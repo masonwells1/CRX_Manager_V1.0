@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Download, FileText, Trash2, ChevronDown, ChevronRight, Tag, Tags, Search, SlidersHorizontal, Users, Layers, Pencil, Settings2, Truck, FlaskConical, ClipboardList, PackageOpen } from 'lucide-react';
+import { Plus, Download, FileText, Trash2, ChevronDown, ChevronRight, Tag, Tags, Search, SlidersHorizontal, Users, Layers, Pencil, Settings2, Truck, FlaskConical, ClipboardList, PackageOpen, Beaker } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge, { type BadgeVariant } from '../components/ui/Badge';
@@ -25,6 +25,9 @@ import { generateChemicalSummaryReportPdf } from '../lib/chemicalSummaryReportPd
 import { fetchProjectedUseData } from '../lib/projectedUseReportFetch';
 import { buildProjectedUseReportData, projectedUseCsvRows } from '../lib/projectedUseReportData';
 import { generateProjectedUseReportPdf } from '../lib/projectedUseReportPdf';
+import { fetchMasterMixSummaryData } from '../lib/masterMixSummaryFetch';
+import { buildMasterMixSummaryData } from '../lib/masterMixSummaryData';
+import { generateMasterMixSummaryPdf } from '../lib/masterMixSummaryPdf';
 import { sanitizeError } from '../lib/errorSanitizer';
 import { Sentry } from '../lib/sentry';
 import { getSeasonDates } from '../utils/season';
@@ -230,6 +233,8 @@ export default function Jobs() {
   // Field-app parity #12: bulk Chemical Summary Report (cross-job per-product totals).
   const [summaryExporting, setSummaryExporting] = useState(false);
   const [projectedExporting, setProjectedExporting] = useState(false);
+  // Field-app parity #14: bulk Master Mix Summary (combined tank mix + per-capacity loads).
+  const [masterMixExporting, setMasterMixExporting] = useState(false);
   // #10: per-row Loader Worksheet print in progress (the job id being generated).
   const [rowLoaderId, setRowLoaderId] = useState<string | null>(null);
   // #11: per-row Chemical Application Report print in progress (job id being generated).
@@ -1005,6 +1010,57 @@ export default function Jobs() {
     setProjectedExporting(false);
   };
 
+  // Field-app parity #14: Master Mix Summary over the checkbox-SELECTED jobs. Shows the
+  // COMBINED tank mix for the whole batch — the SUM of each product to mix across all
+  // selected jobs (keyed by product + unit, gal/lb re-derived from the combined sum) —
+  // PLUS the loads picture grouped by tank capacity + carrier rate (same-capacity jobs
+  // share a combined load plan; different capacities are grouped separately, NEVER
+  // averaged; jobs missing a capacity are noted, their mix still counted). Read-only batch
+  // prep doc: it does NOT stamp printed_at (not a per-job compliance print). NEVER silently
+  // undercounts: a job that can't be resolved is surfaced as EXCLUDED on the report + toast.
+  const handleMasterMixSummary = async () => {
+    // No selection → prompt to select jobs, never an empty/erroring report.
+    if (selectedRows.length === 0) {
+      toast('error', 'Select one or more jobs first to build the Master Mix Summary.');
+      return;
+    }
+    setMasterMixExporting(true);
+    try {
+      const ids = selectedRows.map((j) => j.id);
+      const { jobs: fetched, excluded } = await fetchMasterMixSummaryData(ids);
+      // Every selected job failed to resolve / had no chemicals → don't produce an
+      // official-looking empty mix sheet. Tell the user why (mirrors the per-job guards).
+      if (fetched.length === 0) {
+        toast('error', excluded.length > 0
+          ? 'None of the selected jobs could be mixed (no chemicals or could not be resolved).'
+          : 'No chemical data for the selected jobs.');
+        setMasterMixExporting(false);
+        return;
+      }
+      const mix = buildMasterMixSummaryData(fetched, excluded);
+      await generateMasterMixSummaryPdf(mix);
+
+      // Audit log only (NO printed_at stamp — this is a batch-prep doc, not a compliance print).
+      const includedIds = mix.included_jobs.map((j) => j.job_id);
+      if (profile && includedIds[0]) logActivity({ event: 'master_mix_summary_printed', description: `Master Mix Summary generated across ${includedIds.length} job(s)`, performedBy: profile.id, entityType: 'job', entityId: includedIds[0] });
+
+      // Honest reporting: surface excluded jobs and the different-capacity grouping so the
+      // loader knows the combined mix is complete but loads were split (not averaged).
+      const capNote = mix.mixed_capacities ? ' (loads grouped by capacity)' : '';
+      if (excluded.length > 0) {
+        toast('error', `Master mix generated for ${fetched.length} job(s)${capNote}; ${excluded.length} excluded (see the report's Jobs Excluded list).`);
+      } else if (mix.no_load_jobs.length > 0) {
+        toast('info', `Master mix generated for ${fetched.length} job(s)${capNote}; ${mix.no_load_jobs.length} need a capacity/carrier rate for loads (mix still counted).`);
+      } else {
+        toast('success', `Master mix generated across ${fetched.length} job(s)${capNote}`);
+      }
+    } catch (err) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'jobs_bulk_master_mix' } });
+      toast('error', sanitizeError(err));
+    }
+    setMasterMixExporting(false);
+  };
+
   const handleDelete = async () => {
     setDeleting(true);
     try {
@@ -1063,6 +1119,7 @@ export default function Jobs() {
     { key: 'loader', label: 'Loader Worksheet', icon: <Truck className="w-4 h-4" />, onClick: handleLoaderWorksheets, loading: loaderExporting },
     { key: 'chem-summary', label: 'Chemical Summary Report', icon: <ClipboardList className="w-4 h-4" />, onClick: handleChemicalSummaryReport, loading: summaryExporting },
     { key: 'projected-use', label: 'Projected Use Report', icon: <PackageOpen className="w-4 h-4" />, onClick: handleProjectedUseReport, loading: projectedExporting },
+    { key: 'master-mix', label: 'Master Mix Summary', icon: <Beaker className="w-4 h-4" />, onClick: handleMasterMixSummary, loading: masterMixExporting },
     { key: 'delete', label: 'Delete Jobs', icon: <Trash2 className="w-4 h-4" />, onClick: () => setDeleteModalOpen(true), variant: 'danger' as const },
   ];
 
