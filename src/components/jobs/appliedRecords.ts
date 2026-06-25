@@ -65,7 +65,9 @@ export function sumDraftFieldAcres(fields: AppliedFieldDraft[]): number {
   }, 0);
 }
 
-// Sum the persisted per-location rows of an already-saved entry.
+// Sum the persisted per-location rows of an already-saved entry. This is the raw
+// child-row sum only — for a record's *effective* acres (which falls back to the
+// manual figure when there are no child rows) use effectiveRecordAcres below.
 export function sumRecordFieldAcres(rec: JobAppliedRecordRow): number {
   return (rec.job_applied_record_fields ?? []).reduce(
     (sum, f) => sum + (Number.isFinite(f.applied_acres) ? f.applied_acres : 0),
@@ -73,17 +75,34 @@ export function sumRecordFieldAcres(rec: JobAppliedRecordRow): number {
   );
 }
 
-// The job's total APPLIED acres across every saved entry's per-location rows.
-// This mirrors what the DB trigger writes to jobs.applied_acres. `excludeId`
-// drops the entry currently being edited so the live counter can preview the
-// new total = (others) + (this draft's current sum) without double-counting.
+// A record's EFFECTIVE applied acres — the figure that contributes to the job
+// total. This MUST mirror the DB exactly (recompute_job_applied_acres sums
+// job_applied_records.applied_acres across ALL records, where a per-location
+// record's applied_acres = sum of its child rows and a #17-era manual-only
+// record keeps its manual applied_acres):
+//   - child rows present  -> sum of the child rows (a per-location record)
+//   - no child rows       -> the coerced manual applied_acres (a #17-era record)
+// Without this, a mixed #17/#18 job would read low (manual records ignored) and
+// the per-row cell would contradict the job summary.
+export function effectiveRecordAcres(rec: JobAppliedRecordRow): number {
+  const children = rec.job_applied_record_fields ?? [];
+  if (children.length > 0) return sumRecordFieldAcres(rec);
+  const manual = Number(rec.applied_acres);
+  return Number.isFinite(manual) ? manual : 0;
+}
+
+// The job's total APPLIED acres across every saved entry, using each record's
+// EFFECTIVE acres (child-sum when per-location, manual figure otherwise). This
+// mirrors what the DB writes to jobs.applied_acres. `excludeId` drops the entry
+// currently being edited so the live counter can preview the new total =
+// (others) + (this draft's current sum) without double-counting.
 export function sumAppliedAcresAcrossRecords(
   records: JobAppliedRecordRow[],
   excludeId?: string | null,
 ): number {
   return records
     .filter((r) => !excludeId || r.id !== excludeId)
-    .reduce((sum, r) => sum + sumRecordFieldAcres(r), 0);
+    .reduce((sum, r) => sum + effectiveRecordAcres(r), 0);
 }
 
 export interface RemainingAcresView {
@@ -93,6 +112,12 @@ export interface RemainingAcresView {
   over: number; // how far applied exceeds total (0 when within plan)
   isOver: boolean; // applied > total -> show the over-application warning
 }
+
+// Epsilon for the over-application check. Raw JS float math means {0.1, 0.2}
+// sums to 0.30000000000000004, which would trip "Over-applied by 0.00 ac" against
+// a 0.3 total. We flag over-application only when applied exceeds total by more
+// than EPS (a hair under a hundredth of an acre — well below the 2dp the UI shows).
+const OVER_EPS = 1e-6;
 
 // Compute the Total / Applied / Remaining view for a job, optionally previewing
 // an in-progress edit (excludeId + draftSum replaces that entry's saved acres).
@@ -108,8 +133,11 @@ export function computeRemainingAcres(
   const applied = others + (opts?.draftSum ?? 0);
   const total = Number.isFinite(totalAcres) ? totalAcres : 0;
   const remaining = Math.max(total - applied, 0);
-  const over = applied > total ? applied - total : 0;
-  return { total, applied, remaining, over, isOver: over > 0 };
+  // Float-safe over check: only a difference beyond EPS counts as over-applied,
+  // so {0.1,0.2} vs 0.3 does NOT falsely flag "over by 0.00 ac".
+  const isOver = applied - total > OVER_EPS;
+  const over = isOver ? applied - total : 0;
+  return { total, applied, remaining, over, isOver };
 }
 
 // "Vehicle defaults from the chosen applicator/vehicle but is editable":

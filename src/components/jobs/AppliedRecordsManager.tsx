@@ -32,7 +32,7 @@ import {
   buildAppliedRecordPatch,
   buildAppliedFieldRows,
   sumDraftFieldAcres,
-  sumRecordFieldAcres,
+  effectiveRecordAcres,
   computeRemainingAcres,
   type AppliedRecordDraft,
 } from './appliedRecords';
@@ -425,7 +425,11 @@ export default function AppliedRecordsManager({
             <tbody>
               {records.map((rec) => {
                 const locs = rec.job_applied_record_fields ?? [];
-                const recSum = sumRecordFieldAcres(rec);
+                // Effective acres = child-sum when per-location, else the manual
+                // figure — the SAME rule the job summary and the DB use, so this
+                // cell can never contradict the Applied/Remaining totals above.
+                const recAcres = effectiveRecordAcres(rec);
+                const hasManual = locs.length === 0 && rec.applied_acres != null;
                 return (
                 <tr key={rec.id} className="border-t border-gray-100 align-top">
                   <td className="px-3 py-2 whitespace-nowrap">{rec.application_date}</td>
@@ -434,7 +438,7 @@ export default function AppliedRecordsManager({
                   <td className="px-3 py-2 text-right tabular-nums">
                     {locs.length > 0 ? (
                       <div>
-                        <span className="font-medium">{recSum.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
+                        <span className="font-medium">{recAcres.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
                         <ul className="mt-1 text-xs text-secondary text-left">
                           {locs.map((l) => (
                             <li key={l.id} className="flex items-center gap-1 justify-end">
@@ -445,8 +449,8 @@ export default function AppliedRecordsManager({
                           ))}
                         </ul>
                       </div>
-                    ) : rec.applied_acres != null ? (
-                      rec.applied_acres
+                    ) : hasManual ? (
+                      <span className="font-medium">{recAcres.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
                     ) : (
                       '—'
                     )}

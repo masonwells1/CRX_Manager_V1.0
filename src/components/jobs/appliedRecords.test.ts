@@ -6,6 +6,7 @@ import {
   buildAppliedFieldRows,
   sumDraftFieldAcres,
   sumRecordFieldAcres,
+  effectiveRecordAcres,
   sumAppliedAcresAcrossRecords,
   computeRemainingAcres,
   draftFromRecord,
@@ -204,6 +205,68 @@ describe('#18 sumAppliedAcresAcrossRecords', () => {
   });
   it('excludes the record being edited (no double-count)', () => {
     expect(sumAppliedAcresAcrossRecords(records, 'r1')).toBe(30);
+  });
+});
+
+// MED 1 + MED 3: each record's EFFECTIVE acres must mirror the DB exactly —
+// child-sum when per-location, the manual figure when there are no child rows —
+// so manual-only #17 records are counted and a record whose last child is gone
+// reads 0 (never a stale value), and the per-row cell can't contradict the total.
+describe('#18 effectiveRecordAcres (manual fallback + last-child-zero)', () => {
+  it("uses the child-row sum when a record has per-location rows", () => {
+    expect(effectiveRecordAcres(recWithFields('r1', { f1: 40, f2: 20 }))).toBe(60);
+  });
+  it("falls back to the manual applied_acres for a #17-era record with no child rows", () => {
+    expect(effectiveRecordAcres(rec({ id: 'm1', applied_acres: 30 }))).toBe(30);
+  });
+  it('reads 0 for a per-location record whose last child was removed (no stale value)', () => {
+    // applied_acres still carries the old figure, but with zero child rows the
+    // effective value is the (now-empty) child-sum = 0, matching the DB after the
+    // last-child delete zeroes the record.
+    expect(effectiveRecordAcres(recWithFields('r1', {}))).toBe(0);
+  });
+  it('reads 0 for a record with neither child rows nor a manual figure', () => {
+    expect(effectiveRecordAcres(rec({ id: 'e1', applied_acres: null }))).toBe(0);
+  });
+});
+
+// A mixed job: one #17-era manual-only record + one #18 per-location record. The
+// job summary must sum BOTH (this is the exact MED-3 bug — manual records were
+// previously ignored, so the summary read low on mixed jobs).
+describe('#18 mixed job (manual-only + per-location) sums both', () => {
+  it('counts the manual record AND the per-location child-sum in the job total', () => {
+    const manual = rec({ id: 'man', applied_acres: 30 });          // #17-era, no children
+    const perLoc = recWithFields('loc', { f1: 148.5, f2: 50 });    // 198.5
+    const v = computeRemainingAcres(245.4, [manual, perLoc]);
+    expect(v.applied).toBeCloseTo(228.5, 5);
+    expect(v.remaining).toBeCloseTo(16.9, 5);
+    expect(v.isOver).toBe(false);
+  });
+
+  it('deleting the last child of the per-location record zeroes it AND the job drops to the manual figure', () => {
+    const manual = rec({ id: 'man', applied_acres: 30 });
+    const perLocEmptied = recWithFields('loc', {}); // last child removed -> 0 effective
+    const v = computeRemainingAcres(245.4, [manual, perLocEmptied]);
+    expect(effectiveRecordAcres(perLocEmptied)).toBe(0);
+    expect(v.applied).toBe(30);                  // only the manual record remains
+    expect(v.remaining).toBeCloseTo(215.4, 5);
+  });
+});
+
+// LOW: float false-positive over-application. Raw JS floats make {0.1,0.2} sum to
+// 0.30000000000000004, which must NOT flag "over by 0.00 ac" against a 0.3 total.
+describe('#18 computeRemainingAcres float-safe over check', () => {
+  it('does NOT flag over-application for {0.1, 0.2} vs total 0.3', () => {
+    const records = [recWithFields('r1', { f1: 0.1, f2: 0.2 })];
+    const v = computeRemainingAcres(0.3, records);
+    expect(v.isOver).toBe(false);
+    expect(v.over).toBe(0);
+  });
+  it('still flags a genuine over-application beyond the epsilon', () => {
+    const records = [recWithFields('r1', { f1: 0.1, f2: 0.25 })]; // 0.35 vs 0.3
+    const v = computeRemainingAcres(0.3, records);
+    expect(v.isOver).toBe(true);
+    expect(v.over).toBeCloseTo(0.05, 5);
   });
 });
 
