@@ -50,6 +50,7 @@ const Invoices = lazy(() => import('./pages/Invoices'));
 const FieldInvoices = lazy(() => import('./pages/FieldInvoices'));
 const FieldInvoicesUnposted = lazy(() => import('./pages/FieldInvoicesUnposted'));
 const FieldInvoicesPosted = lazy(() => import('./pages/FieldInvoicesPosted'));
+const CustomerInvoiceSummary = lazy(() => import('./pages/CustomerInvoiceSummary'));
 const UnbilledApplications = lazy(() => import('./pages/UnbilledApplications'));
 const InvoiceDetail = lazy(() => import('./pages/InvoiceDetail'));
 const BlendRecipes = lazy(() => import('./pages/BlendRecipes'));
@@ -211,6 +212,9 @@ const router = createBrowserRouter([
           // — must precede field-invoices/:id (React Router prefers static segments).
           { path: 'field-invoices/posted', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><FieldInvoicesPosted /></ProtectedRoute> },
           { path: 'field-invoices/unbilled', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><UnbilledApplications /></ProtectedRoute> },
+          // Field-app parity #34: combined Customer Invoice Summary (unposted chem
+          // sales + unposted field-app). Static path — must precede field-invoices/:id.
+          { path: 'field-invoices/summary', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><CustomerInvoiceSummary /></ProtectedRoute> },
           // Field-invoice detail (job-built quantity invoices + posted field invoices)
           // reuses the generic invoice editor but under the field-invoices permission
           // (getPageKeyFromPath maps /field-invoices/* -> 'field-invoices'). #3 edit-path.

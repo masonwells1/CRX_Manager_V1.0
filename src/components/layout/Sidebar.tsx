@@ -43,6 +43,7 @@ import {
   Wrench,
   CheckSquare,
   Building2,
+  Layers,
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { hasPageAccess, getPageKeyFromPath } from '../../lib/pagePermissions';
@@ -119,6 +120,7 @@ const navigation: NavEntry[] = [
         { path: '/orders', label: 'Orders', icon: <ClipboardList className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
         { path: '/invoices', label: 'Invoices', icon: <Receipt className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
         { path: '/field-invoices', label: 'Field Invoices', icon: <Sprout className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
+        { path: '/field-invoices/summary', label: 'Customer Summary', icon: <Layers className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
         { path: '/payments', label: 'Payments', icon: <DollarSign className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
       ],
     },

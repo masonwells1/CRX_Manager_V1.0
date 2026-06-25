@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, FileText, Check, Ban, Download, ClipboardCheck, Printer, FileClock, Mail } from 'lucide-react';
+import { Plus, FileText, Check, Ban, Download, ClipboardCheck, Printer, FileClock, Mail, Layers } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
@@ -507,6 +507,14 @@ export default function FieldInvoices() {
             onClick={() => navigate('/field-invoices/unbilled')}
           >
             Unbilled
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            icon={<Layers className="w-4 h-4" />}
+            onClick={() => navigate('/field-invoices/summary')}
+          >
+            Customer Summary
           </Button>
           <Button variant="secondary" icon={<Plus className="w-4 h-4" />} onClick={() => navigate('/invoices/field-app/new')}>
             New Field Application

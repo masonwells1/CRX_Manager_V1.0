@@ -84,7 +84,7 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(
 <div id="header">
   <h1>⬡ CRX Manager — Architecture Map</h1>
   <!-- __STATS_START__ -->
-  <span id="stat-line" style="color:var(--muted);font-size:.8rem">83 routes · 182 RPC calls · 0 issues · Updated Jun 25, 2026</span>
+  <span id="stat-line" style="color:var(--muted);font-size:.8rem">84 routes · 182 RPC calls · 0 issues · Updated Jun 25, 2026</span>
   <!-- __STATS_END__ -->
   <div id="tabs">
     <button class="tab active" onclick="showTab('graph')">Graph</button>
@@ -662,6 +662,14 @@ const NODES = [
       "type": "page-sales",
       "group": "Customers",
       "path": "/field-invoices/unbilled",
+      "problem": false
+    },
+    {
+      "id": "customer-invoice-summary",
+      "label": "CustomerInvoiceSummary",
+      "type": "page-sales",
+      "group": "Customers",
+      "path": "/field-invoices/summary",
       "problem": false
     },
     {
@@ -1335,6 +1343,11 @@ const EDGES = [
       "type": "nav"
     },
     {
+      "s": "customer-invoice-summary",
+      "t": "field-invoices",
+      "type": "nav"
+    },
+    {
       "s": "customers",
       "t": "customer-detail",
       "type": "nav"
@@ -1502,6 +1515,11 @@ const EDGES = [
     {
       "s": "field-invoices",
       "t": "unbilled-applications",
+      "type": "nav"
+    },
+    {
+      "s": "field-invoices",
+      "t": "customer-invoice-summary",
       "type": "nav"
     },
     {
