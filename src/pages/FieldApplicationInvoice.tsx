@@ -170,11 +170,19 @@ export default function FieldApplicationInvoice() {
   const [dueDate, setDueDate] = useState('');
   const [footerNotes, setFooterNotes] = useState('');
   const [internalMemo, setInternalMemo] = useState(''); // internal_notes — NOT printed
-  // #33: Discount Earned is PER-INVOICE (each customer in a split has their own invoice
-  // row). Keyed by invoice id → { dollars: typed string, date }. dollars is kept as the
-  // raw typed string (blank/partial mid-edit allowed) and converted to bigint cents only
-  // at save. Loaded from each group member's discount_earned_cents/discount_date.
-  const [discountByInvoice, setDiscountByInvoice] = useState<Record<string, { dollars: string; date: string }>>({});
+  // #33: Discount Earned is owner-driven + DISPLAY-ONLY (it NEVER folds into the
+  // GENERATED balance_cents). The editor draft is keyed by CUSTOMER_ID — not by
+  // invoice id — so it works on a brand-NEW invoice too, where no invoice id exists
+  // yet (the Customers-tab editor is reachable pre-save via Preview). Each customer's
+  // typed dollars string (blank/partial mid-edit allowed) + optional date is held
+  // here and translated to per-invoice bigint cents only at SAVE, once the created
+  // invoice id(s) are known. Loaded from each member's discount_earned_cents/date
+  // keyed by that member's customer_id.
+  // (Pre-fix this was keyed by invoice id, so on a new invoice the editor dropped
+  // every keystroke — customerToInvoiceId resolved to {} and handleDiscountChange
+  // early-returned. money-lens MED #1.)
+  const [discountByCustomer, setDiscountByCustomer] =
+    useState<Record<string, { dollars: string; date: string }>>({});
   const [status, setStatus] = useState<InvoiceStatus>('draft');
   // #24: the Consultant (responsible salesperson) on this invoice. Backed by the
   // existing invoices.salesman_id column — now user-selectable instead of being
@@ -326,56 +334,60 @@ export default function FieldApplicationInvoice() {
   );
 
   // #33: map each billed customer to THEIR invoice id (each customer has one invoice
-  // row in a split; an un-split invoice maps its single customer to `id`). Used to
-  // drive the per-customer Discount Earned editor on the Customers tab and to display
-  // the saved value. siblings carries {id, customer_id} for the group (1 invoice per
-  // customer — a true 1:1 map). For an UN-split invoice there is exactly ONE invoice
-  // (and so one Discount Earned), even when multiple growers SHARE it; the preview
-  // rows are keyed by the SHARE customer_id, which can differ from invoices.customer_id.
-  // So we anchor the single editable discount to the PRIMARY share customer (the row
-  // the preview marks is_primary), falling back to any share, then to the invoice's
-  // own customer_id. This guarantees the editor maps to a real preview row.
+  // row in a split; an un-split invoice maps its single customer to `id`). Used ONLY
+  // to resolve which customer's draft prints on THIS (the URL) invoice's PDF — the
+  // editor draft itself is keyed by customer_id and needs no invoice id. siblings
+  // carries {id, customer_id} for the group (1 invoice per customer — a true 1:1 map).
+  // For an UN-split invoice there is exactly ONE invoice (and so one Discount Earned),
+  // even when multiple growers SHARE it; the preview rows are keyed by the SHARE
+  // customer_id, which can differ from invoices.customer_id. So we anchor the single
+  // discount to the PRIMARY share customer (the row the preview marks is_primary),
+  // falling back to any share, then to the invoice's own customer_id.
   const customerToInvoiceId = useMemo<Record<string, string>>(() => {
     const map: Record<string, string> = {};
     if (siblings.length > 0) {
       siblings.forEach((s) => { map[s.customer_id] = s.id; });
     } else if (id) {
-      const anchor = shares.find((s) => s.is_primary)?.customer_id
-        ?? shares[0]?.customer_id
-        ?? pdfSnapshot?.customer_id;
+      // Un-split: one invoice, one billed customer. Anchor the single editable
+      // discount to the invoice's OWN billed customer (invoices.customer_id, via
+      // pdfSnapshot) so load (keyed by invoices.customer_id) and save (writes back
+      // to that invoice) agree. Fall back to the primary share customer only when the
+      // invoice's customer isn't known yet (pre-snapshot).
+      const anchor = pdfSnapshot?.customer_id
+        ?? shares.find((s) => s.is_primary)?.customer_id
+        ?? shares[0]?.customer_id;
       if (anchor) map[anchor] = id;
     }
     return map;
   }, [siblings, id, shares, pdfSnapshot?.customer_id]);
 
-  // #33: per-customer Discount Earned (typed dollars + date) for the Customers-tab
-  // editor, keyed by customer_id via customerToInvoiceId. Display/edit only —
-  // converted to bigint cents and written per-invoice at save (never folds into the
-  // billed total). Editing sets dirty so the Save button persists it.
-  const discountByCustomer = useMemo<Record<string, { dollars: string; date: string }>>(() => {
-    const map: Record<string, { dollars: string; date: string }> = {};
-    Object.entries(customerToInvoiceId).forEach(([custId, invId]) => {
-      map[custId] = discountByInvoice[invId] || { dollars: '', date: '' };
-    });
-    return map;
-  }, [customerToInvoiceId, discountByInvoice]);
+  // #33: the customer_id whose Discount Earned prints on THIS (the URL) invoice's PDF.
+  // For a split, each sibling invoice carries its own customer; for an un-split invoice
+  // it's the anchored primary-share customer (or the invoice's own customer_id).
+  const customerForThisInvoice = useMemo<string | null>(() => {
+    if (!id) return null;
+    const entry = Object.entries(customerToInvoiceId).find(([, invId]) => invId === id);
+    return entry?.[0] ?? null;
+  }, [id, customerToInvoiceId]);
 
-  // #33: typed dollars → bigint cents for a given invoice id (0 when blank/invalid).
+  // #33: typed dollars → bigint cents for a given customer (0 when blank/invalid).
   // Used to print the THIS-invoice Discount Earned line on the PDF.
-  const discountCentsForInvoice = useCallback((invId: string): number => {
-    const dollars = parseFloat(discountByInvoice[invId]?.dollars ?? '');
+  const discountCentsForCustomer = useCallback((custId: string | null): number => {
+    if (!custId) return 0;
+    const dollars = parseFloat(discountByCustomer[custId]?.dollars ?? '');
     return Number.isFinite(dollars) && dollars > 0 ? Math.round(dollars * 100) : 0;
-  }, [discountByInvoice]);
+  }, [discountByCustomer]);
 
+  // #33: editor edit handler — writes the per-customer draft DIRECTLY (no invoice id
+  // needed), so a brand-new invoice's Preview discount edits are captured and reach
+  // the save translation instead of being silently dropped. Sets dirty so Save persists.
   const handleDiscountChange = useCallback((customerId: string, patch: { dollars?: string; date?: string }) => {
-    const invId = customerToInvoiceId[customerId];
-    if (!invId) return;
-    setDiscountByInvoice((prev) => ({
+    setDiscountByCustomer((prev) => ({
       ...prev,
-      [invId]: { ...(prev[invId] || { dollars: '', date: '' }), ...patch },
+      [customerId]: { ...(prev[customerId] || { dollars: '', date: '' }), ...patch },
     }));
     setDirty(true);
-  }, [customerToInvoiceId]);
+  }, []);
 
   // #26: base for the ChemMan "<base>-<NNN>" split reference. Prefer the source
   // job number; else the group's PRIMARY (lowest) saved invoice number; else the
@@ -534,21 +546,26 @@ export default function FieldApplicationInvoice() {
             status: (s.status as InvoiceStatus) || 'draft',
           }))
         );
-        // #33: per-invoice Discount Earned map for the whole group (one row per customer).
+        // #33: Discount Earned draft for the whole group, keyed by each member's
+        // CUSTOMER_ID (the key the Customers-tab editor reads/writes). One invoice
+        // row per customer in a split, so customer_id is a stable 1:1 key.
         const discMap: Record<string, { dollars: string; date: string }> = {};
         (sibs as Array<Record<string, unknown>>).forEach((s) => {
-          discMap[s.id as string] = {
+          discMap[s.customer_id as string] = {
             dollars: centsToDollars(s.discount_earned_cents as number | null),
             date: (s.discount_date as string | null) || '',
           };
         });
-        setDiscountByInvoice(discMap);
+        setDiscountByCustomer(discMap);
       }
     } else {
       setSiblings([]);
-      // #33: single (un-split) invoice — its own Discount Earned, keyed by this id.
-      setDiscountByInvoice({
-        [id]: {
+      // #33: single (un-split) invoice — its own Discount Earned, keyed by the
+      // invoice's billed CUSTOMER_ID. customerToInvoiceId anchors the un-split editor
+      // to the primary share customer (which equals invoices.customer_id in the normal
+      // case), so this key matches what the editor renders.
+      setDiscountByCustomer({
+        [invoice.customer_id as string]: {
           dollars: centsToDollars(invoice.discount_earned_cents as number | null),
           date: (invoice.discount_date as string | null) || '',
         },
@@ -914,12 +931,26 @@ export default function FieldApplicationInvoice() {
       // Earned is informational ONLY — it NEVER reduces the GENERATED balance_cents.
       let billingOk = true;
       if (ids.length > 0) {
-        // Build the per-invoice discount map. Only keys in the returned ids are sent
-        // (stale keys would fail the RPC's row-count guard). A blank/0 dollars entry
-        // resolves to amount 0 (off). Round to the nearest cent (bigint cents).
+        // #33 (money-lens MED #1): the editor draft is keyed by CUSTOMER_ID, so to
+        // build the per-INVOICE p_discounts map we must resolve each created/updated
+        // invoice id → its billed customer_id. save_field_app_invoice returns only
+        // invoice_ids (no customer mapping), so fetch the customer_id for exactly
+        // those ids and join to the customer-keyed draft. This works for a NEW invoice
+        // (where siblings/customerToInvoiceId are still empty at save time), a split
+        // (each id → its own customer), and an un-split invoice (single id → single
+        // customer). A blank/0 dollars entry resolves to amount 0 (off, bigint cents).
+        const { data: idRows } = await supabase
+          .from('invoices')
+          .select('id, customer_id')
+          .in('id', ids);
+        const customerByInvoiceId = new Map<string, string>(
+          ((idRows as Array<{ id: string; customer_id: string }> | null) ?? [])
+            .map((r) => [r.id, r.customer_id]),
+        );
         const discounts: Record<string, { amount_cents: number; date: string | null }> = {};
         for (const invId of ids) {
-          const entry = discountByInvoice[invId];
+          const custId = customerByInvoiceId.get(invId);
+          const entry = custId ? discountByCustomer[custId] : undefined;
           const dollars = entry ? parseFloat(entry.dollars) : NaN;
           const cents = Number.isFinite(dollars) && dollars > 0 ? Math.round(dollars * 100) : 0;
           discounts[invId] = { amount_cents: cents, date: (entry?.date || null) };
@@ -1238,9 +1269,10 @@ export default function FieldApplicationInvoice() {
       header_notes: notes || null,
       footer_notes: footerNotes || null,
       due_date: dueDate || null,
-      // #33: Discount Earned for THIS invoice (the URL invoice). Informational line on
-      // the PDF — it does NOT change the Total/Balance math (passed through untouched).
-      discount_earned_cents: id ? discountCentsForInvoice(id) : 0,
+      // #33: Discount Earned for THIS invoice (the URL invoice), resolved from the
+      // customer-keyed draft via the URL invoice's billed customer. Informational line
+      // on the PDF — it does NOT change the Total/Balance math (passed through untouched).
+      discount_earned_cents: discountCentsForCustomer(customerForThisInvoice),
       crop_type: locations[0]?.crop_type ?? null,
       field_names: locations.length > 0 ? locations.map((l) => l.field_name) : null,
       total_acres: totalAppliedAcres || null,

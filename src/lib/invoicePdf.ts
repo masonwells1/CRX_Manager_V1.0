@@ -134,9 +134,14 @@ interface InvoiceRowForPdf {
   customer_id: string;
   customer_name: string;
   salesman_name?: string | null;
+  // #33: invoice-level billing fields (PO ref / terms / due date / header+footer
+  // notes / early-pay Discount Earned). These are OPTIONAL on the row: a caller
+  // that already has the live value (the in-editor print) passes it and it WINS;
+  // a list caller OMITS them (leaves undefined) and the builder re-fetches them
+  // by invoice id below, so the discount line + Terms print from the lists too.
+  // (Field-app parity #33 list-print fix: list rows never carried these, so the
+  // PDF skipped the discount block and the Terms line.)
   purchase_order_ref?: string | null;
-  // #33: invoice-level payment terms (override) + early-pay Discount Earned. When
-  // payment_terms is provided here it wins over the customer default below.
   payment_terms?: string | null;
   discount_earned_cents?: number | null;
   header_notes?: string | null;
@@ -165,7 +170,7 @@ export async function buildInvoicePdfDataFromRow(
   inv: InvoiceRowForPdf,
   options?: InvoicePrintOptions
 ): Promise<InvoicePdfData> {
-  const [{ data: cust }, { data: items }, { data: shares }] = await Promise.all([
+  const [{ data: cust }, { data: items }, { data: shares }, { data: billing }] = await Promise.all([
     supabase
       .from('customers')
       .select('billing_address, city, state, zip, account_number, payment_terms')
@@ -180,6 +185,17 @@ export async function buildInvoicePdfDataFromRow(
       .from('invoice_shares')
       .select('*, customer:customers!invoice_shares_customer_id_fkey(farm_name)')
       .eq('invoice_id', inv.id),
+    // #33: the invoice's OWN billing fields. A list caller omits these on the row,
+    // so without this re-fetch the early-pay Discount Earned line + the Terms / PO /
+    // due-date / header+footer notes silently dropped to undefined → 0 → not printed.
+    // Re-fetching here covers every caller (lists, email, editor) in one place; the
+    // caller-supplied value still WINS (see the `?? ` fallbacks below) so the in-editor
+    // print of unsaved live form edits is unchanged.
+    supabase
+      .from('invoices')
+      .select('discount_earned_cents, discount_date, payment_terms, purchase_order_ref, header_notes, footer_notes, due_date')
+      .eq('id', inv.id)
+      .maybeSingle(),
   ]);
 
   const custRow = cust as {
@@ -187,10 +203,25 @@ export async function buildInvoicePdfDataFromRow(
     zip?: string | null; account_number?: string | null; payment_terms?: string | null;
   } | null;
 
+  // #33: the invoice's persisted billing fields, used ONLY when the caller did not
+  // supply the field on `inv` (undefined). A caller that DID supply it — even as
+  // null to intentionally clear it — keeps full control (live form wins).
+  const billingRow = billing as {
+    discount_earned_cents?: number | null; discount_date?: string | null;
+    payment_terms?: string | null; purchase_order_ref?: string | null;
+    header_notes?: string | null; footer_notes?: string | null; due_date?: string | null;
+  } | null;
+  const pickPo = inv.purchase_order_ref !== undefined ? inv.purchase_order_ref : billingRow?.purchase_order_ref;
+  const pickTerms = inv.payment_terms !== undefined ? inv.payment_terms : billingRow?.payment_terms;
+  const pickDue = inv.due_date !== undefined ? inv.due_date : billingRow?.due_date;
+  const pickHeader = inv.header_notes !== undefined ? inv.header_notes : billingRow?.header_notes;
+  const pickFooter = inv.footer_notes !== undefined ? inv.footer_notes : billingRow?.footer_notes;
+  const pickDiscount = inv.discount_earned_cents !== undefined ? inv.discount_earned_cents : billingRow?.discount_earned_cents;
+
   return {
     invoice_number: inv.invoice_number,
     invoice_date: inv.invoice_date,
-    due_date: inv.due_date || undefined,
+    due_date: pickDue || undefined,
     invoice_type: inv.invoice_type || 'field_application',
     status: inv.status || 'draft',
     customer_name: inv.customer_name,
@@ -200,11 +231,11 @@ export async function buildInvoicePdfDataFromRow(
     customer_zip: custRow?.zip || undefined,
     account_number: custRow?.account_number || undefined,
     // #33: invoice-level payment terms override the customer default when present.
-    payment_terms: inv.payment_terms || custRow?.payment_terms || undefined,
+    payment_terms: pickTerms || custRow?.payment_terms || undefined,
     salesman_name: inv.salesman_name || undefined,
-    purchase_order_ref: inv.purchase_order_ref || undefined,
-    header_notes: inv.header_notes || undefined,
-    footer_notes: inv.footer_notes || undefined,
+    purchase_order_ref: pickPo || undefined,
+    header_notes: pickHeader || undefined,
+    footer_notes: pickFooter || undefined,
     crop_type: inv.crop_type || undefined,
     field_names: inv.field_names || undefined,
     total_acres: inv.total_acres || undefined,
@@ -247,7 +278,7 @@ export async function buildInvoicePdfDataFromRow(
     write_off_cents: inv.write_off_cents || 0,
     balance_cents: inv.balance_cents || 0,
     // #33: informational Discount Earned line (does NOT change total/balance).
-    discount_earned_cents: inv.discount_earned_cents || 0,
+    discount_earned_cents: pickDiscount || 0,
     options,
   };
 }

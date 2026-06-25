@@ -80,9 +80,33 @@ vi.mock('react-router-dom', () => ({
   ),
 }));
 
-// SelectLocationsModal is rendered but we don't drive it in these tests
+// SelectLocationsModal is rendered. Most tests don't drive it; the #33 discount
+// test does, so the mock exposes a button that fires onSelect with a single field
+// (a real Field shape) when the modal is open. Backward compatible — tests that
+// never open the modal never see the button.
 vi.mock('../components/field-app/SelectLocationsModal', () => ({
-  default: () => null,
+  default: ({ isOpen, onSelect }: { isOpen: boolean; onSelect: (fields: unknown[]) => void }) =>
+    isOpen ? (
+      <button
+        type="button"
+        data-testid="mock-select-one-field"
+        onClick={() =>
+          onSelect([
+            {
+              id: 'field-1',
+              field_name: 'North 80',
+              crop_type: 'corn',
+              total_acres: 40,
+              measured_acres: 40,
+              override_acres: null,
+              customer_name: 'Farm A',
+            },
+          ])
+        }
+      >
+        pick field
+      </button>
+    ) : null,
 }));
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -210,6 +234,90 @@ describe('FieldApplicationInvoice — new invoice (no id)', () => {
     fireEvent.click(screen.getByRole('button', { name: /^Save$/i }));
     await waitFor(() => {
       expect(mockToast).toHaveBeenCalledWith('success', expect.stringMatching(/group of 2/));
+    });
+  });
+});
+
+// #33 (money-lens MED #1): on a BRAND-NEW invoice the per-customer Discount Earned
+// editor must capture keystrokes and carry them into update_field_app_invoice_billing
+// at save. Before the fix the editor draft was keyed by invoice id (undefined on a new
+// invoice), so every keystroke was silently dropped and the discount persisted as 0.
+// This test drives the natural create → pick field → Preview → type discount → Save
+// flow and asserts the typed discount reaches the billing RPC as non-zero cents.
+describe('FieldApplicationInvoice — #33 discount on a NEW invoice reaches the billing RPC', () => {
+  beforeEach(() => {
+    mockUseParams.mockReturnValue({ id: undefined });
+    // After save, the page re-fetches the created invoice to map id -> customer_id.
+    mockFrom.mockImplementation(
+      makeFromMock({
+        invoices: { data: [{ id: 'new-inv-1', customer_id: 'cust-A' }] },
+        field_app_locations: { data: [] },
+        invoice_items: { data: [] },
+        invoice_shares: { data: [] },
+      }),
+    );
+    // Route each RPC by name. derive + preview return one customer (cust-A); save
+    // returns the new id; the billing RPC just succeeds.
+    mockRpc.mockImplementation((name: string) => {
+      if (name === 'derive_customer_shares_from_fields') {
+        return Promise.resolve({
+          data: {
+            rows: [],
+            customers: [{ customer_id: 'cust-A', customer_name: 'Farm A', is_primary: true, total_share_acres: 40, overall_split_pct: 100, tier: 1 }],
+            total_applied_acres: 40,
+            field_count: 1,
+            fallback_used_field_ids: [],
+          },
+          error: null,
+        });
+      }
+      if (name === 'preview_field_app_invoice_split') {
+        return Promise.resolve({
+          data: {
+            per_customer: [{ customer_id: 'cust-A', customer_name: 'Farm A', is_primary: true, tier: 1, total_cents: 100000, lines: [] }],
+            grand_total_cents: 100000,
+            customer_count: 1,
+            shares_detail: { rows: [], customers: [], total_applied_acres: 40, field_count: 1, fallback_used_field_ids: [] },
+          },
+          error: null,
+        });
+      }
+      if (name === 'save_field_app_invoice') {
+        return Promise.resolve({ data: { invoice_ids: ['new-inv-1'], invoice_group_id: null }, error: null });
+      }
+      // update_field_app_applied_info + update_field_app_invoice_billing
+      return Promise.resolve({ data: { success: true }, error: null });
+    });
+  });
+
+  it('types a discount on the new invoice Preview and it reaches update_field_app_invoice_billing (not dropped)', async () => {
+    await renderPage();
+
+    // 1) Open the locations modal and pick a field → derives shares (cust-A).
+    fireEvent.click(screen.getByRole('button', { name: /Select Locations/i }));
+    fireEvent.click(await screen.findByTestId('mock-select-one-field'));
+    await waitFor(() =>
+      expect(mockRpc.mock.calls.some((c) => c[0] === 'derive_customer_shares_from_fields')).toBe(true),
+    );
+
+    // 2) Click Preview → server-computed per-customer table renders the editable
+    //    Discount Earned input for cust-A.
+    fireEvent.click(screen.getByRole('button', { name: /^Preview$/i }));
+    const discountInput = await screen.findByTitle(/Early-pay discount earned/i);
+
+    // 3) Type a $25.00 discount on the brand-new invoice.
+    fireEvent.change(discountInput, { target: { value: '25.00' } });
+
+    // 4) Save → the billing RPC must receive cust-A's invoice with 2500 cents.
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/i }));
+
+    await waitFor(() => {
+      const billingCall = mockRpc.mock.calls.find((c) => c[0] === 'update_field_app_invoice_billing');
+      expect(billingCall).toBeDefined();
+      const discounts = (billingCall![1] as { p_discounts: Record<string, { amount_cents: number; date: string | null }> }).p_discounts;
+      // The new invoice id maps to cust-A; the typed $25.00 must arrive as 2500 cents.
+      expect(discounts['new-inv-1']).toBeDefined();
+      expect(discounts['new-inv-1'].amount_cents).toBe(2500);
     });
   });
 });
