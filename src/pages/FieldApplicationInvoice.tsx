@@ -3,10 +3,11 @@ import { useParams, useNavigate, Link } from 'react-router-dom';
 import {
   Save, Send, Trash2, MapPin, FlaskConical, Users, ClipboardList, ArrowLeft, Eye, AlertTriangle,
   Printer, Bell, Lock, X, CornerUpLeft, RotateCcw, Wind, Thermometer, Tractor, Gauge, CalendarDays, Clock,
+  Ban,
 } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
-import Badge from '../components/ui/Badge';
+import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, sanitizeError, assertRpcResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
@@ -19,6 +20,7 @@ import { formatCents as fmt } from '../lib/money';
 import { billableAcres, acreDivergence, appliedMatchesSystem } from '../lib/fieldGeometry';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import ConfirmModal from '../components/ui/ConfirmModal';
+import Modal from '../components/ui/Modal';
 import SelectLocationsModal from '../components/field-app/SelectLocationsModal';
 import FieldAppChemicalEntry, { type ChemicalLine } from '../components/field-app/FieldAppChemicalEntry';
 import CustomerSharesTable from '../components/field-app/CustomerSharesTable';
@@ -123,6 +125,10 @@ export default function FieldApplicationInvoice() {
   // Per-invoice key cache (keyed by invoice id) so a retry reuses the same key — the
   // group case unposts several members, each needing its own stable key.
   const unpostKeysRef = useRef<Record<string, string>>({});
+  // #29: Void — cancel/void this bill right on this screen (draft/unposted -> cancelled,
+  // posted/overdue -> voided). Same per-invoice key cache so a split group is voided
+  // member-by-member (no group RPC) with one stable, idempotent key per member.
+  const voidKeysRef = useRef<Record<string, string>>({});
 
   const [activeTab, setActiveTab] = useState<TabKey>('locations');
   const [saving, setSaving] = useState(false);
@@ -134,6 +140,12 @@ export default function FieldApplicationInvoice() {
   const [showPostConfirm, setShowPostConfirm] = useState(false);
   const [showUnpostConfirm, setShowUnpostConfirm] = useState(false);
   const [unposting, setUnposting] = useState(false);
+  // #29: Void modal + required-reason + in-flight state. Void needs its own Modal
+  // (not a ConfirmModal) because the reason is mandatory — the confirm button is
+  // disabled until a non-empty reason is entered (acceptance criterion: forced reason).
+  const [showVoidModal, setShowVoidModal] = useState(false);
+  const [voidReason, setVoidReason] = useState('');
+  const [voiding, setVoiding] = useState(false);
   // #27: reverse "Transfer to Scheduling" — confirm + in-flight state.
   const [showTransferToSchedulingConfirm, setShowTransferToSchedulingConfirm] = useState(false);
   const [transferringToScheduling, setTransferringToScheduling] = useState(false);
@@ -900,6 +912,72 @@ export default function FieldApplicationInvoice() {
     }
   };
 
+  // #29: Void — cancel/void this bill right on this editor. void_invoice owns the
+  // money + lifecycle: a draft/unposted invoice is routed to 'cancelled' (nothing to
+  // reverse), a posted/overdue one to 'voided' (the RPC reverses allocations + prepay,
+  // cancels pending commissions, writes the append-only financial_audit_log, and zeroes
+  // AR — we never recompute money here). It refuses an already voided/cancelled invoice
+  // and respects the closed-period gate; those come back as honest toasts.
+  // Group-aware: there is NO void_invoice_group RPC, so a split group is voided
+  // member-by-member, each call carrying its own stable, idempotent key (mirrors #28
+  // Unpost) so a retry after a timeout never double-acts.
+  const handleVoid = async () => {
+    if (!profile || !id) return;
+    const reason = voidReason.trim();
+    // Belt-and-suspenders: the confirm button is disabled while blank, but never
+    // send an empty reason (the audit record must carry a real reason).
+    if (!reason) {
+      toast('error', 'Enter a reason for voiding.');
+      return;
+    }
+    // Target every NON-terminal member of the group (or just this invoice). A member
+    // already voided/cancelled is skipped — the RPC would reject it, and there is
+    // nothing to do.
+    const groupMembers = invoiceGroupId && siblings.length > 0 ? siblings : [{ id, status }];
+    const targets = groupMembers.filter((m) => m.status !== 'voided' && m.status !== 'cancelled');
+    if (targets.length === 0) {
+      toast('error', 'Nothing to void — this invoice is already voided or cancelled.');
+      return;
+    }
+    setVoiding(true);
+    let ok = 0;
+    const failures: string[] = [];
+    try {
+      for (const m of targets) {
+        // Per-invoice key cache: a retry reuses the SAME key so a server-side dedup
+        // matches (never a double void). Cleared per id on success.
+        if (!voidKeysRef.current[m.id]) {
+          voidKeysRef.current[m.id] = generateIdempotencyKey('void_invoice', `${profile.id}:${m.id}`);
+        }
+        try {
+          // void_invoice RETURNS void — use .throwOnError() (no `=` capture).
+          await supabase.rpc('void_invoice', {
+            p_invoice_id: m.id,
+            p_void_reason: reason,
+            p_idempotency_key: voidKeysRef.current[m.id],
+          }).throwOnError();
+          ok += 1;
+          delete voidKeysRef.current[m.id];
+        } catch (err) {
+          Sentry.captureException(err, { tags: { rpc: 'void_invoice' } });
+          failures.push(fieldAppError(err));
+        }
+      }
+      if (failures.length === 0) {
+        toast('success', targets.length > 1 ? `Voided ${ok} invoice(s)` : 'Invoice voided');
+        setShowVoidModal(false);
+        setVoidReason('');
+      } else if (ok > 0) {
+        toast('error', `Voided ${ok}, but ${failures.length} failed: ${failures[0]}`);
+      } else {
+        toast('error', `Void failed: ${failures[0]}`);
+      }
+      fetchInvoice();
+    } finally {
+      setVoiding(false);
+    }
+  };
+
   // Phase 1: edit lock covers the whole group — any sibling not in draft/unposted blocks edits.
   const canEdit = isNew || (
     ['draft', 'unposted'].includes(status) &&
@@ -915,6 +993,17 @@ export default function FieldApplicationInvoice() {
       ? siblings.filter((s) => s.status === 'posted' || s.status === 'overdue')
       : (status === 'posted' || status === 'overdue' ? [{ id, status }] : []);
   const canUnpost = !isNew && unpostTargets.length > 0;
+  // #29: Void is admin-only (the void_invoice RPC rejects a non-admin) and available
+  // on any SAVED, non-terminal invoice — draft/unposted (-> cancelled) OR posted/overdue
+  // (-> voided). It is hidden once the invoice (or, for a group, every member) is already
+  // voided/cancelled. A paid invoice still shows Void: void_invoice reverses its
+  // allocations/prepay; if a guard refuses, the error surfaces as a toast. Both Void and
+  // Unpost coexist on a posted invoice — Void is terminal, Unpost returns it to editable.
+  const voidTargets =
+    invoiceGroupId && siblings.length > 0
+      ? siblings.filter((s) => s.status !== 'voided' && s.status !== 'cancelled')
+      : (status !== 'voided' && status !== 'cancelled' ? [{ id, status }] : []);
+  const canVoid = !isNew && isAdmin && voidTargets.length > 0;
   // #24: a posted/voided/paid invoice is LOCKED — committed money must not change
   // (#23 lifecycle). canEdit already encodes this; isLocked is its inverse for an
   // existing invoice, used to drive the posted-lock banner + read-only chrome.
@@ -1074,7 +1163,9 @@ export default function FieldApplicationInvoice() {
               {totalAppliedAcres.toFixed(1)} acres &middot; {locations.length} locations &middot; {fmt(invoiceTotalCents)} <span className="text-gray-400">est.</span>
             </p>
           </div>
-          {!isNew && <Badge variant={status === 'draft' ? 'default' : status === 'posted' ? 'success' : 'warning'}>{status}</Badge>}
+          {/* #29: canonical status→variant map so a voided/cancelled invoice reads as a
+              clear error (red), not amber — the prior inline ternary mislabeled both. */}
+          {!isNew && <Badge variant={statusToBadgeVariant[status] || 'default'}>{status}</Badge>}
         </div>
         <div className="flex flex-wrap gap-2 justify-end">
           {!isNew && canEdit && (
@@ -1108,6 +1199,14 @@ export default function FieldApplicationInvoice() {
               {invoiceGroupId && unpostTargets.length > 1 ? `Unpost Group (${unpostTargets.length})` : 'Unpost'}
             </Button>
           )}
+          {/* #29: Void — cancel/void the bill with a required reason. Admin-only;
+              available on any saved, non-terminal invoice (draft/unposted -> cancelled,
+              posted/overdue -> voided). Group-aware: voids each member. Terminal. */}
+          {!isNew && canVoid && (
+            <Button variant="danger" size="sm" icon={<Ban className="w-4 h-4" />} onClick={() => { setVoidReason(''); setShowVoidModal(true); }} loading={voiding} disabled={voiding}>
+              {invoiceGroupId && voidTargets.length > 1 ? `Void Group (${voidTargets.length})` : 'Void'}
+            </Button>
+          )}
           {/* #24: Print — available for any saved invoice (draft or posted). */}
           {!isNew && (
             <Button variant="secondary" size="sm" icon={<Printer className="w-4 h-4" />} onClick={handlePrint} loading={printing} disabled={printing}>
@@ -1132,8 +1231,21 @@ export default function FieldApplicationInvoice() {
       </div>
 
       {/* #24: posted-lock banner — a committed invoice is read-only (the posted
-          records warning from #23). Editing inputs are also disabled via canEdit. */}
-      {isLocked && (
+          records warning from #23). Editing inputs are also disabled via canEdit.
+          #29: a voided/cancelled invoice is TERMINAL — it can't be unposted, so show a
+          distinct red banner instead of the amber "unpost to edit" copy. */}
+      {isLocked && (status === 'voided' || status === 'cancelled') && (
+        <Card>
+          <div className="flex items-start gap-2 px-4 py-3 bg-red-50 border-l-4 border-red-400 rounded text-sm text-red-800">
+            <Ban className="w-4 h-4 mt-0.5 shrink-0" />
+            <span>
+              This invoice is <strong>{status}</strong> and is permanently locked for audit. It is excluded from
+              open and AR totals and can&apos;t be edited or reopened. It stays visible here for the record. Print is still available.
+            </span>
+          </div>
+        </Card>
+      )}
+      {isLocked && status !== 'voided' && status !== 'cancelled' && (
         <Card>
           <div className="flex items-start gap-2 px-4 py-3 bg-amber-50 border-l-4 border-amber-400 rounded text-sm text-amber-800">
             <Lock className="w-4 h-4 mt-0.5 shrink-0" />
@@ -1607,6 +1719,49 @@ export default function FieldApplicationInvoice() {
         variant="warning"
         loading={unposting}
       />
+
+      {/* #29: Void modal — a required reason (button disabled until non-empty), then
+          void_invoice (draft/unposted -> cancelled, posted/overdue -> voided). Group-aware. */}
+      <Modal open={showVoidModal} onClose={() => { if (!voiding) setShowVoidModal(false); }} title={invoiceGroupId && voidTargets.length > 1 ? 'Void Invoice Group' : 'Void Invoice'}>
+        <div className="space-y-4">
+          <div className="flex items-start gap-3 p-3 bg-red-50 rounded-lg">
+            <Ban className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
+            <p className="text-sm text-red-800">
+              {invoiceGroupId && voidTargets.length > 1
+                ? `Void all ${voidTargets.length} invoice(s) in this split group? `
+                : 'Void this invoice? '}
+              A draft/unposted invoice is <strong>cancelled</strong>; a posted invoice is <strong>voided</strong> and its
+              balance, allocations, and prepay are reversed. This is terminal and can&apos;t be undone. The invoice stays
+              visible for audit but drops out of open and AR totals.
+            </p>
+          </div>
+          <div>
+            <label htmlFor="void-reason" className="block text-sm font-medium text-gray-700 mb-1">
+              Reason for voiding <span className="text-red-600">*</span>
+            </label>
+            <textarea
+              id="void-reason"
+              value={voidReason}
+              onChange={(e) => setVoidReason(e.target.value)}
+              rows={3}
+              placeholder="e.g., Entered in error, duplicate invoice, wrong customer"
+              className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-200"
+            />
+          </div>
+          <div className="flex justify-end gap-3 pt-2">
+            <Button variant="ghost" onClick={() => setShowVoidModal(false)} disabled={voiding}>Cancel</Button>
+            <Button
+              variant="danger"
+              icon={<Ban className="w-4 h-4" />}
+              onClick={handleVoid}
+              loading={voiding}
+              disabled={voiding || !voidReason.trim()}
+            >
+              {invoiceGroupId && voidTargets.length > 1 ? 'Void Group' : 'Void Invoice'}
+            </Button>
+          </div>
+        </div>
+      </Modal>
 
       {/* #27: reverse Transfer to Scheduling confirm. */}
       <ConfirmModal

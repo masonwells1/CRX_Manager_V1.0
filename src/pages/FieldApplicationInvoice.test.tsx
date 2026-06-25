@@ -400,6 +400,94 @@ describe('FieldApplicationInvoice — #28 Unpost on a posted invoice', () => {
   });
 });
 
+// #29: Void on the per-acre field-app editor — Void is admin-only, requires a reason
+// (the confirm button is disabled until non-empty), and routes through void_invoice
+// with the actor's reason + a per-invoice idempotency key. void_invoice itself routes
+// draft/unposted -> cancelled and posted -> voided; the UI is the same either way.
+describe('FieldApplicationInvoice — #29 Void on a field-app invoice', () => {
+  function setupInvoice(status: string, extra: Record<string, unknown> = {}) {
+    mockUseParams.mockReturnValue({ id: 'inv-void' });
+    mockFrom.mockImplementation(
+      makeFromMock({
+        invoices: {
+          data: [
+            {
+              id: 'inv-void',
+              invoice_number: 'INV-9001',
+              invoice_type: 'field_application',
+              job_id: null,
+              blend_ticket_id: null,
+              invoice_date: '2026-04-29',
+              header_notes: '',
+              status,
+              application_service_id: null,
+              invoice_group_id: null,
+              total_amount_cents: 100000,
+              ...extra,
+            },
+          ],
+        },
+        field_app_locations: { data: [] },
+        invoice_items: { data: [] },
+        invoice_shares: { data: [] },
+      }),
+    );
+  }
+
+  it('shows a Void button on a posted invoice and forces a reason before voiding', async () => {
+    setupInvoice('posted');
+    await renderPage();
+    await waitFor(() => expect(screen.getByText(/Field Application INV-9001/)).toBeInTheDocument());
+
+    const voidButton = screen.getByRole('button', { name: /^Void$/i });
+    expect(voidButton).toBeInTheDocument();
+    fireEvent.click(voidButton);
+
+    // The modal opens; the confirm "Void Invoice" button is disabled until a reason
+    // is entered (acceptance criterion: forced reason).
+    const confirmButton = await screen.findByRole('button', { name: /^Void Invoice$/i });
+    expect(confirmButton).toBeDisabled();
+
+    const reason = screen.getByPlaceholderText(/Entered in error/i);
+    fireEvent.change(reason, { target: { value: 'Duplicate bill' } });
+    expect(confirmButton).not.toBeDisabled();
+
+    mockRpc.mockResolvedValueOnce({ data: null, error: null }); // void_invoice RETURNS void
+    fireEvent.click(confirmButton);
+
+    await waitFor(() => {
+      const call = mockRpc.mock.calls.find((c) => c[0] === 'void_invoice');
+      expect(call).toBeDefined();
+      expect(call![1]).toMatchObject({
+        p_invoice_id: 'inv-void',
+        p_void_reason: 'Duplicate bill',
+      });
+      expect(typeof call![1].p_idempotency_key).toBe('string');
+    });
+  });
+
+  it('shows Void on a draft invoice (routes to cancelled via the same RPC)', async () => {
+    setupInvoice('draft');
+    await renderPage();
+    await waitFor(() => expect(screen.getByText(/Field Application INV-9001/)).toBeInTheDocument());
+    expect(screen.getByRole('button', { name: /^Void$/i })).toBeInTheDocument();
+  });
+
+  it('does NOT show Void on an already-voided invoice (terminal)', async () => {
+    setupInvoice('voided');
+    await renderPage();
+    await waitFor(() => expect(screen.getByText(/Field Application INV-9001/)).toBeInTheDocument());
+    expect(screen.queryByRole('button', { name: /^Void$/i })).not.toBeInTheDocument();
+  });
+
+  it('does NOT show Void on an already-cancelled invoice (terminal)', async () => {
+    setupInvoice('cancelled');
+    await renderPage();
+    await waitFor(() => expect(screen.getByText(/Field Application INV-9001/)).toBeInTheDocument());
+    expect(screen.queryByRole('button', { name: /^Void$/i })).not.toBeInTheDocument();
+  });
+});
+
 /**
  * F2 Branch B — make the common auto-fill case visible. applied_acres defaults to the field's
  * system acres, so the >=10% divergence flag never fires on a full-field bill. The Locations tab
