@@ -1875,6 +1875,14 @@ export default function JobDetail() {
                 applicators={applicators}
                 vehicles={vehicles}
                 jobVehicleId={vehicleId || null}
+                jobFields={fieldRows
+                  .filter((f) => f.field_id)
+                  .map((f) => ({
+                    field_id: f.field_id,
+                    field_name: f.field_name,
+                    acres: parseFloat(f.acres_to_treat) || 0,
+                  }))}
+                totalAcres={totalAcres}
                 canEdit={canEdit}
                 performedBy={profile?.id ?? null}
               />

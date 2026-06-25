@@ -15,7 +15,7 @@
 // extend AppliedRecordDraft/buildAppliedRecordPatch in appliedRecords.ts.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Plus, Pencil, Trash2, Truck, User, CalendarDays } from 'lucide-react';
+import { Plus, Pencil, Trash2, Truck, User, CalendarDays, MapPin, AlertTriangle, X } from 'lucide-react';
 import Button from '../ui/Button';
 import Input from '../ui/Input';
 import Modal from '../ui/Modal';
@@ -30,17 +30,35 @@ import {
   defaultVehicleForApplicator,
   validateAppliedRecord,
   buildAppliedRecordPatch,
+  buildAppliedFieldRows,
+  sumDraftFieldAcres,
+  sumRecordFieldAcres,
+  computeRemainingAcres,
   type AppliedRecordDraft,
 } from './appliedRecords';
+
+// The job's planned locations, passed from JobDetail (field_id + name + the
+// planned acres_to_treat). Drives the per-location picker and the "X of Y
+// remaining" counter. acres is the planned figure for that field.
+export interface AppliedJobField {
+  field_id: string;
+  field_name: string;
+  acres: number;
+}
 
 interface Props {
   jobId: string;
   applicators: Profile[];
   vehicles: Vehicle[];
   jobVehicleId: string | null;
+  // #18: the job's planned locations + total planned acres, for per-location
+  // applied-acres capture and the live remaining-acres counter.
+  jobFields: AppliedJobField[];
+  totalAcres: number;
   canEdit: boolean;
   performedBy: string | null;
 }
+
 
 // NOTE: do NOT embed `applicator:profiles!...` here. The `profiles` SELECT RLS
 // is `is_admin() OR id = auth.uid()`, so that embed returns NULL for every
@@ -50,14 +68,20 @@ interface Props {
 // readable by sales_rep). The vehicle embed is kept and read directly so a
 // valid-but-inactive vehicle (not in the active `vehicles` prop) still shows
 // its name on the row.
+// Pull the per-location child rows along with each entry (job_applied_record_fields)
+// so the list shows each entry's own acres total and the remaining-acres math has
+// everything it needs without a second round-trip. Kept as a single string literal
+// so PostgREST can statically type the embedded result.
 const RECORD_SELECT =
-  '*, vehicle:vehicles!job_applied_records_vehicle_id_fkey(vehicle_name, vehicle_type)';
+  '*, vehicle:vehicles!job_applied_records_vehicle_id_fkey(vehicle_name, vehicle_type), job_applied_record_fields(id, application_record_id, field_id, applied_acres, created_at, updated_at)';
 
 export default function AppliedRecordsManager({
   jobId,
   applicators,
   vehicles,
   jobVehicleId,
+  jobFields,
+  totalAcres,
   canEdit,
   performedBy,
 }: Props) {
@@ -92,6 +116,20 @@ export default function AppliedRecordsManager({
       return map.get(rec.vehicle_id) ?? rec.vehicle?.vehicle_name ?? '(removed vehicle)';
     };
   }, [vehicles]);
+
+  // Resolve a field name from the job's planned locations. A field later removed
+  // from the job still shows a name if it's in jobFields; otherwise "(field)".
+  const fieldName = useMemo(() => {
+    const map = new Map(jobFields.map((f) => [f.field_id, f.field_name]));
+    return (id: string) => map.get(id) ?? '(field)';
+  }, [jobFields]);
+
+  // Job-level Total / Applied / Remaining across every SAVED entry (this is what
+  // the DB trigger writes to jobs.applied_acres -> jobs.remaining_acres).
+  const jobSummary = useMemo(
+    () => computeRemainingAcres(totalAcres, records),
+    [totalAcres, records],
+  );
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -146,22 +184,55 @@ export default function AppliedRecordsManager({
       return;
     }
     setSaving(true);
-    const patch = buildAppliedRecordPatch(draft);
+    // Per-location mode is active whenever the job has planned locations (the UI
+    // then captures per-field acres instead of a single manual figure). In that
+    // mode the record's applied_acres is the field sum (0 when cleared), so it
+    // never drifts from the DB trigger's roll-up.
+    const perLocationMode = jobFields.length > 0;
+    const patch = buildAppliedRecordPatch(draft, perLocationMode);
+    const fieldRows = buildAppliedFieldRows(draft);
     try {
+      let recordId = editingId;
       if (editingId) {
         const result = await supabase
           .from('job_applied_records')
           .update(patch)
           .eq('id', editingId)
-          .select(RECORD_SELECT);
+          .select('id');
         checkMutationResult(result, 'Update applied-info record');
       } else {
         const result = await supabase
           .from('job_applied_records')
           .insert({ ...patch, job_id: jobId, created_by: performedBy })
-          .select(RECORD_SELECT);
+          .select('id');
         checkMutationResult(result, 'Add applied-info record');
+        recordId = (result.data?.[0] as { id: string } | undefined)?.id ?? null;
       }
+
+      // #18: replace the entry's per-location detail. Delete-then-insert keeps
+      // the set authoritative (handles added/removed/edited rows in one path).
+      // The DB trigger then recomputes the entry's applied_acres roll-up and the
+      // job's applied_acres -> remaining_acres from the resulting child rows.
+      if (recordId) {
+        // Clear any existing per-location rows first. NOTE: a fresh record (add
+        // path) or an entry that had no locations matches ZERO rows, which is
+        // legitimate — so only surface a real error here, not a 0-rows-affected
+        // "denial" (checkMutationResult treats [] as denied, which would wrongly
+        // abort every first save). RLS still protects the delete via the parent.
+        const del = await supabase
+          .from('job_applied_record_fields')
+          .delete()
+          .eq('application_record_id', recordId);
+        if (del.error) throw del.error;
+        if (fieldRows.length > 0) {
+          const ins = await supabase
+            .from('job_applied_record_fields')
+            .insert(fieldRows.map((f) => ({ ...f, application_record_id: recordId })))
+            .select();
+          checkMutationResult(ins, 'Add applied-info locations');
+        }
+      }
+
       if (performedBy) {
         logActivity({
           event: editingId ? 'job_applied_record_updated' : 'job_applied_record_added',
@@ -232,8 +303,86 @@ export default function AppliedRecordsManager({
     return opts;
   }, [vehicles, draft.vehicle_id, editingRecord]);
 
+  // ── #18 per-location draft handlers ──────────────────────────────────────
+  function addFieldRow() {
+    setDraft((d) => ({ ...d, fields: [...d.fields, { field_id: '', applied_acres: '' }] }));
+  }
+  function updateFieldRow(idx: number, key: 'field_id' | 'applied_acres', value: string) {
+    setDraft((d) => {
+      const next = d.fields.map((f, i) => (i === idx ? { ...f, [key]: value } : f));
+      return { ...d, fields: next };
+    });
+  }
+  function removeFieldRow(idx: number) {
+    setDraft((d) => ({ ...d, fields: d.fields.filter((_, i) => i !== idx) }));
+  }
+  // Pre-fill a per-location row's acres with that field's PLANNED acres when the
+  // user picks a field and hasn't typed an acres value yet (the common "applied
+  // the whole field" case). They can still override it.
+  function onFieldPicked(idx: number, fieldId: string) {
+    setDraft((d) => {
+      const planned = jobFields.find((f) => f.field_id === fieldId);
+      const next = d.fields.map((f, i) => {
+        if (i !== idx) return f;
+        const acres = f.applied_acres.trim() === '' && planned ? String(planned.acres) : f.applied_acres;
+        return { field_id: fieldId, applied_acres: acres };
+      });
+      return { ...d, fields: next };
+    });
+  }
+
+  // Live "X of Y remaining" preview while editing: replace the entry being
+  // edited (excludeId) with the current draft's per-location sum so the counter
+  // reflects what saving WOULD make the job total, without double-counting.
+  const draftFieldSum = sumDraftFieldAcres(draft.fields);
+  const livePreview = useMemo(
+    () => computeRemainingAcres(totalAcres, records, { excludeId: editingId, draftSum: draftFieldSum }),
+    [totalAcres, records, editingId, draftFieldSum],
+  );
+
+  // Locations not yet on this entry (so the picker doesn't offer a duplicate).
+  function availableFieldsFor(currentFieldId: string) {
+    const chosen = new Set(draft.fields.map((f) => f.field_id).filter((id) => id && id !== currentFieldId));
+    return jobFields.filter((f) => !chosen.has(f.field_id));
+  }
+
   return (
     <div>
+      {/* #18 job-level acres summary: Total planned vs Applied (sum of every
+          entry's per-location acres) vs Remaining. Mirrors jobs.applied_acres /
+          jobs.remaining_acres. Over-application is flagged, never silently hidden. */}
+      <div className="mb-4 grid grid-cols-3 gap-3">
+        <div className="rounded-lg border border-gray-200 px-3 py-2">
+          <p className="text-xs text-secondary">Total Acres</p>
+          <p className="text-lg font-semibold text-nav-dark tabular-nums">
+            {jobSummary.total.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+          </p>
+        </div>
+        <div className="rounded-lg border border-gray-200 px-3 py-2">
+          <p className="text-xs text-secondary">Applied Acres</p>
+          <p className="text-lg font-semibold text-nav-dark tabular-nums">
+            {jobSummary.applied.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+          </p>
+        </div>
+        <div className={`rounded-lg border px-3 py-2 ${jobSummary.isOver ? 'border-amber-300 bg-amber-50' : 'border-gray-200'}`}>
+          <p className="text-xs text-secondary">Remaining Acres</p>
+          <p className={`text-lg font-semibold tabular-nums ${jobSummary.isOver ? 'text-amber-700' : 'text-crx-green'}`}>
+            {jobSummary.remaining.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+          </p>
+        </div>
+      </div>
+      {jobSummary.isOver && (
+        <div className="mb-4 flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+          <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+          <span>
+            Over-applied by {jobSummary.over.toLocaleString(undefined, { maximumFractionDigits: 2 })} ac
+            &mdash; applied acres ({jobSummary.applied.toLocaleString(undefined, { maximumFractionDigits: 2 })})
+            exceed the planned total ({jobSummary.total.toLocaleString(undefined, { maximumFractionDigits: 2 })}).
+            Check the per-location entries.
+          </span>
+        </div>
+      )}
+
       <div className="flex items-center justify-between mb-3">
         <div>
           <h3 className="text-sm font-semibold text-nav-dark">As-Applied Entries</h3>
@@ -274,13 +423,33 @@ export default function AppliedRecordsManager({
               </tr>
             </thead>
             <tbody>
-              {records.map((rec) => (
-                <tr key={rec.id} className="border-t border-gray-100">
+              {records.map((rec) => {
+                const locs = rec.job_applied_record_fields ?? [];
+                const recSum = sumRecordFieldAcres(rec);
+                return (
+                <tr key={rec.id} className="border-t border-gray-100 align-top">
                   <td className="px-3 py-2 whitespace-nowrap">{rec.application_date}</td>
                   <td className="px-3 py-2">{applicatorLabel(rec.applicator_id)}</td>
                   <td className="px-3 py-2">{vehicleLabel(rec)}</td>
                   <td className="px-3 py-2 text-right tabular-nums">
-                    {rec.applied_acres != null ? rec.applied_acres : '—'}
+                    {locs.length > 0 ? (
+                      <div>
+                        <span className="font-medium">{recSum.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
+                        <ul className="mt-1 text-xs text-secondary text-left">
+                          {locs.map((l) => (
+                            <li key={l.id} className="flex items-center gap-1 justify-end">
+                              <MapPin className="w-3 h-3" />
+                              <span>{fieldName(l.field_id)}:</span>
+                              <span className="tabular-nums">{l.applied_acres.toLocaleString(undefined, { maximumFractionDigits: 2 })} ac</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    ) : rec.applied_acres != null ? (
+                      rec.applied_acres
+                    ) : (
+                      '—'
+                    )}
                   </td>
                   <td className="px-3 py-2 text-secondary">{rec.notes ?? ''}</td>
                   {canEdit && (
@@ -306,7 +475,8 @@ export default function AppliedRecordsManager({
                     </td>
                   )}
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -361,15 +531,95 @@ export default function AppliedRecordsManager({
             onChange={(e) => setDraft({ ...draft, application_date: e.target.value })}
           />
 
-          <Input
-            label="Applied Acres (optional)"
-            type="number"
-            min="0"
-            step="0.1"
-            value={draft.applied_acres}
-            onChange={(e) => setDraft({ ...draft, applied_acres: e.target.value })}
-            placeholder="Acres covered in this pass"
-          />
+          {/* #18 per-location applied acres. When the job has planned locations,
+              record which fields this pass covered and how many acres on each.
+              The entry's applied total is the sum of these lines; the DB trigger
+              rolls every entry's sum into the job's applied/remaining acres. */}
+          {jobFields.length > 0 ? (
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-sm font-medium text-nav-dark">
+                  <MapPin className="w-3.5 h-3.5 inline mr-1" />Applied Acres by Location
+                </label>
+                <Button type="button" size="sm" variant="secondary" onClick={addFieldRow}>
+                  <Plus className="w-3.5 h-3.5" /> Add Location
+                </Button>
+              </div>
+
+              {draft.fields.length === 0 ? (
+                <p className="text-xs text-secondary py-1">
+                  Add a location to record how many acres of each field this pass covered.
+                </p>
+              ) : (
+                <div className="space-y-2">
+                  {draft.fields.map((row, idx) => (
+                    <div key={idx} className="flex items-center gap-2">
+                      <select
+                        value={row.field_id}
+                        onChange={(e) => onFieldPicked(idx, e.target.value)}
+                        aria-label={`Location ${idx + 1}`}
+                        className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                      >
+                        <option value="">Select location...</option>
+                        {availableFieldsFor(row.field_id).map((f) => (
+                          <option key={f.field_id} value={f.field_id}>
+                            {f.field_name} ({f.acres.toLocaleString(undefined, { maximumFractionDigits: 2 })} ac planned)
+                          </option>
+                        ))}
+                      </select>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.1"
+                        value={row.applied_acres}
+                        onChange={(e) => updateFieldRow(idx, 'applied_acres', e.target.value)}
+                        aria-label={`Applied acres for location ${idx + 1}`}
+                        placeholder="Acres"
+                        className="w-28 px-3 py-2 text-sm border border-gray-200 rounded-lg text-right tabular-nums focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => removeFieldRow(idx)}
+                        aria-label={`Remove location ${idx + 1}`}
+                        className="p-1.5 text-secondary hover:text-red-600 rounded"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Live "X of Y remaining" counter — previews what saving this entry
+                  would make the job total. Over-application is flagged here too. */}
+              <div className={`mt-2 flex items-center justify-between rounded-lg border px-3 py-2 text-sm ${livePreview.isOver ? 'border-amber-300 bg-amber-50 text-amber-800' : 'border-gray-200 text-secondary'}`}>
+                <span>
+                  This entry: <span className="font-medium tabular-nums">{draftFieldSum.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span> ac
+                </span>
+                <span className="flex items-center gap-1">
+                  {livePreview.isOver && <AlertTriangle className="w-4 h-4" />}
+                  Remaining after save:{' '}
+                  <span className="font-semibold tabular-nums">
+                    {livePreview.remaining.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                  </span>{' '}
+                  of {livePreview.total.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                  {livePreview.isOver && (
+                    <span className="ml-1">(over by {livePreview.over.toLocaleString(undefined, { maximumFractionDigits: 2 })})</span>
+                  )}
+                </span>
+              </div>
+            </div>
+          ) : (
+            <Input
+              label="Applied Acres (optional)"
+              type="number"
+              min="0"
+              step="0.1"
+              value={draft.applied_acres}
+              onChange={(e) => setDraft({ ...draft, applied_acres: e.target.value })}
+              placeholder="Acres covered in this pass"
+            />
+          )}
 
           <div>
             <label className="block text-sm font-medium text-nav-dark mb-1">Notes</label>

@@ -3805,6 +3805,48 @@ export type Database = {
           },
         ]
       }
+      job_applied_record_fields: {
+        Row: {
+          application_record_id: string
+          applied_acres: number
+          created_at: string
+          field_id: string
+          id: string
+          updated_at: string
+        }
+        Insert: {
+          application_record_id: string
+          applied_acres?: number
+          created_at?: string
+          field_id: string
+          id?: string
+          updated_at?: string
+        }
+        Update: {
+          application_record_id?: string
+          applied_acres?: number
+          created_at?: string
+          field_id?: string
+          id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "job_applied_record_fields_application_record_id_fkey"
+            columns: ["application_record_id"]
+            isOneToOne: false
+            referencedRelation: "job_applied_records"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "job_applied_record_fields_field_id_fkey"
+            columns: ["field_id"]
+            isOneToOne: false
+            referencedRelation: "fields"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       job_applied_records: {
         Row: {
           applicator_id: string | null

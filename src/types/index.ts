@@ -2131,10 +2131,26 @@ export interface JobAppliedRecord {
   updated_at: string;
 }
 
-// Joined display shape used by the Applied Info tab (record + resolved names).
+// Field-app parity #18: per-location applied acres for one as-applied entry.
+// Child of job_applied_records. The SUM of these across ALL of a job's entries
+// is rolled (by a DB trigger) into jobs.applied_acres, which feeds the GENERATED
+// jobs.remaining_acres = GREATEST(total_acres - applied_acres, 0). One row per
+// (entry, field). NEVER write jobs.remaining_acres directly.
+export interface JobAppliedRecordField {
+  id: string;
+  application_record_id: string;
+  field_id: string;
+  applied_acres: number;
+  created_at: string;
+  updated_at: string;
+}
+
+// Joined display shape used by the Applied Info tab (record + resolved names +
+// its per-location applied-acres detail rows).
 export interface JobAppliedRecordRow extends JobAppliedRecord {
   applicator?: { full_name: string | null } | null;
   vehicle?: { vehicle_name: string | null; vehicle_type: string | null } | null;
+  job_applied_record_fields?: JobAppliedRecordField[];
 }
 
 // Sprint 9: Report Row Types
