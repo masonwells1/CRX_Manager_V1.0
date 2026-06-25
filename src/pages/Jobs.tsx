@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Download, FileText, Trash2, ChevronDown, ChevronRight, Tag, Tags, Search, SlidersHorizontal, Users, Layers, Pencil, Settings2, Truck, FlaskConical } from 'lucide-react';
+import { Plus, Download, FileText, Trash2, ChevronDown, ChevronRight, Tag, Tags, Search, SlidersHorizontal, Users, Layers, Pencil, Settings2, Truck, FlaskConical, ClipboardList } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge, { type BadgeVariant } from '../components/ui/Badge';
@@ -19,6 +19,9 @@ import { fetchLoaderWorksheetData } from '../lib/loaderWorksheetFetch';
 import { generateLoaderWorksheetBatchPdf, generateLoaderWorksheetPdf } from '../lib/loaderWorksheetPdf';
 import { fetchChemicalApplicationReportData } from '../lib/chemicalApplicationReportFetch';
 import { generateChemicalApplicationReportPdf } from '../lib/chemicalApplicationReportPdf';
+import { fetchChemicalSummaryData } from '../lib/chemicalSummaryReportFetch';
+import { buildChemicalSummaryReportData, chemicalSummaryCsvRows } from '../lib/chemicalSummaryReportData';
+import { generateChemicalSummaryReportPdf } from '../lib/chemicalSummaryReportPdf';
 import { sanitizeError } from '../lib/errorSanitizer';
 import { Sentry } from '../lib/sentry';
 import { getSeasonDates } from '../utils/season';
@@ -199,6 +202,8 @@ export default function Jobs() {
   const [exporting, setExporting] = useState(false);
   // Field-app parity #10: bulk Loader Worksheet PDF over the selected jobs.
   const [loaderExporting, setLoaderExporting] = useState(false);
+  // Field-app parity #12: bulk Chemical Summary Report (cross-job per-product totals).
+  const [summaryExporting, setSummaryExporting] = useState(false);
   // #10: per-row Loader Worksheet print in progress (the job id being generated).
   const [rowLoaderId, setRowLoaderId] = useState<string | null>(null);
   // #11: per-row Chemical Application Report print in progress (job id being generated).
@@ -795,6 +800,72 @@ export default function Jobs() {
     setRowChemReportId(null);
   };
 
+  // Field-app parity #12: Chemical Summary Report over the checkbox-SELECTED jobs.
+  // Sums each chemical/product's total applied quantity across all selected jobs
+  // (keyed by product + unit), re-derives the gal/lb-equivalent from the SUMMED
+  // quantity, and renders a print-ready PDF + a CSV. NEVER silently undercounts: a
+  // job that can't be fully fetched/resolved is surfaced as EXCLUDED on the report
+  // and in a toast, so the grand total is never quietly wrong.
+  const handleChemicalSummaryReport = async () => {
+    // Criterion 5: no selection → prompt to select jobs, never an empty/erroring report.
+    if (selectedRows.length === 0) {
+      toast('error', 'Select one or more jobs first to run the Chemical Summary Report.');
+      return;
+    }
+    setSummaryExporting(true);
+    try {
+      const ids = selectedRows.map((j) => j.id);
+      const { jobs: fetched, excluded } = await fetchChemicalSummaryData(ids);
+      // Every selected job failed to resolve / had no chemicals → don't produce an
+      // official-looking empty PDF. Tell the user why (mirrors the per-job guards).
+      if (fetched.length === 0) {
+        toast('error', excluded.length > 0
+          ? 'None of the selected jobs could be summarized (no chemicals or could not be resolved).'
+          : 'No chemical data for the selected jobs.');
+        setSummaryExporting(false);
+        return;
+      }
+      const summary = buildChemicalSummaryReportData(fetched, excluded);
+      await generateChemicalSummaryReportPdf(summary);
+      // CSV export alongside the PDF (criterion 3 "ideally a CSV export too").
+      exportToCSV(chemicalSummaryCsvRows(summary), [
+        { key: 'product_name', header: 'Product' },
+        { key: 'unit', header: 'Unit' },
+        { key: 'total_quantity', header: 'Total Applied' },
+        { key: 'gl_lb_equiv', header: 'gal/lb Equivalent' },
+        { key: 'job_count', header: 'Jobs' },
+      ], 'chemical-summary');
+
+      // Stamp the print audit for the INCLUDED jobs only (the ones actually summed),
+      // matching the #10/#11 bulk print paths. Best-effort: a failed stamp must not
+      // undo the already-downloaded report.
+      const includedIds = summary.included_jobs.map((j) => j.job_id);
+      try {
+        const stamp = await supabase
+          .from('jobs')
+          .update({ printed_at: new Date().toISOString(), last_printed_by: profile?.id ?? null })
+          .in('id', includedIds)
+          .select('id');
+        checkMutationResult(stamp, 'Stamp chemical-summary print');
+        fetchJobs();
+      } catch { /* non-blocking — the report already generated */ }
+      // includedIds is non-empty here (fetched.length > 0 was guarded above), so the
+      // first included job anchors the audit entry (entityId is a single uuid).
+      if (profile && includedIds[0]) logActivity({ event: 'chemical_summary_report_printed', description: `Chemical Summary Report generated across ${includedIds.length} job(s)`, performedBy: profile.id, entityType: 'job', entityId: includedIds[0] });
+
+      // Surface excluded jobs so the grand total is never silently wrong.
+      if (excluded.length > 0) {
+        toast('error', `Summary generated for ${fetched.length} job(s); ${excluded.length} excluded (see the report's Jobs Excluded list).`);
+      } else {
+        toast('success', `Chemical summary generated across ${fetched.length} job(s)`);
+      }
+    } catch (err) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'jobs_bulk_chemical_summary' } });
+      toast('error', sanitizeError(err));
+    }
+    setSummaryExporting(false);
+  };
+
   const handleDelete = async () => {
     setDeleting(true);
     try {
@@ -822,6 +893,7 @@ export default function Jobs() {
     { key: 'csv', label: 'Export CSV', icon: <Download className="w-4 h-4" />, onClick: handleExportCSV },
     { key: 'pdf', label: 'Download PDF', icon: <FileText className="w-4 h-4" />, onClick: handleExportPDF, loading: exporting },
     { key: 'loader', label: 'Loader Worksheet', icon: <Truck className="w-4 h-4" />, onClick: handleLoaderWorksheets, loading: loaderExporting },
+    { key: 'chem-summary', label: 'Chemical Summary Report', icon: <ClipboardList className="w-4 h-4" />, onClick: handleChemicalSummaryReport, loading: summaryExporting },
     { key: 'delete', label: 'Delete Jobs', icon: <Trash2 className="w-4 h-4" />, onClick: () => setDeleteModalOpen(true), variant: 'danger' as const },
   ];
 

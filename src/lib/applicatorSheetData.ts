@@ -141,6 +141,13 @@ export interface ApplicatorSheetProduct {
   total_unit: string | null;
   /** "12.5 gal" / "40 lb" gallon-or-pound equivalent of total_applied; null if not convertible. */
   total_gl_lb: string | null;
+  /**
+   * 'liquid' | 'dry' (or null when unknown) — carried THROUGH from the raw input so a
+   * cross-job aggregator (#12 Chemical Summary) can RE-DERIVE the gal/lb equivalent of a
+   * SUMMED quantity with the same product_form the server convert_to_gl_lb uses, instead
+   * of string-adding per-job gal/lb displays. Display-only consumers (#9/#11) ignore it.
+   */
+  product_form: 'liquid' | 'dry' | null;
   rei_hours: number | null;
   phi_days: number | null;
   epa_registration: string | null;
@@ -269,6 +276,7 @@ export function buildApplicatorSheetData(input: BuildSheetInput): ApplicatorShee
       total_applied: total != null ? Math.round(total * 10000) / 10000 : null,
       total_unit: totalUnit,
       total_gl_lb: conv ? `${fmtNum(conv.value)} ${conv.unit}` : null,
+      product_form: p.product_form,
       rei_hours: p.rei_hours,
       phi_days: p.phi_days,
       epa_registration: p.epa_registration,
