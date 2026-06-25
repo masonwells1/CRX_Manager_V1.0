@@ -69,6 +69,75 @@
       ],
       "openQuestions": []
     },
+    "18": {
+      "status": "BUILT",
+      "date": "2026-06-24",
+      "commit": "7c64fb9 + fix 5f25a4c",
+      "criteria": "7/7",
+      "codex": "pending",
+      "codexDetail": "Codex unavailable. Multi-lens review found HIGH + 3 MED + 1 LOW — ALL FIXED in 5f25a4c (new migration 20260624181000) and re-verified live by orchestrator: (HIGH) field_id FK was ON DELETE CASCADE (would erase legal as-applied detail on field delete) -> now ON DELETE RESTRICT (confirmed confdeltype). (MED) recompute_job_applied_acres SECURITY DEFINER was anon-callable -> EXECUTE REVOKED from PUBLIC+anon (confirmed false; triggers run as definer). (MED) stale per-entry on last-child-delete -> settle_applied_record_acres zeroes the record. (MED) #17-era manual records uncounted -> jobs.applied_acres now SUMs applied_acres across ALL records; frontend effectiveRecordAcres mirrors. (LOW) float over-application false positive -> 1e-6 epsilon. Re-run Codex at reset: both migrations + appliedRecords + AppliedRecordsManager.",
+      "migration": "20260624180000_job_applied_record_fields.sql + 20260624181000_fix_applied_acres_integrity.sql",
+      "verified": "Build agent proved applied/remaining math + over-clamp in-app. Multi-lens caught HIGH+3MED. Fix 5f25a4c: 5 live smoke results (FK RESTRICT blocks field delete; anon EXECUTE revoked; last-child zeroes; manual record counted; remaining_acres consistent) + mixed-job UI agreement (228.5=198.5+30) + 42 tests. Orchestrator re-verified live: FK RESTRICT, anon EXECUTE false on both fns, old migration untouched, typecheck PASS.",
+      "parkedLow": [],
+      "openQuestions": []
+    },
+    "21": {
+      "status": "BUILT",
+      "date": "2026-06-24",
+      "commit": "cf11739 + fix 0c860bd",
+      "criteria": "6/6",
+      "codex": "pending",
+      "codexDetail": "Codex unavailable. Multi-lens review found 1 HIGH (+ Lows) — FIXED in 0c860bd (frontend-only) and re-verified: editing an as-applied entry ran an UNCONDITIONAL crew delete+reinsert that WIPED the SET-NULL'd legal snapshot rows -> now scoped .delete().not('member_id','is',null) so legal rows survive (proven before/after in a rolled-back txn: old=0 rows, fixed=1 survives). + Low guard: load-failure toast + skip crew mutation when catalog empty while members selected. Security lens CLEAN (RLS job-scoped link->record->job; anon denied; applicator-cross-job write blocked). member_id ON DELETE SET NULL + member_name_snapshot preserves legal record. Re-run Codex at reset: migration + AppliedRecordsManager + appliedRecords.",
+      "migration": "20260624210000_job_applied_record_crew.sql",
+      "verified": "Spot-check: HEAD 0c860bd, tree clean, typecheck PASS, fix .not('member_id','is',null) at AppliedRecordsManager:326. Fix agent reproduced before/after (NULL legal row destroyed by old code, survives with fix), 101 tests. Build agent verified attach/persist/member-filter + member-deleted-record-survives + applicator RLS block.",
+      "parkedLow": [
+        "[#21 Low / doc-only, can't fix without editing committed migration] migration comment says 'NULLS NOT DISTINCT' but DDL is plain UNIQUE = NULLS DISTINCT — behavior is CORRECT (multiple removed-member NULL rows coexist by design); only the comment misleads. Left unedited (red line).",
+        "[#21 Low / accepted pattern] client-supplied member/crew name snapshots aren't server-validated (forgeable by applicator on own job; RLS-contained, display-only, React-escaped, matches #17/#18). Optional future: derive snapshots server-side at insert."
+      ],
+      "openQuestions": []
+    },
+    "20": {
+      "status": "BUILT",
+      "date": "2026-06-24",
+      "commit": "43d09143",
+      "criteria": "6/6",
+      "codex": "pending",
+      "codexDetail": "Codex unavailable. Low-risk additive-columns section on already-RLS-proven job_applied_records (no new RLS/RPC/money) → thorough orchestrator spot-check in lieu of full panel: net_tach GENERATED ALWAYS (can't drift), CHECK live-REJECTS end<beginning + negatives, #18 recompute triggers intact, RLS inherited, typecheck PASS, 83 tests. Re-run Codex at reset: migration + appliedRecords + AppliedRecordsManager.",
+      "migration": "20260624200000_job_applied_record_tach.sql",
+      "verified": "Spot-check (thorough): HEAD 43d09143, tree clean, typecheck PASS, net_tach GENERATED, CHECK live-rejected an end<begin insert, #18 triggers intact. Agent proved net 6.5 from 1200.5/1207.0 in-app + persist/reload + end<begin warning.",
+      "parkedLow": [],
+      "openQuestions": []
+    },
+    "19": {
+      "status": "BUILT",
+      "date": "2026-06-24",
+      "commit": "440f70c",
+      "criteria": "9/9",
+      "codex": "pending",
+      "codexDetail": "Codex unavailable. INTERIM multi-lens review = CLEAN (all 3 lenses). Live-verified: additive idempotent migration (12 nullable weather cols, ADD COLUMN IF NOT EXISTS), 7 CHECK constraints reject bad values (humidity 150 / wind -3 / source 'api' all rejected), #18 acres rollup + triggers untouched, RLS cross-tenant isolation (non-owner SELECT/UPDATE = 0 rows, anon denied), Open-Meteo fetch from numeric lat/lng.toFixed(4) + regex-gated dateISO on CSP-whitelisted host (no SSRF/XSS), kept FREE provider. Re-run Codex at reset: migration + weatherCapture + appliedRecords + AppliedRecordsManager.",
+      "migration": "20260624190000_job_applied_record_weather.sql",
+      "verified": "Spot-check: HEAD 440f70c, tree clean, typecheck PASS, 12 weather cols + CHECK constraints, #18 triggers intact, no paid provider. Multi-lens CLEAN. Agent ran real Open-Meteo auto-pull (start 75F, end at 10:30 73F — time-keyed), manual override flips source, Total Time 2h30m, persist+reload, in-app vs local.",
+      "parkedLow": [
+        "[#19 Low] Auto-pull with a blank Time defaults to a noon reading but doesn't stamp the assumed time (editable, non-gating). Optional: default time to selected hour or note 'midday assumed'.",
+        "[#19 Low] computeTotalMinutes wraps any end<start to +24h (intentional overnight support) so a same-day typo (10:00→08:00) shows '22h 0m' (editable). Optional: flag >12h windows or an explicit overnight flag."
+      ],
+      "openQuestions": []
+    },
+    "17": {
+      "status": "BUILT",
+      "date": "2026-06-24",
+      "commit": "38fb120 + fix 1b96aee",
+      "criteria": "6/6",
+      "codex": "pending",
+      "codexDetail": "Codex unavailable. INTERIM multi-lens review found 2 Med (both FIXED in 1b96aee, verified live as sales_rep): (1) applicator name read via RLS-blocked profiles embed → '(removed applicator)' for non-admins → now resolved from profile_public_view-backed prop Map; (2) vehicle name from active-only list → inactive vehicle showed '(removed)' + edit silently nulled it → now joined-row value + inject current vehicle as extra <option>. Migration + RLS were CLEAN (additive job_applied_records, 4 job-scoped policies live-proven admin/sales_rep OR applicator-owns-job). Re-run Codex at reset: migration + AppliedRecordsManager + appliedRecords + JobDetail.",
+      "migration": "20260624170000_job_applied_records.sql",
+      "verified": "Spot-check: HEAD 1b96aee, tree clean, typecheck PASS. Fix verified live as a real sales_rep user (old embed null, new shows real names; inactive vehicle kept on edit). Build agent ran 2-record add/edit/delete in-app vs local. Multi-lens: migration/RLS CLEAN, 2 Med fixed.",
+      "parkedLow": [
+        "[#17 Low / policy] canEdit is office-only (admin/sales_rep); applicators can't self-record from this UI even though RLS grants them write on their own job's records. Intentional default left as-is; revisit if applicators should record their own passes (would gate canEdit on applicator-owns-job + allow while completed).",
+        "[#17 Low / RECURRING] created_by client-supplied, not bound to auth.uid() (audit-spoofing only). One-shot hardening migration before prod gate."
+      ],
+      "openQuestions": []
+    },
     "8": {
       "status": "BUILT",
       "date": "2026-06-24",
@@ -118,6 +187,7 @@
     }
   },
   "carryForward": [
+    "LESSON (all sections rendering a person's name): NEVER resolve applicator/user/created-by names via a direct PostgREST `profiles` embed — the profiles SELECT RLS is `is_admin() OR id=auth.uid()`, so the embed returns NULL for sales_reps/applicators and the name renders '(removed)'. Use profile_public_view (or a prop/label-map sourced from it) for names. Caught as a Med in #17. Similarly, when an edit-modal <select> is populated from an active-only list (vehicles status='active', active applicators), INJECT the record's current value as an extra <option> if it's not in the active list, or editing silently nulls it.",
     "#1 → #26 auto-split: per-field per-customer shares persist in job_field_shares(job_id, field_id, customer_id, split_pct, is_primary), defaulted from field_billing_defaults, validated to 100% per field. save_job rejects shares for fields not on the job. Canonical split engine to reuse: derive_customer_shares_from_fields(uuid[], jsonb).",
     "#1 → #10/#18 remaining-acres: jobs.applied_acres (default 0) + GENERATED jobs.remaining_acres = GREATEST(total_acres - applied_acres, 0). As-applied work UPDATEs applied_acres; NEVER write remaining_acres directly.",
     "#1 new columns: jobs gained call_date,date_proposed,time_proposed,schedule_date,date_expires,consultant_id,loader_comment,additional_info,internal_memo(NOT printed - keep off customer PDFs),updated_by,printed_at(stamped by WPS-notice action). job_fields gained planted_acres,crop,strip,pests. job_chemicals gained diluent_rate,rei_hours,phi_days,warehouse(free text - products has no warehouse col),vendor.",
@@ -132,6 +202,10 @@
     "#3 → #7/#8: job batches = job_batches table (RLS) + jobs.batch_ref FK (ON DELETE SET NULL, one-batch-per-job, distinct from many-to-many tags). Batch filter = JobFilters.batchIds (SERVER-side on batch_ref); batchOptions/batchByJob Map/batchMemberCounts already on the Jobs page. #7 mass-edit can 'Set batch' via the same direct .update() (admin/sales gated) — reuse JobBatchAssignModal's single-choice pattern. #8 columns: a sortable 'Batch' column (key 'batch_name') is in dataColumns — include it in the per-column on/off toggle set.",
     "#7 → #10: wire the loader-worksheet bulk option at the '#10 INSERTION POINT' comment in src/components/jobs/JobMassEditModal.tsx; add the opt-in flag(s) to MassEditDraft in jobMassEdit.ts and include the column(s) in buildFieldPatch() (clean patch object — drops in without touching date/status/applicator/batch).",
     "#7 → any bulk-status section: reuse partitionByStatusLegality() + allowedSourceStatuses() in src/components/jobs/jobMassEdit.ts (they mirror _enforce_job_status_transition). FORWARD steps (in_progress/completed/invoiced) MUST go through start_job/complete_job/transfer_job_to_invoice (they create application records/inventory moves/invoices) — never a raw status update. Bulk mass-edit only applies 'cancelled'.",
-    "#8 → all later list work: the Jobs list now renders via a per-user VISIBLE set (orderedVisibleColumnIds, registry order). Any new job-list column must be added to JOB_COLUMN_REGISTRY in src/components/jobs/jobListColumns.ts (id,label,shared,defaultVisible) AND to dataColumns in Jobs.tsx, or it won't appear. user_list_settings is a GENERIC per-user table keyed (user_id, list_key) with RLS auth.uid()=user_id — REUSE it for the Phase-3 invoice lists (add a list_key or extend the shared map; isInvoiceColumnVisible already shares the 'jobs' list_key for 3 shared columns). showCompleted=false hides completed jobs UNLESS the status filter explicitly includes 'completed'."
+    "#8 → all later list work: the Jobs list now renders via a per-user VISIBLE set (orderedVisibleColumnIds, registry order). Any new job-list column must be added to JOB_COLUMN_REGISTRY in src/components/jobs/jobListColumns.ts (id,label,shared,defaultVisible) AND to dataColumns in Jobs.tsx, or it won't appear. user_list_settings is a GENERIC per-user table keyed (user_id, list_key) with RLS auth.uid()=user_id — REUSE it for the Phase-3 invoice lists (add a list_key or extend the shared map; isInvoiceColumnVisible already shares the 'jobs' list_key for 3 shared columns). showCompleted=false hides completed jobs UNLESS the status filter explicitly includes 'completed'.",
+    "#21 → PHASE-3 + #27/#16 (AS-APPLIED RECORD NOW COMPLETE): job_applied_records carries per entry — applicator_id(->profiles), vehicle_id(->vehicles), application_date, per-location acres (child job_applied_record_fields = authoritative source of jobs.applied_acres/remaining_acres via #18 trigger), start+end weather (12 cols), tach (beginning_tach/end_tach/GENERATED net_tach), ground crew (child job_applied_record_crew, member_id FK SET NULL + member_name_snapshot/crew_name_snapshot to preserve the legal record). READ crew via job_applied_record_crew + resolve name with crewMemberDisplayName() (live name, snapshot fallback) — do NOT join profiles (ground_crew_members SELECT RLS USING(true) is all-role readable). recordHasCrewMember(rec,memberId) is the pure crew-member filter predicate (idx_jarc_member backs server-side). Do NOT put crew/weather/tach in save_job (frozen 6-arg); all are children/columns of the applied record managed by AppliedRecordsManager (delete-then-insert like #18). jobs.ground_crew_id (#6) is a separate coarser job-level grain.",
+    "#19 → #20/#21/#27/#16: start+end WEATHER lives on job_applied_records.start_*/end_* columns (12 cols; source flag 'auto'|'manual'; 3 CHECK constraints). #27 applicator sheet + #16 invoice editor read those for the weather block. Reusable: summarizeWeatherSet(), computeTotalMinutes/formatTotalTime in src/components/jobs/appliedRecords.ts (pure); fetchWeatherForDateTime(lat,lng,dateISO,timeHHMM) in src/lib/weatherCapture.ts (date-keyed Open-Meteo pull, free provider only). #20 tach: add beginning_tach/end_tach/net_tach columns to job_applied_records the same additive way (extend AppliedRecordDraft + buildAppliedRecordPatch + JobAppliedRecord type + modal slot + list col; does NOT affect #18 rollup). Legacy job_applied_info 'Completion Weather Snapshot' stays separate — don't conflate.",
+    "#18 → #19/#20/#21: jobs.applied_acres is now OWNED by trigger recompute_job_applied_acres(job_id) — fires AFTER INS/UPD/DEL on job_applied_record_fields + AFTER DELETE on job_applied_records; sums child rows -> jobs.applied_acres -> GENERATED jobs.remaining_acres. NEVER write jobs.applied_acres or remaining_acres directly. Adding weather/tach (#19/#20) COLUMNS to job_applied_records does NOT affect the rollup (it reads only job_applied_record_fields). #21 crew goes on a NEW link table — leave the field-acres child untouched. AppliedRecordsManager save uses delete-then-insert for child rows; the cleanup-delete is ERROR-ONLY (not checkMutationResult — 0 rows is legitimate on a fresh record). #19/#20 fields ride the parent patch via buildAppliedRecordPatch + AppliedRecordDraft (extend both; modal has slots above Notes). Per-location helpers (computeRemainingAcres, sumDraftFieldAcres) live in appliedRecords.ts — pure/tested.",
+    "#17 → #18/#19/#20/#21 (PHASE-2 ANCHOR): table job_applied_records (PK id uuid), one job→MANY records (no UNIQUE on job_id, ON DELETE CASCADE from jobs). Shape: id, job_id(FK jobs CASCADE), applicator_id(FK profiles SET NULL), vehicle_id(FK vehicles SET NULL), application_date(date NOT NULL), applied_acres(numeric>=0 optional), notes, created_by, created_at, updated_at. RLS = job-scoped (admin/sales_rep OR applicator-on-own-job) all 4 verbs (live-proven). UI lives in src/components/jobs/AppliedRecordsManager.tsx (add/edit modal) + helpers in appliedRecords.ts (AppliedRecordDraft / buildAppliedRecordPatch — extend these). NEXT: #18 add child job_applied_record_fields(application_record_id->CASCADE, field_id, applied_acres) + sum records into jobs.applied_acres (feeds GENERATED jobs.remaining_acres — NEVER write remaining_acres directly). #19 add start_*/end_* weather cols on job_applied_records (Open-Meteo weatherCapture.ts). #20 add beginning_tach/end_tach/net_tach on job_applied_records. #21 add link job_applied_record_crew(application_record_id, member_id->ground_crew_members.id) — REUSE #6 ground_crews/ground_crew_members catalog. LEAVE the legacy 1:1 job_applied_info (complete_job weather snapshot, now a separate 'Completion Weather Snapshot' card) UNTOUCHED — don't conflate."
   ]
 }

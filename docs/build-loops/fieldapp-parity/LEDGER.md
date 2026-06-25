@@ -3,7 +3,7 @@
 **Branch:** `feat/fieldapp-parity` (off `origin/main` d65d15d7)  
 **Worktree:** `C:\CRX_Manager\.claude\worktrees\fieldapp-parity`  
 **Step-0 re-audit:** 2026-06-24 → **0 DONE · 19 PARTIAL · 22 TODO** (all 41 need work). Full evidence: `STEP0-AUDIT.json`.  
-**Progress this run:** 8 / 41 sections BUILT. Machine state: `PROGRESS.json`.
+**Progress this run:** 13 / 41 sections BUILT. Machine state: `PROGRESS.json`.
 
 **Status key:** `PENDING` (awaiting build) · `IN-PROGRESS` · `BUILT` (built+verified+Codex-clean this run) · `BLOCKED`.
 
@@ -20,6 +20,7 @@
 - **Baseline caveat (pre-existing repo tech-debt, NOT mine):** 517-migration history doesn't replay from scratch — 29 copy-renames + 5 shim objects + ~34 content patches, ALL on COPIES (real files untouched). New additive migrations apply to live normally at the gate. Detail: `C:\Users\mason\fieldapp-local-db\copy-fixes.log`.
 
 ## Carry-forward notes (from built sections — read before building dependents)
+- LESSON (all sections rendering a person's name): NEVER resolve applicator/user/created-by names via a direct PostgREST `profiles` embed — the profiles SELECT RLS is `is_admin() OR id=auth.uid()`, so the embed returns NULL for sales_reps/applicators and the name renders '(removed)'. Use profile_public_view (or a prop/label-map sourced from it) for names. Caught as a Med in #17. Similarly, when an edit-modal <select> is populated from an active-only list (vehicles status='active', active applicators), INJECT the record's current value as an extra <option> if it's not in the active list, or editing silently nulls it.
 - #1 → #26 auto-split: per-field per-customer shares persist in job_field_shares(job_id, field_id, customer_id, split_pct, is_primary), defaulted from field_billing_defaults, validated to 100% per field. save_job rejects shares for fields not on the job. Canonical split engine to reuse: derive_customer_shares_from_fields(uuid[], jsonb).
 - #1 → #10/#18 remaining-acres: jobs.applied_acres (default 0) + GENERATED jobs.remaining_acres = GREATEST(total_acres - applied_acres, 0). As-applied work UPDATEs applied_acres; NEVER write remaining_acres directly.
 - #1 new columns: jobs gained call_date,date_proposed,time_proposed,schedule_date,date_expires,consultant_id,loader_comment,additional_info,internal_memo(NOT printed - keep off customer PDFs),updated_by,printed_at(stamped by WPS-notice action). job_fields gained planted_acres,crop,strip,pests. job_chemicals gained diluent_rate,rei_hours,phi_days,warehouse(free text - products has no warehouse col),vendor.
@@ -35,6 +36,10 @@
 - #7 → #10: wire the loader-worksheet bulk option at the '#10 INSERTION POINT' comment in src/components/jobs/JobMassEditModal.tsx; add the opt-in flag(s) to MassEditDraft in jobMassEdit.ts and include the column(s) in buildFieldPatch() (clean patch object — drops in without touching date/status/applicator/batch).
 - #7 → any bulk-status section: reuse partitionByStatusLegality() + allowedSourceStatuses() in src/components/jobs/jobMassEdit.ts (they mirror _enforce_job_status_transition). FORWARD steps (in_progress/completed/invoiced) MUST go through start_job/complete_job/transfer_job_to_invoice (they create application records/inventory moves/invoices) — never a raw status update. Bulk mass-edit only applies 'cancelled'.
 - #8 → all later list work: the Jobs list now renders via a per-user VISIBLE set (orderedVisibleColumnIds, registry order). Any new job-list column must be added to JOB_COLUMN_REGISTRY in src/components/jobs/jobListColumns.ts (id,label,shared,defaultVisible) AND to dataColumns in Jobs.tsx, or it won't appear. user_list_settings is a GENERIC per-user table keyed (user_id, list_key) with RLS auth.uid()=user_id — REUSE it for the Phase-3 invoice lists (add a list_key or extend the shared map; isInvoiceColumnVisible already shares the 'jobs' list_key for 3 shared columns). showCompleted=false hides completed jobs UNLESS the status filter explicitly includes 'completed'.
+- #21 → PHASE-3 + #27/#16 (AS-APPLIED RECORD NOW COMPLETE): job_applied_records carries per entry — applicator_id(->profiles), vehicle_id(->vehicles), application_date, per-location acres (child job_applied_record_fields = authoritative source of jobs.applied_acres/remaining_acres via #18 trigger), start+end weather (12 cols), tach (beginning_tach/end_tach/GENERATED net_tach), ground crew (child job_applied_record_crew, member_id FK SET NULL + member_name_snapshot/crew_name_snapshot to preserve the legal record). READ crew via job_applied_record_crew + resolve name with crewMemberDisplayName() (live name, snapshot fallback) — do NOT join profiles (ground_crew_members SELECT RLS USING(true) is all-role readable). recordHasCrewMember(rec,memberId) is the pure crew-member filter predicate (idx_jarc_member backs server-side). Do NOT put crew/weather/tach in save_job (frozen 6-arg); all are children/columns of the applied record managed by AppliedRecordsManager (delete-then-insert like #18). jobs.ground_crew_id (#6) is a separate coarser job-level grain.
+- #19 → #20/#21/#27/#16: start+end WEATHER lives on job_applied_records.start_*/end_* columns (12 cols; source flag 'auto'|'manual'; 3 CHECK constraints). #27 applicator sheet + #16 invoice editor read those for the weather block. Reusable: summarizeWeatherSet(), computeTotalMinutes/formatTotalTime in src/components/jobs/appliedRecords.ts (pure); fetchWeatherForDateTime(lat,lng,dateISO,timeHHMM) in src/lib/weatherCapture.ts (date-keyed Open-Meteo pull, free provider only). #20 tach: add beginning_tach/end_tach/net_tach columns to job_applied_records the same additive way (extend AppliedRecordDraft + buildAppliedRecordPatch + JobAppliedRecord type + modal slot + list col; does NOT affect #18 rollup). Legacy job_applied_info 'Completion Weather Snapshot' stays separate — don't conflate.
+- #18 → #19/#20/#21: jobs.applied_acres is now OWNED by trigger recompute_job_applied_acres(job_id) — fires AFTER INS/UPD/DEL on job_applied_record_fields + AFTER DELETE on job_applied_records; sums child rows -> jobs.applied_acres -> GENERATED jobs.remaining_acres. NEVER write jobs.applied_acres or remaining_acres directly. Adding weather/tach (#19/#20) COLUMNS to job_applied_records does NOT affect the rollup (it reads only job_applied_record_fields). #21 crew goes on a NEW link table — leave the field-acres child untouched. AppliedRecordsManager save uses delete-then-insert for child rows; the cleanup-delete is ERROR-ONLY (not checkMutationResult — 0 rows is legitimate on a fresh record). #19/#20 fields ride the parent patch via buildAppliedRecordPatch + AppliedRecordDraft (extend both; modal has slots above Notes). Per-location helpers (computeRemainingAcres, sumDraftFieldAcres) live in appliedRecords.ts — pure/tested.
+- #17 → #18/#19/#20/#21 (PHASE-2 ANCHOR): table job_applied_records (PK id uuid), one job→MANY records (no UNIQUE on job_id, ON DELETE CASCADE from jobs). Shape: id, job_id(FK jobs CASCADE), applicator_id(FK profiles SET NULL), vehicle_id(FK vehicles SET NULL), application_date(date NOT NULL), applied_acres(numeric>=0 optional), notes, created_by, created_at, updated_at. RLS = job-scoped (admin/sales_rep OR applicator-on-own-job) all 4 verbs (live-proven). UI lives in src/components/jobs/AppliedRecordsManager.tsx (add/edit modal) + helpers in appliedRecords.ts (AppliedRecordDraft / buildAppliedRecordPatch — extend these). NEXT: #18 add child job_applied_record_fields(application_record_id->CASCADE, field_id, applied_acres) + sum records into jobs.applied_acres (feeds GENERATED jobs.remaining_acres — NEVER write remaining_acres directly). #19 add start_*/end_* weather cols on job_applied_records (Open-Meteo weatherCapture.ts). #20 add beginning_tach/end_tach/net_tach on job_applied_records. #21 add link job_applied_record_crew(application_record_id, member_id->ground_crew_members.id) — REUSE #6 ground_crews/ground_crew_members catalog. LEAVE the legacy 1:1 job_applied_info (complete_job weather snapshot, now a separate 'Completion Weather Snapshot' card) UNTOUCHED — don't conflate.
 
 ## Build order (topological; PLAN-phase tie-break)
 
@@ -54,16 +59,16 @@
       ↳ Spot-check: HEAD 5e827066, tree clean, typecheck PASS, no cancel_job RPC to bypass. Reviewer CLEAN (status-legality + cancel side-effects + selection). Agent ran 3-job mass-edit (date/status/applicator/batch) in-app vs local; unselected + unfilled-field jobs proven untouched.
 - [x] ** 8.** (#8, P1-Jobs) `(DB)` **Customizable list columns (List Settings)** — **BUILT** 6/6 · commit `77ad2ef1` · mig `20260624160000_user_list_settings.sql`
       ↳ Spot-check: HEAD 77ad2ef1, tree clean, typecheck PASS, user_list_settings RLS=true 4 policies all auth.uid()-bound. Multi-lens CLEAN. Agent ran toggle+persist+reload+per-user-isolation in-app/DB; 2326 tests pass.
-- [ ] ** 9.** (#17, P2-Applied) `(DB)` **As-applied entry record (applicator, vehicle, application date)** — _PARTIAL_ (1/6) · PENDING
-      ↳ gaps: Applicator is a free-text input, NOT selected from the applicator/profile list (FieldAppli… / No Vehicle field at all on the field-app invoice, and no auto-default-from-applicator
-- [ ] **10.** (#18, P2-Applied) `(DB)` **Applied acres per location + remaining-acres tracking (partial / multi-day)** — _PARTIAL_ (2/7) · PENDING
-      ↳ gaps: No Total vs Applied vs REMAINING acres tracking per job (Remaining = planned - sum applied… / No live 'X of Y remaining' indicator anywhere (grep for remaining-acres in field-app conte…
-- [ ] **11.** (#19, P2-Applied) `(DB)` **START + END weather pair on field-app invoices (Open-Meteo auto-pull)** — _TODO_ (0/9) · PENDING
-      ↳ gaps: No START weather set with Time/Temp/WindDir/WindMph/Humidity — the invoice has only two fr… / No END weather set at all (no pair — single snapshot only)
-- [ ] **12.** (#20, P2-Applied) `(DB)` **Tach hours (beginning / end / net engine hours)** — _TODO_ (0/6) · PENDING
-      ↳ gaps: No Beginning Tach field anywhere (no beg_tach column, no UI) / No End Tach field anywhere
-- [ ] **13.** (#21, P2-Applied) `(DB)` **Ground crew + ground crew members** — _TODO_ (0/6) · PENDING
-      ↳ gaps: No managed Ground Crews list (no crews table, no create/rename/deactivate UI) / No Ground Crew Members list/table (crew has-many members)
+- [x] ** 9.** (#17, P2-Applied) `(DB)` **As-applied entry record (applicator, vehicle, application date)** — **BUILT** 6/6 · commit `38fb120 + fix 1b96aee` · mig `20260624170000_job_applied_records.sql`
+      ↳ Spot-check: HEAD 1b96aee, tree clean, typecheck PASS. Fix verified live as a real sales_rep user (old embed null, new shows real names; inactive vehicle kept on edit). Build agent ran 2-record add/edit/delete in-app vs local. Multi-lens: migration/RLS CLEAN, 2 Med fixed.
+- [x] **10.** (#18, P2-Applied) `(DB)` **Applied acres per location + remaining-acres tracking (partial / multi-day)** — **BUILT** 7/7 · commit `7c64fb9 + fix 5f25a4c` · mig `20260624180000_job_applied_record_fields.sql + 20260624181000_fix_applied_acres_integrity.sql`
+      ↳ Build agent proved applied/remaining math + over-clamp in-app. Multi-lens caught HIGH+3MED. Fix 5f25a4c: 5 live smoke results (FK RESTRICT blocks field delete; anon EXECUTE revoked; last-child zeroes; manual record counted; remaining_acres consistent) + mixed-job UI agreement (228.5=198.5+30) + 42 tests. Orchestrator re-verified live: FK RESTRICT, anon EXECUTE false on both fns, old migration untouched, typecheck PASS.
+- [x] **11.** (#19, P2-Applied) `(DB)` **START + END weather pair on field-app invoices (Open-Meteo auto-pull)** — **BUILT** 9/9 · commit `440f70c` · mig `20260624190000_job_applied_record_weather.sql`
+      ↳ Spot-check: HEAD 440f70c, tree clean, typecheck PASS, 12 weather cols + CHECK constraints, #18 triggers intact, no paid provider. Multi-lens CLEAN. Agent ran real Open-Meteo auto-pull (start 75F, end at 10:30 73F — time-keyed), manual override flips source, Total Time 2h30m, persist+reload, in-app vs local.
+- [x] **12.** (#20, P2-Applied) `(DB)` **Tach hours (beginning / end / net engine hours)** — **BUILT** 6/6 · commit `43d09143` · mig `20260624200000_job_applied_record_tach.sql`
+      ↳ Spot-check (thorough): HEAD 43d09143, tree clean, typecheck PASS, net_tach GENERATED, CHECK live-rejected an end<begin insert, #18 triggers intact. Agent proved net 6.5 from 1200.5/1207.0 in-app + persist/reload + end<begin warning.
+- [x] **13.** (#21, P2-Applied) `(DB)` **Ground crew + ground crew members** — **BUILT** 6/6 · commit `cf11739 + fix 0c860bd` · mig `20260624210000_job_applied_record_crew.sql`
+      ↳ Spot-check: HEAD 0c860bd, tree clean, typecheck PASS, fix .not('member_id','is',null) at AppliedRecordsManager:326. Fix agent reproduced before/after (NULL legal row destroyed by old code, survives with fix), 101 tests. Build agent verified attach/persist/member-filter + member-deleted-record-survives + applicator RLS block.
 - [ ] **14.** (#22, P3-Invoice)       **Unposted invoice list (working list parity)** — _PARTIAL_ (2/8) · PENDING
       ↳ gaps: No dedicated 'Unposted' page listing ONLY un-posted invoices (it is one combined list with… / No ChemMan filter bar: missing Invoice-Number filter, Customer multi-select, and Transacti…
 - [ ] **15.** (#23, P3-Invoice)       **Posted invoice list (committed list parity)** — _TODO_ (1/7) · PENDING
@@ -136,6 +141,12 @@
 - [#7 Low] Mass-edit writes updated_by; single-job cancel (JobDetail) does not — cosmetic consistency nit (column nullable).
 - [#8 Low] List Settings toggles fire-and-forget full-snapshot upserts; rapid out-of-order completions could land a stale snapshot last (self-heals on next load/change; no money/cross-user). Optional: debounce ~300ms or serialize.
 - [#8 Low] anon retains an inherited table-level SELECT grant on user_list_settings, neutralized by RLS + no anon policy (anon SELECT=0 rows; matches project convention). Optional project-wide REVOKE.
+- [#17 Low / policy] canEdit is office-only (admin/sales_rep); applicators can't self-record from this UI even though RLS grants them write on their own job's records. Intentional default left as-is; revisit if applicators should record their own passes (would gate canEdit on applicator-owns-job + allow while completed).
+- [#17 Low / RECURRING] created_by client-supplied, not bound to auth.uid() (audit-spoofing only). One-shot hardening migration before prod gate.
+- [#19 Low] Auto-pull with a blank Time defaults to a noon reading but doesn't stamp the assumed time (editable, non-gating). Optional: default time to selected hour or note 'midday assumed'.
+- [#19 Low] computeTotalMinutes wraps any end<start to +24h (intentional overnight support) so a same-day typo (10:00→08:00) shows '22h 0m' (editable). Optional: flag >12h windows or an explicit overnight flag.
+- [#21 Low / doc-only, can't fix without editing committed migration] migration comment says 'NULLS NOT DISTINCT' but DDL is plain UNIQUE = NULLS DISTINCT — behavior is CORRECT (multiple removed-member NULL rows coexist by design); only the comment misleads. Left unedited (red line).
+- [#21 Low / accepted pattern] client-supplied member/crew name snapshots aren't server-validated (forgeable by applicator on own job; RLS-contained, display-only, React-escaped, matches #17/#18). Optional future: derive snapshots server-side at insert.
 
 ## Migrations created this run (apply to PRODUCTION only at end, with Mason's approval)
 - `20260624120000_job_parity_scheduling_agronomy_shares.sql` — section #1 (Job list + create/edit job parity)
@@ -143,6 +154,11 @@
 - `20260624140000_job_ground_crews_and_filter_indexes.sql` — section #6 (Full filter set (AND-combined))
 - `20260624150000_job_batches.sql` — section #3 (Job batches (group jobs into named batches))
 - `20260624160000_user_list_settings.sql` — section #8 (Customizable list columns (List Settings))
+- `20260624170000_job_applied_records.sql` — section #17 (As-applied entry record (applicator, vehicle, application date))
+- `20260624180000_job_applied_record_fields.sql + 20260624181000_fix_applied_acres_integrity.sql` — section #18 (Applied acres per location + remaining-acres tracking (partial / multi-day))
+- `20260624190000_job_applied_record_weather.sql` — section #19 (START + END weather pair on field-app invoices (Open-Meteo auto-pull))
+- `20260624200000_job_applied_record_tach.sql` — section #20 (Tach hours (beginning / end / net engine hours))
+- `20260624210000_job_applied_record_crew.sql` — section #21 (Ground crew + ground crew members)
 
 ## Codex review status (gate — must be clean before production gate)
 - **Codex CLI hit its usage limit during section #2 (resets 2026-06-25 ~07:02). Interim gate = builder self-review + orchestrator spot-check + (for DB/money/RLS sections) a fresh adversarial reviewer agent. Run a real Codex pass over all codex:pending sections when limits reset, BEFORE the production gate.**
@@ -155,6 +171,11 @@
   - #3 (pending, commit 6357b94) — Job batches (group jobs into named batches)
   - #7 (pending, commit 5e827066) — Mass edit selected jobs (dates / status / loader worksheets)
   - #8 (pending, commit 77ad2ef1) — Customizable list columns (List Settings)
+  - #17 (pending, commit 38fb120 + fix 1b96aee) — As-applied entry record (applicator, vehicle, application date)
+  - #18 (pending, commit 7c64fb9 + fix 5f25a4c) — Applied acres per location + remaining-acres tracking (partial / multi-day)
+  - #19 (pending, commit 440f70c) — START + END weather pair on field-app invoices (Open-Meteo auto-pull)
+  - #20 (pending, commit 43d09143) — Tach hours (beginning / end / net engine hours)
+  - #21 (pending, commit cf11739 + fix 0c860bd) — Ground crew + ground crew members
 
 ## Open questions for Mason (don't block — keep building)
 _(none yet)_
@@ -169,3 +190,8 @@ _(none yet)_
 - 2026-06-24: #3 Job batches (group jobs into named batches) — BUILT 5/5 (commit 6357b94)
 - 2026-06-24: #7 Mass edit selected jobs (dates / status / loader worksheets) — BUILT 7/7 (commit 5e827066)
 - 2026-06-24: #8 Customizable list columns (List Settings) — BUILT 6/6 (commit 77ad2ef1)
+- 2026-06-24: #17 As-applied entry record (applicator, vehicle, application date) — BUILT 6/6 (commit 38fb120 + fix 1b96aee)
+- 2026-06-24: #18 Applied acres per location + remaining-acres tracking (partial / multi-day) — BUILT 7/7 (commit 7c64fb9 + fix 5f25a4c)
+- 2026-06-24: #19 START + END weather pair on field-app invoices (Open-Meteo auto-pull) — BUILT 9/9 (commit 440f70c)
+- 2026-06-24: #20 Tach hours (beginning / end / net engine hours) — BUILT 6/6 (commit 43d09143)
+- 2026-06-24: #21 Ground crew + ground crew members — BUILT 6/6 (commit cf11739 + fix 0c860bd)
