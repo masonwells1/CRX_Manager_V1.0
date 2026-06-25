@@ -22,6 +22,7 @@ import { localToday, parseLocalDate } from '../lib/dateUtils';
 import { applyChemEdit, recomputeChemRowForAcres, sumAcres, toGallonOrLbEquivalent } from '../lib/chemCalculator';
 import { recipeItemToChemRowSeed, chemRowsToRecipeItems, getLastRecipeId, setLastRecipeId } from '../lib/recipeHelpers';
 import { moveItem, moveUp, moveDown } from '../lib/routeOrder';
+import AppliedRecordsManager from '../components/jobs/AppliedRecordsManager';
 import QuickTaskModal from '../components/team/QuickTaskModal';
 import ConfirmModal from '../components/ui/ConfirmModal';
 import RelatedNotes from '../components/team/RelatedNotes';
@@ -1858,27 +1859,52 @@ export default function JobDetail() {
 
       {/* ─────────────── APPLIED INFO TAB ─────────────── */}
       {activeTab === 'applied' && (
-        <Card>
-          <h2 className="text-lg font-semibold text-nav-dark mb-3">Applied Information</h2>
-          {!isNew && (status === 'completed' || status === 'invoiced') ? (
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              <div><span className="text-xs text-secondary">Wind Speed</span><p className="font-medium">{appliedInfo.wind_speed || '-'} mph</p></div>
-              <div><span className="text-xs text-secondary">Wind Direction</span><p className="font-medium">{appliedInfo.wind_direction || '-'}</p></div>
-              <div><span className="text-xs text-secondary">Temperature</span><p className="font-medium">{appliedInfo.temperature || '-'}&deg;F</p></div>
-              <div><span className="text-xs text-secondary">Humidity</span><p className="font-medium">{appliedInfo.humidity || '-'}%</p></div>
-              <div><span className="text-xs text-secondary">Actual Gallons</span><p className="font-medium">{appliedInfo.actual_gallons_applied || '-'}</p></div>
-              {appliedInfo.notes && (
-                <div className="col-span-2 md:col-span-3"><span className="text-xs text-secondary">Notes</span><p className="font-medium">{appliedInfo.notes}</p></div>
-              )}
-            </div>
-          ) : (
-            <p className="text-sm text-secondary py-2">
-              {canComplete
-                ? 'Applied weather + actual data is captured when you Complete the job.'
-                : 'Applied information is recorded once the job is started and completed.'}
-            </p>
-          )}
-        </Card>
+        <div className="space-y-4">
+          {/* As-applied entry records (#17): MANY per job — applicator, vehicle,
+              date. This is the Phase-2 foundation that #18 (acres), #19
+              (weather), #20 (tach), #21 (crew) extend off each record's id.
+              Only available once the job is saved (records reference a job_id). */}
+          <Card>
+            {isNew ? (
+              <p className="text-sm text-secondary py-2">
+                Save the job first, then add as-applied entries (applicator, vehicle, date).
+              </p>
+            ) : (
+              <AppliedRecordsManager
+                jobId={id!}
+                applicators={applicators}
+                vehicles={vehicles}
+                jobVehicleId={vehicleId || null}
+                canEdit={canEdit}
+                performedBy={profile?.id ?? null}
+              />
+            )}
+          </Card>
+
+          {/* Completion weather snapshot (legacy job_applied_info, 1:1) — set by
+              Complete Job. Distinct from the per-pass as-applied entries above. */}
+          <Card>
+            <h2 className="text-lg font-semibold text-nav-dark mb-3">Completion Weather Snapshot</h2>
+            {!isNew && (status === 'completed' || status === 'invoiced') ? (
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div><span className="text-xs text-secondary">Wind Speed</span><p className="font-medium">{appliedInfo.wind_speed || '-'} mph</p></div>
+                <div><span className="text-xs text-secondary">Wind Direction</span><p className="font-medium">{appliedInfo.wind_direction || '-'}</p></div>
+                <div><span className="text-xs text-secondary">Temperature</span><p className="font-medium">{appliedInfo.temperature || '-'}&deg;F</p></div>
+                <div><span className="text-xs text-secondary">Humidity</span><p className="font-medium">{appliedInfo.humidity || '-'}%</p></div>
+                <div><span className="text-xs text-secondary">Actual Gallons</span><p className="font-medium">{appliedInfo.actual_gallons_applied || '-'}</p></div>
+                {appliedInfo.notes && (
+                  <div className="col-span-2 md:col-span-3"><span className="text-xs text-secondary">Notes</span><p className="font-medium">{appliedInfo.notes}</p></div>
+                )}
+              </div>
+            ) : (
+              <p className="text-sm text-secondary py-2">
+                {canComplete
+                  ? 'Applied weather + actual data is captured when you Complete the job.'
+                  : 'Applied information is recorded once the job is started and completed.'}
+              </p>
+            )}
+          </Card>
+        </div>
       )}
 
       {/* ─────────────── NOTIFICATIONS TAB ─────────────── */}

@@ -2112,6 +2112,31 @@ export interface JobAppliedInfo {
   updated_at: string;
 }
 
+// Field-app parity #17: a single as-applied entry on a job. A job can have MANY
+// of these — one per pass / day / applicator+vehicle. Applicator and vehicle are
+// REAL references (profiles / vehicles), not free text. This row is the anchor
+// that Phase-2 sections extend: #18 per-location applied acres (drives
+// applied_acres -> jobs.applied_acres), #19 start/end weather, #20 tach hours,
+// #21 ground crew. New fields hang off `id`; do not collapse this back to 1:1.
+export interface JobAppliedRecord {
+  id: string;
+  job_id: string;
+  applicator_id: string | null;
+  vehicle_id: string | null;
+  application_date: string; // 'YYYY-MM-DD'
+  applied_acres: number | null;
+  notes: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// Joined display shape used by the Applied Info tab (record + resolved names).
+export interface JobAppliedRecordRow extends JobAppliedRecord {
+  applicator?: { full_name: string | null } | null;
+  vehicle?: { vehicle_name: string | null; vehicle_type: string | null } | null;
+}
+
 // Sprint 9: Report Row Types
 
 export interface LogbookRow {

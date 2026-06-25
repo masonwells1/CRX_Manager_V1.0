@@ -3805,6 +3805,74 @@ export type Database = {
           },
         ]
       }
+      job_applied_records: {
+        Row: {
+          applicator_id: string | null
+          applied_acres: number | null
+          application_date: string
+          created_at: string
+          created_by: string | null
+          id: string
+          job_id: string
+          notes: string | null
+          updated_at: string
+          vehicle_id: string | null
+        }
+        Insert: {
+          applicator_id?: string | null
+          applied_acres?: number | null
+          application_date: string
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          job_id: string
+          notes?: string | null
+          updated_at?: string
+          vehicle_id?: string | null
+        }
+        Update: {
+          applicator_id?: string | null
+          applied_acres?: number | null
+          application_date?: string
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          job_id?: string
+          notes?: string | null
+          updated_at?: string
+          vehicle_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "job_applied_records_applicator_id_fkey"
+            columns: ["applicator_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "job_applied_records_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "job_applied_records_job_id_fkey"
+            columns: ["job_id"]
+            isOneToOne: false
+            referencedRelation: "jobs"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "job_applied_records_vehicle_id_fkey"
+            columns: ["vehicle_id"]
+            isOneToOne: false
+            referencedRelation: "vehicles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       job_applied_info: {
         Row: {
           actual_end_time: string | null
