@@ -1,5 +1,13 @@
 import type { CustomerShareResult, PreviewFieldAppSplitResult } from '../../types';
-import { formatCents as fmt } from '../../lib/money';
+import { formatCents } from '../../lib/money';
+import {
+  deriveSplitRef,
+  reconcileSplit,
+  customerShareAcres,
+  customerSharePct,
+  CUSTOMER_SHARES_BASIS_OPTIONS,
+  type CustomerSharesBasis,
+} from './customerSplit';
 
 interface CustomerSharesTableProps {
   /**
@@ -15,19 +23,146 @@ interface CustomerSharesTableProps {
    * Returned by preview_field_app_invoice_split RPC.
    */
   preview?: PreviewFieldAppSplitResult | null;
+
+  /**
+   * #26: "Customer Shares By" basis (Locations / Share %). Controls how the
+   * per-customer SUMMARY row labels each customer's "Total Shares" — it does NOT
+   * change the dollars (the engine always splits by acres-weighted location
+   * share). Optional; defaults to 'location'.
+   */
+  sharesBasis?: CustomerSharesBasis;
+  onSharesBasisChange?: (basis: CustomerSharesBasis) => void;
+
+  /**
+   * #26: split numbering base — the source JOB number when this invoice came
+   * from a job, else the group's primary invoice number. Used to render the
+   * ChemMan "<base>-<NNN>" Split Ref per customer. Optional.
+   */
+  splitRefBase?: string | null;
 }
 
 
-export default function CustomerSharesTable({ shares, invoiceTotalCents, preview }: CustomerSharesTableProps) {
+export default function CustomerSharesTable({
+  shares,
+  invoiceTotalCents,
+  preview,
+  sharesBasis = 'location',
+  onSharesBasisChange,
+  splitRefBase,
+}: CustomerSharesTableProps) {
   // Server-computed preview path (Phase 1 split-aware): show real per-customer
   // amounts including grower-share lines, chemical lines, and service fees.
   if (preview && preview.per_customer.length > 0) {
+    const isSplit = preview.per_customer.length > 1;
+    const recon = reconcileSplit(preview);
+
     return (
       <div className="space-y-4">
-        {preview.per_customer.map((c) => (
+        {/* #26: "Customer Shares By" basis selector (ChemMan parity). */}
+        <div className="flex items-center justify-between gap-4 flex-wrap">
+          <label className="flex items-center gap-2 text-sm">
+            <span className="text-gray-600 whitespace-nowrap">Customer Shares By:</span>
+            <select
+              value={sharesBasis}
+              onChange={(e) => onSharesBasisChange?.(e.target.value as CustomerSharesBasis)}
+              disabled={!onSharesBasisChange}
+              className="border rounded px-2 py-1 text-sm disabled:bg-gray-50 disabled:text-gray-500"
+            >
+              {CUSTOMER_SHARES_BASIS_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
+          </label>
+
+          {/* #26: explicit reconciliation badge — the split totals must equal the
+              whole (penny-exact dollars + conserved acres). */}
+          {recon.balanced ? (
+            <span className="text-xs px-2 py-1 rounded bg-crx-green/10 text-crx-green font-medium">
+              Reconciles · {formatCents(recon.grandTotalCents)} · {recon.totalAppliedAcres.toFixed(2)} ac
+            </span>
+          ) : (
+            <span className="text-xs px-2 py-1 rounded bg-red-50 text-red-700 font-medium">
+              Mismatch · split sums {formatCents(recon.sumCustomerCents)} / {recon.sumCustomerAcres.toFixed(2)} ac
+              {' '}vs whole {formatCents(recon.grandTotalCents)} / {recon.totalAppliedAcres.toFixed(2)} ac
+            </span>
+          )}
+        </div>
+
+        {/* #26: per-customer SUMMARY table — ChemMan Customers-tab columns:
+            Name, Total Shares, Total acres, Discount Earned, Invoice Total. */}
+        <div className="overflow-x-auto border rounded-lg">
+          <table className="w-full text-sm">
+            <thead className="text-xs text-gray-500 bg-gray-50">
+              <tr className="border-b">
+                {isSplit && <th className="px-4 py-2 text-left font-medium">Split Ref</th>}
+                <th className="px-4 py-2 text-left font-medium">Name</th>
+                <th className="px-4 py-2 text-right font-medium">Total Shares</th>
+                <th className="px-4 py-2 text-right font-medium">Total acres</th>
+                <th className="px-4 py-2 text-right font-medium">Discount Earned</th>
+                <th className="px-4 py-2 text-right font-medium">Invoice Total</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y">
+              {preview.per_customer.map((c, idx) => {
+                const acres = customerShareAcres(preview, c.customer_id);
+                const pct = customerSharePct(preview, c.customer_id);
+                // "Total Shares": by-location shows acres; by-share shows the
+                // overall percentage. Same money either way.
+                const totalShares = sharesBasis === 'share'
+                  ? `${pct.toFixed(2)}%`
+                  : `${acres.toFixed(2)} ac`;
+                return (
+                  <tr key={c.customer_id} className="hover:bg-gray-50">
+                    {isSplit && (
+                      <td className="px-4 py-2 tabular-nums text-gray-700">
+                        {deriveSplitRef(splitRefBase || '', idx, true)}
+                      </td>
+                    )}
+                    <td className="px-4 py-2 font-medium">
+                      {c.customer_name}
+                      {c.is_primary && (
+                        <span className="ml-2 text-xs px-1.5 py-0.5 rounded bg-crx-green/10 text-crx-green font-normal">
+                          Primary
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-4 py-2 text-right tabular-nums">{totalShares}</td>
+                    <td className="px-4 py-2 text-right tabular-nums">{acres.toFixed(2)}</td>
+                    {/* Discount Earned is owned by the discount-earned feature
+                        (#33); shown as $0.00 here for layout parity, never invented. */}
+                    <td className="px-4 py-2 text-right tabular-nums text-gray-400" title="Set per the early-pay discount feature">
+                      {formatCents(0)}
+                    </td>
+                    <td className="px-4 py-2 text-right tabular-nums font-semibold">{formatCents(c.total_cents)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+            <tfoot>
+              <tr className="bg-gray-50 font-semibold border-t">
+                {isSplit && <td className="px-4 py-2" />}
+                <td className="px-4 py-2">Totals</td>
+                <td className="px-4 py-2 text-right tabular-nums">
+                  {sharesBasis === 'share' ? '100.00%' : `${recon.sumCustomerAcres.toFixed(2)} ac`}
+                </td>
+                <td className="px-4 py-2 text-right tabular-nums">{recon.sumCustomerAcres.toFixed(2)}</td>
+                <td className="px-4 py-2 text-right tabular-nums text-gray-400">{formatCents(0)}</td>
+                <td className="px-4 py-2 text-right tabular-nums">{formatCents(recon.sumCustomerCents)}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+
+        {/* Per-customer line-item detail (unchanged from Phase 1). */}
+        {preview.per_customer.map((c, idx) => (
           <div key={c.customer_id} className="border rounded-lg overflow-hidden">
             <div className="flex items-center justify-between px-4 py-2 bg-gray-50 border-b">
               <div className="font-medium">
+                {isSplit && (
+                  <span className="mr-2 text-xs px-1.5 py-0.5 rounded bg-gray-200 text-gray-700 tabular-nums">
+                    {deriveSplitRef(splitRefBase || '', idx, true)}
+                  </span>
+                )}
                 {c.customer_name}
                 {c.is_primary && (
                   <span className="ml-2 text-xs px-1.5 py-0.5 rounded bg-crx-green/10 text-crx-green font-normal">
@@ -36,7 +171,7 @@ export default function CustomerSharesTable({ shares, invoiceTotalCents, preview
                 )}
                 <span className="ml-2 text-xs text-gray-500">Tier {c.tier}</span>
               </div>
-              <div className="font-semibold tabular-nums">{fmt(c.total_cents)}</div>
+              <div className="font-semibold tabular-nums">{formatCents(c.total_cents)}</div>
             </div>
             <table className="w-full text-sm">
               <thead className="text-xs text-gray-500">
@@ -48,8 +183,8 @@ export default function CustomerSharesTable({ shares, invoiceTotalCents, preview
                 </tr>
               </thead>
               <tbody className="divide-y">
-                {c.lines.map((l, idx) => (
-                  <tr key={idx} className="hover:bg-gray-50">
+                {c.lines.map((l, lineIdx) => (
+                  <tr key={lineIdx} className="hover:bg-gray-50">
                     <td className="px-4 py-1.5">
                       {l.kind === 'grower_share' && (
                         <span className="text-xs px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 mr-2">grower</span>
@@ -60,8 +195,8 @@ export default function CustomerSharesTable({ shares, invoiceTotalCents, preview
                       {l.description}
                     </td>
                     <td className="px-4 py-1.5 text-right tabular-nums">{l.quantity.toFixed(2)}</td>
-                    <td className="px-4 py-1.5 text-right tabular-nums">{fmt(l.unit_price_cents)}</td>
-                    <td className="px-4 py-1.5 text-right tabular-nums font-medium">{fmt(l.extended_cents)}</td>
+                    <td className="px-4 py-1.5 text-right tabular-nums">{formatCents(l.unit_price_cents)}</td>
+                    <td className="px-4 py-1.5 text-right tabular-nums font-medium">{formatCents(l.extended_cents)}</td>
                   </tr>
                 ))}
                 {c.lines.length === 0 && (
@@ -76,7 +211,7 @@ export default function CustomerSharesTable({ shares, invoiceTotalCents, preview
             Customers: <span className="font-semibold">{preview.customer_count}</span>
           </div>
           <div className="text-gray-600">
-            Grand Total: <span className="font-semibold text-gray-900">{fmt(preview.grand_total_cents)}</span>
+            Grand Total: <span className="font-semibold text-gray-900">{formatCents(preview.grand_total_cents)}</span>
           </div>
         </div>
       </div>
@@ -128,7 +263,7 @@ export default function CustomerSharesTable({ shares, invoiceTotalCents, preview
               <td className="px-4 py-2">Totals</td>
               <td className="px-4 py-2 text-right tabular-nums">{totalPct.toFixed(2)}%</td>
               <td className="px-4 py-2 text-right tabular-nums">{totalAcres.toFixed(1)}</td>
-              <td className="px-4 py-2 text-right text-xs italic text-gray-400">{fmt(invoiceTotalCents)}</td>
+              <td className="px-4 py-2 text-right text-xs italic text-gray-400">{formatCents(invoiceTotalCents)}</td>
             </tr>
           </tfoot>
         )}

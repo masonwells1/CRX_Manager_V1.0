@@ -21,6 +21,7 @@ import ConfirmModal from '../components/ui/ConfirmModal';
 import SelectLocationsModal from '../components/field-app/SelectLocationsModal';
 import FieldAppChemicalEntry, { type ChemicalLine } from '../components/field-app/FieldAppChemicalEntry';
 import CustomerSharesTable from '../components/field-app/CustomerSharesTable';
+import type { CustomerSharesBasis } from '../components/field-app/customerSplit';
 import ApplicationServicePicker from '../components/field-app/ApplicationServicePicker';
 import { downloadInvoicePdf, buildInvoicePdfDataFromRow } from '../lib/invoicePdf';
 import {
@@ -189,6 +190,14 @@ export default function FieldApplicationInvoice() {
   const [primaryCustomerTier, setPrimaryCustomerTier] = useState<number>(1);
   const [previewData, setPreviewData] = useState<PreviewFieldAppSplitResult | null>(null);
   const [previewing, setPreviewing] = useState(false);
+  // #26: source job number for the ChemMan "<jobnumber>-<NNN>" split-ref. Set
+  // when this field invoice was transferred from / linked to a job (job_id);
+  // null for a pure engine-built invoice (then the split-ref falls back to the
+  // group's primary invoice number).
+  const [jobNumber, setJobNumber] = useState<string | null>(null);
+  // #26: "Customer Shares By" basis (Locations / Share %). Presentation only —
+  // the engine always splits by acres-weighted per-location share.
+  const [sharesBasis, setSharesBasis] = useState<CustomerSharesBasis>('location');
 
   useUnsavedChanges(dirty);
 
@@ -269,6 +278,20 @@ export default function FieldApplicationInvoice() {
     [chemicals]
   );
 
+  // #26: base for the ChemMan "<base>-<NNN>" split reference. Prefer the source
+  // job number; else the group's PRIMARY (lowest) saved invoice number; else the
+  // current invoice number. Display-only — the real invoice_number is untouched.
+  const splitRefBase = useMemo<string | null>(() => {
+    if (jobNumber) return jobNumber;
+    if (siblings.length > 0) {
+      return [...siblings]
+        .map((s) => s.invoice_number)
+        .filter(Boolean)
+        .sort()[0] ?? null;
+    }
+    return invoiceNumber || null;
+  }, [jobNumber, siblings, invoiceNumber]);
+
   const fetchInvoice = useCallback(async () => {
     if (!id) return;
     // #3 segregation: validate the invoice belongs in THIS (per-acre, field-app)
@@ -339,6 +362,19 @@ export default function FieldApplicationInvoice() {
     // load the as-applied carry-over panel below. NULL for an engine-built invoice.
     const srcJobId = (invoice.job_id as string | null) || null;
     setJobId(srcJobId);
+    // #26: when this invoice came from a job, read the job number so the
+    // Customers tab can render the ChemMan "<jobnumber>-<NNN>" split-ref. A pure
+    // engine-built invoice (no job_id) falls back to the primary invoice number.
+    if (srcJobId) {
+      const { data: jobRow } = await supabase
+        .from('jobs')
+        .select('job_number')
+        .eq('id', srcJobId)
+        .maybeSingle();
+      setJobNumber((jobRow as { job_number?: string } | null)?.job_number ?? null);
+    } else {
+      setJobNumber(null);
+    }
     // #24: snapshot the money + header fields the PDF builder needs so Print
     // reconciles (Balance Due = Total − payments − prepay). balance_cents is the
     // GENERATED source of truth for AR; never recompute it client-side.
@@ -1277,6 +1313,9 @@ export default function FieldApplicationInvoice() {
               shares={shares}
               invoiceTotalCents={invoiceTotalCents}
               preview={previewData}
+              sharesBasis={sharesBasis}
+              onSharesBasisChange={canEdit ? setSharesBasis : undefined}
+              splitRefBase={splitRefBase}
             />
           </div>
         )}

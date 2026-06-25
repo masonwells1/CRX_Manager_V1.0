@@ -76,6 +76,11 @@
       "description": "Recipe per-unit pricing BUNDLE (Phase 4, REQUIRES 20260618230000 + 20260619150000): save_blend_recipe persists price_per_unit_cents on create AND keeps it on edit (no wipe — Codex Phase-4 P2); load_recipe_into_job seeds job_chemicals.price_per_unit_cents from it; a negative price is rejected. Pre-apply the chain FAILS (live save_blend_recipe drops the column).",
       "covers": ["load_recipe_into_job", "save_blend_recipe"]
     },
+    "save_field_app_invoice": {
+      "chain": "smoke-field-app-split-penny-exact.sql",
+      "description": "Field-app parity #26 (no migration — proves the live split engine): a multi-customer field auto-splits into ONE invoice PER billing customer sharing an invoice_group_id; the split is PENNY-EXACT on an INDIVISIBLE total (price 1501c, rate 0.01, 1/3-2/3 split -> A=500c + B=1001c = 1501c odd; the per-customer pieces round independently yet sum to exactly the preview grand_total_cents — no remainder lost); invoice_shares.amount_cents ties per-customer and in total; per-customer share acres conserve to the applied acres (100.02); and an idempotent re-run (same key) returns the SAME invoice ids with no double-split.",
+      "covers": ["save_field_app_invoice", "preview_field_app_invoice_split"]
+    },
     "save_invoice": {
       "chain": "smoke-save-invoice-field-app.sql",
       "description": "save_invoice field-application aware (#3 edit-path, REQUIRES 20260619160000): editing a field_application invoice PRESERVES the is_application_fee machine-fee line + re-balances the per-grower invoice_shares to the new total; a chemical_sale invoice's shares are NOT touched (field-only guard). Pre-apply the chain FAILS (live save_invoice drops the fee flag + never touches shares).",

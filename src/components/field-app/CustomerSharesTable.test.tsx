@@ -125,12 +125,48 @@ describe('CustomerSharesTable — Phase 1 preview path', () => {
 
   it('renders one card per customer with their tier label and total', () => {
     render(<CustomerSharesTable shares={[]} invoiceTotalCents={0} preview={makePreview()} />);
-    expect(screen.getByText('Farm Alpha')).toBeInTheDocument();
-    expect(screen.getByText('Farm Beta')).toBeInTheDocument();
+    // #26: each name + amount now appears in BOTH the per-customer summary row
+    // and the detail card, so there are two occurrences each.
+    expect(screen.getAllByText('Farm Alpha').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('Farm Beta').length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText('Tier 1')).toBeInTheDocument();
     expect(screen.getByText('Tier 3')).toBeInTheDocument();
-    expect(screen.getByText('$1,000.00')).toBeInTheDocument();
-    expect(screen.getByText('$500.00')).toBeInTheDocument();
+    expect(screen.getAllByText('$1,000.00').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('$500.00').length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('#26: renders the ChemMan Customers-tab columns (Total Shares, Discount Earned, Invoice Total)', () => {
+    render(<CustomerSharesTable shares={[]} invoiceTotalCents={0} preview={makePreview()} />);
+    expect(screen.getByText('Total Shares')).toBeInTheDocument();
+    expect(screen.getByText('Discount Earned')).toBeInTheDocument();
+    expect(screen.getByText('Invoice Total')).toBeInTheDocument();
+    expect(screen.getByText('Customer Shares By:')).toBeInTheDocument();
+  });
+
+  it('#26: shows a "Reconciles" badge when split totals tie to the whole', () => {
+    // makePreview has empty shares_detail.rows so acres sum to 0 and
+    // total_applied_acres is 50 — that is an acre MISMATCH, so build a tying one.
+    const preview: PreviewFieldAppSplitResult = {
+      ...makePreview(),
+      shares_detail: {
+        rows: [
+          { field_id: 'f1', field_name: 'N40', customer_id: 'c1', customer_name: 'Farm Alpha', is_primary: true, split_pct: 100, share_acres: 30, price_override_cents: null, pricing_note: null, tier: 1, field_total_acres: 30, field_applied_acres: 30, used_fallback: false },
+          { field_id: 'f2', field_name: 'S20', customer_id: 'c2', customer_name: 'Farm Beta', is_primary: false, split_pct: 100, share_acres: 20, price_override_cents: null, pricing_note: null, tier: 3, field_total_acres: 20, field_applied_acres: 20, used_fallback: false },
+        ],
+        customers: [],
+        total_applied_acres: 50,
+        field_count: 2,
+        fallback_used_field_ids: [],
+      },
+    };
+    render(<CustomerSharesTable shares={[]} invoiceTotalCents={0} preview={preview} />);
+    expect(screen.getByText(/reconciles/i)).toBeInTheDocument();
+  });
+
+  it('#26: shows a "Mismatch" badge when split acres do NOT tie to the whole', () => {
+    render(<CustomerSharesTable shares={[]} invoiceTotalCents={0} preview={makePreview()} />);
+    // makePreview rows are empty (acres sum 0) but total_applied_acres is 50.
+    expect(screen.getByText(/mismatch/i)).toBeInTheDocument();
   });
 
   it('tags grower_share lines with a "grower" badge and service_fee lines with "service" badge', () => {
@@ -144,7 +180,8 @@ describe('CustomerSharesTable — Phase 1 preview path', () => {
   it('shows grand total + customer count footer derived from the preview shape', () => {
     render(<CustomerSharesTable shares={[]} invoiceTotalCents={0} preview={makePreview()} />);
     expect(screen.getByText('Grand Total:')).toBeInTheDocument();
-    expect(screen.getByText('$1,500.00')).toBeInTheDocument();
+    // $1,500.00 now appears in the summary-table Totals row AND the grand-total footer.
+    expect(screen.getAllByText('$1,500.00').length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText('Customers:')).toBeInTheDocument();
   });
 
@@ -177,7 +214,9 @@ describe('CustomerSharesTable — Phase 1 preview path', () => {
       shares_detail: { rows: [], customers: [], total_applied_acres: 0, field_count: 0, fallback_used_field_ids: [] },
     };
     render(<CustomerSharesTable shares={[]} invoiceTotalCents={0} preview={preview} />);
-    expect(screen.getByText('Farm Alpha')).toBeInTheDocument();
+    // Name appears in the summary row; with a single customer there's no split so
+    // no Split Ref column — still at least one occurrence.
+    expect(screen.getAllByText('Farm Alpha').length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText(/no lines yet/i)).toBeInTheDocument();
   });
 });
