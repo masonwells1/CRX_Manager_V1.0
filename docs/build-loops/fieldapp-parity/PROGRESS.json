@@ -218,6 +218,17 @@
       "parkedLow": [],
       "openQuestions": []
     },
+    "16": {
+      "status": "IN-PROGRESS",
+      "date": "2026-06-25",
+      "commit": null,
+      "criteria": "(paused mid-build)",
+      "codex": "pending",
+      "migration": "20260625200000_job_attachments.sql (applied to LOCAL; NOT committed)",
+      "note": "PAUSED mid-build (Mason's request). Near-complete WIP preserved in git stash@{0} ('WIP #16 map/logs + attachments'). Agent state when stopped: 'build clean, re-running Codex to confirm 3 findings'. WIP files: migration 20260625200000_job_attachments.sql (applied to local), JobAttachments.tsx, JobFieldMap.tsx, jobAttachments.ts(+test), jobAttachmentsData.ts(+test), edits to JobDetail.tsx/Jobs.tsx/types. RESUME: git stash pop → finish Codex → orchestrator SECURITY psql proof of job_attachments + storage.objects RLS (cross-job/anon) → multi-lens review (risk:db) → record BUILT → snapshot-commit. CAVEAT: no storage API container locally → file-BYTES round-trip is a prod-gate item (prove security + table/list/scoping locally). Full playbook in RESUME.md.",
+      "parkedLow": [],
+      "openQuestions": []
+    },
     "17": {
       "status": "BUILT",
       "date": "2026-06-24",
@@ -510,5 +521,6 @@
     "#12 → ALL later sections that UPDATE jobs (NEW DB GUARD): BEFORE UPDATE trigger enforce_billed_job_immutability on jobs (migration 20260625190000) makes invoiced/cancelled jobs IMMUTABLE for non-admins — blocks soft-delete (deleted_at NULL→non-NULL) + any billed-relevant column rewrite via an ALLOW-LIST (new columns protected BY DEFAULT). EXEMPT (still writable on a billed job by a non-admin): status (governed by _enforce_job_status_transition), applied_acres (recompute_job_applied_acres), printed_at/last_printed_by (print-audit stamp), updated_at/updated_by, invoice_id. Admins AND SECURITY DEFINER flows that SET LOCAL app.admin_override='true' (the _is_admin_override() hatch — e.g. transfer_invoice_to_job) bypass it. IMPLICATION: any NEW code/RPC that updates a possibly-invoiced/cancelled job as a non-admin must touch ONLY exempt columns, or run as a definer flow that sets the override hatch, or it will RAISE check_violation. If a later section adds a new jobs column that SHOULD remain non-admin-editable on a billed job, add it to the exempt allow-list in that migration. UI side: Jobs.tsx three-tier selection REPORTABLE(+invoiced, read-only reports/exports) / DELETABLE / EDITABLE(=DELETABLE, mutating bulk actions via openMutatingAction+editableSelectedIds); the soft-delete query is also .in(status,DELETABLE).",
     "#14 → #15/#16 (cross-job report family + batched side-query): the read-only report family now has 4 members (chem summary #12, projected use #13, master mix #14, plus per-job applicator/chem #9/#11). Canonical place to add a NEW read-only job-list report = the bulkActions array in Jobs.tsx (~lines 1063-1068): use selectedRows (REPORTABLE), a distinct Lucide icon, a no-selection toast, and NO printed_at stamp for planning/batch docs (#13/#14 precedent). masterMixSummaryFetch shows the pattern for #11-gatherer-per-job + ONE batched side-query (.in('id',ids)) for extra job columns the list query doesn't carry (capacity/rate/vehicle) — reuse for #16 (per-job map/logs needs extra job columns too). Aggregation keying: use a NUL ('\\u0000') delimiter for product+unit/recipe composite keys (not space/pipe) to avoid collisions. NOTE #15 (Print job list) is DIFFERENT: it prints the FILTERED/displayed list (visibleJobs), not selectedRows, with the per-user VISIBLE columns (#8 list-settings JOB_COLUMN_REGISTRY/orderedVisibleColumnIds) + the on-screen bottom totals row — a toolbar PRINT action, not a selection bulk action.",
     "#15 → #16 + any 'print exactly what's displayed' need: reportPdf.ts now supports an optional totalsRow (bold autotable foot, showFoot:'lastPage' so it isn't repeated per page) — additive, existing callers unchanged. tableSearchSort.ts (applyTableSearchSort, pure) + DataTable's NEW optional controlled search/sort props (searchValue/onSearchChange/sortState/onSortChange, with internal fallback so every existing caller is unaffected) let a page lift the in-table search+sort so print==displayed. jobListPrint.ts (jobPrintCellValue / computeJobListTotals / buildJobListPrintData) is the screen→print mapping over the per-user VISIBLE columns (#8 List Settings). #15 PRINT is a top-level toolbar action over displayedJobs (NOT a selection bulk action, NO printed_at stamp)."
-  ]
+  ],
+  "pausedNote": "PAUSED 2026-06-25 at 33/41 BUILT (Phases 1-3 + Phase-4 printouts #9-#15 done). #16 IN-PROGRESS (WIP in git stash@{0}). Remaining: finish #16, then Phase 5 dispatch #35-41, then end-of-run tasks + production gate. See RESUME.md for the full resume playbook."
 }
