@@ -114,10 +114,18 @@ describe('CustomerSharesTable — Phase 1 preview path', () => {
       grand_total_cents: 150000,
       customer_count: 2,
       shares_detail: {
-        rows: [],
-        customers: [],
+        // Consistent rows + rollups for the two present customers (30 + 20 = 50 ac)
+        // so the default preview RECONCILES (matches real derive output shape).
+        rows: [
+          { field_id: 'f1', field_name: 'N40', customer_id: 'c1', customer_name: 'Farm Alpha', is_primary: true, split_pct: 100, share_acres: 30, price_override_cents: null, pricing_note: null, tier: 1, field_total_acres: 30, field_applied_acres: 30, used_fallback: false },
+          { field_id: 'f2', field_name: 'S20', customer_id: 'c2', customer_name: 'Farm Beta', is_primary: false, split_pct: 100, share_acres: 20, price_override_cents: null, pricing_note: null, tier: 3, field_total_acres: 20, field_applied_acres: 20, used_fallback: false },
+        ],
+        customers: [
+          { customer_id: 'c1', customer_name: 'Farm Alpha', is_primary: true, total_share_acres: 30, overall_split_pct: 100, tier: 1, has_override: false },
+          { customer_id: 'c2', customer_name: 'Farm Beta', is_primary: false, total_share_acres: 20, overall_split_pct: 100, tier: 3, has_override: false },
+        ],
         total_applied_acres: 50,
-        field_count: 1,
+        field_count: 2,
         fallback_used_field_ids: [],
       },
     };
@@ -143,29 +151,53 @@ describe('CustomerSharesTable — Phase 1 preview path', () => {
     expect(screen.getByText('Customer Shares By:')).toBeInTheDocument();
   });
 
-  it('#26: shows a "Reconciles" badge when split totals tie to the whole', () => {
-    // makePreview has empty shares_detail.rows so acres sum to 0 and
-    // total_applied_acres is 50 — that is an acre MISMATCH, so build a tying one.
+  it('#26: shows a "Reconciles" badge for a default preview (no hand-built shares_detail needed)', () => {
+    // makePreview now carries consistent rows + rollups for its present customers,
+    // so a DEFAULT preview reconciles green — no tying workaround required.
+    render(<CustomerSharesTable shares={[]} invoiceTotalCents={0} preview={makePreview()} />);
+    expect(screen.getByText(/reconciles/i)).toBeInTheDocument();
+  });
+
+  it('#26: reconciles GREEN after a split member is soft-deleted (gross total_applied_acres still counts them)', () => {
+    // Regression: user removed a customer from the split and re-previewed. The RPC
+    // drops them from per_customer but shares_detail stays GROSS (rows + rollup +
+    // total_applied_acres still include the removed member). Acres must reconcile
+    // over the PRESENT set only, so the badge reads "Reconciles", not "Mismatch".
     const preview: PreviewFieldAppSplitResult = {
       ...makePreview(),
       shares_detail: {
+        ...makePreview().shares_detail,
         rows: [
-          { field_id: 'f1', field_name: 'N40', customer_id: 'c1', customer_name: 'Farm Alpha', is_primary: true, split_pct: 100, share_acres: 30, price_override_cents: null, pricing_note: null, tier: 1, field_total_acres: 30, field_applied_acres: 30, used_fallback: false },
-          { field_id: 'f2', field_name: 'S20', customer_id: 'c2', customer_name: 'Farm Beta', is_primary: false, split_pct: 100, share_acres: 20, price_override_cents: null, pricing_note: null, tier: 3, field_total_acres: 20, field_applied_acres: 20, used_fallback: false },
+          ...makePreview().shares_detail.rows,
+          { field_id: 'f3', field_name: 'E15', customer_id: 'c3', customer_name: 'Farm Gamma (removed)', is_primary: false, split_pct: 100, share_acres: 15, price_override_cents: null, pricing_note: null, tier: 1, field_total_acres: 15, field_applied_acres: 15, used_fallback: false },
         ],
-        customers: [],
-        total_applied_acres: 50,
-        field_count: 2,
-        fallback_used_field_ids: [],
+        customers: [
+          ...makePreview().shares_detail.customers,
+          { customer_id: 'c3', customer_name: 'Farm Gamma (removed)', is_primary: false, total_share_acres: 15, overall_split_pct: 100, tier: 1, has_override: false },
+        ],
+        total_applied_acres: 65, // 30 + 20 + 15 (removed c3 still counted in gross)
+        field_count: 3,
       },
     };
     render(<CustomerSharesTable shares={[]} invoiceTotalCents={0} preview={preview} />);
     expect(screen.getByText(/reconciles/i)).toBeInTheDocument();
+    expect(screen.queryByText(/mismatch/i)).not.toBeInTheDocument();
   });
 
-  it('#26: shows a "Mismatch" badge when split acres do NOT tie to the whole', () => {
-    render(<CustomerSharesTable shares={[]} invoiceTotalCents={0} preview={makePreview()} />);
-    // makePreview rows are empty (acres sum 0) but total_applied_acres is 50.
+  it('#26: shows a "Mismatch" badge for a GENUINE acre drift (present customer rows do not sum to their rollup)', () => {
+    // c2's per-field rows sum to 10 ac but its own rollup says 20 ac — a real
+    // drift for a PRESENT customer, which must still flag RED.
+    const base = makePreview();
+    const preview: PreviewFieldAppSplitResult = {
+      ...base,
+      shares_detail: {
+        ...base.shares_detail,
+        rows: base.shares_detail.rows.map((r) =>
+          r.customer_id === 'c2' ? { ...r, share_acres: 10 } : r,
+        ),
+      },
+    };
+    render(<CustomerSharesTable shares={[]} invoiceTotalCents={0} preview={preview} />);
     expect(screen.getByText(/mismatch/i)).toBeInTheDocument();
   });
 

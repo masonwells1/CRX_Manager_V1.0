@@ -161,19 +161,62 @@ describe('reconcileSplit — penny-exactness', () => {
     expect(r.balanced).toBe(false);
   });
 
-  it('flags an acre mismatch even when dollars tie out', () => {
+  it('flags a GENUINE acre drift (present customer rows do NOT sum to that customer own rollup) even when dollars tie out', () => {
+    // A real drift: customer c2 own rollup says 40 acres, but its per-field share
+    // rows only sum to 35 — the split lost 5 acres for a PRESENT customer. That
+    // must stay RED. (The badge compares each present customer row sum vs their
+    // own total_share_acres rollup, NOT the gross total_applied_acres.)
     const p = makePreview(
       [
         { id: 'c1', name: 'A', cents: 60000, acres: 60, pct: 60, primary: true },
         { id: 'c2', name: 'B', cents: 40000, acres: 40, pct: 40 },
       ],
       100000,
-      105, // total applied claims 105 but customer acres sum to 100
+      100,
+    );
+    // Corrupt only c2's per-field row acres (35), leaving its rollup at 40.
+    p.shares_detail.rows = p.shares_detail.rows.map((row) =>
+      row.customer_id === 'c2' ? { ...row, share_acres: 35 } : row,
     );
     const r = reconcileSplit(p);
     expect(r.centDifference).toBe(0);
+    expect(r.sumCustomerAcres).toBe(95); // 60 + 35 (rows)
+    expect(r.totalAppliedAcres).toBe(100); // 60 + 40 (rollups)
     expect(r.acreDifference).toBeCloseTo(-5, 2);
     expect(r.balanced).toBe(false);
+  });
+
+  it('reconciles GREEN after a split member is soft-deleted (per_customer excludes them, gross total_applied_acres still includes them, dollars tie)', () => {
+    // Regression for the soft-delete false "Mismatch": the user removed customer
+    // c3 from the split and re-previewed. The preview RPC CONTINUE-skips c3 from
+    // per_customer, but shares_detail (rows, customers, total_applied_acres) is
+    // the GROSS derive output that still carries c3's 25 acres. Dollars tie over
+    // the present two customers; acres must reconcile over the present set only.
+    const p = makePreview(
+      [
+        { id: 'c1', name: 'A', cents: 60000, acres: 60, pct: 48, primary: true },
+        { id: 'c2', name: 'B', cents: 40000, acres: 40, pct: 32 },
+      ],
+      100000,
+      125, // GROSS total_applied_acres = 60 + 40 + 25 (the removed c3 still counted)
+    );
+    // shares_detail still carries the soft-deleted c3 (a row + a customers rollup)
+    // — exactly what derive_customer_shares_from_fields returns; per_customer omits it.
+    p.shares_detail.rows.push({
+      field_id: 'f-c3', field_name: 'Field c3', customer_id: 'c3', customer_name: 'C (removed)',
+      is_primary: false, split_pct: 20, share_acres: 25, price_override_cents: null,
+      pricing_note: null, tier: 1, field_total_acres: 25, field_applied_acres: 25, used_fallback: false,
+    });
+    p.shares_detail.customers.push({
+      customer_id: 'c3', customer_name: 'C (removed)', is_primary: false,
+      total_share_acres: 25, overall_split_pct: 20, tier: 1, has_override: false,
+    });
+    const r = reconcileSplit(p);
+    expect(r.centDifference).toBe(0);
+    expect(r.sumCustomerAcres).toBe(100); // present c1+c2 rows, NOT the gross 125
+    expect(r.totalAppliedAcres).toBe(100); // present c1+c2 rollups, NOT the gross 125
+    expect(r.acreDifference).toBe(0);
+    expect(r.balanced).toBe(true); // GREEN — was falsely RED before the fix
   });
 
   it('handles a single-customer (100%) split', () => {

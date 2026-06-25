@@ -59,9 +59,14 @@ export interface SplitReconciliation {
   sumCustomerCents: number;
   /** the server's grand total (cents) — must equal sumCustomerCents */
   grandTotalCents: number;
-  /** sum of the per-customer share acres */
+  /** sum of the per-customer share acres (from shares_detail.rows, present
+   *  customers only) */
   sumCustomerAcres: number;
-  /** total applied acres across all locations (from shares_detail) */
+  /** expected applied acres for the PRESENT customer set — the sum of each
+   *  present customer's own share-acre rollup (shares_detail.customers
+   *  total_share_acres). Compared against sumCustomerAcres so a soft-deleted
+   *  member (absent from per_customer, but still inside the GROSS
+   *  shares_detail.total_applied_acres) cannot trip a false acre mismatch. */
   totalAppliedAcres: number;
   /** true when BOTH dollars (exact cents) and acres (within tolerance) tie out */
   balanced: boolean;
@@ -89,22 +94,47 @@ export function reconcileSplit(
   );
   const grandTotalCents = Math.round(preview.grand_total_cents);
 
-  // Per-customer share acres: sum the share_acres of every share row belonging
-  // to each customer (the same grain save_field_app_invoice writes to
-  // invoice_shares.acres). Falls back to 0 when shares_detail is absent.
+  // Acre reconciliation is over the SAME customer set on both sides — the
+  // customers actually present in per_customer. The preview RPC CONTINUE-skips a
+  // soft-deleted split member from per_customer, but leaves them inside the GROSS
+  // shares_detail (rows, customers, AND total_applied_acres). Comparing the
+  // present-customer row sum to that gross figure produced a FALSE "Mismatch" on
+  // a valid edited-and-re-previewed split whose dollars tie exactly. So we
+  // restrict BOTH sides to the present customers:
+  //   sumCustomerAcres   = sum of per-field rows.share_acres   (present only)
+  //   totalAppliedAcres  = sum of each present customer's own total_share_acres
+  //                        rollup (shares_detail.customers), falling back to the
+  //                        row sum when the rollup is absent.
+  // This still catches a GENUINE drift: if a present customer's per-field share
+  // rows don't sum to that customer's own rollup acres, the two sides differ.
+  const presentCustomerIds = new Set(preview.per_customer.map((c) => c.customer_id));
+
   const rows = preview.shares_detail?.rows ?? [];
-  const acresByCustomer = new Map<string, number>();
+  const rowAcresByCustomer = new Map<string, number>();
   for (const r of rows) {
-    acresByCustomer.set(
+    if (!presentCustomerIds.has(r.customer_id)) continue;
+    rowAcresByCustomer.set(
       r.customer_id,
-      (acresByCustomer.get(r.customer_id) ?? 0) + (r.share_acres ?? 0),
+      (rowAcresByCustomer.get(r.customer_id) ?? 0) + (r.share_acres ?? 0),
     );
   }
-  let sumCustomerAcres = 0;
-  for (const c of preview.per_customer) {
-    sumCustomerAcres += acresByCustomer.get(c.customer_id) ?? 0;
+
+  const rollupAcresByCustomer = new Map<string, number>();
+  for (const c of preview.shares_detail?.customers ?? []) {
+    if (!presentCustomerIds.has(c.customer_id)) continue;
+    rollupAcresByCustomer.set(c.customer_id, c.total_share_acres ?? 0);
   }
-  const totalAppliedAcres = preview.shares_detail?.total_applied_acres ?? 0;
+
+  let sumCustomerAcres = 0;
+  let totalAppliedAcres = 0;
+  for (const c of preview.per_customer) {
+    const rowAcres = rowAcresByCustomer.get(c.customer_id) ?? 0;
+    sumCustomerAcres += rowAcres;
+    // Expected acres for this customer = their own rollup; fall back to the row
+    // sum when no rollup row exists (so a customer with rows but no rollup entry
+    // still reconciles instead of falsely flagging).
+    totalAppliedAcres += rollupAcresByCustomer.get(c.customer_id) ?? rowAcres;
+  }
 
   const centDifference = sumCustomerCents - grandTotalCents;
   const acreDifference = round2(sumCustomerAcres) - round2(totalAppliedAcres);
