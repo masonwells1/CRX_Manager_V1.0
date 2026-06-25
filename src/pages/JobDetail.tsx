@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState , useCallback } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import { Save, Plus, Trash2, Check, FileText, Beaker, Ban, MessageSquarePlus, Printer, CloudSun, MapPin, Truck, ClipboardList, Bell, History, BookmarkPlus, GripVertical, ChevronUp, ChevronDown } from 'lucide-react';
+import { Save, Plus, Trash2, Check, FileText, Beaker, Ban, MessageSquarePlus, Printer, CloudSun, MapPin, Truck, ClipboardList, FlaskConical, Bell, History, BookmarkPlus, GripVertical, ChevronUp, ChevronDown } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
@@ -20,8 +20,10 @@ import {
   buildApplicatorSheetData,
   parseCustomConfig,
   SHEET_FORMAT_LABELS,
+  type ApplicatorSheetData,
   type ApplicatorSheetFormat,
 } from '../lib/applicatorSheetData';
+import { generateChemicalApplicationReportPdf } from '../lib/chemicalApplicationReportPdf';
 import { generateLoaderWorksheetPdf } from '../lib/loaderWorksheetPdf';
 import { computeLoaderWorksheet, isGallonCapacityUnit } from '../lib/loaderWorksheet';
 import { overrideSaveApplicatorId, shouldReassignApplicatorAfterSave, canGenerateWpsNotice } from '../lib/jobSaveHelpers';
@@ -275,6 +277,8 @@ export default function JobDetail() {
   // #9: applicator field sheet (Original / Custom / Enhanced) print picker.
   const [sheetPickerOpen, setSheetPickerOpen] = useState(false);
   const [generatingSheet, setGeneratingSheet] = useState<ApplicatorSheetFormat | null>(null);
+  // #11: Chemical Application Report (per-job chemical-centric PDF) print in progress.
+  const [generatingChemReport, setGeneratingChemReport] = useState(false);
   // C4: weather auto-capture at completion
   const [fetchingWeather, setFetchingWeather] = useState(false);
 
@@ -362,6 +366,118 @@ export default function JobDetail() {
     setPrintingWps(false);
   };
 
+  // Shared builder: assemble the SHARED ApplicatorSheetData from current (saved)
+  // form state. Used by BOTH the Applicator Field Sheet (#9) and the Chemical
+  // Application Report (#11) so their products, rates, totals and gal/lb
+  // conversions are byte-identical for the same job. Returns null on a failed
+  // product-label lookup (caller toasts + aborts). Caller must have already
+  // verified the job is saved (not dirty).
+  const buildSheetDataFromState = async (): Promise<ApplicatorSheetData | null> => {
+    // Pull REI/PHI/EPA/product_form for EVERY product on the job, including any
+    // since-deactivated ones (allProducts is is_active=true only) — mirrors the
+    // WPS-notice label fetch so a retired product still prints its compliance data.
+    const pids = chemRows.filter((c) => c.product_id).map((c) => c.product_id);
+    const labelById = new Map<string, { rei_hours: number | null; phi_days: number | null; epa_registration: string | null; product_form: 'liquid' | 'dry' | null }>();
+    if (pids.length > 0) {
+      const { data: lp, error: lpErr } = await supabase
+        .from('products')
+        .select('id, rei_hours, phi_days, epa_registration, product_form')
+        .in('id', pids);
+      if (lpErr || !lp) return null;
+      (lp as Array<{ id: string; rei_hours: number | null; phi_days: number | null; epa_registration: string | null; product_form: string | null }>).forEach((p) => {
+        const form = p.product_form === 'liquid' || p.product_form === 'dry' ? p.product_form : null;
+        labelById.set(p.id, { rei_hours: p.rei_hours, phi_days: p.phi_days, epa_registration: p.epa_registration, product_form: form });
+      });
+      // A short array (RLS-hidden / deleted product) returns NO error, but a missing
+      // label row would silently blank that product's EPA reg / gal-lb / REI / PHI —
+      // abort (return null → caller toasts) so a compliance printout is never built
+      // with missing label data (Codex P2; mirrors the WPS-notice path).
+      if (pids.some((pid) => !labelById.has(pid))) return null;
+    }
+
+    // Billed customers: prefer the per-field shares (multi-customer); else the
+    // single job customer. Dedup by name+account. The in-memory `customers` list is
+    // active-only, so a since-DEACTIVATED billed customer is resolved by a direct id
+    // lookup (no is_active filter) — otherwise the compliance report would print a
+    // generic "Customer" / omit a billed customer (Codex P2; mirrors the loader path).
+    const billedIds = [...new Set((shareRows.length > 0 ? shareRows.map((s) => s.customer_id) : [customerId]).filter(Boolean))];
+    const nameByCustId = new Map<string, { farm_name: string | null; account_number: string | null }>();
+    customers.forEach((c) => nameByCustId.set(c.id, { farm_name: c.farm_name, account_number: c.account_number ?? null }));
+    const missingIds = billedIds.filter((cid) => !nameByCustId.has(cid));
+    if (missingIds.length > 0) {
+      const { data: extraCusts } = await supabase
+        .from('customers')
+        .select('id, farm_name, account_number')
+        .in('id', missingIds);
+      ((extraCusts || []) as Array<{ id: string; farm_name: string | null; account_number: string | null }>)
+        .forEach((c) => nameByCustId.set(c.id, { farm_name: c.farm_name, account_number: c.account_number ?? null }));
+    }
+    const custMap = new Map<string, { customer_name: string; account_number: string | null }>();
+    billedIds.forEach((cid) => {
+      const c = nameByCustId.get(cid);
+      if (!c || !c.farm_name) return;
+      custMap.set(`${c.farm_name}|${c.account_number ?? ''}`, { customer_name: c.farm_name, account_number: c.account_number ?? null });
+    });
+
+    // Applicator name: the `applicators` picker list is active-only, so a job whose
+    // saved applicator has since been DEACTIVATED would print a blank name. Resolve
+    // it directly from profile_public_view by id when it's not in the active list
+    // (never a profiles embed — RLS) so the compliance printout keeps the name (Codex P2).
+    let applicatorName = applicators.find((a) => a.id === applicatorId)?.full_name || null;
+    if (applicatorId && !applicatorName) {
+      const { data: prof } = await supabase
+        .from('profile_public_view')
+        .select('full_name')
+        .eq('id', applicatorId)
+        .maybeSingle();
+      applicatorName = (prof as { full_name?: string | null } | null)?.full_name ?? null;
+    }
+
+    return buildApplicatorSheetData({
+      job_number: jobNumber || 'draft',
+      customers: [...custMap.values()],
+      scheduled_date: jobDate,
+      scheduled_time: scheduledTime || null,
+      applicator_name: applicatorName,
+      vehicle_name: vehicles.find((v) => v.id === vehicleId)?.vehicle_name || null,
+      loader_comment: loaderComment || null,
+      fields: fieldRows
+        .filter((f) => f.field_id)
+        .map((f) => {
+          const fld = allFields.find((af) => af.id === f.field_id);
+          return {
+            field_id: f.field_id,
+            field_name: fld?.field_name || 'Field',
+            county: fld?.county || null,
+            state: fld?.state || null,
+            acres: parseFloat(f.acres_to_treat) || 0,
+            crop: f.crop || fld?.crop_type || null,
+            pest: f.pests || null,
+            sort_order: f.sort_order,
+          };
+        }),
+      products: chemRows
+        .filter((c) => c.product_id)
+        .map((c) => {
+          const lbl = labelById.get(c.product_id);
+          return {
+            product_name: c.product_name || 'Product',
+            rate_per_acre: parseFloat(c.rate_per_acre) || null,
+            rate_unit: c.rate_unit || null,
+            // The Total Applied quantity's measure unit (e.g. GAL/LB) — drives the
+            // gal/lb conversion + labels Total Applied, matching the in-page
+            // preview + loader worksheet. NOT rate_unit (per-acre).
+            unit: c.unit || null,
+            total_quantity: parseFloat(c.quantity) || null,
+            product_form: lbl?.product_form ?? null,
+            rei_hours: c.rei_hours !== '' ? parseFloat(c.rei_hours) : (lbl?.rei_hours ?? null),
+            phi_days: c.phi_days !== '' ? parseFloat(c.phi_days) : (lbl?.phi_days ?? null),
+            epa_registration: lbl?.epa_registration ?? null,
+          };
+        }),
+    });
+  };
+
   // #9: generate the Applicator Field Sheet in one of three formats. Built from
   // the SAVED job (blocked while dirty, like the WPS notice) so the printed
   // figures match the persisted record. Fields print IN ROUTE ORDER (sort_order).
@@ -372,25 +488,11 @@ export default function JobDetail() {
     }
     setGeneratingSheet(format);
     try {
-      // Pull REI/PHI/EPA/product_form for EVERY product on the job, including any
-      // since-deactivated ones (allProducts is is_active=true only) — mirrors the
-      // WPS-notice label fetch so a retired product still prints its compliance data.
-      const pids = chemRows.filter((c) => c.product_id).map((c) => c.product_id);
-      const labelById = new Map<string, { rei_hours: number | null; phi_days: number | null; epa_registration: string | null; product_form: 'liquid' | 'dry' | null }>();
-      if (pids.length > 0) {
-        const { data: lp, error: lpErr } = await supabase
-          .from('products')
-          .select('id, rei_hours, phi_days, epa_registration, product_form')
-          .in('id', pids);
-        if (lpErr || !lp) {
-          toast('error', 'Could not load product data — try again before printing the field sheet.');
-          setGeneratingSheet(null);
-          return;
-        }
-        (lp as Array<{ id: string; rei_hours: number | null; phi_days: number | null; epa_registration: string | null; product_form: string | null }>).forEach((p) => {
-          const form = p.product_form === 'liquid' || p.product_form === 'dry' ? p.product_form : null;
-          labelById.set(p.id, { rei_hours: p.rei_hours, phi_days: p.phi_days, epa_registration: p.epa_registration, product_form: form });
-        });
+      const sheetData = await buildSheetDataFromState();
+      if (!sheetData) {
+        toast('error', 'Could not load product data — try again before printing the field sheet.');
+        setGeneratingSheet(null);
+        return;
       }
 
       // Resolve the Custom layout config (only needed for the Custom format).
@@ -404,64 +506,6 @@ export default function JobDetail() {
           .maybeSingle();
         customCfg = parseCustomConfig((cfgRow as { setting_value?: string } | null)?.setting_value ?? null);
       }
-
-      // Billed customers: prefer the per-field shares (multi-customer); else the
-      // single job customer. Dedup by name+account. (Mirrors the Jobs list logic.)
-      const custMap = new Map<string, { customer_name: string; account_number: string | null }>();
-      shareRows.forEach((s) => {
-        const c = customers.find((cc) => cc.id === s.customer_id);
-        if (!c) return;
-        const name = c.farm_name || 'Customer';
-        custMap.set(`${name}|${c.account_number ?? ''}`, { customer_name: name, account_number: c.account_number ?? null });
-      });
-      if (custMap.size === 0) {
-        const c = customers.find((cc) => cc.id === customerId);
-        if (c) custMap.set(`${c.farm_name}|${c.account_number ?? ''}`, { customer_name: c.farm_name || 'Customer', account_number: c.account_number ?? null });
-      }
-
-      const sheetData = buildApplicatorSheetData({
-        job_number: jobNumber || 'draft',
-        customers: [...custMap.values()],
-        scheduled_date: jobDate,
-        scheduled_time: scheduledTime || null,
-        applicator_name: applicators.find((a) => a.id === applicatorId)?.full_name || null,
-        vehicle_name: vehicles.find((v) => v.id === vehicleId)?.vehicle_name || null,
-        loader_comment: loaderComment || null,
-        fields: fieldRows
-          .filter((f) => f.field_id)
-          .map((f) => {
-            const fld = allFields.find((af) => af.id === f.field_id);
-            return {
-              field_id: f.field_id,
-              field_name: fld?.field_name || 'Field',
-              county: fld?.county || null,
-              state: fld?.state || null,
-              acres: parseFloat(f.acres_to_treat) || 0,
-              crop: f.crop || fld?.crop_type || null,
-              pest: f.pests || null,
-              sort_order: f.sort_order,
-            };
-          }),
-        products: chemRows
-          .filter((c) => c.product_id)
-          .map((c) => {
-            const lbl = labelById.get(c.product_id);
-            return {
-              product_name: c.product_name || 'Product',
-              rate_per_acre: parseFloat(c.rate_per_acre) || null,
-              rate_unit: c.rate_unit || null,
-              // The Total Applied quantity's measure unit (e.g. GAL/LB) — drives the
-              // gal/lb conversion + labels Total Applied, matching the in-page
-              // preview + loader worksheet. NOT rate_unit (per-acre).
-              unit: c.unit || null,
-              total_quantity: parseFloat(c.quantity) || null,
-              product_form: lbl?.product_form ?? null,
-              rei_hours: c.rei_hours !== '' ? parseFloat(c.rei_hours) : (lbl?.rei_hours ?? null),
-              phi_days: c.phi_days !== '' ? parseFloat(c.phi_days) : (lbl?.phi_days ?? null),
-              epa_registration: lbl?.epa_registration ?? null,
-            };
-          }),
-      });
 
       await generateApplicatorSheetPdf(sheetData, format, customCfg);
 
@@ -477,6 +521,38 @@ export default function JobDetail() {
       toast('error', 'Failed to generate field sheet');
     }
     setGeneratingSheet(null);
+  };
+
+  // #11: generate the Chemical Application Report — the official per-job record of
+  // exactly what chemical went on each field (handed to a customer or regulator).
+  // Built from the SAVED job (blocked while dirty) via the SAME shared gatherer as
+  // the applicator field sheet, so every product, rate, total and gal/lb conversion
+  // is byte-identical between the two documents.
+  const handleChemicalReport = async () => {
+    if (!canGenerateWpsNotice({ isDirty })) {
+      toast('error', 'Save the job before printing the chemical report — it must match the saved record.');
+      return;
+    }
+    setGeneratingChemReport(true);
+    try {
+      const sheetData = await buildSheetDataFromState();
+      if (!sheetData) {
+        toast('error', 'Could not load product data — try again before printing the chemical report.');
+        setGeneratingChemReport(false);
+        return;
+      }
+      await generateChemicalApplicationReportPdf(sheetData);
+      // Stamp printed status + who (ChemMan "Printed" column). Best-effort.
+      if (!isNew && id) {
+        const stampRes = await supabase.from('jobs').update({ printed_at: new Date().toISOString(), last_printed_by: profile?.id ?? null }).eq('id', id).select();
+        try { checkMutationResult(stampRes, 'Stamp printed_at'); } catch { /* non-blocking */ }
+      }
+      if (profile) logActivity({ event: 'chemical_application_report_printed', description: `Chemical Application Report generated for job ${jobNumber}`, performedBy: profile.id, entityType: 'job', entityId: id });
+    } catch (err) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'chemical_application_report_pdf' } });
+      toast('error', 'Failed to generate chemical report');
+    }
+    setGeneratingChemReport(false);
   };
 
   // #10: generate the Loader Worksheet PDF for this field job. Built from the SAVED
@@ -1600,6 +1676,10 @@ export default function JobDetail() {
               <Button variant="secondary" onClick={() => setSheetPickerOpen(true)} loading={generatingSheet !== null}>
                 <ClipboardList className="w-4 h-4" />
                 Field Sheet
+              </Button>
+              <Button variant="secondary" onClick={handleChemicalReport} loading={generatingChemReport}>
+                <FlaskConical className="w-4 h-4" />
+                Chem Report
               </Button>
               <Button variant="secondary" onClick={handleLoaderWorksheet} loading={printingLoader}>
                 <Truck className="w-4 h-4" />

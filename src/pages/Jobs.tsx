@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Download, FileText, Trash2, ChevronDown, ChevronRight, Tag, Tags, Search, SlidersHorizontal, Users, Layers, Pencil, Settings2, Truck } from 'lucide-react';
+import { Plus, Download, FileText, Trash2, ChevronDown, ChevronRight, Tag, Tags, Search, SlidersHorizontal, Users, Layers, Pencil, Settings2, Truck, FlaskConical } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge, { type BadgeVariant } from '../components/ui/Badge';
@@ -11,11 +11,14 @@ import SplitHeading from '../components/ui/SplitHeading';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, checkMutationResult } from '../lib/db';
+import { logActivity } from '../lib/activityLogger';
 import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection';
 import { exportToCSV, fmtCSV, fmtDateCSV } from '../lib/csvExport';
 import { downloadReportPdf, type ReportPdfColumn } from '../lib/reportPdf';
 import { fetchLoaderWorksheetData } from '../lib/loaderWorksheetFetch';
 import { generateLoaderWorksheetBatchPdf, generateLoaderWorksheetPdf } from '../lib/loaderWorksheetPdf';
+import { fetchChemicalApplicationReportData } from '../lib/chemicalApplicationReportFetch';
+import { generateChemicalApplicationReportPdf } from '../lib/chemicalApplicationReportPdf';
 import { sanitizeError } from '../lib/errorSanitizer';
 import { Sentry } from '../lib/sentry';
 import { getSeasonDates } from '../utils/season';
@@ -198,6 +201,8 @@ export default function Jobs() {
   const [loaderExporting, setLoaderExporting] = useState(false);
   // #10: per-row Loader Worksheet print in progress (the job id being generated).
   const [rowLoaderId, setRowLoaderId] = useState<string | null>(null);
+  // #11: per-row Chemical Application Report print in progress (job id being generated).
+  const [rowChemReportId, setRowChemReportId] = useState<string | null>(null);
   // Per-row expander state, keyed "<jobId>:<field>" (customers | locations).
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   // Field-app parity #8: per-user List Settings (which columns show + whether
@@ -746,6 +751,50 @@ export default function Jobs() {
     setRowLoaderId(null);
   };
 
+  // Field-app parity #11: print ONE job's Chemical Application Report straight from
+  // its list row (no bulk selection needed — works for any viewer). Re-fetches the
+  // job's full mix/fields/product-label data via the SHARED applicator-sheet gatherer
+  // (so the figures match the Applicator Sheet), generates the chemical-centric PDF,
+  // then best-effort stamps the print audit and refreshes the row.
+  const handleRowChemicalReport = async (jobId: string) => {
+    setRowChemReportId(jobId);
+    try {
+      const data = await fetchChemicalApplicationReportData(jobId);
+      if (!data) {
+        toast('error', 'No chemical-report data for that job.');
+        setRowChemReportId(null);
+        return;
+      }
+      // Gate a blank report: the row icon shows on EVERY job, but a job with no
+      // chemicals or no fields would produce an official-looking empty PDF (and stamp
+      // printed_at). JobDetail only shows its print buttons when the job has both, so
+      // mirror that here before generating/stamping (Codex P2).
+      if (data.products.length === 0 || data.fields.length === 0) {
+        toast('error', 'This job has no chemicals/fields to report — add them before printing.');
+        setRowChemReportId(null);
+        return;
+      }
+      await generateChemicalApplicationReportPdf(data);
+      try {
+        const stamp = await supabase
+          .from('jobs')
+          .update({ printed_at: new Date().toISOString(), last_printed_by: profile?.id ?? null })
+          .eq('id', jobId)
+          .select('id');
+        checkMutationResult(stamp, 'Stamp chemical-report print');
+        fetchJobs();
+      } catch { /* non-blocking — the PDF already generated */ }
+      // Audit the compliance-document print in the activity feed (mirrors the
+      // JobDetail single-job path) so a row-action print isn't invisible (Codex P2).
+      if (profile) logActivity({ event: 'chemical_application_report_printed', description: `Chemical Application Report generated for job ${data.job_number}`, performedBy: profile.id, entityType: 'job', entityId: jobId });
+      toast('success', 'Chemical application report generated');
+    } catch (err) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'jobs_row_chemical_report' } });
+      toast('error', sanitizeError(err));
+    }
+    setRowChemReportId(null);
+  };
+
   const handleDelete = async () => {
     setDeleting(true);
     try {
@@ -839,6 +888,19 @@ export default function Jobs() {
             className="text-secondary hover:text-crx-green disabled:opacity-40 transition-colors"
           >
             <Truck className="w-3.5 h-3.5" />
+          </button>
+          {/* #11: per-row Chemical Application Report entry point — the official
+              per-job chemical record, reachable directly from the job list for ANY
+              viewer (alongside the loader/applicator printouts). */}
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); handleRowChemicalReport(r.id); }}
+            disabled={rowChemReportId === r.id}
+            title="Print Chemical Application Report"
+            aria-label={`Print chemical application report for job ${r.job_number}`}
+            className="text-secondary hover:text-crx-green disabled:opacity-40 transition-colors"
+          >
+            <FlaskConical className="w-3.5 h-3.5" />
           </button>
         </div>
       ),
