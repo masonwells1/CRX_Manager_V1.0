@@ -75,6 +75,7 @@ export interface InvoicePdfData {
   total_cost_cents: number;
   paid_amount_cents: number;
   prepay_applied_cents: number;
+  write_off_cents?: number;
   balance_cents: number;
 
   // Field application context
@@ -128,6 +129,7 @@ interface InvoiceRowForPdf {
   total_cost_cents?: number | null;
   paid_amount_cents?: number | null;
   prepay_applied_cents?: number | null;
+  write_off_cents?: number | null;
   balance_cents: number;
 }
 
@@ -219,6 +221,7 @@ export async function buildInvoicePdfDataFromRow(
     total_cost_cents: inv.total_cost_cents || 0,
     paid_amount_cents: inv.paid_amount_cents || 0,
     prepay_applied_cents: inv.prepay_applied_cents || 0,
+    write_off_cents: inv.write_off_cents || 0,
     balance_cents: inv.balance_cents || 0,
     options,
   };
@@ -403,7 +406,7 @@ export async function generateInvoicePdf(data: InvoicePdfData) {
 
   const totalsW = 220;
   const totalsX = pageW - margin - totalsW;
-  const totalsH = 110 + (data.paid_amount_cents > 0 ? 16 : 0) + (data.prepay_applied_cents > 0 ? 16 : 0);
+  const totalsH = 110 + (data.paid_amount_cents > 0 ? 16 : 0) + (data.prepay_applied_cents > 0 ? 16 : 0) + ((data.write_off_cents ?? 0) > 0 ? 16 : 0);
   doc.setFillColor(...LIGHT_BG);
   doc.roundedRect(totalsX, y, totalsW, totalsH, 4, 4, 'F');
 
@@ -430,6 +433,14 @@ export async function generateInvoicePdf(data: InvoicePdfData) {
     doc.text('Prepay Applied', tLX, ty);
     doc.setTextColor(...CRX_GREEN);
     doc.text(`-${fmt(data.prepay_applied_cents)}`, tRX, ty, { align: 'right' });
+    doc.setTextColor(...CHARCOAL);
+    ty += 16;
+  }
+
+  if ((data.write_off_cents ?? 0) > 0) {
+    doc.text('Write-off', tLX, ty);
+    doc.setTextColor(...CRX_GREEN);
+    doc.text(`-${fmt(data.write_off_cents ?? 0)}`, tRX, ty, { align: 'right' });
     doc.setTextColor(...CHARCOAL);
     ty += 16;
   }
@@ -713,6 +724,7 @@ async function generateLegacyInvoicePdf(data: InvoicePdfData) {
   totalRow('Subtotal:', fmt(data.total_amount_cents));
   if (data.paid_amount_cents > 0) totalRow('Payments:', `-${fmt(data.paid_amount_cents)}`);
   if (data.prepay_applied_cents > 0) totalRow('Prepay Applied:', `-${fmt(data.prepay_applied_cents)}`);
+  if ((data.write_off_cents ?? 0) > 0) totalRow('Write-off:', `-${fmt(data.write_off_cents ?? 0)}`);
   if (data.finance_charge_cents && data.finance_charge_cents > 0) totalRow('Finance Charges:', fmt(data.finance_charge_cents));
 
   doc.setDrawColor(...black);

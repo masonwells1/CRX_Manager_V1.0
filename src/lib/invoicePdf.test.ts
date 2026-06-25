@@ -207,6 +207,36 @@ describe('generateInvoicePdf', () => {
     expect(hasFinanceCharges).toBe(true);
   });
 
+  it('prints a Write-off line so the current-format totals reconcile to Balance Due', async () => {
+    // Posted invoice WITH a hidden write-off: Subtotal 18500, Payments 5000,
+    // Prepay 1500, Write-off 3000 → Balance Due 9000. Without the Write-off
+    // line the four printed numbers don't add up (18500−5000−1500 = 12000 ≠
+    // the printed 9000). The line must appear AND the math must close.
+    await generateInvoicePdf(makeInvoiceData({
+      total_amount_cents: 18500,
+      paid_amount_cents: 5000,
+      prepay_applied_cents: 1500,
+      write_off_cents: 3000,
+      balance_cents: 9000, // 18500 − 5000 − 1500 − 3000
+    }));
+    const textCalls = mockDoc.text.mock.calls.flat();
+    const has = (s: string) => textCalls.some((a: unknown) => typeof a === 'string' && a.includes(s));
+    expect(has('Write-off')).toBe(true);   // the new line label
+    expect(has('$185.00')).toBe(true);     // Subtotal
+    expect(has('-$50.00')).toBe(true);     // Payments
+    expect(has('-$15.00')).toBe(true);     // Prepay Applied
+    expect(has('-$30.00')).toBe(true);     // Write-off (was hidden before)
+    expect(has('$90.00')).toBe(true);      // Balance Due (now reconciles)
+    // 18500 − 5000 − 1500 − 3000 === 9000
+    expect(18500 - 5000 - 1500 - 3000).toBe(9000);
+  });
+
+  it('omits the Write-off line when write_off_cents is 0', async () => {
+    await generateInvoicePdf(makeInvoiceData({ write_off_cents: 0 }));
+    const textCalls = mockDoc.text.mock.calls.flat();
+    expect(textCalls.some((a: unknown) => typeof a === 'string' && a.includes('Write-off'))).toBe(false);
+  });
+
   it('handles customer with null optional fields', async () => {
     const doc = await generateInvoicePdf(makeInvoiceData({
       customer_email: undefined,
@@ -320,6 +350,31 @@ describe('generateInvoicePdf — legacy "Old Print" format', () => {
     expect(has('-$15.00')).toBe(true);      // Prepay Applied
     expect(has('$120.00')).toBe(true);      // Balance Due (reconciles)
     expect(has('BALANCE DUE:')).toBe(true);
+  });
+
+  it('prints a Write-off line so the legacy-format totals reconcile to Balance Due', async () => {
+    // Same hidden-write-off scenario in the legacy "Old Print" layout: without
+    // the Write-off line, Subtotal − Payments − Prepay = 12000 ≠ the printed
+    // Balance Due 9000. The line must appear AND the four lines must close.
+    await generateInvoicePdf(makeInvoiceData({
+      options: legacyOpts,
+      total_amount_cents: 18500,
+      paid_amount_cents: 5000,
+      prepay_applied_cents: 1500,
+      write_off_cents: 3000,
+      balance_cents: 9000, // 18500 − 5000 − 1500 − 3000
+    }));
+    const textCalls = mockDoc.text.mock.calls.flat();
+    const has = (s: string) => textCalls.some((a: unknown) => typeof a === 'string' && a.includes(s));
+    expect(has('Write-off:')).toBe(true);  // the new legacy line label
+    expect(has('$185.00')).toBe(true);     // Subtotal
+    expect(has('-$50.00')).toBe(true);     // Payments
+    expect(has('-$15.00')).toBe(true);     // Prepay Applied
+    expect(has('-$30.00')).toBe(true);     // Write-off (was hidden before)
+    expect(has('$90.00')).toBe(true);      // Balance Due (now reconciles)
+    expect(has('BALANCE DUE:')).toBe(true);
+    // 18500 − 5000 − 1500 − 3000 === 9000
+    expect(18500 - 5000 - 1500 - 3000).toBe(9000);
   });
 
   it('renders a split with per-customer "Ref" labels that sum to the whole', async () => {

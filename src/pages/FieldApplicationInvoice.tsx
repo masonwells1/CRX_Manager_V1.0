@@ -201,6 +201,7 @@ export default function FieldApplicationInvoice() {
     total_cost_cents: number | null;
     paid_amount_cents: number | null;
     prepay_applied_cents: number | null;
+    write_off_cents: number | null;
     balance_cents: number;
   } | null>(null);
 
@@ -409,6 +410,7 @@ export default function FieldApplicationInvoice() {
       total_cost_cents: (invoice.total_cost_cents as number | null) ?? null,
       paid_amount_cents: (invoice.paid_amount_cents as number | null) ?? null,
       prepay_applied_cents: (invoice.prepay_applied_cents as number | null) ?? null,
+      write_off_cents: (invoice.write_off_cents as number | null) ?? null,
       balance_cents: (invoice.balance_cents as number) || 0,
     });
     // Wave B.1 / P2-1: load Applied Info from the invoice row. These are
@@ -1090,6 +1092,7 @@ export default function FieldApplicationInvoice() {
         total_cost_cents: pdfSnapshot.total_cost_cents,
         paid_amount_cents: pdfSnapshot.paid_amount_cents,
         prepay_applied_cents: pdfSnapshot.prepay_applied_cents,
+        write_off_cents: pdfSnapshot.write_off_cents,
         balance_cents: pdfSnapshot.balance_cents,
       }, {
         // #30: format toggles the layout only; share/price/EPA detail stay on so

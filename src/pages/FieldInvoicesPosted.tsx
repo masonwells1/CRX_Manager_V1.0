@@ -238,6 +238,7 @@ export default function FieldInvoicesPosted() {
     total_cost_cents: row.total_cost_cents,
     paid_amount_cents: row.paid_amount_cents,
     prepay_applied_cents: row.prepay_applied_cents,
+    write_off_cents: row.write_off_cents,
     balance_cents: row.balance_cents,
   });
 
