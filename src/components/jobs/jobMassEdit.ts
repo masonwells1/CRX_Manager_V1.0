@@ -7,8 +7,8 @@ import type { JobStatus } from '../../types';
 /**
  * The opt-in sections the office can toggle in the Mass Edit modal. Each is OFF
  * by default ("leave unchanged"); only an enabled section contributes to the
- * write. The loader-worksheet section is intentionally absent — it lands with
- * section #10 (Loader Worksheet PDF wired to FIELD JOBS).
+ * write. The loader-worksheet section (#10) bulk-sets the per-load planning inputs
+ * (carrier rate / tank-capacity override / loader comment) across many jobs.
  */
 export interface MassEditDraft {
   /** Set the visible "Scheduled" date (jobs.job_date) on every selected job. */
@@ -30,6 +30,16 @@ export interface MassEditDraft {
   /** Bulk-set jobs.batch_ref (or clear it). */
   setBatch: boolean;
   batchRef: string | null; // null = remove from batch
+
+  // ── Loader Worksheet (#10) — per-load planning inputs ────────────────────────
+  /** Bulk-set the loader-worksheet inputs (carrier rate / tank capacity / comment). */
+  setLoader: boolean;
+  /** Carrier (water/spray) gallons per acre. Blank => clear (NULL). */
+  carrierRateGpa: string;
+  /** Per-job tank-capacity override (gallons). Blank => clear (NULL = use vehicle). */
+  loaderTankCapacity: string;
+  /** Free-text loader comment. Blank => clear. */
+  loaderComment: string;
 }
 
 export const emptyMassEditDraft: MassEditDraft = {
@@ -43,6 +53,10 @@ export const emptyMassEditDraft: MassEditDraft = {
   applicatorId: null,
   setBatch: false,
   batchRef: null,
+  setLoader: false,
+  carrierRateGpa: '',
+  loaderTankCapacity: '',
+  loaderComment: '',
 };
 
 /**
@@ -127,14 +141,47 @@ export function partitionByStatusLegality<T extends { id: string; status: JobSta
  * for transition legality, so it is intentionally excluded here.
  *
  * Returns `null` when no non-status section is enabled (nothing to write).
+ *
+ * Loader-worksheet numbers respect the jobs CHECK constraints: a blank input
+ * clears to NULL; an invalid (negative / non-positive capacity) value is dropped
+ * so the batch is never rejected by jobs_carrier_rate_gpa_nonneg /
+ * jobs_loader_tank_capacity_pos. Use `loaderInputsValid` to surface that in the UI.
  */
-export function buildFieldPatch(draft: MassEditDraft): Record<string, string | null> | null {
-  const patch: Record<string, string | null> = {};
+export function buildFieldPatch(draft: MassEditDraft): Record<string, string | number | null> | null {
+  const patch: Record<string, string | number | null> = {};
   if (draft.setJobDate && draft.jobDate) patch.job_date = draft.jobDate;
   if (draft.setScheduleDate) patch.schedule_date = draft.scheduleDate || null;
   if (draft.setApplicator) patch.applicator_id = draft.applicatorId;
   if (draft.setBatch) patch.batch_ref = draft.batchRef;
+  if (draft.setLoader) {
+    // Carrier rate: blank => NULL; >= 0 only (CHECK jobs_carrier_rate_gpa_nonneg).
+    const carrier = parseFloat(draft.carrierRateGpa);
+    patch.carrier_rate_gpa = draft.carrierRateGpa.trim() !== '' && !Number.isNaN(carrier) && carrier >= 0 ? carrier : null;
+    // Capacity: blank => NULL; > 0 only (CHECK jobs_loader_tank_capacity_pos).
+    const cap = parseFloat(draft.loaderTankCapacity);
+    patch.loader_tank_capacity = draft.loaderTankCapacity.trim() !== '' && !Number.isNaN(cap) && cap > 0 ? cap : null;
+    // Comment: blank => NULL (clear).
+    patch.loader_comment = draft.loaderComment.trim() !== '' ? draft.loaderComment.trim() : null;
+  }
   return Object.keys(patch).length > 0 ? patch : null;
+}
+
+/**
+ * True when the loader section's numeric inputs are usable (or blank). A negative
+ * carrier rate or a non-positive capacity is invalid (the DB CHECK would reject
+ * them) — the modal uses this to warn rather than silently dropping the value.
+ */
+export function loaderInputsValid(draft: MassEditDraft): boolean {
+  if (!draft.setLoader) return true;
+  if (draft.carrierRateGpa.trim() !== '') {
+    const c = parseFloat(draft.carrierRateGpa);
+    if (Number.isNaN(c) || c < 0) return false;
+  }
+  if (draft.loaderTankCapacity.trim() !== '') {
+    const cap = parseFloat(draft.loaderTankCapacity);
+    if (Number.isNaN(cap) || cap <= 0) return false;
+  }
+  return true;
 }
 
 /**
@@ -164,5 +211,10 @@ export function describeChanges(
   }
   if (draft.setApplicator) lines.push(`Applicator → ${draft.applicatorId ? (opts.applicatorName ?? 'selected') : '(cleared)'}`);
   if (draft.setBatch) lines.push(`Batch → ${draft.batchRef ? (opts.batchName ?? 'selected') : '(removed)'}`);
+  if (draft.setLoader) {
+    lines.push(`Carrier Rate → ${draft.carrierRateGpa.trim() !== '' ? `${draft.carrierRateGpa} gal/ac` : '(cleared)'}`);
+    lines.push(`Tank Capacity → ${draft.loaderTankCapacity.trim() !== '' ? `${draft.loaderTankCapacity} gal` : '(cleared / use vehicle)'}`);
+    lines.push(`Loader Comment → ${draft.loaderComment.trim() !== '' ? 'set' : '(cleared)'}`);
+  }
   return lines;
 }

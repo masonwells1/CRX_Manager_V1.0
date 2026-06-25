@@ -9,6 +9,7 @@ import {
   buildFieldPatch,
   hasAnyChange,
   describeChanges,
+  loaderInputsValid,
 } from './jobMassEdit';
 import type { JobStatus } from '../../types';
 
@@ -169,5 +170,73 @@ describe('jobMassEdit — describeChanges (confirm copy)', () => {
 
   it('returns an empty list for an empty draft', () => {
     expect(describeChanges(emptyMassEditDraft, {})).toEqual([]);
+  });
+});
+
+describe('jobMassEdit — Loader Worksheet bulk fields (#10)', () => {
+  it('does not touch loader columns when the section is off', () => {
+    expect(buildFieldPatch(emptyMassEditDraft)).toBeNull();
+    const patch = buildFieldPatch(draft({ setJobDate: true, jobDate: '2026-07-01' }));
+    expect(patch).not.toHaveProperty('carrier_rate_gpa');
+    expect(patch).not.toHaveProperty('loader_tank_capacity');
+    expect(patch).not.toHaveProperty('loader_comment');
+  });
+
+  it('writes carrier rate, capacity, and comment when enabled', () => {
+    const patch = buildFieldPatch(draft({
+      setLoader: true,
+      carrierRateGpa: '15',
+      loaderTankCapacity: '500',
+      loaderComment: '  Mix surfactant last  ',
+    }));
+    expect(patch).toEqual({
+      carrier_rate_gpa: 15,
+      loader_tank_capacity: 500,
+      loader_comment: 'Mix surfactant last',
+    });
+  });
+
+  it('clears (NULL) blank loader fields when enabled', () => {
+    const patch = buildFieldPatch(draft({ setLoader: true }));
+    expect(patch).toEqual({
+      carrier_rate_gpa: null,
+      loader_tank_capacity: null,
+      loader_comment: null,
+    });
+  });
+
+  it('drops an invalid carrier rate / capacity to NULL (respects the CHECK constraints)', () => {
+    const patch = buildFieldPatch(draft({
+      setLoader: true,
+      carrierRateGpa: '-5', // negative => CHECK would reject => NULL
+      loaderTankCapacity: '0', // non-positive => CHECK would reject => NULL
+    }));
+    expect(patch?.carrier_rate_gpa).toBeNull();
+    expect(patch?.loader_tank_capacity).toBeNull();
+  });
+
+  it('loaderInputsValid flags bad numbers but passes blank/valid ones', () => {
+    expect(loaderInputsValid(emptyMassEditDraft)).toBe(true); // section off
+    expect(loaderInputsValid(draft({ setLoader: true }))).toBe(true); // blank
+    expect(loaderInputsValid(draft({ setLoader: true, carrierRateGpa: '15', loaderTankCapacity: '500' }))).toBe(true);
+    expect(loaderInputsValid(draft({ setLoader: true, carrierRateGpa: '-1' }))).toBe(false);
+    expect(loaderInputsValid(draft({ setLoader: true, loaderTankCapacity: '0' }))).toBe(false);
+    expect(loaderInputsValid(draft({ setLoader: true, loaderTankCapacity: '-50' }))).toBe(false);
+  });
+
+  it('hasAnyChange is true when only the loader section is enabled', () => {
+    expect(hasAnyChange(draft({ setLoader: true }))).toBe(true);
+  });
+
+  it('describeChanges lists the loader edits', () => {
+    const lines = describeChanges(draft({
+      setLoader: true,
+      carrierRateGpa: '15',
+      loaderTankCapacity: '500',
+      loaderComment: 'note',
+    }), {});
+    expect(lines.some((l) => l.includes('Carrier Rate') && l.includes('15'))).toBe(true);
+    expect(lines.some((l) => l.includes('Tank Capacity') && l.includes('500'))).toBe(true);
+    expect(lines.some((l) => l.includes('Loader Comment'))).toBe(true);
   });
 });

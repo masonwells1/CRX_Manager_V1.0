@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Check, Calendar, CircleDot, User, Layers, AlertTriangle, Pencil } from 'lucide-react';
+import { Check, Calendar, CircleDot, User, Layers, AlertTriangle, Pencil, Truck } from 'lucide-react';
 import Modal from '../ui/Modal';
 import Button from '../ui/Button';
 import { useToast } from '../ui/Toast';
@@ -18,6 +18,7 @@ import {
   buildFieldPatch,
   hasAnyChange,
   describeChanges,
+  loaderInputsValid,
 } from './jobMassEdit';
 
 /** Minimal shape of a selected job the modal needs (id + current status). */
@@ -99,7 +100,10 @@ export default function JobMassEditModal({
   const statusActionable =
     !draft.setStatus ||
     (statusSafe && (statusPartition?.eligible.length ?? 0) > 0);
-  const canApply = hasAnyChange(draft) && statusActionable && count > 0 && !applying;
+  // #10: a bad loader number (negative rate / non-positive capacity) would be
+  // rejected by the jobs CHECK constraints — block Apply until it's fixed.
+  const loaderValid = loaderInputsValid(draft);
+  const canApply = hasAnyChange(draft) && statusActionable && loaderValid && count > 0 && !applying;
 
   const reset = () => setDraft(emptyMassEditDraft);
 
@@ -318,14 +322,63 @@ export default function JobMassEditModal({
           </select>
         </Section>
 
-        {/*
-          #10 INSERTION POINT — Loader Worksheet bulk fields.
-          When section #10 (Loader Worksheet PDF wired to FIELD JOBS) lands, add a
-          <Section> here for the bulk-settable loader-worksheet fields (e.g. tank
-          capacity / loader comment). Add the matching opt-in flags to MassEditDraft
-          (jobMassEdit.ts) and include the columns in buildFieldPatch(). Status and
-          the date/applicator/batch sections above are unaffected.
-        */}
+        {/* --- Loader Worksheet (#10) --------------------------------------- */}
+        <Section
+          icon={<Truck className="w-4 h-4 text-crx-green" />}
+          label="Loader Worksheet"
+          enabled={draft.setLoader}
+          onToggle={(v) => patch('setLoader', v)}
+        >
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <div>
+              <label className="block text-xs text-secondary mb-1">Carrier Rate (gal/acre)</label>
+              <input
+                type="number"
+                step="0.1"
+                min="0"
+                value={draft.carrierRateGpa}
+                disabled={!draft.setLoader}
+                onChange={(e) => patch('carrierRateGpa', e.target.value)}
+                aria-label="Carrier rate gallons per acre"
+                placeholder="blank = clear"
+                className={inputCls}
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-secondary mb-1">Tank Capacity (gal)</label>
+              <input
+                type="number"
+                step="1"
+                min="0"
+                value={draft.loaderTankCapacity}
+                disabled={!draft.setLoader}
+                onChange={(e) => patch('loaderTankCapacity', e.target.value)}
+                aria-label="Tank capacity gallons"
+                placeholder="blank = use vehicle"
+                className={inputCls}
+              />
+            </div>
+          </div>
+          <label className="block text-xs text-secondary mt-2 mb-1">Loader Comment</label>
+          <textarea
+            value={draft.loaderComment}
+            disabled={!draft.setLoader}
+            onChange={(e) => patch('loaderComment', e.target.value)}
+            rows={2}
+            aria-label="Loader comment"
+            placeholder="blank = clear"
+            className={`${inputCls} resize-none`}
+          />
+          {draft.setLoader && !loaderValid && (
+            <p className="mt-1.5 flex items-start gap-1.5 text-xs text-amber-600">
+              <AlertTriangle className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
+              Carrier rate can&apos;t be negative and tank capacity must be greater than zero.
+            </p>
+          )}
+          <p className="mt-1.5 text-xs text-secondary">
+            Applies the same loader-worksheet settings to all {count} selected job{count !== 1 ? 's' : ''}. A blank field clears that value.
+          </p>
+        </Section>
 
         {/* Confirm summary + actions */}
         {changes.length > 0 && (

@@ -4316,6 +4316,7 @@ export type Database = {
           batch_id: string | null
           batch_ref: string | null
           call_date: string | null
+          carrier_rate_gpa: number | null
           consultant_id: string | null
           created_at: string
           created_by: string | null
@@ -4332,6 +4333,7 @@ export type Database = {
           job_number: string
           last_printed_by: string | null
           loader_comment: string | null
+          loader_tank_capacity: number | null
           notes: string | null
           printed_at: string | null
           priority: string
@@ -4360,6 +4362,7 @@ export type Database = {
           batch_id?: string | null
           batch_ref?: string | null
           call_date?: string | null
+          carrier_rate_gpa?: number | null
           consultant_id?: string | null
           created_at?: string
           created_by?: string | null
@@ -4376,6 +4379,7 @@ export type Database = {
           job_number: string
           last_printed_by?: string | null
           loader_comment?: string | null
+          loader_tank_capacity?: number | null
           notes?: string | null
           printed_at?: string | null
           priority?: string
@@ -4403,6 +4407,7 @@ export type Database = {
           batch_id?: string | null
           batch_ref?: string | null
           call_date?: string | null
+          carrier_rate_gpa?: number | null
           consultant_id?: string | null
           created_at?: string
           created_by?: string | null
@@ -4419,6 +4424,7 @@ export type Database = {
           job_number?: string
           last_printed_by?: string | null
           loader_comment?: string | null
+          loader_tank_capacity?: number | null
           notes?: string | null
           printed_at?: string | null
           priority?: string

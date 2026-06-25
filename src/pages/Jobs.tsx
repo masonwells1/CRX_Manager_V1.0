@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Download, FileText, Trash2, ChevronDown, ChevronRight, Tag, Tags, Search, SlidersHorizontal, Users, Layers, Pencil, Settings2 } from 'lucide-react';
+import { Plus, Download, FileText, Trash2, ChevronDown, ChevronRight, Tag, Tags, Search, SlidersHorizontal, Users, Layers, Pencil, Settings2, Truck } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge, { type BadgeVariant } from '../components/ui/Badge';
@@ -14,6 +14,8 @@ import { supabase, checkMutationResult } from '../lib/db';
 import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection';
 import { exportToCSV, fmtCSV, fmtDateCSV } from '../lib/csvExport';
 import { downloadReportPdf, type ReportPdfColumn } from '../lib/reportPdf';
+import { fetchLoaderWorksheetData } from '../lib/loaderWorksheetFetch';
+import { generateLoaderWorksheetBatchPdf, generateLoaderWorksheetPdf } from '../lib/loaderWorksheetPdf';
 import { sanitizeError } from '../lib/errorSanitizer';
 import { Sentry } from '../lib/sentry';
 import { getSeasonDates } from '../utils/season';
@@ -192,6 +194,10 @@ export default function Jobs() {
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [exporting, setExporting] = useState(false);
+  // Field-app parity #10: bulk Loader Worksheet PDF over the selected jobs.
+  const [loaderExporting, setLoaderExporting] = useState(false);
+  // #10: per-row Loader Worksheet print in progress (the job id being generated).
+  const [rowLoaderId, setRowLoaderId] = useState<string | null>(null);
   // Per-row expander state, keyed "<jobId>:<field>" (customers | locations).
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   // Field-app parity #8: per-user List Settings (which columns show + whether
@@ -674,6 +680,72 @@ export default function Jobs() {
     setExporting(false);
   };
 
+  // Field-app parity #10: generate one combined Loader Worksheet PDF (a page per
+  // selected job). Re-fetches each job's full mix/fields (the list query is
+  // summary-only) and computes the per-load split from the shared pure engine.
+  const handleLoaderWorksheets = async () => {
+    setLoaderExporting(true);
+    try {
+      const ids = selectedRows.map((j) => j.id);
+      const data = await fetchLoaderWorksheetData(ids);
+      if (data.length === 0) {
+        toast('error', 'No loader-worksheet data for the selected jobs.');
+        setLoaderExporting(false);
+        return;
+      }
+      await generateLoaderWorksheetBatchPdf(data);
+      // Stamp the print audit (ChemMan "Last Printed By"/printed_at) for every
+      // selected job, matching the single-job print path. Best-effort: a failed
+      // stamp must not undo the already-downloaded PDF. Refresh so the list's
+      // Last Printed By column reflects the print.
+      try {
+        const stamp = await supabase
+          .from('jobs')
+          .update({ printed_at: new Date().toISOString(), last_printed_by: profile?.id ?? null })
+          .in('id', ids)
+          .select('id');
+        checkMutationResult(stamp, 'Stamp loader-worksheet print');
+        fetchJobs();
+      } catch { /* non-blocking — the PDF already generated */ }
+      toast('success', `Generated loader worksheets for ${data.length} job(s)`);
+    } catch (err) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'jobs_bulk_loader_worksheet' } });
+      toast('error', sanitizeError(err));
+    }
+    setLoaderExporting(false);
+  };
+
+  // Field-app parity #10: print ONE job's Loader Worksheet straight from its list
+  // row (no bulk selection needed — works for any viewer, incl. applicators). Uses
+  // the same fetch + single-job generator as the rest of the loader feature, then
+  // best-effort stamps the print audit and refreshes the row.
+  const handleRowLoaderWorksheet = async (jobId: string) => {
+    setRowLoaderId(jobId);
+    try {
+      const data = await fetchLoaderWorksheetData([jobId]);
+      if (data.length === 0) {
+        toast('error', 'No loader-worksheet data for that job.');
+        setRowLoaderId(null);
+        return;
+      }
+      await generateLoaderWorksheetPdf(data[0]);
+      try {
+        const stamp = await supabase
+          .from('jobs')
+          .update({ printed_at: new Date().toISOString(), last_printed_by: profile?.id ?? null })
+          .eq('id', jobId)
+          .select('id');
+        checkMutationResult(stamp, 'Stamp loader-worksheet print');
+        fetchJobs();
+      } catch { /* non-blocking — the PDF already generated */ }
+      toast('success', 'Loader worksheet generated');
+    } catch (err) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'jobs_row_loader_worksheet' } });
+      toast('error', sanitizeError(err));
+    }
+    setRowLoaderId(null);
+  };
+
   const handleDelete = async () => {
     setDeleting(true);
     try {
@@ -700,6 +772,7 @@ export default function Jobs() {
     { key: 'tags', label: 'Edit Job Tags', icon: <Tag className="w-4 h-4" />, onClick: () => setBulkTagsOpen(true) },
     { key: 'csv', label: 'Export CSV', icon: <Download className="w-4 h-4" />, onClick: handleExportCSV },
     { key: 'pdf', label: 'Download PDF', icon: <FileText className="w-4 h-4" />, onClick: handleExportPDF, loading: exporting },
+    { key: 'loader', label: 'Loader Worksheet', icon: <Truck className="w-4 h-4" />, onClick: handleLoaderWorksheets, loading: loaderExporting },
     { key: 'delete', label: 'Delete Jobs', icon: <Trash2 className="w-4 h-4" />, onClick: () => setDeleteModalOpen(true), variant: 'danger' as const },
   ];
 
@@ -747,12 +820,27 @@ export default function Jobs() {
       header: 'Job #',
       sortable: true,
       render: (r) => (
-        <button
-          onClick={() => navigate(`/jobs/${r.id}`)}
-          className="font-medium text-nav-dark font-mono text-xs hover:text-crx-green transition-colors"
-        >
-          {r.job_number}
-        </button>
+        <div className="flex items-center gap-1.5">
+          <button
+            onClick={() => navigate(`/jobs/${r.id}`)}
+            className="font-medium text-nav-dark font-mono text-xs hover:text-crx-green transition-colors"
+          >
+            {r.job_number}
+          </button>
+          {/* #10: per-row Loader Worksheet entry point — reachable directly from the
+              job list for ANY viewer (incl. applicators with no bulk bar), not only
+              via the bulk action. Generates the single-job loader PDF. */}
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); handleRowLoaderWorksheet(r.id); }}
+            disabled={rowLoaderId === r.id}
+            title="Print Loader Worksheet"
+            aria-label={`Print loader worksheet for job ${r.job_number}`}
+            className="text-secondary hover:text-crx-green disabled:opacity-40 transition-colors"
+          >
+            <Truck className="w-3.5 h-3.5" />
+          </button>
+        </div>
       ),
     },
     {

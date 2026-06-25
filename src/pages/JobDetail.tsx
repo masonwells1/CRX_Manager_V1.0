@@ -22,6 +22,8 @@ import {
   SHEET_FORMAT_LABELS,
   type ApplicatorSheetFormat,
 } from '../lib/applicatorSheetData';
+import { generateLoaderWorksheetPdf } from '../lib/loaderWorksheetPdf';
+import { computeLoaderWorksheet, isGallonCapacityUnit } from '../lib/loaderWorksheet';
 import { overrideSaveApplicatorId, shouldReassignApplicatorAfterSave, canGenerateWpsNotice } from '../lib/jobSaveHelpers';
 import { fetchCurrentWeather, parseCentroid } from '../lib/weatherCapture';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
@@ -61,6 +63,12 @@ interface JobDbRow {
   loader_comment?: string | null;
   additional_info?: string | null;
   internal_memo?: string | null;
+  // Field-app parity #10: loader-worksheet inputs (set via direct .update(), like
+  // ground_crew_id — the save_job 6-arg contract is frozen). carrier_rate_gpa =
+  // gallons of carrier (water) per acre; loader_tank_capacity = optional per-job
+  // tank-capacity override (else the assigned vehicle's capacity_gallons).
+  carrier_rate_gpa?: number | null;
+  loader_tank_capacity?: number | null;
   job_fields?: Array<{
     field_id: string;
     acres_to_treat?: number | null;
@@ -113,6 +121,10 @@ interface JobDbRow {
   quote_section_id?: string | null;
   quote?: { quote_number: string } | null;
   quote_section?: { section_name: string } | null;
+  // #10: the assigned vehicle's capacity, embedded so the loader worksheet keeps
+  // a capacity fallback even when the vehicle is INACTIVE (loadLookups filters
+  // vehicles to status='active', so selectedVehicle would be undefined for it).
+  vehicle?: { vehicle_name: string; capacity_gallons?: number | null; capacity_unit?: string | null } | null;
 }
 
 interface SaveJobResult { job_id: string }
@@ -238,6 +250,22 @@ export default function JobDetail() {
   const [loaderComment, setLoaderComment] = useState('');
   const [additionalInfo, setAdditionalInfo] = useState('');
   const [internalMemo, setInternalMemo] = useState('');
+  // Field-app parity #10: loader-worksheet inputs. carrierRateGpa = gallons of
+  // carrier (water) per acre → spray volume = total acres × this. tankCapacity =
+  // optional per-job capacity override (blank = use the assigned vehicle's). Both
+  // persisted via the direct .update() after save_job (frozen RPC contract).
+  const [carrierRateGpa, setCarrierRateGpa] = useState('');
+  const [tankCapacity, setTankCapacity] = useState('');
+  // #10: the assigned vehicle's capacity from the SAVED job embed — survives even
+  // when that vehicle is inactive (the active-only `vehicles` lookup wouldn't carry
+  // it), so the loader worksheet doesn't false-trip the "enter capacity" state.
+  const [savedVehicleCapacity, setSavedVehicleCapacity] = useState<{ name: string | null; gallons: number | null; unit: string | null } | null>(null);
+  // The vehicle_id SAVED on the job (distinct from the editable `vehicleId`). The
+  // inactive-vehicle capacity fallback only applies while the chosen vehicle still
+  // equals this — switching to another vehicle drops the saved-embed fallback.
+  const [savedJobVehicleId, setSavedJobVehicleId] = useState<string | null>(null);
+  // #10: Loader Worksheet print in progress.
+  const [printingLoader, setPrintingLoader] = useState(false);
   // The applicator currently saved on the job — the license gate only fires on a CHANGE
   const [savedApplicatorId, setSavedApplicatorId] = useState<string | null>(null);
   const [showLicenseOverrideConfirm, setShowLicenseOverrideConfirm] = useState(false);
@@ -450,6 +478,81 @@ export default function JobDetail() {
     }
     setGeneratingSheet(null);
   };
+
+  // #10: generate the Loader Worksheet PDF for this field job. Built from the SAVED
+  // job (blocked while dirty, like the field sheet / WPS notice) so the printed
+  // loads + per-load amounts match the persisted record. The per-load split is
+  // computed inside generateLoaderWorksheetPdf from the SAME pure function the
+  // in-page preview uses, so screen and paper agree.
+  const handleLoaderWorksheet = async () => {
+    if (!canGenerateWpsNotice({ isDirty })) {
+      toast('error', 'Save the job before printing the loader worksheet — it must match the saved record.');
+      return;
+    }
+    setPrintingLoader(true);
+    try {
+      // Billed customers (mirror handleGenerateSheet): prefer per-field shares,
+      // else the single job customer. The in-memory `customers` list is active-only,
+      // so a since-DEACTIVATED billed customer is resolved by a direct id lookup (no
+      // is_active filter) — otherwise the PDF would print a generic "Customer" /
+      // omit a billed customer (Codex), unlike the bulk path which fetches by id.
+      const billedIds = [...new Set((shareRows.length > 0 ? shareRows.map((s) => s.customer_id) : [customerId]).filter(Boolean))];
+      const nameByCustId = new Map<string, { farm_name: string | null; account_number: string | null }>();
+      customers.forEach((c) => nameByCustId.set(c.id, { farm_name: c.farm_name, account_number: c.account_number ?? null }));
+      const missingIds = billedIds.filter((cid) => !nameByCustId.has(cid));
+      if (missingIds.length > 0) {
+        const { data: extraCusts } = await supabase
+          .from('customers')
+          .select('id, farm_name, account_number')
+          .in('id', missingIds);
+        ((extraCusts || []) as Array<{ id: string; farm_name: string | null; account_number: string | null }>)
+          .forEach((c) => nameByCustId.set(c.id, { farm_name: c.farm_name, account_number: c.account_number ?? null }));
+      }
+      const custMap = new Map<string, { customer_name: string; account_number: string | null }>();
+      billedIds.forEach((cid) => {
+        const c = nameByCustId.get(cid);
+        if (!c || !c.farm_name) return;
+        custMap.set(`${c.farm_name}|${c.account_number ?? ''}`, { customer_name: c.farm_name, account_number: c.account_number ?? null });
+      });
+
+      await generateLoaderWorksheetPdf({
+        job_number: jobNumber || 'draft',
+        customers: [...custMap.values()],
+        scheduled_date: jobDate,
+        scheduled_time: scheduledTime || null,
+        applicator_name: applicators.find((a) => a.id === applicatorId)?.full_name || null,
+        vehicle_name: selectedVehicle?.vehicle_name || savedVehicleName || null,
+        total_acres: totalAcres,
+        // Pass the RAW parsed carrier rate (the same value the in-page preview's
+        // computeLoaderWorksheet consumed) — NOT the 4dp-rounded display value — so
+        // the PDF recomputes the identical split and can't disagree with the screen
+        // for a high-precision rate near a tank-capacity boundary (Codex).
+        carrier_rate_gpa: !Number.isNaN(parsedCarrierRate) && parsedCarrierRate > 0 ? parsedCarrierRate : null,
+        tank_capacity: effectiveCapacity,
+        capacity_unit: (tankCapacity.trim() !== '' && effectiveCapacity === overrideCapacity) ? 'gal' : (assignedVehicleCapacityUnit || 'gal'),
+        products: chemRows
+          .filter((c) => c.product_id)
+          .map((c) => ({
+            product_name: c.product_name || 'Product',
+            total_quantity: parseFloat(c.quantity) || null,
+            unit: c.unit || null,
+          })),
+        loader_comment: loaderComment || null,
+      });
+
+      // Stamp printed status + who (ChemMan "Printed" column). Best-effort.
+      if (!isNew && id) {
+        const stampRes = await supabase.from('jobs').update({ printed_at: new Date().toISOString(), last_printed_by: profile?.id ?? null }).eq('id', id).select();
+        try { checkMutationResult(stampRes, 'Stamp printed_at'); } catch { /* non-blocking */ }
+      }
+      if (profile) logActivity({ event: 'loader_worksheet_printed', description: `Loader worksheet generated for job ${jobNumber}`, performedBy: profile.id, entityType: 'job', entityId: id });
+    } catch (err) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'loader_worksheet_pdf' } });
+      toast('error', 'Failed to generate loader worksheet');
+    }
+    setPrintingLoader(false);
+  };
+
   const [vehicleId, setVehicleId] = useState('');
   const [recipeId, setRecipeId] = useState('');
   const [notes, setNotes] = useState('');
@@ -510,11 +613,12 @@ export default function JobDetail() {
   const formSnapshot = useCallback(() => JSON.stringify({
     customerId, jobDate, scheduledTime, applicatorId, vehicleId, notes, batchId,
     callDate, dateProposed, timeProposed, scheduleDate, dateExpires, consultantId, groundCrewId,
-    loaderComment, additionalInfo, internalMemo,
+    loaderComment, additionalInfo, internalMemo, carrierRateGpa, tankCapacity,
     fieldRows, chemRows, shareRows,
   }), [customerId, jobDate, scheduledTime, applicatorId, vehicleId, notes, batchId,
        callDate, dateProposed, timeProposed, scheduleDate, dateExpires, consultantId, groundCrewId,
-       loaderComment, additionalInfo, internalMemo, fieldRows, chemRows, shareRows]);
+       loaderComment, additionalInfo, internalMemo, carrierRateGpa, tankCapacity,
+       fieldRows, chemRows, shareRows]);
 
   // Single dirty engine: when no baseline is set yet, ADOPT the current form as the
   // clean baseline (but only once the load has settled, so we don't adopt a half-
@@ -577,7 +681,7 @@ export default function JobDetail() {
       .select(`
         *,
         customer:customers(farm_name),
-        vehicle:vehicles(vehicle_name),
+        vehicle:vehicles(vehicle_name, capacity_gallons, capacity_unit),
         quote:quotes!jobs_quote_id_fkey(quote_number),
         quote_section:quote_sections!jobs_quote_section_id_fkey(section_name),
         job_fields(*, field:fields(field_name)),
@@ -603,6 +707,10 @@ export default function JobDetail() {
     setApplicatorId(j.applicator_id || '');
     setSavedApplicatorId(j.applicator_id || null);
     setVehicleId(j.vehicle_id || '');
+    // #10: keep the assigned vehicle's id + capacity from the embed (works even if
+    // the vehicle is now inactive and absent from the active-only `vehicles` lookup).
+    setSavedJobVehicleId(j.vehicle_id || null);
+    setSavedVehicleCapacity(j.vehicle ? { name: j.vehicle.vehicle_name ?? null, gallons: j.vehicle.capacity_gallons ?? null, unit: j.vehicle.capacity_unit ?? null } : null);
     setRecipeId(j.recipe_id || '');
     setNotes(j.notes || '');
     setBatchId(j.batch_id || '');
@@ -616,6 +724,9 @@ export default function JobDetail() {
     setLoaderComment(j.loader_comment || '');
     setAdditionalInfo(j.additional_info || '');
     setInternalMemo(j.internal_memo || '');
+    // #10 loader-worksheet inputs (numbers stored as strings in the form).
+    setCarrierRateGpa(j.carrier_rate_gpa != null ? String(j.carrier_rate_gpa) : '');
+    setTankCapacity(j.loader_tank_capacity != null ? String(j.loader_tank_capacity) : '');
     // Quote traceability (typed via JobDbRow)
     if (j.quote_id) {
       setQuoteLinkage({ quote_id: j.quote_id, quote_number: j.quote?.quote_number || '', section_name: j.quote_section?.section_name || '' });
@@ -741,17 +852,59 @@ export default function JobDetail() {
   const totalCostCents = chemRows.reduce((sum, c) => sum + Math.round((parseFloat(c.quantity) || 0) * (parseInt(c.cost_per_unit_cents) || 0)), 0);
   const totalPriceCents = chemRows.reduce((sum, c) => sum + Math.round((parseFloat(c.quantity) || 0) * (parseInt(c.price_per_unit_cents) || 0)), 0);
 
-  // Loader worksheet — sum each liquid line's GALLON-equivalent (qt/pt/fl oz/gal
-  // all roll up to gallons), so tank-load planning is right for any liquid unit,
-  // not only units whose text literally contains "gal" (Codex P2).
+  // Loader worksheet (#10) — the spray tank is sized by SPRAY VOLUME, not by the
+  // sum of chemical gallons. Spray volume = total acres × the carrier rate (gal/
+  // acre); loads = ceil(spray volume / tank capacity). The effective capacity is
+  // the per-job override (if entered) else the assigned vehicle's capacity_gallons.
+  // computeLoaderWorksheet does the per-load split + the Invalid guard (no crash /
+  // no wrong number when capacity or carrier rate is missing). The PDF prints from
+  // this SAME function, so the on-screen preview and the paper always agree.
   const selectedVehicle = vehicles.find(v => v.id === vehicleId);
-  const totalGallons = chemRows.reduce((sum, c) => {
-    const conv = toGallonOrLbEquivalent(parseFloat(c.quantity) || 0, c.unit);
-    return conv && conv.unit === 'gal' ? sum + conv.value : sum;
-  }, 0);
-  const loadsNeeded = selectedVehicle?.capacity_gallons && totalGallons > 0
-    ? Math.ceil(totalGallons / selectedVehicle.capacity_gallons)
+  // The assigned vehicle's capacity. If the chosen vehicle IS in the active lookup,
+  // its capacity is authoritative (even when null — a real active vehicle with no
+  // capacity must NOT borrow some other vehicle's number). Only when the assigned
+  // vehicle is ABSENT from the active list (an inactive vehicle still on the saved
+  // job) do we fall back to the SAVED job's embedded vehicle, and ONLY when the
+  // chosen vehicleId still equals the saved job's vehicle (not after switching to a
+  // different vehicle). Otherwise the worksheet would false-trip "enter capacity".
+  const assignedVehicleIsInactive = !!vehicleId && !selectedVehicle && vehicleId === savedJobVehicleId;
+  const rawAssignedVehicleCapacity = selectedVehicle
+    ? (selectedVehicle.capacity_gallons ?? null)
+    : (assignedVehicleIsInactive && savedVehicleCapacity ? savedVehicleCapacity.gallons : null);
+  const assignedVehicleCapacityUnit = selectedVehicle
+    ? (selectedVehicle.capacity_unit ?? null)
+    : (assignedVehicleIsInactive && savedVehicleCapacity ? savedVehicleCapacity.unit : null);
+  // Only use the vehicle's capacity as the GALLON tank size when its unit measures
+  // gallons. A dry spreader rated in lbs/tons can't seed gallon loads — the user
+  // supplies a per-job gallon override instead (Codex).
+  const assignedVehicleCapacity = isGallonCapacityUnit(assignedVehicleCapacityUnit)
+    ? rawAssignedVehicleCapacity
     : null;
+  const savedVehicleName = selectedVehicle
+    ? selectedVehicle.vehicle_name
+    : (assignedVehicleIsInactive && savedVehicleCapacity ? savedVehicleCapacity.name : null);
+  // The per-job override: a non-blank value that is NOT a positive number is
+  // treated as INVALID (capacity null → the worksheet shows its guard), never as a
+  // silent fall-through to the vehicle capacity (Codex). Blank => use the vehicle.
+  const overrideCapacity = parseFloat(tankCapacity);
+  const overrideIsBlank = tankCapacity.trim() === '';
+  const overrideIsValid = !overrideIsBlank && !Number.isNaN(overrideCapacity) && overrideCapacity > 0;
+  const effectiveCapacity = overrideIsBlank
+    ? (assignedVehicleCapacity ?? null)        // no override → assigned vehicle
+    : (overrideIsValid ? overrideCapacity : null); // bad override → invalid (guard)
+  const parsedCarrierRate = parseFloat(carrierRateGpa);
+  const loaderWorksheet = computeLoaderWorksheet({
+    total_acres: totalAcres,
+    carrier_rate_gpa: carrierRateGpa.trim() !== '' && !Number.isNaN(parsedCarrierRate) ? parsedCarrierRate : null,
+    tank_capacity: effectiveCapacity,
+    products: chemRows
+      .filter((c) => c.product_id)
+      .map((c) => ({
+        product_name: c.product_name || 'Product',
+        total_quantity: parseFloat(c.quantity) || null,
+        unit: c.unit || null,
+      })),
+  });
 
   // C4: weather auto-capture at completion (first selected field's centroid).
   const firstFieldId = fieldRows.find((r) => r.field_id)?.field_id ?? null;
@@ -824,6 +977,26 @@ export default function JobDetail() {
     if (!sharesValid) {
       toast('error', "Each field's customer shares must total 100%. Open the Locations tab to fix.");
       return;
+    }
+
+    // #10: validate the loader-worksheet numbers BEFORE saving (don't silently
+    // drop a value). A present-but-out-of-range value is rejected here with a
+    // clear message — otherwise the post-save direct .update() would clear the
+    // previously-saved value (or be rejected by the CHECK). Blank stays allowed
+    // (it clears intentionally). Mirrors the mass-edit loaderInputsValid guard.
+    if (carrierRateGpa.trim() !== '') {
+      const c = parseFloat(carrierRateGpa);
+      if (Number.isNaN(c) || c < 0) {
+        toast('error', 'Carrier rate must be zero or more — fix it on the Loader Worksheet tab (or clear it).');
+        return;
+      }
+    }
+    if (tankCapacity.trim() !== '') {
+      const cap = parseFloat(tankCapacity);
+      if (Number.isNaN(cap) || cap <= 0) {
+        toast('error', 'Tank capacity must be greater than zero — fix it on the Loader Worksheet tab (or clear it to use the vehicle).');
+        return;
+      }
     }
 
     // B5 license gate pre-check — only when assigning or CHANGING the applicator.
@@ -933,18 +1106,33 @@ export default function JobDetail() {
       saveJobIdem.resetKey();
       const result = assertRpcResult<SaveJobResult>(data, 'save_job');
 
-      // Field-app parity #6: persist the ground crew via a direct .update().
-      // save_job's contract is frozen (6 args, one overload) and never touches
-      // ground_crew_id, so this dedicated write is safe — it won't be clobbered
-      // on the next save. RLS gates it to admin/sales_rep.
+      // Field-app parity #6 + #10: persist the ground crew AND the loader-worksheet
+      // inputs (carrier rate + per-job tank-capacity override) via a direct
+      // .update(). save_job's contract is frozen (6 args, one overload) and never
+      // touches these columns, so this dedicated write is safe — it won't be
+      // clobbered on the next save. RLS gates it to admin/sales_rep. Blank numeric
+      // inputs persist as NULL (the worksheet then shows its "enter …" guard state).
       {
         const savedJobId = isNew ? result.job_id : id!;
+        const parsedCarrier = parseFloat(carrierRateGpa);
+        const parsedCapacity = parseFloat(tankCapacity);
+        // handleSave already BLOCKS an out-of-range value before we get here, so
+        // these only ever see a blank or a CHECK-valid number. This final guard
+        // (NULL unless carrier_rate_gpa >= 0 / loader_tank_capacity > 0) is a
+        // defense-in-depth backstop: this direct .update() runs AFTER save_job has
+        // committed, so it must never send a value the CHECK would reject.
+        const carrierVal = carrierRateGpa.trim() !== '' && !Number.isNaN(parsedCarrier) && parsedCarrier >= 0 ? parsedCarrier : null;
+        const capacityVal = tankCapacity.trim() !== '' && !Number.isNaN(parsedCapacity) && parsedCapacity > 0 ? parsedCapacity : null;
         const crewResult = await supabase
           .from('jobs')
-          .update({ ground_crew_id: groundCrewId || null })
+          .update({
+            ground_crew_id: groundCrewId || null,
+            carrier_rate_gpa: carrierVal,
+            loader_tank_capacity: capacityVal,
+          })
           .eq('id', savedJobId)
           .select('id');
-        checkMutationResult(crewResult, 'Assign ground crew');
+        checkMutationResult(crewResult, 'Assign ground crew / loader worksheet');
       }
 
       if (shouldReassignApplicatorAfterSave({ licenseOverride, applicatorId, savedApplicatorId })) {
@@ -1412,6 +1600,10 @@ export default function JobDetail() {
               <Button variant="secondary" onClick={() => setSheetPickerOpen(true)} loading={generatingSheet !== null}>
                 <ClipboardList className="w-4 h-4" />
                 Field Sheet
+              </Button>
+              <Button variant="secondary" onClick={handleLoaderWorksheet} loading={printingLoader}>
+                <Truck className="w-4 h-4" />
+                Loader
               </Button>
               <Button variant="secondary" onClick={handleWpsNotice} loading={printingWps}>
                 <Printer className="w-4 h-4" />
@@ -1954,28 +2146,109 @@ export default function JobDetail() {
       {activeTab === 'loader' && (
         <Card>
           <h2 className="text-lg font-semibold text-nav-dark mb-3">Loader Worksheet</h2>
-          {selectedVehicle && totalGallons > 0 ? (
-            <div className="grid grid-cols-3 gap-4 text-center">
-              <div className="bg-gray-50 rounded-lg p-3">
-                <p className="text-2xl font-bold text-nav-dark">{totalGallons.toLocaleString()}</p>
-                <p className="text-xs text-secondary">Total Gallons</p>
-              </div>
-              <div className="bg-gray-50 rounded-lg p-3">
-                <p className="text-2xl font-bold text-nav-dark">
-                  {selectedVehicle.capacity_gallons?.toLocaleString() || '-'}
-                </p>
-                <p className="text-xs text-secondary">Tank Capacity ({selectedVehicle.capacity_unit || 'gal'})</p>
-              </div>
-              <div className="bg-crx-green-tint rounded-lg p-3">
-                <p className="text-2xl font-bold text-crx-green">{loadsNeeded ?? '-'}</p>
-                <p className="text-xs text-secondary">Loads Needed</p>
-              </div>
+
+          {/* Inputs: carrier rate (gal/acre) drives spray volume; tank capacity is
+              the per-job override (blank = use the assigned vehicle's capacity). */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+            <div>
+              <label className="block text-sm font-medium text-nav-dark mb-1">Carrier Rate (gal/acre)</label>
+              <input
+                type="number"
+                value={carrierRateGpa}
+                onChange={(e) => setCarrierRateGpa(e.target.value)}
+                disabled={!canEdit}
+                step="0.1"
+                min="0"
+                placeholder="e.g. 15"
+                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:bg-gray-50"
+              />
+              <p className="mt-1 text-xs text-secondary">Spray volume = total acres × carrier rate.</p>
             </div>
+            <div>
+              <label className="block text-sm font-medium text-nav-dark mb-1">Tank Capacity (gal)</label>
+              <input
+                type="number"
+                value={tankCapacity}
+                onChange={(e) => setTankCapacity(e.target.value)}
+                disabled={!canEdit}
+                step="1"
+                min="0"
+                placeholder={assignedVehicleCapacity ? `Vehicle: ${assignedVehicleCapacity}` : 'Enter capacity'}
+                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:bg-gray-50"
+              />
+              <p className="mt-1 text-xs text-secondary">
+                {tankCapacity.trim() !== ''
+                  ? 'Per-job override.'
+                  : assignedVehicleCapacity
+                    ? `Using the ${savedVehicleName || 'vehicle'} capacity (${assignedVehicleCapacity} ${assignedVehicleCapacityUnit || 'gal'}).`
+                    : 'No vehicle capacity — enter one to plan loads.'}
+              </p>
+            </div>
+          </div>
+
+          {loaderWorksheet.valid ? (
+            <>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-center">
+                <div className="bg-gray-50 rounded-lg p-3">
+                  <p className="text-2xl font-bold text-nav-dark">{loaderWorksheet.spray_volume.toLocaleString()}</p>
+                  <p className="text-xs text-secondary">Spray Volume (gal)</p>
+                </div>
+                <div className="bg-gray-50 rounded-lg p-3">
+                  <p className="text-2xl font-bold text-nav-dark">{loaderWorksheet.tank_capacity.toLocaleString()}</p>
+                  <p className="text-xs text-secondary">Tank Capacity (gal)</p>
+                </div>
+                <div className="bg-crx-green-tint rounded-lg p-3">
+                  <p className="text-2xl font-bold text-crx-green">{loaderWorksheet.loads_count}</p>
+                  <p className="text-xs text-secondary">Loads Needed</p>
+                </div>
+                <div className="bg-gray-50 rounded-lg p-3">
+                  <p className="text-2xl font-bold text-nav-dark">
+                    {loaderWorksheet.partial_load_volume > 0 ? `${loaderWorksheet.partial_load_volume.toLocaleString()}` : 'None'}
+                  </p>
+                  <p className="text-xs text-secondary">Partial Last Load (gal)</p>
+                </div>
+              </div>
+
+              {/* Per-load mix preview (matches the printed PDF). */}
+              {loaderWorksheet.loads[0]?.products.length > 0 && (
+                <div className="mt-4 overflow-x-auto">
+                  <table className="w-full text-sm border-collapse">
+                    <thead>
+                      <tr className="border-b border-gray-200">
+                        <th className="text-left py-2 px-2 font-medium text-secondary">Product</th>
+                        {loaderWorksheet.loads.map((l) => (
+                          <th key={l.load_number} className="text-right py-2 px-2 font-medium text-secondary whitespace-nowrap">
+                            Load {l.load_number}
+                            <span className="block text-[10px] font-normal">
+                              {l.volume.toLocaleString()} gal{l.is_partial ? ' (partial)' : ''}
+                            </span>
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {loaderWorksheet.loads[0].products.map((p, pi) => (
+                        <tr key={pi} className="border-b border-gray-100">
+                          <td className="py-1.5 px-2 text-nav-dark">{p.product_name}{p.unit ? ` (${p.unit})` : ''}</td>
+                          {loaderWorksheet.loads.map((l) => (
+                            <td key={l.load_number} className="text-right py-1.5 px-2 text-nav-dark">
+                              {l.products[pi]?.amount.toLocaleString() ?? '—'}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </>
           ) : (
-            <p className="text-sm text-secondary py-2">
-              Select a vehicle and add liquid (gallon) chemicals to compute loads.
-            </p>
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-3">
+              <p className="text-sm font-medium text-amber-800">Loads cannot be calculated</p>
+              <p className="text-xs text-amber-700 mt-0.5">{loaderWorksheet.invalid_reason}</p>
+            </div>
           )}
+
           <div className="mt-4">
             <label className="block text-sm font-medium text-nav-dark mb-1">Loader Comment</label>
             <textarea

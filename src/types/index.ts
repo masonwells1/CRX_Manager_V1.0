@@ -1953,6 +1953,12 @@ export interface Job {
   additional_info: string | null;
   /** Internal Job/Invoice memo — NEVER printed on customer-facing docs. */
   internal_memo: string | null;
+  /** Field-app parity #10: carrier (water/spray) gallons per acre. Spray volume =
+   *  total_acres × carrier_rate_gpa drives the loader-worksheet loads count. Not money. */
+  carrier_rate_gpa: number | null;
+  /** Field-app parity #10: optional per-job loader tank-capacity override (gallons).
+   *  When set, wins over the assigned vehicle's capacity_gallons. Not money. */
+  loader_tank_capacity: number | null;
   /** Acres treated so far (0 until the as-applied sections land). */
   applied_acres: number;
   /** GENERATED = GREATEST(total_acres - applied_acres, 0). Read-only. */
