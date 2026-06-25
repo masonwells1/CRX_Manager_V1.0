@@ -948,17 +948,29 @@ export default function Jobs() {
         setDeleteModalOpen(false);
         return;
       }
+      // Belt-and-suspenders: scope the soft-delete by status IN DELETABLE at the
+      // QUERY level too (not just the in-memory `ids` filter above). If the
+      // in-memory status were ever stale/wrong, the DB query still refuses to
+      // stamp deleted_at on an invoiced/cancelled job. This mirrors the new
+      // server-side _enforce_billed_job_immutability trigger (#12 DB guard).
       const result = await supabase
         .from('jobs')
         .update({ deleted_at: new Date().toISOString() })
         .in('id', ids)
+        .in('status', DELETABLE)
         .select();
       checkMutationResult(result, 'Delete jobs');
+      // If the DB matched fewer rows than we asked to delete, a selected job was
+      // not in a deletable status (e.g. it was billed between fetch and delete) and
+      // the query correctly skipped it. Surface that instead of claiming success.
+      const deletedCount = result.data?.length ?? 0;
+      const dbSkipped = ids.length - deletedCount;
+      const totalSkipped = skipped + dbSkipped;
       toast(
-        skipped > 0 ? 'info' : 'success',
-        skipped > 0
-          ? `Deleted ${ids.length} job(s); ${skipped} skipped — invoiced/finished jobs can't be deleted.`
-          : `Deleted ${ids.length} job(s)`,
+        totalSkipped > 0 ? 'info' : 'success',
+        totalSkipped > 0
+          ? `Deleted ${deletedCount} job(s); ${totalSkipped} skipped — invoiced/finished jobs can't be deleted.`
+          : `Deleted ${deletedCount} job(s)`,
       );
       clearSelection();
       fetchJobs();
