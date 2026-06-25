@@ -90,13 +90,42 @@ export function recomputeChemRowForAcres<T extends ChemCalcRow>(row: T, acres: n
 //
 // ChemMan's Chemical/Charges tab shows, per product line, the "Total Applied"
 // (the quantity column already = rate × total acres) AND a converted
-// gallon-or-pound equivalent so the loader can plan tank loads. The unit text a
-// user types is free-form (e.g. "GL", "gal", "fl oz", "pt", "qt", "LB", "oz").
-// We convert the typed unit to gallons (liquid) or pounds (dry) using the
-// standard US measure factors below. An unrecognized unit returns null (the UI
-// shows a dash) — we never guess a conversion we don't know.
+// gallon-or-pound equivalent so the loader can plan tank loads.
+//
+// THE SERVER IS AUTHORITATIVE. The field-app invoice save RPC computes the
+// saved/printed value via the SQL fn `convert_to_gl_lb(total_applied, rate_unit,
+// product_form)` (migration 20260219200000), which chooses gallons-vs-pounds
+// from the PRODUCT FORM, not the unit text:
+//   • product_form = 'dry'  → POUNDS:  oz = 1/16 lb,  lb = 1
+//   • product_form = liquid → GALLONS: oz = 1/128 gal, pt = 1/8, qt = 1/4, gal = 1
+// So a LIQUID product dosed in bare 'oz' (the field-app default rate_unit) must
+// preview as GALLONS — NOT pounds — to match the invoice + PDF. The #25 preview
+// passes `product_form`; we replicate the server's branch exactly so the on-screen
+// figure equals the saved one (loader/tank-planning depends on agreement).
+//
+// When `product_form` is omitted (the legacy job-grid loader worksheet in
+// JobDetail, which has no product_form on its rows) we fall back to inferring
+// liquid-vs-dry from the free-text unit string (the original behavior).
+//
+// An unrecognized OR product_form-mismatched unit returns null (the UI shows a
+// dash) — we never guess a conversion we don't know.
 
-/** US fluid conversions → gallons (1 gal = 4 qt = 8 pt = 128 fl oz). */
+/** Server-parity factors → GALLONS for a LIQUID product (matches convert_to_gl_lb's liquid branch). */
+const LIQUID_TO_GALLONS: Record<string, number> = {
+  gal: 1, gallon: 1, gallons: 1, gl: 1,
+  qt: 1 / 4, quart: 1 / 4, quarts: 1 / 4,
+  pt: 1 / 8, pint: 1 / 8, pints: 1 / 8,
+  oz: 1 / 128, 'fl oz': 1 / 128, floz: 1 / 128, 'fluid ounce': 1 / 128,
+};
+
+/** Server-parity factors → POUNDS for a DRY product (matches convert_to_gl_lb's dry branch). */
+const DRY_TO_POUNDS: Record<string, number> = {
+  lb: 1, lbs: 1, pound: 1, pounds: 1,
+  oz: 1 / 16, ounce: 1 / 16, ounces: 1 / 16,
+  ton: 2000, tons: 2000,
+};
+
+/** Legacy free-text inference → gallons, used ONLY when product_form is unknown (JobDetail loader worksheet). */
 const TO_GALLONS: Record<string, number> = {
   gal: 1, gallon: 1, gallons: 1, gl: 1,
   qt: 1 / 4, quart: 1 / 4, quarts: 1 / 4,
@@ -104,7 +133,7 @@ const TO_GALLONS: Record<string, number> = {
   'fl oz': 1 / 128, floz: 1 / 128, 'fluid ounce': 1 / 128,
 };
 
-/** Dry-weight conversions → pounds (1 lb = 16 oz). */
+/** Legacy free-text inference → pounds, used ONLY when product_form is unknown. */
 const TO_POUNDS: Record<string, number> = {
   lb: 1, lbs: 1, pound: 1, pounds: 1,
   oz: 1 / 16, ounce: 1 / 16, ounces: 1 / 16,
@@ -118,16 +147,40 @@ export interface AppliedConversion {
   unit: 'gal' | 'lb';
 }
 
+/** 4-dp rounding — matches the server's ROUND(..., 4) on the saved gl/lb value. */
+const round4 = (x: number): number => Math.round(x * 10000) / 10000;
+
 /**
- * Convert a total-applied quantity in `unit` to its gallon (liquid) or pound
- * (dry) equivalent. Returns null for a blank/zero quantity or an unrecognized
- * unit (caller renders a dash — never a guessed number). Pure + tested.
+ * Convert a total-applied quantity to its gallon (liquid) or pound (dry)
+ * equivalent for the on-screen preview. Returns null for a blank/zero quantity,
+ * an unrecognized unit, or a unit that doesn't belong to the product's form
+ * (caller renders a dash — never a guessed number). Pure + tested.
+ *
+ * @param productForm  when 'liquid' or 'dry', the gal/lb choice is taken from the
+ *   product form to MATCH the server `convert_to_gl_lb` (the #25 field-app preview).
+ *   When omitted/null, the form is inferred from the free-text unit (legacy path).
  */
-export function toGallonOrLbEquivalent(quantity: number, unit: string | null | undefined): AppliedConversion | null {
+export function toGallonOrLbEquivalent(
+  quantity: number,
+  unit: string | null | undefined,
+  productForm?: 'liquid' | 'dry' | null,
+): AppliedConversion | null {
   if (!Number.isFinite(quantity) || quantity === 0) return null;
   const key = (unit || '').trim().toLowerCase();
   if (key === '') return null;
-  if (key in TO_GALLONS) return { value: Math.round(quantity * TO_GALLONS[key] * 10000) / 10000, unit: 'gal' };
-  if (key in TO_POUNDS) return { value: Math.round(quantity * TO_POUNDS[key] * 10000) / 10000, unit: 'lb' };
+
+  // #25 field-app preview: branch on product_form so screen == saved/PDF.
+  if (productForm === 'dry') {
+    if (key in DRY_TO_POUNDS) return { value: round4(quantity * DRY_TO_POUNDS[key]), unit: 'lb' };
+    return null; // a non-dry unit on a dry product → don't guess
+  }
+  if (productForm === 'liquid') {
+    if (key in LIQUID_TO_GALLONS) return { value: round4(quantity * LIQUID_TO_GALLONS[key]), unit: 'gal' };
+    return null; // a non-liquid unit on a liquid product → don't guess
+  }
+
+  // Legacy path (product_form unknown): infer liquid-vs-dry from the unit text.
+  if (key in TO_GALLONS) return { value: round4(quantity * TO_GALLONS[key]), unit: 'gal' };
+  if (key in TO_POUNDS) return { value: round4(quantity * TO_POUNDS[key]), unit: 'lb' };
   return null;
 }

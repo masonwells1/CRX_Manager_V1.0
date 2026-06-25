@@ -130,3 +130,52 @@ describe('chemCalculator — toGallonOrLbEquivalent (ChemMan parity #1)', () => 
     expect(toGallonOrLbEquivalent(10, 'widgets')).toBeNull();
   });
 });
+
+// #25 fix: when product_form is supplied the gal/lb choice comes from the FORM,
+// not the unit text, so the on-screen preview EQUALS the saved/printed value the
+// server computes via convert_to_gl_lb(total_applied, rate_unit, product_form).
+//
+//   convert_to_gl_lb rules (migration 20260219200000):
+//     dry    → LB:  oz = q/16,  lb = q
+//     liquid → GL:  oz = q/128, pt = q/8, qt = q/4, gal = q
+//
+// `serverGlLb` below is a literal re-statement of those SQL rules; each test
+// asserts the CLIENT helper returns exactly what the SERVER would — so agreement
+// is proven against the rules, not coincidental.
+describe('chemCalculator — toGallonOrLbEquivalent branches on product_form (server parity, #25)', () => {
+  /** Mirror of the SQL convert_to_gl_lb branch — the authority the client must equal. */
+  function serverGlLb(q: number, unit: string, form: 'liquid' | 'dry'): { value: number; unit: 'gal' | 'lb' } | null {
+    const u = unit.trim().toUpperCase();
+    if (form === 'dry') {
+      const f = u === 'OZ' ? 1 / 16 : u === 'LB' ? 1 : null;
+      return f === null ? null : { value: Math.round(q * f * 10000) / 10000, unit: 'lb' };
+    }
+    const f = u === 'OZ' ? 1 / 128 : u === 'PT' ? 1 / 8 : u === 'QT' ? 1 / 4 : u === 'GL' || u === 'GAL' ? 1 : null;
+    return f === null ? null : { value: Math.round(q * f * 10000) / 10000, unit: 'gal' };
+  }
+
+  it('LIQUID + bare oz (the field-app default) → GALLONS, matching the server (NOT pounds)', () => {
+    // 80 oz of a liquid product: server says 80/128 = 0.625 GL. The OLD unit-only
+    // helper wrongly hit the pounds table (80/16 = 5 LB) — the bug this fixes.
+    expect(toGallonOrLbEquivalent(80, 'oz', 'liquid')).toEqual({ value: 0.625, unit: 'gal' });
+    expect(toGallonOrLbEquivalent(80, 'oz')).toEqual({ value: 5, unit: 'lb' }); // legacy/no-form path (unchanged)
+    expect(toGallonOrLbEquivalent(80, 'oz', 'liquid')).toEqual(serverGlLb(80, 'oz', 'liquid'));
+  });
+
+  it('LIQUID qt / pt / gal → GALLONS, equal to the server', () => {
+    for (const [q, u] of [[4, 'qt'], [8, 'pt'], [3, 'GL'], [128, 'oz']] as [number, string][]) {
+      expect(toGallonOrLbEquivalent(q, u, 'liquid')).toEqual(serverGlLb(q, u, 'liquid'));
+    }
+  });
+
+  it('DRY oz / lb → POUNDS, equal to the server (keeps the existing dry-oz case)', () => {
+    expect(toGallonOrLbEquivalent(80, 'oz', 'dry')).toEqual({ value: 5, unit: 'lb' }); // 80/16 = 5 LB
+    expect(toGallonOrLbEquivalent(80, 'oz', 'dry')).toEqual(serverGlLb(80, 'oz', 'dry'));
+    expect(toGallonOrLbEquivalent(5, 'lb', 'dry')).toEqual(serverGlLb(5, 'lb', 'dry'));
+  });
+
+  it('a unit that does not belong to the product form → null (never a guessed number)', () => {
+    expect(toGallonOrLbEquivalent(10, 'lb', 'liquid')).toBeNull(); // pounds on a liquid product
+    expect(toGallonOrLbEquivalent(10, 'qt', 'dry')).toBeNull();    // quarts on a dry product
+  });
+});

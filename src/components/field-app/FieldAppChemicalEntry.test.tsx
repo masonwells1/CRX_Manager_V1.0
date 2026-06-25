@@ -231,10 +231,18 @@ describe('FieldAppChemicalEntry', () => {
     expect(next[0].manual_override).toBe(false);
   });
 
-  it('shows the gallon/lb-equivalent under Total Applied for a recognized unit', async () => {
-    // dry: 80 oz -> 5 lb. quantity 80, rate_unit 'oz'.
-    await renderEntry({ chemicals: [makeLine({ quantity: 80, rate_unit: 'oz' })] });
+  it('shows the gallon/lb-equivalent under Total Applied for a DRY product (oz -> lb, server parity)', async () => {
+    // dry: 80 oz -> 5 lb (80/16). Branches on product_form, matching convert_to_gl_lb.
+    await renderEntry({ chemicals: [makeLine({ quantity: 80, rate_unit: 'oz', product_form: 'dry' })] });
     expect(screen.getByText(/= 5 lb/i)).toBeInTheDocument();
+  });
+
+  it('#25 fix: a LIQUID product dosed in bare oz previews as GALLONS (0.625 GL), matching the saved/printed value (not 5 lb)', async () => {
+    // The bug: the unit-text helper sent bare 'oz' to the pounds table -> "5 lb" on
+    // screen while the server saved 80/128 = 0.625 GL. Now both branch on product_form.
+    await renderEntry({ chemicals: [makeLine({ quantity: 80, rate_unit: 'oz', product_form: 'liquid' })] });
+    expect(screen.getByText(/= 0\.625 gal/i)).toBeInTheDocument();
+    expect(screen.queryByText(/= 5 lb/i)).not.toBeInTheDocument();
   });
 
   it('shows NO gl/lb line for an unrecognized unit', async () => {

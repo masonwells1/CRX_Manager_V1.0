@@ -336,7 +336,7 @@ export default function FieldAppChemicalEntry({
                 <td className="px-3 py-2 text-right tabular-nums">
                   <div>{line.quantity.toFixed(2)} <span className="text-gray-400">{line.rate_unit}</span></div>
                   {(() => {
-                    const conv = toGallonOrLbEquivalent(line.quantity, line.rate_unit);
+                    const conv = toGallonOrLbEquivalent(line.quantity, line.rate_unit, line.product_form);
                     return conv ? (
                       <div className="text-[11px] text-gray-400">= {conv.value.toLocaleString(undefined, { maximumFractionDigits: 4 })} {conv.unit}</div>
                     ) : null;

@@ -13,6 +13,9 @@
 --       (oz -> LB): total_applied=80 oz, total_applied_gl_lb = 80/16 = 5 LB.
 --   M5  the invoice header total_amount_cents reconciles to the sole line
 --       (no drift from the informational columns).
+--   M6  the gal/lb conversion branches on PRODUCT_FORM (server convert_to_gl_lb),
+--       so the on-screen client preview equals the saved/printed value:
+--       LIQUID 80 oz -> 0.625 GL, DRY 80 oz -> 5 LB. (field-app parity #25 MED fix)
 --
 -- Ends in RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK' (everything rolls back).
 -- ============================================================================
@@ -119,6 +122,28 @@ BEGIN
   -- and the tier price still drove the cents (no manual override): 250c x (8*5=40) = 10000c
   SELECT extended_cents INTO v_ext FROM invoice_items WHERE invoice_id = v_inv2 AND is_application_fee = false;
   IF v_ext <> 10000 THEN RAISE EXCEPTION 'SMOKE_FAIL M3 tier pricing: % (exp 10000 = tier 250c x 40)', v_ext; END IF;
+
+  -- ── M6: client gal/lb preview AGREES with the server (convert_to_gl_lb) ─────
+  -- These are the exact (quantity, rate_unit, product_form) tuples the on-screen
+  -- preview `toGallonOrLbEquivalent` now feeds. The client must return the SAME
+  -- gal/lb value the server saves/prints. The bug this fixes: a LIQUID product
+  -- dosed in bare 'oz' (the field-app DEFAULT rate_unit) previewed as POUNDS off
+  -- the unit text (80 oz -> 5 LB) while the server saved GALLONS (80/128 = 0.625 GL).
+  -- Now both branch on product_form, so screen == saved/PDF.
+  --
+  --   LIQUID + 80 oz : server -> 0.625 GL   (client toGallonOrLbEquivalent(80,'oz','liquid') = {0.625,'gal'})
+  --   DRY    + 80 oz : server -> 5 LB        (client toGallonOrLbEquivalent(80,'oz','dry')    = {5,'lb'})
+  SELECT converted_value, converted_unit INTO v_ta_glb, v_glb_u
+    FROM convert_to_gl_lb(80, 'oz', 'liquid');
+  IF v_glb_u IS DISTINCT FROM 'GL' THEN RAISE EXCEPTION 'SMOKE_FAIL M6 liquid-oz unit: % (exp GL)', v_glb_u; END IF;
+  IF round(v_ta_glb, 4) <> 0.625 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL M6 liquid-oz value: % (exp 0.625 = 80 oz / 128; client must equal this)', v_ta_glb; END IF;
+
+  SELECT converted_value, converted_unit INTO v_ta_glb, v_glb_u
+    FROM convert_to_gl_lb(80, 'oz', 'dry');
+  IF v_glb_u IS DISTINCT FROM 'LB' THEN RAISE EXCEPTION 'SMOKE_FAIL M6 dry-oz unit: % (exp LB)', v_glb_u; END IF;
+  IF round(v_ta_glb, 4) <> 5 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL M6 dry-oz value: % (exp 5 = 80 oz / 16; client must equal this)', v_ta_glb; END IF;
 
   RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK';
 END $smoke$;
