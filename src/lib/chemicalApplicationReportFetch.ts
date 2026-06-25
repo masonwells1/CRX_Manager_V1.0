@@ -18,12 +18,18 @@
  * `products` lookup by id (NOT a job_chemicals→products embed), so a since-
  * DEACTIVATED product still contributes its label data — mirroring JobDetail's
  * label fetch and the WPS-notice path.
+ *
+ * Billed CUSTOMERS are resolved via the SECURITY DEFINER RPC get_job_billed_customers
+ * (resolveBilledCustomers), NOT a customers embed: on a split-billed job an
+ * applicator's customers_select RLS hides the CO-billed customers, so an embed would
+ * silently drop them from this compliance PDF. If resolution is incomplete the fetch
+ * THROWS so the caller aborts and never stamps printed_at (#11 compliance fix).
  */
 import { supabase } from './db';
+import { resolveBilledCustomers } from './billedCustomersResolver';
 import {
   buildApplicatorSheetData,
   type ApplicatorSheetData,
-  type ApplicatorSheetCustomer,
   type RawSheetField,
   type RawSheetProduct,
 } from './applicatorSheetData';
@@ -35,7 +41,6 @@ interface ReportJobRow {
   job_date: string;
   scheduled_time: string | null;
   applicator_id: string | null;
-  customer: { farm_name: string | null; account_number: string | null } | null;
   job_fields: Array<{
     field_id: string | null;
     acres_to_treat: number | null;
@@ -55,7 +60,6 @@ interface ReportJobRow {
     sort_order: number | null;
     product: { product_name: string | null } | null;
   }> | null;
-  job_field_shares: Array<{ field_id: string; customer: { farm_name: string | null; account_number: string | null } | null }> | null;
 }
 
 /** Product label fields (compliance) resolved by a direct id lookup. */
@@ -64,13 +68,6 @@ interface ProductLabel {
   phi_days: number | null;
   epa_registration: string | null;
   product_form: 'liquid' | 'dry' | null;
-}
-
-/** A resolved billing-default share (field → customer name/account). */
-interface DefaultShare {
-  field_id: string;
-  farm_name: string | null;
-  account_number: string | null;
 }
 
 /**
@@ -83,12 +80,10 @@ export async function fetchChemicalApplicationReportData(jobId: string): Promise
     .from('jobs')
     .select(`
       id, job_number, job_date, scheduled_time, applicator_id,
-      customer:customers(farm_name, account_number),
       job_fields(field_id, acres_to_treat, crop, pests, sort_order,
         field:fields(field_name, county, state, crop_type)),
       job_chemicals(product_id, quantity, unit, rate_per_acre, rate_unit, rei_hours, phi_days, sort_order,
-        product:products(product_name)),
-      job_field_shares(field_id, customer:customers(farm_name, account_number))
+        product:products(product_name))
     `)
     .eq('id', jobId)
     .maybeSingle();
@@ -131,44 +126,15 @@ export async function fetchChemicalApplicationReportData(jobId: string): Promise
     if (missingLabel.length > 0) throw new Error('Some products on this job have no label data on file — the chemical report cannot be completed.');
   }
 
-  // Billed customers (mirror JobDetail's seed order): saved job_field_shares, then
-  // field_billing_defaults for fields without a saved share, then the primary job
-  // customer when a field has neither. Dedup by name+account.
-  const fieldsWithShares = new Set((r.job_field_shares || []).map((s) => s.field_id));
-  const fieldsNeedingDefaults = new Set<string>();
-  (r.job_fields || []).forEach((f) => {
-    if (f.field_id && !fieldsWithShares.has(f.field_id)) fieldsNeedingDefaults.add(f.field_id);
-  });
-  const defaultsByField = new Map<string, DefaultShare[]>();
-  if (fieldsNeedingDefaults.size > 0) {
-    const { data: fbd } = await supabase
-      .from('field_billing_defaults')
-      .select('field_id, customer:customers(farm_name, account_number)')
-      .in('field_id', [...fieldsNeedingDefaults]);
-    ((fbd || []) as Array<{ field_id: string; customer: { farm_name: string | null; account_number: string | null } | null }>).forEach((d) => {
-      if (!d.customer) return;
-      const list = defaultsByField.get(d.field_id) ?? [];
-      list.push({ field_id: d.field_id, farm_name: d.customer.farm_name, account_number: d.customer.account_number });
-      defaultsByField.set(d.field_id, list);
-    });
+  // Billed customers via the SECURITY DEFINER RPC (saved job_field_shares →
+  // field_billing_defaults → primary customer_id), which resolves the CO-billed
+  // customers an applicator's customers_select RLS hides. If resolution is incomplete
+  // (a billed customer with no resolvable name) this is a COMPLIANCE document — ABORT
+  // (throw) so the caller never prints a silently-partial PDF or stamps printed_at.
+  const { customers: billedCustomers, complete } = await resolveBilledCustomers(jobId);
+  if (!complete) {
+    throw new Error('Some billed customers on this job could not be resolved — the chemical report cannot be completed.');
   }
-
-  const custMap = new Map<string, ApplicatorSheetCustomer>();
-  const add = (name: string | null, account: string | null) => {
-    if (!name) return;
-    custMap.set(`${name}|${account ?? ''}`, { customer_name: name, account_number: account ?? null });
-  };
-  (r.job_field_shares || []).forEach((s) => add(s.customer?.farm_name ?? null, s.customer?.account_number ?? null));
-  (r.job_fields || []).forEach((f) => {
-    if (!f.field_id || fieldsWithShares.has(f.field_id)) return;
-    const defs = defaultsByField.get(f.field_id);
-    if (defs && defs.length > 0) {
-      defs.forEach((d) => add(d.farm_name, d.account_number));
-    } else {
-      add(r.customer?.farm_name ?? null, r.customer?.account_number ?? null);
-    }
-  });
-  if (custMap.size === 0) add(r.customer?.farm_name ?? null, r.customer?.account_number ?? null);
 
   const fields: RawSheetField[] = (r.job_fields || [])
     .filter((f) => f.field_id)
@@ -206,7 +172,7 @@ export async function fetchChemicalApplicationReportData(jobId: string): Promise
 
   return buildApplicatorSheetData({
     job_number: r.job_number,
-    customers: [...custMap.values()],
+    customers: billedCustomers,
     scheduled_date: r.job_date,
     scheduled_time: r.scheduled_time,
     applicator_name: applicatorName,

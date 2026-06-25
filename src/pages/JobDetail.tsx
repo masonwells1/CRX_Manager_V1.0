@@ -24,6 +24,7 @@ import {
   type ApplicatorSheetFormat,
 } from '../lib/applicatorSheetData';
 import { generateChemicalApplicationReportPdf } from '../lib/chemicalApplicationReportPdf';
+import { resolveBilledCustomers } from '../lib/billedCustomersResolver';
 import { generateLoaderWorksheetPdf } from '../lib/loaderWorksheetPdf';
 import { computeLoaderWorksheet, isGallonCapacityUnit } from '../lib/loaderWorksheet';
 import { overrideSaveApplicatorId, shouldReassignApplicatorAfterSave, canGenerateWpsNotice } from '../lib/jobSaveHelpers';
@@ -372,7 +373,13 @@ export default function JobDetail() {
   // conversions are byte-identical for the same job. Returns null on a failed
   // product-label lookup (caller toasts + aborts). Caller must have already
   // verified the job is saved (not dirty).
-  const buildSheetDataFromState = async (): Promise<ApplicatorSheetData | null> => {
+  // `strict` (default) = COMPLIANCE mode (#11 chemical report): billed customers are
+  // resolved via the SECURITY DEFINER RPC and an INCOMPLETE resolution ABORTS (returns
+  // null → caller toasts, no PDF, no printed_at). `strict = false` = the #9 field sheet:
+  // it still resolves via the RPC, but on an incomplete/empty result it falls back to
+  // the shipped #9 semantics (a null-named billed customer prints as "Customer", and an
+  // empty customer set falls back to the primary customer) rather than refusing.
+  const buildSheetDataFromState = async (strict = true): Promise<ApplicatorSheetData | null> => {
     // Pull REI/PHI/EPA/product_form for EVERY product on the job, including any
     // since-deactivated ones (allProducts is is_active=true only) — mirrors the
     // WPS-notice label fetch so a retired product still prints its compliance data.
@@ -395,29 +402,46 @@ export default function JobDetail() {
       if (pids.some((pid) => !labelById.has(pid))) return null;
     }
 
-    // Billed customers: prefer the per-field shares (multi-customer); else the
-    // single job customer. Dedup by name+account. The in-memory `customers` list is
-    // active-only, so a since-DEACTIVATED billed customer is resolved by a direct id
-    // lookup (no is_active filter) — otherwise the compliance report would print a
-    // generic "Customer" / omit a billed customer (Codex P2; mirrors the loader path).
-    const billedIds = [...new Set((shareRows.length > 0 ? shareRows.map((s) => s.customer_id) : [customerId]).filter(Boolean))];
-    const nameByCustId = new Map<string, { farm_name: string | null; account_number: string | null }>();
-    customers.forEach((c) => nameByCustId.set(c.id, { farm_name: c.farm_name, account_number: c.account_number ?? null }));
-    const missingIds = billedIds.filter((cid) => !nameByCustId.has(cid));
-    if (missingIds.length > 0) {
-      const { data: extraCusts } = await supabase
-        .from('customers')
-        .select('id, farm_name, account_number')
-        .in('id', missingIds);
-      ((extraCusts || []) as Array<{ id: string; farm_name: string | null; account_number: string | null }>)
-        .forEach((c) => nameByCustId.set(c.id, { farm_name: c.farm_name, account_number: c.account_number ?? null }));
+    // Billed customers via the SECURITY DEFINER RPC (saved job_field_shares →
+    // field_billing_defaults → primary customer_id), which resolves the CO-billed
+    // customers an applicator's customers_select RLS hides (the #11 split-bill
+    // omission). Only a SAVED job has rows to resolve; a brand-new/unsaved job (no id)
+    // uses the in-memory fallback below.
+    let billedCustomers: ApplicatorSheetData['customers'] = [];
+    let resolveComplete = false;
+    if (!isNew && id) {
+      const resolved = await resolveBilledCustomers(id);
+      billedCustomers = resolved.customers;
+      resolveComplete = resolved.complete;
     }
-    const custMap = new Map<string, { customer_name: string; account_number: string | null }>();
-    billedIds.forEach((cid) => {
-      const c = nameByCustId.get(cid);
-      if (!c || !c.farm_name) return;
-      custMap.set(`${c.farm_name}|${c.account_number ?? ''}`, { customer_name: c.farm_name, account_number: c.account_number ?? null });
-    });
+
+    if (strict) {
+      // COMPLIANCE (#11): refuse a silently-partial customer set — abort, no PDF/stamp.
+      if (!resolveComplete) return null;
+    } else {
+      // #9 FIELD SHEET: restore the shipped fallback semantics. If the RPC produced no
+      // usable customers (unsaved job, or resolution gap), seed from the in-memory
+      // share/primary state — a null-named billed customer prints as "Customer", and an
+      // empty set falls back to the primary customer (so the sheet always has a line).
+      if (billedCustomers.length === 0) {
+        const billedIds = [...new Set((shareRows.length > 0 ? shareRows.map((s) => s.customer_id) : [customerId]).filter(Boolean))];
+        const custMap = new Map<string, { customer_name: string; account_number: string | null }>();
+        billedIds.forEach((cid) => {
+          const c = customers.find((cc) => cc.id === cid);
+          // A billed customer with a null/blank farm_name still prints as "Customer"
+          // (shipped #9 behavior) rather than being silently dropped.
+          const name = c?.farm_name || 'Customer';
+          custMap.set(`${name}|${c?.account_number ?? ''}`, { customer_name: name, account_number: c?.account_number ?? null });
+        });
+        // Empty custMap → fall back to the primary customer (never print no customer).
+        if (custMap.size === 0 && customerId) {
+          const c = customers.find((cc) => cc.id === customerId);
+          const name = c?.farm_name || 'Customer';
+          custMap.set(`${name}|${c?.account_number ?? ''}`, { customer_name: name, account_number: c?.account_number ?? null });
+        }
+        billedCustomers = [...custMap.values()];
+      }
+    }
 
     // Applicator name: the `applicators` picker list is active-only, so a job whose
     // saved applicator has since been DEACTIVATED would print a blank name. Resolve
@@ -435,7 +459,7 @@ export default function JobDetail() {
 
     return buildApplicatorSheetData({
       job_number: jobNumber || 'draft',
-      customers: [...custMap.values()],
+      customers: billedCustomers,
       scheduled_date: jobDate,
       scheduled_time: scheduledTime || null,
       applicator_name: applicatorName,
@@ -468,7 +492,11 @@ export default function JobDetail() {
             // gal/lb conversion + labels Total Applied, matching the in-page
             // preview + loader worksheet. NOT rate_unit (per-acre).
             unit: c.unit || null,
-            total_quantity: parseFloat(c.quantity) || null,
+            // Preserve a real 0 (only a BLANK quantity → null), matching the raw-quantity
+            // convention the fetch path uses — so JobDetail's #11 report and the Jobs-list
+            // report print byte-identical totals for a zero-quantity line (was
+            // `parseFloat(c.quantity) || null`, which coerced a real 0 → null).
+            total_quantity: c.quantity.trim() === '' ? null : parseFloat(c.quantity),
             product_form: lbl?.product_form ?? null,
             rei_hours: c.rei_hours !== '' ? parseFloat(c.rei_hours) : (lbl?.rei_hours ?? null),
             phi_days: c.phi_days !== '' ? parseFloat(c.phi_days) : (lbl?.phi_days ?? null),
@@ -488,7 +516,9 @@ export default function JobDetail() {
     }
     setGeneratingSheet(format);
     try {
-      const sheetData = await buildSheetDataFromState();
+      // #9 FIELD SHEET: non-strict — fall back to "Customer"/primary if billed-customer
+      // resolution is incomplete (it's an internal crew sheet, not a compliance record).
+      const sheetData = await buildSheetDataFromState(false);
       if (!sheetData) {
         toast('error', 'Could not load product data — try again before printing the field sheet.');
         setGeneratingSheet(null);
@@ -535,9 +565,12 @@ export default function JobDetail() {
     }
     setGeneratingChemReport(true);
     try {
-      const sheetData = await buildSheetDataFromState();
+      // #11 COMPLIANCE: strict (default) — a null result means product-label data or a
+      // billed customer could not be fully resolved; refuse to print a partial record
+      // and do NOT stamp printed_at.
+      const sheetData = await buildSheetDataFromState(true);
       if (!sheetData) {
-        toast('error', 'Could not load product data — try again before printing the chemical report.');
+        toast('error', 'Could not complete the chemical report — some product or billed-customer data could not be resolved. Try again.');
         setGeneratingChemReport(false);
         return;
       }
@@ -567,33 +600,39 @@ export default function JobDetail() {
     }
     setPrintingLoader(true);
     try {
-      // Billed customers (mirror handleGenerateSheet): prefer per-field shares,
-      // else the single job customer. The in-memory `customers` list is active-only,
-      // so a since-DEACTIVATED billed customer is resolved by a direct id lookup (no
-      // is_active filter) — otherwise the PDF would print a generic "Customer" /
-      // omit a billed customer (Codex), unlike the bulk path which fetches by id.
-      const billedIds = [...new Set((shareRows.length > 0 ? shareRows.map((s) => s.customer_id) : [customerId]).filter(Boolean))];
-      const nameByCustId = new Map<string, { farm_name: string | null; account_number: string | null }>();
-      customers.forEach((c) => nameByCustId.set(c.id, { farm_name: c.farm_name, account_number: c.account_number ?? null }));
-      const missingIds = billedIds.filter((cid) => !nameByCustId.has(cid));
-      if (missingIds.length > 0) {
-        const { data: extraCusts } = await supabase
-          .from('customers')
-          .select('id, farm_name, account_number')
-          .in('id', missingIds);
-        ((extraCusts || []) as Array<{ id: string; farm_name: string | null; account_number: string | null }>)
-          .forEach((c) => nameByCustId.set(c.id, { farm_name: c.farm_name, account_number: c.account_number ?? null }));
+      // Billed customers via the SECURITY DEFINER RPC (saved job_field_shares →
+      // field_billing_defaults → primary customer_id), which resolves the CO-billed
+      // customers an applicator's customers_select RLS hides. A saved job resolves via
+      // the RPC and ABORTS (no PDF/stamp) if resolution is incomplete; a brand-new
+      // unsaved job uses the in-memory "Customer"/primary fallback.
+      let loaderCustomers: ApplicatorSheetData['customers'] = [];
+      if (!isNew && id) {
+        const resolved = await resolveBilledCustomers(id);
+        if (!resolved.complete) {
+          toast('error', 'Could not complete the loader worksheet — some billed-customer data could not be resolved. Try again.');
+          setPrintingLoader(false);
+          return;
+        }
+        loaderCustomers = resolved.customers;
+      } else {
+        const billedIds = [...new Set((shareRows.length > 0 ? shareRows.map((s) => s.customer_id) : [customerId]).filter(Boolean))];
+        const custMap = new Map<string, { customer_name: string; account_number: string | null }>();
+        billedIds.forEach((cid) => {
+          const c = customers.find((cc) => cc.id === cid);
+          const name = c?.farm_name || 'Customer';
+          custMap.set(`${name}|${c?.account_number ?? ''}`, { customer_name: name, account_number: c?.account_number ?? null });
+        });
+        if (custMap.size === 0 && customerId) {
+          const c = customers.find((cc) => cc.id === customerId);
+          const name = c?.farm_name || 'Customer';
+          custMap.set(`${name}|${c?.account_number ?? ''}`, { customer_name: name, account_number: c?.account_number ?? null });
+        }
+        loaderCustomers = [...custMap.values()];
       }
-      const custMap = new Map<string, { customer_name: string; account_number: string | null }>();
-      billedIds.forEach((cid) => {
-        const c = nameByCustId.get(cid);
-        if (!c || !c.farm_name) return;
-        custMap.set(`${c.farm_name}|${c.account_number ?? ''}`, { customer_name: c.farm_name, account_number: c.account_number ?? null });
-      });
 
       await generateLoaderWorksheetPdf({
         job_number: jobNumber || 'draft',
-        customers: [...custMap.values()],
+        customers: loaderCustomers,
         scheduled_date: jobDate,
         scheduled_time: scheduledTime || null,
         applicator_name: applicators.find((a) => a.id === applicatorId)?.full_name || null,
@@ -610,7 +649,10 @@ export default function JobDetail() {
           .filter((c) => c.product_id)
           .map((c) => ({
             product_name: c.product_name || 'Product',
-            total_quantity: parseFloat(c.quantity) || null,
+            // Preserve a real 0 (only a BLANK quantity → null), matching the raw-quantity
+            // convention the bulk loaderWorksheetFetch path uses, so single-job and bulk
+            // loader worksheets print identical totals for a zero-quantity line.
+            total_quantity: c.quantity.trim() === '' ? null : parseFloat(c.quantity),
             unit: c.unit || null,
           })),
         loader_comment: loaderComment || null,

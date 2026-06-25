@@ -8567,6 +8567,15 @@ export type Database = {
         Returns: Json
       }
       get_inventory_position: { Args: never; Returns: Json }
+      get_job_billed_customers: {
+        Args: { p_job_id: string }
+        Returns: {
+          account_number: string | null
+          customer_id: string
+          farm_name: string | null
+          is_primary: boolean
+        }[]
+      }
       get_logbook_by_applicator: {
         Args: {
           p_applicator_id: string

@@ -12,10 +12,19 @@
  * Kept out of the page so the PostgREST shape mapping is isolated. The applicator
  * NAME is resolved via profile_public_view (LEDGER lesson: never embed `profiles`
  * — the RLS hides other users' rows and the name would render "(removed)").
+ *
+ * Billed CUSTOMERS are resolved via the SECURITY DEFINER RPC get_job_billed_customers
+ * (resolveBilledCustomers), NOT a customers embed: on a split-billed job an
+ * applicator's customers_select RLS hides the CO-billed customers, so an embed would
+ * silently drop them. If ANY selected job's billed-customer resolution is incomplete
+ * this THROWS so the caller aborts the worksheet and never stamps printed_at — the
+ * same complete-or-refused rule the #11 chemical report uses (shared resolver).
  */
 import { supabase } from './db';
+import { resolveBilledCustomers } from './billedCustomersResolver';
 import { isGallonCapacityUnit } from './loaderWorksheet';
 import type { LoaderWorksheetPdfData } from './loaderWorksheetPdf';
+import type { ApplicatorSheetCustomer } from './applicatorSheetData';
 
 /** Raw row shape from the loader-worksheet fetch (only the columns we read). */
 interface LoaderJobRow {
@@ -27,18 +36,9 @@ interface LoaderJobRow {
   carrier_rate_gpa: number | null;
   loader_tank_capacity: number | null;
   loader_comment: string | null;
-  customer: { farm_name: string | null; account_number: string | null } | null;
   vehicle: { vehicle_name: string | null; capacity_gallons: number | null; capacity_unit: string | null } | null;
   job_fields: Array<{ field_id: string | null; acres_to_treat: number | null }> | null;
   job_chemicals: Array<{ quantity: number | null; unit: string | null; product: { product_name: string | null } | null }> | null;
-  job_field_shares: Array<{ field_id: string; customer: { farm_name: string | null; account_number: string | null } | null }> | null;
-}
-
-/** A resolved billing-default share (field → customer name/account). */
-interface DefaultShare {
-  field_id: string;
-  farm_name: string | null;
-  account_number: string | null;
 }
 
 /**
@@ -54,11 +54,9 @@ export async function fetchLoaderWorksheetData(jobIds: string[]): Promise<Loader
     .select(`
       id, job_number, job_date, scheduled_time, applicator_id,
       carrier_rate_gpa, loader_tank_capacity, loader_comment,
-      customer:customers(farm_name, account_number),
       vehicle:vehicles(vehicle_name, capacity_gallons, capacity_unit),
       job_fields(field_id, acres_to_treat),
-      job_chemicals(quantity, unit, product:products(product_name)),
-      job_field_shares(field_id, customer:customers(farm_name, account_number))
+      job_chemicals(quantity, unit, product:products(product_name))
     `)
     .in('id', jobIds);
   if (error) throw error;
@@ -78,30 +76,19 @@ export async function fetchLoaderWorksheetData(jobIds: string[]): Promise<Loader
     });
   }
 
-  // Field-billing-default shares (mirrors the JobDetail single-job print): for any
-  // field on a job that has NO saved job_field_shares row yet, the customer list
-  // comes from field_billing_defaults — so the bulk PDF shows the same customer(s)
-  // as the single-job print, not just the primary job customer. Resolve them in one
-  // batched query keyed by field_id.
-  const fieldsNeedingDefaults = new Set<string>();
-  rows.forEach((r) => {
-    const withShares = new Set((r.job_field_shares || []).map((s) => s.field_id));
-    (r.job_fields || []).forEach((f) => {
-      if (f.field_id && !withShares.has(f.field_id)) fieldsNeedingDefaults.add(f.field_id);
-    });
-  });
-  const defaultsByField = new Map<string, DefaultShare[]>();
-  if (fieldsNeedingDefaults.size > 0) {
-    const { data: fbd } = await supabase
-      .from('field_billing_defaults')
-      .select('field_id, customer:customers(farm_name, account_number)')
-      .in('field_id', [...fieldsNeedingDefaults]);
-    ((fbd || []) as Array<{ field_id: string; customer: { farm_name: string | null; account_number: string | null } | null }>).forEach((d) => {
-      if (!d.customer) return;
-      const list = defaultsByField.get(d.field_id) ?? [];
-      list.push({ field_id: d.field_id, farm_name: d.customer.farm_name, account_number: d.customer.account_number });
-      defaultsByField.set(d.field_id, list);
-    });
+  // Billed customers per job via the SECURITY DEFINER RPC (saved job_field_shares →
+  // field_billing_defaults → primary customer_id), which resolves the CO-billed
+  // customers an applicator's customers_select RLS hides. Resolved per job (the RPC
+  // self-gates each job). If ANY selected job's resolution is incomplete (a billed
+  // customer with no resolvable name) ABORT — a print document is never built with a
+  // silently-partial customer list (shared #11 complete-or-refused rule).
+  const customersByJob = new Map<string, ApplicatorSheetCustomer[]>();
+  for (const r of rows) {
+    const { customers, complete } = await resolveBilledCustomers(r.id);
+    if (!complete) {
+      throw new Error(`Some billed customers on job ${r.job_number} could not be resolved — the loader worksheet cannot be completed.`);
+    }
+    customersByJob.set(r.id, customers);
   }
 
   const byId = new Map(rows.map((r) => [r.id, r]));
@@ -109,44 +96,16 @@ export async function fetchLoaderWorksheetData(jobIds: string[]): Promise<Loader
   return jobIds
     .map((jid) => byId.get(jid))
     .filter((r): r is LoaderJobRow => !!r)
-    .map((r) => mapRowToPdfData(r, nameById, defaultsByField));
+    .map((r) => mapRowToPdfData(r, nameById, customersByJob.get(r.id) ?? []));
 }
 
 /** Map one fetched job row to the shared LoaderWorksheetPdfData. */
 function mapRowToPdfData(
   r: LoaderJobRow,
   nameById: Map<string, string>,
-  defaultsByField: Map<string, DefaultShare[]>,
+  billedCustomers: ApplicatorSheetCustomer[],
 ): LoaderWorksheetPdfData {
   const totalAcres = (r.job_fields || []).reduce((s, f) => s + (f.acres_to_treat || 0), 0);
-
-  // Billed customers (mirrors JobDetail's seed order): saved job_field_shares, then
-  // field_billing_defaults for fields without a saved share, then the primary job
-  // customer only when a field has neither. Dedup by name+account.
-  const custMap = new Map<string, { customer_name: string; account_number: string | null }>();
-  const add = (name: string | null, account: string | null) => {
-    if (!name) return;
-    custMap.set(`${name}|${account ?? ''}`, { customer_name: name, account_number: account ?? null });
-  };
-  const fieldsWithShares = new Set((r.job_field_shares || []).map((s) => s.field_id));
-  (r.job_field_shares || []).forEach((s) => add(s.customer?.farm_name ?? null, s.customer?.account_number ?? null));
-  // Default-share customers for fields lacking a saved share; primary fallback when
-  // a field has no default either.
-  (r.job_fields || []).forEach((f) => {
-    if (!f.field_id || fieldsWithShares.has(f.field_id)) return;
-    const defs = defaultsByField.get(f.field_id);
-    if (defs && defs.length > 0) {
-      defs.forEach((d) => add(d.farm_name, d.account_number));
-    } else {
-      add(r.customer?.farm_name ?? null, r.customer?.account_number ?? null);
-    }
-  });
-  if (custMap.size === 0 && r.customer?.farm_name) {
-    custMap.set(`${r.customer.farm_name}|${r.customer.account_number ?? ''}`, {
-      customer_name: r.customer.farm_name,
-      account_number: r.customer.account_number ?? null,
-    });
-  }
 
   // Effective capacity: the per-job override (in gallons) wins over the assigned
   // vehicle's. The vehicle capacity is only usable as a GALLON tank size when its
@@ -160,7 +119,7 @@ function mapRowToPdfData(
 
   return {
     job_number: r.job_number,
-    customers: [...custMap.values()],
+    customers: billedCustomers,
     scheduled_date: r.job_date,
     scheduled_time: r.scheduled_time,
     applicator_name: r.applicator_id ? (nameById.get(r.applicator_id) ?? null) : null,

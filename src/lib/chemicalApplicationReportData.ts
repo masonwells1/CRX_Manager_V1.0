@@ -97,10 +97,11 @@ function distinctJoin(fields: ApplicatorSheetField[], pick: (f: ApplicatorSheetF
  * Pure: it only re-shapes what `buildApplicatorSheetData` already computed (totals,
  * gal/lb conversion, REI/PHI/EPA), so every figure equals the applicator sheet's.
  *
- * The product SET is exactly the gatherer's `products` (a resolved product with a
- * positive quantity, per the shared #9 filter) — so the report lists the SAME
- * chemical lines the applicator sheet would for this job, never a looser/different
- * set (the #10 consistency pitfall).
+ * The product SET is EXACTLY the gatherer's `products` — no extra quantity filter is
+ * applied here (none exists in buildApplicatorSheetData either; a row is included once
+ * it has a resolved product). The report therefore lists the SAME chemical lines the
+ * applicator sheet (#9) would for this job, never a looser/different set (the #10
+ * consistency pitfall).
  */
 export function buildChemicalApplicationReportData(data: ApplicatorSheetData): ChemicalApplicationReportData {
   const chemicals: ChemicalApplicationReportRow[] = data.products.map((p) => {
