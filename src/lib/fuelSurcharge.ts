@@ -8,8 +8,10 @@
  * (server-side, in cents) when an admin both enables it AND types a positive rate.
  *
  * This file is presentation/serialization ONLY. The authoritative cents math lives
- * in the DB function compute_fuel_surcharge_cents() so the editor preview, the saved
- * invoice, the PDF and the share split can never disagree.
+ * in the DB function compute_fuel_surcharge_cents() — STABLE (reads app_settings),
+ * NOT IMMUTABLE: marking it IMMUTABLE would let Postgres cache a stale surcharge
+ * after the owner edits the rate. The editor preview, the saved invoice, the PDF
+ * and the share split all read that one function so they can never disagree.
  */
 
 export type FuelSurchargeBasis = '' | 'per_acre' | 'percent' | 'flat';

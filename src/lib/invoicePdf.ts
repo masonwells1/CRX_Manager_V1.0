@@ -42,6 +42,20 @@ export interface InvoicePdfItem {
   product_form?: string | null;
 }
 
+/**
+ * The Fuel Surcharge line (field-app parity #32) is stored is_application_fee=true
+ * with quantity=1 and unit_price_cents = the FULL flat/percent amount (NOT a
+ * per-acre rate): acres/rate_per_acre/total_applied are NULL. Without this the
+ * generic is_application_fee branch would mislabel it as a per-acre charge —
+ * printing "200.00/AC" and "1.00 AC" on the grower-facing invoice. Detect it so
+ * both PDF layouts render Rate/Total-Applied BLANK and Unit Price/Amount as a
+ * plain dollar amount (no "/AC"). The Amount + invoice total use extended_cents
+ * and are unchanged — this is display only.
+ */
+export function isFuelSurchargeLine(item: InvoicePdfItem): boolean {
+  return Boolean(item.is_application_fee) && item.description === 'Fuel Surcharge';
+}
+
 export interface InvoicePdfShare {
   customer_name: string;
   split_percentage: number;
@@ -621,17 +635,24 @@ async function generateLegacyInvoicePdf(data: InvoicePdfData) {
       ? [['Product', 'EPA Reg', 'Rate/Ac', 'Total Applied', 'Unit Price', 'Amount']]
       : [['Product', 'Rate/Ac', 'Total Applied', 'Unit Price', 'Amount']];
     body = data.items.map((item) => {
-      const rateStr = item.rate_per_acre != null
-        ? `${fmtNum(item.rate_per_acre, 4)} ${item.rate_unit || item.unit_size || ''}`.trim()
-        : '';
-      const totalApplied = item.total_applied != null
-        ? `${fmtNum(item.total_applied, item.total_applied === Math.round(item.total_applied) ? 2 : 4)} ${item.total_applied_unit || ''}`.trim()
-        : item.is_application_fee
-          ? `${fmtNum(item.quantity, 2)} AC`
+      const isFuel = isFuelSurchargeLine(item);
+      const rateStr = isFuel
+        ? ''
+        : item.rate_per_acre != null
+          ? `${fmtNum(item.rate_per_acre, 4)} ${item.rate_unit || item.unit_size || ''}`.trim()
           : '';
-      const unitPrice = item.is_application_fee
-        ? `${fmtNum(item.unit_price_cents / 100, 2)}/AC`
-        : `${fmtNum(item.unit_price_cents / 100, 2)} ${item.gl_lb_unit || item.unit_size || ''}`.trim();
+      const totalApplied = isFuel
+        ? ''
+        : item.total_applied != null
+          ? `${fmtNum(item.total_applied, item.total_applied === Math.round(item.total_applied) ? 2 : 4)} ${item.total_applied_unit || ''}`.trim()
+          : item.is_application_fee
+            ? `${fmtNum(item.quantity, 2)} AC`
+            : '';
+      const unitPrice = isFuel
+        ? fmtNum(item.unit_price_cents / 100, 2)
+        : item.is_application_fee
+          ? `${fmtNum(item.unit_price_cents / 100, 2)}/AC`
+          : `${fmtNum(item.unit_price_cents / 100, 2)} ${item.gl_lb_unit || item.unit_size || ''}`.trim();
       return showEpa
         ? [item.product_name || item.description, item.epa_registration || '', rateStr, totalApplied, unitPrice, fmt(item.extended_cents)]
         : [item.product_name || item.description, rateStr, totalApplied, unitPrice, fmt(item.extended_cents)];
@@ -799,15 +820,20 @@ function drawFieldApplicationLayout(
     : [['Product', 'Rate / Acre', 'Total Applied', 'Total Applied GL/LB', 'Unit Price', 'Total Cost']];
 
   const rows = data.items.map((item) => {
-    const rateStr = item.rate_per_acre != null
-      ? `${fmtNum(item.rate_per_acre, 4)} ${item.rate_unit || item.unit_size || ''}`
-      : item.is_application_fee ? '' : '';
+    const isFuel = isFuelSurchargeLine(item);
+    const rateStr = isFuel
+      ? ''
+      : item.rate_per_acre != null
+        ? `${fmtNum(item.rate_per_acre, 4)} ${item.rate_unit || item.unit_size || ''}`
+        : item.is_application_fee ? '' : '';
 
-    const totalApplied = item.total_applied != null
-      ? `${fmtNum(item.total_applied, item.total_applied === Math.round(item.total_applied) ? 2 : 4)} ${item.total_applied_unit || ''}`
-      : item.is_application_fee
-        ? `${fmtNum(item.quantity, 2)} AC`
-        : '';
+    const totalApplied = isFuel
+      ? ''
+      : item.total_applied != null
+        ? `${fmtNum(item.total_applied, item.total_applied === Math.round(item.total_applied) ? 2 : 4)} ${item.total_applied_unit || ''}`
+        : item.is_application_fee
+          ? `${fmtNum(item.quantity, 2)} AC`
+          : '';
 
     const glLb = item.total_applied_gl_lb != null
       ? `${fmtNum(item.total_applied_gl_lb, 4)} ${item.gl_lb_unit || ''}`
@@ -815,9 +841,11 @@ function drawFieldApplicationLayout(
         ? ''
         : '';
 
-    const unitPrice = item.is_application_fee
-      ? `${fmtNum(item.unit_price_cents / 100, 2)} AC`
-      : `${fmtNum(item.unit_price_cents / 100, 2)} ${item.gl_lb_unit || item.unit_size || ''}`;
+    const unitPrice = isFuel
+      ? `${fmtNum(item.unit_price_cents / 100, 2)}`
+      : item.is_application_fee
+        ? `${fmtNum(item.unit_price_cents / 100, 2)} AC`
+        : `${fmtNum(item.unit_price_cents / 100, 2)} ${item.gl_lb_unit || item.unit_size || ''}`;
 
     const row = showEpa
       ? [

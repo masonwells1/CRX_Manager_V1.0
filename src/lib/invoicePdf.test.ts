@@ -291,6 +291,86 @@ describe('generateInvoicePdf', () => {
     expect(doc).toBe(mockDoc);
   });
 
+  it('renders a Fuel Surcharge line as a flat amount (no "/AC") — current layout', async () => {
+    // The surcharge line is stored is_application_fee=true, quantity=1,
+    // unit_price_cents = the FULL flat/percent amount, acres/rate/total_applied NULL.
+    // The generic app-fee branch would print "200.00/AC" + "1.00 AC"; the fuel
+    // branch must print a PLAIN $ amount and blank Rate/Total-Applied.
+    await generateInvoicePdf(makeInvoiceData({
+      options: { show_shares: false, show_price_per_acre: false, show_epa_registration: false },
+      items: [makeItem({
+        is_application_fee: true,
+        description: 'Fuel Surcharge',
+        product_name: 'Fuel Surcharge',
+        quantity: 1,
+        unit_price_cents: 20000,   // $200.00 flat
+        extended_cents: 20000,
+        rate_per_acre: null,
+        rate_unit: null,
+        acres: null,
+        total_applied: null,
+        total_applied_unit: null,
+        total_applied_gl_lb: null,
+        gl_lb_unit: null,
+        epa_registration: null,
+      })],
+      total_amount_cents: 20000,
+      balance_cents: 20000,
+    }));
+    const autoTable = vi.mocked(await import('jspdf-autotable')).default;
+    // The line-item table is the first autoTable call (head[0][0] === 'Product').
+    const itemCall = autoTable.mock.calls.find((c: unknown[]) => {
+      const opts = c[1] as { head?: unknown[][] };
+      return Array.isArray(opts.head) && Array.isArray(opts.head[0]) && opts.head[0][0] === 'Product';
+    });
+    expect(itemCall).toBeDefined();
+    const body = ((itemCall as unknown[])[1] as { body: string[][] }).body;
+    const fuelRow = body.find((r) => r.includes('Fuel Surcharge'));
+    expect(fuelRow).toBeDefined();
+    // No cell may carry the per-acre "/AC" suffix on the surcharge row.
+    expect((fuelRow as string[]).some((cell) => /\/AC\b/.test(cell))).toBe(false);
+    // No "1.00 AC" Total-Applied mislabel.
+    expect((fuelRow as string[]).some((cell) => /\bAC\b/.test(cell))).toBe(false);
+    // The Unit Price cell is the plain dollar amount "200.00" (no slash, no unit).
+    expect((fuelRow as string[]).includes('200.00')).toBe(true);
+  });
+
+  it('renders a Fuel Surcharge line as a flat amount (no "AC") — legacy layout', async () => {
+    await generateInvoicePdf(makeInvoiceData({
+      options: { show_shares: true, show_price_per_acre: true, show_epa_registration: false, format: 'legacy' },
+      items: [makeItem({
+        is_application_fee: true,
+        description: 'Fuel Surcharge',
+        product_name: 'Fuel Surcharge',
+        quantity: 1,
+        unit_price_cents: 20000,
+        extended_cents: 20000,
+        rate_per_acre: null,
+        rate_unit: null,
+        acres: null,
+        total_applied: null,
+        total_applied_unit: null,
+        total_applied_gl_lb: null,
+        gl_lb_unit: null,
+        epa_registration: null,
+      })],
+      total_amount_cents: 20000,
+      balance_cents: 20000,
+    }));
+    const autoTable = vi.mocked(await import('jspdf-autotable')).default;
+    const itemCall = autoTable.mock.calls.find((c: unknown[]) => {
+      const opts = c[1] as { head?: unknown[][] };
+      return Array.isArray(opts.head) && Array.isArray(opts.head[0]) && opts.head[0][0] === 'Product';
+    });
+    expect(itemCall).toBeDefined();
+    const body = ((itemCall as unknown[])[1] as { body: string[][] }).body;
+    const fuelRow = body.find((r) => r.includes('Fuel Surcharge'));
+    expect(fuelRow).toBeDefined();
+    // Legacy mislabel was "200.00 AC" in Unit Price + "1.00 AC" in Total Applied.
+    expect((fuelRow as string[]).some((cell) => /\bAC\b/.test(cell))).toBe(false);
+    expect((fuelRow as string[]).includes('200.00')).toBe(true);
+  });
+
   it('handles field_application with all context fields', async () => {
     const doc = await generateInvoicePdf(makeInvoiceData({
       job_number: 'JOB-2026-0010',

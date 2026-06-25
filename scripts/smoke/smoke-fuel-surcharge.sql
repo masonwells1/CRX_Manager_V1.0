@@ -159,3 +159,151 @@ BEGIN
   RAISE NOTICE 'SMOKE OK: OFF=% ON=% (+%) shares=% blank=%', v_total_off, v_total_on, v_expected_surcharge, v_share_sum, v_total_blank;
   RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK';
 END $smoke$;
+
+-- ============================================================================
+-- SMOKE TEST 2 (rolled back by design): MONEY-LENS FIXES for #32.
+-- REQUIRES migration 20260625141000_fuel_surcharge_fixes.sql.
+-- ----------------------------------------------------------------------------
+-- Proves:
+--   MED1 — PREVIEW == SAVE on the PERCENT basis when the app-service row has a
+--          NULL vehicle_id/created_by. Before the fix, preview's whole-record
+--          `v_app_service IS NOT NULL` test was FALSE (a nullable column was
+--          NULL), so preview DROPPED the app-fee from the subtotal and computed
+--          the percent surcharge on an understated base — diverging from save.
+--          After the fix, preview's grand_total === save's invoice total.
+--   MED2 — A NON-JSON app_settings.fuel_surcharge value makes
+--          compute_fuel_surcharge_cents() RETURN 0 (not throw), and a field-app
+--          invoice still SAVES successfully (no abort of the money editor).
+--   OFF  — Re-confirm the shipped default-OFF config keeps compute = 0 (inert).
+-- All config writes are inside the rolled-back transaction; the persisted
+-- shipped default (OFF/blank) is NEVER changed. Ends in SMOKE_PASS_ROLLBACK.
+-- ============================================================================
+DO $med$
+DECLARE
+  v_admin uuid;
+  v_sfx   text := substr(gen_random_uuid()::text,1,8);
+  v_cust  uuid;
+  v_field uuid;
+  v_prod  uuid;
+  v_svc   uuid;
+  v_locations jsonb;
+  v_chemicals jsonb;
+  v_preview jsonb;
+  v_save jsonb;
+  v_inv uuid;
+  v_preview_total bigint;
+  v_save_total bigint;
+  v_compute bigint;
+  v_acres numeric := 80;
+  v_pct_rate text := '5';  -- TEST 5% percent-basis rate ONLY. NOT a real rate.
+BEGIN
+  SELECT id INTO v_admin FROM profiles WHERE role='admin' AND is_active=true ORDER BY created_at LIMIT 1;
+  IF v_admin IS NULL THEN RAISE EXCEPTION 'SMOKE_SETUP: no admin'; END IF;
+  PERFORM set_config('request.jwt.claims', json_build_object('sub', v_admin, 'role','authenticated')::text, true);
+
+  -- Sanity: persisted setting must START at the shipped inert default.
+  IF (SELECT setting_value::jsonb->>'enabled' FROM app_settings WHERE setting_key='fuel_surcharge') <> 'false'
+     OR NULLIF(TRIM((SELECT setting_value::jsonb->>'rate' FROM app_settings WHERE setting_key='fuel_surcharge')), '') IS NOT NULL THEN
+    RAISE EXCEPTION 'SMOKE_SETUP: fuel_surcharge setting is not at the OFF/blank default — refusing to test';
+  END IF;
+
+  INSERT INTO customers (farm_name, assigned_tier) VALUES ('[SMOKE] FuelFix '||v_sfx, 1) RETURNING id INTO v_cust;
+  INSERT INTO fields (field_name, customer_id, total_acres)
+    VALUES ('[SMOKE] FuelFix Field '||v_sfx, v_cust, v_acres) RETURNING id INTO v_field;
+  INSERT INTO field_billing_defaults (field_id, customer_id, split_pct, is_primary)
+    VALUES (v_field, v_cust, 100, true);
+  INSERT INTO products (product_name, unit_size, current_cost, tier1_price)
+    VALUES ('[SMOKE] FuelFix Prod '||v_sfx, 'gal', 1.00, 10.00) RETURNING id INTO v_prod;
+
+  -- App service with BOTH vehicle_id AND created_by NULL — the exact condition
+  -- that made preview's whole-record null test false (the MED1 trigger).
+  INSERT INTO application_services (name, default_rate_per_acre_cents, cost_per_acre_cents, is_active)
+    VALUES ('[SMOKE] FuelFix Svc '||v_sfx, 1300, 500, true) RETURNING id INTO v_svc;
+  IF (SELECT vehicle_id FROM application_services WHERE id = v_svc) IS NOT NULL
+     OR (SELECT created_by FROM application_services WHERE id = v_svc) IS NOT NULL THEN
+    RAISE EXCEPTION 'SMOKE_SETUP: app service vehicle_id/created_by should be NULL for the MED1 condition';
+  END IF;
+
+  v_locations := jsonb_build_array(jsonb_build_object(
+    'field_id', v_field, 'map_number', 1,
+    'total_acres', v_acres, 'planted_acres', NULL,
+    'applied_acres', v_acres, 'crop_type', NULL,
+    'wind_direction', NULL, 'sort_order', 0
+  ));
+  -- tier1 $10/gal at 1 gal/ac over 80 ac = $800.00 chem base; + app fee $13/ac*80
+  -- = $1040.00 fee; percent surcharge 5% must be computed on the SUM of both.
+  v_chemicals := jsonb_build_array(jsonb_build_object(
+    'product_id', v_prod, 'description', 'FuelFix Chem',
+    'quantity', 0, 'unit_size', 'gal',
+    'unit_price_cents', NULL, 'cost_cents', 0, 'sort_order', 0,
+    'rate_per_acre', 1.0, 'rate_unit', 'gal',
+    'manual_override', false
+  ));
+
+  -- Enable a PERCENT-basis surcharge for this test.
+  UPDATE app_settings
+     SET setting_value = jsonb_build_object('enabled', true, 'basis', 'percent', 'rate', v_pct_rate)::text
+   WHERE setting_key = 'fuel_surcharge';
+
+  -- ── MED1: preview total === save total (percent basis, app svc w/ null cols) ─
+  v_preview := preview_field_app_invoice_split(v_locations, v_chemicals, v_svc, NULL);
+  v_preview_total := (v_preview->>'grand_total_cents')::bigint;
+
+  v_save := save_field_app_invoice(
+    NULL,
+    jsonb_build_object('invoice_date', CURRENT_DATE::text, 'header_notes', '[SMOKE] med1'),
+    v_locations, v_chemicals, v_admin, v_svc, 'smoke-fuelfix-med1-'||v_sfx
+  );
+  v_inv := ((v_save->'invoice_ids')->>0)::uuid;
+  SELECT total_amount_cents INTO v_save_total FROM invoices WHERE id = v_inv;
+
+  IF v_preview_total <> v_save_total THEN
+    RAISE EXCEPTION 'SMOKE_FAIL(MED1): preview total % != save total % — percent surcharge basis diverged (app-fee dropped from preview subtotal)', v_preview_total, v_save_total;
+  END IF;
+  -- Both must include the app fee in the subtotal: total must exceed chem-only
+  -- ($800) + fee ($1040) = $1840 base by exactly the 5% surcharge on that base.
+  IF v_save_total <> ROUND((80000 + 104000)::numeric * 0.05)::bigint + (80000 + 104000) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL(MED1): save total % != base(184000) + 5%% surcharge(9200) = 193200', v_save_total;
+  END IF;
+  RAISE NOTICE 'MED1 OK: preview total = save total = % cents (5%% on app-fee-incl subtotal)', v_save_total;
+
+  -- ── MED2: malformed config → compute returns 0, AND save still succeeds ──────
+  UPDATE app_settings
+     SET setting_value = 'this is NOT json {{{'
+   WHERE setting_key = 'fuel_surcharge';
+
+  v_compute := compute_fuel_surcharge_cents(v_acres, 100000);
+  IF v_compute <> 0 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL(MED2): malformed config returned % cents — expected 0 (disabled)', v_compute;
+  END IF;
+
+  -- The whole invoice save must NOT abort on the malformed config (no app svc so
+  -- the percent path is irrelevant; the point is the config READ no longer throws).
+  v_save := save_field_app_invoice(
+    NULL,
+    jsonb_build_object('invoice_date', CURRENT_DATE::text, 'header_notes', '[SMOKE] med2'),
+    v_locations, v_chemicals, v_admin, NULL, 'smoke-fuelfix-med2-'||v_sfx
+  );
+  v_inv := ((v_save->'invoice_ids')->>0)::uuid;
+  IF v_inv IS NULL THEN
+    RAISE EXCEPTION 'SMOKE_FAIL(MED2): save aborted / returned no invoice under malformed config';
+  END IF;
+  SELECT total_amount_cents INTO v_save_total FROM invoices WHERE id = v_inv;
+  IF v_save_total <> 80000 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL(MED2): save total % != chem base 80000 (malformed config should add no surcharge)', v_save_total;
+  END IF;
+  RAISE NOTICE 'MED2 OK: malformed config compute=0 AND save succeeded (total = % cents, no surcharge)', v_save_total;
+
+  -- ── OFF: re-confirm shipped default keeps compute inert (0) ─────────────────
+  UPDATE app_settings
+     SET setting_value = jsonb_build_object('enabled', false, 'basis', '', 'rate', '')::text
+   WHERE setting_key = 'fuel_surcharge';
+  v_compute := compute_fuel_surcharge_cents(v_acres, 100000);
+  IF v_compute <> 0 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL(OFF): default-OFF compute returned % — expected 0', v_compute;
+  END IF;
+  RAISE NOTICE 'OFF OK: default-OFF compute = 0 (inert)';
+
+  RAISE NOTICE 'SMOKE2 OK: MED1 preview==save, MED2 malformed→0+save-ok, OFF inert';
+  RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK';
+END $med$;
