@@ -5,7 +5,7 @@
 // rules here decide the default vehicle, validate an entry, and build the
 // persisted patch.
 
-import type { JobAppliedRecord, JobAppliedRecordRow } from '../../types';
+import type { JobAppliedRecord, JobAppliedRecordRow, JobAppliedRecordCrew, GroundCrew, GroundCrewMember } from '../../types';
 
 // Field-app parity #18: a per-location line inside an as-applied entry draft —
 // which field was sprayed in this pass and how many acres on it. String-valued
@@ -50,6 +50,14 @@ export interface AppliedRecordDraft {
   // (GENERATED) and the live computeNetTach() display, not on the draft.
   beginningTach: string;
   endTach: string;
+  // #21: the ground crew + members on this entry. crew_id selects which crew's
+  // members the picker offers; member_ids are the catalog member ids present for
+  // this pass (zero, one, or many). Persisted to the job_applied_record_crew link
+  // table with a name snapshot per member so the legal record survives a later
+  // catalog delete. crew_id is purely a UI convenience (which roster to show) —
+  // the durable per-member crew name is snapshotted at save from the catalog.
+  crew_id: string;
+  member_ids: string[];
 }
 
 export function emptyAppliedRecordDraft(defaults?: Partial<AppliedRecordDraft>): AppliedRecordDraft {
@@ -64,6 +72,8 @@ export function emptyAppliedRecordDraft(defaults?: Partial<AppliedRecordDraft>):
     endWeather: emptyWeatherSetDraft(),
     beginningTach: '',
     endTach: '',
+    crew_id: '',
+    member_ids: [],
     ...defaults,
   };
 }
@@ -103,7 +113,22 @@ function weatherSetFromRecord(
 }
 
 // Turn a persisted row back into an editable draft (string-valued for inputs).
-export function draftFromRecord(rec: JobAppliedRecord & { job_applied_record_fields?: { field_id: string; applied_acres: number }[] }): AppliedRecordDraft {
+export function draftFromRecord(
+  rec: JobAppliedRecord & {
+    job_applied_record_fields?: { field_id: string; applied_acres: number }[];
+    job_applied_record_crew?: Pick<JobAppliedRecordCrew, 'member_id' | 'crew_id_snapshot'>[];
+  },
+): AppliedRecordDraft {
+  const crewRows = rec.job_applied_record_crew ?? [];
+  // The editable crew is the set of members STILL in the catalog (live member_id).
+  // A member deleted from the catalog (member_id NULL) keeps its name snapshot on
+  // the saved row for display, but can't be re-selected in the picker — so it is
+  // not loaded into member_ids. crew_id defaults to the crew the saved members
+  // belonged to (first non-null snapshot) so reopening shows the right roster.
+  const member_ids = crewRows
+    .map((c) => c.member_id)
+    .filter((id): id is string => !!id);
+  const crew_id = crewRows.find((c) => c.crew_id_snapshot)?.crew_id_snapshot ?? '';
   return {
     applicator_id: rec.applicator_id ?? '',
     vehicle_id: rec.vehicle_id ?? '',
@@ -118,6 +143,8 @@ export function draftFromRecord(rec: JobAppliedRecord & { job_applied_record_fie
     endWeather: weatherSetFromRecord(rec, 'end'),
     beginningTach: rec.beginning_tach != null ? String(rec.beginning_tach) : '',
     endTach: rec.end_tach != null ? String(rec.end_tach) : '',
+    crew_id,
+    member_ids,
   };
 }
 
@@ -538,4 +565,76 @@ export function buildAppliedFieldRows(draft: AppliedRecordDraft): AppliedFieldRo
   return draft.fields
     .filter((f) => f.field_id && f.applied_acres.trim() !== '')
     .map((f) => ({ field_id: f.field_id, applied_acres: Number(f.applied_acres) }));
+}
+
+// ── #21 ground-crew rows: build the link rows + display helpers (pure) ───────
+
+// One job_applied_record_crew row to persist (minus application_record_id, which
+// the caller stamps after the parent record saves). member_id is the live FK;
+// the *_snapshot fields are the durable legal record captured at attach time so
+// a later catalog delete (member_id -> NULL) never loses who was present.
+export interface AppliedCrewRow {
+  member_id: string;
+  member_name_snapshot: string;
+  crew_id_snapshot: string | null;
+  crew_name_snapshot: string | null;
+}
+
+// Build the crew link rows for an entry from the draft's selected member_ids,
+// resolving each member's NAME and its crew NAME from the catalog AT SAVE TIME
+// (so the snapshot is durable). Members not found in the catalog are dropped (a
+// stale id can't be attached). The draft's crew_id is the picker's roster choice;
+// the authoritative per-member crew comes from each member's own crew_id, so a
+// member always carries its real crew snapshot even if the picker drifted.
+export function buildAppliedCrewRows(
+  draft: AppliedRecordDraft,
+  members: GroundCrewMember[],
+  crews: GroundCrew[],
+): AppliedCrewRow[] {
+  const memberById = new Map(members.map((m) => [m.id, m]));
+  const crewById = new Map(crews.map((c) => [c.id, c]));
+  const rows: AppliedCrewRow[] = [];
+  const seen = new Set<string>();
+  for (const id of draft.member_ids) {
+    if (!id || seen.has(id)) continue;
+    const m = memberById.get(id);
+    if (!m) continue; // unknown/stale id — never attach an orphan
+    seen.add(id);
+    const crew = crewById.get(m.crew_id) ?? null;
+    rows.push({
+      member_id: m.id,
+      member_name_snapshot: m.name,
+      crew_id_snapshot: m.crew_id ?? null,
+      crew_name_snapshot: crew?.name ?? null,
+    });
+  }
+  return rows;
+}
+
+// Display name for a saved crew link: prefer the LIVE catalog member's name when
+// the member still exists (so a rename shows the current name), otherwise fall
+// back to the durable snapshot (the member was deleted from the catalog). This
+// is the rule that keeps the legal record readable in every state.
+export function crewMemberDisplayName(link: JobAppliedRecordCrew): string {
+  if (link.member_id && link.member?.name) return link.member.name;
+  return link.member_name_snapshot;
+}
+
+// The set of distinct crew names present on a saved entry (for the list cell).
+export function recordCrewNames(rec: JobAppliedRecordRow): string[] {
+  const names = new Set<string>();
+  for (const link of rec.job_applied_record_crew ?? []) {
+    if (link.crew_name_snapshot) names.add(link.crew_name_snapshot);
+  }
+  return [...names];
+}
+
+// ── #21 filter: does an entry include a given crew MEMBER? (pure predicate) ──
+// Parity with ChemMan's "Ground Crew Member" report filter — crew membership is
+// queryable, not just stored. Matches on the live catalog member_id (the stable,
+// rename-proof identity). An empty memberId means "no member filter" -> matches
+// every record, so the filter is opt-in and never hides records by default.
+export function recordHasCrewMember(rec: JobAppliedRecordRow, memberId: string): boolean {
+  if (!memberId) return true;
+  return (rec.job_applied_record_crew ?? []).some((c) => c.member_id === memberId);
 }

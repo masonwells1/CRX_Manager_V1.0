@@ -15,7 +15,7 @@
 // extend AppliedRecordDraft/buildAppliedRecordPatch in appliedRecords.ts.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Plus, Pencil, Trash2, Truck, User, CalendarDays, MapPin, AlertTriangle, X, CloudSun, Clock, Wind, Thermometer, Droplets, Gauge } from 'lucide-react';
+import { Plus, Pencil, Trash2, Truck, User, CalendarDays, MapPin, AlertTriangle, X, CloudSun, Clock, Wind, Thermometer, Droplets, Gauge, Users, Filter } from 'lucide-react';
 import Button from '../ui/Button';
 import Input from '../ui/Input';
 import Modal from '../ui/Modal';
@@ -24,7 +24,8 @@ import { useToast } from '../ui/Toast';
 import { supabase, checkMutationResult } from '../../lib/db';
 import { logActivity } from '../../lib/activityLogger';
 import { fetchWeatherForDateTime } from '../../lib/weatherCapture';
-import type { Profile, Vehicle, JobAppliedRecordRow } from '../../types';
+import GroundCrewsManager from './GroundCrewsManager';
+import type { Profile, Vehicle, JobAppliedRecordRow, GroundCrew, GroundCrewMember } from '../../types';
 import {
   emptyAppliedRecordDraft,
   draftFromRecord,
@@ -32,6 +33,10 @@ import {
   validateAppliedRecord,
   buildAppliedRecordPatch,
   buildAppliedFieldRows,
+  buildAppliedCrewRows,
+  recordCrewNames,
+  crewMemberDisplayName,
+  recordHasCrewMember,
   sumDraftFieldAcres,
   effectiveRecordAcres,
   computeRemainingAcres,
@@ -84,8 +89,13 @@ interface Props {
 // so the list shows each entry's own acres total and the remaining-acres math has
 // everything it needs without a second round-trip. Kept as a single string literal
 // so PostgREST can statically type the embedded result.
+// #21: embed the crew links AND the live catalog member (ground_crew_members has
+// SELECT RLS `USING(true)`, so this embed is readable by every viewer — unlike a
+// `profiles` embed). The live member name lets a renamed member show its current
+// name; the row's own member_name_snapshot is the fallback once the member is
+// deleted from the catalog (member_id -> NULL).
 const RECORD_SELECT =
-  '*, vehicle:vehicles!job_applied_records_vehicle_id_fkey(vehicle_name, vehicle_type), job_applied_record_fields(id, application_record_id, field_id, applied_acres, created_at, updated_at)';
+  '*, vehicle:vehicles!job_applied_records_vehicle_id_fkey(vehicle_name, vehicle_type), job_applied_record_fields(id, application_record_id, field_id, applied_acres, created_at, updated_at), job_applied_record_crew(id, application_record_id, member_id, member_name_snapshot, crew_id_snapshot, crew_name_snapshot, created_at, member:ground_crew_members(name, is_active))';
 
 export default function AppliedRecordsManager({
   jobId,
@@ -112,6 +122,16 @@ export default function AppliedRecordsManager({
 
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
+
+  // #21: the ground-crew catalog (crews + all members) for the modal picker, the
+  // "Manage Crews" sub-modal, and the member filter. Loaded once; refetched when
+  // the manager edits the catalog.
+  const [crews, setCrews] = useState<GroundCrew[]>([]);
+  const [allMembers, setAllMembers] = useState<GroundCrewMember[]>([]);
+  const [manageCrewsOpen, setManageCrewsOpen] = useState(false);
+  // Filter the entry list to passes that included a given crew member (parity
+  // with ChemMan's Ground Crew Member report filter). '' = no filter.
+  const [memberFilter, setMemberFilter] = useState('');
 
   // Resolve the applicator name from the `applicators` prop (sourced from
   // profile_public_view, readable by sales_rep) — NOT from a profiles embed,
@@ -164,9 +184,26 @@ export default function AppliedRecordsManager({
     setLoading(false);
   }, [jobId, toast]);
 
+  // #21: load the ground-crew catalog (crews + their members). Catalog SELECT RLS
+  // is `USING(true)`, so any viewer can read it for the picker/filter. Members are
+  // loaded for ALL crews so the filter dropdown and a saved entry's roster resolve
+  // without a per-crew round-trip.
+  const loadCrews = useCallback(async () => {
+    const [crewRes, memberRes] = await Promise.all([
+      supabase.from('ground_crews').select('*').order('name'),
+      supabase.from('ground_crew_members').select('*').order('name'),
+    ]);
+    if (!crewRes.error) setCrews((crewRes.data as GroundCrew[]) ?? []);
+    if (!memberRes.error) setAllMembers((memberRes.data as GroundCrewMember[]) ?? []);
+  }, []);
+
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    void loadCrews();
+  }, [loadCrews]);
 
   function openAdd() {
     setEditingId(null);
@@ -207,6 +244,9 @@ export default function AppliedRecordsManager({
     const perLocationMode = jobFields.length > 0;
     const patch = buildAppliedRecordPatch(draft, perLocationMode);
     const fieldRows = buildAppliedFieldRows(draft);
+    // #21: resolve the selected crew members into link rows with name snapshots
+    // (durable legal record) from the catalog at save time.
+    const crewRows = buildAppliedCrewRows(draft, allMembers, crews);
     try {
       let recordId = editingId;
       if (editingId) {
@@ -246,6 +286,24 @@ export default function AppliedRecordsManager({
             .insert(fieldRows.map((f) => ({ ...f, application_record_id: recordId })))
             .select();
           checkMutationResult(ins, 'Add applied-info locations');
+        }
+
+        // #21: replace the entry's ground-crew member links. Same delete-then-
+        // insert pattern as the per-location rows: the delete clears the existing
+        // set (a fresh record or an entry with no crew matches ZERO rows, which is
+        // legitimate — surface a real error only, never a 0-rows "denial"). RLS
+        // protects both via the parent record -> job walk.
+        const delCrew = await supabase
+          .from('job_applied_record_crew')
+          .delete()
+          .eq('application_record_id', recordId);
+        if (delCrew.error) throw delCrew.error;
+        if (crewRows.length > 0) {
+          const insCrew = await supabase
+            .from('job_applied_record_crew')
+            .insert(crewRows.map((c) => ({ ...c, application_record_id: recordId })))
+            .select();
+          checkMutationResult(insCrew, 'Add applied-info crew');
         }
       }
 
@@ -318,6 +376,71 @@ export default function AppliedRecordsManager({
     }
     return opts;
   }, [vehicles, draft.vehicle_id, editingRecord]);
+
+  // ── #21 ground-crew picker + filter derived data ─────────────────────────
+  const activeCrews = useMemo(() => {
+    // Active crews, plus the draft's chosen crew if it was since deactivated (so
+    // editing an entry on an old crew never silently drops the crew on save).
+    const opts = crews.filter((c) => c.is_active);
+    if (draft.crew_id && !opts.some((c) => c.id === draft.crew_id)) {
+      const cur = crews.find((c) => c.id === draft.crew_id);
+      if (cur) opts.unshift(cur);
+    }
+    return opts;
+  }, [crews, draft.crew_id]);
+
+  // Members offered in the picker for the draft's selected crew. Active members
+  // of that crew, plus any already-selected member that was since deactivated
+  // (kept checked so an edit doesn't silently drop them).
+  const crewMemberOptions = useMemo(() => {
+    if (!draft.crew_id) return [] as GroundCrewMember[];
+    const inCrew = allMembers.filter((m) => m.crew_id === draft.crew_id);
+    const active = inCrew.filter((m) => m.is_active);
+    const selectedInactive = inCrew.filter(
+      (m) => !m.is_active && draft.member_ids.includes(m.id),
+    );
+    return [...active, ...selectedInactive];
+  }, [allMembers, draft.crew_id, draft.member_ids]);
+
+  function toggleMember(memberId: string) {
+    setDraft((d) => {
+      const has = d.member_ids.includes(memberId);
+      return {
+        ...d,
+        member_ids: has ? d.member_ids.filter((id) => id !== memberId) : [...d.member_ids, memberId],
+      };
+    });
+  }
+
+  // When the crew changes, drop any selected members that no longer belong to it.
+  function onCrewChange(crewId: string) {
+    setDraft((d) => {
+      const keep = new Set(allMembers.filter((m) => m.crew_id === crewId).map((m) => m.id));
+      return { ...d, crew_id: crewId, member_ids: d.member_ids.filter((id) => keep.has(id)) };
+    });
+  }
+
+  // Member-filter dropdown options: members that actually appear on at least one
+  // saved entry of THIS job (resolved by live member_id), so the filter only
+  // offers members the tester can actually narrow by. Labelled with crew name.
+  const filterableMembers = useMemo(() => {
+    const present = new Map<string, string>(); // member_id -> "Name (Crew)"
+    for (const rec of records) {
+      for (const link of rec.job_applied_record_crew ?? []) {
+        if (!link.member_id) continue; // deleted member — not selectable
+        const name = link.member?.name ?? link.member_name_snapshot;
+        const crew = link.crew_name_snapshot ? ` (${link.crew_name_snapshot})` : '';
+        present.set(link.member_id, `${name}${crew}`);
+      }
+    }
+    return [...present.entries()].map(([id, label]) => ({ id, label })).sort((a, b) => a.label.localeCompare(b.label));
+  }, [records]);
+
+  // Apply the member filter (pure predicate; '' = no filter -> all records).
+  const visibleRecords = useMemo(
+    () => records.filter((r) => recordHasCrewMember(r, memberFilter)),
+    [records, memberFilter],
+  );
 
   // ── #18 per-location draft handlers ──────────────────────────────────────
   function addFieldRow() {
@@ -576,18 +699,43 @@ export default function AppliedRecordsManager({
         </div>
       )}
 
-      <div className="flex items-center justify-between mb-3">
+      <div className="flex items-center justify-between mb-3 gap-3 flex-wrap">
         <div>
           <h3 className="text-sm font-semibold text-nav-dark">As-Applied Entries</h3>
           <p className="text-xs text-secondary">
             Who applied, with what vehicle, and on what date. Add one entry per pass / day.
           </p>
         </div>
-        {canEdit && (
-          <Button size="sm" onClick={openAdd}>
-            <Plus className="w-4 h-4" /> Add Applied Info
-          </Button>
-        )}
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* #21 Ground Crew Member filter — parity with ChemMan's report filter.
+              Only offers members that appear on this job's saved entries. */}
+          {filterableMembers.length > 0 && (
+            <div className="flex items-center gap-1">
+              <Filter className="w-3.5 h-3.5 text-secondary" />
+              <select
+                value={memberFilter}
+                onChange={(e) => setMemberFilter(e.target.value)}
+                aria-label="Filter by crew member"
+                className="px-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              >
+                <option value="">All crew members</option>
+                {filterableMembers.map((m) => (
+                  <option key={m.id} value={m.id}>{m.label}</option>
+                ))}
+              </select>
+            </div>
+          )}
+          {canEdit && (
+            <Button size="sm" variant="secondary" onClick={() => setManageCrewsOpen(true)}>
+              <Users className="w-4 h-4" /> Manage Crews
+            </Button>
+          )}
+          {canEdit && (
+            <Button size="sm" onClick={openAdd}>
+              <Plus className="w-4 h-4" /> Add Applied Info
+            </Button>
+          )}
+        </div>
       </div>
 
       {loading ? (
@@ -595,6 +743,13 @@ export default function AppliedRecordsManager({
       ) : records.length === 0 ? (
         <p className="text-sm text-secondary py-3">
           No applied-info entries yet.{canEdit ? ' Use "Add Applied Info" to record the first pass.' : ''}
+        </p>
+      ) : visibleRecords.length === 0 ? (
+        <p className="text-sm text-secondary py-3">
+          No entries match the selected crew member.{' '}
+          <button type="button" onClick={() => setMemberFilter('')} className="text-crx-green hover:underline">
+            Clear filter
+          </button>
         </p>
       ) : (
         <div className="overflow-x-auto border border-gray-200 rounded-lg">
@@ -617,12 +772,15 @@ export default function AppliedRecordsManager({
                 <th className="text-right font-medium px-3 py-2">
                   <Gauge className="w-3.5 h-3.5 inline mr-1" />Tach (Beg / End / Net)
                 </th>
+                <th className="text-left font-medium px-3 py-2">
+                  <Users className="w-3.5 h-3.5 inline mr-1" />Ground Crew
+                </th>
                 <th className="text-left font-medium px-3 py-2">Notes</th>
                 {canEdit && <th className="px-3 py-2"></th>}
               </tr>
             </thead>
             <tbody>
-              {records.map((rec) => {
+              {visibleRecords.map((rec) => {
                 const locs = rec.job_applied_record_fields ?? [];
                 // Effective acres = child-sum when per-location, else the manual
                 // figure — the SAME rule the job summary and the DB use, so this
@@ -706,6 +864,31 @@ export default function AppliedRecordsManager({
                         )}
                       </div>
                     )}
+                  </td>
+                  <td className="px-3 py-2 text-xs whitespace-nowrap">
+                    {(() => {
+                      const links = rec.job_applied_record_crew ?? [];
+                      if (links.length === 0) return <span className="text-secondary">—</span>;
+                      const crewNames = recordCrewNames(rec);
+                      return (
+                        <div className="space-y-0.5">
+                          {crewNames.length > 0 && (
+                            <div className="font-medium text-nav-dark">{crewNames.join(', ')}</div>
+                          )}
+                          <ul className="text-secondary">
+                            {links.map((link) => (
+                              <li key={link.id} className="flex items-center gap-1">
+                                <User className="w-3 h-3" />
+                                <span>{crewMemberDisplayName(link)}</span>
+                                {!link.member_id && (
+                                  <span className="text-[10px] text-gray-400">(removed)</span>
+                                )}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      );
+                    })()}
                   </td>
                   <td className="px-3 py-2 text-secondary">{rec.notes ?? ''}</td>
                   {canEdit && (
@@ -967,6 +1150,60 @@ export default function AppliedRecordsManager({
             )}
           </div>
 
+          {/* #21 ground crew + members on this pass. Pick a crew, then check the
+              members who were present (zero, one, or many). Members reference the
+              managed catalog (renamed crew/member updates everywhere); a member
+              later removed from the catalog still shows on this saved record via a
+              name snapshot. Use "Manage Crews" to add a crew/member if missing. */}
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="block text-sm font-medium text-nav-dark">
+                <Users className="w-3.5 h-3.5 inline mr-1" />Ground Crew
+              </label>
+              <Button type="button" size="sm" variant="secondary" onClick={() => setManageCrewsOpen(true)}>
+                Manage Crews
+              </Button>
+            </div>
+            <select
+              value={draft.crew_id}
+              onChange={(e) => onCrewChange(e.target.value)}
+              aria-label="Ground crew"
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+            >
+              <option value="">No ground crew</option>
+              {activeCrews.map((c) => (
+                <option key={c.id} value={c.id}>{c.is_active ? c.name : `${c.name} (inactive)`}</option>
+              ))}
+            </select>
+
+            {draft.crew_id && (
+              crewMemberOptions.length === 0 ? (
+                <p className="text-xs text-secondary mt-2">
+                  This crew has no members yet. Use &ldquo;Manage Crews&rdquo; to add some.
+                </p>
+              ) : (
+                <div className="mt-2">
+                  <p className="text-xs text-secondary mb-1">Members present on this pass:</p>
+                  <div className="space-y-1.5 max-h-40 overflow-y-auto rounded-lg border border-gray-200 p-2">
+                    {crewMemberOptions.map((m) => (
+                      <label key={m.id} className="flex items-center gap-2 text-sm cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={draft.member_ids.includes(m.id)}
+                          onChange={() => toggleMember(m.id)}
+                          aria-label={`Member ${m.name}`}
+                          className="rounded border-gray-300 text-crx-green focus:ring-crx-green/20"
+                        />
+                        <span className="text-nav-dark">{m.name}</span>
+                        {!m.is_active && <span className="text-[10px] text-gray-400">(inactive)</span>}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )
+            )}
+          </div>
+
           <div>
             <label className="block text-sm font-medium text-nav-dark mb-1">Notes</label>
             <textarea
@@ -996,6 +1233,16 @@ export default function AppliedRecordsManager({
         confirmLabel="Remove"
         variant="danger"
         loading={deleting}
+      />
+
+      {/* #21: reuse the #6 ground-crew catalog manager (create/rename/deactivate
+          crews + add/remove members). On any change, refetch the catalog AND the
+          records (a renamed member resolves live on saved entries via the embed). */}
+      <GroundCrewsManager
+        open={manageCrewsOpen}
+        onClose={() => setManageCrewsOpen(false)}
+        crews={crews}
+        onChanged={() => { void loadCrews(); void load(); }}
       />
     </div>
   );

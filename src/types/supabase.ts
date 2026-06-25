@@ -3805,6 +3805,51 @@ export type Database = {
           },
         ]
       }
+      job_applied_record_crew: {
+        Row: {
+          application_record_id: string
+          created_at: string
+          crew_id_snapshot: string | null
+          crew_name_snapshot: string | null
+          id: string
+          member_id: string | null
+          member_name_snapshot: string
+        }
+        Insert: {
+          application_record_id: string
+          created_at?: string
+          crew_id_snapshot?: string | null
+          crew_name_snapshot?: string | null
+          id?: string
+          member_id?: string | null
+          member_name_snapshot: string
+        }
+        Update: {
+          application_record_id?: string
+          created_at?: string
+          crew_id_snapshot?: string | null
+          crew_name_snapshot?: string | null
+          id?: string
+          member_id?: string | null
+          member_name_snapshot?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "job_applied_record_crew_application_record_id_fkey"
+            columns: ["application_record_id"]
+            isOneToOne: false
+            referencedRelation: "job_applied_records"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "job_applied_record_crew_member_id_fkey"
+            columns: ["member_id"]
+            isOneToOne: false
+            referencedRelation: "ground_crew_members"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       job_applied_record_fields: {
         Row: {
           application_record_id: string

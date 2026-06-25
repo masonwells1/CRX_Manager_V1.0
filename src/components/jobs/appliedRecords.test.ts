@@ -20,9 +20,13 @@ import {
   computeRemainingAcres,
   draftFromRecord,
   emptyAppliedRecordDraft,
+  buildAppliedCrewRows,
+  crewMemberDisplayName,
+  recordCrewNames,
+  recordHasCrewMember,
   type WeatherSetDraft,
 } from './appliedRecords';
-import type { JobAppliedRecord, JobAppliedRecordField, JobAppliedRecordRow } from '../../types';
+import type { JobAppliedRecord, JobAppliedRecordField, JobAppliedRecordRow, JobAppliedRecordCrew, GroundCrew, GroundCrewMember } from '../../types';
 
 // Null-filled #19 weather columns, so test records satisfy the JobAppliedRecord
 // shape without every case spelling them out (override via `over` as needed).
@@ -185,6 +189,7 @@ describe('draftFromRecord round-trip', () => {
       applied_acres: '33.5', notes: 'n', fields: [],
       startWeather: emptyWeatherSetDraft(), endWeather: emptyWeatherSetDraft(),
       beginningTach: '', endTach: '',
+      crew_id: '', member_ids: [],
     });
   });
 
@@ -201,6 +206,7 @@ describe('draftFromRecord round-trip', () => {
       applied_acres: '', notes: '', fields: [],
       startWeather: emptyWeatherSetDraft(), endWeather: emptyWeatherSetDraft(),
       beginningTach: '', endTach: '',
+      crew_id: '', member_ids: [],
     });
   });
 
@@ -711,5 +717,133 @@ describe('#20 draftFromRecord — tach round-trip', () => {
     const d = draftFromRecord(rec({}));
     expect(d.beginningTach).toBe('');
     expect(d.endTach).toBe('');
+  });
+});
+
+// ── #21 ground crew + members on an applied record ──────────────────────────
+
+const CREWS: GroundCrew[] = [
+  { id: 'crew-N', name: 'Crew North', is_active: true, created_by: null, created_at: 'x', updated_at: 'x' },
+  { id: 'crew-S', name: 'Crew South', is_active: true, created_by: null, created_at: 'x', updated_at: 'x' },
+];
+const MEMBERS: GroundCrewMember[] = [
+  { id: 'm-carlos', crew_id: 'crew-N', name: 'Carlos', profile_id: null, is_active: true, created_at: 'x', updated_at: 'x' },
+  { id: 'm-dana', crew_id: 'crew-N', name: 'Dana', profile_id: null, is_active: true, created_at: 'x', updated_at: 'x' },
+  { id: 'm-evan', crew_id: 'crew-S', name: 'Evan', profile_id: null, is_active: true, created_at: 'x', updated_at: 'x' },
+];
+
+// Build a saved record carrying ground-crew links (#21).
+function recWithCrew(links: Partial<JobAppliedRecordCrew>[]): JobAppliedRecordRow {
+  const full: JobAppliedRecordCrew[] = links.map((l, i) => ({
+    id: l.id ?? `c${i}`,
+    application_record_id: 'r1',
+    member_id: l.member_id ?? null,
+    member_name_snapshot: l.member_name_snapshot ?? 'Snapshot',
+    crew_id_snapshot: l.crew_id_snapshot ?? null,
+    crew_name_snapshot: l.crew_name_snapshot ?? null,
+    created_at: 'x',
+    member: l.member,
+  }));
+  return rec({ id: 'r1', job_applied_record_crew: full });
+}
+
+describe('#21 buildAppliedCrewRows — snapshots resolved from catalog', () => {
+  it('resolves each selected member name + crew name from the catalog', () => {
+    const draft = emptyAppliedRecordDraft({ crew_id: 'crew-N', member_ids: ['m-carlos', 'm-dana'] });
+    const rows = buildAppliedCrewRows(draft, MEMBERS, CREWS);
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toMatchObject({ member_id: 'm-carlos', member_name_snapshot: 'Carlos', crew_id_snapshot: 'crew-N', crew_name_snapshot: 'Crew North' });
+    expect(rows[1]).toMatchObject({ member_id: 'm-dana', member_name_snapshot: 'Dana', crew_name_snapshot: 'Crew North' });
+  });
+  it('drops unknown/stale member ids (never attaches an orphan)', () => {
+    const draft = emptyAppliedRecordDraft({ crew_id: 'crew-N', member_ids: ['m-carlos', 'ghost'] });
+    const rows = buildAppliedCrewRows(draft, MEMBERS, CREWS);
+    expect(rows.map((r) => r.member_id)).toEqual(['m-carlos']);
+  });
+  it('de-duplicates a member listed twice', () => {
+    const draft = emptyAppliedRecordDraft({ member_ids: ['m-carlos', 'm-carlos'] });
+    const rows = buildAppliedCrewRows(draft, MEMBERS, CREWS);
+    expect(rows).toHaveLength(1);
+  });
+  it('carries each member’s OWN crew snapshot, even across crews', () => {
+    const draft = emptyAppliedRecordDraft({ member_ids: ['m-carlos', 'm-evan'] });
+    const rows = buildAppliedCrewRows(draft, MEMBERS, CREWS);
+    const byMember = Object.fromEntries(rows.map((r) => [r.member_id, r.crew_name_snapshot]));
+    expect(byMember['m-carlos']).toBe('Crew North');
+    expect(byMember['m-evan']).toBe('Crew South');
+  });
+  it('returns no rows when no members selected', () => {
+    const draft = emptyAppliedRecordDraft({ crew_id: 'crew-N', member_ids: [] });
+    expect(buildAppliedCrewRows(draft, MEMBERS, CREWS)).toEqual([]);
+  });
+});
+
+describe('#21 crewMemberDisplayName — live name vs snapshot (legal record)', () => {
+  it('shows the LIVE member name when the member still exists (handles renames)', () => {
+    const link: JobAppliedRecordCrew = {
+      id: 'c1', application_record_id: 'r1', member_id: 'm-carlos',
+      member_name_snapshot: 'Carlos', crew_id_snapshot: 'crew-N', crew_name_snapshot: 'Crew North',
+      created_at: 'x', member: { name: 'Carlos Renamed', is_active: true },
+    };
+    expect(crewMemberDisplayName(link)).toBe('Carlos Renamed');
+  });
+  it('falls back to the snapshot once the member is deleted (member_id NULL)', () => {
+    const link: JobAppliedRecordCrew = {
+      id: 'c1', application_record_id: 'r1', member_id: null,
+      member_name_snapshot: 'Carlos', crew_id_snapshot: 'crew-N', crew_name_snapshot: 'Crew North',
+      created_at: 'x', member: null,
+    };
+    expect(crewMemberDisplayName(link)).toBe('Carlos');
+  });
+});
+
+describe('#21 recordCrewNames + recordHasCrewMember (filter parity)', () => {
+  it('lists the distinct crew names on an entry', () => {
+    const r = recWithCrew([
+      { member_id: 'm-carlos', crew_name_snapshot: 'Crew North' },
+      { member_id: 'm-dana', crew_name_snapshot: 'Crew North' },
+      { member_id: 'm-evan', crew_name_snapshot: 'Crew South' },
+    ]);
+    expect(recordCrewNames(r).sort()).toEqual(['Crew North', 'Crew South']);
+  });
+  it('matches a record that includes the given member', () => {
+    const r = recWithCrew([{ member_id: 'm-carlos' }, { member_id: 'm-dana' }]);
+    expect(recordHasCrewMember(r, 'm-carlos')).toBe(true);
+    expect(recordHasCrewMember(r, 'm-evan')).toBe(false);
+  });
+  it('empty member filter matches every record (opt-in filter)', () => {
+    const r = recWithCrew([{ member_id: 'm-carlos' }]);
+    expect(recordHasCrewMember(r, '')).toBe(true);
+    expect(recordHasCrewMember(rec({}), '')).toBe(true);
+  });
+  it('a deleted member (member_id NULL) does not match by id', () => {
+    const r = recWithCrew([{ member_id: null, member_name_snapshot: 'Carlos' }]);
+    expect(recordHasCrewMember(r, 'm-carlos')).toBe(false);
+  });
+});
+
+describe('#21 draftFromRecord — crew round-trip', () => {
+  it('loads selectable members (live member_id) and the crew from snapshots', () => {
+    const r = recWithCrew([
+      { member_id: 'm-carlos', crew_id_snapshot: 'crew-N' },
+      { member_id: 'm-dana', crew_id_snapshot: 'crew-N' },
+    ]);
+    const d = draftFromRecord(r);
+    expect(d.crew_id).toBe('crew-N');
+    expect(d.member_ids.sort()).toEqual(['m-carlos', 'm-dana']);
+  });
+  it('excludes deleted members (member_id NULL) from the editable selection but keeps the crew', () => {
+    const r = recWithCrew([
+      { member_id: 'm-carlos', crew_id_snapshot: 'crew-N' },
+      { member_id: null, member_name_snapshot: 'Gone', crew_id_snapshot: 'crew-N' },
+    ]);
+    const d = draftFromRecord(r);
+    expect(d.member_ids).toEqual(['m-carlos']);
+    expect(d.crew_id).toBe('crew-N');
+  });
+  it('leaves crew blank when the record has no crew', () => {
+    const d = draftFromRecord(rec({}));
+    expect(d.crew_id).toBe('');
+    expect(d.member_ids).toEqual([]);
   });
 });

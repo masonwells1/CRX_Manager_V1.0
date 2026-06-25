@@ -2169,12 +2169,36 @@ export interface JobAppliedRecordField {
   updated_at: string;
 }
 
+// Field-app parity #21: a ground-crew MEMBER attached to one as-applied entry.
+// Link table between job_applied_records (#17) and the ground_crew_members
+// catalog (#6). member_id is a live FK (ON DELETE SET NULL) so a member later
+// removed from the catalog never erases the legal record of who was on the crew
+// that day — member_name_snapshot (NOT NULL) + crew_*_snapshot are captured at
+// attach time and persist even after member_id goes NULL. Show the live member
+// name when present (handles renames), the snapshot once the member is deleted.
+export interface JobAppliedRecordCrew {
+  id: string;
+  application_record_id: string;
+  /** Live FK to the catalog member; NULL once that member is deleted (record survives via the snapshot). */
+  member_id: string | null;
+  /** Durable name captured at attach time — the legal record of who was present. */
+  member_name_snapshot: string;
+  crew_id_snapshot: string | null;
+  crew_name_snapshot: string | null;
+  created_at: string;
+  // Joined: the live catalog member (null when deleted) — lets the UI show a
+  // renamed member's current name while it still exists.
+  member?: { name: string | null; is_active: boolean } | null;
+}
+
 // Joined display shape used by the Applied Info tab (record + resolved names +
-// its per-location applied-acres detail rows).
+// its per-location applied-acres detail rows + its ground-crew members).
 export interface JobAppliedRecordRow extends JobAppliedRecord {
   applicator?: { full_name: string | null } | null;
   vehicle?: { vehicle_name: string | null; vehicle_type: string | null } | null;
   job_applied_record_fields?: JobAppliedRecordField[];
+  // #21: the ground-crew members attached to this entry.
+  job_applied_record_crew?: JobAppliedRecordCrew[];
 }
 
 // Sprint 9: Report Row Types
