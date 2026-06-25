@@ -5,9 +5,11 @@ import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import MultiSelectDropdown, { type MultiSelectOption } from '../components/jobs/MultiSelectDropdown';
 import { useToast } from '../components/ui/Toast';
-import { supabase } from '../lib/db';
+import { supabase, assertRpcResult } from '../lib/db';
 import { Sentry } from '../lib/sentry';
 import { runCriticalAction } from '../lib/criticalAction';
+import { generateIdempotencyKey } from '../lib/idempotency';
+import ConfirmModal from '../components/ui/ConfirmModal';
 import {
   buildInvoicePdfDataFromRow,
   generateBatchInvoicePdf,
@@ -86,6 +88,13 @@ export default function FieldInvoicesPosted() {
   const [filters, setFilters] = useState<FieldInvoiceListFilters>(emptyFieldInvoiceFilters);
   const [scope, setScope] = useState<PostedScope>(defaultPostedScope);
   const [busy, setBusy] = useState(false);
+  // #28: bulk Unpost All — confirm gate + in-flight guard.
+  const [showUnpostConfirm, setShowUnpostConfirm] = useState(false);
+  const [unposting, setUnposting] = useState(false);
+  // #28: per-invoice idempotency key cache (keyed by invoice id), so a retry after a
+  // timeout reuses the SAME key and the server dedup matches — never a double unpost.
+  // Mirrors the Unposted list's Post All (postKeysRef). Cleared on a clean run.
+  const unpostKeysRef = useRef<Record<string, string>>({});
   // Per-row action guard so a double-click can't fire two prints/emails.
   const rowActionRef = useRef(false);
 
@@ -355,13 +364,73 @@ export default function FieldInvoicesPosted() {
     });
   };
 
-  // --- UNPOST ALL (parity placeholder — the actual unpost is #28) ---
-  // No unpost_invoice RPC exists yet (it needs a dedicated migration in #28).
-  // Reversing a posted invoice is a ledger mutation that must go through that
-  // gated RPC — we will NOT fake it with a raw status update. Until #28 lands,
-  // the button is present for ChemMan parity but explains it is unavailable.
-  const unpostAll = () => {
-    toast('info', 'Unpost is coming soon. To reverse a posted invoice, open it and use the Unpost action (in development).');
+  // --- UNPOST ALL (#28) ---
+  // Real bulk unpost: reverse every UNPAID posted/overdue invoice in the shown
+  // set back to the Unposted list, one at a time through the gated unpost_invoice
+  // RPC (per-invoice idempotency key, .throwOnError() + assertRpcResult). A 'paid'
+  // invoice can't be unposted (money applied) — it is skipped, not failed. Each
+  // call respects the closed-period and money guards in the RPC; if one fails the
+  // others still process and we report a clear per-invoice failure summary.
+  // The button is gated behind a ConfirmModal (openable below), then refreshes.
+  const candidates = useMemo(
+    () => visible.filter((r) => r.status === 'posted' || r.status === 'overdue'),
+    [visible],
+  );
+
+  const runUnpostAll = async () => {
+    setShowUnpostConfirm(false);
+    if (!profile) { toast('error', 'Profile not loaded — please refresh.'); return; }
+    if (candidates.length === 0) { toast('error', 'No unpostable invoices in view (paid invoices cannot be unposted).'); return; }
+    setUnposting(true);
+    let ok = 0;
+    const failures: string[] = [];
+    try {
+      for (const row of candidates) {
+        // Reuse a cached per-invoice key on retry so the server dedup matches.
+        if (!unpostKeysRef.current[row.id]) {
+          unpostKeysRef.current[row.id] = generateIdempotencyKey('unpost_invoice', `${profile.id}:${row.id}`);
+        }
+        try {
+          const { data, error } = await supabase.rpc('unpost_invoice', {
+            p_invoice_id: row.id,
+            p_performed_by: profile.id,
+            p_idempotency_key: unpostKeysRef.current[row.id],
+          });
+          if (error) throw error;
+          assertRpcResult(data, 'unpost_invoice');
+          ok += 1;
+          // Succeeded — drop this invoice's key so a later run mints a fresh one.
+          delete unpostKeysRef.current[row.id];
+        } catch (err) {
+          Sentry.captureException(err, { tags: { rpc: 'unpost_invoice', page: 'field-invoices-posted' } });
+          const msg = err instanceof Error ? err.message : String(err);
+          failures.push(`${row.invoice_number}: ${msg}`);
+          // Keep the failed invoice's key cached so a retry reuses it.
+        }
+      }
+
+      if (failures.length === 0) {
+        toast('success', `Unposted ${ok} invoice(s) — returned to the Unposted list.`);
+      } else if (ok > 0) {
+        toast('error', `Unposted ${ok}, but ${failures.length} could not be unposted. ${failures[0]}`);
+      } else {
+        toast('error', `Could not unpost. ${failures[0]}`);
+      }
+
+      if (ok > 0) {
+        logActivity({
+          event: 'invoices_bulk_unposted',
+          description: `Bulk unposted ${ok} field invoice(s) from the Posted list`,
+          performedBy: profile.id,
+          entityType: 'invoice',
+          entityId: candidates[0].id,
+        });
+      }
+
+      await fetchInvoices();
+    } finally {
+      setUnposting(false);
+    }
   };
 
   if (loading) {
@@ -623,15 +692,34 @@ export default function FieldInvoicesPosted() {
               variant="secondary"
               size="sm"
               icon={<RotateCcw className="w-4 h-4" />}
-              onClick={unpostAll}
-              disabled={visible.length === 0}
-              title="Unpost reverses posted invoices (in development — #28)"
+              onClick={() => setShowUnpostConfirm(true)}
+              loading={unposting}
+              disabled={unposting || candidates.length === 0}
+              title="Return every unpaid posted invoice in view to the Unposted list"
             >
-              Unpost All
+              Unpost All{candidates.length > 0 ? ` (${candidates.length})` : ''}
             </Button>
           </div>
         </div>
       </Card>
+
+      {/* #28: bulk Unpost All confirm. Reverses every unpaid posted/overdue invoice
+          shown back to the Unposted list (paid invoices are skipped). */}
+      <ConfirmModal
+        open={showUnpostConfirm}
+        onClose={() => setShowUnpostConfirm(false)}
+        onConfirm={runUnpostAll}
+        title="Unpost All Shown Invoices"
+        message={
+          `Return ${candidates.length} posted invoice(s) to the Unposted list? ` +
+          `This reverses their posting so they become editable again and updates the ` +
+          `affected month-end batch totals. Paid invoices are skipped. Invoices in a ` +
+          `closed accounting period cannot be unposted.`
+        }
+        confirmLabel={`Unpost ${candidates.length}`}
+        variant="warning"
+        loading={unposting}
+      />
     </div>
   );
 }

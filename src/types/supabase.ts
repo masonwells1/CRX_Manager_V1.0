@@ -9676,6 +9676,14 @@ export type Database = {
         }
         Returns: undefined
       }
+      unpost_invoice: {
+        Args: {
+          p_idempotency_key?: string
+          p_invoice_id: string
+          p_performed_by: string
+        }
+        Returns: Json
+      }
       update_blend_ticket_billing_status: {
         Args: {
           p_blend_ticket_id: string

@@ -12,6 +12,7 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, sanitizeError, assertRpcResult } from '../lib/db';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
+import { generateIdempotencyKey } from '../lib/idempotency';
 import { parseDollarsToCents } from '../lib/parseCents';
 import type { Invoice, InvoiceType, InvoiceStatus, Product, Customer, InvoiceShare, InvoicePrintOptions } from '../types';
 import { downloadInvoicePdf, generateInvoicePdf, type InvoicePdfData, type InvoicePdfItem } from '../lib/invoicePdf';
@@ -93,6 +94,12 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
   // (a transferred invoice has a job_id but NO field_app_locations, so the #24
   // discriminator routes it here, not to the per-acre FieldApplicationInvoice).
   const transferToSchedulingIdem = useIdempotencyKey('transfer_invoice_to_job', profile?.id || '');
+  // #28: Unpost — reverse a posting on a posted field-application invoice (returns it
+  // to the editable Unposted list). Surfaced here so a TRANSFERRED field invoice (which
+  // opens in THIS generic editor, not the per-acre one) can be unposted in place.
+  // #28: Unpost key cache (keyed by invoice id) so a retry reuses the same key — the
+  // group case unposts several members, each needing its own stable key.
+  const unpostKeysRef = useRef<Record<string, string>>({});
   const { warning: creditWarning, check: checkCreditLimit, dismiss: dismissCreditWarning } = useCreditLimitCheck();
   const isNew = id === 'new';
 
@@ -150,6 +157,9 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
   const [showVoidModal, setShowVoidModal] = useState(false);
   const [voidReason, setVoidReason] = useState('');
   const [voiding, setVoiding] = useState(false);
+  // #28: Unpost confirm + in-flight (field-application invoices only).
+  const [showUnpostModal, setShowUnpostModal] = useState(false);
+  const [unposting, setUnposting] = useState(false);
 
   // #27: reverse "Transfer to Scheduling" — confirm + in-flight state.
   const [showTransferToSchedulingModal, setShowTransferToSchedulingModal] = useState(false);
@@ -680,6 +690,64 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
     setVoiding(false);
   };
 
+  // #28: Unpost invoice — reverse a posting (posted/overdue -> unposted) on a
+  // field-application invoice, returning it to the editable Unposted list. The
+  // gated unpost_invoice RPC refuses a paid/voided invoice, one with payments/prepay
+  // applied, or one in a closed accounting period — surfaced here as a toast. A
+  // split group is unposted member-by-member (no group RPC); each call is idempotent.
+  const handleUnpost = async () => {
+    if (!id || !profile) return;
+    setUnposting(true);
+    let ok = 0;
+    const failures: string[] = [];
+    try {
+      // Resolve the unpost target list. For a split group, unpost every posted/overdue
+      // member (mirrors how Post is group-aware); otherwise just this invoice.
+      let targetIds: string[] = [id];
+      if (invoice.invoice_group_id) {
+        const { data: members, error: memErr } = await supabase
+          .from('invoices')
+          .select('id, status')
+          .eq('invoice_group_id', invoice.invoice_group_id)
+          .in('status', ['posted', 'overdue']);
+        if (memErr) throw memErr;
+        const ids = (members || []).map((m) => (m as { id: string }).id);
+        if (ids.length > 0) targetIds = ids;
+      }
+      for (const invId of targetIds) {
+        // Per-invoice key cache so a timeout retry reuses the same key (no double unpost).
+        if (!unpostKeysRef.current[invId]) {
+          unpostKeysRef.current[invId] = generateIdempotencyKey('unpost_invoice', `${profile.id}:${invId}`);
+        }
+        try {
+          const { data, error } = await supabase.rpc('unpost_invoice', {
+            p_invoice_id: invId,
+            p_performed_by: profile.id,
+            p_idempotency_key: unpostKeysRef.current[invId],
+          });
+          if (error) throw error;
+          assertRpcResult(data, 'unpost_invoice');
+          ok += 1;
+          delete unpostKeysRef.current[invId];
+        } catch (err: unknown) {
+          Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'unpost_invoice' } });
+          failures.push(sanitizeError(err));
+        }
+      }
+      if (failures.length === 0) {
+        toast('success', targetIds.length > 1 ? `Unposted ${ok} invoice(s)` : 'Invoice unposted');
+      } else if (ok > 0) {
+        toast('error', `Unposted ${ok}, but ${failures.length} failed: ${failures[0]}`);
+      } else {
+        toast('error', failures[0]);
+      }
+      setShowUnpostModal(false);
+      fetchInvoice(id);
+    } finally {
+      setUnposting(false);
+    }
+  };
+
   // #27: Transfer back to Scheduling — the reverse of transfer_job_to_invoice.
   // Cancels this draft/unposted job-built field invoice (deletes its items + shares,
   // detaches the as-applied records) and returns the source job to 'completed' so it
@@ -1074,6 +1142,23 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
                 Write Off
               </Button>
             </>
+          )}
+          {/* #28: Unpost — reverse a posting on a field-application invoice back to the
+              Unposted list. Surfaced here because a TRANSFERRED field invoice opens in
+              this generic editor (job_id, no field_app_locations). Posted/overdue only;
+              the RPC refuses one with payments/prepay or in a closed period. */}
+          {!isNew && invoice.invoice_type === 'field_application'
+            && (invoice.status === 'posted' || invoice.status === 'overdue') && isAdmin && (
+              <Button
+                variant="secondary"
+                icon={<RotateCcw className="w-4 h-4" />}
+                onClick={() => setShowUnpostModal(true)}
+                loading={unposting}
+                disabled={unposting}
+                showChevron={false}
+              >
+                Unpost
+              </Button>
           )}
           {!isNew && invoice.status === 'posted' && isAdmin && (
               <Button variant="ghost" icon={<Ban className="w-4 h-4" />} onClick={() => { voidIdem.resetKey(); setShowVoidModal(true); }}>
@@ -1638,6 +1723,24 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
         variant="info"
         icon={RotateCcw}
         loading={transferringToScheduling}
+      />
+
+      {/* #28: Unpost confirm — reverse a posting back to the Unposted list. */}
+      <ConfirmModal
+        open={showUnpostModal}
+        onClose={() => setShowUnpostModal(false)}
+        onConfirm={handleUnpost}
+        title={invoice.invoice_group_id ? 'Unpost Invoice Group' : 'Unpost Invoice'}
+        message={
+          (invoice.invoice_group_id
+            ? 'Return every posted invoice in this split group to the Unposted list? '
+            : 'Return this invoice to the Unposted list? ') +
+          'This reverses the posting so it becomes editable again and updates the affected month-end batch totals. An invoice with payments or prepay applied, or one in a closed accounting period, cannot be unposted.'
+        }
+        confirmLabel={invoice.invoice_group_id ? 'Unpost Group' : 'Unpost Invoice'}
+        variant="warning"
+        icon={RotateCcw}
+        loading={unposting}
       />
     </div>
   );

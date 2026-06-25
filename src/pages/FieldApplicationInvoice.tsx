@@ -1,8 +1,8 @@
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import {
   Save, Send, Trash2, MapPin, FlaskConical, Users, ClipboardList, ArrowLeft, Eye, AlertTriangle,
-  Printer, Bell, Lock, X, CornerUpLeft, Wind, Thermometer, Tractor, Gauge, CalendarDays, Clock,
+  Printer, Bell, Lock, X, CornerUpLeft, RotateCcw, Wind, Thermometer, Tractor, Gauge, CalendarDays, Clock,
 } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -11,6 +11,7 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, sanitizeError, assertRpcResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
+import { generateIdempotencyKey } from '../lib/idempotency';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { logActivity } from '../lib/activityLogger';
 import { Sentry } from '../lib/sentry';
@@ -118,6 +119,10 @@ export default function FieldApplicationInvoice() {
   const deleteIdem = useIdempotencyKey('delete_invoices', profile?.id || '');
   // #27: reverse "Transfer to Scheduling" — push a job-built invoice back to its job.
   const transferToSchedulingIdem = useIdempotencyKey('transfer_invoice_to_job', profile?.id || '');
+  // #28: Unpost — reverse a posting (posted/overdue -> unposted) right on this screen.
+  // Per-invoice key cache (keyed by invoice id) so a retry reuses the same key — the
+  // group case unposts several members, each needing its own stable key.
+  const unpostKeysRef = useRef<Record<string, string>>({});
 
   const [activeTab, setActiveTab] = useState<TabKey>('locations');
   const [saving, setSaving] = useState(false);
@@ -125,6 +130,10 @@ export default function FieldApplicationInvoice() {
   const [dirty, setDirty] = useState(false);
   const [showLocationsModal, setShowLocationsModal] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  // #28: Post confirm + Unpost confirm/in-flight state.
+  const [showPostConfirm, setShowPostConfirm] = useState(false);
+  const [showUnpostConfirm, setShowUnpostConfirm] = useState(false);
+  const [unposting, setUnposting] = useState(false);
   // #27: reverse "Transfer to Scheduling" — confirm + in-flight state.
   const [showTransferToSchedulingConfirm, setShowTransferToSchedulingConfirm] = useState(false);
   const [transferringToScheduling, setTransferringToScheduling] = useState(false);
@@ -837,12 +846,75 @@ export default function FieldApplicationInvoice() {
     }
   };
 
+  // #28: Unpost — reverse the posting (posted/overdue -> unposted) right on this
+  // editor, the inverse of Post. Group-aware to mirror Post: a split group is
+  // unposted member-by-member through the gated unpost_invoice RPC (each call is
+  // idempotent + honors the money/closed-period guards in the RPC). A single
+  // invoice unposts itself. The RPC refuses a paid/voided invoice or one in a
+  // closed period with a plain-English error surfaced as a toast.
+  const handleUnpost = async () => {
+    if (!profile || !id) return;
+    // Build the target list: every posted/overdue member of the group (or just this
+    // invoice). Skip members that are not posted/overdue (nothing to unpost there).
+    const groupMembers = invoiceGroupId && siblings.length > 0 ? siblings : [{ id, status }];
+    const targets = groupMembers.filter((m) => m.status === 'posted' || m.status === 'overdue');
+    if (targets.length === 0) {
+      toast('error', 'Nothing to unpost — this invoice is not posted.');
+      return;
+    }
+    setUnposting(true);
+    let ok = 0;
+    const failures: string[] = [];
+    try {
+      for (const m of targets) {
+        // Per-invoice key cache: a retry after a timeout reuses the SAME key so the
+        // server dedup matches (never a double unpost). Cleared per id on success.
+        if (!unpostKeysRef.current[m.id]) {
+          unpostKeysRef.current[m.id] = generateIdempotencyKey('unpost_invoice', `${profile.id}:${m.id}`);
+        }
+        try {
+          const { data, error } = await supabase.rpc('unpost_invoice', {
+            p_invoice_id: m.id,
+            p_performed_by: profile.id,
+            p_idempotency_key: unpostKeysRef.current[m.id],
+          });
+          if (error) throw error;
+          assertRpcResult(data, 'unpost_invoice');
+          ok += 1;
+          delete unpostKeysRef.current[m.id];
+        } catch (err) {
+          Sentry.captureException(err, { tags: { rpc: 'unpost_invoice' } });
+          failures.push(fieldAppError(err));
+        }
+      }
+      if (failures.length === 0) {
+        toast('success', targets.length > 1 ? `Unposted ${ok} invoice(s)` : 'Invoice unposted');
+      } else if (ok > 0) {
+        toast('error', `Unposted ${ok}, but ${failures.length} failed: ${failures[0]}`);
+      } else {
+        toast('error', `Unpost failed: ${failures[0]}`);
+      }
+      fetchInvoice();
+    } finally {
+      setUnposting(false);
+    }
+  };
+
   // Phase 1: edit lock covers the whole group — any sibling not in draft/unposted blocks edits.
   const canEdit = isNew || (
     ['draft', 'unposted'].includes(status) &&
     (siblings.length === 0 || siblings.every((s) => ['draft', 'unposted'].includes(s.status)))
   );
   const canPost = !isNew && canEdit;
+  // #28: Unpost is available when this saved invoice (or any group member) is
+  // posted/overdue — the inverse condition to Post. paid/voided/cancelled invoices
+  // are NOT unpostable here (the RPC also refuses them); a paid invoice must have
+  // its payment unapplied first, and a voided/cancelled one is terminal.
+  const unpostTargets =
+    invoiceGroupId && siblings.length > 0
+      ? siblings.filter((s) => s.status === 'posted' || s.status === 'overdue')
+      : (status === 'posted' || status === 'overdue' ? [{ id, status }] : []);
+  const canUnpost = !isNew && unpostTargets.length > 0;
   // #24: a posted/voided/paid invoice is LOCKED — committed money must not change
   // (#23 lifecycle). canEdit already encodes this; isLocked is its inverse for an
   // existing invoice, used to drive the posted-lock banner + read-only chrome.
@@ -1025,8 +1097,15 @@ export default function FieldApplicationInvoice() {
             </Button>
           )}
           {!isNew && canPost && (
-            <Button variant="secondary" size="sm" icon={<Send className="w-4 h-4" />} onClick={handlePost} loading={posting} disabled={posting}>
+            <Button variant="secondary" size="sm" icon={<Send className="w-4 h-4" />} onClick={() => setShowPostConfirm(true)} loading={posting} disabled={posting}>
               {invoiceGroupId ? `Post Group (${siblings.length || 1})` : 'Post'}
+            </Button>
+          )}
+          {/* #28: Unpost — reverse the posting on a posted/overdue invoice, returning
+              it to the editable Unposted list. Mirrors Post; group-aware. */}
+          {!isNew && canUnpost && (
+            <Button variant="secondary" size="sm" icon={<RotateCcw className="w-4 h-4" />} onClick={() => setShowUnpostConfirm(true)} loading={unposting} disabled={unposting}>
+              {invoiceGroupId && unpostTargets.length > 1 ? `Unpost Group (${unpostTargets.length})` : 'Unpost'}
             </Button>
           )}
           {/* #24: Print — available for any saved invoice (draft or posted). */}
@@ -1494,6 +1573,39 @@ export default function FieldApplicationInvoice() {
         message="Are you sure you want to delete this field application invoice? This action cannot be undone."
         confirmLabel="Delete"
         variant="danger"
+      />
+
+      {/* #28: Post confirm — posting commits the bill to its month-end batch. */}
+      <ConfirmModal
+        open={showPostConfirm}
+        onClose={() => setShowPostConfirm(false)}
+        onConfirm={() => { setShowPostConfirm(false); handlePost(); }}
+        title={invoiceGroupId ? 'Post Invoice Group' : 'Post Invoice'}
+        message={
+          invoiceGroupId
+            ? `Post all ${siblings.length || 1} invoice(s) in this split group? This commits them to the month-end batch for their invoice date. They become read-only; use Unpost to reverse.`
+            : 'Post this invoice? This commits it to the month-end batch for its invoice date and makes it read-only. Use Unpost to reverse.'
+        }
+        confirmLabel={invoiceGroupId ? 'Post Group' : 'Post Invoice'}
+        variant="info"
+        loading={posting}
+      />
+
+      {/* #28: Unpost confirm — reverse a posting back to the Unposted list. */}
+      <ConfirmModal
+        open={showUnpostConfirm}
+        onClose={() => setShowUnpostConfirm(false)}
+        onConfirm={() => { setShowUnpostConfirm(false); handleUnpost(); }}
+        title={invoiceGroupId && unpostTargets.length > 1 ? 'Unpost Invoice Group' : 'Unpost Invoice'}
+        message={
+          (invoiceGroupId && unpostTargets.length > 1
+            ? `Return all ${unpostTargets.length} posted invoice(s) in this group to the Unposted list? `
+            : 'Return this invoice to the Unposted list? ') +
+          'This reverses the posting so it can be edited again and updates the affected month-end batch totals. An invoice with payments or prepay applied, or one in a closed accounting period, cannot be unposted.'
+        }
+        confirmLabel={invoiceGroupId && unpostTargets.length > 1 ? 'Unpost Group' : 'Unpost Invoice'}
+        variant="warning"
+        loading={unposting}
       />
 
       {/* #27: reverse Transfer to Scheduling confirm. */}

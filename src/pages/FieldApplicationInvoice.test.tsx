@@ -248,7 +248,10 @@ describe('FieldApplicationInvoice — existing single invoice (no group)', () =>
     const postButton = screen.getByRole('button', { name: /^Post$/i });
     expect(postButton).toBeInTheDocument();
 
+    // #28: Post now opens a confirm modal first; confirm to fire the RPC.
     fireEvent.click(postButton);
+    const confirmButton = await screen.findByRole('button', { name: /^Post Invoice$/i });
+    fireEvent.click(confirmButton);
     await waitFor(() => {
       const calls = mockRpc.mock.calls.map((c) => c[0]);
       expect(calls).toContain('post_invoice');
@@ -308,6 +311,10 @@ describe('FieldApplicationInvoice — existing GROUP member invoice', () => {
 
     const postButton = screen.getByRole('button', { name: /Post Group/i });
     fireEvent.click(postButton);
+    // #28: Post now opens a confirm modal first; confirm to fire the RPC. The confirm
+    // button on a group is labeled "Post Group" (the toolbar button is "Post Group (N)").
+    const confirmButton = await screen.findByRole('button', { name: /^Post Group$/i });
+    fireEvent.click(confirmButton);
     await waitFor(() => {
       const calls = mockRpc.mock.calls.map((c) => c[0]);
       expect(calls).toContain('post_invoice_group');
@@ -331,6 +338,65 @@ describe('FieldApplicationInvoice — existing GROUP member invoice', () => {
     expect(screen.queryByRole('button', { name: /^Post$/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Post Group/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^Delete$/i })).not.toBeInTheDocument();
+  });
+});
+
+// #28: Unpost on the per-acre field-app editor — a posted single invoice exposes an
+// Unpost button (NOT Post), and confirming it routes through the unpost_invoice RPC
+// with the actor + a per-invoice idempotency key.
+describe('FieldApplicationInvoice — #28 Unpost on a posted invoice', () => {
+  beforeEach(() => {
+    mockUseParams.mockReturnValue({ id: 'inv-posted' });
+    mockFrom.mockImplementation(
+      makeFromMock({
+        invoices: {
+          data: [
+            {
+              id: 'inv-posted',
+              invoice_number: 'INV-3001',
+              invoice_type: 'field_application',
+              invoice_date: '2026-04-29',
+              header_notes: '',
+              status: 'posted',
+              application_service_id: null,
+              invoice_group_id: null,
+              total_amount_cents: 320000,
+            },
+          ],
+        },
+        field_app_locations: { data: [] },
+        invoice_items: { data: [] },
+        invoice_shares: { data: [] },
+      }),
+    );
+  });
+
+  it('shows Unpost (not Post) on a posted invoice and routes through unpost_invoice after confirm', async () => {
+    await renderPage();
+    await waitFor(() => expect(screen.getByText(/Field Application INV-3001/)).toBeInTheDocument());
+
+    // Posted => Post button is gone, Unpost is shown.
+    expect(screen.queryByRole('button', { name: /^Post$/i })).not.toBeInTheDocument();
+    const unpostButton = screen.getByRole('button', { name: /^Unpost$/i });
+    expect(unpostButton).toBeInTheDocument();
+
+    mockRpc.mockResolvedValueOnce({ data: { success: true, status: 'unposted' }, error: null });
+
+    fireEvent.click(unpostButton);
+    // Confirm modal opens; the confirm button is "Unpost Invoice" (distinct from the
+    // toolbar "Unpost" button).
+    const confirmButton = await screen.findByRole('button', { name: /^Unpost Invoice$/i });
+    fireEvent.click(confirmButton);
+
+    await waitFor(() => {
+      const call = mockRpc.mock.calls.find((c) => c[0] === 'unpost_invoice');
+      expect(call).toBeDefined();
+      expect(call![1]).toMatchObject({
+        p_invoice_id: 'inv-posted',
+        p_performed_by: 'user-1',
+      });
+      expect(typeof call![1].p_idempotency_key).toBe('string');
+    });
   });
 });
 

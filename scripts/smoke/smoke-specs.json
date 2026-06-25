@@ -95,6 +95,11 @@
       "chain": "smoke-transfer-invoice-to-job.sql",
       "description": "#27 reverse leg (REQUIRES 20260625120000): full job<->invoice round-trip. transfer_job_to_invoice creates the unposted invoice (job invoiced + invoice_id set + per-customer shares + application_records linked), then transfer_invoice_to_job reverses it (invoice -> cancelled, items+shares deleted, application_records.invoice_id cleared, job invoiced -> completed, jobs.invoice_id NULL, one invoice_cancelled audit row). Proves: forged actor -> ACTOR_MISMATCH (no mutation); idempotent replay (same key -> saved result, no 2nd audit row); the returned job re-transfers to a NEW invoice; a POSTED invoice is refused ('Only a draft or unposted invoice...'); an engine-built field invoice with no job_id is refused.",
       "covers": ["transfer_invoice_to_job"]
+    },
+    "unpost_invoice": {
+      "chain": "smoke-unpost-invoice.sql",
+      "description": "#28 unpost leg (REQUIRES 20260625130000): post->unpost round-trip on a field_application invoice. post_invoice posts a draft (posted_by/at stamped, invoice_posted audit row); unpost_invoice reverses it (posted|overdue -> unposted, posted_by/at cleared, money fields untouched, one append-only invoice_unposted audit row, post row preserved). Proves: forged actor -> ACTOR_MISMATCH (no mutation); idempotent replay (same key -> saved result, no 2nd audit row); re-post after unpost works; MONEY GUARD refuses a posted invoice with an allocated payment + paid_amount_cents (status unchanged, allocation intact, no audit row); STATUS GUARD refuses a never-posted draft ('nothing to unpost'); PERIOD GUARD refuses a posted invoice in a CLOSED accounting period (status unchanged); an 'overdue' invoice unposts (superset of posted).",
+      "covers": ["unpost_invoice"]
     }
   }
 }
