@@ -48,6 +48,7 @@ const BlendTickets = lazy(() => import('./pages/BlendTickets').then(m => ({ defa
 const BlendTicketDetail = lazy(() => import('./pages/BlendTicketDetail').then(m => ({ default: m.BlendTicketDetail })));
 const Invoices = lazy(() => import('./pages/Invoices'));
 const FieldInvoices = lazy(() => import('./pages/FieldInvoices'));
+const FieldInvoicesUnposted = lazy(() => import('./pages/FieldInvoicesUnposted'));
 const UnbilledApplications = lazy(() => import('./pages/UnbilledApplications'));
 const InvoiceDetail = lazy(() => import('./pages/InvoiceDetail'));
 const BlendRecipes = lazy(() => import('./pages/BlendRecipes'));
@@ -202,6 +203,9 @@ const router = createBrowserRouter([
           { path: 'invoices/field-app/:id', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><FieldApplicationInvoice /></ProtectedRoute> },
           { path: 'invoices/:id', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><InvoiceDetail routeArea="chemical" /></ProtectedRoute> },
           { path: 'field-invoices', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><FieldInvoices /></ProtectedRoute> },
+          // Field-app parity #22: dedicated "Unposted" working tray. Static path
+          // — must precede field-invoices/:id (React Router prefers static segments).
+          { path: 'field-invoices/unposted', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><FieldInvoicesUnposted /></ProtectedRoute> },
           { path: 'field-invoices/unbilled', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><UnbilledApplications /></ProtectedRoute> },
           // Field-invoice detail (job-built quantity invoices + posted field invoices)
           // reuses the generic invoice editor but under the field-invoices permission

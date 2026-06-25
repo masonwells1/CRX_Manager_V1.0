@@ -11,6 +11,7 @@
  */
 
 import type { InvoicePrintOptions } from '../types';
+import { supabase } from './db';
 import { COMPANY_TAGLINE_HEADER, COMPANY_LEGAL_NAME } from './companyInfo';
 import { formatCents as fmt } from './money';
 import type jsPDF from 'jspdf';
@@ -96,6 +97,131 @@ export interface InvoicePdfData {
 
   // Print options
   options?: InvoicePrintOptions;
+}
+
+// ── Shared row → InvoicePdfData builder ───────────────────────────────────
+// Used by every list that prints invoices (Chemical Sales batch print, the
+// Field-app Unposted list per-row Print + Print All). Fetches the invoice's
+// line items (with product detail), shares, and customer billing fields, then
+// maps to InvoicePdfData. Centralized here so the ~50-line mapping lives once.
+
+interface InvoiceRowForPdf {
+  id: string;
+  invoice_number: string;
+  invoice_date: string;
+  due_date?: string | null;
+  invoice_type?: string | null;
+  status?: string | null;
+  customer_id: string;
+  customer_name: string;
+  salesman_name?: string | null;
+  purchase_order_ref?: string | null;
+  header_notes?: string | null;
+  footer_notes?: string | null;
+  crop_type?: string | null;
+  field_names?: string[] | null;
+  total_acres?: number | null;
+  applicator_name?: string | null;
+  vehicle_name?: string | null;
+  application_date?: string | null;
+  total_amount_cents: number;
+  total_cost_cents?: number | null;
+  paid_amount_cents?: number | null;
+  prepay_applied_cents?: number | null;
+  balance_cents: number;
+}
+
+/**
+ * Build a complete InvoicePdfData from a list row by fetching the line items,
+ * shares, and customer billing fields. The caller supplies the lightweight row
+ * (already loaded in the list); this only touches the DB for the per-invoice
+ * detail it doesn't have.
+ */
+export async function buildInvoicePdfDataFromRow(
+  inv: InvoiceRowForPdf,
+  options?: InvoicePrintOptions
+): Promise<InvoicePdfData> {
+  const [{ data: cust }, { data: items }, { data: shares }] = await Promise.all([
+    supabase
+      .from('customers')
+      .select('billing_address, city, state, zip, account_number, payment_terms')
+      .eq('id', inv.customer_id)
+      .maybeSingle(),
+    supabase
+      .from('invoice_items')
+      .select('*, product:products(product_name, epa_registration, product_form)')
+      .eq('invoice_id', inv.id)
+      .order('sort_order'),
+    supabase
+      .from('invoice_shares')
+      .select('*, customer:customers!invoice_shares_customer_id_fkey(farm_name)')
+      .eq('invoice_id', inv.id),
+  ]);
+
+  const custRow = cust as {
+    billing_address?: string | null; city?: string | null; state?: string | null;
+    zip?: string | null; account_number?: string | null; payment_terms?: string | null;
+  } | null;
+
+  return {
+    invoice_number: inv.invoice_number,
+    invoice_date: inv.invoice_date,
+    due_date: inv.due_date || undefined,
+    invoice_type: inv.invoice_type || 'field_application',
+    status: inv.status || 'draft',
+    customer_name: inv.customer_name,
+    customer_address: custRow?.billing_address || undefined,
+    customer_city: custRow?.city || undefined,
+    customer_state: custRow?.state || undefined,
+    customer_zip: custRow?.zip || undefined,
+    account_number: custRow?.account_number || undefined,
+    payment_terms: custRow?.payment_terms || undefined,
+    salesman_name: inv.salesman_name || undefined,
+    purchase_order_ref: inv.purchase_order_ref || undefined,
+    header_notes: inv.header_notes || undefined,
+    footer_notes: inv.footer_notes || undefined,
+    crop_type: inv.crop_type || undefined,
+    field_names: inv.field_names || undefined,
+    total_acres: inv.total_acres || undefined,
+    applicator_name: inv.applicator_name || undefined,
+    vehicle_name: inv.vehicle_name || undefined,
+    application_date: inv.application_date || undefined,
+    shares: ((shares || []) as Array<{ customer?: { farm_name?: string } | null; split_percentage: number; acres: number | null; amount_cents: number; price_per_acre_cents?: number | null; pricing_note?: string | null }>).length > 0
+      ? (shares as Array<{ customer?: { farm_name?: string } | null; split_percentage: number; acres: number | null; amount_cents: number; price_per_acre_cents?: number | null; pricing_note?: string | null }>).map((s) => ({
+          customer_name: s.customer?.farm_name || 'Unknown',
+          split_percentage: s.split_percentage,
+          acres: s.acres,
+          amount_cents: s.amount_cents,
+          price_per_acre_cents: s.price_per_acre_cents ?? null,
+          pricing_note: s.pricing_note ?? null,
+        }))
+      : undefined,
+    items: ((items || []) as Array<Record<string, unknown> & { product?: { product_name?: string; epa_registration?: string | null; product_form?: string | null } }>).map((it) => ({
+      description: String(it.description ?? ''),
+      product_name: it.product?.product_name || String(it.description ?? ''),
+      quantity: Number(it.quantity),
+      unit_size: (it.unit_size as string) || undefined,
+      unit_price_cents: Number(it.unit_price_cents) || 0,
+      extended_cents: Number(it.extended_cents) || 0,
+      cost_cents: Number(it.cost_cents) || 0,
+      rate_per_acre: it.rate_per_acre != null ? Number(it.rate_per_acre) : null,
+      rate_unit: (it.rate_unit as string) || null,
+      acres: it.acres != null ? Number(it.acres) : null,
+      total_applied: it.total_applied != null ? Number(it.total_applied) : null,
+      total_applied_unit: (it.total_applied_unit as string) || null,
+      total_applied_gl_lb: it.total_applied_gl_lb != null ? Number(it.total_applied_gl_lb) : null,
+      gl_lb_unit: (it.gl_lb_unit as string) || null,
+      epa_registration: (it.epa_registration as string) || it.product?.epa_registration || null,
+      is_application_fee: Boolean(it.is_application_fee),
+      product_form: (it.product_form as string) || it.product?.product_form || null,
+    })) as InvoicePdfItem[],
+    total_amount_cents: inv.total_amount_cents || 0,
+    total_cost_cents: inv.total_cost_cents || 0,
+    paid_amount_cents: inv.paid_amount_cents || 0,
+    prepay_applied_cents: inv.prepay_applied_cents || 0,
+    balance_cents: inv.balance_cents || 0,
+    options,
+  };
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────
