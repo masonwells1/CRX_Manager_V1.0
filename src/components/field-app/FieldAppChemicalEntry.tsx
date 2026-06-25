@@ -6,6 +6,7 @@ import { Sentry } from '../../lib/sentry';
 import type { Product } from '../../types';
 import { formatCents as fmt } from '../../lib/money';
 import { parseDollarsToCents } from '../../lib/parseCents';
+import { toGallonOrLbEquivalent } from '../../lib/chemCalculator';
 
 export interface ChemicalLine {
   id: string;
@@ -21,6 +22,20 @@ export interface ChemicalLine {
   unit_cost_cents: number;
   sort_order: number;
   epa_registration?: string;
+  /**
+   * #25 (ChemMan parity): per-line Warehouse (free text — products has no warehouse
+   * column, so this is a typed location/shed) and Vendor (defaults from the product's
+   * vendor on select, editable). Both are informational and never affect pricing; the
+   * server persists them on invoice_items.warehouse / .vendor.
+   */
+  warehouse?: string | null;
+  vendor?: string | null;
+  /**
+   * #25: the product form drives the gallon-vs-pound choice for the Total Applied
+   * conversion display (liquid -> gal, dry -> lb). Captured on product select; the
+   * server is authoritative via convert_to_gl_lb().
+   */
+  product_form?: 'liquid' | 'dry' | null;
   /**
    * Phase 1 (2026-04-29): when true, the unit_price_cents on this line is a
    * deliberate manual override. The server records price_source = 'manual'.
@@ -42,6 +57,14 @@ interface FieldAppChemicalEntryProps {
    * Defaults to 1 when no fields/customers are selected yet.
    */
   primaryCustomerTier?: number;
+  /**
+   * #24/#25 posted-lock: when true the whole Chemical/Charges tab is read-only —
+   * a posted/voided/paid field-app invoice's committed lines must not be editable.
+   * Driven by the editor's !canEdit. (The Save button is already hidden and the
+   * save RPC guards status, but the UI must reflect the lock too — closing the #24
+   * carry-forward hole where these inputs stayed interactive.)
+   */
+  readOnly?: boolean;
 }
 
 
@@ -62,6 +85,7 @@ export default function FieldAppChemicalEntry({
   onChemicalsChange,
   totalAppliedAcres,
   primaryCustomerTier = 1,
+  readOnly = false,
 }: FieldAppChemicalEntryProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<Product[]>([]);
@@ -111,6 +135,7 @@ export default function FieldAppChemicalEntry({
   }, []);
 
   const addLine = () => {
+    if (readOnly) return;
     const line: ChemicalLine = {
       id: genId(),
       product_id: null,
@@ -124,6 +149,9 @@ export default function FieldAppChemicalEntry({
       extended_cents: 0,
       unit_cost_cents: 0,
       sort_order: chemicals.length,
+      warehouse: null,
+      vendor: null,
+      product_form: null,
     };
     onChemicalsChange([...chemicals, line]);
     setActiveLineId(line.id);
@@ -133,10 +161,12 @@ export default function FieldAppChemicalEntry({
   };
 
   const removeLine = (id: string) => {
+    if (readOnly) return;
     onChemicalsChange(chemicals.filter((c) => c.id !== id));
   };
 
   const updateLine = (id: string, updates: Partial<ChemicalLine>) => {
+    if (readOnly) return;
     onChemicalsChange(
       chemicals.map((c) => {
         if (c.id !== id) return c;
@@ -164,6 +194,10 @@ export default function FieldAppChemicalEntry({
       price_unit: product.inventory_unit || 'oz',
       unit_cost_cents: Math.round((product.current_cost || 0) * 100),
       epa_registration: product.epa_registration || undefined,
+      // #25: default Vendor from the product (editable); capture product_form for the
+      // gallon/lb conversion display. Warehouse stays a free-text field the user fills.
+      vendor: product.vendor || null,
+      product_form: product.product_form,
       manual_override: false,
     });
     setShowSearch(false);
@@ -188,7 +222,9 @@ export default function FieldAppChemicalEntry({
         <table className="w-full text-sm">
           <thead>
             <tr className="bg-gray-50 border-b">
-              <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 w-[250px]">Product</th>
+              <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 w-[220px]">Product</th>
+              <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 w-28">Warehouse</th>
+              <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 w-32">Vendor</th>
               <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 w-24">Rate/Acre</th>
               <th className="px-3 py-2 text-center text-xs font-medium text-gray-500 w-16">UM</th>
               <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 w-28">Total Applied</th>
@@ -206,8 +242,10 @@ export default function FieldAppChemicalEntry({
                     {line.product_name ? (
                       <button
                         type="button"
-                        className="w-full text-left font-medium hover:text-crx-green"
+                        disabled={readOnly}
+                        className="w-full text-left font-medium hover:text-crx-green disabled:hover:text-inherit disabled:cursor-default"
                         onClick={() => {
+                          if (readOnly) return;
                           setActiveLineId(line.id);
                           setShowSearch(true);
                           setSearchQuery('');
@@ -222,13 +260,14 @@ export default function FieldAppChemicalEntry({
                       <input
                         type="text"
                         placeholder="Search product..."
+                        disabled={readOnly}
                         value={activeLineId === line.id ? searchQuery : ''}
                         onChange={(e) => { setSearchQuery(e.target.value); setActiveLineId(line.id); setShowSearch(true); }}
                         onFocus={() => { setActiveLineId(line.id); setShowSearch(true); }}
-                        className="w-full px-2 py-1 border rounded text-sm"
+                        className="w-full px-2 py-1 border rounded text-sm disabled:bg-gray-100 disabled:text-gray-500"
                       />
                     )}
-                    {showSearch && activeLineId === line.id && (searchQuery.length >= 2 || searchResults.length > 0) && (
+                    {!readOnly && showSearch && activeLineId === line.id && (searchQuery.length >= 2 || searchResults.length > 0) && (
                       <div className="absolute z-20 top-full left-0 w-80 mt-1 bg-white border rounded-lg shadow-lg max-h-60 overflow-auto">
                         {searching && (
                           <div className="px-3 py-2 text-sm text-gray-400">Searching...</div>
@@ -260,17 +299,49 @@ export default function FieldAppChemicalEntry({
                     )}
                   </div>
                 </td>
+                {/* #25: per-line Warehouse (free text) + Vendor (defaults from product, editable) */}
+                <td className="px-3 py-2">
+                  <input
+                    type="text"
+                    placeholder="—"
+                    disabled={readOnly}
+                    value={line.warehouse ?? ''}
+                    onChange={(e) => updateLine(line.id, { warehouse: e.target.value || null })}
+                    className="w-full px-2 py-1 border rounded text-sm disabled:bg-gray-100 disabled:text-gray-500"
+                  />
+                </td>
+                <td className="px-3 py-2">
+                  <input
+                    type="text"
+                    placeholder="—"
+                    disabled={readOnly}
+                    value={line.vendor ?? ''}
+                    onChange={(e) => updateLine(line.id, { vendor: e.target.value || null })}
+                    className="w-full px-2 py-1 border rounded text-sm disabled:bg-gray-100 disabled:text-gray-500"
+                  />
+                </td>
                 <td className="px-3 py-2">
                   <input
                     type="number"
                     step="0.01"
+                    disabled={readOnly}
                     value={line.rate_per_acre ?? ''}
                     onChange={(e) => updateLine(line.id, { rate_per_acre: e.target.value ? Number(e.target.value) : null })}
-                    className="w-full px-2 py-1 border rounded text-right text-sm tabular-nums"
+                    className="w-full px-2 py-1 border rounded text-right text-sm tabular-nums disabled:bg-gray-100 disabled:text-gray-500"
                   />
                 </td>
                 <td className="px-3 py-2 text-center text-gray-600">{line.rate_unit}</td>
-                <td className="px-3 py-2 text-right tabular-nums">{line.quantity.toFixed(2)}</td>
+                {/* #25: Total Applied + its gallon/lb equivalent (loader planning). The
+                    server is authoritative via convert_to_gl_lb; this is the live preview. */}
+                <td className="px-3 py-2 text-right tabular-nums">
+                  <div>{line.quantity.toFixed(2)} <span className="text-gray-400">{line.rate_unit}</span></div>
+                  {(() => {
+                    const conv = toGallonOrLbEquivalent(line.quantity, line.rate_unit);
+                    return conv ? (
+                      <div className="text-[11px] text-gray-400">= {conv.value.toLocaleString(undefined, { maximumFractionDigits: 4 })} {conv.unit}</div>
+                    ) : null;
+                  })()}
+                </td>
                 <td className="px-3 py-2">
                   <div className="flex items-center gap-1">
                     <div className="relative flex-1">
@@ -279,9 +350,10 @@ export default function FieldAppChemicalEntry({
                         type="number"
                         step="0.01"
                         min={0}
+                        disabled={readOnly}
                         value={line.unit_price_cents ? (line.unit_price_cents / 100).toFixed(2) : ''}
                         onChange={(e) => updateLine(line.id, { unit_price_cents: e.target.value ? parseDollarsToCents(e.target.value) : 0, manual_override: true })}
-                        className="w-full pl-5 pr-2 py-1 border rounded text-right text-sm tabular-nums"
+                        className="w-full pl-5 pr-2 py-1 border rounded text-right text-sm tabular-nums disabled:bg-gray-100 disabled:text-gray-500"
                         title={line.manual_override ? 'Manual price override' : 'Tier preview - final price computed per customer on save'}
                       />
                     </div>
@@ -295,28 +367,33 @@ export default function FieldAppChemicalEntry({
                 <td className="px-3 py-2 text-center text-gray-600">{line.price_unit}</td>
                 <td className="px-3 py-2 text-right font-medium tabular-nums">{fmt(line.extended_cents)}</td>
                 <td className="px-3 py-2">
-                  <button onClick={() => removeLine(line.id)} className="p-1 rounded hover:bg-red-50 text-red-400 hover:text-red-600">
-                    <Trash2 className="w-4 h-4" />
-                  </button>
+                  {!readOnly && (
+                    <button onClick={() => removeLine(line.id)} className="p-1 rounded hover:bg-red-50 text-red-400 hover:text-red-600">
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  )}
                 </td>
               </tr>
             ))}
             {chemicals.length === 0 && (
-              <tr><td colSpan={8} className="px-3 py-8 text-center text-gray-400">No chemicals added yet</td></tr>
+              <tr><td colSpan={10} className="px-3 py-8 text-center text-gray-400">No chemicals added yet</td></tr>
             )}
           </tbody>
         </table>
       </div>
 
       {/* Add button (recipe picker / save-as-recipe were non-functional TODO
-          stubs — removed 2026-05-30 P3 hygiene; reintroduce when implemented) */}
-      <div className="flex items-center justify-between">
-        <div className="flex gap-2">
-          <Button variant="secondary" size="sm" icon={<Plus className="w-4 h-4" />} onClick={addLine}>
-            Add Chemical
-          </Button>
+          stubs — removed 2026-05-30 P3 hygiene; reintroduce when implemented).
+          Hidden on a posted/locked invoice (#24/#25 posted-lock). */}
+      {!readOnly && (
+        <div className="flex items-center justify-between">
+          <div className="flex gap-2">
+            <Button variant="secondary" size="sm" icon={<Plus className="w-4 h-4" />} onClick={addLine}>
+              Add Chemical
+            </Button>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Summary — preview only, final amounts computed server-side per customer */}
       <div className="flex items-center justify-between gap-6 text-sm pt-2 border-t">

@@ -1100,6 +1100,10 @@ export interface InvoiceItem {
   gl_lb_unit: string | null;
   epa_registration: string | null;
   product_form: string | null;
+  // Field-app parity #25: ChemMan per-line Warehouse (free text) + Vendor
+  // (defaults from products.vendor, editable). Informational; never priced.
+  warehouse: string | null;
+  vendor: string | null;
   is_application_fee: boolean;
   quoted_price_cents: number | null;
   price_source: 'quoted' | 'tier' | 'manual' | null;

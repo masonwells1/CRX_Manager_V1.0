@@ -436,6 +436,11 @@ export default function FieldApplicationInvoice() {
           extended_cents: (it.extended_cents as number) || 0,
           unit_cost_cents: (it.cost_cents as number) || 0,
           sort_order: (it.sort_order as number) || idx,
+          // #25: per-line Warehouse / Vendor and the product form (for the gl/lb display).
+          warehouse: (it.warehouse as string | null) ?? null,
+          vendor: (it.vendor as string | null) ?? null,
+          product_form: (it.product_form as 'liquid' | 'dry' | null) ?? null,
+          epa_registration: (it.epa_registration as string | null) || undefined,
         }))
       );
     }
@@ -668,6 +673,8 @@ export default function FieldApplicationInvoice() {
         })),
         // Phase 1: Drop client-computed extended_cents — server is source of truth.
         // Pass manual_override flag so server records price_source correctly.
+        // #25: warehouse / vendor / epa_registration ride along so the server persists
+        // them on invoice_items (informational ChemMan per-line fields; never priced).
         p_chemicals: chemicals.map((c, idx) => ({
           product_id: c.product_id,
           description: c.product_name,
@@ -679,6 +686,9 @@ export default function FieldApplicationInvoice() {
           rate_per_acre: c.rate_per_acre,
           rate_unit: c.rate_unit,
           manual_override: c.manual_override === true,
+          warehouse: c.warehouse ?? null,
+          vendor: c.vendor ?? null,
+          epa_registration: c.epa_registration ?? null,
         })),
         p_performed_by: profile.id,
         p_application_service_id: (appServiceId || null) as string,
@@ -1214,6 +1224,7 @@ export default function FieldApplicationInvoice() {
               onChemicalsChange={handleChemicalsChange}
               totalAppliedAcres={totalAppliedAcres}
               primaryCustomerTier={primaryCustomerTier}
+              readOnly={!canEdit}
             />
           </div>
         )}

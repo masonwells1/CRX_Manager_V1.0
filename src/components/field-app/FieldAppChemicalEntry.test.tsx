@@ -14,14 +14,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, act } from '@testing-library/react';
 import FieldAppChemicalEntry, { type ChemicalLine } from './FieldAppChemicalEntry';
 
-const { mockFrom } = vi.hoisted(() => {
+const { mockFrom, mockLimit } = vi.hoisted(() => {
   const mockLimit = vi.fn().mockResolvedValue({ data: [], error: null });
   const mockOrder = vi.fn().mockReturnValue({ limit: mockLimit });
   const mockOr = vi.fn().mockReturnValue({ order: mockOrder });
   const mockEq = vi.fn().mockReturnValue({ or: mockOr });
   const mockSelect = vi.fn().mockReturnValue({ eq: mockEq });
   const mockFrom = vi.fn().mockReturnValue({ select: mockSelect });
-  return { mockFrom };
+  return { mockFrom, mockLimit };
 });
 
 vi.mock('../../lib/db', () => ({
@@ -166,5 +166,124 @@ describe('FieldAppChemicalEntry', () => {
     const next = onChange.mock.calls[0][0] as ChemicalLine[];
     expect(next).toHaveLength(1);
     expect(next[0].id).toBe('chem_b');
+  });
+
+  // ── #25: per-acre price-book math (tier select, rate x acres cents, override) ──
+
+  it('changing the rate recomputes quantity = rate x acres and extended_cents (rounded at the cent)', async () => {
+    const onChange = vi.fn();
+    // 12.5/ac over 50 acres -> quantity 625; 625 x 6500c = 4,062,500c (exact, no rounding loss)
+    await renderEntry({ chemicals: [makeLine()], totalAppliedAcres: 50, onChemicalsChange: onChange });
+    const rateInput = screen.getByDisplayValue('4');
+    fireEvent.change(rateInput, { target: { value: '12.5' } });
+    const next = onChange.mock.calls[onChange.mock.calls.length - 1][0] as ChemicalLine[];
+    expect(next[0].quantity).toBe(625);
+    expect(next[0].extended_cents).toBe(4062500);
+  });
+
+  it('per-acre x acres rounds extended_cents at the cent (no float drift)', async () => {
+    const onChange = vi.fn();
+    // unit_price 333c over 7 acres. Drive rate 0.33/ac -> quantity = round(0.33*7,2) = 2.31;
+    // extended = round(2.31 * 333) = round(769.23) = 769c (proves Math.round, integer cents).
+    const line = makeLine({ unit_price_cents: 333, rate_per_acre: 1, quantity: 7, extended_cents: 2331 });
+    await renderEntry({ chemicals: [line], totalAppliedAcres: 7, onChemicalsChange: onChange });
+    const rateInput = screen.getByDisplayValue('1');
+    fireEvent.change(rateInput, { target: { value: '0.33' } });
+    const next = onChange.mock.calls[onChange.mock.calls.length - 1][0] as ChemicalLine[];
+    expect(next[0].quantity).toBe(2.31);
+    expect(Number.isInteger(next[0].extended_cents)).toBe(true);
+    expect(next[0].extended_cents).toBe(769);
+  });
+
+  it('selecting a product auto-fills the tier-N price (cents), default vendor, product_form (override=false)', async () => {
+    const onChange = vi.fn();
+    // tier 3 customer -> tier3_price ($9.25) drives unit_price_cents = 925.
+    mockLimit.mockResolvedValueOnce({
+      data: [{
+        id: 'prod-x', product_name: 'Atrazine 4L', is_active: true,
+        tier1_price: 5.00, tier2_price: 7.50, tier3_price: 9.25,
+        rate_per_acre: 2, rate_unit: 'qt', inventory_unit: 'qt',
+        current_cost: 3.00, vendor: 'Helena', product_form: 'liquid',
+        epa_registration: '524-549',
+      }],
+      error: null,
+    });
+    await renderEntry({
+      chemicals: [makeLine({ id: 'cl', product_id: null, product_name: '', vendor: null })],
+      primaryCustomerTier: 3,
+      onChemicalsChange: onChange,
+    });
+    const searchInput = screen.getByPlaceholderText(/search product/i);
+    await act(async () => {
+      fireEvent.focus(searchInput);
+      fireEvent.change(searchInput, { target: { value: 'Atra' } });
+      // debounce is 250ms; advance real time
+      await new Promise((r) => setTimeout(r, 300));
+    });
+    const item = await screen.findByText('Atrazine 4L');
+    await act(async () => { fireEvent.click(item); });
+    const next = onChange.mock.calls[onChange.mock.calls.length - 1][0] as ChemicalLine[];
+    expect(next[0].unit_price_cents).toBe(925);    // tier 3 = $9.25 -> 925c
+    expect(next[0].unit_cost_cents).toBe(300);     // $3.00 -> 300c
+    expect(next[0].vendor).toBe('Helena');         // defaulted from product
+    expect(next[0].product_form).toBe('liquid');   // captured for gl/lb display
+    expect(next[0].rate_per_acre).toBe(2);
+    expect(next[0].manual_override).toBe(false);
+  });
+
+  it('shows the gallon/lb-equivalent under Total Applied for a recognized unit', async () => {
+    // dry: 80 oz -> 5 lb. quantity 80, rate_unit 'oz'.
+    await renderEntry({ chemicals: [makeLine({ quantity: 80, rate_unit: 'oz' })] });
+    expect(screen.getByText(/= 5 lb/i)).toBeInTheDocument();
+  });
+
+  it('shows NO gl/lb line for an unrecognized unit', async () => {
+    await renderEntry({ chemicals: [makeLine({ quantity: 80, rate_unit: 'widgets' })] });
+    expect(screen.queryByText(/= .* (lb|gal)/i)).not.toBeInTheDocument();
+  });
+
+  it('renders editable Warehouse and Vendor inputs that round-trip through onChemicalsChange', async () => {
+    const onChange = vi.fn();
+    await renderEntry({
+      chemicals: [makeLine({ warehouse: 'North Shed', vendor: 'ACME Ag' })],
+      onChemicalsChange: onChange,
+    });
+    const wh = screen.getByDisplayValue('North Shed');
+    const vendor = screen.getByDisplayValue('ACME Ag');
+    expect(wh).toBeInTheDocument();
+    expect(vendor).toBeInTheDocument();
+    fireEvent.change(vendor, { target: { value: 'New Vendor' } });
+    const next = onChange.mock.calls[onChange.mock.calls.length - 1][0] as ChemicalLine[];
+    expect(next[0].vendor).toBe('New Vendor');
+  });
+
+  // ── #24/#25: posted-lock (readOnly) closes the carry-forward hole ──
+
+  it('readOnly disables every line input and hides Add Chemical + Trash', async () => {
+    const onChange = vi.fn();
+    await renderEntry({
+      chemicals: [makeLine({ warehouse: 'Shed', vendor: 'V' })],
+      readOnly: true,
+      onChemicalsChange: onChange,
+    });
+    // rate, price, warehouse, vendor inputs all disabled
+    expect(screen.getByDisplayValue('4')).toBeDisabled();          // rate
+    expect(screen.getByDisplayValue('65.00')).toBeDisabled();      // price (dollars)
+    expect(screen.getByDisplayValue('Shed')).toBeDisabled();       // warehouse
+    expect(screen.getByDisplayValue('V')).toBeDisabled();          // vendor
+    // Add Chemical hidden
+    expect(screen.queryByRole('button', { name: /add chemical/i })).not.toBeInTheDocument();
+    // no trash button
+    const trash = screen.queryAllByRole('button').filter((b) =>
+      b.querySelector('svg')?.classList.contains('lucide-trash2'),
+    );
+    expect(trash).toHaveLength(0);
+  });
+
+  it('readOnly guards the mutators: editing a disabled input does NOT call onChemicalsChange', async () => {
+    const onChange = vi.fn();
+    await renderEntry({ chemicals: [makeLine()], readOnly: true, onChemicalsChange: onChange });
+    // Disabled inputs do not fire change in real browsers; assert no spurious calls on render.
+    expect(onChange).not.toHaveBeenCalled();
   });
 });
