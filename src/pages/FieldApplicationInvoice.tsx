@@ -1053,7 +1053,7 @@ export default function FieldApplicationInvoice() {
   // (it re-fetches line items / shares / customer billing by id) so the printed
   // Total and Balance Due reconcile with payments/prepay. Only meaningful for a
   // saved invoice; a brand-new unsaved invoice has nothing to print.
-  const handlePrint = async () => {
+  const handlePrint = async (format: 'current' | 'legacy' = 'current') => {
     if (!id || !pdfSnapshot) {
       toast('error', 'Save the invoice before printing.');
       return;
@@ -1091,10 +1091,18 @@ export default function FieldApplicationInvoice() {
         paid_amount_cents: pdfSnapshot.paid_amount_cents,
         prepay_applied_cents: pdfSnapshot.prepay_applied_cents,
         balance_cents: pdfSnapshot.balance_cents,
+      }, {
+        // #30: format toggles the layout only; share/price/EPA detail stay on so
+        // the printed sheet is complete in either format. Money is identical
+        // (same pdfData) — Total/Balance Due reconcile regardless of format.
+        show_shares: true,
+        show_price_per_acre: true,
+        show_epa_registration: true,
+        format,
       });
       await downloadInvoicePdf(pdfData);
     } catch (err) {
-      Sentry.captureException(err, { tags: { action: 'print_field_app_invoice' } });
+      Sentry.captureException(err, { tags: { action: 'print_field_app_invoice', format } });
       toast('error', `Print failed: ${sanitizeError(err)}`);
     } finally {
       setPrinting(false);
@@ -1207,10 +1215,16 @@ export default function FieldApplicationInvoice() {
               {invoiceGroupId && voidTargets.length > 1 ? `Void Group (${voidTargets.length})` : 'Void'}
             </Button>
           )}
-          {/* #24: Print — available for any saved invoice (draft or posted). */}
+          {/* #24/#30: Print (current) + Old Print (legacy). Both available for any
+              saved invoice (draft or posted); money is identical between formats. */}
           {!isNew && (
-            <Button variant="secondary" size="sm" icon={<Printer className="w-4 h-4" />} onClick={handlePrint} loading={printing} disabled={printing}>
+            <Button variant="secondary" size="sm" icon={<Printer className="w-4 h-4" />} onClick={() => handlePrint('current')} loading={printing} disabled={printing}>
               Print
+            </Button>
+          )}
+          {!isNew && (
+            <Button variant="secondary" size="sm" icon={<Printer className="w-4 h-4" />} onClick={() => handlePrint('legacy')} loading={printing} disabled={printing}>
+              Old Print
             </Button>
           )}
           {locations.length > 0 && (

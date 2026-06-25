@@ -1,6 +1,6 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, FileText, Check, Ban, Download, ClipboardCheck } from 'lucide-react';
+import { Plus, FileText, Check, Ban, Download, ClipboardCheck, Printer, FileClock } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
@@ -8,8 +8,10 @@ import DataTable, { type Column } from '../components/ui/DataTable';
 import { useToast } from '../components/ui/Toast';
 import { supabase, sanitizeError } from '../lib/db';
 import { Sentry } from '../lib/sentry';
+import { runCriticalAction } from '../lib/criticalAction';
 import { exportToCSV } from '../lib/csvExport';
 import { downloadReportPdf } from '../lib/reportPdf';
+import { buildInvoicePdfDataFromRow, generateBatchInvoicePdf, downloadInvoicePdf } from '../lib/invoicePdf';
 import { useAuth } from '../contexts/AuthContext';
 import {
   JOBS_LIST_KEY,
@@ -67,6 +69,9 @@ export default function FieldInvoices() {
   const [statusFilter, setStatusFilter] = useState('');
   const [cardFilter, setCardFilter] = useState<'unposted' | 'posted' | 'outstanding' | null>(null);
   const [exportingPdf, setExportingPdf] = useState(false);
+  const [printing, setPrinting] = useState(false);
+  // Per-row action guard so a double-click can't fire two prints.
+  const rowActionRef = useRef(false);
   // Field-app parity #8: the SHARED column toggles (Customers / Applicators /
   // Total Acres) are governed by the same per-user list settings as the job
   // list, so the choice carries over to this list (acceptance criterion #5).
@@ -175,6 +180,70 @@ export default function FieldInvoices() {
     setExportingPdf(false);
   };
 
+  // #30: map a combined-list row into the snapshot shape buildInvoicePdfDataFromRow
+  // expects. The builder re-fetches line items / shares / customer billing by id;
+  // we carry the money fields so a posted invoice WITH payments prints a Balance
+  // Due that reconciles with its Total (Total − Payments − Prepay = Balance).
+  const toPdfRow = (row: FieldInvoiceRow) => ({
+    id: row.id,
+    invoice_number: row.invoice_number,
+    invoice_date: row.invoice_date,
+    invoice_type: 'field_application',
+    status: row.status,
+    customer_id: row.customer_id,
+    customer_name: row.customer_name,
+    // salesman_name intentionally omitted — the list row has no resolved
+    // salesman name (only salesman_id), and the builder doesn't fetch it. Do
+    // NOT map applicator_name here (that's the applicator, not the salesman).
+    crop_type: row.crop_type ?? null,
+    field_names: row.field_names ?? null,
+    total_acres: row.total_acres ?? null,
+    applicator_name: row.applicator_name ?? null,
+    total_amount_cents: row.total_amount_cents,
+    total_cost_cents: row.total_cost_cents ?? 0,
+    paid_amount_cents: row.paid_amount_cents ?? 0,
+    prepay_applied_cents: row.prepay_applied_cents ?? 0,
+    balance_cents: row.balance_cents,
+  });
+
+  // #30: per-row Print / Old Print on the combined field-invoice list.
+  const printRow = async (row: FieldInvoiceRow, format: 'current' | 'legacy') => {
+    if (rowActionRef.current) return;
+    rowActionRef.current = true;
+    await runCriticalAction({
+      action: async () => {
+        const pdfData = await buildInvoicePdfDataFromRow(toPdfRow(row), {
+          show_shares: true, show_price_per_acre: true, show_epa_registration: true, format,
+        });
+        await downloadInvoicePdf(pdfData);
+      },
+      toast,
+      successMessage: `Printed ${row.invoice_number}`,
+      setLoading: (v) => { setPrinting(v); if (!v) rowActionRef.current = false; },
+      sentryTag: format === 'legacy' ? 'field_invoice_combined_old_print_row' : 'field_invoice_combined_print_row',
+    });
+    rowActionRef.current = false;
+  };
+
+  // #30: bulk Print All / Old Print All over the filtered list (one PDF each).
+  const printAll = async (format: 'current' | 'legacy') => {
+    if (filtered.length === 0) { toast('error', 'No invoices to print'); return; }
+    await runCriticalAction({
+      action: async () => {
+        const list = await Promise.all(
+          filtered.map((row) => buildInvoicePdfDataFromRow(toPdfRow(row), {
+            show_shares: true, show_price_per_acre: true, show_epa_registration: true, format,
+          }))
+        );
+        await generateBatchInvoicePdf(list);
+      },
+      toast,
+      successMessage: `Printed ${filtered.length} invoice(s)`,
+      setLoading: setPrinting,
+      sentryTag: format === 'legacy' ? 'field_invoice_combined_old_print_all' : 'field_invoice_combined_print_all',
+    });
+  };
+
   const columns: Column<FieldInvoiceRow>[] = [
     {
       key: 'invoice_number',
@@ -243,6 +312,34 @@ export default function FieldInvoices() {
       sortable: true,
       render: (row) => statusBadge(row.status),
     },
+    {
+      key: 'id',
+      header: 'Print',
+      render: (row) => (
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); void printRow(row, 'current'); }}
+            disabled={printing}
+            className="p-1.5 rounded hover:bg-gray-100 text-secondary disabled:opacity-40"
+            aria-label={`Print ${row.invoice_number}`}
+            title="Print (current format)"
+          >
+            <Printer className="w-4 h-4" />
+          </button>
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); void printRow(row, 'legacy'); }}
+            disabled={printing}
+            className="p-1.5 rounded hover:bg-gray-100 text-secondary disabled:opacity-40"
+            aria-label={`Old Print ${row.invoice_number}`}
+            title="Old Print (legacy format)"
+          >
+            <FileClock className="w-4 h-4" />
+          </button>
+        </div>
+      ),
+    },
   ];
 
   if (loading) {
@@ -297,6 +394,26 @@ export default function FieldInvoices() {
             loading={exportingPdf}
           >
             Download PDF
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            icon={<Printer className="w-4 h-4" />}
+            onClick={() => printAll('current')}
+            loading={printing}
+            disabled={printing || filtered.length === 0}
+          >
+            Print All
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            icon={<FileClock className="w-4 h-4" />}
+            onClick={() => printAll('legacy')}
+            loading={printing}
+            disabled={printing || filtered.length === 0}
+          >
+            Old Print All
           </Button>
           <Button
             variant="secondary"

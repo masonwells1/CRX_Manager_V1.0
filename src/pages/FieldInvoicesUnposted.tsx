@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, FileText, Printer, Mail, Pencil, X, Search, ClipboardCheck, ArrowLeft } from 'lucide-react';
+import { Plus, FileText, Printer, FileClock, Mail, Pencil, X, Search, ClipboardCheck, ArrowLeft } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import ConfirmModal from '../components/ui/ConfirmModal';
@@ -196,13 +196,17 @@ export default function FieldInvoicesUnposted() {
   // field invoices for edit; its own loader routes per-acre detail correctly.
   const editPath = (row: FieldInvoiceListRow): string => `/field-invoices/${row.id}`;
 
-  // --- Per-row PRINT (current format) ---
-  const printRow = async (row: FieldInvoiceListRow) => {
+  // --- Per-row PRINT (current or legacy "Old Print" format, #30) ---
+  const printRow = async (row: FieldInvoiceListRow, format: 'current' | 'legacy' = 'current') => {
     if (rowActionRef.current) return;
     rowActionRef.current = true;
     await runCriticalAction({
       action: async () => {
-        const pdfData = await buildInvoicePdfDataFromRow(toPdfRow(row));
+        // Money fields ride toPdfRow; the builder re-fetches lines/shares. The
+        // format only switches the layout — Total/Balance Due are identical.
+        const pdfData = await buildInvoicePdfDataFromRow(toPdfRow(row), {
+          show_shares: true, show_price_per_acre: true, show_epa_registration: true, format,
+        });
         await downloadInvoicePdf(pdfData);
       },
       toast,
@@ -270,20 +274,22 @@ export default function FieldInvoicesUnposted() {
     rowActionRef.current = false;
   };
 
-  // --- PRINT ALL (one PDF per displayed invoice) ---
-  const printAll = async () => {
+  // --- PRINT ALL / OLD PRINT ALL (one PDF per displayed invoice, #30) ---
+  const printAll = async (format: 'current' | 'legacy' = 'current') => {
     if (visible.length === 0) { toast('error', 'No invoices to print'); return; }
     await runCriticalAction({
       action: async () => {
         const list = await Promise.all(
-          visible.map((row) => buildInvoicePdfDataFromRow(toPdfRow(row)))
+          visible.map((row) => buildInvoicePdfDataFromRow(toPdfRow(row), {
+            show_shares: true, show_price_per_acre: true, show_epa_registration: true, format,
+          }))
         );
         await generateBatchInvoicePdf(list);
       },
       toast,
       successMessage: `Printed ${visible.length} invoice(s)`,
       setLoading: setBusy,
-      sentryTag: 'field_invoice_print_all',
+      sentryTag: format === 'legacy' ? 'field_invoice_old_print_all' : 'field_invoice_print_all',
     });
   };
 
@@ -518,13 +524,23 @@ export default function FieldInvoicesUnposted() {
                       <div className="flex items-center justify-end gap-1">
                         <button
                           type="button"
-                          onClick={(e) => { e.stopPropagation(); void printRow(row); }}
+                          onClick={(e) => { e.stopPropagation(); void printRow(row, 'current'); }}
                           disabled={busy}
                           className="p-1.5 rounded hover:bg-gray-100 text-secondary disabled:opacity-40"
                           aria-label={`Print ${row.invoice_number}`}
-                          title="Print"
+                          title="Print (current format)"
                         >
                           <Printer className="w-4 h-4" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); void printRow(row, 'legacy'); }}
+                          disabled={busy}
+                          className="p-1.5 rounded hover:bg-gray-100 text-secondary disabled:opacity-40"
+                          aria-label={`Old Print ${row.invoice_number}`}
+                          title="Old Print (legacy format)"
+                        >
+                          <FileClock className="w-4 h-4" />
                         </button>
                         <button
                           type="button"
@@ -575,8 +591,11 @@ export default function FieldInvoicesUnposted() {
             Bulk actions apply to all {totals.count} invoice(s) currently shown.
           </p>
           <div className="flex flex-wrap gap-2 justify-end">
-            <Button variant="secondary" size="sm" icon={<Printer className="w-4 h-4" />} onClick={printAll} loading={busy} disabled={visible.length === 0}>
+            <Button variant="secondary" size="sm" icon={<Printer className="w-4 h-4" />} onClick={() => printAll('current')} loading={busy} disabled={visible.length === 0}>
               Print All
+            </Button>
+            <Button variant="secondary" size="sm" icon={<FileClock className="w-4 h-4" />} onClick={() => printAll('legacy')} loading={busy} disabled={visible.length === 0}>
+              Old Print All
             </Button>
             <Button variant="secondary" size="sm" icon={<FileText className="w-4 h-4" />} onClick={printReport} loading={busy} disabled={visible.length === 0}>
               Print Invoice Report

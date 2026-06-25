@@ -55,14 +55,24 @@ describe('InvoicePrintDialog', () => {
     expect(screen.queryByText('Show price per acre')).not.toBeInTheDocument();
   });
 
-  it('calls onPrint with all options when Download PDF clicked', () => {
+  it('calls onPrint with all options (current format by default) when Download PDF clicked', () => {
     render(<InvoicePrintDialog {...defaultProps} />);
     fireEvent.click(screen.getByRole('button', { name: /download pdf/i }));
     expect(defaultProps.onPrint).toHaveBeenCalledWith({
       show_shares: true,
       show_price_per_acre: true,
       show_epa_registration: true,
+      format: 'current',
     });
+  });
+
+  it('passes format: legacy when Old Print is selected (#30)', () => {
+    render(<InvoicePrintDialog {...defaultProps} />);
+    fireEvent.click(screen.getByRole('button', { name: /old print/i }));
+    fireEvent.click(screen.getByRole('button', { name: /download pdf/i }));
+    expect(defaultProps.onPrint).toHaveBeenCalledWith(
+      expect.objectContaining({ format: 'legacy' }),
+    );
   });
 
   it('toggling checkboxes changes the options passed to onPrint', () => {

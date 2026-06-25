@@ -16,6 +16,7 @@ const mockDoc = {
   setTextColor: vi.fn(),
   text: vi.fn(),
   setDrawColor: vi.fn(),
+  setLineWidth: vi.fn(),
   line: vi.fn(),
   roundedRect: vi.fn(),
   splitTextToSize: vi.fn((text: string) => [text]),
@@ -274,6 +275,98 @@ describe('generateInvoicePdf', () => {
       typeof arg === 'string' && arg.includes('Applied per customer request'),
     );
     expect(hasHeaderNote).toBe(true);
+  });
+});
+
+// ── Legacy "Old Print" format (field-app parity #30) ─────────────────────────
+
+describe('generateInvoicePdf — legacy "Old Print" format', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockDoc.lastAutoTable = { finalY: 300 };
+  });
+
+  const legacyOpts = { show_shares: true, show_price_per_acre: true, show_epa_registration: true, format: 'legacy' as const };
+
+  it('returns a jsPDF document for the legacy field_application layout', async () => {
+    const doc = await generateInvoicePdf(makeInvoiceData({ options: legacyOpts }));
+    expect(doc).toBe(mockDoc);
+  });
+
+  it('renders the plain-text "INVOICE" header (no green band)', async () => {
+    await generateInvoicePdf(makeInvoiceData({ options: legacyOpts }));
+    const textCalls = mockDoc.text.mock.calls.flat();
+    expect(textCalls.some((a: unknown) => a === 'CROP RX SOLUTIONS')).toBe(true);
+    expect(textCalls.some((a: unknown) => a === 'INVOICE')).toBe(true);
+    // The legacy header prints the invoice number as "No. <number>".
+    expect(textCalls.some((a: unknown) => typeof a === 'string' && a.includes('No. INV-2026-0001'))).toBe(true);
+  });
+
+  it('prints the SAME money totals as the data (no recompute)', async () => {
+    // Posted invoice WITH a payment: Total 18500, Payments 5000, Prepay 1500 →
+    // Balance Due 12000. Total − Payments − Prepay = Balance Due must hold, and
+    // the printed strings must be exactly those cents (formatted /100).
+    await generateInvoicePdf(makeInvoiceData({
+      options: legacyOpts,
+      total_amount_cents: 18500,
+      paid_amount_cents: 5000,
+      prepay_applied_cents: 1500,
+      balance_cents: 12000, // 18500 − 5000 − 1500
+    }));
+    const textCalls = mockDoc.text.mock.calls.flat();
+    const has = (s: string) => textCalls.some((a: unknown) => typeof a === 'string' && a.includes(s));
+    expect(has('$185.00')).toBe(true);      // Subtotal
+    expect(has('-$50.00')).toBe(true);      // Payments
+    expect(has('-$15.00')).toBe(true);      // Prepay Applied
+    expect(has('$120.00')).toBe(true);      // Balance Due (reconciles)
+    expect(has('BALANCE DUE:')).toBe(true);
+  });
+
+  it('renders a split with per-customer "Ref" labels that sum to the whole', async () => {
+    const shares: InvoicePdfShare[] = [
+      makeShare({ customer_name: 'Smith Farm', split_percentage: 33.34, amount_cents: 5000 }),
+      makeShare({ customer_name: 'Jones Farm', split_percentage: 66.66, amount_cents: 10010 }),
+    ];
+    // Per-customer cents (5000 + 10010) must equal the grand total (15010).
+    const sum = shares.reduce((s, x) => s + x.amount_cents, 0);
+    expect(sum).toBe(15010);
+    await generateInvoicePdf(makeInvoiceData({
+      options: legacyOpts,
+      job_number: '230568',
+      shares,
+      total_amount_cents: 15010,
+      balance_cents: 15010,
+    }));
+    const textCalls = mockDoc.text.mock.calls.flat();
+    // deriveSplitRef('230568', idx, true) → 230568-001 / 230568-002
+    const autoTableArg = (vi.mocked(await import('jspdf-autotable')).default).mock.calls;
+    // The share table is rendered via autoTable; assert its body carries the refs.
+    const bodies = autoTableArg.map((c: unknown[]) => (c[1] as { body?: unknown[][] }).body).filter(Boolean) as unknown[][][];
+    const flatCells = bodies.flat(2).map(String);
+    expect(flatCells.includes('230568-001')).toBe(true);
+    expect(flatCells.includes('230568-002')).toBe(true);
+    // grand-total still prints from data (no recompute)
+    expect(textCalls.some((a: unknown) => typeof a === 'string' && a.includes('$150.10'))).toBe(true);
+  });
+
+  it('handles a legacy chemical_sale invoice', async () => {
+    const doc = await generateInvoicePdf(makeInvoiceData({
+      invoice_type: 'chemical_sale',
+      options: legacyOpts,
+      items: [makeItem({ product_name: 'Roundup', extended_cents: 24000 })],
+      total_amount_cents: 24000,
+      balance_cents: 24000,
+    }));
+    expect(doc).toBe(mockDoc);
+  });
+
+  it('current format is unchanged when format is omitted/undefined', async () => {
+    const doc = await generateInvoicePdf(makeInvoiceData({
+      options: { show_shares: true, show_price_per_acre: true, show_epa_registration: true },
+    }));
+    expect(doc).toBe(mockDoc);
+    // Current format draws the green header band via rect(); legacy never calls rect.
+    expect(mockDoc.rect).toHaveBeenCalled();
   });
 });
 

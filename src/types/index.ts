@@ -1138,6 +1138,14 @@ export interface InvoicePrintOptions {
   show_shares: boolean;
   show_price_per_acre: boolean;
   show_epa_registration: boolean;
+  /**
+   * Which printed layout to render (field-app parity #30 — ChemMan "Print" vs
+   * "Old Print"). 'current' (default/undefined) = the modern CRX-branded layout;
+   * 'legacy' = the denser monochrome "Old Print" format some customers still
+   * expect. Money is identical in both — the same InvoicePdfData feeds each, so
+   * Total / Payments / Prepay / Balance Due reconcile regardless of format.
+   */
+  format?: 'current' | 'legacy';
 }
 
 export interface StatementOptions {
