@@ -20,8 +20,15 @@ import {
   crewMemberDisplayName,
 } from '../jobs/appliedRecords';
 
+// The two strings applicatorNameFor() returns when there is no real name to show.
+// They are fine for the on-screen carry-over panel, but must NEVER reach the printed
+// legal PDF Applicator field — there they read as junk. realApplicatorName() below
+// maps them back to null so the PDF can fall through to a real source or print blank.
+export const APPLICATOR_PLACEHOLDERS = ['—', '(removed applicator)'] as const;
+
 export interface AppliedCarryoverRow {
   id: string;
+  applicator_id: string | null;
   applicator_name: string;
   vehicle_name: string;
   application_date: string;
@@ -43,6 +50,20 @@ export function applicatorNameFor(
 ): string {
   if (!applicatorId) return '—';
   return names.get(applicatorId) ?? '(removed applicator)';
+}
+
+// Return a REAL applicator name for the printed legal PDF, or null when there isn't
+// one. A placeholder string (em-dash / "(removed applicator)") is treated as NO value
+// so it never prints on the bill. #17 LESSON: an inactive applicator is still a real,
+// printable name — resolve from an UNFILTERED name map (not the active-only picker
+// list) so a now-inactive applicator still prints correctly instead of a placeholder.
+export function realApplicatorName(name: string | null | undefined): string | null {
+  if (!name) return null;
+  const trimmed = name.trim();
+  if (trimmed === '' || (APPLICATOR_PLACEHOLDERS as readonly string[]).includes(trimmed)) {
+    return null;
+  }
+  return trimmed;
 }
 
 // Format the net tach (engine hours) for display. net_tach is the GENERATED
@@ -82,6 +103,7 @@ export function carryoverRowFromRecord(
   );
   return {
     id: rec.id,
+    applicator_id: rec.applicator_id,
     applicator_name: applicatorNameFor(rec.applicator_id, applicatorNames),
     vehicle_name: rec.vehicle?.vehicle_name ?? '—',
     application_date: rec.application_date || '—',

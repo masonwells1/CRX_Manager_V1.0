@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   applicatorNameFor,
+  realApplicatorName,
   formatNetTach,
   carryoverRowFromRecord,
   carryoverRowsFromRecords,
@@ -56,6 +57,36 @@ describe('applicatorNameFor', () => {
   });
 });
 
+describe('realApplicatorName (money-lens LOW#1 — no placeholder on the legal PDF)', () => {
+  it('returns a real name unchanged (trimmed)', () => {
+    expect(realApplicatorName('Jane Doe')).toBe('Jane Doe');
+    expect(realApplicatorName('  Jane Doe  ')).toBe('Jane Doe');
+  });
+
+  it('maps the em-dash placeholder back to null', () => {
+    expect(realApplicatorName('—')).toBeNull();
+  });
+
+  it('maps the "(removed applicator)" placeholder back to null', () => {
+    expect(realApplicatorName('(removed applicator)')).toBeNull();
+  });
+
+  it('treats null / undefined / blank as no value', () => {
+    expect(realApplicatorName(null)).toBeNull();
+    expect(realApplicatorName(undefined)).toBeNull();
+    expect(realApplicatorName('   ')).toBeNull();
+  });
+
+  it('an inactive/unmapped applicator still prints when an unfiltered map resolves a real name', () => {
+    // Active-only picker map would MISS the id and yield a placeholder -> blank on the PDF.
+    const activeOnly = new Map<string, string>();
+    expect(realApplicatorName(applicatorNameFor('inactive-1', activeOnly))).toBeNull();
+    // Unfiltered map (active AND inactive) resolves the real legal name -> prints.
+    const unfiltered = new Map([['inactive-1', 'Retired Rick']]);
+    expect(realApplicatorName(applicatorNameFor('inactive-1', unfiltered))).toBe('Retired Rick');
+  });
+});
+
 describe('formatNetTach', () => {
   it('formats a numeric net tach', () => {
     expect(formatNetTach(6.5)).toBe('6.5 hr');
@@ -69,6 +100,7 @@ describe('carryoverRowFromRecord', () => {
   it('produces display strings for a full record', () => {
     const names = new Map([['app-1', 'Jane Doe']]);
     const row = carryoverRowFromRecord(baseRecord(), names);
+    expect(row.applicator_id).toBe('app-1');
     expect(row.applicator_name).toBe('Jane Doe');
     expect(row.vehicle_name).toBe('Sprayer A');
     expect(row.application_date).toBe('2026-06-20');

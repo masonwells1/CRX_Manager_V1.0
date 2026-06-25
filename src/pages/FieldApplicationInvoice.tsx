@@ -25,6 +25,8 @@ import ApplicationServicePicker from '../components/field-app/ApplicationService
 import { downloadInvoicePdf, buildInvoicePdfDataFromRow } from '../lib/invoicePdf';
 import {
   carryoverRowsFromRecords,
+  realApplicatorName,
+  applicatorNameFor,
   type AppliedCarryoverRow,
 } from '../components/field-app/invoiceAppliedCarryover';
 import type {
@@ -45,10 +47,11 @@ import type {
 const APPLIED_RECORD_SELECT =
   '*, vehicle:vehicles!job_applied_records_vehicle_id_fkey(vehicle_name, vehicle_type), job_applied_record_fields(id, application_record_id, field_id, applied_acres, created_at, updated_at), job_applied_record_crew(id, application_record_id, member_id, member_name_snapshot, crew_id_snapshot, crew_name_snapshot, created_at, member:ground_crew_members(name, is_active))';
 
-// One customer-facing notification entry for this invoice / its source job.
-// The CUSTOMER pre/post-application notification system is built in #40/#41; for
-// now the tab reads the existing internal notifications table keyed to this
-// invoice or its job so any history that DOES exist is surfaced.
+// One notification entry addressed to the current viewer about this invoice / its
+// source job. The notifications table is RLS-scoped to user_id = auth.uid(), so this
+// can only show the VIEWER'S OWN notices — never customer-facing ones. The CUSTOMER
+// pre/post-application notification system is built separately in #40/#41; this tab
+// just surfaces whatever in-app notices keyed to this invoice or job the viewer has.
 interface NotificationRow {
   id: string;
   title: string;
@@ -130,6 +133,13 @@ export default function FieldApplicationInvoice() {
   // invoice. NO migration: salesman_id already exists.
   const [consultantId, setConsultantId] = useState('');
   const [consultants, setConsultants] = useState<Profile[]>([]);
+  // #24 (money-lens LOW#1): an UNFILTERED id -> name map (active AND inactive) used
+  // ONLY to resolve the as-applied applicator's REAL name for the printed legal PDF.
+  // The Consultant picker (`consultants`) stays active-only — you should not assign a
+  // new invoice to an inactive person — but a now-inactive applicator who actually
+  // sprayed the field is still a real, printable legal name (#17 LESSON). Resolving
+  // the PDF name from the active-only list leaked '(removed applicator)' onto the bill.
+  const [applicatorNameMap, setApplicatorNameMap] = useState<Map<string, string>>(new Map());
 
   const [locations, setLocations] = useState<FieldLocation[]>([]);
   const [chemicals, setChemicals] = useState<ChemicalLine[]>([]);
@@ -145,8 +155,11 @@ export default function FieldApplicationInvoice() {
   // for an engine-built invoice with no source job (the carry-over panel hides).
   const [jobId, setJobId] = useState<string | null>(null);
   const [appliedRecords, setAppliedRecords] = useState<JobAppliedRecordRow[]>([]);
-  // #24: customer-facing notification history for this invoice / its job.
+  // #24: notification history addressed to the viewer for this invoice / its job.
   const [notifications, setNotifications] = useState<NotificationRow[]>([]);
+  // #24 (money-lens LOW#2): surface a fetch error instead of a silent empty list, so
+  // a broken query reads as an error rather than a misleading "No notifications yet".
+  const [notificationsError, setNotificationsError] = useState<string | null>(null);
   // #24: print state + the money snapshot the PDF builder needs (kept off the
   // visible form — read from the loaded invoice row so the printed Balance Due
   // reconciles with payments/prepay).
@@ -188,6 +201,7 @@ export default function FieldApplicationInvoice() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
+      // Active-only list for the Consultant picker.
       const { data } = await supabase
         .from('profile_public_view')
         .select('id, full_name, role, is_active')
@@ -195,6 +209,19 @@ export default function FieldApplicationInvoice() {
         .eq('is_active', true)
         .order('full_name');
       if (!cancelled) setConsultants((data || []) as Profile[]);
+
+      // #24 (LOW#1): UNFILTERED id -> name map (active AND inactive) for resolving the
+      // as-applied applicator's real legal name on the PDF. profile_public_view is the
+      // non-PII view readable by sales_rep — never a profiles embed (RLS nulls it).
+      const { data: allRows } = await supabase
+        .from('profile_public_view')
+        .select('id, full_name')
+        .in('role', ['applicator', 'admin', 'sales_rep']);
+      if (!cancelled) {
+        setApplicatorNameMap(
+          new Map((allRows || []).map((r) => [r.id as string, (r.full_name as string | null) ?? ''])),
+        );
+      }
     })();
     return () => { cancelled = true; };
   }, []);
@@ -445,17 +472,25 @@ export default function FieldApplicationInvoice() {
       setAppliedRecords([]);
     }
 
-    // #24: Notifications history for this invoice (or its job). The CUSTOMER
-    // pre/post-application notice system is #40/#41; this surfaces any existing
-    // internal notification rows keyed to the invoice / job so history isn't lost.
+    // #24: Notifications history for this invoice (or its job). NOTE: the notifications
+    // table is RLS-scoped to user_id = auth.uid(), so this shows only notices addressed
+    // to the CURRENT VIEWER about this invoice/job — NOT customer-facing notices (the
+    // customer pre/post-application notice system is #40/#41). The copy on the tab says
+    // so. (LOW#2) Capture a fetch error rather than silently showing "No notifications".
     const notifOrFilters = [`and(related_entity_type.eq.invoice,related_entity_id.eq.${id})`];
     if (srcJobId) notifOrFilters.push(`and(related_entity_type.eq.job,related_entity_id.eq.${srcJobId})`);
-    const { data: notifs } = await supabase
+    const { data: notifs, error: notifsError } = await supabase
       .from('notifications')
       .select('id, title, message, notification_type, created_at, related_entity_type')
       .or(notifOrFilters.join(','))
       .order('created_at', { ascending: false });
-    setNotifications((notifs as NotificationRow[]) ?? []);
+    if (notifsError) {
+      setNotificationsError(sanitizeError(notifsError));
+      setNotifications([]);
+    } else {
+      setNotificationsError(null);
+      setNotifications((notifs as NotificationRow[]) ?? []);
+    }
   }, [id, toast, navigate]);
 
   useEffect(() => {
@@ -830,7 +865,15 @@ export default function FieldApplicationInvoice() {
         crop_type: locations[0]?.crop_type ?? null,
         field_names: locations.length > 0 ? locations.map((l) => l.field_name) : null,
         total_acres: totalAppliedAcres || null,
-        applicator_name: applicator || carryover[0]?.applicator_name || null,
+        // #24 (LOW#1): the printed legal Applicator name. Prefer the typed free-text
+        // value; otherwise resolve the as-applied applicator's REAL name from the
+        // UNFILTERED name map (so a now-inactive applicator still prints correctly),
+        // never the on-screen placeholder. Falls back to null (blank) when there is no
+        // real name — a placeholder like '(removed applicator)' must not reach the PDF.
+        applicator_name:
+          realApplicatorName(applicator) ??
+          realApplicatorName(applicatorNameFor(carryover[0]?.applicator_id ?? null, applicatorNameMap)) ??
+          null,
         total_amount_cents: pdfSnapshot.total_amount_cents,
         total_cost_cents: pdfSnapshot.total_cost_cents,
         paid_amount_cents: pdfSnapshot.paid_amount_cents,
@@ -1302,17 +1345,23 @@ export default function FieldApplicationInvoice() {
         {activeTab === 'notifications' && (
           <div className="p-4 space-y-4">
             <div>
-              <h3 className="font-semibold">Customer Notifications</h3>
+              <h3 className="font-semibold">Your Notifications</h3>
               <p className="text-xs text-gray-500">
-                Pre- and post-application notices sent to the customer for this invoice and its job.
+                Notifications addressed to you about this invoice and its job. (Customer
+                pre/post-application notices are sent separately.)
               </p>
             </div>
-            {notifications.length === 0 ? (
+            {notificationsError ? (
+              <div className="flex items-start gap-2 px-3 py-2 bg-red-50 border-l-4 border-red-400 text-sm text-red-800 rounded">
+                <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+                <span>Could not load notifications: {notificationsError}</span>
+              </div>
+            ) : notifications.length === 0 ? (
               <div className="text-center py-10 text-gray-400">
                 <Bell className="w-8 h-8 mx-auto mb-2" />
                 <p>No notifications yet</p>
                 <p className="text-sm">
-                  Customer pre/post-application notifications will appear here once they are sent.
+                  Notifications addressed to you about this invoice or job will appear here.
                 </p>
               </div>
             ) : (
