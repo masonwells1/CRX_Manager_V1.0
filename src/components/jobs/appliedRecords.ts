@@ -629,6 +629,19 @@ export function recordCrewNames(rec: JobAppliedRecordRow): string[] {
   return [...names];
 }
 
+// ── #21 edit-save: which existing crew links SURVIVE a re-save? (pure) ───────
+// On an edit-save the entry's live crew is replaced (delete live rows, re-insert
+// the selected members). The crew links that MUST be preserved are the ones whose
+// member was deleted from the catalog: member_id -> NULL (FK ON DELETE SET NULL)
+// with a kept member_name_snapshot. That NULL row is the durable legal proof of
+// "who was on the crew that day", so the delete is scoped to member_id IS NOT NULL.
+// This helper is the single source of truth for that rule — the component's
+// `.delete().not('member_id', 'is', null)` deletes exactly the COMPLEMENT of these
+// rows, and this lets the save-path behavior be unit-tested without the DB.
+export function crewLinksPreservedOnSave(rec: JobAppliedRecordRow): JobAppliedRecordCrew[] {
+  return (rec.job_applied_record_crew ?? []).filter((link) => link.member_id == null);
+}
+
 // ── #21 filter: does an entry include a given crew MEMBER? (pure predicate) ──
 // Parity with ChemMan's "Ground Crew Member" report filter — crew membership is
 // queryable, not just stored. Matches on the live catalog member_id (the stable,

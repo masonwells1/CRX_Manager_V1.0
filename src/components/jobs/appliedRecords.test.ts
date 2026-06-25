@@ -24,6 +24,7 @@ import {
   crewMemberDisplayName,
   recordCrewNames,
   recordHasCrewMember,
+  crewLinksPreservedOnSave,
   type WeatherSetDraft,
 } from './appliedRecords';
 import type { JobAppliedRecord, JobAppliedRecordField, JobAppliedRecordRow, JobAppliedRecordCrew, GroundCrew, GroundCrewMember } from '../../types';
@@ -819,6 +820,46 @@ describe('#21 recordCrewNames + recordHasCrewMember (filter parity)', () => {
   it('a deleted member (member_id NULL) does not match by id', () => {
     const r = recWithCrew([{ member_id: null, member_name_snapshot: 'Carlos' }]);
     expect(recordHasCrewMember(r, 'm-carlos')).toBe(false);
+  });
+});
+
+// HIGH (legal-record preservation): editing an entry must NOT drop the rows of
+// crew members who were deleted from the catalog (member_id -> NULL + kept
+// member_name_snapshot). The save path deletes only LIVE links
+// (`.not('member_id', 'is', null)`); crewLinksPreservedOnSave is the same rule
+// expressed as the rows that SURVIVE, so this pins the behavior without the DB.
+describe('#21 crewLinksPreservedOnSave — SET-NULL legal rows survive an edit-save', () => {
+  it('preserves a deleted-member row (member_id NULL) while live rows are replaced', () => {
+    const r = recWithCrew([
+      { id: 'live-1', member_id: 'm-carlos', member_name_snapshot: 'Carlos' },
+      { id: 'gone-1', member_id: null, member_name_snapshot: 'Dana (gone)', crew_name_snapshot: 'Crew North' },
+      { id: 'live-2', member_id: 'm-evan', member_name_snapshot: 'Evan' },
+    ]);
+    const preserved = crewLinksPreservedOnSave(r);
+    // ONLY the NULL-member legal row survives the re-save; the live ones are the
+    // ones the component deletes-and-reinserts.
+    expect(preserved.map((l) => l.id)).toEqual(['gone-1']);
+    expect(preserved[0].member_id).toBeNull();
+    expect(preserved[0].member_name_snapshot).toBe('Dana (gone)');
+  });
+
+  it('preserves MULTIPLE deleted-member rows (UNIQUE is NULLS DISTINCT — they coexist)', () => {
+    const r = recWithCrew([
+      { id: 'gone-1', member_id: null, member_name_snapshot: 'Carlos (gone)' },
+      { id: 'gone-2', member_id: null, member_name_snapshot: 'Dana (gone)' },
+      { id: 'live-1', member_id: 'm-evan' },
+    ]);
+    const preserved = crewLinksPreservedOnSave(r);
+    expect(preserved.map((l) => l.member_name_snapshot).sort()).toEqual(['Carlos (gone)', 'Dana (gone)']);
+  });
+
+  it('preserves nothing when every member is still live (normal edit clears all live rows)', () => {
+    const r = recWithCrew([{ member_id: 'm-carlos' }, { member_id: 'm-dana' }]);
+    expect(crewLinksPreservedOnSave(r)).toEqual([]);
+  });
+
+  it('handles a record with no crew links at all', () => {
+    expect(crewLinksPreservedOnSave(rec({}))).toEqual([]);
   });
 });
 

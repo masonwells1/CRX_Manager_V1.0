@@ -195,7 +195,15 @@ export default function AppliedRecordsManager({
     ]);
     if (!crewRes.error) setCrews((crewRes.data as GroundCrew[]) ?? []);
     if (!memberRes.error) setAllMembers((memberRes.data as GroundCrewMember[]) ?? []);
-  }, []);
+    // Surface a catalog-load failure. If this is swallowed and the member fetch
+    // failed, allMembers stays [] — and an edit-save would then resolve ZERO
+    // crew rows and silently clear the entry's live crew. The save path also
+    // guards against this (skips the crew mutation when the catalog is empty but
+    // members are still selected), but the user needs to know the picker is stale.
+    if (crewRes.error || memberRes.error) {
+      toast('error', 'Failed to load the ground-crew catalog — crew edits are disabled until it reloads.');
+    }
+  }, [toast]);
 
   useEffect(() => {
     void load();
@@ -289,21 +297,41 @@ export default function AppliedRecordsManager({
         }
 
         // #21: replace the entry's ground-crew member links. Same delete-then-
-        // insert pattern as the per-location rows: the delete clears the existing
-        // set (a fresh record or an entry with no crew matches ZERO rows, which is
-        // legitimate — surface a real error only, never a 0-rows "denial"). RLS
-        // protects both via the parent record -> job walk.
-        const delCrew = await supabase
-          .from('job_applied_record_crew')
-          .delete()
-          .eq('application_record_id', recordId);
-        if (delCrew.error) throw delCrew.error;
-        if (crewRows.length > 0) {
-          const insCrew = await supabase
+        // insert pattern as the per-location rows, with TWO critical guards:
+        //
+        // 1) LEGAL-RECORD PRESERVATION: only delete rows that still point at a
+        //    LIVE catalog member (member_id IS NOT NULL). A member later deleted
+        //    from the catalog leaves a row with member_id -> NULL (FK ON DELETE
+        //    SET NULL) but a kept member_name_snapshot — that is the durable proof
+        //    of "who was on the crew that day" (regulatory). An UNCONDITIONAL
+        //    delete here would wipe those NULL-member legal rows on ANY edit-save.
+        //    The re-insert only adds live members, and the UNIQUE constraint
+        //    (application_record_id, member_id) is NULLS DISTINCT, so live rows
+        //    never collide with the preserved NULL rows.
+        //
+        // 2) CATALOG-FETCH-FAILURE GUARD: if loadCrews failed (allMembers stays
+        //    []), buildAppliedCrewRows resolves ZERO rows even though the user has
+        //    members selected — clearing the entry's live crew with no real intent.
+        //    Skip the whole crew mutation in that case (catalog empty AND members
+        //    selected). The legitimate "user removed all members" case has the
+        //    catalog loaded (allMembers non-empty), so it still clears live rows.
+        const catalogUnavailable = allMembers.length === 0 && draft.member_ids.length > 0;
+        if (catalogUnavailable) {
+          toast('error', 'Ground-crew catalog unavailable — crew left unchanged for this entry.');
+        } else {
+          const delCrew = await supabase
             .from('job_applied_record_crew')
-            .insert(crewRows.map((c) => ({ ...c, application_record_id: recordId })))
-            .select();
-          checkMutationResult(insCrew, 'Add applied-info crew');
+            .delete()
+            .eq('application_record_id', recordId)
+            .not('member_id', 'is', null);
+          if (delCrew.error) throw delCrew.error;
+          if (crewRows.length > 0) {
+            const insCrew = await supabase
+              .from('job_applied_record_crew')
+              .insert(crewRows.map((c) => ({ ...c, application_record_id: recordId })))
+              .select();
+            checkMutationResult(insCrew, 'Add applied-info crew');
+          }
         }
       }
 
