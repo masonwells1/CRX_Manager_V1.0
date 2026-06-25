@@ -1,10 +1,11 @@
 import { useEffect, useState, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Download, FileText, Trash2, ChevronDown, ChevronRight, Tag, Tags, Search, SlidersHorizontal, Users, Layers, Pencil, Settings2, Truck, FlaskConical, ClipboardList, PackageOpen, Beaker } from 'lucide-react';
+import { Plus, Download, FileText, Trash2, ChevronDown, ChevronRight, Tag, Tags, Search, SlidersHorizontal, Users, Layers, Pencil, Settings2, Truck, FlaskConical, ClipboardList, PackageOpen, Beaker, Printer } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge, { type BadgeVariant } from '../components/ui/Badge';
 import DataTable, { type Column } from '../components/ui/DataTable';
+import { applyTableSearchSort, type SortDir } from '../lib/tableSearchSort';
 import BulkActionBar from '../components/ui/BulkActionBar';
 import BulkDeleteConfirmModal from '../components/ui/BulkDeleteConfirmModal';
 import SplitHeading from '../components/ui/SplitHeading';
@@ -15,6 +16,7 @@ import { logActivity } from '../lib/activityLogger';
 import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection';
 import { exportToCSV, fmtCSV, fmtDateCSV } from '../lib/csvExport';
 import { downloadReportPdf, type ReportPdfColumn } from '../lib/reportPdf';
+import { buildJobListPrintData, computeJobListTotals } from '../lib/jobListPrint';
 import { fetchLoaderWorksheetData } from '../lib/loaderWorksheetFetch';
 import { generateLoaderWorksheetBatchPdf, generateLoaderWorksheetPdf } from '../lib/loaderWorksheetPdf';
 import { fetchChemicalApplicationReportData } from '../lib/chemicalApplicationReportFetch';
@@ -112,6 +114,11 @@ const statusVariant: Record<JobStatus, BadgeVariant> = {
 
 // How many overflow chips before the "Click for full list" expander appears.
 const OVERFLOW_LIMIT = 2;
+
+// Field-app parity #15: the keys the DataTable's in-table quick-search matches.
+// Shared so the on-screen table and the PRINT search the SAME columns (paper ==
+// screen). Must match the `searchKeys` passed to <DataTable>.
+const JOB_TABLE_SEARCH_KEYS = ['job_number', 'customers_search', 'applicator_name'];
 
 // Crop season = October 1 to September 30
 function getPresetDates(preset: string): { start: string; end: string } {
@@ -228,6 +235,8 @@ export default function Jobs() {
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [exporting, setExporting] = useState(false);
+  // Field-app parity #15: print the CURRENTLY-DISPLAYED (filtered) job list.
+  const [printingList, setPrintingList] = useState(false);
   // Field-app parity #10: bulk Loader Worksheet PDF over the selected jobs.
   const [loaderExporting, setLoaderExporting] = useState(false);
   // Field-app parity #12: bulk Chemical Summary Report (cross-job per-product totals).
@@ -241,6 +250,13 @@ export default function Jobs() {
   const [rowChemReportId, setRowChemReportId] = useState<string | null>(null);
   // Per-row expander state, keyed "<jobId>:<field>" (customers | locations).
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  // Field-app parity #15: the DataTable's in-table search box + column sort are
+  // LIFTED here (controlled) so the PRINT can reproduce the EXACT rows + order the
+  // table shows — including a typed in-table search and a clicked column sort, not
+  // just the filter-bar/visibleJobs subset (Codex P2). The page's filter bar above
+  // is separate; this is the table's own quick search.
+  const [tableSearch, setTableSearch] = useState('');
+  const [tableSort, setTableSort] = useState<{ key: string | null; dir: SortDir }>({ key: null, dir: 'asc' });
   // Field-app parity #8: per-user List Settings (which columns show + whether
   // completed jobs appear). Loaded from user_list_settings (RLS-scoped to the
   // signed-in user); defaults until a saved row arrives. We only persist on an
@@ -600,6 +616,17 @@ export default function Jobs() {
     });
   }, [jobs, applied, listSettings.showCompleted]);
 
+  // Field-app parity #15: the EXACT rows the table shows = visibleJobs after the
+  // DataTable's own in-table search + column sort (which the table applies itself
+  // after receiving visibleJobs). The PRINT and the bottom totals read THIS so the
+  // paper and the on-screen totals match what's literally displayed (Codex P2).
+  // The DataTable below is fed the SAME controlled search/sort, so it renders this
+  // identical set.
+  const displayedJobs = useMemo(
+    () => applyTableSearchSort(visibleJobs, JOB_TABLE_SEARCH_KEYS, tableSearch, tableSort.key, tableSort.dir),
+    [visibleJobs, tableSearch, tableSort]
+  );
+
   // jobId -> set of assigned tag ids, for the bulk modal's starting state.
   const assignmentsByJob = useMemo(() => {
     const map = new Map<string, Set<string>>();
@@ -670,19 +697,12 @@ export default function Jobs() {
   const fmtCents = (cents: number) =>
     `$${(cents / 100).toLocaleString(undefined, { minimumFractionDigits: 2 })}`;
 
-  // Bottom totals row: sum total + remaining acres across the CURRENTLY-LISTED
-  // (filtered) jobs. DataTable filters its own search client-side, so we total
-  // the fetched/filtered set the page is showing (criterion #2).
-  const totals = useMemo(() => {
-    return visibleJobs.reduce(
-      (acc, j) => {
-        acc.totalAcres += j.total_acres || 0;
-        acc.remainingAcres += j.remaining_acres ?? (j.total_acres || 0);
-        return acc;
-      },
-      { totalAcres: 0, remainingAcres: 0 }
-    );
-  }, [visibleJobs]);
+  // Bottom totals row: sum total + remaining acres across the CURRENTLY-DISPLAYED
+  // jobs — i.e. visibleJobs AFTER the table's in-table search/sort (displayedJobs),
+  // so the totals reflect exactly the rows on screen (criterion #2). The SAME
+  // computeJobListTotals over the SAME displayedJobs powers the print footer (#15),
+  // so paper == screen.
+  const totals = useMemo(() => computeJobListTotals(displayedJobs), [displayedJobs]);
 
   // Field-app parity #6: multi-select option lists for the filter pickers.
   const customerOptions: MultiSelectOption[] = useMemo(
@@ -749,6 +769,44 @@ export default function Jobs() {
       toast('error', sanitizeError(err));
     }
     setExporting(false);
+  };
+
+  // Field-app parity #15: PRINT the on-screen list AS-DISPLAYED. Unlike "Download
+  // PDF" (which prints only the checkbox-selected rows with a fixed column set),
+  // this prints the CURRENTLY-DISPLAYED `displayedJobs` — visibleJobs after the
+  // active filter bar AND the table's own in-table search/sort — with the SAME
+  // visible columns the user chose in List Settings, in the same order and with
+  // the same header labels — plus a footer TOTALS row whose acres match the
+  // on-screen bottom totals. Works with ZERO checkbox selection.
+  const handlePrintList = async () => {
+    setPrintingList(true);
+    try {
+      const visibleIds = orderedVisibleColumnIds(listSettings);
+      if (visibleIds.length === 0) {
+        toast('error', 'Turn on at least one column in List Settings before printing.');
+        setPrintingList(false);
+        return;
+      }
+      const { columns, rows, totalsRow } = buildJobListPrintData(displayedJobs, visibleIds);
+      // Reflect the active filters in the printed subtitle so the paper says what
+      // it's a print OF (the displayed count + any active filters).
+      const filterNote = activeCount > 0 ? `, ${activeCount} active filter${activeCount !== 1 ? 's' : ''}` : '';
+      await downloadReportPdf({
+        title: 'Job Schedule',
+        subtitle: `${displayedJobs.length} job${displayedJobs.length !== 1 ? 's' : ''} (current list${filterNote})`,
+        dateRange: applied.startDate || applied.endDate
+          ? { start: applied.startDate || '…', end: applied.endDate || '…' }
+          : undefined,
+        columns,
+        data: rows,
+        totalsRow,
+      });
+      toast('success', `Printed list of ${displayedJobs.length} job(s)`);
+    } catch (err) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'jobs_print_list' } });
+      toast('error', sanitizeError(err));
+    }
+    setPrintingList(false);
   };
 
   // Field-app parity #10: generate one combined Loader Worksheet PDF (a page per
@@ -1418,6 +1476,20 @@ export default function Jobs() {
               </Button>
             </>
           )}
+          {/* Field-app parity #15: print the on-screen list AS-FILTERED with the
+              visible List-Settings columns + acre totals. A top-level action (NOT
+              a selection bulk action) — it prints `visibleJobs` regardless of any
+              checkbox selection. Available to any viewer, like the per-row prints. */}
+          <Button
+            variant="secondary"
+            icon={<Printer className="w-4 h-4" />}
+            onClick={handlePrintList}
+            loading={printingList}
+            disabled={displayedJobs.length === 0}
+            showChevron={false}
+          >
+            Print List
+          </Button>
           <Button
             variant="secondary"
             icon={<Settings2 className="w-4 h-4" />}
@@ -1663,7 +1735,13 @@ export default function Jobs() {
             columns={columns as unknown as Column<Record<string, unknown>>[]}
             searchable
             searchPlaceholder="Search jobs..."
-            searchKeys={['job_number', 'customers_search', 'applicator_name']}
+            searchKeys={JOB_TABLE_SEARCH_KEYS}
+            // Field-app parity #15: lift the in-table search + sort so the PRINT and
+            // bottom totals read the EXACT displayed rows (displayedJobs).
+            searchValue={tableSearch}
+            onSearchChange={setTableSearch}
+            sortState={tableSort}
+            onSortChange={setTableSort}
             emptyTitle="No jobs found"
             emptyDescription="Create your first job to get started with scheduling."
             loading={loading}
@@ -1678,10 +1756,12 @@ export default function Jobs() {
               ) : undefined
             }
           />
-          {/* Bottom totals row — sums the currently-listed jobs (criterion #2). */}
-          {visibleJobs.length > 0 && (
+          {/* Bottom totals row — sums the currently-DISPLAYED jobs (visibleJobs
+              after the table's in-table search/sort), matching what's on screen
+              and what the PRINT footer totals show (criterion #2/#3). */}
+          {displayedJobs.length > 0 && (
             <div className="mt-3 flex items-center justify-end gap-6 border-t pt-3 text-sm font-semibold text-nav-dark">
-              <span>{visibleJobs.length} job{visibleJobs.length !== 1 ? 's' : ''}</span>
+              <span>{displayedJobs.length} job{displayedJobs.length !== 1 ? 's' : ''}</span>
               <span>Tot. ac: <span className="tabular-nums">{totals.totalAcres.toLocaleString(undefined, { maximumFractionDigits: 1 })}</span></span>
               <span>Rem. ac: <span className="tabular-nums">{totals.remainingAcres.toLocaleString(undefined, { maximumFractionDigits: 1 })}</span></span>
             </div>

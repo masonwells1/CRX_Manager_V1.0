@@ -223,6 +223,49 @@ describe('generateReportPdf', () => {
     );
     expect(hasNote).toBe(false);
   });
+
+  it('renders a totals row as an autotable foot when provided', async () => {
+    await generateReportPdf(
+      makeOptions({ totalsRow: ['TOTALS', '$40.50'] })
+    );
+    const opts = mockAutoTable.mock.calls[0][1] as Record<string, unknown>;
+    expect(opts.foot).toEqual([['TOTALS', '$40.50']]);
+  });
+
+  it('maps null/undefined totals cells to blank and pads to the column count', async () => {
+    await generateReportPdf(
+      makeOptions({
+        columns: [
+          { header: 'A', key: 'a' },
+          { header: 'B', key: 'b' },
+          { header: 'C', key: 'c' },
+        ],
+        data: [],
+        totalsRow: ['TOTALS', null], // shorter than columns + a null cell
+      })
+    );
+    const opts = mockAutoTable.mock.calls[0][1] as Record<string, unknown>;
+    // One foot row, one cell per column, blanks where no total/undefined.
+    expect(opts.foot).toEqual([['TOTALS', '', '']]);
+  });
+
+  it('omits foot when no totals row is provided', async () => {
+    await generateReportPdf(makeOptions());
+    const opts = mockAutoTable.mock.calls[0][1] as Record<string, unknown>;
+    expect(opts.foot).toBeUndefined();
+  });
+
+  it('shrinks the body font for a wide column set so nothing truncates', async () => {
+    const wideCols: ReportPdfColumn[] = Array.from({ length: 10 }, (_, i) => ({
+      header: `C${i}`,
+      key: `c${i}`,
+    }));
+    await generateReportPdf(makeOptions({ columns: wideCols, data: [] }));
+    const opts = mockAutoTable.mock.calls[0][1] as Record<string, unknown>;
+    const styles = opts.styles as Record<string, unknown>;
+    expect(styles.fontSize).toBe(7); // <= the narrow-set 8pt
+    expect(styles.overflow).toBe('linebreak');
+  });
 });
 
 // ── downloadReportPdf ────────────────────────────────────────────────────

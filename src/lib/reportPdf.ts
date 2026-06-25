@@ -28,6 +28,15 @@ export interface ReportPdfOptions {
   data: Record<string, unknown>[];
   orientation?: 'portrait' | 'landscape';
   footerNote?: string;
+  /**
+   * Optional aggregated TOTALS row rendered as a bold final row in the table
+   * (autotable `foot`). One cell per column, in the same order as `columns`;
+   * a null/undefined/'' cell renders blank. Use this for a summed footer like
+   * the job-list acre totals (criterion #3) so the printout's totals match the
+   * on-screen bottom totals. Additive — existing callers that omit it are
+   * unaffected.
+   */
+  totalsRow?: (string | number | null | undefined)[];
 }
 
 export async function generateReportPdf(options: ReportPdfOptions) {
@@ -98,18 +107,50 @@ export async function generateReportPdf(options: ReportPdfOptions) {
     }
   });
 
+  // Optional aggregated TOTALS row -> autotable `foot` (bold, shaded). One cell
+  // per column; a null/undefined cell renders blank. This keeps a printed totals
+  // row aligned under its column (e.g. acre totals under the acre columns).
+  const foot =
+    options.totalsRow && options.totalsRow.length > 0
+      ? [
+          options.columns.map((_, i) => {
+            const v = options.totalsRow?.[i];
+            return v === null || v === undefined ? '' : String(v);
+          }),
+        ]
+      : undefined;
+
+  // Column-fit safety for WIDE column sets (criterion #4): wrap long cells onto
+  // multiple lines and let autotable auto-size columns to the printable width so
+  // no column is truncated off the page. Shrink the body font a touch when many
+  // columns are present so a wide set still fits landscape letter.
+  const wideColumns = options.columns.length > 8;
+  const bodyFontSize = wideColumns ? 7 : 8;
+
   autoTable(doc, {
     startY: y,
     margin: { left: margin, right: margin },
     head: heads,
     body,
+    foot,
+    // A grand-totals foot must appear ONCE on the last page, not repeated at the
+    // bottom of every page (autotable defaults showFoot to 'everyPage'). Only set
+    // it when a foot exists so non-totals reports are unaffected (Codex P2).
+    ...(foot ? { showFoot: 'lastPage' as const } : {}),
     theme: 'plain',
-    styles: { fontSize: 8, cellPadding: 4, textColor: CHARCOAL },
+    tableWidth: 'auto',
+    styles: { fontSize: bodyFontSize, cellPadding: 4, textColor: CHARCOAL, overflow: 'linebreak' },
     headStyles: {
       fillColor: [240, 240, 240],
       textColor: CHARCOAL,
       fontStyle: 'bold',
-      fontSize: 7,
+      fontSize: wideColumns ? 6.5 : 7,
+    },
+    footStyles: {
+      fillColor: [232, 245, 238],
+      textColor: CHARCOAL,
+      fontStyle: 'bold',
+      fontSize: bodyFontSize,
     },
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     columnStyles: colStyles as any,

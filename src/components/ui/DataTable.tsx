@@ -1,6 +1,7 @@
 import { useState, useMemo, type ReactNode } from 'react';
 import { Search, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
 import EmptyState from './EmptyState';
+import { applyTableSearchSort, type SortDir } from '../../lib/tableSearchSort';
 
 export interface Column<T> {
   key: string;
@@ -22,6 +23,16 @@ interface DataTableProps<T> {
   emptyAction?: ReactNode;
   filters?: ReactNode;
   loading?: boolean;
+  /**
+   * Optional CONTROLLED search/sort. When provided, the parent owns the in-table
+   * search term and column sort (so it can reuse `applyTableSearchSort` to print
+   * the exact displayed rows). When omitted, the table keeps its own internal
+   * state — every existing caller is unaffected.
+   */
+  searchValue?: string;
+  onSearchChange?: (value: string) => void;
+  sortState?: { key: string | null; dir: SortDir };
+  onSortChange?: (next: { key: string | null; dir: SortDir }) => void;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -37,44 +48,37 @@ export default function DataTable<T extends Record<string, any>>({
   emptyAction,
   filters,
   loading = false,
+  searchValue,
+  onSearchChange,
+  sortState,
+  onSortChange,
 }: DataTableProps<T>) {
-  const [search, setSearch] = useState('');
-  const [sortKey, setSortKey] = useState<string | null>(null);
-  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+  // Internal fallback state — used only when the caller doesn't control it.
+  const [searchInner, setSearchInner] = useState('');
+  const [sortKeyInner, setSortKeyInner] = useState<string | null>(null);
+  const [sortDirInner, setSortDirInner] = useState<SortDir>('asc');
 
-  const filtered = useMemo(() => {
-    let result = data;
-    if (search && searchKeys.length > 0) {
-      const lower = search.toLowerCase();
-      result = result.filter((row) =>
-        searchKeys.some((key) => {
-          const val = row[key];
-          return val != null && String(val).toLowerCase().includes(lower);
-        })
-      );
-    }
-    if (sortKey) {
-      result = [...result].sort((a, b) => {
-        const aVal = a[sortKey];
-        const bVal = b[sortKey];
-        if (aVal == null) return 1;
-        if (bVal == null) return -1;
-        if (typeof aVal === 'number' && typeof bVal === 'number') {
-          return sortDir === 'asc' ? aVal - bVal : bVal - aVal;
-        }
-        const cmp = String(aVal).localeCompare(String(bVal));
-        return sortDir === 'asc' ? cmp : -cmp;
-      });
-    }
-    return result;
-  }, [data, search, searchKeys, sortKey, sortDir]);
+  const controlledSearch = searchValue !== undefined && onSearchChange !== undefined;
+  const controlledSort = sortState !== undefined && onSortChange !== undefined;
+
+  const search = controlledSearch ? searchValue : searchInner;
+  const setSearch = controlledSearch ? onSearchChange : setSearchInner;
+  const sortKey = controlledSort ? sortState.key : sortKeyInner;
+  const sortDir = controlledSort ? sortState.dir : sortDirInner;
+
+  const filtered = useMemo(
+    () => applyTableSearchSort(data, searchKeys, search, sortKey, sortDir),
+    [data, searchKeys, search, sortKey, sortDir]
+  );
 
   const toggleSort = (key: string) => {
-    if (sortKey === key) {
-      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    const nextDir: SortDir = sortKey === key && sortDir === 'asc' ? 'desc' : 'asc';
+    const next = sortKey === key ? { key, dir: nextDir } : { key, dir: 'asc' as SortDir };
+    if (controlledSort) {
+      onSortChange(next);
     } else {
-      setSortKey(key);
-      setSortDir('asc');
+      setSortKeyInner(next.key);
+      setSortDirInner(next.dir);
     }
   };
 
