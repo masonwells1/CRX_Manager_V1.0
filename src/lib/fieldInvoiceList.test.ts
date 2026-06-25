@@ -123,6 +123,89 @@ describe('mapFieldInvoiceRow — engine-built (child locations)', () => {
     expect(row.customer_name).toBe('Unknown');
     expect(row.job_number).toBeNull();
   });
+
+  it('carries the money fields through for the PDF (paid/prepay/write-off/cost)', () => {
+    const row = mapFieldInvoiceRow(baseRaw({
+      total_amount_cents: 50000,
+      paid_amount_cents: 20000,
+      prepay_applied_cents: 5000,
+      write_off_cents: 1000,
+      total_cost_cents: 30000,
+      balance_cents: 25000,
+    }));
+    expect(row.total_amount_cents).toBe(50000);
+    expect(row.paid_amount_cents).toBe(20000);
+    expect(row.prepay_applied_cents).toBe(5000);
+    expect(row.write_off_cents).toBe(1000);
+    expect(row.total_cost_cents).toBe(30000);
+    expect(row.balance_cents).toBe(25000);
+  });
+
+  it('does NOT silently default money fields to 0 — a balance<total invoice keeps its payments', () => {
+    // Regression for LOW#3: a posted invoice WITH a payment has balance < total.
+    // If paid/prepay were dropped, the PDF would print a full Total but a lower
+    // Balance Due with no Payments line — they would disagree. Here we prove the
+    // row preserves the components so the PDF totals reconcile:
+    //   total - payments - prepay === balance.
+    const row = mapFieldInvoiceRow(baseRaw({
+      total_amount_cents: 100000,
+      paid_amount_cents: 30000,
+      prepay_applied_cents: 10000,
+      balance_cents: 60000,
+    }));
+    expect(row.balance_cents).toBeLessThan(row.total_amount_cents);
+    expect(row.total_amount_cents - row.paid_amount_cents - row.prepay_applied_cents)
+      .toBe(row.balance_cents);
+  });
+});
+
+describe('mapFieldInvoiceRow — grouped (split, multi-customer) invoice', () => {
+  // The per-acre engine keys a split invoice's field_app_locations by
+  // invoice_group_id with invoice_id=NULL, so the invoice_id-FK embed comes back
+  // EMPTY and the invoice-level snapshot columns (field_names/crop_type/
+  // total_acres) are NEVER written. The page fetches the locations by group and
+  // injects them into field_app_locations before mapping — this proves that,
+  // once injected, Locations/Crops/Acres populate and do NOT silently blank.
+  it('populates locations/crops/acres from the injected group-keyed locations', () => {
+    const grouped = baseRaw({
+      invoice_group_id: 'grp-9',
+      // snapshot fallback columns are null for grouped invoices (engine never writes them)
+      field_names: null,
+      crop_type: null,
+      total_acres: null,
+      // Embedded (invoice_id-keyed) locations come back EMPTY for a grouped invoice…
+      field_app_locations: [],
+    });
+    // …and the page injects the group-matched rows here before mapping:
+    grouped.field_app_locations = [
+      { applied_acres: 40, crop_type: 'Corn', field: { field_name: 'Pole Field', crop_type: 'Corn' } },
+      { applied_acres: 22.5, crop_type: null, field: { field_name: 'Leaming 92', crop_type: 'Soybeans' } },
+    ];
+
+    const row = mapFieldInvoiceRow(grouped);
+    expect(row.locations).toEqual(['Pole Field', 'Leaming 92']);
+    expect(row.crops).toEqual(['Corn', 'Soybeans']);
+    expect(row.total_acres).toBe(62.5);
+    // and these MUST NOT be blank/zero (the bug this guards against)
+    expect(row.locations.length).toBeGreaterThan(0);
+    expect(row.crops.length).toBeGreaterThan(0);
+    expect(row.total_acres).toBeGreaterThan(0);
+  });
+
+  it('a grouped invoice with NO injected locations and null snapshots blanks honestly (not a crash)', () => {
+    // If the group fetch returned nothing, the row should degrade to empty —
+    // never throw — so the list still renders.
+    const row = mapFieldInvoiceRow(baseRaw({
+      invoice_group_id: 'grp-empty',
+      field_names: null,
+      crop_type: null,
+      total_acres: null,
+      field_app_locations: [],
+    }));
+    expect(row.locations).toEqual([]);
+    expect(row.crops).toEqual([]);
+    expect(row.total_acres).toBe(0);
+  });
 });
 
 describe('applyFieldInvoiceFilters', () => {

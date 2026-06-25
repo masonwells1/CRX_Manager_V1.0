@@ -21,6 +21,10 @@ export type RawFieldInvoiceRow = Omit<Invoice, 'customer'> & {
   customer?: { farm_name?: string | null } | null;
   job?: { job_number?: string | null } | null;
   // Engine-built per-acre invoices store locations/crops/acres on child rows.
+  // For UNGROUPED invoices these embed directly via the invoice_id FK. For
+  // GROUPED (split, multi-customer) invoices the engine keys locations by
+  // invoice_group_id with invoice_id=NULL, so the caller must fetch them by
+  // group and inject them here before mapping (see FieldInvoicesUnposted).
   field_app_locations?: Array<{
     crop_type?: string | null;
     total_acres?: number | null;
@@ -53,6 +57,14 @@ export interface FieldInvoiceListRow {
   chemicals: string[];
   total_acres: number;
   total_amount_cents: number;
+  /** Cents already paid (for an accurate PDF Payments line + Balance Due). */
+  paid_amount_cents: number;
+  /** Cents of prepay applied (for an accurate PDF Prepay line + Balance Due). */
+  prepay_applied_cents: number;
+  /** Cents written off (carried through to the PDF). */
+  write_off_cents: number;
+  /** Total cost cents (carried through to the PDF). */
+  total_cost_cents: number;
   balance_cents: number;
   invoice_date: string;
   /** Lowercased haystack for the in-list Search box. */
@@ -146,6 +158,10 @@ export function mapFieldInvoiceRow(raw: RawFieldInvoiceRow): FieldInvoiceListRow
     chemicals,
     total_acres,
     total_amount_cents: raw.total_amount_cents,
+    paid_amount_cents: Number(raw.paid_amount_cents) || 0,
+    prepay_applied_cents: Number(raw.prepay_applied_cents) || 0,
+    write_off_cents: Number(raw.write_off_cents) || 0,
+    total_cost_cents: Number(raw.total_cost_cents) || 0,
     balance_cents: raw.balance_cents,
     invoice_date: raw.invoice_date,
     search_blob,

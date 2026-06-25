@@ -6,7 +6,7 @@ import Button from '../components/ui/Button';
 import ConfirmModal from '../components/ui/ConfirmModal';
 import MultiSelectDropdown, { type MultiSelectOption } from '../components/jobs/MultiSelectDropdown';
 import { useToast } from '../components/ui/Toast';
-import { supabase, sanitizeError } from '../lib/db';
+import { supabase, sanitizeError, hasRpcCode, RpcErrorCodes } from '../lib/db';
 import { Sentry } from '../lib/sentry';
 import { runCriticalAction } from '../lib/criticalAction';
 import { generateIdempotencyKey } from '../lib/idempotency';
@@ -91,15 +91,20 @@ export default function FieldInvoicesUnposted() {
   const fetchInvoices = useCallback(async () => {
     setLoading(true);
     const { start: seasonStart, end: seasonEnd } = getSeasonDates();
+    // Window on invoice_date — it is what the 'Trans. Date' filter + column use
+    // (ChemMan "Trans. Date" = the invoice/transaction date). Windowing on
+    // created_at would silently drop an invoice whose invoice_date is in range
+    // but whose created_at fell outside the season — hiding it from the list,
+    // the footer totals, AND Post All.
     const { data, error } = await supabase
       .from('invoices')
       .select(LIST_SELECT)
       .eq('invoice_type', 'field_application')
       .in('status', ['draft', 'unposted'])
       .is('deleted_at', null)
-      .gte('created_at', seasonStart)
-      .lte('created_at', seasonEnd + 'T23:59:59')
-      .order('created_at', { ascending: false })
+      .gte('invoice_date', seasonStart)
+      .lte('invoice_date', seasonEnd)
+      .order('invoice_date', { ascending: false })
       .limit(QUERY_LIMIT);
 
     if (error) {
@@ -113,7 +118,51 @@ export default function FieldInvoicesUnposted() {
       toast('error', `Showing first ${QUERY_LIMIT} unposted field invoices — some may be hidden.`);
     }
 
-    setRows(((data || []) as unknown as RawFieldInvoiceRow[]).map(mapFieldInvoiceRow));
+    const raws = (data || []) as unknown as RawFieldInvoiceRow[];
+
+    // GROUPED (split, multi-customer) invoices: the per-acre engine keys their
+    // field_app_locations by invoice_group_id with invoice_id=NULL, so the
+    // invoice_id-FK embed in LIST_SELECT comes back EMPTY for them. Fetch those
+    // locations by group and inject them so Locations/Crops/Acres (and the PDF
+    // application-detail header, which toPdfRow derives from these) populate.
+    // (Mirrors the groupId ? eq('invoice_group_id') : eq('invoice_id') branch in
+    // FieldApplicationInvoice.tsx.)
+    const groupIds = [...new Set(
+      raws.map((r) => r.invoice_group_id).filter((g): g is string => !!g)
+    )];
+
+    if (groupIds.length > 0) {
+      const { data: groupLocs, error: groupErr } = await supabase
+        .from('field_app_locations')
+        .select('invoice_group_id, applied_acres, crop_type, field:fields!field_app_locations_field_id_fkey(field_name, crop_type)')
+        .in('invoice_group_id', groupIds);
+
+      if (groupErr) {
+        Sentry.captureException(groupErr, { tags: { source: 'fetch_group_locations', page: 'field-invoices-unposted' } });
+        toast('error', 'Failed to load split-invoice locations');
+        setLoading(false);
+        return;
+      }
+
+      const byGroup = new Map<string, RawFieldInvoiceRow['field_app_locations']>();
+      for (const loc of (groupLocs || []) as NonNullable<RawFieldInvoiceRow['field_app_locations']>) {
+        const gid = (loc as { invoice_group_id?: string | null }).invoice_group_id;
+        if (!gid) continue;
+        const list = byGroup.get(gid) ?? [];
+        list!.push(loc);
+        byGroup.set(gid, list);
+      }
+
+      for (const r of raws) {
+        if (r.invoice_group_id) {
+          // Use the group-matched locations for grouped invoices. Ungrouped rows
+          // keep their embedded invoice_id-keyed field_app_locations untouched.
+          r.field_app_locations = byGroup.get(r.invoice_group_id) ?? [];
+        }
+      }
+    }
+
+    setRows(raws.map(mapFieldInvoiceRow));
     setLoading(false);
   }, [toast]);
 
@@ -294,7 +343,14 @@ export default function FieldInvoicesUnposted() {
               .throwOnError();
             posted += 1;
           } catch (err: unknown) {
-            failures.push(`${t.invoice_number}: ${sanitizeError(err)}`);
+            // PRICING_INCOMPLETE is the common, expected reason a field invoice
+            // can't post yet — show plain English instead of the raw code.
+            // (Mirrors OrderDetail's Post-All handling.)
+            if (hasRpcCode(err, RpcErrorCodes.PRICING_INCOMPLETE)) {
+              failures.push(`${t.invoice_number}: needs pricing first`);
+            } else {
+              failures.push(`${t.invoice_number}: ${sanitizeError(err)}`);
+            }
           }
         }
         await fetchInvoices();
@@ -564,6 +620,14 @@ function toPdfRow(row: FieldInvoiceListRow) {
     total_acres: row.total_acres || null,
     applicator_name: row.applicators[0] ?? null,
     total_amount_cents: row.total_amount_cents,
+    // Carry the money fields so the PDF's Payments / Prepay lines and Balance
+    // Due agree with the printed Total. Defaulting these to 0 would make a
+    // posted invoice WITH payments print a full Total but a lower Balance Due
+    // (they'd silently disagree) — this list is unposted today, but #23 Posted
+    // reuses toPdfRow → buildInvoicePdfDataFromRow.
+    total_cost_cents: row.total_cost_cents,
+    paid_amount_cents: row.paid_amount_cents,
+    prepay_applied_cents: row.prepay_applied_cents,
     balance_cents: row.balance_cents,
   };
 }
