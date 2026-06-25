@@ -51,23 +51,26 @@ const sheet = (over: Partial<BuildSheetInput>) =>
   });
 
 /**
- * An in-scope job input from a built sheet. `total_acres`/`remaining_acres`/`status`
- * are supplied explicitly (in real use they come from jobs.* via the fetch). When
- * total/remaining are omitted they default to the sheet's full acres (a pure scheduled
- * job: nothing applied → remaining == total → factor 1).
+ * An in-scope job input from a built sheet. `remaining_acres`/`acre_basis`/`status` are
+ * supplied explicitly (in real use the fetch computes remaining = acre_basis − applied and
+ * reads status from jobs.*). The scale-factor DENOMINATOR is `acre_basis` — the SAME basis
+ * the caller derived remaining from (normally the gatherer's field-acre total
+ * data.total_acres; a no-field fallback job carries jobs.total_acres). When `basis` is
+ * omitted it defaults to the sheet's field acres (data.total_acres); when `remaining` is
+ * omitted it defaults to that basis (a pure scheduled job: nothing applied → factor 1).
  */
 const job = (
   id: string,
   over: Partial<BuildSheetInput>,
-  acres?: { total?: number; remaining?: number; status?: string },
+  acres?: { basis?: number; remaining?: number; status?: string },
 ): ProjectedUseJobInput => {
   const data = sheet(over);
-  const total = acres?.total ?? data.total_acres;
+  const basis = acres?.basis ?? data.total_acres;
   return {
     job_id: id,
     data,
-    total_acres: total,
-    remaining_acres: acres?.remaining ?? total,
+    acre_basis: basis,
+    remaining_acres: acres?.remaining ?? basis,
     status: acres?.status ?? 'scheduled',
   };
 };
@@ -79,7 +82,7 @@ describe('buildProjectedUseReportData — scheduled job projection (criterion 2 
       job_number: 'JOB-1',
       fields: [field({ field_name: 'A', acres: 100, sort_order: 0 })],
       products: [product({ product_name: 'Roundup', rate_per_acre: 2, rate_unit: 'pt', unit: 'pt', product_form: 'liquid' })],
-    }, { total: 100, remaining: 100, status: 'scheduled' });
+    }, { basis: 100, remaining: 100, status: 'scheduled' });
     const out = buildProjectedUseReportData([j]);
     expect(out.rows).toHaveLength(1);
     expect(out.rows[0]).toMatchObject({
@@ -104,12 +107,12 @@ describe('buildProjectedUseReportData — scheduled job projection (criterion 2 
       job_number: 'JOB-1',
       fields: [field({ field_name: 'A', acres: 100, sort_order: 0 })],
       products: [product({ product_name: 'Roundup', rate_per_acre: 2, rate_unit: 'pt', unit: 'pt', product_form: 'liquid' })],
-    }, { total: 100, remaining: 100, status: 'scheduled' });
+    }, { basis: 100, remaining: 100, status: 'scheduled' });
     const j2 = job('j2', {
       job_number: 'JOB-2',
       fields: [field({ field_name: 'B', acres: 50, sort_order: 0 })],
       products: [product({ product_name: 'Roundup', rate_per_acre: 2, rate_unit: 'pt', unit: 'pt', product_form: 'liquid' })],
-    }, { total: 50, remaining: 50, status: 'scheduled' });
+    }, { basis: 50, remaining: 50, status: 'scheduled' });
     const out = buildProjectedUseReportData([j1, j2]);
     const roundup = out.rows.find((r) => r.product_name === 'Roundup')!;
     // Hand-verify: planned rate × scheduled acres summed = 200 + 100 = 300.
@@ -131,7 +134,7 @@ describe('buildProjectedUseReportData — in_progress uses REMAINING acres, not 
       job_number: 'JOB-IP',
       fields: [field({ acres: 100, sort_order: 0 })],
       products: [product({ product_name: 'Roundup', rate_per_acre: 2, rate_unit: 'pt', unit: 'pt', product_form: 'liquid' })],
-    }, { total: 100, remaining: 60, status: 'in_progress' });
+    }, { basis: 100, remaining: 60, status: 'in_progress' });
     const out = buildProjectedUseReportData([j]);
     const roundup = out.rows.find((r) => r.product_name === 'Roundup')!;
     // 2 pt/ac × 60 remaining ac = 120 pt (NOT 200).
@@ -142,17 +145,41 @@ describe('buildProjectedUseReportData — in_progress uses REMAINING acres, not 
     expect(out.projected_acres).toBe(60);
   });
 
+  it('scales by the gatherer FIELD-acre total even when jobs.total_acres would diverge (MED fix)', () => {
+    // The MED defect: the factor denominator used to be jobs.total_acres. Here the job's
+    // FIELD acres (Σ acres_to_treat) = 100 and the saved product quantity = 200 pt
+    // (= rate 2 × 100 field acres). If jobs.total_acres were a divergent 80, the OLD code
+    // computed factor = remaining/jobs.total = 60/80 = 0.75 → 200 × 0.75 = 150 pt (WRONG).
+    // The FIX uses data.total_acres (100) as the denominator → 60/100 = 0.6 → 120 pt (RIGHT).
+    // We supply only remaining (60); the denominator is read from data.total_acres (100),
+    // so a divergent jobs.total_acres can never reach the math.
+    const j = job('jDiv', {
+      job_number: 'JOB-DIVERGE',
+      fields: [field({ acres: 100, sort_order: 0 })],
+      products: [product({ product_name: 'Roundup', rate_per_acre: 2, rate_unit: 'pt', unit: 'pt', product_form: 'liquid' })],
+    }, { remaining: 60, status: 'in_progress' });
+    // Sanity: the gatherer basis IS the field-acre total, and the planned total is rate×100.
+    expect(j.data.total_acres).toBe(100);
+    expect(j.data.products[0].total_applied).toBe(200);
+    const out = buildProjectedUseReportData([j]);
+    const roundup = out.rows.find((r) => r.product_name === 'Roundup')!;
+    expect(roundup.projected_quantity).toBe(120); // the CORRECT field-acre-based number, not 150
+    expect(roundup.projected_quantity).toBe(2 * 60);
+    expect(roundup.gl_lb_display).toBe('15 gal'); // 120 pt / 8, re-derived from the projected sum
+    expect(out.included_jobs[0]).toMatchObject({ remaining_acres: 60, total_acres: 100, status: 'in_progress' });
+  });
+
   it('a scheduled job (full acres) + an in_progress job (remaining) sum correctly by product', () => {
     // Scheduled: 2 pt/ac × 100 = 200 pt. In_progress: 2 pt/ac × 60 remaining (of 100) = 120 pt.
     // Projected sum = 320 pt → 40 gal.
     const sched = job('sched', {
       fields: [field({ acres: 100, sort_order: 0 })],
       products: [product({ product_name: 'Roundup', rate_per_acre: 2, rate_unit: 'pt', unit: 'pt', product_form: 'liquid' })],
-    }, { total: 100, remaining: 100, status: 'scheduled' });
+    }, { basis: 100, remaining: 100, status: 'scheduled' });
     const inprog = job('inprog', {
       fields: [field({ acres: 100, sort_order: 0 })],
       products: [product({ product_name: 'Roundup', rate_per_acre: 2, rate_unit: 'pt', unit: 'pt', product_form: 'liquid' })],
-    }, { total: 100, remaining: 60, status: 'in_progress' });
+    }, { basis: 100, remaining: 60, status: 'in_progress' });
     const out = buildProjectedUseReportData([sched, inprog]);
     const roundup = out.rows.find((r) => r.product_name === 'Roundup')!;
     expect(roundup.projected_quantity).toBe(320);
@@ -168,7 +195,7 @@ describe('buildProjectedUseReportData — excluded accounting (criterion 4: neve
       job_number: 'JOB-1',
       fields: [field({ acres: 100, sort_order: 0 })],
       products: [product({ product_name: 'Roundup', rate_per_acre: 2, rate_unit: 'pt', unit: 'pt', product_form: 'liquid' })],
-    }, { total: 100, remaining: 100, status: 'scheduled' });
+    }, { basis: 100, remaining: 100, status: 'scheduled' });
     const out = buildProjectedUseReportData(
       [sched],
       [{ job_id: 'jDone', job_number: 'JOB-DONE', reason: 'Already applied / not scheduled (status: completed) — nothing left to project' }],
@@ -251,7 +278,7 @@ describe('buildProjectedUseReportData — guards & edge cases', () => {
     const j = job('j1', {
       fields: [field({ acres: 100, sort_order: 0 })],
       products: [product({ product_name: 'Roundup', rate_per_acre: 2, rate_unit: 'pt', unit: 'pt', product_form: 'liquid' })],
-    }, { total: 100, remaining: 0, status: 'in_progress' });
+    }, { basis: 100, remaining: 0, status: 'in_progress' });
     const out = buildProjectedUseReportData([j]);
     expect(out.rows).toEqual([]);
     expect(out.included_jobs).toHaveLength(1); // still listed
@@ -262,7 +289,7 @@ describe('buildProjectedUseReportData — guards & edge cases', () => {
     const j1 = job('j1', {
       fields: [field({ acres: 0, sort_order: 0 })],
       products: [product({ product_name: 'Bare' })],
-    }, { total: 0, remaining: 0, status: 'scheduled' });
+    }, { basis: 0, remaining: 0, status: 'scheduled' });
     const out = buildProjectedUseReportData([j1]);
     expect(out.rows).toEqual([]);
     expect(out.included_jobs).toHaveLength(1);
@@ -277,7 +304,7 @@ describe('projectedUseCsvRows', () => {
         product({ product_name: 'Roundup', rate_per_acre: 2, rate_unit: 'pt', unit: 'pt', product_form: 'liquid' }),
         product({ product_name: 'AMS', rate_per_acre: 5, rate_unit: 'lb', unit: 'lb', product_form: 'dry' }),
       ],
-    }, { total: 100, remaining: 100, status: 'scheduled' });
+    }, { basis: 100, remaining: 100, status: 'scheduled' });
     const out = buildProjectedUseReportData([j1]);
     const csv = projectedUseCsvRows(out);
     expect(csv).toEqual([
@@ -290,7 +317,7 @@ describe('projectedUseCsvRows', () => {
     const j1 = job('j1', {
       fields: [field({ acres: 100, sort_order: 0 })],
       products: [product({ product_name: 'Roundup', rate_per_acre: 2, rate_unit: 'pt', unit: 'pt', product_form: 'liquid' })],
-    }, { total: 100, remaining: 100, status: 'scheduled' });
+    }, { basis: 100, remaining: 100, status: 'scheduled' });
     const out = buildProjectedUseReportData(
       [j1],
       [{ job_id: 'jX', job_number: 'JOB-9', reason: 'Could not resolve billed customers' }],

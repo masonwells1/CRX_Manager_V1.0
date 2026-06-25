@@ -13,14 +13,24 @@
  *
  * IN-SCOPE (the criterion-4 "distinguish projected from already-applied" gate):
  *   • status is 'scheduled' or 'in_progress' (a job that still has work to do), AND
- *   • remaining_acres > 0 (there is an un-sprayed portion to forecast).
- * Any other selected job — completed / invoiced / cancelled / 0 remaining — is EXCLUDED
- * with a plain reason and listed on the report, so the office sees it was deliberately
- * NOT projected (its product is already out, not still to buy).
+ *   • remaining_acres > 0, where remaining = the gatherer's AUTHORITATIVE field-acre
+ *     total (Σ job_fields.acres_to_treat = `data.total_acres`) MINUS applied_acres.
+ * Any other selected job — completed / invoiced / cancelled / fully-applied / no-acres-
+ * basis — is EXCLUDED with a plain reason and listed on the report, so the office sees it
+ * was deliberately NOT projected (its product is already out, not still to buy).
  *
- * remaining_acres / total_acres / status are read from the SAME jobs row the list
- * already carries, but we re-read them here so the scope decision and the projection
- * basis come from one authoritative fetch (not a possibly-stale in-memory row).
+ * WHY NOT jobs.remaining_acres (the bug this fixes): jobs.remaining_acres is a GENERATED
+ * column = GREATEST(COALESCE(total_acres,0) − COALESCE(applied_acres,0), 0). When a
+ * scheduled/in_progress job has a NULL jobs.total_acres but real un-applied field work, it
+ * reads 0 (never NULL), so a remaining<=0 gate would silently DROP a fresh job with the
+ * FALSE reason "already applied" — the office under-orders. So we DRIVE the acre math off
+ * the gatherer's field-acre total (data.total_acres) and read applied_acres to compute
+ * remaining honestly. jobs.total_acres is only a last-resort fallback when the job has no
+ * field acres at all.
+ *
+ * status / applied_acres / total_acres are read from the SAME jobs row the list already
+ * carries, but we re-read them here so the scope decision and the projection basis come
+ * from one authoritative fetch (not a possibly-stale in-memory row).
  *
  * N+1 is acceptable here (one fetch per in-scope job — a bounded, user-selected set);
  * we do NOT over-engineer a batch query. We just never undercount.
@@ -45,16 +55,7 @@ interface ScopeRow {
   job_number: string | null;
   status: string | null;
   total_acres: number | null;
-  remaining_acres: number | null;
-}
-
-/** A short, plain-English reason a job is not projected. */
-function excludeReason(status: string | null, remaining: number): string {
-  if (status && !PROJECTABLE_STATUSES.has(status)) {
-    return `Already applied / not scheduled (status: ${status}) — nothing left to project`;
-  }
-  if (remaining <= 0) return 'No remaining acres — all planned acres already applied';
-  return 'Not eligible for projection';
+  applied_acres: number | null;
 }
 
 /**
@@ -64,7 +65,8 @@ function excludeReason(status: string | null, remaining: number): string {
  *
  * A job is EXCLUDED (not silently dropped) when:
  *   • its status is not scheduled/in_progress (already-applied / completed / cancelled / invoiced), or
- *   • it has 0 remaining acres (all planned acres already sprayed), or
+ *   • it is genuinely fully applied (applied_acres >= the field-acre total), or
+ *   • it has no acres basis at all (no field acres AND no jobs.total_acres to fall back on), or
  *   • its scope row can't be read / it no longer exists, or
  *   • its #11 fetch throws (RLS/compliance abort, label/customer unresolved), or
  *   • it has no chemicals to project (nothing to contribute — surfaced so the count is honest).
@@ -73,12 +75,15 @@ export async function fetchProjectedUseData(jobIds: string[]): Promise<Projected
   const uniqueIds = [...new Set(jobIds)];
   if (uniqueIds.length === 0) return { jobs: [], excluded: [] };
 
-  // One authoritative read of the scope columns (status + acres) for the selection.
+  // One authoritative read of the scope columns (status + applied/total acres) for the
+  // selection. We DO NOT read jobs.remaining_acres: it is a generated column off
+  // jobs.total_acres and reads 0 (never NULL) when total_acres is NULL, which would drop a
+  // fresh NULL-total job. We compute remaining ourselves from the field-acre basis below.
   const scopeById = new Map<string, ScopeRow>();
   try {
     const { data, error } = await supabase
       .from('jobs')
-      .select('id, job_number, status, total_acres, remaining_acres')
+      .select('id, job_number, status, total_acres, applied_acres')
       .in('id', uniqueIds);
     if (error) throw error;
     (data as ScopeRow[] | null)?.forEach((j) => scopeById.set(j.id, j));
@@ -103,12 +108,19 @@ export async function fetchProjectedUseData(jobIds: string[]): Promise<Projected
     }
     const jobNumber = scope.job_number ?? null;
     const status = scope.status ?? null;
-    const totalAcres = Number(scope.total_acres) || 0;
-    const remainingAcres = Number(scope.remaining_acres ?? scope.total_acres) || 0;
+    const appliedAcres = Number.isFinite(Number(scope.applied_acres)) ? Number(scope.applied_acres) : 0;
+    const jobsTotalAcres = Number.isFinite(Number(scope.total_acres)) ? Number(scope.total_acres) : 0;
 
-    // SCOPE GATE: only scheduled/in_progress jobs with un-applied acres are projected.
-    if (!status || !PROJECTABLE_STATUSES.has(status) || remainingAcres <= 0) {
-      excluded.push({ job_id: jobId, job_number: jobNumber, reason: excludeReason(status, remainingAcres) });
+    // STATUS GATE ONLY: only scheduled/in_progress jobs still have work to project. The
+    // ACRE/remaining decision is made AFTER the gatherer fetch below, off the gatherer's
+    // authoritative field-acre total — NOT jobs.remaining_acres (which reads 0 for a fresh
+    // NULL-total job and would silently drop it as "already applied").
+    if (!status || !PROJECTABLE_STATUSES.has(status)) {
+      excluded.push({
+        job_id: jobId,
+        job_number: jobNumber,
+        reason: `Already applied / not scheduled (status: ${status ?? 'unknown'}) — nothing left to project`,
+      });
       continue;
     }
 
@@ -118,6 +130,35 @@ export async function fetchProjectedUseData(jobIds: string[]): Promise<Projected
         excluded.push({ job_id: jobId, job_number: jobNumber, reason: 'Job no longer exists' });
         continue;
       }
+
+      // AUTHORITATIVE acre basis = the gatherer's field-acre total (Σ acres_to_treat).
+      // Fall back to jobs.total_acres ONLY when the job has no field acres at all.
+      const fieldTotal = Number.isFinite(data.total_acres) && data.total_acres > 0
+        ? data.total_acres
+        : jobsTotalAcres;
+
+      if (fieldTotal <= 0) {
+        // No acres basis at all — honest reason, NOT "already applied" (applied may be 0).
+        excluded.push({
+          job_id: jobId,
+          job_number: data.job_number ?? jobNumber,
+          reason: 'No acres basis to project — set the job’s field/total acres',
+        });
+        continue;
+      }
+
+      // Honest remaining = the field-acre total minus what has already been applied.
+      const remainingAcres = Math.max(fieldTotal - appliedAcres, 0);
+      if (remainingAcres <= 0) {
+        // Genuinely fully applied (applied >= the field-acre total) — nothing left.
+        excluded.push({
+          job_id: jobId,
+          job_number: data.job_number ?? jobNumber,
+          reason: 'Already applied — nothing left to project',
+        });
+        continue;
+      }
+
       if (data.products.length === 0) {
         excluded.push({ job_id: jobId, job_number: data.job_number ?? jobNumber, reason: 'No chemicals on this job to project' });
         continue;
@@ -126,7 +167,7 @@ export async function fetchProjectedUseData(jobIds: string[]): Promise<Projected
         job_id: jobId,
         data,
         remaining_acres: remainingAcres,
-        total_acres: totalAcres,
+        acre_basis: fieldTotal, // the basis we derived remaining from — honored by the aggregator
         status,
       });
     } catch (err) {

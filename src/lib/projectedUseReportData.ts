@@ -13,21 +13,31 @@
  *                              [ planned rate-per-acre × the job's NOT-YET-APPLIED acres ]
  *
  *   • The per-job gatherer (#11 `buildApplicatorSheetData`) already computes, per
- *     product, `total_applied` = planned rate × the job's FULL planned acres (= sum of
- *     job_fields.acres_to_treat = the job's total_acres). To turn that into the
- *     NOT-YET-APPLIED forecast we SCALE it by the job's remaining-acres FACTOR
- *     = remaining_acres / total_acres:
- *         projected_for_job = total_applied × (remaining_acres / total_acres)
- *                           = (rate × total_acres) × (remaining / total_acres)
+ *     product, `total_applied` = planned rate × the job's FULL FIELD acres (= Σ
+ *     job_fields.acres_to_treat, exposed as `data.total_acres`). To turn that into the
+ *     NOT-YET-APPLIED forecast we SCALE it by the job's remaining-acres FACTOR whose
+ *     denominator MUST be that SAME field-acre total so it cancels exactly:
+ *         factor = remaining_acres / field_acre_total
+ *         projected_for_job = total_applied × factor
+ *                           = (rate × field_acre_total) × (remaining / field_acre_total)
  *                           = rate × remaining_acres            ✓ (the rule above)
- *     For a pure `scheduled` job nothing is applied so remaining == total → factor 1 →
- *     projected == planned (full scheduled acres). For an `in_progress` job partly done
- *     (e.g. 100 total, 40 applied → 60 remaining) the factor is 0.6 and the projection
- *     is the UN-sprayed 60-acre portion — exactly the forecast the office must buy for.
- *   • The caller (`projectedUseReportFetch`) is responsible for restricting the input
- *     to IN-SCOPE jobs (status scheduled/in_progress AND remaining_acres > 0) and for
- *     supplying each job's remaining/total acres so this pure module can compute the
- *     factor. Already-applied/completed/invoiced/cancelled/zero-remaining jobs are
+ *     The field-acre total is the gatherer's `data.total_acres` (Σ acres_to_treat) — the
+ *     AUTHORITATIVE acre basis the per-product `total_applied` was computed over. It is
+ *     NOT `jobs.total_acres`, which can DIVERGE (legacy/imported/quote/blend jobs) and
+ *     would make the factor's denominator not match the quantity's acre basis (the MED
+ *     defect: jobs.total_acres=80 but field acres=100, qty=200 @ remaining=60 → using 80
+ *     gives 150 pt; using the field-acre 100 gives the true 120 pt).
+ *     For a pure `scheduled` job nothing is applied so remaining == field total → factor
+ *     1 → projected == planned (full scheduled acres). For an `in_progress` job partly
+ *     done (e.g. 100 field ac, 40 applied → 60 remaining) the factor is 0.6 and the
+ *     projection is the UN-sprayed 60-acre portion — exactly the forecast the office buys.
+ *   • The caller (`projectedUseReportFetch`) is responsible for restricting the input to
+ *     IN-SCOPE jobs (status scheduled/in_progress AND a positive acre basis with
+ *     remaining > 0) and for supplying each job's honest remaining_acres
+ *     (= field_acre_total − applied_acres) so this pure module can compute the factor.
+ *     The denominator is read here straight from `data.total_acres` (the field-acre
+ *     total), NOT from a separate caller-supplied total — one authoritative basis.
+ *     Already-applied/completed/invoiced/cancelled/zero-remaining/no-basis jobs are
  *     EXCLUDED upstream and listed here — NEVER folded into the projection (criterion 4:
  *     distinguish projected from already-applied; never double-count a sprayed quantity).
  *
@@ -81,7 +91,7 @@ export interface ProjectedUseJobRef {
   status: string;
   /** Acres NOT yet applied that the projection used for this job (the forecast acres). */
   remaining_acres: number;
-  /** The job's full planned acres (so the reader sees remaining vs total at a glance). */
+  /** The job's full FIELD acres (Σ acres_to_treat — the projection basis) — remaining vs total at a glance. */
   total_acres: number;
 }
 
@@ -96,10 +106,21 @@ export interface ProjectedUseExcludedJob {
 export interface ProjectedUseJobInput {
   job_id: string;
   data: ApplicatorSheetData;
-  /** Acres NOT yet applied (jobs.remaining_acres) — the forecast acres for this job. */
+  /**
+   * Acres NOT yet applied — the forecast acres for this job. The caller computes this
+   * HONESTLY as `acre_basis − applied_acres` (NOT jobs.remaining_acres, which is a
+   * generated column off jobs.total_acres and reads 0 when total_acres is NULL).
+   */
   remaining_acres: number;
-  /** The job's full planned acres (jobs.total_acres) — the denominator of the scale factor. */
-  total_acres: number;
+  /**
+   * The acre BASIS the projection scales against (the scale-factor denominator) — the SAME
+   * basis the caller used to derive remaining_acres. Normally the gatherer's field-acre
+   * total (data.total_acres = Σ acres_to_treat); the caller falls back to jobs.total_acres
+   * ONLY when the job has no field acres. The aggregator uses THIS, not a re-derived
+   * data.total_acres, so the fetch's basis decision is honored end-to-end (a no-field
+   * fallback job is NOT silently zeroed out). Must equal data.total_acres for a normal job.
+   */
+  acre_basis: number;
   /** Job status (scheduled / in_progress) for the included-jobs basis display. */
   status: string;
 }
@@ -154,14 +175,19 @@ export function buildProjectedUseReportData(
   let date_from: string | null = null;
   let date_to: string | null = null;
 
-  for (const { job_id, data, remaining_acres, total_acres, status } of jobs) {
-    // The scale factor turns the gatherer's "planned rate × FULL acres" into
-    // "planned rate × NOT-YET-APPLIED acres". Guard the denominator: a job with no
-    // positive total_acres has no derivable per-acre basis to project, so it
-    // contributes 0 (it should have been excluded upstream, but never divide by zero).
+  for (const { job_id, data, remaining_acres, acre_basis, status } of jobs) {
+    // The scale factor turns the gatherer's "planned rate × FULL acres" into "planned rate
+    // × NOT-YET-APPLIED acres". The denominator is the caller-supplied `acre_basis` — the
+    // SAME basis the caller derived remaining_acres from, and the SAME acre count the
+    // per-product `total_applied` was computed over (normally data.total_acres = Σ
+    // acres_to_treat; a no-field fallback job carries jobs.total_acres). Using the caller's
+    // basis (not a re-derived data.total_acres) keeps the decision in ONE place — so a
+    // divergent jobs.total_acres can't mis-scale (the MED defect) AND a no-field fallback
+    // job isn't silently zeroed (the Codex P2 follow-up). Guard: no positive basis → no
+    // derivable per-acre rate, so it contributes 0 (excluded upstream, but never ÷0).
+    const basis = Number.isFinite(acre_basis) && acre_basis > 0 ? acre_basis : 0;
     const remaining = Number.isFinite(remaining_acres) && remaining_acres > 0 ? remaining_acres : 0;
-    const total = Number.isFinite(total_acres) && total_acres > 0 ? total_acres : 0;
-    const factor = total > 0 ? remaining / total : 0;
+    const factor = basis > 0 ? remaining / basis : 0;
 
     projected_acres = round4(projected_acres + remaining);
     included_jobs.push({
@@ -172,7 +198,7 @@ export function buildProjectedUseReportData(
         : '',
       status,
       remaining_acres: remaining,
-      total_acres: total,
+      total_acres: basis,
     });
 
     // Track the date range the projection is based on (criterion 3).
