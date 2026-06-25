@@ -85,6 +85,11 @@
       "chain": "smoke-transfer_job_invoice_machine_fee.sql",
       "description": "Job->field-invoice billing (REQUIRES 20260619140000): forged actor -> ACTOR_MISMATCH (G3); a job with application_service_id gets ONE is_application_fee line (price_source 'tier') + the service FK on the invoice; a FLAT/unrated chemical line still bills; per-customer fee rate in split jobs (a grower's customer_application_rates override is honored — Codex P1); totals + shares reconcile in single / same-rate-split / different-rate-split cases. Pre-apply the chain FAILS (live body has no fee line). NOTE: the prior full start_job->complete->post->void loop chain file is absent; this chain certifies transfer_job_to_invoice's fee+actor behavior.",
       "covers": ["transfer_job_to_invoice"]
+    },
+    "transfer_invoice_to_job": {
+      "chain": "smoke-transfer-invoice-to-job.sql",
+      "description": "#27 reverse leg (REQUIRES 20260625120000): full job<->invoice round-trip. transfer_job_to_invoice creates the unposted invoice (job invoiced + invoice_id set + per-customer shares + application_records linked), then transfer_invoice_to_job reverses it (invoice -> cancelled, items+shares deleted, application_records.invoice_id cleared, job invoiced -> completed, jobs.invoice_id NULL, one invoice_cancelled audit row). Proves: forged actor -> ACTOR_MISMATCH (no mutation); idempotent replay (same key -> saved result, no 2nd audit row); the returned job re-transfers to a NEW invoice; a POSTED invoice is refused ('Only a draft or unposted invoice...'); an engine-built field invoice with no job_id is refused.",
+      "covers": ["transfer_invoice_to_job"]
     }
   }
 }

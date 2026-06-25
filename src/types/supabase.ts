@@ -9625,6 +9625,14 @@ export type Database = {
         }
         Returns: Json
       }
+      transfer_invoice_to_job: {
+        Args: {
+          p_idempotency_key?: string
+          p_invoice_id: string
+          p_performed_by: string
+        }
+        Returns: Json
+      }
       transfer_job_to_invoice: {
         Args: {
           p_idempotency_key?: string

@@ -1406,6 +1406,7 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   'save_job',
   'save_purchase_order',
   'save_quote',
+  'transfer_invoice_to_job',
   'transfer_job_to_invoice',
   'transition_rebate_claim',
   'unapply_credit_memo',

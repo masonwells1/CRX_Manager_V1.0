@@ -88,6 +88,11 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
   // idempotency cache hits resolve correctly.
   const payIdem = useIdempotencyKey('allocate_payment', profile?.id || '');
   const reverseWoIdem = useIdempotencyKey('reverse_write_off', profile?.id || '');
+  // #27: reverse "Transfer to Scheduling" — push a job-built field invoice back to
+  // its source job. This is the editor a TRANSFERRED field invoice actually opens in
+  // (a transferred invoice has a job_id but NO field_app_locations, so the #24
+  // discriminator routes it here, not to the per-acre FieldApplicationInvoice).
+  const transferToSchedulingIdem = useIdempotencyKey('transfer_invoice_to_job', profile?.id || '');
   const { warning: creditWarning, check: checkCreditLimit, dismiss: dismissCreditWarning } = useCreditLimitCheck();
   const isNew = id === 'new';
 
@@ -145,6 +150,10 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
   const [showVoidModal, setShowVoidModal] = useState(false);
   const [voidReason, setVoidReason] = useState('');
   const [voiding, setVoiding] = useState(false);
+
+  // #27: reverse "Transfer to Scheduling" — confirm + in-flight state.
+  const [showTransferToSchedulingModal, setShowTransferToSchedulingModal] = useState(false);
+  const [transferringToScheduling, setTransferringToScheduling] = useState(false);
 
   // Payment modal
   const [showPayModal, setShowPayModal] = useState(false);
@@ -671,6 +680,35 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
     setVoiding(false);
   };
 
+  // #27: Transfer back to Scheduling — the reverse of transfer_job_to_invoice.
+  // Cancels this draft/unposted job-built field invoice (deletes its items + shares,
+  // detaches the as-applied records) and returns the source job to 'completed' so it
+  // can be re-worked / re-transferred. Idempotent (a double click / retry returns the
+  // saved result, never double-reverses). The RPC also refuses a posted/paid invoice
+  // with a plain-English message (the button is only shown for an editable one).
+  const handleTransferToScheduling = async () => {
+    if (!id || !profile || !invoice.job_id) return;
+    setTransferringToScheduling(true);
+    try {
+      const idemKey = transferToSchedulingIdem.getKey();
+      const { data, error } = await supabase.rpc('transfer_invoice_to_job', {
+        p_invoice_id: id,
+        p_performed_by: profile.id,
+        p_idempotency_key: idemKey,
+      });
+      if (error) throw error;
+      transferToSchedulingIdem.resetKey();
+      const result = assertRpcResult<{ job_id: string; job_number: string }>(data, 'transfer_invoice_to_job');
+      setShowTransferToSchedulingModal(false);
+      toast('success', `Invoice returned to scheduling — job ${result.job_number} reopened`);
+      navigate(`/jobs/${result.job_id}`);
+    } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'transfer_invoice_to_job' } });
+      toast('error', sanitizeError(err));
+    }
+    setTransferringToScheduling(false);
+  };
+
   // Record payment via allocate_payment (PR-08, 2026-05-10).
   //
   // Pre-PR-08 this called `record_invoice_payment` which wrote to the
@@ -976,6 +1014,20 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
           {!isNew && editable && isAdmin && (
             <Button variant="secondary" icon={<Send className="w-4 h-4" />} onClick={openPostConfirm} loading={posting}>
               Post
+            </Button>
+          )}
+          {/* #27: reverse Transfer to Scheduling — only for an editable (draft/unposted)
+              field invoice that came from a job. Pushes the invoice back to the job. */}
+          {!isNew && editable && invoice.invoice_type === 'field_application' && invoice.job_id && (
+            <Button
+              variant="secondary"
+              icon={<RotateCcw className="w-4 h-4" />}
+              onClick={() => setShowTransferToSchedulingModal(true)}
+              loading={transferringToScheduling}
+              disabled={transferringToScheduling}
+              showChevron={false}
+            >
+              Transfer to Scheduling
             </Button>
           )}
           {!isNew && (
@@ -1573,6 +1625,19 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
         variant={rupPostWarning ? 'danger' : 'warning'}
         icon={AlertTriangle}
         loading={posting}
+      />
+
+      {/* #27: reverse Transfer to Scheduling confirm */}
+      <ConfirmModal
+        open={showTransferToSchedulingModal}
+        onClose={() => setShowTransferToSchedulingModal(false)}
+        onConfirm={handleTransferToScheduling}
+        title="Transfer to Scheduling"
+        message="Return this invoice to its source job? This cancels the invoice (its line items and customer shares are removed) and reopens the job so it can be edited and re-invoiced. Only works on an unposted invoice."
+        confirmLabel="Transfer to Scheduling"
+        variant="info"
+        icon={RotateCcw}
+        loading={transferringToScheduling}
       />
     </div>
   );

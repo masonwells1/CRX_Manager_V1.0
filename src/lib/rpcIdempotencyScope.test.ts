@@ -142,6 +142,7 @@ const HELPER_SCOPED: string[] = [
   'save_invoice',
   'save_purchase_order',
   'save_vendor',
+  'transfer_invoice_to_job',
   'transfer_job_to_invoice',
   'transition_rebate_claim',
   'unlink_blend_ticket_from_order',

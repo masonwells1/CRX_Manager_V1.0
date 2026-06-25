@@ -115,6 +115,8 @@ export default function FieldApplicationInvoice() {
   const saveIdem = useIdempotencyKey('save_field_app_invoice', profile?.id || '');
   const postIdem = useIdempotencyKey('post_invoice_group', profile?.id || '');
   const deleteIdem = useIdempotencyKey('delete_invoices', profile?.id || '');
+  // #27: reverse "Transfer to Scheduling" — push a job-built invoice back to its job.
+  const transferToSchedulingIdem = useIdempotencyKey('transfer_invoice_to_job', profile?.id || '');
 
   const [activeTab, setActiveTab] = useState<TabKey>('locations');
   const [saving, setSaving] = useState(false);
@@ -122,6 +124,9 @@ export default function FieldApplicationInvoice() {
   const [dirty, setDirty] = useState(false);
   const [showLocationsModal, setShowLocationsModal] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  // #27: reverse "Transfer to Scheduling" — confirm + in-flight state.
+  const [showTransferToSchedulingConfirm, setShowTransferToSchedulingConfirm] = useState(false);
+  const [transferringToScheduling, setTransferringToScheduling] = useState(false);
 
   const [invoiceNumber, setInvoiceNumber] = useState('');
   const [transactionDate, setTransactionDate] = useState(new Date().toISOString().slice(0, 10));
@@ -899,13 +904,38 @@ export default function FieldApplicationInvoice() {
     }
   };
 
-  // #24: Transfer back to Scheduling (reverse the job->invoice transfer). The
-  // reverse-transfer RPC is owned by section #27 (TRANSFER JOB to INVOICE flow) —
-  // it does not exist yet, so this surfaces an honest message rather than a
-  // silent no-op or a fake mutation. Only shown when this invoice HAS a source
-  // job and is still editable (a posted invoice can't be pushed back).
-  const handleTransferToScheduling = () => {
-    toast('info', 'Transfer back to Scheduling is coming with the Transfer flow (section #27). The invoice is unchanged.');
+  // #27: Transfer back to Scheduling (reverse the job->invoice transfer). Calls
+  // transfer_invoice_to_job: cancels this draft/unposted job-built invoice, deletes
+  // its items + shares, detaches the as-applied records, and returns the source job
+  // to 'completed' so it can be re-worked / re-transferred. Idempotent (a double
+  // click / retry returns the saved result, never double-reverses). Only reachable
+  // when this invoice HAS a source job AND is still editable (canEdit gates a posted/
+  // paid invoice out — the RPC also refuses anything past 'unposted' with a plain
+  // message). On success we navigate to the reopened job.
+  const handleTransferToScheduling = async () => {
+    if (!id || !profile || !jobId) return;
+    setTransferringToScheduling(true);
+    try {
+      const idemKey = transferToSchedulingIdem.getKey();
+      const { data, error } = await supabase.rpc('transfer_invoice_to_job', {
+        p_invoice_id: id,
+        p_performed_by: profile.id,
+        p_idempotency_key: idemKey,
+      });
+      if (error) throw error;
+      transferToSchedulingIdem.resetKey();
+      const result = assertRpcResult<{ job_id: string; job_number: string }>(data, 'transfer_invoice_to_job');
+      // The invoice is now cancelled and the form holds stale, deleted contents —
+      // clear the unsaved-changes guard so leaving doesn't prompt, then go to the job.
+      setDirty(false);
+      toast('success', `Invoice returned to scheduling — job ${result.job_number} reopened`);
+      navigate(`/jobs/${result.job_id}`);
+    } catch (err) {
+      Sentry.captureException(err, { tags: { action: 'transfer_invoice_to_job' } });
+      toast('error', `Transfer to scheduling failed: ${fieldAppError(err)}`);
+    } finally {
+      setTransferringToScheduling(false);
+    }
   };
 
   // #24: explicit Cancel (Cancel Without Saving). Navigates away; the
@@ -944,10 +974,17 @@ export default function FieldApplicationInvoice() {
               Delete
             </Button>
           )}
-          {/* #24: Transfer back to Scheduling — only when this invoice came from a
-              job AND is still editable. The reverse-transfer RPC lands in #27. */}
+          {/* #27: Transfer back to Scheduling — only when this invoice came from a
+              job AND is still editable (a posted/paid invoice can't be pushed back). */}
           {!isNew && canEdit && jobId && (
-            <Button variant="secondary" size="sm" icon={<CornerUpLeft className="w-4 h-4" />} onClick={handleTransferToScheduling}>
+            <Button
+              variant="secondary"
+              size="sm"
+              icon={<CornerUpLeft className="w-4 h-4" />}
+              onClick={() => setShowTransferToSchedulingConfirm(true)}
+              loading={transferringToScheduling}
+              disabled={transferringToScheduling}
+            >
               Transfer to Scheduling
             </Button>
           )}
@@ -1418,6 +1455,18 @@ export default function FieldApplicationInvoice() {
         message="Are you sure you want to delete this field application invoice? This action cannot be undone."
         confirmLabel="Delete"
         variant="danger"
+      />
+
+      {/* #27: reverse Transfer to Scheduling confirm. */}
+      <ConfirmModal
+        open={showTransferToSchedulingConfirm}
+        onClose={() => setShowTransferToSchedulingConfirm(false)}
+        onConfirm={() => { setShowTransferToSchedulingConfirm(false); handleTransferToScheduling(); }}
+        title="Transfer to Scheduling"
+        message="Return this invoice to its source job? This cancels the invoice (its chemical lines and customer shares are removed) and reopens the job so it can be edited and re-invoiced. Only works on an unposted invoice."
+        confirmLabel="Transfer to Scheduling"
+        variant="info"
+        loading={transferringToScheduling}
       />
     </div>
   );
