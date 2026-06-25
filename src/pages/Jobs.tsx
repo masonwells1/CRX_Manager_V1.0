@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Download, FileText, Trash2, ChevronDown, ChevronRight, Tag, Tags, Search, SlidersHorizontal, Users, Layers, Pencil, Settings2, Truck, FlaskConical, ClipboardList } from 'lucide-react';
+import { Plus, Download, FileText, Trash2, ChevronDown, ChevronRight, Tag, Tags, Search, SlidersHorizontal, Users, Layers, Pencil, Settings2, Truck, FlaskConical, ClipboardList, PackageOpen } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge, { type BadgeVariant } from '../components/ui/Badge';
@@ -22,6 +22,9 @@ import { generateChemicalApplicationReportPdf } from '../lib/chemicalApplication
 import { fetchChemicalSummaryData } from '../lib/chemicalSummaryReportFetch';
 import { buildChemicalSummaryReportData, chemicalSummaryCsvRows } from '../lib/chemicalSummaryReportData';
 import { generateChemicalSummaryReportPdf } from '../lib/chemicalSummaryReportPdf';
+import { fetchProjectedUseData } from '../lib/projectedUseReportFetch';
+import { buildProjectedUseReportData, projectedUseCsvRows } from '../lib/projectedUseReportData';
+import { generateProjectedUseReportPdf } from '../lib/projectedUseReportPdf';
 import { sanitizeError } from '../lib/errorSanitizer';
 import { Sentry } from '../lib/sentry';
 import { getSeasonDates } from '../utils/season';
@@ -226,6 +229,7 @@ export default function Jobs() {
   const [loaderExporting, setLoaderExporting] = useState(false);
   // Field-app parity #12: bulk Chemical Summary Report (cross-job per-product totals).
   const [summaryExporting, setSummaryExporting] = useState(false);
+  const [projectedExporting, setProjectedExporting] = useState(false);
   // #10: per-row Loader Worksheet print in progress (the job id being generated).
   const [rowLoaderId, setRowLoaderId] = useState<string | null>(null);
   // #11: per-row Chemical Application Report print in progress (job id being generated).
@@ -932,6 +936,75 @@ export default function Jobs() {
     setSummaryExporting(false);
   };
 
+  // Field-app parity #13: Projected Use Report over the checkbox-SELECTED jobs.
+  // FORECASTS how much of each chemical is still to apply on the UPCOMING / in-flight
+  // jobs, so the office can order product ahead. Projected = planned rate × NOT-YET-
+  // APPLIED (remaining) acres, summed per product+unit, gal/lb re-derived from the
+  // projected sum. Only scheduled/in_progress jobs WITH remaining acres are projected;
+  // already-applied / completed / invoiced / cancelled / zero-remaining jobs are listed
+  // as EXCLUDED (never folded in) so the number is a genuine forecast, not a record of
+  // what's already sprayed. Read-only: this is a planning forecast, NOT a per-job
+  // compliance document, so it does NOT stamp printed_at.
+  const handleProjectedUseReport = async () => {
+    // Criterion 1/5: no selection → prompt to select jobs, never an empty/erroring report.
+    if (selectedRows.length === 0) {
+      toast('error', 'Select one or more scheduled / in-progress jobs first to run the Projected Use Report.');
+      return;
+    }
+    setProjectedExporting(true);
+    try {
+      const ids = selectedRows.map((j) => j.id);
+      const { jobs: fetched, excluded } = await fetchProjectedUseData(ids);
+      // No in-scope jobs (e.g. every selected job is already applied / completed) → don't
+      // produce an official-looking empty forecast. Tell the user why.
+      if (fetched.length === 0) {
+        toast('error', excluded.length > 0
+          ? 'None of the selected jobs can be projected — they are already applied/completed or have no remaining acres.'
+          : 'No projectable chemical data for the selected jobs.');
+        setProjectedExporting(false);
+        return;
+      }
+      const projection = buildProjectedUseReportData(fetched, excluded);
+      await generateProjectedUseReportPdf(projection);
+      // CSV alongside the PDF (criterion 5). projectedUseCsvRows appends an EXCLUDED
+      // marker block when any job was dropped, so a standalone CSV is never a silently-
+      // partial forecast (Codex P2). Write the CSV when there is ANY content — projected
+      // product lines OR excluded-job markers — and report honestly below. The unit /
+      // gal-lb columns double as Job # / Reason for the excluded marker rows.
+      const hasRows = projection.rows.length > 0;
+      const csvRows = projectedUseCsvRows(projection);
+      const wroteCsv = csvRows.length > 0;
+      if (wroteCsv) {
+        exportToCSV(csvRows, [
+          { key: 'product_name', header: 'Product / Marker' },
+          { key: 'unit', header: 'Unit / Job #' },
+          { key: 'projected_quantity', header: 'Projected Use' },
+          { key: 'gl_lb_equiv', header: 'gal/lb Equivalent / Reason' },
+          { key: 'job_count', header: 'Jobs' },
+        ], 'projected-use');
+      }
+
+      // Audit log only (NO printed_at stamp — this is a forecast, not a compliance print).
+      const includedIds = projection.included_jobs.map((j) => j.job_id);
+      if (profile && includedIds[0]) logActivity({ event: 'projected_use_report_printed', description: `Projected Use Report generated across ${includedIds.length} job(s)`, performedBy: profile.id, entityType: 'job', entityId: includedIds[0] });
+
+      const csvNote = wroteCsv ? ' (PDF + CSV)' : ' — PDF only (no CSV)';
+      if (excluded.length > 0) {
+        // The CSV now carries the excluded jobs as marker rows, so it is never a silently
+        // partial forecast — but still point the user at the report's Jobs Excluded list.
+        toast('error', `Projection generated for ${fetched.length} job(s)${csvNote}; ${excluded.length} excluded (listed on the report and in the CSV).`);
+      } else if (!hasRows) {
+        toast('info', `Projection generated for ${fetched.length} job(s) but no projected lines were found — PDF only, no CSV written.`);
+      } else {
+        toast('success', `Projected use generated across ${fetched.length} job(s) (PDF + CSV)`);
+      }
+    } catch (err) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'jobs_bulk_projected_use' } });
+      toast('error', sanitizeError(err));
+    }
+    setProjectedExporting(false);
+  };
+
   const handleDelete = async () => {
     setDeleting(true);
     try {
@@ -989,6 +1062,7 @@ export default function Jobs() {
     { key: 'pdf', label: 'Download PDF', icon: <FileText className="w-4 h-4" />, onClick: handleExportPDF, loading: exporting },
     { key: 'loader', label: 'Loader Worksheet', icon: <Truck className="w-4 h-4" />, onClick: handleLoaderWorksheets, loading: loaderExporting },
     { key: 'chem-summary', label: 'Chemical Summary Report', icon: <ClipboardList className="w-4 h-4" />, onClick: handleChemicalSummaryReport, loading: summaryExporting },
+    { key: 'projected-use', label: 'Projected Use Report', icon: <PackageOpen className="w-4 h-4" />, onClick: handleProjectedUseReport, loading: projectedExporting },
     { key: 'delete', label: 'Delete Jobs', icon: <Trash2 className="w-4 h-4" />, onClick: () => setDeleteModalOpen(true), variant: 'danger' as const },
   ];
 
