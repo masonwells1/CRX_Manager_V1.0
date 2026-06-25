@@ -76,6 +76,8 @@ type JobRow = Job & {
   chemicals: JobChemSummary[];
   created_by_name: string;
   updated_by_name: string;
+  /** Field-app parity #9: resolved name of who last printed this job. */
+  last_printed_by_name: string;
   /** Color-coded tags assigned to this job (field-app parity #4). */
   jobTags: JobTag[];
   /** Field-app parity #6: joined facts the client-side filters read. */
@@ -393,11 +395,12 @@ export default function Jobs() {
       applicator_id?: string | null;
       created_by?: string | null;
       updated_by?: string | null;
+      last_printed_by?: string | null;
     };
     const raw = (data || []) as RawJob[];
 
     const profileIds = [...new Set(
-      raw.flatMap((j) => [j.applicator_id, j.created_by, j.updated_by]).filter(Boolean) as string[]
+      raw.flatMap((j) => [j.applicator_id, j.created_by, j.updated_by, j.last_printed_by]).filter(Boolean) as string[]
     )];
     const nameMap: Record<string, string> = {};
     if (profileIds.length > 0) {
@@ -474,6 +477,7 @@ export default function Jobs() {
         chemicals,
         created_by_name: j.created_by ? nameMap[j.created_by] || '-' : '-',
         updated_by_name: j.updated_by ? nameMap[j.updated_by] || '-' : '-',
+        last_printed_by_name: j.last_printed_by ? nameMap[j.last_printed_by] || '-' : '-',
         jobTags,
         counties,
         states,
@@ -888,10 +892,19 @@ export default function Jobs() {
     },
     {
       key: 'printed_at',
-      header: 'Printed',
+      header: 'Last Printed By',
       sortable: true,
       render: (r) => r.printed_at
-        ? <Badge variant="success">Printed</Badge>
+        ? (
+          <div className="flex flex-col gap-0.5">
+            <Badge variant="success">Printed</Badge>
+            <span className="text-xs text-secondary">
+              {r.last_printed_by_name && r.last_printed_by_name !== '-' ? r.last_printed_by_name : 'Unknown'}
+              {' · '}
+              {new Date(r.printed_at).toLocaleDateString()}
+            </span>
+          </div>
+        )
         : <Badge variant="default">Not printed</Badge>,
     },
   ];

@@ -1961,6 +1961,9 @@ export interface Job {
   updated_by: string | null;
   /** Stamped when the WPS notice / applicator printout is generated. */
   printed_at: string | null;
+  /** Field-app parity #9: profile who generated the most recent printout
+   *  (resolve the name via profile_public_view). Companion to printed_at. */
+  last_printed_by: string | null;
   /** Field-app parity #6: nullable FK to a ground crew (filterable job attribute). */
   ground_crew_id: string | null;
   /** Field-app parity #3: nullable FK to a named job batch. The OLD free-text

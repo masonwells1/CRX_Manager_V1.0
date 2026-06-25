@@ -15,6 +15,13 @@ import { supabase, checkMutationResult, assertRpcResult, hasRpcCode, RpcErrorCod
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { getLicenseStatus, licenseStatusLabel } from '../lib/licenseStatus';
 import { generateWpsNoticePdf } from '../lib/wpsNoticePdf';
+import { generateApplicatorSheetPdf } from '../lib/applicatorSheetPdf';
+import {
+  buildApplicatorSheetData,
+  parseCustomConfig,
+  SHEET_FORMAT_LABELS,
+  type ApplicatorSheetFormat,
+} from '../lib/applicatorSheetData';
 import { overrideSaveApplicatorId, shouldReassignApplicatorAfterSave, canGenerateWpsNotice } from '../lib/jobSaveHelpers';
 import { fetchCurrentWeather, parseCentroid } from '../lib/weatherCapture';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
@@ -237,6 +244,9 @@ export default function JobDetail() {
   const assignIdem = useIdempotencyKey('assign_job_applicator', profile?.id || '');
   // B3: WPS pre-application notice PDF
   const [printingWps, setPrintingWps] = useState(false);
+  // #9: applicator field sheet (Original / Custom / Enhanced) print picker.
+  const [sheetPickerOpen, setSheetPickerOpen] = useState(false);
+  const [generatingSheet, setGeneratingSheet] = useState<ApplicatorSheetFormat | null>(null);
   // C4: weather auto-capture at completion
   const [fetchingWeather, setFetchingWeather] = useState(false);
 
@@ -310,10 +320,10 @@ export default function JobDetail() {
             };
           }),
       });
-      // Stamp the printed status (ChemMan "Printed" column). Best-effort: a failed
-      // stamp must not block the already-generated PDF.
+      // Stamp the printed status (ChemMan "Printed" column) + who printed it.
+      // Best-effort: a failed stamp must not block the already-generated PDF.
       if (!isNew && id) {
-        const stampRes = await supabase.from('jobs').update({ printed_at: new Date().toISOString() }).eq('id', id).select();
+        const stampRes = await supabase.from('jobs').update({ printed_at: new Date().toISOString(), last_printed_by: profile?.id ?? null }).eq('id', id).select();
         try { checkMutationResult(stampRes, 'Stamp printed_at'); } catch { /* non-blocking */ }
       }
       if (profile) logActivity({ event: 'wps_notice_printed', description: `WPS pre-application notice generated for job ${jobNumber}`, performedBy: profile.id, entityType: 'job', entityId: id });
@@ -322,6 +332,119 @@ export default function JobDetail() {
       toast('error', 'Failed to generate WPS notice');
     }
     setPrintingWps(false);
+  };
+
+  // #9: generate the Applicator Field Sheet in one of three formats. Built from
+  // the SAVED job (blocked while dirty, like the WPS notice) so the printed
+  // figures match the persisted record. Fields print IN ROUTE ORDER (sort_order).
+  const handleGenerateSheet = async (format: ApplicatorSheetFormat) => {
+    if (!canGenerateWpsNotice({ isDirty })) {
+      toast('error', 'Save the job before printing the field sheet — it must match the saved record.');
+      return;
+    }
+    setGeneratingSheet(format);
+    try {
+      // Pull REI/PHI/EPA/product_form for EVERY product on the job, including any
+      // since-deactivated ones (allProducts is is_active=true only) — mirrors the
+      // WPS-notice label fetch so a retired product still prints its compliance data.
+      const pids = chemRows.filter((c) => c.product_id).map((c) => c.product_id);
+      const labelById = new Map<string, { rei_hours: number | null; phi_days: number | null; epa_registration: string | null; product_form: 'liquid' | 'dry' | null }>();
+      if (pids.length > 0) {
+        const { data: lp, error: lpErr } = await supabase
+          .from('products')
+          .select('id, rei_hours, phi_days, epa_registration, product_form')
+          .in('id', pids);
+        if (lpErr || !lp) {
+          toast('error', 'Could not load product data — try again before printing the field sheet.');
+          setGeneratingSheet(null);
+          return;
+        }
+        (lp as Array<{ id: string; rei_hours: number | null; phi_days: number | null; epa_registration: string | null; product_form: string | null }>).forEach((p) => {
+          const form = p.product_form === 'liquid' || p.product_form === 'dry' ? p.product_form : null;
+          labelById.set(p.id, { rei_hours: p.rei_hours, phi_days: p.phi_days, epa_registration: p.epa_registration, product_form: form });
+        });
+      }
+
+      // Resolve the Custom layout config (only needed for the Custom format).
+      // A failed/absent settings read falls back to the inert default (no error).
+      let customCfg = null;
+      if (format === 'custom') {
+        const { data: cfgRow } = await supabase
+          .from('app_settings')
+          .select('setting_value')
+          .eq('setting_key', 'applicator_sheet_custom')
+          .maybeSingle();
+        customCfg = parseCustomConfig((cfgRow as { setting_value?: string } | null)?.setting_value ?? null);
+      }
+
+      // Billed customers: prefer the per-field shares (multi-customer); else the
+      // single job customer. Dedup by name+account. (Mirrors the Jobs list logic.)
+      const custMap = new Map<string, { customer_name: string; account_number: string | null }>();
+      shareRows.forEach((s) => {
+        const c = customers.find((cc) => cc.id === s.customer_id);
+        if (!c) return;
+        const name = c.farm_name || 'Customer';
+        custMap.set(`${name}|${c.account_number ?? ''}`, { customer_name: name, account_number: c.account_number ?? null });
+      });
+      if (custMap.size === 0) {
+        const c = customers.find((cc) => cc.id === customerId);
+        if (c) custMap.set(`${c.farm_name}|${c.account_number ?? ''}`, { customer_name: c.farm_name || 'Customer', account_number: c.account_number ?? null });
+      }
+
+      const sheetData = buildApplicatorSheetData({
+        job_number: jobNumber || 'draft',
+        customers: [...custMap.values()],
+        scheduled_date: jobDate,
+        scheduled_time: scheduledTime || null,
+        applicator_name: applicators.find((a) => a.id === applicatorId)?.full_name || null,
+        vehicle_name: vehicles.find((v) => v.id === vehicleId)?.vehicle_name || null,
+        loader_comment: loaderComment || null,
+        fields: fieldRows
+          .filter((f) => f.field_id)
+          .map((f) => {
+            const fld = allFields.find((af) => af.id === f.field_id);
+            return {
+              field_id: f.field_id,
+              field_name: fld?.field_name || 'Field',
+              county: fld?.county || null,
+              state: fld?.state || null,
+              acres: parseFloat(f.acres_to_treat) || 0,
+              crop: f.crop || fld?.crop_type || null,
+              pest: f.pests || null,
+              sort_order: f.sort_order,
+            };
+          }),
+        products: chemRows
+          .filter((c) => c.product_id)
+          .map((c) => {
+            const lbl = labelById.get(c.product_id);
+            return {
+              product_name: c.product_name || 'Product',
+              rate_per_acre: parseFloat(c.rate_per_acre) || null,
+              rate_unit: c.rate_unit || null,
+              total_quantity: parseFloat(c.quantity) || null,
+              product_form: lbl?.product_form ?? null,
+              rei_hours: c.rei_hours !== '' ? parseFloat(c.rei_hours) : (lbl?.rei_hours ?? null),
+              phi_days: c.phi_days !== '' ? parseFloat(c.phi_days) : (lbl?.phi_days ?? null),
+              epa_registration: lbl?.epa_registration ?? null,
+            };
+          }),
+      });
+
+      await generateApplicatorSheetPdf(sheetData, format, customCfg);
+
+      // Stamp printed status + who (ChemMan "Printed" column). Best-effort.
+      if (!isNew && id) {
+        const stampRes = await supabase.from('jobs').update({ printed_at: new Date().toISOString(), last_printed_by: profile?.id ?? null }).eq('id', id).select();
+        try { checkMutationResult(stampRes, 'Stamp printed_at'); } catch { /* non-blocking */ }
+      }
+      if (profile) logActivity({ event: 'applicator_sheet_printed', description: `${SHEET_FORMAT_LABELS[format]} generated for job ${jobNumber}`, performedBy: profile.id, entityType: 'job', entityId: id });
+      setSheetPickerOpen(false);
+    } catch (err) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'applicator_sheet_pdf' } });
+      toast('error', 'Failed to generate field sheet');
+    }
+    setGeneratingSheet(null);
   };
   const [vehicleId, setVehicleId] = useState('');
   const [recipeId, setRecipeId] = useState('');
@@ -1281,10 +1404,16 @@ export default function JobDetail() {
         </div>
         <div className="flex items-center gap-2">
           {!isNew && fieldRows.some((f) => f.field_id) && chemRows.some((c) => c.product_id) && (
-            <Button variant="secondary" onClick={handleWpsNotice} loading={printingWps}>
-              <Printer className="w-4 h-4" />
-              WPS Notice
-            </Button>
+            <>
+              <Button variant="secondary" onClick={() => setSheetPickerOpen(true)} loading={generatingSheet !== null}>
+                <ClipboardList className="w-4 h-4" />
+                Field Sheet
+              </Button>
+              <Button variant="secondary" onClick={handleWpsNotice} loading={printingWps}>
+                <Printer className="w-4 h-4" />
+                WPS Notice
+              </Button>
+            </>
           )}
           {!isNew && (status === 'scheduled' || status === 'in_progress') && (
             <Button variant="danger" onClick={() => setShowCancelConfirm(true)} loading={cancelling}>
@@ -2069,6 +2198,36 @@ export default function JobDetail() {
               <BookmarkPlus className="w-4 h-4" /> Save Recipe
             </Button>
           </div>
+        </div>
+      </Modal>
+
+      {/* #9: Applicator Field Sheet format picker (Original / Custom / Enhanced). */}
+      <Modal open={sheetPickerOpen} onClose={() => setSheetPickerOpen(false)} title="Print Applicator Field Sheet">
+        <div className="space-y-3">
+          <p className="text-sm text-secondary">
+            The crew's carry sheet — fields in route order with the tank mix, plus blank spaces to record as-applied acres and start/end weather in the field. Choose a format:
+          </p>
+          {(['original', 'custom', 'enhanced'] as ApplicatorSheetFormat[]).map((fmt) => (
+            <button
+              key={fmt}
+              type="button"
+              onClick={() => handleGenerateSheet(fmt)}
+              disabled={generatingSheet !== null}
+              className="w-full flex items-start gap-3 rounded-lg border border-gray-200 p-3 text-left hover:border-crx-green hover:bg-green-50 disabled:opacity-50 transition-colors"
+            >
+              <ClipboardList className="w-5 h-5 text-crx-green mt-0.5 flex-shrink-0" />
+              <span>
+                <span className="block text-sm font-medium text-charcoal">
+                  {SHEET_FORMAT_LABELS[fmt]}{generatingSheet === fmt ? ' …' : ''}
+                </span>
+                <span className="block text-xs text-secondary mt-0.5">
+                  {fmt === 'original' && 'Compact: job #, customers + IDs, fields (acres/crop/pest), chemicals with rate/acre.'}
+                  {fmt === 'custom' && 'Same data as Enhanced, with the company header/logo/footer and columns set in Settings.'}
+                  {fmt === 'enhanced' && 'Adds total applied + gallon/lb conversion, applicator, vehicle, date, and per-product REI/PHI.'}
+                </span>
+              </span>
+            </button>
+          ))}
         </div>
       </Modal>
 

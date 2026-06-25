@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Save, UserPlus, Pencil, Shield, Users, KeyRound, Fuel } from 'lucide-react';
+import { Save, UserPlus, Pencil, Shield, Users, KeyRound, Fuel, ClipboardList } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
@@ -27,6 +27,12 @@ import {
   type FuelSurchargeConfig,
   type FuelSurchargeBasis,
 } from '../lib/fuelSurcharge';
+import {
+  DEFAULT_CUSTOM_CONFIG,
+  parseCustomConfig,
+  serializeCustomConfig,
+  type ApplicatorSheetCustomConfig,
+} from '../lib/applicatorSheetData';
 import type { Profile, AppSetting, UserRole } from '../types';
 
 // --- Permissions Panel ---
@@ -140,6 +146,10 @@ export default function SettingsPage() {
   // #32: Fuel Surcharge — OFF by default, rate blank. The owner sets the rule.
   const [fuelSurcharge, setFuelSurcharge] = useState<FuelSurchargeConfig>(DEFAULT_FUEL_SURCHARGE);
   const [savingFuel, setSavingFuel] = useState(false);
+  // #9: Custom applicator field-sheet layout (LAYOUT ONLY — header/logo/footer +
+  // optional column toggles). Blank by default => standard CRX header.
+  const [sheetConfig, setSheetConfig] = useState<ApplicatorSheetCustomConfig>(DEFAULT_CUSTOM_CONFIG);
+  const [savingSheet, setSavingSheet] = useState(false);
   const [users, setUsers] = useState<Profile[]>([]);
   const [savingCompany, setSavingCompany] = useState(false);
   const [savingDefaults, setSavingDefaults] = useState(false);
@@ -194,6 +204,8 @@ export default function SettingsPage() {
     setDefaultTier(map['default_tier'] || '1');
     // #32: blank/absent => the inert OFF default (never invents a rate).
     setFuelSurcharge(parseFuelSurchargeConfig(map['fuel_surcharge']));
+    // #9: blank/absent => standard CRX header + all optional columns shown.
+    setSheetConfig(parseCustomConfig(map['applicator_sheet_custom']));
   };
 
   const fetchUsers = async () => {
@@ -279,6 +291,30 @@ export default function SettingsPage() {
       toast('error', sanitizeError(errUnknown));
     }
     setSavingFuel(false);
+  };
+
+  const saveSheetConfig = async () => {
+    // #9: layout only — there is nothing to validate (any combination is valid;
+    // blank fields fall back to the standard CRX header).
+    setSavingSheet(true);
+    try {
+      await saveSetting('applicator_sheet_custom', serializeCustomConfig(sheetConfig));
+      toast('success', 'Custom applicator sheet settings saved');
+      if (profile) {
+        logActivity({
+          event: 'settings_updated',
+          description: 'Custom applicator field-sheet layout updated',
+          performedBy: profile.id,
+        });
+      }
+    } catch (errUnknown: unknown) {
+      toast('error', sanitizeError(errUnknown));
+    }
+    setSavingSheet(false);
+  };
+
+  const toggleSheetColumn = (key: keyof ApplicatorSheetCustomConfig['columns']) => {
+    setSheetConfig((c) => ({ ...c, columns: { ...c.columns, [key]: !c.columns[key] } }));
   };
 
   const handleCreateUser = async () => {
@@ -708,6 +744,112 @@ export default function SettingsPage() {
               </span>
             )}
           </p>
+        </div>
+      </Card>
+
+      {/* #9: Custom applicator field-sheet layout (LAYOUT ONLY). */}
+      <Card>
+        <CardHeader
+          title="Custom Applicator"
+          accent="Field Sheet"
+          action={
+            <Button
+              size="sm"
+              icon={<Save className="w-4 h-4" />}
+              onClick={saveSheetConfig}
+              loading={savingSheet}
+            >
+              Save
+            </Button>
+          }
+        />
+        <div className="space-y-4">
+          <div className="flex items-start gap-3 rounded-lg bg-green-50 border border-green-100 p-3">
+            <ClipboardList className="w-5 h-5 text-crx-green mt-0.5 shrink-0" />
+            <p className="text-sm text-green-800">
+              <strong>Layout only.</strong> These settings change how the
+              &ldquo;Custom Applicator Report&rdquo; field sheet looks &mdash; the company
+              header, logo, footer, and which optional columns appear. They never
+              change any chemical, rate, acre, or billing figure. Leave fields blank to
+              use the standard CropRX header.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <Input
+              label="Company Name (header)"
+              placeholder="Blank = Crop RX Solutions"
+              value={sheetConfig.company_name}
+              onChange={(e) => setSheetConfig((c) => ({ ...c, company_name: e.target.value }))}
+            />
+            <Input
+              label="Company Address (header)"
+              placeholder="Blank = West York, IL"
+              value={sheetConfig.company_address}
+              onChange={(e) => setSheetConfig((c) => ({ ...c, company_address: e.target.value }))}
+            />
+          </div>
+
+          <Input
+            label="Footer Text (optional)"
+            placeholder="An extra line under the standard footer"
+            value={sheetConfig.footer_text}
+            onChange={(e) => setSheetConfig((c) => ({ ...c, footer_text: e.target.value }))}
+          />
+
+          <div>
+            <label className="block text-sm font-medium text-secondary mb-1">Header Logo (optional)</label>
+            <div className="flex items-center gap-3">
+              <input
+                type="file"
+                accept="image/png,image/jpeg"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (!file) return;
+                  if (file.size > 500 * 1024) {
+                    toast('error', 'Logo must be under 500 KB');
+                    return;
+                  }
+                  const reader = new FileReader();
+                  reader.onload = () => setSheetConfig((c) => ({ ...c, logo_data_url: typeof reader.result === 'string' ? reader.result : '' }));
+                  reader.readAsDataURL(file);
+                }}
+                className="text-sm"
+              />
+              {sheetConfig.logo_data_url && (
+                <Button size="sm" variant="secondary" onClick={() => setSheetConfig((c) => ({ ...c, logo_data_url: '' }))}>
+                  Remove
+                </Button>
+              )}
+            </div>
+            {sheetConfig.logo_data_url && (
+              <img src={sheetConfig.logo_data_url} alt="Logo preview" className="mt-2 h-10 object-contain" />
+            )}
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-secondary mb-2">Optional columns on the Custom sheet</label>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+              {([
+                ['crop', 'Crop'],
+                ['pest', 'Pest'],
+                ['total_applied', 'Total Applied'],
+                ['gl_lb', 'gal/lb Equivalent'],
+                ['rei', 'REI'],
+                ['phi', 'PHI'],
+              ] as [keyof ApplicatorSheetCustomConfig['columns'], string][]).map(([key, label]) => (
+                <label key={key} className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={sheetConfig.columns[key]}
+                    onChange={() => toggleSheetColumn(key)}
+                    className="w-4 h-4 rounded border-gray-300 text-crx-green focus:ring-crx-green/20"
+                  />
+                  <span className="text-sm text-secondary">{label}</span>
+                </label>
+              ))}
+            </div>
+          </div>
         </div>
       </Card>
 

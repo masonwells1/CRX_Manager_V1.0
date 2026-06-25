@@ -4330,6 +4330,7 @@ export type Database = {
           invoice_id: string | null
           job_date: string
           job_number: string
+          last_printed_by: string | null
           loader_comment: string | null
           notes: string | null
           printed_at: string | null
@@ -4373,6 +4374,7 @@ export type Database = {
           invoice_id?: string | null
           job_date: string
           job_number: string
+          last_printed_by?: string | null
           loader_comment?: string | null
           notes?: string | null
           printed_at?: string | null
@@ -4415,6 +4417,7 @@ export type Database = {
           invoice_id?: string | null
           job_date?: string
           job_number?: string
+          last_printed_by?: string | null
           loader_comment?: string | null
           notes?: string | null
           printed_at?: string | null
