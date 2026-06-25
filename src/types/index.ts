@@ -2143,6 +2143,13 @@ export interface JobAppliedRecord {
   end_wind_mph: number | null;
   end_humidity_pct: number | null;
   end_weather_source: 'auto' | 'manual' | null;
+  // Field-app parity #20: tach (engine-hour meter) readings for the pass.
+  // beginning_tach / end_tach are optional numeric readings; net_tach is a
+  // GENERATED column = GREATEST(end_tach - beginning_tach, 0) (NULL when either
+  // reading is missing) — read-only, never written by the client.
+  beginning_tach: number | null;
+  end_tach: number | null;
+  net_tach: number | null;
   created_by: string | null;
   created_at: string;
   updated_at: string;

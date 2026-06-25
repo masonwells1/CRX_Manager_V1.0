@@ -9,6 +9,8 @@ import {
   formatTotalTime,
   weatherSetHasData,
   summarizeWeatherSet,
+  computeNetTach,
+  tachEndBelowBeginning,
   timeForInput,
   emptyWeatherSetDraft,
   sumDraftFieldAcres,
@@ -39,6 +41,13 @@ const NULL_WEATHER = {
   end_weather_source: null,
 } as const;
 
+// Null-filled #20 tach columns, same purpose as NULL_WEATHER.
+const NULL_TACH = {
+  beginning_tach: null,
+  end_tach: null,
+  net_tach: null,
+} as const;
+
 function rec(over: Partial<JobAppliedRecordRow>): JobAppliedRecordRow {
   return {
     id: over.id ?? crypto.randomUUID(),
@@ -49,6 +58,7 @@ function rec(over: Partial<JobAppliedRecordRow>): JobAppliedRecordRow {
     applied_acres: over.applied_acres ?? null,
     notes: over.notes ?? null,
     ...NULL_WEATHER,
+    ...NULL_TACH,
     created_by: null,
     created_at: over.created_at ?? '2026-06-01T00:00:00Z',
     updated_at: '2026-06-01T00:00:00Z',
@@ -146,6 +156,8 @@ describe('buildAppliedRecordPatch', () => {
       start_wind_mph: null, start_humidity_pct: null, start_weather_source: null,
       end_weather_time: null, end_temp_f: null, end_wind_direction: null,
       end_wind_mph: null, end_humidity_pct: null, end_weather_source: null,
+      // #20: an empty draft persists both tach readings as null.
+      beginning_tach: null, end_tach: null,
     });
   });
 
@@ -165,12 +177,14 @@ describe('draftFromRecord round-trip', () => {
       id: 'r1', job_id: 'j1', applicator_id: 'a1', vehicle_id: 'v1',
       application_date: '2026-06-05', applied_acres: 33.5, notes: 'n',
       ...NULL_WEATHER,
+      ...NULL_TACH,
       created_by: null, created_at: 'x', updated_at: 'y',
     };
     expect(draftFromRecord(row)).toEqual({
       applicator_id: 'a1', vehicle_id: 'v1', application_date: '2026-06-05',
       applied_acres: '33.5', notes: 'n', fields: [],
       startWeather: emptyWeatherSetDraft(), endWeather: emptyWeatherSetDraft(),
+      beginningTach: '', endTach: '',
     });
   });
 
@@ -179,12 +193,14 @@ describe('draftFromRecord round-trip', () => {
       id: 'r1', job_id: 'j1', applicator_id: null, vehicle_id: null,
       application_date: '2026-06-05', applied_acres: null, notes: null,
       ...NULL_WEATHER,
+      ...NULL_TACH,
       created_by: null, created_at: 'x', updated_at: 'y',
     };
     expect(draftFromRecord(row)).toEqual({
       applicator_id: '', vehicle_id: '', application_date: '2026-06-05',
       applied_acres: '', notes: '', fields: [],
       startWeather: emptyWeatherSetDraft(), endWeather: emptyWeatherSetDraft(),
+      beginningTach: '', endTach: '',
     });
   });
 
@@ -193,6 +209,7 @@ describe('draftFromRecord round-trip', () => {
       id: 'r1', job_id: 'j1', applicator_id: 'a1', vehicle_id: 'v1',
       application_date: '2026-06-05', applied_acres: 60, notes: null,
       ...NULL_WEATHER,
+      ...NULL_TACH,
       created_by: null, created_at: 'x', updated_at: 'y',
       job_applied_record_fields: [
         { field_id: 'f1', applied_acres: 40 },
@@ -576,5 +593,123 @@ describe('draftFromRecord — weather round-trip', () => {
     });
     expect(d.endWeather.time).toBe('11:00');
     expect(d.endWeather.temp_f).toBe('78');
+  });
+});
+
+// ── #20 tach (engine-hour meter) hours ──────────────────────────────────────
+
+describe('#20 computeNetTach', () => {
+  it('computes Net = End - Beginning for the spec example (1200.0 / 1206.5 -> 6.5)', () => {
+    expect(computeNetTach('1200.0', '1206.5')).toBe(6.5);
+  });
+  it('returns null when beginning is blank (partial entry)', () => {
+    expect(computeNetTach('', '1206.5')).toBeNull();
+  });
+  it('returns null when end is blank (partial entry)', () => {
+    expect(computeNetTach('1200.0', '')).toBeNull();
+  });
+  it('returns null when both blank', () => {
+    expect(computeNetTach('', '')).toBeNull();
+  });
+  it('returns null on a non-numeric reading', () => {
+    expect(computeNetTach('abc', '10')).toBeNull();
+    expect(computeNetTach('10', 'xyz')).toBeNull();
+  });
+  it('clamps a negative difference to 0 (mirrors GREATEST(.., 0))', () => {
+    expect(computeNetTach('1206.5', '1200.0')).toBe(0);
+  });
+  it('handles whole-number readings', () => {
+    expect(computeNetTach('100', '108')).toBe(8);
+  });
+});
+
+describe('#20 tachEndBelowBeginning (warn flag)', () => {
+  it('flags end < beginning when both present', () => {
+    expect(tachEndBelowBeginning('1206.5', '1200.0')).toBe(true);
+  });
+  it('does NOT flag end >= beginning', () => {
+    expect(tachEndBelowBeginning('1200.0', '1206.5')).toBe(false);
+    expect(tachEndBelowBeginning('1200.0', '1200.0')).toBe(false);
+  });
+  it('does NOT flag a partial/blank entry (never nags a half-filled form)', () => {
+    expect(tachEndBelowBeginning('1200.0', '')).toBe(false);
+    expect(tachEndBelowBeginning('', '1206.5')).toBe(false);
+    expect(tachEndBelowBeginning('', '')).toBe(false);
+  });
+  it('does NOT flag a non-numeric entry', () => {
+    expect(tachEndBelowBeginning('abc', '10')).toBe(false);
+  });
+});
+
+describe('#20 validateAppliedRecord — tach rules', () => {
+  const base = emptyAppliedRecordDraft({ applicator_id: 'a1', application_date: '2026-06-01' });
+  it('accepts no tach (optional — a job without tach still saves)', () => {
+    expect(validateAppliedRecord(base).ok).toBe(true);
+  });
+  it('accepts a valid beg/end pair', () => {
+    expect(validateAppliedRecord({ ...base, beginningTach: '1200.0', endTach: '1206.5' }).ok).toBe(true);
+  });
+  it('accepts partial entry (beginning only)', () => {
+    expect(validateAppliedRecord({ ...base, beginningTach: '1200.0' }).ok).toBe(true);
+  });
+  it('accepts partial entry (end only)', () => {
+    expect(validateAppliedRecord({ ...base, endTach: '1206.5' }).ok).toBe(true);
+  });
+  it('rejects a negative beginning tach', () => {
+    const r = validateAppliedRecord({ ...base, beginningTach: '-5' });
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/beginning tach/i);
+  });
+  it('rejects a negative end tach', () => {
+    const r = validateAppliedRecord({ ...base, endTach: '-1' });
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/end tach/i);
+  });
+  it('rejects end below beginning when both present', () => {
+    const r = validateAppliedRecord({ ...base, beginningTach: '1206.5', endTach: '1200.0' });
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/lower than beginning/i);
+  });
+});
+
+describe('#20 buildAppliedRecordPatch — tach columns', () => {
+  it('writes beginning_tach and end_tach; net_tach is NOT in the patch (GENERATED)', () => {
+    const draft = emptyAppliedRecordDraft({
+      applicator_id: 'a1', application_date: '2026-06-01',
+      beginningTach: '1200.0', endTach: '1206.5',
+    });
+    const p = buildAppliedRecordPatch(draft);
+    expect(p.beginning_tach).toBe(1200);
+    expect(p.end_tach).toBe(1206.5);
+    expect('net_tach' in p).toBe(false);
+  });
+  it('nulls a blank tach reading (partial / none stores NULL, not 0)', () => {
+    const draft = emptyAppliedRecordDraft({
+      applicator_id: 'a1', application_date: '2026-06-01',
+      beginningTach: '1200.0', endTach: '',
+    });
+    const p = buildAppliedRecordPatch(draft);
+    expect(p.beginning_tach).toBe(1200);
+    expect(p.end_tach).toBeNull();
+  });
+  it('nulls both when no tach entered', () => {
+    const draft = emptyAppliedRecordDraft({ applicator_id: 'a1', application_date: '2026-06-01' });
+    const p = buildAppliedRecordPatch(draft);
+    expect(p.beginning_tach).toBeNull();
+    expect(p.end_tach).toBeNull();
+  });
+});
+
+describe('#20 draftFromRecord — tach round-trip', () => {
+  it('reads beginning_tach / end_tach back into the draft as strings', () => {
+    const r = rec({ beginning_tach: 1200, end_tach: 1206.5, net_tach: 6.5 });
+    const d = draftFromRecord(r);
+    expect(d.beginningTach).toBe('1200');
+    expect(d.endTach).toBe('1206.5');
+  });
+  it('leaves tach blank when the record has none', () => {
+    const d = draftFromRecord(rec({}));
+    expect(d.beginningTach).toBe('');
+    expect(d.endTach).toBe('');
   });
 });

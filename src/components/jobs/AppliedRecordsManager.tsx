@@ -15,7 +15,7 @@
 // extend AppliedRecordDraft/buildAppliedRecordPatch in appliedRecords.ts.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Plus, Pencil, Trash2, Truck, User, CalendarDays, MapPin, AlertTriangle, X, CloudSun, Clock, Wind, Thermometer, Droplets } from 'lucide-react';
+import { Plus, Pencil, Trash2, Truck, User, CalendarDays, MapPin, AlertTriangle, X, CloudSun, Clock, Wind, Thermometer, Droplets, Gauge } from 'lucide-react';
 import Button from '../ui/Button';
 import Input from '../ui/Input';
 import Modal from '../ui/Modal';
@@ -38,6 +38,8 @@ import {
   computeTotalMinutes,
   formatTotalTime,
   summarizeWeatherSet,
+  computeNetTach,
+  tachEndBelowBeginning,
   type AppliedRecordDraft,
   type WeatherSetDraft,
 } from './appliedRecords';
@@ -404,6 +406,12 @@ export default function AppliedRecordsManager({
   // are set. Pure helper so the display can never disagree with what's persisted.
   const totalMinutes = computeTotalMinutes(draft.startWeather.time, draft.endWeather.time);
 
+  // #20 tach: live Net = End - Beginning (mirrors the GENERATED net_tach column),
+  // and an end<beginning warning so the user sees a friendly flag before save
+  // rather than a raw DB CHECK error.
+  const netTach = computeNetTach(draft.beginningTach, draft.endTach);
+  const tachEndLow = tachEndBelowBeginning(draft.beginningTach, draft.endTach);
+
   // Render one weather set (START or END): Time + NOW, Get Weather, then Temp /
   // Wind Dir / Wind mph / Humidity — all editable. A badge shows whether the set
   // was last auto-pulled or hand-entered.
@@ -606,6 +614,9 @@ export default function AppliedRecordsManager({
                 <th className="text-left font-medium px-3 py-2">
                   <CloudSun className="w-3.5 h-3.5 inline mr-1" />Weather (Start / End)
                 </th>
+                <th className="text-right font-medium px-3 py-2">
+                  <Gauge className="w-3.5 h-3.5 inline mr-1" />Tach (Beg / End / Net)
+                </th>
                 <th className="text-left font-medium px-3 py-2">Notes</th>
                 {canEdit && <th className="px-3 py-2"></th>}
               </tr>
@@ -678,6 +689,23 @@ export default function AppliedRecordsManager({
                         </div>
                       );
                     })()}
+                  </td>
+                  <td className="px-3 py-2 text-right text-xs whitespace-nowrap tabular-nums">
+                    {rec.beginning_tach == null && rec.end_tach == null ? (
+                      '—'
+                    ) : (
+                      <div className="space-y-0.5 text-secondary">
+                        {rec.beginning_tach != null && (
+                          <div>Beg {rec.beginning_tach.toLocaleString(undefined, { maximumFractionDigits: 2 })}</div>
+                        )}
+                        {rec.end_tach != null && (
+                          <div>End {rec.end_tach.toLocaleString(undefined, { maximumFractionDigits: 2 })}</div>
+                        )}
+                        {rec.net_tach != null && (
+                          <div className="font-medium text-nav-dark">Net {rec.net_tach.toLocaleString(undefined, { maximumFractionDigits: 2 })}</div>
+                        )}
+                      </div>
+                    )}
                   </td>
                   <td className="px-3 py-2 text-secondary">{rec.notes ?? ''}</td>
                   {canEdit && (
@@ -874,6 +902,69 @@ export default function AppliedRecordsManager({
               {renderWeatherSet('start', 'Start')}
               {renderWeatherSet('end', 'End')}
             </div>
+          </div>
+
+          {/* #20 tach (engine-hour meter) hours. Beginning + End are optional
+              numeric readings; Net = End - Beginning is computed (read-only) and
+              shown live. An end below the beginning is flagged as a likely typo
+              before save (the DB also rejects it). */}
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="block text-sm font-medium text-nav-dark">
+                <Gauge className="w-3.5 h-3.5 inline mr-1" />Tach Hours (engine hours)
+              </label>
+              <span className="text-xs text-secondary">
+                Net: <span className="font-semibold text-nav-dark tabular-nums">
+                  {netTach != null ? netTach.toLocaleString(undefined, { maximumFractionDigits: 2 }) : '—'}
+                </span>
+              </span>
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              <div>
+                <label className="block text-xs text-secondary mb-1">Beginning Tach</label>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.1"
+                  value={draft.beginningTach}
+                  onChange={(e) => setDraft({ ...draft, beginningTach: e.target.value })}
+                  aria-label="Beginning tach"
+                  placeholder="e.g. 1200.0"
+                  className="w-full px-2 py-2 text-sm border border-gray-200 rounded-lg text-right tabular-nums focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-secondary mb-1">End Tach</label>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.1"
+                  value={draft.endTach}
+                  onChange={(e) => setDraft({ ...draft, endTach: e.target.value })}
+                  aria-label="End tach"
+                  placeholder="e.g. 1206.5"
+                  className="w-full px-2 py-2 text-sm border border-gray-200 rounded-lg text-right tabular-nums focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-secondary mb-1">Net Tach</label>
+                <div
+                  aria-label="Net tach"
+                  className="w-full px-2 py-2 text-sm border border-gray-100 bg-gray-50 rounded-lg text-right tabular-nums text-nav-dark"
+                >
+                  {netTach != null ? netTach.toLocaleString(undefined, { maximumFractionDigits: 2 }) : '—'}
+                </div>
+              </div>
+            </div>
+            <p className="text-xs text-secondary mt-1">
+              Optional. Net is End &minus; Beginning (computed). Leave blank if not tracking engine hours.
+            </p>
+            {tachEndLow && (
+              <div className="mt-1 flex items-start gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-xs text-amber-800">
+                <AlertTriangle className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
+                <span>End tach is lower than beginning tach &mdash; this is usually a typo. Check the readings before saving.</span>
+              </div>
+            )}
           </div>
 
           <div>

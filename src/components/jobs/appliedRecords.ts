@@ -45,6 +45,11 @@ export interface AppliedRecordDraft {
   // #19: START + END weather pair.
   startWeather: WeatherSetDraft;
   endWeather: WeatherSetDraft;
+  // #20: tach (engine-hour meter) readings — string-valued (form inputs). Net is
+  // derived (end - beginning), never hand-entered, so it lives only in the DB
+  // (GENERATED) and the live computeNetTach() display, not on the draft.
+  beginningTach: string;
+  endTach: string;
 }
 
 export function emptyAppliedRecordDraft(defaults?: Partial<AppliedRecordDraft>): AppliedRecordDraft {
@@ -57,6 +62,8 @@ export function emptyAppliedRecordDraft(defaults?: Partial<AppliedRecordDraft>):
     fields: [],
     startWeather: emptyWeatherSetDraft(),
     endWeather: emptyWeatherSetDraft(),
+    beginningTach: '',
+    endTach: '',
     ...defaults,
   };
 }
@@ -109,7 +116,41 @@ export function draftFromRecord(rec: JobAppliedRecord & { job_applied_record_fie
     })),
     startWeather: weatherSetFromRecord(rec, 'start'),
     endWeather: weatherSetFromRecord(rec, 'end'),
+    beginningTach: rec.beginning_tach != null ? String(rec.beginning_tach) : '',
+    endTach: rec.end_tach != null ? String(rec.end_tach) : '',
   };
+}
+
+// ── #20 tach (engine-hour meter) helpers (pure, DB-free, unit-tested) ────────
+
+// Net tach = end - beginning, mirroring the DB's GENERATED net_tach column:
+//   - either reading blank/invalid -> null (no net to show; the DB stores NULL).
+//   - both present -> end - beginning, clamped at 0 (GREATEST(.., 0)). A negative
+//     raw difference only occurs when end < beginning, which the UI flags and the
+//     DB CHECK rejects; clamping keeps the displayed net non-negative regardless.
+// Exported for the live modal display and the entry list.
+export function computeNetTach(beginningTach: string, endTach: string): number | null {
+  const b = beginningTach.trim();
+  const e = endTach.trim();
+  if (b === '' || e === '') return null;
+  const bn = Number(b);
+  const en = Number(e);
+  if (!Number.isFinite(bn) || !Number.isFinite(en)) return null;
+  return Math.max(en - bn, 0);
+}
+
+// True when BOTH tach readings are present and end is below beginning — the
+// "likely data-entry error" case (a meter only counts up). Used to warn the user
+// in the form BEFORE save (the DB CHECK also rejects it). Returns false on any
+// partial/blank/invalid entry, so it never nags a half-filled form.
+export function tachEndBelowBeginning(beginningTach: string, endTach: string): boolean {
+  const b = beginningTach.trim();
+  const e = endTach.trim();
+  if (b === '' || e === '') return false;
+  const bn = Number(b);
+  const en = Number(e);
+  if (!Number.isFinite(bn) || !Number.isFinite(en)) return false;
+  return en < bn;
 }
 
 // ── #19 weather pair: Total Time + persistence helpers (pure, DB-free, tested) ─
@@ -334,7 +375,33 @@ export function validateAppliedRecord(draft: AppliedRecordDraft): AppliedRecordV
   if (wErr) return { ok: false, error: wErr };
   const eErr = validateWeatherSet(draft.endWeather, 'End');
   if (eErr) return { ok: false, error: eErr };
+  // #20: tach readings, if entered, must each be a non-negative number (mirrors
+  // the DB CHECKs), and end must not be below beginning when BOTH are present
+  // (a meter only counts up). Either side alone is allowed (partial entry).
+  const tErr = validateTach(draft.beginningTach, draft.endTach);
+  if (tErr) return { ok: false, error: tErr };
   return { ok: true };
+}
+
+// Validate the tach readings. Returns an error message or null. Blank is allowed
+// (tach is optional). Each present value must be a non-negative number; when both
+// are present end must be >= beginning. Mirrors the DB CHECK constraints so a
+// save is never bounced by a raw constraint error the user can't read.
+function validateTach(beginningTach: string, endTach: string): string | null {
+  const b = beginningTach.trim();
+  const e = endTach.trim();
+  if (b !== '') {
+    const n = Number(b);
+    if (!Number.isFinite(n) || n < 0) return 'Beginning tach must be a number of 0 or more.';
+  }
+  if (e !== '') {
+    const n = Number(e);
+    if (!Number.isFinite(n) || n < 0) return 'End tach must be a number of 0 or more.';
+  }
+  if (b !== '' && e !== '' && Number(e) < Number(b)) {
+    return 'End tach is lower than beginning tach — check the readings.';
+  }
+  return null;
 }
 
 // Validate one weather set's numeric fields. Returns an error message or null.
@@ -384,6 +451,10 @@ export interface AppliedRecordPatch {
   end_wind_mph: number | null;
   end_humidity_pct: number | null;
   end_weather_source: 'auto' | 'manual' | null;
+  // #20 tach readings. net_tach is NOT in the patch — it is a GENERATED column
+  // the DB computes from these two; writing it would error.
+  beginning_tach: number | null;
+  end_tach: number | null;
 }
 
 // Convert a weather-set draft into its persisted columns. Empty strings -> null.
@@ -436,6 +507,7 @@ export function buildAppliedRecordPatch(
     : (manual === '' ? null : Number(manual));
   const start = buildWeatherSetPatch(draft.startWeather);
   const end = buildWeatherSetPatch(draft.endWeather);
+  const tachOrNull = (s: string) => (s.trim() === '' ? null : Number(s));
   return {
     applicator_id: draft.applicator_id,
     vehicle_id: draft.vehicle_id || null,
@@ -454,6 +526,9 @@ export function buildAppliedRecordPatch(
     end_wind_mph: end.wind_mph,
     end_humidity_pct: end.humidity_pct,
     end_weather_source: end.source,
+    // #20: only the two source readings — net_tach is GENERATED in the DB.
+    beginning_tach: tachOrNull(draft.beginningTach),
+    end_tach: tachOrNull(draft.endTach),
   };
 }
 
