@@ -1,10 +1,19 @@
 import { describe, it, expect } from 'vitest';
 import {
   isUnpostedFieldInvoice,
+  isPostedFieldInvoice,
+  STATUS_POSTED,
   mapFieldInvoiceRow,
   applyFieldInvoiceFilters,
   computeFieldInvoiceTotals,
   emptyFieldInvoiceFilters,
+  batchMonthOf,
+  currentBatchMonth,
+  monthLabel,
+  deriveMonthBatches,
+  applyPostedScope,
+  spansMultipleBatches,
+  defaultPostedScope,
   type RawFieldInvoiceRow,
   type FieldInvoiceListRow,
 } from './fieldInvoiceList';
@@ -240,6 +249,97 @@ describe('applyFieldInvoiceFilters', () => {
 
   it('applies the free-text search over the blob', () => {
     expect(applyFieldInvoiceFilters(rows, { ...emptyFieldInvoiceFilters, search: 'beta' }).map((r) => r.id)).toEqual(['b']);
+  });
+});
+
+describe('isPostedFieldInvoice / STATUS_POSTED (#23 committed statuses)', () => {
+  it('treats posted, overdue and paid as committed (on the Posted list)', () => {
+    for (const s of ['posted', 'overdue', 'paid'] as const) {
+      expect(isPostedFieldInvoice(s)).toBe(true);
+    }
+  });
+  it('excludes the working tray and terminal reversals', () => {
+    for (const s of ['draft', 'unposted', 'voided', 'cancelled'] as const) {
+      expect(isPostedFieldInvoice(s)).toBe(false);
+    }
+  });
+  it('posted and unposted status sets are disjoint (a posted invoice never shows on the unposted tray)', () => {
+    for (const s of STATUS_POSTED) {
+      expect(isUnpostedFieldInvoice(s)).toBe(false);
+    }
+  });
+});
+
+describe('month-batch helpers (#23 scope selector)', () => {
+  it('batchMonthOf takes the YYYY-MM of an invoice_date', () => {
+    expect(batchMonthOf('2026-06-10')).toBe('2026-06');
+    expect(batchMonthOf('2026-01-31')).toBe('2026-01');
+  });
+
+  it('currentBatchMonth zero-pads the month', () => {
+    expect(currentBatchMonth(new Date('2026-03-05T12:00:00'))).toBe('2026-03');
+    expect(currentBatchMonth(new Date('2026-11-20T12:00:00'))).toBe('2026-11');
+  });
+
+  it('monthLabel renders a friendly label', () => {
+    expect(monthLabel('2026-06')).toBe('June 2026');
+    expect(monthLabel('2025-12')).toBe('December 2025');
+  });
+
+  it('deriveMonthBatches lists distinct months newest-first with counts', () => {
+    const rows: FieldInvoiceListRow[] = [
+      mapFieldInvoiceRow(baseRaw({ id: 'a', invoice_date: '2026-06-01', field_app_locations: [] })),
+      mapFieldInvoiceRow(baseRaw({ id: 'b', invoice_date: '2026-06-28', field_app_locations: [] })),
+      mapFieldInvoiceRow(baseRaw({ id: 'c', invoice_date: '2026-05-15', field_app_locations: [] })),
+    ];
+    const batches = deriveMonthBatches(rows);
+    expect(batches.map((b) => b.month)).toEqual(['2026-06', '2026-05']); // newest first
+    expect(batches[0]).toMatchObject({ month: '2026-06', label: 'June 2026', count: 2 });
+    expect(batches[1]).toMatchObject({ month: '2026-05', label: 'May 2026', count: 1 });
+  });
+});
+
+describe('applyPostedScope', () => {
+  const rows: FieldInvoiceListRow[] = [
+    mapFieldInvoiceRow(baseRaw({ id: 'jun1', invoice_date: '2026-06-03', field_app_locations: [] })),
+    mapFieldInvoiceRow(baseRaw({ id: 'jun2', invoice_date: '2026-06-29', field_app_locations: [] })),
+    mapFieldInvoiceRow(baseRaw({ id: 'may1', invoice_date: '2026-05-10', field_app_locations: [] })),
+  ];
+
+  it('season scope returns every row (already windowed by the query)', () => {
+    expect(applyPostedScope(rows, defaultPostedScope).map((r) => r.id)).toEqual(['jun1', 'jun2', 'may1']);
+  });
+
+  it('mtd scope keeps only the current calendar month', () => {
+    const out = applyPostedScope(rows, { kind: 'mtd' }, new Date('2026-06-15T12:00:00'));
+    expect(out.map((r) => r.id)).toEqual(['jun1', 'jun2']);
+  });
+
+  it('batch scope keeps only the chosen month', () => {
+    expect(applyPostedScope(rows, { kind: 'batch', month: '2026-05' }).map((r) => r.id)).toEqual(['may1']);
+    expect(applyPostedScope(rows, { kind: 'batch', month: '2026-06' }).map((r) => r.id)).toEqual(['jun1', 'jun2']);
+  });
+});
+
+describe('spansMultipleBatches (#23 dynamic month-batch warning)', () => {
+  it('is false within a single batch', () => {
+    const rows: FieldInvoiceListRow[] = [
+      mapFieldInvoiceRow(baseRaw({ id: 'a', invoice_date: '2026-06-01', field_app_locations: [] })),
+      mapFieldInvoiceRow(baseRaw({ id: 'b', invoice_date: '2026-06-30', field_app_locations: [] })),
+    ];
+    expect(spansMultipleBatches(rows)).toBe(false);
+  });
+
+  it('is true when rows cross a month boundary', () => {
+    const rows: FieldInvoiceListRow[] = [
+      mapFieldInvoiceRow(baseRaw({ id: 'a', invoice_date: '2026-05-31', field_app_locations: [] })),
+      mapFieldInvoiceRow(baseRaw({ id: 'b', invoice_date: '2026-06-01', field_app_locations: [] })),
+    ];
+    expect(spansMultipleBatches(rows)).toBe(true);
+  });
+
+  it('is false for an empty list', () => {
+    expect(spansMultipleBatches([])).toBe(false);
   });
 });
 

@@ -73,9 +73,23 @@ export interface FieldInvoiceListRow {
 
 const STATUS_UNPOSTED: ReadonlyArray<InvoiceStatus> = ['draft', 'unposted'];
 
+/**
+ * Committed (posted) field-app statuses for the Posted list (#23). A posted
+ * invoice ages: post_invoice sets 'posted'; mark_overdue_invoices flips it to
+ * 'overdue'; full payment flips it to 'paid'. All three are committed to the
+ * ledger and must show on the Posted list (and must NOT show on the Unposted
+ * tray). 'voided'/'cancelled' are terminal reversals — excluded from both.
+ */
+export const STATUS_POSTED: ReadonlyArray<InvoiceStatus> = ['posted', 'overdue', 'paid'];
+
 /** True when an invoice is still in the working tray (not yet posted). */
 export function isUnpostedFieldInvoice(status: InvoiceStatus): boolean {
   return STATUS_UNPOSTED.includes(status);
+}
+
+/** True when an invoice is committed to the ledger (on the Posted list). */
+export function isPostedFieldInvoice(status: InvoiceStatus): boolean {
+  return STATUS_POSTED.includes(status);
 }
 
 /** De-dupe + drop empty/whitespace strings, preserving first-seen order. */
@@ -230,4 +244,106 @@ export function computeFieldInvoiceTotals(rows: FieldInvoiceListRow[]): FieldInv
     totalAmountCents += row.total_amount_cents;
   }
   return { totalAcres, totalAmountCents, count: rows.length };
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+ * Posted-list scope selector (#23) — Season / Month-to-date / monthly batch.
+ *
+ * A posted field-app invoice has NO accounting_period_id FK; the "batch" it
+ * belongs to is the CALENDAR MONTH of its invoice_date (close_accounting_period
+ * keys the month-end batch off date_trunc('month', invoice_date)). So a "batch"
+ * here is one YYYY-MM month. The Season scope is the whole season already
+ * windowed by the query; MTD is the current calendar month; a batch scope picks
+ * one specific month. All scope filtering is pure + client-side so the footer
+ * totals reflect exactly what's shown.
+ * ────────────────────────────────────────────────────────────────────────── */
+
+/** The selected scope: whole season, month-to-date, or one YYYY-MM batch. */
+export type PostedScope =
+  | { kind: 'season' }
+  | { kind: 'mtd' }
+  | { kind: 'batch'; month: string }; // month = 'YYYY-MM'
+
+export const defaultPostedScope: PostedScope = { kind: 'season' };
+
+/** The YYYY-MM batch month for an invoice_date (the calendar month it posts into). */
+export function batchMonthOf(invoiceDate: string): string {
+  // invoice_date is 'YYYY-MM-DD'; the batch is its leading 'YYYY-MM'.
+  return invoiceDate.slice(0, 7);
+}
+
+/** Current calendar month as 'YYYY-MM' (for the Month-to-date scope). */
+export function currentBatchMonth(now: Date = new Date()): string {
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, '0');
+  return `${y}-${m}`;
+}
+
+export interface MonthBatch {
+  /** 'YYYY-MM'. */
+  month: string;
+  /** Human label e.g. 'June 2026'. */
+  label: string;
+  /** Number of posted invoices in the batch (within the loaded set). */
+  count: number;
+}
+
+const MONTH_NAMES = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December',
+];
+
+/** Human label for a 'YYYY-MM' month, e.g. '2026-06' -> 'June 2026'. */
+export function monthLabel(month: string): string {
+  const [y, m] = month.split('-');
+  const idx = Number(m) - 1;
+  const name = MONTH_NAMES[idx] ?? month;
+  return `${name} ${y}`;
+}
+
+/**
+ * Distinct monthly batches present in the rows, newest first, each with its
+ * posted-invoice count. Drives the Season/Batch/MTD dropdown options.
+ */
+export function deriveMonthBatches(rows: FieldInvoiceListRow[]): MonthBatch[] {
+  const counts = new Map<string, number>();
+  for (const r of rows) {
+    if (!r.invoice_date) continue;
+    const month = batchMonthOf(r.invoice_date);
+    counts.set(month, (counts.get(month) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .map(([month, count]) => ({ month, label: monthLabel(month), count }))
+    // 'YYYY-MM' sorts lexically = chronologically; newest batch first.
+    .sort((a, b) => (a.month < b.month ? 1 : a.month > b.month ? -1 : 0));
+}
+
+/**
+ * Narrow rows to the selected scope. Season = no narrowing (already windowed by
+ * the query); MTD = only the current calendar month; batch = only that YYYY-MM.
+ * Pure — the same result drives the table AND the footer totals.
+ */
+export function applyPostedScope(
+  rows: FieldInvoiceListRow[],
+  scope: PostedScope,
+  now: Date = new Date()
+): FieldInvoiceListRow[] {
+  if (scope.kind === 'season') return rows;
+  const target = scope.kind === 'mtd' ? currentBatchMonth(now) : scope.month;
+  return rows.filter((r) => r.invoice_date && batchMonthOf(r.invoice_date) === target);
+}
+
+/**
+ * True when the given rows span MORE THAN ONE monthly batch. Drives the dynamic
+ * caution that an Unpost All / bulk action would touch multiple month-end batch
+ * totals (each must be re-reconciled/reprinted), distinct from the always-on
+ * posted-records warning banner.
+ */
+export function spansMultipleBatches(rows: FieldInvoiceListRow[]): boolean {
+  const months = new Set<string>();
+  for (const r of rows) {
+    if (r.invoice_date) months.add(batchMonthOf(r.invoice_date));
+    if (months.size > 1) return true;
+  }
+  return false;
 }

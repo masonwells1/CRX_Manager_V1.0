@@ -309,6 +309,14 @@ export default function FieldInvoices() {
           <Button
             variant="secondary"
             size="sm"
+            icon={<Check className="w-4 h-4" />}
+            onClick={() => navigate('/field-invoices/posted')}
+          >
+            Posted List
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
             icon={<ClipboardCheck className="w-4 h-4" />}
             onClick={() => navigate('/field-invoices/unbilled')}
           >
