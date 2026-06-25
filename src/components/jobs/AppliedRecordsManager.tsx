@@ -42,8 +42,16 @@ interface Props {
   performedBy: string | null;
 }
 
+// NOTE: do NOT embed `applicator:profiles!...` here. The `profiles` SELECT RLS
+// is `is_admin() OR id = auth.uid()`, so that embed returns NULL for every
+// non-admin viewer — a sales_rep (a primary audience) would then see EVERY
+// entry as "(removed applicator)". Applicator names are resolved from the
+// `applicators` prop instead (sourced from `profile_public_view`, which IS
+// readable by sales_rep). The vehicle embed is kept and read directly so a
+// valid-but-inactive vehicle (not in the active `vehicles` prop) still shows
+// its name on the row.
 const RECORD_SELECT =
-  '*, applicator:profiles!job_applied_records_applicator_id_fkey(full_name), vehicle:vehicles!job_applied_records_vehicle_id_fkey(vehicle_name, vehicle_type)';
+  '*, vehicle:vehicles!job_applied_records_vehicle_id_fkey(vehicle_name, vehicle_type)';
 
 export default function AppliedRecordsManager({
   jobId,
@@ -65,9 +73,24 @@ export default function AppliedRecordsManager({
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
 
+  // Resolve the applicator name from the `applicators` prop (sourced from
+  // profile_public_view, readable by sales_rep) — NOT from a profiles embed,
+  // which RLS would null out for non-admins.
+  const applicatorLabel = useMemo(() => {
+    const map = new Map(applicators.map((a) => [a.id, a.full_name]));
+    return (id: string | null) => (id ? map.get(id) ?? '(removed applicator)' : '—');
+  }, [applicators]);
+
+  // Resolve the vehicle name. The active `vehicles` prop is filtered to
+  // status='active', so a vehicle later set inactive/maintenance (both valid)
+  // wouldn't be in it — fall back to the record's own joined vehicle row so a
+  // valid-but-inactive vehicle still shows its name instead of "(removed)".
   const vehicleLabel = useMemo(() => {
     const map = new Map(vehicles.map((v) => [v.id, v.vehicle_name]));
-    return (id: string | null) => (id ? map.get(id) ?? '(removed vehicle)' : '—');
+    return (rec: JobAppliedRecordRow) => {
+      if (!rec.vehicle_id) return '—';
+      return map.get(rec.vehicle_id) ?? rec.vehicle?.vehicle_name ?? '(removed vehicle)';
+    };
   }, [vehicles]);
 
   const load = useCallback(async () => {
@@ -183,6 +206,32 @@ export default function AppliedRecordsManager({
     }
   }
 
+  // The active `applicators` / `vehicles` props are filtered to active-only,
+  // so editing a record whose applicator/vehicle was later deactivated would
+  // leave its <select> with NO matching <option> — touching the field would
+  // then silently null the original value on save. Inject the record's current
+  // value as an extra option (kept selected) when it isn't in the active list.
+  const editingRecord = editingId ? records.find((r) => r.id === editingId) ?? null : null;
+
+  const applicatorOptions = useMemo(() => {
+    const opts = applicators.map((a) => ({ id: a.id, label: a.full_name }));
+    const current = draft.applicator_id;
+    if (current && !opts.some((o) => o.id === current)) {
+      opts.unshift({ id: current, label: '(deactivated applicator)' });
+    }
+    return opts;
+  }, [applicators, draft.applicator_id]);
+
+  const vehicleOptions = useMemo(() => {
+    const opts = vehicles.map((v) => ({ id: v.id, label: `${v.vehicle_name} (${v.vehicle_type})` }));
+    const current = draft.vehicle_id;
+    if (current && !opts.some((o) => o.id === current)) {
+      const name = editingRecord?.vehicle?.vehicle_name ?? null;
+      opts.unshift({ id: current, label: name ? `${name} (inactive)` : '(inactive vehicle)' });
+    }
+    return opts;
+  }, [vehicles, draft.vehicle_id, editingRecord]);
+
   return (
     <div>
       <div className="flex items-center justify-between mb-3">
@@ -228,8 +277,8 @@ export default function AppliedRecordsManager({
               {records.map((rec) => (
                 <tr key={rec.id} className="border-t border-gray-100">
                   <td className="px-3 py-2 whitespace-nowrap">{rec.application_date}</td>
-                  <td className="px-3 py-2">{rec.applicator?.full_name ?? '(removed applicator)'}</td>
-                  <td className="px-3 py-2">{vehicleLabel(rec.vehicle_id)}</td>
+                  <td className="px-3 py-2">{applicatorLabel(rec.applicator_id)}</td>
+                  <td className="px-3 py-2">{vehicleLabel(rec)}</td>
                   <td className="px-3 py-2 text-right tabular-nums">
                     {rec.applied_acres != null ? rec.applied_acres : '—'}
                   </td>
@@ -280,8 +329,8 @@ export default function AppliedRecordsManager({
               className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
             >
               <option value="">Select applicator...</option>
-              {applicators.map((a) => (
-                <option key={a.id} value={a.id}>{a.full_name}</option>
+              {applicatorOptions.map((a) => (
+                <option key={a.id} value={a.id}>{a.label}</option>
               ))}
             </select>
           </div>
@@ -295,10 +344,8 @@ export default function AppliedRecordsManager({
               className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
             >
               <option value="">Select vehicle...</option>
-              {vehicles.map((v) => (
-                <option key={v.id} value={v.id}>
-                  {v.vehicle_name} ({v.vehicle_type})
-                </option>
+              {vehicleOptions.map((v) => (
+                <option key={v.id} value={v.id}>{v.label}</option>
               ))}
             </select>
             <p className="text-xs text-secondary mt-1">
