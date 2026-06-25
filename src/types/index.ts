@@ -1042,6 +1042,16 @@ export interface Invoice {
   purchase_order_ref: string | null;
   header_notes: string | null;
   footer_notes: string | null;
+  // Field-app parity #33: invoice-level payment terms (free text, printed; distinct
+  // from customers.payment_terms — an invoice override) + an internal memo that is
+  // saved but NOT printed on the customer copy.
+  payment_terms: string | null;
+  internal_notes: string | null;
+  // #33: owner-entered early-pay "Discount Earned" (bigint cents, default 0/off) and
+  // its date. INFORMATIONAL/displayed only — it does NOT reduce the GENERATED
+  // balance_cents (the real reduction flows through payments/write-off). Never a formula.
+  discount_earned_cents: number;
+  discount_date: string | null;
   parent_invoice_id: string | null;
 
   // Field application context (snapshot from job)

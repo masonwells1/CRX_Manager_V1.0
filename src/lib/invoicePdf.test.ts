@@ -237,6 +237,47 @@ describe('generateInvoicePdf', () => {
     expect(textCalls.some((a: unknown) => typeof a === 'string' && a.includes('Write-off'))).toBe(false);
   });
 
+  // #33: Discount Earned is OWNER-DRIVEN + DISPLAY-ONLY. It must PRINT as an
+  // informational line but NEVER reduce the printed Balance Due (no double-count;
+  // the real reduction flows through payments/write-off). These tests pin that.
+  it('prints an informational Discount Earned line WITHOUT changing Balance Due (current format)', async () => {
+    await generateInvoicePdf(makeInvoiceData({
+      total_amount_cents: 18500,
+      paid_amount_cents: 0,
+      prepay_applied_cents: 0,
+      write_off_cents: 0,
+      discount_earned_cents: 1000, // $10 early-pay discount, recorded only
+      balance_cents: 18500,        // UNCHANGED — discount is not deducted
+    }));
+    const textCalls = mockDoc.text.mock.calls.flat();
+    const has = (s: string) => textCalls.some((a: unknown) => typeof a === 'string' && a.includes(s));
+    expect(has('Discount Earned (if paid early)')).toBe(true); // the line prints
+    expect(has('$10.00')).toBe(true);                          // the recorded amount
+    expect(has('$185.00')).toBe(true);                         // Balance Due == Subtotal (unreduced)
+    // Pin the invariant: discount never enters the balance math.
+    expect(18500 - 0 - 0 - 0).toBe(18500);
+  });
+
+  it('omits the Discount Earned line when discount_earned_cents is 0/absent', async () => {
+    await generateInvoicePdf(makeInvoiceData({ discount_earned_cents: 0 }));
+    const noDisc = mockDoc.text.mock.calls.flat();
+    expect(noDisc.some((a: unknown) => typeof a === 'string' && a.includes('Discount Earned'))).toBe(false);
+  });
+
+  it('prints the PO Reference label + value in the current format (#33)', async () => {
+    await generateInvoicePdf(makeInvoiceData({ purchase_order_ref: 'PO-7788' }));
+    const textCalls = mockDoc.text.mock.calls.flat();
+    const has = (s: string) => textCalls.some((a: unknown) => typeof a === 'string' && a.includes(s));
+    expect(has('PO REF')).toBe(true);
+    expect(has('PO-7788')).toBe(true);
+  });
+
+  it('omits the PO REF label when purchase_order_ref is absent', async () => {
+    await generateInvoicePdf(makeInvoiceData({ purchase_order_ref: undefined }));
+    const textCalls = mockDoc.text.mock.calls.flat();
+    expect(textCalls.some((a: unknown) => typeof a === 'string' && a === 'PO REF')).toBe(false);
+  });
+
   it('handles customer with null optional fields', async () => {
     const doc = await generateInvoicePdf(makeInvoiceData({
       customer_email: undefined,
@@ -455,6 +496,23 @@ describe('generateInvoicePdf — legacy "Old Print" format', () => {
     expect(has('BALANCE DUE:')).toBe(true);
     // 18500 − 5000 − 1500 − 3000 === 9000
     expect(18500 - 5000 - 1500 - 3000).toBe(9000);
+  });
+
+  it('prints an informational Discount Earned line WITHOUT changing Balance Due (legacy format)', async () => {
+    await generateInvoicePdf(makeInvoiceData({
+      options: legacyOpts,
+      total_amount_cents: 18500,
+      paid_amount_cents: 0,
+      prepay_applied_cents: 0,
+      write_off_cents: 0,
+      discount_earned_cents: 1000, // $10 recorded early-pay discount
+      balance_cents: 18500,        // UNCHANGED
+    }));
+    const textCalls = mockDoc.text.mock.calls.flat();
+    const has = (s: string) => textCalls.some((a: unknown) => typeof a === 'string' && a.includes(s));
+    expect(has('Discount Earned (if paid early):')).toBe(true);
+    expect(has('$10.00')).toBe(true);   // recorded discount
+    expect(has('$185.00')).toBe(true);  // Balance Due == Subtotal (unreduced)
   });
 
   it('renders a split with per-customer "Ref" labels that sum to the whole', async () => {

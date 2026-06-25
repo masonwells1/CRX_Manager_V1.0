@@ -119,6 +119,11 @@ export default function FieldApplicationInvoice() {
   const { profile } = useAuth();
   const { toast } = useToast();
   const saveIdem = useIdempotencyKey('save_field_app_invoice', profile?.id || '');
+  // #33: per-invoice key cache for the billing-details RPC (PO/terms/due/footer/memo
+  // + per-invoice Discount Earned). Keyed by the editor's invoice id (or '__new__'
+  // before the first save) so a retry after a timeout reuses the SAME idempotency key
+  // and the server dedup never double-applies.
+  const billingKeysRef = useRef<Record<string, string>>({});
   const postIdem = useIdempotencyKey('post_invoice_group', profile?.id || '');
   const deleteIdem = useIdempotencyKey('delete_invoices', profile?.id || '');
   // #27: reverse "Transfer to Scheduling" — push a job-built invoice back to its job.
@@ -154,7 +159,22 @@ export default function FieldApplicationInvoice() {
 
   const [invoiceNumber, setInvoiceNumber] = useState('');
   const [transactionDate, setTransactionDate] = useState(new Date().toISOString().slice(0, 10));
-  const [notes, setNotes] = useState('');
+  const [notes, setNotes] = useState(''); // header_notes (printed)
+  // #33: ChemMan billing details. Header/footer notes + PO + due date already
+  // existed on invoices; payment_terms / internal_notes / discount are new (migration
+  // 20260625150000). The header fields apply uniformly to the whole split group; the
+  // Discount Earned is per-invoice (one invoice row per customer in a split).
+  // poRef/terms/dueDate/footerNotes/internalMemo are uniform across the group.
+  const [poRef, setPoRef] = useState('');
+  const [paymentTerms, setPaymentTerms] = useState('');
+  const [dueDate, setDueDate] = useState('');
+  const [footerNotes, setFooterNotes] = useState('');
+  const [internalMemo, setInternalMemo] = useState(''); // internal_notes — NOT printed
+  // #33: Discount Earned is PER-INVOICE (each customer in a split has their own invoice
+  // row). Keyed by invoice id → { dollars: typed string, date }. dollars is kept as the
+  // raw typed string (blank/partial mid-edit allowed) and converted to bigint cents only
+  // at save. Loaded from each group member's discount_earned_cents/discount_date.
+  const [discountByInvoice, setDiscountByInvoice] = useState<Record<string, { dollars: string; date: string }>>({});
   const [status, setStatus] = useState<InvoiceStatus>('draft');
   // #24: the Consultant (responsible salesperson) on this invoice. Backed by the
   // existing invoices.salesman_id column — now user-selectable instead of being
@@ -200,6 +220,8 @@ export default function FieldApplicationInvoice() {
     due_date: string | null;
     purchase_order_ref: string | null;
     footer_notes: string | null;
+    payment_terms: string | null;
+    discount_earned_cents: number;
     total_amount_cents: number;
     total_cost_cents: number | null;
     paid_amount_cents: number | null;
@@ -303,6 +325,58 @@ export default function FieldApplicationInvoice() {
     [chemicals]
   );
 
+  // #33: map each billed customer to THEIR invoice id (each customer has one invoice
+  // row in a split; an un-split invoice maps its single customer to `id`). Used to
+  // drive the per-customer Discount Earned editor on the Customers tab and to display
+  // the saved value. siblings carries {id, customer_id} for the group (1 invoice per
+  // customer — a true 1:1 map). For an UN-split invoice there is exactly ONE invoice
+  // (and so one Discount Earned), even when multiple growers SHARE it; the preview
+  // rows are keyed by the SHARE customer_id, which can differ from invoices.customer_id.
+  // So we anchor the single editable discount to the PRIMARY share customer (the row
+  // the preview marks is_primary), falling back to any share, then to the invoice's
+  // own customer_id. This guarantees the editor maps to a real preview row.
+  const customerToInvoiceId = useMemo<Record<string, string>>(() => {
+    const map: Record<string, string> = {};
+    if (siblings.length > 0) {
+      siblings.forEach((s) => { map[s.customer_id] = s.id; });
+    } else if (id) {
+      const anchor = shares.find((s) => s.is_primary)?.customer_id
+        ?? shares[0]?.customer_id
+        ?? pdfSnapshot?.customer_id;
+      if (anchor) map[anchor] = id;
+    }
+    return map;
+  }, [siblings, id, shares, pdfSnapshot?.customer_id]);
+
+  // #33: per-customer Discount Earned (typed dollars + date) for the Customers-tab
+  // editor, keyed by customer_id via customerToInvoiceId. Display/edit only —
+  // converted to bigint cents and written per-invoice at save (never folds into the
+  // billed total). Editing sets dirty so the Save button persists it.
+  const discountByCustomer = useMemo<Record<string, { dollars: string; date: string }>>(() => {
+    const map: Record<string, { dollars: string; date: string }> = {};
+    Object.entries(customerToInvoiceId).forEach(([custId, invId]) => {
+      map[custId] = discountByInvoice[invId] || { dollars: '', date: '' };
+    });
+    return map;
+  }, [customerToInvoiceId, discountByInvoice]);
+
+  // #33: typed dollars → bigint cents for a given invoice id (0 when blank/invalid).
+  // Used to print the THIS-invoice Discount Earned line on the PDF.
+  const discountCentsForInvoice = useCallback((invId: string): number => {
+    const dollars = parseFloat(discountByInvoice[invId]?.dollars ?? '');
+    return Number.isFinite(dollars) && dollars > 0 ? Math.round(dollars * 100) : 0;
+  }, [discountByInvoice]);
+
+  const handleDiscountChange = useCallback((customerId: string, patch: { dollars?: string; date?: string }) => {
+    const invId = customerToInvoiceId[customerId];
+    if (!invId) return;
+    setDiscountByInvoice((prev) => ({
+      ...prev,
+      [invId]: { ...(prev[invId] || { dollars: '', date: '' }), ...patch },
+    }));
+    setDirty(true);
+  }, [customerToInvoiceId]);
+
   // #26: base for the ChemMan "<base>-<NNN>" split reference. Prefer the source
   // job number; else the group's PRIMARY (lowest) saved invoice number; else the
   // current invoice number. Display-only — the real invoice_number is untouched.
@@ -378,6 +452,14 @@ export default function FieldApplicationInvoice() {
     setInvoiceNumber((invoice.invoice_number as string) || '');
     setTransactionDate((invoice.invoice_date as string) || '');
     setNotes((invoice.header_notes as string) || '');
+    // #33: load the ChemMan billing details from the loaded invoice. These header
+    // fields are uniform across a split group (the save RPC writes them to every
+    // member), so reading them off the URL invoice is correct.
+    setPoRef((invoice.purchase_order_ref as string | null) || '');
+    setPaymentTerms((invoice.payment_terms as string | null) || '');
+    setDueDate((invoice.due_date as string | null) || '');
+    setFooterNotes((invoice.footer_notes as string | null) || '');
+    setInternalMemo((invoice.internal_notes as string | null) || '');
     setStatus((invoice.status as InvoiceStatus) || 'draft');
     setAppServiceId((invoice.application_service_id as string | null) || null);
     // #24: Consultant = invoices.salesman_id (the responsible salesperson),
@@ -409,6 +491,8 @@ export default function FieldApplicationInvoice() {
       due_date: (invoice.due_date as string | null) || null,
       purchase_order_ref: (invoice.purchase_order_ref as string | null) || null,
       footer_notes: (invoice.footer_notes as string | null) || null,
+      payment_terms: (invoice.payment_terms as string | null) || null,
+      discount_earned_cents: (invoice.discount_earned_cents as number | null) ?? 0,
       total_amount_cents: (invoice.total_amount_cents as number) || 0,
       total_cost_cents: (invoice.total_cost_cents as number | null) ?? null,
       paid_amount_cents: (invoice.paid_amount_cents as number | null) ?? null,
@@ -427,11 +511,15 @@ export default function FieldApplicationInvoice() {
     const groupId = (invoice.invoice_group_id as string | null) || null;
     setInvoiceGroupId(groupId);
 
+    // Helper: cents → typed dollars string for the Discount Earned editor (blank at 0).
+    const centsToDollars = (cents: number | null | undefined) =>
+      cents && cents > 0 ? (cents / 100).toFixed(2) : '';
+
     // If grouped, load sibling invoices for the banner
     if (groupId) {
       const { data: sibs } = await supabase
         .from('invoices')
-        .select('id, invoice_number, customer_id, total_amount_cents, status, customer:customers!invoices_customer_id_fkey(farm_name)')
+        .select('id, invoice_number, customer_id, total_amount_cents, status, discount_earned_cents, discount_date, customer:customers!invoices_customer_id_fkey(farm_name)')
         .eq('invoice_group_id', groupId)
         .is('deleted_at', null) // [B1.2] don't surface a soft-deleted split member in the banner
         .order('invoice_number');
@@ -446,9 +534,25 @@ export default function FieldApplicationInvoice() {
             status: (s.status as InvoiceStatus) || 'draft',
           }))
         );
+        // #33: per-invoice Discount Earned map for the whole group (one row per customer).
+        const discMap: Record<string, { dollars: string; date: string }> = {};
+        (sibs as Array<Record<string, unknown>>).forEach((s) => {
+          discMap[s.id as string] = {
+            dollars: centsToDollars(s.discount_earned_cents as number | null),
+            date: (s.discount_date as string | null) || '',
+          };
+        });
+        setDiscountByInvoice(discMap);
       }
     } else {
       setSiblings([]);
+      // #33: single (un-split) invoice — its own Discount Earned, keyed by this id.
+      setDiscountByInvoice({
+        [id]: {
+          dollars: centsToDollars(invoice.discount_earned_cents as number | null),
+          date: (invoice.discount_date as string | null) || '',
+        },
+      });
     }
 
     // Locations: when grouped, locations are keyed by invoice_group_id;
@@ -802,19 +906,72 @@ export default function FieldApplicationInvoice() {
         }
       }
 
-      // Only consider the form clean when BOTH writes succeeded. If Applied
-      // Info failed, leave dirty=true so the leave-page warning still fires
-      // and the user can retry without re-entering the rest of the form.
-      if (appliedInfoOk) {
+      // #33: persist the ChemMan billing details (PO / terms / due date / footer
+      // notes / internal memo + per-invoice Discount Earned) via the SECURITY DEFINER
+      // RPC — same reason as Applied Info: invoices_update RLS is admin-only, so a raw
+      // update silently no-ops for a sales_rep. Header fields apply uniformly to every
+      // member; p_discounts carries the per-invoice {amount_cents, date}. The Discount
+      // Earned is informational ONLY — it NEVER reduces the GENERATED balance_cents.
+      let billingOk = true;
+      if (ids.length > 0) {
+        // Build the per-invoice discount map. Only keys in the returned ids are sent
+        // (stale keys would fail the RPC's row-count guard). A blank/0 dollars entry
+        // resolves to amount 0 (off). Round to the nearest cent (bigint cents).
+        const discounts: Record<string, { amount_cents: number; date: string | null }> = {};
+        for (const invId of ids) {
+          const entry = discountByInvoice[invId];
+          const dollars = entry ? parseFloat(entry.dollars) : NaN;
+          const cents = Number.isFinite(dollars) && dollars > 0 ? Math.round(dollars * 100) : 0;
+          discounts[invId] = { amount_cents: cents, date: (entry?.date || null) };
+        }
+        const billingKey =
+          billingKeysRef.current[id || '__new__'] ||
+          (billingKeysRef.current[id || '__new__'] = generateIdempotencyKey('update_field_app_invoice_billing', profile.id));
+        const billingResult = await supabase.rpc('update_field_app_invoice_billing', {
+          p_invoice_ids: ids,
+          // Omit (undefined) when blank → the RPC's NULL default clears the column,
+          // matching the Applied-Info "blank intentionally clears" behavior.
+          p_purchase_order_ref: poRef || undefined,
+          p_payment_terms: paymentTerms || undefined,
+          p_header_notes: notes || undefined,
+          p_due_date: dueDate || undefined,
+          p_footer_notes: footerNotes || undefined,
+          p_internal_notes: internalMemo || undefined,
+          p_discounts: discounts,
+          p_performed_by: profile.id,
+          p_idempotency_key: billingKey,
+        });
+        if (billingResult.error) {
+          billingOk = false;
+          Sentry.captureException(billingResult.error, {
+            level: 'error',
+            extra: { context: 'field_app_invoice_billing_persist', invoice_ids: ids },
+          });
+        } else {
+          assertRpcResult(billingResult.data, 'update_field_app_invoice_billing');
+          // Clear the per-id key only on success so a retry after a failure reuses it.
+          delete billingKeysRef.current[id || '__new__'];
+        }
+      }
+
+      // Only consider the form clean when ALL writes succeeded. If any failed,
+      // leave dirty=true so the leave-page warning still fires and the user can
+      // retry without re-entering the rest of the form.
+      if (appliedInfoOk && billingOk) {
         setDirty(false);
       }
 
-      if (appliedInfoOk) {
+      if (appliedInfoOk && billingOk) {
         toast('success', isNew ? `Invoice created${groupNote}` : `Invoice saved${groupNote}`);
-      } else {
+      } else if (!appliedInfoOk) {
         toast('error',
           (isNew ? 'Invoice created' : 'Invoice saved') + groupNote +
           ', but Applied Info (wind/temp/applicator) did NOT persist. Re-enter and save again.'
+        );
+      } else {
+        toast('error',
+          (isNew ? 'Invoice created' : 'Invoice saved') + groupNote +
+          ', but the billing details (PO / terms / due date / notes / discount) did NOT persist. Re-enter and save again.'
         );
       }
 
@@ -1073,10 +1230,17 @@ export default function FieldApplicationInvoice() {
       customer_id: pdfSnapshot!.customer_id,
       customer_name: primaryShare?.customer_name || pdfSnapshot!.customer_name || '',
       salesman_name: consultants.find((c) => c.id === consultantId)?.full_name || null,
-      purchase_order_ref: pdfSnapshot!.purchase_order_ref,
+      // #33: print the LIVE form values so an in-editor edit prints without a reload
+      // (matches the existing header_notes: notes pattern). payment_terms is the
+      // invoice-level override and wins over the customer default in the builder.
+      purchase_order_ref: poRef || null,
+      payment_terms: paymentTerms || null,
       header_notes: notes || null,
-      footer_notes: pdfSnapshot!.footer_notes,
-      due_date: pdfSnapshot!.due_date,
+      footer_notes: footerNotes || null,
+      due_date: dueDate || null,
+      // #33: Discount Earned for THIS invoice (the URL invoice). Informational line on
+      // the PDF — it does NOT change the Total/Balance math (passed through untouched).
+      discount_earned_cents: id ? discountCentsForInvoice(id) : 0,
       crop_type: locations[0]?.crop_type ?? null,
       field_names: locations.length > 0 ? locations.map((l) => l.field_name) : null,
       total_acres: totalAppliedAcres || null,
@@ -1426,14 +1590,77 @@ export default function FieldApplicationInvoice() {
               disabled={!canEdit}
             />
           </div>
+          {/* #33: PO Reference — ChemMan purchase-order ref, printed. */}
           <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">Notes</label>
+            <label className="block text-xs font-medium text-gray-500 mb-1">PO Reference</label>
+            <input
+              type="text"
+              value={poRef}
+              onChange={(e) => { setPoRef(e.target.value); setDirty(true); }}
+              placeholder="Customer PO #"
+              disabled={!canEdit}
+              className="w-full px-3 py-2 border rounded-lg text-sm disabled:bg-gray-50"
+            />
+          </div>
+          {/* #33: Due Date — printed; defaults to "On receipt" on the PDF when blank. */}
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Due Date</label>
+            <input
+              type="date"
+              value={dueDate}
+              onChange={(e) => { setDueDate(e.target.value); setDirty(true); }}
+              disabled={!canEdit}
+              className="w-full px-3 py-2 border rounded-lg text-sm disabled:bg-gray-50"
+            />
+          </div>
+          {/* #33: Payment Terms — invoice-level override (free text), printed. */}
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Payment Terms</label>
+            <input
+              type="text"
+              value={paymentTerms}
+              onChange={(e) => { setPaymentTerms(e.target.value); setDirty(true); }}
+              placeholder="e.g. Net 30"
+              disabled={!canEdit}
+              className="w-full px-3 py-2 border rounded-lg text-sm disabled:bg-gray-50"
+            />
+          </div>
+          {/* header_notes (printed at the top of the invoice). */}
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Header Notes</label>
             <input
               type="text"
               value={notes}
               onChange={(e) => { setNotes(e.target.value); setDirty(true); }}
-              placeholder="Optional notes"
+              placeholder="Printed at top of invoice"
               disabled={!canEdit}
+              className="w-full px-3 py-2 border rounded-lg text-sm disabled:bg-gray-50"
+            />
+          </div>
+          {/* #33: Footer Notes — printed at the bottom of the invoice. */}
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Footer Notes</label>
+            <input
+              type="text"
+              value={footerNotes}
+              onChange={(e) => { setFooterNotes(e.target.value); setDirty(true); }}
+              placeholder="Printed at bottom of invoice"
+              disabled={!canEdit}
+              className="w-full px-3 py-2 border rounded-lg text-sm disabled:bg-gray-50"
+            />
+          </div>
+          {/* #33: Internal Memo — saved with the invoice but NEVER printed on the
+              customer copy. Spans the full row for visibility. */}
+          <div className="col-span-2 lg:col-span-3">
+            <label className="block text-xs font-medium text-gray-500 mb-1">
+              Internal Memo <span className="font-normal text-gray-400">(not printed)</span>
+            </label>
+            <textarea
+              value={internalMemo}
+              onChange={(e) => { setInternalMemo(e.target.value); setDirty(true); }}
+              placeholder="Internal note — stays off the customer invoice"
+              disabled={!canEdit}
+              rows={2}
               className="w-full px-3 py-2 border rounded-lg text-sm disabled:bg-gray-50"
             />
           </div>
@@ -1604,6 +1831,8 @@ export default function FieldApplicationInvoice() {
               sharesBasis={sharesBasis}
               onSharesBasisChange={canEdit ? setSharesBasis : undefined}
               splitRefBase={splitRefBase}
+              discountByCustomer={discountByCustomer}
+              onDiscountChange={canEdit ? handleDiscountChange : undefined}
             />
           </div>
         )}

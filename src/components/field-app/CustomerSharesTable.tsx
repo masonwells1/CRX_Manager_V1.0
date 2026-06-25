@@ -39,6 +39,20 @@ interface CustomerSharesTableProps {
    * ChemMan "<base>-<NNN>" Split Ref per customer. Optional.
    */
   splitRefBase?: string | null;
+
+  /**
+   * #33: per-customer "Discount Earned" — owner-entered early-pay discount in
+   * TYPED DOLLARS (string, blank/partial allowed mid-edit) + an optional date,
+   * keyed by customer_id. Display/edit ONLY — it is informational and NEVER
+   * reduces the billed Invoice Total (the real reduction flows through
+   * payments/write-off). Stored per-invoice as bigint cents by the parent.
+   */
+  discountByCustomer?: Record<string, { dollars: string; date: string }>;
+  /**
+   * #33: edit callback for the Discount Earned column. When omitted the column is
+   * read-only (a posted/locked invoice). Patches dollars and/or date for one customer.
+   */
+  onDiscountChange?: (customerId: string, patch: { dollars?: string; date?: string }) => void;
 }
 
 
@@ -49,7 +63,15 @@ export default function CustomerSharesTable({
   sharesBasis = 'location',
   onSharesBasisChange,
   splitRefBase,
+  discountByCustomer,
+  onDiscountChange,
 }: CustomerSharesTableProps) {
+  // #33: parse a typed dollars string to bigint cents (0 when blank/invalid). Used
+  // only to SUM the Discount Earned column footer — never to alter Invoice Total.
+  const discountCents = (custId: string): number => {
+    const dollars = parseFloat(discountByCustomer?.[custId]?.dollars ?? '');
+    return Number.isFinite(dollars) && dollars > 0 ? Math.round(dollars * 100) : 0;
+  };
   // Server-computed preview path (Phase 1 split-aware): show real per-customer
   // amounts including grower-share lines, chemical lines, and service fees.
   if (preview && preview.per_customer.length > 0) {
@@ -128,10 +150,39 @@ export default function CustomerSharesTable({
                     </td>
                     <td className="px-4 py-2 text-right tabular-nums">{totalShares}</td>
                     <td className="px-4 py-2 text-right tabular-nums">{acres.toFixed(2)}</td>
-                    {/* Discount Earned is owned by the discount-earned feature
-                        (#33); shown as $0.00 here for layout parity, never invented. */}
-                    <td className="px-4 py-2 text-right tabular-nums text-gray-400" title="Set per the early-pay discount feature">
-                      {formatCents(0)}
+                    {/* #33: Discount Earned — owner-entered early-pay discount (DOLLARS),
+                        per customer. Informational ONLY: it is recorded/printed but does
+                        NOT reduce the Invoice Total. Editable when onDiscountChange is set
+                        (a draft/unposted invoice); read-only (the saved amount) otherwise. */}
+                    <td className="px-4 py-2 text-right tabular-nums">
+                      {onDiscountChange ? (
+                        <div className="flex flex-col items-end gap-1">
+                          <div className="flex items-center justify-end gap-1">
+                            <span className="text-gray-400">$</span>
+                            <input
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              value={discountByCustomer?.[c.customer_id]?.dollars ?? ''}
+                              onChange={(e) => onDiscountChange(c.customer_id, { dollars: e.target.value })}
+                              placeholder="0.00"
+                              className="w-24 px-2 py-1 border rounded text-right text-sm tabular-nums"
+                              title="Early-pay discount earned — recorded & printed, does not reduce the invoice total"
+                            />
+                          </div>
+                          <input
+                            type="date"
+                            value={discountByCustomer?.[c.customer_id]?.date ?? ''}
+                            onChange={(e) => onDiscountChange(c.customer_id, { date: e.target.value })}
+                            className="w-32 px-2 py-1 border rounded text-right text-xs text-gray-600"
+                            title="Discount date (optional)"
+                          />
+                        </div>
+                      ) : (
+                        <span className={discountCents(c.customer_id) > 0 ? '' : 'text-gray-400'}>
+                          {formatCents(discountCents(c.customer_id))}
+                        </span>
+                      )}
                     </td>
                     <td className="px-4 py-2 text-right tabular-nums font-semibold">{formatCents(c.total_cents)}</td>
                   </tr>
@@ -146,7 +197,11 @@ export default function CustomerSharesTable({
                   {sharesBasis === 'share' ? '100.00%' : `${recon.sumCustomerAcres.toFixed(2)} ac`}
                 </td>
                 <td className="px-4 py-2 text-right tabular-nums">{recon.sumCustomerAcres.toFixed(2)}</td>
-                <td className="px-4 py-2 text-right tabular-nums text-gray-400">{formatCents(0)}</td>
+                {/* #33: sum of Discount Earned across customers — informational; it is
+                    NOT subtracted from the Invoice Total below (no double-count). */}
+                <td className="px-4 py-2 text-right tabular-nums">
+                  {formatCents(preview.per_customer.reduce((s, c) => s + discountCents(c.customer_id), 0))}
+                </td>
                 <td className="px-4 py-2 text-right tabular-nums">{formatCents(recon.sumCustomerCents)}</td>
               </tr>
             </tfoot>

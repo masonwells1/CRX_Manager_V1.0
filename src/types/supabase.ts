@@ -3613,11 +3613,14 @@ export type Database = {
           customer_id: string
           deleted_at: string | null
           delivery_id: string | null
+          discount_date: string | null
+          discount_earned_cents: number
           due_date: string | null
           field_names: string[] | null
           footer_notes: string | null
           header_notes: string | null
           id: string
+          internal_notes: string | null
           invoice_date: string
           invoice_group_id: string | null
           invoice_number: string
@@ -3627,6 +3630,7 @@ export type Database = {
           order_id: string | null
           paid_amount_cents: number
           parent_invoice_id: string | null
+          payment_terms: string | null
           posted_at: string | null
           posted_by: string | null
           prepay_applied_cents: number
@@ -3659,11 +3663,14 @@ export type Database = {
           customer_id: string
           deleted_at?: string | null
           delivery_id?: string | null
+          discount_date?: string | null
+          discount_earned_cents?: number
           due_date?: string | null
           field_names?: string[] | null
           footer_notes?: string | null
           header_notes?: string | null
           id?: string
+          internal_notes?: string | null
           invoice_date?: string
           invoice_group_id?: string | null
           invoice_number?: string
@@ -3673,6 +3680,7 @@ export type Database = {
           order_id?: string | null
           paid_amount_cents?: number
           parent_invoice_id?: string | null
+          payment_terms?: string | null
           posted_at?: string | null
           posted_by?: string | null
           prepay_applied_cents?: number
@@ -3705,11 +3713,14 @@ export type Database = {
           customer_id?: string
           deleted_at?: string | null
           delivery_id?: string | null
+          discount_date?: string | null
+          discount_earned_cents?: number
           due_date?: string | null
           field_names?: string[] | null
           footer_notes?: string | null
           header_notes?: string | null
           id?: string
+          internal_notes?: string | null
           invoice_date?: string
           invoice_group_id?: string | null
           invoice_number?: string
@@ -3719,6 +3730,7 @@ export type Database = {
           order_id?: string | null
           paid_amount_cents?: number
           parent_invoice_id?: string | null
+          payment_terms?: string | null
           posted_at?: string | null
           posted_by?: string | null
           prepay_applied_cents?: number
@@ -9710,6 +9722,21 @@ export type Database = {
           p_performed_by?: string
           p_temperature_text?: string
           p_wind_direction?: string
+        }
+        Returns: Json
+      }
+      update_field_app_invoice_billing: {
+        Args: {
+          p_discounts?: Json
+          p_due_date?: string
+          p_footer_notes?: string
+          p_header_notes?: string
+          p_idempotency_key?: string
+          p_internal_notes?: string
+          p_invoice_ids: string[]
+          p_payment_terms?: string
+          p_performed_by?: string
+          p_purchase_order_ref?: string
         }
         Returns: Json
       }

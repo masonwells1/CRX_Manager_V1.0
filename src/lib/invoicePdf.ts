@@ -91,6 +91,10 @@ export interface InvoicePdfData {
   prepay_applied_cents: number;
   write_off_cents?: number;
   balance_cents: number;
+  // #33: owner-entered early-pay "Discount Earned" (bigint cents). INFORMATIONAL —
+  // printed as a labeled line but NEVER subtracted from total/balance (no double-count;
+  // the real reduction flows through payments/write-off). Absent/0 = no line printed.
+  discount_earned_cents?: number;
 
   // Field application context
   crop_type?: string;
@@ -131,6 +135,10 @@ interface InvoiceRowForPdf {
   customer_name: string;
   salesman_name?: string | null;
   purchase_order_ref?: string | null;
+  // #33: invoice-level payment terms (override) + early-pay Discount Earned. When
+  // payment_terms is provided here it wins over the customer default below.
+  payment_terms?: string | null;
+  discount_earned_cents?: number | null;
   header_notes?: string | null;
   footer_notes?: string | null;
   crop_type?: string | null;
@@ -191,7 +199,8 @@ export async function buildInvoicePdfDataFromRow(
     customer_state: custRow?.state || undefined,
     customer_zip: custRow?.zip || undefined,
     account_number: custRow?.account_number || undefined,
-    payment_terms: custRow?.payment_terms || undefined,
+    // #33: invoice-level payment terms override the customer default when present.
+    payment_terms: inv.payment_terms || custRow?.payment_terms || undefined,
     salesman_name: inv.salesman_name || undefined,
     purchase_order_ref: inv.purchase_order_ref || undefined,
     header_notes: inv.header_notes || undefined,
@@ -237,6 +246,8 @@ export async function buildInvoicePdfDataFromRow(
     prepay_applied_cents: inv.prepay_applied_cents || 0,
     write_off_cents: inv.write_off_cents || 0,
     balance_cents: inv.balance_cents || 0,
+    // #33: informational Discount Earned line (does NOT change total/balance).
+    discount_earned_cents: inv.discount_earned_cents || 0,
     options,
   };
 }
@@ -399,6 +410,19 @@ export async function generateInvoicePdf(data: InvoicePdfData) {
     doc.setTextColor(...CHARCOAL);
     doc.text(data.payment_terms, labelX, ry + 12);
   }
+  // #33: PO Reference in the current (default) format too — previously it only
+  // printed on the legacy "Old Print" layout, so a PO set in the editor was invisible
+  // on the default print. Placed beside TERMS on the same info row.
+  if (data.purchase_order_ref) {
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(...GRAY);
+    doc.text('PO REF', rightX - 50, ry);
+    doc.setFontSize(9);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(...CHARCOAL);
+    doc.text(data.purchase_order_ref, rightX - 50, ry + 12);
+  }
 
   y += 105;
 
@@ -420,7 +444,10 @@ export async function generateInvoicePdf(data: InvoicePdfData) {
 
   const totalsW = 220;
   const totalsX = pageW - margin - totalsW;
-  const totalsH = 110 + (data.paid_amount_cents > 0 ? 16 : 0) + (data.prepay_applied_cents > 0 ? 16 : 0) + ((data.write_off_cents ?? 0) > 0 ? 16 : 0);
+  // #33: reserve an extra row for the informational Discount Earned line below the
+  // balance (only when an amount is recorded). It is NOT a deduction.
+  const hasDiscount = (data.discount_earned_cents ?? 0) > 0;
+  const totalsH = 110 + (data.paid_amount_cents > 0 ? 16 : 0) + (data.prepay_applied_cents > 0 ? 16 : 0) + ((data.write_off_cents ?? 0) > 0 ? 16 : 0) + (hasDiscount ? 16 : 0);
   doc.setFillColor(...LIGHT_BG);
   doc.roundedRect(totalsX, y, totalsW, totalsH, 4, 4, 'F');
 
@@ -477,6 +504,18 @@ export async function generateInvoicePdf(data: InvoicePdfData) {
   const balanceColor = data.balance_cents > 0 ? RED : CRX_GREEN;
   doc.setTextColor(...balanceColor);
   doc.text(fmt(data.balance_cents), tRX, ty, { align: 'right' });
+
+  // #33: informational Discount Earned line BELOW the balance — it is recorded and
+  // shown (early-pay discount) but is deliberately NOT deducted from the balance,
+  // so the printed Balance Due still reconciles to total − payments − prepay − write-off.
+  if (hasDiscount) {
+    ty += 16;
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(...GRAY);
+    doc.text('Discount Earned (if paid early)', tLX, ty);
+    doc.text(fmt(data.discount_earned_cents ?? 0), tRX, ty, { align: 'right' });
+  }
 
   y += totalsH + 15;
 
@@ -753,6 +792,16 @@ async function generateLegacyInvoicePdf(data: InvoicePdfData) {
   doc.line(labelX, y - 4, valX, y - 4);
   y += 4;
   totalRow('BALANCE DUE:', fmt(data.balance_cents), true);
+  // #33: informational Discount Earned line — recorded/printed, NOT deducted from the
+  // balance (so Balance Due still reconciles to total − payments − prepay − write-off).
+  if ((data.discount_earned_cents ?? 0) > 0) {
+    doc.setFont('courier', 'normal');
+    doc.setFontSize(8);
+    doc.setTextColor(90, 90, 90);
+    totalRow('Discount Earned (if paid early):', fmt(data.discount_earned_cents ?? 0));
+    doc.setTextColor(...black);
+    doc.setFontSize(9);
+  }
 
   // ── Footer notes ───────────────────────────────────────────────────
   if (data.footer_notes) {
