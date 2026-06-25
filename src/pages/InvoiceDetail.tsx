@@ -1108,7 +1108,19 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
               Print
             </Button>
           )}
-          {!isNew && invoice.status === 'posted' && isAdmin && (
+          {/* Email gate:
+                • Chemical-sale invoices keep the existing policy — posted + admin only.
+                • #31 field-application parity: a transferred field invoice opens HERE
+                  (it has job_id but no field_app_locations), and ChemMan emails the bill
+                  from the field-app screens for unposted invoices and by sales reps too.
+                  So for invoice_type='field_application' surface Email on any saved,
+                  non-terminal invoice (draft/unposted/posted/overdue/paid) for admin +
+                  sales rep — matching the field-app editor/list Email actions. */}
+          {!isNew && (
+            invoice.invoice_type === 'field_application'
+              ? !['voided', 'cancelled'].includes(invoice.status || '')
+              : (invoice.status === 'posted' && isAdmin)
+          ) && (
             <Button
               variant="secondary"
               icon={<Mail className="w-4 h-4" />}

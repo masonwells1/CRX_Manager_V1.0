@@ -14,8 +14,8 @@ vi.mock('./db', () => ({
 
 vi.stubGlobal('fetch', mockFetch);
 
-import { sendEmail, pdfToBase64, buildEmailHtml } from './emailService';
-import type { SendEmailParams } from './emailService';
+import { sendEmail, pdfToBase64, buildEmailHtml, buildInvoiceEmailPayload } from './emailService';
+import type { SendEmailParams, InvoiceEmailInput } from './emailService';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -186,5 +186,77 @@ describe('sendEmail', () => {
 
     const body = JSON.parse(mockFetch.mock.calls[0][1].body);
     expect(body.attachments).toEqual([{ filename: 'invoice.pdf', content: 'base64data' }]);
+  });
+});
+
+// #31: the field-app "Email invoice to customer" payload builder. These tests pin
+// the recipient resolution + payload shape that every field-app screen (per-acre
+// editor toolbar, combined list, unposted/posted lists) relies on, so a missing
+// email never sends to a blank/wrong address and the attachment is the right one.
+describe('buildInvoiceEmailPayload', () => {
+  const base: InvoiceEmailInput = {
+    customerEmail: 'farmer@example.com',
+    customerId: 'cust-123',
+    invoiceId: 'inv-456',
+    invoiceNumber: 'FA-1001',
+    invoiceDate: '2026-06-25',
+    balanceCents: 125000, // $1,250.00
+    attachmentBase64: 'QkFTRTY0UERG', // dummy base64
+    nowMs: 1_700_000_000_000,
+  };
+
+  it('addresses the email to the resolved customer email', () => {
+    const p = buildInvoiceEmailPayload(base);
+    expect(p.to).toBe('farmer@example.com');
+    expect(p.customer_id).toBe('cust-123');
+  });
+
+  it('throws an honest error (no send) when the customer has no email on file', () => {
+    expect(() => buildInvoiceEmailPayload({ ...base, customerEmail: null }))
+      .toThrow('Customer does not have an email address on file');
+    expect(() => buildInvoiceEmailPayload({ ...base, customerEmail: undefined }))
+      .toThrow('Customer does not have an email address on file');
+    expect(() => buildInvoiceEmailPayload({ ...base, customerEmail: '' }))
+      .toThrow('Customer does not have an email address on file');
+    // whitespace-only must NOT be treated as a valid address
+    expect(() => buildInvoiceEmailPayload({ ...base, customerEmail: '   ' }))
+      .toThrow('Customer does not have an email address on file');
+  });
+
+  it('trims surrounding whitespace from the recipient', () => {
+    const p = buildInvoiceEmailPayload({ ...base, customerEmail: '  farmer@example.com  ' });
+    expect(p.to).toBe('farmer@example.com');
+  });
+
+  it('attaches the supplied PDF under an invoice-numbered filename', () => {
+    const p = buildInvoiceEmailPayload(base);
+    expect(p.attachments).toHaveLength(1);
+    expect(p.attachments![0].filename).toBe('Invoice-FA-1001.pdf');
+    expect(p.attachments![0].content).toBe('QkFTRTY0UERG');
+  });
+
+  it('builds a deterministic, per-invoice idempotency key', () => {
+    const p = buildInvoiceEmailPayload(base);
+    expect(p.idempotency_key).toBe('invoice-email-inv-456-1700000000000');
+  });
+
+  it('marks the send as an invoice email about this invoice resource', () => {
+    const p = buildInvoiceEmailPayload(base);
+    expect(p.email_type).toBe('invoice');
+    expect(p.resource_type).toBe('invoice');
+    expect(p.resource_id).toBe('inv-456');
+  });
+
+  it('puts the invoice number, formatted balance, and date in the subject + body', () => {
+    const p = buildInvoiceEmailPayload(base);
+    expect(p.subject).toBe('Invoice FA-1001 from Crop RX Solutions');
+    expect(p.html).toContain('Field Application Invoice FA-1001');
+    expect(p.html).toContain('$1,250.00');
+    expect(p.html).toContain('2026-06-25');
+  });
+
+  it('formats a zero balance correctly (paid invoice)', () => {
+    const p = buildInvoiceEmailPayload({ ...base, balanceCents: 0 });
+    expect(p.html).toContain('$0.00');
   });
 });

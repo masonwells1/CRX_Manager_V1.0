@@ -78,6 +78,63 @@ export function pdfToBase64(doc: { output: (type: string) => string }): string {
   return base64Part;
 }
 
+// ── buildInvoiceEmailPayload ───────────────────────────────────────────
+// Pure builder for an "email this invoice to the customer" send. Centralises the
+// recipient guard + subject + branded body + idempotency key + attachment filename
+// so every field-app screen (editor toolbar, list rows) sends an IDENTICAL,
+// correctly-addressed payload. Throws the honest, user-facing error when there is
+// no email on file so the caller never sends to a blank/wrong address.
+//
+// The attachment `content` (base64 PDF) is supplied by the caller because building
+// it needs jsPDF; this helper owns only the recipient/payload shape, which is the
+// part worth unit-testing.
+
+export interface InvoiceEmailInput {
+  /** The customer's billing email, already resolved from THIS invoice's customer. */
+  customerEmail: string | null | undefined;
+  customerId: string;
+  invoiceId: string;
+  invoiceNumber: string;
+  invoiceDate: string;
+  /** Authoritative AR balance in cents (GENERATED invoices.balance_cents). */
+  balanceCents: number;
+  /** Base64 PDF (no data-URI prefix) — see pdfToBase64(). */
+  attachmentBase64: string;
+  /** Unique-per-send token; defaults to a per-invoice + timestamp key. */
+  nowMs?: number;
+}
+
+export function buildInvoiceEmailPayload(input: InvoiceEmailInput): SendEmailParams {
+  const email = input.customerEmail?.trim();
+  if (!email) {
+    // Same wording the InvoiceDetail / list handlers use — honest, not a silent send.
+    throw new Error('Customer does not have an email address on file');
+  }
+
+  const amountStr = (input.balanceCents / 100).toLocaleString('en-US', {
+    style: 'currency',
+    currency: 'USD',
+  });
+  const html = buildEmailHtml(`
+          <h2 style="margin:0 0 16px;color:#111827;font-size:18px;">Field Application Invoice ${input.invoiceNumber}</h2>
+          <p style="margin:0 0 8px;color:#374151;">Amount Due: <strong>${amountStr}</strong></p>
+          <p style="margin:0 0 8px;color:#374151;">Invoice Date: ${input.invoiceDate}</p>
+          <p style="margin:16px 0 0;color:#374151;">Please find your invoice attached to this email.</p>
+        `);
+
+  return {
+    to: email,
+    subject: `Invoice ${input.invoiceNumber} from Crop RX Solutions`,
+    html,
+    email_type: 'invoice',
+    customer_id: input.customerId,
+    resource_type: 'invoice',
+    resource_id: input.invoiceId,
+    idempotency_key: `invoice-email-${input.invoiceId}-${input.nowMs ?? Date.now()}`,
+    attachments: [{ filename: `Invoice-${input.invoiceNumber}.pdf`, content: input.attachmentBase64 }],
+  };
+}
+
 // ── buildEmailHtml ─────────────────────────────────────────────────────
 // Wraps body content in a CRX-branded HTML email template.
 

@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, FileText, Check, Ban, Download, ClipboardCheck, Printer, FileClock } from 'lucide-react';
+import { Plus, FileText, Check, Ban, Download, ClipboardCheck, Printer, FileClock, Mail } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
@@ -11,7 +11,9 @@ import { Sentry } from '../lib/sentry';
 import { runCriticalAction } from '../lib/criticalAction';
 import { exportToCSV } from '../lib/csvExport';
 import { downloadReportPdf } from '../lib/reportPdf';
-import { buildInvoicePdfDataFromRow, generateBatchInvoicePdf, downloadInvoicePdf } from '../lib/invoicePdf';
+import { buildInvoicePdfDataFromRow, generateBatchInvoicePdf, downloadInvoicePdf, generateInvoicePdf } from '../lib/invoicePdf';
+import { sendEmail, pdfToBase64, buildInvoiceEmailPayload } from '../lib/emailService';
+import { logActivity } from '../lib/activityLogger';
 import { useAuth } from '../contexts/AuthContext';
 import {
   JOBS_LIST_KEY,
@@ -70,7 +72,8 @@ export default function FieldInvoices() {
   const [cardFilter, setCardFilter] = useState<'unposted' | 'posted' | 'outstanding' | null>(null);
   const [exportingPdf, setExportingPdf] = useState(false);
   const [printing, setPrinting] = useState(false);
-  // Per-row action guard so a double-click can't fire two prints.
+  const [emailing, setEmailing] = useState(false);
+  // Per-row action guard so a double-click can't fire two prints/emails.
   const rowActionRef = useRef(false);
   // Field-app parity #8: the SHARED column toggles (Customers / Applicators /
   // Total Acres) are governed by the same per-user list settings as the job
@@ -226,6 +229,60 @@ export default function FieldInvoices() {
     rowActionRef.current = false;
   };
 
+  // #31: per-row EMAIL — send the field invoice (current-format PDF attached) to
+  // the customer's billing email. Recipient is resolved from the invoice's OWN
+  // customer (re-fetched by row.customer_id so we never trust a stale list field),
+  // and a missing email gives an honest error instead of a blank/wrong send. The
+  // send is idempotent (per invoice + timestamp) and logged via invoice_emailed.
+  // Mirrors the Unposted/Posted list emailRow handlers exactly.
+  const emailRow = async (row: FieldInvoiceRow) => {
+    if (rowActionRef.current) return;
+    if (!profile) { toast('error', 'Profile not loaded — please refresh.'); return; }
+    rowActionRef.current = true;
+    await runCriticalAction({
+      action: async () => {
+        const { data: cust } = await supabase
+          .from('customers')
+          .select('email')
+          .eq('id', row.customer_id)
+          .maybeSingle();
+        const email = (cust as { email?: string | null } | null)?.email;
+
+        const pdfData = await buildInvoicePdfDataFromRow(toPdfRow(row));
+        const doc = await generateInvoicePdf(pdfData);
+        const base64 = pdfToBase64(doc);
+
+        // buildInvoiceEmailPayload throws the honest "no email on file" error
+        // before any send, so a missing email never results in a blank/wrong send.
+        const payload = buildInvoiceEmailPayload({
+          customerEmail: email,
+          customerId: row.customer_id,
+          invoiceId: row.id,
+          invoiceNumber: row.invoice_number,
+          invoiceDate: row.invoice_date,
+          balanceCents: row.balance_cents,
+          attachmentBase64: base64,
+        });
+        const result = await sendEmail(payload);
+        if (!result.success) throw new Error(result.error || 'Email failed to send');
+
+        logActivity({
+          event: 'invoice_emailed',
+          description: `Field invoice ${row.invoice_number} emailed to ${payload.to}`,
+          performedBy: profile.id,
+          entityType: 'invoice',
+          entityId: row.id,
+          customerId: row.customer_id,
+        });
+      },
+      toast,
+      successMessage: `Emailed ${row.invoice_number}`,
+      setLoading: (v) => { setEmailing(v); if (!v) rowActionRef.current = false; },
+      sentryTag: 'field_invoice_combined_email_row',
+    });
+    rowActionRef.current = false;
+  };
+
   // #30: bulk Print All / Old Print All over the filtered list (one PDF each).
   const printAll = async (format: 'current' | 'legacy') => {
     if (filtered.length === 0) { toast('error', 'No invoices to print'); return; }
@@ -315,7 +372,7 @@ export default function FieldInvoices() {
     },
     {
       key: 'id',
-      header: 'Print',
+      header: 'Actions',
       render: (row) => (
         <div className="flex items-center gap-1">
           <button
@@ -337,6 +394,17 @@ export default function FieldInvoices() {
             title="Old Print (legacy format)"
           >
             <FileClock className="w-4 h-4" />
+          </button>
+          {/* #31: Email this invoice to the customer (current-format PDF attached). */}
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); void emailRow(row); }}
+            disabled={emailing}
+            className="p-1.5 rounded hover:bg-gray-100 text-secondary disabled:opacity-40"
+            aria-label={`Email ${row.invoice_number}`}
+            title="Email to customer"
+          >
+            <Mail className="w-4 h-4" />
           </button>
         </div>
       ),

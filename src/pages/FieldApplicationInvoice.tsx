@@ -3,7 +3,7 @@ import { useParams, useNavigate, Link } from 'react-router-dom';
 import {
   Save, Send, Trash2, MapPin, FlaskConical, Users, ClipboardList, ArrowLeft, Eye, AlertTriangle,
   Printer, Bell, Lock, X, CornerUpLeft, RotateCcw, Wind, Thermometer, Tractor, Gauge, CalendarDays, Clock,
-  Ban,
+  Ban, Mail,
 } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -26,7 +26,9 @@ import FieldAppChemicalEntry, { type ChemicalLine } from '../components/field-ap
 import CustomerSharesTable from '../components/field-app/CustomerSharesTable';
 import type { CustomerSharesBasis } from '../components/field-app/customerSplit';
 import ApplicationServicePicker from '../components/field-app/ApplicationServicePicker';
-import { downloadInvoicePdf, buildInvoicePdfDataFromRow } from '../lib/invoicePdf';
+import { downloadInvoicePdf, buildInvoicePdfDataFromRow, generateInvoicePdf } from '../lib/invoicePdf';
+import { sendEmail, pdfToBase64, buildInvoiceEmailPayload } from '../lib/emailService';
+import { runCriticalAction } from '../lib/criticalAction';
 import {
   carryoverRowsFromRecords,
   realApplicatorName,
@@ -191,6 +193,7 @@ export default function FieldApplicationInvoice() {
   // visible form — read from the loaded invoice row so the printed Balance Due
   // reconciles with payments/prepay).
   const [printing, setPrinting] = useState(false);
+  const [emailing, setEmailing] = useState(false);
   const [pdfSnapshot, setPdfSnapshot] = useState<{
     customer_id: string;
     customer_name: string;
@@ -1055,6 +1058,54 @@ export default function FieldApplicationInvoice() {
   // (it re-fetches line items / shares / customer billing by id) so the printed
   // Total and Balance Due reconcile with payments/prepay. Only meaningful for a
   // saved invoice; a brand-new unsaved invoice has nothing to print.
+  // #24/#30/#31: build the money-correct PDF data for this saved invoice. Shared by
+  // Print (#30) and Email (#31) so the emailed attachment is byte-identical to the
+  // printed sheet — same Total/Balance reconciliation, same legal applicator name.
+  // Re-fetches line items / shares / customer billing by id via buildInvoicePdfDataFromRow.
+  const buildEditorPdfData = (format: 'current' | 'legacy' = 'current') => {
+    const primaryShare = shares.find((s) => s.is_primary) || shares[0];
+    return buildInvoicePdfDataFromRow({
+      id: id!,
+      invoice_number: invoiceNumber,
+      invoice_date: transactionDate,
+      invoice_type: 'field_application',
+      status,
+      customer_id: pdfSnapshot!.customer_id,
+      customer_name: primaryShare?.customer_name || pdfSnapshot!.customer_name || '',
+      salesman_name: consultants.find((c) => c.id === consultantId)?.full_name || null,
+      purchase_order_ref: pdfSnapshot!.purchase_order_ref,
+      header_notes: notes || null,
+      footer_notes: pdfSnapshot!.footer_notes,
+      due_date: pdfSnapshot!.due_date,
+      crop_type: locations[0]?.crop_type ?? null,
+      field_names: locations.length > 0 ? locations.map((l) => l.field_name) : null,
+      total_acres: totalAppliedAcres || null,
+      // #24 (LOW#1): the printed legal Applicator name. Prefer the typed free-text
+      // value; otherwise resolve the as-applied applicator's REAL name from the
+      // UNFILTERED name map (so a now-inactive applicator still prints correctly),
+      // never the on-screen placeholder. Falls back to null (blank) when there is no
+      // real name — a placeholder like '(removed applicator)' must not reach the PDF.
+      applicator_name:
+        realApplicatorName(applicator) ??
+        realApplicatorName(applicatorNameFor(carryover[0]?.applicator_id ?? null, applicatorNameMap)) ??
+        null,
+      total_amount_cents: pdfSnapshot!.total_amount_cents,
+      total_cost_cents: pdfSnapshot!.total_cost_cents,
+      paid_amount_cents: pdfSnapshot!.paid_amount_cents,
+      prepay_applied_cents: pdfSnapshot!.prepay_applied_cents,
+      write_off_cents: pdfSnapshot!.write_off_cents,
+      balance_cents: pdfSnapshot!.balance_cents,
+    }, {
+      // #30: format toggles the layout only; share/price/EPA detail stay on so
+      // the printed sheet is complete in either format. Money is identical
+      // (same pdfData) — Total/Balance Due reconcile regardless of format.
+      show_shares: true,
+      show_price_per_acre: true,
+      show_epa_registration: true,
+      format,
+    });
+  };
+
   const handlePrint = async (format: 'current' | 'legacy' = 'current') => {
     if (!id || !pdfSnapshot) {
       toast('error', 'Save the invoice before printing.');
@@ -1062,47 +1113,7 @@ export default function FieldApplicationInvoice() {
     }
     setPrinting(true);
     try {
-      const primaryShare = shares.find((s) => s.is_primary) || shares[0];
-      const pdfData = await buildInvoicePdfDataFromRow({
-        id,
-        invoice_number: invoiceNumber,
-        invoice_date: transactionDate,
-        invoice_type: 'field_application',
-        status,
-        customer_id: pdfSnapshot.customer_id,
-        customer_name: primaryShare?.customer_name || pdfSnapshot.customer_name || '',
-        salesman_name: consultants.find((c) => c.id === consultantId)?.full_name || null,
-        purchase_order_ref: pdfSnapshot.purchase_order_ref,
-        header_notes: notes || null,
-        footer_notes: pdfSnapshot.footer_notes,
-        due_date: pdfSnapshot.due_date,
-        crop_type: locations[0]?.crop_type ?? null,
-        field_names: locations.length > 0 ? locations.map((l) => l.field_name) : null,
-        total_acres: totalAppliedAcres || null,
-        // #24 (LOW#1): the printed legal Applicator name. Prefer the typed free-text
-        // value; otherwise resolve the as-applied applicator's REAL name from the
-        // UNFILTERED name map (so a now-inactive applicator still prints correctly),
-        // never the on-screen placeholder. Falls back to null (blank) when there is no
-        // real name — a placeholder like '(removed applicator)' must not reach the PDF.
-        applicator_name:
-          realApplicatorName(applicator) ??
-          realApplicatorName(applicatorNameFor(carryover[0]?.applicator_id ?? null, applicatorNameMap)) ??
-          null,
-        total_amount_cents: pdfSnapshot.total_amount_cents,
-        total_cost_cents: pdfSnapshot.total_cost_cents,
-        paid_amount_cents: pdfSnapshot.paid_amount_cents,
-        prepay_applied_cents: pdfSnapshot.prepay_applied_cents,
-        write_off_cents: pdfSnapshot.write_off_cents,
-        balance_cents: pdfSnapshot.balance_cents,
-      }, {
-        // #30: format toggles the layout only; share/price/EPA detail stay on so
-        // the printed sheet is complete in either format. Money is identical
-        // (same pdfData) — Total/Balance Due reconcile regardless of format.
-        show_shares: true,
-        show_price_per_acre: true,
-        show_epa_registration: true,
-        format,
-      });
+      const pdfData = await buildEditorPdfData(format);
       await downloadInvoicePdf(pdfData);
     } catch (err) {
       Sentry.captureException(err, { tags: { action: 'print_field_app_invoice', format } });
@@ -1110,6 +1121,66 @@ export default function FieldApplicationInvoice() {
     } finally {
       setPrinting(false);
     }
+  };
+
+  // #31: Email this field invoice (current-format PDF attached) to the customer's
+  // billing email. Recipient is resolved from THIS invoice's own customer
+  // (pdfSnapshot.customer_id = invoices.customer_id — for a split/grouped invoice
+  // that is the per-invoice billed customer, never the wrong party); a missing
+  // email gives an honest error instead of a blank/wrong send. The send is
+  // idempotent (per invoice + timestamp) and logged via invoice_emailed. Mirrors
+  // the list emailRow handlers and InvoiceDetail.handleEmailInvoice.
+  const handleEmailInvoice = async () => {
+    if (!id || !pdfSnapshot) {
+      toast('error', 'Save the invoice before emailing.');
+      return;
+    }
+    if (!profile) {
+      toast('error', 'Profile not loaded — please refresh.');
+      return;
+    }
+    await runCriticalAction({
+      action: async () => {
+        const { data: cust } = await supabase
+          .from('customers')
+          .select('email')
+          .eq('id', pdfSnapshot.customer_id)
+          .maybeSingle();
+        const email = (cust as { email?: string | null } | null)?.email;
+
+        // Build the money-correct attachment FIRST, then the addressed payload.
+        // buildInvoiceEmailPayload throws the honest "no email on file" error
+        // before any send, so a customer without an email never gets a blank send.
+        const pdfData = await buildEditorPdfData('current');
+        const doc = await generateInvoicePdf(pdfData);
+        const base64 = pdfToBase64(doc);
+
+        const payload = buildInvoiceEmailPayload({
+          customerEmail: email,
+          customerId: pdfSnapshot.customer_id,
+          invoiceId: id,
+          invoiceNumber,
+          invoiceDate: transactionDate,
+          balanceCents: pdfSnapshot.balance_cents,
+          attachmentBase64: base64,
+        });
+        const result = await sendEmail(payload);
+        if (!result.success) throw new Error(result.error || 'Email failed to send');
+
+        logActivity({
+          event: 'invoice_emailed',
+          description: `Field invoice ${invoiceNumber} emailed to ${payload.to}`,
+          performedBy: profile.id,
+          entityType: 'invoice',
+          entityId: id,
+          customerId: pdfSnapshot.customer_id,
+        });
+      },
+      toast,
+      successMessage: `Emailed ${invoiceNumber}`,
+      setLoading: setEmailing,
+      sentryTag: 'field_app_invoice_email',
+    });
   };
 
   // #27: Transfer back to Scheduling (reverse the job->invoice transfer). Calls
@@ -1228,6 +1299,15 @@ export default function FieldApplicationInvoice() {
           {!isNew && (
             <Button variant="secondary" size="sm" icon={<Printer className="w-4 h-4" />} onClick={() => handlePrint('legacy')} loading={printing} disabled={printing}>
               Old Print
+            </Button>
+          )}
+          {/* #31: Email the invoice (current-format PDF attached) to the customer.
+              Available on any saved invoice, mirroring Print — admin + sales rep
+              (the page itself is gated to those roles). Honest error if the
+              customer has no email on file. */}
+          {!isNew && (
+            <Button variant="secondary" size="sm" icon={<Mail className="w-4 h-4" />} onClick={handleEmailInvoice} loading={emailing} disabled={emailing}>
+              Email
             </Button>
           )}
           {locations.length > 0 && (
