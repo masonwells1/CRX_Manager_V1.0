@@ -23,8 +23,12 @@
  *     adding the per-job gal/lb display strings (which would lose precision and
  *     can't be re-summed as text). product_form drives gal-vs-lb to match the server
  *     convert_to_gl_lb (the #25 fix), carried through ApplicatorSheetProduct.
- *   • A product line with conflicting product_form across jobs (a data anomaly) is
- *     flagged and its gal/lb is omitted (—) rather than guessed.
+ *   • A product line whose contributing rows DISAGREE on product_form (a data
+ *     anomaly — `products` has no unique-name constraint, so same-name rows can hold
+ *     divergent forms, including one row `liquid` and another `null`) is flagged and
+ *     its gal/lb is omitted (—) rather than guessed. `null` is treated as a DISTINCT
+ *     form value here, so null-vs-'liquid' IS a conflict; all-null (or all-'liquid')
+ *     is NOT — that line converts exactly as each job's own #11 report would.
  *
  * NEVER SILENTLY UNDERCOUNT: a summary's whole value is a correct total. The CALLER
  * fetches each job and reports per job whether it resolved; this module records the
@@ -110,9 +114,18 @@ export function buildChemicalSummaryReportData(
     unit: string;
     total: number;
     job_ids: Set<string>;
-    /** The product_form seen for this product+unit; null until first set. */
+    /**
+     * The product_form of the FIRST contributing row for this product+unit. Held as
+     * the line's canonical form. `null` is a REAL value here (a no-form row), NOT
+     * "unset" — so null-vs-'liquid' is treated as a conflict (see form_conflict).
+     */
     form: 'liquid' | 'dry' | null;
-    /** True once two contributing rows disagree on product_form → gal/lb is unsafe. */
+    /**
+     * True once any later contributing row carries a DIFFERENT product_form than the
+     * first one — treating `null` as distinct from a known form. So null-vs-'liquid'
+     * IS a conflict, but all-null or all-'liquid' is NOT. When true, gal/lb is unsafe
+     * to compute (we'd have to guess a branch) so it renders as '—'.
+     */
     form_conflict: boolean;
   }
   const acc = new Map<string, Acc>();
@@ -143,13 +156,13 @@ export function buildChemicalSummaryReportData(
       if (existing) {
         existing.total = round4(existing.total + p.total_applied);
         existing.job_ids.add(job_id);
-        if (existing.form !== p.product_form) {
-          // Differing form for the same product+unit across jobs → don't trust a single
-          // gal/lb branch. Keep summing the raw quantity; just flag the conversion.
-          if (existing.form != null && p.product_form != null) existing.form_conflict = true;
-          // Adopt a non-null form if we had none yet (so a later same-form row converts).
-          if (existing.form == null) existing.form = p.product_form;
-        }
+        // Compare THIS row's form against the line's first-seen canonical form,
+        // treating `null` as a distinct value (a no-form row is NOT the same as a
+        // 'liquid' row). Any difference flags a conflict so gal/lb renders '—'
+        // rather than guessing a gallon-vs-lb branch the divergent row never had.
+        // We DON'T adopt the later form — the first row's form stays canonical for
+        // the all-same case; on a conflict the form is irrelevant (we emit '—').
+        if (existing.form !== p.product_form) existing.form_conflict = true;
       } else {
         acc.set(key, {
           product_name: p.product_name,

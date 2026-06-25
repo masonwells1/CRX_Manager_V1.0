@@ -129,7 +129,29 @@ function getPresetDates(preset: string): { start: string; end: string } {
   }
 }
 
+// Which job statuses may be soft-DELETED. `invoiced` and `cancelled` are NOT
+// deletable — an invoiced job is billed history and must never be removable from
+// the list. The Delete bulk action re-filters the selection to this set at click
+// time, so broadening REPORTABLE below can never make an invoiced job deletable.
 const DELETABLE: JobStatus[] = ['scheduled', 'in_progress', 'completed'];
+
+// Which job statuses may be SELECTED for a bulk report/export (Chemical Summary,
+// Loader Worksheet, Chemical Application Report, CSV/PDF). This is DECOUPLED from
+// DELETABLE: the office wants the finished/billed work in a usage summary, so
+// `invoiced` is reportable even though it can't be deleted. `cancelled` is left
+// OUT — a cancelled job has no real usage, so excluding it from the summary (and
+// from the Excluded list) is correct.
+const REPORTABLE: JobStatus[] = ['scheduled', 'in_progress', 'completed', 'invoiced'];
+
+// Which job statuses may be MUTATED by a bulk edit (Mass Edit, Add to Batch, Edit
+// Job Tags). Same set as DELETABLE: a billed (`invoiced`) or `cancelled` job is
+// finished history and must not have its schedule/applicator/batch/tags rewritten.
+// Because REPORTABLE broadened checkbox selection to include `invoiced` (so it can
+// be summarized/exported), the mutating actions MUST re-filter the selection to
+// this set — otherwise broadening selection would silently make billed jobs
+// editable again (Codex). Read-only report/export actions intentionally keep the
+// full REPORTABLE selection.
+const EDITABLE: JobStatus[] = DELETABLE;
 
 /** Expander chip list: shows up to OVERFLOW_LIMIT then "+N — Click for full list". */
 function OverflowChips({ items, expanded, onToggle, jobId, field }: {
@@ -598,13 +620,43 @@ export default function Jobs() {
     useRowSelection({
       data: visibleJobs,
       getId: (j) => j.id,
-      isSelectable: (j) => DELETABLE.includes(j.status),
+      // Selection is driven by REPORTABLE (incl. invoiced) so finished/billed jobs
+      // can be summarized/exported. Deletability is enforced separately in handleDelete.
+      isSelectable: (j) => REPORTABLE.includes(j.status),
     });
 
   const checkboxCol = useMemo(
-    () => createCheckboxColumn<JobRow>(selected, toggleSelect, (j) => j.id, (j) => DELETABLE.includes(j.status)),
+    () => createCheckboxColumn<JobRow>(selected, toggleSelect, (j) => j.id, (j) => REPORTABLE.includes(j.status)),
     [selected, toggleSelect]
   );
+
+  // The EDITABLE subset of the current selection. The mutating bulk actions (Mass
+  // Edit / Add to Batch / Edit Job Tags) operate on THIS — never on a billed
+  // (`invoiced`) or `cancelled` job that REPORTABLE made selectable for reporting.
+  const editableSelectedRows = useMemo(
+    () => selectedRows.filter((j) => EDITABLE.includes(j.status)),
+    [selectedRows]
+  );
+  const editableSelectedIds = useMemo(
+    () => editableSelectedRows.map((j) => j.id),
+    [editableSelectedRows]
+  );
+
+  // Open a mutating bulk modal, but refuse it when NO selected job is editable, and
+  // warn (once, at open) when some selected jobs will be skipped because they're
+  // billed/finished. Mirrors the Delete gate so a bulk edit can never silently
+  // rewrite an invoiced/cancelled job.
+  const openMutatingAction = useCallback((open: () => void) => {
+    const skipped = selectedRows.length - editableSelectedRows.length;
+    if (editableSelectedRows.length === 0) {
+      toast('error', 'No editable jobs selected — invoiced/cancelled jobs can’t be bulk-edited.');
+      return;
+    }
+    if (skipped > 0) {
+      toast('info', `${skipped} invoiced/cancelled job(s) will be skipped — bulk edit applies to ${editableSelectedRows.length} job(s).`);
+    }
+    open();
+  }, [selectedRows.length, editableSelectedRows, toast]);
 
   const fmtCents = (cents: number) =>
     `$${(cents / 100).toLocaleString(undefined, { minimumFractionDigits: 2 })}`;
@@ -828,13 +880,21 @@ export default function Jobs() {
       const summary = buildChemicalSummaryReportData(fetched, excluded);
       await generateChemicalSummaryReportPdf(summary);
       // CSV export alongside the PDF (criterion 3 "ideally a CSV export too").
-      exportToCSV(chemicalSummaryCsvRows(summary), [
-        { key: 'product_name', header: 'Product' },
-        { key: 'unit', header: 'Unit' },
-        { key: 'total_quantity', header: 'Total Applied' },
-        { key: 'gl_lb_equiv', header: 'gal/lb Equivalent' },
-        { key: 'job_count', header: 'Jobs' },
-      ], 'chemical-summary');
+      // LOW fix: exportToCSV silently no-ops on an empty array, so when there are
+      // NO product lines (e.g. every included job is zero-acre/quantity-less) it
+      // would download nothing while the toast claimed a CSV was produced. Only
+      // call it when there ARE rows, and tell the user honestly below whether a
+      // CSV was actually written.
+      const hasRows = summary.rows.length > 0;
+      if (hasRows) {
+        exportToCSV(chemicalSummaryCsvRows(summary), [
+          { key: 'product_name', header: 'Product' },
+          { key: 'unit', header: 'Unit' },
+          { key: 'total_quantity', header: 'Total Applied' },
+          { key: 'gl_lb_equiv', header: 'gal/lb Equivalent' },
+          { key: 'job_count', header: 'Jobs' },
+        ], 'chemical-summary');
+      }
 
       // Stamp the print audit for the INCLUDED jobs only (the ones actually summed),
       // matching the #10/#11 bulk print paths. Best-effort: a failed stamp must not
@@ -853,11 +913,17 @@ export default function Jobs() {
       // first included job anchors the audit entry (entityId is a single uuid).
       if (profile && includedIds[0]) logActivity({ event: 'chemical_summary_report_printed', description: `Chemical Summary Report generated across ${includedIds.length} job(s)`, performedBy: profile.id, entityType: 'job', entityId: includedIds[0] });
 
-      // Surface excluded jobs so the grand total is never silently wrong.
+      // Honest reporting: distinguish (a) jobs excluded from the totals and (b) the
+      // case where the included jobs had NO chemical lines to sum (so no CSV was
+      // written). The PDF always downloads (it carries the included/excluded jobs),
+      // but the toast must never claim a CSV that doesn't exist.
+      const csvNote = hasRows ? ' (PDF + CSV)' : ' — no chemical lines found, PDF only (no CSV)';
       if (excluded.length > 0) {
-        toast('error', `Summary generated for ${fetched.length} job(s); ${excluded.length} excluded (see the report's Jobs Excluded list).`);
+        toast('error', `Summary generated for ${fetched.length} job(s)${csvNote}; ${excluded.length} excluded (see the report's Jobs Excluded list).`);
+      } else if (!hasRows) {
+        toast('info', `Summary generated for ${fetched.length} job(s) but no chemical lines were found — PDF only, no CSV written.`);
       } else {
-        toast('success', `Chemical summary generated across ${fetched.length} job(s)`);
+        toast('success', `Chemical summary generated across ${fetched.length} job(s) (PDF + CSV)`);
       }
     } catch (err) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'jobs_bulk_chemical_summary' } });
@@ -869,14 +935,31 @@ export default function Jobs() {
   const handleDelete = async () => {
     setDeleting(true);
     try {
-      const ids = selectedRows.map((j) => j.id);
+      // REPORTABLE broadened selection to include invoiced jobs (so they can be
+      // summarized/exported). Delete must stay gated to DELETABLE: re-filter the
+      // selection here so an invoiced/finished job is NEVER soft-deleted, even if
+      // it's checkbox-selected for a report. Skipped jobs are surfaced in the toast.
+      const deletableRows = selectedRows.filter((j) => DELETABLE.includes(j.status));
+      const ids = deletableRows.map((j) => j.id);
+      const skipped = selectedRows.length - ids.length;
+      if (ids.length === 0) {
+        toast('error', `No deletable jobs selected — invoiced/finished jobs can't be deleted (${skipped} skipped).`);
+        setDeleting(false);
+        setDeleteModalOpen(false);
+        return;
+      }
       const result = await supabase
         .from('jobs')
         .update({ deleted_at: new Date().toISOString() })
         .in('id', ids)
         .select();
       checkMutationResult(result, 'Delete jobs');
-      toast('success', `Deleted ${ids.length} job(s)`);
+      toast(
+        skipped > 0 ? 'info' : 'success',
+        skipped > 0
+          ? `Deleted ${ids.length} job(s); ${skipped} skipped — invoiced/finished jobs can't be deleted.`
+          : `Deleted ${ids.length} job(s)`,
+      );
       clearSelection();
       fetchJobs();
     } catch (err) {
@@ -887,9 +970,9 @@ export default function Jobs() {
   };
 
   const bulkActions = [
-    { key: 'mass-edit', label: 'Mass Edit', icon: <Pencil className="w-4 h-4" />, onClick: () => setMassEditOpen(true) },
-    { key: 'batch', label: 'Add to Batch', icon: <Layers className="w-4 h-4" />, onClick: () => setAssignBatchOpen(true) },
-    { key: 'tags', label: 'Edit Job Tags', icon: <Tag className="w-4 h-4" />, onClick: () => setBulkTagsOpen(true) },
+    { key: 'mass-edit', label: 'Mass Edit', icon: <Pencil className="w-4 h-4" />, onClick: () => openMutatingAction(() => setMassEditOpen(true)) },
+    { key: 'batch', label: 'Add to Batch', icon: <Layers className="w-4 h-4" />, onClick: () => openMutatingAction(() => setAssignBatchOpen(true)) },
+    { key: 'tags', label: 'Edit Job Tags', icon: <Tag className="w-4 h-4" />, onClick: () => openMutatingAction(() => setBulkTagsOpen(true)) },
     { key: 'csv', label: 'Export CSV', icon: <Download className="w-4 h-4" />, onClick: handleExportCSV },
     { key: 'pdf', label: 'Download PDF', icon: <FileText className="w-4 h-4" />, onClick: handleExportPDF, loading: exporting },
     { key: 'loader', label: 'Loader Worksheet', icon: <Truck className="w-4 h-4" />, onClick: handleLoaderWorksheets, loading: loaderExporting },
@@ -1482,7 +1565,7 @@ export default function Jobs() {
       <JobTagsBulkModal
         open={bulkTagsOpen}
         onClose={() => setBulkTagsOpen(false)}
-        selectedJobIds={selectedRows.map((j) => j.id)}
+        selectedJobIds={editableSelectedIds}
         tags={allTags}
         assignmentsByJob={assignmentsByJob}
         onManageTags={() => { setBulkTagsOpen(false); setManageTagsOpen(true); }}
@@ -1509,7 +1592,7 @@ export default function Jobs() {
       <JobBatchAssignModal
         open={assignBatchOpen}
         onClose={() => setAssignBatchOpen(false)}
-        selectedJobIds={selectedRows.map((j) => j.id)}
+        selectedJobIds={editableSelectedIds}
         batches={allBatches}
         batchByJob={batchByJob}
         onManageBatches={() => { setAssignBatchOpen(false); setManageBatchesOpen(true); }}
@@ -1522,7 +1605,7 @@ export default function Jobs() {
       <JobMassEditModal
         open={massEditOpen}
         onClose={() => setMassEditOpen(false)}
-        selectedJobs={selectedRows.map((j) => ({ id: j.id, job_number: j.job_number, status: j.status }))}
+        selectedJobs={editableSelectedRows.map((j) => ({ id: j.id, job_number: j.job_number, status: j.status }))}
         applicators={applicators}
         batches={allBatches.map((b) => ({ id: b.id, name: b.name }))}
         onApplied={() => { fetchBatches(); fetchJobs(); }}

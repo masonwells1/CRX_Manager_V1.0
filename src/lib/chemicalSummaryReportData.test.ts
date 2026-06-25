@@ -224,6 +224,67 @@ describe('buildChemicalSummaryReportData — guards & edge cases', () => {
     expect(m.gl_lb_display).toBe('—');
   });
 
+  it('treats NULL form as DISTINCT from a known form → conflict → — (MED1 regression)', () => {
+    // products has NO unique-name constraint, so same-name rows can hold divergent
+    // forms — here one row is liquid, the other null. The null row's own #11 report
+    // converts 'oz' on the DRY (legacy lb) branch (1600 oz → 100 lb), so adopting it
+    // into the liquid line and re-converting on the gallon branch would print a WRONG
+    // gallon figure. The guard must flag the conflict and emit '—' while still summing.
+    const liquidJob = job('j1', {
+      fields: [field({ acres: 100, sort_order: 0 })],
+      products: [product({ product_name: 'Mystery', rate_per_acre: 1, rate_unit: 'oz', unit: 'oz', product_form: 'liquid' })], // 100 oz
+    });
+    const nullJob = job('j2', {
+      fields: [field({ acres: 100, sort_order: 0 })],
+      products: [product({ product_name: 'Mystery', rate_per_acre: 16, rate_unit: 'oz', unit: 'oz', product_form: null })], // 1600 oz
+    });
+    const out = buildChemicalSummaryReportData([liquidJob, nullJob]);
+    const m = out.rows.find((r) => r.product_name === 'Mystery')!;
+    // Raw total still sums: 100 + 1600 = 1700 oz.
+    expect(m.total_quantity).toBe(1700);
+    expect(m.total_quantity_display).toBe('1,700 oz');
+    // gal/lb is NOT guessed on either branch — conflict → dash.
+    expect(m.gl_lb_display).toBe('—');
+    // Order-independence: the null row first must conflict the same way.
+    const flipped = buildChemicalSummaryReportData([nullJob, liquidJob]);
+    expect(flipped.rows.find((r) => r.product_name === 'Mystery')!.gl_lb_display).toBe('—');
+  });
+
+  it('ALL-null form lines convert exactly as each job’s own #11 report does (no conflict)', () => {
+    // Two null-form jobs in 'oz' — no known form anywhere, so NOT a conflict. The
+    // legacy (product_form omitted) path infers from the unit text: 'oz' → POUNDS
+    // (1/16). 1600 oz → 100 lb on each job's #11; summed 1700 oz → 106.25 lb here,
+    // matching what #11 would show for the same total. (Proves the all-null case is
+    // not regressed into a dash.)
+    const j1 = job('j1', {
+      fields: [field({ acres: 100, sort_order: 0 })],
+      products: [product({ product_name: 'NullProd', rate_per_acre: 1, rate_unit: 'oz', unit: 'oz', product_form: null })], // 100 oz
+    });
+    const j2 = job('j2', {
+      fields: [field({ acres: 100, sort_order: 0 })],
+      products: [product({ product_name: 'NullProd', rate_per_acre: 16, rate_unit: 'oz', unit: 'oz', product_form: null })], // 1600 oz
+    });
+    const out = buildChemicalSummaryReportData([j1, j2]);
+    const m = out.rows.find((r) => r.product_name === 'NullProd')!;
+    expect(m.total_quantity).toBe(1700);
+    // 1700 oz × 1/16 = 106.25 lb — the same branch #11 used (legacy unit-inferred lb).
+    expect(m.gl_lb_display).toBe('106.25 lb');
+  });
+
+  it('ALL same KNOWN form lines are unchanged (no false conflict)', () => {
+    // Three liquid 'pt' jobs — all the same known form → NOT a conflict; gal/lb is
+    // computed normally from the SUM (200+200+200 = 600 pt → 75 gal at 8 pt/gal).
+    const mk = (id: string) => job(id, {
+      fields: [field({ acres: 100, sort_order: 0 })],
+      products: [product({ product_name: 'Same', rate_per_acre: 2, rate_unit: 'pt', unit: 'pt', product_form: 'liquid' })],
+    });
+    const out = buildChemicalSummaryReportData([mk('a'), mk('b'), mk('c')]);
+    const m = out.rows.find((r) => r.product_name === 'Same')!;
+    expect(m.total_quantity).toBe(600);
+    expect(m.gl_lb_display).toBe('75 gal');
+    expect(m.job_count).toBe(3);
+  });
+
   it('skips a flat/quantity-less product line (nothing to sum) without erroring', () => {
     const j1 = job('j1', {
       fields: [field({ acres: 0, sort_order: 0 })], // no acres → no derived total
