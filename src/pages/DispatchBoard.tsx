@@ -1,35 +1,71 @@
 /**
- * DispatchBoard.tsx — Map-based dispatch view for job scheduling
+ * DispatchBoard.tsx — Dark field/tablet "Dispatch & Applicator View"
+ * (field-app parity #35).
  *
- * Split-screen layout: map on left (60%), job list on right (40%)
- * Color-coded by status, filterable by status/date/applicator/customer
- * Applicator assignment from sidebar
+ * A purpose-built, DARK, high-contrast, touch-friendly dispatch screen — distinct
+ * from the light office Jobs list. A left rail groups navigation into:
+ *   - JOBS:     View Map · View List   (drive the map/list toggle)
+ *   - DISPATCH: Dispatch Jobs · View Dispatched List
+ * Job rows show: Job Nbr + customer, applied-of-total acres ('X of Y ac'), a
+ * PENDING/ACTIVE status badge, and 'Assigned To: <name>' when dispatched.
+ * An OPTIONS menu offers: Filter Jobs By Recipe (#39 stub), More Search Options,
+ * Switch View, Add New Job, Reload List.
+ *
+ * One shared filter object (`filters`) drives BOTH views, so switching map<->list
+ * keeps the same active filter set (criterion #6).
+ *
+ * Scope (this is the FIRST of 7 dispatch sections — structure + hooks only):
+ *   - 'Filter Jobs By Recipe' = #39  → menu entry wired to a simple recipe stub.
+ *   - 'View Dispatched List'  = #37  → nav entry routes to an in-page placeholder.
+ *   - Per-location dispatch wizard = #36 → 'Assigned To' is rendered from the
+ *     EXISTING job-level applicator assignment; 'Dispatch Jobs' reuses the
+ *     existing inline assign control (the wizard is #36's job).
  */
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { MapPin, Filter, Users, Clock, AlertTriangle, ChevronRight } from 'lucide-react';
+import {
+  Map as MapIcon,
+  List as ListIcon,
+  Send,
+  ClipboardList,
+  MoreVertical,
+  FlaskConical,
+  SlidersHorizontal,
+  Plus,
+  RefreshCw,
+  Users,
+  Search,
+  X,
+  Truck,
+} from 'lucide-react';
+import type { MapRef } from 'react-map-gl/mapbox';
 import CRXMap from '../components/map/CRXMap';
 import FieldBoundaryLayer from '../components/map/FieldBoundaryLayer';
-import Card from '../components/ui/Card';
-import Badge from '../components/ui/Badge';
-import Skeleton from '../components/ui/Skeleton';
 import ConfirmModal from '../components/ui/ConfirmModal';
+import ErrorBoundary from '../components/ErrorBoundary';
 import { usePageMeta } from '../hooks/usePageMeta';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, assertRpcResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
 import { Sentry } from '../lib/sentry';
-import { localToday } from '../lib/dateUtils';
+import {
+  formatAppliedOfTotal,
+  jobStatusToDispatchBadge,
+  selectDispatchView,
+  hasActiveDispatchFilter,
+  emptyDispatchFilters,
+  type DispatchFilters,
+  type DispatchView,
+} from '../lib/dispatchDisplay';
 import type { Job, Profile, Field } from '../types';
 
-type StatusFilter = 'all' | 'scheduled' | 'in_progress' | 'completed' | 'cancelled';
-type PriorityFilter = 'all' | 'low' | 'normal' | 'high' | 'urgent';
+type NavSection = 'map' | 'list' | 'dispatch' | 'dispatched';
 
 interface DispatchJob extends Job {
   customer_name?: string;
-  applicator_name?: string;
-  field_names?: string;
+  applicator_name?: string | null;
+  field_names?: string | null;
   field_ids?: string[];
 }
 
@@ -42,54 +78,79 @@ export default function DispatchBoard() {
   const [loading, setLoading] = useState(true);
   const [jobs, setJobs] = useState<DispatchJob[]>([]);
   const [applicators, setApplicators] = useState<Pick<Profile, 'id' | 'full_name' | 'role'>[]>([]);
+  const [recipes, setRecipes] = useState<{ id: string; name: string }[]>([]);
   const [allFields, setAllFields] = useState<Field[]>([]);
 
-  // Filters
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
-  const [priorityFilter, setPriorityFilter] = useState<PriorityFilter>('all');
-  const [dateFilter, setDateFilter] = useState(localToday());
-  const [applicatorFilter, setApplicatorFilter] = useState('');
-  const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
+  // The active nav section. 'map' / 'list' are the two Jobs views and also the
+  // map/list toggle target; 'dispatch' is the assign flow; 'dispatched' is the
+  // #37 placeholder.
+  const [section, setSection] = useState<NavSection>('list');
 
-  // License-override confirm (B5 license gates) — admin only
+  // The SINGLE shared filter object — feeds whichever view renders (criterion #6).
+  const [filters, setFilters] = useState<DispatchFilters>(emptyDispatchFilters);
+  const [optionsOpen, setOptionsOpen] = useState(false);
+  const [moreSearchOpen, setMoreSearchOpen] = useState(false);
+  const [recipeMenuOpen, setRecipeMenuOpen] = useState(false);
+  const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
+  const optionsRef = useRef<HTMLDivElement>(null);
+  // Held so we can resize the map after it becomes visible (it mounts hidden).
+  const mapRef = useRef<MapRef | null>(null);
+
+  // License-override confirm (B5 license gates) — admin only.
   const [licenseOverridePrompt, setLicenseOverridePrompt] = useState<{ jobId: string; applicatorId: string } | null>(null);
   const assignIdem = useIdempotencyKey('assign_job_applicator', profile?.id || '');
 
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      const [jobsRes, applicatorsRes, fieldsRes] = await Promise.all([
-        // PR-07 follow-up: dropped applicator FK embed; resolved via the
-        // applicators list returned in the same Promise.all (already a view
-        // read) — pivot to a map after the fetch.
-        supabase
-          .from('jobs')
-          .select(`
-            *,
-            customer:customers(farm_name),
-            job_fields(field_id, acres_to_treat, field:fields(id, field_name, boundary_geojson, centroid_lat, centroid_lng, total_acres, crop_type, customer_id))
-          `)
-          .is('deleted_at', null)
-          .gte('job_date', dateFilter)
-          .lte('job_date', dateFilter)
-          .order('scheduled_time', { ascending: true, nullsFirst: false }),
-        // PR-07 follow-up: profile_public_view exposes only id/full_name/role/is_active.
+      // The LIST view (job#, X-of-Y acres, status, Assigned-To) is the core of the
+      // dispatch board and must NEVER depend on map-only geometry columns. So the
+      // jobs query embeds only the lightweight field_name (for the row's location
+      // line); the heavy boundary/centroid geometry is fetched SEPARATELY below and
+      // is best-effort (a missing map column degrades the map, not the whole page).
+      // The structured filters (status / applicator / date range) are pushed into
+      // the QUERY so the 500-row cap applies to the already-filtered set — otherwise
+      // filtering for an older date/assignee could falsely show "No jobs" when the
+      // matches sit beyond the newest-500 slice (Codex P2). Recipe (#39) and the
+      // free-text search stay client-side in selectDispatchView. Ordered job_date
+      // DESC + limit 500 so the MOST RECENT matching jobs are kept (Codex P1).
+      // Mirrors the office Jobs list. Applicator name is resolved from the
+      // applicators view below (never a profiles embed — RLS nulls it for non-admins).
+      let jobsQuery = supabase
+        .from('jobs')
+        .select(`
+          *,
+          customer:customers(farm_name),
+          job_fields(field_id, acres_to_treat, field:fields(id, field_name))
+        `)
+        .is('deleted_at', null);
+      if (filters.status !== 'all') jobsQuery = jobsQuery.eq('status', filters.status);
+      if (filters.applicatorId) jobsQuery = jobsQuery.eq('applicator_id', filters.applicatorId);
+      if (filters.startDate) jobsQuery = jobsQuery.gte('job_date', filters.startDate);
+      if (filters.endDate) jobsQuery = jobsQuery.lte('job_date', filters.endDate);
+      jobsQuery = jobsQuery.order('job_date', { ascending: false, nullsFirst: false }).limit(500);
+
+      const [jobsRes, applicatorsRes, recipesRes] = await Promise.all([
+        jobsQuery,
         supabase
           .from('profile_public_view')
           .select('id, full_name, role')
           .in('role', ['applicator', 'driver', 'admin'])
           .eq('is_active', true)
           .order('full_name'),
+        // Only LIVE recipes in the picker — match BlendRecipes.tsx (soft-deleted
+        // recipes are excluded via deleted_at) so #39's recipe filter never lists a
+        // stale/removed recipe to applicators (Codex P3).
         supabase
-          .from('fields')
-          .select('id, field_name, boundary_geojson, centroid_lat, centroid_lng, total_acres, crop_type, customer_id, customer:customers(farm_name)')
-          .eq('is_active', true),
+          .from('blend_recipes')
+          .select('id, name')
+          .is('deleted_at', null)
+          .order('name'),
       ]);
 
       if (jobsRes.error) throw jobsRes.error;
 
-      // Build applicator name map from the parallel applicators fetch above
-      // so we don't need a second profile_public_view round-trip.
+      // Applicator name map from the parallel applicators fetch (no extra round-trip).
       const applicatorNameMap: Record<string, string> = {};
       ((applicatorsRes.data || []) as Array<{ id: string; full_name: string }>).forEach((a) => {
         applicatorNameMap[a.id] = a.full_name;
@@ -100,56 +161,97 @@ export default function DispatchBoard() {
         customer_name: (j.customer as { farm_name?: string })?.farm_name || 'Unknown',
         applicator_name: j.applicator_id ? applicatorNameMap[j.applicator_id as string] || null : null,
         field_names: ((j.job_fields as { field?: { field_name?: string } }[]) || [])
-          .map(jf => jf.field?.field_name)
+          .map((jf) => jf.field?.field_name)
           .filter(Boolean)
           .join(', ') || null,
-        field_ids: ((j.job_fields as { field_id?: string }[]) || []).map(jf => jf.field_id).filter(Boolean),
+        field_ids: ((j.job_fields as { field_id?: string }[]) || []).map((jf) => jf.field_id).filter(Boolean),
       })) as DispatchJob[];
 
       setJobs(mapped);
       setApplicators((applicatorsRes.data || []) as Pick<Profile, 'id' | 'full_name' | 'role'>[]);
-      setAllFields((fieldsRes.data || []) as unknown as Field[]);
+      setRecipes((recipesRes.data || []) as { id: string; name: string }[]);
+
+      // Best-effort map geometry: the boundary/centroid columns power the MAP view
+      // only. If they're unavailable (e.g. a DB without the geometry columns) the
+      // map simply shows no boundaries — the list view is unaffected.
+      const fieldsRes = await supabase
+        .from('fields')
+        .select('id, field_name, boundary_geojson, centroid_lat, centroid_lng, total_acres, crop_type, customer_id, customer:customers(farm_name)')
+        .eq('is_active', true);
+      if (fieldsRes.error) {
+        Sentry.captureException(fieldsRes.error, { tags: { source: 'fetch', action: 'dispatch_map_fields' } });
+        setAllFields([]);
+      } else {
+        setAllFields((fieldsRes.data || []) as unknown as Field[]);
+      }
     } catch (err) {
       Sentry.captureException(err);
       toast('error', 'Failed to load dispatch data');
     }
     setLoading(false);
-  }, [dateFilter, toast]);
+    // Refetch when a SERVER-pushed filter changes (status/applicator/date). Recipe
+    // and free-text search are client-side only, so they don't trigger a refetch.
+  }, [toast, filters.status, filters.applicatorId, filters.startDate, filters.endDate]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
-  const filteredJobs = useMemo(() => {
-    return jobs.filter(j => {
-      if (statusFilter !== 'all' && j.status !== statusFilter) return false;
-      if (priorityFilter !== 'all' && j.priority !== priorityFilter) return false;
-      if (applicatorFilter && j.applicator_id !== applicatorFilter) return false;
-      return true;
-    });
-  }, [jobs, statusFilter, priorityFilter, applicatorFilter]);
+  // Close the OPTIONS menu on an outside click / Escape (touch-friendly).
+  useEffect(() => {
+    if (!optionsOpen && !recipeMenuOpen) return;
+    function onDown(e: MouseEvent) {
+      if (optionsRef.current && !optionsRef.current.contains(e.target as Node)) {
+        setOptionsOpen(false);
+        setRecipeMenuOpen(false);
+      }
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') { setOptionsOpen(false); setRecipeMenuOpen(false); }
+    }
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [optionsOpen, recipeMenuOpen]);
 
-  // Get fields for jobs that are visible on the map
+  // The active view for the map/list toggle. 'dispatch'/'dispatched' sections
+  // reuse the LIST rendering but with their own framing.
+  const activeView: DispatchView = section === 'map' ? 'map' : 'list';
+
+  // The map is kept mounted but hidden (display:none) so the shared filter survives
+  // toggles. Mapbox initializes against a zero-size parent while hidden, so when the
+  // user switches TO the map we tell it to re-measure — otherwise the first open can
+  // render blank/mis-sized until a window resize (Codex P2). rAF lets the container's
+  // real size settle after the `hidden` class is removed before we resize.
+  useEffect(() => {
+    if (activeView !== 'map' || !mapRef.current) return;
+    const id = requestAnimationFrame(() => mapRef.current?.resize());
+    return () => cancelAnimationFrame(id);
+  }, [activeView]);
+
+  // ONE filtered set, fed to whichever view renders (criterion #6).
+  const visibleJobs = useMemo(
+    () => selectDispatchView(jobs, filters, activeView),
+    [jobs, filters, activeView]
+  );
+
+  // Fields for the jobs currently visible on the map.
   const jobFields = useMemo(() => {
-    const fieldIds = new Set(filteredJobs.flatMap(j => j.field_ids || []));
-    return allFields.filter(f => fieldIds.has(f.id));
-  }, [filteredJobs, allFields]);
+    const fieldIds = new Set(visibleJobs.flatMap((j) => j.field_ids || []));
+    return allFields.filter((f) => fieldIds.has(f.id));
+  }, [visibleJobs, allFields]);
 
-  const statusColor: Record<string, string> = {
-    scheduled: 'bg-yellow-500',
-    in_progress: 'bg-blue-500',
-    completed: 'bg-gray-400',
-    cancelled: 'bg-red-400',
-    invoiced: 'bg-green-500',
-  };
+  const applicatorOnly = useMemo(
+    () => applicators.filter((a) => a.role === 'applicator'),
+    [applicators]
+  );
 
-  const priorityBadge: Record<string, { variant: 'default' | 'warning' | 'error'; label: string }> = {
-    low: { variant: 'default', label: 'Low' },
-    normal: { variant: 'default', label: 'Normal' },
-    high: { variant: 'warning', label: 'High' },
-    urgent: { variant: 'error', label: 'Urgent' },
-  };
+  const patchFilter = useCallback(<K extends keyof DispatchFilters>(key: K, value: DispatchFilters[K]) => {
+    setFilters((prev) => ({ ...prev, [key]: value }));
+  }, []);
 
   async function handleAssign(jobId: string, applicatorId: string, licenseOverride = false) {
-    // Every select change is a new intent — fresh idempotency key per attempt.
     assignIdem.resetKey();
     try {
       const { data, error } = await supabase.rpc('assign_job_applicator', {
@@ -162,7 +264,6 @@ export default function DispatchBoard() {
       if (error) throw error;
       assertRpcResult(data, 'assign_job_applicator');
       assignIdem.resetKey();
-
       toast('success', licenseOverride ? 'Applicator assigned (license override)' : 'Applicator assigned');
       fetchData();
     } catch (err) {
@@ -179,205 +280,386 @@ export default function DispatchBoard() {
     }
   }
 
-  // Stats
-  const scheduled = jobs.filter(j => j.status === 'scheduled').length;
-  const inProgress = jobs.filter(j => j.status === 'in_progress').length;
-  const completed = jobs.filter(j => j.status === 'completed').length;
-  const totalAcres = jobs.reduce((sum, j) => sum + (j.total_acres || 0), 0);
+  const filtersActive = hasActiveDispatchFilter(filters);
+  const activeRecipeName = filters.recipeId
+    ? recipes.find((r) => r.id === filters.recipeId)?.name ?? null
+    : null;
 
-  if (loading) {
-    return (
-      <div className="space-y-4">
-        <Skeleton className="h-8 w-48" />
-        <div className="grid grid-cols-4 gap-4">
-          {[1, 2, 3, 4].map(i => <Skeleton key={i} className="h-20" />)}
-        </div>
-        <Skeleton className="h-[600px]" />
-      </div>
-    );
-  }
+  // --- Left rail nav config ---
+  const navGroups: { label: string; items: { id: NavSection; label: string; icon: JSX.Element }[] }[] = [
+    {
+      label: 'Jobs',
+      items: [
+        { id: 'map', label: 'View Map', icon: <MapIcon className="w-5 h-5" /> },
+        { id: 'list', label: 'View List', icon: <ListIcon className="w-5 h-5" /> },
+      ],
+    },
+    {
+      label: 'Dispatch',
+      items: [
+        { id: 'dispatch', label: 'Dispatch Jobs', icon: <Send className="w-5 h-5" /> },
+        { id: 'dispatched', label: 'View Dispatched List', icon: <ClipboardList className="w-5 h-5" /> },
+      ],
+    },
+  ];
 
   return (
-    <div className="space-y-4">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <h2 className="text-xl font-semibold font-heading text-nav-dark flex items-center gap-2">
-          <MapPin className="w-5 h-5 text-crx-green" /> Dispatch Board
-        </h2>
-        <input
-          type="date"
-          value={dateFilter}
-          onChange={(e) => setDateFilter(e.target.value)}
-          className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
-        />
-      </div>
-
-      {/* Summary Cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-        <Card>
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-lg bg-yellow-50 flex items-center justify-center">
-              <Clock className="w-5 h-5 text-yellow-600" />
-            </div>
-            <div>
-              <p className="text-2xl font-semibold font-heading text-nav-dark">{scheduled}</p>
-              <p className="text-xs text-secondary">Scheduled</p>
-            </div>
+    <div className="-m-4 sm:-m-6 lg:-m-8 min-h-[calc(100vh-4rem)] bg-slate-950 text-slate-100">
+      <div className="flex flex-col lg:flex-row min-h-[calc(100vh-4rem)]">
+        {/* LEFT RAIL — nav groups (criterion #2) */}
+        <nav className="lg:w-60 flex-shrink-0 bg-slate-900 border-b lg:border-b-0 lg:border-r border-slate-800 p-3 lg:p-4">
+          <div className="flex items-center gap-2 px-2 pb-3 mb-2 border-b border-slate-800">
+            <Truck className="w-6 h-6 text-crx-green" />
+            <span className="text-base font-semibold tracking-wide">Dispatch</span>
           </div>
-        </Card>
-        <Card>
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-lg bg-blue-50 flex items-center justify-center">
-              <MapPin className="w-5 h-5 text-blue-600" />
-            </div>
-            <div>
-              <p className="text-2xl font-semibold font-heading text-nav-dark">{inProgress}</p>
-              <p className="text-xs text-secondary">In Progress</p>
-            </div>
+          <div className="flex flex-row lg:flex-col gap-4 lg:gap-5">
+            {navGroups.map((group) => (
+              <div key={group.label} className="flex-1 lg:flex-none">
+                <p className="px-2 mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-500">{group.label}</p>
+                <div className="space-y-1">
+                  {group.items.map((item) => {
+                    const active = section === item.id;
+                    return (
+                      <button
+                        key={item.id}
+                        onClick={() => setSection(item.id)}
+                        aria-current={active ? 'page' : undefined}
+                        className={`w-full flex items-center gap-3 px-3 py-3 rounded-lg text-left text-sm font-medium transition-colors min-h-[44px] ${
+                          active
+                            ? 'bg-crx-green/20 text-crx-green ring-1 ring-crx-green/40'
+                            : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+                        }`}
+                      >
+                        <span className={active ? 'text-crx-green' : 'text-slate-400'}>{item.icon}</span>
+                        <span>{item.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
           </div>
-        </Card>
-        <Card>
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-lg bg-green-50 flex items-center justify-center">
-              <Filter className="w-5 h-5 text-green-600" />
-            </div>
-            <div>
-              <p className="text-2xl font-semibold font-heading text-nav-dark">{completed}</p>
-              <p className="text-xs text-secondary">Completed</p>
-            </div>
-          </div>
-        </Card>
-        <Card>
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-lg bg-crx-green-light flex items-center justify-center">
-              <Users className="w-5 h-5 text-crx-green" />
-            </div>
-            <div>
-              <p className="text-2xl font-semibold font-heading text-nav-dark">{totalAcres.toLocaleString()}</p>
-              <p className="text-xs text-secondary">Total Acres</p>
-            </div>
-          </div>
-        </Card>
-      </div>
+        </nav>
 
-      {/* Split Screen: Map + Job List */}
-      <div className="grid grid-cols-1 lg:grid-cols-5 gap-4" style={{ minHeight: '600px' }}>
-        {/* Map Panel (60%) */}
-        <div className="lg:col-span-3 rounded-lg overflow-hidden border border-gray-200">
-          <CRXMap className="h-full min-h-[500px]" showLayerToggle interactive>
-            <FieldBoundaryLayer
-              fields={jobFields as (Field & { customer_name?: string })[]}
-              showLabels
-              onFieldClick={(fieldId) => {
-                const job = filteredJobs.find(j => j.field_ids?.includes(fieldId));
-                if (job) setSelectedJobId(job.id);
-              }}
-            />
-          </CRXMap>
-        </div>
+        {/* MAIN PANEL */}
+        <div className="flex-1 min-w-0 flex flex-col">
+          {/* Toolbar: section title + search + OPTIONS menu */}
+          <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-800 bg-slate-900/60">
+            <h1 className="text-lg font-semibold flex items-center gap-2 flex-shrink-0">
+              {section === 'map' && <><MapIcon className="w-5 h-5 text-crx-green" /> Job Map</>}
+              {section === 'list' && <><ListIcon className="w-5 h-5 text-crx-green" /> Job List</>}
+              {section === 'dispatch' && <><Send className="w-5 h-5 text-crx-green" /> Dispatch Jobs</>}
+              {section === 'dispatched' && <><ClipboardList className="w-5 h-5 text-crx-green" /> Dispatched List</>}
+            </h1>
 
-        {/* Job List Panel (40%) */}
-        <div className="lg:col-span-2 space-y-3 overflow-y-auto" style={{ maxHeight: '700px' }}>
-          {/* Filters */}
-          <Card className="p-3">
-            <div className="grid grid-cols-2 gap-2">
-              <select
-                value={statusFilter}
-                onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
-                className="text-sm border border-gray-200 rounded-lg px-2 py-1.5"
-              >
-                <option value="all">All Statuses</option>
-                <option value="scheduled">Scheduled</option>
-                <option value="in_progress">In Progress</option>
-                <option value="completed">Completed</option>
-              </select>
-              <select
-                value={priorityFilter}
-                onChange={(e) => setPriorityFilter(e.target.value as PriorityFilter)}
-                className="text-sm border border-gray-200 rounded-lg px-2 py-1.5"
-              >
-                <option value="all">All Priorities</option>
-                <option value="urgent">Urgent</option>
-                <option value="high">High</option>
-                <option value="normal">Normal</option>
-                <option value="low">Low</option>
-              </select>
-              <select
-                value={applicatorFilter}
-                onChange={(e) => setApplicatorFilter(e.target.value)}
-                className="text-sm border border-gray-200 rounded-lg px-2 py-1.5 col-span-2"
-              >
-                <option value="">All Applicators</option>
-                {applicators.filter(a => a.role === 'applicator').map(a => (
-                  <option key={a.id} value={a.id}>{a.full_name}</option>
-                ))}
-              </select>
+            {/* Quick search (part of the shared filter) */}
+            <div className="relative flex-1 max-w-sm hidden sm:block">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
+              <input
+                type="text"
+                value={filters.search}
+                onChange={(e) => patchFilter('search', e.target.value)}
+                placeholder="Search job # or customer…"
+                className="w-full pl-9 pr-3 py-2.5 rounded-lg bg-slate-800 border border-slate-700 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-crx-green/40 focus:border-crx-green"
+              />
             </div>
-          </Card>
 
-          {/* Job Cards */}
-          {filteredJobs.length === 0 ? (
-            <Card className="p-6 text-center">
-              <p className="text-secondary text-sm">No jobs for {dateFilter}</p>
-            </Card>
-          ) : (
-            filteredJobs.map(job => (
-              <Card
-                key={job.id}
-                className={`p-4 cursor-pointer hover:border-crx-green transition-colors ${
-                  selectedJobId === job.id ? 'border-crx-green ring-1 ring-crx-green/30' : ''
-                }`}
-                onClick={() => setSelectedJobId(job.id === selectedJobId ? null : job.id)}
-              >
-                <div className="flex items-start justify-between mb-2">
-                  <div className="flex items-center gap-2">
-                    <div className={`w-2.5 h-2.5 rounded-full ${statusColor[job.status] || 'bg-gray-300'}`} />
+            <div className="ml-auto flex items-center gap-2">
+              {filtersActive && (
+                <button
+                  onClick={() => setFilters(emptyDispatchFilters)}
+                  className="hidden sm:inline-flex items-center gap-1 px-3 py-2 text-xs font-medium text-slate-300 hover:text-white rounded-lg hover:bg-slate-800"
+                >
+                  <X className="w-3.5 h-3.5" /> Clear filters
+                </button>
+              )}
+
+              {/* OPTIONS menu (criterion #5) */}
+              <div className="relative" ref={optionsRef}>
+                <button
+                  onClick={() => { setOptionsOpen((v) => !v); setRecipeMenuOpen(false); }}
+                  aria-haspopup="menu"
+                  aria-expanded={optionsOpen}
+                  className="inline-flex items-center gap-1.5 px-3 py-2.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-sm font-medium text-slate-100 min-h-[44px]"
+                >
+                  <MoreVertical className="w-4 h-4" /> Options
+                </button>
+                {optionsOpen && (
+                  <div role="menu" className="absolute right-0 mt-2 w-64 rounded-xl bg-slate-800 border border-slate-700 shadow-2xl py-1.5 z-50">
+                    {/* Filter Jobs By Recipe — section #39 stub (entry + simple recipe picker) */}
                     <button
-                      onClick={(e) => { e.stopPropagation(); navigate(`/jobs/${job.id}`); }}
-                      className="font-medium text-sm text-crx-green hover:underline"
+                      role="menuitem"
+                      onClick={() => setRecipeMenuOpen((v) => !v)}
+                      className="w-full flex items-center gap-3 px-4 py-3 text-sm text-slate-200 hover:bg-slate-700 min-h-[44px]"
                     >
-                      {job.job_number}
+                      <FlaskConical className="w-4 h-4 text-slate-400" />
+                      <span className="flex-1 text-left">Filter Jobs By Recipe</span>
+                      {activeRecipeName && <span className="text-xs text-crx-green truncate max-w-[80px]">{activeRecipeName}</span>}
                     </button>
-                    {job.priority !== 'normal' && (
-                      <Badge variant={priorityBadge[job.priority]?.variant || 'default'} size="sm">
-                        {job.priority === 'urgent' && <AlertTriangle className="w-3 h-3 mr-0.5" />}
-                        {priorityBadge[job.priority]?.label}
-                      </Badge>
+                    {recipeMenuOpen && (
+                      <div className="max-h-56 overflow-y-auto border-y border-slate-700 bg-slate-900 py-1">
+                        <button
+                          onClick={() => { patchFilter('recipeId', ''); setRecipeMenuOpen(false); setOptionsOpen(false); }}
+                          className={`w-full text-left px-6 py-2.5 text-sm hover:bg-slate-700 ${!filters.recipeId ? 'text-crx-green' : 'text-slate-300'}`}
+                        >
+                          All recipes
+                        </button>
+                        {recipes.length === 0 && (
+                          <p className="px-6 py-2 text-xs text-slate-500">No recipes yet</p>
+                        )}
+                        {recipes.map((r) => (
+                          <button
+                            key={r.id}
+                            onClick={() => { patchFilter('recipeId', r.id); setRecipeMenuOpen(false); setOptionsOpen(false); }}
+                            className={`w-full text-left px-6 py-2.5 text-sm hover:bg-slate-700 ${filters.recipeId === r.id ? 'text-crx-green' : 'text-slate-300'}`}
+                          >
+                            {r.name}
+                          </button>
+                        ))}
+                      </div>
                     )}
+                    <button
+                      role="menuitem"
+                      onClick={() => { setMoreSearchOpen(true); setOptionsOpen(false); }}
+                      className="w-full flex items-center gap-3 px-4 py-3 text-sm text-slate-200 hover:bg-slate-700 min-h-[44px]"
+                    >
+                      <SlidersHorizontal className="w-4 h-4 text-slate-400" /> More Search Options
+                    </button>
+                    <button
+                      role="menuitem"
+                      onClick={() => { setSection((v) => (v === 'map' ? 'list' : 'map')); setOptionsOpen(false); }}
+                      className="w-full flex items-center gap-3 px-4 py-3 text-sm text-slate-200 hover:bg-slate-700 min-h-[44px]"
+                    >
+                      {activeView === 'map' ? <ListIcon className="w-4 h-4 text-slate-400" /> : <MapIcon className="w-4 h-4 text-slate-400" />}
+                      Switch View ({activeView === 'map' ? 'to List' : 'to Map'})
+                    </button>
+                    <button
+                      role="menuitem"
+                      onClick={() => navigate('/jobs/new')}
+                      className="w-full flex items-center gap-3 px-4 py-3 text-sm text-slate-200 hover:bg-slate-700 min-h-[44px]"
+                    >
+                      <Plus className="w-4 h-4 text-slate-400" /> Add New Job
+                    </button>
+                    <button
+                      role="menuitem"
+                      onClick={() => { fetchData(); setOptionsOpen(false); }}
+                      className="w-full flex items-center gap-3 px-4 py-3 text-sm text-slate-200 hover:bg-slate-700 min-h-[44px]"
+                    >
+                      <RefreshCw className="w-4 h-4 text-slate-400" /> Reload List
+                    </button>
                   </div>
-                  <ChevronRight className="w-4 h-4 text-gray-300" />
-                </div>
-
-                <p className="text-sm text-nav-dark font-medium">{job.customer_name}</p>
-                {job.field_names && (
-                  <p className="text-xs text-secondary mt-0.5">{job.field_names}</p>
                 )}
-                <div className="flex items-center gap-3 mt-2 text-xs text-secondary">
-                  {job.total_acres && <span>{job.total_acres} ac</span>}
-                  {job.scheduled_time && <span>{job.scheduled_time}</span>}
-                  {job.estimated_hours && <span>{job.estimated_hours}h est</span>}
+              </div>
+            </div>
+          </div>
+
+          {/* Active-filter chips */}
+          {filtersActive && (
+            <div className="flex flex-wrap items-center gap-2 px-4 py-2 bg-slate-900/40 border-b border-slate-800 text-xs">
+              <span className="text-slate-500">Filters:</span>
+              {filters.status !== 'all' && <FilterChip label={`Status: ${filters.status}`} onClear={() => patchFilter('status', 'all')} />}
+              {filters.applicatorId && <FilterChip label={`Applicator: ${applicatorOnly.find((a) => a.id === filters.applicatorId)?.full_name ?? '—'}`} onClear={() => patchFilter('applicatorId', '')} />}
+              {activeRecipeName && <FilterChip label={`Recipe: ${activeRecipeName}`} onClear={() => patchFilter('recipeId', '')} />}
+              {filters.search.trim() && <FilterChip label={`Search: ${filters.search}`} onClear={() => patchFilter('search', '')} />}
+              {(filters.startDate || filters.endDate) && <FilterChip label={`Date: ${filters.startDate || '…'} → ${filters.endDate || '…'}`} onClear={() => setFilters((p) => ({ ...p, startDate: '', endDate: '' }))} />}
+            </div>
+          )}
+
+          {/* CONTENT */}
+          <div className="flex-1 overflow-hidden">
+            {loading ? (
+              <div className="p-6 space-y-3">
+                {[1, 2, 3, 4].map((i) => (
+                  <div key={i} className="h-24 rounded-xl bg-slate-800/60 animate-pulse" />
+                ))}
+              </div>
+            ) : section === 'dispatched' ? (
+              <DispatchedListPlaceholder />
+            ) : (
+              <>
+                {/* MAP VIEW — kept MOUNTED and toggled with CSS (`hidden`) rather than
+                    conditionally unmounted. The map engine (Mapbox) is expensive to
+                    tear down/rebuild and its unmount can disturb the React tree; by
+                    never unmounting it, switching map<->list preserves the shared
+                    filter/section state (criterion #6). The map is also wrapped in its
+                    OWN error boundary so a map failure (e.g. a missing Mapbox token)
+                    is contained to the map panel and never tears down the page. */}
+                <div className={`h-[calc(100vh-12rem)] m-3 rounded-xl overflow-hidden border border-slate-800 ${activeView === 'map' ? '' : 'hidden'}`}>
+                  <ErrorBoundary inline>
+                    <CRXMap
+                      className="h-full min-h-[400px]"
+                      showLayerToggle
+                      interactive
+                      onMapLoad={(map) => { mapRef.current = map; }}
+                    >
+                      <FieldBoundaryLayer
+                        fields={jobFields as (Field & { customer_name?: string })[]}
+                        showLabels
+                        onFieldClick={(fieldId) => {
+                          const job = visibleJobs.find((j) => j.field_ids?.includes(fieldId));
+                          if (job) setSelectedJobId(job.id);
+                        }}
+                      />
+                    </CRXMap>
+                  </ErrorBoundary>
                 </div>
 
-                {/* Applicator Assignment */}
-                <div className="mt-3 flex items-center gap-2">
-                  <Users className="w-3.5 h-3.5 text-secondary" />
-                  <select
-                    value={job.applicator_id || ''}
-                    onClick={(e) => e.stopPropagation()}
-                    onChange={(e) => handleAssign(job.id, e.target.value)}
-                    className="text-xs border border-gray-200 rounded px-2 py-1 flex-1 focus:outline-none focus:ring-1 focus:ring-crx-green/30"
-                  >
-                    <option value="">Unassigned</option>
-                    {applicators.filter(a => a.role === 'applicator').map(a => (
-                      <option key={a.id} value={a.id}>{a.full_name}</option>
-                    ))}
-                  </select>
+                {/* LIST VIEW (also used by the Dispatch Jobs section) */}
+                <div className={`p-3 sm:p-4 space-y-3 overflow-y-auto h-[calc(100vh-12rem)] ${activeView === 'list' ? '' : 'hidden'}`}>
+                  {/* Mobile search */}
+                  <div className="relative sm:hidden">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
+                    <input
+                      type="text"
+                      value={filters.search}
+                      onChange={(e) => patchFilter('search', e.target.value)}
+                      placeholder="Search job # or customer…"
+                      className="w-full pl-9 pr-3 py-3 rounded-lg bg-slate-800 border border-slate-700 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-crx-green/40"
+                    />
+                  </div>
+
+                  {visibleJobs.length === 0 ? (
+                    <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-10 text-center">
+                      <p className="text-slate-400">No jobs match the current filters.</p>
+                    </div>
+                  ) : (
+                    visibleJobs.map((job) => {
+                      const badge = jobStatusToDispatchBadge(job.status);
+                      const selected = selectedJobId === job.id;
+                      const showAssign = section === 'dispatch';
+                      return (
+                        <div
+                          key={job.id}
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => setSelectedJobId(selected ? null : job.id)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault();
+                              setSelectedJobId(selected ? null : job.id);
+                            }
+                          }}
+                          className={`rounded-xl border bg-slate-900 p-4 transition-colors cursor-pointer ${
+                            selected ? 'border-crx-green ring-1 ring-crx-green/40' : 'border-slate-800 hover:border-slate-600'
+                          }`}
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); navigate(`/jobs/${job.id}`); }}
+                                  className="text-base font-semibold text-crx-green hover:underline"
+                                >
+                                  {job.job_number}
+                                </button>
+                                <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold tracking-wide ${badge.className}`}>
+                                  {badge.label}
+                                </span>
+                              </div>
+                              <p className="mt-1 text-sm text-slate-200 font-medium truncate">{job.customer_name}</p>
+                              {job.field_names && <p className="text-xs text-slate-500 truncate">{job.field_names}</p>}
+                            </div>
+                            <div className="text-right flex-shrink-0">
+                              <p className="text-lg font-bold text-white tabular-nums">
+                                {formatAppliedOfTotal(job.applied_acres, job.total_acres)}
+                              </p>
+                            </div>
+                          </div>
+
+                          {/* Assigned-To label (criterion #4) — only on dispatched (assigned) jobs */}
+                          {job.applicator_name && (
+                            <div className="mt-3 flex items-center gap-2 text-sm">
+                              <Users className="w-4 h-4 text-crx-green" />
+                              <span className="text-slate-400">Assigned To:</span>
+                              <span className="font-semibold text-slate-100">{job.applicator_name}</span>
+                            </div>
+                          )}
+
+                          {/* Dispatch Jobs section: inline assign control (the per-location
+                              3-step wizard is #36's job; this reuses the existing job-level
+                              assign so the dispatcher can hand a job off today). */}
+                          {showAssign && (
+                            <div className="mt-3 flex items-center gap-2" role="presentation" onClick={(e) => e.stopPropagation()}>
+                              <Send className="w-4 h-4 text-slate-500" />
+                              <select
+                                value={job.applicator_id || ''}
+                                onChange={(e) => handleAssign(job.id, e.target.value)}
+                                className="flex-1 text-sm rounded-lg bg-slate-800 border border-slate-700 px-3 py-2.5 text-slate-100 min-h-[44px] focus:outline-none focus:ring-2 focus:ring-crx-green/40"
+                              >
+                                <option value="">Unassigned</option>
+                                {applicatorOnly.map((a) => (
+                                  <option key={a.id} value={a.id}>{a.full_name}</option>
+                                ))}
+                              </select>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })
+                  )}
                 </div>
-              </Card>
-            ))
-          )}
+              </>
+            )}
+          </div>
         </div>
       </div>
+
+      {/* MORE SEARCH OPTIONS drawer */}
+      {moreSearchOpen && (
+        <div className="fixed inset-0 z-50 flex justify-end" role="dialog" aria-modal="true" aria-label="More search options">
+          <button type="button" aria-label="Close more search options" className="absolute inset-0 bg-black/60" onClick={() => setMoreSearchOpen(false)} />
+          <div className="relative w-full max-w-sm h-full bg-slate-900 border-l border-slate-800 p-5 overflow-y-auto">
+            <div className="flex items-center justify-between mb-5">
+              <h2 className="text-base font-semibold flex items-center gap-2"><SlidersHorizontal className="w-5 h-5 text-crx-green" /> More Search Options</h2>
+              <button onClick={() => setMoreSearchOpen(false)} className="p-2 rounded-lg hover:bg-slate-800 text-slate-400"><X className="w-5 h-5" /></button>
+            </div>
+            <div className="space-y-4">
+              <label className="block">
+                <span className="text-xs font-medium uppercase tracking-wider text-slate-500">Status</span>
+                <select
+                  value={filters.status}
+                  onChange={(e) => patchFilter('status', e.target.value as DispatchFilters['status'])}
+                  className="mt-1.5 w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-3 text-sm text-slate-100 min-h-[44px]"
+                >
+                  <option value="all">All Statuses</option>
+                  <option value="scheduled">Pending (Scheduled)</option>
+                  <option value="in_progress">Active (In Progress)</option>
+                  <option value="completed">Completed</option>
+                  <option value="invoiced">Invoiced</option>
+                  <option value="cancelled">Cancelled</option>
+                </select>
+              </label>
+              <label className="block">
+                <span className="text-xs font-medium uppercase tracking-wider text-slate-500">Applicator</span>
+                <select
+                  value={filters.applicatorId}
+                  onChange={(e) => patchFilter('applicatorId', e.target.value)}
+                  className="mt-1.5 w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-3 text-sm text-slate-100 min-h-[44px]"
+                >
+                  <option value="">All Applicators</option>
+                  {applicatorOnly.map((a) => (
+                    <option key={a.id} value={a.id}>{a.full_name}</option>
+                  ))}
+                </select>
+              </label>
+              <div className="grid grid-cols-2 gap-3">
+                <label className="block">
+                  <span className="text-xs font-medium uppercase tracking-wider text-slate-500">From</span>
+                  <input type="date" value={filters.startDate} onChange={(e) => patchFilter('startDate', e.target.value)} className="mt-1.5 w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-3 text-sm text-slate-100 min-h-[44px]" />
+                </label>
+                <label className="block">
+                  <span className="text-xs font-medium uppercase tracking-wider text-slate-500">To</span>
+                  <input type="date" value={filters.endDate} onChange={(e) => patchFilter('endDate', e.target.value)} className="mt-1.5 w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-3 text-sm text-slate-100 min-h-[44px]" />
+                </label>
+              </div>
+              <div className="flex gap-3 pt-2">
+                <button onClick={() => setFilters(emptyDispatchFilters)} className="flex-1 px-4 py-3 rounded-lg border border-slate-700 text-sm text-slate-200 hover:bg-slate-800 min-h-[44px]">Clear All</button>
+                <button onClick={() => setMoreSearchOpen(false)} className="flex-1 px-4 py-3 rounded-lg bg-crx-green text-sm font-semibold text-white hover:bg-crx-green/90 min-h-[44px]">Done</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* License-override confirm (admin only) */}
       <ConfirmModal
@@ -395,6 +677,39 @@ export default function DispatchBoard() {
         confirmLabel="Assign Anyway"
         variant="warning"
       />
+    </div>
+  );
+}
+
+/** Small dark-mode filter chip with a clear (x) action. */
+function FilterChip({ label, onClear }: { label: string; onClear: () => void }) {
+  return (
+    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-800 border border-slate-700 text-slate-200">
+      {label}
+      <button onClick={onClear} className="text-slate-500 hover:text-white" aria-label={`Clear ${label}`}>
+        <X className="w-3 h-3" />
+      </button>
+    </span>
+  );
+}
+
+/**
+ * 'View Dispatched List' placeholder. The full dispatched-list view (per-location
+ * dispatch records, crew assignment, status) is section #37. This is a deliberate
+ * stub that names the future feature so the nav entry is real today.
+ */
+function DispatchedListPlaceholder() {
+  return (
+    <div className="p-6 flex items-center justify-center h-[calc(100vh-12rem)]">
+      <div className="max-w-md text-center rounded-2xl border border-dashed border-slate-700 bg-slate-900/50 p-10">
+        <ClipboardList className="w-10 h-10 text-slate-600 mx-auto mb-4" />
+        <h2 className="text-base font-semibold text-slate-200">Dispatched List</h2>
+        <p className="mt-2 text-sm text-slate-500">
+          The per-location dispatched-jobs list lands in a later build (dispatch section #37).
+          For now, assign applicators from <span className="text-slate-300">Dispatch Jobs</span>;
+          assigned jobs show their <span className="text-slate-300">Assigned To</span> name in the list.
+        </p>
+      </div>
     </div>
   );
 }
