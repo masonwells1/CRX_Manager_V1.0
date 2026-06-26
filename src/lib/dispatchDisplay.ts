@@ -107,6 +107,10 @@ export interface DispatchSelectableJob {
   job_number: string;
   customer_name?: string;
   job_date?: string | null;
+  /** Applicator ids dispatched to this job at the LOCATION level (#36) — the
+   *  Applicator filter matches the job-level applicator OR any of these, so a
+   *  per-location-only assignee still surfaces under that applicator's filter. */
+  dispatched_applicator_ids?: string[];
 }
 
 /**
@@ -124,7 +128,19 @@ export function selectDispatchView<T extends DispatchSelectableJob>(
   const search = filters.search.trim().toLowerCase();
   return jobs.filter((j) => {
     if (filters.status !== 'all' && j.status !== filters.status) return false;
-    if (filters.applicatorId && j.applicator_id !== filters.applicatorId) return false;
+    if (filters.applicatorId) {
+      // Match the DISPLAYED assignee, mirroring aggregateAssignedTo (#36): when a
+      // job has per-location dispatches, the row shows ONLY those assignees (the
+      // legacy job-level applicator is hidden), so the filter must match the
+      // per-location assignees and NOT the stale jobs.applicator_id. Only when a
+      // job has NO per-location dispatch does the job-level applicator count (the
+      // display fallback). This keeps the filter consistent with the visible label.
+      const perLocation = j.dispatched_applicator_ids ?? [];
+      const matches = perLocation.length > 0
+        ? perLocation.includes(filters.applicatorId)
+        : j.applicator_id === filters.applicatorId;
+      if (!matches) return false;
+    }
     if (filters.recipeId && j.recipe_id !== filters.recipeId) return false;
     if (filters.startDate && (j.job_date ?? '') < filters.startDate) return false;
     if (filters.endDate && (j.job_date ?? '') > filters.endDate) return false;

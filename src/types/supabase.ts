@@ -4204,6 +4204,95 @@ export type Database = {
           },
         ]
       }
+      job_location_dispatches: {
+        Row: {
+          applicator_id: string | null
+          created_at: string
+          crew_id: string | null
+          dispatch_status: string
+          dispatched_at: string
+          dispatched_by: string | null
+          id: string
+          job_field_id: string
+          job_id: string
+          updated_at: string
+        }
+        Insert: {
+          applicator_id?: string | null
+          created_at?: string
+          crew_id?: string | null
+          dispatch_status?: string
+          dispatched_at?: string
+          dispatched_by?: string | null
+          id?: string
+          job_field_id: string
+          job_id: string
+          updated_at?: string
+        }
+        Update: {
+          applicator_id?: string | null
+          created_at?: string
+          crew_id?: string | null
+          dispatch_status?: string
+          dispatched_at?: string
+          dispatched_by?: string | null
+          id?: string
+          job_field_id?: string
+          job_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "job_location_dispatches_applicator_id_fkey"
+            columns: ["applicator_id"]
+            isOneToOne: false
+            referencedRelation: "profile_public_view"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "job_location_dispatches_applicator_id_fkey"
+            columns: ["applicator_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "job_location_dispatches_crew_id_fkey"
+            columns: ["crew_id"]
+            isOneToOne: false
+            referencedRelation: "ground_crews"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "job_location_dispatches_dispatched_by_fkey"
+            columns: ["dispatched_by"]
+            isOneToOne: false
+            referencedRelation: "profile_public_view"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "job_location_dispatches_dispatched_by_fkey"
+            columns: ["dispatched_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "job_location_dispatches_job_field_id_fkey"
+            columns: ["job_field_id"]
+            isOneToOne: true
+            referencedRelation: "job_fields"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "job_location_dispatches_job_id_fkey"
+            columns: ["job_id"]
+            isOneToOne: false
+            referencedRelation: "jobs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       job_tag_assignments: {
         Row: {
           created_at: string
@@ -7721,6 +7810,7 @@ export type Database = {
         Returns: number
       }
       _is_admin_override: { Args: never; Returns: boolean }
+      _is_dispatched_to_me: { Args: { p_job_id: string }; Returns: boolean }
       _require_auth: { Args: never; Returns: string }
       _sync_planned_holds: {
         Args: { p_actor: string; p_quote_id: string }
@@ -8306,6 +8396,15 @@ export type Database = {
       }
       derive_customer_shares_from_fields: {
         Args: { p_applied_acres_map?: Json; p_field_ids: string[] }
+        Returns: Json
+      }
+      dispatch_job_locations: {
+        Args: {
+          p_assignments: Json
+          p_idempotency_key?: string
+          p_license_override?: boolean
+          p_performed_by?: string
+        }
         Returns: Json
       }
       draw_down_quote: {

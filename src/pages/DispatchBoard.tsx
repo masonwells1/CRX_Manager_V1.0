@@ -43,6 +43,7 @@ import CRXMap from '../components/map/CRXMap';
 import FieldBoundaryLayer from '../components/map/FieldBoundaryLayer';
 import ConfirmModal from '../components/ui/ConfirmModal';
 import ErrorBoundary from '../components/ErrorBoundary';
+import DispatchWizard from '../components/dispatch/DispatchWizard';
 import { usePageMeta } from '../hooks/usePageMeta';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { useToast } from '../components/ui/Toast';
@@ -58,15 +59,55 @@ import {
   type DispatchFilters,
   type DispatchView,
 } from '../lib/dispatchDisplay';
+import { aggregateAssignedTo, type DispatchLocation } from '../lib/dispatchWizard';
 import type { Job, Profile, Field } from '../types';
 
 type NavSection = 'map' | 'list' | 'dispatch' | 'dispatched';
 
+/**
+ * Page through active ('dispatched') job_location_dispatches rows and return the
+ * DISTINCT job_ids — optionally scoped to one applicator, and/or to a set of job
+ * ids. The Supabase Data API caps a single response (~1000 rows), so an un-ranged
+ * read would silently miss later rows once the table grows — breaking the applicator
+ * filter / exclusion set (#36 P2). We page via .range() until a short page signals
+ * the end. Returns null on error (caller logs). When scoped by jobIds and that list
+ * is empty, returns [] without querying.
+ */
+const DISPATCH_PAGE = 1000;
+async function fetchDispatchedJobIds(
+  opts: { applicatorId?: string; jobIds?: string[] }
+): Promise<string[] | null> {
+  if (opts.jobIds && opts.jobIds.length === 0) return [];
+  const ids = new Set<string>();
+  for (let from = 0; ; from += DISPATCH_PAGE) {
+    let query = supabase
+      .from('job_location_dispatches')
+      .select('job_id')
+      .eq('dispatch_status', 'dispatched');
+    if (opts.applicatorId) query = query.eq('applicator_id', opts.applicatorId);
+    if (opts.jobIds) query = query.in('job_id', opts.jobIds);
+    const { data, error } = await query.range(from, from + DISPATCH_PAGE - 1);
+    if (error) return null;
+    const rows = (data || []) as Array<{ job_id: string }>;
+    for (const r of rows) ids.add(r.job_id);
+    if (rows.length < DISPATCH_PAGE) break;
+  }
+  return Array.from(ids);
+}
+
 interface DispatchJob extends Job {
   customer_name?: string;
-  applicator_name?: string | null;
+  /** Aggregated 'Assigned To' label — distinct per-location assignees (a job
+   *  split between two applicators shows BOTH), falling back to the whole-job
+   *  applicator when there are no per-location dispatches (#36 criteria 5/6). */
+  assigned_to_label?: string | null;
+  /** Applicator ids dispatched to this job at the LOCATION level — so the
+   *  Applicator filter matches a per-location-only assignee (#36 P2). */
+  dispatched_applicator_ids?: string[];
   field_names?: string | null;
   field_ids?: string[];
+  /** Dispatchable field locations (job_fields rows) for the wizard. */
+  locations?: DispatchLocation[];
 }
 
 export default function DispatchBoard() {
@@ -78,8 +119,10 @@ export default function DispatchBoard() {
   const [loading, setLoading] = useState(true);
   const [jobs, setJobs] = useState<DispatchJob[]>([]);
   const [applicators, setApplicators] = useState<Pick<Profile, 'id' | 'full_name' | 'role'>[]>([]);
+  const [crews, setCrews] = useState<{ id: string; name: string }[]>([]);
   const [recipes, setRecipes] = useState<{ id: string; name: string }[]>([]);
   const [allFields, setAllFields] = useState<Field[]>([]);
+  const [wizardOpen, setWizardOpen] = useState(false);
 
   // The active nav section. 'map' / 'list' are the two Jobs views and also the
   // map/list toggle target; 'dispatch' is the assign flow; 'dispatched' is the
@@ -116,21 +159,63 @@ export default function DispatchBoard() {
       // DESC + limit 500 so the MOST RECENT matching jobs are kept (Codex P1).
       // Mirrors the office Jobs list. Applicator name is resolved from the
       // applicators view below (never a profiles embed — RLS nulls it for non-admins).
+      // Applicator filter must match the DISPLAYED assignee, which can now come from
+      // a per-location dispatch, not only jobs.applicator_id. Crucially it must match
+      // the SAME semantics as the row label (aggregateAssignedTo): once a job has ANY
+      // per-location dispatch, the legacy jobs.applicator_id is HIDDEN. So the server
+      // filter (which runs BEFORE the 500-row cap) matches:
+      //   (a) jobs dispatched to this applicator at the location level, OR
+      //   (b) jobs whose job-level applicator is this one AND that have NO per-location
+      //       dispatch at all (so a stale job-level assignment on a now-split job does
+      //       NOT consume cap slots and hide real per-location matches — Codex #36 P2,
+      //       re-review-8 P2). This keeps the capped query consistent with the label.
+      let locDispatchJobIds: string[] = [];
+      let anyDispatchedJobIds: string[] = [];
+      if (filters.applicatorId) {
+        // Paginated reads (#36 P2): page past the API row cap so the filter / exclusion
+        // set stay complete once the dispatch table grows.
+        const [locIds, anyIds] = await Promise.all([
+          fetchDispatchedJobIds({ applicatorId: filters.applicatorId }),
+          fetchDispatchedJobIds({}),
+        ]);
+        if (locIds === null) {
+          Sentry.captureException(new Error('dispatch_filter_job_ids read failed'), { tags: { source: 'fetch', action: 'dispatch_filter_job_ids' } });
+        } else {
+          locDispatchJobIds = locIds;
+        }
+        if (anyIds === null) {
+          Sentry.captureException(new Error('dispatch_any_job_ids read failed'), { tags: { source: 'fetch', action: 'dispatch_any_job_ids' } });
+        } else {
+          anyDispatchedJobIds = anyIds;
+        }
+      }
+
       let jobsQuery = supabase
         .from('jobs')
         .select(`
           *,
           customer:customers(farm_name),
-          job_fields(field_id, acres_to_treat, field:fields(id, field_name))
+          job_fields(id, field_id, acres_to_treat, sort_order, field:fields(id, field_name))
         `)
         .is('deleted_at', null);
       if (filters.status !== 'all') jobsQuery = jobsQuery.eq('status', filters.status);
-      if (filters.applicatorId) jobsQuery = jobsQuery.eq('applicator_id', filters.applicatorId);
+      if (filters.applicatorId) {
+        // (b) job-level branch: applicator_id = X, excluding jobs that have ANY
+        //     per-location dispatch (those show per-location assignees, not the
+        //     legacy job-level one). NOT-IN an empty list is a no-op, so guard it.
+        const jobLevelBranch = anyDispatchedJobIds.length > 0
+          ? `and(applicator_id.eq.${filters.applicatorId},id.not.in.(${anyDispatchedJobIds.join(',')}))`
+          : `applicator_id.eq.${filters.applicatorId}`;
+        jobsQuery = locDispatchJobIds.length > 0
+          ? jobsQuery.or(`id.in.(${locDispatchJobIds.join(',')}),${jobLevelBranch}`)
+          // no per-location dispatch to this applicator → just the (b) branch.
+          : jobsQuery.or(jobLevelBranch);
+      }
       if (filters.startDate) jobsQuery = jobsQuery.gte('job_date', filters.startDate);
       if (filters.endDate) jobsQuery = jobsQuery.lte('job_date', filters.endDate);
       jobsQuery = jobsQuery.order('job_date', { ascending: false, nullsFirst: false }).limit(500);
 
-      const [jobsRes, applicatorsRes, recipesRes] = await Promise.all([
+      const [jobsRes, applicatorsRes, recipesRes, crewsRes] = await Promise.all([
         jobsQuery,
         supabase
           .from('profile_public_view')
@@ -146,29 +231,94 @@ export default function DispatchBoard() {
           .select('id, name')
           .is('deleted_at', null)
           .order('name'),
+        // Active crews for the dispatch wizard's crew option (#21 / #36).
+        supabase
+          .from('ground_crews')
+          .select('id, name')
+          .eq('is_active', true)
+          .order('name'),
       ]);
 
       if (jobsRes.error) throw jobsRes.error;
 
       // Applicator name map from the parallel applicators fetch (no extra round-trip).
+      // Crews keyed too so a per-location crew dispatch resolves to a display name.
       const applicatorNameMap: Record<string, string> = {};
       ((applicatorsRes.data || []) as Array<{ id: string; full_name: string }>).forEach((a) => {
         applicatorNameMap[a.id] = a.full_name;
       });
+      const crewNameMap: Record<string, string> = {};
+      ((crewsRes.data || []) as Array<{ id: string; name: string }>).forEach((c) => {
+        crewNameMap[c.id] = c.name;
+      });
 
-      const mapped: DispatchJob[] = (jobsRes.data || []).map((j: Record<string, unknown>) => ({
-        ...j,
-        customer_name: (j.customer as { farm_name?: string })?.farm_name || 'Unknown',
-        applicator_name: j.applicator_id ? applicatorNameMap[j.applicator_id as string] || null : null,
-        field_names: ((j.job_fields as { field?: { field_name?: string } }[]) || [])
-          .map((jf) => jf.field?.field_name)
-          .filter(Boolean)
-          .join(', ') || null,
-        field_ids: ((j.job_fields as { field_id?: string }[]) || []).map((jf) => jf.field_id).filter(Boolean),
-      })) as DispatchJob[];
+      // Per-location dispatch rows for the visible jobs (#36). Scoped to the job
+      // ids we loaded so the row's 'Assigned To' can AGGREGATE every distinct
+      // per-location assignee (a job split between two applicators shows BOTH).
+      const jobIds = (jobsRes.data || []).map((j: Record<string, unknown>) => j.id as string);
+      const dispatchesByJob: Record<string, string[]> = {};
+      // Per-job set of applicator ids dispatched at the location level — feeds the
+      // client-side Applicator filter so a job whose only Bob-link is a per-location
+      // dispatch still matches a "Bob" filter (Codex #36 P2).
+      const dispatchApplicatorIdsByJob: Record<string, string[]> = {};
+      if (jobIds.length > 0) {
+        // Paginate (#36 P2): up to 500 jobs each with multiple locations can exceed
+        // the API row cap, so page via .range() until a short page ends the scan;
+        // an error aborts the aggregation (best-effort — the row still renders, just
+        // without per-location assignees).
+        for (let from = 0; ; from += DISPATCH_PAGE) {
+          const dispatchRes = await supabase
+            .from('job_location_dispatches')
+            .select('job_id, applicator_id, crew_id')
+            .in('job_id', jobIds)
+            .eq('dispatch_status', 'dispatched')
+            .range(from, from + DISPATCH_PAGE - 1);
+          if (dispatchRes.error) {
+            Sentry.captureException(dispatchRes.error, { tags: { source: 'fetch', action: 'dispatch_location_rows' } });
+            break;
+          }
+          const rows = (dispatchRes.data || []) as Array<{ job_id: string; applicator_id: string | null; crew_id: string | null }>;
+          for (const d of rows) {
+            if (d.applicator_id) (dispatchApplicatorIdsByJob[d.job_id] ||= []).push(d.applicator_id);
+            const name = d.applicator_id
+              ? applicatorNameMap[d.applicator_id]
+              : d.crew_id
+                ? crewNameMap[d.crew_id]
+                : null;
+            if (!name) continue;
+            (dispatchesByJob[d.job_id] ||= []).push(name);
+          }
+          if (rows.length < DISPATCH_PAGE) break;
+        }
+      }
+
+      const mapped: DispatchJob[] = (jobsRes.data || []).map((j: Record<string, unknown>) => {
+        const jobLevelName = j.applicator_id ? applicatorNameMap[j.applicator_id as string] || null : null;
+        const jobFields = (j.job_fields as Array<{ id?: string; field_id?: string; acres_to_treat?: number | null; field?: { field_name?: string } }>) || [];
+        const customerName = (j.customer as { farm_name?: string })?.farm_name || 'Unknown';
+        return {
+          ...j,
+          customer_name: customerName,
+          assigned_to_label: aggregateAssignedTo(dispatchesByJob[j.id as string] || [], jobLevelName),
+          dispatched_applicator_ids: dispatchApplicatorIdsByJob[j.id as string] || [],
+          field_names: jobFields.map((jf) => jf.field?.field_name).filter(Boolean).join(', ') || null,
+          field_ids: jobFields.map((jf) => jf.field_id).filter(Boolean) as string[],
+          locations: jobFields
+            .filter((jf) => jf.id)
+            .map((jf) => ({
+              jobFieldId: jf.id as string,
+              jobId: j.id as string,
+              jobNumber: (j.job_number as string) || '—',
+              customerName,
+              fieldName: jf.field?.field_name || 'Field',
+              acres: jf.acres_to_treat ?? null,
+            })),
+        };
+      }) as DispatchJob[];
 
       setJobs(mapped);
       setApplicators((applicatorsRes.data || []) as Pick<Profile, 'id' | 'full_name' | 'role'>[]);
+      setCrews((crewsRes.data || []) as { id: string; name: string }[]);
       setRecipes((recipesRes.data || []) as { id: string; name: string }[]);
 
       // Best-effort map geometry: the boundary/centroid columns power the MAP view
@@ -219,6 +369,11 @@ export default function DispatchBoard() {
   // reuse the LIST rendering but with their own framing.
   const activeView: DispatchView = section === 'map' ? 'map' : 'list';
 
+  // Only admins/sales_reps can dispatch — the dispatch_job_locations RPC is
+  // admin/sales-only, so an applicator who reaches /dispatch must NOT be shown the
+  // wizard launcher (they'd hit INSUFFICIENT_ROLE after selecting locations). #36 P2.
+  const canDispatch = profile?.role === 'admin' || profile?.role === 'sales_rep';
+
   // The map is kept mounted but hidden (display:none) so the shared filter survives
   // toggles. Mapbox initializes against a zero-size parent while hidden, so when the
   // user switches TO the map we tell it to re-measure — otherwise the first open can
@@ -245,6 +400,18 @@ export default function DispatchBoard() {
   const applicatorOnly = useMemo(
     () => applicators.filter((a) => a.role === 'applicator'),
     [applicators]
+  );
+
+  // Dispatchable locations for the wizard: every field LOCATION on a job that is
+  // scheduled or in_progress (the RPC enforces this too; we pre-filter so the
+  // wizard never offers a location it would reject). Respects the active filter
+  // set so the wizard scopes to the same jobs the dispatcher is looking at.
+  const dispatchableLocations = useMemo<DispatchLocation[]>(
+    () =>
+      visibleJobs
+        .filter((j) => j.status === 'scheduled' || j.status === 'in_progress')
+        .flatMap((j) => j.locations || []),
+    [visibleJobs]
   );
 
   const patchFilter = useCallback(<K extends keyof DispatchFilters>(key: K, value: DispatchFilters[K]) => {
@@ -518,6 +685,31 @@ export default function DispatchBoard() {
                     />
                   </div>
 
+                  {/* Dispatch Jobs: a single prominent launcher for the 3-step wizard,
+                      which selects field locations across the visible jobs (#36).
+                      Only shown to dispatchers (admin/sales_rep) — the RPC is gated to
+                      them, so an applicator must not be offered the wizard (#36 P2). */}
+                  {section === 'dispatch' && canDispatch && (
+                    <div className="flex items-center justify-between gap-3 rounded-xl border border-crx-green/30 bg-crx-green/10 px-4 py-3">
+                      <p className="text-sm text-slate-200">
+                        Dispatch individual field locations to applicators or crews.
+                        <span className="text-slate-400"> {dispatchableLocations.length} dispatchable location{dispatchableLocations.length === 1 ? '' : 's'}.</span>
+                      </p>
+                      <button
+                        onClick={() => setWizardOpen(true)}
+                        disabled={dispatchableLocations.length === 0}
+                        className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-crx-green text-sm font-semibold text-white hover:bg-crx-green/90 disabled:opacity-40 disabled:cursor-not-allowed min-h-[44px] flex-shrink-0"
+                      >
+                        <Send className="w-4 h-4" /> Start Dispatch
+                      </button>
+                    </div>
+                  )}
+                  {section === 'dispatch' && !canDispatch && (
+                    <div className="rounded-xl border border-slate-800 bg-slate-900/50 px-4 py-3 text-sm text-slate-400">
+                      Dispatching is handled by an admin or sales rep. You can view your assigned jobs in the list below.
+                    </div>
+                  )}
+
                   {visibleJobs.length === 0 ? (
                     <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-10 text-center">
                       <p className="text-slate-400">No jobs match the current filters.</p>
@@ -526,7 +718,7 @@ export default function DispatchBoard() {
                     visibleJobs.map((job) => {
                       const badge = jobStatusToDispatchBadge(job.status);
                       const selected = selectedJobId === job.id;
-                      const showAssign = section === 'dispatch';
+                      const showAssign = section === 'dispatch' && canDispatch;
                       return (
                         <div
                           key={job.id}
@@ -566,31 +758,28 @@ export default function DispatchBoard() {
                             </div>
                           </div>
 
-                          {/* Assigned-To label (criterion #4) — only on dispatched (assigned) jobs */}
-                          {job.applicator_name && (
+                          {/* Assigned-To label (criteria #4/#5/#6) — aggregates the
+                              per-location assignees so a job split between two applicators
+                              shows BOTH names; falls back to the whole-job applicator. */}
+                          {job.assigned_to_label && (
                             <div className="mt-3 flex items-center gap-2 text-sm">
                               <Users className="w-4 h-4 text-crx-green" />
                               <span className="text-slate-400">Assigned To:</span>
-                              <span className="font-semibold text-slate-100">{job.applicator_name}</span>
+                              <span className="font-semibold text-slate-100">{job.assigned_to_label}</span>
                             </div>
                           )}
 
-                          {/* Dispatch Jobs section: inline assign control (the per-location
-                              3-step wizard is #36's job; this reuses the existing job-level
-                              assign so the dispatcher can hand a job off today). */}
-                          {showAssign && (
+                          {/* Dispatch Jobs section: launch the per-location 3-step wizard
+                              (#36). The wizard handles selecting locations across jobs and
+                              assigning each to an applicator/crew. */}
+                          {showAssign && (job.status === 'scheduled' || job.status === 'in_progress') && (
                             <div className="mt-3 flex items-center gap-2" role="presentation" onClick={(e) => e.stopPropagation()}>
-                              <Send className="w-4 h-4 text-slate-500" />
-                              <select
-                                value={job.applicator_id || ''}
-                                onChange={(e) => handleAssign(job.id, e.target.value)}
-                                className="flex-1 text-sm rounded-lg bg-slate-800 border border-slate-700 px-3 py-2.5 text-slate-100 min-h-[44px] focus:outline-none focus:ring-2 focus:ring-crx-green/40"
+                              <button
+                                onClick={() => setWizardOpen(true)}
+                                className="inline-flex items-center gap-2 px-3 py-2.5 rounded-lg bg-crx-green/15 border border-crx-green/40 text-sm font-medium text-crx-green hover:bg-crx-green/25 min-h-[44px]"
                               >
-                                <option value="">Unassigned</option>
-                                {applicatorOnly.map((a) => (
-                                  <option key={a.id} value={a.id}>{a.full_name}</option>
-                                ))}
-                              </select>
+                                <Send className="w-4 h-4" /> Dispatch Locations
+                              </button>
                             </div>
                           )}
                         </div>
@@ -676,6 +865,18 @@ export default function DispatchBoard() {
         message="This applicator's license has expired. Assign them to this job anyway? The override is recorded in the activity log."
         confirmLabel="Assign Anyway"
         variant="warning"
+      />
+
+      {/* Per-location dispatch wizard (#36) — 3 steps: Select / Assign / Finish. */}
+      <DispatchWizard
+        open={wizardOpen}
+        onClose={() => setWizardOpen(false)}
+        locations={dispatchableLocations}
+        applicators={applicatorOnly.map((a) => ({ id: a.id, full_name: a.full_name }))}
+        crews={crews}
+        performedBy={profile?.id || ''}
+        isAdmin={profile?.role === 'admin'}
+        onDispatched={fetchData}
       />
     </div>
   );

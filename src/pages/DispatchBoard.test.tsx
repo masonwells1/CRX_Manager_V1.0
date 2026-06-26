@@ -110,6 +110,14 @@ vi.mock('../lib/db', () => {
     for (const m of ['select', 'is', 'eq', 'in', 'gte', 'lte', 'or', 'order', 'limit']) {
       chain[m] = self;
     }
+    // .range(from, to) is used by the paginated job_location_dispatches reads (#36).
+    // Return the full data on the FIRST page (from === 0) and an empty page after,
+    // so the caller's "rows.length < PAGE -> stop" loop terminates instead of
+    // looping forever / reading undefined.
+    chain.range = (from: number) => ({
+      then: (resolve: (v: { data: unknown[]; error: null }) => unknown) =>
+        resolve({ data: from === 0 ? data : [], error: null }),
+    });
     chain.then = (resolve: (v: { data: unknown[]; error: null }) => unknown) =>
       resolve({ data, error: null });
     return chain;
@@ -118,7 +126,9 @@ vi.mock('../lib/db', () => {
     if (table === 'jobs') return JOBS;
     if (table === 'profile_public_view') return APPLICATORS;
     if (table === 'blend_recipes') return [{ id: 'rec-1', name: 'Test Mix A' }];
-    return []; // fields + anything else
+    // job_location_dispatches → none in this fixture (FJOB-002 uses the legacy
+    // job-level applicator, so aggregateAssignedTo falls back to it).
+    return []; // fields + job_location_dispatches + anything else
   };
   return {
     supabase: {

@@ -2125,6 +2125,26 @@ export interface JobAttachment {
   uploaded_at: string;
 }
 
+/**
+ * Field-app parity #36 (2026-06-26): a per-LOCATION dispatch record. One current
+ * dispatch per job_field (location); a location is dispatched to an applicator OR
+ * a crew (never both/neither). Written by the dispatch_job_locations RPC (the
+ * 3-step wizard's commit). A job split between two applicators has two rows here
+ * with different applicator_ids, so the dispatch board aggregates BOTH assignees.
+ */
+export interface JobLocationDispatch {
+  id: string;
+  job_field_id: string;
+  job_id: string;
+  applicator_id: string | null;
+  crew_id: string | null;
+  dispatched_at: string;
+  dispatch_status: 'dispatched' | 'completed' | 'cancelled';
+  dispatched_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface JobChemical {
   id: string;
   job_id: string;

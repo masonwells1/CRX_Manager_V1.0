@@ -90,6 +90,11 @@
       "voided",
       "cancelled"
     ],
+    "job_location_dispatches.dispatch_status": [
+      "dispatched",
+      "completed",
+      "cancelled"
+    ],
     "jobs.status": [
       "scheduled",
       "in_progress",
@@ -612,6 +617,16 @@
       ],
       "constraints": [
         "invoices_status_check"
+      ]
+    },
+    "job_location_dispatches.dispatch_status": {
+      "values": [
+        "dispatched",
+        "completed",
+        "cancelled"
+      ],
+      "constraints": [
+        "job_location_dispatches_dispatch_status_check"
       ]
     },
     "jobs.priority": {
@@ -1849,6 +1864,19 @@
       ],
       "with_default": [
         "id"
+      ]
+    },
+    "job_location_dispatches": {
+      "no_default": [
+        "job_field_id",
+        "job_id"
+      ],
+      "with_default": [
+        "id",
+        "dispatched_at",
+        "dispatch_status",
+        "created_at",
+        "updated_at"
       ]
     },
     "jobs": {
@@ -3234,6 +3262,18 @@
       "field_id",
       "acres_to_treat",
       "sort_order"
+    ],
+    "job_location_dispatches": [
+      "id",
+      "job_field_id",
+      "job_id",
+      "applicator_id",
+      "crew_id",
+      "dispatched_at",
+      "dispatch_status",
+      "dispatched_by",
+      "created_at",
+      "updated_at"
     ],
     "jobs": [
       "id",

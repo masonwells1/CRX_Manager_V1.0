@@ -78,6 +78,37 @@ describe('selectDispatchView (shared filter)', () => {
     expect(selectDispatchView(jobs, f, 'list').map((j) => j.job_number)).toEqual(['A']);
   });
 
+  it('applicator filter also matches a per-location-only assignee (#36)', () => {
+    // Job D has NO job-level applicator but is dispatched to app-1 at the location
+    // level — it must surface under an app-1 filter.
+    const withPerLocation = [
+      ...jobs,
+      mkJob({ job_number: 'D', status: 'scheduled', applicator_id: null, dispatched_applicator_ids: ['app-1', 'app-2'] }),
+    ];
+    const f: DispatchFilters = { ...emptyDispatchFilters, applicatorId: 'app-1' };
+    expect(selectDispatchView(withPerLocation, f, 'list').map((j) => j.job_number).sort()).toEqual(['A', 'D']);
+  });
+
+  it('applicator filter excludes a job whose per-location assignees do not include the filter', () => {
+    const withPerLocation = [
+      mkJob({ job_number: 'E', status: 'scheduled', applicator_id: null, dispatched_applicator_ids: ['app-2'] }),
+    ];
+    const f: DispatchFilters = { ...emptyDispatchFilters, applicatorId: 'app-1' };
+    expect(selectDispatchView(withPerLocation, f, 'list')).toHaveLength(0);
+  });
+
+  it('once per-location dispatches exist, the filter matches the DISPLAYED assignee, NOT the stale job-level applicator (#36)', () => {
+    // Job F has a LEGACY job-level applicator app-1, but is now per-location
+    // dispatched only to app-2. The row displays "app-2" (aggregateAssignedTo hides
+    // the legacy app-1), so filtering by app-1 must NOT surface it, and filtering by
+    // app-2 must.
+    const withLegacy = [
+      mkJob({ job_number: 'F', status: 'scheduled', applicator_id: 'app-1', dispatched_applicator_ids: ['app-2'] }),
+    ];
+    expect(selectDispatchView(withLegacy, { ...emptyDispatchFilters, applicatorId: 'app-1' }, 'list')).toHaveLength(0);
+    expect(selectDispatchView(withLegacy, { ...emptyDispatchFilters, applicatorId: 'app-2' }, 'list').map((j) => j.job_number)).toEqual(['F']);
+  });
+
   it('filters by search over job number and customer', () => {
     const f: DispatchFilters = { ...emptyDispatchFilters, search: 'beta' };
     expect(selectDispatchView(jobs, f, 'list').map((j) => j.job_number)).toEqual(['C']);

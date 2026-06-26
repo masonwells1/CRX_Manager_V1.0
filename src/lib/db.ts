@@ -195,7 +195,20 @@ export type RpcErrorCode = (typeof RpcErrorCodes)[keyof typeof RpcErrorCodes];
  * error's text.
  */
 export function hasRpcCode(err: unknown, code: RpcErrorCode): boolean {
-  const message = err instanceof Error ? err.message : String(err ?? '');
+  // A raised RPC error reaches the client in two shapes: a real `Error`, OR a
+  // plain Supabase/PostgREST error OBJECT `{ code, message, details, hint }`
+  // (NOT an Error instance) when the caller `throw`s the `{ error }` from
+  // `supabase.rpc(...)`. Read `.message` off either; only fall back to String()
+  // for genuinely message-less values (so a plain object never stringifies to
+  // "[object Object]" and silently fails the token match).
+  let message: string;
+  if (err instanceof Error) {
+    message = err.message;
+  } else if (err && typeof err === 'object' && typeof (err as { message?: unknown }).message === 'string') {
+    message = (err as { message: string }).message;
+  } else {
+    message = String(err ?? '');
+  }
   // Match: exact "TOKEN", "TOKEN:rest", or "TOKEN rest"
   return message === code
     || message.startsWith(`${code}:`)

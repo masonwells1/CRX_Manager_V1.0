@@ -5,7 +5,7 @@ vi.mock('@supabase/supabase-js', () => ({
   createClient: vi.fn().mockReturnValue({}),
 }));
 
-import { checkMutationResult, assertRpcResult } from './db';
+import { checkMutationResult, assertRpcResult, hasRpcCode, RpcErrorCodes } from './db';
 
 describe('checkMutationResult', () => {
   it('does nothing when result has data and no error', () => {
@@ -87,5 +87,29 @@ describe('assertRpcResult', () => {
     } catch (e: unknown) {
       expect((e as Error).message).toContain('my_custom_rpc');
     }
+  });
+});
+
+describe('hasRpcCode', () => {
+  it('matches a real Error whose message starts with the token', () => {
+    expect(hasRpcCode(new Error('LICENSE_EXPIRED: license expired 2020-01-01'), RpcErrorCodes.LICENSE_EXPIRED)).toBe(true);
+  });
+  it('matches a plain Supabase/PostgREST error OBJECT (not an Error instance)', () => {
+    // This is the shape supabase.rpc() returns and the dispatch wizard throws —
+    // it is NOT an Error, so reading only Error.message would miss the token.
+    const pgErr = { code: 'P0001', message: 'LICENSE_EXPIRED: applicator x license expired 2020-01-01', details: null, hint: null };
+    expect(hasRpcCode(pgErr, RpcErrorCodes.LICENSE_EXPIRED)).toBe(true);
+  });
+  it('matches the bare token and "TOKEN suffix" forms', () => {
+    expect(hasRpcCode({ message: 'ACTOR_MISMATCH' }, RpcErrorCodes.ACTOR_MISMATCH)).toBe(true);
+    expect(hasRpcCode({ message: 'INSUFFICIENT_ROLE admin or sales_rep required' }, RpcErrorCodes.INSUFFICIENT_ROLE)).toBe(true);
+  });
+  it('does NOT false-positive on the token mid-message', () => {
+    expect(hasRpcCode({ message: 'note: LICENSE_EXPIRED appears here' }, RpcErrorCodes.LICENSE_EXPIRED)).toBe(false);
+  });
+  it('handles null/undefined/odd values without throwing', () => {
+    expect(hasRpcCode(null, RpcErrorCodes.LICENSE_EXPIRED)).toBe(false);
+    expect(hasRpcCode(undefined, RpcErrorCodes.LICENSE_EXPIRED)).toBe(false);
+    expect(hasRpcCode(42, RpcErrorCodes.LICENSE_EXPIRED)).toBe(false);
   });
 });
