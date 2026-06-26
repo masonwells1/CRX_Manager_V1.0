@@ -162,13 +162,27 @@ describe('getAttachmentDownloadUrl', () => {
 
 describe('deleteJobAttachment', () => {
   it('removes the storage object AND deletes the row', async () => {
-    storageApi.remove.mockResolvedValue({ error: null });
+    storageApi.remove.mockResolvedValue({ data: [{ name: `${JOB}/${UUID}_x.pdf` }], error: null });
     const eq = vi.fn().mockReturnValue({ select: vi.fn().mockResolvedValue({ data: [{ id: 'att-1' }], error: null }) });
     const del = vi.fn().mockReturnValue({ eq });
     mockFrom.mockReturnValue({ delete: del });
 
     await deleteJobAttachment({ id: 'att-1', storage_path: `${JOB}/${UUID}_x.pdf` });
     expect(storageApi.remove).toHaveBeenCalledWith([`${JOB}/${UUID}_x.pdf`]);
+    expect(eq).toHaveBeenCalledWith('id', 'att-1');
+  });
+
+  it('succeeds even when remove returns an EMPTY data array (storage-js version variance)', async () => {
+    // storage-js can return HTTP 200 + data:[] on a successful remove. We must NOT treat
+    // that as failure (Codex P1) — success signal is the absence of `error`. The catalog
+    // row is then deleted and checkMutationResult confirms it actually affected a row.
+    storageApi.remove.mockResolvedValue({ data: [], error: null });
+    const eq = vi.fn().mockReturnValue({ select: vi.fn().mockResolvedValue({ data: [{ id: 'att-1' }], error: null }) });
+    const del = vi.fn().mockReturnValue({ eq });
+    mockFrom.mockReturnValue({ delete: del });
+
+    await deleteJobAttachment({ id: 'att-1', storage_path: `${JOB}/${UUID}_x.pdf` });
+    expect(del).toHaveBeenCalled();
     expect(eq).toHaveBeenCalledWith('id', 'att-1');
   });
 
@@ -180,5 +194,16 @@ describe('deleteJobAttachment', () => {
       deleteJobAttachment({ id: 'att-1', storage_path: 'p' })
     ).rejects.toThrow('remove denied');
     expect(del).not.toHaveBeenCalled();
+  });
+
+  it('throws (does not falsely report success) when the catalog-row delete is RLS-denied', async () => {
+    // Storage removed fine, but the row delete affects 0 rows (RLS) → checkMutationResult
+    // throws, so the caller learns the delete did not fully succeed.
+    storageApi.remove.mockResolvedValue({ data: [{ name: `${JOB}/${UUID}_x.pdf` }], error: null });
+    const eq = vi.fn().mockReturnValue({ select: vi.fn().mockResolvedValue({ data: [], error: null }) });
+    mockFrom.mockReturnValue({ delete: vi.fn().mockReturnValue({ eq }) });
+    await expect(
+      deleteJobAttachment({ id: 'att-1', storage_path: `${JOB}/${UUID}_x.pdf` })
+    ).rejects.toThrow(/no rows were affected/);
   });
 });

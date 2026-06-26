@@ -91,9 +91,19 @@ export async function getAttachmentDownloadUrl(
 }
 
 /**
- * Delete an attachment: remove the storage object AND the catalog row (both
- * RLS-gated). Storage object first so a row never points at missing bytes; if the
- * object remove fails we abort before touching the row.
+ * Delete an attachment: remove the storage object AND the catalog row (both RLS-gated).
+ *
+ * Order matters. We remove the BYTES first, then delete the catalog ROW:
+ *   - On a real storage error (`removeErr`) we abort before touching the row, so a row
+ *     never ends up pointing at bytes we failed to remove.
+ *   - storage-js `.remove()` can return HTTP 200 with an empty `data` array on success
+ *     in some versions/paths, so we do NOT treat an empty array as failure (that would
+ *     reject valid deletes — Codex P1). The success signal is the absence of `error`.
+ *   - The storage DELETE RLS is kept at least as strict as the catalog-row DELETE RLS
+ *     (see migration 20260625203000), so a caller who can remove the bytes can always
+ *     remove the row too — the two can't diverge into an orphaned row or orphaned bytes.
+ *   - `checkMutationResult` then confirms the row delete actually affected a row (it
+ *     throws on a silent RLS denial), so we never report success on a no-op row delete.
  */
 export async function deleteJobAttachment(attachment: Pick<JobAttachment, 'id' | 'storage_path'>): Promise<void> {
   const { error: removeErr } = await supabase.storage

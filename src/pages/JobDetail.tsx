@@ -978,6 +978,20 @@ export default function JobDetail() {
     })();
   }, [id, fetchJob, isNew, searchParams]);
 
+  // Field-app parity #16: keep the active tab in sync with the ?tab= param AFTER mount.
+  // The useState initializer only reads ?tab= once, so a same-route param change (e.g.
+  // clicking the Jobs-list "Map / Logs" action while already on this job) wouldn't switch
+  // tabs. This effect applies a valid tab param whenever it changes; an absent/invalid
+  // param leaves the current tab untouched (no snap-back to 'locations' on unrelated
+  // param changes like recipe_id).
+  useEffect(() => {
+    const t = searchParams.get('tab');
+    const valid: TabKey[] = ['locations', 'chemicals', 'loader', 'applied', 'map_logs', 'notifications'];
+    if (t && (valid as string[]).includes(t)) {
+      setActiveTab(t as TabKey);
+    }
+  }, [searchParams]);
+
   // Computed
   const customerFields = allFields.filter(f => !customerId || f.customer_id === customerId);
   const totalAcres = fieldRows.reduce((sum, f) => sum + (parseFloat(f.acres_to_treat) || 0), 0);
