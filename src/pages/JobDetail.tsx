@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState , useCallback } from 'react';
+import { useEffect, useRef, useState , useCallback, lazy, Suspense } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import { Save, Plus, Trash2, Check, FileText, Beaker, Ban, MessageSquarePlus, Printer, CloudSun, MapPin, Truck, ClipboardList, FlaskConical, Bell, History, BookmarkPlus, GripVertical, ChevronUp, ChevronDown } from 'lucide-react';
+import { Save, Plus, Trash2, Check, FileText, Beaker, Ban, MessageSquarePlus, Printer, CloudSun, MapPin, Truck, ClipboardList, FlaskConical, Bell, History, BookmarkPlus, GripVertical, ChevronUp, ChevronDown, Map as MapIcon } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
@@ -35,6 +35,11 @@ import { applyChemEdit, recomputeChemRowForAcres, sumAcres, toGallonOrLbEquivale
 import { recipeItemToChemRowSeed, chemRowsToRecipeItems, getLastRecipeId, setLastRecipeId } from '../lib/recipeHelpers';
 import { moveItem, moveUp, moveDown } from '../lib/routeOrder';
 import AppliedRecordsManager from '../components/jobs/AppliedRecordsManager';
+// Codex #16 P2: lazy-load the map component so the mapbox bundle is only fetched when
+// the user actually opens the Map / Logs tab — not on every JobDetail page load (matters
+// on field/mobile connections). JobAttachments is light, so it stays a static import.
+const JobFieldMap = lazy(() => import('../components/jobs/JobFieldMap'));
+import JobAttachments from '../components/jobs/JobAttachments';
 import QuickTaskModal from '../components/team/QuickTaskModal';
 import ConfirmModal from '../components/ui/ConfirmModal';
 import RelatedNotes from '../components/team/RelatedNotes';
@@ -142,12 +147,14 @@ const statusVariant: Record<JobStatus, BadgeVariant> = {
   invoiced: 'success',
 };
 
-type TabKey = 'locations' | 'chemicals' | 'loader' | 'applied' | 'notifications';
+type TabKey = 'locations' | 'chemicals' | 'loader' | 'applied' | 'map_logs' | 'notifications';
 const TABS: { key: TabKey; label: string; icon: React.ReactNode }[] = [
   { key: 'locations', label: 'Locations', icon: <MapPin className="w-4 h-4" /> },
   { key: 'chemicals', label: 'Chemicals / Charges', icon: <Beaker className="w-4 h-4" /> },
   { key: 'loader', label: 'Loader Worksheet', icon: <Truck className="w-4 h-4" /> },
   { key: 'applied', label: 'Applied Info', icon: <ClipboardList className="w-4 h-4" /> },
+  // Field-app parity #16: per-job field map + attach log files (the last Phase-4 printout).
+  { key: 'map_logs', label: 'Map / Logs', icon: <MapIcon className="w-4 h-4" /> },
   { key: 'notifications', label: 'Notifications', icon: <Bell className="w-4 h-4" /> },
 ];
 
@@ -218,7 +225,14 @@ export default function JobDetail() {
   const [isDirty, setIsDirty] = useState(false);
   const baselineRef = useRef<string | null>(null);
   const blocker = useUnsavedChanges(isDirty);
-  const [activeTab, setActiveTab] = useState<TabKey>('locations');
+  // Field-app parity #16: allow a deep-link to a tab (e.g. the Jobs-list "Map / Logs"
+  // row action opens /jobs/:id?tab=map_logs). Falls back to 'locations'.
+  const initialTab = ((): TabKey => {
+    const t = searchParams.get('tab');
+    const valid: TabKey[] = ['locations', 'chemicals', 'loader', 'applied', 'map_logs', 'notifications'];
+    return (valid as string[]).includes(t ?? '') ? (t as TabKey) : 'locations';
+  })();
+  const [activeTab, setActiveTab] = useState<TabKey>(initialTab);
 
   // Lookup data
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -2445,6 +2459,45 @@ export default function JobDetail() {
       )}
 
       {/* ─────────────── NOTIFICATIONS TAB ─────────────── */}
+      {/* ─────────────── MAP / LOGS TAB (#16) ─────────────── */}
+      {activeTab === 'map_logs' && (
+        <div className="space-y-4">
+          {isNew || !id ? (
+            <Card>
+              <p className="text-sm text-secondary text-center py-6">
+                Save this job first to see its field map.
+              </p>
+            </Card>
+          ) : (
+            <Suspense
+              fallback={
+                <Card>
+                  <p className="text-sm text-gray-500 py-10 text-center">Loading map…</p>
+                </Card>
+              }
+            >
+              <JobFieldMap jobId={id} />
+            </Suspense>
+          )}
+          {isNew || !id ? (
+            <Card>
+              <p className="text-sm text-secondary text-center py-6">
+                Save this job first to attach log files.
+              </p>
+            </Card>
+          ) : (
+            // Codex #16 P2: the RLS lets the assigned applicator attach/delete their
+            // OWN logs (they hold the GPS/equipment files), so the upload/delete
+            // controls must be available to them too — not just admin/sales. The
+            // DELETE policy still restricts an applicator to files they uploaded.
+            <JobAttachments
+              jobId={id}
+              canEdit={isEditable || (role === 'applicator' && applicatorId === profile?.id)}
+            />
+          )}
+        </div>
+      )}
+
       {activeTab === 'notifications' && (
         <Card>
           <h2 className="text-lg font-semibold text-nav-dark mb-3">Notifications &amp; Memos</h2>

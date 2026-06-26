@@ -4272,6 +4272,61 @@ export type Database = {
           },
         ]
       }
+      job_attachments: {
+        Row: {
+          content_type: string | null
+          file_name: string
+          file_size: number | null
+          id: string
+          job_id: string
+          storage_path: string
+          uploaded_at: string
+          uploaded_by: string | null
+        }
+        Insert: {
+          content_type?: string | null
+          file_name: string
+          file_size?: number | null
+          id?: string
+          job_id: string
+          storage_path: string
+          uploaded_at?: string
+          uploaded_by?: string | null
+        }
+        Update: {
+          content_type?: string | null
+          file_name?: string
+          file_size?: number | null
+          id?: string
+          job_id?: string
+          storage_path?: string
+          uploaded_at?: string
+          uploaded_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "job_attachments_job_id_fkey"
+            columns: ["job_id"]
+            isOneToOne: false
+            referencedRelation: "jobs"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "job_attachments_uploaded_by_fkey"
+            columns: ["uploaded_by"]
+            isOneToOne: false
+            referencedRelation: "profile_public_view"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "job_attachments_uploaded_by_fkey"
+            columns: ["uploaded_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       job_batches: {
         Row: {
           created_at: string
@@ -8574,6 +8629,20 @@ export type Database = {
           customer_id: string
           farm_name: string | null
           is_primary: boolean
+        }[]
+      }
+      get_job_fields_with_geojson: {
+        Args: { p_job_id: string }
+        Returns: {
+          boundary_geojson: string
+          centroid_geojson: string
+          customer_id: string
+          field_name: string
+          id: string
+          measured_acres: number
+          override_acres: number
+          sort_order: number
+          total_acres: number
         }[]
       }
       get_logbook_by_applicator: {

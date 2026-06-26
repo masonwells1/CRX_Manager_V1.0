@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Download, FileText, Trash2, ChevronDown, ChevronRight, Tag, Tags, Search, SlidersHorizontal, Users, Layers, Pencil, Settings2, Truck, FlaskConical, ClipboardList, PackageOpen, Beaker, Printer } from 'lucide-react';
+import { Plus, Download, FileText, Trash2, ChevronDown, ChevronRight, Tag, Tags, Search, SlidersHorizontal, Users, Layers, Pencil, Settings2, Truck, FlaskConical, ClipboardList, PackageOpen, Beaker, Printer, Map as MapIcon } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge, { type BadgeVariant } from '../components/ui/Badge';
@@ -1257,6 +1257,18 @@ export default function Jobs() {
             className="text-secondary hover:text-crx-green disabled:opacity-40 transition-colors"
           >
             <FlaskConical className="w-3.5 h-3.5" />
+          </button>
+          {/* #16: per-row Map / Logs entry point — opens the job's field map +
+              attached log files, reachable directly from the job list (deep-links
+              to the JobDetail "Map / Logs" tab). */}
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); navigate(`/jobs/${r.id}?tab=map_logs`); }}
+            title="Map / Logs"
+            aria-label={`Open map and log files for job ${r.job_number}`}
+            className="text-secondary hover:text-crx-green transition-colors"
+          >
+            <MapIcon className="w-3.5 h-3.5" />
           </button>
         </div>
       ),

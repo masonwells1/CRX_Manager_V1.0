@@ -2107,6 +2107,24 @@ export interface JobFieldShare {
   customer?: Customer;
 }
 
+/**
+ * Field-app parity #16 (2026-06-25): a log file / proof document attached to a
+ * field job. Bytes live in the PRIVATE `job-attachments` storage bucket at
+ * `<job_id>/<uuid>_<filename>`; this row is the catalog. Job-scoped RLS mirrors
+ * jobs_select (admin / sales_rep / the assigned applicator). Downloads use signed
+ * URLs (the bucket is private).
+ */
+export interface JobAttachment {
+  id: string;
+  job_id: string;
+  storage_path: string;
+  file_name: string;
+  file_size: number | null;
+  content_type: string | null;
+  uploaded_by: string | null;
+  uploaded_at: string;
+}
+
 export interface JobChemical {
   id: string;
   job_id: string;
