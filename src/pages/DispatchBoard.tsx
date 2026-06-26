@@ -41,14 +41,12 @@ import {
 import type { MapRef } from 'react-map-gl/mapbox';
 import CRXMap from '../components/map/CRXMap';
 import FieldBoundaryLayer from '../components/map/FieldBoundaryLayer';
-import ConfirmModal from '../components/ui/ConfirmModal';
 import ErrorBoundary from '../components/ErrorBoundary';
 import DispatchWizard from '../components/dispatch/DispatchWizard';
 import { usePageMeta } from '../hooks/usePageMeta';
-import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, assertRpcResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
+import { supabase, assertRpcResult } from '../lib/db';
 import { Sentry } from '../lib/sentry';
 import {
   formatAppliedOfTotal,
@@ -64,36 +62,11 @@ import type { Job, Profile, Field } from '../types';
 
 type NavSection = 'map' | 'list' | 'dispatch' | 'dispatched';
 
-/**
- * Page through active ('dispatched') job_location_dispatches rows and return the
- * DISTINCT job_ids — optionally scoped to one applicator, and/or to a set of job
- * ids. The Supabase Data API caps a single response (~1000 rows), so an un-ranged
- * read would silently miss later rows once the table grows — breaking the applicator
- * filter / exclusion set (#36 P2). We page via .range() until a short page signals
- * the end. Returns null on error (caller logs). When scoped by jobIds and that list
- * is empty, returns [] without querying.
- */
+// Page size for the per-job dispatch-row aggregation below (the Supabase Data API
+// caps a single response at ~1000 rows, so we page via .range() until a short page
+// signals the end). The applicator FILTER itself no longer reads this table from the
+// client — it is resolved server-side by get_dispatch_board_jobs (review #36 MED).
 const DISPATCH_PAGE = 1000;
-async function fetchDispatchedJobIds(
-  opts: { applicatorId?: string; jobIds?: string[] }
-): Promise<string[] | null> {
-  if (opts.jobIds && opts.jobIds.length === 0) return [];
-  const ids = new Set<string>();
-  for (let from = 0; ; from += DISPATCH_PAGE) {
-    let query = supabase
-      .from('job_location_dispatches')
-      .select('job_id')
-      .eq('dispatch_status', 'dispatched');
-    if (opts.applicatorId) query = query.eq('applicator_id', opts.applicatorId);
-    if (opts.jobIds) query = query.in('job_id', opts.jobIds);
-    const { data, error } = await query.range(from, from + DISPATCH_PAGE - 1);
-    if (error) return null;
-    const rows = (data || []) as Array<{ job_id: string }>;
-    for (const r of rows) ids.add(r.job_id);
-    if (rows.length < DISPATCH_PAGE) break;
-  }
-  return Array.from(ids);
-}
 
 interface DispatchJob extends Job {
   customer_name?: string;
@@ -139,10 +112,6 @@ export default function DispatchBoard() {
   // Held so we can resize the map after it becomes visible (it mounts hidden).
   const mapRef = useRef<MapRef | null>(null);
 
-  // License-override confirm (B5 license gates) — admin only.
-  const [licenseOverridePrompt, setLicenseOverridePrompt] = useState<{ jobId: string; applicatorId: string } | null>(null);
-  const assignIdem = useIdempotencyKey('assign_job_applicator', profile?.id || '');
-
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
@@ -159,64 +128,73 @@ export default function DispatchBoard() {
       // DESC + limit 500 so the MOST RECENT matching jobs are kept (Codex P1).
       // Mirrors the office Jobs list. Applicator name is resolved from the
       // applicators view below (never a profiles embed — RLS nulls it for non-admins).
-      // Applicator filter must match the DISPLAYED assignee, which can now come from
-      // a per-location dispatch, not only jobs.applicator_id. Crucially it must match
-      // the SAME semantics as the row label (aggregateAssignedTo): once a job has ANY
-      // per-location dispatch, the legacy jobs.applicator_id is HIDDEN. So the server
-      // filter (which runs BEFORE the 500-row cap) matches:
-      //   (a) jobs dispatched to this applicator at the location level, OR
-      //   (b) jobs whose job-level applicator is this one AND that have NO per-location
-      //       dispatch at all (so a stale job-level assignment on a now-split job does
-      //       NOT consume cap slots and hide real per-location matches — Codex #36 P2,
-      //       re-review-8 P2). This keeps the capped query consistent with the label.
-      let locDispatchJobIds: string[] = [];
-      let anyDispatchedJobIds: string[] = [];
+      // Applicator filter must match the DISPLAYED assignee, which can now come from a
+      // per-location dispatch, not only jobs.applicator_id, and must match the SAME
+      // semantics as the row label (aggregateAssignedTo): once a job has ANY per-location
+      // dispatch, the legacy jobs.applicator_id is HIDDEN. The whole match is resolved
+      // SERVER-SIDE by get_dispatch_board_jobs (review #36 MED fix): it returns, IN SQL,
+      // the FULLY-SHAPED job rows that match this applicator —
+      //   (a) jobs with a CURRENT per-location dispatch to this applicator (that the
+      //       caller can see), UNION
+      //   (b) jobs whose whole-job applicator is this one AND have NO per-location
+      //       dispatch at all —
+      // already intersected with the caller's job visibility, ordered job_date DESC and
+      // capped at 500. CRUCIALLY this returns ROWS, not ids: it replaces BOTH the old
+      // unbounded `id.not.in.(<every globally-dispatched job id>)` AND any follow-on
+      // `id.in.(<matched ids>)` — neither a whole-table NOR a per-applicator id list ever
+      // enters a request URL (a 500-uuid `id=in.(...)` is ~19.7KB and already fails the
+      // gateway). The row carries `_dispatches` (the per-location rows the caller can
+      // see) so the label aggregation needs no second round-trip either.
+      let filteredJobsData: Record<string, unknown>[] | null = null;
       if (filters.applicatorId) {
-        // Paginated reads (#36 P2): page past the API row cap so the filter / exclusion
-        // set stay complete once the dispatch table grows.
-        const [locIds, anyIds] = await Promise.all([
-          fetchDispatchedJobIds({ applicatorId: filters.applicatorId }),
-          fetchDispatchedJobIds({}),
-        ]);
-        if (locIds === null) {
-          Sentry.captureException(new Error('dispatch_filter_job_ids read failed'), { tags: { source: 'fetch', action: 'dispatch_filter_job_ids' } });
-        } else {
-          locDispatchJobIds = locIds;
+        const { data: rpcRows, error: rpcErr } = await supabase.rpc('get_dispatch_board_jobs', {
+          p_applicator_id: filters.applicatorId,
+          p_status: filters.status !== 'all' ? filters.status : undefined,
+          p_start_date: filters.startDate || undefined,
+          p_end_date: filters.endDate || undefined,
+        });
+        // A real error OR a null result (Supabase returns null, not an error, when an RPC
+        // is RLS-denied) means we cannot trust the filter. Surface the degradation rather
+        // than silently falling back to a job-level-only match (which would hide a
+        // location-only assignee and wrongly show a split job's stale applicator). Skip
+        // the partial result and tell the user (review #36 LOW 2). An empty array (the
+        // applicator legitimately has zero jobs) is fine and renders "No jobs".
+        if (rpcErr || rpcRows === null) {
+          Sentry.captureException(rpcErr ?? new Error('get_dispatch_board_jobs returned no data'), { tags: { source: 'fetch', action: 'dispatch_board_jobs' } });
+          toast('error', 'Dispatch filter may be incomplete — please retry.');
+          setJobs([]);
+          setLoading(false);
+          return;
         }
-        if (anyIds === null) {
-          Sentry.captureException(new Error('dispatch_any_job_ids read failed'), { tags: { source: 'fetch', action: 'dispatch_any_job_ids' } });
-        } else {
-          anyDispatchedJobIds = anyIds;
-        }
+        filteredJobsData = assertRpcResult<Record<string, unknown>[]>(rpcRows, 'get_dispatch_board_jobs');
       }
 
-      let jobsQuery = supabase
+      // The unfiltered (no applicator) path keeps the direct jobs query; the filtered
+      // path uses the RPC rows above. Both share the SAME downstream shape.
+      const jobsQuery = supabase
         .from('jobs')
         .select(`
           *,
           customer:customers(farm_name),
           job_fields(id, field_id, acres_to_treat, sort_order, field:fields(id, field_name))
         `)
-        .is('deleted_at', null);
-      if (filters.status !== 'all') jobsQuery = jobsQuery.eq('status', filters.status);
-      if (filters.applicatorId) {
-        // (b) job-level branch: applicator_id = X, excluding jobs that have ANY
-        //     per-location dispatch (those show per-location assignees, not the
-        //     legacy job-level one). NOT-IN an empty list is a no-op, so guard it.
-        const jobLevelBranch = anyDispatchedJobIds.length > 0
-          ? `and(applicator_id.eq.${filters.applicatorId},id.not.in.(${anyDispatchedJobIds.join(',')}))`
-          : `applicator_id.eq.${filters.applicatorId}`;
-        jobsQuery = locDispatchJobIds.length > 0
-          ? jobsQuery.or(`id.in.(${locDispatchJobIds.join(',')}),${jobLevelBranch}`)
-          // no per-location dispatch to this applicator → just the (b) branch.
-          : jobsQuery.or(jobLevelBranch);
-      }
-      if (filters.startDate) jobsQuery = jobsQuery.gte('job_date', filters.startDate);
-      if (filters.endDate) jobsQuery = jobsQuery.lte('job_date', filters.endDate);
-      jobsQuery = jobsQuery.order('job_date', { ascending: false, nullsFirst: false }).limit(500);
+        .is('deleted_at', null)
+        .order('job_date', { ascending: false, nullsFirst: false })
+        .limit(500);
+      const scopedJobsQuery = (() => {
+        let q = jobsQuery;
+        if (filters.status !== 'all') q = q.eq('status', filters.status);
+        if (filters.startDate) q = q.gte('job_date', filters.startDate);
+        if (filters.endDate) q = q.lte('job_date', filters.endDate);
+        return q;
+      })();
 
       const [jobsRes, applicatorsRes, recipesRes, crewsRes] = await Promise.all([
-        jobsQuery,
+        // When an applicator filter is active, the RPC already returned the rows; resolve
+        // immediately so the rest of the load (names/crews/recipes) still runs in parallel.
+        filteredJobsData !== null
+          ? Promise.resolve({ data: filteredJobsData, error: null })
+          : scopedJobsQuery,
         supabase
           .from('profile_public_view')
           .select('id, full_name, role')
@@ -252,43 +230,56 @@ export default function DispatchBoard() {
         crewNameMap[c.id] = c.name;
       });
 
-      // Per-location dispatch rows for the visible jobs (#36). Scoped to the job
-      // ids we loaded so the row's 'Assigned To' can AGGREGATE every distinct
-      // per-location assignee (a job split between two applicators shows BOTH).
-      const jobIds = (jobsRes.data || []).map((j: Record<string, unknown>) => j.id as string);
+      // Per-location dispatch rows for the visible jobs (#36), so the row's 'Assigned To'
+      // can AGGREGATE every distinct per-location assignee (a job split between two
+      // applicators shows BOTH).
       const dispatchesByJob: Record<string, string[]> = {};
       // Per-job set of applicator ids dispatched at the location level — feeds the
       // client-side Applicator filter so a job whose only Bob-link is a per-location
       // dispatch still matches a "Bob" filter (Codex #36 P2).
       const dispatchApplicatorIdsByJob: Record<string, string[]> = {};
-      if (jobIds.length > 0) {
-        // Paginate (#36 P2): up to 500 jobs each with multiple locations can exceed
-        // the API row cap, so page via .range() until a short page ends the scan;
-        // an error aborts the aggregation (best-effort — the row still renders, just
-        // without per-location assignees).
-        for (let from = 0; ; from += DISPATCH_PAGE) {
-          const dispatchRes = await supabase
-            .from('job_location_dispatches')
-            .select('job_id, applicator_id, crew_id')
-            .in('job_id', jobIds)
-            .eq('dispatch_status', 'dispatched')
-            .range(from, from + DISPATCH_PAGE - 1);
-          if (dispatchRes.error) {
-            Sentry.captureException(dispatchRes.error, { tags: { source: 'fetch', action: 'dispatch_location_rows' } });
-            break;
+      const ingestDispatchRow = (jobId: string, applicatorId: string | null, crewId: string | null) => {
+        if (applicatorId) (dispatchApplicatorIdsByJob[jobId] ||= []).push(applicatorId);
+        const name = applicatorId
+          ? applicatorNameMap[applicatorId]
+          : crewId
+            ? crewNameMap[crewId]
+            : null;
+        if (!name) return;
+        (dispatchesByJob[jobId] ||= []).push(name);
+      };
+
+      if (filteredJobsData !== null) {
+        // FILTERED path: the RPC embedded `_dispatches` (the per-location rows the caller
+        // can see) on each job, so we aggregate WITHOUT a second round-trip — and without
+        // a `job_id=in.(<up to 500 ids>)` URL (review #36 MED).
+        for (const j of filteredJobsData) {
+          const ds = (j._dispatches as Array<{ applicator_id: string | null; crew_id: string | null }>) || [];
+          for (const d of ds) ingestDispatchRow(j.id as string, d.applicator_id, d.crew_id);
+        }
+      } else {
+        // UNFILTERED path: page the per-location dispatch rows for the visible jobs.
+        const jobIds = (jobsRes.data || []).map((j: Record<string, unknown>) => j.id as string);
+        if (jobIds.length > 0) {
+          // Paginate (#36 P2): up to 500 jobs each with multiple locations can exceed the
+          // API row cap, so page via .range() until a short page ends the scan; an error
+          // aborts the aggregation (best-effort — the row still renders, just without
+          // per-location assignees).
+          for (let from = 0; ; from += DISPATCH_PAGE) {
+            const dispatchRes = await supabase
+              .from('job_location_dispatches')
+              .select('job_id, applicator_id, crew_id')
+              .in('job_id', jobIds)
+              .eq('dispatch_status', 'dispatched')
+              .range(from, from + DISPATCH_PAGE - 1);
+            if (dispatchRes.error) {
+              Sentry.captureException(dispatchRes.error, { tags: { source: 'fetch', action: 'dispatch_location_rows' } });
+              break;
+            }
+            const rows = (dispatchRes.data || []) as Array<{ job_id: string; applicator_id: string | null; crew_id: string | null }>;
+            for (const d of rows) ingestDispatchRow(d.job_id, d.applicator_id, d.crew_id);
+            if (rows.length < DISPATCH_PAGE) break;
           }
-          const rows = (dispatchRes.data || []) as Array<{ job_id: string; applicator_id: string | null; crew_id: string | null }>;
-          for (const d of rows) {
-            if (d.applicator_id) (dispatchApplicatorIdsByJob[d.job_id] ||= []).push(d.applicator_id);
-            const name = d.applicator_id
-              ? applicatorNameMap[d.applicator_id]
-              : d.crew_id
-                ? crewNameMap[d.crew_id]
-                : null;
-            if (!name) continue;
-            (dispatchesByJob[d.job_id] ||= []).push(name);
-          }
-          if (rows.length < DISPATCH_PAGE) break;
         }
       }
 
@@ -417,35 +408,6 @@ export default function DispatchBoard() {
   const patchFilter = useCallback(<K extends keyof DispatchFilters>(key: K, value: DispatchFilters[K]) => {
     setFilters((prev) => ({ ...prev, [key]: value }));
   }, []);
-
-  async function handleAssign(jobId: string, applicatorId: string, licenseOverride = false) {
-    assignIdem.resetKey();
-    try {
-      const { data, error } = await supabase.rpc('assign_job_applicator', {
-        p_job_id: jobId,
-        p_applicator_id: applicatorId || undefined,
-        p_license_override: licenseOverride,
-        p_performed_by: profile?.id ?? undefined,
-        p_idempotency_key: assignIdem.getKey(),
-      });
-      if (error) throw error;
-      assertRpcResult(data, 'assign_job_applicator');
-      assignIdem.resetKey();
-      toast('success', licenseOverride ? 'Applicator assigned (license override)' : 'Applicator assigned');
-      fetchData();
-    } catch (err) {
-      if (hasRpcCode(err, RpcErrorCodes.LICENSE_EXPIRED)) {
-        if (profile?.role === 'admin') {
-          setLicenseOverridePrompt({ jobId, applicatorId });
-        } else {
-          toast('error', "This applicator's license has expired — an admin can override if needed.");
-        }
-        return;
-      }
-      Sentry.captureException(err, { tags: { source: 'action', action: 'assign_applicator' } });
-      toast('error', 'Failed to assign applicator. Please try again.');
-    }
-  }
 
   const filtersActive = hasActiveDispatchFilter(filters);
   const activeRecipeName = filters.recipeId
@@ -849,23 +811,6 @@ export default function DispatchBoard() {
           </div>
         </div>
       )}
-
-      {/* License-override confirm (admin only) */}
-      <ConfirmModal
-        open={licenseOverridePrompt !== null}
-        onClose={() => setLicenseOverridePrompt(null)}
-        onConfirm={() => {
-          if (licenseOverridePrompt) {
-            const { jobId, applicatorId } = licenseOverridePrompt;
-            setLicenseOverridePrompt(null);
-            handleAssign(jobId, applicatorId, true);
-          }
-        }}
-        title="Applicator License Expired"
-        message="This applicator's license has expired. Assign them to this job anyway? The override is recorded in the activity log."
-        confirmLabel="Assign Anyway"
-        variant="warning"
-      />
 
       {/* Per-location dispatch wizard (#36) — 3 steps: Select / Assign / Finish. */}
       <DispatchWizard

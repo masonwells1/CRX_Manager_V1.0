@@ -8616,6 +8616,15 @@ export type Database = {
         Args: { p_as_of_date: string; p_customer_id: string; p_mode?: string }
         Returns: Json
       }
+      get_dispatch_board_jobs: {
+        Args: {
+          p_applicator_id: string
+          p_status?: string
+          p_start_date?: string
+          p_end_date?: string
+        }
+        Returns: Json[]
+      }
       get_expiring_planned_holds: {
         Args: { p_days_ahead?: number; p_idempotency_key?: string }
         Returns: Json

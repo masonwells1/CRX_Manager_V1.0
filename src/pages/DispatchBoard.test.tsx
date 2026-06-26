@@ -33,9 +33,6 @@ vi.mock('../contexts/AuthContext', () => ({
 }));
 
 vi.mock('../hooks/usePageMeta', () => ({ usePageMeta: vi.fn() }));
-vi.mock('../hooks/useIdempotencyKey', () => ({
-  useIdempotencyKey: () => ({ getKey: () => 'idem-key', resetKey: vi.fn() }),
-}));
 // Stable toast object — a fresh { toast } each render would change fetchData's
 // identity every render and re-fire its effect forever (skeleton never clears).
 const { stableToast } = vi.hoisted(() => ({ stableToast: { toast: () => {} } }));
@@ -133,11 +130,11 @@ vi.mock('../lib/db', () => {
   return {
     supabase: {
       from: (table: string) => makeChain(dataForTable(table)),
-      rpc: vi.fn().mockResolvedValue({ data: null, error: null }),
+      // No applicator filter is set in these tests, so get_dispatch_board_jobs is
+      // never called; a benign default keeps the mock total.
+      rpc: vi.fn().mockResolvedValue({ data: [], error: null }),
     },
-    assertRpcResult: vi.fn(),
-    hasRpcCode: () => false,
-    RpcErrorCodes: { LICENSE_EXPIRED: 'LICENSE_EXPIRED' },
+    assertRpcResult: (data: unknown) => data,
   };
 });
 
