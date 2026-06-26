@@ -52,7 +52,7 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, assertRpcResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
 import ConfirmModal from '../components/ui/ConfirmModal';
-import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
+import { generateIdempotencyKey } from '../lib/idempotency';
 import type { Json } from '../types/supabase';
 import { Sentry } from '../lib/sentry';
 import {
@@ -893,8 +893,58 @@ interface DispatchedListProps {
  */
 function DispatchedList({ applicators, crews, performedBy, canDispatch, isAdmin, onChanged }: DispatchedListProps) {
   const { toast } = useToast();
-  const reassignIdem = useIdempotencyKey('dispatch_job_locations', performedBy);
-  const undispatchIdem = useIdempotencyKey('undispatch_job_locations', performedBy);
+  // PER-ROW idempotency keys (NOT one component-scoped key shared across rows).
+  // A single shared key let a generic-but-committed error on row A leave a stale
+  // key that the NEXT action on a DIFFERENT row B reused → the server replayed
+  // row A's cached result and the UI showed a FALSE success on row B (Codex #37
+  // final-5 MED). The cache key scopes the idempotency key to the full ACTION
+  // INTENT, so a stale key can only ever replay for the IDENTICAL intent (a true
+  // retry), never a changed one:
+  //   - reassign: (job_field_id : assignee-choice : license-override). Scoping by
+  //     job_field_id ALONE was insufficient — if a committed-but-errored reassign of
+  //     a row to applicator X left its key, then the dispatcher changed THE SAME ROW
+  //     to a different assignee Y and saved, the server replayed the X result and the
+  //     UI showed a false success while Y was never applied (Codex #37 final-6 MED).
+  //     Including the chosen assignee + override means a changed intent mints a NEW
+  //     key (the server runs it) while an unchanged retry reuses the SAME key (safe
+  //     idempotent replay).
+  //   - undispatch: (job_field_id) — undispatch has no payload beyond the row, so the
+  //     row IS the whole intent.
+  // Mirrors the established per-(actor:entity) ref-cache pattern (FieldInvoicesUnposted
+  // postKeysRef / Rebates transitionKeysRef, which keys by `${claimId}:${newStatus}`).
+  const reassignKeysRef = useRef<Map<string, string>>(new Map());
+  const undispatchKeysRef = useRef<Map<string, string>>(new Map());
+  // The scope of the write CURRENTLY in flight (or null). On a reload, fetchRows() clears
+  // EVERY cached key EXCEPT this one — the only key that legitimately must survive a reload
+  // is the outstanding write's, for its own post-commit-error retry; every other cached key
+  // is from a prior resolved action and may be stale against the new dispatch generation
+  // (Codex #37 final-7/8/9 P2). A ref (not state) keeps fetchRows' identity stable so
+  // busy-ness changes don't re-fire its effect.
+  const activeScopeRef = useRef<{ kind: 'reassign' | 'undispatch'; scope: string } | null>(null);
+
+  /** Build the intent-scoped cache key for a reassign (row + chosen assignee + override). */
+  const reassignScope = (jobFieldId: string, choice: string, licenseOverride: boolean) =>
+    `${jobFieldId}|${choice}|${licenseOverride ? 'ovr' : 'noovr'}`;
+
+  /** Get (or mint once) the reassign idempotency key for a specific row+intent. */
+  const getReassignKey = useCallback((scope: string): string => {
+    let key = reassignKeysRef.current.get(scope);
+    if (!key) {
+      key = generateIdempotencyKey('dispatch_job_locations', `${performedBy}:${scope}`);
+      reassignKeysRef.current.set(scope, key);
+    }
+    return key;
+  }, [performedBy]);
+
+  /** Get (or mint once) the undispatch key for a specific row. */
+  const getUndispatchKey = useCallback((jobFieldId: string): string => {
+    let key = undispatchKeysRef.current.get(jobFieldId);
+    if (!key) {
+      key = generateIdempotencyKey('undispatch_job_locations', `${performedBy}:${jobFieldId}`);
+      undispatchKeysRef.current.set(jobFieldId, key);
+    }
+    return key;
+  }, [performedBy]);
 
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<DispatchedListRow[]>([]);
@@ -909,6 +959,24 @@ function DispatchedList({ applicators, crews, performedBy, canDispatch, isAdmin,
   const [licensePrompt, setLicensePrompt] = useState<DispatchedListRow | null>(null);
 
   const fetchRows = useCallback(async () => {
+    // Discard cached idempotency keys whenever the list reloads — EXCEPT the one write
+    // currently in flight (if any). Once the rows are re-read, a location's dispatch
+    // "generation" (and the correct result of any action on it) may have changed —
+    // undispatched-and-re-dispatched, reassigned by another dispatcher, etc. A key minted
+    // against the OLD generation must never be replayed against the new one (it would
+    // return the stale cached result and falsely report success — Codex #37 final-7,
+    // covering reassign-back-to-an-old-assignee AND undispatch-across-re-dispatch). The
+    // ONLY key that must survive a reload is the outstanding write's, for its own
+    // post-commit-error retry (a mid-write Reload/filter-change must not drop it and cause
+    // a double-execute — Codex #37 final-8); preserving that single active scope rather
+    // than the whole cache closes the "preserved a DIFFERENT stale key" gap (final-9).
+    const active = activeScopeRef.current;
+    const keepReassign = active?.kind === 'reassign' ? reassignKeysRef.current.get(active.scope) : undefined;
+    const keepUndispatch = active?.kind === 'undispatch' ? undispatchKeysRef.current.get(active.scope) : undefined;
+    reassignKeysRef.current.clear();
+    undispatchKeysRef.current.clear();
+    if (active?.kind === 'reassign' && keepReassign) reassignKeysRef.current.set(active.scope, keepReassign);
+    if (active?.kind === 'undispatch' && keepUndispatch) undispatchKeysRef.current.set(active.scope, keepUndispatch);
     setLoading(true);
     try {
       // Push the assignee filter to the SERVER (p_applicator_id / p_crew_id) AND page
@@ -950,12 +1018,12 @@ function DispatchedList({ applicators, crews, performedBy, canDispatch, isAdmin,
   // stale-while-refetch).
   const visibleRows = useMemo(() => filterDispatchedRows(rows, filter), [rows, filter]);
   const filterActive = hasActiveDispatchedFilter(filter);
-  // TRUE while ANY reassign/undispatch RPC is in flight. The reassign/undispatch
-  // idempotency keys are component-scoped (shared across rows), so two overlapping row
-  // actions would send the SAME key and the second could be deduped as a replay of the
-  // first — the UI would report success without changing the second row (Codex #37
-  // final-4 P2). Serialize: disable EVERY row's actions (not just the acting row's)
-  // while one is pending, so only one RPC is ever outstanding per key.
+  // TRUE while ANY reassign/undispatch RPC is in flight. Idempotency keys are now
+  // PER-ROW (keyed by job_field_id), so a cross-row replay can no longer produce a
+  // false success (Codex #37 final-5 MED — the prior shared-key bug). We still
+  // serialize all row actions while one is pending — it keeps the UI predictable
+  // (one outstanding write at a time) and avoids overlapping refetch races; it is
+  // no longer the thing preventing the cross-row replay.
   const actionPending = busyId !== null;
 
   // The filter <select> value mirrors whichever assignee is set (applicator XOR crew).
@@ -974,7 +1042,14 @@ function DispatchedList({ applicators, crews, performedBy, canDispatch, isAdmin,
   async function doReassign(row: DispatchedListRow, choice: string, licenseOverride = false) {
     const [kind, id] = choice.split(':');
     if (!kind || !id) return;
+    // Idempotency key scoped to the FULL intent (row + chosen assignee + override) so a
+    // stale key from a committed-but-errored attempt can only replay the IDENTICAL intent,
+    // never a changed assignee on the same row (Codex #37 final-6 MED).
+    const scope = reassignScope(row.job_field_id, choice, licenseOverride);
     setBusyId(row.job_field_id);
+    // Mark THIS scope in flight so a concurrent fetchRows() (Reload / filter change)
+    // preserves only this key, not a stale one (Codex #37 final-8/9). Cleared when the RPC resolves.
+    activeScopeRef.current = { kind: 'reassign', scope };
     try {
       const payload = [{
         job_field_id: row.job_field_id,
@@ -984,20 +1059,25 @@ function DispatchedList({ applicators, crews, performedBy, canDispatch, isAdmin,
       const { data, error } = await supabase.rpc('dispatch_job_locations', {
         p_assignments: payload as unknown as Json,
         p_performed_by: performedBy,
-        p_idempotency_key: reassignIdem.getKey(),
+        p_idempotency_key: getReassignKey(scope),
         p_license_override: licenseOverride,
       });
+      activeScopeRef.current = null; // RPC resolved — no longer in flight
       if (error) throw error;
       assertRpcResult<{ dispatched: number }>(data, 'dispatch_job_locations');
-      reassignIdem.resetKey();
+      reassignKeysRef.current.delete(scope); // confirmed success → next reassign of this intent is a new action
       toast('success', `Reassigned ${row.field_name || 'location'}${licenseOverride ? ' (license override)' : ''}`);
       setReassignFor(null);
       setReassignChoice('');
       await fetchRows();
       onChanged(); // keep the job-row 'Assigned To' on the board in sync (criterion #4/#5)
     } catch (err) {
+      activeScopeRef.current = null; // RPC rejected (network) — no longer in flight; key kept for retry
       if (hasRpcCode(err, RpcErrorCodes.LICENSE_EXPIRED)) {
-        reassignIdem.resetKey();
+        // The override retry is a DIFFERENT intent (licenseOverride flips true), so it
+        // already maps to a DIFFERENT scope/key — no stale-key reuse. Drop this
+        // (non-override) intent's key so it can't linger.
+        reassignKeysRef.current.delete(scope);
         if (isAdmin) {
           setReassignFor(null);
           setLicensePrompt(row);
@@ -1015,15 +1095,18 @@ function DispatchedList({ applicators, crews, performedBy, canDispatch, isAdmin,
 
   async function doUndispatch(row: DispatchedListRow) {
     setBusyId(row.job_field_id);
+    // In flight → a concurrent fetchRows() preserves only THIS key (Codex #37 final-8/9).
+    activeScopeRef.current = { kind: 'undispatch', scope: row.job_field_id };
     try {
       const { data, error } = await supabase.rpc('undispatch_job_locations', {
         p_job_field_ids: [row.job_field_id],
         p_performed_by: performedBy,
-        p_idempotency_key: undispatchIdem.getKey(),
+        p_idempotency_key: getUndispatchKey(row.job_field_id),
       });
+      activeScopeRef.current = null; // RPC resolved — no longer in flight
       if (error) throw error;
       const res = assertRpcResult<{ undispatched: number }>(data, 'undispatch_job_locations');
-      undispatchIdem.resetKey();
+      undispatchKeysRef.current.delete(row.job_field_id); // confirmed success → clear this row's key
       // The RPC returns {undispatched:0} (not an error) when the row was already gone —
       // another dispatcher beat us to it, or the job left the dispatchable window. Don't
       // claim success in that case; tell the user nothing changed and refresh so the
@@ -1037,6 +1120,7 @@ function DispatchedList({ applicators, crews, performedBy, canDispatch, isAdmin,
       await fetchRows();
       onChanged(); // the job-row 'Assigned To' label drops this assignee (criterion #4)
     } catch (err) {
+      activeScopeRef.current = null; // RPC rejected (network) — no longer in flight; key kept for retry
       Sentry.captureException(err, { tags: { source: 'action', action: 'undispatch_job_locations' } });
       toast('error', 'Failed to undispatch. Please try again.');
     }
