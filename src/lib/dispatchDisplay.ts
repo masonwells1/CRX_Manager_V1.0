@@ -152,6 +152,67 @@ export function selectDispatchView<T extends DispatchSelectableJob>(
   });
 }
 
+/**
+ * One row of the "Dispatched List" (#37) — a single CURRENTLY-dispatched location,
+ * as returned by the `get_dispatched_list` RPC (assignee name resolved server-side).
+ * Acres are display-only (the location's acres_to_treat + the job's applied/total).
+ */
+export interface DispatchedListRow {
+  dispatch_id: string;
+  job_field_id: string;
+  job_id: string;
+  job_number: string;
+  /** The job lifecycle status (scheduled/in_progress/...) — drives the row badge. */
+  job_status: string;
+  dispatch_status: string;
+  assignee_kind: 'applicator' | 'crew';
+  applicator_id: string | null;
+  crew_id: string | null;
+  /** Resolved server-side (profiles.full_name / ground_crews.name); never a client embed. */
+  assignee_name: string | null;
+  field_name: string | null;
+  customer_name: string | null;
+  location_acres: number | null;
+  job_applied_acres: number | null;
+  job_total_acres: number | null;
+}
+
+/** The assignee filter for the Dispatched List — at most one of applicator/crew. */
+export interface DispatchedAssigneeFilter {
+  applicatorId: string;
+  crewId: string;
+}
+
+export const emptyDispatchedAssigneeFilter: DispatchedAssigneeFilter = {
+  applicatorId: '',
+  crewId: '',
+};
+
+/**
+ * Apply the assignee filter to the dispatched-list rows (criterion #3). The server
+ * RPC can already narrow by assignee, but we ALSO filter client-side so the toggle
+ * is instant and the result is consistent whether the rows were fetched filtered or
+ * unfiltered. An empty filter returns every row. Only ONE of applicator/crew is ever
+ * set (the picker is single-select); if both were somehow set, a row must match both.
+ */
+export function filterDispatchedRows(
+  rows: DispatchedListRow[],
+  filter: DispatchedAssigneeFilter
+): DispatchedListRow[] {
+  const { applicatorId, crewId } = filter;
+  if (!applicatorId && !crewId) return rows;
+  return rows.filter((r) => {
+    if (applicatorId && r.applicator_id !== applicatorId) return false;
+    if (crewId && r.crew_id !== crewId) return false;
+    return true;
+  });
+}
+
+/** True when the Dispatched List assignee filter is active. */
+export function hasActiveDispatchedFilter(filter: DispatchedAssigneeFilter): boolean {
+  return filter.applicatorId !== '' || filter.crewId !== '';
+}
+
 /** True when any filter is active (drives the "filters active" hint + Clear). */
 export function hasActiveDispatchFilter(filters: DispatchFilters): boolean {
   return (

@@ -37,6 +37,10 @@ import {
   Search,
   X,
   Truck,
+  RotateCcw,
+  UserMinus,
+  Loader2,
+  MapPin,
 } from 'lucide-react';
 import type { MapRef } from 'react-map-gl/mapbox';
 import CRXMap from '../components/map/CRXMap';
@@ -46,7 +50,10 @@ import DispatchWizard from '../components/dispatch/DispatchWizard';
 import { usePageMeta } from '../hooks/usePageMeta';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, assertRpcResult } from '../lib/db';
+import { supabase, assertRpcResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
+import ConfirmModal from '../components/ui/ConfirmModal';
+import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
+import type { Json } from '../types/supabase';
 import { Sentry } from '../lib/sentry';
 import {
   formatAppliedOfTotal,
@@ -54,8 +61,13 @@ import {
   selectDispatchView,
   hasActiveDispatchFilter,
   emptyDispatchFilters,
+  filterDispatchedRows,
+  hasActiveDispatchedFilter,
+  emptyDispatchedAssigneeFilter,
   type DispatchFilters,
   type DispatchView,
+  type DispatchedListRow,
+  type DispatchedAssigneeFilter,
 } from '../lib/dispatchDisplay';
 import { aggregateAssignedTo, type DispatchLocation } from '../lib/dispatchWizard';
 import type { Job, Profile, Field } from '../types';
@@ -481,7 +493,12 @@ export default function DispatchBoard() {
               {section === 'dispatched' && <><ClipboardList className="w-5 h-5 text-crx-green" /> Dispatched List</>}
             </h1>
 
-            {/* Quick search (part of the shared filter) */}
+            {/* Quick search + Options drive the JOB filters (map/list/dispatch sections).
+                The Dispatched List (#37) has its OWN assignee filter and does NOT consume
+                these job filters, so showing them there is misleading (the chips would mark
+                a filter active while the dispatched rows never change — Codex #37 final-3
+                P2). Hide all job-filter controls on the dispatched section. */}
+            {section !== 'dispatched' && (
             <div className="relative flex-1 max-w-sm hidden sm:block">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
               <input
@@ -492,7 +509,9 @@ export default function DispatchBoard() {
                 className="w-full pl-9 pr-3 py-2.5 rounded-lg bg-slate-800 border border-slate-700 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-crx-green/40 focus:border-crx-green"
               />
             </div>
+            )}
 
+            {section !== 'dispatched' && (
             <div className="ml-auto flex items-center gap-2">
               {filtersActive && (
                 <button
@@ -580,10 +599,11 @@ export default function DispatchBoard() {
                 )}
               </div>
             </div>
+            )}
           </div>
 
-          {/* Active-filter chips */}
-          {filtersActive && (
+          {/* Active-filter chips (job filters — not shown on the dispatched section) */}
+          {section !== 'dispatched' && filtersActive && (
             <div className="flex flex-wrap items-center gap-2 px-4 py-2 bg-slate-900/40 border-b border-slate-800 text-xs">
               <span className="text-slate-500">Filters:</span>
               {filters.status !== 'all' && <FilterChip label={`Status: ${filters.status}`} onClear={() => patchFilter('status', 'all')} />}
@@ -603,7 +623,14 @@ export default function DispatchBoard() {
                 ))}
               </div>
             ) : section === 'dispatched' ? (
-              <DispatchedListPlaceholder />
+              <DispatchedList
+                applicators={applicatorOnly}
+                crews={crews}
+                performedBy={profile?.id || ''}
+                canDispatch={canDispatch}
+                isAdmin={profile?.role === 'admin'}
+                onChanged={fetchData}
+              />
             ) : (
               <>
                 {/* MAP VIEW — kept MOUNTED and toggled with CSS (`hidden`) rather than
@@ -839,23 +866,417 @@ function FilterChip({ label, onClear }: { label: string; onClear: () => void }) 
   );
 }
 
+interface DispatchedListProps {
+  applicators: Pick<Profile, 'id' | 'full_name' | 'role'>[];
+  crews: { id: string; name: string }[];
+  performedBy: string;
+  /** Only dispatchers (admin/sales_rep) get the reassign/undispatch controls. */
+  canDispatch: boolean;
+  /** Admins may override an expired-license reassign (mirrors the dispatch wizard). */
+  isAdmin: boolean;
+  /** Re-fetch the board after a change so the job-row 'Assigned To' label stays in sync. */
+  onChanged: () => void;
+}
+
 /**
- * 'View Dispatched List' placeholder. The full dispatched-list view (per-location
- * dispatch records, crew assignment, status) is section #37. This is a deliberate
- * stub that names the future feature so the nav entry is real today.
+ * 'View Dispatched List' (#37) — a tracker of every CURRENTLY-dispatched location:
+ * who it went to (assignee name), the job#/field identity, the status, and
+ * applied-of-total acres for progress. A dispatcher can filter by assignee and, per
+ * row, REASSIGN the location to a different applicator/crew (upsert via
+ * dispatch_job_locations) or UNDISPATCH it (cancel via undispatch_job_locations).
+ * After either action the list AND the parent board re-fetch so the job-row
+ * 'Assigned To' label updates in lock-step (criteria #4/#5).
+ *
+ * The rows come from the get_dispatched_list RPC, which resolves assignee names
+ * server-side and is RLS-gated — so NO client-side unbounded id-list (the board's
+ * URL caps ~19KB; a 500-uuid id.in list already fails the gateway — #36 lesson).
  */
-function DispatchedListPlaceholder() {
-  return (
-    <div className="p-6 flex items-center justify-center h-[calc(100vh-12rem)]">
-      <div className="max-w-md text-center rounded-2xl border border-dashed border-slate-700 bg-slate-900/50 p-10">
-        <ClipboardList className="w-10 h-10 text-slate-600 mx-auto mb-4" />
-        <h2 className="text-base font-semibold text-slate-200">Dispatched List</h2>
-        <p className="mt-2 text-sm text-slate-500">
-          The per-location dispatched-jobs list lands in a later build (dispatch section #37).
-          For now, assign applicators from <span className="text-slate-300">Dispatch Jobs</span>;
-          assigned jobs show their <span className="text-slate-300">Assigned To</span> name in the list.
-        </p>
+function DispatchedList({ applicators, crews, performedBy, canDispatch, isAdmin, onChanged }: DispatchedListProps) {
+  const { toast } = useToast();
+  const reassignIdem = useIdempotencyKey('dispatch_job_locations', performedBy);
+  const undispatchIdem = useIdempotencyKey('undispatch_job_locations', performedBy);
+
+  const [loading, setLoading] = useState(true);
+  const [rows, setRows] = useState<DispatchedListRow[]>([]);
+  const [filter, setFilter] = useState<DispatchedAssigneeFilter>(emptyDispatchedAssigneeFilter);
+  // The row currently being reassigned (its job_field_id) + the chosen assignee.
+  const [reassignFor, setReassignFor] = useState<DispatchedListRow | null>(null);
+  const [reassignChoice, setReassignChoice] = useState('');
+  // The row pending undispatch confirmation.
+  const [undispatchFor, setUndispatchFor] = useState<DispatchedListRow | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  // License-override prompt for a reassign blocked by LICENSE_EXPIRED (admin only).
+  const [licensePrompt, setLicensePrompt] = useState<DispatchedListRow | null>(null);
+
+  const fetchRows = useCallback(async () => {
+    setLoading(true);
+    try {
+      // Push the assignee filter to the SERVER (p_applicator_id / p_crew_id) AND page
+      // the SETOF result — never rely on one unbounded unfiltered load. At scale (more
+      // current dispatches than the PostgREST single-response cap) a single unfiltered
+      // call would only return the first page, and a client-side assignee filter could
+      // then wrongly show "no rows" for an assignee whose rows sit past that slice
+      // (Codex #37 P2 — same class as #36's id-list cap). Paging via .range() until a
+      // short page ends the scan keeps the whole filtered set in hand.
+      const all: DispatchedListRow[] = [];
+      for (let from = 0; ; from += DISPATCH_PAGE) {
+        const { data, error } = await supabase
+          .rpc('get_dispatched_list', {
+            p_applicator_id: filter.applicatorId || undefined,
+            p_crew_id: filter.crewId || undefined,
+          })
+          .range(from, from + DISPATCH_PAGE - 1);
+        if (error) throw error;
+        // A SETOF RPC returns [] when there are no (more) rows, not null; assertRpcResult
+        // only throws on a null/RLS-denied result (caught below → error toast).
+        const page = assertRpcResult<DispatchedListRow[]>(data, 'get_dispatched_list');
+        const rowsPage = Array.isArray(page) ? page : [];
+        all.push(...rowsPage);
+        if (rowsPage.length < DISPATCH_PAGE) break;
+      }
+      setRows(all);
+    } catch (err) {
+      Sentry.captureException(err, { tags: { source: 'fetch', action: 'get_dispatched_list' } });
+      toast('error', 'Failed to load the dispatched list');
+      setRows([]);
+    }
+    setLoading(false);
+  }, [toast, filter.applicatorId, filter.crewId]);
+
+  useEffect(() => { fetchRows(); }, [fetchRows]);
+
+  // The server already narrowed by assignee; this client filter is a belt-and-suspenders
+  // pass so the rendered set always matches the active filter (and stays instant on a
+  // stale-while-refetch).
+  const visibleRows = useMemo(() => filterDispatchedRows(rows, filter), [rows, filter]);
+  const filterActive = hasActiveDispatchedFilter(filter);
+  // TRUE while ANY reassign/undispatch RPC is in flight. The reassign/undispatch
+  // idempotency keys are component-scoped (shared across rows), so two overlapping row
+  // actions would send the SAME key and the second could be deduped as a replay of the
+  // first — the UI would report success without changing the second row (Codex #37
+  // final-4 P2). Serialize: disable EVERY row's actions (not just the acting row's)
+  // while one is pending, so only one RPC is ever outstanding per key.
+  const actionPending = busyId !== null;
+
+  // The filter <select> value mirrors whichever assignee is set (applicator XOR crew).
+  const filterValue = filter.applicatorId
+    ? `applicator:${filter.applicatorId}`
+    : filter.crewId
+      ? `crew:${filter.crewId}`
+      : '';
+
+  function onFilterChange(value: string) {
+    if (!value) { setFilter(emptyDispatchedAssigneeFilter); return; }
+    const [kind, id] = value.split(':');
+    setFilter(kind === 'applicator' ? { applicatorId: id, crewId: '' } : { applicatorId: '', crewId: id });
+  }
+
+  async function doReassign(row: DispatchedListRow, choice: string, licenseOverride = false) {
+    const [kind, id] = choice.split(':');
+    if (!kind || !id) return;
+    setBusyId(row.job_field_id);
+    try {
+      const payload = [{
+        job_field_id: row.job_field_id,
+        applicator_id: kind === 'applicator' ? id : null,
+        crew_id: kind === 'crew' ? id : null,
+      }];
+      const { data, error } = await supabase.rpc('dispatch_job_locations', {
+        p_assignments: payload as unknown as Json,
+        p_performed_by: performedBy,
+        p_idempotency_key: reassignIdem.getKey(),
+        p_license_override: licenseOverride,
+      });
+      if (error) throw error;
+      assertRpcResult<{ dispatched: number }>(data, 'dispatch_job_locations');
+      reassignIdem.resetKey();
+      toast('success', `Reassigned ${row.field_name || 'location'}${licenseOverride ? ' (license override)' : ''}`);
+      setReassignFor(null);
+      setReassignChoice('');
+      await fetchRows();
+      onChanged(); // keep the job-row 'Assigned To' on the board in sync (criterion #4/#5)
+    } catch (err) {
+      if (hasRpcCode(err, RpcErrorCodes.LICENSE_EXPIRED)) {
+        reassignIdem.resetKey();
+        if (isAdmin) {
+          setReassignFor(null);
+          setLicensePrompt(row);
+        } else {
+          toast('error', "An applicator's license has expired — an admin can override if needed.");
+        }
+        setBusyId(null);
+        return;
+      }
+      Sentry.captureException(err, { tags: { source: 'action', action: 'dispatch_job_locations_reassign' } });
+      toast('error', 'Failed to reassign. Please try again.');
+    }
+    setBusyId(null);
+  }
+
+  async function doUndispatch(row: DispatchedListRow) {
+    setBusyId(row.job_field_id);
+    try {
+      const { data, error } = await supabase.rpc('undispatch_job_locations', {
+        p_job_field_ids: [row.job_field_id],
+        p_performed_by: performedBy,
+        p_idempotency_key: undispatchIdem.getKey(),
+      });
+      if (error) throw error;
+      const res = assertRpcResult<{ undispatched: number }>(data, 'undispatch_job_locations');
+      undispatchIdem.resetKey();
+      // The RPC returns {undispatched:0} (not an error) when the row was already gone —
+      // another dispatcher beat us to it, or the job left the dispatchable window. Don't
+      // claim success in that case; tell the user nothing changed and refresh so the
+      // stale row disappears (Codex #37 final-3 P3).
+      if (res.undispatched > 0) {
+        toast('success', `Undispatched ${row.field_name || 'location'}`);
+      } else {
+        toast('info', 'This location was already undispatched or its job is no longer active — list refreshed.');
+      }
+      setUndispatchFor(null);
+      await fetchRows();
+      onChanged(); // the job-row 'Assigned To' label drops this assignee (criterion #4)
+    } catch (err) {
+      Sentry.captureException(err, { tags: { source: 'action', action: 'undispatch_job_locations' } });
+      toast('error', 'Failed to undispatch. Please try again.');
+    }
+    setBusyId(null);
+  }
+
+  if (loading) {
+    return (
+      <div className="p-6 space-y-3">
+        {[1, 2, 3, 4].map((i) => (
+          <div key={i} className="h-20 rounded-xl bg-slate-800/60 animate-pulse" />
+        ))}
       </div>
+    );
+  }
+
+  return (
+    <div className="p-3 sm:p-4 space-y-3 overflow-y-auto h-[calc(100vh-12rem)]">
+      {/* Assignee filter (criterion #3) */}
+      <div className="flex flex-wrap items-center gap-3 rounded-xl border border-slate-800 bg-slate-900/60 px-4 py-3">
+        <label className="flex items-center gap-2 text-sm text-slate-300">
+          <Users className="w-4 h-4 text-crx-green" />
+          <span>Assignee</span>
+          <select
+            value={filterValue}
+            onChange={(e) => onFilterChange(e.target.value)}
+            className="rounded-lg bg-slate-800 border border-slate-700 px-3 py-2.5 text-sm text-slate-100 min-h-[44px] min-w-[180px] focus:outline-none focus:ring-2 focus:ring-crx-green/40"
+          >
+            <option value="">All assignees</option>
+            {applicators.length > 0 && (
+              <optgroup label="Applicators">
+                {applicators.map((a) => (
+                  <option key={a.id} value={`applicator:${a.id}`}>{a.full_name}</option>
+                ))}
+              </optgroup>
+            )}
+            {crews.length > 0 && (
+              <optgroup label="Crews">
+                {crews.map((c) => (
+                  <option key={c.id} value={`crew:${c.id}`}>{c.name}</option>
+                ))}
+              </optgroup>
+            )}
+          </select>
+        </label>
+        {filterActive && (
+          <button
+            onClick={() => setFilter(emptyDispatchedAssigneeFilter)}
+            className="inline-flex items-center gap-1 px-3 py-2 text-xs font-medium text-slate-300 hover:text-white rounded-lg hover:bg-slate-800"
+          >
+            <X className="w-3.5 h-3.5" /> Clear
+          </button>
+        )}
+        <span className="ml-auto text-xs text-slate-500">
+          {visibleRows.length} dispatched location{visibleRows.length === 1 ? '' : 's'}
+        </span>
+        <button
+          onClick={fetchRows}
+          className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-medium text-slate-100"
+        >
+          <RefreshCw className="w-3.5 h-3.5" /> Reload
+        </button>
+      </div>
+
+      {visibleRows.length === 0 ? (
+        <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-10 text-center">
+          <ClipboardList className="w-9 h-9 text-slate-600 mx-auto mb-3" />
+          <p className="text-slate-400">
+            {filterActive ? 'No dispatched locations for this assignee.' : 'Nothing dispatched yet.'}
+          </p>
+          <p className="mt-1 text-xs text-slate-500">Hand out field locations from <span className="text-slate-300">Dispatch Jobs</span>.</p>
+        </div>
+      ) : (
+        visibleRows.map((row) => {
+          const badge = jobStatusToDispatchBadge(row.job_status);
+          const isReassigning = reassignFor?.job_field_id === row.job_field_id;
+          // `busy` = THIS row's RPC is running (drives the spinner on its button).
+          // `busy` is also true when ANY action is pending, so every row's controls are
+          // disabled while one RPC is outstanding — preventing the shared-idempotency-key
+          // replay collision (Codex #37 final-4 P2).
+          const busy = busyId === row.job_field_id || actionPending;
+          // Only a job still in a DISPATCHABLE lifecycle state can be reassigned/undispatched:
+          // dispatch_job_locations enforces scheduled/in_progress (a reassign on a
+          // completed/cancelled/invoiced job would just fail JOB_NOT_DISPATCHABLE), and
+          // undispatching a row on a now-finished job would strip a historical assignment.
+          // So hide the controls unless the parent job is still scheduled/in_progress
+          // (Codex #37 P2).
+          const dispatchable = row.job_status === 'scheduled' || row.job_status === 'in_progress';
+          // The row's CURRENT assignee as a picker value — used to no-op a Save that
+          // didn't actually change the assignee (a same-assignee upsert would bump
+          // dispatched_at + write a spurious activity row — Codex #37 P3).
+          const currentAssigneeValue = row.applicator_id
+            ? `applicator:${row.applicator_id}`
+            : row.crew_id
+              ? `crew:${row.crew_id}`
+              : '';
+          return (
+            <div key={row.dispatch_id} className="rounded-xl border border-slate-800 bg-slate-900 p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-base font-semibold text-crx-green">{row.job_number}</span>
+                    <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold tracking-wide ${badge.className}`}>
+                      {badge.label}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-sm text-slate-200 font-medium truncate">{row.customer_name || 'Unknown'}</p>
+                  <p className="flex items-center gap-1.5 text-xs text-slate-500 truncate">
+                    <MapPin className="w-3.5 h-3.5" /> {row.field_name || 'Field'}
+                  </p>
+                </div>
+                <div className="text-right flex-shrink-0">
+                  {/* applied-of-total acres for job progress + this location's acres */}
+                  <p className="text-lg font-bold text-white tabular-nums">
+                    {formatAppliedOfTotal(row.job_applied_acres, row.job_total_acres)}
+                  </p>
+                  {row.location_acres != null && (
+                    <p className="text-xs text-slate-500 tabular-nums">{row.location_acres} ac this location</p>
+                  )}
+                </div>
+              </div>
+
+              {/* Assignee */}
+              <div className="mt-3 flex items-center gap-2 text-sm">
+                <Users className="w-4 h-4 text-crx-green" />
+                <span className="text-slate-400">Assigned To:</span>
+                <span className="font-semibold text-slate-100">{row.assignee_name || 'Unknown'}</span>
+                <span className="text-xs text-slate-500">({row.assignee_kind})</span>
+              </div>
+
+              {/* The job left the dispatchable window — reassign/undispatch no longer apply. */}
+              {canDispatch && !dispatchable && (
+                <p className="mt-3 text-xs text-slate-500">
+                  This job is {row.job_status} — it can no longer be reassigned or undispatched.
+                </p>
+              )}
+
+              {/* Reassign / Undispatch (dispatchers only, dispatchable jobs only) */}
+              {canDispatch && dispatchable && (
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  {isReassigning ? (
+                    <>
+                      <select
+                        value={reassignChoice}
+                        onChange={(e) => setReassignChoice(e.target.value)}
+                        disabled={busy}
+                        className="text-sm rounded-lg bg-slate-800 border border-slate-700 px-3 py-2.5 text-slate-100 min-h-[44px] min-w-[180px] focus:outline-none focus:ring-2 focus:ring-crx-green/40 disabled:opacity-50"
+                      >
+                        <option value="">Choose new assignee…</option>
+                        {applicators.length > 0 && (
+                          <optgroup label="Applicators">
+                            {applicators.map((a) => (
+                              <option key={a.id} value={`applicator:${a.id}`}>{a.full_name}</option>
+                            ))}
+                          </optgroup>
+                        )}
+                        {crews.length > 0 && (
+                          <optgroup label="Crews">
+                            {crews.map((c) => (
+                              <option key={c.id} value={`crew:${c.id}`}>{c.name}</option>
+                            ))}
+                          </optgroup>
+                        )}
+                      </select>
+                      <button
+                        onClick={() => doReassign(row, reassignChoice)}
+                        disabled={busy || !reassignChoice || reassignChoice === currentAssigneeValue}
+                        title={reassignChoice === currentAssigneeValue ? 'Pick a different assignee to reassign' : undefined}
+                        className="inline-flex items-center gap-1.5 px-3 py-2.5 rounded-lg bg-crx-green text-sm font-semibold text-white hover:bg-crx-green/90 disabled:opacity-40 disabled:cursor-not-allowed min-h-[44px]"
+                      >
+                        {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <RotateCcw className="w-4 h-4" />} Save
+                      </button>
+                      <button
+                        onClick={() => { setReassignFor(null); setReassignChoice(''); }}
+                        disabled={busy}
+                        className="inline-flex items-center gap-1.5 px-3 py-2.5 rounded-lg border border-slate-700 text-sm font-medium text-slate-200 hover:bg-slate-800 min-h-[44px] disabled:opacity-50"
+                      >
+                        Cancel
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        onClick={() => {
+                          setReassignFor(row);
+                          // Preselect the current assignee so a "change" is one click away.
+                          setReassignChoice(row.applicator_id ? `applicator:${row.applicator_id}` : row.crew_id ? `crew:${row.crew_id}` : '');
+                        }}
+                        disabled={busy}
+                        className="inline-flex items-center gap-1.5 px-3 py-2.5 rounded-lg bg-slate-800 border border-slate-700 text-sm font-medium text-slate-100 hover:bg-slate-700 min-h-[44px] disabled:opacity-50"
+                      >
+                        <RotateCcw className="w-4 h-4 text-crx-green" /> Reassign
+                      </button>
+                      <button
+                        onClick={() => setUndispatchFor(row)}
+                        disabled={busy}
+                        className="inline-flex items-center gap-1.5 px-3 py-2.5 rounded-lg bg-slate-800 border border-slate-700 text-sm font-medium text-rose-300 hover:bg-rose-500/10 hover:border-rose-500/40 min-h-[44px] disabled:opacity-50"
+                      >
+                        <UserMinus className="w-4 h-4" /> Undispatch
+                      </button>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })
+      )}
+
+      {/* Undispatch confirmation */}
+      <ConfirmModal
+        open={undispatchFor !== null}
+        onClose={() => setUndispatchFor(null)}
+        onConfirm={() => { if (undispatchFor) doUndispatch(undispatchFor); }}
+        title="Undispatch this location?"
+        message={
+          undispatchFor
+            ? `Remove "${undispatchFor.field_name || 'this location'}" (${undispatchFor.job_number}) from ${undispatchFor.assignee_name || 'its assignee'}. It leaves the dispatched list and the job's Assigned-To label updates. You can re-dispatch it later.`
+            : ''
+        }
+        confirmLabel="Undispatch"
+        variant="warning"
+        loading={busyId !== null && undispatchFor?.job_field_id === busyId}
+      />
+
+      {/* License-expired override for a reassign (admin only) */}
+      <ConfirmModal
+        open={licensePrompt !== null}
+        onClose={() => setLicensePrompt(null)}
+        onConfirm={() => {
+          const row = licensePrompt;
+          const choice = reassignChoice;
+          setLicensePrompt(null);
+          if (row) doReassign(row, choice, true);
+        }}
+        title="Applicator License Expired"
+        message="The chosen applicator has an expired license. Reassign anyway? The override is recorded."
+        confirmLabel="Reassign Anyway"
+        variant="warning"
+      />
     </div>
   );
 }

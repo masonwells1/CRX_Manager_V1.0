@@ -5,8 +5,13 @@ import {
   selectDispatchView,
   hasActiveDispatchFilter,
   emptyDispatchFilters,
+  filterDispatchedRows,
+  hasActiveDispatchedFilter,
+  emptyDispatchedAssigneeFilter,
   type DispatchFilters,
   type DispatchSelectableJob,
+  type DispatchedListRow,
+  type DispatchedAssigneeFilter,
 } from '../dispatchDisplay';
 
 describe('formatAppliedOfTotal', () => {
@@ -132,6 +137,65 @@ describe('selectDispatchView (shared filter)', () => {
     const f: DispatchFilters = { ...emptyDispatchFilters, recipeId: 'rec-9' };
     expect(selectDispatchView(withRecipe, f, 'list').map((j) => j.job_number)).toEqual(['R']);
   });
+});
+
+function mkDispatchedRow(over: Partial<DispatchedListRow>): DispatchedListRow {
+  return {
+    dispatch_id: 'd-1',
+    job_field_id: 'jf-1',
+    job_id: 'job-1',
+    job_number: 'JOB-1',
+    job_status: 'scheduled',
+    dispatch_status: 'dispatched',
+    assignee_kind: 'applicator',
+    applicator_id: 'app-1',
+    crew_id: null,
+    assignee_name: 'Bob',
+    field_name: 'North 40',
+    customer_name: 'Farm A',
+    location_acres: 40,
+    job_applied_acres: 0,
+    job_total_acres: 100,
+    ...over,
+  };
+}
+
+describe('filterDispatchedRows (assignee filter — #37 criterion 3)', () => {
+  const rows: DispatchedListRow[] = [
+    mkDispatchedRow({ dispatch_id: 'd-a', job_field_id: 'jf-a', applicator_id: 'app-1', crew_id: null, assignee_kind: 'applicator' }),
+    mkDispatchedRow({ dispatch_id: 'd-b', job_field_id: 'jf-b', applicator_id: 'app-2', crew_id: null, assignee_kind: 'applicator' }),
+    mkDispatchedRow({ dispatch_id: 'd-c', job_field_id: 'jf-c', applicator_id: null, crew_id: 'crew-9', assignee_kind: 'crew' }),
+  ];
+
+  it('returns all rows with an empty filter', () =>
+    expect(filterDispatchedRows(rows, emptyDispatchedAssigneeFilter)).toHaveLength(3));
+
+  it('filters to a single applicator', () => {
+    const f: DispatchedAssigneeFilter = { applicatorId: 'app-1', crewId: '' };
+    expect(filterDispatchedRows(rows, f).map((r) => r.dispatch_id)).toEqual(['d-a']);
+  });
+
+  it('filters to a single crew', () => {
+    const f: DispatchedAssigneeFilter = { applicatorId: '', crewId: 'crew-9' };
+    expect(filterDispatchedRows(rows, f).map((r) => r.dispatch_id)).toEqual(['d-c']);
+  });
+
+  it('an applicator filter excludes crew rows (and vice versa)', () => {
+    expect(filterDispatchedRows(rows, { applicatorId: 'app-2', crewId: '' }).map((r) => r.dispatch_id)).toEqual(['d-b']);
+    expect(filterDispatchedRows(rows, { applicatorId: '', crewId: 'crew-9' }).every((r) => r.crew_id === 'crew-9')).toBe(true);
+  });
+
+  it('returns empty when no row matches the chosen assignee', () =>
+    expect(filterDispatchedRows(rows, { applicatorId: 'app-404', crewId: '' })).toHaveLength(0));
+});
+
+describe('hasActiveDispatchedFilter', () => {
+  it('false for the empty filter', () =>
+    expect(hasActiveDispatchedFilter(emptyDispatchedAssigneeFilter)).toBe(false));
+  it('true when an applicator is chosen', () =>
+    expect(hasActiveDispatchedFilter({ applicatorId: 'app-1', crewId: '' })).toBe(true));
+  it('true when a crew is chosen', () =>
+    expect(hasActiveDispatchedFilter({ applicatorId: '', crewId: 'crew-9' })).toBe(true));
 });
 
 describe('hasActiveDispatchFilter', () => {

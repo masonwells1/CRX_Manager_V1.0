@@ -8625,6 +8625,10 @@ export type Database = {
         }
         Returns: Json[]
       }
+      get_dispatched_list: {
+        Args: { p_applicator_id?: string; p_crew_id?: string }
+        Returns: Json[]
+      }
       get_expiring_planned_holds: {
         Args: { p_days_ahead?: number; p_idempotency_key?: string }
         Returns: Json
@@ -9864,6 +9868,14 @@ export type Database = {
           p_idempotency_key?: string
           p_performed_by?: string
           p_reason: string
+        }
+        Returns: Json
+      }
+      undispatch_job_locations: {
+        Args: {
+          p_job_field_ids: string[]
+          p_performed_by?: string
+          p_idempotency_key?: string
         }
         Returns: Json
       }
