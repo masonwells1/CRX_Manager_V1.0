@@ -309,6 +309,52 @@ export function filterFieldViewCards(
 }
 
 /**
+ * Split a list of ids into fixed-size chunks so a PostgREST `.in('col', ids)` filter
+ * never serializes an unbounded number of UUIDs into a single GET URL (a large
+ * dispatch set could otherwise exceed the gateway URL limit and throw before Postgres
+ * runs). Caller fetches each chunk and concatenates. `size` defaults to 200 — well
+ * under the URL cap even at 36-char UUIDs, and far above any realistic per-applicator
+ * dispatch count, so it's a single request in practice.
+ */
+export function chunkIds<T>(ids: T[], size = 200): T[][] {
+  if (size <= 0) return ids.length ? [ids] : [];
+  const out: T[][] = [];
+  for (let i = 0; i < ids.length; i += size) out.push(ids.slice(i, i + size));
+  return out;
+}
+
+/**
+ * Stable cache key for a card's lazily-loaded read-only detail (#38). The detail is
+ * SCOPED to the caller's dispatched job_field_ids, so the cache must invalidate when
+ * that set changes (a dispatcher adding/removing one of the caller's locations) —
+ * keying by job_id ALONE would replay a stale location/crop list after a reload.
+ * Combines the job_id with the SORTED dispatched job_field_ids so the key is identical
+ * across reloads of an unchanged dispatch and differs the moment the set changes.
+ */
+export function cardDetailCacheKey(card: FieldViewJobCard): string {
+  const ids = card.locations.map((l) => l.job_field_id).sort();
+  return `${card.job_id}|${ids.join(',')}`;
+}
+
+/**
+ * Resolve a clicked master `field_id` to the `job_id` it belongs to, using the
+ * `field_id → job_id` map built from the caller's dispatched `job_fields` (#38 map
+ * tap-to-open). `get_dispatched_list` does NOT carry the master `field_id`, so the
+ * field view fetches `job_fields(job_id, field_id)` separately and feeds that map
+ * here. Returns `null` when the clicked field isn't one of the caller's dispatched
+ * job fields (e.g. a stray boundary). A master field shared across two of the
+ * caller's dispatched jobs is a rare tie — the map already collapsed it to one
+ * job_id (first writer wins); that's acceptable per the spec.
+ */
+export function resolveFieldToJob(
+  fieldToJob: Map<string, string>,
+  fieldId: string | null | undefined
+): string | null {
+  if (!fieldId) return null;
+  return fieldToJob.get(fieldId) ?? null;
+}
+
+/**
  * Per-product charge for the read-only card's Chemicals/Charges line, in cents.
  * Charge = quantity × price_per_unit_cents (there is no separate job-charges table —
  * charges are DERIVED from the job_chemicals price column). Returns a non-negative

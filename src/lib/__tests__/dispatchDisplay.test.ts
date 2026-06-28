@@ -11,6 +11,10 @@ import {
   groupDispatchedByJob,
   filterFieldViewCards,
   chemicalChargeCents,
+  resolveFieldToJob,
+  chunkIds,
+  cardDetailCacheKey,
+  type FieldViewJobCard,
   type DispatchFilters,
   type DispatchSelectableJob,
   type DispatchedListRow,
@@ -267,6 +271,101 @@ describe('filterFieldViewCards (field view #38 search)', () => {
     expect(filterFieldViewCards(cards, 'green').map((c) => c.job_id)).toEqual(['a']));
   it('returns empty when nothing matches', () =>
     expect(filterFieldViewCards(cards, 'zzz')).toHaveLength(0));
+});
+
+describe('resolveFieldToJob (field view #38 — map tap-to-open)', () => {
+  const f2j = new Map<string, string>([
+    ['field-1', 'job-A'],
+    ['field-2', 'job-A'],
+    ['field-3', 'job-B'],
+  ]);
+
+  it('resolves a clicked master field_id to its owning job_id', () => {
+    expect(resolveFieldToJob(f2j, 'field-1')).toBe('job-A');
+    expect(resolveFieldToJob(f2j, 'field-3')).toBe('job-B');
+  });
+
+  it('two fields on the same job both resolve to that job', () => {
+    expect(resolveFieldToJob(f2j, 'field-1')).toBe('job-A');
+    expect(resolveFieldToJob(f2j, 'field-2')).toBe('job-A');
+  });
+
+  it('returns null for a field not in the dispatched set (stray boundary)', () =>
+    expect(resolveFieldToJob(f2j, 'field-999')).toBeNull());
+
+  it('returns null for a null/undefined/empty field_id', () => {
+    expect(resolveFieldToJob(f2j, null)).toBeNull();
+    expect(resolveFieldToJob(f2j, undefined)).toBeNull();
+    expect(resolveFieldToJob(f2j, '')).toBeNull();
+  });
+
+  it('returns null against an empty map (map not loaded yet)', () =>
+    expect(resolveFieldToJob(new Map(), 'field-1')).toBeNull());
+});
+
+describe('chunkIds (field view #38 — bound .in() URL length)', () => {
+  it('returns a single chunk when under the size', () =>
+    expect(chunkIds(['a', 'b', 'c'], 200)).toEqual([['a', 'b', 'c']]));
+
+  it('splits into fixed-size chunks, last chunk shorter', () => {
+    const ids = Array.from({ length: 5 }, (_, i) => `id-${i}`);
+    expect(chunkIds(ids, 2)).toEqual([['id-0', 'id-1'], ['id-2', 'id-3'], ['id-4']]);
+  });
+
+  it('preserves order and loses no ids across chunks', () => {
+    const ids = Array.from({ length: 450 }, (_, i) => i);
+    const chunks = chunkIds(ids, 200);
+    expect(chunks).toHaveLength(3);
+    expect(chunks.flat()).toEqual(ids);
+  });
+
+  it('returns an empty array for no ids', () =>
+    expect(chunkIds([], 200)).toEqual([]));
+
+  it('falls back to a single chunk for a non-positive size (never infinite-loops)', () =>
+    expect(chunkIds(['a', 'b'], 0)).toEqual([['a', 'b']]));
+});
+
+function mkCard(over: Partial<FieldViewJobCard>): FieldViewJobCard {
+  return {
+    job_id: 'job-A',
+    job_number: 'JOB-A',
+    job_status: 'scheduled',
+    customer_name: 'Farm A',
+    job_applied_acres: 0,
+    job_total_acres: 100,
+    locations: [{ job_field_id: 'jf-1', field_id: null, field_name: 'North 40', location_acres: 40 }],
+    ...over,
+  };
+}
+
+describe('cardDetailCacheKey (field view #38 — cache invalidates on dispatch change)', () => {
+  it('is stable across reloads of an unchanged dispatch set (order-independent)', () => {
+    const a = mkCard({ locations: [
+      { job_field_id: 'jf-2', field_id: null, field_name: 'B', location_acres: 1 },
+      { job_field_id: 'jf-1', field_id: null, field_name: 'A', location_acres: 1 },
+    ] });
+    const b = mkCard({ locations: [
+      { job_field_id: 'jf-1', field_id: null, field_name: 'A', location_acres: 1 },
+      { job_field_id: 'jf-2', field_id: null, field_name: 'B', location_acres: 1 },
+    ] });
+    expect(cardDetailCacheKey(a)).toBe(cardDetailCacheKey(b));
+  });
+
+  it('CHANGES when a location is added or removed (forces a refetch)', () => {
+    const one = mkCard({ locations: [{ job_field_id: 'jf-1', field_id: null, field_name: 'A', location_acres: 1 }] });
+    const two = mkCard({ locations: [
+      { job_field_id: 'jf-1', field_id: null, field_name: 'A', location_acres: 1 },
+      { job_field_id: 'jf-2', field_id: null, field_name: 'B', location_acres: 1 },
+    ] });
+    expect(cardDetailCacheKey(one)).not.toBe(cardDetailCacheKey(two));
+  });
+
+  it('differs per job even with the same location ids', () => {
+    const j1 = mkCard({ job_id: 'job-1' });
+    const j2 = mkCard({ job_id: 'job-2' });
+    expect(cardDetailCacheKey(j1)).not.toBe(cardDetailCacheKey(j2));
+  });
 });
 
 describe('chemicalChargeCents (field view #38 — derived charge)', () => {

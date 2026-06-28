@@ -57,6 +57,9 @@ import {
   groupDispatchedByJob,
   filterFieldViewCards,
   chemicalChargeCents,
+  resolveFieldToJob,
+  chunkIds,
+  cardDetailCacheKey,
   type DispatchedListRow,
   type FieldViewJobCard,
 } from '../lib/dispatchDisplay';
@@ -99,10 +102,23 @@ export default function FieldView() {
   // Per-job expanded detail, fetched lazily on first expand and cached.
   const [details, setDetails] = useState<Record<string, CardDetail>>({});
   const [detailLoading, setDetailLoading] = useState<string | null>(null);
+  // Cache keys whose detail fetch is currently IN FLIGHT. The cached-result check
+  // alone can't dedupe concurrent loads (two callers both see an empty cache before
+  // either request resolves), so a ref tracks in-flight keys and short-circuits a
+  // second identical fetch — preventing duplicate requests / double error toasts on a
+  // single open (Codex re-review P2). A ref (not state) so it's read/written
+  // synchronously without its own re-render.
+  const inFlightDetail = useRef<Set<string>>(new Set());
 
   // Map geometry (best-effort; the list view never depends on it).
   const [mapFields, setMapFields] = useState<Field[]>([]);
   const mapRef = useRef<MapRef | null>(null);
+
+  // master field_id → job_id, built from the caller's dispatched job_fields. The
+  // dispatch RPC doesn't carry the master field_id, so a map tap (which yields a
+  // field_id) needs this to resolve back to the owning card's job_id. Kept in state
+  // so onFieldClick / visibleMapFields re-derive when the dispatched set changes.
+  const [fieldToJob, setFieldToJob] = useState<Map<string, string>>(() => new Map());
 
   // --- Load "my jobs" (the dispatched-location rows for the caller) -----------------
   const fetchCards = useCallback(async () => {
@@ -138,32 +154,53 @@ export default function FieldView() {
   // yields no boundaries — the list view is unaffected. Scoped to the field_ids on the
   // caller's dispatched job_fields, so an applicator never pulls the whole fields table.
   useEffect(() => {
-    if (cards.length === 0) { setMapFields([]); return; }
+    if (cards.length === 0) { setMapFields([]); setFieldToJob(new Map()); return; }
     let cancelled = false;
     (async () => {
       try {
-        const jobIds = cards.map((c) => c.job_id);
-        // Read the dispatched job_fields (RLS: job_fields_select_location_dispatchee) to
-        // resolve field_ids, then the fields' geometry. Both are best-effort for the map.
-        const jfRes = await supabase
-          .from('job_fields')
-          .select('field_id')
-          .in('job_id', jobIds);
-        if (jfRes.error) throw jfRes.error;
-        const fieldIds = Array.from(
-          new Set(((jfRes.data || []) as { field_id: string | null }[]).map((r) => r.field_id).filter(Boolean) as string[])
-        );
+        // Scope to the caller's OWN dispatched locations, NOT every field on the job.
+        // The location-dispatchee RLS is job-keyed (dispatched to ANY field on a job
+        // grants read of ALL its job_fields), so an `.in('job_id', …)` query would pull
+        // unassigned fields too — and then the map would plot them and a tap would open
+        // the card, contradicting the "locations assigned to you" framing. card.locations[]
+        // already lists the caller's dispatched job_field_ids; query by those instead.
+        const myJobFieldIds = cards.flatMap((c) => c.locations.map((l) => l.job_field_id));
+        if (myJobFieldIds.length === 0) { if (!cancelled) { setMapFields([]); setFieldToJob(new Map()); } return; }
+        // Read only the caller's dispatched job_fields to resolve their master field_ids,
+        // then the fields' geometry. We also pull job_id so a map tap (field_id) can
+        // resolve back to the owning card. Both are best-effort for the map. Chunk the
+        // id filter so a large dispatch set never overflows the request URL.
+        const jfRows: { job_id: string; field_id: string | null }[] = [];
+        for (const chunk of chunkIds(myJobFieldIds)) {
+          const jfRes = await supabase
+            .from('job_fields')
+            .select('job_id, field_id')
+            .in('id', chunk);
+          if (jfRes.error) throw jfRes.error;
+          jfRows.push(...((jfRes.data || []) as { job_id: string; field_id: string | null }[]));
+        }
+        // field_id → job_id (first match wins on the rare shared-field tie — acceptable).
+        const f2j = new Map<string, string>();
+        for (const r of jfRows) {
+          if (r.field_id && !f2j.has(r.field_id)) f2j.set(r.field_id, r.job_id);
+        }
+        if (!cancelled) setFieldToJob(f2j);
+        const fieldIds = Array.from(new Set(Array.from(f2j.keys())));
         if (fieldIds.length === 0) { if (!cancelled) setMapFields([]); return; }
-        const fRes = await supabase
-          .from('fields')
-          .select('id, field_name, boundary_geojson, centroid_lat, centroid_lng, total_acres, crop_type, customer_id, customer:customers(farm_name)')
-          .in('id', fieldIds);
-        if (fRes.error) throw fRes.error;
-        if (!cancelled) setMapFields((fRes.data || []) as unknown as Field[]);
+        const fRows: Field[] = [];
+        for (const chunk of chunkIds(fieldIds)) {
+          const fRes = await supabase
+            .from('fields')
+            .select('id, field_name, boundary_geojson, centroid_lat, centroid_lng, total_acres, crop_type, customer_id, customer:customers(farm_name)')
+            .in('id', chunk);
+          if (fRes.error) throw fRes.error;
+          fRows.push(...((fRes.data || []) as unknown as Field[]));
+        }
+        if (!cancelled) setMapFields(fRows);
       } catch (err) {
         // Map geometry is non-critical — log and degrade to an empty map.
         Sentry.captureException(err, { tags: { source: 'fetch', action: 'field_view_map_fields' } });
-        if (!cancelled) setMapFields([]);
+        if (!cancelled) { setMapFields([]); setFieldToJob(new Map()); }
       }
     })();
     return () => { cancelled = true; };
@@ -180,20 +217,28 @@ export default function FieldView() {
   const visibleCards = useMemo(() => filterFieldViewCards(cards, search), [cards, search]);
 
   // Fields plotted on the map = the fields belonging to the currently-visible cards.
+  // The dispatch rows don't carry the master field_id, so we scope via the
+  // field_id → job_id map: keep a fetched map field only if its job is currently
+  // visible. This makes an active search narrow the map to match the list (no leak
+  // either way — every job is the caller's own). If the map hasn't loaded yet
+  // (empty fieldToJob), there's nothing to plot.
   const visibleMapFields = useMemo(() => {
-    const fieldIds = new Set(
-      visibleCards.flatMap((c) => c.locations.map((l) => l.field_id).filter(Boolean) as string[])
-    );
-    // The map fields were fetched separately; intersect with the visible cards' fields.
-    // When the dispatch rows don't carry field_id (today's RPC), fall back to showing
-    // every loaded map field (still scoped to the caller's dispatched jobs above).
-    if (fieldIds.size === 0) return mapFields;
-    return mapFields.filter((f) => fieldIds.has(f.id));
-  }, [visibleCards, mapFields]);
+    const visibleJobIds = new Set(visibleCards.map((c) => c.job_id));
+    return mapFields.filter((f) => {
+      const jobId = fieldToJob.get(f.id);
+      return jobId != null && visibleJobIds.has(jobId);
+    });
+  }, [visibleCards, mapFields, fieldToJob]);
 
   // --- Lazy-load a card's read-only detail on first expand --------------------------
   const loadDetail = useCallback(async (card: FieldViewJobCard) => {
-    if (details[card.job_id]) return; // cached
+    // Cache key includes the dispatched location set, not just job_id, so a reload
+    // after a dispatcher changed the caller's locations refetches instead of replaying
+    // a stale location/crop list (Codex re-review P2).
+    const cacheKey = cardDetailCacheKey(card);
+    if (details[cacheKey]) return; // cached
+    if (inFlightDetail.current.has(cacheKey)) return; // already fetching this exact set
+    inFlightDetail.current.add(cacheKey);
     setDetailLoading(card.job_id);
     try {
       // Scheduled Date (jobs.job_date) — readable via jobs_select_location_dispatchee.
@@ -205,12 +250,25 @@ export default function FieldView() {
       if (jobRes.error) throw jobRes.error;
 
       // Locations + Crops (job_fields.crop) — readable via job_fields_select_location_dispatchee.
-      const fieldsRes = await supabase
-        .from('job_fields')
-        .select('id, crop, acres_to_treat, sort_order, field:fields(field_name)')
-        .eq('job_id', card.job_id)
-        .order('sort_order', { ascending: true, nullsFirst: false });
-      if (fieldsRes.error) throw fieldsRes.error;
+      // SCOPE to the caller's OWN dispatched locations (the job-keyed RLS would let a
+      // location-only dispatchee read EVERY field on the job, but the header says
+      // "N locations assigned to you" — so the detail must match that count, not the
+      // whole job). card.locations[] carries each dispatched job_field_id.
+      // Chunk the id filter so a job with very many dispatched locations never
+      // overflows the request URL; re-sort the merged rows by sort_order client-side.
+      const myJobFieldIds = card.locations.map((l) => l.job_field_id);
+      const jfRaw: Array<{ id: string; crop: string | null; acres_to_treat: number | null; sort_order: number | null; field?: { field_name?: string } }> = [];
+      for (const chunk of chunkIds(myJobFieldIds)) {
+        const fieldsRes = await supabase
+          .from('job_fields')
+          .select('id, crop, acres_to_treat, sort_order, field:fields(field_name)')
+          .in('id', chunk)
+          .order('sort_order', { ascending: true, nullsFirst: false });
+        if (fieldsRes.error) throw fieldsRes.error;
+        jfRaw.push(...((fieldsRes.data || []) as typeof jfRaw));
+      }
+      // A multi-chunk fetch loses the global sort_order ordering across chunks — re-sort.
+      jfRaw.sort((a, b) => (a.sort_order ?? Number.MAX_SAFE_INTEGER) - (b.sort_order ?? Number.MAX_SAFE_INTEGER));
 
       // Chemicals/Charges (job_chemicals) — readable via job_chemicals_select_location_dispatchee
       // (the #38 additive policy). Charges derived from price_per_unit_cents.
@@ -223,7 +281,7 @@ export default function FieldView() {
 
       const detail: CardDetail = {
         jobDate: (jobRes.data as { job_date?: string } | null)?.job_date ?? null,
-        fields: ((fieldsRes.data || []) as Array<{ id: string; crop: string | null; acres_to_treat: number | null; field?: { field_name?: string } }>).map((jf) => ({
+        fields: jfRaw.map((jf) => ({
           id: jf.id,
           field_name: jf.field?.field_name ?? null,
           crop: jf.crop,
@@ -239,21 +297,33 @@ export default function FieldView() {
           chargeCents: chemicalChargeCents(jc.quantity, jc.price_per_unit_cents),
         })),
       };
-      setDetails((prev) => ({ ...prev, [card.job_id]: detail }));
+      setDetails((prev) => ({ ...prev, [cacheKey]: detail }));
     } catch (err) {
       Sentry.captureException(err, { tags: { source: 'fetch', action: 'field_view_card_detail' } });
       toast('error', 'Failed to load job details');
+    } finally {
+      inFlightDetail.current.delete(cacheKey);
+      setDetailLoading(null);
     }
-    setDetailLoading(null);
   }, [details, toast]);
 
+  // Just toggles which card is open; the effect below is the SINGLE place that
+  // initiates the detail fetch (so a tap can't race the effect into a double-load).
   const toggleExpand = useCallback((card: FieldViewJobCard) => {
-    setExpandedId((prev) => {
-      const next = prev === card.job_id ? null : card.job_id;
-      if (next) void loadDetail(card);
-      return next;
-    });
-  }, [loadDetail]);
+    setExpandedId((prev) => (prev === card.job_id ? null : card.job_id));
+  }, []);
+
+  // The ONE place a card's read-only detail is loaded. Runs whenever the expanded card
+  // (or its dispatched-location set, via the cache key) changes and that detail isn't
+  // cached yet. This covers both a normal open AND the case a tap-handler can't: a card
+  // stays expanded across a reload while a dispatcher changed the caller's locations —
+  // the cache key flips to an uncached one with no collapse→expand transition. loadDetail
+  // is idempotent (cached + in-flight guards), so this never double-fetches (Codex re-review P2).
+  useEffect(() => {
+    if (!expandedId) return;
+    const card = visibleCards.find((c) => c.job_id === expandedId);
+    if (card && !details[cardDetailCacheKey(card)]) void loadDetail(card);
+  }, [expandedId, visibleCards, details, loadDetail]);
 
   // Distinct crops across the job's locations (the Crops card section).
   const cropList = (detail: CardDetail): string[] =>
@@ -332,8 +402,13 @@ export default function FieldView() {
                 fields={visibleMapFields as (Field & { customer_name?: string })[]}
                 showLabels
                 onFieldClick={(fieldId) => {
-                  const card = visibleCards.find((c) => c.locations.some((l) => l.field_id === fieldId));
-                  if (card) { setView('list'); setExpandedId(card.job_id); void loadDetail(card); }
+                  // Tapping a field boundary resolves the master field_id → its job_id
+                  // via the dispatched-job_fields map, then opens that card in the list.
+                  // The expand effect loads the detail (single fetch path).
+                  const jobId = resolveFieldToJob(fieldToJob, fieldId);
+                  if (!jobId) return;
+                  const card = visibleCards.find((c) => c.job_id === jobId);
+                  if (card) { setView('list'); setExpandedId(card.job_id); }
                 }}
               />
             </CRXMap>
@@ -354,7 +429,7 @@ export default function FieldView() {
           {visibleCards.map((card) => {
             const badge = jobStatusToDispatchBadge(card.job_status);
             const expanded = expandedId === card.job_id;
-            const detail = details[card.job_id];
+            const detail = details[cardDetailCacheKey(card)];
             const isDetailLoading = detailLoading === card.job_id;
             return (
               <div
@@ -382,11 +457,14 @@ export default function FieldView() {
                       {card.locations.length} location{card.locations.length === 1 ? '' : 's'} assigned to you
                     </p>
                   </div>
-                  <div className="flex flex-col items-end gap-1 flex-shrink-0">
-                    <span className="text-lg font-bold text-white tabular-nums">
+                  <div className="flex flex-col items-end gap-0.5 flex-shrink-0">
+                    <span className="text-lg font-bold text-white tabular-nums leading-tight">
                       {formatAppliedOfTotal(card.job_applied_acres, card.job_total_acres)}
                     </span>
-                    {expanded ? <ChevronUp className="w-5 h-5 text-slate-400" /> : <ChevronDown className="w-5 h-5 text-slate-400" />}
+                    {/* This progress is whole-JOB acres, not the caller's own — label it so
+                        a location-only applicator doesn't read it as "your" acres. */}
+                    <span className="text-[10px] uppercase tracking-wider text-slate-500">job total</span>
+                    {expanded ? <ChevronUp className="w-5 h-5 text-slate-400 mt-0.5" /> : <ChevronDown className="w-5 h-5 text-slate-400 mt-0.5" />}
                   </div>
                 </button>
 
@@ -442,8 +520,12 @@ export default function FieldView() {
                           )}
                         </Section>
 
-                        {/* 5. Chemicals / Charges */}
+                        {/* 5. Chemicals / Charges — JOB-LEVEL spray mix (job_chemicals has no
+                            field dimension), so it's the whole job's plan, not the caller's
+                            charges. Caption it honestly so "assigned to you" framing above
+                            doesn't bleed onto these charges. */}
                         <Section icon={<FlaskConical className="w-4 h-4 text-crx-green" />} title="Chemicals / Charges">
+                          <p className="text-[11px] text-slate-500 -mt-1 mb-1.5">Applies to the whole job.</p>
                           {detail.chemicals.length === 0 ? (
                             <p className="text-sm text-slate-500">No chemicals listed.</p>
                           ) : (
