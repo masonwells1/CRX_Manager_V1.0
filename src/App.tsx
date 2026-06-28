@@ -70,6 +70,7 @@ const ProgramTracker = lazy(() => import('./pages/ProgramTracker'));
 const Jobs = lazy(() => import('./pages/Jobs'));
 const JobDetail = lazy(() => import('./pages/JobDetail'));
 const DispatchBoard = lazy(() => import('./pages/DispatchBoard'));
+const FieldView = lazy(() => import('./pages/FieldView'));
 const MonthEndClose = lazy(() => import('./pages/MonthEndClose'));
 const CommissionPayments = lazy(() => import('./pages/CommissionPayments'));
 const CustomerTransactionReview = lazy(() => import('./pages/CustomerTransactionReview'));
@@ -259,6 +260,8 @@ const router = createBrowserRouter([
           { path: 'jobs', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep', 'applicator']}><Jobs /></ProtectedRoute> },
           { path: 'jobs/:id', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep', 'applicator']}><JobDetail /></ProtectedRoute> },
           { path: 'dispatch', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep', 'applicator']}><DispatchBoard /></ProtectedRoute> },
+          // Phone/mobile applicator field view (#38) — read-only "my jobs" cards.
+          { path: 'field', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep', 'applicator']}><FieldView /></ProtectedRoute> },
 
           // Admin only
           { path: 'financial-dashboard', element: <ProtectedRoute allowedRoles={['admin']}><FinancialDashboard /></ProtectedRoute> },

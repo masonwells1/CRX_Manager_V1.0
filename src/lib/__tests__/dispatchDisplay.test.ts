@@ -8,6 +8,9 @@ import {
   filterDispatchedRows,
   hasActiveDispatchedFilter,
   emptyDispatchedAssigneeFilter,
+  groupDispatchedByJob,
+  filterFieldViewCards,
+  chemicalChargeCents,
   type DispatchFilters,
   type DispatchSelectableJob,
   type DispatchedListRow,
@@ -207,4 +210,75 @@ describe('hasActiveDispatchFilter', () => {
     expect(hasActiveDispatchFilter({ ...emptyDispatchFilters, search: ' x ' })).toBe(true));
   it('false when search is only whitespace', () =>
     expect(hasActiveDispatchFilter({ ...emptyDispatchFilters, search: '   ' })).toBe(false));
+});
+
+describe('groupDispatchedByJob (field view #38 — "my jobs" cards)', () => {
+  it('returns one card per job, collapsing multiple dispatched locations', () => {
+    const rows: DispatchedListRow[] = [
+      mkDispatchedRow({ dispatch_id: 'd1', job_id: 'job-A', job_number: 'JOB-A', job_field_id: 'jf-1', field_name: 'North 40', location_acres: 40 }),
+      mkDispatchedRow({ dispatch_id: 'd2', job_id: 'job-A', job_number: 'JOB-A', job_field_id: 'jf-2', field_name: 'South 60', location_acres: 60 }),
+      mkDispatchedRow({ dispatch_id: 'd3', job_id: 'job-B', job_number: 'JOB-B', job_field_id: 'jf-3', field_name: 'East 80', location_acres: 80 }),
+    ];
+    const cards = groupDispatchedByJob(rows);
+    expect(cards).toHaveLength(2);
+    const a = cards.find((c) => c.job_id === 'job-A')!;
+    expect(a.locations.map((l) => l.field_name)).toEqual(['North 40', 'South 60']);
+    expect(cards.find((c) => c.job_id === 'job-B')!.locations).toHaveLength(1);
+  });
+
+  it('carries job-level header data (customer, status, applied/total acres)', () => {
+    const cards = groupDispatchedByJob([
+      mkDispatchedRow({ job_id: 'job-A', job_number: 'JOB-A', customer_name: 'Farm A', job_status: 'in_progress', job_applied_acres: 25, job_total_acres: 100 }),
+    ]);
+    expect(cards[0]).toMatchObject({ customer_name: 'Farm A', job_status: 'in_progress', job_applied_acres: 25, job_total_acres: 100 });
+  });
+
+  it('de-dupes a repeated job_field_id (defensive against a re-dispatch generation)', () => {
+    const cards = groupDispatchedByJob([
+      mkDispatchedRow({ dispatch_id: 'd1', job_id: 'job-A', job_field_id: 'jf-1' }),
+      mkDispatchedRow({ dispatch_id: 'd2', job_id: 'job-A', job_field_id: 'jf-1' }),
+    ]);
+    expect(cards[0].locations).toHaveLength(1);
+  });
+
+  it('orders cards by job_number (stable list across reloads)', () => {
+    const cards = groupDispatchedByJob([
+      mkDispatchedRow({ job_id: 'b', job_number: 'JOB-9' }),
+      mkDispatchedRow({ job_id: 'a', job_number: 'JOB-1' }),
+      mkDispatchedRow({ job_id: 'c', job_number: 'JOB-5' }),
+    ]);
+    expect(cards.map((c) => c.job_number)).toEqual(['JOB-1', 'JOB-5', 'JOB-9']);
+  });
+
+  it('returns an empty list for no rows', () =>
+    expect(groupDispatchedByJob([])).toEqual([]));
+});
+
+describe('filterFieldViewCards (field view #38 search)', () => {
+  const cards = groupDispatchedByJob([
+    mkDispatchedRow({ job_id: 'a', job_number: 'JOB-101', customer_name: 'Green Acres' }),
+    mkDispatchedRow({ job_id: 'b', job_number: 'JOB-202', customer_name: 'Sunrise Ag' }),
+  ]);
+  it('returns all cards for an empty query', () =>
+    expect(filterFieldViewCards(cards, '   ')).toHaveLength(2));
+  it('matches on job number', () =>
+    expect(filterFieldViewCards(cards, '202').map((c) => c.job_id)).toEqual(['b']));
+  it('matches on customer name (case-insensitive)', () =>
+    expect(filterFieldViewCards(cards, 'green').map((c) => c.job_id)).toEqual(['a']));
+  it('returns empty when nothing matches', () =>
+    expect(filterFieldViewCards(cards, 'zzz')).toHaveLength(0));
+});
+
+describe('chemicalChargeCents (field view #38 — derived charge)', () => {
+  it('multiplies quantity by price-per-unit cents (integer cents, no float dust)', () =>
+    expect(chemicalChargeCents(200, 1234)).toBe(246800));
+  it('rounds a fractional quantity to whole cents', () =>
+    expect(chemicalChargeCents(2.5, 333)).toBe(833)); // 832.5 -> 833
+  it('reads a null/zero/negative input as 0 (never NaN)', () => {
+    expect(chemicalChargeCents(null, 1000)).toBe(0);
+    expect(chemicalChargeCents(10, null)).toBe(0);
+    expect(chemicalChargeCents(0, 1000)).toBe(0);
+    expect(chemicalChargeCents(-5, 1000)).toBe(0);
+    expect(chemicalChargeCents(10, -1)).toBe(0);
+  });
 });

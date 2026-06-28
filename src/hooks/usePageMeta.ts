@@ -10,6 +10,7 @@ const pageMeta: Record<string, { title: string; accent: string }> = {
   '/invoices': { title: 'Invoice', accent: 'Management' },
   '/deliveries': { title: 'Delivery', accent: 'Management' },
   '/jobs': { title: 'Job', accent: 'Management' },
+  '/field': { title: 'My Field', accent: 'Jobs' },
   '/fields': { title: 'Field', accent: 'Management' },
   '/purchase-orders': { title: 'Supplier', accent: 'Purchase Orders' },
   '/receiving': { title: 'Receiving', accent: 'Log' },

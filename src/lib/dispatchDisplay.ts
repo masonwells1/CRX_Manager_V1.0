@@ -224,3 +224,103 @@ export function hasActiveDispatchFilter(filters: DispatchFilters): boolean {
     filters.endDate !== ''
   );
 }
+
+/**
+ * A single job CARD for the phone/mobile applicator field view (#38) — the result of
+ * grouping the flat `get_dispatched_list()` rows (one per dispatched LOCATION) by job.
+ * The field view shows ONE card per job, listing every location dispatched to the
+ * caller. Acres/customer/status are taken from the job-level columns the RPC already
+ * resolved (identical across the job's rows). The map plots `field_ids`.
+ */
+export interface FieldViewJobCard {
+  job_id: string;
+  job_number: string;
+  job_status: string;
+  customer_name: string | null;
+  job_applied_acres: number | null;
+  job_total_acres: number | null;
+  /** Every location dispatched to the caller on this job (for the card + the map). */
+  locations: {
+    job_field_id: string;
+    field_id: string | null;
+    field_name: string | null;
+    location_acres: number | null;
+  }[];
+}
+
+/**
+ * Group the flat dispatched-LOCATION rows (`get_dispatched_list()`) into one card per
+ * JOB for the field view (#38, criteria #1/#2/#3). A job dispatched to the caller at
+ * two locations collapses to a SINGLE card listing both. Cards are returned ordered by
+ * job_number (stable, matches the RPC's own ORDER BY) so the list never reshuffles
+ * between reloads.
+ *
+ * `field_id` is optional on the row: `get_dispatched_list` doesn't return it today, so
+ * the map plotting falls back to the separately-fetched job_fields when it's absent.
+ * Passing it through keeps the helper forward-compatible and unit-testable.
+ */
+export function groupDispatchedByJob(
+  rows: (DispatchedListRow & { field_id?: string | null })[]
+): FieldViewJobCard[] {
+  const byJob = new Map<string, FieldViewJobCard>();
+  for (const r of rows) {
+    let card = byJob.get(r.job_id);
+    if (!card) {
+      card = {
+        job_id: r.job_id,
+        job_number: r.job_number,
+        job_status: r.job_status,
+        customer_name: r.customer_name,
+        job_applied_acres: r.job_applied_acres,
+        job_total_acres: r.job_total_acres,
+        locations: [],
+      };
+      byJob.set(r.job_id, card);
+    }
+    // De-dupe locations by job_field_id (a defensive guard — the RPC returns one row
+    // per current dispatch, but a re-dispatch generation could surface a duplicate).
+    if (!card.locations.some((l) => l.job_field_id === r.job_field_id)) {
+      card.locations.push({
+        job_field_id: r.job_field_id,
+        field_id: r.field_id ?? null,
+        field_name: r.field_name,
+        location_acres: r.location_acres,
+      });
+    }
+  }
+  return Array.from(byJob.values()).sort((a, b) =>
+    a.job_number.localeCompare(b.job_number)
+  );
+}
+
+/**
+ * Free-text filter for the field-view job cards (job# or customer). Mirrors the
+ * office search but scoped to the small card set the applicator already owns.
+ */
+export function filterFieldViewCards(
+  cards: FieldViewJobCard[],
+  search: string
+): FieldViewJobCard[] {
+  const q = search.trim().toLowerCase();
+  if (!q) return cards;
+  return cards.filter((c) =>
+    `${c.job_number} ${c.customer_name ?? ''}`.toLowerCase().includes(q)
+  );
+}
+
+/**
+ * Per-product charge for the read-only card's Chemicals/Charges line, in cents.
+ * Charge = quantity × price_per_unit_cents (there is no separate job-charges table —
+ * charges are DERIVED from the job_chemicals price column). Returns a non-negative
+ * integer cents value; a missing/negative input reads as 0 so the card never shows
+ * NaN. Display divides by 100 (money is bigint cents — never float math on dollars).
+ */
+export function chemicalChargeCents(
+  quantity: number | null | undefined,
+  pricePerUnitCents: number | null | undefined
+): number {
+  const qty = toNum(quantity);
+  const price = toNum(pricePerUnitCents);
+  if (qty <= 0 || price <= 0) return 0;
+  return Math.round(qty * price);
+}

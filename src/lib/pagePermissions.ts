@@ -49,6 +49,7 @@ export const PAGE_PERMISSIONS: PagePermission[] = [
   { key: 'application-records', label: 'App Records', category: 'Operations', roles: ['admin', 'sales_rep', 'applicator'] },
   { key: 'application-services', label: 'Application Services', category: 'Operations', roles: ['admin'] },
   { key: 'dispatch', label: 'Dispatch', category: 'Operations', roles: ['admin', 'sales_rep', 'applicator'] },
+  { key: 'field', label: 'My Field Jobs', category: 'Operations', roles: ['admin', 'sales_rep', 'applicator'] },
   { key: 'program-tracker', label: 'Program Tracker', category: 'Operations', roles: ['admin', 'sales_rep'] },
 
   // Inventory

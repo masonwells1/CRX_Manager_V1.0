@@ -21,6 +21,7 @@ import {
   DollarSign,
   Sprout,
   MapPin,
+  Smartphone,
   Receipt,
   Beaker,
   ClipboardCheck,
@@ -166,6 +167,7 @@ const navigation: NavEntry[] = [
       items: [
         { path: '/jobs', label: 'Job Schedule', icon: <CalendarClock className="w-4 h-4" />, roles: ['admin', 'sales_rep', 'applicator'] },
         { path: '/dispatch', label: 'Dispatch & Applicator View', icon: <Truck className="w-4 h-4" />, roles: ['admin', 'sales_rep', 'applicator'] },
+        { path: '/field', label: 'My Field Jobs', icon: <Smartphone className="w-4 h-4" />, roles: ['admin', 'sales_rep', 'applicator'] },
         { path: '/deliveries', label: 'Deliveries', icon: <Truck className="w-4 h-4" />, roles: ['admin', 'sales_rep', 'driver'] },
         { path: '/my-route', label: 'My Route', icon: <Navigation className="w-4 h-4" />, roles: ['admin', 'sales_rep', 'driver'] },
         { path: '/delivery-remainders', label: 'Remainders', icon: <Package className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
