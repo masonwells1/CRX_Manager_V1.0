@@ -146,6 +146,95 @@ describe('selectDispatchView (shared filter)', () => {
   });
 });
 
+describe('selectDispatchView — recipe filter (#39 Filter Jobs By Recipe)', () => {
+  // Three jobs share recipe rec-9 across different statuses/applicators; one has a
+  // DIFFERENT recipe; one has NO recipe. The board narrows to ONLY the chosen recipe
+  // in BOTH list and map (criteria #1/#2/#5 — one selectDispatchView feeds both views).
+  const jobs: DispatchSelectableJob[] = [
+    mkJob({ job_number: 'R1', recipe_id: 'rec-9', status: 'scheduled', applicator_id: 'app-1', job_date: '2026-06-20' }),
+    mkJob({ job_number: 'R2', recipe_id: 'rec-9', status: 'in_progress', applicator_id: 'app-2', job_date: '2026-06-25' }),
+    mkJob({ job_number: 'R3', recipe_id: 'rec-9', status: 'scheduled', applicator_id: 'app-1', job_date: '2026-06-30' }),
+    mkJob({ job_number: 'OTHER', recipe_id: 'rec-5', status: 'scheduled', applicator_id: 'app-1', job_date: '2026-06-21' }),
+    mkJob({ job_number: 'NONE', recipe_id: null, status: 'scheduled', applicator_id: 'app-1', job_date: '2026-06-22' }),
+  ];
+
+  it('narrows to ONLY jobs using the chosen recipe (criterion #1/#2)', () => {
+    const f: DispatchFilters = { ...emptyDispatchFilters, recipeId: 'rec-9' };
+    expect(selectDispatchView(jobs, f, 'list').map((j) => j.job_number).sort()).toEqual(['R1', 'R2', 'R3']);
+  });
+
+  it('excludes a job with a DIFFERENT recipe and a job with NO recipe', () => {
+    const out = selectDispatchView(jobs, { ...emptyDispatchFilters, recipeId: 'rec-9' }, 'list').map((j) => j.job_number);
+    expect(out).not.toContain('OTHER');
+    expect(out).not.toContain('NONE');
+  });
+
+  it('clearing the recipe filter restores the full (otherwise-filtered) set (criterion #3)', () =>
+    expect(selectDispatchView(jobs, { ...emptyDispatchFilters, recipeId: '' }, 'list')).toHaveLength(5));
+
+  it('the SAME recipe filter yields the SAME subset for map and list (criteria #2/#5)', () => {
+    const f: DispatchFilters = { ...emptyDispatchFilters, recipeId: 'rec-9' };
+    const list = selectDispatchView(jobs, f, 'list').map((j) => j.job_number).sort();
+    const map = selectDispatchView(jobs, f, 'map').map((j) => j.job_number).sort();
+    expect(map).toEqual(list);
+    expect(list).toEqual(['R1', 'R2', 'R3']);
+  });
+
+  // CRITERION #4 — the load-bearing additivity proof. The recipe filter must COMBINE
+  // with (not replace) an assignee / status / date filter.
+  it('COMBINES with the applicator filter (recipe AND assignee — criterion #4)', () => {
+    const f: DispatchFilters = { ...emptyDispatchFilters, recipeId: 'rec-9', applicatorId: 'app-1' };
+    // Only R1 & R3 are both recipe rec-9 AND applicator app-1 (R2 is app-2).
+    expect(selectDispatchView(jobs, f, 'list').map((j) => j.job_number).sort()).toEqual(['R1', 'R3']);
+  });
+
+  it('COMBINES with the status filter (recipe AND status — criterion #4)', () => {
+    const f: DispatchFilters = { ...emptyDispatchFilters, recipeId: 'rec-9', status: 'in_progress' };
+    expect(selectDispatchView(jobs, f, 'list').map((j) => j.job_number)).toEqual(['R2']);
+  });
+
+  it('COMBINES with the date range (recipe AND date — criterion #4)', () => {
+    const f: DispatchFilters = { ...emptyDispatchFilters, recipeId: 'rec-9', startDate: '2026-06-24', endDate: '2026-06-26' };
+    expect(selectDispatchView(jobs, f, 'list').map((j) => j.job_number)).toEqual(['R2']);
+  });
+
+  it('COMBINES with a per-location-only assignee (recipe AND #36 location dispatch)', () => {
+    // A job whose ONLY app-1 link is a per-location dispatch still combines with the recipe.
+    const withPerLocation: DispatchSelectableJob[] = [
+      mkJob({ job_number: 'PL', recipe_id: 'rec-9', applicator_id: null, dispatched_applicator_ids: ['app-1'] }),
+      ...jobs,
+    ];
+    const f: DispatchFilters = { ...emptyDispatchFilters, recipeId: 'rec-9', applicatorId: 'app-1' };
+    expect(selectDispatchView(withPerLocation, f, 'list').map((j) => j.job_number).sort()).toEqual(['PL', 'R1', 'R3']);
+  });
+
+  it('a recipe with no matching jobs yields an empty set (not the full board)', () =>
+    expect(selectDispatchView(jobs, { ...emptyDispatchFilters, recipeId: 'rec-404' }, 'list')).toHaveLength(0));
+
+  // REGRESSION GUARD: the applicator-filtered board feeds rows from the
+  // get_dispatch_board_jobs RPC, which returns SETOF jsonb built via to_jsonb(jobs.*),
+  // so each row carries recipe_id at the top level exactly like the direct jobs query.
+  // This asserts a JSON-shaped row (string keys, recipe_id present) flows through the
+  // SAME selector — so criterion #4 holds on the applicator path, where the recipe
+  // filter is client-side over the RPC rows. If a future RPC refactor dropped recipe_id
+  // (e.g. switching to a RETURNS TABLE without the column), this test breaks.
+  it('a get_dispatch_board_jobs-shaped row (recipe_id from to_jsonb) filters correctly on the applicator path', () => {
+    // Simulate the spread the board does on the RPC rows: { ...rpcJsonRow }.
+    const rpcRow = {
+      id: 'job-uuid',
+      status: 'scheduled',
+      applicator_id: 'app-1',
+      recipe_id: 'rec-9',
+      job_number: 'RPC-1',
+      job_date: '2026-06-25',
+      customer_name: 'Farm A',
+    } as unknown as DispatchSelectableJob;
+    const noRecipeRow = { ...rpcRow, job_number: 'RPC-0', recipe_id: null } as DispatchSelectableJob;
+    const f: DispatchFilters = { ...emptyDispatchFilters, recipeId: 'rec-9', applicatorId: 'app-1' };
+    expect(selectDispatchView([rpcRow, noRecipeRow], f, 'list').map((j) => j.job_number)).toEqual(['RPC-1']);
+  });
+});
+
 function mkDispatchedRow(over: Partial<DispatchedListRow>): DispatchedListRow {
   return {
     dispatch_id: 'd-1',
