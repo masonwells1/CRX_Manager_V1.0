@@ -57,6 +57,8 @@ function makeProduct(overrides: Partial<Product> = {}): Product {
     suggested_rate: null,
     rate_per_acre: null,
     rate_unit: null,
+    max_label_rate: null,
+    max_label_rate_unit: null,
     notes: null,
     is_active: true,
     created_at: '2026-01-01',

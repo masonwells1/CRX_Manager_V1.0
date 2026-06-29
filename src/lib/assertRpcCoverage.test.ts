@@ -24,7 +24,11 @@ function findSourceFiles(dir: string): string[] {
 // Fire-and-forget calls (`await supabase.rpc(...)` with no `=`) do NOT need
 // wrapping and are excluded by the leading `=`. The `\s*\.\s*rpc` allows the
 // call to span lines (`await supabase\n  .rpc(...)`) — common Prettier shape.
-const RPC_CAPTURE_PATTERN = /=\s*await\s+supabase\s*\.\s*rpc\s*\(\s*['"]([^'"]+)['"]/g;
+//
+// `supabaseUntyped` is an alias for `supabase` used when a table/RPC is not yet
+// in the generated TypeScript types (new tables before type regen). Both aliases
+// must satisfy the same assertRpcResult contract.
+const RPC_CAPTURE_PATTERN = /=\s*await\s+supabase(?:Untyped)?\s*\.\s*rpc\s*\(\s*['"]([^'"]+)['"]/g;
 
 // `assertRpcResult(...)` invocations. The optional `<...>` group handles
 // generic-type uses like `assertRpcResult<{ id: string }>(data, 'rpc_name')`,

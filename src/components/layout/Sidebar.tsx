@@ -45,6 +45,7 @@ import {
   CheckSquare,
   Building2,
   Layers,
+  FlaskConical,
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { hasPageAccess, getPageKeyFromPath } from '../../lib/pagePermissions';
@@ -203,6 +204,7 @@ const navigation: NavEntry[] = [
         { path: '/sales-reports', label: 'Sales Reports', icon: <BarChart3 className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
         { path: '/compliance', label: 'Compliance', icon: <ShieldCheck className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
         { path: '/lot-trace', label: 'Lot Trace', icon: <PackageSearch className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
+        { path: '/label-review', label: 'Label Review', icon: <FlaskConical className="w-4 h-4" />, roles: ['admin'] },
       ],
     },
   },

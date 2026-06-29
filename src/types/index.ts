@@ -65,11 +65,63 @@ export interface Product {
   suggested_rate: string | null;
   rate_per_acre: number | null;
   rate_unit: string | null;
+  /** Maximum application rate from the product label (e.g. 2.5) */
+  max_label_rate: number | null;
+  /** Unit for max_label_rate (e.g. 'oz/acre', 'pt/acre', 'lb/acre') */
+  max_label_rate_unit: string | null;
   notes: string | null;
   internal_notes: string | null;
   is_active: boolean;
   created_at: string;
   updated_at: string;
+}
+
+// ─── Label Drafts (§1 AI Label-Data Backfill) ───────────────────────────────
+
+export type LabelDraftConfidence = 'high' | 'medium' | 'low';
+export type LabelDraftStatus = 'pending' | 'accepted' | 'edited' | 'rejected' | 'needs_manual';
+
+export interface ProductLabelDraft {
+  id: string;
+  product_id: string;
+  signal_word: string | null;
+  rei_hours: number | null;
+  phi_days: number | null;
+  epa_registration: string | null;
+  max_label_rate: number | null;
+  max_label_rate_unit: string | null;
+  source_note: string;
+  confidence: LabelDraftConfidence;
+  status: LabelDraftStatus;
+  created_by: string;
+  reviewed_by: string | null;
+  reviewed_at: string | null;
+  run_idempotency_key: string | null;
+  created_at: string;
+  updated_at: string;
+  // Joined from products query
+  product?: Pick<Product, 'id' | 'product_name' | 'sku' | 'vendor' | 'signal_word' | 'rei_hours' | 'phi_days' | 'epa_registration' | 'max_label_rate' | 'max_label_rate_unit'>;
+}
+
+export interface LabelCoverageReport {
+  total_active_products: number;
+  signal_word: number;
+  rei_hours: number;
+  phi_days: number;
+  epa_registration: number;
+  max_label_rate: number;
+  pending_drafts: number;
+  accepted_drafts: number;
+  rejected_drafts: number;
+  needs_manual: number;
+}
+
+export interface CommitLabelDraftResult {
+  draft_id: string;
+  product_id: string;
+  decision: 'accepted' | 'edited' | 'rejected';
+  applied: string[];
+  skipped: string[];
 }
 
 export interface CostHistory {

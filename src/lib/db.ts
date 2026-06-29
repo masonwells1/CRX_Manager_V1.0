@@ -1,4 +1,4 @@
-import { createClient } from '@supabase/supabase-js';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import type { Database } from '../types/supabase';
 import { Sentry } from './sentry';
 export { sanitizeError } from './errorSanitizer';
@@ -222,3 +222,12 @@ export function hasRpcCode(err: unknown, code: RpcErrorCode): boolean {
     || message.startsWith(`${code}:`)
     || message.startsWith(`${code} `);
 }
+
+/**
+ * Untyped Supabase client alias for tables/RPCs not yet in the generated
+ * `src/types/supabase.ts` (e.g., newly migrated tables applied only locally).
+ * Cast to the plain SupabaseClient to bypass the Database type constraints
+ * while still using the same underlying connection and auth session.
+ * Use this ONLY for new tables/RPCs; prefer the typed `supabase` everywhere else.
+ */
+export const supabaseUntyped: SupabaseClient = supabase as unknown as SupabaseClient;

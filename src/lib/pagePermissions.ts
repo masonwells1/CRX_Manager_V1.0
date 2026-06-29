@@ -81,6 +81,7 @@ export const PAGE_PERMISSIONS: PagePermission[] = [
   { key: 'sales-reports', label: 'Sales Reports', category: 'Reports', roles: ['admin', 'sales_rep'] },
   { key: 'compliance', label: 'Compliance', category: 'Reports', roles: ['admin', 'sales_rep'] },
   { key: 'lot-trace', label: 'Lot Trace', category: 'Reports', roles: ['admin', 'sales_rep'] },
+  { key: 'label-review', label: 'Label Review', category: 'Reports', roles: ['admin'] },
 ];
 
 /**

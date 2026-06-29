@@ -24,6 +24,7 @@ const pageMeta: Record<string, { title: string; accent: string }> = {
   '/rebates': { title: 'Manufacturer', accent: 'Rebates' },
   '/application-records': { title: 'Application', accent: 'Records' },
   '/lot-trace': { title: 'Lot', accent: 'Trace' },
+  '/label-review': { title: 'Label', accent: 'Review' },
   '/delivery-remainders': { title: 'Delivery', accent: 'Remainders' },
   '/brand-vs-generic': { title: 'Brand vs', accent: 'Generic' },
   '/reports': { title: 'Reports', accent: 'Dashboard' },
