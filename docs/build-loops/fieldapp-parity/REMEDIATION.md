@@ -24,10 +24,10 @@ Owner decision (2026-06-29): split-invoice **Unpost = ALL-OR-NOTHING** (atomic g
 - [x] get_job_billed_customers dispatch leg (2b: 20260629180000; dispatched applicator now reads it — role-sim) (Wave1 mig 20260625180000) has the SAME narrow self-gate → a per-location-dispatched applicator's compliance PDF (#10/#11) is REFUSED; add the _is_dispatched_to_me leg (one-line, NEW migration). [folded from spawned task_f10e6bb4]
 
 ### WAVE 3 — P3
-- [ ] FieldApplicationInvoice.tsx:2469 + InvoiceDetail modal: "can be edited" copy vs a completed job being non-editable → text-only fix ("returns the job to Completed so it can be re-invoiced or cancelled"). Do NOT change the lifecycle.
-- [ ] transfer_invoice_to_job cancel path leaves stale total_cost_cents → NEW migration adds `total_cost_cents=0` to the cancel UPDATE.
-- [ ] Jobs.tsx 500-cap: client filters run after the newest-500 cap → add a "showing newest 500" banner when data.length===500.
-- [ ] appliedRecords.ts sumDraftFieldAcres: a row with acres but no field_id is summed into the parent but dropped as a child → skip field-less rows in the sum (or reject in validate).
+- [x] FieldApplicationInvoice.tsx (ConfirmModal ~2485) + InvoiceDetail.tsx (ConfirmModal ~1735): "reopens the job so it can be edited and re-invoiced" → "returns the job to Completed so it can be re-invoiced or cancelled" (text-only, both files; lifecycle untouched; typecheck+build clean).
+- [x] transfer_invoice_to_job cancel path stale total_cost_cents → NEW migration 20260629200000_transfer_invoice_to_job_zero_cost.sql (CREATE OR REPLACE, faithful body, only `total_cost_cents = 0` added to the cancel UPDATE). Applied local (1 overload). Smoke smoke-transfer-invoice-to-job.sql extended + PASS; probe proved forward cost=20000 → after-reverse cost=0; forward re-transfer still works.
+- [x] Jobs.tsx newest-500 cap honesty → JOBS_FETCH_LIMIT const + atFetchCap state (data.length===limit) + amber Info banner above the table Card. Proven in-app: limit 500 (19 jobs) → no banner; limit 10 → banner shows "most recent 10 jobs — older jobs aren't searched", 10 rows; restored to 500 → banner gone.
+- [x] appliedRecords.ts sumDraftFieldAcres → gates on `if (!f.field_id) return sum;` so a field-less row (dropped by buildAppliedFieldRows) is no longer summed into the parent. Test added (field-less row with acres NOT counted). 102 tests pass.
 
 ## Dismissed (for the record) — NOT actioned
 14 ALREADY_FIXED (Jobs totals #15; #18 acres follow-up 20260624181000 = REVOKE public + RESTRICT FK + all-records rollup; salesman/applicator carry-over db061bc5; FieldAppChemicalEntry oz fix ef668faa; fuel-surcharge guards db592aff/20260625141000; discount/PDF rework dd535989; chemical-summary NUL e923cfbc + form-conflict 24a8fd25) · 3 FALSE_POSITIVE (bare CREATE TRIGGER replay; grouped-invoice redirect unreachable; split-group deleted-member status filter already excludes).
