@@ -220,6 +220,32 @@ describe('chemCalculator — toGallonOrLbEquivalent branches on product_form (se
     expect(toGallonOrLbEquivalent(10, 'lb', 'liquid')).toBeNull(); // pounds on a liquid product
     expect(toGallonOrLbEquivalent(10, 'qt', 'dry')).toBeNull();    // quarts on a dry product
   });
+
+  // FIX 1 (Wave 2b) call-site regression: the JobDetail Chemicals-tab gal/lb PREVIEW
+  // (JobDetail.tsx ~2639) previously called toGallonOrLbEquivalent(qty, unit) WITHOUT
+  // the product's form, so a LIQUID line in bare 'oz' took the legacy unit-only branch
+  // and was mis-classified as POUNDS (oz = 1/16 lb) — disagreeing with the saved /
+  // invoiced value (server convert_to_gl_lb treats liquid oz as FLUID ounces = 1/128
+  // gal). The fix resolves product_form from allProducts and passes it. This mirrors
+  // that exact call-site resolution to lock in the gallons (not pounds) classification.
+  it('JobDetail preview call site: liquid product in bare oz resolves to GALLONS, not pounds', () => {
+    const allProducts = [
+      { id: 'p-liquid', product_form: 'liquid' as const },
+      { id: 'p-dry', product_form: 'dry' as const },
+      { id: 'p-unknown', product_form: null },
+    ];
+    const resolveForm = (productId: string) => {
+      const f = allProducts.find((p) => p.id === productId)?.product_form ?? null;
+      return f === 'liquid' || f === 'dry' ? f : null;
+    };
+    // 80 oz of a LIQUID product → 0.625 gal (NOT 5 lb) — the bug FIX 1 closes.
+    expect(toGallonOrLbEquivalent(80, 'oz', resolveForm('p-liquid'))).toEqual({ value: 0.625, unit: 'gal' });
+    expect(toGallonOrLbEquivalent(80, 'oz', resolveForm('p-liquid'))).toEqual(serverGlLb(80, 'oz', 'liquid'));
+    // A DRY product in oz still reads as pounds (unchanged).
+    expect(toGallonOrLbEquivalent(80, 'oz', resolveForm('p-dry'))).toEqual({ value: 5, unit: 'lb' });
+    // An unknown-form product falls back to the legacy unit-only inference.
+    expect(toGallonOrLbEquivalent(80, 'oz', resolveForm('p-unknown'))).toEqual({ value: 5, unit: 'lb' });
+  });
 });
 
 describe('chemCalculator — baseUnitOfRate (strip the per-acre suffix)', () => {

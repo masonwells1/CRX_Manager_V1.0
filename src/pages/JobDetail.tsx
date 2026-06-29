@@ -27,7 +27,7 @@ import { generateChemicalApplicationReportPdf } from '../lib/chemicalApplication
 import { resolveBilledCustomers } from '../lib/billedCustomersResolver';
 import { generateLoaderWorksheetPdf } from '../lib/loaderWorksheetPdf';
 import { computeLoaderWorksheet, isGallonCapacityUnit } from '../lib/loaderWorksheet';
-import { overrideSaveApplicatorId, shouldReassignApplicatorAfterSave, canGenerateWpsNotice } from '../lib/jobSaveHelpers';
+import { overrideSaveApplicatorId, shouldReassignApplicatorAfterSave, canGenerateWpsNotice, anySelectedFieldSharesLoading } from '../lib/jobSaveHelpers';
 import { fetchCurrentWeather, parseCentroid } from '../lib/weatherCapture';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
@@ -1112,6 +1112,12 @@ export default function JobDetail() {
   // Per-field customer shares, keyed by field. Empty until a field is added /
   // shares are loaded — then defaulted from field_billing_defaults.
   const [shareRows, setShareRows] = useState<ShareRow[]>([]);
+  // FIX 3 (Wave 2b): field_ids whose customer-share defaults are still being looked
+  // up (async seedSharesForField). A save while a selected field is still loading
+  // would see an EMPTY shareRows for it, pass sharesValid (no shares = OK), and send
+  // an empty field_shares array — so save_job persists NO frozen split snapshot for a
+  // split-billed field. Block save until every selected field's shares have resolved.
+  const [sharesLoading, setSharesLoading] = useState<Set<string>>(new Set());
 
   // Applied info (completion)
   const [showCompleteModal, setShowCompleteModal] = useState(false);
@@ -1545,10 +1551,19 @@ export default function JobDetail() {
       return Math.abs((fieldShareTotals[f.field_id] || 0) - 100) < 0.01;
     });
 
+  // FIX 3: a selected field whose share defaults are still loading is NOT yet
+  // save-ready (an empty shareRows for it would slip past sharesValid and persist
+  // no split snapshot). Block the save until those lookups resolve.
+  const selectedFieldSharesLoading = anySelectedFieldSharesLoading(fieldRows, sharesLoading);
+
   const handleSave = async () => {
     saveJobIdem.resetKey();
     if (!customerId) { toast('error', 'Customer is required'); return; }
     if (!jobDate) { toast('error', 'Job date is required'); return; }
+    if (selectedFieldSharesLoading) {
+      toast('error', 'Field shares are still loading — try again in a moment.');
+      return;
+    }
     if (!sharesValid) {
       toast('error', "Each field's customer shares must total 100%. Open the Locations tab to fix.");
       return;
@@ -1698,16 +1713,39 @@ export default function JobDetail() {
         // committed, so it must never send a value the CHECK would reject.
         const carrierVal = carrierRateGpa.trim() !== '' && !Number.isNaN(parsedCarrier) && parsedCarrier >= 0 ? parsedCarrier : null;
         const capacityVal = tankCapacity.trim() !== '' && !Number.isNaN(parsedCapacity) && parsedCapacity > 0 ? parsedCapacity : null;
-        const crewResult = await supabase
-          .from('jobs')
-          .update({
-            ground_crew_id: groundCrewId || null,
-            carrier_rate_gpa: carrierVal,
-            loader_tank_capacity: capacityVal,
-          })
-          .eq('id', savedJobId)
-          .select('id');
-        checkMutationResult(crewResult, 'Assign ground crew / loader worksheet');
+        // FIX 2 (Wave 2b): wrap this crew/loader sub-write in its OWN try/catch.
+        // save_job has already INSERTED the row and the idempotency key was reset
+        // above. If this separate .update() then fails (e.g. ground_crew_id FK
+        // rejected because the crew was deleted by another user), the outer catch
+        // would toast but NOT navigate — leaving an isNew user on /jobs/new with
+        // isDirty still true. A retry there mints a FRESH idempotency key and
+        // save_job INSERTS A SECOND job (silent duplicate → duplicate-invoicing
+        // risk). Instead, on failure we move the user onto the SAVED job (exactly
+        // the applicator-reassign-failure pattern below) so any retry edits the
+        // existing row rather than inserting again.
+        try {
+          const crewResult = await supabase
+            .from('jobs')
+            .update({
+              ground_crew_id: groundCrewId || null,
+              carrier_rate_gpa: carrierVal,
+              loader_tank_capacity: capacityVal,
+            })
+            .eq('id', savedJobId)
+            .select('id');
+          checkMutationResult(crewResult, 'Assign ground crew / loader worksheet');
+        } catch (crewErr) {
+          Sentry.captureException(crewErr instanceof Error ? crewErr : new Error(String(crewErr)), { extra: { context: 'job_crew_loader_after_save' } });
+          toast('error', 'Job created, but the crew/loader settings did not save — adjust them on this page.');
+          setIsDirty(false);
+          if (isNew) {
+            navigate(`/jobs/${result.job_id}`);
+          } else {
+            await fetchJob();
+          }
+          setSaving(false);
+          return;
+        }
       }
 
       if (shouldReassignApplicatorAfterSave({ licenseOverride, applicatorId, savedApplicatorId })) {
@@ -1975,25 +2013,37 @@ export default function JobDetail() {
     if (!fieldId) return;
     // Don't clobber shares already set for this field.
     if (shareRows.some((s) => s.field_id === fieldId)) return;
-    const { data } = await supabase
-      .from('field_billing_defaults')
-      .select('customer_id, split_pct, is_primary')
-      .eq('field_id', fieldId);
-    let seeded: ShareRow[];
-    if (data && data.length > 0) {
-      seeded = (data as { customer_id: string; split_pct: number; is_primary: boolean }[]).map((d) => ({
-        field_id: fieldId,
-        customer_id: d.customer_id,
-        split_pct: d.split_pct.toString(),
-        is_primary: d.is_primary,
-      }));
-    } else {
-      // Fall back to the field's owner at 100%.
-      const fld = allFields.find((f) => f.id === fieldId);
-      const ownerId = fld?.customer_id || customerId;
-      seeded = ownerId ? [{ field_id: fieldId, customer_id: ownerId, split_pct: '100', is_primary: true }] : [];
+    // FIX 3: mark this field as "shares loading" so handleSave/sharesValid block a
+    // save that would otherwise race ahead of the async lookup and persist an empty
+    // split snapshot. Cleared in finally regardless of success/error.
+    setSharesLoading((prev) => new Set(prev).add(fieldId));
+    try {
+      const { data } = await supabase
+        .from('field_billing_defaults')
+        .select('customer_id, split_pct, is_primary')
+        .eq('field_id', fieldId);
+      let seeded: ShareRow[];
+      if (data && data.length > 0) {
+        seeded = (data as { customer_id: string; split_pct: number; is_primary: boolean }[]).map((d) => ({
+          field_id: fieldId,
+          customer_id: d.customer_id,
+          split_pct: d.split_pct.toString(),
+          is_primary: d.is_primary,
+        }));
+      } else {
+        // Fall back to the field's owner at 100%.
+        const fld = allFields.find((f) => f.id === fieldId);
+        const ownerId = fld?.customer_id || customerId;
+        seeded = ownerId ? [{ field_id: fieldId, customer_id: ownerId, split_pct: '100', is_primary: true }] : [];
+      }
+      if (seeded.length > 0) setShareRows((prev) => [...prev, ...seeded]);
+    } finally {
+      setSharesLoading((prev) => {
+        const next = new Set(prev);
+        next.delete(fieldId);
+        return next;
+      });
     }
-    if (seeded.length > 0) setShareRows((prev) => [...prev, ...seeded]);
   };
 
   const addFieldRow = () => {
@@ -2020,7 +2070,17 @@ export default function JobDetail() {
         updated[i].crop = f.crop_type;
       }
       // Re-seed shares for the newly chosen field; drop the old field's shares.
-      if (prevFieldId) setShareRows((prev) => prev.filter((s) => s.field_id !== prevFieldId));
+      if (prevFieldId) {
+        setShareRows((prev) => prev.filter((s) => s.field_id !== prevFieldId));
+        // FIX 3: also clear any in-flight loading flag for the field being replaced,
+        // so a stale flag can't permanently block save after a field swap.
+        setSharesLoading((prev) => {
+          if (!prev.has(prevFieldId)) return prev;
+          const next = new Set(prev);
+          next.delete(prevFieldId);
+          return next;
+        });
+      }
       if (value) seedSharesForField(value);
     }
     setFieldRows(updated);
@@ -2636,7 +2696,14 @@ export default function JobDetail() {
             <div className="space-y-3">
               {chemRows.map((c, i) => {
                 const totalApplied = parseFloat(c.quantity) || 0;
-                const conv = toGallonOrLbEquivalent(totalApplied, c.unit);
+                // FIX 1 (Wave 2b): pass the product's form so this in-page gal/lb
+                // preview matches the server convert_to_gl_lb (and the #11 report at
+                // ~813-926 / FieldAppChemicalEntry). Without it a LIQUID line measured
+                // in bare 'oz' takes the legacy branch and is mis-classified as POUNDS
+                // (oz = 1/16 lb) instead of FLUID ounces (1/128 gal) — the preview then
+                // disagrees with the saved/invoiced value.
+                const previewForm = allProducts.find((p) => p.id === c.product_id)?.product_form ?? null;
+                const conv = toGallonOrLbEquivalent(totalApplied, c.unit, previewForm === 'liquid' || previewForm === 'dry' ? previewForm : null);
                 return (
                   <div key={i} className="border border-gray-200 rounded-lg p-3 space-y-2">
                     <div className="grid grid-cols-12 gap-2 items-end">

@@ -46,3 +46,21 @@ export function shouldReassignApplicatorAfterSave(opts: {
 export function canGenerateWpsNotice(opts: { isDirty: boolean }): boolean {
   return !opts.isDirty;
 }
+
+/**
+ * FIX 3 (Wave 2b): true when at least one SELECTED field's customer-share defaults
+ * are still being looked up asynchronously (seedSharesForField in flight). Saving in
+ * that window would see an EMPTY shareRows for that field — sharesValid would pass
+ * (no shares = single-owner, OK) and an empty field_shares array would be sent, so a
+ * split-billed field saved then persists NO frozen split snapshot. handleSave uses
+ * this to BLOCK the save until the lookups resolve.
+ *
+ * A field row with no field_id (a blank, not-yet-picked row) never blocks. Pure so
+ * the rule is unit-testable without mounting JobDetail.
+ */
+export function anySelectedFieldSharesLoading(
+  fieldRows: { field_id: string }[],
+  loadingFieldIds: ReadonlySet<string>,
+): boolean {
+  return fieldRows.some((f) => !!f.field_id && loadingFieldIds.has(f.field_id));
+}

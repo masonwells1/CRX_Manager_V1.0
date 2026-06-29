@@ -3,6 +3,7 @@ import {
   overrideSaveApplicatorId,
   shouldReassignApplicatorAfterSave,
   canGenerateWpsNotice,
+  anySelectedFieldSharesLoading,
 } from './jobSaveHelpers';
 
 const A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'; // newly-selected (e.g. expired) applicator
@@ -50,5 +51,28 @@ describe('canGenerateWpsNotice (#5 — block WPS while the form is dirty)', () =
   });
   it('allows when the form is saved/clean', () => {
     expect(canGenerateWpsNotice({ isDirty: false })).toBe(true);
+  });
+});
+
+describe('anySelectedFieldSharesLoading (FIX 3 Wave 2b — block save while a field\'s shares load)', () => {
+  it('BLOCKS when a selected field is still loading its shares (save-immediately-after-select)', () => {
+    // The exact race: user picks field A, then hits Save before seedSharesForField(A)
+    // resolves — A is in the loading set, so save must be blocked.
+    expect(anySelectedFieldSharesLoading([{ field_id: A }], new Set([A]))).toBe(true);
+  });
+  it('allows once the lookup has resolved (loading set cleared)', () => {
+    expect(anySelectedFieldSharesLoading([{ field_id: A }], new Set())).toBe(false);
+  });
+  it('a blank (not-yet-picked) field row never blocks, even if some other id is loading', () => {
+    expect(anySelectedFieldSharesLoading([{ field_id: '' }], new Set([A]))).toBe(false);
+  });
+  it('blocks if ANY of several selected fields is still loading', () => {
+    expect(anySelectedFieldSharesLoading([{ field_id: A }, { field_id: B }], new Set([B]))).toBe(true);
+  });
+  it('allows when none of the selected fields are loading (an unrelated id loads)', () => {
+    expect(anySelectedFieldSharesLoading([{ field_id: A }], new Set([B]))).toBe(false);
+  });
+  it('no fields at all -> never blocks', () => {
+    expect(anySelectedFieldSharesLoading([], new Set([A]))).toBe(false);
   });
 });
