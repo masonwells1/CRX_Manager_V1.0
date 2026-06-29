@@ -97,8 +97,11 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
   // #28: Unpost — reverse a posting on a posted field-application invoice (returns it
   // to the editable Unposted list). Surfaced here so a TRANSFERRED field invoice (which
   // opens in THIS generic editor, not the per-acre one) can be unposted in place.
-  // #28: Unpost key cache (keyed by invoice id) so a retry reuses the same key — the
-  // group case unposts several members, each needing its own stable key.
+  // #28/FIX 4: per-invoice AND per-group key cache so a retry reuses the same key while a
+  // different invoice/group always gets its own. A single invoice uses unpost_invoice
+  // (keyed by id); a SPLIT GROUP routes through the atomic unpost_invoice_group (FIX 4 —
+  // all-or-nothing) under a `grp:<groupId>` key. A ref map (not the useIdempotencyKey
+  // hook) so it's render-stable AND inherently per-group — no cross-group replay.
   const unpostKeysRef = useRef<Record<string, string>>({});
   const { warning: creditWarning, check: checkCreditLimit, dismiss: dismissCreditWarning } = useCreditLimitCheck();
   const isNew = id === 'new';
@@ -691,58 +694,54 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
   };
 
   // #28: Unpost invoice — reverse a posting (posted/overdue -> unposted) on a
-  // field-application invoice, returning it to the editable Unposted list. The
-  // gated unpost_invoice RPC refuses a paid/voided invoice, one with payments/prepay
-  // applied, or one in a closed accounting period — surfaced here as a toast. A
-  // split group is unposted member-by-member (no group RPC); each call is idempotent.
+  // field-application invoice, returning it to the editable Unposted list. The gated
+  // RPC refuses a paid/voided invoice, one with payments/prepay applied, or one in a
+  // closed accounting period — surfaced here as a toast.
+  // FIX 4 (Wave 2a): a SPLIT GROUP routes through unpost_invoice_group, which unposts
+  // ALL members in ONE transaction (all-or-nothing) — a single in-JS member loop could
+  // leave a half-unposted group. A single invoice still uses unpost_invoice.
   const handleUnpost = async () => {
     if (!id || !profile) return;
     setUnposting(true);
-    let ok = 0;
-    const failures: string[] = [];
     try {
-      // Resolve the unpost target list. For a split group, unpost every posted/overdue
-      // member (mirrors how Post is group-aware); otherwise just this invoice.
-      let targetIds: string[] = [id];
       if (invoice.invoice_group_id) {
-        const { data: members, error: memErr } = await supabase
-          .from('invoices')
-          .select('id, status')
-          .eq('invoice_group_id', invoice.invoice_group_id)
-          .in('status', ['posted', 'overdue']);
-        if (memErr) throw memErr;
-        const ids = (members || []).map((m) => (m as { id: string }).id);
-        if (ids.length > 0) targetIds = ids;
-      }
-      for (const invId of targetIds) {
-        // Per-invoice key cache so a timeout retry reuses the same key (no double unpost).
-        if (!unpostKeysRef.current[invId]) {
-          unpostKeysRef.current[invId] = generateIdempotencyKey('unpost_invoice', `${profile.id}:${invId}`);
+        // Per-GROUP key (keyed by invoice_group_id) so a retry reuses the same key while a
+        // different group always gets its own — no cross-group replay (the server also
+        // rejects a mismatched-group replay as a backstop). Cleared on success.
+        const groupKeyId = `grp:${invoice.invoice_group_id}`;
+        if (!unpostKeysRef.current[groupKeyId]) {
+          unpostKeysRef.current[groupKeyId] = generateIdempotencyKey('unpost_invoice_group', `${profile.id}:${invoice.invoice_group_id}`);
         }
-        try {
-          const { data, error } = await supabase.rpc('unpost_invoice', {
-            p_invoice_id: invId,
-            p_performed_by: profile.id,
-            p_idempotency_key: unpostKeysRef.current[invId],
-          });
-          if (error) throw error;
-          assertRpcResult(data, 'unpost_invoice');
-          ok += 1;
-          delete unpostKeysRef.current[invId];
-        } catch (err: unknown) {
-          Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'unpost_invoice' } });
-          failures.push(sanitizeError(err));
-        }
-      }
-      if (failures.length === 0) {
-        toast('success', targetIds.length > 1 ? `Unposted ${ok} invoice(s)` : 'Invoice unposted');
-      } else if (ok > 0) {
-        toast('error', `Unposted ${ok}, but ${failures.length} failed: ${failures[0]}`);
+        const { data, error } = await supabase.rpc('unpost_invoice_group', {
+          p_invoice_group_id: invoice.invoice_group_id,
+          p_performed_by: profile.id,
+          p_idempotency_key: unpostKeysRef.current[groupKeyId],
+        });
+        if (error) throw error;
+        assertRpcResult(data, 'unpost_invoice_group');
+        delete unpostKeysRef.current[groupKeyId];
+        toast('success', 'Invoice group unposted');
       } else {
-        toast('error', failures[0]);
+        if (!unpostKeysRef.current[id]) {
+          unpostKeysRef.current[id] = generateIdempotencyKey('unpost_invoice', `${profile.id}:${id}`);
+        }
+        const { data, error } = await supabase.rpc('unpost_invoice', {
+          p_invoice_id: id,
+          p_performed_by: profile.id,
+          p_idempotency_key: unpostKeysRef.current[id],
+        });
+        if (error) throw error;
+        assertRpcResult(data, 'unpost_invoice');
+        delete unpostKeysRef.current[id];
+        toast('success', 'Invoice unposted');
       }
       setShowUnpostModal(false);
       fetchInvoice(id);
+    } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), {
+        extra: { context: invoice.invoice_group_id ? 'unpost_invoice_group' : 'unpost_invoice' },
+      });
+      toast('error', sanitizeError(err));
     } finally {
       setUnposting(false);
     }
@@ -1158,9 +1157,12 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
           {/* #28: Unpost — reverse a posting on a field-application invoice back to the
               Unposted list. Surfaced here because a TRANSFERRED field invoice opens in
               this generic editor (job_id, no field_app_locations). Posted/overdue only;
-              the RPC refuses one with payments/prepay or in a closed period. */}
+              the RPC refuses one with payments/prepay or in a closed period.
+              FIX 5 (Wave 2a): NOT admin-gated — unpost_invoice/_group explicitly allow
+              sales_rep, and the Posted list + per-acre editor already offer sales reps
+              Unpost. (Void stays admin-only below.) */}
           {!isNew && invoice.invoice_type === 'field_application'
-            && (invoice.status === 'posted' || invoice.status === 'overdue') && isAdmin && (
+            && (invoice.status === 'posted' || invoice.status === 'overdue') && (
               <Button
                 variant="secondary"
                 icon={<RotateCcw className="w-4 h-4" />}

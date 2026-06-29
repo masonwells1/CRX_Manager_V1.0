@@ -138,8 +138,13 @@ export default function FieldApplicationInvoice() {
   // #27: reverse "Transfer to Scheduling" — push a job-built invoice back to its job.
   const transferToSchedulingIdem = useIdempotencyKey('transfer_invoice_to_job', profile?.id || '');
   // #28: Unpost — reverse a posting (posted/overdue -> unposted) right on this screen.
-  // Per-invoice key cache (keyed by invoice id) so a retry reuses the same key — the
-  // group case unposts several members, each needing its own stable key.
+  // Per-invoice key cache (keyed by invoice id) for the SINGLE-invoice path.
+  // FIX 4 (Wave 2a): a SPLIT GROUP routes through the atomic unpost_invoice_group under
+  // its own group key (all-or-nothing) instead of looping members in JS.
+  // #28/FIX 4: per-invoice AND per-group key cache (keyed by invoice id, or `grp:<groupId>`
+  // for the atomic group unpost) so a retry reuses the same key while a different
+  // invoice/group always gets its own — no useIdempotencyKey hook (its per-render object
+  // would loop a fetch effect; a ref map is render-stable and inherently per-group).
   const unpostKeysRef = useRef<Record<string, string>>({});
   // #29: Void — cancel/void this bill right on this screen (draft/unposted -> cancelled,
   // posted/overdue -> voided). Same per-invoice key cache so a split group is voided
@@ -1150,54 +1155,65 @@ export default function FieldApplicationInvoice() {
   };
 
   // #28: Unpost — reverse the posting (posted/overdue -> unposted) right on this
-  // editor, the inverse of Post. Group-aware to mirror Post: a split group is
-  // unposted member-by-member through the gated unpost_invoice RPC (each call is
-  // idempotent + honors the money/closed-period guards in the RPC). A single
-  // invoice unposts itself. The RPC refuses a paid/voided invoice or one in a
-  // closed period with a plain-English error surfaced as a toast.
+  // editor, the inverse of Post. The gated RPC refuses a paid/voided invoice or one
+  // in a closed period with a plain-English error surfaced as a toast.
+  // FIX 4 (Wave 2a): a SPLIT GROUP routes through unpost_invoice_group — ALL members
+  // unpost in ONE transaction (all-or-nothing); a mid-loop failure can no longer leave
+  // a half-unposted group. A single invoice still uses unpost_invoice.
   const handleUnpost = async () => {
     if (!profile || !id) return;
-    // Build the target list: every posted/overdue member of the group (or just this
-    // invoice). Skip members that are not posted/overdue (nothing to unpost there).
-    const groupMembers = invoiceGroupId && siblings.length > 0 ? siblings : [{ id, status }];
-    const targets = groupMembers.filter((m) => m.status === 'posted' || m.status === 'overdue');
-    if (targets.length === 0) {
+    // Route on invoiceGroupId ALONE (mirrors handlePost): if this invoice belongs to a
+    // split group we ALWAYS use unpost_invoice_group so ALL members move atomically — even
+    // if the client `siblings` query came back empty (a transient fetch/RLS error). The RPC
+    // owns membership (it locks + unposts every group member), so we never fall back to a
+    // single-member unpost that could leave the group half-unposted (Codex).
+    const isGroup = !!invoiceGroupId;
+    // For a single invoice, guard the "nothing to unpost" case up front. For a group,
+    // the RPC decides (it unposts every member; a non-posted member is an honest error).
+    if (!isGroup && !(status === 'posted' || status === 'overdue')) {
       toast('error', 'Nothing to unpost — this invoice is not posted.');
       return;
     }
     setUnposting(true);
-    let ok = 0;
-    const failures: string[] = [];
     try {
-      for (const m of targets) {
-        // Per-invoice key cache: a retry after a timeout reuses the SAME key so the
-        // server dedup matches (never a double unpost). Cleared per id on success.
-        if (!unpostKeysRef.current[m.id]) {
-          unpostKeysRef.current[m.id] = generateIdempotencyKey('unpost_invoice', `${profile.id}:${m.id}`);
+      if (isGroup) {
+        // Per-GROUP key cache (keyed by invoice_group_id) so a timeout retry reuses the
+        // SAME key (idempotent) while a DIFFERENT group always gets its own key — the
+        // client can't accidentally replay group A's key onto group B (the server also
+        // rejects a cross-group replay as a backstop). Cleared on success.
+        const groupKeyId = `grp:${invoiceGroupId}`;
+        if (!unpostKeysRef.current[groupKeyId]) {
+          unpostKeysRef.current[groupKeyId] = generateIdempotencyKey('unpost_invoice_group', `${profile.id}:${invoiceGroupId}`);
         }
-        try {
-          const { data, error } = await supabase.rpc('unpost_invoice', {
-            p_invoice_id: m.id,
-            p_performed_by: profile.id,
-            p_idempotency_key: unpostKeysRef.current[m.id],
-          });
-          if (error) throw error;
-          assertRpcResult(data, 'unpost_invoice');
-          ok += 1;
-          delete unpostKeysRef.current[m.id];
-        } catch (err) {
-          Sentry.captureException(err, { tags: { rpc: 'unpost_invoice' } });
-          failures.push(fieldAppError(err));
-        }
-      }
-      if (failures.length === 0) {
-        toast('success', targets.length > 1 ? `Unposted ${ok} invoice(s)` : 'Invoice unposted');
-      } else if (ok > 0) {
-        toast('error', `Unposted ${ok}, but ${failures.length} failed: ${failures[0]}`);
+        const { data, error } = await supabase.rpc('unpost_invoice_group', {
+          p_invoice_group_id: invoiceGroupId,
+          p_performed_by: profile.id,
+          p_idempotency_key: unpostKeysRef.current[groupKeyId],
+        });
+        if (error) throw error;
+        assertRpcResult(data, 'unpost_invoice_group');
+        delete unpostKeysRef.current[groupKeyId];
+        toast('success', 'Invoice group unposted');
       } else {
-        toast('error', `Unpost failed: ${failures[0]}`);
+        // Per-invoice key cache: a retry after a timeout reuses the SAME key so the
+        // server dedup matches (never a double unpost). Cleared on success.
+        if (!unpostKeysRef.current[id]) {
+          unpostKeysRef.current[id] = generateIdempotencyKey('unpost_invoice', `${profile.id}:${id}`);
+        }
+        const { data, error } = await supabase.rpc('unpost_invoice', {
+          p_invoice_id: id,
+          p_performed_by: profile.id,
+          p_idempotency_key: unpostKeysRef.current[id],
+        });
+        if (error) throw error;
+        assertRpcResult(data, 'unpost_invoice');
+        delete unpostKeysRef.current[id];
+        toast('success', 'Invoice unposted');
       }
       fetchInvoice();
+    } catch (err) {
+      Sentry.captureException(err, { tags: { rpc: isGroup ? 'unpost_invoice_group' : 'unpost_invoice' } });
+      toast('error', `Unpost failed: ${fieldAppError(err)}`);
     } finally {
       setUnposting(false);
     }

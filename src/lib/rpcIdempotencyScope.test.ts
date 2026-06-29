@@ -198,6 +198,7 @@ const INLINE_SCOPED: string[] = [
   'save_quote_template',
   'start_job',
   'unapply_credit_memo',
+  'unpost_invoice_group',
   'void_delivery',
   'void_payment',
 ];
