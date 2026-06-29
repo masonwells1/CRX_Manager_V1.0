@@ -11,15 +11,17 @@ Owner decision (2026-06-29): split-invoice **Unpost = ALL-OR-NOTHING** (atomic g
 - [x] **P1 MONEY** (commit b807da4 — 240 pt not GAL, cost $674 not $5400; 13 tests) — `JobDetail.tsx` updateChemRow autofill (~2093-2111): product with stock unit≠rate unit (e.g. unit_size=GAL, rate_unit=pt/ac) autofills qty=rate×acres but labels it the STOCK unit → saves 240 GAL not 240 pt, inflating loader gal + cost/price ~8×. Fix: express qty+unit+cost in ONE consistent measure (rate's base unit). Add a GAL/pt-ac unit test. Re-check the in-page gal/lb preview (2622), totals (1410-1411), loader (1462).
 
 ### WAVE 2 — P2
-- [ ] convert_to_gl_lb: liquid branch only matches 'GL'; add GAL/Gal/Gallon(S) aliases + NULL for unknown (NEW migration). Strengthen chemCalculator parity test.
-- [ ] InvoiceDetail.tsx:1163 Unpost button gated `&& isAdmin` but RPC allows sales_rep → drop `&& isAdmin` (keep Void admin-only).
-- [ ] job_applied_record_fields INSERT/UPDATE RLS: add job-field membership check `EXISTS(job_fields jf WHERE jf.job_id=r.job_id AND jf.field_id=…)` (NEW migration).
-- [ ] Jobs.tsx co-billed customers: applicator RLS hides share customers → resolve via SECURITY DEFINER (batch get_jobs_billed_customers RPC or reuse get_job_billed_customers).
+- [x] convert_to_gl_lb (2a: 20260629140000; GAL/gal/Gallon=10, unknown→dash; 35 tests): liquid branch only matches 'GL'; add GAL/Gal/Gallon(S) aliases + NULL for unknown (NEW migration). Strengthen chemCalculator parity test.
+- [x] Unpost-isAdmin removed (2a, commit 7f90cc48; Void untouched) button gated `&& isAdmin` but RPC allows sales_rep → drop `&& isAdmin` (keep Void admin-only).
+- [x] applied-record RLS membership (2a: 20260629150000; foreign field_id rejected — smoke)/UPDATE RLS: add job-field membership check `EXISTS(job_fields jf WHERE jf.job_id=r.job_id AND jf.field_id=…)` (NEW migration).
+- [x] co-billed SECDEF batch RPC (2a: 20260629160000 get_jobs_billed_customers; applicator+dispatchee see split set; anon revoked) customers: applicator RLS hides share customers → resolve via SECURITY DEFINER (batch get_jobs_billed_customers RPC or reuse get_job_billed_customers).
 - [ ] JobDetail.tsx:2622 gal/lb PREVIEW drops product_form → bare 'oz' liquid misclassified as lb; pass product_form (same root as ef668faa fix, this call site remains).
 - [ ] JobDetail.tsx new-job save: idempotency key reset BEFORE crew/loader sub-write → sub-write fail → retry mints new key → DUPLICATE JOB. Wrap sub-write in try/catch + navigate to saved job (mirror the applicator-reassign pattern).
 - [ ] AppliedRecordsManager.tsx: non-atomic parent+child save → wrap in a save_job_applied_record txn RPC (covers #21 crew rows too).
-- [ ] **[owner=ALL-OR-NOTHING]** unpost split group: NEW `unpost_invoice_group` RPC (atomic, modeled on post_invoice_group) routed from both UI surfaces when invoice_group_id set.
+- [x] **[owner=ALL-OR-NOTHING]** unpost_invoice_group (2a: 20260629170000; paid member→whole RAISES — proven; routed both surfaces) unpost split group: NEW `unpost_invoice_group` RPC (atomic, modeled on post_invoice_group) routed from both UI surfaces when invoice_group_id set.
 - [ ] JobDetail.tsx shares-loading: save before async seedSharesForField resolves → empty split snapshot persisted; block save while a selected field's shares are still loading.
+
+- [ ] get_job_billed_customers (Wave1 mig 20260625180000) has the SAME narrow self-gate → a per-location-dispatched applicator's compliance PDF (#10/#11) is REFUSED; add the _is_dispatched_to_me leg (one-line, NEW migration). [folded from spawned task_f10e6bb4]
 
 ### WAVE 3 — P3
 - [ ] FieldApplicationInvoice.tsx:2469 + InvoiceDetail modal: "can be edited" copy vs a completed job being non-editable → text-only fix ("returns the job to Completed so it can be re-invoiced or cancelled"). Do NOT change the lifecycle.
