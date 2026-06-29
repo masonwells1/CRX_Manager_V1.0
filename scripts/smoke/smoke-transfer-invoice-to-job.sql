@@ -76,6 +76,9 @@ BEGIN
   SELECT * INTO v_jobR FROM jobs WHERE id=v_job;
   IF v_invR.status<>'cancelled' THEN RAISE EXCEPTION 'SMOKE_FAIL: invoice not cancelled (%)', v_invR.status; END IF;
   IF v_invR.total_amount_cents<>0 THEN RAISE EXCEPTION 'SMOKE_FAIL: cancelled invoice total not zeroed (%)', v_invR.total_amount_cents; END IF;
+  -- P3 remediation: the internal COGS header is zeroed too, so a cancelled, line-less
+  -- invoice never keeps a stale forward cost total on its PDF.
+  IF v_invR.total_cost_cents<>0 THEN RAISE EXCEPTION 'SMOKE_FAIL: cancelled invoice total_cost_cents not zeroed (%)', v_invR.total_cost_cents; END IF;
   IF v_jobR.status<>'completed' THEN RAISE EXCEPTION 'SMOKE_FAIL: job not returned to completed (%)', v_jobR.status; END IF;
   IF v_jobR.invoice_id IS NOT NULL THEN RAISE EXCEPTION 'SMOKE_FAIL: job.invoice_id not cleared'; END IF;
   SELECT count(*) INTO v_n FROM invoice_items WHERE invoice_id=v_inv; IF v_n<>0 THEN RAISE EXCEPTION 'SMOKE_FAIL: invoice_items not deleted (%)', v_n; END IF;

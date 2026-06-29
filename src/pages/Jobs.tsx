@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Download, FileText, Trash2, ChevronDown, ChevronRight, Tag, Tags, Search, SlidersHorizontal, Users, Layers, Pencil, Settings2, Truck, FlaskConical, ClipboardList, PackageOpen, Beaker, Printer, Map as MapIcon } from 'lucide-react';
+import { Plus, Download, FileText, Trash2, ChevronDown, ChevronRight, Tag, Tags, Search, SlidersHorizontal, Users, Layers, Pencil, Settings2, Truck, FlaskConical, ClipboardList, PackageOpen, Beaker, Printer, Map as MapIcon, Info } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge, { type BadgeVariant } from '../components/ui/Badge';
@@ -202,12 +202,23 @@ function OverflowChips({ items, expanded, onToggle, jobId, field }: {
   );
 }
 
+// The newest-N cap on the jobs fetch. Client-side Crop/Chemical/County/State/
+// Field-name filters run AFTER this cap, so a match older than the newest
+// JOBS_FETCH_LIMIT jobs is never in the window. When the fetch returns exactly
+// this many rows we surface an honest banner telling the user older jobs aren't
+// searched (and how to include them).
+const JOBS_FETCH_LIMIT = 500;
+
 export default function Jobs() {
   const navigate = useNavigate();
   const { toast } = useToast();
   const { role, profile } = useAuth();
   const [jobs, setJobs] = useState<JobRow[]>([]);
   const [loading, setLoading] = useState(true);
+  // Field-app parity (P3 remediation): true when fetchJobs hit the newest-N cap
+  // (data.length === JOBS_FETCH_LIMIT) — drives the "older jobs aren't searched"
+  // banner so client-side filters running after the cap aren't silently lossy.
+  const [atFetchCap, setAtFetchCap] = useState(false);
   // Field-app parity #6: the FULL filter set, AND-combined. Two copies:
   //   - `draft` is what the user edits in the bar.
   //   - `applied` is what actually drives the query + the visibleJobs memo.
@@ -407,7 +418,7 @@ export default function Jobs() {
       `)
       .is('deleted_at', null)
       .order('job_date', { ascending: false })
-      .limit(500);
+      .limit(JOBS_FETCH_LIMIT);
 
     // ---- SERVER-side filters (indexed scalar columns on jobs) ----
     if (applied.statuses.length > 0) query = query.in('status', applied.statuses);
@@ -459,6 +470,9 @@ export default function Jobs() {
       last_printed_by?: string | null;
     };
     const raw = (data || []) as RawJob[];
+    // Honest cap flag: exactly JOBS_FETCH_LIMIT rows means the server truncated to
+    // the newest window, so older jobs are NOT in scope for the client-side filters.
+    setAtFetchCap(raw.length === JOBS_FETCH_LIMIT);
 
     const profileIds = [...new Set(
       raw.flatMap((j) => [j.applicator_id, j.created_by, j.updated_by, j.last_printed_by]).filter(Boolean) as string[]
@@ -1764,6 +1778,19 @@ export default function Jobs() {
           </div>
         </div>
       </Card>
+
+      {/* P3 remediation: client-side Crop/Chemical/County/State/Field-name filters
+          run AFTER the newest-N server cap, so a match older than the window is
+          never shown. Be honest about it when the cap is hit. */}
+      {atFetchCap && (
+        <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          <Info className="w-4 h-4 mt-0.5 flex-shrink-0" />
+          <span>
+            Showing the most recent {JOBS_FETCH_LIMIT} jobs — older jobs aren&apos;t searched.
+            Narrow by date or customer to include them.
+          </span>
+        </div>
+      )}
 
       <Card padding={false}>
         <div className="p-5">

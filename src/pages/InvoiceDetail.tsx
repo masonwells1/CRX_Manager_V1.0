@@ -1732,7 +1732,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
         onClose={() => setShowTransferToSchedulingModal(false)}
         onConfirm={handleTransferToScheduling}
         title="Transfer to Scheduling"
-        message="Return this invoice to its source job? This cancels the invoice (its line items and customer shares are removed) and reopens the job so it can be edited and re-invoiced. Only works on an unposted invoice."
+        message="Return this invoice to its source job? This cancels the invoice (its line items and customer shares are removed) and returns the job to Completed so it can be re-invoiced or cancelled. Only works on an unposted invoice."
         confirmLabel="Transfer to Scheduling"
         variant="info"
         icon={RotateCcw}

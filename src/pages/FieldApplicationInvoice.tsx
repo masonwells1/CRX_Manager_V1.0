@@ -2482,7 +2482,7 @@ export default function FieldApplicationInvoice() {
         onClose={() => setShowTransferToSchedulingConfirm(false)}
         onConfirm={() => { setShowTransferToSchedulingConfirm(false); handleTransferToScheduling(); }}
         title="Transfer to Scheduling"
-        message="Return this invoice to its source job? This cancels the invoice (its chemical lines and customer shares are removed) and reopens the job so it can be edited and re-invoiced. Only works on an unposted invoice."
+        message="Return this invoice to its source job? This cancels the invoice (its chemical lines and customer shares are removed) and returns the job to Completed so it can be re-invoiced or cancelled. Only works on an unposted invoice."
         confirmLabel="Transfer to Scheduling"
         variant="info"
         loading={transferringToScheduling}

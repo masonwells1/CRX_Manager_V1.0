@@ -255,8 +255,13 @@ export function summarizeWeatherSet(w: PersistedWeatherSet): string {
 
 // Sum the per-location lines of a single entry draft (blank/invalid -> 0). This
 // is the entry's own applied-acres total when per-location detail is present.
+// A row with NO field_id is skipped: buildAppliedFieldRows drops it as a child
+// (a field-less row can't be persisted), so counting its acres in the parent sum
+// would inflate jobs.applied_acres with a figure that has no child detail behind
+// it. Gating on field_id keeps the parent total in lock-step with what is saved.
 export function sumDraftFieldAcres(fields: AppliedFieldDraft[]): number {
   return fields.reduce((sum, f) => {
+    if (!f.field_id) return sum;
     const n = Number(f.applied_acres);
     return sum + (Number.isFinite(n) && n > 0 ? n : 0);
   }, 0);

@@ -244,6 +244,16 @@ describe('#18 sumDraftFieldAcres', () => {
   it('returns 0 for an empty list', () => {
     expect(sumDraftFieldAcres([])).toBe(0);
   });
+  it('skips a row with acres but no field_id (parent sum mirrors persisted children)', () => {
+    // buildAppliedFieldRows drops a field-less row, so its acres must NOT be
+    // counted into the parent total — otherwise jobs.applied_acres would include
+    // a location-less figure with no child detail behind it.
+    expect(sumDraftFieldAcres([
+      { field_id: 'f1', applied_acres: '40' },
+      { field_id: '', applied_acres: '99' },   // no field -> NOT counted
+      { field_id: 'f2', applied_acres: '20' },
+    ])).toBe(60);
+  });
 });
 
 describe('#18 sumRecordFieldAcres', () => {
