@@ -1,0 +1,27 @@
+{
+  "_doc": "Machine-readable progress for the field-app BEYOND-PARITY loop. LEDGER.md is regenerated from this. status per section: PENDING | IN-PROGRESS | BUILT | BLOCKED. codex: done | pending | partial | n/a.",
+  "loop": "fieldapp-beyond-parity",
+  "state": "SCAFFOLDED — not started",
+  "precondition": "ChemMan-parity rebuild (feat/fieldapp-parity) merged to main + live; loop branch created off post-parity main.",
+  "branch": "feat/fieldapp-beyond-parity (not yet created)",
+  "buildOrder": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+  "sections": {
+    "1": { "name": "AI Label-Data Backfill", "phase": "1 — Enablers & safeguards", "status": "PENDING", "codex": "n/a", "needs_migration": true, "risk": "medium", "commit": null, "verified": null, "parkedLow": [], "openQuestions": [] },
+    "2": { "name": "Wrong-Field / Wrong-Rate / Double-Bill Watchdog", "phase": "1 — Enablers & safeguards", "status": "PENDING", "codex": "n/a", "needs_migration": true, "risk": "low-medium", "commit": null, "verified": null, "parkedLow": [], "openQuestions": [] },
+    "3": { "name": "Office Cockpit (exception dashboard)", "phase": "2 — Office command center", "status": "PENDING", "codex": "n/a", "needs_migration": false, "risk": "low", "commit": null, "verified": null, "parkedLow": [], "openQuestions": [] },
+    "4": { "name": "Auto-Invoice on Completion -> review/post queue", "phase": "2 — Office command center", "status": "PENDING", "codex": "n/a", "needs_migration": true, "risk": "medium-high (MONEY)", "commit": null, "verified": null, "parkedLow": [], "openQuestions": [] },
+    "5": { "name": "Label-Rate Guardrails", "phase": "3 — Compliance guardrail", "status": "PENDING", "codex": "n/a", "needs_migration": true, "risk": "medium", "commit": null, "verified": null, "parkedLow": [], "openQuestions": [] },
+    "6": { "name": "'Your Field Was Sprayed' Proof Notification", "phase": "4 — Customer-facing", "status": "PENDING", "codex": "n/a", "needs_migration": true, "risk": "medium", "commit": null, "verified": null, "parkedLow": [], "openQuestions": [] },
+    "7": { "name": "Grower Portal — Login & security scoping", "phase": "4 — Customer-facing", "status": "PENDING", "codex": "n/a", "needs_migration": true, "risk": "HIGH (new outside-facing auth surface)", "commit": null, "verified": null, "parkedLow": [], "openQuestions": [] },
+    "8": { "name": "Grower Portal — My Fields & Application History", "phase": "4 — Customer-facing", "status": "PENDING", "codex": "n/a", "needs_migration": true, "risk": "medium", "commit": null, "verified": null, "parkedLow": [], "openQuestions": [] },
+    "9": { "name": "Grower Portal — My Invoices & Balance", "phase": "4 — Customer-facing", "status": "PENDING", "codex": "n/a", "needs_migration": true, "risk": "medium", "commit": null, "verified": null, "parkedLow": [], "openQuestions": [] },
+    "10": { "name": "Grower Portal — Self-serve compliance records", "phase": "4 — Customer-facing", "status": "PENDING", "codex": "n/a", "needs_migration": true, "risk": "medium", "commit": null, "verified": null, "parkedLow": [], "openQuestions": [] }
+  },
+  "openQuestions": [
+    "SEQUENCING (Mason): default builds the 4 internal features first, then §6 then the portal (§7-§10). Mason may drop the portal this round or move it earlier before kickoff.",
+    "§4 (money): confirm any per-acre pricing default not already encoded in the existing transfer/split/price RPCs.",
+    "§5: hard-block vs warn on an over-label rate — default WARN; hard-block is an owner decision.",
+    "§6: a new edge-function email_type deploy is owner-gated.",
+    "§1: the PROD load of accepted label values is Mason's review-and-approve task at the gate."
+  ]
+}
