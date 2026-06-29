@@ -1,10 +1,56 @@
-# Migration History (517 migrations)
+# Migration History (556 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
 > ✅ **Doc-debt cleared 2026-05-17.** Entries #322–#345 backfilled in the main table below. See `docs/archive/2026-spring/2026-05-13-pr59-codex-review-summary.md` and `docs/CHANGELOG.md` for deeper context on each fix.
 
 > 🩹 **Backfill 2026-05-25.** A doc-drift audit found 10 migration files on disk that had never been indexed here (the prior "no gaps #1–#345" claim was inaccurate). They are listed in the **Un-indexed migrations (backfilled)** section below rather than renumbered into the main descending table, because the `#` column is editorial (it already has duplicate-timestamp pairs) and renumbering 346 rows carries needless risk. Every `supabase/migrations/*.sql` file is now represented in this doc.
+
+## Field-application parity build 2026-06-24 → 2026-06-29 (`feat/fieldapp-parity` — 39 migrations, NOT YET APPLIED LIVE)
+
+> ⚠️ **Branch-only.** These 39 migrations live on `feat/fieldapp-parity` and have been applied only to the LOCAL throwaway Supabase DB. They are NOT in live `schema_migrations` until the branch ships through the apply gate. The field-app-parity loop built **41 sections** to ChemMan parity (job scheduling/agronomy/shares, tags, ground crews, batches, applied-records with weather/tach/crew, fuel surcharge, header/footer/discount, applicator + loader print audit, per-location dispatch board, job attachments, notifications, job↔invoice transfer/unpost) followed by a **15-fix Codex remediation pass** (incl. the P1 `invoice_id` immutability hole and the atomic applied-record save). Listed here so every disk file is indexed; descriptions are one-line — see `docs/CHANGELOG.md` and the per-section smoke chains in `scripts/smoke/` for detail.
+
+| Timestamp | Slug | One-line |
+|-----------|------|----------|
+| 20260624120000 | `job_parity_scheduling_agronomy_shares` | #1 — extends `save_job`: scheduling dates (call/proposed/schedule/expires), consultant, memo fields, per-field agronomy (planted_acres/crop/strip/pests), per-field customer shares, chemical extras (diluent_rate/rei_hours/phi_days/warehouse/vendor); `remaining_acres` GENERATED. |
+| 20260624130000 | `job_tags` | #2 — `jobs.tags text[]` + GIN index for job tagging/filtering. |
+| 20260624140000 | `job_ground_crews_and_filter_indexes` | #3 — `ground_crews` lookup + `jobs.ground_crew_id` + list-filter indexes. |
+| 20260624150000 | `job_batches` | #4 — `job_batches` table + `jobs.batch_id`/`batch_ref` for batch grouping. |
+| 20260624160000 | `user_list_settings` | #5 — `user_list_settings` (per-user saved list columns/filters). |
+| 20260624170000 | `job_applied_records` | #6 — `job_applied_records` (as-applied legal record header per job). |
+| 20260624180000 | `job_applied_record_fields` | #7 — `job_applied_record_fields` (per-field applied_acres on a record). |
+| 20260624181000 | `fix_applied_acres_integrity` | #7b — `recompute_job_applied_acres` + `trg_jarf_recompute` rollup integrity. |
+| 20260624190000 | `job_applied_record_weather` | #8 — start/end weather capture columns on applied records. |
+| 20260624200000 | `job_applied_record_tach` | #9 — tach/hour-meter start/end columns on applied records. |
+| 20260624210000 | `job_applied_record_crew` | #10 — crew roster columns on applied records. |
+| 20260624211000 | `save_field_app_invoice_preserve_consultant` | #11a — field-app invoice save preserves the consultant on re-save. |
+| 20260624212000 | `field_app_invoice_line_warehouse_vendor_glb` | #11b — field-app invoice lines carry warehouse/vendor/GLB tags. |
+| 20260625120000 | `transfer_invoice_to_job` | #27 — `transfer_invoice_to_job` reverse leg (un-bill a job; clears invoice_id under override hatch). |
+| 20260625130000 | `unpost_invoice` | #28 — `unpost_invoice` (posted/overdue → unposted, money-guarded, append-only audit). |
+| 20260625140000 | `fuel_surcharge_setting` | #29 — fuel-surcharge SETTING scaffold, OFF by default, formula blank (no invented money rule). |
+| 20260625141000 | `fuel_surcharge_fixes` | #29b — fuel-surcharge follow-up fixes. |
+| 20260625150000 | `invoice_header_footer_discount` | #30 — invoice header/footer text + discount support. |
+| 20260625160000 | `applicator_sheet_print_audit` | #31 — applicator-sheet `printed_at`/`last_printed_by` print-audit stamp. |
+| 20260625170000 | `job_loader_worksheet_fields` | #32 — loader worksheet fields (loader_comment, tank capacity, carrier rate gpa). |
+| 20260625180000 | `get_job_billed_customers` | #33 — `get_job_billed_customers` (RLS-safe billed-customer resolver per job). |
+| 20260625190000 | `guard_billed_job_immutability` | #12 — `_enforce_billed_job_immutability` BEFORE-UPDATE trigger (non-admin cannot soft-delete/rewrite a billed job). |
+| 20260625200000 | `job_attachments` | #34 — `job_attachments` table + storage. |
+| 20260625203000 | `job_attachments_fixups` | #34b — job-attachments follow-up fixes. |
+| 20260626120000 | `job_location_dispatches` | #36 — `job_location_dispatches` + `dispatch_job_locations` (per-location dispatch). |
+| 20260626130000 | `get_dispatch_board_jobs` | #35 — `get_dispatch_board_jobs` (dispatch board query). |
+| 20260626140000 | `undispatch_job_locations` | #37 — `undispatch_job_locations` + `get_dispatched_list`. |
+| 20260626150000 | `get_dispatched_list_stable_order` | #37b — stable ordering for `get_dispatched_list`. |
+| 20260627120000 | `job_chemicals_location_dispatchee_select` | #38 — per-location dispatchee can SELECT the job's chemicals (RLS). |
+| 20260628120000 | `job_notifications` | #39 — `job_notifications` table + triggers. |
+| 20260628130000 | `job_post_notifications` | #40 — post-event job notifications. |
+| 20260629120000 | `guard_billed_job_immutability_invoice_id` | Remediation P1 — closes the `invoice_id` detach/repoint hole in the billed-job immutability guard. |
+| 20260629140000 | `convert_to_gl_lb_gallon_aliases` | Remediation — GL/LB/gallon unit-alias conversion fix. |
+| 20260629150000 | `jarf_field_membership_rls` | Remediation Wave-2a FIX 1 — field-membership RLS on `job_applied_record_fields` INSERT/UPDATE. |
+| 20260629160000 | `get_jobs_billed_customers` | Remediation Wave-2a FIX 2 — batched RLS-safe billed-customer resolver for the jobs list. |
+| 20260629170000 | `unpost_invoice_group` | Remediation Wave-2a FIX 4 — all-or-nothing split-group unpost. |
+| 20260629180000 | `get_job_billed_customers_dispatch` | Remediation — dispatch-aware billed-customer resolver. |
+| 20260629190000 | `save_job_applied_record` | Remediation Wave-2b — atomic applied-record save RPC (commit 158e3259). |
+| 20260629200000 | `transfer_invoice_to_job_zero_cost` | Remediation P3 — zero `total_cost_cents` header on a cancelled transfer-reversed invoice. |
 
 ## Nightly Debug remediation 2026-06-16 (foundation fixes — applied live)
 

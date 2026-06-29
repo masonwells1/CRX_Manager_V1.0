@@ -1,4 +1,4 @@
-# Pages & Routes Reference (75 pages, 77 routes)
+# Pages & Routes Reference (79 pages, 81 routes)
 
 | Route | Page | Description |
 |-------|------|-------------|
@@ -77,5 +77,9 @@
 | `/receiving-hub` | ReceivingHub | Admin/sales. Open PO lines grouped by product across vendors (ordered/received/remaining + arrival) + a commitment snapshot (On Floor/Hold/Order/Spoken-For/Net) from `get_inventory_position`. Inline full-receipt "Receive" (reuses `receive_po_items`). (UI overhaul v2) |
 | `/accounts-receivable` | AccountsReceivable | **Admin-only.** One AR workspace: tabs for Aging / Payment History / Prepayments / Customer Ledger + a Net Money Position card (total owed via `get_ar_aging` minus unused `prepay_credits`). `/payments` (PaymentAllocation) stays SEPARATE (admin+sales). (UI overhaul v2) |
 | `/field-invoices` | FieldInvoices | Admin/sales. Field-application invoices area (as-applied billing); list + entry into the field-app invoice editor. |
+| `/field-invoices/unposted` | FieldInvoicesUnposted | Admin/sales. Field-app parity #22 — dedicated "Unposted" working tray for field invoices (static path, precedes `:id`). |
+| `/field-invoices/posted` | FieldInvoicesPosted | Admin/sales. Field-app parity #23 — dedicated "Posted" committed field-invoice list (static path, precedes `:id`). |
+| `/field-invoices/summary` | CustomerInvoiceSummary | Admin/sales. Field-app parity #34 — combined Customer Invoice Summary (unposted chem sales + unposted field-app). |
 | `/field-invoices/unbilled` | UnbilledApplications | Admin/sales. Applied-but-unbilled field work awaiting an invoice (reconciliation worklist). |
+| `/field` | FieldView | Admin/sales/applicator. Field-app parity #38 — phone/mobile applicator field view (read-only "my jobs" cards). |
 | `/design-preview` | DesignPreview | **Dev/preview only** (hostname-gated, never on croprxsolutions.app): shared-component visual gallery for the design system. |

@@ -1,4 +1,6 @@
-# Database Schema Reference (97 Tables + 2 views)
+# Database Schema Reference (111 Tables + 2 views)
+
+> Count as of 2026-06-29 includes the `feat/fieldapp-parity` branch's new field-app tables (job_applied_records, job_applied_record_fields/crew, job_tags, job_tag_assignments, job_batches, ground_crews, ground_crew_members, job_location_dispatches, job_attachments, job_notifications, user_list_settings, etc.) — applied LOCALLY only, not yet in live `schema_migrations`. The per-table sections below are not yet exhaustively backfilled for every new field-app table; see `docs/reference/migration-history.md` (Field-application parity build section) and `src/types/index.ts`.
 
 ## Core Business
 - `profiles` - Users (id refs auth.users, email, full_name, role, phone, is_active, applicator_license_number, faa_certificate_number)

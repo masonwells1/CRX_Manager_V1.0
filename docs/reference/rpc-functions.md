@@ -1,6 +1,8 @@
-# RPC Functions Reference (228 callable RPCs + 51 trigger/internal functions — live as of 2026-06-23)
+# RPC Functions Reference (270 callable RPCs + 56 trigger/internal functions — branch HEAD as of 2026-06-29)
 
-> Live function inventory (Supabase `pg_proc`, 2026-06-23): **228 callable RPCs** (incl. the 3 B1 lot RPCs live since the `20260622170000` apply on 2026-06-23), **51 trigger functions**, plus 24 `plpgsql_check` extension helpers (not documented here). The detailed sections below document the notable functions, not an exhaustive per-function enumeration.
+> Function inventory (Supabase `pg_proc`, 2026-06-29, `feat/fieldapp-parity` branch HEAD applied to the LOCAL throwaway DB): **270 callable RPCs**, **56 trigger functions**, plus 7 `plpgsql_check` extension helpers (not documented here, excluded from the count). The +42 callable RPCs over the 2026-06-23 baseline (228) are the field-app parity build + remediation (e.g. `transfer_invoice_to_job`, `unpost_invoice`, `unpost_invoice_group`, `dispatch_job_locations`, `undispatch_job_locations`, `get_dispatch_board_jobs`, `get_dispatched_list`, `get_job_billed_customers`, `get_jobs_billed_customers`, `save_job_applied_record`, `set_field_boundary`/`set_field_override_acres`); these 39 migrations are LOCAL-only, not yet in live `schema_migrations`. The detailed sections below document the notable functions, not an exhaustive per-function enumeration.
+
+> **Prior live baseline (2026-06-23):** 228 callable RPCs + 51 trigger functions (incl. the 3 B1 lot RPCs live since the `20260622170000` apply).
 
 > **IMPORTANT:** As of migration 20260331600000, all mutating RPCs have exactly ONE overload with `p_idempotency_key text DEFAULT NULL`. Never create function overloads — see SAFE_DEVELOPMENT_RULES.md.
 
