@@ -150,8 +150,11 @@ export function buildChemicalSummaryReportData(
       if (p.total_applied == null || !Number.isFinite(p.total_applied)) continue;
       const unit = (p.total_unit ?? '').trim();
       // Key on name + a case-folded unit so "PT" and "pt" sum together, but keep the
-      // first-seen original unit casing for display.
-      const key = `${p.product_name} ${unit.toLowerCase()}`;
+      // first-seen original unit casing for display. Delimit with NUL (\u0000), NOT a
+      // space: a space-joined key would conflate "Roundup fl"+"oz" with "Roundup"+"fl oz"
+      // and silently sum two different products (parked #14 NUL hardening, mirrors
+      // masterMixSummaryData.productUnitKey). NUL never appears in a product name/unit.
+      const key = `${p.product_name}\u0000${unit.toLowerCase()}`;
       const existing = acc.get(key);
       if (existing) {
         existing.total = round4(existing.total + p.total_applied);

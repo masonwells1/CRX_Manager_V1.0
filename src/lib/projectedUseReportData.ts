@@ -217,7 +217,7 @@ export function buildProjectedUseReportData(
       const projected = round4(p.total_applied * factor);
       if (projected === 0) continue; // factor 0 (no remaining) adds nothing
       const unit = (p.total_unit ?? '').trim();
-      const key = `${p.product_name} ${unit.toLowerCase()}`;
+      const key = `${p.product_name}\u0000${unit.toLowerCase()}`;
       const existing = acc.get(key);
       if (existing) {
         existing.total = round4(existing.total + projected);
