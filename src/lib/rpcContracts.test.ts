@@ -1536,17 +1536,36 @@ const IDEMPOTENCY_BODY_EXEMPT: Record<
 };
 
 /**
+ * Migration files (name + content), read from disk ONCE and memoized.
+ *
+ * Why the cache: `latestFunctionBody` is called once per covered RPC, and each
+ * call used to re-`readdirSync` + re-`readFileSync` its way back through the
+ * ~500+ migration files. That O(RPCs × files) synchronous disk I/O finishes in
+ * ~2s when this file runs alone (warm cache, no contention) but blew the 5s
+ * test timeout under the full parallel suite (150 files contending for CPU/disk)
+ * — a perf flake, not a logic failure. Reading each file once makes the disk
+ * work O(files) total; the per-RPC scan is then pure in-memory regex.
+ */
+let _migrationFilesCache: { name: string; content: string }[] | null = null;
+function getMigrationFiles(): { name: string; content: string }[] {
+  if (_migrationFilesCache) return _migrationFilesCache;
+  _migrationFilesCache = readdirSync(MIGRATIONS_DIR)
+    .filter((f) => f.endsWith('.sql'))
+    .sort() // timestamp-prefixed → ascending chronological
+    .map((name) => ({ name, content: readFileSync(join(MIGRATIONS_DIR, name), 'utf8') }));
+  return _migrationFilesCache;
+}
+
+/**
  * Returns the body of the LATEST migration definition of `rpc`, or null if no
  * disk migration defines it by name (some functions live in consolidated files
  * under a different filename — existence is covered by other tests + live).
  */
 function latestFunctionBody(rpc: string): string | null {
-  const files = readdirSync(MIGRATIONS_DIR)
-    .filter((f) => f.endsWith('.sql'))
-    .sort(); // timestamp-prefixed → ascending chronological
+  const files = getMigrationFiles();
   const sigRe = new RegExp(`FUNCTION\\s+(?:public\\.)?${rpc}\\s*\\(`, 'i');
   for (let i = files.length - 1; i >= 0; i--) {
-    const content = readFileSync(join(MIGRATIONS_DIR, files[i]), 'utf8');
+    const content = files[i].content;
     const sigIdx = content.search(sigRe);
     if (sigIdx === -1) continue;
     // Extract the dollar-quoted body that follows the signature:  AS $tag$ ... $tag$
