@@ -145,14 +145,22 @@ describe('chemCalculator — toGallonOrLbEquivalent (ChemMan parity #1)', () => 
 // asserts the CLIENT helper returns exactly what the SERVER would — so agreement
 // is proven against the rules, not coincidental.
 describe('chemCalculator — toGallonOrLbEquivalent branches on product_form (server parity, #25)', () => {
-  /** Mirror of the SQL convert_to_gl_lb branch — the authority the client must equal. */
+  /** Mirror of the SQL convert_to_gl_lb branch (migration 20260629140000) — the
+   *  authority the client must equal. Reproduces BOTH CASE statements verbatim,
+   *  including every fl-oz / pound / ton spelling and NULL-on-unrecognized. */
   function serverGlLb(q: number, unit: string, form: 'liquid' | 'dry'): { value: number; unit: 'gal' | 'lb' } | null {
     const u = unit.trim().toUpperCase();
     if (form === 'dry') {
-      const f = u === 'OZ' ? 1 / 16 : u === 'LB' ? 1 : null;
+      const f = (u === 'OZ' || u === 'OUNCE' || u === 'OUNCES') ? 1 / 16
+        : (u === 'LB' || u === 'LBS' || u === 'POUND' || u === 'POUNDS') ? 1
+        : (u === 'TON' || u === 'TONS') ? 2000 : null;
       return f === null ? null : { value: Math.round(q * f * 10000) / 10000, unit: 'lb' };
     }
-    const f = u === 'OZ' ? 1 / 128 : u === 'PT' ? 1 / 8 : u === 'QT' ? 1 / 4 : u === 'GL' || u === 'GAL' ? 1 : null;
+    // Liquid: fl-oz spellings = q/128; gallons (GL/GAL/GALLON/GALLONS) = q.
+    // An unrecognized liquid unit returns NULL (server) / null (client) — never a guess.
+    const f = (u === 'OZ' || u === 'FL OZ' || u === 'FLOZ' || u === 'FLUID OUNCE') ? 1 / 128
+      : u === 'PT' ? 1 / 8 : u === 'QT' ? 1 / 4
+      : (u === 'GL' || u === 'GAL' || u === 'GALLON' || u === 'GALLONS') ? 1 : null;
     return f === null ? null : { value: Math.round(q * f * 10000) / 10000, unit: 'gal' };
   }
 
@@ -168,6 +176,38 @@ describe('chemCalculator — toGallonOrLbEquivalent branches on product_form (se
     for (const [q, u] of [[4, 'qt'], [8, 'pt'], [3, 'GL'], [128, 'oz']] as [number, string][]) {
       expect(toGallonOrLbEquivalent(q, u, 'liquid')).toEqual(serverGlLb(q, u, 'liquid'));
     }
+  });
+
+  // FIX 3 (Wave 2a remediation): every gallon SPELLING the field app emits must
+  // read as 1:1 gallons — NOT 1/128. The old server matched only the literal 'GL',
+  // so 'GAL'/'gal'/'Gallon' fell through and showed ~128x too small. Both client and
+  // server now accept GL/GAL/GALLON/GALLONS (case-folded).
+  it('LIQUID gallon aliases {GAL, gal, Gallon, GALLON, GALLONS} → 1:1 gallons (server == client)', () => {
+    for (const u of ['GAL', 'gal', 'Gallon', 'GALLON', 'GALLONS']) {
+      expect(toGallonOrLbEquivalent(10, u, 'liquid')).toEqual({ value: 10, unit: 'gal' });
+      expect(toGallonOrLbEquivalent(10, u, 'liquid')).toEqual(serverGlLb(10, u, 'liquid'));
+    }
+  });
+
+  it('an UNRECOGNIZED liquid unit → null (was a silent /128 guess on the server)', () => {
+    expect(toGallonOrLbEquivalent(10, 'widgets', 'liquid')).toBeNull();
+    expect(toGallonOrLbEquivalent(10, 'widgets', 'liquid')).toEqual(serverGlLb(10, 'widgets', 'liquid'));
+  });
+
+  // FIX 3 regression guard (Codex re-review): NULL-on-unknown must NOT drop the
+  // valid fluid-ounce spellings the field app emits, nor the dry pound/ton spellings.
+  it('LIQUID fluid-ounce spellings {fl oz, floz, fluid ounce} → q/128 gallons (server == client)', () => {
+    for (const u of ['fl oz', 'floz', 'fluid ounce']) {
+      expect(toGallonOrLbEquivalent(128, u, 'liquid')).toEqual({ value: 1, unit: 'gal' });
+      expect(toGallonOrLbEquivalent(128, u, 'liquid')).toEqual(serverGlLb(128, u, 'liquid'));
+    }
+  });
+
+  it('DRY pound/ton spellings {lbs, pound, ton} match the server', () => {
+    expect(toGallonOrLbEquivalent(10, 'lbs', 'dry')).toEqual(serverGlLb(10, 'lbs', 'dry'));   // 10 LB
+    expect(toGallonOrLbEquivalent(10, 'pound', 'dry')).toEqual(serverGlLb(10, 'pound', 'dry')); // 10 LB
+    expect(toGallonOrLbEquivalent(2, 'ton', 'dry')).toEqual({ value: 4000, unit: 'lb' });     // 2*2000
+    expect(toGallonOrLbEquivalent(2, 'ton', 'dry')).toEqual(serverGlLb(2, 'ton', 'dry'));
   });
 
   it('DRY oz / lb → POUNDS, equal to the server (keeps the existing dry-oz case)', () => {
