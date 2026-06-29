@@ -15,13 +15,13 @@ Owner decision (2026-06-29): split-invoice **Unpost = ALL-OR-NOTHING** (atomic g
 - [x] Unpost-isAdmin removed (2a, commit 7f90cc48; Void untouched) button gated `&& isAdmin` but RPC allows sales_rep → drop `&& isAdmin` (keep Void admin-only).
 - [x] applied-record RLS membership (2a: 20260629150000; foreign field_id rejected — smoke)/UPDATE RLS: add job-field membership check `EXISTS(job_fields jf WHERE jf.job_id=r.job_id AND jf.field_id=…)` (NEW migration).
 - [x] co-billed SECDEF batch RPC (2a: 20260629160000 get_jobs_billed_customers; applicator+dispatchee see split set; anon revoked) customers: applicator RLS hides share customers → resolve via SECURITY DEFINER (batch get_jobs_billed_customers RPC or reuse get_job_billed_customers).
-- [ ] JobDetail.tsx:2622 gal/lb PREVIEW drops product_form → bare 'oz' liquid misclassified as lb; pass product_form (same root as ef668faa fix, this call site remains).
-- [ ] JobDetail.tsx new-job save: idempotency key reset BEFORE crew/loader sub-write → sub-write fail → retry mints new key → DUPLICATE JOB. Wrap sub-write in try/catch + navigate to saved job (mirror the applicator-reassign pattern).
-- [ ] AppliedRecordsManager.tsx: non-atomic parent+child save → wrap in a save_job_applied_record txn RPC (covers #21 crew rows too).
+- [x] JobDetail gal/lb preview form (2b, 7fb5f4e2; oz-liquid→1.563 gal not 12.5 lb) drops product_form → bare 'oz' liquid misclassified as lb; pass product_form (same root as ef668faa fix, this call site remains).
+- [x] dup-job guard (2b, 7fb5f4e2; sub-write try/catch+navigate — no silent duplicate): idempotency key reset BEFORE crew/loader sub-write → sub-write fail → retry mints new key → DUPLICATE JOB. Wrap sub-write in try/catch + navigate to saved job (mirror the applicator-reassign pattern).
+- [x] atomic save_job_applied_record RPC (2b: 20260629190000, SECURITY INVOKER, bad child→whole rolls back — smoke): non-atomic parent+child save → wrap in a save_job_applied_record txn RPC (covers #21 crew rows too).
 - [x] **[owner=ALL-OR-NOTHING]** unpost_invoice_group (2a: 20260629170000; paid member→whole RAISES — proven; routed both surfaces) unpost split group: NEW `unpost_invoice_group` RPC (atomic, modeled on post_invoice_group) routed from both UI surfaces when invoice_group_id set.
-- [ ] JobDetail.tsx shares-loading: save before async seedSharesForField resolves → empty split snapshot persisted; block save while a selected field's shares are still loading.
+- [x] shares-loading save guard (2b, 7fb5f4e2; 6 tests): save before async seedSharesForField resolves → empty split snapshot persisted; block save while a selected field's shares are still loading.
 
-- [ ] get_job_billed_customers (Wave1 mig 20260625180000) has the SAME narrow self-gate → a per-location-dispatched applicator's compliance PDF (#10/#11) is REFUSED; add the _is_dispatched_to_me leg (one-line, NEW migration). [folded from spawned task_f10e6bb4]
+- [x] get_job_billed_customers dispatch leg (2b: 20260629180000; dispatched applicator now reads it — role-sim) (Wave1 mig 20260625180000) has the SAME narrow self-gate → a per-location-dispatched applicator's compliance PDF (#10/#11) is REFUSED; add the _is_dispatched_to_me leg (one-line, NEW migration). [folded from spawned task_f10e6bb4]
 
 ### WAVE 3 — P3
 - [ ] FieldApplicationInvoice.tsx:2469 + InvoiceDetail modal: "can be edited" copy vs a completed job being non-editable → text-only fix ("returns the job to Completed so it can be re-invoiced or cancelled"). Do NOT change the lifecycle.
