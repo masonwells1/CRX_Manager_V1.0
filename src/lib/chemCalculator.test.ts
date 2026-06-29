@@ -5,6 +5,8 @@ import {
   applyChemEdit,
   recomputeChemRowForAcres,
   toGallonOrLbEquivalent,
+  baseUnitOfRate,
+  reconcileChemAutofillUnits,
   type ChemCalcRow,
 } from './chemCalculator';
 
@@ -177,5 +179,90 @@ describe('chemCalculator — toGallonOrLbEquivalent branches on product_form (se
   it('a unit that does not belong to the product form → null (never a guessed number)', () => {
     expect(toGallonOrLbEquivalent(10, 'lb', 'liquid')).toBeNull(); // pounds on a liquid product
     expect(toGallonOrLbEquivalent(10, 'qt', 'dry')).toBeNull();    // quarts on a dry product
+  });
+});
+
+describe('chemCalculator — baseUnitOfRate (strip the per-acre suffix)', () => {
+  it('strips /ac, /acre, /a', () => {
+    expect(baseUnitOfRate('pt/ac')).toBe('pt');
+    expect(baseUnitOfRate('PT/ACRE')).toBe('pt');
+    expect(baseUnitOfRate('gal/a')).toBe('gal');
+  });
+  it('strips a spelled-out per acre', () => {
+    expect(baseUnitOfRate('pt per acre')).toBe('pt');
+  });
+  it('a bare unit with no suffix is returned lowercased', () => {
+    expect(baseUnitOfRate('GAL')).toBe('gal');
+  });
+  it('blank in → blank out', () => {
+    expect(baseUnitOfRate('')).toBe('');
+    expect(baseUnitOfRate(null)).toBe('');
+    expect(baseUnitOfRate(undefined)).toBe('');
+  });
+});
+
+// ── P1 MONEY fix: the bug was stock unit (GAL) != rate base unit (pt) → the saved
+// row read "240 GAL" with per-GAL cost/price, inflating cost/price/loader ~8×. ──
+describe('chemCalculator — reconcileChemAutofillUnits (P1 money fix)', () => {
+  it('THE BUG CASE: GAL stock + pt/ac rate → unit pt, cost/price per pint (÷8), so the line is NOT ~8× inflated', () => {
+    // Roundup PowerMax: unit_size=GAL, rate_unit=pt/ac, cost $22.50/GAL (2250¢),
+    // tier1 price $28.00/GAL (2800¢), liquid. 1 GAL = 8 pt.
+    const r = reconcileChemAutofillUnits('GAL', 'pt/ac', 2250, 2800, 'liquid');
+    expect(r.unit).toBe('pt');                 // NOT 'GAL'
+    expect(r.costPerUnitCents).toBe(281);      // 2250 / 8 = 281.25 → 281¢ per pint
+    expect(r.pricePerUnitCents).toBe(350);     // 2800 / 8 = 350¢ per pint
+
+    // 1.5 pt/ac × 160 ac = 240 (pints). The grid bills quantity × per-unit cents.
+    const quantity = 1.5 * 160; // 240
+    const lineCost = quantity * r.costPerUnitCents;   // 240 × 281 = 67,440¢ = $674.40
+    const linePrice = quantity * r.pricePerUnitCents; // 240 × 350 = 84,000¢ = $840.00
+
+    // The BUGGY row would have billed 240 × per-GAL cents:
+    const buggyLineCost = quantity * 2250;   // 540,000¢ = $5,400 (≈8× too high)
+    const buggyLinePrice = quantity * 2800;  // 672,000¢ = $6,720
+
+    // Correct line ≈ the gal-equivalent (30 gal) × per-GAL price.
+    expect(lineCost).toBe(67440);
+    expect(linePrice).toBe(84000);
+    // 30 gal × $22.50 = $675 (off by the 281 vs 281.25 rounding); within 1%.
+    expect(Math.abs(lineCost - 30 * 2250)).toBeLessThan(2250 * 0.01 * 30);
+    expect(linePrice).toBe(30 * 2800); // 84,000 exactly
+    // And it is ~8× below the bug.
+    expect(buggyLineCost / lineCost).toBeCloseTo(8, 0);
+    expect(buggyLinePrice / linePrice).toBe(8);
+  });
+
+  it('SAME-UNIT case is unchanged: stock unit == rate base unit (most products)', () => {
+    // unit_size=pt, rate_unit=pt/ac → no conversion; stock cost/price kept verbatim.
+    const r = reconcileChemAutofillUnits('pt', 'pt/ac', 1000, 1500, 'liquid');
+    expect(r.unit).toBe('pt');
+    expect(r.costPerUnitCents).toBe(1000);
+    expect(r.pricePerUnitCents).toBe(1500);
+  });
+
+  it('dry product: LB stock + oz/ac rate → unit oz, cost ÷16', () => {
+    const r = reconcileChemAutofillUnits('LB', 'oz/ac', 1600, 3200, 'dry');
+    expect(r.unit).toBe('oz');
+    expect(r.costPerUnitCents).toBe(100);  // 1600 / 16
+    expect(r.pricePerUnitCents).toBe(200); // 3200 / 16
+  });
+
+  it('infers the form from the stock unit when product_form is omitted', () => {
+    const r = reconcileChemAutofillUnits('GAL', 'qt/ac', 400, 800); // 1 GAL = 4 qt
+    expect(r.unit).toBe('qt');
+    expect(r.costPerUnitCents).toBe(100); // 400 / 4
+    expect(r.pricePerUnitCents).toBe(200);
+  });
+
+  it('SAFE FALLBACK: unknown / unreconcilable units keep the stock unit + per-stock cost/price', () => {
+    // unknown stock unit → can't convert → keep as-is (no worse than before, no guess).
+    const r1 = reconcileChemAutofillUnits('widgets', 'pt/ac', 1000, 2000, 'liquid');
+    expect(r1).toEqual({ unit: 'widgets', costPerUnitCents: 1000, pricePerUnitCents: 2000 });
+    // cross-form (liquid stock, dry-only rate unit) → don't guess, keep stock.
+    const r2 = reconcileChemAutofillUnits('GAL', 'lb/ac', 1000, 2000, 'liquid');
+    expect(r2).toEqual({ unit: 'GAL', costPerUnitCents: 1000, pricePerUnitCents: 2000 });
+    // no rate unit → keep stock.
+    const r3 = reconcileChemAutofillUnits('GAL', '', 1000, 2000, 'liquid');
+    expect(r3).toEqual({ unit: 'GAL', costPerUnitCents: 1000, pricePerUnitCents: 2000 });
   });
 });

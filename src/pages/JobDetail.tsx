@@ -31,7 +31,7 @@ import { overrideSaveApplicatorId, shouldReassignApplicatorAfterSave, canGenerat
 import { fetchCurrentWeather, parseCentroid } from '../lib/weatherCapture';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
-import { applyChemEdit, recomputeChemRowForAcres, sumAcres, toGallonOrLbEquivalent } from '../lib/chemCalculator';
+import { applyChemEdit, recomputeChemRowForAcres, reconcileChemAutofillUnits, sumAcres, toGallonOrLbEquivalent } from '../lib/chemCalculator';
 import { recipeItemToChemRowSeed, chemRowsToRecipeItems, getLastRecipeId, setLastRecipeId } from '../lib/recipeHelpers';
 import { moveItem, moveUp, moveDown } from '../lib/routeOrder';
 import AppliedRecordsManager from '../components/jobs/AppliedRecordsManager';
@@ -2092,8 +2092,6 @@ export default function JobDetail() {
       if (p) {
         // Auto-fill from the product (criterion #8/#9): warehouse has no product
         // source so it stays whatever the user enters.
-        updated[i].unit = p.unit_size || '';
-        updated[i].cost_per_unit_cents = Math.round((p.current_cost || 0) * 100).toString();
         updated[i].vendor = p.vendor || '';
         updated[i].rei_hours = p.rei_hours != null ? p.rei_hours.toString() : '';
         updated[i].phi_days = p.phi_days != null ? p.phi_days.toString() : '';
@@ -2102,11 +2100,30 @@ export default function JobDetail() {
           updated[i].driver = 'rate';
         }
         if (p.rate_unit && !updated[i].rate_unit) updated[i].rate_unit = p.rate_unit;
-        // Default the per-acre price from the customer's tier (chemical preview).
+        // P1 MONEY fix: quantity = rate × acres comes out in the RATE's base unit
+        // (e.g. pt), but the STOCK unit (unit_size, e.g. GAL) and per-unit cost/price
+        // are per stock unit. Reconcile them into ONE measure (the rate's base unit)
+        // so the saved quantity/unit agree and the line cost/price + loader gallons
+        // are NOT inflated. When the stock unit already equals the rate unit (or the
+        // units can't be reconciled), this returns the stock unit + per-stock
+        // cost/price unchanged — the common case is untouched.
         const cust = customers.find((c) => c.id === customerId);
         const tier = cust?.assigned_tier ?? 1;
         const tierPrice = tier === 3 ? p.tier3_price : tier === 2 ? p.tier2_price : p.tier1_price;
-        if (tierPrice != null) updated[i].price_per_unit_cents = Math.round(tierPrice * 100).toString();
+        const costPerStockCents = Math.round((p.current_cost || 0) * 100);
+        const pricePerStockCents = tierPrice != null ? Math.round(tierPrice * 100) : 0;
+        const reconciled = reconcileChemAutofillUnits(
+          p.unit_size,
+          updated[i].rate_unit || p.rate_unit,
+          costPerStockCents,
+          pricePerStockCents,
+          p.product_form,
+        );
+        updated[i].unit = reconciled.unit;
+        updated[i].cost_per_unit_cents = reconciled.costPerUnitCents.toString();
+        // Only default the price when the product has a tier price; otherwise leave
+        // whatever was there (mirrors the prior tierPrice != null guard).
+        if (tierPrice != null) updated[i].price_per_unit_cents = reconciled.pricePerUnitCents.toString();
         // Re-derive the quantity now that a rate auto-filled.
         updated[i] = recomputeChemRowForAcres(updated[i], sumAcres(fieldRows));
       }

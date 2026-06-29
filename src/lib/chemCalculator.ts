@@ -184,3 +184,118 @@ export function toGallonOrLbEquivalent(
   if (key in TO_POUNDS) return { value: round4(quantity * TO_POUNDS[key]), unit: 'lb' };
   return null;
 }
+
+// ── Product-autofill unit reconciliation (P1 MONEY fix) ──────────────────────
+//
+// THE BUG this fixes. The job chem grid carries TWO units:
+//   • rate_unit  (e.g. 'pt/ac')  — the per-acre dosing unit. quantity = rate × acres
+//                                  is therefore expressed in this rate's BASE unit (pt).
+//   • unit       (e.g. 'GAL')    — the measure unit OF that quantity; cost_per_unit_cents
+//                                  and price_per_unit_cents are per THIS unit; it also
+//                                  drives the gal/lb (loader) conversion.
+// When a product's STOCK unit (products.unit_size, e.g. GAL) differs from its rate's
+// base unit (pt), the old autofill set unit = stock unit (GAL) while quantity came out
+// in pints — so the saved row read "240 GAL" instead of "240 pt", and because cost/price
+// were per-GAL multiplied by a pint quantity, the line cost/price (and loader gallons)
+// inflated ~8×. The fix expresses quantity, unit, AND cost/price in ONE consistent
+// measure: the rate's base unit. cost/price are converted from per-stock-unit to
+// per-base-unit with the SAME server-parity factor tables above.
+
+/**
+ * Strip a per-acre suffix ('/ac', '/acre', '/a', ' per acre') from a rate_unit and
+ * return the bare base measure unit (e.g. 'pt/ac' → 'pt', 'GAL' → 'gal'). Empty in →
+ * empty out.
+ */
+export function baseUnitOfRate(rateUnit: string | null | undefined): string {
+  const raw = (rateUnit || '').trim().toLowerCase();
+  if (raw === '') return '';
+  // take the part before the first '/' (handles 'pt/ac', 'pt/acre', 'pt/a')
+  let base = raw.split('/')[0].trim();
+  // also handle the spelled-out ' per acre' form
+  base = base.replace(/\s+per\s+acre$/, '').trim();
+  return base;
+}
+
+/**
+ * Size of a unit within its product form (gallons for liquid, pounds for dry),
+ * using the same server-parity tables as toGallonOrLbEquivalent. Returns null when
+ * the unit is unknown for the given form.
+ */
+function unitSizeInForm(unitKey: string, form: 'liquid' | 'dry'): number | null {
+  if (form === 'liquid') return unitKey in LIQUID_TO_GALLONS ? LIQUID_TO_GALLONS[unitKey] : null;
+  return unitKey in DRY_TO_POUNDS ? DRY_TO_POUNDS[unitKey] : null;
+}
+
+export interface ChemAutofillUnits {
+  /** The measure unit to store on the row (the rate's base unit when reconcilable). */
+  unit: string;
+  /** Per-`unit` cost in cents (converted from the per-stock-unit cost when units differ). */
+  costPerUnitCents: number;
+  /** Per-`unit` price in cents (converted from the per-stock-unit price when units differ). */
+  pricePerUnitCents: number;
+}
+
+/**
+ * Reconcile a product's autofill so the row's quantity, unit, and per-unit cost/price
+ * are all in ONE measure — the rate's base unit — so quantity (= rate × acres, in the
+ * rate's base unit) is billed and loader-converted correctly.
+ *
+ * Inputs are per the STOCK unit (products.unit_size): costPerStockCents, pricePerStockCents.
+ *
+ * Behavior:
+ *  • No rate_unit, or stock base == rate base → returns the STOCK unit unchanged and the
+ *    per-stock cost/price unchanged (the common case; NOTHING changes vs before).
+ *  • Stock unit ≠ rate base unit, BOTH known in the same form → returns the rate's base
+ *    unit and the cost/price CONVERTED to per-base-unit
+ *    (perBase = perStock × sizeOf(baseUnit) / sizeOf(stockUnit)). Example: GAL→pt is
+ *    1/8, so a $22.50/GAL cost becomes $2.8125/pt; 240 pt × $2.8125 = $675 = 30 gal ×
+ *    $22.50 (the correct, NON-inflated amount).
+ *  • Units can't be reconciled (unknown unit, or different forms) → SAFE FALLBACK: keep
+ *    the STOCK unit + per-stock cost/price unchanged (never guess a conversion). This is
+ *    the pre-fix behavior for those rows; the mismatch is at least no worse than before
+ *    and the user can correct the unit/cost manually.
+ *
+ * Pure + tested (chemCalculator.test.ts).
+ */
+export function reconcileChemAutofillUnits(
+  stockUnit: string | null | undefined,
+  rateUnit: string | null | undefined,
+  costPerStockCents: number,
+  pricePerStockCents: number,
+  productForm?: 'liquid' | 'dry' | null,
+): ChemAutofillUnits {
+  const stock = (stockUnit || '').trim();
+  const stockKey = stock.toLowerCase();
+  const baseKey = baseUnitOfRate(rateUnit);
+
+  const fallback: ChemAutofillUnits = {
+    unit: stock,
+    costPerUnitCents: costPerStockCents,
+    pricePerUnitCents: pricePerStockCents,
+  };
+
+  // No rate unit, or identical units → nothing to reconcile (common case).
+  if (baseKey === '' || baseKey === stockKey || stockKey === '') return fallback;
+
+  // Determine the form: trust product_form when given, else infer from the stock unit.
+  let form: 'liquid' | 'dry' | null = productForm ?? null;
+  if (form == null) {
+    if (stockKey in LIQUID_TO_GALLONS) form = 'liquid';
+    else if (stockKey in DRY_TO_POUNDS) form = 'dry';
+  }
+  if (form == null) return fallback;
+
+  const stockSize = unitSizeInForm(stockKey, form);
+  const baseSize = unitSizeInForm(baseKey, form);
+  // Both units must be known in the SAME form to safely convert; otherwise don't guess.
+  if (stockSize == null || baseSize == null || baseSize === 0) return fallback;
+
+  // base-units per stock-unit = stockSize / baseSize (e.g. GAL/pt = 1 / (1/8) = 8).
+  // per-base cost = per-stock cost / (base-units per stock-unit) = perStock × baseSize / stockSize.
+  const perBaseFactor = baseSize / stockSize;
+  return {
+    unit: baseKey,
+    costPerUnitCents: Math.round(costPerStockCents * perBaseFactor),
+    pricePerUnitCents: Math.round(pricePerStockCents * perBaseFactor),
+  };
+}
