@@ -21,11 +21,12 @@ import Input from '../ui/Input';
 import Modal from '../ui/Modal';
 import ConfirmModal from '../ui/ConfirmModal';
 import { useToast } from '../ui/Toast';
-import { supabase, checkMutationResult } from '../../lib/db';
+import { supabase, checkMutationResult, assertRpcResult } from '../../lib/db';
 import { logActivity } from '../../lib/activityLogger';
 import { fetchWeatherForDateTime } from '../../lib/weatherCapture';
 import GroundCrewsManager from './GroundCrewsManager';
 import type { Profile, Vehicle, JobAppliedRecordRow, GroundCrew, GroundCrewMember } from '../../types';
+import type { Json } from '../../types/supabase';
 import {
   emptyAppliedRecordDraft,
   draftFromRecord,
@@ -255,85 +256,34 @@ export default function AppliedRecordsManager({
     // #21: resolve the selected crew members into link rows with name snapshots
     // (durable legal record) from the catalog at save time.
     const crewRows = buildAppliedCrewRows(draft, allMembers, crews);
+    // FIX 4 (Wave 2b): the parent + per-location fields + ground-crew rows now save
+    // ATOMICALLY via the save_job_applied_record RPC (one transaction). Previously
+    // these were 3-4 separate PostgREST writes; an insert failing after the child
+    // DELETE committed lost per-location/crew detail and zeroed the parent's
+    // applied_acres. The RPC is SECURITY INVOKER, so the SAME RLS gates apply —
+    // including the Wave-2a field-membership WITH CHECK (a foreign field_id RAISES
+    // and rolls back the WHOLE save).
+    //
+    // CATALOG-FETCH-FAILURE GUARD preserved: if loadCrews failed (allMembers stays
+    // []) while members are still selected, buildAppliedCrewRows would resolve ZERO
+    // rows — clearing the entry's live crew with no real intent. In that case pass
+    // p_crew = NULL so the RPC SKIPS the crew mutation entirely (leaves it unchanged),
+    // mirroring the prior skip-and-warn behavior. The legitimate "user removed all
+    // members" case has the catalog loaded, so p_crew is the (possibly empty) array
+    // and the live crew is replaced. The RPC itself preserves member_id-NULL legal
+    // snapshots on replacement (deletes only live-member rows).
+    const catalogUnavailable = allMembers.length === 0 && draft.member_ids.length > 0;
+    if (catalogUnavailable) {
+      toast('error', 'Ground-crew catalog unavailable — crew left unchanged for this entry.');
+    }
     try {
-      let recordId = editingId;
-      if (editingId) {
-        const result = await supabase
-          .from('job_applied_records')
-          .update(patch)
-          .eq('id', editingId)
-          .select('id');
-        checkMutationResult(result, 'Update applied-info record');
-      } else {
-        const result = await supabase
-          .from('job_applied_records')
-          .insert({ ...patch, job_id: jobId, created_by: performedBy })
-          .select('id');
-        checkMutationResult(result, 'Add applied-info record');
-        recordId = (result.data?.[0] as { id: string } | undefined)?.id ?? null;
-      }
-
-      // #18: replace the entry's per-location detail. Delete-then-insert keeps
-      // the set authoritative (handles added/removed/edited rows in one path).
-      // The DB trigger then recomputes the entry's applied_acres roll-up and the
-      // job's applied_acres -> remaining_acres from the resulting child rows.
-      if (recordId) {
-        // Clear any existing per-location rows first. NOTE: a fresh record (add
-        // path) or an entry that had no locations matches ZERO rows, which is
-        // legitimate — so only surface a real error here, not a 0-rows-affected
-        // "denial" (checkMutationResult treats [] as denied, which would wrongly
-        // abort every first save). RLS still protects the delete via the parent.
-        const del = await supabase
-          .from('job_applied_record_fields')
-          .delete()
-          .eq('application_record_id', recordId);
-        if (del.error) throw del.error;
-        if (fieldRows.length > 0) {
-          const ins = await supabase
-            .from('job_applied_record_fields')
-            .insert(fieldRows.map((f) => ({ ...f, application_record_id: recordId })))
-            .select();
-          checkMutationResult(ins, 'Add applied-info locations');
-        }
-
-        // #21: replace the entry's ground-crew member links. Same delete-then-
-        // insert pattern as the per-location rows, with TWO critical guards:
-        //
-        // 1) LEGAL-RECORD PRESERVATION: only delete rows that still point at a
-        //    LIVE catalog member (member_id IS NOT NULL). A member later deleted
-        //    from the catalog leaves a row with member_id -> NULL (FK ON DELETE
-        //    SET NULL) but a kept member_name_snapshot — that is the durable proof
-        //    of "who was on the crew that day" (regulatory). An UNCONDITIONAL
-        //    delete here would wipe those NULL-member legal rows on ANY edit-save.
-        //    The re-insert only adds live members, and the UNIQUE constraint
-        //    (application_record_id, member_id) is NULLS DISTINCT, so live rows
-        //    never collide with the preserved NULL rows.
-        //
-        // 2) CATALOG-FETCH-FAILURE GUARD: if loadCrews failed (allMembers stays
-        //    []), buildAppliedCrewRows resolves ZERO rows even though the user has
-        //    members selected — clearing the entry's live crew with no real intent.
-        //    Skip the whole crew mutation in that case (catalog empty AND members
-        //    selected). The legitimate "user removed all members" case has the
-        //    catalog loaded (allMembers non-empty), so it still clears live rows.
-        const catalogUnavailable = allMembers.length === 0 && draft.member_ids.length > 0;
-        if (catalogUnavailable) {
-          toast('error', 'Ground-crew catalog unavailable — crew left unchanged for this entry.');
-        } else {
-          const delCrew = await supabase
-            .from('job_applied_record_crew')
-            .delete()
-            .eq('application_record_id', recordId)
-            .not('member_id', 'is', null);
-          if (delCrew.error) throw delCrew.error;
-          if (crewRows.length > 0) {
-            const insCrew = await supabase
-              .from('job_applied_record_crew')
-              .insert(crewRows.map((c) => ({ ...c, application_record_id: recordId })))
-              .select();
-            checkMutationResult(insCrew, 'Add applied-info crew');
-          }
-        }
-      }
+      const { data, error } = await supabase.rpc('save_job_applied_record', {
+        p_record: { ...patch, id: editingId ?? '', job_id: jobId, created_by: performedBy } as unknown as Json,
+        p_fields: fieldRows as unknown as Json,
+        p_crew: (catalogUnavailable ? null : crewRows) as unknown as Json,
+      });
+      if (error) throw error;
+      assertRpcResult<{ record_id: string }>(data, 'save_job_applied_record');
 
       if (performedBy) {
         logActivity({

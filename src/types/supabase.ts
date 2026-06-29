@@ -9889,6 +9889,14 @@ export type Database = {
         }
         Returns: Json
       }
+      save_job_applied_record: {
+        Args: {
+          p_crew?: Json
+          p_fields: Json
+          p_record: Json
+        }
+        Returns: Json
+      }
       save_purchase_order: {
         Args: {
           p_idempotency_key?: string
