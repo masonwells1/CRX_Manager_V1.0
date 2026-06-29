@@ -5,6 +5,8 @@ import {
   interpolatePreNotification,
   renderPreNotification,
   buildPreNotificationEmailPayload,
+  countSentPreNotifications,
+  describePreNotificationSend,
   type PreNotificationTokens,
   type PreNotificationEmailInput,
 } from './preNotification';
@@ -124,5 +126,55 @@ describe('buildPreNotificationEmailPayload', () => {
   it('has no attachments (pre-notice is body-only)', () => {
     const p = buildPreNotificationEmailPayload(base);
     expect(p.attachments).toBeUndefined();
+  });
+});
+
+// ── #40 MED: re-send safety (warn before re-notifying already-sent customers) ──
+
+describe('countSentPreNotifications', () => {
+  it('counts only pre rows with status sent', () => {
+    const rows = [
+      { notification_type: 'pre', status: 'sent' },
+      { notification_type: 'pre', status: 'sent' },
+      { notification_type: 'pre', status: 'failed' }, // not yet emailed — NOT counted
+      { notification_type: 'post', status: 'sent' },   // post notice — NOT a pre-notification
+    ];
+    expect(countSentPreNotifications(rows)).toBe(2);
+  });
+
+  it('returns 0 when nothing has been sent (empty or all-failed)', () => {
+    expect(countSentPreNotifications([])).toBe(0);
+    expect(countSentPreNotifications([
+      { notification_type: 'pre', status: 'failed' },
+      { notification_type: 'pre', status: 'failed' },
+    ])).toBe(0);
+  });
+});
+
+describe('describePreNotificationSend', () => {
+  it('first send (0 already sent): default Send label, no re-send warning', () => {
+    const c = describePreNotificationSend(0);
+    expect(c.isResend).toBe(false);
+    expect(c.buttonLabel).toBe('Send Pre-Notification');
+    expect(c.confirmTitle).toBe('Send Pre-Notification');
+    expect(c.confirmLabel).toBe('Send Pre-Notification');
+    expect(c.confirmMessage).not.toMatch(/second time/i);
+  });
+
+  it('re-send (>=1 already sent): relabels + warns about a SECOND notification', () => {
+    const c = describePreNotificationSend(3);
+    expect(c.isResend).toBe(true);
+    expect(c.buttonLabel).toBe('Re-send Pre-Notification');
+    expect(c.confirmTitle).toBe('Re-send Pre-Notification');
+    expect(c.confirmLabel).toBe('Re-send Anyway');
+    // the warning must state how many and that they'll be notified again
+    expect(c.confirmMessage).toContain('3 customers');
+    expect(c.confirmMessage).toMatch(/second time/i);
+  });
+
+  it('singularizes the customer count in the warning', () => {
+    const c = describePreNotificationSend(1);
+    expect(c.confirmMessage).toContain('1 customer.');
+    expect(c.confirmMessage).not.toContain('1 customers');
   });
 });

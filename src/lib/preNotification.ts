@@ -148,6 +148,65 @@ export function buildPreNotificationEmailPayload(
   };
 }
 
+// ── Re-send safety (#40 MED) ─────────────────────────────────────────────────
+
+/**
+ * How many PRE notifications for a job have already been confirmed 'sent'.
+ * Counts only `notification_type === 'pre'` rows with `status === 'sent'` — a
+ * 'failed' row is NOT a prior notification (the customer was never emailed), so it
+ * must NOT trigger the re-send warning. Pure so it's unit-testable without a DB.
+ */
+export function countSentPreNotifications(
+  notifications: ReadonlyArray<{ notification_type: string; status: string }>,
+): number {
+  return notifications.filter(
+    (n) => n.notification_type === 'pre' && n.status === 'sent',
+  ).length;
+}
+
+/**
+ * Resolve the Send-control label + confirm-modal copy for the pre-notification
+ * action, given how many recipients have ALREADY been notified.
+ *
+ * When `alreadySentCount > 0` the job has live pre-notices: relabel to "Re-send",
+ * and the confirm modal must explicitly warn that confirming notifies those
+ * customers a SECOND time. This closes the "no warning + only disabled in-flight"
+ * gap (#40 MED) — a stray second click sees the warning, a deliberate re-send is
+ * an explicit, informed confirmation.
+ */
+export function describePreNotificationSend(alreadySentCount: number): {
+  isResend: boolean;
+  buttonLabel: string;
+  confirmTitle: string;
+  confirmMessage: string;
+  confirmLabel: string;
+} {
+  const baseMessage =
+    'Email a before-application notice to this job’s billed customer(s)? '
+    + 'Each notification is recorded in the log below. Customers with no email on '
+    + 'file are logged but not emailed.';
+  if (alreadySentCount > 0) {
+    const plural = alreadySentCount === 1 ? 'customer' : 'customers';
+    return {
+      isResend: true,
+      buttonLabel: 'Re-send Pre-Notification',
+      confirmTitle: 'Re-send Pre-Notification',
+      confirmMessage:
+        `This job already has pre-notifications sent to ${alreadySentCount} ${plural}. `
+        + 'Sending again will notify them a second time. '
+        + 'Only continue if you intend a deliberate re-send.',
+      confirmLabel: 'Re-send Anyway',
+    };
+  }
+  return {
+    isResend: false,
+    buttonLabel: 'Send Pre-Notification',
+    confirmTitle: 'Send Pre-Notification',
+    confirmMessage: baseMessage,
+    confirmLabel: 'Send Pre-Notification',
+  };
+}
+
 /** Minimal HTML escaping so a customer/job value with <, >, & renders safely. */
 function escapeHtml(s: string): string {
   return s

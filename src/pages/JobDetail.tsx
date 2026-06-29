@@ -51,6 +51,8 @@ import {
   parsePreNotificationTemplate,
   renderPreNotification,
   buildPreNotificationEmailPayload,
+  countSentPreNotifications,
+  describePreNotificationSend,
 } from '../lib/preNotification';
 
 interface JobDbRow {
@@ -305,9 +307,28 @@ export default function JobDetail() {
   // Field-app parity #40: per-job customer pre-notification log + send action.
   const [jobNotifications, setJobNotifications] = useState<JobNotification[]>([]);
   const [loadingNotifications, setLoadingNotifications] = useState(false);
+  // #40 MED (Codex review): TRUE only after a SUCCESSFUL log load. The sent-count
+  // (alreadySentPreCount) is only trustworthy once we've actually read the log — a
+  // FAILED load leaves jobNotifications=[] with loadingNotifications=false, which
+  // would otherwise read as "0 sent" and silently enable the FIRST-send flow on a
+  // job that already has sent notices. Gate the send on this so we FAIL CLOSED.
+  const [notificationsLoaded, setNotificationsLoaded] = useState(false);
+  // #40 MED (Codex re-review): a FAILED load must be VISIBLE (not a silently-disabled
+  // Send button + a misleading "no notifications" empty state) → drives an error+Retry
+  // panel. And notifLoadReqRef drops a STALE in-flight response from a PREVIOUSLY viewed
+  // job (this component is reused across /jobs/:id navigation) so the new job's Send
+  // control is never computed from the old job's log.
+  const [notificationsLoadError, setNotificationsLoadError] = useState(false);
+  const notifLoadReqRef = useRef<string | null>(null);
   const [sendingPreNotice, setSendingPreNotice] = useState(false);
   const [showPreNoticeConfirm, setShowPreNoticeConfirm] = useState(false);
   const { getKey: getPreNoticeKey, resetKey: resetPreNoticeKey } = useIdempotencyKey('record_job_pre_notifications', profile?.id || '');
+  // #40 MED: how many pre-notifications have ALREADY been confirmed 'sent' for this
+  // job. > 0 means a click is a RE-SEND — relabel the control + warn in the confirm
+  // modal that confirming notifies those customers a SECOND time (a stray double
+  // click should NOT silently re-notify; only an explicit, informed confirm proceeds).
+  const alreadySentPreCount = countSentPreNotifications(jobNotifications);
+  const preSendCopy = describePreNotificationSend(alreadySentPreCount);
 
   // Field-app parity #40: load the per-job customer notification log. Read-only;
   // the job_notifications RLS policy allows ONLY admin/sales (the log carries
@@ -315,21 +336,35 @@ export default function JobDetail() {
   // don't fire a guaranteed-RLS-denied read that gets swallowed into the empty
   // state AND logged to Sentry as noise every time (Codex #40 P3).
   const loadJobNotifications = useCallback(async () => {
-    if (isNew || !id || !isEditable) { setJobNotifications([]); return; }
+    if (isNew || !id || !isEditable) { setJobNotifications([]); setNotificationsLoaded(false); setNotificationsLoadError(false); return; }
+    const reqId = id;                  // the job this load is FOR
+    notifLoadReqRef.current = reqId;   // mark it the latest requested job
     setLoadingNotifications(true);
+    setNotificationsLoaded(false); // reset until THIS load confirms the count is trustworthy
+    setNotificationsLoadError(false);
     try {
       const { data, error } = await supabase
         .from('job_notifications')
         .select('id, job_id, notification_type, customer_id, recipient_email, channel, subject, message, status, sent_at, sent_by, idempotency_key, created_at, customer:customers(farm_name)')
-        .eq('job_id', id)
-        .order('sent_at', { ascending: false });
+        .eq('job_id', reqId)
+        // #40 LOW: order by created_at (NOT NULL on every row), NOT sent_at — a
+        // failed/unsent row has sent_at=NULL and Postgres sorts NULLS FIRST, which
+        // floated failed rows ABOVE real sends and read the log backwards.
+        .order('created_at', { ascending: false });
+      // #40 MED (Codex re-review): a newer job's load superseded this one — drop the
+      // stale result so we never compute the new job's Send control off the old log.
+      if (notifLoadReqRef.current !== reqId) return;
       if (error) throw error;
       setJobNotifications((data as unknown as JobNotification[]) ?? []);
+      setNotificationsLoaded(true); // ONLY a clean read makes the sent-count safe to send off
     } catch (err) {
-      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'load_job_notifications', jobId: id } });
+      if (notifLoadReqRef.current !== reqId) return; // stale — don't clobber the current job's state
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'load_job_notifications', jobId: reqId } });
       setJobNotifications([]);
+      setNotificationsLoaded(false); // failed load: count is NOT trustworthy → keep the send disabled
+      setNotificationsLoadError(true); // ...but make it VISIBLE + retryable (don't strand the user)
     } finally {
-      setLoadingNotifications(false);
+      if (notifLoadReqRef.current === reqId) setLoadingNotifications(false);
     }
   }, [id, isNew, isEditable]);
 
@@ -344,6 +379,15 @@ export default function JobDetail() {
   // twice. The action key is preserved on any failure so a retry reuses it.
   const handleSendPreNotification = async () => {
     if (isNew || !id) return;
+    // #40 MED (Codex review) FAIL CLOSED: never decide first-send vs re-send off a
+    // log we haven't SUCCESSFULLY read — alreadySentPreCount reads 0 both when there
+    // are genuinely no notices AND when the load FAILED, so a failed/incomplete load
+    // would skip the re-send warning and re-notify customers. Require a confirmed
+    // load (notificationsLoaded) — the button is also disabled in both cases.
+    if (loadingNotifications || !notificationsLoaded) {
+      toast('error', 'Could not load the notification log yet — reload the page before sending, so an already-sent notice is not duplicated.');
+      return;
+    }
     // Codex #40 P2 (save-first): the subject/body are built from CURRENT form state
     // but the RPC resolves recipients from the PERSISTED job. Block on unsaved edits
     // so we never email the saved customers with in-progress (or stale) details —
@@ -455,7 +499,11 @@ export default function JobDetail() {
       if (emailErr > 0) {
         // Do NOT reset the key — a retry reuses it so already-sent recipients
         // de-dupe at the edge and aren't emailed twice.
-        toast('error', `${emailedOk} sent; ${emailErr} email(s) failed. Fix and click Send again to retry.`);
+        // #40 LOW: include the no-email count (co-billed recipients recorded
+        // 'failed' for lack of an address), mirroring the success-branch wording —
+        // otherwise they're silently under-reported.
+        const noEmailSuffix = noEmail > 0 ? ` ${noEmail} had no email on file.` : '';
+        toast('error', `${emailedOk} sent; ${emailErr} email(s) failed.${noEmailSuffix} Fix and click Send again to retry.`);
       } else if (emailedOk === 0) {
         // No email actually went out (every billed customer lacks an email on
         // file). Surface this as a warning — NOT a "sent" success — so the user
@@ -465,7 +513,14 @@ export default function JobDetail() {
         resetPreNoticeKey();
         toast('error', `No email sent — ${noEmail} billed customer(s) have no email on file. Add an email and try again.`);
       } else {
-        resetPreNoticeKey(); // clean success — next click is a new intent
+        // Clean success — reset the key so the NEXT distinct action gets a fresh
+        // key. The guard against an ACCIDENTAL duplicate is the warning modal (#40
+        // MED): a re-send is relabelled + warns "will notify a second time" and only
+        // proceeds on an explicit "Re-send Anyway" click. Keeping the key stable here
+        // would instead make a DELIBERATE re-send silently de-dupe at the edge (no
+        // email sent) while the UI reports success (Codex #40-fix P2) — so reset it
+        // and let the modal, not the key, prevent the unintended re-fire.
+        resetPreNoticeKey();
         if (noEmail > 0) {
           toast('success', `Pre-notification sent to ${emailedOk} customer(s). ${noEmail} had no email on file (logged as failed).`);
         } else {
@@ -2730,11 +2785,16 @@ export default function JobDetail() {
             {isEditable && !isNew && id && (status === 'scheduled' || status === 'in_progress') && (
               <Button
                 size="sm"
+                variant={preSendCopy.isResend ? 'secondary' : 'primary'}
                 onClick={() => setShowPreNoticeConfirm(true)}
                 loading={sendingPreNotice}
-                disabled={sendingPreNotice}
+                // #40 MED (Codex review): block until the log has SUCCESSFULLY loaded.
+                // A still-loading OR failed load leaves alreadySentPreCount=0, which
+                // would give the FIRST-send modal and bypass the re-send warning on a
+                // job that already has sent notices. notificationsLoaded fails closed.
+                disabled={sendingPreNotice || loadingNotifications || !notificationsLoaded}
               >
-                <Bell className="w-4 h-4" /> Send Pre-Notification
+                <Bell className="w-4 h-4" /> {preSendCopy.buttonLabel}
               </Button>
             )}
           </div>
@@ -2744,6 +2804,12 @@ export default function JobDetail() {
             </p>
           ) : loadingNotifications ? (
             <p className="text-sm text-gray-500 py-6 text-center">Loading notifications…</p>
+          ) : notificationsLoadError ? (
+            <div className="text-center py-6">
+              <p className="text-sm text-red-600">Couldn't load the notification log.</p>
+              <p className="text-xs text-secondary mt-1">Sending is disabled until it loads, so an already-sent notice isn't duplicated.</p>
+              <Button size="sm" variant="secondary" className="mt-3" onClick={loadJobNotifications}>Retry</Button>
+            </div>
           ) : jobNotifications.length === 0 ? (
             <p className="text-sm text-secondary text-center py-6">
               No notifications have been sent yet.
@@ -3036,14 +3102,17 @@ export default function JobDetail() {
         loading={transferring}
       />
 
-      {/* #40: Send Pre-Notification Confirm (customer-facing — explicit confirm) */}
+      {/* #40: Send Pre-Notification Confirm (customer-facing — explicit confirm). On
+          a RE-SEND (the job already has 'sent' pre rows) the title/copy/label switch
+          to an explicit warning that confirming notifies those customers a SECOND
+          time (#40 MED — no silent duplicate; deliberate re-send must be informed). */}
       <ConfirmModal
         open={showPreNoticeConfirm}
         onClose={() => setShowPreNoticeConfirm(false)}
         onConfirm={() => { setShowPreNoticeConfirm(false); handleSendPreNotification(); }}
-        title="Send Pre-Notification"
-        message="Email a before-application notice to this job's billed customer(s)? Each notification is recorded in the log below. Customers with no email on file are logged but not emailed."
-        confirmLabel="Send Pre-Notification"
+        title={preSendCopy.confirmTitle}
+        message={preSendCopy.confirmMessage}
+        confirmLabel={preSendCopy.confirmLabel}
         variant="warning"
         loading={sendingPreNotice}
       />
