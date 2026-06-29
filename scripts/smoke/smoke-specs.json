@@ -115,6 +115,21 @@
       "chain": "smoke-undispatch-job-locations.sql",
       "description": "Field-app parity #37 (REQUIRES 20260626120000 + 20260626140000): Dispatched List + reassign/undispatch. Proves through the REAL undispatch_job_locations + get_dispatched_list RPCs (+ dispatch_job_locations for reassign): SETUP/LIST (dispatch loc A->app1, loc B->app2; get_dispatched_list returns both rows fully shaped — assignee name resolved server-side, job#, field name, status, location + job acres); ASSIGNEE FILTER (get_dispatched_list(app1) returns only loc A); REASSIGN (dispatch_job_locations re-dispatches loc A->app2 as an upsert; the list shows loc A under app2, no duplicate, no longer under app1); UNDISPATCH (undispatch_job_locations([loc B]) -> {undispatched:1}, the row's dispatch_status='cancelled', the list drops loc B, an activity_feed audit row is written); UNDISPATCH REVOKES VISIBILITY (the former assignee can no longer SELECT the cancelled dispatch row); ROLE GATE (an applicator caller -> INSUFFICIENT_ROLE); ACTOR GATE (forged p_performed_by -> ACTOR_MISMATCH); IDEMPOTENCY (replaying the same undispatch key -> same result, cancels nothing new); NO-OP UNDISPATCH (undispatching a never-dispatched location -> {undispatched:0}, not an error); ANON DENIED (anon has no EXECUTE on either new fn). Self-contained fixtures.",
       "covers": ["undispatch_job_locations", "get_dispatched_list"]
+    },
+    "unpost_invoice_group": {
+      "chain": "smoke-unpost-invoice-group.sql",
+      "description": "Field-app remediation Wave 2a FIX 4 (REQUIRES 20260629170000): ALL-OR-NOTHING split-group unpost. Proves through the REAL unpost_invoice_group: HAPPY (a posted 2-member split group unposts in ONE call — both members posted->unposted, posted_by/at cleared, one invoice_unposted audit row per member, one invoice_group_unposted activity row); ALL-OR-NOTHING (a posted group where one member is PAID/money-applied -> the whole call RAISES the money-guard error and NOTHING changes — both still posted, 0 unpost audit rows; no half-unpost reachable); ROLE GATE (an applicator caller -> 'admin or sales role required'); ACTOR GATE (forged p_performed_by -> ACTOR_MISMATCH, no mutation); GRANTS (anon has NO EXECUTE, authenticated does). Self-contained fixtures.",
+      "covers": ["unpost_invoice_group"]
+    },
+    "get_jobs_billed_customers": {
+      "chain": "smoke-get-jobs-billed-customers.sql",
+      "description": "Field-app remediation Wave 2a FIX 2 (REQUIRES 20260629160000): batched, RLS-safe billed-customer resolver for the jobs list. Proves through the REAL get_jobs_billed_customers vs get_job_billed_customers: PARITY (as an applicator on a split job, the batch resolver returns the SAME customer_id set as the per-job resolver — exactly {primary A, co-billed B}); CO-BILLED VISIBLE (the co-billed split owner B IS returned to the applicator, the bug being that the job_field_shares.customer RLS embed dropped B; exactly one is_primary row); GRANTS (anon has NO EXECUTE, authenticated does). Self-contained fixtures.",
+      "covers": ["get_jobs_billed_customers"]
+    },
+    "job_applied_record_fields_rls": {
+      "chain": "smoke-jarf-field-membership-rls.sql",
+      "description": "Field-app remediation Wave 2a FIX 1 (REQUIRES 20260629150000): field-membership RLS on job_applied_record_fields INSERT/UPDATE. Proves with a sales_rep under RLS (role authenticated): REJECT (inserting a row whose field_id is NOT one of the parent record's job fields fails the WITH CHECK — row-level security violation); ACCEPT (an in-job field_id inserts cleanly, exactly one row, no foreign row); UPDATE REJECT (moving the legit row's field_id onto a foreign field fails the WITH CHECK; the row stays on the in-job field). Self-contained fixtures. (Policy-only migration; no callable RPC — the covers token below is the TABLE name so `--spec job_applied_record_fields` resolves this chain.)",
+      "covers": ["job_applied_record_fields"]
     }
   }
 }

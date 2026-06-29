@@ -11,7 +11,7 @@ import BulkDeleteConfirmModal from '../components/ui/BulkDeleteConfirmModal';
 import SplitHeading from '../components/ui/SplitHeading';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, checkMutationResult } from '../lib/db';
+import { supabase, checkMutationResult, assertRpcResult } from '../lib/db';
 import { logActivity } from '../lib/activityLogger';
 import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection';
 import { exportToCSV, fmtCSV, fmtDateCSV } from '../lib/csvExport';
@@ -402,7 +402,6 @@ export default function Jobs() {
         vehicle:vehicles(vehicle_name),
         job_fields(crop, field:fields(field_name, crop_type, county, state)),
         job_chemicals(rate_per_acre, rate_unit, product:products(product_name)),
-        job_field_shares(customer_id, split_pct, is_primary, customer:customers(farm_name, account_number)),
         job_tag_assignments(tag:job_tags(id, name, color, created_by, created_at, updated_at)),
         batch:job_batches(name)
       `)
@@ -452,7 +451,6 @@ export default function Jobs() {
       vehicle?: { vehicle_name?: string };
       job_fields?: Array<{ crop?: string | null; field?: { field_name?: string; crop_type?: string | null; county?: string | null; state?: string | null } }>;
       job_chemicals?: Array<{ rate_per_acre?: number | null; rate_unit?: string | null; product?: { product_name?: string } }>;
-      job_field_shares?: Array<{ customer_id: string; split_pct: number; is_primary: boolean; customer?: { farm_name?: string; account_number?: string | null } }>;
       job_tag_assignments?: Array<{ tag?: JobTag | null }>;
       batch?: { name?: string } | null;
       applicator_id?: string | null;
@@ -474,16 +472,43 @@ export default function Jobs() {
       (profs || []).forEach((a: { id: string | null; full_name: string | null }) => { if (a.id) nameMap[a.id] = a.full_name ?? ''; });
     }
 
+    // Field-app FIX 2 (Wave 2a security): resolve each job's BILLED customers via the
+    // SECURITY DEFINER batch RPC get_jobs_billed_customers, NOT the job_field_shares.customer
+    // embed. That embed is RLS-blocked for applicators (the customers policy exposes only the
+    // job's PRIMARY customer), so co-billed split owners on a split job came back null and were
+    // dropped — an applicator saw only the primary. The RPC self-gates per job on the same
+    // jobs_select predicate (never widens visibility) and returns the co-billed names too.
+    const jobIds = [...new Set(raw.map((j) => j.id).filter(Boolean) as string[])];
+    const billedByJob = new Map<string, JobCustomerSummary[]>();
+    if (jobIds.length > 0) {
+      try {
+        const { data: billed, error: billedErr } = await supabase.rpc('get_jobs_billed_customers', { p_job_ids: jobIds });
+        if (billedErr) throw billedErr;
+        type BilledRow = { job_id: string | null; farm_name: string | null; account_number: string | null };
+        const billedRows = assertRpcResult<BilledRow[]>(billed, 'get_jobs_billed_customers');
+        billedRows.forEach((b) => {
+          if (!b.job_id) return;
+          const list = billedByJob.get(b.job_id) ?? [];
+          // RPC already orders primary-first then by farm_name, and emits one row per
+          // (job, customer) — just preserve that order.
+          list.push({ customer_name: b.farm_name || 'Unknown', account_number: b.account_number ?? null });
+          billedByJob.set(b.job_id, list);
+        });
+      } catch (billedErr) {
+        // Non-fatal: the list still renders with the primary-customer fallback below.
+        Sentry.captureException(billedErr, { tags: { source: 'fetch', action: 'load_jobs_billed_customers' } });
+      }
+    }
+
     const rows: JobRow[] = raw.map((j) => {
-      // Billed customers: prefer the per-field shares (multi-customer); else the
-      // single job customer. Dedup by name+account.
-      const shareCustomers = (j.job_field_shares || [])
-        .map((s) => s.customer)
-        .filter(Boolean) as { farm_name?: string; account_number?: string | null }[];
+      // Billed customers from the RLS-safe RPC (includes co-billed split owners that the
+      // job_field_shares.customer embed hid from applicators). Dedup by name+account,
+      // preserving the RPC's primary-first order; fall back to the single job customer
+      // only if the RPC returned nothing for this job (e.g. a job with no resolvable share).
+      const billed = billedByJob.get(j.id as string) ?? [];
       const custMap = new Map<string, JobCustomerSummary>();
-      shareCustomers.forEach((c) => {
-        const name = c.farm_name || 'Unknown';
-        custMap.set(`${name}|${c.account_number ?? ''}`, { customer_name: name, account_number: c.account_number ?? null });
+      billed.forEach((c) => {
+        custMap.set(`${c.customer_name}|${c.account_number ?? ''}`, c);
       });
       if (custMap.size === 0 && j.customer) {
         const name = j.customer.farm_name || 'Unknown';

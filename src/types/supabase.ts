@@ -8813,6 +8813,16 @@ export type Database = {
           is_primary: boolean
         }[]
       }
+      get_jobs_billed_customers: {
+        Args: { p_job_ids: string[] }
+        Returns: {
+          account_number: string | null
+          customer_id: string
+          farm_name: string | null
+          is_primary: boolean
+          job_id: string
+        }[]
+      }
       get_job_fields_with_geojson: {
         Args: { p_job_id: string }
         Returns: {
@@ -9999,6 +10009,14 @@ export type Database = {
         Args: {
           p_idempotency_key?: string
           p_invoice_id: string
+          p_performed_by: string
+        }
+        Returns: Json
+      }
+      unpost_invoice_group: {
+        Args: {
+          p_idempotency_key?: string
+          p_invoice_group_id: string
           p_performed_by: string
         }
         Returns: Json
