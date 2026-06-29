@@ -54,6 +54,13 @@ import {
   countSentPreNotifications,
   describePreNotificationSend,
 } from '../lib/preNotification';
+import {
+  parsePostNotificationTemplate,
+  renderPostNotification,
+  buildPostNotificationEmailPayload,
+  countSentPostNotifications,
+  describePostNotificationSend,
+} from '../lib/postNotification';
 
 interface JobDbRow {
   id: string;
@@ -329,6 +336,15 @@ export default function JobDetail() {
   // click should NOT silently re-notify; only an explicit, informed confirm proceeds).
   const alreadySentPreCount = countSentPreNotifications(jobNotifications);
   const preSendCopy = describePreNotificationSend(alreadySentPreCount);
+  // Field-app parity #41: post-application notice send action (AFTER application).
+  // Reuses the SAME jobNotifications log + load + fail-closed gating as #40; only the
+  // type ('post') + lifecycle gate (completed/invoiced) differ. The re-send-safety
+  // count is over 'post' rows so a pre send never relabels the post control (or v.v.).
+  const [sendingPostNotice, setSendingPostNotice] = useState(false);
+  const [showPostNoticeConfirm, setShowPostNoticeConfirm] = useState(false);
+  const { getKey: getPostNoticeKey, resetKey: resetPostNoticeKey } = useIdempotencyKey('record_job_post_notifications', profile?.id || '');
+  const alreadySentPostCount = countSentPostNotifications(jobNotifications);
+  const postSendCopy = describePostNotificationSend(alreadySentPostCount);
 
   // Field-app parity #40: load the per-job customer notification log. Read-only;
   // the job_notifications RLS policy allows ONLY admin/sales (the log carries
@@ -537,6 +553,159 @@ export default function JobDetail() {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'send_pre_notification', jobId: id } });
     } finally {
       setSendingPreNotice(false);
+    }
+  };
+
+  // Send an after-application post-notification to the job's resolved share
+  // customer(s). Close mirror of handleSendPreNotification — same RECORD -> SEND ->
+  // CONFIRM flow, same fail-closed gating on a successfully-loaded log, same
+  // save-first guard, same deterministic per-recipient idempotency. Differs only in
+  // the RPC (record_job_post_notifications), the template setting key, and the
+  // honest error mapping for the post lifecycle gate.
+  const handleSendPostNotification = async () => {
+    if (isNew || !id) return;
+    // FAIL CLOSED: never decide first-send vs re-send off a log we haven't
+    // SUCCESSFULLY read (a failed load reads as "0 sent" and would skip the re-send
+    // warning). Require a confirmed load — the button is also disabled in both cases.
+    if (loadingNotifications || !notificationsLoaded) {
+      toast('error', 'Could not load the notification log yet — reload the page before sending, so an already-sent notice is not duplicated.');
+      return;
+    }
+    // The subject/body are built from CURRENT form state but the RPC resolves
+    // recipients from the PERSISTED job. Block on unsaved edits so we never email the
+    // saved customers with in-progress (or stale) details.
+    if (isDirty) {
+      toast('error', 'Save the job before sending a post-notification — it must match the saved record.');
+      return;
+    }
+    setSendingPostNotice(true);
+    const key = getPostNoticeKey();
+    try {
+      // Resolve the editable template (criterion #4). ABORT on a failed read — a
+      // null-on-error would silently fall back to the hard-coded default and email
+      // the WRONG (not owner-edited) wording. A genuinely-absent row (no error, data
+      // null) correctly uses the default.
+      const { data: tplRow, error: tplErr } = await supabase
+        .from('app_settings')
+        .select('setting_value')
+        .eq('setting_key', 'post_application_notice_template')
+        .maybeSingle();
+      if (tplErr) throw new Error(`Could not load the post-notification message: ${tplErr.message}`);
+      const template = parsePostNotificationTemplate((tplRow as { setting_value?: string } | null)?.setting_value ?? null);
+
+      // Render once with the primary customer's name for the recorded log subject/
+      // message; per-recipient bodies are re-rendered with each farm name below.
+      const primaryFarm = customers.find((c) => c.id === customerId)?.farm_name ?? '';
+      const recorded = renderPostNotification(template, {
+        customer: primaryFarm,
+        jobNumber,
+        jobDate,
+      });
+
+      // 1) Record the per-recipient log (admin/sales only; resolves recipients).
+      const rpcRes = await supabase.rpc('record_job_post_notifications', {
+        p_job_id: id,
+        p_subject: recorded.subject,
+        p_message: recorded.body,
+        p_performed_by: profile?.id ?? undefined,
+        p_idempotency_key: key,
+      });
+      // Throw the RPC error FIRST so the machine-readable code reaches the hasRpcCode
+      // branches below (asserting null data on a raise would swallow it generically).
+      if (rpcRes.error) throw rpcRes.error;
+      const result = assertRpcResult<{
+        success: boolean;
+        recipients_with_email: number;
+        recipients_without_email: number;
+        recipients: Array<{
+          notification_id: string;
+          customer_id: string;
+          farm_name: string | null;
+          email: string | null;
+          has_email: boolean;
+          email_idempotency_key: string | null;
+        }>;
+      }>(rpcRes.data, 'record_job_post_notifications');
+
+      // 2) Send the actual email to each recipient WITH an email; confirm -> 'sent'
+      // only on success.
+      let emailedOk = 0;
+      let emailErr = 0;
+      for (const r of result.recipients) {
+        if (!r.has_email || !r.email) continue;
+        try {
+          const rendered = renderPostNotification(template, {
+            customer: r.farm_name ?? primaryFarm,
+            jobNumber,
+            jobDate,
+          });
+          const payload = buildPostNotificationEmailPayload({
+            customerEmail: r.email,
+            customerId: r.customer_id,
+            jobId: id,
+            subject: rendered.subject,
+            body: rendered.body,
+          });
+          // Deterministic edge idempotency key from the RPC (NOT Date.now()): a retry
+          // reuses it so the edge fn de-dupes the same recipient's send.
+          if (r.email_idempotency_key) payload.idempotency_key = r.email_idempotency_key;
+          await sendEmail(payload);
+          // Flip THIS row failed -> sent now that the email actually went out, and
+          // store the EXACT per-recipient text emailed. confirm_job_notification_sent
+          // is REUSED from #40 (notification_type-agnostic).
+          const confirmRes = await supabase.rpc('confirm_job_notification_sent', {
+            p_notification_id: r.notification_id,
+            p_subject: rendered.subject,
+            p_message: rendered.body,
+            p_performed_by: profile?.id ?? undefined,
+          });
+          if (confirmRes.error) throw confirmRes.error;
+          assertRpcResult(confirmRes.data, 'confirm_job_notification_sent');
+          emailedOk += 1;
+        } catch (sendErr) {
+          // Row stays 'failed' — honest. Keep the action key so a retry de-dupes.
+          emailErr += 1;
+          Sentry.captureException(sendErr instanceof Error ? sendErr : new Error(String(sendErr)), { extra: { context: 'send_post_notification_email', jobId: id, customerId: r.customer_id } });
+        }
+      }
+
+      if (profile) {
+        logActivity({ event: 'job_post_notification_sent', description: `Post-application notice for job ${jobNumber}: ${result.recipients_with_email} recipient(s) with email, ${emailedOk} emailed`, performedBy: profile.id, entityType: 'job', entityId: id });
+      }
+
+      const noEmail = result.recipients_without_email;
+      if (emailErr > 0) {
+        // Do NOT reset the key — a retry reuses it so already-sent recipients de-dupe.
+        const noEmailSuffix = noEmail > 0 ? ` ${noEmail} had no email on file.` : '';
+        toast('error', `${emailedOk} sent; ${emailErr} email(s) failed.${noEmailSuffix} Fix and click Send again to retry.`);
+      } else if (emailedOk === 0) {
+        // No email actually went out (every billed customer lacks an email on file).
+        // Surface as a warning — NOT a "sent" success. Reset the key: nothing to
+        // retry-dedupe, and the recorded 'failed' rows already show who had no email.
+        resetPostNoticeKey();
+        toast('error', `No email sent — ${noEmail} billed customer(s) have no email on file. Add an email and try again.`);
+      } else {
+        // Clean success — reset the key so the NEXT distinct action gets a fresh key.
+        // The guard against an ACCIDENTAL duplicate is the warning modal (a re-send is
+        // relabelled + warns "will notify a second time" and only proceeds on an
+        // explicit "Re-send Anyway" click).
+        resetPostNoticeKey();
+        if (noEmail > 0) {
+          toast('success', `Post-notification sent to ${emailedOk} customer(s). ${noEmail} had no email on file (logged as failed).`);
+        } else {
+          toast('success', `Post-notification sent to ${emailedOk} customer(s).`);
+        }
+      }
+      await loadJobNotifications();
+    } catch (err) {
+      // Keep the key so a retry de-dupes the recorded log on the same intent.
+      let msg = err instanceof Error ? err.message : 'Failed to send post-notification';
+      if (hasRpcCode(err, RpcErrorCodes.INSUFFICIENT_ROLE)) msg = 'Only admin or sales can send notifications.';
+      else if (hasRpcCode(err, RpcErrorCodes.JOB_NOT_POST_NOTIFIABLE)) msg = 'A post-notification can only be sent on a completed or invoiced job.';
+      toast('error', msg);
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'send_post_notification', jobId: id } });
+    } finally {
+      setSendingPostNotice(false);
     }
   };
 
@@ -2780,23 +2949,39 @@ export default function JobDetail() {
             <h2 className="text-lg font-semibold text-nav-dark flex items-center gap-2">
               <Bell className="w-4 h-4 text-crx-green" /> Customer Notifications
             </h2>
-            {/* #40 Codex P2: a PRE-application notice only on a not-yet-applied job
-                (scheduled / in_progress); hidden on completed / invoiced / cancelled. */}
-            {isEditable && !isNew && id && (status === 'scheduled' || status === 'in_progress') && (
-              <Button
-                size="sm"
-                variant={preSendCopy.isResend ? 'secondary' : 'primary'}
-                onClick={() => setShowPreNoticeConfirm(true)}
-                loading={sendingPreNotice}
-                // #40 MED (Codex review): block until the log has SUCCESSFULLY loaded.
-                // A still-loading OR failed load leaves alreadySentPreCount=0, which
-                // would give the FIRST-send modal and bypass the re-send warning on a
-                // job that already has sent notices. notificationsLoaded fails closed.
-                disabled={sendingPreNotice || loadingNotifications || !notificationsLoaded}
-              >
-                <Bell className="w-4 h-4" /> {preSendCopy.buttonLabel}
-              </Button>
-            )}
+            <div className="flex items-center gap-2">
+              {/* #40 Codex P2: a PRE-application notice only on a not-yet-applied job
+                  (scheduled / in_progress); hidden on completed / invoiced / cancelled. */}
+              {isEditable && !isNew && id && (status === 'scheduled' || status === 'in_progress') && (
+                <Button
+                  size="sm"
+                  variant={preSendCopy.isResend ? 'secondary' : 'primary'}
+                  onClick={() => setShowPreNoticeConfirm(true)}
+                  loading={sendingPreNotice}
+                  // #40 MED (Codex review): block until the log has SUCCESSFULLY loaded.
+                  // A still-loading OR failed load leaves alreadySentPreCount=0, which
+                  // would give the FIRST-send modal and bypass the re-send warning on a
+                  // job that already has sent notices. notificationsLoaded fails closed.
+                  disabled={sendingPreNotice || loadingNotifications || !notificationsLoaded}
+                >
+                  <Bell className="w-4 h-4" /> {preSendCopy.buttonLabel}
+                </Button>
+              )}
+              {/* #41: a POST-application notice only on an APPLIED job (completed /
+                  invoiced); hidden on scheduled / in_progress / cancelled. Same
+                  fail-closed gating + re-send safety as the pre control above. */}
+              {isEditable && !isNew && id && (status === 'completed' || status === 'invoiced') && (
+                <Button
+                  size="sm"
+                  variant={postSendCopy.isResend ? 'secondary' : 'primary'}
+                  onClick={() => setShowPostNoticeConfirm(true)}
+                  loading={sendingPostNotice}
+                  disabled={sendingPostNotice || loadingNotifications || !notificationsLoaded}
+                >
+                  <Bell className="w-4 h-4" /> {postSendCopy.buttonLabel}
+                </Button>
+              )}
+            </div>
           </div>
           {isNew || !id ? (
             <p className="text-sm text-secondary text-center py-6">
@@ -2854,7 +3039,7 @@ export default function JobDetail() {
             </div>
           )}
           <p className="mt-3 text-xs text-secondary">
-            The pre-notification message is configured in Settings (editable wording) and goes to the job&apos;s billed customer(s) by email.
+            The pre- and post-notification messages are configured in Settings (editable wording) and go to the job&apos;s billed customer(s) by email. This history carries over to the job&apos;s field-application invoice.
           </p>
         </Card>
 
@@ -3115,6 +3300,21 @@ export default function JobDetail() {
         confirmLabel={preSendCopy.confirmLabel}
         variant="warning"
         loading={sendingPreNotice}
+      />
+
+      {/* #41: Send Post-Notification Confirm (customer-facing — explicit confirm). On
+          a RE-SEND (the job already has 'sent' post rows) the title/copy/label switch
+          to an explicit warning that confirming notifies those customers a SECOND time
+          (no silent duplicate; deliberate re-send must be informed). */}
+      <ConfirmModal
+        open={showPostNoticeConfirm}
+        onClose={() => setShowPostNoticeConfirm(false)}
+        onConfirm={() => { setShowPostNoticeConfirm(false); handleSendPostNotification(); }}
+        title={postSendCopy.confirmTitle}
+        message={postSendCopy.confirmMessage}
+        confirmLabel={postSendCopy.confirmLabel}
+        variant="warning"
+        loading={sendingPostNotice}
       />
     </div>
   );

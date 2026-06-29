@@ -9608,6 +9608,16 @@ export type Database = {
         }
         Returns: Json
       }
+      record_job_post_notifications: {
+        Args: {
+          p_idempotency_key?: string
+          p_job_id: string
+          p_message: string
+          p_performed_by?: string
+          p_subject: string
+        }
+        Returns: Json
+      }
       record_job_pre_notifications: {
         Args: {
           p_idempotency_key?: string
@@ -10134,6 +10144,7 @@ export type Database = {
         | "low_stock_alert"
         | "month_end_close"
         | "pre_application_notice"
+        | "post_application_notice"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -10271,6 +10282,7 @@ export const Constants = {
         "low_stock_alert",
         "month_end_close",
         "pre_application_notice",
+        "post_application_notice",
       ],
     },
   },

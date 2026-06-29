@@ -14,7 +14,10 @@ export type EmailType =
   // Field-app parity #40: before-application courtesy notice to the job's
   // customer(s). The matching send-email edge allow-list entry is PREPARED but
   // its deploy is gated for Mason (see supabase/functions/send-email/index.ts).
-  | 'pre_application_notice';
+  | 'pre_application_notice'
+  // Field-app parity #41: after-application courtesy notice to the job's
+  // customer(s). Same gated-deploy story as the pre notice above.
+  | 'post_application_notice';
 
 export interface SendEmailParams {
   to: string;

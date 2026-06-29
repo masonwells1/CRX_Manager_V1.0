@@ -65,6 +65,12 @@ const ALL_EMAIL_TYPES = new Set([
   // this edge function is DEPLOYED — that deploy is GATED for Mason. The local
   // `pre_application_notice` enum value migration is applied to LOCAL only.
   "pre_application_notice",
+  // Field-app parity #41: after-application customer notice. Same as the pre
+  // notice above — admin + sales_rep only (via ALL_EMAIL_TYPES), NOT a driver
+  // type. PREPARED here but its effect only goes live when this edge function is
+  // DEPLOYED — that deploy is GATED for Mason. The local `post_application_notice`
+  // enum value migration is applied to LOCAL only.
+  "post_application_notice",
 ]);
 
 // What email types each role may send.

@@ -28,6 +28,13 @@ import type { CustomerSharesBasis } from '../components/field-app/customerSplit'
 import ApplicationServicePicker from '../components/field-app/ApplicationServicePicker';
 import { downloadInvoicePdf, buildInvoicePdfDataFromRow, generateInvoicePdf } from '../lib/invoicePdf';
 import { sendEmail, pdfToBase64, buildInvoiceEmailPayload } from '../lib/emailService';
+import {
+  parsePostNotificationTemplate,
+  renderPostNotification,
+  buildPostNotificationEmailPayload,
+  countSentPostNotifications,
+  describePostNotificationSend,
+} from '../lib/postNotification';
 import { runCriticalAction } from '../lib/criticalAction';
 import {
   carryoverRowsFromRecords,
@@ -43,6 +50,8 @@ import type {
   FieldAppInvoiceResult,
   PreviewFieldAppSplitResult,
   JobAppliedRecordRow,
+  JobNotification,
+  JobStatus,
   Profile,
 } from '../types';
 
@@ -211,9 +220,41 @@ export default function FieldApplicationInvoice() {
   // Applied Info tab — applicator/vehicle/date/weather/tach/crew. jobId stays null
   // for an engine-built invoice with no source job (the carry-over panel hides).
   const [jobId, setJobId] = useState<string | null>(null);
+  // #41: the source job's status — gates the "Send Post-Notification" action (a post
+  // notice requires an APPLIED job: completed or invoiced). Null for an engine-built
+  // invoice with no source job (then the post action is hidden).
+  const [jobStatus, setJobStatus] = useState<JobStatus | null>(null);
+  // #41 (Codex P2): the source job's APPLICATION date (jobs.job_date), used for the
+  // post-notice {{job_date}} token. The invoice's transaction date is the BILLING
+  // date and can differ — telling a customer the application happened on the billing
+  // date would be wrong, so the notice uses the real application date from the job.
+  const [jobApplicationDate, setJobApplicationDate] = useState<string | null>(null);
   const [appliedRecords, setAppliedRecords] = useState<JobAppliedRecordRow[]>([]);
   // #24: notification history addressed to the viewer for this invoice / its job.
   const [notifications, setNotifications] = useState<NotificationRow[]>([]);
+  // #41 (SHARED HISTORY — the load-bearing parity detail): the SAME customer-facing
+  // job_notifications log shown on the job. Read by the invoice's source job_id, so a
+  // pre/post notice sent from the job shows here and a post sent from here shows on the
+  // job — one continuous history (criterion #3/#5). Distinct from `notifications`
+  // above (the viewer's in-app notices). Empty when this invoice has no source job.
+  const [jobNotifications, setJobNotifications] = useState<JobNotification[]>([]);
+  const [loadingJobNotifications, setLoadingJobNotifications] = useState(false);
+  // #41 (mirrors #40 MED): TRUE only after a SUCCESSFUL load — the re-send count is
+  // only trustworthy once we've actually read the log (a failed load reads as "0 sent"
+  // and would bypass the re-send warning). Gate the send on this so we FAIL CLOSED.
+  const [jobNotificationsLoaded, setJobNotificationsLoaded] = useState(false);
+  const [jobNotificationsError, setJobNotificationsError] = useState(false);
+  // #41 (Codex P2): drop a STALE in-flight load from a PREVIOUSLY viewed invoice/job —
+  // this component is reused across /invoices/field-app/:id navigation, so a slow load
+  // for the old job must not clobber the new job's log + loaded flag (which would
+  // compute the Send control's re-send state off the wrong job).
+  const jobNotifLoadReqRef = useRef<string | null>(null);
+  // #41: post-application notice send action state (mirrors JobDetail's).
+  const [sendingPostNotice, setSendingPostNotice] = useState(false);
+  const [showPostNoticeConfirm, setShowPostNoticeConfirm] = useState(false);
+  const postNoticeIdem = useIdempotencyKey('record_job_post_notifications', profile?.id || '');
+  const alreadySentPostCount = countSentPostNotifications(jobNotifications);
+  const postSendCopy = describePostNotificationSend(alreadySentPostCount);
   // #24 (money-lens LOW#2): surface a fetch error instead of a silent empty list, so
   // a broken query reads as an error rather than a misleading "No notifications yet".
   const [notificationsError, setNotificationsError] = useState<string | null>(null);
@@ -487,12 +528,18 @@ export default function FieldApplicationInvoice() {
     if (srcJobId) {
       const { data: jobRow } = await supabase
         .from('jobs')
-        .select('job_number')
+        .select('job_number, status, job_date')
         .eq('id', srcJobId)
         .maybeSingle();
       setJobNumber((jobRow as { job_number?: string } | null)?.job_number ?? null);
+      // #41: source job status gates the post-notification action (completed/invoiced).
+      setJobStatus(((jobRow as { status?: string } | null)?.status as JobStatus | undefined) ?? null);
+      // #41 (Codex P2): the real application date for the post-notice {{job_date}}.
+      setJobApplicationDate(((jobRow as { job_date?: string | null } | null)?.job_date) ?? null);
     } else {
       setJobNumber(null);
+      setJobStatus(null);
+      setJobApplicationDate(null);
     }
     // #24: snapshot the money + header fields the PDF builder needs so Print
     // reconciles (Balance Due = Total − payments − prepay). balance_cents is the
@@ -689,6 +736,57 @@ export default function FieldApplicationInvoice() {
   useEffect(() => {
     fetchInvoice();
   }, [fetchInvoice]);
+
+  // #41 (SHARED HISTORY): load the SAME customer-facing job_notifications log the job
+  // shows, keyed by THIS invoice's source job_id. Reading by job_id (not invoice id)
+  // is what makes the history CONTINUOUS — a notice sent from the job appears here and
+  // a post sent from here appears on the job (criterion #3/#5). RLS allows only
+  // admin/sales (the log carries co-billed customer emails); a non-admin/sales read is
+  // RLS-denied and surfaces as the error+retry state, not a misleading empty log.
+  // Skips entirely when this invoice has no source job (engine-built) — the log is
+  // job-scoped, so there is nothing to show.
+  const loadJobNotifications = useCallback(async () => {
+    if (!jobId) {
+      jobNotifLoadReqRef.current = null;
+      setJobNotifications([]);
+      setJobNotificationsLoaded(false);
+      setJobNotificationsError(false);
+      return;
+    }
+    const reqId = jobId;                   // the job this load is FOR
+    jobNotifLoadReqRef.current = reqId;    // mark it the latest requested job
+    setLoadingJobNotifications(true);
+    setJobNotificationsLoaded(false);
+    setJobNotificationsError(false);
+    try {
+      const { data, error } = await supabase
+        .from('job_notifications')
+        .select('id, job_id, notification_type, customer_id, recipient_email, channel, subject, message, status, sent_at, sent_by, idempotency_key, created_at, customer:customers(farm_name)')
+        .eq('job_id', reqId)
+        // Order by created_at (NOT NULL on every row), NOT sent_at — a failed/unsent
+        // row has sent_at=NULL and Postgres sorts NULLS FIRST, floating failed rows
+        // above real sends (the #40 LOW fix).
+        .order('created_at', { ascending: false });
+      // A newer invoice/job load superseded this one — drop the stale result so we
+      // never compute the new job's Send control off the old log (Codex P2).
+      if (jobNotifLoadReqRef.current !== reqId) return;
+      if (error) throw error;
+      setJobNotifications((data as unknown as JobNotification[]) ?? []);
+      setJobNotificationsLoaded(true);
+    } catch (err) {
+      if (jobNotifLoadReqRef.current !== reqId) return; // stale — don't clobber current state
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'invoice_load_job_notifications', jobId: reqId } });
+      setJobNotifications([]);
+      setJobNotificationsLoaded(false);
+      setJobNotificationsError(true);
+    } finally {
+      if (jobNotifLoadReqRef.current === reqId) setLoadingJobNotifications(false);
+    }
+  }, [jobId]);
+
+  useEffect(() => {
+    loadJobNotifications();
+  }, [loadJobNotifications]);
 
   const deriveShares = useCallback(async (fieldIds: string[], appliedAcresMap: Record<string, number>) => {
     if (fieldIds.length === 0) {
@@ -1379,6 +1477,147 @@ export default function FieldApplicationInvoice() {
     });
   };
 
+  // #41: Send an after-application post-notification to the source job's resolved
+  // share customer(s), RIGHT FROM THE INVOICE (criterion #1/#5). Mirrors JobDetail's
+  // handleSendPostNotification: RECORD (record_job_post_notifications, resolves
+  // recipients off the PERSISTED job) -> SEND (gated edge fn, owner-editable template)
+  // -> CONFIRM (confirm_job_notification_sent, reused from #40). Same fail-closed
+  // gating on a successfully-loaded log + same re-send safety. The rows it writes are
+  // the SAME job_notifications rows the JOB reads — so a post sent here shows on the
+  // job and vice-versa (continuous shared history). Real outbound email is GATED.
+  const handleSendPostNotification = async () => {
+    if (!jobId || !profile) {
+      toast('error', 'This invoice has no source job to notify.');
+      return;
+    }
+    // FAIL CLOSED: never decide first-send vs re-send off a log we haven't
+    // SUCCESSFULLY read (a failed load reads as "0 sent" and would skip the warning).
+    if (loadingJobNotifications || !jobNotificationsLoaded) {
+      toast('error', 'Could not load the notification log yet — reload before sending, so an already-sent notice is not duplicated.');
+      return;
+    }
+    // Block on unsaved edits — the RPC resolves recipients from the PERSISTED job, so
+    // the message must match the saved record.
+    if (dirty) {
+      toast('error', 'Save the invoice before sending a post-notification.');
+      return;
+    }
+    setSendingPostNotice(true);
+    const key = postNoticeIdem.getKey();
+    try {
+      // Resolve the editable template (criterion #4). ABORT on a failed read so a
+      // transient error never silently emails the hard-coded default wording.
+      const { data: tplRow, error: tplErr } = await supabase
+        .from('app_settings')
+        .select('setting_value')
+        .eq('setting_key', 'post_application_notice_template')
+        .maybeSingle();
+      if (tplErr) throw new Error(`Could not load the post-notification message: ${tplErr.message}`);
+      const template = parsePostNotificationTemplate((tplRow as { setting_value?: string } | null)?.setting_value ?? null);
+
+      // Both the job number and the APPLICATION date come from the source job — the
+      // notice tells the customer when the application happened, NOT the billing date.
+      // Fall back to the invoice's transaction date only if the job has no job_date
+      // (it always does in practice). Per-recipient farm names re-render the body below.
+      const noticeJobDate = jobApplicationDate ?? transactionDate;
+      const primaryFarm = pdfSnapshot?.customer_name
+        || shares.find((s) => s.is_primary)?.customer_name
+        || shares[0]?.customer_name
+        || '';
+      const recorded = renderPostNotification(template, {
+        customer: primaryFarm,
+        jobNumber: jobNumber ?? '',
+        jobDate: noticeJobDate,
+      });
+
+      // 1) Record the per-recipient log (admin/sales only; resolves recipients).
+      const rpcRes = await supabase.rpc('record_job_post_notifications', {
+        p_job_id: jobId,
+        p_subject: recorded.subject,
+        p_message: recorded.body,
+        p_performed_by: profile.id,
+        p_idempotency_key: key,
+      });
+      if (rpcRes.error) throw rpcRes.error;
+      const result = assertRpcResult<{
+        success: boolean;
+        recipients_with_email: number;
+        recipients_without_email: number;
+        recipients: Array<{
+          notification_id: string;
+          customer_id: string;
+          farm_name: string | null;
+          email: string | null;
+          has_email: boolean;
+          email_idempotency_key: string | null;
+        }>;
+      }>(rpcRes.data, 'record_job_post_notifications');
+
+      // 2) Send the actual email to each recipient WITH an email; confirm -> 'sent'
+      // only on success.
+      let emailedOk = 0;
+      let emailErr = 0;
+      for (const r of result.recipients) {
+        if (!r.has_email || !r.email) continue;
+        try {
+          const rendered = renderPostNotification(template, {
+            customer: r.farm_name ?? primaryFarm,
+            jobNumber: jobNumber ?? '',
+            jobDate: noticeJobDate,
+          });
+          const payload = buildPostNotificationEmailPayload({
+            customerEmail: r.email,
+            customerId: r.customer_id,
+            jobId,
+            subject: rendered.subject,
+            body: rendered.body,
+          });
+          if (r.email_idempotency_key) payload.idempotency_key = r.email_idempotency_key;
+          await sendEmail(payload);
+          const confirmRes = await supabase.rpc('confirm_job_notification_sent', {
+            p_notification_id: r.notification_id,
+            p_subject: rendered.subject,
+            p_message: rendered.body,
+            p_performed_by: profile.id,
+          });
+          if (confirmRes.error) throw confirmRes.error;
+          assertRpcResult(confirmRes.data, 'confirm_job_notification_sent');
+          emailedOk += 1;
+        } catch (sendErr) {
+          emailErr += 1;
+          Sentry.captureException(sendErr instanceof Error ? sendErr : new Error(String(sendErr)), { extra: { context: 'invoice_send_post_notification_email', jobId, customerId: r.customer_id } });
+        }
+      }
+
+      logActivity({ event: 'job_post_notification_sent', description: `Post-application notice for job ${jobNumber ?? jobId}: ${result.recipients_with_email} recipient(s) with email, ${emailedOk} emailed (from invoice ${invoiceNumber})`, performedBy: profile.id, entityType: 'job', entityId: jobId });
+
+      const noEmail = result.recipients_without_email;
+      if (emailErr > 0) {
+        const noEmailSuffix = noEmail > 0 ? ` ${noEmail} had no email on file.` : '';
+        toast('error', `${emailedOk} sent; ${emailErr} email(s) failed.${noEmailSuffix} Fix and click Send again to retry.`);
+      } else if (emailedOk === 0) {
+        postNoticeIdem.resetKey();
+        toast('error', `No email sent — ${noEmail} billed customer(s) have no email on file. Add an email and try again.`);
+      } else {
+        postNoticeIdem.resetKey();
+        if (noEmail > 0) {
+          toast('success', `Post-notification sent to ${emailedOk} customer(s). ${noEmail} had no email on file (logged as failed).`);
+        } else {
+          toast('success', `Post-notification sent to ${emailedOk} customer(s).`);
+        }
+      }
+      await loadJobNotifications();
+    } catch (err) {
+      let msg = err instanceof Error ? err.message : 'Failed to send post-notification';
+      if (hasRpcCode(err, RpcErrorCodes.INSUFFICIENT_ROLE)) msg = 'Only admin or sales can send notifications.';
+      else if (hasRpcCode(err, RpcErrorCodes.JOB_NOT_POST_NOTIFIABLE)) msg = 'A post-notification can only be sent on a completed or invoiced job.';
+      toast('error', msg);
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'invoice_send_post_notification', jobId } });
+    } finally {
+      setSendingPostNotice(false);
+    }
+  };
+
   // #27: Transfer back to Scheduling (reverse the job->invoice transfer). Calls
   // transfer_invoice_to_job: cancels this draft/unposted job-built invoice, deletes
   // its items + shares, detaches the as-applied records, and returns the source job
@@ -1504,6 +1743,23 @@ export default function FieldApplicationInvoice() {
           {!isNew && (
             <Button variant="secondary" size="sm" icon={<Mail className="w-4 h-4" />} onClick={handleEmailInvoice} loading={emailing} disabled={emailing}>
               Email
+            </Button>
+          )}
+          {/* #41: Send Post-Notification — an AFTER-application courtesy notice to the
+              job's billed customer(s), RIGHT FROM THE INVOICE. Only when this invoice
+              came from a job that has been applied (completed / invoiced). Re-send
+              safety: relabels + warns once a 'post' notice is already sent. Fail-closed
+              until the shared log has loaded so it never bypasses the re-send warning. */}
+          {!isNew && jobId && (jobStatus === 'completed' || jobStatus === 'invoiced') && (
+            <Button
+              variant={postSendCopy.isResend ? 'secondary' : 'primary'}
+              size="sm"
+              icon={<Bell className="w-4 h-4" />}
+              onClick={() => setShowPostNoticeConfirm(true)}
+              loading={sendingPostNotice}
+              disabled={sendingPostNotice || loadingJobNotifications || !jobNotificationsLoaded}
+            >
+              {postSendCopy.buttonLabel}
             </Button>
           )}
           {locations.length > 0 && (
@@ -1979,12 +2235,81 @@ export default function FieldApplicationInvoice() {
         )}
 
         {activeTab === 'notifications' && (
-          <div className="p-4 space-y-4">
+          <div className="p-4 space-y-6">
+            {/* #41 SHARED HISTORY (the load-bearing parity detail): the SAME customer
+                pre/post-application notification log the source JOB shows — read by
+                job_id, so a notice sent from the job appears here and a post sent from
+                this invoice appears on the job (criterion #3/#5). Only when this
+                invoice came from a job. */}
+            {jobId && (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="font-semibold flex items-center gap-2">
+                      <Bell className="w-4 h-4 text-crx-green" /> Customer Notifications
+                    </h3>
+                    <p className="text-xs text-gray-500">
+                      Pre- and post-application notices sent to this job&apos;s billed
+                      customer(s). This history is shared with the job &mdash; sending a
+                      notice from either place shows in both.
+                    </p>
+                  </div>
+                </div>
+                {loadingJobNotifications ? (
+                  <p className="text-sm text-gray-500 py-4 text-center">Loading customer notifications…</p>
+                ) : jobNotificationsError ? (
+                  <div className="text-center py-4">
+                    <p className="text-sm text-red-600">Couldn&apos;t load the customer notification log.</p>
+                    <p className="text-xs text-gray-500 mt-1">Sending is disabled until it loads, so an already-sent notice isn&apos;t duplicated.</p>
+                    <Button size="sm" variant="secondary" className="mt-2" onClick={loadJobNotifications}>Retry</Button>
+                  </div>
+                ) : jobNotifications.length === 0 ? (
+                  <p className="text-sm text-gray-500 py-4 text-center">No customer notifications have been sent yet.</p>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="bg-gray-50 border-b">
+                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">Type</th>
+                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">Recipient</th>
+                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">Channel</th>
+                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">Sent</th>
+                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">Status</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y">
+                        {jobNotifications.map((n) => (
+                          <tr key={n.id} className="hover:bg-gray-50">
+                            <td className="px-3 py-2">
+                              <Badge variant={n.notification_type === 'pre' ? 'info' : 'success'}>
+                                {n.notification_type === 'pre' ? 'Pre' : 'Post'}
+                              </Badge>
+                            </td>
+                            <td className="px-3 py-2">
+                              <div className="font-medium">{n.customer?.farm_name ?? 'Customer'}</div>
+                              <div className="text-xs text-gray-500">{n.recipient_email || 'no email on file'}</div>
+                            </td>
+                            <td className="px-3 py-2 capitalize text-gray-600">{n.channel}</td>
+                            <td className="px-3 py-2 text-gray-600">{n.sent_at ? new Date(n.sent_at).toLocaleString() : '—'}</td>
+                            <td className="px-3 py-2">
+                              <Badge variant={n.status === 'sent' ? 'success' : 'danger'}>
+                                {n.status === 'sent' ? 'Sent' : 'Failed'}
+                              </Badge>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )}
+
             <div>
               <h3 className="font-semibold">Your Notifications</h3>
               <p className="text-xs text-gray-500">
                 Notifications addressed to you about this invoice and its job. (Customer
-                pre/post-application notices are sent separately.)
+                pre/post-application notices are shown above.)
               </p>
             </div>
             {notificationsError ? (
@@ -2043,6 +2368,20 @@ export default function FieldApplicationInvoice() {
         message="Are you sure you want to delete this field application invoice? This action cannot be undone."
         confirmLabel="Delete"
         variant="danger"
+      />
+
+      {/* #41: Send Post-Notification Confirm (customer-facing — explicit confirm). On a
+          RE-SEND (a 'post' notice already sent) the title/copy/label switch to an
+          explicit "notify a SECOND time" warning. */}
+      <ConfirmModal
+        open={showPostNoticeConfirm}
+        onClose={() => setShowPostNoticeConfirm(false)}
+        onConfirm={() => { setShowPostNoticeConfirm(false); handleSendPostNotification(); }}
+        title={postSendCopy.confirmTitle}
+        message={postSendCopy.confirmMessage}
+        confirmLabel={postSendCopy.confirmLabel}
+        variant="warning"
+        loading={sendingPostNotice}
       />
 
       {/* #28: Post confirm — posting commits the bill to its month-end batch. */}

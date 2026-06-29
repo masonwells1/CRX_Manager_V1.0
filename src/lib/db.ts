@@ -183,6 +183,8 @@ export const RpcErrorCodes = {
   INVALID_MESSAGE: 'INVALID_MESSAGE',
   NO_RECIPIENTS: 'NO_RECIPIENTS',
   JOB_NOT_PRE_NOTIFIABLE: 'JOB_NOT_PRE_NOTIFIABLE',
+  // record_job_post_notifications — field-app #41 post-application customer notice
+  JOB_NOT_POST_NOTIFIABLE: 'JOB_NOT_POST_NOTIFIABLE',
   NOTIFICATION_NOT_FOUND: 'NOTIFICATION_NOT_FOUND',
 } as const;
 

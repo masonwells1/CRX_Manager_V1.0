@@ -38,6 +38,11 @@ import {
   parsePreNotificationTemplate,
   type PreNotificationTemplate,
 } from '../lib/preNotification';
+import {
+  DEFAULT_POST_NOTIFICATION_TEMPLATE,
+  parsePostNotificationTemplate,
+  type PostNotificationTemplate,
+} from '../lib/postNotification';
 import type { Profile, AppSetting, UserRole } from '../types';
 
 // --- Permissions Panel ---
@@ -158,6 +163,9 @@ export default function SettingsPage() {
   // Field-app parity #40: editable pre-application notice template (subject + body).
   const [preNoticeTemplate, setPreNoticeTemplate] = useState<PreNotificationTemplate>(DEFAULT_PRE_NOTIFICATION_TEMPLATE);
   const [savingPreNotice, setSavingPreNotice] = useState(false);
+  // Field-app parity #41: editable post-application notice template (subject + body).
+  const [postNoticeTemplate, setPostNoticeTemplate] = useState<PostNotificationTemplate>(DEFAULT_POST_NOTIFICATION_TEMPLATE);
+  const [savingPostNotice, setSavingPostNotice] = useState(false);
   const [users, setUsers] = useState<Profile[]>([]);
   const [savingCompany, setSavingCompany] = useState(false);
   const [savingDefaults, setSavingDefaults] = useState(false);
@@ -216,6 +224,8 @@ export default function SettingsPage() {
     setSheetConfig(parseCustomConfig(map['applicator_sheet_custom']));
     // #40: blank/absent => the seeded default pre-notification wording.
     setPreNoticeTemplate(parsePreNotificationTemplate(map['pre_application_notice_template']));
+    // #41: blank/absent => the seeded default post-notification wording.
+    setPostNoticeTemplate(parsePostNotificationTemplate(map['post_application_notice_template']));
   };
 
   const fetchUsers = async () => {
@@ -348,6 +358,33 @@ export default function SettingsPage() {
       toast('error', sanitizeError(errUnknown));
     }
     setSavingPreNotice(false);
+  };
+
+  // #41: persist the editable post-application notice wording. Subject + body must
+  // both be non-blank (a blank template would email an empty notice).
+  const savePostNoticeTemplate = async () => {
+    if (!postNoticeTemplate.subject.trim() || !postNoticeTemplate.body.trim()) {
+      toast('error', 'The post-notification subject and message cannot be blank.');
+      return;
+    }
+    setSavingPostNotice(true);
+    try {
+      await saveSetting(
+        'post_application_notice_template',
+        JSON.stringify({ subject: postNoticeTemplate.subject, body: postNoticeTemplate.body }),
+      );
+      toast('success', 'Post-notification message saved');
+      if (profile) {
+        logActivity({
+          event: 'settings_updated',
+          description: 'Post-application notice template updated',
+          performedBy: profile.id,
+        });
+      }
+    } catch (errUnknown: unknown) {
+      toast('error', sanitizeError(errUnknown));
+    }
+    setSavingPostNotice(false);
   };
 
   const toggleSheetColumn = (key: keyof ApplicatorSheetCustomConfig['columns']) => {
@@ -928,6 +965,53 @@ export default function SettingsPage() {
             <textarea
               value={preNoticeTemplate.body}
               onChange={(e) => setPreNoticeTemplate((t) => ({ ...t, body: e.target.value }))}
+              rows={8}
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green resize-y"
+              placeholder="Hello {{customer}}, ..."
+            />
+          </div>
+        </div>
+      </Card>
+
+      {/* #41: editable post-application customer notice wording (subject + body). */}
+      <Card>
+        <CardHeader
+          title="Post-Application"
+          accent="Customer Notice"
+          action={
+            <Button
+              size="sm"
+              icon={<Save className="w-4 h-4" />}
+              onClick={savePostNoticeTemplate}
+              loading={savingPostNotice}
+            >
+              Save
+            </Button>
+          }
+        />
+        <div className="space-y-4">
+          <div className="flex items-start gap-3 rounded-lg bg-green-50 border border-green-100 p-3">
+            <Bell className="w-5 h-5 text-crx-green mt-0.5 shrink-0" />
+            <p className="text-sm text-green-800">
+              The message emailed to a customer when you click <strong>Send Post-Notification</strong> on
+              a completed job or its field-application invoice. Use <code>{'{{customer}}'}</code>,{' '}
+              <code>{'{{job_number}}'}</code> and <code>{'{{job_date}}'}</code> as placeholders &mdash;
+              they are filled in per recipient.
+            </p>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-secondary mb-1">Subject</label>
+            <Input
+              value={postNoticeTemplate.subject}
+              onChange={(e) => setPostNoticeTemplate((t) => ({ ...t, subject: e.target.value }))}
+              placeholder="Your field application is complete"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-secondary mb-1">Message</label>
+            <textarea
+              value={postNoticeTemplate.body}
+              onChange={(e) => setPostNoticeTemplate((t) => ({ ...t, body: e.target.value }))}
               rows={8}
               className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green resize-y"
               placeholder="Hello {{customer}}, ..."
