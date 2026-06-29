@@ -4293,6 +4293,76 @@ export type Database = {
           },
         ]
       }
+      job_notifications: {
+        Row: {
+          channel: string
+          created_at: string
+          customer_id: string | null
+          id: string
+          idempotency_key: string | null
+          job_id: string
+          message: string | null
+          notification_type: string
+          recipient_email: string | null
+          sent_at: string | null
+          sent_by: string | null
+          status: string
+          subject: string | null
+        }
+        Insert: {
+          channel?: string
+          created_at?: string
+          customer_id?: string | null
+          id?: string
+          idempotency_key?: string | null
+          job_id: string
+          message?: string | null
+          notification_type: string
+          recipient_email?: string | null
+          sent_at?: string
+          sent_by?: string | null
+          status?: string
+          subject?: string | null
+        }
+        Update: {
+          channel?: string
+          created_at?: string
+          customer_id?: string | null
+          id?: string
+          idempotency_key?: string | null
+          job_id?: string
+          message?: string | null
+          notification_type?: string
+          recipient_email?: string | null
+          sent_at?: string
+          sent_by?: string | null
+          status?: string
+          subject?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "job_notifications_customer_id_fkey"
+            columns: ["customer_id"]
+            isOneToOne: false
+            referencedRelation: "customers"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "job_notifications_job_id_fkey"
+            columns: ["job_id"]
+            isOneToOne: false
+            referencedRelation: "jobs"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "job_notifications_sent_by_fkey"
+            columns: ["sent_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       job_tag_assignments: {
         Row: {
           created_at: string
@@ -9528,6 +9598,26 @@ export type Database = {
         }
         Returns: string
       }
+      confirm_job_notification_sent: {
+        Args: {
+          p_idempotency_key?: string
+          p_message?: string
+          p_notification_id: string
+          p_performed_by?: string
+          p_subject?: string
+        }
+        Returns: Json
+      }
+      record_job_pre_notifications: {
+        Args: {
+          p_idempotency_key?: string
+          p_job_id: string
+          p_message: string
+          p_performed_by?: string
+          p_subject: string
+        }
+        Returns: Json
+      }
       record_vendor_payment: {
         Args: {
           p_amount_cents: number
@@ -10043,6 +10133,7 @@ export type Database = {
         | "ar_reminder"
         | "low_stock_alert"
         | "month_end_close"
+        | "pre_application_notice"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -10179,6 +10270,7 @@ export const Constants = {
         "ar_reminder",
         "low_stock_alert",
         "month_end_close",
+        "pre_application_notice",
       ],
     },
   },

@@ -178,6 +178,12 @@ export const RpcErrorCodes = {
   DUPLICATE_LOT: 'DUPLICATE_LOT',
   // save_field_app_invoice / post_invoice_group — per-acre billing guard (field-acre billing)
   ZERO_APPLIED_ACRES: 'ZERO_APPLIED_ACRES',
+  // record_job_pre_notifications — field-app #40 pre-application customer notice
+  INVALID_SUBJECT: 'INVALID_SUBJECT',
+  INVALID_MESSAGE: 'INVALID_MESSAGE',
+  NO_RECIPIENTS: 'NO_RECIPIENTS',
+  JOB_NOT_PRE_NOTIFIABLE: 'JOB_NOT_PRE_NOTIFIABLE',
+  NOTIFICATION_NOT_FOUND: 'NOTIFICATION_NOT_FOUND',
 } as const;
 
 export type RpcErrorCode = (typeof RpcErrorCodes)[keyof typeof RpcErrorCodes];

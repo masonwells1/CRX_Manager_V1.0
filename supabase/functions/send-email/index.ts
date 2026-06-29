@@ -59,9 +59,17 @@ const ALL_EMAIL_TYPES = new Set([
   "ar_reminder",
   "low_stock_alert",
   "month_end_close",
+  // Field-app parity #40: before-application customer notice. Sendable by
+  // admin + sales_rep (it is in ALL_EMAIL_TYPES, which both roles map to below);
+  // NOT a driver type. This line is PREPARED but its effect only goes live when
+  // this edge function is DEPLOYED — that deploy is GATED for Mason. The local
+  // `pre_application_notice` enum value migration is applied to LOCAL only.
+  "pre_application_notice",
 ]);
 
 // What email types each role may send.
+//   admin, sales_rep -> all types in ALL_EMAIL_TYPES (incl. pre_application_notice)
+//   driver           -> only delivery_completed
 const EMAIL_TYPES_BY_ROLE: Record<string, Set<string>> = {
   admin: ALL_EMAIL_TYPES,
   sales_rep: ALL_EMAIL_TYPES,

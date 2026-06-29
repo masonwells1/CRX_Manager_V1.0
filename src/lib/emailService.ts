@@ -10,7 +10,11 @@ export type EmailType =
   | 'quote'
   | 'ar_reminder'
   | 'low_stock_alert'
-  | 'month_end_close';
+  | 'month_end_close'
+  // Field-app parity #40: before-application courtesy notice to the job's
+  // customer(s). The matching send-email edge allow-list entry is PREPARED but
+  // its deploy is gated for Mason (see supabase/functions/send-email/index.ts).
+  | 'pre_application_notice';
 
 export interface SendEmailParams {
   to: string;

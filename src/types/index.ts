@@ -2166,6 +2166,33 @@ export interface JobChemical {
   product?: Product;
 }
 
+// Field-app parity #40: a per-job customer-facing notification log entry. 'pre'
+// is the before-application courtesy notice (this section); 'post' is reserved
+// for #41 (after-application). One row per recipient (a split-billed job has many
+// share customers). A recipient with no email on file is recorded status='failed'
+// — surfaced in the log, never silently dropped. Channel is email-only by design.
+export type JobNotificationType = 'pre' | 'post';
+export type JobNotificationStatus = 'sent' | 'failed';
+
+export interface JobNotification {
+  id: string;
+  job_id: string;
+  notification_type: JobNotificationType;
+  customer_id: string | null;
+  recipient_email: string | null;
+  channel: 'email';
+  subject: string | null;
+  message: string | null;
+  status: JobNotificationStatus;
+  /** NULL until the row is confirmed 'sent' (a failed/pending row has no send time). */
+  sent_at: string | null;
+  sent_by: string | null;
+  idempotency_key: string | null;
+  created_at: string;
+  // Joined (optional)
+  customer?: { farm_name: string } | null;
+}
+
 export interface JobAppliedInfo {
   id: string;
   job_id: string;
@@ -2773,7 +2800,11 @@ export type EmailType =
   | 'quote'
   | 'ar_reminder'
   | 'low_stock_alert'
-  | 'month_end_close';
+  | 'month_end_close'
+  // Field-app parity #40: pre-application customer notice (matches the DB
+  // email_type enum value; the send-email edge allow-list entry is prepared,
+  // its deploy gated for Mason).
+  | 'pre_application_notice';
 
 export interface EmailLog {
   id: string;

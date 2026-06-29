@@ -44,8 +44,14 @@ import QuickTaskModal from '../components/team/QuickTaskModal';
 import ConfirmModal from '../components/ui/ConfirmModal';
 import RelatedNotes from '../components/team/RelatedNotes';
 import { Sentry } from '../lib/sentry';
-import type { JobStatus, Customer, Product, Field, Vehicle, Profile, BlendRecipe, BlendRecipeItem, LinkedEntityType } from '../types';
+import type { JobStatus, Customer, Product, Field, Vehicle, Profile, BlendRecipe, BlendRecipeItem, LinkedEntityType, JobNotification } from '../types';
 import type { Json } from '../types/supabase';
+import { sendEmail } from '../lib/emailService';
+import {
+  parsePreNotificationTemplate,
+  renderPreNotification,
+  buildPreNotificationEmailPayload,
+} from '../lib/preNotification';
 
 interface JobDbRow {
   id: string;
@@ -296,6 +302,188 @@ export default function JobDetail() {
   const [generatingChemReport, setGeneratingChemReport] = useState(false);
   // C4: weather auto-capture at completion
   const [fetchingWeather, setFetchingWeather] = useState(false);
+  // Field-app parity #40: per-job customer pre-notification log + send action.
+  const [jobNotifications, setJobNotifications] = useState<JobNotification[]>([]);
+  const [loadingNotifications, setLoadingNotifications] = useState(false);
+  const [sendingPreNotice, setSendingPreNotice] = useState(false);
+  const [showPreNoticeConfirm, setShowPreNoticeConfirm] = useState(false);
+  const { getKey: getPreNoticeKey, resetKey: resetPreNoticeKey } = useIdempotencyKey('record_job_pre_notifications', profile?.id || '');
+
+  // Field-app parity #40: load the per-job customer notification log. Read-only;
+  // the job_notifications RLS policy allows ONLY admin/sales (the log carries
+  // co-billed customer emails). Skip the query entirely for any other role so we
+  // don't fire a guaranteed-RLS-denied read that gets swallowed into the empty
+  // state AND logged to Sentry as noise every time (Codex #40 P3).
+  const loadJobNotifications = useCallback(async () => {
+    if (isNew || !id || !isEditable) { setJobNotifications([]); return; }
+    setLoadingNotifications(true);
+    try {
+      const { data, error } = await supabase
+        .from('job_notifications')
+        .select('id, job_id, notification_type, customer_id, recipient_email, channel, subject, message, status, sent_at, sent_by, idempotency_key, created_at, customer:customers(farm_name)')
+        .eq('job_id', id)
+        .order('sent_at', { ascending: false });
+      if (error) throw error;
+      setJobNotifications((data as unknown as JobNotification[]) ?? []);
+    } catch (err) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'load_job_notifications', jobId: id } });
+      setJobNotifications([]);
+    } finally {
+      setLoadingNotifications(false);
+    }
+  }, [id, isNew, isEditable]);
+
+  // Send a before-application pre-notification to the job's resolved share
+  // customer(s). Flow: (1) record the per-recipient log via the SECURITY DEFINER
+  // RPC (resolves the distinct share customers; EVERY row starts 'failed'); (2) for
+  // each recipient WITH an email, send through the gated send-email edge fn using
+  // the OWNER-EDITABLE template, then confirm the row -> 'sent' ONLY on a successful
+  // send (so the log never shows 'Sent' for an email that didn't leave). The
+  // outbound idempotency key is the DETERMINISTIC per-recipient key the RPC returns,
+  // so a retry de-dupes at the edge and a recipient already emailed isn't emailed
+  // twice. The action key is preserved on any failure so a retry reuses it.
+  const handleSendPreNotification = async () => {
+    if (isNew || !id) return;
+    // Codex #40 P2 (save-first): the subject/body are built from CURRENT form state
+    // but the RPC resolves recipients from the PERSISTED job. Block on unsaved edits
+    // so we never email the saved customers with in-progress (or stale) details —
+    // same guard the WPS/compliance actions use.
+    if (isDirty) {
+      toast('error', 'Save the job before sending a pre-notification — it must match the saved record.');
+      return;
+    }
+    setSendingPreNotice(true);
+    const key = getPreNoticeKey();
+    try {
+      // Resolve the editable template (criterion #5). ABORT on a failed read — a
+      // null-on-error would silently fall back to the hard-coded default and email
+      // the WRONG (not owner-edited) wording to the customer (Codex #40 P2). A
+      // genuinely-absent row (no error, data null) correctly uses the default.
+      const { data: tplRow, error: tplErr } = await supabase
+        .from('app_settings')
+        .select('setting_value')
+        .eq('setting_key', 'pre_application_notice_template')
+        .maybeSingle();
+      if (tplErr) throw new Error(`Could not load the pre-notification message: ${tplErr.message}`);
+      const template = parsePreNotificationTemplate((tplRow as { setting_value?: string } | null)?.setting_value ?? null);
+
+      // Render once with the primary customer's name for the recorded log subject/
+      // message; per-recipient bodies are re-rendered with each farm name below.
+      const primaryFarm = customers.find((c) => c.id === customerId)?.farm_name ?? '';
+      const recorded = renderPreNotification(template, {
+        customer: primaryFarm,
+        jobNumber,
+        jobDate,
+      });
+
+      // 1) Record the per-recipient log (admin/sales only; resolves recipients).
+      const rpcRes = await supabase.rpc('record_job_pre_notifications', {
+        p_job_id: id,
+        p_subject: recorded.subject,
+        p_message: recorded.body,
+        p_performed_by: profile?.id ?? undefined,
+        p_idempotency_key: key,
+      });
+      // Throw the RPC error FIRST so the machine-readable code (INSUFFICIENT_ROLE /
+      // JOB_NOT_PRE_NOTIFIABLE) reaches the hasRpcCode branches below — asserting a
+      // null data on a raise would otherwise swallow it as a generic no-data error
+      // (Codex #40 re-review P2).
+      if (rpcRes.error) throw rpcRes.error;
+      const result = assertRpcResult<{
+        success: boolean;
+        recipients_with_email: number;
+        recipients_without_email: number;
+        recipients: Array<{
+          notification_id: string;
+          customer_id: string;
+          farm_name: string | null;
+          email: string | null;
+          has_email: boolean;
+          email_idempotency_key: string | null;
+        }>;
+      }>(rpcRes.data, 'record_job_pre_notifications');
+
+      // 2) Send the actual email to each recipient WITH an email; confirm -> 'sent'
+      // only on success.
+      let emailedOk = 0;
+      let emailErr = 0;
+      for (const r of result.recipients) {
+        if (!r.has_email || !r.email) continue;
+        try {
+          const rendered = renderPreNotification(template, {
+            customer: r.farm_name ?? primaryFarm,
+            jobNumber,
+            jobDate,
+          });
+          const payload = buildPreNotificationEmailPayload({
+            customerEmail: r.email,
+            customerId: r.customer_id,
+            jobId: id,
+            subject: rendered.subject,
+            body: rendered.body,
+          });
+          // Deterministic edge idempotency key from the RPC (NOT Date.now()): a
+          // retry reuses it so the edge fn de-dupes the same recipient's send.
+          if (r.email_idempotency_key) payload.idempotency_key = r.email_idempotency_key;
+          await sendEmail(payload);
+          // Flip THIS row failed -> sent now that the email actually went out, and
+          // store the EXACT per-recipient text that was emailed so the audit row
+          // matches what the (co-billed) customer received. No idempotency key
+          // needed: the RPC is naturally idempotent (re-confirming a 'sent' row is a
+          // no-op) and scoped to a single stable notification_id.
+          const confirmRes = await supabase.rpc('confirm_job_notification_sent', {
+            p_notification_id: r.notification_id,
+            p_subject: rendered.subject,
+            p_message: rendered.body,
+            p_performed_by: profile?.id ?? undefined,
+          });
+          if (confirmRes.error) throw confirmRes.error;
+          assertRpcResult(confirmRes.data, 'confirm_job_notification_sent');
+          emailedOk += 1;
+        } catch (sendErr) {
+          // Row stays 'failed' — honest. Keep the action key so a retry de-dupes.
+          emailErr += 1;
+          Sentry.captureException(sendErr instanceof Error ? sendErr : new Error(String(sendErr)), { extra: { context: 'send_pre_notification_email', jobId: id, customerId: r.customer_id } });
+        }
+      }
+
+      if (profile) {
+        logActivity({ event: 'job_pre_notification_sent', description: `Pre-application notice for job ${jobNumber}: ${result.recipients_with_email} recipient(s) with email, ${emailedOk} emailed`, performedBy: profile.id, entityType: 'job', entityId: id });
+      }
+
+      const noEmail = result.recipients_without_email;
+      if (emailErr > 0) {
+        // Do NOT reset the key — a retry reuses it so already-sent recipients
+        // de-dupe at the edge and aren't emailed twice.
+        toast('error', `${emailedOk} sent; ${emailErr} email(s) failed. Fix and click Send again to retry.`);
+      } else if (emailedOk === 0) {
+        // No email actually went out (every billed customer lacks an email on
+        // file). Surface this as a warning — NOT a "sent" success — so the user
+        // doesn't believe the customer was notified (Codex #40 P3). Reset the key:
+        // there is nothing to retry-dedupe (no send succeeded), and the recorded
+        // 'failed' rows already show who had no email.
+        resetPreNoticeKey();
+        toast('error', `No email sent — ${noEmail} billed customer(s) have no email on file. Add an email and try again.`);
+      } else {
+        resetPreNoticeKey(); // clean success — next click is a new intent
+        if (noEmail > 0) {
+          toast('success', `Pre-notification sent to ${emailedOk} customer(s). ${noEmail} had no email on file (logged as failed).`);
+        } else {
+          toast('success', `Pre-notification sent to ${emailedOk} customer(s).`);
+        }
+      }
+      await loadJobNotifications();
+    } catch (err) {
+      // Keep the key so a retry de-dupes the recorded log on the same intent.
+      let msg = err instanceof Error ? err.message : 'Failed to send pre-notification';
+      if (hasRpcCode(err, RpcErrorCodes.INSUFFICIENT_ROLE)) msg = 'Only admin or sales can send notifications.';
+      else if (hasRpcCode(err, RpcErrorCodes.JOB_NOT_PRE_NOTIFIABLE)) msg = 'A pre-notification can only be sent on a scheduled or in-progress job.';
+      toast('error', msg);
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'send_pre_notification', jobId: id } });
+    } finally {
+      setSendingPreNotice(false);
+    }
+  };
 
   const handleWpsNotice = async () => {
     // #5: the notice is built from current form state, so it MUST reflect the saved
@@ -1079,6 +1267,23 @@ export default function JobDetail() {
       cancelled = true;
     };
   }, [firstFieldId]);
+
+  // Field-app parity #40: load the customer notification log when the
+  // Notifications tab is first opened for a saved job.
+  useEffect(() => {
+    if (activeTab === 'notifications' && !isNew && id) {
+      void loadJobNotifications();
+    }
+  }, [activeTab, isNew, id, loadJobNotifications]);
+
+  // Codex #40 re-review P1: the pre-notice idempotency key is intentionally KEPT on
+  // a failed send (for retry), but useIdempotencyKey stores it in a ref that
+  // survives while JobDetail stays mounted across /jobs/:id navigation. Reset it
+  // when the job id changes so a send on a DIFFERENT job can never replay the prior
+  // job's cached recipient list / confirm the prior job's rows.
+  useEffect(() => {
+    resetPreNoticeKey();
+  }, [id, resetPreNoticeKey]);
 
   const handleFetchWeather = async () => {
     if (!jobFieldCentroid) return;
@@ -2513,8 +2718,83 @@ export default function JobDetail() {
       )}
 
       {activeTab === 'notifications' && (
+        <div className="space-y-4">
+        {/* ── Customer Notifications log (#40 pre-application notice) ── */}
         <Card>
-          <h2 className="text-lg font-semibold text-nav-dark mb-3">Notifications &amp; Memos</h2>
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-lg font-semibold text-nav-dark flex items-center gap-2">
+              <Bell className="w-4 h-4 text-crx-green" /> Customer Notifications
+            </h2>
+            {/* #40 Codex P2: a PRE-application notice only on a not-yet-applied job
+                (scheduled / in_progress); hidden on completed / invoiced / cancelled. */}
+            {isEditable && !isNew && id && (status === 'scheduled' || status === 'in_progress') && (
+              <Button
+                size="sm"
+                onClick={() => setShowPreNoticeConfirm(true)}
+                loading={sendingPreNotice}
+                disabled={sendingPreNotice}
+              >
+                <Bell className="w-4 h-4" /> Send Pre-Notification
+              </Button>
+            )}
+          </div>
+          {isNew || !id ? (
+            <p className="text-sm text-secondary text-center py-6">
+              Save this job first to send and track customer notifications.
+            </p>
+          ) : loadingNotifications ? (
+            <p className="text-sm text-gray-500 py-6 text-center">Loading notifications…</p>
+          ) : jobNotifications.length === 0 ? (
+            <p className="text-sm text-secondary text-center py-6">
+              No notifications have been sent yet.
+            </p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-left text-xs font-medium text-secondary border-b border-gray-200">
+                    <th className="py-2 pr-3">Type</th>
+                    <th className="py-2 pr-3">Recipient</th>
+                    <th className="py-2 pr-3">Channel</th>
+                    <th className="py-2 pr-3">Sent</th>
+                    <th className="py-2 pr-3">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {jobNotifications.map((n) => (
+                    <tr key={n.id} className="border-b border-gray-100 last:border-0">
+                      <td className="py-2 pr-3">
+                        <Badge variant={n.notification_type === 'pre' ? 'info' : 'success'}>
+                          {n.notification_type === 'pre' ? 'Pre' : 'Post'}
+                        </Badge>
+                      </td>
+                      <td className="py-2 pr-3 text-charcoal">
+                        <div className="font-medium">{n.customer?.farm_name ?? 'Customer'}</div>
+                        <div className="text-xs text-secondary">{n.recipient_email || 'no email on file'}</div>
+                      </td>
+                      <td className="py-2 pr-3 capitalize text-secondary">{n.channel}</td>
+                      <td className="py-2 pr-3 text-secondary">
+                        {n.sent_at ? new Date(n.sent_at).toLocaleString() : '—'}
+                      </td>
+                      <td className="py-2 pr-3">
+                        <Badge variant={n.status === 'sent' ? 'success' : 'danger'}>
+                          {n.status === 'sent' ? 'Sent' : 'Failed'}
+                        </Badge>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <p className="mt-3 text-xs text-secondary">
+            The pre-notification message is configured in Settings (editable wording) and goes to the job&apos;s billed customer(s) by email.
+          </p>
+        </Card>
+
+        {/* ── Job notes / memos (internal) ── */}
+        <Card>
+          <h2 className="text-lg font-semibold text-nav-dark mb-3">Job Notes &amp; Memos</h2>
           <div className="space-y-4">
             <div>
               <label className="block text-sm font-medium text-nav-dark mb-1">Job Notes</label>
@@ -2545,6 +2825,7 @@ export default function JobDetail() {
             )}
           </div>
         </Card>
+        </div>
       )}
 
       {/* Related Notes */}
@@ -2753,6 +3034,18 @@ export default function JobDetail() {
         confirmLabel="Transfer to Invoice"
         variant="warning"
         loading={transferring}
+      />
+
+      {/* #40: Send Pre-Notification Confirm (customer-facing — explicit confirm) */}
+      <ConfirmModal
+        open={showPreNoticeConfirm}
+        onClose={() => setShowPreNoticeConfirm(false)}
+        onConfirm={() => { setShowPreNoticeConfirm(false); handleSendPreNotification(); }}
+        title="Send Pre-Notification"
+        message="Email a before-application notice to this job's billed customer(s)? Each notification is recorded in the log below. Customers with no email on file are logged but not emailed."
+        confirmLabel="Send Pre-Notification"
+        variant="warning"
+        loading={sendingPreNotice}
       />
     </div>
   );

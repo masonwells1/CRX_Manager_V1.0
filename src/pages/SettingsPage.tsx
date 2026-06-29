@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Save, UserPlus, Pencil, Shield, Users, KeyRound, Fuel, ClipboardList } from 'lucide-react';
+import { Save, UserPlus, Pencil, Shield, Users, KeyRound, Fuel, ClipboardList, Bell } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
@@ -33,6 +33,11 @@ import {
   serializeCustomConfig,
   type ApplicatorSheetCustomConfig,
 } from '../lib/applicatorSheetData';
+import {
+  DEFAULT_PRE_NOTIFICATION_TEMPLATE,
+  parsePreNotificationTemplate,
+  type PreNotificationTemplate,
+} from '../lib/preNotification';
 import type { Profile, AppSetting, UserRole } from '../types';
 
 // --- Permissions Panel ---
@@ -150,6 +155,9 @@ export default function SettingsPage() {
   // optional column toggles). Blank by default => standard CRX header.
   const [sheetConfig, setSheetConfig] = useState<ApplicatorSheetCustomConfig>(DEFAULT_CUSTOM_CONFIG);
   const [savingSheet, setSavingSheet] = useState(false);
+  // Field-app parity #40: editable pre-application notice template (subject + body).
+  const [preNoticeTemplate, setPreNoticeTemplate] = useState<PreNotificationTemplate>(DEFAULT_PRE_NOTIFICATION_TEMPLATE);
+  const [savingPreNotice, setSavingPreNotice] = useState(false);
   const [users, setUsers] = useState<Profile[]>([]);
   const [savingCompany, setSavingCompany] = useState(false);
   const [savingDefaults, setSavingDefaults] = useState(false);
@@ -206,6 +214,8 @@ export default function SettingsPage() {
     setFuelSurcharge(parseFuelSurchargeConfig(map['fuel_surcharge']));
     // #9: blank/absent => standard CRX header + all optional columns shown.
     setSheetConfig(parseCustomConfig(map['applicator_sheet_custom']));
+    // #40: blank/absent => the seeded default pre-notification wording.
+    setPreNoticeTemplate(parsePreNotificationTemplate(map['pre_application_notice_template']));
   };
 
   const fetchUsers = async () => {
@@ -311,6 +321,33 @@ export default function SettingsPage() {
       toast('error', sanitizeError(errUnknown));
     }
     setSavingSheet(false);
+  };
+
+  // #40: persist the editable pre-application notice wording. Subject + body must
+  // both be non-blank (a blank template would email an empty notice).
+  const savePreNoticeTemplate = async () => {
+    if (!preNoticeTemplate.subject.trim() || !preNoticeTemplate.body.trim()) {
+      toast('error', 'The pre-notification subject and message cannot be blank.');
+      return;
+    }
+    setSavingPreNotice(true);
+    try {
+      await saveSetting(
+        'pre_application_notice_template',
+        JSON.stringify({ subject: preNoticeTemplate.subject, body: preNoticeTemplate.body }),
+      );
+      toast('success', 'Pre-notification message saved');
+      if (profile) {
+        logActivity({
+          event: 'settings_updated',
+          description: 'Pre-application notice template updated',
+          performedBy: profile.id,
+        });
+      }
+    } catch (errUnknown: unknown) {
+      toast('error', sanitizeError(errUnknown));
+    }
+    setSavingPreNotice(false);
   };
 
   const toggleSheetColumn = (key: keyof ApplicatorSheetCustomConfig['columns']) => {
@@ -849,6 +886,52 @@ export default function SettingsPage() {
                 </label>
               ))}
             </div>
+          </div>
+        </div>
+      </Card>
+
+      {/* #40: editable pre-application customer notice wording (subject + body). */}
+      <Card>
+        <CardHeader
+          title="Pre-Application"
+          accent="Customer Notice"
+          action={
+            <Button
+              size="sm"
+              icon={<Save className="w-4 h-4" />}
+              onClick={savePreNoticeTemplate}
+              loading={savingPreNotice}
+            >
+              Save
+            </Button>
+          }
+        />
+        <div className="space-y-4">
+          <div className="flex items-start gap-3 rounded-lg bg-green-50 border border-green-100 p-3">
+            <Bell className="w-5 h-5 text-crx-green mt-0.5 shrink-0" />
+            <p className="text-sm text-green-800">
+              The message emailed to a customer when you click <strong>Send Pre-Notification</strong> on
+              a job. Use <code>{'{{customer}}'}</code>, <code>{'{{job_number}}'}</code> and{' '}
+              <code>{'{{job_date}}'}</code> as placeholders &mdash; they are filled in per recipient.
+            </p>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-secondary mb-1">Subject</label>
+            <Input
+              value={preNoticeTemplate.subject}
+              onChange={(e) => setPreNoticeTemplate((t) => ({ ...t, subject: e.target.value }))}
+              placeholder="Upcoming application on your fields"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-secondary mb-1">Message</label>
+            <textarea
+              value={preNoticeTemplate.body}
+              onChange={(e) => setPreNoticeTemplate((t) => ({ ...t, body: e.target.value }))}
+              rows={8}
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green resize-y"
+              placeholder="Hello {{customer}}, ..."
+            />
           </div>
         </div>
       </Card>
