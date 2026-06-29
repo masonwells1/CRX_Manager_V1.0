@@ -1,0 +1,331 @@
+{
+  "summary": "Beyond-parity field-app build backlog — the 6 features Mason chose from the Beyond-Parity Opportunity Map, decomposed into 10 dependency-ordered, testable sections for the autonomous build loop.",
+  "generated": "2026-06-29",
+  "source_ideas": "C:\\Users\\mason\\Documents\\CRX-FieldApp-Beyond-Parity-Opportunity-Map.md",
+  "precondition": "ChemMan-parity rebuild (feat/fieldapp-parity) is merged to main and live. This loop branches off post-parity main.",
+  "section_schema": "id, name, feature, why, goal, beyond_parity_rationale, who_it_helps, acceptance_criteria[], subtasks[], reuses[], needs_migration, risk, depends_on[], gates[], notes",
+  "phases": [
+    { "title": "Phase 1 — Enablers & safeguards", "sections": [1, 2] },
+    { "title": "Phase 2 — Office command center", "sections": [3, 4] },
+    { "title": "Phase 3 — Compliance guardrail", "sections": [5] },
+    { "title": "Phase 4 — Customer-facing", "sections": [6, 7, 8, 9, 10] }
+  ],
+  "open_decision": "Default sequencing builds the 4 internal features first, then §6 then the portal (§7-§10). Mason may, before kickoff, drop the portal from this round or move it earlier — re-order accordingly; do not add new scope.",
+  "result": [
+    {
+      "area": "Phase 1 — Enablers & safeguards",
+      "sections": [
+        {
+          "id": 1,
+          "name": "AI Label-Data Backfill",
+          "feature": "AI label-data backfill",
+          "why": "Zero of ~604 products currently have safety-label data (re-entry interval, pre-harvest interval, signal word, EPA #, max legal rate). That gap blocks the compliance features. This turns a multi-day manual data-entry chore into a review-and-approve session using the vision/OCR pipeline CRX already runs on blend tickets.",
+          "goal": "Build a tool that drafts label data for products from label images/sheets, lands the drafts in a review queue with source + confidence, and writes only human-accepted values onto products. Produce a coverage report.",
+          "beyond_parity_rationale": "ChemMan never surfaces EPA/REI/PHI/signal word at all, so it has no pipeline to mass-extract them. This is the enabler that powers §5 (rate guardrails) and feeds §2/§6.",
+          "who_it_helps": "Owner/office (a 600+ product chore becomes a review session); everyone downstream gets accurate safety data.",
+          "acceptance_criteria": [
+            "An admin can run a backfill for one product or all products that, from a provided label image/PDF (or a configured source), drafts values for: signal_word, rei_hours, phi_days, epa_registration, and max_label_rate (+ unit).",
+            "Drafted values land in a STAGING area (not directly on products), each with a source note and a confidence/needs-review marker.",
+            "A review screen lets an admin accept / edit / reject each drafted value per product; only ACCEPTED values are written to the products table.",
+            "Writing accepted values is idempotent and activity-logged; a non-empty existing field is never overwritten without an explicit confirm.",
+            "No value is auto-applied to a product without human acceptance (wrong REI/PHI is a safety hazard).",
+            "After a run, a coverage report shows, of the ~604 products, how many now have each label field filled.",
+            "The tool degrades gracefully when a label can't be read (marks it 'needs manual entry', never guesses silently)."
+          ],
+          "subtasks": [
+            "Audit products table label fields; add products.max_label_rate (+ unit) if missing.",
+            "Create a product_label_drafts staging table (RLS, admin-only) holding drafted values + source + confidence + status.",
+            "Wire the existing Google Vision OCR / process-document edge function to extract label fields into drafts.",
+            "Build the admin review screen (accept/edit/reject per field per product).",
+            "Build the idempotent, logged commit path (accepted draft -> products), with no-overwrite-without-confirm.",
+            "Build the coverage report.",
+            "Run end-to-end against LOCAL db on a sample of products; show the coverage number move."
+          ],
+          "reuses": ["Google Vision OCR + process-document edge fn", "products table", "activityLogger", "rupCompliance.ts"],
+          "needs_migration": true,
+          "risk": "medium — compliance data correctness; fully human-gated. Loading values to PROD products is an OWNER review-and-approve task at the gate, not an automatic write.",
+          "depends_on": [],
+          "gates": ["admin-only", "human-review before any product write", "owner approves the PROD data load at the gate"],
+          "notes": "Build the TOOL and draft values against LOCAL only. The real PROD load of accepted label values is Mason's task at the production gate (he confirms the AI's drafts). Prior label-data drafting found wrong EPA #s — review is mandatory."
+        },
+        {
+          "id": 2,
+          "name": "Wrong-Field / Wrong-Rate / Double-Bill Watchdog",
+          "feature": "Wrong-field / wrong-rate / double-bill watchdog",
+          "why": "Catch the handful of records that look wrong before they become a bad bill or a compliance problem. Generalizes the 10% acre-divergence alert CRX already shipped into a standing, cross-signal watchdog.",
+          "goal": "An always-on check that flags wrong-field (applied acres vs boundary), wrong-rate (outside sane range / over label max), double-bill, and uncleared-REI applications, surfaced inline and as a standing exceptions list feeding the Cockpit.",
+          "beyond_parity_rationale": "Wrong-field needs boundary acres, wrong-rate needs product history/label max, double-bill needs the AR ledger — ChemMan has none of the three in one place.",
+          "who_it_helps": "Office (catches errors before they ship), applicator (caught before a wrong rate), grower (a correct bill).",
+          "acceptance_criteria": [
+            "Flags a completed job/invoice where applied acres diverge more than a configurable threshold (default 10%) from the field's authoritative boundary acres.",
+            "Flags a chemical line whose rate/acre is outside a sane range for that product (over the label max once §1 data exists, else a configurable multiple of the typical rate); degrades gracefully when no label max is on file.",
+            "Flags a likely double-bill (two invoices for the same job/blend-ticket source, or a job about to be invoiced twice).",
+            "Flags a product applied to a field whose REI from a prior application hasn't cleared.",
+            "Each flag is plain-English with a one-tap 'looks fine / needs fix'; resolving/dismissing is logged.",
+            "Flags surface both inline (in the relevant job/invoice flow) and as a standing exceptions list that the Cockpit (§3) consumes."
+          ],
+          "subtasks": [
+            "Reuse fieldGeometry divergence logic for the acre check.",
+            "Define the rate-sanity check (label max from §1 when present; configurable fallback).",
+            "Define double-bill detection over invoices/source links.",
+            "Define the REI-not-cleared check from job_applied_records + products.rei_hours.",
+            "Decide storage: a watchdog_flags table + dismissals, or a derived view + a dismissals table (prefer the lightest that supports 'dismiss' state).",
+            "Build the plain-English flag list UI + dismiss/resolve (logged).",
+            "Smoke each check against LOCAL with seeded good/bad rows."
+          ],
+          "reuses": ["fieldGeometry.ts divergence engine (shipped)", "PostGIS boundaries/measured_acres", "AR ledger / financial_audit_log", "products.rei_hours"],
+          "needs_migration": true,
+          "risk": "low-medium — mostly read + a flags/dismissals table.",
+          "depends_on": [1],
+          "gates": [],
+          "notes": "Rate-vs-label-max check depends on §1 data; build it to no-op gracefully if a product lacks a max rate. Keep flags advisory (don't block) here; hard-blocking on rate lives in §5."
+        }
+      ]
+    },
+    {
+      "area": "Phase 2 — Office command center",
+      "sections": [
+        {
+          "id": 3,
+          "name": "Office Cockpit (exception dashboard)",
+          "feature": "Office Cockpit",
+          "why": "One home screen showing the office only what's stuck or wrong, replacing ChemMan's run-seven-separate-reports ritual. Mason's #1 priority (save office time) and the anchor the other features surface in.",
+          "goal": "A live exception dashboard with click-through tiles for every category of stuck/wrong work across the field-app, RLS-respecting.",
+          "beyond_parity_rationale": "A cross-subsystem live exception feed (billing + AR + GIS divergence + compliance expiry + inventory) is only buildable on one integrated database; ChemMan can only report what it bills.",
+          "who_it_helps": "Office/dispatcher (nothing slips, no report-hunting), owner (glanceable health check).",
+          "acceptance_criteria": [
+            "One screen shows live tiles: completed-but-unbilled jobs; invoices ready to post (fed by §4); watchdog flags (from §2); weather-blocked jobs over the next N days; applicator licenses / buyer certs expiring within 30 days; overdue field-app AR; (if feasible) inventory shortfalls for upcoming jobs.",
+            "Each tile shows a count and the underlying rows, each with a click-through to the correct screen to act on it.",
+            "Counts are live (refresh or realtime) and respect RLS (a sales rep sees their own scope; an admin sees all).",
+            "An 'all clear' empty state shows when a category has nothing.",
+            "The dashboard loads fast on a normal-size dataset (paged/aggregated queries, not N+1)."
+          ],
+          "subtasks": [
+            "Inventory the data sources (reuse the read-only UnbilledApplications query, AR aging, §2 flags, license/RUP tables, weather, divergence).",
+            "Add any small read RPCs needed for aggregate counts (no schema change ideally).",
+            "Build the dashboard page (tiles + counts + drill-in lists + click-through), lazy-loaded + nav link.",
+            "Wire the 'ready to post' tile to §4's draft queue (build the tile now; it populates once §4 lands).",
+            "Verify RLS scoping by viewing as admin and as a sales rep.",
+            "Run the app and confirm each tile shows real local data and links out correctly."
+          ],
+          "reuses": ["UnbilledApplications query", "AR aging (ARaging)", "§2 watchdog flags", "applicator_licenses / rup_sales_records", "weatherCapture", "fieldGeometry divergence", "real-time Supabase"],
+          "needs_migration": false,
+          "risk": "low — read-only aggregation.",
+          "depends_on": [2],
+          "gates": [],
+          "notes": "Inventory-shortfall tile depends on joining scheduled job chemicals to live inventory; if that join is heavy, ship the tile as a follow-on and note it (don't block the cockpit)."
+        },
+        {
+          "id": 4,
+          "name": "Auto-Invoice on Completion -> review/post queue",
+          "feature": "Auto-invoice on completion",
+          "why": "Even at parity, the office still manually transfers each completed job to an invoice. This auto-drafts the bill the second a job is done, collapsing the daily data-entry loop into review-and-approve and getting bills out the same day.",
+          "goal": "On job completion, auto-DRAFT the per-acre, share-split, priced invoice(s) into a 'ready to post' queue. Never auto-post.",
+          "beyond_parity_rationale": "Auto-draft landing in a real AR ledger is only possible because field-app and accounting are the same database; ChemMan's field module can't post to an AR ledger it doesn't own.",
+          "who_it_helps": "Office (kills the transfer-each-job chore, faster cash), grower (accurate bill fast).",
+          "acceptance_criteria": [
+            "When a job is marked complete (with applied acres etc.), the system auto-drafts the field-app invoice(s): split by customer share, priced per-acre from the price book, in DRAFT/unposted state.",
+            "It NEVER auto-posts — posting always requires a human click (hard rule).",
+            "Drafts appear in the Cockpit 'ready to post' queue with a 'post all clean ones' action, where 'clean' = passes validation AND has no open §2 watchdog flag.",
+            "Auto-draft is idempotent — completing or re-saving a job does not create duplicate drafts.",
+            "A setting toggles auto-draft on/off (default on) without breaking the existing manual transfer path.",
+            "If pricing or shares can't be resolved, the draft is created flagged 'needs attention' rather than guessing a number."
+          ],
+          "subtasks": [
+            "Find the job-completion seam (complete_job) and add the auto-draft hook (RPC/trigger) using the existing transfer/split/price RPCs.",
+            "Enforce DRAFT-only output; ensure no code path auto-posts.",
+            "Add the idempotency guard (no duplicate drafts on re-complete).",
+            "Add the auto-draft on/off setting (off-path keeps manual transfer working).",
+            "Wire 'clean' detection to §2 flags + validation for the 'post all clean ones' action.",
+            "Smoke against LOCAL: complete a job -> exactly one draft appears, correctly split/priced; re-complete -> no duplicate; never posted."
+          ],
+          "reuses": ["transfer_job_to_invoice", "derive_customer_shares_from_fields", "post_invoice_group (manual only)", "idempotency_keys", "invoices.balance_cents / accounting_periods"],
+          "needs_migration": true,
+          "risk": "MEDIUM-HIGH — money. EXTRA review: money-lens + Codex; auto-DRAFT only, never auto-post. Closed-period checks must hold.",
+          "depends_on": [3],
+          "gates": ["money-lens review", "Codex required", "auto-draft never auto-post"],
+          "notes": "This is the riskiest internal section. Reuse the existing, already-reviewed transfer/split/price RPCs rather than re-deriving pricing. Respect check_period_open. Confirm with Mason any pricing default that isn't already encoded."
+        }
+      ]
+    },
+    {
+      "area": "Phase 3 — Compliance guardrail",
+      "sections": [
+        {
+          "id": 5,
+          "name": "Label-Rate Guardrails",
+          "feature": "Label-rate guardrails",
+          "why": "Compare an entered rate-per-acre to the legal label maximum and flag/block an over-the-label rate before the chemical leaves the warehouse — catching the costly, common decimal-typo violation — plus auto-compute REI/PHI windows.",
+          "goal": "At mix build/edit time, validate each chemical line's rate against the product's max label rate (from §1), warn/block per policy, and surface REI/PHI + a PHI-vs-harvest-date warning.",
+          "beyond_parity_rationale": "ChemMan surfaces no label data on its lines, so it can't compare an entered rate to a legal maximum; it's a passive data-entry box.",
+          "who_it_helps": "Applicator (catches a mis-keyed/over-label rate), office (won't bill a label violation), grower (protected from crop damage / illegal residues / blown PHI).",
+          "acceptance_criteria": [
+            "When a job's tank mix is built/edited, each chemical line's rate/acre is compared to the product's max label rate; an over-label rate is flagged (warn) or blocked (hard) per a configurable policy.",
+            "Re-entry (REI) and pre-harvest (PHI) intervals are auto-computed/displayed and printed on the field sheet.",
+            "If a field's harvest date (from crop history) falls inside the PHI window, the user is warned.",
+            "Guardrails degrade gracefully when a product lacks label data (warn 'no label max on file' rather than block).",
+            "An admin override on a hard block is captured with a logged reason.",
+            "(Optional, if time) rotational-crop restrictions are flagged."
+          ],
+          "subtasks": [
+            "Use §1's products.max_label_rate (+ unit) for the comparison; add a guardrail policy setting (warn vs block).",
+            "Add the rate-vs-max check into the chemical-entry component (FieldAppChemicalEntry / JobDetail chemicals tab).",
+            "Surface REI/PHI on the line + the field sheet; add the PHI-vs-harvest-date warning from field_crop_history.",
+            "Add the logged admin override for hard blocks.",
+            "Smoke against LOCAL: an over-label rate warns/blocks; a missing-data product warns-not-blocks; PHI-window warning fires."
+          ],
+          "reuses": ["products label fields incl. §1 max_label_rate", "job_chemicals", "chemCalculator.ts", "field_crop_history", "applicator field-sheet PDF"],
+          "needs_migration": true,
+          "risk": "medium — safety. Hard-block policy is a behavior change at mix time; default to WARN unless Mason wants block.",
+          "depends_on": [1],
+          "gates": ["compliance-reviewer pass", "default to warn; confirm with Mason before hard-block"],
+          "notes": "Needs §1 label data to be meaningful. Build to no-op gracefully where a product has no max rate. Default policy = warn; hard-block is an owner decision."
+        }
+      ]
+    },
+    {
+      "area": "Phase 4 — Customer-facing",
+      "sections": [
+        {
+          "id": 6,
+          "name": "'Your Field Was Sprayed' Proof Notification",
+          "feature": "Proof notification",
+          "why": "At completion, give the grower a polished proof message (field, acres, products, weather, boundary map, safe re-entry/harvest timing) — office-approved and sent with one tap.",
+          "goal": "Auto-draft a rich proof notification on job completion for office-approved send via the existing email service, logged per recipient.",
+          "beyond_parity_rationale": "ChemMan's notifications are plain text with no map, weather, boundary picture, or compliance enrichment, and it lacks the GIS/weather/AI to add them.",
+          "who_it_helps": "Grower (immediate proof to forward to a landlord/insurer + safe-timing), office (looks proactive, no extra work).",
+          "acceptance_criteria": [
+            "On job completion, the system drafts a proof message containing: field name, acres, products, weather at time of application, applicator, a static boundary-map image, and safe re-entry/harvest timing from REI/PHI.",
+            "The office approves and sends with one tap (office-approved send — NOT silent auto-send).",
+            "Sends via the existing Resend email service; every send is logged per recipient (idempotency) and failures are visible.",
+            "Message content is templated and editable; recipient resolution reuses the parity pre/post-notification infra.",
+            "If a new edge-function email_type is required, it is PREPARED but its deploy is owner-gated (the loop does not deploy it)."
+          ],
+          "subtasks": [
+            "Reuse the parity #40/#41 notification + recipient-resolution infra.",
+            "Build the proof-message template (incl. static boundary map render + weather + REI/PHI timing).",
+            "Build the office approve-and-send (one tap) + send log; per-recipient idempotency.",
+            "If an edge-function email_type change is needed, prepare it and document the gated deploy.",
+            "Smoke against LOCAL: completion drafts a correct message; approve-send logs; no silent send."
+          ],
+          "reuses": ["parity notification infra (#40/#41)", "emailService.ts / Resend", "PostGIS boundaries (static map)", "weatherCapture", "products REI/PHI", "job_notifications log"],
+          "needs_migration": true,
+          "risk": "medium — outbound to customers + possible edge-fn deploy gate.",
+          "depends_on": [1],
+          "gates": ["office-approved send (no silent auto-send)", "edge-fn deploy owner-gated"],
+          "notes": "Standalone-capable (proof inline in the email); once §8/§10 portal exists, add a 'view full record' link into the portal."
+        },
+        {
+          "id": 7,
+          "name": "Grower Portal — Login & security scoping",
+          "feature": "Grower portal",
+          "why": "The foundation of the customer-facing portal: a separate grower login, each grower locked by RLS to only their own customer's data. The biggest, riskiest piece — a new outside-facing security surface.",
+          "goal": "A grower can log in to a customer-facing portal and read only their own customer's whitelisted data, proven at runtime as a grower with a negative cross-tenant test.",
+          "beyond_parity_rationale": "ChemMan has zero customer-facing surface; a real portal means customer logins scoped to live field/compliance/billing data a point product can't assemble.",
+          "who_it_helps": "Grower (24/7 self-service), office (fewer 'send me that record' calls).",
+          "acceptance_criteria": [
+            "A grower can log in to a customer-facing portal (separate role) and is scoped via RLS to ONLY their own customer's data.",
+            "An admin-only mapping links an auth user to a customer; a grower cannot create/alter that link.",
+            "Runtime-proven AS a grower (not just admin) that they can read their whitelisted views and NOTHING else, INCLUDING a negative test: grower A cannot read grower B's fields/applications/invoices.",
+            "No existing internal RLS policy is loosened to enable the portal (additive policies only).",
+            "rls-security-reviewer + a security-lens Codex pass are clean before the section counts as done.",
+            "The portal role can write nothing except explicitly-allowed actions (none in this section)."
+          ],
+          "subtasks": [
+            "Design the grower role + a portal_users (auth_user_id -> customer_id) mapping table with admin-only management + RLS.",
+            "Add additive RLS policies on the whitelisted read surfaces scoping to the grower's customer_id.",
+            "Build the portal login + a minimal authenticated landing scoped to the grower.",
+            "Runtime-prove RLS as grower A and grower B (positive + negative).",
+            "Run rls-security-reviewer + Codex security pass; fix all findings."
+          ],
+          "reuses": ["Supabase RLS/auth", "customers table"],
+          "needs_migration": true,
+          "risk": "HIGH — new outside-facing auth surface. Dedicated security gate; additive RLS only; runtime-prove cross-tenant isolation; explicit owner sign-off before go-live.",
+          "depends_on": [],
+          "gates": ["rls-security-reviewer", "security-lens Codex", "runtime cross-tenant proof", "owner sign-off before go-live"],
+          "notes": "Sequenced last on purpose. This section is the security foundation for §8-§10; do NOT proceed to those until this is clean. Customer logins are outward-facing — go-live needs Mason's explicit approval."
+        },
+        {
+          "id": 8,
+          "name": "Grower Portal — My Fields & Application History",
+          "feature": "Grower portal",
+          "why": "The grower sees their fields and a cross-season timeline of what was applied, where, when, by whom, and the weather.",
+          "goal": "Read-only, RLS-scoped grower views of fields (with boundary map) and per-field application history + crop history.",
+          "beyond_parity_rationale": "Self-service per-field application history tied to GIS boundaries is white space even versus big players; ChemMan has nothing customer-facing.",
+          "who_it_helps": "Grower (answers 'what went on this field and when' themselves), office (fewer calls).",
+          "acceptance_criteria": [
+            "A logged-in grower sees their fields (name, acres, boundary on a map), RLS-scoped to their customer.",
+            "Per field, a cross-season timeline shows applications (date, products, rates, applied acres, applicator, weather) plus crop history where present.",
+            "All views are read-only and mobile-friendly.",
+            "RLS isolation re-confirmed (grower sees only their own fields)."
+          ],
+          "subtasks": [
+            "Build read RPCs/views for grower fields + per-field application timeline (RLS-scoped).",
+            "Build the portal Fields list + field detail (map + timeline + crop history).",
+            "Verify as a grower that only their own fields/history show.",
+            "Mobile viewport pass."
+          ],
+          "reuses": ["fields/field_polygons", "job_applied_records + fields", "field_crop_history", "MapLibre/Mapbox", "§7 RLS foundation"],
+          "needs_migration": true,
+          "risk": "medium — privacy (RLS).",
+          "depends_on": [7],
+          "gates": ["RLS re-verify as grower"],
+          "notes": "Frontend is read-only, but the grower-scoped read RPCs/views it needs ARE DB objects = additive migrations (governed by §7's RLS foundation) — they MUST be tracked + applied at the production gate. (Codex P2 2026-06-29: views/RPCs+RLS are migrations in this repo; don't mark non-migration or the gate omits them.)"
+        },
+        {
+          "id": 9,
+          "name": "Grower Portal — My Invoices & Balance",
+          "feature": "Grower portal",
+          "why": "The grower sees their field-app invoices, paid/unpaid status, balance, and can download invoice PDFs themselves.",
+          "goal": "Read-only, RLS-scoped grower view of their field-app invoices + balances + self-download PDFs.",
+          "beyond_parity_rationale": "A customer-facing billing view tied to a real AR ledger is impossible for a tool that doesn't own the ledger.",
+          "who_it_helps": "Grower (self-serve bills), office (less billing back-and-forth), owner (faster pay).",
+          "acceptance_criteria": [
+            "A grower sees their field-app invoices with status (paid/unpaid/overdue) and balance, RLS-scoped to their customer.",
+            "Money displays correctly (cents divided by 100); the grower can alter nothing.",
+            "The grower can download each invoice PDF themselves (reusing the internal invoice PDF generator).",
+            "RLS isolation re-confirmed (grower sees only their own invoices)."
+          ],
+          "subtasks": [
+            "Build read RPC/view for grower invoices + balances (RLS-scoped).",
+            "Build the portal Invoices list + invoice detail + PDF download.",
+            "Verify money formatting and read-only-ness; verify RLS as a grower.",
+            "Mobile viewport pass."
+          ],
+          "reuses": ["invoices (balance_cents/status)", "invoicePdf.ts", "§7 RLS foundation"],
+          "needs_migration": true,
+          "risk": "medium — money display + privacy.",
+          "depends_on": [7],
+          "gates": ["RLS re-verify as grower", "money-format check"],
+          "notes": "Read-only frontend, but the grower-scoped read RPC/view for invoices is a DB object = an additive migration (under §7's RLS foundation) — track + apply at the gate. No payment-taking this round (separate, owner-gated). (Codex P2 2026-06-29.)"
+        },
+        {
+          "id": 10,
+          "name": "Grower Portal — Self-serve compliance records",
+          "feature": "Grower portal",
+          "why": "The grower can download their own proof-of-application / compliance PDFs for a field or date range — the exact proof their certifier/insurer/landlord demands.",
+          "goal": "RLS-scoped grower self-download of compliance/proof PDFs reusing the internal generators.",
+          "beyond_parity_rationale": "Self-serve, field-level, audit-grade compliance records spanning applications/EPA/weather are not offered by ChemMan.",
+          "who_it_helps": "Grower (instant proof for audits/insurers/landlords), office (stops being a records clerk).",
+          "acceptance_criteria": [
+            "A grower can generate/download their own proof-of-application / compliance PDF for a chosen field and/or date range.",
+            "Content is RLS-scoped to the grower's own data and reuses the internal report/PDF generators.",
+            "RLS isolation re-confirmed (grower can only export their own records)."
+          ],
+          "subtasks": [
+            "Expose the internal compliance/proof PDF generation to the grower scope (RLS-safe).",
+            "Build the portal Compliance/Records page (pick field + date range -> download).",
+            "Verify as a grower that only their own records are exportable.",
+            "Mobile viewport pass."
+          ],
+          "reuses": ["wpsNoticePdf / reportPdf / applicator-sheet generators", "§1 label data", "job_applied_records", "§7 RLS foundation"],
+          "needs_migration": true,
+          "risk": "medium — privacy.",
+          "depends_on": [7],
+          "gates": ["RLS re-verify as grower"],
+          "notes": "Read/generate only on the frontend, but any grower-scoped read RPC/view it needs is a DB object = an additive migration (under §7's RLS foundation) — track + apply at the gate. Richest once §1 label data is loaded. (Codex P2 2026-06-29.)"
+        }
+      ]
+    }
+  ]
+}
