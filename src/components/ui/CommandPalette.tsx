@@ -36,6 +36,7 @@ import {
   Image,
   ClipboardCheck,
   ArrowLeftRight,
+  ShieldAlert,
 } from 'lucide-react';
 import { supabase, assertRpcResult } from '../../lib/db';
 import { getRecentItems } from '../../lib/recentPages';
@@ -122,6 +123,7 @@ const PAGE_ICON_MAP: Record<string, React.ReactNode> = {
   '/sales-reports': <BarChart3 className="w-4 h-4" />,
   '/compliance': <ShieldCheck className="w-4 h-4" />,
   '/lot-trace': <PackageSearch className="w-4 h-4" />,
+  '/watchdog': <ShieldAlert className="w-4 h-4" />,
   '/team-board': <MessageSquare className="w-4 h-4" />,
   '/settings': <Settings className="w-4 h-4" />,
   '/getting-started': <BookOpen className="w-4 h-4" />,
@@ -179,6 +181,7 @@ const ALL_PAGES: { path: string; label: string }[] = [
   { path: '/sales-reports?tab=by_month', label: 'Sales by Month' },
   { path: '/compliance', label: 'Compliance' },
   { path: '/lot-trace', label: 'Lot Trace' },
+  { path: '/watchdog', label: 'Watchdog Flags' },
   { path: '/team-board', label: 'Team Board' },
   { path: '/settings', label: 'Settings' },
   { path: '/getting-started', label: 'Getting Started' },

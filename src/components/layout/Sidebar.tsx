@@ -46,6 +46,7 @@ import {
   Building2,
   Layers,
   FlaskConical,
+  ShieldAlert as WatchdogIcon,
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { hasPageAccess, getPageKeyFromPath } from '../../lib/pagePermissions';
@@ -205,6 +206,7 @@ const navigation: NavEntry[] = [
         { path: '/compliance', label: 'Compliance', icon: <ShieldCheck className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
         { path: '/lot-trace', label: 'Lot Trace', icon: <PackageSearch className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
         { path: '/label-review', label: 'Label Review', icon: <FlaskConical className="w-4 h-4" />, roles: ['admin'] },
+        { path: '/watchdog', label: 'Watchdog Flags', icon: <WatchdogIcon className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
       ],
     },
   },

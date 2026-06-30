@@ -3056,3 +3056,59 @@ export interface GlobalSearchResult {
   primary_text: string;
   secondary_text: string;
 }
+
+// ── §2 Watchdog Flags ────────────────────────────────────────────────────────
+
+export type WatchdogFlagType =
+  | 'acre_divergence'
+  | 'rate_over_label'
+  | 'double_bill'
+  | 'rei_not_cleared';
+
+export type WatchdogSeverity = 'warning' | 'info';
+export type WatchdogEntityType = 'job' | 'invoice' | 'job_chemical';
+export type WatchdogResolution = 'looks_fine' | 'needs_fix';
+
+export interface WatchdogFlag {
+  id: string;
+  flag_type: WatchdogFlagType;
+  severity: WatchdogSeverity;
+  entity_type: WatchdogEntityType;
+  entity_id: string;
+  job_id: string | null;
+  invoice_id: string | null;
+  product_id: string | null;
+  field_id: string | null;
+  customer_id: string | null;
+  message: string;
+  detail: Record<string, unknown> | null;
+  created_at: string;
+  // joined from get_watchdog_flags RPC
+  is_dismissed: boolean;
+  dismissed_at: string | null;
+  dismissed_by: string | null;
+  resolution: WatchdogResolution | null;
+  dismiss_note: string | null;
+}
+
+export interface WatchdogFlagDismissal {
+  id: string;
+  flag_id: string;
+  dismissed_by: string;
+  resolution: WatchdogResolution;
+  note: string | null;
+  dismissed_at: string;
+}
+
+export interface DismissWatchdogFlagResult {
+  dismissal_id: string;
+  flag_id: string;
+  resolution: WatchdogResolution;
+  dismissed_at: string;
+}
+
+export interface RefreshWatchdogFlagsResult {
+  flags_total: number;
+  flags_deleted: number;
+  scope: string;
+}
