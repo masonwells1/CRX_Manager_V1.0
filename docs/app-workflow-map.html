@@ -84,7 +84,7 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(
 <div id="header">
   <h1>⬡ CRX Manager — Architecture Map</h1>
   <!-- __STATS_START__ -->
-  <span id="stat-line" style="color:var(--muted);font-size:.8rem">85 routes · 194 RPC calls · 0 issues · Updated Jun 30, 2026</span>
+  <span id="stat-line" style="color:var(--muted);font-size:.8rem">88 routes · 201 RPC calls · 0 issues · Updated Jun 30, 2026</span>
   <!-- __STATS_END__ -->
   <div id="tabs">
     <button class="tab active" onclick="showTab('graph')">Graph</button>
@@ -830,6 +830,30 @@ const NODES = [
       "type": "page-sales",
       "group": "Core",
       "path": "/lot-trace",
+      "problem": false
+    },
+    {
+      "id": "label-review",
+      "label": "LabelReview",
+      "type": "page-admin",
+      "group": "Core",
+      "path": "/label-review",
+      "problem": false
+    },
+    {
+      "id": "watchdog-exceptions",
+      "label": "WatchdogExceptions",
+      "type": "page-sales",
+      "group": "Core",
+      "path": "/watchdog",
+      "problem": false
+    },
+    {
+      "id": "office-cockpit",
+      "label": "OfficeCockpit",
+      "type": "page-sales",
+      "group": "Core",
+      "path": "/office-cockpit",
       "problem": false
     },
     {
@@ -1741,6 +1765,46 @@ const EDGES = [
       "type": "nav"
     },
     {
+      "s": "office-cockpit",
+      "t": "unbilled-applications",
+      "type": "nav"
+    },
+    {
+      "s": "office-cockpit",
+      "t": "job-detail",
+      "type": "nav"
+    },
+    {
+      "s": "office-cockpit",
+      "t": "field-invoices-unposted",
+      "type": "nav"
+    },
+    {
+      "s": "office-cockpit",
+      "t": "invoice-detail",
+      "type": "nav"
+    },
+    {
+      "s": "office-cockpit",
+      "t": "watchdog-exceptions",
+      "type": "nav"
+    },
+    {
+      "s": "office-cockpit",
+      "t": "jobs",
+      "type": "nav"
+    },
+    {
+      "s": "office-cockpit",
+      "t": "compliance",
+      "type": "nav"
+    },
+    {
+      "s": "office-cockpit",
+      "t": "a-raging",
+      "type": "nav"
+    },
+    {
       "s": "order-detail",
       "t": "invoice-detail",
       "type": "nav"
@@ -2063,6 +2127,11 @@ const EDGES = [
     {
       "s": "new-vendor-bill",
       "t": "r-vendor",
+      "type": "rpc"
+    },
+    {
+      "s": "office-cockpit",
+      "t": "r-invoice",
       "type": "rpc"
     },
     {

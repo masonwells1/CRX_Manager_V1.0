@@ -1,0 +1,983 @@
+/**
+ * OfficeCockpit — §3 Beyond-Parity: Exception dashboard for the office team.
+ *
+ * ONE screen showing everything stuck or wrong across the field-app.
+ * Replaces the old "run seven reports" ritual.
+ *
+ * Tiles:
+ *   (a) Completed-but-unbilled jobs
+ *   (b) Field-app invoices ready to post (draft/unposted) — §4 will populate this
+ *   (c) Active watchdog flags from §2 get_watchdog_flags RPC
+ *   (d) Upcoming scheduled jobs in the next 7 days (no DB-stored weather-blocked
+ *       state exists; weather risk is a UI overlay per Job Detail, not a stored flag)
+ *   (e) Applicator licenses / buyer certs expiring within 30 days
+ *   (f) Overdue field-app AR (posted invoices, balance > 0, due_date < today)
+ *   (g) Inventory shortfalls — deferred follow-on (would require per-job-chemical
+ *       x current-inventory join across many rows, i.e. N+1 risk; noted below tile)
+ *
+ * status-enum-check: exempt (TS) — this file queries THREE tables each with a status
+ * column. The hook cannot track cross-table context. All values verified live:
+ *   jobs.status: 'completed', 'scheduled' — both valid per CHECK constraint.
+ *   invoices.status: 'draft', 'unposted', 'posted' — all valid per CHECK constraint.
+ *
+ * RLS: each query inherits the caller's RLS context (direct table selects).
+ * The watchdog RPC is SECURITY DEFINER but gates on role inside its body.
+ * READ-ONLY — no mutations here.
+ */
+import { useEffect, useState, useCallback, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
+import {
+  RefreshCw,
+  Tractor,
+  FileCheck,
+  AlertTriangle,
+  CalendarClock,
+  ShieldAlert,
+  DollarSign,
+  PackageX,
+  CheckCircle,
+  ChevronRight,
+  ArrowRight,
+} from 'lucide-react';
+import Card from '../components/ui/Card';
+import Button from '../components/ui/Button';
+import Badge from '../components/ui/Badge';
+import Modal from '../components/ui/Modal';
+import { useToast } from '../components/ui/Toast';
+import { supabase, supabaseUntyped, assertRpcResult, hasRpcCode, RpcErrorCodes, sanitizeError } from '../lib/db';
+import { generateIdempotencyKey } from '../lib/idempotency';
+import { runCriticalAction } from '../lib/criticalAction';
+import { Sentry } from '../lib/sentry';
+import { formatCents } from '../lib/money';
+import { localToday, localDatePlusDays } from '../lib/dateUtils';
+import { SkeletonCard } from '../components/ui/Skeleton';
+import type { WatchdogFlag } from '../types';
+import { useAuth } from '../contexts/AuthContext';
+
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+interface UnbilledJobRow {
+  id: string;
+  job_number: string;
+  job_date: string;
+  total_acres: number | null;
+  total_price_cents: number | null;
+  customer_name: string;
+}
+
+interface PostableInvoiceRow {
+  id: string;
+  invoice_number: string;
+  invoice_date: string;
+  status: string;
+  total_amount_cents: number;
+  customer_name: string;
+  job_id: string | null;
+  invoice_group_id: string | null;
+  pricing_pending: boolean;
+}
+
+interface UpcomingJobRow {
+  id: string;
+  job_number: string;
+  job_date: string;
+  total_acres: number | null;
+  customer_name: string;
+}
+
+interface ExpiringLicenseRow {
+  id: string;
+  holder_name: string;
+  license_type: string;
+  expiry_date: string;
+  customer_name: string | null;
+  expired: boolean;
+}
+
+interface OverdueARRow {
+  id: string;
+  invoice_number: string;
+  due_date: string;
+  balance_cents: number;
+  customer_name: string;
+}
+
+interface CockpitData {
+  unbilledJobs: UnbilledJobRow[];
+  postableInvoices: PostableInvoiceRow[];
+  watchdogFlags: WatchdogFlag[];
+  upcomingJobs: UpcomingJobRow[];
+  expiringLicenses: ExpiringLicenseRow[];
+  overdueAR: OverdueARRow[];
+  // True only when get_watchdog_flags loaded cleanly. When false we CANNOT tell which
+  // invoices are flagged, so bulk-posting is disabled (fail-safe — never post on unknown).
+  watchdogLoadOk: boolean;
+}
+
+type RawUnbilledJob = {
+  id: string;
+  job_number: string;
+  job_date: string;
+  total_acres: number | null;
+  total_price_cents: number | null;
+  customer: { farm_name: string } | null;
+};
+
+type RawPostableInvoice = {
+  id: string;
+  invoice_number: string;
+  invoice_date: string;
+  status: string;
+  total_amount_cents: number;
+  job_id: string | null;
+  invoice_group_id: string | null;
+  pricing_pending: boolean | null;
+  customer: { farm_name: string } | null;
+};
+
+type RawUpcomingJob = {
+  id: string;
+  job_number: string;
+  job_date: string;
+  total_acres: number | null;
+  customer: { farm_name: string } | null;
+};
+
+type RawLicense = {
+  id: string;
+  holder_name: string;
+  license_type: string;
+  expiry_date: string;
+  customer: { farm_name: string } | null;
+};
+
+type RawOverdueAR = {
+  id: string;
+  invoice_number: string;
+  due_date: string;
+  balance_cents: number;
+  customer: { farm_name: string } | null;
+};
+
+const TILE_LIMIT = 50;
+
+// ── Helper components ─────────────────────────────────────────────────────────
+
+function AllClear({ label }: { label: string }) {
+  return (
+    <div className="flex items-center gap-2 py-3 text-sm text-gray-500">
+      <CheckCircle className="w-4 h-4 text-crx-green flex-shrink-0" />
+      <span>{label}</span>
+    </div>
+  );
+}
+
+function TileHeader({
+  icon,
+  title,
+  count,
+  countColor,
+  linkLabel,
+  onLink,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  count: number;
+  countColor?: string;
+  linkLabel?: string;
+  onLink?: () => void;
+}) {
+  const color = count === 0 ? 'text-gray-400' : (countColor ?? 'text-red-600');
+  return (
+    <div className="flex items-center justify-between mb-3">
+      <div className="flex items-center gap-2">
+        {icon}
+        <h2 className="font-semibold text-nav-dark">{title}</h2>
+        <span className={`text-sm font-bold ${color}`}>({count})</span>
+      </div>
+      {onLink && (
+        <button
+          onClick={onLink}
+          className="flex items-center gap-1 text-sm text-crx-green hover:underline"
+        >
+          {linkLabel ?? 'View all'} <ChevronRight className="w-4 h-4" />
+        </button>
+      )}
+    </div>
+  );
+}
+
+// ── Main component ────────────────────────────────────────────────────────────
+
+export default function OfficeCockpit() {
+  const navigate = useNavigate();
+  const { toast } = useToast();
+  const { profile } = useAuth();
+  const isAdmin = profile?.role === 'admin';
+
+  const [loading, setLoading] = useState(true);
+  const [data, setData] = useState<CockpitData>({
+    unbilledJobs: [],
+    postableInvoices: [],
+    watchdogFlags: [],
+    upcomingJobs: [],
+    expiringLicenses: [],
+    overdueAR: [],
+    watchdogLoadOk: false,
+  });
+  const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
+  // §4 Post-all-clean state.
+  const [postAllOpen, setPostAllOpen] = useState(false);
+  const [posting, setPosting] = useState(false);
+  // Idempotency keys keyed by invoice id (group keyed by 'grp:<id>') so a retry of
+  // a failed item reuses the SAME key (no risk of double-posting on retry).
+  const postKeysRef = useRef<Record<string, string>>({});
+
+  const fetchAll = useCallback(async () => {
+    setLoading(true);
+    const today = localToday();
+    const in7Days = localDatePlusDays(7);
+    const in30Days = localDatePlusDays(30);
+    const past30Days = localDatePlusDays(-30);
+
+    // status-enum-check: exempt (TS) — cross-table: jobs uses 'completed'/'scheduled',
+    // invoices uses 'draft'/'unposted'/'posted'. All verified against live CHECK constraints.
+
+    // (c) Active watchdog flags (non-dismissed) via §2 RPC — pulled out of
+    // Promise.all so the assertRpcCoverage scanner can detect the capture.
+    const watchdogRes = await supabaseUntyped.rpc('get_watchdog_flags', {
+      p_job_id: null,
+      p_invoice_id: null,
+      p_flag_type: null,
+      p_include_dismissed: false,
+    });
+
+    const [
+      unbilledJobsRes,
+      postableInvRes,
+      upcomingJobsRes,
+      expiringLicRes,
+      overdueARRes,
+    ] = await Promise.all([
+      // (a) Completed jobs with no invoice
+      supabase
+        .from('jobs')
+        .select('id, job_number, job_date, total_acres, total_price_cents, customer:customers(farm_name)')
+        .eq('status', 'completed')
+        .is('invoice_id', null)
+        .is('deleted_at', null)
+        .order('job_date', { ascending: true })
+        .limit(TILE_LIMIT),
+
+      // (b) Draft/unposted field-app invoices (§4 auto-populates these)
+      supabase
+        .from('invoices')
+        .select('id, invoice_number, invoice_date, status, total_amount_cents, job_id, invoice_group_id, pricing_pending, customer:customers(farm_name)')
+        .in('status', ['draft', 'unposted'])
+        .eq('invoice_type', 'field_application')
+        .is('deleted_at', null)
+        .order('invoice_date', { ascending: true })
+        .limit(TILE_LIMIT),
+
+      // (d) Upcoming scheduled jobs (next 7 days) — proxy for weather-at-risk
+      supabase
+        .from('jobs')
+        .select('id, job_number, job_date, total_acres, customer:customers(farm_name)')
+        .eq('status', 'scheduled')
+        .is('deleted_at', null)
+        .gte('job_date', today)
+        .lte('job_date', in7Days)
+        .order('job_date', { ascending: true })
+        .limit(TILE_LIMIT),
+
+      // (e) Expiring applicator licenses / buyer certs within 30 days
+      supabase
+        .from('applicator_licenses')
+        .select('id, holder_name, license_type, expiry_date, customer:customers(farm_name)')
+        .eq('is_active', true)
+        .gte('expiry_date', past30Days)
+        .lte('expiry_date', in30Days)
+        .order('expiry_date', { ascending: true })
+        .limit(TILE_LIMIT),
+
+      // (f) Overdue field-app AR: balance > 0, past due_date. Include BOTH 'posted'
+      // (past due but not yet swept) AND 'overdue' (already marked by mark_overdue_invoices)
+      // — filtering to 'posted' alone hides the invoices that are actually overdue.
+      supabase
+        .from('invoices')
+        .select('id, invoice_number, due_date, balance_cents, customer:customers(farm_name)')
+        .eq('invoice_type', 'field_application')
+        .in('status', ['posted', 'overdue'])
+        .lt('due_date', today)
+        .gt('balance_cents', 0)
+        .is('deleted_at', null)
+        .order('due_date', { ascending: true })
+        .limit(TILE_LIMIT),
+    ]);
+
+    const errors = [
+      unbilledJobsRes.error,
+      postableInvRes.error,
+      watchdogRes.error,
+      upcomingJobsRes.error,
+      expiringLicRes.error,
+      overdueARRes.error,
+    ].filter(Boolean);
+
+    if (errors.length > 0) {
+      const firstErr = errors[0] as { message?: string };
+      Sentry.captureException(firstErr, { tags: { page: 'office-cockpit' } });
+      toast('error', `Failed to load some cockpit data: ${firstErr?.message ?? 'Unknown error'}`);
+    }
+
+    const unbilledJobs: UnbilledJobRow[] = ((unbilledJobsRes.data || []) as RawUnbilledJob[]).map((r) => ({
+      id: r.id,
+      job_number: r.job_number,
+      job_date: r.job_date,
+      total_acres: r.total_acres,
+      total_price_cents: r.total_price_cents,
+      customer_name: r.customer?.farm_name ?? 'Unknown',
+    }));
+
+    const postableInvoices: PostableInvoiceRow[] = ((postableInvRes.data || []) as RawPostableInvoice[]).map((r) => ({
+      id: r.id,
+      invoice_number: r.invoice_number,
+      invoice_date: r.invoice_date,
+      status: r.status,
+      total_amount_cents: r.total_amount_cents,
+      customer_name: r.customer?.farm_name ?? 'Unknown',
+      job_id: r.job_id,
+      invoice_group_id: r.invoice_group_id,
+      pricing_pending: r.pricing_pending === true,
+    }));
+
+    let watchdogFlags: WatchdogFlag[] = [];
+    let watchdogLoadOk = false;
+    if (!watchdogRes.error && watchdogRes.data) {
+      try {
+        watchdogFlags = assertRpcResult<WatchdogFlag[]>(watchdogRes.data, 'get_watchdog_flags');
+        watchdogLoadOk = true;
+      } catch (e) {
+        Sentry.captureException(e, { tags: { page: 'office-cockpit', tile: 'watchdog' } });
+      }
+    }
+
+    const upcomingJobs: UpcomingJobRow[] = ((upcomingJobsRes.data || []) as RawUpcomingJob[]).map((r) => ({
+      id: r.id,
+      job_number: r.job_number,
+      job_date: r.job_date,
+      total_acres: r.total_acres,
+      customer_name: r.customer?.farm_name ?? 'Unknown',
+    }));
+
+    const expiringLicenses: ExpiringLicenseRow[] = ((expiringLicRes.data || []) as RawLicense[]).map((r) => ({
+      id: r.id,
+      holder_name: r.holder_name,
+      license_type: r.license_type,
+      expiry_date: r.expiry_date,
+      customer_name: r.customer?.farm_name ?? null,
+      expired: r.expiry_date < today,
+    }));
+
+    const overdueAR: OverdueARRow[] = ((overdueARRes.data || []) as RawOverdueAR[]).map((r) => ({
+      id: r.id,
+      invoice_number: r.invoice_number,
+      due_date: r.due_date,
+      balance_cents: r.balance_cents,
+      customer_name: r.customer?.farm_name ?? 'Unknown',
+    }));
+
+    setData({ unbilledJobs, postableInvoices, watchdogFlags, upcomingJobs, expiringLicenses, overdueAR, watchdogLoadOk });
+    setLastRefreshed(new Date());
+    setLoading(false);
+  }, [toast]);
+
+  useEffect(() => {
+    void fetchAll();
+  }, [fetchAll]);
+
+  const totalExceptions =
+    data.unbilledJobs.length +
+    data.postableInvoices.length +
+    data.watchdogFlags.length +
+    data.expiringLicenses.length +
+    data.overdueAR.length;
+
+  // §4 Post-all-clean gating. A draft is "clean" (safe to auto-post in bulk) only when:
+  //   (a) it passes validation — pricing is NOT pending (the same gate post_invoice_group
+  //       / post_invoice enforce; we pre-filter so the bulk action only attempts postable
+  //       ones), AND
+  //   (b) it has NO open §2 watchdog flag on the invoice itself OR on its source job
+  //       (acre-divergence / REI flags attach to the job, double-bill/rate flags to the
+  //       invoice). Any open flag means a human must look before posting — never bulk-post it.
+  // The DB still enforces both gates inside post_invoice — this is defense-in-depth + UX.
+  const flaggedInvoiceIds = new Set(
+    data.watchdogFlags.map((f) => f.invoice_id).filter((x): x is string => !!x)
+  );
+  const flaggedJobIds = new Set(
+    data.watchdogFlags.map((f) => f.job_id).filter((x): x is string => !!x)
+  );
+  // Per-invoice cleanliness: pricing resolved AND no open flag on the invoice or its source job.
+  const isInvoiceCleanBase = (inv: PostableInvoiceRow): boolean => {
+    if (inv.pricing_pending) return false;
+    if (flaggedInvoiceIds.has(inv.id)) return false;
+    if (inv.job_id && flaggedJobIds.has(inv.job_id)) return false;
+    return true;
+  };
+  // SPLIT GROUPS: post_invoice_group posts EVERY member atomically, but this tile only loads up
+  // to TILE_LIMIT invoices — a group could have a flagged/pricing-pending member OUTSIDE that
+  // window we can't see here. So bulk "post all clean" NEVER posts a grouped invoice; split-group
+  // invoices are left for a human to post deliberately from the invoice/group detail (where the
+  // whole group is visible). Only standalone (non-grouped) clean drafts are bulk-postable.
+  const isInvoiceClean = (inv: PostableInvoiceRow): boolean =>
+    isInvoiceCleanBase(inv) && inv.invoice_group_id == null;
+  // FAIL-SAFE: if get_watchdog_flags did NOT load, we cannot know which invoices are flagged,
+  // so NOTHING is bulk-postable (post individually instead). Never fail open on money.
+  const cleanInvoices = data.watchdogLoadOk ? data.postableInvoices.filter(isInvoiceClean) : [];
+  const blockedInvoices = data.postableInvoices.filter((inv) => !cleanInvoices.includes(inv));
+
+  // Post ONLY the clean drafts. Group → post_invoice_group; single → post_invoice
+  // (the canonical branch used by InvoiceDetail/FieldInvoicesUnposted). A HUMAN clicked
+  // this, so posting is allowed here — but we NEVER touch a flagged/pricing-pending one.
+  const runPostAllClean = async () => {
+    setPostAllOpen(false);
+    if (!profile) {
+      toast('error', 'Profile not loaded — please refresh.');
+      return;
+    }
+    if (cleanInvoices.length === 0) {
+      toast('info', 'No clean invoices to post.');
+      return;
+    }
+    await runCriticalAction({
+      action: async () => {
+        // FRESHNESS GUARD (Codex go-live P2): `cleanInvoices` was derived from the LAST
+        // persisted watchdog sweep, which can be STALE if jobs/invoices changed since the
+        // cockpit loaded. Before posting real money, RECOMPUTE the sweep and re-derive
+        // "clean" from fresh flags. Fail CLOSED — if we can't confirm freshness, post NOTHING.
+        let freshFlags: WatchdogFlag[];
+        try {
+          // refresh_watchdog_flags RETURNS jsonb (sweep counts); we only need it to have run.
+          await supabaseUntyped.rpc('refresh_watchdog_flags', {}).throwOnError();
+          const freshRes = await supabaseUntyped.rpc('get_watchdog_flags', {
+            p_job_id: null,
+            p_invoice_id: null,
+            p_flag_type: null,
+            p_include_dismissed: false,
+          });
+          if (freshRes.error) throw freshRes.error;
+          freshFlags = assertRpcResult<WatchdogFlag[]>(freshRes.data, 'get_watchdog_flags');
+        } catch (err: unknown) {
+          await fetchAll(); // resync the tiles to whatever the fresh sweep produced
+          throw new Error(
+            `Could not confirm the invoices are still clean (watchdog refresh failed) — nothing was posted. ${sanitizeError(err)}`
+          );
+        }
+
+        const freshFlaggedInv = new Set(
+          freshFlags.map((f) => f.invoice_id).filter((x): x is string => !!x)
+        );
+        const freshFlaggedJob = new Set(
+          freshFlags.map((f) => f.job_id).filter((x): x is string => !!x)
+        );
+        // Re-derive the still-clean set from FRESH flags (standalone + priced + no open flag).
+        const toPost = cleanInvoices.filter(
+          (inv) =>
+            !inv.pricing_pending &&
+            inv.invoice_group_id == null &&
+            !freshFlaggedInv.has(inv.id) &&
+            !(inv.job_id != null && freshFlaggedJob.has(inv.job_id))
+        );
+        const heldBack = cleanInvoices.length - toPost.length;
+
+        if (toPost.length === 0) {
+          await fetchAll();
+          throw new Error(
+            `After refreshing the watchdog, none of the ${cleanInvoices.length} invoice(s) are still clean — review the new flags before posting.`
+          );
+        }
+
+        let posted = 0;
+        const failures: string[] = [];
+        // toPost holds only NON-grouped, still-clean drafts, so each posts singly via
+        // post_invoice — we never call post_invoice_group here.
+        for (const inv of toPost) {
+          try {
+            if (!postKeysRef.current[inv.id]) {
+              postKeysRef.current[inv.id] = generateIdempotencyKey('post_invoice', `${profile.id}:${inv.id}`);
+            }
+            // post_invoice RETURNS void — .throwOnError(), no result to assert.
+            await supabase
+              .rpc('post_invoice', {
+                p_invoice_id: inv.id,
+                p_idempotency_key: postKeysRef.current[inv.id],
+              })
+              .throwOnError();
+            posted += 1;
+          } catch (err: unknown) {
+            if (hasRpcCode(err, RpcErrorCodes.PRICING_INCOMPLETE)) {
+              failures.push(`${inv.invoice_number}: needs pricing first`);
+            } else {
+              failures.push(`${inv.invoice_number}: ${sanitizeError(err)}`);
+            }
+          }
+        }
+        await fetchAll();
+        if (failures.length > 0 || heldBack > 0) {
+          // Honest partial outcome; keep failed keys so a retry reuses them.
+          const heldMsg = heldBack > 0 ? ` ${heldBack} held back (new watchdog flag since load).` : '';
+          throw new Error(
+            `Posted ${posted}/${toPost.length}.${heldMsg}` +
+            (failures.length > 0
+              ? ` Failed: ${failures.slice(0, 3).join(' | ')}${failures.length > 3 ? ' …' : ''}`
+              : '')
+          );
+        }
+        postKeysRef.current = {};
+      },
+      toast,
+      successMessage: `Posted ${cleanInvoices.length} clean invoice(s)`,
+      setLoading: setPosting,
+      sentryTag: 'cockpit_post_all_clean',
+    });
+  };
+
+  if (loading) {
+    return (
+      <div className="p-6 space-y-4">
+        <h1 className="text-2xl font-bold text-nav-dark">Office Cockpit</h1>
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <SkeletonCard key={i} />
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="p-6 space-y-4">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-2">
+        <div>
+          <h1 className="text-2xl font-bold text-nav-dark">Office Cockpit</h1>
+          <p className="text-sm text-gray-500 mt-0.5">
+            Everything stuck or wrong &mdash; one screen, no report-running.
+          </p>
+        </div>
+        <div className="flex items-center gap-3">
+          {lastRefreshed && (
+            <span className="text-xs text-gray-400">
+              Updated {lastRefreshed.toLocaleTimeString()}
+            </span>
+          )}
+          <Button
+            onClick={() => { void fetchAll(); }}
+            variant="secondary"
+            size="sm"
+            className="flex items-center gap-2"
+          >
+            <RefreshCw className="w-4 h-4" />
+            Refresh
+          </Button>
+        </div>
+      </div>
+
+      {/* All-clear banner when nothing is wrong */}
+      {totalExceptions === 0 && (
+        <div className="flex items-center gap-3 bg-emerald-50 border border-emerald-200 rounded-xl px-5 py-4">
+          <CheckCircle className="w-6 h-6 text-crx-green flex-shrink-0" />
+          <div>
+            <p className="font-semibold text-emerald-800">All clear!</p>
+            <p className="text-sm text-emerald-600">No exceptions found across any category.</p>
+          </div>
+        </div>
+      )}
+
+      {/* Tile grid — 3-column on large screens */}
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+
+        {/* (a) Completed-but-unbilled jobs */}
+        <Card>
+          <TileHeader
+            icon={<Tractor className="w-5 h-5 text-orange-500" />}
+            title="Unbilled Jobs"
+            count={data.unbilledJobs.length}
+            countColor="text-orange-600"
+            linkLabel="View all"
+            onLink={() => navigate('/field-invoices/unbilled')}
+          />
+          {data.unbilledJobs.length === 0 ? (
+            <AllClear label="No completed jobs without an invoice." />
+          ) : (
+            <div className="divide-y divide-gray-100">
+              {data.unbilledJobs.slice(0, 6).map((row) => (
+                <button
+                  key={row.id}
+                  onClick={() => navigate(`/jobs/${row.id}`)}
+                  className="w-full flex items-center justify-between py-2 text-sm hover:bg-gray-50 rounded transition-colors text-left"
+                >
+                  <div>
+                    <span className="font-medium text-nav-dark">{row.customer_name}</span>
+                    <span className="ml-2 text-gray-500">#{row.job_number}</span>
+                    {row.total_acres != null && (
+                      <span className="ml-2 text-gray-400">{row.total_acres} ac</span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-1 text-gray-400 flex-shrink-0">
+                    <span>{row.job_date}</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </div>
+                </button>
+              ))}
+              {data.unbilledJobs.length > 6 && (
+                <button
+                  onClick={() => navigate('/field-invoices/unbilled')}
+                  className="w-full text-center py-2 text-sm text-crx-green hover:underline"
+                >
+                  +{data.unbilledJobs.length - 6} more
+                </button>
+              )}
+            </div>
+          )}
+        </Card>
+
+        {/* (b) Field-app invoices ready to post */}
+        <Card>
+          <TileHeader
+            icon={<FileCheck className="w-5 h-5 text-blue-500" />}
+            title="Ready to Post"
+            count={data.postableInvoices.length}
+            countColor="text-blue-600"
+            linkLabel="Field Invoices"
+            onLink={() => navigate('/field-invoices/unposted')}
+          />
+          <p className="text-xs text-gray-400 mb-2">
+            Draft/unposted field-app invoices &mdash; §4 Auto-Invoice auto-populates these.
+          </p>
+          {!data.watchdogLoadOk && data.postableInvoices.length > 0 && (
+            <p className="text-xs text-amber-700 mb-2 flex items-start gap-1">
+              <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+              Watchdog flags couldn&apos;t be loaded &mdash; bulk posting is off (post individually so a flagged invoice can&apos;t slip through). Refresh to retry.
+            </p>
+          )}
+          {data.postableInvoices.length > 0 && (
+            <div className="flex items-center justify-between gap-2 mb-2 pb-2 border-b border-gray-100">
+              <span className="text-xs text-gray-500">
+                {cleanInvoices.length} clean
+                {blockedInvoices.length > 0 && (
+                  <span className="text-amber-600">
+                    {' '}&middot; {blockedInvoices.length} need review
+                  </span>
+                )}
+              </span>
+              <Button
+                size="sm"
+                variant="primary"
+                onClick={() => setPostAllOpen(true)}
+                disabled={cleanInvoices.length === 0 || posting}
+                loading={posting}
+                className="flex items-center gap-1"
+              >
+                <FileCheck className="w-3.5 h-3.5" />
+                Post all clean
+              </Button>
+            </div>
+          )}
+          {data.postableInvoices.length === 0 ? (
+            <AllClear label="No field-app invoices waiting to post." />
+          ) : (
+            <div className="divide-y divide-gray-100">
+              {data.postableInvoices.slice(0, 6).map((row) => (
+                <button
+                  key={row.id}
+                  onClick={() => navigate(`/field-invoices/${row.id}`)}
+                  className="w-full flex items-center justify-between py-2 text-sm hover:bg-gray-50 rounded transition-colors text-left"
+                >
+                  <div>
+                    <span className="font-medium text-nav-dark">{row.customer_name}</span>
+                    <span className="ml-2 text-gray-500">#{row.invoice_number}</span>
+                  </div>
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    <Badge variant={row.status === 'unposted' ? 'info' : 'draft'} size="sm">
+                      {row.status}
+                    </Badge>
+                    <span className="text-gray-600 text-xs">{formatCents(row.total_amount_cents)}</span>
+                    <ArrowRight className="w-3.5 h-3.5 text-gray-400" />
+                  </div>
+                </button>
+              ))}
+              {data.postableInvoices.length > 6 && (
+                <button
+                  onClick={() => navigate('/field-invoices/unposted')}
+                  className="w-full text-center py-2 text-sm text-crx-green hover:underline"
+                >
+                  +{data.postableInvoices.length - 6} more
+                </button>
+              )}
+            </div>
+          )}
+        </Card>
+
+        {/* (c) Active watchdog flags from §2 */}
+        <Card>
+          <TileHeader
+            icon={<AlertTriangle className="w-5 h-5 text-red-500" />}
+            title="Watchdog Flags"
+            count={data.watchdogFlags.length}
+            countColor="text-red-600"
+            linkLabel="Manage"
+            onLink={() => navigate('/watchdog')}
+          />
+          {data.watchdogFlags.length === 0 ? (
+            <AllClear label="No active watchdog flags." />
+          ) : (
+            <div className="divide-y divide-gray-100">
+              {data.watchdogFlags.slice(0, 6).map((flag) => (
+                <button
+                  key={flag.id}
+                  onClick={() => {
+                    if (flag.job_id) navigate(`/jobs/${flag.job_id}`);
+                    else if (flag.invoice_id) navigate(`/field-invoices/${flag.invoice_id}`);
+                    else navigate('/watchdog');
+                  }}
+                  className="w-full flex items-center justify-between py-2 text-sm hover:bg-gray-50 rounded transition-colors text-left"
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    <Badge variant={flag.severity === 'warning' ? 'warning' : 'error'} size="sm">
+                      {flag.flag_type.replace(/_/g, ' ')}
+                    </Badge>
+                    <span className="text-gray-500 truncate">{flag.message}</span>
+                  </div>
+                  <ArrowRight className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
+                </button>
+              ))}
+              {data.watchdogFlags.length > 6 && (
+                <button
+                  onClick={() => navigate('/watchdog')}
+                  className="w-full text-center py-2 text-sm text-crx-green hover:underline"
+                >
+                  +{data.watchdogFlags.length - 6} more
+                </button>
+              )}
+            </div>
+          )}
+        </Card>
+
+        {/* (d) Upcoming scheduled jobs — next 7 days */}
+        <Card>
+          <TileHeader
+            icon={<CalendarClock className="w-5 h-5 text-indigo-500" />}
+            title="Upcoming Jobs (7 days)"
+            count={data.upcomingJobs.length}
+            countColor="text-indigo-600"
+            linkLabel="Schedule"
+            onLink={() => navigate('/jobs')}
+          />
+          <p className="text-xs text-gray-400 mb-2">
+            Scheduled jobs in the next 7 days. Weather risk is checked live in Job Detail
+            (no stored weather-blocked flag exists in the DB).
+          </p>
+          {data.upcomingJobs.length === 0 ? (
+            <AllClear label="No scheduled jobs in the next 7 days." />
+          ) : (
+            <div className="divide-y divide-gray-100">
+              {data.upcomingJobs.slice(0, 6).map((row) => (
+                <button
+                  key={row.id}
+                  onClick={() => navigate(`/jobs/${row.id}`)}
+                  className="w-full flex items-center justify-between py-2 text-sm hover:bg-gray-50 rounded transition-colors text-left"
+                >
+                  <div>
+                    <span className="font-medium text-nav-dark">{row.customer_name}</span>
+                    <span className="ml-2 text-gray-500">#{row.job_number}</span>
+                    {row.total_acres != null && (
+                      <span className="ml-2 text-gray-400">{row.total_acres} ac</span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-1 text-gray-400 flex-shrink-0">
+                    <span>{row.job_date}</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </div>
+                </button>
+              ))}
+              {data.upcomingJobs.length > 6 && (
+                <button
+                  onClick={() => navigate('/jobs')}
+                  className="w-full text-center py-2 text-sm text-crx-green hover:underline"
+                >
+                  +{data.upcomingJobs.length - 6} more
+                </button>
+              )}
+            </div>
+          )}
+        </Card>
+
+        {/* (e) Expiring applicator licenses / buyer certs */}
+        <Card>
+          <TileHeader
+            icon={<ShieldAlert className="w-5 h-5 text-yellow-500" />}
+            title="Expiring Licenses"
+            count={data.expiringLicenses.length}
+            countColor="text-yellow-600"
+            linkLabel="Compliance"
+            onLink={() => navigate('/compliance')}
+          />
+          {data.expiringLicenses.length === 0 ? (
+            <AllClear label="No licenses or certs expiring within 30 days." />
+          ) : (
+            <div className="divide-y divide-gray-100">
+              {data.expiringLicenses.slice(0, 6).map((row) => (
+                <button
+                  key={row.id}
+                  onClick={() => navigate('/compliance')}
+                  className="w-full flex items-center justify-between py-2 text-sm hover:bg-gray-50 rounded transition-colors text-left"
+                >
+                  <div>
+                    <span className="font-medium text-nav-dark">{row.holder_name}</span>
+                    {row.customer_name && (
+                      <span className="ml-2 text-gray-400">{row.customer_name}</span>
+                    )}
+                    <span className="ml-2 text-gray-500">{row.license_type}</span>
+                  </div>
+                  <div className="flex items-center gap-1 flex-shrink-0">
+                    <span className={`text-xs font-medium ${row.expired ? 'text-red-600' : 'text-yellow-600'}`}>
+                      {row.expired ? 'Expired' : 'Expires'} {row.expiry_date}
+                    </span>
+                    <ArrowRight className="w-3.5 h-3.5 text-gray-400" />
+                  </div>
+                </button>
+              ))}
+              {data.expiringLicenses.length > 6 && (
+                <button
+                  onClick={() => navigate('/compliance')}
+                  className="w-full text-center py-2 text-sm text-crx-green hover:underline"
+                >
+                  +{data.expiringLicenses.length - 6} more
+                </button>
+              )}
+            </div>
+          )}
+        </Card>
+
+        {/* (f) Overdue field-app AR */}
+        <Card>
+          <TileHeader
+            icon={<DollarSign className="w-5 h-5 text-red-500" />}
+            title="Overdue Field-App AR"
+            count={data.overdueAR.length}
+            countColor="text-red-600"
+            linkLabel={isAdmin ? 'AR Aging' : undefined}
+            onLink={isAdmin ? () => navigate('/ar-aging') : undefined}
+          />
+          {data.overdueAR.length === 0 ? (
+            <AllClear label="No overdue field-app receivables." />
+          ) : (
+            <div className="divide-y divide-gray-100">
+              {data.overdueAR.slice(0, 6).map((row) => (
+                <button
+                  key={row.id}
+                  onClick={() => navigate(`/field-invoices/${row.id}`)}
+                  className="w-full flex items-center justify-between py-2 text-sm hover:bg-gray-50 rounded transition-colors text-left"
+                >
+                  <div>
+                    <span className="font-medium text-nav-dark">{row.customer_name}</span>
+                    <span className="ml-2 text-gray-500">#{row.invoice_number}</span>
+                  </div>
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    <span className="text-red-600 font-medium text-xs">{formatCents(row.balance_cents)}</span>
+                    <span className="text-gray-400 text-xs">due {row.due_date}</span>
+                    <ArrowRight className="w-3.5 h-3.5 text-gray-400" />
+                  </div>
+                </button>
+              ))}
+              {data.overdueAR.length > 6 && (
+                <button
+                  onClick={() => navigate('/ar-aging')}
+                  className="w-full text-center py-2 text-sm text-crx-green hover:underline"
+                >
+                  +{data.overdueAR.length - 6} more
+                </button>
+              )}
+            </div>
+          )}
+        </Card>
+
+        {/* (g) Inventory shortfalls — deferred follow-on tile */}
+        <Card className="border-dashed border-gray-300 bg-gray-50">
+          <div className="flex items-center gap-2 mb-2">
+            <PackageX className="w-5 h-5 text-gray-400" />
+            <h2 className="font-semibold text-gray-400">Inventory Shortfalls</h2>
+            <Badge variant="default" size="sm">Coming</Badge>
+          </div>
+          <p className="text-sm text-gray-400">
+            Will show products short for upcoming jobs. Deferred: requires joining
+            job_chemicals against live inventory per job &mdash; anti-N+1 query design is
+            the follow-on task.
+          </p>
+        </Card>
+
+      </div>
+
+      {/* §4: Post-all-clean confirmation — in-app modal (no confirm()/alert()). */}
+      <Modal
+        open={postAllOpen}
+        onClose={() => setPostAllOpen(false)}
+        title="Post"
+        accent="all clean"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-secondary">
+            This will <strong>post</strong> the {cleanInvoices.length} field-application
+            invoice(s) below. Posting locks an invoice and records it in the books &mdash;
+            this is the human step in billing.
+          </p>
+
+          {cleanInvoices.length > 0 && (
+            <div className="rounded-lg border border-gray-100 divide-y divide-gray-100 max-h-48 overflow-y-auto">
+              {cleanInvoices.map((inv) => (
+                <div key={inv.id} className="flex items-center justify-between px-3 py-2 text-sm">
+                  <span>
+                    <span className="font-medium text-nav-dark">{inv.customer_name}</span>
+                    <span className="ml-2 text-gray-500">#{inv.invoice_number}</span>
+                  </span>
+                  <span className="text-gray-600">{formatCents(inv.total_amount_cents)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {blockedInvoices.length > 0 && (
+            <div className="rounded-lg bg-amber-50 border border-amber-100 p-3">
+              <p className="text-sm font-medium text-amber-800 mb-1">
+                {blockedInvoices.length} invoice(s) will be skipped (need review):
+              </p>
+              <ul className="text-xs text-amber-700 list-disc list-inside space-y-0.5">
+                {blockedInvoices.slice(0, 6).map((inv) => (
+                  <li key={inv.id}>
+                    #{inv.invoice_number} &mdash; {inv.customer_name}
+                    {inv.pricing_pending ? ' (pricing incomplete)' : ' (open watchdog flag)'}
+                  </li>
+                ))}
+                {blockedInvoices.length > 6 && <li>+{blockedInvoices.length - 6} more</li>}
+              </ul>
+            </div>
+          )}
+
+          <div className="flex items-center justify-end gap-2 pt-2">
+            <Button variant="secondary" onClick={() => setPostAllOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              onClick={() => { void runPostAllClean(); }}
+              disabled={cleanInvoices.length === 0}
+            >
+              Post {cleanInvoices.length} invoice(s)
+            </Button>
+          </div>
+        </div>
+      </Modal>
+    </div>
+  );
+}

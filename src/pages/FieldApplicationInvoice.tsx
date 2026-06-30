@@ -20,21 +20,37 @@ import { formatCents as fmt } from '../lib/money';
 import { billableAcres, acreDivergence, appliedMatchesSystem } from '../lib/fieldGeometry';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import ConfirmModal from '../components/ui/ConfirmModal';
+import WatchdogFlagBanner from '../components/watchdog/WatchdogFlagBanner';
 import Modal from '../components/ui/Modal';
 import SelectLocationsModal from '../components/field-app/SelectLocationsModal';
 import FieldAppChemicalEntry, { type ChemicalLine } from '../components/field-app/FieldAppChemicalEntry';
+import {
+  LABEL_RATE_GUARDRAIL_MODE_KEY,
+  DEFAULT_GUARDRAIL_MODE,
+  parseGuardrailMode,
+  type GuardrailMode,
+} from '../lib/labelGuardrailSetting';
+import { compareToMaxRate, phiHarvestWarning } from '../lib/labelGuardrails';
+import { computeSeason } from '../utils/season';
 import CustomerSharesTable from '../components/field-app/CustomerSharesTable';
 import type { CustomerSharesBasis } from '../components/field-app/customerSplit';
 import ApplicationServicePicker from '../components/field-app/ApplicationServicePicker';
 import { downloadInvoicePdf, buildInvoicePdfDataFromRow, generateInvoicePdf } from '../lib/invoicePdf';
 import { sendEmail, pdfToBase64, buildInvoiceEmailPayload } from '../lib/emailService';
 import {
-  parsePostNotificationTemplate,
-  renderPostNotification,
-  buildPostNotificationEmailPayload,
   countSentPostNotifications,
   describePostNotificationSend,
 } from '../lib/postNotification';
+// §6: "Your Field Was Sprayed" rich proof — assembled from get_job_proof_data and
+// sent through the SAME record/confirm post-notification RPCs (office one-tap, not auto).
+import {
+  buildProofDraft,
+  buildProofEmailPayload,
+  proofSubject,
+  renderProofText,
+  type JobProofData,
+  type ProofDraft,
+} from '../lib/proofNotification';
 import { runCriticalAction } from '../lib/criticalAction';
 import {
   carryoverRowsFromRecords,
@@ -216,6 +232,20 @@ export default function FieldApplicationInvoice() {
   const [chemicals, setChemicals] = useState<ChemicalLine[]>([]);
   const [shares, setShares] = useState<CustomerShareResult[]>([]);
 
+  // §5 (Label-Rate Guardrails): the configurable policy (warn vs block). WARN is the
+  // shipped/empty default and NEVER blocks the save. Loaded from app_settings once.
+  const [guardrailMode, setGuardrailMode] = useState<GuardrailMode>(DEFAULT_GUARDRAIL_MODE);
+  // §5 (Codex r6): TRUE once the mode read resolves. The block-mode save gate FAILS CLOSED
+  // until then — a click before the read returns must not slip through as warn and skip a
+  // required override.
+  const [guardrailModeLoaded, setGuardrailModeLoaded] = useState(false);
+  // §5: earliest planned harvest date across the selected fields (field_crop_history),
+  // used for the PHI-vs-harvest warning. Null when none of the fields have a harvest date.
+  const [earliestHarvestDate, setEarliestHarvestDate] = useState<string | null>(null);
+  // §5: block-mode admin-override modal state + the captured reason.
+  const [showOverrideModal, setShowOverrideModal] = useState(false);
+  const [overrideReason, setOverrideReason] = useState('');
+
   const [windDirection, setWindDirection] = useState('');
   const [temperature, setTemperature] = useState('');
   const [applicator, setApplicator] = useState('');
@@ -256,10 +286,16 @@ export default function FieldApplicationInvoice() {
   const jobNotifLoadReqRef = useRef<string | null>(null);
   // #41: post-application notice send action state (mirrors JobDetail's).
   const [sendingPostNotice, setSendingPostNotice] = useState(false);
-  const [showPostNoticeConfirm, setShowPostNoticeConfirm] = useState(false);
   const postNoticeIdem = useIdempotencyKey('record_job_post_notifications', profile?.id || '');
   const alreadySentPostCount = countSentPostNotifications(jobNotifications);
   const postSendCopy = describePostNotificationSend(alreadySentPostCount);
+  // §6: the office-reviewable "your field was sprayed" PROOF draft. Built on demand from
+  // get_job_proof_data when the office opens the preview; null until then. The same draft
+  // is reused for the per-recipient email body when they approve the one-tap send, so the
+  // proof they reviewed is exactly what goes out.
+  const [proofDraft, setProofDraft] = useState<ProofDraft | null>(null);
+  const [showProofPreview, setShowProofPreview] = useState(false);
+  const [loadingProof, setLoadingProof] = useState(false);
   // #24 (money-lens LOW#2): surface a fetch error instead of a silent empty list, so
   // a broken query reads as an error rather than a misleading "No notifications yet".
   const [notificationsError, setNotificationsError] = useState<string | null>(null);
@@ -346,6 +382,76 @@ export default function FieldApplicationInvoice() {
   useEffect(() => {
     if (isNew && profile?.id) setConsultantId((prev) => prev || profile.id);
   }, [isNew, profile?.id]);
+
+  // §5: load the label-rate guardrail policy once. A failed/absent read falls back to
+  // the safe default ('warn') — we never silently switch to 'block'.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const { data } = await supabase
+        .from('app_settings')
+        .select('setting_value')
+        .eq('setting_key', LABEL_RATE_GUARDRAIL_MODE_KEY)
+        .maybeSingle();
+      if (!cancelled) {
+        setGuardrailMode(parseGuardrailMode((data as { setting_value?: string } | null)?.setting_value ?? null));
+        setGuardrailModeLoaded(true);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  // §5: load the earliest planned harvest date across the selected fields from
+  // field_crop_history (for the PHI-vs-harvest warning). SCOPED to the application's SEASON
+  // (Codex P2 fix) — field_crop_history holds one row per field/season, so without the
+  // season filter an OLD prior-season harvest would falsely trip the PHI window. Re-runs
+  // when the field set OR the application date changes. A field with no harvest row in the
+  // season contributes nothing (graceful — no warning).
+  const locationFieldKey = locations.map((l) => l.field_id).sort().join(',');
+  const guardrailAppDate = jobApplicationDate ?? transactionDate;
+  useEffect(() => {
+    let cancelled = false;
+    const fieldIds = locationFieldKey ? locationFieldKey.split(',') : [];
+    if (fieldIds.length === 0) { setEarliestHarvestDate(null); return; }
+    // Parse the YYYY-MM-DD as a LOCAL date (NOT UTC) so a season-boundary date like
+    // Oct 1 doesn't shift into the prior season's evening before computeSeason reads the
+    // month. (Codex r2 P2.)
+    const appSeason = computeSeason(guardrailAppDate ? new Date(guardrailAppDate + 'T00:00:00') : new Date());
+    (async () => {
+      const { data, error } = await supabase
+        .from('field_crop_history')
+        .select('harvest_date')
+        .in('field_id', fieldIds)
+        .eq('season', appSeason)
+        .not('harvest_date', 'is', null)
+        .order('harvest_date', { ascending: true })
+        .limit(1);
+      if (cancelled) return;
+      if (error) { setEarliestHarvestDate(null); return; }
+      const first = (data as Array<{ harvest_date: string | null }> | null)?.[0]?.harvest_date ?? null;
+      setEarliestHarvestDate(first);
+    })();
+    return () => { cancelled = true; };
+  }, [locationFieldKey, guardrailAppDate]);
+
+  // §5 (Codex P2 fix): the aggregate guardrail state is computed HERE in the parent from
+  // `chemicals` — NOT inside the Chemicals-tab component — so the BLOCK-mode save gate is
+  // correct even when the Chemicals tab was never opened (e.g. saving header/location edits
+  // on a reopened invoice). 'cannot_compare' / 'no_label_max' never count toward the gate.
+  const guardrailState = useMemo(() => {
+    const overRateProducts: string[] = [];
+    let phiHarvestWarnCount = 0;
+    const appDate = jobApplicationDate ?? transactionDate;
+    for (const c of chemicals) {
+      if (c.product_id == null) continue;
+      const cmp = compareToMaxRate(c.rate_per_acre, c.rate_unit, c.max_label_rate ?? null, c.max_label_rate_unit ?? null);
+      if (cmp.status === 'over') overRateProducts.push(c.product_name || 'Unnamed product');
+      if (phiHarvestWarning(c.phi_days ?? null, earliestHarvestDate, appDate).status === 'inside_window') {
+        phiHarvestWarnCount += 1;
+      }
+    }
+    return { overRateCount: overRateProducts.length, overRateProducts, phiHarvestWarnCount };
+  }, [chemicals, earliestHarvestDate, jobApplicationDate, transactionDate]);
 
   // Resolve an applicator id -> name for the carry-over panel (live name map).
   const applicatorNames = useMemo(
@@ -662,26 +768,58 @@ export default function FieldApplicationInvoice() {
       .order('sort_order');
 
     if (items) {
+      // §5 (Codex P2): invoice_items does NOT carry label data, so hydrate the per-line
+      // label fields (max_label_rate / unit / rei / phi) from products for the lines that
+      // have a product_id. Without this, a REOPENED over-label invoice would read as
+      // 'no_label_max' and block mode would not require an override. A failed/empty fetch
+      // degrades gracefully (no label data => the line shows "no label max on file").
+      const productIds = Array.from(
+        new Set((items as Array<Record<string, unknown>>).map((it) => it.product_id as string | null).filter((x): x is string => !!x)),
+      );
+      const labelByProduct = new Map<string, { max_label_rate: number | null; max_label_rate_unit: string | null; rei_hours: number | null; phi_days: number | null }>();
+      if (productIds.length > 0) {
+        const { data: prodRows } = await supabase
+          .from('products')
+          .select('id, max_label_rate, max_label_rate_unit, rei_hours, phi_days')
+          .in('id', productIds);
+        for (const p of (prodRows as Array<{ id: string; max_label_rate: number | null; max_label_rate_unit: string | null; rei_hours: number | null; phi_days: number | null }> | null) ?? []) {
+          labelByProduct.set(p.id, {
+            max_label_rate: p.max_label_rate,
+            max_label_rate_unit: p.max_label_rate_unit,
+            rei_hours: p.rei_hours,
+            phi_days: p.phi_days,
+          });
+        }
+      }
       setChemicals(
-        (items as Array<Record<string, unknown>>).map((it, idx) => ({
-          id: (it.id as string) || `chem_${idx}`,
-          product_id: it.product_id as string | null,
-          product_name: (it.description as string) || '',
-          rate_per_acre: it.rate_per_acre as number | null,
-          rate_unit: (it.rate_unit as string) || 'oz',
-          quantity: (it.quantity as number) || 0,
-          unit: (it.unit_size as string) || 'oz',
-          unit_price_cents: (it.unit_price_cents as number) || 0,
-          price_unit: (it.unit_size as string) || 'oz',
-          extended_cents: (it.extended_cents as number) || 0,
-          unit_cost_cents: (it.cost_cents as number) || 0,
-          sort_order: (it.sort_order as number) || idx,
-          // #25: per-line Warehouse / Vendor and the product form (for the gl/lb display).
-          warehouse: (it.warehouse as string | null) ?? null,
-          vendor: (it.vendor as string | null) ?? null,
-          product_form: (it.product_form as 'liquid' | 'dry' | null) ?? null,
-          epa_registration: (it.epa_registration as string | null) || undefined,
-        }))
+        (items as Array<Record<string, unknown>>).map((it, idx) => {
+          const pid = it.product_id as string | null;
+          const label = pid ? (labelByProduct.get(pid) ?? null) : null;
+          return {
+            id: (it.id as string) || `chem_${idx}`,
+            product_id: it.product_id as string | null,
+            product_name: (it.description as string) || '',
+            rate_per_acre: it.rate_per_acre as number | null,
+            rate_unit: (it.rate_unit as string) || 'oz',
+            quantity: (it.quantity as number) || 0,
+            unit: (it.unit_size as string) || 'oz',
+            unit_price_cents: (it.unit_price_cents as number) || 0,
+            price_unit: (it.unit_size as string) || 'oz',
+            extended_cents: (it.extended_cents as number) || 0,
+            unit_cost_cents: (it.cost_cents as number) || 0,
+            sort_order: (it.sort_order as number) || idx,
+            // #25: per-line Warehouse / Vendor and the product form (for the gl/lb display).
+            warehouse: (it.warehouse as string | null) ?? null,
+            vendor: (it.vendor as string | null) ?? null,
+            product_form: (it.product_form as 'liquid' | 'dry' | null) ?? null,
+            epa_registration: (it.epa_registration as string | null) || undefined,
+            // §5: hydrated label data (null when the product has none / fetch failed).
+            max_label_rate: label?.max_label_rate ?? null,
+            max_label_rate_unit: label?.max_label_rate_unit ?? null,
+            rei_hours: label?.rei_hours ?? null,
+            phi_days: label?.phi_days ?? null,
+          };
+        })
       );
     }
 
@@ -922,7 +1060,82 @@ export default function FieldApplicationInvoice() {
     }
   };
 
+  // §5: the save gate. In WARN mode (default) this is a straight pass-through — an
+  // over-label rate is flagged in the UI but NEVER blocks the save. In BLOCK mode (owner
+  // opt-in), an over-label line opens the admin-override modal (admins only) so the save
+  // proceeds only with a LOGGED reason; a non-admin is told to fix the rate (still no
+  // silent data corruption). 'cannot_compare' / 'no_label_max' never gate a save.
   const handleSave = async () => {
+    if (!profile) return;
+    // §5 (Codex r6): if any line is over-label but the guardrail mode hasn't loaded yet,
+    // FAIL CLOSED — don't let a pending read default to warn and skip a block-mode override.
+    if (guardrailState.overRateCount > 0 && !guardrailModeLoaded) {
+      toast('error', 'Checking the label-rate policy — try Save again in a moment.');
+      return;
+    }
+    if (guardrailMode === 'block' && guardrailState.overRateCount > 0) {
+      if (!isAdmin) {
+        toast('error',
+          `${guardrailState.overRateCount} line(s) exceed the product's max label rate ` +
+          `(${guardrailState.overRateProducts.join(', ')}). An admin must override to save — ` +
+          `lower the rate or ask an admin.`,
+        );
+        return;
+      }
+      // Admin: require a logged reason before saving an over-label mix.
+      setOverrideReason('');
+      setShowOverrideModal(true);
+      return;
+    }
+    await performSave();
+  };
+
+  // §5: admin confirms the block-mode override. The override reason is carried INTO the
+  // save and the audit row is written only AFTER the save SUCCEEDS, linked to the real
+  // saved invoice id (Codex follow-up P2). Writing it up front orphaned a 'they overrode'
+  // audit row whenever the save then failed (validation / RPC error) and was retried.
+  const handleOverrideConfirm = async () => {
+    if (!profile) return;
+    const reason = overrideReason.trim();
+    if (reason === '') {
+      toast('error', 'Enter a reason for the over-label-rate override.');
+      return;
+    }
+    setShowOverrideModal(false);
+    setOverrideReason('');
+    await performSave(reason);
+  };
+
+  // §5: after a SUCCESSFUL save, write the override audit row linked to the real saved id.
+  //
+  // DELIBERATE TRADE-OFF (owner-directed; do not "fix" to atomic without that direction):
+  // the audit is written AFTER the save so a FAILED/retried save never orphans a phantom
+  // "they overrode" row (the bug this replaced). The unavoidable flip side is that if the
+  // save succeeds but THIS audit insert then fails (RLS/network), the invoice is already
+  // committed and cannot be un-committed client-side. We do NOT silently swallow it: we
+  // raise a LOUD toast + an error-level Sentry so the gap is visible and an admin can
+  // re-record it. Making this truly atomic would require moving the audit INTO the frozen
+  // save_field_app_invoice RPC (a server migration) — out of scope for this UI fix.
+  const writeOverrideAudit = async (reason: string, savedInvoiceId: string | null) => {
+    if (!profile) return;
+    const description =
+      `Admin override of over-label-rate guardrail (block mode) on field-app invoice ` +
+      `${invoiceNumber || savedInvoiceId || 'new'}. Over-rate product(s): ` +
+      `${guardrailState.overRateProducts.join(', ')}. Reason: ${reason}`;
+    const logResult = await supabase.from('activity_feed').insert({
+      event_type: 'label_rate_override',
+      description,
+      performed_by: profile.id,
+      related_entity_type: 'invoice',
+      related_entity_id: savedInvoiceId,
+    });
+    if (logResult.error) {
+      Sentry.captureException(logResult.error, { level: 'error', extra: { context: 'label_rate_override_log', invoice_id: savedInvoiceId } });
+      toast('error', `The invoice saved, but the over-label-rate override reason could NOT be recorded — tell an admin: ${sanitizeError(logResult.error)}`);
+    }
+  };
+
+  const performSave = async (overrideReasonForAudit?: string) => {
     if (!profile) return;
     // [B1.1] Never bill 0 / blank applied acres. The server rejects it
     // (ZERO_APPLIED_ACRES); block here too with a clear message so the user fixes
@@ -991,6 +1204,13 @@ export default function FieldApplicationInvoice() {
       saveIdem.resetKey();
       const ids = result.invoice_ids || [];
       const groupNote = result.invoice_group_id ? ` (group of ${ids.length})` : '';
+
+      // §5: the save RPC committed the invoice atomically — NOW (and only now) write the
+      // block-mode override audit, linked to the real saved id. If the save had failed, we
+      // never reach here, so no orphan 'they overrode' row is left behind.
+      if (overrideReasonForAudit) {
+        await writeOverrideAudit(overrideReasonForAudit, ids[0] ?? (id || null));
+      }
 
       // Wave B.1 / P2-1 (audit B-4 + B-5 + B-8): persist Applied Info on
       // every invoice in the group. Always runs when there is at least one
@@ -1493,14 +1713,55 @@ export default function FieldApplicationInvoice() {
     });
   };
 
-  // #41: Send an after-application post-notification to the source job's resolved
-  // share customer(s), RIGHT FROM THE INVOICE (criterion #1/#5). Mirrors JobDetail's
-  // handleSendPostNotification: RECORD (record_job_post_notifications, resolves
-  // recipients off the PERSISTED job) -> SEND (gated edge fn, owner-editable template)
-  // -> CONFIRM (confirm_job_notification_sent, reused from #40). Same fail-closed
-  // gating on a successfully-loaded log + same re-send safety. The rows it writes are
-  // the SAME job_notifications rows the JOB reads — so a post sent here shows on the
-  // job and vice-versa (continuous shared history). Real outbound email is GATED.
+  // §6: load the rich "your field was sprayed" PROOF draft from the source job. Reads
+  // get_job_proof_data (read-only, admin/sales-gated) and assembles the office-reviewable
+  // draft (fields+acres+boundary map, products, weather, applicator, REI/PHI). Returns the
+  // draft so the SEND path can reuse the exact draft the office reviewed. Throws on failure
+  // so a transient error never silently falls back to the generic notice.
+  const loadProofDraft = useCallback(async (): Promise<ProofDraft | null> => {
+    if (!jobId) return null;
+    const { data, error } = await supabase.rpc('get_job_proof_data', { p_job_id: jobId });
+    if (error) throw error;
+    const proof = assertRpcResult<JobProofData>(data, 'get_job_proof_data');
+    const draft = buildProofDraft(proof);
+    setProofDraft(draft);
+    return draft;
+  }, [jobId]);
+
+  // §6: open the proof preview (office reviews the rich draft before approving the send).
+  const handleOpenProofPreview = async () => {
+    if (!jobId) {
+      toast('error', 'This invoice has no source job to build a proof from.');
+      return;
+    }
+    setLoadingProof(true);
+    try {
+      await loadProofDraft();
+      setShowProofPreview(true);
+    } catch (err) {
+      const msg = hasRpcCode(err, RpcErrorCodes.INSUFFICIENT_ROLE)
+        ? 'Only admin or sales can preview the proof.'
+        : err instanceof Error ? err.message : 'Could not build the proof preview.';
+      toast('error', msg);
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'invoice_proof_preview', jobId } });
+    } finally {
+      setLoadingProof(false);
+    }
+  };
+
+  // §6: Send the rich "your field was sprayed" PROOF to the source job's resolved share
+  // customer(s), RIGHT FROM THE INVOICE — OFFICE-APPROVED ONE-TAP (never auto-send; the
+  // office reviews the proof, then taps Send). Builds ON the parity post-notification
+  // infra unchanged:
+  //   RECORD  -> record_job_post_notifications (resolves recipients off the PERSISTED job,
+  //              logs one row each, returns a DETERMINISTIC per-recipient idempotency key)
+  //   SEND    -> the rich proof body (buildProofEmailPayload), via the gated send-email edge
+  //              fn (email_type='post_application_notice' — PREPARED, deploy GATED for Mason)
+  //   CONFIRM -> confirm_job_notification_sent (flips a row failed->sent ONLY after the
+  //              email actually goes out; reused from #40)
+  // Per-recipient idempotency (the RPC's email_idempotency_key, NOT Date.now()) means a
+  // retry never double-sends; a recipient with no email on file is logged as failed, never
+  // dropped. Same fail-closed gating on a successfully-loaded log + same re-send safety.
   const handleSendPostNotification = async () => {
     if (!jobId || !profile) {
       toast('error', 'This invoice has no source job to notify.');
@@ -1521,36 +1782,31 @@ export default function FieldApplicationInvoice() {
     setSendingPostNotice(true);
     const key = postNoticeIdem.getKey();
     try {
-      // Resolve the editable template (criterion #4). ABORT on a failed read so a
-      // transient error never silently emails the hard-coded default wording.
-      const { data: tplRow, error: tplErr } = await supabase
-        .from('app_settings')
-        .select('setting_value')
-        .eq('setting_key', 'post_application_notice_template')
-        .maybeSingle();
-      if (tplErr) throw new Error(`Could not load the post-notification message: ${tplErr.message}`);
-      const template = parsePostNotificationTemplate((tplRow as { setting_value?: string } | null)?.setting_value ?? null);
+      // §6: build the rich "your field was sprayed" PROOF draft from the source job.
+      // Reuse the draft the office just previewed if present, else build it now. ABORT
+      // on a failed build so a transient error never sends an empty/wrong proof.
+      const draft = proofDraft ?? (await loadProofDraft());
+      if (!draft) throw new Error('Could not build the proof for this job.');
 
-      // Both the job number and the APPLICATION date come from the source job — the
-      // notice tells the customer when the application happened, NOT the billing date.
-      // Fall back to the invoice's transaction date only if the job has no job_date
-      // (it always does in practice). Per-recipient farm names re-render the body below.
-      const noticeJobDate = jobApplicationDate ?? transactionDate;
+      // The application date + job number live on the draft (from the source job — the
+      // proof tells the customer when the application happened, not the billing date).
       const primaryFarm = pdfSnapshot?.customer_name
         || shares.find((s) => s.is_primary)?.customer_name
         || shares[0]?.customer_name
         || '';
-      const recorded = renderPostNotification(template, {
-        customer: primaryFarm,
-        jobNumber: jobNumber ?? '',
-        jobDate: noticeJobDate,
-      });
+      // The recorded log row carries only a NEUTRAL subject + a placeholder body (no
+      // per-field detail) so a split-billed customer's pre-confirm log row can NEVER hold
+      // another customer's field names. Each recipient's row is re-stamped on confirm with
+      // their OWN scoped proof text (the exact text they were emailed). (Codex P1 leak.)
+      const recordedSubject = proofSubject(draft);
+      const recordedBody = 'Proof of application — per-recipient details are recorded when each notice is sent.';
 
-      // 1) Record the per-recipient log (admin/sales only; resolves recipients).
+      // 1) Record the per-recipient log (admin/sales only; resolves recipients off the
+      // PERSISTED job; returns a DETERMINISTIC per-recipient idempotency key).
       const rpcRes = await supabase.rpc('record_job_post_notifications', {
         p_job_id: jobId,
-        p_subject: recorded.subject,
-        p_message: recorded.body,
+        p_subject: recordedSubject,
+        p_message: recordedBody,
         p_performed_by: profile.id,
         p_idempotency_key: key,
       });
@@ -1569,31 +1825,48 @@ export default function FieldApplicationInvoice() {
         }>;
       }>(rpcRes.data, 'record_job_post_notifications');
 
-      // 2) Send the actual email to each recipient WITH an email; confirm -> 'sent'
-      // only on success.
+      // 2) Send the rich proof email to each recipient WITH an email; confirm -> 'sent'
+      // only on success. The per-recipient deterministic key (email_idempotency_key) is
+      // REQUIRED — buildProofEmailPayload refuses to invent a timestamp key, so a missing
+      // key means "do not send" rather than a double-send risk.
+      //
+      // CROSS-CUSTOMER LEAK FIX (Codex P1): a split-billing job has different customers on
+      // different fields, so each recipient's proof MUST contain ONLY their own field(s) —
+      // never the whole-job `draft`. We re-fetch get_job_proof_data SCOPED to this
+      // recipient's customer_id and build a per-recipient draft. The whole-job `draft` is
+      // ONLY for the office preview; it never reaches a customer email.
       let emailedOk = 0;
       let emailErr = 0;
       for (const r of result.recipients) {
         if (!r.has_email || !r.email) continue;
+        if (!r.email_idempotency_key) {
+          // Defensive: a recipient WITH an email should always carry a key. If not, skip
+          // (logged 'failed') rather than send with a non-deterministic key.
+          emailErr += 1;
+          Sentry.captureMessage('post-notification recipient missing email_idempotency_key', { level: 'warning', extra: { jobId, customerId: r.customer_id } });
+          continue;
+        }
         try {
-          const rendered = renderPostNotification(template, {
-            customer: r.farm_name ?? primaryFarm,
-            jobNumber: jobNumber ?? '',
-            jobDate: noticeJobDate,
-          });
-          const payload = buildPostNotificationEmailPayload({
+          const recipientName = r.farm_name ?? primaryFarm ?? 'Customer';
+          // Per-recipient SCOPED proof — only this customer's fields/acres/maps.
+          const scopedRes = await supabase.rpc('get_job_proof_data', { p_job_id: jobId, p_customer_id: r.customer_id });
+          if (scopedRes.error) throw scopedRes.error;
+          const scopedProof = assertRpcResult<JobProofData>(scopedRes.data, 'get_job_proof_data');
+          const recipientDraft = buildProofDraft(scopedProof);
+          const recipientText = renderProofText({ customerName: recipientName, draft: recipientDraft });
+          const payload = buildProofEmailPayload({
             customerEmail: r.email,
             customerId: r.customer_id,
+            customerName: recipientName,
             jobId,
-            subject: rendered.subject,
-            body: rendered.body,
+            draft: recipientDraft,
+            emailIdempotencyKey: r.email_idempotency_key,
           });
-          if (r.email_idempotency_key) payload.idempotency_key = r.email_idempotency_key;
           await sendEmail(payload);
           const confirmRes = await supabase.rpc('confirm_job_notification_sent', {
             p_notification_id: r.notification_id,
-            p_subject: rendered.subject,
-            p_message: rendered.body,
+            p_subject: proofSubject(recipientDraft),
+            p_message: recipientText,
             p_performed_by: profile.id,
           });
           if (confirmRes.error) throw confirmRes.error;
@@ -1616,10 +1889,11 @@ export default function FieldApplicationInvoice() {
         toast('error', `No email sent — ${noEmail} billed customer(s) have no email on file. Add an email and try again.`);
       } else {
         postNoticeIdem.resetKey();
+        setShowProofPreview(false);
         if (noEmail > 0) {
-          toast('success', `Post-notification sent to ${emailedOk} customer(s). ${noEmail} had no email on file (logged as failed).`);
+          toast('success', `Proof sent to ${emailedOk} customer(s). ${noEmail} had no email on file (logged as failed).`);
         } else {
-          toast('success', `Post-notification sent to ${emailedOk} customer(s).`);
+          toast('success', `Proof sent to ${emailedOk} customer(s).`);
         }
       }
       await loadJobNotifications();
@@ -1761,21 +2035,22 @@ export default function FieldApplicationInvoice() {
               Email
             </Button>
           )}
-          {/* #41: Send Post-Notification — an AFTER-application courtesy notice to the
-              job's billed customer(s), RIGHT FROM THE INVOICE. Only when this invoice
-              came from a job that has been applied (completed / invoiced). Re-send
-              safety: relabels + warns once a 'post' notice is already sent. Fail-closed
-              until the shared log has loaded so it never bypasses the re-send warning. */}
+          {/* §6: "Your Field Was Sprayed" PROOF — opens an office-reviewable preview of the
+              rich proof (fields+acres+boundary map, products, weather, applicator, REI/PHI),
+              from which the office one-taps Send. NOT a silent auto-send. Only when this
+              invoice came from a job that has been applied (completed / invoiced). Re-send
+              safety: relabels + warns once a 'post' notice is already sent. Fail-closed until
+              the shared log has loaded so it never bypasses the re-send warning. */}
           {!isNew && jobId && (jobStatus === 'completed' || jobStatus === 'invoiced') && (
             <Button
               variant={postSendCopy.isResend ? 'secondary' : 'primary'}
               size="sm"
               icon={<Bell className="w-4 h-4" />}
-              onClick={() => setShowPostNoticeConfirm(true)}
-              loading={sendingPostNotice}
-              disabled={sendingPostNotice || loadingJobNotifications || !jobNotificationsLoaded}
+              onClick={handleOpenProofPreview}
+              loading={loadingProof || sendingPostNotice}
+              disabled={loadingProof || sendingPostNotice || loadingJobNotifications || !jobNotificationsLoaded}
             >
-              {postSendCopy.buttonLabel}
+              {postSendCopy.isResend ? 'Re-send Proof' : 'Send Proof'}
             </Button>
           )}
           {locations.length > 0 && (
@@ -1794,6 +2069,16 @@ export default function FieldApplicationInvoice() {
           )}
         </div>
       </div>
+
+      {/* §2 Watchdog — inline advisory flags for this invoice (double-bill) and its
+          source job (acre/rate/REI). Auto-refreshes the source job's flags on open. */}
+      {!isNew && id && (
+        <WatchdogFlagBanner
+          invoiceId={id}
+          jobId={jobId ?? undefined}
+          autoRefresh
+        />
+      )}
 
       {/* #24: posted-lock banner — a committed invoice is read-only (the posted
           records warning from #23). Editing inputs are also disabled via canEdit.
@@ -2117,6 +2402,9 @@ export default function FieldApplicationInvoice() {
               totalAppliedAcres={totalAppliedAcres}
               primaryCustomerTier={primaryCustomerTier}
               readOnly={!canEdit}
+              guardrailMode={guardrailMode}
+              earliestHarvestDate={earliestHarvestDate}
+              applicationDate={jobApplicationDate ?? transactionDate}
             />
           </div>
         )}
@@ -2386,19 +2674,102 @@ export default function FieldApplicationInvoice() {
         variant="danger"
       />
 
-      {/* #41: Send Post-Notification Confirm (customer-facing — explicit confirm). On a
-          RE-SEND (a 'post' notice already sent) the title/copy/label switch to an
-          explicit "notify a SECOND time" warning. */}
-      <ConfirmModal
-        open={showPostNoticeConfirm}
-        onClose={() => setShowPostNoticeConfirm(false)}
-        onConfirm={() => { setShowPostNoticeConfirm(false); handleSendPostNotification(); }}
-        title={postSendCopy.confirmTitle}
-        message={postSendCopy.confirmMessage}
-        confirmLabel={postSendCopy.confirmLabel}
-        variant="warning"
-        loading={sendingPostNotice}
-      />
+      {/* §6: "Your Field Was Sprayed" PROOF preview — the office REVIEWS the rich proof
+          (field/acres/boundary map, products, weather, applicator, REI/PHI) and one-taps
+          Send. NOTHING auto-sends. On a RE-SEND (a 'post' notice already sent) the warning
+          copy switches to an explicit "notify a SECOND time" caution. */}
+      <Modal
+        open={showProofPreview}
+        onClose={() => setShowProofPreview(false)}
+        title={postSendCopy.isResend ? 'Re-send "Your Field Was Sprayed" Proof' : '"Your Field Was Sprayed" Proof'}
+        size="large"
+      >
+        {proofDraft ? (
+          <div className="space-y-4">
+            {/* Re-send warning (explicit second-notify caution). */}
+            {postSendCopy.isResend && (
+              <div className="flex items-start gap-2 px-3 py-2 bg-amber-50 border-l-4 border-amber-400 rounded text-sm text-amber-800">
+                <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+                <span>{postSendCopy.confirmMessage}</span>
+              </div>
+            )}
+
+            {/* Summary line. */}
+            <div className="text-sm text-gray-700 space-y-1">
+              <div><span className="font-medium">Job:</span> {proofDraft.jobNumber}{proofDraft.applicationDate ? ` · applied ${proofDraft.applicationDate}` : ''}</div>
+              {proofDraft.applicator && <div><span className="font-medium">Applicator:</span> {proofDraft.applicator}</div>}
+              {proofDraft.totalAcres !== '—' && <div><span className="font-medium">Total acres:</span> {proofDraft.totalAcres}</div>}
+              {proofDraft.weatherSummary && <div><span className="font-medium">Weather at application:</span> {proofDraft.weatherSummary}</div>}
+            </div>
+
+            {/* Fields with their boundary-map snapshots. */}
+            {proofDraft.fields.length > 0 && (
+              <div>
+                <h4 className="text-sm font-semibold text-gray-900 mb-2 flex items-center gap-1.5"><MapPin className="w-4 h-4 text-crx-green" /> Fields treated</h4>
+                <div className="space-y-3">
+                  {proofDraft.fields.map((f) => (
+                    <div key={`${f.field_name}-${f.acres}`} className="text-sm text-gray-700">
+                      <div className="font-medium">{f.field_name}{f.location ? ` — ${f.location}` : ''} ({f.acres})</div>
+                      {f.mapImageUrl && (
+                        <a href={f.mapLink ?? f.mapImageUrl} target="_blank" rel="noopener noreferrer">
+                          <img
+                            src={f.mapImageUrl}
+                            alt={`Map of ${f.field_name}`}
+                            width={480}
+                            loading="lazy"
+                            className="mt-1 max-w-full rounded border border-gray-200"
+                          />
+                        </a>
+                      )}
+                      {!f.mapImageUrl && (
+                        <div className="text-xs text-gray-400 mt-0.5">No mapped boundary on file for this field &mdash; map omitted.</div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Products with REI/PHI safe-timing. */}
+            {proofDraft.products.length > 0 && (
+              <div>
+                <h4 className="text-sm font-semibold text-gray-900 mb-2 flex items-center gap-1.5"><FlaskConical className="w-4 h-4 text-crx-green" /> Products applied</h4>
+                <ul className="space-y-1.5">
+                  {proofDraft.products.map((p) => (
+                    <li key={p.label} className="text-sm text-gray-700">
+                      <span className="font-medium">{p.label}</span>
+                      {p.signalWord && <span className="text-amber-700"> ({p.signalWord})</span>}
+                      {p.safeTiming && <div className="text-xs text-gray-500">{p.safeTiming}</div>}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            <div className="text-xs text-gray-500 border-t pt-3">
+              This proof is emailed to the job&apos;s billed customer(s). Customers with no email on file are
+              logged but not emailed. Each send is recorded in the notification log below.
+            </div>
+
+            <div className="flex justify-end gap-2 pt-1">
+              <Button variant="secondary" size="sm" onClick={() => setShowProofPreview(false)} disabled={sendingPostNotice}>
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                icon={<Send className="w-4 h-4" />}
+                onClick={handleSendPostNotification}
+                loading={sendingPostNotice}
+                disabled={sendingPostNotice}
+              >
+                {postSendCopy.isResend ? 'Re-send Proof' : 'Send Proof'}
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div className="py-8 text-center text-sm text-gray-500">Building the proof&hellip;</div>
+        )}
+      </Modal>
 
       {/* #28: Post confirm — posting commits the bill to its month-end batch. */}
       <ConfirmModal
@@ -2487,6 +2858,46 @@ export default function FieldApplicationInvoice() {
         variant="info"
         loading={transferringToScheduling}
       />
+
+      {/* §5: block-mode over-label-rate admin override — a required reason (button disabled
+          until non-empty). Only reached in 'block' mode for an admin; logs the reason to
+          the activity feed then saves. This is the escape hatch — never a hard wall. */}
+      <Modal open={showOverrideModal} onClose={() => { if (!saving) setShowOverrideModal(false); }} title="Over-label-rate override">
+        <div className="space-y-4">
+          <div className="flex items-start gap-3 p-3 bg-amber-50 rounded-lg">
+            <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+            <p className="text-sm text-amber-800">
+              {guardrailState.overRateCount} chemical line(s) exceed the product&rsquo;s maximum label rate
+              {guardrailState.overRateProducts.length > 0 && <> (<strong>{guardrailState.overRateProducts.join(', ')}</strong>)</>}.
+              The guardrail is set to <strong>block</strong>, so saving requires an admin override. Your reason is logged for the audit trail.
+            </p>
+          </div>
+          <div>
+            <label htmlFor="override-reason" className="block text-sm font-medium text-gray-700 mb-1">
+              Reason for the override <span className="text-red-600">*</span>
+            </label>
+            <textarea
+              id="override-reason"
+              value={overrideReason}
+              onChange={(e) => setOverrideReason(e.target.value)}
+              rows={3}
+              placeholder="e.g., Split application across two passes; per-pass rate is within label."
+              className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-200"
+            />
+          </div>
+          <div className="flex justify-end gap-3 pt-2">
+            <Button variant="ghost" onClick={() => setShowOverrideModal(false)} disabled={saving}>Cancel</Button>
+            <Button
+              variant="primary"
+              onClick={handleOverrideConfirm}
+              loading={saving}
+              disabled={saving || !overrideReason.trim()}
+            >
+              Override &amp; Save
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }

@@ -4,6 +4,68 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-06-30 — Beyond-Parity GO-LIVE: all 6 internal features applied to production (`feat/fieldapp-beyond-parity`)
+
+The §1–§6 beyond-parity build (built LOCAL-only, detailed in the per-section entries below) went **live to production** (`croprxsolutions.app` / Supabase `rhyzpcqhnizqbxphqdkr`) on 2026-06-30 after a full re-gate.
+
+- **Re-gate before apply:** 3 CRX reviewers (rls-security / migration-drift / compliance) + an independent Codex pass on the whole branch. Codex caught **2 medium gaps** in the new safety features — both fixed before go-live:
+  - **Watchdog unit-matching** (`normalize_rate_unit`): the over-label-rate check compared units as raw strings, so `oz/acre` vs `oz` (or `pint` vs `pt`) wouldn't match and a real over-application could go un-flagged. Fixed with a pure `normalize_rate_unit()` mirror of the frontend normalizer, in its OWN append-only migration `20260630170000` (NOT an in-place edit of `…240000` — Codex P1).
+  - **Cockpit "Post all clean" freshness** (`OfficeCockpit.tsx`): bulk-post trusted the last persisted watchdog sweep; it now **recomputes** the sweep and re-derives the clean set from FRESH flags before posting, failing closed — a stale flag can no longer let a now-flagged invoice slip through.
+- **Applied to live:** all **9** migrations (`20260629210000` → `20260630170000`) in timestamp order, each behind the migration-apply-guard proof + the reviewer gate. Verified live: every new table has RLS; every new SECDEF function is search-path-safe + anon-revoked; `complete_job` is the verbatim core + the gated auto-draft block and **never posts**; `get_job_proof_data` is the per-customer 2-arg form (no cross-customer leak); the security advisor added **zero** new findings and the invariant sweeps **zero** new violations.
+- **Safe by default:** `auto_draft_invoice_on_job_completion` = `false` (OFF) and `label_rate_guardrail_mode` = `warn` — no customer-facing behavior changes on apply.
+- **Owner-gated remainders:** the §1 label-data load (review of AI-drafted REI/PHI/signal/EPA/max-rate values onto the 604 live products) and the `send-email` edge-function deploy (activates the customer "field was sprayed" email) stay owner tasks.
+
+---
+
+## 2026-06-30 — Beyond-Parity §6 (FINAL): "Your Field Was Sprayed" proof notification — office-approved one-tap send (`feat/fieldapp-beyond-parity`)
+
+On a completed/invoiced field-app job, the office reviews a rich **proof** of the application and **one-taps Send** to the grower (never an auto-send). Builds on the parity #41 post-notification infra rather than duplicating it.
+
+- **Migration `20260630120000_job_proof_data.sql`** (LOCAL only): adds one read-only `SECURITY DEFINER` RPC `get_job_proof_data(uuid)` returning a `jsonb` proof payload — job/applicator, fields (effective acres + county/state + centroid & boundary GeoJSON via PostGIS + planned harvest date), products (per-acre rate, REI hours, PHI days, signal word), and weather at application. `STABLE`/no-mutation (no idempotency key); `SET search_path` (incl. `extensions` for PostGIS); anon revoked; admin/sales_rep gate as the first statement. Each block degrades gracefully (NULL when not on file).
+- **Reuses unchanged:** `record_job_post_notifications` (per-recipient log + DETERMINISTIC per-recipient email idempotency key) and `confirm_job_notification_sent` (flips a row to `sent` only after the email succeeds). The send-email `post_application_notice` email_type is already allow-listed — **PREPARED, deploy GATED for Mason** (not deployed).
+- **Frontend:** `src/lib/proofNotification.ts` (pure builder: rich HTML + plain-text proof, free/keyless OpenStreetMap static boundary-map snapshot + live-map link, REI/PHI safe-timing reusing §5 `labelGuardrails`, `escapeHtml` on all customer/field/product text → no injection; 28 unit tests) + an office-reviewable proof-preview Modal and rewired send in `FieldApplicationInvoice.tsx`. `vercel.json` CSP `img-src` adds `staticmap.openstreetmap.de` for the in-app preview.
+- **Safety:** office-approved one-tap (no silent auto-send); per-recipient deterministic key (never `Date.now()`) so a retry never double-sends; a recipient with no email is logged `failed`, never dropped; per-recipient send errors are surfaced. Static **boundary-map IMAGE** ships as a pinned OSM snapshot + deep link; a full polygon-on-tile render is flagged as a follow-on.
+- **Proven:** rolled-back LOCAL smoke (record → retry-idempotent → confirm 2 recipients; anon + applicator rejected) + a live-DB end-to-end render (auth → RPC → rich proof HTML with every block). typecheck/lint/build clean; rls-security + migration-drift reviewers CLEAN.
+- **GATE:** the send-email edge-function **deploy** (to activate `post_application_notice` in live) is **OWNER-GATED** — prepared, not deployed.
+
+---
+
+## 2026-06-30 — Beyond-Parity §4: Auto-Invoice on job completion — auto-DRAFT only, NEVER auto-post (`feat/fieldapp-beyond-parity`)
+
+When a field job is completed, optionally create a **draft** field-application invoice for the office to review and post — the riskiest "money" section, built off-by-default and fail-soft so it can never surprise the office or block job completion.
+
+- **Migration `20260630073344_auto_draft_invoice_on_job_completion.sql`** (LOCAL only):
+  - Seeds an inert app-setting `auto_draft_invoice_on_job_completion` = `'false'` (**OFF by default**, admin-only via existing `app_settings` RLS).
+  - `CREATE OR REPLACE complete_job(uuid,jsonb,uuid,text)` — verbatim live body + ONE added block at the end of the success path. When the setting is `'true'` **and** no non-voided invoice already references the job, it calls the already-reviewed `transfer_job_to_invoice()` (which creates a DRAFT field-app invoice, flips it to `unposted`, and STOPS). **It NEVER posts** — no post RPC is in the auto path. Single overload preserved.
+  - **Fail-soft:** the block is wrapped in a nested `BEGIN/EXCEPTION WHEN OTHERS` — any draft failure is swallowed (job still completes) and an `auto_draft_failed` activity-feed note is logged for the office.
+  - **Idempotent:** job-scoped idempotency key + existing-invoice guard = no duplicate draft on re-complete/retry.
+- **Settings toggle** (`src/lib/autoDraftSetting.ts` + `SettingsPage.tsx` "Auto Invoice" card, admin-only) — OFF by default; only `'true'` is ON.
+- **Office-Cockpit "Post all clean"** (`OfficeCockpit.tsx`) — posts ONLY the drafts that (a) pass validation (`pricing_pending=false`) AND (b) have no open §2 watchdog flag on the invoice or its job. Group → `post_invoice_group`, single → `post_invoice`. In-app Modal summary (no `confirm()`/`alert()`); skipped invoices listed with reason. A human clicks it, so posting is allowed — but a flagged/incomplete invoice is never posted.
+- **Proven against LOCAL DB** (rolled-back txn, all 4 cases): OFF → 0 drafts; ON → exactly 1 `unposted` `field_application` draft (NOT posted, priced/split by existing logic); re-run → still 1 (idempotent); applicator-completed (transfer role-gate fails) → job completes, 0 drafts, `auto_draft_failed` logged.
+- **Tests:** `src/lib/autoDraftSetting.test.ts` (14 cases — OFF default, only `'true'` is ON, round-trip).
+
+---
+
+## 2026-06-30 — Beyond-Parity §3: Office Cockpit exception dashboard (`feat/fieldapp-beyond-parity`)
+
+One screen showing the office everything stuck or wrong across the field-app — Mason's #1 priority from the beyond-parity opportunity map (saving office time, replacing the run-seven-reports ritual).
+
+- **New page `/office-cockpit`** (`src/pages/OfficeCockpit.tsx`): 7 live exception tiles, each with count, all-clear empty state, per-row click-through to the relevant screen, and a refresh button with "Updated" timestamp.
+  - **(a) Unbilled Jobs** — completed jobs with no invoice (`jobs.status='completed' AND invoice_id IS NULL`). Click-through: `/jobs/:id`.
+  - **(b) Ready to Post** — draft/unposted field-app invoices (`invoices.status IN ('draft','unposted') AND invoice_type='field_application'`). Notes §4 Auto-Invoice will auto-populate this tile. Click-through: `/field-invoices/:id`.
+  - **(c) Watchdog Flags** — active (non-dismissed) flags via `get_watchdog_flags` RPC from §2. Click-through: `/jobs/:id` or `/field-invoices/:id` per flag entity, else `/watchdog`.
+  - **(d) Upcoming Jobs (7 days)** — scheduled jobs in the next 7 days. Notes weather risk is checked live in Job Detail (no DB-stored weather-blocked flag exists). Click-through: `/jobs/:id`.
+  - **(e) Expiring Licenses** — applicator licenses/buyer certs within 30 days window (`applicator_licenses.is_active=true AND expiry_date BETWEEN -30 AND +30 days`). Click-through: `/compliance`.
+  - **(f) Overdue Field-App AR** — posted field-app invoices past due with balance > 0. Click-through: `/field-invoices/:id`.
+  - **(g) Inventory Shortfalls** — placeholder tile (deferred: would require per-job-chemical × live-inventory join per job, anti-N+1 query design is the follow-on task).
+- **All 6 live queries run in parallel** (`Promise.all`) — one aggregate query per tile, no N+1.
+- **RLS-respecting** — all queries are direct table SELECTs inheriting the caller's RLS policy; the watchdog RPC gates on role inside its body.
+- **Sidebar nav link** "Office Cockpit" (LayoutGrid icon) added as a top-level standalone item (admin/sales_rep). `pagePermissions.ts` entry added; `pagePermissions.test.ts` 32/32 pass.
+- **Verified against LOCAL DB**: 4 tiles populated (1 unbilled job, 6 ready-to-post invoices, 1 seeded watchdog flag, 1 upcoming job), 2 tiles legitimately empty with all-clear state. Click-through on unbilled job row navigated to `/jobs/00000000-0000-0000-0000-0000000aa103` (FJOB-003). Refresh button updates timestamp. Compliance review: CLEAN (0 blockers, 0 high, 0 med).
+- **No migration required** — read-only aggregation using existing tables and §2's `get_watchdog_flags` RPC.
+
+---
+
 ## 2026-06-29 — Field-application parity build COMPLETE (`feat/fieldapp-parity`): 41 sections + 15-fix Codex remediation
 
 End of the field-app-parity loop. The branch closes the verified ChemMan field-application + invoicing gaps (per the 2026-06-24 competitor capture) and is now Codex-clean. **Branch-only and LOCAL-DB-only** — its 39 migrations are NOT yet in live `schema_migrations`; shipping is gated on the production apply review.

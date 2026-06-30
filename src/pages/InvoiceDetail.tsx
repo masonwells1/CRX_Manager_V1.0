@@ -25,6 +25,7 @@ import { checkRUPCompliance, rupRegisterDisposition } from '../lib/rupCompliance
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
 import WriteOffModal from '../components/invoices/WriteOffModal';
+import WatchdogFlagBanner from '../components/watchdog/WatchdogFlagBanner';
 import InvoicePrintDialog from '../components/invoices/InvoicePrintDialog';
 import ConfirmModal from '../components/ui/ConfirmModal';
 import TransactionThread from '../components/ui/TransactionThread';
@@ -1181,6 +1182,16 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
           )}
         </div>
       </div>
+
+      {/* §2 Watchdog — inline advisory flags for this invoice (double-bill) and its
+          source job (acre/rate/REI). Auto-refreshes the source job's flags on open. */}
+      {!isNew && id && (
+        <WatchdogFlagBanner
+          invoiceId={id}
+          jobId={invoice.job_id ?? undefined}
+          autoRefresh
+        />
+      )}
 
       {/* Invoice Info */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
