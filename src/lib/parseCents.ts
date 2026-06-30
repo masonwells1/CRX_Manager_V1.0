@@ -42,9 +42,11 @@ export function parseDollarsToCents(input: string): number {
  *   "-$50"   → -5000
  *   "-"      → 0   (no digits)
  *   "-."     → 0
+ *   "12-34"  → 0   (dash not leading = malformed; was -123400)
  *
  * Implementation uses string splitting to avoid parseFloat precision issues.
- * Rejects scientific notation and multi-dot input (audit #20).
+ * Rejects scientific notation, multi-dot input (audit #20), and a minus sign
+ * anywhere but the leading position (codex-driven hunt cycle 2).
  */
 export function parseDollarsToCentsSigned(input: string): number {
   if (!input || typeof input !== 'string') return 0;
@@ -52,8 +54,15 @@ export function parseDollarsToCentsSigned(input: string): number {
   const cleaned = input.replace(/[^0-9.-]/g, '');
   if (!cleaned || cleaned === '-' || cleaned === '.' || cleaned === '-.') return 0;
   if ((cleaned.match(/\./g) || []).length > 1) return 0;
-  const sign = cleaned.includes('-') ? -1 : 1;
-  const absStr = cleaned.replace(/-/g, '');
+  // A minus is only valid as the LEADING sign character. A dash anywhere else
+  // ("12-34", "50-", "5-0") is malformed input and is rejected (return 0), the
+  // same way multi-dot and scientific notation are rejected above. Previously
+  // every dash was treated as the sign and then stripped, so "12-34" parsed as
+  // -123400 cents — a large bogus negative on the signed callers (vendor-bill
+  // adjustment_cents, discount fields).
+  const sign = cleaned[0] === '-' ? -1 : 1;
+  const absStr = sign === -1 ? cleaned.slice(1) : cleaned;
+  if (absStr.includes('-')) return 0;
   const parts = absStr.split('.');
   const dollars = parseInt(parts[0] || '0', 10);
   const centStr = (parts[1] || '00').substring(0, 2).padEnd(2, '0');
