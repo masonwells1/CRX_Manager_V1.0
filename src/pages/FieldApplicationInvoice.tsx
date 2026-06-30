@@ -1794,10 +1794,12 @@ export default function FieldApplicationInvoice() {
         || shares.find((s) => s.is_primary)?.customer_name
         || shares[0]?.customer_name
         || '';
-      // The recorded log subject/message = the proof text for the PRIMARY farm (each
-      // recipient's row is re-stamped with their own rendered text on confirm below).
+      // The recorded log row carries only a NEUTRAL subject + a placeholder body (no
+      // per-field detail) so a split-billed customer's pre-confirm log row can NEVER hold
+      // another customer's field names. Each recipient's row is re-stamped on confirm with
+      // their OWN scoped proof text (the exact text they were emailed). (Codex P1 leak.)
       const recordedSubject = proofSubject(draft);
-      const recordedBody = renderProofText({ customerName: primaryFarm || 'Customer', draft });
+      const recordedBody = 'Proof of application — per-recipient details are recorded when each notice is sent.';
 
       // 1) Record the per-recipient log (admin/sales only; resolves recipients off the
       // PERSISTED job; returns a DETERMINISTIC per-recipient idempotency key).
@@ -1827,6 +1829,12 @@ export default function FieldApplicationInvoice() {
       // only on success. The per-recipient deterministic key (email_idempotency_key) is
       // REQUIRED — buildProofEmailPayload refuses to invent a timestamp key, so a missing
       // key means "do not send" rather than a double-send risk.
+      //
+      // CROSS-CUSTOMER LEAK FIX (Codex P1): a split-billing job has different customers on
+      // different fields, so each recipient's proof MUST contain ONLY their own field(s) —
+      // never the whole-job `draft`. We re-fetch get_job_proof_data SCOPED to this
+      // recipient's customer_id and build a per-recipient draft. The whole-job `draft` is
+      // ONLY for the office preview; it never reaches a customer email.
       let emailedOk = 0;
       let emailErr = 0;
       for (const r of result.recipients) {
@@ -1840,19 +1848,24 @@ export default function FieldApplicationInvoice() {
         }
         try {
           const recipientName = r.farm_name ?? primaryFarm ?? 'Customer';
-          const recipientText = renderProofText({ customerName: recipientName, draft });
+          // Per-recipient SCOPED proof — only this customer's fields/acres/maps.
+          const scopedRes = await supabase.rpc('get_job_proof_data', { p_job_id: jobId, p_customer_id: r.customer_id });
+          if (scopedRes.error) throw scopedRes.error;
+          const scopedProof = assertRpcResult<JobProofData>(scopedRes.data, 'get_job_proof_data');
+          const recipientDraft = buildProofDraft(scopedProof);
+          const recipientText = renderProofText({ customerName: recipientName, draft: recipientDraft });
           const payload = buildProofEmailPayload({
             customerEmail: r.email,
             customerId: r.customer_id,
             customerName: recipientName,
             jobId,
-            draft,
+            draft: recipientDraft,
             emailIdempotencyKey: r.email_idempotency_key,
           });
           await sendEmail(payload);
           const confirmRes = await supabase.rpc('confirm_job_notification_sent', {
             p_notification_id: r.notification_id,
-            p_subject: proofSubject(draft),
+            p_subject: proofSubject(recipientDraft),
             p_message: recipientText,
             p_performed_by: profile.id,
           });

@@ -9,6 +9,7 @@ import {
   formatWeatherSummary,
   safeTimingLine,
   buildProofDraft,
+  earliestHarvestDate,
   escapeHtml,
   proofSubject,
   renderProofHtml,
@@ -189,6 +190,69 @@ describe('buildProofDraft', () => {
     const d = buildProofDraft({ ...fullData, job_number: null, fields: [{ ...fieldWithBoundary, acres: null }] });
     expect(d.jobNumber).toBe('job-1');
     expect(d.totalAcres).toBe('—');
+  });
+});
+
+// ── earliest-harvest PHI (Codex P1: never drop a later in-window field) ───────
+
+describe('earliestHarvestDate', () => {
+  it('returns the minimum harvest date across fields, ignoring order', () => {
+    expect(
+      earliestHarvestDate([
+        { harvest_date: '2026-09-15' },
+        { harvest_date: '2026-06-20' }, // earliest, NOT first
+        { harvest_date: '2026-08-01' },
+      ]),
+    ).toBe('2026-06-20');
+  });
+  it('skips null/invalid harvest dates', () => {
+    expect(earliestHarvestDate([{ harvest_date: null }, { harvest_date: 'bad' }, { harvest_date: '2026-07-01' }])).toBe('2026-07-01');
+  });
+  it('returns null when no field has a harvest date', () => {
+    expect(earliestHarvestDate([{ harvest_date: null }, { harvest_date: null }])).toBeNull();
+  });
+});
+
+describe('buildProofDraft — multi-field PHI uses the EARLIEST harvest', () => {
+  it('FIRES the PHI warning when a LATER field is inside the window but the first is clear', () => {
+    // Application 2026-06-12, PHI 21d => window closes 2026-07-03.
+    // Field A (first, route order) harvest 2026-09-01 = CLEAR; Field B harvest 2026-06-25 = INSIDE.
+    // The old first-field logic would take A (clear) and DROP the warning — this must not happen.
+    const data: JobProofData = {
+      ...fullData,
+      fields: [
+        { ...fieldWithBoundary, field_id: 'A', field_name: 'Clear Field', harvest_date: '2026-09-01', sort_order: 0 },
+        { ...fieldWithBoundary, field_id: 'B', field_name: 'Risky Field', harvest_date: '2026-06-25', sort_order: 1 },
+      ],
+    };
+    const d = buildProofDraft(data);
+    expect(d.products[0].safeTiming).toContain('planned harvest falls inside this window');
+  });
+  it('stays CLEAR when the earliest harvest is outside the window', () => {
+    const data: JobProofData = {
+      ...fullData,
+      fields: [
+        { ...fieldWithBoundary, field_id: 'A', field_name: 'F1', harvest_date: '2026-09-01', sort_order: 0 },
+        { ...fieldWithBoundary, field_id: 'B', field_name: 'F2', harvest_date: '2026-08-15', sort_order: 1 },
+      ],
+    };
+    const d = buildProofDraft(data);
+    expect(d.products[0].safeTiming).not.toContain('inside this window');
+  });
+});
+
+// ── applied-acres source (Codex P2: proof shows SPRAYED acres) ────────────────
+
+describe('buildProofDraft — applied acres', () => {
+  it('renders the applied (sprayed) acres the RPC returns, not the master field acres', () => {
+    // The RPC already resolves applied-vs-master server-side; the draft just formats what it gets.
+    const data: JobProofData = {
+      ...fullData,
+      fields: [{ ...fieldWithBoundary, acres: 40, acres_source: 'applied' }],
+    };
+    const d = buildProofDraft(data);
+    expect(d.fields[0].acres).toBe('40 ac');
+    expect(d.totalAcres).toBe('40 ac');
   });
 });
 

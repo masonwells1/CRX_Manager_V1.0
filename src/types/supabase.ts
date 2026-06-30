@@ -8838,7 +8838,7 @@ export type Database = {
         }[]
       }
       get_job_proof_data: {
-        Args: { p_job_id: string }
+        Args: { p_job_id: string; p_customer_id?: string }
         Returns: Json
       }
       get_logbook_by_applicator: {

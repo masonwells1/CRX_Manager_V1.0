@@ -37,7 +37,7 @@ export interface ProofField {
   state: string | null;
   /** Effective acres (override > measured > total), already resolved server-side. */
   acres: number | null;
-  acres_source: 'override' | 'measured' | 'total' | null;
+  acres_source: 'applied' | 'override' | 'measured' | 'total' | null;
   /** GeoJSON Point string, or null when the field has no centroid. */
   centroid_geojson: string | null;
   /** GeoJSON (Multi)Polygon string, or null when the field has no drawn boundary. */
@@ -281,14 +281,36 @@ export interface ProofDraft {
 }
 
 /**
+ * The EARLIEST (minimum) harvest date across a set of fields, as YYYY-MM-DD, or null.
+ *
+ * The PHI-vs-harvest warning must use the SOONEST harvest, not the first field in route
+ * order: if a LATER field's harvest falls inside the PHI window but an earlier field's is
+ * clear, taking the first field would drop the warning (a real safety miss). Comparing the
+ * YYYY-MM-DD strings lexicographically is a valid chronological compare for that format.
+ * Pure + tested.
+ */
+export function earliestHarvestDate(fields: ReadonlyArray<Pick<ProofField, 'harvest_date'>>): string | null {
+  let earliest: string | null = null;
+  for (const f of fields) {
+    const h = f.harvest_date;
+    if (h && /^\d{4}-\d{2}-\d{2}/.test(h) && (earliest === null || h < earliest)) {
+      earliest = h.slice(0, 10);
+    }
+  }
+  return earliest;
+}
+
+/**
  * Build the structured draft the office previews before approving the send. Pure —
- * exercises every graceful-degrade branch without a DB. The earliest harvest date
- * uses the FIRST field that has a harvest date (a single proof covers the job).
+ * exercises every graceful-degrade branch without a DB. The PHI warning uses the
+ * EARLIEST harvest date across all (recipient-scoped) fields so a later in-window
+ * harvest is never dropped.
  */
 export function buildProofDraft(data: JobProofData): ProofDraft {
   const appDate = data.application_date ?? '';
-  // The job's representative harvest date (first field that has one) for the PHI line.
-  const harvestDate = data.fields.find((f) => f.harvest_date)?.harvest_date ?? null;
+  // The SOONEST harvest across the scoped fields drives the PHI-vs-harvest warning, so a
+  // later field inside the window is never missed (a first-field-only pick would drop it).
+  const harvestDate = earliestHarvestDate(data.fields);
 
   const fields: ProofDraftFieldLine[] = data.fields.map((f) => {
     const county = (f.county ?? '').trim();
