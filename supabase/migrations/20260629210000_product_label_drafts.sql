@@ -149,6 +149,18 @@ BEGIN
     RAISE EXCEPTION 'PERMISSION_DENIED: admin role required';
   END IF;
 
+  -- Non-negativity guard: regulatory intervals/rates can never be negative.
+  -- (Reject at staging so an impossible value can't even be drafted.)
+  IF p_rei_hours IS NOT NULL AND p_rei_hours < 0 THEN
+    RAISE EXCEPTION 'INVALID_LABEL_VALUE: rei_hours must be >= 0 (got %)', p_rei_hours;
+  END IF;
+  IF p_phi_days IS NOT NULL AND p_phi_days < 0 THEN
+    RAISE EXCEPTION 'INVALID_LABEL_VALUE: phi_days must be >= 0 (got %)', p_phi_days;
+  END IF;
+  IF p_max_label_rate IS NOT NULL AND p_max_label_rate < 0 THEN
+    RAISE EXCEPTION 'INVALID_LABEL_VALUE: max_label_rate must be >= 0 (got %)', p_max_label_rate;
+  END IF;
+
   -- Idempotency: return cached result if same key already processed
   IF p_idempotency_key IS NOT NULL THEN
     SELECT result INTO v_cached
@@ -281,6 +293,28 @@ BEGIN
       v_new_epa  := v_draft.epa_registration;
       v_new_mlr  := v_draft.max_label_rate;
       v_new_mlru := v_draft.max_label_rate_unit;
+    END IF;
+
+    -- Non-negativity guard on the RESOLVED values (authoritative — runs before any
+    -- write to products). A negative regulatory interval/rate is a safety-impossible
+    -- value and must never reach the products table, even via the 'edited' path.
+    IF v_new_rei IS NOT NULL AND v_new_rei < 0 THEN
+      RAISE EXCEPTION 'INVALID_LABEL_VALUE: rei_hours must be >= 0 (got %)', v_new_rei;
+    END IF;
+    IF v_new_phi IS NOT NULL AND v_new_phi < 0 THEN
+      RAISE EXCEPTION 'INVALID_LABEL_VALUE: phi_days must be >= 0 (got %)', v_new_phi;
+    END IF;
+    IF v_new_mlr IS NOT NULL AND v_new_mlr < 0 THEN
+      RAISE EXCEPTION 'INVALID_LABEL_VALUE: max_label_rate must be >= 0 (got %)', v_new_mlr;
+    END IF;
+
+    -- Empty-decision guard: an accept/edit with NO resolved values is a no-op that
+    -- would mark the draft 'decided' while writing nothing. Reject it so a value-less
+    -- draft (e.g. a fresh "New Draft" or a needs_manual row) can't leave the queue
+    -- without the admin actually entering values first.
+    IF v_new_sw IS NULL AND v_new_rei IS NULL AND v_new_phi IS NULL
+       AND v_new_epa IS NULL AND v_new_mlr IS NULL AND v_new_mlru IS NULL THEN
+      RAISE EXCEPTION 'NO_VALUES_TO_APPLY: % decision has no values to write — enter values before accepting', p_decision;
     END IF;
 
     -- No-overwrite guard: if product field is non-empty and p_force_overwrite=false → skip that field
@@ -463,6 +497,17 @@ BEGIN
 
   FOR v_item IN SELECT jsonb_array_elements(p_drafts)
   LOOP
+    -- Non-negativity guard: reject impossible regulatory values per element.
+    IF (v_item->>'rei_hours') IS NOT NULL AND (v_item->>'rei_hours')::integer < 0 THEN
+      RAISE EXCEPTION 'INVALID_LABEL_VALUE: rei_hours must be >= 0 (got %)', v_item->>'rei_hours';
+    END IF;
+    IF (v_item->>'phi_days') IS NOT NULL AND (v_item->>'phi_days')::integer < 0 THEN
+      RAISE EXCEPTION 'INVALID_LABEL_VALUE: phi_days must be >= 0 (got %)', v_item->>'phi_days';
+    END IF;
+    IF (v_item->>'max_label_rate') IS NOT NULL AND (v_item->>'max_label_rate')::numeric < 0 THEN
+      RAISE EXCEPTION 'INVALID_LABEL_VALUE: max_label_rate must be >= 0 (got %)', v_item->>'max_label_rate';
+    END IF;
+
     INSERT INTO product_label_drafts (
       product_id, signal_word, rei_hours, phi_days, epa_registration,
       max_label_rate, max_label_rate_unit,

@@ -96,6 +96,38 @@ function draftToEditState(d: ProductLabelDraft): EditState {
   };
 }
 
+// True when EVERY label field in the edit state is blank — accepting such a draft
+// would mark it 'decided' while writing nothing (the empty-draft / needs_manual case).
+function isEditStateEmpty(es: EditState): boolean {
+  return (
+    !es.signal_word.trim() &&
+    !es.rei_hours.trim() &&
+    !es.phi_days.trim() &&
+    !es.epa_registration.trim() &&
+    !es.max_label_rate.trim() &&
+    !es.max_label_rate_unit.trim()
+  );
+}
+
+// Returns the list of numeric fields whose entered value parses to a negative number.
+// Regulatory intervals/rates can never be negative; the HTML min attribute alone does
+// not block a typed/pasted negative, so we validate before submit.
+function negativeNumericFields(es: EditState): string[] {
+  const bad: string[] = [];
+  const checks: Array<[string, string]> = [
+    ['REI hours', es.rei_hours],
+    ['PHI days', es.phi_days],
+    ['max label rate', es.max_label_rate],
+  ];
+  for (const [label, raw] of checks) {
+    const trimmed = raw.trim();
+    if (trimmed === '') continue;
+    const n = Number(trimmed);
+    if (Number.isFinite(n) && n < 0) bad.push(label);
+  }
+  return bad;
+}
+
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export default function LabelReview() {
@@ -254,6 +286,22 @@ export default function LabelReview() {
   // ── handle accept / edit button ──
   function handleAcceptOrEdit(decision: 'accepted' | 'edited') {
     if (!editDraft || !editState) return;
+
+    // Guard 1: never submit a negative regulatory value (the HTML min attribute does
+    // not block a typed/pasted negative reaching the handler/RPC).
+    const negatives = negativeNumericFields(editState);
+    if (negatives.length > 0) {
+      toast('error', `Negative values are not allowed for: ${negatives.join(', ')}. Enter zero or a positive number.`);
+      return;
+    }
+
+    // Guard 2: never accept a value-less draft — it would mark the draft decided
+    // while writing nothing. Require the admin to enter values first.
+    if (isEditStateEmpty(editState)) {
+      toast('error', 'This draft has no values to save. Enter at least one label value before accepting (or Reject it).');
+      return;
+    }
+
     const conflicts = detectOverwrittenFields(editDraft, editState);
     if (conflicts.length > 0 && !forceOverwrite) {
       // Show confirm modal instead of proceeding
@@ -690,6 +738,35 @@ export default function LabelReview() {
               Force overwrite existing (non-empty) product label fields
             </label>
 
+            {/* Empty-draft / negative-value guidance (blocks the accept buttons below) */}
+            {(() => {
+              const emptyDraft = isEditStateEmpty(editState);
+              const negatives  = negativeNumericFields(editState);
+              if (negatives.length > 0) {
+                return (
+                  <div className="flex items-start gap-2 bg-red-50 border border-red-200 rounded px-3 py-2 text-sm text-red-800">
+                    <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+                    <span>
+                      Negative values are not allowed for <strong>{negatives.join(', ')}</strong>.
+                      Regulatory intervals and rates must be zero or positive.
+                    </span>
+                  </div>
+                );
+              }
+              if (emptyDraft) {
+                return (
+                  <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 rounded px-3 py-2 text-sm text-amber-800">
+                    <Info className="w-4 h-4 mt-0.5 shrink-0" />
+                    <span>
+                      This draft has no values yet. Enter at least one label value above to
+                      accept it, or <strong>Reject</strong> it to clear it from the queue.
+                    </span>
+                  </div>
+                );
+              }
+              return null;
+            })()}
+
             {/* Actions */}
             <div className="flex flex-wrap gap-2 justify-end pt-2 border-t border-gray-100">
               <Button
@@ -710,14 +787,14 @@ export default function LabelReview() {
               <Button
                 variant="secondary"
                 onClick={() => handleAcceptOrEdit('edited')}
-                disabled={committing}
+                disabled={committing || isEditStateEmpty(editState) || negativeNumericFields(editState).length > 0}
               >
                 <Edit3 className="w-4 h-4 mr-1" />
                 Accept with edits
               </Button>
               <Button
                 onClick={() => handleAcceptOrEdit('accepted')}
-                disabled={committing}
+                disabled={committing || isEditStateEmpty(editState) || negativeNumericFields(editState).length > 0}
               >
                 <CheckCircle className="w-4 h-4 mr-1" />
                 Accept as drafted
