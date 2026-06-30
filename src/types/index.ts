@@ -1140,6 +1140,11 @@ export interface Invoice {
   end_weather_time?: string | null;
   end_weather_source?: 'auto' | 'manual' | null;
   weather_manual_override?: boolean | null;
+  // ChemMan Gap-Closeout #2: diluent / carrier-water RATE per acre (gallons/acre),
+  // mirroring the job-side jobs.carrier_rate_gpa. Nullable — optional. The TOTAL
+  // diluent (rate x applied acres) is computed for display/PDF, NOT stored, because
+  // invoices.total_acres is not reliably written on save. A QUANTITY, never money/cents.
+  diluent_rate_gpa?: number | null;
   vehicle_name: string | null;
   application_date: string | null;
   job_id: string | null;

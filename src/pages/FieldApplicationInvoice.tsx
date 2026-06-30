@@ -38,6 +38,12 @@ import ApplicationServicePicker from '../components/field-app/ApplicationService
 import { downloadInvoicePdf, buildInvoicePdfDataFromRow, generateInvoicePdf } from '../lib/invoicePdf';
 import { fetchWeatherForDateTime, parseCentroid } from '../lib/weatherCapture';
 import {
+  parseDiluentRate,
+  isDiluentInputValid,
+  computeTotalDiluentGallons,
+  formatGallons,
+} from '../lib/fieldAppDiluent';
+import {
   EMPTY_WEATHER_SET,
   weatherSetFromRow,
   applyCapturedWeather,
@@ -272,6 +278,14 @@ export default function FieldApplicationInvoice() {
   const [weatherCentroid, setWeatherCentroid] = useState<{ lat: number; lng: number } | null>(null);
   // Which set is mid-fetch ('start' | 'end' | null) — drives the button spinner.
   const [fetchingWeather, setFetchingWeather] = useState<'start' | 'end' | null>(null);
+
+  // ChemMan Gap-Closeout #2: diluent / carrier-water RATE per acre (gallons/acre),
+  // mirroring the job-side jobs.carrier_rate_gpa. Held as a free-text string for the
+  // controlled input (blank = not recorded). The TOTAL (rate x applied acres) is
+  // derived for display + PDF; only the RATE is persisted (invoices.diluent_rate_gpa)
+  // because invoices.total_acres is not reliably written on save. Diluent is a
+  // QUANTITY, never money/cents.
+  const [diluentRate, setDiluentRate] = useState('');
   // The weather lookup key (field + application date) last seen as SETTLED. Used to
   // invalidate stale AUTO readings when the user later changes the field or date — but
   // NOT on the initial load (which legitimately hydrates auto readings from the saved row).
@@ -528,6 +542,19 @@ export default function FieldApplicationInvoice() {
   const totalAppliedAcres = useMemo(
     () => locations.reduce((sum, l) => sum + (l.applied_acres || 0), 0),
     [locations]
+  );
+
+  // #2: the diluent rate parsed from the input (null when blank/non-numeric),
+  // whether the RAW input is a valid save value, and the derived total diluent
+  // (rate x applied acres — null, never 0, when the rate is absent/invalid).
+  // diluentRateValid checks the RAW string (not the parsed value) so a non-empty
+  // unparseable typo ("-", "e") is rejected rather than read as "blank" and used
+  // to silently clear a saved rate on save (Codex P2).
+  const diluentRateNum = useMemo(() => parseDiluentRate(diluentRate), [diluentRate]);
+  const diluentRateValid = useMemo(() => isDiluentInputValid(diluentRate), [diluentRate]);
+  const totalDiluentGallons = useMemo(
+    () => computeTotalDiluentGallons(diluentRateNum, totalAppliedAcres),
+    [diluentRateNum, totalAppliedAcres],
   );
 
   // #1 (weather auto-fill) handlers ─────────────────────────────────────────
@@ -853,6 +880,11 @@ export default function FieldApplicationInvoice() {
     // recorded (not treated as a user change) — the auto readings just hydrated from the row
     // must survive the initial render; only a later field/date change invalidates them.
     weatherLookupKeyRef.current = null;
+
+    // #2: load the persisted diluent RATE (gal/acre) into the controlled input
+    // (blank when not recorded). The total is derived from the live acres, not loaded.
+    const diluentRaw = invoice.diluent_rate_gpa as number | null | undefined;
+    setDiluentRate(diluentRaw != null ? String(diluentRaw) : '');
 
     const groupId = (invoice.invoice_group_id as string | null) || null;
     setInvoiceGroupId(groupId);
@@ -1322,6 +1354,14 @@ export default function FieldApplicationInvoice() {
       toast('error', `Enter applied acres for "${missingAcres.field_name}" (greater than 0), or remove the field.`);
       return;
     }
+    // #2: reject an invalid diluent rate before the round-trip (the RPC also guards
+    // negatives). Blank/empty is fine (optional field, clears the rate); a non-empty
+    // value that is non-numeric or negative is rejected here so a typo can't slip
+    // through as "blank" and silently clear a saved rate (Codex P2).
+    if (!diluentRateValid) {
+      toast('error', 'Enter a valid diluent / carrier-water rate (a number 0 or greater, gal/acre), or leave it blank.');
+      return;
+    }
     setSaving(true);
     try {
       const key = saveIdem.getKey();
@@ -1418,6 +1458,12 @@ export default function FieldApplicationInvoice() {
           // omits this and the weather params) can't silently erase captured weather.
           p_update_weather: true,
           ...weatherParams,
+          // #2: persist the diluent RATE (gal/acre). blank → null (clears the column).
+          // p_update_diluent: TRUE — this UI intends to write diluent; a stale old-bundle
+          // caller omits it (defaults false) so it can never erase a recorded rate. The
+          // negative-rate guard above already blocked an invalid value before we get here.
+          p_diluent_rate_gpa: diluentRateNum ?? undefined,
+          p_update_diluent: true,
         });
         if (appliedResult.error) {
           appliedInfoOk = false;
@@ -1794,6 +1840,9 @@ export default function FieldApplicationInvoice() {
       crop_type: locations[0]?.crop_type ?? null,
       field_names: locations.length > 0 ? locations.map((l) => l.field_name) : null,
       total_acres: totalAppliedAcres || null,
+      // #2: print the LIVE diluent rate (gal/acre) so an in-editor edit prints without a
+      // reload; the PDF renderer derives the total from total_acres above. null = omit.
+      diluent_gpa: diluentRateNum,
       // #24 (LOW#1): the printed legal Applicator name. Prefer the typed free-text
       // value; otherwise resolve the as-applied applicator's REAL name from the
       // UNFILTERED name map (so a now-inactive applicator still prints correctly),
@@ -2716,6 +2765,71 @@ export default function FieldApplicationInvoice() {
                     disabled={!canEdit}
                     className="w-full px-3 py-2 border rounded-lg text-sm disabled:bg-gray-50"
                   />
+                </div>
+              </div>
+            </div>
+
+            {/* #2 (ChemMan Gap-Closeout): diluent / carrier-water RATE per acre.
+                Mirrors the job-side jobs.carrier_rate_gpa (gal/acre). The TOTAL
+                (rate x applied acres) is derived live and printed; only the rate
+                is persisted. Optional — blank means "not recorded". A QUANTITY of
+                water (gallons), never money. */}
+            <div className="space-y-4">
+              <div>
+                <h3 className="font-semibold flex items-center gap-2">
+                  <Droplets className="w-4 h-4 text-crx-green" /> Diluent / Carrier Water
+                </h3>
+                <p className="text-xs text-gray-500">
+                  Carrier-water rate the chemical was mixed into, in gallons per acre. The total
+                  spray volume is computed from the applied acres and printed on the invoice.
+                </p>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">
+                    Diluent / Carrier Water (gal/acre)
+                  </label>
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    min="0"
+                    step="any"
+                    value={diluentRate}
+                    onChange={(e) => { setDiluentRate(e.target.value); setDirty(true); }}
+                    placeholder="e.g. 15"
+                    disabled={!canEdit}
+                    aria-label="Diluent or carrier water rate in gallons per acre"
+                    aria-invalid={!diluentRateValid}
+                    className={`w-full px-3 py-2 border rounded-lg text-sm disabled:bg-gray-50 ${
+                      diluentRateValid ? '' : 'border-red-400 focus:ring-red-400'
+                    }`}
+                  />
+                  {!diluentRateValid && (
+                    <p className="mt-1 text-xs text-red-600">
+                      Enter a number 0 or greater (gal/acre), or leave it blank.
+                    </p>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">
+                    Total Diluent (gallons)
+                  </label>
+                  <div className="w-full px-3 py-2 border rounded-lg text-sm bg-gray-50 tabular-nums text-gray-700">
+                    {totalDiluentGallons != null ? (
+                      <>
+                        {new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(totalDiluentGallons)} gal
+                        <span className="text-gray-400">
+                          {' '}&middot; {formatGallons(diluentRateNum)} gal/ac &times; {totalAppliedAcres.toFixed(1)} ac
+                        </span>
+                      </>
+                    ) : (
+                      <span className="text-gray-400">
+                        {diluentRateNum == null
+                          ? 'Enter a rate to see the total'
+                          : 'Add applied acres to see the total'}
+                      </span>
+                    )}
+                  </div>
                 </div>
               </div>
             </div>
