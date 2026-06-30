@@ -35,6 +35,7 @@ import { applyChemEdit, recomputeChemRowForAcres, reconcileChemAutofillUnits, su
 import { recipeItemToChemRowSeed, chemRowsToRecipeItems, getLastRecipeId, setLastRecipeId } from '../lib/recipeHelpers';
 import { moveItem, moveUp, moveDown } from '../lib/routeOrder';
 import AppliedRecordsManager from '../components/jobs/AppliedRecordsManager';
+import WatchdogFlagBanner from '../components/watchdog/WatchdogFlagBanner';
 // Codex #16 P2: lazy-load the map component so the mapbox bundle is only fetched when
 // the user actually opens the Map / Logs tab — not on every JobDetail page load (matters
 // on field/mobile connections). JobAttachments is light, so it stays a static import.
@@ -2308,6 +2309,9 @@ export default function JobDetail() {
           )}
         </div>
       </div>
+
+      {/* §2 Watchdog — inline advisory flags for this job (auto-refreshes on open) */}
+      {!isNew && id && <WatchdogFlagBanner jobId={id} autoRefresh />}
 
       {/* Job Header */}
       <Card>

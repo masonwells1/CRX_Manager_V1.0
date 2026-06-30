@@ -20,6 +20,7 @@ import { formatCents as fmt } from '../lib/money';
 import { billableAcres, acreDivergence, appliedMatchesSystem } from '../lib/fieldGeometry';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import ConfirmModal from '../components/ui/ConfirmModal';
+import WatchdogFlagBanner from '../components/watchdog/WatchdogFlagBanner';
 import Modal from '../components/ui/Modal';
 import SelectLocationsModal from '../components/field-app/SelectLocationsModal';
 import FieldAppChemicalEntry, { type ChemicalLine } from '../components/field-app/FieldAppChemicalEntry';
@@ -1794,6 +1795,16 @@ export default function FieldApplicationInvoice() {
           )}
         </div>
       </div>
+
+      {/* §2 Watchdog — inline advisory flags for this invoice (double-bill) and its
+          source job (acre/rate/REI). Auto-refreshes the source job's flags on open. */}
+      {!isNew && id && (
+        <WatchdogFlagBanner
+          invoiceId={id}
+          jobId={jobId ?? undefined}
+          autoRefresh
+        />
+      )}
 
       {/* #24: posted-lock banner — a committed invoice is read-only (the posted
           records warning from #23). Editing inputs are also disabled via canEdit.
