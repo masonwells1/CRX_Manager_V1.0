@@ -4,6 +4,26 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-06-30 — Beyond-Parity §3: Office Cockpit exception dashboard (`feat/fieldapp-beyond-parity`)
+
+One screen showing the office everything stuck or wrong across the field-app — Mason's #1 priority from the beyond-parity opportunity map (saving office time, replacing the run-seven-reports ritual).
+
+- **New page `/office-cockpit`** (`src/pages/OfficeCockpit.tsx`): 7 live exception tiles, each with count, all-clear empty state, per-row click-through to the relevant screen, and a refresh button with "Updated" timestamp.
+  - **(a) Unbilled Jobs** — completed jobs with no invoice (`jobs.status='completed' AND invoice_id IS NULL`). Click-through: `/jobs/:id`.
+  - **(b) Ready to Post** — draft/unposted field-app invoices (`invoices.status IN ('draft','unposted') AND invoice_type='field_application'`). Notes §4 Auto-Invoice will auto-populate this tile. Click-through: `/field-invoices/:id`.
+  - **(c) Watchdog Flags** — active (non-dismissed) flags via `get_watchdog_flags` RPC from §2. Click-through: `/jobs/:id` or `/field-invoices/:id` per flag entity, else `/watchdog`.
+  - **(d) Upcoming Jobs (7 days)** — scheduled jobs in the next 7 days. Notes weather risk is checked live in Job Detail (no DB-stored weather-blocked flag exists). Click-through: `/jobs/:id`.
+  - **(e) Expiring Licenses** — applicator licenses/buyer certs within 30 days window (`applicator_licenses.is_active=true AND expiry_date BETWEEN -30 AND +30 days`). Click-through: `/compliance`.
+  - **(f) Overdue Field-App AR** — posted field-app invoices past due with balance > 0. Click-through: `/field-invoices/:id`.
+  - **(g) Inventory Shortfalls** — placeholder tile (deferred: would require per-job-chemical × live-inventory join per job, anti-N+1 query design is the follow-on task).
+- **All 6 live queries run in parallel** (`Promise.all`) — one aggregate query per tile, no N+1.
+- **RLS-respecting** — all queries are direct table SELECTs inheriting the caller's RLS policy; the watchdog RPC gates on role inside its body.
+- **Sidebar nav link** "Office Cockpit" (LayoutGrid icon) added as a top-level standalone item (admin/sales_rep). `pagePermissions.ts` entry added; `pagePermissions.test.ts` 32/32 pass.
+- **Verified against LOCAL DB**: 4 tiles populated (1 unbilled job, 6 ready-to-post invoices, 1 seeded watchdog flag, 1 upcoming job), 2 tiles legitimately empty with all-clear state. Click-through on unbilled job row navigated to `/jobs/00000000-0000-0000-0000-0000000aa103` (FJOB-003). Refresh button updates timestamp. Compliance review: CLEAN (0 blockers, 0 high, 0 med).
+- **No migration required** — read-only aggregation using existing tables and §2's `get_watchdog_flags` RPC.
+
+---
+
 ## 2026-06-29 — Field-application parity build COMPLETE (`feat/fieldapp-parity`): 41 sections + 15-fix Codex remediation
 
 End of the field-app-parity loop. The branch closes the verified ChemMan field-application + invoicing gaps (per the 2026-06-24 competitor capture) and is now Codex-clean. **Branch-only and LOCAL-DB-only** — its 39 migrations are NOT yet in live `schema_migrations`; shipping is gated on the production apply review.

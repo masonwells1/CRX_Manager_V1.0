@@ -1,4 +1,4 @@
-# Pages & Routes Reference (79 pages, 81 routes)
+# Pages & Routes Reference (80 pages, 82 routes)
 
 | Route | Page | Description |
 |-------|------|-------------|
@@ -81,5 +81,6 @@
 | `/field-invoices/posted` | FieldInvoicesPosted | Admin/sales. Field-app parity #23 — dedicated "Posted" committed field-invoice list (static path, precedes `:id`). |
 | `/field-invoices/summary` | CustomerInvoiceSummary | Admin/sales. Field-app parity #34 — combined Customer Invoice Summary (unposted chem sales + unposted field-app). |
 | `/field-invoices/unbilled` | UnbilledApplications | Admin/sales. Applied-but-unbilled field work awaiting an invoice (reconciliation worklist). |
+| `/office-cockpit` | OfficeCockpit | Admin/sales. §3 Beyond-Parity exception dashboard: 7 live tiles (unbilled jobs, ready-to-post field-app invoices, watchdog flags, upcoming jobs 7-day, expiring licenses/certs 30-day, overdue field-app AR, deferred inventory shortfalls). One screen replaces the run-seven-reports ritual. |
 | `/field` | FieldView | Admin/sales/applicator. Field-app parity #38 — phone/mobile applicator field view (read-only "my jobs" cards). |
 | `/design-preview` | DesignPreview | **Dev/preview only** (hostname-gated, never on croprxsolutions.app): shared-component visual gallery for the design system. |

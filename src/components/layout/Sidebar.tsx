@@ -47,6 +47,7 @@ import {
   Layers,
   FlaskConical,
   ShieldAlert as WatchdogIcon,
+  LayoutGrid,
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { hasPageAccess, getPageKeyFromPath } from '../../lib/pagePermissions';
@@ -91,6 +92,16 @@ const navigation: NavEntry[] = [
       path: '/',
       label: 'Dashboard',
       icon: <LayoutDashboard className="w-5 h-5" />,
+    },
+  },
+  {
+    type: 'standalone',
+    link: {
+      id: 'office-cockpit',
+      path: '/office-cockpit',
+      label: 'Office Cockpit',
+      icon: <LayoutGrid className="w-5 h-5" />,
+      roles: ['admin', 'sales_rep'],
     },
   },
   {
