@@ -4,6 +4,19 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-06-30 — Beyond-Parity GO-LIVE: all 6 internal features applied to production (`feat/fieldapp-beyond-parity`)
+
+The §1–§6 beyond-parity build (built LOCAL-only, detailed in the per-section entries below) went **live to production** (`croprxsolutions.app` / Supabase `rhyzpcqhnizqbxphqdkr`) on 2026-06-30 after a full re-gate.
+
+- **Re-gate before apply:** 3 CRX reviewers (rls-security / migration-drift / compliance) + an independent Codex pass on the whole branch. Codex caught **2 medium gaps** in the new safety features — both fixed before go-live:
+  - **Watchdog unit-matching** (`normalize_rate_unit`): the over-label-rate check compared units as raw strings, so `oz/acre` vs `oz` (or `pint` vs `pt`) wouldn't match and a real over-application could go un-flagged. Fixed with a pure `normalize_rate_unit()` mirror of the frontend normalizer, in its OWN append-only migration `20260630170000` (NOT an in-place edit of `…240000` — Codex P1).
+  - **Cockpit "Post all clean" freshness** (`OfficeCockpit.tsx`): bulk-post trusted the last persisted watchdog sweep; it now **recomputes** the sweep and re-derives the clean set from FRESH flags before posting, failing closed — a stale flag can no longer let a now-flagged invoice slip through.
+- **Applied to live:** all **9** migrations (`20260629210000` → `20260630170000`) in timestamp order, each behind the migration-apply-guard proof + the reviewer gate. Verified live: every new table has RLS; every new SECDEF function is search-path-safe + anon-revoked; `complete_job` is the verbatim core + the gated auto-draft block and **never posts**; `get_job_proof_data` is the per-customer 2-arg form (no cross-customer leak); the security advisor added **zero** new findings and the invariant sweeps **zero** new violations.
+- **Safe by default:** `auto_draft_invoice_on_job_completion` = `false` (OFF) and `label_rate_guardrail_mode` = `warn` — no customer-facing behavior changes on apply.
+- **Owner-gated remainders:** the §1 label-data load (review of AI-drafted REI/PHI/signal/EPA/max-rate values onto the 604 live products) and the `send-email` edge-function deploy (activates the customer "field was sprayed" email) stay owner tasks.
+
+---
+
 ## 2026-06-30 — Beyond-Parity §6 (FINAL): "Your Field Was Sprayed" proof notification — office-approved one-tap send (`feat/fieldapp-beyond-parity`)
 
 On a completed/invoiced field-app job, the office reviews a rich **proof** of the application and **one-taps Send** to the grower (never an auto-send). Builds on the parity #41 post-notification infra rather than duplicating it.
