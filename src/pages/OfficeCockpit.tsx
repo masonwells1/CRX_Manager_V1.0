@@ -424,16 +424,13 @@ export default function OfficeCockpit() {
     if (inv.job_id && flaggedJobIds.has(inv.job_id)) return false;
     return true;
   };
-  // A split group posts ATOMICALLY (post_invoice_group posts EVERY member). So a group is only
-  // safe to bulk-post when EVERY postable member is clean — one dirty sibling taints the whole
-  // group, else posting a "clean" member would drag a flagged/pricing-pending sibling live too.
-  const dirtyGroupIds = new Set<string>();
-  for (const inv of data.postableInvoices) {
-    if (inv.invoice_group_id && !isInvoiceCleanBase(inv)) dirtyGroupIds.add(inv.invoice_group_id);
-  }
+  // SPLIT GROUPS: post_invoice_group posts EVERY member atomically, but this tile only loads up
+  // to TILE_LIMIT invoices — a group could have a flagged/pricing-pending member OUTSIDE that
+  // window we can't see here. So bulk "post all clean" NEVER posts a grouped invoice; split-group
+  // invoices are left for a human to post deliberately from the invoice/group detail (where the
+  // whole group is visible). Only standalone (non-grouped) clean drafts are bulk-postable.
   const isInvoiceClean = (inv: PostableInvoiceRow): boolean =>
-    isInvoiceCleanBase(inv) &&
-    !(inv.invoice_group_id != null && dirtyGroupIds.has(inv.invoice_group_id));
+    isInvoiceCleanBase(inv) && inv.invoice_group_id == null;
   // FAIL-SAFE: if get_watchdog_flags did NOT load, we cannot know which invoices are flagged,
   // so NOTHING is bulk-postable (post individually instead). Never fail open on money.
   const cleanInvoices = data.watchdogLoadOk ? data.postableInvoices.filter(isInvoiceClean) : [];
@@ -456,41 +453,21 @@ export default function OfficeCockpit() {
       action: async () => {
         let posted = 0;
         const failures: string[] = [];
-        // De-dupe by group: a split group posts atomically once via its group id.
-        const postedGroups = new Set<string>();
+        // cleanInvoices holds only NON-grouped drafts (split groups are excluded above and posted
+        // by hand), so each posts singly via post_invoice — we never call post_invoice_group here.
         for (const inv of cleanInvoices) {
           try {
-            if (inv.invoice_group_id) {
-              if (postedGroups.has(inv.invoice_group_id)) {
-                posted += 1; // already posted with its sibling(s)
-                continue;
-              }
-              const gid = `grp:${inv.invoice_group_id}`;
-              if (!postKeysRef.current[gid]) {
-                postKeysRef.current[gid] = generateIdempotencyKey('post_invoice_group', `${profile.id}:${inv.invoice_group_id}`);
-              }
-              const { data: pgData, error } = await supabase.rpc('post_invoice_group', {
-                p_invoice_group_id: inv.invoice_group_id,
-                p_performed_by: profile.id,
-                p_idempotency_key: postKeysRef.current[gid],
-              });
-              if (error) throw error;
-              assertRpcResult(pgData, 'post_invoice_group');
-              postedGroups.add(inv.invoice_group_id);
-              posted += 1;
-            } else {
-              if (!postKeysRef.current[inv.id]) {
-                postKeysRef.current[inv.id] = generateIdempotencyKey('post_invoice', `${profile.id}:${inv.id}`);
-              }
-              // post_invoice RETURNS void — .throwOnError(), no result to assert.
-              await supabase
-                .rpc('post_invoice', {
-                  p_invoice_id: inv.id,
-                  p_idempotency_key: postKeysRef.current[inv.id],
-                })
-                .throwOnError();
-              posted += 1;
+            if (!postKeysRef.current[inv.id]) {
+              postKeysRef.current[inv.id] = generateIdempotencyKey('post_invoice', `${profile.id}:${inv.id}`);
             }
+            // post_invoice RETURNS void — .throwOnError(), no result to assert.
+            await supabase
+              .rpc('post_invoice', {
+                p_invoice_id: inv.id,
+                p_idempotency_key: postKeysRef.current[inv.id],
+              })
+              .throwOnError();
+            posted += 1;
           } catch (err: unknown) {
             if (hasRpcCode(err, RpcErrorCodes.PRICING_INCOMPLETE)) {
               failures.push(`${inv.invoice_number}: needs pricing first`);

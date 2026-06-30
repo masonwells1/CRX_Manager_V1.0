@@ -326,7 +326,12 @@ BEGIN
      WHERE setting_key = 'auto_draft_invoice_on_job_completion';
     v_auto_draft_on := COALESCE(v_auto_draft_on, false);
 
-    IF v_auto_draft_on THEN
+    -- OFFICE-COMPLETIONS ONLY (Mason, 2026-06-30): only an admin/sales_rep completion auto-drafts.
+    -- An applicator (field driver) completing their OWN job does NOT auto-draft — transfer_job_to_invoice
+    -- is admin/sales_rep-gated and we deliberately do NOT loosen it; the office bills those by hand
+    -- (they surface in the Cockpit "completed-but-unbilled" tile). Checking the role HERE (vs letting
+    -- the call fail-soft) keeps applicator completions clean — no spurious 'auto_draft_failed' note.
+    IF v_auto_draft_on AND (is_admin() OR is_sales_rep()) THEN
       -- IDEMPOTENCY: never create a second draft. If ANY non-voided/cancelled invoice
       -- already points at this job (the manual transfer, a prior auto-draft, or a retry),
       -- do nothing. transfer_job_to_invoice also sets jobs.status='invoiced', but we
