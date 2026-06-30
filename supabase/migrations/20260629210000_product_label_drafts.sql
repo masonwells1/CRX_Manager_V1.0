@@ -320,12 +320,17 @@ BEGIN
         v_new_epa := v_product.epa_registration;
       END IF;
     END IF;
-    -- max_label_rate + max_label_rate_unit (ATOMIC PAIR — never mix a new rate with an old unit, or vice versa)
+    -- max_label_rate + max_label_rate_unit (ATOMIC PAIR — only ever written TOGETHER, from ONE source.
+    -- A one-sided draft (rate without unit, or unit without rate) is never partially applied, so a new
+    -- unit can never glue onto an old rate (or vice versa), even under force-overwrite.)
     IF v_new_mlr IS NOT NULL OR v_new_mlru IS NOT NULL THEN
-      IF (v_product.max_label_rate IS NULL AND v_product.max_label_rate_unit IS NULL) OR p_force_overwrite THEN
-        IF v_new_mlr  IS NOT NULL THEN v_applied := array_append(v_applied, 'max_label_rate'); END IF;
-        IF v_new_mlru IS NOT NULL THEN v_applied := array_append(v_applied, 'max_label_rate_unit'); END IF;
+      IF v_new_mlr IS NOT NULL AND v_new_mlru IS NOT NULL
+         AND ((v_product.max_label_rate IS NULL AND v_product.max_label_rate_unit IS NULL) OR p_force_overwrite) THEN
+        -- both sides present AND (target pair empty OR explicit force): apply the pair together
+        v_applied := array_append(v_applied, 'max_label_rate');
+        v_applied := array_append(v_applied, 'max_label_rate_unit');
       ELSE
+        -- one-sided draft, OR target pair non-empty without force: skip the pair, keep the existing pair intact
         IF v_new_mlr  IS NOT NULL THEN v_skipped := array_append(v_skipped, 'max_label_rate'); END IF;
         IF v_new_mlru IS NOT NULL THEN v_skipped := array_append(v_skipped, 'max_label_rate_unit'); END IF;
         v_new_mlr  := v_product.max_label_rate;       -- revert BOTH to existing so the stored pair stays consistent
@@ -493,8 +498,14 @@ BEGIN
 END;
 $$;
 
--- Grant EXECUTE only to authenticated users (RLS + in-body gate do the real guarding)
-GRANT EXECUTE ON FUNCTION create_label_draft     TO authenticated;
-GRANT EXECUTE ON FUNCTION commit_label_draft     TO authenticated;
-GRANT EXECUTE ON FUNCTION get_label_coverage_report TO authenticated;
-GRANT EXECUTE ON FUNCTION bulk_create_label_drafts  TO authenticated;
+-- SECURITY DEFINER funcs: revoke the implicit PUBLIC/anon EXECUTE FIRST, then grant ONLY authenticated.
+-- (Postgres leaves EXECUTE on PUBLIC by default; the in-body admin gate is the real guard, but per CRX
+--  convention anon must be off the SECDEF surface so the security advisor stays clean.)
+REVOKE EXECUTE ON FUNCTION create_label_draft        FROM PUBLIC, anon;
+REVOKE EXECUTE ON FUNCTION commit_label_draft        FROM PUBLIC, anon;
+REVOKE EXECUTE ON FUNCTION get_label_coverage_report FROM PUBLIC, anon;
+REVOKE EXECUTE ON FUNCTION bulk_create_label_drafts  FROM PUBLIC, anon;
+GRANT  EXECUTE ON FUNCTION create_label_draft        TO authenticated;
+GRANT  EXECUTE ON FUNCTION commit_label_draft        TO authenticated;
+GRANT  EXECUTE ON FUNCTION get_label_coverage_report TO authenticated;
+GRANT  EXECUTE ON FUNCTION bulk_create_label_drafts  TO authenticated;
