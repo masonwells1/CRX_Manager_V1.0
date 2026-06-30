@@ -1118,6 +1118,28 @@ export interface Invoice {
   // (Wave B audit B-3 / migration 20260507120000).
   wind_direction: string | null;
   temperature_text: string | null;
+  // ChemMan Gap-Closeout #1: structured START/END weather captured on the
+  // field-application invoice (mirrors job_applied_records' shape exactly). All
+  // nullable — weather auto-fill (Open-Meteo) is a convenience and never gates a
+  // save; the legacy wind_direction/temperature_text free-text fields above are
+  // preserved alongside these for back-compat. source = 'auto' (fetched) |
+  // 'manual' (hand-entered/edited). weather_manual_override flags that the user
+  // overrode an auto-filled value (compliance audit — modeled, not measured).
+  // Optional (?) because not every invoice query selects them; they are present
+  // (nullable) on the field-application invoice editor's `select('*')` load.
+  start_temp_f?: number | null;
+  start_wind_mph?: number | null;
+  start_wind_direction?: string | null;
+  start_humidity_pct?: number | null;
+  start_weather_time?: string | null; // 'HH:MM' / 'HH:MM:SS'
+  start_weather_source?: 'auto' | 'manual' | null;
+  end_temp_f?: number | null;
+  end_wind_mph?: number | null;
+  end_wind_direction?: string | null;
+  end_humidity_pct?: number | null;
+  end_weather_time?: string | null;
+  end_weather_source?: 'auto' | 'manual' | null;
+  weather_manual_override?: boolean | null;
   vehicle_name: string | null;
   application_date: string | null;
   job_id: string | null;

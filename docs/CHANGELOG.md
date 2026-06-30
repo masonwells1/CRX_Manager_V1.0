@@ -4,6 +4,17 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-06-30 — ChemMan Gap-Closeout #1: Weather auto-fill on the field-application invoice (`feat/chemman-gap-closeout`, LOCAL only)
+
+One of the two remaining ChemMan-comparison gaps. The field-app invoice's Applied Info tab gains one-tap **Get Weather** capture for START and END conditions (temperature °F, wind speed mph, wind direction, humidity %, plus a per-set clock time), persisted to structured columns alongside the legacy free-text fields.
+
+- **Migration `20260630180000_field_app_invoice_weather_capture.sql`** (LOCAL only): 13 ADDITIVE NULLABLE columns on `invoices` (a MONEY table) mirroring `job_applied_records` — `start_*`/`end_*` temp/wind/humidity/direction/source/time + `weather_manual_override` boolean. **No new CHECK, no NOT NULL** (touches none of invoices' 6 CHECKs); RLS unchanged. Extends `update_field_app_applied_info` **drift-safe** (DROP old 6-arg → single 20-arg superset; verbatim body + only additive writes; strict-actor, admin/sales gate, op-scoped idempotency, editable-invoice guard, `SET search_path` all preserved; original `REVOKE … FROM PUBLIC, anon` + `GRANT … TO authenticated` re-applied).
+- **Stale-data safety (Codex-driven):** a `p_update_weather` sentinel means an old-bundle browser tab calling the 6-arg form can't silently erase captured weather; auto readings are invalidated when the user changes the field/date but preserved on load; an in-flight fetch whose key changed is dropped. RPC-layer validation rejects impossible values (negative wind, humidity outside 0–100, bad source) without a DB CHECK.
+- **Open-Meteo only** (free/keyless, already CSP-whitelisted) via the existing `fetchWeatherForDateTime` helper + `get_field_geojson` centroid; manual entry always works offline; a failed fetch never blocks save. The mandatory **"weather is modeled, not measured — verify on-site before relying on it for compliance"** disclaimer renders on the weather UI.
+- **Proven:** rolled-back LOCAL smoke (persist / old-caller-preserve / validation-reject / idempotent replay / single overload / anon-revoked) + live-DB end-to-end render in the running app (login → invoice → Get Weather fills both sets → manual edit flips source to Manual → save persists → reload restores → user date-change clears stale auto → offline fetch still allows manual entry). 3 CRX reviewers (rls-security / migration-drift / compliance) + Codex (5 rounds) clean. NOT applied to prod — local only, awaiting the owner production gate.
+
+---
+
 ## 2026-06-30 — Beyond-Parity GO-LIVE: all 6 internal features applied to production (`feat/fieldapp-beyond-parity`)
 
 The §1–§6 beyond-parity build (built LOCAL-only, detailed in the per-section entries below) went **live to production** (`croprxsolutions.app` / Supabase `rhyzpcqhnizqbxphqdkr`) on 2026-06-30 after a full re-gate.

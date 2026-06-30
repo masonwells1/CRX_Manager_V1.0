@@ -3,7 +3,7 @@ import { useParams, useNavigate, Link } from 'react-router-dom';
 import {
   Save, Send, Trash2, MapPin, FlaskConical, Users, ClipboardList, ArrowLeft, Eye, AlertTriangle,
   Printer, Bell, Lock, X, CornerUpLeft, RotateCcw, Wind, Thermometer, Tractor, Gauge, CalendarDays, Clock,
-  Ban, Mail,
+  Ban, Mail, CloudSun, Droplets,
 } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -36,6 +36,17 @@ import CustomerSharesTable from '../components/field-app/CustomerSharesTable';
 import type { CustomerSharesBasis } from '../components/field-app/customerSplit';
 import ApplicationServicePicker from '../components/field-app/ApplicationServicePicker';
 import { downloadInvoicePdf, buildInvoicePdfDataFromRow, generateInvoicePdf } from '../lib/invoicePdf';
+import { fetchWeatherForDateTime, parseCentroid } from '../lib/weatherCapture';
+import {
+  EMPTY_WEATHER_SET,
+  weatherSetFromRow,
+  applyCapturedWeather,
+  applyManualEdit,
+  buildWeatherRpcParams,
+  invalidateAutoWeather,
+  WEATHER_DISCLAIMER,
+  type WeatherSetForm,
+} from '../lib/fieldAppWeather';
 import { sendEmail, pdfToBase64, buildInvoiceEmailPayload } from '../lib/emailService';
 import {
   countSentPostNotifications,
@@ -250,6 +261,22 @@ export default function FieldApplicationInvoice() {
   const [temperature, setTemperature] = useState('');
   const [applicator, setApplicator] = useState('');
 
+  // ChemMan Gap-Closeout #1: structured START/END weather captured on the
+  // invoice (mirrors job_applied_records + AppliedRecordsManager). Auto-fill via
+  // the free Open-Meteo helper for the invoice's field + application date; manual
+  // entry always works (offline fallback). Persisted via update_field_app_applied_info.
+  const [startWeather, setStartWeather] = useState<WeatherSetForm>(EMPTY_WEATHER_SET);
+  const [endWeather, setEndWeather] = useState<WeatherSetForm>(EMPTY_WEATHER_SET);
+  // Field centroid {lat,lng} for the FIRST mapped location on this invoice — the
+  // lookup point for Get Weather. Null when no location has a drawn boundary.
+  const [weatherCentroid, setWeatherCentroid] = useState<{ lat: number; lng: number } | null>(null);
+  // Which set is mid-fetch ('start' | 'end' | null) — drives the button spinner.
+  const [fetchingWeather, setFetchingWeather] = useState<'start' | 'end' | null>(null);
+  // The weather lookup key (field + application date) last seen as SETTLED. Used to
+  // invalidate stale AUTO readings when the user later changes the field or date — but
+  // NOT on the initial load (which legitimately hydrates auto readings from the saved row).
+  const weatherLookupKeyRef = useRef<string | null>(null);
+
   // #24: when this invoice was TRANSFERRED from a job (job_id set), read that
   // job's as-applied legal record(s) for a read-only carry-over panel on the
   // Applied Info tab — applicator/vehicle/date/weather/tach/crew. jobId stays null
@@ -409,6 +436,36 @@ export default function FieldApplicationInvoice() {
   // season contributes nothing (graceful — no warning).
   const locationFieldKey = locations.map((l) => l.field_id).sort().join(',');
   const guardrailAppDate = jobApplicationDate ?? transactionDate;
+
+  // #1 (weather auto-fill): resolve the lookup point for Get Weather — the
+  // centroid of the FIRST mapped location on this invoice — via get_field_geojson
+  // + parseCentroid (the AppliedRecordsManager pattern). Null when no location has
+  // a drawn boundary; the Get Weather button then disables and the user types
+  // weather by hand. Re-runs when the field set changes (a slow lookup for the old
+  // field is dropped via the cancelled flag so it can't clobber the new centroid).
+  const firstFieldId = locations.length > 0 ? locations[0].field_id : null;
+  useEffect(() => {
+    let cancelled = false;
+    // Clear the previous field's centroid IMMEDIATELY so that while the new lookup is in
+    // flight the Get Weather button disables (no centroid) — otherwise the stale coords
+    // could attach the prior field's weather to the newly selected location (Codex race).
+    setWeatherCentroid(null);
+    if (!firstFieldId) { return; }
+    (async () => {
+      try {
+        const { data, error } = await supabase.rpc('get_field_geojson', { p_field_id: firstFieldId });
+        if (cancelled) return;
+        if (error) { setWeatherCentroid(null); return; }
+        // get_field_geojson RETURNS TABLE(centroid_geojson text, boundary_geojson text)
+        // → PostgREST yields an array of rows; mirror JobDetail's centroid resolution.
+        const rows = assertRpcResult<Array<{ centroid_geojson?: string | null }>>(data, 'get_field_geojson');
+        setWeatherCentroid(parseCentroid(rows[0]?.centroid_geojson));
+      } catch {
+        if (!cancelled) setWeatherCentroid(null);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [firstFieldId]);
   useEffect(() => {
     let cancelled = false;
     const fieldIds = locationFieldKey ? locationFieldKey.split(',') : [];
@@ -472,6 +529,100 @@ export default function FieldApplicationInvoice() {
     () => locations.reduce((sum, l) => sum + (l.applied_acres || 0), 0),
     [locations]
   );
+
+  // #1 (weather auto-fill) handlers ─────────────────────────────────────────
+  // The application date used for the lookup mirrors the rest of the page: the
+  // source job's application date when transferred, else the invoice's date.
+  const weatherAppDate = jobApplicationDate ?? transactionDate;
+
+  // A modeled (auto) reading is keyed to a specific field + application date. When the
+  // user CHANGES the field or the date, any auto reading no longer describes the new
+  // application — clear it (manual entries are kept) so stale modeled conditions can't be
+  // saved as current compliance data (Codex r2 P2).
+  //
+  // Ordering hazard (Codex r3 P1): on initial load the key settles in TWO steps — the
+  // invoice row arrives first (key '|<date>'), then `locations` supply the field a tick
+  // later (key '<field>|<date>'). We must NOT treat that async hydration as a user change
+  // and wipe the just-loaded auto weather. So invalidation runs ONLY when the form is
+  // already `dirty` (a real user edit set it) — initial load leaves dirty=false, so the
+  // hydrated values survive. We still keep the ref current during load so the FIRST
+  // user-driven change after load is detected correctly.
+  const weatherLookupKey = `${firstFieldId ?? ''}|${weatherAppDate ?? ''}`;
+  useEffect(() => {
+    const prevKey = weatherLookupKeyRef.current;
+    weatherLookupKeyRef.current = weatherLookupKey;
+    // Only a real user edit (dirty) on a genuinely-changed key invalidates auto readings;
+    // load-time hydration (dirty=false) and the first settle (prevKey null) are no-ops.
+    if (prevKey === null || prevKey === weatherLookupKey || !dirty) return;
+    setStartWeather((prev) => invalidateAutoWeather(prev));
+    setEndWeather((prev) => invalidateAutoWeather(prev));
+  }, [weatherLookupKey, dirty]);
+
+  // Edit one reading of a weather set by hand. Any manual edit flips source ->
+  // 'manual' (the value is no longer a pristine auto pull — legal-record integrity).
+  const updateWeather = useCallback(
+    (set: 'start' | 'end', key: 'time' | 'temp_f' | 'wind_mph' | 'wind_direction' | 'humidity_pct', value: string) => {
+      const setter = set === 'start' ? setStartWeather : setEndWeather;
+      setter((prev) => applyManualEdit(prev, key, value));
+      setDirty(true);
+    },
+    [],
+  );
+
+  // NOW: stamp the current local clock time (HH:MM) into a set's time.
+  const stampWeatherNow = useCallback((set: 'start' | 'end') => {
+    const now = new Date();
+    const hhmm = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+    updateWeather(set, 'time', hhmm);
+  }, [updateWeather]);
+
+  // Get Weather: auto-pull from Open-Meteo for the application date + the set's
+  // time (midday fallback when blank) at the field centroid. On success the four
+  // readings fill and source -> 'auto'; on failure (offline / no data / no
+  // coordinates) the user gets a clear message and can still type by hand —
+  // auto-pull failure NEVER blocks saving (manual fallback is always available).
+  const getWeather = useCallback(async (set: 'start' | 'end') => {
+    if (!weatherCentroid) {
+      toast('error', 'No mapped field location for this invoice — enter weather manually.');
+      return;
+    }
+    if (!weatherAppDate) {
+      toast('error', 'Set the invoice date first, then Get Weather.');
+      return;
+    }
+    const cur = set === 'start' ? startWeather : endWeather;
+    // Snapshot the lookup key AND the set's time at request time. If the user changes the
+    // field/date (key) OR this set's time while the request is in flight, the resolved reading
+    // describes the OLD inputs and must be dropped (Codex r3/r7 P2) — otherwise stale modeled
+    // conditions, or readings under the wrong clock time, land on the record.
+    const keyAtRequest = weatherLookupKey;
+    const timeAtRequest = cur.time;
+    setFetchingWeather(set);
+    const w = await fetchWeatherForDateTime(weatherCentroid.lat, weatherCentroid.lng, weatherAppDate, cur.time || null);
+    setFetchingWeather(null);
+    if (weatherLookupKeyRef.current !== keyAtRequest) {
+      toast('error', 'Field or date changed while fetching — Get Weather again for the new values.');
+      return;
+    }
+    if (!w) {
+      toast('error', 'Could not fetch weather — enter conditions manually.');
+      return;
+    }
+    const setter = set === 'start' ? setStartWeather : setEndWeather;
+    let staleTime = false;
+    setter((prev) => {
+      // The set's time was edited mid-fetch → the reading is for the old hour; drop it
+      // (the functional updater sees the freshest time, avoiding a stale-closure compare).
+      if (prev.time !== timeAtRequest) { staleTime = true; return prev; }
+      return applyCapturedWeather(prev, w);
+    });
+    if (staleTime) {
+      toast('error', 'Time changed while fetching — Get Weather again for the new time.');
+      return;
+    }
+    setDirty(true);
+    toast('success', 'Weather filled from Open-Meteo — verify on-site before relying on it.');
+  }, [weatherCentroid, weatherAppDate, weatherLookupKey, startWeather, endWeather, toast]);
 
   // Applicator-mix-up review flag: locations whose applied acres are 10%+ off (over OR under)
   // the field's billable acreage on file. Advisory only — never blocks billing.
@@ -677,6 +828,31 @@ export default function FieldApplicationInvoice() {
     setWindDirection((invoice.wind_direction as string | null) || '');
     setTemperature((invoice.temperature_text as string | null) || '');
     setApplicator((invoice.applicator_name as string | null) || '');
+
+    // #1: load the structured START/END weather from the invoice row. The row
+    // carries the same column shape as job_applied_records; weatherSetFromRow
+    // turns the nullable columns into controlled-input strings (blank, not "null").
+    const weatherRow = {
+      start_temp_f: (invoice.start_temp_f as number | null) ?? null,
+      start_wind_mph: (invoice.start_wind_mph as number | null) ?? null,
+      start_wind_direction: (invoice.start_wind_direction as string | null) ?? null,
+      start_humidity_pct: (invoice.start_humidity_pct as number | null) ?? null,
+      start_weather_time: (invoice.start_weather_time as string | null) ?? null,
+      start_weather_source: (invoice.start_weather_source as 'auto' | 'manual' | null) ?? null,
+      end_temp_f: (invoice.end_temp_f as number | null) ?? null,
+      end_wind_mph: (invoice.end_wind_mph as number | null) ?? null,
+      end_wind_direction: (invoice.end_wind_direction as string | null) ?? null,
+      end_humidity_pct: (invoice.end_humidity_pct as number | null) ?? null,
+      end_weather_time: (invoice.end_weather_time as string | null) ?? null,
+      end_weather_source: (invoice.end_weather_source as 'auto' | 'manual' | null) ?? null,
+      weather_manual_override: (invoice.weather_manual_override as boolean | null) ?? null,
+    };
+    setStartWeather(weatherSetFromRow(weatherRow, 'start'));
+    setEndWeather(weatherSetFromRow(weatherRow, 'end'));
+    // Reset the stale-auto-weather guard so the FIRST settled lookup key after this load is
+    // recorded (not treated as a user change) — the auto readings just hydrated from the row
+    // must survive the initial render; only a later field/date change invalidates them.
+    weatherLookupKeyRef.current = null;
 
     const groupId = (invoice.invoice_group_id as string | null) || null;
     setInvoiceGroupId(groupId);
@@ -1226,6 +1402,9 @@ export default function FieldApplicationInvoice() {
         // silently matched 0 rows for a sales_rep and surfaced a false "Save failed" +
         // a duplicate invoice on retry. The RPC re-gates on admin/sales_rep, binds the
         // actor, and restricts the write to editable field-application invoices.
+        // #1: structured START/END weather params (nulls clear the columns when a
+        // set is blank — same "blank intentionally clears" semantics as the text fields).
+        const weatherParams = buildWeatherRpcParams(startWeather, endWeather);
         const appliedResult = await supabase.rpc('update_field_app_applied_info', {
           p_invoice_ids: ids,
           // Omit (undefined) when blank → the RPC's NULL default clears the column,
@@ -1234,6 +1413,11 @@ export default function FieldApplicationInvoice() {
           p_temperature_text: temperature || undefined,
           p_applicator_name: applicator || undefined,
           p_performed_by: profile.id,
+          // p_update_weather: TRUE — this (current-bundle) UI intends to write the structured
+          // weather columns. The RPC only writes them on TRUE, so a stale old-bundle tab (which
+          // omits this and the weather params) can't silently erase captured weather.
+          p_update_weather: true,
+          ...weatherParams,
         });
         if (appliedResult.error) {
           appliedInfoOk = false;
@@ -2534,6 +2718,152 @@ export default function FieldApplicationInvoice() {
                   />
                 </div>
               </div>
+            </div>
+
+            {/* #1 (ChemMan Gap-Closeout): structured START + END weather capture.
+                One-tap auto-fill from the free Open-Meteo model for the field's
+                location + the application date; every value stays editable and
+                manual-only entry works offline. The legacy free-text Wind
+                Direction / Temperature above are kept for back-compat. */}
+            <div className="space-y-4">
+              <div>
+                <h3 className="font-semibold">Weather Conditions (Start &amp; End)</h3>
+                <p className="text-xs text-gray-500">
+                  One-tap auto-fill from Open-Meteo for the field&apos;s location and the application date, or enter by hand.
+                </p>
+              </div>
+
+              {/* Mandatory compliance disclaimer — modeled, not measured. */}
+              <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
+                <AlertTriangle className="w-4 h-4 text-amber-500 mt-0.5 flex-shrink-0" />
+                <p className="text-xs text-amber-800">{WEATHER_DISCLAIMER}</p>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {(['start', 'end'] as const).map((set) => {
+                  const w = set === 'start' ? startWeather : endWeather;
+                  const label = set === 'start' ? 'Start' : 'End';
+                  const busy = fetchingWeather === set;
+                  return (
+                    <div key={set} className="rounded-lg border border-gray-200 p-3">
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-medium">{label} Conditions</span>
+                          {w.source === 'auto' && (
+                            <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-crx-green/10 text-crx-green">Auto</span>
+                          )}
+                          {w.source === 'manual' && (
+                            <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-gray-100 text-gray-600">Manual</span>
+                          )}
+                        </div>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="secondary"
+                          onClick={() => getWeather(set)}
+                          loading={busy}
+                          disabled={!canEdit || !weatherCentroid || fetchingWeather !== null}
+                          title={weatherCentroid ? 'Auto-fill from Open-Meteo' : 'No mapped field location on this invoice'}
+                        >
+                          <CloudSun className="w-3.5 h-3.5" /> Get Weather
+                        </Button>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="block text-xs text-gray-500 mb-1">
+                            <Clock className="w-3 h-3 inline mr-1" />Time
+                          </label>
+                          <div className="flex items-center gap-1">
+                            <input
+                              type="time"
+                              value={w.time}
+                              onChange={(e) => updateWeather(set, 'time', e.target.value)}
+                              disabled={!canEdit || busy}
+                              aria-label={`${label} weather time`}
+                              className="flex-1 px-2 py-2 text-sm border rounded-lg disabled:bg-gray-50"
+                            />
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="secondary"
+                              onClick={() => stampWeatherNow(set)}
+                              disabled={!canEdit || busy}
+                              title="Stamp the current time"
+                            >
+                              Now
+                            </Button>
+                          </div>
+                        </div>
+                        <div>
+                          <label className="block text-xs text-gray-500 mb-1">
+                            <Thermometer className="w-3 h-3 inline mr-1" />Temp (&deg;F)
+                          </label>
+                          <input
+                            type="number"
+                            inputMode="decimal"
+                            value={w.temp_f}
+                            onChange={(e) => updateWeather(set, 'temp_f', e.target.value)}
+                            disabled={!canEdit || busy}
+                            placeholder="e.g. 72"
+                            aria-label={`${label} temperature in Fahrenheit`}
+                            className="w-full px-2 py-2 text-sm border rounded-lg disabled:bg-gray-50"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs text-gray-500 mb-1">
+                            <Wind className="w-3 h-3 inline mr-1" />Wind Dir
+                          </label>
+                          <input
+                            type="text"
+                            value={w.wind_direction}
+                            onChange={(e) => updateWeather(set, 'wind_direction', e.target.value)}
+                            disabled={!canEdit || busy}
+                            placeholder="e.g. NW"
+                            aria-label={`${label} wind direction`}
+                            className="w-full px-2 py-2 text-sm border rounded-lg disabled:bg-gray-50"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs text-gray-500 mb-1">
+                            <Wind className="w-3 h-3 inline mr-1" />Wind (mph)
+                          </label>
+                          <input
+                            type="number"
+                            inputMode="decimal"
+                            value={w.wind_mph}
+                            onChange={(e) => updateWeather(set, 'wind_mph', e.target.value)}
+                            disabled={!canEdit || busy}
+                            placeholder="e.g. 8"
+                            aria-label={`${label} wind speed in mph`}
+                            className="w-full px-2 py-2 text-sm border rounded-lg disabled:bg-gray-50"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs text-gray-500 mb-1">
+                            <Droplets className="w-3 h-3 inline mr-1" />Humidity (%)
+                          </label>
+                          <input
+                            type="number"
+                            inputMode="decimal"
+                            value={w.humidity_pct}
+                            onChange={(e) => updateWeather(set, 'humidity_pct', e.target.value)}
+                            disabled={!canEdit || busy}
+                            placeholder="e.g. 55"
+                            aria-label={`${label} humidity percent`}
+                            className="w-full px-2 py-2 text-sm border rounded-lg disabled:bg-gray-50"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              {!weatherCentroid && (
+                <p className="text-xs text-gray-500">
+                  No mapped field boundary found for this invoice&apos;s first location, so auto-fill is unavailable &mdash; enter weather by hand.
+                </p>
+              )}
             </div>
           </div>
         )}
