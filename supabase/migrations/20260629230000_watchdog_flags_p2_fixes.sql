@@ -357,7 +357,9 @@ BEGIN
       'prior_job_date',    prior_j.job_date,
       'this_job_date',     j.job_date,
       'hours_since_prior',
-        ROUND((EXTRACT(EPOCH FROM (j.job_date::timestamptz - prior_j.job_date::timestamptz)) / 3600)::numeric, 1)
+        ROUND((EXTRACT(EPOCH FROM (
+          (j.job_date + COALESCE(j.scheduled_time, '00:00:00'::time))::timestamptz - prior_j.prior_ts
+        )) / 3600)::numeric, 1)
     )
   FROM jobs j
   JOIN job_fields jf ON jf.job_id = j.id
@@ -366,6 +368,7 @@ BEGIN
     -- most-recent PRIOR application on this same field (ANY product) whose REI hasn't cleared,
     -- judged by the PRIOR product's rei_hours (not the current job's product)
     SELECT pj.id, pj.job_number, pj.job_date,
+           (pj.job_date + COALESCE(pj.scheduled_time, '00:00:00'::time))::timestamptz AS prior_ts,
            pp.id AS prior_product_id, pp.product_name AS prior_product_name, pp.rei_hours AS prior_rei_hours
     FROM jobs pj
     JOIN job_fields pjf ON pjf.job_id = pj.id AND pjf.field_id = jf.field_id
@@ -374,12 +377,18 @@ BEGIN
     WHERE pj.id <> j.id
       AND pj.deleted_at IS NULL
       AND pj.status IN ('completed','invoiced')
-      AND pj.job_date < j.job_date
+      AND pj.job_date <= j.job_date
       AND pp.rei_hours IS NOT NULL
       AND pp.rei_hours > 0
-      AND EXTRACT(EPOCH FROM (j.job_date::timestamptz - pj.job_date::timestamptz)) / 3600
-          < pp.rei_hours
-    ORDER BY pj.job_date DESC, pp.rei_hours DESC
+      -- precise REI window from job_date + scheduled_time (falls back to date-only when time absent),
+      -- so an hours-scale REI isn't measured in whole days; also catches same-day re-entry
+      AND (pj.job_date + COALESCE(pj.scheduled_time, '00:00:00'::time))::timestamptz
+          < (j.job_date + COALESCE(j.scheduled_time, '00:00:00'::time))::timestamptz
+      AND EXTRACT(EPOCH FROM (
+            (j.job_date  + COALESCE(j.scheduled_time,  '00:00:00'::time))::timestamptz
+          - (pj.job_date + COALESCE(pj.scheduled_time, '00:00:00'::time))::timestamptz
+          )) / 3600 < pp.rei_hours
+    ORDER BY (pj.job_date + COALESCE(pj.scheduled_time, '00:00:00'::time)) DESC, pp.rei_hours DESC
     LIMIT 1
   ) prior_j ON true
   WHERE j.deleted_at IS NULL
