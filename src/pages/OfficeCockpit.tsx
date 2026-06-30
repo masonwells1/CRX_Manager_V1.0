@@ -451,11 +451,57 @@ export default function OfficeCockpit() {
     }
     await runCriticalAction({
       action: async () => {
+        // FRESHNESS GUARD (Codex go-live P2): `cleanInvoices` was derived from the LAST
+        // persisted watchdog sweep, which can be STALE if jobs/invoices changed since the
+        // cockpit loaded. Before posting real money, RECOMPUTE the sweep and re-derive
+        // "clean" from fresh flags. Fail CLOSED — if we can't confirm freshness, post NOTHING.
+        let freshFlags: WatchdogFlag[];
+        try {
+          // refresh_watchdog_flags RETURNS jsonb (sweep counts); we only need it to have run.
+          await supabaseUntyped.rpc('refresh_watchdog_flags', {}).throwOnError();
+          const freshRes = await supabaseUntyped.rpc('get_watchdog_flags', {
+            p_job_id: null,
+            p_invoice_id: null,
+            p_flag_type: null,
+            p_include_dismissed: false,
+          });
+          if (freshRes.error) throw freshRes.error;
+          freshFlags = assertRpcResult<WatchdogFlag[]>(freshRes.data, 'get_watchdog_flags');
+        } catch (err: unknown) {
+          await fetchAll(); // resync the tiles to whatever the fresh sweep produced
+          throw new Error(
+            `Could not confirm the invoices are still clean (watchdog refresh failed) — nothing was posted. ${sanitizeError(err)}`
+          );
+        }
+
+        const freshFlaggedInv = new Set(
+          freshFlags.map((f) => f.invoice_id).filter((x): x is string => !!x)
+        );
+        const freshFlaggedJob = new Set(
+          freshFlags.map((f) => f.job_id).filter((x): x is string => !!x)
+        );
+        // Re-derive the still-clean set from FRESH flags (standalone + priced + no open flag).
+        const toPost = cleanInvoices.filter(
+          (inv) =>
+            !inv.pricing_pending &&
+            inv.invoice_group_id == null &&
+            !freshFlaggedInv.has(inv.id) &&
+            !(inv.job_id != null && freshFlaggedJob.has(inv.job_id))
+        );
+        const heldBack = cleanInvoices.length - toPost.length;
+
+        if (toPost.length === 0) {
+          await fetchAll();
+          throw new Error(
+            `After refreshing the watchdog, none of the ${cleanInvoices.length} invoice(s) are still clean — review the new flags before posting.`
+          );
+        }
+
         let posted = 0;
         const failures: string[] = [];
-        // cleanInvoices holds only NON-grouped drafts (split groups are excluded above and posted
-        // by hand), so each posts singly via post_invoice — we never call post_invoice_group here.
-        for (const inv of cleanInvoices) {
+        // toPost holds only NON-grouped, still-clean drafts, so each posts singly via
+        // post_invoice — we never call post_invoice_group here.
+        for (const inv of toPost) {
           try {
             if (!postKeysRef.current[inv.id]) {
               postKeysRef.current[inv.id] = generateIdempotencyKey('post_invoice', `${profile.id}:${inv.id}`);
@@ -477,9 +523,15 @@ export default function OfficeCockpit() {
           }
         }
         await fetchAll();
-        if (failures.length > 0) {
+        if (failures.length > 0 || heldBack > 0) {
           // Honest partial outcome; keep failed keys so a retry reuses them.
-          throw new Error(`Posted ${posted}/${cleanInvoices.length}. Failed: ${failures.slice(0, 3).join(' | ')}${failures.length > 3 ? ' …' : ''}`);
+          const heldMsg = heldBack > 0 ? ` ${heldBack} held back (new watchdog flag since load).` : '';
+          throw new Error(
+            `Posted ${posted}/${toPost.length}.${heldMsg}` +
+            (failures.length > 0
+              ? ` Failed: ${failures.slice(0, 3).join(' | ')}${failures.length > 3 ? ' …' : ''}`
+              : '')
+          );
         }
         postKeysRef.current = {};
       },
