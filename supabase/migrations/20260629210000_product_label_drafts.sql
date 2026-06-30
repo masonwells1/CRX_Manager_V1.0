@@ -308,6 +308,13 @@ BEGIN
       RAISE EXCEPTION 'INVALID_LABEL_VALUE: max_label_rate must be >= 0 (got %)', v_new_mlr;
     END IF;
 
+    -- Normalize blank text to NULL so an empty string is treated as "no value" everywhere below
+    -- (skip decision, empty/no-values guards, and what we store). The UI already sends '' as null,
+    -- but this also covers OCR/bulk-created drafts and products carrying a blank string.
+    v_new_sw   := NULLIF(btrim(v_new_sw), '');
+    v_new_epa  := NULLIF(btrim(v_new_epa), '');
+    v_new_mlru := NULLIF(btrim(v_new_mlru), '');
+
     -- Empty-decision guard: an accept/edit with NO resolved values is a no-op that
     -- would mark the draft 'decided' while writing nothing. Reject it so a value-less
     -- draft (e.g. a fresh "New Draft" or a needs_manual row) can't leave the queue
@@ -320,7 +327,7 @@ BEGIN
     -- No-overwrite guard: if product field is non-empty and p_force_overwrite=false → skip that field
     -- signal_word
     IF v_new_sw IS NOT NULL THEN
-      IF v_product.signal_word IS NULL OR p_force_overwrite THEN
+      IF NULLIF(btrim(v_product.signal_word), '') IS NULL OR p_force_overwrite THEN
         v_applied := array_append(v_applied, 'signal_word');
       ELSE
         v_skipped := array_append(v_skipped, 'signal_word');
@@ -347,7 +354,7 @@ BEGIN
     END IF;
     -- epa_registration
     IF v_new_epa IS NOT NULL THEN
-      IF v_product.epa_registration IS NULL OR p_force_overwrite THEN
+      IF NULLIF(btrim(v_product.epa_registration), '') IS NULL OR p_force_overwrite THEN
         v_applied := array_append(v_applied, 'epa_registration');
       ELSE
         v_skipped := array_append(v_skipped, 'epa_registration');
@@ -453,10 +460,10 @@ BEGIN
 
   SELECT jsonb_build_object(
     'total_active_products', v_total,
-    'signal_word',       (SELECT count(*) FROM products WHERE is_active = true AND signal_word      IS NOT NULL),
+    'signal_word',       (SELECT count(*) FROM products WHERE is_active = true AND NULLIF(btrim(signal_word), '')      IS NOT NULL),
     'rei_hours',         (SELECT count(*) FROM products WHERE is_active = true AND rei_hours        IS NOT NULL),
     'phi_days',          (SELECT count(*) FROM products WHERE is_active = true AND phi_days         IS NOT NULL),
-    'epa_registration',  (SELECT count(*) FROM products WHERE is_active = true AND epa_registration IS NOT NULL),
+    'epa_registration',  (SELECT count(*) FROM products WHERE is_active = true AND NULLIF(btrim(epa_registration), '') IS NOT NULL),
     'max_label_rate',    (SELECT count(*) FROM products WHERE is_active = true AND max_label_rate   IS NOT NULL),
     'pending_drafts',    (SELECT count(*) FROM product_label_drafts WHERE status = 'pending'),
     'accepted_drafts',   (SELECT count(*) FROM product_label_drafts WHERE status IN ('accepted','edited')),
