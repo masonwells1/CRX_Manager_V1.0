@@ -121,18 +121,6 @@ BEGIN
     ) AS fr
     FROM job_fields jf
     JOIN fields f ON f.id = jf.field_id
-    -- the customer this field bills to (precedence resolver)
-    CROSS JOIN LATERAL (
-      SELECT COALESCE(
-        (SELECT jfs.customer_id FROM job_field_shares jfs
-          WHERE jfs.job_id = p_job_id AND jfs.field_id = f.id AND jfs.customer_id IS NOT NULL
-          LIMIT 1),
-        (SELECT fbd.customer_id FROM field_billing_defaults fbd
-          WHERE fbd.field_id = f.id AND fbd.customer_id IS NOT NULL
-          LIMIT 1),
-        v_primary_customer_id
-      ) AS owner_customer_id
-    ) own
     -- the real sprayed acres for this field on this job (NULL when none recorded)
     LEFT JOIN LATERAL (
       SELECT SUM(rf.applied_acres) AS applied_acres
@@ -143,8 +131,28 @@ BEGIN
       HAVING SUM(rf.applied_acres) > 0
     ) applied ON true
     WHERE jf.job_id = p_job_id
-      -- scope to ONE customer's fields when a recipient is given (P1 leak fix)
-      AND (p_customer_id IS NULL OR own.owner_customer_id = p_customer_id)
+      -- Scope to a recipient (P1 leak fix), but a field SHARED across MULTIPLE customers must
+      -- appear for EACH of its billed customers (not collapse to one owner). Include field f for
+      -- p_customer_id when: whole-job preview (NULL); OR p_customer_id holds an explicit share of f;
+      -- OR f has NO explicit shares and p_customer_id is f's billing-default; OR f has neither and
+      -- p_customer_id is the job's primary customer. A customer with NO claim to f never sees it.
+      AND (
+        p_customer_id IS NULL
+        OR EXISTS (
+             SELECT 1 FROM job_field_shares jfs
+             WHERE jfs.job_id = p_job_id AND jfs.field_id = f.id AND jfs.customer_id = p_customer_id
+           )
+        OR (
+          NOT EXISTS (SELECT 1 FROM job_field_shares jfs2 WHERE jfs2.job_id = p_job_id AND jfs2.field_id = f.id)
+          AND (
+            EXISTS (SELECT 1 FROM field_billing_defaults fbd WHERE fbd.field_id = f.id AND fbd.customer_id = p_customer_id)
+            OR (
+              NOT EXISTS (SELECT 1 FROM field_billing_defaults fbd2 WHERE fbd2.field_id = f.id)
+              AND p_customer_id = v_primary_customer_id
+            )
+          )
+        )
+      )
   ) s;
 
   -- ── Products applied (job-wide — the same tank mix went on every field). REI/PHI prefer
