@@ -126,7 +126,7 @@ BEGIN
         / field_totals.boundary_acres * 100
         >= p_acre_divergence_threshold
     AND (p_job_id IS NULL OR j.id = p_job_id)
-  ON CONFLICT (natural_key) DO UPDATE
+  ON CONFLICT (natural_key) WHERE natural_key IS NOT NULL DO UPDATE
     SET message    = EXCLUDED.message,
         detail     = EXCLUDED.detail,
         created_at = now()
@@ -159,7 +159,7 @@ BEGIN
         p.max_label_rate, p.max_label_rate_unit
       )
       ELSE format(
-        'Job %s: %s applied at %s %s/acre exceeds %.0f× suggested rate (%s %s/acre)',
+        'Job %s: %s applied at %s %s/acre exceeds %s× suggested rate (%s %s/acre)',
         j.job_number, p.product_name,
         jc.rate_per_acre, COALESCE(jc.rate_unit,''),
         p_rate_fallback_multiple,
@@ -218,7 +218,7 @@ BEGIN
             = LOWER(NULLIF(btrim(COALESCE(p.rate_unit,'')), ''))
       )
     )
-  ON CONFLICT (natural_key) DO UPDATE
+  ON CONFLICT (natural_key) WHERE natural_key IS NOT NULL DO UPDATE
     SET message    = EXCLUDED.message,
         detail     = EXCLUDED.detail,
         created_at = now()
@@ -266,7 +266,7 @@ BEGIN
     AND i.deleted_at IS NULL
     AND j.deleted_at IS NULL
     AND (p_job_id IS NULL OR i.job_id = p_job_id)
-  ON CONFLICT (natural_key) DO UPDATE
+  ON CONFLICT (natural_key) WHERE natural_key IS NOT NULL DO UPDATE
     SET message    = EXCLUDED.message,
         detail     = EXCLUDED.detail,
         created_at = now()
@@ -316,7 +316,7 @@ BEGIN
     AND i.deleted_at IS NULL
     AND i.job_id IS NULL   -- job-level handled above
     AND p_job_id IS NULL   -- blend-ticket scope only in full-refresh mode
-  ON CONFLICT (natural_key) DO UPDATE
+  ON CONFLICT (natural_key) WHERE natural_key IS NOT NULL DO UPDATE
     SET message    = EXCLUDED.message,
         detail     = EXCLUDED.detail,
         created_at = now()
@@ -379,7 +379,7 @@ BEGIN
     AND p.rei_hours IS NOT NULL
     AND p.rei_hours > 0
     AND (p_job_id IS NULL OR j.id = p_job_id)
-  ON CONFLICT (natural_key) DO UPDATE
+  ON CONFLICT (natural_key) WHERE natural_key IS NOT NULL DO UPDATE
     SET message    = EXCLUDED.message,
         detail     = EXCLUDED.detail,
         created_at = now()
