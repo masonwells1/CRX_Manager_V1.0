@@ -38,12 +38,19 @@ import ApplicationServicePicker from '../components/field-app/ApplicationService
 import { downloadInvoicePdf, buildInvoicePdfDataFromRow, generateInvoicePdf } from '../lib/invoicePdf';
 import { sendEmail, pdfToBase64, buildInvoiceEmailPayload } from '../lib/emailService';
 import {
-  parsePostNotificationTemplate,
-  renderPostNotification,
-  buildPostNotificationEmailPayload,
   countSentPostNotifications,
   describePostNotificationSend,
 } from '../lib/postNotification';
+// §6: "Your Field Was Sprayed" rich proof — assembled from get_job_proof_data and
+// sent through the SAME record/confirm post-notification RPCs (office one-tap, not auto).
+import {
+  buildProofDraft,
+  buildProofEmailPayload,
+  proofSubject,
+  renderProofText,
+  type JobProofData,
+  type ProofDraft,
+} from '../lib/proofNotification';
 import { runCriticalAction } from '../lib/criticalAction';
 import {
   carryoverRowsFromRecords,
@@ -279,10 +286,16 @@ export default function FieldApplicationInvoice() {
   const jobNotifLoadReqRef = useRef<string | null>(null);
   // #41: post-application notice send action state (mirrors JobDetail's).
   const [sendingPostNotice, setSendingPostNotice] = useState(false);
-  const [showPostNoticeConfirm, setShowPostNoticeConfirm] = useState(false);
   const postNoticeIdem = useIdempotencyKey('record_job_post_notifications', profile?.id || '');
   const alreadySentPostCount = countSentPostNotifications(jobNotifications);
   const postSendCopy = describePostNotificationSend(alreadySentPostCount);
+  // §6: the office-reviewable "your field was sprayed" PROOF draft. Built on demand from
+  // get_job_proof_data when the office opens the preview; null until then. The same draft
+  // is reused for the per-recipient email body when they approve the one-tap send, so the
+  // proof they reviewed is exactly what goes out.
+  const [proofDraft, setProofDraft] = useState<ProofDraft | null>(null);
+  const [showProofPreview, setShowProofPreview] = useState(false);
+  const [loadingProof, setLoadingProof] = useState(false);
   // #24 (money-lens LOW#2): surface a fetch error instead of a silent empty list, so
   // a broken query reads as an error rather than a misleading "No notifications yet".
   const [notificationsError, setNotificationsError] = useState<string | null>(null);
@@ -1700,14 +1713,55 @@ export default function FieldApplicationInvoice() {
     });
   };
 
-  // #41: Send an after-application post-notification to the source job's resolved
-  // share customer(s), RIGHT FROM THE INVOICE (criterion #1/#5). Mirrors JobDetail's
-  // handleSendPostNotification: RECORD (record_job_post_notifications, resolves
-  // recipients off the PERSISTED job) -> SEND (gated edge fn, owner-editable template)
-  // -> CONFIRM (confirm_job_notification_sent, reused from #40). Same fail-closed
-  // gating on a successfully-loaded log + same re-send safety. The rows it writes are
-  // the SAME job_notifications rows the JOB reads — so a post sent here shows on the
-  // job and vice-versa (continuous shared history). Real outbound email is GATED.
+  // §6: load the rich "your field was sprayed" PROOF draft from the source job. Reads
+  // get_job_proof_data (read-only, admin/sales-gated) and assembles the office-reviewable
+  // draft (fields+acres+boundary map, products, weather, applicator, REI/PHI). Returns the
+  // draft so the SEND path can reuse the exact draft the office reviewed. Throws on failure
+  // so a transient error never silently falls back to the generic notice.
+  const loadProofDraft = useCallback(async (): Promise<ProofDraft | null> => {
+    if (!jobId) return null;
+    const { data, error } = await supabase.rpc('get_job_proof_data', { p_job_id: jobId });
+    if (error) throw error;
+    const proof = assertRpcResult<JobProofData>(data, 'get_job_proof_data');
+    const draft = buildProofDraft(proof);
+    setProofDraft(draft);
+    return draft;
+  }, [jobId]);
+
+  // §6: open the proof preview (office reviews the rich draft before approving the send).
+  const handleOpenProofPreview = async () => {
+    if (!jobId) {
+      toast('error', 'This invoice has no source job to build a proof from.');
+      return;
+    }
+    setLoadingProof(true);
+    try {
+      await loadProofDraft();
+      setShowProofPreview(true);
+    } catch (err) {
+      const msg = hasRpcCode(err, RpcErrorCodes.INSUFFICIENT_ROLE)
+        ? 'Only admin or sales can preview the proof.'
+        : err instanceof Error ? err.message : 'Could not build the proof preview.';
+      toast('error', msg);
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'invoice_proof_preview', jobId } });
+    } finally {
+      setLoadingProof(false);
+    }
+  };
+
+  // §6: Send the rich "your field was sprayed" PROOF to the source job's resolved share
+  // customer(s), RIGHT FROM THE INVOICE — OFFICE-APPROVED ONE-TAP (never auto-send; the
+  // office reviews the proof, then taps Send). Builds ON the parity post-notification
+  // infra unchanged:
+  //   RECORD  -> record_job_post_notifications (resolves recipients off the PERSISTED job,
+  //              logs one row each, returns a DETERMINISTIC per-recipient idempotency key)
+  //   SEND    -> the rich proof body (buildProofEmailPayload), via the gated send-email edge
+  //              fn (email_type='post_application_notice' — PREPARED, deploy GATED for Mason)
+  //   CONFIRM -> confirm_job_notification_sent (flips a row failed->sent ONLY after the
+  //              email actually goes out; reused from #40)
+  // Per-recipient idempotency (the RPC's email_idempotency_key, NOT Date.now()) means a
+  // retry never double-sends; a recipient with no email on file is logged as failed, never
+  // dropped. Same fail-closed gating on a successfully-loaded log + same re-send safety.
   const handleSendPostNotification = async () => {
     if (!jobId || !profile) {
       toast('error', 'This invoice has no source job to notify.');
@@ -1728,36 +1782,29 @@ export default function FieldApplicationInvoice() {
     setSendingPostNotice(true);
     const key = postNoticeIdem.getKey();
     try {
-      // Resolve the editable template (criterion #4). ABORT on a failed read so a
-      // transient error never silently emails the hard-coded default wording.
-      const { data: tplRow, error: tplErr } = await supabase
-        .from('app_settings')
-        .select('setting_value')
-        .eq('setting_key', 'post_application_notice_template')
-        .maybeSingle();
-      if (tplErr) throw new Error(`Could not load the post-notification message: ${tplErr.message}`);
-      const template = parsePostNotificationTemplate((tplRow as { setting_value?: string } | null)?.setting_value ?? null);
+      // §6: build the rich "your field was sprayed" PROOF draft from the source job.
+      // Reuse the draft the office just previewed if present, else build it now. ABORT
+      // on a failed build so a transient error never sends an empty/wrong proof.
+      const draft = proofDraft ?? (await loadProofDraft());
+      if (!draft) throw new Error('Could not build the proof for this job.');
 
-      // Both the job number and the APPLICATION date come from the source job — the
-      // notice tells the customer when the application happened, NOT the billing date.
-      // Fall back to the invoice's transaction date only if the job has no job_date
-      // (it always does in practice). Per-recipient farm names re-render the body below.
-      const noticeJobDate = jobApplicationDate ?? transactionDate;
+      // The application date + job number live on the draft (from the source job — the
+      // proof tells the customer when the application happened, not the billing date).
       const primaryFarm = pdfSnapshot?.customer_name
         || shares.find((s) => s.is_primary)?.customer_name
         || shares[0]?.customer_name
         || '';
-      const recorded = renderPostNotification(template, {
-        customer: primaryFarm,
-        jobNumber: jobNumber ?? '',
-        jobDate: noticeJobDate,
-      });
+      // The recorded log subject/message = the proof text for the PRIMARY farm (each
+      // recipient's row is re-stamped with their own rendered text on confirm below).
+      const recordedSubject = proofSubject(draft);
+      const recordedBody = renderProofText({ customerName: primaryFarm || 'Customer', draft });
 
-      // 1) Record the per-recipient log (admin/sales only; resolves recipients).
+      // 1) Record the per-recipient log (admin/sales only; resolves recipients off the
+      // PERSISTED job; returns a DETERMINISTIC per-recipient idempotency key).
       const rpcRes = await supabase.rpc('record_job_post_notifications', {
         p_job_id: jobId,
-        p_subject: recorded.subject,
-        p_message: recorded.body,
+        p_subject: recordedSubject,
+        p_message: recordedBody,
         p_performed_by: profile.id,
         p_idempotency_key: key,
       });
@@ -1776,31 +1823,37 @@ export default function FieldApplicationInvoice() {
         }>;
       }>(rpcRes.data, 'record_job_post_notifications');
 
-      // 2) Send the actual email to each recipient WITH an email; confirm -> 'sent'
-      // only on success.
+      // 2) Send the rich proof email to each recipient WITH an email; confirm -> 'sent'
+      // only on success. The per-recipient deterministic key (email_idempotency_key) is
+      // REQUIRED — buildProofEmailPayload refuses to invent a timestamp key, so a missing
+      // key means "do not send" rather than a double-send risk.
       let emailedOk = 0;
       let emailErr = 0;
       for (const r of result.recipients) {
         if (!r.has_email || !r.email) continue;
+        if (!r.email_idempotency_key) {
+          // Defensive: a recipient WITH an email should always carry a key. If not, skip
+          // (logged 'failed') rather than send with a non-deterministic key.
+          emailErr += 1;
+          Sentry.captureMessage('post-notification recipient missing email_idempotency_key', { level: 'warning', extra: { jobId, customerId: r.customer_id } });
+          continue;
+        }
         try {
-          const rendered = renderPostNotification(template, {
-            customer: r.farm_name ?? primaryFarm,
-            jobNumber: jobNumber ?? '',
-            jobDate: noticeJobDate,
-          });
-          const payload = buildPostNotificationEmailPayload({
+          const recipientName = r.farm_name ?? primaryFarm ?? 'Customer';
+          const recipientText = renderProofText({ customerName: recipientName, draft });
+          const payload = buildProofEmailPayload({
             customerEmail: r.email,
             customerId: r.customer_id,
+            customerName: recipientName,
             jobId,
-            subject: rendered.subject,
-            body: rendered.body,
+            draft,
+            emailIdempotencyKey: r.email_idempotency_key,
           });
-          if (r.email_idempotency_key) payload.idempotency_key = r.email_idempotency_key;
           await sendEmail(payload);
           const confirmRes = await supabase.rpc('confirm_job_notification_sent', {
             p_notification_id: r.notification_id,
-            p_subject: rendered.subject,
-            p_message: rendered.body,
+            p_subject: proofSubject(draft),
+            p_message: recipientText,
             p_performed_by: profile.id,
           });
           if (confirmRes.error) throw confirmRes.error;
@@ -1823,10 +1876,11 @@ export default function FieldApplicationInvoice() {
         toast('error', `No email sent — ${noEmail} billed customer(s) have no email on file. Add an email and try again.`);
       } else {
         postNoticeIdem.resetKey();
+        setShowProofPreview(false);
         if (noEmail > 0) {
-          toast('success', `Post-notification sent to ${emailedOk} customer(s). ${noEmail} had no email on file (logged as failed).`);
+          toast('success', `Proof sent to ${emailedOk} customer(s). ${noEmail} had no email on file (logged as failed).`);
         } else {
-          toast('success', `Post-notification sent to ${emailedOk} customer(s).`);
+          toast('success', `Proof sent to ${emailedOk} customer(s).`);
         }
       }
       await loadJobNotifications();
@@ -1968,21 +2022,22 @@ export default function FieldApplicationInvoice() {
               Email
             </Button>
           )}
-          {/* #41: Send Post-Notification — an AFTER-application courtesy notice to the
-              job's billed customer(s), RIGHT FROM THE INVOICE. Only when this invoice
-              came from a job that has been applied (completed / invoiced). Re-send
-              safety: relabels + warns once a 'post' notice is already sent. Fail-closed
-              until the shared log has loaded so it never bypasses the re-send warning. */}
+          {/* §6: "Your Field Was Sprayed" PROOF — opens an office-reviewable preview of the
+              rich proof (fields+acres+boundary map, products, weather, applicator, REI/PHI),
+              from which the office one-taps Send. NOT a silent auto-send. Only when this
+              invoice came from a job that has been applied (completed / invoiced). Re-send
+              safety: relabels + warns once a 'post' notice is already sent. Fail-closed until
+              the shared log has loaded so it never bypasses the re-send warning. */}
           {!isNew && jobId && (jobStatus === 'completed' || jobStatus === 'invoiced') && (
             <Button
               variant={postSendCopy.isResend ? 'secondary' : 'primary'}
               size="sm"
               icon={<Bell className="w-4 h-4" />}
-              onClick={() => setShowPostNoticeConfirm(true)}
-              loading={sendingPostNotice}
-              disabled={sendingPostNotice || loadingJobNotifications || !jobNotificationsLoaded}
+              onClick={handleOpenProofPreview}
+              loading={loadingProof || sendingPostNotice}
+              disabled={loadingProof || sendingPostNotice || loadingJobNotifications || !jobNotificationsLoaded}
             >
-              {postSendCopy.buttonLabel}
+              {postSendCopy.isResend ? 'Re-send Proof' : 'Send Proof'}
             </Button>
           )}
           {locations.length > 0 && (
@@ -2606,19 +2661,102 @@ export default function FieldApplicationInvoice() {
         variant="danger"
       />
 
-      {/* #41: Send Post-Notification Confirm (customer-facing — explicit confirm). On a
-          RE-SEND (a 'post' notice already sent) the title/copy/label switch to an
-          explicit "notify a SECOND time" warning. */}
-      <ConfirmModal
-        open={showPostNoticeConfirm}
-        onClose={() => setShowPostNoticeConfirm(false)}
-        onConfirm={() => { setShowPostNoticeConfirm(false); handleSendPostNotification(); }}
-        title={postSendCopy.confirmTitle}
-        message={postSendCopy.confirmMessage}
-        confirmLabel={postSendCopy.confirmLabel}
-        variant="warning"
-        loading={sendingPostNotice}
-      />
+      {/* §6: "Your Field Was Sprayed" PROOF preview — the office REVIEWS the rich proof
+          (field/acres/boundary map, products, weather, applicator, REI/PHI) and one-taps
+          Send. NOTHING auto-sends. On a RE-SEND (a 'post' notice already sent) the warning
+          copy switches to an explicit "notify a SECOND time" caution. */}
+      <Modal
+        open={showProofPreview}
+        onClose={() => setShowProofPreview(false)}
+        title={postSendCopy.isResend ? 'Re-send "Your Field Was Sprayed" Proof' : '"Your Field Was Sprayed" Proof'}
+        size="large"
+      >
+        {proofDraft ? (
+          <div className="space-y-4">
+            {/* Re-send warning (explicit second-notify caution). */}
+            {postSendCopy.isResend && (
+              <div className="flex items-start gap-2 px-3 py-2 bg-amber-50 border-l-4 border-amber-400 rounded text-sm text-amber-800">
+                <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+                <span>{postSendCopy.confirmMessage}</span>
+              </div>
+            )}
+
+            {/* Summary line. */}
+            <div className="text-sm text-gray-700 space-y-1">
+              <div><span className="font-medium">Job:</span> {proofDraft.jobNumber}{proofDraft.applicationDate ? ` · applied ${proofDraft.applicationDate}` : ''}</div>
+              {proofDraft.applicator && <div><span className="font-medium">Applicator:</span> {proofDraft.applicator}</div>}
+              {proofDraft.totalAcres !== '—' && <div><span className="font-medium">Total acres:</span> {proofDraft.totalAcres}</div>}
+              {proofDraft.weatherSummary && <div><span className="font-medium">Weather at application:</span> {proofDraft.weatherSummary}</div>}
+            </div>
+
+            {/* Fields with their boundary-map snapshots. */}
+            {proofDraft.fields.length > 0 && (
+              <div>
+                <h4 className="text-sm font-semibold text-gray-900 mb-2 flex items-center gap-1.5"><MapPin className="w-4 h-4 text-crx-green" /> Fields treated</h4>
+                <div className="space-y-3">
+                  {proofDraft.fields.map((f) => (
+                    <div key={`${f.field_name}-${f.acres}`} className="text-sm text-gray-700">
+                      <div className="font-medium">{f.field_name}{f.location ? ` — ${f.location}` : ''} ({f.acres})</div>
+                      {f.mapImageUrl && (
+                        <a href={f.mapLink ?? f.mapImageUrl} target="_blank" rel="noopener noreferrer">
+                          <img
+                            src={f.mapImageUrl}
+                            alt={`Map of ${f.field_name}`}
+                            width={480}
+                            loading="lazy"
+                            className="mt-1 max-w-full rounded border border-gray-200"
+                          />
+                        </a>
+                      )}
+                      {!f.mapImageUrl && (
+                        <div className="text-xs text-gray-400 mt-0.5">No mapped boundary on file for this field &mdash; map omitted.</div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Products with REI/PHI safe-timing. */}
+            {proofDraft.products.length > 0 && (
+              <div>
+                <h4 className="text-sm font-semibold text-gray-900 mb-2 flex items-center gap-1.5"><FlaskConical className="w-4 h-4 text-crx-green" /> Products applied</h4>
+                <ul className="space-y-1.5">
+                  {proofDraft.products.map((p) => (
+                    <li key={p.label} className="text-sm text-gray-700">
+                      <span className="font-medium">{p.label}</span>
+                      {p.signalWord && <span className="text-amber-700"> ({p.signalWord})</span>}
+                      {p.safeTiming && <div className="text-xs text-gray-500">{p.safeTiming}</div>}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            <div className="text-xs text-gray-500 border-t pt-3">
+              This proof is emailed to the job&apos;s billed customer(s). Customers with no email on file are
+              logged but not emailed. Each send is recorded in the notification log below.
+            </div>
+
+            <div className="flex justify-end gap-2 pt-1">
+              <Button variant="secondary" size="sm" onClick={() => setShowProofPreview(false)} disabled={sendingPostNotice}>
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                icon={<Send className="w-4 h-4" />}
+                onClick={handleSendPostNotification}
+                loading={sendingPostNotice}
+                disabled={sendingPostNotice}
+              >
+                {postSendCopy.isResend ? 'Re-send Proof' : 'Send Proof'}
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div className="py-8 text-center text-sm text-gray-500">Building the proof&hellip;</div>
+        )}
+      </Modal>
 
       {/* #28: Post confirm — posting commits the bill to its month-end batch. */}
       <ConfirmModal

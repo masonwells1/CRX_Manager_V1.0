@@ -8837,6 +8837,10 @@ export type Database = {
           total_acres: number
         }[]
       }
+      get_job_proof_data: {
+        Args: { p_job_id: string }
+        Returns: Json
+      }
       get_logbook_by_applicator: {
         Args: {
           p_applicator_id: string

@@ -4,6 +4,19 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-06-30 — Beyond-Parity §6 (FINAL): "Your Field Was Sprayed" proof notification — office-approved one-tap send (`feat/fieldapp-beyond-parity`)
+
+On a completed/invoiced field-app job, the office reviews a rich **proof** of the application and **one-taps Send** to the grower (never an auto-send). Builds on the parity #41 post-notification infra rather than duplicating it.
+
+- **Migration `20260630120000_job_proof_data.sql`** (LOCAL only): adds one read-only `SECURITY DEFINER` RPC `get_job_proof_data(uuid)` returning a `jsonb` proof payload — job/applicator, fields (effective acres + county/state + centroid & boundary GeoJSON via PostGIS + planned harvest date), products (per-acre rate, REI hours, PHI days, signal word), and weather at application. `STABLE`/no-mutation (no idempotency key); `SET search_path` (incl. `extensions` for PostGIS); anon revoked; admin/sales_rep gate as the first statement. Each block degrades gracefully (NULL when not on file).
+- **Reuses unchanged:** `record_job_post_notifications` (per-recipient log + DETERMINISTIC per-recipient email idempotency key) and `confirm_job_notification_sent` (flips a row to `sent` only after the email succeeds). The send-email `post_application_notice` email_type is already allow-listed — **PREPARED, deploy GATED for Mason** (not deployed).
+- **Frontend:** `src/lib/proofNotification.ts` (pure builder: rich HTML + plain-text proof, free/keyless OpenStreetMap static boundary-map snapshot + live-map link, REI/PHI safe-timing reusing §5 `labelGuardrails`, `escapeHtml` on all customer/field/product text → no injection; 28 unit tests) + an office-reviewable proof-preview Modal and rewired send in `FieldApplicationInvoice.tsx`. `vercel.json` CSP `img-src` adds `staticmap.openstreetmap.de` for the in-app preview.
+- **Safety:** office-approved one-tap (no silent auto-send); per-recipient deterministic key (never `Date.now()`) so a retry never double-sends; a recipient with no email is logged `failed`, never dropped; per-recipient send errors are surfaced. Static **boundary-map IMAGE** ships as a pinned OSM snapshot + deep link; a full polygon-on-tile render is flagged as a follow-on.
+- **Proven:** rolled-back LOCAL smoke (record → retry-idempotent → confirm 2 recipients; anon + applicator rejected) + a live-DB end-to-end render (auth → RPC → rich proof HTML with every block). typecheck/lint/build clean; rls-security + migration-drift reviewers CLEAN.
+- **GATE:** the send-email edge-function **deploy** (to activate `post_application_notice` in live) is **OWNER-GATED** — prepared, not deployed.
+
+---
+
 ## 2026-06-30 — Beyond-Parity §4: Auto-Invoice on job completion — auto-DRAFT only, NEVER auto-post (`feat/fieldapp-beyond-parity`)
 
 When a field job is completed, optionally create a **draft** field-application invoice for the office to review and post — the riskiest "money" section, built off-by-default and fail-soft so it can never surprise the office or block job completion.
