@@ -779,6 +779,44 @@ function parseDocument(
 
 // ─── Main Handler ────────────────────────────────────────────────────────────
 
+// PARKED-011 (codex-driven cycle 7, MED): bound the request body + per-page
+// decoded size BEFORE forwarding to Google Vision, to cap Edge Function memory
+// and Vision API cost. Streams the body counting bytes (a lying/absent
+// Content-Length can't bypass it) and aborts past the cap.
+const MAX_REQUEST_BODY_BYTES = 52_000_000;     // ~50 MB on the wire
+const MAX_DECODED_BYTES_PER_PAGE = 5_000_000;  // 5 MB decoded per page
+const MAX_DECODED_BYTES_TOTAL = 37_000_000;    // 37 MB decoded across all pages
+
+async function readBodyWithCap(req: Request, maxBytes: number): Promise<unknown> {
+  if (!req.body) throw new Error("Request body is required");
+  const reader = req.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel("Request body exceeds limit");
+        throw Object.assign(new Error(`Request body exceeds ${maxBytes} bytes`), { __status: 413 });
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(total);
+  let off = 0;
+  for (const c of chunks) { bytes.set(c, off); off += c.byteLength; }
+  return JSON.parse(new TextDecoder().decode(bytes));
+}
+
+function approxDecodedBytes(b64: string): number {
+  const padding = b64.endsWith("==") ? 2 : b64.endsWith("=") ? 1 : 0;
+  return Math.floor((b64.length * 3) / 4) - padding;
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { status: 200, headers: corsHeaders });
@@ -822,10 +860,19 @@ Deno.serve(async (req: Request) => {
   let pages: PageInput[];
   let _metadata: Record<string, string> = {};
 
+  // PARKED-011: read the body with a hard byte cap (replaces await req.json()),
+  // then validate the pages array (length, per-page magic-byte + decoded-size caps).
+  let body: { document_type?: DocumentType; pages?: PageInput[]; metadata?: Record<string, string> };
   try {
-    const body = await req.json();
-    documentType = body.document_type;
-    pages = body.pages;
+    body = await readBodyWithCap(req, MAX_REQUEST_BODY_BYTES) as typeof body;
+  } catch (e) {
+    const status = (e as { __status?: number }).__status === 413 ? 413 : 400;
+    return jsonResponse({ error: (e as Error).message }, status);
+  }
+
+  try {
+    documentType = body.document_type as DocumentType;
+    pages = body.pages as PageInput[];
     _metadata = body.metadata || {};
 
     if (!documentType) throw new Error("document_type is required");
@@ -834,6 +881,28 @@ Deno.serve(async (req: Request) => {
     }
     if (pages.length > 20) {
       throw new Error("Maximum 20 pages per request");
+    }
+
+    // PARKED-011: per-page magic-byte sniff (PNG/JPEG/PDF) + decoded-size caps,
+    // so a handful of huge or garbage base64 blobs can't OOM the function or run
+    // up the Vision bill.
+    let totalDecodedBytes = 0;
+    for (const [i, p] of pages.entries()) {
+      if (typeof p?.base64 !== "string" || p.base64.length === 0) {
+        throw new Error(`pages[${i}].base64 must be a non-empty string`);
+      }
+      const headB64 = p.base64.slice(0, 8);
+      if (!/^(\/9j\/|iVBOR|JVBER)/.test(headB64)) {
+        throw new Error(`pages[${i}].base64 does not look like a supported image (PNG / JPEG / PDF)`);
+      }
+      const decoded = approxDecodedBytes(p.base64);
+      if (decoded > MAX_DECODED_BYTES_PER_PAGE) {
+        throw new Error(`pages[${i}] is ~${decoded} decoded bytes; max ${MAX_DECODED_BYTES_PER_PAGE} per page`);
+      }
+      totalDecodedBytes += decoded;
+    }
+    if (totalDecodedBytes > MAX_DECODED_BYTES_TOTAL) {
+      throw new Error(`total decoded bytes across all pages is ~${totalDecodedBytes}; max ${MAX_DECODED_BYTES_TOTAL}`);
     }
 
     const validTypes: DocumentType[] = [
