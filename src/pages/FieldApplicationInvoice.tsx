@@ -1077,11 +1077,10 @@ export default function FieldApplicationInvoice() {
     await performSave();
   };
 
-  // §5: admin confirms the block-mode override. Persists the reason to the append-only
-  // activity feed (criterion 5) BEFORE saving — and GATES the save on that write
-  // succeeding (Codex r2 P2). Unlike fire-and-forget logActivity (which swallows errors),
-  // a direct checked insert means an over-label mix never saves without its persisted
-  // override reason; a failed audit write aborts the save with a clear message.
+  // §5: admin confirms the block-mode override. The override reason is carried INTO the
+  // save and the audit row is written only AFTER the save SUCCEEDS, linked to the real
+  // saved invoice id (Codex follow-up P2). Writing it up front orphaned a 'they overrode'
+  // audit row whenever the save then failed (validation / RPC error) and was retried.
   const handleOverrideConfirm = async () => {
     if (!profile) return;
     const reason = overrideReason.trim();
@@ -1089,29 +1088,41 @@ export default function FieldApplicationInvoice() {
       toast('error', 'Enter a reason for the over-label-rate override.');
       return;
     }
+    setShowOverrideModal(false);
+    setOverrideReason('');
+    await performSave(reason);
+  };
+
+  // §5: after a SUCCESSFUL save, write the override audit row linked to the real saved id.
+  //
+  // DELIBERATE TRADE-OFF (owner-directed; do not "fix" to atomic without that direction):
+  // the audit is written AFTER the save so a FAILED/retried save never orphans a phantom
+  // "they overrode" row (the bug this replaced). The unavoidable flip side is that if the
+  // save succeeds but THIS audit insert then fails (RLS/network), the invoice is already
+  // committed and cannot be un-committed client-side. We do NOT silently swallow it: we
+  // raise a LOUD toast + an error-level Sentry so the gap is visible and an admin can
+  // re-record it. Making this truly atomic would require moving the audit INTO the frozen
+  // save_field_app_invoice RPC (a server migration) — out of scope for this UI fix.
+  const writeOverrideAudit = async (reason: string, savedInvoiceId: string | null) => {
+    if (!profile) return;
     const description =
       `Admin override of over-label-rate guardrail (block mode) on field-app invoice ` +
-      `${invoiceNumber || (id ?? 'new')}. Over-rate product(s): ` +
+      `${invoiceNumber || savedInvoiceId || 'new'}. Over-rate product(s): ` +
       `${guardrailState.overRateProducts.join(', ')}. Reason: ${reason}`;
-    // Checked write — abort the save if the audit row can't be persisted.
     const logResult = await supabase.from('activity_feed').insert({
       event_type: 'label_rate_override',
       description,
       performed_by: profile.id,
       related_entity_type: 'invoice',
-      related_entity_id: id || null,
+      related_entity_id: savedInvoiceId,
     });
     if (logResult.error) {
-      Sentry.captureException(logResult.error, { level: 'error', extra: { context: 'label_rate_override_log', invoice_id: id } });
-      toast('error', `Could not record the override reason, so the save was stopped: ${sanitizeError(logResult.error)}`);
-      return;
+      Sentry.captureException(logResult.error, { level: 'error', extra: { context: 'label_rate_override_log', invoice_id: savedInvoiceId } });
+      toast('error', `The invoice saved, but the over-label-rate override reason could NOT be recorded — tell an admin: ${sanitizeError(logResult.error)}`);
     }
-    setShowOverrideModal(false);
-    setOverrideReason('');
-    await performSave();
   };
 
-  const performSave = async () => {
+  const performSave = async (overrideReasonForAudit?: string) => {
     if (!profile) return;
     // [B1.1] Never bill 0 / blank applied acres. The server rejects it
     // (ZERO_APPLIED_ACRES); block here too with a clear message so the user fixes
@@ -1180,6 +1191,13 @@ export default function FieldApplicationInvoice() {
       saveIdem.resetKey();
       const ids = result.invoice_ids || [];
       const groupNote = result.invoice_group_id ? ` (group of ${ids.length})` : '';
+
+      // §5: the save RPC committed the invoice atomically — NOW (and only now) write the
+      // block-mode override audit, linked to the real saved id. If the save had failed, we
+      // never reach here, so no orphan 'they overrode' row is left behind.
+      if (overrideReasonForAudit) {
+        await writeOverrideAudit(overrideReasonForAudit, ids[0] ?? (id || null));
+      }
 
       // Wave B.1 / P2-1 (audit B-4 + B-5 + B-8): persist Applied Info on
       // every invoice in the group. Always runs when there is at least one

@@ -1129,6 +1129,11 @@ export default function JobDetail() {
   const [jobEarliestHarvestDate, setJobEarliestHarvestDate] = useState<string | null>(null);
   const [showOverrideModal, setShowOverrideModal] = useState(false);
   const [overrideReason, setOverrideReason] = useState('');
+  // §5 (Codex follow-up): carries the confirmed over-label override reason ACROSS the
+  // separate license-override confirmation round-trip, so an over-label job that ALSO needs
+  // a license override still records its label-rate audit on the eventual save. Null when
+  // there's no pending label override.
+  const pendingOverrideReasonRef = useRef<string | null>(null);
   // §5: label max per product for the lines ON THIS JOB — fetched by product_id WITHOUT an
   // is_active filter (Codex P2), so a now-INACTIVE product on a saved job still gets its
   // label max for the guardrail (allProducts is active-only). Authoritative over allProducts.
@@ -1692,37 +1697,47 @@ export default function JobDetail() {
     await runJobSave();
   };
 
-  // §5: admin confirms the block-mode override. Persists the reason to the append-only
-  // activity feed and GATES the save on that write succeeding (a failed audit write aborts
-  // the save — an over-label job mix never saves without its persisted override reason).
+  // §5: admin confirms the block-mode override. The reason is carried INTO the save and the
+  // audit row is written only AFTER the save SUCCEEDS, linked to the real saved job id
+  // (Codex follow-up P2). Writing it up front orphaned a 'they overrode' row whenever the
+  // save then failed (shares ≠ 100%, missing customer, RPC error) and was retried.
   const handleOverrideConfirm = async () => {
     if (!profile) return;
     const reason = overrideReason.trim();
     if (reason === '') { toast('error', 'Enter a reason for the over-label-rate override.'); return; }
-    // For a NEW job, id is the route literal 'new' (NOT a UUID) — never write it to the
-    // uuid related_entity_id column (Codex r7). Use null until the job has a real id.
-    const realJobId = isNew ? null : (id || null);
+    setShowOverrideModal(false);
+    setOverrideReason('');
+    await runJobSave(reason);
+  };
+
+  // §5: after a SUCCESSFUL save, write the override audit linked to the real saved job id.
+  //
+  // DELIBERATE TRADE-OFF (owner-directed; do not "fix" to atomic without that direction):
+  // the audit is written AFTER the save so a FAILED/retried save never orphans a phantom
+  // override row (the bug this replaced). The flip side is that if the save succeeds but
+  // THIS insert then fails (RLS/network), the job is already committed and can't be undone
+  // client-side. We do NOT swallow it: a LOUD toast + error-level Sentry make the gap
+  // visible so an admin can re-record it. True atomicity would require moving the audit
+  // INTO the frozen save_job RPC (a server migration) — out of scope for this UI fix.
+  const writeOverrideAudit = async (reason: string, savedJobId: string | null) => {
+    if (!profile) return;
     const description =
-      `Admin override of over-label-rate guardrail (block mode) on job ${jobNumber || 'new'}. ` +
+      `Admin override of over-label-rate guardrail (block mode) on job ${jobNumber || savedJobId || 'new'}. ` +
       `Over-rate product(s): ${guardrailState.overRateProducts.join(', ')}. Reason: ${reason}`;
     const logResult = await supabase.from('activity_feed').insert({
       event_type: 'label_rate_override',
       description,
       performed_by: profile.id,
       related_entity_type: 'job',
-      related_entity_id: realJobId,
+      related_entity_id: savedJobId,
     });
     if (logResult.error) {
-      Sentry.captureException(logResult.error, { level: 'error', extra: { context: 'label_rate_override_log_job', job_id: id } });
-      toast('error', `Could not record the override reason, so the save was stopped: ${sanitizeError(logResult.error)}`);
-      return;
+      Sentry.captureException(logResult.error, { level: 'error', extra: { context: 'label_rate_override_log_job', job_id: savedJobId } });
+      toast('error', `The job saved, but the over-label-rate override reason could NOT be recorded — tell an admin: ${sanitizeError(logResult.error)}`);
     }
-    setShowOverrideModal(false);
-    setOverrideReason('');
-    await runJobSave();
   };
 
-  const runJobSave = async () => {
+  const runJobSave = async (overrideReasonForAudit?: string) => {
     saveJobIdem.resetKey();
     if (!customerId) { toast('error', 'Customer is required'); return; }
     if (!jobDate) { toast('error', 'Job date is required'); return; }
@@ -1760,6 +1775,9 @@ export default function JobDetail() {
       const st = getLicenseStatus(licensesByProfile[applicatorId] || []);
       if (st.status === 'expired') {
         if (profile?.role === 'admin') {
+          // §5: stash the label-override reason so confirming the license modal still
+          // records the audit (the modal's performSave(true) reads this ref).
+          pendingOverrideReasonRef.current = overrideReasonForAudit ?? null;
           setShowLicenseOverrideConfirm(true);
         } else {
           toast('error', "This applicator's license has expired — an admin can override if needed.");
@@ -1768,7 +1786,7 @@ export default function JobDetail() {
       }
     }
 
-    await performSave(false);
+    await performSave(false, overrideReasonForAudit);
   };
 
   /** Assign the applicator via the override RPC (admin-only path, B5). */
@@ -1786,7 +1804,7 @@ export default function JobDetail() {
     assignIdem.resetKey();
   };
 
-  const performSave = async (licenseOverride: boolean) => {
+  const performSave = async (licenseOverride: boolean, overrideReasonForAudit?: string) => {
     setSaving(true);
     try {
       const payload = {
@@ -1903,6 +1921,11 @@ export default function JobDetail() {
         } catch (crewErr) {
           Sentry.captureException(crewErr instanceof Error ? crewErr : new Error(String(crewErr)), { extra: { context: 'job_crew_loader_after_save' } });
           toast('error', 'Job created, but the crew/loader settings did not save — adjust them on this page.');
+          // §5: the job + over-label mix DID commit (only the crew/loader sub-write failed),
+          // so still record the override audit linked to the saved job before bailing.
+          if (overrideReasonForAudit) {
+            await writeOverrideAudit(overrideReasonForAudit, isNew ? result.job_id : (id || null));
+          }
           setIsDirty(false);
           if (isNew) {
             navigate(`/jobs/${result.job_id}`);
@@ -1922,6 +1945,11 @@ export default function JobDetail() {
           toast('error', isNew
             ? 'Job created, but the override applicator assignment failed — assign the applicator from this page.'
             : 'Job saved, but the override applicator change failed — retry the applicator assignment.');
+          // §5: the job + over-label mix DID commit (only the applicator reassign failed),
+          // so still record the override audit linked to the saved job before bailing.
+          if (overrideReasonForAudit) {
+            await writeOverrideAudit(overrideReasonForAudit, isNew ? result.job_id : (id || null));
+          }
           setIsDirty(false);
           if (isNew) {
             navigate(`/jobs/${result.job_id}`);
@@ -1934,6 +1962,13 @@ export default function JobDetail() {
       }
 
       if (profile) logActivity({ event: isNew ? 'job_created' : 'job_updated', description: isNew ? `Job created for ${customers.find(c => c.id === customerId)?.farm_name}` : `Job ${jobNumber} updated`, performedBy: profile.id });
+
+      // §5: the job + chemicals committed — NOW write the block-mode override audit, linked
+      // to the real saved job id. Reached only on a SUCCESSFUL save, so a failed/retried
+      // save leaves NO orphan override row. (Codex follow-up P2.)
+      if (overrideReasonForAudit) {
+        await writeOverrideAudit(overrideReasonForAudit, isNew ? result.job_id : (id || null));
+      }
 
       toast('success', isNew ? 'Job created' : 'Job saved');
       setIsDirty(false);
@@ -1948,6 +1983,9 @@ export default function JobDetail() {
       // Race: licenses changed since page load and the DB trigger fired.
       if (hasRpcCode(err, RpcErrorCodes.LICENSE_EXPIRED)) {
         if (profile?.role === 'admin') {
+          // §5: the save was rejected (LICENSE_EXPIRED) — NOTHING committed — so carry the
+          // label-override reason into the license-override retry to record the audit then.
+          pendingOverrideReasonRef.current = overrideReasonForAudit ?? null;
           setShowLicenseOverrideConfirm(true);
         } else {
           toast('error', "This applicator's license has expired — an admin can override if needed.");
@@ -3564,8 +3602,15 @@ export default function JobDetail() {
       {/* License-override confirm (admin only, B5) */}
       <ConfirmModal
         open={showLicenseOverrideConfirm}
-        onClose={() => setShowLicenseOverrideConfirm(false)}
-        onConfirm={() => { setShowLicenseOverrideConfirm(false); performSave(true); }}
+        onClose={() => { pendingOverrideReasonRef.current = null; setShowLicenseOverrideConfirm(false); }}
+        onConfirm={() => {
+          setShowLicenseOverrideConfirm(false);
+          // §5: pass the stashed label-override reason (if any) so the license-override save
+          // still records the over-label audit. Clear the ref after reading it.
+          const reason = pendingOverrideReasonRef.current ?? undefined;
+          pendingOverrideReasonRef.current = null;
+          performSave(true, reason);
+        }}
         title="Applicator License Expired"
         message="This applicator's license has expired. Save the job and assign them anyway? The override is recorded in the activity log."
         confirmLabel="Assign Anyway"
