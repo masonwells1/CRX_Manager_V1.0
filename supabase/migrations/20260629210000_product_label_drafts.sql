@@ -149,6 +149,12 @@ BEGIN
     RAISE EXCEPTION 'PERMISSION_DENIED: admin role required';
   END IF;
 
+  -- A new draft is never created already-decided: clamp to a reviewable status so a row can't
+  -- enter the queue as accepted/edited/rejected (which would bypass human review).
+  IF p_status NOT IN ('pending', 'needs_manual') THEN
+    p_status := 'pending';
+  END IF;
+
   -- Non-negativity guard: regulatory intervals/rates can never be negative.
   -- (Reject at staging so an impossible value can't even be drafted.)
   IF p_rei_hours IS NOT NULL AND p_rei_hours < 0 THEN
@@ -539,7 +545,8 @@ BEGIN
       v_item->>'max_label_rate_unit',
       COALESCE(v_item->>'source_note', ''),
       COALESCE(v_item->>'confidence', 'low'),
-      COALESCE(v_item->>'status', 'pending'),
+      -- clamp to a reviewable status: a bulk-created row never enters the queue already-decided
+      CASE WHEN v_item->>'status' IN ('pending','needs_manual') THEN v_item->>'status' ELSE 'pending' END,
       v_user_id,
       p_idempotency_key
     )

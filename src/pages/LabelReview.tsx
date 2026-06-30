@@ -72,6 +72,17 @@ function confidenceBadge(c: string): BadgeVariant {
   return 'default';
 }
 
+// Supabase/PostgREST errors are plain objects (not Error instances), so `err instanceof Error`
+// is false and String(err) yields "[object Object]". Pull the real message text when present.
+function errMessage(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (err && typeof err === 'object' && 'message' in err
+      && typeof (err as { message: unknown }).message === 'string') {
+    return (err as { message: string }).message;
+  }
+  return String(err);
+}
+
 type LabelFieldKey = 'signal_word' | 'rei_hours' | 'phi_days' | 'epa_registration' | 'max_label_rate';
 
 // ─── Edit modal state ────────────────────────────────────────────────────────
@@ -200,7 +211,7 @@ export default function LabelReview() {
       if (error) throw error;
       setDrafts((data ?? []) as ProductLabelDraft[]);
     } catch (err) {
-      toast('error', `Failed to load drafts: ${err instanceof Error ? err.message : String(err)}`);
+      toast('error', `Failed to load drafts: ${errMessage(err)}`);
     } finally {
       setLoading(false);
     }
@@ -215,7 +226,7 @@ export default function LabelReview() {
       const report = assertRpcResult<LabelCoverageReport>(data, 'get_label_coverage_report');
       setCoverage(report);
     } catch (err) {
-      toast('error', `Coverage report failed: ${err instanceof Error ? err.message : String(err)}`);
+      toast('error', `Coverage report failed: ${errMessage(err)}`);
     } finally {
       setCoverageLoading(false);
     }
@@ -294,7 +305,7 @@ export default function LabelReview() {
       void loadDrafts();
       if (showCoverage) void loadCoverage();
     } catch (err) {
-      toast('error', `Commit failed: ${err instanceof Error ? err.message : String(err)}`);
+      toast('error', `Commit failed: ${errMessage(err)}`);
     } finally {
       setCommitting(false);
     }
@@ -375,7 +386,7 @@ export default function LabelReview() {
       setCreateSource('');
       void loadDrafts();
     } catch (err) {
-      toast('error', `Create failed: ${err instanceof Error ? err.message : String(err)}`);
+      toast('error', `Create failed: ${errMessage(err)}`);
     } finally {
       setCreating(false);
     }
