@@ -732,12 +732,13 @@ export default function LabelReview() {
         <Modal
           open={!!overwriteConfirmPending}
           onClose={() => setOverwriteConfirmPending(null)}
-          title="Confirm overwrite"
+          title="Some fields already have values"
         >
           <div className="space-y-4">
             <p className="text-sm text-ink">
-              One or more fields on this product already have values. Proceeding will
-              overwrite them with the drafted values. Are you sure?
+              One or more fields on this product already have values. Choose how to proceed:
+              apply only the <strong>empty</strong> fields and keep the existing ones, or
+              overwrite the existing values with the drafted ones.
             </p>
             <div className="flex justify-end gap-2">
               <Button
@@ -750,11 +751,21 @@ export default function LabelReview() {
               <Button
                 onClick={() => {
                   const { draftId, decision, editState: es } = overwriteConfirmPending;
+                  void commitDraft(draftId, decision, es, false);
+                }}
+                disabled={committing}
+              >
+                Apply empty fields only
+              </Button>
+              <Button
+                variant="danger"
+                onClick={() => {
+                  const { draftId, decision, editState: es } = overwriteConfirmPending;
                   void commitDraft(draftId, decision, es, true);
                 }}
                 disabled={committing}
               >
-                Yes, overwrite
+                Overwrite existing
               </Button>
             </div>
           </div>
