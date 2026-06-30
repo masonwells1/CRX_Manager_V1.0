@@ -372,6 +372,14 @@ BEGIN
       END IF;
     END IF;
 
+    -- Nothing was actually applied (every proposed field was skipped as already-filled, or only a
+    -- one-sided max-rate pair was supplied) -> reject so the draft is NOT closed without writing anything.
+    -- (The earlier empty-decision guard catches a value-less draft; this catches a draft that HAD values
+    -- but where all of them ended up skipped — e.g. a lone rate without a unit.)
+    IF array_length(v_applied, 1) IS NULL THEN
+      RAISE EXCEPTION 'NO_VALUES_TO_APPLY: nothing was applied (all proposed fields were skipped as already-filled, or formed a one-sided max-rate pair) — nothing to accept';
+    END IF;
+
     -- Write to products
     UPDATE products
     SET
@@ -385,18 +393,20 @@ BEGIN
     WHERE id = v_draft.product_id;
   END IF;
 
-  -- Mark draft as decided
+  -- Mark draft as decided. For accept/edit store the FINAL resolved values (v_new_*) that reflect what
+  -- the product actually holds now (applied fields = the written value; skipped fields = the existing
+  -- product value) — NEVER the raw proposed edits, so the queue can't display a value as saved when it
+  -- was actually skipped. For 'rejected', leave the drafted values untouched.
   UPDATE product_label_drafts
   SET status      = p_decision,
       reviewed_by  = v_user_id,
       reviewed_at  = now(),
-      -- If edited, store the final values that were written
-      signal_word          = CASE WHEN p_decision = 'edited' THEN p_signal_word         ELSE signal_word         END,
-      rei_hours            = CASE WHEN p_decision = 'edited' THEN p_rei_hours            ELSE rei_hours            END,
-      phi_days             = CASE WHEN p_decision = 'edited' THEN p_phi_days             ELSE phi_days             END,
-      epa_registration     = CASE WHEN p_decision = 'edited' THEN p_epa_registration    ELSE epa_registration     END,
-      max_label_rate       = CASE WHEN p_decision = 'edited' THEN p_max_label_rate      ELSE max_label_rate       END,
-      max_label_rate_unit  = CASE WHEN p_decision = 'edited' THEN p_max_label_rate_unit ELSE max_label_rate_unit  END
+      signal_word          = CASE WHEN p_decision = 'rejected' THEN signal_word         ELSE v_new_sw   END,
+      rei_hours            = CASE WHEN p_decision = 'rejected' THEN rei_hours            ELSE v_new_rei  END,
+      phi_days             = CASE WHEN p_decision = 'rejected' THEN phi_days             ELSE v_new_phi  END,
+      epa_registration     = CASE WHEN p_decision = 'rejected' THEN epa_registration     ELSE v_new_epa  END,
+      max_label_rate       = CASE WHEN p_decision = 'rejected' THEN max_label_rate       ELSE v_new_mlr  END,
+      max_label_rate_unit  = CASE WHEN p_decision = 'rejected' THEN max_label_rate_unit  ELSE v_new_mlru END
   WHERE id = p_draft_id;
 
   v_result := jsonb_build_object(

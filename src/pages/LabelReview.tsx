@@ -128,6 +128,23 @@ function negativeNumericFields(es: EditState): string[] {
   return bad;
 }
 
+// REI hours and PHI days are whole-number intervals. A type="number" field + parseInt silently
+// TRUNCATES a decimal or scientific value ('2.5' -> 2, '1e2' -> 1), saving something the admin did
+// not type. Flag any non-(non-negative-integer) entry so submit can reject it instead.
+function nonIntegerIntervalFields(es: EditState): string[] {
+  const bad: string[] = [];
+  const checks: Array<[string, string]> = [
+    ['REI hours', es.rei_hours],
+    ['PHI days', es.phi_days],
+  ];
+  for (const [label, raw] of checks) {
+    const t = raw.trim();
+    if (t === '') continue;
+    if (!/^\d+$/.test(t)) bad.push(label);
+  }
+  return bad;
+}
+
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export default function LabelReview() {
@@ -292,6 +309,14 @@ export default function LabelReview() {
     const negatives = negativeNumericFields(editState);
     if (negatives.length > 0) {
       toast('error', `Negative values are not allowed for: ${negatives.join(', ')}. Enter zero or a positive number.`);
+      return;
+    }
+
+    // Guard 1b: REI/PHI are whole-number intervals — reject decimals/scientific notation rather
+    // than silently truncating (parseInt('2.5') -> 2). Max label rate may be a decimal, so it is excluded.
+    const nonIntegers = nonIntegerIntervalFields(editState);
+    if (nonIntegers.length > 0) {
+      toast('error', `${nonIntegers.join(' and ')} must be a whole number (no decimals or scientific notation).`);
       return;
     }
 
@@ -742,6 +767,7 @@ export default function LabelReview() {
             {(() => {
               const emptyDraft = isEditStateEmpty(editState);
               const negatives  = negativeNumericFields(editState);
+              const nonIntegers = nonIntegerIntervalFields(editState);
               if (negatives.length > 0) {
                 return (
                   <div className="flex items-start gap-2 bg-red-50 border border-red-200 rounded px-3 py-2 text-sm text-red-800">
@@ -749,6 +775,17 @@ export default function LabelReview() {
                     <span>
                       Negative values are not allowed for <strong>{negatives.join(', ')}</strong>.
                       Regulatory intervals and rates must be zero or positive.
+                    </span>
+                  </div>
+                );
+              }
+              if (nonIntegers.length > 0) {
+                return (
+                  <div className="flex items-start gap-2 bg-red-50 border border-red-200 rounded px-3 py-2 text-sm text-red-800">
+                    <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+                    <span>
+                      <strong>{nonIntegers.join(' and ')}</strong> must be a whole number — no decimals
+                      or scientific notation.
                     </span>
                   </div>
                 );
@@ -787,14 +824,14 @@ export default function LabelReview() {
               <Button
                 variant="secondary"
                 onClick={() => handleAcceptOrEdit('edited')}
-                disabled={committing || isEditStateEmpty(editState) || negativeNumericFields(editState).length > 0}
+                disabled={committing || isEditStateEmpty(editState) || negativeNumericFields(editState).length > 0 || nonIntegerIntervalFields(editState).length > 0}
               >
                 <Edit3 className="w-4 h-4 mr-1" />
                 Accept with edits
               </Button>
               <Button
                 onClick={() => handleAcceptOrEdit('accepted')}
-                disabled={committing || isEditStateEmpty(editState) || negativeNumericFields(editState).length > 0}
+                disabled={committing || isEditStateEmpty(editState) || negativeNumericFields(editState).length > 0 || nonIntegerIntervalFields(editState).length > 0}
               >
                 <CheckCircle className="w-4 h-4 mr-1" />
                 Accept as drafted
