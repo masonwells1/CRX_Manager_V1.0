@@ -24,6 +24,14 @@ import WatchdogFlagBanner from '../components/watchdog/WatchdogFlagBanner';
 import Modal from '../components/ui/Modal';
 import SelectLocationsModal from '../components/field-app/SelectLocationsModal';
 import FieldAppChemicalEntry, { type ChemicalLine } from '../components/field-app/FieldAppChemicalEntry';
+import {
+  LABEL_RATE_GUARDRAIL_MODE_KEY,
+  DEFAULT_GUARDRAIL_MODE,
+  parseGuardrailMode,
+  type GuardrailMode,
+} from '../lib/labelGuardrailSetting';
+import { compareToMaxRate, phiHarvestWarning } from '../lib/labelGuardrails';
+import { computeSeason } from '../utils/season';
 import CustomerSharesTable from '../components/field-app/CustomerSharesTable';
 import type { CustomerSharesBasis } from '../components/field-app/customerSplit';
 import ApplicationServicePicker from '../components/field-app/ApplicationServicePicker';
@@ -217,6 +225,20 @@ export default function FieldApplicationInvoice() {
   const [chemicals, setChemicals] = useState<ChemicalLine[]>([]);
   const [shares, setShares] = useState<CustomerShareResult[]>([]);
 
+  // §5 (Label-Rate Guardrails): the configurable policy (warn vs block). WARN is the
+  // shipped/empty default and NEVER blocks the save. Loaded from app_settings once.
+  const [guardrailMode, setGuardrailMode] = useState<GuardrailMode>(DEFAULT_GUARDRAIL_MODE);
+  // §5 (Codex r6): TRUE once the mode read resolves. The block-mode save gate FAILS CLOSED
+  // until then — a click before the read returns must not slip through as warn and skip a
+  // required override.
+  const [guardrailModeLoaded, setGuardrailModeLoaded] = useState(false);
+  // §5: earliest planned harvest date across the selected fields (field_crop_history),
+  // used for the PHI-vs-harvest warning. Null when none of the fields have a harvest date.
+  const [earliestHarvestDate, setEarliestHarvestDate] = useState<string | null>(null);
+  // §5: block-mode admin-override modal state + the captured reason.
+  const [showOverrideModal, setShowOverrideModal] = useState(false);
+  const [overrideReason, setOverrideReason] = useState('');
+
   const [windDirection, setWindDirection] = useState('');
   const [temperature, setTemperature] = useState('');
   const [applicator, setApplicator] = useState('');
@@ -347,6 +369,76 @@ export default function FieldApplicationInvoice() {
   useEffect(() => {
     if (isNew && profile?.id) setConsultantId((prev) => prev || profile.id);
   }, [isNew, profile?.id]);
+
+  // §5: load the label-rate guardrail policy once. A failed/absent read falls back to
+  // the safe default ('warn') — we never silently switch to 'block'.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const { data } = await supabase
+        .from('app_settings')
+        .select('setting_value')
+        .eq('setting_key', LABEL_RATE_GUARDRAIL_MODE_KEY)
+        .maybeSingle();
+      if (!cancelled) {
+        setGuardrailMode(parseGuardrailMode((data as { setting_value?: string } | null)?.setting_value ?? null));
+        setGuardrailModeLoaded(true);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  // §5: load the earliest planned harvest date across the selected fields from
+  // field_crop_history (for the PHI-vs-harvest warning). SCOPED to the application's SEASON
+  // (Codex P2 fix) — field_crop_history holds one row per field/season, so without the
+  // season filter an OLD prior-season harvest would falsely trip the PHI window. Re-runs
+  // when the field set OR the application date changes. A field with no harvest row in the
+  // season contributes nothing (graceful — no warning).
+  const locationFieldKey = locations.map((l) => l.field_id).sort().join(',');
+  const guardrailAppDate = jobApplicationDate ?? transactionDate;
+  useEffect(() => {
+    let cancelled = false;
+    const fieldIds = locationFieldKey ? locationFieldKey.split(',') : [];
+    if (fieldIds.length === 0) { setEarliestHarvestDate(null); return; }
+    // Parse the YYYY-MM-DD as a LOCAL date (NOT UTC) so a season-boundary date like
+    // Oct 1 doesn't shift into the prior season's evening before computeSeason reads the
+    // month. (Codex r2 P2.)
+    const appSeason = computeSeason(guardrailAppDate ? new Date(guardrailAppDate + 'T00:00:00') : new Date());
+    (async () => {
+      const { data, error } = await supabase
+        .from('field_crop_history')
+        .select('harvest_date')
+        .in('field_id', fieldIds)
+        .eq('season', appSeason)
+        .not('harvest_date', 'is', null)
+        .order('harvest_date', { ascending: true })
+        .limit(1);
+      if (cancelled) return;
+      if (error) { setEarliestHarvestDate(null); return; }
+      const first = (data as Array<{ harvest_date: string | null }> | null)?.[0]?.harvest_date ?? null;
+      setEarliestHarvestDate(first);
+    })();
+    return () => { cancelled = true; };
+  }, [locationFieldKey, guardrailAppDate]);
+
+  // §5 (Codex P2 fix): the aggregate guardrail state is computed HERE in the parent from
+  // `chemicals` — NOT inside the Chemicals-tab component — so the BLOCK-mode save gate is
+  // correct even when the Chemicals tab was never opened (e.g. saving header/location edits
+  // on a reopened invoice). 'cannot_compare' / 'no_label_max' never count toward the gate.
+  const guardrailState = useMemo(() => {
+    const overRateProducts: string[] = [];
+    let phiHarvestWarnCount = 0;
+    const appDate = jobApplicationDate ?? transactionDate;
+    for (const c of chemicals) {
+      if (c.product_id == null) continue;
+      const cmp = compareToMaxRate(c.rate_per_acre, c.rate_unit, c.max_label_rate ?? null, c.max_label_rate_unit ?? null);
+      if (cmp.status === 'over') overRateProducts.push(c.product_name || 'Unnamed product');
+      if (phiHarvestWarning(c.phi_days ?? null, earliestHarvestDate, appDate).status === 'inside_window') {
+        phiHarvestWarnCount += 1;
+      }
+    }
+    return { overRateCount: overRateProducts.length, overRateProducts, phiHarvestWarnCount };
+  }, [chemicals, earliestHarvestDate, jobApplicationDate, transactionDate]);
 
   // Resolve an applicator id -> name for the carry-over panel (live name map).
   const applicatorNames = useMemo(
@@ -663,26 +755,58 @@ export default function FieldApplicationInvoice() {
       .order('sort_order');
 
     if (items) {
+      // §5 (Codex P2): invoice_items does NOT carry label data, so hydrate the per-line
+      // label fields (max_label_rate / unit / rei / phi) from products for the lines that
+      // have a product_id. Without this, a REOPENED over-label invoice would read as
+      // 'no_label_max' and block mode would not require an override. A failed/empty fetch
+      // degrades gracefully (no label data => the line shows "no label max on file").
+      const productIds = Array.from(
+        new Set((items as Array<Record<string, unknown>>).map((it) => it.product_id as string | null).filter((x): x is string => !!x)),
+      );
+      const labelByProduct = new Map<string, { max_label_rate: number | null; max_label_rate_unit: string | null; rei_hours: number | null; phi_days: number | null }>();
+      if (productIds.length > 0) {
+        const { data: prodRows } = await supabase
+          .from('products')
+          .select('id, max_label_rate, max_label_rate_unit, rei_hours, phi_days')
+          .in('id', productIds);
+        for (const p of (prodRows as Array<{ id: string; max_label_rate: number | null; max_label_rate_unit: string | null; rei_hours: number | null; phi_days: number | null }> | null) ?? []) {
+          labelByProduct.set(p.id, {
+            max_label_rate: p.max_label_rate,
+            max_label_rate_unit: p.max_label_rate_unit,
+            rei_hours: p.rei_hours,
+            phi_days: p.phi_days,
+          });
+        }
+      }
       setChemicals(
-        (items as Array<Record<string, unknown>>).map((it, idx) => ({
-          id: (it.id as string) || `chem_${idx}`,
-          product_id: it.product_id as string | null,
-          product_name: (it.description as string) || '',
-          rate_per_acre: it.rate_per_acre as number | null,
-          rate_unit: (it.rate_unit as string) || 'oz',
-          quantity: (it.quantity as number) || 0,
-          unit: (it.unit_size as string) || 'oz',
-          unit_price_cents: (it.unit_price_cents as number) || 0,
-          price_unit: (it.unit_size as string) || 'oz',
-          extended_cents: (it.extended_cents as number) || 0,
-          unit_cost_cents: (it.cost_cents as number) || 0,
-          sort_order: (it.sort_order as number) || idx,
-          // #25: per-line Warehouse / Vendor and the product form (for the gl/lb display).
-          warehouse: (it.warehouse as string | null) ?? null,
-          vendor: (it.vendor as string | null) ?? null,
-          product_form: (it.product_form as 'liquid' | 'dry' | null) ?? null,
-          epa_registration: (it.epa_registration as string | null) || undefined,
-        }))
+        (items as Array<Record<string, unknown>>).map((it, idx) => {
+          const pid = it.product_id as string | null;
+          const label = pid ? (labelByProduct.get(pid) ?? null) : null;
+          return {
+            id: (it.id as string) || `chem_${idx}`,
+            product_id: it.product_id as string | null,
+            product_name: (it.description as string) || '',
+            rate_per_acre: it.rate_per_acre as number | null,
+            rate_unit: (it.rate_unit as string) || 'oz',
+            quantity: (it.quantity as number) || 0,
+            unit: (it.unit_size as string) || 'oz',
+            unit_price_cents: (it.unit_price_cents as number) || 0,
+            price_unit: (it.unit_size as string) || 'oz',
+            extended_cents: (it.extended_cents as number) || 0,
+            unit_cost_cents: (it.cost_cents as number) || 0,
+            sort_order: (it.sort_order as number) || idx,
+            // #25: per-line Warehouse / Vendor and the product form (for the gl/lb display).
+            warehouse: (it.warehouse as string | null) ?? null,
+            vendor: (it.vendor as string | null) ?? null,
+            product_form: (it.product_form as 'liquid' | 'dry' | null) ?? null,
+            epa_registration: (it.epa_registration as string | null) || undefined,
+            // §5: hydrated label data (null when the product has none / fetch failed).
+            max_label_rate: label?.max_label_rate ?? null,
+            max_label_rate_unit: label?.max_label_rate_unit ?? null,
+            rei_hours: label?.rei_hours ?? null,
+            phi_days: label?.phi_days ?? null,
+          };
+        })
       );
     }
 
@@ -923,7 +1047,71 @@ export default function FieldApplicationInvoice() {
     }
   };
 
+  // §5: the save gate. In WARN mode (default) this is a straight pass-through — an
+  // over-label rate is flagged in the UI but NEVER blocks the save. In BLOCK mode (owner
+  // opt-in), an over-label line opens the admin-override modal (admins only) so the save
+  // proceeds only with a LOGGED reason; a non-admin is told to fix the rate (still no
+  // silent data corruption). 'cannot_compare' / 'no_label_max' never gate a save.
   const handleSave = async () => {
+    if (!profile) return;
+    // §5 (Codex r6): if any line is over-label but the guardrail mode hasn't loaded yet,
+    // FAIL CLOSED — don't let a pending read default to warn and skip a block-mode override.
+    if (guardrailState.overRateCount > 0 && !guardrailModeLoaded) {
+      toast('error', 'Checking the label-rate policy — try Save again in a moment.');
+      return;
+    }
+    if (guardrailMode === 'block' && guardrailState.overRateCount > 0) {
+      if (!isAdmin) {
+        toast('error',
+          `${guardrailState.overRateCount} line(s) exceed the product's max label rate ` +
+          `(${guardrailState.overRateProducts.join(', ')}). An admin must override to save — ` +
+          `lower the rate or ask an admin.`,
+        );
+        return;
+      }
+      // Admin: require a logged reason before saving an over-label mix.
+      setOverrideReason('');
+      setShowOverrideModal(true);
+      return;
+    }
+    await performSave();
+  };
+
+  // §5: admin confirms the block-mode override. Persists the reason to the append-only
+  // activity feed (criterion 5) BEFORE saving — and GATES the save on that write
+  // succeeding (Codex r2 P2). Unlike fire-and-forget logActivity (which swallows errors),
+  // a direct checked insert means an over-label mix never saves without its persisted
+  // override reason; a failed audit write aborts the save with a clear message.
+  const handleOverrideConfirm = async () => {
+    if (!profile) return;
+    const reason = overrideReason.trim();
+    if (reason === '') {
+      toast('error', 'Enter a reason for the over-label-rate override.');
+      return;
+    }
+    const description =
+      `Admin override of over-label-rate guardrail (block mode) on field-app invoice ` +
+      `${invoiceNumber || (id ?? 'new')}. Over-rate product(s): ` +
+      `${guardrailState.overRateProducts.join(', ')}. Reason: ${reason}`;
+    // Checked write — abort the save if the audit row can't be persisted.
+    const logResult = await supabase.from('activity_feed').insert({
+      event_type: 'label_rate_override',
+      description,
+      performed_by: profile.id,
+      related_entity_type: 'invoice',
+      related_entity_id: id || null,
+    });
+    if (logResult.error) {
+      Sentry.captureException(logResult.error, { level: 'error', extra: { context: 'label_rate_override_log', invoice_id: id } });
+      toast('error', `Could not record the override reason, so the save was stopped: ${sanitizeError(logResult.error)}`);
+      return;
+    }
+    setShowOverrideModal(false);
+    setOverrideReason('');
+    await performSave();
+  };
+
+  const performSave = async () => {
     if (!profile) return;
     // [B1.1] Never bill 0 / blank applied acres. The server rejects it
     // (ZERO_APPLIED_ACRES); block here too with a clear message so the user fixes
@@ -2128,6 +2316,9 @@ export default function FieldApplicationInvoice() {
               totalAppliedAcres={totalAppliedAcres}
               primaryCustomerTier={primaryCustomerTier}
               readOnly={!canEdit}
+              guardrailMode={guardrailMode}
+              earliestHarvestDate={earliestHarvestDate}
+              applicationDate={jobApplicationDate ?? transactionDate}
             />
           </div>
         )}
@@ -2498,6 +2689,46 @@ export default function FieldApplicationInvoice() {
         variant="info"
         loading={transferringToScheduling}
       />
+
+      {/* §5: block-mode over-label-rate admin override — a required reason (button disabled
+          until non-empty). Only reached in 'block' mode for an admin; logs the reason to
+          the activity feed then saves. This is the escape hatch — never a hard wall. */}
+      <Modal open={showOverrideModal} onClose={() => { if (!saving) setShowOverrideModal(false); }} title="Over-label-rate override">
+        <div className="space-y-4">
+          <div className="flex items-start gap-3 p-3 bg-amber-50 rounded-lg">
+            <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+            <p className="text-sm text-amber-800">
+              {guardrailState.overRateCount} chemical line(s) exceed the product&rsquo;s maximum label rate
+              {guardrailState.overRateProducts.length > 0 && <> (<strong>{guardrailState.overRateProducts.join(', ')}</strong>)</>}.
+              The guardrail is set to <strong>block</strong>, so saving requires an admin override. Your reason is logged for the audit trail.
+            </p>
+          </div>
+          <div>
+            <label htmlFor="override-reason" className="block text-sm font-medium text-gray-700 mb-1">
+              Reason for the override <span className="text-red-600">*</span>
+            </label>
+            <textarea
+              id="override-reason"
+              value={overrideReason}
+              onChange={(e) => setOverrideReason(e.target.value)}
+              rows={3}
+              placeholder="e.g., Split application across two passes; per-pass rate is within label."
+              className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-200"
+            />
+          </div>
+          <div className="flex justify-end gap-3 pt-2">
+            <Button variant="ghost" onClick={() => setShowOverrideModal(false)} disabled={saving}>Cancel</Button>
+            <Button
+              variant="primary"
+              onClick={handleOverrideConfirm}
+              loading={saving}
+              disabled={saving || !overrideReason.trim()}
+            >
+              Override &amp; Save
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }

@@ -49,6 +49,13 @@ import {
   parseAutoDraftEnabled,
   serializeAutoDraftEnabled,
 } from '../lib/autoDraftSetting';
+import {
+  LABEL_RATE_GUARDRAIL_MODE_KEY,
+  DEFAULT_GUARDRAIL_MODE,
+  parseGuardrailMode,
+  serializeGuardrailMode,
+  type GuardrailMode,
+} from '../lib/labelGuardrailSetting';
 import type { Profile, AppSetting, UserRole } from '../types';
 
 // --- Permissions Panel ---
@@ -165,6 +172,9 @@ export default function SettingsPage() {
   // §4: Auto-draft invoice on job completion — OFF by default (never auto-posts).
   const [autoDraftEnabled, setAutoDraftEnabled] = useState<boolean>(DEFAULT_AUTO_DRAFT_ENABLED);
   const [savingAutoDraft, setSavingAutoDraft] = useState(false);
+  // §5: Label-rate guardrail mode — WARN by default (never blocks a save).
+  const [guardrailMode, setGuardrailMode] = useState<GuardrailMode>(DEFAULT_GUARDRAIL_MODE);
+  const [savingGuardrail, setSavingGuardrail] = useState(false);
   // #9: Custom applicator field-sheet layout (LAYOUT ONLY — header/logo/footer +
   // optional column toggles). Blank by default => standard CRX header.
   const [sheetConfig, setSheetConfig] = useState<ApplicatorSheetCustomConfig>(DEFAULT_CUSTOM_CONFIG);
@@ -231,6 +241,8 @@ export default function SettingsPage() {
     setFuelSurcharge(parseFuelSurchargeConfig(map['fuel_surcharge']));
     // §4: blank/absent/anything-but-'true' => OFF (the safe default).
     setAutoDraftEnabled(parseAutoDraftEnabled(map[AUTO_DRAFT_SETTING_KEY]));
+    // §5: blank/absent/anything-but-'block' => WARN (the safe default; never blocks).
+    setGuardrailMode(parseGuardrailMode(map[LABEL_RATE_GUARDRAIL_MODE_KEY]));
     // #9: blank/absent => standard CRX header + all optional columns shown.
     setSheetConfig(parseCustomConfig(map['applicator_sheet_custom']));
     // #40: blank/absent => the seeded default pre-notification wording.
@@ -340,6 +352,24 @@ export default function SettingsPage() {
       toast('error', sanitizeError(errUnknown));
     }
     setSavingAutoDraft(false);
+  };
+
+  const saveGuardrailMode = async () => {
+    setSavingGuardrail(true);
+    try {
+      await saveSetting(LABEL_RATE_GUARDRAIL_MODE_KEY, serializeGuardrailMode(guardrailMode));
+      toast('success', `Label-rate guardrail set to ${guardrailMode === 'block' ? 'Block (admin override required)' : 'Warn'}`);
+      if (profile) {
+        logActivity({
+          event: 'settings_updated',
+          description: `Label-rate guardrail mode set to '${guardrailMode}' (warn never blocks a save; block requires an admin override with a logged reason)`,
+          performedBy: profile.id,
+        });
+      }
+    } catch (errUnknown: unknown) {
+      toast('error', sanitizeError(errUnknown));
+    }
+    setSavingGuardrail(false);
   };
 
   const saveSheetConfig = async () => {
@@ -905,6 +935,66 @@ export default function SettingsPage() {
               </span>
             )}
           </p>
+        </div>
+      </Card>
+
+      {/* §5: Label-rate guardrail mode (WARN by default — never blocks a save). */}
+      <Card>
+        <CardHeader
+          title="Label-Rate"
+          accent="Guardrail"
+          action={
+            <Button
+              size="sm"
+              icon={<Save className="w-4 h-4" />}
+              onClick={saveGuardrailMode}
+              loading={savingGuardrail}
+            >
+              Save
+            </Button>
+          }
+        />
+        <div className="space-y-4">
+          <div className="flex items-start gap-3 rounded-lg bg-blue-50 border border-blue-100 p-3">
+            <Shield className="w-5 h-5 text-blue-600 mt-0.5 shrink-0" />
+            <p className="text-sm text-blue-800">
+              When building a tank mix, each chemical&rsquo;s per-acre rate is checked against the
+              product&rsquo;s maximum label rate, and the re-entry (REI) and pre-harvest (PHI)
+              windows are shown. <strong>Warn</strong> (recommended) flags an over-label rate but
+              never stops the save. <strong>Block</strong> requires an admin to override an
+              over-label line with a logged reason before saving &mdash; it is still never a hard
+              wall. A product with no label rate on file is never blocked.
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <label className="flex items-start gap-3 cursor-pointer">
+              <input
+                type="radio"
+                name="guardrail-mode"
+                checked={guardrailMode === 'warn'}
+                onChange={() => setGuardrailMode('warn')}
+                className="w-4 h-4 mt-0.5 border-gray-300 text-crx-green focus:ring-crx-green/20"
+              />
+              <span className="text-sm">
+                <span className="font-medium text-secondary">Warn</span>
+                <span className="block text-xs text-gray-500">Flag over-label rates; the mix still saves. (Recommended default.)</span>
+              </span>
+            </label>
+            <label className="flex items-start gap-3 cursor-pointer">
+              <input
+                type="radio"
+                name="guardrail-mode"
+                checked={guardrailMode === 'block'}
+                onChange={() => setGuardrailMode('block')}
+                className="w-4 h-4 mt-0.5 border-gray-300 text-crx-green focus:ring-crx-green/20"
+              />
+              <span className="text-sm">
+                <span className="font-medium text-secondary">Block (admin override)</span>
+                <span className="block text-xs text-gray-500">An over-label line needs an admin override with a logged reason before saving.</span>
+              </span>
+            </label>
+          </div>
         </div>
       </Card>
 

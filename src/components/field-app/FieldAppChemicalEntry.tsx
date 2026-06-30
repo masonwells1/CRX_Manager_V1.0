@@ -1,5 +1,5 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
-import { Plus, Trash2, AlertTriangle } from 'lucide-react';
+import { useState, useRef, useEffect, useCallback, Fragment } from 'react';
+import { Plus, Trash2, AlertTriangle, ShieldAlert, Clock, CalendarClock } from 'lucide-react';
 import Button from '../ui/Button';
 import { supabase } from '../../lib/db';
 import { Sentry } from '../../lib/sentry';
@@ -7,6 +7,13 @@ import type { Product } from '../../types';
 import { formatCents as fmt } from '../../lib/money';
 import { parseDollarsToCents } from '../../lib/parseCents';
 import { toGallonOrLbEquivalent } from '../../lib/chemCalculator';
+import {
+  compareToMaxRate,
+  phiHarvestWarning,
+  formatRei,
+  formatPhi,
+} from '../../lib/labelGuardrails';
+import type { GuardrailMode } from '../../lib/labelGuardrailSetting';
 
 export interface ChemicalLine {
   id: string;
@@ -43,6 +50,17 @@ export interface ChemicalLine {
    * shown here is just a display preview based on the primary customer's tier.
    */
   manual_override?: boolean;
+  /**
+   * §5 (Label-Rate Guardrails): the product's label data captured at select time so
+   * the rate-vs-max check + REI/PHI windows can be shown on the line WITHOUT a re-fetch.
+   * All optional/nullable — a product with no label data degrades gracefully (the line
+   * shows "no label max on file", never blocks, never errors). These are DISPLAY/SAFETY
+   * only — they don't affect pricing and are not persisted by the line.
+   */
+  max_label_rate?: number | null;
+  max_label_rate_unit?: string | null;
+  rei_hours?: number | null;
+  phi_days?: number | null;
 }
 
 interface FieldAppChemicalEntryProps {
@@ -65,6 +83,26 @@ interface FieldAppChemicalEntryProps {
    * carry-forward hole where these inputs stayed interactive.)
    */
   readOnly?: boolean;
+  /**
+   * §5 (Label-Rate Guardrails): the configurable policy. 'warn' (default) flags an
+   * over-label rate but NEVER blocks the save. 'block' is owner-opt-in: an over-label
+   * line needs an admin override (logged) before save. This component only renders the
+   * WARNING UI; the parent decides what to do with the over-label state (and gates save
+   * in block mode). Defaults to 'warn' so a missing prop never silently blocks.
+   */
+  guardrailMode?: GuardrailMode;
+  /**
+   * §5: earliest planned harvest date (YYYY-MM-DD) across the selected fields, from
+   * field_crop_history. When a product's PHI window (application + phi_days) would extend
+   * PAST this date, the user is warned. Null/undefined => the PHI-vs-harvest check is
+   * skipped (graceful — no false warning).
+   */
+  earliestHarvestDate?: string | null;
+  /**
+   * §5: the application/scheduled date (YYYY-MM-DD) used as the PHI window start. Defaults
+   * to today inside the guardrail when omitted.
+   */
+  applicationDate?: string | null;
 }
 
 
@@ -86,6 +124,9 @@ export default function FieldAppChemicalEntry({
   totalAppliedAcres,
   primaryCustomerTier = 1,
   readOnly = false,
+  guardrailMode = 'warn',
+  earliestHarvestDate = null,
+  applicationDate = null,
 }: FieldAppChemicalEntryProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<Product[]>([]);
@@ -199,6 +240,12 @@ export default function FieldAppChemicalEntry({
       vendor: product.vendor || null,
       product_form: product.product_form,
       manual_override: false,
+      // §5: capture label data so the rate-vs-max guardrail + REI/PHI windows render on
+      // the line. All nullable — a product with no label data shows "no label max on file".
+      max_label_rate: product.max_label_rate ?? null,
+      max_label_rate_unit: product.max_label_rate_unit ?? null,
+      rei_hours: product.rei_hours ?? null,
+      phi_days: product.phi_days ?? null,
     });
     setShowSearch(false);
     setSearchQuery('');
@@ -207,6 +254,20 @@ export default function FieldAppChemicalEntry({
   const invoiceTotal = chemicals.reduce((sum, c) => sum + c.extended_cents, 0);
   const pricePerAcre = totalAppliedAcres > 0 ? invoiceTotal / totalAppliedAcres : 0;
 
+  // §5: compute the aggregate guardrail state and report it to the parent. The parent
+  // gates save in 'block' mode + captures the admin override reason; this component only
+  // renders the warnings. (Pure functions; recomputed only when inputs change.)
+  const overRateProducts: string[] = [];
+  let phiHarvestWarnCount = 0;
+  for (const c of chemicals) {
+    if (c.product_id == null) continue;
+    const cmp = compareToMaxRate(c.rate_per_acre, c.rate_unit, c.max_label_rate ?? null, c.max_label_rate_unit ?? null);
+    if (cmp.status === 'over') overRateProducts.push(c.product_name || 'Unnamed product');
+    const phi = phiHarvestWarning(c.phi_days ?? null, earliestHarvestDate, applicationDate);
+    if (phi.status === 'inside_window') phiHarvestWarnCount += 1;
+  }
+  const overRateCount = overRateProducts.length;
+  // (guardrail aggregate is computed in the parent for the save gate)
   return (
     <div className="space-y-4">
       {/* Warn (don't silently bill $0) when acres are missing but rates are entered */}
@@ -214,6 +275,30 @@ export default function FieldAppChemicalEntry({
         <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
           <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
           <span>Applied acres are 0, so these lines bill $0.00. Enter the acres sprayed on the Locations tab to price them.</span>
+        </div>
+      )}
+
+      {/* §5: aggregate label-rate guardrail banner. WARN mode = informational (never blocks
+          the save). BLOCK mode = the parent requires an admin override with a logged reason
+          before saving (still never a hard wall). */}
+      {overRateCount > 0 && (
+        <div className={`flex items-start gap-2 rounded-lg border px-3 py-2 text-sm ${guardrailMode === 'block' ? 'border-red-200 bg-red-50 text-red-800' : 'border-amber-200 bg-amber-50 text-amber-800'}`}>
+          <ShieldAlert className="w-4 h-4 mt-0.5 shrink-0" />
+          <span>
+            {overRateCount} chemical line{overRateCount > 1 ? 's' : ''} {overRateCount > 1 ? 'are' : 'is'} above the product&rsquo;s max label rate
+            {' '}({overRateProducts.join(', ')}).{' '}
+            {guardrailMode === 'block'
+              ? 'Saving requires an admin override with a reason.'
+              : 'You can still save — double-check the rate against the label.'}
+          </span>
+        </div>
+      )}
+      {phiHarvestWarnCount > 0 && (
+        <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+          <CalendarClock className="w-4 h-4 mt-0.5 shrink-0" />
+          <span>
+            {phiHarvestWarnCount} product{phiHarvestWarnCount > 1 ? 's' : ''} {phiHarvestWarnCount > 1 ? 'have' : 'has'} a pre-harvest interval that extends past a field&rsquo;s planned harvest date. Confirm the harvest timing before applying.
+          </span>
         </div>
       )}
 
@@ -235,8 +320,23 @@ export default function FieldAppChemicalEntry({
             </tr>
           </thead>
           <tbody className="divide-y">
-            {chemicals.map((line) => (
-              <tr key={line.id} className="hover:bg-gray-50">
+            {chemicals.map((line) => {
+            // §5 guardrail evaluation for this line (pure, unit-safe). Only flags when the
+            // rate's unit MATCHES the max-label unit; a mismatch/missing => 'cannot_compare'
+            // (no false over-rate flag). A missing max => 'no_label_max' (soft note).
+            const rateCmp = compareToMaxRate(
+              line.rate_per_acre,
+              line.rate_unit,
+              line.max_label_rate ?? null,
+              line.max_label_rate_unit ?? null,
+            );
+            const phiCheck = phiHarvestWarning(line.phi_days ?? null, earliestHarvestDate, applicationDate);
+            const hasGuardrailInfo =
+              line.product_id != null &&
+              (rateCmp.status !== 'no_rate' || (line.rei_hours ?? null) != null || (line.phi_days ?? null) != null);
+            return (
+            <Fragment key={line.id}>
+              <tr className="hover:bg-gray-50">
                 <td className="px-3 py-2">
                   <div className="relative" ref={activeLineId === line.id ? searchRef : undefined}>
                     {line.product_name ? (
@@ -374,7 +474,55 @@ export default function FieldAppChemicalEntry({
                   )}
                 </td>
               </tr>
-            ))}
+              {/* §5 Label-Rate Guardrails sub-row: REI/PHI windows + over-rate flag +
+                  PHI-vs-harvest warning. Renders only once a product is selected. The
+                  over-rate flag NEVER blocks the save in 'warn' mode — it's a warning. */}
+              {hasGuardrailInfo && (
+                <tr className="border-t-0">
+                  <td colSpan={10} className="px-3 pb-2 pt-0">
+                    <div className="flex flex-wrap items-center gap-2 text-xs">
+                      {/* REI / PHI windows (auto-displayed; also printed on the field sheet) */}
+                      <span className="inline-flex items-center gap-1 rounded bg-gray-100 px-2 py-0.5 text-gray-600" title="Restricted-entry interval (label)">
+                        <Clock className="w-3 h-3" /> REI {formatRei(line.rei_hours)}
+                      </span>
+                      <span className="inline-flex items-center gap-1 rounded bg-gray-100 px-2 py-0.5 text-gray-600" title="Pre-harvest interval (label)">
+                        <CalendarClock className="w-3 h-3" /> PHI {formatPhi(line.phi_days)}
+                      </span>
+
+                      {/* Rate-vs-max-label result */}
+                      {rateCmp.status === 'over' && (
+                        <span
+                          className={`inline-flex items-center gap-1 rounded px-2 py-0.5 font-medium ${guardrailMode === 'block' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-800'}`}
+                          title={`Entered rate ${rateCmp.rate} ${line.rate_unit} exceeds the label max ${rateCmp.maxRate} ${line.max_label_rate_unit}`}
+                        >
+                          <ShieldAlert className="w-3 h-3" />
+                          {guardrailMode === 'block' ? 'OVER LABEL RATE — override required' : 'Over label rate'} ({rateCmp.rate} &gt; {rateCmp.maxRate} {line.max_label_rate_unit})
+                        </span>
+                      )}
+                      {rateCmp.status === 'no_label_max' && (
+                        <span className="inline-flex items-center gap-1 rounded bg-gray-100 px-2 py-0.5 text-gray-500" title="No maximum label rate is on file for this product — can't check the rate. Add it on the product to enable the guardrail.">
+                          <AlertTriangle className="w-3 h-3" /> No label max on file
+                        </span>
+                      )}
+                      {rateCmp.status === 'cannot_compare' && (line.rate_per_acre ?? 0) > 0 && (
+                        <span className="inline-flex items-center gap-1 rounded bg-gray-100 px-2 py-0.5 text-gray-500" title={`Can't compare: rate unit (${line.rate_unit || '—'}) differs from the label-max unit (${line.max_label_rate_unit || '—'}).`}>
+                          <AlertTriangle className="w-3 h-3" /> Units differ — rate not checked
+                        </span>
+                      )}
+
+                      {/* PHI-vs-harvest-date warning */}
+                      {phiCheck.status === 'inside_window' && (
+                        <span className="inline-flex items-center gap-1 rounded bg-amber-100 px-2 py-0.5 font-medium text-amber-800" title={`Harvest ${phiCheck.harvestDate} is sooner than the earliest safe harvest ${phiCheck.earliestHarvest} (application + ${phiCheck.phiDays}-day PHI).`}>
+                          <CalendarClock className="w-3 h-3" /> Harvest {phiCheck.harvestDate} is inside the {phiCheck.phiDays}-day PHI window (earliest {phiCheck.earliestHarvest})
+                        </span>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              )}
+            </Fragment>
+            );
+            })}
             {chemicals.length === 0 && (
               <tr><td colSpan={10} className="px-3 py-8 text-center text-gray-400">No chemicals added yet</td></tr>
             )}

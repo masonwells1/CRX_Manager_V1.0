@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState , useCallback, lazy, Suspense } from 'react';
+import { useEffect, useRef, useState , useCallback, useMemo, lazy, Suspense } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import { Save, Plus, Trash2, Check, FileText, Beaker, Ban, MessageSquarePlus, Printer, CloudSun, MapPin, Truck, ClipboardList, FlaskConical, Bell, History, BookmarkPlus, GripVertical, ChevronUp, ChevronDown, Map as MapIcon } from 'lucide-react';
+import { Save, Plus, Trash2, Check, FileText, Beaker, Ban, MessageSquarePlus, Printer, CloudSun, MapPin, Truck, ClipboardList, FlaskConical, Bell, History, BookmarkPlus, GripVertical, ChevronUp, ChevronDown, Map as MapIcon, ShieldAlert, CalendarClock, AlertTriangle } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
@@ -11,7 +11,7 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { logActivity } from '../lib/activityLogger';
-import { supabase, checkMutationResult, assertRpcResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
+import { supabase, checkMutationResult, assertRpcResult, hasRpcCode, RpcErrorCodes, sanitizeError } from '../lib/db';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { getLicenseStatus, licenseStatusLabel } from '../lib/licenseStatus';
 import { generateWpsNoticePdf } from '../lib/wpsNoticePdf';
@@ -32,6 +32,14 @@ import { fetchCurrentWeather, parseCentroid } from '../lib/weatherCapture';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
 import { applyChemEdit, recomputeChemRowForAcres, reconcileChemAutofillUnits, sumAcres, toGallonOrLbEquivalent } from '../lib/chemCalculator';
+import { compareToMaxRate, phiHarvestWarning } from '../lib/labelGuardrails';
+import {
+  LABEL_RATE_GUARDRAIL_MODE_KEY,
+  DEFAULT_GUARDRAIL_MODE,
+  parseGuardrailMode,
+  type GuardrailMode,
+} from '../lib/labelGuardrailSetting';
+import { computeSeason } from '../utils/season';
 import { recipeItemToChemRowSeed, chemRowsToRecipeItems, getLastRecipeId, setLastRecipeId } from '../lib/recipeHelpers';
 import { moveItem, moveUp, moveDown } from '../lib/routeOrder';
 import AppliedRecordsManager from '../components/jobs/AppliedRecordsManager';
@@ -1110,6 +1118,21 @@ export default function JobDetail() {
   // the applicator route order (null when no drag is in progress).
   const [dragFieldIndex, setDragFieldIndex] = useState<number | null>(null);
   const [chemRows, setChemRows] = useState<ChemRow[]>([]);
+  // §5 (Label-Rate Guardrails): policy mode (warn default, never blocks) + earliest
+  // planned harvest across the job's fields (for the PHI-vs-harvest warning) + the
+  // block-mode admin-override modal state.
+  const [guardrailMode, setGuardrailMode] = useState<GuardrailMode>(DEFAULT_GUARDRAIL_MODE);
+  // §5 (Codex r6): the block-mode save gate FAILS CLOSED until BOTH the mode read AND the
+  // by-id label fetch resolve, so an early Save can't slip an over-label line past block mode.
+  const [guardrailModeLoaded, setGuardrailModeLoaded] = useState(false);
+  const [jobLabelsLoaded, setJobLabelsLoaded] = useState(false);
+  const [jobEarliestHarvestDate, setJobEarliestHarvestDate] = useState<string | null>(null);
+  const [showOverrideModal, setShowOverrideModal] = useState(false);
+  const [overrideReason, setOverrideReason] = useState('');
+  // §5: label max per product for the lines ON THIS JOB — fetched by product_id WITHOUT an
+  // is_active filter (Codex P2), so a now-INACTIVE product on a saved job still gets its
+  // label max for the guardrail (allProducts is active-only). Authoritative over allProducts.
+  const [jobProductLabels, setJobProductLabels] = useState<Map<string, { max_label_rate: number | null; max_label_rate_unit: string | null }>>(new Map());
   // Per-field customer shares, keyed by field. Empty until a field is added /
   // shares are loaded — then defaulted from field_billing_defaults.
   const [shareRows, setShareRows] = useState<ShareRow[]>([]);
@@ -1171,6 +1194,85 @@ export default function JobDetail() {
        loaderComment, additionalInfo, internalMemo, carrierRateGpa, tankCapacity,
        fieldRows, chemRows, shareRows]);
 
+  // §5: load the earliest planned harvest date across the job's fields, SCOPED to the
+  // job-date's season (field_crop_history holds one row per field/season, so without the
+  // season filter an old prior-season harvest would falsely trip the PHI window). Re-runs
+  // when the field set OR the job date changes. No harvest row => no warning (graceful).
+  const jobFieldKey = fieldRows.map((f) => f.field_id).filter(Boolean).sort().join(',');
+  useEffect(() => {
+    let cancelled = false;
+    const fieldIds = jobFieldKey ? jobFieldKey.split(',') : [];
+    if (fieldIds.length === 0) { setJobEarliestHarvestDate(null); return; }
+    const season = computeSeason(jobDate ? new Date(jobDate + 'T00:00:00') : new Date());
+    (async () => {
+      const { data, error } = await supabase
+        .from('field_crop_history')
+        .select('harvest_date')
+        .in('field_id', fieldIds)
+        .eq('season', season)
+        .not('harvest_date', 'is', null)
+        .order('harvest_date', { ascending: true })
+        .limit(1);
+      if (cancelled) return;
+      if (error) { setJobEarliestHarvestDate(null); return; }
+      setJobEarliestHarvestDate((data as Array<{ harvest_date: string | null }> | null)?.[0]?.harvest_date ?? null);
+    })();
+    return () => { cancelled = true; };
+  }, [jobFieldKey, jobDate]);
+
+  // §5 (Codex P2): fetch the label max for THIS job's chemical products by id (no is_active
+  // filter) so an inactive product still has its max for the rate-vs-max guardrail. Re-runs
+  // when the set of product ids on the lines changes. A failed fetch => empty map (the row
+  // falls back to allProducts, then degrades to "no label max" — never blocks/errors).
+  const chemProductIdKey = Array.from(new Set(chemRows.map((c) => c.product_id).filter(Boolean))).sort().join(',');
+  useEffect(() => {
+    let cancelled = false;
+    const ids = chemProductIdKey ? chemProductIdKey.split(',') : [];
+    if (ids.length === 0) { setJobProductLabels(new Map()); setJobLabelsLoaded(true); return; }
+    setJobLabelsLoaded(false);
+    (async () => {
+      const { data, error } = await supabase
+        .from('products')
+        .select('id, max_label_rate, max_label_rate_unit')
+        .in('id', ids);
+      if (cancelled) return;
+      if (error) { setJobProductLabels(new Map()); setJobLabelsLoaded(true); return; }
+      const m = new Map<string, { max_label_rate: number | null; max_label_rate_unit: string | null }>();
+      for (const p of (data as unknown as Array<{ id: string; max_label_rate: number | null; max_label_rate_unit: string | null }> | null) ?? []) {
+        m.set(p.id, { max_label_rate: p.max_label_rate, max_label_rate_unit: p.max_label_rate_unit });
+      }
+      setJobProductLabels(m);
+      setJobLabelsLoaded(true);
+    })();
+    return () => { cancelled = true; };
+  }, [chemProductIdKey]);
+
+  // §5: resolve a line's label max — the by-id fetch (inactive-safe) wins, then allProducts.
+  const labelMaxFor = useCallback((productId: string): { max_label_rate: number | null; max_label_rate_unit: string | null } => {
+    const fromJob = jobProductLabels.get(productId);
+    if (fromJob) return fromJob;
+    const lp = allProducts.find((p) => p.id === productId);
+    return { max_label_rate: lp?.max_label_rate ?? null, max_label_rate_unit: lp?.max_label_rate_unit ?? null };
+  }, [jobProductLabels, allProducts]);
+
+  // §5: aggregate guardrail state from chemRows + allProducts (the live label max). Drives
+  // the BLOCK-mode save gate — computed here in the page so it's correct regardless of the
+  // active tab. 'cannot_compare' / 'no_label_max' never count toward the gate.
+  const guardrailState = useMemo(() => {
+    const overRateProducts: string[] = [];
+    let phiHarvestWarnCount = 0;
+    for (const c of chemRows) {
+      if (!c.product_id) continue;
+      const lbl = labelMaxFor(c.product_id);
+      const cmp = compareToMaxRate(parseFloat(c.rate_per_acre) || null, c.rate_unit, lbl.max_label_rate, lbl.max_label_rate_unit);
+      if (cmp.status === 'over') overRateProducts.push(c.product_name || allProducts.find((p) => p.id === c.product_id)?.product_name || 'Unnamed product');
+      if (phiHarvestWarning(parseFloat(c.phi_days) || null, jobEarliestHarvestDate, jobDate).status === 'inside_window') {
+        phiHarvestWarnCount += 1;
+      }
+    }
+    return { overRateCount: overRateProducts.length, overRateProducts, phiHarvestWarnCount };
+  }, [chemRows, allProducts, labelMaxFor, jobEarliestHarvestDate, jobDate]);
+
   // Single dirty engine: when no baseline is set yet, ADOPT the current form as the
   // clean baseline (but only once the load has settled, so we don't adopt a half-
   // populated form); thereafter compare. fetchJob / the new-job init reset the
@@ -1208,6 +1310,12 @@ export default function JobDetail() {
     const crewResult = await supabase
       .from('ground_crews').select('id, name').eq('is_active', true).order('name');
     setGroundCrews((crewResult.data || []) as { id: string; name: string }[]);
+
+    // §5: load the label-rate guardrail policy (warn default; failed/absent => warn).
+    const grResult = await supabase
+      .from('app_settings').select('setting_value').eq('setting_key', LABEL_RATE_GUARDRAIL_MODE_KEY).maybeSingle();
+    setGuardrailMode(parseGuardrailMode((grResult.data as { setting_value?: string } | null)?.setting_value ?? null));
+    setGuardrailModeLoaded(true);
 
     // Staff-held license rows for the license-gate badge + pre-save check (B5)
     const licResult = await supabase
@@ -1557,7 +1665,64 @@ export default function JobDetail() {
   // no split snapshot). Block the save until those lookups resolve.
   const selectedFieldSharesLoading = anySelectedFieldSharesLoading(fieldRows, sharesLoading);
 
+  // §5: the save gate. WARN mode (default) is a straight pass-through — an over-label rate
+  // is flagged on the grid but NEVER blocks the save. BLOCK mode (owner opt-in) opens the
+  // admin-override modal (admins only) so the save proceeds only with a LOGGED reason; a
+  // non-admin is told to fix the rate (no silent corruption).
   const handleSave = async () => {
+    // §5 (Codex r6): FAIL CLOSED while the guardrail mode / by-id label data are still
+    // loading and the mix has products — an early Save must not skip a block-mode override.
+    if (chemRows.some((c) => c.product_id) && (!guardrailModeLoaded || !jobLabelsLoaded)) {
+      toast('error', 'Checking the label-rate policy — try Save again in a moment.');
+      return;
+    }
+    if (guardrailMode === 'block' && guardrailState.overRateCount > 0) {
+      if (role !== 'admin') {
+        toast('error',
+          `${guardrailState.overRateCount} chemical line(s) exceed the product's max label rate ` +
+          `(${guardrailState.overRateProducts.join(', ')}). An admin must override to save — ` +
+          `lower the rate or ask an admin.`,
+        );
+        return;
+      }
+      setOverrideReason('');
+      setShowOverrideModal(true);
+      return;
+    }
+    await runJobSave();
+  };
+
+  // §5: admin confirms the block-mode override. Persists the reason to the append-only
+  // activity feed and GATES the save on that write succeeding (a failed audit write aborts
+  // the save — an over-label job mix never saves without its persisted override reason).
+  const handleOverrideConfirm = async () => {
+    if (!profile) return;
+    const reason = overrideReason.trim();
+    if (reason === '') { toast('error', 'Enter a reason for the over-label-rate override.'); return; }
+    // For a NEW job, id is the route literal 'new' (NOT a UUID) — never write it to the
+    // uuid related_entity_id column (Codex r7). Use null until the job has a real id.
+    const realJobId = isNew ? null : (id || null);
+    const description =
+      `Admin override of over-label-rate guardrail (block mode) on job ${jobNumber || 'new'}. ` +
+      `Over-rate product(s): ${guardrailState.overRateProducts.join(', ')}. Reason: ${reason}`;
+    const logResult = await supabase.from('activity_feed').insert({
+      event_type: 'label_rate_override',
+      description,
+      performed_by: profile.id,
+      related_entity_type: 'job',
+      related_entity_id: realJobId,
+    });
+    if (logResult.error) {
+      Sentry.captureException(logResult.error, { level: 'error', extra: { context: 'label_rate_override_log_job', job_id: id } });
+      toast('error', `Could not record the override reason, so the save was stopped: ${sanitizeError(logResult.error)}`);
+      return;
+    }
+    setShowOverrideModal(false);
+    setOverrideReason('');
+    await runJobSave();
+  };
+
+  const runJobSave = async () => {
     saveJobIdem.resetKey();
     if (!customerId) { toast('error', 'Customer is required'); return; }
     if (!jobDate) { toast('error', 'Job date is required'); return; }
@@ -2797,6 +2962,40 @@ export default function JobDetail() {
                           disabled={!canEdit} step="1" className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg disabled:bg-gray-50" />
                       </div>
                     </div>
+                    {/* §5 Label-Rate Guardrails: rate-vs-max + PHI-vs-harvest on the job mix
+                        grid (unit-safe; never blocks here — the save gate handles block mode).
+                        Label max is read live from allProducts so it works on reopen too. */}
+                    {(() => {
+                      if (!c.product_id) return null;
+                      const lbl = labelMaxFor(c.product_id);
+                      const cmp = compareToMaxRate(parseFloat(c.rate_per_acre) || null, c.rate_unit, lbl.max_label_rate, lbl.max_label_rate_unit);
+                      const phi = phiHarvestWarning(parseFloat(c.phi_days) || null, jobEarliestHarvestDate, jobDate);
+                      if (cmp.status === 'no_rate' && phi.status !== 'inside_window') return null;
+                      return (
+                        <div className="flex flex-wrap items-center gap-2 text-xs pt-1">
+                          {cmp.status === 'over' && (
+                            <span className={`inline-flex items-center gap-1 rounded px-2 py-0.5 font-medium ${guardrailMode === 'block' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-800'}`}>
+                              <ShieldAlert className="w-3 h-3" /> {guardrailMode === 'block' ? 'Over label rate — override required' : 'Over label rate'} ({cmp.rate} &gt; {cmp.maxRate} {lbl.max_label_rate_unit})
+                            </span>
+                          )}
+                          {cmp.status === 'no_label_max' && (
+                            <span className="inline-flex items-center gap-1 rounded bg-gray-100 px-2 py-0.5 text-gray-500">
+                              <AlertTriangle className="w-3 h-3" /> No label max on file
+                            </span>
+                          )}
+                          {cmp.status === 'cannot_compare' && (
+                            <span className="inline-flex items-center gap-1 rounded bg-gray-100 px-2 py-0.5 text-gray-500">
+                              <AlertTriangle className="w-3 h-3" /> Units differ — rate not checked
+                            </span>
+                          )}
+                          {phi.status === 'inside_window' && (
+                            <span className="inline-flex items-center gap-1 rounded bg-amber-100 px-2 py-0.5 font-medium text-amber-800">
+                              <CalendarClock className="w-3 h-3" /> Harvest {phi.harvestDate} is inside the {phi.phiDays}-day PHI window (earliest {phi.earliestHarvest})
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })()}
                   </div>
                 );
               })}
@@ -3314,6 +3513,40 @@ export default function JobDetail() {
               </span>
             </button>
           ))}
+        </div>
+      </Modal>
+
+      {/* §5: block-mode over-label-rate admin override — a required reason; logs it then
+          saves. Only reached in 'block' mode for an admin. Never a hard wall. */}
+      <Modal open={showOverrideModal} onClose={() => { if (!saving) setShowOverrideModal(false); }} title="Over-label-rate override">
+        <div className="space-y-4">
+          <div className="flex items-start gap-3 p-3 bg-amber-50 rounded-lg">
+            <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+            <p className="text-sm text-amber-800">
+              {guardrailState.overRateCount} chemical line(s) exceed the product&rsquo;s maximum label rate
+              {guardrailState.overRateProducts.length > 0 && <> (<strong>{guardrailState.overRateProducts.join(', ')}</strong>)</>}.
+              The guardrail is set to <strong>block</strong>, so saving requires an admin override. Your reason is logged for the audit trail.
+            </p>
+          </div>
+          <div>
+            <label htmlFor="job-override-reason" className="block text-sm font-medium text-gray-700 mb-1">
+              Reason for the override <span className="text-red-600">*</span>
+            </label>
+            <textarea
+              id="job-override-reason"
+              value={overrideReason}
+              onChange={(e) => setOverrideReason(e.target.value)}
+              rows={3}
+              placeholder="e.g., Split application across two passes; per-pass rate is within label."
+              className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-200"
+            />
+          </div>
+          <div className="flex justify-end gap-3 pt-2">
+            <Button variant="secondary" onClick={() => setShowOverrideModal(false)} disabled={saving}>Cancel</Button>
+            <Button variant="primary" onClick={handleOverrideConfirm} loading={saving} disabled={saving || !overrideReason.trim()}>
+              Override &amp; Save
+            </Button>
+          </div>
         </div>
       </Modal>
 
