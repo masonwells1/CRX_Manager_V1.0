@@ -49,6 +49,7 @@ import { formatCents } from '../lib/money';
 import { localToday, localDatePlusDays } from '../lib/dateUtils';
 import { SkeletonCard } from '../components/ui/Skeleton';
 import type { WatchdogFlag } from '../types';
+import { useAuth } from '../contexts/AuthContext';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -199,6 +200,8 @@ function TileHeader({
 export default function OfficeCockpit() {
   const navigate = useNavigate();
   const { toast } = useToast();
+  const { profile } = useAuth();
+  const isAdmin = profile?.role === 'admin';
 
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState<CockpitData>({
@@ -278,12 +281,14 @@ export default function OfficeCockpit() {
         .order('expiry_date', { ascending: true })
         .limit(TILE_LIMIT),
 
-      // (f) Overdue field-app AR: posted invoices, balance > 0, past due_date
+      // (f) Overdue field-app AR: balance > 0, past due_date. Include BOTH 'posted'
+      // (past due but not yet swept) AND 'overdue' (already marked by mark_overdue_invoices)
+      // — filtering to 'posted' alone hides the invoices that are actually overdue.
       supabase
         .from('invoices')
         .select('id, invoice_number, due_date, balance_cents, customer:customers(farm_name)')
         .eq('invoice_type', 'field_application')
-        .eq('status', 'posted')
+        .in('status', ['posted', 'overdue'])
         .lt('due_date', today)
         .gt('balance_cents', 0)
         .is('deleted_at', null)
@@ -670,8 +675,8 @@ export default function OfficeCockpit() {
             title="Overdue Field-App AR"
             count={data.overdueAR.length}
             countColor="text-red-600"
-            linkLabel="AR Aging"
-            onLink={() => navigate('/ar-aging')}
+            linkLabel={isAdmin ? 'AR Aging' : undefined}
+            onLink={isAdmin ? () => navigate('/ar-aging') : undefined}
           />
           {data.overdueAR.length === 0 ? (
             <AllClear label="No overdue field-app receivables." />
