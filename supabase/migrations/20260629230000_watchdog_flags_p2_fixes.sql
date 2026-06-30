@@ -107,17 +107,21 @@ BEGIN
     )
   FROM jobs j
   JOIN LATERAL (
-    -- Sum authoritative acres across all fields linked to this job
+    -- Authoritative acres across ALL fields linked to this job. Only USABLE when EVERY field has a
+    -- boundary acreage — otherwise the SUM is partial and would manufacture a false divergence
+    -- (full applied_acres compared against an under-counted boundary total).
     SELECT
       SUM(COALESCE(f.override_acres, f.measured_acres, f.total_acres)) AS boundary_acres,
-      COUNT(*)                                                          AS field_count
+      COUNT(*)                                                          AS field_count,
+      COUNT(*) FILTER (
+        WHERE COALESCE(f.override_acres, f.measured_acres, f.total_acres) > 0
+      )                                                                 AS fields_with_acres
     FROM job_fields jf
     JOIN fields f ON f.id = jf.field_id
     WHERE jf.job_id = j.id
-      AND COALESCE(f.override_acres, f.measured_acres, f.total_acres) IS NOT NULL
-      AND COALESCE(f.override_acres, f.measured_acres, f.total_acres) > 0
   ) field_totals ON field_totals.boundary_acres IS NOT NULL
                  AND field_totals.boundary_acres > 0
+                 AND field_totals.field_count = field_totals.fields_with_acres
   WHERE j.deleted_at IS NULL
     AND j.status IN ('completed','invoiced')
     AND j.applied_acres IS NOT NULL
@@ -327,57 +331,59 @@ BEGIN
     natural_key, flag_type, severity, entity_type, entity_id,
     job_id, product_id, field_id, customer_id, message, detail
   )
-  SELECT DISTINCT ON (j.id, jc.product_id, jf.field_id)
-    'rei_not_cleared:job:' || j.id::text || ':prod:' || jc.product_id::text || ':field:' || jf.field_id::text,
+  SELECT DISTINCT ON (j.id, jf.field_id)
+    'rei_not_cleared:job:' || j.id::text || ':field:' || jf.field_id::text,
     'rei_not_cleared'::text,
     'warning'::text,
     'job'::text,
     j.id,
     j.id,
-    jc.product_id,
+    prior_j.prior_product_id,
     jf.field_id,
     j.customer_id,
     format(
-      'Job %s: %s applied to field "%s" but REI window from job %s (%s hours) may not have cleared',
+      'Job %s entered field "%s" but the REI from job %s (%s, %s hours) may not have cleared',
       j.job_number,
-      p.product_name,
       f.field_name,
       prior_j.job_number,
-      p.rei_hours
+      prior_j.prior_product_name,
+      prior_j.prior_rei_hours
     ),
     jsonb_build_object(
-      'product_name',      p.product_name,
       'field_name',        f.field_name,
-      'rei_hours',         p.rei_hours,
+      'prior_product',     prior_j.prior_product_name,
+      'prior_rei_hours',   prior_j.prior_rei_hours,
       'prior_job_number',  prior_j.job_number,
       'prior_job_date',    prior_j.job_date,
       'this_job_date',     j.job_date,
       'hours_since_prior',
-        EXTRACT(EPOCH FROM (j.job_date::timestamptz - prior_j.job_date::timestamptz)) / 3600
+        ROUND((EXTRACT(EPOCH FROM (j.job_date::timestamptz - prior_j.job_date::timestamptz)) / 3600)::numeric, 1)
     )
   FROM jobs j
-  JOIN job_chemicals jc ON jc.job_id = j.id
-  JOIN products p ON p.id = jc.product_id
   JOIN job_fields jf ON jf.job_id = j.id
   JOIN fields f ON f.id = jf.field_id
   JOIN LATERAL (
-    SELECT pj.id, pj.job_number, pj.job_date
+    -- most-recent PRIOR application on this same field (ANY product) whose REI hasn't cleared,
+    -- judged by the PRIOR product's rei_hours (not the current job's product)
+    SELECT pj.id, pj.job_number, pj.job_date,
+           pp.id AS prior_product_id, pp.product_name AS prior_product_name, pp.rei_hours AS prior_rei_hours
     FROM jobs pj
-    JOIN job_chemicals pjc ON pjc.job_id = pj.id AND pjc.product_id = jc.product_id
     JOIN job_fields pjf ON pjf.job_id = pj.id AND pjf.field_id = jf.field_id
+    JOIN job_chemicals pjc ON pjc.job_id = pj.id
+    JOIN products pp ON pp.id = pjc.product_id
     WHERE pj.id <> j.id
       AND pj.deleted_at IS NULL
       AND pj.status IN ('completed','invoiced')
       AND pj.job_date < j.job_date
+      AND pp.rei_hours IS NOT NULL
+      AND pp.rei_hours > 0
       AND EXTRACT(EPOCH FROM (j.job_date::timestamptz - pj.job_date::timestamptz)) / 3600
-          < p.rei_hours
-    ORDER BY pj.job_date DESC
+          < pp.rei_hours
+    ORDER BY pj.job_date DESC, pp.rei_hours DESC
     LIMIT 1
   ) prior_j ON true
   WHERE j.deleted_at IS NULL
     AND j.status IN ('completed','invoiced')
-    AND p.rei_hours IS NOT NULL
-    AND p.rei_hours > 0
     AND (p_job_id IS NULL OR j.id = p_job_id)
   ON CONFLICT (natural_key) WHERE natural_key IS NOT NULL DO UPDATE
     SET message    = EXCLUDED.message,

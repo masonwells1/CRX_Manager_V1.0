@@ -69,7 +69,7 @@ CREATE POLICY "watchdog_dismissals_select" ON watchdog_flag_dismissals
 
 CREATE POLICY "watchdog_dismissals_insert" ON watchdog_flag_dismissals
   FOR INSERT TO authenticated
-  WITH CHECK (is_admin() OR is_sales_rep());
+  WITH CHECK ((is_admin() OR is_sales_rep()) AND dismissed_by = auth.uid());
 
 -- ─── WATCHDOG CONFIG (lightweight — stored in a single-row config) ───────────
 -- We don't need a full config table; use constants in the RPC defaults.
