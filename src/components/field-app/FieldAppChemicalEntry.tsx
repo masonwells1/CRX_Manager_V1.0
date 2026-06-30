@@ -426,7 +426,14 @@ export default function FieldAppChemicalEntry({
                     step="0.01"
                     disabled={readOnly}
                     value={line.rate_per_acre ?? ''}
-                    onChange={(e) => updateLine(line.id, { rate_per_acre: e.target.value ? Number(e.target.value) : null })}
+                    onChange={(e) => {
+                      // codex-driven hunt cycle 8: a type=number input still accepts
+                      // transient strings like "e", "-", "." -> Number() = NaN. Guard
+                      // with Number.isFinite so NaN never enters line state (it survives
+                      // `?? ''`, glitches the field, and silently nulls the rate on save).
+                      const n = Number(e.target.value);
+                      updateLine(line.id, { rate_per_acre: e.target.value !== '' && Number.isFinite(n) ? n : null });
+                    }}
                     className="w-full px-2 py-1 border rounded text-right text-sm tabular-nums disabled:bg-gray-100 disabled:text-gray-500"
                   />
                 </td>
