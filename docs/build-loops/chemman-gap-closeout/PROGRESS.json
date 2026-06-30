@@ -1,0 +1,22 @@
+{
+  "_doc": "Machine-readable progress for the ChemMan Gap-Closeout loop. LEDGER.md is regenerated from this. status per section: PENDING | IN-PROGRESS | BUILT | PARTIAL | BLOCKED. codex: done | pending | partial | n/a.",
+  "loop": "chemman-gap-closeout",
+  "state": "SCAFFOLDED — docs authored; build not yet started. Next: build Stage 1 (weather auto-fill) via a fresh Opus build subagent.",
+  "branch": "feat/chemman-gap-closeout",
+  "based_on": "feat/fieldapp-beyond-parity",
+  "precondition_verified": "2026-06-30: solo check passed — on feat/chemman-gap-closeout, tree clean (package-lock churn from npm install restored/ignored). HEAD 3d9a51e1 (beyond-parity ledger tip). node_modules installed. Live schema grounded: field-app invoice = invoices table (invoice_type='field_application'), weather today = invoices.temperature_text+wind_direction (manual text), acres = invoices.total_acres; weatherCapture.ts already has fetchWeatherForDateTime; diluent missing on billing side (exists job-side as jobs.carrier_rate_gpa). Newest migration on disk 20260630170000.",
+  "owner_decisions": {
+    "scope": "EXACTLY two sections (weather auto-fill, diluent per acre) on the field-application invoice. Everything else from the ChemMan comparison is already built — do NOT rebuild.",
+    "models": "Orchestrator = Opus 4.8. BOTH build stages touch the invoices money table -> build subagents on Opus 4.8. Read-only grounding/search subagents may use Sonnet 5. Fable unavailable."
+  },
+  "buildOrder": [1, 2],
+  "sections": {
+    "1": { "name": "Weather auto-fill on the field-application invoice", "model": "opus", "status": "PENDING", "codex": "n/a", "needs_migration": true, "risk": "medium", "commit": null, "verified": null, "parkedLow": [], "openQuestions": [] },
+    "2": { "name": "Diluent / carrier-water per acre on the field-application invoice", "model": "opus", "status": "PENDING", "codex": "n/a", "needs_migration": true, "risk": "medium", "commit": null, "verified": null, "parkedLow": [], "openQuestions": [] }
+  },
+  "openQuestions": [
+    "SETUP NOTE: confirm the LOCAL throwaway Supabase (C:/Users/mason/fieldapp-local-db) carries the beyond-parity migrations through 20260630170000 before applying the new migrations; if its ledger is behind, apply new migrations via direct psql against the parity schema (the parity/beyond-parity loops' established MO), not a full db reset.",
+    "Stage 2: confirm save_field_app_invoice reliably writes invoices.total_acres before choosing a GENERATED diluent_total_gallons column (else store a plain total or compute for display).",
+    "PRODUCTION GATE: beyond-parity (feat/fieldapp-beyond-parity) must be on main first or together — these two gaps sit on top of it. Flag the exact state at the gate."
+  ]
+}
