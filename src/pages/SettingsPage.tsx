@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Save, UserPlus, Pencil, Shield, Users, KeyRound, Fuel, ClipboardList, Bell } from 'lucide-react';
+import { Save, UserPlus, Pencil, Shield, Users, KeyRound, Fuel, ClipboardList, Bell, FileText } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
@@ -43,6 +43,12 @@ import {
   parsePostNotificationTemplate,
   type PostNotificationTemplate,
 } from '../lib/postNotification';
+import {
+  AUTO_DRAFT_SETTING_KEY,
+  DEFAULT_AUTO_DRAFT_ENABLED,
+  parseAutoDraftEnabled,
+  serializeAutoDraftEnabled,
+} from '../lib/autoDraftSetting';
 import type { Profile, AppSetting, UserRole } from '../types';
 
 // --- Permissions Panel ---
@@ -156,6 +162,9 @@ export default function SettingsPage() {
   // #32: Fuel Surcharge — OFF by default, rate blank. The owner sets the rule.
   const [fuelSurcharge, setFuelSurcharge] = useState<FuelSurchargeConfig>(DEFAULT_FUEL_SURCHARGE);
   const [savingFuel, setSavingFuel] = useState(false);
+  // §4: Auto-draft invoice on job completion — OFF by default (never auto-posts).
+  const [autoDraftEnabled, setAutoDraftEnabled] = useState<boolean>(DEFAULT_AUTO_DRAFT_ENABLED);
+  const [savingAutoDraft, setSavingAutoDraft] = useState(false);
   // #9: Custom applicator field-sheet layout (LAYOUT ONLY — header/logo/footer +
   // optional column toggles). Blank by default => standard CRX header.
   const [sheetConfig, setSheetConfig] = useState<ApplicatorSheetCustomConfig>(DEFAULT_CUSTOM_CONFIG);
@@ -220,6 +229,8 @@ export default function SettingsPage() {
     setDefaultTier(map['default_tier'] || '1');
     // #32: blank/absent => the inert OFF default (never invents a rate).
     setFuelSurcharge(parseFuelSurchargeConfig(map['fuel_surcharge']));
+    // §4: blank/absent/anything-but-'true' => OFF (the safe default).
+    setAutoDraftEnabled(parseAutoDraftEnabled(map[AUTO_DRAFT_SETTING_KEY]));
     // #9: blank/absent => standard CRX header + all optional columns shown.
     setSheetConfig(parseCustomConfig(map['applicator_sheet_custom']));
     // #40: blank/absent => the seeded default pre-notification wording.
@@ -311,6 +322,24 @@ export default function SettingsPage() {
       toast('error', sanitizeError(errUnknown));
     }
     setSavingFuel(false);
+  };
+
+  const saveAutoDraft = async () => {
+    setSavingAutoDraft(true);
+    try {
+      await saveSetting(AUTO_DRAFT_SETTING_KEY, serializeAutoDraftEnabled(autoDraftEnabled));
+      toast('success', `Auto-invoice ${autoDraftEnabled ? 'enabled' : 'disabled'}`);
+      if (profile) {
+        logActivity({
+          event: 'settings_updated',
+          description: `Auto-draft invoice on job completion ${autoDraftEnabled ? 'enabled' : 'disabled'} (drafts only — never auto-posts)`,
+          performedBy: profile.id,
+        });
+      }
+    } catch (errUnknown: unknown) {
+      toast('error', sanitizeError(errUnknown));
+    }
+    setSavingAutoDraft(false);
   };
 
   const saveSheetConfig = async () => {
@@ -815,6 +844,64 @@ export default function SettingsPage() {
             ) : (
               <span className="text-gray-400">
                 Inert &mdash; no surcharge will be applied (off, or no rate entered).
+              </span>
+            )}
+          </p>
+        </div>
+      </Card>
+
+      {/* §4: Auto-invoice on job completion (DRAFTS ONLY — never auto-posts). */}
+      <Card>
+        <CardHeader
+          title="Auto"
+          accent="Invoice"
+          action={
+            <Button
+              size="sm"
+              icon={<Save className="w-4 h-4" />}
+              onClick={saveAutoDraft}
+              loading={savingAutoDraft}
+            >
+              Save
+            </Button>
+          }
+        />
+        <div className="space-y-4">
+          <div className="flex items-start gap-3 rounded-lg bg-blue-50 border border-blue-100 p-3">
+            <FileText className="w-5 h-5 text-blue-600 mt-0.5 shrink-0" />
+            <p className="text-sm text-blue-800">
+              <strong>Off by default.</strong> When on, completing a field job automatically
+              creates a <strong>draft</strong> field-application invoice (using your existing
+              prices and customer splits). It is <em>never</em> posted automatically &mdash;
+              a draft simply lands in the &ldquo;Ready to Post&rdquo; queue on the Office
+              Cockpit, where someone reviews and posts it by hand. If pricing can&rsquo;t be
+              worked out, the job still completes and the office is alerted to bill it
+              manually.
+            </p>
+          </div>
+
+          <label className="flex items-center gap-3 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={autoDraftEnabled}
+              onChange={(e) => setAutoDraftEnabled(e.target.checked)}
+              className="w-4 h-4 rounded border-gray-300 text-crx-green focus:ring-crx-green/20"
+            />
+            <span className="text-sm font-medium text-secondary">
+              Automatically create a draft invoice when a field job is completed
+            </span>
+          </label>
+
+          <p className="text-xs text-secondary">
+            {autoDraftEnabled ? (
+              <span className="text-blue-700 font-medium">
+                On &mdash; completed jobs will auto-create a draft invoice for review (never
+                auto-posted).
+              </span>
+            ) : (
+              <span className="text-gray-400">
+                Off &mdash; billing stays a manual step (transfer each completed job to an
+                invoice yourself).
               </span>
             )}
           </p>

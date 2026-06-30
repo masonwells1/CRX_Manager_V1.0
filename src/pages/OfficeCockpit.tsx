@@ -24,7 +24,7 @@
  * The watchdog RPC is SECURITY DEFINER but gates on role inside its body.
  * READ-ONLY — no mutations here.
  */
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   RefreshCw,
@@ -42,8 +42,11 @@ import {
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
+import Modal from '../components/ui/Modal';
 import { useToast } from '../components/ui/Toast';
-import { supabase, supabaseUntyped, assertRpcResult } from '../lib/db';
+import { supabase, supabaseUntyped, assertRpcResult, hasRpcCode, RpcErrorCodes, sanitizeError } from '../lib/db';
+import { generateIdempotencyKey } from '../lib/idempotency';
+import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
 import { formatCents } from '../lib/money';
 import { localToday, localDatePlusDays } from '../lib/dateUtils';
@@ -69,6 +72,9 @@ interface PostableInvoiceRow {
   status: string;
   total_amount_cents: number;
   customer_name: string;
+  job_id: string | null;
+  invoice_group_id: string | null;
+  pricing_pending: boolean;
 }
 
 interface UpcomingJobRow {
@@ -103,6 +109,9 @@ interface CockpitData {
   upcomingJobs: UpcomingJobRow[];
   expiringLicenses: ExpiringLicenseRow[];
   overdueAR: OverdueARRow[];
+  // True only when get_watchdog_flags loaded cleanly. When false we CANNOT tell which
+  // invoices are flagged, so bulk-posting is disabled (fail-safe — never post on unknown).
+  watchdogLoadOk: boolean;
 }
 
 type RawUnbilledJob = {
@@ -120,6 +129,9 @@ type RawPostableInvoice = {
   invoice_date: string;
   status: string;
   total_amount_cents: number;
+  job_id: string | null;
+  invoice_group_id: string | null;
+  pricing_pending: boolean | null;
   customer: { farm_name: string } | null;
 };
 
@@ -211,8 +223,15 @@ export default function OfficeCockpit() {
     upcomingJobs: [],
     expiringLicenses: [],
     overdueAR: [],
+    watchdogLoadOk: false,
   });
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
+  // §4 Post-all-clean state.
+  const [postAllOpen, setPostAllOpen] = useState(false);
+  const [posting, setPosting] = useState(false);
+  // Idempotency keys keyed by invoice id (group keyed by 'grp:<id>') so a retry of
+  // a failed item reuses the SAME key (no risk of double-posting on retry).
+  const postKeysRef = useRef<Record<string, string>>({});
 
   const fetchAll = useCallback(async () => {
     setLoading(true);
@@ -250,10 +269,10 @@ export default function OfficeCockpit() {
         .order('job_date', { ascending: true })
         .limit(TILE_LIMIT),
 
-      // (b) Draft/unposted field-app invoices (§4 will auto-populate these)
+      // (b) Draft/unposted field-app invoices (§4 auto-populates these)
       supabase
         .from('invoices')
-        .select('id, invoice_number, invoice_date, status, total_amount_cents, customer:customers(farm_name)')
+        .select('id, invoice_number, invoice_date, status, total_amount_cents, job_id, invoice_group_id, pricing_pending, customer:customers(farm_name)')
         .in('status', ['draft', 'unposted'])
         .eq('invoice_type', 'field_application')
         .is('deleted_at', null)
@@ -327,12 +346,17 @@ export default function OfficeCockpit() {
       status: r.status,
       total_amount_cents: r.total_amount_cents,
       customer_name: r.customer?.farm_name ?? 'Unknown',
+      job_id: r.job_id,
+      invoice_group_id: r.invoice_group_id,
+      pricing_pending: r.pricing_pending === true,
     }));
 
     let watchdogFlags: WatchdogFlag[] = [];
+    let watchdogLoadOk = false;
     if (!watchdogRes.error && watchdogRes.data) {
       try {
         watchdogFlags = assertRpcResult<WatchdogFlag[]>(watchdogRes.data, 'get_watchdog_flags');
+        watchdogLoadOk = true;
       } catch (e) {
         Sentry.captureException(e, { tags: { page: 'office-cockpit', tile: 'watchdog' } });
       }
@@ -363,7 +387,7 @@ export default function OfficeCockpit() {
       customer_name: r.customer?.farm_name ?? 'Unknown',
     }));
 
-    setData({ unbilledJobs, postableInvoices, watchdogFlags, upcomingJobs, expiringLicenses, overdueAR });
+    setData({ unbilledJobs, postableInvoices, watchdogFlags, upcomingJobs, expiringLicenses, overdueAR, watchdogLoadOk });
     setLastRefreshed(new Date());
     setLoading(false);
   }, [toast]);
@@ -378,6 +402,116 @@ export default function OfficeCockpit() {
     data.watchdogFlags.length +
     data.expiringLicenses.length +
     data.overdueAR.length;
+
+  // §4 Post-all-clean gating. A draft is "clean" (safe to auto-post in bulk) only when:
+  //   (a) it passes validation — pricing is NOT pending (the same gate post_invoice_group
+  //       / post_invoice enforce; we pre-filter so the bulk action only attempts postable
+  //       ones), AND
+  //   (b) it has NO open §2 watchdog flag on the invoice itself OR on its source job
+  //       (acre-divergence / REI flags attach to the job, double-bill/rate flags to the
+  //       invoice). Any open flag means a human must look before posting — never bulk-post it.
+  // The DB still enforces both gates inside post_invoice — this is defense-in-depth + UX.
+  const flaggedInvoiceIds = new Set(
+    data.watchdogFlags.map((f) => f.invoice_id).filter((x): x is string => !!x)
+  );
+  const flaggedJobIds = new Set(
+    data.watchdogFlags.map((f) => f.job_id).filter((x): x is string => !!x)
+  );
+  // Per-invoice cleanliness: pricing resolved AND no open flag on the invoice or its source job.
+  const isInvoiceCleanBase = (inv: PostableInvoiceRow): boolean => {
+    if (inv.pricing_pending) return false;
+    if (flaggedInvoiceIds.has(inv.id)) return false;
+    if (inv.job_id && flaggedJobIds.has(inv.job_id)) return false;
+    return true;
+  };
+  // A split group posts ATOMICALLY (post_invoice_group posts EVERY member). So a group is only
+  // safe to bulk-post when EVERY postable member is clean — one dirty sibling taints the whole
+  // group, else posting a "clean" member would drag a flagged/pricing-pending sibling live too.
+  const dirtyGroupIds = new Set<string>();
+  for (const inv of data.postableInvoices) {
+    if (inv.invoice_group_id && !isInvoiceCleanBase(inv)) dirtyGroupIds.add(inv.invoice_group_id);
+  }
+  const isInvoiceClean = (inv: PostableInvoiceRow): boolean =>
+    isInvoiceCleanBase(inv) &&
+    !(inv.invoice_group_id != null && dirtyGroupIds.has(inv.invoice_group_id));
+  // FAIL-SAFE: if get_watchdog_flags did NOT load, we cannot know which invoices are flagged,
+  // so NOTHING is bulk-postable (post individually instead). Never fail open on money.
+  const cleanInvoices = data.watchdogLoadOk ? data.postableInvoices.filter(isInvoiceClean) : [];
+  const blockedInvoices = data.postableInvoices.filter((inv) => !cleanInvoices.includes(inv));
+
+  // Post ONLY the clean drafts. Group → post_invoice_group; single → post_invoice
+  // (the canonical branch used by InvoiceDetail/FieldInvoicesUnposted). A HUMAN clicked
+  // this, so posting is allowed here — but we NEVER touch a flagged/pricing-pending one.
+  const runPostAllClean = async () => {
+    setPostAllOpen(false);
+    if (!profile) {
+      toast('error', 'Profile not loaded — please refresh.');
+      return;
+    }
+    if (cleanInvoices.length === 0) {
+      toast('info', 'No clean invoices to post.');
+      return;
+    }
+    await runCriticalAction({
+      action: async () => {
+        let posted = 0;
+        const failures: string[] = [];
+        // De-dupe by group: a split group posts atomically once via its group id.
+        const postedGroups = new Set<string>();
+        for (const inv of cleanInvoices) {
+          try {
+            if (inv.invoice_group_id) {
+              if (postedGroups.has(inv.invoice_group_id)) {
+                posted += 1; // already posted with its sibling(s)
+                continue;
+              }
+              const gid = `grp:${inv.invoice_group_id}`;
+              if (!postKeysRef.current[gid]) {
+                postKeysRef.current[gid] = generateIdempotencyKey('post_invoice_group', `${profile.id}:${inv.invoice_group_id}`);
+              }
+              const { data: pgData, error } = await supabase.rpc('post_invoice_group', {
+                p_invoice_group_id: inv.invoice_group_id,
+                p_performed_by: profile.id,
+                p_idempotency_key: postKeysRef.current[gid],
+              });
+              if (error) throw error;
+              assertRpcResult(pgData, 'post_invoice_group');
+              postedGroups.add(inv.invoice_group_id);
+              posted += 1;
+            } else {
+              if (!postKeysRef.current[inv.id]) {
+                postKeysRef.current[inv.id] = generateIdempotencyKey('post_invoice', `${profile.id}:${inv.id}`);
+              }
+              // post_invoice RETURNS void — .throwOnError(), no result to assert.
+              await supabase
+                .rpc('post_invoice', {
+                  p_invoice_id: inv.id,
+                  p_idempotency_key: postKeysRef.current[inv.id],
+                })
+                .throwOnError();
+              posted += 1;
+            }
+          } catch (err: unknown) {
+            if (hasRpcCode(err, RpcErrorCodes.PRICING_INCOMPLETE)) {
+              failures.push(`${inv.invoice_number}: needs pricing first`);
+            } else {
+              failures.push(`${inv.invoice_number}: ${sanitizeError(err)}`);
+            }
+          }
+        }
+        await fetchAll();
+        if (failures.length > 0) {
+          // Honest partial outcome; keep failed keys so a retry reuses them.
+          throw new Error(`Posted ${posted}/${cleanInvoices.length}. Failed: ${failures.slice(0, 3).join(' | ')}${failures.length > 3 ? ' …' : ''}`);
+        }
+        postKeysRef.current = {};
+      },
+      toast,
+      successMessage: `Posted ${cleanInvoices.length} clean invoice(s)`,
+      setLoading: setPosting,
+      sentryTag: 'cockpit_post_all_clean',
+    });
+  };
 
   if (loading) {
     return (
@@ -490,8 +624,37 @@ export default function OfficeCockpit() {
             onLink={() => navigate('/field-invoices/unposted')}
           />
           <p className="text-xs text-gray-400 mb-2">
-            Draft/unposted field-app invoices &mdash; §4 Auto-Invoice will auto-populate these.
+            Draft/unposted field-app invoices &mdash; §4 Auto-Invoice auto-populates these.
           </p>
+          {!data.watchdogLoadOk && data.postableInvoices.length > 0 && (
+            <p className="text-xs text-amber-700 mb-2 flex items-start gap-1">
+              <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+              Watchdog flags couldn&apos;t be loaded &mdash; bulk posting is off (post individually so a flagged invoice can&apos;t slip through). Refresh to retry.
+            </p>
+          )}
+          {data.postableInvoices.length > 0 && (
+            <div className="flex items-center justify-between gap-2 mb-2 pb-2 border-b border-gray-100">
+              <span className="text-xs text-gray-500">
+                {cleanInvoices.length} clean
+                {blockedInvoices.length > 0 && (
+                  <span className="text-amber-600">
+                    {' '}&middot; {blockedInvoices.length} need review
+                  </span>
+                )}
+              </span>
+              <Button
+                size="sm"
+                variant="primary"
+                onClick={() => setPostAllOpen(true)}
+                disabled={cleanInvoices.length === 0 || posting}
+                loading={posting}
+                className="flex items-center gap-1"
+              >
+                <FileCheck className="w-3.5 h-3.5" />
+                Post all clean
+              </Button>
+            </div>
+          )}
           {data.postableInvoices.length === 0 ? (
             <AllClear label="No field-app invoices waiting to post." />
           ) : (
@@ -726,6 +889,66 @@ export default function OfficeCockpit() {
         </Card>
 
       </div>
+
+      {/* §4: Post-all-clean confirmation — in-app modal (no confirm()/alert()). */}
+      <Modal
+        open={postAllOpen}
+        onClose={() => setPostAllOpen(false)}
+        title="Post"
+        accent="all clean"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-secondary">
+            This will <strong>post</strong> the {cleanInvoices.length} field-application
+            invoice(s) below. Posting locks an invoice and records it in the books &mdash;
+            this is the human step in billing.
+          </p>
+
+          {cleanInvoices.length > 0 && (
+            <div className="rounded-lg border border-gray-100 divide-y divide-gray-100 max-h-48 overflow-y-auto">
+              {cleanInvoices.map((inv) => (
+                <div key={inv.id} className="flex items-center justify-between px-3 py-2 text-sm">
+                  <span>
+                    <span className="font-medium text-nav-dark">{inv.customer_name}</span>
+                    <span className="ml-2 text-gray-500">#{inv.invoice_number}</span>
+                  </span>
+                  <span className="text-gray-600">{formatCents(inv.total_amount_cents)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {blockedInvoices.length > 0 && (
+            <div className="rounded-lg bg-amber-50 border border-amber-100 p-3">
+              <p className="text-sm font-medium text-amber-800 mb-1">
+                {blockedInvoices.length} invoice(s) will be skipped (need review):
+              </p>
+              <ul className="text-xs text-amber-700 list-disc list-inside space-y-0.5">
+                {blockedInvoices.slice(0, 6).map((inv) => (
+                  <li key={inv.id}>
+                    #{inv.invoice_number} &mdash; {inv.customer_name}
+                    {inv.pricing_pending ? ' (pricing incomplete)' : ' (open watchdog flag)'}
+                  </li>
+                ))}
+                {blockedInvoices.length > 6 && <li>+{blockedInvoices.length - 6} more</li>}
+              </ul>
+            </div>
+          )}
+
+          <div className="flex items-center justify-end gap-2 pt-2">
+            <Button variant="secondary" onClick={() => setPostAllOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              onClick={() => { void runPostAllClean(); }}
+              disabled={cleanInvoices.length === 0}
+            >
+              Post {cleanInvoices.length} invoice(s)
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }

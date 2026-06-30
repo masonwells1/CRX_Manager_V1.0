@@ -4,6 +4,22 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-06-30 — Beyond-Parity §4: Auto-Invoice on job completion — auto-DRAFT only, NEVER auto-post (`feat/fieldapp-beyond-parity`)
+
+When a field job is completed, optionally create a **draft** field-application invoice for the office to review and post — the riskiest "money" section, built off-by-default and fail-soft so it can never surprise the office or block job completion.
+
+- **Migration `20260630073344_auto_draft_invoice_on_job_completion.sql`** (LOCAL only):
+  - Seeds an inert app-setting `auto_draft_invoice_on_job_completion` = `'false'` (**OFF by default**, admin-only via existing `app_settings` RLS).
+  - `CREATE OR REPLACE complete_job(uuid,jsonb,uuid,text)` — verbatim live body + ONE added block at the end of the success path. When the setting is `'true'` **and** no non-voided invoice already references the job, it calls the already-reviewed `transfer_job_to_invoice()` (which creates a DRAFT field-app invoice, flips it to `unposted`, and STOPS). **It NEVER posts** — no post RPC is in the auto path. Single overload preserved.
+  - **Fail-soft:** the block is wrapped in a nested `BEGIN/EXCEPTION WHEN OTHERS` — any draft failure is swallowed (job still completes) and an `auto_draft_failed` activity-feed note is logged for the office.
+  - **Idempotent:** job-scoped idempotency key + existing-invoice guard = no duplicate draft on re-complete/retry.
+- **Settings toggle** (`src/lib/autoDraftSetting.ts` + `SettingsPage.tsx` "Auto Invoice" card, admin-only) — OFF by default; only `'true'` is ON.
+- **Office-Cockpit "Post all clean"** (`OfficeCockpit.tsx`) — posts ONLY the drafts that (a) pass validation (`pricing_pending=false`) AND (b) have no open §2 watchdog flag on the invoice or its job. Group → `post_invoice_group`, single → `post_invoice`. In-app Modal summary (no `confirm()`/`alert()`); skipped invoices listed with reason. A human clicks it, so posting is allowed — but a flagged/incomplete invoice is never posted.
+- **Proven against LOCAL DB** (rolled-back txn, all 4 cases): OFF → 0 drafts; ON → exactly 1 `unposted` `field_application` draft (NOT posted, priced/split by existing logic); re-run → still 1 (idempotent); applicator-completed (transfer role-gate fails) → job completes, 0 drafts, `auto_draft_failed` logged.
+- **Tests:** `src/lib/autoDraftSetting.test.ts` (14 cases — OFF default, only `'true'` is ON, round-trip).
+
+---
+
 ## 2026-06-30 — Beyond-Parity §3: Office Cockpit exception dashboard (`feat/fieldapp-beyond-parity`)
 
 One screen showing the office everything stuck or wrong across the field-app — Mason's #1 priority from the beyond-parity opportunity map (saving office time, replacing the run-seven-reports ritual).
