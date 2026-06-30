@@ -1,16 +1,16 @@
 # ChemMan Gap-Closeout Loop — LEDGER
 
-**State: SCAFFOLDED — docs authored; build not yet started.**
+**State: Stage 1 BUILT + verified; Stage 2 (diluent) next.**
 Branch `feat/chemman-gap-closeout` (based on `feat/fieldapp-beyond-parity`). Worktree `C:\CRX_GapLoop`. Nothing pushed/merged/applied-to-prod. This file is the **source of truth for resume** (regenerated from `PROGRESS.json`).
 
 ## Scope (bounded — do NOT expand)
 The **two** remaining ChemMan-gap items on the field-application invoice. Everything else from the ChemMan comparison is **already built** on this branch — confirm before touching, do not rebuild.
 
-## Progress: 0 / 2 sections built
+## Progress: 1 / 2 sections built
 
 | # | Section | Status | Migration(s) | Commit | Notes |
 |---|---------|--------|--------------|--------|-------|
-| 1 | Weather auto-fill (Get Weather; start+end; manual override; modeled-not-measured disclaimer) | ⏳ PENDING | (planned `20260630180000_field_app_invoice_weather_capture`) | — | mirror job_applied_records weather cols on invoices; reuse weatherCapture.fetchWeatherForDateTime (free Open-Meteo) |
+| 1 | Weather auto-fill (Get Weather; start+end; manual override; modeled-not-measured disclaimer) | ✅ BUILT | `20260630180000_field_app_invoice_weather_capture` | `36382c95` | 13 nullable weather cols on invoices mirroring job_applied_records + override flag; drift-safe RPC (1 overload, anon revoked); reuses weatherCapture.fetchWeatherForDateTime (free Open-Meteo). Subagent 12-round Codex + drift/compliance clean; orchestrator DB-verified + independent Codex clean |
 | 2 | Diluent / carrier-water per acre (rate input + computed total; persisted + printed) | ⏳ PENDING | (planned `20260630190000_field_app_invoice_diluent_per_acre`) | — | additive nullable cols on invoices; mirror jobs.carrier_rate_gpa; extend invoicePdf |
 
 ## Solo / safety state
@@ -23,4 +23,5 @@ The **two** remaining ChemMan-gap items on the field-application invoice. Everyt
 - At apply: bind each apply-guard proof to the **TRANSMITTED** SQL hash; run the migration reviewers + a real Codex pass; `/regen-schema-registry` + db-invariant-sweeps after.
 
 ## Parked-Low (follow-ups)
-- (none yet)
+- **§1 (a) DEPLOY-ORDER (gate note):** the new frontend sends the 20-arg `update_field_app_applied_info` call, which exists only after the migration applies → at the PROD gate apply the migration **before/with** the code deploy (timestamp order already enforces this). Not a code change.
+- **§1 (b) provenance-after-reload:** a save→reload of a partially hand-corrected auto weather set loses per-value auto/manual provenance (one source flag per set, not per value) — accepted trade-off (a pessimistic wipe would destroy saved manual data; the modeled-not-measured disclaimer covers verify-on-site).
