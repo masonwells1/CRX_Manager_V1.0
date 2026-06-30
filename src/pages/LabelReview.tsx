@@ -327,13 +327,23 @@ export default function LabelReview() {
       return;
     }
 
+    // Route a changed/manual draft through 'edited' so the ENTERED values are actually sent.
+    // 'accepted' submits the draft's STORED values, which are empty for a manual "New Draft" the
+    // admin just filled in — accepting it as-is would save nothing. If the editor differs from the
+    // draft's stored values, commit as 'edited' (which passes the editor values to the RPC).
+    const effective: 'accepted' | 'edited' =
+      decision === 'accepted'
+        && JSON.stringify(editState) !== JSON.stringify(draftToEditState(editDraft))
+        ? 'edited'
+        : decision;
+
     const conflicts = detectOverwrittenFields(editDraft, editState);
     if (conflicts.length > 0 && !forceOverwrite) {
       // Show confirm modal instead of proceeding
-      setOverwriteConfirmPending({ draftId: editDraft.id, decision, editState });
+      setOverwriteConfirmPending({ draftId: editDraft.id, decision: effective, editState });
       return;
     }
-    void commitDraft(editDraft.id, decision, decision === 'edited' ? editState : null, forceOverwrite);
+    void commitDraft(editDraft.id, effective, effective === 'edited' ? editState : null, forceOverwrite);
   }
 
   // ── create a sample draft (for demo/testing; real Vision path wired below) ──
