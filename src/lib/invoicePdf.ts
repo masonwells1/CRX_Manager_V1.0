@@ -171,6 +171,31 @@ interface InvoiceRowForPdf {
 }
 
 /**
+ * #2: Derive the applied-acres aggregate for a field-application invoice from
+ * field_app_locations, group-aware. invoices.total_acres is NOT reliably written
+ * by save_field_app_invoice (engine-built invoices leave it NULL), so a PDF that
+ * needs the diluent TOTAL (rate x acres) must fall back to summing the locations:
+ *   - a SPLIT invoice's locations link by invoice_group_id (invoice_id is NULL)
+ *   - an UN-SPLIT invoice's locations link by invoice_id
+ * This mirrors the editor's `totalAppliedAcres` so every print path shows the same
+ * total. Returns null when no positive acres are found (caller keeps its prior value).
+ * Shared by buildInvoicePdfDataFromRow (list/email) and InvoiceDetail's print path
+ * so the derivation lives in exactly one place.
+ */
+export async function deriveFieldAppAppliedAcres(
+  invoiceId: string,
+  invoiceGroupId: string | null | undefined,
+): Promise<number | null> {
+  const locQuery = supabase.from('field_app_locations').select('applied_acres');
+  const { data: locRows } = invoiceGroupId
+    ? await locQuery.eq('invoice_group_id', invoiceGroupId)
+    : await locQuery.eq('invoice_id', invoiceId);
+  const summed = ((locRows || []) as Array<{ applied_acres: number | null }>)
+    .reduce((s, r) => s + (Number(r.applied_acres) || 0), 0);
+  return summed > 0 ? summed : null;
+}
+
+/**
  * Build a complete InvoicePdfData from a list row by fetching the line items,
  * shares, and customer billing fields. The caller supplies the lightweight row
  * (already loaded in the list); this only touches the DB for the per-invoice
@@ -243,14 +268,8 @@ export async function buildInvoicePdfDataFromRow(
   // totalAppliedAcres so the list-print total matches the in-editor total.
   let pickAcres = inv.total_acres != null ? inv.total_acres : billingRow?.total_acres;
   if (pickDiluent != null && (pickAcres == null || pickAcres <= 0)) {
-    const groupId = billingRow?.invoice_group_id ?? null;
-    const locQuery = supabase.from('field_app_locations').select('applied_acres');
-    const { data: locRows } = groupId
-      ? await locQuery.eq('invoice_group_id', groupId)
-      : await locQuery.eq('invoice_id', inv.id);
-    const summed = ((locRows || []) as Array<{ applied_acres: number | null }>)
-      .reduce((s, r) => s + (Number(r.applied_acres) || 0), 0);
-    if (summed > 0) pickAcres = summed;
+    const derived = await deriveFieldAppAppliedAcres(inv.id, billingRow?.invoice_group_id ?? null);
+    if (derived != null) pickAcres = derived;
   }
 
   return {
