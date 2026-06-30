@@ -320,21 +320,15 @@ BEGIN
         v_new_epa := v_product.epa_registration;
       END IF;
     END IF;
-    -- max_label_rate
-    IF v_new_mlr IS NOT NULL THEN
-      IF v_product.max_label_rate IS NULL OR p_force_overwrite THEN
-        v_applied := array_append(v_applied, 'max_label_rate');
+    -- max_label_rate + max_label_rate_unit (ATOMIC PAIR — never mix a new rate with an old unit, or vice versa)
+    IF v_new_mlr IS NOT NULL OR v_new_mlru IS NOT NULL THEN
+      IF (v_product.max_label_rate IS NULL AND v_product.max_label_rate_unit IS NULL) OR p_force_overwrite THEN
+        IF v_new_mlr  IS NOT NULL THEN v_applied := array_append(v_applied, 'max_label_rate'); END IF;
+        IF v_new_mlru IS NOT NULL THEN v_applied := array_append(v_applied, 'max_label_rate_unit'); END IF;
       ELSE
-        v_skipped := array_append(v_skipped, 'max_label_rate');
-        v_new_mlr := v_product.max_label_rate;
-      END IF;
-    END IF;
-    -- max_label_rate_unit
-    IF v_new_mlru IS NOT NULL THEN
-      IF v_product.max_label_rate_unit IS NULL OR p_force_overwrite THEN
-        v_applied := array_append(v_applied, 'max_label_rate_unit');
-      ELSE
-        v_skipped := array_append(v_skipped, 'max_label_rate_unit');
+        IF v_new_mlr  IS NOT NULL THEN v_skipped := array_append(v_skipped, 'max_label_rate'); END IF;
+        IF v_new_mlru IS NOT NULL THEN v_skipped := array_append(v_skipped, 'max_label_rate_unit'); END IF;
+        v_new_mlr  := v_product.max_label_rate;       -- revert BOTH to existing so the stored pair stays consistent
         v_new_mlru := v_product.max_label_rate_unit;
       END IF;
     END IF;
@@ -406,15 +400,15 @@ BEGIN
     RAISE EXCEPTION 'PERMISSION_DENIED: admin role required';
   END IF;
 
-  SELECT count(*) INTO v_total FROM products WHERE is_active = true AND deleted_at IS NULL;
+  SELECT count(*) INTO v_total FROM products WHERE is_active = true;
 
   SELECT jsonb_build_object(
     'total_active_products', v_total,
-    'signal_word',       (SELECT count(*) FROM products WHERE is_active = true AND deleted_at IS NULL AND signal_word      IS NOT NULL),
-    'rei_hours',         (SELECT count(*) FROM products WHERE is_active = true AND deleted_at IS NULL AND rei_hours        IS NOT NULL),
-    'phi_days',          (SELECT count(*) FROM products WHERE is_active = true AND deleted_at IS NULL AND phi_days         IS NOT NULL),
-    'epa_registration',  (SELECT count(*) FROM products WHERE is_active = true AND deleted_at IS NULL AND epa_registration IS NOT NULL),
-    'max_label_rate',    (SELECT count(*) FROM products WHERE is_active = true AND deleted_at IS NULL AND max_label_rate   IS NOT NULL),
+    'signal_word',       (SELECT count(*) FROM products WHERE is_active = true AND signal_word      IS NOT NULL),
+    'rei_hours',         (SELECT count(*) FROM products WHERE is_active = true AND rei_hours        IS NOT NULL),
+    'phi_days',          (SELECT count(*) FROM products WHERE is_active = true AND phi_days         IS NOT NULL),
+    'epa_registration',  (SELECT count(*) FROM products WHERE is_active = true AND epa_registration IS NOT NULL),
+    'max_label_rate',    (SELECT count(*) FROM products WHERE is_active = true AND max_label_rate   IS NOT NULL),
     'pending_drafts',    (SELECT count(*) FROM product_label_drafts WHERE status = 'pending'),
     'accepted_drafts',   (SELECT count(*) FROM product_label_drafts WHERE status IN ('accepted','edited')),
     'rejected_drafts',   (SELECT count(*) FROM product_label_drafts WHERE status = 'rejected'),
