@@ -85,7 +85,7 @@ describe('metrics', () => {
   // ── trackBusinessEvent ────────────────────────────────────────
 
   describe('trackBusinessEvent', () => {
-    it('adds breadcrumb and captureMessage for business event', () => {
+    it('adds a business breadcrumb and does NOT send it to the Sentry Issues list', () => {
       trackBusinessEvent('order_placed', {
         message: 'Order O-2026-0050 for Smith Farms',
         data: { orderId: 'abc-123', total: 5000 },
@@ -98,37 +98,39 @@ describe('metrics', () => {
         data: { orderId: 'abc-123', total: 5000 },
       });
 
-      expect(Sentry.captureMessage).toHaveBeenCalledWith(
-        '[biz] order_placed: Order O-2026-0050 for Smith Farms',
-        {
-          level: 'info',
-          tags: { event_name: 'order_placed' },
-          extra: { orderId: 'abc-123', total: 5000 },
-        }
-      );
+      // Business events are intentionally NOT captured as Sentry issues.
+      expect(Sentry.captureMessage).not.toHaveBeenCalled();
     });
 
-    it('defaults level to info', () => {
+    it('defaults the breadcrumb level to info', () => {
       trackBusinessEvent('quote_created', {
         message: 'New quote Q-001',
       });
 
-      expect(Sentry.captureMessage).toHaveBeenCalledWith(
-        '[biz] quote_created: New quote Q-001',
-        expect.objectContaining({ level: 'info' })
+      expect(Sentry.addBreadcrumb).toHaveBeenCalledWith(
+        expect.objectContaining({
+          category: 'business',
+          message: 'quote_created: New quote Q-001',
+          level: 'info',
+        })
       );
+      expect(Sentry.captureMessage).not.toHaveBeenCalled();
     });
 
-    it('supports warning level', () => {
+    it('supports warning level on the breadcrumb', () => {
       trackBusinessEvent('credit_limit_exceeded', {
         message: 'Customer ABC over limit',
         level: 'warning',
       });
 
-      expect(Sentry.captureMessage).toHaveBeenCalledWith(
-        '[biz] credit_limit_exceeded: Customer ABC over limit',
-        expect.objectContaining({ level: 'warning' })
+      expect(Sentry.addBreadcrumb).toHaveBeenCalledWith(
+        expect.objectContaining({
+          category: 'business',
+          message: 'credit_limit_exceeded: Customer ABC over limit',
+          level: 'warning',
+        })
       );
+      expect(Sentry.captureMessage).not.toHaveBeenCalled();
     });
 
     it('does not throw if Sentry is unavailable', () => {

@@ -7,8 +7,9 @@
  *     include who was affected.
  *  2. Navigation breadcrumbs so Sentry shows the page trail
  *     leading up to any error.
- *  3. Business event tracking (captureMessage) for key workflows
- *     so you can search Sentry for "quote_created", "order_placed", etc.
+ *  3. Business event tracking (breadcrumbs) for key workflows so the
+ *     trail leading up to any error shows recent business activity.
+ *     (Business events are NOT sent to the Sentry Issues list.)
  *
  * All functions are fire-and-forget; they never throw.
  */
@@ -73,8 +74,10 @@ interface BusinessEventData {
 }
 
 /**
- * Track a significant business event (shows up in Sentry Issues
- * under the "info" level, searchable by event name).
+ * Track a significant business event as a Sentry breadcrumb — part of the
+ * debugging trail shown alongside any later error report. Business events are
+ * deliberately NOT sent to the Sentry Issues list (they are not errors; owner
+ * decision 2026-07-01 — Sentry is not used as a business-activity feed).
  *
  * Use sparingly — only for events that matter operationally:
  *  - quote_created, order_placed, delivery_completed
@@ -86,19 +89,13 @@ interface BusinessEventData {
  */
 export function trackBusinessEvent(name: string, opts: BusinessEventData) {
   try {
-    // Breadcrumb for the trail
+    // Breadcrumb for the trail. Intentionally NOT captured as a Sentry issue —
+    // business activity is kept out of the error stream (see note above).
     Sentry.addBreadcrumb({
       category: 'business',
       message: `${name}: ${opts.message}`,
       level: opts.level ?? 'info',
       data: opts.data ?? undefined,
-    });
-
-    // Structured message so it appears in Sentry Issues list
-    Sentry.captureMessage(`[biz] ${name}: ${opts.message}`, {
-      level: opts.level ?? 'info',
-      tags: { event_name: name },
-      extra: opts.data ?? {},
     });
   } catch {
     // ignore

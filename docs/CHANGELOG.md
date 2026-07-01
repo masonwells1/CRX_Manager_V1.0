@@ -4,6 +4,15 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-01 — Error-source triage sweep + Sentry noise cleanup (business events out of Sentry Issues)
+
+Read-only sweep across every flagged-error source (GitHub CI/Actions, code-scanning / Dependabot / secret-scanning, open issues/PRs, Sentry, Supabase advisors, local lint/build/typecheck/doc-drift). Result: **production healthy** — `main` CI green, local gates all clean, 6 low-volume Sentry issues (no real crash), 0 open security alerts.
+
+- **Issue #89 closed** as a stale false-positive: the `watchdog_flags` migration's `entity_type/entity_id` are the table's own columns (not idempotency-key misuse); the CI "62>61" red was the validator false-positive already fixed in `2004b81a`; CI is green at the unchanged `--max-violations=61`. No corrective migration needed.
+- **Sentry queue cleared to 0 unresolved:** resolved the stale `boundary_geojson` `/dispatch` error (column now exists, no events since 06-15), ignored-until-escalating the expected `complete_delivery` "Insufficient inventory" guard, and ignored-forever the 4 `[biz]` business-activity logs.
+- **Code:** `trackBusinessEvent` (`src/lib/metrics.ts`) no longer calls `Sentry.captureMessage` — business events stay as debug breadcrumbs only and are no longer posted to the Sentry Issues list (owner decision: Sentry is not a business-activity feed). Tests updated (`metrics.test.ts` asserts the breadcrumb is kept and captureMessage is not called). Lint / typecheck / build / 3106 tests green.
+- **Open owner items surfaced (free security toggles, all currently OFF):** enable GitHub Dependabot alerts + secret scanning / push protection + CodeQL, and Supabase leaked-password protection (L4) — account-settings toggles only the owner can flip.
+
 ## 2026-07-01 — Recent-Commits Bug-Hunt: 7 findings, 6 shipped LIVE (Codex-reviewed ×3)
 
 Full-assault bug hunt over the last-few-days `main` surface (Sentry + GitHub CI + Supabase advisors + a multi-agent hunt), every finding run past **Codex three times** (findings → fixes → re-review). Built in an isolated worktree (`C:\CRX_BugHunt`).
