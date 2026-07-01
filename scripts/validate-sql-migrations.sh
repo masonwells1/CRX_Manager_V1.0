@@ -218,15 +218,20 @@ for file in $ALL_SQL; do
       VIOLATIONS=$((VIOLATIONS + 1))
     fi
 
-    # 4: entity_type/entity_id used AS idempotency_keys columns (the real bug), e.g.
-    #    INSERT INTO idempotency_keys (..., entity_type, entity_id) or a lookup that
-    #    SELECTs/filters idempotency_keys by entity_type/entity_id. Scope to lines that
-    #    actually name idempotency_keys so a DIFFERENT table's legitimate entity_type/
-    #    entity_id columns (watchdog_flags, notifications, activity_feed, financial_audit_log)
-    #    do NOT false-flag. The previous check grepped the whole file and mis-fired on any
-    #    file that both referenced idempotency_keys AND had an unrelated entity_type/entity_id
-    #    table (e.g. 20260629220000_watchdog_flags.sql — the CI red 2026-06-30..07-01).
-    if echo "$CODE_ONLY" | grep -qiE 'INTO[[:space:]]+idempotency_keys[[:space:]]*\([^)]*entity_(type|id)' \
+    # 4: entity_type/entity_id used AS idempotency_keys columns (the real bug) — an
+    #    INSERT INTO idempotency_keys (..., entity_type, entity_id ...), or a single-line lookup that
+    #    filters idempotency_keys by entity_type/entity_id. The first clause flattens newlines (tr)
+    #    so a MULTI-LINE INSERT col-list is caught (Codex fix-review). The second clause is line-based
+    #    so a DIFFERENT table's legit entity_type/entity_id columns (watchdog_flags, notifications,
+    #    activity_feed, financial_audit_log) do NOT false-flag — they never share a line OR an
+    #    idempotency_keys INSERT col-list (this was the CI red 2026-06-30..07-01 on watchdog_flags).
+    #    KNOWN LIMIT (accepted): a MULTI-LINE SELECT/WHERE lookup that filters idempotency_keys by
+    #    entity_type across lines is not caught — a statement-window match for it false-fires on a
+    #    legit fn that uses idempotency_keys AND activity_feed.entity_type together (e.g.
+    #    20260317100000_fix_idempotency_and_searchpath_final.sql). The gap is low-risk: new code uses
+    #    the check_idempotency/save_idempotency helpers, not raw idempotency_keys access, and the
+    #    original check never caught it either. The single-line + multi-line-INSERT cases are covered.
+    if echo "$CODE_ONLY" | tr '\n' ' ' | grep -qiE 'INTO[[:space:]]+idempotency_keys[[:space:]]*\([^)]*entity_(type|id)' \
        || echo "$CODE_ONLY" | grep -iE 'idempotency_keys' | grep -qiE 'entity_(type|id)'; then
       echo "VIOLATION: $file"
       echo "  Uses 'entity_type/entity_id' as idempotency_keys columns"

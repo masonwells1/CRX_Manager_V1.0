@@ -188,13 +188,11 @@ export default function FieldView() {
         const fieldIds = Array.from(new Set(Array.from(f2j.keys())));
         if (fieldIds.length === 0) { if (!cancelled) setMapFields([]); return; }
         // The fields table stores PostGIS geometry, not geojson/lat-lng columns, so a
-        // direct column select 42703's. Pull display geojson from the canonical RPC and
-        // keep only the fields belonging to the visible jobs.
-        const { data: geoData, error: geoErr } = await supabase.rpc('get_fields_with_geojson');
+        // direct column select 42703's. Pull display geojson from the id-scoped RPC for
+        // ONLY the caller's own job fields (not every field in the org).
+        const { data: geoData, error: geoErr } = await supabase.rpc('get_fields_geojson_by_ids', { p_field_ids: fieldIds });
         if (geoErr) throw geoErr;
-        const wanted = new Set(fieldIds);
-        const fRows = (assertRpcResult<Array<Field & { id: string }>>(geoData, 'get_fields_with_geojson') || [])
-          .filter((f) => wanted.has(f.id)) as unknown as Field[];
+        const fRows = (assertRpcResult<Array<Field>>(geoData, 'get_fields_geojson_by_ids') || []) as unknown as Field[];
         if (!cancelled) setMapFields(fRows);
       } catch (err) {
         // Map geometry is non-critical — log and degrade to an empty map.

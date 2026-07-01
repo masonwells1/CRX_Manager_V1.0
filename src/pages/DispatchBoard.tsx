@@ -327,15 +327,20 @@ export default function DispatchBoard() {
       // Best-effort map geometry. The fields table stores PostGIS geometry (boundary/
       // centroid), NOT geojson or lat/lng columns — a direct column select 42703's
       // ("column fields.boundary_geojson does not exist"). Pull display geojson from the
-      // canonical RPC instead. If it fails the map simply shows no boundaries — the list
-      // view is unaffected.
-      const { data: fieldsData, error: fieldsErr } = await supabase.rpc('get_fields_with_geojson');
-      if (fieldsErr) {
-        Sentry.captureException(fieldsErr, { tags: { source: 'fetch', action: 'dispatch_map_fields' } });
+      // id-scoped RPC for ONLY the fields on the loaded jobs (not every field in the org).
+      // If it fails the map simply shows no boundaries — the list view is unaffected.
+      const mapFieldIds = Array.from(new Set(mapped.flatMap((j) => j.field_ids || [])));
+      if (mapFieldIds.length === 0) {
         setAllFields([]);
       } else {
-        const rows = assertRpcResult<Array<Field & { is_active?: boolean }>>(fieldsData, 'get_fields_with_geojson') || [];
-        setAllFields(rows.filter((f) => f.is_active !== false) as unknown as Field[]);
+        const { data: fieldsData, error: fieldsErr } = await supabase.rpc('get_fields_geojson_by_ids', { p_field_ids: mapFieldIds });
+        if (fieldsErr) {
+          Sentry.captureException(fieldsErr, { tags: { source: 'fetch', action: 'dispatch_map_fields' } });
+          setAllFields([]);
+        } else {
+          const rows = assertRpcResult<Array<Field & { is_active?: boolean }>>(fieldsData, 'get_fields_geojson_by_ids') || [];
+          setAllFields(rows.filter((f) => f.is_active !== false) as unknown as Field[]);
+        }
       }
     } catch (err) {
       Sentry.captureException(err);

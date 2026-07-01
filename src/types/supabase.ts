@@ -8759,6 +8759,22 @@ export type Database = {
           sort_order: number
         }[]
       }
+      get_fields_geojson_by_ids: {
+        Args: { p_field_ids: string[] }
+        Returns: {
+          boundary_geojson: string
+          centroid_geojson: string
+          crop_type: string
+          customer_id: string
+          customer_name: string
+          field_name: string
+          id: string
+          is_active: boolean
+          measured_acres: number
+          override_acres: number
+          total_acres: number
+        }[]
+      }
       get_fields_with_geojson: {
         Args: { p_customer_id?: string }
         Returns: {
