@@ -1,6 +1,6 @@
 # Field-App Beyond-Parity Loop — LEDGER
 
-**State: BUILD COMPLETE.** All 6 sections built + independently Codex-verified on `feat/fieldapp-beyond-parity` (tip `30e4147a`, 31 commits). **LOCAL only — nothing pushed, merged, or applied to production.** Awaiting Mason's production gate.
+**State: 🚀 SHIPPED LIVE 2026-06-30.** All 6 sections applied to production. All **9** migrations (`20260629210000`→`20260630170000`) applied to live Supabase + verified (RLS / search_path / anon-revoked / 1-overload each; complete_job never posts; per-customer proof no leak; advisor +0, sweeps +0). Frontend fast-forwarded to `main` (`87de1233`) → Vercel deployed (pre-push typecheck+build PASSED; site HTTP 200). send-email edge fn = NO deploy needed (live v14 already allows `post_application_notice`). Go-live re-gate fixed 2 Codex mediums (watchdog `normalize_rate_unit` in new migration `20260630170000`; cockpit "Post all clean" freshness guard). Switches safe-by-default (`auto_draft_invoice_on_job_completion`=false, `label_rate_guardrail_mode`=warn). Remaining = OWNER tasks: §1 label-data load + optional toggle flips.
 **Owner decision (2026-06-29):** grower portal §7–§10 SKIPPED this round.
 
 ## Progress: 6 / 6 sections built (portal §7–§10 deferred)

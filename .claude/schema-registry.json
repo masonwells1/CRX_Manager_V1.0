@@ -1,12 +1,12 @@
 {
   "_meta": {
     "registry_version": 2,
-    "generated_at": "2026-06-30",
+    "generated_at": "2026-07-01",
     "generated_from": "Supabase project rhyzpcqhnizqbxphqdkr — public schema introspection",
     "regenerate_with": "node scripts/regenerate-schema-registry.mjs --from-introspection <queries.json> (queries documented in the script header)",
     "purpose": "Single source of truth for hooks: generated columns, status enums, ALL parseable CHECK IN-lists, NOT NULL columns, full column lists, sequences, tables-with/without updated_at, applied-migration high water.",
     "note": "For a fresh refresh from the live DB, ask Claude Code: 'regenerate the schema-registry from Supabase' (/regen-schema-registry). skipped_constraints lists every CHECK the hooks can NOT validate — review it when touching those tables.",
-    "migrations_high_water": "20260630173726"
+    "migrations_high_water": "20260701002103"
   },
   "generated_columns": [
     {
@@ -3671,7 +3671,21 @@
       "payment_terms",
       "internal_notes",
       "discount_earned_cents",
-      "discount_date"
+      "discount_date",
+      "start_temp_f",
+      "start_wind_mph",
+      "start_wind_direction",
+      "start_humidity_pct",
+      "start_weather_time",
+      "start_weather_source",
+      "end_temp_f",
+      "end_wind_mph",
+      "end_wind_direction",
+      "end_humidity_pct",
+      "end_weather_time",
+      "end_weather_source",
+      "weather_manual_override",
+      "diluent_rate_gpa"
     ],
     "job_applied_info": [
       "id",

@@ -15,7 +15,7 @@ import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import { parseDollarsToCents } from '../lib/parseCents';
 import type { Invoice, InvoiceType, InvoiceStatus, Product, Customer, InvoiceShare, InvoicePrintOptions } from '../types';
-import { downloadInvoicePdf, generateInvoicePdf, type InvoicePdfData, type InvoicePdfItem } from '../lib/invoicePdf';
+import { downloadInvoicePdf, generateInvoicePdf, deriveFieldAppAppliedAcres, type InvoicePdfData, type InvoicePdfItem } from '../lib/invoicePdf';
 import { formatCents as fmt } from '../lib/money';
 import { sendEmail, pdfToBase64, buildEmailHtml } from '../lib/emailService';
 import { logActivity } from '../lib/activityLogger';
@@ -875,6 +875,24 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
 
     const cust = customers.find(c => c.id === invoice.customer_id);
 
+    // ChemMan Gap-Closeout #2: wire the persisted diluent / carrier-water RATE
+    // (gal/acre) into the PDF for a POSTED field-application invoice opened here
+    // (/field-invoices/:id), so Print/Email from this detail page shows the same
+    // "Diluent / Carrier Water" line the editor and list/email paths already print.
+    // Only populate for field_application — the renderer omits the line when
+    // diluent_gpa is absent, so a chemical-sale invoice (diluent_rate_gpa null/
+    // absent) correctly never shows it. The renderer derives the TOTAL from
+    // total_acres; invoice.total_acres is not reliably written on save, so when it
+    // is null we fall back to the SHARED group-aware field_app_locations derivation
+    // (same helper buildInvoicePdfDataFromRow uses) so the total matches every path.
+    const isFieldApp = invoice.invoice_type === 'field_application';
+    const diluentRate = isFieldApp ? (invoice.diluent_rate_gpa ?? undefined) : undefined;
+    let diluentAcres = invoice.total_acres || undefined;
+    if (diluentRate != null && (diluentAcres == null || diluentAcres <= 0)) {
+      const derived = await deriveFieldAppAppliedAcres(id!, invoice.invoice_group_id ?? null);
+      if (derived != null) diluentAcres = derived;
+    }
+
     return {
       invoice_number: invoice.invoice_number || 'DRAFT',
       invoice_date: invoice.invoice_date || localToday(),
@@ -894,10 +912,13 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
       footer_notes: invoice.footer_notes || undefined,
       crop_type: invoice.crop_type || undefined,
       field_names: invoice.field_names || undefined,
-      total_acres: invoice.total_acres || undefined,
+      total_acres: diluentAcres,
       applicator_name: invoice.applicator_name || undefined,
       vehicle_name: invoice.vehicle_name || undefined,
       application_date: invoice.application_date || undefined,
+      // #2: diluent / carrier-water rate (gal/acre); renderer derives the total
+      // from total_acres above. Absent for non-field invoices → line omitted.
+      diluent_gpa: diluentRate,
       shares: shares.length > 0 ? shares.map(s => ({
         customer_name: s.customer_name,
         split_percentage: s.split_percentage,

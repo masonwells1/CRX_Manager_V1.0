@@ -1,0 +1,114 @@
+{
+  "summary": "ChemMan Gap-Closeout build backlog — the two remaining ChemMan-comparison gaps on the field-application invoice (everything else from the comparison is already built on feat/fieldapp-beyond-parity; do NOT rebuild it). Two dependency-light, additive, testable sections for the autonomous build loop.",
+  "generated": "2026-06-30",
+  "branch": "feat/chemman-gap-closeout",
+  "based_on": "feat/fieldapp-beyond-parity (already contains the beyond-parity field-app work; NOT yet on main as of the re-baseline)",
+  "precondition": "feat/fieldapp-beyond-parity is the base. At the production gate, beyond-parity must be on main first or together (these two gaps sit on top of it).",
+  "section_schema": "id, name, feature, why, goal, beyond_parity_rationale, who_it_helps, acceptance_criteria[], subtasks[], reuses[], needs_migration, risk, depends_on[], gates[], notes",
+  "already_built_do_not_rebuild": [
+    "mass-edit jobs", "printed/dispatched flag", "fuel surcharge", "consultant field",
+    "per-line warehouse + vendor", "job batching", "master-mix summary",
+    "per-customer discount", "customer-vs-internal notes"
+  ],
+  "grounding_facts": {
+    "invoice_table": "The field-application invoice IS the shared `invoices` table, discriminated by invoice_type='field_application' (FieldApplicationInvoice.tsx:577; .from('invoices') at 567/603/690/725/1265). No dedicated field_application_invoices table. Live: 0 field_application invoices yet (operationally empty).",
+    "invoice_check_constraints": "invoices has 6 CHECK constraints (balance_non_negative, discount_earned_nonneg, invoice_type_check, paid_non_negative, status_check, total_non_negative). Additive NULLABLE columns touch none of them. NEVER add a new CHECK or NOT NULL to invoices.",
+    "weather_today": "Manual only: invoices.wind_direction (text) + invoices.temperature_text (text). No humidity, no wind-speed, no start/end, no auto-fetch. State: windDirection/temperature (string) at FieldApplicationInvoice.tsx:249-250. Saved via RPC update_field_app_applied_info(p_invoice_ids, p_wind_direction, p_temperature_text, p_applicator_name, p_performed_by) — writes ONLY those 3 invoice columns (migration 20260622030000).",
+    "weather_helper": "src/lib/weatherCapture.ts ALREADY exports fetchWeatherForDateTime(lat,lng,dateISO,timeHHMM) -> CapturedWeather|null {temperature_f, wind_speed_mph, wind_direction (cardinal string), humidity_pct}. Open-Meteo, free/keyless, api.open-meteo.com whitelisted in vercel.json connect-src. Also fetchCurrentWeather + parseCentroid(centroidGeojson) + degreesToCardinal. NO new API/CSP needed.",
+    "weather_pattern_to_mirror": "src/components/jobs/AppliedRecordsManager.tsx getWeather('start'|'end') (lines 474-504): looks up field centroid via supabase.rpc('get_field_geojson',{p_field_id}) -> parseCentroid -> {lat,lng}; calls fetchWeatherForDateTime(lat,lng,application_date,time||null); on success fills temp_f/wind_direction/wind_mph/humidity_pct + sets source:'auto' (badge 'Auto'); on null toasts error and leaves manual entry. JobDetail.tsx handleFetchWeather (1632-1649) is the simpler 'now' variant.",
+    "structured_weather_model_to_mirror": "job_applied_records already has the proven structured shape: start_temp_f, start_wind_mph, start_wind_direction, start_humidity_pct, start_weather_source, start_weather_time(time), and the matching end_* set. Mirror these EXACT names on invoices.",
+    "acres_source": "Per-location locations[i].applied_acres (FieldAppLocation.applied_acres, persisted to field_app_locations.applied_acres). Aggregate totalAppliedAcres = sum(applied_acres) (FieldApplicationInvoice.tsx:471-474), written to the PDF as total_acres and (verify) to invoices.total_acres on save. Diluent total = rate x the invoice acres aggregate.",
+    "diluent_today": "MISSING on billing side (invoices / field_app_locations / invoice_items / invoicePdf.ts: zero diluent/carrier/spray-volume tokens). EXISTS job-side: jobs.carrier_rate_gpa (numeric gal/acre, migration 20260625170000) + job_chemicals.diluent_rate (migration 20260624120000). Invoice can be engine-built with jobId=null, so it can't always inherit jobs.carrier_rate_gpa -> the invoice-side field is independent.",
+    "pdf": "Print path: FieldApplicationInvoice.tsx buildEditorPdfData -> buildInvoicePdfDataFromRow (single shared builder, src/lib/invoicePdf.ts:169) -> InvoicePdfData (interface invoicePdf.ts:68-119, NO weather/diluent fields today) -> downloadInvoicePdf/generateInvoicePdf. There is a 'legacy' format branch too — a new printed line must render (or be intentionally omitted) in BOTH layout branches.",
+    "migration_timestamps": "Newest on disk: 20260630170000. Use 20260630180000 (weather) then 20260630190000 (diluent), or any later strictly-increasing timestamps."
+  },
+  "result": [
+    {
+      "area": "ChemMan Gap-Closeout — field-application invoice",
+      "sections": [
+        {
+          "id": 1,
+          "name": "Weather auto-fill on the field-application invoice",
+          "feature": "Weather auto-fill (Get Weather button) with START + END capture and manual override",
+          "why": "Today the field-app invoice only has two free-text boxes (wind_direction, temperature_text) you type weather into by hand — no humidity, no wind speed, no start/end, no auto-fetch. ChemMan-parity expects one-tap weather capture for the application record on the invoice. The free Open-Meteo helper and the structured start/end model already exist elsewhere in the app (JobDetail / AppliedRecordsManager / job_applied_records) — this brings the same convenience to the invoice.",
+          "goal": "Add a 'Get Weather' button on the field-application invoice's Applied Info area that auto-fills temperature, wind speed, wind direction, and humidity for the invoice's field location + application date/time, capturing BOTH start and end conditions, persisted to typed NULLABLE columns on invoices. Manual override is always allowed (and manual-only entry must work offline). Show the modeled-not-measured compliance disclaimer.",
+          "beyond_parity_rationale": "ChemMan stores typed weather but makes the user enter it; auto-fill from a free model for the field's exact location + the application timestamp, with explicit start/end and a manual-override audit flag, is a step beyond.",
+          "who_it_helps": "Office/applicator (one tap instead of hand-typing four readings twice), and the compliance record (structured, queryable weather instead of one free-text string).",
+          "acceptance_criteria": [
+            "On the field-application invoice (Applied Info area), a 'Get Weather' control exists for START conditions and for END conditions (two captures), each auto-filling temperature (F), wind speed (mph), wind direction (cardinal), and humidity (%) for the invoice's field location and the application date (+ a per-capture clock time).",
+            "Auto-fill uses ONLY the existing free Open-Meteo helper src/lib/weatherCapture.ts (fetchWeatherForDateTime) — no paid provider, no new API host. The field location lat/lng comes from the invoice's field via supabase.rpc('get_field_geojson') + parseCentroid (the AppliedRecordsManager pattern).",
+            "Every auto-filled value is editable; the user can also type all values by hand with no fetch (offline / no-signal fallback). A failed fetch toasts an error and leaves the fields editable — it never blocks save or clears manual input.",
+            "Captured values persist to NEW typed NULLABLE columns on invoices mirroring job_applied_records: start_temp_f, start_wind_mph, start_wind_direction, start_humidity_pct, start_weather_time, start_weather_source, and the end_* equivalents, plus a weather_manual_override boolean.",
+            "weather_source records provenance per capture (e.g. 'auto' when fetched, 'manual' when hand-edited); weather_manual_override is set when the user overrides an auto-filled value. (Mirror AppliedRecordsManager's source: 'auto'|'manual' semantics.)",
+            "A visible disclaimer appears wherever weather is shown/entered on the invoice: 'weather is modeled, not measured — verify on-site before relying on it for compliance.'",
+            "The existing manual text fields (invoices.wind_direction, invoices.temperature_text) are preserved (additive — not removed/renamed); they remain populated for back-compat/legacy display. (Decide and document whether the new structured wind_direction also mirrors into the legacy text field, or they stay independent.)",
+            "Saving the structured weather is drift-safe: if it extends an existing RPC (e.g. update_field_app_applied_info), the function is cloned VERBATIM from its live source with only additive DEFAULT NULL params + new column writes (exactly one overload remains); or a new dedicated SECURITY DEFINER RPC is added (SET search_path = public, pg_temp; p_idempotency_key text DEFAULT NULL and used; strict-actor auth.uid() bind). Restricted to invoice_type='field_application' AND status IN ('draft','unposted') like the existing applied-info RPC.",
+            "src/types/index.ts Invoice interface is updated with the new nullable columns; npm run typecheck/lint/build are clean."
+          ],
+          "subtasks": [
+            "Write migration <ts>_field_app_invoice_weather_capture.sql: ALTER TABLE invoices ADD COLUMN IF NOT EXISTS the 12 start_/end_ weather columns (mirror job_applied_records types: numeric for temp/wind/humidity, text for direction/source, time for *_weather_time) + weather_manual_override boolean DEFAULT false. ALL NULLABLE. No new CHECK, no NOT NULL. (invoices keeps RLS.)",
+            "Persist path: read the LIVE source of update_field_app_applied_info (migration 20260622030000 + any later redefinition) and extend it drift-safe (DROP + recreate or single-overload CREATE OR REPLACE with additive DEFAULT NULL params writing the new columns), OR add a dedicated weather RPC. Keep the invoice_type/status guard. Confirm exactly one overload via the pg_proc count query.",
+            "UI: in FieldApplicationInvoice.tsx Applied Info / Application Details card, add START and END weather sub-sections each with temperature/wind speed/wind direction/humidity inputs + a 'Get Weather' button. Reuse the get_field_geojson + parseCentroid + fetchWeatherForDateTime flow; derive the application date from the invoice's application date field (locate it — application_date used in the PDF builder) and a per-capture time input (with a 'Now' helper if useful).",
+            "Wire load (populate the new state from the invoice row) and save (send the new fields through the chosen RPC). Add the source/override tracking. Add the modeled-not-measured disclaimer text.",
+            "Add/extend a vitest unit test for any new mapping/derivation logic (e.g. CapturedWeather -> form state, source flagging).",
+            "Local DB: apply the migration to the LOCAL throwaway Supabase; run a rolled-back smoke of the save RPC (insert/update a field_application invoice's weather, read it back, ROLLBACK).",
+            "Run the app against LOCAL: open a field_application invoice, click Get Weather (start + end), observe the four readings fill, edit one (see source flip to manual / override set), and confirm a forced-failure path still allows manual entry. Capture evidence."
+          ],
+          "reuses": [
+            "src/lib/weatherCapture.ts (fetchWeatherForDateTime, fetchCurrentWeather, parseCentroid, degreesToCardinal) — Open-Meteo, free",
+            "src/components/jobs/AppliedRecordsManager.tsx getWeather('start'|'end') — the start/end + source pattern to mirror",
+            "supabase.rpc('get_field_geojson', { p_field_id }) — field centroid",
+            "job_applied_records start_/end_ weather columns — the column naming/shape to mirror",
+            "update_field_app_applied_info RPC (extend drift-safe) — the existing applied-info save",
+            "invoices.temperature_text / invoices.wind_direction — existing manual fields (preserve)"
+          ],
+          "needs_migration": true,
+          "risk": "medium — additive columns on the invoices MONEY table; if extending an existing RPC it must be drift-safe (verbatim clone, single overload). No money math changes.",
+          "depends_on": [],
+          "gates": ["weather stays Open-Meteo (free)", "manual entry always works (offline fallback)", "modeled-not-measured disclaimer present", "drift-safe RPC change", "additive NULLABLE schema only"],
+          "notes": "The historical-timestamp helper (fetchWeatherForDateTime) ALREADY exists — this stage is mostly wiring it into the invoice, NOT writing new weather code. Mirror job_applied_records' column names exactly so the two application-record surfaces stay consistent. Do NOT add a paid weather provider. Do NOT make any new column NOT NULL or add a CHECK to invoices."
+        },
+        {
+          "id": 2,
+          "name": "Diluent / carrier-water per acre on the field-application invoice",
+          "feature": "Diluent-per-acre input + computed total diluent, persisted and printed",
+          "why": "The field-application invoice has no place to record the carrier water (diluent) the chemical was mixed into — a standard line on a ChemMan application invoice. The concept already ships job-side (jobs.carrier_rate_gpa gal/acre, job_chemicals.diluent_rate) but is entirely absent from the invoice/billing surface, so an invoice built with no source job (jobId=null) has nowhere to capture it.",
+          "goal": "Add a diluent (carrier-water) rate-per-acre input on the field-application invoice, compute the total diluent (rate x the invoice's applied-acres aggregate), persist both, and show them on the invoice screen / applied-info area and on the printout (PDF).",
+          "beyond_parity_rationale": "Brings the loader-worksheet carrier-rate concept into the customer-facing invoice/compliance record, where ChemMan keeps spray volume — closing the last data gap on the as-applied invoice.",
+          "who_it_helps": "Office (carrier water captured on the bill/record), grower (a complete application record showing total spray volume), compliance (water volume on file).",
+          "acceptance_criteria": [
+            "On the field-application invoice (Applied Info / Application Details area), an input captures the diluent / carrier-water rate per acre (gallons per acre), labeled clearly (e.g. 'Diluent / Carrier Water (gal/acre)').",
+            "A computed total diluent = rate per acre x the invoice's applied-acres aggregate (totalAppliedAcres / invoices.total_acres) is shown on screen and persisted. The mechanism is documented: PREFER a GENERATED ALWAYS column on invoices (diluent_total_gallons = diluent_rate_gpa * total_acres, STORED) mirroring how invoices.balance_cents is generated — BUT only if save_field_app_invoice reliably writes invoices.total_acres; otherwise store a plain numeric total the save RPC computes, or compute for display + store the rate only. Verify which against the live save RPC and pick the reliable path.",
+            "New columns on invoices are additive and NULLABLE: diluent_rate_gpa numeric (gal/acre) [+ diluent_total_gallons if generated]. No NOT NULL, no new CHECK on invoices. Diluent is a quantity (numeric gallons), NOT money — no cents.",
+            "The diluent rate + total appear on the invoice PRINTOUT: extend InvoicePdfData (new optional field(s), e.g. diluent_gpa / total_diluent_gallons) and render in generateInvoicePdf — in BOTH the standard and the 'legacy' layout branch (or intentionally omit in legacy and document why). Pass the value from buildEditorPdfData AND the shared buildInvoicePdfDataFromRow so list-print paths carry it too.",
+            "A blank/null diluent rate is fine (the field is optional) — the printout omits the line gracefully when there's no rate, and the total is null (never 0-divides or shows a spurious 0).",
+            "Negative diluent rate is rejected in the UI (app-layer validation; no DB CHECK added). Total recomputes live as the rate or acres change.",
+            "If a value is persisted via an existing RPC (save_field_app_invoice or the applied-info RPC), the change is drift-safe (verbatim clone + additive param, single overload); src/types/index.ts Invoice interface updated; typecheck/lint/build clean."
+          ],
+          "subtasks": [
+            "Write migration <ts>_field_app_invoice_diluent_per_acre.sql: ALTER TABLE invoices ADD COLUMN IF NOT EXISTS diluent_rate_gpa numeric (nullable). If using a generated total, add diluent_total_gallons numeric GENERATED ALWAYS AS (diluent_rate_gpa * total_acres) STORED — but FIRST confirm invoices.total_acres is reliably populated by save_field_app_invoice; if not, use a plain stored total written by the save RPC. No CHECK, no NOT NULL.",
+            "Decide naming: align with the job-side gal/acre semantics (jobs.carrier_rate_gpa). Use diluent_rate_gpa for clarity + consistency; document the choice.",
+            "Persist path: extend the field-app invoice save (save_field_app_invoice header from p_invoice jsonb, OR update_field_app_applied_info) drift-safe to write diluent_rate_gpa; a generated total needs no write. Confirm single overload.",
+            "UI: add the diluent rate input in FieldApplicationInvoice.tsx Applied Info, show the live computed total (rate x totalAppliedAcres), with negative-value validation and graceful empty state.",
+            "PDF: extend InvoicePdfData + generateInvoicePdf (both layout branches) + buildEditorPdfData + buildInvoicePdfDataFromRow to render a diluent rate + total line; omit cleanly when null.",
+            "src/types/index.ts: add the new nullable field(s) to the Invoice interface.",
+            "Local DB: apply the migration to LOCAL; rolled-back smoke (set a rate, read back the rate + total, ROLLBACK).",
+            "Run the app against LOCAL: open a field_application invoice, enter a diluent rate, watch the total compute, save, reopen to confirm persistence, and print/preview the PDF to see the diluent line. Capture evidence."
+          ],
+          "reuses": [
+            "jobs.carrier_rate_gpa / job_chemicals.diluent_rate — the existing job-side gal/acre semantics to mirror",
+            "FieldApplicationInvoice.tsx totalAppliedAcres (471-474) — the acres aggregate to multiply",
+            "invoices.total_acres — the persisted acres aggregate (verify it's written on save)",
+            "src/lib/invoicePdf.ts (InvoicePdfData, buildInvoicePdfDataFromRow, generateInvoicePdf, downloadInvoicePdf) — the print path",
+            "save_field_app_invoice / update_field_app_applied_info — the invoice save RPCs (extend drift-safe)"
+          ],
+          "needs_migration": true,
+          "risk": "medium — additive columns on the invoices MONEY table + a PDF change; a generated total depends on total_acres being reliably written (verify). Diluent is not money, but lives on the money table.",
+          "depends_on": [],
+          "gates": ["additive NULLABLE schema only (no CHECK/NOT NULL on invoices)", "generated-total only if total_acres is reliably populated", "drift-safe RPC change (single overload)", "PDF renders in both layout branches or documents the omission", "pdf-output-reviewer lens"],
+          "notes": "Independent of Stage 1 (separate additive columns + a separate migration). Build Stage 1 first only to keep the two migrations cleanly ordered. Diluent is gal/acre (mirror jobs.carrier_rate_gpa) — NOT money/cents. Do NOT add a CHECK or NOT NULL to invoices. The invoice can have no source job, so the invoice-side rate is entered on the invoice, not inherited."
+        }
+      ]
+    }
+  ]
+}

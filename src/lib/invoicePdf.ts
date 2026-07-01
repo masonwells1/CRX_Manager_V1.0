@@ -12,6 +12,7 @@
 
 import type { InvoicePrintOptions } from '../types';
 import { supabase } from './db';
+import { computeTotalDiluentGallons, formatGallons } from './fieldAppDiluent';
 import { COMPANY_TAGLINE_HEADER, COMPANY_LEGAL_NAME } from './companyInfo';
 import { formatCents as fmt } from './money';
 import type jsPDF from 'jspdf';
@@ -103,6 +104,11 @@ export interface InvoicePdfData {
   applicator_name?: string;
   vehicle_name?: string;
   application_date?: string;
+  // ChemMan Gap-Closeout #2: diluent / carrier-water RATE per acre (gallons/acre).
+  // The TOTAL is derived in the renderer (rate x total_acres) — never persisted —
+  // because invoices.total_acres is not reliably written on save. Absent/null = the
+  // diluent line is omitted entirely (no spurious 0). A QUANTITY, never money/cents.
+  diluent_gpa?: number | null;
 
   // Shares/Splits
   shares?: InvoicePdfShare[];
@@ -152,12 +158,41 @@ interface InvoiceRowForPdf {
   applicator_name?: string | null;
   vehicle_name?: string | null;
   application_date?: string | null;
+  // #2: diluent rate (gal/acre). OPTIONAL on the row, mirroring total_acres: the
+  // in-editor caller passes the live value (wins); a list caller omits it and the
+  // builder re-fetches it (with total_acres) from the invoices row below.
+  diluent_gpa?: number | null;
   total_amount_cents: number;
   total_cost_cents?: number | null;
   paid_amount_cents?: number | null;
   prepay_applied_cents?: number | null;
   write_off_cents?: number | null;
   balance_cents: number;
+}
+
+/**
+ * #2: Derive the applied-acres aggregate for a field-application invoice from
+ * field_app_locations, group-aware. invoices.total_acres is NOT reliably written
+ * by save_field_app_invoice (engine-built invoices leave it NULL), so a PDF that
+ * needs the diluent TOTAL (rate x acres) must fall back to summing the locations:
+ *   - a SPLIT invoice's locations link by invoice_group_id (invoice_id is NULL)
+ *   - an UN-SPLIT invoice's locations link by invoice_id
+ * This mirrors the editor's `totalAppliedAcres` so every print path shows the same
+ * total. Returns null when no positive acres are found (caller keeps its prior value).
+ * Shared by buildInvoicePdfDataFromRow (list/email) and InvoiceDetail's print path
+ * so the derivation lives in exactly one place.
+ */
+export async function deriveFieldAppAppliedAcres(
+  invoiceId: string,
+  invoiceGroupId: string | null | undefined,
+): Promise<number | null> {
+  const locQuery = supabase.from('field_app_locations').select('applied_acres');
+  const { data: locRows } = invoiceGroupId
+    ? await locQuery.eq('invoice_group_id', invoiceGroupId)
+    : await locQuery.eq('invoice_id', invoiceId);
+  const summed = ((locRows || []) as Array<{ applied_acres: number | null }>)
+    .reduce((s, r) => s + (Number(r.applied_acres) || 0), 0);
+  return summed > 0 ? summed : null;
 }
 
 /**
@@ -193,7 +228,7 @@ export async function buildInvoicePdfDataFromRow(
     // print of unsaved live form edits is unchanged.
     supabase
       .from('invoices')
-      .select('discount_earned_cents, discount_date, payment_terms, purchase_order_ref, header_notes, footer_notes, due_date')
+      .select('discount_earned_cents, discount_date, payment_terms, purchase_order_ref, header_notes, footer_notes, due_date, diluent_rate_gpa, total_acres, invoice_group_id')
       .eq('id', inv.id)
       .maybeSingle(),
   ]);
@@ -210,6 +245,7 @@ export async function buildInvoicePdfDataFromRow(
     discount_earned_cents?: number | null; discount_date?: string | null;
     payment_terms?: string | null; purchase_order_ref?: string | null;
     header_notes?: string | null; footer_notes?: string | null; due_date?: string | null;
+    diluent_rate_gpa?: number | null; total_acres?: number | null; invoice_group_id?: string | null;
   } | null;
   const pickPo = inv.purchase_order_ref !== undefined ? inv.purchase_order_ref : billingRow?.purchase_order_ref;
   const pickTerms = inv.payment_terms !== undefined ? inv.payment_terms : billingRow?.payment_terms;
@@ -217,6 +253,24 @@ export async function buildInvoicePdfDataFromRow(
   const pickHeader = inv.header_notes !== undefined ? inv.header_notes : billingRow?.header_notes;
   const pickFooter = inv.footer_notes !== undefined ? inv.footer_notes : billingRow?.footer_notes;
   const pickDiscount = inv.discount_earned_cents !== undefined ? inv.discount_earned_cents : billingRow?.discount_earned_cents;
+  // #2: diluent rate. Caller-supplied (in-editor live form) wins; a list caller omits
+  // it and we fall back to the persisted column.
+  const pickDiluent = inv.diluent_gpa !== undefined ? inv.diluent_gpa : billingRow?.diluent_rate_gpa;
+
+  // #2: acres for the diluent TOTAL. The in-editor Print passes the live applied-acres
+  // aggregate (wins). A LIST / email caller omits it, and invoices.total_acres is NOT
+  // reliably written by save_field_app_invoice (engine-built invoices leave it NULL),
+  // so falling back to that column alone would print the diluent rate with NO total on
+  // a saved list-print (Codex r2 P2). When we have a diluent rate but still no acres,
+  // DERIVE the applied-acres aggregate from field_app_locations the same way the editor
+  // does — group-aware: a split invoice's locations link by invoice_group_id (invoice_id
+  // NULL); an un-split invoice's locations link by invoice_id. This mirrors the editor's
+  // totalAppliedAcres so the list-print total matches the in-editor total.
+  let pickAcres = inv.total_acres != null ? inv.total_acres : billingRow?.total_acres;
+  if (pickDiluent != null && (pickAcres == null || pickAcres <= 0)) {
+    const derived = await deriveFieldAppAppliedAcres(inv.id, billingRow?.invoice_group_id ?? null);
+    if (derived != null) pickAcres = derived;
+  }
 
   return {
     invoice_number: inv.invoice_number,
@@ -238,10 +292,12 @@ export async function buildInvoicePdfDataFromRow(
     footer_notes: pickFooter || undefined,
     crop_type: inv.crop_type || undefined,
     field_names: inv.field_names || undefined,
-    total_acres: inv.total_acres || undefined,
+    total_acres: pickAcres || undefined,
     applicator_name: inv.applicator_name || undefined,
     vehicle_name: inv.vehicle_name || undefined,
     application_date: inv.application_date || undefined,
+    // #2: diluent rate (gal/acre); the renderer derives the total from total_acres.
+    diluent_gpa: pickDiluent ?? undefined,
     shares: ((shares || []) as Array<{ customer?: { farm_name?: string } | null; split_percentage: number; acres: number | null; amount_cents: number; price_per_acre_cents?: number | null; pricing_note?: string | null }>).length > 0
       ? (shares as Array<{ customer?: { farm_name?: string } | null; split_percentage: number; acres: number | null; amount_cents: number; price_per_acre_cents?: number | null; pricing_note?: string | null }>).map((s) => ({
           customer_name: s.customer?.farm_name || 'Unknown',
@@ -290,6 +346,26 @@ const fmtNum = (n: number, decimals = 4) =>
 
 const fmtDate = (d: string) =>
   new Date(d + 'T00:00:00').toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' });
+
+// #2: one-line "Diluent / Carrier Water" string for the field-app PDF — the rate
+// per acre plus the derived total (rate x applied acres) when acres are known.
+// Returns '' to signal "render nothing" (caller skips the line) when there is no
+// recorded rate, so the printout never shows a phantom 0 / a rate with no total.
+//   "Diluent / Carrier Water: 15 gal/ac · 1,500 gal total (91.90 ac)"
+//   "Diluent / Carrier Water: 15 gal/ac"   (acres unknown — rate only)
+function buildDiluentLine(
+  rateGpa: number | null | undefined,
+  acres: number | null | undefined,
+): string {
+  if (rateGpa == null || !Number.isFinite(rateGpa) || rateGpa < 0) return '';
+  const rateStr = formatGallons(rateGpa);
+  const total = computeTotalDiluentGallons(rateGpa, acres);
+  if (total == null) {
+    return `Diluent / Carrier Water: ${rateStr} gal/ac`;
+  }
+  const totalStr = new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(total);
+  return `Diluent / Carrier Water: ${rateStr} gal/ac · ${totalStr} gal total (${fmtNum(acres as number, 2)} ac)`;
+}
 
 // ── Main Generator ──────────────────────────────────────────────────────
 
@@ -685,6 +761,20 @@ async function generateLegacyInvoicePdf(data: InvoicePdfData) {
     y += descLines.length * 11 + 2;
   }
 
+  // ── Diluent / carrier-water line (#2) ──────────────────────────────
+  // Rate per acre + computed total (rate x applied acres). Omitted entirely when
+  // no rate is recorded — never a phantom 0. A QUANTITY (gallons), never money.
+  if (isFieldApp && data.diluent_gpa != null) {
+    const diluentLine = buildDiluentLine(data.diluent_gpa, data.total_acres);
+    if (diluentLine) {
+      doc.setFont('courier', 'normal');
+      doc.setFontSize(9);
+      doc.setTextColor(...black);
+      doc.text(diluentLine, margin, y);
+      y += 11 + 2;
+    }
+  }
+
   // Header notes
   if (data.header_notes) {
     doc.setFont('courier', 'normal');
@@ -868,6 +958,21 @@ function drawFieldApplicationLayout(
     ].filter(Boolean);
     doc.text(descParts.join(' - '), margin, y);
     y += 14;
+  }
+
+  // ── Diluent / carrier-water line (#2) ──────────────────────────────
+  // Rate per acre + computed total (rate x applied acres), in the standard
+  // (current) field-app layout. Omitted entirely when no rate is recorded —
+  // never a phantom 0. A QUANTITY (gallons), never money.
+  if (data.diluent_gpa != null) {
+    const diluentLine = buildDiluentLine(data.diluent_gpa, data.total_acres);
+    if (diluentLine) {
+      doc.setFontSize(9);
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(...CHARCOAL);
+      doc.text(diluentLine, margin, y);
+      y += 14;
+    }
   }
 
   // Grower line

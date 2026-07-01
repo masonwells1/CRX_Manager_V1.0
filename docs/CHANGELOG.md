@@ -4,6 +4,28 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-01 — ChemMan Gap-Closeout GO-LIVE: weather auto-fill + diluent-per-acre applied to production (`feat/chemman-gap-closeout`)
+
+The two remaining ChemMan-comparison gaps (#1 weather auto-fill, #2 diluent/carrier-water per acre — both detailed below) went **live to production** (`croprxsolutions.app` / Supabase `rhyzpcqhnizqbxphqdkr`) on 2026-07-01 after Mason's explicit go-live approval.
+
+- **Both migrations applied to prod in order** via the apply-guard proof + `rls-security-reviewer` + `migration-drift-reviewer` (both CLEAN each): `20260630180000_field_app_invoice_weather_capture` (invoices +13 nullable weather cols; `update_field_app_applied_info` 6→20 arg) then `20260630190000_field_app_invoice_diluent_per_acre` (invoices +`diluent_rate_gpa`; RPC 20→22 arg). **Prod-verified**: single overload each, all new cols nullable, **no new CHECK** (invoices still 6), `anon` execute revoked, no generated column. Security advisor clean (only the pre-existing, accepted `profile_public_view` ERROR). Live prod `update_field_app_applied_info` body was confirmed byte-identical to the migration's clone base before applying.
+- **Code:** `origin/main` merged into the branch (2 doc conflicts resolved → 572 migrations on disk), then `main` fast-forwarded to `17b4445e` and pushed (pre-push typecheck+build green); Vercel deployed. **Proven live** by fetching the deployed `FieldApplicationInvoice` chunk on croprxsolutions.app and grepping the feature text (`Diluent / Carrier Water`, `Get Weather`, `modeled, not measured`).
+- **Defaults:** the diluent rate + total print on the **customer-facing** invoice PDF (both standard + legacy layouts), matching ChemMan — Mason's chosen default; reversible to internal-only later with no data change. Weather stays modeled-not-measured (disclaimer shown).
+- **Follow-up (non-blocking):** regenerate `.claude/schema-registry.json` to include the 14 new `invoices` columns (drift-reviewer recommendation; low risk — additive nullable, no enum/generated/table).
+
+---
+
+## 2026-06-30 — ChemMan Gap-Closeout #1: Weather auto-fill on the field-application invoice (`feat/chemman-gap-closeout`, LOCAL only)
+
+One of the two remaining ChemMan-comparison gaps. The field-app invoice's Applied Info tab gains one-tap **Get Weather** capture for START and END conditions (temperature °F, wind speed mph, wind direction, humidity %, plus a per-set clock time), persisted to structured columns alongside the legacy free-text fields.
+
+- **Migration `20260630180000_field_app_invoice_weather_capture.sql`** (LOCAL only): 13 ADDITIVE NULLABLE columns on `invoices` (a MONEY table) mirroring `job_applied_records` — `start_*`/`end_*` temp/wind/humidity/direction/source/time + `weather_manual_override` boolean. **No new CHECK, no NOT NULL** (touches none of invoices' 6 CHECKs); RLS unchanged. Extends `update_field_app_applied_info` **drift-safe** (DROP old 6-arg → single 20-arg superset; verbatim body + only additive writes; strict-actor, admin/sales gate, op-scoped idempotency, editable-invoice guard, `SET search_path` all preserved; original `REVOKE … FROM PUBLIC, anon` + `GRANT … TO authenticated` re-applied).
+- **Stale-data safety (Codex-driven):** a `p_update_weather` sentinel means an old-bundle browser tab calling the 6-arg form can't silently erase captured weather; auto readings are invalidated when the user changes the field/date but preserved on load; an in-flight fetch whose key changed is dropped. RPC-layer validation rejects impossible values (negative wind, humidity outside 0–100, bad source) without a DB CHECK.
+- **Open-Meteo only** (free/keyless, already CSP-whitelisted) via the existing `fetchWeatherForDateTime` helper + `get_field_geojson` centroid; manual entry always works offline; a failed fetch never blocks save. The mandatory **"weather is modeled, not measured — verify on-site before relying on it for compliance"** disclaimer renders on the weather UI.
+- **Proven:** rolled-back LOCAL smoke (persist / old-caller-preserve / validation-reject / idempotent replay / single overload / anon-revoked) + live-DB end-to-end render in the running app (login → invoice → Get Weather fills both sets → manual edit flips source to Manual → save persists → reload restores → user date-change clears stale auto → offline fetch still allows manual entry). 3 CRX reviewers (rls-security / migration-drift / compliance) + Codex (5 rounds) clean. NOT applied to prod — local only, awaiting the owner production gate.
+
+---
+
 ## 2026-06-30 — Beyond-Parity GO-LIVE: all 6 internal features applied to production (`feat/fieldapp-beyond-parity`)
 
 The §1–§6 beyond-parity build (built LOCAL-only, detailed in the per-section entries below) went **live to production** (`croprxsolutions.app` / Supabase `rhyzpcqhnizqbxphqdkr`) on 2026-06-30 after a full re-gate.
