@@ -1,0 +1,272 @@
+{
+  "loop": "codex-driven-bug-hunt",
+  "branch": "claude/main-debug-hunt",
+  "startedUtc": "2026-06-30T20:25:50Z",
+  "cycles": [
+    {
+      "cycle": 1,
+      "utc": "2026-06-30T20:40:00Z",
+      "slice": ["invoices-core", "payments-allocation"],
+      "codexCandidates": 1, "confirmed": 0, "refuted": 1, "greenFixed": 0, "parked": 0,
+      "note": "Codex re-found PARKED-002 from the stale append-only migration file; live DB already has the guard."
+    },
+    {
+      "cycle": 2,
+      "utc": "2026-06-30T21:05:00Z",
+      "slice": ["money-primitives", "commissions", "credit-returns"],
+      "codexCandidates": 4, "confirmed": 4, "refuted": 0, "greenFixed": 2, "parked": 1,
+      "note": "2 green frontend fixes committed in 5938937d; returns bypass (C3+C4) bundled into PARKED-004."
+    },
+    {
+      "cycle": 3,
+      "utc": "2026-06-30T21:35:00Z",
+      "slice": ["orders-AR", "prepay-finance", "commission-split"],
+      "codexCandidates": 4, "confirmed": 2, "refuted": 2, "greenFixed": 1, "parked": 1,
+      "note": "C6 AR-reminder $NaN total -> GREEN (832f6c8a); C7 reminder excludes overdue -> PARKED-005. C8/C9 search_path refuted (append-only trap; live has public,pg_temp). commission-split CLEAN; prepay-finance got no findings (re-hunt for thoroughness)."
+    },
+    {
+      "cycle": 4,
+      "utc": "2026-06-30T22:05:00Z",
+      "slice": ["blend-ticket-billing", "field-acre-billing"],
+      "codexCandidates": 2, "confirmed": 2, "refuted": 0, "greenFixed": 1, "parked": 1,
+      "note": "C10 blend Create-Invoice card shown for prepaid/no_charge -> GREEN (2d274161). C11 two blend RPCs inline idempotency save instead of hardened save_idempotency -> PARKED-006 (LOW, optional; only bites under impossible UUID cross-op collision). field-acre-billing CLEAN."
+    },
+    {
+      "cycle": 5,
+      "utc": "2026-06-30T22:45:00Z",
+      "slice": ["prepay-finance", "quotes-holds", "inventory-engine"],
+      "codexCandidates": 4, "confirmed": 2, "refuted": 2, "greenFixed": 1, "parked": 1,
+      "note": "C13 dead prepay Apply/Apply-All buttons (RPCs hard-disabled) -> GREEN (36b9bec5). C15 inventory planned-demand double-count (holds_qty + planned_qty) -> PARKED-007. C12 apply_prepay CURRENT_DATE period guard REFUTED (correct/consistent with apply_write_off/issue_return_credit). C14 quote pre-save-accepted REFUTED (partial-draw guarded; convert_quote_to_order tolerates pre-accept by design) + residual LOW note."
+    },
+    {
+      "cycle": 6,
+      "utc": "2026-06-30T23:20:00Z",
+      "slice": ["deliveries", "jobs", "purchase-orders-receiving"],
+      "codexCandidates": 5, "confirmed": 1, "refuted": 4, "greenFixed": 0, "parked": 1,
+      "note": "Heavy append-only trap: C16 transfer_job_to_invoice, C18 start_job/complete_job scope, C19 complete_delivery idempotency ALL already-fixed-live (Codex read old migrations). C20 PO submit direct-update REFUTED (admin RLS + enforce_po_status_transition + on-order triggers). C17 receive_po_items missing FOR UPDATE -> over-receive/double-count race -> PARKED-009."
+    },
+    {
+      "cycle": 7,
+      "utc": "2026-06-30T23:55:00Z",
+      "slice": ["rls-security-definer", "edge-functions", "idempotency-infra"],
+      "codexCandidates": 3, "confirmed": 2, "refuted": 1, "greenFixed": 1, "parked": 0,
+      "note": "C22 JobDetail notification not fail-closed on missing email idempotency key -> GREEN (4c20fb8d). C23 dismiss_watchdog_flag inline idempotency save -> folded into PARKED-006 (systemic inline-save pattern). C21 send-email optional idempotency REFUTED (opt-in by design; real gap was caller C22). rls-security-definer CLEAN (advisor subagent corroborated: no RLS-disabled tables, only known-accepted ERROR = profile_public_view)."
+    },
+    {
+      "cycle": "8 (timeout) -> 8a retry",
+      "utc": "2026-07-01T00:40:00Z",
+      "slice": ["misc-pages: label-guardrails + field-app charges"],
+      "codexCandidates": 3, "confirmed": 2, "refuted": 1, "greenFixed": 1, "parked": 1,
+      "note": "Cycle 8 (3 subsystems) TIMED OUT at 900s (HUNT_RC=124, no stdout) — Codex got lost grepping the newest migrations; retried as 8a with a tight 5-file frontend slice. C25 chemical rate NaN-guard -> GREEN (1cd3c873). C24 field-app line-total unit mismatch (rate_unit qty x inventory_unit price; 556/604 products mismatched) -> PARKED-010 (HIGH, verify-before-go-live). C26 financeChargeCalc.ts missing = non-finding (wrong path in my prompt)."
+    },
+    {
+      "cycle": "8b",
+      "utc": "2026-07-01T01:05:00Z",
+      "slice": ["misc-pages: month-end / settings-admin / watchdog / office-cockpit"],
+      "codexCandidates": 0, "confirmed": 0, "refuted": 0, "greenFixed": 0, "parked": 0,
+      "note": "CLEAN. MonthEndClose (idempotency+assertRpcResult+formatCents), SettingsPage (non-admin redirect, auto-draft OFF + guardrail WARN defaults, checkMutationResult), WatchdogExceptions (actor-bound dismissal + idempotency), OfficeCockpit (fresh recheck + per-invoice idempotency) all verified. Completes the full Phase 1 + Phase 2 sweep."
+    }
+  ],
+  "status": "SWEEP COMPLETE — all PHASE-PLAN subsystems drained. Loop stopped (stop condition: swept everything; diminishing signal).",
+  "candidates": [
+    {
+      "id": "C1", "cycle": 1,
+      "dedupeKey": "invoices-core::save_invoice::lifecycle-credit-memo-forge",
+      "title": "save_invoice can forge credit memos outside return flow",
+      "severity": "MED", "fixKind": "migration", "status": "REFUTED",
+      "reason": "ALREADY FIXED LIVE (PARKED-002, mig 20260630173011). Live save_invoice rejects credit_memo on new+update paths. Codex read the old append-only file."
+    },
+    {
+      "id": "C2", "cycle": 2,
+      "dedupeKey": "money-primitives::parseDollarsToCentsSigned::malformed-dash-negative",
+      "title": "Non-leading dash parses as large negative cents (\"12-34\" -> -123400)",
+      "severity": "LOW", "fixKind": "frontend-only", "status": "FIXED",
+      "commit": "5938937d",
+      "reason": "Confirmed: signed parser used includes('-') then stripped all dashes. Only signed callers affected (vendor-bill adjustment, discounts). Fixed to reject non-leading dash + 5 regression tests."
+    },
+    {
+      "id": "C5", "cycle": 2,
+      "dedupeKey": "commissions::CommissionPayments-void::missing-cancelled-dead-order-count",
+      "title": "Void UI ignores commissions_cancelled_dead_order (claims all re-payable)",
+      "severity": "LOW", "fixKind": "frontend-only", "status": "FIXED",
+      "commit": "5938937d",
+      "reason": "Confirmed against live void_commission_payment (returns both counts). UI read only commissions_reset. Fixed toast/activity/modal to surface cancelled count."
+    },
+    {
+      "id": "C3", "cycle": 2,
+      "dedupeKey": "credit-returns::Returns-handleCreate::non-atomic-non-idempotent-create",
+      "title": "Return creation = two separate inserts, no idempotency",
+      "severity": "MED", "fixKind": "migration", "status": "PARKED",
+      "parkId": "PARKED-004",
+      "reason": "Confirmed: returns insert + return_items insert not wrapped; no idem key. Bundled into PARKED-004 (create_return RPC)."
+    },
+    {
+      "id": "C4", "cycle": 2,
+      "dedupeKey": "credit-returns::returns_update-RLS+transition-trigger::status-rpc-bypass",
+      "title": "Requester can directly UPDATE return status, skipping RPC side-effects (restock, credit-memo)",
+      "severity": "MED", "fixKind": "migration", "status": "PARKED",
+      "parkId": "PARKED-004",
+      "reason": "Confirmed via RLS (returns_update allows requested_by=auth.uid()) + trigger (only validates status graph, not caller). Insider/own-returns/data-integrity (money event still blocked by PARKED-002). Draft gates transitions on a session flag + adds reject_return/create_return RPCs; compiled OK against live (rolled back)."
+    },
+    {
+      "id": "C6", "cycle": 3,
+      "dedupeKey": "orders-AR::ARaging-handleSendARReminders::total_balance-cents-unit-mismatch",
+      "title": "AR reminder email shows $NaN outstanding total (reads non-existent total_balance_cents)",
+      "severity": "MED", "fixKind": "frontend-only", "status": "FIXED",
+      "commit": "832f6c8a",
+      "reason": "Confirmed: live get_ar_reminder_candidates returns total_balance (dollars); UI rendered fmtCents(cust.total_balance_cents) (undefined) at lines 528+540. Fixed by summing per-invoice balance_cents (all >0)."
+    },
+    {
+      "id": "C7", "cycle": 3,
+      "dedupeKey": "orders-AR::get_ar_reminder_candidates::excludes-overdue-status",
+      "title": "AR reminder RPC filters status='posted', excluding mark_overdue_invoices()'s 'overdue' invoices",
+      "severity": "MED", "fixKind": "migration", "status": "PARKED",
+      "parkId": "PARKED-005",
+      "reason": "Confirmed: mark_overdue_invoices flips posted->overdue (due_date<today); reminder RPC's WHERE status='posted' then skips them. Latent (0 posted/overdue live). Draft changes WHERE to status IN ('posted','overdue'); compiled OK against live (rolled back)."
+    },
+    {
+      "id": "C8", "cycle": 3,
+      "dedupeKey": "orders-AR::get_ar_reminder_candidates::search_path-missing-pg_temp",
+      "title": "get_ar_reminder_candidates SECURITY DEFINER search_path missing pg_temp",
+      "severity": "LOW", "fixKind": "migration", "status": "REFUTED",
+      "reason": "ALREADY FIXED LIVE: live def has SET search_path TO 'public','pg_temp'. Codex read old migration 20260308100000. Append-only trap."
+    },
+    {
+      "id": "C9", "cycle": 3,
+      "dedupeKey": "prepay-finance::check_period_open::search_path-empty",
+      "title": "check_period_open SECURITY DEFINER search_path empty",
+      "severity": "LOW", "fixKind": "migration", "status": "REFUTED",
+      "reason": "ALREADY FIXED LIVE: live def has SET search_path TO 'public','pg_temp' and schema-qualifies refs. Codex read old migration 20260217200000. Append-only trap."
+    },
+    {
+      "id": "C10", "cycle": 4,
+      "dedupeKey": "blend-ticket-billing::BlendTicketDetail-DirectInvoiceCard::payment_status-gate-mismatch",
+      "title": "Create Invoice card shown for prepaid/no_charge tickets the RPC rejects",
+      "severity": "LOW", "fixKind": "frontend-only", "status": "FIXED",
+      "commit": "2d274161",
+      "reason": "Confirmed: live create_invoice_from_blend_ticket requires payment_status='unbilled'; UI showed card for !=='billed'. Gated card on ==='unbilled'."
+    },
+    {
+      "id": "C11", "cycle": 4,
+      "dedupeKey": "blend-ticket-billing::reverse_blend_ticket_approval+create_invoice_from_blend_ticket::inline-idempotency-save",
+      "title": "Two blend RPCs inline idempotency INSERT instead of hardened save_idempotency",
+      "severity": "LOW", "fixKind": "migration", "status": "PARKED",
+      "parkId": "PARKED-006",
+      "reason": "Real consistency gap (SYSTEMIC): multiple RPCs inline their idempotency INSERT (ON CONFLICT(idempotency_key) DO NOTHING or plain INSERT) instead of calling save_idempotency, bypassing its cross-op guard (added by prior-hunt PARKED-008, which explicitly noted direct callers remain unfixed). Known instances: reverse_blend_ticket_approval, create_invoice_from_blend_ticket, dismiss_watchdog_flag (C23, cycle 7), start_job, complete_job. Only matters under a UUID cross-op collision (effectively impossible) -> optional defense-in-depth migration sweep."
+    },
+    {
+      "id": "C12", "cycle": 5,
+      "dedupeKey": "prepay-finance::apply_prepay_to_invoice::check_period_open-current_date",
+      "title": "apply_prepay_to_invoice guards CURRENT_DATE not invoice_date",
+      "severity": "HIGH", "fixKind": "migration", "status": "REFUTED",
+      "reason": "NOT A BUG. A prepay application is a present-dated event (no historical date param); CURRENT_DATE is the correct, consistent guard — it sits alongside apply_write_off(CURRENT_DATE) and issue_return_credit(CURRENT_DATE). Invoice-dated events (post/void/unpost_invoice) guard invoice_date; today-dated events guard CURRENT_DATE. Guarding the old invoice's period would wrongly forbid applying prepay to any invoice whose original period closed."
+    },
+    {
+      "id": "C13", "cycle": 5,
+      "dedupeKey": "prepay-finance::PrepaymentManager-Apply+ApplyAll::dead-disabled-rpc-buttons",
+      "title": "Prepay Quick/Apply-All buttons call hard-disabled RPCs (always error)",
+      "severity": "MED", "fixKind": "frontend-only", "status": "FIXED",
+      "commit": "36b9bec5",
+      "reason": "Confirmed: apply_remaining_prepayments + batch_apply_all_prepayments both begin with a RAISE guard (bulk apply hard-disabled pending reserved-pool redesign). Disabled both buttons with a tooltip routing to the working Allocate flow."
+    },
+    {
+      "id": "C14", "cycle": 5,
+      "dedupeKey": "quotes-holds::QuoteBuilder-executeConvertToOrder::pre-save-accepted-before-convert",
+      "title": "Quote convert pre-saves 'accepted' before convert_quote_to_order",
+      "severity": "HIGH", "fixKind": "frontend-only", "status": "REFUTED",
+      "reason": "Headline refuted. The destructive partial-draw case is already guarded (handler checks quote_product_draws and routes away BEFORE the pre-save). convert_quote_to_order is DESIGNED to tolerate a pre-flipped 'accepted' (accepts sent/revised/accepted; releases holds itself atomically). Residual LOW: a non-drawn convert FAILURE after the pre-save leaves holds released + quote reverted to sent without hold recreation — but it's a deliberate, heavily-commented flow with a graceful catch; not a safe autonomous edit. Noted, not fixed."
+    },
+    {
+      "id": "C15", "cycle": 5,
+      "dedupeKey": "inventory-engine::get_inventory_position+InventoryPage::planned-demand-double-count",
+      "title": "total_planned_qty double-counts planned quote demand (holds_qty + planned_qty)",
+      "severity": "MED", "fixKind": "migration", "status": "PARKED",
+      "parkId": "PARKED-007",
+      "reason": "Confirmed: _sync_planned_holds creates a crop_program hold of qty (total_units_needed - drawn) for each planned quote item, so the planned demand is in holds_qty; the planned_quotes CTE counts SUM(total_units_needed) for the same quotes; UI sums holds_qty + planned_qty -> double-count (and planned_qty is also stale: it ignores draws). Robust fix is RPC-level (drop/redefine planned_qty so it excludes what holds already cover); interim frontend fix = total_planned_qty: holds_qty."
+    },
+    {
+      "id": "C16", "cycle": 6,
+      "dedupeKey": "jobs::transfer_job_to_invoice::missing-actor-idempotency-header",
+      "title": "transfer_job_to_invoice lacks actor/idempotency + header from cached total",
+      "severity": "HIGH", "fixKind": "migration", "status": "REFUTED",
+      "reason": "ALREADY FIXED LIVE. Live has p_idempotency_key, role gate, ACTOR_MISMATCH (line 47), check/save_idempotency, AND reconciles header to summed shares (line 192). Codex read old migration 20260405000000."
+    },
+    {
+      "id": "C17", "cycle": 6,
+      "dedupeKey": "purchase-orders-receiving::receive_po_items::missing-for-update-lock",
+      "title": "receive_po_items has no FOR UPDATE -> concurrent over-receive/inventory double-count",
+      "severity": "MED", "fixKind": "migration", "status": "PARKED",
+      "parkId": "PARKED-009",
+      "reason": "Confirmed: live receive_po_items reads quantity_received with no row lock, then checks over-receive against the stale value. Two concurrent receives of the same po_item both pass the check and both add -> over-receive past ordered + inventory double-increment. (Status-bypass mostly neutralized by the enforce_po_status_transition trigger + per-item over-receive guard.) Draft adds FOR UPDATE OF poi + explicit status guard; compiled OK against live (rolled back)."
+    },
+    {
+      "id": "C18", "cycle": 6,
+      "dedupeKey": "jobs::start_job+complete_job::idempotency-lookup-unscoped",
+      "title": "start_job/complete_job idempotency lookup not scoped by operation",
+      "severity": "HIGH", "fixKind": "migration", "status": "REFUTED",
+      "reason": "ALREADY FIXED LIVE. Live lookups are scoped: 'WHERE idempotency_key = p_idempotency_key AND operation = start_job/complete_job'. Codex read old migration 20260430190000."
+    },
+    {
+      "id": "C19", "cycle": 6,
+      "dedupeKey": "deliveries::complete_delivery::idempotency-key-unused",
+      "title": "complete_delivery accepts p_idempotency_key but never uses it",
+      "severity": "MED", "fixKind": "migration", "status": "REFUTED",
+      "reason": "ALREADY FIXED LIVE. Live calls check_idempotency (line 35) + save_idempotency (line 318). Codex read old migration 20260320100000."
+    },
+    {
+      "id": "C20", "cycle": 6,
+      "dedupeKey": "purchase-orders-receiving::PurchaseOrderDetail-handleSubmitPO::direct-status-update",
+      "title": "PO submit is a direct status UPDATE, not an RPC",
+      "severity": "MED", "fixKind": "frontend-only", "status": "REFUTED",
+      "reason": "Adequately gated: po_update RLS is admin-only; enforce_po_status_transition trigger validates the state machine on any update; trg_po_submitted_on_order handles the On-Order side-effect. Submit has no unhandled side-effect, so the direct update is safe (unlike the returns C4 case where RPC side-effects weren't trigger-backed). Only missing idempotency on a client-guarded status flip -> negligible."
+    },
+    {
+      "id": "C21", "cycle": 7,
+      "dedupeKey": "edge-functions::send-email::optional-idempotency-key",
+      "title": "send-email does not REQUIRE an idempotency key",
+      "severity": "MED", "fixKind": "edge-fn", "status": "REFUTED",
+      "reason": "By design: send-email correctly dedupes WHEN given a key (opt-in idempotency). Making it mandatory could break legitimate keyless sends. The real exploitable gap was a specific careless caller (JobDetail) -> fixed as C22. Optional edge-fn hardening (require a key) noted but not pursued."
+    },
+    {
+      "id": "C22", "cycle": 7,
+      "dedupeKey": "edge-functions::JobDetail-notifications::not-fail-closed-on-missing-email-key",
+      "title": "Job pre/post notifications send keyless when email_idempotency_key is null",
+      "severity": "MED", "fixKind": "frontend-only", "status": "FIXED",
+      "commit": "4c20fb8d",
+      "reason": "Confirmed: both JobDetail loops set the key only if present then sendEmail regardless; a null-key recipient got a keyless send a retry would double-deliver. FieldApplicationInvoice already fail-closes (skip+log). Applied the same guard to both loops."
+    },
+    {
+      "id": "C23", "cycle": 7,
+      "dedupeKey": "idempotency-infra::dismiss_watchdog_flag::inline-idempotency-save",
+      "title": "dismiss_watchdog_flag inline idempotency save bypasses cross-op guard",
+      "severity": "LOW", "fixKind": "migration", "status": "PARKED",
+      "parkId": "PARKED-006",
+      "reason": "Same class as C11 — inline INSERT ... ON CONFLICT(idempotency_key) DO NOTHING instead of save_idempotency. Folded into PARKED-006 (systemic sweep). Only bites under impossible UUID cross-op collision."
+    },
+    {
+      "id": "C24", "cycle": "8a",
+      "dedupeKey": "field-app::FieldAppChemicalEntry::rate_unit-vs-inventory_unit-line-total",
+      "title": "Field-app chemical line total multiplies rate_unit qty by inventory_unit price (no conversion)",
+      "severity": "HIGH", "fixKind": "migration", "status": "APPLIED-LIVE-VERIFIED",
+      "parkId": "PARKED-010",
+      "frontendCommit": "e695875e",
+      "appliedNote": "Migration APPLIED to live prod by Mason (normal session) + VERIFIED against live 2026-07-01: field_app_priced_quantity exists; save_field_app_invoice + preview_field_app_invoice_split both converted (old bugs gone, cost-fix + unconvertible guard present); live smoke proved 16oz/ac*100ac@$32.10/gal = 40125c ($401.25), dry oz->lb=200, identity=100, oz->qt=3.125, unconvertible=null. Frontend half (e695875e) still on branch claude/main-debug-hunt — needs merge to main + Vercel deploy so the entry-screen preview matches (the SERVER preview + billing are already live-correct).",
+      "reason": "CONFIRMED by tracing live save_field_app_invoice: priced rate-unit qty (oz) x price-per-inventory-unit (gal) with no conversion -> ~128x overcharge (100ac 2,4D 16oz/ac @$32.10/gal bills $51,360 vs $401.25). 556/604 products affected. Latent (0 field-app invoices). FIX BUILT + VALIDATED + CODEX-SHIP (round 2): (a) new SQL helper field_app_priced_quantity converts rate->inventory unit (identity when equal, NULL/blocked when unconvertible); (b) corrected BOTH save_field_app_invoice AND preview_field_app_invoice_split (Codex r1 caught the 2nd fn + the cost/margin + rounding) to price + cost on the converted qty; (c) frontend preview mirror committed e695875e (JS fieldAppPricedQuantity + tests, build+suite green). Migration draft (PARKED-010-field-app-pricing-unit-fix.draft.sql) compile-validated against live + dollars proven (40125c=$401.25). MIGRATION needs Mason apply-OK (money + SECURITY DEFINER); job path (complete_job/transfer_job_to_invoice) audited = NOT affected (bills from quote total, not rate*acres*price)."
+    },
+    {
+      "id": "C25", "cycle": "8a",
+      "dedupeKey": "field-app::FieldAppChemicalEntry::rate-input-NaN",
+      "title": "Chemical rate number-input can store NaN (transient 'e'/'-'/'.')",
+      "severity": "MED", "fixKind": "frontend-only", "status": "FIXED",
+      "commit": "1cd3c873",
+      "reason": "Confirmed: Number(e.target.value) is NaN for 'e'/'-'/'.'; NaN survives `?? ''`, glitches the field, nulls the rate on save. Added Number.isFinite guard."
+    },
+    {
+      "id": "C26", "cycle": "8a",
+      "dedupeKey": "field-app::financeChargeCalc::missing-file",
+      "title": "financeChargeCalc.ts does not exist",
+      "severity": "LOW", "fixKind": "docs-or-test", "status": "DISMISSED",
+      "reason": "Non-finding: my hunt prompt listed a wrong path. Only financeChargeCalc.test.ts exists; the finance-charge logic lives elsewhere/inline. Not a bug."
+    }
+  ]
+}
