@@ -66,6 +66,21 @@ Specialized reviewers invoked via the `Agent` tool. They run in their own contex
 
 To exempt a specific file from a PreToolUse hook, add the marker comment named in the hook's error message.
 
+### Correction-mined guards (added 2026-07-01)
+
+Built from a workflow that mined the last 50 sessions (524 Mason-typed messages → 70 corrections → 12 recurring themes). Each targets something Mason repeatedly had to correct. All are **fail-open / off-by-default** — a read error or missing state file never blocks work. Lessons also live as auto-loading `memory/` files. Tests: `npm run test:correction-guards` (99 assertions across `stop-verify-lib.test.mjs`, `worktree-awareness-lib.test.mjs`, `autopilot-lib.test.mjs`, `guards.test.mjs`).
+
+| Hook | Event | What it does | Correction it prevents / escape hatch |
+|------|-------|--------------|----------------------------------------|
+| `stop-verify.mjs` (+ `stop-verify-lib.mjs`) | Stop | When session code changed, BLOCKS "done" unless the transcript shows real verification (a `PROOF —` block, or a preview/WebFetch/prod-fetch/`execute_sql`). "Tests pass" is no longer accepted as proof. Bounded to 2 blocks/change-set (fails open). | #1 correction (16×): "is it really live?", "the icons still aren't there", "are the branches merged?". Escape: post `PROOF — Ran: … · Saw: … · Not verified: …`. |
+| `worktree-awareness.mjs` (+ `-lib`) | SessionStart | Injects the list of sibling worktrees, each with branch + merged-into-origin/main + dirty count. Silent when solo. | "I have another session working on that", "is it already merged?" — claiming done blind to parallel work. |
+| `codex-push-guard.mjs` (+ `-lib`) | PreToolUse(Bash) | Blocks `git push` from `main` when the diff (`origin/main...HEAD`) touches `supabase/migrations|functions` (or RLS/policy files) unless a fresh, HEAD-bound Codex proof (`.claude/session-state/codex-review-<sha>.json`, <30 min, `codex_ran:true`, clean verdict) exists. Non-risky pushes pass. | "has codex reviewed all of these?" — shipping risky code with the Codex gate skipped or treated as queued. |
+| `unattended-autopilot.mjs` (+ `-lib`, `autopilot-arm.mjs`) | PreToolUse(*) | OFF unless an unexpired `.claude/session-state/AUTOPILOT.on` flag exists. When armed, auto-approves tool calls EXCEPT a hard deny-set (push, deploy, live migration, destructive delete, secret write) so an overnight loop never stalls on prompts. Arm: `node .claude/hooks/autopilot-arm.mjs --hours N`; disarm: `--off`. | "it keeps asking for permission… I'm going to bed" — reassurance instead of actually granting hands-free permission. |
+| `autopilot-intent-reminder.mjs` | UserPromptSubmit | On "run it overnight / never ask / going to bed", tells Claude to ARM autopilot, not just reassure. | Same as above — makes the complaint drive an action. |
+| `hold-latch-prompt.mjs` + `hold-latch-guard.mjs` (+ `-lib`) | UserPromptSubmit + PreToolUse(*) | "stop / pause / cancel background / just scoping" latches `hold.json`; the guard then blocks build/commit/migrate/deploy tools (reads, tests, and session-state/SCOPE.md writes stay allowed). Any next message clears it — can't stick across turns. | "lets just stop here, cancel all background work" — momentum past an explicit stop. |
+| `live-testdata-guard.mjs` (+ `live-testdata-lib.mjs`) | PreToolUse(*) | Blocks `execute_sql` that INSERTs into a live business table without `[E2E]`, or DELETE/void of a financial table. Override: create `.claude/session-state/REAL-DATA-OK`. | "use only fake fields/customers… delete them after"; cancel/void of real financial records is Mason's job. |
+| `active-area-guard.mjs` | PreToolUse(Bash) | Blocks destructive ops (`rm -rf`, `git worktree remove`, `git branch -D`, `git clean -f`, force-push) against a folder/branch listed in `.claude/active-areas.json`. Inert when that file is absent. | "we're working in beyond-parity now, don't mess with it" — sweeping a folder marked active. |
+
 **Full audit (manual):** `scripts/validate-sql-migrations.sh` — scans ALL migration files. Run with `--idempotency-only` for focused check.
 
 **Refresh schema registry after schema changes:** `node scripts/regenerate-schema-registry.mjs` (or ask Claude Code to do it via Supabase MCP).

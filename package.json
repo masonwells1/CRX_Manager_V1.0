@@ -29,6 +29,7 @@
     "check:agent-workflows": "node scripts/check-agent-workflows.mjs",
     "test:agent-workflows": "node .claude/hooks/codex-gauntlet-reminder.test.mjs && node .claude/hooks/codex-to-claude-handoff-reminder.test.mjs && node .claude/hooks/agent-pair-review-reminder.test.mjs && node scripts/run-claude-review.test.mjs && node scripts/agent-health-check.test.mjs && node scripts/post-agent-review-to-pr.test.mjs && node scripts/check-agent-workflows.mjs",
     "agent-health": "node scripts/agent-health-check.mjs",
+    "test:correction-guards": "node .claude/hooks/stop-verify-lib.test.mjs && node .claude/hooks/worktree-awareness-lib.test.mjs && node .claude/hooks/autopilot-lib.test.mjs && node .claude/hooks/guards.test.mjs",
     "test:contracts": "vitest run src/lib/rpcContracts.test.ts src/lib/rpcIdempotencyScope.test.ts src/lib/rpcFixtureLiveDiff.test.ts",
     "prepare": "husky"
   },

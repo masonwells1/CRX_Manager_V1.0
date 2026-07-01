@@ -4,6 +4,16 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-01 — Correction-mined guardrails (self-improvement from the last 50 sessions)
+
+Mined the 50 most-recent sessions (524 Mason-typed messages → 70 corrections → 12 recurring themes, via a fan-out workflow) for the things Mason keeps having to correct, then turned the top themes into a deterministic prevention system. **No app/DB change** — this is `.claude/` tooling + docs + auto-memory only.
+
+- **12 auto-loading `memory/` files** (one per theme, indexed in `MEMORY.md`) so every future session pre-loads the lessons: done-means-ran-and-proven, codex-gate-ran-not-queued, parallel-sessions-collision-check, verify-paths-and-merge-state, arm-autopilot-not-reassure, lead-with-status-and-next-step, complete-the-recommendation, drive-browser-adapt-channel, capture-loop-harness-spec, live-prod-testdata-and-owner-actions, stop-pause-scope-are-hard-halts, verify-facts-and-ask-preferences.
+- **7 new/upgraded hooks** (all fail-open / off-by-default): `stop-verify.mjs` upgraded to require real end-state proof (a `PROOF —` block or preview/fetch/SQL evidence) before "done"; `worktree-awareness.mjs` (SessionStart sibling-worktree list); `codex-push-guard.mjs` (blocks risky push to main without a fresh Codex verdict); `unattended-autopilot.mjs` + `autopilot-arm.mjs` + `autopilot-intent-reminder.mjs` (overnight hands-free switch, dangerous actions still blocked); `hold-latch-prompt.mjs` + `hold-latch-guard.mjs` (stop/pause/scope halts building); `live-testdata-guard.mjs` + `active-area-guard.mjs` (live fake-data + protected-folder boundaries). Wired into `.claude/settings.json`.
+- **Tests:** `npm run test:correction-guards` — 99 assertions (4 test files) green; existing `test:agent-workflows` still green. Detail + escape hatches in `docs/reference/agent-guardrails.md`, summary in `CLAUDE.md`.
+
+---
+
 ## 2026-07-01 — Error-source triage sweep + Sentry noise cleanup (business events out of Sentry Issues)
 
 Read-only sweep across every flagged-error source (GitHub CI/Actions, code-scanning / Dependabot / secret-scanning, open issues/PRs, Sentry, Supabase advisors, local lint/build/typecheck/doc-drift). Result: **production healthy** — `main` CI green, local gates all clean, 6 low-volume Sentry issues (no real crash), 0 open security alerts.
