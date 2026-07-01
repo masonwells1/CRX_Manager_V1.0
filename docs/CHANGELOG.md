@@ -4,6 +4,27 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-01 — Codex-Driven Bug-Hunt GO-LIVE: 8 code fixes + field-app ~128× billing fix applied to production (`claude/main-debug-hunt`)
+
+An 8-cycle **Codex-driven bug hunt** (Codex hunts → Claude verifies each candidate against the **live DB** → auto-fix if green / park if it needs a migration) swept the whole app. 26 Codex candidates → **15 confirmed, 11 refuted** (mostly the "append-only trap": Codex read an old migration file, not the live function). **8 code fixes (7 commits) + the field-app billing fix are now on production `main`** (the 7 fix commits merged earlier; this session landed the audit record + docs). Nothing was rolled back.
+
+- **🔴 Headline — field-application invoices overcharged ~128× (PARKED-010, now LIVE).** A field-app chemical line billed `(rate/acre × acres) × unit_price` with the rate in **ounces** but the price per **gallon** and **no unit conversion**. A 16 oz/ac product at $32.10/gal over 100 ac billed **$51,360** instead of **$401.25** (1,600 oz = 12.5 gal × $32.10). Affected ~556/604 products (ratio varies by unit). **Nothing was mis-billed** (0 field-app invoices existed) — but the first real one would have massively overcharged.
+  - **DB half — APPLIED LIVE** (migration `20260630180000_field_app_pricing_unit_fix`, version `20260701002103`): adds a `field_app_priced_quantity(qty, rate_unit, inventory_unit, product_form)` converter and corrects **both** server functions — `save_field_app_invoice` (the invoice) and `preview_field_app_invoice_split` (the on-page customer split) — to price on the **converted** quantity, fix cost/margin the same way, and **refuse** (clear error) the ~7 products whose units genuinely don't convert rather than mis-bill them.
+  - **Frontend half — merged** (`e695875e`): the on-screen entry preview now prices in the sold unit.
+  - **Verified live 2026-07-01:** `field_app_priced_quantity(1600,'oz','gal','liquid')` → 12.5 gal; a 16 oz/ac @ $32.10/gal × 100 ac line now bills **40125 cents ($401.25)**, not $51,360. Codex reviewed the migration twice (round 1 caught cost-math + the second function + rounding, all fixed; round 2 = SHIP).
+- **8 code fixes (7 commits) — all Codex-found, Claude-verified against the live DB, Codex-reviewed SHIP:**
+  - `4c20fb8d` — job-notification emails could double-send on retry (now fail-closed when the dedupe key is missing, matching the field-app-invoice sibling).
+  - `36b9bec5` — disabled the dead prepay "Quick" / "Apply All" buttons (they called server-disabled RPCs that always errored).
+  - `2d274161` — hide the blend-ticket "Create Invoice" card unless the ticket is actually billable (`unbilled`).
+  - `832f6c8a` — AR reminder email showed `$NaN` for the outstanding total (now summed from per-invoice balances instead of a field the DB doesn't return).
+  - `5938937d` — (a) signed-money parser no longer treats a mid-string dash as a minus (`"12-34"` → rejected, not −$1,234); (b) commission-void screen now reports both the reset AND the closed-out commission counts.
+  - `1cd3c873` — guarded the chemical-rate input against NaN.
+- **Audit record preserved:** the full morning report, ledger, and parked-migration drafts live in `docs/audits/codex-driven-bug-hunt/` (commit `3dfc26e0`, landed on `main` this session — docs only, deploys nothing).
+- **5 parked migrations remain (owner decision; none urgent, none touch money — the system is operationally empty):** PARKED-004 (returns can be advanced without their RPC side-effects — insider data-integrity), PARKED-005 (AR reminders skip `overdue` invoices — one line), PARKED-006 (route inline idempotency saves through the hardened `save_idempotency` helper), PARKED-007 (inventory "planned" column double-counts planned-quote holds), PARKED-009 (PO receiving can over-count under concurrent receives — add `FOR UPDATE` + status guard). Drafts/validation for 004/005/009 are in `docs/audits/codex-driven-bug-hunt/`.
+- **Naming note:** a prior hunt already used migration names `parked_001`…`parked_010`, so this hunt's field-app fix landed as `20260630180000_field_app_pricing_unit_fix`, **not** `parked_010`. Any of the 5 above, if approved, must get fresh descriptive names (not `parked_00N`).
+
+---
+
 ## 2026-07-01 — ChemMan Gap-Closeout GO-LIVE: weather auto-fill + diluent-per-acre applied to production (`feat/chemman-gap-closeout`)
 
 The two remaining ChemMan-comparison gaps (#1 weather auto-fill, #2 diluent/carrier-water per acre — both detailed below) went **live to production** (`croprxsolutions.app` / Supabase `rhyzpcqhnizqbxphqdkr`) on 2026-07-01 after Mason's explicit go-live approval.
