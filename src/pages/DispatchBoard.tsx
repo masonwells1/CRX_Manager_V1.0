@@ -324,18 +324,18 @@ export default function DispatchBoard() {
       setCrews((crewsRes.data || []) as { id: string; name: string }[]);
       setRecipes((recipesRes.data || []) as { id: string; name: string }[]);
 
-      // Best-effort map geometry: the boundary/centroid columns power the MAP view
-      // only. If they're unavailable (e.g. a DB without the geometry columns) the
-      // map simply shows no boundaries — the list view is unaffected.
-      const fieldsRes = await supabase
-        .from('fields')
-        .select('id, field_name, boundary_geojson, centroid_lat, centroid_lng, total_acres, crop_type, customer_id, customer:customers(farm_name)')
-        .eq('is_active', true);
-      if (fieldsRes.error) {
-        Sentry.captureException(fieldsRes.error, { tags: { source: 'fetch', action: 'dispatch_map_fields' } });
+      // Best-effort map geometry. The fields table stores PostGIS geometry (boundary/
+      // centroid), NOT geojson or lat/lng columns — a direct column select 42703's
+      // ("column fields.boundary_geojson does not exist"). Pull display geojson from the
+      // canonical RPC instead. If it fails the map simply shows no boundaries — the list
+      // view is unaffected.
+      const { data: fieldsData, error: fieldsErr } = await supabase.rpc('get_fields_with_geojson');
+      if (fieldsErr) {
+        Sentry.captureException(fieldsErr, { tags: { source: 'fetch', action: 'dispatch_map_fields' } });
         setAllFields([]);
       } else {
-        setAllFields((fieldsRes.data || []) as unknown as Field[]);
+        const rows = assertRpcResult<Array<Field & { is_active?: boolean }>>(fieldsData, 'get_fields_with_geojson') || [];
+        setAllFields(rows.filter((f) => f.is_active !== false) as unknown as Field[]);
       }
     } catch (err) {
       Sentry.captureException(err);

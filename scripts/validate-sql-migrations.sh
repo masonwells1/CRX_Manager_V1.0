@@ -218,12 +218,18 @@ for file in $ALL_SQL; do
       VIOLATIONS=$((VIOLATIONS + 1))
     fi
 
-    # 4: entity_type, entity_id IN idempotency_keys context
-    #    (Exclude lines referencing activity_log, financial_audit_log, activity_feed,
-    #     notifications — those tables legitimately use entity_type/entity_id columns)
-    if echo "$CODE_ONLY" | grep -viE '(activity_log|financial_audit_log|activity_feed|notifications|operation_type)' | grep -qiE 'entity_type\s*,\s*entity_id'; then
+    # 4: entity_type/entity_id used AS idempotency_keys columns (the real bug), e.g.
+    #    INSERT INTO idempotency_keys (..., entity_type, entity_id) or a lookup that
+    #    SELECTs/filters idempotency_keys by entity_type/entity_id. Scope to lines that
+    #    actually name idempotency_keys so a DIFFERENT table's legitimate entity_type/
+    #    entity_id columns (watchdog_flags, notifications, activity_feed, financial_audit_log)
+    #    do NOT false-flag. The previous check grepped the whole file and mis-fired on any
+    #    file that both referenced idempotency_keys AND had an unrelated entity_type/entity_id
+    #    table (e.g. 20260629220000_watchdog_flags.sql — the CI red 2026-06-30..07-01).
+    if echo "$CODE_ONLY" | grep -qiE 'INTO[[:space:]]+idempotency_keys[[:space:]]*\([^)]*entity_(type|id)' \
+       || echo "$CODE_ONLY" | grep -iE 'idempotency_keys' | grep -qiE 'entity_(type|id)'; then
       echo "VIOLATION: $file"
-      echo "  Uses 'entity_type, entity_id' columns"
+      echo "  Uses 'entity_type/entity_id' as idempotency_keys columns"
       echo "  CORRECT: operation, result"
       echo ""
       VIOLATIONS=$((VIOLATIONS + 1))

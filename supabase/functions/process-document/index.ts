@@ -892,8 +892,16 @@ Deno.serve(async (req: Request) => {
         throw new Error(`pages[${i}].base64 must be a non-empty string`);
       }
       const headB64 = p.base64.slice(0, 8);
-      if (!/^(\/9j\/|iVBOR|JVBER)/.test(headB64)) {
-        throw new Error(`pages[${i}].base64 does not look like a supported image (PNG / JPEG / PDF)`);
+      // Accept every image/PDF format the frontend advertises AND actually sends. The
+      // client (documentOCR.ts isOCRSupported / imageToPage, BulkPOImport.tsx) accepts
+      // jpg/png/webp/bmp/tiff + pdf, and imageCompression returns the ORIGINAL bytes
+      // unchanged for small/already-compact files — so a WebP/BMP/TIFF reaches here in
+      // its NATIVE format, not JPEG. The old allow-list only passed JPEG/PNG/PDF, so
+      // advertised WebP/BMP/TIFF uploads 400'd (Codex bug-hunt F3). All of these are
+      // Google Vision-supported. Base64 magic-byte prefixes: JPEG \/9j\/, PNG iVBOR,
+      // PDF JVBER (%PDF), WebP UklGR (RIFF), BMP Qk (BM), TIFF SUkq (II*) / TU0A (MM*).
+      if (!/^(\/9j\/|iVBOR|JVBER|UklGR|Qk|SUkq|TU0A)/.test(headB64)) {
+        throw new Error(`pages[${i}].base64 does not look like a supported image (JPEG / PNG / WebP / BMP / TIFF / PDF)`);
       }
       const decoded = approxDecodedBytes(p.base64);
       if (decoded > MAX_DECODED_BYTES_PER_PAGE) {
