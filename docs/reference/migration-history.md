@@ -1,4 +1,4 @@
-# Migration History (573 migrations)
+# Migration History (577 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
@@ -934,5 +934,9 @@ These 10 historical migrations apply by timestamp order like all others; they si
 | 568 | 20260630173015 | **APPLIED LIVE 2026-06-30. PARKED-005 — billed-job applied-record immutability** (new trigger fn on job_applied_records + _fields/_crew; xmin same-txn + child-sum recompute exempts; 3 triggers). |
 | 569 | 20260630173022 | **APPLIED LIVE 2026-06-30. PARKED-010 — `create_inventory_hold` auth-before-cache** (auth/strict-actor/role gate moved BEFORE the idempotency lookup; signature/defaults/grants preserved). |
 | 570 | 20260630173050 | **APPLIED LIVE 2026-06-30. PARKED-006 — `unpost_invoice` voids RUP sale rows** (voided_at/by/reason cols + voided-aware dedup + get_rup_sales_register p_include_voided; financial_audit_log CHECK superset; anon EXECUTE off). |
+| 574 | 20260701200000 | **APPLIED LIVE 2026-07-01. AR reminders include overdue** (main-debug hunt PARKED-005): `get_ar_reminder_candidates` WHERE status = 'posted' -> IN ('posted','overdue'); only the status predicate changed; admin gate + search_path preserved. |
+| 575 | 20260701201000 | **APPLIED LIVE 2026-07-01. `receive_po_items` row lock + status guard** (main-debug hunt PARKED-009): FOR UPDATE OF poi closes the concurrent over-receive TOCTOU race; fail-fast reject of draft/cancelled POs; actor/role/idempotency preserved. |
+| 576 | 20260701202000 | **APPLIED LIVE 2026-07-01. Returns RPC gating** (main-debug hunt PARKED-004): transition trigger requires app.return_rpc flag or admin_override; new reject_return + create_return RPCs; approve/receive/issue_return_credit re-emitted verbatim + the flag; Returns.tsx + supabase.ts switched to the RPCs. Gate proven live (direct status UPDATE blocked). |
+| 577 | 20260701203000 | **APPLIED LIVE 2026-07-01. Inventory planned/holds no double-count** (main-debug hunt PARKED-007): `get_inventory_position` planned_quotes CTE excludes demand already covered by an active linked hold; display-only; net_position unchanged. |
 
 > PARKED-011 (process-document base64 size cap) is an edge-fn, not a migration — deployed to `process-document` v14 on 2026-06-30. The 5 HIGH migrations (parked_001/003/004/007/009) landed via the beyond-parity go-live.

@@ -64,6 +64,8 @@ export default function Returns() {
   const receiveIdem = useIdempotencyKey('receive_return', profile?.id || '');
   const creditIdem = useIdempotencyKey('issue_return_credit', profile?.id || '');
   const cancelIdem = useIdempotencyKey('cancel_return', profile?.id || '');
+  const rejectIdem = useIdempotencyKey('reject_return', profile?.id || '');
+  const createIdem = useIdempotencyKey('create_return', profile?.id || '');
   const { toast } = useToast();
   const [returns, setReturns] = useState<ReturnRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -218,47 +220,35 @@ export default function Returns() {
 
     await runCriticalAction({
       action: async () => {
-        // Use sequential RPC instead of timestamp-based number
-        const { data: rpcNum, error: rpcError } = await supabase.rpc('next_return_number');
-        if (rpcError || !rpcNum) {
-          throw new Error(rpcError?.message || 'Failed to generate return number');
-        }
-        const returnNum = assertRpcResult<string>(rpcNum, 'next_return_number');
-
-        const { data: ret, error: retError } = await supabase
-          .from('returns')
-          .insert({
-            return_number: returnNum,
+        // Atomic + idempotent creation via create_return RPC (returns_rpc_gating,
+        // PARKED-004): replaces the prior next_return_number + two direct inserts.
+        const createKey = createIdem.getKey();
+        const { data, error } = await supabase.rpc('create_return', {
+          p_return: {
             customer_id: newForm.customer_id,
             order_id: newForm.order_id || null,
             reason: newForm.reason,
             reason_notes: newForm.reason_notes || null,
             notes: newForm.notes || null,
-          })
-          .select()
-          .single();
+          },
+          p_items: newItems.map((item, idx) => ({
+            product_id: item.product_id,
+            product_name: item.product_name,
+            quantity: item.quantity,
+            unit: item.unit,
+            unit_price_cents: item.unit_price_cents,
+            condition: item.condition,
+            restock: item.restock,
+            sort_order: idx,
+            notes: item.notes || null,
+          })),
+          p_idempotency_key: createKey,
+        });
+        if (error) throw error;
+        const created = assertRpcResult<{ return_id: string; return_number: string; item_count: number }>(data, 'create_return');
+        createIdem.resetKey();
 
-        if (retError) throw retError;
-
-        const itemsPayload = newItems.map((item, idx) => ({
-          return_id: ret.id,
-          product_id: item.product_id,
-          product_name: item.product_name,
-          quantity: item.quantity,
-          unit: item.unit,
-          unit_price_cents: item.unit_price_cents,
-          extended_cents: Math.round(item.quantity * item.unit_price_cents),
-          condition: item.condition,
-          restock: item.restock,
-          sort_order: idx,
-          notes: item.notes || null,
-        }));
-
-        const returnItemsResult = await supabase.from('return_items').insert(itemsPayload).select();
-        if (returnItemsResult.error) throw returnItemsResult.error;
-        checkMutationResult(returnItemsResult, 'Insert return items');
-
-        await logActivity({ event: 'return_requested', description: `Return ${returnNum} requested for ${newItems.length} product(s)`, performedBy: profile.id, entityType: 'return', entityId: ret.id, customerId: newForm.customer_id });
+        await logActivity({ event: 'return_requested', description: `Return ${created.return_number} requested for ${newItems.length} product(s)`, performedBy: profile.id, entityType: 'return', entityId: created.return_id, customerId: newForm.customer_id });
       },
       toast,
       setLoading: setCreating,
@@ -322,12 +312,15 @@ export default function Returns() {
     }
     await runCriticalAction({
       action: async () => {
-        const result = await supabase
-          .from('returns')
-          .update({ status: 'rejected' })
-          .eq('id', activeReturn.id)
-          .select();
-        checkMutationResult(result, 'Reject return');
+        const rejectKey = rejectIdem.getKey();
+        const { data, error } = await supabase.rpc('reject_return', {
+          p_return_id: activeReturn.id,
+          p_rejected_by: profile.id,
+          p_idempotency_key: rejectKey,
+        });
+        if (error) throw error;
+        assertRpcResult(data, 'reject_return');
+        rejectIdem.resetKey();
 
         await logActivity({ event: 'return_rejected', description: `Return ${activeReturn.return_number} rejected`, performedBy: profile.id, entityType: 'return', entityId: activeReturn.id });
       },

@@ -8092,6 +8092,22 @@ export type Database = {
         }
         Returns: Json
       }
+      create_return: {
+        Args: {
+          p_idempotency_key?: string
+          p_items?: Json
+          p_return: Json
+        }
+        Returns: Json
+      }
+      reject_return: {
+        Args: {
+          p_idempotency_key?: string
+          p_rejected_by?: string
+          p_return_id: string
+        }
+        Returns: Json
+      }
       check_customer_credit_limit: {
         Args: { p_customer_id: string }
         Returns: Json

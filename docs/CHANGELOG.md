@@ -4,6 +4,18 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-01 — Parked-Migration Batch GO-LIVE: 4 codex-driven-hunt hardening migrations applied to production (`main`)
+
+The 4 non-urgent hardening migrations parked by the codex-driven bug hunt (owner-greenlit 2026-07-01) went **live to production** after the full gate: `rls-security-reviewer` + `migration-drift-reviewer` per migration (PARKED-004 also cleared `compliance-reviewer`), rolled-back `plpgsql`/compile smoke tests, live byte-verification of every re-emitted function, and post-apply live verification. None touched real money (the DB is operationally near-empty).
+
+- **`20260701200000` — AR reminders include overdue invoices (PARKED-005):** `get_ar_reminder_candidates` now selects `status IN ('posted','overdue')` (was `= 'posted'`), so the most-delinquent auto-marked-overdue invoices are no longer excluded from reminder emails. One-predicate change; admin gate + search_path preserved.
+- **`20260701201000` — `receive_po_items` row lock + status guard (PARKED-009):** added `FOR UPDATE OF poi` so concurrent receives of the same PO line serialize (closes an over-receive / double-increment TOCTOU race), plus a fail-fast reject of receives against draft/cancelled POs. submitted/partially_received/fully_received stay receivable (the `p_allow_over_receive` correction path is preserved).
+- **`20260701202000` — Returns RPC gating (PARKED-004):** the returns status-transition trigger now requires the `app.return_rpc` session flag (set only by the return RPCs) or `admin_override`, so a direct `UPDATE returns SET status` that skips the RPC side-effects (inventory restock, credit memo) is rejected with `RETURN_STATUS_VIA_RPC_ONLY`. Adds `reject_return` + `create_return` canonical RPCs; re-emits `approve_return`/`receive_return`/`issue_return_credit` verbatim + the flag (`cancel_return`/`unapply_credit_memo` unchanged — they use `admin_override`). **Returns.tsx** switched `handleReject`→`reject_return` and `handleCreate`→`create_return`; the two new RPCs added to `src/types/supabase.ts`. Gate proven live: a direct status UPDATE is now blocked (rolled back, the 1 live requested return untouched).
+- **`20260701203000` — Inventory planned/holds no double-count (PARKED-007):** `get_inventory_position` `planned_qty` now excludes planned-quote demand already covered by an active linked hold (the 2026-06-13 sync creates one per planned-quote line), so screens adding `holds_qty + planned_qty` no longer double-count. Display-only; `net_position` unchanged. Verified live (a synced product's `planned_qty` went 730→0, holds unchanged at 730).
+- **Deferred:** PARKED-006 (route ~6 functions' inline idempotency saves through the hardened `save_idempotency` helper) — cosmetic/defense-in-depth (needs a one-in-a-billion cross-op UUID collision to ever matter); not done because it means 6 verbatim function re-emits for zero functional change. Awaiting owner call.
+
+---
+
 ## 2026-07-01 — Codex-Driven Bug-Hunt GO-LIVE: 8 code fixes + field-app ~128× billing fix applied to production (`claude/main-debug-hunt`)
 
 An 8-cycle **Codex-driven bug hunt** (Codex hunts → Claude verifies each candidate against the **live DB** → auto-fix if green / park if it needs a migration) swept the whole app. 26 Codex candidates → **15 confirmed, 11 refuted** (mostly the "append-only trap": Codex read an old migration file, not the live function). **8 code fixes (7 commits) + the field-app billing fix are now on production `main`** (the 7 fix commits merged earlier; this session landed the audit record + docs). Nothing was rolled back.
