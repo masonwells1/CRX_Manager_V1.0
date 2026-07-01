@@ -64,4 +64,20 @@ describe('parseDollarsToCentsSigned (negative-capable variant)', () => {
     expect(parseDollarsToCentsSigned('1e5')).toBe(0));
   it('rejects multi-dot input', () =>
     expect(parseDollarsToCentsSigned('1.2.3')).toBe(0));
+
+  // codex-driven hunt cycle 2: a minus is only the LEADING sign. A dash anywhere
+  // else is malformed — previously "12-34" stripped the dash and parsed as a
+  // large negative (-123400), corrupting signed vendor-bill/discount adjustments.
+  describe('rejects non-leading dash (malformed signed input)', () => {
+    it('rejects an embedded dash "12-34" (was -123400)', () =>
+      expect(parseDollarsToCentsSigned('12-34')).toBe(0));
+    it('rejects a trailing dash "50-"', () =>
+      expect(parseDollarsToCentsSigned('50-')).toBe(0));
+    it('rejects a double leading dash "--50"', () =>
+      expect(parseDollarsToCentsSigned('--50')).toBe(0));
+    it('rejects an embedded dash with cents "5-0.50"', () =>
+      expect(parseDollarsToCentsSigned('5-0.50')).toBe(0));
+    it('still accepts a valid leading-minus value "-1234.56"', () =>
+      expect(parseDollarsToCentsSigned('-1234.56')).toBe(-123456));
+  });
 });

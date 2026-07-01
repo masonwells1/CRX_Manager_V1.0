@@ -478,6 +478,15 @@ export default function JobDetail() {
       let emailErr = 0;
       for (const r of result.recipients) {
         if (!r.has_email || !r.email) continue;
+        if (!r.email_idempotency_key) {
+          // codex-driven hunt cycle 7 — fail-closed (matches FieldApplicationInvoice):
+          // a recipient WITH an email must carry a deterministic edge idempotency key.
+          // Without one, SKIP (logged 'failed') rather than send with no key — a retry
+          // would otherwise double-send this customer's pre-application notice.
+          emailErr += 1;
+          Sentry.captureMessage('job pre-notification recipient missing email_idempotency_key', { level: 'warning', extra: { jobId: id, customerId: r.customer_id } });
+          continue;
+        }
         try {
           const rendered = renderPreNotification(template, {
             customer: r.farm_name ?? primaryFarm,
@@ -493,7 +502,8 @@ export default function JobDetail() {
           });
           // Deterministic edge idempotency key from the RPC (NOT Date.now()): a
           // retry reuses it so the edge fn de-dupes the same recipient's send.
-          if (r.email_idempotency_key) payload.idempotency_key = r.email_idempotency_key;
+          // Guaranteed present by the fail-closed guard above.
+          payload.idempotency_key = r.email_idempotency_key;
           await sendEmail(payload);
           // Flip THIS row failed -> sent now that the email actually went out, and
           // store the EXACT per-recipient text that was emailed so the audit row
@@ -642,6 +652,15 @@ export default function JobDetail() {
       let emailErr = 0;
       for (const r of result.recipients) {
         if (!r.has_email || !r.email) continue;
+        if (!r.email_idempotency_key) {
+          // codex-driven hunt cycle 7 — fail-closed (matches FieldApplicationInvoice):
+          // a recipient WITH an email must carry a deterministic edge idempotency key.
+          // Without one, SKIP (logged 'failed') rather than send with no key — a retry
+          // would otherwise double-send this customer's post-application notice.
+          emailErr += 1;
+          Sentry.captureMessage('job post-notification recipient missing email_idempotency_key', { level: 'warning', extra: { jobId: id, customerId: r.customer_id } });
+          continue;
+        }
         try {
           const rendered = renderPostNotification(template, {
             customer: r.farm_name ?? primaryFarm,
@@ -657,7 +676,8 @@ export default function JobDetail() {
           });
           // Deterministic edge idempotency key from the RPC (NOT Date.now()): a retry
           // reuses it so the edge fn de-dupes the same recipient's send.
-          if (r.email_idempotency_key) payload.idempotency_key = r.email_idempotency_key;
+          // Guaranteed present by the fail-closed guard above.
+          payload.idempotency_key = r.email_idempotency_key;
           await sendEmail(payload);
           // Flip THIS row failed -> sent now that the email actually went out, and
           // store the EXACT per-recipient text emailed. confirm_job_notification_sent

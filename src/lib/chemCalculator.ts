@@ -185,6 +185,58 @@ export function toGallonOrLbEquivalent(
   return null;
 }
 
+// ── Field-app pricing unit conversion (PARKED-010 MONEY fix) ─────────────────
+//
+// THE BUG this fixes (preview side). The field-app chemical line is billed as
+// (rate × acres) × unit_price, where the applied amount (rate × acres) is in the
+// RATE unit (e.g. oz) but unit_price is per the product's SOLD/inventory unit
+// (e.g. $/gal). Without converting between them the line over-bills by the unit
+// ratio (oz→gal = 128×). `fieldAppPricedQuantity` converts the applied amount into
+// the sold unit so it can be priced at the per-sold-unit price. It MIRRORS the SQL
+// fn `field_app_priced_quantity` used by save_field_app_invoice EXACTLY (same unit
+// sets, identity when the units already match, null when they don't convert) so the
+// on-screen preview equals the saved/invoiced amount.
+
+/** Unit size in the form's base unit (liquid base = fluid ounce; dry base = ounce). */
+const LIQUID_UNIT_SIZE: Record<string, number> = {
+  oz: 1, 'fl oz': 1, floz: 1, 'fluid ounce': 1,
+  pt: 16, pint: 16, pints: 16,
+  qt: 32, quart: 32, quarts: 32,
+  gl: 128, gal: 128, gallon: 128, gallons: 128,
+};
+const DRY_UNIT_SIZE: Record<string, number> = {
+  oz: 1, 'dry oz': 1, ounce: 1, ounces: 1,
+  lb: 16, lbs: 16, pound: 16, pounds: 16,
+  ton: 32000, tons: 32000,
+};
+
+/**
+ * Convert an applied quantity from its RATE unit into the product's SOLD (inventory)
+ * unit, so it can be priced at the per-inventory-unit price. Mirrors the SQL fn
+ * `field_app_priced_quantity` so the field-app preview equals the invoiced amount.
+ *  • same unit (case-insensitive) → identity (no conversion; never breaks an already-correct line).
+ *  • both units known in the product's form → qty × sizeOf(rateUnit) / sizeOf(invUnit).
+ *  • not convertible (unknown unit, or different forms) → null (caller treats as unpriceable).
+ * A null/unknown product_form is treated as liquid, matching the server.
+ */
+export function fieldAppPricedQuantity(
+  appliedQty: number,
+  rateUnit: string | null | undefined,
+  inventoryUnit: string | null | undefined,
+  productForm?: 'liquid' | 'dry' | null,
+): number | null {
+  if (!Number.isFinite(appliedQty)) return null;
+  const r = (rateUnit || '').trim().toLowerCase();
+  const i = (inventoryUnit || '').trim().toLowerCase();
+  if (r === i) return appliedQty;            // same unit: no conversion needed
+  if (r === '' || i === '') return null;
+  const sizes = productForm === 'dry' ? DRY_UNIT_SIZE : LIQUID_UNIT_SIZE;
+  const sr = sizes[r];
+  const si = sizes[i];
+  if (sr == null || si == null || si === 0) return null;  // not convertible
+  return (appliedQty * sr) / si;
+}
+
 // ── Product-autofill unit reconciliation (P1 MONEY fix) ──────────────────────
 //
 // THE BUG this fixes. The job chem grid carries TWO units:

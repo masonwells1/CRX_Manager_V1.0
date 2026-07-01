@@ -524,6 +524,12 @@ export default function PrepaymentManager() {
                 handleApply(r);
               }}
               loading={applying === r.id}
+              // codex-driven hunt cycle 5: apply_remaining_prepayments is hard-disabled
+              // server-side (RAISE guard) pending the reserved-pool redesign, so this
+              // one-click apply always failed. Disable it and route users to Allocate
+              // (the working per-bucket flow) until the redesign lands.
+              disabled
+              title="One-click apply is temporarily disabled pending the reserved-pool redesign — use Allocate to apply this customer's credits per bucket."
               showChevron={false}
             >
               Quick
@@ -558,6 +564,12 @@ export default function PrepaymentManager() {
               icon={<Zap className="w-4 h-4" />}
               onClick={() => setShowBatchConfirm(true)}
               loading={batchApplying}
+              // codex-driven hunt cycle 5: batch_apply_all_prepayments is hard-disabled
+              // server-side (RAISE guard) pending the reserved-pool redesign, so "Apply
+              // All" always failed. Disable until the redesign lands; use Allocate per
+              // customer in the meantime.
+              disabled
+              title="Bulk apply is temporarily disabled pending the reserved-pool redesign — use Allocate to apply each customer's credits per bucket."
             >
               Apply All
             </Button>
