@@ -6,7 +6,7 @@ import { Sentry } from '../../lib/sentry';
 import type { Product } from '../../types';
 import { formatCents as fmt } from '../../lib/money';
 import { parseDollarsToCents } from '../../lib/parseCents';
-import { toGallonOrLbEquivalent } from '../../lib/chemCalculator';
+import { toGallonOrLbEquivalent, fieldAppPricedQuantity } from '../../lib/chemCalculator';
 import {
   compareToMaxRate,
   phiHarvestWarning,
@@ -216,7 +216,15 @@ export default function FieldAppChemicalEntry({
         if (updated.rate_per_acre && totalAppliedAcres > 0) {
           updated.quantity = Number((updated.rate_per_acre * totalAppliedAcres).toFixed(2));
         }
-        updated.extended_cents = Math.round(updated.quantity * updated.unit_price_cents);
+        // codex-driven hunt (PARKED-010): bill the applied amount in the product's SOLD unit.
+        // quantity is in the RATE unit (e.g. oz) but unit_price_cents is per the inventory unit
+        // (e.g. $/gal); convert before multiplying so the preview matches the server
+        // (save_field_app_invoice) instead of over-stating by the unit ratio (~128x for oz→gal).
+        // No inventory unit (manual line) → identity. Genuinely unconvertible → 0 (server blocks save).
+        const pricedQty = fieldAppPricedQuantity(
+          updated.quantity, updated.rate_unit, updated.unit || updated.rate_unit, updated.product_form,
+        );
+        updated.extended_cents = pricedQty == null ? 0 : Math.round(pricedQty * (updated.unit_price_cents || 0));
         return updated;
       })
     );
@@ -426,7 +434,14 @@ export default function FieldAppChemicalEntry({
                     step="0.01"
                     disabled={readOnly}
                     value={line.rate_per_acre ?? ''}
-                    onChange={(e) => updateLine(line.id, { rate_per_acre: e.target.value ? Number(e.target.value) : null })}
+                    onChange={(e) => {
+                      // codex-driven hunt cycle 8: a type=number input still accepts
+                      // transient strings like "e", "-", "." -> Number() = NaN. Guard
+                      // with Number.isFinite so NaN never enters line state (it survives
+                      // `?? ''`, glitches the field, and silently nulls the rate on save).
+                      const n = Number(e.target.value);
+                      updateLine(line.id, { rate_per_acre: e.target.value !== '' && Number.isFinite(n) ? n : null });
+                    }}
                     className="w-full px-2 py-1 border rounded text-right text-sm tabular-nums disabled:bg-gray-100 disabled:text-gray-500"
                   />
                 </td>

@@ -330,17 +330,26 @@ export default function CommissionPayments() {
         p_idempotency_key: voidKey,
       });
       if (error) throw error;
-      const result = assertRpcResult<{ commissions_reset: number }>(voidResult, 'void_commission_payment');
+      const result = assertRpcResult<{ commissions_reset: number; commissions_cancelled_dead_order?: number }>(voidResult, 'void_commission_payment');
       voidPaymentIdem.resetKey();
+      // codex-driven hunt cycle 2: void_commission_payment resets live-order
+      // commissions to 'pending' (re-payable) but CLOSES OUT (cancels, amount→0)
+      // any commission whose order was since cancelled/voided. Report both counts
+      // so the admin isn't told a closed-out commission is repayable.
+      const resetCount = result.commissions_reset || 0;
+      const cancelledCount = result.commissions_cancelled_dead_order || 0;
+      const outcome = cancelledCount > 0
+        ? `${resetCount} commission(s) reset to pending, ${cancelledCount} closed out (order cancelled/voided)`
+        : `${resetCount} commission(s) reset to pending`;
       // Audit #11: surface void in activity feed.
       await logActivity({
         event: 'commission_payment_voided',
-        description: `Commission payment ${voidTarget.payment_number} voided (${result.commissions_reset || 0} commission(s) reset to pending). Reason: ${voidReason.trim()}`,
+        description: `Commission payment ${voidTarget.payment_number} voided (${outcome}). Reason: ${voidReason.trim()}`,
         performedBy: profile.id,
         entityType: 'commission_payment',
         entityId: voidTarget.id,
       });
-      toast('success', `Payment ${voidTarget.payment_number} voided. ${result.commissions_reset || 0} commission(s) reset to pending.`);
+      toast('success', `Payment ${voidTarget.payment_number} voided. ${outcome}.`);
       setShowVoid(false);
       setVoidReason('');
       setVoidTarget(null);
@@ -566,7 +575,8 @@ export default function CommissionPayments() {
             <RotateCcw className="w-5 h-5 text-red-600 flex-shrink-0" />
             <p className="text-sm text-red-800">
               You are about to void payment <strong>{voidTarget?.payment_number}</strong> ({fmt(voidTarget?.total_amount || 0)}).
-              All {voidTarget?.item_count} linked commission(s) will be reset to <strong>pending</strong> and can be re-paid later.
+              Its {voidTarget?.item_count} linked commission(s) will be reset to <strong>pending</strong> and can be re-paid later &mdash;
+              except any whose order was since cancelled or voided, which will be <strong>closed out</strong> (not re-payable).
             </p>
           </div>
           <div>

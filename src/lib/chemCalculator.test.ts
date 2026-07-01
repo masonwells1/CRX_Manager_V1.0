@@ -5,6 +5,7 @@ import {
   applyChemEdit,
   recomputeChemRowForAcres,
   toGallonOrLbEquivalent,
+  fieldAppPricedQuantity,
   baseUnitOfRate,
   reconcileChemAutofillUnits,
   type ChemCalcRow,
@@ -330,5 +331,37 @@ describe('chemCalculator — reconcileChemAutofillUnits (P1 money fix)', () => {
     // no rate unit → keep stock.
     const r3 = reconcileChemAutofillUnits('GAL', '', 1000, 2000, 'liquid');
     expect(r3).toEqual({ unit: 'GAL', costPerUnitCents: 1000, pricePerUnitCents: 2000 });
+  });
+});
+
+describe('chemCalculator — fieldAppPricedQuantity (PARKED-010 field-app billing unit fix)', () => {
+  it('converts oz → gallons for a liquid product (÷128)', () =>
+    expect(fieldAppPricedQuantity(3200, 'oz', 'Gal', 'liquid')).toBe(25));
+  it('converts qt → gallons for a liquid product (÷4)', () =>
+    expect(fieldAppPricedQuantity(100, 'qt', 'Gal', 'liquid')).toBe(25));
+  it('converts oz → quarts for a liquid product (÷32)', () =>
+    expect(fieldAppPricedQuantity(100, 'oz', 'Qt', 'liquid')).toBe(3.125));
+  it('converts dry oz → pounds for a dry product (÷16)', () =>
+    expect(fieldAppPricedQuantity(3200, 'Dry oz', 'Lb', 'dry')).toBe(200));
+  it('is identity when the rate unit already equals the sold unit (never breaks a correct line)', () => {
+    expect(fieldAppPricedQuantity(100, 'oz', 'Oz', 'liquid')).toBe(100);
+    expect(fieldAppPricedQuantity(600, 'MG', 'MG', 'dry')).toBe(600);
+  });
+  it('is case-insensitive on the unit text', () =>
+    expect(fieldAppPricedQuantity(128, 'OZ', 'gAlLoN', 'liquid')).toBe(1));
+  it('returns null when the units genuinely do not convert (caller must block, not mis-bill)', () => {
+    expect(fieldAppPricedQuantity(195, 'oz', 'Unit', null)).toBeNull();
+    expect(fieldAppPricedQuantity(50, 'oz', 'Ea', null)).toBeNull();
+  });
+  it('returns null for a non-finite quantity', () =>
+    expect(fieldAppPricedQuantity(NaN, 'oz', 'Gal', 'liquid')).toBeNull());
+
+  it('pricing the converted qty fixes the ~128× overcharge (16 oz/ac × 100 ac @ $32.10/gal)', () => {
+    const appliedOz = 16 * 100;                 // 1,600 oz applied
+    const pricePerGalCents = 3210;              // $32.10 / gal
+    const pricedQty = fieldAppPricedQuantity(appliedOz, 'oz', 'Gal', 'liquid');
+    expect(pricedQty).toBe(12.5);               // 1,600 oz = 12.5 gal
+    const extendedCents = Math.round((pricedQty as number) * pricePerGalCents);
+    expect(extendedCents).toBe(40125);          // $401.25 (was 1600 × 3210 = $51,360)
   });
 });

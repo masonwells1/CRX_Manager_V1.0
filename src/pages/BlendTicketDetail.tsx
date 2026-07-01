@@ -1439,7 +1439,12 @@ export function BlendTicketDetail() {
       </Card>
 
       {/* Create Invoice directly from Blend Ticket (Pillar 1) */}
-      {ticket.review_status === 'approved' && ticket.payment_status !== 'billed' && (
+      {/* codex-driven hunt cycle 4: gate on payment_status === 'unbilled' to match the
+          RPC's actual guard (create_invoice_from_blend_ticket rejects anything not
+          'unbilled'). The old `!== 'billed'` test also showed the card for prepaid /
+          no_charge tickets, giving a Create Invoice button that always errored.
+          Re-bill-after-void still works — the sync trigger resets billed -> unbilled. */}
+      {ticket.review_status === 'approved' && ticket.payment_status === 'unbilled' && (
         <Card className="p-6 border-crx-green/30 bg-crx-green-light/20">
           <div className="flex items-center justify-between">
             <div>

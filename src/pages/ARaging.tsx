@@ -475,7 +475,10 @@ export default function ARaging() {
           customer_id: string;
           farm_name: string;
           email: string;
-          total_balance_cents: number;
+          // get_ar_reminder_candidates returns total_balance in DOLLARS (SUM(...)/100.0),
+          // NOT a *_cents value. The UI sums the per-invoice balance_cents below for a
+          // cents-consistent total instead of reading this field directly.
+          total_balance: number;
           max_days_past_due: number;
           invoices: ARReminderInvoice[];
         };
@@ -515,6 +518,13 @@ export default function ARaging() {
             </tr>`)
             .join('');
 
+          // codex-driven hunt cycle 3: the RPC returns total_balance in dollars, but
+          // the email rendered fmtCents(custTotalCents) — a field that does
+          // not exist — so the outstanding total showed as $NaN. Sum the per-invoice
+          // balance_cents (all > 0; the RPC filters balance_cents > 0) for a correct,
+          // cents-consistent total.
+          const custTotalCents = cust.invoices.reduce((sum, inv) => sum + inv.balance_cents, 0);
+
           const urgencyColor = reminderLevel >= 90 ? '#dc2626' : reminderLevel >= 60 ? '#d97706' : '#2563eb';
           const urgencyLabel = reminderLevel >= 90 ? 'URGENT' : reminderLevel >= 60 ? 'Past Due' : 'Reminder';
 
@@ -525,7 +535,7 @@ export default function ARaging() {
             </p>
             <p style="color:#475569;font-size:14px;line-height:1.6;">
               Our records show an outstanding balance of
-              <strong style="color:${urgencyColor};">${fmtCents(cust.total_balance_cents)}</strong>
+              <strong style="color:${urgencyColor};">${fmtCents(custTotalCents)}</strong>
               on your account. Please see the details below:
             </p>
             <table style="width:100%;border-collapse:collapse;margin:16px 0;">
@@ -537,7 +547,7 @@ export default function ARaging() {
               ${invoiceRows}
               <tr style="background:#f8fafc;">
                 <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;font-weight:700;">Total</td>
-                <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;font-weight:700;text-align:right;color:${urgencyColor};">${fmtCents(cust.total_balance_cents)}</td>
+                <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;font-weight:700;text-align:right;color:${urgencyColor};">${fmtCents(custTotalCents)}</td>
                 <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;"></td>
               </tr>
             </table>
