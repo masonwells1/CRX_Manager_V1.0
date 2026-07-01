@@ -1,7 +1,7 @@
 # ChemMan Gap-Closeout Loop — LEDGER
 
-**State: ✅ BUILD COMPLETE — both sections BUILT + verified. AWAITING Mason's PRODUCTION GATE (HARD STOP).**
-Branch `feat/chemman-gap-closeout` (based on `feat/fieldapp-beyond-parity`), tip `141952c2`. Worktree `C:\CRX_GapLoop`. Nothing pushed/merged/applied-to-prod. This file is the **source of truth for resume** (regenerated from `PROGRESS.json`).
+**State: 🚀 SHIPPED LIVE 2026-07-01 (Mason approved go-live).**
+Both migrations APPLIED TO PROD in order (weather `20260630180000` → diluent `20260630190000`) via apply-guard proof + rls/drift reviewers clean; prod-verified (single 22-arg overload, nullable cols, no new CHECK, anon revoked). Code merged to `main` @`17b4445e` + Vercel deployed; PROVEN live by grepping the deployed field-app chunk on croprxsolutions.app (`Diluent / Carrier Water` + `Get Weather` + `modeled, not measured`). Follow-up (non-blocking): regen `.claude/schema-registry.json` for the 14 new `invoices` columns. This file is the **source of truth for resume**.
 
 ## Scope (bounded — do NOT expand)
 The **two** remaining ChemMan-gap items on the field-application invoice. Everything else from the ChemMan comparison is **already built** on this branch — confirm before touching, do not rebuild.

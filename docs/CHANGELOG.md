@@ -4,6 +4,17 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-01 — ChemMan Gap-Closeout GO-LIVE: weather auto-fill + diluent-per-acre applied to production (`feat/chemman-gap-closeout`)
+
+The two remaining ChemMan-comparison gaps (#1 weather auto-fill, #2 diluent/carrier-water per acre — both detailed below) went **live to production** (`croprxsolutions.app` / Supabase `rhyzpcqhnizqbxphqdkr`) on 2026-07-01 after Mason's explicit go-live approval.
+
+- **Both migrations applied to prod in order** via the apply-guard proof + `rls-security-reviewer` + `migration-drift-reviewer` (both CLEAN each): `20260630180000_field_app_invoice_weather_capture` (invoices +13 nullable weather cols; `update_field_app_applied_info` 6→20 arg) then `20260630190000_field_app_invoice_diluent_per_acre` (invoices +`diluent_rate_gpa`; RPC 20→22 arg). **Prod-verified**: single overload each, all new cols nullable, **no new CHECK** (invoices still 6), `anon` execute revoked, no generated column. Security advisor clean (only the pre-existing, accepted `profile_public_view` ERROR). Live prod `update_field_app_applied_info` body was confirmed byte-identical to the migration's clone base before applying.
+- **Code:** `origin/main` merged into the branch (2 doc conflicts resolved → 572 migrations on disk), then `main` fast-forwarded to `17b4445e` and pushed (pre-push typecheck+build green); Vercel deployed. **Proven live** by fetching the deployed `FieldApplicationInvoice` chunk on croprxsolutions.app and grepping the feature text (`Diluent / Carrier Water`, `Get Weather`, `modeled, not measured`).
+- **Defaults:** the diluent rate + total print on the **customer-facing** invoice PDF (both standard + legacy layouts), matching ChemMan — Mason's chosen default; reversible to internal-only later with no data change. Weather stays modeled-not-measured (disclaimer shown).
+- **Follow-up (non-blocking):** regenerate `.claude/schema-registry.json` to include the 14 new `invoices` columns (drift-reviewer recommendation; low risk — additive nullable, no enum/generated/table).
+
+---
+
 ## 2026-06-30 — ChemMan Gap-Closeout #1: Weather auto-fill on the field-application invoice (`feat/chemman-gap-closeout`, LOCAL only)
 
 One of the two remaining ChemMan-comparison gaps. The field-app invoice's Applied Info tab gains one-tap **Get Weather** capture for START and END conditions (temperature °F, wind speed mph, wind direction, humidity %, plus a per-set clock time), persisted to structured columns alongside the legacy free-text fields.
