@@ -112,7 +112,7 @@ export async function sendDeliveryCompletionEmail(params: DeliveryCompletionEmai
       customer_id: customerId,
       resource_type: 'delivery',
       resource_id: deliveryId,
-      idempotency_key: `delivery-completed-${deliveryId}-${Date.now()}`,
+      idempotency_key: `delivery-completed-${deliveryId}`,
     });
   } catch (emailErr) {
     Sentry.captureException(emailErr instanceof Error ? emailErr : new Error(String(emailErr)), {

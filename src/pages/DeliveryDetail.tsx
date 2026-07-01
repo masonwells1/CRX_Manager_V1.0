@@ -956,7 +956,7 @@ export default function DeliveryDetail() {
             customer_id: delivery.customer_id,
             resource_type: 'delivery',
             resource_id: delivery.id,
-            idempotency_key: `delivery-completed-${delivery.id}-${Date.now()}`,
+            idempotency_key: `delivery-completed-${delivery.id}`,
           });
         } catch (emailErr) {
           Sentry.captureException(emailErr instanceof Error ? emailErr : new Error(String(emailErr)), { level: 'warning', extra: { context: 'Delivery completion email failed — delivery already succeeded' } });
