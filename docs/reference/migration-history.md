@@ -1,4 +1,4 @@
-# Migration History (577 migrations)
+# Migration History (578 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
@@ -938,5 +938,6 @@ These 10 historical migrations apply by timestamp order like all others; they si
 | 575 | 20260701201000 | **APPLIED LIVE 2026-07-01. `receive_po_items` row lock + status guard** (main-debug hunt PARKED-009): FOR UPDATE OF poi closes the concurrent over-receive TOCTOU race; fail-fast reject of draft/cancelled POs; actor/role/idempotency preserved. |
 | 576 | 20260701202000 | **APPLIED LIVE 2026-07-01. Returns RPC gating** (main-debug hunt PARKED-004): transition trigger requires app.return_rpc flag or admin_override; new reject_return + create_return RPCs; approve/receive/issue_return_credit re-emitted verbatim + the flag; Returns.tsx + supabase.ts switched to the RPCs. Gate proven live (direct status UPDATE blocked). |
 | 577 | 20260701203000 | **APPLIED LIVE 2026-07-01. Inventory planned/holds no double-count** (main-debug hunt PARKED-007): `get_inventory_position` planned_quotes CTE excludes demand already covered by an active linked hold; display-only; net_position unchanged. |
+| 578 | 20260701204000 | **APPLIED LIVE 2026-07-01. Revoke anon EXECUTE on new returns RPCs**: reject_return + create_return were created with the default PUBLIC grant; REVOKE FROM PUBLIC,anon + GRANT authenticated to match sibling return RPCs (both already self-gate on auth.uid()). Caught by the db-invariant-sweep anon-exec-secdef predicate. |
 
 > PARKED-011 (process-document base64 size cap) is an edge-fn, not a migration — deployed to `process-document` v14 on 2026-06-30. The 5 HIGH migrations (parked_001/003/004/007/009) landed via the beyond-parity go-live.
