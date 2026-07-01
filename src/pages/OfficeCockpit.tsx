@@ -102,6 +102,17 @@ interface OverdueARRow {
   customer_name: string;
 }
 
+interface ShortfallRow {
+  product_id: string;
+  product_name: string;
+  inventory_unit: string | null;
+  needed_qty: number;
+  available_free: number;
+  shortfall_qty: number;
+  job_count: number;
+  job_numbers: string[];
+}
+
 interface CockpitData {
   unbilledJobs: UnbilledJobRow[];
   postableInvoices: PostableInvoiceRow[];
@@ -109,6 +120,11 @@ interface CockpitData {
   upcomingJobs: UpcomingJobRow[];
   expiringLicenses: ExpiringLicenseRow[];
   overdueAR: OverdueARRow[];
+  // (g) Products short for upcoming (next 7 days) scheduled jobs vs today's free stock.
+  shortfalls: ShortfallRow[];
+  // False when the shortfall RPC failed/threw — the tile then shows 'unavailable', not
+  // a false 'all clear'.
+  shortfallsLoadOk: boolean;
   // True only when get_watchdog_flags loaded cleanly. When false we CANNOT tell which
   // invoices are flagged, so bulk-posting is disabled (fail-safe — never post on unknown).
   watchdogLoadOk: boolean;
@@ -223,6 +239,8 @@ export default function OfficeCockpit() {
     upcomingJobs: [],
     expiringLicenses: [],
     overdueAR: [],
+    shortfalls: [],
+    shortfallsLoadOk: false,
     watchdogLoadOk: false,
   });
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
@@ -250,6 +268,13 @@ export default function OfficeCockpit() {
       p_invoice_id: null,
       p_flag_type: null,
       p_include_dismissed: false,
+    });
+
+    // (g) Inventory shortfalls — products short for the next 7 days of scheduled jobs
+    // vs today's free stock (available − prebooked − active holds). Read-only RPC pulled
+    // out of Promise.all so the assertRpcCoverage scanner can detect the capture.
+    const shortfallsRes = await supabaseUntyped.rpc('get_job_inventory_shortfalls', {
+      p_days_ahead: 7,
     });
 
     const [
@@ -319,6 +344,7 @@ export default function OfficeCockpit() {
       unbilledJobsRes.error,
       postableInvRes.error,
       watchdogRes.error,
+      shortfallsRes.error,
       upcomingJobsRes.error,
       expiringLicRes.error,
       overdueARRes.error,
@@ -387,7 +413,18 @@ export default function OfficeCockpit() {
       customer_name: r.customer?.farm_name ?? 'Unknown',
     }));
 
-    setData({ unbilledJobs, postableInvoices, watchdogFlags, upcomingJobs, expiringLicenses, overdueAR, watchdogLoadOk });
+    let shortfalls: ShortfallRow[] = [];
+    let shortfallsLoadOk = false;
+    if (!shortfallsRes.error && shortfallsRes.data) {
+      try {
+        shortfalls = assertRpcResult<ShortfallRow[]>(shortfallsRes.data, 'get_job_inventory_shortfalls');
+        shortfallsLoadOk = true;
+      } catch (e) {
+        Sentry.captureException(e, { tags: { page: 'office-cockpit', tile: 'shortfalls' } });
+      }
+    }
+
+    setData({ unbilledJobs, postableInvoices, watchdogFlags, upcomingJobs, expiringLicenses, overdueAR, shortfalls, shortfallsLoadOk, watchdogLoadOk });
     setLastRefreshed(new Date());
     setLoading(false);
   }, [toast]);
@@ -401,7 +438,8 @@ export default function OfficeCockpit() {
     data.postableInvoices.length +
     data.watchdogFlags.length +
     data.expiringLicenses.length +
-    data.overdueAR.length;
+    data.overdueAR.length +
+    data.shortfalls.length;
 
   // §4 Post-all-clean gating. A draft is "clean" (safe to auto-post in bulk) only when:
   //   (a) it passes validation — pricing is NOT pending (the same gate post_invoice_group
@@ -903,18 +941,52 @@ export default function OfficeCockpit() {
           )}
         </Card>
 
-        {/* (g) Inventory shortfalls — deferred follow-on tile */}
-        <Card className="border-dashed border-gray-300 bg-gray-50">
-          <div className="flex items-center gap-2 mb-2">
-            <PackageX className="w-5 h-5 text-gray-400" />
-            <h2 className="font-semibold text-gray-400">Inventory Shortfalls</h2>
-            <Badge variant="default" size="sm">Coming</Badge>
-          </div>
-          <p className="text-sm text-gray-400">
-            Will show products short for upcoming jobs. Deferred: requires joining
-            job_chemicals against live inventory per job &mdash; anti-N+1 query design is
-            the follow-on task.
-          </p>
+        {/* (g) Inventory shortfalls — products short for the next 7 days of scheduled jobs */}
+        <Card>
+          <TileHeader
+            icon={<PackageX className={`w-5 h-5 ${data.shortfalls.length === 0 ? 'text-gray-400' : 'text-red-500'}`} />}
+            title="Inventory Shortfalls"
+            count={data.shortfalls.length}
+            countColor="text-red-600"
+            linkLabel="Inventory"
+            onLink={() => navigate('/inventory')}
+          />
+          {!data.shortfallsLoadOk ? (
+            <p className="py-2 text-sm text-gray-400">Shortfall check unavailable right now.</p>
+          ) : data.shortfalls.length === 0 ? (
+            <AllClear label="Enough stock for the next 7 days of scheduled jobs." />
+          ) : (
+            <div className="divide-y divide-gray-100">
+              {data.shortfalls.slice(0, 6).map((row) => (
+                <button
+                  key={row.product_id}
+                  onClick={() => navigate('/inventory')}
+                  className="w-full flex items-center justify-between py-2 text-sm hover:bg-gray-50 rounded transition-colors text-left"
+                >
+                  <div className="min-w-0">
+                    <span className="font-medium text-nav-dark">{row.product_name}</span>
+                    <span className="ml-2 text-gray-500 text-xs">
+                      {row.job_count} job{row.job_count === 1 ? '' : 's'}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    <span className="text-red-600 font-medium text-xs">
+                      short {row.shortfall_qty.toLocaleString(undefined, { maximumFractionDigits: 1 })}{row.inventory_unit ? ` ${row.inventory_unit}` : ''}
+                    </span>
+                    <ArrowRight className="w-3.5 h-3.5 text-gray-400" />
+                  </div>
+                </button>
+              ))}
+              {data.shortfalls.length > 6 && (
+                <button
+                  onClick={() => navigate('/inventory')}
+                  className="w-full text-center py-2 text-sm text-crx-green hover:underline"
+                >
+                  +{data.shortfalls.length - 6} more
+                </button>
+              )}
+            </div>
+          )}
         </Card>
 
       </div>

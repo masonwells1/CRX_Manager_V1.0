@@ -70,7 +70,7 @@ import {
   type DispatchedAssigneeFilter,
 } from '../lib/dispatchDisplay';
 import { aggregateAssignedTo, type DispatchLocation } from '../lib/dispatchWizard';
-import type { Job, Profile, Field } from '../types';
+import type { Job, Profile, Field, InventoryPositionRow } from '../types';
 
 type NavSection = 'map' | 'list' | 'dispatch' | 'dispatched';
 
@@ -79,6 +79,20 @@ type NavSection = 'map' | 'list' | 'dispatch' | 'dispatched';
 // signals the end). The applicator FILTER itself no longer reads this table from the
 // client — it is resolved server-side by get_dispatch_board_jobs (review #36 MED).
 const DISPATCH_PAGE = 1000;
+
+// Layer 1 (inventory-aware dispatch): per-job product needs + a stock light computed
+// vs today's free stock (available − prebooked − active holds). Read-only overlay — it
+// warns, never blocks, and reserves nothing.
+type JobStockStatus = 'ok' | 'low' | 'short' | 'unknown';
+interface JobChemNeed {
+  product_id: string;
+  product_name: string;
+  quantity: number;
+  unit: string | null;
+}
+const STOCK_SEVERITY: Record<JobStockStatus, number> = { unknown: 0, ok: 1, low: 2, short: 3 };
+const worseStock = (a: JobStockStatus, b: JobStockStatus): JobStockStatus =>
+  STOCK_SEVERITY[b] > STOCK_SEVERITY[a] ? b : a;
 
 interface DispatchJob extends Job {
   customer_name?: string;
@@ -93,6 +107,10 @@ interface DispatchJob extends Job {
   field_ids?: string[];
   /** Dispatchable field locations (job_fields rows) for the wizard. */
   locations?: DispatchLocation[];
+  /** Layer 1: product needs for this job (job_chemicals). */
+  chemicals?: JobChemNeed[];
+  /** Layer 1: stock light vs today's free stock — schedulable jobs only. */
+  stock_status?: JobStockStatus;
 }
 
 export default function DispatchBoard() {
@@ -319,7 +337,96 @@ export default function DispatchBoard() {
         };
       }) as DispatchJob[];
 
-      setJobs(mapped);
+      // Inventory-aware dispatch (Layer 1): attach each schedulable job's product needs
+      // and a stock light vs today's free stock. Read-only overlay — no reservation.
+      // OFFICE-ONLY: /dispatch is also applicator-accessible, and get_inventory_position
+      // exposes product cost/vendor + full stock levels. Gate the whole overlay to
+      // admin/sales_rep so applicators see the board unchanged (Codex P1).
+      const isOffice = profile?.role === 'admin' || profile?.role === 'sales_rep';
+      const activeJobIds = isOffice
+        ? mapped
+            .filter((j) => j.status === 'scheduled' || j.status === 'in_progress')
+            .map((j) => j.id)
+        : [];
+      const chemByJob: Record<string, JobChemNeed[]> = {};
+      // available − prebooked SUMMED across a product's locations; holds_qty is
+      // product-level (the same value on every location row) so it's captured once.
+      const freeByProduct: Record<string, { availLessPrebooked: number; holds: number; reorder: number }> = {};
+      let positionLoaded = false;
+      if (activeJobIds.length > 0) {
+        // Product needs for the schedulable jobs. Chunk the job-id filter (a bare .in()
+        // of up to ~500 UUIDs can exceed the request-URL limit) AND page each chunk for
+        // the ~1000-row API cap.
+        const JOB_ID_CHUNK = 150;
+        for (let ci = 0; ci < activeJobIds.length; ci += JOB_ID_CHUNK) {
+          const idChunk = activeJobIds.slice(ci, ci + JOB_ID_CHUNK);
+          for (let from = 0; ; from += DISPATCH_PAGE) {
+            const chemRes = await supabase
+              .from('job_chemicals')
+              .select('job_id, product_id, quantity, unit, product:products(product_name)')
+              .in('job_id', idChunk)
+              .range(from, from + DISPATCH_PAGE - 1);
+            if (chemRes.error) {
+              Sentry.captureException(chemRes.error, { tags: { source: 'fetch', action: 'dispatch_job_chemicals' } });
+              break;
+            }
+            const rows = (chemRes.data || []) as Array<{ job_id: string; product_id: string; quantity: number | null; unit: string | null; product?: { product_name?: string } | null }>;
+            for (const c of rows) {
+              (chemByJob[c.job_id] ||= []).push({
+                product_id: c.product_id,
+                product_name: c.product?.product_name || 'Product',
+                quantity: Number(c.quantity) || 0,
+                unit: c.unit,
+              });
+            }
+            if (rows.length < DISPATCH_PAGE) break;
+          }
+        }
+        // Today's free stock per product from the canonical position RPC (single call).
+        const { data: posData, error: posErr } = await supabase.rpc('get_inventory_position');
+        if (posErr) {
+          Sentry.captureException(posErr, { tags: { source: 'fetch', action: 'dispatch_inventory_position' } });
+        } else {
+          const posRows = assertRpcResult<InventoryPositionRow[]>(posData, 'get_inventory_position') || [];
+          positionLoaded = true;
+          for (const r of posRows) {
+            // Sum available−prebooked across the product's locations; holds_qty is
+            // product-level (same on every location row) so it's captured once.
+            // CONSERVATIVE by design: free = available − prebooked − ALL active holds, so
+            // the light never falsely says "ok" when stock is reserved for another program.
+            // The cost is that a job backed by its OWN planned-quote hold may over-warn
+            // (harmless — it just prompts an inventory check); precise per-job reservation
+            // attribution is Layer 2.
+            const acc = (freeByProduct[r.product_id] ||= { availLessPrebooked: 0, holds: r.holds_qty, reorder: r.reorder_point });
+            acc.availLessPrebooked += r.quantity_available - r.quantity_prebooked;
+          }
+        }
+      }
+
+      const enriched: DispatchJob[] = mapped.map((j) => {
+        if (j.status !== 'scheduled' && j.status !== 'in_progress') {
+          return { ...j, chemicals: [], stock_status: 'unknown' as JobStockStatus };
+        }
+        const chems = chemByJob[j.id] || [];
+        // If the position lookup failed (or the job has no products), show 'unknown'
+        // rather than painting every job red on a transient RPC error — don't cry wolf.
+        if (!positionLoaded || chems.length === 0) {
+          return { ...j, chemicals: chems, stock_status: 'unknown' as JobStockStatus };
+        }
+        let status: JobStockStatus = 'ok';
+        for (const c of chems) {
+          if (c.quantity <= 0) continue;
+          const pos = freeByProduct[c.product_id];
+          // No inventory record for a product the job needs = a real shortfall signal.
+          if (!pos) { status = worseStock(status, 'short'); continue; }
+          const free = pos.availLessPrebooked - pos.holds;
+          if (c.quantity > free) status = worseStock(status, 'short');
+          else if (free - c.quantity <= pos.reorder) status = worseStock(status, 'low');
+        }
+        return { ...j, chemicals: chems, stock_status: status };
+      });
+
+      setJobs(enriched);
       setApplicators((applicatorsRes.data || []) as Pick<Profile, 'id' | 'full_name' | 'role'>[]);
       setCrews((crewsRes.data || []) as { id: string; name: string }[]);
       setRecipes((recipesRes.data || []) as { id: string; name: string }[]);
@@ -349,7 +456,7 @@ export default function DispatchBoard() {
     setLoading(false);
     // Refetch when a SERVER-pushed filter changes (status/applicator/date). Recipe
     // and free-text search are client-side only, so they don't trigger a refetch.
-  }, [toast, filters.status, filters.applicatorId, filters.startDate, filters.endDate]);
+  }, [toast, profile?.role, filters.status, filters.applicatorId, filters.startDate, filters.endDate]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -751,6 +858,37 @@ export default function DispatchBoard() {
                               </p>
                             </div>
                           </div>
+
+                          {/* Layer 1 — product needs + stock light vs today's free stock
+                              (schedulable jobs only). Warns, never blocks; reserves nothing. */}
+                          {(job.status === 'scheduled' || job.status === 'in_progress') && (job.chemicals?.length ?? 0) > 0 && (
+                            <div className="mt-3 flex items-start gap-2 text-sm">
+                              <span
+                                className={`mt-1 inline-block w-2.5 h-2.5 rounded-full flex-shrink-0 ${
+                                  job.stock_status === 'short' ? 'bg-red-500'
+                                  : job.stock_status === 'low' ? 'bg-amber-400'
+                                  : job.stock_status === 'ok' ? 'bg-crx-green'
+                                  : 'bg-slate-600'
+                                }`}
+                                aria-label={
+                                  job.stock_status === 'short' ? 'Short on product'
+                                  : job.stock_status === 'low' ? 'Stock tight'
+                                  : 'In stock'
+                                }
+                              />
+                              <div className="min-w-0">
+                                <p className="text-slate-300 text-xs truncate">
+                                  {(job.chemicals ?? []).map((c) => c.product_name).join(', ')}
+                                </p>
+                                {job.stock_status === 'short' && (
+                                  <p className="text-red-400 text-xs font-medium">Short on product — check inventory before dispatch.</p>
+                                )}
+                                {job.stock_status === 'low' && (
+                                  <p className="text-amber-400 text-xs font-medium">Stock is tight for this job.</p>
+                                )}
+                              </div>
+                            </div>
+                          )}
 
                           {/* Assigned-To label (criteria #4/#5/#6) — aggregates the
                               per-location assignees so a job split between two applicators

@@ -1,4 +1,4 @@
-# Migration History (583 migrations)
+# Migration History (584 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
@@ -944,5 +944,6 @@ These 10 historical migrations apply by timestamp order like all others; they si
 | 581 | 20260701212000 | **APPLIED LIVE 2026-07-01. Revoke anon EXECUTE on 3 SECDEF fns** (recent-commits bug-hunt F4): next_return_number + trg_jarf_recompute + trg_job_applied_record_recompute (REVOKE FROM PUBLIC,anon; next_return_number keeps authenticated/service_role). |
 | 582 | 20260701213000 | **APPLIED LIVE 2026-07-01. RLS init-plan wrap + FK indexes** (recent-commits bug-hunt F5): wrap auth.uid() as (select auth.uid()) in 9 policies (product_label_drafts, user_list_settings, watchdog_flag_dismissals) + 9 new-table FK covering indexes. Semantics unchanged. |
 | 583 | 20260701214000 | **APPLIED LIVE 2026-07-01. get_fields_geojson_by_ids RPC** (recent-commits bug-hunt F1): id-scoped read-only SECDEF geojson RPC (mirrors get_fields_with_geojson + `WHERE id = ANY(p_field_ids)` + measured/override acres; anon revoked). DispatchBoard + FieldView now fetch only their visible-job fields — fixes the `fields.boundary_geojson` 42703 (Sentry CRX-MANAGER-11/12) + the over-fetch. |
+| 584 | 20260702120000 | **APPLIED LIVE 2026-07-01. Inventory-aware scheduling (Layer 1), read-only.** New `get_job_inventory_shortfalls(int)` SECDEF (office-gated via `require_admin_or_sales_rep`; anon revoked to match get_inventory_position acl; search_path pinned): products the next N days of scheduled/in_progress jobs will run short of, quantity-aware-deduped vs the parent planned-quote hold. Powers the Office Cockpit "Inventory Shortfalls" tile + the Dispatch Board stock light. No tables / no DML / no reservation; existing inventory fns untouched (folding job demand into get_inventory_position/forecast deferred to Layer 2). |
 
 > PARKED-011 (process-document base64 size cap) is an edge-fn, not a migration — deployed to `process-document` v14 on 2026-06-30. The 5 HIGH migrations (parked_001/003/004/007/009) landed via the beyond-parity go-live.

@@ -4,6 +4,18 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-01 — Inventory-aware scheduling, Layer 1 (dispatch stock light + Office Cockpit shortfalls)
+
+Wired the field-job scheduler to inventory so the office can see product shortfalls before crews roll — the first, read-only slice of "inventory-aware scheduling". Built via `/ship` (4 reviewer subagents + 4 Codex rounds + both-direction smoke proofs) after first mapping the existing planned-programs / holds / forecast allocation model so this extends it rather than duplicating it.
+
+- **New RPC `get_job_inventory_shortfalls(int)`** (migration `20260702120000`, applied live) — read-only, SECURITY DEFINER, office-gated (`require_admin_or_sales_rep`), anon revoked, search_path pinned. Returns products the next N days of scheduled/in_progress jobs will run short of, **quantity-aware-deduped** vs the parent planned-quote hold (counts only the uncovered portion). No tables, no DML, no reservation.
+- **Office Cockpit** — the long-deferred "Inventory Shortfalls" placeholder tile is now live (real data, plus honest "all-clear" and "unavailable" states; counts toward the exception total).
+- **Dispatch Board** — office users now see each schedulable job's products + a green/amber/red stock light vs today's free stock (available − prebooked − active holds). Conservative by design (never falsely "ok"); applicators see the board unchanged (the `get_inventory_position` call is office-role-gated).
+- **Deferred to Layer 2** (Mason's call): folding job demand into the Inventory *Forecast* page + a "Jobs" column, and precise per-job reservation math — cleanly reverted, since exact hold reconciliation belongs with real job reservations.
+- **Codex caught (and we fixed):** a forecast null-crash on job-only products, a multi-location free-stock miscount, an applicator data-exposure via `get_inventory_position`, a shortfall tile that was loaded but never rendered, and the all-or-nothing hold dedup. Post-apply we also caught + fixed a live `anon=X` grant (Supabase default-privilege quirk) so the ACL matches the reference functions.
+
+---
+
 ## 2026-07-01 — Correction-mined guardrails (self-improvement from the last 50 sessions)
 
 Mined the 50 most-recent sessions (524 Mason-typed messages → 70 corrections → 12 recurring themes, via a fan-out workflow) for the things Mason keeps having to correct, then turned the top themes into a deterministic prevention system. **No app/DB change** — this is `.claude/` tooling + docs + auto-memory only.
