@@ -803,17 +803,21 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
     setPayingInvoice(true);
     try {
       const idemKey = payIdem.getKey();
+      // Overpay -> prepay credit (parity with the Payments/allocation screen): cap this
+      // invoice's allocation at its own balance and let allocate_payment bank any excess as
+      // a prepay credit, instead of rejecting the whole payment for exceeding the balance.
+      const allocCents = Math.min(amountCents, invoice.balance_cents || 0);
       const { data, error } = await supabase.rpc('allocate_payment', {
         p_customer_id: invoice.customer_id,
         p_total_cents: amountCents,
         p_payment_method: payMethod,
         p_reference_number: payRef || undefined,
         p_notes: payNotes || undefined,
-        p_allocations: [{ invoice_id: id, amount_cents: amountCents }],
+        p_allocations: allocCents > 0 ? [{ invoice_id: id, amount_cents: allocCents }] : [],
         p_idempotency_key: idemKey,
       });
       if (error) throw error;
-      assertRpcResult<{
+      const allocResult = assertRpcResult<{
         success: boolean;
         allocation_set_id: string;
         total_allocated_cents: number;
@@ -821,7 +825,11 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
         invoices_paid: number;
       }>(data, 'allocate_payment');
       payIdem.resetKey();
-      toast('success', `Payment of ${fmt(amountCents)} recorded`);
+      const payMsgParts = [`Payment of ${fmt(amountCents)} recorded`];
+      if (allocResult.prepay_created_cents > 0) {
+        payMsgParts.push(`${fmt(allocResult.prepay_created_cents)} added as prepay credit`);
+      }
+      toast('success', payMsgParts.join('. '));
       setShowPayModal(false);
       setPayAmount('');
       setPayRef('');
