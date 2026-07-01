@@ -1,18 +1,33 @@
 {
   "_meta": {
     "registry_version": 2,
-    "generated_at": "2026-06-29",
+    "generated_at": "2026-06-30",
     "generated_from": "Supabase project rhyzpcqhnizqbxphqdkr — public schema introspection",
     "regenerate_with": "node scripts/regenerate-schema-registry.mjs --from-introspection <queries.json> (queries documented in the script header)",
     "purpose": "Single source of truth for hooks: generated columns, status enums, ALL parseable CHECK IN-lists, NOT NULL columns, full column lists, sequences, tables-with/without updated_at, applied-migration high water.",
     "note": "For a fresh refresh from the live DB, ask Claude Code: 'regenerate the schema-registry from Supabase' (/regen-schema-registry). skipped_constraints lists every CHECK the hooks can NOT validate — review it when touching those tables.",
-    "migrations_high_water": "20260623181444"
+    "migrations_high_water": "20260630173726"
   },
   "generated_columns": [
+    {
+      "table": "fields",
+      "column": "acres_source",
+      "expression": "\nCASE\n    WHEN (override_acres IS NOT NULL) THEN 'override'::text\n    WHEN (measured_acres IS NOT NULL) THEN 'measured'::text\n    ELSE 'legacy'::text\nEND"
+    },
     {
       "table": "invoices",
       "column": "balance_cents",
       "expression": "(((total_amount_cents - paid_amount_cents) - prepay_applied_cents) - write_off_cents)"
+    },
+    {
+      "table": "job_applied_records",
+      "column": "net_tach",
+      "expression": "\nCASE\n    WHEN ((beginning_tach IS NULL) OR (end_tach IS NULL)) THEN NULL::numeric\n    ELSE GREATEST((end_tach - beginning_tach), (0)::numeric)\nEND"
+    },
+    {
+      "table": "jobs",
+      "column": "remaining_acres",
+      "expression": "GREATEST((COALESCE(total_acres, (0)::numeric) - COALESCE(applied_acres, (0)::numeric)), (0)::numeric)"
     },
     {
       "table": "vendor_bills",
@@ -95,6 +110,10 @@
       "completed",
       "cancelled"
     ],
+    "job_notifications.status": [
+      "sent",
+      "failed"
+    ],
     "jobs.status": [
       "scheduled",
       "in_progress",
@@ -118,6 +137,13 @@
       "fulfilled",
       "cancelled",
       "voided"
+    ],
+    "product_label_drafts.status": [
+      "pending",
+      "accepted",
+      "edited",
+      "rejected",
+      "needs_manual"
     ],
     "purchase_orders.status": [
       "draft",
@@ -204,8 +230,13 @@
     "inventory_transactions",
     "invoice_line_allocations",
     "invoice_shares",
+    "job_applied_record_crew",
+    "job_attachments",
     "job_chemicals",
+    "job_field_shares",
     "job_fields",
+    "job_notifications",
+    "job_tag_assignments",
     "note_activity_log",
     "note_tags",
     "notifications",
@@ -230,6 +261,8 @@
     "team_note_tags",
     "unit_conversions",
     "vendor_payments",
+    "watchdog_flag_dismissals",
+    "watchdog_flags",
     "write_offs"
   ],
   "check_constraints": {
@@ -490,6 +523,7 @@
       "values": [
         "invoice_created",
         "invoice_posted",
+        "invoice_unposted",
         "invoice_voided",
         "invoice_cancelled",
         "invoice_updated",
@@ -549,7 +583,8 @@
         "vendor_bill_voided",
         "vendor_bill_updated",
         "vendor_payment_recorded",
-        "vendor_payment_voided"
+        "vendor_payment_voided",
+        "rup_sales_voided"
       ],
       "constraints": [
         "financial_audit_log_operation_type_check"
@@ -619,6 +654,26 @@
         "invoices_status_check"
       ]
     },
+    "job_applied_records.end_weather_source": {
+      "values": [
+        "auto",
+        "manual"
+      ],
+      "constraints": [
+        "job_applied_records_end_weather_source_check"
+      ],
+      "nullable": true
+    },
+    "job_applied_records.start_weather_source": {
+      "values": [
+        "auto",
+        "manual"
+      ],
+      "constraints": [
+        "job_applied_records_start_weather_source_check"
+      ],
+      "nullable": true
+    },
     "job_location_dispatches.dispatch_status": {
       "values": [
         "dispatched",
@@ -627,6 +682,24 @@
       ],
       "constraints": [
         "job_location_dispatches_dispatch_status_check"
+      ]
+    },
+    "job_notifications.notification_type": {
+      "values": [
+        "pre",
+        "post"
+      ],
+      "constraints": [
+        "job_notifications_notification_type_check"
+      ]
+    },
+    "job_notifications.status": {
+      "values": [
+        "sent",
+        "failed"
+      ],
+      "constraints": [
+        "job_notifications_status_check"
       ]
     },
     "jobs.priority": {
@@ -694,6 +767,28 @@
       ],
       "constraints": [
         "payments_payment_method_check"
+      ]
+    },
+    "product_label_drafts.confidence": {
+      "values": [
+        "high",
+        "medium",
+        "low"
+      ],
+      "constraints": [
+        "product_label_drafts_confidence_check"
+      ]
+    },
+    "product_label_drafts.status": {
+      "values": [
+        "pending",
+        "accepted",
+        "edited",
+        "rejected",
+        "needs_manual"
+      ],
+      "constraints": [
+        "product_label_drafts_status_check"
       ]
     },
     "products.container_type": {
@@ -932,6 +1027,45 @@
       "constraints": [
         "vendor_bills_status_check"
       ]
+    },
+    "watchdog_flag_dismissals.resolution": {
+      "values": [
+        "looks_fine",
+        "needs_fix"
+      ],
+      "constraints": [
+        "watchdog_flag_dismissals_resolution_check"
+      ]
+    },
+    "watchdog_flags.entity_type": {
+      "values": [
+        "job",
+        "invoice",
+        "job_chemical"
+      ],
+      "constraints": [
+        "watchdog_flags_entity_type_check"
+      ]
+    },
+    "watchdog_flags.flag_type": {
+      "values": [
+        "acre_divergence",
+        "rate_over_label",
+        "double_bill",
+        "rei_not_cleared"
+      ],
+      "constraints": [
+        "watchdog_flags_flag_type_check"
+      ]
+    },
+    "watchdog_flags.severity": {
+      "values": [
+        "warning",
+        "info"
+      ],
+      "constraints": [
+        "watchdog_flags_severity_check"
+      ]
     }
   },
   "skipped_constraints": [
@@ -1032,12 +1166,6 @@
       "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
     },
     {
-      "table": "inventory_holds",
-      "constraint": "inventory_holds_quantity_check",
-      "def": "CHECK ((quantity >= (0)::numeric))",
-      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
-    },
-    {
       "table": "inventory",
       "constraint": "chk_inventory_qty_on_order",
       "def": "CHECK ((quantity_on_order >= (0)::numeric))",
@@ -1047,6 +1175,12 @@
       "table": "inventory",
       "constraint": "chk_inventory_qty_prebooked",
       "def": "CHECK ((quantity_prebooked >= (0)::numeric))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "inventory_holds",
+      "constraint": "inventory_holds_quantity_check",
+      "def": "CHECK ((quantity >= (0)::numeric))",
       "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
     },
     {
@@ -1075,6 +1209,12 @@
     },
     {
       "table": "invoices",
+      "constraint": "invoices_discount_earned_nonneg",
+      "def": "CHECK ((discount_earned_cents >= 0))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "invoices",
       "constraint": "invoices_paid_non_negative",
       "def": "CHECK ((paid_amount_cents >= 0))",
       "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
@@ -1083,6 +1223,102 @@
       "table": "invoices",
       "constraint": "invoices_total_non_negative",
       "def": "CHECK (((invoice_type = 'credit_memo'::text) OR (total_amount_cents >= 0)))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "job_applied_record_fields",
+      "constraint": "job_applied_record_fields_applied_acres_check",
+      "def": "CHECK ((applied_acres >= (0)::numeric))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "job_applied_records",
+      "constraint": "job_applied_records_applied_acres_check",
+      "def": "CHECK (((applied_acres IS NULL) OR (applied_acres >= (0)::numeric)))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "job_applied_records",
+      "constraint": "job_applied_records_beginning_tach_check",
+      "def": "CHECK (((beginning_tach IS NULL) OR (beginning_tach >= (0)::numeric)))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "job_applied_records",
+      "constraint": "job_applied_records_end_humidity_pct_check",
+      "def": "CHECK (((end_humidity_pct IS NULL) OR ((end_humidity_pct >= (0)::numeric) AND (end_humidity_pct <= (100)::numeric))))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "job_applied_records",
+      "constraint": "job_applied_records_end_tach_check",
+      "def": "CHECK (((end_tach IS NULL) OR (end_tach >= (0)::numeric)))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "job_applied_records",
+      "constraint": "job_applied_records_end_wind_mph_check",
+      "def": "CHECK (((end_wind_mph IS NULL) OR (end_wind_mph >= (0)::numeric)))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "job_applied_records",
+      "constraint": "job_applied_records_start_humidity_pct_check",
+      "def": "CHECK (((start_humidity_pct IS NULL) OR ((start_humidity_pct >= (0)::numeric) AND (start_humidity_pct <= (100)::numeric))))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "job_applied_records",
+      "constraint": "job_applied_records_start_wind_mph_check",
+      "def": "CHECK (((start_wind_mph IS NULL) OR (start_wind_mph >= (0)::numeric)))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "job_applied_records",
+      "constraint": "job_applied_records_tach_end_ge_begin_check",
+      "def": "CHECK (((beginning_tach IS NULL) OR (end_tach IS NULL) OR (end_tach >= beginning_tach)))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "job_attachments",
+      "constraint": "job_attachments_storage_path_scoped",
+      "def": "CHECK ((storage_path ~~ ((job_id)::text || '/%'::text)))",
+      "reason": "unparseable — hooks do NOT validate this constraint"
+    },
+    {
+      "table": "job_field_shares",
+      "constraint": "job_field_shares_split_pct_check",
+      "def": "CHECK (((split_pct > (0)::numeric) AND (split_pct <= (100)::numeric)))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "job_location_dispatches",
+      "constraint": "job_location_dispatches_one_assignee_check",
+      "def": "CHECK (((applicator_id IS NOT NULL) <> (crew_id IS NOT NULL)))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "job_notifications",
+      "constraint": "job_notifications_channel_check",
+      "def": "CHECK ((channel = 'email'::text))",
+      "reason": "unparseable — hooks do NOT validate this constraint"
+    },
+    {
+      "table": "job_tags",
+      "constraint": "job_tags_color_check",
+      "def": "CHECK ((color ~ '^#[0-9A-Fa-f]{6}$'::text))",
+      "reason": "unparseable — hooks do NOT validate this constraint"
+    },
+    {
+      "table": "jobs",
+      "constraint": "jobs_carrier_rate_gpa_nonneg",
+      "def": "CHECK (((carrier_rate_gpa IS NULL) OR (carrier_rate_gpa >= (0)::numeric)))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "jobs",
+      "constraint": "jobs_loader_tank_capacity_pos",
+      "def": "CHECK (((loader_tank_capacity IS NULL) OR (loader_tank_capacity > (0)::numeric)))",
       "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
     },
     {
@@ -1191,6 +1427,12 @@
       "table": "returns",
       "constraint": "returns_cancelled_has_reason_check",
       "def": "CHECK (((status <> 'cancelled'::text) OR (cancellation_reason IS NOT NULL)))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "user_list_settings",
+      "constraint": "user_list_settings_list_key_check",
+      "def": "CHECK (((length(list_key) >= 1) AND (length(list_key) <= 64)))",
       "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
     },
     {
@@ -1715,6 +1957,29 @@
         "created_at"
       ]
     },
+    "ground_crew_members": {
+      "no_default": [
+        "crew_id",
+        "name"
+      ],
+      "with_default": [
+        "id",
+        "is_active",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    "ground_crews": {
+      "no_default": [
+        "name"
+      ],
+      "with_default": [
+        "id",
+        "is_active",
+        "created_at",
+        "updated_at"
+      ]
+    },
     "idempotency_keys": {
       "no_default": [
         "idempotency_key",
@@ -1834,12 +2099,67 @@
         "created_at",
         "updated_at",
         "write_off_cents",
-        "pricing_pending"
+        "pricing_pending",
+        "discount_earned_cents"
       ]
     },
     "job_applied_info": {
       "no_default": [
         "job_id"
+      ],
+      "with_default": [
+        "id",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    "job_applied_record_crew": {
+      "no_default": [
+        "application_record_id",
+        "member_name_snapshot"
+      ],
+      "with_default": [
+        "id",
+        "created_at"
+      ]
+    },
+    "job_applied_record_fields": {
+      "no_default": [
+        "application_record_id",
+        "field_id"
+      ],
+      "with_default": [
+        "id",
+        "applied_acres",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    "job_applied_records": {
+      "no_default": [
+        "job_id",
+        "application_date"
+      ],
+      "with_default": [
+        "id",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    "job_attachments": {
+      "no_default": [
+        "job_id",
+        "storage_path",
+        "file_name"
+      ],
+      "with_default": [
+        "id",
+        "uploaded_at"
+      ]
+    },
+    "job_batches": {
+      "no_default": [
+        "name"
       ],
       "with_default": [
         "id",
@@ -1855,6 +2175,19 @@
       "with_default": [
         "id",
         "quantity"
+      ]
+    },
+    "job_field_shares": {
+      "no_default": [
+        "job_id",
+        "field_id",
+        "customer_id",
+        "split_pct"
+      ],
+      "with_default": [
+        "id",
+        "is_primary",
+        "created_at"
       ]
     },
     "job_fields": {
@@ -1879,6 +2212,38 @@
         "updated_at"
       ]
     },
+    "job_notifications": {
+      "no_default": [
+        "job_id",
+        "notification_type"
+      ],
+      "with_default": [
+        "id",
+        "channel",
+        "status",
+        "created_at"
+      ]
+    },
+    "job_tag_assignments": {
+      "no_default": [
+        "job_id",
+        "tag_id"
+      ],
+      "with_default": [
+        "created_at"
+      ]
+    },
+    "job_tags": {
+      "no_default": [
+        "name"
+      ],
+      "with_default": [
+        "id",
+        "color",
+        "created_at",
+        "updated_at"
+      ]
+    },
     "jobs": {
       "no_default": [
         "job_number",
@@ -1890,7 +2255,8 @@
         "status",
         "created_at",
         "updated_at",
-        "priority"
+        "priority",
+        "applied_acres"
       ]
     },
     "note_activity_log": {
@@ -2048,6 +2414,20 @@
       "with_default": [
         "id",
         "season",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    "product_label_drafts": {
+      "no_default": [
+        "product_id",
+        "created_by"
+      ],
+      "with_default": [
+        "id",
+        "source_note",
+        "confidence",
+        "status",
         "created_at",
         "updated_at"
       ]
@@ -2394,6 +2774,18 @@
         "unit_type"
       ]
     },
+    "user_list_settings": {
+      "no_default": [
+        "user_id",
+        "list_key"
+      ],
+      "with_default": [
+        "id",
+        "settings",
+        "created_at",
+        "updated_at"
+      ]
+    },
     "vehicles": {
       "no_default": [
         "vehicle_name",
@@ -2448,6 +2840,30 @@
         "is_default",
         "created_at",
         "updated_at"
+      ]
+    },
+    "watchdog_flag_dismissals": {
+      "no_default": [
+        "flag_id",
+        "dismissed_by",
+        "resolution"
+      ],
+      "with_default": [
+        "id",
+        "dismissed_at"
+      ]
+    },
+    "watchdog_flags": {
+      "no_default": [
+        "flag_type",
+        "entity_type",
+        "entity_id",
+        "message"
+      ],
+      "with_default": [
+        "id",
+        "severity",
+        "created_at"
       ]
     },
     "write_offs": {
@@ -3043,7 +3459,11 @@
       "is_active",
       "created_at",
       "updated_at",
-      "parent_field_id"
+      "parent_field_id",
+      "measured_acres",
+      "override_acres",
+      "boundary_geom",
+      "acres_source"
     ],
     "finance_charges": [
       "id",
@@ -3069,6 +3489,23 @@
       "total_impact_cents",
       "description",
       "created_at"
+    ],
+    "ground_crew_members": [
+      "id",
+      "crew_id",
+      "name",
+      "profile_id",
+      "is_active",
+      "created_at",
+      "updated_at"
+    ],
+    "ground_crews": [
+      "id",
+      "name",
+      "is_active",
+      "created_by",
+      "created_at",
+      "updated_at"
     ],
     "idempotency_keys": [
       "id",
@@ -3157,7 +3594,9 @@
       "is_application_fee",
       "tote_number",
       "quoted_price_cents",
-      "price_source"
+      "price_source",
+      "warehouse",
+      "vendor"
     ],
     "invoice_line_allocations": [
       "id",
@@ -3228,7 +3667,11 @@
       "delivery_id",
       "wind_direction",
       "temperature_text",
-      "pricing_pending"
+      "pricing_pending",
+      "payment_terms",
+      "internal_notes",
+      "discount_earned_cents",
+      "discount_date"
     ],
     "job_applied_info": [
       "id",
@@ -3244,6 +3687,68 @@
       "created_at",
       "updated_at"
     ],
+    "job_applied_record_crew": [
+      "id",
+      "application_record_id",
+      "member_id",
+      "member_name_snapshot",
+      "crew_id_snapshot",
+      "crew_name_snapshot",
+      "created_at"
+    ],
+    "job_applied_record_fields": [
+      "id",
+      "application_record_id",
+      "field_id",
+      "applied_acres",
+      "created_at",
+      "updated_at"
+    ],
+    "job_applied_records": [
+      "id",
+      "job_id",
+      "applicator_id",
+      "vehicle_id",
+      "application_date",
+      "applied_acres",
+      "notes",
+      "created_by",
+      "created_at",
+      "updated_at",
+      "start_weather_time",
+      "start_temp_f",
+      "start_wind_direction",
+      "start_wind_mph",
+      "start_humidity_pct",
+      "start_weather_source",
+      "end_weather_time",
+      "end_temp_f",
+      "end_wind_direction",
+      "end_wind_mph",
+      "end_humidity_pct",
+      "end_weather_source",
+      "beginning_tach",
+      "end_tach",
+      "net_tach"
+    ],
+    "job_attachments": [
+      "id",
+      "job_id",
+      "storage_path",
+      "file_name",
+      "file_size",
+      "content_type",
+      "uploaded_by",
+      "uploaded_at"
+    ],
+    "job_batches": [
+      "id",
+      "name",
+      "description",
+      "created_by",
+      "created_at",
+      "updated_at"
+    ],
     "job_chemicals": [
       "id",
       "job_id",
@@ -3254,14 +3759,32 @@
       "rate_unit",
       "cost_per_unit_cents",
       "price_per_unit_cents",
-      "sort_order"
+      "sort_order",
+      "diluent_rate",
+      "rei_hours",
+      "phi_days",
+      "warehouse",
+      "vendor"
+    ],
+    "job_field_shares": [
+      "id",
+      "job_id",
+      "field_id",
+      "customer_id",
+      "split_pct",
+      "is_primary",
+      "created_at"
     ],
     "job_fields": [
       "id",
       "job_id",
       "field_id",
       "acres_to_treat",
-      "sort_order"
+      "sort_order",
+      "planted_acres",
+      "crop",
+      "strip",
+      "pests"
     ],
     "job_location_dispatches": [
       "id",
@@ -3272,6 +3795,34 @@
       "dispatched_at",
       "dispatch_status",
       "dispatched_by",
+      "created_at",
+      "updated_at"
+    ],
+    "job_notifications": [
+      "id",
+      "job_id",
+      "notification_type",
+      "customer_id",
+      "recipient_email",
+      "channel",
+      "subject",
+      "message",
+      "status",
+      "sent_at",
+      "sent_by",
+      "idempotency_key",
+      "created_at"
+    ],
+    "job_tag_assignments": [
+      "job_id",
+      "tag_id",
+      "created_at"
+    ],
+    "job_tags": [
+      "id",
+      "name",
+      "color",
+      "created_by",
       "created_at",
       "updated_at"
     ],
@@ -3301,7 +3852,25 @@
       "estimated_hours",
       "quote_id",
       "quote_section_id",
-      "application_service_id"
+      "application_service_id",
+      "call_date",
+      "date_proposed",
+      "time_proposed",
+      "schedule_date",
+      "date_expires",
+      "consultant_id",
+      "loader_comment",
+      "additional_info",
+      "internal_memo",
+      "applied_acres",
+      "updated_by",
+      "printed_at",
+      "remaining_acres",
+      "ground_crew_id",
+      "batch_ref",
+      "last_printed_by",
+      "carrier_rate_gpa",
+      "loader_tank_capacity"
     ],
     "note_activity_log": [
       "id",
@@ -3460,6 +4029,25 @@
       "bucket_label",
       "quote_id"
     ],
+    "product_label_drafts": [
+      "id",
+      "product_id",
+      "signal_word",
+      "rei_hours",
+      "phi_days",
+      "epa_registration",
+      "max_label_rate",
+      "max_label_rate_unit",
+      "source_note",
+      "confidence",
+      "status",
+      "created_by",
+      "reviewed_by",
+      "reviewed_at",
+      "run_idempotency_key",
+      "created_at",
+      "updated_at"
+    ],
     "products": [
       "id",
       "product_name",
@@ -3499,7 +4087,9 @@
       "signal_word",
       "internal_notes",
       "rei_hours",
-      "phi_days"
+      "phi_days",
+      "max_label_rate",
+      "max_label_rate_unit"
     ],
     "profiles": [
       "id",
@@ -3788,7 +4378,10 @@
       "compliance_notes",
       "season",
       "created_at",
-      "created_by"
+      "created_by",
+      "voided_at",
+      "voided_by",
+      "void_reason"
     ],
     "team_note_attachments": [
       "id",
@@ -3843,6 +4436,14 @@
       "factor_oz",
       "notes",
       "unit_type"
+    ],
+    "user_list_settings": [
+      "id",
+      "user_id",
+      "list_key",
+      "settings",
+      "created_at",
+      "updated_at"
     ],
     "vehicles": [
       "id",
@@ -3920,6 +4521,30 @@
       "is_default",
       "created_at",
       "updated_at"
+    ],
+    "watchdog_flag_dismissals": [
+      "id",
+      "flag_id",
+      "dismissed_by",
+      "resolution",
+      "note",
+      "dismissed_at"
+    ],
+    "watchdog_flags": [
+      "id",
+      "flag_type",
+      "severity",
+      "entity_type",
+      "entity_id",
+      "job_id",
+      "invoice_id",
+      "product_id",
+      "field_id",
+      "customer_id",
+      "message",
+      "detail",
+      "created_at",
+      "natural_key"
     ],
     "write_offs": [
       "id",
