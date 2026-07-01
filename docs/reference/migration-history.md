@@ -1,4 +1,4 @@
-# Migration History (578 migrations)
+# Migration History (583 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
@@ -939,5 +939,10 @@ These 10 historical migrations apply by timestamp order like all others; they si
 | 576 | 20260701202000 | **APPLIED LIVE 2026-07-01. Returns RPC gating** (main-debug hunt PARKED-004): transition trigger requires app.return_rpc flag or admin_override; new reject_return + create_return RPCs; approve/receive/issue_return_credit re-emitted verbatim + the flag; Returns.tsx + supabase.ts switched to the RPCs. Gate proven live (direct status UPDATE blocked). |
 | 577 | 20260701203000 | **APPLIED LIVE 2026-07-01. Inventory planned/holds no double-count** (main-debug hunt PARKED-007): `get_inventory_position` planned_quotes CTE excludes demand already covered by an active linked hold; display-only; net_position unchanged. |
 | 578 | 20260701204000 | **APPLIED LIVE 2026-07-01. Revoke anon EXECUTE on new returns RPCs**: reject_return + create_return were created with the default PUBLIC grant; REVOKE FROM PUBLIC,anon + GRANT authenticated to match sibling return RPCs (both already self-gate on auth.uid()). Caught by the db-invariant-sweep anon-exec-secdef predicate. |
+| 579 | 20260701210000 | **APPLIED LIVE 2026-07-01. Notification lifecycle gate before idempotency** (recent-commits bug-hunt B1, Codex-found): record_job_pre/post_notifications run the lifecycle gate BEFORE the idempotency replay, so a retry after a job-status change can't re-send a stale notice. Re-emitted verbatim except block order; single overload; SECDEF + search_path preserved. |
+| 580 | 20260701211000 | **APPLIED LIVE 2026-07-01. receive_po_items parent-PO lock** (recent-commits bug-hunt B2, Codex-found): `FOR UPDATE OF poi` -> `FOR UPDATE OF poi, po` closes the receive-vs-`cancel_purchase_order` race (stock landing on a cancelled PO). One-line change; rest verbatim. |
+| 581 | 20260701212000 | **APPLIED LIVE 2026-07-01. Revoke anon EXECUTE on 3 SECDEF fns** (recent-commits bug-hunt F4): next_return_number + trg_jarf_recompute + trg_job_applied_record_recompute (REVOKE FROM PUBLIC,anon; next_return_number keeps authenticated/service_role). |
+| 582 | 20260701213000 | **APPLIED LIVE 2026-07-01. RLS init-plan wrap + FK indexes** (recent-commits bug-hunt F5): wrap auth.uid() as (select auth.uid()) in 9 policies (product_label_drafts, user_list_settings, watchdog_flag_dismissals) + 9 new-table FK covering indexes. Semantics unchanged. |
+| 583 | 20260701214000 | **APPLIED LIVE 2026-07-01. get_fields_geojson_by_ids RPC** (recent-commits bug-hunt F1): id-scoped read-only SECDEF geojson RPC (mirrors get_fields_with_geojson + `WHERE id = ANY(p_field_ids)` + measured/override acres; anon revoked). DispatchBoard + FieldView now fetch only their visible-job fields — fixes the `fields.boundary_geojson` 42703 (Sentry CRX-MANAGER-11/12) + the over-fetch. |
 
 > PARKED-011 (process-document base64 size cap) is an edge-fn, not a migration — deployed to `process-document` v14 on 2026-06-30. The 5 HIGH migrations (parked_001/003/004/007/009) landed via the beyond-parity go-live.

@@ -4,6 +4,20 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-01 — Recent-Commits Bug-Hunt: 7 findings, 6 shipped LIVE (Codex-reviewed ×3)
+
+Full-assault bug hunt over the last-few-days `main` surface (Sentry + GitHub CI + Supabase advisors + a multi-agent hunt), every finding run past **Codex three times** (findings → fixes → re-review). Built in an isolated worktree (`C:\CRX_BugHunt`).
+
+- **F1 [P1, live]** DispatchBoard + FieldView selected non-existent `fields.boundary_geojson/centroid_lat/centroid_lng` → Postgres 42703 in prod (Sentry CRX-MANAGER-11/12). Fixed via new id-scoped `get_fields_geojson_by_ids` RPC (mig `20260701214000`) + both pages fetch only their visible-job fields. Sentry resolved.
+- **F2 [CI red]** `validate-sql-migrations.sh` false-flagged `watchdog_flags`' legit entity_type/entity_id → CI red 11 commits. Scoped the idempotency check (still catches multi-line INSERTs); full scan 62→61; **CI run #583 GREEN**.
+- **B1 [P2, Codex-found]** notification RPCs replayed the cached idempotency result before the lifecycle gate (stale send on retry after a status change) — gate moved before idempotency (mig `20260701210000`).
+- **B2 [P2, Codex-found]** `receive_po_items` locked the item but not the parent PO (receive-vs-cancel race) — `FOR UPDATE OF poi, po` (mig `20260701211000`).
+- **F4 [P3]** revoke anon EXECUTE on next_return_number + 2 trigger fns (mig `20260701212000`).
+- **F5 [P3]** wrap 9 policies' `auth.uid()` as `(select auth.uid())` + 9 FK indexes (mig `20260701213000`).
+- **F3 [P2] PARKED:** process-document WebP/BMP/TIFF allow-list widened; code committed + pushed but the edge-fn deploy hit a persistent Supabase platform 500 ("Failed to set function store") — old v14 intact (OCR unaffected); retry `supabase functions deploy process-document`.
+
+5 migrations smoke-tested vs live (rolled back) + `plpgsql_check` + rls/drift reviewers (0 blockers), applied live + verified. Frontend/CI pushed (`2004b81a`). F3/B1/B2 nits accepted (documented).
+
 ## 2026-07-01 — Parked-Migration Batch GO-LIVE: 4 codex-driven-hunt hardening migrations applied to production (`main`)
 
 The 4 non-urgent hardening migrations parked by the codex-driven bug hunt (owner-greenlit 2026-07-01) went **live to production** after the full gate: `rls-security-reviewer` + `migration-drift-reviewer` per migration (PARKED-004 also cleared `compliance-reviewer`), rolled-back `plpgsql`/compile smoke tests, live byte-verification of every re-emitted function, and post-apply live verification. None touched real money (the DB is operationally near-empty).
