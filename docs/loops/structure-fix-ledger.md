@@ -41,7 +41,7 @@
 | A11 | Wire get_expiring_planned_holds into Dashboard/ActionQueue | frontend | | TODO | | | |
 | A12 | PHI guardrail writer: field crop-history editor + upsert RPC | frontend + parked mig | | TODO | | | |
 | A13 | reorder_point edit UI + below-reorder list | frontend | | TODO | | | |
-| A14 | convert_to_gl_lb pint/quart aliases | parked mig | | TODO | | | |
+| A14 | convert_to_gl_lb pint/quart aliases | parked mig `20260702133000` | YES | **PARKED (done, unapplied)** | FUNCTIONAL smoke pint(8)=1.0/quart(4)=1.0, PT/QT unchanged, plpgsql_check CLEAN | clean | (A14 commit) |
 
 ## WAVE B — Phase 1 units (only after Wave A fully ledgered)
 | Item | Status | Note |
@@ -117,3 +117,9 @@ already fall back to tier1, so post-server-fix client & server agree; a blind sw
 shared helper risks changing money behavior at sites with deliberate `!= null` guards (JobDetail:2396/2410
 NO-clobber guard; recipeHelpers:81 recipe-price-first). Needs a per-site pass — logged for follow-up.
 Draft: `...132000_a4_...sql`.
+
+**Cycle 5 — A14 (convert_to_gl_lb pint/quart aliases):** PARKED (done, unapplied). Added full-word
+`PINT/PINTS`/`QUART/QUARTS` to the liquid branch so a 'pint'/'quart' rate_unit no longer previews a
+gallon value on screen but saves NULL (client-shows / server-saves-NULL). PROOF — Ran: FUNCTIONAL
+rolled-back smoke actually calling the fn; Saw: pint(8)=1.0 GL, pints(16)=2.0, quart(4)=1.0, quarts(8)=2.0,
+PT/QT/gal unchanged, plpgsql_check CLEAN, live unchanged (position()=0). Codex CLEAN. Draft: `...133000_a14_...sql`.
