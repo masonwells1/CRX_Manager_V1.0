@@ -552,6 +552,20 @@ export interface InventoryPositionRow {
   is_low_stock: boolean;
 }
 
+// Layer 2 (B3) — return shape of get_dispatch_stock_status(uuid[]). One row per
+// (job, product) the schedulable job needs. free_excluding_own_hold subtracts every
+// active hold EXCEPT this job's own job-hold, so the dispatch light never warns a job
+// against its own reservation. demand_qty is already converted to the product's
+// inventory unit server-side. has_inventory=false means no stock record → treat as short.
+export interface DispatchStockRow {
+  job_id: string;
+  product_id: string;
+  demand_qty: number;
+  has_inventory: boolean;
+  free_excluding_own_hold: number;
+  reorder_point: number;
+}
+
 export type DeliveryStatus = 'scheduled' | 'in_progress' | 'completed' | 'cancelled' | 'voided';
 export type DeliveryPriority = 'low' | 'normal' | 'high' | 'urgent';
 export type DeliveryIssueType = 'none' | 'customer_not_home' | 'gate_locked' | 'road_blocked' | 'wrong_address' | 'refused' | 'weather' | 'other';
