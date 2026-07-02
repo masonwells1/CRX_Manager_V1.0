@@ -9231,8 +9231,6 @@ export type Database = {
         Args: {
           p_idempotency_key?: string
           p_location: string
-          // p_min_stock_level / p_reorder_point PENDING parked migration
-          // 20260702141000 (structure-fix A13) — regenerate after apply.
           p_min_stock_level?: number
           p_notes?: string
           p_performed_by?: string
@@ -9867,7 +9865,6 @@ export type Database = {
         }
         Returns: Json
       }
-      // PENDING parked migration 20260702140000 (structure-fix A12) — regenerate after apply.
       save_field_crop_history: {
         Args: {
           p_crop_type: string

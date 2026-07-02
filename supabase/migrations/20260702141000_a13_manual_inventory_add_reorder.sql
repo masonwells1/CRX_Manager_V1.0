@@ -1,6 +1,13 @@
 -- ============================================================================
--- PARKED DRAFT — DO NOT APPLY (structure-fix loop, Wave A / A13). 2026-07-02.
--- Mason applies via the DRAFT/APPLY protocol after review.
+-- APPLIED LIVE 2026-07-02 (structure-fix loop, Wave A / A13) via gated MCP apply_migration
+-- with Mason's explicit OK. Reviewers rls-security + migration-drift = CLEAN; live pre-apply
+-- confirmed exactly ONE 8-arg overload so the single DROP sufficed; verified live post-apply:
+-- exactly 1 overload (the 10-arg), SECDEF + search_path, ACL authenticated (no anon).
+-- caller-analysis: manual_inventory_add :: the only live caller is the UI rpc at
+--   src/pages/InventoryPage.tsx (runs as an authenticated user). The REVOKEs strip only
+--   PUBLIC/anon; authenticated EXECUTE is re-GRANTed, so that callsite is unaffected. The
+--   DROP+CREATE re-establishes the sole overload with the identical ACL (authenticated +
+--   service_role). No other in-DB / cron caller (leaf function).
 --
 -- WHAT: manual_inventory_add gains two optional params — p_reorder_point and
 --       p_min_stock_level — written into the new inventory row on creation.

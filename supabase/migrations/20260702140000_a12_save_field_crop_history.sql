@@ -1,6 +1,7 @@
 -- ============================================================================
--- PARKED DRAFT — DO NOT APPLY (structure-fix loop, Wave A / A12). 2026-07-02.
--- Mason applies via the DRAFT/APPLY protocol after review.
+-- APPLIED LIVE 2026-07-02 (structure-fix loop, Wave A / A12) via gated MCP apply_migration
+-- with Mason's explicit OK. Reviewers rls-security + migration-drift = CLEAN; verified live
+-- post-apply: 1 overload, SECDEF + search_path=public,pg_temp, ACL authenticated (no anon).
 --
 -- WHAT: New RPC save_field_crop_history(field_id, season, crop_type, ...) that
 --       INSERT..ON CONFLICT (field_id, season) upserts a field_crop_history row.

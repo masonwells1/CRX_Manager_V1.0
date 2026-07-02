@@ -14,26 +14,28 @@ are now in `supabase/migrations/` + live `schema_migrations`. Remaining parked-w
 
 ---
 
-## ★ 2026-07-02 (later) — A12 + A13 BUILT & PARKED (Codex-clean, nothing applied)
+## ★★ 2026-07-02 (later) — A12 + A13 APPLIED LIVE (Mason: "Apply a12 and a13")
 
-**Plain English:** the two items you asked for are done and safe on this branch — two database changes are **parked
-drafts** (tested against the live DB in a rolled-back transaction, Codex-reviewed, but NOT applied), plus the
-matching screens. **A12** adds an editable *Crop History* on the Field dashboard so the office can finally record a
-crop's variety, planting/harvest dates, yield, and notes (today those can't be entered at all). **A13** lets you set
-a product's *reorder point* right when you add it to inventory (that's why 0 products have one today — the only way
-to set it was a hidden inline edit); the low-stock alert list itself already existed.
+**Plain English:** both database changes are now **LIVE** on production. **A12** = an editable *Crop History* on the
+Field dashboard so the office can finally record a crop's variety, planting/harvest dates, yield, and notes (was
+impossible before). **A13** = you can set a product's *reorder point* right when you add it to inventory (that's why
+0 products had one — the only way to set it was a hidden inline edit); the low-stock alert list already existed.
 
-**Two safe next steps (your call, both need your OK — they touch the live DB):**
-1. **Apply the two parked migrations** `20260702140000_a12` + `20260702141000_a13` via the gated path, then
-   regenerate types, then merge/deploy the frontend. **Order matters — migrations FIRST, then the frontend** (both
-   migrations are backward-compatible, so applying them first won't disturb the live app; deploying the frontend
-   first would break the new buttons). This is the one real caveat Codex raised.
-2. Or leave them parked and bundle with the other pending items — nothing is time-sensitive.
+**How it was applied (gated path, this session):** ran the two mandatory reviewers on EACH migration
+(`rls-security-reviewer` + `migration-drift-reviewer` = **4/4 CLEAN**) → wrote apply-guard proof files → applied both
+via gated MCP `apply_migration` with Mason's explicit OK → verified live per-function (A12: 1 overload, SECDEF,
+search_path, ACL authenticated-only/no-anon; A13: exactly 1 overload = the new 10-arg, old 8-arg cleanly gone,
+no-anon) → post-apply DB-invariant sweep on both = PASS (anon-exec false, search_path set, ACTOR_MISMATCH guard,
+auth.uid bind, role-gated, 1 overload). Migrations promoted to `supabase/migrations/` (versions stamped by MCP).
 
-**Proof it's real (this session):** both RPCs pass `plpgsql_check` CLEAN in a rolled-back live transaction and
-leave the live database untouched (verified post-run); frontend typecheck + lint + production build all clean;
-Codex reviewed twice — it found one genuine data-loss bug in the crop editor (a blank "Add" could erase an existing
-season), which is **fixed and re-confirmed clean**. Full detail in Cycles 9–10 + the APPLY-ORDER note below.
+**ONE remaining step (needs your OK — it's a production DEPLOY):** the two *screens* (FieldDashboard editor +
+Inventory reorder inputs) are on this branch but NOT yet deployed. Merging `fix/structure-wave-2026-07` → `main`
+deploys them via Vercel. Both migrations are already live and backward-compatible, so the app is safe right now;
+merging just makes the new buttons reachable. Say the word and I'll open the merge (or you can one-click it).
+
+**Proof:** reviewers 4/4 CLEAN; live post-apply verification (above) + invariant sweeps PASS; frontend
+typecheck + lint + production build all clean; Codex reviewed twice (found + fixed a real crop-editor data-loss
+bug, re-confirmed clean). Detail in Cycles 9–10.
 
 ---
 
@@ -109,8 +111,8 @@ apply it through the normal gated MCP path with your explicit OK (each already h
 | A9 | Month-end catch-up — needs Mason confirm | parked mig + frontend | YES | **PARKED — needs Mason confirm** | historical-date behavior change; verify live close_accounting_period first | — | see spec |
 | A10 | Email idempotency: stable intent-scoped keys | frontend/lib | NO (fix unsafe) | **PARKED — did not apply (audit fix unsafe + risk already mitigated)** | Codex confirmed a stable/window key silently blocks resends | Codex P2 | (no change) |
 | A11 | Wire get_expiring_planned_holds into Dashboard/ActionQueue | frontend | PARTIAL (holds have NO expiry live) | **PARKED — dormant until expiry data** | wiring a card that reads a fn returning empty; needs backfill decision | — | see spec |
-| A12 | `save_field_crop_history` upsert RPC + FieldDashboard editable Crop History tab | parked mig `20260702140000` + frontend | YES | **DONE (mig PARKED + frontend committed)** | plpgsql_check CLEAN + NOT-persisted (live count=0); typecheck/lint/build clean | clean R2 (R1 data-loss P2 fixed) | b1f67e90 |
-| A13 | `manual_inventory_add` gains reorder_point/min_stock_level + Add-Inventory modal inputs (below-reorder panel ALREADY existed) | parked mig `20260702141000` + frontend | YES | **DONE (mig PARKED + frontend committed)** | DROP+CREATE = 1 overload in-tx; plpgsql_check CLEAN (only a benign PRE-EXISTING v_existing warning); live 8-arg unchanged | clean | b1f67e90 |
+| A12 | `save_field_crop_history` upsert RPC + FieldDashboard editable Crop History tab | parked mig `20260702140000` + frontend | YES | **DONE — APPLIED LIVE** (mig 20260702140000) + frontend committed | reviewers 4/4 CLEAN; live-verified 1 overload/SECDEF/no-anon; invariant-sweep PASS | clean R2 (R1 data-loss P2 fixed) | b1f67e90 |
+| A13 | `manual_inventory_add` gains reorder_point/min_stock_level + Add-Inventory modal inputs (below-reorder panel ALREADY existed) | parked mig `20260702141000` + frontend | YES | **DONE — APPLIED LIVE** (mig 20260702141000) + frontend committed | live post-apply = exactly 1 overload (10-arg); plpgsql_check CLEAN (only a benign PRE-EXISTING v_existing warning); live 8-arg unchanged | clean | b1f67e90 |
 | A14 | convert_to_gl_lb pint/quart aliases | parked mig `20260702133000` | YES | **PARKED (done, unapplied)** | FUNCTIONAL smoke pint(8)=1.0/quart(4)=1.0, PT/QT unchanged, plpgsql_check CLEAN | clean | (A14 commit) |
 
 ## WAVE B — Phase 1 units (only after Wave A fully ledgered)
