@@ -31,7 +31,7 @@
 | A1 | Blend product-select stale-closure bug | frontend | YES | **DONE** | fail-first test (`'' → 'p1'`) | clean | f9a4d7ee |
 | A2 | save_blend_ticket persists job_id + application_service_id (+ job/customer guard) | parked mig `20260702130000` | YES | **PARKED (done, unapplied)** | plpgsql_check CLEAN, rolled back | clean (3 rounds) | (in A2 commit) |
 | A3 | save_quote restore 3 section fields + is_planned (idempotency ALREADY LIVE) | parked mig `20260702131000` | PARTIAL* | **PARKED (done, unapplied)** | plpgsql_check CLEAN + drift-review CLEAN (additive-only) | clean | (A3 commit) |
-| A4 | create_quick_delivery tier-price $0 fallback + shared getTierPrice | parked mig + frontend | | TODO | | | |
+| A4 | create_quick_delivery tier $0 fallback (mig DONE) + getTierPrice consolidation (DEFERRED, DRY-only) | parked mig `20260702132000` | YES | **PARKED (mig done) + frontend deferred** | plpgsql_check CLEAN | clean | (A4 commit) |
 | A5 | Blend unit conversion (3 RPCs) + OCR ratePerAcre carry + $0-rate guard | parked migs + edge-fn | | TODO | | | |
 | A6 | complete_job inventory unit conversion + shortfalls + DispatchBoard | parked mig + frontend | | TODO | | | |
 | A7 | PO single write path + quantity_on_order recompute (604-product diff) | parked mig + frontend | | TODO | | | |
@@ -106,3 +106,14 @@ verbatim from live (`20260616204400`, 1 overload) additively adding `is_planned`
 QuoteBuilder.tsx:889,898-900. PROOF — Ran: rolled-back live smoke + plpgsql_check; Saw: NO FINDINGS - CLEAN,
 live fn unchanged (position()=0), 1 overload. Codex CLEAN + migration-drift-reviewer CLEAN (byte-for-byte
 additive-only, all 4 columns/types verified). Draft: `...131000_a3_...sql`.
+
+**Cycle 4 — A4 (create_quick_delivery tier-price $0 fallback):** migration PARKED (done); frontend
+consolidation DEFERRED. The SERVER bug (bills $0 when a tier-2/3 customer's product has no tier2/3
+price) is the real Tier-0 issue — fixed by cascading tier2/3→tier1 in BOTH pricing passes (verbatim
+reproduction, 2 surgical CASE edits). PROOF — Ran: rolled-back smoke + plpgsql_check; Saw: NO FINDINGS -
+CLEAN, live unchanged (position()=0), 1 overload. Codex CLEAN (matches create_direct_order's existing
+pattern). **Frontend getTierPrice consolidation deferred (NOT a bug):** the audit's ~7 frontend cascades
+already fall back to tier1, so post-server-fix client & server agree; a blind swap onto the `||`-based
+shared helper risks changing money behavior at sites with deliberate `!= null` guards (JobDetail:2396/2410
+NO-clobber guard; recipeHelpers:81 recipe-price-first). Needs a per-site pass — logged for follow-up.
+Draft: `...132000_a4_...sql`.
