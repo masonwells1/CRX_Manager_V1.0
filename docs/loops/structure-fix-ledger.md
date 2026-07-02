@@ -37,7 +37,7 @@
 | A7 | PO single write path + quantity_on_order recompute (604-product diff) | parked mig + frontend | | TODO | | | |
 | A8 | Terms→due-date (payment_terms_days + post_invoice default) — needs Mason policy | parked mig + frontend | | TODO | | | |
 | A9 | Month-end catch-up — needs Mason confirm | parked mig + frontend | | TODO | | | |
-| A10 | Email idempotency: stable intent-scoped keys | frontend/lib | | TODO | | | |
+| A10 | Email idempotency: stable intent-scoped keys | frontend/lib | NO (fix unsafe) | **PARKED — did not apply (audit fix unsafe + risk already mitigated)** | Codex confirmed a stable/window key silently blocks resends | Codex P2 | (no change) |
 | A11 | Wire get_expiring_planned_holds into Dashboard/ActionQueue | frontend | | TODO | | | |
 | A12 | PHI guardrail writer: field crop-history editor + upsert RPC | frontend + parked mig | | TODO | | | |
 | A13 | reorder_point edit UI + below-reorder list | frontend | | TODO | | | |
@@ -135,3 +135,13 @@ exact spec; I pre-reviewed the diff + independently confirmed no-persist (positi
 PROOF — Ran: rolled-back plpgsql_check on both fns = NO FINDINGS - CLEAN; DispatchBoard typecheck+lint clean.
 Codex CLEAN (both together). Draft: `...134000_a6_...sql`. **Behavior flag for Mason: blank/unknown job-chem
 unit now hard-stops completion (intended guard).**
+
+**Cycle 7 — A10 (email idempotency):** PARKED — investigated, did NOT apply (the audit's fix is unsafe).
+I tried the audit's "drop Date.now() for a stable key" (as a per-minute bucket). Codex flagged a real
+P2: the send-email edge fn dedups against `email_log` (PERMANENT) purely by key, so ANY stable/window key
+SILENTLY blocks intentional resends (customer gets nothing, UI says "sent") — worse than an occasional
+duplicate. Verified: `sendEmail` has NO auto-retry (single fetch), so a per-attempt nonce adds no dedup
+either. AND the accidental-double-send the audit targets is ALREADY mitigated at the UI: the list pages
+guard with `rowActionRef` ("a double-click can't fire two prints/emails") and InvoiceDetail disables the
+button via `emailing`/`loading`. So the correct action was to REVERT and keep the unique-per-send key.
+Real follow-up (if wanted): surface the edge fn's `deduplicated:true` in the UI — a UI concern, not a key one.
