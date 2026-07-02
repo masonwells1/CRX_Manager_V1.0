@@ -27,7 +27,7 @@
 --
 -- status-enum-check: exempt
 --   (writes the inventory_holds.hold_type literal 'job'; the CHECK was extended
---    to a superset in A1 20260702130000. Registry is regenerated post-apply.)
+--    to a superset in A1 20260702170000. Registry is regenerated post-apply.)
 -- ============================================================================
 
 -- ── Engine ──────────────────────────────────────────────────────────────────
@@ -89,11 +89,19 @@ BEGIN
   DELETE FROM job_product_draws WHERE job_id = p_job_id;
 
   FOR v_item IN
-    SELECT jc.product_id, SUM(jc.quantity) AS job_demand
+    -- Demand in INVENTORY units (Codex P1): convert each chemical's quantity from
+    -- its unit to the product's inventory_unit — matching complete_job's
+    -- deduction and the quote booking (which is stored in inventory units). 1:1
+    -- when the units already match (the common case). Fall back to the raw
+    -- quantity for a blank/unconvertible unit so the warn-only reserve never
+    -- raises (unlike complete_job, which does).
+    SELECT jc.product_id,
+           SUM(COALESCE(field_app_priced_quantity(jc.quantity, jc.unit, p.inventory_unit, p.product_form), jc.quantity)) AS job_demand
     FROM job_chemicals jc
+    JOIN products p ON p.id = jc.product_id
     WHERE jc.job_id = p_job_id AND jc.product_id IS NOT NULL
     GROUP BY jc.product_id
-    HAVING SUM(jc.quantity) > 0
+    HAVING SUM(COALESCE(field_app_priced_quantity(jc.quantity, jc.unit, p.inventory_unit, p.product_form), jc.quantity)) > 0
   LOOP
     v_job_demand := v_item.job_demand;
     v_job_drawn := 0;
@@ -158,11 +166,19 @@ BEGIN
   -- WARN (never block, §6.1): per product, free = available − prebooked − active
   -- non-expired holds. Negative free (or no inventory row) => short.
   FOR v_item IN
-    SELECT jc.product_id, SUM(jc.quantity) AS job_demand
+    -- Demand in INVENTORY units (Codex P1): convert each chemical's quantity from
+    -- its unit to the product's inventory_unit — matching complete_job's
+    -- deduction and the quote booking (which is stored in inventory units). 1:1
+    -- when the units already match (the common case). Fall back to the raw
+    -- quantity for a blank/unconvertible unit so the warn-only reserve never
+    -- raises (unlike complete_job, which does).
+    SELECT jc.product_id,
+           SUM(COALESCE(field_app_priced_quantity(jc.quantity, jc.unit, p.inventory_unit, p.product_form), jc.quantity)) AS job_demand
     FROM job_chemicals jc
+    JOIN products p ON p.id = jc.product_id
     WHERE jc.job_id = p_job_id AND jc.product_id IS NOT NULL
     GROUP BY jc.product_id
-    HAVING SUM(jc.quantity) > 0
+    HAVING SUM(COALESCE(field_app_priced_quantity(jc.quantity, jc.unit, p.inventory_unit, p.product_form), jc.quantity)) > 0
   LOOP
     SELECT inv.quantity_available - inv.quantity_prebooked
            - COALESCE((

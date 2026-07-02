@@ -6,6 +6,31 @@
 
 ---
 
+## ⚠️ AUTHORITATIVE STATUS (2026‑07‑02, supersedes any stale refs below)
+
+**Part A CORE is BUILT + PROVEN + gated** — 7 migrations, all renumbered to the `20260702170000+` range (see below). Frontend job‑draw pre‑checks in `QuoteBuilder.tsx`. Final authoritative file list:
+| Cycle | File | Proven |
+|---|---|---|
+| A1 | `20260702170000_layer2_job_holds_schema.sql` | job hold_type + `job_product_draws` + SECDEF‑only job‑hold policies; RLS‑block e2e |
+| A2 | `20260702171000_layer2_sync_planned_holds_job_aware.sql` | `_sync_planned_holds` job‑aware; executed on live quote |
+| A3 | `20260702172000_layer2_draw_down_quote_job_aware.sql` | `draw_down_quote` job‑aware; plpgsql_check == live |
+| A3.5 | `20260702172500_layer2_convert_quote_to_order_job_aware.sql` | `convert_quote_to_order` job‑aware (5 Codex rounds) |
+| A3.6 | `20260702173000_layer2_quote_lifecycle_guards_job_aware.sql` | accept+terminal triggers job‑aware |
+| A4 | `20260702174000_layer2_reserve_job_inventory.sql` | reserve engine + `job_chemicals` triggers + `jobs` lifecycle trigger + inventory‑unit conversion; lifecycle e2e (reserve/complete‑keep/cancel‑reverse) PROVEN |
+| A5 | `20260702175000_layer2_complete_job_drop_phase7_drain.sql` | §3.5 fix; before/after e2e (prebooked no longer drained) |
+
+**🚨 BLOCKER — branch divergence (Mason's call):** a **parallel session (structure‑fix wave)** advanced `origin/main` by **15 commits** DURING this build, incl. an "a‑series" of migrations that took the SAME `20260702130000–135000` timestamps I'd used (a2 save_quote, a6 = live complete_job, a7 PO, …) — all APPLIED LIVE (live max version `20260702161533`). Two consequences:
+1. **RENUMBERED** all Layer 2 migrations to `170000–175000` (past the live max) so they don't collide / get skipped. ✅ done.
+2. **Merge reconciliation needed:** this branch is behind `main`; `main`'s `2aa374b4 feat(types): typed Supabase client` touched `QuoteBuilder.tsx` + `src/types/*` → my job‑draw edits will conflict on merge. **Recommend: rebase `feat/inventory-layer2` onto latest `origin/main`** (getting the a‑series), resolve the `QuoteBuilder.tsx`/types conflicts, re‑verify Layer 2 applies after the a‑series, THEN the batched apply.
+
+**REMAINING to finish Layer 2 (do AFTER the rebase, on the reconciled base):**
+- Part A polish: **`save_quote` drawn‑product guard → job‑aware** (Codex A3.5 round‑5 root cause), **db‑invariant sweep** (active `job` holds on terminal/deleted jobs = 0), **rollover/settlement trio** (`rollover_quote_to_season`/`get_open_booking_rollover`/`get_booking_settlement` subtract job draws).
+- Part B (read side): `get_job_inventory_shortfalls` own‑hold coverage · `get_inventory_position` job column + qty‑aware dedup · dispatch free‑excluding‑own‑hold · `get_inventory_forecast` job holds via `jobs.job_date`.
+- A4‑cohort frontend: DispatchBoard/Jobs reserve wiring + a "Job" badge at `InventoryPage.tsx:1171‑1173`.
+- Note: A4's inventory‑unit conversion (Codex A5 P1 fix) is `plpgsql_check`‑clean + 1:1 for the common (matching‑unit) case; wants a final Codex confirmation post‑rebase. Codex A5 P2 (blank‑unit job rows blocked at completion) is **pre‑existing a6 behavior** (live), not a Layer 2 regression.
+
+---
+
 ## Step 0 — ship‑state verification (done 2026‑07‑02)
 - Layer 1 (`f7e74c9c`, mig `20260702120000_inventory_job_demand_visibility`) is an ancestor of `origin/main`; branch is at latest, nothing ahead. Layer 1 migration is double‑recorded live (harmless, as documented).
 - No other session/branch is building Layer 2 (grep across all branches = docs commits only; no `_sync_job`/`reserve_job` code anywhere).
@@ -26,12 +51,12 @@
 ## Cycle plan & status  (timestamps sort AFTER Layer 1's `20260702120000`)
 | Cycle | Migration file | What | Status |
 |------|----------------|------|--------|
-| A1 | `20260702130000_layer2_job_holds_schema.sql` | `job` hold_type + `job_product_draws` table + **SECDEF-only job-hold write policies** + types | ✅ **COMMITTED `4ff80fb4`** — reviewers+Codex clean (P2 fixed+proven) |
-| A2 | `20260702131000_layer2_sync_planned_holds_job_aware.sql` | `_sync_planned_holds` subtracts job draws | ✅ **COMMITTED `df61b823`** — reviewers+Codex clean |
-| A3 | `20260702132000_layer2_draw_down_quote_job_aware.sql` | `draw_down_quote` remaining subtracts job draws (§6.5) | ✅ **COMMITTED** — reviewers+Codex clean |
-| A3.5 | `20260702132500_layer2_convert_quote_to_order_job_aware.sql` | **`convert_quote_to_order` job-aware** (Codex P1) + **P2 fix** (raise instead of null-order `already_converted`) | drift+rls CLEAN; **P2 edit re-review running** |
+| A1 | `20260702170000_layer2_job_holds_schema.sql` | `job` hold_type + `job_product_draws` table + **SECDEF-only job-hold write policies** + types | ✅ **COMMITTED `4ff80fb4`** — reviewers+Codex clean (P2 fixed+proven) |
+| A2 | `20260702171000_layer2_sync_planned_holds_job_aware.sql` | `_sync_planned_holds` subtracts job draws | ✅ **COMMITTED `df61b823`** — reviewers+Codex clean |
+| A3 | `20260702172000_layer2_draw_down_quote_job_aware.sql` | `draw_down_quote` remaining subtracts job draws (§6.5) | ✅ **COMMITTED** — reviewers+Codex clean |
+| A3.5 | `20260702172500_layer2_convert_quote_to_order_job_aware.sql` | **`convert_quote_to_order` job-aware** (Codex P1) + **P2 fix** (raise instead of null-order `already_converted`) | drift+rls CLEAN; **P2 edit re-review running** |
 | A3.5/A3.6/FE | `…132500`+`…133000`+`QuoteBuilder.tsx` | convert + accept/terminal guards + FE pre-checks job-aware | ✅ **COMMITTED** — 5 Codex rounds, all clean |
-| A4 | `20260702134000_layer2_reserve_job_inventory.sql` | **reserve engine**: `_sync_job_holds` + `job_chemicals` triggers + **`jobs` lifecycle release trigger** + `reserve_job_inventory` RPC | reviewers v1 CLEAN; **3 Codex findings FIXED+PROVEN**; re-gate running |
+| A4 | `20260702174000_layer2_reserve_job_inventory.sql` | **reserve engine**: `_sync_job_holds` + `job_chemicals` triggers + **`jobs` lifecycle release trigger** + `reserve_job_inventory` RPC | reviewers v1 CLEAN; **3 Codex findings FIXED+PROVEN**; re-gate running |
 
 **A4 Codex round 1 (3 findings, all FIXED + lifecycle e2e PROVEN):**
 - **P1 lifecycle release** — job holds are `expires_at=NULL` + only `job_chemicals` triggers were wired, so a terminal/deleted job stranded its reservation. FIX: added `jobs` AFTER-UPDATE-OF-status/deleted_at trigger → re-runs the engine (reserves if scheduled/in_progress, releases otherwise). **Completion KEEPS the draw** (consumed), **cancel/soft-delete REVERSES it** (restored). PROVEN e2e: reserve 2 jobs (crop 91.25→88.25), complete A (hold released, draw KEPT=1) + cancel B (hold released, draw REVERSED), quote crop → 90.25 (=booking−kept draw).
@@ -46,9 +71,9 @@
 - **Wiring = `job_chemicals` statement-level triggers** (INSERT/DELETE/UPDATE, transition table `affected`) → `_sync_job_holds(job_id, auth.uid())` per distinct job_id. Avoids rewriting the 3 large writers; catches all writers (§6.2 auto). No recursion (writes holds/draws, not job_chemicals).
 - **`reserve_job_inventory(p_job_id, p_performed_by, p_idempotency_key)`** (SECDEF, strict-actor, admin/sales_rep, idempotency helpers, REVOKE anon): calls `_sync_job_holds`, returns shortfalls — explicit entry so the dispatcher sees warnings. **`release_job_inventory`** (admin): manual release (§6.2).
 - **Jobs come from planned quotes only, status ≠ declined/expired/cancelled** — DRAFT job draws are real → terminal guard (A3.6) already covers draft. `-- status-enum-check: exempt` (writes `'job'` literal). No `inventory_transactions` row (D4 — holds, not movements).
-| A4 | `20260702133000_layer2_reserve_job_inventory.sql` | `_sync_job_holds` + `reserve_job_inventory` + wire 3 writers + FE | pending |
-| A5 | `20260702134000_layer2_complete_job_and_release.sql` | `complete_job` rewrite (+§3.5 fix) + `jobs` release trigger + invariant sweep | pending |
-| B1 | `20260702135000_layer2_shortfalls_job_coverage.sql` | `get_job_inventory_shortfalls` treats own hold as coverage | pending |
+| A4 | `20260702173000_layer2_reserve_job_inventory.sql` | `_sync_job_holds` + `reserve_job_inventory` + wire 3 writers + FE | pending |
+| A5 | `20260702174000_layer2_complete_job_and_release.sql` | `complete_job` rewrite (+§3.5 fix) + `jobs` release trigger + invariant sweep | pending |
+| B1 | `20260702175000_layer2_shortfalls_job_coverage.sql` | `get_job_inventory_shortfalls` treats own hold as coverage | pending |
 | B2 | `20260702136000_layer2_inventory_position_job_column.sql` | `get_inventory_position` split holds by type + qty‑aware planned dedup | pending |
 | B3 | `20260702137000_layer2_dispatch_free_precision.sql` | dispatch RPC free‑excluding‑own‑hold + FE light | pending |
 | B4 | `20260702138000_layer2_forecast_job_holds.sql` | `get_inventory_forecast` joins jobs, buckets on job_date + FE column | pending |
@@ -95,8 +120,12 @@ Codex caught a gap the handoff §4A.3 missed: it named `_sync_planned_holds` + `
 5. Frontend: DispatchBoard/Jobs reserve calls + `assertRpcResult` + `logActivity`; add a "Job" badge branch at `InventoryPage.tsx:1171-1173` (A1 types‑review i3).
 6. **REVOKE anon** on the new SECDEF fns + verify `has_function_privilege('anon',…)=false`.
 
+### A5 — `complete_job` §3.5 fix (2026‑07‑02)
+- **File:** `20260702175000_layer2_complete_job_drop_phase7_drain.sql`. Removes the buggy "Phase 7" quote‑hold drain (`v_hold_qty`/`v_decrement_pb`/prebooked decrement/crop FIFO drain + unused vars). complete_job now ONLY deducts physical stock; A4's jobs trigger (fired on `status='completed'`) owns the hold release + quote resync. Everything else byte‑faithful.
+- **PROVEN before/after (rolled back, live product w/ prebooked=305.5):** LIVE buggy → prebooked 305.5→**304.5** + crop 90.25→**89.25** (double‑reduction). A5 fixed → avail 1100→1099, prebooked 305.5→**305.5** (untouched), crop 90.25→**90.25** (draw kept), job hold released. `plpgsql_check` CLEAN.
+
 ### Revised cycle order (core first, then quote‑side polish, then Part B)
-A3.5/A3.6 → **A4 (reserve engine — THE core; makes everything non‑inert)** → **A5 (completion + release trigger + §3.5 fix + invariant sweep)** → A3.7/A3.8/A3.9 (rollover/settlement job‑awareness) → Part B (B1–B4 read side).
+A3.5/A3.6 → A4 (reserve engine) → **A5 (complete_job §3.5 fix)** ✅ built → **db‑invariant sweep** (active `job` holds on terminal/deleted jobs = 0) + `save_quote` guard (A4‑cohort) → A3.7/A3.8/A3.9 (rollover/settlement) → Part B (B1–B4 read side).
 
 ## POST‑APPLY BATCH CHECKLIST (hand to Mason at the end — do NOT do during the loop)
 1. Apply migrations A1→B4 in filename order via Supabase MCP `apply_migration` (Mason's explicit OK per file).
