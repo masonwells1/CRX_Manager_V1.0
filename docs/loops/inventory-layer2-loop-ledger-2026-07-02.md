@@ -115,6 +115,16 @@ Not regressions — these are pre-existing paths that adding job holds/draws rip
 - **P2** (`QuoteBuilder.tsx` openDrawDownModal): the Partial Order modal computed `remaining` from order draws only, so with a job reservation it showed too much and let the user submit an amount `draw_down_quote` now rejects (BOOKING_OVERDRAWN). FIX: fetch `job_product_draws` and fold into `drawn` (order+job) so remaining = booked − order − job = the server balance. typecheck + lint CLEAN.
 Migration count now 14 (`170000`–`182000`). A round-5 Codex confirms.
 
+### Codex `/codex-review` ROUND 5 (2026-07-02) — 3 findings (2 P1 multi-job allocation + 1 P2 soft-delete). P2 FIXED; the two P1s = OWNER DECISION (redesign).
+- **P2 FIXED** (`Quotes.tsx` handleDelete): the bulk-delete guard checked `quote_product_draws` only → a quote with a job draw could be soft-deleted (no status trigger fires, FK cascades only on hard delete) while its booking stays consumed. Now folds `job_product_draws` into the skip-set. typecheck+lint CLEAN.
+- **P1 ×2 = DEFERRED, presented to Mason (multi-job coordinated allocation — a redesign, not a point fix):**
+  1. *Sibling draw reallocation on release* (`174000:83`): when one of N jobs on the SAME quote+product is cancelled/deleted, its draw is dropped + the crop hold rebuilt, but SIBLING jobs aren't re-drawn → freed booking shows drawable while a sibling still needs it.
+  2. *Order-coverage allocated once* (`174000:165`): the round-3 hold formula subtracts the quote-level `v_order_drawn` PER JOB, so with multiple jobs on one product the shared prebooked coverage is over-applied → under-reserve.
+  **Root cause:** the reserve engine sizes each job INDEPENDENTLY; correct multi-job behavior needs the booking + order coverage ALLOCATED ONCE across sibling jobs (FIFO/proportional) — a coordinated-allocation model.
+  **Impact:** requires multiple jobs on the SAME planned quote AND product with insufficient booking; layer is WARN-ONLY (never blocks; complete_job still flags short-stock; draw_down_quote's BOOKING_OVERDRAWN backstops re-draw); **ZERO current impact** (DB operationally empty — no real bookings, existing jobs are fake, §6.6).
+  **Recommendation:** apply the 15-fix hardened core now; build the coordinated sibling-allocation as a scoped follow-up (it deserves its own careful pass + would likely surface further edge cases). Neither simple choice satisfies both round-2 (no over-reserve) and round-5 (no under-reserve) — only coordinated allocation does.
+Migration count 15 (`170000`–`182000` + the P2 was a frontend-only change, no new migration). Codex rounds: 5+3+4+2+3 = **17 findings, 15 fixed**; 2 residual P1s = the multi-job-allocation decision above.
+
 ### ⚠️ Branch topology (verified 2026-07-02 — matters for the merge target)
 - **local `main` is STALE** (HEAD `30adac32`, the Layer 2 handoff commit) — it does NOT have the structure-fix work.
 - **origin/main is AHEAD** (HEAD `8d908bce`) and ALREADY contains the structure-fix loop's commits (`022ee69e` etc. ARE in origin/main).

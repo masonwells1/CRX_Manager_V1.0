@@ -12,7 +12,7 @@ import ConfirmModal from '../components/ui/ConfirmModal';
 import BulkQuoteImport from '../components/quotes/BulkQuoteImport';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, assertRpcResult, checkMutationResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
+import { supabase, supabaseUntyped, assertRpcResult, checkMutationResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection';
 import { exportToCSV, fmtCSV, fmtDateCSV } from '../lib/csvExport';
@@ -371,16 +371,23 @@ export default function Quotes() {
       // Open bookings with partial draw-downs must not be soft-deleted:
       // deletion changes no status, so the hold-release trigger never fires —
       // the booking's reserved inventory would stay held on a hidden quote.
-      const { data: drawnRows, error: drawnErr } = await supabase
-        .from('quote_product_draws')
-        .select('quote_id')
-        .in('quote_id', ids)
-        .gt('quantity_drawn', 0);
-      if (drawnErr) throw drawnErr;
-      const drawnIds = new Set((drawnRows || []).map((d) => d.quote_id));
+      // Layer 2 (§6.5 / Codex round-5 P2): a job reservation is a SECOND draw ledger
+      // (job_product_draws) and the FK only cascades on HARD deletes, so a quote with
+      // a live job draw must be skipped here too — else it's hidden while its booking
+      // stays consumed by a schedulable/invoiceable job.
+      const [orderDrawnRes, jobDrawnRes] = await Promise.all([
+        supabase.from('quote_product_draws').select('quote_id').in('quote_id', ids).gt('quantity_drawn', 0),
+        supabaseUntyped.from('job_product_draws').select('quote_id').in('quote_id', ids).gt('quantity_drawn', 0),
+      ]);
+      if (orderDrawnRes.error) throw orderDrawnRes.error;
+      if (jobDrawnRes.error) throw jobDrawnRes.error;
+      const drawnIds = new Set<string>([
+        ...(orderDrawnRes.data || []).map((d) => d.quote_id),
+        ...(jobDrawnRes.data || []).map((d: { quote_id: string }) => d.quote_id),
+      ]);
       if (drawnIds.size > 0) {
         const blocked = selectedRows.filter((q) => drawnIds.has(q.id));
-        toast('warning', `${blocked.length} booking(s) with draw-downs skipped — close the booking (draw or cancel the remainder) before deleting: ${blocked.map((q) => q.quote_number).join(', ')}`);
+        toast('warning', `${blocked.length} booking(s) with draw-downs or job reservations skipped — close the booking (draw/cancel the remainder or the job) before deleting: ${blocked.map((q) => q.quote_number).join(', ')}`);
         ids = ids.filter((id) => !drawnIds.has(id));
         if (ids.length === 0) {
           setDeleting(false);
