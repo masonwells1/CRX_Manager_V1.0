@@ -53,6 +53,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { supabase, assertRpcResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
 import ConfirmModal from '../components/ui/ConfirmModal';
 import { generateIdempotencyKey } from '../lib/idempotency';
+import { fieldAppPricedQuantity } from '../lib/chemCalculator';
 import type { Json } from '../types/supabase';
 import { Sentry } from '../lib/sentry';
 import {
@@ -89,6 +90,8 @@ interface JobChemNeed {
   product_name: string;
   quantity: number;
   unit: string | null;
+  inventory_unit: string | null;
+  product_form: string | null;
 }
 const STOCK_SEVERITY: Record<JobStockStatus, number> = { unknown: 0, ok: 1, low: 2, short: 3 };
 const worseStock = (a: JobStockStatus, b: JobStockStatus): JobStockStatus =>
@@ -363,20 +366,22 @@ export default function DispatchBoard() {
           for (let from = 0; ; from += DISPATCH_PAGE) {
             const chemRes = await supabase
               .from('job_chemicals')
-              .select('job_id, product_id, quantity, unit, product:products(product_name)')
+              .select('job_id, product_id, quantity, unit, product:products(product_name, inventory_unit, product_form)')
               .in('job_id', idChunk)
               .range(from, from + DISPATCH_PAGE - 1);
             if (chemRes.error) {
               Sentry.captureException(chemRes.error, { tags: { source: 'fetch', action: 'dispatch_job_chemicals' } });
               break;
             }
-            const rows = (chemRes.data || []) as Array<{ job_id: string; product_id: string; quantity: number | null; unit: string | null; product?: { product_name?: string } | null }>;
+            const rows = (chemRes.data || []) as Array<{ job_id: string; product_id: string; quantity: number | null; unit: string | null; product?: { product_name?: string; inventory_unit?: string | null; product_form?: string | null } | null }>;
             for (const c of rows) {
               (chemByJob[c.job_id] ||= []).push({
                 product_id: c.product_id,
                 product_name: c.product?.product_name || 'Product',
                 quantity: Number(c.quantity) || 0,
                 unit: c.unit,
+                inventory_unit: c.product?.inventory_unit ?? null,
+                product_form: c.product?.product_form ?? null,
               });
             }
             if (rows.length < DISPATCH_PAGE) break;
@@ -420,8 +425,16 @@ export default function DispatchBoard() {
           // No inventory record for a product the job needs = a real shortfall signal.
           if (!pos) { status = worseStock(status, 'short'); continue; }
           const free = pos.availLessPrebooked - pos.holds;
-          if (c.quantity > free) status = worseStock(status, 'short');
-          else if (free - c.quantity <= pos.reorder) status = worseStock(status, 'low');
+          // A6: job_chemicals.quantity is in the chem's rate-base unit (e.g. pt); free stock is
+          // in the product's inventory unit (e.g. gal). Convert before comparing so the stock
+          // light isn't wrong by the unit ratio (mirrors complete_job / get_job_inventory_shortfalls).
+          // Unconvertible/blank units fall back to the raw qty (conservative — same as the RPC).
+          const needQty = fieldAppPricedQuantity(
+            c.quantity, c.unit, c.inventory_unit,
+            c.product_form === 'dry' ? 'dry' : c.product_form === 'liquid' ? 'liquid' : null,
+          ) ?? c.quantity;
+          if (needQty > free) status = worseStock(status, 'short');
+          else if (free - needQty <= pos.reorder) status = worseStock(status, 'low');
         }
         return { ...j, chemicals: chems, stock_status: status };
       });

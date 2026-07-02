@@ -33,7 +33,7 @@
 | A3 | save_quote restore 3 section fields + is_planned (idempotency ALREADY LIVE) | parked mig `20260702131000` | PARTIAL* | **PARKED (done, unapplied)** | plpgsql_check CLEAN + drift-review CLEAN (additive-only) | clean | (A3 commit) |
 | A4 | create_quick_delivery tier $0 fallback (mig DONE) + getTierPrice consolidation (DEFERRED, DRY-only) | parked mig `20260702132000` | YES | **PARKED (mig done) + frontend deferred** | plpgsql_check CLEAN | clean | (A4 commit) |
 | A5 | Blend unit conversion (3 RPCs) + OCR ratePerAcre carry + $0-rate guard | parked migs + edge-fn | | TODO | | | |
-| A6 | complete_job inventory unit conversion + shortfalls + DispatchBoard | parked mig + frontend | | TODO | | | |
+| A6 | complete_job + shortfalls unit conversion (mig) + DispatchBoard compare (frontend) | parked mig `20260702134000` | YES | **DONE (mig PARKED + frontend committed)** | both fns plpgsql_check CLEAN + rolled back; DispatchBoard typecheck/lint clean | clean | (A6 commit) |
 | A7 | PO single write path + quantity_on_order recompute (604-product diff) | parked mig + frontend | | TODO | | | |
 | A8 | Terms→due-date (payment_terms_days + post_invoice default) — needs Mason policy | parked mig + frontend | | TODO | | | |
 | A9 | Month-end catch-up — needs Mason confirm | parked mig + frontend | | TODO | | | |
@@ -123,3 +123,15 @@ Draft: `...132000_a4_...sql`.
 gallon value on screen but saves NULL (client-shows / server-saves-NULL). PROOF — Ran: FUNCTIONAL
 rolled-back smoke actually calling the fn; Saw: pint(8)=1.0 GL, pints(16)=2.0, quart(4)=1.0, quarts(8)=2.0,
 PT/QT/gal unchanged, plpgsql_check CLEAN, live unchanged (position()=0). Codex CLEAN. Draft: `...133000_a14_...sql`.
+
+**Cycle 6 — A6 (complete_job inventory unit conversion + shortfalls + DispatchBoard):** DONE (mig PARKED +
+frontend committed). complete_job deducted rate-unit job_chemicals.quantity from inventory-unit
+quantity_available UNCONVERTED (the "single worst correctness bug" — corrupts stock by the unit ratio).
+Fixed by converting via `field_app_priced_quantity` into a new `v_deduct_qty` (HARD-RAISE
+JOB_INV_UNIT_UNCONVERTIBLE on unconvertible — consistent w/ field-app side) used in all 5 inventory
+writes; get_job_inventory_shortfalls converts demand (COALESCE fallback, read-only, no raise); DispatchBoard
+stock-light converts via the TS `fieldAppPricedQuantity` mirror. Drafting+smoke delegated to a subagent w/
+exact spec; I pre-reviewed the diff + independently confirmed no-persist (position()=0, 1 overload each).
+PROOF — Ran: rolled-back plpgsql_check on both fns = NO FINDINGS - CLEAN; DispatchBoard typecheck+lint clean.
+Codex CLEAN (both together). Draft: `...134000_a6_...sql`. **Behavior flag for Mason: blank/unknown job-chem
+unit now hard-stops completion (intended guard).**
