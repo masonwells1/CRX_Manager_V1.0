@@ -25,7 +25,10 @@ are held too (the overnight autopilot blocks all `git push` by design — the co
 5. `20260702134000_a6` — **job completion + shortfalls stop corrupting inventory by the unit ratio** (the worst one).
    ⚠️ **Behavior note:** after A6, completing a job whose chemical has a blank/unknown unit will STOP with a clear
    error instead of silently deducting the wrong amount. Intended guard; the common (same-unit) case is unaffected.
-6. `20260702135000_a7` — *(pending — fixes the 18 products whose "on order" count drifted; see cycle log.)*
+6. `20260702135000_a7` — fixes the products whose "on order" count drifted (16 corrected + 2 new rows) and
+   stops the INSERT-as-submitted PO path from re-drifting it. ⚠️ **Apply during low PO activity** (it briefly
+   locks the PO/inventory tables for the one-time recompute). Known latent follow-up in the header: on-order
+   increment (Main Warehouse) vs receive decrement (received location) can mismatch under multi-location receiving.
 
 **Needs YOUR decision before I build/apply (see `owner-decisions-2026-07.md` — 6 packets with concrete lists):**
 - Junk-data deletes (8 RTJ recipes, Test Mfg/Vendor, vendor 'we') · vendor+manufacturer merges · category remap ·
@@ -68,7 +71,7 @@ apply it through the normal gated MCP path with your explicit OK (each already h
 | A4 | create_quick_delivery tier $0 fallback (mig DONE) + getTierPrice consolidation (DEFERRED, DRY-only) | parked mig `20260702132000` | YES | **PARKED (mig done) + frontend deferred** | plpgsql_check CLEAN | clean | (A4 commit) |
 | A5 | Blend unit conversion (3 RPCs) + OCR ratePerAcre carry + $0-rate guard | parked migs + edge-fn | | TODO | | | |
 | A6 | complete_job + shortfalls unit conversion (mig) + DispatchBoard compare (frontend) | parked mig `20260702134000` | YES | **DONE (mig PARKED + frontend committed)** | both fns plpgsql_check CLEAN + rolled back; DispatchBoard typecheck/lint clean | clean | (A6 commit) |
-| A7 | PO single write path + quantity_on_order recompute (604-product diff) | parked mig + frontend | | TODO | | | |
+| A7 | PO on-order INSERT-path fix (insert-as-draft-then-promote) + locked recompute (16 fixed + 2 new rows) | parked mig `20260702135000` | YES (16 drift, not 18) | **PARKED (done, unapplied)** | plpgsql_check CLEAN + recompute smoke (116/16/2) rolled back, live 114 unchanged | clean R2 (R1 P1+P2 fixed; location-mismatch documented) | (A7 commit) |
 | A8 | Terms→due-date (payment_terms_days + post_invoice default) — needs Mason policy | parked mig + frontend | | TODO | | | |
 | A9 | Month-end catch-up — needs Mason confirm | parked mig + frontend | | TODO | | | |
 | A10 | Email idempotency: stable intent-scoped keys | frontend/lib | NO (fix unsafe) | **PARKED — did not apply (audit fix unsafe + risk already mitigated)** | Codex confirmed a stable/window key silently blocks resends | Codex P2 | (no change) |
@@ -224,3 +227,16 @@ either. AND the accidental-double-send the audit targets is ALREADY mitigated at
 guard with `rowActionRef` ("a double-click can't fire two prints/emails") and InvoiceDetail disables the
 button via `emailing`/`loading`. So the correct action was to REVERT and keep the unique-per-send key.
 Real follow-up (if wanted): surface the edge fn's `deduplicated:true` in the UI — a UI concern, not a key one.
+
+**Cycle 8 — A7 (PO on-order INSERT-path fix + recompute):** PARKED (done, unapplied). Root cause: the on-order
+trigger fires only on a draft→submitted UPDATE, but `save_purchase_order` INSERTed POs directly as 'submitted',
+skipping it → 16 products drifted (worst 0→9000, an under-count). Fix (delegated draft, my review + Codex):
+**Option A insert-as-draft-then-promote** — save_purchase_order now INSERTs as 'draft' then UPDATEs to the
+requested status, reusing the EXISTING tested trigger (structurally can't double-count; verified vs all 4 PO
+triggers) + a one-time authoritative recompute. Codex R1 found 2 real issues → FIXED: [P1] a SHARE ROW EXCLUSIVE
+lock so the recompute can't race concurrent PO writes; [P2] insert Main-Warehouse rows for open-PO products that
+lack one (smoke proved 2 REAL such rows — Codex was right). PROOF — Ran: rolled-back plpgsql_check (CLEAN) +
+recompute smoke (total 116, 16 changed, 2 inserted); Saw: live still 114 rows, save_purchase_order 1 overload +
+promote-block absent (position()=0). Codex R2 clean on the fixes; raised a SEPARATE latent location-mismatch
+(increment@MainWarehouse vs receive-decrement@received-location) — DOCUMENTED as a warehouse-theme follow-up (not
+a bug in A7's scope; latent since all inventory is single-location). Draft: `...135000_a7_...sql`.
