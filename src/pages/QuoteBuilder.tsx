@@ -34,7 +34,7 @@ import { useToast } from '../components/ui/Toast';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import { useAuth } from '../contexts/AuthContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
-import { supabase, assertRpcResult, checkMutationResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
+import { supabase, supabaseUntyped, assertRpcResult, checkMutationResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
@@ -1132,15 +1132,26 @@ export default function QuoteBuilder() {
     const verb = newStatus === 'declined' ? 'decline' : 'cancel';
     setStatusActionLoading(true);
     try {
-      const { data: draws, error: drawErr } = await supabase
-        .from('quote_product_draws')
-        .select('quantity_drawn')
-        .eq('quote_id', id)
-        .gt('quantity_drawn', 0)
-        .limit(1);
-      if (drawErr) throw drawErr;
-      if (draws && draws.length > 0) {
-        toast('warning', `This booking has partial draw-downs — close it from its orders (draw or cancel the remaining balance) before you ${verb} the quote.`);
+      const [orderDrawsRes, jobDrawsRes] = await Promise.all([
+        supabase
+          .from('quote_product_draws')
+          .select('quantity_drawn')
+          .eq('quote_id', id)
+          .gt('quantity_drawn', 0)
+          .limit(1),
+        // Layer 2: a job reservation also blocks a terminal transition — the
+        // _enforce_quote_terminal_not_drawn trigger now counts job draws too.
+        supabaseUntyped
+          .from('job_product_draws')
+          .select('quantity_drawn')
+          .eq('quote_id', id)
+          .gt('quantity_drawn', 0)
+          .limit(1),
+      ]);
+      if (orderDrawsRes.error) throw orderDrawsRes.error;
+      if (jobDrawsRes.error) throw jobDrawsRes.error;
+      if ((orderDrawsRes.data && orderDrawsRes.data.length > 0) || (jobDrawsRes.data && jobDrawsRes.data.length > 0)) {
+        toast('warning', `This booking has partial draw-downs or job reservations — close it from its orders/jobs (draw or cancel the remaining balance) before you ${verb} the quote.`);
         return;
       }
       const result = await supabase
@@ -1674,15 +1685,27 @@ export default function QuoteBuilder() {
     // don't risk the destructive pre-accept.
     if (id) {
       try {
-        const { data: drawCheck, error: drawCheckError } = await supabase
-          .from('quote_product_draws')
-          .select('quantity_drawn')
-          .eq('quote_id', id)
-          .gt('quantity_drawn', 0)
-          .limit(1);
-        if (drawCheckError) throw drawCheckError;
-        if (drawCheck && drawCheck.length > 0) {
-          toast('warning', 'This booking has partial draw-downs — use "Partial Order" to draw the remaining balance instead of converting.');
+        const [orderDrawRes, jobDrawRes] = await Promise.all([
+          supabase
+            .from('quote_product_draws')
+            .select('quantity_drawn')
+            .eq('quote_id', id)
+            .gt('quantity_drawn', 0)
+            .limit(1),
+          // Layer 2: a job reservation also makes the booking partially drawn —
+          // whole conversion would re-order units a job already holds/bills (§6.5).
+          // job_product_draws isn't in the generated types yet → untyped client.
+          supabaseUntyped
+            .from('job_product_draws')
+            .select('quantity_drawn')
+            .eq('quote_id', id)
+            .gt('quantity_drawn', 0)
+            .limit(1),
+        ]);
+        if (orderDrawRes.error) throw orderDrawRes.error;
+        if (jobDrawRes.error) throw jobDrawRes.error;
+        if ((orderDrawRes.data && orderDrawRes.data.length > 0) || (jobDrawRes.data && jobDrawRes.data.length > 0)) {
+          toast('warning', 'This booking has partial draw-downs or job reservations — use "Partial Order" to draw the remaining balance instead of converting.');
           setConverting(false);
           return;
         }
