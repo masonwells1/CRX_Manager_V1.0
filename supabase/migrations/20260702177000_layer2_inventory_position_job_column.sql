@@ -67,39 +67,49 @@ BEGIN
       GROUP BY ih.product_id
     ),
     planned_quotes AS (
-      -- LAYER2<<< quantity-aware dedup (§4B.2 #2): unreserved remainder per line,
-      -- not all-or-nothing existence of a linked hold. See header for the algebra.
-      SELECT qi.product_id,
-             SUM(GREATEST(
-               qi.total_units_needed
-                 - COALESCE(lh.linked_hold, 0)
-                 - COALESCE(od.order_drawn, 0)
-                 - COALESCE(jd.job_drawn, 0),
-               0)) AS qty
-      FROM quote_items qi
-      JOIN quotes q ON q.id = qi.quote_id
-      LEFT JOIN LATERAL (
-        SELECT COALESCE(SUM(ih.quantity), 0) AS linked_hold
-        FROM inventory_holds ih
-        WHERE ih.source_id = qi.quote_id
-          AND ih.product_id = qi.product_id
-          AND ih.is_active = true
-          AND (ih.expires_at IS NULL OR ih.expires_at >= CURRENT_DATE)
-      ) lh ON true
-      LEFT JOIN LATERAL (
-        SELECT COALESCE(SUM(qpd.quantity_drawn), 0) AS order_drawn
-        FROM quote_product_draws qpd
-        WHERE qpd.quote_id = qi.quote_id
-          AND qpd.product_id = qi.product_id
-      ) od ON true
-      LEFT JOIN LATERAL (
-        SELECT COALESCE(SUM(jpd.quantity_drawn), 0) AS job_drawn
-        FROM job_product_draws jpd
-        WHERE jpd.quote_id = qi.quote_id
-          AND jpd.product_id = qi.product_id
-      ) jd ON true
-      WHERE q.is_planned = true AND q.status IN ('draft', 'sent', 'revised')
-      GROUP BY qi.product_id
+      -- LAYER2<<< quantity-aware dedup (§4B.2 #2): unreserved remainder per booking line.
+      -- Codex A+B round-2 P2: AGGREGATE the booking per (quote, product) FIRST, THEN
+      -- subtract the product-level hold/draws ONCE. Subtracting them inside a per-line
+      -- SUM over-deducts when a product appears on multiple quote lines (two 50-unit
+      -- lines with a 60-unit job draw and no hold would report 0 instead of 40 unreserved).
+      SELECT pq.product_id, SUM(pq.remainder) AS qty
+      FROM (
+        SELECT b.quote_id, b.product_id,
+               GREATEST(
+                 b.booked
+                   - COALESCE(lh.linked_hold, 0)
+                   - COALESCE(od.order_drawn, 0)
+                   - COALESCE(jd.job_drawn, 0),
+                 0) AS remainder
+        FROM (
+          SELECT qi.quote_id, qi.product_id, SUM(COALESCE(qi.total_units_needed, 0)) AS booked
+          FROM quote_items qi
+          JOIN quotes q ON q.id = qi.quote_id
+          WHERE q.is_planned = true AND q.status IN ('draft', 'sent', 'revised')
+          GROUP BY qi.quote_id, qi.product_id
+        ) b
+        LEFT JOIN LATERAL (
+          SELECT COALESCE(SUM(ih.quantity), 0) AS linked_hold
+          FROM inventory_holds ih
+          WHERE ih.source_id = b.quote_id
+            AND ih.product_id = b.product_id
+            AND ih.is_active = true
+            AND (ih.expires_at IS NULL OR ih.expires_at >= CURRENT_DATE)
+        ) lh ON true
+        LEFT JOIN LATERAL (
+          SELECT COALESCE(SUM(qpd.quantity_drawn), 0) AS order_drawn
+          FROM quote_product_draws qpd
+          WHERE qpd.quote_id = b.quote_id
+            AND qpd.product_id = b.product_id
+        ) od ON true
+        LEFT JOIN LATERAL (
+          SELECT COALESCE(SUM(jpd.quantity_drawn), 0) AS job_drawn
+          FROM job_product_draws jpd
+          WHERE jpd.quote_id = b.quote_id
+            AND jpd.product_id = b.product_id
+        ) jd ON true
+      ) pq
+      GROUP BY pq.product_id
       -- >>>LAYER2
     ),
     delivered_ytd AS (

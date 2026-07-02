@@ -109,6 +109,7 @@ BEGIN
   LOOP
     v_job_demand := v_item.job_demand;
     v_job_drawn := 0;
+    v_quote_booking := 0;  -- reset per product (0 for quote-less / non-planned jobs)
 
     -- Lock the product's inventory row FIRST (Codex P2): serializes concurrent
     -- reservations of the same product so the shortfall read below sees the
@@ -147,17 +148,28 @@ BEGIN
       END IF;
     END IF;
 
-    -- The job hold reserves the FULL job demand. The drawn portion shrinks the
-    -- quote's crop_program hold (resync below), so quote_remaining + job_hold
-    -- never exceeds the booking. expires_at = NULL (§6.3).
-    INSERT INTO inventory_holds (
-      product_id, customer_id, quantity, hold_type, source_id,
-      notes, created_by, expires_at, is_active
-    ) VALUES (
-      v_item.product_id, v_job.customer_id, v_job_demand, 'job', p_job_id,
-      'Job reservation for ' || COALESCE(v_job.job_number, p_job_id::text),
-      COALESCE(v_actor, v_job.created_by), NULL, true
-    );
+    -- The job hold reserves the drawn portion PLUS any demand beyond the ENTIRE
+    -- quote booking (genuinely un-booked stock). It deliberately EXCLUDES demand
+    -- already reserved elsewhere: the crop_program hold (for the undrawn OPEN
+    -- booking) or, for a CONVERTED quote, the order's prebooked.
+    -- Codex A+B round-2 P2: an accepted/converted quote is fully order-drawn, so
+    -- v_job_drawn=0 and v_quote_booking>=demand -> hold 0 -> no double-reserve on
+    -- top of quantity_prebooked. For an OPEN booking with demand<=remaining this
+    -- equals the full demand (v_job_drawn=demand). The drawn portion shrinks the
+    -- crop_program hold (resync below), so quote_remaining + job_hold never exceeds
+    -- the booking. expires_at = NULL (§6.3). Skip a zero-qty hold entirely.
+    -- status-enum-check: exempt (writes the 'job' hold_type added by A1 20260702170000)
+    IF (v_job_drawn + GREATEST(v_job_demand - v_quote_booking, 0)) > 0 THEN
+      INSERT INTO inventory_holds (
+        product_id, customer_id, quantity, hold_type, source_id,
+        notes, created_by, expires_at, is_active
+      ) VALUES (
+        v_item.product_id, v_job.customer_id,
+        (v_job_drawn + GREATEST(v_job_demand - v_quote_booking, 0)), 'job', p_job_id,
+        'Job reservation for ' || COALESCE(v_job.job_number, p_job_id::text),
+        COALESCE(v_actor, v_job.created_by), NULL, true
+      );
+    END IF;
   END LOOP;
 
   -- Resync the parent quote's crop_program holds to account for this job's draws
