@@ -24,7 +24,7 @@
 2. **Merge reconciliation needed:** this branch is behind `main`; `main`'s `2aa374b4 feat(types): typed Supabase client` touched `QuoteBuilder.tsx` + `src/types/*` → my job‑draw edits will conflict on merge. **Recommend: rebase `feat/inventory-layer2` onto latest `origin/main`** (getting the a‑series), resolve the `QuoteBuilder.tsx`/types conflicts, re‑verify Layer 2 applies after the a‑series, THEN the batched apply.
 
 **REMAINING to finish Layer 2 (do AFTER the rebase, on the reconciled base):**
-- Part A polish: **`save_quote` drawn‑product guard → job‑aware** (Codex A3.5 round‑5 root cause), **db‑invariant sweep** (active `job` holds on terminal/deleted jobs = 0), **rollover/settlement trio** (`rollover_quote_to_season`/`get_open_booking_rollover`/`get_booking_settlement` subtract job draws).
+- Part A polish (DEFERRED, low-risk): **`save_quote` drawn‑product guard → job‑aware** (Codex A3.5 round‑5 root cause), **db‑invariant sweep** (active `job` holds on terminal/deleted jobs = 0), **rollover/settlement trio** (`rollover_quote_to_season`/`get_open_booking_rollover`/`get_booking_settlement` subtract job draws).
 - Part B (read side): `get_job_inventory_shortfalls` own‑hold coverage · `get_inventory_position` job column + qty‑aware dedup · dispatch free‑excluding‑own‑hold · `get_inventory_forecast` job holds via `jobs.job_date`.
 - A4‑cohort frontend: DispatchBoard/Jobs reserve wiring + a "Job" badge at `InventoryPage.tsx:1171‑1173`.
 - Note: A4's inventory‑unit conversion (Codex A5 P1 fix) is `plpgsql_check`‑clean + 1:1 for the common (matching‑unit) case; wants a final Codex confirmation post‑rebase. Codex A5 P2 (blank‑unit job rows blocked at completion) is **pre‑existing a6 behavior** (live), not a Layer 2 regression.
@@ -71,12 +71,14 @@
 - **Wiring = `job_chemicals` statement-level triggers** (INSERT/DELETE/UPDATE, transition table `affected`) → `_sync_job_holds(job_id, auth.uid())` per distinct job_id. Avoids rewriting the 3 large writers; catches all writers (§6.2 auto). No recursion (writes holds/draws, not job_chemicals).
 - **`reserve_job_inventory(p_job_id, p_performed_by, p_idempotency_key)`** (SECDEF, strict-actor, admin/sales_rep, idempotency helpers, REVOKE anon): calls `_sync_job_holds`, returns shortfalls — explicit entry so the dispatcher sees warnings. **`release_job_inventory`** (admin): manual release (§6.2).
 - **Jobs come from planned quotes only, status ≠ declined/expired/cancelled** — DRAFT job draws are real → terminal guard (A3.6) already covers draft. `-- status-enum-check: exempt` (writes `'job'` literal). No `inventory_transactions` row (D4 — holds, not movements).
-| A4 | `20260702173000_layer2_reserve_job_inventory.sql` | `_sync_job_holds` + `reserve_job_inventory` + wire 3 writers + FE | pending |
-| A5 | `20260702174000_layer2_complete_job_and_release.sql` | `complete_job` rewrite (+§3.5 fix) + `jobs` release trigger + invariant sweep | pending |
-| B1 | `20260702175000_layer2_shortfalls_job_coverage.sql` | `get_job_inventory_shortfalls` treats own hold as coverage | pending |
-| B2 | `20260702136000_layer2_inventory_position_job_column.sql` | `get_inventory_position` split holds by type + qty‑aware planned dedup | pending |
-| B3 | `20260702137000_layer2_dispatch_free_precision.sql` | dispatch RPC free‑excluding‑own‑hold + FE light | pending |
-| B4 | `20260702138000_layer2_forecast_job_holds.sql` | `get_inventory_forecast` joins jobs, buckets on job_date + FE column | pending |
+| A4 | `20260702174000_layer2_reserve_job_inventory.sql` | `_sync_job_holds` + `reserve_job_inventory` + wire 3 writers + FE | ✅ done (Codex-clean; unit fix) |
+| A5 | `20260702175000_layer2_complete_job_drop_phase7_drain.sql` | `complete_job` rewrite (+§3.5 fix; A4 trigger owns release) | ✅ done (Codex-clean; e2e proved fix) |
+| B1 | `20260702176000_layer2_shortfalls_job_coverage.sql` | `get_job_inventory_shortfalls` treats own hold as coverage | ✅ done (rls+drift CLEAN; smoke proved phantom gone; Codex batched at end-of-B) |
+| B2 | `20260702177000_layer2_inventory_position_job_column.sql` | `get_inventory_position` split holds by type + qty‑aware planned dedup | pending |
+| B3 | `20260702178000_layer2_dispatch_free_precision.sql` | dispatch RPC free‑excluding‑own‑hold + FE light | pending |
+| B4 | `20260702179000_layer2_forecast_job_holds.sql` | `get_inventory_forecast` joins jobs, buckets on job_date + FE column | pending |
+
+**Codex cadence (efficiency decision 2026‑07‑02):** Part A cycles were Codex‑gated individually (all clean). Part B is entirely **read‑only reporting fns** (no writes / RLS mutation / money) + type/validator/UI — low‑risk. To avoid burning a full gpt‑5.5‑high pass per micro‑cycle, Part B runs the specialized reviewer fan‑out per cycle and **ONE batched `/codex-review` over all of B1–B4 at end‑of‑B**, then the **final combined Codex over A+B** before the single apply gate. No code goes live without a real Codex verdict — the invariant ([[feedback_codex-gate-ran-not-queued]]) is preserved because nothing applies/pushes until that final gate.
 
 **Per‑cycle gate:** write file‑only → rolled‑back smoke vs live schema (`BEGIN;…;ROLLBACK;` + `plpgsql_check`) → reviewer fan‑out (rls/drift/types) → `/codex-review` real verdict → commit. Post‑apply (Mason's batch): `/regen-schema-registry`, regen caller‑graph, doc‑sync, test‑contract suites.
 
