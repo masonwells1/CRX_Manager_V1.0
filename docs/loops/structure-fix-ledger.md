@@ -30,7 +30,7 @@
 |---|---|---|---|---|---|---|---|
 | A1 | Blend product-select stale-closure bug | frontend | YES | **DONE** | fail-first test (`'' → 'p1'`) | clean | f9a4d7ee |
 | A2 | save_blend_ticket persists job_id + application_service_id (+ job/customer guard) | parked mig `20260702130000` | YES | **PARKED (done, unapplied)** | plpgsql_check CLEAN, rolled back | clean (3 rounds) | (in A2 commit) |
-| A3 | save_quote restore dropped fields + create_job_from_quote_section idempotency | parked mig | | TODO | | | |
+| A3 | save_quote restore 3 section fields + is_planned (idempotency ALREADY LIVE) | parked mig `20260702131000` | PARTIAL* | **PARKED (done, unapplied)** | plpgsql_check CLEAN + drift-review CLEAN (additive-only) | clean | (A3 commit) |
 | A4 | create_quick_delivery tier-price $0 fallback + shared getTierPrice | parked mig + frontend | | TODO | | | |
 | A5 | Blend unit conversion (3 RPCs) + OCR ratePerAcre carry + $0-rate guard | parked migs + edge-fn | | TODO | | | |
 | A6 | complete_job inventory unit conversion + shortfalls + DispatchBoard | parked mig + frontend | | TODO | | | |
@@ -97,3 +97,12 @@ overload) additively adding the two SET columns the UI already sends. PROOF — 
 (position()=0). Codex 3 rounds: R1 → added job/customer-match guard (mis-pricing risk via
 `create_invoice_from_blend_ticket`→`job.quote_section_id`); R2 → validate EFFECTIVE job (sparse-payload
 customer-change edge); R3 clean. Draft: `scripts/.staging-migrations/20260702130000_a2_...sql`.
+
+**Cycle 3 — A3 (save_quote restore dropped fields):** PARKED (done, unapplied). *PARTIAL reproduction:
+the mission's second A3 sub-task (create_job_from_quote_section idempotency `AND operation=`) is ALREADY
+LIVE (20260611211058) — verified, NOT re-touched. Restored only what's actually broken: rebuilt save_quote
+verbatim from live (`20260616204400`, 1 overload) additively adding `is_planned` (quotes UPDATE+INSERT) and
+`section_header_notes`/`needed_by_date`/`field_id` (quote_sections INSERT). Payload keys confirmed vs
+QuoteBuilder.tsx:889,898-900. PROOF — Ran: rolled-back live smoke + plpgsql_check; Saw: NO FINDINGS - CLEAN,
+live fn unchanged (position()=0), 1 overload. Codex CLEAN + migration-drift-reviewer CLEAN (byte-for-byte
+additive-only, all 4 columns/types verified). Draft: `...131000_a3_...sql`.
