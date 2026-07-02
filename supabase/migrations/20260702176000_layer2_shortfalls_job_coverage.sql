@@ -34,22 +34,21 @@ BEGIN
         AND j.job_date <= (CURRENT_DATE + (p_days_ahead || ' days')::interval)::date
     ),
     demand AS (
+      -- Codex A+B P2 #3: needed = FULL job demand, NOT reduced by the quote's
+      -- crop_program hold. Post-A4 the job's own reservation is its 'job' hold
+      -- (excluded from active_holds below, so free isn't reduced by it); the
+      -- leftover quote crop_program hold covers the UN-drawn booking, NOT this job.
+      -- Subtracting it here too double-discounted and hid real job shortfalls
+      -- (e.g. 100-booked quote, 60-unit job -> 40 crop hold; with 50 free the true
+      -- shortfall is 60 - (50-40) = 50, not 60-40 - (50-40) = 10).
       SELECT jc.product_id,
-             SUM(GREATEST(cq.demand_qty - COALESCE(hc.covered, 0), 0)) AS needed_qty,
-             COUNT(DISTINCT wj.id) FILTER (WHERE cq.demand_qty - COALESCE(hc.covered, 0) > 0) AS job_count,
+             SUM(cq.demand_qty) AS needed_qty,
+             COUNT(DISTINCT wj.id) FILTER (WHERE cq.demand_qty > 0) AS job_count,
              ARRAY_AGG(DISTINCT wj.job_number ORDER BY wj.job_number)
-               FILTER (WHERE cq.demand_qty - COALESCE(hc.covered, 0) > 0) AS job_numbers
+               FILTER (WHERE cq.demand_qty > 0) AS job_numbers
       FROM win_jobs wj
       JOIN job_chemicals jc ON jc.job_id = wj.id
       JOIN products p ON p.id = jc.product_id
-      LEFT JOIN LATERAL (
-        SELECT COALESCE(SUM(ih.quantity), 0) AS covered
-        FROM inventory_holds ih
-        WHERE ih.source_id = wj.quote_id
-          AND ih.product_id = jc.product_id
-          AND ih.is_active = true
-          AND (ih.expires_at IS NULL OR ih.expires_at >= CURRENT_DATE)
-      ) hc ON true
       CROSS JOIN LATERAL (
         SELECT COALESCE(
                  field_app_priced_quantity(jc.quantity, jc.unit, p.inventory_unit, p.product_form),

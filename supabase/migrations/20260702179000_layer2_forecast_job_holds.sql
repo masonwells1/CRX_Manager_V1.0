@@ -63,8 +63,12 @@ BEGIN
         dr.needed_month,
         SUM(dr.quantity) AS planned_demand,
         COALESCE(SUM(dr.quantity) FILTER (WHERE dr.kind = 'job'), 0) AS job_demand,
-        (SELECT COALESCE(i.quantity_available, 0) FROM inventory i WHERE i.product_id = p.id AND i.location = 'Main Warehouse' LIMIT 1) AS current_available,
-        (SELECT COALESCE(i.quantity_prebooked, 0) FROM inventory i WHERE i.product_id = p.id AND i.location = 'Main Warehouse' LIMIT 1) AS prebooked,
+        -- Codex A+B P2 #5: wrap the scalar subquery in COALESCE so a NO-ROW result
+        -- (product with a job hold but no Main Warehouse inventory row) yields 0, not
+        -- NULL — the inner COALESCE only guards a NULL column, not a missing row, and
+        -- the frontend calls .toLocaleString() on these (would crash on null).
+        COALESCE((SELECT i.quantity_available FROM inventory i WHERE i.product_id = p.id AND i.location = 'Main Warehouse' LIMIT 1), 0) AS current_available,
+        COALESCE((SELECT i.quantity_prebooked FROM inventory i WHERE i.product_id = p.id AND i.location = 'Main Warehouse' LIMIT 1), 0) AS prebooked,
         (SELECT COALESCE(SUM(poi.quantity_ordered - poi.quantity_received), 0)
          FROM purchase_order_items poi
          JOIN purchase_orders po ON po.id = poi.purchase_order_id

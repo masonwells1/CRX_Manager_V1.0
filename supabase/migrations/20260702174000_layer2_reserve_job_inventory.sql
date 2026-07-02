@@ -70,12 +70,16 @@ BEGIN
   END IF;
 
   -- RELEASE state: a deleted or terminal job holds nothing. Drop its job holds.
-  -- Reverse the DRAW only for abandoned jobs (cancelled / soft-deleted); a
-  -- completed or invoiced job consumed its draw (complete_job deducts the real
-  -- stock), so its draw + the quote's reduced booking must persist.
+  -- Reverse the DRAW only when the reserved chemical was NEVER applied — i.e. a
+  -- cancelled job, or a job soft-deleted while still scheduled/in_progress.
+  -- (Codex A+B P1 #1) A COMPLETED or INVOICED job consumed its draw (complete_job
+  -- already deducted the real stock); soft-deleting it later must NOT reverse the
+  -- draw, or the parent quote would regain drawable/rollable balance for chemical
+  -- that was physically applied.
   IF v_job.deleted_at IS NOT NULL OR v_job.status NOT IN ('scheduled', 'in_progress') THEN
     DELETE FROM inventory_holds WHERE source_id = p_job_id AND hold_type = 'job';
-    IF v_job.deleted_at IS NOT NULL OR v_job.status = 'cancelled' THEN
+    IF v_job.status = 'cancelled'
+       OR (v_job.deleted_at IS NOT NULL AND v_job.status IN ('scheduled', 'in_progress')) THEN
       DELETE FROM job_product_draws WHERE job_id = p_job_id;
     END IF;
     IF v_job.quote_id IS NOT NULL THEN
