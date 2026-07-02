@@ -22,6 +22,7 @@ const goodRow = {
   quantity_prebooked: 36,
   quantity_on_order: 0,
   holds_qty: 0,
+  job_holds_qty: 0,
   planned_qty: 0,
   delivered_ytd: 530,
   net_position: 550,

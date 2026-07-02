@@ -525,6 +525,9 @@ export interface InventoryHold {
 // Wave B.3 — return shape of the get_inventory_position() RPC.
 // One row per (product, location). net_position = quantity_available - quantity_prebooked + quantity_on_order.
 // holds_qty and planned_qty are reported separately; they are NOT subtracted from net_position.
+// Layer 2 (B2): holds_qty still sums ALL active holds; job_holds_qty is the job-type
+// SUBSET of holds_qty (a breakout, not additive to totals). planned_qty is now the
+// quantity-aware unreserved remainder per line (no longer all-or-nothing dedup).
 export interface InventoryPositionRow {
   inventory_id: string | null;
   product_id: string;
@@ -540,6 +543,7 @@ export interface InventoryPositionRow {
   quantity_prebooked: number;
   quantity_on_order: number;
   holds_qty: number;
+  job_holds_qty: number;
   planned_qty: number;
   delivered_ytd: number;
   net_position: number;

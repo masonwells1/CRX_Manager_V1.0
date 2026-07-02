@@ -74,7 +74,7 @@
 | A4 | `20260702174000_layer2_reserve_job_inventory.sql` | `_sync_job_holds` + `reserve_job_inventory` + wire 3 writers + FE | ✅ done (Codex-clean; unit fix) |
 | A5 | `20260702175000_layer2_complete_job_drop_phase7_drain.sql` | `complete_job` rewrite (+§3.5 fix; A4 trigger owns release) | ✅ done (Codex-clean; e2e proved fix) |
 | B1 | `20260702176000_layer2_shortfalls_job_coverage.sql` | `get_job_inventory_shortfalls` treats own hold as coverage | ✅ done (rls+drift CLEAN; smoke proved phantom gone; Codex batched at end-of-B) |
-| B2 | `20260702177000_layer2_inventory_position_job_column.sql` | `get_inventory_position` split holds by type + qty‑aware planned dedup | pending |
+| B2 | `20260702177000_layer2_inventory_position_job_column.sql` | `get_inventory_position` split holds by type + qty‑aware planned dedup | ✅ done (rls+drift+types CLEAN; smoke: resurface 100→0, 3 regressions clean; typecheck clean; +job_holds_qty type/validator/test) |
 | B3 | `20260702178000_layer2_dispatch_free_precision.sql` | dispatch RPC free‑excluding‑own‑hold + FE light | pending |
 | B4 | `20260702179000_layer2_forecast_job_holds.sql` | `get_inventory_forecast` joins jobs, buckets on job_date + FE column | pending |
 
