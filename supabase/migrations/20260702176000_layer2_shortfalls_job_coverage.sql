@@ -34,18 +34,23 @@ BEGIN
         AND j.job_date <= (CURRENT_DATE + (p_days_ahead || ' days')::interval)::date
     ),
     demand AS (
-      -- Codex A+B P2 #3: needed = FULL job demand, NOT reduced by the quote's
-      -- crop_program hold. Post-A4 the job's own reservation is its 'job' hold
-      -- (excluded from active_holds below, so free isn't reduced by it); the
-      -- leftover quote crop_program hold covers the UN-drawn booking, NOT this job.
-      -- Subtracting it here too double-discounted and hid real job shortfalls
-      -- (e.g. 100-booked quote, 60-unit job -> 40 crop hold; with 50 free the true
-      -- shortfall is 60 - (50-40) = 50, not 60-40 - (50-40) = 10).
+      -- Codex A+B P2 #3: needed = FULL job demand when the job HAS its own 'job' hold
+      -- (that hold is excluded from active_holds below, so free isn't reduced by it);
+      -- the leftover quote crop_program hold covers the UN-drawn booking, NOT this job,
+      -- so subtracting it too would double-discount and hide real shortfalls (e.g.
+      -- 100-booked quote, 60-unit job -> 40 crop hold; with 50 free the true shortfall
+      -- is 60 - (50-40) = 50).
+      -- Codex round-3 P2: BUT a PRE-EXISTING scheduled/in-progress job (one that
+      -- existed before Layer 2 — A4 does no backfill, §6.6) has no own 'job' hold yet,
+      -- so nothing is excluded from active_holds; falling through to full demand while
+      -- the crop hold is still subtracted from free would report a PHANTOM shortfall.
+      -- So: cover = 0 when the job has its own hold; otherwise fall back to the parent
+      -- quote's crop coverage (the Layer-1 behavior) until the job is reserved.
       SELECT jc.product_id,
-             SUM(cq.demand_qty) AS needed_qty,
-             COUNT(DISTINCT wj.id) FILTER (WHERE cq.demand_qty > 0) AS job_count,
+             SUM(GREATEST(cq.demand_qty - cov.covered, 0)) AS needed_qty,
+             COUNT(DISTINCT wj.id) FILTER (WHERE cq.demand_qty - cov.covered > 0) AS job_count,
              ARRAY_AGG(DISTINCT wj.job_number ORDER BY wj.job_number)
-               FILTER (WHERE cq.demand_qty > 0) AS job_numbers
+               FILTER (WHERE cq.demand_qty - cov.covered > 0) AS job_numbers
       FROM win_jobs wj
       JOIN job_chemicals jc ON jc.job_id = wj.id
       JOIN products p ON p.id = jc.product_id
@@ -55,6 +60,22 @@ BEGIN
                  jc.quantity
                ) AS demand_qty
       ) cq
+      CROSS JOIN LATERAL (
+        SELECT CASE
+                 WHEN EXISTS (
+                   SELECT 1 FROM inventory_holds ih
+                   WHERE ih.source_id = wj.id AND ih.hold_type = 'job'
+                     AND ih.product_id = jc.product_id AND ih.is_active = true
+                     AND (ih.expires_at IS NULL OR ih.expires_at >= CURRENT_DATE)
+                 ) THEN 0
+                 ELSE COALESCE((
+                   SELECT SUM(ih.quantity) FROM inventory_holds ih
+                   WHERE ih.source_id = wj.quote_id
+                     AND ih.product_id = jc.product_id AND ih.is_active = true
+                     AND (ih.expires_at IS NULL OR ih.expires_at >= CURRENT_DATE)
+                 ), 0)
+               END AS covered
+      ) cov
       WHERE jc.quantity > 0
       GROUP BY jc.product_id
     ),

@@ -13,10 +13,11 @@
 -- live catalog and typed out explicitly — not cloned dynamically) EXCEPT the changes
 -- marked LAYER2<<< / >>>LAYER2. Valuation choice: order draws keep their locked-order
 -- price; JOB draws have no order (billed via transfer_job_to_invoice), so they are
--- valued at the booked weighted-average CURRENT price and reported in their OWN
--- `job_drawn_cents`/`job_drawn_qty` bucket so the identity
---   booked = order_drawn + job_drawn + remaining
--- holds exactly (additive fields — existing consumers are unaffected).
+-- valued at the booked weighted-average CURRENT price. Both are FOLDED into the
+-- existing `drawn_cents`/`drawn_qty` fields (Codex round-3 P2) so the identity
+--   booked = drawn (order + job) + remaining
+-- holds in the existing settlement card / rollover table WITHOUT a new field the UI
+-- would ignore. remaining always subtracts BOTH order and job draws (§6.5).
 -- ============================================================================
 
 
@@ -88,10 +89,13 @@ BEGIN
   ),
   per_product AS (
     SELECT b.quote_id,
-           ROUND(COALESCE(d.quantity_drawn, 0) * COALESCE(l.locked_price, b.wavg_price) * 100)::bigint AS drawn_cents,
-           -- LAYER2<<< job-drawn valued at current wavg (no locked order price for a job)
-           ROUND(COALESCE(jd.qty, 0) * b.wavg_price * 100)::bigint AS job_drawn_cents,
-           -- remaining now also subtracts job draws (§6.5): booked − order − job
+           -- LAYER2<<< "drawn" folds ORDER draws (at their locked price) AND JOB draws
+           -- (at current wavg — a job carries no locked order price), so the existing
+           -- Quotes rollover table reconciles booked = drawn + remaining WITHOUT a new
+           -- field the UI would ignore (Codex round-3 P2). remaining subtracts both
+           -- order and job draws (§6.5): booked − order − job.
+           ROUND((COALESCE(d.quantity_drawn, 0) * COALESCE(l.locked_price, b.wavg_price)
+                  + COALESCE(jd.qty, 0) * b.wavg_price) * 100)::bigint AS drawn_cents,
            ROUND(GREATEST(b.booked_qty - COALESCE(d.quantity_drawn, 0) - COALESCE(jd.qty, 0), 0) * b.wavg_price * 100)::bigint AS remaining_cents
            -- >>>LAYER2
       FROM booked b
@@ -101,11 +105,8 @@ BEGIN
   ),
   booking_money AS (
     SELECT quote_id,
-           -- LAYER2<<< booked = order_drawn + job_drawn + remaining (identity preserved)
-           COALESCE(SUM(drawn_cents + job_drawn_cents + remaining_cents), 0) AS booked_cents,
+           COALESCE(SUM(drawn_cents + remaining_cents), 0) AS booked_cents,
            COALESCE(SUM(drawn_cents), 0) AS drawn_cents,
-           COALESCE(SUM(job_drawn_cents), 0) AS job_drawn_cents,
-           -- >>>LAYER2
            COALESCE(SUM(remaining_cents), 0) AS remaining_cents
       FROM per_product
       GROUP BY quote_id
@@ -133,8 +134,7 @@ BEGIN
     'status', ob.status,
     'season', ob.season,
     'booked_cents', COALESCE(bm.booked_cents, 0),
-    'drawn_cents', COALESCE(bm.drawn_cents, 0),
-    'job_drawn_cents', COALESCE(bm.job_drawn_cents, 0),   -- LAYER2: additive
+    'drawn_cents', COALESCE(bm.drawn_cents, 0),   -- LAYER2: folds order + job draws
     'remaining_cents', COALESCE(bm.remaining_cents, 0),
     'prepay_earmarked_cents', COALESCE(ba.applied_cents, 0) + COALESCE(bp.remaining_prepay_cents, 0),
     'prepay_remaining_cents', COALESCE(bp.remaining_prepay_cents, 0),
@@ -167,7 +167,6 @@ DECLARE
   v_lines jsonb;
   v_booked_cents bigint;
   v_drawn_cents bigint;
-  v_job_drawn_cents bigint;   -- LAYER2
   v_remaining_cents bigint;
   v_prepay_earmarked_cents bigint;
   v_prepay_remaining_cents bigint;
@@ -236,16 +235,16 @@ BEGIN
     SELECT b.product_id,
            p.product_name,
            b.booked_qty,
-           COALESCE(d.quantity_drawn, 0) AS drawn_qty,
-           COALESCE(jd.qty, 0) AS job_drawn_qty,   -- LAYER2
-           -- LAYER2<<< remaining subtracts BOTH order and job draws (§6.5)
+           -- LAYER2<<< "drawn" folds ORDER + JOB draws so booked = drawn + remaining
+           -- reconciles in the existing settlement card (Codex round-3 P2); remaining
+           -- subtracts both (§6.5): booked − order − job. Order draws keep their locked
+           -- price; a job draw has no locked order price, valued at current wavg.
+           (COALESCE(d.quantity_drawn, 0) + COALESCE(jd.qty, 0)) AS drawn_qty,
            GREATEST(b.booked_qty - COALESCE(d.quantity_drawn, 0) - COALESCE(jd.qty, 0), 0) AS remaining_qty,
-           -- >>>LAYER2
            COALESCE(l.locked_price, b.wavg_price) AS locked_price,
            b.wavg_price AS current_price,
-           ROUND(COALESCE(d.quantity_drawn, 0) * COALESCE(l.locked_price, b.wavg_price) * 100)::bigint AS drawn_cents,
-           -- LAYER2<<< job-drawn valued at current wavg; remaining subtracts job draws
-           ROUND(COALESCE(jd.qty, 0) * b.wavg_price * 100)::bigint AS job_drawn_cents,
+           ROUND((COALESCE(d.quantity_drawn, 0) * COALESCE(l.locked_price, b.wavg_price)
+                  + COALESCE(jd.qty, 0) * b.wavg_price) * 100)::bigint AS drawn_cents,
            ROUND(GREATEST(b.booked_qty - COALESCE(d.quantity_drawn, 0) - COALESCE(jd.qty, 0), 0) * b.wavg_price * 100)::bigint AS remaining_cents
            -- >>>LAYER2
       FROM booked b
@@ -259,25 +258,18 @@ BEGIN
       'product_id', product_id,
       'product_name', product_name,
       'booked_qty', booked_qty,
-      'drawn_qty', drawn_qty,
-      'job_drawn_qty', job_drawn_qty,               -- LAYER2: additive
+      'drawn_qty', drawn_qty,               -- LAYER2: folds order + job draws
       'remaining_qty', remaining_qty,
       'locked_price', locked_price,
       'current_price', current_price,
-      -- LAYER2<<< booked = order_drawn + job_drawn + remaining (identity preserved)
-      'booked_cents', drawn_cents + job_drawn_cents + remaining_cents,
+      'booked_cents', drawn_cents + remaining_cents,
       'drawn_cents', drawn_cents,
-      'job_drawn_cents', job_drawn_cents,           -- LAYER2: additive
-      -- >>>LAYER2
       'remaining_cents', remaining_cents
     ) ORDER BY product_name), '[]'::jsonb),
-    -- LAYER2<<< summary identity + job bucket
-    COALESCE(SUM(drawn_cents + job_drawn_cents + remaining_cents), 0),
+    COALESCE(SUM(drawn_cents + remaining_cents), 0),
     COALESCE(SUM(drawn_cents), 0),
-    COALESCE(SUM(job_drawn_cents), 0),
-    -- >>>LAYER2
     COALESCE(SUM(remaining_cents), 0)
-  INTO v_lines, v_booked_cents, v_drawn_cents, v_job_drawn_cents, v_remaining_cents
+  INTO v_lines, v_booked_cents, v_drawn_cents, v_remaining_cents
   FROM line_rows;
 
   SELECT COALESCE(SUM(pc.balance_cents), 0)
@@ -302,8 +294,7 @@ BEGIN
     'is_planned', v_quote.is_planned,
     'lines', v_lines,
     'booked_cents', v_booked_cents,
-    'drawn_cents', v_drawn_cents,
-    'job_drawn_cents', v_job_drawn_cents,           -- LAYER2: additive
+    'drawn_cents', v_drawn_cents,   -- LAYER2: folds order + job draws
     'remaining_cents', v_remaining_cents,
     'prepay_earmarked_cents', v_prepay_earmarked_cents,
     'prepay_applied_cents', v_prepay_applied_cents,
@@ -357,10 +348,15 @@ BEGIN
   SELECT * INTO v_old_quote FROM quotes WHERE id = p_quote_id AND deleted_at IS NULL FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION 'Quote not found: %', p_quote_id; END IF;
 
-  -- A5 draw-awareness, GATED to OPEN bookings only. LAYER2: "draws" now means BOTH
-  -- order draws (quote_product_draws) AND job draws (job_product_draws) — a booking
-  -- consumed by a job rolls over only its truly-undrawn remainder (§6.5).
-  IF v_old_quote.status IN ('sent', 'revised') THEN
+  -- A5 draw-awareness, GATED to OPEN bookings. LAYER2: "draws" now means BOTH order
+  -- draws (quote_product_draws) AND job draws (job_product_draws) — a booking consumed
+  -- by a job rolls over only its truly-undrawn remainder (§6.5). The gate includes
+  -- 'draft' because a job can be scheduled from a DRAFT planned quote (A4 gates the
+  -- reserve on is_planned + non-terminal, which includes draft), so a draft with a live
+  -- job draw must NOT clone the job-consumed units into the next season (Codex round-3
+  -- P2). Order draws only ever exist on sent/revised, so adding 'draft' only affects
+  -- job-draw detection.
+  IF v_old_quote.status IN ('draft', 'sent', 'revised') THEN
     SELECT
       EXISTS (SELECT 1 FROM quote_product_draws WHERE quote_id = p_quote_id AND quantity_drawn > 0)
       -- LAYER2<<< job draws also count as "drawn"

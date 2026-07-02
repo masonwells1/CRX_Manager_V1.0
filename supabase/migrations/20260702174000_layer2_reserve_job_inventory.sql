@@ -110,6 +110,7 @@ BEGIN
     v_job_demand := v_item.job_demand;
     v_job_drawn := 0;
     v_quote_booking := 0;  -- reset per product (0 for quote-less / non-planned jobs)
+    v_order_drawn := 0;    -- reset per product (only re-set inside the planned-open branch)
 
     -- Lock the product's inventory row FIRST (Codex P2): serializes concurrent
     -- reservations of the same product so the shortfall read below sees the
@@ -148,24 +149,26 @@ BEGIN
       END IF;
     END IF;
 
-    -- The job hold reserves the drawn portion PLUS any demand beyond the ENTIRE
-    -- quote booking (genuinely un-booked stock). It deliberately EXCLUDES demand
-    -- already reserved elsewhere: the crop_program hold (for the undrawn OPEN
-    -- booking) or, for a CONVERTED quote, the order's prebooked.
-    -- Codex A+B round-2 P2: an accepted/converted quote is fully order-drawn, so
-    -- v_job_drawn=0 and v_quote_booking>=demand -> hold 0 -> no double-reserve on
-    -- top of quantity_prebooked. For an OPEN booking with demand<=remaining this
-    -- equals the full demand (v_job_drawn=demand). The drawn portion shrinks the
-    -- crop_program hold (resync below), so quote_remaining + job_hold never exceeds
-    -- the booking. expires_at = NULL (§6.3). Skip a zero-qty hold entirely.
+    -- Job hold = the drawn portion (v_job_drawn, from the crop hold) PLUS the demand
+    -- NOT covered by the crop draw OR the quote's ORDER prebooked:
+    --   hold = v_job_drawn + GREATEST(v_job_demand - v_job_drawn - v_order_drawn, 0)
+    -- It excludes ONLY the ORDER-prebooked overlap (that stock is already reserved in
+    -- inventory.quantity_prebooked), NOT other jobs' draws or the whole booking.
+    -- Codex A+B round-3 P2 (corrects the round-2 `- v_quote_booking` term, which
+    -- under-reserved when a booking had prior OTHER-JOB draws): e.g. a 50-unit job on
+    -- a 100-unit booking already 80-drawn by other jobs now holds v_job_drawn(20) +
+    -- (50-20-0)=50 (full), while a fully order-CONVERTED quote holds 0+GREATEST(60-0-
+    -- 100,0)=0 (no double vs prebooked), and a partial order draw holds exactly the
+    -- non-prebooked remainder. The drawn portion shrinks the crop_program hold (resync
+    -- below). expires_at = NULL (§6.3). Skip a zero-qty hold entirely.
     -- status-enum-check: exempt (writes the 'job' hold_type added by A1 20260702170000)
-    IF (v_job_drawn + GREATEST(v_job_demand - v_quote_booking, 0)) > 0 THEN
+    IF (v_job_drawn + GREATEST(v_job_demand - v_job_drawn - v_order_drawn, 0)) > 0 THEN
       INSERT INTO inventory_holds (
         product_id, customer_id, quantity, hold_type, source_id,
         notes, created_by, expires_at, is_active
       ) VALUES (
         v_item.product_id, v_job.customer_id,
-        (v_job_drawn + GREATEST(v_job_demand - v_quote_booking, 0)), 'job', p_job_id,
+        (v_job_drawn + GREATEST(v_job_demand - v_job_drawn - v_order_drawn, 0)), 'job', p_job_id,
         'Job reservation for ' || COALESCE(v_job.job_number, p_job_id::text),
         COALESCE(v_actor, v_job.created_by), NULL, true
       );

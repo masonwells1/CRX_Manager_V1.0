@@ -101,6 +101,14 @@ The re-review confirmed round-1's 5 fixes closed, and found 3 DEEPER issues. All
 - **P2** (B2 `177000`): product-level hold/draws subtracted PER quote-line → a product on multiple lines over-deducted. FIX: aggregate booking per (quote,product) FIRST, subtract once, sum per product. Proof: two 50-lines + 60 job draw → old 0, new 40; plpgsql_check CLEAN.
 Migration count now 13 (added `20260702181000`). save_quote/restore reproduced with the byte-safe guard-only change; drift+rls reviewers + a round-3 Codex confirm-clean pass gate this before the apply decision.
 
+### Codex `/codex-review` ROUND 3 (2026-07-02) — 4 findings, ALL P2 (no P1/BLOCKER — converging), ALL FIXED
+Severity trend P1→P1→none confirms convergence on edge cases. All fixed file-only + behaviorally proven:
+- **P2** (A4 `174000`, a REGRESSION from my round-2 fix): the round-2 hold term `− v_quote_booking` UNDER-reserved when a booking had prior OTHER-JOB draws (50-unit job on a 100-booking already 80-drawn by other jobs held only 20). Corrected to `v_job_drawn + GREATEST(demand − v_job_drawn − v_order_drawn, 0)` — excludes ONLY the order-prebooked overlap, not the whole booking. Proof: other-job case now holds 50 (was 20); converted still 0; open still full demand; +reset v_order_drawn.
+- **P2** (B1 `176000`): a PRE-EXISTING job (no own hold yet — no backfill, §6.6) would report a phantom shortfall (full demand counted while crop hold still subtracted from free). FIX: cover = 0 when the job HAS its own job hold, else fall back to the parent quote crop coverage (Layer-1 behavior). plpgsql_check CLEAN.
+- **P2** (A3.7 `180000` rollover): job-aware remainder mode was gated to sent/revised, but jobs can draw from DRAFT planned quotes → a draft rollover cloned job-consumed units. FIX: gate now `IN ('draft','sent','revised')` (order draws only exist on sent/revised, so adding draft only affects job-draw detection).
+- **P2** (A3.7 `180000` reads): the additive job_drawn_cents/qty buckets weren't rendered by the existing settlement card / rollover table → booked ≠ drawn+remaining on screen. FIX: FOLD job draws into `drawn_cents`/`drawn_qty` (order at locked price + job at wavg); dropped the separate buckets + the v_job_drawn_cents var. 2-bucket identity restored, no frontend change. Proof: drawn(80)+remaining(20)=booked(100).
+Migration set stays 13 (all edits to existing Layer 2 files). A round-4 Codex confirms convergence before the apply decision.
+
 ### ⚠️ Branch topology (verified 2026-07-02 — matters for the merge target)
 - **local `main` is STALE** (HEAD `30adac32`, the Layer 2 handoff commit) — it does NOT have the structure-fix work.
 - **origin/main is AHEAD** (HEAD `8d908bce`) and ALREADY contains the structure-fix loop's commits (`022ee69e` etc. ARE in origin/main).
