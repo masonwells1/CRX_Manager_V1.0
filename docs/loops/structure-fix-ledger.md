@@ -69,21 +69,21 @@ apply it through the normal gated MCP path with your explicit OK (each already h
 | A2 | save_blend_ticket persists job_id + application_service_id (+ job/customer guard) | parked mig `20260702130000` | YES | **PARKED (done, unapplied)** | plpgsql_check CLEAN, rolled back | clean (3 rounds) | (in A2 commit) |
 | A3 | save_quote restore 3 section fields + is_planned (idempotency ALREADY LIVE) | parked mig `20260702131000` | PARTIAL* | **PARKED (done, unapplied)** | plpgsql_check CLEAN + drift-review CLEAN (additive-only) | clean | (A3 commit) |
 | A4 | create_quick_delivery tier $0 fallback (mig DONE) + getTierPrice consolidation (DEFERRED, DRY-only) | parked mig `20260702132000` | YES | **PARKED (mig done) + frontend deferred** | plpgsql_check CLEAN | clean | (A4 commit) |
-| A5 | Blend unit conversion (3 RPCs) + OCR ratePerAcre carry + $0-rate guard | parked migs + edge-fn | | TODO | | | |
+| A5 | Blend unit conversion (3 RPCs) + OCR ratePerAcre carry + $0-rate guard | parked migs + edge-fn | YES (LATENT) | **PARKED — spec'd (not built)** | most complex; 0 live blend data; deserves a dedicated session | — | see spec |
 | A6 | complete_job + shortfalls unit conversion (mig) + DispatchBoard compare (frontend) | parked mig `20260702134000` | YES | **DONE (mig PARKED + frontend committed)** | both fns plpgsql_check CLEAN + rolled back; DispatchBoard typecheck/lint clean | clean | (A6 commit) |
 | A7 | PO on-order INSERT-path fix (insert-as-draft-then-promote) + locked recompute (16 fixed + 2 new rows) | parked mig `20260702135000` | YES (16 drift, not 18) | **PARKED (done, unapplied)** | plpgsql_check CLEAN + recompute smoke (116/16/2) rolled back, live 114 unchanged | clean R2 (R1 P1+P2 fixed; location-mismatch documented) | (A7 commit) |
-| A8 | Terms→due-date (payment_terms_days + post_invoice default) — needs Mason policy | parked mig + frontend | | TODO | | | |
-| A9 | Month-end catch-up — needs Mason confirm | parked mig + frontend | | TODO | | | |
+| A8 | Terms→due-date (payment_terms_days + post_invoice default) — needs Mason policy | parked mig + frontend | YES | **PARKED — needs Mason policy (Packet 4)** | build blocked on due-date/aging decision | — | see spec |
+| A9 | Month-end catch-up — needs Mason confirm | parked mig + frontend | YES | **PARKED — needs Mason confirm** | historical-date behavior change; verify live close_accounting_period first | — | see spec |
 | A10 | Email idempotency: stable intent-scoped keys | frontend/lib | NO (fix unsafe) | **PARKED — did not apply (audit fix unsafe + risk already mitigated)** | Codex confirmed a stable/window key silently blocks resends | Codex P2 | (no change) |
-| A11 | Wire get_expiring_planned_holds into Dashboard/ActionQueue | frontend | | TODO | | | |
-| A12 | PHI guardrail writer: field crop-history editor + upsert RPC | frontend + parked mig | | TODO | | | |
-| A13 | reorder_point edit UI + below-reorder list | frontend | | TODO | | | |
+| A11 | Wire get_expiring_planned_holds into Dashboard/ActionQueue | frontend | PARTIAL (holds have NO expiry live) | **PARKED — dormant until expiry data** | wiring a card that reads a fn returning empty; needs backfill decision | — | see spec |
+| A12 | PHI guardrail writer: field crop-history editor + upsert RPC | frontend + parked mig | YES | **PARKED — spec'd (not built)** | needs upsert RPC (compute_season/RLS/actor/field-ownership) + FieldDashboard editor | — | see spec |
+| A13 | reorder_point edit UI + below-reorder list | frontend | YES (inline edit already exists) | **PARKED — spec'd (not built)** | Add-modal field + manual_inventory_add param + below-reorder list | — | see spec |
 | A14 | convert_to_gl_lb pint/quart aliases | parked mig `20260702133000` | YES | **PARKED (done, unapplied)** | FUNCTIONAL smoke pint(8)=1.0/quart(4)=1.0, PT/QT unchanged, plpgsql_check CLEAN | clean | (A14 commit) |
 
 ## WAVE B — Phase 1 units (only after Wave A fully ledgered)
 | Item | Status | Note |
 |---|---|---|
-| units.ts canonical module → dropdowns → drift report → normalize (parked) → importers → E2E | TODO | |
+| units.ts canonical module → dropdowns → drift report → normalize (parked) → importers → E2E | **PARKED — spec'd (not reached)** | Wave A not fully built (5 items parked-spec); full Wave-B spec in the section above |
 
 ## Decision packets (docs only, no code)
 | Packet | Status | Note |
