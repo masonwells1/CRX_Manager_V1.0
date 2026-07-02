@@ -51,7 +51,7 @@
 ## Decision packets (docs only, no code)
 | Packet | Status | Note |
 |---|---|---|
-| owner-decisions-2026-07.md (6 packets) | TODO | vendor/mfr merge · category remap · junk-delete · due-date policy · wire-vs-retire · 'wire' payment method |
+| owner-decisions-2026-07.md (6 packets) | **DONE** | Written with concrete live side-by-side lists (vendor/mfr typos, 19 categories, 8 RTJ + Test Mfg/Vendor junk, terms 150-empty, wire-vs-retire, 'wire' method). Awaits Mason's calls. |
 
 ---
 
