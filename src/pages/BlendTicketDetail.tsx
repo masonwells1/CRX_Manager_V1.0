@@ -484,9 +484,15 @@ export function BlendTicketDetail() {
   }
 
   function updateProduct(index: number, field: keyof BlendTicketProduct, value: BlendTicketProduct[keyof BlendTicketProduct]) {
-    const updated = [...products];
-    updated[index] = { ...updated[index], [field]: value };
-    setProducts(updated);
+    // Functional updater: the product-select onChange fires updateProduct twice back-to-back
+    // (product_id then product_name). Reading `products` from the closure made the second call
+    // overwrite the first (product_id was lost -> $0 pricing / FK crash on create-order). Using
+    // the previous-state form composes both updates correctly.
+    setProducts(prev => {
+      const updated = [...prev];
+      updated[index] = { ...updated[index], [field]: value };
+      return updated;
+    });
   }
 
   async function addProduct() {

@@ -136,7 +136,11 @@ export function ManualTicketCreate({ customers, onComplete }: ManualTicketCreate
   }
 
   function updateProduct(tempId: string, field: keyof ManualProduct, value: string | number | null) {
-    setProducts(products.map(p => (p.tempId === tempId ? { ...p, [field]: value } : p)));
+    // Functional updater: the product-select onChange fires updateProduct twice back-to-back
+    // (product_id then product_name). Reading `products` from the closure made the second call
+    // overwrite the first (product_id was lost -> $0 pricing / FK crash on create-order). Using
+    // the previous-state form composes both updates correctly.
+    setProducts(prev => prev.map(p => (p.tempId === tempId ? { ...p, [field]: value } : p)));
   }
 
   function removeProduct(tempId: string) {
