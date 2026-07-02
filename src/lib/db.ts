@@ -186,6 +186,9 @@ export const RpcErrorCodes = {
   // record_job_post_notifications — field-app #41 post-application customer notice
   JOB_NOT_POST_NOTIFIABLE: 'JOB_NOT_POST_NOTIFIABLE',
   NOTIFICATION_NOT_FOUND: 'NOTIFICATION_NOT_FOUND',
+  // save_field_crop_history — A12 crop-history editor (structure-fix loop, 2026-07-02)
+  FIELD_NOT_FOUND: 'FIELD_NOT_FOUND',
+  CROP_TYPE_REQUIRED: 'CROP_TYPE_REQUIRED',
 } as const;
 
 export type RpcErrorCode = (typeof RpcErrorCodes)[keyof typeof RpcErrorCodes];

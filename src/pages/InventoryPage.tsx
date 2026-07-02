@@ -102,6 +102,8 @@ export default function InventoryPage() {
   const [addQty, setAddQty] = useState('');
   const [addUnitSize, setAddUnitSize] = useState('');
   const [addUnitCost, setAddUnitCost] = useState('');
+  const [addReorderPoint, setAddReorderPoint] = useState('');
+  const [addMinStock, setAddMinStock] = useState('');
   const [adding, setAdding] = useState(false);
   const [productSearch, setProductSearch] = useState('');
   const [holdsExpanded, setHoldsExpanded] = useState(true);
@@ -312,6 +314,8 @@ export default function InventoryPage() {
     setAddQty('');
     setAddUnitSize('');
     setAddUnitCost('');
+    setAddReorderPoint('');
+    setAddMinStock('');
     setProductSearch('');
     setAddOpen(true);
   };
@@ -468,6 +472,8 @@ export default function InventoryPage() {
     setAdding(true);
 
     const unitCost = addUnitCost ? parseFloat(addUnitCost) : null;
+    const reorderPoint = addReorderPoint ? parseFloat(addReorderPoint) : null;
+    const minStock = addMinStock ? parseFloat(addMinStock) : null;
     const { data: manualAddData, error } = await supabase.rpc('manual_inventory_add', {
       p_product_id: addProductId,
       p_location: addLocation || 'Main Warehouse',
@@ -476,6 +482,8 @@ export default function InventoryPage() {
       p_performed_by: profile?.id || undefined,
       p_notes: qty > 0 ? `Initial inventory record created with ${qty} units` : undefined,
       p_unit_cost: unitCost && unitCost > 0 ? unitCost : undefined,
+      p_reorder_point: reorderPoint != null && reorderPoint >= 0 ? reorderPoint : undefined,
+      p_min_stock_level: minStock != null && minStock >= 0 ? minStock : undefined,
       p_idempotency_key: manualAddIdem.getKey(),
     });
     if (!error) assertRpcResult(manualAddData, 'manual_inventory_add');
@@ -1435,6 +1443,31 @@ export default function InventoryPage() {
             />
             <p className="text-xs text-secondary mt-1">
               For record-keeping only — does not change the product's pricing or cost.
+            </p>
+          </div>
+          <div>
+            <div className="grid grid-cols-2 gap-3">
+              <Input
+                label="Reorder Point (optional)"
+                type="number"
+                min="0"
+                step="any"
+                value={addReorderPoint}
+                onChange={(e) => setAddReorderPoint(e.target.value)}
+                placeholder="e.g. 50"
+              />
+              <Input
+                label="Min Stock (optional)"
+                type="number"
+                min="0"
+                step="any"
+                value={addMinStock}
+                onChange={(e) => setAddMinStock(e.target.value)}
+                placeholder="e.g. 20"
+              />
+            </div>
+            <p className="text-xs text-secondary mt-1">
+              Reorder point flags this item on the "Needs Reorder" list when stock runs low. Leave blank to set later.
             </p>
           </div>
           <div className="flex justify-end gap-2">

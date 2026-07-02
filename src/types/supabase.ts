@@ -9231,10 +9231,14 @@ export type Database = {
         Args: {
           p_idempotency_key?: string
           p_location: string
+          // p_min_stock_level / p_reorder_point PENDING parked migration
+          // 20260702141000 (structure-fix A13) — regenerate after apply.
+          p_min_stock_level?: number
           p_notes?: string
           p_performed_by?: string
           p_product_id: string
           p_quantity: number
+          p_reorder_point?: number
           p_unit_cost?: number
           p_unit_size?: string
         }
@@ -9860,6 +9864,23 @@ export type Database = {
           p_invoice_id: string
           p_locations: Json
           p_performed_by: string
+        }
+        Returns: Json
+      }
+      // PENDING parked migration 20260702140000 (structure-fix A12) — regenerate after apply.
+      save_field_crop_history: {
+        Args: {
+          p_crop_type: string
+          p_field_id: string
+          p_harvest_date?: string
+          p_idempotency_key?: string
+          p_notes?: string
+          p_performed_by?: string
+          p_planting_date?: string
+          p_season: number
+          p_variety?: string
+          p_yield_per_acre?: number
+          p_yield_unit?: string
         }
         Returns: Json
       }

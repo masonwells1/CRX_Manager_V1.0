@@ -14,6 +14,29 @@ are now in `supabase/migrations/` + live `schema_migrations`. Remaining parked-w
 
 ---
 
+## ★ 2026-07-02 (later) — A12 + A13 BUILT & PARKED (Codex-clean, nothing applied)
+
+**Plain English:** the two items you asked for are done and safe on this branch — two database changes are **parked
+drafts** (tested against the live DB in a rolled-back transaction, Codex-reviewed, but NOT applied), plus the
+matching screens. **A12** adds an editable *Crop History* on the Field dashboard so the office can finally record a
+crop's variety, planting/harvest dates, yield, and notes (today those can't be entered at all). **A13** lets you set
+a product's *reorder point* right when you add it to inventory (that's why 0 products have one today — the only way
+to set it was a hidden inline edit); the low-stock alert list itself already existed.
+
+**Two safe next steps (your call, both need your OK — they touch the live DB):**
+1. **Apply the two parked migrations** `20260702140000_a12` + `20260702141000_a13` via the gated path, then
+   regenerate types, then merge/deploy the frontend. **Order matters — migrations FIRST, then the frontend** (both
+   migrations are backward-compatible, so applying them first won't disturb the live app; deploying the frontend
+   first would break the new buttons). This is the one real caveat Codex raised.
+2. Or leave them parked and bundle with the other pending items — nothing is time-sensitive.
+
+**Proof it's real (this session):** both RPCs pass `plpgsql_check` CLEAN in a rolled-back live transaction and
+leave the live database untouched (verified post-run); frontend typecheck + lint + production build all clean;
+Codex reviewed twice — it found one genuine data-loss bug in the crop editor (a blank "Add" could erase an existing
+season), which is **fixed and re-confirmed clean**. Full detail in Cycles 9–10 + the APPLY-ORDER note below.
+
+---
+
 ## ★ HANDOFF FOR MASON (historical — pre-apply)
 
 **Plain English:** I fixed a batch of the Tier-0 "broken features" from the audit. Every fix is either a
@@ -86,8 +109,8 @@ apply it through the normal gated MCP path with your explicit OK (each already h
 | A9 | Month-end catch-up — needs Mason confirm | parked mig + frontend | YES | **PARKED — needs Mason confirm** | historical-date behavior change; verify live close_accounting_period first | — | see spec |
 | A10 | Email idempotency: stable intent-scoped keys | frontend/lib | NO (fix unsafe) | **PARKED — did not apply (audit fix unsafe + risk already mitigated)** | Codex confirmed a stable/window key silently blocks resends | Codex P2 | (no change) |
 | A11 | Wire get_expiring_planned_holds into Dashboard/ActionQueue | frontend | PARTIAL (holds have NO expiry live) | **PARKED — dormant until expiry data** | wiring a card that reads a fn returning empty; needs backfill decision | — | see spec |
-| A12 | PHI guardrail writer: field crop-history editor + upsert RPC | frontend + parked mig | YES | **PARKED — spec'd (not built)** | needs upsert RPC (compute_season/RLS/actor/field-ownership) + FieldDashboard editor | — | see spec |
-| A13 | reorder_point edit UI + below-reorder list | frontend | YES (inline edit already exists) | **PARKED — spec'd (not built)** | Add-modal field + manual_inventory_add param + below-reorder list | — | see spec |
+| A12 | `save_field_crop_history` upsert RPC + FieldDashboard editable Crop History tab | parked mig `20260702140000` + frontend | YES | **DONE (mig PARKED + frontend committed)** | plpgsql_check CLEAN + NOT-persisted (live count=0); typecheck/lint/build clean | clean R2 (R1 data-loss P2 fixed) | (A12 commit) |
+| A13 | `manual_inventory_add` gains reorder_point/min_stock_level + Add-Inventory modal inputs (below-reorder panel ALREADY existed) | parked mig `20260702141000` + frontend | YES | **DONE (mig PARKED + frontend committed)** | DROP+CREATE = 1 overload in-tx; plpgsql_check CLEAN (only a benign PRE-EXISTING v_existing warning); live 8-arg unchanged | clean | (A13 commit) |
 | A14 | convert_to_gl_lb pint/quart aliases | parked mig `20260702133000` | YES | **PARKED (done, unapplied)** | FUNCTIONAL smoke pint(8)=1.0/quart(4)=1.0, PT/QT unchanged, plpgsql_check CLEAN | clean | (A14 commit) |
 
 ## WAVE B — Phase 1 units (only after Wave A fully ledgered)
@@ -250,3 +273,39 @@ recompute smoke (total 116, 16 changed, 2 inserted); Saw: live still 114 rows, s
 promote-block absent (position()=0). Codex R2 clean on the fixes; raised a SEPARATE latent location-mismatch
 (increment@MainWarehouse vs receive-decrement@received-location) — DOCUMENTED as a warehouse-theme follow-up (not
 a bug in A7's scope; latent since all inventory is single-location). Draft: `...135000_a7_...sql`.
+
+**Cycle 9 — A12 (field crop-history editor + upsert RPC):** DONE (mig PARKED + frontend committed). Grounded vs
+live: `field_crop_history` (id/field_id/season/crop_type/variety/planting_date/harvest_date/yield_per_acre/
+yield_unit/notes; NO updated_at) had NO write path for harvest_date/variety/yield/notes — the only writer is the
+`snapshot_field_crop_history` trigger (crop_type-only, `ON CONFLICT (field_id, season)`). Built a new
+`save_field_crop_history` SECDEF upsert RPC on the live unique index `idx_field_crop_history_unique (field_id,
+season)` — strict-actor + role gate **admin/sales_rep** (mirrors the live INSERT/UPDATE RLS; applicator is
+SELECT-only), `check_idempotency`/`save_idempotency`, `compute_season` fallback, anon revoked. Made the
+FieldDashboard Crop History tab editable (Add Entry + per-row pencil → modal → RPC → refetch), gated to
+admin/sales_rep. PROOF — Ran: live tx aborted via summary RAISE (nothing persisted; live pg_proc count=0);
+plpgsql_check = NO FINDINGS - CLEAN; typecheck+lint+build clean. Codex R1 found a real **[P2] data-loss**: a blank
+"Add" on a season that already has a row upserts NULLs over its variety/dates/yield/notes → FIXED (Add now only
+offers seasons with no row + a handleSave guard; edit-existing goes through the pencil, which prefills). Codex R2:
+data-loss P2 RESOLVED; remaining note is the expected parked-coupling (see apply-order). Draft:
+`...140000_a12_...sql`. Type bridge: added a PENDING `save_field_crop_history` entry to the generated `supabase.ts`
+(regenerate after apply) + 2 new error tokens (FIELD_NOT_FOUND / CROP_TYPE_REQUIRED) in `db.ts`.
+
+**Cycle 10 — A13 (reorder point at inventory creation):** DONE (mig PARKED + frontend committed). Grounding
+CORRECTED the audit's scope: the "below-reorder list/panel" ALREADY EXISTS (InventoryPage's vendor-grouped
+"ACTION REQUIRED — Reorder Alerts" card + the "Needs Reorder" filter chip), and reorder_point/min_stock_level are
+ALREADY inline-editable (admin). The ONLY real gap = you can't set them when *creating* a record, so new rows sit
+at 0/0 (why 0 rows have a reorder point). Fix: `manual_inventory_add` DROP+CREATE (not a 2nd overload) adding two
+optional params `p_reorder_point`/`p_min_stock_level` (GREATEST(COALESCE(.,0),0)), grants re-applied
+(authenticated only; anon not granted) + two inputs in the Add-Inventory modal. PROOF — Ran: live tx aborted via
+RAISE — after DROP+CREATE exactly ONE overload in-tx; plpgsql_check CLEAN except a benign 'never read variable
+v_existing' extra-warning verified IDENTICAL on the live 8-arg fn (inherited verbatim, not introduced); live
+manual_inventory_add unchanged (still 8-arg); typecheck+lint+build clean. Codex CLEAN on the SQL; R2 note = the
+expected parked-coupling. Draft: `...141000_a13_...sql`. Type bridge: added p_reorder_point?/p_min_stock_level? to
+the generated `manual_inventory_add` Args (regenerate after apply).
+
+**APPLY-ORDER + COUPLING (A12 & A13) — READ BEFORE SHIPPING:** each item's frontend depends on its migration, and
+Codex R2 (correctly) flagged that a frontend deployed AHEAD of its migration would 404 the new call. Both
+migrations are **migration-first safe**, so the order is: (1) apply `20260702140000_a12` + `20260702141000_a13`
+via the gated MCP path (both additive/backward-compatible — the live app keeps working), (2) regenerate the
+supabase types, (3) THEN merge/deploy the frontend. Never deploy the FieldDashboard/InventoryPage frontend before
+the two migrations are live.
