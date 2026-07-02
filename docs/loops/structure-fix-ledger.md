@@ -4,7 +4,17 @@
 **Mission:** [structure-fix-loop-2026-07-02.md](structure-fix-loop-2026-07-02.md)
 **Live high-water at start:** `20260701205341` · **Baseline:** typecheck + build clean, tests 3106 pass / 122 skip (GREEN)
 
-## ★ HANDOFF FOR MASON (read this first)
+## ★★ SHIPPED LIVE 2026-07-02 (Mason authorized "push and ship it all live")
+All 6 parked migrations were **APPLIED LIVE** (branch pushed; then applied via gated MCP with the two review
+subagents run + proof files: **all 12 reviews clean, 0 blockers**), and the branch is being merged to `main` to
+deploy the frontend (A1 + A6 DispatchBoard). Apply verified per-migration (new function bodies present, 1 overload
+each; **A7 recompute: 0 remaining on-order drift, 2 new inventory rows**). Migrations `20260702130000`–`135000`
+are now in `supabase/migrations/` + live `schema_migrations`. Remaining parked-with-spec items (A5/A8/A9/A11/A12/A13
++ Wave B) are unbuilt; A13/A12 recommended for a fresh session.
+
+---
+
+## ★ HANDOFF FOR MASON (historical — pre-apply)
 
 **Plain English:** I fixed a batch of the Tier-0 "broken features" from the audit. Every fix is either a
 frontend change already committed to this branch, or a **parked** database migration (a `.sql` file in
