@@ -49,6 +49,19 @@ push branch → update this loop's ledger.
 | P2-3 | Ingredient-map (brand↔generic) management page | frontend (+ mig only if a write RPC is needed) | Packet 5 |
 | P2-4 | Crop Programs → "Apply Program" into jobs (make CropPrograms/ProgramTracker consumed) | frontend + parked mig | Packet 5; deep-dive Phase 4.2 |
 | P2-5 | Surface per-acre tier pricing in QuoteBuilder (readers for `tier{1,2,3}_price_per_acre`) | frontend | Packet 5 |
+## PHASE 2A — AR terms + due-date + aging (ONE coherent workstream; A8 moved here from Phase 1)
+Phase-1 A8 (terms→due-date) drew THREE consecutive Codex findings, each a real interconnection with the wider AR
+system — it is NOT a quick migration and must be built holistically here. Owner policy (Mason 2026-07-02): default
+Net 30; age from due_date; forward-only. Build these together, in order, as one reviewed batch:
+| # | Item | Ships as |
+|---|---|---|
+| A8 | **Terms → due-date.** Decide the terms SOURCE first: EITHER (a) `post_invoice` strict-parses the EXISTING editable `customers.payment_terms` free text (single source, no new column, default 30 on unparseable) — simplest, no desync; OR (b) add a numeric `customers.payment_terms_days` column AND ship the settable customer-editor field (save_customer) in the SAME batch (Codex P1: never ship the column without the setter, or the editable text and the due-date driver desync). Then `post_invoice` sets `due_date = invoice_date + terms` forward-only (only when NULL). Also decide whether to align `transfer_job_to_invoice`'s flat +30 field-app default to customer terms. | parked mig (+ frontend if 4b) |
+| A8-aging | **AR aging-basis unification** (Codex P2 from Phase-1 A8): switch ALL aging-report producers — `get_ar_aging`, `financial_dashboard_summary`, `get_detailed_statement_data` — from invoice_date to `COALESCE(due_date, invoice_date)` AT ONCE, and count not-yet-due invoices (negative age) in **Current** (`age_days BETWEEN 0 AND 29` → `age_days <= 29`). Do all producers together so an invoice can't bucket differently across the AR page / dashboard / statement PDF. Enforcement (mark_overdue/finance-charges) is already due_date-based. | parked mig |
+
+## PHASE 2 worklist (medium builds) — after 2A
+| # | Item | Ships as | Spec source |
+|---|---|---|---|
+| P2-8 | **Vendor master consolidation** (Codex P2 deferred from Phase-1 merges): merge the duplicate `vendors` master rows 'The Anderson''s'→'The Andersons' and 'Van Deist Supply'→'Van Diest Supply' — repoint vendor_bills/vendor_payments FKs from the duplicate vendor_id to the canonical, dedup the master row, THEN rename the matching purchase_orders.vendor + products.vendor free-text strings in the SAME migration (so create_vendor_bill's name↔PO match never hits VENDOR_PO_MISMATCH). Phase-1 did manufacturer merges only. | parked mig | Codex P2 on Phase-1 merges |
 
 ## PHASE 3 worklist (the big builds)
 | # | Item | Ships as | Spec source |
