@@ -271,6 +271,19 @@ export interface QuoteProductDraw {
   updated_at: string;
 }
 
+// Layer 2: per-(job, product) draw-down of a parent planned quote's booking by
+// a scheduled job. Mirrors QuoteProductDraw; lives in its own table because the
+// job_chemicals writers recreate all chemical lines on every edit.
+export interface JobProductDraw {
+  id: string;
+  job_id: string;
+  quote_id: string;
+  product_id: string;
+  quantity_drawn: number;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface QuoteVersion {
   id: string;
   quote_id: string;
@@ -489,7 +502,7 @@ export interface Inventory {
   product?: Product;
 }
 
-export type InventoryHoldType = 'manual' | 'crop_program';
+export type InventoryHoldType = 'manual' | 'crop_program' | 'job';
 
 export interface InventoryHold {
   id: string;
