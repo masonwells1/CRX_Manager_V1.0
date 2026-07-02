@@ -97,14 +97,13 @@ Layer 1's dispatch light subtracts **all** active holds from free stock (conserv
 
 ---
 
-## 6. Owner decisions to confirm with Mason BEFORE coding
-(Lead with a recommendation; the calls are his.)
-1. **Conflict behavior — corrected framing:** today **NOTHING blocks anywhere** — completion goes negative with a review flag (§3.4), order draw‑down warns. So: reserve‑time **warn**, reserve‑time **block**, or warn‑at‑reserve + keep the completion flag? Recommend **warn‑first** (matches the app; block is a later toggle) — and note 17 negative‑stock products make any blocking auto‑reserve immediately painful.
-2. **Automatic vs manual:** auto‑reserve on schedule/dispatch, or a deliberate "Reserve" action? Recommend auto, with an admin release.
-3. **Expiry:** job holds live‑until‑lifecycle, or also a safety expiry? Constraint v1 didn't state: expiry is **read‑filter‑only** today (no sweep flips `is_active`, §3.1), and the forecast **buckets on `expires_at`** — so this choice shapes Part B.4. Recommend live‑until‑lifecycle + a safety expiry **with a real sweep shipped alongside**.
-4. **Loop‑harness spec** (standing ask for big features): DRIVER, granularity, worktree, definition‑of‑done, delivery gate. Recommend: one session, own git worktree (this touches the live inventory ledger), file‑only DB drafts until an APPLY step, `/ship` per migration.
-5. **Booking consumption (new):** should a job draw also consume the quote's drawable **order** balance so the same demand can't be billed twice via `transfer_job_to_invoice` + a later order draw (§3.4)? Recommend **yes** — it falls out of the §4A.3 shared‑remaining computation.
-6. **Backfill + override (new):** do the existing scheduled jobs get retro‑reserved on ship, or only new/edited jobs (two‑regime until they cycle)? Recommend reserve‑on‑next‑edit + a one‑time office review. And who may force‑reserve when short — keep force admin‑only (warn mode already lets dispatchers proceed with a logged warning)?
+## 6. Owner decisions — ✅ DECIDED by Mason 2026‑07‑02 (do not re‑ask; build to these)
+1. **Conflict behavior: WARN.** Reserving never blocks — create the hold, surface a shortfall warning (draw_down_quote‑style semantics, §4A.4). Do NOT wire the reserve path through `create_inventory_hold`'s hard‑block. (Context: nothing blocks anywhere today; 17 negative‑stock products would make blocking auto‑reserve unusable.) Force‑override stays admin‑only per the existing engine; warn mode already lets dispatchers proceed with a logged warning.
+2. **Automatic:** auto‑reserve on schedule/dispatch (and re‑sync on every job_chemicals edit); admin can release.
+3. **Expiry: live‑until‑lifecycle, NO safety expiry.** Job holds get `expires_at = NULL`; they release ONLY via the lifecycle/delete paths (§4A.6) — which makes the delete‑aware release trigger and the orphan‑sweep invariant non‑optional. Part B consequence: the forecast cannot bucket job holds on `expires_at` — it must join `jobs` via `source_id` and bucket on `jobs.job_date` (§4B.4, decided).
+4. **Loop‑harness (decided spec):** ONE dedicated session in its own worktree **`C:\CRX_Layer2`** (branch `feat/inventory-layer2`), running a self‑paced find→build→review loop. Per cycle: implement ONE work item **file‑only** (no live applies) → rolled‑back smoke vs live schema → `/ship`‑style reviewer fan‑out → **`/codex-review` gate (a real verdict recorded, not queued)** → commit to the branch. Autonomous: do NOT ask Mason anything unless genuinely blocked on an owner call. **Hard stop preserved:** no live migration applies, no edge‑fn deploys, no push to `main` during the loop — when Part A (then B) is fully built + Codex‑clean + green, STOP and hand Mason ONE batched apply/merge decision. Mason runs other sessions concurrently — never touch other worktrees, check `git worktree list` before claiming anything shipped.
+5. **Booking consumption: YES.** A job draw also consumes the quote's drawable order balance (single shared remaining‑computation, §4A.3) — the same demand can never be billed twice via `transfer_job_to_invoice` + a later order draw.
+6. **Backfill: NONE.** The ~2 existing scheduled jobs are FAKE test data — do not retro‑reserve them; ignore them (deleting/cancelling real‑looking records is Mason's job, not the loop's).
 
 ---
 
@@ -127,5 +126,5 @@ Layer 1's dispatch light subtracts **all** active holds from free stock (conserv
 
 ---
 
-## 9. Suggested opening move for the fresh session
-Do §2 (verify ship‑state — including whether the §3.5 bug fix already shipped) → read §3's live definitions → write a short plain‑English plan for Mason (Part A first: the §4A.3 shared‑draw design, the §6 decisions with recommendations) → get his OK → build Part A via `/ship`, one gated migration at a time. Don't start Part B until Part A's holds exist.
+## 9. Opening move for the fresh session (decisions are already made — just build)
+You are launched in `C:\CRX_Layer2` on `feat/inventory-layer2`. Do §2 (verify ship‑state — including whether the §3.5 bug fix already shipped via the standalone chip) → read §3's live definitions → then START THE LOOP per §6.4: build Part A work items one per cycle, file‑only, Codex‑gated, committing to the branch. §6 is decided — do not re‑ask Mason those questions. Fold the §3.5 live‑bug fix into the Part A completion rewrite (or verify it shipped). Don't start Part B until Part A's holds exist. When everything is built + reviewed + green, stop and give Mason the single batched apply/merge decision with a plain‑English summary.
