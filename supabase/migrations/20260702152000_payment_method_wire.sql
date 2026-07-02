@@ -1,5 +1,5 @@
 -- ============================================================================
--- PARKED DRAFT — DO NOT APPLY (structure-fix Phase 1 / Packet 6 wire). 2026-07-02.
+-- APPLIED LIVE 2026-07-02 (Mason authorized; gated MCP apply; rls-security + migration-drift + Codex CLEAN; verified live).
 -- Mason applies via the DRAFT/APPLY protocol after review. CONFIRMED by Mason 2026-07-02:
 -- allow 'wire' + standardize the payment-method vocabulary; keep 'direct_deposit' on the
 -- commission screen so nothing breaks.

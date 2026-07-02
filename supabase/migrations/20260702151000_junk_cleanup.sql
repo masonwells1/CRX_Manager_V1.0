@@ -1,5 +1,5 @@
 -- ============================================================================
--- PARKED DRAFT — DO NOT APPLY (structure-fix Phase 1 / Packet 3 junk). 2026-07-02.
+-- APPLIED LIVE 2026-07-02 (Mason authorized; gated MCP apply; rls-security + migration-drift + Codex CLEAN; verified live).
 -- Mason applies via the DRAFT/APPLY protocol after review. Actions CONFIRMED by Mason
 -- 2026-07-02 after grounding corrected the packet: only the 8 fake recipes are safely
 -- deletable; the 3 'test' products are HIDDEN (not deleted); the 'we' PO is NOT touched.

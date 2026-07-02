@@ -1,5 +1,5 @@
 -- ============================================================================
--- PARKED DRAFT — DO NOT APPLY (structure-fix Phase 1 / Packet 1 merges). 2026-07-02.
+-- APPLIED LIVE 2026-07-02 (Mason authorized; gated MCP apply; rls-security + migration-drift + Codex CLEAN; verified live).
 -- Mason applies via the DRAFT/APPLY protocol after review. Directions CONFIRMED by Mason
 -- 2026-07-02: 'Nufarm' canonical casing; 'Bayer (BASF)' LEFT ALONE.
 --
