@@ -4,7 +4,41 @@
 **Mission:** [structure-fix-loop-2026-07-02.md](structure-fix-loop-2026-07-02.md)
 **Live high-water at start:** `20260701205341` · **Baseline:** typecheck + build clean, tests 3106 pass / 122 skip (GREEN)
 
-> **HANDOFF (kept at top; filled in at end):** apply-order for parked migrations · decision packet pointer · plain-English summary for Mason.
+## ★ HANDOFF FOR MASON (read this first)
+
+**Plain English:** I fixed a batch of the Tier-0 "broken features" from the audit. Every fix is either a
+frontend change already committed to this branch, or a **parked** database migration (a `.sql` file in
+`scripts/.staging-migrations/` that is drafted, safety-tested against the live database in a rolled-back
+transaction, and independently reviewed by Codex — but **NOT applied**). Nothing touched production. Pushes
+are held too (the overnight autopilot blocks all `git push` by design — the commits are local on branch
+`fix/structure-wave-2026-07`; **push it when you're back**, then we merge to `main` together).
+
+**What's DONE (proven + Codex-clean, on this branch):**
+- **A1** (committed frontend) — blend-ticket product picker now actually saves the product (was silently dropping it → $0 / crashes).
+- **A6 DispatchBoard** (committed frontend) — the dispatch stock-light now converts units before comparing (was wrong by the unit ratio).
+
+**Parked migrations — SAFE to apply (additive / bug-fix, no policy call), recommended apply order:**
+1. `20260702133000_a14` — units: accept full-word pint/quart (was saving NULL). *Trivial, functionally proven.*
+2. `20260702130000_a2` — blend ticket saves its job + application-service links (+ a customer-match guard).
+3. `20260702131000_a3` — quotes stop wiping section header-notes / needed-by-date / field / is-planned on re-save.
+4. `20260702132000_a4` — quick-delivery bills tier1 instead of $0 when a customer's tier price is missing.
+5. `20260702134000_a6` — **job completion + shortfalls stop corrupting inventory by the unit ratio** (the worst one).
+   ⚠️ **Behavior note:** after A6, completing a job whose chemical has a blank/unknown unit will STOP with a clear
+   error instead of silently deducting the wrong amount. Intended guard; the common (same-unit) case is unaffected.
+6. `20260702135000_a7` — *(pending — fixes the 18 products whose "on order" count drifted; see cycle log.)*
+
+**Needs YOUR decision before I build/apply (see `owner-decisions-2026-07.md` — 6 packets with concrete lists):**
+- Junk-data deletes (8 RTJ recipes, Test Mfg/Vendor, vendor 'we') · vendor+manufacturer merges · category remap ·
+  **due-date policy (unblocks A8)** · wire-vs-retire calls · 'wire' payment method.
+
+**Parked with a detailed spec (not built — see "Remaining Wave-A items" + the specs below):** A5 (blend billing unit
+conversion — latent), A8/A9 (need your policy confirm), A11 (dormant — holds have no expiry live), A12 (crop-history editor),
+A13 (reorder UI). **A10 was investigated and deliberately NOT changed** — the audit's fix was unsafe (would block invoice resends).
+
+**How to apply a parked migration:** move the file from `scripts/.staging-migrations/` to `supabase/migrations/`, then
+apply it through the normal gated MCP path with your explicit OK (each already has its Codex verdict + smoke evidence in the header).
+
+---
 
 ---
 
@@ -73,6 +107,51 @@ Corrections to the audit worklist (all findings re-verified against live `pg_get
 - **A14** reproduces YES — `convert_to_gl_lb` (20260629140000) accepts only PT/QT; TS accepts pint(s)/quart(s). Single additive CREATE OR REPLACE.
 
 Full agent output: `tasks/w4jvvj7ip.output` (in scratchpad task dir).
+
+---
+
+## Remaining Wave-A items — implementation specs (for continuation)
+Each is grounded (verdicts above). Do them the same way: rebuild fn from LIVE source additively → rolled-back
+`plpgsql_check` smoke (+ `[E2E]` marker on any query whose body writes a business table) → `/codex-review` → park.
+
+- **A5 — blend unit conversion (3 RPCs + OCR + $0-rate guard) — most complex, LATENT (0 live blend data).**
+  Three live RPCs multiply rate×acres (or ×qty) with NO unit conversion: `create_invoice_from_blend_ticket`
+  (live from `20260620240000`), `create_order_from_blend_ticket` (`20260305200000`), `create_application_record_from_blend_ticket`
+  (`20260610145350`). Fix: convert via `field_app_priced_quantity(qty, rate_unit, inventory_unit, product_form)`
+  (the A6 helper) before pricing/inventory. Carry OCR rate into `blend_ticket_products.rate_per_acre`/`rate_per_acre_unit`:
+  `supabase/functions/process-blend-ticket/index.ts` parses `ratePerAcre` (lines 374/391/etc.) but the INSERT (~1057-1068) OMITS
+  both columns — add them (edge-fn code committed, deploy PARKED). Guard/warn on $0-rate billable lines (currently silently dropped).
+  Split into per-RPC parked migrations + the edge-fn code. Watch: `create_invoice_from_blend_ticket` uses `job.quote_section_id`
+  quoted-pricing branch (A2 added the job/customer guard) — keep consistent.
+- **A8 — terms→due-date — NEEDS MASON POLICY (Packet 4).** Add `customers.payment_terms_days int` (+ optional per-invoice
+  override) + a terms `<select>`; `post_invoice` derives `due_date = invoice_date + terms_days` at post time FORWARD ONLY
+  (never backfill posted invoices). Default terms Net 30 (matches field-app +30). Confirm aging basis (Packet 4). Parked + flagged.
+- **A9 — month-end catch-up — NEEDS MASON CONFIRM.** GOTCHA: pull the LIVE `close_accounting_period` first — it differs from
+  the `20260217200000` migration source (calls check/save_idempotency, references `scheduled_date`). Fix: month/year picker in
+  `MonthEndClose.tsx` (currently hardcodes current month, lines 47-56) + seed `accounting_periods` for prior months as 'open'
+  BEFORE the first real billing (zero-backfill window). Behavior change on historical dates → owner decision. Parked + flagged.
+- **A11 — wire get_expiring_planned_holds — PARTIAL (holds have NO expiry live).** The fn has zero callers; wiring = a new
+  category in `ActionQueue.tsx` CATEGORIES (35-120) fed by `get_dashboard_action_items` (must add a call to
+  `get_expiring_planned_holds`). BUT live: all 9 crop_program holds have `expires_at = NULL`, so the card is DORMANT until either
+  (a) Mason backfills expiry, or (b) `create_planned_holds` is fixed to set it. → decide before wiring a permanently-empty card.
+- **A12 — PHI crop-history editor + upsert RPC (frontend + parked mig).** `field_crop_history.harvest_date` has no write path
+  (only a crop_type-only trigger `snapshot_field_crop_history` writes). Add `save_field_crop_history(field_id, season, crop_type,
+  variety, planting_date, harvest_date, ...)` SECDEF RPC: derive season via `compute_season` (consistency), gate admin/sales_rep
+  (+applicator? RLS currently admin/sales_rep only — confirm), strict-actor + `p_idempotency_key`, revoke anon, and mirror
+  field-ownership precedence (job_field_shares→field_billing_defaults→customer_id) to prevent cross-tenant writes. Make
+  `FieldDashboard.tsx` CropHistoryTab (638-691) editable (it's read-only today). Watch: don't let a future migration re-emit the
+  crop_type-only trigger and clobber manual harvest_date edits.
+- **A13 — reorder_point edit UI + below-reorder list (frontend + tiny mig).** InventoryPage already has an INLINE-editable
+  reorder_point column (admin, undiscoverable) — the gap is: add `reorder_point`/`min_stock_level` inputs to the Add-Inventory
+  modal (`InventoryPage.tsx` ~1371-1447) + a `p_reorder_point`/`p_min_stock_level` param on `manual_inventory_add` (parked mig,
+  default 0/NULL-safe) + a "below reorder" list/panel. 0/114 rows set today (the ChemMan Reorder-Report gap).
+
+## WAVE B — Phase 1 units (spec, only after Wave A ledgered)
+`src/lib/units.ts` canonical module (fetch-once cached options from `unit_conversions`, one conversion helper; chemCalculator/
+quoteCalc tables become derived) → rate-unit dropdowns (ProductDetail:470, JobDetail:2964/2986 with `unit` auto-derived,
+field-app line editable UM, LabelReview, CropPrograms) → read-only unit-drift report for Mason → normalization UPDATE as a parked
+migration (backfill BEFORE any enforcement) → normalize-on-save in BulkProductImport/BulkQuoteImport → E2E fixture/locator updates
+in the same commits. FROZEN-KEYS rule: never rename `unit_conversions` rows; canonical/synonym columns are additive only.
 
 ---
 
