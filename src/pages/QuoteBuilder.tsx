@@ -1542,14 +1542,23 @@ export default function QuoteBuilder() {
     setDrawLoading(true);
     setShowDrawModal(true);
     try {
-      const [itemsRes, drawsRes] = await Promise.all([
+      const [itemsRes, drawsRes, jobDrawsRes] = await Promise.all([
         supabase.from('quote_items').select('product_id, total_units_needed').eq('quote_id', id),
         supabase.from('quote_product_draws').select('product_id, quantity_drawn').eq('quote_id', id),
+        // Layer 2 (§6.5): a job reservation also consumes the drawable booking, so the
+        // modal's remaining MUST subtract job draws too — otherwise it shows too much
+        // and lets the user submit an amount draw_down_quote now rejects as
+        // BOOKING_OVERDRAWN. Fold job draws into `drawn` (order + job) so drawn +
+        // remaining = booked, matching the server-side balance.
+        supabaseUntyped.from('job_product_draws').select('product_id, quantity_drawn').eq('quote_id', id),
       ]);
       if (itemsRes.error) throw itemsRes.error;
       if (drawsRes.error) throw drawsRes.error;
+      if (jobDrawsRes.error) throw jobDrawsRes.error;
       const drawnByProduct = new Map<string, number>();
       (drawsRes.data || []).forEach((d) => drawnByProduct.set(d.product_id, Number(d.quantity_drawn) || 0));
+      (jobDrawsRes.data || []).forEach((d: { product_id: string; quantity_drawn: number | null }) =>
+        drawnByProduct.set(d.product_id, (drawnByProduct.get(d.product_id) || 0) + (Number(d.quantity_drawn) || 0)));
       const bookedByProduct = new Map<string, number>();
       (itemsRes.data || []).forEach((it) => {
         if (!it.product_id) return;

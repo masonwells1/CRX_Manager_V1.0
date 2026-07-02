@@ -109,6 +109,12 @@ Severity trend P1→P1→none confirms convergence on edge cases. All fixed file
 - **P2** (A3.7 `180000` reads): the additive job_drawn_cents/qty buckets weren't rendered by the existing settlement card / rollover table → booked ≠ drawn+remaining on screen. FIX: FOLD job draws into `drawn_cents`/`drawn_qty` (order at locked price + job at wavg); dropped the separate buckets + the v_job_drawn_cents var. 2-bucket identity restored, no frontend change. Proof: drawn(80)+remaining(20)=booked(100).
 Migration set stays 13 (all edits to existing Layer 2 files). A round-4 Codex confirms convergence before the apply decision.
 
+### Codex `/codex-review` ROUND 4 (2026-07-02) — 2 findings (1 P1, 1 P2), a NEW CLASS (adjacent existing code), ALL FIXED
+Not regressions — these are pre-existing paths that adding job holds/draws rippled into. Both fixed + proven:
+- **P1** (NEW mig `20260702182000` = A3.9): `release_inventory_hold` (the generic admin "Release" RPC, SECDEF, bypasses RLS) didn't reject `hold_type='job'` → an admin could deactivate a job reservation via that path, orphaning `job_product_draws` + leaving the quote un-resynced (drawn-but-not-reserved). FIX: reject 'job' holds ('release automatically via the job lifecycle'). Reproduced verbatim + the guard; plpgsql_check CLEAN.
+- **P2** (`QuoteBuilder.tsx` openDrawDownModal): the Partial Order modal computed `remaining` from order draws only, so with a job reservation it showed too much and let the user submit an amount `draw_down_quote` now rejects (BOOKING_OVERDRAWN). FIX: fetch `job_product_draws` and fold into `drawn` (order+job) so remaining = booked − order − job = the server balance. typecheck + lint CLEAN.
+Migration count now 14 (`170000`–`182000`). A round-5 Codex confirms.
+
 ### ⚠️ Branch topology (verified 2026-07-02 — matters for the merge target)
 - **local `main` is STALE** (HEAD `30adac32`, the Layer 2 handoff commit) — it does NOT have the structure-fix work.
 - **origin/main is AHEAD** (HEAD `8d908bce`) and ALREADY contains the structure-fix loop's commits (`022ee69e` etc. ARE in origin/main).
