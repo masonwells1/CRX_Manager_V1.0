@@ -28,8 +28,8 @@
 
 | # | Item | Ships as | Verify | Status | Proof | Codex | Commit |
 |---|---|---|---|---|---|---|---|
-| A1 | Blend product-select stale-closure bug | frontend | | TODO | | | |
-| A2 | save_blend_ticket persists job_id + application_service_id | parked mig | | TODO | | | |
+| A1 | Blend product-select stale-closure bug | frontend | YES | **DONE** | fail-first test (`'' → 'p1'`) | clean | f9a4d7ee |
+| A2 | save_blend_ticket persists job_id + application_service_id (+ job/customer guard) | parked mig `20260702130000` | YES | **PARKED (done, unapplied)** | plpgsql_check CLEAN, rolled back | clean (3 rounds) | (in A2 commit) |
 | A3 | save_quote restore dropped fields + create_job_from_quote_section idempotency | parked mig | | TODO | | | |
 | A4 | create_quick_delivery tier-price $0 fallback + shared getTierPrice | parked mig + frontend | | TODO | | | |
 | A5 | Blend unit conversion (3 RPCs) + OCR ratePerAcre carry + $0-rate guard | parked migs + edge-fn | | TODO | | | |
@@ -77,3 +77,23 @@ Full agent output: `tasks/w4jvvj7ip.output` (in scratchpad task dir).
 ---
 
 ## Cycle log (chronological)
+
+> **PUSH NOTE:** the armed autopilot deliberately blocks ALL `git push` during an unattended run
+> (`autopilot-lib.mjs:19` — "no unattended push — Mason reviews in the morning"). So every cycle
+> commits LOCALLY only; **Mason reviews + pushes the branch when he's back**. Work is preserved in
+> local commits on `fix/structure-wave-2026-07`. This overrides mission gate #4's per-cycle push
+> (the mission also says keep autopilot armed — the autopilot design wins).
+
+**Cycle 1 — A1 (blend product-select stale-closure):** DONE. Fixed `updateProduct` in
+ManualTicketCreate.tsx + BlendTicketDetail.tsx to use the functional (`prev =>`) updater so the
+two back-to-back setState calls compose. PROOF — Ran: added fail-first regression test; Saw: FAILS
+on old closure code (`expected '' to be 'p1'`), PASSES with fix; typecheck clean; 8 blend tests green.
+Codex (`--uncommitted`): "no introduced correctness issues." Commit `f9a4d7ee` (local; push deferred).
+
+**Cycle 2 — A2 (save_blend_ticket persist job_id + application_service_id):** PARKED (drafted + proven +
+Codex-clean; NOT applied). Rebuilt `save_blend_ticket` verbatim from live source (`20260608152631`, sole
+overload) additively adding the two SET columns the UI already sends. PROOF — Ran: live rolled-back
+`BEGIN … ROLLBACK` + `plpgsql_check`; Saw: NO FINDINGS - CLEAN (×3), live fn confirmed unchanged
+(position()=0). Codex 3 rounds: R1 → added job/customer-match guard (mis-pricing risk via
+`create_invoice_from_blend_ticket`→`job.quote_section_id`); R2 → validate EFFECTIVE job (sparse-payload
+customer-change edge); R3 clean. Draft: `scripts/.staging-migrations/20260702130000_a2_...sql`.
