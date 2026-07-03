@@ -259,3 +259,49 @@ actor-forgery only the pre-existing allowlisted cancel_delivery — save_quote a
 Remaining: push-gate P1 #2 (sibling reallocation on cancel) + #3 (order coverage across
 siblings) — the multi-job coordinated-allocation redesign, owner-accepted deferral (warn-only,
 zero impact until 2+ real jobs share one booking).
+
+---
+
+## Post-fix Codex gate (2026-07-03, HEAD 9b484702) — 2 NEW findings; push held
+
+The re-review confirmed the A3.10 unplan guard is present but surfaced that it's one facet of a
+broader "quote edits don't re-sync job reservations" gap:
+
+- **[P1 #4] Re-sync job reservations after quote quantity changes** (save_quote) — a job synced
+  against a smaller booking whose quote is later saved with MORE quantity keeps its stale (small)
+  draw; the added quantity is exposed as re-drawable balance that draw_down/rollover can commit
+  again while the job hold already reserves that demand. Single-job reachable. NOT a quick guard —
+  the real fix is making save_quote re-sync the quote's active jobs (touches the core quote RPC +
+  inventory locking; entangled with the multi-job #2/#3 sibling allocation).
+- **[P2 #5] Lock the quote FOR UPDATE before the unplan guard** — TOCTOU: _sync_job_holds locks
+  the quote then inserts a draw; my EXISTS check can run before save_quote's UPDATE lock, so a
+  concurrent schedule slips a draw between check and update. Small fix (lock early).
+
+ROOT CAUSE: #2, #3, #4, #5 are all facets of ONE area — quote edits + job scheduling don't
+coordinate their reservations. All DORMANT on the current empty operational DB (zero real
+jobs/bookings). The applied A3.10 guard is a valid, harmless partial protection (over-blocks at
+worst). Recommendation to Mason: do NOT keep applying midnight guards to the core save_quote RPC;
+build ONE designed "job-reservation coordination" follow-up (covers #2–#5) before real jobs exist.
+Push remains correctly BLOCKED (open P1 #4) — not bypassing.
+
+## OWNER DECISION 2026-07-03: build coordination fix BEFORE merging
+
+Mason chose: do NOT merge to main tonight. Next focused session, build ONE designed
+"quote edits re-sync job reservations" fix covering #2/#3/#4/#5, with its own reviewer +
+Codex gate, then merge `feat/inventory-layer2` → main fully clean.
+
+STATE AT HANDOFF (branch `feat/inventory-layer2` @ 9b484702, NOT pushed):
+- All 15 Layer 2 migrations (170000–183000) APPLIED LIVE + verified; DB is live & dormant-safe.
+- #1 unplan guard (183000) applied — valid harmless partial protection (over-blocks at worst).
+- Branch merged up to origin/main (0 behind / 20 ahead); docs synced to 610; drift PASS.
+- OPEN (all dormant, zero real jobs/bookings): #4 (P1, save_quote stale draw on quantity change),
+  #5 (P2, guard race — lock quote FOR UPDATE), #2 (P1, sibling realloc on cancel), #3 (P1, order
+  coverage across siblings). Root: quote/job reservation coordination incomplete.
+
+NEXT-SESSION PLAN (the coordination fix):
+- Design: make save_quote (+ quote lifecycle) re-sync the quote's ACTIVE jobs after quote_items
+  change, and lock the quote FOR UPDATE before the unplan guard (#5). Handle multi-job sibling
+  allocation (#2/#3) in the same reserve-engine pass (reallocate order+booking coverage across
+  sibling jobs once; re-sync remaining siblings on cancel/delete).
+- Gate: rls + drift reviewers + rolled-back smoke + Codex until SHIP (only then merge/push).
+- Codex full output archived: .claude/session-state/codex-review-latest.txt
