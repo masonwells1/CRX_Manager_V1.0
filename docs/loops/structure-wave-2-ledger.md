@@ -19,7 +19,7 @@ each item Codex-gated (≤3 rounds) before commit.
 | A8-aging | AR aging-basis unification (3 reporting producers) | mig 597 | 🚀 **APPLIED LIVE 2026-07-03** (v20260703170440), verified |
 | AR-reminder | Reminder due-date basis + **configurable threshold** (Settings) | mig 598 + SettingsPage/ARaging | ✅ **mig LIVE + frontend DEPLOYED 2026-07-03** (v20260703170528; prod @b07715d0) |
 | P2-1 | Category two-axis remap (+ use_timing + normalization trigger + write path) | mig 599 + frontend | ✅ **mig LIVE + frontend DEPLOYED 2026-07-03** (v20260703170632, verified: herb 272/foliar 53/timing 317/0 blanks; prod @b07715d0) |
-| P2-2 | Retire dead tables/columns | parked mig 180000 | ✅ **PARKED (2 clean drops: document_processing_log + create_prepay_credit), Codex-clean** · 6 of 8 approved targets verified NOT clean → owner-gated/deferred (see cycle log) |
+| P2-2 | Retire dead tables/columns | mig 180000 (live v20260703190820) | 🚀 **APPLIED LIVE 2026-07-03 (2 clean drops: create_prepay_credit + document_processing_log), verified gone** · 6 of 8 targets NOT dead → jobs.tags/batch_id KEEP per owner + rest deferred (see cycle log) |
 | P2-3 | Ingredient-map (brand↔generic) page | frontend (+mig?) | ⬜ not started |
 | P2-4 | Crop Programs → "Apply Program" into jobs | frontend + parked mig | ⬜ not started |
 | P2-5 | Surface per-acre tier pricing in QuoteBuilder | frontend | ⬜ not started |
@@ -53,7 +53,13 @@ Legend: ⬜ not started · 🔨 in progress · 🧪 built, proving · 🔍 Codex
 ## Cycle log
 (newest first — one entry per item as it completes)
 
-### 2026-07-03 — P2-2 retire dead objects — ✅ PARKED (clean subset only), Codex-clean
+### 2026-07-03 — 🚀 APPLY GATE: P2-2 clean drops APPLIED LIVE (Mason OK'd "apply the 2 verified dead drops now")
+- **Owner decisions this session:** (1) apply the 2 clean drops → done; (2) **KEEP `jobs.tags` + `jobs.batch_id` + the Batch ID UI box** — Mason: "we don't use the app yet but will" (planned features, NOT dead — do not retire).
+- **Gate:** rls-security-reviewer + migration-drift-reviewer both ran on the migration → **0 BLOCKERS** (drift: single correct overload, no incoming FK, RESTRICT-safe; RLS: nothing references either object, drop reduces attack surface). Codex `review --uncommitted` already CLEAN. Content-bound apply-guard proof written (queryHash `c51fb5fe…`).
+- **Applied** via MCP apply_migration (name `20260702180000_p2_2_retire_dead_objects`, stamped live version **v20260703190820**). Verified live: `create_prepay_credit` gone (0), `document_processing_log` gone (false); `prepay_credits` table + edit/delete/apply_prepay RPCs INTACT (prepay feature unaffected).
+- **Post-apply sync:** promoted staging→`supabase/migrations/` (599→600); migration-history #600 row; CLAUDE.md counts (112 tables / 281 RPCs / 600 migs) + Wave-2 note; schema-registry document_processing_log removed (4 blocks, JSON re-validated); AGENTS.md regen; doc-drift PASS. **DEFERRED cleanup (harmless, noted):** `src/types/supabase.ts` still has both objects' auto-gen types (a full regen would pull unrelated parallel-session drift — do it in a dedicated regen pass); the two reference docs (rpc-functions.md/database-schema.md) are branch-baseline-stale already.
+
+### 2026-07-03 — P2-2 retire dead objects — build+park (clean subset only), Codex-clean
 **Method:** 9-target adversarial verification workflow (Explore verifiers + Opus critic, ~660k tok) + my own live pg_proc/pg_trigger checks. The approved "dead" list was **materially over-broad — only 2 of 8 are clean.** Verified each against live DB + running code before writing any DROP.
 
 **PARKED (mig `20260702180000_p2_2_retire_dead_objects.sql`, 2 objects — 0 rows/values, 0 live readers/writers, no frontend/type fallout):**

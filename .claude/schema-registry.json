@@ -217,7 +217,6 @@
     "cycle_counts",
     "delivery_items",
     "delivery_photos",
-    "document_processing_log",
     "email_log",
     "field_app_location_shares",
     "field_app_locations",
@@ -463,19 +462,6 @@
       ],
       "constraints": [
         "delivery_remainders_status_check"
-      ]
-    },
-    "document_processing_log.document_type": {
-      "values": [
-        "invoice",
-        "purchase_order",
-        "price_list",
-        "product_list",
-        "customer_list",
-        "quote_list"
-      ],
-      "constraints": [
-        "document_processing_log_document_type_check"
       ]
     },
     "email_log.status": {
@@ -1868,18 +1854,6 @@
         "status",
         "created_at",
         "updated_at"
-      ]
-    },
-    "document_processing_log": {
-      "no_default": [
-        "user_id",
-        "document_type",
-        "file_name"
-      ],
-      "with_default": [
-        "id",
-        "success",
-        "created_at"
       ]
     },
     "email_log": {
@@ -3379,20 +3353,6 @@
       "updated_at",
       "reminder_sent_at",
       "escalation_sent_at"
-    ],
-    "document_processing_log": [
-      "id",
-      "user_id",
-      "document_type",
-      "file_name",
-      "file_size_bytes",
-      "page_count",
-      "processing_time_ms",
-      "confidence",
-      "items_extracted",
-      "success",
-      "error_message",
-      "created_at"
     ],
     "email_log": [
       "id",
