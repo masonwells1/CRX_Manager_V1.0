@@ -2193,7 +2193,7 @@ export default function JobDetail() {
   // decision 2026-07-03) — never wipes existing lines; the user reviews + Saves.
   // Reads the in-memory program (no fetch); mirrors loadRecipeById's seed → acres
   // re-derive so a loaded line reflects THIS job's acreage.
-  const loadProgramById = (programId: string) => {
+  const loadProgramById = async (programId: string) => {
     const program = cropPrograms.find((p) => p.id === programId);
     if (!program) return;
     if (program.items.length === 0) {
@@ -2203,8 +2203,24 @@ export default function JobDetail() {
     const cust = customers.find((c) => c.id === customerId);
     const tier = (cust?.assigned_tier ?? 1) as 1 | 2 | 3;
     const acres = sumAcres(fieldRows);
+
+    // Build a product lookup that ALSO includes any since-deactivated products the
+    // program references (allProducts is is_active=true only) so cost/price/REI/PHI
+    // are still correct — otherwise a discontinued line would load at $0 with no
+    // label data (Codex P2). Mirrors the applicator-sheet compliance fetch by id.
+    const byId = new Map(allProducts.map((p) => [p.id, p] as const));
+    const missingIds = [...new Set(program.items.map((it) => it.product_id).filter((id) => id && !byId.has(id)))];
+    if (missingIds.length > 0) {
+      const { data: extra, error: extraErr } = await supabase.from('products').select('*').in('id', missingIds);
+      if (extraErr) {
+        Sentry.captureException(extraErr, { tags: { source: 'fetch', action: 'load_program_inactive_products' } });
+      } else {
+        (extra as Product[] | null)?.forEach((p) => byId.set(p.id, p));
+      }
+    }
+
     const seeds: ChemRow[] = program.items.map((item, idx) => {
-      const product = allProducts.find((p) => p.id === item.product_id);
+      const product = byId.get(item.product_id);
       const seed = programItemToChemRowSeed(item, product, tier);
       const row = acres > 0
         ? recomputeChemRowForAcres({ ...seed, sort_order: idx }, acres)
