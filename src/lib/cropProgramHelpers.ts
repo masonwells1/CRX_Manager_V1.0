@@ -17,6 +17,7 @@
 
 import type { Product } from '../types';
 import type { RecipeChemRowSeed } from './recipeHelpers';
+import { reconcileChemAutofillUnits } from './chemCalculator';
 
 /** One product line inside a crop program. Mirrors the shape written by
  *  src/pages/CropPrograms.tsx (kept in sync — the store has no DB table). */
@@ -84,23 +85,40 @@ export function programItemToChemRowSeed(
   product: Product | undefined,
   tier: 1 | 2 | 3,
 ): RecipeChemRowSeed {
-  let priceCents = 0;
+  let priceStockCents = 0;
   if (product) {
     const tierPrice = tier === 3 ? product.tier3_price : tier === 2 ? product.tier2_price : product.tier1_price;
-    if (tierPrice != null) priceCents = Math.round(tierPrice * 100);
+    if (tierPrice != null) priceStockCents = Math.round(tierPrice * 100);
   }
-  const costCents = product?.current_cost != null ? Math.round(product.current_cost * 100) : 0;
+  const costStockCents = product?.current_cost != null ? Math.round(product.current_cost * 100) : 0;
   const rate = typeof item.rate === 'number' && Number.isFinite(item.rate) ? item.rate : null;
+  const rateUnit = item.rate_unit || product?.rate_unit || '';
+
+  // P1 MONEY fix (mirror the manual product-pick path in JobDetail): quantity =
+  // rate × acres comes out in the RATE's base unit (e.g. oz), but the product's
+  // STOCK unit (unit_size, e.g. GAL) and its per-unit cost/price are per STOCK unit.
+  // Without reconciling, saving an oz/acre program line for a per-gallon product
+  // persists (acres × oz) labeled as GAL at the per-GAL price — a ~128× over-bill.
+  // reconcileChemAutofillUnits expresses unit + cost/price in the rate's base unit
+  // (falls back to the stock unit unchanged when it can't convert). Uses the same
+  // server-parity factors as the invoice math.
+  const reconciled = reconcileChemAutofillUnits(
+    product?.unit_size,
+    rateUnit,
+    costStockCents,
+    priceStockCents,
+    product?.product_form ?? null,
+  );
 
   return {
     product_id: item.product_id,
     product_name: item.product_name || product?.product_name || '',
     quantity: '0',
-    unit: product?.unit_size || '',
+    unit: reconciled.unit,
     rate_per_acre: rate != null ? rate.toString() : '',
-    rate_unit: item.rate_unit || product?.rate_unit || '',
-    cost_per_unit_cents: costCents.toString(),
-    price_per_unit_cents: priceCents.toString(),
+    rate_unit: rateUnit,
+    cost_per_unit_cents: reconciled.costPerUnitCents.toString(),
+    price_per_unit_cents: reconciled.pricePerUnitCents.toString(),
     diluent_rate: '',
     rei_hours: product?.rei_hours != null ? product.rei_hours.toString() : '',
     phi_days: product?.phi_days != null ? product.phi_days.toString() : '',

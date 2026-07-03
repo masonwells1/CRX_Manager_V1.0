@@ -50,29 +50,42 @@ describe('programItemToChemRowSeed', () => {
     product_id: 'prod1', product_name: 'Atrazine', rate: 32, rate_unit: 'oz/acre',
     section_name: 'Pre-Emerge', notes: '',
   };
-  const product = {
+  // A per-GALLON product dosed by the OUNCE — the mismatch that would over-bill.
+  const galProduct = {
     id: 'prod1', product_name: 'Atrazine', current_cost: 5, tier1_price: 10,
     tier2_price: 9, tier3_price: 8, rate_unit: 'oz/acre', unit_size: 'gal',
-    vendor: 'Acme', rei_hours: 12, phi_days: 30,
+    product_form: 'liquid', vendor: 'Acme', rei_hours: 12, phi_days: 30,
   } as unknown as Product;
 
-  it("maps the program's per-acre rate + unit and defers quantity", () => {
-    const seed = programItemToChemRowSeed(item, product, 1);
+  it("maps the program's per-acre rate, defers quantity, reconciles the measure unit", () => {
+    const seed = programItemToChemRowSeed(item, galProduct, 1);
     expect(seed.product_id).toBe('prod1');
     expect(seed.rate_per_acre).toBe('32');
-    expect(seed.rate_unit).toBe('oz/acre');
-    expect(seed.quantity).toBe('0'); // re-derived from rate × acres by the caller
+    expect(seed.rate_unit).toBe('oz/acre'); // the program's per-acre dosing unit is preserved
+    expect(seed.unit).toBe('oz');           // measure unit reconciled to the rate's base (was 'gal')
+    expect(seed.quantity).toBe('0');        // re-derived from rate × acres by the caller
     expect(seed.driver).toBe('rate');
   });
 
-  it('uses the customer tier price (cents) so a loaded line is never $0', () => {
-    expect(programItemToChemRowSeed(item, product, 1).price_per_unit_cents).toBe('1000');
-    expect(programItemToChemRowSeed(item, product, 3).price_per_unit_cents).toBe('800');
+  it('MONEY: reconciles per-unit cost/price when the rate unit differs from the stock unit', () => {
+    // $10/gal ÷ 128 oz/gal = 7.8125¢/oz → 8; $5/gal cost → 3.9¢ → 4. So 100ac × 4oz = 400 oz
+    // × 8¢ = $32 (correct), NOT 400 "gal" × $10 = $4000 (the 128× over-bill Codex flagged).
+    expect(programItemToChemRowSeed(item, galProduct, 1).price_per_unit_cents).toBe('8');
+    expect(programItemToChemRowSeed(item, galProduct, 3).price_per_unit_cents).toBe('6'); // 800/128→6
+    expect(programItemToChemRowSeed(item, galProduct, 1).cost_per_unit_cents).toBe('4');
+    expect(programItemToChemRowSeed(item, galProduct, 1).unit).toBe('oz');
   });
 
-  it('takes cost/vendor/REI/PHI from the live product', () => {
-    const seed = programItemToChemRowSeed(item, product, 1);
-    expect(seed.cost_per_unit_cents).toBe('500');
+  it('leaves per-stock cost/price untouched when the units already match', () => {
+    const ozProduct = { ...galProduct, unit_size: 'oz' } as unknown as Product;
+    const seed = programItemToChemRowSeed(item, ozProduct, 1);
+    expect(seed.unit).toBe('oz');
+    expect(seed.cost_per_unit_cents).toBe('500');   // no conversion — common case unchanged
+    expect(seed.price_per_unit_cents).toBe('1000');
+  });
+
+  it('takes vendor/REI/PHI from the live product', () => {
+    const seed = programItemToChemRowSeed(item, galProduct, 1);
     expect(seed.vendor).toBe('Acme');
     expect(seed.rei_hours).toBe('12');
     expect(seed.phi_days).toBe('30');
