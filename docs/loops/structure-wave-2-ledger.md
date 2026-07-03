@@ -15,10 +15,10 @@ each item Codex-gated (≤3 rounds) before commit.
 
 | # | Item | Ships as | Status |
 |---|------|----------|--------|
-| A8 | Terms → due-date (post_invoice) | parked mig | ✅ done — parked, Codex R3 clean, committed |
-| A8-aging | AR aging-basis unification (3 reporting producers) | parked mig | ✅ done — parked, Codex R3 clean, committed |
-| AR-reminder | Reminder due-date basis + **configurable threshold** (Settings) | parked mig 162000 + SettingsPage/ARaging | ✅ done — parked, Codex R4 clean, committed |
-| P2-1 | Category two-axis remap (+ use_timing + normalization trigger + write path) | parked mig 170000 + frontend | ✅ done — parked, Codex-reviewed (6 rounds), committed |
+| A8 | Terms → due-date (post_invoice) | mig 596 | 🚀 **APPLIED LIVE 2026-07-03** (v20260703170243), verified |
+| A8-aging | AR aging-basis unification (3 reporting producers) | mig 597 | 🚀 **APPLIED LIVE 2026-07-03** (v20260703170440), verified |
+| AR-reminder | Reminder due-date basis + **configurable threshold** (Settings) | mig 598 + SettingsPage/ARaging | 🚀 **mig APPLIED LIVE 2026-07-03** (v20260703170528); frontend committed, NOT yet deployed |
+| P2-1 | Category two-axis remap (+ use_timing + normalization trigger + write path) | mig 599 + frontend | 🚀 **mig APPLIED LIVE 2026-07-03** (v20260703170632, verified: herb 272/foliar 53/timing 317/0 blanks); frontend committed, NOT yet deployed |
 | P2-2 | Retire dead tables/columns | parked mig | ⬜ not started |
 | P2-3 | Ingredient-map (brand↔generic) page | frontend (+mig?) | ⬜ not started |
 | P2-4 | Crop Programs → "Apply Program" into jobs | frontend + parked mig | ⬜ not started |
@@ -52,6 +52,14 @@ Legend: ⬜ not started · 🔨 in progress · 🧪 built, proving · 🔍 Codex
 
 ## Cycle log
 (newest first — one entry per item as it completes)
+
+### 2026-07-03 — 🚀 APPLY GATE: all 4 Wave-2 workstreams APPLIED LIVE (Mason OK'd "apply the 4")
+- **Pre-apply grounding:** live moved well past this session's base (parallel Layer2 + A-series migrations, newest applied 11:13 today). Re-verified every re-emitted fn (post_invoice, get_ar_aging, get_detailed_statement_data, financial_dashboard_summary, get_ar_reminder_candidates) is byte-for-byte the CURRENT live def with only the intended aging/terms swaps — **zero parallel-session drift**. Re-verified P2-1 live category counts + 6 UUIDs unchanged. app_settings columns/UNIQUE confirmed for 162000.
+- **Gate:** rls-security-reviewer + migration-drift-reviewer ran on both the AR batch and P2-1 → **0 blockers** (only a B7 version-stamp handoff + "confirm live data" notes, both satisfied). Final live `pg_proc` overload check = exactly 1 overload per fn. Codex verdicts (a8-r3, reminder-r4, p2-1-r6) recorded this session. Apply-guard proofs written per-migration (content-hash bound).
+- **Applied in order** via MCP apply_migration (each content-hash matched the guard = faithful transmission), verified live after each: 160000 (helper+post_invoice A8), 161000 (3 aging fns COALESCE basis), 162000 (setting seeded + reminder fn reads it), 170000 (Herbicide 272 / Foliar Fertilizer 53 / use_timing 317 / 0 blanks / fake hidden / trigger active). Live versions v20260703170243→170632.
+- **Post-apply:** promoted 4 files staging→supabase/migrations (595→599); anon-exec revoked on parse_payment_terms_days (normalize_product_category is an inert INVOKER trigger fn — accepted); docs synced (migration-history 596–599, CLAUDE.md snapshot, schema-registry products.use_timing + high-water, AGENTS.md).
+- **⚠ REMAINING OWNER GATE:** the coupled **frontend is committed on-branch but NOT deployed to prod** (SettingsPage AR-reminder control · ARaging generic copy · ProductDetail Use-Timing combobox · BulkProductImport use_timing map). Merging `fix/structure-wave-2026-07` → `main` = Vercel prod deploy = owner-gated one-click. APPLY-ORDER already satisfied (migrations live first). Until deploy: live site keeps working (forward-compatible), the new UI is just dormant.
+
 
 ### 2026-07-03 — P2-1 category two-axis remap — ✅ PARKED (mig 170000 + frontend), Codex 6 rounds
 - **Data remap** (`20260702170000`): new `products.use_timing` column (nullable, free-text, no CHECK); pulled TIMING out of the herbicide categories into use_timing so `category`='Herbicide' (Post Emergence/Pre-Emerge Corn+Soybean/Volunteer Corn/Range Pasture Turf); consolidated the two foliar buckets → 'Foliar Fertilizer'/Foliar; Utility→Other; applied Mason's 6-blank classifications; hid the fake product. ~400 rows re-bucketed. Categories already clean (Fungicide/Insecticide/etc.) left untouched to minimize sales-report churn.

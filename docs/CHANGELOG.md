@@ -4,6 +4,16 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-03 — Structure Wave-2: AR due-date/aging + configurable reminder + product-category two-axis remap (4 migrations APPLIED LIVE)
+
+Applied the four Codex-gated, reviewer-cleared workstreams from the Structure Wave-2 loop to production (branch `fix/structure-wave-2026-07`). Each re-emitted function was re-verified byte-for-byte against the *current* live definition before apply (parallel Layer2/A-series work had moved live well past this session's base — zero drift found), then applied in strict order with a live verification after each.
+
+- **A8 — `post_invoice` now stamps a due date** (migration `20260702160000`, live `v20260703170243`). New IMMUTABLE `parse_payment_terms_days(text)` (leading-int parse, default/clamp Net 30, anon-revoked) + `post_invoice` sets `due_date = COALESCE(due_date, invoice_date + parsed-terms)` only-when-NULL, forward-only, invoice-override-then-customer terms. Closes the real gap: chemical-sale invoices previously had **no** due date, so nothing could ever mark them late.
+- **A8-aging — unified aging basis** (migration `20260702161000`, live `v20260703170440`). `get_ar_aging`, `get_detailed_statement_data`, and `financial_dashboard_summary` all age from `COALESCE(due_date, invoice_date)` now (was invoice_date), so every AR surface agrees; forward-safe (degrades to old behavior when due_date is NULL). Bucket labels + dashboard JSON shape deliberately unchanged. Proven surgical.
+- **Configurable AR reminder threshold** (migration `20260702162000`, live `v20260703170528`). Seeds `app_settings.ar_reminder_days='30'`; `get_ar_reminder_candidates` reads it (robust parse, clamp 1..3650) and ages on the due-date basis. Coupled Settings control (adjust the day-count) + generic ARaging send copy ship on-branch.
+- **P2-1 — product category two-axis remap** (migration `20260702170000`, live `v20260703170632`). New `products.use_timing` column; ~400 products re-bucketed (timing-herbicides → Herbicide + a `use_timing` tag; two foliar buckets → Foliar Fertilizer; Utility → Other; 6 blank products classified per owner; fake test product hidden). A `BEFORE INSERT/UPDATE OF category` trigger keeps deprecated aliases from re-entering while **preserving operator free-text** timings (the crux of a 6-round Codex debate). Verified live: Herbicide 272 / Foliar Fertilizer 53 / use_timing 317 / 0 blanks.
+- **Not yet deployed:** the coupled frontend (SettingsPage reminder control, ARaging generic copy, ProductDetail Use-Timing combobox, BulkProductImport `use_timing` mapping) is committed on-branch but **not** on `main` — merging = a Vercel prod deploy, which stays owner-gated. Apply-order is already satisfied (migrations live first); the live site is forward-compatible until the deploy.
+
 ## 2026-07-01 — Inventory-aware scheduling, Layer 1 (dispatch stock light + Office Cockpit shortfalls)
 
 Wired the field-job scheduler to inventory so the office can see product shortfalls before crews roll — the first, read-only slice of "inventory-aware scheduling". Built via `/ship` (4 reviewer subagents + 4 Codex rounds + both-direction smoke proofs) after first mapping the existing planned-programs / holds / forecast allocation model so this extends it rather than duplicating it.
