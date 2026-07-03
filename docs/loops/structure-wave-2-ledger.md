@@ -17,8 +17,8 @@ each item Codex-gated (≤3 rounds) before commit.
 |---|------|----------|--------|
 | A8 | Terms → due-date (post_invoice) | mig 596 | 🚀 **APPLIED LIVE 2026-07-03** (v20260703170243), verified |
 | A8-aging | AR aging-basis unification (3 reporting producers) | mig 597 | 🚀 **APPLIED LIVE 2026-07-03** (v20260703170440), verified |
-| AR-reminder | Reminder due-date basis + **configurable threshold** (Settings) | mig 598 + SettingsPage/ARaging | 🚀 **mig APPLIED LIVE 2026-07-03** (v20260703170528); frontend committed, NOT yet deployed |
-| P2-1 | Category two-axis remap (+ use_timing + normalization trigger + write path) | mig 599 + frontend | 🚀 **mig APPLIED LIVE 2026-07-03** (v20260703170632, verified: herb 272/foliar 53/timing 317/0 blanks); frontend committed, NOT yet deployed |
+| AR-reminder | Reminder due-date basis + **configurable threshold** (Settings) | mig 598 + SettingsPage/ARaging | ✅ **mig LIVE + frontend DEPLOYED 2026-07-03** (v20260703170528; prod @b07715d0) |
+| P2-1 | Category two-axis remap (+ use_timing + normalization trigger + write path) | mig 599 + frontend | ✅ **mig LIVE + frontend DEPLOYED 2026-07-03** (v20260703170632, verified: herb 272/foliar 53/timing 317/0 blanks; prod @b07715d0) |
 | P2-2 | Retire dead tables/columns | parked mig | ⬜ not started |
 | P2-3 | Ingredient-map (brand↔generic) page | frontend (+mig?) | ⬜ not started |
 | P2-4 | Crop Programs → "Apply Program" into jobs | frontend + parked mig | ⬜ not started |
@@ -58,7 +58,7 @@ Legend: ⬜ not started · 🔨 in progress · 🧪 built, proving · 🔍 Codex
 - **Gate:** rls-security-reviewer + migration-drift-reviewer ran on both the AR batch and P2-1 → **0 blockers** (only a B7 version-stamp handoff + "confirm live data" notes, both satisfied). Final live `pg_proc` overload check = exactly 1 overload per fn. Codex verdicts (a8-r3, reminder-r4, p2-1-r6) recorded this session. Apply-guard proofs written per-migration (content-hash bound).
 - **Applied in order** via MCP apply_migration (each content-hash matched the guard = faithful transmission), verified live after each: 160000 (helper+post_invoice A8), 161000 (3 aging fns COALESCE basis), 162000 (setting seeded + reminder fn reads it), 170000 (Herbicide 272 / Foliar Fertilizer 53 / use_timing 317 / 0 blanks / fake hidden / trigger active). Live versions v20260703170243→170632.
 - **Post-apply:** promoted 4 files staging→supabase/migrations (595→599); anon-exec revoked on parse_payment_terms_days (normalize_product_category is an inert INVOKER trigger fn — accepted); docs synced (migration-history 596–599, CLAUDE.md snapshot, schema-registry products.use_timing + high-water, AGENTS.md).
-- **⚠ REMAINING OWNER GATE:** the coupled **frontend is committed on-branch but NOT deployed to prod** (SettingsPage AR-reminder control · ARaging generic copy · ProductDetail Use-Timing combobox · BulkProductImport use_timing map). Merging `fix/structure-wave-2026-07` → `main` = Vercel prod deploy = owner-gated one-click. APPLY-ORDER already satisfied (migrations live first). Until deploy: live site keeps working (forward-compatible), the new UI is just dormant.
+- **✅ FRONTEND DEPLOYED (Mason OK'd "deploy the UI now"):** ran a fresh Codex push-gate review on the FULL branch diff (migrations + frontend) → CLEAN ("no actionable correctness issues"); merged `origin/main` (1 unrelated commit, no conflicts) → pushed `fix/structure-wave-2026-07` → fast-forwarded `main` @`b07715d0` = Vercel prod deploy. Verified **Vercel deployment `dpl_4rL1efCsw54bw3r1TD6XfmrGYCB8` = READY / production / commit b07715d0**. Coupled UI now live: SettingsPage AR-reminder control · ARaging generic copy · ProductDetail Use-Timing combobox · BulkProductImport use_timing map. (Click-through render not visually confirmed — auth-gated; build compiled + Codex confirmed frontend compiles.)
 
 
 ### 2026-07-03 — P2-1 category two-axis remap — ✅ PARKED (mig 170000 + frontend), Codex 6 rounds
