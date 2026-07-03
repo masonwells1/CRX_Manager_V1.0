@@ -18,7 +18,7 @@ each item Codex-gated (≤3 rounds) before commit.
 | A8 | Terms → due-date (post_invoice) | parked mig | ✅ done — parked, Codex R3 clean, committed |
 | A8-aging | AR aging-basis unification (3 reporting producers) | parked mig | ✅ done — parked, Codex R3 clean, committed |
 | AR-reminder | Reminder due-date basis + **configurable threshold** (Settings) | parked mig 162000 + SettingsPage/ARaging | ✅ done — parked, Codex R4 clean, committed |
-| P2-1 | Category two-axis remap (+ park ambiguous-2 + 6 blanks) | parked mig + frontend | ⏸ grounded — proposals parked for owner input (below); unambiguous remap ready to build on confirm |
+| P2-1 | Category two-axis remap (+ use_timing + normalization trigger + write path) | parked mig 170000 + frontend | ✅ done — parked, Codex-reviewed (6 rounds), committed |
 | P2-2 | Retire dead tables/columns | parked mig | ⬜ not started |
 | P2-3 | Ingredient-map (brand↔generic) page | frontend (+mig?) | ⬜ not started |
 | P2-4 | Crop Programs → "Apply Program" into jobs | frontend + parked mig | ⬜ not started |
@@ -52,6 +52,15 @@ Legend: ⬜ not started · 🔨 in progress · 🧪 built, proving · 🔍 Codex
 
 ## Cycle log
 (newest first — one entry per item as it completes)
+
+### 2026-07-03 — P2-1 category two-axis remap — ✅ PARKED (mig 170000 + frontend), Codex 6 rounds
+- **Data remap** (`20260702170000`): new `products.use_timing` column (nullable, free-text, no CHECK); pulled TIMING out of the herbicide categories into use_timing so `category`='Herbicide' (Post Emergence/Pre-Emerge Corn+Soybean/Volunteer Corn/Range Pasture Turf); consolidated the two foliar buckets → 'Foliar Fertilizer'/Foliar; Utility→Other; applied Mason's 6-blank classifications; hid the fake product. ~400 rows re-bucketed. Categories already clean (Fungicide/Insecticide/etc.) left untouched to minimize sales-report churn.
+- **Normalization trigger** `trg_normalize_product_category` (BEFORE INSERT OR UPDATE OF category): maps the deprecated category aliases → functional class + the alias's canonical timing, so no write path (UI/import/RPC) can re-introduce the old taxonomy. **Does NOT police free-text use_timing** — deliberate (see below).
+- **Write path** (frontend, coupled to the migration): ProductDetail gains a "Use Timing" combobox (shown for Herbicide/Foliar Fertilizer); BulkProductImport maps a use_timing column; `use_timing?: string|null` on the Product type. Category dropdowns already self-adapt (dynamic Combobox).
+- **Codex (6 rounds):** R1 re-drift → trigger. R2 stale-tag on re-type → direct-assign. R3/R4 asked to CLEAR cross-category stale tags → added a valid-tag invariant. R5 → widen trigger + add write path. **R6** showed the invariant DISCARDS legitimate free-text timings ('Burndown', 'In-Furrow') = data-loss. **RESOLUTION:** R3/R4 (clear) vs R6 (preserve) are in genuine tension on a free-text column; preserving operator input wins — the trigger no longer clears free-text. Accepted trade-off: a rare cross-category re-edit can leave a cosmetically-stale tag, operator-fixable via the Use-Timing field.
+- **Proof:** final rolled-back live smoke — backfill=PASS (herb=272, foliar=53, timing=317, empty=0, fake hidden), legacy_norm=PASS, free_text_preserved=PASS ('Burndown' survives), plpgsql_check=0, nothing persisted; frontend typecheck+lint clean.
+- **⚠ APPLY-ORDER:** apply `170000` (adds products.use_timing) BEFORE merging/deploying the ProductDetail/BulkProductImport frontend (same branch; merge=deploy).
+- **Owner note:** the 2 ambiguous buckets used defaults (Foliar Nutrition & Liquid Fertilizer→Foliar Fertilizer; Utility→Other) — flip in the migration before apply if wrong.
 
 ### 2026-07-03 — AR reminder: due-date basis + configurable threshold — ✅ PARKED, Codex R4 clean
 - **Mason asked** (2026-07-03) to keep >30-days-past-due reminders AND make the day-count adjustable in Settings.

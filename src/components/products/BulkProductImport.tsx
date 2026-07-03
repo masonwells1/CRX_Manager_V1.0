@@ -17,6 +17,7 @@ interface ParsedProduct {
   product_name: string;
   sku?: string;
   category?: string;
+  use_timing?: string;
   vendor?: string;
   manufacturer?: string;
   container_size?: number;
@@ -48,6 +49,7 @@ const FIELD_MAPPINGS: Record<string, string[]> = {
   product_name: ['product_name', 'product', 'name', 'productname', 'item', 'item_name'],
   sku: ['sku', 'item_code', 'product_code', 'code'],
   category: ['category', 'type', 'product_type'],
+  use_timing: ['use_timing', 'timing', 'application_timing', 'use timing'],
   vendor: ['vendor', 'supplier', 'distributor'],
   manufacturer: ['manufacturer', 'mfg', 'brand'],
   container_size: ['container_size', 'size', 'container', 'package_size'],
@@ -266,7 +268,8 @@ export default function BulkProductImport({ open, onClose, onSuccess }: BulkProd
 
             if (field === 'product_name' || field === 'sku' || field === 'category' ||
                 field === 'vendor' || field === 'manufacturer' || field === 'unit_size' ||
-                field === 'epa_registration' || field === 'suggested_rate' || field === 'rate_unit' || field === 'notes') {
+                field === 'epa_registration' || field === 'suggested_rate' || field === 'rate_unit' || field === 'notes' ||
+                field === 'use_timing') {
               if (value) product[field] = value;
             } else if (field === 'container_size' || field === 'current_cost' ||
                        field === 'tier1_price' || field === 'tier2_price' ||
