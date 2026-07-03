@@ -4,6 +4,17 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-02 — Inventory-aware scheduling, Layer 2 (scheduled jobs reserve + draw against bookings)
+
+Scheduled field jobs now actually **reserve** the inventory they'll consume, instead of just showing a warning light. When a job is scheduled, each product on it becomes a real inventory hold (`hold_type='job'`, non-expiring), and if the job belongs to a planned booking (a quote), it **draws** against that booking so the same units are never counted or billed twice. Built file-only in the `feat/inventory-layer2` worktree, hardened over 5 Codex rounds, then applied live as one batch (14 migrations) on Mason's go-ahead.
+
+- **New reservation engine** — a `jobs`/`job_chemicals` trigger set (`_sync_job_holds`) keeps each job's holds in lock-step with its chemicals and lifecycle. Holds release automatically on cancel / complete / delete (there's no expiry to lean on). Completion **keeps** the draw (stock was consumed); cancel / soft-delete-while-active **reverses** it.
+- **New draw ledger `job_product_draws`** (mirrors `quote_product_draws`) — records how much of a booking each job has pulled. RLS: staff SELECT, writes via SECURITY DEFINER only, FK CASCADE on job + quote + product, UNIQUE(job, product).
+- **Core invariant enforced:** a booking's quote-side crop-program hold + its job holds never exceed the booked quantity. Job hold = `drawn + max(demand − drawn − order_prebooked_overlap, 0)`; draw = `min(demand, max(booking − order_drawn − other_job_drawn, 0))`. Quote lifecycle guards, `draw_down_quote`, `convert_quote_to_order`, rollover/settlement, and `save_quote`/`restore_quote_version` all now fold job draws into "already drawn" so settlement math and the accepted-when-fully-drawn rule stay correct.
+- **`hold_type='job'` is lifecycle-only** — `release_inventory_hold` rejects it (a manual release would orphan the draw + un-resync the quote); the Inventory client write-guards exclude job holds.
+- **Reads made job-aware:** Inventory Forecast gains a "Jobs" column + job demand by job date; `get_inventory_position` reports a `job_holds_qty`; the shortfall RPC no longer double-counts a job's own hold; a new precise `get_dispatch_stock_status` RPC (office-gated, anon-revoked) replaces the client-side dispatch free-stock estimate.
+- **14 migrations `20260702170000`–`182000` APPLIED LIVE 2026-07-02** (verified: 113 inventory-position rows carry `job_holds_qty`, structure + security clean). Owner-tracked follow-up: a multi-job **coordinated** allocation refinement (two round-5 warn-only P1s) — no current impact on an operationally-empty DB, to be built before real multi-job bookings exist.
+
 ## 2026-07-01 — Inventory-aware scheduling, Layer 1 (dispatch stock light + Office Cockpit shortfalls)
 
 Wired the field-job scheduler to inventory so the office can see product shortfalls before crews roll — the first, read-only slice of "inventory-aware scheduling". Built via `/ship` (4 reviewer subagents + 4 Codex rounds + both-direction smoke proofs) after first mapping the existing planned-programs / holds / forecast allocation model so this extends it rather than duplicating it.

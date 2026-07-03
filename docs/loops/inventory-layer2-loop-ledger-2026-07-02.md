@@ -115,6 +115,14 @@ Not regressions — these are pre-existing paths that adding job holds/draws rip
 - **P2** (`QuoteBuilder.tsx` openDrawDownModal): the Partial Order modal computed `remaining` from order draws only, so with a job reservation it showed too much and let the user submit an amount `draw_down_quote` now rejects (BOOKING_OVERDRAWN). FIX: fetch `job_product_draws` and fold into `drawn` (order+job) so remaining = booked − order − job = the server balance. typecheck + lint CLEAN.
 Migration count now 14 (`170000`–`182000`). A round-5 Codex confirms.
 
+## 🚀 APPLIED LIVE 2026-07-02 (Mason's explicit "Go")
+All 14 migrations applied to prod (`rhyzpcqhnizqbxphqdkr`) in filename order 170000→182000 (fresh version stamps at apply time — no collision with the live high-water). Rebased clean onto latest `origin/main` first (15 commits, 0 conflicts). Post-apply verification:
+- **Functional**: `get_inventory_position()` returns 113 rows live WITH the new `job_holds_qty` key.
+- **Structural**: `'job'` in the live `inventory_holds_hold_type_check`; `job_product_draws` table + RLS on; `get_dispatch_stock_status` RPC + `trg_release_job_holds_on_lifecycle` trigger present.
+- **Security**: 0 function overloads across all 18 Layer 2 fns; targeted sweep = 0 anon-exec / 0 missing-search_path; the only ERROR advisor is the pre-existing accepted `profile_public_view`; new fns are `authenticated`-exec + self-gated.
+- Reserve engine is warn-only (§6.1) and the DB is operationally empty, so the 2 deferred multi-job-allocation P1s are dormant.
+**Remaining OWNER item**: the multi-job coordinated-allocation refinement (round-5 P1s) — build before real multi-job bookings exist. Everything else DONE.
+
 ### Codex `/codex-review` ROUND 5 (2026-07-02) — 3 findings (2 P1 multi-job allocation + 1 P2 soft-delete). P2 FIXED; the two P1s = OWNER DECISION (redesign).
 - **P2 FIXED** (`Quotes.tsx` handleDelete): the bulk-delete guard checked `quote_product_draws` only → a quote with a job draw could be soft-deleted (no status trigger fires, FK cascades only on hard delete) while its booking stays consumed. Now folds `job_product_draws` into the skip-set. typecheck+lint CLEAN.
 - **P1 ×2 = DEFERRED, presented to Mason (multi-job coordinated allocation — a redesign, not a point fix):**
