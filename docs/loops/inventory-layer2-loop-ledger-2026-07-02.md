@@ -212,3 +212,30 @@ A3.5/A3.6 → A4 (reserve engine) → **A5 (complete_job §3.5 fix)** ✅ built 
 4. `node scripts/generate-caller-graph.mjs` (caller‑graph is 2026‑06‑13, stale).
 5. Doc‑sync: `docs/reference/migration-history.md` rows **[A1: M1]** + database‑schema.md/rpc‑functions.md + INVENTORY_RULES.md hold_type list + CLAUDE.md lifecycles/Net‑Free + GettingStarted.tsx Net‑Free copy + `docs/CHANGELOG.md` + `node scripts/regenerate-agents-md.mjs`.
 6. Run the 4 test‑contract suites (rpcFixtureLiveDiff, rpcIdempotencyScope, schemaIntegrity, inventoryPositionValidator) + db‑invariant sweeps.
+
+---
+
+## Final push-gate Codex review (2026-07-02, vs origin/main @ 35bd91ea, HEAD 37f6d73c)
+
+Ran one final independent Codex review (gpt-5.5, xhigh) against the exact pushable tip
+after rebasing/merging origin/main + doc-sync. **Verdict: NOT clean — 3 P1 findings**, all
+in the reserve-accounting layer, all WARN-only, all dormant on the current empty operational DB:
+
+1. **[P1] Unplan-after-job-draw** (`20260702181000` save_quote:96) — **NEWLY surfaced.**
+   save_quote lets `is_planned` flip to false even when a live `job_product_draws` row exists.
+   On the next job re-sync the draw is deleted and (quote no longer planned) not re-inserted,
+   so the booking's drawable/rollable balance reopens fully while the job still consumes stock
+   → double-count. Single-job reachable. **Small, pattern-matching fix** (guard the unplan,
+   like the existing terminal/drawn guards).
+2. **[P1] Sibling reallocation on cancel/delete** (`20260702174000`:79-88) — KNOWN round-5
+   deferral. Multi-job only.
+3. **[P1] Allocate order coverage once across siblings** (`20260702174000`:165-171) — KNOWN
+   round-5 deferral. Multi-job only.
+
+#2 + #3 = the two owner-acknowledged multi-job coordinated-allocation P1s (need 2+ real jobs
+on one quote+product to matter; genuine redesign). #1 is new and single-job-reachable.
+
+**Push is correctly BLOCKED by codex-push-guard** (no clean verdict). Not bypassing.
+Recommendation carried to Mason: fix #1 now (one small migration, gated apply), defer #2/#3
+as the already-planned multi-job follow-up, then complete merge/push. Full output archived at
+`.claude/session-state/codex-review-latest.txt`.
