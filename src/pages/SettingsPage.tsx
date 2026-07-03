@@ -165,6 +165,7 @@ export default function SettingsPage() {
   const [companyEmail, setCompanyEmail] = useState('');
   const [companyAddress, setCompanyAddress] = useState('');
   const [defaultValidDays, setDefaultValidDays] = useState('30');
+  const [arReminderDays, setArReminderDays] = useState('30');
   const [defaultTier, setDefaultTier] = useState('1');
   // #32: Fuel Surcharge — OFF by default, rate blank. The owner sets the rule.
   const [fuelSurcharge, setFuelSurcharge] = useState<FuelSurchargeConfig>(DEFAULT_FUEL_SURCHARGE);
@@ -236,6 +237,7 @@ export default function SettingsPage() {
     setCompanyEmail(map['company_email'] || '');
     setCompanyAddress(map['company_address'] || '');
     setDefaultValidDays(map['default_quote_valid_days'] || '30');
+    setArReminderDays(map['ar_reminder_days'] || '30');
     setDefaultTier(map['default_tier'] || '1');
     // #32: blank/absent => the inert OFF default (never invents a rate).
     setFuelSurcharge(parseFuelSurchargeConfig(map['fuel_surcharge']));
@@ -299,9 +301,15 @@ export default function SettingsPage() {
 
   const saveDefaults = async () => {
     setSavingDefaults(true);
+    // Clamp the AR reminder threshold to exactly what get_ar_reminder_candidates enforces
+    // (1..3650 whole days) so the stored/shown value can never diverge from the cadence used.
+    const nReminder = parseInt(arReminderDays, 10);
+    const normalizedReminderDays = String(Number.isFinite(nReminder) ? Math.min(Math.max(nReminder, 1), 3650) : 30);
+    setArReminderDays(normalizedReminderDays);
     try {
       await Promise.all([
         saveSetting('default_quote_valid_days', defaultValidDays),
+        saveSetting('ar_reminder_days', normalizedReminderDays),
         saveSetting('default_tier', defaultTier),
       ]);
       toast('success', 'Default settings saved');
@@ -782,6 +790,17 @@ export default function SettingsPage() {
             min="1"
             value={defaultValidDays}
             onChange={(e) => setDefaultValidDays(e.target.value)}
+          />
+          {/* AR reminder threshold. NOTE: takes effect only once parked migration
+              20260702162000 is applied live (get_ar_reminder_candidates reads
+              app_settings.ar_reminder_days). Apply that migration before/with this deploy. */}
+          <Input
+            label="AR Reminder Threshold (days past due)"
+            type="number"
+            min="1"
+            max="3650"
+            value={arReminderDays}
+            onChange={(e) => setArReminderDays(e.target.value)}
           />
           <div>
             <label className="block text-sm font-medium text-secondary mb-1">Default Tier</label>

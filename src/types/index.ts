@@ -33,6 +33,7 @@ export interface Product {
   product_name: string;
   sku: string | null;
   category: string | null;
+  use_timing?: string | null;
   vendor: string | null;
   manufacturer: string | null;
   container_size: number | null;

@@ -313,6 +313,18 @@ export default function ProductDetail() {
               <Input label="Product Name" required value={product.product_name || ''} onChange={(e) => update('product_name', e.target.value)} disabled={!isAdmin} />
               <Input label="SKU" value={product.sku || ''} onChange={(e) => update('sku', e.target.value)} disabled={!isAdmin} />
               <Combobox label="Category" value={product.category || ''} onChange={(v) => update('category', v)} options={categoryOptions} disabled={!isAdmin} placeholder="Type or select..." />
+              {(product.category === 'Herbicide' || product.category === 'Foliar Fertilizer') && (
+                <Combobox
+                  label="Use Timing"
+                  value={product.use_timing || ''}
+                  onChange={(v) => update('use_timing', v || null)}
+                  options={product.category === 'Foliar Fertilizer'
+                    ? ['Foliar']
+                    : ['Post-Emergence', 'Pre-Emerge Corn', 'Pre-Emerge Soybean', 'Volunteer Corn', 'Range/Pasture/Turf']}
+                  disabled={!isAdmin}
+                  placeholder="Type or select..."
+                />
+              )}
               <Combobox label="Vendor" value={product.vendor || ''} onChange={(v) => update('vendor', v)} options={vendorOptions} disabled={!isAdmin} placeholder="Type or select..." />
               <Combobox label="Manufacturer" value={product.manufacturer || ''} onChange={(v) => update('manufacturer', v)} options={manufacturerOptions} disabled={!isAdmin} placeholder="Type or select..." />
               <Input label="EPA Registration" value={product.epa_registration || ''} onChange={(e) => update('epa_registration', e.target.value)} disabled={!isAdmin} placeholder="e.g., 34704-69" />
