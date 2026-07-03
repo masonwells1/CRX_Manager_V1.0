@@ -19,7 +19,7 @@ each item Codex-gated (≤3 rounds) before commit.
 | A8-aging | AR aging-basis unification (3 reporting producers) | mig 597 | 🚀 **APPLIED LIVE 2026-07-03** (v20260703170440), verified |
 | AR-reminder | Reminder due-date basis + **configurable threshold** (Settings) | mig 598 + SettingsPage/ARaging | ✅ **mig LIVE + frontend DEPLOYED 2026-07-03** (v20260703170528; prod @b07715d0) |
 | P2-1 | Category two-axis remap (+ use_timing + normalization trigger + write path) | mig 599 + frontend | ✅ **mig LIVE + frontend DEPLOYED 2026-07-03** (v20260703170632, verified: herb 272/foliar 53/timing 317/0 blanks; prod @b07715d0) |
-| P2-2 | Retire dead tables/columns | parked mig | ⬜ not started |
+| P2-2 | Retire dead tables/columns | parked mig 180000 | ✅ **PARKED (2 clean drops: document_processing_log + create_prepay_credit), Codex-clean** · 6 of 8 approved targets verified NOT clean → owner-gated/deferred (see cycle log) |
 | P2-3 | Ingredient-map (brand↔generic) page | frontend (+mig?) | ⬜ not started |
 | P2-4 | Crop Programs → "Apply Program" into jobs | frontend + parked mig | ⬜ not started |
 | P2-5 | Surface per-acre tier pricing in QuoteBuilder | frontend | ⬜ not started |
@@ -52,6 +52,22 @@ Legend: ⬜ not started · 🔨 in progress · 🧪 built, proving · 🔍 Codex
 
 ## Cycle log
 (newest first — one entry per item as it completes)
+
+### 2026-07-03 — P2-2 retire dead objects — ✅ PARKED (clean subset only), Codex-clean
+**Method:** 9-target adversarial verification workflow (Explore verifiers + Opus critic, ~660k tok) + my own live pg_proc/pg_trigger checks. The approved "dead" list was **materially over-broad — only 2 of 8 are clean.** Verified each against live DB + running code before writing any DROP.
+
+**PARKED (mig `20260702180000_p2_2_retire_dead_objects.sql`, 2 objects — 0 rows/values, 0 live readers/writers, no frontend/type fallout):**
+- `DROP FUNCTION create_prepay_credit(uuid,bigint,text,text,text)` — 1 overload, zero callers (caller-graph confirms), in no test fixture array.
+- `DROP TABLE document_processing_log` — 0 rows, no incoming FK, no fn/trigger/view/edge-fn reads it, no hand-written index.ts interface.
+- **Coupling edits on branch (build+test green either merge order):** `rpcFixtureLiveDiff.test.ts` snapshot (removed `create_prepay_credit`, count 267→266; 7/7 pass) + `backup-via-rest.py` TABLES (removed `document_processing_log`, else backup 404s). Apply-time: regen supabase.ts + schema-registry.
+- **Proof:** rolled-back live smoke `SMOKE_RESULT|cpc_gone=t doclog_table_gone=t` (ran the actual DROPs against live, verified, rolled back — nothing persisted) + typecheck clean.
+- **Codex (`review --uncommitted`):** CLEAN — "No actionable correctness issues … in the backup table list, RPC fixture snapshot, or parked dead-object retirement SQL."
+
+**NOT clean → deferred / OWNER-GATED (do NOT fold a bare drop in — each verified against live):**
+- `deliveries.receipt_pdf_url` — dead in DB (0/102, no reader) BUT removing its `index.ts` Delivery field destabilizes fragile `as Array<Delivery&{…}>` casts in `Deliveries.tsx:294,436` (customer-mismatch typecheck error). Needs a tiny cast-cleanup first; not a schema-drop ride-along. **DEFERRED (low effort, own change).**
+- `jobs.tags` + `jobs.batch_id` — BOTH written by `save_job` (INSERT+UPDATE) and guarded by `_enforce_billed_job_immutability` (`NEW.tags/batch_id IS NOT DISTINCT FROM OLD.*`). Dropping either crashes save_job + the trigger. `batch_id` is ALSO a live editable "Batch ID" field on JobDetail (:2609-2615, saved). **OWNER-GATED:** needs a save_job + trigger re-emit (do both columns in ONE save_job touch); `batch_id` removal is a product decision (remove the UI field).
+- `payments` (table) + `record_invoice_payment` (RPC) — 0 rows, but 3 LIVE money reports SELECT `public.payments` (`close_accounting_period`, `get_monthly_summary`, `get_customer_statement`) + live E2E specs call `record_invoice_payment`. Dropping = money-behavior change. **OWNER-GATED (a `/foundation-ultra-review`-class change: re-point the 3 readers + migrate the E2E seed path first).**
+- `order_line_allocations` (table) — 0 rows, but live `DELETE` refs remain in prod RPCs (`update_order_items` + 2 more) + a smoke script. **NOT dead — keep out.**
 
 ### 2026-07-03 — 🚀 APPLY GATE: all 4 Wave-2 workstreams APPLIED LIVE (Mason OK'd "apply the 4")
 - **Pre-apply grounding:** live moved well past this session's base (parallel Layer2 + A-series migrations, newest applied 11:13 today). Re-verified every re-emitted fn (post_invoice, get_ar_aging, get_detailed_statement_data, financial_dashboard_summary, get_ar_reminder_candidates) is byte-for-byte the CURRENT live def with only the intended aging/terms swaps — **zero parallel-session drift**. Re-verified P2-1 live category counts + 6 UUIDs unchanged. app_settings columns/UNIQUE confirmed for 162000.
