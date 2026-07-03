@@ -20,8 +20,8 @@ each item Codex-gated (≤3 rounds) before commit.
 | AR-reminder | Reminder due-date basis + **configurable threshold** (Settings) | mig 598 + SettingsPage/ARaging | ✅ **mig LIVE + frontend DEPLOYED 2026-07-03** (v20260703170528; prod @b07715d0) |
 | P2-1 | Category two-axis remap (+ use_timing + normalization trigger + write path) | mig 599 + frontend | ✅ **mig LIVE + frontend DEPLOYED 2026-07-03** (v20260703170632, verified: herb 272/foliar 53/timing 317/0 blanks; prod @b07715d0) |
 | P2-2 | Retire dead tables/columns | mig 180000 (live v20260703190820) | 🚀 **APPLIED LIVE 2026-07-03 (2 clean drops: create_prepay_credit + document_processing_log), verified gone** · 6 of 8 targets NOT dead → jobs.tags/batch_id KEEP per owner + rest deferred (see cycle log) |
-| P2-3 | Ingredient-map (brand↔generic) page | **frontend-only (no mig)** | ✅ **BUILT + PROVEN 2026-07-03** — admin CRUD on `ingredient_map`; compliance-reviewer CLEAN; live rolled-back insert smoke PASS; committed to loop branch |
-| P2-4 | Crop Programs → "Apply Program" into jobs | frontend + parked mig | ⬜ not started |
+| P2-3 | Ingredient-map (brand↔generic) page | **frontend-only (no mig)** | 🚀 **DEPLOYED TO PROD 2026-07-03** — admin CRUD on `ingredient_map`; Codex push-gate 5 rounds → CLEAN; main @`1ef739e2`, Vercel `dpl_8WPxBGvSmhRuYfQ9b91eJUjRAi3Q` READY (croprxsolutions.app) |
+| P2-4 | Crop Programs → "Apply Program" into jobs | frontend + parked mig | 🔨 **in progress 2026-07-03** |
 | P2-5 | Surface per-acre tier pricing in QuoteBuilder | frontend | ⬜ not started |
 | P2-8 | Vendor master consolidation | parked mig | ⬜ not started |
 | A5 | Blend unit conversion | parked migs + edge-fn code | ⬜ not started |
