@@ -1,4 +1,4 @@
-# Migration History (609 migrations)
+# Migration History (610 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
@@ -971,5 +971,6 @@ These 10 historical migrations apply by timestamp order like all others; they si
 | 607 | 20260702180000 | **APPLIED LIVE 2026-07-02. Layer 2 A3.7 — rollover/settlement trio job-aware (§6.5).** get_open_booking_rollover + get_booking_settlement + rollover_quote_to_season subtract job draws from the drawable remainder; job draws folded into `drawn` so booked=drawn+remaining; draft rollover gated (Codex rounds 2/3). |
 | 608 | 20260702181000 | **APPLIED LIVE 2026-07-02. Layer 2 A3.8 — save_quote + restore_quote_version drawn guards count job draws** (block reducing a line below its combined order+job drawn qty; verbatim reproduction + guard-only change; Codex round-2 P1). |
 | 609 | 20260702182000 | **APPLIED LIVE 2026-07-02. Layer 2 A3.9 — release_inventory_hold rejects 'job' holds** (lifecycle-managed only; the generic admin Release path can't orphan a job draw; Codex round-4 P1). |
+| 610 | 20260702183000 | **APPLIED LIVE 2026-07-03. Layer 2 A3.10 — save_quote blocks unplanning a booking with live job draws** (Codex final push-gate P1 #1). Rejects `is_planned`→false with `BOOKING_HAS_JOB_RESERVATION` while a live `job_product_draws` row exists — else _sync_planned_holds would release the crop hold and the next job re-sync would drop the draw, reopening the booking while the job still consumes stock (double-count). Verbatim reproduction + guard-only change; single overload; rls+drift reviewers clean. The 2 multi-job-allocation P1s (#2/#3) remain the owner-accepted deferral. |
 
 > PARKED-011 (process-document base64 size cap) is an edge-fn, not a migration — deployed to `process-document` v14 on 2026-06-30. The 5 HIGH migrations (parked_001/003/004/007/009) landed via the beyond-parity go-live.

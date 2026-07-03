@@ -239,3 +239,23 @@ on one quote+product to matter; genuine redesign). #1 is new and single-job-reac
 Recommendation carried to Mason: fix #1 now (one small migration, gated apply), defer #2/#3
 as the already-planned multi-job follow-up, then complete merge/push. Full output archived at
 `.claude/session-state/codex-review-latest.txt`.
+
+---
+
+## Push-gate P1 #1 fix APPLIED LIVE (2026-07-03)
+
+Migration `20260702183000_layer2_save_quote_block_unplan_with_job_draws` (A3.10) — save_quote
+now rejects unplanning a booking (`is_planned`→false) while a live `job_product_draws` row
+exists, with `BOOKING_HAS_JOB_RESERVATION`. Closes the newly-surfaced, single-job-reachable
+push-gate P1 #1.
+
+Verification chain: plpgsql_check CLEAN (rolled-back vs live) · guard truth-table correct ·
+rls-security-reviewer CLEAN · migration-drift-reviewer CLEAN (byte-faithful diff, single
+overload, all 3 referenced columns exist) · APPLIED LIVE (apply-guard proof hash
+871229f0…, autopilot disarmed) · live-verified (1 overload, unplan guard + drawn guard both
+present, search_path pinned) · post-apply sweeps CLEAN (overloads 0, secdef-searchpath 0,
+actor-forgery only the pre-existing allowlisted cancel_delivery — save_quote absent).
+
+Remaining: push-gate P1 #2 (sibling reallocation on cancel) + #3 (order coverage across
+siblings) — the multi-job coordinated-allocation redesign, owner-accepted deferral (warn-only,
+zero impact until 2+ real jobs share one booking).

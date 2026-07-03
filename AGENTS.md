@@ -12,7 +12,7 @@ This file is for Codex and other coding agents working in this repo. `CLAUDE.md`
 - Production: https://croprxsolutions.app
 - Supabase project: `rhyzpcqhnizqbxphqdkr`
 - Owner: Mason Wells. Mason has 0 coding experience. Lead the process, explain in plain English, define jargon, give clear next steps.
-- Live counts (regenerated 2026-07-03): 82 lazy-loaded pages, 609 migrations, 6 Edge Functions.
+- Live counts (regenerated 2026-07-03): 82 lazy-loaded pages, 610 migrations, 6 Edge Functions.
 
 ## Read First
 
