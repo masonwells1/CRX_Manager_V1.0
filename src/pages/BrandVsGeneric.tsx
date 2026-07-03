@@ -33,7 +33,7 @@ export default function BrandVsGeneric() {
   const [editing, setEditing] = useState<MappingRow | null>(null);
   const [brandedName, setBrandedName] = useState('');
   const [activeIngredient, setActiveIngredient] = useState('');
-  const [genericName, setGenericName] = useState('');
+  const [genericLabel, setGenericLabel] = useState('');
   const [hasBulk, setHasBulk] = useState(false);
   const [notes, setNotes] = useState('');
   const [formError, setFormError] = useState('');
@@ -70,14 +70,43 @@ export default function BrandVsGeneric() {
     fetchData();
   }, [fetchData]);
 
-  // Fast name -> product lookup for resolving picker text back to a product row.
-  const productByName = useMemo(() => {
-    const m = new Map<string, Product>();
-    products.forEach((p) => m.set(p.product_name, p));
-    return m;
+  // product_name is NOT unique in the catalog (verified live: e.g. two "Vixen D - 12#"),
+  // so a name-keyed lookup would collapse duplicates and could persist the wrong
+  // generic_product_id. The BRANDED value is stored as a plain product_name
+  // (fallback_branded_product is name-keyed by design), but the GENERIC picker must
+  // resolve to a SPECIFIC product — key it on a unique per-product label (name + SKU
+  // when the name is duplicated), not the name.
+  const nameCounts = useMemo(() => {
+    const c = new Map<string, number>();
+    products.forEach((p) => c.set(p.product_name, (c.get(p.product_name) || 0) + 1));
+    return c;
   }, [products]);
 
-  const productNames = useMemo(() => products.map((p) => p.product_name), [products]);
+  const labelFor = useCallback(
+    (p: Product) =>
+      (nameCounts.get(p.product_name) || 0) > 1
+        ? `${p.product_name} — SKU ${p.sku || p.id.slice(0, 8)}`
+        : p.product_name,
+    [nameCounts]
+  );
+
+  // Branded picker: unique product names (duplicates collapse to the same stored string).
+  const brandedOptions = useMemo(
+    () => [...new Set(products.map((p) => p.product_name))].sort((a, b) => a.localeCompare(b)),
+    [products]
+  );
+  const productNameSet = useMemo(() => new Set(products.map((p) => p.product_name)), [products]);
+
+  // Generic picker: one disambiguated label per product, mapped back to the exact row.
+  const genericOptions = useMemo(
+    () => products.map(labelFor).sort((a, b) => a.localeCompare(b)),
+    [products, labelFor]
+  );
+  const productByLabel = useMemo(() => {
+    const m = new Map<string, Product>();
+    products.forEach((p) => m.set(labelFor(p), p));
+    return m;
+  }, [products, labelFor]);
 
   // Comparison viewer — derived from the loaded mappings (single source of truth).
   const selectedProduct = products.find((p) => p.id === selectedProductId) || null;
@@ -95,7 +124,7 @@ export default function BrandVsGeneric() {
     setEditing(null);
     setBrandedName('');
     setActiveIngredient('');
-    setGenericName('');
+    setGenericLabel('');
     setHasBulk(false);
     setNotes('');
     setFormError('');
@@ -106,7 +135,7 @@ export default function BrandVsGeneric() {
     setEditing(row);
     setBrandedName(row.fallback_branded_product || '');
     setActiveIngredient(row.branded_ingredient || '');
-    setGenericName(row.generic_product?.product_name || '');
+    setGenericLabel(row.generic_product ? labelFor(row.generic_product) : '');
     setHasBulk(row.generic_has_bulk);
     setNotes(row.notes || '');
     setFormError('');
@@ -120,7 +149,7 @@ export default function BrandVsGeneric() {
       setFormError('Choose a branded product.');
       return;
     }
-    if (!productByName.has(branded)) {
+    if (!productNameSet.has(branded)) {
       setFormError('The branded product must match an existing product.');
       return;
     }
@@ -136,10 +165,10 @@ export default function BrandVsGeneric() {
       setFormError('A mapping for this branded product already exists — edit that one instead.');
       return;
     }
-    const generic = genericName.trim();
+    const generic = genericLabel.trim();
     let genericId: string | null = null;
     if (generic) {
-      const genericProd = productByName.get(generic);
+      const genericProd = productByLabel.get(generic);
       if (!genericProd) {
         setFormError('The generic alternative must match an existing product (or leave it blank).');
         return;
@@ -453,7 +482,7 @@ export default function BrandVsGeneric() {
                 label="Branded Product *"
                 value={brandedName}
                 onChange={setBrandedName}
-                options={productNames}
+                options={brandedOptions}
                 placeholder="Search products..."
               />
               <p className="mt-1 text-xs text-secondary">
@@ -476,9 +505,9 @@ export default function BrandVsGeneric() {
             <div>
               <Combobox
                 label="Generic Alternative"
-                value={genericName}
-                onChange={setGenericName}
-                options={productNames}
+                value={genericLabel}
+                onChange={setGenericLabel}
+                options={genericOptions}
                 placeholder="Search products (optional)..."
               />
               <p className="mt-1 text-xs text-secondary">

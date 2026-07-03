@@ -171,6 +171,34 @@ describe('BrandVsGeneric — ingredient-map management', () => {
     expect(H.state.lastInsert).toBeNull();
   });
 
+  it('resolves the generic to the correct product id when product names collide (SKU-disambiguated)', async () => {
+    // Two active products share a name — the picker must resolve to a SPECIFIC id,
+    // not collapse them (schema does not enforce product_name uniqueness).
+    H.state.products = [
+      ROUNDUP,
+      { id: 'd1', product_name: 'Dupe Product', sku: 'AAA', is_active: true },
+      { id: 'd2', product_name: 'Dupe Product', sku: 'BBB', is_active: true },
+    ];
+    H.state.mappings = [];
+    render(<BrandVsGeneric />);
+    const addButtons = await screen.findAllByRole('button', { name: 'Add Mapping' });
+    fireEvent.click(addButtons[0]);
+
+    const dialogs = await screen.findAllByRole('dialog');
+    const dialog = dialogs[dialogs.length - 1];
+    fireEvent.change(within(dialog).getByPlaceholderText('Search products...'), {
+      target: { value: 'Roundup PowerMAX' },
+    });
+    // The duplicate rows are offered as "Dupe Product — SKU AAA/BBB"; pick BBB (d2).
+    fireEvent.change(within(dialog).getByPlaceholderText('Search products (optional)...'), {
+      target: { value: 'Dupe Product — SKU BBB' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Add Mapping' }));
+
+    await waitFor(() => expect(H.state.lastInsert).not.toBeNull());
+    expect(H.state.lastInsert?.payload.generic_product_id).toBe('d2'); // the exact SKU BBB row, not d1
+  });
+
   it('hides all write controls from a non-admin (read-only)', async () => {
     H.state.role = 'sales_rep';
     H.state.mappings = [
