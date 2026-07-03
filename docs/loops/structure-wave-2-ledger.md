@@ -17,7 +17,7 @@ each item Codex-gated (≤3 rounds) before commit.
 |---|------|----------|--------|
 | A8 | Terms → due-date (post_invoice) | parked mig | ✅ done — parked, Codex R3 clean, committed |
 | A8-aging | AR aging-basis unification (4 producers) | parked mig | ✅ done — parked, Codex R3 clean, committed |
-| P2-1 | Category two-axis remap (+ park ambiguous-2 + 6 blanks) | parked mig + frontend | ⬜ not started |
+| P2-1 | Category two-axis remap (+ park ambiguous-2 + 6 blanks) | parked mig + frontend | ⏸ grounded — proposals parked for owner input (below); unambiguous remap ready to build on confirm |
 | P2-2 | Retire dead tables/columns | parked mig | ⬜ not started |
 | P2-3 | Ingredient-map (brand↔generic) page | frontend (+mig?) | ⬜ not started |
 | P2-4 | Crop Programs → "Apply Program" into jobs | frontend + parked mig | ⬜ not started |
@@ -32,7 +32,14 @@ Legend: ⬜ not started · 🔨 in progress · 🧪 built, proving · 🔍 Codex
 ---
 
 ## Owner-confirms parked for Mason (surface at end)
-- **Category remap ambiguous buckets** (P2-1): (a) "Foliar Nutrition & Liquid Fertilizer" (16 products) → Foliar Fertilizer OR Liquid Fertilizer; (b) "Utility" (2) → Charge/Service OR Other; (c) 6 empty-category products → classify by hand (list TBD once identified).
+- **Category remap ambiguous buckets** (P2-1): (a) "Foliar Nutrition & Liquid Fertilizer" (16 products) → Foliar Fertilizer OR Liquid Fertilizer; (b) "Utility" (2) → Charge/Service OR Other.
+- **Category remap — the 6 empty-category products** (P2-1, grounded 2026-07-02; my proposal, confirm/correct each):
+  1. `Imazuron Herbicide` (Nufarm, dry) → **Herbicide** (clear from name). *(confident)*
+  2. `Treaty Extra` (Nufarm, dry) → **Herbicide** (Treaty = a metsulfuron SU herbicide). *(confident)*
+  3. `Palisade EC` (Atticus, liquid) → **?? Other** (Palisade = a plant growth regulator; no PGR bucket exists — Other, or add a "Growth Regulator" category?).
+  4. `Piksi Dust Plus` (Alchemy BioScience, dry) → **?? Biological** (Alchemy makes biologicals) **or Adjuvant** — need your read.
+  5. `Water W/ D-Chlorinator` (no mfr) → **?? Other/Utility** (carrier water / conditioner, not a product).
+  6. `1A TEST PRODUCT - FAKE PRODUCT` (20 Mule Team) → **NOT a category — this is JUNK/fake test data.** Recommend HIDE it (is_active=false), like the Phase-1 [UI-TEST] products. It was missed by Phase-1 (no [UI-TEST]/[E2E] prefix). Confirm and I'll fold the hide into the remap migration.
 - **AR reminder dunning cadence** (A8-aging, mig 20260702161000 fn 4): switching `get_ar_reminder_candidates` to the due-date basis means dunning-reminder emails now fire at **>30 days past DUE** (was >30 days past invoice = the due date itself for a Net-30 customer). This is the coherent, more-conservative behavior and it stops premature reminders on not-yet-due invoices — but it shifts *when* customers get reminded. Confirm the cadence before applying (or say if you'd rather remind sooner, e.g. any days-past-due > 0).
 
 ---
