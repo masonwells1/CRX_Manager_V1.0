@@ -6,7 +6,7 @@
     "regenerate_with": "node scripts/regenerate-schema-registry.mjs --from-introspection <queries.json> (queries documented in the script header)",
     "purpose": "Single source of truth for hooks: generated columns, status enums, ALL parseable CHECK IN-lists, NOT NULL columns, full column lists, sequences, tables-with/without updated_at, applied-migration high water.",
     "note": "For a fresh refresh from the live DB, ask Claude Code: 'regenerate the schema-registry from Supabase' (/regen-schema-registry). skipped_constraints lists every CHECK the hooks can NOT validate — review it when touching those tables.",
-    "migrations_high_water": "20260702135000"
+    "migrations_high_water": "20260702153000"
   },
   "generated_columns": [
     {
@@ -764,10 +764,51 @@
         "ach",
         "cash",
         "credit_card",
+        "wire",
         "other"
       ],
       "constraints": [
         "payments_payment_method_check"
+      ]
+    },
+    "allocation_sets.payment_method": {
+      "values": [
+        "check",
+        "ach",
+        "cash",
+        "credit_card",
+        "wire",
+        "other"
+      ],
+      "constraints": [
+        "allocation_sets_payment_method_check"
+      ]
+    },
+    "vendor_payments.payment_method": {
+      "values": [
+        "check",
+        "ach",
+        "cash",
+        "credit_card",
+        "wire",
+        "other"
+      ],
+      "constraints": [
+        "vendor_payments_payment_method_check"
+      ]
+    },
+    "commission_payments.payment_method": {
+      "values": [
+        "check",
+        "ach",
+        "cash",
+        "credit_card",
+        "wire",
+        "other",
+        "direct_deposit"
+      ],
+      "constraints": [
+        "commission_payments_payment_method_check"
       ]
     },
     "product_label_drafts.confidence": {
