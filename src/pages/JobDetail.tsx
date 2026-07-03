@@ -1199,6 +1199,7 @@ export default function JobDetail() {
   const [cropPrograms, setCropPrograms] = useState<CropProgram[]>([]);
   const [showProgramModal, setShowProgramModal] = useState(false);
   const [selectedProgramId, setSelectedProgramId] = useState('');
+  const [loadingProgram, setLoadingProgram] = useState(false);
   const [selectedRecipeId, setSelectedRecipeId] = useState('');
   const [loadingRecipe, setLoadingRecipe] = useState(false);
   // 'replace' wipes the current chem lines; 'append' merges the recipe in (so a
@@ -2194,12 +2195,15 @@ export default function JobDetail() {
   // Reads the in-memory program (no fetch); mirrors loadRecipeById's seed → acres
   // re-derive so a loaded line reflects THIS job's acreage.
   const loadProgramById = async (programId: string) => {
+    if (loadingProgram) return; // in-flight guard: a double-click must not append twice
     const program = cropPrograms.find((p) => p.id === programId);
     if (!program) return;
     if (program.items.length === 0) {
       toast('error', 'That program has no products.');
       return;
     }
+    setLoadingProgram(true);
+    try {
     const cust = customers.find((c) => c.id === customerId);
     const tier = (cust?.assigned_tier ?? 1) as 1 | 2 | 3;
     const acres = sumAcres(fieldRows);
@@ -2231,6 +2235,9 @@ export default function JobDetail() {
     toast('success', `Added ${program.items.length} product${program.items.length === 1 ? '' : 's'} from "${program.name}" — review and Save.`);
     setShowProgramModal(false);
     setSelectedProgramId('');
+    } finally {
+      setLoadingProgram(false);
+    }
   };
 
   /** One-click "use last used recipe" — loads the per-browser last recipe (replace). */
@@ -3601,7 +3608,7 @@ export default function JobDetail() {
           </div>
           <div className="flex justify-end gap-2 pt-2">
             <Button variant="secondary" onClick={() => setShowProgramModal(false)}>Cancel</Button>
-            <Button onClick={() => loadProgramById(selectedProgramId)} disabled={!selectedProgramId}>
+            <Button onClick={() => loadProgramById(selectedProgramId)} disabled={!selectedProgramId || loadingProgram} loading={loadingProgram}>
               <Sprout className="w-4 h-4" /> Load Program
             </Button>
           </div>
