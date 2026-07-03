@@ -138,6 +138,33 @@ describe('BrandVsGeneric — ingredient-map management', () => {
     expect(H.state.lastInsert).toBeNull();
   });
 
+  it('blocks a duplicate mapping for a branded product that already has one (no insert)', async () => {
+    H.state.mappings = [
+      {
+        id: 'm1',
+        fallback_branded_product: 'Roundup PowerMAX',
+        branded_ingredient: 'Glyphosate',
+        generic_product_id: 'p2',
+        generic_has_bulk: false,
+        notes: null,
+        generic_product: GENERIC,
+      },
+    ];
+    render(<BrandVsGeneric />);
+    const addButtons = await screen.findAllByRole('button', { name: 'Add Mapping' });
+    fireEvent.click(addButtons[0]);
+
+    const dialogs = await screen.findAllByRole('dialog');
+    const dialog = dialogs[dialogs.length - 1];
+    fireEvent.change(within(dialog).getByPlaceholderText('Search products...'), {
+      target: { value: 'Roundup PowerMAX' }, // already mapped above
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Add Mapping' }));
+
+    expect(await within(dialog).findByText(/already exists/i)).toBeTruthy();
+    expect(H.state.lastInsert).toBeNull();
+  });
+
   it('hides all write controls from a non-admin (read-only)', async () => {
     H.state.role = 'sales_rep';
     H.state.mappings = [

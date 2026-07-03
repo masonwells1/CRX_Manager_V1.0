@@ -124,6 +124,18 @@ export default function BrandVsGeneric() {
       setFormError('The branded product must match an existing product.');
       return;
     }
+    // One mapping per branded product — the comparison viewer resolves a product
+    // with mappings.find(...) and would otherwise pick an arbitrary duplicate row.
+    // On edit, allow the row itself but block colliding with a different one.
+    const duplicate = mappings.find(
+      (m) =>
+        m.id !== editing?.id &&
+        (m.fallback_branded_product || '').trim().toLowerCase() === branded.toLowerCase()
+    );
+    if (duplicate) {
+      setFormError('A mapping for this branded product already exists — edit that one instead.');
+      return;
+    }
     const generic = genericName.trim();
     let genericId: string | null = null;
     if (generic) {
