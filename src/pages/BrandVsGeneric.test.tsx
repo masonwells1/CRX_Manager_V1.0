@@ -48,7 +48,13 @@ vi.mock('../lib/db', async (importOriginal) => {
 vi.mock('../contexts/AuthContext', () => ({
   useAuth: () => ({ role: H.state.role, profile: { role: H.state.role }, user: { id: 'u' } }),
 }));
-vi.mock('../components/ui/Toast', () => ({ useToast: () => ({ toast: vi.fn() }) }));
+// Stable toast fn: the component keeps `toast` in fetchData's useCallback deps,
+// so a fresh vi.fn() per render would change fetchData every render and re-fire
+// the load effect in a loop (leaving the table stuck on skeletons). One shared fn.
+vi.mock('../components/ui/Toast', () => {
+  const toast = vi.fn();
+  return { useToast: () => ({ toast }) };
+});
 vi.mock('../lib/sentry', () => ({ Sentry: new Proxy({}, { get: () => () => undefined }) }));
 
 // Import AFTER mocks are registered.
