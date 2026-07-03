@@ -4,6 +4,14 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-03 — Structure Wave-2: P2-4 Crop Programs → "Load Program" into jobs (frontend-only)
+
+Wired the previously **write-only** Crop Programs feature into jobs: a **"Load Program"** button on JobDetail's Chemicals tab drops a saved program's products (with their per-acre rates) into the editable chem grid — **appending** to existing lines (owner decision), non-destructive, reviewed then Saved via the normal `save_job` path. Crop programs are JSON in `app_settings` (no DB table), so this is **frontend-only, no migration.** Mirrors the existing non-destructive "Load Recipe" client-side loader.
+
+- New pure `src/lib/cropProgramHelpers.ts` (13 unit tests): `parseCropPrograms`, `orderProgramsForJob` (programs matching the job's crop first), `programItemToChemRowSeed`, `normalizeProgramRateUnit`.
+- **Money-correct by construction** (5 Codex rounds, 2 P1s fixed): the loaded line runs through `reconcileChemAutofillUnits` so an `oz/acre` program line on a per-gallon product doesn't over-bill 128× (and live `Dry oz` normalizes to `oz` so dry-per-lb lines don't over-bill 16×); since-deactivated program products are fetched by id so they still price + carry REI/PHI; a `loadingProgram` guard blocks double-click duplicates.
+- **Proof:** typecheck + lint + build clean; full suite 191 files / 3126 tests; a regression test over the **exact live program** ("2026 Wells NON-GMO") proves real data parses + maps correctly. Codex push-gate: CLEAN.
+
 ## 2026-07-03 — Structure Wave-2: P2-3 Brand-vs-Generic wired into an admin management page (frontend-only, on branch)
 
 Turned the previously read-only **Brand vs Generic** page into an admin CRUD manager for the `ingredient_map` (brand↔generic) table — closing the Packet-5 dead end where the empty state told a non-coder owner to "edit the ingredient_map table" by hand. **No database change:** the table already exists live with correct RLS (SELECT for any authenticated user; INSERT/UPDATE/DELETE gated on `is_admin()`), a `generic_product_id → products` FK, and 0 rows. Frontend-only, single page + companion test.

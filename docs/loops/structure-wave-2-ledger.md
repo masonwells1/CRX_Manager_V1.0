@@ -21,7 +21,7 @@ each item Codex-gated (≤3 rounds) before commit.
 | P2-1 | Category two-axis remap (+ use_timing + normalization trigger + write path) | mig 599 + frontend | ✅ **mig LIVE + frontend DEPLOYED 2026-07-03** (v20260703170632, verified: herb 272/foliar 53/timing 317/0 blanks; prod @b07715d0) |
 | P2-2 | Retire dead tables/columns | mig 180000 (live v20260703190820) | 🚀 **APPLIED LIVE 2026-07-03 (2 clean drops: create_prepay_credit + document_processing_log), verified gone** · 6 of 8 targets NOT dead → jobs.tags/batch_id KEEP per owner + rest deferred (see cycle log) |
 | P2-3 | Ingredient-map (brand↔generic) page | **frontend-only (no mig)** | 🚀 **DEPLOYED TO PROD 2026-07-03** — admin CRUD on `ingredient_map`; Codex push-gate 5 rounds → CLEAN; main @`1ef739e2`, Vercel `dpl_8WPxBGvSmhRuYfQ9b91eJUjRAi3Q` READY (croprxsolutions.app) |
-| P2-4 | Crop Programs → "Apply Program" into jobs | frontend + parked mig | 🔨 **in progress 2026-07-03** |
+| P2-4 | Crop Programs → "Apply Program" into jobs | **frontend-only (no mig)** | ✅ **BUILT + Codex-CLEAN 2026-07-03** — "Load Program" appends a crop program's products into JobDetail chemicals (unit-reconciled money math); 5 Codex rounds (2 money P1s fixed) → CLEAN |
 | P2-5 | Surface per-acre tier pricing in QuoteBuilder | frontend | ⬜ not started |
 | P2-8 | Vendor master consolidation | parked mig | ⬜ not started |
 | A5 | Blend unit conversion | parked migs + edge-fn code | ⬜ not started |
@@ -52,6 +52,13 @@ Legend: ⬜ not started · 🔨 in progress · 🧪 built, proving · 🔍 Codex
 
 ## Cycle log
 (newest first — one entry per item as it completes)
+
+### 2026-07-03 — P2-4 Crop Programs → "Load Program" into jobs — ✅ BUILT + Codex-CLEAN (frontend-only, no DB change)
+- **What Packet 5 flagged:** Crop Programs (reusable product/rate templates in `app_settings`) were write-only — nothing consumed them. Mason chose WIRE. Owner decision (this session): **append to existing chemicals, non-destructive** (not replace).
+- **Grounded vs live first:** crop programs are JSON in `app_settings` (key `crop_programs`); job chemicals go through `save_job` (`p_chemicals`); the existing **"Load Recipe"** is the exact non-destructive client-side precedent → mirrored it. No migration.
+- **Built:** new pure `src/lib/cropProgramHelpers.ts` (types + `parseCropPrograms` + `orderProgramsForJob` [crop-match first] + `programItemToChemRowSeed`) + JobDetail "Load Program" button (canEdit + active-program gated) + "Load Crop Program" modal + `loadProgramById` (appends seeds, re-derives qty from acres).
+- **Codex push-gate: 5 rounds → CLEAN.** Every finding real & fixed: **P1** rate-unit vs stock-unit reconciliation (an oz/acre line on a per-gal product was a 128× over-bill — now routes through `reconcileChemAutofillUnits` like the manual path); **P1** live `Dry oz` unit normalized to `oz` (was a 16× dry over-bill); **P2** since-deactivated program products fetched by id so they price correctly (not $0/blank-REI-PHI); **P2** double-click in-flight guard (`loadingProgram`).
+- **Proof:** typecheck + eslint + build clean · full suite **191 files / 3126 tests** · **13 helper tests incl. a regression over the EXACT live program** ("2026 Wells NON-GMO", incl. the `9.6` decimal + `Dry oz` line) proving parse + money-correct mapping. In-browser click-through auth-gated; wiring mirrors the shipped Load Recipe path.
 
 ### 2026-07-03 — P2-3 Ingredient-map (brand↔generic) management page — ✅ BUILT + PROVEN (frontend-only, no DB change)
 - **What Packet 5 flagged:** the `BrandVsGeneric` page was read-only and its empty state literally told a no-code owner to "add mappings in the ingredient_map table" — a dead end. Mason chose WIRE (keep + finish the UI), not retire.
