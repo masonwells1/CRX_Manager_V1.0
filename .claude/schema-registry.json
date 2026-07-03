@@ -6,7 +6,7 @@
     "regenerate_with": "node scripts/regenerate-schema-registry.mjs --from-introspection <queries.json> (queries documented in the script header)",
     "purpose": "Single source of truth for hooks: generated columns, status enums, ALL parseable CHECK IN-lists, NOT NULL columns, full column lists, sequences, tables-with/without updated_at, applied-migration high water.",
     "note": "For a fresh refresh from the live DB, ask Claude Code: 'regenerate the schema-registry from Supabase' (/regen-schema-registry). skipped_constraints lists every CHECK the hooks can NOT validate — review it when touching those tables.",
-    "migrations_high_water": "20260702170000"
+    "migrations_high_water": "20260703190820"
   },
   "generated_columns": [
     {
@@ -284,6 +284,19 @@
         "allocation_sets_entity_type_check"
       ]
     },
+    "allocation_sets.payment_method": {
+      "values": [
+        "check",
+        "ach",
+        "cash",
+        "credit_card",
+        "wire",
+        "other"
+      ],
+      "constraints": [
+        "allocation_sets_payment_method_check"
+      ]
+    },
     "application_records.source_type": {
       "values": [
         "job",
@@ -372,6 +385,20 @@
       ],
       "constraints": [
         "blend_tickets_status_check"
+      ]
+    },
+    "commission_payments.payment_method": {
+      "values": [
+        "check",
+        "ach",
+        "cash",
+        "credit_card",
+        "wire",
+        "other",
+        "direct_deposit"
+      ],
+      "constraints": [
+        "commission_payments_payment_method_check"
       ]
     },
     "commission_payments.status": {
@@ -757,46 +784,6 @@
         "payments_payment_method_check"
       ]
     },
-    "allocation_sets.payment_method": {
-      "values": [
-        "check",
-        "ach",
-        "cash",
-        "credit_card",
-        "wire",
-        "other"
-      ],
-      "constraints": [
-        "allocation_sets_payment_method_check"
-      ]
-    },
-    "vendor_payments.payment_method": {
-      "values": [
-        "check",
-        "ach",
-        "cash",
-        "credit_card",
-        "wire",
-        "other"
-      ],
-      "constraints": [
-        "vendor_payments_payment_method_check"
-      ]
-    },
-    "commission_payments.payment_method": {
-      "values": [
-        "check",
-        "ach",
-        "cash",
-        "credit_card",
-        "wire",
-        "other",
-        "direct_deposit"
-      ],
-      "constraints": [
-        "commission_payments_payment_method_check"
-      ]
-    },
     "product_label_drafts.confidence": {
       "values": [
         "high",
@@ -1054,6 +1041,19 @@
       ],
       "constraints": [
         "vendor_bills_status_check"
+      ]
+    },
+    "vendor_payments.payment_method": {
+      "values": [
+        "check",
+        "ach",
+        "cash",
+        "credit_card",
+        "wire",
+        "other"
+      ],
+      "constraints": [
+        "vendor_payments_payment_method_check"
       ]
     },
     "watchdog_flag_dismissals.resolution": {
@@ -1330,6 +1330,12 @@
       "constraint": "job_notifications_channel_check",
       "def": "CHECK ((channel = 'email'::text))",
       "reason": "unparseable — hooks do NOT validate this constraint"
+    },
+    {
+      "table": "job_product_draws",
+      "constraint": "job_product_draws_quantity_drawn_check",
+      "def": "CHECK ((quantity_drawn >= (0)::numeric))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
     },
     {
       "table": "job_tags",
@@ -2238,6 +2244,19 @@
         "channel",
         "status",
         "created_at"
+      ]
+    },
+    "job_product_draws": {
+      "no_default": [
+        "job_id",
+        "quote_id",
+        "product_id"
+      ],
+      "with_default": [
+        "id",
+        "quantity_drawn",
+        "created_at",
+        "updated_at"
       ]
     },
     "job_tag_assignments": {
@@ -3828,6 +3847,15 @@
       "sent_by",
       "idempotency_key",
       "created_at"
+    ],
+    "job_product_draws": [
+      "id",
+      "job_id",
+      "quote_id",
+      "product_id",
+      "quantity_drawn",
+      "created_at",
+      "updated_at"
     ],
     "job_tag_assignments": [
       "job_id",

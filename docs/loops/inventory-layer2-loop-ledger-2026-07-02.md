@@ -414,9 +414,14 @@ structure-wave (their live tables are missing from it too). Deferred because a t
 `--from-introspection` workflow, which can't cleanly pipe a 115-table JSON through the MCP tool in-session.
 
 **OPEN FOLLOW-UPS (owner / maintenance — none block the live app, which is correct now):**
-1. **Schema-registry regen** (`node scripts/regenerate-schema-registry.mjs --from-introspection <live.json>`):
-   run Q1–Q5 via MCP, assemble the JSON, rebuild. Add `job_product_draws` + `'job'` hold_type + the
-   structure-wave tables + bump high-water to `20260703170632`+.
+1. ~~Schema-registry regen~~ **✅ DONE 2026-07-03** (commit `9c8ba3a7`): synced `.claude/schema-registry.json`
+   to live via a targeted, live-VERIFIED merge (the full `--from-introspection` rebuild needs a direct DB
+   connection / a 68KB introspection blob that can't be piped through the query tool this session). Verified
+   the registry now matches live EXACTLY: per-table column-count diff = 0 across all 114 tables, IN-list
+   CHECKs 68=68, generated 5=5, sequences 7=7. The only real drift since high-water `20260702170000` was
+   **+`job_product_draws`** (Layer 2) and **−`document_processing_log`** (dropped live by another session);
+   `inventory_holds.hold_type` already carried `'job'` and `products.use_timing` was already present (folded
+   in via the structure-wave merge). high-water → `20260703190820` (SessionStart staleness warning cleared).
 2. **"Close / mark fulfilled by application" lifecycle** (the dropped-#B follow-up): a way to close a booking
    fully fulfilled by job applications WITHOUT converting it to a chemical-sale order. Business-process +
    UX design with Mason.
