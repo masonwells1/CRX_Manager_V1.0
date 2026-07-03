@@ -305,3 +305,59 @@ NEXT-SESSION PLAN (the coordination fix):
   sibling jobs once; re-sync remaining siblings on cancel/delete).
 - Gate: rls + drift reviewers + rolled-back smoke + Codex until SHIP (only then merge/push).
 - Codex full output archived: .claude/session-state/codex-review-latest.txt
+
+---
+
+## ✅ COORDINATION FIX BUILT + APPLIED LIVE (2026-07-03) — migration `20260703120000` (A3.11)
+
+Mason approved ("Go", 2026-07-03) after the full gate came back green. Closes the last four open
+findings (#2/#3/#4/#5) as ONE designed change — no more midnight guards on save_quote.
+
+**What it is:** new SECDEF allocator **`_sync_quote_job_reservations(quote, actor)`** that rebuilds
+EVERY active job's draws+holds for a quote together, allocating the crop-drawable remainder AND the
+order-prebooked coverage ONCE across sibling jobs (FIFO by job creation):
+```
+crop_pool = booking − order_drawn − consumed_job_drawn ; preb_pool = order_drawn
+per active job (FIFO): draw=LEAST(demand,crop_pool); crop_pool−=draw
+                       rem=demand−draw; cover=LEAST(rem,preb_pool); preb_pool−=cover
+                       hold=draw+(rem−cover)
+```
+For a lone active job with no consumed sibling this is **arithmetically identical** to the old per-job
+formula (`draw=LEAST(demand,booking−order−consumed)`, `hold=draw+GREATEST(demand−draw−order,0)`), so
+single-job behavior is unchanged; it differs — correctly — only for 2+ jobs on one product.
+- **`_sync_job_holds`** re-routed to a thin router: quote-linked jobs → the allocator (handles this
+  job's reserve/release AND sibling reallocation); quote-less jobs keep independent full-demand holds.
+  Still returns per-job warn shortfalls, so the job_chemicals/jobs triggers + `reserve_job_inventory`
+  are unchanged.
+- **`save_quote`** (verbatim + 2 marked lines): (#5) `SELECT status ... FOR UPDATE` locks the quote
+  before the unplan guard (kills the TOCTOU); (#4) trailing `_sync_planned_holds` → the allocator, so a
+  quote edit re-syncs its jobs (a grown line re-draws; a shrunk line reallocates siblings).
+
+**Which finding each piece closes:** #2 (sibling realloc on cancel) + #3 (order coverage once) = the
+coordinated per-quote rebuild; #4 (stale draw on quantity growth) = save_quote calling the allocator;
+#5 (guard TOCTOU) = the FOR UPDATE lock.
+
+**Verification chain (all before apply):**
+- `plpgsql_check` CLEAN on allocator + router (rolled-back vs live).
+- `save_quote` byte-diff vs applied-live `183000` = EXACTLY the 2 intended lines (drift reviewer
+  independently confirmed).
+- Arithmetic replay of all 5 Codex target scenarios → ALL PASS (single-converted=0, single-open=60,
+  #3=0/20, other-job=80/50, #2 realloc 60/40→60).
+- **Real rolled-back `[E2E]` end-to-end on live tables:** 2 jobs share a booking of 100 → J1 draw 60
+  hold 60, J2 draw 40 hold 60, crop 0; soft-delete J1 (lifecycle trigger fires) → J1 draw NULL, J2
+  re-draws to 60 hold 60. #2 proven on real triggers, rolled back (live untouched; `[E2E]` markers).
+- rls-security-reviewer CLEAN · migration-drift-reviewer CLEAN · `npm run typecheck` clean.
+- **Codex `/codex-review --uncommitted`**: 0 BLOCKER/HIGH/P1; only 1 P2 = doc-count 610→611 (now fixed).
+
+**APPLIED LIVE 2026-07-03** (apply-guard proof `dab0306a…`, autopilot disarmed). Live-verified: 1
+overload each (save_quote/_sync_job_holds/_sync_quote_job_reservations); save_quote FOR UPDATE +
+allocator call both present; router delegates; allocator search_path pinned; anon EXEC = false on all
+three (service_role only). Post-apply sweeps CLEAN (no new overloads/searchpath/anon-exec/actor-forgery
+— only the pre-existing allowlisted `cancel_delivery`). Docs synced to **611** (drift PASS), AGENTS.md
+regenerated, CHANGELOG + this ledger + memory updated.
+
+**NO RESIDUAL LAYER 2 DEFERRALS REMAIN.** Remaining: commit → push-gate Codex (`--base origin/main`,
+HEAD-tied for codex-push-guard) → merge `feat/inventory-layer2` → `main` + push (Mason's go).
+Post-merge follow-ups (pre-existing, non-blocking): schema-registry regen for `job_product_draws` +
+`'job'` hold_type (SessionStart staleness note — from the earlier 15 migs, not this fix); regen
+`rpcFixtureLiveDiff` pg_proc snapshot if it captures function bodies.
