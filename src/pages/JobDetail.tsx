@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState , useCallback, useMemo, lazy, Suspense } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import { Save, Plus, Trash2, Check, FileText, Beaker, Ban, MessageSquarePlus, Printer, CloudSun, MapPin, Truck, ClipboardList, FlaskConical, Bell, History, BookmarkPlus, GripVertical, ChevronUp, ChevronDown, Map as MapIcon, ShieldAlert, CalendarClock, AlertTriangle } from 'lucide-react';
+import { Save, Plus, Trash2, Check, FileText, Beaker, Ban, MessageSquarePlus, Printer, CloudSun, MapPin, Truck, ClipboardList, FlaskConical, Bell, History, BookmarkPlus, GripVertical, ChevronUp, ChevronDown, Map as MapIcon, ShieldAlert, CalendarClock, AlertTriangle, Sprout } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
@@ -41,6 +41,7 @@ import {
 } from '../lib/labelGuardrailSetting';
 import { computeSeason } from '../utils/season';
 import { recipeItemToChemRowSeed, chemRowsToRecipeItems, getLastRecipeId, setLastRecipeId } from '../lib/recipeHelpers';
+import { programItemToChemRowSeed, parseCropPrograms, orderProgramsForJob, type CropProgram } from '../lib/cropProgramHelpers';
 import { moveItem, moveUp, moveDown } from '../lib/routeOrder';
 import AppliedRecordsManager from '../components/jobs/AppliedRecordsManager';
 import WatchdogFlagBanner from '../components/watchdog/WatchdogFlagBanner';
@@ -1194,6 +1195,10 @@ export default function JobDetail() {
 
   // Recipe load modal
   const [showRecipeModal, setShowRecipeModal] = useState(false);
+  // P2-4: crop-program templates loadable into the job chemicals (append-only).
+  const [cropPrograms, setCropPrograms] = useState<CropProgram[]>([]);
+  const [showProgramModal, setShowProgramModal] = useState(false);
+  const [selectedProgramId, setSelectedProgramId] = useState('');
   const [selectedRecipeId, setSelectedRecipeId] = useState('');
   const [loadingRecipe, setLoadingRecipe] = useState(false);
   // 'replace' wipes the current chem lines; 'append' merges the recipe in (so a
@@ -1341,6 +1346,11 @@ export default function JobDetail() {
       .from('app_settings').select('setting_value').eq('setting_key', LABEL_RATE_GUARDRAIL_MODE_KEY).maybeSingle();
     setGuardrailMode(parseGuardrailMode((grResult.data as { setting_value?: string } | null)?.setting_value ?? null));
     setGuardrailModeLoaded(true);
+
+    // P2-4: load reusable crop-program templates (for "Load Program" into chemicals).
+    const cpResult = await supabase
+      .from('app_settings').select('setting_value').eq('setting_key', 'crop_programs').maybeSingle();
+    setCropPrograms(parseCropPrograms((cpResult.data as { setting_value?: string } | null)?.setting_value ?? null));
 
     // Staff-held license rows for the license-gate badge + pre-save check (B5)
     const licResult = await supabase
@@ -2179,6 +2189,34 @@ export default function JobDetail() {
 
   const handleLoadRecipe = () => loadRecipeById(selectedRecipeId, recipeMode);
 
+  // P2-4: load a crop program's products into the chem rows. APPENDS (owner
+  // decision 2026-07-03) — never wipes existing lines; the user reviews + Saves.
+  // Reads the in-memory program (no fetch); mirrors loadRecipeById's seed → acres
+  // re-derive so a loaded line reflects THIS job's acreage.
+  const loadProgramById = (programId: string) => {
+    const program = cropPrograms.find((p) => p.id === programId);
+    if (!program) return;
+    if (program.items.length === 0) {
+      toast('error', 'That program has no products.');
+      return;
+    }
+    const cust = customers.find((c) => c.id === customerId);
+    const tier = (cust?.assigned_tier ?? 1) as 1 | 2 | 3;
+    const acres = sumAcres(fieldRows);
+    const seeds: ChemRow[] = program.items.map((item, idx) => {
+      const product = allProducts.find((p) => p.id === item.product_id);
+      const seed = programItemToChemRowSeed(item, product, tier);
+      const row = acres > 0
+        ? recomputeChemRowForAcres({ ...seed, sort_order: idx }, acres)
+        : { ...seed, sort_order: idx };
+      return row as ChemRow;
+    });
+    setChemRows((prev) => [...prev, ...seeds].map((c, i) => ({ ...c, sort_order: i })));
+    toast('success', `Added ${program.items.length} product${program.items.length === 1 ? '' : 's'} from "${program.name}" — review and Save.`);
+    setShowProgramModal(false);
+    setSelectedProgramId('');
+  };
+
   /** One-click "use last used recipe" — loads the per-browser last recipe (replace). */
   const handleUseLastRecipe = () => {
     if (!lastRecipeId) return;
@@ -2896,6 +2934,12 @@ export default function JobDetail() {
                   <Beaker className="w-4 h-4" /> Select Recipe
                 </Button>
               )}
+              {canEdit && cropPrograms.some((p) => p.is_active) && (
+                <Button size="sm" variant="secondary" onClick={() => { setSelectedProgramId(''); setShowProgramModal(true); }}
+                  title="Add a saved crop program's products to this job">
+                  <Sprout className="w-4 h-4" /> Load Program
+                </Button>
+              )}
               {canEdit && lastRecipeId && recipes.some((r) => r.id === lastRecipeId) && (
                 <Button size="sm" variant="secondary" onClick={handleUseLastRecipe} loading={loadingRecipe}
                   title={`Load "${recipes.find((r) => r.id === lastRecipeId)?.name || 'last recipe'}" (replaces current chemicals)`}>
@@ -3512,6 +3556,37 @@ export default function JobDetail() {
             <Button variant="secondary" onClick={() => setShowRecipeModal(false)}>Cancel</Button>
             <Button onClick={handleLoadRecipe} disabled={!selectedRecipeId} loading={loadingRecipe}>
               <Beaker className="w-4 h-4" /> Load Recipe
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* P2-4: Load Crop Program Modal (append-only) */}
+      <Modal open={showProgramModal} onClose={() => setShowProgramModal(false)} title="Load Crop Program">
+        <div className="space-y-4">
+          <p className="text-sm text-secondary">
+            Add a saved crop program's products (with their per-acre rates) to this job. The lines are <strong>added</strong> to the current chemicals and stay editable — review them and Save the job to keep them. Programs matching this job's crop are listed first.
+          </p>
+          <div>
+            <label className="block text-xs font-medium text-secondary mb-1">Program</label>
+            <select
+              value={selectedProgramId}
+              onChange={(e) => setSelectedProgramId(e.target.value)}
+              aria-label="Select crop program"
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg"
+            >
+              <option value="">Select program...</option>
+              {orderProgramsForJob(cropPrograms, fieldRows.map((f) => f.crop)).map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name} — {p.crop_type} {p.season} ({p.items.length} product{p.items.length === 1 ? '' : 's'})
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="secondary" onClick={() => setShowProgramModal(false)}>Cancel</Button>
+            <Button onClick={() => loadProgramById(selectedProgramId)} disabled={!selectedProgramId}>
+              <Sprout className="w-4 h-4" /> Load Program
             </Button>
           </div>
         </div>
