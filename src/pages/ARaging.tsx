@@ -485,7 +485,7 @@ export default function ARaging() {
         const candidates = assertRpcResult<ARReminderCandidate[]>(data, 'get_ar_reminder_candidates');
 
         if (candidates.length === 0) {
-          toast('info', 'No customers with 30+ day overdue invoices');
+          toast('info', 'No customers are overdue past the AR reminder threshold');
           return;
         }
 
@@ -1149,7 +1149,7 @@ export default function ARaging() {
         onClose={() => setShowARReminderConfirm(false)}
         onConfirm={handleSendARReminders}
         title="Send AR Reminders"
-        message="Send AR reminder emails to all customers with 30+ day overdue invoices?"
+        message="Send AR reminder emails to every customer overdue past the AR reminder threshold (set in Settings)?"
         confirmLabel="Send Emails"
         variant="info"
         loading={sendingReminders}

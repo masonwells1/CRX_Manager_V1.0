@@ -16,7 +16,8 @@ each item Codex-gated (≤3 rounds) before commit.
 | # | Item | Ships as | Status |
 |---|------|----------|--------|
 | A8 | Terms → due-date (post_invoice) | parked mig | ✅ done — parked, Codex R3 clean, committed |
-| A8-aging | AR aging-basis unification (4 producers) | parked mig | ✅ done — parked, Codex R3 clean, committed |
+| A8-aging | AR aging-basis unification (3 reporting producers) | parked mig | ✅ done — parked, Codex R3 clean, committed |
+| AR-reminder | Reminder due-date basis + **configurable threshold** (Settings) | parked mig 162000 + SettingsPage/ARaging | ✅ done — parked, Codex R4 clean, committed |
 | P2-1 | Category two-axis remap (+ park ambiguous-2 + 6 blanks) | parked mig + frontend | ⏸ grounded — proposals parked for owner input (below); unambiguous remap ready to build on confirm |
 | P2-2 | Retire dead tables/columns | parked mig | ⬜ not started |
 | P2-3 | Ingredient-map (brand↔generic) page | frontend (+mig?) | ⬜ not started |
@@ -30,6 +31,11 @@ each item Codex-gated (≤3 rounds) before commit.
 Legend: ⬜ not started · 🔨 in progress · 🧪 built, proving · 🔍 Codex round N · ✅ done (parked, Codex-clean, committed) · ⏸ parked-with-spec (owner input) · ❌ dropped
 
 ---
+
+## Owner decisions — RESOLVED 2026-07-03
+- **AR reminder cadence:** Mason OK'd >30-days-past-DUE as-is, AND asked for the threshold to be **adjustable in Settings** (new work item: make `get_ar_reminder_candidates` read the day-count from a setting + add a Settings control).
+- **Category 6 blanks:** `Imazuron Herbicide`→Herbicide, `Treaty Extra`→Herbicide, `Palisade EC`→Other, `Piksi Dust Plus`→**Foliar Fertilizer**, `Water W/ D-Chlorinator`→Other, `1A TEST PRODUCT - FAKE PRODUCT`→**HIDE (is_active=false)**.
+- **Category 2 ambiguous buckets (defaults, flagged for confirm-at-apply):** "Foliar Nutrition & Liquid Fertilizer" (16)→**Foliar Fertilizer** (use_timing=Foliar); "Utility" (2)→**Other**. Flip either before apply if wrong.
 
 ## Owner-confirms parked for Mason (surface at end)
 - **Category remap ambiguous buckets** (P2-1): (a) "Foliar Nutrition & Liquid Fertilizer" (16 products) → Foliar Fertilizer OR Liquid Fertilizer; (b) "Utility" (2) → Charge/Service OR Other.
@@ -46,6 +52,14 @@ Legend: ⬜ not started · 🔨 in progress · 🧪 built, proving · 🔍 Codex
 
 ## Cycle log
 (newest first — one entry per item as it completes)
+
+### 2026-07-03 — AR reminder: due-date basis + configurable threshold — ✅ PARKED, Codex R4 clean
+- **Mason asked** (2026-07-03) to keep >30-days-past-due reminders AND make the day-count adjustable in Settings.
+- **Parked mig `20260702162000`**: seeds `app_settings.ar_reminder_days='30'` (ON CONFLICT DO NOTHING) + re-emits `get_ar_reminder_candidates` on the due-date basis, reading the threshold from that setting (robust leading-integer parse, default 30, clamp 1..3650). No signature change. Moved OUT of 161000 to avoid double-defining the function across two parked migrations.
+- **Frontend (on branch, coupled to 162000):** `SettingsPage.tsx` new "AR Reminder Threshold (days past due)" number input (mirrors default_quote_valid_days; normalizes 1..3650 on save + input max). `ARaging.tsx` send-confirm modal + toast made GENERIC (no hardcoded day-count) so they can't mislead regardless of migration state.
+- **Proof:** rolled-back live smoke — threshold_parse=PASS incl. '30.0'→30 / '1e2'→1 / '45.5'→45, plpgsql_check_errors=0, wiring+parser=PASS, nothing persisted; frontend lint+typecheck clean.
+- **Codex:** R1 (parser digit-strip + ARaging copy) → R2 (SettingsPage save normalize) → R3 **P1** (deploy-gap: UI vs old-RPC mismatch → fixed by generic send copy) → R4 CLEAN.
+- **⚠ APPLY-ORDER (handoff):** apply `160000 → 161000 → 162000` live BEFORE merging/deploying the SettingsPage+ARaging frontend (same branch; merge = deploy). Otherwise the Settings control saves a value the not-yet-updated RPC ignores.
 
 ### 2026-07-02 — A8 (terms→due-date) + A8-aging (aging-basis unification) — ✅ PARKED, Codex R3 clean
 - **A8** (`20260702160000_a8_terms_to_due_date.sql`): new `parse_payment_terms_days(text)` helper + `post_invoice` sets `due_date` at post from the parsed terms, only-when-NULL + forward-only. Terms source = invoice override (`invoices.payment_terms`) then customer default. `transfer_job_to_invoice`'s +30 left as-is (= customer terms for all current Net-30 customers; future-proof follow-up noted).

@@ -5,7 +5,7 @@
 --
 -- WHAT: switch the AR aging AGE BASIS from invoice_date to COALESCE(due_date, invoice_date)
 --   in ALL aging producers, so every surface measures "how overdue" from the same date now
---   that A8 gives posted invoices a real due_date. All FOUR producers, atomically in this file:
+--   that A8 gives posted invoices a real due_date. THREE reporting producers, atomically here:
 --     (1) get_ar_aging (AR aging report):  age = p_as_of - COALESCE(due_date, invoice_date);
 --         AND fold not-yet-due (negative age) into Current: `age_days BETWEEN 0 AND 29`
 --         -> `age_days <= 29`.
@@ -16,15 +16,11 @@
 --         `EXTRACT(DAY FROM NOW() - i.invoice_date)` -> `... NOW() - COALESCE(i.due_date, i.invoice_date)`.
 --         Its Current already uses `<= 30`; the coarse 4-bucket JSON shape read by the frontend
 --         (current/days_31_60/days_61_90/days_90_plus) is intentionally left unchanged.
---     (4) get_ar_reminder_candidates (customer dunning-reminder emails — 4th producer, surfaced
---         by Codex R2, NOT in the original spec's 3-producer list): all 3 uses of
---         `NOW() - i.invoice_date` (the `> 30` WHERE threshold, max_days_past_due, per-invoice
---         days_past_due) switch to the COALESCE(due_date, invoice_date) basis. This BOTH stops it
---         emailing reminders for NOT-YET-DUE invoices of Net 45/60 customers AND stops the
---         "Days Past Due" from being inflated by the terms period.
---         ** CADENCE NOTE (owner-confirm): reminders now trigger at >30 days past DUE (was >30
---         days past invoice = at the due date for a Net-30 customer) — a more conservative dunning
---         cadence, consistent with the rest of the aging system. Flagged in the ledger for Mason. **
+--   NOTE: a 4th, customer-facing producer — get_ar_reminder_candidates (dunning-reminder emails),
+--   which also aged from invoice_date (Codex R2) — was moved to its OWN migration 20260702162000.
+--   There it gains the same COALESCE(due_date, invoice_date) basis AND a configurable threshold
+--   (Settings > "AR Reminder Threshold (days)", default 30; Mason 2026-07-03). Kept out of this file
+--   to avoid double-defining one function across two parked migrations. Apply 162000 in this batch.
 --
 -- SCOPE NOTE (deliberate, documented): only the age BASIS is unified here — the material fix.
 --   The pre-existing bucket-BOUNDARY label differences (get_ar_aging Current<=29 vs statement
@@ -48,12 +44,10 @@
 --   ONLY the intended aging substrings replaced (ar_surgical=PASS, detailed_surgical=PASS);
 --   plpgsql_check_errors=0 on both. So nothing but the age basis (+ get_ar_aging Current<=29) changed.
 --   The dashboard (financial_dashboard_summary, function 3 below) is proved the same way.
---   Codex R2 added function (4) get_ar_reminder_candidates: RE-SMOKE reminder_surgical=PASS
---   (whitespace-insensitive: new == live with only the 3 `NOW()-i.invoice_date` ->
---   `NOW()-COALESCE(i.due_date,i.invoice_date)` swaps) + plpgsql_check_errors=0.
--- CODEX: R1 clean on aging fns (surgical). R2 surfaced the 4th producer (get_ar_reminder_candidates,
---   customer reminder emails) aging from invoice_date -> premature/ inflated reminders for non-Net-30
---   customers. FIXED: added as function (4) on the same COALESCE(due_date, invoice_date) basis.
+--   (The 4th producer get_ar_reminder_candidates was reviewed here in R2/R3, then moved to its own
+--   migration 20260702162000 which adds the configurable threshold — re-proved there.)
+-- CODEX: R1 clean on the 3 aging fns (surgical). R2 surfaced a 4th producer (get_ar_reminder_candidates)
+--   aging from invoice_date -> premature/inflated reminders for non-Net-30 customers (now in 162000).
 --   R3 (2026-07-02): CLEAN — "no actionable correctness issues; surgical; auth/idempotency preserved."
 -- ============================================================================
 
@@ -579,59 +573,6 @@ BEGIN
   CROSS JOIN bottom_customers bcm
   CROSS JOIN monthly_margin   mmt
   LEFT JOIN  period_info     pi ON true;
-
-  RETURN result;
-END;
-$function$;
-
--- (4) get_ar_reminder_candidates -----------------------------------------------
--- Re-emitted verbatim from the live def; ONLY the 3 aging expressions changed
--- (NOW() - i.invoice_date -> NOW() - COALESCE(i.due_date, i.invoice_date)) in the >30 WHERE
--- filter, max_days_past_due, and the per-invoice days_past_due. Proven surgical in the smoke.
-CREATE OR REPLACE FUNCTION public.get_ar_reminder_candidates()
- RETURNS jsonb
- LANGUAGE plpgsql
- SECURITY DEFINER
- SET search_path TO 'public', 'pg_temp'
-AS $function$
-DECLARE
-  result jsonb;
-  _role  text;
-BEGIN
-  _role := COALESCE(
-    current_setting('request.jwt.claims', true)::jsonb ->> 'user_role',
-    (SELECT role FROM public.profiles WHERE id = auth.uid())
-  );
-  IF _role IS DISTINCT FROM 'admin' THEN
-    RAISE EXCEPTION 'permission denied: admin role required';
-  END IF;
-
-  SELECT COALESCE(jsonb_agg(row_to_json(cust_agg)::jsonb), '[]'::jsonb)
-  INTO result
-  FROM (
-    SELECT
-      c.id AS customer_id,
-      c.farm_name,
-      c.email,
-      MAX(EXTRACT(DAY FROM NOW() - COALESCE(i.due_date, i.invoice_date))::int) AS max_days_past_due,
-      COALESCE(SUM(GREATEST(i.balance_cents, 0)), 0) / 100.0 AS total_balance,
-      jsonb_agg(jsonb_build_object(
-        'invoice_id', i.id,
-        'invoice_number', i.invoice_number,
-        'invoice_date', i.invoice_date,
-        'balance_cents', i.balance_cents,
-        'days_past_due', EXTRACT(DAY FROM NOW() - COALESCE(i.due_date, i.invoice_date))::int
-      ) ORDER BY i.invoice_date) AS invoices
-    FROM invoices i
-    JOIN customers c ON c.id = i.customer_id
-    WHERE i.status IN ('posted', 'overdue')
-      AND i.balance_cents > 0
-      AND EXTRACT(DAY FROM NOW() - COALESCE(i.due_date, i.invoice_date))::int > 30
-      AND c.email IS NOT NULL
-      AND c.email <> ''
-    GROUP BY c.id, c.farm_name, c.email
-    ORDER BY max_days_past_due DESC
-  ) cust_agg;
 
   RETURN result;
 END;
