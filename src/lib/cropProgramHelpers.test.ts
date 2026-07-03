@@ -76,6 +76,20 @@ describe('programItemToChemRowSeed', () => {
     expect(programItemToChemRowSeed(item, galProduct, 1).unit).toBe('oz');
   });
 
+  it('MONEY: normalizes "Dry oz" so a dry per-lb product reconciles (not 16× over-billed)', () => {
+    const dryItem: ProgramItem = { ...item, rate: 32, rate_unit: 'Dry oz' };
+    const lbProduct = {
+      id: 'p2', product_name: 'AMS', current_cost: 8, tier1_price: 16, tier2_price: 15,
+      tier3_price: 14, rate_unit: 'oz', unit_size: 'lb', product_form: 'dry',
+    } as unknown as Product;
+    const seed = programItemToChemRowSeed(dryItem, lbProduct, 1);
+    expect(seed.rate_unit).toBe('oz');            // "Dry oz" → "oz" (dry-ness from product_form)
+    expect(seed.unit).toBe('oz');                 // reconciled to the rate base (was 'lb')
+    expect(seed.price_per_unit_cents).toBe('100'); // $16/lb ÷ 16 oz/lb = $1.00/oz
+    expect(seed.cost_per_unit_cents).toBe('50');   // $8/lb ÷ 16 = 50¢/oz
+    // 100 ac × 32 oz = 3200 oz × $1.00 = $3200 = 200 lb × $16/lb (correct; not 16×).
+  });
+
   it('leaves per-stock cost/price untouched when the units already match', () => {
     const ozProduct = { ...galProduct, unit_size: 'oz' } as unknown as Product;
     const seed = programItemToChemRowSeed(item, ozProduct, 1);
@@ -116,7 +130,8 @@ describe('live production data: "2026 Wells NON-GMO"', () => {
     // Product not in the (empty) catalog here → mapper stays safe, carries rate+unit.
     const seeds = programs[0].items.map((it) => programItemToChemRowSeed(it, undefined, 1));
     expect(seeds.map((s) => s.rate_per_acre)).toEqual(['4', '64', '9.6', '32']); // decimal preserved
-    expect(seeds.map((s) => s.rate_unit)).toEqual(['oz', 'oz', 'oz', 'Dry oz']); // non-standard unit carried
+    // "Dry oz" (real Ammonium Sulfate line) normalizes to "oz" so it reconciles.
+    expect(seeds.map((s) => s.rate_unit)).toEqual(['oz', 'oz', 'oz', 'oz']);
     expect(seeds.every((s) => s.driver === 'rate')).toBe(true);
   });
 

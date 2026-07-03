@@ -73,6 +73,19 @@ export function orderProgramsForJob(programs: CropProgram[], jobCrops: string[])
 }
 
 /**
+ * Normalize a crop-program rate unit so the money/loader math can reconcile it.
+ * Crop programs carry free-text units; the live data uses "Dry oz", which the
+ * unit-factor tables (and reconcileChemAutofillUnits) key as bare "oz" — the
+ * dry-vs-liquid distinction is carried by the product's form, not the unit text.
+ * Strips a leading "dry " qualifier so "Dry oz" → "oz" (and leaves everything
+ * else, incl. per-acre suffixes, untouched). Empty in → empty out.
+ */
+export function normalizeProgramRateUnit(unit: string | null | undefined): string {
+  const u = (unit || '').trim();
+  return /^dry\s+/i.test(u) ? u.replace(/^dry\s+/i, '').trim() : u;
+}
+
+/**
  * Map a crop-program item (+ its current product, + the customer's tier) into a
  * chem-row seed for the job editor. The program's per-acre rate + unit are
  * authoritative (the program author set them); cost/vendor/REI/PHI come from the
@@ -92,7 +105,10 @@ export function programItemToChemRowSeed(
   }
   const costStockCents = product?.current_cost != null ? Math.round(product.current_cost * 100) : 0;
   const rate = typeof item.rate === 'number' && Number.isFinite(item.rate) ? item.rate : null;
-  const rateUnit = item.rate_unit || product?.rate_unit || '';
+  // Normalize "Dry oz" → "oz" so the reconciliation below can convert it (dry vs
+  // liquid comes from product_form). Without this, a "Dry oz" line on a per-lb
+  // product falls through reconcile and over-bills 16×.
+  const rateUnit = normalizeProgramRateUnit(item.rate_unit) || product?.rate_unit || '';
 
   // P1 MONEY fix (mirror the manual product-pick path in JobDetail): quantity =
   // rate × acres comes out in the RATE's base unit (e.g. oz), but the product's
