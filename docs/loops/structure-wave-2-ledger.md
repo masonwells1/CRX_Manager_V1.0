@@ -21,8 +21,8 @@ each item Codex-gated (≤3 rounds) before commit.
 | P2-1 | Category two-axis remap (+ use_timing + normalization trigger + write path) | mig 599 + frontend | ✅ **mig LIVE + frontend DEPLOYED 2026-07-03** (v20260703170632, verified: herb 272/foliar 53/timing 317/0 blanks; prod @b07715d0) |
 | P2-2 | Retire dead tables/columns | mig 180000 (live v20260703190820) | 🚀 **APPLIED LIVE 2026-07-03 (2 clean drops: create_prepay_credit + document_processing_log), verified gone** · 6 of 8 targets NOT dead → jobs.tags/batch_id KEEP per owner + rest deferred (see cycle log) |
 | P2-3 | Ingredient-map (brand↔generic) page | **frontend-only (no mig)** | 🚀 **DEPLOYED TO PROD 2026-07-03** — admin CRUD on `ingredient_map`; Codex push-gate 5 rounds → CLEAN; main @`1ef739e2`, Vercel `dpl_8WPxBGvSmhRuYfQ9b91eJUjRAi3Q` READY (croprxsolutions.app) |
-| P2-4 | Crop Programs → "Apply Program" into jobs | **frontend-only (no mig)** | ✅ **BUILT + Codex-CLEAN 2026-07-03** — "Load Program" appends a crop program's products into JobDetail chemicals (unit-reconciled money math); 5 Codex rounds (2 money P1s fixed) → CLEAN |
-| P2-5 | Surface per-acre tier pricing in QuoteBuilder | frontend | ⬜ not started |
+| P2-4 | Crop Programs → "Apply Program" into jobs | **frontend-only (no mig)** | 🚀 **DEPLOYED TO PROD 2026-07-03** — "Load Program" on JobDetail chemicals (unit-reconciled money math); 5 Codex rounds (2 money P1s) → CLEAN; main @`d27919eb`, Vercel `dpl_B1UNpTU9tdFCU3u1PFd8J2qhwHF5` READY |
+| P2-5 | Surface per-acre tier pricing in QuoteBuilder | frontend | 🔨 **in progress 2026-07-03** (scoping) |
 | P2-8 | Vendor master consolidation | parked mig | ⬜ not started |
 | A5 | Blend unit conversion | parked migs + edge-fn code | ⬜ not started |
 | A9 | Month-end catch-up | parked mig + frontend | ⬜ not started |
