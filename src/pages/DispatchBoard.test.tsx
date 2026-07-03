@@ -134,6 +134,12 @@ vi.mock('../lib/db', () => {
       // never called; a benign default keeps the mock total.
       rpc: vi.fn().mockResolvedValue({ data: [], error: null }),
     },
+    // Layer 2 (B3): the dispatch stock light now reads get_dispatch_stock_status via
+    // supabaseUntyped. An empty result keeps the light benign (jobs still render); these
+    // tests assert row/badge/assigned-to rendering, not a specific stock color.
+    supabaseUntyped: {
+      rpc: vi.fn().mockResolvedValue({ data: [], error: null }),
+    },
     assertRpcResult: (data: unknown) => data,
   };
 });

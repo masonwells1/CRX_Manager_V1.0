@@ -272,6 +272,19 @@ export interface QuoteProductDraw {
   updated_at: string;
 }
 
+// Layer 2: per-(job, product) draw-down of a parent planned quote's booking by
+// a scheduled job. Mirrors QuoteProductDraw; lives in its own table because the
+// job_chemicals writers recreate all chemical lines on every edit.
+export interface JobProductDraw {
+  id: string;
+  job_id: string;
+  quote_id: string;
+  product_id: string;
+  quantity_drawn: number;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface QuoteVersion {
   id: string;
   quote_id: string;
@@ -490,7 +503,7 @@ export interface Inventory {
   product?: Product;
 }
 
-export type InventoryHoldType = 'manual' | 'crop_program';
+export type InventoryHoldType = 'manual' | 'crop_program' | 'job';
 
 export interface InventoryHold {
   id: string;
@@ -513,6 +526,9 @@ export interface InventoryHold {
 // Wave B.3 — return shape of the get_inventory_position() RPC.
 // One row per (product, location). net_position = quantity_available - quantity_prebooked + quantity_on_order.
 // holds_qty and planned_qty are reported separately; they are NOT subtracted from net_position.
+// Layer 2 (B2): holds_qty still sums ALL active holds; job_holds_qty is the job-type
+// SUBSET of holds_qty (a breakout, not additive to totals). planned_qty is now the
+// quantity-aware unreserved remainder per line (no longer all-or-nothing dedup).
 export interface InventoryPositionRow {
   inventory_id: string | null;
   product_id: string;
@@ -528,12 +544,27 @@ export interface InventoryPositionRow {
   quantity_prebooked: number;
   quantity_on_order: number;
   holds_qty: number;
+  job_holds_qty: number;
   planned_qty: number;
   delivered_ytd: number;
   net_position: number;
   reorder_point: number;
   min_stock_level: number;
   is_low_stock: boolean;
+}
+
+// Layer 2 (B3) — return shape of get_dispatch_stock_status(uuid[]). One row per
+// (job, product) the schedulable job needs. free_excluding_own_hold subtracts every
+// active hold EXCEPT this job's own job-hold, so the dispatch light never warns a job
+// against its own reservation. demand_qty is already converted to the product's
+// inventory unit server-side. has_inventory=false means no stock record → treat as short.
+export interface DispatchStockRow {
+  job_id: string;
+  product_id: string;
+  demand_qty: number;
+  has_inventory: boolean;
+  free_excluding_own_hold: number;
+  reorder_point: number;
 }
 
 export type DeliveryStatus = 'scheduled' | 'in_progress' | 'completed' | 'cancelled' | 'voided';

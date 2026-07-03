@@ -50,10 +50,9 @@ import DispatchWizard from '../components/dispatch/DispatchWizard';
 import { usePageMeta } from '../hooks/usePageMeta';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, assertRpcResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
+import { supabase, supabaseUntyped, assertRpcResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
 import ConfirmModal from '../components/ui/ConfirmModal';
 import { generateIdempotencyKey } from '../lib/idempotency';
-import { fieldAppPricedQuantity } from '../lib/chemCalculator';
 import type { Json } from '../types/supabase';
 import { Sentry } from '../lib/sentry';
 import {
@@ -71,7 +70,7 @@ import {
   type DispatchedAssigneeFilter,
 } from '../lib/dispatchDisplay';
 import { aggregateAssignedTo, type DispatchLocation } from '../lib/dispatchWizard';
-import type { Job, Profile, Field, InventoryPositionRow } from '../types';
+import type { Job, Profile, Field, DispatchStockRow } from '../types';
 
 type NavSection = 'map' | 'list' | 'dispatch' | 'dispatched';
 
@@ -352,10 +351,12 @@ export default function DispatchBoard() {
             .map((j) => j.id)
         : [];
       const chemByJob: Record<string, JobChemNeed[]> = {};
-      // available − prebooked SUMMED across a product's locations; holds_qty is
-      // product-level (the same value on every location row) so it's captured once.
-      const freeByProduct: Record<string, { availLessPrebooked: number; holds: number; reorder: number }> = {};
-      let positionLoaded = false;
+      // Layer 2 (B3): per-(job,product) stock-light inputs from the dedicated,
+      // role-gated RPC. `free` EXCLUDES this job's own hold and `demand` is already
+      // unit-converted server-side — replaces the client-side get_inventory_position
+      // compute + fieldAppPricedQuantity.
+      const dispatchStock: Record<string, Record<string, { demand: number; free: number; reorder: number; hasInv: boolean }>> = {};
+      let stockLoaded = false;
       if (activeJobIds.length > 0) {
         // Product needs for the schedulable jobs. Chunk the job-id filter (a bare .in()
         // of up to ~500 UUIDs can exceed the request-URL limit) AND page each chunk for
@@ -387,23 +388,22 @@ export default function DispatchBoard() {
             if (rows.length < DISPATCH_PAGE) break;
           }
         }
-        // Today's free stock per product from the canonical position RPC (single call).
-        const { data: posData, error: posErr } = await supabase.rpc('get_inventory_position');
-        if (posErr) {
-          Sentry.captureException(posErr, { tags: { source: 'fetch', action: 'dispatch_inventory_position' } });
+        // Stock-light inputs for exactly the schedulable jobs. Free per (job,product)
+        // already excludes that job's OWN reservation server-side (still conservative
+        // for every OTHER program's hold; never warns a job against itself).
+        const { data: dsData, error: dsErr } = await supabaseUntyped.rpc('get_dispatch_stock_status', { p_job_ids: activeJobIds });
+        if (dsErr) {
+          Sentry.captureException(dsErr, { tags: { source: 'fetch', action: 'dispatch_stock_status' } });
         } else {
-          const posRows = assertRpcResult<InventoryPositionRow[]>(posData, 'get_inventory_position') || [];
-          positionLoaded = true;
-          for (const r of posRows) {
-            // Sum available−prebooked across the product's locations; holds_qty is
-            // product-level (same on every location row) so it's captured once.
-            // CONSERVATIVE by design: free = available − prebooked − ALL active holds, so
-            // the light never falsely says "ok" when stock is reserved for another program.
-            // The cost is that a job backed by its OWN planned-quote hold may over-warn
-            // (harmless — it just prompts an inventory check); precise per-job reservation
-            // attribution is Layer 2.
-            const acc = (freeByProduct[r.product_id] ||= { availLessPrebooked: 0, holds: r.holds_qty, reorder: r.reorder_point });
-            acc.availLessPrebooked += r.quantity_available - r.quantity_prebooked;
+          const dsRows = assertRpcResult<DispatchStockRow[]>(dsData, 'get_dispatch_stock_status') || [];
+          stockLoaded = true;
+          for (const r of dsRows) {
+            (dispatchStock[r.job_id] ||= {})[r.product_id] = {
+              demand: Number(r.demand_qty) || 0,
+              free: Number(r.free_excluding_own_hold) || 0,
+              reorder: Number(r.reorder_point) || 0,
+              hasInv: r.has_inventory === true,
+            };
           }
         }
       }
@@ -413,28 +413,22 @@ export default function DispatchBoard() {
           return { ...j, chemicals: [], stock_status: 'unknown' as JobStockStatus };
         }
         const chems = chemByJob[j.id] || [];
-        // If the position lookup failed (or the job has no products), show 'unknown'
+        // If the stock lookup failed (or the job has no products), show 'unknown'
         // rather than painting every job red on a transient RPC error — don't cry wolf.
-        if (!positionLoaded || chems.length === 0) {
+        if (!stockLoaded || chems.length === 0) {
           return { ...j, chemicals: chems, stock_status: 'unknown' as JobStockStatus };
         }
+        const stockForJob = dispatchStock[j.id] || {};
         let status: JobStockStatus = 'ok';
         for (const c of chems) {
           if (c.quantity <= 0) continue;
-          const pos = freeByProduct[c.product_id];
-          // No inventory record for a product the job needs = a real shortfall signal.
-          if (!pos) { status = worseStock(status, 'short'); continue; }
-          const free = pos.availLessPrebooked - pos.holds;
-          // A6: job_chemicals.quantity is in the chem's rate-base unit (e.g. pt); free stock is
-          // in the product's inventory unit (e.g. gal). Convert before comparing so the stock
-          // light isn't wrong by the unit ratio (mirrors complete_job / get_job_inventory_shortfalls).
-          // Unconvertible/blank units fall back to the raw qty (conservative — same as the RPC).
-          const needQty = fieldAppPricedQuantity(
-            c.quantity, c.unit, c.inventory_unit,
-            c.product_form === 'dry' ? 'dry' : c.product_form === 'liquid' ? 'liquid' : null,
-          ) ?? c.quantity;
-          if (needQty > free) status = worseStock(status, 'short');
-          else if (free - needQty <= pos.reorder) status = worseStock(status, 'low');
+          // demand + free come from the RPC keyed by (job, product): demand is already
+          // unit-converted and free already excludes THIS job's own hold. A missing row
+          // or no inventory record for a needed product = a real shortfall signal.
+          const s = stockForJob[c.product_id];
+          if (!s || !s.hasInv) { status = worseStock(status, 'short'); continue; }
+          if (s.demand > s.free) status = worseStock(status, 'short');
+          else if (s.free - s.demand <= s.reorder) status = worseStock(status, 'low');
         }
         return { ...j, chemicals: chems, stock_status: status };
       });
