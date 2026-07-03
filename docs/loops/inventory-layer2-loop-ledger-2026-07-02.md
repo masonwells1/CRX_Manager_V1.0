@@ -396,6 +396,28 @@ re-run CLEAN (only a doc-count P2, now fixed). **APPLIED LIVE 2026-07-03** (appl
 `a87162c1…`): overloads 1/1/1, allocator full-demand + anon-revoked, restore re-syncs jobs, accept
 guard UNCHANGED (#B not applied); post-apply sweeps CLEAN. Docs synced to **612** (drift PASS).
 
-**Remaining:** commit → push-gate Codex (`--base origin/main`, HEAD-tied) → merge Layer 2 to `main` +
-push. Then the two OPEN OWNER ITEMS: (1) label CSV / etc. unchanged, (2) the "close application-fulfilled
-booking" lifecycle (#B follow-up).
+## 🎉 MERGED TO MAIN + PUSHED (2026-07-03) — LAYER 2 COMPLETE
+
+`feat/inventory-layer2` merged to `main` and pushed (`937e2634..a7d3ae37`). The merge folded in a
+parallel **structure-wave2** session that had advanced `origin/main` by 8 commits (+4 migrations:
+`20260702160000/161000/162000` + `20260702170000_p2_1`; AR due-date/aging + category remap) — no Layer 2
+CODE conflicts (they touched AR/category only); doc-count files reconciled to the true merged disk total
+(**616 migrations**, drift PASS: migration-history rows re-sorted+renumbered 596–616, CLAUDE.md keeps both
+snapshots, CHANGELOG keeps both entries, AGENTS.md + workflow-map regenerated). Pre-push typecheck+build
+GREEN; codex-push-guard satisfied (HEAD-tied proof `codex-review-a7d3ae37….json`). Vercel deploys the
+frontend delta (#D InventoryPage Job badge / Release-button gating).
+
+**Push-gate Codex verdict:** 0 BLOCKER/HIGH/P1 on the risky migration files; one **P2 = regenerate
+`.claude/schema-registry.json`** (its high-water/`job_product_draws` are stale). This is NON-blocking,
+metadata-only (drives write-time guard accuracy for FUTURE migrations), and **pre-existing + SHARED** with
+structure-wave (their live tables are missing from it too). Deferred because a true rebuild needs the
+`--from-introspection` workflow, which can't cleanly pipe a 115-table JSON through the MCP tool in-session.
+
+**OPEN FOLLOW-UPS (owner / maintenance — none block the live app, which is correct now):**
+1. **Schema-registry regen** (`node scripts/regenerate-schema-registry.mjs --from-introspection <live.json>`):
+   run Q1–Q5 via MCP, assemble the JSON, rebuild. Add `job_product_draws` + `'job'` hold_type + the
+   structure-wave tables + bump high-water to `20260703170632`+.
+2. **"Close / mark fulfilled by application" lifecycle** (the dropped-#B follow-up): a way to close a booking
+   fully fulfilled by job applications WITHOUT converting it to a chemical-sale order. Business-process +
+   UX design with Mason.
+3. Pre-existing owner items unchanged (label CSV, etc.).
