@@ -2333,51 +2333,6 @@ export type Database = {
           },
         ]
       }
-      document_processing_log: {
-        Row: {
-          confidence: number | null
-          created_at: string
-          document_type: string
-          error_message: string | null
-          file_name: string
-          file_size_bytes: number | null
-          id: string
-          items_extracted: number | null
-          page_count: number | null
-          processing_time_ms: number | null
-          success: boolean
-          user_id: string
-        }
-        Insert: {
-          confidence?: number | null
-          created_at?: string
-          document_type: string
-          error_message?: string | null
-          file_name: string
-          file_size_bytes?: number | null
-          id?: string
-          items_extracted?: number | null
-          page_count?: number | null
-          processing_time_ms?: number | null
-          success?: boolean
-          user_id: string
-        }
-        Update: {
-          confidence?: number | null
-          created_at?: string
-          document_type?: string
-          error_message?: string | null
-          file_name?: string
-          file_size_bytes?: number | null
-          id?: string
-          items_extracted?: number | null
-          page_count?: number | null
-          processing_time_ms?: number | null
-          success?: boolean
-          user_id?: string
-        }
-        Relationships: []
-      }
       email_log: {
         Row: {
           attachment_name: string | null
@@ -8359,16 +8314,6 @@ export type Database = {
           p_splits: Json
         }
         Returns: Json
-      }
-      create_prepay_credit: {
-        Args: {
-          p_amount_cents: number
-          p_customer_id: string
-          p_notes?: string
-          p_payment_method?: string
-          p_reference_number?: string
-        }
-        Returns: string
       }
       create_quick_delivery: {
         Args: {
