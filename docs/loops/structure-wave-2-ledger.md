@@ -20,7 +20,7 @@ each item Codex-gated (≤3 rounds) before commit.
 | AR-reminder | Reminder due-date basis + **configurable threshold** (Settings) | mig 598 + SettingsPage/ARaging | ✅ **mig LIVE + frontend DEPLOYED 2026-07-03** (v20260703170528; prod @b07715d0) |
 | P2-1 | Category two-axis remap (+ use_timing + normalization trigger + write path) | mig 599 + frontend | ✅ **mig LIVE + frontend DEPLOYED 2026-07-03** (v20260703170632, verified: herb 272/foliar 53/timing 317/0 blanks; prod @b07715d0) |
 | P2-2 | Retire dead tables/columns | mig 180000 (live v20260703190820) | 🚀 **APPLIED LIVE 2026-07-03 (2 clean drops: create_prepay_credit + document_processing_log), verified gone** · 6 of 8 targets NOT dead → jobs.tags/batch_id KEEP per owner + rest deferred (see cycle log) |
-| P2-3 | Ingredient-map (brand↔generic) page | frontend (+mig?) | ⬜ not started |
+| P2-3 | Ingredient-map (brand↔generic) page | **frontend-only (no mig)** | ✅ **BUILT + PROVEN 2026-07-03** — admin CRUD on `ingredient_map`; compliance-reviewer CLEAN; live rolled-back insert smoke PASS; committed to loop branch |
 | P2-4 | Crop Programs → "Apply Program" into jobs | frontend + parked mig | ⬜ not started |
 | P2-5 | Surface per-acre tier pricing in QuoteBuilder | frontend | ⬜ not started |
 | P2-8 | Vendor master consolidation | parked mig | ⬜ not started |
@@ -52,6 +52,14 @@ Legend: ⬜ not started · 🔨 in progress · 🧪 built, proving · 🔍 Codex
 
 ## Cycle log
 (newest first — one entry per item as it completes)
+
+### 2026-07-03 — P2-3 Ingredient-map (brand↔generic) management page — ✅ BUILT + PROVEN (frontend-only, no DB change)
+- **What Packet 5 flagged:** the `BrandVsGeneric` page was read-only and its empty state literally told a no-code owner to "add mappings in the ingredient_map table" — a dead end. Mason chose WIRE (keep + finish the UI), not retire.
+- **Grounded vs live first:** `ingredient_map` already exists with correct RLS (SELECT for any authenticated user; INSERT/UPDATE/DELETE gated on `is_admin()`), FK `generic_product_id → products(id)`, 0 rows, no `updated_at`, no money cols. **No migration needed — frontend-only.**
+- **Built** (`src/pages/BrandVsGeneric.tsx`, single file + companion test): kept the price-comparison viewer; added an admin **Manage Mappings** section — a searchable DataTable of all mappings + an Add/Edit modal (Branded Product & Generic Alternative via `Combobox`, Active Ingredient, bulk checkbox, notes) + delete via `ConfirmModal`. Direct table mutations + `checkMutationResult` (house pattern for a simple admin reference table — matches the RLS design; an SECDEF RPC would bypass RLS, so not used). Write controls gated to `role==='admin'`; sales_rep keeps read-only (never hits the RLS wall). `branded_ingredient` (NOT NULL) defaults to the branded name when blank; generic name resolves to `generic_product_id`; branded must match a real product (validation).
+- **Proof (ran, not just "tests pass"):** typecheck + eslint + build clean · every-page render smoke PASS · **4 behavioral tests PASS** (real component render + click-through capturing the actual insert payload; NOT-NULL default; name→id resolution; "must be a real product" reject; sales_rep read-only) · **rolled-back LIVE insert smoke PASS** — ran both exact `handleSave` payload shapes against the real `ingredient_map` table inside a DO block, both accepted (FK + NOT NULL satisfied), aborted with `SMOKE_ROLLBACK_OK`, verified 0 rows / 0 `[E2E]` leftovers persisted.
+- **Review:** `compliance-reviewer` → **CLEAN** (0 blockers/high/med). Codex-gate not triggered (frontend-only; no migration/RLS/money/edge-fn per CLAUDE.md scope) — available on request.
+- **Ship state:** committed to loop branch `fix/structure-wave-2026-07`. **NOT pushed to `main`** (per loop gate; frontend deploy = Mason's call). Since it's the same branch as the already-deployed Wave-2 frontend, merging this branch to `main` will deploy it to prod (Vercel) — surfaced for Mason.
 
 ### 2026-07-03 — 🚀 APPLY GATE: P2-2 clean drops APPLIED LIVE (Mason OK'd "apply the 2 verified dead drops now")
 - **Owner decisions this session:** (1) apply the 2 clean drops → done; (2) **KEEP `jobs.tags` + `jobs.batch_id` + the Batch ID UI box** — Mason: "we don't use the app yet but will" (planned features, NOT dead — do not retire).

@@ -4,6 +4,15 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-03 — Structure Wave-2: P2-3 Brand-vs-Generic wired into an admin management page (frontend-only, on branch)
+
+Turned the previously read-only **Brand vs Generic** page into an admin CRUD manager for the `ingredient_map` (brand↔generic) table — closing the Packet-5 dead end where the empty state told a non-coder owner to "edit the ingredient_map table" by hand. **No database change:** the table already exists live with correct RLS (SELECT for any authenticated user; INSERT/UPDATE/DELETE gated on `is_admin()`), a `generic_product_id → products` FK, and 0 rows. Frontend-only, single page + companion test.
+
+- Kept the existing price-comparison viewer; added a searchable **Manage Mappings** table plus an Add/Edit modal (Branded Product & Generic Alternative pickers, Active Ingredient, bulk flag, notes) and a `ConfirmModal` delete. Direct table mutations + `checkMutationResult` (house pattern for a simple admin reference table); write controls gated to `role==='admin'` so sales reps stay read-only and never hit the RLS wall.
+- `branded_ingredient` (NOT NULL) defaults to the branded product name when blank; the generic picker resolves to `generic_product_id`; the branded product must match a real product (validation).
+- **Proof:** typecheck + eslint + build clean · every-page render smoke · 4 behavioral tests (real render + click-through capturing the actual insert payload) · **rolled-back LIVE insert smoke** — both payload shapes accepted by the real `ingredient_map` schema (FK + NOT NULL), aborted, 0 rows persisted. `compliance-reviewer` CLEAN.
+- **Ship state:** committed to `fix/structure-wave-2026-07`, **not** pushed to `main`. Merging the branch to `main` deploys it (Vercel) — owner-gated.
+
 ## 2026-07-03 — Structure Wave-2: AR due-date/aging + configurable reminder + product-category two-axis remap (4 migrations APPLIED LIVE)
 
 Applied the four Codex-gated, reviewer-cleared workstreams from the Structure Wave-2 loop to production (branch `fix/structure-wave-2026-07`). Each re-emitted function was re-verified byte-for-byte against the *current* live definition before apply (parallel Layer2/A-series work had moved live well past this session's base — zero drift found), then applied in strict order with a live verification after each.
