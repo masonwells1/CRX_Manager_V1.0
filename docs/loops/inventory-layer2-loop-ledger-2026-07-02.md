@@ -361,3 +361,41 @@ HEAD-tied for codex-push-guard) → merge `feat/inventory-layer2` → `main` + p
 Post-merge follow-ups (pre-existing, non-blocking): schema-registry regen for `job_product_draws` +
 `'job'` hold_type (SessionStart staleness note — from the earlier 15 migs, not this fix); regen
 `rpcFixtureLiveDiff` pg_proc snapshot if it captures function bodies.
+
+---
+
+## ✅ CHANNEL-SEPARATION FIX APPLIED LIVE (2026-07-03) — migration `20260703130000` (A3.12)
+
+After A3.11's coordination fix, a **full-feature Codex push-gate** (`--base origin/main` over all 22
+commits) surfaced 4 more items. Mason then clarified the **business model** (the key that unblocked it):
+**two sell channels off the same booking — CHEMICAL SALES (we deliver → order draws) and JOB
+APPLICATIONS (we apply → job holds) are SEPARATE shed demands that ADD UP, never offset.** That
+resolved the ambiguity behind the earlier round-2/3 "order coverage" logic (which had wrongly assumed
+the channels shared stock).
+
+Disposition of the 4 push-gate findings:
+- **#A [P1, FIXED]** — the allocator shrank a job's shed hold by the order's drawn qty → under-counted
+  what's needed in the shed to apply. FIX: **job hold = FULL application demand** (dropped preb_pool /
+  order-offset). Draws unchanged (cap at booking → no double-BILL); only the shed RESERVATION grew to
+  be honest. This also dissolved the multi-job "order-coverage-once" #3 (no order offset exists now).
+- **#C [P2, FIXED]** — `restore_quote_version` now re-syncs the quote's active jobs via the allocator
+  (verbatim + 1 line), like save_quote.
+- **#B [P1, DROPPED — owner business-process follow-up]** — relaxing `enforce_quote_accepted_fully_drawn`
+  so a completed-job booking could be "accepted" was **unreachable AND semantically wrong**: in this app
+  "accept" == Convert-to-Order == a CHEMICAL SALE, so accepting an APPLICATION-fulfilled booking would
+  mix channels. Left the accept guard UNCHANGED. Such bookings safely stay sent/revised (fulfilled via
+  application invoices). **OPEN OWNER ITEM:** a dedicated "close / mark fulfilled by application" action
+  (a lifecycle/UX feature, not a guard change) — build if/when Mason wants it.
+- **#D [P2, FIXED]** — InventoryPage: "Job" badge + hide the (server-rejected) Release button on job holds.
+
+**Verification (before apply):** plpgsql_check CLEAN (allocator + restore) · real rolled-back `[E2E]`
+proving **#A** (order 40 + booking 100 + job demand 80 → job draw 60, hold **80** = full, NOT order-
+reduced) **AND** the (then-still-present) #B accept path · save_quote/restore verbatim diffs · rls +
+drift reviewers CLEAN · Codex first flagged #B as unreachable-and-wrong (P2) → **#B removed** → Codex
+re-run CLEAN (only a doc-count P2, now fixed). **APPLIED LIVE 2026-07-03** (apply-guard proof
+`a87162c1…`): overloads 1/1/1, allocator full-demand + anon-revoked, restore re-syncs jobs, accept
+guard UNCHANGED (#B not applied); post-apply sweeps CLEAN. Docs synced to **612** (drift PASS).
+
+**Remaining:** commit → push-gate Codex (`--base origin/main`, HEAD-tied) → merge Layer 2 to `main` +
+push. Then the two OPEN OWNER ITEMS: (1) label CSV / etc. unchanged, (2) the "close application-fulfilled
+booking" lifecycle (#B follow-up).

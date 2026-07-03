@@ -1176,9 +1176,11 @@ export default function InventoryPage() {
                       <td className="py-3 px-3 text-secondary">{hold.customer_name || '—'}</td>
                       <td className="py-3 px-3">
                         <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
-                          hold.hold_type === 'manual' ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700'
+                          hold.hold_type === 'manual' ? 'bg-blue-100 text-blue-700'
+                            : hold.hold_type === 'job' ? 'bg-emerald-100 text-emerald-700'
+                            : 'bg-purple-100 text-purple-700'
                         }`}>
-                          {hold.hold_type === 'manual' ? 'Manual' : 'Program'}
+                          {hold.hold_type === 'manual' ? 'Manual' : hold.hold_type === 'job' ? 'Job' : 'Program'}
                         </span>
                       </td>
                       <td className="py-3 px-3 text-secondary text-xs max-w-xs truncate">{hold.notes || '—'}</td>
@@ -1188,13 +1190,22 @@ export default function InventoryPage() {
                       <td className="py-3 px-3 text-secondary text-xs">{hold.creator_name}</td>
                       {isAdmin && (
                         <td className="py-3 px-3">
-                          <button
-                            onClick={() => handleReleaseHold(hold.id)}
-                            disabled={releasingHoldId === hold.id}
-                            className="text-xs text-red-600 hover:text-red-700 font-medium disabled:opacity-50"
-                          >
-                            {releasingHoldId === hold.id ? 'Releasing...' : 'Release'}
-                          </button>
+                          {hold.hold_type === 'job' ? (
+                            <span
+                              className="text-xs text-secondary"
+                              title="Job reservations release automatically when the job completes, cancels, or is rescheduled."
+                            >
+                              Auto
+                            </span>
+                          ) : (
+                            <button
+                              onClick={() => handleReleaseHold(hold.id)}
+                              disabled={releasingHoldId === hold.id}
+                              className="text-xs text-red-600 hover:text-red-700 font-medium disabled:opacity-50"
+                            >
+                              {releasingHoldId === hold.id ? 'Releasing...' : 'Release'}
+                            </button>
+                          )}
                         </td>
                       )}
                     </tr>
