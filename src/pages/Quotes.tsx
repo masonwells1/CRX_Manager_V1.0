@@ -436,7 +436,7 @@ export default function Quotes() {
       render: (row) => (
         <>
           <Badge variant={statusToBadgeVariant[row.status] || 'default'}>
-            {row.status.replace('_', ' ')}
+            {row.status === 'closed_by_application' ? 'Fulfilled (Applied)' : row.status.replace('_', ' ')}
           </Badge>
           {row.is_planned && (
             <span className="ml-1 px-1.5 py-0.5 text-[10px] font-medium bg-amber-100 text-amber-800 rounded">
@@ -633,6 +633,7 @@ export default function Quotes() {
                   <option value="declined">Declined</option>
                   <option value="expired">Expired</option>
                   <option value="cancelled">Cancelled</option>
+                  <option value="closed_by_application">Fulfilled (Applied)</option>
                 </select>
                 <button
                   onClick={() => setPlannedFilter(!plannedFilter)}

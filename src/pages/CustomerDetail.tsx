@@ -1035,7 +1035,7 @@ export default function CustomerDetail() {
                       <td className="px-4 py-3">
                         <>
                           <Badge variant={statusToBadgeVariant[q.status] || 'default'}>
-                            {q.status}
+                            {q.status === 'closed_by_application' ? 'Fulfilled (Applied)' : q.status}
                           </Badge>
                           {q.is_planned && (
                             <span className="ml-1 px-1.5 py-0.5 text-[10px] font-medium bg-amber-100 text-amber-800 rounded">

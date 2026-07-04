@@ -4,6 +4,18 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-04 — "Close a booking fulfilled by application" lifecycle (migration APPLIED LIVE)
+
+A planned booking that we fulfilled by **applying** product for the customer (via field jobs) previously had no clean way to close — "Accept" is the *chemical-sale* door (it creates an order + prebooks stock + commissions, the wrong channel), and Decline/Cancel are both semantically wrong and hard-blocked while a job reservation exists. So such bookings sat open forever. This adds a distinct terminal status **`closed_by_application`** ("Fulfilled (Applied)") plus a small, actor-bound, idempotent RPC **`close_quote_as_applied`**, reached from a **"Close — Applied"** button on the booking.
+
+- **No money moves.** The customer was already billed through each job's application invoice (off `job_chemicals` pricing); the booking never produces AR for the application channel, so closing cannot double-bill. It's a pure lifecycle + inventory-cleanup action, like Decline/Cancel.
+- **Owner choices (Mason 2026-07-03):** MANUAL close via a button (never auto); CLOSE-ANYWAY — any un-applied / un-delivered leftover is released back to free inventory (the crop-program holds drop via the release trigger) and the RPC reports how much was released as a warning (warn, never blocks).
+- **Guards threaded** (a new status means every "is this booking open?" guard must learn it): the status-transition enforcer gained the `sent/revised → closed_by_application` edge; the hold-release trigger releases its holds; the coordinated allocator treats it as NOT-open so a stray later job event can't re-reserve stock against a closed booking; `create_job_from_quote_section` rejects the new status (no new work scheduled on a closed booking); the RPC requires `is_planned` so a plain non-planned sales quote can't be mislabeled "applied".
+- **Codex-hardened:** the initial pass surfaced two real gaps — schedule-a-job-on-a-closed-booking (P1) and mislabel-a-sales-quote (P2) — both fixed and re-proven.
+- **Proven before + after apply:** `plpgsql_check` clean on all 5 functions; a live rolled-back `[E2E]` end-to-end (close a planned booking → status flips, 100 leftover units released, and a post-close job event does NOT re-reserve); rls + drift reviewers + Codex all clean; post-apply focused security sweep clean. **Migration `20260703200000` APPLIED LIVE 2026-07-04** (5 reproduced functions, each verbatim + a marked one-line change; single overloads; anon-revoked).
+- **Frontend:** "Close — Applied" button + confirmation on the Quote Builder; "Fulfilled (Applied)" status badge/label rendered correctly across the Quote Builder, Quotes list, and Customer detail; the Schedule-Job button hides on a closed (or otherwise terminal) booking.
+
+
 ## 2026-07-03 — Structure Wave-2: P2-5 catalog $/acre in the Quote Builder product picker (frontend-only)
 
 Surfaced a per-acre price reference in the Quote Builder's product picker so reps can compare products by cost-per-acre at the customer's tier before adding one. **Grounding found the trigger-maintained `products.tierN_price_per_acre` columns are computed wrong** (rate in oz ÷ container_size in gal, no unit conversion — ~43% of 559 products over $500/acre, up to $16,373/acre; verified live), so those columns are **not used**. Instead a new pure `catalogPricePerAcre()` in `src/lib/quoteCalc.ts` recomputes it correctly — the same way `recalcItem` prices a quote line — so the picker figure equals the line's $/acre once the product is added. Reference-only; hidden when a product has no rate. Frontend-only, no DB change.

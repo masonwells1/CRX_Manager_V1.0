@@ -170,6 +170,7 @@ export default function QuoteBuilder() {
   const drawDownIdem = useIdempotencyKey('draw_down_quote', profile?.id || '');
   const revertStatusIdem = useIdempotencyKey('revert_quote_status', profile?.id || '');
   const emailQuoteIdem = useIdempotencyKey('send_email_quote', profile?.id || '');
+  const closeAppliedIdem = useIdempotencyKey('close_quote_as_applied', profile?.id || '');
 
   // Partial booking draw-down (sell-side roadmap #1): pull part of the booked
   // quantities into an order; the quote stays open with the remaining balance.
@@ -231,6 +232,11 @@ export default function QuoteBuilder() {
   const [confirmDeclineOpen, setConfirmDeclineOpen] = useState(false);
   const [confirmCancelOpen, setConfirmCancelOpen] = useState(false);
   const [statusActionLoading, setStatusActionLoading] = useState(false);
+  // Close a booking we fulfilled by APPLYING product (job applications), as
+  // opposed to delivering it (convert/draw = chemical sale). Distinct terminal
+  // status; releases any un-applied leftover; never double-bills. (owner 2026-07-03)
+  const [confirmCloseAppliedOpen, setConfirmCloseAppliedOpen] = useState(false);
+  const [closingApplied, setClosingApplied] = useState(false);
   const [showRevertModal, setShowRevertModal] = useState(false);
   const [revertReason, setRevertReason] = useState('');
   const [reverting, setReverting] = useState(false);
@@ -280,6 +286,15 @@ export default function QuoteBuilder() {
   const isAdmin = profile?.role === 'admin';
   const canCancel = isEditing && ['draft', 'sent', 'revised'].includes(currentStatus);
   const canDecline = isEditing && ['sent', 'revised'].includes(currentStatus);
+  // "Close — fulfilled by application" is only for a PLANNED open booking (the
+  // application channel), in parity with the close_quote_as_applied RPC
+  // (sent/revised + is_planned). A plain non-planned sales quote uses convert/
+  // decline, not this. (Codex 2026-07-03 P2)
+  const canCloseApplied = isEditing && isPlanned && ['sent', 'revised'].includes(currentStatus);
+  // A booking only takes new scheduled jobs while it's not terminal — parity with
+  // create_job_from_quote_section's status guard (Codex 2026-07-03 P1): once a
+  // booking is closed/declined/cancelled/expired, no new work may be scheduled against it.
+  const canScheduleJobs = isPlanned && !['declined', 'expired', 'cancelled', 'closed_by_application'].includes(currentStatus);
   const canRevert = isEditing && isAdmin && ['accepted', 'declined', 'expired', 'cancelled'].includes(currentStatus);
   const revertLabel = currentStatus === 'accepted' ? 'Un-accept' : 'Reopen';
 
@@ -1181,6 +1196,46 @@ export default function QuoteBuilder() {
     }
   };
 
+  // Close a booking we fulfilled by APPLYING product for the customer (job
+  // applications), NOT by delivering it (convert/draw = chemical sale). Flips to
+  // the distinct terminal status 'closed_by_application' via the actor-bound,
+  // idempotent close_quote_as_applied RPC, which releases any un-applied leftover
+  // back to free inventory and reports how much. Never double-bills — the
+  // customer was already billed through each job's application invoice. (owner 2026-07-03)
+  const handleCloseAsApplied = async () => {
+    if (!id) return;
+    setClosingApplied(true);
+    try {
+      const idemKey = closeAppliedIdem.getKey();
+      // supabaseUntyped: close_quote_as_applied is a Layer 2 RPC not yet in the
+      // generated types (matches get_dispatch_stock_status / job_product_draws usage).
+      const { data, error } = await supabaseUntyped.rpc('close_quote_as_applied', {
+        p_quote_id: id,
+        p_performed_by: profile!.id,
+        p_idempotency_key: idemKey,
+      });
+      if (error) throw error;
+      closeAppliedIdem.resetKey();
+      const result = assertRpcResult<{ status: string; released_units?: number; active_jobs_remaining?: number; warnings?: string[] }>(data, 'close_quote_as_applied');
+      setStatus('closed_by_application');
+      setIsDirty(false);
+      const warnings = result.warnings || [];
+      toast('success', warnings.length > 0
+        ? `Booking closed — fulfilled by application. ${warnings.join('. ')}.`
+        : 'Booking closed — fulfilled by application.');
+    } catch (err) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { tags: { source: 'mutation', action: 'close_quote_as_applied' } });
+      if (hasRpcCode(err, RpcErrorCodes.BOOKING_CLOSED)) {
+        toast('warning', 'This booking is no longer open — refresh the page to see its current status.');
+      } else {
+        toast('error', err instanceof Error ? err.message : 'Failed to close the booking');
+      }
+    } finally {
+      setClosingApplied(false);
+      setConfirmCloseAppliedOpen(false);
+    }
+  };
+
   // Un-accept / Reopen a quote back to 'sent' (roadmap #5, fixes W4). Routes
   // through the admin-only hardened revert_quote_status RPC, which blocks
   // reverting an accepted quote that already has an order.
@@ -1871,7 +1926,7 @@ export default function QuoteBuilder() {
           )}
           {isEditing && (
             <Badge variant={statusToBadgeVariant[status] || 'default'}>
-              {status}
+              {status === 'closed_by_application' ? 'Fulfilled (Applied)' : status}
             </Badge>
           )}
           <label className="flex items-center gap-2 text-sm ml-4">
@@ -1987,6 +2042,20 @@ export default function QuoteBuilder() {
             >
               Revise Quote
             </Button>
+          )}
+          {canCloseApplied && (
+            <>
+              <Button
+                variant="secondary"
+                icon={<CheckCircle className="w-4 h-4" />}
+                showChevron={false}
+                onClick={() => setConfirmCloseAppliedOpen(true)}
+                loading={closingApplied}
+              >
+                Close — Applied
+              </Button>
+              <HelpTip text="Use this when WE applied this booking's product for the customer (job applications), instead of delivering it. It closes the booking as fulfilled by application and releases any un-applied product back to free inventory. The customer was already billed through each job's application invoice — this never bills again." className="ml-1" />
+            </>
           )}
           {canDecline && (
             <Button
@@ -2545,7 +2614,7 @@ export default function QuoteBuilder() {
                   >
                     Add Item
                   </Button>
-                  {isPlanned && quoteId && sec.id && sec.items.length > 0 && (
+                  {canScheduleJobs && quoteId && sec.id && sec.items.length > 0 && (
                     <Button variant="ghost" size="sm" icon={<CalendarClock className="w-3 h-3" />} showChevron={false} onClick={() => handleScheduleJob(sec._key)} loading={schedulingJobSectionKey === sec._key}>
                       Schedule Job
                     </Button>
@@ -3312,6 +3381,17 @@ export default function QuoteBuilder() {
         variant="danger"
         icon={Ban}
         loading={statusActionLoading}
+      />
+
+      <ConfirmModal
+        open={confirmCloseAppliedOpen}
+        onClose={() => setConfirmCloseAppliedOpen(false)}
+        onConfirm={handleCloseAsApplied}
+        title="Close — Fulfilled by Application"
+        message={`Close booking ${quoteNumber} as fulfilled by application (WE applied the product for the customer)? Any product still un-applied is released back to free inventory. The customer was already billed through each job's application invoice, so this never bills again. This is terminal.`}
+        confirmLabel="Close Booking"
+        icon={CheckCircle}
+        loading={closingApplied}
       />
 
       {showRevertModal && (
