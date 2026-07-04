@@ -26,10 +26,26 @@ each item Codex-gated (≤3 rounds) before commit.
 | P2-5b | Per-acre columns unit-fix + recompute (owner: KEEP + fix, not retire) | mig `20260702190000` (live v20260704031557) | 🚀 **APPLIED LIVE + DEPLOYED 2026-07-04** — Mason OK'd; verified (Pramitol 16,373→319.80; over-$500 242→0; live trigger proof); Codex R2 CLEAN + 3 reviewers 0-blocker; **synced to main `7cc3480b`, Vercel READY** |
 | A5 | Blend unit conversion (3 RPCs, migration-only) | parked mig `20260704120000` | ✅ **built + parked · smoke CLEAN · Codex R2 resolved** (edge-fn reverted → migration-only) · committed |
 | P2-8 | Vendor master consolidation | parked mig `20260704130000` | ✅ **built + parked · smoke CLEAN · Codex R2 CLEAN** (R1: canonical-existence guard) · committed |
-| A9 | Month-end catch-up | parked mig `20260704140000` + MonthEndClose picker | 🧪 **built + parked · seed smoke CLEAN · frontend typecheck + 4 render tests pass** · Codex pending |
-| WaveB | Units Phase 1 (src/lib/units.ts + dropdowns) | parked migs + frontend | ⬜ not started |
+| A9 | Month-end catch-up | seed mig `20260704140000` ✅ · MonthEndClose picker = WIP (deferred) | ✅ **SEED committed (Codex-clean, proven).** Picker built + typecheck/5-tests-clean but hit **6 Codex rounds of period-switch races** (R5 fixed, R6 open) → **deferred to a focused test-first session (with WaveB)**, committed as WIP (branch-only, NOT prod-ready) |
+| WaveB | Units Phase 1 (src/lib/units.ts + dropdowns) | parked migs + frontend | ⏭️ **HANDED OFF to a fresh session** (largest item; fully specced) — see handoff note in cycle log |
 
 Legend: ⬜ not started · 🔨 in progress · 🧪 built, proving · 🔍 Codex round N · ✅ done (parked, Codex-clean, committed) · ⏸ parked-with-spec (owner input) · ❌ dropped
+
+---
+
+## 🚦 HANDOFF — Wave-2b apply gate (Mason's call) — 2026-07-04
+
+Three parked migrations are **built, rolled-back-smoke-proven, Codex-clean, and committed** to `fix/structure-wave-2026-07`. **None applied.** They are independent of each other (blend RPCs / vendors / periods) — apply in any order. At apply time each needs a fresh reviewer + apply-guard proof (house protocol).
+
+| Parked migration | What it does | Notes for apply |
+|---|---|---|
+| `20260704120000_a5_blend_ticket_unit_conversion.sql` | **A5** — re-emits the 3 blend-ticket RPCs (invoice/order/app-record) to convert rate/qty → inventory unit via `field_app_priced_quantity`+`normalize_rate_unit`; refuses rateless/unconvertible billable lines. | All 3 re-emits apply together (one file). **Migration-only — NO edge-fn deploy.** **OWNER-CONFIRM:** hard-refuse vs warn on a bad-unit/rateless blend line (mirrors field-app). Recommend a functional `[E2E]` seed-and-run at apply. Zero live blast radius (blend tables empty). |
+| `20260704130000_p2_8_vendor_master_consolidation.sql` | **P2-8** — merges 2 duplicate vendors into canonical twins (repoint FK, normalize free-text strings, soft-delete dups). | Data-only, reversible (soft-delete). Every op gated on an active canonical. No owner input needed. |
+| `20260704140000_a9_month_end_seed_periods.sql` | **A9 seed** — inserts 'open' `accounting_periods` for Oct 2025→Jun 2026 (`ON CONFLICT DO NOTHING`). | **Cosmetic/visibility only** — `check_period_open` ignores 'open' rows, zero enforcement impact. **OWNER-CONFIRM the range.** |
+
+**Frontend on the branch (deploys when the branch merges to `main`):** A9 `MonthEndClose.tsx` month/year picker (view/close any month, future-month guard, per-period review-reset). No hard dependency on the A9 seed (the seed just pre-populates the periods list).
+
+**Focused next session (deferred, per Mason 2026-07-04):** (1) the **A9 MonthEndClose month/year picker** — built + typecheck/test-clean but **6 Codex rounds surfaced successive period-switch concurrency races** on this financial-close page (R5 fixed, R6 open); **rebuild it test-first** (write the race/idempotency/fail-closed tests, then the code — a simpler design that disables period changes while loading/closing likely kills the class). Committed as **WIP (branch-only, NOT prod-ready)** — do not merge the frontend to prod until it's test-clean. (2) **WaveB (Units Phase 1)** — the largest item. See the A9 + WaveB cycle-log notes + mission doc PHASE 3.
 
 ---
 
@@ -54,14 +70,26 @@ Legend: ⬜ not started · 🔨 in progress · 🧪 built, proving · 🔍 Codex
 ## Cycle log
 (newest first — one entry per item as it completes)
 
+### 2026-07-04 — WaveB (Units Phase 1) — ⏭️ HANDED OFF (fresh session recommended)
+- **Why hand off (not skip):** WaveB is the largest Wave-2 item and this session is deep (A5's 3 money RPCs + P2-8 + A9 + ~7 Codex rounds). A large, unit-sensitive multi-file feature deserves fresh, focused context — Codex catching an A9 cross-period bug I'd missed is the signal that tired context erodes the attention this needs.
+- **Scope (fully specced — mission doc PHASE 3 WaveB + `docs/roadmap/product-units-scheduling-deep-dive-2026-07-01.md`):**
+  1. `src/lib/units.ts` — canonical units module backed by the live `unit_conversions` table (fetch-once, cached options, one conversion helper); chemCalculator/quoteCalc factor tables become derived.
+  2. Rate-unit DROPDOWNS at ProductDetail (~:482, free text today; note P2-1/P2-5b already touched this file), JobDetail rate_unit + unit grid, field-app line UM, LabelReview max-rate unit, CropPrograms.
+  3. Read-only unit-DRIFT report (DISTINCT units that don't normalize) → Mason eyeballs → ONE normalization UPDATE migration (parked, owner-gated). BACKFILL BEFORE any enforcement.
+  4. Normalize-on-save in BulkProductImport / BulkQuoteImport. 5. E2E fixtures/locators → selects (not free-text `fill()`).
+- **FROZEN-KEYS (critical):** never RENAME existing `unit_conversions.unit` rows (`save_quote` joins `LOWER(rate_unit)=LOWER(unit)` — renaming silently rescales money). Additive synonym/canonical columns only. Never touch posted `invoice_items` / `application_records` unit strings.
+- **Reuse:** `normalize_rate_unit()` + `field_app_priced_quantity()` (SQL) already exist and are the server canon (A5 leans on them). `src/lib/quoteCalc.ts` + `src/lib/chemCalculator.ts` hold the TS factor tables to single-source.
+- **Resume:** fresh `claude` session in `C:\CRX_StructureFix` on `fix/structure-wave-2026-07`; read this ledger + mission doc; build WaveB Phase-1 (frontend reversible; the one normalization migration is owner + Codex gated like the rest).
+
 ### 2026-07-04 — A9 Month-end catch-up — 🧪 BUILT + PARKED, seed smoke CLEAN + frontend render-tested, Codex pending
 - **The gap:** only ONE `accounting_periods` row exists live (Jan 2026, open) and `MonthEndClose.tsx` is hard-locked to the *current* calendar month, so the admin can't see or close any prior month.
 - **Grounded live:** `close_accounting_period(period_end)` UPSERTS on `(period_start, period_end)` (creates the row closed if missing); `check_period_open(date)` only raises on a *closed* period — it ignores 'open'/missing — so seeding 'open' rows has **zero enforcement/financial impact** (pure visibility). Idempotency across month-switching is safe (key resets on success; failures never persist it).
 - **Built** — two parts:
   - **Seed migration** `20260704140000_a9_month_end_seed_periods.sql` (parked): INSERT 'open' periods for the current season's elapsed months (Oct 2025→Jun 2026), `ON CONFLICT DO NOTHING` (Jan skipped). Owner-confirm the range (cosmetic only).
   - **Frontend** `MonthEndClose.tsx`: month + year picker (generalized `getPeriodForMonth`), everything keys off the existing `current` var so summary/close/status follow the selection; `isFuturePeriod` guard disables closing a not-yet-started month (both button + `handleClose`); periods-list limit 12→36 to cover the picker range.
-- **Proof:** seed rolled-back smoke `total=9 open=9 closed=0 in_range=9`; frontend `npm run typecheck` clean + **MonthEndClose.test.tsx 4/4 pass** (page + picker render). Full click-interaction is auth/dev-server-gated (loop norm for frontend items).
-- **Next:** Codex gate (seed + frontend), then commit.
+- **Proof:** seed rolled-back smoke `total=9 open=9 closed=0 in_range=9`; frontend `npm run typecheck` clean + **MonthEndClose.test.tsx 5/5 pass** (incl. a behavioral fail-closed test).
+- **Codex gate — SEED: R2 CLEAN → ✅ committed.** **PICKER: R2→R6 (SIX rounds), each surfacing a real period-switch race** on this financial-close page: R2 review-flag reset; R3 stale-summary + idempotency replay; R4 one-render-frame window (→ synchronous-clear root fix); R5 token-bump-timing gap (→ bump token in `changePeriod`); **R6 close-in-flight refresh overwrites the newly-selected period (OPEN).** R2–R5 fixed inline; **R6 left OPEN by decision.**
+- **DECISION (Mason 2026-07-04): defer the picker.** The 6-round pattern shows the period-switch concurrency needs a **test-first rebuild** (encode all six findings as tests first; a design that disables period changes while `loading`/`closing` likely eliminates the class). Committed as **WIP (branch-only, NOT prod-ready).** The seed migration is independent + shipped clean.
 
 ### 2026-07-04 — P2-8 Vendor master consolidation — 🧪 BUILT + PARKED, rolled-back smoke CLEAN, Codex R1 (canonical guard) → R2
 - **The bug:** 2 vendors are duplicated in the master with spelling variants — "The Anderson's"/"The Andersons", "Van Deist Supply"/"Van Diest Supply" — splitting bills/POs/products across both and risking `create_vendor_bill`'s VENDOR_PO_MISMATCH.

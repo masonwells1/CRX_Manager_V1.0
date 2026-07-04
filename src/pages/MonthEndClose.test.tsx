@@ -96,8 +96,22 @@ describe('MonthEndClose', () => {
   it('renders the checklist section', async () => {
     renderMonthEnd();
     await waitFor(() => {
-      expect(screen.getByText(/checklist/i)).toBeInTheDocument();
+      // Target the section heading specifically. With no summary loaded (mock returns
+      // null), the page also renders a "Resolve all checklist items…" fail-closed note
+      // (A9 Codex P1), so a broad /checklist/i now matches two elements.
+      expect(screen.getByText('Close Checklist')).toBeInTheDocument();
     });
+  });
+
+  it('keeps "Roll the Month" unavailable when no summary loaded (fail-closed)', async () => {
+    renderMonthEnd();
+    await waitFor(() => {
+      expect(screen.getByText('Close Checklist')).toBeInTheDocument();
+    });
+    // With get_monthly_summary returning null, the period cannot be closed: the
+    // fail-closed note is shown and the "Roll the Month" button is disabled.
+    expect(screen.getByText(/Resolve all checklist items/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Roll the Month/i })).toBeDisabled();
   });
 
   it('renders statements section', async () => {
