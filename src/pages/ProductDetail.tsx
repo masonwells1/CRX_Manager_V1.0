@@ -13,6 +13,7 @@ import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { logActivity } from '../lib/activityLogger';
 import { supabase, checkMutationResult } from '../lib/db';
 import { Sentry } from '../lib/sentry';
+import { unitOptionsForForm, isKnownUnit } from '../lib/units';
 import type { Product, CostHistory, UnitConversion } from '../types';
 
 export default function ProductDetail() {
@@ -459,15 +460,13 @@ export default function ProductDetail() {
                   className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:opacity-50 disabled:bg-gray-50"
                 >
                   <option value="">-- Select --</option>
-                  {unitConversions
-                    .filter((uc) => {
-                      const form = product.product_form;
-                      if (!form) return true;
-                      return uc.unit_type === form || uc.unit_type === 'both';
-                    })
-                    .map((uc) => (
-                      <option key={uc.id} value={uc.unit}>{uc.unit}</option>
-                    ))}
+                  {/* WaveB: grandfather a legacy value the form filter would otherwise hide, so a save can't blank it */}
+                  {!isKnownUnit(unitConversions, product.product_form, product.inventory_unit) && (
+                    <option value={product.inventory_unit || ''}>{product.inventory_unit} (existing)</option>
+                  )}
+                  {unitOptionsForForm(unitConversions, product.product_form).map((uc) => (
+                    <option key={uc.id} value={uc.unit}>{uc.unit}</option>
+                  ))}
                 </select>
               </div>
             </div>
@@ -479,7 +478,24 @@ export default function ProductDetail() {
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <Input label="Suggested Rate" value={product.suggested_rate || ''} onChange={(e) => update('suggested_rate', e.target.value)} disabled={!isAdmin} />
                 <Input label="Rate Per Acre" type="number" value={product.rate_per_acre ?? ''} onChange={(e) => update('rate_per_acre', e.target.value ? parseFloat(e.target.value) : null)} disabled={!isAdmin} />
-                <Input label="Rate Unit" value={product.rate_unit || ''} onChange={(e) => update('rate_unit', e.target.value)} disabled={!isAdmin} />
+                <div>
+                  <label className="block text-sm font-medium text-secondary mb-1">Rate Unit</label>
+                  <select
+                    value={product.rate_unit || ''}
+                    onChange={(e) => update('rate_unit', e.target.value)}
+                    disabled={!isAdmin}
+                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:opacity-50 disabled:bg-gray-50"
+                  >
+                    <option value="">-- Select --</option>
+                    {/* WaveB: grandfather a legacy value the form filter would otherwise hide, so a save can't blank it */}
+                    {!isKnownUnit(unitConversions, product.product_form, product.rate_unit) && (
+                      <option value={product.rate_unit || ''}>{product.rate_unit} (existing)</option>
+                    )}
+                    {unitOptionsForForm(unitConversions, product.product_form).map((uc) => (
+                      <option key={uc.id} value={uc.unit}>{uc.unit}</option>
+                    ))}
+                  </select>
+                </div>
               </div>
             </div>
 
