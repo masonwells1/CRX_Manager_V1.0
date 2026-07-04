@@ -4,6 +4,16 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-03 — Structure Wave-2: P2-5b per-acre columns UNIT-FIX + recompute (APPLIED LIVE)
+
+Fixed the broken `products.tier{1,2,3}_price_per_acre` columns that P2-5 flagged. The save-time trigger `calculate_prices_from_margin` computed per-acre as `tierN_price * rate_per_acre / container_size` with **no unit conversion** (rate in oz, container in gal) — 242 of 595 active products read over $500/acre, worst $16,373/acre. Owner chose **keep the columns + unit-fix + recompute** (not retire), so they can be used/displayed.
+
+- **New STABLE helper `product_price_per_acre()`** — one source of truth, mirroring the frontend `quoteCalc.ts catalogPricePerAcre` exactly (`tierPrice × rate×factor_oz(rate_unit) / factor_oz(inventory_unit ?? unit_size)`, case-insensitive `unit_conversions` lookup default 1, NULL when rate ≤ 0). So the stored column equals what the QuoteBuilder picker shows.
+- **Two-trigger split** (keeps price semantics exact, keeps per-acre always fresh): trigger **A** `calculate_prices_from_margin` keeps the margin→price+gross-margin math **byte-identical** to live (per-acre removed; watches `current_cost` + margins only); **new** trigger **B** `recalc_product_price_per_acre` (SECDEF) computes per-acre from the *final* tier price, watching the output union incl. `tierN_price` so it refreshes on direct price edits (`BulkPricingImport`, `Products` inline edit) without A re-firing/clobbering — fires after A (`'r' > 'c'`).
+- **One-time recompute** of all products: max per-acre 16,373 → **443**, over-$500 count **242 → 0**, Pramitol 16,373 → **319.80**.
+- **Gates:** Codex (gpt-5.5) R1 caught a [P2] where the v1 single-trigger left per-acre stale after partial price-only updates → fixed by the two-trigger split; **R2 CLEAN**. `rls-security-reviewer` + `migration-drift-reviewer` + `compliance-reviewer` all 0-blocker (both migration versions).
+- **Applied live** as migration `20260702190000` (live version `20260704031557`); verified in production + a rolled-back live trigger proof (a real price edit corrected a seeded `88888` → `319.80` with no price clobber). Frontend: refreshed the now-accurate comment in `src/lib/quoteCalc.ts`. **Not yet displayed** in any UI — optional follow-up.
+
 ## 2026-07-03 — Structure Wave-2: P2-5 catalog $/acre in the Quote Builder product picker (frontend-only)
 
 Surfaced a per-acre price reference in the Quote Builder's product picker so reps can compare products by cost-per-acre at the customer's tier before adding one. **Grounding found the trigger-maintained `products.tierN_price_per_acre` columns are computed wrong** (rate in oz ÷ container_size in gal, no unit conversion — ~43% of 559 products over $500/acre, up to $16,373/acre; verified live), so those columns are **not used**. Instead a new pure `catalogPricePerAcre()` in `src/lib/quoteCalc.ts` recomputes it correctly — the same way `recalcItem` prices a quote line — so the picker figure equals the line's $/acre once the product is added. Reference-only; hidden when a product has no rate. Frontend-only, no DB change.

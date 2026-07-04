@@ -23,7 +23,7 @@ each item Codex-gated (≤3 rounds) before commit.
 | P2-3 | Ingredient-map (brand↔generic) page | **frontend-only (no mig)** | 🚀 **DEPLOYED TO PROD 2026-07-03** — admin CRUD on `ingredient_map`; Codex push-gate 5 rounds → CLEAN; main @`1ef739e2`, Vercel `dpl_8WPxBGvSmhRuYfQ9b91eJUjRAi3Q` READY (croprxsolutions.app) |
 | P2-4 | Crop Programs → "Apply Program" into jobs | **frontend-only (no mig)** | 🚀 **DEPLOYED TO PROD 2026-07-03** — "Load Program" on JobDetail chemicals (unit-reconciled money math); 5 Codex rounds (2 money P1s) → CLEAN; main @`d27919eb`, Vercel `dpl_B1UNpTU9tdFCU3u1PFd8J2qhwHF5` READY |
 | P2-5 | Surface per-acre tier pricing in QuoteBuilder | **frontend-only (no mig)** | 🚀 **DEPLOYED TO PROD 2026-07-03** — catalog $/acre in product picker, RECOMPUTED correctly (stored `tierN_price_per_acre` cols garbage: ~43% >$500/ac, up to $16k — NOT used); main @`a1a432f9`, Vercel `dpl_DkBR2H45fjJbuSVb8Jsd5zcfrxsD` READY. **⚠ owner follow-up: retire/fix the broken cols+trigger** |
-| P2-5b | Per-acre columns unit-fix + recompute (owner: KEEP + fix, not retire) | parked mig `20260702190000` | ✅ **BUILT + PARKED 2026-07-03** — Codex R2 CLEAN + rls/drift/compliance all 0-blocker; **owner-gated live apply** |
+| P2-5b | Per-acre columns unit-fix + recompute (owner: KEEP + fix, not retire) | mig `20260702190000` (live v20260704031557) | 🚀 **APPLIED LIVE 2026-07-03** — Mason OK'd; verified (Pramitol 16,373→319.80; over-$500 242→0; live trigger proof); Codex R2 CLEAN + 3 reviewers 0-blocker |
 | P2-8 | Vendor master consolidation | parked mig | ⬜ not started |
 | A5 | Blend unit conversion | parked migs + edge-fn code | ⬜ not started |
 | A9 | Month-end catch-up | parked mig + frontend | ⬜ not started |
@@ -53,6 +53,12 @@ Legend: ⬜ not started · 🔨 in progress · 🧪 built, proving · 🔍 Codex
 
 ## Cycle log
 (newest first — one entry per item as it completes)
+
+### 2026-07-03 — 🚀 APPLY GATE: P2-5b per-acre unit-fix APPLIED LIVE (Mason OK'd "apply it now")
+- **Pre-apply grounding:** re-verified live `calculate_prices_from_margin` still 1 overload with the OLD binding (no parallel drift), helper+trigB absent, migration name free. Live head was `20260704003641` (Layer2).
+- **Gate:** rls-security + migration-drift reviewers re-run on the v2 two-trigger file → 0 blockers (drift H1 version-stamp + M1 history-row are apply-time only); Codex R2 CLEAN. Content-bound apply-guard proof written via Node (no BOM), queryHash `70f540ac…` (newline-stripped, MCP transmit form).
+- **Applied** via MCP `apply_migration` (name `20260702190000_per_acre_unit_fix_recompute`, MCP stamped fresh live version **20260704031557**). Verified live: helper+trigB exist, margin fn 1 overload, both triggers present in order A→B (`trg_normalize` < `trg_validate` < `trigger_calculate` < `trigger_recalc`), Pramitol **16,373.76→319.80**, max_t1 **443**, over-$500 **242→0**, cnt_t1 569. Post-apply rolled-back live trigger proof: seeded per-acre 88888 → a real `tier1_price` edit corrected it to 319.80 with `tier1_price` unchanged (no clobber).
+- **Post-apply sync:** promoted staging→`supabase/migrations` (617→618); migration-history #618; CLAUDE.md counts (285 RPC/60 trig/618 migs) + Wave-2 note; schema-registry high-water → 20260704031557; CHANGELOG entry; refreshed the now-accurate comment in `src/lib/quoteCalc.ts`; AGENTS.md regen; doc-drift PASS. **NOT pushed to `main` yet** — owner-gated (frontend comment-only change deploys via Vercel; branch also needs an origin/main merge for the parallel Layer2 QuoteBuilder edit first).
 
 ### 2026-07-03 — P2-5b Per-acre columns UNIT-FIX + recompute — ✅ BUILT + PARKED, Codex R2 CLEAN (owner-gated apply)
 - **Owner decision (this session):** the P2-5-flagged `products.tierN_price_per_acre` cols were garbage (old trigger `calculate_prices_from_margin` computed `tierN_price × rate_per_acre / container_size` with NO unit conversion — oz÷gal; live: 242/595 active >$500/ac, max **$16,373.76/ac**, median $315). Mason chose **KEEP the columns + UNIT-FIX + RECOMPUTE** (not retire), and wants them authoritative/usable.

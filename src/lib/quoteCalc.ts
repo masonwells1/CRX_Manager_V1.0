@@ -140,10 +140,12 @@ export function recalcItem(
  * the product picker equals the line's $/acre once the product is added at its
  * default rate. Reference-only, for comparing products by cost-per-acre (P2-5).
  *
- * Deliberately does NOT read products.tierN_price_per_acre — those trigger-
- * maintained columns are computed with a unit-inconsistent formula (rate in oz
- * divided by container_size in gal, no conversion) and are wildly wrong (~43% over
- * $500/acre, up to $16k/acre; verified live 2026-07-03). We recompute correctly.
+ * Deliberately recomputes rather than reading products.tierN_price_per_acre.
+ * Those stored columns are now maintained CORRECTLY (unit-fixed 2026-07-03,
+ * migration 20260702190000 — same formula as here), but we recompute live so the
+ * picker always reflects the VIEWING customer's tier and can never lag a save.
+ * (Before that fix they used a unit-inconsistent formula — rate in oz over
+ * container_size in gal — and were wildly wrong: ~43% over $500/acre, up to $16k.)
  *
  * Returns null when the product has no positive rate_per_acre, or the inventory
  * unit doesn't convert (factor 0) — never a fabricated number.
