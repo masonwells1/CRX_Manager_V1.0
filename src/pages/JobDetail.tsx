@@ -33,6 +33,7 @@ import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
 import { applyChemEdit, recomputeChemRowForAcres, reconcileChemAutofillUnits, sumAcres, toGallonOrLbEquivalent } from '../lib/chemCalculator';
 import { compareToMaxRate, phiHarvestWarning } from '../lib/labelGuardrails';
+import { unitOptionsForForm, isKnownUnit } from '../lib/units';
 import {
   LABEL_RATE_GUARDRAIL_MODE_KEY,
   DEFAULT_GUARDRAIL_MODE,
@@ -54,7 +55,7 @@ import QuickTaskModal from '../components/team/QuickTaskModal';
 import ConfirmModal from '../components/ui/ConfirmModal';
 import RelatedNotes from '../components/team/RelatedNotes';
 import { Sentry } from '../lib/sentry';
-import type { JobStatus, Customer, Product, Field, Vehicle, Profile, BlendRecipe, BlendRecipeItem, LinkedEntityType, JobNotification } from '../types';
+import type { JobStatus, Customer, Product, Field, Vehicle, Profile, BlendRecipe, BlendRecipeItem, LinkedEntityType, JobNotification, UnitConversion } from '../types';
 import type { Json } from '../types/supabase';
 import { sendEmail } from '../lib/emailService';
 import {
@@ -1159,6 +1160,14 @@ export default function JobDetail() {
   // is_active filter (Codex P2), so a now-INACTIVE product on a saved job still gets its
   // label max for the guardrail (allProducts is active-only). Authoritative over allProducts.
   const [jobProductLabels, setJobProductLabels] = useState<Map<string, { max_label_rate: number | null; max_label_rate_unit: string | null }>>(new Map());
+  const [unitConversions, setUnitConversions] = useState<UnitConversion[]>([]);
+
+  useEffect(() => {
+    supabase.from('unit_conversions').select('*').order('unit').then(({ data, error }) => {
+      if (error) return;
+      setUnitConversions((data || []) as UnitConversion[]);
+    });
+  }, []);
   // Per-field customer shares, keyed by field. Empty until a field is added /
   // shares are loaded — then defaulted from field_billing_defaults.
   const [shareRows, setShareRows] = useState<ShareRow[]>([]);
@@ -3028,8 +3037,17 @@ export default function JobDetail() {
                         {/* The per-acre RATE unit (e.g. pt/ac) — this is what the job
                             list summary and the WPS notice read from rate_unit. */}
                         <label className="block text-xs font-medium text-secondary mb-1">Rate Unit</label>
-                        <input type="text" value={c.rate_unit} onChange={(e) => updateChemRow(i, 'rate_unit', e.target.value)}
-                          disabled={!canEdit} placeholder="pt/ac" className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg disabled:bg-gray-50" />
+                        <select value={c.rate_unit} onChange={(e) => updateChemRow(i, 'rate_unit', e.target.value)}
+                          disabled={!canEdit} className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg disabled:bg-gray-50">
+                          <option value="">-- unit --</option>
+                          {/* WaveB: canonical bare units filtered by product form (Codex P2); grandfather a legacy/mismatched value */}
+                          {c.rate_unit && !isKnownUnit(unitConversions, previewForm, c.rate_unit) && (
+                            <option value={c.rate_unit}>{c.rate_unit} (existing)</option>
+                          )}
+                          {unitOptionsForForm(unitConversions, previewForm).map((uc) => (
+                            <option key={uc.id} value={uc.unit}>{uc.unit}</option>
+                          ))}
+                        </select>
                       </div>
                       <div className="col-span-4 md:col-span-1 flex items-end">
                         {canEdit && (
@@ -3050,8 +3068,17 @@ export default function JobDetail() {
                         {/* Measure unit of the total applied (e.g. GAL / LB) — drives the
                             gallon/lb conversion and the loader-worksheet total. */}
                         <label className="block text-xs font-medium text-secondary mb-1">Unit</label>
-                        <input type="text" value={c.unit} onChange={(e) => updateChemRow(i, 'unit', e.target.value)}
-                          disabled={!canEdit} placeholder="gal/lb" className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg disabled:bg-gray-50" />
+                        <select value={c.unit} onChange={(e) => updateChemRow(i, 'unit', e.target.value)}
+                          disabled={!canEdit} className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg disabled:bg-gray-50">
+                          <option value="">-- unit --</option>
+                          {/* WaveB: canonical bare units filtered by product form (Codex P2); grandfather a legacy/mismatched value */}
+                          {c.unit && !isKnownUnit(unitConversions, previewForm, c.unit) && (
+                            <option value={c.unit}>{c.unit} (existing)</option>
+                          )}
+                          {unitOptionsForForm(unitConversions, previewForm).map((uc) => (
+                            <option key={uc.id} value={uc.unit}>{uc.unit}</option>
+                          ))}
+                        </select>
                       </div>
                       <div className="col-span-6 md:col-span-1">
                         <label className="block text-xs font-medium text-secondary mb-1">Equiv.</label>
