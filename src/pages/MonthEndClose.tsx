@@ -418,11 +418,17 @@ export default function MonthEndClose() {
           <p className="text-sm text-secondary mt-1">Review and close accounting periods</p>
         </div>
         <div className="flex gap-2 items-center">
-          {/* A9: month/year picker — view/close any month, not just the current one. */}
+          {/* A9 month/year picker — view/close any month. STRUCTURAL race guard (Codex R6):
+              the selects are disabled while a fetch (loading) OR a close (closing) is in
+              flight, so at most ONE is ever in play — no stale response / post-close refresh
+              can land under a newly-selected period. This makes the whole period-switch race
+              class impossible by construction; the reactive guards (token, fail-closed
+              summary, per-period idempotency reset) are defense-in-depth backup. */}
           <select
             value={selectedMonth}
             onChange={(e) => changePeriod(selectedYear, Number(e.target.value))}
-            className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-crx-green focus:border-transparent"
+            disabled={loading || closing}
+            className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-crx-green focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
             aria-label="Month to review"
           >
             {MONTH_NAMES.map((m, i) => (
@@ -432,7 +438,8 @@ export default function MonthEndClose() {
           <select
             value={selectedYear}
             onChange={(e) => changePeriod(Number(e.target.value), selectedMonth)}
-            className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-crx-green focus:border-transparent"
+            disabled={loading || closing}
+            className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-crx-green focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
             aria-label="Year to review"
           >
             {Array.from({ length: 3 }, (_, k) => new Date().getFullYear() - 2 + k).map((y) => (

@@ -2,7 +2,7 @@
  * MonthEndClose.test.tsx — Tests for the month-end close page
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 
 const { mockFrom, mockRpc, mockToast } = vi.hoisted(() => ({
@@ -118,6 +118,45 @@ describe('MonthEndClose', () => {
     renderMonthEnd();
     await waitFor(() => {
       expect(screen.getByText(/statement/i)).toBeInTheDocument();
+    });
+  });
+
+  it('disables the month/year selects while a close is in flight (Codex R6 structural guard)', async () => {
+    // A closeable period (all checklist items pass) + a close RPC that never resolves,
+    // so `closing` stays true. The period selects must be disabled while closing, so an
+    // admin can't switch months mid-close and have the post-close refresh clobber the
+    // newly-selected period.
+    const validSummary = {
+      invoices: { posted_count: 1, total_amount_cents: 1000, total_cost_cents: 500, draft_count: 0, voided_count: 0 },
+      payments: { count: 0, total_cents: 0 },
+      orders: { count: 0, total_cents: 0 },
+      deliveries: { count: 0, completed_count: 0 },
+      applications: { count: 0, total_acres: 0 },
+      commissions: { earned_cents: 0, paid_count: 0 },
+      ar_balance_cents: 0,
+    };
+    mockRpc.mockImplementation((name: string) => {
+      if (name === 'get_monthly_summary') return Promise.resolve({ data: validSummary, error: null });
+      if (name === 'close_accounting_period') return new Promise(() => {}); // pending forever -> closing stays true
+      return Promise.resolve({ data: null, error: null });
+    });
+
+    renderMonthEnd();
+
+    // Period is closeable -> selects enabled, "Roll the Month" enabled.
+    const rollBtn = await screen.findByRole('button', { name: /Roll the Month/i });
+    await waitFor(() => expect(rollBtn).not.toBeDisabled());
+    expect(screen.getByLabelText('Month to review')).not.toBeDisabled();
+
+    // Open the confirm modal and start the (never-resolving) close.
+    fireEvent.click(rollBtn);
+    const confirmBtn = await screen.findByRole('button', { name: /^Close Period$/i });
+    fireEvent.click(confirmBtn);
+
+    // Now closing is in flight -> both period selects are disabled.
+    await waitFor(() => {
+      expect(screen.getByLabelText('Month to review')).toBeDisabled();
+      expect(screen.getByLabelText('Year to review')).toBeDisabled();
     });
   });
 });
