@@ -24,18 +24,18 @@ each item Codex-gated (≤3 rounds) before commit.
 | P2-4 | Crop Programs → "Apply Program" into jobs | **frontend-only (no mig)** | 🚀 **DEPLOYED TO PROD 2026-07-03** — "Load Program" on JobDetail chemicals (unit-reconciled money math); 5 Codex rounds (2 money P1s) → CLEAN; main @`d27919eb`, Vercel `dpl_B1UNpTU9tdFCU3u1PFd8J2qhwHF5` READY |
 | P2-5 | Surface per-acre tier pricing in QuoteBuilder | **frontend-only (no mig)** | 🚀 **DEPLOYED TO PROD 2026-07-03** — catalog $/acre in product picker, RECOMPUTED correctly (stored `tierN_price_per_acre` cols garbage: ~43% >$500/ac, up to $16k — NOT used); main @`a1a432f9`, Vercel `dpl_DkBR2H45fjJbuSVb8Jsd5zcfrxsD` READY. **⚠ owner follow-up: retire/fix the broken cols+trigger** |
 | P2-5b | Per-acre columns unit-fix + recompute (owner: KEEP + fix, not retire) | mig `20260702190000` (live v20260704031557) | 🚀 **APPLIED LIVE + DEPLOYED 2026-07-04** — Mason OK'd; verified (Pramitol 16,373→319.80; over-$500 242→0; live trigger proof); Codex R2 CLEAN + 3 reviewers 0-blocker; **synced to main `7cc3480b`, Vercel READY** |
-| A5 | Blend unit conversion (3 RPCs, migration-only) | parked mig `20260704120000` | ✅ **built + parked · smoke CLEAN · Codex R2 resolved** (edge-fn reverted → migration-only) · committed |
-| P2-8 | Vendor master consolidation | parked mig `20260704130000` | ✅ **built + parked · smoke CLEAN · Codex R2 CLEAN** (R1: canonical-existence guard) · committed |
-| A9 | Month-end catch-up | seed mig `20260704140000` ✅ · MonthEndClose picker = WIP (deferred) | ✅ **SEED committed (Codex-clean, proven).** Picker built + typecheck/5-tests-clean but hit **6 Codex rounds of period-switch races** (R5 fixed, R6 open) → **deferred to a focused test-first session (with WaveB)**, committed as WIP (branch-only, NOT prod-ready) |
+| A5 | Blend unit conversion (3 RPCs, migration-only) | mig `20260704120000` (live v20260704161532) | 🚀 **APPLIED LIVE 2026-07-04** — 3 blend RPCs convert units + refuse bad/rateless lines; verified (1 overload each, normalize+guards present, plpgsql 0-err). 3 reviewers + Codex R2 clean |
+| P2-8 | Vendor master consolidation | mig `20260704130000` (live v20260704160103) | 🚀 **APPLIED LIVE 2026-07-04** — 2 dups soft-deleted, 73/4 products + 2/2 POs consolidated onto canonical; verified. 2 reviewers + Codex R2 clean |
+| A9 | Month-end catch-up | seed mig `20260704140000` (live v20260704155555) · picker = WIP (deferred) | 🚀 **SEED APPLIED LIVE 2026-07-04** — 9 open periods (Oct 2025→Jun 2026), verified; safe/cosmetic (drift reviewer clean). Picker still **WIP deferred** (6 Codex rounds of period-switch races; R6 open) → focused test-first session with WaveB |
 | WaveB | Units Phase 1 (src/lib/units.ts + dropdowns) | parked migs + frontend | ⏭️ **HANDED OFF to a fresh session** (largest item; fully specced) — see handoff note in cycle log |
 
 Legend: ⬜ not started · 🔨 in progress · 🧪 built, proving · 🔍 Codex round N · ✅ done (parked, Codex-clean, committed) · ⏸ parked-with-spec (owner input) · ❌ dropped
 
 ---
 
-## 🚦 HANDOFF — Wave-2b apply gate (Mason's call) — 2026-07-04
+## ✅ APPLIED LIVE — Wave-2b (Mason OK'd "take the 3 live") — 2026-07-04
 
-Three parked migrations are **built, rolled-back-smoke-proven, Codex-clean, and committed** to `fix/structure-wave-2026-07`. **None applied.** They are independent of each other (blend RPCs / vendors / periods) — apply in any order. At apply time each needs a fresh reviewer + apply-guard proof (house protocol).
+All three migrations are **APPLIED LIVE 2026-07-04 and verified** (Mason's explicit OK). Live version stamps: A9 seed `20260704155555`, P2-8 `20260704160103`, A5 `20260704161532`. Each passed 3 CRX reviewers (rls/drift/compliance, 0 blockers) + Codex R2 + a byte-exact apply-guard proof, and was verified live after apply. Promoted from `scripts/.staging-migrations/` into `supabase/migrations/`. **Mason confirmed A5's hard-refuse behavior + the A9 seed range as-built.** Not yet on `main` (loop branch only; frontend deploy = Mason's separate merge).
 
 | Parked migration | What it does | Notes for apply |
 |---|---|---|
@@ -69,6 +69,14 @@ Three parked migrations are **built, rolled-back-smoke-proven, Codex-clean, and 
 
 ## Cycle log
 (newest first — one entry per item as it completes)
+
+### 2026-07-04 — 🚀 APPLY GATE: A9 seed + P2-8 + A5 ALL APPLIED LIVE (Mason OK'd "take the 3 live")
+- **Pre-apply grounding (live, 0 drift):** live head still `20260704031557` (no parallel-session changes); none of the 3 already applied; all 3 blend RPCs single-overload + pre-A5; all 4 vendor rows active; 1 accounting period.
+- **Reviewer gate (3 subagents, 0 BLOCKERS):** migration-drift (all 3: overload signatures match live, columns present, A9 ON CONFLICT target = real UNIQUE, status 'open' allowed); rls-security (A5: search_path + auth gates byte-identical to live, correct idempotency, no new anon grant, helpers pure); compliance (A5+P2-8: bigint cents, no float, soft-delete only, audit-log append-only, no new CHECK). Codex R2 recorded per item this session.
+- **Applied via MCP `apply_migration`** — each with a **byte-exact content-bound apply-guard proof** (stripped-newline sha256; A5 = 784e4114, 906 lines transmitted exact — guard ALLOWED = proof of byte-exactness). Order A9 → P2-8 → A5. MCP stamped fresh live versions **20260704155555 / 160103 / 161532**.
+- **Verified live after each:** A9 → 9 open periods (Oct 2025→Jun 2026); P2-8 → both dups soft-deleted, products 73/4 + POs 2/2 consolidated, 0 dup-spellings; A5 → 3 RPCs single-overload, normalize+field_app+guards present, plpgsql 0-err.
+- **Post-apply:** promoted 3 files staging→`supabase/migrations/` (619→622 disk); schema-registry high-water → `20260704161532`; migration-history + CLAUDE.md + CHANGELOG synced.
+- **OWNER FOLLOW-UP (pre-existing, NOT from A5):** rls reviewer noted `create_order_from_blend_ticket` trusts a caller-supplied `p_performed_by` with no actor check — identical in the live pre-A5 def (not a regression). Optional separate hardening pass (add AUTH_REQUIRED + ACTOR_MISMATCH + role gate like its 2 siblings).
 
 ### 2026-07-04 — WaveB (Units Phase 1) — ⏭️ HANDED OFF (fresh session recommended)
 - **Why hand off (not skip):** WaveB is the largest Wave-2 item and this session is deep (A5's 3 money RPCs + P2-8 + A9 + ~7 Codex rounds). A large, unit-sensitive multi-file feature deserves fresh, focused context — Codex catching an A9 cross-period bug I'd missed is the signal that tired context erodes the attention this needs.
