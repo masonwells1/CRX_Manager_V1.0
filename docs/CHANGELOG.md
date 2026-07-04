@@ -4,6 +4,13 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-03 — Structure Wave-2: P2-5 catalog $/acre in the Quote Builder product picker (frontend-only)
+
+Surfaced a per-acre price reference in the Quote Builder's product picker so reps can compare products by cost-per-acre at the customer's tier before adding one. **Grounding found the trigger-maintained `products.tierN_price_per_acre` columns are computed wrong** (rate in oz ÷ container_size in gal, no unit conversion — ~43% of 559 products over $500/acre, up to $16,373/acre; verified live), so those columns are **not used**. Instead a new pure `catalogPricePerAcre()` in `src/lib/quoteCalc.ts` recomputes it correctly — the same way `recalcItem` prices a quote line — so the picker figure equals the line's $/acre once the product is added. Reference-only; hidden when a product has no rate. Frontend-only, no DB change.
+
+- 56 `quoteCalc` tests (incl. one asserting the catalog value equals `recalcItem`'s line $/acre, one asserting it ignores the garbage stored column); live check confirms sane $47–320/acre vs the broken $6k–16k. Codex push-gate: CLEAN (1 round).
+- **Owner follow-up (owner-gated, not in this change):** the broken `tierN_price_per_acre` columns + `calculate_prices_from_margin` trigger should be retired or unit-fixed so the bad data can't mislead anywhere it might be read.
+
 ## 2026-07-03 — Structure Wave-2: P2-4 Crop Programs → "Load Program" into jobs (frontend-only)
 
 Wired the previously **write-only** Crop Programs feature into jobs: a **"Load Program"** button on JobDetail's Chemicals tab drops a saved program's products (with their per-acre rates) into the editable chem grid — **appending** to existing lines (owner decision), non-destructive, reviewed then Saved via the normal `save_job` path. Crop programs are JSON in `app_settings` (no DB table), so this is **frontend-only, no migration.** Mirrors the existing non-destructive "Load Recipe" client-side loader.

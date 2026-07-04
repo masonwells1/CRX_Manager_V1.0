@@ -22,7 +22,7 @@ each item Codex-gated (≤3 rounds) before commit.
 | P2-2 | Retire dead tables/columns | mig 180000 (live v20260703190820) | 🚀 **APPLIED LIVE 2026-07-03 (2 clean drops: create_prepay_credit + document_processing_log), verified gone** · 6 of 8 targets NOT dead → jobs.tags/batch_id KEEP per owner + rest deferred (see cycle log) |
 | P2-3 | Ingredient-map (brand↔generic) page | **frontend-only (no mig)** | 🚀 **DEPLOYED TO PROD 2026-07-03** — admin CRUD on `ingredient_map`; Codex push-gate 5 rounds → CLEAN; main @`1ef739e2`, Vercel `dpl_8WPxBGvSmhRuYfQ9b91eJUjRAi3Q` READY (croprxsolutions.app) |
 | P2-4 | Crop Programs → "Apply Program" into jobs | **frontend-only (no mig)** | 🚀 **DEPLOYED TO PROD 2026-07-03** — "Load Program" on JobDetail chemicals (unit-reconciled money math); 5 Codex rounds (2 money P1s) → CLEAN; main @`d27919eb`, Vercel `dpl_B1UNpTU9tdFCU3u1PFd8J2qhwHF5` READY |
-| P2-5 | Surface per-acre tier pricing in QuoteBuilder | frontend | 🔨 **in progress 2026-07-03** (scoping) |
+| P2-5 | Surface per-acre tier pricing in QuoteBuilder | **frontend-only (no mig)** | ✅ **BUILT + Codex-CLEAN 2026-07-03** — catalog $/acre in product picker, RECOMPUTED correctly (stored `tierN_price_per_acre` cols are garbage: ~43% >$500/ac, up to $16k — NOT used). Codex 1 round CLEAN. **⚠ owner follow-up: retire/fix the broken cols+trigger** |
 | P2-8 | Vendor master consolidation | parked mig | ⬜ not started |
 | A5 | Blend unit conversion | parked migs + edge-fn code | ⬜ not started |
 | A9 | Month-end catch-up | parked mig + frontend | ⬜ not started |
@@ -52,6 +52,13 @@ Legend: ⬜ not started · 🔨 in progress · 🧪 built, proving · 🔍 Codex
 
 ## Cycle log
 (newest first — one entry per item as it completes)
+
+### 2026-07-03 — P2-5 Per-acre tier pricing in QuoteBuilder — ✅ BUILT + Codex-CLEAN (frontend-only) + ⚠ owner follow-up
+- **Owner decision (this session):** surface catalog $/acre in the **product picker** (compare-before-add). THEN grounding found the premise broken → owner OK'd "build it correctly, live".
+- **CRITICAL live finding:** the trigger-maintained `products.tierN_price_per_acre` cols are **garbage** — `calculate_prices_from_margin` computes `tierN_price × rate_per_acre / container_size` with rate in **oz** ÷ container in **gal**, no conversion → ~43% of 559 products are >$500/ac, up to **$16,373/ac** (median $315). Same oz-vs-gal bug class as P2-4. Surfacing them would mislead sales. **Did NOT use them.**
+- **Built:** new pure `catalogPricePerAcre()` in `src/lib/quoteCalc.ts` — recomputes per-acre the SAME way `recalcItem` prices a line (`tierPrice × rateInOz / inventoryUnitFactorOz`, from the product's own `rate_per_acre`+`rate_unit`), so the picker figure == the line's $/acre once added. Wired into the QuoteBuilder product-picker (`$X/ac` in crx-green under the T{tier} price; hidden when no rate). Reference-only, no schema/RPC change.
+- **Proof:** 56 quoteCalc tests incl. (a) catalog == recalcItem line $/acre, (b) ignores a garbage stored column; **live check: my formula gives $47–320/ac vs the broken $6k–16k**, matching the trusted line pricing. typecheck+lint+build clean; full suite 191 files / 3130 tests. **Codex 1 round → CLEAN.**
+- **⚠ OWNER FOLLOW-UP (parked, owner-gated):** the broken `tierN_price_per_acre` columns + `calculate_prices_from_margin` trigger are wrong wherever anything reads them — should be **retired** (drop cols+trigger) OR **unit-fixed** (convert rate→inventory unit + recompute 559). Not needed for the picker; surface to Mason.
 
 ### 2026-07-03 — P2-4 Crop Programs → "Load Program" into jobs — ✅ BUILT + Codex-CLEAN (frontend-only, no DB change)
 - **What Packet 5 flagged:** Crop Programs (reusable product/rate templates in `app_settings`) were write-only — nothing consumed them. Mason chose WIRE. Owner decision (this session): **append to existing chemicals, non-destructive** (not replace).
