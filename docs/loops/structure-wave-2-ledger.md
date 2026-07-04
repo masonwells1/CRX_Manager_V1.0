@@ -24,8 +24,8 @@ each item Codex-gated (≤3 rounds) before commit.
 | P2-4 | Crop Programs → "Apply Program" into jobs | **frontend-only (no mig)** | 🚀 **DEPLOYED TO PROD 2026-07-03** — "Load Program" on JobDetail chemicals (unit-reconciled money math); 5 Codex rounds (2 money P1s) → CLEAN; main @`d27919eb`, Vercel `dpl_B1UNpTU9tdFCU3u1PFd8J2qhwHF5` READY |
 | P2-5 | Surface per-acre tier pricing in QuoteBuilder | **frontend-only (no mig)** | 🚀 **DEPLOYED TO PROD 2026-07-03** — catalog $/acre in product picker, RECOMPUTED correctly (stored `tierN_price_per_acre` cols garbage: ~43% >$500/ac, up to $16k — NOT used); main @`a1a432f9`, Vercel `dpl_DkBR2H45fjJbuSVb8Jsd5zcfrxsD` READY. **⚠ owner follow-up: retire/fix the broken cols+trigger** |
 | P2-5b | Per-acre columns unit-fix + recompute (owner: KEEP + fix, not retire) | mig `20260702190000` (live v20260704031557) | 🚀 **APPLIED LIVE + DEPLOYED 2026-07-04** — Mason OK'd; verified (Pramitol 16,373→319.80; over-$500 242→0; live trigger proof); Codex R2 CLEAN + 3 reviewers 0-blocker; **synced to main `7cc3480b`, Vercel READY** |
-| P2-8 | Vendor master consolidation | parked mig | ⬜ not started |
-| A5 | Blend unit conversion | parked migs + edge-fn code | ⬜ not started |
+| A5 | Blend unit conversion (3 RPCs, migration-only) | parked mig `20260704120000` | ✅ **built + parked · smoke CLEAN · Codex R2 resolved** (edge-fn reverted → migration-only) · committed |
+| P2-8 | Vendor master consolidation | parked mig `20260704130000` | 🧪 **built + parked · rolled-back smoke CLEAN** (dups→0 active; products 73/4, POs 2/2 consolidated) · Codex pending |
 | A9 | Month-end catch-up | parked mig + frontend | ⬜ not started |
 | WaveB | Units Phase 1 (src/lib/units.ts + dropdowns) | parked migs + frontend | ⬜ not started |
 
@@ -53,6 +53,26 @@ Legend: ⬜ not started · 🔨 in progress · 🧪 built, proving · 🔍 Codex
 
 ## Cycle log
 (newest first — one entry per item as it completes)
+
+### 2026-07-04 — P2-8 Vendor master consolidation — 🧪 BUILT + PARKED, rolled-back smoke CLEAN, Codex pending
+- **The bug:** 2 vendors are duplicated in the master with spelling variants — "The Anderson's"/"The Andersons", "Van Deist Supply"/"Van Diest Supply" — splitting bills/POs/products across both and risking `create_vendor_bill`'s VENDOR_PO_MISMATCH.
+- **Grounded live:** only FK to `vendors` is `vendor_bills.vendor_id` (vendor_payments→vendor_bills); **0 bills on the dups**; free-text `vendor` on purchase_orders (2 Anderson's + 1 Van Deist) + products (71 Anderson's + 1 Van Deist). Both UI read paths + `create_vendor_bill` already filter `deleted_at IS NULL`.
+- **Built** (parked mig `20260704130000_p2_8_vendor_master_consolidation.sql`, data-only, no schema change): (1) repoint vendor_bills off dups (defensive no-op), (2) normalize the free-text `vendor` strings on purchase_orders + products to canonical, (3) **soft-delete** the 2 dup master rows (reversible; respected by the money RPC + both pickers). No hard delete.
+- **Proof (rolled-back live smoke, nothing persisted):** `dups_active=0 po_dup=0 prod_dup=0 prod_andersons=73 prod_vandiest=4 po_andersons=2 po_vandiest=2 bills_on_dups=0` — exactly the intended consolidation.
+- **Next:** Codex gate (after A5 commits so the review is P2-8-only), then commit.
+
+### 2026-07-04 — A5 Blend-ticket unit conversion — 🧪 BUILT + PARKED, rolled-back smoke CLEAN, Codex R1→R2
+- **The bug:** none of the 3 blend-ticket fulfilment RPCs converted the blend line's rate/quantity unit to the product's inventory (pricing/stock) unit — an oz-on-a-gallons-stocked-product line mis-bills / mis-deducts by up to 128x (same class as the field-app fix 20260630180000; the deep-dive's "single worst correctness bug"). Also the OCR edge fn parsed `ratePerAcre` then **discarded** it → rate silently NULL.
+- **Blast radius: ZERO** — blend_tickets / blend_ticket_products / blend invoices are all **0 rows live** (2026-07-04). Pure forward-looking, pre-season fix.
+- **Built** (parked mig `20260704120000_a5_blend_ticket_unit_conversion.sql`, DB-only re-emit of all 3 RPCs + coupled edge-fn edit, deploy PARKED):
+  - `create_invoice_from_blend_ticket` — bill `rate*acres` **converted** rate→inventory unit via `field_app_priced_quantity`; pre-validate + **refuse** billable lines with no rate (`BLEND_TICKET_ZERO_RATE`) or unconvertible unit (`BLEND_TICKET_UNIT_UNCONVERTIBLE`).
+  - `create_order_from_blend_ticket` — convert stored `quantity` (in its unit) → inventory unit before pricing, prebook, and the inventory txn.
+  - `create_application_record_from_blend_ticket` — convert `quantity` → inventory unit before the stock deduction (the inventory-corruption side of the class).
+  - Every unit is run through `normalize_rate_unit()` (strips /ac, maps aliases) before the helper; the conversion is a NO-OP when units already match. Displayed unit keeps original casing.
+  - Edge fn `process-blend-ticket` now persists the OCR rate NUMBER (parses fractions: `1/2 pt/ac`→0.5) but **NOT** a rate unit (OCR unit is the total's, not the per-acre's → RPC falls back to product.rate_unit; office confirms).
+- **Codex (gpt-5.5) push-gate: R1 → R2 → RESOLVED.** R1 = 3 findings (all real, all fixed): edge fn saved the total-product unit as the rate unit → dropped; `1/2`→`12` fraction bug → proper parse; helper vocabulary narrower than saved units → wrap `normalize_rate_unit`. R2 = 1 P1: even a *unitless* OCR rate is a footgun (RPC falls back to product.rate_unit, but the review UI shows the unit blank → could bill in a stale/wrong unit). **Resolution:** OCR can't reliably supply a per-acre unit, so the edge fn now persists NO OCR rate at all — **fully reverted to origin (byte-identical), making A5 migration-only.** The office enters rate + unit at review; the RPC's ZERO_RATE/UNCONVERTIBLE guards refuse anything not safely billable (which already fixes the old silent-$0 drop). R2's migration verdict was clean; reverting the sole flagged file leaves the R2-clean migration.
+- **Proof (rolled-back live smoke, nothing persisted):** `ov_inv/ord/app=1` (single overloads); `err_inv/ord/app=0` (plpgsql_check clean); `inv/ord/app_norm=1` (normalize wired in all 3); math `c_ozac_gal=1.0 c_ptac_gallons=0.25 c_ident_Gal=5` (oz/ac & gallons now CONVERT vs previously refused).
+- **⚠ APPLY-TIME (owner-gated):** all 3 re-emits apply together (one migration; NO edge-fn deploy). **OWNER-CONFIRM:** the invoice RPC now REFUSES a blend ticket with a rateless/unconvertible billable line (mirrors field-app's existing hard-block) — confirm hard-refuse vs warn before apply. **Gold-standard functional run** (seed an `[E2E]` ticket → invoke each RPC via jwt-claims) belongs at the apply gate.
 
 ### 2026-07-03 — 🚀 APPLY GATE: P2-5b per-acre unit-fix APPLIED LIVE (Mason OK'd "apply it now")
 - **Pre-apply grounding:** re-verified live `calculate_prices_from_margin` still 1 overload with the OLD binding (no parallel drift), helper+trigB absent, migration name free. Live head was `20260704003641` (Layer2).
