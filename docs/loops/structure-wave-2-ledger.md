@@ -25,8 +25,8 @@ each item Codex-gated (≤3 rounds) before commit.
 | P2-5 | Surface per-acre tier pricing in QuoteBuilder | **frontend-only (no mig)** | 🚀 **DEPLOYED TO PROD 2026-07-03** — catalog $/acre in product picker, RECOMPUTED correctly (stored `tierN_price_per_acre` cols garbage: ~43% >$500/ac, up to $16k — NOT used); main @`a1a432f9`, Vercel `dpl_DkBR2H45fjJbuSVb8Jsd5zcfrxsD` READY. **⚠ owner follow-up: retire/fix the broken cols+trigger** |
 | P2-5b | Per-acre columns unit-fix + recompute (owner: KEEP + fix, not retire) | mig `20260702190000` (live v20260704031557) | 🚀 **APPLIED LIVE + DEPLOYED 2026-07-04** — Mason OK'd; verified (Pramitol 16,373→319.80; over-$500 242→0; live trigger proof); Codex R2 CLEAN + 3 reviewers 0-blocker; **synced to main `7cc3480b`, Vercel READY** |
 | A5 | Blend unit conversion (3 RPCs, migration-only) | parked mig `20260704120000` | ✅ **built + parked · smoke CLEAN · Codex R2 resolved** (edge-fn reverted → migration-only) · committed |
-| P2-8 | Vendor master consolidation | parked mig `20260704130000` | 🧪 **built + parked · rolled-back smoke CLEAN** (dups→0 active; products 73/4, POs 2/2 consolidated) · Codex pending |
-| A9 | Month-end catch-up | parked mig + frontend | ⬜ not started |
+| P2-8 | Vendor master consolidation | parked mig `20260704130000` | ✅ **built + parked · smoke CLEAN · Codex R2 CLEAN** (R1: canonical-existence guard) · committed |
+| A9 | Month-end catch-up | parked mig `20260704140000` + MonthEndClose picker | 🧪 **built + parked · seed smoke CLEAN · frontend typecheck + 4 render tests pass** · Codex pending |
 | WaveB | Units Phase 1 (src/lib/units.ts + dropdowns) | parked migs + frontend | ⬜ not started |
 
 Legend: ⬜ not started · 🔨 in progress · 🧪 built, proving · 🔍 Codex round N · ✅ done (parked, Codex-clean, committed) · ⏸ parked-with-spec (owner input) · ❌ dropped
@@ -54,12 +54,21 @@ Legend: ⬜ not started · 🔨 in progress · 🧪 built, proving · 🔍 Codex
 ## Cycle log
 (newest first — one entry per item as it completes)
 
-### 2026-07-04 — P2-8 Vendor master consolidation — 🧪 BUILT + PARKED, rolled-back smoke CLEAN, Codex pending
+### 2026-07-04 — A9 Month-end catch-up — 🧪 BUILT + PARKED, seed smoke CLEAN + frontend render-tested, Codex pending
+- **The gap:** only ONE `accounting_periods` row exists live (Jan 2026, open) and `MonthEndClose.tsx` is hard-locked to the *current* calendar month, so the admin can't see or close any prior month.
+- **Grounded live:** `close_accounting_period(period_end)` UPSERTS on `(period_start, period_end)` (creates the row closed if missing); `check_period_open(date)` only raises on a *closed* period — it ignores 'open'/missing — so seeding 'open' rows has **zero enforcement/financial impact** (pure visibility). Idempotency across month-switching is safe (key resets on success; failures never persist it).
+- **Built** — two parts:
+  - **Seed migration** `20260704140000_a9_month_end_seed_periods.sql` (parked): INSERT 'open' periods for the current season's elapsed months (Oct 2025→Jun 2026), `ON CONFLICT DO NOTHING` (Jan skipped). Owner-confirm the range (cosmetic only).
+  - **Frontend** `MonthEndClose.tsx`: month + year picker (generalized `getPeriodForMonth`), everything keys off the existing `current` var so summary/close/status follow the selection; `isFuturePeriod` guard disables closing a not-yet-started month (both button + `handleClose`); periods-list limit 12→36 to cover the picker range.
+- **Proof:** seed rolled-back smoke `total=9 open=9 closed=0 in_range=9`; frontend `npm run typecheck` clean + **MonthEndClose.test.tsx 4/4 pass** (page + picker render). Full click-interaction is auth/dev-server-gated (loop norm for frontend items).
+- **Next:** Codex gate (seed + frontend), then commit.
+
+### 2026-07-04 — P2-8 Vendor master consolidation — 🧪 BUILT + PARKED, rolled-back smoke CLEAN, Codex R1 (canonical guard) → R2
 - **The bug:** 2 vendors are duplicated in the master with spelling variants — "The Anderson's"/"The Andersons", "Van Deist Supply"/"Van Diest Supply" — splitting bills/POs/products across both and risking `create_vendor_bill`'s VENDOR_PO_MISMATCH.
 - **Grounded live:** only FK to `vendors` is `vendor_bills.vendor_id` (vendor_payments→vendor_bills); **0 bills on the dups**; free-text `vendor` on purchase_orders (2 Anderson's + 1 Van Deist) + products (71 Anderson's + 1 Van Deist). Both UI read paths + `create_vendor_bill` already filter `deleted_at IS NULL`.
 - **Built** (parked mig `20260704130000_p2_8_vendor_master_consolidation.sql`, data-only, no schema change): (1) repoint vendor_bills off dups (defensive no-op), (2) normalize the free-text `vendor` strings on purchase_orders + products to canonical, (3) **soft-delete** the 2 dup master rows (reversible; respected by the money RPC + both pickers). No hard delete.
-- **Proof (rolled-back live smoke, nothing persisted):** `dups_active=0 po_dup=0 prod_dup=0 prod_andersons=73 prod_vandiest=4 po_andersons=2 po_vandiest=2 bills_on_dups=0` — exactly the intended consolidation.
-- **Next:** Codex gate (after A5 commits so the review is P2-8-only), then commit.
+- **Proof (rolled-back live smoke, nothing persisted):** `dups_active=0 po_dup=0 prod_dup=0 prod_andersons=73 prod_vandiest=4 po_andersons=2 po_vandiest=2 bills_on_dups=0` — exactly the intended consolidation (identical before/after the R1 hardening).
+- **Codex R1 → R2 CLEAN.** R1 [P2]: on a DB where a canonical row is missing/soft-deleted, the original would rename strings + soft-delete the dup anyway → products/POs pointing at a spelling with no active master. **Fixed:** every op (repoint / rename / soft-delete) is gated on `JOIN vendors c ON c.name=canon_name AND c.deleted_at IS NULL`, so a pair with no active canonical is skipped entirely. Re-smoke identical. R2 CLEAN.
 
 ### 2026-07-04 — A5 Blend-ticket unit conversion — 🧪 BUILT + PARKED, rolled-back smoke CLEAN, Codex R1→R2
 - **The bug:** none of the 3 blend-ticket fulfilment RPCs converted the blend line's rate/quantity unit to the product's inventory (pricing/stock) unit — an oz-on-a-gallons-stocked-product line mis-bills / mis-deducts by up to 128x (same class as the field-app fix 20260630180000; the deep-dive's "single worst correctness bug"). Also the OCR edge fn parsed `ratePerAcre` then **discarded** it → rate silently NULL.
