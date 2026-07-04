@@ -40,6 +40,7 @@ import { Sentry } from '../lib/sentry';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { logActivity } from '../lib/activityLogger';
 import { formatUSD, formatCents } from '../lib/money';
+import { catalogPricePerAcre } from '../lib/quoteCalc';
 import { notifyLargeOrder, notifyCreditLimitExceeded } from '../lib/notificationTriggers';
 import { sendOrderConfirmedEmail } from '../lib/orderConfirmedEmail';
 import { trackBusinessEvent } from '../lib/metrics';
@@ -2978,7 +2979,12 @@ export default function QuoteBuilder() {
                 No products found
               </p>
             ) : (
-              filteredProducts.map((p) => (
+              filteredProducts.map((p) => {
+                // P2-5: catalog $/acre at this tier, computed correctly from the
+                // product's own rate + units (NOT the broken tierN_price_per_acre
+                // columns) — matches what the line will show once added.
+                const perAcre = catalogPricePerAcre(p, tier, unitConversions);
+                return (
                 <button
                   key={p.id}
                   onClick={() => {
@@ -3007,9 +3013,15 @@ export default function QuoteBuilder() {
                     <p className="text-xs text-gray-400">
                       T{tier} price
                     </p>
+                    {perAcre != null && (
+                      <p className="text-xs font-mono text-crx-green" title={`Approx. $/acre at tier ${tier}, applied at this product's standard rate`}>
+                        {fmt(perAcre)}/ac
+                      </p>
+                    )}
                   </div>
                 </button>
-              ))
+                );
+              })
             )}
           </div>
         </div>

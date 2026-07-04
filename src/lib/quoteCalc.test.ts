@@ -3,6 +3,7 @@ import {
   getTierPrice,
   getConversionFactor,
   recalcItem,
+  catalogPricePerAcre,
   computeQuoteTotals,
   validateCommissionSplits,
   convertToGlLb,
@@ -652,5 +653,42 @@ describe('convertToGlLb', () => {
   it('handles zero totalApplied', () => {
     expect(convertToGlLb(0, 'QT', 'liquid')).toEqual({ value: 0, unit: 'GL' });
     expect(convertToGlLb(0, 'OZ', 'dry')).toEqual({ value: 0, unit: 'LB' });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// catalogPricePerAcre (P2-5 — product-picker per-acre reference)
+// ---------------------------------------------------------------------------
+describe('catalogPricePerAcre', () => {
+  // 64 fl oz/acre on a per-Gallon product priced $20/gal → 0.5 gal/ac × $20 = $10/ac.
+  const perAcreProduct = makeProduct({
+    inventory_unit: 'Gallon', rate_per_acre: 64, rate_unit: 'fl oz',
+    tier1_price: 20, tier2_price: 18, tier3_price: 15,
+  });
+
+  it('computes the per-acre from the product\'s own rate + units (with unit conversion)', () => {
+    expect(catalogPricePerAcre(perAcreProduct, 1, conversions)).toBe(10);   // 20 × 64/128
+    expect(catalogPricePerAcre(perAcreProduct, 3, conversions)).toBe(7.5);  // 15 × 0.5
+  });
+
+  it('MATCHES recalcItem\'s line $/acre when a line uses the product\'s default rate', () => {
+    const line = recalcItem(
+      { calc_mode: 'rate_acres', actual_rate: 64, rate_unit: 'fl oz', acres: 100 } as unknown as CalcItem,
+      perAcreProduct, 1, conversions,
+    );
+    expect(catalogPricePerAcre(perAcreProduct, 1, conversions)).toBe(line.price_per_acre);
+  });
+
+  it('IGNORES the broken trigger-maintained tierN_price_per_acre columns', () => {
+    const withGarbageColumn = makeProduct({
+      inventory_unit: 'Gallon', rate_per_acre: 64, rate_unit: 'fl oz', tier1_price: 20,
+      tier1_price_per_acre: 16373.76, // the kind of garbage the trigger stores
+    });
+    expect(catalogPricePerAcre(withGarbageColumn, 1, conversions)).toBe(10); // recomputed, not 16373.76
+  });
+
+  it('returns null when the product has no positive rate_per_acre', () => {
+    expect(catalogPricePerAcre(makeProduct({ rate_per_acre: null }), 1, conversions)).toBeNull();
+    expect(catalogPricePerAcre(makeProduct({ rate_per_acre: 0 }), 1, conversions)).toBeNull();
   });
 });
