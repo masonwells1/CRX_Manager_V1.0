@@ -56,13 +56,20 @@
       "mcp__50e15046-cf2c-49da-b8df-ceef27768f63__generate_typescript_types",
       "mcp__50e15046-cf2c-49da-b8df-ceef27768f63__search_docs",
       "mcp__50e15046-cf2c-49da-b8df-ceef27768f63__execute_sql",
+      "mcp__50e15046-cf2c-49da-b8df-ceef27768f63__apply_migration",
+      "mcp__50e15046-cf2c-49da-b8df-ceef27768f63__deploy_edge_function",
+      "mcp__supabase__execute_sql",
+      "mcp__supabase__apply_migration",
+      "mcp__supabase__deploy_edge_function",
+      "mcp__supabase__list_migrations",
+      "mcp__claude_ai_Supabase__execute_sql",
+      "mcp__claude_ai_Supabase__apply_migration",
+      "mcp__claude_ai_Supabase__deploy_edge_function",
       "Bash(git push:*)",
       "Workflow",
       "ScheduleWakeup"
     ],
-    "ask": [
-      "mcp__50e15046-cf2c-49da-b8df-ceef27768f63__deploy_edge_function"
-    ],
+    "ask": [],
     "deny": [
       "Bash(git push --force:*)",
       "Bash(git push --force-with-lease:*)",
