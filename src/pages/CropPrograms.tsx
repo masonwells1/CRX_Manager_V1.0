@@ -24,7 +24,8 @@ import { Sentry } from '../lib/sentry';
 import { logActivity } from '../lib/activityLogger';
 import HelpTip from '../components/ui/HelpTip';
 import { computeSeason } from '../utils/season';
-import type { Product } from '../types';
+import { unitOptionsForForm, isKnownUnit } from '../lib/units';
+import type { Product, UnitConversion } from '../types';
 
 interface ProgramItem {
   product_id: string;
@@ -66,6 +67,14 @@ export default function CropPrograms() {
   const [editingProgram, setEditingProgram] = useState<CropProgram | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+  const [unitConversions, setUnitConversions] = useState<UnitConversion[]>([]);
+
+  useEffect(() => {
+    supabase.from('unit_conversions').select('*').order('unit').then(({ data, error }) => {
+      if (error) { Sentry.captureException(error, { tags: { source: 'fetch', action: 'load_unit_conversions' } }); return; }
+      setUnitConversions((data || []) as UnitConversion[]);
+    });
+  }, []);
 
   // Form state
   const [formName, setFormName] = useState('');
@@ -153,7 +162,7 @@ export default function CropPrograms() {
     setFormDesc('');
     setFormCrop('Corn');
     setFormSeason(SEASONS[1]);
-    setFormItems([{ product_id: '', product_name: '', rate: 0, rate_unit: 'oz/acre', section_name: 'Pre-Emerge', notes: '' }]);
+    setFormItems([{ product_id: '', product_name: '', rate: 0, rate_unit: 'oz', section_name: 'Pre-Emerge', notes: '' }]);
     setModalOpen(true);
   };
 
@@ -189,7 +198,7 @@ export default function CropPrograms() {
   };
 
   const addItem = () => {
-    setFormItems([...formItems, { product_id: '', product_name: '', rate: 0, rate_unit: 'oz/acre', section_name: 'Pre-Emerge', notes: '' }]);
+    setFormItems([...formItems, { product_id: '', product_name: '', rate: 0, rate_unit: 'oz', section_name: 'Pre-Emerge', notes: '' }]);
   };
 
   const removeItem = (idx: number) => {
@@ -505,18 +514,20 @@ export default function CropPrograms() {
                       />
                     </div>
                     <div className="col-span-1 sm:col-span-2">
-                      <label className="block text-xs font-medium text-secondary mb-1">Unit</label>
+                      <label className="block text-xs font-medium text-secondary mb-1">Unit <span className="text-gray-400 font-normal">(per acre)</span></label>
                       <select
-                        value={item.rate_unit}
+                        value={item.rate_unit || ''}
                         onChange={(e) => updateItem(idx, 'rate_unit', e.target.value)}
                         className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg"
                       >
-                        <option value="oz/acre">oz/acre</option>
-                        <option value="pt/acre">pt/acre</option>
-                        <option value="qt/acre">qt/acre</option>
-                        <option value="gal/acre">gal/acre</option>
-                        <option value="lb/acre">lb/acre</option>
-                        <option value="units/acre">units/acre</option>
+                        <option value="">-- Select --</option>
+                        {/* WaveB: canonical bare units (match the product master + stored data); the rate is per-acre. Grandfather a legacy value not in the list. */}
+                        {item.rate_unit && !isKnownUnit(unitConversions, null, item.rate_unit) && (
+                          <option value={item.rate_unit}>{item.rate_unit} (existing)</option>
+                        )}
+                        {unitOptionsForForm(unitConversions, null).map((uc) => (
+                          <option key={uc.id} value={uc.unit}>{uc.unit}</option>
+                        ))}
                       </select>
                     </div>
                     <div className="col-span-2 sm:col-span-1 flex justify-center sm:justify-center">
