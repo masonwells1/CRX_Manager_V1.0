@@ -93,6 +93,21 @@ const lines = siblings.map((s) => {
 function listDir(dir) {
   try { return readdirSync(dir); } catch { return []; }
 }
+// Depth-limited recursive file listing — parked drafts live in NESTED audit
+// folders (docs/audits/<hunt>/PARKED-*.sql); a flat scan here would contradict
+// /fleet's recursive count (Codex 2026-07-05 P3).
+function listNamesRecursive(dir, depth = 4) {
+  if (depth < 0) return [];
+  let ents = [];
+  try { ents = readdirSync(dir, { withFileTypes: true }); } catch { return []; }
+  let out = [];
+  for (const ent of ents) {
+    if (ent.isDirectory()) out = out.concat(listNamesRecursive(path.join(dir, ent.name), depth - 1));
+    else out.push(ent.name);
+  }
+  return out;
+}
+
 let fleetLine = "";
 try {
   const ledgerNames = new Set();
@@ -102,10 +117,10 @@ try {
     for (const f of listDir(path.join(e.path, "docs", "loops"))) {
       if (isLedgerDoc(f)) ledgerNames.add(f.toLowerCase());
     }
-    for (const f of listDir(path.join(e.path, "scripts", ".staging-migrations"))) {
+    for (const f of listNamesRecursive(path.join(e.path, "scripts", ".staging-migrations"))) {
       if (isParkedMigrationFile(f)) parkedNames.add(f.toLowerCase());
     }
-    for (const f of listDir(path.join(e.path, "docs", "audits"))) {
+    for (const f of listNamesRecursive(path.join(e.path, "docs", "audits"))) {
       if (isDraftSqlName(f)) parkedNames.add(f.toLowerCase());
     }
   }
