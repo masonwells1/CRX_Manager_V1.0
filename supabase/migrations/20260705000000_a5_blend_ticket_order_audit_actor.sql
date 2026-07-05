@@ -1,6 +1,6 @@
 -- ============================================================================
 -- A5 follow-up — create_order_from_blend_ticket: audit-consistency + actor gate
--- PARKED: owner-gated. Do NOT apply without Mason's explicit OK.
+-- APPLIED LIVE 2026-07-05 (live version v20260705133836) on Mason's explicit OK.
 -- ----------------------------------------------------------------------------
 -- Re-emits create_order_from_blend_ticket (live now as v20260704161532, from
 -- 20260704120000_a5_blend_ticket_unit_conversion.sql) with EXACTLY TWO surgical
@@ -33,7 +33,11 @@
 -- BLAST RADIUS: blend_tickets / blend_ticket_products / blend_ticket_to_order_items
 --   are EMPTY live (0/0/0 on 2026-07-04) — zero historical-data risk.
 --
--- PROOF: see the loop ledger cycle-log entry. Codex verdict: <pending>.
+-- PROOF: see the loop ledger cycle-log entry. rls/drift/compliance reviewers +
+--   Codex (uncommitted + --base main) all clean; post-apply sweeps show the fn
+--   dropped OUT of ungated-secdef-mutators. Byte-exact apply-guard proof (queryHash
+--   f772bbcf). Verified live via rolled-back [E2E] E2E (256 oz -> 2 gal in audit +
+--   order + inventory; forged -> ACTOR_MISMATCH; no-auth -> AUTH_REQUIRED).
 -- ============================================================================
 
 CREATE OR REPLACE FUNCTION public.create_order_from_blend_ticket(p_blend_ticket_id uuid, p_order_number text, p_order_date date DEFAULT CURRENT_DATE, p_notes text DEFAULT NULL::text, p_performed_by uuid DEFAULT auth.uid(), p_idempotency_key text DEFAULT NULL::text)
