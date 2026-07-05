@@ -1,0 +1,41 @@
+-- ============================================================================
+-- Security hardening — revoke direct EXECUTE on recompute_job_applied_acres
+-- PARKED / Do NOT apply until Mason's explicit OK (live migration = hard gate).
+-- ----------------------------------------------------------------------------
+-- WHAT: recompute_job_applied_acres(p_job_id uuid) is a SECURITY DEFINER helper
+--   that recalculates one job's total applied acres by SUMMing its child records
+--   (job_applied_records / job_applied_record_fields). The db-invariant "ungated-
+--   secdef-mutators" sweep flags it: SECURITY DEFINER + it writes (UPDATE jobs)
+--   + no in-body auth.uid()/role gate + the `authenticated` role holds EXECUTE.
+--
+-- WHY IT IS BENIGN TODAY (context, not an excuse to skip the fix):
+--   * It is invoked ONLY by two SECURITY DEFINER triggers, both owned by
+--     `postgres`, which run as the owner:
+--       - trg_jarf_recompute            (trigger jarf_recompute_aiud on
+--                                         job_applied_record_fields)
+--       - trg_job_applied_record_recompute (trigger job_applied_record_recompute_ad
+--                                         on job_applied_records)
+--   * anon does NOT hold EXECUTE (verified live 2026-07-05); no PUBLIC grant.
+--   * No frontend .rpc() caller — the only src reference is a mirror-logic comment
+--     in src/components/jobs/appliedRecords.ts.
+--   * It is recompute-only: it writes the SUM of existing child rows, takes no
+--     forgeable business input, so a direct authenticated call could not corrupt
+--     or forge anything (worst case: recompute a job to its already-correct total).
+--
+-- WHAT THIS MIGRATION DOES: remove the direct-call door that nothing legitimately
+--   uses. Revoking `authenticated` EXECUTE drops the function out of the sweep
+--   (defense-in-depth) WITHOUT touching the trigger path: a SECURITY DEFINER
+--   function runs with its OWNER's privileges, and the owner (postgres) implicitly
+--   retains EXECUTE, so both triggers keep working. service_role (trusted backend,
+--   never in the frontend) keeps EXECUTE. anon/PUBLIC are revoked too for explicit
+--   intent (no-ops — neither holds a grant).
+--
+-- BLAST RADIUS: job_applied_records / job_applied_record_fields are EMPTY live
+--   (0/0 rows on 2026-07-05) — the function is not even invoked in production yet.
+--
+-- PROOF: rolled-back live smoke asserts authenticated EXECUTE -> false while owner
+--   (postgres) + service_role EXECUTE stay true (trigger path intact); anon stays
+--   false. Idempotent: REVOKE of an absent grant is a no-op, safe to re-run.
+-- ============================================================================
+
+REVOKE EXECUTE ON FUNCTION public.recompute_job_applied_acres(uuid) FROM authenticated, anon, PUBLIC;
