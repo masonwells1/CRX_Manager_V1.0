@@ -138,7 +138,9 @@ requireIncludes(claudeSkillPath, claudeSkill, "prefer the `claude-review` skill 
 requireIncludes(claudeHookPath, claudeHook, "CRX Codex-to-Claude Handoff/Review reminder:");
 requireIncludes(claudeHookPath, claudeHook, "claude-review.md");
 requireIncludes(claudeHookPath, claudeHook, "codex-to-claude-handoff.md");
-requireIncludes(claudeHookPath, claudeHook, "Do not push, deploy, apply live migrations, delete data, or commit");
+// 2026-07-05: the hook now injects the single canonical push policy from prompt-source-lib
+requireIncludes(claudeHookPath, claudeHook, "PUSH_POLICY");
+requireIncludes(claudeHookPath, claudeHook, "prompt-source-lib");
 requireIncludes(claudeHookTestPath, claudeHookTest, "let Claude review this");
 requireIncludes(claudeHookTestPath, claudeHookTest, "have Claude look at this");
 requireIncludes(claudeHookTestPath, claudeHookTest, "ask Claude to check this");

@@ -11,10 +11,13 @@
 // It is silent when there are no sibling worktrees (a solo session), so it never nags.
 // Fail-open: any error → emit nothing.
 
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { execFileSync, spawnSync } from "node:child_process";
 import path from "node:path";
-import { parseWorktreePorcelain, siblingsOf, normPath } from "./worktree-awareness-lib.mjs";
+import {
+  parseWorktreePorcelain, siblingsOf, normPath,
+  mergedLabelFromStatus, isLedgerDoc, isParkedMigrationFile, isDraftSqlName, fleetSummaryLine,
+} from "./worktree-awareness-lib.mjs";
 
 function emit(extra) {
   if (extra) {
@@ -58,13 +61,11 @@ let hasOriginMain = false;
 try { git(["rev-parse", "--verify", "--quiet", "origin/main"]); hasOriginMain = true; } catch { hasOriginMain = false; }
 
 function mergedLabel(sha) {
-  if (!hasOriginMain || !sha) return "merge-state unknown";
+  if (!hasOriginMain || !sha) return mergedLabelFromStatus(null, false);
   const r = spawnSync("git", ["merge-base", "--is-ancestor", sha, "origin/main"], {
     encoding: "utf8", timeout: 5000, cwd: projectDir,
   });
-  if (r.status === 0) return "MERGED into origin/main";
-  if (r.status === 1) return "UNMERGED (not in origin/main)";
-  return "merge-state unknown";
+  return mergedLabelFromStatus(r.status, true);
 }
 
 function dirtyCount(wtPath) {
@@ -85,10 +86,37 @@ const lines = siblings.map((s) => {
   return `  • ${s.path}\n      branch: ${branch} — ${merged} — ${dirty}`;
 });
 
+// Cheap fleet summary: count loop ledgers + parked migrations across ALL worktrees
+// (current included), deduped by filename — a tracked ledger exists in every checkout
+// and must count once. Pure filesystem reads only (no extra git calls) so the hook
+// stays fast; fail-open — any error just drops the line.
+function listDir(dir) {
+  try { return readdirSync(dir); } catch { return []; }
+}
+let fleetLine = "";
+try {
+  const ledgerNames = new Set();
+  const parkedNames = new Set();
+  for (const e of entries) {
+    if (!e.path || !existsSync(e.path)) continue;
+    for (const f of listDir(path.join(e.path, "docs", "loops"))) {
+      if (isLedgerDoc(f)) ledgerNames.add(f.toLowerCase());
+    }
+    for (const f of listDir(path.join(e.path, "scripts", ".staging-migrations"))) {
+      if (isParkedMigrationFile(f)) parkedNames.add(f.toLowerCase());
+    }
+    for (const f of listDir(path.join(e.path, "docs", "audits"))) {
+      if (isDraftSqlName(f)) parkedNames.add(f.toLowerCase());
+    }
+  }
+  fleetLine = `\n\n${fleetSummaryLine(ledgerNames.size, parkedNames.size)}`;
+} catch { fleetLine = ""; }
+
 emit(
   `═══ PARALLEL WORK DETECTED ═══\n\n` +
   `You are NOT the only session. Mason runs concurrent sessions/worktrees. ${siblings.length} other worktree(s):\n\n` +
   lines.join("\n") +
+  fleetLine +
   `\n\nBEFORE building a feature or claiming a fix "done / already shipped / already fixed":\n` +
   `  1. Confirm your task isn't already being handled in one of these (git log that branch).\n` +
   `  2. Verify live ship-state — mcp list_migrations + git ancestry — don't trust this session's picture alone.\n` +

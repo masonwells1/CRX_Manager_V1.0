@@ -1,9 +1,28 @@
 // Pure helpers for codex-push-guard.mjs.
 
 // Does the git command push (to main)? We fire on any `git push`; the hook then
-// checks that HEAD is actually on main before doing anything.
+// checks whether the push actually TARGETS main before doing anything.
 export function isGitPush(cmd) {
   return /\bgit\s+push\b/.test(String(cmd || ""));
+}
+
+// Does this push land on main? Covers the refspec forms that used to bypass the
+// gate: `git push origin HEAD:main` / `feature:main` from any branch, bare
+// `git push origin main`, and plain `git push` / `push origin HEAD` while on main.
+export function pushTargetsMain(cmd, currentBranch) {
+  const c = String(cmd || "");
+  const m = c.match(/\bgit\s+push\b([^;&|]*)/);
+  if (!m) return false;
+  const args = m[1].trim().split(/\s+/).filter(Boolean).filter((a) => !a.startsWith("-"));
+  const refspecs = args.slice(1); // args[0] = remote, if present
+  if (refspecs.length === 0) return currentBranch === "main";
+  for (const rs of refspecs) {
+    const hasColon = rs.includes(":");
+    const dst = (hasColon ? rs.split(":").pop() : rs).replace(/^refs\/heads\//, "");
+    if (dst === "main") return true;
+    if (!hasColon && dst === "HEAD" && currentBranch === "main") return true;
+  }
+  return false;
 }
 
 // A changed file is "risky" (needs an independent Codex verdict) when it touches

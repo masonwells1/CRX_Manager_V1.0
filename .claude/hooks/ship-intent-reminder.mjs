@@ -5,15 +5,17 @@
 // deterministically reminds Claude to drive the work through the /ship pipeline —
 // the "hard scaffolding" version of the CLAUDE.md auto-trigger, so it fires reliably.
 //
-// SAFETY: this NEVER authorizes a prod action. /ship does everything and STOPS before
-// any git push / Vercel deploy / live-migration apply for Mason's explicit OK. The
-// reminder restates that gate so "push" can't be misread as "deploy to prod now."
+// SAFETY: this NEVER authorizes a prod action beyond the recorded push policy —
+// it injects the single canonical PUSH_POLICY (auto-push once green; hard gates =
+// live migration / edge deploy / data deletion stay Mason-only).
 //
 // It only injects context (additionalContext) — it cannot force a tool call, and a
 // false-positive is harmless (the reminder itself says: if this is a question or a
-// trivial one-liner, ignore it).
+// trivial one-liner, ignore it). Machine-generated prompts (task notifications,
+// system reminders) are skipped entirely — only things Mason typed count.
 
 import { readFileSync } from "node:fs";
+import { isMachineGenerated, PUSH_POLICY } from "./prompt-source-lib.mjs";
 
 function emit(extra) {
   if (extra) {
@@ -34,8 +36,9 @@ try {
   emit();
 }
 
-const prompt = String(payload?.prompt || "").toLowerCase();
-if (!prompt) emit();
+const rawPrompt = String(payload?.prompt || "");
+if (!rawPrompt || isMachineGenerated(rawPrompt)) emit();
+const prompt = rawPrompt.toLowerCase();
 
 // Intent to get real work done / ship it / push it. Broad on purpose — Mason talks in
 // plain English and the injected reminder tells Claude to ignore it for questions.
@@ -66,7 +69,7 @@ emit([
   "  -> implement -> Step 2.5 prove it actually RUNS (not just 'tests pass') -> scoped review fan-out + fix (hard cap 3 rounds) -> migration/Codex gates.",
   "Tell Mason in ONE line you're running it through /ship; do NOT make him type the command.",
   "",
-  "PUSH POLICY: Mason authorized AUTO-PUSH (2026-06-16) — push regular code to main once the pipeline is green (review clean + tests + the pre-push hook's typecheck/build), no approval click; Vercel rollback is one click. STILL stop for Mason's explicit OK before applying a live migration, deploying an edge function, or deleting data — those can corrupt data / down the live app and are never automatic.",
+  PUSH_POLICY,
   "",
   "If this message is just a question, a discussion, or a genuinely trivial one-line change, IGNORE this reminder (don't spin up the heavy pipeline).",
 ].join("\n"));

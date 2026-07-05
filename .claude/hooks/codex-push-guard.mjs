@@ -13,7 +13,7 @@
 import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
-import { isGitPush, riskyFiles, proofValid } from "./codex-push-lib.mjs";
+import { isGitPush, pushTargetsMain, riskyFiles, proofValid } from "./codex-push-lib.mjs";
 
 function passthrough() { process.exit(0); }               // emit nothing → normal flow (git push is allow-listed)
 function deny(reason) {
@@ -32,10 +32,11 @@ function git(args) {
   return execFileSync("git", args, { encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"], cwd: projectDir }).trim();
 }
 
-// Only gate pushes FROM main (prod). Feature-branch pushes are fine.
+// Only gate pushes that LAND ON main (prod) — including HEAD:main / feature:main
+// refspecs from any branch. Pushes to other branches are fine.
 let branch = "";
 try { branch = git(["rev-parse", "--abbrev-ref", "HEAD"]); } catch { passthrough(); }
-if (branch !== "main") passthrough();
+if (!pushTargetsMain(cmd, branch)) passthrough();
 
 // Need origin/main to diff against; if absent, fail open.
 try { git(["rev-parse", "--verify", "--quiet", "origin/main"]); } catch { passthrough(); }

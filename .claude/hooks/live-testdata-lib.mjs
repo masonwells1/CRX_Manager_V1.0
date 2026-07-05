@@ -1,6 +1,12 @@
 // Pure classifier for live-testdata-guard.mjs. Decides whether an execute_sql
 // query is a real-business-data write that should be blocked (unless it's clearly
 // fake [E2E] data or Mason has authorized real data this session).
+//
+// Also closes the execute_sql side door around the migration gauntlet: raw DDL,
+// GRANT/REVOKE, TRUNCATE, financial-amount UPDATEs, and any hand-written touch of
+// financial_audit_log are blocked here so live schema/money changes can only travel
+// the reviewed apply_migration path. Rolled-back smoke batches (BEGIN;...;ROLLBACK;
+// with no COMMIT) stay allowed — that is the documented safe test pattern.
 
 const BUSINESS_TABLES = [
   "customers", "products", "orders", "order_items", "invoices", "invoice_items",
@@ -19,11 +25,56 @@ const INSERT_RE = new RegExp(`\\binsert\\s+into\\s+(?:public\\.)?"?(${tableAlt(B
 const DELETE_RE = new RegExp(`\\bdelete\\s+from\\s+(?:public\\.)?"?(${tableAlt(FINANCIAL_TABLES)})"?\\b`, "i");
 const CANCEL_VOID_RE = new RegExp(`\\bupdate\\s+(?:public\\.)?"?(${tableAlt(FINANCIAL_TABLES)})"?\\b[\\s\\S]*?\\bset\\b[\\s\\S]*?status\\s*=\\s*'(cancelled|voided)'`, "i");
 
+// Any hand-written touch of the append-only audit log — [E2E] does NOT exempt this.
+const AUDIT_LOG_WRITE_RE = /\b(?:insert\s+into|update|delete\s+from)\s+(?:public\.)?"?financial_audit_log\b/i;
+
+// Statement-anchored DDL (start of batch or after a `;`). `create temp`/`temporary`
+// tables are legitimate scratch space for analysis and stay allowed.
+const DDL_STMT_RE = /(?:^|;)\s*(?:create(?!\s+(?:temp|temporary)\b)(?:\s+or\s+replace)?|alter|drop)\s+\S+/im;
+const GRANT_REVOKE_RE = /(?:^|;)\s*(?:grant|revoke)\b/im;
+const TRUNCATE_RE = /(?:^|;)\s*truncate\b/im;
+
+// Money-ish column assignment (column name on the LEFT of `=`) on a financial table.
+const FIN_UPDATE_RE = new RegExp(`\\bupdate\\s+(?:public\\.)?"?(${tableAlt(FINANCIAL_TABLES)})"?\\b`, "i");
+const MONEY_COL_RE = /\b[a-z_]*(?:cents|amount|total|balance|price|rate|paid)[a-z_]*\s*=/i;
+
 // Returns { block: false } | { block: true, kind, reason }
 export function classifySql(query) {
   const q = String(query || "");
   if (!q) return { block: false };
-  // Clearly-fake test data is always fine.
+
+  // 1. financial_audit_log is append-only, written only by triggers/RPCs — a Hard
+  //    Red Line. No [E2E] exemption; only REAL-DATA-OK (checked by the guard) overrides.
+  if (AUDIT_LOG_WRITE_RE.test(q)) {
+    return {
+      block: true,
+      kind: "audit-log-write",
+      reason: "This writes to financial_audit_log by hand. The audit log is append-only and written ONLY by the database's own triggers/RPCs (Hard Red Line). If a correction is genuinely needed, it is Mason's call — surface the row IDs instead.",
+    };
+  }
+
+  // 2. TRUNCATE has no legitimate execute_sql use against the live DB.
+  if (TRUNCATE_RE.test(q)) {
+    return {
+      block: true,
+      kind: "truncate",
+      reason: "TRUNCATE wipes a live table and is never done via raw SQL here. If data really must be cleared, that is Mason's explicit call via the migration path.",
+    };
+  }
+
+  // 3. Schema changes (DDL, GRANT/REVOKE) must travel the migration gauntlet —
+  //    a rolled-back smoke batch (contains ROLLBACK, no COMMIT) is the one exception.
+  const rolledBack =
+    (/\brollback\b/i.test(q) || q.includes("SMOKE_PASS_ROLLBACK")) && !/\bcommit\b/i.test(q);
+  if (!rolledBack && (DDL_STMT_RE.test(q) || GRANT_REVOKE_RE.test(q))) {
+    return {
+      block: true,
+      kind: "raw-ddl",
+      reason: "This changes the live database schema (or grants) via raw execute_sql, which routes around the entire migration review gauntlet. Put the change in a supabase/migrations/ file and go through apply_migration (with its reviews), or wrap the batch in BEGIN; ... ROLLBACK; if this is a smoke test.",
+    };
+  }
+
+  // 4. Clearly-fake test data is fine for ordinary data writes.
   if (q.includes("[E2E]")) return { block: false };
 
   let m;
@@ -48,6 +99,20 @@ export function classifySql(query) {
       reason: `This cancels/voids a real record in "${m[1]}". Cancelling/voiding live invoices/orders/payments is Mason's job — surface the IDs, don't act. (Override: .claude/session-state/REAL-DATA-OK.)`,
     };
   }
+
+  // 5. Money-amount edits on financial tables (SET clause only, not the WHERE part).
+  if ((m = FIN_UPDATE_RE.exec(q))) {
+    const afterSet = q.slice(m.index).match(/\bset\b([\s\S]*)/i);
+    const setClause = afterSet ? afterSet[1].split(/\bwhere\b/i)[0] : "";
+    if (MONEY_COL_RE.test(setClause)) {
+      return {
+        block: true,
+        kind: "financial-amount-update",
+        reason: `This UPDATEs a money column on the live financial table "${m[1]}" via raw SQL. Real financial amounts change only through the app's RPCs (or Mason's explicit REAL-DATA-OK authorization) — surface the row IDs and the proposed correction instead.`,
+      };
+    }
+  }
+
   return { block: false };
 }
 

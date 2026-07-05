@@ -72,7 +72,8 @@ assert.equal(output.hookSpecificOutput.hookEventName, "UserPromptSubmit");
 assert.match(output.hookSpecificOutput.additionalContext, /Codex-to-Claude Handoff/i);
 assert.match(output.hookSpecificOutput.additionalContext, /claude-review\.md/);
 assert.match(output.hookSpecificOutput.additionalContext, /codex-to-claude-handoff\.md/);
-assert.match(output.hookSpecificOutput.additionalContext, /Do not push, deploy, apply live migrations, delete data, or commit/i);
+assert.match(output.hookSpecificOutput.additionalContext, /HARD GATES that ALWAYS need Mason's explicit OK/i);
+assert.doesNotMatch(output.hookSpecificOutput.additionalContext, /never pushes|do not push.*without.*explicit approval/i);
 
 assert.equal(failures, 0, `${failures} trigger classification failure(s)`);
 console.log(`OK - ${SHOULD_FIRE.length} fire + ${SHOULD_NOT_FIRE.length} no-fire cases passed.`);

@@ -1,0 +1,22 @@
+Show Mason the status of ALL his parallel work at once — every worktree, every loop, every parked migration — so he doesn't have to ask "where are we at?" in each window separately.
+
+Use this when Mason asks anything like: "where are we", "status", "progress", "catch me up", "what's going on across everything", "how's the other work going".
+
+## Steps
+
+1. Run the fleet report:
+   ```
+   node scripts/fleet-status.mjs
+   ```
+   Add `--fetch` only if merge-state freshness matters right now (e.g. Mason just merged something in another window) — it costs one network round-trip; the plain run is faster and usually good enough.
+
+2. If the script fails (git error, missing file), fall back to `git worktree list` + the SessionStart parallel-work snapshot and say plainly that the full report wasn't available.
+
+3. Present it **lead-with-status** style for Mason (no jargon, no wall of raw output):
+   - **Plain status first** — one short paragraph: how many worktrees are active, which ones have unmerged/unfinished work, which are done and merged. Translate: "MERGED into origin/main" = already in the live app's main branch; "changed files" = uncommitted work in progress; a "ledger" = that loop's running logbook.
+   - **ONE recommended next step** — the single most useful thing to do now (e.g. "the StructureFix worktree has finished work that isn't merged yet — I recommend we merge that next"). Not a menu.
+   - **Decisions that need Mason** — each as a question WITH a recommendation (e.g. "2 parked migrations are waiting for your OK to apply live — I recommend we review the per-acre one first because it fixes visible prices. Want me to walk you through it with /parked?"). If the report says "Nothing waiting on you", say exactly that.
+
+4. Remember worktrees churn — this is a snapshot. If Mason then asks to act inside a specific worktree, re-verify it live (`git worktree list`, that branch's log) before claiming anything is done or already shipped there.
+
+This command reads and reports only — it never merges, pushes, applies migrations, or deletes anything.

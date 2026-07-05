@@ -57,7 +57,8 @@ const output = JSON.parse(runHook("run a pair review on this change").stdout);
 assert.equal(output.hookSpecificOutput.hookEventName, "UserPromptSubmit");
 assert.match(output.hookSpecificOutput.additionalContext, /Agent Pair Review/i);
 assert.match(output.hookSpecificOutput.additionalContext, /agent-pair-review\.md/);
-assert.match(output.hookSpecificOutput.additionalContext, /Do not push, deploy, apply live migrations, delete data, or commit/i);
+assert.match(output.hookSpecificOutput.additionalContext, /HARD GATES that ALWAYS need Mason's explicit OK/i);
+assert.doesNotMatch(output.hookSpecificOutput.additionalContext, /never pushes|do not push.*without.*explicit approval/i);
 
 assert.equal(failures, 0, `${failures} trigger classification failure(s)`);
 console.log(`OK - ${SHOULD_FIRE.length} fire + ${SHOULD_NOT_FIRE.length} no-fire cases passed.`);

@@ -3171,3 +3171,22 @@ export interface RefreshWatchdogFlagsResult {
   flags_deleted: number;
   scope: string;
 }
+
+// Data-integrity sentinel (20260704120000): one row per NEW integrity break
+// found by the daily run_data_integrity_sweep() cron. Admin-only read/resolve;
+// rows are inserted only by the SECURITY DEFINER sweep, never by the client.
+export type IntegrityAlertType =
+  | 'negative_inventory'
+  | 'negative_invoice_balance'
+  | 'stale_quote_hold'
+  | 'booking_overdraw';
+
+export interface IntegrityAlert {
+  id: string;
+  alert_type: IntegrityAlertType;
+  entity_table: string;
+  entity_id: string;
+  details: Record<string, unknown>;
+  detected_at: string;
+  resolved_at: string | null;
+}

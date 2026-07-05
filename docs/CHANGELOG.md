@@ -4,6 +4,46 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-05 — Setup overhaul (fix-it-all): closed the execute_sql/refspec/MCP guard bypasses, single-sourced the push policy, machine-content skip on all phrase hooks, registry-freshness enforcement, overnight-arm handshake; NEW: /fleet, /parked, /run-loop, /rollback, /backup-db commands + scripts, incident-rollback + rotate-tokens runbooks, Dependabot; 3 scheduled automations (weekly DB backup, nightly prod watchdog, weekly db-sweeps+janitor); data-integrity sentinel migration 20260704120000 BUILT+PARKED (live rolled-back smoke green) awaiting Mason's apply OK; global settings hardened (prod powers ask outside CRX, dangerous-mode skip removed, filesystem MCP scoped, token rotation runbook for Mason).
+
+Setup overhaul (fix-it-all): closed the execute_sql/refspec/MCP guard bypasses, single-sourced the push policy, machine-content skip on all phrase hooks, registry-freshness enforcement, overnight-arm handshake; NEW: /fleet, /parked, /run-loop, /rollback, /backup-db commands + scripts, incident-rollback + rotate-tokens runbooks, Dependabot; 3 scheduled automations (weekly DB backup, nightly prod watchdog, weekly db-sweeps+janitor); data-integrity sentinel migration 20260704120000 BUILT+PARKED (live rolled-back smoke green) awaiting Mason's apply OK; global settings hardened (prod powers ask outside CRX, dangerous-mode skip removed, filesystem MCP scoped, token rotation runbook for Mason).
+
+- **Commits this session** (git log -15 (fallback — no author-matched commits in the last 12h)):
+  - `491f418d docs(structure-wave2): P2-5b SYNCED TO MAIN + DEPLOYED (7cc3480b, Vercel READY)`
+  - `7cc3480b Merge remote-tracking branch 'origin/main' into fix/structure-wave-2026-07`
+  - `cbe0294a feat(structure-wave2): P2-5b per-acre unit-fix APPLIED LIVE (two-trigger, live v20260704031557)`
+  - `f2904f50 feat(structure-wave2): P2-5b per-acre unit-fix migration BUILT+PARKED (two-trigger, Codex R2 clean)`
+  - `ba6f4a99 feat(inventory): close-a-booking-fulfilled-by-application lifecycle`
+  - `dd076240 docs(structure-wave2): P2-5 DEPLOYED to prod (a1a432f9, Vercel READY)`
+  - `a1a432f9 docs(structure-wave2): P2-5 catalog $/acre picker built + Codex-clean; flag broken per-acre columns`
+  - `5cfa4840 feat(structure-wave2): P2-5 surface CORRECT catalog $/acre in QuoteBuilder product picker`
+  - `3daa1756 docs(structure-wave2): P2-4 DEPLOYED to prod; P2-5 scoping`
+  - `d27919eb docs(structure-wave2): P2-4 Load-Program built + Codex-clean (ledger + CHANGELOG)`
+  - `87e1e719 fix(structure-wave2): P2-4 guard Load Program against double-click (Codex P2)`
+  - `cec27881 fix(structure-wave2): P2-4 price since-deactivated program products correctly (Codex P2)`
+  - `2d950376 fix(structure-wave2): P2-4 normalize "Dry oz" program unit so dry lines reconcile (Codex P1)`
+  - `fdd3e8aa fix(structure-wave2): P2-4 reconcile program rate-unit vs stock-unit to prevent over-billing (Codex P1)`
+  - `74f7f915 feat(structure-wave2): P2-4 wire Crop Programs -> "Load Program" into job chemicals`
+- **Migrations touched** (last 15 commits (fallback)):
+  - `supabase/migrations/20260702190000_per_acre_unit_fix_recompute.sql`
+  - `supabase/migrations/20260703200000_layer2_close_quote_as_applied.sql`
+  - `supabase/migrations/20260702180000_p2_2_retire_dead_objects.sql`
+  - `supabase/migrations/20260703130000_layer2_channel_separation_reserve_fixes.sql`
+  - `supabase/migrations/20260702160000_a8_terms_to_due_date.sql`
+  - `supabase/migrations/20260702161000_a8_aging_basis_unification.sql`
+  - `supabase/migrations/20260702162000_ar_reminder_configurable_threshold.sql`
+  - `supabase/migrations/20260702170000_p2_1_category_two_axis_remap.sql`
+  - `supabase/migrations/20260703120000_layer2_quote_job_reservation_coordination.sql`
+  - `supabase/migrations/20260702183000_layer2_save_quote_block_unplan_with_job_draws.sql`
+  - `supabase/migrations/20260702182000_layer2_release_hold_reject_job.sql`
+  - `supabase/migrations/20260702174000_layer2_reserve_job_inventory.sql`
+  - `supabase/migrations/20260702176000_layer2_shortfalls_job_coverage.sql`
+  - `supabase/migrations/20260702180000_layer2_rollover_settlement_job_aware.sql`
+  - `supabase/migrations/20260702177000_layer2_inventory_position_job_column.sql`
+  - `supabase/migrations/20260702181000_layer2_save_quote_restore_job_aware_guard.sql`
+  - `supabase/migrations/20260702173000_layer2_quote_lifecycle_guards_job_aware.sql`
+  - `supabase/migrations/20260702179000_layer2_forecast_job_holds.sql`
+
 ## 2026-07-04 — "Close a booking fulfilled by application" lifecycle (migration APPLIED LIVE)
 
 A planned booking that we fulfilled by **applying** product for the customer (via field jobs) previously had no clean way to close — "Accept" is the *chemical-sale* door (it creates an order + prebooks stock + commissions, the wrong channel), and Decline/Cancel are both semantically wrong and hard-blocked while a job reservation exists. So such bookings sat open forever. This adds a distinct terminal status **`closed_by_application`** ("Fulfilled (Applied)") plus a small, actor-bound, idempotent RPC **`close_quote_as_applied`**, reached from a **"Close — Applied"** button on the booking.
