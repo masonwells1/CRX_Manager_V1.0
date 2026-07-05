@@ -4,6 +4,14 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-04/05 — Whole-app business-workflow & daily-use review (read-only; report delivered)
+
+Owner-requested pre-launch deep dive over BOTH sales channels (chemical sales vs custom application) for flawed business logic, workflows that don't make sense, and navigation simplification — grounded in a 10-question owner interview (users/roles, channel coupling, daily volumes, timelines). 13 analyst agents (7 persona day-walkthroughs + 6 structural analyses) against real code + live schema → **121 cited findings**, a **navigation blueprint** (all 82 routes mapped old→new, nothing lost), and an **entry-point consolidation** (7 order / 12 invoice / 2 job creators → one obvious path per situation). Adversarial verify pass: **69 CONFIRMED / 2 ADJUSTED / 0 REFUTED** (50 verdicts lost to transient API limits; every §3-anchoring claim hand-verified in the main session; key screens walked in the live prod app).
+
+- **Headline money bugs found (all hand-verified):** the per-acre application fee is never billable from a job (`jobs.application_service_id` has no setter anywhere); follow-up deliveries of shorted product can never be billed (order-level invoice check + delivery-scoped true-up); overdue invoices vanish from the Payments page (`status='posted'` filter — the RPC already accepts overdue); no customer-supplied-chemical concept (recording the truth corrupts inventory); landlord/tenant splits produce unpayable share-annotations on the job channel; commissions never accrue on the application channel.
+- **Deliverable:** `docs/audits/business-workflow-review-2026-07/` — report.md (10 improvement areas, 3-wave plan to Oct 1, 11 owner decisions with recommendations) + findings.json + journeys.md + proposals.md + live-app-anchors.md.
+- **No code, schema, or nav changes made** — report-first per owner's choice; implementation waves pending owner approval, each through the normal /ship + Codex + migration gates.
+
 ## 2026-07-04 — "Close a booking fulfilled by application" lifecycle (migration APPLIED LIVE)
 
 A planned booking that we fulfilled by **applying** product for the customer (via field jobs) previously had no clean way to close — "Accept" is the *chemical-sale* door (it creates an order + prebooks stock + commissions, the wrong channel), and Decline/Cancel are both semantically wrong and hard-blocked while a job reservation exists. So such bookings sat open forever. This adds a distinct terminal status **`closed_by_application`** ("Fulfilled (Applied)") plus a small, actor-bound, idempotent RPC **`close_quote_as_applied`**, reached from a **"Close — Applied"** button on the booking.
