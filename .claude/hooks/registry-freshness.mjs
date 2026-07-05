@@ -47,7 +47,10 @@ try {
   const ddlPatterns = [
     [/\bCREATE\s+TABLE\b/i, "CREATE TABLE"],
     [/\bDROP\s+TABLE\b/i, "DROP TABLE"],
+    [/\bADD\s+COLUMN\b/i, "ADD COLUMN"],
+    [/\bALTER\s+TABLE\b[\s\S]{0,200}?\bADD\s+(?!CONSTRAINT\b)\w/i, "ALTER TABLE ... ADD (column)"],
     [/\bDROP\s+COLUMN\b/i, "DROP COLUMN"],
+    [/\bRENAME\s+(?:COLUMN\b|TO\b)/i, "RENAME COLUMN/TO"],
     [/\bADD\s+CONSTRAINT\b/i, "ADD CONSTRAINT"],
     [/\bCHECK\s*\(/i, "CHECK (...)"],
     [/\bALTER\s+COLUMN\b/i, "ALTER COLUMN"],

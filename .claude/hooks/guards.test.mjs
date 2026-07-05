@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { isHoldPhrase, isResumePhrase, isBuildActionUnderHold } from "./hold-latch-lib.mjs";
 import { classifySql } from "./live-testdata-lib.mjs";
-import { isGitPush, pushTargetsMain, riskyFiles, proofValid } from "./codex-push-lib.mjs";
+import { isGitPush, pushTargetsMain, mainPushSource, riskyFiles, proofValid } from "./codex-push-lib.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 let pass = 0;
@@ -47,6 +47,11 @@ ok(classifySql("REVOKE EXECUTE ON FUNCTION public.f() FROM anon;").block, "raw R
 ok(!classifySql("BEGIN; CREATE TABLE t (id int); ROLLBACK;").block, "rolled-back smoke DDL allowed");
 ok(classifySql("BEGIN; CREATE TABLE t (id int); COMMIT;").block, "committed DDL blocked");
 ok(!classifySql("DO $$ BEGIN PERFORM 1; RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK'; END $$;").block, "SMOKE_PASS_ROLLBACK force-rollback pattern allowed");
+// Codex 2026-07-05 P1: textual rollback markers must NOT qualify — only structural ones
+ok(classifySql("CREATE TABLE public.x(id int); SELECT 'SMOKE_PASS_ROLLBACK';").block, "string-literal SMOKE_PASS_ROLLBACK does not exempt DDL");
+ok(classifySql("CREATE TABLE public.x(id int); SELECT 'please rollback later';").block, "the word rollback in a literal does not exempt DDL");
+ok(classifySql("ALTER TABLE invoices ADD COLUMN x text; ROLLBACK;").block, "ROLLBACK without a BEGIN-first wrapper does not exempt DDL");
+ok(!classifySql("BEGIN; ALTER TABLE invoices ADD COLUMN x text; SELECT 1; ROLLBACK;").block, "real BEGIN-first/ROLLBACK-last wrapper still allowed");
 ok(!classifySql("INSERT INTO customers (name) VALUES ('[E2E] Grant Farms')").block, "[E2E] data mentioning 'Grant' not misread as DDL");
 ok(!classifySql("CREATE TEMP TABLE scratch AS SELECT 1;").block, "temp table allowed");
 ok(!classifySql("SELECT * FROM pg_proc WHERE prosrc LIKE '%create table%'").block, "select mentioning DDL text allowed");
@@ -69,6 +74,13 @@ ok(pushTargetsMain("git push origin HEAD", "main"), "push HEAD while on main tar
 ok(!pushTargetsMain("git push origin HEAD", "feature/x"), "push HEAD from feature branch does not target main");
 ok(!pushTargetsMain("git push", "feature/x"), "plain push from feature branch does not target main");
 ok(!pushTargetsMain("git push -u origin claude/some-branch", "claude/some-branch"), "feature branch push does not target main");
+// Codex 2026-07-05 P1: the guard must diff/proof the ref actually pushed to main
+eq(mainPushSource("git push origin release:main", "feature/x"), "release", "release:main resolves source ref release");
+eq(mainPushSource("git push origin HEAD:main", "feature/x"), "HEAD", "HEAD:main resolves source HEAD");
+eq(mainPushSource("git push origin main", "feature/x"), "main", "bare main refspec resolves local main");
+eq(mainPushSource("git push", "main"), "HEAD", "plain push on main resolves HEAD");
+eq(mainPushSource("git push origin :main", "x"), "DELETE", "push :main detected as branch deletion");
+eq(mainPushSource("git push origin feature/x", "feature/x"), null, "feature push resolves null");
 eq(riskyFiles(["src/App.tsx", "supabase/migrations/x.sql"]).length, 1, "migration is risky");
 eq(riskyFiles(["src/App.tsx", "README.md"]).length, 0, "no risky files");
 ok(riskyFiles(["supabase/functions/send-email/index.ts"]).length === 1, "edge fn is risky");

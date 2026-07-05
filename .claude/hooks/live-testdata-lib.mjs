@@ -63,9 +63,16 @@ export function classifySql(query) {
   }
 
   // 3. Schema changes (DDL, GRANT/REVOKE) must travel the migration gauntlet —
-  //    a rolled-back smoke batch (contains ROLLBACK, no COMMIT) is the one exception.
-  const rolledBack =
-    (/\brollback\b/i.test(q) || q.includes("SMOKE_PASS_ROLLBACK")) && !/\bcommit\b/i.test(q);
+  //    a rolled-back smoke batch is the one exception. "Rolled back" must be
+  //    STRUCTURAL, not textual (Codex 2026-07-05: `SELECT 'SMOKE_PASS_ROLLBACK'`
+  //    used to qualify): either a real transaction wrapper (BEGIN is the first
+  //    statement AND ROLLBACK is the last), or a DO-block smoke that force-aborts
+  //    via an actual RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK'. Any statement-anchored
+  //    COMMIT disqualifies the batch.
+  const hasCommitStmt = /(?:^|;)\s*commit\b/i.test(q);
+  const txWrapped = /^\s*begin\s*;[\s\S]*;\s*rollback\s*;?\s*$/i.test(q);
+  const smokeAbort = /raise\s+exception\s+'?SMOKE_PASS_ROLLBACK/i.test(q);
+  const rolledBack = !hasCommitStmt && (txWrapped || smokeAbort);
   if (!rolledBack && (DDL_STMT_RE.test(q) || GRANT_REVOKE_RE.test(q))) {
     return {
       block: true,

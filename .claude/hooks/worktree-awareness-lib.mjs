@@ -73,9 +73,11 @@ export function isParkedMigrationFile(name) {
   return /\.sql$/i.test(n) && !/^superseded/i.test(n);
 }
 
-// docs/audits variant: only *draft*.sql files there count as parked migrations.
+// docs/audits variant: parked audit drafts are *draft*.sql OR PARKED-*.sql
+// (e.g. docs/audits/nightly-debug/parked-migrations/PARKED-01-....sql —
+// Codex 2026-07-05: the draft-only match missed those).
 export function isDraftSqlName(name) {
-  return isParkedMigrationFile(name) && /draft/i.test(String(name || ""));
+  return isParkedMigrationFile(name) && /draft|^parked[-_]/i.test(String(name || ""));
 }
 
 function truncateLine(s, maxLen) {

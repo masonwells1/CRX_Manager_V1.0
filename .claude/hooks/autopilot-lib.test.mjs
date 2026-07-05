@@ -48,6 +48,10 @@ eq(overnightGateDecision("mcp__supabase__execute_sql", { query: "SELECT 1" }), "
 eq(overnightGateDecision("Bash", { command: "node .claude/hooks/autopilot-arm.mjs --hours 8" }), "allow-through", "arm command passes");
 eq(overnightGateDecision("Bash", { command: "rm .claude/session-state/OVERNIGHT-INTENT.flag" }), "allow-through", "clearing intent flag passes");
 eq(overnightGateDecision("Bash", { command: "git status" }), "allow-through", "git status passes");
+// Codex 2026-07-05 P2: read-only leading token + write redirect must NOT pass
+eq(overnightGateDecision("Bash", { command: "cat src/a.ts > src/b.ts" }), "deny-until-armed", "cat with redirect blocked until armed");
+eq(overnightGateDecision("Bash", { command: "echo x >> supabase/migrations/x.sql" }), "deny-until-armed", "echo append blocked until armed");
+eq(overnightGateDecision("Bash", { command: "git log | tee notes.txt" }), "deny-until-armed", "tee blocked until armed");
 eq(overnightGateDecision("Read", { file_path: "x" }), "allow-through", "read passes");
 eq(overnightGateDecision("Write", { file_path: ".claude/session-state/notes.md" }), "allow-through", "session-state write passes");
 

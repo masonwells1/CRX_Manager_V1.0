@@ -6,7 +6,7 @@
     "regenerate_with": "node scripts/regenerate-schema-registry.mjs --from-introspection <queries.json> (queries documented in the script header)",
     "purpose": "Single source of truth for hooks: generated columns, status enums, ALL parseable CHECK IN-lists, NOT NULL columns, full column lists, sequences, tables-with/without updated_at, applied-migration high water.",
     "note": "For a fresh refresh from the live DB, ask Claude Code: 'regenerate the schema-registry from Supabase' (/regen-schema-registry). skipped_constraints lists every CHECK the hooks can NOT validate — review it when touching those tables.",
-    "migrations_high_water": "20260705133836"
+    "migrations_high_water": "20260705215859"
   },
   "generated_columns": [
     {
@@ -227,6 +227,8 @@
     "financial_audit_log",
     "idempotency_keys",
     "ingredient_map",
+    "integrity_alerts",
+    "integrity_negative_baseline",
     "inventory_transactions",
     "invoice_line_allocations",
     "invoice_shares",
@@ -296,7 +298,8 @@
       ],
       "constraints": [
         "allocation_sets_payment_method_check"
-      ]
+      ],
+      "nullable": true
     },
     "application_records.source_type": {
       "values": [
@@ -400,7 +403,8 @@
       ],
       "constraints": [
         "commission_payments_payment_method_check"
-      ]
+      ],
+      "nullable": true
     },
     "commission_payments.status": {
       "values": [
@@ -602,6 +606,17 @@
       ],
       "constraints": [
         "financial_audit_log_operation_type_check"
+      ]
+    },
+    "integrity_alerts.alert_type": {
+      "values": [
+        "negative_inventory",
+        "negative_invoice_balance",
+        "stale_quote_hold",
+        "booking_overdraw"
+      ],
+      "constraints": [
+        "integrity_alerts_alert_type_check"
       ]
     },
     "inventory_holds.hold_type": {
@@ -1056,7 +1071,8 @@
       ],
       "constraints": [
         "vendor_payments_payment_method_check"
-      ]
+      ],
+      "nullable": true
     },
     "watchdog_flag_dismissals.resolution": {
       "values": [
@@ -2019,6 +2035,27 @@
         "id",
         "branded_ingredient",
         "generic_has_bulk"
+      ]
+    },
+    "integrity_alerts": {
+      "no_default": [
+        "alert_type",
+        "entity_table",
+        "entity_id"
+      ],
+      "with_default": [
+        "id",
+        "details",
+        "detected_at"
+      ]
+    },
+    "integrity_negative_baseline": {
+      "no_default": [
+        "product_id",
+        "quantity_at_baseline"
+      ],
+      "with_default": [
+        "baselined_at"
       ]
     },
     "inventory": {
@@ -3545,6 +3582,20 @@
       "generic_has_bulk",
       "fallback_branded_product",
       "notes"
+    ],
+    "integrity_alerts": [
+      "id",
+      "alert_type",
+      "entity_table",
+      "entity_id",
+      "details",
+      "detected_at",
+      "resolved_at"
+    ],
+    "integrity_negative_baseline": [
+      "product_id",
+      "quantity_at_baseline",
+      "baselined_at"
     ],
     "inventory": [
       "id",

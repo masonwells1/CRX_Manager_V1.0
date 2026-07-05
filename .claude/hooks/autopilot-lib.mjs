@@ -89,7 +89,10 @@ export function overnightGateDecision(toolName, toolInput) {
   const cmd = typeof input.command === "string" ? input.command : "";
   if (cmd && (/autopilot-arm\.mjs/.test(cmd) || /OVERNIGHT-INTENT\.flag/.test(cmd))) return "allow-through";
   if (/^(Bash|PowerShell)$/i.test(name)) {
-    return INTENT_ALLOW_BASH_RE.test(cmd) ? "allow-through" : "deny-until-armed";
+    // Read-only leading token AND no write redirect: `cat > file` / `echo .. >> f`
+    // / `... | tee f` still mutate files (Codex 2026-07-05) — those wait for the arm.
+    const writesViaRedirect = />|\btee\b/.test(cmd);
+    return INTENT_ALLOW_BASH_RE.test(cmd) && !writesViaRedirect ? "allow-through" : "deny-until-armed";
   }
   if (/^(Write|Edit|NotebookEdit)$/i.test(name)) {
     const fp = String(input.file_path || input.path || "");

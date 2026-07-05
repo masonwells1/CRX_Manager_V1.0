@@ -38,6 +38,22 @@ function listDir(dir) {
   try { return readdirSync(dir); } catch { return []; }
 }
 
+// Recursively list files (depth-limited). Parked drafts live in NESTED audit
+// folders like docs/audits/codex-driven-bug-hunt/PARKED-005-...draft.sql —
+// a flat scan reported "0 parked" while drafts were waiting (Codex 2026-07-05).
+function listFilesRecursive(dir, depth = 4) {
+  if (depth < 0) return [];
+  const out = [];
+  for (const name of listDir(dir)) {
+    const full = path.join(dir, name);
+    let st;
+    try { st = statSync(full); } catch { continue; }
+    if (st.isDirectory()) out.push(...listFilesRecursive(full, depth - 1));
+    else out.push(full);
+  }
+  return out;
+}
+
 function mtimeOf(file) {
   try { return statSync(file).mtime; } catch { return null; }
 }
@@ -151,10 +167,10 @@ for (const e of entries) {
     { dir: path.join(e.path, "docs", "audits"), filter: isDraftSqlName },
   ];
   for (const { dir, filter } of parkedDirs) {
-    for (const name of listDir(dir)) {
+    for (const full of listFilesRecursive(dir)) {
+      const name = path.basename(full);
       if (/^superseded/i.test(name) && /\.sql$/i.test(name)) { supersededSkipped++; continue; }
       if (!filter(name)) continue;
-      const full = path.join(dir, name);
       const key = name.toLowerCase();
       if (parked.has(key)) {
         // Same draft checked out in several worktrees — count it once.
