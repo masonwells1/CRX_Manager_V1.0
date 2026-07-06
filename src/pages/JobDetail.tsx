@@ -1158,6 +1158,10 @@ export default function JobDetail() {
   const [recipeId, setRecipeId] = useState('');
   // U3 (#52): optional per-acre machine fee (e.g. Hagie Y-Drop). NULL = no service fee.
   const [applicationServiceId, setApplicationServiceId] = useState<string | null>(null);
+  // U3 follow-up (Codex P2): true only while the current applicationServiceId came
+  // from a customer's default, not the user's hand. An auto-filled value must be
+  // RE-evaluated when the customer changes (a manual pick is never clobbered).
+  const svcAutoFilledRef = useRef(false);
   const [notes, setNotes] = useState('');
   const [batchId, setBatchId] = useState('');
   const [quoteLinkage, setQuoteLinkage] = useState<{ quote_id: string; quote_number: string; section_name: string } | null>(null);
@@ -2878,7 +2882,23 @@ export default function JobDetail() {
             <label className="block text-sm font-medium text-nav-dark mb-1">Customer *</label>
             <select
               value={customerId}
-              onChange={(e) => { setCustomerId(e.target.value); setFieldRows([]); setShareRows([]); }}
+              onChange={(e) => {
+                const newCustomerId = e.target.value;
+                setCustomerId(newCustomerId);
+                setFieldRows([]);
+                setShareRows([]);
+                // New jobs only: prefill the application service from the
+                // customer's default. A MANUAL pick is never clobbered, but an
+                // AUTO-FILLED one is re-evaluated on every customer change
+                // (Codex P2: Customer A's default must not silently ride into
+                // Customer B's job and bill the wrong per-acre fee).
+                if (isNew && (!applicationServiceId || svcAutoFilledRef.current)) {
+                  const selected = customers.find((c) => c.id === newCustomerId);
+                  const def = selected?.default_application_service_id ?? null;
+                  setApplicationServiceId(def);
+                  svcAutoFilledRef.current = def !== null;
+                }
+              }}
               disabled={!canEdit}
               className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:bg-gray-50"
             >
@@ -2963,7 +2983,12 @@ export default function JobDetail() {
             <label className="block text-sm font-medium text-nav-dark mb-1">Application Service</label>
             <ApplicationServicePicker
               value={applicationServiceId}
-              onChange={setApplicationServiceId}
+              onChange={(v) => {
+                // Any change through the picker is the user's hand — from here
+                // on, customer switches must not overwrite it (Codex P2).
+                svcAutoFilledRef.current = false;
+                setApplicationServiceId(v);
+              }}
               disabled={!canEdit}
             />
             <p className="mt-1 text-xs text-gray-500">Adds a per-acre machine fee to this job's invoice.</p>

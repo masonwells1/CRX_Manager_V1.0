@@ -5,6 +5,7 @@ import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
 import CommissionSplitEditor from '../components/ui/CommissionSplitEditor';
+import ApplicationServicePicker from '../components/field-app/ApplicationServicePicker';
 import UnsavedChangesModal from '../components/ui/UnsavedChangesModal';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import { useToast } from '../components/ui/Toast';
@@ -77,6 +78,7 @@ export default function CustomerDetail() {
     notes: '',
     is_active: true,
     default_commission_split: { splits: [{ recipient: '', percentage: 100 }] },
+    default_application_service_id: null,
   });
   const [addresses, setAddresses] = useState<Partial<CustomerAddress>[]>([]);
   const [loading, setLoading] = useState(!isNew);
@@ -467,6 +469,7 @@ export default function CustomerDetail() {
         finance_charge_grace_days: customer.finance_charge_grace_days ?? 0,
         notes: customer.notes,
         is_active: customer.is_active,
+        default_application_service_id: customer.default_application_service_id || null,
       };
 
       const addressesPayload = addresses.map((addr) => ({
@@ -803,6 +806,17 @@ export default function CustomerDetail() {
             />
             <p className="text-xs text-secondary mt-2">
               This default split is applied to new quotes for this customer.
+            </p>
+          </Card>
+
+          <Card>
+            <CardHeader title="Default" accent="Application Service" />
+            <ApplicationServicePicker
+              value={customer.default_application_service_id ?? null}
+              onChange={(val) => update('default_application_service_id', val)}
+            />
+            <p className="text-xs text-secondary mt-2">
+              Pre-fills the application service on new jobs created for this customer.
             </p>
           </Card>
 
