@@ -28,7 +28,15 @@ const { mockFrom, mockRpc, mockToast, mockNavigate } = vi.hoisted(() => {
   mockOrder.mockReturnValue({ eq: mockEq, in: mockIn, or: mockOr, order: mockOrder, limit: mockLimit, select: mockSelect });
   // Products + drivers use .order() at the end which resolves the promise
   mockOrder.mockResolvedValue({ data: [], error: null });
-  const mockFrom = vi.fn().mockReturnValue({ select: mockSelect });
+  // U9: the stock lookup queries terminate in .eq() / .in() (no .order()), so they
+  // need their own resolved-promise terminals or the component's Promise.all hangs.
+  const mockStockEq = vi.fn().mockResolvedValue({ data: [], error: null });
+  const mockStockIn = vi.fn().mockResolvedValue({ data: [], error: null });
+  const mockStockSelect = vi.fn().mockReturnValue({ eq: mockStockEq, in: mockStockIn });
+  const mockFrom = vi.fn().mockImplementation((table: string) =>
+    table === 'inventory' || table === 'purchase_order_items'
+      ? { select: mockStockSelect }
+      : { select: mockSelect });
 
   const mockRpc = vi.fn().mockResolvedValue({ data: null, error: null });
   const mockToast = vi.fn();
