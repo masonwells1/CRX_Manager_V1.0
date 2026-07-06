@@ -45,6 +45,7 @@ import { recipeItemToChemRowSeed, chemRowsToRecipeItems, getLastRecipeId, setLas
 import { programItemToChemRowSeed, parseCropPrograms, orderProgramsForJob, type CropProgram } from '../lib/cropProgramHelpers';
 import { moveItem, moveUp, moveDown } from '../lib/routeOrder';
 import AppliedRecordsManager from '../components/jobs/AppliedRecordsManager';
+import ApplicationServicePicker from '../components/field-app/ApplicationServicePicker';
 import WatchdogFlagBanner from '../components/watchdog/WatchdogFlagBanner';
 // Codex #16 P2: lazy-load the map component so the mapbox bundle is only fetched when
 // the user actually opens the Map / Logs tab — not on every JobDetail page load (matters
@@ -83,6 +84,8 @@ interface JobDbRow {
   applicator_id?: string | null;
   vehicle_id?: string | null;
   recipe_id?: string | null;
+  /** U3 (#52): drives the per-acre service fee on transfer_job_to_invoice. */
+  application_service_id?: string | null;
   notes?: string | null;
   batch_id?: string | null;
   // Field-app parity #1: scheduling + memo fields.
@@ -1130,6 +1133,8 @@ export default function JobDetail() {
 
   const [vehicleId, setVehicleId] = useState('');
   const [recipeId, setRecipeId] = useState('');
+  // U3 (#52): optional per-acre machine fee (e.g. Hagie Y-Drop). NULL = no service fee.
+  const [applicationServiceId, setApplicationServiceId] = useState<string | null>(null);
   const [notes, setNotes] = useState('');
   const [batchId, setBatchId] = useState('');
   const [quoteLinkage, setQuoteLinkage] = useState<{ quote_id: string; quote_number: string; section_name: string } | null>(null);
@@ -1225,11 +1230,11 @@ export default function JobDetail() {
 
   // A stable string of every editable form field — the unit of dirty comparison.
   const formSnapshot = useCallback(() => JSON.stringify({
-    customerId, jobDate, scheduledTime, applicatorId, vehicleId, notes, batchId,
+    customerId, jobDate, scheduledTime, applicatorId, vehicleId, applicationServiceId, notes, batchId,
     callDate, dateProposed, timeProposed, scheduleDate, dateExpires, consultantId, groundCrewId,
     loaderComment, additionalInfo, internalMemo, carrierRateGpa, tankCapacity,
     fieldRows, chemRows, shareRows,
-  }), [customerId, jobDate, scheduledTime, applicatorId, vehicleId, notes, batchId,
+  }), [customerId, jobDate, scheduledTime, applicatorId, vehicleId, applicationServiceId, notes, batchId,
        callDate, dateProposed, timeProposed, scheduleDate, dateExpires, consultantId, groundCrewId,
        loaderComment, additionalInfo, internalMemo, carrierRateGpa, tankCapacity,
        fieldRows, chemRows, shareRows]);
@@ -1416,6 +1421,7 @@ export default function JobDetail() {
     setSavedJobVehicleId(j.vehicle_id || null);
     setSavedVehicleCapacity(j.vehicle ? { name: j.vehicle.vehicle_name ?? null, gallons: j.vehicle.capacity_gallons ?? null, unit: j.vehicle.capacity_unit ?? null } : null);
     setRecipeId(j.recipe_id || '');
+    setApplicationServiceId(j.application_service_id || null);
     setNotes(j.notes || '');
     setBatchId(j.batch_id || '');
     setCallDate(j.call_date || '');
@@ -1854,6 +1860,7 @@ export default function JobDetail() {
         applicator_id: overrideSaveApplicatorId({ licenseOverride, isNew, applicatorId, savedApplicatorId }),
         vehicle_id: vehicleId || null,
         recipe_id: recipeId || null,
+        application_service_id: applicationServiceId,
         notes: notes || null,
         batch_id: batchId || null,
         total_acres: totalAcres,
@@ -2568,13 +2575,40 @@ export default function JobDetail() {
             </Button>
           )}
           {!isNew && status === 'scheduled' && isEditable && (
-            <Button variant="secondary" onClick={handleStart} loading={starting} disabled={starting}>
+            <Button
+              variant="secondary"
+              onClick={() => {
+                // U3 (Codex R2 P1): starting refetches the job and resets the dirty
+                // baseline — an unsaved Application Service (or any edit) would be
+                // silently lost and the later invoice would under-bill. Save first.
+                if (isDirty) {
+                  toast('warning', 'You have unsaved changes — click Save Changes first, then start the job.');
+                  return;
+                }
+                void handleStart();
+              }}
+              loading={starting}
+              disabled={starting}
+            >
               <Check className="w-4 h-4" />
               Start Job
             </Button>
           )}
           {canComplete && (
-            <Button variant="secondary" onClick={() => { completeJobIdem.resetKey(); setShowCompleteModal(true); }}>
+            <Button
+              variant="secondary"
+              onClick={() => {
+                // U3 (Codex P1): completion reads billing-impacting fields (e.g. the
+                // Application Service) from the DATABASE — unsaved edits would be
+                // silently lost and the invoice would under-bill. Save first.
+                if (isDirty) {
+                  toast('warning', 'You have unsaved changes — click Save Changes first, then complete the job.');
+                  return;
+                }
+                completeJobIdem.resetKey();
+                setShowCompleteModal(true);
+              }}
+            >
               <Check className="w-4 h-4" />
               Complete Job
             </Button>
@@ -2675,6 +2709,15 @@ export default function JobDetail() {
                 <option key={v.id} value={v.id}>{v.vehicle_name} ({v.vehicle_type})</option>
               ))}
             </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-nav-dark mb-1">Application Service</label>
+            <ApplicationServicePicker
+              value={applicationServiceId}
+              onChange={setApplicationServiceId}
+              disabled={!canEdit}
+            />
+            <p className="mt-1 text-xs text-gray-500">Adds a per-acre machine fee to this job's invoice.</p>
           </div>
           <Input
             label="Batch ID"
