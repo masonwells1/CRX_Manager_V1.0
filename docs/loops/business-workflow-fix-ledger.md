@@ -109,3 +109,9 @@ Mission: `docs/loops/business-workflow-fix-mission-2026-07.md` · Branch: `fix/b
   | [E2E] Farm Alpha (test fixture) | 2026-03-16 | 3 orders, 1 invoice |
   | [E2E] Farm Beta (test fixture) | 2026-03-16 | none |
   Note: the two [E2E] rows are the standing Playwright fixtures — deleting them breaks the E2E suite's shared fixtures; the other four are Mason's call.
+
+## NIGHT 2 (2026-07-06, daytime start — same mandate, mission-night2.md)
+
+**Run start: 2026-07-06T11:17Z** · hard wrap ~20:17Z (9h) · live high-water at start: 20260706080738 (matches mission expectation).
+
+- **STEP 0 [housekeeping]** — overnight-intent flag removed per mission §1 (autopilot must NOT be armed; launch mode handles permissions). Schema registry refreshed via REAL live introspection (Q1–Q5 → `--from-introspection`): only drift was `migrations_high_water` 20260706053722→20260706080738 (Night-1 wrap had already captured schema content; U6/U9/U11 were function-only). `npm run generate-map` re-run (117 nodes, 218 edges, 0 problems). PROOF — Ran: regenerate-schema-registry.mjs --from-introspection + git diff · Saw: registry v2 rebuilt (27 enums / 5 gen-cols / 66 no-updated_at tables), diff = high-water line only.
