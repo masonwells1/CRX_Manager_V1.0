@@ -80,3 +80,32 @@ Mission: `docs/loops/business-workflow-fix-mission-2026-07.md` · Branch: `fix/b
 - **Migration applied live:** version **20260706080738** (name 20260706130000_stock_policy_warn_not_block)
 - **Reviews:** rls CLEAN · live-diff VERBATIM+EDITS-ONLY on both fns (U2 base carried byte-for-byte) · Codex 5 rounds (R1-R5 all fixed; severity decayed to P3 by R5).
 - **PROOF — Ran:** hash-verified apply + static checks (2 fns, warn keys + U2 guard + seed flag present in live prosrc, plpgsql_check=0, live row v20260706080738) + a fully rolled-back [E2E] E2E: quick delivery needing 5 with only 1 net available. **Saw:** the call SUCCEEDED (old code RAISEd) with stock_warning=true/short_stock_count=1; prebooked 0→5 (net −4); ledger row requires_review=t; 3 admin stock_warning notifications. Zero residue post-rollback. **Not verified:** the picker rendered in a browser (build/lint/typecheck green).
+
+## U10 — Record integrity + auto-draft toggle — PARTIAL (toggle SHIPPED, rest PARKED)
+
+- **SHIPPED:** `auto_draft_invoice_on_job_completion` flipped **ON** live (owner decision §6.5; app_settings UPDATE 2026-07-06 08:21 UTC, RETURNING confirmed 'true'). Draft-only by design — never auto-posts; reversible one-click in Settings. Logged here per mission.
+- **PARKED (needs a migration, queued for the next session):** application_records.application_date from actual start time · applicator name/license snapshot columns (#106) · job-born invoices stamp season from the job (#109 — NOTE: U3's compute_season fix in save_job already corrected the job.season basis, so the remaining gap is only the invoice-side stamping) · auto_draft_skipped activity row for applicator completions (#117).
+
+## PARKED UNITS (drafted or queued — nothing half-landed)
+
+- **U7 splits unification [L]** — NOT drafted (mission's park-whole-if-resistant unit). All prerequisites shipped (U4/U6 transfer_job_to_invoice chain is stable). Next step: opus builder per mission §3, base transfer_job_to_invoice = live post-U6.
+- **U8 commissions on application channel [M]** — NOT drafted; owner rule recorded (§0.2: chemical portion only). Depends on transfer_job_to_invoice (now stable post-U6).
+- **U12 Applicator My Day [L]** — **FULL DRAFT READY** in scratchpad/u12 (migration 20260706060000_field_view_my_day.sql + FieldView replacement + patches). Builder verified: latent dispatch-auth gap in start/complete_job (real), notifications RLS blocks sales_rep-triggered inserts (real pre-existing bug), FieldView has zero write calls (confirmed). Needs: integration + reviewer/Codex gates. Its complete_job re-emit must be REBASED on the U11-applied live text (post-20260706120000) before apply.
+- **U13 assignment unification [L]** — **FULL DRAFT READY** in scratchpad/u13 (migration 20260706100000_assignment_unification.sql: 3 triggers + get_dashboard_action_items re-emit + 7 frontend patches). Builder found an UNLISTED real bug: every JobDetail save cascade-wipes job_location_dispatches (job_fields delete+recreate + ON DELETE CASCADE) — the trigger design fixes it. Needs integration + gates; QuoteBuilder/JobDetail anchors were drafted against tonight's tree.
+- **U14-U18 (Wave 2), U19-U20 (Wave 3)** — not started; report sections stand.
+- **U3 optional follow-up** — per-customer default application service (drafted as 20260706021000 in scratchpad/u3).
+- **U11 follow-up** — hold engines share the normalization gap (normalize_rate_unit before field_app_priced_quantity in _sync_job_holds/_sync_quote_job_reservations); deduction side is fixed, reserve side still NULLs-to-raw on 'pt/ac' units.
+
+## Wrap checks (U21)
+
+- **DB invariant sweeps:** 13/15 predicates PASS. 4 un-allowlisted rows, ALL pre-existing standing drift unrelated to tonight's migrations: 3 inert anon-exec trigger grants (enforce_blend_ticket_fields_billed_lock, fields_acre_authority_guard, recalc_product_price_per_acre — trigger fns, not directly callable) + 1 genuine follow-up: generate_rup_sales_records(uuid,text) is auth-bound but role-ungated (from A8 era). Queue the REVOKE/role-gate fix.
+- **Junk-customer FLAG-ONLY list (owner approves each; NOTHING touched):**
+  | farm_name | created | activity |
+  |---|---|---|
+  | Crop Rx Solutions (own company) | 2026-02-10 | none |
+  | Purchase Orders for WELLS AG SUPPLY CHEMICAL | 2026-02-10 | none |
+  | Test Farm Alpha | 2026-02-22 | 1 order |
+  | A1 TEST FARM | 2026-03-16 | 1 quote, 1 order |
+  | [E2E] Farm Alpha (test fixture) | 2026-03-16 | 3 orders, 1 invoice |
+  | [E2E] Farm Beta (test fixture) | 2026-03-16 | none |
+  Note: the two [E2E] rows are the standing Playwright fixtures — deleting them breaks the E2E suite's shared fixtures; the other four are Mason's call.
