@@ -312,6 +312,12 @@ These are NOT called directly from the frontend. They power triggers, guards, an
 - `_insert_commissions_for_order(p_order_id uuid, p_customer_id uuid, p_order_profit numeric, p_commission_split jsonb, p_order_date date)` — single source of truth for commission INSERT. Called via `PERFORM` from `convert_quote_to_order`, `create_direct_order`, and `create_quick_delivery`. Uses `compute_commission_amount()` helper for the formula. SECURITY DEFINER. EXECUTE revoked from PUBLIC/anon/authenticated — only callable from inside other SECURITY DEFINER bodies (which run as the owner).
 - `_snapshot_order_item_cost()` — BEFORE INSERT trigger function on `order_items`. Snapshots `products.current_cost * 100` into `order_items.cost_at_time_cents` if caller didn't pre-populate. SECURITY DEFINER. Migration 20260513050000 (audit #32).
 
+### Dispatch Preservation (U13 assignment-unification, migration `20260707020000`, APPLIED LIVE 2026-07-06)
+- `_preserve_job_location_dispatch_on_field_delete()` — BEFORE DELETE trigger on `job_fields`. Stashes any live `job_location_dispatches` row for the field being deleted into `job_dispatch_preservation` before `save_job`'s delete-then-reinsert cascades it away.
+- `_sync_job_location_dispatch_on_field_insert()` — AFTER INSERT trigger on `job_fields`. Matches a freshly re-inserted field (by location) against a stashed preservation row and restores the per-location dispatch onto the new `job_fields.id`, so a `save_job` re-save no longer silently wipes a dispatcher's assignment.
+- `_sync_job_location_dispatch_on_applicator_change()` — trigger on `jobs`. Keeps the whole-job `applicator_id` and per-location `job_location_dispatches` assignment systems from drifting apart when one is edited without the other.
+- `_close_job_location_dispatch_on_job_terminal()` — trigger on `jobs`. Closes a job's open per-location dispatch rows when the job reaches a terminal status (completed/cancelled). All four are SECURITY DEFINER with anon EXECUTE revoked.
+
 ### Status Change Triggers
 - `trg_delivery_status_change()` — fires on delivery status change (notifications, side effects)
 - `trg_inventory_significant_change()` — fires on significant inventory changes (alerts)
