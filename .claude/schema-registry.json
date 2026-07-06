@@ -160,7 +160,8 @@
       "declined",
       "expired",
       "cancelled",
-      "closed_by_application"
+      "closed_by_application",
+      "closed_short"
     ],
     "rebate_claims.status": [
       "pending",
@@ -891,7 +892,8 @@
         "declined",
         "expired",
         "cancelled",
-        "closed_by_application"
+        "closed_by_application",
+        "closed_short"
       ],
       "constraints": [
         "quotes_status_check"

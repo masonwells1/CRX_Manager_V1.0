@@ -193,7 +193,7 @@ export interface CustomerAddress {
   created_at: string;
 }
 
-export type QuoteStatus = 'draft' | 'sent' | 'revised' | 'accepted' | 'declined' | 'expired' | 'cancelled' | 'closed_by_application';
+export type QuoteStatus = 'draft' | 'sent' | 'revised' | 'accepted' | 'declined' | 'expired' | 'cancelled' | 'closed_by_application' | 'closed_short';
 
 export interface Quote {
   id: string;

@@ -43,6 +43,7 @@ export const statusToBadgeVariant: Record<string, BadgeVariant> = {
   declined: 'declined',
   expired: 'expired',
   closed_by_application: 'success',
+  closed_short: 'warning',
   confirmed: 'success',
   partially_fulfilled: 'warning',
   fulfilled: 'success',
