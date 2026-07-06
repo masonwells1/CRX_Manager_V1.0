@@ -98,7 +98,12 @@ interface ColumnContract {
 const COLUMN_CONTRACTS: ColumnContract[] = [
   // commissions — most common source of schema bugs
   { table: 'commissions', column: 'id', expectedTypes: PG_TYPE_MAP.uuid, nullable: false },
-  { table: 'commissions', column: 'order_id', expectedTypes: PG_TYPE_MAP.uuid, nullable: false },
+  // U8 (2026-07-06): order_id became nullable — job-sourced (application-channel)
+  // commissions carry job_id + invoice_id instead; chk_commission_source enforces
+  // that at least one lineage is set.
+  { table: 'commissions', column: 'order_id', expectedTypes: PG_TYPE_MAP.uuid, nullable: true },
+  { table: 'commissions', column: 'job_id', expectedTypes: PG_TYPE_MAP.uuid, nullable: true },
+  { table: 'commissions', column: 'invoice_id', expectedTypes: PG_TYPE_MAP.uuid, nullable: true },
   { table: 'commissions', column: 'customer_id', expectedTypes: PG_TYPE_MAP.uuid, nullable: false },
   { table: 'commissions', column: 'recipient_user_id', expectedTypes: PG_TYPE_MAP.uuid, nullable: true },
   { table: 'commissions', column: 'season', expectedTypes: PG_TYPE_MAP.number, nullable: true },
@@ -157,6 +162,7 @@ const FK_CONTRACTS: FKContract[] = [
   { table: 'commissions', column: 'recipient_user_id', referencedTable: 'profiles', reason: 'Commission recipient display name' },
   { table: 'deliveries', column: 'assigned_driver', referencedTable: 'profiles', reason: 'Driver display name embedding' },
   { table: 'commissions', column: 'order_id', referencedTable: 'orders', reason: 'Order details for commission display' },
+  { table: 'commissions', column: 'job_id', referencedTable: 'jobs', reason: 'U8: job details for application-channel commission display' },
   { table: 'commissions', column: 'customer_id', referencedTable: 'customers', reason: 'Customer details for commission display' },
   { table: 'invoices', column: 'customer_id', referencedTable: 'customers', reason: 'Customer display on invoices' },
   { table: 'invoices', column: 'order_id', referencedTable: 'orders', reason: 'Order reference on invoices' },

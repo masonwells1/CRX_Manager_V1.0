@@ -1399,8 +1399,10 @@ export type Database = {
           customer_name: string | null
           deleted_at: string | null
           id: string
+          invoice_id: string | null
+          job_id: string | null
           order_date: string | null
-          order_id: string
+          order_id: string | null
           order_number: string | null
           order_profit: number
           paid_date: string | null
@@ -1418,8 +1420,10 @@ export type Database = {
           customer_name?: string | null
           deleted_at?: string | null
           id?: string
+          invoice_id?: string | null
+          job_id?: string | null
           order_date?: string | null
-          order_id: string
+          order_id?: string | null
           order_number?: string | null
           order_profit?: number
           paid_date?: string | null
@@ -1437,8 +1441,10 @@ export type Database = {
           customer_name?: string | null
           deleted_at?: string | null
           id?: string
+          invoice_id?: string | null
+          job_id?: string | null
           order_date?: string | null
-          order_id?: string
+          order_id?: string | null
           order_number?: string | null
           order_profit?: number
           paid_date?: string | null
@@ -1455,6 +1461,20 @@ export type Database = {
             columns: ["customer_id"]
             isOneToOne: false
             referencedRelation: "customers"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "commissions_invoice_id_fkey"
+            columns: ["invoice_id"]
+            isOneToOne: false
+            referencedRelation: "invoices"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "commissions_job_id_fkey"
+            columns: ["job_id"]
+            isOneToOne: false
+            referencedRelation: "jobs"
             referencedColumns: ["id"]
           },
           {
@@ -4492,6 +4512,7 @@ export type Database = {
           batch_ref: string | null
           call_date: string | null
           carrier_rate_gpa: number | null
+          commission_split: Json | null
           consultant_id: string | null
           created_at: string
           created_by: string | null
@@ -4538,6 +4559,7 @@ export type Database = {
           batch_ref?: string | null
           call_date?: string | null
           carrier_rate_gpa?: number | null
+          commission_split?: Json | null
           consultant_id?: string | null
           created_at?: string
           created_by?: string | null
@@ -4583,6 +4605,7 @@ export type Database = {
           batch_ref?: string | null
           call_date?: string | null
           carrier_rate_gpa?: number | null
+          commission_split?: Json | null
           consultant_id?: string | null
           created_at?: string
           created_by?: string | null

@@ -17,7 +17,7 @@
 - `save_blend_ticket()` — upsert blend ticket + items
 - `save_blend_recipe(p_recipe_id uuid, p_name text, p_recipe_type text, p_items jsonb, ...)` — atomic create-or-replace for blend recipes. For updates, DELETE + INSERT items happen in the same transaction so a failed insert rolls back the DELETE too — closes audit #34 (BlendRecipes wiped items on failed save). Migration 20260513010000.
 - `save_purchase_order()` — upsert PO + items
-- `save_invoice()` — upsert invoice + items
+- `save_invoice()` — upsert invoice + items. **U8 (2026-07-06):** on a job invoice edit, recomputes its pending job commission(s) from the new chemical-line profit (COGS×qty + penny reconciliation on the last row); guarded by `JOB_HAS_BATCHED_COMMISSIONS` (active payout batch) / `JOB_COMMISSIONS_PAID`.
 - `save_field()` — upsert field record
 - `delete_purchase_order()` — soft-delete PO (must be draft)
 - `duplicate_quote()` — deep-clone quote + items with new number; canonical idempotency wired in migration 20260526090000
@@ -59,10 +59,10 @@
 - `create_invoice_from_blend_ticket(p_blend_ticket_id, p_created_by, p_idempotency_key)` → jsonb `{invoice_ids[], invoice_group_id}` — creates draft invoice(s) from approved blend ticket. **Phase 1 (2026-04-29):** return type changed from `uuid` to `jsonb`. Multi-customer fields produce grouped split invoices via `invoice_group_id`. Acres come from `blend_ticket_fields.actual_acres → planned_acres → fields.total_acres → 0`. Mode A (grower-share `price_override_cents`) bills $/ac, Mode B bills line items + tier/quoted/manual + service fee.
 - `create_split_invoices_from_order(p_order_id, p_salesman_id, p_invoice_type, p_idempotency_key)` → uuid[] — creates proportional split invoices based on field billing splits for an order
 - `post_invoice()` — posts invoice; calls `check_period_open()` before posting; raises error if accounting period is closed. Also triggers `generate_rup_sales_records()` for RUP products.
-- `void_invoice()` — void a posted invoice, reversing all related records
+- `void_invoice()` — void a posted invoice, reversing all related records. **U8 (2026-07-06):** on a `field_application` invoice, also cancels+zeroes the pending job commission(s) THIS invoice minted (generation-precise via `commissions.invoice_id`, both the draft/unposted→cancelled and posted→voided paths), blocked by `JOB_HAS_BATCHED_COMMISSIONS` and notifying admins if the commission was already paid out.
 - `batch_post_invoices()` — batch post multiple invoices at once
 - `batch_void_invoices()` — batch void multiple invoices
-- `delete_invoices(p_invoice_ids, p_performed_by, p_idempotency_key)` → integer — **admin-only** soft-delete of draft/unposted/voided invoices (posted/paid/overdue skipped); writes an `invoice_deleted` financial_audit_log row per invoice; idempotent; strict-actor. Replaces the raw UI `.update({deleted_at})` (nightly-debug #9). Gate matches the invoices RLS (`is_admin()`).
+- `delete_invoices(p_invoice_ids, p_performed_by, p_idempotency_key)` → integer — **admin-only** soft-delete of draft/unposted/voided invoices (posted/paid/overdue skipped); writes an `invoice_deleted` financial_audit_log row per invoice; idempotent; strict-actor. Replaces the raw UI `.update({deleted_at})` (nightly-debug #9). Gate matches the invoices RLS (`is_admin()`). **U8 (2026-07-06):** also cancels+zeroes a deleted job invoice's pending commission(s) and releases the stranded job.
 - `record_invoice_payment()` — record payment against a specific invoice
 - ~~`record_payment()`~~ — **DROPPED 2026-06-08** (migration `20260608145944`, audit AW-3): deprecated + unreachable; use `allocate_payment` / `record_invoice_payment` instead
 - `allocate_payment()` — allocate/re-allocate payment amounts across invoices
@@ -311,6 +311,10 @@ These are NOT called directly from the frontend. They power triggers, guards, an
 ### Commission / Order Helpers (audit #6, 2026-05-13)
 - `_insert_commissions_for_order(p_order_id uuid, p_customer_id uuid, p_order_profit numeric, p_commission_split jsonb, p_order_date date)` — single source of truth for commission INSERT. Called via `PERFORM` from `convert_quote_to_order`, `create_direct_order`, and `create_quick_delivery`. Uses `compute_commission_amount()` helper for the formula. SECURITY DEFINER. EXECUTE revoked from PUBLIC/anon/authenticated — only callable from inside other SECURITY DEFINER bodies (which run as the owner).
 - `_snapshot_order_item_cost()` — BEFORE INSERT trigger function on `order_items`. Snapshots `products.current_cost * 100` into `order_items.cost_at_time_cents` if caller didn't pre-populate. SECURITY DEFINER. Migration 20260513050000 (audit #32).
+
+### Commission / Job Helpers (U8, migration `20260707060000`, APPLIED LIVE 2026-07-06, finding #99)
+- `_insert_commissions_for_job(p_job_id uuid, p_invoice_id uuid, p_customer_id uuid, p_profit numeric, p_commission_split jsonb, p_commission_date date)` — job-channel sibling of `_insert_commissions_for_order`, same INSERT/reconciliation logic with `job_id`/`invoice_id` lineage instead of `order_id`. Called via `PERFORM` from `transfer_job_to_invoice` with the job's chemical-line profit only (the per-acre application fee and customer-supplied $0 lines are excluded). No-ops on a NULL/splits-less split; validates a present one via `validate_commission_split_json()` (`COMMISSION_SPLIT_INVALID` aborts). SECURITY DEFINER. EXECUTE revoked from PUBLIC/anon/authenticated — only callable from inside other SECURITY DEFINER bodies.
+- `jobs_snapshot_commission_split()` — `BEFORE INSERT` trigger function on `jobs` (`trg_jobs_snapshot_commission_split`). For a DIRECT job (no `quote_id`) with no `commission_split` supplied, copies the customer's `default_commission_split`, falling back to the locked empty sentinel `{"splits":[]}` if the customer has none — so a customer default added AFTER scheduling can never re-attribute an already-scheduled job. Quote-born jobs are untouched by this trigger; their split is set explicitly by `create_job_from_quote_section` from the parent quote.
 
 ### Dispatch Preservation (U13 assignment-unification, migration `20260707020000`, APPLIED LIVE 2026-07-06)
 - `_preserve_job_location_dispatch_on_field_delete()` — BEFORE DELETE trigger on `job_fields`. Stashes any live `job_location_dispatches` row for the field being deleted into `job_dispatch_preservation` before `save_job`'s delete-then-reinsert cascades it away.

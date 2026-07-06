@@ -52,7 +52,9 @@ interface CommissionRow {
   [k: string]: unknown;
   id: string;
   recipient: string;
-  order_id: string;
+  /** NULL on job-sourced rows (U8) — exactly one of order_id/job_id is set. */
+  order_id: string | null;
+  job_id: string | null;
   commission_amount: number;
   split_percentage: number;
   order_profit: number;

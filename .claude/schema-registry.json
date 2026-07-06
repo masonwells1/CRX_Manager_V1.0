@@ -1,12 +1,12 @@
 {
   "_meta": {
     "registry_version": 2,
-    "generated_at": "2026-07-06",
+    "generated_at": "2026-07-06T23:06:08Z",
     "generated_from": "Supabase project rhyzpcqhnizqbxphqdkr — public schema introspection",
     "regenerate_with": "node scripts/regenerate-schema-registry.mjs --from-introspection <queries.json> (queries documented in the script header)",
     "purpose": "Single source of truth for hooks: generated columns, status enums, ALL parseable CHECK IN-lists, NOT NULL columns, full column lists, sequences, tables-with/without updated_at, applied-migration high water.",
     "note": "For a fresh refresh from the live DB, ask Claude Code: 'regenerate the schema-registry from Supabase' (/regen-schema-registry). skipped_constraints lists every CHECK the hooks can NOT validate — review it when touching those tables.",
-    "migrations_high_water": "20260706175157"
+    "migrations_high_water": "20260706230608"
   },
   "generated_columns": [
     {
@@ -1179,6 +1179,12 @@
       "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
     },
     {
+      "table": "commissions",
+      "constraint": "chk_commission_source",
+      "def": "CHECK ((order_id IS NOT NULL) OR (job_id IS NOT NULL))",
+      "reason": "OR-condition across two nullable FKs, not an IN-list; hooks do NOT validate this constraint (U8, migration 20260707060000)"
+    },
+    {
       "table": "delivery_items",
       "constraint": "chk_di_quantity",
       "def": "CHECK ((quantity > (0)::numeric))",
@@ -1751,7 +1757,6 @@
     },
     "commissions": {
       "no_default": [
-        "order_id",
         "customer_id"
       ],
       "with_default": [
@@ -3264,7 +3269,9 @@
       "season",
       "deleted_at",
       "order_number",
-      "customer_name"
+      "customer_name",
+      "job_id",
+      "invoice_id"
     ],
     "cost_history": [
       "id",
@@ -3998,6 +4005,7 @@
       "ground_crew_id",
       "batch_ref",
       "last_printed_by",
+      "commission_split",
       "carrier_rate_gpa",
       "loader_tank_capacity"
     ],

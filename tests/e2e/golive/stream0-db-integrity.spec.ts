@@ -160,9 +160,13 @@ test.describe.serial('Stream 0 — Database Integrity', () => {
     expect(discrepancies).toHaveLength(0);
   });
 
-  test('DB5: Commission splits sum to 100% per order', async () => {
+  test('DB5: Commission splits sum to 100% per order/job', async () => {
+    // U8 (2026-07-06): job-sourced commissions carry order_id NULL + job_id, and a
+    // void→re-invoice cycle leaves cancelled rows beside the live set — select the
+    // lineage + status columns so checkCommissionSplits groups per source and
+    // excludes cancelled generations (same keying as reconciliation.ts).
     const commResult = await supabaseRest(
-      page, 'GET', 'commissions?select=order_id,order_number,split_percentage&limit=5000',
+      page, 'GET', 'commissions?select=order_id,job_id,invoice_id,status,order_number,split_percentage&limit=5000',
     );
     const commissions = asArray<CommissionRow>(commResult, 'commissions');
 

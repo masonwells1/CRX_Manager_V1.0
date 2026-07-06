@@ -742,7 +742,13 @@ export interface ReceivingSummary {
 
 export interface Commission {
   id: string;
-  order_id: string;
+  /** Source order (chemical-sale channel). NULL on job-sourced rows (U8). */
+  order_id: string | null;
+  /** Source job (application channel, U8). NULL on order-sourced rows. */
+  job_id: string | null;
+  /** The field_application invoice that minted a job commission (U8) — reversal
+   *  and payout-void liveness are generation-precise on this. NULL on order rows. */
+  invoice_id: string | null;
   customer_id: string;
   recipient: string;
   recipient_user_id: string | null;
@@ -2055,6 +2061,10 @@ export interface Job {
   invoice_id: string | null;
   quote_id: string | null;
   quote_section_id: string | null;
+  /** U8 (#99, 2026-07-06): commission split snapshot copied from the quote at
+   *  scheduling — read by transfer_job_to_invoice to mint application-channel
+   *  commissions (chemical-line profit only). */
+  commission_split: CommissionSplit | null;
   /** Phase 4 (2026-04-30): drives per-acre service fee on transfer_job_to_invoice. */
   application_service_id: string | null;
   // Field-app parity #1 (2026-06-24): ChemMan scheduling + memo fields.

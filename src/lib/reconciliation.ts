@@ -322,19 +322,46 @@ export function checkInvoiceBalances(invoices: InvoiceRow[]): Discrepancy[] {
  * sum to exactly 100. Detects corruption from manual edits.
  */
 export interface CommissionRow {
-  order_id: string;
+  /** NULL on job-sourced rows (U8) — exactly one of order_id/job_id is set. */
+  order_id: string | null;
+  /** NULL on order-sourced rows. */
+  job_id?: string | null;
+  /** U8: the minting invoice — job rows group per GENERATION (a paid row that
+   *  survived a void plus the re-invoice's fresh set must not share a bucket). */
+  invoice_id?: string | null;
+  /** Codex R1 P2: cancelled rows are excluded from split-sum grouping. */
+  status?: string | null;
   order_number: string;
   split_percentage: number;
 }
 
 export function checkCommissionSplits(commissions: CommissionRow[]): Discrepancy[] {
-  // Group by order
+  // Group by source entity. U8: job-sourced commissions have order_id NULL, so a
+  // raw order_id key would collapse EVERY job's rows into one `null` bucket and
+  // sum unrelated jobs' percentages — key on the lineage-qualified id instead.
   const byOrder = new Map<string, { orderNumber: string; totalPct: number }>();
 
+  // Codex R8/R9 P2: job rows key on the minting invoice (the GENERATION) — a paid
+  // row that survived a void shares job_id with the re-invoice's fresh set but
+  // never its invoice_id. And a generation containing ANY cancelled row is a
+  // reversal artifact (fully-cancelled, or paid-survivor + cancelled siblings on
+  // both channels) — its live remainder legitimately totals less than 100, so the
+  // whole bucket is excluded from the 100% identity rather than misreported.
+  const keyOf = (c: CommissionRow): string =>
+    c.order_id
+      ?? (c.invoice_id ? `jobinv:${c.invoice_id}` : c.job_id ? `job:${c.job_id}` : 'unlinked');
+
+  const reversedBuckets = new Set<string>();
   for (const c of commissions) {
-    const entry = byOrder.get(c.order_id) ?? { orderNumber: c.order_number, totalPct: 0 };
+    if (c.status === 'cancelled') reversedBuckets.add(keyOf(c));
+  }
+
+  for (const c of commissions) {
+    const key = keyOf(c);
+    if (reversedBuckets.has(key)) continue;
+    const entry = byOrder.get(key) ?? { orderNumber: c.order_number, totalPct: 0 };
     entry.totalPct += c.split_percentage;
-    byOrder.set(c.order_id, entry);
+    byOrder.set(key, entry);
   }
 
   const issues: Discrepancy[] = [];
@@ -746,7 +773,7 @@ export async function runReconciliationChecks(): Promise<ReconciliationReport> {
   try {
     const { data, error: commErr } = await supabase
       .from('commissions')
-      .select('order_id, order_number, split_percentage');
+      .select('order_id, job_id, invoice_id, status, order_number, split_percentage');
     if (commErr) throw new Error(`Commissions query failed: ${commErr.message}`);
 
     const commissions = (data ?? []) as CommissionRow[];
@@ -754,10 +781,10 @@ export async function runReconciliationChecks(): Promise<ReconciliationReport> {
 
     checks.push({
       name: 'Commission Splits',
-      description: 'Commission split percentages sum to 100% per order',
+      description: 'Commission split percentages sum to 100% per order/job',
       passed: disc.length === 0,
       discrepancies: disc,
-      entitiesChecked: new Set(commissions.map((c) => c.order_id)).size,
+      entitiesChecked: new Set(commissions.map((c) => c.order_id ?? `job:${c.job_id}`)).size,
     });
   } catch (err) {
     checks.push({

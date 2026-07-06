@@ -26,7 +26,7 @@
 - `orders` - Confirmed orders (order_number, status, totals, order_date, customer_po_number, is_planned, season, program_notes). Note: `total_paid`/`balance_due` columns were DROPPED — AR is tracked via `invoices.balance_cents`.
 - `order_items` - Order line items (quantity_delivered, quantity_remaining, notes, **cost_at_time_cents** bigint — snapshot of `products.current_cost` at insert time, populated by `trg_snapshot_order_item_cost` BEFORE INSERT trigger; migration 20260513050000, audit #32)
 - `payments` - Legacy payment records (DEPRECATED — use allocation_sets + invoice_line_allocations instead)
-- `commissions` - Per-order per-recipient (split_percentage, commission_amount numeric dollars, status CHECK: pending/paid/cancelled, paid_date)
+- `commissions` - Per-order OR per-job per-recipient (split_percentage, commission_amount numeric dollars, status CHECK: pending/paid/cancelled, paid_date). **U8 (migration `20260707060000`, APPLIED LIVE 2026-07-06):** `order_id` is now nullable; new nullable `job_id`/`invoice_id` FKs give application-channel (job) commissions the same lineage orders always had — `chk_commission_source` CHECK requires at least one of order_id/job_id. `invoice_id` is generation-precise: it's the exact field_application invoice that minted a job commission, so reversal/payout-liveness checks key on it (not job-level liveness, which can't tell an old generation from a fresh one across a void→re-invoice cycle). Partial indexes on both new columns.
 
 ## Inventory
 - `inventory` - Stock per product per location (quantity_available, quantity_prebooked, quantity_on_order, reorder_point, min_stock_level, manufactured_at_delivery — P4-7 phantom-row flag, default false)
@@ -46,7 +46,7 @@
 - `receiving_photos` - Photos attached to receiving events (receiving_record_id, storage_path, image_url)
 
 ## Job Scheduling
-- `jobs` - Job headers (status: scheduled/in_progress/completed/cancelled/invoiced, customer, applicator, vehicle, recipe, priority, estimated_hours, quote_id, quote_section_id)
+- `jobs` - Job headers (status: scheduled/in_progress/completed/cancelled/invoiced, customer, applicator, vehicle, recipe, priority, estimated_hours, quote_id, quote_section_id). **`commission_split` jsonb (U8, migration `20260707060000`, APPLIED LIVE 2026-07-06):** commission-split snapshot locked at job creation via `BEFORE INSERT` trigger `trg_jobs_snapshot_commission_split` — quote-born jobs copy the quote's split, direct jobs copy the customer default. NULL means a pre-U8 job ONLY (resolved once via fallback at first invoicing, then persisted); the empty sentinel `{"splits":[]}` is a deliberately locked "no commission" result, distinct from NULL.
 - `job_fields` - Fields assigned to a job (many-to-many with sort order)
 - `job_chemicals` - Chemicals/products for a job with rates and pricing
 - `job_applied_info` - Recorded data when completed: actual times, weather, gallons applied
