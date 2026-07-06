@@ -28,6 +28,7 @@ import type { Json } from '../../types/supabase';
 import ConfirmModal from '../ui/ConfirmModal';
 import { Sentry } from '../../lib/sentry';
 import { useToast } from '../ui/Toast';
+import { notifyApplicatorDispatched } from '../../lib/notificationTriggers';
 import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
 import {
   DISPATCH_STEPS,
@@ -184,6 +185,22 @@ export default function DispatchWizard({
       const result = assertRpcResult<{ dispatched: number }>(data, 'dispatch_job_locations');
       dispatchIdem.resetKey();
       toast('success', `Dispatched ${result.dispatched} location${result.dispatched === 1 ? '' : 's'}${licenseOverride ? ' (license override)' : ''}`);
+
+      // U12: notify each dispatched APPLICATOR (not crews — no single user to
+      // notify). De-dupe to one notice per (applicator, job) pair so a job
+      // split across several of the caller's selected locations, all going to
+      // the same applicator, doesn't fire duplicate notifications.
+      const notified = new Set<string>();
+      for (const jobFieldId of selected) {
+        const assignee = assignments[jobFieldId];
+        const loc = locations.find((l) => l.jobFieldId === jobFieldId);
+        if (!assignee || assignee.kind !== 'applicator' || !loc) continue;
+        const dedupeKey = `${assignee.id}:${loc.jobId}`;
+        if (notified.has(dedupeKey)) continue;
+        notified.add(dedupeKey);
+        void notifyApplicatorDispatched(assignee.id, loc.jobNumber, loc.customerName, null, loc.jobId);
+      }
+
       onDispatched();
       handleClose();
     } catch (err) {

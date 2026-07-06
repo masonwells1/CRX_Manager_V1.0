@@ -69,6 +69,7 @@ import {
   type DispatchedListRow,
   type DispatchedAssigneeFilter,
 } from '../lib/dispatchDisplay';
+import { notifyApplicatorDispatched, notifyApplicatorUndispatched } from '../lib/notificationTriggers';
 import { aggregateAssignedTo, type DispatchLocation } from '../lib/dispatchWizard';
 import type { Job, Profile, Field, DispatchStockRow } from '../types';
 
@@ -1224,6 +1225,18 @@ function DispatchedList({ applicators, crews, performedBy, canDispatch, isAdmin,
       assertRpcResult<{ dispatched: number }>(data, 'dispatch_job_locations');
       reassignKeysRef.current.delete(scope); // confirmed success → next reassign of this intent is a new action
       toast('success', `Reassigned ${row.field_name || 'location'}${licenseOverride ? ' (license override)' : ''}`);
+
+      // U12: notify the NEW applicator they got this location, and — if the
+      // PREVIOUS assignee was a different applicator — notify them it's off
+      // their plate. Crews are skipped (no single user to notify). Best-effort;
+      // never blocks the already-committed reassign.
+      if (kind === 'applicator') {
+        void notifyApplicatorDispatched(id, row.job_number, row.customer_name || 'Unknown', null, row.job_id);
+      }
+      if (row.applicator_id && row.applicator_id !== (kind === 'applicator' ? id : null)) {
+        void notifyApplicatorUndispatched(row.applicator_id, row.job_number, row.customer_name || 'Unknown', row.job_id);
+      }
+
       setReassignFor(null);
       setReassignChoice('');
       await fetchRows();
@@ -1270,6 +1283,12 @@ function DispatchedList({ applicators, crews, performedBy, canDispatch, isAdmin,
       // stale row disappears (Codex #37 final-3 P3).
       if (res.undispatched > 0) {
         toast('success', `Undispatched ${row.field_name || 'location'}`);
+        // U12: tell the applicator this location is off their plate. Skipped
+        // for a crew dispatch (no single user) and skipped when undispatched=0
+        // (nothing actually changed — see the else branch below).
+        if (row.applicator_id) {
+          void notifyApplicatorUndispatched(row.applicator_id, row.job_number, row.customer_name || 'Unknown', row.job_id);
+        }
       } else {
         toast('info', 'This location was already undispatched or its job is no longer active — list refreshed.');
       }

@@ -11,6 +11,7 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { logActivity } from '../lib/activityLogger';
+import { notifyApplicatorDispatched, notifyApplicatorRescheduled, notifyApplicatorUndispatched } from '../lib/notificationTriggers';
 import { supabase, checkMutationResult, assertRpcResult, hasRpcCode, RpcErrorCodes, sanitizeError } from '../lib/db';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { getLicenseStatus, licenseStatusLabel } from '../lib/licenseStatus';
@@ -318,6 +319,16 @@ export default function JobDetail() {
   const [printingLoader, setPrintingLoader] = useState(false);
   // The applicator currently saved on the job — the license gate only fires on a CHANGE
   const [savedApplicatorId, setSavedApplicatorId] = useState<string | null>(null);
+  // U12: mirrors savedApplicatorId — lets performSave detect a RESCHEDULE
+  // (job_date changed while the same applicator stays assigned) so the
+  // assigned applicator can be notified.
+  const [savedJobDate, setSavedJobDate] = useState<string | null>(null);
+  // U12 Codex R3 #2: true when the CURRENT applicator holds an ACTIVE
+  // ('dispatched') job_location_dispatches row on this job. The assignment-
+  // unification migration authorizes such a dispatchee to start/complete the
+  // job server-side — this state lets the Start/Complete buttons show for them
+  // (previously only the legacy jobs.applicator_id assignee saw them).
+  const [hasActiveDispatch, setHasActiveDispatch] = useState(false);
   const [showLicenseOverrideConfirm, setShowLicenseOverrideConfirm] = useState(false);
   const assignIdem = useIdempotencyKey('assign_job_applicator', profile?.id || '');
   // B3: WPS pre-application notice PDF
@@ -1416,6 +1427,7 @@ export default function JobDetail() {
     setStatus(j.status);
     setCustomerId(j.customer_id);
     setJobDate(j.job_date);
+    setSavedJobDate(j.job_date);
     setScheduledTime(j.scheduled_time || '');
     setApplicatorId(j.applicator_id || '');
     setSavedApplicatorId(j.applicator_id || null);
@@ -1560,6 +1572,32 @@ export default function JobDetail() {
       }
     })();
   }, [id, fetchJob, isNew, searchParams]);
+
+  // U12 Codex R3 #2: does the current APPLICATOR hold an active ('dispatched')
+  // job_location_dispatches row on this job? The assignment-unification migration
+  // authorizes such a dispatchee to start/complete server-side, so the UI gate
+  // must match. RLS on job_location_dispatches already scopes an applicator to
+  // their own active rows, so the query is safe. Best-effort: any error leaves
+  // the gate false (office roles never depend on it, and the RPC stays
+  // authoritative for the stricter rules either way).
+  useEffect(() => {
+    if (isNew || !id || !profile?.id || role !== 'applicator') {
+      setHasActiveDispatch(false);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      const res = await supabase
+        .from('job_location_dispatches')
+        .select('id')
+        .eq('job_id', id)
+        .eq('applicator_id', profile.id)
+        .eq('dispatch_status', 'dispatched')
+        .limit(1);
+      if (!cancelled) setHasActiveDispatch(!res.error && (res.data?.length ?? 0) > 0);
+    })();
+    return () => { cancelled = true; };
+  }, [id, isNew, profile, role]);
 
   // Field-app parity #16: keep the active tab in sync with the ?tab= param AFTER mount.
   // The useState initializer only reads ?tab= once, so a same-route param change (e.g.
@@ -2025,9 +2063,62 @@ export default function JobDetail() {
         await writeOverrideAudit(overrideReasonForAudit, isNew ? result.job_id : (id || null));
       }
 
+      // U12: notify the assigned applicator on dispatch / reschedule / undispatch.
+      // Best-effort (each notify* fn swallows its own errors into Sentry via
+      // logNotificationFailure) — never blocks the save that already committed.
+      // Applicators previously got NO notification at all for any of these three
+      // (verified: no notify*/createNotification call existed around this save
+      // path before U12).
+      const savedJobIdForNotify = isNew ? result.job_id : (id as string);
+      const newApplicatorId = applicatorId || null;
+      const custNameForNotify = customers.find((c) => c.id === customerId)?.farm_name || 'Unknown';
+      if (newApplicatorId && newApplicatorId !== savedApplicatorId) {
+        void notifyApplicatorDispatched(newApplicatorId, jobNumber || '', custNameForNotify, jobDate, savedJobIdForNotify);
+      } else if (newApplicatorId && newApplicatorId === savedApplicatorId && jobDate !== savedJobDate) {
+        void notifyApplicatorRescheduled(newApplicatorId, jobNumber || '', custNameForNotify, jobDate, savedJobIdForNotify);
+      }
+      if (savedApplicatorId && savedApplicatorId !== newApplicatorId) {
+        void notifyApplicatorUndispatched(savedApplicatorId, jobNumber || '', custNameForNotify, savedJobIdForNotify);
+      }
+
+      // U12 Codex R5 #1: a reschedule must ALSO reach the active PER-LOCATION
+      // dispatch assignees, not just the legacy jobs.applicator_id (the branches
+      // above never see wizard-dispatched applicators). Fetch this job's active
+      // ('dispatched') applicator rows, dedupe, and skip anyone already covered:
+      // the legacy applicator (notified above — the dispatched notice carries the
+      // new date too) and the saver themselves. Best-effort like the others —
+      // each notify* self-swallows; a fetch failure only logs to Sentry and never
+      // blocks the already-committed save. Skipped for a brand-new job (its id
+      // was just minted — no dispatch rows can exist). RLS: the saver here is an
+      // office role (the save UI is isEditable-gated), which reads all rows.
+      if (!isNew && jobDate !== savedJobDate) {
+        void (async () => {
+          try {
+            const dispRes = await supabase
+              .from('job_location_dispatches')
+              .select('applicator_id')
+              .eq('job_id', savedJobIdForNotify)
+              .eq('dispatch_status', 'dispatched')
+              .not('applicator_id', 'is', null);
+            if (dispRes.error) throw dispRes.error;
+            const notified = new Set<string>();
+            if (newApplicatorId) notified.add(newApplicatorId);
+            if (profile?.id) notified.add(profile.id);
+            for (const r of (dispRes.data || []) as { applicator_id: string | null }[]) {
+              if (!r.applicator_id || notified.has(r.applicator_id)) continue;
+              notified.add(r.applicator_id);
+              void notifyApplicatorRescheduled(r.applicator_id, jobNumber || '', custNameForNotify, jobDate, savedJobIdForNotify);
+            }
+          } catch (notifyErr) {
+            Sentry.captureException(notifyErr instanceof Error ? notifyErr : new Error(String(notifyErr)), { extra: { context: 'notify_dispatchees_rescheduled' } });
+          }
+        })();
+      }
+
       toast('success', isNew ? 'Job created' : 'Job saved');
       setIsDirty(false);
       setSavedApplicatorId(applicatorId || null);
+      setSavedJobDate(jobDate);
 
       if (isNew) {
         navigate(`/jobs/${result.job_id}`);
@@ -2098,7 +2189,13 @@ export default function JobDetail() {
       await fetchJob();
     } catch (err: unknown) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'complete_job' } });
-      toast('error', err instanceof Error ? err.message : 'Failed to complete job');
+      // U12 Codex R5 #2: same translation as FieldView — a dispatch-only
+      // applicator on a SPLIT job gets the RPC's raw authorization rejection;
+      // explain the business reason instead.
+      const completeMsg = err instanceof Error ? err.message : 'Failed to complete job';
+      toast('error', completeMsg.includes('Not authorized to complete this job')
+        ? 'This job is split with another applicator or crew — the office will complete and close it.'
+        : completeMsg);
     }
     setCompleting(false);
   };
@@ -2524,8 +2621,26 @@ export default function JobDetail() {
   }
 
   const canEdit = isEditable && (isNew || status === 'scheduled' || status === 'in_progress');
-  const canComplete = !isNew && status === 'in_progress';
-  const canTransfer = !isNew && status === 'completed';
+  // U12: the assigned applicator (job-level applicator_id match — mirrors the
+  // existing AppliedRecordsManager canEdit gate a few hundred lines down) can
+  // see Start/Complete on THEIR OWN job even though isEditable is office-only.
+  // Verified server-side: start_job/complete_job already authorize
+  // `is_applicator() AND jobs.applicator_id = actor` (and, after migration
+  // 20260706060000, a per-location dispatchee too) — this UI gate was simply
+  // narrower than what the RPC already allowed, hiding a legitimate action.
+  const isAssignedApplicator = profile?.role === 'applicator' && !!applicatorId && applicatorId === profile?.id;
+  // U12 Codex R3 #2: an applicator holding an ACTIVE per-location dispatch row
+  // (hasActiveDispatch) can also start/complete — mirrors the assignment-
+  // unification migration's server-side authorization. Cancel/Transfer stay
+  // office-only (isEditable) — deliberately NOT widened.
+  const canStart = !isNew && status === 'scheduled' && (isEditable || isAssignedApplicator || hasActiveDispatch);
+  const canComplete = !isNew && status === 'in_progress' && (isEditable || isAssignedApplicator || hasActiveDispatch);
+  // Cancel/Transfer are OFFICE decisions (cancelling work or converting it to a
+  // billable invoice) — not verified-safe to hand an applicator: Cancel had NO
+  // role gate at all before U12 (any of admin/sales_rep/applicator viewing this
+  // page could click it), and Transfer's only gate was the job's status.
+  const canCancel = !isNew && (status === 'scheduled' || status === 'in_progress') && isEditable;
+  const canTransfer = !isNew && status === 'completed' && isEditable;
 
   // Selectable customers for a share row = the field owner + any customer (cross-bill).
   const shareInputCls = 'w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg disabled:bg-gray-50';
@@ -2588,13 +2703,13 @@ export default function JobDetail() {
               </Button>
             </>
           )}
-          {!isNew && (status === 'scheduled' || status === 'in_progress') && (
+          {canCancel && (
             <Button variant="danger" onClick={() => setShowCancelConfirm(true)} loading={cancelling}>
               <Ban className="w-4 h-4" />
               Cancel Job
             </Button>
           )}
-          {!isNew && status === 'scheduled' && isEditable && (
+          {canStart && (
             <Button
               variant="secondary"
               onClick={() => {
