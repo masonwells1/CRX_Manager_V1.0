@@ -130,6 +130,7 @@ interface JobDbRow {
     phi_days?: number | null;
     warehouse?: string | null;
     vendor?: string | null;
+    customer_supplied?: boolean | null;
     sort_order: number;
     product?: { product_name: string } | null;
   }>;
@@ -203,6 +204,9 @@ interface ChemRow {
   phi_days: string;
   warehouse: string;
   vendor: string;
+  /** #53/#54: grower brought this product — apply it, but don't deduct our
+   *  inventory or bill for it. Persisted to job_chemicals.customer_supplied. */
+  customer_supplied: boolean;
   sort_order: number;
   /** UI-only (NOT persisted): which field the user last drove — so an acreage
    *  change re-derives the OTHER field and never silently rewrites a
@@ -1517,6 +1521,7 @@ export default function JobDetail() {
         phi_days: c.phi_days?.toString() || '',
         warehouse: c.warehouse || '',
         vendor: c.vendor || '',
+        customer_supplied: c.customer_supplied ?? false,
         sort_order: c.sort_order,
       }))
     );
@@ -1573,8 +1578,10 @@ export default function JobDetail() {
   // Computed
   const customerFields = allFields.filter(f => !customerId || f.customer_id === customerId);
   const totalAcres = fieldRows.reduce((sum, f) => sum + (parseFloat(f.acres_to_treat) || 0), 0);
-  const totalCostCents = chemRows.reduce((sum, c) => sum + Math.round((parseFloat(c.quantity) || 0) * (parseInt(c.cost_per_unit_cents) || 0)), 0);
-  const totalPriceCents = chemRows.reduce((sum, c) => sum + Math.round((parseFloat(c.quantity) || 0) * (parseInt(c.price_per_unit_cents) || 0)), 0);
+  // #53/#54: a customer-supplied product is applied but not billed and cost us
+  // nothing — it contributes 0 to both job totals (mirrors the server's $0 line).
+  const totalCostCents = chemRows.reduce((sum, c) => sum + (c.customer_supplied ? 0 : Math.round((parseFloat(c.quantity) || 0) * (parseInt(c.cost_per_unit_cents) || 0))), 0);
+  const totalPriceCents = chemRows.reduce((sum, c) => sum + (c.customer_supplied ? 0 : Math.round((parseFloat(c.quantity) || 0) * (parseInt(c.price_per_unit_cents) || 0))), 0);
 
   // Loader worksheet (#10) — the spray tank is sized by SPRAY VOLUME, not by the
   // sum of chemical gallons. Spray volume = total acres × the carrier rate (gal/
@@ -1910,6 +1917,7 @@ export default function JobDetail() {
         phi_days: c.phi_days || null,
         warehouse: c.warehouse || null,
         vendor: c.vendor || null,
+        customer_supplied: c.customer_supplied || false,
         sort_order: i,
       }));
 
@@ -2440,10 +2448,16 @@ export default function JobDetail() {
       product_id: '', product_name: '', quantity: '0', unit: '', rate_per_acre: '', rate_unit: '',
       cost_per_unit_cents: '0', price_per_unit_cents: '0',
       diluent_rate: '', rei_hours: '', phi_days: '', warehouse: '', vendor: '',
+      customer_supplied: false,
       sort_order: chemRows.length,
     }]);
   };
   const removeChemRow = (i: number) => setChemRows(chemRows.filter((_, idx) => idx !== i));
+  const toggleChemSupplied = (i: number) => {
+    const updated = [...chemRows];
+    updated[i] = { ...updated[i], customer_supplied: !updated[i].customer_supplied };
+    setChemRows(updated);
+  };
   const updateChemRow = (i: number, key: keyof ChemRow, value: string) => {
     const updated = [...chemRows];
     updated[i] = { ...updated[i], [key]: value };
@@ -3156,6 +3170,20 @@ export default function JobDetail() {
                         <input type="number" value={c.price_per_unit_cents} onChange={(e) => updateChemRow(i, 'price_per_unit_cents', e.target.value)}
                           disabled={!canEdit} step="1" className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg disabled:bg-gray-50" />
                       </div>
+                    </div>
+                    {/* #53/#54: grower-supplied product — applied but not deducted or billed. */}
+                    <div className="flex items-center gap-2 pt-1">
+                      <input
+                        type="checkbox"
+                        id={`cust-supp-${i}`}
+                        checked={c.customer_supplied}
+                        onChange={() => toggleChemSupplied(i)}
+                        disabled={!canEdit}
+                        className="h-4 w-4 rounded border-gray-300 text-crx-green focus:ring-crx-green disabled:opacity-50"
+                      />
+                      <label htmlFor={`cust-supp-${i}`} className="text-xs font-medium text-secondary select-none">
+                        Customer supplied &mdash; apply it, but don&rsquo;t deduct our inventory or bill for this product
+                      </label>
                     </div>
                     {/* §5 Label-Rate Guardrails: rate-vs-max + PHI-vs-harvest on the job mix
                         grid (unit-safe; never blocks here — the save gate handles block mode).

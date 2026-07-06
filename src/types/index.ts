@@ -2272,6 +2272,10 @@ export interface JobChemical {
   phi_days: number | null;
   warehouse: string | null;
   vendor: string | null;
+  // #53/#54 (2026-07-06): grower supplied this product — applied but NOT deducted
+  // from our inventory and NOT billed (a $0 informational invoice line). It still
+  // appears in the application_records legal product_data (flagged customer_supplied).
+  customer_supplied: boolean;
   sort_order: number;
   // Joined
   product?: Product;

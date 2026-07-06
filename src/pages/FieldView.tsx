@@ -271,7 +271,7 @@ export default function FieldView() {
       // (the #38 additive policy). Charges derived from price_per_unit_cents.
       const chemRes = await supabase
         .from('job_chemicals')
-        .select('id, quantity, unit, rate_per_acre, rate_unit, price_per_unit_cents, sort_order, product:products(product_name)')
+        .select('id, quantity, unit, rate_per_acre, rate_unit, price_per_unit_cents, customer_supplied, sort_order, product:products(product_name)')
         .eq('job_id', card.job_id)
         .order('sort_order', { ascending: true, nullsFirst: false });
       if (chemRes.error) throw chemRes.error;
@@ -284,14 +284,16 @@ export default function FieldView() {
           crop: jf.crop,
           acres_to_treat: jf.acres_to_treat,
         })),
-        chemicals: ((chemRes.data || []) as Array<{ id: string; quantity: number | null; unit: string | null; rate_per_acre: number | null; rate_unit: string | null; price_per_unit_cents: number | null; product?: { product_name?: string } }>).map((jc) => ({
+        chemicals: ((chemRes.data || []) as unknown as Array<{ id: string; quantity: number | null; unit: string | null; rate_per_acre: number | null; rate_unit: string | null; price_per_unit_cents: number | null; customer_supplied?: boolean | null; product?: { product_name?: string } }>).map((jc) => ({
           id: jc.id,
           product_name: jc.product?.product_name ?? null,
           quantity: jc.quantity,
           unit: jc.unit,
           rate_per_acre: jc.rate_per_acre,
           rate_unit: jc.rate_unit,
-          chargeCents: chemicalChargeCents(jc.quantity, jc.price_per_unit_cents),
+          // U4 (#53, Codex R3): grower-supplied product is applied but NOT billed —
+          // the invoice engine emits it at $0, so the phone card must agree.
+          chargeCents: jc.customer_supplied ? 0 : chemicalChargeCents(jc.quantity, jc.price_per_unit_cents),
         })),
       };
       setDetails((prev) => ({ ...prev, [cacheKey]: detail }));

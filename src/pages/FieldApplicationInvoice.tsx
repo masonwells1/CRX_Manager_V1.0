@@ -1021,6 +1021,11 @@ export default function FieldApplicationInvoice() {
             vendor: (it.vendor as string | null) ?? null,
             product_form: (it.product_form as 'liquid' | 'dry' | null) ?? null,
             epa_registration: (it.epa_registration as string | null) || undefined,
+            // U4 (Codex R4): rehydrate manual pricing — a persisted manual price
+            // (price_source='manual') or ANY product-less line (no tier fallback
+            // exists) must reload as manual_override=true, or the next save would
+            // treat the price as tier-derived and zero a custom line's charge.
+            manual_override: (it.price_source as string | null) === 'manual' || it.product_id == null,
             // §5: hydrated label data (null when the product has none / fetch failed).
             max_label_rate: label?.max_label_rate ?? null,
             max_label_rate_unit: label?.max_label_rate_unit ?? null,

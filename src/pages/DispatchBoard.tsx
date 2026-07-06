@@ -91,6 +91,9 @@ interface JobChemNeed {
   unit: string | null;
   inventory_unit: string | null;
   product_form: string | null;
+  /** U4 (#53): grower-supplied — applied but demands nothing from OUR shed, so it
+   *  must not trip the stock light (the stock RPC excludes it server-side too). */
+  customer_supplied: boolean;
 }
 const STOCK_SEVERITY: Record<JobStockStatus, number> = { unknown: 0, ok: 1, low: 2, short: 3 };
 const worseStock = (a: JobStockStatus, b: JobStockStatus): JobStockStatus =>
@@ -367,14 +370,14 @@ export default function DispatchBoard() {
           for (let from = 0; ; from += DISPATCH_PAGE) {
             const chemRes = await supabase
               .from('job_chemicals')
-              .select('job_id, product_id, quantity, unit, product:products(product_name, inventory_unit, product_form)')
+              .select('job_id, product_id, quantity, unit, customer_supplied, product:products(product_name, inventory_unit, product_form)')
               .in('job_id', idChunk)
               .range(from, from + DISPATCH_PAGE - 1);
             if (chemRes.error) {
               Sentry.captureException(chemRes.error, { tags: { source: 'fetch', action: 'dispatch_job_chemicals' } });
               break;
             }
-            const rows = (chemRes.data || []) as Array<{ job_id: string; product_id: string; quantity: number | null; unit: string | null; product?: { product_name?: string; inventory_unit?: string | null; product_form?: string | null } | null }>;
+            const rows = (chemRes.data || []) as unknown as Array<{ job_id: string; product_id: string; quantity: number | null; unit: string | null; customer_supplied?: boolean | null; product?: { product_name?: string; inventory_unit?: string | null; product_form?: string | null } | null }>;
             for (const c of rows) {
               (chemByJob[c.job_id] ||= []).push({
                 product_id: c.product_id,
@@ -383,6 +386,7 @@ export default function DispatchBoard() {
                 unit: c.unit,
                 inventory_unit: c.product?.inventory_unit ?? null,
                 product_form: c.product?.product_form ?? null,
+                customer_supplied: c.customer_supplied ?? false,
               });
             }
             if (rows.length < DISPATCH_PAGE) break;
@@ -422,6 +426,9 @@ export default function DispatchBoard() {
         let status: JobStockStatus = 'ok';
         for (const c of chems) {
           if (c.quantity <= 0) continue;
+          // U4 (#53, Codex R2): grower-supplied product — the stock RPC returns no
+          // row for it BY DESIGN; skip it here too or the missing row reads as short.
+          if (c.customer_supplied) continue;
           // demand + free come from the RPC keyed by (job, product): demand is already
           // unit-converted and free already excludes THIS job's own hold. A missing row
           // or no inventory record for a needed product = a real shortfall signal.
