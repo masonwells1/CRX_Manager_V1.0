@@ -193,6 +193,11 @@ export const RpcErrorCodes = {
   // save_field_crop_history — A12 crop-history editor (structure-fix loop, 2026-07-02)
   FIELD_NOT_FOUND: 'FIELD_NOT_FOUND',
   CROP_TYPE_REQUIRED: 'CROP_TYPE_REQUIRED',
+  // U6 blend<->job double-bill cross-guards (2026-07-06)
+  // create_invoice_from_blend_ticket — ticket's job already has a live invoice
+  JOB_ALREADY_INVOICED: 'JOB_ALREADY_INVOICED',
+  // transfer_job_to_invoice — a blend ticket for this job is already billed
+  BLEND_TICKET_ALREADY_BILLED: 'BLEND_TICKET_ALREADY_BILLED',
 } as const;
 
 export type RpcErrorCode = (typeof RpcErrorCodes)[keyof typeof RpcErrorCodes];

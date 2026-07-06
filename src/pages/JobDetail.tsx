@@ -2144,7 +2144,13 @@ export default function JobDetail() {
       navigate(`/field-invoices/${result.invoice_id}`);
     } catch (err: unknown) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'transfer_job_to_invoice' } });
-      toast('error', err instanceof Error ? err.message : 'Failed to transfer to invoice');
+      if (hasRpcCode(err, RpcErrorCodes.BLEND_TICKET_ALREADY_BILLED)) {
+        // U6 #91b: a blend ticket for this job was already billed — invoicing the job
+        // too would double-bill. Point the user at the existing bill instead.
+        toast('error', 'A blend ticket for this job has already been billed. Invoicing the job as well would double-charge the customer — void that blend-ticket invoice first if you meant to re-bill here.');
+      } else {
+        toast('error', err instanceof Error ? err.message : 'Failed to transfer to invoice');
+      }
     }
     setTransferring(false);
   };
