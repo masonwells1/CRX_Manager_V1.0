@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState , useCallback, useMemo, lazy, Suspense } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import { Save, Plus, Trash2, Check, FileText, Beaker, Ban, MessageSquarePlus, Printer, CloudSun, MapPin, Truck, ClipboardList, FlaskConical, Bell, History, BookmarkPlus, GripVertical, ChevronUp, ChevronDown, Map as MapIcon, ShieldAlert, CalendarClock, AlertTriangle, Sprout } from 'lucide-react';
+import { Save, Plus, Trash2, Check, FileText, Beaker, Ban, MessageSquarePlus, Printer, CloudSun, MapPin, Truck, ClipboardList, FlaskConical, Bell, History, BookmarkPlus, GripVertical, ChevronUp, ChevronDown, Map as MapIcon, ShieldAlert, CalendarClock, AlertTriangle, Sprout, Send } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
@@ -48,6 +48,10 @@ import { moveItem, moveUp, moveDown } from '../lib/routeOrder';
 import AppliedRecordsManager from '../components/jobs/AppliedRecordsManager';
 import ApplicationServicePicker from '../components/field-app/ApplicationServicePicker';
 import WatchdogFlagBanner from '../components/watchdog/WatchdogFlagBanner';
+// U13 (#15-21/#111): job-scoped "Dispatch Locations" — reuses the SAME 3-step
+// wizard the Dispatch Board uses, pre-scoped + pre-selected to this job.
+import DispatchWizard from '../components/dispatch/DispatchWizard';
+import type { DispatchLocation } from '../lib/dispatchWizard';
 // Codex #16 P2: lazy-load the map component so the mapbox bundle is only fetched when
 // the user actually opens the Map / Logs tab — not on every JobDetail page load (matters
 // on field/mobile connections). JobAttachments is light, so it stays a static import.
@@ -331,6 +335,10 @@ export default function JobDetail() {
   const [hasActiveDispatch, setHasActiveDispatch] = useState(false);
   const [showLicenseOverrideConfirm, setShowLicenseOverrideConfirm] = useState(false);
   const assignIdem = useIdempotencyKey('assign_job_applicator', profile?.id || '');
+  // U13 (#15-21/#111): job-scoped Dispatch Locations wizard.
+  const [dispatchWizardOpen, setDispatchWizardOpen] = useState(false);
+  const [dispatchWizardLocations, setDispatchWizardLocations] = useState<DispatchLocation[]>([]);
+  const [dispatchWizardLoading, setDispatchWizardLoading] = useState(false);
   // B3: WPS pre-application notice PDF
   const [printingWps, setPrintingWps] = useState(false);
   // #9: applicator field sheet (Original / Custom / Enhanced) print picker.
@@ -1895,6 +1903,94 @@ export default function JobDetail() {
     assignIdem.resetKey();
   };
 
+  // U13 (#15-21/#111): open the Dispatch Board wizard SCOPED to just this job's
+  // locations, pre-selected. Requires a SAVED, non-dirty job — the wizard needs
+  // real job_fields.id values (only exist after save_job has run), and any
+  // unsaved edit could change which locations should be offered.
+  const openDispatchWizard = async () => {
+    if (isNew || !id) {
+      toast('error', 'Save the job before dispatching its locations.');
+      return;
+    }
+    if (isDirty) {
+      toast('error', 'Save the job before dispatching its locations — the wizard must match the saved record.');
+      return;
+    }
+    setDispatchWizardLoading(true);
+    try {
+      const [jfRes, dispatchRes] = await Promise.all([
+        supabase
+          .from('job_fields')
+          .select('id, acres_to_treat, field:fields(field_name)')
+          .eq('job_id', id)
+          .order('sort_order'),
+        supabase
+          .from('job_location_dispatches')
+          .select('job_field_id, applicator_id, crew_id')
+          .eq('job_id', id)
+          .eq('dispatch_status', 'dispatched'),
+      ]);
+      if (jfRes.error) throw jfRes.error;
+      if (dispatchRes.error) throw dispatchRes.error;
+
+      type JfRow = { id: string; acres_to_treat: number | null; field?: { field_name?: string } | null };
+      const jfRows = (jfRes.data || []) as JfRow[];
+      if (jfRows.length === 0) {
+        toast('error', 'This job has no field locations to dispatch — add a location on the Locations tab first.');
+        setDispatchWizardLoading(false);
+        return;
+      }
+
+      type DispatchRow = { job_field_id: string; applicator_id: string | null; crew_id: string | null };
+      const currentByField = new Map<string, DispatchRow>();
+      ((dispatchRes.data || []) as DispatchRow[]).forEach((d) => currentByField.set(d.job_field_id, d));
+
+      const customerName = customers.find((c) => c.id === customerId)?.farm_name || 'Customer';
+      // U13 (Codex R2 #3): legacy fallback — a saved job can carry a whole-job
+      // jobs.applicator_id with NO per-location dispatch rows yet (assigned
+      // before the U13 triggers landed; no backfill). Treat that applicator as
+      // each such location's current assignee so the "Currently: X" chip
+      // renders and the steal-confirmation still fires when reassigning away
+      // from them. The wizard only opens on a NON-DIRTY job, so
+      // savedApplicatorId is the authoritative saved value.
+      const jobLevelAssignee: DispatchLocation['currentAssignee'] = savedApplicatorId
+        ? {
+            kind: 'applicator',
+            id: savedApplicatorId,
+            name: applicators.find((ap) => ap.id === savedApplicatorId)?.full_name || 'Unknown applicator',
+          }
+        : null;
+      const locs: DispatchLocation[] = jfRows.map((jf) => {
+        const d = currentByField.get(jf.id);
+        let currentAssignee: DispatchLocation['currentAssignee'] = null;
+        if (d?.applicator_id) {
+          const a = applicators.find((ap) => ap.id === d.applicator_id);
+          currentAssignee = { kind: 'applicator', id: d.applicator_id, name: a?.full_name || 'Unknown applicator' };
+        } else if (d?.crew_id) {
+          const c = groundCrews.find((gc) => gc.id === d.crew_id);
+          currentAssignee = { kind: 'crew', id: d.crew_id, name: c?.name || 'Unknown crew' };
+        } else {
+          currentAssignee = jobLevelAssignee;
+        }
+        return {
+          jobFieldId: jf.id,
+          jobId: id,
+          jobNumber,
+          customerName,
+          fieldName: jf.field?.field_name || 'Field',
+          acres: jf.acres_to_treat ?? null,
+          currentAssignee,
+        };
+      });
+      setDispatchWizardLocations(locs);
+      setDispatchWizardOpen(true);
+    } catch (err) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'open_job_dispatch_wizard', jobId: id } });
+      toast('error', 'Could not load this job’s locations for dispatch — try again.');
+    }
+    setDispatchWizardLoading(false);
+  };
+
   const performSave = async (licenseOverride: boolean, overrideReasonForAudit?: string) => {
     setSaving(true);
     try {
@@ -2830,6 +2926,24 @@ export default function JobDetail() {
                 </p>
               );
             })()}
+            {/* U13 (#15-21/#111): saving this dropdown auto-syncs a whole-job
+                per-location dispatch via a DB trigger (no click needed). This
+                button is for the OTHER case — splitting the job across
+                different applicators/crews per location, or reviewing/
+                reassigning an existing split. */}
+            {/* Codex R4 P2: only render for dispatchable statuses — the wizard's
+                RPC rejects anything else with JOB_NOT_DISPATCHABLE at Finish. */}
+            {!isNew && isEditable && (status === 'scheduled' || status === 'in_progress') && (
+              <button
+                type="button"
+                onClick={openDispatchWizard}
+                disabled={dispatchWizardLoading}
+                className="mt-1.5 inline-flex items-center gap-1.5 text-xs font-medium text-crx-green hover:underline disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <Send className="w-3.5 h-3.5" />
+                {dispatchWizardLoading ? 'Loading locations…' : 'Dispatch Locations'}
+              </button>
+            )}
           </div>
           <div>
             <label className="block text-sm font-medium text-nav-dark mb-1">Vehicle</label>
@@ -4018,6 +4132,21 @@ export default function JobDetail() {
         confirmLabel={postSendCopy.confirmLabel}
         variant="warning"
         loading={sendingPostNotice}
+      />
+
+      {/* U13 (#15-21/#111): job-scoped Dispatch Locations wizard. */}
+      <DispatchWizard
+        open={dispatchWizardOpen}
+        onClose={() => setDispatchWizardOpen(false)}
+        locations={dispatchWizardLocations}
+        initialSelectedIds={dispatchWizardLocations.map((l) => l.jobFieldId)}
+        applicators={applicators
+          .filter((a) => a.role === 'applicator')
+          .map((a) => ({ id: a.id, full_name: a.full_name }))}
+        crews={groundCrews}
+        performedBy={profile?.id || ''}
+        isAdmin={role === 'admin'}
+        onDispatched={() => setDispatchWizardOpen(false)}
       />
     </div>
   );

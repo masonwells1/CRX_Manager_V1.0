@@ -6,7 +6,7 @@
     "regenerate_with": "node scripts/regenerate-schema-registry.mjs --from-introspection <queries.json> (queries documented in the script header)",
     "purpose": "Single source of truth for hooks: generated columns, status enums, ALL parseable CHECK IN-lists, NOT NULL columns, full column lists, sequences, tables-with/without updated_at, applied-migration high water.",
     "note": "For a fresh refresh from the live DB, ask Claude Code: 'regenerate the schema-registry from Supabase' (/regen-schema-registry). skipped_constraints lists every CHECK the hooks can NOT validate — review it when touching those tables.",
-    "migrations_high_water": "20260706124057"
+    "migrations_high_water": "20260706160147"
   },
   "generated_columns": [
     {
@@ -236,6 +236,7 @@
     "job_applied_record_crew",
     "job_attachments",
     "job_chemicals",
+    "job_dispatch_preservation",
     "job_field_shares",
     "job_fields",
     "job_notifications",
@@ -1334,6 +1335,12 @@
       "reason": "unparseable — hooks do NOT validate this constraint"
     },
     {
+      "table": "job_dispatch_preservation",
+      "constraint": "job_dispatch_preservation_one_assignee_check",
+      "def": "CHECK (((applicator_id IS NOT NULL) <> (crew_id IS NOT NULL)))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
       "table": "job_field_shares",
       "constraint": "job_field_shares_split_pct_check",
       "def": "CHECK (((split_pct > (0)::numeric) AND (split_pct <= (100)::numeric)))",
@@ -2239,6 +2246,15 @@
         "id",
         "quantity",
         "customer_supplied"
+      ]
+    },
+    "job_dispatch_preservation": {
+      "no_default": [
+        "job_id",
+        "field_id"
+      ],
+      "with_default": [
+        "preserved_at"
       ]
     },
     "job_field_shares": {
@@ -3857,6 +3873,15 @@
       "warehouse",
       "vendor",
       "customer_supplied"
+    ],
+    "job_dispatch_preservation": [
+      "job_id",
+      "field_id",
+      "applicator_id",
+      "crew_id",
+      "dispatched_by",
+      "dispatched_at",
+      "preserved_at"
     ],
     "job_field_shares": [
       "id",

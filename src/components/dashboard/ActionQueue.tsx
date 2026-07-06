@@ -117,6 +117,26 @@ const CATEGORIES: CategoryConfig[] = [
       return [item.secondary_text, date].filter(Boolean).join(' \u2014 ');
     },
   },
+  {
+    // U13 (#15-21/#111): the job-side sibling of unassigned_deliveries \u2014 a
+    // scheduled job with no ACTIVE per-location dispatch (mission #17). Points
+    // at the Jobs list, which now surfaces the same jobs via the "Needs
+    // Dispatch" badge/quick-filter (see Jobs.tsx patch) so clicking through
+    // lands on a page that explains WHY it's here.
+    key: 'unassigned_jobs',
+    label: 'Unassigned Jobs',
+    icon: <Truck className="w-4 h-4" />,
+    bg: 'bg-sky-50', border: 'border-sky-200',
+    iconColor: 'text-sky-600', textColor: 'text-sky-800',
+    entityPath: '/jobs/',
+    entityType: 'job',
+    formatSubtitle: (item) => {
+      const date = item.scheduled_date
+        ? new Date(item.scheduled_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+        : '';
+      return [item.secondary_text, date].filter(Boolean).join(' \u2014 ');
+    },
+  },
 ];
 
 const DEFAULT_VISIBLE = 5;

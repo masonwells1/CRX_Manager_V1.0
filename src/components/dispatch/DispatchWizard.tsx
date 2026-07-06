@@ -12,7 +12,7 @@
  * selection/assignment/payload logic lives in src/lib/dispatchWizard.ts (unit
  * tested); this component owns state, rendering, and the single RPC call.
  */
-import { useMemo, useState, useCallback } from 'react';
+import { useMemo, useState, useCallback, useEffect, useRef } from 'react';
 import {
   X,
   Check,
@@ -41,6 +41,7 @@ import {
   unassignedCount,
   buildDispatchPayload,
   summarizeDispatch,
+  locationsBeingStolen,
   type DispatchStep,
   type DispatchLocation,
   type DispatchAssignee,
@@ -68,6 +69,14 @@ interface DispatchWizardProps {
   isAdmin: boolean;
   /** Called after a successful commit so the board can refetch. */
   onDispatched: () => void;
+  /**
+   * U13 (#15-21/#111): job-field-ids to pre-select in Step 1 when the wizard
+   * opens (e.g. JobDetail's "Dispatch Locations" button pre-selects the whole
+   * job). Applied exactly ONCE per open (one-shot ref, reset on close) so it
+   * never fights a user's mid-session deselection. Omit for the ordinary
+   * DispatchBoard flow (no pre-selection, unchanged).
+   */
+  initialSelectedIds?: string[];
 }
 
 const STEP_META: Record<DispatchStep, { n: number; label: string }> = {
@@ -85,6 +94,7 @@ export default function DispatchWizard({
   performedBy,
   isAdmin,
   onDispatched,
+  initialSelectedIds,
 }: DispatchWizardProps) {
   const { toast } = useToast();
   const dispatchIdem = useIdempotencyKey('dispatch_job_locations', performedBy);
@@ -97,6 +107,28 @@ export default function DispatchWizard({
   const [activeAssignee, setActiveAssignee] = useState<DispatchAssignee | null>(null);
   // Set when the commit hit LICENSE_EXPIRED and the admin can choose to override.
   const [licenseOverridePrompt, setLicenseOverridePrompt] = useState(false);
+  // U13: confirm-before-steal — set when Finish is clicked and >=1 selected
+  // location would be reassigned away from a DIFFERENT existing assignee.
+  const [stealConfirmOpen, setStealConfirmOpen] = useState(false);
+
+  // U13 (Codex R1 #4): pre-select EXACTLY ONCE per open (job-scoped callers).
+  // A one-shot ref (reset when the wizard closes) — NOT a "while the selection
+  // is empty" check — because callers typically pass a fresh array literal on
+  // every render, which would re-fire this effect and re-select everything the
+  // moment the user deselects their last pre-selected location.
+  const initialSelectionAppliedRef = useRef(false);
+  useEffect(() => {
+    if (!open) {
+      initialSelectionAppliedRef.current = false;
+      return;
+    }
+    if (initialSelectionAppliedRef.current) return;
+    initialSelectionAppliedRef.current = true;
+    if (initialSelectedIds && initialSelectedIds.length > 0) {
+      setSelected(new Set(initialSelectedIds));
+    }
+     
+  }, [open, initialSelectedIds]);
 
   const reset = useCallback(() => {
     setStep('select');
@@ -146,6 +178,10 @@ export default function DispatchWizard({
   );
 
   const missing = unassignedCount(selected, assignments);
+  const stolenLocations = useMemo(
+    () => locationsBeingStolen(selected, assignments, locations),
+    [selected, assignments, locations]
+  );
 
   function toggle(jobFieldId: string) {
     setSelected((prev) => {
@@ -364,6 +400,11 @@ export default function DispatchWizard({
                       <div className="min-w-0 flex-1">
                         <p className="text-sm font-medium text-slate-100 truncate">{loc.fieldName}</p>
                         <p className="text-xs text-slate-500 truncate">{loc.jobNumber} · {loc.customerName}</p>
+                        {loc.currentAssignee && (
+                          <p className="text-xs text-amber-400/90 truncate">
+                            Currently: {loc.currentAssignee.name} ({loc.currentAssignee.kind})
+                          </p>
+                        )}
                       </div>
                       <select
                         value={current ? `${current.kind}:${current.id}` : ''}
@@ -470,7 +511,7 @@ export default function DispatchWizard({
             )}
             {step === 'finish' && (
               <button
-                onClick={() => handleFinish()}
+                onClick={() => (stolenLocations.length > 0 ? setStealConfirmOpen(true) : handleFinish())}
                 disabled={submitting || !canAdvanceToFinish(selected, assignments)}
                 className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-lg bg-crx-green text-sm font-semibold text-white hover:bg-crx-green/90 disabled:opacity-50 min-h-[44px]"
               >
@@ -493,6 +534,23 @@ export default function DispatchWizard({
         title="Applicator License Expired"
         message="An applicator in this dispatch has an expired license. Dispatch anyway? The override is recorded."
         confirmLabel="Dispatch Anyway"
+        variant="warning"
+      />
+
+      {/* U13 (#15-21/#111): confirm before stealing a location from its current
+          assignee — never silently reassign someone else's work. */}
+      <ConfirmModal
+        open={stealConfirmOpen}
+        onClose={() => setStealConfirmOpen(false)}
+        onConfirm={() => {
+          setStealConfirmOpen(false);
+          handleFinish();
+        }}
+        title="Reassign From Current Assignee?"
+        message={`${stolenLocations.length} selected location${stolenLocations.length === 1 ? ' is' : 's are'} currently assigned to someone else (${
+          [...new Set(stolenLocations.map((l) => l.currentAssignee?.name).filter(Boolean))].join(', ')
+        }). Dispatching now will move ${stolenLocations.length === 1 ? 'it' : 'them'} to your new selection. Continue?`}
+        confirmLabel="Reassign Anyway"
         variant="warning"
       />
     </div>

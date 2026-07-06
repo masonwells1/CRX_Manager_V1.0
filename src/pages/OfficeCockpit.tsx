@@ -38,6 +38,7 @@ import {
   CheckCircle,
   ChevronRight,
   ArrowRight,
+  Send,
 } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -113,11 +114,21 @@ interface ShortfallRow {
   job_numbers: string[];
 }
 
+/** U13 (#15-21/#111): a SCHEDULED job with no active per-location dispatch. */
+interface NeedsDispatchJobRow {
+  id: string;
+  job_number: string;
+  job_date: string;
+  customer_name: string;
+}
+
 interface CockpitData {
   unbilledJobs: UnbilledJobRow[];
   postableInvoices: PostableInvoiceRow[];
   watchdogFlags: WatchdogFlag[];
   upcomingJobs: UpcomingJobRow[];
+  /** U13: scheduled jobs with no active per-location dispatch. */
+  needsDispatchJobs: NeedsDispatchJobRow[];
   expiringLicenses: ExpiringLicenseRow[];
   overdueAR: OverdueARRow[];
   // (g) Products short for upcoming (next 7 days) scheduled jobs vs today's free stock.
@@ -237,6 +248,7 @@ export default function OfficeCockpit() {
     postableInvoices: [],
     watchdogFlags: [],
     upcomingJobs: [],
+    needsDispatchJobs: [],
     expiringLicenses: [],
     overdueAR: [],
     shortfalls: [],
@@ -283,6 +295,7 @@ export default function OfficeCockpit() {
       upcomingJobsRes,
       expiringLicRes,
       overdueARRes,
+      needsDispatchRes,
     ] = await Promise.all([
       // (a) Completed jobs with no invoice
       supabase
@@ -338,6 +351,26 @@ export default function OfficeCockpit() {
         .is('deleted_at', null)
         .order('due_date', { ascending: true })
         .limit(TILE_LIMIT),
+
+      // (h) U13 (#15-21/#111, Codex R1 #1): scheduled jobs with NO active
+      // per-location dispatch AND no legacy whole-job applicator (a job-level
+      // applicator_id counts as assigned — matches the migration's
+      // unassigned_jobs rule and the Jobs list's needs_dispatch flag). The
+      // "no active dispatch" predicate runs SERVER-side via the PostgREST
+      // anti-join pattern (left-embed filtered to dispatch_status='dispatched',
+      // then keep only rows whose embed came back EMPTY via .is(..., null)) —
+      // a client-side filter over the first TILE_LIMIT rows would hide real
+      // needs-dispatch jobs whenever that first page was fully dispatched.
+      supabase
+        .from('jobs')
+        .select('id, job_number, job_date, customer:customers(farm_name), job_location_dispatches!left(id)')
+        .eq('status', 'scheduled')
+        .is('deleted_at', null)
+        .is('applicator_id', null)
+        .eq('job_location_dispatches.dispatch_status', 'dispatched')
+        .is('job_location_dispatches', null)
+        .order('job_date', { ascending: true })
+        .limit(TILE_LIMIT),
     ]);
 
     const errors = [
@@ -348,6 +381,7 @@ export default function OfficeCockpit() {
       upcomingJobsRes.error,
       expiringLicRes.error,
       overdueARRes.error,
+      needsDispatchRes.error,
     ].filter(Boolean);
 
     if (errors.length > 0) {
@@ -413,6 +447,21 @@ export default function OfficeCockpit() {
       customer_name: r.customer?.farm_name ?? 'Unknown',
     }));
 
+    // U13 (Codex R1 #1): the anti-join + .is('applicator_id', null) above
+    // already excluded dispatched/legacy-assigned jobs SERVER-side, so every
+    // returned row qualifies — just map it.
+    type RawNeedsDispatch = {
+      id: string; job_number: string; job_date: string;
+      customer?: { farm_name?: string } | null;
+    };
+    const needsDispatchJobs: NeedsDispatchJobRow[] = ((needsDispatchRes.data || []) as RawNeedsDispatch[])
+      .map((r) => ({
+        id: r.id,
+        job_number: r.job_number,
+        job_date: r.job_date,
+        customer_name: r.customer?.farm_name ?? 'Unknown',
+      }));
+
     let shortfalls: ShortfallRow[] = [];
     let shortfallsLoadOk = false;
     if (!shortfallsRes.error && shortfallsRes.data) {
@@ -424,7 +473,7 @@ export default function OfficeCockpit() {
       }
     }
 
-    setData({ unbilledJobs, postableInvoices, watchdogFlags, upcomingJobs, expiringLicenses, overdueAR, shortfalls, shortfallsLoadOk, watchdogLoadOk });
+    setData({ unbilledJobs, postableInvoices, watchdogFlags, upcomingJobs, needsDispatchJobs, expiringLicenses, overdueAR, shortfalls, shortfallsLoadOk, watchdogLoadOk });
     setLastRefreshed(new Date());
     setLoading(false);
   }, [toast]);
@@ -439,7 +488,8 @@ export default function OfficeCockpit() {
     data.watchdogFlags.length +
     data.expiringLicenses.length +
     data.overdueAR.length +
-    data.shortfalls.length;
+    data.shortfalls.length +
+    data.needsDispatchJobs.length;
 
   // §4 Post-all-clean gating. A draft is "clean" (safe to auto-post in bulk) only when:
   //   (a) it passes validation — pricing is NOT pending (the same gate post_invoice_group
@@ -676,6 +726,36 @@ export default function OfficeCockpit() {
                   +{data.unbilledJobs.length - 6} more
                 </button>
               )}
+            </div>
+          )}
+        </Card>
+
+        {/* (h) U13 (#15-21/#111): scheduled jobs with no active dispatch */}
+        <Card>
+          <TileHeader
+            icon={<Send className="w-5 h-5 text-sky-500" />}
+            title="Needs Dispatch"
+            count={data.needsDispatchJobs.length}
+            countColor="text-sky-600"
+            linkLabel="View all"
+            onLink={() => navigate('/jobs')}
+          />
+          {data.needsDispatchJobs.length === 0 ? (
+            <AllClear label="No scheduled jobs without a dispatched applicator or crew." />
+          ) : (
+            <div className="divide-y divide-gray-100">
+              {data.needsDispatchJobs.slice(0, 6).map((row) => (
+                <button
+                  key={row.id}
+                  onClick={() => navigate(`/jobs/${row.id}`)}
+                  className="w-full flex items-center justify-between py-2 text-sm hover:bg-gray-50 rounded transition-colors text-left"
+                >
+                  <div>
+                    <span className="font-medium text-nav-dark">{row.customer_name}</span>
+                    <span className="ml-2 text-gray-500">#{row.job_number}</span>
+                  </div>
+                </button>
+              ))}
             </div>
           )}
         </Card>
