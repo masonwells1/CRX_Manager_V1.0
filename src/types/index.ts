@@ -1899,6 +1899,9 @@ export interface ApplicationRecord {
   source_id: string;
   customer_id: string;
   applicator_id: string | null;
+  /** U10 (#106b, 2026-07-06) — as-of-application snapshots; profiles rows mutate but the legal record must not. */
+  applicator_name: string | null;
+  applicator_license_number: string | null;
   /** DEPRECATED — single-field anchor. Phase 2 (2026-04-30): multi-field detail lives in application_record_fields. */
   field_id: string | null;
   application_date: string;

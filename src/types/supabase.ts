@@ -366,6 +366,8 @@ export type Database = {
           application_date: string
           application_time: string | null
           applicator_id: string | null
+          applicator_license_number: string | null
+          applicator_name: string | null
           created_at: string
           created_by: string | null
           customer_id: string
@@ -389,6 +391,8 @@ export type Database = {
           application_date: string
           application_time?: string | null
           applicator_id?: string | null
+          applicator_license_number?: string | null
+          applicator_name?: string | null
           created_at?: string
           created_by?: string | null
           customer_id: string
@@ -412,6 +416,8 @@ export type Database = {
           application_date?: string
           application_time?: string | null
           applicator_id?: string | null
+          applicator_license_number?: string | null
+          applicator_name?: string | null
           created_at?: string
           created_by?: string | null
           customer_id?: string

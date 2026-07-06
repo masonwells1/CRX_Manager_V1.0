@@ -324,9 +324,12 @@ export default function Reports() {
     // PR-07 follow-up: dropped `applicator:profiles(full_name)` embed; applicator
     // names resolved via profile_public_view post-fetch (sales_rep loses
     // profiles SELECT once 20260510999999_profiles_select_tighten lands).
+    // U10 (2026-07-06): application_records now carries an applicator_name snapshot
+    // (as-of-application, filled for new rows) — prefer it and only fall back to the
+    // profiles join for old rows where it's NULL.
     let query = supabase
       .from('application_records')
-      .select('record_number, application_date, customer:customers(farm_name), field:fields(field_name), applicator_id, total_acres, invoice_id, season')
+      .select('record_number, application_date, customer:customers(farm_name), field:fields(field_name), applicator_id, applicator_name, applicator_license_number, total_acres, invoice_id, season')
       .not('invoice_id', 'is', null)
       .order('application_date', { ascending: false })
       .limit(500);
@@ -339,10 +342,11 @@ export default function Reports() {
       customer?: { farm_name?: string };
       field?: { field_name?: string };
       applicator_id?: string | null;
+      applicator_name?: string | null;
     }>;
 
     const applicatorIds = [...new Set(
-      rows.map((r) => r.applicator_id).filter(Boolean) as string[]
+      rows.filter((r) => !r.applicator_name).map((r) => r.applicator_id).filter(Boolean) as string[]
     )];
 
     let applicatorNameMap: Record<string, string> = {};
@@ -360,7 +364,7 @@ export default function Reports() {
       ...r,
       customer_name: r.customer?.farm_name || 'Unknown',
       field_name: r.field?.field_name || '-',
-      applicator_name: r.applicator_id ? (applicatorNameMap[r.applicator_id] || 'Unknown') : '-',
+      applicator_name: r.applicator_name || (r.applicator_id ? (applicatorNameMap[r.applicator_id] || 'Unknown') : '-'),
     })));
   }, [startDate, endDate, toast]);
 
