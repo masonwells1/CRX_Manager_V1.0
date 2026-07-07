@@ -65,6 +65,19 @@ WITH targets AS (
   FROM customers c
   WHERE c.default_commission_split IS NOT NULL
     AND c.default_commission_split <> 'null'::jsonb
+
+  UNION ALL
+
+  -- U8 (2026-07-06): jobs.commission_split — the split snapshot copied from the
+  -- quote at scheduling; transfer_job_to_invoice computes application-channel
+  -- commissions from it, so an invalid job-level split is a silent mis-payment
+  -- exactly like the three sources above.
+  SELECT 'job:' || j.id::text, 'job', j.id, j.customer_id, j.job_number,
+         j.commission_split
+  FROM jobs j
+  WHERE j.commission_split IS NOT NULL
+    AND j.commission_split <> 'null'::jsonb
+    AND j.deleted_at IS NULL
 ),
 shaped AS (
   SELECT t.*,

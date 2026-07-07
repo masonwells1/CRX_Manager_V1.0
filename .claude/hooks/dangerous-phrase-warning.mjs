@@ -14,6 +14,7 @@
 // without realizing what it costs.
 
 import { readFileSync } from "node:fs";
+import { isMachineGenerated, PUSH_POLICY } from "./prompt-source-lib.mjs";
 
 function emit(extra) {
   if (extra) {
@@ -30,6 +31,11 @@ try {
 } catch {
   emit();
 }
+
+// Machine-generated envelopes (<task-notification>, <system-reminder>, slash-command
+// output) are not something Mason typed — stay silent so an embedded report full of
+// risky-sounding words can't trip the warning.
+if (isMachineGenerated(payload?.prompt)) emit();
 
 const prompt = (payload?.prompt || "").toLowerCase();
 if (!prompt) emit();
@@ -81,8 +87,8 @@ const rules = [
   {
     pattern: /\bauto[_\s-]?(commit|push|deploy|merge)\b/,
     label: "AUTO-COMMIT/PUSH/DEPLOY",
-    why: "CRX Manager's rule is that Mason commits, pushes, and deploys — Claude never does these autonomously. The skills (/preflight, /deploy-edge-function) always wait for your explicit approval.",
-    alternatives: "If you want a one-step workflow, ask for the skill (`/preflight` runs all checks, then waits for you to type `commit`). The `automation` is in the orchestration, not in skipping your approval."
+    why: `Automation is fine for regular code, but NOT for the hard gates. ${PUSH_POLICY}`,
+    alternatives: "Route the work through /ship — it reviews, tests, and auto-pushes green code to main on its own, and still STOPS for Mason's explicit OK at the hard gates (applying a live migration, deploying an edge function, deleting data)."
   },
   {
     pattern: /\bbypass\s+(check_period_open|period[_\s-]?open|closed[_\s-]?period)\b/,

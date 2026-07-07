@@ -7,6 +7,7 @@ import LoginPage from './components/auth/LoginPage';
 import ForgotPasswordPage from './components/auth/ForgotPasswordPage';
 import ResetPasswordPage from './components/auth/ResetPasswordPage';
 import ProtectedRoute from './components/auth/ProtectedRoute';
+import RoleLanding from './components/auth/RoleLanding';
 import AppLayout from './components/layout/AppLayout';
 import { checkEnvVars, EnvErrorScreen } from './components/EnvCheck';
 import { trackNavigation } from './lib/metrics';
@@ -183,7 +184,7 @@ const router = createBrowserRouter([
           element: <RouteShell />,
           children: [
           // All authenticated roles
-          { index: true, element: <Dashboard /> },
+          { index: true, element: <RoleLanding officeElement={<Dashboard />} /> },
           { path: 'team-board', element: <TeamBoard /> },
           { path: 'notifications', element: <Notifications /> },
           { path: 'getting-started', element: <GettingStarted /> },

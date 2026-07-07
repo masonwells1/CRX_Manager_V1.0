@@ -39,6 +39,10 @@ const CRITICAL_COLUMNS: Array<{
     columns: [
       { name: 'id', type: 'uuid', nullable: false },
       { name: 'order_id', type: 'uuid', nullable: true },
+      // U8 (2026-07-06): application-channel lineage — NULL on order-sourced rows.
+      { name: 'job_id', type: 'uuid', nullable: true },
+      // U8 Codex R1 P1: the minting invoice (generation-precise reversal/liveness).
+      { name: 'invoice_id', type: 'uuid', nullable: true },
       { name: 'customer_id', type: 'uuid', nullable: true },
       { name: 'recipient_user_id', type: 'uuid', nullable: true },
       { name: 'split_percentage', type: 'number', nullable: true },

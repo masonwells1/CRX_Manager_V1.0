@@ -20,6 +20,7 @@
 // Regression cases live in codex-gauntlet-reminder.test.mjs.
 
 import { readFileSync } from "node:fs";
+import { isMachineGenerated, PUSH_POLICY } from "./prompt-source-lib.mjs";
 
 function emit(extra) {
   if (extra) {
@@ -36,6 +37,11 @@ try {
 } catch {
   emit();
 }
+
+// Machine-generated envelopes (<task-notification>, <system-reminder>, slash-command
+// output) are not something Mason typed — stay silent so review-ish words inside an
+// embedded report can't trip the gauntlet reminder.
+if (isMachineGenerated(payload?.prompt)) emit();
 
 const prompt = String(payload?.prompt || "").toLowerCase();
 if (!prompt) emit();
@@ -203,7 +209,7 @@ emit([
   "- Use foundation audit mode only when Mason asks for a broad app/workflow safety review.",
   "- If the mode or scope is unclear, ask one short question.",
   "",
-  "Hard gates remain in force: do not push, deploy, apply live migrations, delete data, or commit unrelated staged files without Mason's explicit approval in the current conversation.",
+  PUSH_POLICY,
   "",
   "Source of truth: C:\\CRX_Manager\\.claude\\commands\\codex-gauntlet.md"
 ].join("\n"));

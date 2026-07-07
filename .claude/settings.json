@@ -56,12 +56,46 @@
       "mcp__50e15046-cf2c-49da-b8df-ceef27768f63__generate_typescript_types",
       "mcp__50e15046-cf2c-49da-b8df-ceef27768f63__search_docs",
       "mcp__50e15046-cf2c-49da-b8df-ceef27768f63__execute_sql",
+      "mcp__supabase__list_tables",
+      "mcp__supabase__list_migrations",
+      "mcp__supabase__list_extensions",
+      "mcp__supabase__list_edge_functions",
+      "mcp__supabase__get_advisors",
+      "mcp__supabase__get_logs",
+      "mcp__supabase__get_project_url",
+      "mcp__supabase__get_publishable_keys",
+      "mcp__supabase__get_edge_function",
+      "mcp__supabase__generate_typescript_types",
+      "mcp__supabase__search_docs",
+      "mcp__supabase__execute_sql",
+      "mcp__50e15046-cf2c-49da-b8df-ceef27768f63__apply_migration",
+      "mcp__50e15046-cf2c-49da-b8df-ceef27768f63__deploy_edge_function",
+      "mcp__supabase__execute_sql",
+      "mcp__supabase__apply_migration",
+      "mcp__supabase__deploy_edge_function",
+      "mcp__supabase__list_migrations",
+      "mcp__claude_ai_Supabase__execute_sql",
+      "mcp__claude_ai_Supabase__apply_migration",
+      "mcp__claude_ai_Supabase__deploy_edge_function",
       "Bash(git push:*)",
       "Workflow",
       "ScheduleWakeup"
     ],
     "ask": [
-      "mcp__50e15046-cf2c-49da-b8df-ceef27768f63__deploy_edge_function"
+      "Bash(gh pr merge:*)",
+      "mcp__github__push_files",
+      "mcp__github__create_or_update_file",
+      "mcp__github__delete_file",
+      "mcp__github__merge_pull_request",
+      "mcp__Desktop_Commander__start_process",
+      "mcp__Desktop_Commander__interact_with_process",
+      "mcp__Desktop_Commander__write_file",
+      "mcp__Desktop_Commander__edit_block",
+      "mcp__Desktop_Commander__move_file",
+      "mcp__Desktop_Commander__set_config_value",
+      "mcp__filesystem__write_file",
+      "mcp__filesystem__edit_file",
+      "mcp__filesystem__move_file"
     ],
     "deny": [
       "Bash(git push --force:*)",
@@ -128,7 +162,7 @@
         ]
       },
       {
-        "matcher": "Bash",
+        "matcher": "Bash|PowerShell",
         "hooks": [
           {
             "type": "command",
@@ -186,6 +220,16 @@
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/eslint-autofix.mjs\"",
             "timeout": 20
+          }
+        ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/registry-freshness.mjs\"",
+            "timeout": 5
           }
         ]
       }

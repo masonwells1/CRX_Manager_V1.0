@@ -843,6 +843,14 @@ export default function DeliveryDetail() {
       const invoiceId = autoInvoice?.auto_invoice?.invoice_id;
       if (invoiceId) setAutoInvoiceId(invoiceId);
 
+      // U9 (#37): complete_delivery now warns-not-blocks on short stock. It
+      // proceeded, flagged the ledger row for review, and notified admins.
+      const stockResult = completeResult as { stock_warning?: boolean; short_stock_count?: number } | null;
+      if (stockResult?.stock_warning) {
+        const shortN = stockResult.short_stock_count ?? 0;
+        toast('warning', `Delivery completed, but ${shortN} product(s) were short — on-hand inventory went negative. Admins have been notified to review.`);
+      }
+
       if (invoiceNum) {
         toast('success', isPartialDelivery
           ? `Delivery completed (partial). Draft invoice ${invoiceNum} created.`

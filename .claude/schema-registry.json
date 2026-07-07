@@ -1,12 +1,12 @@
 {
   "_meta": {
     "registry_version": 2,
-    "generated_at": "2026-07-04",
+    "generated_at": "2026-07-06T23:06:08Z",
     "generated_from": "Supabase project rhyzpcqhnizqbxphqdkr — public schema introspection",
     "regenerate_with": "node scripts/regenerate-schema-registry.mjs --from-introspection <queries.json> (queries documented in the script header)",
     "purpose": "Single source of truth for hooks: generated columns, status enums, ALL parseable CHECK IN-lists, NOT NULL columns, full column lists, sequences, tables-with/without updated_at, applied-migration high water.",
     "note": "For a fresh refresh from the live DB, ask Claude Code: 'regenerate the schema-registry from Supabase' (/regen-schema-registry). skipped_constraints lists every CHECK the hooks can NOT validate — review it when touching those tables.",
-    "migrations_high_water": "20260704031557"
+    "migrations_high_water": "20260706230608"
   },
   "generated_columns": [
     {
@@ -160,7 +160,8 @@
       "declined",
       "expired",
       "cancelled",
-      "closed_by_application"
+      "closed_by_application",
+      "closed_short"
     ],
     "rebate_claims.status": [
       "pending",
@@ -227,12 +228,15 @@
     "financial_audit_log",
     "idempotency_keys",
     "ingredient_map",
+    "integrity_alerts",
+    "integrity_negative_baseline",
     "inventory_transactions",
     "invoice_line_allocations",
     "invoice_shares",
     "job_applied_record_crew",
     "job_attachments",
     "job_chemicals",
+    "job_dispatch_preservation",
     "job_field_shares",
     "job_fields",
     "job_notifications",
@@ -296,7 +300,8 @@
       ],
       "constraints": [
         "allocation_sets_payment_method_check"
-      ]
+      ],
+      "nullable": true
     },
     "application_records.source_type": {
       "values": [
@@ -400,7 +405,8 @@
       ],
       "constraints": [
         "commission_payments_payment_method_check"
-      ]
+      ],
+      "nullable": true
     },
     "commission_payments.status": {
       "values": [
@@ -602,6 +608,17 @@
       ],
       "constraints": [
         "financial_audit_log_operation_type_check"
+      ]
+    },
+    "integrity_alerts.alert_type": {
+      "values": [
+        "negative_inventory",
+        "negative_invoice_balance",
+        "stale_quote_hold",
+        "booking_overdraw"
+      ],
+      "constraints": [
+        "integrity_alerts_alert_type_check"
       ]
     },
     "inventory_holds.hold_type": {
@@ -876,7 +893,8 @@
         "declined",
         "expired",
         "cancelled",
-        "closed_by_application"
+        "closed_by_application",
+        "closed_short"
       ],
       "constraints": [
         "quotes_status_check"
@@ -1056,7 +1074,8 @@
       ],
       "constraints": [
         "vendor_payments_payment_method_check"
-      ]
+      ],
+      "nullable": true
     },
     "watchdog_flag_dismissals.resolution": {
       "values": [
@@ -1158,6 +1177,12 @@
       "constraint": "chk_commission_pct",
       "def": "CHECK (((split_percentage >= (0)::numeric) AND (split_percentage <= (100)::numeric)))",
       "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "commissions",
+      "constraint": "chk_commission_source",
+      "def": "CHECK ((order_id IS NOT NULL) OR (job_id IS NOT NULL))",
+      "reason": "OR-condition across two nullable FKs, not an IN-list; hooks do NOT validate this constraint (U8, migration 20260707060000)"
     },
     {
       "table": "delivery_items",
@@ -1314,6 +1339,12 @@
       "constraint": "job_attachments_storage_path_scoped",
       "def": "CHECK ((storage_path ~~ ((job_id)::text || '/%'::text)))",
       "reason": "unparseable — hooks do NOT validate this constraint"
+    },
+    {
+      "table": "job_dispatch_preservation",
+      "constraint": "job_dispatch_preservation_one_assignee_check",
+      "def": "CHECK (((applicator_id IS NOT NULL) <> (crew_id IS NOT NULL)))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
     },
     {
       "table": "job_field_shares",
@@ -1726,7 +1757,6 @@
     },
     "commissions": {
       "no_default": [
-        "order_id",
         "customer_id"
       ],
       "with_default": [
@@ -2021,6 +2051,27 @@
         "generic_has_bulk"
       ]
     },
+    "integrity_alerts": {
+      "no_default": [
+        "alert_type",
+        "entity_table",
+        "entity_id"
+      ],
+      "with_default": [
+        "id",
+        "details",
+        "detected_at"
+      ]
+    },
+    "integrity_negative_baseline": {
+      "no_default": [
+        "product_id",
+        "quantity_at_baseline"
+      ],
+      "with_default": [
+        "baselined_at"
+      ]
+    },
     "inventory": {
       "no_default": [
         "product_id"
@@ -2198,7 +2249,17 @@
       ],
       "with_default": [
         "id",
-        "quantity"
+        "quantity",
+        "customer_supplied"
+      ]
+    },
+    "job_dispatch_preservation": {
+      "no_default": [
+        "job_id",
+        "field_id"
+      ],
+      "with_default": [
+        "preserved_at"
       ]
     },
     "job_field_shares": {
@@ -3007,7 +3068,9 @@
       "invoice_id",
       "created_by",
       "created_at",
-      "updated_at"
+      "updated_at",
+      "applicator_name",
+      "applicator_license_number"
     ],
     "application_services": [
       "id",
@@ -3206,7 +3269,9 @@
       "season",
       "deleted_at",
       "order_number",
-      "customer_name"
+      "customer_name",
+      "job_id",
+      "invoice_id"
     ],
     "cost_history": [
       "id",
@@ -3276,7 +3341,8 @@
       "zip",
       "account_number",
       "finance_charge_enabled",
-      "finance_charge_grace_days"
+      "finance_charge_grace_days",
+      "default_application_service_id"
     ],
     "cycle_count_items": [
       "id",
@@ -3546,6 +3612,20 @@
       "fallback_branded_product",
       "notes"
     ],
+    "integrity_alerts": [
+      "id",
+      "alert_type",
+      "entity_table",
+      "entity_id",
+      "details",
+      "detected_at",
+      "resolved_at"
+    ],
+    "integrity_negative_baseline": [
+      "product_id",
+      "quantity_at_baseline",
+      "baselined_at"
+    ],
     "inventory": [
       "id",
       "product_id",
@@ -3801,7 +3881,17 @@
       "rei_hours",
       "phi_days",
       "warehouse",
-      "vendor"
+      "vendor",
+      "customer_supplied"
+    ],
+    "job_dispatch_preservation": [
+      "job_id",
+      "field_id",
+      "applicator_id",
+      "crew_id",
+      "dispatched_by",
+      "dispatched_at",
+      "preserved_at"
     ],
     "job_field_shares": [
       "id",
@@ -3915,6 +4005,7 @@
       "ground_crew_id",
       "batch_ref",
       "last_printed_by",
+      "commission_split",
       "carrier_rate_gpa",
       "loader_tank_capacity"
     ],

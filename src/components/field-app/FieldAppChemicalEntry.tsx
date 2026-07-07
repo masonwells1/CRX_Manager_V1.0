@@ -3,10 +3,11 @@ import { Plus, Trash2, AlertTriangle, ShieldAlert, Clock, CalendarClock } from '
 import Button from '../ui/Button';
 import { supabase } from '../../lib/db';
 import { Sentry } from '../../lib/sentry';
-import type { Product } from '../../types';
+import type { Product, UnitConversion } from '../../types';
 import { formatCents as fmt } from '../../lib/money';
 import { parseDollarsToCents } from '../../lib/parseCents';
 import { toGallonOrLbEquivalent, fieldAppPricedQuantity } from '../../lib/chemCalculator';
+import { unitOptionsForForm, isKnownUnit } from '../../lib/units';
 import {
   compareToMaxRate,
   phiHarvestWarning,
@@ -61,6 +62,13 @@ export interface ChemicalLine {
   max_label_rate_unit?: string | null;
   rei_hours?: number | null;
   phi_days?: number | null;
+  /**
+   * #56 (UI-only, NOT persisted): a hand-entered "custom line" with no catalog
+   * product. Renders a free-text name input instead of the product search box.
+   * The server already supports manual lines (product_id NULL + free-text name +
+   * editable price); this flag just drives the local rendering.
+   */
+  is_custom?: boolean;
 }
 
 interface FieldAppChemicalEntryProps {
@@ -134,6 +142,14 @@ export default function FieldAppChemicalEntry({
   const [activeLineId, setActiveLineId] = useState<string | null>(null);
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState(false);
+  const [unitConversions, setUnitConversions] = useState<UnitConversion[]>([]);
+
+  useEffect(() => {
+    supabase.from('unit_conversions').select('*').order('unit').then(({ data, error }) => {
+      if (error) { Sentry.captureException(error, { tags: { source: 'fetch', action: 'load_unit_conversions' } }); return; }
+      setUnitConversions((data || []) as UnitConversion[]);
+    });
+  }, []);
   const searchRef = useRef<HTMLDivElement>(null);
 
   const searchProducts = useCallback(async (q: string) => {
@@ -201,6 +217,34 @@ export default function FieldAppChemicalEntry({
     setSearchResults([]);
   };
 
+  const addCustomLine = () => {
+    if (readOnly) return;
+    const line: ChemicalLine = {
+      id: genId(),
+      product_id: null,
+      product_name: '',
+      rate_per_acre: null,
+      rate_unit: 'oz',
+      quantity: 0,
+      unit: 'oz',
+      unit_price_cents: 0,
+      price_unit: 'oz',
+      extended_cents: 0,
+      unit_cost_cents: 0,
+      sort_order: chemicals.length,
+      warehouse: null,
+      vendor: null,
+      product_form: null,
+      is_custom: true,
+    };
+    onChemicalsChange([...chemicals, line]);
+    setActiveLineId(line.id);
+    // No product search for a custom line — the user types the name directly.
+    setShowSearch(false);
+    setSearchQuery('');
+    setSearchResults([]);
+  };
+
   const removeLine = (id: string) => {
     if (readOnly) return;
     onChemicalsChange(chemicals.filter((c) => c.id !== id));
@@ -212,6 +256,16 @@ export default function FieldAppChemicalEntry({
       chemicals.map((c) => {
         if (c.id !== id) return c;
         const updated = { ...c, ...updates };
+        // WaveB (Codex R2c): a MANUAL line (no product) has no product inventory unit, so the
+        // server stores/labels the saved invoice item in the value the parent sends as unit_size
+        // (= `unit`), and prices in the rate unit. Keep `unit` + `price_unit` in lockstep with the
+        // rate unit for manual lines whenever the rate unit changes, so the saved/printed line and
+        // the Price-UM column match the billed quantity (e.g. an lb rate isn't mislabeled "oz").
+        // Product lines are untouched: `unit` is the product's inventory unit by design.
+        if (updated.product_id == null && updates.rate_unit !== undefined) {
+          updated.unit = updates.rate_unit;
+          updated.price_unit = updates.rate_unit;
+        }
         // Recalc quantity and total
         if (updated.rate_per_acre && totalAppliedAcres > 0) {
           updated.quantity = Number((updated.rate_per_acre * totalAppliedAcres).toFixed(2));
@@ -220,9 +274,16 @@ export default function FieldAppChemicalEntry({
         // quantity is in the RATE unit (e.g. oz) but unit_price_cents is per the inventory unit
         // (e.g. $/gal); convert before multiplying so the preview matches the server
         // (save_field_app_invoice) instead of over-stating by the unit ratio (~128x for oz→gal).
-        // No inventory unit (manual line) → identity. Genuinely unconvertible → 0 (server blocks save).
+        // WaveB (Codex R2b): mirror the server's pricing unit EXACTLY. save_field_app_invoice sets
+        // the inventory unit only when product_id is present (COALESCE(inventory_unit, rate_unit)),
+        // so a MANUAL line (no product_id) has no inventory unit and prices in the rate unit itself
+        // (identity). `unit` defaults to 'oz', so `unit || rate_unit` wrongly converted manual lines
+        // against 'oz' — showing $0 for a cross-family choice (e.g. a dry Lb rate) while the server
+        // still billed non-zero. Gate on product_id like the server does. Genuinely unconvertible
+        // product line → 0 (server blocks the save with FIELD_APP_UNIT_UNCONVERTIBLE).
+        const pricingUnit = updated.product_id ? (updated.unit || updated.rate_unit) : updated.rate_unit;
         const pricedQty = fieldAppPricedQuantity(
-          updated.quantity, updated.rate_unit, updated.unit || updated.rate_unit, updated.product_form,
+          updated.quantity, updated.rate_unit, pricingUnit, updated.product_form,
         );
         updated.extended_cents = pricedQty == null ? 0 : Math.round(pricedQty * (updated.unit_price_cents || 0));
         return updated;
@@ -347,7 +408,21 @@ export default function FieldAppChemicalEntry({
               <tr className="hover:bg-gray-50">
                 <td className="px-3 py-2">
                   <div className="relative" ref={activeLineId === line.id ? searchRef : undefined}>
-                    {line.product_name ? (
+                    {/* #56 + Codex P2: a custom/manual line is identified by its
+                        PERSISTED state (product_id null + a name) so it survives
+                        save/reload; is_custom covers the fresh empty line just
+                        added this session. A fresh "Add Chemical" line (null id,
+                        empty name, no flag) still falls through to the search box. */}
+                    {line.product_id == null && (line.is_custom || line.product_name !== '') ? (
+                      <input
+                        type="text"
+                        placeholder="Custom line description..."
+                        disabled={readOnly}
+                        value={line.product_name}
+                        onChange={(e) => updateLine(line.id, { product_name: e.target.value })}
+                        className="w-full px-2 py-1 border rounded text-sm disabled:bg-gray-100 disabled:text-gray-500"
+                      />
+                    ) : line.product_name ? (
                       <button
                         type="button"
                         disabled={readOnly}
@@ -445,7 +520,30 @@ export default function FieldAppChemicalEntry({
                     className="w-full px-2 py-1 border rounded text-right text-sm tabular-nums disabled:bg-gray-100 disabled:text-gray-500"
                   />
                 </td>
-                <td className="px-3 py-2 text-center text-gray-600">{line.rate_unit}</td>
+                <td className="px-3 py-2 text-center">
+                  {/* WaveB: the applied UM is now an editable dropdown (was read-only). updateLine
+                      re-prices the line on change (fieldAppPricedQuantity), so a corrected unit
+                      flows straight into the preview + save. Bare canonical units filtered by
+                      product form; grandfather a legacy value so it can't be silently blanked. */}
+                  <select
+                    value={line.rate_unit || ''}
+                    disabled={readOnly}
+                    onChange={(e) => updateLine(line.id, { rate_unit: e.target.value })}
+                    className="w-full px-1 py-1 border rounded text-center text-sm disabled:bg-gray-100 disabled:text-gray-500"
+                  >
+                    {/* Codex P1: the blank option is a disabled placeholder only — a field-app
+                        line always has a rate_unit (set on product select), and actively blanking
+                        it would zero the preview here while the server falls back to unit_size and
+                        still invoices non-zero. Disabled => can't be selected. */}
+                    <option value="" disabled>--</option>
+                    {line.rate_unit && !isKnownUnit(unitConversions, line.product_form, line.rate_unit) && (
+                      <option value={line.rate_unit}>{line.rate_unit}</option>
+                    )}
+                    {unitOptionsForForm(unitConversions, line.product_form).map((uc) => (
+                      <option key={uc.id} value={uc.unit}>{uc.unit}</option>
+                    ))}
+                  </select>
+                </td>
                 {/* #25: Total Applied + its gallon/lb equivalent (loader planning). The
                     server is authoritative via convert_to_gl_lb; this is the live preview. */}
                 <td className="px-3 py-2 text-right tabular-nums">
@@ -553,6 +651,9 @@ export default function FieldAppChemicalEntry({
           <div className="flex gap-2">
             <Button variant="secondary" size="sm" icon={<Plus className="w-4 h-4" />} onClick={addLine}>
               Add Chemical
+            </Button>
+            <Button variant="secondary" size="sm" icon={<Plus className="w-4 h-4" />} onClick={addCustomLine}>
+              Add custom line
             </Button>
           </div>
         </div>

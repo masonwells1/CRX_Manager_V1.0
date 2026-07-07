@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { autopilotDecision, flagActive } from "./autopilot-lib.mjs";
+import { autopilotDecision, flagActive, intentFresh, overnightGateDecision } from "./autopilot-lib.mjs";
 
 let pass = 0;
 function ok(cond, msg) { assert.ok(cond, msg); pass++; }
@@ -27,6 +27,33 @@ eq(autopilotDecision("Bash", { command: "git worktree remove ../x" }), "deny", "
 eq(autopilotDecision("Bash", { command: "echo SECRET >> .env" }), "deny", "write to .env denied");
 eq(autopilotDecision("Write", { file_path: "C:/CRX_Manager/.env.local" }), "deny", "Write .env.local denied");
 eq(autopilotDecision("Edit", { file_path: ".env" }), "deny", "Edit .env denied");
+
+// ── deny-set additions (2026-07-04): CLI deploy, PR merge, MCP write/exec ─
+eq(autopilotDecision("Bash", { command: "npx supabase functions deploy send-email" }), "deny", "CLI edge deploy denied");
+eq(autopilotDecision("Bash", { command: "supabase functions deploy process-document" }), "deny", "bare CLI edge deploy denied");
+eq(autopilotDecision("Bash", { command: "gh pr merge 42 --squash" }), "deny", "gh pr merge denied");
+eq(autopilotDecision("mcp__github__push_files", {}), "deny", "GitHub MCP push_files denied");
+eq(autopilotDecision("mcp__github__merge_pull_request", {}), "deny", "GitHub MCP merge PR denied");
+eq(autopilotDecision("mcp__github__create_or_update_file", {}), "deny", "GitHub MCP file write denied");
+eq(autopilotDecision("mcp__Desktop_Commander__start_process", {}), "deny", "Desktop Commander exec denied");
+eq(autopilotDecision("mcp__Desktop_Commander__write_file", {}), "deny", "Desktop Commander write denied");
+
+// ── overnight-arm handshake ──────────────────────────────────────────────
+ok(intentFresh(JSON.stringify({ created: new Date().toISOString() })), "fresh intent recognized");
+ok(!intentFresh(JSON.stringify({ created: new Date(Date.now() - 2 * 3600e3).toISOString() })), "stale intent ignored");
+ok(!intentFresh("not json"), "malformed intent ignored");
+eq(overnightGateDecision("Edit", { file_path: "src/pages/Foo.tsx" }), "deny-until-armed", "edit blocked until armed");
+eq(overnightGateDecision("Bash", { command: "git add -A && git commit -m x" }), "deny-until-armed", "commit blocked until armed");
+eq(overnightGateDecision("mcp__supabase__execute_sql", { query: "SELECT 1" }), "deny-until-armed", "sql blocked until armed");
+eq(overnightGateDecision("Bash", { command: "node .claude/hooks/autopilot-arm.mjs --hours 8" }), "allow-through", "arm command passes");
+eq(overnightGateDecision("Bash", { command: "rm .claude/session-state/OVERNIGHT-INTENT.flag" }), "allow-through", "clearing intent flag passes");
+eq(overnightGateDecision("Bash", { command: "git status" }), "allow-through", "git status passes");
+// Codex 2026-07-05 P2: read-only leading token + write redirect must NOT pass
+eq(overnightGateDecision("Bash", { command: "cat src/a.ts > src/b.ts" }), "deny-until-armed", "cat with redirect blocked until armed");
+eq(overnightGateDecision("Bash", { command: "echo x >> supabase/migrations/x.sql" }), "deny-until-armed", "echo append blocked until armed");
+eq(overnightGateDecision("Bash", { command: "git log | tee notes.txt" }), "deny-until-armed", "tee blocked until armed");
+eq(overnightGateDecision("Read", { file_path: "x" }), "allow-through", "read passes");
+eq(overnightGateDecision("Write", { file_path: ".claude/session-state/notes.md" }), "allow-through", "session-state write passes");
 
 // ── allow-set: ordinary loop actions are auto-approved ───────────────────
 eq(autopilotDecision("Edit", { file_path: "src/pages/Foo.tsx" }), "allow", "normal edit allowed");

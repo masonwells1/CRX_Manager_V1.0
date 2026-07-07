@@ -1,9 +1,41 @@
 // Pure helpers for codex-push-guard.mjs.
 
 // Does the git command push (to main)? We fire on any `git push`; the hook then
-// checks that HEAD is actually on main before doing anything.
+// checks whether the push actually TARGETS main before doing anything.
 export function isGitPush(cmd) {
   return /\bgit\s+push\b/.test(String(cmd || ""));
+}
+
+// Which LOCAL ref is this push landing on main? Returns:
+//   null      — the push does not target main (gate stands down)
+//   "DELETE"  — `push origin :main` (deleting main!) — the guard denies outright
+//   a ref     — the SOURCE being pushed to main ("HEAD", "main", a branch name).
+// The guard must diff/bind its Codex proof against THIS ref, not blindly HEAD
+// (Codex 2026-07-05: `git push origin release:main` from another branch used to
+// be diffed/proofed against HEAD — the wrong content).
+export function mainPushSource(cmd, currentBranch) {
+  const c = String(cmd || "");
+  const m = c.match(/\bgit\s+push\b([^;&|]*)/);
+  if (!m) return null;
+  const args = m[1].trim().split(/\s+/).filter(Boolean).filter((a) => !a.startsWith("-"));
+  const refspecs = args.slice(1); // args[0] = remote, if present
+  if (refspecs.length === 0) return currentBranch === "main" ? "HEAD" : null;
+  for (const rs of refspecs) {
+    const hasColon = rs.includes(":");
+    const src = hasColon ? rs.split(":")[0].replace(/^\+/, "") : rs;
+    const dst = (hasColon ? rs.split(":").pop() : rs).replace(/^refs\/heads\//, "");
+    if (dst === "main") {
+      if (hasColon) return src ? src.replace(/^refs\/heads\//, "") : "DELETE";
+      return "main"; // bare `git push origin main` pushes local main
+    }
+    if (!hasColon && dst === "HEAD" && currentBranch === "main") return "HEAD";
+  }
+  return null;
+}
+
+// Back-compat boolean used by tests/other callers.
+export function pushTargetsMain(cmd, currentBranch) {
+  return mainPushSource(cmd, currentBranch) !== null;
 }
 
 // A changed file is "risky" (needs an independent Codex verdict) when it touches

@@ -61,6 +61,11 @@ export default function QuickDeliveryModal({
   const [showProductModal, setShowProductModal] = useState(false);
   const [productSearch, setProductSearch] = useState('');
   const [items, setItems] = useState<QuickItem[]>([]);
+  // Stock lookup for the product picker (On Floor + Net position, incl. on-order).
+  const [inventoryByProduct, setInventoryByProduct] = useState<Record<string, { available: number; prebooked: number; onOrder: number }>>({});
+  // U9 (Codex): when the stock lookup itself failed, HIDE the numbers rather
+  // than showing a misleading "On Floor: 0" for every product.
+  const [stockLookupFailed, setStockLookupFailed] = useState(false);
 
   // Drivers
   const [drivers, setDrivers] = useState<Profile[]>([]);
@@ -102,6 +107,50 @@ export default function QuickDeliveryModal({
     };
     fetchData();
   }, [open, profile, toast]);
+
+  // U9 (#14): stock numbers for the product picker — a SEPARATE non-blocking
+  // lookup so the modal (and its tests) never wait on it. Main Warehouse only
+  // (Codex P2): the quick-delivery RPC validates and deducts ONLY this location.
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const [inventoryRes, poRes] = await Promise.all([
+          supabase.from('inventory').select('product_id, quantity_available, quantity_prebooked').eq('location', 'Main Warehouse'),
+          supabase
+            .from('purchase_order_items')
+            .select('product_id, quantity_ordered, quantity_received, purchase_orders!inner(status)')
+            .in('purchase_orders.status', ['submitted', 'partially_received']),
+        ]);
+        if (cancelled) return;
+        if (inventoryRes.error || poRes.error) {
+          // Non-fatal (the modal still works) but don't render fake zeros (Codex).
+          Sentry.captureException(inventoryRes.error || poRes.error, { extra: { context: 'QuickDeliveryModal.stockLookup' } });
+          setStockLookupFailed(true);
+          return;
+        }
+        setStockLookupFailed(false);
+        const invMap: Record<string, { available: number; prebooked: number; onOrder: number }> = {};
+        for (const row of (inventoryRes.data || []) as Array<{ product_id: string; quantity_available: number; quantity_prebooked: number }>) {
+          if (!invMap[row.product_id]) invMap[row.product_id] = { available: 0, prebooked: 0, onOrder: 0 };
+          invMap[row.product_id].available += Number(row.quantity_available);
+          invMap[row.product_id].prebooked += Number(row.quantity_prebooked);
+        }
+        for (const poi of (poRes.data || []) as Array<{ product_id: string; quantity_ordered: number; quantity_received: number }>) {
+          if (!invMap[poi.product_id]) invMap[poi.product_id] = { available: 0, prebooked: 0, onOrder: 0 };
+          invMap[poi.product_id].onOrder += Number(poi.quantity_ordered) - Number(poi.quantity_received);
+        }
+        setInventoryByProduct(invMap);
+      } catch (err) {
+        if (!cancelled) {
+          Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'QuickDeliveryModal.stockLookup' } });
+          setStockLookupFailed(true);
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [open]);
 
   // Customer search debounce
   useEffect(() => {
@@ -248,7 +297,7 @@ export default function QuickDeliveryModal({
       if (error) throw error;
       quickDeliveryIdem.resetKey();
 
-      const result = assertRpcResult<{ delivery_id: string; delivery_number: string; invoice_number: string | null; credit_warning?: boolean }>(data, 'create_quick_delivery');
+      const result = assertRpcResult<{ delivery_id: string; delivery_number: string; invoice_number: string | null; credit_warning?: boolean; stock_warning?: boolean; short_stock_count?: number }>(data, 'create_quick_delivery');
       const invoiceMsg = result.invoice_number
         ? ` with draft invoice ${result.invoice_number}`
         : ' (no invoice created)';
@@ -259,6 +308,12 @@ export default function QuickDeliveryModal({
       // admins server-side (Codex P2: do NOT re-run check_customer_credit_limit
       // here — it excludes drafts so it'd miss the just-created delivery crossing
       // the limit, and would double-notify). Just surface the RPC's flag.
+      // U9 #101 (warn-not-block): create_quick_delivery no longer errors on short stock —
+      // it proceeds, flags the ledger row, notifies admins, and returns stock_warning.
+      if (result.stock_warning) {
+        const shortN = result.short_stock_count ?? 0;
+        toast('warning', `Delivery created, but ${shortN} product(s) were short on stock — net inventory may go negative. Admins have been notified to review.`);
+      }
       if (result.credit_warning) {
         toast('warning', `Heads up: this delivery puts ${selectedCustomer.farm_name} over their credit limit. Admins have been notified.`);
       }
@@ -541,7 +596,12 @@ export default function QuickDeliveryModal({
           </div>
 
           <div className="max-h-96 overflow-y-auto space-y-2">
-            {filteredProducts.map((product) => (
+            {filteredProducts.map((product) => {
+              const tierPriceCents = getTierPrice(product);
+              const inv = inventoryByProduct[product.id];
+              const onFloor = inv ? inv.available : 0;
+              const netPos = inv ? inv.onOrder + inv.available - inv.prebooked : 0;
+              return (
               <button
                 key={product.id}
                 onClick={() => addProduct(product)}
@@ -553,12 +613,23 @@ export default function QuickDeliveryModal({
                 )}
                 <div className="flex items-center gap-4 mt-2 text-xs text-secondary">
                   {product.unit_size && <span>Size: {product.unit_size}</span>}
-                  {product.tier1_price != null && (
-                    <span>Price: {fmtCurrency(Math.round(product.tier1_price * 100))}</span>
+                  {showPricing && tierPriceCents > 0 && (
+                    <span className="text-crx-green font-medium">Price: {fmtCurrency(tierPriceCents)}</span>
+                  )}
+                  {!stockLookupFailed && (
+                    <>
+                      <span className={onFloor > 0 ? 'text-blue-600' : 'text-gray-400'}>
+                        On Floor: {onFloor.toLocaleString()}
+                      </span>
+                      <span className={netPos > 0 ? 'text-emerald-600' : netPos < 0 ? 'text-red-600' : 'text-gray-400'}>
+                        Net: {netPos.toLocaleString()}
+                      </span>
+                    </>
                   )}
                 </div>
               </button>
-            ))}
+              );
+            })}
           </div>
 
           {filteredProducts.length === 0 && (

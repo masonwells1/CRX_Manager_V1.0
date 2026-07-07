@@ -7,7 +7,9 @@
 // Advisory only (a false positive is harmless — the reminder says to ignore it if
 // he isn't asking for a hands-free run).
 
-import { readFileSync } from "node:fs";
+import { readFileSync, mkdirSync, writeFileSync } from "node:fs";
+import path from "node:path";
+import { isMachineGenerated } from "./prompt-source-lib.mjs";
 
 function emit(extra) {
   if (extra) {
@@ -18,6 +20,12 @@ function emit(extra) {
 
 let payload;
 try { payload = JSON.parse(readFileSync(0, "utf8")); } catch { emit(); }
+
+// Machine-generated envelopes (<task-notification>, <system-reminder>, slash-command
+// output) are not something Mason typed — never latch OVERNIGHT-INTENT or remind off
+// a word like "overnight" inside an embedded report.
+if (isMachineGenerated(payload?.prompt)) emit();
+
 const prompt = String(payload?.prompt || "").toLowerCase();
 if (!prompt) emit();
 
@@ -36,6 +44,27 @@ const triggers = [
 ];
 
 if (!triggers.some((re) => re.test(prompt))) emit();
+
+// Strong, unambiguous hands-free signals additionally latch the deterministic
+// handshake: unattended-autopilot.mjs blocks build tools until autopilot is
+// actually armed (or the flag is deliberately cleared). Weak signals only remind.
+const strong = [
+  /going\s+to\s+bed/,
+  /hands.?free/,
+  /overnight/,
+  /run\s+(it|this)\s+(all\s+)?night/,
+  /while\s+i('?m| am)\s+(asleep|sleeping|away|gone)/,
+];
+if (strong.some((re) => re.test(prompt))) {
+  try {
+    const dir = path.join(process.env.CLAUDE_PROJECT_DIR || process.cwd(), ".claude", "session-state");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(path.join(dir, "OVERNIGHT-INTENT.flag"), JSON.stringify({
+      created: new Date().toISOString(),
+      source: "autopilot-intent-reminder",
+    }));
+  } catch { /* advisory hook — never fail the prompt */ }
+}
 
 emit([
   "CRX autopilot reminder:",

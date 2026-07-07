@@ -17,3 +17,5 @@ If no MCP tools are available, fall back to checking:
 - `npm run test` for any test failures
 
 Present findings sorted by severity (CRITICAL first).
+
+If the right fix is undoing a recent deploy/migration/edge-function change rather than patching forward, switch to `/rollback` and follow `docs/runbooks/incident-rollback.md`.

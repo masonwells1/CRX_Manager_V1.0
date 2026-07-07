@@ -67,6 +67,7 @@ import type {
   CommissionSplit,
   QuoteStatus,
   BookingSettlement,
+  JobStatus,
 } from '../types';
 import type { Json } from '../types/supabase';
 
@@ -171,6 +172,7 @@ export default function QuoteBuilder() {
   const revertStatusIdem = useIdempotencyKey('revert_quote_status', profile?.id || '');
   const emailQuoteIdem = useIdempotencyKey('send_email_quote', profile?.id || '');
   const closeAppliedIdem = useIdempotencyKey('close_quote_as_applied', profile?.id || '');
+  const closeShortIdem = useIdempotencyKey('close_quote_as_short', profile?.id || '');
 
   // Partial booking draw-down (sell-side roadmap #1): pull part of the booked
   // quantities into an order; the quote stays open with the remaining balance.
@@ -237,6 +239,15 @@ export default function QuoteBuilder() {
   // status; releases any un-applied leftover; never double-bills. (owner 2026-07-03)
   const [confirmCloseAppliedOpen, setConfirmCloseAppliedOpen] = useState(false);
   const [closingApplied, setClosingApplied] = useState(false);
+  // Close a booking the customer ABANDONED (walked away / took only part): the
+  // un-fulfilled remainder is released back to free inventory. Distinct terminal
+  // status 'closed_short'; never bills. The escape hatch for a partially-drawn
+  // booking that Decline/Cancel/Expire refuse (BOOKING_PARTIALLY_DRAWN). (#1)
+  const [confirmCloseShortOpen, setConfirmCloseShortOpen] = useState(false);
+  const [closingShort, setClosingShort] = useState(false);
+  // Draft bookings CAN be scheduled server-side (a pre-planned draft is valid),
+  // but we warn first because the booking hasn't been sent to the customer. (#103)
+  const [confirmDraftScheduleKey, setConfirmDraftScheduleKey] = useState<string | null>(null);
   const [showRevertModal, setShowRevertModal] = useState(false);
   const [revertReason, setRevertReason] = useState('');
   const [reverting, setReverting] = useState(false);
@@ -291,10 +302,21 @@ export default function QuoteBuilder() {
   // (sent/revised + is_planned). A plain non-planned sales quote uses convert/
   // decline, not this. (Codex 2026-07-03 P2)
   const canCloseApplied = isEditing && isPlanned && ['sent', 'revised'].includes(currentStatus);
-  // A booking only takes new scheduled jobs while it's not terminal — parity with
-  // create_job_from_quote_section's status guard (Codex 2026-07-03 P1): once a
-  // booking is closed/declined/cancelled/expired, no new work may be scheduled against it.
-  const canScheduleJobs = isPlanned && !['declined', 'expired', 'cancelled', 'closed_by_application'].includes(currentStatus);
+  // "Close — Short" (customer walked away, release the remainder) is for ANY open
+  // booking (planned or not) — parity with close_quote_as_short, which does NOT
+  // require is_planned (a non-planned open booking can also be abandoned; it just
+  // has no crop holds to release). (#1)
+  const canCloseShort = isEditing && ['sent', 'revised'].includes(currentStatus);
+  // A booking only takes new scheduled jobs while it's not terminal AND not
+  // 'accepted' — parity with create_job_from_quote_section's status guard: once a
+  // booking is closed/declined/cancelled/expired it's terminal, and 'accepted'
+  // means it was converted to a chemical SALE (order) so scheduling a job would
+  // double-count the product (finding #103 — QUOTE_ALREADY_CONVERTED). Draft
+  // stays schedulable (warn-only). (#103)
+  const canScheduleJobs = isPlanned && !['accepted', 'declined', 'expired', 'cancelled', 'closed_by_application', 'closed_short'].includes(currentStatus);
+  // Show an inline explanation where the Schedule-Job button would be, on an
+  // accepted planned booking, so the user knows to make a standalone job. (#103)
+  const scheduleBlockedAccepted = isPlanned && currentStatus === 'accepted';
   const canRevert = isEditing && isAdmin && ['accepted', 'declined', 'expired', 'cancelled'].includes(currentStatus);
   const revertLabel = currentStatus === 'accepted' ? 'Un-accept' : 'Reopen';
 
@@ -496,6 +518,20 @@ export default function QuoteBuilder() {
     }));
 
     setSections(localSections.length > 0 ? localSections : [makeEmptySection(1)]);
+
+    // U13 (#111): which sections already have a job scheduled from them, so the
+    // badge renders and the "Schedule Job" button hides on load (not just after
+    // a fresh schedule this session).
+    const { data: sectionJobsData } = await supabase
+      .from('jobs')
+      .select('id, job_number, status, quote_section_id')
+      .eq('quote_id', quoteId)
+      .is('deleted_at', null)
+      .not('quote_section_id', 'is', null);
+    const sectionJobMap: Record<string, { id: string; job_number: string; status: JobStatus }> = {};
+    ((sectionJobsData || []) as { id: string; job_number: string; status: JobStatus; quote_section_id: string }[])
+      .forEach((j) => { sectionJobMap[j.quote_section_id] = { id: j.id, job_number: j.job_number, status: j.status }; });
+    setSectionJobs(sectionJobMap);
 
     // Fetch version history for this quote
     const { data: versionsData } = await supabase
@@ -1236,6 +1272,48 @@ export default function QuoteBuilder() {
     }
   };
 
+  // Close a booking the customer ABANDONED (walked away, or drew only part and
+  // never took the rest). Flips to the terminal status 'closed_short' via the
+  // actor-bound, idempotent close_quote_as_short RPC, which releases the
+  // un-fulfilled remainder back to free inventory. Never bills — any drawn
+  // portion was already billed via its order; the remainder was never billed.
+  // Refuses if scheduled/in-progress jobs still exist (BOOKING_HAS_ACTIVE_JOBS). (#1)
+  const handleCloseAsShort = async () => {
+    if (!id) return;
+    setClosingShort(true);
+    try {
+      const idemKey = closeShortIdem.getKey();
+      // supabaseUntyped: close_quote_as_short is a new RPC not yet in the
+      // generated types (matches close_quote_as_applied usage).
+      const { data, error } = await supabaseUntyped.rpc('close_quote_as_short', {
+        p_quote_id: id,
+        p_performed_by: profile!.id,
+        p_idempotency_key: idemKey,
+      });
+      if (error) throw error;
+      closeShortIdem.resetKey();
+      const result = assertRpcResult<{ status: string; released_units?: number; warnings?: string[] }>(data, 'close_quote_as_short');
+      setStatus('closed_short');
+      setIsDirty(false);
+      const warnings = result.warnings || [];
+      toast('success', warnings.length > 0
+        ? `Booking closed short. ${warnings.join('. ')}.`
+        : 'Booking closed short.');
+    } catch (err) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { tags: { source: 'mutation', action: 'close_quote_as_short' } });
+      if (hasRpcCode(err, RpcErrorCodes.BOOKING_HAS_ACTIVE_JOBS)) {
+        toast('warning', 'This booking still has scheduled or in-progress jobs. Cancel or complete them first, then close the booking as short.');
+      } else if (hasRpcCode(err, RpcErrorCodes.BOOKING_CLOSED)) {
+        toast('warning', 'This booking is no longer open — refresh the page to see its current status.');
+      } else {
+        toast('error', err instanceof Error ? err.message : 'Failed to close the booking');
+      }
+    } finally {
+      setClosingShort(false);
+      setConfirmCloseShortOpen(false);
+    }
+  };
+
   // Un-accept / Reopen a quote back to 'sent' (roadmap #5, fixes W4). Routes
   // through the admin-only hardened revert_quote_status RPC, which blocks
   // reverting an accepted quote that already has an order.
@@ -1554,10 +1632,22 @@ export default function QuoteBuilder() {
     window.location.reload();
   };
   const [schedulingJobSectionKey, setSchedulingJobSectionKey] = useState<string | null>(null);
+  // U13 (#111): quote_section.id -> the job already scheduled from it (if any).
+  // Populated by fetchQuote + updated locally right after a successful schedule
+  // so the badge/hide-button logic never needs a full page reload.
+  const [sectionJobs, setSectionJobs] = useState<Record<string, { id: string; job_number: string; status: JobStatus }>>({});
 
   const handleScheduleJob = async (sectionKey: string) => {
     const sec = sections.find((s) => s._key === sectionKey);
     if (!sec?.id || !quoteId || !profile) return;
+    // U13 (#111): create_job_from_quote_section only inserts a job_fields row
+    // `IF v_section.field_id IS NOT NULL` — a field-less section would silently
+    // create a job with ZERO locations (no acres, nothing to apply chemicals on
+    // or dispatch). Block here rather than let that job get created.
+    if (!sec.field_id) {
+      toast('error', 'Select a Field for this section before scheduling a job — a job needs a location to apply chemicals on and to dispatch.');
+      return;
+    }
     setSchedulingJobSectionKey(sectionKey);
     try {
       const idemKey = scheduleJobIdem.getKey();
@@ -1570,6 +1660,11 @@ export default function QuoteBuilder() {
       if (error) throw error;
       const result = assertRpcResult<{ job_id: string }>(data, 'create_job_from_quote_section');
       scheduleJobIdem.resetKey();
+      // U13 (#111): record the badge immediately (no reload needed) + it also
+      // hides the "Schedule Job" button for this section (the RPC would reject
+      // a second job for the same section anyway — this makes that visible
+      // BEFORE the user clicks, instead of via an error toast).
+      setSectionJobs((prev) => ({ ...prev, [sec.id as string]: { id: result.job_id, job_number: '(new)', status: 'scheduled' } }));
       toast('success', `Job scheduled from "${sec.section_name}"`);
       navigate(`/jobs/${result.job_id}`);
     } catch (err: unknown) {
@@ -1926,7 +2021,7 @@ export default function QuoteBuilder() {
           )}
           {isEditing && (
             <Badge variant={statusToBadgeVariant[status] || 'default'}>
-              {status === 'closed_by_application' ? 'Fulfilled (Applied)' : status}
+              {status === 'closed_by_application' ? 'Fulfilled (Applied)' : status === 'closed_short' ? 'Closed — Short' : status}
             </Badge>
           )}
           <label className="flex items-center gap-2 text-sm ml-4">
@@ -2055,6 +2150,20 @@ export default function QuoteBuilder() {
                 Close — Applied
               </Button>
               <HelpTip text="Use this when WE applied this booking's product for the customer (job applications), instead of delivering it. It closes the booking as fulfilled by application and releases any un-applied product back to free inventory. The customer was already billed through each job's application invoice — this never bills again." className="ml-1" />
+            </>
+          )}
+          {canCloseShort && (
+            <>
+              <Button
+                variant="secondary"
+                icon={<PackageOpen className="w-4 h-4" />}
+                showChevron={false}
+                onClick={() => setConfirmCloseShortOpen(true)}
+                loading={closingShort}
+              >
+                Close — Short
+              </Button>
+              <HelpTip text="Use this when the customer walked away from this booking (or took only part of it) and won't take the rest. It closes the booking and releases the un-fulfilled remainder back to free inventory. Any product already drawn was billed on its order — this never bills again. This is the way to close a booking that Decline/Cancel refuse because it was partially drawn." className="ml-1" />
             </>
           )}
           {canDecline && (
@@ -2573,6 +2682,21 @@ export default function QuoteBuilder() {
                     className="text-sm font-semibold font-heading text-nav-dark bg-transparent border-none outline-none focus:ring-0 flex-1"
                     placeholder="Section name"
                   />
+                  {/* U13 (#111): per-section job badge — a section that already has a
+                      scheduled job links straight to it (and the Schedule Job button
+                      below hides, since a 2nd job per section is rejected server-side). */}
+                  {sec.id && sectionJobs[sec.id] && (
+                    <button
+                      type="button"
+                      onClick={() => navigate(`/jobs/${sectionJobs[sec.id as string].id}`)}
+                      className="flex-shrink-0"
+                      title="Open the job scheduled from this section"
+                    >
+                      <Badge variant={statusToBadgeVariant[sectionJobs[sec.id as string].status] || 'info'}>
+                        Job {sectionJobs[sec.id as string].job_number}
+                      </Badge>
+                    </button>
+                  )}
                   <span className="text-sm font-mono text-secondary">
                     {fmt(sectionTotal)}
                   </span>
@@ -2614,10 +2738,17 @@ export default function QuoteBuilder() {
                   >
                     Add Item
                   </Button>
-                  {canScheduleJobs && quoteId && sec.id && sec.items.length > 0 && (
-                    <Button variant="ghost" size="sm" icon={<CalendarClock className="w-3 h-3" />} showChevron={false} onClick={() => handleScheduleJob(sec._key)} loading={schedulingJobSectionKey === sec._key}>
+                  {canScheduleJobs && quoteId && sec.id && sec.items.length > 0 && !sectionJobs[sec.id] && (
+                    <Button variant="ghost" size="sm" icon={<CalendarClock className="w-3 h-3" />} showChevron={false} onClick={() => currentStatus === 'draft' ? setConfirmDraftScheduleKey(sec._key) : handleScheduleJob(sec._key)} loading={schedulingJobSectionKey === sec._key}>
                       Schedule Job
                     </Button>
+                  )}
+                  {scheduleBlockedAccepted && quoteId && sec.id && sec.items.length > 0 && (
+                    <span className="inline-flex items-center gap-1 text-xs text-secondary">
+                      <XCircle className="w-3 h-3 text-orange-500" />
+                      Sold — make a standalone job
+                      <HelpTip text="This booking was accepted and converted to a chemical sale (order). To do field work, create a standalone job from the Jobs page — scheduling from a sold booking would double-count the product." />
+                    </span>
                   )}
                   {sections.length > 1 && (
                     <button
@@ -3392,6 +3523,27 @@ export default function QuoteBuilder() {
         confirmLabel="Close Booking"
         icon={CheckCircle}
         loading={closingApplied}
+      />
+
+      <ConfirmModal
+        open={confirmCloseShortOpen}
+        onClose={() => setConfirmCloseShortOpen(false)}
+        onConfirm={handleCloseAsShort}
+        title="Close — Short (customer walked away)"
+        message={`Close booking ${quoteNumber} short? Use this when the customer won't take the rest of this booking. The un-fulfilled remainder is released back to free inventory. Any product already drawn was billed on its order, so this never bills again. This is terminal. (If jobs are still scheduled against this booking, cancel or complete them first.)`}
+        confirmLabel="Close Booking"
+        icon={PackageOpen}
+        loading={closingShort}
+      />
+
+      <ConfirmModal
+        open={!!confirmDraftScheduleKey}
+        onClose={() => setConfirmDraftScheduleKey(null)}
+        onConfirm={() => { const k = confirmDraftScheduleKey; setConfirmDraftScheduleKey(null); if (k) handleScheduleJob(k); }}
+        title="Schedule job from a draft booking?"
+        message="This booking is still a draft — it hasn't been sent to the customer yet. You can schedule a job now, but the booking and its pricing may still change before it's sent. Continue?"
+        confirmLabel="Schedule Anyway"
+        icon={CalendarClock}
       />
 
       {showRevertModal && (

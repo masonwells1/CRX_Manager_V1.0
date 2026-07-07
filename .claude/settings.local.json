@@ -4,26 +4,17 @@
       "Bash(wc:*)",
       "Bash(tree:*)",
       "Bash(dir:*)",
-      "Bash(ls -la \"C:\\\\CRX_Manager_V1.0\\\\src\\\\pages\"\" | grep \".tsx \")",
       "Bash(npx tsc:*)",
       "Bash(npm install)",
-      "Bash(npm run typecheck:*)",
-      "Bash(npm run build:*)",
+      "Bash(npm run:*)",
       "Bash(echo:*)",
       "Bash(git add:*)",
-      "Bash(git commit -m \"$\\(cat <<''EOF''\nFix all TypeScript errors, add RLS migration, and create CLAUDE.md\n\n- Fix ~60 pre-existing TypeScript type errors across 20+ files\n- Add tuple types for jsPDF color arrays in quotePdf.ts and deliveryPdf.ts\n- Fix toast calls from object syntax to correct positional args\n- Fix component props \\(Modal size, Button variant, Select options, DataTable\\)\n- Fix ActivityFeed hook ordering \\(used before declaration\\)\n- Fix exportToCSV call in Payments.tsx \\(missing columns parameter\\)\n- Add null coalescing for nullable fields in QuoteBuilder PDF generation\n- Add index signatures for DataTable generic constraint in Reports/Payments\n- Remove unused imports and variables across all files\n- Add missing TypeScript fields: Order.total_paid/balance_due,\n  Inventory.reorder_point/min_stock_level, Commission.paid_date/paid_note,\n  TeamNote/TeamNoteComment.deleted_at/deleted_by\n- Fix InventoryPage to read reorder_point/min_stock_level from DB\n- Add order_date to Dashboard orders query\n- Add CORS documentation to all 3 edge functions\n- Create RLS migration for sales rep INSERT permissions\n- Create CLAUDE.md AI dev/QA reference\n\nBoth tsc --noEmit and npm run build pass with zero errors.\n\nCo-Authored-By: Claude <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(git commit:*)",
       "Bash(git push:*)",
       "Bash(git pull:*)",
       "Bash(git stash:*)",
-      "Bash(git commit:*)",
       "Bash(grep:*)",
-      "mcp__Claude_Preview__preview_start",
-      "Bash(node -e \"const fs = require\\(''fs''\\); const data = JSON.parse\\(fs.readFileSync\\(''.claude/settings.json'', ''utf8''\\)\\); console.log\\(''Valid JSON''\\); console.log\\(''Hook events:'', Object.keys\\(data.hooks\\)\\); Object.entries\\(data.hooks\\).forEach\\(\\([event, hooks]\\) => { console.log\\(event + '':'', hooks.length, ''hook group\\(s\\)''\\); hooks.forEach\\(\\(h, i\\) => { const matcher = h.matcher || ''\\(no matcher\\)''; const count = h.hooks ? h.hooks.length : 0; console.log\\(''  ['' + i + ''] matcher='' + matcher + '', hooks='' + count\\); }\\); }\\);\")",
-      "Bash(npm run:*)",
-      "Bash(ls -la /c/Users/mason/CRX_Manager_V1.0/*.md)",
-      "Bash(ls -lh /c/Users/mason/CRX_Manager_V1.0/docs/plans/2026-03-31*.md)",
-      "mcp__c1fc4002-5f49-5f9d-a4e5-93c4ef5d6a75__google_drive_search",
-      "Bash(find C:/Users/mason/CRX_Manager_V1.0/supabase -name *.sql -type f)"
+      "mcp__Claude_Preview__preview_start"
     ]
   }
 }

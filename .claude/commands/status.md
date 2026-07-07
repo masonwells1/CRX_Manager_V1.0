@@ -5,13 +5,13 @@ Show a quick project status dashboard for CRX Manager. Gather this info and pres
 3. **Health**: run `npm run build` silently — just report PASS or FAIL
 4. **Recent activity**: `git log --oneline --since="24 hours ago"` — what changed today?
 
-Present it as a compact dashboard, not a wall of text. Example format:
+Present it as a compact dashboard, not a wall of text. The `<count from ls>` placeholders below mean: use the REAL numbers you just gathered in step 2 — never hardcode counts in this file (hardcoded examples rot). Example format:
 
 ```
 Branch: main (clean)
 Last commit: abc1234 fix: invoice balance calculation
 
-Pages: 59 | Migrations: 233 | Edge Functions: 7
+Pages: <count from ls> | Migrations: <count from ls> | Edge Functions: <count from ls>
 Build: PASS | Tests: not run (use /preflight for full check)
 
 Today's activity:
