@@ -198,6 +198,16 @@ export const RpcErrorCodes = {
   JOB_ALREADY_INVOICED: 'JOB_ALREADY_INVOICED',
   // transfer_job_to_invoice — a blend ticket for this job is already billed
   BLEND_TICKET_ALREADY_BILLED: 'BLEND_TICKET_ALREADY_BILLED',
+  // transfer_job_to_invoice (U7 multi-owner split) — a job whose fields carry per-field
+  // $/acre price overrides cannot be split by percentage (bill it as a single invoice)
+  SPLIT_OVERRIDE_UNSUPPORTED: 'SPLIT_OVERRIDE_UNSUPPORTED',
+  // transfer_job_to_invoice (U7) — a billed field's splits do not total 100%
+  FIELD_SPLIT_NOT_100: 'FIELD_SPLIT_NOT_100',
+  // transfer_job_to_invoice (U7) — a multi-owner job with zero billable acres
+  SPLIT_NO_ACRES: 'SPLIT_NO_ACRES',
+  // transfer_invoice_to_job (U7) — this invoice is one member of a multi-owner group;
+  // return the job to scheduling by voiding each owner invoice instead
+  JOB_BILLED_AS_GROUP: 'JOB_BILLED_AS_GROUP',
 } as const;
 
 export type RpcErrorCode = (typeof RpcErrorCodes)[keyof typeof RpcErrorCodes];

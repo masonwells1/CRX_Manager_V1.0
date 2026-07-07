@@ -172,7 +172,16 @@ interface JobDbRow {
 
 interface SaveJobResult { job_id: string }
 interface CompleteJobResult { record_number: string }
-interface TransferJobResult { invoice_id: string; invoice_number: string }
+interface TransferJobResult {
+  invoice_id: string;
+  // single-owner path returns the invoice number; the multi-owner group path returns
+  // the group fields instead (U7). invoice_id is always the anchor member to navigate to.
+  invoice_number?: string;
+  invoice_ids?: string[];
+  invoice_group_id?: string;
+  invoice_count?: number;
+  split?: boolean;
+}
 
 const statusVariant: Record<JobStatus, BadgeVariant> = {
   scheduled: 'info',
@@ -2347,8 +2356,14 @@ export default function JobDetail() {
       if (error) throw error;
       transferJobIdem.resetKey();
       const result = assertRpcResult<TransferJobResult>(data, 'transfer_job_to_invoice');
-      toast('success', `Invoice ${result.invoice_number} created`);
       setIsDirty(false);
+      if (result.split && (result.invoice_count ?? 0) > 1) {
+        // U7 multi-owner split: one payable invoice was created per field owner. Navigate to
+        // the anchor (primary owner) member; the invoice view links to the sibling invoices.
+        toast('success', `Created ${result.invoice_count} split invoices — one per field owner`);
+      } else {
+        toast('success', `Invoice ${result.invoice_number} created`);
+      }
       navigate(`/field-invoices/${result.invoice_id}`);
     } catch (err: unknown) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'transfer_job_to_invoice' } });
@@ -2356,6 +2371,13 @@ export default function JobDetail() {
         // U6 #91b: a blend ticket for this job was already billed — invoicing the job
         // too would double-bill. Point the user at the existing bill instead.
         toast('error', 'A blend ticket for this job has already been billed. Invoicing the job as well would double-charge the customer — void that blend-ticket invoice first if you meant to re-bill here.');
+      } else if (hasRpcCode(err, RpcErrorCodes.SPLIT_OVERRIDE_UNSUPPORTED)) {
+        // U7: a multi-owner job with per-field $/acre price overrides can't be percentage-split.
+        toast('error', 'This job has more than one field owner AND per-field $/acre pricing, which the automatic split does not support. Bill it as a single invoice, or price each owner in the field-application invoice editor.');
+      } else if (hasRpcCode(err, RpcErrorCodes.FIELD_SPLIT_NOT_100)) {
+        toast('error', 'One of this job’s fields has ownership splits that don’t add up to 100%. Fix the field billing splits, then transfer again.');
+      } else if (hasRpcCode(err, RpcErrorCodes.SPLIT_NO_ACRES)) {
+        toast('error', 'This multi-owner job has no billable acres to split. Enter acres to treat on its fields, then transfer again.');
       } else {
         toast('error', err instanceof Error ? err.message : 'Failed to transfer to invoice');
       }

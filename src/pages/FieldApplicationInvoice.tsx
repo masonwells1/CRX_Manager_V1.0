@@ -150,6 +150,9 @@ const TABS: { key: TabKey; label: string; icon: React.ReactNode }[] = [
 function fieldAppError(err: unknown): string {
   if (hasRpcCode(err, RpcErrorCodes.ZERO_APPLIED_ACRES)) return 'A location has 0 or blank applied acres. Open the Locations tab and enter the acres sprayed for each field.';
   if (hasRpcCode(err, RpcErrorCodes.ACTOR_MISMATCH)) return 'Your sign-in could not be verified. Refresh the page and try again.';
+  // U7: this invoice is one member of a multi-owner split group — it can't be reversed
+  // member-by-member (that would reopen the job while the other owners' invoices stay live).
+  if (hasRpcCode(err, RpcErrorCodes.JOB_BILLED_AS_GROUP)) return 'This job was invoiced as a multi-owner split. To return it to scheduling, void each owner’s invoice — voiding the last one reopens the job.';
   // check_period_open() raises a plain-English sentence ("Date X falls in closed
   // accounting period (...)"), which sanitizeError passes through readably — no token to match.
   return sanitizeError(err);
