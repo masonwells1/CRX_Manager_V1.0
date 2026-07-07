@@ -1134,6 +1134,30 @@ export default function OrderDetail() {
                   className="ml-1"
                 />
               </>)}
+              {/* U7 SAFE-SCOPE: a delivered field/acre-allocated order that should be split-billed
+                  per owner (complete_delivery skipped the mono-bill auto-draft to avoid over-billing
+                  undelivered quantity). Gate on the DERIVABLE state, not the needs_split_billing
+                  flag: hasAllocations + fully delivered (status='fulfilled', so the whole-order
+                  create_split_invoices_from_order can't over-bill) + no active invoice + no open
+                  delivery. Deriving it (rather than requiring needs_split_billing=true) means a
+                  fulfilled allocated order whose split group was later VOIDED (flag already cleared,
+                  hasActiveInvoice now false) can be RE-billed here — Codex R2 P2. The
+                  needs_split_billing flag remains as the Orders-list queue badge/filter. */}
+              {hasAllocations && order.status === 'fulfilled' && !hasActiveInvoice && !hasPendingDelivery && (<>
+                <Button
+                  variant="secondary"
+                  icon={<FileText className="w-4 h-4" />}
+                  showChevron={false}
+                  onClick={onCreateInvoiceClick}
+                  loading={creatingInvoice}
+                >
+                  Create Split Invoices
+                </Button>
+                <HelpTip
+                  text="This order has field/acre allocations, so its auto-invoice was skipped on delivery to avoid over-billing. Generates one draft invoice per field owner, split by acres — nothing is sent to the customer yet."
+                  className="ml-1"
+                />
+              </>)}
               {order.status !== 'cancelled' && order.status !== 'fulfilled' && (<>
                 <Button
                   icon={<Truck className="w-4 h-4" />}
@@ -1288,6 +1312,13 @@ export default function OrderDetail() {
             <Badge variant={statusToBadgeVariant[order.status] || 'default'} size="md">
               {order.status.replace('_', ' ')}
             </Badge>
+            {order.needs_split_billing && (
+              <span title="This delivered order has field/acre allocations — auto-invoice was skipped; use Create Split Invoices below to bill it.">
+                <Badge variant="warning" size="md">
+                  Needs split billing
+                </Badge>
+              </span>
+            )}
           </div>
         </div>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-6">

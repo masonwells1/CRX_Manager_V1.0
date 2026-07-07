@@ -1345,6 +1345,17 @@ export default function JobDetail() {
     return { overRateCount: overRateProducts.length, overRateProducts, phiHarvestWarnCount };
   }, [chemRows, allProducts, labelMaxFor, jobEarliestHarvestDate, jobDate]);
 
+  // SAFE-SCOPE U7: a job is "multi-owner" when its fields' billed shares span more
+  // than one distinct customer — the same customer set transfer_job_to_invoice
+  // bills from (job_fields <-> field_billing_defaults GROUP BY customer_id). On a
+  // multi-owner job, Transfer to Invoice collapses every owner into ONE invoice
+  // to the primary tenant; other owners' shares show as unpayable annotations.
+  const distinctBilledCustomers = useMemo(
+    () => new Set(shareRows.map((s) => s.customer_id).filter(Boolean)),
+    [shareRows]
+  );
+  const isMultiOwner = distinctBilledCustomers.size > 1;
+
   // Single dirty engine: when no baseline is set yet, ADOPT the current form as the
   // clean baseline (but only once the load has settled, so we don't adopt a half-
   // populated form); thereafter compare. fetchJob / the new-job init reset the
@@ -4123,7 +4134,9 @@ export default function JobDetail() {
         onClose={() => setShowTransferConfirm(false)}
         onConfirm={() => { setShowTransferConfirm(false); handleTransferToInvoice(); }}
         title="Transfer to Invoice"
-        message="Transfer this job to an invoice? This will create a new invoice from the job chemicals."
+        message={isMultiOwner
+          ? `This job has fields billed to more than one owner. Transfer to Invoice creates ONE invoice to ${customers.find((c) => c.id === customerId)?.farm_name || 'the primary customer'}; each landlord's share shows on statements but CANNOT be paid separately (per-owner billing for spray jobs is coming soon). Continue only if the tenant is collecting from the other owners.`
+          : 'Transfer this job to an invoice? This will create a new invoice from the job chemicals.'}
         confirmLabel="Transfer to Invoice"
         variant="warning"
         loading={transferring}

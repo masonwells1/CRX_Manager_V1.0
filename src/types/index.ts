@@ -415,6 +415,11 @@ export interface Order {
   pricing_escalation_sent_at: string | null;
   notes: string | null;
   program_notes: string | null;
+  /** U7 SAFE-SCOPE: set true by complete_delivery when a delivered order has
+   * field/acre allocations — the mono-bill auto-draft is skipped and the order
+   * is queued for a manual "Create Split Invoices" pass. Cleared back to false
+   * once create_split_invoices_from_order successfully bills it. */
+  needs_split_billing?: boolean | null;
   created_at: string;
   updated_at: string;
   customer?: Customer;
