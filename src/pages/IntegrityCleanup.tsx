@@ -270,13 +270,20 @@ export default function IntegrityCleanup() {
         }>;
         const orderIds = allCompleted.map((d) => d.order_id);
         if (orderIds.length > 0) {
+          // U2 #34: bill-tracking is per-DELIVERY, not per-order. A delivery is "billed"
+          // only if an active invoice is tied to THIS delivery, or an order-level invoice
+          // (delivery_id IS NULL) covers the whole order. An invoice tied to a DIFFERENT
+          // delivery on the same order must NOT hide this delivery — mirrors the
+          // complete_delivery auto-invoice guard.
           const { data: invoiceRows } = await supabase
             .from('invoices')
-            .select('order_id')
+            .select('order_id, delivery_id')
             .in('order_id', orderIds)
             .not('status', 'in', '("voided","cancelled")');
-          const billedOrderIds = new Set(((invoiceRows || []) as { order_id: string }[]).map((i: { order_id: string }) => i.order_id));
-          const filtered = allCompleted.filter((d) => !billedOrderIds.has(d.order_id));
+          const invRows = (invoiceRows || []) as { order_id: string; delivery_id: string | null }[];
+          const billedDeliveryIds = new Set(invRows.filter((i) => i.delivery_id).map((i) => i.delivery_id as string));
+          const orderLevelBilledOrderIds = new Set(invRows.filter((i) => !i.delivery_id).map((i) => i.order_id));
+          const filtered = allCompleted.filter((d) => !billedDeliveryIds.has(d.id) && !orderLevelBilledOrderIds.has(d.order_id));
           setUnbilled(
             filtered.map((d) => {
               const c = Array.isArray(d.customer) ? d.customer[0] : d.customer;

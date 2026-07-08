@@ -62,6 +62,13 @@ export interface ChemicalLine {
   max_label_rate_unit?: string | null;
   rei_hours?: number | null;
   phi_days?: number | null;
+  /**
+   * #56 (UI-only, NOT persisted): a hand-entered "custom line" with no catalog
+   * product. Renders a free-text name input instead of the product search box.
+   * The server already supports manual lines (product_id NULL + free-text name +
+   * editable price); this flag just drives the local rendering.
+   */
+  is_custom?: boolean;
 }
 
 interface FieldAppChemicalEntryProps {
@@ -206,6 +213,34 @@ export default function FieldAppChemicalEntry({
     onChemicalsChange([...chemicals, line]);
     setActiveLineId(line.id);
     setShowSearch(true);
+    setSearchQuery('');
+    setSearchResults([]);
+  };
+
+  const addCustomLine = () => {
+    if (readOnly) return;
+    const line: ChemicalLine = {
+      id: genId(),
+      product_id: null,
+      product_name: '',
+      rate_per_acre: null,
+      rate_unit: 'oz',
+      quantity: 0,
+      unit: 'oz',
+      unit_price_cents: 0,
+      price_unit: 'oz',
+      extended_cents: 0,
+      unit_cost_cents: 0,
+      sort_order: chemicals.length,
+      warehouse: null,
+      vendor: null,
+      product_form: null,
+      is_custom: true,
+    };
+    onChemicalsChange([...chemicals, line]);
+    setActiveLineId(line.id);
+    // No product search for a custom line — the user types the name directly.
+    setShowSearch(false);
     setSearchQuery('');
     setSearchResults([]);
   };
@@ -373,7 +408,21 @@ export default function FieldAppChemicalEntry({
               <tr className="hover:bg-gray-50">
                 <td className="px-3 py-2">
                   <div className="relative" ref={activeLineId === line.id ? searchRef : undefined}>
-                    {line.product_name ? (
+                    {/* #56 + Codex P2: a custom/manual line is identified by its
+                        PERSISTED state (product_id null + a name) so it survives
+                        save/reload; is_custom covers the fresh empty line just
+                        added this session. A fresh "Add Chemical" line (null id,
+                        empty name, no flag) still falls through to the search box. */}
+                    {line.product_id == null && (line.is_custom || line.product_name !== '') ? (
+                      <input
+                        type="text"
+                        placeholder="Custom line description..."
+                        disabled={readOnly}
+                        value={line.product_name}
+                        onChange={(e) => updateLine(line.id, { product_name: e.target.value })}
+                        className="w-full px-2 py-1 border rounded text-sm disabled:bg-gray-100 disabled:text-gray-500"
+                      />
+                    ) : line.product_name ? (
                       <button
                         type="button"
                         disabled={readOnly}
@@ -602,6 +651,9 @@ export default function FieldAppChemicalEntry({
           <div className="flex gap-2">
             <Button variant="secondary" size="sm" icon={<Plus className="w-4 h-4" />} onClick={addLine}>
               Add Chemical
+            </Button>
+            <Button variant="secondary" size="sm" icon={<Plus className="w-4 h-4" />} onClick={addCustomLine}>
+              Add custom line
             </Button>
           </div>
         </div>

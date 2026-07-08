@@ -476,6 +476,75 @@ describe('checkCommissionSplits', () => {
     expect(result[0].entity).toBe('ORD-002');
   });
 
+  // U8: job-sourced commissions have order_id NULL — each job must group on its
+  // own job_id bucket, never collapse into one shared `null` bucket.
+  it('groups job-sourced commissions per job, not into one null bucket', () => {
+    const commissions: CommissionRow[] = [
+      { order_id: null, job_id: 'j1', order_number: 'Job JOB-001', split_percentage: 60 },
+      { order_id: null, job_id: 'j1', order_number: 'Job JOB-001', split_percentage: 40 },
+      { order_id: null, job_id: 'j2', order_number: 'Job JOB-002', split_percentage: 100 },
+    ];
+
+    // Two valid 100% jobs; a raw order_id key would sum them to 200 and misreport.
+    expect(checkCommissionSplits(commissions)).toEqual([]);
+  });
+
+  it('flags a job whose splits do not sum to 100 without touching other jobs', () => {
+    const commissions: CommissionRow[] = [
+      { order_id: null, job_id: 'j1', order_number: 'Job JOB-001', split_percentage: 100 },
+      { order_id: null, job_id: 'j2', order_number: 'Job JOB-002', split_percentage: 70 },
+    ];
+
+    const result = checkCommissionSplits(commissions);
+    expect(result).toHaveLength(1);
+    expect(result[0].entityId).toBe('job:j2');
+    expect(result[0].actual).toBe(70);
+  });
+
+  it('keeps order and job buckets separate when both channels are present', () => {
+    const commissions: CommissionRow[] = [
+      { order_id: 'o1', job_id: null, order_number: 'ORD-001', split_percentage: 100 },
+      { order_id: null, job_id: 'j1', order_number: 'Job JOB-001', split_percentage: 100 },
+    ];
+
+    expect(checkCommissionSplits(commissions)).toEqual([]);
+  });
+
+  // Codex R1 P2: a void→re-invoice cycle leaves a cancelled generation beside the
+  // live one on the same job — cancelled rows must not inflate the split sum.
+  it('excludes cancelled commissions so a re-invoiced job is not a false 200%', () => {
+    const commissions: CommissionRow[] = [
+      { order_id: null, job_id: 'j1', status: 'cancelled', order_number: 'Job JOB-001', split_percentage: 100 },
+      { order_id: null, job_id: 'j1', status: 'pending', order_number: 'Job JOB-001', split_percentage: 100 },
+    ];
+
+    expect(checkCommissionSplits(commissions)).toEqual([]);
+  });
+
+  // Codex R8 P2: a PAID row that survives a void (admin-notified, kept on the
+  // ledger) shares job_id with the re-invoice's fresh set but not invoice_id —
+  // generations must group separately, each summing to 100.
+  it('groups job commissions per invoice generation, not per job', () => {
+    const commissions: CommissionRow[] = [
+      { order_id: null, job_id: 'j1', invoice_id: 'inv1', status: 'paid', order_number: 'Job JOB-001', split_percentage: 100 },
+      { order_id: null, job_id: 'j1', invoice_id: 'inv2', status: 'pending', order_number: 'Job JOB-001', split_percentage: 100 },
+    ];
+
+    expect(checkCommissionSplits(commissions)).toEqual([]);
+  });
+
+  // Codex R9 P2: a partial generation (one recipient paid + siblings cancelled by
+  // a void) legitimately totals under 100 — the whole bucket is a reversal
+  // artifact and must be excluded, not misreported as split corruption.
+  it('excludes a paid-survivor generation whose siblings were cancelled', () => {
+    const commissions: CommissionRow[] = [
+      { order_id: null, job_id: 'j1', invoice_id: 'inv1', status: 'paid', order_number: 'Job JOB-001', split_percentage: 60 },
+      { order_id: null, job_id: 'j1', invoice_id: 'inv1', status: 'cancelled', order_number: 'Job JOB-001', split_percentage: 40 },
+    ];
+
+    expect(checkCommissionSplits(commissions)).toEqual([]);
+  });
+
   it('handles empty commissions list', () => {
     expect(checkCommissionSplits([])).toEqual([]);
   });

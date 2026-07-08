@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef , useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Save, Check, X, Plus, Trash2, Image as ImageIcon, AlertCircle, Link2, Unlink, ShoppingCart, ClipboardCheck, RefreshCw, MapPin, FileText } from 'lucide-react';
-import { supabase, checkMutationResult, assertRpcResult } from '../lib/db';
+import { supabase, checkMutationResult, assertRpcResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
@@ -14,6 +14,7 @@ import Badge from '../components/ui/Badge';
 import Modal from '../components/ui/Modal';
 import Skeleton from '../components/ui/Skeleton';
 import UnsavedChangesModal from '../components/ui/UnsavedChangesModal';
+import HelpTip from '../components/ui/HelpTip';
 import ConfirmModal from '../components/ui/ConfirmModal';
 import { usePageMeta } from '../hooks/usePageMeta';
 import { useToast } from '../components/ui/Toast';
@@ -630,7 +631,14 @@ export function BlendTicketDetail() {
           p_created_by: profile.id,
           p_idempotency_key: key,
         });
-        if (error) throw error;
+        if (error) {
+          // U6 #91a: the ticket's job already has a live invoice — billing the ticket
+          // too would double-charge. Give a plain-English reason instead of the raw token.
+          if (hasRpcCode(error, RpcErrorCodes.JOB_ALREADY_INVOICED)) {
+            throw new Error('This blend ticket is tied to a job that has already been invoiced. Billing the ticket too would double-charge the customer — void that job invoice first if you meant to re-bill here.');
+          }
+          throw error;
+        }
         // Phase 1 (2026-04-29): RPC return shape changed from uuid to
         // { invoice_ids: string[], invoice_group_id: string | null }.
         // Multi-customer fields produce grouped split invoices; single-customer
@@ -898,8 +906,9 @@ export function BlendTicketDetail() {
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
+              <label className="text-sm font-medium text-gray-700 mb-1 flex items-center">
                 Link to Job
+                <HelpTip className="ml-1" text="Linking connects this ticket to a scheduled application job — the 'we apply it' path. It does not bill anything on its own: the customer is billed later, either from the job (Transfer to Invoice) or directly here with Create Invoice. Do one or the other for a given application, never both, or you double-charge." />
               </label>
               <select
                 value={selectedJobId}
@@ -1421,11 +1430,12 @@ export function BlendTicketDetail() {
             <p className="text-sm text-gray-500">
               This blend ticket is not linked to any order. Link it to an existing order or create a new one.
             </p>
-            <div className="flex gap-2">
+            <div className="flex gap-2 items-center">
               <Button variant="secondary" size="sm" onClick={openLinkModal}>
                 <Link2 className="h-4 w-4" />
                 Link to Existing Order
               </Button>
+              <HelpTip text="Link to Order attaches this ticket to an EXISTING sales order — the 'chemical sale' path where we deliver the product and the order draws it from inventory. Use this when the customer is buying the chemical, not us applying it." />
               <Button size="sm" onClick={() => {
                 if (!ticket.customer_id) {
                   toast('error', 'Please assign a customer first');
@@ -1439,6 +1449,7 @@ export function BlendTicketDetail() {
                 <ShoppingCart className="h-4 w-4" />
                 Create Order from Ticket
               </Button>
+              <HelpTip text="Create Order builds a NEW sales order from this ticket's products at tier pricing — also the 'chemical sale' path (we deliver, inventory is drawn). Use this when there is no existing order to link to." />
             </div>
           </div>
         )}
@@ -1457,6 +1468,7 @@ export function BlendTicketDetail() {
               <h3 className="text-sm font-semibold text-nav-dark flex items-center gap-2">
                 <FileText className="h-4 w-4 text-crx-green" />
                 Direct Invoice
+                <HelpTip text="Create Invoice bills the customer NOW straight from this ticket — the 'we applied it' path (a field-application invoice; no order or delivery needed). Choose this OR the job's Transfer to Invoice for a given application, never both, or the customer is billed twice." />
               </h3>
               <p className="text-xs text-secondary mt-1">
                 Create an invoice directly from this blend ticket — no order required.
@@ -1639,10 +1651,13 @@ export function BlendTicketDetail() {
           </>
         )}
         {ticket.review_status === 'approved' && (
-          <Button variant="secondary" onClick={handleCreateApplicationRecord} loading={creatingAppRecord}>
-            <ClipboardCheck className="h-4 w-4" />
-            Create App Record
-          </Button>
+          <span className="inline-flex items-center gap-1">
+            <Button variant="secondary" onClick={handleCreateApplicationRecord} loading={creatingAppRecord}>
+              <ClipboardCheck className="h-4 w-4" />
+              Create App Record
+            </Button>
+            <HelpTip text="Create Application Record files the legal as-applied record (product, field, date, rate) for compliance. It does NOT bill anyone — it's the regulatory paperwork, separate from Create Invoice (billing) and from linking to an order or job." />
+          </span>
         )}
         <Button onClick={handleSave} disabled={saving}>
           <Save className="h-4 w-4" />

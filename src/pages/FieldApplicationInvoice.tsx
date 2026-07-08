@@ -150,6 +150,9 @@ const TABS: { key: TabKey; label: string; icon: React.ReactNode }[] = [
 function fieldAppError(err: unknown): string {
   if (hasRpcCode(err, RpcErrorCodes.ZERO_APPLIED_ACRES)) return 'A location has 0 or blank applied acres. Open the Locations tab and enter the acres sprayed for each field.';
   if (hasRpcCode(err, RpcErrorCodes.ACTOR_MISMATCH)) return 'Your sign-in could not be verified. Refresh the page and try again.';
+  // U7: this invoice is one member of a multi-owner split group — it can't be reversed
+  // member-by-member (that would reopen the job while the other owners' invoices stay live).
+  if (hasRpcCode(err, RpcErrorCodes.JOB_BILLED_AS_GROUP)) return 'This job was invoiced as a multi-owner split. To return it to scheduling, void each owner’s invoice — voiding the last one reopens the job.';
   // check_period_open() raises a plain-English sentence ("Date X falls in closed
   // accounting period (...)"), which sanitizeError passes through readably — no token to match.
   return sanitizeError(err);
@@ -1021,6 +1024,11 @@ export default function FieldApplicationInvoice() {
             vendor: (it.vendor as string | null) ?? null,
             product_form: (it.product_form as 'liquid' | 'dry' | null) ?? null,
             epa_registration: (it.epa_registration as string | null) || undefined,
+            // U4 (Codex R4): rehydrate manual pricing — a persisted manual price
+            // (price_source='manual') or ANY product-less line (no tier fallback
+            // exists) must reload as manual_override=true, or the next save would
+            // treat the price as tier-derived and zero a custom line's charge.
+            manual_override: (it.price_source as string | null) === 'manual' || it.product_id == null,
             // §5: hydrated label data (null when the product has none / fetch failed).
             max_label_rate: label?.max_label_rate ?? null,
             max_label_rate_unit: label?.max_label_rate_unit ?? null,

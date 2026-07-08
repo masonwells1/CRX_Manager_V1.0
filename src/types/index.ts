@@ -166,6 +166,7 @@ export interface Customer {
   other_acres: number | null;
   payment_terms: string | null;
   default_commission_split: CommissionSplit | null;
+  default_application_service_id?: string | null;
   credit_limit_cents: number | null;
   finance_charge_rate: number | null;
   finance_charge_enabled: boolean;
@@ -193,7 +194,7 @@ export interface CustomerAddress {
   created_at: string;
 }
 
-export type QuoteStatus = 'draft' | 'sent' | 'revised' | 'accepted' | 'declined' | 'expired' | 'cancelled' | 'closed_by_application';
+export type QuoteStatus = 'draft' | 'sent' | 'revised' | 'accepted' | 'declined' | 'expired' | 'cancelled' | 'closed_by_application' | 'closed_short';
 
 export interface Quote {
   id: string;
@@ -414,6 +415,11 @@ export interface Order {
   pricing_escalation_sent_at: string | null;
   notes: string | null;
   program_notes: string | null;
+  /** U7 SAFE-SCOPE: set true by complete_delivery when a delivered order has
+   * field/acre allocations — the mono-bill auto-draft is skipped and the order
+   * is queued for a manual "Create Split Invoices" pass. Cleared back to false
+   * once create_split_invoices_from_order successfully bills it. */
+  needs_split_billing?: boolean | null;
   created_at: string;
   updated_at: string;
   customer?: Customer;
@@ -741,7 +747,13 @@ export interface ReceivingSummary {
 
 export interface Commission {
   id: string;
-  order_id: string;
+  /** Source order (chemical-sale channel). NULL on job-sourced rows (U8). */
+  order_id: string | null;
+  /** Source job (application channel, U8). NULL on order-sourced rows. */
+  job_id: string | null;
+  /** The field_application invoice that minted a job commission (U8) — reversal
+   *  and payout-void liveness are generation-precise on this. NULL on order rows. */
+  invoice_id: string | null;
   customer_id: string;
   recipient: string;
   recipient_user_id: string | null;
@@ -1898,6 +1910,9 @@ export interface ApplicationRecord {
   source_id: string;
   customer_id: string;
   applicator_id: string | null;
+  /** U10 (#106b, 2026-07-06) — as-of-application snapshots; profiles rows mutate but the legal record must not. */
+  applicator_name: string | null;
+  applicator_license_number: string | null;
   /** DEPRECATED — single-field anchor. Phase 2 (2026-04-30): multi-field detail lives in application_record_fields. */
   field_id: string | null;
   application_date: string;
@@ -2051,6 +2066,10 @@ export interface Job {
   invoice_id: string | null;
   quote_id: string | null;
   quote_section_id: string | null;
+  /** U8 (#99, 2026-07-06): commission split snapshot copied from the quote at
+   *  scheduling — read by transfer_job_to_invoice to mint application-channel
+   *  commissions (chemical-line profit only). */
+  commission_split: CommissionSplit | null;
   /** Phase 4 (2026-04-30): drives per-acre service fee on transfer_job_to_invoice. */
   application_service_id: string | null;
   // Field-app parity #1 (2026-06-24): ChemMan scheduling + memo fields.
@@ -2272,6 +2291,10 @@ export interface JobChemical {
   phi_days: number | null;
   warehouse: string | null;
   vendor: string | null;
+  // #53/#54 (2026-07-06): grower supplied this product — applied but NOT deducted
+  // from our inventory and NOT billed (a $0 informational invoice line). It still
+  // appears in the application_records legal product_data (flagged customer_supplied).
+  customer_supplied: boolean;
   sort_order: number;
   // Joined
   product?: Product;

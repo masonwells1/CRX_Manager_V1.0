@@ -1160,7 +1160,9 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
               Email
             </Button>
           )}
-          {!isNew && invoice.status === 'posted' && isAdmin && (
+          {/* U1 (#41): posted OR overdue — an overdue invoice is the one a check most
+              often arrives for; allocate_payment and apply_write_off both accept it. */}
+          {!isNew && (invoice.status === 'posted' || invoice.status === 'overdue') && isAdmin && (
             <>
               <Button
                 variant="secondary"

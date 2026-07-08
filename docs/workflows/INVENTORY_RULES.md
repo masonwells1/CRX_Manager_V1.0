@@ -102,13 +102,15 @@ Every inventory change creates an `inventory_transactions` record. Here are all 
 - **Early-March 2026 seeds are unledgered.** A handful of products created
   around 2026-03-04 had `quantity_available` seeded with no `received` ledger
   rows; the ledger is not a complete derivation of stock for that era.
-- **The insufficient-stock hard block lives on `complete_delivery`** (restored
-  2026-04-30 after a deliberate 2026-03-19→04-30 no-block window). The
-  warn-not-block policy applies to ORDER CREATION (`create_direct_order` /
-  `convert_quote_to_order`), not delivery completion. Job/blend-ticket
-  applications (`complete_job`, `create_application_record_from_blend_ticket`)
-  warn-and-flag (`requires_review = true`, "[SHORT STOCK]" note) but do not
-  block — the chemical is already physically applied when they run.
+- **Warn-not-block is now UNIVERSAL (2026-07-06, owner decision §6.1 of the
+  business-workflow review).** `complete_delivery` and `create_quick_delivery`
+  no longer hard-block on insufficient stock (mig `20260706130000`): they
+  proceed, allow negative stock, flag the ledger row (`requires_review = true`),
+  and notify admins — matching the order-creation and job/blend-application
+  paths, which already warned-and-flagged. History: the delivery hard block was
+  restored 2026-04-30 after a deliberate 2026-03-19→04-30 no-block window, and
+  retired again 2026-07-06 (real paper tickets must be enterable even when the
+  count is wrong — the count is what's wrong, not reality).
 - **Reversals may drive stock negative by design** (2026-06-10): 
   `reverse_receiving_record` / the `receiving_records` delete trigger subtract
   the full reversed quantity so the ledger always equals the applied change; a
@@ -161,7 +163,7 @@ This closes the concurrency window where two admins clicking "Create Hold" simul
 
 ## Phantom inventory rows (P4-7, 2026-05-07)
 
-`inventory.manufactured_at_delivery boolean NOT NULL DEFAULT false` flags rows that were created during a delivery completion when the product had no prior inventory record. The current Phase 15 `complete_delivery` body (migration `20260501100000`) `RAISE EXCEPTION 'Insufficient inventory'` on the NOT FOUND branch rather than auto-creating a row, so the flag should stay at `false` in normal operation. It exists as defensive infrastructure for:
+`inventory.manufactured_at_delivery boolean NOT NULL DEFAULT false` flags rows that were created during a delivery completion when the product had no prior inventory record. Since `20260706130000` (warn-not-block, 2026-07-06), `complete_delivery` and `create_quick_delivery` DO auto-create a zero row on the NOT FOUND branch — with `manufactured_at_delivery = true` — so the shortage stays visible in the position math instead of a silent no-op UPDATE. Such rows surface on `/integrity-cleanup` as designed. The flag's original purposes remain:
 
 1. A future driver-app or field-app path that legitimately needs to manufacture rows.
 2. Detecting regressions to an older `complete_delivery` body that had an auto-create branch (the March 19 body in `20260319200000` used to do this).
