@@ -560,6 +560,15 @@ export default function ProductDetail() {
                       <span className="text-sm font-medium text-secondary">{(product.tier1_gross_margin * 100).toFixed(1)}%</span>
                     </div>
                   )}
+                  {product.tier1_price_per_acre != null && (
+                    <div
+                      className="px-3 py-2 bg-gray-50 rounded-lg border border-gray-100"
+                      title="Auto-calculated from the tier price and the product's label rate. Refreshes when you save."
+                    >
+                      <span className="text-xs text-gray-500">Per acre (label rate): </span>
+                      <span className="text-sm font-medium text-secondary">${product.tier1_price_per_acre.toFixed(2)} / acre</span>
+                    </div>
+                  )}
                 </div>
                 <div className="space-y-3">
                   <h4 className="text-sm font-medium text-secondary">Tier 2</h4>
@@ -569,6 +578,15 @@ export default function ProductDetail() {
                     <div className="px-3 py-2 bg-gray-50 rounded-lg border border-gray-100">
                       <span className="text-xs text-gray-500">Gross Margin: </span>
                       <span className="text-sm font-medium text-secondary">{(product.tier2_gross_margin * 100).toFixed(1)}%</span>
+                    </div>
+                  )}
+                  {product.tier2_price_per_acre != null && (
+                    <div
+                      className="px-3 py-2 bg-gray-50 rounded-lg border border-gray-100"
+                      title="Auto-calculated from the tier price and the product's label rate. Refreshes when you save."
+                    >
+                      <span className="text-xs text-gray-500">Per acre (label rate): </span>
+                      <span className="text-sm font-medium text-secondary">${product.tier2_price_per_acre.toFixed(2)} / acre</span>
                     </div>
                   )}
                 </div>
@@ -583,6 +601,15 @@ export default function ProductDetail() {
                     <div className="px-3 py-2 bg-gray-50 rounded-lg border border-gray-100">
                       <span className="text-xs text-gray-500">Gross Margin: </span>
                       <span className="text-sm font-medium text-secondary">{(product.tier3_gross_margin * 100).toFixed(1)}%</span>
+                    </div>
+                  )}
+                  {product.tier3_price_per_acre != null && (
+                    <div
+                      className="px-3 py-2 bg-gray-50 rounded-lg border border-gray-100"
+                      title="Auto-calculated from the tier price and the product's label rate. Refreshes when you save."
+                    >
+                      <span className="text-xs text-gray-500">Per acre (label rate): </span>
+                      <span className="text-sm font-medium text-secondary">${product.tier3_price_per_acre.toFixed(2)} / acre</span>
                     </div>
                   )}
                 </div>

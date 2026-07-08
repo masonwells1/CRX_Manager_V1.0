@@ -27,6 +27,7 @@ import {
   ArrowDown,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
+import { supabase } from '../lib/db';
 
 const STORAGE_KEY = 'crx_hide_getting_started';
 
@@ -144,6 +145,111 @@ function Tip({ children }: { children: React.ReactNode }) {
   );
 }
 
+/* ── Live "first billing cycle" progress tracker (admin only) ── */
+function FirstCycleTracker() {
+  const navigate = useNavigate();
+  const [counts, setCounts] = useState<number[] | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      // Five milestones of one quote-to-cash cycle. head:true + count:exact is a
+      // cheap COUNT — no rows returned. Read-only; admin RLS allows all five.
+      const [q, o, d, i, p] = await Promise.all([
+        supabase.from('quotes').select('id', { count: 'exact', head: true }).neq('status', 'draft'),
+        supabase.from('orders').select('id', { count: 'exact', head: true }),
+        supabase.from('deliveries').select('id', { count: 'exact', head: true }).eq('status', 'completed'),
+        supabase.from('invoices').select('id', { count: 'exact', head: true }).in('status', ['posted', 'paid', 'overdue']),
+        supabase.from('payments').select('id', { count: 'exact', head: true }),
+      ]);
+      if (!cancelled) {
+        setCounts([q.count ?? 0, o.count ?? 0, d.count ?? 0, i.count ?? 0, p.count ?? 0]);
+      }
+    })().catch(() => {
+      // Onboarding aid — never surface an error; just show nothing.
+      if (!cancelled) setCounts(null);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const steps = [
+    { label: 'Quote sent', icon: <FileText className="w-6 h-6" />, path: '/quotes', hint: 'Build a quote and send it to a customer.' },
+    { label: 'Order created', icon: <ShoppingCart className="w-6 h-6" />, path: '/orders', hint: 'Convert an accepted quote into an order.' },
+    { label: 'Delivery completed', icon: <Truck className="w-6 h-6" />, path: '/deliveries', hint: 'Schedule a delivery, then Start and Complete it.' },
+    { label: 'Invoice posted', icon: <Receipt className="w-6 h-6" />, path: '/invoices', hint: 'Post the draft invoice so it counts toward what customers owe.' },
+    { label: 'Payment recorded', icon: <DollarSign className="w-6 h-6" />, path: '/payments', hint: 'Record the customer payment against the invoice.' },
+  ];
+
+  const firstIncomplete = counts ? counts.findIndex((c) => c === 0) : -1;
+
+  return (
+    <div className="bg-white rounded-lg border border-gray-200 p-6 shadow-sm">
+      <div className="flex items-center gap-2 mb-1">
+        <Target className="w-5 h-5 text-crx-green" />
+        <h2 className="text-lg font-semibold text-gray-900">Your first billing cycle</h2>
+      </div>
+      <p className="text-gray-500 text-sm mb-4 ml-7">
+        A live check of how far a real sale has traveled — from quote all the way to money in.
+      </p>
+      {counts === null ? (
+        <p className="text-sm text-gray-400 ml-7">Checking…</p>
+      ) : (
+        <>
+          <div className="flex flex-wrap items-start justify-center gap-2">
+            {steps.map((step, i) => {
+              const done = (counts[i] ?? 0) > 0;
+              const isNext = !done && i === firstIncomplete;
+              return (
+                <div key={step.label} className="flex items-center gap-2">
+                  <div className="flex flex-col items-center gap-1 w-28 text-center">
+                    <div
+                      className={`w-12 h-12 rounded-full flex items-center justify-center ${
+                        done
+                          ? 'bg-crx-green text-white'
+                          : isNext
+                            ? 'bg-amber-100 text-amber-700 ring-2 ring-amber-400'
+                            : 'bg-gray-100 text-gray-400'
+                      }`}
+                    >
+                      {done ? <CheckCircle2 className="w-6 h-6" /> : step.icon}
+                    </div>
+                    <span className={`text-xs font-medium ${isNext ? 'text-amber-700' : done ? 'text-gray-700' : 'text-gray-400'}`}>
+                      {step.label}
+                    </span>
+                    <span className="text-[11px] text-gray-400">{counts[i]} so far</span>
+                  </div>
+                  {i < steps.length - 1 && <ChevronRight className="w-4 h-4 text-gray-300 flex-shrink-0 mt-3" />}
+                </div>
+              );
+            })}
+          </div>
+          {firstIncomplete === -1 ? (
+            <div className="mt-4 flex items-center gap-2 text-sm text-crx-green font-medium">
+              <CheckCircle2 className="w-4 h-4" /> You&apos;ve completed a full quote-to-cash cycle. 🎉
+            </div>
+          ) : (
+            <div className="mt-4 flex items-center gap-3 rounded-lg bg-amber-50 border border-amber-200 p-3">
+              <div className="text-sm text-amber-800">
+                <span className="font-medium">Next step: {steps[firstIncomplete].label}.</span>{' '}
+                {steps[firstIncomplete].hint}
+              </div>
+              <button
+                onClick={() => navigate(steps[firstIncomplete].path)}
+                className="ml-auto inline-flex items-center gap-1 px-3 py-1.5 bg-crx-green text-white text-sm font-medium rounded-lg hover:bg-crx-green/90 transition-colors whitespace-nowrap"
+              >
+                Go
+                <ChevronRight className="w-4 h-4" />
+              </button>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 const adminSteps: Step[] = [
   { label: 'Create Quote', icon: <FileText className="w-6 h-6" /> },
   { label: 'Send to Customer', icon: <Send className="w-6 h-6" /> },
@@ -162,6 +268,7 @@ const driverSteps: Step[] = [
 export default function GettingStarted() {
   const { profile } = useAuth();
   const isDriver = profile?.role === 'driver';
+  const isAdmin = profile?.role === 'admin';
 
   const [hideOnLogin, setHideOnLogin] = useState(() => {
     try {
@@ -210,6 +317,9 @@ export default function GettingStarted() {
         </p>
         <StepperRow steps={isDriver ? driverSteps : adminSteps} />
       </div>
+
+      {/* Live first-billing-cycle tracker (admin only) */}
+      {isAdmin && <FirstCycleTracker />}
 
       {/* Quick Links */}
       {isDriver ? (
