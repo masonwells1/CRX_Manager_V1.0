@@ -423,7 +423,8 @@ export default function Deliveries() {
           confirmed = true;
         }
 
-        // If confirm succeeds but complete fails, the delivery is left in_progress, and the existing in_progress action lets the user retry complete.
+        // completeIdem is intentionally retained until onSuccess, so a retry after a
+        // lost response replays the same complete_delivery request idempotently.
         const { data, error } = await supabase.rpc('complete_delivery', {
           p_delivery_id: target.id,
           p_signed_by: signedBy.trim(),
@@ -461,9 +462,12 @@ export default function Deliveries() {
     });
 
     if (!completed && confirmed) {
-      setCompleteTarget(null);
-      setSignedBy('');
-      setDeliveredOnDate(today());
+      // Confirm succeeded so the delivery is now in_progress; keep the modal open
+      // with the SAME retained complete-key (completeIdem only resets on success)
+      // so a retry replays idempotently. If the failed call actually committed
+      // server-side, the replay returns the cached result and onSuccess (including
+      // the completion notification) still fires.
+      setCompleteTarget((prev) => (prev && prev.id === target.id ? { ...prev, status: 'in_progress' } : prev));
       await fetchDeliveries();
     }
   };
