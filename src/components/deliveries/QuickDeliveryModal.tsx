@@ -16,6 +16,7 @@ import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
 import { localToday } from '../../lib/dateUtils';
 import { Sentry } from '../../lib/sentry';
 import { formatCents as fmtCurrency } from '../../lib/money';
+import { fetchOpenBookings, type OpenBooking } from '../../lib/openBookings';
 import type { Product, Profile } from '../../types';
 
 interface QuickItem {
@@ -57,6 +58,7 @@ export default function QuickDeliveryModal({
   const [customerResults, setCustomerResults] = useState<CustomerOption[]>([]);
   const [selectedCustomer, setSelectedCustomer] = useState<CustomerOption | null>(null);
   const [showCustomerDropdown, setShowCustomerDropdown] = useState(false);
+  const [openBookings, setOpenBookings] = useState<OpenBooking[]>([]);
   const selectedCustomerRef = useRef<CustomerOption | null>(null);
   const wasOpenRef = useRef(false);
 
@@ -189,9 +191,26 @@ export default function QuickDeliveryModal({
     return () => clearTimeout(timer);
   }, [customerSearch, selectedCustomer, toast]);
 
+  const selectedCustomerId = selectedCustomer?.id;
+  useEffect(() => {
+    if (!selectedCustomerId) {
+      setOpenBookings([]);
+      return;
+    }
+
+    let cancelled = false;
+    setOpenBookings([]);
+    fetchOpenBookings(selectedCustomerId).then((bookings) => {
+      if (!cancelled) setOpenBookings(bookings);
+    });
+
+    return () => { cancelled = true; };
+  }, [selectedCustomerId]);
+
   const selectCustomer = useCallback((c: CustomerOption) => {
     selectedCustomerRef.current = c;
     setSelectedCustomer(c);
+    setOpenBookings([]);
     setCustomerSearch(c.farm_name + (c.account_number ? ` (${c.account_number})` : ''));
     setShowCustomerDropdown(false);
 
@@ -254,6 +273,7 @@ export default function QuickDeliveryModal({
   const clearCustomer = () => {
     selectedCustomerRef.current = null;
     setSelectedCustomer(null);
+    setOpenBookings([]);
     setCustomerSearch('');
   };
 
@@ -368,6 +388,7 @@ export default function QuickDeliveryModal({
       // Reset form
       selectedCustomerRef.current = null;
       setSelectedCustomer(null);
+      setOpenBookings([]);
       setCustomerSearch('');
       setItems([]);
       setDeliveryNotes('');
@@ -391,6 +412,7 @@ export default function QuickDeliveryModal({
     if (!submitting) {
       selectedCustomerRef.current = null;
       setSelectedCustomer(null);
+      setOpenBookings([]);
       setCustomerSearch('');
       setItems([]);
       setDeliveryNotes('');
@@ -429,6 +451,7 @@ export default function QuickDeliveryModal({
                 if (selectedCustomer) {
                   selectedCustomerRef.current = null;
                   setSelectedCustomer(null);
+                  setOpenBookings([]);
                 }
               }}
               placeholder="Search by farm name or account number..."
@@ -463,6 +486,21 @@ export default function QuickDeliveryModal({
               </div>
             )}
           </div>
+
+          {openBookings.length > 0 && (
+            <div className="-mt-3 flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-900">
+              <span>
+                {openBookings.length} open booking{openBookings.length === 1 ? '' : 's'} — consider drawing from Quote {openBookings[0].quote_number} instead
+              </span>
+              <button
+                type="button"
+                onClick={() => navigate(`/quotes/${openBookings[0].id}`)}
+                className="shrink-0 font-medium text-blue-700 underline underline-offset-2 hover:text-blue-900"
+              >
+                View quote
+              </button>
+            </div>
+          )}
 
           {/* Items */}
           <div>
