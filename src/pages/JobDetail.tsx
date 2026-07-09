@@ -1608,10 +1608,13 @@ export default function JobDetail() {
   // U12 Codex R3 #2: does the current APPLICATOR hold an active ('dispatched')
   // job_location_dispatches row on this job? The assignment-unification migration
   // authorizes such a dispatchee to start/complete server-side, so the UI gate
-  // must match. RLS on job_location_dispatches already scopes an applicator to
-  // their own active rows, so the query is safe. Best-effort: any error leaves
-  // the gate false (office roles never depend on it, and the RPC stays
-  // authoritative for the stricter rules either way).
+  // must match. The probe deliberately has NO applicator_id filter (A3), so a
+  // CREW-member dispatch also lights the gate: RLS scopes the read to the caller's
+  // own rows + their active crew's rows, and start_job (via _is_dispatched_to_me's
+  // crew branch) and complete_job (direct ground_crew_members check) authorize
+  // crew members server-side. Best-effort: any error leaves the gate false (office
+  // roles never depend on it, and the RPC stays authoritative for the stricter
+  // rules either way).
   useEffect(() => {
     if (isNew || !id || !profile?.id || role !== 'applicator') {
       setHasActiveDispatch(false);
@@ -1623,7 +1626,6 @@ export default function JobDetail() {
         .from('job_location_dispatches')
         .select('id')
         .eq('job_id', id)
-        .eq('applicator_id', profile.id)
         .eq('dispatch_status', 'dispatched')
         .limit(1);
       if (!cancelled) setHasActiveDispatch(!res.error && (res.data?.length ?? 0) > 0);
