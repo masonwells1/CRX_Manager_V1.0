@@ -8142,6 +8142,7 @@ export type Database = {
       }
       complete_delivery: {
         Args: {
+          p_completed_at?: string
           p_delivery_id: string
           p_idempotency_key?: string
           p_issue_notes?: string
