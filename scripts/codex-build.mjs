@@ -14,7 +14,18 @@
  *     with typecheck/build/test. It never reaches the live DB / Vercel / GitHub.
  *
  * Usage:
- *   node scripts/codex-build.mjs <promptFile> [--timeout 1800] [--model gpt-5.5]
+ *   node scripts/codex-build.mjs <promptFile> [--timeout 1800] [--model gpt-5.6-terra]
+ *                                [--effort xhigh] [--read-only]
+ *
+ * MODEL TIERS (Codex 5.6 family — verified live 2026-07-09; needs codex-cli >= 0.144):
+ *   gpt-5.6-sol   : frontier tier (~Fable-class)  → money / DB / complex units
+ *   gpt-5.6-terra : workhorse    (~Sonnet-class)  → standard UI units (DEFAULT)
+ *   gpt-5.6-luna  : light        (~Haiku-class)   → mechanical sweeps
+ *   The mission doc pins the tier per unit; the default is Terra.
+ *
+ * --read-only : run with `--sandbox read-only` instead of full access — for review
+ *   glances / verdict passes (e.g. the codex-push-guard verdict), where Codex must
+ *   judge a diff but never touch the tree.
  *
  * - <promptFile>: UTF-8 file with the FULL, self-contained build spec for ONE unit
  *   (or one fix-round). Piped to Codex on STDIN — no Windows argv length cap, and
@@ -69,7 +80,10 @@ if (!existsSync(promptFile)) fail(`prompt file not found: ${promptFile}`)
 const tIdx = process.argv.indexOf('--timeout')
 const timeoutSec = tIdx > -1 ? Number(process.argv[tIdx + 1]) || 1800 : 1800
 const mIdx = process.argv.indexOf('--model')
-const model = mIdx > -1 ? String(process.argv[mIdx + 1] || 'gpt-5.5') : 'gpt-5.5'
+const model = mIdx > -1 ? String(process.argv[mIdx + 1] || 'gpt-5.6-terra') : 'gpt-5.6-terra'
+const eIdx = process.argv.indexOf('--effort')
+const effort = eIdx > -1 ? String(process.argv[eIdx + 1] || 'xhigh') : 'xhigh'
+const readOnly = process.argv.includes('--read-only')
 
 const prompt = readFileSync(promptFile, 'utf8')
 if (!prompt.trim()) fail('prompt file is empty')
@@ -106,9 +120,11 @@ const args = [
   'exec',
   '--ignore-user-config',
   '-m', model,
-  '-c', 'model_reasoning_effort="xhigh"',
+  '-c', `model_reasoning_effort="${effort}"`,
   '-c', 'approval_policy="never"',
-  '--sandbox', 'danger-full-access', // Windows has no OS sandbox; workspace-write degrades to read-only
+  // Windows has no OS sandbox; workspace-write degrades to read-only. Build runs
+  // need danger-full-access to write; --read-only pins review/verdict passes down.
+  '--sandbox', readOnly ? 'read-only' : 'danger-full-access',
   '--ephemeral',
   '-C', repoRoot,
 ]
