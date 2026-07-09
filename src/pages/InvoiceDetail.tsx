@@ -81,6 +81,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
   const { profile } = useAuth();
   const { toast } = useToast();
   const isAdmin = profile?.role === 'admin';
+  const isAdminOrRep = isAdmin || profile?.role === 'sales_rep';
   const saveIdem = useIdempotencyKey('save_invoice', profile?.id || '');
   const postIdem = useIdempotencyKey('post_invoice', profile?.id || '');
   const voidIdem = useIdempotencyKey('void_invoice', profile?.id || '');
@@ -95,9 +96,8 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
   // (a transferred invoice has a job_id but NO field_app_locations, so the #24
   // discriminator routes it here, not to the per-acre FieldApplicationInvoice).
   const transferToSchedulingIdem = useIdempotencyKey('transfer_invoice_to_job', profile?.id || '');
-  // #28: Unpost — reverse a posting on a posted field-application invoice (returns it
-  // to the editable Unposted list). Surfaced here so a TRANSFERRED field invoice (which
-  // opens in THIS generic editor, not the per-acre one) can be unposted in place.
+  // #28/U16b: Unpost — reverse a posting on a posted field-application or chemical-sale
+  // invoice (returns it to the editable Unposted list). The RPC is type-agnostic.
   // #28/FIX 4: per-invoice AND per-group key cache so a retry reuses the same key while a
   // different invoice/group always gets its own. A single invoice uses unpost_invoice
   // (keyed by id); a SPLIT GROUP routes through the atomic unpost_invoice_group (FIX 4 —
@@ -161,7 +161,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
   const [showVoidModal, setShowVoidModal] = useState(false);
   const [voidReason, setVoidReason] = useState('');
   const [voiding, setVoiding] = useState(false);
-  // #28: Unpost confirm + in-flight (field-application invoices only).
+  // #28/U16b: Unpost confirm + in-flight (field-application and chemical-sale invoices).
   const [showUnpostModal, setShowUnpostModal] = useState(false);
   const [unposting, setUnposting] = useState(false);
 
@@ -694,10 +694,10 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
     setVoiding(false);
   };
 
-  // #28: Unpost invoice — reverse a posting (posted/overdue -> unposted) on a
-  // field-application invoice, returning it to the editable Unposted list. The gated
-  // RPC refuses a paid/voided invoice, one with payments/prepay applied, or one in a
-  // closed accounting period — surfaced here as a toast.
+  // #28/U16b: Unpost invoice — reverse a posting (posted/overdue -> unposted) on a
+  // field-application or chemical-sale invoice, returning it to the editable Unposted
+  // list. The RPC refuses a paid/voided invoice, one with payments/prepay applied, or
+  // one in a closed accounting period — surfaced here as a toast.
   // FIX 4 (Wave 2a): a SPLIT GROUP routes through unpost_invoice_group, which unposts
   // ALL members in ONE transaction (all-or-nothing) — a single in-JS member loop could
   // leave a half-unposted group. A single invoice still uses unpost_invoice.
@@ -1108,7 +1108,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
             </Button>
           )}
           <GuardrailBanner warning={creditWarning} onDismiss={dismissCreditWarning} />
-          {!isNew && editable && isAdmin && (
+          {!isNew && editable && isAdminOrRep && (
             <Button variant="secondary" icon={<Send className="w-4 h-4" />} onClick={openPostConfirm} loading={posting}>
               Post
             </Button>
@@ -1186,15 +1186,13 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
               </Button>
             </>
           )}
-          {/* #28: Unpost — reverse a posting on a field-application invoice back to the
-              Unposted list. Surfaced here because a TRANSFERRED field invoice opens in
-              this generic editor (job_id, no field_app_locations). Posted/overdue only;
-              the RPC refuses one with payments/prepay or in a closed period.
-              FIX 5 (Wave 2a): NOT admin-gated — unpost_invoice/_group explicitly allow
-              sales_rep, and the Posted list + per-acre editor already offer sales reps
-              Unpost. (Void stays admin-only below.) */}
-          {!isNew && invoice.invoice_type === 'field_application'
-            && (invoice.status === 'posted' || invoice.status === 'overdue') && (
+          {/* #28/U16b: Unpost — reverse a posting on a field-application or chemical-sale
+              invoice back to the Unposted list. Posted/overdue only; the RPC refuses one
+              with payments/prepay or in a closed period.
+              U16b: explicitly gated to admin/sales_rep, matching the RPC. (Void stays
+              admin-only below.) */}
+          {!isNew && (invoice.invoice_type === 'field_application' || invoice.invoice_type === 'chemical_sale')
+            && (invoice.status === 'posted' || invoice.status === 'overdue') && isAdminOrRep && (
               <Button
                 variant="secondary"
                 icon={<RotateCcw className="w-4 h-4" />}
@@ -1781,7 +1779,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
         loading={transferringToScheduling}
       />
 
-      {/* #28: Unpost confirm — reverse a posting back to the Unposted list. */}
+      {/* #28/U16b: Unpost confirm — reverse a posting back to the Unposted list. */}
       <ConfirmModal
         open={showUnpostModal}
         onClose={() => setShowUnpostModal(false)}

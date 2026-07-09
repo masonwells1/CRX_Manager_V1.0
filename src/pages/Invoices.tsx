@@ -1,4 +1,4 @@
-import { useEffect, useState , useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Plus, FileText, Check, Send, Ban, Printer, Mail, Zap, Trash2, Download, PanelRightOpen } from 'lucide-react';
 import Card from '../components/ui/Card';
@@ -7,7 +7,7 @@ import Badge from '../components/ui/Badge';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, sanitizeError, assertRpcResult } from '../lib/db';
+import { supabase, sanitizeError, assertRpcResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
@@ -15,6 +15,7 @@ import { exportToCSV } from '../lib/csvExport';
 import { downloadReportPdf } from '../lib/reportPdf';
 import BatchVoidModal from '../components/invoices/BatchVoidModal';
 import BulkDeleteConfirmModal from '../components/ui/BulkDeleteConfirmModal';
+import ConfirmModal from '../components/ui/ConfirmModal';
 import InvoicePrintDialog from '../components/invoices/InvoicePrintDialog';
 import CustomerDrawer from '../components/customers/CustomerDrawer';
 import { hasPageAccess } from '../lib/pagePermissions';
@@ -23,11 +24,15 @@ import { generateBatchInvoicePdf, type InvoicePdfData, type InvoicePdfItem } fro
 import { formatCents as fmt } from '../lib/money';
 import { SkeletonTable, SkeletonCard } from '../components/ui/Skeleton';
 import { getSeasonDates } from '../utils/season';
+import { generateIdempotencyKey } from '../lib/idempotency';
 
 type InvoiceRow = Invoice & { customer_name: string; salesman_name: string | null; order_number: string | null };
 
-const STATUS_OPTIONS: { value: InvoiceStatus | ''; label: string }[] = [
+type InvoiceStatusFilter = InvoiceStatus | '' | 'ready_to_post';
+
+const STATUS_OPTIONS: { value: InvoiceStatusFilter; label: string }[] = [
   { value: '', label: 'All Statuses' },
+  { value: 'ready_to_post', label: 'Ready to Post (draft + unposted)' },
   { value: 'draft', label: 'Draft' },
   { value: 'unposted', label: 'Unposted' },
   { value: 'posted', label: 'Posted' },
@@ -76,19 +81,24 @@ export default function Invoices() {
   // customers-page permission (blocks a rep denied /customers — Codex P2).
   const canPeekCustomer = hasPageAccess(role, deniedPages, 'customers');
   const { toast } = useToast();
-  const batchPostIdem = useIdempotencyKey('batch_post_invoices', profile?.id || '');
   const batchVoidIdem = useIdempotencyKey('batch_void_invoices', profile?.id || '');
   const batchDeleteIdem = useIdempotencyKey('delete_invoices', profile?.id || '');
-  // Reset all batch keys whenever the selected set changes (Codex P2 fix).
+  const canPostInvoices = profile?.role === 'admin' || profile?.role === 'sales_rep';
+  const isAdmin = profile?.role === 'admin';
+  // post_invoice is called once per selected invoice. Keep a stable key for each
+  // invoice across a failed/network-lost retry, and clear only that key on success.
+  const postKeysRef = useRef<Record<string, string>>({});
+  // Reset the remaining batch keys whenever the selected set changes (Codex P2 fix).
   // See the `selectedKey` derivation + useEffect below.
   const [invoices, setInvoices] = useState<InvoiceRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const [statusFilter, setStatusFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState<InvoiceStatusFilter>('');
   const [typeFilter, setTypeFilter] = useState('');
   const [quickDeliveryOnly, setQuickDeliveryOnly] = useState(false);
   const [balanceOnly, setBalanceOnly] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [posting, setPosting] = useState(false);
+  const [showPostModal, setShowPostModal] = useState(false);
 
   // Codex P2 fix (PR #59, 2026-05-16): reset batch idempotency keys when the
   // user changes their selection. Otherwise the page-scoped keys would carry
@@ -98,7 +108,6 @@ export default function Invoices() {
   // still reuse the key for safe retry-on-network-error.
   const selectedKey = Array.from(selected).sort().join(',');
   useEffect(() => {
-    batchPostIdem.resetKey();
     batchVoidIdem.resetKey();
     batchDeleteIdem.resetKey();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -181,7 +190,8 @@ export default function Invoices() {
   }, [fetchInvoices]);
 
   const filtered = invoices.filter((inv) => {
-    if (statusFilter && inv.status !== statusFilter) return false;
+    if (statusFilter === 'ready_to_post' && !['draft', 'unposted'].includes(inv.status)) return false;
+    if (statusFilter && statusFilter !== 'ready_to_post' && inv.status !== statusFilter) return false;
     if (typeFilter && inv.invoice_type !== typeFilter) return false;
     if (quickDeliveryOnly && !inv.is_quick_delivery) return false;
     if (balanceOnly && !(inv.balance_cents > 0)) return false;
@@ -204,33 +214,64 @@ export default function Invoices() {
   const selectedDeletable = selectedInvoices.filter((i) => ['draft', 'voided'].includes(i.status));
   const selectableStatuses = ['draft', 'unposted', 'posted', 'voided'];
 
-  // Batch post
+  // Batch post — post_invoice is admin+sales_rep while batch_post_invoices is
+  // admin-only/all-or-nothing. Process each invoice independently so good rows
+  // still post and the user gets an exact failure summary for the rest.
   const handleBatchPost = async () => {
-    const ids = selectedPostable.map((i) => i.id);
-    if (ids.length === 0) {
+    setShowPostModal(false);
+    if (!profile || !canPostInvoices) {
+      toast('error', 'Admin or sales access is required to post invoices');
+      return;
+    }
+    const targets = selectedPostable.map((i) => ({ id: i.id, invoice_number: i.invoice_number }));
+    if (targets.length === 0) {
       toast('error', 'No postable invoices selected');
       return;
     }
 
     await runCriticalAction({
       action: async () => {
-        const postKey = batchPostIdem.getKey();
-        const { data, error } = await supabase.rpc('batch_post_invoices', {
-          p_invoice_ids: ids,
-          p_idempotency_key: postKey,
-        });
-        if (error) throw error;
-        batchPostIdem.resetKey();
-        return assertRpcResult(data, 'batch_post_invoices');
+        let posted = 0;
+        const failures: string[] = [];
+        const failedIds: string[] = [];
+        for (const target of targets) {
+          if (!postKeysRef.current[target.id]) {
+            postKeysRef.current[target.id] = generateIdempotencyKey('post_invoice', `${profile.id}:${target.id}`);
+          }
+          try {
+            // post_invoice RETURNS void — the canonical void-RPC pattern is
+            // .throwOnError() with no result capture.
+            await supabase.rpc('post_invoice', {
+              p_invoice_id: target.id,
+              p_idempotency_key: postKeysRef.current[target.id],
+            }).throwOnError();
+            posted += 1;
+            delete postKeysRef.current[target.id];
+          } catch (err: unknown) {
+            failedIds.push(target.id);
+            if (hasRpcCode(err, RpcErrorCodes.PRICING_INCOMPLETE)) {
+              failures.push(`${target.invoice_number}: needs pricing first`);
+            } else {
+              failures.push(`${target.invoice_number}: ${sanitizeError(err)}`);
+            }
+          }
+        }
+
+        await fetchInvoices();
+        if (failures.length > 0) {
+          // Leave only failed invoices selected so the next retry is focused and
+          // reuses their existing per-invoice idempotency keys.
+          setSelected(new Set(failedIds));
+          const shown = failures.slice(0, 3).join(' | ');
+          const extra = failures.length > 3 ? ` | +${failures.length - 3} more` : '';
+          throw new Error(`Posted ${posted}/${targets.length}. Failed: ${shown}${extra}`);
+        }
+        setSelected(new Set());
       },
       toast,
-      successMessage: `Posted ${ids.length} invoice(s)`,
+      successMessage: `Posted ${targets.length} invoice(s)`,
       setLoading: setPosting,
-      sentryTag: 'batch_post_invoices',
-      onSuccess: () => {
-        setSelected(new Set());
-        fetchInvoices();
-      },
+      sentryTag: 'batch_post_invoices_client_loop',
     });
   };
 
@@ -600,19 +641,19 @@ export default function Invoices() {
       <div className="flex items-center justify-between">
         <h2 className="text-xl font-semibold font-heading text-nav-dark">Invoices</h2>
         <div className="flex gap-2 flex-wrap justify-end">
-          {selected.size > 0 && profile?.role === 'admin' && (
+          {selected.size > 0 && canPostInvoices && (
             <>
               {selectedPostable.length > 0 && (
                 <Button
                   variant="secondary"
                   icon={<Send className="w-4 h-4" />}
-                  onClick={handleBatchPost}
+                  onClick={() => setShowPostModal(true)}
                   loading={posting}
                 >
                   Post {selectedPostable.length} Selected
                 </Button>
               )}
-              {selectedVoidable.length > 0 && (
+              {isAdmin && selectedVoidable.length > 0 && (
                 <Button
                   variant="danger"
                   icon={<Ban className="w-4 h-4" />}
@@ -637,7 +678,7 @@ export default function Invoices() {
               >
                 Email
               </Button>
-              {selectedDeletable.length > 0 && (
+              {isAdmin && selectedDeletable.length > 0 && (
                 <Button
                   variant="danger"
                   icon={<Trash2 className="w-4 h-4" />}
@@ -690,16 +731,23 @@ export default function Invoices() {
 
       {/* Summary Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <Card>
-          <div className="flex items-center gap-3 mb-2">
-            <div className="w-10 h-10 rounded-lg bg-amber-50 flex items-center justify-center">
-              <FileText className="w-5 h-5 text-amber-600" />
+        <button
+          type="button"
+          className="w-full text-left"
+          onClick={() => setStatusFilter('ready_to_post')}
+          aria-label="Show invoices ready to post"
+        >
+          <Card hover className={statusFilter === 'ready_to_post' ? 'border-amber-400 ring-2 ring-amber-100' : ''}>
+            <div className="flex items-center gap-3 mb-2">
+              <div className="w-10 h-10 rounded-lg bg-amber-50 flex items-center justify-center">
+                <FileText className="w-5 h-5 text-amber-600" />
+              </div>
+              <span className="text-sm text-secondary">Unposted</span>
             </div>
-            <span className="text-sm text-secondary">Unposted</span>
-          </div>
-          <p className="text-2xl font-semibold font-heading text-amber-600">{unpostedCount}</p>
-          <p className="text-xs text-secondary mt-1">invoices awaiting review</p>
-        </Card>
+            <p className="text-2xl font-semibold font-heading text-amber-600">{unpostedCount}</p>
+            <p className="text-xs text-secondary mt-1">invoices awaiting review</p>
+          </Card>
+        </button>
         <Card>
           <div className="flex items-center gap-3 mb-2">
             <div className="w-10 h-10 rounded-lg bg-crx-green-light flex items-center justify-center">
@@ -746,7 +794,7 @@ export default function Invoices() {
               <div className="flex gap-2 items-center">
                 <select
                   value={statusFilter}
-                  onChange={(e) => setStatusFilter(e.target.value)}
+                  onChange={(e) => setStatusFilter(e.target.value as InvoiceStatusFilter)}
                   aria-label="Filter by status"
                   className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 >
@@ -811,6 +859,18 @@ export default function Invoices() {
         count={selectedVoidable.length}
         onConfirm={handleBatchVoid}
         loading={voiding}
+      />
+
+      <ConfirmModal
+        open={showPostModal}
+        onClose={() => setShowPostModal(false)}
+        onConfirm={handleBatchPost}
+        title="Post Selected Invoices"
+        message={`Post ${selectedPostable.length} selected invoices? Posting locks them into AR.`}
+        confirmLabel={`Post ${selectedPostable.length}`}
+        variant="info"
+        icon={Send}
+        loading={posting}
       />
 
       {/* Batch Print Dialog */}

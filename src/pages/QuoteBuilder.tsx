@@ -192,6 +192,8 @@ export default function QuoteBuilder() {
   const [converting, setConverting] = useState(false);
   const [quoteCreatedAt, setQuoteCreatedAt] = useState<string | null>(null);
   const [confirmConvertOpen, setConfirmConvertOpen] = useState(false);
+  const [confirmBookAsOrderOpen, setConfirmBookAsOrderOpen] = useState(false);
+  const [bookingAsOrder, setBookingAsOrder] = useState(false);
   const [duplicateOrderConfirmOpen, setDuplicateOrderConfirmOpen] = useState(false);
   const [duplicateOrderMsg, setDuplicateOrderMsg] = useState('');
 
@@ -285,10 +287,8 @@ export default function QuoteBuilder() {
   // handleEmailToGrower explicitly supports re-sending an already-sent quote (it only
   // freezes a version on the FIRST send from draft/revised).
   const canSend = ['draft', 'revised', 'sent'].includes(currentStatus);
-  const canConvert = currentStatus === 'sent';
-  // draw_down_quote accepts BOTH 'sent' and 'revised' bookings — keep the
-  // Partial Order button in parity with the RPC (whole-convert stays
-  // sent-only by design). 2026-06-10 error-prevention review §3 LOW.
+  const canConvert = ['sent', 'revised'].includes(currentStatus);
+  // Both whole conversion and draw_down_quote accept sent/revised bookings.
   const canDraw = currentStatus === 'sent' || currentStatus === 'revised';
 
   // Quote lifecycle terminal/reopen actions (roadmap #5). The status-transition
@@ -1544,30 +1544,43 @@ export default function QuoteBuilder() {
     }
   };
 
-  const handleMarkPresented = async () => {
-    if (!quoteId || !profile) return;
+  const handleMarkPresented = async (): Promise<boolean> => {
+    if (!quoteId || !profile) return false;
     // Save current state first
     const savedId = await saveQuote(status === 'draft' ? 'draft' : status);
-    if (!savedId) return;
-    // Create version snapshot via RPC
-    const presVerIdemKey = createVersionIdem.getKey();
-    const { data: versionData, error } = await supabase.rpc('create_quote_version', {
-      p_quote_id: savedId,
-      p_performed_by: profile.id,
-      p_method: 'presented',
-      p_idempotency_key: presVerIdemKey,
-    });
-    if (error) { toast('error', 'Failed to mark as presented'); return; }
-    const ver = assertRpcResult<{ version_number: number }>(versionData, 'create_quote_version');
-    createVersionIdem.resetKey();
-    await logActivity({ event: 'quote_presented', description: `Quote ${quoteNumber} V${ver.version_number} marked as presented to ${selectedCustomer?.farm_name || 'customer'}`, performedBy: profile.id, entityType: 'quote', entityId: savedId, customerId });
-    toast('success', `Quote marked as presented (V${ver.version_number})`);
-    setShowPreviewModal(false);
-    if (previewPdfUrl) URL.revokeObjectURL(previewPdfUrl);
-    setPreviewPdfUrl(null);
-    setStatus('sent');
-    setIsDirty(false);
-    fetchVersions();
+    if (!savedId) return false;
+    try {
+      // Create version snapshot via RPC
+      const presVerIdemKey = createVersionIdem.getKey();
+      const { data: versionData, error } = await supabase.rpc('create_quote_version', {
+        p_quote_id: savedId,
+        p_performed_by: profile.id,
+        p_method: 'presented',
+        p_idempotency_key: presVerIdemKey,
+      });
+      if (error) throw error;
+      const ver = assertRpcResult<{ version_number: number }>(versionData, 'create_quote_version');
+      createVersionIdem.resetKey();
+      setShowPreviewModal(false);
+      if (previewPdfUrl) URL.revokeObjectURL(previewPdfUrl);
+      setPreviewPdfUrl(null);
+      setStatus('sent');
+      setIsDirty(false);
+      fetchVersions();
+      try {
+        await logActivity({ event: 'quote_presented', description: `Quote ${quoteNumber} V${ver.version_number} marked as presented to ${selectedCustomer?.farm_name || 'customer'}`, performedBy: profile.id, entityType: 'quote', entityId: savedId, customerId });
+      } catch (logError) {
+        // The version/status change already committed. Do not strand Book as Order
+        // because the secondary activity-feed write failed.
+        Sentry.captureException(logError instanceof Error ? logError : new Error(String(logError)), { tags: { source: 'activity_log', action: 'quote_presented' } });
+      }
+      toast('success', `Quote marked as presented (V${ver.version_number})`);
+      return true;
+    } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { tags: { source: 'critical_action', action: 'create_quote_version' } });
+      toast('error', 'Failed to mark as presented');
+      return false;
+    }
   };
 
   const AVAILABLE_PDF_COLUMNS = [
@@ -1829,7 +1842,7 @@ export default function QuoteBuilder() {
       } catch { /* ignore — don't block conversion if check fails */ }
     }
 
-    executeConvertToOrder();
+    await executeConvertToOrder();
   };
 
   const executeConvertToOrder = async () => {
@@ -1951,9 +1964,10 @@ export default function QuoteBuilder() {
         || 'Failed to create order';
       toast('error', errMsg);
       }
-      // Bug #29 fix: Revert quote status since conversion failed
-      // Use the status BEFORE conversion (was 'accepted' from saveQuote, revert to previous)
-      const revertTo = status === 'accepted' ? 'sent' : (status || 'sent');
+      // Bug #29 fix: Revert quote status since conversion failed. A draft can only
+      // reach this path through Book as Order, whose mark-presented step already
+      // committed it as sent; keep it sent so the normal Convert button remains.
+      const revertTo = status === 'accepted' || status === 'draft' ? 'sent' : (status || 'sent');
       try {
         const revertResult = await supabase.from('quotes').update({ status: revertTo }).eq('id', savedId).select();
         checkMutationResult(revertResult, 'Revert quote status');
@@ -1966,6 +1980,23 @@ export default function QuoteBuilder() {
       }
     }
     setConverting(false);
+  };
+
+  // U16b: one-step booking for a clean, saved draft. Mark Presented uses the
+  // existing create_quote_version path (snapshot + sent), then the existing
+  // conversion handler applies all stale/duplicate/draw-down guards. If the
+  // first step succeeds but conversion fails, executeConvertToOrder restores the
+  // quote to sent, so staff can retry with the normal Convert button.
+  const handleBookAsOrder = async () => {
+    setBookingAsOrder(true);
+    try {
+      const markedSent = await handleMarkPresented();
+      if (!markedSent) return;
+      setConfirmBookAsOrderOpen(false);
+      await handleConvertToOrder();
+    } finally {
+      setBookingAsOrder(false);
+    }
   };
 
   const filteredProducts = useMemo(() => {
@@ -2098,6 +2129,17 @@ export default function QuoteBuilder() {
               onClick={handlePreviewQuote}
             >
               Preview Quote
+            </Button>
+          )}
+          {isEditing && quoteId && currentStatus === 'draft' && !isDirty && (
+            <Button
+              variant="secondary"
+              icon={<ShoppingCart className="w-4 h-4" />}
+              showChevron={false}
+              onClick={() => setConfirmBookAsOrderOpen(true)}
+              loading={bookingAsOrder}
+            >
+              Book as Order
             </Button>
           )}
           {isEditing && canConvert && (
@@ -3489,6 +3531,18 @@ export default function QuoteBuilder() {
           </div>
         </Modal>
       )}
+
+      <ConfirmModal
+        open={confirmBookAsOrderOpen}
+        onClose={() => setConfirmBookAsOrderOpen(false)}
+        onConfirm={handleBookAsOrder}
+        title="Book as Order"
+        message="Mark this quote as sent and convert it to an order now?"
+        confirmLabel="Book as Order"
+        variant="info"
+        icon={ShoppingCart}
+        loading={bookingAsOrder || converting}
+      />
 
       <ConfirmModal
         open={confirmDeclineOpen}

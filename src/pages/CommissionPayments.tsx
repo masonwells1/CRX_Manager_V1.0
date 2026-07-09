@@ -1,6 +1,6 @@
 /**
  * CommissionPayments — Commission payment management page
- * Unposted/Posted tabs, create from unpaid commissions, post workflow.
+ * Unposted/Posted/Voided tabs, create from unpaid commissions, post workflow.
  *
  * Sprint 10: Commission Payment Lifecycle
  */
@@ -56,7 +56,7 @@ export default function CommissionPayments() {
   const postPaymentIdem = useIdempotencyKey('post_commission_payment', profile?.id || '');
   const voidPaymentIdem = useIdempotencyKey('void_commission_payment', profile?.id || '');
 
-  const [tab, setTab] = useState<'unposted' | 'posted'>('unposted');
+  const [tab, setTab] = useState<'unposted' | 'posted' | 'voided'>('unposted');
   const [payments, setPayments] = useState<CommissionPaymentRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [posting, setPosting] = useState<string | null>(null);
@@ -418,8 +418,8 @@ export default function CommissionPayments() {
       key: 'status',
       header: 'Status',
       render: (r) => (
-        <Badge variant={r.status === 'posted' ? 'success' : 'warning'}>
-          {r.status === 'posted' ? 'Posted' : 'Unposted'}
+        <Badge variant={r.status === 'posted' ? 'success' : r.status === 'voided' ? 'error' : 'warning'}>
+          {r.status === 'posted' ? 'Posted' : r.status === 'voided' ? 'Voided' : 'Unposted'}
         </Badge>
       ),
     },
@@ -556,7 +556,7 @@ export default function CommissionPayments() {
 
       {/* Tab bar */}
       <div className="flex gap-1 bg-gray-100 p-1 rounded-lg w-fit">
-        {(['unposted', 'posted'] as const).map((t) => (
+        {(['unposted', 'posted', 'voided'] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -564,7 +564,7 @@ export default function CommissionPayments() {
               tab === t ? 'bg-white text-nav-dark shadow-sm' : 'text-secondary hover:text-nav-dark'
             }`}
           >
-            {t === 'unposted' ? 'Unposted' : 'Posted'}
+            {t === 'unposted' ? 'Unposted' : t === 'posted' ? 'Posted' : 'Voided'}
           </button>
         ))}
       </div>
@@ -579,7 +579,7 @@ export default function CommissionPayments() {
             searchPlaceholder="Search payments..."
             searchKeys={['payment_number', 'recipient_name', 'reference_number']}
             emptyTitle="No commission payments"
-            emptyDescription={tab === 'unposted' ? 'Create a payment to get started' : 'No posted payments yet'}
+            emptyDescription={tab === 'unposted' ? 'Create a payment to get started' : tab === 'posted' ? 'No posted payments yet' : 'No voided payments yet'}
             loading={loading}
           />
         </div>
