@@ -1960,8 +1960,8 @@ export default function QuoteBuilder() {
         if (liveQuoteError) throw liveQuoteError;
         liveQuoteStatus = liveQuote?.status ?? null;
       } catch {
-        // If verification itself fails, fall through to the existing revert so
-        // this path keeps its current recovery behavior.
+        // A failed verification leaves the conversion outcome unknown. Do not
+        // write a recovery status without proving the quote is still open.
       }
 
       if (liveQuoteStatus === 'accepted') {
@@ -1996,6 +1996,15 @@ export default function QuoteBuilder() {
         return;
       }
 
+      if (liveQuoteStatus === null) {
+        // The conversion RPC is transactional, so a genuine failure leaves the
+        // status unchanged. A recovery write is only safe after a successful
+        // read proves the quote was not accepted.
+        toast('warning', 'Could not verify the outcome — check the Orders page before retrying; the quote status was left unchanged.');
+        setConverting(false);
+        return;
+      }
+
       // Friendly mapping for the booking guards (server-side backstop for the
       // pre-check above — e.g. a draw landed from another tab mid-convert).
       if (hasRpcCode(error, RpcErrorCodes.BOOKING_PARTIALLY_DRAWN)) {
@@ -2012,9 +2021,9 @@ export default function QuoteBuilder() {
         || 'Failed to create order';
       toast('error', errMsg);
       }
-      // Bug #29 fix: Revert quote status since conversion failed. A draft can only
-      // reach this path through Book as Order, whose mark-presented step already
-      // committed it as sent; keep it sent so the normal Convert button remains.
+      // A successful status check proved the quote was not accepted. A draft can
+      // only reach this path through Book as Order, whose mark-presented step
+      // already committed it as sent; keep it sent so normal Convert remains.
       const revertTo = status === 'accepted' || status === 'draft' ? 'sent' : (status || 'sent');
       try {
         const revertResult = await supabase.from('quotes').update({ status: revertTo }).eq('id', savedId).select();
