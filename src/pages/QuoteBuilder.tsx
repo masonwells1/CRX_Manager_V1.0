@@ -1948,6 +1948,54 @@ export default function QuoteBuilder() {
       navigate(`/orders/${result.order_id}`);
     } catch (error: unknown) {
       Sentry.captureException(error, { tags: { source: 'critical_action', action: 'convert_quote_to_order' } });
+
+      // Lost-response-after-commit must not resurrect the booking (push-gate P1).
+      let liveQuoteStatus: string | null = null;
+      try {
+        const { data: liveQuote, error: liveQuoteError } = await supabase
+          .from('quotes')
+          .select('status')
+          .eq('id', savedId)
+          .maybeSingle();
+        if (liveQuoteError) throw liveQuoteError;
+        liveQuoteStatus = liveQuote?.status ?? null;
+      } catch {
+        // If verification itself fails, fall through to the existing revert so
+        // this path keeps its current recovery behavior.
+      }
+
+      if (liveQuoteStatus === 'accepted') {
+        let createdOrderId: string | null = null;
+        try {
+          const { data: createdOrders, error: createdOrderError } = await supabase
+            .from('orders')
+            .select('id')
+            .eq('quote_id', savedId)
+            .is('deleted_at', null)
+            .order('created_at', { ascending: false })
+            .limit(1);
+          if (createdOrderError) throw createdOrderError;
+          createdOrderId = createdOrders?.[0]?.id ?? null;
+        } catch (orderLookupError) {
+          Sentry.captureException(orderLookupError, { tags: { source: 'read', action: 'find_order_after_committed_quote_convert' } });
+        }
+
+        if (createdOrderId) {
+          toast('success', 'The order was created — opening it');
+          setIsDirty(false);
+          navigate(`/orders/${createdOrderId}`);
+        } else {
+          toast('warning', 'The quote was accepted, but its order could not be found — check the Orders page');
+          try {
+            await fetchQuote(savedId);
+          } catch (refetchError) {
+            Sentry.captureException(refetchError, { tags: { source: 'read', action: 'refetch_quote_after_committed_convert' } });
+          }
+        }
+        setConverting(false);
+        return;
+      }
+
       // Friendly mapping for the booking guards (server-side backstop for the
       // pre-check above — e.g. a draw landed from another tab mid-convert).
       if (hasRpcCode(error, RpcErrorCodes.BOOKING_PARTIALLY_DRAWN)) {
@@ -1990,8 +2038,31 @@ export default function QuoteBuilder() {
   const handleBookAsOrder = async () => {
     setBookingAsOrder(true);
     try {
-      const markedSent = await handleMarkPresented();
-      if (!markedSent) return;
+      // A lost mark-sent response leaves the DB sent while the UI thinks draft —
+      // resume the chain from the true state (push-gate P2).
+      let alreadyMarkedSent = false;
+      if (quoteId) {
+        try {
+          const { data: liveQuote, error: liveQuoteError } = await supabase
+            .from('quotes')
+            .select('status')
+            .eq('id', quoteId)
+            .maybeSingle();
+          if (liveQuoteError) throw liveQuoteError;
+          const liveStatus = liveQuote?.status;
+          if (liveStatus === 'sent' || liveStatus === 'revised') {
+            setStatus(liveStatus);
+            alreadyMarkedSent = true;
+          }
+        } catch {
+          // If the live-status check fails, continue with the existing flow.
+        }
+      }
+
+      if (!alreadyMarkedSent) {
+        const markedSent = await handleMarkPresented();
+        if (!markedSent) return;
+      }
       setConfirmBookAsOrderOpen(false);
       await handleConvertToOrder();
     } finally {
