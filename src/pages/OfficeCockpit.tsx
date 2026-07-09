@@ -7,6 +7,8 @@
  * Tiles:
  *   (a) Completed-but-unbilled jobs
  *   (b) Field-app invoices ready to post (draft/unposted) — §4 will populate this
+ *   (b2) Chemical-sale drafts ready to post
+ *   (b3) Completed deliveries with no active covering invoice
  *   (c) Active watchdog flags from §2 get_watchdog_flags RPC
  *   (d) Upcoming scheduled jobs in the next 7 days (no DB-stored weather-blocked
  *       state exists; weather risk is a UI overlay per Job Detail, not a stored flag)
@@ -18,7 +20,9 @@
  * status-enum-check: exempt (TS) — this file queries THREE tables each with a status
  * column. The hook cannot track cross-table context. All values verified live:
  *   jobs.status: 'completed', 'scheduled' — both valid per CHECK constraint.
- *   invoices.status: 'draft', 'unposted', 'posted' — all valid per CHECK constraint.
+ *   deliveries.status: 'completed' — valid per CHECK constraint.
+ *   invoices.status: 'draft', 'unposted', 'posted', 'overdue', 'voided',
+ *   'cancelled' — all valid per CHECK constraint.
  *
  * RLS: each query inherits the caller's RLS context (direct table selects).
  * The watchdog RPC is SECURITY DEFINER but gates on role inside its body.
@@ -39,6 +43,8 @@ import {
   ChevronRight,
   ArrowRight,
   Send,
+  FileText,
+  Truck,
 } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -76,6 +82,22 @@ interface PostableInvoiceRow {
   job_id: string | null;
   invoice_group_id: string | null;
   pricing_pending: boolean;
+}
+
+interface ChemicalDraftRow {
+  id: string;
+  invoice_number: string;
+  status: string;
+  total_amount_cents: number;
+  customer_name: string;
+}
+
+interface DeliveredNotInvoicedRow {
+  id: string;
+  delivery_number: string;
+  order_id: string;
+  completed_at: string | null;
+  customer_name: string;
 }
 
 interface UpcomingJobRow {
@@ -125,6 +147,11 @@ interface NeedsDispatchJobRow {
 interface CockpitData {
   unbilledJobs: UnbilledJobRow[];
   postableInvoices: PostableInvoiceRow[];
+  chemicalDrafts: ChemicalDraftRow[];
+  chemicalDraftsHitLimit: boolean;
+  deliveredNotInvoiced: DeliveredNotInvoicedRow[];
+  deliveredNotInvoicedLoadOk: boolean;
+  deliveredNotInvoicedHitLimit: boolean;
   watchdogFlags: WatchdogFlag[];
   upcomingJobs: UpcomingJobRow[];
   /** U13: scheduled jobs with no active per-location dispatch. */
@@ -160,6 +187,27 @@ type RawPostableInvoice = {
   invoice_group_id: string | null;
   pricing_pending: boolean | null;
   customer: { farm_name: string } | null;
+};
+
+type RawChemicalDraft = {
+  id: string;
+  invoice_number: string;
+  status: string;
+  total_amount_cents: number;
+  customer: { farm_name: string } | null;
+};
+
+type RawCompletedDelivery = {
+  id: string;
+  delivery_number: string;
+  order_id: string | null;
+  completed_at: string | null;
+  customer: { farm_name: string } | null;
+};
+
+type DeliveryInvoiceCoverageRow = {
+  order_id: string;
+  delivery_id: string | null;
 };
 
 type RawUpcomingJob = {
@@ -246,6 +294,11 @@ export default function OfficeCockpit() {
   const [data, setData] = useState<CockpitData>({
     unbilledJobs: [],
     postableInvoices: [],
+    chemicalDrafts: [],
+    chemicalDraftsHitLimit: false,
+    deliveredNotInvoiced: [],
+    deliveredNotInvoicedLoadOk: false,
+    deliveredNotInvoicedHitLimit: false,
     watchdogFlags: [],
     upcomingJobs: [],
     needsDispatchJobs: [],
@@ -271,7 +324,7 @@ export default function OfficeCockpit() {
     const past30Days = localDatePlusDays(-30);
 
     // status-enum-check: exempt (TS) — cross-table: jobs uses 'completed'/'scheduled',
-    // invoices uses 'draft'/'unposted'/'posted'. All verified against live CHECK constraints.
+    // deliveries uses 'completed', and invoices uses the posting/void statuses above.
 
     // (c) Active watchdog flags (non-dismissed) via §2 RPC — pulled out of
     // Promise.all so the assertRpcCoverage scanner can detect the capture.
@@ -292,6 +345,8 @@ export default function OfficeCockpit() {
     const [
       unbilledJobsRes,
       postableInvRes,
+      chemicalDraftsRes,
+      completedDeliveriesRes,
       upcomingJobsRes,
       expiringLicRes,
       overdueARRes,
@@ -315,6 +370,27 @@ export default function OfficeCockpit() {
         .eq('invoice_type', 'field_application')
         .is('deleted_at', null)
         .order('invoice_date', { ascending: true })
+        .limit(TILE_LIMIT),
+
+      // (b2) Draft/unposted chemical-sale invoices are a separate posting queue.
+      // Do not mix these into the field-app "Post all clean" action above.
+      supabase
+        .from('invoices')
+        .select('id, invoice_number, status, total_amount_cents, customer:customers(farm_name)')
+        .eq('invoice_type', 'chemical_sale')
+        .in('status', ['draft', 'unposted'])
+        .is('deleted_at', null)
+        .order('invoice_date', { ascending: true })
+        .limit(TILE_LIMIT),
+
+      // (b3) Candidate completed deliveries. Active invoice coverage is checked
+      // in one follow-up invoices query after these order IDs are known.
+      supabase
+        .from('deliveries')
+        .select('id, delivery_number, order_id, completed_at, customer:customers(farm_name)')
+        .eq('status', 'completed')
+        .is('deleted_at', null)
+        .order('completed_at', { ascending: false })
         .limit(TILE_LIMIT),
 
       // (d) Upcoming scheduled jobs (next 7 days) — proxy for weather-at-risk
@@ -373,9 +449,30 @@ export default function OfficeCockpit() {
         .limit(TILE_LIMIT),
     ]);
 
+    const rawCompletedDeliveries = (completedDeliveriesRes.data || []) as RawCompletedDelivery[];
+    const completedDeliveryCandidates = rawCompletedDeliveries.filter(
+      (row): row is RawCompletedDelivery & { order_id: string } => row.order_id != null
+    );
+    const deliveryOrderIds = [...new Set(completedDeliveryCandidates.map((row) => row.order_id))];
+    let deliveryInvoiceError: { message?: string } | null = null;
+    let activeDeliveryInvoices: DeliveryInvoiceCoverageRow[] = [];
+
+    if (deliveryOrderIds.length > 0) {
+      const invoiceCoverageRes = await supabase
+        .from('invoices')
+        .select('order_id, delivery_id')
+        .in('order_id', deliveryOrderIds)
+        .not('status', 'in', '("voided","cancelled")');
+      deliveryInvoiceError = invoiceCoverageRes.error;
+      activeDeliveryInvoices = (invoiceCoverageRes.data || []) as DeliveryInvoiceCoverageRow[];
+    }
+
     const errors = [
       unbilledJobsRes.error,
       postableInvRes.error,
+      chemicalDraftsRes.error,
+      completedDeliveriesRes.error,
+      deliveryInvoiceError,
       watchdogRes.error,
       shortfallsRes.error,
       upcomingJobsRes.error,
@@ -410,6 +507,35 @@ export default function OfficeCockpit() {
       invoice_group_id: r.invoice_group_id,
       pricing_pending: r.pricing_pending === true,
     }));
+
+    const chemicalDrafts: ChemicalDraftRow[] = ((chemicalDraftsRes.data || []) as RawChemicalDraft[]).map((r) => ({
+      id: r.id,
+      invoice_number: r.invoice_number,
+      status: r.status,
+      total_amount_cents: r.total_amount_cents,
+      customer_name: r.customer?.farm_name ?? 'Unknown',
+    }));
+    const chemicalDraftsHitLimit = (chemicalDraftsRes.data || []).length === TILE_LIMIT;
+
+    const deliveredNotInvoicedLoadOk = !completedDeliveriesRes.error && !deliveryInvoiceError;
+    const deliveredNotInvoicedHitLimit = rawCompletedDeliveries.length === TILE_LIMIT;
+    // Mirrors create_invoice_for_unbilled_delivery's own precondition: an invoice
+    // covers this delivery when it targets this delivery or the whole parent order.
+    // The guarded fix action lives on DeliveryDetail, where the RPC is confirmed.
+    const deliveredNotInvoiced: DeliveredNotInvoicedRow[] = deliveredNotInvoicedLoadOk
+      ? completedDeliveryCandidates
+        .filter((deliveryRow) => !activeDeliveryInvoices.some((invoiceRow) =>
+          invoiceRow.order_id === deliveryRow.order_id &&
+          (invoiceRow.delivery_id === deliveryRow.id || invoiceRow.delivery_id === null)
+        ))
+        .map((deliveryRow) => ({
+          id: deliveryRow.id,
+          delivery_number: deliveryRow.delivery_number,
+          order_id: deliveryRow.order_id,
+          completed_at: deliveryRow.completed_at,
+          customer_name: deliveryRow.customer?.farm_name ?? 'Unknown',
+        }))
+      : [];
 
     let watchdogFlags: WatchdogFlag[] = [];
     let watchdogLoadOk = false;
@@ -473,7 +599,23 @@ export default function OfficeCockpit() {
       }
     }
 
-    setData({ unbilledJobs, postableInvoices, watchdogFlags, upcomingJobs, needsDispatchJobs, expiringLicenses, overdueAR, shortfalls, shortfallsLoadOk, watchdogLoadOk });
+    setData({
+      unbilledJobs,
+      postableInvoices,
+      chemicalDrafts,
+      chemicalDraftsHitLimit,
+      deliveredNotInvoiced,
+      deliveredNotInvoicedLoadOk,
+      deliveredNotInvoicedHitLimit,
+      watchdogFlags,
+      upcomingJobs,
+      needsDispatchJobs,
+      expiringLicenses,
+      overdueAR,
+      shortfalls,
+      shortfallsLoadOk,
+      watchdogLoadOk,
+    });
     setLastRefreshed(new Date());
     setLoading(false);
   }, [toast]);
@@ -485,6 +627,8 @@ export default function OfficeCockpit() {
   const totalExceptions =
     data.unbilledJobs.length +
     data.postableInvoices.length +
+    data.chemicalDrafts.length +
+    data.deliveredNotInvoiced.length +
     data.watchdogFlags.length +
     data.expiringLicenses.length +
     data.overdueAR.length +
@@ -654,6 +798,13 @@ export default function OfficeCockpit() {
           </p>
         </div>
         <div className="flex items-center gap-3">
+          <Button
+            onClick={() => navigate('/payments')}
+            variant="ghost"
+            size="sm"
+          >
+            Record payments &rarr;
+          </Button>
           {lastRefreshed && (
             <span className="text-xs text-gray-400">
               Updated {lastRefreshed.toLocaleTimeString()}
@@ -834,6 +985,107 @@ export default function OfficeCockpit() {
                 </button>
               )}
             </div>
+          )}
+        </Card>
+
+        {/* (b2) Chemical-sale invoices ready to post — intentionally read-only here */}
+        <Card>
+          <TileHeader
+            icon={<FileText className="w-5 h-5 text-violet-500" />}
+            title="Chemical drafts to post"
+            count={data.chemicalDrafts.length}
+            countColor="text-violet-600"
+            linkLabel="Invoices"
+            onLink={() => navigate('/invoices')}
+          />
+          {data.chemicalDrafts.length === 0 ? (
+            <AllClear label="No chemical-sale drafts waiting to post." />
+          ) : (
+            <div className="divide-y divide-gray-100">
+              {data.chemicalDrafts.slice(0, 5).map((row) => (
+                <button
+                  key={row.id}
+                  onClick={() => navigate(`/invoices/${row.id}`)}
+                  className="w-full flex items-center justify-between py-2 text-sm hover:bg-gray-50 rounded transition-colors text-left"
+                >
+                  <div>
+                    <span className="font-medium text-nav-dark">{row.customer_name}</span>
+                    <span className="ml-2 text-gray-500">#{row.invoice_number}</span>
+                  </div>
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    <Badge variant={row.status === 'unposted' ? 'info' : 'draft'} size="sm">
+                      {row.status}
+                    </Badge>
+                    <span className="text-gray-600 text-xs">{formatCents(row.total_amount_cents)}</span>
+                    <ArrowRight className="w-3.5 h-3.5 text-gray-400" />
+                  </div>
+                </button>
+              ))}
+              {data.chemicalDrafts.length > 5 && (
+                <button
+                  onClick={() => navigate('/invoices')}
+                  className="w-full text-center py-2 text-sm text-crx-green hover:underline"
+                >
+                  +{data.chemicalDrafts.length - 5} more
+                </button>
+              )}
+            </div>
+          )}
+          {data.chemicalDraftsHitLimit && (
+            <p className="mt-2 text-xs text-gray-400">
+              Showing the first 50 &mdash; open Invoices for the full list.
+            </p>
+          )}
+        </Card>
+
+        {/* (b3) Completed deliveries with no active covering invoice */}
+        <Card>
+          <TileHeader
+            icon={<Truck className="w-5 h-5 text-teal-500" />}
+            title="Delivered, not invoiced"
+            count={data.deliveredNotInvoiced.length}
+            countColor="text-teal-600"
+            linkLabel="Deliveries"
+            onLink={() => navigate('/deliveries')}
+          />
+          {!data.deliveredNotInvoicedLoadOk ? (
+            <p className="py-2 text-sm text-gray-400">Invoice coverage check unavailable right now.</p>
+          ) : data.deliveredNotInvoiced.length === 0 ? (
+            <AllClear label="Every completed delivery has an active invoice." />
+          ) : (
+            <div className="divide-y divide-gray-100">
+              {data.deliveredNotInvoiced.slice(0, 5).map((row) => (
+                <button
+                  key={row.id}
+                  onClick={() => navigate(`/deliveries/${row.id}`)}
+                  className="w-full flex items-center justify-between py-2 text-sm hover:bg-gray-50 rounded transition-colors text-left"
+                >
+                  <div>
+                    <span className="font-medium text-nav-dark">{row.customer_name}</span>
+                    <span className="ml-2 text-gray-500">#{row.delivery_number}</span>
+                  </div>
+                  <div className="flex items-center gap-1 text-gray-400 flex-shrink-0">
+                    <span className="text-xs">
+                      {row.completed_at ? new Date(row.completed_at).toLocaleDateString() : 'Completed'}
+                    </span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </div>
+                </button>
+              ))}
+              {data.deliveredNotInvoiced.length > 5 && (
+                <button
+                  onClick={() => navigate('/deliveries')}
+                  className="w-full text-center py-2 text-sm text-crx-green hover:underline"
+                >
+                  +{data.deliveredNotInvoiced.length - 5} more
+                </button>
+              )}
+            </div>
+          )}
+          {data.deliveredNotInvoicedLoadOk && data.deliveredNotInvoicedHitLimit && (
+            <p className="mt-2 text-xs text-gray-400">
+              Coverage checked for the newest 50 completed deliveries.
+            </p>
           )}
         </Card>
 

@@ -1706,6 +1706,11 @@ const EDGES = [
     },
     {
       "s": "office-cockpit",
+      "t": "payment-allocation",
+      "type": "nav"
+    },
+    {
+      "s": "office-cockpit",
       "t": "unbilled-applications",
       "type": "nav"
     },
@@ -1727,6 +1732,21 @@ const EDGES = [
     {
       "s": "office-cockpit",
       "t": "invoice-detail",
+      "type": "nav"
+    },
+    {
+      "s": "office-cockpit",
+      "t": "invoices",
+      "type": "nav"
+    },
+    {
+      "s": "office-cockpit",
+      "t": "deliveries",
+      "type": "nav"
+    },
+    {
+      "s": "office-cockpit",
+      "t": "delivery-detail",
       "type": "nav"
     },
     {
@@ -1985,6 +2005,11 @@ const EDGES = [
       "type": "rpc"
     },
     {
+      "s": "delivery-detail",
+      "t": "r-invoice",
+      "type": "rpc"
+    },
+    {
       "s": "delivery-remainders",
       "t": "r-delivery",
       "type": "rpc"
@@ -2167,6 +2192,11 @@ const EDGES = [
     {
       "s": "to-ship",
       "t": "r-inventory",
+      "type": "rpc"
+    },
+    {
+      "s": "unbilled-applications",
+      "t": "r-job",
       "type": "rpc"
     },
     {
