@@ -21,6 +21,7 @@ import {
   Calendar,
   CheckSquare,
   PackageSearch,
+  Zap,
 } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
@@ -410,7 +411,16 @@ export default function Dashboard() {
       {(isAdmin || role === 'sales_rep') && (
         <Card>
           <CardHeader title="Quick" accent="Actions" />
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-3">
+            <button
+              onClick={() => navigate('/deliveries?quickDeliver=1')}
+              className="flex flex-col items-center gap-2 p-4 rounded-xl border border-gray-100 bg-white hover:bg-crx-green-tint hover:border-crx-green/20 transition-all cursor-pointer group"
+            >
+              <div className="w-10 h-10 rounded-lg bg-crx-green/10 group-hover:bg-crx-green/20 flex items-center justify-center transition-colors">
+                <Zap className="w-5 h-5 text-crx-green" />
+              </div>
+              <span className="text-sm font-medium text-nav-dark">Sell &amp; Deliver Now</span>
+            </button>
             <button
               onClick={() => navigate('/to-ship')}
               className="flex flex-col items-center gap-2 p-4 rounded-xl border border-crx-green/30 bg-crx-green-tint hover:bg-crx-green/10 hover:border-crx-green/40 transition-all cursor-pointer group"

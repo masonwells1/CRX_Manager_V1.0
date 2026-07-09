@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo , useCallback, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Plus,
   Truck,
@@ -104,6 +104,7 @@ export default function Deliveries() {
   const [signedBy, setSignedBy] = useState('');
   const [completing, setCompleting] = useState(false);
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { toast } = useToast();
   const [deliveries, setDeliveries] = useState<DeliveryRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -145,6 +146,7 @@ export default function Deliveries() {
 
   /* Quick Delivery modal */
   const [quickDeliveryOpen, setQuickDeliveryOpen] = useState(false);
+  const [quickDeliveryInitialCustomerId, setQuickDeliveryInitialCustomerId] = useState<string>();
 
   /* View mode: list or calendar */
   const [viewMode, setViewMode] = useState<'list' | 'calendar'>('list');
@@ -165,6 +167,28 @@ export default function Deliveries() {
   // customers-page permission: this blocks drivers (not in the page's roles — Codex
   // P1) AND a sales rep who has /customers in their deny-list (Codex P2).
   const canPeekCustomer = hasPageAccess(role, deniedPages, 'customers');
+
+  // Consume a Quick Delivery deep link per navigation. The param strip is the
+  // re-entry guard; a repeat deep link re-adds the param and re-opens the modal.
+  useEffect(() => {
+    if (searchParams.get('quickDeliver') !== '1') return;
+    if (!role) return;
+
+    if (canQuickDeliver) {
+      setQuickDeliveryInitialCustomerId(searchParams.get('customer_id') || undefined);
+      setQuickDeliveryOpen(true);
+    }
+
+    const nextSearchParams = new URLSearchParams(searchParams);
+    nextSearchParams.delete('quickDeliver');
+    nextSearchParams.delete('customer_id');
+    setSearchParams(nextSearchParams, { replace: true });
+  }, [canQuickDeliver, role, searchParams, setSearchParams]);
+
+  const closeQuickDelivery = () => {
+    setQuickDeliveryOpen(false);
+    setQuickDeliveryInitialCustomerId(undefined);
+  };
 
   const fetchDrivers = useCallback(async () => {
     // PR-07 follow-up: driver filter dropdown only uses d.id + d.full_name; safe via view.
@@ -842,7 +866,10 @@ export default function Deliveries() {
                 size="sm"
                 variant="secondary"
                 icon={<Zap className="w-4 h-4" />}
-                onClick={() => setQuickDeliveryOpen(true)}
+                onClick={() => {
+                  setQuickDeliveryInitialCustomerId(undefined);
+                  setQuickDeliveryOpen(true);
+                }}
               >
                 Quick Delivery
               </Button>
@@ -926,7 +953,8 @@ export default function Deliveries() {
         {/* Quick Delivery Modal */}
         <QuickDeliveryModal
           open={quickDeliveryOpen}
-          onClose={() => setQuickDeliveryOpen(false)}
+          onClose={closeQuickDelivery}
+          initialCustomerId={quickDeliveryInitialCustomerId}
         />
       </div>
     );
@@ -1157,7 +1185,10 @@ export default function Deliveries() {
             <Button
               variant="secondary"
               icon={<Zap className="w-4 h-4" />}
-              onClick={() => setQuickDeliveryOpen(true)}
+              onClick={() => {
+                setQuickDeliveryInitialCustomerId(undefined);
+                setQuickDeliveryOpen(true);
+              }}
             >
               Quick Delivery
             </Button>
@@ -1397,7 +1428,8 @@ export default function Deliveries() {
       {/* Quick Delivery Modal */}
       <QuickDeliveryModal
         open={quickDeliveryOpen}
-        onClose={() => setQuickDeliveryOpen(false)}
+        onClose={closeQuickDelivery}
+        initialCustomerId={quickDeliveryInitialCustomerId}
       />
 
       <CustomerDrawer

@@ -2,7 +2,7 @@
  * QuickDeliveryModal — Creates an ad-hoc delivery with auto-created order + draft invoice.
  * Used when a driver gets a phone call and needs to grab product and go.
  */
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AlertTriangle, Plus, Search, Trash2, Zap } from 'lucide-react';
 import Modal from '../ui/Modal';
@@ -38,12 +38,14 @@ interface QuickDeliveryModalProps {
   open: boolean;
   onClose: () => void;
   onCreated?: () => void;
+  initialCustomerId?: string;
 }
 
 export default function QuickDeliveryModal({
   open,
   onClose,
   onCreated,
+  initialCustomerId,
 }: QuickDeliveryModalProps) {
   const navigate = useNavigate();
   const { profile, role } = useAuth();
@@ -55,6 +57,8 @@ export default function QuickDeliveryModal({
   const [customerResults, setCustomerResults] = useState<CustomerOption[]>([]);
   const [selectedCustomer, setSelectedCustomer] = useState<CustomerOption | null>(null);
   const [showCustomerDropdown, setShowCustomerDropdown] = useState(false);
+  const selectedCustomerRef = useRef<CustomerOption | null>(null);
+  const wasOpenRef = useRef(false);
 
   // Products
   const [products, setProducts] = useState<Product[]>([]);
@@ -186,6 +190,7 @@ export default function QuickDeliveryModal({
   }, [customerSearch, selectedCustomer, toast]);
 
   const selectCustomer = useCallback((c: CustomerOption) => {
+    selectedCustomerRef.current = c;
     setSelectedCustomer(c);
     setCustomerSearch(c.farm_name + (c.account_number ? ` (${c.account_number})` : ''));
     setShowCustomerDropdown(false);
@@ -205,7 +210,49 @@ export default function QuickDeliveryModal({
     );
   }, [products]);
 
+  const selectCustomerRef = useRef(selectCustomer);
+  useEffect(() => {
+    selectCustomerRef.current = selectCustomer;
+  }, [selectCustomer]);
+
+  // Deep links can supply a customer ID. Fetch it only as the modal opens so a
+  // re-render while the modal is open never overrides the user's selection.
+  useEffect(() => {
+    const justOpened = open && !wasOpenRef.current;
+    wasOpenRef.current = open;
+
+    if (!justOpened || !initialCustomerId || selectedCustomerRef.current) return;
+
+    let cancelled = false;
+    const fetchInitialCustomer = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('customers')
+          .select('id, farm_name, account_number, assigned_tier')
+          .eq('id', initialCustomerId)
+          .eq('is_active', true)
+          .limit(1);
+
+        if (error) {
+          Sentry.captureException(error, { extra: { context: 'QuickDeliveryModal.fetchInitialCustomer' } });
+          return;
+        }
+
+        const customer = ((data || []) as CustomerOption[])[0];
+        if (!cancelled && customer && !selectedCustomerRef.current) {
+          selectCustomerRef.current(customer);
+        }
+      } catch (err) {
+        Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'QuickDeliveryModal.fetchInitialCustomer' } });
+      }
+    };
+
+    fetchInitialCustomer();
+    return () => { cancelled = true; };
+  }, [open, initialCustomerId]);
+
   const clearCustomer = () => {
+    selectedCustomerRef.current = null;
     setSelectedCustomer(null);
     setCustomerSearch('');
   };
@@ -319,6 +366,7 @@ export default function QuickDeliveryModal({
       }
 
       // Reset form
+      selectedCustomerRef.current = null;
       setSelectedCustomer(null);
       setCustomerSearch('');
       setItems([]);
@@ -341,6 +389,7 @@ export default function QuickDeliveryModal({
 
   const handleClose = () => {
     if (!submitting) {
+      selectedCustomerRef.current = null;
       setSelectedCustomer(null);
       setCustomerSearch('');
       setItems([]);
@@ -377,7 +426,10 @@ export default function QuickDeliveryModal({
               value={customerSearch}
               onChange={(e) => {
                 setCustomerSearch(e.target.value);
-                if (selectedCustomer) setSelectedCustomer(null);
+                if (selectedCustomer) {
+                  selectedCustomerRef.current = null;
+                  setSelectedCustomer(null);
+                }
               }}
               placeholder="Search by farm name or account number..."
             />

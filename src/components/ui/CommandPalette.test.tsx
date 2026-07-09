@@ -84,6 +84,19 @@ describe('CommandPalette', () => {
     });
   });
 
+  it('surfaces Sell & Deliver Now when searching sell', async () => {
+    renderPalette(true);
+    const input = screen.getByPlaceholderText(/search pages/i);
+    fireEvent.change(input, { target: { value: 'sell' } });
+
+    await waitFor(() => {
+      expect(screen.getByText('Sell & Deliver Now')).toBeInTheDocument();
+    });
+
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(mockNavigate).toHaveBeenCalledWith('/deliveries?quickDeliver=1');
+  });
+
   it('navigates on Enter key', async () => {
     renderPalette(true);
     const input = screen.getByPlaceholderText(/search pages/i);

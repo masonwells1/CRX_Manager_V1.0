@@ -157,6 +157,7 @@ const ALL_PAGES: { path: string; label: string }[] = [
   { path: '/dispatch', label: 'Dispatch Board' },
   { path: '/deliveries', label: 'Deliveries' },
   { path: '/deliveries/new', label: 'New Delivery' },
+  { path: '/deliveries?quickDeliver=1', label: 'Sell & Deliver Now' },
   { path: '/delivery-remainders', label: 'Delivery Remainders' },
   { path: '/vehicles', label: 'Vehicles' },
   { path: '/blend-tickets', label: 'Blend Tickets' },
