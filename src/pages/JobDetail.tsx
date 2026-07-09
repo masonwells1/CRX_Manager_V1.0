@@ -2079,6 +2079,29 @@ export default function JobDetail() {
         sort_order: i,
       }));
 
+      const newAssigneeIsApplicator = applicators.some((p) => p.id === applicatorId && p.role === 'applicator');
+      // Mirrors the trigger's role='applicator' + active guard; the picker is active-only, so we never notify about a displacement that didn't happen.
+      const isWholeJobApplicatorReassign = !isNew && !!applicatorId && applicatorId !== savedApplicatorId && newAssigneeIsApplicator;
+      let displacedApplicatorIds: string[] = [];
+      if (isWholeJobApplicatorReassign) {
+        try {
+          const dispRes = await supabase
+            .from('job_location_dispatches')
+            .select('applicator_id')
+            .eq('job_id', id!)
+            .eq('dispatch_status', 'dispatched')
+            .not('applicator_id', 'is', null);
+          if (dispRes.error) throw dispRes.error;
+          displacedApplicatorIds = [...new Set(
+            (dispRes.data || [])
+              .map((r) => r.applicator_id)
+              .filter((aid): aid is string => !!aid),
+          )];
+        } catch (snapshotErr) {
+          Sentry.captureException(snapshotErr instanceof Error ? snapshotErr : new Error(String(snapshotErr)), { extra: { context: 'snapshot_displaced_dispatchees' } });
+        }
+      }
+
       const idemKey = saveJobIdem.getKey();
       const { data, error } = await supabase.rpc('save_job', {
         p_job_id: (isNew ? null : id) as string,
@@ -2199,6 +2222,19 @@ export default function JobDetail() {
       }
       if (savedApplicatorId && savedApplicatorId !== newApplicatorId) {
         void notifyApplicatorUndispatched(savedApplicatorId, jobNumber || '', custNameForNotify, savedJobIdForNotify);
+      }
+
+      // A2: the applicator-change trigger overwrites ALL per-location dispatch rows to the new applicator, displacing split assignees — notify them they're off the job (the whole-job old/new assignees are covered by the branches above). Crew-only displaced rows are out of scope (no per-member notification identity).
+      if (isWholeJobApplicatorReassign) {
+        const notified = new Set<string>();
+        if (newApplicatorId) notified.add(newApplicatorId);
+        if (savedApplicatorId) notified.add(savedApplicatorId);
+        if (profile?.id) notified.add(profile.id);
+        for (const idToNotify of displacedApplicatorIds) {
+          if (notified.has(idToNotify)) continue;
+          notified.add(idToNotify);
+          void notifyApplicatorUndispatched(idToNotify, jobNumber || '', custNameForNotify, savedJobIdForNotify);
+        }
       }
 
       // U12 Codex R5 #1: a reschedule must ALSO reach the active PER-LOCATION
