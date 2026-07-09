@@ -413,14 +413,10 @@ export interface FieldViewCardGroups {
  * either. `todayStr` is caller-supplied (e.g. `localToday()`) so this stays a
  * pure, framework-free, unit-testable function (no `Date.now()` inside).
  *
- * Known limitation (documented, not fixed here — see the migration's header
- * comment): a job that reaches a terminal status keeps its
- * job_location_dispatches row at dispatch_status='dispatched' forever unless a
- * dispatcher explicitly undispatches it — so the Done bucket can grow without
- * bound over time. Out of scope for this unit; flagged as a fast-follow
- * (either a dispatcher habit of undispatching finished work, or a future
- * trigger that auto-transitions dispatch_status to 'completed' when the job
- * does).
+ * Current behavior: the job-terminal trigger closes dispatch rows as
+ * 'completed'/'cancelled', and get_dispatched_list returns active 'dispatched'
+ * rows plus the last seven days of 'completed' rows. The Done bucket is therefore
+ * bounded by that seven-day window.
  */
 export function groupFieldViewCards(
   cards: FieldViewJobCard[],

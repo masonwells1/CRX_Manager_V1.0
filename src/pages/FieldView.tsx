@@ -215,21 +215,29 @@ export default function FieldView() {
       // set, no job_location_dispatches rows) has work that get_dispatched_list
       // never returns — without this merge they'd land on an empty "No jobs"
       // screen despite having a full day. Fetch their open whole-job assignments
-      // and merge any job the dispatch list didn't already cover as a whole-job
-      // card (locations: [] — the card face reads "Whole job assigned to you" and
-      // the expanded detail falls back to a by-job_id job_fields fetch).
+      // plus a 7-day tail of completed/invoiced jobs, then merge any job the dispatch
+      // list didn't already cover as a whole-job card (locations: [] — the card face
+      // reads "Whole job assigned to you" and the expanded detail falls back to a
+      // by-job_id job_fields fetch).
       // Start/Complete already authorize the legacy jobs.applicator_id path
       // server-side. RLS: jobs_select/job_fields_select let the whole-job
       // applicator read their own jobs (JobDetail relies on this today). The
       // customers embed is RLS-gated for applicators (7-day job window) — a
       // blocked embed just renders 'Unknown', never errors.
+      // Accepted difference (A1 compliance MED): this legacy tail anchors on
+      // jobs.updated_at (any job edit bumps it, stretching how long the card
+      // lingers in Done), while the RPC path anchors on the dispatch row's
+      // updated_at (touched only at job-terminal). jobs has no
+      // completion-specific timestamp to anchor on; a slightly-longer Done
+      // linger for legacy jobs is harmless.
       if (profile?.id) {
+        const sevenDaysAgoIso = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
         const legacyRes = await supabase
           .from('jobs')
           .select('id, job_number, job_date, status, total_acres, applied_acres, customer_id, customer:customers(farm_name)')
           .eq('applicator_id', profile.id)
           .is('deleted_at', null)
-          .in('status', ['scheduled', 'in_progress']);
+          .or(`status.in.(scheduled,in_progress),and(status.in.(completed,invoiced),updated_at.gte.${sevenDaysAgoIso})`);
         if (legacyRes.error) throw legacyRes.error;
         const covered = new Set(grouped.map((c) => c.job_id));
         const legacyRows = (legacyRes.data || []) as unknown as Array<{

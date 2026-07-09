@@ -14,6 +14,7 @@ import {
   resolveFieldToJob,
   chunkIds,
   cardDetailCacheKey,
+  groupFieldViewCards,
   type FieldViewJobCard,
   type DispatchFilters,
   type DispatchSelectableJob,
@@ -430,6 +431,16 @@ function mkCard(over: Partial<FieldViewJobCard>): FieldViewJobCard {
     ...over,
   };
 }
+
+describe('groupFieldViewCards (field view My Day sections)', () => {
+  it('moves a completed card into the done bucket', () => {
+    const completed = mkCard({ job_id: 'job-done', job_status: 'completed' });
+    const groups = groupFieldViewCards([completed], '2026-07-09');
+
+    expect(groups.active).toEqual([]);
+    expect(groups.done).toEqual([completed]);
+  });
+});
 
 describe('cardDetailCacheKey (field view #38 — cache invalidates on dispatch change)', () => {
   it('is stable across reloads of an unchanged dispatch set (order-independent)', () => {

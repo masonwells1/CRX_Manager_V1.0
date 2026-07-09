@@ -1160,7 +1160,8 @@ function DispatchedList({ applicators, crews, performedBy, canDispatch, isAdmin,
         all.push(...rowsPage);
         if (rowsPage.length < DISPATCH_PAGE) break;
       }
-      setRows(all);
+      // The RPC includes a 7-day completed tail for FieldView's Done section; the office board hides it.
+      setRows(all.filter((r) => r.dispatch_status === 'dispatched'));
     } catch (err) {
       Sentry.captureException(err, { tags: { source: 'fetch', action: 'get_dispatched_list' } });
       toast('error', 'Failed to load the dispatched list');
