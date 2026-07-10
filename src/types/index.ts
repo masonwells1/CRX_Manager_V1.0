@@ -2386,6 +2386,11 @@ export interface JobAppliedRecord {
   // collapses it to the first row (no duplicate applied-record). NULL on legacy rows
   // and never set on edit. Not surfaced in the UI.
   idempotency_key: string | null;
+  // md5 fingerprint of the create request stamped alongside idempotency_key on a keyed
+  // create. On a retried create the server compares it: identical -> replay (dedup);
+  // different -> raises APPLIED_RECORD_ALREADY_SAVED_DIFFERENT so a corrected retry
+  // surfaces a conflict instead of silently dropping the correction. Internal; not in UI.
+  idempotency_request_hash: string | null;
   created_at: string;
   updated_at: string;
 }

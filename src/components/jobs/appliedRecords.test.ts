@@ -66,6 +66,7 @@ function rec(over: Partial<JobAppliedRecordRow>): JobAppliedRecordRow {
     ...NULL_TACH,
     created_by: null,
     idempotency_key: null,
+    idempotency_request_hash: null,
     created_at: over.created_at ?? '2026-06-01T00:00:00Z',
     updated_at: '2026-06-01T00:00:00Z',
     ...over,
@@ -184,7 +185,7 @@ describe('draftFromRecord round-trip', () => {
       application_date: '2026-06-05', applied_acres: 33.5, notes: 'n',
       ...NULL_WEATHER,
       ...NULL_TACH,
-      created_by: null, idempotency_key: null, created_at: 'x', updated_at: 'y',
+      created_by: null, idempotency_key: null, idempotency_request_hash: null, created_at: 'x', updated_at: 'y',
     };
     expect(draftFromRecord(row)).toEqual({
       applicator_id: 'a1', vehicle_id: 'v1', application_date: '2026-06-05',
@@ -201,7 +202,7 @@ describe('draftFromRecord round-trip', () => {
       application_date: '2026-06-05', applied_acres: null, notes: null,
       ...NULL_WEATHER,
       ...NULL_TACH,
-      created_by: null, idempotency_key: null, created_at: 'x', updated_at: 'y',
+      created_by: null, idempotency_key: null, idempotency_request_hash: null, created_at: 'x', updated_at: 'y',
     };
     expect(draftFromRecord(row)).toEqual({
       applicator_id: '', vehicle_id: '', application_date: '2026-06-05',
@@ -218,7 +219,7 @@ describe('draftFromRecord round-trip', () => {
       application_date: '2026-06-05', applied_acres: 60, notes: null,
       ...NULL_WEATHER,
       ...NULL_TACH,
-      created_by: null, idempotency_key: null, created_at: 'x', updated_at: 'y',
+      created_by: null, idempotency_key: null, idempotency_request_hash: null, created_at: 'x', updated_at: 'y',
       job_applied_record_fields: [
         { field_id: 'f1', applied_acres: 40 },
         { field_id: 'f2', applied_acres: 20 },

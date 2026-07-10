@@ -316,8 +316,22 @@ export default function AppliedRecordsManager({
       setModalOpen(false);
       await load();
       toast('success', editingId ? 'Applied-info entry updated.' : 'Applied-info entry added.');
-    } catch {
-      toast('error', 'Could not save the applied-info entry.');
+    } catch (err) {
+      // Payload-conflict replay (server RAISEs APPLIED_RECORD_ALREADY_SAVED_DIFFERENT):
+      // the first create actually committed but its response was lost, and a value was
+      // edited before this retry. The server refuses to overwrite the saved record with
+      // the changed retry rather than silently drop the correction. Reset the create key,
+      // reload so the saved record appears, and tell the user to reopen/edit it — never
+      // report a bare failure that would hide the already-saved (differing) record.
+      const msg = err instanceof Error ? err.message : String((err as { message?: string })?.message ?? '');
+      if (msg.includes('APPLIED_RECORD_ALREADY_SAVED_DIFFERENT')) {
+        if (isCreate) resetKey();
+        setModalOpen(false);
+        await load();
+        toast('error', 'This entry was already saved with different values — reloaded it. Reopen the entry to review or edit.');
+      } else {
+        toast('error', 'Could not save the applied-info entry.');
+      }
     } finally {
       setSaving(false);
     }
