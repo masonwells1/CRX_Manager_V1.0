@@ -409,7 +409,7 @@ export default function Dashboard() {
       {(isAdmin || role === 'sales_rep') && (
         <Card>
           <CardHeader title="Quick" accent="Actions" />
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-5 gap-3">
             <button
               onClick={() => navigate('/deliveries?quickDeliver=1')}
               className="flex flex-col items-center gap-2 p-4 rounded-xl border border-gray-100 bg-white hover:bg-crx-green-tint hover:border-crx-green/20 transition-all cursor-pointer group"
@@ -420,13 +420,22 @@ export default function Dashboard() {
               <span className="text-sm font-medium text-nav-dark">Sell &amp; Deliver Now</span>
             </button>
             <button
-              onClick={() => navigate('/to-ship')}
-              className="flex flex-col items-center gap-2 p-4 rounded-xl border border-crx-green/30 bg-crx-green-tint hover:bg-crx-green/10 hover:border-crx-green/40 transition-all cursor-pointer group"
+              onClick={() => navigate('/quotes/new')}
+              className="flex flex-col items-center gap-2 p-4 rounded-xl border border-gray-100 bg-white hover:bg-crx-green-tint hover:border-crx-green/20 transition-all cursor-pointer group"
             >
-              <div className="w-10 h-10 rounded-lg bg-crx-green/10 group-hover:bg-crx-green/20 flex items-center justify-center transition-colors">
-                <PackageSearch className="w-5 h-5 text-crx-green" />
+              <div className="w-10 h-10 rounded-lg bg-purple-50 group-hover:bg-purple-100 flex items-center justify-center transition-colors">
+                <FileText className="w-5 h-5 text-purple-600" />
               </div>
-              <span className="text-sm font-medium text-nav-dark">To-Ship</span>
+              <span className="text-sm font-medium text-nav-dark">New Quote</span>
+            </button>
+            <button
+              onClick={() => navigate('/jobs/new')}
+              className="flex flex-col items-center gap-2 p-4 rounded-xl border border-gray-100 bg-white hover:bg-crx-green-tint hover:border-crx-green/20 transition-all cursor-pointer group"
+            >
+              <div className="w-10 h-10 rounded-lg bg-sky-50 group-hover:bg-sky-100 flex items-center justify-center transition-colors">
+                <ClipboardList className="w-5 h-5 text-sky-600" />
+              </div>
+              <span className="text-sm font-medium text-nav-dark">New Job</span>
             </button>
             <button
               onClick={() => navigate('/orders/new')}
@@ -438,41 +447,54 @@ export default function Dashboard() {
               <span className="text-sm font-medium text-nav-dark">New Order</span>
             </button>
             <button
-              onClick={() => navigate('/purchase-orders/new')}
-              className="flex flex-col items-center gap-2 p-4 rounded-xl border border-gray-100 bg-white hover:bg-crx-green-tint hover:border-crx-green/20 transition-all cursor-pointer group"
+              onClick={() => navigate('/to-ship')}
+              className="flex flex-col items-center gap-2 p-4 rounded-xl border border-crx-green/30 bg-crx-green-tint hover:bg-crx-green/10 hover:border-crx-green/40 transition-all cursor-pointer group"
             >
-              <div className="w-10 h-10 rounded-lg bg-teal-50 group-hover:bg-teal-100 flex items-center justify-center transition-colors">
-                <Package className="w-5 h-5 text-teal-600" />
+              <div className="w-10 h-10 rounded-lg bg-crx-green/10 group-hover:bg-crx-green/20 flex items-center justify-center transition-colors">
+                <PackageSearch className="w-5 h-5 text-crx-green" />
               </div>
-              <span className="text-sm font-medium text-nav-dark">New PO</span>
+              <span className="text-sm font-medium text-nav-dark">To-Ship</span>
             </button>
-            <button
-              onClick={() => navigate('/deliveries/new')}
-              className="flex flex-col items-center gap-2 p-4 rounded-xl border border-gray-100 bg-white hover:bg-crx-green-tint hover:border-crx-green/20 transition-all cursor-pointer group"
-            >
-              <div className="w-10 h-10 rounded-lg bg-green-50 group-hover:bg-green-100 flex items-center justify-center transition-colors">
-                <Truck className="w-5 h-5 text-green-600" />
-              </div>
-              <span className="text-sm font-medium text-nav-dark">Schedule Delivery</span>
-            </button>
-            <button
-              onClick={() => navigate('/inventory')}
-              className="flex flex-col items-center gap-2 p-4 rounded-xl border border-gray-100 bg-white hover:bg-crx-green-tint hover:border-crx-green/20 transition-all cursor-pointer group"
-            >
-              <div className="w-10 h-10 rounded-lg bg-amber-50 group-hover:bg-amber-100 flex items-center justify-center transition-colors">
-                <Warehouse className="w-5 h-5 text-amber-600" />
-              </div>
-              <span className="text-sm font-medium text-nav-dark">Inventory</span>
-            </button>
-            <button
-              onClick={() => navigate('/receiving')}
-              className="flex flex-col items-center gap-2 p-4 rounded-xl border border-gray-100 bg-white hover:bg-crx-green-tint hover:border-crx-green/20 transition-all cursor-pointer group"
-            >
-              <div className="w-10 h-10 rounded-lg bg-indigo-50 group-hover:bg-indigo-100 flex items-center justify-center transition-colors">
-                <Inbox className="w-5 h-5 text-indigo-600" />
-              </div>
-              <span className="text-sm font-medium text-nav-dark">Receiving</span>
-            </button>
+          </div>
+          <div className="mt-4 border-t border-gray-100 pt-4">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <button
+                onClick={() => navigate('/deliveries/new')}
+                className="flex flex-col items-center gap-2 p-4 rounded-xl border border-gray-100 bg-gray-50/60 hover:bg-crx-green-tint hover:border-crx-green/20 transition-all cursor-pointer group"
+              >
+                <div className="w-10 h-10 rounded-lg bg-green-50 group-hover:bg-green-100 flex items-center justify-center transition-colors">
+                  <Truck className="w-5 h-5 text-green-600" />
+                </div>
+                <span className="text-sm font-medium text-nav-dark">Schedule Delivery</span>
+              </button>
+              <button
+                onClick={() => navigate('/purchase-orders/new')}
+                className="flex flex-col items-center gap-2 p-4 rounded-xl border border-gray-100 bg-gray-50/60 hover:bg-crx-green-tint hover:border-crx-green/20 transition-all cursor-pointer group"
+              >
+                <div className="w-10 h-10 rounded-lg bg-teal-50 group-hover:bg-teal-100 flex items-center justify-center transition-colors">
+                  <Package className="w-5 h-5 text-teal-600" />
+                </div>
+                <span className="text-sm font-medium text-nav-dark">New PO</span>
+              </button>
+              <button
+                onClick={() => navigate('/inventory')}
+                className="flex flex-col items-center gap-2 p-4 rounded-xl border border-gray-100 bg-gray-50/60 hover:bg-crx-green-tint hover:border-crx-green/20 transition-all cursor-pointer group"
+              >
+                <div className="w-10 h-10 rounded-lg bg-amber-50 group-hover:bg-amber-100 flex items-center justify-center transition-colors">
+                  <Warehouse className="w-5 h-5 text-amber-600" />
+                </div>
+                <span className="text-sm font-medium text-nav-dark">Inventory</span>
+              </button>
+              <button
+                onClick={() => navigate('/receiving')}
+                className="flex flex-col items-center gap-2 p-4 rounded-xl border border-gray-100 bg-gray-50/60 hover:bg-crx-green-tint hover:border-crx-green/20 transition-all cursor-pointer group"
+              >
+                <div className="w-10 h-10 rounded-lg bg-indigo-50 group-hover:bg-indigo-100 flex items-center justify-center transition-colors">
+                  <Inbox className="w-5 h-5 text-indigo-600" />
+                </div>
+                <span className="text-sm font-medium text-nav-dark">Receiving</span>
+              </button>
+            </div>
           </div>
         </Card>
       )}

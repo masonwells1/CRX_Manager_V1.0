@@ -719,13 +719,9 @@ export default function Invoices() {
           >
             Download PDF
           </Button>
-          <Button variant="secondary" icon={<Plus className="w-4 h-4" />} onClick={() => navigate('/invoices/field-app/new')}>
-            New Field Application
+          <Button variant="secondary" onClick={() => navigate('/invoices/new?type=misc_charge')}>
+            Misc Charge
           </Button>
-          {/* "New Invoice" standalone-create path removed 2026-04-30 (Phase 10).
-              Invoices must come from an order or blend ticket per CLAUDE.md hard
-              rule. Use the "Create Invoice" button on Order Detail or Blend
-              Ticket Detail instead. */}
         </div>
       </div>
 

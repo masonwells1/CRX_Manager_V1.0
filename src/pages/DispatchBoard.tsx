@@ -9,7 +9,7 @@
  * Job rows show: Job Nbr + customer, applied-of-total acres ('X of Y ac'), a
  * PENDING/ACTIVE status badge, and 'Assigned To: <name>' when dispatched.
  * An OPTIONS menu offers: Filter Jobs By Recipe (#39 stub), More Search Options,
- * Switch View, Add New Job, Reload List.
+ * Switch View, Reload List. Add New Job is a visible header action.
  *
  * One shared filter object (`filters`) drives BOTH views, so switching map<->list
  * keeps the same active filter set (criterion #6).
@@ -649,6 +649,14 @@ export default function DispatchBoard() {
                 </button>
               )}
 
+              <button
+                type="button"
+                onClick={() => navigate('/jobs/new')}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-crx-green px-3 py-2.5 text-sm font-medium text-white hover:bg-crx-green-hover min-h-[44px]"
+              >
+                <Plus className="w-4 h-4" /> Add New Job
+              </button>
+
               {/* OPTIONS menu (criterion #5) */}
               <div className="relative" ref={optionsRef}>
                 <button
@@ -707,13 +715,6 @@ export default function DispatchBoard() {
                     >
                       {activeView === 'map' ? <ListIcon className="w-4 h-4 text-slate-400" /> : <MapIcon className="w-4 h-4 text-slate-400" />}
                       Switch View ({activeView === 'map' ? 'to List' : 'to Map'})
-                    </button>
-                    <button
-                      role="menuitem"
-                      onClick={() => navigate('/jobs/new')}
-                      className="w-full flex items-center gap-3 px-4 py-3 text-sm text-slate-200 hover:bg-slate-700 min-h-[44px]"
-                    >
-                      <Plus className="w-4 h-4 text-slate-400" /> Add New Job
                     </button>
                     <button
                       role="menuitem"

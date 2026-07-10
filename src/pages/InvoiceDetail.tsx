@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Save, Send, Ban, Plus, Trash2, Search, DollarSign, FileText, Printer, Truck, Mail, RotateCcw, AlertTriangle,
 } from 'lucide-react';
@@ -78,6 +78,7 @@ const statusBadge = (status: InvoiceStatus) => {
 export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'chemical' } = {}) {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { profile } = useAuth();
   const { toast } = useToast();
   const isAdmin = profile?.role === 'admin';
@@ -106,10 +107,11 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
   const unpostKeysRef = useRef<Record<string, string>>({});
   const { warning: creditWarning, check: checkCreditLimit, dismiss: dismissCreditWarning } = useCreditLimitCheck();
   const isNew = id === 'new';
+  const isMiscChargeLocked = isNew && searchParams.get('type') === 'misc_charge';
 
   // Invoice header
   const [invoice, setInvoice] = useState<Partial<Invoice>>({
-    invoice_type: 'chemical_sale',
+    invoice_type: isMiscChargeLocked ? 'misc_charge' : 'chemical_sale',
     status: 'draft',
     invoice_date: localToday(),
     customer_id: '',
@@ -1273,13 +1275,15 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
 
             {/* Type — locked to a read-only label on the segregated field route
                  (Codex P2): a field invoice must not be reclassified to Chemical
-                 Sales from the field-invoices area. */}
+                 Sales from the field-invoices area. A new misc-charge entry is
+                 locked in the selector below. */}
             <div>
               <label className="text-sm font-medium text-nav-dark">Invoice Type</label>
               {editable && routeArea !== 'field' ? (
                 <select
                   value={invoice.invoice_type || 'chemical_sale'}
                   onChange={(e) => setInvoice((prev) => ({ ...prev, invoice_type: e.target.value as InvoiceType }))}
+                  disabled={isMiscChargeLocked}
                   className="mt-1 w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 >
                   <option value="chemical_sale">Chemical Sale</option>
@@ -1292,6 +1296,9 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
                 </select>
               ) : (
                 <p className="mt-1 text-sm capitalize">{(invoice.invoice_type || '').replace(/_/g, ' ')}</p>
+              )}
+              {isMiscChargeLocked && (
+                <p className="mt-1 text-sm text-gray-500">Locked — opened as a Misc Charge</p>
               )}
             </div>
 

@@ -664,6 +664,27 @@ export function BlendTicketDetail() {
     });
   }
 
+  async function openCreateOrderModal() {
+    if (!ticket?.customer_id) {
+      toast('error', 'Please assign a customer first');
+      return;
+    }
+
+    setNewOrderNumber('');
+    setNewOrderDate(localToday());
+    setNewOrderNotes('');
+    setShowCreateOrderModal(true);
+
+    try {
+      const { data, error } = await supabase.rpc('generate_order_number');
+      if (error) throw error;
+      setNewOrderNumber(assertRpcResult<string>(data, 'generate_order_number'));
+    } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'generate_order_number' } });
+      toast('warning', 'Could not prefill an order number. Enter one to continue.');
+    }
+  }
+
   async function handleCreateOrder() {
     if (!ticket || !profile || !newOrderNumber.trim()) return;
     setLinking(true);
@@ -1436,16 +1457,7 @@ export function BlendTicketDetail() {
                 Link to Existing Order
               </Button>
               <HelpTip text="Link to Order attaches this ticket to an EXISTING sales order — the 'chemical sale' path where we deliver the product and the order draws it from inventory. Use this when the customer is buying the chemical, not us applying it." />
-              <Button size="sm" onClick={() => {
-                if (!ticket.customer_id) {
-                  toast('error', 'Please assign a customer first');
-                  return;
-                }
-                setNewOrderNumber('');
-                setNewOrderDate(localToday());
-                setNewOrderNotes('');
-                setShowCreateOrderModal(true);
-              }}>
+              <Button size="sm" onClick={openCreateOrderModal}>
                 <ShoppingCart className="h-4 w-4" />
                 Create Order from Ticket
               </Button>

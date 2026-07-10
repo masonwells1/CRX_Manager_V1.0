@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, FileText, Printer, FileClock, Mail, Pencil, X, Search, ClipboardCheck, ArrowLeft } from 'lucide-react';
+import { FileText, Printer, FileClock, Mail, Pencil, X, Search, ClipboardCheck, ArrowLeft, MoreHorizontal } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import ConfirmModal from '../components/ui/ConfirmModal';
@@ -84,8 +84,10 @@ export default function FieldInvoicesUnposted() {
   const [filters, setFilters] = useState<FieldInvoiceListFilters>(emptyFieldInvoiceFilters);
   const [busy, setBusy] = useState(false);
   const [showPostAll, setShowPostAll] = useState(false);
+  const [manualInvoiceMenuOpen, setManualInvoiceMenuOpen] = useState(false);
   // Per-row action guard so a double-click can't fire two prints/emails.
   const rowActionRef = useRef(false);
+  const manualInvoiceMenuRef = useRef<HTMLDivElement>(null);
   // Per-invoice/per-group idempotency keys from a keyed ref cache so a network-retry
   // (post committed server-side but response lost) reuses the SAME key per
   // invoice and the server dedup matches instead of double-posting. Minted
@@ -179,6 +181,26 @@ export default function FieldInvoicesUnposted() {
   useEffect(() => {
     fetchInvoices();
   }, [fetchInvoices]);
+
+  useEffect(() => {
+    if (!manualInvoiceMenuOpen) return;
+
+    const closeMenuOnOutsideClick = (event: MouseEvent) => {
+      if (!manualInvoiceMenuRef.current?.contains(event.target as Node)) {
+        setManualInvoiceMenuOpen(false);
+      }
+    };
+    const closeMenuOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setManualInvoiceMenuOpen(false);
+    };
+
+    document.addEventListener('mousedown', closeMenuOnOutsideClick);
+    document.addEventListener('keydown', closeMenuOnEscape);
+    return () => {
+      document.removeEventListener('mousedown', closeMenuOnOutsideClick);
+      document.removeEventListener('keydown', closeMenuOnEscape);
+    };
+  }, [manualInvoiceMenuOpen]);
 
   // The SAME filtered list drives the table AND the footer totals.
   const visible = useMemo(
@@ -458,9 +480,41 @@ export default function FieldInvoicesUnposted() {
             <p className="text-xs text-secondary mt-0.5">The working tray — field bills that have not yet been posted.</p>
           </div>
         </div>
-        <Button variant="primary" icon={<Plus className="w-4 h-4" />} onClick={() => navigate('/invoices/field-app/new')}>
-          Add Invoice
-        </Button>
+        <div
+          className="relative"
+          ref={manualInvoiceMenuRef}
+          onBlur={(event) => {
+            if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+              setManualInvoiceMenuOpen(false);
+            }
+          }}
+        >
+          <button
+            type="button"
+            onClick={() => setManualInvoiceMenuOpen((open) => !open)}
+            aria-label="More actions"
+            aria-haspopup="menu"
+            aria-expanded={manualInvoiceMenuOpen}
+            className="inline-flex items-center justify-center rounded-lg border border-gray-300 bg-white p-2 text-nav-dark hover:bg-gray-50"
+          >
+            <MoreHorizontal className="w-4 h-4" />
+          </button>
+          {manualInvoiceMenuOpen && (
+            <div role="menu" className="absolute right-0 z-20 mt-2 w-52 rounded-lg border border-gray-200 bg-white py-1 shadow-lg">
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  navigate('/invoices/field-app/new');
+                  setManualInvoiceMenuOpen(false);
+                }}
+                className="w-full px-3 py-2 text-left text-sm text-nav-dark hover:bg-gray-50"
+              >
+                Manual Invoice (no job)
+              </button>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Filter bar */}

@@ -23,6 +23,7 @@ import {
   XCircle,
   Ban,
   Undo2,
+  MoreHorizontal,
 } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -313,6 +314,10 @@ export default function QuoteBuilder() {
   const [templateDescription, setTemplateDescription] = useState('');
   const [showRolloverModal, setShowRolloverModal] = useState(false);
   const [rolloverSeason, setRolloverSeason] = useState(new Date().getFullYear() + 1);
+  const [createOrderMenuOpen, setCreateOrderMenuOpen] = useState(false);
+  const [moreActionsOpen, setMoreActionsOpen] = useState(false);
+  const createOrderMenuRef = useRef<HTMLDivElement>(null);
+  const moreActionsRef = useRef<HTMLDivElement>(null);
 
   // Track dirty state for unsaved changes warning
   const [isDirty, setIsDirty] = useState(false);
@@ -359,6 +364,33 @@ export default function QuoteBuilder() {
   const scheduleBlockedAccepted = isPlanned && currentStatus === 'accepted';
   const canRevert = isEditing && isAdmin && ['accepted', 'declined', 'expired', 'cancelled'].includes(currentStatus);
   const revertLabel = currentStatus === 'accepted' ? 'Un-accept' : 'Reopen';
+
+  useEffect(() => {
+    if (!createOrderMenuOpen && !moreActionsOpen) return;
+
+    const closeMenusOnOutsideClick = (event: MouseEvent) => {
+      if (
+        !createOrderMenuRef.current?.contains(event.target as Node)
+        && !moreActionsRef.current?.contains(event.target as Node)
+      ) {
+        setCreateOrderMenuOpen(false);
+        setMoreActionsOpen(false);
+      }
+    };
+    const closeMenusOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setCreateOrderMenuOpen(false);
+        setMoreActionsOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', closeMenusOnOutsideClick);
+    document.addEventListener('keydown', closeMenusOnEscape);
+    return () => {
+      document.removeEventListener('mousedown', closeMenusOnOutsideClick);
+      document.removeEventListener('keydown', closeMenusOnEscape);
+    };
+  }, [createOrderMenuOpen, moreActionsOpen]);
 
   // Mark dirty whenever user changes form data (after initial load)
   useEffect(() => {
@@ -2306,17 +2338,6 @@ export default function QuoteBuilder() {
           >
             Save Draft
           </Button>
-          <button
-            onClick={() => setCustomerView(!customerView)}
-            className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-lg border transition-colors ${
-              customerView
-                ? 'bg-crx-green text-white border-crx-green'
-                : 'border-gray-200 text-secondary hover:border-crx-green hover:text-crx-green'
-            }`}
-          >
-            {customerView ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-            Customer View
-          </button>
           <Button
             variant="secondary"
             icon={<Download className="w-4 h-4" />}
@@ -2325,26 +2346,70 @@ export default function QuoteBuilder() {
           >
             Download PDF
           </Button>
-          {quoteId && (
-            <>
-              <button
-                onClick={() => setShowSaveTemplateModal(true)}
-                className="flex items-center gap-2 px-3 py-1.5 text-sm border border-gray-200 rounded-lg hover:bg-gray-50"
-              >
-                <Copy className="w-4 h-4" />
-                Save as Template
-              </button>
-              <HelpTip text="Saves this quote's structure as a reusable template. Great for customers who reorder the same products each season." className="ml-1" />
-              <button
-                onClick={() => setShowRolloverModal(true)}
-                className="flex items-center gap-2 px-3 py-1.5 text-sm border border-gray-200 rounded-lg hover:bg-gray-50"
-              >
-                <RotateCcw className="w-4 h-4" />
-                Roll Over to New Season
-              </button>
-              <HelpTip text="Copies this planned program into the next season (Oct–Sep) with the same products and quantities. Dates update automatically." className="ml-1" />
-            </>
-          )}
+          <div
+            className="relative"
+            ref={moreActionsRef}
+            onBlur={(event) => {
+              if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                setMoreActionsOpen(false);
+              }
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => setMoreActionsOpen((open) => !open)}
+              aria-label="More actions"
+              aria-haspopup="menu"
+              aria-expanded={moreActionsOpen}
+              className="inline-flex items-center justify-center rounded-lg border border-gray-200 p-2 text-secondary transition-colors hover:border-crx-green hover:text-crx-green"
+            >
+              <MoreHorizontal className="w-4 h-4" />
+            </button>
+            {moreActionsOpen && (
+              <div role="menu" className="absolute right-0 z-30 mt-2 w-60 rounded-lg border border-gray-200 bg-white py-1 shadow-lg">
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setCustomerView(!customerView);
+                    setMoreActionsOpen(false);
+                  }}
+                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-nav-dark hover:bg-gray-50"
+                >
+                  {customerView ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  Customer View
+                </button>
+                {quoteId && (
+                  <>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setShowSaveTemplateModal(true);
+                        setMoreActionsOpen(false);
+                      }}
+                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-nav-dark hover:bg-gray-50"
+                    >
+                      <Copy className="w-4 h-4" />
+                      Save as Template
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setShowRolloverModal(true);
+                        setMoreActionsOpen(false);
+                      }}
+                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-nav-dark hover:bg-gray-50"
+                    >
+                      <RotateCcw className="w-4 h-4" />
+                      Roll Over to New Season
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
           {canSend && (
             <Button
               variant="primary"
@@ -2365,32 +2430,59 @@ export default function QuoteBuilder() {
               Book as Order
             </Button>
           )}
-          {isEditing && canConvert && (
-            <>
+          {isEditing && (canConvert || canDraw) && (
+            <div
+              className="relative"
+              ref={createOrderMenuRef}
+              onBlur={(event) => {
+                if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                  setCreateOrderMenuOpen(false);
+                }
+              }}
+            >
               <Button
                 variant="primary"
                 icon={<ShoppingCart className="w-4 h-4" />}
-                onClick={() => setConfirmConvertOpen(true)}
-                loading={converting}
-              >
-                Convert to Order
-              </Button>
-              <HelpTip text="Creates a confirmed order from this quote. Inventory holds transfer to the order and the customer gets a confirmation email." className="ml-1" />
-            </>
-          )}
-          {isEditing && canDraw && (
-            <>
-              <Button
-                variant="secondary"
-                icon={<PackageOpen className="w-4 h-4" />}
                 showChevron={false}
-                onClick={openDrawDownModal}
-                loading={drawLoading}
+                onClick={() => setCreateOrderMenuOpen((open) => !open)}
+                aria-haspopup="menu"
+                aria-expanded={createOrderMenuOpen}
               >
-                Partial Order
+                Create Order ▾
               </Button>
-              <HelpTip text="Pull part of this booking into an order — e.g. send 200 of the 500 booked gallons. The quote keeps the remaining balance and stays open until fully drawn." className="ml-1" />
-            </>
+              {createOrderMenuOpen && (
+                <div role="menu" className="absolute right-0 z-30 mt-2 w-64 rounded-lg border border-gray-200 bg-white py-1 shadow-lg">
+                  <button
+                    type="button"
+                    role="menuitem"
+                    disabled={!canConvert || converting}
+                    title={canConvert ? undefined : 'Whole-booking conversion is available after the quote is sent or revised.'}
+                    onClick={() => {
+                      setConfirmConvertOpen(true);
+                      setCreateOrderMenuOpen(false);
+                    }}
+                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-nav-dark hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <ShoppingCart className="w-4 h-4" />
+                    Convert whole booking
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    disabled={!canDraw || drawLoading}
+                    title={canDraw ? undefined : 'Partial draw-down is available after the quote is sent or revised.'}
+                    onClick={() => {
+                      openDrawDownModal();
+                      setCreateOrderMenuOpen(false);
+                    }}
+                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-nav-dark hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <PackageOpen className="w-4 h-4" />
+                    Draw part of booking…
+                  </button>
+                </div>
+              )}
+            </div>
           )}
           {isEditing && currentStatus === 'sent' && (
             <Button
