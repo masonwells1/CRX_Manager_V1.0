@@ -14,6 +14,7 @@ import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { logActivity } from '../lib/activityLogger';
 import { notifyApplicatorDispatched, notifyApplicatorRescheduled, notifyApplicatorUndispatched } from '../lib/notificationTriggers';
 import { supabase, checkMutationResult, assertRpcResult, hasRpcCode, RpcErrorCodes, sanitizeError } from '../lib/db';
+import { warnIfOverCreditLimit } from '../lib/creditLimit';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { getLicenseStatus, licenseStatusLabel } from '../lib/licenseStatus';
 import { generateWpsNoticePdf } from '../lib/wpsNoticePdf';
@@ -2327,6 +2328,7 @@ export default function JobDetail() {
 
       if (isNew) {
         navigate(`/jobs/${result.job_id}`);
+        void warnIfOverCreditLimit(customerId, toast);
       } else {
         await fetchJob();
       }

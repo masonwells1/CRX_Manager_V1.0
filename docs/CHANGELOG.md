@@ -4,6 +4,15 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-10 — Business-workflow review #105: credit-exposure on the spray-job channel (1 migration APPLIED LIVE, Mason's OK; Codex-built + Codex-reviewed)
+
+Closed review finding #105. Two parts, built by Codex and reviewed by Codex (the loop model), with Claude orchestrating the gates + the live apply.
+
+- **The gap:** the "customer is over their credit limit" warning fired only on the chemical-sale side (quote convert, new order, quick delivery) — scheduling/dispatching a **spray job** never checked credit, so an over-limit customer kept getting sprayed with no signal. And the exposure math (`check_customer_credit_limit`) counted only `posted`/`overdue` invoices, so a season of completed-but-`unposted` spray bills was invisible to the number even on the channels that did check.
+- **Part A (frontend):** new shared helper `src/lib/creditLimit.ts` (`warnIfOverCreditLimit`, non-blocking, mirrors the existing NewOrder pattern) wired into the spray-job **schedule** flow — `JobDetail` new-job save and `QuoteBuilder` schedule-from-booking. Fire-and-forget after navigation so it can never stall the save. Dispatch hook deliberately deferred (DispatchWizard dispatches multiple customers in one action with no single customer id — warning there would risk the wrong customer).
+- **Part B (migration `20260712130000`, live v`20260710234754`):** `check_customer_credit_limit` re-emitted (LIVE body verbatim) with the sole change of adding `'unposted'` to the invoice status filter. Read-only SECURITY DEFINER, single overload, `search_path` intact, anon still excluded. Owner-approved (2026-07-10) that committed-but-unposted bills should count.
+- **Gates:** rls-security / migration-drift / compliance reviewers all CLEAN. Codex review-gate found **2 real HIGH bugs it had introduced** — (1) QuoteBuilder checked the editable picker customer instead of the job's actual customer; (2) the warning was `await`ed with no timeout, so a hung call could stall a committed save (duplicate-job risk) — both **fixed by Codex**, re-review **CLEAN**. Filter change proven on the live engine (`old_ar 40000 → new_ar 65000`, draft/voided excluded); live function verified post-apply. Zero blast radius today (0 unposted invoices currently exist). No data mutation; one-click reversible.
+
 ## 2026-07-10 — Business-workflow review: 3 daily-use screen fixes (#67 / #23 / #68) — frontend-only, deployed to `main`
 
 Cleared three confirmed UX traps from the 2026-07 business-workflow review (the review is now ~90% shipped — both big UI redesigns are already live; this closes the small residual frontend set). All pure-frontend: no DB, no money math, no RLS, no migration, no edge function. Built in worktree `C:\CRX_WorkflowUX`.

@@ -44,6 +44,7 @@ import { logActivity } from '../lib/activityLogger';
 import { formatUSD, formatCents } from '../lib/money';
 import { catalogPricePerAcre } from '../lib/quoteCalc';
 import { notifyLargeOrder, notifyCreditLimitExceeded } from '../lib/notificationTriggers';
+import { warnIfOverCreditLimit } from '../lib/creditLimit';
 import { sendOrderConfirmedEmail } from '../lib/orderConfirmedEmail';
 import { trackBusinessEvent } from '../lib/metrics';
 import { localDatePlusDays, localToday, parseLocalDate } from '../lib/dateUtils';
@@ -1861,6 +1862,19 @@ export default function QuoteBuilder() {
       setSectionJobs((prev) => ({ ...prev, [sec.id as string]: { id: result.job_id, job_number: '(new)', status: 'scheduled' } }));
       toast('success', `Job scheduled from "${sec.section_name}"`);
       navigate(`/jobs/${result.job_id}`);
+      void (async () => {
+        try {
+          const { data: createdJob, error: createdJobError } = await supabase
+            .from('jobs')
+            .select('customer_id')
+            .eq('id', result.job_id)
+            .single();
+          if (createdJobError) return;
+          void warnIfOverCreditLimit(createdJob.customer_id, toast);
+        } catch {
+          // Non-blocking — the job is already committed and navigation has started.
+        }
+      })();
     } catch (err: unknown) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'schedule_job_from_quote' } });
       toast('error', err instanceof Error ? err.message : 'Failed to schedule job');
