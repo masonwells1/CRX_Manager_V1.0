@@ -238,4 +238,23 @@ describe('ProductDetail EPA lookup', () => {
     expect(params.p_confidence).toBe('medium');
     expect(JSON.stringify(params)).not.toContain('UNRECOGNIZED RAW VALUE');
   });
+
+  it('blocks applying a lookup of a registration different from the product\'s saved one', async () => {
+    // Product already has a saved registration; admin looks up a DIFFERENT number.
+    // Empty-fields-only would keep the saved reg but still fill the signal word
+    // from the unrelated lookup — wrong hazard word on a regulatory field. Block it.
+    H.product = baseProduct({ epa_registration: '100-885', signal_word: null });
+    render(<ProductDetail />);
+    await runLookup(lookupResult({ eparegno: '264-849' }));
+
+    const applyButtons = await screen.findAllByRole('button', { name: /apply to product/i });
+    fireEvent.click(applyButtons[0]);
+
+    await waitFor(() => expect(H.toast).toHaveBeenCalledWith(
+      'warning',
+      expect.stringContaining('different registration number'),
+    ));
+    expect(H.rpc).not.toHaveBeenCalled();
+    expect(H.navigate).not.toHaveBeenCalled();
+  });
 });

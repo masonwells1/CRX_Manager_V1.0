@@ -449,6 +449,21 @@ export default function ProductDetail() {
     const existingRegistration = hasText(persistedLabelFields.epaRegistration)
       ? persistedLabelFields.epaRegistration.trim()
       : null;
+
+    // A product's label data may only be filled from a lookup of ITS OWN saved
+    // registration number. If it already has a (different) saved registration,
+    // applying data from an unrelated lookup would attach the wrong hazard word
+    // to it — empty-fields-only keeps the saved (mismatched) registration while
+    // still filling the signal word from the unrelated lookup. Block that.
+    // (Codex ship-gate blocker, 2026-07-10 — regulatory-data corruption.)
+    if (existingRegistration && existingRegistration !== validatedRegNumber) {
+      toast(
+        'warning',
+        "This lookup is for a different registration number than the one saved on this product. To fill its label data, look up the product's own saved registration number, or correct the saved number first.",
+      );
+      return;
+    }
+
     const proposedSignalWord = !existingSignalWord && !epaLookupResult.needsManual
       ? epaLookupResult.signalWordCanonical
       : null;
