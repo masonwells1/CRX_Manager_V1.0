@@ -77,6 +77,41 @@ export interface Product {
   updated_at: string;
 }
 
+// ─── EPA PPLS Lookup ────────────────────────────────────────────────────────
+// Keep this shape in sync with supabase/functions/epa-lookup/logic.ts.
+
+export type EpaRegistrationType = 'section3' | 'distributor';
+export type EpaSignalWordCanonical = 'Danger' | 'Warning' | 'Caution';
+
+export interface EpaActiveIngredient {
+  name: string;
+  percent: number | null;
+  pcCode: string | null;
+  casNumber: string | null;
+}
+
+export interface EpaLabelPdf {
+  fileName: string;
+  acceptedDate: string | null;
+  url: string;
+}
+
+export interface EpaLookupResult {
+  found: boolean;
+  regType: EpaRegistrationType;
+  eparegno: string | null;
+  productname: string | null;
+  signalWordCanonical: EpaSignalWordCanonical | null;
+  needsManual: boolean;
+  manufacturer: string | null;
+  rupYn: 'Yes' | 'No' | null;
+  productStatus: string | null;
+  isCancelled: boolean;
+  activeIngredients: EpaActiveIngredient[];
+  latestLabelPdfUrl: string | null;
+  labelPdfs: EpaLabelPdf[];
+}
+
 // ─── Label Drafts (§1 AI Label-Data Backfill) ───────────────────────────────
 
 export type LabelDraftConfidence = 'high' | 'medium' | 'low';
