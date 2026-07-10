@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Menu, Plus, Search } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
+import { hasPageAccess } from '../../lib/pagePermissions';
 import NotificationsPanel from '../team/NotificationsPanel';
 
 interface TopBarProps {
@@ -12,20 +13,24 @@ interface TopBarProps {
 }
 
 const NEW_MENU_ITEMS = [
-  { label: 'Quote/Booking', path: '/quotes/new' },
-  { label: 'Order', path: '/orders/new' },
-  { label: 'Delivery', path: '/deliveries/new' },
-  { label: 'Job', path: '/jobs/new' },
-  { label: 'Field App Invoice', path: '/invoices/field-app/new' },
-  { label: 'PO', path: '/purchase-orders/new' },
-  { label: 'Quick Receive', path: '/receiving/quick' },
+  { label: 'Quote/Booking', path: '/quotes/new', pageKey: 'quotes' },
+  { label: 'Order', path: '/orders/new', pageKey: 'orders' },
+  { label: 'Delivery', path: '/deliveries/new', pageKey: 'deliveries' },
+  { label: 'Job', path: '/jobs/new', pageKey: 'jobs' },
+  { label: 'Field App Invoice', path: '/invoices/field-app/new', pageKey: 'field-invoices' },
+  { label: 'PO', path: '/purchase-orders/new', pageKey: 'purchase-orders' },
+  { label: 'Quick Receive', path: '/receiving/quick', pageKey: 'receiving' },
 ];
 
 export default function TopBar({ onMenuClick, onSearchClick, title, accent }: TopBarProps) {
-  const { profile } = useAuth();
+  const { profile, deniedPages } = useAuth();
   const navigate = useNavigate();
   const [newMenuOpen, setNewMenuOpen] = useState(false);
-  const isOfficeRole = profile?.role === 'admin' || profile?.role === 'sales_rep';
+  const role = profile?.role ?? null;
+  const isOfficeRole = role === 'admin' || role === 'sales_rep';
+  const allowedNewMenuItems = isOfficeRole
+    ? NEW_MENU_ITEMS.filter((item) => hasPageAccess(role, deniedPages, item.pageKey))
+    : [];
 
   const closeWhenFocusLeaves = (event: React.FocusEvent<HTMLDivElement>) => {
     if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
@@ -60,7 +65,7 @@ export default function TopBar({ onMenuClick, onSearchClick, title, accent }: To
             <span className="hidden md:inline text-sm">Search…</span>
             <kbd className="hidden md:inline text-[11px] border border-gray-200 rounded px-1.5 py-0.5">⌘K</kbd>
           </button>
-          {isOfficeRole && (
+          {allowedNewMenuItems.length > 0 && (
             <div className="relative" onBlur={closeWhenFocusLeaves}>
               <button
                 type="button"
@@ -84,7 +89,7 @@ export default function TopBar({ onMenuClick, onSearchClick, title, accent }: To
                   }}
                   className="absolute right-0 top-full mt-2 w-52 rounded-lg border border-gray-200 bg-white py-1 shadow-lg"
                 >
-                  {NEW_MENU_ITEMS.map((item) => (
+                  {allowedNewMenuItems.map((item) => (
                     <button
                       key={item.path}
                       type="button"

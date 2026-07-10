@@ -41,7 +41,8 @@ import {
 } from 'lucide-react';
 import { supabase, assertRpcResult } from '../../lib/db';
 import { getRecentItems } from '../../lib/recentPages';
-import { PAGE_PERMISSIONS } from '../../lib/pagePermissions';
+import { PAGE_PERMISSIONS, hasPageAccess } from '../../lib/pagePermissions';
+import { useAuth } from '../../contexts/AuthContext';
 import type { GlobalSearchResult, SearchEntityType } from '../../types';
 
 // ── Types ──────────────────────────────────────────────────────────
@@ -135,25 +136,20 @@ const PAGE_ICON_MAP: Record<string, React.ReactNode> = {
 
 // Commands without a PAGE_PERMISSIONS entry: creation/deep links and global
 // routes. Permission pages themselves are derived below from the canonical list.
-const EXTRA_PAGES: { path: string; label: string }[] = [
-  { path: '/quotes/new', label: 'New Quote/Booking' },
-  { path: '/orders/new', label: 'New Order' },
-  { path: '/purchase-orders/new', label: 'New Purchase Order' },
-  { path: '/receiving/quick', label: 'Quick Receive' },
-  { path: '/deliveries/new', label: 'New Delivery' },
-  { path: '/deliveries?quickDeliver=1', label: 'Sell & Deliver Now' },
-  { path: '/sales-reports?tab=by_product', label: 'Sales by Product (Product Mix)' },
-  { path: '/sales-reports?tab=by_customer', label: 'Sales by Customer (Customer Profitability)' },
-  { path: '/sales-reports?tab=by_sales_rep', label: 'Sales by Sales Rep' },
-  { path: '/sales-reports?tab=by_month', label: 'Sales by Month' },
+const EXTRA_PAGES: { path: string; label: string; pageKey?: string }[] = [
+  { path: '/quotes/new', label: 'New Quote/Booking', pageKey: 'quotes' },
+  { path: '/orders/new', label: 'New Order', pageKey: 'orders' },
+  { path: '/purchase-orders/new', label: 'New Purchase Order', pageKey: 'purchase-orders' },
+  { path: '/receiving/quick', label: 'Quick Receive', pageKey: 'receiving' },
+  { path: '/deliveries/new', label: 'New Delivery', pageKey: 'deliveries' },
+  { path: '/deliveries?quickDeliver=1', label: 'Sell & Deliver Now', pageKey: 'deliveries' },
+  { path: '/sales-reports?tab=by_product', label: 'Sales by Product (Product Mix)', pageKey: 'sales-reports' },
+  { path: '/sales-reports?tab=by_customer', label: 'Sales by Customer (Customer Profitability)', pageKey: 'sales-reports' },
+  { path: '/sales-reports?tab=by_sales_rep', label: 'Sales by Sales Rep', pageKey: 'sales-reports' },
+  { path: '/sales-reports?tab=by_month', label: 'Sales by Month', pageKey: 'sales-reports' },
   { path: '/team-board', label: 'Team Board' },
   { path: '/notifications', label: 'Notifications' },
   { path: '/settings', label: 'Settings' },
-];
-
-const ALL_PAGES: { path: string; label: string }[] = [
-  ...PAGE_PERMISSIONS.map((page) => ({ path: page.path, label: page.label })),
-  ...EXTRA_PAGES,
 ];
 
 // ── Helpers ────────────────────────────────────────────────────────
@@ -182,6 +178,7 @@ function getPageIcon(path: string): React.ReactNode {
 // ── Component ──────────────────────────────────────────────────────
 
 export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
+  const { role: authRole, deniedPages, loading: authLoading } = useAuth();
   const navigate = useNavigate();
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -190,6 +187,24 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
   const [entityResults, setEntityResults] = useState<GlobalSearchResult[]>([]);
   const [loading, setLoading] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout>>();
+  // AppLayout is withheld while auth loads; the fallback keeps isolated component
+  // renders using AuthContext's loading default equivalent to the prior admin tests.
+  const role = authRole ?? (authLoading ? 'admin' : null);
+  const availablePages = useMemo(() => {
+    if (!role) return [];
+
+    const permissionPages = PAGE_PERMISSIONS
+      .filter((page) => page.roles.includes(role) && hasPageAccess(role, deniedPages, page.key))
+      .map((page) => ({ path: page.path, label: page.label }));
+    const isOfficeRole = role === 'admin' || role === 'sales_rep';
+    const extraPages = isOfficeRole
+      ? EXTRA_PAGES
+        .filter((page) => !page.pageKey || hasPageAccess(role, deniedPages, page.pageKey))
+        .map(({ path, label }) => ({ path, label }))
+      : [];
+
+    return [...permissionPages, ...extraPages];
+  }, [deniedPages, role]);
 
   // Reset state when opening
   useEffect(() => {
@@ -267,7 +282,7 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
     }
 
     // Pages (client-side fuzzy match, instant)
-    const matchingPages = ALL_PAGES.filter((p) => fuzzyMatch(trimmed, p.label));
+    const matchingPages = availablePages.filter((p) => fuzzyMatch(trimmed, p.label));
     for (const p of matchingPages.slice(0, 5)) {
       items.push({
         id: `page-${p.path}`,
@@ -290,7 +305,7 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
     }
 
     return items.slice(0, 25);
-  }, [query, entityResults]);
+  }, [query, entityResults, availablePages]);
 
   // Reset active index when results change
   useEffect(() => {

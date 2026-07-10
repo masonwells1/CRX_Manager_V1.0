@@ -67,16 +67,14 @@ export default function SearchableSelect({
   };
 
   const handleBlur = () => {
-    window.setTimeout(() => {
-      if (!query.trim() && value) {
-        setQuery('');
-        onChange('');
-      } else if (value && query !== selectedOption?.label) {
-        setQuery(selectedOption?.label || '');
-      }
+    if (!query.trim() && value) {
+      setQuery('');
+      onChange('');
+    } else if (value && query !== selectedOption?.label) {
+      setQuery(selectedOption?.label || '');
+    }
 
-      setIsOpen(false);
-    }, 150);
+    setIsOpen(false);
   };
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {

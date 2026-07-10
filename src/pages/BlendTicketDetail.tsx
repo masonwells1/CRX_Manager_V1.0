@@ -679,7 +679,9 @@ export function BlendTicketDetail() {
     try {
       const { data, error } = await supabase.rpc('generate_order_number');
       if (error) throw error;
-      setNewOrderNumber(assertRpcResult<string>(data, 'generate_order_number'));
+      const generatedOrderNumber = assertRpcResult<string>(data, 'generate_order_number');
+      // Preserve anything the user typed while the asynchronous prefill was loading.
+      setNewOrderNumber((current) => current.trim() ? current : generatedOrderNumber);
     } catch (err: unknown) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'generate_order_number' } });
       toast('warning', 'Could not prefill an order number. Enter one to continue.');

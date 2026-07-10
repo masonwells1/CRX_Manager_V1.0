@@ -1647,8 +1647,8 @@ export default function JobDetail() {
   // roles never depend on it, and the RPC stays authoritative for the stricter
   // rules either way).
   useEffect(() => {
+    setHasActiveDispatch(false);
     if (isNew || !id || !profile?.id || role !== 'applicator') {
-      setHasActiveDispatch(false);
       return;
     }
     let cancelled = false;
@@ -2115,7 +2115,11 @@ export default function JobDetail() {
       const newAssigneeIsApplicator = applicators.some((p) => p.id === applicatorId && p.role === 'applicator');
       // Mirrors the trigger's role='applicator' + active guard; the picker is active-only, so we never notify about a displacement that didn't happen.
       const isWholeJobApplicatorReassign = !isNew && !!applicatorId && applicatorId !== savedApplicatorId && newAssigneeIsApplicator;
+      const newApplicatorId = applicatorId || null;
+      const custNameForNotify = customers.find((c) => c.id === customerId)?.farm_name || 'Unknown';
       let displacedApplicatorIds: string[] = [];
+      // This pre-save snapshot is not atomic with save; concurrent dispatch edits or a retry-after-commit can mis-target advisory notifications.
+      // That best-effort window is accepted because notifications are advisory and the server data remains correct.
       if (isWholeJobApplicatorReassign) {
         try {
           const dispRes = await supabase
@@ -2135,6 +2139,22 @@ export default function JobDetail() {
         }
       }
 
+      let displacementCommitted = false;
+      // A2: fire as soon as a displacement commits so no later fallible sub-step or
+      // early return can silently drop the split-assignee un-dispatch notices.
+      const notifyDisplacedApplicators = (savedJobId: string) => {
+        if (!isWholeJobApplicatorReassign || !displacementCommitted) return;
+        const notified = new Set<string>();
+        if (newApplicatorId) notified.add(newApplicatorId);
+        if (savedApplicatorId) notified.add(savedApplicatorId);
+        if (profile?.id) notified.add(profile.id);
+        for (const idToNotify of displacedApplicatorIds) {
+          if (notified.has(idToNotify)) continue;
+          notified.add(idToNotify);
+          void notifyApplicatorUndispatched(idToNotify, jobNumber || '', custNameForNotify, savedJobId);
+        }
+      };
+
       const idemKey = saveJobIdem.getKey();
       const { data, error } = await supabase.rpc('save_job', {
         p_job_id: (isNew ? null : id) as string,
@@ -2146,8 +2166,13 @@ export default function JobDetail() {
       });
 
       if (error) throw error;
+      if (isWholeJobApplicatorReassign && !licenseOverride) {
+        displacementCommitted = true;
+        notifyDisplacedApplicators(id as string);
+      }
       saveJobIdem.resetKey();
       const result = assertRpcResult<SaveJobResult>(data, 'save_job');
+      const savedJobIdForNotify = isNew ? result.job_id : (id as string);
 
       // Field-app parity #6 + #10: persist the ground crew AND the loader-worksheet
       // inputs (carrier rate + per-job tank-capacity override) via a direct
@@ -2209,6 +2234,10 @@ export default function JobDetail() {
       if (shouldReassignApplicatorAfterSave({ licenseOverride, applicatorId, savedApplicatorId })) {
         try {
           await assignWithOverride(isNew ? result.job_id : id!);
+          if (isWholeJobApplicatorReassign) {
+            displacementCommitted = true;
+            notifyDisplacedApplicators(savedJobIdForNotify);
+          }
         } catch (assignErr) {
           Sentry.captureException(assignErr instanceof Error ? assignErr : new Error(String(assignErr)), { extra: { context: 'assign_job_applicator_after_save' } });
           toast('error', isNew
@@ -2245,9 +2274,6 @@ export default function JobDetail() {
       // Applicators previously got NO notification at all for any of these three
       // (verified: no notify*/createNotification call existed around this save
       // path before U12).
-      const savedJobIdForNotify = isNew ? result.job_id : (id as string);
-      const newApplicatorId = applicatorId || null;
-      const custNameForNotify = customers.find((c) => c.id === customerId)?.farm_name || 'Unknown';
       if (newApplicatorId && newApplicatorId !== savedApplicatorId) {
         void notifyApplicatorDispatched(newApplicatorId, jobNumber || '', custNameForNotify, jobDate, savedJobIdForNotify);
       } else if (newApplicatorId && newApplicatorId === savedApplicatorId && jobDate !== savedJobDate) {
@@ -2255,19 +2281,6 @@ export default function JobDetail() {
       }
       if (savedApplicatorId && savedApplicatorId !== newApplicatorId) {
         void notifyApplicatorUndispatched(savedApplicatorId, jobNumber || '', custNameForNotify, savedJobIdForNotify);
-      }
-
-      // A2: the applicator-change trigger overwrites ALL per-location dispatch rows to the new applicator, displacing split assignees — notify them they're off the job (the whole-job old/new assignees are covered by the branches above). Crew-only displaced rows are out of scope (no per-member notification identity).
-      if (isWholeJobApplicatorReassign) {
-        const notified = new Set<string>();
-        if (newApplicatorId) notified.add(newApplicatorId);
-        if (savedApplicatorId) notified.add(savedApplicatorId);
-        if (profile?.id) notified.add(profile.id);
-        for (const idToNotify of displacedApplicatorIds) {
-          if (notified.has(idToNotify)) continue;
-          notified.add(idToNotify);
-          void notifyApplicatorUndispatched(idToNotify, jobNumber || '', custNameForNotify, savedJobIdForNotify);
-        }
       }
 
       // U12 Codex R5 #1: a reschedule must ALSO reach the active PER-LOCATION

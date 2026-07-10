@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import SearchableSelect from './SearchableSelect';
 
 const options = [
@@ -54,27 +54,43 @@ describe('SearchableSelect', () => {
   });
 
   it('commits a clear when a selected field is emptied and blurred', () => {
-    vi.useFakeTimers();
     const onChange = vi.fn();
     render(<SearchableSelect options={options} value="north" onChange={onChange} label="Customer" />);
     const input = screen.getByRole('combobox', { name: 'Customer' });
 
     fireEvent.change(input, { target: { value: '' } });
     fireEvent.blur(input);
-    act(() => vi.advanceTimersByTime(150));
+
+    expect(onChange).toHaveBeenCalledWith('');
+  });
+
+  it('commits a clear synchronously after selecting an option and blurring empty text', () => {
+    const onChange = vi.fn();
+    const { rerender } = render(
+      <SearchableSelect options={options} value="" onChange={onChange} label="Customer" />
+    );
+    const input = screen.getByRole('combobox', { name: 'Customer' });
+
+    fireEvent.focus(input);
+    const option = screen.getByRole('option', { name: /north farm/i });
+    fireEvent.mouseDown(option);
+    fireEvent.click(option);
+    rerender(<SearchableSelect options={options} value="north" onChange={onChange} label="Customer" />);
+    onChange.mockClear();
+
+    fireEvent.change(input, { target: { value: '' } });
+    fireEvent.blur(input);
 
     expect(onChange).toHaveBeenCalledWith('');
   });
 
   it('restores the selected label when a partial query is blurred', () => {
-    vi.useFakeTimers();
     const onChange = vi.fn();
     render(<SearchableSelect options={options} value="north" onChange={onChange} label="Customer" />);
     const input = screen.getByRole('combobox', { name: 'Customer' });
 
     fireEvent.change(input, { target: { value: 'North' } });
     fireEvent.blur(input);
-    act(() => vi.advanceTimersByTime(150));
 
     expect(input).toHaveValue('North Farm');
     expect(onChange).not.toHaveBeenCalled();
