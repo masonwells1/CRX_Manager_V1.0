@@ -44,7 +44,7 @@ import { catalogPricePerAcre } from '../lib/quoteCalc';
 import { notifyLargeOrder, notifyCreditLimitExceeded } from '../lib/notificationTriggers';
 import { sendOrderConfirmedEmail } from '../lib/orderConfirmedEmail';
 import { trackBusinessEvent } from '../lib/metrics';
-import { localDatePlusDays, localToday } from '../lib/dateUtils';
+import { localDatePlusDays, localToday, parseLocalDate } from '../lib/dateUtils';
 import { downloadQuotePdf, generateQuotePdf } from '../lib/quotePdf';
 import { sendEmail, pdfToBase64, buildEmailHtml } from '../lib/emailService';
 import { checkRUPCompliance } from '../lib/rupCompliance';
@@ -2991,11 +2991,11 @@ export default function QuoteBuilder() {
                               return earliest == null || hold.expires_at < earliest ? hold.expires_at : earliest;
                             }, null);
                             const unit = products.find((product) => product.id === productId)?.inventory_unit;
-                            const isLapsed = earliestExpiry != null && earliestExpiry.slice(0, 10) < localToday();
+                            const isLapsed = earliestExpiry != null && earliestExpiry.slice(0, 10) <= localToday();
                             return (
                               <span key={productId}>
                                 Held: {heldQuantity}{unit ? ` ${unit}` : ''} &middot; {earliestExpiry ? (
-                                  <>expires <span className={isLapsed ? 'text-red-600 font-medium' : undefined}>{new Date(earliestExpiry).toLocaleDateString()}{isLapsed ? ' (lapsed)' : ''}</span></>
+                                  <>expires <span className={isLapsed ? 'text-red-600 font-medium' : undefined}>{parseLocalDate(earliestExpiry.slice(0, 10)).toLocaleDateString()}{isLapsed ? ' (lapsed)' : ''}</span></>
                                 ) : 'no expiry (no needed-by date)'}
                               </span>
                             );

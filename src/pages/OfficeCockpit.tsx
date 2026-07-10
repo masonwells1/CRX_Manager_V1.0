@@ -137,6 +137,7 @@ interface ShortfallRow {
 }
 
 interface PlannedBookingAttentionRow {
+  hold_id?: string;
   quote_id: string;
   quote_number: string;
   product_id: string;
@@ -259,6 +260,7 @@ type ExpiringPlannedHoldRpcRow = {
 };
 
 type RawLapsedPlannedHold = {
+  id: string;
   product_id: string;
   quantity: number;
   expires_at: string;
@@ -502,7 +504,7 @@ export default function OfficeCockpit() {
       // expiring-holds RPC, so query them separately.
       supabase
         .from('inventory_holds')
-        .select('product_id, quantity, expires_at, source_id')
+        .select('id, product_id, quantity, expires_at, source_id')
         .eq('hold_type', 'crop_program')
         .eq('is_active', true)
         // Include today to close the live RPC's strict `expires_at > CURRENT_DATE` gap; it is unchangeable here.
@@ -719,6 +721,7 @@ export default function OfficeCockpit() {
         ...rawLapsedPlannedHolds
           .filter((hold): hold is RawLapsedPlannedHold & { source_id: string } => hold.source_id != null)
           .map((hold) => ({
+            hold_id: hold.id,
             quote_id: hold.source_id,
             quote_number: lapsedQuoteNumbers.get(hold.source_id) ?? 'Unknown',
             product_id: hold.product_id,
@@ -728,6 +731,7 @@ export default function OfficeCockpit() {
             attention: 'lapsed' as const,
           })),
         ...expiringPlannedHolds.map((hold) => ({
+          hold_id: hold.hold_id,
           quote_id: hold.quote_id,
           quote_number: hold.quote_number,
           product_id: hold.product_id,
@@ -1070,9 +1074,9 @@ export default function OfficeCockpit() {
             <AllClear label="No planned bookings have lapsed or are expiring soon." />
           ) : (
             <div className="divide-y divide-gray-100">
-              {data.plannedBookingAttention.slice(0, 6).map((row) => (
+              {data.plannedBookingAttention.slice(0, 6).map((row, index) => (
                 <button
-                  key={`${row.quote_id}-${row.product_id}-${row.expires_at}`}
+                  key={row.hold_id ?? `${row.quote_id}-${row.product_id}-${row.expires_at}-${index}`}
                   onClick={() => navigate(`/quotes/${row.quote_id}`)}
                   className="w-full py-2 text-sm hover:bg-gray-50 rounded transition-colors text-left"
                 >
