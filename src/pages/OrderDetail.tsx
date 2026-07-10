@@ -115,8 +115,6 @@ export default function OrderDetail() {
   const [invoiceWarnOpen, setInvoiceWarnOpen] = useState(false);
 
   // Status change
-  const [statusModalOpen, setStatusModalOpen] = useState(false);
-  const [newStatus, setNewStatus] = useState('');
   const [changingStatus, setChangingStatus] = useState(false);
   const [statusConfirmOpen, setStatusConfirmOpen] = useState(false);
   const [pendingStatus, setPendingStatus] = useState<string>('');
@@ -549,12 +547,6 @@ export default function OrderDetail() {
     setTogglingPlanned(false);
   };
 
-  const handleStatusChange = () => {
-    if (!newStatus || !order || !profile) return;
-    setPendingStatus(newStatus);
-    setStatusConfirmOpen(true);
-  };
-
   const executeStatusChange = async () => {
     if (!pendingStatus || !order || !profile) return;
     setStatusConfirmOpen(false);
@@ -593,7 +585,6 @@ export default function OrderDetail() {
           const allowed = validTransitions[order.status] || [];
           if (!allowed.includes(targetStatus)) {
             toast('error', `Cannot change status from '${order.status}' to '${targetStatus}'`);
-            setStatusModalOpen(false);
             return;
           }
           const statusResult = await supabase
@@ -617,7 +608,6 @@ export default function OrderDetail() {
         // Orders are born at status='confirmed', so there is no transition
         // INTO confirmed to gate on. Wave A.2 / audit finding P1-7.
 
-        setStatusModalOpen(false);
         fetchOrder();
       },
       toast,
@@ -1283,12 +1273,16 @@ export default function OrderDetail() {
             </p>
           </div>
           <div className="flex items-center gap-3">
-            {isAdmin && order.status !== 'voided' && order.status !== 'cancelled' && (
+            {/* #67: the only manual order-status transition the handler allows is
+                → cancelled; fulfilled/partially_fulfilled are auto-derived when
+                deliveries complete. So this is a plain Cancel Order action, not a
+                dropdown of choices that always fail. */}
+            {isAdmin && (order.status === 'confirmed' || order.status === 'partially_fulfilled') && (
               <button
-                onClick={() => { cancelOrderIdem.resetKey(); setNewStatus(order.status); setStatusModalOpen(true); }}
-                className="text-xs text-secondary hover:text-crx-green underline"
+                onClick={() => { cancelOrderIdem.resetKey(); setPendingStatus('cancelled'); setStatusConfirmOpen(true); }}
+                className="text-xs text-red-500 hover:text-red-700 underline"
               >
-                Change Status
+                Cancel Order
               </button>
             )}
             {isAdmin && order.status === 'fulfilled' && (
@@ -1934,28 +1928,6 @@ export default function OrderDetail() {
         </Card>
       )}
 
-      {/* Status Change Modal */}
-      <Modal open={statusModalOpen} onClose={() => setStatusModalOpen(false)} title="Change Order Status">
-        <div className="space-y-4">
-          <select
-            value={newStatus}
-            onChange={(e) => setNewStatus(e.target.value)}
-            className="w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
-          >
-            <option value={order?.status}>{(order?.status || '').replace('_', ' ')}</option>
-            {(({ confirmed: ['partially_fulfilled', 'fulfilled', 'cancelled'], partially_fulfilled: ['fulfilled', 'cancelled'] } as Record<string, string[]>)[order?.status || ''] || [])
-              .filter(s => s !== 'cancelled' || isAdmin)
-              .map(s => (
-              <option key={s} value={s}>{s.replace('_', ' ')}</option>
-            ))}
-          </select>
-          <div className="flex justify-end gap-3">
-            <Button variant="ghost" onClick={() => setStatusModalOpen(false)}>Cancel</Button>
-            <Button onClick={handleStatusChange} loading={changingStatus} disabled={changingStatus}>Update Status</Button>
-          </div>
-        </div>
-      </Modal>
-
       {/* Void Order Modal */}
       <Modal open={voidModalOpen} onClose={() => { setVoidModalOpen(false); setVoidReason(''); }} title="Void Order">
         <div className="space-y-4">
@@ -2085,10 +2057,10 @@ export default function OrderDetail() {
         open={statusConfirmOpen}
         onClose={() => setStatusConfirmOpen(false)}
         onConfirm={executeStatusChange}
-        title="Change Order Status"
-        message={`Change order status to ${pendingStatus.replace('_', ' ')}?`}
+        title="Cancel Order"
+        message="Cancel this order? Inventory holds will be released, any draft invoices voided, and pending commissions zeroed. Posted invoices or paid commissions are flagged for manual review. This cannot be undone."
         variant="warning"
-        confirmLabel="Change Status"
+        confirmLabel="Cancel Order"
         loading={changingStatus}
       />
 

@@ -295,7 +295,10 @@ export default function JobDetail() {
   // Job form
   const [jobNumber, setJobNumber] = useState('');
   const [status, setStatus] = useState<JobStatus>('scheduled');
-  const [customerId, setCustomerId] = useState('');
+  // #23: pre-fill the customer when arriving from a customer page
+  // (/jobs/new?customer_id=…). Only for a NEW job; existing jobs load their own
+  // customer in fetchJob. A stale/bogus id simply renders as no selection.
+  const [customerId, setCustomerId] = useState(() => (isNew ? (searchParams.get('customer_id') ?? '') : ''));
   const [jobDate, setJobDate] = useState(localToday());
   const [scheduledTime, setScheduledTime] = useState('');
   const [applicatorId, setApplicatorId] = useState('');
@@ -2374,6 +2377,22 @@ export default function JobDetail() {
   const handleComplete = async () => {
     setCompleting(true);
     try {
+      // #68: after-the-fact completion — the office is recording a job that was
+      // already sprayed. complete_job requires status 'in_progress', so if the job
+      // is still 'scheduled' start it first (chained) to skip the click-wait-click
+      // Start→Complete dance. Timing is approximate; a start/end-time field on the
+      // modal is the nicer follow-up the review noted.
+      if (status === 'scheduled') {
+        const startKey = startJobIdem.getKey();
+        const { data: startData, error: startErr } = await supabase.rpc('start_job', {
+          p_job_id: id!,
+          p_performed_by: profile!.id,
+          p_idempotency_key: startKey,
+        });
+        if (startErr) throw startErr;
+        assertRpcResult(startData, 'start_job');
+        startJobIdem.resetKey();
+      }
       const idemKey = completeJobIdem.getKey();
       const { data, error } = await supabase.rpc('complete_job', {
         p_job_id: id!,
@@ -2849,7 +2868,11 @@ export default function JobDetail() {
   // unification migration's server-side authorization. Cancel/Transfer stay
   // office-only (isEditable) — deliberately NOT widened.
   const canStart = !isNew && status === 'scheduled' && (isEditable || isAssignedApplicator || hasActiveDispatch);
-  const canComplete = !isNew && status === 'in_progress' && (isEditable || isAssignedApplicator || hasActiveDispatch);
+  // #68: also allow completing a still-'scheduled' job (sprayed earlier, keyed in
+  // now). handleComplete chains start_job → complete_job so the office skips the
+  // fake Start-then-Complete click. Start Job also stays available for the
+  // start-now-spray-later flow.
+  const canComplete = !isNew && (status === 'in_progress' || status === 'scheduled') && (isEditable || isAssignedApplicator || hasActiveDispatch);
   // Cancel/Transfer are OFFICE decisions (cancelling work or converting it to a
   // billable invoice) — not verified-safe to hand an applicator: Cancel had NO
   // role gate at all before U12 (any of admin/sales_rep/applicator viewing this
@@ -3978,6 +4001,12 @@ export default function JobDetail() {
           <p className="text-sm text-secondary">
             Record weather conditions and actual application data. This will create an application record and deduct inventory.
           </p>
+          {status === 'scheduled' && (
+            <div className="flex items-start gap-2 p-2.5 rounded-lg bg-blue-50 text-xs text-blue-800">
+              <Check className="w-4 h-4 flex-shrink-0 mt-0.5" />
+              <span>This job hasn&apos;t been started yet &mdash; completing it will mark it started and finished in one step (for a job sprayed earlier and recorded now).</span>
+            </div>
+          )}
           {jobFieldCentroid && (
             <Button variant="ghost" size="sm" onClick={handleFetchWeather} loading={fetchingWeather}>
               <CloudSun className="w-4 h-4" />

@@ -4,6 +4,16 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-10 — Business-workflow review: 3 daily-use screen fixes (#67 / #23 / #68) — frontend-only, deployed to `main`
+
+Cleared three confirmed UX traps from the 2026-07 business-workflow review (the review is now ~90% shipped — both big UI redesigns are already live; this closes the small residual frontend set). All pure-frontend: no DB, no money math, no RLS, no migration, no edge function. Built in worktree `C:\CRX_WorkflowUX`.
+
+- **#67 — Order "Change Status" trap (medium):** the admin dropdown offered `partially_fulfilled` / `fulfilled`, but the handler only ever allows `→ cancelled` (fulfillment is auto-derived when deliveries complete), so those options always errored "Cannot change status". Replaced the dead-option dropdown with one honest **Cancel Order** action — shown only on `confirmed` / `partially_fulfilled`, routing straight to the existing cancel confirmation → unchanged `cancel_order` RPC (no change to what cancel does). Removed the now-dead modal + orphaned state/handler; added a render test asserting Cancel Order shows and Change Status is gone. `OrderDetail.tsx`.
+- **#23 — Job-from-customer prefill (low):** CustomerDetail had New Quote / Order / Delivery but no New Job, and `/jobs/new` ignored a customer. Added a **New Job** button on CustomerDetail (`/jobs/new?customer_id=…`) and made JobDetail pre-fill the customer for a new job (which also pre-filters the field picker). `CustomerDetail.tsx`, `JobDetail.tsx`.
+- **#68 — Fake "Start Job" click (medium):** completing a job keyed in after the fact forced Start → wait → Complete (`complete_job` requires `in_progress`). Now Complete is available on a `scheduled` job and `handleComplete` chains `start_job → complete_job` in one action (with an in-modal note). Timing stays approximate — a start/end-time field on the modal is the noted follow-up. `JobDetail.tsx`.
+
+Proof: typecheck + lint + build + tests all green (OrderDetail suite incl. the new #67 render assertion; all-pages render smoke mounts all three pages with the changes). Verification boundary: the fully-authed click-through — and the destructive Cancel Order / Complete Job actions — was NOT exercised against live data (no test login; those actions mutate real records) and is Mason's to eyeball on the live site.
+
 ## 2026-07-10 — EPA label-data lookup (Stage 1) SHIPPED LIVE: per-product "Look up EPA" button + a catalog data-quality report that surfaced a large wrong-registration-number problem (main @`49f81ab4`, Vercel READY)
 
 Built the ChemMan-style "look a product up against EPA's public database and auto-fill its label data" capability, to attack the dormant product-label backfill (0/595 active products had signal_word/rei/phi). Heavy-Codex / lean-Claude loop in worktree `C:\CRX_EPA` (Codex built + self-reviewed all code; Claude/Sonnet gated). **Reuses the already-live-but-never-used label-draft review→commit pipeline** (`product_label_drafts` + `create/commit_label_draft` + `LabelReview`) rather than building a new one — proven live with a rolled-back create→commit smoke.
