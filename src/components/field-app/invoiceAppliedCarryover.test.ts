@@ -33,6 +33,8 @@ function baseRecord(overrides: Partial<JobAppliedRecordRow> = {}): JobAppliedRec
     end_tach: 1207.0,
     net_tach: 6.5,
     created_by: 'app-1',
+    idempotency_key: null,
+    idempotency_request_hash: null,
     created_at: '2026-06-20T12:00:00Z',
     updated_at: '2026-06-20T12:00:00Z',
     vehicle: { vehicle_name: 'Sprayer A', vehicle_type: 'sprayer' },

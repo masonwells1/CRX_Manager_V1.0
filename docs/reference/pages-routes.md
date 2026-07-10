@@ -1,4 +1,4 @@
-# Pages & Routes Reference (80 pages, 82 routes)
+# Pages & Routes Reference (82 pages, 82 routes)
 
 | Route | Page | Description |
 |-------|------|-------------|

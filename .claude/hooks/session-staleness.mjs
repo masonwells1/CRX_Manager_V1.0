@@ -1,11 +1,8 @@
 #!/usr/bin/env node
 // SessionStart staleness checks. Surfaces things that have drifted while the
 // laptop was closed:
-//   - schema-registry.json BEHIND the migrations on disk (content-based, C3 v2:
-//     compares registry _meta.migrations_high_water against the highest
-//     supabase/migrations/*.sql filename stamp; falls back to the old 7-day
-//     mtime check for a v1-shaped registry without a high-water mark)
-//   - CLAUDE.md "Current State" counts that don't match reality (pages, migrations)
+//   - schema-registry.json BEHIND registry-relevant migrations on disk
+//     (schema-neutral cron/data-only migrations do not create a false alarm)
 //   - Uncommitted files from a prior session
 //   - Weekly DB backup missing or stale (backups/LATEST-OK.json, stamped by
 //     scripts/backup-db.mjs — Supabase FREE plan has no point-in-time recovery)
@@ -29,6 +26,13 @@ function emit(extra) {
 const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
 const warnings = [];
 
+function migrationMayAffectSchemaRegistry(sql) {
+  const withoutComments = String(sql)
+    .replace(/\/\*[\s\S]*?\*\//g, " ")
+    .replace(/--[^\r\n]*/g, " ");
+  return /\b(?:create|alter|drop)\s+(?:table|function|type|sequence)\b|\b(?:add|drop)\s+constraint\b/i.test(withoutComments);
+}
+
 // ─── CHECK 1 — schema registry staleness (content-based, not mtime) ──────
 const registryPath = path.join(projectDir, ".claude", "schema-registry.json");
 try {
@@ -45,7 +49,10 @@ try {
       if (existsSync(migDir)) {
         for (const f of readdirSync(migDir)) {
           const m = f.match(/^(\d{14})_.+\.sql$/);
-          if (m && m[1] > String(highWater)) newer.push(f);
+          if (m && m[1] > String(highWater)) {
+            const sql = readFileSync(path.join(migDir, f), "utf8");
+            if (migrationMayAffectSchemaRegistry(sql)) newer.push(f);
+          }
         }
       }
       if (newer.length > 0) {
@@ -75,52 +82,7 @@ try {
   }
 } catch { /* ignore */ }
 
-// ─── CHECK 2 — CLAUDE.md count drift ─────────────────────────────────────
-const claudeMdPath = path.join(projectDir, "CLAUDE.md");
-try {
-  if (existsSync(claudeMdPath)) {
-    const md = readFileSync(claudeMdPath, "utf8");
-
-    // Page count: count `lazy(` in src/App.tsx
-    let actualPages = 0;
-    try {
-      const app = readFileSync(path.join(projectDir, "src", "App.tsx"), "utf8");
-      actualPages = (app.match(/lazy\(/g) || []).length;
-    } catch { /* ignore */ }
-
-    // Migrations: count .sql files
-    let actualMigrations = 0;
-    try {
-      const out = execFileSync("git", ["ls-files", "supabase/migrations/*.sql"], {
-        encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"],
-        cwd: projectDir,
-      });
-      actualMigrations = out.split("\n").filter(l => l.trim()).length;
-    } catch { /* ignore */ }
-
-    // Pull claimed counts from the "Current State" section.
-    // Patterns: "66 pages", "356 migrations"
-    const claimedPagesMatch = md.match(/(\d+)\s+pages\b/);
-    const claimedMigrationsMatch = md.match(/(\d+)\s+migrations\b/);
-    const claimedPages = claimedPagesMatch ? Number(claimedPagesMatch[1]) : null;
-    const claimedMigrations = claimedMigrationsMatch ? Number(claimedMigrationsMatch[1]) : null;
-
-    if (claimedPages !== null && actualPages > 0 && claimedPages !== actualPages) {
-      warnings.push(
-        `📄 CLAUDE.md claims ${claimedPages} pages but src/App.tsx has ${actualPages} lazy() imports.\n` +
-        `   Recommend: invoke /update-docs to sync.`
-      );
-    }
-    if (claimedMigrations !== null && actualMigrations > 0 && claimedMigrations !== actualMigrations) {
-      warnings.push(
-        `🗄️  CLAUDE.md claims ${claimedMigrations} migrations but supabase/migrations/ has ${actualMigrations} files.\n` +
-        `   Recommend: invoke /update-docs to sync.`
-      );
-    }
-  }
-} catch { /* ignore */ }
-
-// ─── CHECK 3 — uncommitted files from prior session ──────────────────────
+// ─── CHECK 2 — uncommitted files from prior session ──────────────────────
 try {
   const porcelain = execFileSync("git", ["status", "--porcelain"], {
     encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"],

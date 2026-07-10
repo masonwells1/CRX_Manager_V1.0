@@ -97,7 +97,7 @@ Use this structure:
 **Requested by:** Mason (CRX Manager)
 **Author:** Codex
 **Intended reviewer:** Claude
-**Repo:** C:\CRX_Manager
+**Repo:** <active repository root from `git rev-parse --show-toplevel`>
 
 ## What I Need Claude To Do
 
@@ -159,7 +159,7 @@ Print only:
 
 Use this exact next step:
 
-`Open Claude in C:\CRX_Manager and say: "Read <handoff-path> and follow it."`
+`Open Claude in the same active repository/worktree and say: "Read <handoff-path> and follow it."`
 
 ## Step 5 - When Claude Responds
 

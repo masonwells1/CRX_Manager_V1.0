@@ -15,7 +15,7 @@ Use this when Mason asks anything like: "what's parked", "anything waiting on me
 3. **If Mason asks to APPLY one — never apply it directly from here.** Route into the existing gated flow, in order:
    1. `/explain-migration <file>` — plain-English explanation of exactly what the SQL will do to the live database, what could go wrong, and what rollback looks like.
    2. `/migration-review <file>` — the deep parallel review (RLS + drift + types with adversarial verification); only a clean verdict stamps the proof file the `migration-apply-guard` hook requires.
-   3. **Mason's explicit OK** — a live migration is one of the three hard-gated actions (live migration / edge-function deploy / data deletion). Auto-push authorization does NOT cover it. Only after his clear yes does `apply_migration` run, followed by the standard post-apply verification (smoke the change against live, `list_migrations`, update docs).
+   3. **Mason's explicit OK** — a live migration is a hard-gated action. Approval for a push, deploy, or another migration does not cover it. Only after his clear yes in the current conversation does `apply_migration` run, followed by the standard post-apply verification (smoke the change against live, `list_migrations`, update docs).
 
    The human gate stays. If any step fails or the review comes back blocked, stop and tell Mason what was found and what you recommend instead.
 

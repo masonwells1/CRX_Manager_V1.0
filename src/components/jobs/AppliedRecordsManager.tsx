@@ -22,6 +22,7 @@ import Modal from '../ui/Modal';
 import ConfirmModal from '../ui/ConfirmModal';
 import { useToast } from '../ui/Toast';
 import { supabase, checkMutationResult, assertRpcResult } from '../../lib/db';
+import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
 import { logActivity } from '../../lib/activityLogger';
 import { fetchWeatherForDateTime } from '../../lib/weatherCapture';
 import GroundCrewsManager from './GroundCrewsManager';
@@ -113,6 +114,11 @@ export default function AppliedRecordsManager({
   const [records, setRecords] = useState<JobAppliedRecordRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  // Insert-once guard for the CREATE path: getKey() returns a stable key that
+  // survives a retry (network timeout in the field) so the server dedups instead
+  // of creating a duplicate applied-record. resetKey() only after a confirmed
+  // create success, so the next new entry is a distinct action.
+  const { getKey, resetKey } = useIdempotencyKey('save_job_applied_record', performedBy ?? '');
 
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -217,6 +223,12 @@ export default function AppliedRecordsManager({
   function openAdd() {
     setEditingId(null);
     setDraft(emptyAppliedRecordDraft());
+    // Fresh dedup token per new-record INTENT. Without this, a create whose
+    // response was lost (field timeout) leaves the key set; cancelling and adding
+    // a DIFFERENT pass would reuse it and the server would replay the first record
+    // instead of saving the new one (silent data loss). A same-modal retry still
+    // reuses the key (getKey is stable until reset), so double-submit stays deduped.
+    resetKey();
     setModalOpen(true);
   }
 
@@ -276,14 +288,21 @@ export default function AppliedRecordsManager({
     if (catalogUnavailable) {
       toast('error', 'Ground-crew catalog unavailable — crew left unchanged for this entry.');
     }
+    // Insert-once only matters for a NEW record; an edit targets an existing id and
+    // is a pure re-upsert (naturally idempotent), so no key is sent on edit.
+    const isCreate = !editingId;
     try {
       const { data, error } = await supabase.rpc('save_job_applied_record', {
         p_record: { ...patch, id: editingId ?? '', job_id: jobId, created_by: performedBy } as unknown as Json,
         p_fields: fieldRows as unknown as Json,
         p_crew: (catalogUnavailable ? null : crewRows) as unknown as Json,
+        p_idempotency_key: isCreate ? getKey() : null,
       });
       if (error) throw error;
       assertRpcResult<{ record_id: string }>(data, 'save_job_applied_record');
+      // Only clear the key after a confirmed create success — on error the SAME key
+      // is kept so a retry replays and the server dedups instead of duplicating.
+      if (isCreate) resetKey();
 
       if (performedBy) {
         logActivity({
@@ -297,8 +316,22 @@ export default function AppliedRecordsManager({
       setModalOpen(false);
       await load();
       toast('success', editingId ? 'Applied-info entry updated.' : 'Applied-info entry added.');
-    } catch {
-      toast('error', 'Could not save the applied-info entry.');
+    } catch (err) {
+      // Payload-conflict replay (server RAISEs APPLIED_RECORD_ALREADY_SAVED_DIFFERENT):
+      // the first create actually committed but its response was lost, and a value was
+      // edited before this retry. The server refuses to overwrite the saved record with
+      // the changed retry rather than silently drop the correction. Reset the create key,
+      // reload so the saved record appears, and tell the user to reopen/edit it — never
+      // report a bare failure that would hide the already-saved (differing) record.
+      const msg = err instanceof Error ? err.message : String((err as { message?: string })?.message ?? '');
+      if (msg.includes('APPLIED_RECORD_ALREADY_SAVED_DIFFERENT')) {
+        if (isCreate) resetKey();
+        setModalOpen(false);
+        await load();
+        toast('error', 'This entry was already saved with different values — reloaded it. Reopen the entry to review or edit.');
+      } else {
+        toast('error', 'Could not save the applied-info entry.');
+      }
     } finally {
       setSaving(false);
     }
