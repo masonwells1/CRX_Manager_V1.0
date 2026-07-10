@@ -9922,6 +9922,7 @@ export type Database = {
         Args: {
           p_crew?: Json
           p_fields: Json
+          p_idempotency_key?: string | null
           p_record: Json
         }
         Returns: Json

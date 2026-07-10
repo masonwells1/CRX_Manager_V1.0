@@ -6,7 +6,7 @@
     "regenerate_with": "node scripts/regenerate-schema-registry.mjs --from-introspection <queries.json> (queries documented in the script header)",
     "purpose": "Single source of truth for hooks: generated columns, status enums, ALL parseable CHECK IN-lists, NOT NULL columns, full column lists, sequences, tables-with/without updated_at, applied-migration high water.",
     "note": "For a fresh refresh from the live DB, ask Claude Code: 'regenerate the schema-registry from Supabase' (/regen-schema-registry). skipped_constraints lists every CHECK the hooks can NOT validate — review it when touching those tables.",
-    "migrations_high_water": "20260710010846"
+    "migrations_high_water": "20260710165446"
   },
   "generated_columns": [
     {
@@ -3846,7 +3846,8 @@
       "end_weather_source",
       "beginning_tach",
       "end_tach",
-      "net_tach"
+      "net_tach",
+      "idempotency_key"
     ],
     "job_attachments": [
       "id",

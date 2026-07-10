@@ -2381,6 +2381,11 @@ export interface JobAppliedRecord {
   end_tach: number | null;
   net_tach: number | null;
   created_by: string | null;
+  // Insert-once dedup token for the CREATE path (save_job_applied_record). Set only
+  // on a new record; a retried create replays the same key and a partial UNIQUE index
+  // collapses it to the first row (no duplicate applied-record). NULL on legacy rows
+  // and never set on edit. Not surfaced in the UI.
+  idempotency_key: string | null;
   created_at: string;
   updated_at: string;
 }
