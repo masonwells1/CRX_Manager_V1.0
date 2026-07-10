@@ -560,6 +560,7 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
                         }}
                         className="p-1 rounded text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors"
                         title="Remove this PO"
+                        aria-label="Remove this PO"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
@@ -739,6 +740,7 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
                                       <button
                                         onClick={() => removeItem(poIdx, itemIdx)}
                                         className="p-1 rounded text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors"
+                                        aria-label="Remove item"
                                       >
                                         <Trash2 className="w-3 h-3" />
                                       </button>

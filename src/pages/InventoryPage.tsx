@@ -882,6 +882,7 @@ export default function InventoryPage() {
                   onClick={(e) => { e.stopPropagation(); openReceiveModal(row.id); }}
                   className="p-1.5 rounded hover:bg-gray-100 text-secondary"
                   title="Receive Shipment"
+                  aria-label="Receive Shipment"
                 >
                   <ArrowDownToLine className="w-4 h-4" />
                 </button>
@@ -889,6 +890,7 @@ export default function InventoryPage() {
                   onClick={(e) => { e.stopPropagation(); adjustIdem.resetKey(); setSelectedId(row.id); setAdjustOpen(true); }}
                   className="p-1.5 rounded hover:bg-gray-100 text-secondary"
                   title="Manual Adjustment"
+                  aria-label="Manual Adjustment"
                 >
                   <Pencil className="w-4 h-4" />
                 </button>
@@ -896,6 +898,7 @@ export default function InventoryPage() {
                   onClick={(e) => { e.stopPropagation(); handleDelete(row.id); }}
                   className="p-1.5 rounded hover:bg-red-50 text-red-600"
                   title="Delete Inventory Item"
+                  aria-label="Delete Inventory Item"
                 >
                   <Trash2 className="w-4 h-4" />
                 </button>

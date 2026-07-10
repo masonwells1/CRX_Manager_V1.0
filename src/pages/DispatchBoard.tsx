@@ -948,7 +948,7 @@ export default function DispatchBoard() {
           <div className="relative w-full max-w-sm h-full bg-slate-900 border-l border-slate-800 p-5 overflow-y-auto">
             <div className="flex items-center justify-between mb-5">
               <h2 className="text-base font-semibold flex items-center gap-2"><SlidersHorizontal className="w-5 h-5 text-crx-green" /> More Search Options</h2>
-              <button onClick={() => setMoreSearchOpen(false)} className="p-2 rounded-lg hover:bg-slate-800 text-slate-400"><X className="w-5 h-5" /></button>
+              <button aria-label="Close search options" onClick={() => setMoreSearchOpen(false)} className="p-2 rounded-lg hover:bg-slate-800 text-slate-400"><X className="w-5 h-5" /></button>
             </div>
             <div className="space-y-4">
               <label className="block">

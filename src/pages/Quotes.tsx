@@ -496,6 +496,7 @@ export default function Quotes() {
             onClick={(e) => handleDuplicate(row.id, e)}
             className="p-1.5 rounded-lg text-gray-400 hover:text-crx-green hover:bg-crx-green-light transition-colors"
             title="Duplicate this quote"
+            aria-label="Duplicate this quote"
           >
             <Copy className="w-4 h-4" />
           </button>

@@ -28,6 +28,7 @@ import {
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
+import SearchableSelect from '../components/ui/SearchableSelect';
 import Modal from '../components/ui/Modal';
 import ConfirmModal from '../components/ui/ConfirmModal';
 import UnsavedChangesModal from '../components/ui/UnsavedChangesModal';
@@ -2944,18 +2945,12 @@ export default function QuoteBuilder() {
             <label className="block text-sm font-medium text-secondary mb-1">
               Customer
             </label>
-            <select
+            <SearchableSelect
+              options={customers.map((c) => ({ value: c.id, label: c.farm_name }))}
               value={customerId}
-              onChange={(e) => handleCustomerChange(e.target.value)}
-              className="w-full px-3 py-2 text-sm text-nav-dark bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
-            >
-              <option value="">Select a customer...</option>
-              {customers.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.farm_name}
-                </option>
-              ))}
-            </select>
+              onChange={handleCustomerChange}
+              placeholder="Select a customer..."
+            />
           </div>
           <div>
             <label className="block text-sm font-medium text-secondary mb-1">
@@ -3026,6 +3021,7 @@ export default function QuoteBuilder() {
                   <button
                     onClick={() => toggleSectionCollapse(sec._key)}
                     className="p-1 rounded hover:bg-gray-100 text-secondary"
+                    aria-label={isCollapsed ? 'Expand section' : 'Collapse section'}
                   >
                     {isCollapsed ? (
                       <ChevronDown className="w-4 h-4" />
@@ -3139,6 +3135,7 @@ export default function QuoteBuilder() {
                     <button
                       onClick={() => removeSection(sec._key)}
                       className="p-1.5 rounded-lg text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors"
+                      aria-label="Remove section"
                     >
                       <Trash2 className="w-4 h-4" />
                     </button>
@@ -3449,6 +3446,7 @@ export default function QuoteBuilder() {
                               <button
                                 onClick={() => removeItem(sec._key, item._key)}
                                 className="p-1 rounded text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors"
+                                aria-label="Remove line item"
                               >
                                 <Trash2 className="w-3.5 h-3.5" />
                               </button>

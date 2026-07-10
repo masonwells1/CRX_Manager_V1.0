@@ -10,6 +10,7 @@ import { useAuth } from '../contexts/AuthContext';
 import Button from '../components/ui/Button';
 import Card from '../components/ui/Card';
 import Input from '../components/ui/Input';
+import SearchableSelect from '../components/ui/SearchableSelect';
 import Badge from '../components/ui/Badge';
 import Modal from '../components/ui/Modal';
 import Skeleton from '../components/ui/Skeleton';
@@ -878,18 +879,12 @@ export function BlendTicketDetail() {
               <label className="block text-sm font-medium text-gray-700 mb-1">
                 Customer
               </label>
-              <select
+              <SearchableSelect
+                options={customers.map((customer) => ({ value: customer.id, label: customer.farm_name }))}
                 value={formData.customer_id}
-                onChange={(e) => setFormData({ ...formData, customer_id: e.target.value })}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              >
-                <option value="">Select Customer</option>
-                {customers.map(customer => (
-                  <option key={customer.id} value={customer.id}>
-                    {customer.farm_name}
-                  </option>
-                ))}
-              </select>
+                onChange={(value) => setFormData({ ...formData, customer_id: value })}
+                placeholder="Select Customer"
+              />
             </div>
 
             <div>
@@ -1119,24 +1114,18 @@ export function BlendTicketDetail() {
                 <label className="block text-xs font-medium text-gray-700 mb-1">
                   Product
                 </label>
-                <select
+                <SearchableSelect
+                  options={allProducts.map((p) => ({ value: p.id, label: p.product_name }))}
                   value={product.product_id || ''}
-                  onChange={(e) => {
-                    updateProduct(index, 'product_id', e.target.value || null);
-                    const selectedProduct = allProducts.find(p => p.id === e.target.value);
+                  onChange={(value) => {
+                    updateProduct(index, 'product_id', value || null);
+                    const selectedProduct = allProducts.find(p => p.id === value);
                     if (selectedProduct) {
                       updateProduct(index, 'product_name', selectedProduct.product_name);
                     }
                   }}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                >
-                  <option value="">Select Product</option>
-                  {allProducts.map(p => (
-                    <option key={p.id} value={p.id}>
-                      {p.product_name}
-                    </option>
-                  ))}
-                </select>
+                  placeholder="Select Product"
+                />
               </div>
 
               <div className="col-span-4 md:col-span-1">
@@ -1285,23 +1274,19 @@ export function BlendTicketDetail() {
               <div key={idx} className="grid grid-cols-12 gap-3 items-end">
                 <div className="col-span-5">
                   <label className="block text-xs font-medium text-gray-600 mb-1">Field</label>
-                  <select
+                  <SearchableSelect
+                    options={availableFields
+                      .filter(f => !ticket.customer_id || f.customer_id === ticket.customer_id || f.customer_id === tf.customer_id)
+                      .map((f) => ({ value: f.id, label: f.field_name }))}
                     value={tf.field_id}
-                    onChange={(e) => {
+                    onChange={(value) => {
                       const updated = [...ticketFields];
-                      const selectedField = availableFields.find(f => f.id === e.target.value);
-                      updated[idx] = { ...updated[idx], field_id: e.target.value, field_name: selectedField?.field_name || '', customer_id: selectedField?.customer_id || tf.customer_id };
+                      const selectedField = availableFields.find(f => f.id === value);
+                      updated[idx] = { ...updated[idx], field_id: value, field_name: selectedField?.field_name || '', customer_id: selectedField?.customer_id || tf.customer_id };
                       setTicketFields(updated);
                     }}
-                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
-                  >
-                    <option value="">Select field...</option>
-                    {availableFields
-                      .filter(f => !ticket.customer_id || f.customer_id === ticket.customer_id || f.customer_id === tf.customer_id)
-                      .map(f => (
-                        <option key={f.id} value={f.id}>{f.field_name}</option>
-                      ))}
-                  </select>
+                    placeholder="Select field..."
+                  />
                 </div>
                 <div className="col-span-4">
                   <label className="block text-xs font-medium text-gray-600 mb-1">Planned Acres</label>

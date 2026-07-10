@@ -2241,7 +2241,7 @@ export default function FieldApplicationInvoice() {
 
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <button onClick={() => navigate('/field-invoices')} className="p-1 rounded hover:bg-gray-100">
+          <button aria-label="Back to field invoices" onClick={() => navigate('/field-invoices')} className="p-1 rounded hover:bg-gray-100">
             <ArrowLeft className="w-5 h-5" />
           </button>
           <div>

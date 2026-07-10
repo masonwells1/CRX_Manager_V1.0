@@ -143,7 +143,7 @@ describe('QuoteBuilder', () => {
   it('renders customer select dropdown', async () => {
     renderQuoteBuilder();
     await waitFor(() => {
-      expect(screen.getByText('Select a customer...')).toBeInTheDocument();
+      expect(screen.getByPlaceholderText('Select a customer...')).toBeInTheDocument();
     });
   });
 

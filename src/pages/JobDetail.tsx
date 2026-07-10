@@ -4,6 +4,7 @@ import { Save, Plus, Trash2, Check, FileText, Beaker, Ban, MessageSquarePlus, Pr
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
+import SearchableSelect from '../components/ui/SearchableSelect';
 import Badge, { type BadgeVariant } from '../components/ui/Badge';
 import Modal from '../components/ui/Modal';
 import UnsavedChangesModal from '../components/ui/UnsavedChangesModal';
@@ -3271,17 +3272,13 @@ export default function JobDetail() {
                       <div className="grid grid-cols-2 md:grid-cols-7 gap-2 items-end">
                         <div className="col-span-2 md:col-span-2">
                           <label className="block text-xs font-medium text-secondary mb-1">Field</label>
-                          <select
+                          <SearchableSelect
+                            options={customerFields.map((cf) => ({ value: cf.id, label: cf.field_name }))}
                             value={f.field_id}
-                            onChange={(e) => updateFieldRow(i, 'field_id', e.target.value)}
+                            onChange={(value) => updateFieldRow(i, 'field_id', value)}
                             disabled={!canEdit}
-                            className={shareInputCls}
-                          >
-                            <option value="">Select field...</option>
-                            {customerFields.map((cf) => (
-                              <option key={cf.id} value={cf.id}>{cf.field_name}</option>
-                            ))}
-                          </select>
+                            placeholder="Select field..."
+                          />
                         </div>
                         <div>
                           <label className="block text-xs font-medium text-secondary mb-1">Acres</label>
@@ -3329,17 +3326,13 @@ export default function JobDetail() {
                           <div className="space-y-1.5">
                             {fieldShares.map((s) => (
                               <div key={s.idx} className="flex items-center gap-2">
-                                <select
+                                <SearchableSelect
+                                  options={customers.map((c) => ({ value: c.id, label: c.farm_name }))}
                                   value={s.customer_id}
-                                  onChange={(e) => updateShareRow(s.idx, 'customer_id', e.target.value)}
+                                  onChange={(value) => updateShareRow(s.idx, 'customer_id', value)}
                                   disabled={!canEdit}
-                                  className="flex-1 px-2 py-1 text-sm border border-gray-200 rounded disabled:bg-gray-50"
-                                >
-                                  <option value="">Select customer...</option>
-                                  {customers.map((c) => (
-                                    <option key={c.id} value={c.id}>{c.farm_name}</option>
-                                  ))}
-                                </select>
+                                  placeholder="Select customer..."
+                                />
                                 <input
                                   type="number" min={0} max={100} step="0.01"
                                   value={s.split_pct}
@@ -3435,11 +3428,13 @@ export default function JobDetail() {
                     <div className="grid grid-cols-12 gap-2 items-end">
                       <div className="col-span-12 md:col-span-3">
                         <label className="block text-xs font-medium text-secondary mb-1">Chemical</label>
-                        <select value={c.product_id} onChange={(e) => updateChemRow(i, 'product_id', e.target.value)}
-                          disabled={!canEdit} className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg disabled:bg-gray-50">
-                          <option value="">Select product...</option>
-                          {allProducts.map((p) => (<option key={p.id} value={p.id}>{p.product_name}</option>))}
-                        </select>
+                        <SearchableSelect
+                          options={allProducts.map((p) => ({ value: p.id, label: p.product_name }))}
+                          value={c.product_id}
+                          onChange={(value) => updateChemRow(i, 'product_id', value)}
+                          disabled={!canEdit}
+                          placeholder="Select product..."
+                        />
                       </div>
                       <div className="col-span-6 md:col-span-2">
                         <label className="block text-xs font-medium text-secondary mb-1">Warehouse</label>

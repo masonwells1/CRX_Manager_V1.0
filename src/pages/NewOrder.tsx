@@ -871,6 +871,7 @@ export default function NewOrder() {
                                 ? getTierPrice(products.find((p) => p.id === item.product_id)!, customerTier)
                                 : 0
                             )}`}
+                            aria-label="Reset price to catalog"
                             className="p-1.5 rounded text-amber-500 hover:text-amber-700 hover:bg-amber-100 transition-colors flex-shrink-0"
                           >
                             <RotateCcw className="w-4 h-4" />
