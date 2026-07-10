@@ -84,7 +84,7 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(
 <div id="header">
   <h1>⬡ CRX Manager — Architecture Map</h1>
   <!-- __STATS_START__ -->
-  <span id="stat-line" style="color:var(--muted);font-size:.8rem">88 routes · 208 RPC calls · 0 issues · Updated Jul 9, 2026</span>
+  <span id="stat-line" style="color:var(--muted);font-size:.8rem">89 routes · 208 RPC calls · 0 issues · Updated Jul 9, 2026</span>
   <!-- __STATS_END__ -->
   <div id="tabs">
     <button class="tab active" onclick="showTab('graph')">Graph</button>
@@ -470,6 +470,14 @@ const NODES = [
       "type": "page-all",
       "group": "Core",
       "path": "/",
+      "problem": false
+    },
+    {
+      "id": "dashboard",
+      "label": "Dashboard",
+      "type": "page-all",
+      "group": "Core",
+      "path": "/dashboard",
       "problem": false
     },
     {
@@ -1385,6 +1393,71 @@ const EDGES = [
       "type": "nav"
     },
     {
+      "s": "dashboard",
+      "t": "to-ship",
+      "type": "nav"
+    },
+    {
+      "s": "dashboard",
+      "t": "new-order",
+      "type": "nav"
+    },
+    {
+      "s": "dashboard",
+      "t": "new-purchase-order",
+      "type": "nav"
+    },
+    {
+      "s": "dashboard",
+      "t": "new-delivery",
+      "type": "nav"
+    },
+    {
+      "s": "dashboard",
+      "t": "inventory-page",
+      "type": "nav"
+    },
+    {
+      "s": "dashboard",
+      "t": "receiving-log",
+      "type": "nav"
+    },
+    {
+      "s": "dashboard",
+      "t": "orders",
+      "type": "nav"
+    },
+    {
+      "s": "dashboard",
+      "t": "quotes",
+      "type": "nav"
+    },
+    {
+      "s": "dashboard",
+      "t": "deliveries",
+      "type": "nav"
+    },
+    {
+      "s": "dashboard",
+      "t": "purchase-orders",
+      "type": "nav"
+    },
+    {
+      "s": "dashboard",
+      "t": "program-tracker",
+      "type": "nav"
+    },
+    {
+      "s": "dashboard",
+      "t": "team-board",
+      "type": "nav"
+    },
+    {
+      "s": "dashboard",
+      "t": "delivery-detail",
+      "type": "nav"
+    },
+    {
       "s": "deliveries",
       "t": "delivery-detail",
       "type": "nav"
@@ -2002,6 +2075,11 @@ const EDGES = [
     {
       "s": "cycle-counts",
       "t": "r-cycle",
+      "type": "rpc"
+    },
+    {
+      "s": "dashboard",
+      "t": "r-report",
       "type": "rpc"
     },
     {

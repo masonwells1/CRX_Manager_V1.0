@@ -184,7 +184,8 @@ const router = createBrowserRouter([
           element: <RouteShell />,
           children: [
           // All authenticated roles
-          { index: true, element: <RoleLanding officeElement={<Dashboard />} /> },
+          { index: true, element: <RoleLanding /> },
+          { path: 'dashboard', element: <Dashboard /> },
           { path: 'team-board', element: <TeamBoard /> },
           { path: 'notifications', element: <Notifications /> },
           { path: 'getting-started', element: <GettingStarted /> },

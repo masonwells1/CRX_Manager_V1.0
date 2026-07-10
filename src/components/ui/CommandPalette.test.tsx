@@ -80,7 +80,7 @@ describe('CommandPalette', () => {
     const input = screen.getByPlaceholderText(/search pages/i);
     fireEvent.change(input, { target: { value: 'Invo' } });
     await waitFor(() => {
-      expect(screen.getByText('Invoices')).toBeInTheDocument();
+      expect(screen.getByText('Invoices — Chemical')).toBeInTheDocument();
     });
   });
 

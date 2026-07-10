@@ -1,53 +1,47 @@
 import { useState, useEffect, useCallback } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import {
-  LayoutDashboard,
-  Package,
-  PackageSearch,
-  Users,
-  FileText,
-  ClipboardList,
-  Warehouse,
-  Truck,
-  Navigation,
-  ShoppingCart,
-  Scale,
-  BarChart3,
-  MessageSquare,
-  Settings,
-  LogOut,
-  X,
-  Image,
-  DollarSign,
-  Sprout,
-  MapPin,
-  Smartphone,
-  Receipt,
-  Beaker,
-  ClipboardCheck,
-  RotateCcw,
-  ShieldCheck,
-  ShieldAlert,
-  BadgeDollarSign,
-  Clock,
-  Plane,
-  CalendarClock,
-  Banknote,
-  CalendarCheck,
-  CreditCard,
-  Wallet,
   ArrowLeftRight,
+  BadgeDollarSign,
+  Banknote,
+  BarChart3,
+  Beaker,
+  BookOpen,
+  Building2,
+  CalendarCheck,
+  CalendarClock,
   ChevronLeft,
   ChevronRight,
-  PackageCheck,
-  BookOpen,
-  Wrench,
-  CheckSquare,
-  Building2,
-  Layers,
+  ClipboardCheck,
+  ClipboardList,
+  CreditCard,
+  DollarSign,
+  FileText,
   FlaskConical,
-  ShieldAlert as WatchdogIcon,
+  Image,
+  LayoutDashboard,
   LayoutGrid,
+  LogOut,
+  MapPin,
+  MessageSquare,
+  Navigation,
+  Package,
+  PackageCheck,
+  PackageSearch,
+  Plane,
+  Receipt,
+  RotateCcw,
+  Scale,
+  Settings,
+  ShieldAlert,
+  ShieldCheck,
+  ShoppingCart,
+  Sprout,
+  Truck,
+  Users,
+  Warehouse,
+  Wrench,
+  X,
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { hasPageAccess, getPageKeyFromPath } from '../../lib/pagePermissions';
@@ -84,163 +78,144 @@ type NavEntry =
 
 // --- Navigation structure ---
 
-const navigation: NavEntry[] = [
-  {
-    type: 'standalone',
-    link: {
-      id: 'dashboard',
-      path: '/',
-      label: 'Dashboard',
-      icon: <LayoutDashboard className="w-5 h-5" />,
-    },
-  },
-  {
-    type: 'standalone',
-    link: {
-      id: 'office-cockpit',
-      path: '/office-cockpit',
-      label: 'Office Cockpit',
-      icon: <LayoutGrid className="w-5 h-5" />,
-      roles: ['admin', 'sales_rep'],
-    },
-  },
-  {
-    type: 'standalone',
-    link: {
-      id: 'to-ship',
-      path: '/to-ship',
-      label: 'To-Ship',
-      icon: <PackageSearch className="w-5 h-5" />,
-      roles: ['admin', 'sales_rep'],
-    },
-  },
-  {
-    type: 'standalone',
-    link: {
-      id: 'getting-started',
-      path: '/getting-started',
-      label: 'Getting Started',
-      icon: <BookOpen className="w-5 h-5" />,
-    },
-  },
+const officeNavigation: NavEntry[] = [
+  { type: 'standalone', link: { id: 'today', path: '/office-cockpit', label: 'Today', icon: <LayoutGrid className="w-5 h-5" />, roles: ['admin', 'sales_rep'] } },
+  { type: 'standalone', link: { id: 'to-ship', path: '/to-ship', label: 'To-Ship (Load-Out Board)', icon: <PackageSearch className="w-5 h-5" />, roles: ['admin', 'sales_rep'] } },
   {
     type: 'category',
     category: {
-      id: 'sales',
-      label: 'Sales',
-      icon: <FileText className="w-5 h-5" />,
+      id: 'sell-deliver', label: 'Sell & Deliver', icon: <Truck className="w-5 h-5" />,
       items: [
-        { path: '/quotes', label: 'Quotes', icon: <FileText className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
-        { path: '/orders', label: 'Orders', icon: <ClipboardList className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
-        { path: '/invoices', label: 'Invoices', icon: <Receipt className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
-        { path: '/field-invoices', label: 'Field Invoices', icon: <Sprout className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
-        { path: '/field-invoices/summary', label: 'Customer Summary', icon: <Layers className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
-        { path: '/payments', label: 'Payments', icon: <DollarSign className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
+        { path: '/quotes', label: 'Quotes & Bookings', icon: <FileText className="w-4 h-4" /> },
+        { path: '/orders', label: 'Orders', icon: <ClipboardList className="w-4 h-4" /> },
+        { path: '/deliveries', label: 'Deliveries', icon: <Truck className="w-4 h-4" /> },
+        { path: '/my-route', label: 'My Route (field mode)', icon: <Navigation className="w-4 h-4" /> },
+        { path: '/delivery-remainders', label: 'Remainders', icon: <Package className="w-4 h-4" /> },
+        { path: '/invoices', label: 'Invoices — Chemical', icon: <Receipt className="w-4 h-4" /> },
+        { path: '/returns', label: 'Returns', icon: <RotateCcw className="w-4 h-4" /> },
       ],
     },
   },
   {
     type: 'category',
     category: {
-      id: 'customers',
-      label: 'Customers',
-      icon: <Users className="w-5 h-5" />,
+      id: 'spray-fields', label: 'Spray Fields', icon: <Sprout className="w-5 h-5" />,
       items: [
-        { path: '/customers', label: 'Customers', icon: <Users className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
-        { path: '/fields', label: 'Fields', icon: <MapPin className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
-        { path: '/crop-programs', label: 'Crop Programs', icon: <Sprout className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
+        { path: '/jobs', label: 'Job Schedule', icon: <CalendarClock className="w-4 h-4" /> },
+        { path: '/dispatch', label: 'Dispatch Board', icon: <MapPin className="w-4 h-4" /> },
+        { path: '/field-invoices', label: 'Field Invoices', icon: <Receipt className="w-4 h-4" /> },
+        { path: '/application-records', label: 'Record Book (Applications)', icon: <ClipboardCheck className="w-4 h-4" /> },
+        { path: '/program-tracker', label: 'Program Tracker', icon: <CalendarCheck className="w-4 h-4" /> },
+        { path: '/recipes', label: 'Blend Recipes', icon: <Beaker className="w-4 h-4" /> },
+        { path: '/field', label: 'Field View (phone preview)', icon: <MapPin className="w-4 h-4" /> },
       ],
     },
   },
   {
     type: 'category',
     category: {
-      id: 'products',
-      label: 'Products & Inventory',
-      icon: <Package className="w-5 h-5" />,
+      id: 'customers-fields', label: 'Customers & Fields', icon: <Users className="w-5 h-5" />,
       items: [
-        { path: '/products', label: 'Products', icon: <Package className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
-        { path: '/brand-vs-generic', label: 'Brand vs Generic', icon: <Scale className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
-        { path: '/recipes', label: 'Blend Recipes', icon: <Beaker className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
-        { path: '/inventory', label: 'Inventory', icon: <Warehouse className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
+        { path: '/customers', label: 'Customers', icon: <Users className="w-4 h-4" /> },
+        { path: '/fields', label: 'Fields & Maps', icon: <MapPin className="w-4 h-4" /> },
+        { path: '/crop-programs', label: 'Crop Programs', icon: <Sprout className="w-4 h-4" /> },
+      ],
+    },
+  },
+  {
+    type: 'category',
+    category: {
+      id: 'inventory-buying', label: 'Inventory & Buying', icon: <Warehouse className="w-5 h-5" />,
+      items: [
+        { path: '/inventory', label: 'Inventory', icon: <Warehouse className="w-4 h-4" /> },
+        { path: '/products', label: 'Products', icon: <Package className="w-4 h-4" /> },
+        { path: '/brand-vs-generic', label: 'Brand vs Generic', icon: <Scale className="w-4 h-4" /> },
+        { path: '/purchase-orders', label: 'Purchase Orders', icon: <ShoppingCart className="w-4 h-4" /> },
+        { path: '/receiving-hub', label: 'Receiving (Hub)', icon: <PackageSearch className="w-4 h-4" /> },
+        { path: '/receiving', label: 'Receiving Log', icon: <PackageCheck className="w-4 h-4" /> },
         { path: '/cycle-counts', label: 'Cycle Counts', icon: <ClipboardCheck className="w-4 h-4" />, roles: ['admin'] },
-        { path: '/purchase-orders', label: 'Supplier POs', icon: <ShoppingCart className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
-        { path: '/receiving', label: 'Receiving', icon: <PackageCheck className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
-        { path: '/receiving-hub', label: 'Receiving Hub', icon: <PackageSearch className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
-        { path: '/returns', label: 'Returns', icon: <RotateCcw className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
       ],
     },
   },
   {
     type: 'category',
     category: {
-      id: 'operations',
-      label: 'Operations',
-      icon: <CalendarClock className="w-5 h-5" />,
+      id: 'money', label: 'Money', icon: <DollarSign className="w-5 h-5" />,
       items: [
-        { path: '/jobs', label: 'Job Schedule', icon: <CalendarClock className="w-4 h-4" />, roles: ['admin', 'sales_rep', 'applicator'] },
-        { path: '/dispatch', label: 'Dispatch & Applicator View', icon: <Truck className="w-4 h-4" />, roles: ['admin', 'sales_rep', 'applicator'] },
-        { path: '/field', label: 'My Field Jobs', icon: <Smartphone className="w-4 h-4" />, roles: ['admin', 'sales_rep', 'applicator'] },
-        { path: '/deliveries', label: 'Deliveries', icon: <Truck className="w-4 h-4" />, roles: ['admin', 'sales_rep', 'driver'] },
-        { path: '/my-route', label: 'My Route', icon: <Navigation className="w-4 h-4" />, roles: ['admin', 'sales_rep', 'driver'] },
-        { path: '/delivery-remainders', label: 'Remainders', icon: <Package className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
-        { path: '/vehicles', label: 'Vehicles', icon: <Plane className="w-4 h-4" />, roles: ['admin'] },
-        { path: '/application-services', label: 'App Services', icon: <Wrench className="w-4 h-4" />, roles: ['admin'] },
-        { path: '/blend-tickets', label: 'Blend Tickets', icon: <Image className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
-        { path: '/application-records', label: 'App Records', icon: <ClipboardCheck className="w-4 h-4" />, roles: ['admin', 'sales_rep', 'applicator'] },
-        { path: '/program-tracker', label: 'Program Tracker', icon: <CheckSquare className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
-      ],
-    },
-  },
-  {
-    type: 'category',
-    category: {
-      id: 'finance',
-      label: 'Finance',
-      icon: <DollarSign className="w-5 h-5" />,
-      items: [
-        { path: '/financial-dashboard', label: 'Dashboard', icon: <LayoutDashboard className="w-4 h-4" />, roles: ['admin'] },
-        { path: '/accounts-receivable', label: 'Accounts Receivable', icon: <DollarSign className="w-4 h-4" />, roles: ['admin'] },
-        { path: '/ar-aging', label: 'AR Aging', icon: <Clock className="w-4 h-4" />, roles: ['admin'] },
-        { path: '/accounts-payable', label: 'Accounts Payable', icon: <Receipt className="w-4 h-4" />, roles: ['admin'] },
-        { path: '/vendors', label: 'Vendors', icon: <Building2 className="w-4 h-4" />, roles: ['admin'] },
-        { path: '/prepayments', label: 'Prepayments', icon: <Wallet className="w-4 h-4" />, roles: ['admin'] },
+        { path: '/payments', label: 'Record Payments', icon: <DollarSign className="w-4 h-4" /> },
+        { path: '/accounts-receivable', label: 'A/R Workspace', icon: <CreditCard className="w-4 h-4" />, roles: ['admin'] },
         { path: '/prepay-workspace', label: 'Prepay Workspace', icon: <ArrowLeftRight className="w-4 h-4" />, roles: ['admin'] },
-        { path: '/commission-payments', label: 'Commission Pay', icon: <Banknote className="w-4 h-4" />, roles: ['admin'] },
-        { path: '/customer-transactions', label: 'Transactions', icon: <CreditCard className="w-4 h-4" />, roles: ['admin'] },
-        { path: '/month-end', label: 'Month-End', icon: <CalendarCheck className="w-4 h-4" />, roles: ['admin'] },
-        { path: '/integrity-report', label: 'Integrity Report', icon: <ShieldAlert className="w-4 h-4" />, roles: ['admin'] },
-        { path: '/integrity-cleanup', label: 'Integrity Cleanup', icon: <Wrench className="w-4 h-4" />, roles: ['admin'] },
+        { path: '/accounts-payable', label: 'A/P & Vendor Bills', icon: <Receipt className="w-4 h-4" />, roles: ['admin'] },
+        { path: '/field-invoices/summary', label: 'Unposted Invoice Summary', icon: <ClipboardList className="w-4 h-4" /> },
+        { path: '/commission-payments', label: 'Commissions', icon: <Banknote className="w-4 h-4" />, roles: ['admin'] },
         { path: '/rebates', label: 'Rebates', icon: <BadgeDollarSign className="w-4 h-4" />, roles: ['admin'] },
-        { path: '/reports', label: 'Reports', icon: <BarChart3 className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
-        { path: '/sales-reports', label: 'Sales Reports', icon: <BarChart3 className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
-        { path: '/compliance', label: 'Compliance', icon: <ShieldCheck className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
-        { path: '/lot-trace', label: 'Lot Trace', icon: <PackageSearch className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
-        { path: '/label-review', label: 'Label Review', icon: <FlaskConical className="w-4 h-4" />, roles: ['admin'] },
-        { path: '/watchdog', label: 'Watchdog Flags', icon: <WatchdogIcon className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
+        { path: '/month-end', label: 'Month-End Close', icon: <CalendarCheck className="w-4 h-4" />, roles: ['admin'] },
+        { path: '/integrity-report', label: 'Data Integrity — Report', icon: <ShieldAlert className="w-4 h-4" />, roles: ['admin'] },
+        { path: '/integrity-cleanup', label: 'Data Integrity — Cleanup', icon: <Wrench className="w-4 h-4" />, roles: ['admin'] },
       ],
     },
   },
   {
-    type: 'standalone',
-    link: {
-      id: 'team-board',
-      path: '/team-board',
-      label: 'Team Board',
-      icon: <MessageSquare className="w-5 h-5" />,
+    type: 'category',
+    category: {
+      id: 'compliance-records', label: 'Compliance & Records', icon: <ShieldCheck className="w-5 h-5" />,
+      items: [
+        { path: '/compliance', label: 'Licenses & RUP Register', icon: <ShieldCheck className="w-4 h-4" /> },
+        { path: '/lot-trace', label: 'Lot Trace (recall lookup)', icon: <PackageSearch className="w-4 h-4" /> },
+        { path: '/watchdog', label: 'Watchdog Flags', icon: <ShieldAlert className="w-4 h-4" /> },
+        { path: '/label-review', label: 'Label Review', icon: <FlaskConical className="w-4 h-4" />, roles: ['admin'] },
+        { path: '/blend-tickets', label: 'Blend Tickets (OCR)', icon: <Image className="w-4 h-4" /> },
+      ],
     },
   },
   {
-    type: 'standalone',
-    link: {
-      id: 'settings',
-      path: '/settings',
-      label: 'Settings',
-      icon: <Settings className="w-5 h-5" />,
-      roles: ['admin'],
+    type: 'category',
+    category: {
+      id: 'insights', label: 'Insights', icon: <BarChart3 className="w-5 h-5" />,
+      items: [
+        { path: '/dashboard', label: 'Overview (KPI Dashboard)', icon: <LayoutDashboard className="w-4 h-4" /> },
+        { path: '/reports', label: 'Reports Library', icon: <BarChart3 className="w-4 h-4" /> },
+        { path: '/sales-reports', label: 'Sales Reports', icon: <BarChart3 className="w-4 h-4" /> },
+        { path: '/financial-dashboard', label: 'Financial Dashboard', icon: <LayoutDashboard className="w-4 h-4" />, roles: ['admin'] },
+      ],
     },
   },
+  {
+    type: 'category',
+    category: {
+      id: 'setup-admin', label: 'Setup & Admin', icon: <Settings className="w-5 h-5" />,
+      items: [
+        { path: '/vehicles', label: 'Vehicles', icon: <Plane className="w-4 h-4" />, roles: ['admin'] },
+        { path: '/application-services', label: 'Application Services (fees)', icon: <Wrench className="w-4 h-4" />, roles: ['admin'] },
+        { path: '/vendors', label: 'Vendors', icon: <Building2 className="w-4 h-4" />, roles: ['admin'] },
+        { path: '/getting-started', label: 'Getting Started (help)', icon: <BookOpen className="w-4 h-4" /> },
+        { path: '/settings', label: 'Settings', icon: <Settings className="w-4 h-4" />, roles: ['admin'] },
+      ],
+    },
+  },
+  { type: 'standalone', link: { id: 'team-board', path: '/team-board', label: 'Team Board', icon: <MessageSquare className="w-5 h-5" /> } },
 ];
+
+const applicatorNavigation: NavEntry[] = [
+  { type: 'standalone', link: { id: 'my-day', path: '/field', label: 'My Day', icon: <Sprout className="w-5 h-5" /> } },
+  { type: 'standalone', link: { id: 'my-jobs', path: '/jobs', label: 'My Jobs', icon: <CalendarClock className="w-5 h-5" /> } },
+  { type: 'standalone', link: { id: 'record-book', path: '/application-records', label: 'Record Book', icon: <ClipboardCheck className="w-5 h-5" /> } },
+  { type: 'standalone', link: { id: 'team-board', path: '/team-board', label: 'Team Board', icon: <MessageSquare className="w-5 h-5" /> } },
+  { type: 'standalone', link: { id: 'help', path: '/getting-started', label: 'Help', icon: <BookOpen className="w-5 h-5" /> } },
+];
+
+const driverNavigation: NavEntry[] = [
+  { type: 'standalone', link: { id: 'my-route', path: '/my-route', label: 'My Route', icon: <Navigation className="w-5 h-5" /> } },
+  { type: 'standalone', link: { id: 'deliveries', path: '/deliveries', label: 'Deliveries', icon: <Truck className="w-5 h-5" /> } },
+  { type: 'standalone', link: { id: 'team-board', path: '/team-board', label: 'Team Board', icon: <MessageSquare className="w-5 h-5" /> } },
+  { type: 'standalone', link: { id: 'help', path: '/getting-started', label: 'Help', icon: <BookOpen className="w-5 h-5" /> } },
+];
+
+function getNavigationForRole(role: UserRole | undefined): NavEntry[] {
+  if (role === 'applicator') return applicatorNavigation;
+  if (role === 'driver') return driverNavigation;
+  return officeNavigation;
+}
 
 // --- Helpers ---
 
@@ -290,6 +265,7 @@ export default function Sidebar({ mobileOpen, onClose }: SidebarProps) {
   const { profile, deniedPages, signOut } = useAuth();
   const location = useLocation();
   const userRole = profile?.role;
+  const navigation = getNavigationForRole(userRole);
 
   // Expanded category id (null = collapsed sidebar, string = that category is open)
   const [openCategory, setOpenCategory] = useState<string | null>(() => {

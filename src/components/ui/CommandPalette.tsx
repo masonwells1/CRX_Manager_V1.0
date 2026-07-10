@@ -37,9 +37,11 @@ import {
   ClipboardCheck,
   ArrowLeftRight,
   ShieldAlert,
+  LayoutGrid,
 } from 'lucide-react';
 import { supabase, assertRpcResult } from '../../lib/db';
 import { getRecentItems } from '../../lib/recentPages';
+import { PAGE_PERMISSIONS } from '../../lib/pagePermissions';
 import type { GlobalSearchResult, SearchEntityType } from '../../types';
 
 // ── Types ──────────────────────────────────────────────────────────
@@ -87,7 +89,9 @@ const ENTITY_PATHS: Record<SearchEntityType, string> = {
 
 // Page icon mapping for common pages
 const PAGE_ICON_MAP: Record<string, React.ReactNode> = {
-  '/': <LayoutDashboard className="w-4 h-4" />,
+  '/dashboard': <LayoutDashboard className="w-4 h-4" />,
+  '/office-cockpit': <LayoutGrid className="w-4 h-4" />,
+  '/to-ship': <PackageSearch className="w-4 h-4" />,
   '/quotes': <FileText className="w-4 h-4" />,
   '/orders': <ClipboardList className="w-4 h-4" />,
   '/invoices': <Receipt className="w-4 h-4" />,
@@ -129,63 +133,27 @@ const PAGE_ICON_MAP: Record<string, React.ReactNode> = {
   '/getting-started': <BookOpen className="w-4 h-4" />,
 };
 
-// All navigable pages for client-side fuzzy search
-const ALL_PAGES: { path: string; label: string }[] = [
-  { path: '/', label: 'Operations Dashboard' },
-  { path: '/quotes', label: 'Quotes' },
-  { path: '/quotes/new', label: 'New Quote' },
-  { path: '/orders', label: 'Orders' },
+// Commands without a PAGE_PERMISSIONS entry: creation/deep links and global
+// routes. Permission pages themselves are derived below from the canonical list.
+const EXTRA_PAGES: { path: string; label: string }[] = [
+  { path: '/quotes/new', label: 'New Quote/Booking' },
   { path: '/orders/new', label: 'New Order' },
-  { path: '/invoices', label: 'Invoices' },
-  { path: '/payments', label: 'Payments' },
-  { path: '/customers', label: 'Customers' },
-  { path: '/fields', label: 'Fields' },
-  { path: '/crop-programs', label: 'Crop Programs' },
-  { path: '/products', label: 'Products' },
-  { path: '/brand-vs-generic', label: 'Brand vs Generic' },
-  { path: '/recipes', label: 'Blend Recipes' },
-  { path: '/inventory', label: 'Inventory' },
-  { path: '/cycle-counts', label: 'Cycle Counts' },
-  { path: '/purchase-orders', label: 'Supplier POs' },
   { path: '/purchase-orders/new', label: 'New Purchase Order' },
-  { path: '/receiving', label: 'Receiving' },
   { path: '/receiving/quick', label: 'Quick Receive' },
-  { path: '/receiving-hub', label: 'Receiving Hub' },
-  { path: '/to-ship', label: 'To Ship (Command Center)' },
-  { path: '/returns', label: 'Returns' },
-  { path: '/jobs', label: 'Job Schedule' },
-  { path: '/dispatch', label: 'Dispatch Board' },
-  { path: '/deliveries', label: 'Deliveries' },
   { path: '/deliveries/new', label: 'New Delivery' },
   { path: '/deliveries?quickDeliver=1', label: 'Sell & Deliver Now' },
-  { path: '/delivery-remainders', label: 'Delivery Remainders' },
-  { path: '/vehicles', label: 'Vehicles' },
-  { path: '/blend-tickets', label: 'Blend Tickets' },
-  { path: '/application-records', label: 'Application Records' },
-  { path: '/financial-dashboard', label: 'Financial Dashboard' },
-  { path: '/accounts-receivable', label: 'Accounts Receivable' },
-  { path: '/ar-aging', label: 'AR Aging' },
-  { path: '/field-invoices', label: 'Field Invoices' },
-  { path: '/accounts-payable', label: 'Accounts Payable' },
-  { path: '/prepayments', label: 'Prepayments' },
-  { path: '/prepay-workspace', label: 'Prepay Workspace' },
-  { path: '/commission-payments', label: 'Commission Payments' },
-  { path: '/customer-transactions', label: 'Customer Transactions' },
-  { path: '/month-end', label: 'Month-End Close' },
-  { path: '/rebates', label: 'Rebates' },
-  { path: '/reports', label: 'Reports' },
-  { path: '/sales-reports', label: 'Sales Reports' },
-  // Individual reports, deep-linked so typing the report name jumps straight to it (F1c).
   { path: '/sales-reports?tab=by_product', label: 'Sales by Product (Product Mix)' },
   { path: '/sales-reports?tab=by_customer', label: 'Sales by Customer (Customer Profitability)' },
   { path: '/sales-reports?tab=by_sales_rep', label: 'Sales by Sales Rep' },
   { path: '/sales-reports?tab=by_month', label: 'Sales by Month' },
-  { path: '/compliance', label: 'Compliance' },
-  { path: '/lot-trace', label: 'Lot Trace' },
-  { path: '/watchdog', label: 'Watchdog Flags' },
   { path: '/team-board', label: 'Team Board' },
+  { path: '/notifications', label: 'Notifications' },
   { path: '/settings', label: 'Settings' },
-  { path: '/getting-started', label: 'Getting Started' },
+];
+
+const ALL_PAGES: { path: string; label: string }[] = [
+  ...PAGE_PERMISSIONS.map((page) => ({ path: page.path, label: page.label })),
+  ...EXTRA_PAGES,
 ];
 
 // ── Helpers ────────────────────────────────────────────────────────

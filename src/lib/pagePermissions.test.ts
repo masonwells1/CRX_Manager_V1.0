@@ -37,6 +37,10 @@ describe('getPageKeyFromPath', () => {
     expect(getPageKeyFromPath('/login')).toBeNull();
   });
 
+  it('maps the KPI dashboard route to the dashboard permission', () => {
+    expect(getPageKeyFromPath('/dashboard')).toBe('dashboard');
+  });
+
   it('returns null for empty path', () => {
     expect(getPageKeyFromPath('')).toBeNull();
   });
@@ -142,7 +146,7 @@ describe('getPagesForRole', () => {
 
   it('driver gets very few pages', () => {
     const pages = getPagesForRole('driver');
-    expect(pages.length).toBeLessThanOrEqual(3);
+    expect(pages.length).toBeLessThanOrEqual(4);
     const keys = pages.map((p) => p.key);
     expect(keys).toContain('deliveries');
     expect(keys).toContain('my-route');
@@ -172,8 +176,16 @@ describe('getCategories', () => {
 
   it('preserves insertion order', () => {
     const categories = getCategories(PAGE_PERMISSIONS);
-    // First entry in PAGE_PERMISSIONS is Onboarding (PR-11 added getting-started)
-    expect(categories[0]).toBe('Onboarding');
+    expect(categories).toEqual([
+      'Sell & Deliver',
+      'Spray Fields',
+      'Customers & Fields',
+      'Inventory & Buying',
+      'Money',
+      'Compliance & Records',
+      'Insights',
+      'Setup & Admin',
+    ]);
   });
 });
 
@@ -238,9 +250,10 @@ describe('PAGE_PERMISSIONS data integrity', () => {
     expect(new Set(keys).size).toBe(keys.length);
   });
 
-  it('all entries have non-empty key, label, category, and roles', () => {
+  it('all entries have non-empty key, path, label, category, and roles', () => {
     for (const perm of PAGE_PERMISSIONS) {
       expect(perm.key.length).toBeGreaterThan(0);
+      expect(perm.path.length).toBeGreaterThan(0);
       expect(perm.label.length).toBeGreaterThan(0);
       expect(perm.category.length).toBeGreaterThan(0);
       expect(perm.roles.length).toBeGreaterThan(0);
