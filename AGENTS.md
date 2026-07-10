@@ -1,89 +1,87 @@
-# CRX Manager Codex Guide
+# CRX Manager Agent Guide
 
-> **Auto-generated from CLAUDE.md by `scripts/regenerate-agents-md.mjs`. Do not edit by hand.**
-> Source of truth: `CLAUDE.md`. To update this file, edit CLAUDE.md and re-run the script.
+This is the shared, project-level contract for every coding agent in this repository. Keep it stable and concise. Tool-specific guidance belongs in that tool's file; volatile counts and sprint status belong in `docs/`.
 
-This file is for Codex and other coding agents working in this repo. `CLAUDE.md` is the primary source of truth; this is a condensed pointer.
+## Project and Owner
 
-## Project Snapshot
-
-- App: CRX Manager V1.0 for Crop RX Solutions, an agricultural chemical distributor.
-- Stack: React 18, TypeScript, Vite, Tailwind CSS, Supabase, Vercel.
-- Production: https://croprxsolutions.app
+- CRX Manager V1.0 is the production operations app for Crop RX Solutions, an agricultural chemical distributor.
+- Stack: React 18, TypeScript, Vite, Tailwind CSS, Supabase, and Vercel.
+- Repo: `https://github.com/masonwells1/CRX_Manager_V1.0`
+- Production: `https://croprxsolutions.app`
 - Supabase project: `rhyzpcqhnizqbxphqdkr`
-- Owner: Mason Wells. Mason has 0 coding experience. Lead the process, explain in plain English, define jargon, give clear next steps.
-- Live counts (regenerated 2026-07-10): 82 lazy-loaded pages, 653 migrations, 6 Edge Functions.
+- Owner: Mason Wells. Mason has no formal coding background. Lead the process, define jargon once, explain risk in plain English, and give one clear recommended next step.
 
-## Read First
+## Start Here
 
-At the start of a work session, read:
+1. Inspect `git status --short --branch` before doing anything that writes.
+2. Read `docs/workflows/SAFE_DEVELOPMENT_RULES.md` for any multi-file, data, money, security, production, migration, permission, or customer-facing task.
+3. Read `docs/reference/gotchas.md` and the relevant file under `docs/workflows/` for the area being changed.
+4. Treat executable code, migrations, live read-only evidence, and current grants as stronger evidence than prose or old handoffs.
+5. Claude workflow logic lives under `.claude/`; Codex-facing skills under `.agents/` are generated adapters. Do not maintain two independent workflow implementations.
 
-1. `CLAUDE.md` (source of truth)
-2. `docs/workflows/SAFE_DEVELOPMENT_RULES.md`
-3. `docs/reference/gotchas.md` (project-specific quirks)
-4. The relevant workflow doc for the area being changed (`docs/workflows/`).
+## Plan and Approval Gates
 
-Reference docs in `docs/reference/`:
-- `database-schema.md`, `rpc-functions.md`, `migration-history.md`, `pages-routes.md`, `code-patterns.md`, `qa-testing.md`, `gotchas.md`.
+For multi-file or risky work, present a short plain-English plan, name the files or systems expected to change, and wait for Mason's approval before writing or making the live-changing move. Tiny, obvious, reversible fixes may proceed directly.
 
-## Hard Rules (mirror of CLAUDE.md)
+Always get Mason's explicit approval in the current conversation before:
 
-- Database changes only through new files in `supabase/migrations/`. Never edit old migrations.
-- Every new table must `ENABLE ROW LEVEL SECURITY` and have at least one `CREATE POLICY` in the same migration (enforced by `.claude/hooks/rls-on-new-tables.mjs`).
-- Every mutating RPC accepts `p_idempotency_key text DEFAULT NULL` AND uses it in the body (enforced by `.claude/hooks/idempotency-body-check.mjs`).
-- Every `SECURITY DEFINER` function includes `SET search_path = public, pg_temp`.
-- Status string values must match the DB CHECK constraints in `.claude/schema-registry.json` (enforced by `.claude/hooks/status-enum-check.mjs`).
-- Never UPDATE GENERATED columns (e.g. `invoices.balance_cents`) — enforced by `.claude/hooks/generated-column-check.mjs`.
+- pushing `main`, a production branch, or force-pushing any branch;
+- deploying to production;
+- applying a live database migration or changing live data;
+- deleting data;
+- changing secrets, authentication, permissions, billing, or customer-visible production state.
+
+Never commit `.env` files or reveal keys. Never use `--no-verify`. Never use destructive recovery such as `git reset --hard`, broad discard-all commands, or recursive force-delete unless Mason explicitly requests that exact action after the risk is explained.
+
+## Workspace Hygiene
+
+- Preserve user work. Do not revert unrelated changes.
+- Before trusting a long-running or isolated checkout, run `git fetch origin` and `git rev-list --left-right --count origin/main...HEAD`.
+- If the active checkout is dirty or stale and the task is multi-file/risky, use a clean worktree based on current `origin/main`.
+- Do not claim a finding is current when the checkout is behind `origin/main`.
+- Do not push, deploy, migrate, or mutate live data as part of a review, audit, health check, or setup check.
+
+## CRX Hard Rules
+
+- Add database changes only as new files under `supabase/migrations/`; never edit an applied migration.
+- New tables must enable Row Level Security (RLS) and include policies in the same migration.
+- Mutating RPCs must accept and actually enforce `p_idempotency_key text DEFAULT NULL`.
+- `SECURITY DEFINER` functions must use `SET search_path = public, pg_temp` and deliberate grants.
+- Money is bigint cents. Never use floating-point math for stored or calculated money.
+- Inventory and financial invariants belong in PostgreSQL RPCs/triggers, not only in React.
 - Use `src/lib/db.ts` as the only Supabase client.
-- Use `assertRpcResult()` after RPC calls and `checkMutationResult()` after `.update()`/`.delete()`.
+- Call `assertRpcResult()` after RPCs and `checkMutationResult()` after `.update()` or `.delete()`.
+- Never update generated columns such as `invoices.balance_cents`.
+- Status values must match current database constraints in `.claude/schema-registry.json`.
 - Use `ConfirmModal`, not `confirm()`/`window.confirm()`. Use toasts, not `alert()`.
 - Import Sentry only through `src/lib/sentry`.
-- Money is bigint cents — never floating point.
-- Lucide React icons + Tailwind CSS only.
-- Shared types in `src/types/index.ts`.
-- Never commit `.env` or expose service-role keys.
+- Use shared types from `src/types/index.ts`, Lucide icons, and Tailwind CSS.
 
-## Business Rules (mirror of CLAUDE.md)
+## Verification Standard
 
-- Season: October 1 through September 30.
-- Delivery: `scheduled -> in_progress -> completed` (with cancel/void).
-- Delivery items editable only while status = `scheduled`.
-- Invoices link to an order or blend ticket.
-- `post_invoice()` respects `check_period_open()`.
-- Inventory math runs in PostgreSQL (RPCs/triggers), not React.
-- AR source of truth: `invoices.balance_cents`.
+Done means the changed behavior ran and was observed, not merely that a new test passed.
 
-## Common Entry Points
+- Frontend/UI: open or render the affected flow and verify behavior and console state.
+- Backend/API/RPC: execute the path or a focused safe check and inspect the result.
+- Database/business logic: verify migration shape and relevant read-only live state when appropriate; never mutate live state without approval.
+- Match breadth to risk: narrow checks for a low-risk one-file change; typecheck, tests, build, and real-path proof for shared logic, money, data, auth, or multi-file behavior.
+- If real-path verification is blocked, state exactly what was not verified and the remaining risk.
 
-- App routes: `src/App.tsx`
-- Auth: `src/contexts/AuthContext.tsx`
-- Supabase client: `src/lib/db.ts`
-- Activity logging: `src/lib/activityLogger.ts`
-- Idempotency: `src/lib/idempotency.ts`, `src/hooks/useIdempotencyKey.ts`
-- Shared types: `src/types/index.ts`
-- Pages: `src/pages/`, Domain components: `src/components/{domain}/`
-- Migrations: `supabase/migrations/`, Edge Functions: `supabase/functions/`
-- E2E fixtures: `tests/e2e/fixtures/e2e-constants.ts`
-
-## Useful Commands
+Common commands:
 
 ```bash
-npm run dev            # local dev server
-npm run typecheck      # TS strict check
-npm run lint           # ESLint (with local rules)
-npm run build          # production build
-npm run test           # vitest unit tests
-npm run test:e2e       # playwright E2E
+npm run typecheck
+npm run lint
+npm run test
+npm run build
+npm run test:agent-workflows
+npm run agent-health
 ```
 
-## After Making Changes
+## Documentation and Generated Files
 
-1. Run the narrowest useful checks first.
-2. For frontend changes: `npm run typecheck` and usually `npm run build`.
-3. For DB or business logic changes: also run relevant tests.
-4. Update docs when behavior, schema, routes, RPCs, or migration counts change.
-5. If the schema changed, regenerate the schema registry (ask Claude or run `node scripts/regenerate-schema-registry.mjs`).
-
----
-
-*Regenerated by `scripts/regenerate-agents-md.mjs` on 2026-07-10. To rebuild: `node scripts/regenerate-agents-md.mjs`.*
+- `AGENTS.md` is the canonical shared contract and is edited intentionally by hand.
+- `CLAUDE.md` imports this file and contains Claude-only routing; it must not restate or contradict shared policy.
+- After changing `.claude/commands/` or `.claude/skills/`, run `node scripts/sync-agent-workflows.mjs --write`, then `npm run test:agent-workflows`.
+- After schema changes, refresh the schema registry from the correct database source and update the relevant `docs/reference/` files.
+- Do not put migration/page/function counts in always-loaded agent files; `npm run check:docs` verifies those claims in reference docs.

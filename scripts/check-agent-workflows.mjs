@@ -1,281 +1,126 @@
 #!/usr/bin/env node
-// Local guard for CRX agent workflow handoffs.
-// It verifies the Codex-to-Claude handoff source exists in .claude and that the
-// local Codex-facing skill copy has been synced from Claude.
 
+import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const root = path.resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
-
+const ROOT = path.resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
 const checks = [];
+const pass = (name, note = "") => checks.push({ status: "PASS", name, note });
+const fail = (name, note = "") => checks.push({ status: "FAIL", name, note });
 
-function pass(name, note = "") {
-  checks.push({ name, status: "PASS", note });
-}
-
-function fail(name, note = "") {
-  checks.push({ name, status: "FAIL", note });
-}
-
-function read(rel) {
-  const abs = path.join(root, rel);
-  if (!existsSync(abs)) return null;
-  return readFileSync(abs, "utf8");
-}
-
-// Is the machine-local Codex/agents mirror present AT ALL? The .codex/ and .agents/
-// trees are gitignored (populated by .codex/sync-from-claude.ps1), so they are
-// entirely absent in CI / a clean checkout. When the mirror is absent its files
-// are optional (skip); when it IS present, a MISSING mirror file is a real
-// partial-sync failure — don't let a half-synced mirror pass silently.
-const codexMirrorPresent =
-  existsSync(path.join(root, ".codex")) || existsSync(path.join(root, ".agents"));
-
-function requireFile(rel) {
-  const content = read(rel);
-  if (content === null) {
-    if ((rel.startsWith(".codex/") || rel.startsWith(".agents/")) && !codexMirrorPresent) {
-      return null; // clean checkout: no mirror at all → optional
-    }
-    fail(rel, "missing");
+function requireFile(relative) {
+  const full = path.join(ROOT, relative);
+  if (!existsSync(full)) {
+    fail(relative, "missing");
     return null;
   }
-  pass(rel, "present");
-  return content;
+  pass(relative, "present");
+  return readFileSync(full, "utf8");
 }
 
-function requireIncludes(rel, content, needle) {
-  if (content?.includes(needle)) {
-    pass(`${rel} includes ${needle}`);
-  } else {
-    fail(`${rel} includes ${needle}`);
-  }
+function requireIncludes(relative, content, expected) {
+  if (content?.includes(expected)) pass(`${relative} contains ${expected}`);
+  else fail(`${relative} contains ${expected}`);
 }
 
-const commandPath = ".claude/commands/codex-to-claude-handoff.md";
-const claudeSkillPath = ".claude/skills/codex-to-claude-handoff/SKILL.md";
-const codexSkillPath = ".agents/skills/codex-to-claude-handoff/SKILL.md";
-const claudeHookPath = ".claude/hooks/codex-to-claude-handoff-reminder.mjs";
-const claudeHookTestPath = ".claude/hooks/codex-to-claude-handoff-reminder.test.mjs";
-const codexHookPath = ".codex/hooks/codex-to-claude-handoff-reminder.mjs";
-const claudeReviewCommandPath = ".claude/commands/claude-review.md";
-const claudeReviewSkillPath = ".claude/skills/claude-review/SKILL.md";
-const codexClaudeReviewSkillPath = ".agents/skills/claude-review/SKILL.md";
-const pairReviewCommandPath = ".claude/commands/agent-pair-review.md";
-const pairReviewSkillPath = ".claude/skills/agent-pair-review/SKILL.md";
-const codexPairReviewSkillPath = ".agents/skills/agent-pair-review/SKILL.md";
-const pairReviewHookPath = ".claude/hooks/agent-pair-review-reminder.mjs";
-const pairReviewHookTestPath = ".claude/hooks/agent-pair-review-reminder.test.mjs";
-const codexPairReviewHookPath = ".codex/hooks/agent-pair-review-reminder.mjs";
-const agentHealthCommandPath = ".claude/commands/agent-health.md";
-const agentHealthSkillPath = ".claude/skills/agent-health/SKILL.md";
-const codexAgentHealthSkillPath = ".agents/skills/agent-health/SKILL.md";
-const agentPrCommentCommandPath = ".claude/commands/agent-pr-comment.md";
-const agentPrCommentSkillPath = ".claude/skills/agent-pr-comment/SKILL.md";
-const codexAgentPrCommentSkillPath = ".agents/skills/agent-pr-comment/SKILL.md";
-const codexGauntletCommandPath = ".claude/commands/codex-gauntlet.md";
-const codexGauntletSkillPath = ".claude/skills/codex-gauntlet/SKILL.md";
-const codexCodexGauntletSkillPath = ".agents/skills/codex-gauntlet/SKILL.md";
-const codexGauntletHookPath = ".claude/hooks/codex-gauntlet-reminder.mjs";
-const codexGauntletHookTestPath = ".claude/hooks/codex-gauntlet-reminder.test.mjs";
-const codexCodexGauntletHookPath = ".codex/hooks/codex-gauntlet-reminder.mjs";
-const codexReviewSkillPath = ".claude/skills/codex-review/SKILL.md";
-const codexCodexReviewSkillPath = ".agents/skills/codex-review/SKILL.md";
+const required = [
+  "AGENTS.md",
+  "CLAUDE.md",
+  ".claude/settings.json",
+  ".claude/commands/claude-review.md",
+  ".claude/commands/agent-pair-review.md",
+  ".claude/commands/codex-to-claude-handoff.md",
+  ".claude/commands/agent-health.md",
+  ".claude/commands/agent-pr-comment.md",
+  ".claude/commands/codex-gauntlet.md",
+  ".claude/skills/claude-review/SKILL.md",
+  ".claude/skills/agent-pair-review/SKILL.md",
+  ".claude/skills/codex-to-claude-handoff/SKILL.md",
+  ".claude/skills/agent-health/SKILL.md",
+  ".claude/skills/agent-pr-comment/SKILL.md",
+  ".claude/skills/codex-gauntlet/SKILL.md",
+  ".agents/skills/claude-review/SKILL.md",
+  ".agents/skills/agent-pair-review/SKILL.md",
+  ".agents/skills/codex-to-claude-handoff/SKILL.md",
+  ".agents/skills/agent-health/SKILL.md",
+  ".agents/skills/agent-pr-comment/SKILL.md",
+  ".agents/skills/codex-gauntlet/SKILL.md",
+  ".codex/config.toml",
+  ".codex/hooks.json",
+  ".codex/hooks/codex-hook-adapter.mjs",
+  ".codex/hooks/production-action-guard.mjs",
+  "scripts/run-claude-review.mjs",
+  "scripts/post-agent-review-to-pr.mjs",
+  "scripts/sync-agent-workflows.mjs",
+  "scripts/check-agent-guidance.mjs",
+  "scripts/agent-health-check.mjs",
+];
+const contents = new Map(required.map((relative) => [relative, requireFile(relative)]));
 
-const command = requireFile(commandPath);
-const claudeSkill = requireFile(claudeSkillPath);
-const codexSkill = requireFile(codexSkillPath);
-const claudeHook = requireFile(claudeHookPath);
-const claudeHookTest = requireFile(claudeHookTestPath);
-const codexHook = requireFile(codexHookPath);
-const claudeReviewCommand = requireFile(claudeReviewCommandPath);
-const claudeReviewSkill = requireFile(claudeReviewSkillPath);
-const codexClaudeReviewSkill = requireFile(codexClaudeReviewSkillPath);
-const pairReviewCommand = requireFile(pairReviewCommandPath);
-const pairReviewSkill = requireFile(pairReviewSkillPath);
-const codexPairReviewSkill = requireFile(codexPairReviewSkillPath);
-const pairReviewHook = requireFile(pairReviewHookPath);
-const pairReviewHookTest = requireFile(pairReviewHookTestPath);
-const codexPairReviewHook = requireFile(codexPairReviewHookPath);
-const agentHealthCommand = requireFile(agentHealthCommandPath);
-const agentHealthSkill = requireFile(agentHealthSkillPath);
-const codexAgentHealthSkill = requireFile(codexAgentHealthSkillPath);
-const agentPrCommentCommand = requireFile(agentPrCommentCommandPath);
-const agentPrCommentSkill = requireFile(agentPrCommentSkillPath);
-const codexAgentPrCommentSkill = requireFile(codexAgentPrCommentSkillPath);
-const codexGauntletCommand = requireFile(codexGauntletCommandPath);
-const codexGauntletSkill = requireFile(codexGauntletSkillPath);
-const codexCodexGauntletSkill = requireFile(codexCodexGauntletSkillPath);
-const codexGauntletHook = requireFile(codexGauntletHookPath);
-const codexGauntletHookTest = requireFile(codexGauntletHookTestPath);
-const codexCodexGauntletHook = requireFile(codexCodexGauntletHookPath);
-const codexReviewSkill = requireFile(codexReviewSkillPath);
-const codexCodexReviewSkill = requireFile(codexCodexReviewSkillPath);
-const runClaudeReviewScript = requireFile("scripts/run-claude-review.mjs");
-const runClaudeReviewTest = requireFile("scripts/run-claude-review.test.mjs");
-const agentHealthScript = requireFile("scripts/agent-health-check.mjs");
-const agentHealthTest = requireFile("scripts/agent-health-check.test.mjs");
-const prCommentScript = requireFile("scripts/post-agent-review-to-pr.mjs");
-const prCommentTest = requireFile("scripts/post-agent-review-to-pr.test.mjs");
-const claudeSettings = requireFile(".claude/settings.json");
-const codexHooksJson = requireFile(".codex/hooks.json");
-const packageJson = requireFile("package.json");
-
-requireIncludes(commandPath, command, "docs/audits/<YYYY-MM-DD>-codex-to-claude-<short-slug>-handoff.md");
-requireIncludes(commandPath, command, "Codex's Current Position");
-requireIncludes(commandPath, command, "Questions For Claude");
-requireIncludes(commandPath, command, "Anti-Prompt-Injection Note");
-requireIncludes(commandPath, command, "Do not push, deploy, apply live migrations, delete data, or commit");
-requireIncludes(commandPath, command, "prefer `claude-review` first");
-
-requireIncludes(claudeSkillPath, claudeSkill, "name: codex-to-claude-handoff");
-requireIncludes(claudeSkillPath, claudeSkill, "C:\\CRX_Manager\\.claude\\commands\\codex-to-claude-handoff.md");
-requireIncludes(claudeSkillPath, claudeSkill, "durable handoff");
-requireIncludes(claudeSkillPath, claudeSkill, "prefer the `claude-review` skill first");
-
-requireIncludes(claudeHookPath, claudeHook, "CRX Codex-to-Claude Handoff/Review reminder:");
-requireIncludes(claudeHookPath, claudeHook, "claude-review.md");
-requireIncludes(claudeHookPath, claudeHook, "codex-to-claude-handoff.md");
-// 2026-07-05: the hook now injects the single canonical push policy from prompt-source-lib
-requireIncludes(claudeHookPath, claudeHook, "PUSH_POLICY");
-requireIncludes(claudeHookPath, claudeHook, "prompt-source-lib");
-requireIncludes(claudeHookTestPath, claudeHookTest, "let Claude review this");
-requireIncludes(claudeHookTestPath, claudeHookTest, "have Claude look at this");
-requireIncludes(claudeHookTestPath, claudeHookTest, "ask Claude to check this");
-
-requireIncludes(claudeReviewCommandPath, claudeReviewCommand, "node scripts/run-claude-review.mjs");
-requireIncludes(claudeReviewCommandPath, claudeReviewCommand, ".claude/session-state/claude-review-latest.txt");
-requireIncludes(claudeReviewCommandPath, claudeReviewCommand, "Do not push, deploy, apply live migrations, delete data, or commit");
-requireIncludes(claudeReviewSkillPath, claudeReviewSkill, "name: claude-review");
-requireIncludes(claudeReviewSkillPath, claudeReviewSkill, "run-claude-review.mjs");
-requireIncludes("scripts/run-claude-review.mjs", runClaudeReviewScript, "Do not write, edit, commit, push, deploy, apply migrations, or delete data");
-requireIncludes("scripts/run-claude-review.test.mjs", runClaudeReviewTest, "buildClaudeReviewPrompt");
-
-requireIncludes(pairReviewCommandPath, pairReviewCommand, "agent-pair-review");
-requireIncludes(pairReviewCommandPath, pairReviewCommand, "agree/disagree/needs more evidence");
-requireIncludes(pairReviewCommandPath, pairReviewCommand, "node scripts/run-claude-review.mjs");
-requireIncludes(pairReviewSkillPath, pairReviewSkill, "name: agent-pair-review");
-requireIncludes(pairReviewSkillPath, pairReviewSkill, "two-model review");
-requireIncludes(pairReviewHookPath, pairReviewHook, "CRX Agent Pair Review reminder:");
-requireIncludes(pairReviewHookPath, pairReviewHook, "agent-pair-review.md");
-requireIncludes(pairReviewHookTestPath, pairReviewHookTest, "have both Codex and Claude review this");
-
-requireIncludes(agentHealthCommandPath, agentHealthCommand, "node scripts/agent-health-check.mjs");
-requireIncludes(agentHealthCommandPath, agentHealthCommand, "npm run test:agent-workflows");
-requireIncludes(agentHealthSkillPath, agentHealthSkill, "name: agent-health");
-requireIncludes("scripts/agent-health-check.mjs", agentHealthScript, "checkCodexSessionStartSyncsHooks");
-requireIncludes("scripts/agent-health-check.test.mjs", agentHealthTest, "checkCodexSessionStartSyncsHooks");
-
-requireIncludes(agentPrCommentCommandPath, agentPrCommentCommand, "post-agent-review-to-pr.mjs");
-requireIncludes(agentPrCommentCommandPath, agentPrCommentCommand, "--dry-run");
-requireIncludes(agentPrCommentCommandPath, agentPrCommentCommand, "--confirm");
-requireIncludes(agentPrCommentSkillPath, agentPrCommentSkill, "name: agent-pr-comment");
-requireIncludes("scripts/post-agent-review-to-pr.mjs", prCommentScript, "Default is safe dry-run");
-requireIncludes("scripts/post-agent-review-to-pr.test.mjs", prCommentTest, "buildPrCommentBody");
-
-requireIncludes(codexGauntletCommandPath, codexGauntletCommand, "CRX Codex Review Gauntlet");
-requireIncludes(codexGauntletCommandPath, codexGauntletCommand, "Baseline against `origin/main`");
-requireIncludes(codexGauntletCommandPath, codexGauntletCommand, "Do not push.");
-requireIncludes(codexGauntletSkillPath, codexGauntletSkill, "name: codex-gauntlet");
-requireIncludes(codexGauntletHookPath, codexGauntletHook, "Codex Review Gauntlet");
-requireIncludes(codexGauntletHookTestPath, codexGauntletHookTest, "Codex Review Gauntlet reminder");
-requireIncludes(codexReviewSkillPath, codexReviewSkill, "name: codex-review");
-requireIncludes(codexReviewSkillPath, codexReviewSkill, "Codex Review (direct CLI");
-
-requireIncludes(".claude/settings.json", claudeSettings, "codex-to-claude-handoff-reminder.mjs");
-requireIncludes(".claude/settings.json", claudeSettings, "agent-pair-review-reminder.mjs");
-requireIncludes(".claude/settings.json", claudeSettings, "codex-gauntlet-reminder.mjs");
-if (codexHooksJson !== null) {
-  // Only when the machine-local Codex hook mirror is present (skipped in CI / clean checkouts).
-  requireIncludes(".codex/hooks.json", codexHooksJson, "codex-to-claude-handoff-reminder.mjs");
-  requireIncludes(".codex/hooks.json", codexHooksJson, "agent-pair-review-reminder.mjs");
-  // The gauntlet reminder ("is this safe to ship?") must be mirrored to Codex too —
-  // otherwise a stale mirror missing only it would still pass while Codex never prompts.
-  requireIncludes(".codex/hooks.json", codexHooksJson, "codex-gauntlet-reminder.mjs");
-  requireIncludes(".codex/hooks.json", codexHooksJson, "-IncludeHooks");
+const claudeSettingsText = contents.get(".claude/settings.json");
+const codexHooksText = contents.get(".codex/hooks.json");
+try {
+  JSON.parse(claudeSettingsText);
+  pass(".claude/settings.json parses");
+} catch (error) {
+  fail(".claude/settings.json parses", error.message);
+}
+try {
+  JSON.parse(codexHooksText);
+  pass(".codex/hooks.json parses");
+} catch (error) {
+  fail(".codex/hooks.json parses", error.message);
 }
 
-if (claudeSkill !== null && codexSkill !== null) {
-  if (claudeSkill === codexSkill) {
-    pass("Codex skill copy is synced from Claude");
-  } else {
-    fail("Codex skill copy is synced from Claude", "run .codex\\sync-from-claude.ps1");
-  }
-}
-
-for (const [source, copy, label] of [
-  [claudeReviewSkill, codexClaudeReviewSkill, "Claude review skill copy is synced from Claude"],
-  [pairReviewSkill, codexPairReviewSkill, "Agent pair review skill copy is synced from Claude"],
-  [agentHealthSkill, codexAgentHealthSkill, "Agent health skill copy is synced from Claude"],
-  [agentPrCommentSkill, codexAgentPrCommentSkill, "Agent PR comment skill copy is synced from Claude"],
-  [codexGauntletSkill, codexCodexGauntletSkill, "Codex gauntlet skill copy is synced from Claude"],
-  [codexReviewSkill, codexCodexReviewSkill, "Codex review skill copy is synced from Claude"],
+for (const reminder of [
+  "codex-to-claude-handoff-reminder.mjs",
+  "agent-pair-review-reminder.mjs",
+  "codex-gauntlet-reminder.mjs",
 ]) {
-  if (source !== null && copy !== null) {
-    if (source === copy) {
-      pass(label);
-    } else {
-      fail(label, "run .codex\\sync-from-claude.ps1");
-    }
-  }
+  requireIncludes(".claude/settings.json", claudeSettingsText, reminder);
+  requireIncludes(".codex/hooks.json", codexHooksText, reminder);
 }
 
-if (claudeHook !== null && codexHook !== null) {
-  if (claudeHook === codexHook) {
-    pass("Codex hook copy is synced from Claude");
-  } else {
-    fail("Codex hook copy is synced from Claude", "run .codex\\sync-from-claude.ps1 -IncludeHooks");
-  }
-}
+requireIncludes(".codex/hooks.json", codexHooksText, ".claude/hooks/sql-safety.mjs");
+requireIncludes(".codex/hooks.json", codexHooksText, "production-action-guard.mjs");
+requireIncludes(".codex/config.toml", contents.get(".codex/config.toml"), "read_only=true");
+requireIncludes(".claude/commands/claude-review.md", contents.get(".claude/commands/claude-review.md"), "node scripts/run-claude-review.mjs");
+requireIncludes(".claude/commands/agent-pr-comment.md", contents.get(".claude/commands/agent-pr-comment.md"), "--dry-run");
+requireIncludes(".claude/commands/agent-pr-comment.md", contents.get(".claude/commands/agent-pr-comment.md"), "--confirm");
+requireIncludes(".claude/commands/codex-gauntlet.md", contents.get(".claude/commands/codex-gauntlet.md"), "Do not push.");
 
-if (pairReviewHook !== null && codexPairReviewHook !== null) {
-  if (pairReviewHook === codexPairReviewHook) {
-    pass("Codex pair review hook copy is synced from Claude");
-  } else {
-    fail("Codex pair review hook copy is synced from Claude", "run .codex\\sync-from-claude.ps1 -IncludeHooks");
-  }
-}
+const combinedWorkflowSources = [
+  ...[...contents.entries()]
+    .filter(([relative]) => relative.startsWith(".claude/commands/") || relative.startsWith(".claude/skills/"))
+    .map(([, content]) => content || ""),
+].join("\n");
+if (/C:\\\\CRX_Manager|C:\/CRX_Manager/i.test(combinedWorkflowSources)) fail("Claude workflow sources are worktree portable", "hard-coded C:\\CRX_Manager found");
+else pass("Claude workflow sources are worktree portable");
 
-if (codexGauntletHook !== null && codexCodexGauntletHook !== null) {
-  if (codexGauntletHook === codexCodexGauntletHook) {
-    pass("Codex gauntlet hook copy is synced from Claude");
-  } else {
-    fail("Codex gauntlet hook copy is synced from Claude", "run .codex\\sync-from-claude.ps1 -IncludeHooks");
-  }
-}
+const sync = spawnSync(process.execPath, [path.join(ROOT, "scripts", "sync-agent-workflows.mjs"), "--check"], {
+  cwd: ROOT,
+  encoding: "utf8",
+});
+if (sync.status === 0) pass("Codex workflow adapters are synced", sync.stdout.trim().split(/\r?\n/)[0]);
+else fail("Codex workflow adapters are synced", (sync.stderr || sync.stdout).trim().split(/\r?\n/)[0]);
 
 try {
-  const scripts = JSON.parse(packageJson).scripts || {};
-  if (scripts["check:agent-workflows"] === "node scripts/check-agent-workflows.mjs") {
-    pass("package.json check:agent-workflows script");
-  } else {
-    fail("package.json check:agent-workflows script");
-  }
-  if (scripts["test:agent-workflows"] === "node .claude/hooks/codex-gauntlet-reminder.test.mjs && node .claude/hooks/codex-to-claude-handoff-reminder.test.mjs && node .claude/hooks/agent-pair-review-reminder.test.mjs && node scripts/run-claude-review.test.mjs && node scripts/agent-health-check.test.mjs && node scripts/post-agent-review-to-pr.test.mjs && node scripts/check-agent-workflows.mjs") {
-    pass("package.json test:agent-workflows script");
-  } else {
-    fail("package.json test:agent-workflows script");
-  }
-  if (scripts["agent-health"] === "node scripts/agent-health-check.mjs") {
-    pass("package.json agent-health script");
-  } else {
-    fail("package.json agent-health script");
+  const scripts = JSON.parse(readFileSync(path.join(ROOT, "package.json"), "utf8")).scripts || {};
+  for (const name of ["check:agent-guidance", "check:agent-workflows", "test:agent-workflows", "agent-health"]) {
+    if (scripts[name]) pass(`package.json ${name} script`);
+    else fail(`package.json ${name} script`, "missing");
   }
 } catch (error) {
-  fail("package.json parse", error.message);
+  fail("package.json parses", error.message);
 }
 
 console.log("check-agent-workflows");
-for (const check of checks) {
-  console.log(`${check.status.padEnd(4)} ${check.name}${check.note ? ` - ${check.note}` : ""}`);
-}
-
-const failed = checks.filter((check) => check.status === "FAIL");
+for (const item of checks) console.log(`${item.status.padEnd(4)} ${item.name}${item.note ? ` - ${item.note}` : ""}`);
+const failed = checks.filter((item) => item.status === "FAIL");
 if (failed.length > 0) {
-  console.log(`FAIL - ${failed.length} check(s) failed.`);
+  console.log(`FAIL - ${failed.length} workflow check(s) failed.`);
   process.exit(1);
 }
-
-console.log("PASS - agent workflows are present and synced.");
+console.log("PASS - Claude and Codex workflows are present, portable, and synced.");
