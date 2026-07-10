@@ -56,7 +56,7 @@ import { generateIdempotencyKey } from '../lib/idempotency';
 import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
 import { formatCents } from '../lib/money';
-import { localToday, localDatePlusDays } from '../lib/dateUtils';
+import { localToday, localDatePlusDays, parseLocalDate } from '../lib/dateUtils';
 import { SkeletonCard } from '../components/ui/Skeleton';
 import type { WatchdogFlag } from '../types';
 import { useAuth } from '../contexts/AuthContext';
@@ -1079,7 +1079,7 @@ export default function OfficeCockpit() {
                   <span className={row.attention === 'lapsed' ? 'font-medium text-red-600' : 'font-medium text-nav-dark'}>Quote {row.quote_number}</span>
                   <span className={row.attention === 'lapsed' ? 'text-red-600' : 'text-gray-500'}> &mdash; {row.product_name} &middot; {row.quantity} &middot; </span>
                   <span className={row.attention === 'lapsed' ? 'text-red-600 font-medium' : 'text-orange-600 font-medium'}>
-                    {row.attention === 'lapsed' ? 'lapsed' : 'expires'} {new Date(row.expires_at).toLocaleDateString()}
+                    {row.attention === 'lapsed' ? 'lapsed' : 'expires'} {parseLocalDate(row.expires_at).toLocaleDateString()}
                   </span>
                 </button>
               ))}

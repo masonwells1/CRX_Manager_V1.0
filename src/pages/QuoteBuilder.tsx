@@ -165,6 +165,18 @@ function makeEmptyItem(): LocalItem {
   };
 }
 
+function hasUserEnteredItemValues(item: LocalItem): boolean {
+  return item.notes !== null
+    || item.price_override !== null
+    || item.actual_rate !== null
+    || item.rate_unit !== null
+    || item.acres !== null
+    || item.total_units_needed !== null
+    || item.unit_size !== null
+    || item.price_unit !== null
+    || item.calc_mode !== 'rate_acres';
+}
+
 function makeEmptySection(order: number): LocalSection {
   return {
     _key: nextKey(),
@@ -811,6 +823,23 @@ export default function QuoteBuilder() {
   };
 
   const closeProductPicker = () => {
+    if (productSearchOpen) {
+      const { sectionKey, itemKey } = productSearchOpen;
+      setSections((prev) =>
+        prev.map((section) => {
+          if (section._key !== sectionKey) return section;
+          const targetItem = section.items.find((item) => item._key === itemKey);
+          if (!targetItem || targetItem.product_id || hasUserEnteredItemValues(targetItem)) return section;
+
+          return {
+            ...section,
+            items: section.items
+              .filter((item) => item._key !== itemKey)
+              .map((item, index) => ({ ...item, sort_order: index + 1 })),
+          };
+        })
+      );
+    }
     setProductSearchOpen(null);
     setProductQuery('');
     setKeepProductPickerOpen(false);
