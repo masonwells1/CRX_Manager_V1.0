@@ -13,6 +13,7 @@ import { Plus, Copy, Pencil, Trash2, Sprout, Save, X, ChevronDown, ChevronUp } f
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
+import SearchableSelect from '../components/ui/SearchableSelect';
 import Modal from '../components/ui/Modal';
 import Badge from '../components/ui/Badge';
 import SplitHeading from '../components/ui/SplitHeading';
@@ -353,6 +354,7 @@ export default function CropPrograms() {
                   <button
                     onClick={() => setExpandedId(expandedId === prog.id ? null : prog.id)}
                     className="p-1.5 rounded-lg text-gray-400 hover:text-nav-dark hover:bg-gray-100 transition-colors"
+                    aria-label={expandedId === prog.id ? 'Collapse program' : 'Expand program'}
                   >
                     {expandedId === prog.id ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
                   </button>
@@ -360,6 +362,7 @@ export default function CropPrograms() {
                     onClick={() => openEdit(prog)}
                     className="p-1.5 rounded-lg text-gray-400 hover:text-crx-green hover:bg-crx-green-light transition-colors"
                     title="Edit"
+                    aria-label="Edit"
                   >
                     <Pencil className="w-4 h-4" />
                   </button>
@@ -367,6 +370,7 @@ export default function CropPrograms() {
                     onClick={() => handleDuplicate(prog)}
                     className="p-1.5 rounded-lg text-gray-400 hover:text-blue-600 hover:bg-blue-50 transition-colors"
                     title="Duplicate"
+                    aria-label="Duplicate"
                   >
                     <Copy className="w-4 h-4" />
                   </button>
@@ -375,6 +379,7 @@ export default function CropPrograms() {
                       onClick={() => setDeleteConfirm(prog.id)}
                       className="p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors"
                       title="Delete"
+                      aria-label="Delete"
                     >
                       <Trash2 className="w-4 h-4" />
                     </button>
@@ -492,16 +497,12 @@ export default function CropPrograms() {
                     </div>
                     <div className="col-span-2 sm:col-span-4">
                       <label className="block text-xs font-medium text-secondary mb-1">Product</label>
-                      <select
+                      <SearchableSelect
+                        options={products.map((p) => ({ value: p.id, label: p.product_name }))}
                         value={item.product_id}
-                        onChange={(e) => updateItem(idx, 'product_id', e.target.value)}
-                        className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg"
-                      >
-                        <option value="">Select product...</option>
-                        {products.map((p) => (
-                          <option key={p.id} value={p.id}>{p.product_name}</option>
-                        ))}
-                      </select>
+                        onChange={(value) => updateItem(idx, 'product_id', value)}
+                        placeholder="Select product..."
+                      />
                     </div>
                     <div className="col-span-1 sm:col-span-2">
                       <label className="block text-xs font-medium text-secondary mb-1">Rate</label>
@@ -534,6 +535,7 @@ export default function CropPrograms() {
                       <button
                         onClick={() => removeItem(idx)}
                         className="p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors"
+                        aria-label="Remove item"
                       >
                         <X className="w-4 h-4" />
                       </button>

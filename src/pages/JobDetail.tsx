@@ -4,6 +4,7 @@ import { Save, Plus, Trash2, Check, FileText, Beaker, Ban, MessageSquarePlus, Pr
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
+import SearchableSelect from '../components/ui/SearchableSelect';
 import Badge, { type BadgeVariant } from '../components/ui/Badge';
 import Modal from '../components/ui/Modal';
 import UnsavedChangesModal from '../components/ui/UnsavedChangesModal';
@@ -1177,6 +1178,7 @@ export default function JobDetail() {
 
   // Sub-collections
   const [fieldRows, setFieldRows] = useState<FieldRow[]>([]);
+  const [growerShareFieldNames, setGrowerShareFieldNames] = useState<string[]>([]);
   // Field-app parity #5: index of the field row currently being dragged to set
   // the applicator route order (null when no drag is in progress).
   const [dragFieldIndex, setDragFieldIndex] = useState<number | null>(null);
@@ -1510,6 +1512,34 @@ export default function JobDetail() {
         }))
     );
 
+    // U16b: best-effort advisory before transfer. The transfer RPC remains the
+    // pricing authority; a failed read simply leaves the banner hidden.
+    const jobFields = j.job_fields || [];
+    const jobFieldIds = Array.from(new Set(jobFields.map((field) => field.field_id).filter(Boolean)));
+    if (jobFieldIds.length > 0) {
+      const { data: growerShareRows, error: growerShareError } = await supabase
+        .from('field_billing_defaults')
+        .select('field_id')
+        .in('field_id', jobFieldIds)
+        .not('price_override_cents', 'is', null);
+      if (growerShareError) {
+        Sentry.captureException(growerShareError, { tags: { source: 'fetch', page: 'job-detail', context: 'grower_share_banner' } });
+        setGrowerShareFieldNames([]);
+      } else {
+        const overrideIds = new Set(
+          ((growerShareRows || []) as Array<{ field_id: string }>).map((row) => row.field_id),
+        );
+        setGrowerShareFieldNames(Array.from(new Set(
+          jobFields
+            .filter((field) => overrideIds.has(field.field_id))
+            .map((field) => field.field?.field_name || '')
+            .filter(Boolean),
+        )));
+      }
+    } else {
+      setGrowerShareFieldNames([]);
+    }
+
     // Load saved shares; then SEED defaults for any field that has no saved
     // shares (existing jobs created before this migration, or a field never
     // touched), so the list/#26 split don't collapse to the primary customer
@@ -1595,6 +1625,7 @@ export default function JobDetail() {
       if (!isNew && id) {
         await fetchJob();
       } else {
+        setGrowerShareFieldNames([]);
         const { data, error } = await supabase.rpc('next_job_number');
         if (!error && data) setJobNumber(assertRpcResult<string>(data, 'next_job_number'));
         const recipeParam = searchParams.get('recipe_id');
@@ -1608,13 +1639,16 @@ export default function JobDetail() {
   // U12 Codex R3 #2: does the current APPLICATOR hold an active ('dispatched')
   // job_location_dispatches row on this job? The assignment-unification migration
   // authorizes such a dispatchee to start/complete server-side, so the UI gate
-  // must match. RLS on job_location_dispatches already scopes an applicator to
-  // their own active rows, so the query is safe. Best-effort: any error leaves
-  // the gate false (office roles never depend on it, and the RPC stays
-  // authoritative for the stricter rules either way).
+  // must match. The probe deliberately has NO applicator_id filter (A3), so a
+  // CREW-member dispatch also lights the gate: RLS scopes the read to the caller's
+  // own rows + their active crew's rows, and start_job (via _is_dispatched_to_me's
+  // crew branch) and complete_job (direct ground_crew_members check) authorize
+  // crew members server-side. Best-effort: any error leaves the gate false (office
+  // roles never depend on it, and the RPC stays authoritative for the stricter
+  // rules either way).
   useEffect(() => {
+    setHasActiveDispatch(false);
     if (isNew || !id || !profile?.id || role !== 'applicator') {
-      setHasActiveDispatch(false);
       return;
     }
     let cancelled = false;
@@ -1623,7 +1657,6 @@ export default function JobDetail() {
         .from('job_location_dispatches')
         .select('id')
         .eq('job_id', id)
-        .eq('applicator_id', profile.id)
         .eq('dispatch_status', 'dispatched')
         .limit(1);
       if (!cancelled) setHasActiveDispatch(!res.error && (res.data?.length ?? 0) > 0);
@@ -2079,6 +2112,49 @@ export default function JobDetail() {
         sort_order: i,
       }));
 
+      const newAssigneeIsApplicator = applicators.some((p) => p.id === applicatorId && p.role === 'applicator');
+      // Mirrors the trigger's role='applicator' + active guard; the picker is active-only, so we never notify about a displacement that didn't happen.
+      const isWholeJobApplicatorReassign = !isNew && !!applicatorId && applicatorId !== savedApplicatorId && newAssigneeIsApplicator;
+      const newApplicatorId = applicatorId || null;
+      const custNameForNotify = customers.find((c) => c.id === customerId)?.farm_name || 'Unknown';
+      let displacedApplicatorIds: string[] = [];
+      // This pre-save snapshot is not atomic with save; concurrent dispatch edits or a retry-after-commit can mis-target advisory notifications.
+      // That best-effort window is accepted because notifications are advisory and the server data remains correct.
+      if (isWholeJobApplicatorReassign) {
+        try {
+          const dispRes = await supabase
+            .from('job_location_dispatches')
+            .select('applicator_id')
+            .eq('job_id', id!)
+            .eq('dispatch_status', 'dispatched')
+            .not('applicator_id', 'is', null);
+          if (dispRes.error) throw dispRes.error;
+          displacedApplicatorIds = [...new Set(
+            (dispRes.data || [])
+              .map((r) => r.applicator_id)
+              .filter((aid): aid is string => !!aid),
+          )];
+        } catch (snapshotErr) {
+          Sentry.captureException(snapshotErr instanceof Error ? snapshotErr : new Error(String(snapshotErr)), { extra: { context: 'snapshot_displaced_dispatchees' } });
+        }
+      }
+
+      let displacementCommitted = false;
+      // A2: fire as soon as a displacement commits so no later fallible sub-step or
+      // early return can silently drop the split-assignee un-dispatch notices.
+      const notifyDisplacedApplicators = (savedJobId: string) => {
+        if (!isWholeJobApplicatorReassign || !displacementCommitted) return;
+        const notified = new Set<string>();
+        if (newApplicatorId) notified.add(newApplicatorId);
+        if (savedApplicatorId) notified.add(savedApplicatorId);
+        if (profile?.id) notified.add(profile.id);
+        for (const idToNotify of displacedApplicatorIds) {
+          if (notified.has(idToNotify)) continue;
+          notified.add(idToNotify);
+          void notifyApplicatorUndispatched(idToNotify, jobNumber || '', custNameForNotify, savedJobId);
+        }
+      };
+
       const idemKey = saveJobIdem.getKey();
       const { data, error } = await supabase.rpc('save_job', {
         p_job_id: (isNew ? null : id) as string,
@@ -2090,8 +2166,13 @@ export default function JobDetail() {
       });
 
       if (error) throw error;
+      if (isWholeJobApplicatorReassign && !licenseOverride) {
+        displacementCommitted = true;
+        notifyDisplacedApplicators(id as string);
+      }
       saveJobIdem.resetKey();
       const result = assertRpcResult<SaveJobResult>(data, 'save_job');
+      const savedJobIdForNotify = isNew ? result.job_id : (id as string);
 
       // Field-app parity #6 + #10: persist the ground crew AND the loader-worksheet
       // inputs (carrier rate + per-job tank-capacity override) via a direct
@@ -2153,6 +2234,10 @@ export default function JobDetail() {
       if (shouldReassignApplicatorAfterSave({ licenseOverride, applicatorId, savedApplicatorId })) {
         try {
           await assignWithOverride(isNew ? result.job_id : id!);
+          if (isWholeJobApplicatorReassign) {
+            displacementCommitted = true;
+            notifyDisplacedApplicators(savedJobIdForNotify);
+          }
         } catch (assignErr) {
           Sentry.captureException(assignErr instanceof Error ? assignErr : new Error(String(assignErr)), { extra: { context: 'assign_job_applicator_after_save' } });
           toast('error', isNew
@@ -2189,9 +2274,6 @@ export default function JobDetail() {
       // Applicators previously got NO notification at all for any of these three
       // (verified: no notify*/createNotification call existed around this save
       // path before U12).
-      const savedJobIdForNotify = isNew ? result.job_id : (id as string);
-      const newApplicatorId = applicatorId || null;
-      const custNameForNotify = customers.find((c) => c.id === customerId)?.farm_name || 'Unknown';
       if (newApplicatorId && newApplicatorId !== savedApplicatorId) {
         void notifyApplicatorDispatched(newApplicatorId, jobNumber || '', custNameForNotify, jobDate, savedJobIdForNotify);
       } else if (newApplicatorId && newApplicatorId === savedApplicatorId && jobDate !== savedJobDate) {
@@ -2881,6 +2963,11 @@ export default function JobDetail() {
               Complete Job
             </Button>
           )}
+          {canTransfer && growerShareFieldNames.length > 0 && (
+            <div className="max-w-sm px-3 py-1.5 rounded-lg bg-blue-50 text-xs text-blue-800">
+              Grower-share override active on <strong>{growerShareFieldNames.join(', ')}</strong> — the invoice will bill those growers at the override rate.
+            </div>
+          )}
           {canTransfer && (
             <Button variant="secondary" onClick={() => setShowTransferConfirm(true)} loading={transferring}>
               <FileText className="w-4 h-4" />
@@ -3198,17 +3285,13 @@ export default function JobDetail() {
                       <div className="grid grid-cols-2 md:grid-cols-7 gap-2 items-end">
                         <div className="col-span-2 md:col-span-2">
                           <label className="block text-xs font-medium text-secondary mb-1">Field</label>
-                          <select
+                          <SearchableSelect
+                            options={customerFields.map((cf) => ({ value: cf.id, label: cf.field_name }))}
                             value={f.field_id}
-                            onChange={(e) => updateFieldRow(i, 'field_id', e.target.value)}
+                            onChange={(value) => updateFieldRow(i, 'field_id', value)}
                             disabled={!canEdit}
-                            className={shareInputCls}
-                          >
-                            <option value="">Select field...</option>
-                            {customerFields.map((cf) => (
-                              <option key={cf.id} value={cf.id}>{cf.field_name}</option>
-                            ))}
-                          </select>
+                            placeholder="Select field..."
+                          />
                         </div>
                         <div>
                           <label className="block text-xs font-medium text-secondary mb-1">Acres</label>
@@ -3256,17 +3339,13 @@ export default function JobDetail() {
                           <div className="space-y-1.5">
                             {fieldShares.map((s) => (
                               <div key={s.idx} className="flex items-center gap-2">
-                                <select
+                                <SearchableSelect
+                                  options={customers.map((c) => ({ value: c.id, label: c.farm_name }))}
                                   value={s.customer_id}
-                                  onChange={(e) => updateShareRow(s.idx, 'customer_id', e.target.value)}
+                                  onChange={(value) => updateShareRow(s.idx, 'customer_id', value)}
                                   disabled={!canEdit}
-                                  className="flex-1 px-2 py-1 text-sm border border-gray-200 rounded disabled:bg-gray-50"
-                                >
-                                  <option value="">Select customer...</option>
-                                  {customers.map((c) => (
-                                    <option key={c.id} value={c.id}>{c.farm_name}</option>
-                                  ))}
-                                </select>
+                                  placeholder="Select customer..."
+                                />
                                 <input
                                   type="number" min={0} max={100} step="0.01"
                                   value={s.split_pct}
@@ -3362,11 +3441,13 @@ export default function JobDetail() {
                     <div className="grid grid-cols-12 gap-2 items-end">
                       <div className="col-span-12 md:col-span-3">
                         <label className="block text-xs font-medium text-secondary mb-1">Chemical</label>
-                        <select value={c.product_id} onChange={(e) => updateChemRow(i, 'product_id', e.target.value)}
-                          disabled={!canEdit} className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg disabled:bg-gray-50">
-                          <option value="">Select product...</option>
-                          {allProducts.map((p) => (<option key={p.id} value={p.id}>{p.product_name}</option>))}
-                        </select>
+                        <SearchableSelect
+                          options={allProducts.map((p) => ({ value: p.id, label: p.product_name }))}
+                          value={c.product_id}
+                          onChange={(value) => updateChemRow(i, 'product_id', value)}
+                          disabled={!canEdit}
+                          placeholder="Select product..."
+                        />
                       </div>
                       <div className="col-span-6 md:col-span-2">
                         <label className="block text-xs font-medium text-secondary mb-1">Warehouse</label>

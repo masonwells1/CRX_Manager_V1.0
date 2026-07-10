@@ -622,6 +622,7 @@ export default function Orders() {
                   <option value="partially_fulfilled">Partially Fulfilled</option>
                   <option value="fulfilled">Fulfilled</option>
                   <option value="cancelled">Cancelled</option>
+                  <option value="voided">Voided</option>
                 </select>
                 <select
                   value={planFilter}

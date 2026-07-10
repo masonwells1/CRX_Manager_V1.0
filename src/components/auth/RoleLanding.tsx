@@ -1,44 +1,27 @@
-import { useAuth } from '../../contexts/AuthContext';
 import { Navigate } from 'react-router-dom';
-import type { ReactNode } from 'react';
+import { useAuth } from '../../contexts/AuthContext';
 import { hasPageAccess } from '../../lib/pagePermissions';
 
 /**
- * Role-based landing for "/" (U12 — applicator "My Day" rebuild).
- *
- * Office roles (admin/sales_rep) keep the existing Dashboard — pass it in as
- * `officeElement` so App.tsx keeps full control of its lazy-loading (this
- * component must NOT import Dashboard directly, which would defeat the
- * `lazy()` split — CLAUDE.md rule "Lazy-load all pages").
- *
- * A driver's primary job is running today's delivery route, so "/" now sends
- * them straight to /my-route instead of the office Dashboard. An applicator's
- * primary job is running today's field jobs, so "/" sends them to /field
- * (FieldView / "My Day"). Both routes were already reachable via direct nav
- * for these roles (App.tsx allowedRoles already include them) — this only
- * changes what "/" resolves to, so they aren't dropped on an office screen
- * with mostly-inaccessible links every time they open the app.
- *
- * Deny-list guard (Codex U12 P2): the target page can be in the profile's
- * denied_pages (an admin can deny 'my-route' to a driver / 'field' to an
- * applicator). Redirecting there anyway would bounce off ProtectedRoute's
- * hasPageAccess check back to "/" — an infinite redirect loop. So this
- * component runs the SAME hasPageAccess(role, deniedPages, pageKey) check
- * ProtectedRoute uses (identical helper, identical page keys), and falls back
- * to the office Dashboard when the role's landing page is denied.
- *
- * This component is mounted UNDER the existing <ProtectedRoute> (no
- * allowedRoles — every authenticated role reaches "/"), which already blocks
- * on `loading`/`!session`/`!profile` before rendering its children — so by
- * the time RoleLanding renders, `profile` is guaranteed non-null.
+ * Role-based landing for "/". The root route is deliberately redirect-only:
+ * office users begin on Today, while phone roles begin on their daily screen.
+ * Check the deny-list here: ProtectedRoute redirects denied pages back to "/"
+ * (Codex U12 P2), so an unchecked landing target would create a redirect loop.
  */
-export default function RoleLanding({ officeElement }: { officeElement: ReactNode }) {
+export default function RoleLanding() {
   const { profile, deniedPages } = useAuth();
-  if (profile?.role === 'driver' && hasPageAccess(profile.role, deniedPages, 'my-route')) {
+  const role = profile?.role;
+
+  if (role === 'driver' && hasPageAccess(role, deniedPages, 'my-route')) {
     return <Navigate to="/my-route" replace />;
   }
-  if (profile?.role === 'applicator' && hasPageAccess(profile.role, deniedPages, 'field')) {
+  if (role === 'applicator' && hasPageAccess(role, deniedPages, 'field')) {
     return <Navigate to="/field" replace />;
   }
-  return <>{officeElement}</>;
+  if ((role === 'admin' || role === 'sales_rep') && hasPageAccess(role, deniedPages, 'office-cockpit')) {
+    return <Navigate to="/office-cockpit" replace />;
+  }
+
+  // Team Board is all-role and exempt from the deny-list, so this fallback cannot loop.
+  return <Navigate to="/team-board" replace />;
 }

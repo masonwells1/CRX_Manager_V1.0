@@ -500,7 +500,7 @@ export default function FieldSetup() {
     <div className="space-y-4">
       {/* Header */}
       <div className="flex items-center gap-3">
-        <button onClick={() => navigate('/fields')} className="p-2 rounded-lg hover:bg-white hover:shadow-sm transition-all text-secondary">
+        <button aria-label="Back to fields" onClick={() => navigate('/fields')} className="p-2 rounded-lg hover:bg-white hover:shadow-sm transition-all text-secondary">
           <ArrowLeft className="w-5 h-5" />
         </button>
         <MapPin className="w-5 h-5 text-crx-green" />

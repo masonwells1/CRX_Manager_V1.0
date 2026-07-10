@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState , useCallback, lazy, Suspense } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Save, Plus, Trash2, Search, MapPin, FileText, Truck, AlertTriangle, MessageSquarePlus, Copy, ClipboardList } from 'lucide-react';
+import { Save, Plus, Trash2, Search, MapPin, FileText, Truck, AlertTriangle, MessageSquarePlus, Copy, ClipboardList, Zap } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
@@ -583,6 +583,9 @@ export default function CustomerDetail() {
               </Button>
               <Button variant="secondary" size="sm" icon={<Truck className="w-4 h-4" />} onClick={() => navigate(`/deliveries/new?customer_id=${id}`)}>
                 Sched. Delivery
+              </Button>
+              <Button variant="secondary" size="sm" icon={<Zap className="w-4 h-4" />} onClick={() => navigate(`/deliveries?quickDeliver=1&customer_id=${id}`)}>
+                Sell &amp; Deliver Now
               </Button>
               <Button
                 variant="secondary"

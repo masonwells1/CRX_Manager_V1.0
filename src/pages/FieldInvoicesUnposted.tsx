@@ -1,12 +1,12 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, FileText, Printer, FileClock, Mail, Pencil, X, Search, ClipboardCheck, ArrowLeft } from 'lucide-react';
+import { FileText, Printer, FileClock, Mail, Pencil, X, Search, ClipboardCheck, ArrowLeft, MoreHorizontal } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import ConfirmModal from '../components/ui/ConfirmModal';
 import MultiSelectDropdown, { type MultiSelectOption } from '../components/jobs/MultiSelectDropdown';
 import { useToast } from '../components/ui/Toast';
-import { supabase, sanitizeError, hasRpcCode, RpcErrorCodes } from '../lib/db';
+import { supabase, sanitizeError, assertRpcResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
 import { Sentry } from '../lib/sentry';
 import { runCriticalAction } from '../lib/criticalAction';
 import { generateIdempotencyKey } from '../lib/idempotency';
@@ -23,6 +23,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { formatCents as fmt } from '../lib/money';
 import { getSeasonDates } from '../utils/season';
 import { SkeletonTable } from '../components/ui/Skeleton';
+import type { PostInvoiceGroupResult } from '../types';
 import {
   mapFieldInvoiceRow,
   applyFieldInvoiceFilters,
@@ -41,6 +42,10 @@ import {
 // /field-invoices. Money is integer cents end-to-end (display via formatCents).
 
 const QUERY_LIMIT = 2000;
+
+type UnpostedFieldInvoiceRow = FieldInvoiceListRow & {
+  invoice_group_id: string | null;
+};
 
 // PostgREST select: the invoice + customer + linked job number + engine-built
 // per-location rows (locations/crops/acres) + line items (chemicals). One round
@@ -74,14 +79,16 @@ export default function FieldInvoicesUnposted() {
   const { toast } = useToast();
   const { profile } = useAuth();
 
-  const [rows, setRows] = useState<FieldInvoiceListRow[]>([]);
+  const [rows, setRows] = useState<UnpostedFieldInvoiceRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [filters, setFilters] = useState<FieldInvoiceListFilters>(emptyFieldInvoiceFilters);
   const [busy, setBusy] = useState(false);
   const [showPostAll, setShowPostAll] = useState(false);
+  const [manualInvoiceMenuOpen, setManualInvoiceMenuOpen] = useState(false);
   // Per-row action guard so a double-click can't fire two prints/emails.
   const rowActionRef = useRef(false);
-  // Per-invoice idempotency keys from a keyed ref cache so a network-retry
+  const manualInvoiceMenuRef = useRef<HTMLDivElement>(null);
+  // Per-invoice/per-group idempotency keys from a keyed ref cache so a network-retry
   // (post committed server-side but response lost) reuses the SAME key per
   // invoice and the server dedup matches instead of double-posting. Minted
   // once per invoice; cleared on a clean Post All run. (Mirrors OrderDetail's
@@ -162,7 +169,12 @@ export default function FieldInvoicesUnposted() {
       }
     }
 
-    setRows(raws.map(mapFieldInvoiceRow));
+    // LIST_SELECT includes `*`, so invoice_group_id is already present. Preserve it
+    // on the flattened row for atomic Post All routing.
+    setRows(raws.map((raw) => ({
+      ...mapFieldInvoiceRow(raw),
+      invoice_group_id: raw.invoice_group_id ?? null,
+    })));
     setLoading(false);
   }, [toast]);
 
@@ -170,8 +182,31 @@ export default function FieldInvoicesUnposted() {
     fetchInvoices();
   }, [fetchInvoices]);
 
+  useEffect(() => {
+    if (!manualInvoiceMenuOpen) return;
+
+    const closeMenuOnOutsideClick = (event: MouseEvent) => {
+      if (!manualInvoiceMenuRef.current?.contains(event.target as Node)) {
+        setManualInvoiceMenuOpen(false);
+      }
+    };
+    const closeMenuOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setManualInvoiceMenuOpen(false);
+    };
+
+    document.addEventListener('mousedown', closeMenuOnOutsideClick);
+    document.addEventListener('keydown', closeMenuOnEscape);
+    return () => {
+      document.removeEventListener('mousedown', closeMenuOnOutsideClick);
+      document.removeEventListener('keydown', closeMenuOnEscape);
+    };
+  }, [manualInvoiceMenuOpen]);
+
   // The SAME filtered list drives the table AND the footer totals.
-  const visible = useMemo(() => applyFieldInvoiceFilters(rows, filters), [rows, filters]);
+  const visible = useMemo(
+    () => applyFieldInvoiceFilters(rows, filters) as UnpostedFieldInvoiceRow[],
+    [rows, filters],
+  );
   const totals = useMemo(() => computeFieldInvoiceTotals(visible), [visible]);
 
   const customerOptions: MultiSelectOption[] = useMemo(() => {
@@ -324,52 +359,96 @@ export default function FieldInvoicesUnposted() {
     });
   };
 
-  // --- POST ALL (posts every displayed invoice, after confirm) ---
+  const postGroupCount = useMemo(
+    () => new Set(visible.map((row) => row.invoice_group_id).filter((groupId): groupId is string => !!groupId)).size,
+    [visible],
+  );
+  const postIndividualCount = visible.filter((row) => !row.invoice_group_id).length;
+
+  // --- POST ALL (posts every displayed individual invoice and each displayed split
+  // group once, after confirm). post_invoice_group intentionally posts ALL members,
+  // including siblings hidden by the current filters, so a group cannot be half-posted.
   const postAll = async () => {
     setShowPostAll(false);
     if (!profile) { toast('error', 'Profile not loaded — please refresh.'); return; }
-    const targets = visible.map((r) => ({ id: r.id, invoice_number: r.invoice_number }));
-    if (targets.length === 0) { toast('error', 'No invoices to post'); return; }
+    const individualTargets = visible
+      .filter((row) => !row.invoice_group_id)
+      .map((row) => ({ id: row.id, invoice_number: row.invoice_number }));
+    const groupTargets = Array.from(
+      visible.reduce((groups, row) => {
+        if (row.invoice_group_id && !groups.has(row.invoice_group_id)) {
+          groups.set(row.invoice_group_id, {
+            group_id: row.invoice_group_id,
+            label: `split group containing ${row.invoice_number}`,
+          });
+        }
+        return groups;
+      }, new Map<string, { group_id: string; label: string }>()).values(),
+    );
+    const targetCount = individualTargets.length + groupTargets.length;
+    if (targetCount === 0) { toast('error', 'No invoices to post'); return; }
     await runCriticalAction({
       action: async () => {
         let posted = 0;
         const failures: string[] = [];
-        for (const t of targets) {
-          if (!postKeysRef.current[t.id]) {
-            postKeysRef.current[t.id] = generateIdempotencyKey('post_invoice', `${profile.id}:${t.id}`);
+        for (const group of groupTargets) {
+          const keyId = `grp:${group.group_id}`;
+          if (!postKeysRef.current[keyId]) {
+            postKeysRef.current[keyId] = generateIdempotencyKey('post_invoice_group', `${profile.id}:${group.group_id}`);
+          }
+          try {
+            const { data, error } = await supabase.rpc('post_invoice_group', {
+              p_invoice_group_id: group.group_id,
+              p_performed_by: profile.id,
+              p_idempotency_key: postKeysRef.current[keyId],
+            });
+            if (error) throw error;
+            assertRpcResult<PostInvoiceGroupResult>(data, 'post_invoice_group');
+            posted += 1;
+            delete postKeysRef.current[keyId];
+          } catch (err: unknown) {
+            if (hasRpcCode(err, RpcErrorCodes.PRICING_INCOMPLETE)) {
+              failures.push(`${group.label}: needs pricing first`);
+            } else {
+              failures.push(`${group.label}: ${sanitizeError(err)}`);
+            }
+          }
+        }
+        for (const target of individualTargets) {
+          if (!postKeysRef.current[target.id]) {
+            postKeysRef.current[target.id] = generateIdempotencyKey('post_invoice', `${profile.id}:${target.id}`);
           }
           try {
             // post_invoice RETURNS void — canonical void-RPC pattern is
             // .throwOnError() with no `=` capture (no result to assert).
             await supabase
               .rpc('post_invoice', {
-                p_invoice_id: t.id,
-                p_idempotency_key: postKeysRef.current[t.id],
+                p_invoice_id: target.id,
+                p_idempotency_key: postKeysRef.current[target.id],
               })
               .throwOnError();
             posted += 1;
+            delete postKeysRef.current[target.id];
           } catch (err: unknown) {
             // PRICING_INCOMPLETE is the common, expected reason a field invoice
             // can't post yet — show plain English instead of the raw code.
             // (Mirrors OrderDetail's Post-All handling.)
             if (hasRpcCode(err, RpcErrorCodes.PRICING_INCOMPLETE)) {
-              failures.push(`${t.invoice_number}: needs pricing first`);
+              failures.push(`${target.invoice_number}: needs pricing first`);
             } else {
-              failures.push(`${t.invoice_number}: ${sanitizeError(err)}`);
+              failures.push(`${target.invoice_number}: ${sanitizeError(err)}`);
             }
           }
         }
         await fetchInvoices();
         if (failures.length > 0) {
-          // Surface partial outcome honestly — some posted, some did not. Keep
-          // the keys for the failed ones so a retry reuses the same key.
-          throw new Error(`Posted ${posted}/${targets.length}. Failed: ${failures.slice(0, 3).join(' | ')}${failures.length > 3 ? ' …' : ''}`);
+          // Surface partial outcome honestly — some posting targets succeeded,
+          // some did not. Failed target keys remain stable for a safe retry.
+          throw new Error(`Posted ${posted}/${targetCount} target(s). Failed: ${failures.slice(0, 3).join(' | ')}${failures.length > 3 ? ` | +${failures.length - 3} more` : ''}`);
         }
-        // Clean run — clear the cache so a future Post All mints fresh keys.
-        postKeysRef.current = {};
       },
       toast,
-      successMessage: `Posted ${targets.length} invoice(s)`,
+      successMessage: `Posted ${individualTargets.length} individual invoice(s) and ${groupTargets.length} split group(s)`,
       setLoading: setBusy,
       sentryTag: 'field_invoice_post_all',
     });
@@ -401,9 +480,41 @@ export default function FieldInvoicesUnposted() {
             <p className="text-xs text-secondary mt-0.5">The working tray — field bills that have not yet been posted.</p>
           </div>
         </div>
-        <Button variant="primary" icon={<Plus className="w-4 h-4" />} onClick={() => navigate('/invoices/field-app/new')}>
-          Add Invoice
-        </Button>
+        <div
+          className="relative"
+          ref={manualInvoiceMenuRef}
+          onBlur={(event) => {
+            if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+              setManualInvoiceMenuOpen(false);
+            }
+          }}
+        >
+          <button
+            type="button"
+            onClick={() => setManualInvoiceMenuOpen((open) => !open)}
+            aria-label="More actions"
+            aria-haspopup="menu"
+            aria-expanded={manualInvoiceMenuOpen}
+            className="inline-flex items-center justify-center rounded-lg border border-gray-300 bg-white p-2 text-nav-dark hover:bg-gray-50"
+          >
+            <MoreHorizontal className="w-4 h-4" />
+          </button>
+          {manualInvoiceMenuOpen && (
+            <div role="menu" className="absolute right-0 z-20 mt-2 w-52 rounded-lg border border-gray-200 bg-white py-1 shadow-lg">
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  navigate('/invoices/field-app/new');
+                  setManualInvoiceMenuOpen(false);
+                }}
+                className="w-full px-3 py-2 text-left text-sm text-nav-dark hover:bg-gray-50"
+              >
+                Manual Invoice (no job)
+              </button>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Filter bar */}
@@ -612,8 +723,8 @@ export default function FieldInvoicesUnposted() {
         onClose={() => setShowPostAll(false)}
         onConfirm={postAll}
         title="Post all displayed invoices?"
-        message={`This posts all ${totals.count} unposted field invoice(s) currently shown (${fmt(totals.totalAmountCents)}). Posting commits them to accounts receivable and is logged. Continue?`}
-        confirmLabel={`Post ${totals.count}`}
+        message={`Post ${postIndividualCount} individual invoice(s) + ${postGroupCount} split group(s) represented in the current view? A split group always posts all of its members together, even when some members are hidden by filters. Posting commits them to accounts receivable and is logged.`}
+        confirmLabel={`Post ${postIndividualCount + postGroupCount} target(s)`}
         variant="info"
         icon={ClipboardCheck}
         loading={busy}

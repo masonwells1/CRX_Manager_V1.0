@@ -547,6 +547,7 @@ export default function QuickReceive() {
                         onClick={() => toggleExpanded(item.key)}
                         className="p-2 rounded-lg text-gray-400 hover:text-nav-dark hover:bg-gray-50 transition-colors"
                         title="Details"
+                        aria-label={expandedItems.has(item.key) ? 'Collapse details' : 'Expand details'}
                       >
                         {expandedItems.has(item.key) ? (
                           <ChevronUp className="w-4 h-4" />
@@ -559,6 +560,7 @@ export default function QuickReceive() {
                       <button
                         onClick={() => removeItem(item.key)}
                         className="p-2 rounded-lg text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors"
+                        aria-label="Remove line item"
                       >
                         <Trash2 className="w-4 h-4" />
                       </button>

@@ -84,7 +84,7 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(
 <div id="header">
   <h1>⬡ CRX Manager — Architecture Map</h1>
   <!-- __STATS_START__ -->
-  <span id="stat-line" style="color:var(--muted);font-size:.8rem">88 routes · 208 RPC calls · 0 issues · Updated Jul 10, 2026</span>
+  <span id="stat-line" style="color:var(--muted);font-size:.8rem">89 routes · 209 RPC calls · 0 issues · Updated Jul 10, 2026</span>
   <!-- __STATS_END__ -->
   <div id="tabs">
     <button class="tab active" onclick="showTab('graph')">Graph</button>
@@ -470,6 +470,14 @@ const NODES = [
       "type": "page-all",
       "group": "Core",
       "path": "/",
+      "problem": false
+    },
+    {
+      "id": "dashboard",
+      "label": "Dashboard",
+      "type": "page-all",
+      "group": "Core",
+      "path": "/dashboard",
       "problem": false
     },
     {
@@ -1385,6 +1393,81 @@ const EDGES = [
       "type": "nav"
     },
     {
+      "s": "dashboard",
+      "t": "quote-builder",
+      "type": "nav"
+    },
+    {
+      "s": "dashboard",
+      "t": "job-detail",
+      "type": "nav"
+    },
+    {
+      "s": "dashboard",
+      "t": "new-order",
+      "type": "nav"
+    },
+    {
+      "s": "dashboard",
+      "t": "to-ship",
+      "type": "nav"
+    },
+    {
+      "s": "dashboard",
+      "t": "new-delivery",
+      "type": "nav"
+    },
+    {
+      "s": "dashboard",
+      "t": "new-purchase-order",
+      "type": "nav"
+    },
+    {
+      "s": "dashboard",
+      "t": "inventory-page",
+      "type": "nav"
+    },
+    {
+      "s": "dashboard",
+      "t": "receiving-log",
+      "type": "nav"
+    },
+    {
+      "s": "dashboard",
+      "t": "orders",
+      "type": "nav"
+    },
+    {
+      "s": "dashboard",
+      "t": "quotes",
+      "type": "nav"
+    },
+    {
+      "s": "dashboard",
+      "t": "deliveries",
+      "type": "nav"
+    },
+    {
+      "s": "dashboard",
+      "t": "purchase-orders",
+      "type": "nav"
+    },
+    {
+      "s": "dashboard",
+      "t": "program-tracker",
+      "type": "nav"
+    },
+    {
+      "s": "dashboard",
+      "t": "team-board",
+      "type": "nav"
+    },
+    {
+      "s": "dashboard",
+      "t": "delivery-detail",
+      "type": "nav"
+    },
+    {
       "s": "deliveries",
       "t": "delivery-detail",
       "type": "nav"
@@ -1626,11 +1709,6 @@ const EDGES = [
     },
     {
       "s": "invoices",
-      "t": "field-application-invoice",
-      "type": "nav"
-    },
-    {
-      "s": "invoices",
       "t": "invoice-detail",
       "type": "nav"
     },
@@ -1680,6 +1758,11 @@ const EDGES = [
       "type": "nav"
     },
     {
+      "s": "new-order",
+      "t": "quote-builder",
+      "type": "nav"
+    },
+    {
       "s": "new-purchase-order",
       "t": "purchase-order-detail",
       "type": "nav"
@@ -1701,6 +1784,11 @@ const EDGES = [
     },
     {
       "s": "office-cockpit",
+      "t": "payment-allocation",
+      "type": "nav"
+    },
+    {
+      "s": "office-cockpit",
       "t": "unbilled-applications",
       "type": "nav"
     },
@@ -1716,12 +1804,37 @@ const EDGES = [
     },
     {
       "s": "office-cockpit",
+      "t": "quotes",
+      "type": "nav"
+    },
+    {
+      "s": "office-cockpit",
+      "t": "quote-builder",
+      "type": "nav"
+    },
+    {
+      "s": "office-cockpit",
       "t": "field-invoices-unposted",
       "type": "nav"
     },
     {
       "s": "office-cockpit",
       "t": "invoice-detail",
+      "type": "nav"
+    },
+    {
+      "s": "office-cockpit",
+      "t": "invoices",
+      "type": "nav"
+    },
+    {
+      "s": "office-cockpit",
+      "t": "deliveries",
+      "type": "nav"
+    },
+    {
+      "s": "office-cockpit",
+      "t": "delivery-detail",
       "type": "nav"
     },
     {
@@ -1970,6 +2083,11 @@ const EDGES = [
       "type": "rpc"
     },
     {
+      "s": "dashboard",
+      "t": "r-report",
+      "type": "rpc"
+    },
+    {
       "s": "deliveries",
       "t": "r-delivery",
       "type": "rpc"
@@ -1977,6 +2095,11 @@ const EDGES = [
     {
       "s": "delivery-detail",
       "t": "r-delivery",
+      "type": "rpc"
+    },
+    {
+      "s": "delivery-detail",
+      "t": "r-invoice",
       "type": "rpc"
     },
     {
@@ -2162,6 +2285,11 @@ const EDGES = [
     {
       "s": "to-ship",
       "t": "r-inventory",
+      "type": "rpc"
+    },
+    {
+      "s": "unbilled-applications",
+      "t": "r-job",
       "type": "rpc"
     },
     {

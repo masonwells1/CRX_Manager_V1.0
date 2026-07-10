@@ -296,7 +296,7 @@ export default function ProductDetail() {
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-3">
-        <button onClick={() => navigate('/products')} className="p-2 rounded-lg hover:bg-white hover:shadow-sm transition-all text-secondary">
+        <button aria-label="Back to products" onClick={() => navigate('/products')} className="p-2 rounded-lg hover:bg-white hover:shadow-sm transition-all text-secondary">
           <ArrowLeft className="w-5 h-5" />
         </button>
         <h2 className="text-lg font-semibold font-heading text-nav-dark">

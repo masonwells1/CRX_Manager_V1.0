@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo , useCallback, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { parseLocalDate, localDatePlusDays } from '../lib/dateUtils';
+import { parseLocalDate, localDatePlusDays, localToday } from '../lib/dateUtils';
 import { Plus, Upload, Copy, Download, FileText, Trash2, Layers, ChevronDown, ChevronUp, PackageCheck, AlertTriangle } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -468,7 +468,14 @@ export default function Quotes() {
       key: 'expires_at',
       header: 'Expires',
       sortable: true,
-      render: (row) => (row.expires_at ? parseLocalDate(row.expires_at).toLocaleDateString() : '-'),
+      render: (row) => {
+        if (!row.expires_at) return '-';
+        const isPastDue = (row.status === 'sent' || row.status === 'revised') && row.expires_at.slice(0, 10) < localToday();
+        const date = parseLocalDate(row.expires_at).toLocaleDateString();
+        return isPastDue ? (
+          <span className="text-red-600 font-medium">{date} (past due)</span>
+        ) : date;
+      },
     },
     {
       key: 'id',
@@ -489,6 +496,7 @@ export default function Quotes() {
             onClick={(e) => handleDuplicate(row.id, e)}
             className="p-1.5 rounded-lg text-gray-400 hover:text-crx-green hover:bg-crx-green-light transition-colors"
             title="Duplicate this quote"
+            aria-label="Duplicate this quote"
           >
             <Copy className="w-4 h-4" />
           </button>

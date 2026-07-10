@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 
 // Fully chainable Supabase query-builder mock
 function chainable(resolveWith: unknown = { data: [], error: null }) {
@@ -74,32 +74,30 @@ describe('ManualTicketCreate', () => {
   // A1 regression guard: the product-select onChange calls updateProduct twice back-to-back
   // (product_id then product_name). With a stale-closure updateProduct the second call overwrote
   // the first and product_id was lost (select reverted to ''), causing $0 pricing / FK crash.
-  // The functional-updater fix must keep BOTH the id (select value) and the name.
+  // The functional-updater fix must keep BOTH the id and the name.
   it('persists product_id when a product is selected (no stale-closure wipe)', async () => {
     render(<ManualTicketCreate {...defaultProps} />);
 
-    // Add a blank product line (the product <select> only renders per product row).
+    // Add a blank product line (the product picker only renders per product row).
     fireEvent.click(screen.getByRole('button', { name: /add product/i }));
 
-    // Wait for the async product catalog to load into the new row's dropdown.
-    await waitFor(() =>
-      expect(screen.getAllByRole('option', { name: 'Roundup PowerMax' }).length).toBeGreaterThan(0)
-    );
+    const productInput = screen.getByPlaceholderText('Select Product');
+    fireEvent.click(productInput);
+    fireEvent.change(productInput, { target: { value: 'Roundup' } });
 
-    // Find the product-row <select> (the one offering "Select Product").
-    const productSelect = screen
-      .getAllByRole('combobox')
-      .find((el) =>
-        Array.from(el.querySelectorAll('option')).some((o) => o.textContent === 'Select Product')
-      ) as HTMLSelectElement;
-    expect(productSelect).toBeTruthy();
+    // Wait for the async product catalog to load into the open product picker.
+    const productOption = await screen.findByRole('option', { name: 'Roundup PowerMax' });
 
     // Select a product — fires the double updateProduct.
-    fireEvent.change(productSelect, { target: { value: 'p1' } });
+    fireEvent.mouseDown(productOption);
+    fireEvent.click(productOption);
 
-    // product_id must survive: the select value stays 'p1' (bug would revert it to '').
-    expect(productSelect.value).toBe('p1');
-    // ...and product_name is applied too.
-    expect(screen.getAllByRole('option', { selected: true }).some((o) => o.textContent === 'Roundup PowerMax')).toBe(true);
+    // product_name must be applied too.
+    expect(productInput).toHaveValue('Roundup PowerMax');
+
+    // Reopen the picker so the selected option exposes the persisted product_id.
+    fireEvent.click(productInput);
+    const selectedProductOption = await screen.findByRole('option', { name: 'Roundup PowerMax' });
+    expect(selectedProductOption).toHaveAttribute('aria-selected', 'true');
   });
 });

@@ -23,10 +23,12 @@ import {
   XCircle,
   Ban,
   Undo2,
+  MoreHorizontal,
 } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
+import SearchableSelect from '../components/ui/SearchableSelect';
 import Modal from '../components/ui/Modal';
 import ConfirmModal from '../components/ui/ConfirmModal';
 import UnsavedChangesModal from '../components/ui/UnsavedChangesModal';
@@ -44,7 +46,7 @@ import { catalogPricePerAcre } from '../lib/quoteCalc';
 import { notifyLargeOrder, notifyCreditLimitExceeded } from '../lib/notificationTriggers';
 import { sendOrderConfirmedEmail } from '../lib/orderConfirmedEmail';
 import { trackBusinessEvent } from '../lib/metrics';
-import { localDatePlusDays } from '../lib/dateUtils';
+import { localDatePlusDays, localToday, parseLocalDate } from '../lib/dateUtils';
 import { downloadQuotePdf, generateQuotePdf } from '../lib/quotePdf';
 import { sendEmail, pdfToBase64, buildEmailHtml } from '../lib/emailService';
 import { checkRUPCompliance } from '../lib/rupCompliance';
@@ -110,6 +112,31 @@ interface LocalItem {
   price_unit: string | null;
 }
 
+interface FieldOption {
+  id: string;
+  field_name: string;
+  customer_id: string | null;
+  total_acres: number | null;
+  measured_acres: number | null;
+  override_acres: number | null;
+}
+
+interface ActivePlannedHold {
+  product_id: string;
+  quantity: number;
+  expires_at: string | null;
+}
+
+interface DrawRow {
+  product_id: string;
+  product_name: string;
+  booked: number;
+  drawn: number;
+  remaining: number;
+  qty: string;
+  unit: string | null;
+}
+
 let keyCounter = 0;
 function nextKey() {
   return `_k${++keyCounter}`;
@@ -138,6 +165,18 @@ function makeEmptyItem(): LocalItem {
     calc_mode: 'rate_acres',
     price_unit: null,
   };
+}
+
+function hasUserEnteredItemValues(item: LocalItem): boolean {
+  return item.notes !== null
+    || item.price_override !== null
+    || item.actual_rate !== null
+    || item.rate_unit !== null
+    || item.acres !== null
+    || item.total_units_needed !== null
+    || item.unit_size !== null
+    || item.price_unit !== null
+    || item.calc_mode !== 'rate_acres';
 }
 
 function makeEmptySection(order: number): LocalSection {
@@ -177,7 +216,7 @@ export default function QuoteBuilder() {
   // Partial booking draw-down (sell-side roadmap #1): pull part of the booked
   // quantities into an order; the quote stays open with the remaining balance.
   const [showDrawModal, setShowDrawModal] = useState(false);
-  const [drawRows, setDrawRows] = useState<Array<{ product_id: string; product_name: string; booked: number; drawn: number; remaining: number; qty: string }>>([]);
+  const [drawRows, setDrawRows] = useState<DrawRow[]>([]);
   const [drawLoading, setDrawLoading] = useState(false);
   const [drawing, setDrawing] = useState(false);
   // Booking settlement (roadmap #6c): read-only booked/drawn/remaining + prepay
@@ -192,6 +231,8 @@ export default function QuoteBuilder() {
   const [converting, setConverting] = useState(false);
   const [quoteCreatedAt, setQuoteCreatedAt] = useState<string | null>(null);
   const [confirmConvertOpen, setConfirmConvertOpen] = useState(false);
+  const [confirmBookAsOrderOpen, setConfirmBookAsOrderOpen] = useState(false);
+  const [bookingAsOrder, setBookingAsOrder] = useState(false);
   const [duplicateOrderConfirmOpen, setDuplicateOrderConfirmOpen] = useState(false);
   const [duplicateOrderMsg, setDuplicateOrderMsg] = useState('');
 
@@ -213,13 +254,15 @@ export default function QuoteBuilder() {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [unitConversions, setUnitConversions] = useState<UnitConversion[]>([]);
-  const [fields, setFields] = useState<{ id: string; field_name: string; customer_id: string | null }[]>([]);
+  const [fields, setFields] = useState<FieldOption[]>([]);
+  const [activePlannedHolds, setActivePlannedHolds] = useState<ActivePlannedHold[]>([]);
 
   const [productSearchOpen, setProductSearchOpen] = useState<{
     sectionKey: string;
     itemKey: string;
   } | null>(null);
   const [productQuery, setProductQuery] = useState('');
+  const [keepProductPickerOpen, setKeepProductPickerOpen] = useState(false);
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
   const [rupWarnings, setRupWarnings] = useState<string[]>([]);
   const [quoteVersions, setQuoteVersions] = useState<QuoteVersion[]>([]);
@@ -253,6 +296,7 @@ export default function QuoteBuilder() {
   const [reverting, setReverting] = useState(false);
   // #3 Stage A: email the quote PDF to the grower via the send-email Edge Function.
   const [emailingGrower, setEmailingGrower] = useState(false);
+  const [lastQuoteEmailAt, setLastQuoteEmailAt] = useState<string | null>(null);
   const [customerView, setCustomerView] = useState(false);
   const [showPreviewModal, setShowPreviewModal] = useState(false);
 
@@ -271,6 +315,10 @@ export default function QuoteBuilder() {
   const [templateDescription, setTemplateDescription] = useState('');
   const [showRolloverModal, setShowRolloverModal] = useState(false);
   const [rolloverSeason, setRolloverSeason] = useState(new Date().getFullYear() + 1);
+  const [createOrderMenuOpen, setCreateOrderMenuOpen] = useState(false);
+  const [moreActionsOpen, setMoreActionsOpen] = useState(false);
+  const createOrderMenuRef = useRef<HTMLDivElement>(null);
+  const moreActionsRef = useRef<HTMLDivElement>(null);
 
   // Track dirty state for unsaved changes warning
   const [isDirty, setIsDirty] = useState(false);
@@ -285,10 +333,8 @@ export default function QuoteBuilder() {
   // handleEmailToGrower explicitly supports re-sending an already-sent quote (it only
   // freezes a version on the FIRST send from draft/revised).
   const canSend = ['draft', 'revised', 'sent'].includes(currentStatus);
-  const canConvert = currentStatus === 'sent';
-  // draw_down_quote accepts BOTH 'sent' and 'revised' bookings — keep the
-  // Partial Order button in parity with the RPC (whole-convert stays
-  // sent-only by design). 2026-06-10 error-prevention review §3 LOW.
+  const canConvert = ['sent', 'revised'].includes(currentStatus);
+  // Both whole conversion and draw_down_quote accept sent/revised bookings.
   const canDraw = currentStatus === 'sent' || currentStatus === 'revised';
 
   // Quote lifecycle terminal/reopen actions (roadmap #5). The status-transition
@@ -320,6 +366,33 @@ export default function QuoteBuilder() {
   const canRevert = isEditing && isAdmin && ['accepted', 'declined', 'expired', 'cancelled'].includes(currentStatus);
   const revertLabel = currentStatus === 'accepted' ? 'Un-accept' : 'Reopen';
 
+  useEffect(() => {
+    if (!createOrderMenuOpen && !moreActionsOpen) return;
+
+    const closeMenusOnOutsideClick = (event: MouseEvent) => {
+      if (
+        !createOrderMenuRef.current?.contains(event.target as Node)
+        && !moreActionsRef.current?.contains(event.target as Node)
+      ) {
+        setCreateOrderMenuOpen(false);
+        setMoreActionsOpen(false);
+      }
+    };
+    const closeMenusOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setCreateOrderMenuOpen(false);
+        setMoreActionsOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', closeMenusOnOutsideClick);
+    document.addEventListener('keydown', closeMenusOnEscape);
+    return () => {
+      document.removeEventListener('mousedown', closeMenusOnOutsideClick);
+      document.removeEventListener('keydown', closeMenusOnEscape);
+    };
+  }, [createOrderMenuOpen, moreActionsOpen]);
+
   // Mark dirty whenever user changes form data (after initial load)
   useEffect(() => {
     if (!initialLoadDone.current) return;
@@ -345,6 +418,53 @@ export default function QuoteBuilder() {
     })();
     return () => { cancelled = true; };
   }, [isEditing, quoteId, currentStatus]);
+
+  const loadActivePlannedHolds = useCallback(async (targetQuoteId: string) => {
+    const { data, error } = await supabase
+      .from('inventory_holds')
+      .select('product_id, quantity, expires_at')
+      .eq('hold_type', 'crop_program')
+      .eq('source_id', targetQuoteId)
+      .eq('is_active', true);
+    if (error) {
+      setActivePlannedHolds([]);
+      return;
+    }
+    setActivePlannedHolds((data || []) as ActivePlannedHold[]);
+  }, []);
+
+  useEffect(() => {
+    if (!isPlanned || !quoteId) {
+      setActivePlannedHolds([]);
+      return;
+    }
+    void loadActivePlannedHolds(quoteId);
+  }, [isPlanned, quoteId, loadActivePlannedHolds]);
+
+  const loadQuoteEmailStatus = useCallback(async (targetQuoteNumber: string) => {
+    // send-email records this quote reference as its attachment_name, not resource_id.
+    const { data, error } = await supabase
+      .from('email_log')
+      .select('created_at')
+      .eq('email_type', 'quote')
+      .eq('attachment_name', `Quote-${targetQuoteNumber}.pdf`)
+      .eq('status', 'sent')
+      .order('created_at', { ascending: false })
+      .limit(1);
+    if (error) {
+      setLastQuoteEmailAt(null);
+      return;
+    }
+    setLastQuoteEmailAt(data?.[0]?.created_at ?? null);
+  }, []);
+
+  useEffect(() => {
+    if (!quoteId || !quoteNumber) {
+      setLastQuoteEmailAt(null);
+      return;
+    }
+    void loadQuoteEmailStatus(quoteNumber);
+  }, [quoteId, quoteNumber, loadQuoteEmailStatus]);
 
   // RUP compliance check when the customer or the PRODUCT SET changes. Keyed by a
   // stable product-set string (NOT `sections`) so editing quantities/prices/notes
@@ -402,7 +522,7 @@ export default function QuoteBuilder() {
       supabase.from('customers').select('*').eq('is_active', true).order('farm_name'),
       supabase.from('products').select('*').eq('is_active', true).order('product_name'),
       supabase.from('unit_conversions').select('*'),
-      supabase.from('fields').select('id, field_name, customer_id').eq('is_active', true).order('field_name'),
+      supabase.from('fields').select('id, field_name, customer_id, total_acres, measured_acres, override_acres').eq('is_active', true).order('field_name'),
     ]);
 
     if (custRes.error) {
@@ -420,7 +540,7 @@ export default function QuoteBuilder() {
     setCustomers((custRes.data || []) as Customer[]);
     setProducts((prodRes.data || []) as Product[]);
     setUnitConversions((convRes.data || []) as UnitConversion[]);
-    setFields((fieldsRes.data || []) as { id: string; field_name: string; customer_id: string | null }[]);
+    setFields((fieldsRes.data || []) as FieldOption[]);
   }, [toast]);
 
   const generateQuoteNumber = async () => {
@@ -735,6 +855,29 @@ export default function QuoteBuilder() {
     );
   };
 
+  const closeProductPicker = () => {
+    if (productSearchOpen) {
+      const { sectionKey, itemKey } = productSearchOpen;
+      setSections((prev) =>
+        prev.map((section) => {
+          if (section._key !== sectionKey) return section;
+          const targetItem = section.items.find((item) => item._key === itemKey);
+          if (!targetItem || targetItem.product_id || hasUserEnteredItemValues(targetItem)) return section;
+
+          return {
+            ...section,
+            items: section.items
+              .filter((item) => item._key !== itemKey)
+              .map((item, index) => ({ ...item, sort_order: index + 1 })),
+          };
+        })
+      );
+    }
+    setProductSearchOpen(null);
+    setProductQuery('');
+    setKeepProductPickerOpen(false);
+  };
+
   const assignProduct = (sectionKey: string, itemKey: string, product: Product) => {
     const pricePerUnit = getTierPrice(product, tier);
     setSections((prev) =>
@@ -763,8 +906,13 @@ export default function QuoteBuilder() {
         };
       })
     );
-    setProductSearchOpen(null);
-    setProductQuery('');
+    if (keepProductPickerOpen) {
+      const nextItemKey = addItem(sectionKey);
+      setProductSearchOpen({ sectionKey, itemKey: nextItemKey });
+      setProductQuery('');
+      return;
+    }
+    closeProductPicker();
   };
 
   const addSection = () => {
@@ -790,16 +938,42 @@ export default function QuoteBuilder() {
     );
   };
 
-  const addItem = (sectionKey: string) => {
+  const handleSectionFieldChange = (sectionKey: string, fieldId: string | null) => {
+    updateSectionField(sectionKey, 'field_id', fieldId);
+    const field = fields.find((candidate) => candidate.id === fieldId);
+    // Documented field-acre precedence: override → measured → legacy total.
+    const effectiveAcres = field?.override_acres ?? field?.measured_acres ?? field?.total_acres;
+    if (effectiveAcres == null) return;
+
+    setSections((prev) =>
+      prev.map((section) => {
+        if (section._key !== sectionKey) return section;
+        return {
+          ...section,
+          items: section.items.map((item) => {
+            if ((item.acres ?? 0) !== 0) return item;
+            return recalcItem({
+              ...item,
+              acres: effectiveAcres,
+              calc_mode: item.calc_mode === 'units_direct' ? 'units_direct' : 'rate_acres',
+            }, tier);
+          }),
+        };
+      })
+    );
+  };
+
+  function addItem(sectionKey: string): string {
+    const newItem = makeEmptyItem();
     setSections((prev) =>
       prev.map((sec) => {
         if (sec._key !== sectionKey) return sec;
-        const newItem = makeEmptyItem();
         newItem.sort_order = sec.items.length + 1;
         return { ...sec, items: [...sec.items, newItem] };
       })
     );
-  };
+    return newItem._key;
+  }
 
   const removeItem = (sectionKey: string, itemKey: string) => {
     setSections((prev) =>
@@ -1029,6 +1203,7 @@ export default function QuoteBuilder() {
           assertRpcResult(holdData, 'create_planned_holds');
           plannedHoldsIdem.resetKey();
           toast('success', 'Inventory holds created for planned program');
+          await loadActivePlannedHolds(result);
         }
       } else if (!isPlanned && wasPlanned) {
         // Release holds when toggled off — zero rows is valid (no holds may exist)
@@ -1041,6 +1216,7 @@ export default function QuoteBuilder() {
         if (releaseResult.error) toast('error', 'Failed to release inventory holds: ' + releaseResult.error.message);
         else if (releaseResult.data && releaseResult.data.length > 0) checkMutationResult(releaseResult, 'Release inventory holds');
         setWasPlanned(false);
+        setActivePlannedHolds([]);
       }
 
       if (!isEditing) navigate(`/quotes/${result}`, { replace: true });
@@ -1528,6 +1704,7 @@ export default function QuoteBuilder() {
       } else {
         toast('success', `Quote emailed to ${selectedCustomer.email}`);
       }
+      await loadQuoteEmailStatus(quoteNumber);
       await logActivity({
         event: 'quote_emailed',
         description: `Quote ${quoteNumber} emailed to ${selectedCustomer.email}`,
@@ -1544,30 +1721,47 @@ export default function QuoteBuilder() {
     }
   };
 
-  const handleMarkPresented = async () => {
-    if (!quoteId || !profile) return;
+  const handleMarkPresented = async (): Promise<boolean> => {
+    if (!quoteId) {
+      toast('error', 'Save the quote first, then mark it presented');
+      return false;
+    }
+    if (!profile) return false;
     // Save current state first
     const savedId = await saveQuote(status === 'draft' ? 'draft' : status);
-    if (!savedId) return;
-    // Create version snapshot via RPC
-    const presVerIdemKey = createVersionIdem.getKey();
-    const { data: versionData, error } = await supabase.rpc('create_quote_version', {
-      p_quote_id: savedId,
-      p_performed_by: profile.id,
-      p_method: 'presented',
-      p_idempotency_key: presVerIdemKey,
-    });
-    if (error) { toast('error', 'Failed to mark as presented'); return; }
-    const ver = assertRpcResult<{ version_number: number }>(versionData, 'create_quote_version');
-    createVersionIdem.resetKey();
-    await logActivity({ event: 'quote_presented', description: `Quote ${quoteNumber} V${ver.version_number} marked as presented to ${selectedCustomer?.farm_name || 'customer'}`, performedBy: profile.id, entityType: 'quote', entityId: savedId, customerId });
-    toast('success', `Quote marked as presented (V${ver.version_number})`);
-    setShowPreviewModal(false);
-    if (previewPdfUrl) URL.revokeObjectURL(previewPdfUrl);
-    setPreviewPdfUrl(null);
-    setStatus('sent');
-    setIsDirty(false);
-    fetchVersions();
+    if (!savedId) return false;
+    try {
+      // Create version snapshot via RPC
+      const presVerIdemKey = createVersionIdem.getKey();
+      const { data: versionData, error } = await supabase.rpc('create_quote_version', {
+        p_quote_id: savedId,
+        p_performed_by: profile.id,
+        p_method: 'presented',
+        p_idempotency_key: presVerIdemKey,
+      });
+      if (error) throw error;
+      const ver = assertRpcResult<{ version_number: number }>(versionData, 'create_quote_version');
+      createVersionIdem.resetKey();
+      setShowPreviewModal(false);
+      if (previewPdfUrl) URL.revokeObjectURL(previewPdfUrl);
+      setPreviewPdfUrl(null);
+      setStatus('sent');
+      setIsDirty(false);
+      fetchVersions();
+      try {
+        await logActivity({ event: 'quote_presented', description: `Quote ${quoteNumber} V${ver.version_number} marked as presented to ${selectedCustomer?.farm_name || 'customer'}`, performedBy: profile.id, entityType: 'quote', entityId: savedId, customerId });
+      } catch (logError) {
+        // The version/status change already committed. Do not strand Book as Order
+        // because the secondary activity-feed write failed.
+        Sentry.captureException(logError instanceof Error ? logError : new Error(String(logError)), { tags: { source: 'activity_log', action: 'quote_presented' } });
+      }
+      toast('success', `Quote marked as presented (V${ver.version_number})`);
+      return true;
+    } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { tags: { source: 'critical_action', action: 'create_quote_version' } });
+      toast('error', 'Failed to mark as presented');
+      return false;
+    }
   };
 
   const AVAILABLE_PDF_COLUMNS = [
@@ -1678,14 +1872,8 @@ export default function QuoteBuilder() {
   // Partial booking draw-down: open the modal with the per-product balance
   const openDrawDownModal = async () => {
     if (!id) return;
-    // Guardrail parity with handleConvertToOrder: a booking drawn months after
-    // it was created may carry stale prices. First click surfaces the
-    // GuardrailBanner below the header; "Continue Anyway" lets the next click
-    // through. (2026-06-10 error-prevention review §3 LOW.)
-    if (quoteCreatedAt) {
-      const fresh = checkStaleQuote(quoteCreatedAt);
-      if (!fresh && !staleWarning?.dismissed) return;
-    }
+    // Draw-down bills at this quote's locked prices, so a current-price stale guard
+    // would be misleading and block the first click without protecting the customer.
     if (isDirty) {
       toast('warning', 'Save the quote before drawing down the booking');
       return;
@@ -1722,6 +1910,7 @@ export default function QuoteBuilder() {
           return {
             product_id: productId,
             product_name: products.find((p) => p.id === productId)?.product_name || 'Unknown product',
+            unit: products.find((p) => p.id === productId)?.inventory_unit ?? null,
             booked,
             drawn,
             remaining: Math.max(booked - drawn, 0),
@@ -1829,7 +2018,7 @@ export default function QuoteBuilder() {
       } catch { /* ignore — don't block conversion if check fails */ }
     }
 
-    executeConvertToOrder();
+    await executeConvertToOrder();
   };
 
   const executeConvertToOrder = async () => {
@@ -1935,6 +2124,63 @@ export default function QuoteBuilder() {
       navigate(`/orders/${result.order_id}`);
     } catch (error: unknown) {
       Sentry.captureException(error, { tags: { source: 'critical_action', action: 'convert_quote_to_order' } });
+
+      // Lost-response-after-commit must not resurrect the booking (push-gate P1).
+      let liveQuoteStatus: string | null = null;
+      try {
+        const { data: liveQuote, error: liveQuoteError } = await supabase
+          .from('quotes')
+          .select('status')
+          .eq('id', savedId)
+          .maybeSingle();
+        if (liveQuoteError) throw liveQuoteError;
+        liveQuoteStatus = liveQuote?.status ?? null;
+      } catch {
+        // A failed verification leaves the conversion outcome unknown. Do not
+        // write a recovery status without proving the quote is still open.
+      }
+
+      if (liveQuoteStatus === 'accepted') {
+        let createdOrderId: string | null = null;
+        try {
+          const { data: createdOrders, error: createdOrderError } = await supabase
+            .from('orders')
+            .select('id')
+            .eq('quote_id', savedId)
+            .is('deleted_at', null)
+            .order('created_at', { ascending: false })
+            .limit(1);
+          if (createdOrderError) throw createdOrderError;
+          createdOrderId = createdOrders?.[0]?.id ?? null;
+        } catch (orderLookupError) {
+          Sentry.captureException(orderLookupError, { tags: { source: 'read', action: 'find_order_after_committed_quote_convert' } });
+        }
+
+        if (createdOrderId) {
+          toast('success', 'The order was created — opening it');
+          setIsDirty(false);
+          navigate(`/orders/${createdOrderId}`);
+        } else {
+          toast('warning', 'The quote was accepted, but its order could not be found — check the Orders page');
+          try {
+            await fetchQuote(savedId);
+          } catch (refetchError) {
+            Sentry.captureException(refetchError, { tags: { source: 'read', action: 'refetch_quote_after_committed_convert' } });
+          }
+        }
+        setConverting(false);
+        return;
+      }
+
+      if (liveQuoteStatus === null) {
+        // The conversion RPC is transactional, so a genuine failure leaves the
+        // status unchanged. A recovery write is only safe after a successful
+        // read proves the quote was not accepted.
+        toast('warning', 'Could not verify the outcome — check the Orders page before retrying; the quote status was left unchanged.');
+        setConverting(false);
+        return;
+      }
+
       // Friendly mapping for the booking guards (server-side backstop for the
       // pre-check above — e.g. a draw landed from another tab mid-convert).
       if (hasRpcCode(error, RpcErrorCodes.BOOKING_PARTIALLY_DRAWN)) {
@@ -1951,9 +2197,10 @@ export default function QuoteBuilder() {
         || 'Failed to create order';
       toast('error', errMsg);
       }
-      // Bug #29 fix: Revert quote status since conversion failed
-      // Use the status BEFORE conversion (was 'accepted' from saveQuote, revert to previous)
-      const revertTo = status === 'accepted' ? 'sent' : (status || 'sent');
+      // A successful status check proved the quote was not accepted. A draft can
+      // only reach this path through Book as Order, whose mark-presented step
+      // already committed it as sent; keep it sent so normal Convert remains.
+      const revertTo = status === 'accepted' || status === 'draft' ? 'sent' : (status || 'sent');
       try {
         const revertResult = await supabase.from('quotes').update({ status: revertTo }).eq('id', savedId).select();
         checkMutationResult(revertResult, 'Revert quote status');
@@ -1966,6 +2213,46 @@ export default function QuoteBuilder() {
       }
     }
     setConverting(false);
+  };
+
+  // U16b: one-step booking for a clean, saved draft. Mark Presented uses the
+  // existing create_quote_version path (snapshot + sent), then the existing
+  // conversion handler applies all stale/duplicate/draw-down guards. If the
+  // first step succeeds but conversion fails, executeConvertToOrder restores the
+  // quote to sent, so staff can retry with the normal Convert button.
+  const handleBookAsOrder = async () => {
+    setBookingAsOrder(true);
+    try {
+      // A lost mark-sent response leaves the DB sent while the UI thinks draft —
+      // resume the chain from the true state (push-gate P2).
+      let alreadyMarkedSent = false;
+      if (quoteId) {
+        try {
+          const { data: liveQuote, error: liveQuoteError } = await supabase
+            .from('quotes')
+            .select('status')
+            .eq('id', quoteId)
+            .maybeSingle();
+          if (liveQuoteError) throw liveQuoteError;
+          const liveStatus = liveQuote?.status;
+          if (liveStatus === 'sent' || liveStatus === 'revised') {
+            setStatus(liveStatus);
+            alreadyMarkedSent = true;
+          }
+        } catch {
+          // If the live-status check fails, continue with the existing flow.
+        }
+      }
+
+      if (!alreadyMarkedSent) {
+        const markedSent = await handleMarkPresented();
+        if (!markedSent) return;
+      }
+      setConfirmBookAsOrderOpen(false);
+      await handleConvertToOrder();
+    } finally {
+      setBookingAsOrder(false);
+    }
   };
 
   const filteredProducts = useMemo(() => {
@@ -2052,17 +2339,6 @@ export default function QuoteBuilder() {
           >
             Save Draft
           </Button>
-          <button
-            onClick={() => setCustomerView(!customerView)}
-            className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-lg border transition-colors ${
-              customerView
-                ? 'bg-crx-green text-white border-crx-green'
-                : 'border-gray-200 text-secondary hover:border-crx-green hover:text-crx-green'
-            }`}
-          >
-            {customerView ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-            Customer View
-          </button>
           <Button
             variant="secondary"
             icon={<Download className="w-4 h-4" />}
@@ -2071,26 +2347,70 @@ export default function QuoteBuilder() {
           >
             Download PDF
           </Button>
-          {quoteId && (
-            <>
-              <button
-                onClick={() => setShowSaveTemplateModal(true)}
-                className="flex items-center gap-2 px-3 py-1.5 text-sm border border-gray-200 rounded-lg hover:bg-gray-50"
-              >
-                <Copy className="w-4 h-4" />
-                Save as Template
-              </button>
-              <HelpTip text="Saves this quote's structure as a reusable template. Great for customers who reorder the same products each season." className="ml-1" />
-              <button
-                onClick={() => setShowRolloverModal(true)}
-                className="flex items-center gap-2 px-3 py-1.5 text-sm border border-gray-200 rounded-lg hover:bg-gray-50"
-              >
-                <RotateCcw className="w-4 h-4" />
-                Roll Over to New Season
-              </button>
-              <HelpTip text="Copies this planned program into the next season (Oct–Sep) with the same products and quantities. Dates update automatically." className="ml-1" />
-            </>
-          )}
+          <div
+            className="relative"
+            ref={moreActionsRef}
+            onBlur={(event) => {
+              if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                setMoreActionsOpen(false);
+              }
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => setMoreActionsOpen((open) => !open)}
+              aria-label="More actions"
+              aria-haspopup="menu"
+              aria-expanded={moreActionsOpen}
+              className="inline-flex items-center justify-center rounded-lg border border-gray-200 p-2 text-secondary transition-colors hover:border-crx-green hover:text-crx-green"
+            >
+              <MoreHorizontal className="w-4 h-4" />
+            </button>
+            {moreActionsOpen && (
+              <div role="menu" className="absolute right-0 z-30 mt-2 w-60 rounded-lg border border-gray-200 bg-white py-1 shadow-lg">
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setCustomerView(!customerView);
+                    setMoreActionsOpen(false);
+                  }}
+                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-nav-dark hover:bg-gray-50"
+                >
+                  {customerView ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  Customer View
+                </button>
+                {quoteId && (
+                  <>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setShowSaveTemplateModal(true);
+                        setMoreActionsOpen(false);
+                      }}
+                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-nav-dark hover:bg-gray-50"
+                    >
+                      <Copy className="w-4 h-4" />
+                      Save as Template
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setShowRolloverModal(true);
+                        setMoreActionsOpen(false);
+                      }}
+                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-nav-dark hover:bg-gray-50"
+                    >
+                      <RotateCcw className="w-4 h-4" />
+                      Roll Over to New Season
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
           {canSend && (
             <Button
               variant="primary"
@@ -2100,32 +2420,70 @@ export default function QuoteBuilder() {
               Preview Quote
             </Button>
           )}
-          {isEditing && canConvert && (
-            <>
+          {isEditing && quoteId && currentStatus === 'draft' && !isDirty && (
+            <Button
+              variant="secondary"
+              icon={<ShoppingCart className="w-4 h-4" />}
+              showChevron={false}
+              onClick={() => setConfirmBookAsOrderOpen(true)}
+              loading={bookingAsOrder}
+            >
+              Book as Order
+            </Button>
+          )}
+          {isEditing && (canConvert || canDraw) && (
+            <div
+              className="relative"
+              ref={createOrderMenuRef}
+              onBlur={(event) => {
+                if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                  setCreateOrderMenuOpen(false);
+                }
+              }}
+            >
               <Button
                 variant="primary"
                 icon={<ShoppingCart className="w-4 h-4" />}
-                onClick={() => setConfirmConvertOpen(true)}
-                loading={converting}
-              >
-                Convert to Order
-              </Button>
-              <HelpTip text="Creates a confirmed order from this quote. Inventory holds transfer to the order and the customer gets a confirmation email." className="ml-1" />
-            </>
-          )}
-          {isEditing && canDraw && (
-            <>
-              <Button
-                variant="secondary"
-                icon={<PackageOpen className="w-4 h-4" />}
                 showChevron={false}
-                onClick={openDrawDownModal}
-                loading={drawLoading}
+                onClick={() => setCreateOrderMenuOpen((open) => !open)}
+                aria-haspopup="menu"
+                aria-expanded={createOrderMenuOpen}
               >
-                Partial Order
+                Create Order ▾
               </Button>
-              <HelpTip text="Pull part of this booking into an order — e.g. send 200 of the 500 booked gallons. The quote keeps the remaining balance and stays open until fully drawn." className="ml-1" />
-            </>
+              {createOrderMenuOpen && (
+                <div role="menu" className="absolute right-0 z-30 mt-2 w-64 rounded-lg border border-gray-200 bg-white py-1 shadow-lg">
+                  <button
+                    type="button"
+                    role="menuitem"
+                    disabled={!canConvert || converting}
+                    title={canConvert ? undefined : 'Whole-booking conversion is available after the quote is sent or revised.'}
+                    onClick={() => {
+                      setConfirmConvertOpen(true);
+                      setCreateOrderMenuOpen(false);
+                    }}
+                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-nav-dark hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <ShoppingCart className="w-4 h-4" />
+                    Convert whole booking
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    disabled={!canDraw || drawLoading}
+                    title={canDraw ? undefined : 'Partial draw-down is available after the quote is sent or revised.'}
+                    onClick={() => {
+                      openDrawDownModal();
+                      setCreateOrderMenuOpen(false);
+                    }}
+                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-nav-dark hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <PackageOpen className="w-4 h-4" />
+                    Draw part of booking…
+                  </button>
+                </div>
+              )}
+            </div>
           )}
           {isEditing && currentStatus === 'sent' && (
             <Button
@@ -2218,10 +2576,7 @@ export default function QuoteBuilder() {
         </div>
       </div>
 
-      {/* Stale-quote warning for the Partial Order path — the convert path
-          shows this banner inside its confirm modal, but openDrawDownModal
-          returns before any modal opens, so surface it at page level here.
-          Renders nothing unless a warning is active and undismissed. */}
+      {/* Covers a stale warning left active when the convert-confirm modal closes; draw-down no longer raises it. */}
       {!confirmConvertOpen && (
         <GuardrailBanner warning={staleWarning} onDismiss={dismissStaleWarning} />
       )}
@@ -2290,12 +2645,18 @@ export default function QuoteBuilder() {
                 </thead>
                 <tbody>
                   {bookingSettlement.lines.map((ln) => (
-                    <tr key={ln.product_id} className="border-b border-gray-50">
-                      <td className="px-2 py-1">{ln.product_name ?? '—'}</td>
-                      <td className="px-2 py-1 text-right">{ln.booked_qty}</td>
-                      <td className="px-2 py-1 text-right">{ln.drawn_qty}</td>
-                      <td className="px-2 py-1 text-right">{ln.remaining_qty}</td>
-                    </tr>
+                    (() => {
+                      const unit = products.find((product) => product.id === ln.product_id)?.inventory_unit;
+                      const suffix = unit ? ` ${unit}` : '';
+                      return (
+                        <tr key={ln.product_id} className="border-b border-gray-50">
+                          <td className="px-2 py-1">{ln.product_name ?? '—'}</td>
+                          <td className="px-2 py-1 text-right">{ln.booked_qty}{suffix}</td>
+                          <td className="px-2 py-1 text-right">{ln.drawn_qty}{suffix}</td>
+                          <td className="px-2 py-1 text-right">{ln.remaining_qty}{suffix}</td>
+                        </tr>
+                      );
+                    })()
                   ))}
                 </tbody>
               </table>
@@ -2584,18 +2945,12 @@ export default function QuoteBuilder() {
             <label className="block text-sm font-medium text-secondary mb-1">
               Customer
             </label>
-            <select
+            <SearchableSelect
+              options={customers.map((c) => ({ value: c.id, label: c.farm_name }))}
               value={customerId}
-              onChange={(e) => handleCustomerChange(e.target.value)}
-              className="w-full px-3 py-2 text-sm text-nav-dark bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
-            >
-              <option value="">Select a customer...</option>
-              {customers.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.farm_name}
-                </option>
-              ))}
-            </select>
+              onChange={handleCustomerChange}
+              placeholder="Select a customer..."
+            />
           </div>
           <div>
             <label className="block text-sm font-medium text-secondary mb-1">
@@ -2666,6 +3021,7 @@ export default function QuoteBuilder() {
                   <button
                     onClick={() => toggleSectionCollapse(sec._key)}
                     className="p-1 rounded hover:bg-gray-100 text-secondary"
+                    aria-label={isCollapsed ? 'Expand section' : 'Collapse section'}
                   >
                     {isCollapsed ? (
                       <ChevronDown className="w-4 h-4" />
@@ -2701,21 +3057,46 @@ export default function QuoteBuilder() {
                     {fmt(sectionTotal)}
                   </span>
                   {isPlanned && (
-                    <div className="flex items-center gap-2 ml-2">
-                      <label className="text-xs text-secondary whitespace-nowrap flex items-center">Needed By:<HelpTip text="This is when the customer needs the product — different from the quote expiration. Used for inventory forecasting and delivery scheduling." className="ml-1" /></label>
-                      <input
-                        type="date"
-                        value={sec.needed_by_date || ''}
-                        onChange={(e) => updateSectionField(sec._key, 'needed_by_date', e.target.value || null)}
-                        className="text-sm border border-gray-200 rounded px-2 py-1"
-                      />
-                    </div>
+                    <>
+                      <div className="flex items-center gap-2 ml-2">
+                        <label className="text-xs text-secondary whitespace-nowrap flex items-center">Needed By:<HelpTip text="This is when the customer needs the product — different from the quote expiration. Used for inventory forecasting and delivery scheduling." className="ml-1" /></label>
+                        <input
+                          type="date"
+                          value={sec.needed_by_date || ''}
+                          onChange={(e) => updateSectionField(sec._key, 'needed_by_date', e.target.value || null)}
+                          className="text-sm border border-gray-200 rounded px-2 py-1"
+                        />
+                      </div>
+                      {/* Holds have one row per quote item; this per-section view aggregates the quote's matching rows for each product. */}
+                      {quoteId && activePlannedHolds.length > 0 && (
+                        <div className="ml-2 flex flex-col items-start gap-0.5 text-xs text-secondary">
+                          {Array.from(new Set(sec.items.map((item) => item.product_id).filter(Boolean))).map((productId) => {
+                            const holds = activePlannedHolds.filter((candidate) => candidate.product_id === productId);
+                            if (holds.length === 0) return null;
+                            const heldQuantity = holds.reduce((sum, hold) => sum + hold.quantity, 0);
+                            const earliestExpiry = holds.reduce<string | null>((earliest, hold) => {
+                              if (hold.expires_at == null) return earliest;
+                              return earliest == null || hold.expires_at < earliest ? hold.expires_at : earliest;
+                            }, null);
+                            const unit = products.find((product) => product.id === productId)?.inventory_unit;
+                            const isLapsed = earliestExpiry != null && earliestExpiry.slice(0, 10) <= localToday();
+                            return (
+                              <span key={productId}>
+                                Held: {heldQuantity}{unit ? ` ${unit}` : ''} &middot; {earliestExpiry ? (
+                                  <>expires <span className={isLapsed ? 'text-red-600 font-medium' : undefined}>{parseLocalDate(earliestExpiry.slice(0, 10)).toLocaleDateString()}{isLapsed ? ' (lapsed)' : ''}</span></>
+                                ) : 'no expiry (no needed-by date)'}
+                              </span>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </>
                   )}
                   <div className="flex items-center gap-2 ml-2">
                     <label className="text-xs text-secondary whitespace-nowrap">Field:</label>
                     <select
                       value={sec.field_id || ''}
-                      onChange={(e) => updateSectionField(sec._key, 'field_id', e.target.value || null)}
+                      onChange={(e) => handleSectionFieldChange(sec._key, e.target.value || null)}
                       className="text-sm border border-gray-200 rounded px-2 py-1 max-w-[180px]"
                     >
                       <option value="">— None —</option>
@@ -2754,6 +3135,7 @@ export default function QuoteBuilder() {
                     <button
                       onClick={() => removeSection(sec._key)}
                       className="p-1.5 rounded-lg text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors"
+                      aria-label="Remove section"
                     >
                       <Trash2 className="w-4 h-4" />
                     </button>
@@ -3064,6 +3446,7 @@ export default function QuoteBuilder() {
                               <button
                                 onClick={() => removeItem(sec._key, item._key)}
                                 className="p-1 rounded text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors"
+                                aria-label="Remove line item"
                               >
                                 <Trash2 className="w-3.5 h-3.5" />
                               </button>
@@ -3153,10 +3536,7 @@ export default function QuoteBuilder() {
 
       <Modal
         open={productSearchOpen !== null}
-        onClose={() => {
-          setProductSearchOpen(null);
-          setProductQuery('');
-        }}
+        onClose={closeProductPicker}
         title="Select"
         accent="Product"
         maxWidth="max-w-2xl"
@@ -3173,6 +3553,15 @@ export default function QuoteBuilder() {
               autoFocus
             />
           </div>
+          <label className="inline-flex items-center gap-2 text-sm text-secondary cursor-pointer">
+            <input
+              type="checkbox"
+              checked={keepProductPickerOpen}
+              onChange={(e) => setKeepProductPickerOpen(e.target.checked)}
+              className="rounded border-gray-300 text-crx-green focus:ring-crx-green"
+            />
+            Keep open &mdash; add several
+          </label>
           <div className="max-h-80 overflow-y-auto divide-y divide-gray-50">
             {filteredProducts.length === 0 ? (
               <p className="text-sm text-secondary py-4 text-center">
@@ -3319,16 +3708,16 @@ export default function QuoteBuilder() {
             Download PDF
           </Button>
           <Button
-            variant="primary"
+            variant="secondary"
             icon={<CheckCircle className="w-4 h-4" />}
             onClick={handleMarkPresented}
             disabled={status !== 'draft' && status !== 'revised'}
           >
             Mark as Presented
           </Button>
-          <HelpTip text="Sends the quote PDF to the customer's email and locks it as 'Sent'. A version snapshot is saved automatically so you can always see what the customer received." className="ml-1" />
+          <HelpTip text="Marks the quote as sent WITHOUT emailing &mdash; use when you presented it in person" className="ml-1" />
           <Button
-            variant="secondary"
+            variant="primary"
             icon={<Send className="w-4 h-4" />}
             showChevron={false}
             onClick={handleEmailToGrower}
@@ -3336,6 +3725,12 @@ export default function QuoteBuilder() {
           >
             Email to Grower
           </Button>
+          {lastQuoteEmailAt && (
+            <span className="inline-flex items-center rounded-full bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700">
+              Emailed {new Date(lastQuoteEmailAt).toLocaleDateString()} ✓
+            </span>
+          )}
+          <HelpTip text="Emails the quote PDF to the grower and logs it" className="ml-1" />
         </div>
       </Modal>
 
@@ -3411,24 +3806,27 @@ export default function QuoteBuilder() {
                     {drawRows.map((row, idx) => (
                       <tr key={row.product_id} className="border-b last:border-0">
                         <td className="py-2 pr-2">{row.product_name}</td>
-                        <td className="py-2 pr-2 text-right">{row.booked}</td>
-                        <td className="py-2 pr-2 text-right">{row.drawn}</td>
-                        <td className="py-2 pr-2 text-right font-medium">{row.remaining}</td>
+                        <td className="py-2 pr-2 text-right">{row.booked}{row.unit ? ` ${row.unit}` : ''}</td>
+                        <td className="py-2 pr-2 text-right">{row.drawn}{row.unit ? ` ${row.unit}` : ''}</td>
+                        <td className="py-2 pr-2 text-right font-medium">{row.remaining}{row.unit ? ` ${row.unit}` : ''}</td>
                         <td className="py-2 text-right">
-                          <input
-                            type="number"
-                            min={0}
-                            max={row.remaining}
-                            step="any"
-                            value={row.qty}
-                            disabled={row.remaining <= 0}
-                            onChange={(e) => {
-                              const next = [...drawRows];
-                              next[idx] = { ...row, qty: e.target.value };
-                              setDrawRows(next);
-                            }}
-                            className="w-24 px-2 py-1 text-sm text-right border border-gray-200 rounded-lg disabled:bg-gray-50"
-                          />
+                          <div className="inline-flex items-center gap-1">
+                            <input
+                              type="number"
+                              min={0}
+                              max={row.remaining}
+                              step="any"
+                              value={row.qty}
+                              disabled={row.remaining <= 0}
+                              onChange={(e) => {
+                                const next = [...drawRows];
+                                next[idx] = { ...row, qty: e.target.value };
+                                setDrawRows(next);
+                              }}
+                              className="w-24 px-2 py-1 text-sm text-right border border-gray-200 rounded-lg disabled:bg-gray-50"
+                            />
+                            {row.unit && <span className="text-xs text-secondary">{row.unit}</span>}
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -3489,6 +3887,18 @@ export default function QuoteBuilder() {
           </div>
         </Modal>
       )}
+
+      <ConfirmModal
+        open={confirmBookAsOrderOpen}
+        onClose={() => setConfirmBookAsOrderOpen(false)}
+        onConfirm={handleBookAsOrder}
+        title="Book as Order"
+        message="Mark this quote as sent and convert it to an order now?"
+        confirmLabel="Book as Order"
+        variant="info"
+        icon={ShoppingCart}
+        loading={bookingAsOrder || converting}
+      />
 
       <ConfirmModal
         open={confirmDeclineOpen}

@@ -2,7 +2,7 @@
  * QuickDeliveryModal — Creates an ad-hoc delivery with auto-created order + draft invoice.
  * Used when a driver gets a phone call and needs to grab product and go.
  */
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AlertTriangle, Plus, Search, Trash2, Zap } from 'lucide-react';
 import Modal from '../ui/Modal';
@@ -16,6 +16,7 @@ import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
 import { localToday } from '../../lib/dateUtils';
 import { Sentry } from '../../lib/sentry';
 import { formatCents as fmtCurrency } from '../../lib/money';
+import { fetchOpenBookings, type OpenBooking } from '../../lib/openBookings';
 import type { Product, Profile } from '../../types';
 
 interface QuickItem {
@@ -38,12 +39,14 @@ interface QuickDeliveryModalProps {
   open: boolean;
   onClose: () => void;
   onCreated?: () => void;
+  initialCustomerId?: string;
 }
 
 export default function QuickDeliveryModal({
   open,
   onClose,
   onCreated,
+  initialCustomerId,
 }: QuickDeliveryModalProps) {
   const navigate = useNavigate();
   const { profile, role } = useAuth();
@@ -55,6 +58,9 @@ export default function QuickDeliveryModal({
   const [customerResults, setCustomerResults] = useState<CustomerOption[]>([]);
   const [selectedCustomer, setSelectedCustomer] = useState<CustomerOption | null>(null);
   const [showCustomerDropdown, setShowCustomerDropdown] = useState(false);
+  const [openBookings, setOpenBookings] = useState<OpenBooking[]>([]);
+  const selectedCustomerRef = useRef<CustomerOption | null>(null);
+  const wasOpenRef = useRef(false);
 
   // Products
   const [products, setProducts] = useState<Product[]>([]);
@@ -185,8 +191,26 @@ export default function QuickDeliveryModal({
     return () => clearTimeout(timer);
   }, [customerSearch, selectedCustomer, toast]);
 
+  const selectedCustomerId = selectedCustomer?.id;
+  useEffect(() => {
+    if (!selectedCustomerId) {
+      setOpenBookings([]);
+      return;
+    }
+
+    let cancelled = false;
+    setOpenBookings([]);
+    fetchOpenBookings(selectedCustomerId).then((bookings) => {
+      if (!cancelled) setOpenBookings(bookings);
+    });
+
+    return () => { cancelled = true; };
+  }, [selectedCustomerId]);
+
   const selectCustomer = useCallback((c: CustomerOption) => {
+    selectedCustomerRef.current = c;
     setSelectedCustomer(c);
+    setOpenBookings([]);
     setCustomerSearch(c.farm_name + (c.account_number ? ` (${c.account_number})` : ''));
     setShowCustomerDropdown(false);
 
@@ -205,8 +229,51 @@ export default function QuickDeliveryModal({
     );
   }, [products]);
 
+  const selectCustomerRef = useRef(selectCustomer);
+  useEffect(() => {
+    selectCustomerRef.current = selectCustomer;
+  }, [selectCustomer]);
+
+  // Deep links can supply a customer ID. Fetch it only as the modal opens so a
+  // re-render while the modal is open never overrides the user's selection.
+  useEffect(() => {
+    const justOpened = open && !wasOpenRef.current;
+    wasOpenRef.current = open;
+
+    if (!justOpened || !initialCustomerId || selectedCustomerRef.current) return;
+
+    let cancelled = false;
+    const fetchInitialCustomer = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('customers')
+          .select('id, farm_name, account_number, assigned_tier')
+          .eq('id', initialCustomerId)
+          .eq('is_active', true)
+          .limit(1);
+
+        if (error) {
+          Sentry.captureException(error, { extra: { context: 'QuickDeliveryModal.fetchInitialCustomer' } });
+          return;
+        }
+
+        const customer = ((data || []) as CustomerOption[])[0];
+        if (!cancelled && customer && !selectedCustomerRef.current) {
+          selectCustomerRef.current(customer);
+        }
+      } catch (err) {
+        Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'QuickDeliveryModal.fetchInitialCustomer' } });
+      }
+    };
+
+    fetchInitialCustomer();
+    return () => { cancelled = true; };
+  }, [open, initialCustomerId]);
+
   const clearCustomer = () => {
+    selectedCustomerRef.current = null;
     setSelectedCustomer(null);
+    setOpenBookings([]);
     setCustomerSearch('');
   };
 
@@ -319,7 +386,9 @@ export default function QuickDeliveryModal({
       }
 
       // Reset form
+      selectedCustomerRef.current = null;
       setSelectedCustomer(null);
+      setOpenBookings([]);
       setCustomerSearch('');
       setItems([]);
       setDeliveryNotes('');
@@ -341,7 +410,9 @@ export default function QuickDeliveryModal({
 
   const handleClose = () => {
     if (!submitting) {
+      selectedCustomerRef.current = null;
       setSelectedCustomer(null);
+      setOpenBookings([]);
       setCustomerSearch('');
       setItems([]);
       setDeliveryNotes('');
@@ -377,7 +448,11 @@ export default function QuickDeliveryModal({
               value={customerSearch}
               onChange={(e) => {
                 setCustomerSearch(e.target.value);
-                if (selectedCustomer) setSelectedCustomer(null);
+                if (selectedCustomer) {
+                  selectedCustomerRef.current = null;
+                  setSelectedCustomer(null);
+                  setOpenBookings([]);
+                }
               }}
               placeholder="Search by farm name or account number..."
             />
@@ -411,6 +486,21 @@ export default function QuickDeliveryModal({
               </div>
             )}
           </div>
+
+          {openBookings.length > 0 && (
+            <div className="-mt-3 flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-900">
+              <span>
+                {openBookings.length} open booking{openBookings.length === 1 ? '' : 's'} — consider drawing from Quote {openBookings[0].quote_number} instead
+              </span>
+              <button
+                type="button"
+                onClick={() => navigate(`/quotes/${openBookings[0].id}`)}
+                className="shrink-0 font-medium text-blue-700 underline underline-offset-2 hover:text-blue-900"
+              >
+                View quote
+              </button>
+            </div>
+          )}
 
           {/* Items */}
           <div>

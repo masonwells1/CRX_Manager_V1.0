@@ -613,7 +613,7 @@ export async function notifyDeliveryCompleted(
 
 /**
  * Run all periodic notification checks.
- * Call this once from Dashboard on load.
+ * Retired from Dashboard-load in favor of the run_morning_notification_checks cron (U18).
  */
 export async function runPeriodicNotificationChecks() {
   await Promise.all([

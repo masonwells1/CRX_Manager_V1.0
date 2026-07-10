@@ -411,6 +411,7 @@ export default function NewPurchaseOrder() {
                             <button
                               onClick={() => removeItem(item.key)}
                               className="p-1 rounded text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors"
+                              aria-label="Remove line item"
                             >
                               <Trash2 className="w-3.5 h-3.5" />
                             </button>

@@ -4,6 +4,97 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-10 — U18c: morning-notification-checks cron was firing at 01:20 AM, not 06:20. Fixed live (mig `20260711010000`, live v20260710154919).
+
+Found while checking the U18 cron's first run: the `morning-notification-checks` pg_cron job was scheduled `20 6 * * *` on the assumption it meant 06:20 local, but pg_cron runs in UTC (verified `current_setting('TimeZone') = 'UTC'`), so it fired at 06:20 UTC = **01:20 AM Central**. Same bug class as the A9 fix above — a "business time" written as if the DB were on the local clock. Re-scheduled to `20 11 * * *` = 06:20 America/Chicago in summer / 05:20 in winter (pg_cron can't track DST, so the earlier UTC time was chosen to keep it at-or-before 06:20 year-round for early-start ag crews). Cron-reschedule only; the function is untouched. rls + drift reviewers 0 blockers; proven live (schedule now `20 11 * * *`, single active job, rolled-back `PERFORM run_morning_notification_checks()` ran cleanly).
+
+## 2026-07-10 — A9 month-end close: test-first follow-up. Codex worked, Claude reviewed adversarially. Two REAL server-side gaps found and closed in `20260711000000_a9_close_period_guards` (**APPLIED LIVE 2026-07-10**, live v20260710151913, Mason's explicit OK); 6 new regression tests + 4 `dateUtils` tests; full suite 3182 pass.
+
+**The premise was wrong, and that mattered.** CLAUDE.md claimed the A9 MonthEndClose picker + WaveB units were "deferred to a focused test-first session." Git says otherwise: `86583df0` (picker, Codex R7 clean) and `c2eca4c3` (WaveB) are both ancestors of `origin/main` — they shipped 2026-07-04. That stale line is now corrected.
+
+So the session became what it should have been: an adversarial review of shipped, live code that closes accounting periods.
+
+- **Gap 1 (reachable from the UI, was live):** the page blocked closing a month whose *start* was in the future, and the database had **no date guard whatsoever**. Nothing in `close_accounting_period` compared `p_period_end` to the current date. Proven by a rolled-back live probe: closing **July 2026 on 2026-07-10** — the in-progress month — was **ACCEPTED**, which would have made `check_period_open()` reject every invoice and payment dated Jul 11-31.
+- **Gap 2 (admin + direct RPC):** `v_period_start := date_trunc('month', p_period_end)` accepted any day. With unique key `(period_start, period_end)`, `p_period_end = '2026-03-15'` inserted a **second, overlapping** closed row next to the open full-month row (proven live: `march rows now: 2`) — the page would still show March "Open" while its first half was silently locked. `NULL` also slipped through (`NULL <> x` is `NULL`, which does not RAISE).
+- **Owner decisions:** close only *after* a month ends, enforced in **both** page and database; **no** sequential-close rule (nine open periods back to Oct 2025 would have trapped him).
+- **The independent Codex gate returned `VERDICT: blockers` on a P1 that Claude had found and rationalized away:** the page used the browser's local date, the guard used `CURRENT_DATE`, and the DB session timezone is UTC. Fixed by putting both on one business clock — new `BUSINESS_TIMEZONE`/`todayInBusinessTz()` in `src/lib/dateUtils.ts`, and `(now() AT TIME ZONE 'America/Chicago')::date` in the guard. Postgres and the browser were then verified to agree on all 9 boundary instants incl. both DST transitions. The guard is session-tz-immune: under session TimeZone `Pacific/Kiritimati`, `CURRENT_DATE` = 2026-07-11 while the guard's date stayed 2026-07-10.
+- **Proof, not assertion:** rolled-back live txn applying the exact migration file — 5 probes correct, happy path (April, ended + clean) still ACCEPTED, re-close still refused as already-closed, and a `pg_get_functiondef` line-diff of **0 removed / 11 added** proving the re-emit is byte-faithful. The new timezone test was **mutation-tested**: reverting the page to the browser clock makes it fail under `TZ=UTC`. Live DB left untouched throughout (`closed_periods = 0`, function md5 unchanged).
+- **Known follow-up (latent, not user-reachable):** `changePeriod()` sets `loading = true` unconditionally, but `fetchData` only re-runs when the period's start/end change — so a *programmatic* same-period change strands the page on a spinner forever. A real `<select>` never fires `change` for the already-selected option, so no user can hit it. Left alone deliberately rather than widen a money-path change.
+
+## 2026-07-10 — Sprint D (workflow-waves follow-ups): D2 reserve-side unit normalization APPLIED LIVE v20260710111734 (all 8 hold/planning call sites normalize units before conversion, mirroring complete_job; rolled-back [E2E] proof: 2 pt/ac -> 0.25 Gal hold, was 8x over-reserve) + D1 logbook/dashboard/lot-trace snapshot preference APPLIED LIVE v20260710112102 (6 read RPCs; disk-drift caught on the logbook bases, re-emitted from verified live text). D3 U8 leftovers PARKED: blend commission mint (additive but dormant-by-owner) + commission_split visibility (needs an owner design call: admin-only side table).
+
+**Same day — post-ship Codex gauntlet + contract amendment:** adversarial gpt-5.6-sol passes over the 7 frontend-only workflow-waves commits (A2/A3/U14a-b/U19/U20a-b — Claude-reviewed but never Codex-reviewed) found 1 real P1 (SearchableSelect 150ms delayed-blur commit: clear the customer picker, click Create Order fast, and the order submits to the old hidden customer at the wrong tier — blur reconciliation made synchronous + regression test) + 2 P2 (displaced-applicator notify dropped by early returns; blend order-number prefill clobbering typed input) + 3 P3 (stale crew probe across job navigation; palette + "+ New" ignoring role/deny-list; snapshot-window doc), all fixed @`0a4d6a2a`, confirm verdict CLEAN; 2 findings refuted as designed/pre-existing. Loop contract amended per Mason (`docs/loops/workflow-waves-loop-2026-07.md` §4.7, @`41ed9f84`): **a read-only Codex verdict is required before pushing EVERY shipped unit, frontend included** — no more DB-only gating. **Cron verified:** first 06:20 `morning-notification-checks` run succeeded — 51 low_stock notifications = 17 low/negative-stock products × 3 admins, 0 duplicates (U18b dedup holds).
+
+- **Commits this session** (git log --since=12.hours --author=Mason):
+  - `fa9a3c32 docs(workflow-waves): wrap — morning report, ledger, CHANGELOG, counts, registry high-water`
+  - `e79cd433 feat(a11y+ux): U20b — aria-label sweep + searchable-picker sweep (+ parked backfill draft)`
+  - `66ff98d5 feat(entry-points): U20a — Part 3 demotions (Create Order chooser, editor demotions, misc charge, quick-action reorder, blend auto-number)`
+  - `8bf04755 feat(nav): U19 — nav blueprint (proposals.md mapping, exactly)`
+  - `bf7c7e32 fix(safety-nets): U18b — same-day expiry window + per-recipient dedup in morning checks`
+  - `209697a2 feat(safety-nets): U18 — negative-stock alerts, expiry alignment, 06:20 cron, AR prepay`
+  - `74dc3418 fix(quotes): U17 — lte lapse rule + local date parse on hold lines, unique row keys`
+  - `35d5792b fix(quotes): U17 — local date parsing on attention card + keep-open stray-item cleanup`
+  - `9f8dca1b feat(quotes): U17 — booking hygiene (holds visible, honest email, faster entry)`
+  - `0b149263 fix(quotes): U16b — no status write when convert outcome is unverifiable`
+  - `363b4c51 fix(quotes): U16b — Book-as-Order chain survives lost responses`
+- **Migrations touched** (last 15 commits (fallback)):
+  - `supabase/migrations/20260710003000_u18b_morning_checks_fixes.sql`
+  - `supabase/migrations/20260709230000_u18_safety_nets.sql`
+  - `supabase/migrations/20260709233000_u17_email_log_select_own.sql`
+  - `supabase/migrations/20260709220000_u15_complete_delivery_backdate.sql`
+  - `supabase/migrations/20260709210000_a1b_dispatched_to_me_completed_tail.sql`
+  - `supabase/migrations/20260709190000_a1_dispatched_list_recent_completed.sql`
+  - `supabase/migrations/20260707140000_u7_spray_job_split_group.sql`
+  - `supabase/migrations/20260707090000_u7_split_gate_allow_predelivery.sql`
+  - `supabase/migrations/20260707070000_u7_delivery_split_billing.sql`
+  - `supabase/migrations/20260707060000_u8_application_channel_commissions.sql`
+  - `supabase/migrations/20260707050000_application_record_integrity.sql`
+  - `supabase/migrations/20260707030000_customers_default_application_service_id.sql`
+  - `supabase/migrations/20260707040000_generate_rup_sales_records_role_gate.sql`
+  - `supabase/migrations/20260707020000_assignment_unification.sql`
+  - `supabase/migrations/20260707010000_field_view_my_day.sql`
+  - `supabase/migrations/20260707011000_start_complete_job_null_actor_guard.sql`
+  - `supabase/migrations/20260706130000_stock_policy_warn_not_block.sql`
+
+## 2026-07-09 — Workflow-waves loop (Codex 5.6 builds, Claude orchestrates): Sprint A phone-flow fixes + U14-U20 daily-flow/billing/booking/nav/entry-point overhaul SHIPPED to prod — 6 additive migrations live (v20260709203120-v20260710010846: dispatch Done-tails, complete_delivery backdate, email_log own-rows policy, U18 safety nets + 06:20 morning-notification cron + U18b fixes), ~15 review findings fixed via Opus/Sonnet/Codex gates; Sprint D + dispatch backfill PARKED with plans; full suite 3171 pass.
+
+Workflow-waves loop (Codex 5.6 builds, Claude orchestrates): Sprint A phone-flow fixes + U14-U20 daily-flow/billing/booking/nav/entry-point overhaul SHIPPED to prod — 6 additive migrations live (v20260709203120-v20260710010846: dispatch Done-tails, complete_delivery backdate, email_log own-rows policy, U18 safety nets + 06:20 morning-notification cron + U18b fixes), ~15 review findings fixed via Opus/Sonnet/Codex gates; Sprint D + dispatch backfill PARKED with plans; full suite 3171 pass.
+
+- **Commits this session** (git log --since=12.hours --author=Mason):
+  - `e79cd433 feat(a11y+ux): U20b — aria-label sweep + searchable-picker sweep (+ parked backfill draft)`
+  - `66ff98d5 feat(entry-points): U20a — Part 3 demotions (Create Order chooser, editor demotions, misc charge, quick-action reorder, blend auto-number)`
+  - `8bf04755 feat(nav): U19 — nav blueprint (proposals.md mapping, exactly)`
+  - `bf7c7e32 fix(safety-nets): U18b — same-day expiry window + per-recipient dedup in morning checks`
+  - `209697a2 feat(safety-nets): U18 — negative-stock alerts, expiry alignment, 06:20 cron, AR prepay`
+  - `74dc3418 fix(quotes): U17 — lte lapse rule + local date parse on hold lines, unique row keys`
+  - `35d5792b fix(quotes): U17 — local date parsing on attention card + keep-open stray-item cleanup`
+  - `9f8dca1b feat(quotes): U17 — booking hygiene (holds visible, honest email, faster entry)`
+  - `0b149263 fix(quotes): U16b — no status write when convert outcome is unverifiable`
+  - `363b4c51 fix(quotes): U16b — Book-as-Order chain survives lost responses`
+  - `a73d84f0 feat(billing): U16b — posting rights, Ready-to-Post, chemical Unpost, booking actions`
+  - `1c5eb07d feat(billing): U16a — billing home tiles + one-click invoicing`
+  - `0476cb41 chore(types): U15 — add p_completed_at to generated complete_delivery args`
+  - `ef7bf4a4 fix(deliveries): U15 — keep retry replayable after confirm-ok/complete-fail`
+  - `8d098ad2 feat(deliveries): U15 — deliveries both ways (backdate + one-shot + phone polish)`
+- **Migrations touched** (last 15 commits (fallback)):
+  - `supabase/migrations/20260710003000_u18b_morning_checks_fixes.sql`
+  - `supabase/migrations/20260709230000_u18_safety_nets.sql`
+  - `supabase/migrations/20260709233000_u17_email_log_select_own.sql`
+  - `supabase/migrations/20260709220000_u15_complete_delivery_backdate.sql`
+  - `supabase/migrations/20260709210000_a1b_dispatched_to_me_completed_tail.sql`
+  - `supabase/migrations/20260709190000_a1_dispatched_list_recent_completed.sql`
+  - `supabase/migrations/20260707140000_u7_spray_job_split_group.sql`
+  - `supabase/migrations/20260707090000_u7_split_gate_allow_predelivery.sql`
+  - `supabase/migrations/20260707070000_u7_delivery_split_billing.sql`
+  - `supabase/migrations/20260707060000_u8_application_channel_commissions.sql`
+  - `supabase/migrations/20260707050000_application_record_integrity.sql`
+  - `supabase/migrations/20260707030000_customers_default_application_service_id.sql`
+  - `supabase/migrations/20260707040000_generate_rup_sales_records_role_gate.sql`
+  - `supabase/migrations/20260707020000_assignment_unification.sql`
+  - `supabase/migrations/20260707010000_field_view_my_day.sql`
+  - `supabase/migrations/20260707011000_start_complete_job_null_actor_guard.sql`
+  - `supabase/migrations/20260706130000_stock_policy_warn_not_block.sql`
+
 ## 2026-07-07 — Business-workflow U7 (spray-job half) — per-owner split invoices on Transfer, group-aware lifecycle (U7 COMPLETE)
 
 Migration `20260707140000_u7_spray_job_split_group` **applied live** (findings #42/#100/#50), closing the last U7 gap — the spray-job counterpart to the delivery-half `create_split_invoices_from_order` shipped earlier the same day. A spray job whose fields belong to more than one owner (landlord/tenant) now bills each owner their OWN payable invoice instead of one invoice to the primary customer with co-owners' shares as unpayable annotations.

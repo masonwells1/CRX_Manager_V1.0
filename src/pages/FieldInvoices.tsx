@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, FileText, Check, Ban, Download, ClipboardCheck, Printer, FileClock, Mail, Layers } from 'lucide-react';
+import { FileText, Check, Ban, Download, ClipboardCheck, Printer, FileClock, Mail, Layers, MoreHorizontal } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
@@ -73,8 +73,10 @@ export default function FieldInvoices() {
   const [exportingPdf, setExportingPdf] = useState(false);
   const [printing, setPrinting] = useState(false);
   const [emailing, setEmailing] = useState(false);
+  const [manualInvoiceMenuOpen, setManualInvoiceMenuOpen] = useState(false);
   // Per-row action guard so a double-click can't fire two prints/emails.
   const rowActionRef = useRef(false);
+  const manualInvoiceMenuRef = useRef<HTMLDivElement>(null);
   // Field-app parity #8: the SHARED column toggles (Customers / Applicators /
   // Total Acres) are governed by the same per-user list settings as the job
   // list, so the choice carries over to this list (acceptance criterion #5).
@@ -97,6 +99,26 @@ export default function FieldInvoices() {
     })();
     return () => { cancelled = true; };
   }, [profile?.id]);
+
+  useEffect(() => {
+    if (!manualInvoiceMenuOpen) return;
+
+    const closeMenuOnOutsideClick = (event: MouseEvent) => {
+      if (!manualInvoiceMenuRef.current?.contains(event.target as Node)) {
+        setManualInvoiceMenuOpen(false);
+      }
+    };
+    const closeMenuOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setManualInvoiceMenuOpen(false);
+    };
+
+    document.addEventListener('mousedown', closeMenuOnOutsideClick);
+    document.addEventListener('keydown', closeMenuOnEscape);
+    return () => {
+      document.removeEventListener('mousedown', closeMenuOnOutsideClick);
+      document.removeEventListener('keydown', closeMenuOnEscape);
+    };
+  }, [manualInvoiceMenuOpen]);
 
   const fetchInvoices = useCallback(async () => {
     setLoading(true);
@@ -516,9 +538,41 @@ export default function FieldInvoices() {
           >
             Customer Summary
           </Button>
-          <Button variant="secondary" icon={<Plus className="w-4 h-4" />} onClick={() => navigate('/invoices/field-app/new')}>
-            New Field Application
-          </Button>
+          <div
+            className="relative"
+            ref={manualInvoiceMenuRef}
+            onBlur={(event) => {
+              if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                setManualInvoiceMenuOpen(false);
+              }
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => setManualInvoiceMenuOpen((open) => !open)}
+              aria-label="More actions"
+              aria-haspopup="menu"
+              aria-expanded={manualInvoiceMenuOpen}
+              className="inline-flex items-center justify-center rounded-lg border border-gray-300 bg-white p-2 text-nav-dark hover:bg-gray-50"
+            >
+              <MoreHorizontal className="w-4 h-4" />
+            </button>
+            {manualInvoiceMenuOpen && (
+              <div role="menu" className="absolute right-0 z-20 mt-2 w-52 rounded-lg border border-gray-200 bg-white py-1 shadow-lg">
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    navigate('/invoices/field-app/new');
+                    setManualInvoiceMenuOpen(false);
+                  }}
+                  className="w-full px-3 py-2 text-left text-sm text-nav-dark hover:bg-gray-50"
+                >
+                  Manual Invoice (no job)
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
@@ -611,12 +665,7 @@ export default function FieldInvoices() {
               )
             }
             emptyTitle="No field invoices yet"
-            emptyDescription="Field invoices come from a completed spray job, or start one with New Field Application."
-            emptyAction={
-              <Button variant="secondary" icon={<Plus className="w-4 h-4" />} onClick={() => navigate('/invoices/field-app/new')}>
-                New Field Application
-              </Button>
-            }
+            emptyDescription="Field invoices come from a completed spray job. To add a manual invoice without a job, use More actions."
             loading={loading}
             filters={
               <div className="flex gap-2 items-center">
