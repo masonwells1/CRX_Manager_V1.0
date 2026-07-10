@@ -3614,6 +3614,7 @@ export type Database = {
           payment_terms: string | null
           posted_at: string | null
           posted_by: string | null
+          credit_applied_cents: number
           prepay_applied_cents: number
           pricing_pending: boolean
           purchase_order_ref: string | null
@@ -3664,6 +3665,7 @@ export type Database = {
           payment_terms?: string | null
           posted_at?: string | null
           posted_by?: string | null
+          credit_applied_cents?: number
           prepay_applied_cents?: number
           pricing_pending?: boolean
           purchase_order_ref?: string | null
@@ -3714,6 +3716,7 @@ export type Database = {
           payment_terms?: string | null
           posted_at?: string | null
           posted_by?: string | null
+          credit_applied_cents?: number
           prepay_applied_cents?: number
           pricing_pending?: boolean
           purchase_order_ref?: string | null

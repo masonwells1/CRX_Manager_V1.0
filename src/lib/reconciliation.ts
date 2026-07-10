@@ -233,9 +233,11 @@ export interface InvoiceRow {
   id: string;
   invoice_number: string;
   order_id: string;
+  invoice_type: string;
   paid_amount_cents: number;
   prepay_applied_cents: number;
   write_off_cents: number;
+  credit_applied_cents: number;
   total_amount_cents: number;
   balance_cents: number;
 }
@@ -286,11 +288,13 @@ export function checkInvoicePayments(
 /**
  * Check 4: Generated balance column integrity
  *
- * For each invoice, balance_cents should equal:
- *   total_amount_cents - paid_amount_cents - prepay_applied_cents - write_off_cents
+ * For each invoice, balance_cents should equal (type-aware, 5 levers since mig 20260711020000):
+ *   (total_amount_cents - paid_amount_cents - prepay_applied_cents - write_off_cents)
+ *     + (invoice_type === 'credit_memo' ? +credit_applied_cents : -credit_applied_cents)
  *
  * (PR-09 fix: write_off_cents was missing from the formula, causing every
  * written-off invoice to be flagged as a balance discrepancy.)
+ * (credit-memo apply: credit_applied_cents is the 5th lever — consumes a memo, reduces an invoice.)
  *
  * Since this is a GENERATED ALWAYS column in Postgres, a mismatch
  * would indicate a catastrophic DB issue. This is a sanity check.
@@ -299,7 +303,8 @@ export function checkInvoiceBalances(invoices: InvoiceRow[]): Discrepancy[] {
   const issues: Discrepancy[] = [];
 
   for (const inv of invoices) {
-    const expected = inv.total_amount_cents - inv.paid_amount_cents - inv.prepay_applied_cents - inv.write_off_cents;
+    const expected = inv.total_amount_cents - inv.paid_amount_cents - inv.prepay_applied_cents - inv.write_off_cents
+      + (inv.invoice_type === 'credit_memo' ? inv.credit_applied_cents : -inv.credit_applied_cents);
     if (Math.abs(inv.balance_cents - expected) > TOLERANCE_CENTS) {
       issues.push({
         check: 'invoice_balance_formula',
@@ -721,7 +726,7 @@ export async function runReconciliationChecks(): Promise<ReconciliationReport> {
     const [invoiceRes, allocRes] = await Promise.all([
       supabase
         .from('invoices')
-        .select('id, invoice_number, order_id, paid_amount_cents, prepay_applied_cents, write_off_cents, total_amount_cents, balance_cents')
+        .select('id, invoice_number, order_id, invoice_type, paid_amount_cents, prepay_applied_cents, write_off_cents, credit_applied_cents, total_amount_cents, balance_cents')
         .eq('status', 'posted')
         .is('deleted_at', null),
       supabase

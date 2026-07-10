@@ -1119,7 +1119,11 @@ export interface Invoice {
   total_amount_cents: number;
   paid_amount_cents: number;
   prepay_applied_cents: number;
-  balance_cents: number; // generated column
+  /** Credit-memo application lever (mig 20260711020000). Non-negative on both row types;
+   * on a credit_memo it is credit applied OUT, on a real invoice it is credit received IN.
+   * Written only by apply_credit_memo_to_invoice / reverse_credit_memo_application. */
+  credit_applied_cents: number;
+  balance_cents: number; // generated column (5 levers, type-aware: credit adds on memos, subtracts on invoices)
 
   // Posting workflow
   posted_by: string | null;
@@ -1210,6 +1214,21 @@ export interface Invoice {
   salesman?: Profile;
   items?: InvoiceItem[];
   shares?: InvoiceShare[];
+}
+
+/** One application of a credit memo to an open invoice (mig 20260711030000).
+ * Immutable/append-only: a reversal stamps reversed_at/by/reason, never deletes.
+ * Written only by apply_credit_memo_to_invoice / reverse_credit_memo_application. */
+export interface CreditMemoApplication {
+  id: string;
+  credit_memo_id: string;
+  target_invoice_id: string;
+  amount_cents: number;
+  applied_by: string;
+  applied_at: string;
+  reversed_at: string | null;
+  reversed_by: string | null;
+  reversal_reason: string | null;
 }
 
 export interface InvoiceItem {
