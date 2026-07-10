@@ -1,8 +1,8 @@
 /**
  * MonthEndClose.test.tsx — Tests for the month-end close page
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 
 const { mockFrom, mockRpc, mockToast } = vi.hoisted(() => ({
@@ -11,7 +11,29 @@ const { mockFrom, mockRpc, mockToast } = vi.hoisted(() => ({
   mockToast: vi.fn(),
 }));
 
-function buildChain(result: { data: unknown; error: unknown }): Record<string, unknown> {
+interface ChainResult {
+  data: unknown;
+  error: unknown;
+  count?: number | null;
+}
+
+interface SummaryFixture {
+  invoices: {
+    posted_count: number;
+    total_amount_cents: number;
+    total_cost_cents: number;
+    draft_count: number;
+    voided_count: number;
+  };
+  payments: { count: number; total_cents: number };
+  orders: { count: number; total_cents: number };
+  deliveries: { count: number; completed_count: number };
+  applications: { count: number; total_acres: number };
+  commissions: { earned_cents: number; paid_count: number };
+  ar_balance_cents: number;
+}
+
+function buildChain(result: ChainResult): Record<string, unknown> {
   const self: Record<string, unknown> = {};
   const method = (..._args: unknown[]) => self;
   const methods = ['select', 'insert', 'update', 'upsert', 'delete', 'eq', 'neq',
@@ -25,6 +47,49 @@ function buildChain(result: { data: unknown; error: unknown }): Record<string, u
   self.catch = promise.catch.bind(promise);
   self.finally = promise.finally.bind(promise);
   return self;
+}
+
+function cleanSummary(): SummaryFixture {
+  return {
+    invoices: {
+      posted_count: 1,
+      total_amount_cents: 1000,
+      total_cost_cents: 500,
+      draft_count: 0,
+      voided_count: 0,
+    },
+    payments: { count: 0, total_cents: 0 },
+    orders: { count: 0, total_cents: 0 },
+    deliveries: { count: 0, completed_count: 0 },
+    applications: { count: 0, total_acres: 0 },
+    commissions: { earned_cents: 0, paid_count: 0 },
+    ar_balance_cents: 0,
+  };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
+function mockCleanCloseableSummary() {
+  mockRpc.mockImplementation((name: string) => {
+    if (name === 'get_monthly_summary') {
+      return Promise.resolve({ data: cleanSummary(), error: null });
+    }
+    return Promise.resolve({ data: null, error: null });
+  });
+}
+
+async function switchToMonth(monthIndex: number) {
+  const monthSelect = await screen.findByLabelText('Month to review');
+  fireEvent.change(monthSelect, { target: { value: String(monthIndex) } });
+  await waitFor(() => {
+    expect(screen.getByLabelText('Month to review')).toHaveValue(String(monthIndex));
+  });
 }
 
 vi.mock('../lib/db', () => ({
@@ -69,11 +134,32 @@ function renderMonthEnd() {
   );
 }
 
+type SelectChangeHandler = (event: { target: { value: string } }) => void;
+
+function getReactSelectChangeHandler(element: HTMLElement): SelectChangeHandler {
+  const propsKey = Object.keys(element).find((key) => key.startsWith('__reactProps$'));
+  if (!propsKey) throw new Error('React props not found for select');
+  const props = (element as unknown as Record<string, unknown>)[propsKey];
+  if (!props || typeof props !== 'object') throw new Error('React props are not an object');
+  const onChange = (props as { onChange?: unknown }).onChange;
+  if (typeof onChange !== 'function') throw new Error('React onChange handler not found');
+  return onChange as SelectChangeHandler;
+}
+
 describe('MonthEndClose', () => {
   beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date('2026-07-10T12:00:00Z'));
     vi.clearAllMocks();
-    mockFrom.mockImplementation(() => buildChain({ data: [], error: null }));
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'orders') return buildChain({ data: [], count: 0, error: null });
+      return buildChain({ data: [], error: null });
+    });
     mockRpc.mockImplementation(() => Promise.resolve({ data: null, error: null }));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it('renders Month-End Close heading', async () => {
@@ -86,10 +172,7 @@ describe('MonthEndClose', () => {
   it('shows current period label', async () => {
     renderMonthEnd();
     await waitFor(() => {
-      // Should show the current month name (e.g., "March 2026")
-      const now = new Date();
-      const monthLabel = now.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
-      expect(screen.getByText(monthLabel)).toBeInTheDocument();
+      expect(screen.getByText('July 2026')).toBeInTheDocument();
     });
   });
 
@@ -121,6 +204,164 @@ describe('MonthEndClose', () => {
     });
   });
 
+  it('keeps the current in-progress month from being closeable', async () => {
+    mockCleanCloseableSummary();
+
+    renderMonthEnd();
+
+    await screen.findByText('July 2026');
+    await waitFor(() => {
+      expect(screen.getByText('No unpriced rush orders')).toBeInTheDocument();
+    });
+
+    expect(screen.getByRole('button', { name: /Roll the Month/i })).toBeDisabled();
+    expect(screen.getByText(/month has not ended yet/i)).toBeInTheDocument();
+  });
+
+  // NOTE (Codex gate P3): this test only DISCRIMINATES on a host whose timezone differs from
+  // America/Chicago (e.g. a UTC CI box) — on a Central workstation the browser clock and the
+  // business clock coincide, so a browser-clock regression would still pass here. The
+  // host-independent guard is src/lib/dateUtils.test.ts, which pins Intl to America/Chicago.
+  it('treats the last evening of the month as still in-progress (Central, not UTC)', async () => {
+    vi.setSystemTime(new Date('2026-08-01T02:00:00Z'));
+    mockCleanCloseableSummary();
+
+    renderMonthEnd();
+
+    // 02:00Z on Aug 1 is 21:00 Central on Jul 31. The page must default to JULY, not
+    // August: the default period is derived from the business clock, not the browser's.
+    // (Under TZ=UTC a browser-clock implementation would land on August and fail here.)
+    const monthSelect = await screen.findByLabelText('Month to review');
+    const yearSelect = await screen.findByLabelText('Year to review');
+    expect(monthSelect).toHaveValue('6');
+    expect(yearSelect).toHaveValue('2026');
+
+    await screen.findByText('July 2026');
+    await waitFor(() => {
+      expect(screen.getByText('No unpriced rush orders')).toBeInTheDocument();
+    });
+
+    expect(screen.getByRole('button', { name: /Roll the Month/i })).toBeDisabled();
+    expect(screen.getByText(/month has not ended yet/i)).toBeInTheDocument();
+  });
+
+  it('keeps an ended month closeable when the checklist is clean', async () => {
+    mockCleanCloseableSummary();
+
+    renderMonthEnd();
+    await switchToMonth(5);
+
+    await screen.findByText('June 2026');
+    await waitFor(() => {
+      expect(screen.getByText('No unpriced rush orders')).toBeInTheDocument();
+    });
+
+    expect(screen.getByRole('button', { name: /Roll the Month/i })).not.toBeDisabled();
+  });
+
+  it('keeps a newly-selected period fail-closed when an older summary response resolves late', async () => {
+    const slowSummary = deferred<{ data: SummaryFixture; error: null }>();
+    let summaryCalls = 0;
+
+    mockRpc.mockImplementation((name: string) => {
+      if (name !== 'get_monthly_summary') return Promise.resolve({ data: null, error: null });
+      summaryCalls += 1;
+      if (summaryCalls === 1) return Promise.resolve({ data: cleanSummary(), error: null });
+      if (summaryCalls === 2) return slowSummary.promise;
+      return Promise.resolve({ data: null, error: { message: 'summary failed' } });
+    });
+
+    renderMonthEnd();
+    await screen.findByText('July 2026');
+
+    const monthSelect = await screen.findByLabelText('Month to review');
+    const changeMonth = getReactSelectChangeHandler(monthSelect);
+
+    act(() => {
+      changeMonth({ target: { value: '5' } });
+    });
+    await waitFor(() => expect(summaryCalls).toBe(2));
+
+    act(() => {
+      changeMonth({ target: { value: '4' } });
+    });
+    await waitFor(() => expect(summaryCalls).toBe(3));
+    await waitFor(() => {
+      expect(screen.getByText(/Resolve all checklist items/i)).toBeInTheDocument();
+    });
+
+    await act(async () => {
+      slowSummary.resolve({ data: cleanSummary(), error: null });
+      await slowSummary.promise;
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Roll the Month/i })).toBeDisabled();
+    });
+    expect(screen.getByText(/Resolve all checklist items/i)).toBeInTheDocument();
+  });
+
+  it('clears ticked review boxes when switching periods', async () => {
+    const paymentSummary = cleanSummary();
+    paymentSummary.payments = { count: 2, total_cents: 2500 };
+    mockRpc.mockImplementation((name: string) => {
+      if (name === 'get_monthly_summary') {
+        return Promise.resolve({ data: paymentSummary, error: null });
+      }
+      return Promise.resolve({ data: null, error: null });
+    });
+
+    renderMonthEnd();
+
+    const checkbox = await screen.findByRole('checkbox', {
+      name: /I have reviewed this and confirm it is correct/i,
+    });
+    fireEvent.click(checkbox);
+    expect(checkbox).toBeChecked();
+
+    await switchToMonth(5);
+
+    const newCheckbox = await screen.findByRole('checkbox', {
+      name: /I have reviewed this and confirm it is correct/i,
+    });
+    expect(newCheckbox).not.toBeChecked();
+  });
+
+  it('fails closed when the monthly summary cannot load', async () => {
+    mockRpc.mockImplementation((name: string) => {
+      if (name === 'get_monthly_summary') {
+        return Promise.resolve({ data: null, error: { message: 'summary failed' } });
+      }
+      return Promise.resolve({ data: null, error: null });
+    });
+
+    renderMonthEnd();
+
+    await waitFor(() => {
+      expect(screen.getByText(/Resolve all checklist items/i)).toBeInTheDocument();
+    });
+    expect(screen.getByRole('button', { name: /Roll the Month/i })).toBeDisabled();
+  });
+
+  it('requires manual confirmation when the unpriced rush-order count query fails', async () => {
+    mockCleanCloseableSummary();
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'orders') {
+        return buildChain({ data: [], count: null, error: { message: 'count failed' } });
+      }
+      return buildChain({ data: [], error: null });
+    });
+
+    renderMonthEnd();
+
+    await screen.findByText('Rush orders priced');
+    expect(screen.getByText(/Could not verify unpriced rush orders/i)).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', {
+      name: /I have reviewed this and confirm it is correct/i,
+    })).not.toBeChecked();
+    expect(screen.getByRole('button', { name: /Roll the Month/i })).toBeDisabled();
+  });
+
   it('disables the month/year selects while a close is in flight (Codex R6 structural guard)', async () => {
     // A closeable period (all checklist items pass) + a close RPC that never resolves,
     // so `closing` stays true. The period selects must be disabled while closing, so an
@@ -142,6 +383,9 @@ describe('MonthEndClose', () => {
     });
 
     renderMonthEnd();
+
+    await switchToMonth(5);
+    await screen.findByText('June 2026');
 
     // Period is closeable -> selects enabled, "Roll the Month" enabled.
     const rollBtn = await screen.findByRole('button', { name: /Roll the Month/i });

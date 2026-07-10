@@ -33,7 +33,7 @@ Run when a new session begins. Inject `additionalContext` so Claude sees state-d
 | Hook | What it surfaces |
 |------|------------------|
 | `session-snapshot.mjs` | Git porcelain snapshot (so Stop hook can tell session-scoped changes from prior WIP) |
-| `session-staleness.mjs` | Schema registry >7 days old, CLAUDE.md count drift vs reality, uncommitted files from a prior session |
+| `session-staleness.mjs` | Schema registry behind registry-relevant migrations (without false alarms for cron/data-only migrations), uncommitted files from a prior session |
 
 ### Stop Hooks (`.claude/hooks/`)
 Run when a session ends. Block until Claude addresses loose ends.
@@ -85,7 +85,7 @@ Built from a workflow that mined the last 50 sessions (524 Mason-typed messages 
 
 **Refresh schema registry after schema changes:** `node scripts/regenerate-schema-registry.mjs` (or ask Claude Code to do it via Supabase MCP).
 
-**Refresh AGENTS.md after CLAUDE.md changes:** `node scripts/regenerate-agents-md.mjs`.
+**Shared guidance:** edit `AGENTS.md` intentionally. `CLAUDE.md` imports it and contains only Claude-specific routing. Verify with `npm run check:agent-guidance`.
 
 **Refresh architecture map:** `npm run generate-map` (or `node scripts/generate-workflow-map.mjs`). Auto-runs in pre-commit hook and stages `docs/app-workflow-map.html` automatically.
 

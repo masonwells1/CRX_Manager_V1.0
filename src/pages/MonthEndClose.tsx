@@ -19,6 +19,7 @@ import { logActivity } from '../lib/activityLogger';
 import { downloadBatchStatements } from '../lib/statementPdf';
 import { downloadBatchYearEndSummaries } from '../lib/yearEndSummaryPdf';
 import { formatCents as fmt } from '../lib/money';
+import { todayInBusinessTz } from '../lib/dateUtils';
 import StatementPrintDialog from '../components/statements/StatementPrintDialog';
 import YearEndSummaryDialog from '../components/reports/YearEndSummaryDialog';
 import type { DetailedStatementData, StatementOptions, YearEndSummaryData } from '../types';
@@ -86,14 +87,22 @@ export default function MonthEndClose() {
   const [needsPricingError, setNeedsPricingError] = useState(false);
   const [yeLoading, setYeLoading] = useState(false);
 
-  // A9: month/year picker — defaults to the actual current month.
-  const [selectedYear, setSelectedYear] = useState(() => new Date().getFullYear());
-  const [selectedMonth, setSelectedMonth] = useState(() => new Date().getMonth());
+  // A9: month/year picker — defaults to the current business-clock month.
+  const [initialBusinessToday] = useState(() => todayInBusinessTz());
+  const [selectedYear, setSelectedYear] = useState(() => Number(initialBusinessToday.slice(0, 4)));
+  const [selectedMonth, setSelectedMonth] = useState(() => Number(initialBusinessToday.slice(5, 7)) - 1);
   const current = getPeriodForMonth(selectedYear, selectedMonth);
-  // A period whose month hasn't started yet can be viewed (all zeros) but not closed.
-  const _today = new Date();
-  const todayStr = `${_today.getFullYear()}-${String(_today.getMonth() + 1).padStart(2, '0')}-${String(_today.getDate()).padStart(2, '0')}`;
-  const isFuturePeriod = current.start > todayStr;
+  const todayStr = todayInBusinessTz();
+  const businessYear = Number(todayStr.slice(0, 4));
+  // A9: a period may only be closed once it has ENDED (owner rule, 2026-07-10).
+  // Compares the period's END (not its start) — the old `start > today` check let an
+  // admin close the current, in-progress month.
+  const periodHasEnded = current.end < todayStr;
+  const closeableOn = new Date(selectedYear, selectedMonth + 1, 1).toLocaleDateString('en-US', {
+    month: 'long',
+    day: 'numeric',
+    year: 'numeric',
+  });
 
   // A9 (Codex P1): monotonic token to ignore stale in-flight fetch responses when the
   // admin switches period mid-load (a slower OLD-period response must not overwrite the
@@ -262,8 +271,8 @@ export default function MonthEndClose() {
       toast('error', 'Cannot close period — profile not loaded. Please refresh.');
       return;
     }
-    if (isFuturePeriod) {
-      toast('error', 'Cannot close a period that has not started yet.');
+    if (!periodHasEnded) {
+      toast('error', 'Cannot close a period that has not ended yet.');
       return;
     }
     // A9 (Codex R4): self-guard so even a programmatic call can't close a period whose
@@ -442,7 +451,7 @@ export default function MonthEndClose() {
             className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-crx-green focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
             aria-label="Year to review"
           >
-            {Array.from({ length: 3 }, (_, k) => new Date().getFullYear() - 2 + k).map((y) => (
+            {Array.from({ length: 3 }, (_, k) => businessYear - 2 + k).map((y) => (
               <option key={y} value={y}>{y}</option>
             ))}
           </select>
@@ -466,7 +475,7 @@ export default function MonthEndClose() {
             <Button
               icon={<Lock className="w-4 h-4" />}
               onClick={() => setShowCloseModal(true)}
-              disabled={!allChecksPassed || isFuturePeriod}
+              disabled={!allChecksPassed || !periodHasEnded}
             >
               Roll the Month
             </Button>
@@ -494,11 +503,6 @@ export default function MonthEndClose() {
         {isClosed && currentPeriodStatus?.closed_at && (
           <p className="text-sm text-secondary">
             Closed on {new Date(currentPeriodStatus.closed_at).toLocaleString()}
-          </p>
-        )}
-        {isFuturePeriod && (
-          <p className="text-sm text-amber-600">
-            This month hasn&apos;t started yet — there&apos;s nothing to close.
           </p>
         )}
       </Card>
@@ -595,6 +599,14 @@ export default function MonthEndClose() {
               <div className="mt-4 p-3 bg-amber-50 border border-amber-200 rounded-lg">
                 <p className="text-sm text-amber-800">
                   Resolve all checklist items before closing the period.
+                </p>
+              </div>
+            )}
+
+            {!periodHasEnded && (
+              <div className="mt-4 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                <p className="text-sm text-amber-800">
+                  This month has not ended yet. It can be closed on {closeableOn}.
                 </p>
               </div>
             )}
