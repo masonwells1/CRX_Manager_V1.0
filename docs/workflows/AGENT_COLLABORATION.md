@@ -26,5 +26,7 @@ Run this after changing agent commands, skills, hooks, or helper scripts:
 ```powershell
 npm run test:agent-workflows
 node scripts/agent-health-check.mjs
-.codex\sync-from-claude.ps1 -IncludeHooks
+node scripts/sync-agent-workflows.mjs --check
 ```
+
+`.claude/commands/` and `.claude/skills/` are the workflow source. Run `node scripts/sync-agent-workflows.mjs --write` after changing them. Shared hook implementations are not copied: tracked `.codex/hooks.json` invokes `.claude/hooks/` through the worktree-aware adapter.

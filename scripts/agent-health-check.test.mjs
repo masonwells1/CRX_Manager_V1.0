@@ -7,7 +7,8 @@ import path from "node:path";
 import {
   checkClaudeAuth,
   checkCodexAuth,
-  checkCodexSessionStartSyncsHooks,
+  checkBranchStaleness,
+  checkCodexHookPortability,
   checkFilesPresent,
   compareSyncedFiles,
   summarizeChecks,
@@ -48,7 +49,7 @@ try {
           hooks: [
             {
               type: "command",
-              command: "powershell -NoProfile -ExecutionPolicy Bypass -File 'C:\\CRX_Manager\\.codex\\sync-from-claude.ps1'",
+              command: "node C:\\CRX_Manager\\.codex\\hooks\\copied-hook.mjs",
             },
           ],
         },
@@ -57,12 +58,18 @@ try {
   };
   const freshHooks = {
     hooks: {
-      SessionStart: [
+      PreToolUse: [
         {
           hooks: [
             {
               type: "command",
-              command: "powershell -NoProfile -ExecutionPolicy Bypass -File 'C:\\CRX_Manager\\.codex\\sync-from-claude.ps1' -IncludeHooks",
+              command: "node \"$(git rev-parse --show-toplevel)/.codex/hooks/codex-hook-adapter.mjs\" \".claude/hooks/sql-safety.mjs\"",
+              commandWindows: "powershell -Command shared-hook",
+            },
+            {
+              type: "command",
+              command: "node \"$(git rev-parse --show-toplevel)/.codex/hooks/production-action-guard.mjs\"",
+              commandWindows: "powershell -Command production-action-guard.mjs",
             },
           ],
         },
@@ -70,8 +77,11 @@ try {
     },
   };
 
-  assert.equal(checkCodexSessionStartSyncsHooks(staleHooks).status, "FAIL");
-  assert.equal(checkCodexSessionStartSyncsHooks(freshHooks).status, "PASS");
+  assert.equal(checkCodexHookPortability(staleHooks).status, "FAIL");
+  assert.equal(checkCodexHookPortability(freshHooks).status, "PASS");
+  assert.equal(checkBranchStaleness(() => "0 2").status, "PASS");
+  assert.equal(checkBranchStaleness(() => "3 1").status, "WARN");
+  assert.equal(checkBranchStaleness(() => "bad output").status, "WARN");
 
   assert.equal(
     summarizeChecks([

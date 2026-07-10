@@ -5,8 +5,9 @@ Use this when Mason asks whether the agents, hooks, handoff workflow, direct rev
 ## What This Checks
 
 - Claude workflow files exist.
-- Codex-facing skill and hook copies are synced from `.claude`.
-- Codex SessionStart sync includes hook files.
+- Codex-facing skills are synced from `.claude`.
+- Codex hooks are tracked, worktree-aware, and invoke the shared `.claude/hooks/` source.
+- The current branch is compared with `origin/main`.
 - Direct Claude review helper exists.
 - Pair review helper exists.
 - PR comment helper exists.

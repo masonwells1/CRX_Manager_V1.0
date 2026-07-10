@@ -40,19 +40,38 @@ export function compareSyncedFiles(root, pairs) {
   });
 }
 
-export function checkCodexSessionStartSyncsHooks(hooksJson) {
-  const sessionStart = hooksJson?.hooks?.SessionStart || [];
-  const commands = sessionStart
+export function checkCodexHookPortability(hooksJson) {
+  const commands = Object.values(hooksJson?.hooks || {})
+    .flatMap((entries) => entries || [])
     .flatMap((entry) => entry.hooks || [])
-    .map((hook) => String(hook.command || ""));
-  const syncCommand = commands.find((command) => command.includes("sync-from-claude.ps1"));
-  if (!syncCommand) {
-    return check("FAIL", ".codex/hooks.json SessionStart sync", "sync-from-claude.ps1 not registered");
+    .filter((hook) => hook.type === "command");
+  if (commands.length === 0) return check("FAIL", ".codex/hooks.json portability", "no command hooks registered");
+  const serialized = JSON.stringify(hooksJson);
+  if (serialized.includes("C:\\CRX_Manager")) return check("FAIL", ".codex/hooks.json portability", "hard-coded C:\\CRX_Manager path found");
+  if (commands.some((hook) => !hook.command || !hook.commandWindows)) return check("FAIL", ".codex/hooks.json portability", "each command hook needs command and commandWindows");
+  if (serialized.includes("sync-from-claude.ps1")) return check("FAIL", ".codex/hooks.json portability", "SessionStart must not rewrite tracked hooks");
+  if (!serialized.includes(".claude/hooks/sql-safety.mjs") || !serialized.includes("production-action-guard.mjs")) {
+    return check("FAIL", ".codex/hooks.json portability", "shared hook source or production guard missing");
   }
-  if (!syncCommand.includes("-IncludeHooks")) {
-    return check("FAIL", ".codex/hooks.json SessionStart sync includes hooks", "add -IncludeHooks");
+  return check("PASS", ".codex/hooks.json portability", `${commands.length} worktree-aware command hooks`);
+}
+
+export function checkBranchStaleness(runner) {
+  try {
+    const output = runner
+      ? runner()
+      : execFileSync("git", ["rev-list", "--left-right", "--count", "origin/main...HEAD"], {
+          cwd: ROOT,
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "ignore"],
+        });
+    const [behind, ahead] = String(output).trim().split(/\s+/).map(Number);
+    if (!Number.isInteger(behind) || !Number.isInteger(ahead)) throw new Error("unexpected rev-list output");
+    if (behind > 0) return check("WARN", "Branch freshness", `${behind} commit(s) behind origin/main; ${ahead} ahead`);
+    return check("PASS", "Branch freshness", `current with origin/main; ${ahead} ahead`);
+  } catch (error) {
+    return check("WARN", "Branch freshness", `could not compare origin/main: ${error.message}`);
   }
-  return check("PASS", ".codex/hooks.json SessionStart sync includes hooks");
 }
 
 function runCommand(name, command, args, options = {}) {
@@ -211,11 +230,16 @@ function buildHealthChecks(root = ROOT) {
     ".claude/skills/agent-pr-comment/SKILL.md",
     ".agents/skills/agent-pr-comment/SKILL.md",
     ".claude/hooks/agent-pair-review-reminder.mjs",
-    ".codex/hooks/agent-pair-review-reminder.mjs",
+    ".codex/config.toml",
+    ".codex/hooks.json",
+    ".codex/hooks/codex-hook-adapter.mjs",
+    ".codex/hooks/production-action-guard.mjs",
     "scripts/run-claude-review.mjs",
     "scripts/agent-health-check.mjs",
     "scripts/post-agent-review-to-pr.mjs",
     "scripts/check-agent-workflows.mjs",
+    "scripts/check-agent-guidance.mjs",
+    "scripts/sync-agent-workflows.mjs",
   ];
 
   const checks = [
@@ -225,13 +249,13 @@ function buildHealthChecks(root = ROOT) {
       [".claude/skills/agent-pair-review/SKILL.md", ".agents/skills/agent-pair-review/SKILL.md"],
       [".claude/skills/agent-health/SKILL.md", ".agents/skills/agent-health/SKILL.md"],
       [".claude/skills/agent-pr-comment/SKILL.md", ".agents/skills/agent-pr-comment/SKILL.md"],
-      [".claude/hooks/agent-pair-review-reminder.mjs", ".codex/hooks/agent-pair-review-reminder.mjs"],
-      [".claude/hooks/codex-to-claude-handoff-reminder.mjs", ".codex/hooks/codex-to-claude-handoff-reminder.mjs"],
-      [".claude/hooks/codex-gauntlet-reminder.mjs", ".codex/hooks/codex-gauntlet-reminder.mjs"],
     ]),
   ];
 
-  checks.push(checkCodexSessionStartSyncsHooks(readJsonIfPresent(path.join(root, ".codex", "hooks.json"))));
+  checks.push(checkCodexHookPortability(readJsonIfPresent(path.join(root, ".codex", "hooks.json"))));
+  checks.push(runCommand("Agent workflow sync", process.execPath, [path.join(ROOT, "scripts", "sync-agent-workflows.mjs"), "--check"], { shell: false }));
+  checks.push(runCommand("Agent guidance", process.execPath, [path.join(ROOT, "scripts", "check-agent-guidance.mjs")], { shell: false }));
+  checks.push(checkBranchStaleness());
   checks.push(runCommand("Claude CLI", "claude", ["--version"], { warn: false }));
   checks.push(checkClaudeAuth());
   checks.push(checkCodexCli());
