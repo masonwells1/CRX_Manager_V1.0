@@ -99,6 +99,30 @@ describe('ActionQueue', () => {
     expect(mockNavigate).toHaveBeenCalledWith('/invoices/inv-1');
   });
 
+  it('renders new delivery safety-net categories and opens their deliveries', async () => {
+    mockRpc.mockResolvedValue({
+      data: {
+        due_today_not_started: [
+          { id: 'del-due', primary_text: 'DEL-002', secondary_text: 'Farm Alpha', scheduled_date: '2026-07-09' },
+        ],
+        unbilled_deliveries: [
+          { id: 'del-unbilled', primary_text: 'DEL-003', secondary_text: 'Farm Beta', scheduled_date: '2026-07-08' },
+        ],
+      },
+      error: null,
+    });
+
+    renderQueue();
+    await waitFor(() => {
+      expect(screen.getByText('Due today — not started (1)')).toBeInTheDocument();
+      expect(screen.getByText('Delivered, not invoiced (1)')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByText('DEL-002'));
+    fireEvent.click(screen.getByText('DEL-003'));
+    expect(mockNavigate).toHaveBeenNthCalledWith(1, '/deliveries/del-due');
+    expect(mockNavigate).toHaveBeenNthCalledWith(2, '/deliveries/del-unbilled');
+  });
+
   it('dismiss hides an item', async () => {
     mockRpc.mockResolvedValue({
       data: {

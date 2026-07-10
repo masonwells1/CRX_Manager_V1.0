@@ -31,7 +31,6 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, assertRpcResult } from '../lib/db';
 import { Sentry } from '../lib/sentry';
-import { runPeriodicNotificationChecks } from '../lib/notificationTriggers';
 import ActionQueue from '../components/dashboard/ActionQueue';
 import DailyBrief from '../components/dashboard/DailyBrief';
 import FinanceSnapshotCard from '../components/dashboard/FinanceSnapshotCard';
@@ -334,8 +333,7 @@ export default function Dashboard() {
     }
     setLoading(false);
 
-    // Side-effects from original dashboard
-    runPeriodicNotificationChecks();
+    // Low-stock and expiring-quote notifications now run via the U18 run_morning_notification_checks cron.
 
     try {
       const { data: reminderData, error: reminderErr } = await supabase.rpc('check_remainder_reminders');
