@@ -136,7 +136,7 @@ const PAGE_ICON_MAP: Record<string, React.ReactNode> = {
 
 // Commands without a PAGE_PERMISSIONS entry: creation/deep links and global
 // routes. Permission pages themselves are derived below from the canonical list.
-const EXTRA_PAGES: { path: string; label: string; pageKey?: string }[] = [
+const EXTRA_PAGES: { path: string; label: string; pageKey?: string; allRoles?: boolean; adminOnly?: boolean }[] = [
   { path: '/quotes/new', label: 'New Quote/Booking', pageKey: 'quotes' },
   { path: '/orders/new', label: 'New Order', pageKey: 'orders' },
   { path: '/purchase-orders/new', label: 'New Purchase Order', pageKey: 'purchase-orders' },
@@ -147,9 +147,12 @@ const EXTRA_PAGES: { path: string; label: string; pageKey?: string }[] = [
   { path: '/sales-reports?tab=by_customer', label: 'Sales by Customer (Customer Profitability)', pageKey: 'sales-reports' },
   { path: '/sales-reports?tab=by_sales_rep', label: 'Sales by Sales Rep', pageKey: 'sales-reports' },
   { path: '/sales-reports?tab=by_month', label: 'Sales by Month', pageKey: 'sales-reports' },
-  { path: '/team-board', label: 'Team Board' },
-  { path: '/notifications', label: 'Notifications' },
-  { path: '/settings', label: 'Settings' },
+  // Global routes without a PAGE_PERMISSIONS entry. Team Board + Notifications
+  // are all-role; Settings is admin-only (mirrors its route gate) — these must
+  // NOT be swept up in the office-role gate below (gauntlet confirm-round P3).
+  { path: '/team-board', label: 'Team Board', allRoles: true },
+  { path: '/notifications', label: 'Notifications', allRoles: true },
+  { path: '/settings', label: 'Settings', adminOnly: true },
 ];
 
 // ── Helpers ────────────────────────────────────────────────────────
@@ -197,11 +200,14 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
       .filter((page) => page.roles.includes(role) && hasPageAccess(role, deniedPages, page.key))
       .map((page) => ({ path: page.path, label: page.label }));
     const isOfficeRole = role === 'admin' || role === 'sales_rep';
-    const extraPages = isOfficeRole
-      ? EXTRA_PAGES
-        .filter((page) => !page.pageKey || hasPageAccess(role, deniedPages, page.pageKey))
-        .map(({ path, label }) => ({ path, label }))
-      : [];
+    const extraPages = EXTRA_PAGES
+      .filter((page) => {
+        if (page.allRoles) return true;
+        if (page.adminOnly) return role === 'admin';
+        // Office deep-links: office role + the linked page's deny-list gate.
+        return isOfficeRole && (!page.pageKey || hasPageAccess(role, deniedPages, page.pageKey));
+      })
+      .map(({ path, label }) => ({ path, label }));
 
     return [...permissionPages, ...extraPages];
   }, [deniedPages, role]);
