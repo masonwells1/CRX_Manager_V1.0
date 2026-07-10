@@ -204,3 +204,28 @@ also the same split that already worked on the workflow-waves / structure-fix / 
 
 **Section 11 update:** per decision #2, Stage 1 makes **zero** database changes. Skip the optional
 `epa_last_synced_at`/`epa_product_status` columns entirely for this loop.
+
+## 15. Known follow-up — commit-side registration re-check (owner-accepted deferral, 2026-07-10)
+
+**Found by the ship-gate Codex review (round 2) and accepted by Mason to defer.** The per-product button, when
+it fills a product's signal word while that product already has a saved (matching) registration, creates a
+draft that carries the signal word but not the registration (empty-fields-only leaves the existing reg). The
+shared, pre-existing `commit_label_draft` RPC then applies the draft's values later **without re-verifying that
+the product's registration is still the one the signal word came from.** So if a product's registration is
+changed in the window *between* draft creation and Label-Review approval, approving the draft can attach the
+old registration's hazard word to the now-different registration.
+
+- **This is a property of the pre-existing `commit_label_draft` pipeline** (live since the beyond-parity work,
+  `product_label_drafts` had 0 rows / was never exercised). This diff does **not** modify `commit_label_draft`.
+  The EPA button does, however, make the pipeline easy to use for the first time, so it moves the risk from
+  dormant to reachable.
+- **Immediate direct path is fixed** (§ ProductDetail `handleCreateEpaDraft`): a lookup of a *different*
+  registration than the product's saved one is blocked before any draft is created (regression-tested).
+- **The proper fix (deferred, needs a migration — out of this loop's zero-DB scope + Mason's explicit OK):**
+  persist the draft's *source registration* on `product_label_drafts`, and have `commit_label_draft` refuse to
+  apply a signal word whose source registration ≠ the product's current registration (a `SOURCE_REG_MISMATCH`
+  guard). Natural companion to the registration-number cleanup. Until then, the mitigation is human review at
+  commit (the draft's `source_note` records the source registration, e.g. `EPA PPLS lookup 100-1131 …`) plus
+  the fact that a reviewer sees both the draft and the product before approving.
+- **Owner decision (2026-07-10):** ship the button now with the direct-path fix; track this hardening as a
+  follow-up rather than block the ship or expand this loop into a shared-RPC migration.
