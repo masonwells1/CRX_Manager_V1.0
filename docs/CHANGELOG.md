@@ -4,6 +4,10 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-10 — U18c: morning-notification-checks cron was firing at 01:20 AM, not 06:20. Fixed live (mig `20260711010000`, live v20260710154919).
+
+Found while checking the U18 cron's first run: the `morning-notification-checks` pg_cron job was scheduled `20 6 * * *` on the assumption it meant 06:20 local, but pg_cron runs in UTC (verified `current_setting('TimeZone') = 'UTC'`), so it fired at 06:20 UTC = **01:20 AM Central**. Same bug class as the A9 fix above — a "business time" written as if the DB were on the local clock. Re-scheduled to `20 11 * * *` = 06:20 America/Chicago in summer / 05:20 in winter (pg_cron can't track DST, so the earlier UTC time was chosen to keep it at-or-before 06:20 year-round for early-start ag crews). Cron-reschedule only; the function is untouched. rls + drift reviewers 0 blockers; proven live (schedule now `20 11 * * *`, single active job, rolled-back `PERFORM run_morning_notification_checks()` ran cleanly).
+
 ## 2026-07-10 — A9 month-end close: test-first follow-up. Codex worked, Claude reviewed adversarially. Two REAL server-side gaps found and closed in `20260711000000_a9_close_period_guards` (**APPLIED LIVE 2026-07-10**, live v20260710151913, Mason's explicit OK); 6 new regression tests + 4 `dateUtils` tests; full suite 3182 pass.
 
 **The premise was wrong, and that mattered.** CLAUDE.md claimed the A9 MonthEndClose picker + WaveB units were "deferred to a focused test-first session." Git says otherwise: `86583df0` (picker, Codex R7 clean) and `c2eca4c3` (WaveB) are both ancestors of `origin/main` — they shipped 2026-07-04. That stale line is now corrected.
