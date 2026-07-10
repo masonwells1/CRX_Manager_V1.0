@@ -7910,6 +7910,25 @@ export type Database = {
         }
         Returns: Json
       }
+      apply_credit_memo_to_invoice: {
+        Args: {
+          p_amount_cents: number
+          p_credit_memo_id: string
+          p_idempotency_key?: string
+          p_performed_by?: string
+          p_target_invoice_id: string
+        }
+        Returns: string
+      }
+      reverse_credit_memo_application: {
+        Args: {
+          p_application_id: string
+          p_idempotency_key?: string
+          p_performed_by?: string
+          p_reason: string
+        }
+        Returns: Json
+      }
       apply_prepay_to_invoice: {
         Args: {
           p_amount_cents: number
