@@ -136,6 +136,16 @@ interface ShortfallRow {
   job_numbers: string[];
 }
 
+interface PlannedBookingAttentionRow {
+  quote_id: string;
+  quote_number: string;
+  product_id: string;
+  product_name: string;
+  quantity: number;
+  expires_at: string;
+  attention: 'lapsed' | 'expiring';
+}
+
 /** U13 (#15-21/#111): a SCHEDULED job with no active per-location dispatch. */
 interface NeedsDispatchJobRow {
   id: string;
@@ -163,6 +173,8 @@ interface CockpitData {
   // False when the shortfall RPC failed/threw — the tile then shows 'unavailable', not
   // a false 'all clear'.
   shortfallsLoadOk: boolean;
+  plannedBookingAttention: PlannedBookingAttentionRow[];
+  plannedBookingAttentionLoadOk: boolean;
   // True only when get_watchdog_flags loaded cleanly. When false we CANNOT tell which
   // invoices are flagged, so bulk-posting is disabled (fail-safe — never post on unknown).
   watchdogLoadOk: boolean;
@@ -232,6 +244,35 @@ type RawOverdueAR = {
   due_date: string;
   balance_cents: number;
   customer: { farm_name: string } | null;
+};
+
+// Exact jsonb shape returned by get_expiring_planned_holds (planned_programs.sql).
+type ExpiringPlannedHoldRpcRow = {
+  hold_id: string;
+  product_id: string;
+  product_name: string;
+  quantity: number;
+  expires_at: string;
+  needed_by_date: string | null;
+  quote_id: string;
+  quote_number: string;
+};
+
+type RawLapsedPlannedHold = {
+  product_id: string;
+  quantity: number;
+  expires_at: string;
+  source_id: string | null;
+};
+
+type RawQuoteNumber = {
+  id: string;
+  quote_number: string;
+};
+
+type RawProductName = {
+  id: string;
+  product_name: string;
 };
 
 const TILE_LIMIT = 50;
@@ -306,6 +347,8 @@ export default function OfficeCockpit() {
     overdueAR: [],
     shortfalls: [],
     shortfallsLoadOk: false,
+    plannedBookingAttention: [],
+    plannedBookingAttentionLoadOk: false,
     watchdogLoadOk: false,
   });
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
@@ -342,6 +385,12 @@ export default function OfficeCockpit() {
       p_days_ahead: 7,
     });
 
+    // Planned holds expiring soon. The RPC deliberately excludes already-lapsed holds,
+    // which are loaded directly below so the booking tile shows both conditions.
+    const expiringPlannedHoldsRes = await supabaseUntyped.rpc('get_expiring_planned_holds', {
+      p_days_ahead: 7,
+    });
+
     const [
       unbilledJobsRes,
       postableInvRes,
@@ -351,6 +400,7 @@ export default function OfficeCockpit() {
       expiringLicRes,
       overdueARRes,
       needsDispatchRes,
+      lapsedPlannedHoldsRes,
     ] = await Promise.all([
       // (a) Completed jobs with no invoice
       supabase
@@ -447,6 +497,17 @@ export default function OfficeCockpit() {
         .is('job_location_dispatches', null)
         .order('job_date', { ascending: true })
         .limit(TILE_LIMIT),
+
+      // Already-lapsed planned holds are intentionally not returned by the
+      // expiring-holds RPC, so query them separately.
+      supabase
+        .from('inventory_holds')
+        .select('product_id, quantity, expires_at, source_id')
+        .eq('hold_type', 'crop_program')
+        .eq('is_active', true)
+        // Include today to close the live RPC's strict `expires_at > CURRENT_DATE` gap; it is unchangeable here.
+        .lte('expires_at', today)
+        .order('expires_at', { ascending: true }),
     ]);
 
     const rawCompletedDeliveries = (completedDeliveriesRes.data || []) as RawCompletedDelivery[];
@@ -467,6 +528,48 @@ export default function OfficeCockpit() {
       activeDeliveryInvoices = (invoiceCoverageRes.data || []) as DeliveryInvoiceCoverageRow[];
     }
 
+    const rawLapsedPlannedHolds = (lapsedPlannedHoldsRes.data || []) as RawLapsedPlannedHold[];
+    const lapsedSourceIds = [...new Set(
+      rawLapsedPlannedHolds
+        .map((hold) => hold.source_id)
+        .filter((sourceId): sourceId is string => sourceId != null)
+    )];
+    const lapsedProductIds = [...new Set(rawLapsedPlannedHolds.map((hold) => hold.product_id))];
+    let lapsedQuotes: RawQuoteNumber[] = [];
+    let lapsedProducts: RawProductName[] = [];
+    let lapsedQuotesError: { message?: string } | null = null;
+    let lapsedProductsError: { message?: string } | null = null;
+
+    if (lapsedSourceIds.length > 0 || lapsedProductIds.length > 0) {
+      const [lapsedQuotesRes, lapsedProductsRes] = await Promise.all([
+        lapsedSourceIds.length > 0
+          ? supabase.from('quotes').select('id, quote_number').in('id', lapsedSourceIds)
+          : Promise.resolve({ data: [], error: null }),
+        lapsedProductIds.length > 0
+          ? supabase.from('products').select('id, product_name').in('id', lapsedProductIds)
+          : Promise.resolve({ data: [], error: null }),
+      ]);
+      lapsedQuotes = (lapsedQuotesRes.data || []) as RawQuoteNumber[];
+      lapsedProducts = (lapsedProductsRes.data || []) as RawProductName[];
+      lapsedQuotesError = lapsedQuotesRes.error;
+      lapsedProductsError = lapsedProductsRes.error;
+    }
+
+    let expiringPlannedHolds: ExpiringPlannedHoldRpcRow[] = [];
+    let expiringPlannedHoldsValidationError: Error | null = null;
+    if (!expiringPlannedHoldsRes.error) {
+      try {
+        expiringPlannedHolds = assertRpcResult<ExpiringPlannedHoldRpcRow[]>(
+          expiringPlannedHoldsRes.data,
+          'get_expiring_planned_holds'
+        );
+      } catch (error) {
+        expiringPlannedHoldsValidationError = error instanceof Error
+          ? error
+          : new Error('Invalid get_expiring_planned_holds response');
+      }
+    }
+
     const errors = [
       unbilledJobsRes.error,
       postableInvRes.error,
@@ -475,6 +578,11 @@ export default function OfficeCockpit() {
       deliveryInvoiceError,
       watchdogRes.error,
       shortfallsRes.error,
+      expiringPlannedHoldsRes.error,
+      expiringPlannedHoldsValidationError,
+      lapsedPlannedHoldsRes.error,
+      lapsedQuotesError,
+      lapsedProductsError,
       upcomingJobsRes.error,
       expiringLicRes.error,
       overdueARRes.error,
@@ -599,6 +707,38 @@ export default function OfficeCockpit() {
       }
     }
 
+    const plannedBookingAttentionLoadOk = !expiringPlannedHoldsRes.error &&
+      !expiringPlannedHoldsValidationError &&
+      !lapsedPlannedHoldsRes.error &&
+      !lapsedQuotesError &&
+      !lapsedProductsError;
+    const lapsedQuoteNumbers = new Map(lapsedQuotes.map((quote) => [quote.id, quote.quote_number]));
+    const lapsedProductNames = new Map(lapsedProducts.map((product) => [product.id, product.product_name]));
+    const plannedBookingAttention: PlannedBookingAttentionRow[] = plannedBookingAttentionLoadOk
+      ? [
+        ...rawLapsedPlannedHolds
+          .filter((hold): hold is RawLapsedPlannedHold & { source_id: string } => hold.source_id != null)
+          .map((hold) => ({
+            quote_id: hold.source_id,
+            quote_number: lapsedQuoteNumbers.get(hold.source_id) ?? 'Unknown',
+            product_id: hold.product_id,
+            product_name: lapsedProductNames.get(hold.product_id) ?? 'Unknown product',
+            quantity: Number(hold.quantity),
+            expires_at: hold.expires_at,
+            attention: 'lapsed' as const,
+          })),
+        ...expiringPlannedHolds.map((hold) => ({
+          quote_id: hold.quote_id,
+          quote_number: hold.quote_number,
+          product_id: hold.product_id,
+          product_name: hold.product_name,
+          quantity: Number(hold.quantity),
+          expires_at: hold.expires_at,
+          attention: 'expiring' as const,
+        })),
+      ]
+      : [];
+
     setData({
       unbilledJobs,
       postableInvoices,
@@ -614,6 +754,8 @@ export default function OfficeCockpit() {
       overdueAR,
       shortfalls,
       shortfallsLoadOk,
+      plannedBookingAttention,
+      plannedBookingAttentionLoadOk,
       watchdogLoadOk,
     });
     setLastRefreshed(new Date());
@@ -633,7 +775,8 @@ export default function OfficeCockpit() {
     data.expiringLicenses.length +
     data.overdueAR.length +
     data.shortfalls.length +
-    data.needsDispatchJobs.length;
+    data.needsDispatchJobs.length +
+    data.plannedBookingAttention.length;
 
   // §4 Post-all-clean gating. A draft is "clean" (safe to auto-post in bulk) only when:
   //   (a) it passes validation — pricing is NOT pending (the same gate post_invoice_group
@@ -907,6 +1050,47 @@ export default function OfficeCockpit() {
                   </div>
                 </button>
               ))}
+            </div>
+          )}
+        </Card>
+
+        {/* Planned-booking holds that have lapsed or need attention in the next seven days. */}
+        <Card>
+          <TileHeader
+            icon={<AlertTriangle className={`w-5 h-5 ${data.plannedBookingAttention.length === 0 ? 'text-gray-400' : 'text-red-500'}`} />}
+            title="Planned bookings needing attention"
+            count={data.plannedBookingAttention.length}
+            countColor="text-red-600"
+            linkLabel="Quotes"
+            onLink={() => navigate('/quotes')}
+          />
+          {!data.plannedBookingAttentionLoadOk ? (
+            <p className="py-2 text-sm text-gray-400">Planned-booking hold check unavailable right now.</p>
+          ) : data.plannedBookingAttention.length === 0 ? (
+            <AllClear label="No planned bookings have lapsed or are expiring soon." />
+          ) : (
+            <div className="divide-y divide-gray-100">
+              {data.plannedBookingAttention.slice(0, 6).map((row) => (
+                <button
+                  key={`${row.quote_id}-${row.product_id}-${row.expires_at}`}
+                  onClick={() => navigate(`/quotes/${row.quote_id}`)}
+                  className="w-full py-2 text-sm hover:bg-gray-50 rounded transition-colors text-left"
+                >
+                  <span className={row.attention === 'lapsed' ? 'font-medium text-red-600' : 'font-medium text-nav-dark'}>Quote {row.quote_number}</span>
+                  <span className={row.attention === 'lapsed' ? 'text-red-600' : 'text-gray-500'}> &mdash; {row.product_name} &middot; {row.quantity} &middot; </span>
+                  <span className={row.attention === 'lapsed' ? 'text-red-600 font-medium' : 'text-orange-600 font-medium'}>
+                    {row.attention === 'lapsed' ? 'lapsed' : 'expires'} {new Date(row.expires_at).toLocaleDateString()}
+                  </span>
+                </button>
+              ))}
+              {data.plannedBookingAttention.length > 6 && (
+                <button
+                  onClick={() => navigate('/quotes')}
+                  className="w-full text-center py-2 text-sm text-crx-green hover:underline"
+                >
+                  +{data.plannedBookingAttention.length - 6} more
+                </button>
+              )}
             </div>
           )}
         </Card>

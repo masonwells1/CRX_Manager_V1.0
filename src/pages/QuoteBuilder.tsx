@@ -44,7 +44,7 @@ import { catalogPricePerAcre } from '../lib/quoteCalc';
 import { notifyLargeOrder, notifyCreditLimitExceeded } from '../lib/notificationTriggers';
 import { sendOrderConfirmedEmail } from '../lib/orderConfirmedEmail';
 import { trackBusinessEvent } from '../lib/metrics';
-import { localDatePlusDays } from '../lib/dateUtils';
+import { localDatePlusDays, localToday } from '../lib/dateUtils';
 import { downloadQuotePdf, generateQuotePdf } from '../lib/quotePdf';
 import { sendEmail, pdfToBase64, buildEmailHtml } from '../lib/emailService';
 import { checkRUPCompliance } from '../lib/rupCompliance';
@@ -108,6 +108,31 @@ interface LocalItem {
   product?: Product;
   calc_mode: CalcMode;
   price_unit: string | null;
+}
+
+interface FieldOption {
+  id: string;
+  field_name: string;
+  customer_id: string | null;
+  total_acres: number | null;
+  measured_acres: number | null;
+  override_acres: number | null;
+}
+
+interface ActivePlannedHold {
+  product_id: string;
+  quantity: number;
+  expires_at: string | null;
+}
+
+interface DrawRow {
+  product_id: string;
+  product_name: string;
+  booked: number;
+  drawn: number;
+  remaining: number;
+  qty: string;
+  unit: string | null;
 }
 
 let keyCounter = 0;
@@ -177,7 +202,7 @@ export default function QuoteBuilder() {
   // Partial booking draw-down (sell-side roadmap #1): pull part of the booked
   // quantities into an order; the quote stays open with the remaining balance.
   const [showDrawModal, setShowDrawModal] = useState(false);
-  const [drawRows, setDrawRows] = useState<Array<{ product_id: string; product_name: string; booked: number; drawn: number; remaining: number; qty: string }>>([]);
+  const [drawRows, setDrawRows] = useState<DrawRow[]>([]);
   const [drawLoading, setDrawLoading] = useState(false);
   const [drawing, setDrawing] = useState(false);
   // Booking settlement (roadmap #6c): read-only booked/drawn/remaining + prepay
@@ -215,13 +240,15 @@ export default function QuoteBuilder() {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [unitConversions, setUnitConversions] = useState<UnitConversion[]>([]);
-  const [fields, setFields] = useState<{ id: string; field_name: string; customer_id: string | null }[]>([]);
+  const [fields, setFields] = useState<FieldOption[]>([]);
+  const [activePlannedHolds, setActivePlannedHolds] = useState<ActivePlannedHold[]>([]);
 
   const [productSearchOpen, setProductSearchOpen] = useState<{
     sectionKey: string;
     itemKey: string;
   } | null>(null);
   const [productQuery, setProductQuery] = useState('');
+  const [keepProductPickerOpen, setKeepProductPickerOpen] = useState(false);
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
   const [rupWarnings, setRupWarnings] = useState<string[]>([]);
   const [quoteVersions, setQuoteVersions] = useState<QuoteVersion[]>([]);
@@ -255,6 +282,7 @@ export default function QuoteBuilder() {
   const [reverting, setReverting] = useState(false);
   // #3 Stage A: email the quote PDF to the grower via the send-email Edge Function.
   const [emailingGrower, setEmailingGrower] = useState(false);
+  const [lastQuoteEmailAt, setLastQuoteEmailAt] = useState<string | null>(null);
   const [customerView, setCustomerView] = useState(false);
   const [showPreviewModal, setShowPreviewModal] = useState(false);
 
@@ -346,6 +374,53 @@ export default function QuoteBuilder() {
     return () => { cancelled = true; };
   }, [isEditing, quoteId, currentStatus]);
 
+  const loadActivePlannedHolds = useCallback(async (targetQuoteId: string) => {
+    const { data, error } = await supabase
+      .from('inventory_holds')
+      .select('product_id, quantity, expires_at')
+      .eq('hold_type', 'crop_program')
+      .eq('source_id', targetQuoteId)
+      .eq('is_active', true);
+    if (error) {
+      setActivePlannedHolds([]);
+      return;
+    }
+    setActivePlannedHolds((data || []) as ActivePlannedHold[]);
+  }, []);
+
+  useEffect(() => {
+    if (!isPlanned || !quoteId) {
+      setActivePlannedHolds([]);
+      return;
+    }
+    void loadActivePlannedHolds(quoteId);
+  }, [isPlanned, quoteId, loadActivePlannedHolds]);
+
+  const loadQuoteEmailStatus = useCallback(async (targetQuoteNumber: string) => {
+    // send-email records this quote reference as its attachment_name, not resource_id.
+    const { data, error } = await supabase
+      .from('email_log')
+      .select('created_at')
+      .eq('email_type', 'quote')
+      .eq('attachment_name', `Quote-${targetQuoteNumber}.pdf`)
+      .eq('status', 'sent')
+      .order('created_at', { ascending: false })
+      .limit(1);
+    if (error) {
+      setLastQuoteEmailAt(null);
+      return;
+    }
+    setLastQuoteEmailAt(data?.[0]?.created_at ?? null);
+  }, []);
+
+  useEffect(() => {
+    if (!quoteId || !quoteNumber) {
+      setLastQuoteEmailAt(null);
+      return;
+    }
+    void loadQuoteEmailStatus(quoteNumber);
+  }, [quoteId, quoteNumber, loadQuoteEmailStatus]);
+
   // RUP compliance check when the customer or the PRODUCT SET changes. Keyed by a
   // stable product-set string (NOT `sections`) so editing quantities/prices/notes
   // does not re-run the check, and the activity log is deduped per
@@ -402,7 +477,7 @@ export default function QuoteBuilder() {
       supabase.from('customers').select('*').eq('is_active', true).order('farm_name'),
       supabase.from('products').select('*').eq('is_active', true).order('product_name'),
       supabase.from('unit_conversions').select('*'),
-      supabase.from('fields').select('id, field_name, customer_id').eq('is_active', true).order('field_name'),
+      supabase.from('fields').select('id, field_name, customer_id, total_acres, measured_acres, override_acres').eq('is_active', true).order('field_name'),
     ]);
 
     if (custRes.error) {
@@ -420,7 +495,7 @@ export default function QuoteBuilder() {
     setCustomers((custRes.data || []) as Customer[]);
     setProducts((prodRes.data || []) as Product[]);
     setUnitConversions((convRes.data || []) as UnitConversion[]);
-    setFields((fieldsRes.data || []) as { id: string; field_name: string; customer_id: string | null }[]);
+    setFields((fieldsRes.data || []) as FieldOption[]);
   }, [toast]);
 
   const generateQuoteNumber = async () => {
@@ -735,6 +810,12 @@ export default function QuoteBuilder() {
     );
   };
 
+  const closeProductPicker = () => {
+    setProductSearchOpen(null);
+    setProductQuery('');
+    setKeepProductPickerOpen(false);
+  };
+
   const assignProduct = (sectionKey: string, itemKey: string, product: Product) => {
     const pricePerUnit = getTierPrice(product, tier);
     setSections((prev) =>
@@ -763,8 +844,13 @@ export default function QuoteBuilder() {
         };
       })
     );
-    setProductSearchOpen(null);
-    setProductQuery('');
+    if (keepProductPickerOpen) {
+      const nextItemKey = addItem(sectionKey);
+      setProductSearchOpen({ sectionKey, itemKey: nextItemKey });
+      setProductQuery('');
+      return;
+    }
+    closeProductPicker();
   };
 
   const addSection = () => {
@@ -790,16 +876,42 @@ export default function QuoteBuilder() {
     );
   };
 
-  const addItem = (sectionKey: string) => {
+  const handleSectionFieldChange = (sectionKey: string, fieldId: string | null) => {
+    updateSectionField(sectionKey, 'field_id', fieldId);
+    const field = fields.find((candidate) => candidate.id === fieldId);
+    // Documented field-acre precedence: override → measured → legacy total.
+    const effectiveAcres = field?.override_acres ?? field?.measured_acres ?? field?.total_acres;
+    if (effectiveAcres == null) return;
+
+    setSections((prev) =>
+      prev.map((section) => {
+        if (section._key !== sectionKey) return section;
+        return {
+          ...section,
+          items: section.items.map((item) => {
+            if ((item.acres ?? 0) !== 0) return item;
+            return recalcItem({
+              ...item,
+              acres: effectiveAcres,
+              calc_mode: item.calc_mode === 'units_direct' ? 'units_direct' : 'rate_acres',
+            }, tier);
+          }),
+        };
+      })
+    );
+  };
+
+  function addItem(sectionKey: string): string {
+    const newItem = makeEmptyItem();
     setSections((prev) =>
       prev.map((sec) => {
         if (sec._key !== sectionKey) return sec;
-        const newItem = makeEmptyItem();
         newItem.sort_order = sec.items.length + 1;
         return { ...sec, items: [...sec.items, newItem] };
       })
     );
-  };
+    return newItem._key;
+  }
 
   const removeItem = (sectionKey: string, itemKey: string) => {
     setSections((prev) =>
@@ -1029,6 +1141,7 @@ export default function QuoteBuilder() {
           assertRpcResult(holdData, 'create_planned_holds');
           plannedHoldsIdem.resetKey();
           toast('success', 'Inventory holds created for planned program');
+          await loadActivePlannedHolds(result);
         }
       } else if (!isPlanned && wasPlanned) {
         // Release holds when toggled off — zero rows is valid (no holds may exist)
@@ -1041,6 +1154,7 @@ export default function QuoteBuilder() {
         if (releaseResult.error) toast('error', 'Failed to release inventory holds: ' + releaseResult.error.message);
         else if (releaseResult.data && releaseResult.data.length > 0) checkMutationResult(releaseResult, 'Release inventory holds');
         setWasPlanned(false);
+        setActivePlannedHolds([]);
       }
 
       if (!isEditing) navigate(`/quotes/${result}`, { replace: true });
@@ -1528,6 +1642,7 @@ export default function QuoteBuilder() {
       } else {
         toast('success', `Quote emailed to ${selectedCustomer.email}`);
       }
+      await loadQuoteEmailStatus(quoteNumber);
       await logActivity({
         event: 'quote_emailed',
         description: `Quote ${quoteNumber} emailed to ${selectedCustomer.email}`,
@@ -1545,7 +1660,11 @@ export default function QuoteBuilder() {
   };
 
   const handleMarkPresented = async (): Promise<boolean> => {
-    if (!quoteId || !profile) return false;
+    if (!quoteId) {
+      toast('error', 'Save the quote first, then mark it presented');
+      return false;
+    }
+    if (!profile) return false;
     // Save current state first
     const savedId = await saveQuote(status === 'draft' ? 'draft' : status);
     if (!savedId) return false;
@@ -1691,14 +1810,8 @@ export default function QuoteBuilder() {
   // Partial booking draw-down: open the modal with the per-product balance
   const openDrawDownModal = async () => {
     if (!id) return;
-    // Guardrail parity with handleConvertToOrder: a booking drawn months after
-    // it was created may carry stale prices. First click surfaces the
-    // GuardrailBanner below the header; "Continue Anyway" lets the next click
-    // through. (2026-06-10 error-prevention review §3 LOW.)
-    if (quoteCreatedAt) {
-      const fresh = checkStaleQuote(quoteCreatedAt);
-      if (!fresh && !staleWarning?.dismissed) return;
-    }
+    // Draw-down bills at this quote's locked prices, so a current-price stale guard
+    // would be misleading and block the first click without protecting the customer.
     if (isDirty) {
       toast('warning', 'Save the quote before drawing down the booking');
       return;
@@ -1735,6 +1848,7 @@ export default function QuoteBuilder() {
           return {
             product_id: productId,
             product_name: products.find((p) => p.id === productId)?.product_name || 'Unknown product',
+            unit: products.find((p) => p.id === productId)?.inventory_unit ?? null,
             booked,
             drawn,
             remaining: Math.max(booked - drawn, 0),
@@ -2340,10 +2454,7 @@ export default function QuoteBuilder() {
         </div>
       </div>
 
-      {/* Stale-quote warning for the Partial Order path — the convert path
-          shows this banner inside its confirm modal, but openDrawDownModal
-          returns before any modal opens, so surface it at page level here.
-          Renders nothing unless a warning is active and undismissed. */}
+      {/* Covers a stale warning left active when the convert-confirm modal closes; draw-down no longer raises it. */}
       {!confirmConvertOpen && (
         <GuardrailBanner warning={staleWarning} onDismiss={dismissStaleWarning} />
       )}
@@ -2412,12 +2523,18 @@ export default function QuoteBuilder() {
                 </thead>
                 <tbody>
                   {bookingSettlement.lines.map((ln) => (
-                    <tr key={ln.product_id} className="border-b border-gray-50">
-                      <td className="px-2 py-1">{ln.product_name ?? '—'}</td>
-                      <td className="px-2 py-1 text-right">{ln.booked_qty}</td>
-                      <td className="px-2 py-1 text-right">{ln.drawn_qty}</td>
-                      <td className="px-2 py-1 text-right">{ln.remaining_qty}</td>
-                    </tr>
+                    (() => {
+                      const unit = products.find((product) => product.id === ln.product_id)?.inventory_unit;
+                      const suffix = unit ? ` ${unit}` : '';
+                      return (
+                        <tr key={ln.product_id} className="border-b border-gray-50">
+                          <td className="px-2 py-1">{ln.product_name ?? '—'}</td>
+                          <td className="px-2 py-1 text-right">{ln.booked_qty}{suffix}</td>
+                          <td className="px-2 py-1 text-right">{ln.drawn_qty}{suffix}</td>
+                          <td className="px-2 py-1 text-right">{ln.remaining_qty}{suffix}</td>
+                        </tr>
+                      );
+                    })()
                   ))}
                 </tbody>
               </table>
@@ -2823,21 +2940,46 @@ export default function QuoteBuilder() {
                     {fmt(sectionTotal)}
                   </span>
                   {isPlanned && (
-                    <div className="flex items-center gap-2 ml-2">
-                      <label className="text-xs text-secondary whitespace-nowrap flex items-center">Needed By:<HelpTip text="This is when the customer needs the product — different from the quote expiration. Used for inventory forecasting and delivery scheduling." className="ml-1" /></label>
-                      <input
-                        type="date"
-                        value={sec.needed_by_date || ''}
-                        onChange={(e) => updateSectionField(sec._key, 'needed_by_date', e.target.value || null)}
-                        className="text-sm border border-gray-200 rounded px-2 py-1"
-                      />
-                    </div>
+                    <>
+                      <div className="flex items-center gap-2 ml-2">
+                        <label className="text-xs text-secondary whitespace-nowrap flex items-center">Needed By:<HelpTip text="This is when the customer needs the product — different from the quote expiration. Used for inventory forecasting and delivery scheduling." className="ml-1" /></label>
+                        <input
+                          type="date"
+                          value={sec.needed_by_date || ''}
+                          onChange={(e) => updateSectionField(sec._key, 'needed_by_date', e.target.value || null)}
+                          className="text-sm border border-gray-200 rounded px-2 py-1"
+                        />
+                      </div>
+                      {/* Holds have one row per quote item; this per-section view aggregates the quote's matching rows for each product. */}
+                      {quoteId && activePlannedHolds.length > 0 && (
+                        <div className="ml-2 flex flex-col items-start gap-0.5 text-xs text-secondary">
+                          {Array.from(new Set(sec.items.map((item) => item.product_id).filter(Boolean))).map((productId) => {
+                            const holds = activePlannedHolds.filter((candidate) => candidate.product_id === productId);
+                            if (holds.length === 0) return null;
+                            const heldQuantity = holds.reduce((sum, hold) => sum + hold.quantity, 0);
+                            const earliestExpiry = holds.reduce<string | null>((earliest, hold) => {
+                              if (hold.expires_at == null) return earliest;
+                              return earliest == null || hold.expires_at < earliest ? hold.expires_at : earliest;
+                            }, null);
+                            const unit = products.find((product) => product.id === productId)?.inventory_unit;
+                            const isLapsed = earliestExpiry != null && earliestExpiry.slice(0, 10) < localToday();
+                            return (
+                              <span key={productId}>
+                                Held: {heldQuantity}{unit ? ` ${unit}` : ''} &middot; {earliestExpiry ? (
+                                  <>expires <span className={isLapsed ? 'text-red-600 font-medium' : undefined}>{new Date(earliestExpiry).toLocaleDateString()}{isLapsed ? ' (lapsed)' : ''}</span></>
+                                ) : 'no expiry (no needed-by date)'}
+                              </span>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </>
                   )}
                   <div className="flex items-center gap-2 ml-2">
                     <label className="text-xs text-secondary whitespace-nowrap">Field:</label>
                     <select
                       value={sec.field_id || ''}
-                      onChange={(e) => updateSectionField(sec._key, 'field_id', e.target.value || null)}
+                      onChange={(e) => handleSectionFieldChange(sec._key, e.target.value || null)}
                       className="text-sm border border-gray-200 rounded px-2 py-1 max-w-[180px]"
                     >
                       <option value="">— None —</option>
@@ -3275,10 +3417,7 @@ export default function QuoteBuilder() {
 
       <Modal
         open={productSearchOpen !== null}
-        onClose={() => {
-          setProductSearchOpen(null);
-          setProductQuery('');
-        }}
+        onClose={closeProductPicker}
         title="Select"
         accent="Product"
         maxWidth="max-w-2xl"
@@ -3295,6 +3434,15 @@ export default function QuoteBuilder() {
               autoFocus
             />
           </div>
+          <label className="inline-flex items-center gap-2 text-sm text-secondary cursor-pointer">
+            <input
+              type="checkbox"
+              checked={keepProductPickerOpen}
+              onChange={(e) => setKeepProductPickerOpen(e.target.checked)}
+              className="rounded border-gray-300 text-crx-green focus:ring-crx-green"
+            />
+            Keep open &mdash; add several
+          </label>
           <div className="max-h-80 overflow-y-auto divide-y divide-gray-50">
             {filteredProducts.length === 0 ? (
               <p className="text-sm text-secondary py-4 text-center">
@@ -3441,16 +3589,16 @@ export default function QuoteBuilder() {
             Download PDF
           </Button>
           <Button
-            variant="primary"
+            variant="secondary"
             icon={<CheckCircle className="w-4 h-4" />}
             onClick={handleMarkPresented}
             disabled={status !== 'draft' && status !== 'revised'}
           >
             Mark as Presented
           </Button>
-          <HelpTip text="Sends the quote PDF to the customer's email and locks it as 'Sent'. A version snapshot is saved automatically so you can always see what the customer received." className="ml-1" />
+          <HelpTip text="Marks the quote as sent WITHOUT emailing &mdash; use when you presented it in person" className="ml-1" />
           <Button
-            variant="secondary"
+            variant="primary"
             icon={<Send className="w-4 h-4" />}
             showChevron={false}
             onClick={handleEmailToGrower}
@@ -3458,6 +3606,12 @@ export default function QuoteBuilder() {
           >
             Email to Grower
           </Button>
+          {lastQuoteEmailAt && (
+            <span className="inline-flex items-center rounded-full bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700">
+              Emailed {new Date(lastQuoteEmailAt).toLocaleDateString()} ✓
+            </span>
+          )}
+          <HelpTip text="Emails the quote PDF to the grower and logs it" className="ml-1" />
         </div>
       </Modal>
 
@@ -3533,24 +3687,27 @@ export default function QuoteBuilder() {
                     {drawRows.map((row, idx) => (
                       <tr key={row.product_id} className="border-b last:border-0">
                         <td className="py-2 pr-2">{row.product_name}</td>
-                        <td className="py-2 pr-2 text-right">{row.booked}</td>
-                        <td className="py-2 pr-2 text-right">{row.drawn}</td>
-                        <td className="py-2 pr-2 text-right font-medium">{row.remaining}</td>
+                        <td className="py-2 pr-2 text-right">{row.booked}{row.unit ? ` ${row.unit}` : ''}</td>
+                        <td className="py-2 pr-2 text-right">{row.drawn}{row.unit ? ` ${row.unit}` : ''}</td>
+                        <td className="py-2 pr-2 text-right font-medium">{row.remaining}{row.unit ? ` ${row.unit}` : ''}</td>
                         <td className="py-2 text-right">
-                          <input
-                            type="number"
-                            min={0}
-                            max={row.remaining}
-                            step="any"
-                            value={row.qty}
-                            disabled={row.remaining <= 0}
-                            onChange={(e) => {
-                              const next = [...drawRows];
-                              next[idx] = { ...row, qty: e.target.value };
-                              setDrawRows(next);
-                            }}
-                            className="w-24 px-2 py-1 text-sm text-right border border-gray-200 rounded-lg disabled:bg-gray-50"
-                          />
+                          <div className="inline-flex items-center gap-1">
+                            <input
+                              type="number"
+                              min={0}
+                              max={row.remaining}
+                              step="any"
+                              value={row.qty}
+                              disabled={row.remaining <= 0}
+                              onChange={(e) => {
+                                const next = [...drawRows];
+                                next[idx] = { ...row, qty: e.target.value };
+                                setDrawRows(next);
+                              }}
+                              className="w-24 px-2 py-1 text-sm text-right border border-gray-200 rounded-lg disabled:bg-gray-50"
+                            />
+                            {row.unit && <span className="text-xs text-secondary">{row.unit}</span>}
+                          </div>
                         </td>
                       </tr>
                     ))}
