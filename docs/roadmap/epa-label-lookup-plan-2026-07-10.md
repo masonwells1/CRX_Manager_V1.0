@@ -191,10 +191,16 @@ also the same split that already worked on the workflow-waves / structure-fix / 
   verdict is real and current, not skipped.
 
 ## 14. Decisions for Mason
-1. **Confirm the narrowed scope:** build Stage 1 (signal word + data-quality report) now; **defer** the
-   REI/PHI/rate-guardrail piece (Stage 2) until we design per-crop modeling. *Recommended.*
-2. **Report vs. persisted status:** do you want the data-quality findings as a **one-time report** (zero schema),
-   or persisted on each product (`epa_last_synced_at` + `epa_product_status`, one tiny additive migration)?
-   *Recommendation: start with the report; add the columns later if you find yourself wanting them.*
-3. ~~**Loop driver/worktree:**~~ **CONFIRMED 2026-07-10** — heavy-Codex / lean-Sonnet loop (Codex builds +
-   self-reviews, Claude/Sonnet limited to 3 touchpoints) in a fresh `C:\CRX_EPA` worktree. See §13.
+
+**All three CONFIRMED 2026-07-10 — Mason: "go with your recommendations."**
+
+1. ~~**Confirm the narrowed scope:**~~ **CONFIRMED** — build Stage 1 (signal word + data-quality report) now;
+   **defer** the REI/PHI/rate-guardrail piece (Stage 2) until per-crop modeling is designed.
+2. ~~**Report vs. persisted status:**~~ **CONFIRMED — report first, zero schema.** Data-quality findings ship as
+   a one-time report in Stage 1; `epa_last_synced_at`/`epa_product_status` are NOT built now — revisit only if a
+   real need for persisted status shows up after using the report.
+3. ~~**Loop driver/worktree:**~~ **CONFIRMED** — heavy-Codex / lean-Sonnet loop (Codex builds + self-reviews,
+   Claude/Sonnet limited to 3 touchpoints) in this `C:\CRX_EPA` worktree, branch `feat/epa-label-lookup`. See §13.
+
+**Section 11 update:** per decision #2, Stage 1 makes **zero** database changes. Skip the optional
+`epa_last_synced_at`/`epa_product_status` columns entirely for this loop.
