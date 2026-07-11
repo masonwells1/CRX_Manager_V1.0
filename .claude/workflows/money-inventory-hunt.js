@@ -156,6 +156,27 @@ const DIMENSIONS = [
     prompt:
       'Hunt BUSINESS-LIFECYCLE correctness across quote/order/delivery/invoice/job/PO/return/commission/commission_payment (lifecycles documented in CLAUDE.md — note the quote lifecycle now includes closed_by_application, terminal, planned-only, and create_job_from_quote_section must reject it). (a) status strings written by frontend or RPC that are NOT in the live CHECK; (b) documented transitions no trigger/RPC enforces (the jobs enforcer cancel-from-terminal item is KNOWN/parked — look for NEW holes, e.g. around invoiced jobs, group-billed jobs, closed_by_application quotes); (c) the delivery two-step + item-lock bypassable via direct RPC or URL; (d) quote draw-down / Net-Free invariant holes; (e) invoice-type segregation (field_application vs chemical vs credit_memo rows leaking into each other\'s lists/reports). Use live pg_constraint + pg_proc.',
   },
+  // ---- Phase 3: un-swept money/inventory-adjacent subsystems (added 2026-07-11) ----
+  {
+    key: 'returns-credits', phase: 3,
+    prompt:
+      'Hunt RETURNS + RETURN-CREDIT ISSUANCE. Lifecycle: requested → {approved,rejected,cancelled}; approved → {received,cancelled}; received → credited (terminal branches). RPCs: the return create/approve/receive RPCs, issue_return_credit (inserts a credit_memo whose order_id MAY be NULL — the documented exemption), return_items restock/restocked flags, the returns→inventory restock path (returned inventory_transactions type), and how a credit memo links back (returns.credit_invoice_id). Read each via live pg_proc. Especially class 1 (idempotency on issue_return_credit), class 2 (actor binding), class 3 (credit cents = sum of return_items extended_cents penny-exact), class 6 (a status written outside the live returns CHECK; a return re-credited twice; restock double-counting inventory), class 8 (financial_audit_log return_credit_issued row). Confirm voiding the credit memo releases the return (the void_invoice credit_memo branch resets returns to received — verify the inverse issue path is symmetric).',
+  },
+  {
+    key: 'vendor-ap', phase: 3,
+    prompt:
+      'Hunt VENDOR BILLS + AP PAYMENTS (accounts payable). Tables: vendor_bills (status unpaid→partially_paid→paid→voided; total_cents = subtotal + COALESCE(adjustment,0) CHECK; balance_cents GENERATED = total - COALESCE(paid,0)), vendor_payments (void path). RPCs: create/void vendor bill, record/void vendor payment, any PO→bill link. Read via live pg_proc. Especially class 3 (cents: paid_cents accumulation vs balance_cents generated column — never write balance_cents; adjustment_cents sign), class 6 (status vs the live vendor_bills CHECK; paying more than balance; voiding a paid bill), class 8 (financial_audit_log vendor_bill_*/vendor_payment_* rows on every mutation), class 2 (actor), class 1 (idempotency). Note live row counts (likely dormant) so severity reflects reachability.',
+  },
+  {
+    key: 'po-receiving', phase: 3,
+    prompt:
+      'Hunt PURCHASE ORDERS + RECEIVING + COST. Lifecycle: draft→submitted→partially_received→fully_received→cancelled. RPCs: PO create/submit/cancel, receive_po / receiving_records insert (B2 parent-lock was fixed — look for NEW holes), the received inventory_transactions write, cost update (products.current_cost / cost_history) on receipt, quantity_on_order maintenance (sum(ordered-received)). Read via live pg_proc. Especially class 4 (concurrency: two receipts on one PO line without a lock double-incrementing quantity_available or over-receiving past quantity_ordered), class 3 (unit_cost cents, receiving in a different unit than ordered), class 6 (PO status transition not matching received quantities; receiving on a cancelled PO), class 7 (checkMutationResult on the inventory update). Confirm quantity_on_order can\'t go negative (CHECK exists) and receipt reconciles ordered vs received.',
+  },
+  {
+    key: 'finance-charges-prepay', phase: 3,
+    prompt:
+      'Hunt FINANCE CHARGES + PREPAY SETTLEMENT. Finance charges: generate_finance_charges (mints a misc_charge interest invoice), the charge_rate/base_amount/grace-days math, finance_charge_enabled/grace per customer, the finance_charges table, voiding a finance-charge invoice. Prepay: apply_prepay / batch prepay apply, prepay_credits balance_cents (CHECK >=0), prepay_applications, the booking-prepay link + settlement/rollover, overpayment→credit. Read via live pg_proc. Especially class 3 (interest cents rounding; prepay applied > invoice balance; prepay balance drift across apply/void), class 6 (a prepay application that leaves invoices.balance_cents wrong — remember balance_cents is GENERATED from paid/prepay/write_off/credit levers; any consumer computing owed-amount inline from a SUBSET is wrong — the credit-memo class), class 1 (idempotency on both), class 8 (audit rows: finance_charge*, prepay_*). Cross-check every path that moves prepay against the GENERATED balance_cents formula.',
+  },
 ]
 
 // args may arrive as an object OR as a JSON-encoded string (the harness sometimes
