@@ -7,6 +7,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { supabase, checkMutationResult } from '../../lib/db';
 import { processDocumentWithOCR, isCSVFile, isOCRSupported } from '../../lib/documentOCR';
 import { Sentry } from '../../lib/sentry';
+import type { TablesUpdate } from '../../types/supabase';
 
 interface BulkPricingImportProps {
   open: boolean;
@@ -221,7 +222,7 @@ export default function BulkPricingImport({ open, onClose, onSuccess }: BulkPric
         continue;
       }
 
-      const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
+      const updates: TablesUpdate<'products'> = { updated_at: new Date().toISOString() };
       if (row.cost !== undefined) updates.current_cost = row.cost;
       if (row.tier1_price !== undefined) updates.tier1_price = row.tier1_price;
       if (row.tier2_price !== undefined) updates.tier2_price = row.tier2_price;

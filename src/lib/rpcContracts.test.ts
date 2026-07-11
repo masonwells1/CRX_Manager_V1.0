@@ -1350,6 +1350,10 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   'batch_post_invoices',
   'batch_reschedule_deliveries',
   'batch_void_invoices',
+  // label-draft + watchdog RPCs (applied live, no migration file) — classified WITH
+  // idempotency 2026-07-11: verified against live pg_proc that each body caches its
+  // result in idempotency_keys scoped to its own operation and replays on a repeat key.
+  'bulk_create_label_drafts',
   'bulk_import_order',
   'cancel_cycle_count',
   'cancel_delivery',
@@ -1357,6 +1361,10 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   'cancel_purchase_order',
   'cancel_return',
   'close_accounting_period',
+  // close_quote_* (Layer 2, in-migration): bodies use the canonical idempotency_keys block.
+  'close_quote_as_applied',
+  'close_quote_as_short',
+  'commit_label_draft',
   'complete_cycle_count',
   'complete_delivery',
   'complete_job',
@@ -1368,6 +1376,7 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   'create_direct_order',
   'create_followup_delivery',
   'create_invoice_from_order',
+  'create_label_draft',
   'create_order_from_blend_ticket',
   'create_quick_delivery',
   'create_rebate_claim',
@@ -1375,6 +1384,7 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   'delete_invoices',
   'delete_prepay_credit',
   'delete_purchase_order',
+  'dismiss_watchdog_flag',
   'duplicate_quote',
   'edit_delivery',
   'edit_prepay_credit',
