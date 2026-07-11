@@ -19,7 +19,7 @@ const NEW_MENU_ITEMS = [
   { label: 'Job', path: '/jobs/new', pageKey: 'jobs' },
   { label: 'Field App Invoice', path: '/invoices/field-app/new', pageKey: 'field-invoices' },
   { label: 'PO', path: '/purchase-orders/new', pageKey: 'purchase-orders' },
-  { label: 'Quick Receive', path: '/receiving/quick', pageKey: 'receiving' },
+  { label: 'Quick Receive', path: '/receiving?tab=quick', pageKey: 'receiving' },
 ];
 
 export default function TopBar({ onMenuClick, onSearchClick, title, accent }: TopBarProps) {

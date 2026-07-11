@@ -68,6 +68,20 @@ describe('getPageKeyFromPath', () => {
     expect(getPageKeyFromPath('/invoices')).toBe('invoices');
     expect(getPageKeyFromPath('/invoices/some-invoice-id')).toBe('invoices');
   });
+
+  it('maps the legacy receiving hub route to the consolidated receiving permission', () => {
+    expect(getPageKeyFromPath('/receiving-hub')).toBe('receiving');
+  });
+
+  it('maps legacy prepay routes to the consolidated prepay permission', () => {
+    expect(getPageKeyFromPath('/prepayments')).toBe('prepay');
+    expect(getPageKeyFromPath('/prepay-workspace')).toBe('prepay');
+  });
+
+  it('maps legacy integrity routes to the consolidated integrity permission', () => {
+    expect(getPageKeyFromPath('/integrity-report')).toBe('integrity');
+    expect(getPageKeyFromPath('/integrity-cleanup')).toBe('integrity');
+  });
 });
 
 // ── hasPageAccess ───────────────────────────────────────────────────────
@@ -113,6 +127,10 @@ describe('hasPageAccess', () => {
   it('respects deny list', () => {
     expect(hasPageAccess('sales_rep', ['quotes'], 'quotes')).toBe(false);
     expect(hasPageAccess('sales_rep', ['quotes', 'orders'], 'orders')).toBe(false);
+  });
+
+  it('preserves legacy receiving-hub deny-list restrictions', () => {
+    expect(hasPageAccess('sales_rep', ['receiving-hub'], 'receiving')).toBe(false);
   });
 
   it('admin ignores deny list', () => {
@@ -210,12 +228,10 @@ function extractRouteFirstSegmentsFromAppTsx(): Set<string> {
 describe('PAGE_PERMISSIONS coverage (PR-11 fail-closed)', () => {
   it('every protected route in App.tsx has a PAGE_PERMISSIONS entry or is exempt', () => {
     const routeSegments = extractRouteFirstSegmentsFromAppTsx();
-    const knownKeys = new Set(PAGE_PERMISSIONS.map((p) => p.key));
-
     const missing: string[] = [];
     for (const seg of routeSegments) {
       if (EXEMPT_ROUTE_SEGMENTS.has(seg)) continue;
-      if (!knownKeys.has(seg)) missing.push(seg);
+      if (getPageKeyFromPath(`/${seg}`) === null) missing.push(seg);
     }
 
     // Surface the diff explicitly so a failing test names the missing route(s).

@@ -20,6 +20,7 @@ import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
 import ConfirmModal from '../components/ui/ConfirmModal';
+import PageHeader from '../components/ui/PageHeader';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, assertRpcResult, sanitizeError } from '../lib/db';
@@ -330,13 +331,10 @@ export default function PaymentAllocation() {
 
   return (
     <div className="space-y-4">
-      {/* Header */}
-      <div>
-        <h2 className="text-xl font-semibold font-heading text-nav-dark">Payments</h2>
-        <p className="text-sm text-secondary mt-1">
-          Allocate a check across multiple invoices. Any remainder becomes a prepay credit.
-        </p>
-      </div>
+      <PageHeader
+        title="Payments"
+        subtitle="Allocate a check across multiple invoices. Any remainder becomes a prepay credit."
+      />
 
       {/* Success Banner */}
       {lastResult && (

@@ -1,21 +1,21 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, FileText, Printer, Layers } from 'lucide-react';
-import Card from '../components/ui/Card';
-import Button from '../components/ui/Button';
-import { useToast } from '../components/ui/Toast';
-import { supabase } from '../lib/db';
-import { Sentry } from '../lib/sentry';
-import { runCriticalAction } from '../lib/criticalAction';
-import { formatCents as fmt } from '../lib/money';
-import { localToday, parseLocalDate } from '../lib/dateUtils';
-import { SkeletonTable } from '../components/ui/Skeleton';
+import Card from '../ui/Card';
+import Button from '../ui/Button';
+import { useToast } from '../ui/Toast';
+import { supabase } from '../../lib/db';
+import { Sentry } from '../../lib/sentry';
+import { runCriticalAction } from '../../lib/criticalAction';
+import { formatCents as fmt } from '../../lib/money';
+import { localToday, parseLocalDate } from '../../lib/dateUtils';
+import { SkeletonTable } from '../ui/Skeleton';
 import {
   buildCustomerInvoiceSummary,
   type SummaryInvoiceRow,
   type SummaryTotals,
-} from '../lib/customerInvoiceSummary';
-import { downloadCustomerInvoiceSummaryPdf } from '../lib/invoiceSummaryPdf';
+} from '../../lib/customerInvoiceSummary';
+import { downloadCustomerInvoiceSummaryPdf } from '../../lib/invoiceSummaryPdf';
 
 /**
  * CustomerInvoiceSummary.tsx — field-app parity #34.
@@ -50,7 +50,7 @@ interface CustomerOption {
   payment_terms: string | null;
 }
 
-export default function CustomerInvoiceSummary() {
+export default function CustomerInvoiceSummaryPanel() {
   const navigate = useNavigate();
   const { toast } = useToast();
 

@@ -25,6 +25,7 @@ import { formatCents as fmt } from '../lib/money';
 import { SkeletonTable, SkeletonCard } from '../components/ui/Skeleton';
 import { getSeasonDates } from '../utils/season';
 import { generateIdempotencyKey } from '../lib/idempotency';
+import PageHeader from '../components/ui/PageHeader';
 
 type InvoiceRow = Invoice & { customer_name: string; salesman_name: string | null; order_number: string | null };
 
@@ -637,93 +638,94 @@ export default function Invoices() {
 
   return (
     <div className="space-y-4">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <h2 className="text-xl font-semibold font-heading text-nav-dark">Invoices</h2>
-        <div className="flex gap-2 flex-wrap justify-end">
-          {selected.size > 0 && canPostInvoices && (
-            <>
-              {selectedPostable.length > 0 && (
+      <PageHeader
+        title="Invoices"
+        actions={
+          <div className="flex gap-2 flex-wrap justify-end">
+            {selected.size > 0 && canPostInvoices && (
+              <>
+                {selectedPostable.length > 0 && (
+                  <Button
+                    variant="secondary"
+                    icon={<Send className="w-4 h-4" />}
+                    onClick={() => setShowPostModal(true)}
+                    loading={posting}
+                  >
+                    Post {selectedPostable.length} Selected
+                  </Button>
+                )}
+                {isAdmin && selectedVoidable.length > 0 && (
+                  <Button
+                    variant="danger"
+                    icon={<Ban className="w-4 h-4" />}
+                    onClick={() => setShowVoidModal(true)}
+                  >
+                    Void {selectedVoidable.length} Selected
+                  </Button>
+                )}
                 <Button
                   variant="secondary"
-                  icon={<Send className="w-4 h-4" />}
-                  onClick={() => setShowPostModal(true)}
-                  loading={posting}
+                  icon={<Printer className="w-4 h-4" />}
+                  onClick={() => setShowBatchPrintDialog(true)}
+                  loading={printing}
                 >
-                  Post {selectedPostable.length} Selected
+                  Print {selected.size} Selected
                 </Button>
-              )}
-              {isAdmin && selectedVoidable.length > 0 && (
                 <Button
-                  variant="danger"
-                  icon={<Ban className="w-4 h-4" />}
-                  onClick={() => setShowVoidModal(true)}
+                  variant="secondary"
+                  icon={<Mail className="w-4 h-4" />}
+                  disabled
+                  title="Coming soon — requires email integration"
                 >
-                  Void {selectedVoidable.length} Selected
+                  Email
                 </Button>
-              )}
-              <Button
-                variant="secondary"
-                icon={<Printer className="w-4 h-4" />}
-                onClick={() => setShowBatchPrintDialog(true)}
-                loading={printing}
-              >
-                Print {selected.size} Selected
-              </Button>
-              <Button
-                variant="secondary"
-                icon={<Mail className="w-4 h-4" />}
-                disabled
-                title="Coming soon — requires email integration"
-              >
-                Email
-              </Button>
-              {isAdmin && selectedDeletable.length > 0 && (
-                <Button
-                  variant="danger"
-                  icon={<Trash2 className="w-4 h-4" />}
-                  onClick={() => setShowDeleteModal(true)}
-                >
-                  Delete {selectedDeletable.length}
-                </Button>
-              )}
-            </>
-          )}
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={() =>
-              exportToCSV(
-                filtered as unknown as Record<string, unknown>[],
-                [
-                  { key: 'invoice_number', header: 'Invoice #' },
-                  { key: 'customer_name', header: 'Customer' },
-                  { key: 'invoice_type', header: 'Type' },
-                  { key: 'invoice_date', header: 'Date' },
-                  { key: 'total_amount_cents', header: 'Total ($)', format: (v: unknown) => ((Number(v) || 0) / 100).toFixed(2) },
-                  { key: 'balance_cents', header: 'Balance ($)', format: (v: unknown) => ((Number(v) || 0) / 100).toFixed(2) },
-                  { key: 'status', header: 'Status' },
-                ],
-                'invoices'
-              )
-            }
-          >
-            Export CSV
-          </Button>
-          <Button
-            variant="secondary"
-            size="sm"
-            icon={<Download className="w-4 h-4" />}
-            onClick={handleExportPDF}
-            loading={exportingPdf}
-          >
-            Download PDF
-          </Button>
-          <Button variant="secondary" onClick={() => navigate('/invoices/new?type=misc_charge')}>
-            Misc Charge
-          </Button>
-        </div>
-      </div>
+                {isAdmin && selectedDeletable.length > 0 && (
+                  <Button
+                    variant="danger"
+                    icon={<Trash2 className="w-4 h-4" />}
+                    onClick={() => setShowDeleteModal(true)}
+                  >
+                    Delete {selectedDeletable.length}
+                  </Button>
+                )}
+              </>
+            )}
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() =>
+                exportToCSV(
+                  filtered as unknown as Record<string, unknown>[],
+                  [
+                    { key: 'invoice_number', header: 'Invoice #' },
+                    { key: 'customer_name', header: 'Customer' },
+                    { key: 'invoice_type', header: 'Type' },
+                    { key: 'invoice_date', header: 'Date' },
+                    { key: 'total_amount_cents', header: 'Total ($)', format: (v: unknown) => ((Number(v) || 0) / 100).toFixed(2) },
+                    { key: 'balance_cents', header: 'Balance ($)', format: (v: unknown) => ((Number(v) || 0) / 100).toFixed(2) },
+                    { key: 'status', header: 'Status' },
+                  ],
+                  'invoices'
+                )
+              }
+            >
+              Export CSV
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              icon={<Download className="w-4 h-4" />}
+              onClick={handleExportPDF}
+              loading={exportingPdf}
+            >
+              Download PDF
+            </Button>
+            <Button variant="secondary" onClick={() => navigate('/invoices/new?type=misc_charge')}>
+              Misc Charge
+            </Button>
+          </div>
+        }
+      />
 
       {/* Summary Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">

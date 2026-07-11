@@ -23,6 +23,7 @@ import {
 import Card, { CardHeader } from '../components/ui/Card';
 import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
+import PageHeader from '../components/ui/PageHeader';
 import { SkeletonCard } from '../components/ui/Skeleton';
 import { useToast } from '../components/ui/Toast';
 import { supabase, assertRpcResult } from '../lib/db';
@@ -134,8 +135,8 @@ interface QuickLink {
 
 const quickLinks: QuickLink[] = [
   { label: 'AR Aging', path: '/ar-aging', icon: <BarChart3 className="w-5 h-5" /> },
-  { label: 'Prepayments', path: '/prepayments', icon: <Banknote className="w-5 h-5" /> },
-  { label: 'Prepay Workspace', path: '/prepay-workspace', icon: <Wallet className="w-5 h-5" /> },
+  { label: 'Prepay Manager', path: '/prepay?tab=manager', icon: <Banknote className="w-5 h-5" /> },
+  { label: 'Prepay Workspace', path: '/prepay?tab=workspace', icon: <Wallet className="w-5 h-5" /> },
   { label: 'Payment History', path: '/payment-history', icon: <History className="w-5 h-5" /> },
   { label: 'Commission Pay', path: '/commission-payments', icon: <CreditCard className="w-5 h-5" /> },
   { label: 'Transactions', path: '/customer-transactions', icon: <ArrowLeftRight className="w-5 h-5" /> },
@@ -282,15 +283,15 @@ export default function FinancialDashboard() {
 
   return (
     <div className="space-y-6">
-      {/* Page Header */}
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold font-heading text-nav-dark">
-          Financial <span className="split-heading-accent">Dashboard</span>
-        </h1>
-        <Button variant="ghost" size="sm" onClick={() => navigate('/')}>
-          Operational Dashboard
-        </Button>
-      </div>
+      <PageHeader
+        title="Financial"
+        accent="Dashboard"
+        actions={(
+          <Button variant="ghost" size="sm" onClick={() => navigate('/')}>
+            Operational Dashboard
+          </Button>
+        )}
+      />
 
       {/* Section 1: Top Row — 4 Financial KPI Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
@@ -391,7 +392,7 @@ export default function FinancialDashboard() {
         <Card
           hover
           className="cursor-pointer"
-          onClick={() => navigate('/prepay-workspace')}
+          onClick={() => navigate('/prepay?tab=workspace')}
         >
           <div className="flex items-center gap-3 mb-3">
             <div className="w-10 h-10 rounded-lg bg-purple-50 flex items-center justify-center">

@@ -18,6 +18,7 @@ import BulkDeleteConfirmModal from '../components/ui/BulkDeleteConfirmModal';
 import { BulkTicketUpload } from '../components/blendtickets/BulkTicketUpload';
 import { ManualTicketCreate } from '../components/blendtickets/ManualTicketCreate';
 import DataTable, { type Column } from '../components/ui/DataTable';
+import PageHeader from '../components/ui/PageHeader';
 import { usePageMeta } from '../hooks/usePageMeta';
 import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection';
 import { exportToCSV, fmtDateCSV } from '../lib/csvExport';
@@ -500,15 +501,12 @@ export function BlendTickets() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between flex-wrap gap-2">
-        <div className="flex-1 flex items-center gap-3">
-          <FileText className="h-8 w-8 text-gray-700" />
-          <div>
-            <h2 className="text-3xl font-bold text-gray-900">Blend Tickets</h2>
-            <p className="text-gray-600 mt-1">
-              Upload and manage blend ticket images with automatic OCR processing
-            </p>
-          </div>
+      <PageHeader
+        title="Blend"
+        accent="Tickets"
+        subtitle="Upload and manage blend ticket images with automatic OCR processing"
+        actions={(
+          <>
           {canBulkAction && (
             <BulkActionBar
               selectedCount={selectedCount}
@@ -516,8 +514,7 @@ export function BlendTickets() {
               onDeselectAll={clearSelection}
             />
           )}
-        </div>
-        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3">
           {isProcessing && (
             <div className="flex items-center gap-2 text-sm text-blue-600 bg-blue-50 px-3 py-2 rounded-lg">
               <Clock className="h-4 w-4 animate-spin" />
@@ -543,8 +540,10 @@ export function BlendTickets() {
             <Upload className="h-4 w-4" />
             {showUpload ? 'Hide Upload' : 'Upload Tickets'}
           </Button>
-        </div>
-      </div>
+          </div>
+          </>
+        )}
+      />
 
       {showUpload && (
         <BulkTicketUpload

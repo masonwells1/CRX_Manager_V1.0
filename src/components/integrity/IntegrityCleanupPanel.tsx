@@ -1,11 +1,11 @@
 import { useEffect, useState, useCallback } from 'react';
 import { ShieldAlert, RefreshCw, AlertTriangle, FileText, Wrench, PackageCheck, Activity } from 'lucide-react';
-import { supabase, supabaseUntyped, assertRpcResult, checkMutationResult } from '../lib/db';
-import { useAuth } from '../contexts/AuthContext';
-import { useToast } from '../components/ui/Toast';
-import Button from '../components/ui/Button';
-import ConfirmModal from '../components/ui/ConfirmModal';
-import { Sentry } from '../lib/sentry';
+import { supabase, supabaseUntyped, assertRpcResult, checkMutationResult } from '../../lib/db';
+import { useAuth } from '../../contexts/AuthContext';
+import { useToast } from '../ui/Toast';
+import Button from '../ui/Button';
+import ConfirmModal from '../ui/ConfirmModal';
+import { Sentry } from '../../lib/sentry';
 
 interface NegativeInvRow {
   id: string;
@@ -98,7 +98,7 @@ function describeAlert(a: IntegrityAlertRow): { title: string; detail: string } 
   }
 }
 
-export default function IntegrityCleanup() {
+export default function IntegrityCleanupPanel() {
   const { profile } = useAuth();
   const { toast } = useToast();
   // F2 fix: idempotency keys are generated per-click (not via useIdempotencyKey)
@@ -334,6 +334,7 @@ export default function IntegrityCleanup() {
         p_new_quantity: parseFloat(input.qty),
         p_reason: input.reason.trim(),
         p_performed_by: profile.id,
+        // eslint-disable-next-line local-rules/idempotency-key-from-hook -- deliberate per-row key; see F2 comment above
         p_idempotency_key: idemKey,
       });
       if (error) throw error;
@@ -357,6 +358,7 @@ export default function IntegrityCleanup() {
       const { data, error } = await supabase.rpc('mark_inventory_row_verified', {
         p_inventory_id: rowId,
         p_performed_by: profile.id,
+        // eslint-disable-next-line local-rules/idempotency-key-from-hook -- deliberate per-row key; see F2 comment above
         p_idempotency_key: idemKey,
       });
       if (error) throw error;
@@ -392,6 +394,7 @@ export default function IntegrityCleanup() {
       const { data, error } = await supabase.rpc('create_invoice_for_unbilled_delivery', {
         p_delivery_id: row.id,
         p_performed_by: profile.id,
+        // eslint-disable-next-line local-rules/idempotency-key-from-hook -- deliberate per-row key; see F2 comment above
         p_idempotency_key: idemKey,
       });
       if (error) throw error;

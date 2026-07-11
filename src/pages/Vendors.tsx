@@ -15,6 +15,7 @@ import Input from '../components/ui/Input';
 import Modal from '../components/ui/Modal';
 import ConfirmModal from '../components/ui/ConfirmModal';
 import DataTable, { type Column } from '../components/ui/DataTable';
+import PageHeader from '../components/ui/PageHeader';
 import { useToast } from '../components/ui/Toast';
 import { supabase, assertRpcResult } from '../lib/db';
 import { sanitizeError } from '../lib/errorSanitizer';
@@ -204,15 +205,15 @@ export default function Vendors() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold font-heading text-nav-dark">Vendors</h1>
-          <p className="text-sm text-secondary">Manage suppliers for purchase orders and bills.</p>
-        </div>
-        <Button icon={<Plus className="w-4 h-4" />} onClick={openCreateModal}>
-          Add Vendor
-        </Button>
-      </div>
+      <PageHeader
+        title="Vendors"
+        subtitle="Manage suppliers for purchase orders and bills."
+        actions={(
+          <Button icon={<Plus className="w-4 h-4" />} onClick={openCreateModal}>
+            Add Vendor
+          </Button>
+        )}
+      />
 
       <Card>
         {!loading && vendors.length === 0 ? (

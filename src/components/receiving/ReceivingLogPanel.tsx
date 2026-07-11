@@ -11,22 +11,22 @@ import {
   FileText,
   Trash2,
 } from 'lucide-react';
-import Card from '../components/ui/Card';
-import DataTable, { type Column } from '../components/ui/DataTable';
-import Badge from '../components/ui/Badge';
-import BulkActionBar from '../components/ui/BulkActionBar';
-import BulkDeleteConfirmModal from '../components/ui/BulkDeleteConfirmModal';
-import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection';
-import { useToast } from '../components/ui/Toast';
-import { useAuth } from '../contexts/AuthContext';
-import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
-import { supabase, sanitizeError, assertRpcResult } from '../lib/db';
-import { runCriticalAction } from '../lib/criticalAction';
-import { Sentry } from '../lib/sentry';
-import HelpTip from '../components/ui/HelpTip';
-import { exportToCSV } from '../lib/csvExport';
-import { downloadReportPdf } from '../lib/reportPdf';
-import type { ReceivingRecord, ReceivingSummary, Profile } from '../types';
+import Card from '../ui/Card';
+import DataTable, { type Column } from '../ui/DataTable';
+import Badge from '../ui/Badge';
+import BulkActionBar from '../ui/BulkActionBar';
+import BulkDeleteConfirmModal from '../ui/BulkDeleteConfirmModal';
+import { useRowSelection, createCheckboxColumn } from '../../hooks/useRowSelection';
+import { useToast } from '../ui/Toast';
+import { useAuth } from '../../contexts/AuthContext';
+import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
+import { supabase, sanitizeError, assertRpcResult } from '../../lib/db';
+import { runCriticalAction } from '../../lib/criticalAction';
+import { Sentry } from '../../lib/sentry';
+import HelpTip from '../ui/HelpTip';
+import { exportToCSV } from '../../lib/csvExport';
+import { downloadReportPdf } from '../../lib/reportPdf';
+import type { ReceivingRecord, ReceivingSummary, Profile } from '../../types';
 
 /* ─── Condition badge helpers ─── */
 const conditionVariant = (c: string): 'success' | 'error' | 'warning' | 'default' => {
@@ -38,7 +38,7 @@ const conditionVariant = (c: string): 'success' | 'error' | 'warning' | 'default
 const conditionLabel = (c: string) =>
   c.replace(/_/g, ' ').replace(/\b\w/g, (ch) => ch.toUpperCase());
 
-export default function ReceivingLog() {
+export default function ReceivingLogPanel() {
   const { role, profile } = useAuth();
   const navigate = useNavigate();
   const { toast } = useToast();
@@ -333,7 +333,7 @@ export default function ReceivingLog() {
           {canBulkAction && <BulkActionBar selectedCount={selectedCount} actions={bulkActions} onDeselectAll={clearSelection} />}
         </div>
         <button
-          onClick={() => navigate('/receiving/quick')}
+          onClick={() => navigate('/receiving?tab=quick')}
           className="flex items-center gap-2 px-4 py-2 bg-crx-green text-white rounded-xl text-sm font-medium hover:bg-crx-green/90 transition-colors shadow-sm self-start sm:self-auto"
         >
           <PackageCheck className="w-4 h-4" />

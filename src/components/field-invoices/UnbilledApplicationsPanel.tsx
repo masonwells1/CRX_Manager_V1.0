@@ -1,16 +1,16 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { RefreshCw, Tractor, ClipboardCheck, ArrowRight, CheckCircle2 } from 'lucide-react';
-import Card from '../components/ui/Card';
-import Button from '../components/ui/Button';
-import ConfirmModal from '../components/ui/ConfirmModal';
-import { useToast } from '../components/ui/Toast';
-import { useAuth } from '../contexts/AuthContext';
-import { supabase, assertRpcResult, sanitizeError } from '../lib/db';
-import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
-import { Sentry } from '../lib/sentry';
-import { SkeletonCard } from '../components/ui/Skeleton';
-import { formatCents as fmt } from '../lib/money';
+import Card from '../ui/Card';
+import Button from '../ui/Button';
+import ConfirmModal from '../ui/ConfirmModal';
+import { useToast } from '../ui/Toast';
+import { useAuth } from '../../contexts/AuthContext';
+import { supabase, assertRpcResult, sanitizeError } from '../../lib/db';
+import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
+import { Sentry } from '../../lib/sentry';
+import { SkeletonCard } from '../ui/Skeleton';
+import { formatCents as fmt } from '../../lib/money';
 
 // Phase 2 of the As-Applied / Field-Invoice build (read-only reconciliation).
 // Surfaces the TWO reliable, actionable "applied but not yet billed" backlogs so
@@ -117,7 +117,7 @@ function CreateJobInvoiceButton({
   );
 }
 
-export default function UnbilledApplications() {
+export default function UnbilledApplicationsPanel() {
   const navigate = useNavigate();
   const { toast } = useToast();
   const { profile } = useAuth();

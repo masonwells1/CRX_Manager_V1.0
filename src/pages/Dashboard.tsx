@@ -4,24 +4,15 @@ import {
   ShoppingCart,
   FileText,
   Truck,
-  Package,
-  Warehouse,
   ClipboardList,
-  ClipboardCheck,
   Clock,
   CalendarCheck,
-  ChevronRight,
-  Plus,
   Pin,
   User,
   BarChart3,
   CheckCircle2,
   Circle,
-  Inbox,
   Calendar,
-  CheckSquare,
-  PackageSearch,
-  Zap,
 } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
@@ -33,7 +24,6 @@ import { supabase, assertRpcResult } from '../lib/db';
 import { Sentry } from '../lib/sentry';
 import ActionQueue from '../components/dashboard/ActionQueue';
 import DailyBrief from '../components/dashboard/DailyBrief';
-import FinanceSnapshotCard from '../components/dashboard/FinanceSnapshotCard';
 import ExpiringLicensesCard from '../components/compliance/ExpiringLicensesCard';
 
 // --- Types ---
@@ -114,7 +104,6 @@ interface OperationalData {
   openQuotesSent: number;
   pendingDeliveriesCount: number;
   openPosCount: number;
-  programCompletionPct: number | null;
   teamActionItems: TeamActionItem[];
   inventoryAvailable: number;
   inventoryPrebooked: number;
@@ -201,7 +190,6 @@ const defaultData: OperationalData = {
   openQuotesSent: 0,
   pendingDeliveriesCount: 0,
   openPosCount: 0,
-  programCompletionPct: null,
   teamActionItems: [],
   inventoryAvailable: 0,
   inventoryPrebooked: 0,
@@ -316,17 +304,7 @@ export default function Dashboard() {
         periodStatus: d.period_status || 'open',
         periodDaysRemaining: Number(d.period_days_remaining) || 0,
         recentActivity: d.recent_activity || [],
-        programCompletionPct: null,
       });
-      // Fetch program completion for dashboard card
-      try {
-        const { data: progData } = await supabase.rpc('get_program_completion');
-        const progResult = assertRpcResult<Array<{ completion_pct: number }>>(progData, 'get_program_completion');
-        if (Array.isArray(progResult) && progResult.length > 0) {
-          const totalPct = progResult.reduce((s, p) => s + (p.completion_pct || 0), 0);
-          setData(prev => ({ ...prev, programCompletionPct: Math.round(totalPct / progResult.length) }));
-        } else { setData(prev => ({ ...prev, programCompletionPct: 0 })); }
-      } catch (progErr) { Sentry.captureException(progErr, { tags: { source: 'fetch', action: 'program_completion' } }); }
     } catch (err) {
       Sentry.captureException(err, { tags: { source: 'fetch', page: 'dashboard' } });
       toast('error', 'Failed to load dashboard data. Please refresh.');
@@ -403,187 +381,8 @@ export default function Dashboard() {
         />
       )}
 
-      {/* ═══════════════════════════════════════════════════════════ */}
-      {/* Quick Actions (hidden from drivers)                       */}
-      {/* ═══════════════════════════════════════════════════════════ */}
-      {(isAdmin || role === 'sales_rep') && (
-        <Card>
-          <CardHeader title="Quick" accent="Actions" />
-          <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-5 gap-3">
-            <button
-              onClick={() => navigate('/deliveries?quickDeliver=1')}
-              className="flex flex-col items-center gap-2 p-4 rounded-xl border border-gray-100 bg-white hover:bg-crx-green-tint hover:border-crx-green/20 transition-all cursor-pointer group"
-            >
-              <div className="w-10 h-10 rounded-lg bg-crx-green/10 group-hover:bg-crx-green/20 flex items-center justify-center transition-colors">
-                <Zap className="w-5 h-5 text-crx-green" />
-              </div>
-              <span className="text-sm font-medium text-nav-dark">Sell &amp; Deliver Now</span>
-            </button>
-            <button
-              onClick={() => navigate('/quotes/new')}
-              className="flex flex-col items-center gap-2 p-4 rounded-xl border border-gray-100 bg-white hover:bg-crx-green-tint hover:border-crx-green/20 transition-all cursor-pointer group"
-            >
-              <div className="w-10 h-10 rounded-lg bg-purple-50 group-hover:bg-purple-100 flex items-center justify-center transition-colors">
-                <FileText className="w-5 h-5 text-purple-600" />
-              </div>
-              <span className="text-sm font-medium text-nav-dark">New Quote</span>
-            </button>
-            <button
-              onClick={() => navigate('/jobs/new')}
-              className="flex flex-col items-center gap-2 p-4 rounded-xl border border-gray-100 bg-white hover:bg-crx-green-tint hover:border-crx-green/20 transition-all cursor-pointer group"
-            >
-              <div className="w-10 h-10 rounded-lg bg-sky-50 group-hover:bg-sky-100 flex items-center justify-center transition-colors">
-                <ClipboardList className="w-5 h-5 text-sky-600" />
-              </div>
-              <span className="text-sm font-medium text-nav-dark">New Job</span>
-            </button>
-            <button
-              onClick={() => navigate('/orders/new')}
-              className="flex flex-col items-center gap-2 p-4 rounded-xl border border-gray-100 bg-white hover:bg-crx-green-tint hover:border-crx-green/20 transition-all cursor-pointer group"
-            >
-              <div className="w-10 h-10 rounded-lg bg-blue-50 group-hover:bg-blue-100 flex items-center justify-center transition-colors">
-                <Plus className="w-5 h-5 text-blue-600" />
-              </div>
-              <span className="text-sm font-medium text-nav-dark">New Order</span>
-            </button>
-            <button
-              onClick={() => navigate('/to-ship')}
-              className="flex flex-col items-center gap-2 p-4 rounded-xl border border-crx-green/30 bg-crx-green-tint hover:bg-crx-green/10 hover:border-crx-green/40 transition-all cursor-pointer group"
-            >
-              <div className="w-10 h-10 rounded-lg bg-crx-green/10 group-hover:bg-crx-green/20 flex items-center justify-center transition-colors">
-                <PackageSearch className="w-5 h-5 text-crx-green" />
-              </div>
-              <span className="text-sm font-medium text-nav-dark">To-Ship</span>
-            </button>
-          </div>
-          <div className="mt-4 border-t border-gray-100 pt-4">
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-              <button
-                onClick={() => navigate('/deliveries/new')}
-                className="flex flex-col items-center gap-2 p-4 rounded-xl border border-gray-100 bg-gray-50/60 hover:bg-crx-green-tint hover:border-crx-green/20 transition-all cursor-pointer group"
-              >
-                <div className="w-10 h-10 rounded-lg bg-green-50 group-hover:bg-green-100 flex items-center justify-center transition-colors">
-                  <Truck className="w-5 h-5 text-green-600" />
-                </div>
-                <span className="text-sm font-medium text-nav-dark">Schedule Delivery</span>
-              </button>
-              <button
-                onClick={() => navigate('/purchase-orders/new')}
-                className="flex flex-col items-center gap-2 p-4 rounded-xl border border-gray-100 bg-gray-50/60 hover:bg-crx-green-tint hover:border-crx-green/20 transition-all cursor-pointer group"
-              >
-                <div className="w-10 h-10 rounded-lg bg-teal-50 group-hover:bg-teal-100 flex items-center justify-center transition-colors">
-                  <Package className="w-5 h-5 text-teal-600" />
-                </div>
-                <span className="text-sm font-medium text-nav-dark">New PO</span>
-              </button>
-              <button
-                onClick={() => navigate('/inventory')}
-                className="flex flex-col items-center gap-2 p-4 rounded-xl border border-gray-100 bg-gray-50/60 hover:bg-crx-green-tint hover:border-crx-green/20 transition-all cursor-pointer group"
-              >
-                <div className="w-10 h-10 rounded-lg bg-amber-50 group-hover:bg-amber-100 flex items-center justify-center transition-colors">
-                  <Warehouse className="w-5 h-5 text-amber-600" />
-                </div>
-                <span className="text-sm font-medium text-nav-dark">Inventory</span>
-              </button>
-              <button
-                onClick={() => navigate('/receiving')}
-                className="flex flex-col items-center gap-2 p-4 rounded-xl border border-gray-100 bg-gray-50/60 hover:bg-crx-green-tint hover:border-crx-green/20 transition-all cursor-pointer group"
-              >
-                <div className="w-10 h-10 rounded-lg bg-indigo-50 group-hover:bg-indigo-100 flex items-center justify-center transition-colors">
-                  <Inbox className="w-5 h-5 text-indigo-600" />
-                </div>
-                <span className="text-sm font-medium text-nav-dark">Receiving</span>
-              </button>
-            </div>
-          </div>
-        </Card>
-      )}
-
-      {/* Finance Snapshot (admin only; F6 — money + alerts at a glance) */}
-      {isAdmin && <FinanceSnapshotCard />}
-
       {/* License renewal reminders (admin + sales; B5 license gates) */}
       {(isAdmin || role === 'sales_rep') && <ExpiringLicensesCard />}
-
-      {/* ═══════════════════════════════════════════════════════════ */}
-      {/* Section 1: Top KPI Row (hidden from drivers)              */}
-      {/* ═══════════════════════════════════════════════════════════ */}
-      {showFull && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-          {/* Active Orders */}
-          <Card hover className="cursor-pointer" onClick={() => navigate('/orders')}>
-            <div className="flex items-center gap-3 mb-3">
-              <div className="w-10 h-10 rounded-lg bg-blue-50 flex items-center justify-center">
-                <ShoppingCart className="w-5 h-5 text-blue-600" />
-              </div>
-              <span className="text-sm text-secondary">Active Orders</span>
-            </div>
-            <p className="text-2xl font-semibold font-heading text-nav-dark">{data.activeOrdersCount}</p>
-            <p className="text-xs text-secondary mt-1 flex items-center gap-1">
-              Confirmed & partially fulfilled <ChevronRight className="w-3 h-3" />
-            </p>
-          </Card>
-
-          {/* Open Quotes */}
-          <Card hover className="cursor-pointer" onClick={() => navigate('/quotes')}>
-            <div className="flex items-center gap-3 mb-3">
-              <div className="w-10 h-10 rounded-lg bg-purple-50 flex items-center justify-center">
-                <FileText className="w-5 h-5 text-purple-600" />
-              </div>
-              <span className="text-sm text-secondary">Open Quotes</span>
-            </div>
-            <p className="text-2xl font-semibold font-heading text-nav-dark">
-              {data.openQuotesDraft + data.openQuotesSent}
-            </p>
-            <div className="flex gap-2 mt-1">
-              <Badge variant="draft">{data.openQuotesDraft} draft</Badge>
-              <Badge variant="sent">{data.openQuotesSent} sent</Badge>
-            </div>
-          </Card>
-
-          {/* Pending Deliveries */}
-          <Card hover className="cursor-pointer" onClick={() => navigate('/deliveries')}>
-            <div className="flex items-center gap-3 mb-3">
-              <div className="w-10 h-10 rounded-lg bg-green-50 flex items-center justify-center">
-                <Truck className="w-5 h-5 text-green-600" />
-              </div>
-              <span className="text-sm text-secondary">Pending Deliveries</span>
-            </div>
-            <p className="text-2xl font-semibold font-heading text-nav-dark">{data.pendingDeliveriesCount}</p>
-            <p className="text-xs text-secondary mt-1 flex items-center gap-1">
-              Scheduled & in progress <ChevronRight className="w-3 h-3" />
-            </p>
-          </Card>
-
-          {/* Open POs */}
-          <Card hover className="cursor-pointer" onClick={() => navigate('/purchase-orders')}>
-            <div className="flex items-center gap-3 mb-3">
-              <div className="w-10 h-10 rounded-lg bg-teal-50 flex items-center justify-center">
-                <Package className="w-5 h-5 text-teal-600" />
-              </div>
-              <span className="text-sm text-secondary">Open POs</span>
-            </div>
-            <p className="text-2xl font-semibold font-heading text-nav-dark">{data.openPosCount}</p>
-            <p className="text-xs text-secondary mt-1 flex items-center gap-1">
-              Submitted & partially received <ChevronRight className="w-3 h-3" />
-            </p>
-          </Card>
-
-          {/* Program Progress */}
-          <Card hover className="cursor-pointer" onClick={() => navigate('/program-tracker')}>
-            <div className="flex items-center gap-3 mb-3">
-              <div className="w-10 h-10 rounded-lg bg-emerald-50 flex items-center justify-center">
-                <CheckSquare className="w-5 h-5 text-emerald-600" />
-              </div>
-              <span className="text-sm text-secondary">Program Progress</span>
-            </div>
-            <p className="text-2xl font-semibold font-heading text-nav-dark">{data.programCompletionPct ?? '-'}%</p>
-            <p className="text-xs text-secondary mt-1 flex items-center gap-1">
-              Season application programs <ChevronRight className="w-3 h-3" />
-            </p>
-          </Card>
-        </div>
-      )}
 
       {/* ═══════════════════════════════════════════════════════════ */}
       {/* Section 2: Team Board Action Items                        */}
@@ -655,65 +454,6 @@ export default function Dashboard() {
           </div>
         )}
       </Card>
-
-      {/* ═══════════════════════════════════════════════════════════ */}
-      {/* Section 3: Inventory Position (hidden from drivers)       */}
-      {/* ═══════════════════════════════════════════════════════════ */}
-      {showFull && (
-        <div>
-          <h2 className="text-sm font-semibold text-secondary uppercase tracking-wide mb-3">Inventory Position</h2>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            {/* Floor Stock */}
-            <Card hover className="cursor-pointer" onClick={() => navigate('/inventory')}>
-              <div className="flex items-center gap-3 mb-3">
-                <div className="w-10 h-10 rounded-lg bg-amber-50 flex items-center justify-center">
-                  <Warehouse className="w-5 h-5 text-amber-600" />
-                </div>
-                <span className="text-sm text-secondary">Floor Stock</span>
-              </div>
-              <p className="text-2xl font-semibold font-heading text-nav-dark">
-                {data.inventoryAvailable.toLocaleString()} <span className="text-sm font-normal text-secondary">units</span>
-              </p>
-              <div className="flex gap-3 mt-1">
-                <span className="text-xs text-crx-green">{(data.inventoryAvailable - data.inventoryPrebooked).toLocaleString()} free</span>
-                <span className="text-xs text-amber-600">{data.inventoryPrebooked.toLocaleString()} pre-booked</span>
-              </div>
-            </Card>
-
-            {/* On Order */}
-            <Card hover className="cursor-pointer" onClick={() => navigate('/purchase-orders')}>
-              <div className="flex items-center gap-3 mb-3">
-                <div className="w-10 h-10 rounded-lg bg-sky-50 flex items-center justify-center">
-                  <Package className="w-5 h-5 text-sky-600" />
-                </div>
-                <span className="text-sm text-secondary">On Order</span>
-              </div>
-              <p className="text-2xl font-semibold font-heading text-nav-dark">
-                {data.onOrderUnits.toLocaleString()} <span className="text-sm font-normal text-secondary">units</span>
-              </p>
-              <p className="text-xs text-secondary mt-1 flex items-center gap-1">
-                Across {data.onOrderPoCount} open PO(s) <ChevronRight className="w-3 h-3" />
-              </p>
-            </Card>
-
-            {/* Committed */}
-            <Card hover className="cursor-pointer" onClick={() => navigate('/orders')}>
-              <div className="flex items-center gap-3 mb-3">
-                <div className="w-10 h-10 rounded-lg bg-violet-50 flex items-center justify-center">
-                  <ClipboardCheck className="w-5 h-5 text-violet-600" />
-                </div>
-                <span className="text-sm text-secondary">Committed</span>
-              </div>
-              <p className="text-2xl font-semibold font-heading text-nav-dark">
-                {data.committedUnits.toLocaleString()} <span className="text-sm font-normal text-secondary">units</span>
-              </p>
-              <p className="text-xs text-secondary mt-1 flex items-center gap-1">
-                Across {data.committedOrderCount} active order(s) <ChevronRight className="w-3 h-3" />
-              </p>
-            </Card>
-          </div>
-        </div>
-      )}
 
       {/* ═══════════════════════════════════════════════════════════ */}
       {/* Section 4: Delivery Command Center                        */}

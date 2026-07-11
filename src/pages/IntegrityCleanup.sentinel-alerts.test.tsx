@@ -53,7 +53,7 @@ vi.mock('../contexts/AuthContext', () => ({
   useAuth: () => ({ profile: { id: 'user-1', role: 'admin' } }),
 }));
 
-import IntegrityCleanup from './IntegrityCleanup';
+import IntegrityCleanupPanel from '../components/integrity/IntegrityCleanupPanel';
 
 describe('IntegrityCleanup — data-integrity sentinel alerts', () => {
   beforeEach(() => {
@@ -61,7 +61,7 @@ describe('IntegrityCleanup — data-integrity sentinel alerts', () => {
   });
 
   it('surfaces open integrity alerts in plain English with a resolve action', async () => {
-    render(<IntegrityCleanup />);
+    render(<IntegrityCleanupPanel />);
     await screen.findByText('Data-integrity alerts');
     expect(await screen.findByText('Negative invoice balance')).toBeTruthy();
     // details rendered as "Invoice INV-100 — balance $-5.00 (posted)"

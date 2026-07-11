@@ -13,6 +13,7 @@ import Input from '../components/ui/Input';
 import Modal from '../components/ui/Modal';
 import ConfirmModal from '../components/ui/ConfirmModal';
 import DataTable, { type Column } from '../components/ui/DataTable';
+import PageHeader from '../components/ui/PageHeader';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, checkMutationResult, assertRpcResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
@@ -551,9 +552,11 @@ export default function Rebates() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h2 className="text-xl font-semibold font-heading text-nav-dark">Manufacturer Rebates</h2>
-        <div className="flex gap-2">
+      <PageHeader
+        title="Manufacturer"
+        accent="Rebates"
+        actions={(
+          <div className="flex gap-2">
           {tab === 'programs' && isAdmin && (
             <Button icon={<Plus className="w-4 h-4" />} onClick={openAddProgram}>
               Add Program
@@ -564,8 +567,9 @@ export default function Rebates() {
               New Claim
             </Button>
           )}
-        </div>
-      </div>
+          </div>
+        )}
+      />
 
       {/* Summary */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">

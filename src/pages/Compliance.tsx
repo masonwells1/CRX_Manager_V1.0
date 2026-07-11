@@ -13,6 +13,7 @@ import Badge, { type BadgeVariant } from '../components/ui/Badge';
 import Input from '../components/ui/Input';
 import Modal from '../components/ui/Modal';
 import DataTable, { type Column } from '../components/ui/DataTable';
+import PageHeader from '../components/ui/PageHeader';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, checkMutationResult, assertRpcResult } from '../lib/db';
@@ -486,14 +487,14 @@ export default function Compliance() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h2 className="text-xl font-semibold font-heading text-nav-dark">Compliance</h2>
-        {tab === 'licenses' && (
+      <PageHeader
+        title="Compliance"
+        actions={tab === 'licenses' ? (
           <Button icon={<Plus className="w-4 h-4" />} onClick={openAdd}>
             Add License
           </Button>
-        )}
-      </div>
+        ) : undefined}
+      />
 
       {/* Tabs */}
       <div className="flex gap-1 bg-gray-100 p-1 rounded-lg w-fit">

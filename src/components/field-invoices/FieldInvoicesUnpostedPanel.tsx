@@ -1,59 +1,55 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { FileText, Printer, FileClock, Mail, Eye, Search, AlertTriangle, RotateCcw, ArrowLeft } from 'lucide-react';
-import Card from '../components/ui/Card';
-import Button from '../components/ui/Button';
-import MultiSelectDropdown, { type MultiSelectOption } from '../components/jobs/MultiSelectDropdown';
-import { useToast } from '../components/ui/Toast';
-import { supabase, assertRpcResult } from '../lib/db';
-import { Sentry } from '../lib/sentry';
-import { runCriticalAction } from '../lib/criticalAction';
-import { generateIdempotencyKey } from '../lib/idempotency';
-import ConfirmModal from '../components/ui/ConfirmModal';
+import { FileText, Printer, FileClock, Mail, Pencil, X, Search, ClipboardCheck, ArrowLeft, MoreHorizontal } from 'lucide-react';
+import Card from '../ui/Card';
+import Button from '../ui/Button';
+import ConfirmModal from '../ui/ConfirmModal';
+import MultiSelectDropdown, { type MultiSelectOption } from '../jobs/MultiSelectDropdown';
+import { useToast } from '../ui/Toast';
+import { supabase, sanitizeError, assertRpcResult, hasRpcCode, RpcErrorCodes } from '../../lib/db';
+import { Sentry } from '../../lib/sentry';
+import { runCriticalAction } from '../../lib/criticalAction';
+import { generateIdempotencyKey } from '../../lib/idempotency';
+import { logActivity } from '../../lib/activityLogger';
 import {
   buildInvoicePdfDataFromRow,
   generateBatchInvoicePdf,
   generateInvoicePdf,
   downloadInvoicePdf,
-} from '../lib/invoicePdf';
-import { downloadReportPdf } from '../lib/reportPdf';
-import { sendEmail, pdfToBase64, buildEmailHtml } from '../lib/emailService';
-import { useAuth } from '../contexts/AuthContext';
-import { logActivity } from '../lib/activityLogger';
-import { formatCents as fmt } from '../lib/money';
-import { getSeasonDates } from '../utils/season';
-import { SkeletonTable } from '../components/ui/Skeleton';
+} from '../../lib/invoicePdf';
+import { downloadReportPdf } from '../../lib/reportPdf';
+import { sendEmail, pdfToBase64, buildEmailHtml } from '../../lib/emailService';
+import { useAuth } from '../../contexts/AuthContext';
+import { formatCents as fmt } from '../../lib/money';
+import { getSeasonDates } from '../../utils/season';
+import { SkeletonTable } from '../ui/Skeleton';
+import type { PostInvoiceGroupResult } from '../../types';
 import {
   mapFieldInvoiceRow,
   applyFieldInvoiceFilters,
   computeFieldInvoiceTotals,
   emptyFieldInvoiceFilters,
-  STATUS_POSTED,
-  deriveMonthBatches,
-  applyPostedScope,
-  spansMultipleBatches,
-  defaultPostedScope,
   type RawFieldInvoiceRow,
   type FieldInvoiceListRow,
   type FieldInvoiceListFilters,
-  type PostedScope,
-} from '../lib/fieldInvoiceList';
+} from '../../lib/fieldInvoiceList';
 
-// Field-app parity #23: the dedicated "Posted Field Application Invoices" page
-// (ChemMan's /#/invoices/posted "Posted Invoices"). Lists ONLY invoices already
-// committed to the ledger (status posted|overdue|paid), so the owner can review
-// what was billed without risk of accidental edits. Same column set + footer
-// totals as the Unposted tray, PLUS a Season/Batch/Month-to-date scope selector,
-// a posted-records warning banner, and a bottom action bar (Print All / Print
-// Invoice Report / Unpost All). Posted invoices are committed — actions are
-// view/print/email only; the editor opens read-only paths. Money is integer
-// cents end-to-end (display via formatCents). Unpost is gated to #28 (no
-// unpost_invoice RPC exists yet) — the button is present for parity but inert.
+// Field-app parity #22: the dedicated "Unposted Field Application Invoices"
+// working tray (ChemMan's /#/invoices/unposted). Lists ONLY not-yet-posted
+// field invoices (status draft|unposted), with the ChemMan filter bar,
+// per-row print/email/edit, footer totals, and bottom bulk actions (Print All /
+// Print Invoice Report / Post All). The combined status-filterable list stays at
+// /field-invoices. Money is integer cents end-to-end (display via formatCents).
 
 const QUERY_LIMIT = 2000;
 
-// Same one-round-trip select as the Unposted list: invoice + customer + linked
-// job number + engine-built per-location rows + line items (chemicals).
+type UnpostedFieldInvoiceRow = FieldInvoiceListRow & {
+  invoice_group_id: string | null;
+};
+
+// PostgREST select: the invoice + customer + linked job number + engine-built
+// per-location rows (locations/crops/acres) + line items (chemicals). One round
+// trip; everything else is derived client-side by mapFieldInvoiceRow.
 const LIST_SELECT = `
   *,
   customer:customers!invoices_customer_id_fkey(farm_name),
@@ -78,38 +74,40 @@ const chips = (values: string[]) => {
   );
 };
 
-export default function FieldInvoicesPosted() {
+export default function FieldInvoicesUnpostedPanel() {
   const navigate = useNavigate();
   const { toast } = useToast();
   const { profile } = useAuth();
 
-  const [rows, setRows] = useState<FieldInvoiceListRow[]>([]);
+  const [rows, setRows] = useState<UnpostedFieldInvoiceRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [filters, setFilters] = useState<FieldInvoiceListFilters>(emptyFieldInvoiceFilters);
-  const [scope, setScope] = useState<PostedScope>(defaultPostedScope);
   const [busy, setBusy] = useState(false);
-  // #28: bulk Unpost All — confirm gate + in-flight guard.
-  const [showUnpostConfirm, setShowUnpostConfirm] = useState(false);
-  const [unposting, setUnposting] = useState(false);
-  // #28: per-invoice idempotency key cache (keyed by invoice id), so a retry after a
-  // timeout reuses the SAME key and the server dedup matches — never a double unpost.
-  // Mirrors the Unposted list's Post All (postKeysRef). Cleared on a clean run.
-  const unpostKeysRef = useRef<Record<string, string>>({});
+  const [showPostAll, setShowPostAll] = useState(false);
+  const [manualInvoiceMenuOpen, setManualInvoiceMenuOpen] = useState(false);
   // Per-row action guard so a double-click can't fire two prints/emails.
   const rowActionRef = useRef(false);
+  const manualInvoiceMenuRef = useRef<HTMLDivElement>(null);
+  // Per-invoice/per-group idempotency keys from a keyed ref cache so a network-retry
+  // (post committed server-side but response lost) reuses the SAME key per
+  // invoice and the server dedup matches instead of double-posting. Minted
+  // once per invoice; cleared on a clean Post All run. (Mirrors OrderDetail's
+  // postDraftKeysRef pattern; avoids the inline-generate double-execution class.)
+  const postKeysRef = useRef<Record<string, string>>({});
 
   const fetchInvoices = useCallback(async () => {
     setLoading(true);
     const { start: seasonStart, end: seasonEnd } = getSeasonDates();
-    // Window on invoice_date — the same field the Trans. Date filter/column and
-    // the monthly batch (date_trunc('month', invoice_date)) key off. Windowing
-    // on created_at would drop an invoice whose invoice_date is in range but
-    // created_at fell outside the season.
+    // Window on invoice_date — it is what the 'Trans. Date' filter + column use
+    // (ChemMan "Trans. Date" = the invoice/transaction date). Windowing on
+    // created_at would silently drop an invoice whose invoice_date is in range
+    // but whose created_at fell outside the season — hiding it from the list,
+    // the footer totals, AND Post All.
     const { data, error } = await supabase
       .from('invoices')
       .select(LIST_SELECT)
       .eq('invoice_type', 'field_application')
-      .in('status', [...STATUS_POSTED])
+      .in('status', ['draft', 'unposted'])
       .is('deleted_at', null)
       .gte('invoice_date', seasonStart)
       .lte('invoice_date', seasonEnd)
@@ -117,14 +115,14 @@ export default function FieldInvoicesPosted() {
       .limit(QUERY_LIMIT);
 
     if (error) {
-      Sentry.captureException(error, { tags: { source: 'fetch', page: 'field-invoices-posted' } });
-      toast('error', 'Failed to load posted field invoices');
+      Sentry.captureException(error, { tags: { source: 'fetch', page: 'field-invoices-unposted' } });
+      toast('error', 'Failed to load unposted field invoices');
       setLoading(false);
       return;
     }
 
     if (data && data.length === QUERY_LIMIT) {
-      toast('error', `Showing first ${QUERY_LIMIT} posted field invoices — some may be hidden.`);
+      toast('error', `Showing first ${QUERY_LIMIT} unposted field invoices — some may be hidden.`);
     }
 
     const raws = (data || []) as unknown as RawFieldInvoiceRow[];
@@ -133,7 +131,9 @@ export default function FieldInvoicesPosted() {
     // field_app_locations by invoice_group_id with invoice_id=NULL, so the
     // invoice_id-FK embed in LIST_SELECT comes back EMPTY for them. Fetch those
     // locations by group and inject them so Locations/Crops/Acres (and the PDF
-    // application-detail header) populate for split posted invoices.
+    // application-detail header, which toPdfRow derives from these) populate.
+    // (Mirrors the groupId ? eq('invoice_group_id') : eq('invoice_id') branch in
+    // FieldApplicationInvoice.tsx.)
     const groupIds = [...new Set(
       raws.map((r) => r.invoice_group_id).filter((g): g is string => !!g)
     )];
@@ -145,7 +145,7 @@ export default function FieldInvoicesPosted() {
         .in('invoice_group_id', groupIds);
 
       if (groupErr) {
-        Sentry.captureException(groupErr, { tags: { source: 'fetch_group_locations', page: 'field-invoices-posted' } });
+        Sentry.captureException(groupErr, { tags: { source: 'fetch_group_locations', page: 'field-invoices-unposted' } });
         toast('error', 'Failed to load split-invoice locations');
         setLoading(false);
         return;
@@ -162,12 +162,19 @@ export default function FieldInvoicesPosted() {
 
       for (const r of raws) {
         if (r.invoice_group_id) {
+          // Use the group-matched locations for grouped invoices. Ungrouped rows
+          // keep their embedded invoice_id-keyed field_app_locations untouched.
           r.field_app_locations = byGroup.get(r.invoice_group_id) ?? [];
         }
       }
     }
 
-    setRows(raws.map(mapFieldInvoiceRow));
+    // LIST_SELECT includes `*`, so invoice_group_id is already present. Preserve it
+    // on the flattened row for atomic Post All routing.
+    setRows(raws.map((raw) => ({
+      ...mapFieldInvoiceRow(raw),
+      invoice_group_id: raw.invoice_group_id ?? null,
+    })));
     setLoading(false);
   }, [toast]);
 
@@ -175,18 +182,32 @@ export default function FieldInvoicesPosted() {
     fetchInvoices();
   }, [fetchInvoices]);
 
-  // The named filter bar narrows first; then the scope (season/MTD/batch) narrows
-  // by month. The SAME final list drives the table AND the footer totals.
-  const filtered = useMemo(() => applyFieldInvoiceFilters(rows, filters), [rows, filters]);
-  const visible = useMemo(() => applyPostedScope(filtered, scope), [filtered, scope]);
-  const totals = useMemo(() => computeFieldInvoiceTotals(visible), [visible]);
+  useEffect(() => {
+    if (!manualInvoiceMenuOpen) return;
 
-  // Monthly batches available for the scope dropdown (derived from the loaded,
-  // named-filtered rows so the option list tracks the current filter bar).
-  const monthBatches = useMemo(() => deriveMonthBatches(filtered), [filtered]);
-  // The displayed set crosses more than one month-end batch — an Unpost All here
-  // would touch multiple batch totals (each must be re-reconciled / reprinted).
-  const crossesBatches = useMemo(() => spansMultipleBatches(visible), [visible]);
+    const closeMenuOnOutsideClick = (event: MouseEvent) => {
+      if (!manualInvoiceMenuRef.current?.contains(event.target as Node)) {
+        setManualInvoiceMenuOpen(false);
+      }
+    };
+    const closeMenuOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setManualInvoiceMenuOpen(false);
+    };
+
+    document.addEventListener('mousedown', closeMenuOnOutsideClick);
+    document.addEventListener('keydown', closeMenuOnEscape);
+    return () => {
+      document.removeEventListener('mousedown', closeMenuOnOutsideClick);
+      document.removeEventListener('keydown', closeMenuOnEscape);
+    };
+  }, [manualInvoiceMenuOpen]);
+
+  // The SAME filtered list drives the table AND the footer totals.
+  const visible = useMemo(
+    () => applyFieldInvoiceFilters(rows, filters) as UnpostedFieldInvoiceRow[],
+    [rows, filters],
+  );
+  const totals = useMemo(() => computeFieldInvoiceTotals(visible), [visible]);
 
   const customerOptions: MultiSelectOption[] = useMemo(() => {
     const byId = new Map<string, string>();
@@ -201,46 +222,14 @@ export default function FieldInvoicesPosted() {
     filters.customerIds.length > 0 ||
     filters.dateFrom !== '' ||
     filters.dateTo !== '' ||
-    filters.search !== '' ||
-    scope.kind !== 'season';
+    filters.search !== '';
 
-  const clearFilters = () => { setFilters(emptyFieldInvoiceFilters); setScope(defaultPostedScope); };
+  const clearFilters = () => setFilters(emptyFieldInvoiceFilters);
 
-  // Encode/decode the scope <select> value. 'season' | 'mtd' | a YYYY-MM month.
-  const scopeValue = scope.kind === 'batch' ? scope.month : scope.kind;
-  const onScopeChange = (value: string) => {
-    if (value === 'season') setScope({ kind: 'season' });
-    else if (value === 'mtd') setScope({ kind: 'mtd' });
-    else setScope({ kind: 'batch', month: value });
-  };
-
-  // Open the read-only field-invoice detail for a row. Posted invoices are
-  // committed — the generic field-invoice editor (/field-invoices/:id) opens
-  // them in the appropriate (non-per-acre) path and enforces the lifecycle.
-  const viewPath = (row: FieldInvoiceListRow): string => `/field-invoices/${row.id}`;
-
-  // Map a list row into the snapshot shape buildInvoicePdfDataFromRow expects.
-  // Carries the money fields so a posted invoice WITH payments prints a Balance
-  // Due that reconciles with its Total (Total − Payments − Prepay = Balance).
-  const toPdfRow = (row: FieldInvoiceListRow) => ({
-    id: row.id,
-    invoice_number: row.invoice_number,
-    invoice_date: row.invoice_date,
-    invoice_type: 'field_application',
-    status: row.status,
-    customer_id: row.customer_id,
-    customer_name: row.customer_name,
-    crop_type: row.crops[0] ?? null,
-    field_names: row.locations.length > 0 ? row.locations : null,
-    total_acres: row.total_acres || null,
-    applicator_name: row.applicators[0] ?? null,
-    total_amount_cents: row.total_amount_cents,
-    total_cost_cents: row.total_cost_cents,
-    paid_amount_cents: row.paid_amount_cents,
-    prepay_applied_cents: row.prepay_applied_cents,
-    write_off_cents: row.write_off_cents,
-    balance_cents: row.balance_cents,
-  });
+  // Open the field-invoice editor for a row. The generic field-invoice editor
+  // (/field-invoices/:id) handles both engine-built per-acre and job-built
+  // field invoices for edit; its own loader routes per-acre detail correctly.
+  const editPath = (row: FieldInvoiceListRow): string => `/field-invoices/${row.id}`;
 
   // --- Per-row PRINT (current or legacy "Old Print" format, #30) ---
   const printRow = async (row: FieldInvoiceListRow, format: 'current' | 'legacy' = 'current') => {
@@ -248,6 +237,8 @@ export default function FieldInvoicesPosted() {
     rowActionRef.current = true;
     await runCriticalAction({
       action: async () => {
+        // Money fields ride toPdfRow; the builder re-fetches lines/shares. The
+        // format only switches the layout — Total/Balance Due are identical.
         const pdfData = await buildInvoicePdfDataFromRow(toPdfRow(row), {
           show_shares: true, show_price_per_acre: true, show_epa_registration: true, format,
         });
@@ -256,7 +247,7 @@ export default function FieldInvoicesPosted() {
       toast,
       successMessage: `Printed ${row.invoice_number}`,
       setLoading: (v) => { setBusy(v); if (!v) rowActionRef.current = false; },
-      sentryTag: 'field_invoice_posted_print_row',
+      sentryTag: 'field_invoice_print_row',
     });
     rowActionRef.current = false;
   };
@@ -303,7 +294,7 @@ export default function FieldInvoicesPosted() {
 
         logActivity({
           event: 'invoice_emailed',
-          description: `Posted field invoice ${row.invoice_number} emailed to ${email}`,
+          description: `Field invoice ${row.invoice_number} emailed to ${email}`,
           performedBy: profile.id,
           entityType: 'invoice',
           entityId: row.id,
@@ -313,7 +304,7 @@ export default function FieldInvoicesPosted() {
       toast,
       successMessage: `Emailed ${row.invoice_number}`,
       setLoading: (v) => { setBusy(v); if (!v) rowActionRef.current = false; },
-      sentryTag: 'field_invoice_posted_email_row',
+      sentryTag: 'field_invoice_email_row',
     });
     rowActionRef.current = false;
   };
@@ -333,7 +324,7 @@ export default function FieldInvoicesPosted() {
       toast,
       successMessage: `Printed ${visible.length} invoice(s)`,
       setLoading: setBusy,
-      sentryTag: format === 'legacy' ? 'field_invoice_posted_old_print_all' : 'field_invoice_posted_print_all',
+      sentryTag: format === 'legacy' ? 'field_invoice_old_print_all' : 'field_invoice_print_all',
     });
   };
 
@@ -343,7 +334,7 @@ export default function FieldInvoicesPosted() {
     await runCriticalAction({
       action: async () => {
         await downloadReportPdf({
-          title: 'Posted Field Application Invoices',
+          title: 'Unposted Field Application Invoices',
           subtitle: `${totals.count} invoice(s) — ${totals.totalAcres.toLocaleString()} acres — ${fmt(totals.totalAmountCents)}`,
           columns: [
             { header: 'Job #', key: 'job_number', format: (v) => String(v || '-') },
@@ -355,7 +346,6 @@ export default function FieldInvoicesPosted() {
             { header: 'Chemicals', key: 'chemicals', format: (v) => (Array.isArray(v) ? v.join(', ') : '-') },
             { header: 'Acres', key: 'total_acres', align: 'right', format: (v) => (v != null ? String(v) : '-') },
             { header: 'Total', key: 'total_amount_cents', align: 'right', format: (v) => fmt(Number(v) || 0) },
-            { header: 'Balance', key: 'balance_cents', align: 'right', format: (v) => fmt(Number(v) || 0) },
             { header: 'Date', key: 'invoice_date', format: (v) => (v ? new Date(String(v) + 'T00:00:00').toLocaleDateString() : '-') },
           ],
           data: visible as unknown as Record<string, unknown>[],
@@ -365,77 +355,103 @@ export default function FieldInvoicesPosted() {
       toast,
       successMessage: 'Invoice report downloaded',
       setLoading: setBusy,
-      sentryTag: 'field_invoice_posted_print_report',
+      sentryTag: 'field_invoice_print_report',
     });
   };
 
-  // --- UNPOST ALL (#28) ---
-  // Real bulk unpost: reverse every UNPAID posted/overdue invoice in the shown
-  // set back to the Unposted list, one at a time through the gated unpost_invoice
-  // RPC (per-invoice idempotency key, .throwOnError() + assertRpcResult). A 'paid'
-  // invoice can't be unposted (money applied) — it is skipped, not failed. Each
-  // call respects the closed-period and money guards in the RPC; if one fails the
-  // others still process and we report a clear per-invoice failure summary.
-  // The button is gated behind a ConfirmModal (openable below), then refreshes.
-  const candidates = useMemo(
-    () => visible.filter((r) => r.status === 'posted' || r.status === 'overdue'),
+  const postGroupCount = useMemo(
+    () => new Set(visible.map((row) => row.invoice_group_id).filter((groupId): groupId is string => !!groupId)).size,
     [visible],
   );
+  const postIndividualCount = visible.filter((row) => !row.invoice_group_id).length;
 
-  const runUnpostAll = async () => {
-    setShowUnpostConfirm(false);
+  // --- POST ALL (posts every displayed individual invoice and each displayed split
+  // group once, after confirm). post_invoice_group intentionally posts ALL members,
+  // including siblings hidden by the current filters, so a group cannot be half-posted.
+  const postAll = async () => {
+    setShowPostAll(false);
     if (!profile) { toast('error', 'Profile not loaded — please refresh.'); return; }
-    if (candidates.length === 0) { toast('error', 'No unpostable invoices in view (paid invoices cannot be unposted).'); return; }
-    setUnposting(true);
-    let ok = 0;
-    const failures: string[] = [];
-    try {
-      for (const row of candidates) {
-        // Reuse a cached per-invoice key on retry so the server dedup matches.
-        if (!unpostKeysRef.current[row.id]) {
-          unpostKeysRef.current[row.id] = generateIdempotencyKey('unpost_invoice', `${profile.id}:${row.id}`);
-        }
-        try {
-          const { data, error } = await supabase.rpc('unpost_invoice', {
-            p_invoice_id: row.id,
-            p_performed_by: profile.id,
-            p_idempotency_key: unpostKeysRef.current[row.id],
+    const individualTargets = visible
+      .filter((row) => !row.invoice_group_id)
+      .map((row) => ({ id: row.id, invoice_number: row.invoice_number }));
+    const groupTargets = Array.from(
+      visible.reduce((groups, row) => {
+        if (row.invoice_group_id && !groups.has(row.invoice_group_id)) {
+          groups.set(row.invoice_group_id, {
+            group_id: row.invoice_group_id,
+            label: `split group containing ${row.invoice_number}`,
           });
-          if (error) throw error;
-          assertRpcResult(data, 'unpost_invoice');
-          ok += 1;
-          // Succeeded — drop this invoice's key so a later run mints a fresh one.
-          delete unpostKeysRef.current[row.id];
-        } catch (err) {
-          Sentry.captureException(err, { tags: { rpc: 'unpost_invoice', page: 'field-invoices-posted' } });
-          const msg = err instanceof Error ? err.message : String(err);
-          failures.push(`${row.invoice_number}: ${msg}`);
-          // Keep the failed invoice's key cached so a retry reuses it.
         }
-      }
-
-      if (failures.length === 0) {
-        toast('success', `Unposted ${ok} invoice(s) — returned to the Unposted list.`);
-      } else if (ok > 0) {
-        toast('error', `Unposted ${ok}, but ${failures.length} could not be unposted. ${failures[0]}`);
-      } else {
-        toast('error', `Could not unpost. ${failures[0]}`);
-      }
-
-      if (ok > 0) {
-        logActivity({
-          event: 'invoices_bulk_unposted',
-          description: `Bulk unposted ${ok} field invoice(s) from the Posted list`,
-          performedBy: profile.id,
-          entityType: 'invoice',
-          entityId: candidates[0].id,
-        });
-      }
-
-      await fetchInvoices();
-    } finally {
-      setUnposting(false);
-    }
+        return groups;
+      }, new Map<string, { group_id: string; label: string }>()).values(),
+    );
+    const targetCount = individualTargets.length + groupTargets.length;
+    if (targetCount === 0) { toast('error', 'No invoices to post'); return; }
+    await runCriticalAction({
+      action: async () => {
+        let posted = 0;
+        const failures: string[] = [];
+        for (const group of groupTargets) {
+          const keyId = `grp:${group.group_id}`;
+          if (!postKeysRef.current[keyId]) {
+            postKeysRef.current[keyId] = generateIdempotencyKey('post_invoice_group', `${profile.id}:${group.group_id}`);
+          }
+          try {
+            const { data, error } = await supabase.rpc('post_invoice_group', {
+              p_invoice_group_id: group.group_id,
+              p_performed_by: profile.id,
+              p_idempotency_key: postKeysRef.current[keyId],
+            });
+            if (error) throw error;
+            assertRpcResult<PostInvoiceGroupResult>(data, 'post_invoice_group');
+            posted += 1;
+            delete postKeysRef.current[keyId];
+          } catch (err: unknown) {
+            if (hasRpcCode(err, RpcErrorCodes.PRICING_INCOMPLETE)) {
+              failures.push(`${group.label}: needs pricing first`);
+            } else {
+              failures.push(`${group.label}: ${sanitizeError(err)}`);
+            }
+          }
+        }
+        for (const target of individualTargets) {
+          if (!postKeysRef.current[target.id]) {
+            postKeysRef.current[target.id] = generateIdempotencyKey('post_invoice', `${profile.id}:${target.id}`);
+          }
+          try {
+            // post_invoice RETURNS void — canonical void-RPC pattern is
+            // .throwOnError() with no `=` capture (no result to assert).
+            await supabase
+              .rpc('post_invoice', {
+                p_invoice_id: target.id,
+                p_idempotency_key: postKeysRef.current[target.id],
+              })
+              .throwOnError();
+            posted += 1;
+            delete postKeysRef.current[target.id];
+          } catch (err: unknown) {
+            // PRICING_INCOMPLETE is the common, expected reason a field invoice
+            // can't post yet — show plain English instead of the raw code.
+            // (Mirrors OrderDetail's Post-All handling.)
+            if (hasRpcCode(err, RpcErrorCodes.PRICING_INCOMPLETE)) {
+              failures.push(`${target.invoice_number}: needs pricing first`);
+            } else {
+              failures.push(`${target.invoice_number}: ${sanitizeError(err)}`);
+            }
+          }
+        }
+        await fetchInvoices();
+        if (failures.length > 0) {
+          // Surface partial outcome honestly — some posting targets succeeded,
+          // some did not. Failed target keys remain stable for a safe retry.
+          throw new Error(`Posted ${posted}/${targetCount} target(s). Failed: ${failures.slice(0, 3).join(' | ')}${failures.length > 3 ? ` | +${failures.length - 3} more` : ''}`);
+        }
+      },
+      toast,
+      successMessage: `Posted ${individualTargets.length} individual invoice(s) and ${groupTargets.length} split group(s)`,
+      setLoading: setBusy,
+      sentryTag: 'field_invoice_post_all',
+    });
   };
 
   if (loading) {
@@ -460,59 +476,54 @@ export default function FieldInvoicesPosted() {
             <ArrowLeft className="w-4 h-4" />
           </button>
           <div>
-            <h2 className="text-xl font-semibold font-heading text-nav-dark">Posted Field Application Invoices</h2>
-            <p className="text-xs text-secondary mt-0.5">Committed field bills — already counted in the books for their month-end batch.</p>
+            <h2 className="text-xl font-semibold font-heading text-nav-dark">Unposted Field Application Invoices</h2>
+            <p className="text-xs text-secondary mt-0.5">The working tray — field bills that have not yet been posted.</p>
           </div>
         </div>
-      </div>
-
-      {/* Posted-records warning banner (always on) */}
-      <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-        <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
-        <p>
-          Posted records are from the most recent month roll. Modifying a posted invoice will cause the
-          previous batch totals to update, and any applicable reports will need to be reprinted.
-        </p>
-      </div>
-
-      {/* Dynamic month-batch span warning (only when the shown set crosses batches) */}
-      {crossesBatches && (
-        <div className="flex items-start gap-2 rounded-lg border border-orange-200 bg-orange-50 px-4 py-3 text-sm text-orange-800">
-          <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
-          <p>
-            The invoices shown span more than one month-end batch. A bulk action here would affect
-            multiple batch totals — narrow the scope to a single batch (below) to act on one batch at a time.
-          </p>
+        <div
+          className="relative"
+          ref={manualInvoiceMenuRef}
+          onBlur={(event) => {
+            if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+              setManualInvoiceMenuOpen(false);
+            }
+          }}
+        >
+          <button
+            type="button"
+            onClick={() => setManualInvoiceMenuOpen((open) => !open)}
+            aria-label="More actions"
+            aria-haspopup="menu"
+            aria-expanded={manualInvoiceMenuOpen}
+            className="inline-flex items-center justify-center rounded-lg border border-gray-300 bg-white p-2 text-nav-dark hover:bg-gray-50"
+          >
+            <MoreHorizontal className="w-4 h-4" />
+          </button>
+          {manualInvoiceMenuOpen && (
+            <div role="menu" className="absolute right-0 z-20 mt-2 w-52 rounded-lg border border-gray-200 bg-white py-1 shadow-lg">
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  navigate('/invoices/field-app/new');
+                  setManualInvoiceMenuOpen(false);
+                }}
+                className="w-full px-3 py-2 text-left text-sm text-nav-dark hover:bg-gray-50"
+              >
+                Manual Invoice (no job)
+              </button>
+            </div>
+          )}
         </div>
-      )}
+      </div>
 
       {/* Filter bar */}
       <Card>
         <div className="flex flex-wrap items-end gap-3">
           <div>
-            <label className="block text-xs font-medium text-secondary mb-1" htmlFor="fip-scope">Scope</label>
-            <select
-              id="fip-scope"
-              value={scopeValue}
-              onChange={(e) => onScopeChange(e.target.value)}
-              aria-label="Posting scope"
-              className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
-            >
-              <option value="season">This Season</option>
-              <option value="mtd">Month-to-date</option>
-              {monthBatches.length > 0 && (
-                <optgroup label="Monthly batches">
-                  {monthBatches.map((b) => (
-                    <option key={b.month} value={b.month}>{b.label} ({b.count})</option>
-                  ))}
-                </optgroup>
-              )}
-            </select>
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-secondary mb-1" htmlFor="fip-invnum">Inv. Nbr</label>
+            <label className="block text-xs font-medium text-secondary mb-1" htmlFor="fi-invnum">Inv. Nbr</label>
             <input
-              id="fip-invnum"
+              id="fi-invnum"
               type="text"
               value={filters.invoiceNumber}
               onChange={(e) => setFilters((f) => ({ ...f, invoiceNumber: e.target.value }))}
@@ -529,9 +540,9 @@ export default function FieldInvoicesPosted() {
             emptyText="No customers"
           />
           <div>
-            <label className="block text-xs font-medium text-secondary mb-1" htmlFor="fip-from">Trans. Date From</label>
+            <label className="block text-xs font-medium text-secondary mb-1" htmlFor="fi-from">Trans. Date From</label>
             <input
-              id="fip-from"
+              id="fi-from"
               type="date"
               value={filters.dateFrom}
               onChange={(e) => setFilters((f) => ({ ...f, dateFrom: e.target.value }))}
@@ -539,9 +550,9 @@ export default function FieldInvoicesPosted() {
             />
           </div>
           <div>
-            <label className="block text-xs font-medium text-secondary mb-1" htmlFor="fip-to">Trans. Date To</label>
+            <label className="block text-xs font-medium text-secondary mb-1" htmlFor="fi-to">Trans. Date To</label>
             <input
-              id="fip-to"
+              id="fi-to"
               type="date"
               value={filters.dateTo}
               onChange={(e) => setFilters((f) => ({ ...f, dateTo: e.target.value }))}
@@ -549,11 +560,11 @@ export default function FieldInvoicesPosted() {
             />
           </div>
           <div className="flex-1 min-w-[12rem]">
-            <label className="block text-xs font-medium text-secondary mb-1" htmlFor="fip-search">Search</label>
+            <label className="block text-xs font-medium text-secondary mb-1" htmlFor="fi-search">Search</label>
             <div className="relative">
               <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
               <input
-                id="fip-search"
+                id="fi-search"
                 type="text"
                 value={filters.search}
                 onChange={(e) => setFilters((f) => ({ ...f, search: e.target.value }))}
@@ -563,7 +574,7 @@ export default function FieldInvoicesPosted() {
             </div>
           </div>
           {hasFilters && (
-            <Button variant="ghost" size="sm" icon={<RotateCcw className="w-4 h-4" />} onClick={clearFilters}>
+            <Button variant="ghost" size="sm" icon={<X className="w-4 h-4" />} onClick={clearFilters}>
               Clear
             </Button>
           )}
@@ -585,7 +596,6 @@ export default function FieldInvoicesPosted() {
                 <th className="px-3 py-2 font-medium">Chemicals</th>
                 <th className="px-3 py-2 font-medium text-right">Acres</th>
                 <th className="px-3 py-2 font-medium text-right">Total</th>
-                <th className="px-3 py-2 font-medium text-right">Balance</th>
                 <th className="px-3 py-2 font-medium">Transaction</th>
                 <th className="px-3 py-2 font-medium text-right">Actions</th>
               </tr>
@@ -593,8 +603,8 @@ export default function FieldInvoicesPosted() {
             <tbody>
               {visible.length === 0 ? (
                 <tr>
-                  <td colSpan={12} className="px-3 py-10 text-center text-secondary">
-                    No posted field invoices{hasFilters ? ' match these filters' : ''}.
+                  <td colSpan={11} className="px-3 py-10 text-center text-secondary">
+                    No unposted field invoices{hasFilters ? ' match these filters' : ''}.
                   </td>
                 </tr>
               ) : (
@@ -602,7 +612,7 @@ export default function FieldInvoicesPosted() {
                   <tr
                     key={row.id}
                     className="border-b border-gray-50 hover:bg-gray-50/60 cursor-pointer"
-                    onClick={() => navigate(viewPath(row))}
+                    onClick={() => navigate(editPath(row))}
                   >
                     <td className="px-3 py-2 text-gray-700">{row.job_number || '—'}</td>
                     <td className="px-3 py-2">
@@ -618,11 +628,6 @@ export default function FieldInvoicesPosted() {
                     <td className="px-3 py-2">{chips(row.chemicals)}</td>
                     <td className="px-3 py-2 text-right tabular-nums text-gray-700">{row.total_acres.toLocaleString()}</td>
                     <td className="px-3 py-2 text-right tabular-nums font-medium">{fmt(row.total_amount_cents)}</td>
-                    <td className="px-3 py-2 text-right tabular-nums">
-                      <span className={row.balance_cents > 0 ? 'text-red-600 font-semibold' : 'text-crx-green'}>
-                        {fmt(row.balance_cents)}
-                      </span>
-                    </td>
                     <td className="px-3 py-2 text-gray-700 whitespace-nowrap">
                       {new Date(row.invoice_date + 'T00:00:00').toLocaleDateString()}
                     </td>
@@ -660,12 +665,12 @@ export default function FieldInvoicesPosted() {
                         </button>
                         <button
                           type="button"
-                          onClick={(e) => { e.stopPropagation(); navigate(viewPath(row)); }}
+                          onClick={(e) => { e.stopPropagation(); navigate(editPath(row)); }}
                           className="p-1.5 rounded hover:bg-gray-100 text-crx-green"
-                          aria-label={`View ${row.invoice_number}`}
-                          title="View"
+                          aria-label={`Edit ${row.invoice_number}`}
+                          title="Edit"
                         >
-                          <Eye className="w-4 h-4" />
+                          <Pencil className="w-4 h-4" />
                         </button>
                       </div>
                     </td>
@@ -682,7 +687,7 @@ export default function FieldInvoicesPosted() {
                   </td>
                   <td className="px-3 py-2 text-right tabular-nums">{totals.totalAcres.toLocaleString()}</td>
                   <td className="px-3 py-2 text-right tabular-nums">{fmt(totals.totalAmountCents)}</td>
-                  <td className="px-3 py-2" colSpan={3}></td>
+                  <td className="px-3 py-2" colSpan={2}></td>
                 </tr>
               </tfoot>
             )}
@@ -706,38 +711,54 @@ export default function FieldInvoicesPosted() {
             <Button variant="secondary" size="sm" icon={<FileText className="w-4 h-4" />} onClick={printReport} loading={busy} disabled={visible.length === 0}>
               Print Invoice Report
             </Button>
-            <Button
-              variant="secondary"
-              size="sm"
-              icon={<RotateCcw className="w-4 h-4" />}
-              onClick={() => setShowUnpostConfirm(true)}
-              loading={unposting}
-              disabled={unposting || candidates.length === 0}
-              title="Return every unpaid posted invoice in view to the Unposted list"
-            >
-              Unpost All{candidates.length > 0 ? ` (${candidates.length})` : ''}
+            <Button variant="primary" size="sm" icon={<ClipboardCheck className="w-4 h-4" />} onClick={() => setShowPostAll(true)} disabled={busy || visible.length === 0}>
+              Post All
             </Button>
           </div>
         </div>
       </Card>
 
-      {/* #28: bulk Unpost All confirm. Reverses every unpaid posted/overdue invoice
-          shown back to the Unposted list (paid invoices are skipped). */}
       <ConfirmModal
-        open={showUnpostConfirm}
-        onClose={() => setShowUnpostConfirm(false)}
-        onConfirm={runUnpostAll}
-        title="Unpost All Shown Invoices"
-        message={
-          `Return ${candidates.length} posted invoice(s) to the Unposted list? ` +
-          `This reverses their posting so they become editable again and updates the ` +
-          `affected month-end batch totals. Paid invoices are skipped. Invoices in a ` +
-          `closed accounting period cannot be unposted.`
-        }
-        confirmLabel={`Unpost ${candidates.length}`}
-        variant="warning"
-        loading={unposting}
+        open={showPostAll}
+        onClose={() => setShowPostAll(false)}
+        onConfirm={postAll}
+        title="Post all displayed invoices?"
+        message={`Post ${postIndividualCount} individual invoice(s) + ${postGroupCount} split group(s) represented in the current view? A split group always posts all of its members together, even when some members are hidden by filters. Posting commits them to accounts receivable and is logged.`}
+        confirmLabel={`Post ${postIndividualCount + postGroupCount} target(s)`}
+        variant="info"
+        icon={ClipboardCheck}
+        loading={busy}
       />
     </div>
   );
+}
+
+// Map a list row into the snapshot shape buildInvoicePdfDataFromRow expects.
+// The list row already carries the field/crop/applicator snapshot it needs;
+// the builder re-fetches line items / shares / customer billing by id.
+function toPdfRow(row: FieldInvoiceListRow) {
+  return {
+    id: row.id,
+    invoice_number: row.invoice_number,
+    invoice_date: row.invoice_date,
+    invoice_type: 'field_application',
+    status: row.status,
+    customer_id: row.customer_id,
+    customer_name: row.customer_name,
+    crop_type: row.crops[0] ?? null,
+    field_names: row.locations.length > 0 ? row.locations : null,
+    total_acres: row.total_acres || null,
+    applicator_name: row.applicators[0] ?? null,
+    total_amount_cents: row.total_amount_cents,
+    // Carry the money fields so the PDF's Payments / Prepay lines and Balance
+    // Due agree with the printed Total. Defaulting these to 0 would make a
+    // posted invoice WITH payments print a full Total but a lower Balance Due
+    // (they'd silently disagree) — this list is unposted today, but #23 Posted
+    // reuses toPdfRow → buildInvoicePdfDataFromRow.
+    total_cost_cents: row.total_cost_cents,
+    paid_amount_cents: row.paid_amount_cents,
+    prepay_applied_cents: row.prepay_applied_cents,
+    write_off_cents: row.write_off_cents,
+    balance_cents: row.balance_cents,
+  };
 }
