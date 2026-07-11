@@ -10,6 +10,7 @@ import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
 import DataTable, { type Column } from '../components/ui/DataTable';
+import PageHeader from '../components/ui/PageHeader';
 import Modal from '../components/ui/Modal';
 import ConfirmModal from '../components/ui/ConfirmModal';
 import { useToast } from '../components/ui/Toast';
@@ -495,10 +496,11 @@ export default function CommissionPayments() {
 
   return (
     <div className="space-y-4">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <h2 className="text-xl font-semibold font-heading text-nav-dark">Commission Payments</h2>
-        <div className="flex gap-2">
+      <PageHeader
+        title="Commission"
+        accent="Payments"
+        actions={(
+          <div className="flex gap-2">
           <Button
             variant="secondary"
             size="sm"
@@ -523,8 +525,9 @@ export default function CommissionPayments() {
           <Button icon={<Plus className="w-4 h-4" />} onClick={openCreate}>
             New Payment
           </Button>
-        </div>
-      </div>
+          </div>
+        )}
+      />
 
       {/* Summary Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

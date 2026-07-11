@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import Tabs, { type TabItem } from '../components/ui/Tabs';
+import PageHeader from '../components/ui/PageHeader';
 import { supabase } from '../lib/db';
 import { getSeasonDates } from '../utils/season';
 import FieldInvoicesListPanel from '../components/field-invoices/FieldInvoicesListPanel';
@@ -87,12 +88,11 @@ export default function FieldInvoices() {
 
   return (
     <div className="space-y-5">
-      <div>
-        <h1 className="text-2xl font-semibold font-heading text-nav-dark">Field Invoices</h1>
-        <p className="mt-1 text-sm text-secondary">
-          Move applied work from unbilled through draft and posted invoices, then review by customer.
-        </p>
-      </div>
+      <PageHeader
+        title="Field"
+        accent="Invoices"
+        subtitle="Move applied work from unbilled through draft and posted invoices, then review by customer."
+      />
 
       <Tabs
         tabs={tabs}

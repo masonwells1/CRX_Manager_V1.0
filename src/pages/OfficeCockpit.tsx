@@ -59,6 +59,7 @@ import {
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
+import PageHeader from '../components/ui/PageHeader';
 import Modal from '../components/ui/Modal';
 import { useToast } from '../components/ui/Toast';
 import { supabase, supabaseUntyped, assertRpcResult, hasRpcCode, RpcErrorCodes, sanitizeError } from '../lib/db';
@@ -1066,7 +1067,7 @@ export default function OfficeCockpit() {
   if (loading) {
     return (
       <div className="p-6 space-y-4">
-        <h1 className="text-2xl font-bold text-nav-dark">Office Cockpit</h1>
+        <PageHeader title="Office" accent="Cockpit" />
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           {Array.from({ length: 6 }).map((_, i) => (
             <SkeletonCard key={i} />
@@ -1078,38 +1079,36 @@ export default function OfficeCockpit() {
 
   return (
     <div className="p-6 space-y-4">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-2">
-        <div>
-          <h1 className="text-2xl font-bold text-nav-dark">Office Cockpit</h1>
-          <p className="text-sm text-gray-500 mt-0.5">
-            Everything stuck or wrong &mdash; one screen, no report-running.
-          </p>
-        </div>
-        <div className="flex items-center gap-3">
-          <Button
-            onClick={() => navigate('/payments')}
-            variant="ghost"
-            size="sm"
-          >
-            Record payments &rarr;
-          </Button>
-          {lastRefreshed && (
-            <span className="text-xs text-gray-400">
-              Updated {lastRefreshed.toLocaleTimeString()}
-            </span>
-          )}
-          <Button
-            onClick={() => { void fetchAll(); }}
-            variant="secondary"
-            size="sm"
-            className="flex items-center gap-2"
-          >
-            <RefreshCw className="w-4 h-4" />
-            Refresh
-          </Button>
-        </div>
-      </div>
+      <PageHeader
+        title="Office"
+        accent="Cockpit"
+        subtitle={<>Everything stuck or wrong &mdash; one screen, no report-running.</>}
+        actions={
+          <div className="flex items-center gap-3">
+            <Button
+              onClick={() => navigate('/payments')}
+              variant="ghost"
+              size="sm"
+            >
+              Record payments &rarr;
+            </Button>
+            {lastRefreshed && (
+              <span className="text-xs text-gray-400">
+                Updated {lastRefreshed.toLocaleTimeString()}
+              </span>
+            )}
+            <Button
+              onClick={() => { void fetchAll(); }}
+              variant="secondary"
+              size="sm"
+              className="flex items-center gap-2"
+            >
+              <RefreshCw className="w-4 h-4" />
+              Refresh
+            </Button>
+          </div>
+        }
+      />
 
       {/* All-clear banner when nothing is wrong */}
       {totalExceptions === 0 && (

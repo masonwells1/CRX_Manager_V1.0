@@ -7,6 +7,7 @@ import Input from '../components/ui/Input';
 import Modal from '../components/ui/Modal';
 import ConfirmModal from '../components/ui/ConfirmModal';
 import DataTable, { type Column } from '../components/ui/DataTable';
+import PageHeader from '../components/ui/PageHeader';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, checkMutationResult, assertRpcResult } from '../lib/db';
@@ -390,12 +391,15 @@ export default function BlendRecipes() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h2 className="text-xl font-semibold font-heading text-nav-dark">Blend Recipes</h2>
-        <Button icon={<Plus className="w-4 h-4" />} onClick={() => openEditor()}>
-          New Recipe
-        </Button>
-      </div>
+      <PageHeader
+        title="Blend"
+        accent="Recipes"
+        actions={(
+          <Button icon={<Plus className="w-4 h-4" />} onClick={() => openEditor()}>
+            New Recipe
+          </Button>
+        )}
+      />
 
       <Card padding={false}>
         <div className="p-5">

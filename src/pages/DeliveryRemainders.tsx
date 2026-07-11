@@ -15,6 +15,7 @@ import { supabase, assertRpcResult } from '../lib/db';
 import { Sentry } from '../lib/sentry';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import HelpTip from '../components/ui/HelpTip';
+import PageHeader from '../components/ui/PageHeader';
 
 interface RemainderRow {
   id: string;
@@ -250,10 +251,11 @@ export default function DeliveryRemainders() {
 
   return (
     <div className="space-y-4">
-      <h2 className="text-xl font-semibold font-heading text-nav-dark">
-        Delivery Remainders
-        <HelpTip text="Items that couldn't be fully delivered. These are automatically created when a delivery is completed with less than the ordered quantity. Group by customer to create follow-up deliveries." className="ml-1" />
-      </h2>
+      <PageHeader
+        title="Delivery"
+        accent="Remainders"
+        subtitle={<HelpTip text="Items that couldn't be fully delivered. These are automatically created when a delivery is completed with less than the ordered quantity. Group by customer to create follow-up deliveries." />}
+      />
 
       {/* Summary */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

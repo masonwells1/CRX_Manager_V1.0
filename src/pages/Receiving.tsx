@@ -3,6 +3,7 @@ import ReceivingHubPanel from '../components/receiving/ReceivingHubPanel';
 import ReceivingLogPanel from '../components/receiving/ReceivingLogPanel';
 import QuickReceivePanel from '../components/receiving/QuickReceivePanel';
 import Tabs, { type TabItem } from '../components/ui/Tabs';
+import PageHeader from '../components/ui/PageHeader';
 
 type ReceivingTab = 'hub' | 'quick' | 'log';
 
@@ -37,12 +38,10 @@ export default function Receiving() {
 
   return (
     <div className="space-y-5">
-      <div>
-        <h1 className="text-2xl font-semibold font-heading text-nav-dark">Receiving</h1>
-        <p className="mt-1 text-sm text-secondary">
-          Review inbound purchase orders, receive shipments, and audit receiving history.
-        </p>
-      </div>
+      <PageHeader
+        title="Receiving"
+        subtitle="Review inbound purchase orders, receive shipments, and audit receiving history."
+      />
 
       <Tabs
         tabs={tabs}

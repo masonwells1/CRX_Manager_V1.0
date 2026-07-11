@@ -26,6 +26,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { Sentry } from '../lib/sentry';
 import { formatLocalDate } from '../lib/dateUtils';
+import PageHeader from '../components/ui/PageHeader';
 import Badge, { type BadgeVariant } from '../components/ui/Badge';
 import type {
   WatchdogFlag,
@@ -164,24 +165,21 @@ export default function WatchdogExceptions() {
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <div className="p-6 max-w-5xl mx-auto space-y-6">
-      {/* Header */}
-      <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div>
-          <h1 className="text-xl font-semibold text-primary flex items-center gap-2">
-            <AlertTriangle className="w-5 h-5 text-amber-500" />
-            Watchdog Exceptions
-          </h1>
-          <p className="text-sm text-secondary mt-1">
+      <PageHeader
+        title="Watchdog"
+        accent="Exceptions"
+        subtitle={(
+          <>
             Advisory flags for suspicious jobs and invoices — never blocks workflow.
             {lastRefreshed && (
               <span className="ml-2 text-xs text-tertiary">
                 Last swept: {formatLocalDate(lastRefreshed)}
               </span>
             )}
-          </p>
-        </div>
-
-        <div className="flex items-center gap-3">
+          </>
+        )}
+        actions={(
+          <div className="flex items-center gap-3">
           <label className="flex items-center gap-2 text-sm text-secondary cursor-pointer select-none">
             <input
               type="checkbox"
@@ -203,8 +201,9 @@ export default function WatchdogExceptions() {
             <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
             {refreshing ? 'Sweeping…' : 'Run sweep'}
           </button>
-        </div>
-      </div>
+          </div>
+        )}
+      />
 
       {/* Sweep summary */}
       {refreshSummary && (

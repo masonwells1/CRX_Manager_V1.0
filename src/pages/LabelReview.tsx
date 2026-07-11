@@ -13,7 +13,6 @@
  */
 import { useEffect, useState, useCallback } from 'react';
 import {
-  FlaskConical,
   CheckCircle,
   XCircle,
   Edit3,
@@ -26,6 +25,7 @@ import {
   Plus,
 } from 'lucide-react';
 import Card from '../components/ui/Card';
+import PageHeader from '../components/ui/PageHeader';
 import Button from '../components/ui/Button';
 import Badge, { type BadgeVariant } from '../components/ui/Badge';
 import Input from '../components/ui/Input';
@@ -493,19 +493,17 @@ export default function LabelReview() {
 
   return (
     <div className="max-w-7xl mx-auto px-4 py-6 space-y-6">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold text-ink flex items-center gap-2">
-            <FlaskConical className="w-6 h-6 text-crx-green" />
-            Label Review Queue
-          </h1>
-          <p className="text-sm text-muted mt-1">
+      <PageHeader
+        title="Label Review"
+        accent="Queue"
+        subtitle={(
+          <>
             Review AI-drafted label safety data before it is written to products.
             No value is applied without your explicit acceptance.
-          </p>
-        </div>
-        <div className="flex gap-2">
+          </>
+        )}
+        actions={(
+          <div className="flex gap-2">
           <Button
             variant="secondary"
             onClick={() => {
@@ -523,8 +521,9 @@ export default function LabelReview() {
           <Button variant="secondary" onClick={() => { void loadDrafts(); }} title="Refresh">
             <RefreshCw className="w-4 h-4" />
           </Button>
-        </div>
-      </div>
+          </div>
+        )}
+      />
 
       {/* Safety notice */}
       <div className="flex items-start gap-3 bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-sm text-amber-900">

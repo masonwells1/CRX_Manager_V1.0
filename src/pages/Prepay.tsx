@@ -2,6 +2,7 @@ import { useSearchParams } from 'react-router-dom';
 import PrepayWorkspacePanel from '../components/prepay/PrepayWorkspacePanel';
 import PrepaymentManagerPanel from '../components/prepay/PrepaymentManagerPanel';
 import Tabs, { type TabItem } from '../components/ui/Tabs';
+import PageHeader from '../components/ui/PageHeader';
 
 type PrepayTab = 'workspace' | 'manager';
 
@@ -34,12 +35,10 @@ export default function Prepay() {
 
   return (
     <div className="space-y-5">
-      <div>
-        <h1 className="text-2xl font-semibold font-heading text-nav-dark">Prepay</h1>
-        <p className="mt-1 text-sm text-secondary">
-          Allocate customer prepay buckets and manage available prepayment credits.
-        </p>
-      </div>
+      <PageHeader
+        title="Prepay"
+        subtitle="Allocate customer prepay buckets and manage available prepayment credits."
+      />
 
       <Tabs
         tabs={tabs}

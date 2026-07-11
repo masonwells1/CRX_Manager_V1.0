@@ -20,6 +20,7 @@ import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import BulkActionBar from '../components/ui/BulkActionBar';
 import BulkDeleteConfirmModal from '../components/ui/BulkDeleteConfirmModal';
 import HelpTip from '../components/ui/HelpTip';
+import PageHeader from '../components/ui/PageHeader';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, assertRpcResult } from '../lib/db';
@@ -455,13 +456,12 @@ export default function PurchaseOrders() {
 
   return (
     <div className="space-y-4">
-      {/* Header + Actions */}
-      <div className="flex items-center justify-between flex-wrap gap-2">
-        <div className="flex-1 flex items-center gap-3">
-          <h2 className="text-xl font-semibold font-heading text-nav-dark">
-            Purchase Orders
-            <HelpTip text="Manage supplier purchase orders. Use the 'Outstanding Items' tab to see all products still awaiting delivery across all POs — no need to check each PO individually." className="ml-1" />
-          </h2>
+      <PageHeader
+        title="Purchase"
+        accent="Orders"
+        subtitle={<HelpTip text="Manage supplier purchase orders. Use the 'Outstanding Items' tab to see all products still awaiting delivery across all POs — no need to check each PO individually." />}
+        actions={(
+          <>
           {activeTab === 'all' && canBulkAction && (
             <BulkActionBar
               selectedCount={selectedCount}
@@ -469,7 +469,6 @@ export default function PurchaseOrders() {
               onDeselectAll={clearSelection}
             />
           )}
-        </div>
         {isAdmin && activeTab === 'all' && (
           <div className="flex gap-2">
             <Button
@@ -507,7 +506,9 @@ export default function PurchaseOrders() {
             </Button>
           </div>
         )}
-      </div>
+          </>
+        )}
+      />
 
       {/* Tab Toggle */}
       <div className="flex border-b border-gray-200">

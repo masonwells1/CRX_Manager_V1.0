@@ -21,6 +21,7 @@ import { formatUSD as fmt } from '../lib/money';
 import { downloadReportPdf, type ReportPdfColumn } from '../lib/reportPdf';
 import { SkeletonTable } from '../components/ui/Skeleton';
 import HelpTip from '../components/ui/HelpTip';
+import PageHeader from '../components/ui/PageHeader';
 import type { Product } from '../types';
 
 export default function Products() {
@@ -569,12 +570,11 @@ export default function Products() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between flex-wrap gap-2">
-        <div className="flex-1 flex items-center gap-3">
-          <h2 className="text-xl font-semibold font-heading text-nav-dark">
-            Products
-            <HelpTip text="Your product master list. Set tier pricing (1/2/3) for customer-specific pricing, mark products as RUP for compliance tracking, and manage unit sizes. Edit inline by clicking any editable cell." className="ml-1" />
-          </h2>
+      <PageHeader
+        title="Products"
+        subtitle={<HelpTip text="Your product master list. Set tier pricing (1/2/3) for customer-specific pricing, mark products as RUP for compliance tracking, and manage unit sizes. Edit inline by clicking any editable cell." />}
+        actions={(
+          <>
           {canBulkAction && (
             <BulkActionBar
               selectedCount={selectedCount}
@@ -582,8 +582,7 @@ export default function Products() {
               onDeselectAll={clearSelection}
             />
           )}
-        </div>
-        <div className="flex gap-2">
+          <div className="flex gap-2">
           {/* Download All dropdown */}
           <div className="relative">
             <Button
@@ -642,8 +641,10 @@ export default function Products() {
               </Button>
             </>
           )}
-        </div>
-      </div>
+          </div>
+          </>
+        )}
+      />
 
       <Card padding={false}>
         <div className="p-5">

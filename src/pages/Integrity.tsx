@@ -2,6 +2,7 @@ import { useSearchParams } from 'react-router-dom';
 import IntegrityReportPanel from '../components/integrity/IntegrityReportPanel';
 import IntegrityCleanupPanel from '../components/integrity/IntegrityCleanupPanel';
 import Tabs, { type TabItem } from '../components/ui/Tabs';
+import PageHeader from '../components/ui/PageHeader';
 
 type IntegrityTab = 'report' | 'cleanup';
 
@@ -33,12 +34,11 @@ export default function Integrity() {
 
   return (
     <div className="space-y-5">
-      <div>
-        <h1 className="text-2xl font-semibold font-heading text-nav-dark">Data Integrity</h1>
-        <p className="mt-1 text-sm text-secondary">
-          Review reconciliation checks and resolve data conditions that need attention.
-        </p>
-      </div>
+      <PageHeader
+        title="Data"
+        accent="Integrity"
+        subtitle="Review reconciliation checks and resolve data conditions that need attention."
+      />
 
       <Tabs
         tabs={tabs}

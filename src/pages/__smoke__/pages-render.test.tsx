@@ -221,6 +221,8 @@ const COVERED = new Set<string>([
   'InventoryPage',
   'InvoiceDetail',
   'Invoices',
+  'Orders',
+  'Quotes',
 ]);
 
 function pickComponent(mod: Record<string, unknown>): React.ComponentType | null {

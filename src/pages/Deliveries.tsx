@@ -23,6 +23,7 @@ import CustomerDrawer from '../components/customers/CustomerDrawer';
 import { hasPageAccess } from '../lib/pagePermissions';
 import Modal from '../components/ui/Modal';
 import Button from '../components/ui/Button';
+import PageHeader from '../components/ui/PageHeader';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import { useToast } from '../components/ui/Toast';
@@ -1164,10 +1165,10 @@ export default function Deliveries() {
 
   return (
     <div className="space-y-4">
-      {/* Header + Actions */}
-      <div className="flex items-center justify-between flex-wrap gap-2">
-        <div className="flex items-center gap-3">
-          <h2 className="text-xl font-semibold font-heading text-nav-dark">Deliveries</h2>
+      <PageHeader
+        title="Deliveries"
+        actions={(
+          <>
           <div className="flex rounded-lg border border-gray-200 overflow-hidden">
             <button
               onClick={() => setViewMode('list')}
@@ -1194,8 +1195,7 @@ export default function Deliveries() {
               Calendar
             </button>
           </div>
-        </div>
-        <div className="flex gap-2 flex-wrap justify-end">
+          <div className="flex gap-2 flex-wrap justify-end">
           <Button
             variant="secondary"
             size="sm"
@@ -1261,8 +1261,10 @@ export default function Deliveries() {
               Schedule Delivery
             </Button>
           )}
-        </div>
-      </div>
+          </div>
+          </>
+        )}
+      />
 
       {/* Summary Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">

@@ -22,6 +22,7 @@ import { sanitizeError } from '../lib/errorSanitizer';
 import { Sentry } from '../lib/sentry';
 import { SkeletonTable } from '../components/ui/Skeleton';
 import HelpTip from '../components/ui/HelpTip';
+import PageHeader from '../components/ui/PageHeader';
 import { notifyLargeOrder, notifyCreditLimitExceeded } from '../lib/notificationTriggers';
 import { sendOrderConfirmedEmail } from '../lib/orderConfirmedEmail';
 import { trackBusinessEvent } from '../lib/metrics';
@@ -517,30 +518,32 @@ export default function Quotes() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between flex-wrap gap-2">
-        <div className="flex-1 flex items-center gap-3">
-          <h2 className="text-xl font-semibold font-heading text-nav-dark">Quotes</h2>
-          {canBulkAction && (
-            <BulkActionBar
-              selectedCount={selectedCount}
-              actions={bulkActions}
-              onDeselectAll={clearSelection}
-            />
-          )}
-        </div>
-        <div className="flex gap-2">
-          <Button
-            variant="secondary"
-            icon={<Upload className="w-4 h-4" />}
-            onClick={() => setImportModalOpen(true)}
-          >
-            Bulk Import
-          </Button>
-          <Button icon={<Plus className="w-4 h-4" />} onClick={() => navigate('/quotes/new')}>
-            New Quote
-          </Button>
-        </div>
-      </div>
+      <PageHeader
+        title="Quotes"
+        actions={
+          <>
+            {canBulkAction && (
+              <BulkActionBar
+                selectedCount={selectedCount}
+                actions={bulkActions}
+                onDeselectAll={clearSelection}
+              />
+            )}
+            <div className="flex gap-2">
+              <Button
+                variant="secondary"
+                icon={<Upload className="w-4 h-4" />}
+                onClick={() => setImportModalOpen(true)}
+              >
+                Bulk Import
+              </Button>
+              <Button icon={<Plus className="w-4 h-4" />} onClick={() => navigate('/quotes/new')}>
+                New Quote
+              </Button>
+            </div>
+          </>
+        }
+      />
 
       <BulkQuoteImport
         open={importModalOpen}
