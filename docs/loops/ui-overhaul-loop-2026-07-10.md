@@ -26,6 +26,7 @@ Auto-push of green frontend-only phases to `main` is AUTHORIZED by Mason (2026-0
 - **Codex self-review**: after building, the SAME Codex invocation (or a follow-up `codex exec`) must review its own diff against the unit's acceptance checklist and fix its findings BEFORE handing off.
 - **Claude review + implement**: Claude reads the diff, verifies against acceptance criteria, runs the unit through `npm run typecheck && npm run lint && npm run test && npm run build`, and actually RENDERS the affected page (vitest render test or dev-server check) before counting it done.
 - Hard cap: 3 build→review rounds per unit; if still failing, PARK it in the ledger and move on.
+- **Builder fallback (Mason, 2026-07-10):** if Codex CLI fails on credits/quota/rate-limit, switch builders to Claude Sonnet subagents (Agent tool, model sonnet) with the same build→self-review→hand-off contract. Do NOT stop the loop. Note the switch in the ledger.
 - Known gotchas: 600s bash cap kills long builds (run Codex builds with run_in_background); page tests flake in full suite (use waitFor/findAllBy); use `&mdash;` in JSX; `npm run typecheck` is the only real typecheck.
 
 ## Phase 1 — One true home screen

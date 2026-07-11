@@ -12,7 +12,7 @@
 | 1.1 Merge Dashboard KPIs/inventory/quick-actions into OfficeCockpit (queues on top) | 1 | DONE @c0bb5089 | gpt-5.6-terra | 2 | render test + 4 gates green |
 | 1.2 Slim Dashboard to pure reports page | 1 | DONE @c0bb5089 (Codex merged into 1.1) | gpt-5.6-terra | 2 | same gates |
 | 2.0 Shared Tabs primitive + tests | 2 | DONE | gpt-5.6-sol | 1 | typecheck + 4/4 Tabs tests (render, switch, keyboard, badges) |
-| 2.1 Field-invoice consolidation (5 pages → 1 tabbed) | 2 | QUEUED | terra | — | — |
+| 2.1 Field-invoice consolidation (5 pages → 1 tabbed) | 2 | DONE | gpt-5.6-terra | 1 | net −3,000 lines; redirects live; 3216 tests + 4 gates green; Codex dev-server route check (login wall = expected) |
 | 2.2 Receiving consolidation (3 → 1) | 2 | QUEUED | sol | — | — |
 | 2.3 Prepay consolidation (2 → 1) | 2 | QUEUED | sol | — | — |
 | 2.4 Integrity consolidation (2 → 1) | 2 | QUEUED | luna | — | — |

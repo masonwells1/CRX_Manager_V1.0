@@ -147,7 +147,6 @@ const officeNavigation: NavEntry[] = [
         { path: '/accounts-receivable', label: 'A/R Workspace', icon: <CreditCard className="w-4 h-4" />, roles: ['admin'] },
         { path: '/prepay-workspace', label: 'Prepay Workspace', icon: <ArrowLeftRight className="w-4 h-4" />, roles: ['admin'] },
         { path: '/accounts-payable', label: 'A/P & Vendor Bills', icon: <Receipt className="w-4 h-4" />, roles: ['admin'] },
-        { path: '/field-invoices/summary', label: 'Unposted Invoice Summary', icon: <ClipboardList className="w-4 h-4" /> },
         { path: '/commission-payments', label: 'Commissions', icon: <Banknote className="w-4 h-4" />, roles: ['admin'] },
         { path: '/rebates', label: 'Rebates', icon: <BadgeDollarSign className="w-4 h-4" />, roles: ['admin'] },
         { path: '/month-end', label: 'Month-End Close', icon: <CalendarCheck className="w-4 h-4" />, roles: ['admin'] },

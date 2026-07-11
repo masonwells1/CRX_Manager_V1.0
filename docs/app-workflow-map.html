@@ -649,35 +649,11 @@ const NODES = [
       "problem": false
     },
     {
-      "id": "field-invoices-unposted",
-      "label": "FieldInvoicesUnposted",
+      "id": "navigate",
+      "label": "Navigate",
       "type": "page-sales",
       "group": "Customers",
       "path": "/field-invoices/unposted",
-      "problem": false
-    },
-    {
-      "id": "field-invoices-posted",
-      "label": "FieldInvoicesPosted",
-      "type": "page-sales",
-      "group": "Customers",
-      "path": "/field-invoices/posted",
-      "problem": false
-    },
-    {
-      "id": "unbilled-applications",
-      "label": "UnbilledApplications",
-      "type": "page-sales",
-      "group": "Customers",
-      "path": "/field-invoices/unbilled",
-      "problem": false
-    },
-    {
-      "id": "customer-invoice-summary",
-      "label": "CustomerInvoiceSummary",
-      "type": "page-sales",
-      "group": "Customers",
-      "path": "/field-invoices/summary",
       "problem": false
     },
     {
@@ -1391,11 +1367,6 @@ const EDGES = [
       "type": "nav"
     },
     {
-      "s": "customer-invoice-summary",
-      "t": "field-invoices",
-      "type": "nav"
-    },
-    {
       "s": "customers",
       "t": "customer-detail",
       "type": "nav"
@@ -1503,51 +1474,6 @@ const EDGES = [
     {
       "s": "field-dashboard",
       "t": "field-setup",
-      "type": "nav"
-    },
-    {
-      "s": "field-invoices",
-      "t": "customer-detail",
-      "type": "nav"
-    },
-    {
-      "s": "field-invoices",
-      "t": "field-invoices-unposted",
-      "type": "nav"
-    },
-    {
-      "s": "field-invoices",
-      "t": "field-invoices-posted",
-      "type": "nav"
-    },
-    {
-      "s": "field-invoices",
-      "t": "unbilled-applications",
-      "type": "nav"
-    },
-    {
-      "s": "field-invoices",
-      "t": "customer-invoice-summary",
-      "type": "nav"
-    },
-    {
-      "s": "field-invoices",
-      "t": "field-application-invoice",
-      "type": "nav"
-    },
-    {
-      "s": "field-invoices-posted",
-      "t": "field-invoices",
-      "type": "nav"
-    },
-    {
-      "s": "field-invoices-unposted",
-      "t": "field-invoices",
-      "type": "nav"
-    },
-    {
-      "s": "field-invoices-unposted",
-      "t": "field-application-invoice",
       "type": "nav"
     },
     {
@@ -1747,7 +1673,7 @@ const EDGES = [
     },
     {
       "s": "office-cockpit",
-      "t": "unbilled-applications",
+      "t": "navigate",
       "type": "nav"
     },
     {
@@ -1768,11 +1694,6 @@ const EDGES = [
     {
       "s": "office-cockpit",
       "t": "quote-builder",
-      "type": "nav"
-    },
-    {
-      "s": "office-cockpit",
-      "t": "field-invoices-unposted",
       "type": "nav"
     },
     {
@@ -1981,11 +1902,6 @@ const EDGES = [
       "type": "nav"
     },
     {
-      "s": "unbilled-applications",
-      "t": "field-invoices",
-      "type": "nav"
-    },
-    {
       "s": "vehicle-detail",
       "t": "vehicles",
       "type": "nav"
@@ -2097,11 +2013,6 @@ const EDGES = [
     },
     {
       "s": "field-application-invoice",
-      "t": "r-invoice",
-      "type": "rpc"
-    },
-    {
-      "s": "field-invoices-unposted",
       "t": "r-invoice",
       "type": "rpc"
     },
@@ -2278,11 +2189,6 @@ const EDGES = [
     {
       "s": "to-ship",
       "t": "r-inventory",
-      "type": "rpc"
-    },
-    {
-      "s": "unbilled-applications",
-      "t": "r-job",
       "type": "rpc"
     },
     {
