@@ -3,6 +3,7 @@
 // Detects requests for Claude and Codex to both review the same work.
 
 import { readFileSync } from "node:fs";
+import { isMachineGenerated, PUSH_POLICY } from "./prompt-source-lib.mjs";
 
 function emit(extra) {
   if (extra) {
@@ -22,6 +23,10 @@ try {
 } catch {
   emit();
 }
+
+// Machine-generated envelopes (<task-notification>, <system-reminder>, slash-command
+// output) are not something Mason typed — stay silent on them.
+if (isMachineGenerated(payload?.prompt)) emit();
 
 const prompt = String(payload?.prompt || "").toLowerCase();
 if (!prompt) emit();
@@ -50,7 +55,7 @@ emit([
   "- Reconcile findings into agree / disagree / needs-more-evidence.",
   "- Keep BLOCKER/HIGH disagreements visible for Mason instead of silently choosing one model.",
   "",
-  "Hard gates remain in force: Do not push, deploy, apply live migrations, delete data, or commit without Mason's explicit approval in the current conversation.",
+  PUSH_POLICY,
   "",
   "Source of truth: C:\\CRX_Manager\\.claude\\commands\\agent-pair-review.md",
 ].join("\n"));

@@ -13,7 +13,7 @@
 import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
-import { isGitPush, riskyFiles, proofValid } from "./codex-push-lib.mjs";
+import { isGitPush, mainPushSource, riskyFiles, proofValid } from "./codex-push-lib.mjs";
 
 function passthrough() { process.exit(0); }               // emit nothing → normal flow (git push is allow-listed)
 function deny(reason) {
@@ -32,22 +32,33 @@ function git(args) {
   return execFileSync("git", args, { encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"], cwd: projectDir }).trim();
 }
 
-// Only gate pushes FROM main (prod). Feature-branch pushes are fine.
+// Only gate pushes that LAND ON main (prod) — including HEAD:main / feature:main
+// refspecs from any branch. The diff AND the proof bind to the ref actually being
+// pushed (Codex 2026-07-05: `git push origin release:main` used to be checked
+// against HEAD — the wrong content). Pushes to other branches are fine.
 let branch = "";
 try { branch = git(["rev-parse", "--abbrev-ref", "HEAD"]); } catch { passthrough(); }
-if (branch !== "main") passthrough();
+const srcRef = mainPushSource(cmd, branch);
+if (!srcRef) passthrough();
+if (srcRef === "DELETE") {
+  deny("CODEX GATE: `git push origin :main` DELETES the production main branch. Never do this. If a bad commit landed, use the /rollback runbook (compensating commit / Vercel promote-previous) instead.");
+}
 
 // Need origin/main to diff against; if absent, fail open.
 try { git(["rev-parse", "--verify", "--quiet", "origin/main"]); } catch { passthrough(); }
 
+// Resolve the PUSHED ref; if git can't resolve it, the push itself will fail —
+// let git report that (fail-open).
+let srcSha = "";
+try { srcSha = git(["rev-parse", "--verify", srcRef === "HEAD" ? "HEAD" : srcRef]); } catch { passthrough(); }
+
 let files = [];
-try { files = git(["diff", "--name-only", "origin/main...HEAD"]).split("\n").map((s) => s.trim()).filter(Boolean); } catch { passthrough(); }
+try { files = git(["diff", "--name-only", `origin/main...${srcSha}`]).split("\n").map((s) => s.trim()).filter(Boolean); } catch { passthrough(); }
 
 const risky = riskyFiles(files);
 if (risky.length === 0) passthrough(); // ordinary code push — auto-push authorized, allow
 
-let headSha = "";
-try { headSha = git(["rev-parse", "HEAD"]); } catch { headSha = ""; }
+const headSha = srcSha; // proof binds to the pushed ref's sha
 
 // Look for a valid, HEAD-bound, recent Codex proof.
 const stateDir = path.join(projectDir, ".claude", "session-state");

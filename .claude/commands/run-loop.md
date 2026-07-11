@@ -1,0 +1,52 @@
+Standard launcher for any mission loop — the one way to start "run the X loop" or "read docs/loops/Y.md and execute it". Mason's recorded loop-harness spec applies here (memory: `feedback_capture-loop-harness-spec`): every loop confirms **Driver, Granularity, Worktree, Definition of done, Delivery gate** before any code runs — **no ad-hoc variants**. This command turns that spec into a checked launch sequence instead of something to remember.
+
+**The mission doc** is everything after `/run-loop` (e.g. `/run-loop docs/loops/structure-wave-2-loop-2026-07-02.md`). If Mason named a loop instead of a path ("run the structure wave loop"), find the matching doc in `docs/loops/` and confirm the match to him in one line before proceeding.
+
+## Step 1: Validate the mission doc (HARD STOP on failure)
+
+```bash
+node scripts/validate-mission-doc.mjs docs/loops/<mission>.md
+```
+
+- **Exit 0** ("MISSION DOC OK") → continue. Surface any ⚠ warnings (worktree path missing on disk, or checked out on a different branch than the doc states) to Mason in the Step 3 summary — warnings don't block, but he should see them.
+- **Exit non-zero** → **STOP. Do not launch. Do not "run it anyway".** The validator prints a fill-in template naming the missing slot(s) — fix the doc **with Mason** (these are his calls: who drives, how big a cycle is, which worktree, when it ends, what stays gated), then re-run Step 1. If the doc lacks the 5 slots, the validator already failed it by design — that is the loop-harness spec working, not an obstacle to route around.
+
+## Step 2: Collision check (parallel sessions are real here)
+
+```bash
+git worktree list
+```
+
+Mason runs many concurrent sessions/worktrees. Compare the list against the worktree + branch the mission doc states:
+
+- Another session appears to be working **in the same worktree** (its branch has recent commits not from you, the tree has fresh WIP that isn't yours, or the worktree is checked out on a different branch than the doc states) → **STOP and ask Mason** which session owns it. Never assume; never launch two sessions into one tree (see memory: `project_parallel-sessions-collision-check`).
+- The worktree doesn't exist yet and the doc's Step 0 says to create it → creating it is part of executing the doc (Step 4), not a blocker.
+
+## Step 3: Echo a 3-line plain-English launch summary
+
+Before executing anything, tell Mason exactly what he's getting — pulled from the doc, not paraphrased from memory:
+
+```
+Driver:             <who drives each cycle + who reviews — e.g. "Claude implements, Codex reviews every cycle, no owner input unless needed">
+Definition of done: <what ends the loop — e.g. "every worklist item DONE (proven + Codex-clean + committed) or PARKED with reason; ledger complete">
+Delivery gate:      <what will NOT happen without his OK — e.g. "no live migration apply, no edge-fn deploy, no data deletion, no merge/push to main">
+```
+
+If Mason is present, a one-word go ("go" / "run it") is enough. If this is an armed unattended run (autopilot flag verified, not assumed), print the summary and proceed.
+
+## Step 4: Execute the mission doc start-to-finish
+
+Follow the doc **exactly as written** — its hard gates, per-cycle protocol, worklist order, and ledger requirements are the contract. While executing:
+
+- **Keep momentum on reversible work.** Don't pause to ask "should I keep going?" between cycles.
+- **Pause ONLY at the hard gates:** applying a live migration, deploying an edge function, or deleting data — each needs Mason's explicit OK in the current conversation (and the doc may gate more, e.g. "never push to main"; the doc's gates add to these, never replace them).
+- **Stop/pause from Mason = hard halt.** Checkpoint the ledger, then stop (see memory: `feedback_stop-pause-scope-are-hard-halts`).
+- **Prove each cycle ran** per the doc's protocol (PROOF — Ran: … · Saw: … lines in the ledger) — tests passing alone is not proof.
+- At the end, land the doc's definition-of-done deliverables (ledger handoff, parked-migration apply-order, plain-English summary for Mason) before declaring the loop finished.
+
+## Hard Rules
+
+- NEVER skip or soften Step 1. A mission doc that fails validation does not run — period.
+- NEVER launch into a worktree another session may own without Mason's answer.
+- NEVER invent an ad-hoc loop variant because the doc is incomplete — incomplete docs go back to Mason.
+- The three irreversible actions (live migration apply / edge-fn deploy / data deletion) stay gated no matter what the mission doc says.

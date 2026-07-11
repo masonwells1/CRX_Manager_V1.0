@@ -3,7 +3,11 @@
 // Run: node .claude/hooks/worktree-awareness-lib.test.mjs
 
 import assert from "node:assert/strict";
-import { parseWorktreePorcelain, siblingsOf, normPath } from "./worktree-awareness-lib.mjs";
+import {
+  parseWorktreePorcelain, siblingsOf, normPath,
+  mergedLabelFromStatus, isLedgerDoc, isParkedMigrationFile, isDraftSqlName,
+  lastNonEmptyLine, firstCommentLine, fleetSummaryLine,
+} from "./worktree-awareness-lib.mjs";
 
 let pass = 0;
 function ok(cond, msg) { assert.ok(cond, msg); pass++; }
@@ -48,5 +52,50 @@ ok(!sibs.some((s) => normPath(s.path) === "c:/crx_manager"), "current not in sib
 
 // no siblings when only the current worktree exists
 eq(siblingsOf([entries[0]], "C:/CRX_Manager").length, 0, "solo → no siblings");
+
+// ── fleet helpers (shared with scripts/fleet-status.mjs) ──
+
+// merged-label classification from merge-base exit status
+eq(mergedLabelFromStatus(0), "MERGED into origin/main", "status 0 → merged");
+eq(mergedLabelFromStatus(1), "UNMERGED (not in origin/main)", "status 1 → unmerged");
+eq(mergedLabelFromStatus(128), "merge-state unknown", "git error → unknown");
+eq(mergedLabelFromStatus(0, false), "merge-state unknown", "no origin/main → unknown");
+
+// ledger vs mission-doc classification
+ok(isLedgerDoc("structure-wave-2-ledger.md"), "ledger doc matched");
+ok(isLedgerDoc("Inventory-Layer2-Loop-LEDGER-2026-07-02.md"), "ledger match is case-insensitive");
+ok(!isLedgerDoc("structure-wave-2-loop-2026-07-02.md"), "mission doc is not a ledger");
+ok(!isLedgerDoc("some-ledger.txt"), "non-md file ignored");
+
+// parked-migration classification
+ok(isParkedMigrationFile("20260707120000_add_thing.sql"), "staged .sql counts as parked");
+ok(!isParkedMigrationFile("SUPERSEDED-20260611080937_sweep.sql"), "SUPERSEDED drafts are not awaiting apply");
+ok(!isParkedMigrationFile("notes.md"), "non-sql file ignored");
+ok(isDraftSqlName("2026-07-01-per-acre-draft.sql"), "audits *draft*.sql counts as parked");
+ok(!isDraftSqlName("2026-07-01-review-final.sql"), "audits sql without 'draft' ignored");
+
+// last non-empty line (ledger tail) + truncation
+eq(lastNonEmptyLine("first\nsecond\n\n   \n"), "second", "skips trailing blank lines");
+eq(lastNonEmptyLine(""), "", "empty text → empty string");
+const longTail = lastNonEmptyLine("x".repeat(200));
+eq(longTail.length, 120, "long line truncated to 120 chars");
+ok(longTail.endsWith("…"), "truncated line ends with ellipsis");
+
+// first comment line of a SQL draft
+eq(firstCommentLine("-- fix per-acre units\nCREATE TABLE x ();"), "fix per-acre units", "leading -- comment extracted");
+eq(firstCommentLine("\nCREATE TABLE x ();"), "CREATE TABLE x ();", "no comment → first non-empty line");
+eq(firstCommentLine(""), "", "empty sql → empty string");
+
+// fleet summary line (singular/plural)
+eq(
+  fleetSummaryLine(1, 1),
+  "Fleet: 1 loop ledger active · 1 parked migration awaiting apply — run /fleet for the full picture",
+  "fleet line singular"
+);
+eq(
+  fleetSummaryLine(3, 0),
+  "Fleet: 3 loop ledgers active · 0 parked migrations awaiting apply — run /fleet for the full picture",
+  "fleet line plural + zero"
+);
 
 console.log(`worktree-awareness-lib: ${pass} assertions passed`);

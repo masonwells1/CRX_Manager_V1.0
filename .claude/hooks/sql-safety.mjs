@@ -19,7 +19,7 @@
 //   Marker `-- sql-safety: exempt-registry` skips rules 6-8 only (rules 1-5 always run).
 //   Rules 6-8 fail-open when the registry is missing or still v1-shaped.
 
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
@@ -47,6 +47,31 @@ if (!filePath.endsWith(".sql") || !filePath.includes("supabase/migrations/")) {
 
 const content = payload?.tool_input?.content || payload?.tool_input?.new_string || "";
 if (!content) out("allow");
+
+// ─── Registry-freshness gate (A8, 2026-07-04) ────────────────────────────
+// A live apply_migration this session contained registry-relevant DDL, so
+// registry-freshness.mjs (PostToolUse) wrote .claude/session-state/REGISTRY-STALE.flag.
+// Until the registry is refreshed, rules 6-8 below (and the 3 other registry-backed
+// hooks) are checking against a schema that no longer exists — block new migration
+// writes rather than validate them against stale data.
+// The existing `-- sql-safety: exempt-registry` marker skips this gate too.
+if (!/--\s*sql-safety:\s*exempt-registry/i.test(content)) {
+  try {
+    const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
+    const staleFlag = path.join(projectDir, ".claude", "session-state", "REGISTRY-STALE.flag");
+    if (existsSync(staleFlag)) {
+      out("block",
+        "REGISTRY STALE: the schema snapshot that powers the safety hooks (.claude/schema-registry.json) " +
+        "is stale from the last live apply — a migration changed the live database and the registry has not " +
+        "been refreshed, so every registry-backed check could be blind to what just changed. " +
+        "Refresh it FIRST via the /regen-schema-registry skill's live-introspection mode " +
+        "(the script's default mode only re-stamps the timestamp — that is NOT a refresh), " +
+        "verify the registry content actually changed, then delete .claude/session-state/REGISTRY-STALE.flag " +
+        "and retry this write. " +
+        "(Escape hatch: add `-- sql-safety: exempt-registry` with a justification comment, same as rules 6-8.)");
+    }
+  } catch { /* fail-open */ }
+}
 
 const violations = [];
 

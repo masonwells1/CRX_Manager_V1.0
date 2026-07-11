@@ -18,7 +18,7 @@ Mason does not type this command name. Treat plain-English requests like these a
 
 ## Branch, scope, state
 
-- **Branch:** the isolated debug branch in `C:\CRX_MainDebug` (currently `claude/main-debug-hunt`, based on `main`). Stay on it — never commit to `main` or any feature branch, and **never edit `C:\CRX_BeyondParity`** (Mason is actively building there).
+- **Branch:** an isolated debug branch (based on `main`) in a **fresh dedicated worktree** — check `git worktree list` live before starting; do NOT reuse a torn-down path (e.g. `C:\CRX_MainDebug` was torn down 2026-07-01 — a path that "exists" may be a revived or half-deleted leftover). Stay on the debug branch — never commit to `main` or any feature branch, and **never edit a sibling worktree another session is actively working in** (again: `git worktree list` is the source of truth, not memory).
 - **Scope order:** the billing / money engine first (where ~80% of past bugs lived), then a broad whole-app sweep. **1–3 subsystem keys per cycle** keeps Codex's hunt focused and under the timeout.
 - **State dir:** `docs/audits/codex-driven-bug-hunt/` — `LEDGER.json` (every candidate + dedupe key + tier + status), `REPORT.md` (Mason's morning read), `PHASE-PLAN.md` (subsystem queue + drained markers). Initialize them on the first run.
 

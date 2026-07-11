@@ -56,12 +56,43 @@
       "mcp__50e15046-cf2c-49da-b8df-ceef27768f63__generate_typescript_types",
       "mcp__50e15046-cf2c-49da-b8df-ceef27768f63__search_docs",
       "mcp__50e15046-cf2c-49da-b8df-ceef27768f63__execute_sql",
+      "mcp__supabase__list_tables",
+      "mcp__supabase__list_migrations",
+      "mcp__supabase__list_extensions",
+      "mcp__supabase__list_edge_functions",
+      "mcp__supabase__get_advisors",
+      "mcp__supabase__get_logs",
+      "mcp__supabase__get_project_url",
+      "mcp__supabase__get_publishable_keys",
+      "mcp__supabase__get_edge_function",
+      "mcp__supabase__generate_typescript_types",
+      "mcp__supabase__search_docs",
+      "mcp__supabase__execute_sql",
       "Bash(git push:*)",
       "Workflow",
       "ScheduleWakeup"
     ],
     "ask": [
-      "mcp__50e15046-cf2c-49da-b8df-ceef27768f63__deploy_edge_function"
+      "mcp__50e15046-cf2c-49da-b8df-ceef27768f63__deploy_edge_function",
+      "mcp__supabase__deploy_edge_function",
+      "mcp__50e15046-cf2c-49da-b8df-ceef27768f63__apply_migration",
+      "mcp__supabase__apply_migration",
+      "Bash(supabase functions deploy:*)",
+      "Bash(npx supabase functions deploy:*)",
+      "Bash(gh pr merge:*)",
+      "mcp__github__push_files",
+      "mcp__github__create_or_update_file",
+      "mcp__github__delete_file",
+      "mcp__github__merge_pull_request",
+      "mcp__Desktop_Commander__start_process",
+      "mcp__Desktop_Commander__interact_with_process",
+      "mcp__Desktop_Commander__write_file",
+      "mcp__Desktop_Commander__edit_block",
+      "mcp__Desktop_Commander__move_file",
+      "mcp__Desktop_Commander__set_config_value",
+      "mcp__filesystem__write_file",
+      "mcp__filesystem__edit_file",
+      "mcp__filesystem__move_file"
     ],
     "deny": [
       "Bash(git push --force:*)",
@@ -88,62 +119,62 @@
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/sql-safety.mjs\"",
-            "timeout": 5
+            "timeout": 15
           },
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/money-safety.mjs\"",
-            "timeout": 5
+            "timeout": 15
           },
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/idempotency-body-check.mjs\"",
-            "timeout": 5
+            "timeout": 15
           },
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/rls-on-new-tables.mjs\"",
-            "timeout": 5
+            "timeout": 15
           },
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/status-enum-check.mjs\"",
-            "timeout": 5
+            "timeout": 15
           },
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/generated-column-check.mjs\"",
-            "timeout": 5
+            "timeout": 15
           },
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/env-guard.mjs\"",
-            "timeout": 5
+            "timeout": 15
           },
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/grant-change-guard.mjs\"",
-            "timeout": 5
+            "timeout": 15
           }
         ]
       },
       {
-        "matcher": "Bash",
+        "matcher": "Bash|PowerShell",
         "hooks": [
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/bash-safety.mjs\"",
-            "timeout": 5
+            "timeout": 15
           },
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/active-area-guard.mjs\"",
-            "timeout": 5
+            "timeout": 15
           },
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/codex-push-guard.mjs\"",
-            "timeout": 5
+            "timeout": 15
           }
         ]
       },
@@ -153,22 +184,22 @@
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/migration-apply-guard.mjs\"",
-            "timeout": 5
+            "timeout": 15
           },
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/hold-latch-guard.mjs\"",
-            "timeout": 5
+            "timeout": 15
           },
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/live-testdata-guard.mjs\"",
-            "timeout": 5
+            "timeout": 15
           },
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/unattended-autopilot.mjs\"",
-            "timeout": 5
+            "timeout": 15
           }
         ]
       }
@@ -180,12 +211,22 @@
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/posttooluse-migration.mjs\"",
-            "timeout": 5
+            "timeout": 15
           },
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/eslint-autofix.mjs\"",
             "timeout": 20
+          }
+        ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/registry-freshness.mjs\"",
+            "timeout": 15
           }
         ]
       }
@@ -197,12 +238,12 @@
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/stop-verify.mjs\"",
-            "timeout": 5
+            "timeout": 15
           },
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/stop-wrap.mjs\"",
-            "timeout": 5
+            "timeout": 15
           }
         ]
       }
@@ -213,37 +254,37 @@
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/dangerous-phrase-warning.mjs\"",
-            "timeout": 5
+            "timeout": 15
           },
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/codex-gauntlet-reminder.mjs\"",
-            "timeout": 5
+            "timeout": 15
           },
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/agent-pair-review-reminder.mjs\"",
-            "timeout": 5
+            "timeout": 15
           },
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/codex-to-claude-handoff-reminder.mjs\"",
-            "timeout": 5
+            "timeout": 15
           },
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/ship-intent-reminder.mjs\"",
-            "timeout": 5
+            "timeout": 15
           },
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/hold-latch-prompt.mjs\"",
-            "timeout": 5
+            "timeout": 15
           },
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/autopilot-intent-reminder.mjs\"",
-            "timeout": 5
+            "timeout": 15
           }
         ]
       }
@@ -265,7 +306,7 @@
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/session-snapshot.mjs\"",
-            "timeout": 5
+            "timeout": 15
           },
           {
             "type": "command",

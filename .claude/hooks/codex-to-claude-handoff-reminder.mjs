@@ -4,6 +4,7 @@
 // Direct review is preferred; durable handoff stays available for continuation.
 
 import { readFileSync } from "node:fs";
+import { isMachineGenerated, PUSH_POLICY } from "./prompt-source-lib.mjs";
 
 function emit(extra) {
   if (extra) {
@@ -23,6 +24,10 @@ try {
 } catch {
   emit();
 }
+
+// Machine-generated envelopes (<task-notification>, <system-reminder>, slash-command
+// output) are not something Mason typed — stay silent on them.
+if (isMachineGenerated(payload?.prompt)) emit();
 
 const prompt = String(payload?.prompt || "").toLowerCase();
 if (!prompt) emit();
@@ -61,7 +66,7 @@ emit([
   "- Create a packet at docs/audits/<YYYY-MM-DD>-codex-to-claude-<slug>-handoff.md.",
   "- Tell Mason exactly: Open Claude in C:\\CRX_Manager and say: \"Read <handoff-path> and follow it.\"",
   "",
-  "Hard gates remain in force: Do not push, deploy, apply live migrations, delete data, or commit without Mason's explicit approval in the current conversation.",
+  PUSH_POLICY,
   "",
   "Sources of truth: C:\\CRX_Manager\\.claude\\commands\\claude-review.md and C:\\CRX_Manager\\.claude\\commands\\codex-to-claude-handoff.md",
 ].join("\n"));

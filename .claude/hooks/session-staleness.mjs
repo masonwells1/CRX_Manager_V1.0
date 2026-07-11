@@ -7,6 +7,8 @@
 //     mtime check for a v1-shaped registry without a high-water mark)
 //   - CLAUDE.md "Current State" counts that don't match reality (pages, migrations)
 //   - Uncommitted files from a prior session
+//   - Weekly DB backup missing or stale (backups/LATEST-OK.json, stamped by
+//     scripts/backup-db.mjs — Supabase FREE plan has no point-in-time recovery)
 //
 // Returns a "prompt" hookSpecificOutput.additionalContext so Claude sees the
 // warnings at session start and can mention them to Mason proactively.
@@ -141,6 +143,29 @@ try {
       (meaningfulLines.length > 6 ? `\n      ... and ${meaningfulLines.length - 6} more` : "") +
       `\n   Recommend: run /preflight before continuing — these might be in-progress work or forgotten changes.`
     );
+  }
+} catch { /* ignore */ }
+
+// ─── CHECK 4 — weekly DB backup freshness (backups/LATEST-OK.json) ───────
+try {
+  const latestOkPath = path.join(projectDir, "backups", "LATEST-OK.json");
+  if (!existsSync(latestOkPath)) {
+    warnings.push(
+      `💾 No database backup exists yet — say "back up the database" to create the first one.\n` +
+      `   (Supabase FREE plan = no point-in-time recovery; the weekly /backup-db dump is the only copy.)`
+    );
+  } else {
+    const latest = JSON.parse(readFileSync(latestOkPath, "utf8"));
+    const completedAt = Date.parse(latest?.completed_at);
+    if (Number.isFinite(completedAt)) {
+      const ageDays = (Date.now() - completedAt) / (1000 * 60 * 60 * 24);
+      if (ageDays > 8) {
+        warnings.push(
+          `💾 Last DB backup is ${Math.round(ageDays)} days old (weekly expected) — the scheduled backup may have died.\n` +
+          `   Recommend: run /backup-db now, then check why the weekly scheduled session stopped.`
+        );
+      }
+    }
   }
 } catch { /* ignore */ }
 

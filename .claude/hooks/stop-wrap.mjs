@@ -231,6 +231,38 @@ if (newOrChanged.length >= 5) {
   );
 }
 
+// ─── Changelog entry per session ──────────────────────────────────────────
+// CLAUDE.md ("Keeping Docs In Sync") mandates a docs/CHANGELOG.md entry every
+// session. Heuristic: commits landed during THIS session (git log since the
+// session-start snapshot's mtime) but docs/CHANGELOG.md hasn't been touched
+// since that snapshot — neither edited in the working tree nor written to
+// disk after session start. Fail-open: no snapshot / git error / unreadable
+// file → skip silently (parallel sessions share tmpdir snapshots, so this is
+// a prompt, not a proof — same block-by-listing semantics as the items above).
+try {
+  if (existsSync(snapPath)) {
+    const sessionStartMs = statSync(snapPath).mtimeMs;
+    const sessionCommits = runGit([
+      "log", "--oneline", `--since=${new Date(sessionStartMs).toISOString()}`,
+    ]).trim();
+    if (sessionCommits) {
+      const changelogInTree = lines.some(
+        l => l.slice(3).replace(/\\/g, "/").trim() === "docs/CHANGELOG.md"
+      );
+      let changelogMtimeMs = 0;
+      try {
+        changelogMtimeMs = statSync(path.join(projectDir, "docs", "CHANGELOG.md")).mtimeMs;
+      } catch { /* missing changelog — treated as untouched, flagged below */ }
+      if (!changelogInTree && changelogMtimeMs < sessionStartMs) {
+        issues.push(
+          `📓 Commits exist this session but docs/CHANGELOG.md is untouched since the session snapshot —\n` +
+          `     run node scripts/log-session.mjs --summary '...' (CLAUDE.md mandates a changelog entry per session).`
+        );
+      }
+    }
+  }
+} catch { /* fail-open — never block the stop over this heuristic */ }
+
 if (issues.length === 0) {
   process.exit(0);
 }

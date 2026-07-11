@@ -1,12 +1,12 @@
 {
   "_meta": {
     "registry_version": 2,
-    "generated_at": "2026-07-01",
+    "generated_at": "2026-07-10",
     "generated_from": "Supabase project rhyzpcqhnizqbxphqdkr — public schema introspection",
     "regenerate_with": "node scripts/regenerate-schema-registry.mjs --from-introspection <queries.json> (queries documented in the script header)",
     "purpose": "Single source of truth for hooks: generated columns, status enums, ALL parseable CHECK IN-lists, NOT NULL columns, full column lists, sequences, tables-with/without updated_at, applied-migration high water.",
     "note": "For a fresh refresh from the live DB, ask Claude Code: 'regenerate the schema-registry from Supabase' (/regen-schema-registry). skipped_constraints lists every CHECK the hooks can NOT validate — review it when touching those tables.",
-    "migrations_high_water": "20260701002103"
+    "migrations_high_water": "20260710194343"
   },
   "generated_columns": [
     {
@@ -17,7 +17,7 @@
     {
       "table": "invoices",
       "column": "balance_cents",
-      "expression": "(((total_amount_cents - paid_amount_cents) - prepay_applied_cents) - write_off_cents)"
+      "expression": "((((total_amount_cents - paid_amount_cents) - prepay_applied_cents) - write_off_cents) +\nCASE\n    WHEN (invoice_type = 'credit_memo'::text) THEN credit_applied_cents\n    ELSE (- credit_applied_cents)\nEND)"
     },
     {
       "table": "job_applied_records",
@@ -159,7 +159,9 @@
       "accepted",
       "declined",
       "expired",
-      "cancelled"
+      "cancelled",
+      "closed_by_application",
+      "closed_short"
     ],
     "rebate_claims.status": [
       "pending",
@@ -211,13 +213,13 @@
     "commission_payment_items",
     "commissions",
     "cost_history",
+    "credit_memo_applications",
     "customer_addresses",
     "customer_application_rates",
     "cycle_count_items",
     "cycle_counts",
     "delivery_items",
     "delivery_photos",
-    "document_processing_log",
     "email_log",
     "field_app_location_shares",
     "field_app_locations",
@@ -227,12 +229,15 @@
     "financial_audit_log",
     "idempotency_keys",
     "ingredient_map",
+    "integrity_alerts",
+    "integrity_negative_baseline",
     "inventory_transactions",
     "invoice_line_allocations",
     "invoice_shares",
     "job_applied_record_crew",
     "job_attachments",
     "job_chemicals",
+    "job_dispatch_preservation",
     "job_field_shares",
     "job_fields",
     "job_notifications",
@@ -284,6 +289,20 @@
       "constraints": [
         "allocation_sets_entity_type_check"
       ]
+    },
+    "allocation_sets.payment_method": {
+      "values": [
+        "check",
+        "ach",
+        "cash",
+        "credit_card",
+        "wire",
+        "other"
+      ],
+      "constraints": [
+        "allocation_sets_payment_method_check"
+      ],
+      "nullable": true
     },
     "application_records.source_type": {
       "values": [
@@ -375,6 +394,21 @@
         "blend_tickets_status_check"
       ]
     },
+    "commission_payments.payment_method": {
+      "values": [
+        "check",
+        "ach",
+        "cash",
+        "credit_card",
+        "wire",
+        "other",
+        "direct_deposit"
+      ],
+      "constraints": [
+        "commission_payments_payment_method_check"
+      ],
+      "nullable": true
+    },
     "commission_payments.status": {
       "values": [
         "unposted",
@@ -463,19 +497,6 @@
       ],
       "constraints": [
         "delivery_remainders_status_check"
-      ]
-    },
-    "document_processing_log.document_type": {
-      "values": [
-        "invoice",
-        "purchase_order",
-        "price_list",
-        "product_list",
-        "customer_list",
-        "quote_list"
-      ],
-      "constraints": [
-        "document_processing_log_document_type_check"
       ]
     },
     "email_log.status": {
@@ -590,10 +611,22 @@
         "financial_audit_log_operation_type_check"
       ]
     },
+    "integrity_alerts.alert_type": {
+      "values": [
+        "negative_inventory",
+        "negative_invoice_balance",
+        "stale_quote_hold",
+        "booking_overdraw"
+      ],
+      "constraints": [
+        "integrity_alerts_alert_type_check"
+      ]
+    },
     "inventory_holds.hold_type": {
       "values": [
         "manual",
-        "crop_program"
+        "crop_program",
+        "job"
       ],
       "constraints": [
         "inventory_holds_hold_type_check"
@@ -763,6 +796,7 @@
         "ach",
         "cash",
         "credit_card",
+        "wire",
         "other"
       ],
       "constraints": [
@@ -859,7 +893,9 @@
         "accepted",
         "declined",
         "expired",
-        "cancelled"
+        "cancelled",
+        "closed_by_application",
+        "closed_short"
       ],
       "constraints": [
         "quotes_status_check"
@@ -1028,6 +1064,20 @@
         "vendor_bills_status_check"
       ]
     },
+    "vendor_payments.payment_method": {
+      "values": [
+        "check",
+        "ach",
+        "cash",
+        "credit_card",
+        "wire",
+        "other"
+      ],
+      "constraints": [
+        "vendor_payments_payment_method_check"
+      ],
+      "nullable": true
+    },
     "watchdog_flag_dismissals.resolution": {
       "values": [
         "looks_fine",
@@ -1130,6 +1180,30 @@
       "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
     },
     {
+      "table": "commissions",
+      "constraint": "chk_commission_source",
+      "def": "CHECK (((order_id IS NOT NULL) OR (job_id IS NOT NULL)))",
+      "reason": "conditional/multi-column — not a single-column IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "credit_memo_applications",
+      "constraint": "credit_memo_applications_amount_cents_check",
+      "def": "CHECK ((amount_cents > 0))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "credit_memo_applications",
+      "constraint": "credit_memo_apps_distinct",
+      "def": "CHECK ((credit_memo_id <> target_invoice_id))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "credit_memo_applications",
+      "constraint": "credit_memo_apps_reversal_complete",
+      "def": "CHECK ((((reversed_at IS NULL) AND (reversed_by IS NULL) AND (reversal_reason IS NULL)) OR ((reversed_at IS NOT NULL) AND (reversed_by IS NOT NULL) AND (reversal_reason IS NOT NULL))))",
+      "reason": "conditional/multi-column — not a single-column IN-list; hooks do NOT validate this constraint"
+    },
+    {
       "table": "delivery_items",
       "constraint": "chk_di_quantity",
       "def": "CHECK ((quantity > (0)::numeric))",
@@ -1205,6 +1279,24 @@
       "table": "invoices",
       "constraint": "invoices_balance_non_negative",
       "def": "CHECK (((invoice_type = 'credit_memo'::text) OR (balance_cents >= 0)))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "invoices",
+      "constraint": "invoices_credit_applied_non_negative",
+      "def": "CHECK ((credit_applied_cents >= 0))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "invoices",
+      "constraint": "invoices_credit_memo_balance_nonpositive",
+      "def": "CHECK (((invoice_type <> 'credit_memo'::text) OR (balance_cents <= 0)))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "invoices",
+      "constraint": "invoices_credit_memo_total_nonpositive",
+      "def": "CHECK (((invoice_type <> 'credit_memo'::text) OR (total_amount_cents <= 0)))",
       "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
     },
     {
@@ -1286,6 +1378,12 @@
       "reason": "unparseable — hooks do NOT validate this constraint"
     },
     {
+      "table": "job_dispatch_preservation",
+      "constraint": "job_dispatch_preservation_one_assignee_check",
+      "def": "CHECK (((applicator_id IS NOT NULL) <> (crew_id IS NOT NULL)))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
       "table": "job_field_shares",
       "constraint": "job_field_shares_split_pct_check",
       "def": "CHECK (((split_pct > (0)::numeric) AND (split_pct <= (100)::numeric)))",
@@ -1302,6 +1400,12 @@
       "constraint": "job_notifications_channel_check",
       "def": "CHECK ((channel = 'email'::text))",
       "reason": "unparseable — hooks do NOT validate this constraint"
+    },
+    {
+      "table": "job_product_draws",
+      "constraint": "job_product_draws_quantity_drawn_check",
+      "def": "CHECK ((quantity_drawn >= (0)::numeric))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
     },
     {
       "table": "job_tags",
@@ -1690,7 +1794,6 @@
     },
     "commissions": {
       "no_default": [
-        "order_id",
         "customer_id"
       ],
       "with_default": [
@@ -1711,6 +1814,18 @@
       "with_default": [
         "id",
         "changed_at"
+      ]
+    },
+    "credit_memo_applications": {
+      "no_default": [
+        "credit_memo_id",
+        "target_invoice_id",
+        "amount_cents",
+        "applied_by"
+      ],
+      "with_default": [
+        "id",
+        "applied_at"
       ]
     },
     "customer_addresses": {
@@ -1827,18 +1942,6 @@
         "status",
         "created_at",
         "updated_at"
-      ]
-    },
-    "document_processing_log": {
-      "no_default": [
-        "user_id",
-        "document_type",
-        "file_name"
-      ],
-      "with_default": [
-        "id",
-        "success",
-        "created_at"
       ]
     },
     "email_log": {
@@ -1997,6 +2100,27 @@
         "generic_has_bulk"
       ]
     },
+    "integrity_alerts": {
+      "no_default": [
+        "alert_type",
+        "entity_table",
+        "entity_id"
+      ],
+      "with_default": [
+        "id",
+        "details",
+        "detected_at"
+      ]
+    },
+    "integrity_negative_baseline": {
+      "no_default": [
+        "product_id",
+        "quantity_at_baseline"
+      ],
+      "with_default": [
+        "baselined_at"
+      ]
+    },
     "inventory": {
       "no_default": [
         "product_id"
@@ -2100,7 +2224,8 @@
         "updated_at",
         "write_off_cents",
         "pricing_pending",
-        "discount_earned_cents"
+        "discount_earned_cents",
+        "credit_applied_cents"
       ]
     },
     "job_applied_info": {
@@ -2174,7 +2299,17 @@
       ],
       "with_default": [
         "id",
-        "quantity"
+        "quantity",
+        "customer_supplied"
+      ]
+    },
+    "job_dispatch_preservation": {
+      "no_default": [
+        "job_id",
+        "field_id"
+      ],
+      "with_default": [
+        "preserved_at"
       ]
     },
     "job_field_shares": {
@@ -2222,6 +2357,19 @@
         "channel",
         "status",
         "created_at"
+      ]
+    },
+    "job_product_draws": {
+      "no_default": [
+        "job_id",
+        "quote_id",
+        "product_id"
+      ],
+      "with_default": [
+        "id",
+        "quantity_drawn",
+        "created_at",
+        "updated_at"
       ]
     },
     "job_tag_assignments": {
@@ -2970,7 +3118,9 @@
       "invoice_id",
       "created_by",
       "created_at",
-      "updated_at"
+      "updated_at",
+      "applicator_name",
+      "applicator_license_number"
     ],
     "application_services": [
       "id",
@@ -3169,7 +3319,9 @@
       "season",
       "deleted_at",
       "order_number",
-      "customer_name"
+      "customer_name",
+      "job_id",
+      "invoice_id"
     ],
     "cost_history": [
       "id",
@@ -3185,6 +3337,17 @@
       "new_tier3_price",
       "change_note",
       "changed_at"
+    ],
+    "credit_memo_applications": [
+      "id",
+      "credit_memo_id",
+      "target_invoice_id",
+      "amount_cents",
+      "applied_by",
+      "applied_at",
+      "reversed_at",
+      "reversed_by",
+      "reversal_reason"
     ],
     "customer_addresses": [
       "id",
@@ -3239,7 +3402,8 @@
       "zip",
       "account_number",
       "finance_charge_enabled",
-      "finance_charge_grace_days"
+      "finance_charge_grace_days",
+      "default_application_service_id"
     ],
     "cycle_count_items": [
       "id",
@@ -3338,20 +3502,6 @@
       "updated_at",
       "reminder_sent_at",
       "escalation_sent_at"
-    ],
-    "document_processing_log": [
-      "id",
-      "user_id",
-      "document_type",
-      "file_name",
-      "file_size_bytes",
-      "page_count",
-      "processing_time_ms",
-      "confidence",
-      "items_extracted",
-      "success",
-      "error_message",
-      "created_at"
     ],
     "email_log": [
       "id",
@@ -3523,6 +3673,20 @@
       "fallback_branded_product",
       "notes"
     ],
+    "integrity_alerts": [
+      "id",
+      "alert_type",
+      "entity_table",
+      "entity_id",
+      "details",
+      "detected_at",
+      "resolved_at"
+    ],
+    "integrity_negative_baseline": [
+      "product_id",
+      "quantity_at_baseline",
+      "baselined_at"
+    ],
     "inventory": [
       "id",
       "product_id",
@@ -3661,7 +3825,6 @@
       "total_cost_cents",
       "is_quick_delivery",
       "write_off_cents",
-      "balance_cents",
       "invoice_group_id",
       "application_service_id",
       "delivery_id",
@@ -3685,7 +3848,9 @@
       "end_weather_time",
       "end_weather_source",
       "weather_manual_override",
-      "diluent_rate_gpa"
+      "diluent_rate_gpa",
+      "credit_applied_cents",
+      "balance_cents"
     ],
     "job_applied_info": [
       "id",
@@ -3743,7 +3908,9 @@
       "end_weather_source",
       "beginning_tach",
       "end_tach",
-      "net_tach"
+      "net_tach",
+      "idempotency_key",
+      "idempotency_request_hash"
     ],
     "job_attachments": [
       "id",
@@ -3778,7 +3945,17 @@
       "rei_hours",
       "phi_days",
       "warehouse",
-      "vendor"
+      "vendor",
+      "customer_supplied"
+    ],
+    "job_dispatch_preservation": [
+      "job_id",
+      "field_id",
+      "applicator_id",
+      "crew_id",
+      "dispatched_by",
+      "dispatched_at",
+      "preserved_at"
     ],
     "job_field_shares": [
       "id",
@@ -3826,6 +4003,15 @@
       "sent_by",
       "idempotency_key",
       "created_at"
+    ],
+    "job_product_draws": [
+      "id",
+      "job_id",
+      "quote_id",
+      "product_id",
+      "quantity_drawn",
+      "created_at",
+      "updated_at"
     ],
     "job_tag_assignments": [
       "job_id",
@@ -3884,7 +4070,8 @@
       "batch_ref",
       "last_printed_by",
       "carrier_rate_gpa",
-      "loader_tank_capacity"
+      "loader_tank_capacity",
+      "commission_split"
     ],
     "note_activity_log": [
       "id",
@@ -4002,7 +4189,8 @@
       "booking_draw",
       "pricing_status",
       "pricing_reminder_sent_at",
-      "pricing_escalation_sent_at"
+      "pricing_escalation_sent_at",
+      "needs_split_billing"
     ],
     "payments": [
       "id",
@@ -4103,7 +4291,8 @@
       "rei_hours",
       "phi_days",
       "max_label_rate",
-      "max_label_rate_unit"
+      "max_label_rate_unit",
+      "use_timing"
     ],
     "profiles": [
       "id",
