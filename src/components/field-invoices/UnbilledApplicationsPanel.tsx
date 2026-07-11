@@ -266,7 +266,7 @@ export default function UnbilledApplicationsPanel() {
 
   if (loading) {
     return (
-      <div className="p-6 space-y-6">
+      <div className="space-y-6 p-4 sm:p-6">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <SkeletonCard />
           <SkeletonCard />
@@ -276,16 +276,16 @@ export default function UnbilledApplicationsPanel() {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="min-w-0 space-y-4">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col items-stretch justify-between gap-3 sm:flex-row sm:items-center">
         <div>
           <h2 className="text-xl font-semibold font-heading text-nav-dark">Unbilled Applications</h2>
           <p className="text-xs text-secondary mt-0.5">
             Applied work that has not been turned into a field invoice yet — {totalUnbilled} item(s) across 2 billing backlogs.
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="grid grid-cols-1 gap-2 sm:flex">
           <Button variant="ghost" size="sm" onClick={() => navigate('/field-invoices')}>
             Field Invoices
           </Button>
@@ -325,15 +325,15 @@ export default function UnbilledApplicationsPanel() {
       {/* Sections */}
       {sections.map((s) => (
         <Card key={`section-${s.key}`} padding={false}>
-          <div className="p-5">
-            <div className="flex items-center justify-between mb-3">
+          <div className="p-4 sm:p-5">
+            <div className="mb-3 flex items-start justify-between gap-3">
               <div>
                 <h3 className="text-sm font-semibold text-nav-dark">{s.title}</h3>
                 <p className="text-xs text-secondary">{s.subtitle}</p>
               </div>
               <button
                 onClick={() => navigate(s.parentPath)}
-                className="text-xs text-crx-green hover:underline flex items-center gap-1"
+                className="flex min-h-[44px] flex-shrink-0 items-center gap-1 text-xs text-crx-green hover:underline"
               >
                 View all <ArrowRight className="w-3 h-3" />
               </button>
@@ -342,8 +342,8 @@ export default function UnbilledApplicationsPanel() {
             {s.rows.length === 0 ? (
               <p className="text-sm text-secondary py-6 text-center">Nothing unbilled here — all caught up.</p>
             ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
+              <div className="max-w-full overflow-x-auto overscroll-x-contain">
+                <table className="min-w-[42rem] text-sm">
                   <thead>
                     <tr className="text-left text-xs text-secondary border-b border-gray-100">
                       <th className="py-2 pr-4 font-medium">{s.refLabel}</th>

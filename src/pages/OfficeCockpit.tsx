@@ -363,8 +363,8 @@ function TileHeader({
 }) {
   const color = count === 0 ? 'text-gray-400' : (countColor ?? 'text-red-600');
   return (
-    <div className="flex items-center justify-between mb-3">
-      <div className="flex items-center gap-2">
+    <div className="flex items-start justify-between gap-2 mb-3">
+      <div className="flex min-w-0 items-start gap-2">
         {icon}
         <h2 className="font-semibold text-nav-dark">{title}</h2>
         <span className={`text-sm font-bold ${color}`}>({count})</span>
@@ -372,7 +372,7 @@ function TileHeader({
       {onLink && (
         <button
           onClick={onLink}
-          className="flex items-center gap-1 text-sm text-crx-green hover:underline"
+          className="flex min-h-[44px] flex-shrink-0 items-center gap-1 text-sm text-crx-green hover:underline sm:min-h-0"
         >
           {linkLabel ?? 'View all'} <ChevronRight className="w-4 h-4" />
         </button>
@@ -390,7 +390,7 @@ function LinkedCard({ to, children }: { to: string; children: React.ReactNode })
       hover
       role="button"
       tabIndex={0}
-      className="cursor-pointer"
+      className="min-w-0 cursor-pointer"
       onClick={open}
       onKeyDown={(event) => {
         if (event.key === 'Enter' || event.key === ' ') {
@@ -1067,7 +1067,7 @@ export default function OfficeCockpit() {
 
   if (loading) {
     return (
-      <div className="p-6 space-y-4">
+      <div className="min-w-0 space-y-4 p-4 sm:p-6">
         <PageHeader title="Office" accent="Cockpit" />
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           {Array.from({ length: 6 }).map((_, i) => (
@@ -1079,13 +1079,13 @@ export default function OfficeCockpit() {
   }
 
   return (
-    <div className="p-6 space-y-4">
+    <div className="min-w-0 space-y-4 p-4 sm:p-6">
       <PageHeader
         title="Office"
         accent="Cockpit"
         subtitle={<>Everything stuck or wrong &mdash; one screen, no report-running.</>}
         actions={
-          <div className="flex items-center gap-3">
+          <div className="flex w-full flex-col items-stretch gap-2 sm:w-auto sm:flex-row sm:items-center sm:gap-3">
             <Button
               onClick={() => navigate('/payments')}
               variant="ghost"
@@ -1123,7 +1123,7 @@ export default function OfficeCockpit() {
       )}
 
       {/* Tile grid — 3-column on large screens */}
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+      <div className="grid min-w-0 grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3 [&>*]:min-w-0">
 
         {/* (a) Completed-but-unbilled jobs */}
         <Card>
@@ -1143,7 +1143,7 @@ export default function OfficeCockpit() {
                 <button
                   key={row.id}
                   onClick={() => navigate(`/jobs/${row.id}`)}
-                  className="w-full flex items-center justify-between py-2 text-sm hover:bg-gray-50 rounded transition-colors text-left"
+                  className="flex min-h-[44px] w-full flex-col items-start justify-between gap-2 rounded py-2 text-left text-sm transition-colors hover:bg-gray-50 sm:min-h-0 sm:flex-row sm:items-center"
                 >
                   <div>
                     <span className="font-medium text-nav-dark">{row.customer_name}</span>
@@ -1188,7 +1188,7 @@ export default function OfficeCockpit() {
                 <button
                   key={row.id}
                   onClick={() => navigate(`/jobs/${row.id}`)}
-                  className="w-full flex items-center justify-between py-2 text-sm hover:bg-gray-50 rounded transition-colors text-left"
+                  className="flex min-h-[44px] w-full flex-col items-start justify-between gap-2 rounded py-2 text-left text-sm transition-colors hover:bg-gray-50 sm:min-h-0 sm:flex-row sm:items-center"
                 >
                   <div>
                     <span className="font-medium text-nav-dark">{row.customer_name}</span>
@@ -1220,7 +1220,7 @@ export default function OfficeCockpit() {
                 <button
                   key={row.hold_id ?? `${row.quote_id}-${row.product_id}-${row.expires_at}-${index}`}
                   onClick={() => navigate(`/quotes/${row.quote_id}`)}
-                  className="w-full py-2 text-sm hover:bg-gray-50 rounded transition-colors text-left"
+                  className="min-h-[44px] w-full rounded py-2 text-left text-sm transition-colors hover:bg-gray-50 sm:min-h-0"
                 >
                   <span className={row.attention === 'lapsed' ? 'font-medium text-red-600' : 'font-medium text-nav-dark'}>Quote {row.quote_number}</span>
                   <span className={row.attention === 'lapsed' ? 'text-red-600' : 'text-gray-500'}> &mdash; {row.product_name} &middot; {row.quantity} &middot; </span>
@@ -1291,7 +1291,7 @@ export default function OfficeCockpit() {
                 <button
                   key={row.id}
                   onClick={() => navigate(`/field-invoices/${row.id}`)}
-                  className="w-full flex items-center justify-between py-2 text-sm hover:bg-gray-50 rounded transition-colors text-left"
+                  className="flex min-h-[44px] w-full flex-col items-start justify-between gap-2 rounded py-2 text-left text-sm transition-colors hover:bg-gray-50 sm:min-h-0 sm:flex-row sm:items-center"
                 >
                   <div>
                     <span className="font-medium text-nav-dark">{row.customer_name}</span>
@@ -1336,7 +1336,7 @@ export default function OfficeCockpit() {
                 <button
                   key={row.id}
                   onClick={() => navigate(`/invoices/${row.id}`)}
-                  className="w-full flex items-center justify-between py-2 text-sm hover:bg-gray-50 rounded transition-colors text-left"
+                  className="flex min-h-[44px] w-full flex-col items-start justify-between gap-2 rounded py-2 text-left text-sm transition-colors hover:bg-gray-50 sm:min-h-0 sm:flex-row sm:items-center"
                 >
                   <div>
                     <span className="font-medium text-nav-dark">{row.customer_name}</span>
@@ -1388,7 +1388,7 @@ export default function OfficeCockpit() {
                 <button
                   key={row.id}
                   onClick={() => navigate(`/deliveries/${row.id}`)}
-                  className="w-full flex items-center justify-between py-2 text-sm hover:bg-gray-50 rounded transition-colors text-left"
+                  className="flex min-h-[44px] w-full flex-col items-start justify-between gap-2 rounded py-2 text-left text-sm transition-colors hover:bg-gray-50 sm:min-h-0 sm:flex-row sm:items-center"
                 >
                   <div>
                     <span className="font-medium text-nav-dark">{row.customer_name}</span>
@@ -1441,7 +1441,7 @@ export default function OfficeCockpit() {
                     else if (flag.invoice_id) navigate(`/field-invoices/${flag.invoice_id}`);
                     else navigate('/watchdog');
                   }}
-                  className="w-full flex items-center justify-between py-2 text-sm hover:bg-gray-50 rounded transition-colors text-left"
+                  className="flex min-h-[44px] w-full flex-col items-start justify-between gap-2 rounded py-2 text-left text-sm transition-colors hover:bg-gray-50 sm:min-h-0 sm:flex-row sm:items-center"
                 >
                   <div className="flex items-center gap-2 min-w-0">
                     <Badge variant={flag.severity === 'warning' ? 'warning' : 'error'} size="sm">
@@ -1486,7 +1486,7 @@ export default function OfficeCockpit() {
                 <button
                   key={row.id}
                   onClick={() => navigate(`/jobs/${row.id}`)}
-                  className="w-full flex items-center justify-between py-2 text-sm hover:bg-gray-50 rounded transition-colors text-left"
+                  className="flex min-h-[44px] w-full flex-col items-start justify-between gap-2 rounded py-2 text-left text-sm transition-colors hover:bg-gray-50 sm:min-h-0 sm:flex-row sm:items-center"
                 >
                   <div>
                     <span className="font-medium text-nav-dark">{row.customer_name}</span>
@@ -1531,7 +1531,7 @@ export default function OfficeCockpit() {
                 <button
                   key={row.id}
                   onClick={() => navigate('/compliance')}
-                  className="w-full flex items-center justify-between py-2 text-sm hover:bg-gray-50 rounded transition-colors text-left"
+                  className="flex min-h-[44px] w-full flex-col items-start justify-between gap-2 rounded py-2 text-left text-sm transition-colors hover:bg-gray-50 sm:min-h-0 sm:flex-row sm:items-center"
                 >
                   <div>
                     <span className="font-medium text-nav-dark">{row.holder_name}</span>
@@ -1578,7 +1578,7 @@ export default function OfficeCockpit() {
                 <button
                   key={row.id}
                   onClick={() => navigate(`/field-invoices/${row.id}`)}
-                  className="w-full flex items-center justify-between py-2 text-sm hover:bg-gray-50 rounded transition-colors text-left"
+                  className="flex min-h-[44px] w-full flex-col items-start justify-between gap-2 rounded py-2 text-left text-sm transition-colors hover:bg-gray-50 sm:min-h-0 sm:flex-row sm:items-center"
                 >
                   <div>
                     <span className="font-medium text-nav-dark">{row.customer_name}</span>
@@ -1623,7 +1623,7 @@ export default function OfficeCockpit() {
                 <button
                   key={row.product_id}
                   onClick={() => navigate('/inventory')}
-                  className="w-full flex items-center justify-between py-2 text-sm hover:bg-gray-50 rounded transition-colors text-left"
+                  className="flex min-h-[44px] w-full flex-col items-start justify-between gap-2 rounded py-2 text-left text-sm transition-colors hover:bg-gray-50 sm:min-h-0 sm:flex-row sm:items-center"
                 >
                   <div className="min-w-0">
                     <span className="font-medium text-nav-dark">{row.product_name}</span>
@@ -1662,7 +1662,7 @@ export default function OfficeCockpit() {
               <p className="text-sm text-gray-400">Operational KPI summary is unavailable right now. Refresh to retry.</p>
             </Card>
           ) : (
-            <div className="grid grid-cols-2 xl:grid-cols-5 gap-3">
+            <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5 [&>*]:min-w-0">
               <LinkedCard to="/orders">
                 <div className="flex items-center gap-2 mb-2">
                   <div className="w-8 h-8 rounded-lg bg-blue-50 flex items-center justify-center">
@@ -1734,7 +1734,7 @@ export default function OfficeCockpit() {
             <p className="text-sm text-gray-400">Inventory position is unavailable until the operational summary loads.</p>
           </Card>
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div className="grid min-w-0 grid-cols-1 gap-4 sm:grid-cols-3 [&>*]:min-w-0">
             <LinkedCard to="/inventory">
               <div className="flex items-center gap-3 mb-3">
                 <div className="w-10 h-10 rounded-lg bg-amber-50 flex items-center justify-center">
@@ -1783,7 +1783,7 @@ export default function OfficeCockpit() {
       {(isAdmin || profile?.role === 'sales_rep') && (
         <Card>
           <CardHeader title="Quick" accent="Actions" />
-          <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-5 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 xl:grid-cols-5">
             <button
               onClick={() => navigate('/deliveries?quickDeliver=1')}
               className="flex flex-col items-center gap-2 p-4 rounded-xl border border-gray-100 bg-white hover:bg-crx-green-tint hover:border-crx-green/20 transition-all cursor-pointer group"
@@ -1831,7 +1831,7 @@ export default function OfficeCockpit() {
             </button>
           </div>
           <div className="mt-4 border-t border-gray-100 pt-4">
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
               <button
                 onClick={() => navigate('/deliveries/new')}
                 className="flex flex-col items-center gap-2 p-4 rounded-xl border border-gray-100 bg-gray-50/60 hover:bg-crx-green-tint hover:border-crx-green/20 transition-all cursor-pointer group"

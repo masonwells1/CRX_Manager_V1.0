@@ -4,14 +4,31 @@ import { fireEvent, render, screen } from '@testing-library/react';
 const mockNavigate = vi.fn();
 const mockToast = vi.fn();
 
-function emptyQuery() {
+function emptyQuery(table: string) {
   const builder: Record<string, unknown> = {};
+  let selection = '';
   const self = () => builder;
-  for (const method of ['select', 'eq', 'is', 'order', 'limit', 'in', 'gte', 'lte', 'lt', 'gt', 'not']) {
+  builder.select = vi.fn((columns: string) => {
+    selection = columns;
+    return builder;
+  });
+  for (const method of ['eq', 'is', 'order', 'limit', 'in', 'gte', 'lte', 'lt', 'gt', 'not']) {
     builder[method] = vi.fn(self);
   }
   builder.then = vi.fn((resolve: (value: unknown) => unknown) =>
-    Promise.resolve({ data: [], error: null }).then(resolve)
+    Promise.resolve({
+      data: table === 'jobs' && selection.includes('total_price_cents')
+        ? [{
+            id: 'job-1',
+            job_number: 'JOB-1',
+            job_date: '2026-07-11',
+            total_acres: 80,
+            total_price_cents: 125000,
+            customer: { farm_name: 'Test Farm' },
+          }]
+        : [],
+      error: null,
+    }).then(resolve)
   );
   return builder;
 }
@@ -30,7 +47,7 @@ vi.mock('../components/ui/Toast', () => ({
 
 vi.mock('../lib/db', () => ({
   supabase: {
-    from: vi.fn(() => emptyQuery()),
+    from: vi.fn((table: string) => emptyQuery(table)),
     rpc: vi.fn((functionName: string) => {
       if (functionName === 'operational_dashboard_summary') {
         return Promise.resolve({
@@ -115,5 +132,22 @@ describe('OfficeCockpit morning screen', () => {
 
     fireEvent.keyDown(screen.getByRole('button', { name: /Active Orders/ }), { key: 'Enter' });
     expect(mockNavigate).toHaveBeenCalledWith('/orders');
+  });
+
+  it('uses a one-column 375px layout and 44px queue targets', async () => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 375 });
+    window.dispatchEvent(new Event('resize'));
+
+    const { container } = render(<OfficeCockpit />);
+
+    const queueRow = (await screen.findByText('#JOB-1')).closest('button');
+    const snapshotGrid = screen.getByText('Active Orders').closest('[class*="grid-cols-1"]');
+    const page = container.firstElementChild;
+
+    expect(page).toHaveClass('min-w-0', 'p-4', 'sm:p-6');
+    expect(queueRow).toHaveClass('min-h-[44px]');
+    expect(snapshotGrid).toHaveClass('grid-cols-1', 'sm:grid-cols-2');
+    expect(screen.getByText('Floor Stock').closest('[class*="grid-cols-1"]')).toHaveClass('grid-cols-1');
+    expect(screen.getByText('Sell & Deliver Now').closest('[class*="grid-cols-1"]')).toHaveClass('grid-cols-1');
   });
 });

@@ -87,7 +87,7 @@ export default function FieldInvoices() {
   };
 
   return (
-    <div className="space-y-5">
+    <div className="min-w-0 space-y-5">
       <PageHeader
         title="Field"
         accent="Invoices"

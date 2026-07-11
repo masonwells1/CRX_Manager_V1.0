@@ -10,6 +10,7 @@ import { Sentry } from '../../lib/sentry';
 import { runCriticalAction } from '../../lib/criticalAction';
 import { generateIdempotencyKey } from '../../lib/idempotency';
 import ConfirmModal from '../ui/ConfirmModal';
+import MobileCardList from '../ui/MobileCardList';
 import {
   buildInvoicePdfDataFromRow,
   generateBatchInvoicePdf,
@@ -447,7 +448,7 @@ export default function FieldInvoicesPostedPanel() {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="min-w-0 space-y-4">
       {/* Header */}
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <div className="flex items-center gap-2">
@@ -488,15 +489,15 @@ export default function FieldInvoicesPostedPanel() {
 
       {/* Filter bar */}
       <Card>
-        <div className="flex flex-wrap items-end gap-3">
-          <div>
+        <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:flex-wrap sm:items-end">
+          <div className="w-full sm:w-auto">
             <label className="block text-xs font-medium text-secondary mb-1" htmlFor="fip-scope">Scope</label>
             <select
               id="fip-scope"
               value={scopeValue}
               onChange={(e) => onScopeChange(e.target.value)}
               aria-label="Posting scope"
-              className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-crx-green focus:outline-none focus:ring-2 focus:ring-crx-green/20 sm:w-auto"
             >
               <option value="season">This Season</option>
               <option value="mtd">Month-to-date</option>
@@ -509,7 +510,7 @@ export default function FieldInvoicesPostedPanel() {
               )}
             </select>
           </div>
-          <div>
+          <div className="w-full sm:w-auto">
             <label className="block text-xs font-medium text-secondary mb-1" htmlFor="fip-invnum">Inv. Nbr</label>
             <input
               id="fip-invnum"
@@ -517,7 +518,7 @@ export default function FieldInvoicesPostedPanel() {
               value={filters.invoiceNumber}
               onChange={(e) => setFilters((f) => ({ ...f, invoiceNumber: e.target.value }))}
               placeholder="Invoice #"
-              className="px-3 py-2 text-sm border border-gray-200 rounded-lg w-36 focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-crx-green focus:outline-none focus:ring-2 focus:ring-crx-green/20 sm:w-36"
             />
           </div>
           <MultiSelectDropdown
@@ -528,27 +529,27 @@ export default function FieldInvoicesPostedPanel() {
             placeholder="All customers"
             emptyText="No customers"
           />
-          <div>
+          <div className="w-full sm:w-auto">
             <label className="block text-xs font-medium text-secondary mb-1" htmlFor="fip-from">Trans. Date From</label>
             <input
               id="fip-from"
               type="date"
               value={filters.dateFrom}
               onChange={(e) => setFilters((f) => ({ ...f, dateFrom: e.target.value }))}
-              className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-crx-green focus:outline-none focus:ring-2 focus:ring-crx-green/20 sm:w-auto"
             />
           </div>
-          <div>
+          <div className="w-full sm:w-auto">
             <label className="block text-xs font-medium text-secondary mb-1" htmlFor="fip-to">Trans. Date To</label>
             <input
               id="fip-to"
               type="date"
               value={filters.dateTo}
               onChange={(e) => setFilters((f) => ({ ...f, dateTo: e.target.value }))}
-              className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-crx-green focus:outline-none focus:ring-2 focus:ring-crx-green/20 sm:w-auto"
             />
           </div>
-          <div className="flex-1 min-w-[12rem]">
+          <div className="w-full min-w-0 flex-1 sm:min-w-[12rem]">
             <label className="block text-xs font-medium text-secondary mb-1" htmlFor="fip-search">Search</label>
             <div className="relative">
               <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
@@ -572,7 +573,40 @@ export default function FieldInvoicesPostedPanel() {
 
       {/* Table */}
       <Card padding={false}>
-        <div className="overflow-x-auto">
+        {visible.length === 0 && (
+          <p className="px-4 py-8 text-center text-sm text-secondary md:hidden">
+            No posted field invoices{hasFilters ? ' match these filters' : ''}.
+          </p>
+        )}
+        <MobileCardList
+          rows={visible}
+          getRowKey={(row) => row.id}
+          getRowLabel={(row) => `View invoice ${row.invoice_number} for ${row.customer_name}`}
+          onRowClick={(row) => navigate(viewPath(row))}
+          className="p-3"
+          renderCard={(row) => (
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="truncate font-semibold text-nav-dark">{row.customer_name}</p>
+                <p className="mt-1 text-xs text-secondary">
+                  #{row.invoice_number}{row.job_number ? ` · Job ${row.job_number}` : ''}
+                </p>
+                <p className="mt-1 text-xs text-secondary">
+                  {new Date(row.invoice_date + 'T00:00:00').toLocaleDateString()} · {row.total_acres.toLocaleString()} ac
+                </p>
+              </div>
+              <div className="flex-shrink-0 text-right">
+                <p className="font-semibold text-nav-dark">{fmt(row.total_amount_cents)}</p>
+                <p className={row.balance_cents > 0 ? 'mt-1 text-xs font-semibold text-red-600' : 'mt-1 text-xs text-crx-green'}>
+                  {fmt(row.balance_cents)} due
+                </p>
+                <span className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-crx-green">
+                  View <Eye className="h-3.5 w-3.5" />
+                </span>
+              </div>
+            </div>
+          )}
+          desktop={<div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-gray-100 text-left text-xs text-secondary uppercase tracking-wide">
@@ -687,7 +721,8 @@ export default function FieldInvoicesPostedPanel() {
               </tfoot>
             )}
           </table>
-        </div>
+        </div>}
+        />
       </Card>
 
       {/* Bottom bulk-action bar */}
@@ -696,7 +731,7 @@ export default function FieldInvoicesPostedPanel() {
           <p className="text-xs text-secondary">
             Bulk actions apply to all {totals.count} invoice(s) currently shown.
           </p>
-          <div className="flex flex-wrap gap-2 justify-end">
+          <div className="grid w-full grid-cols-1 gap-2 sm:flex sm:w-auto sm:flex-wrap sm:justify-end">
             <Button variant="secondary" size="sm" icon={<Printer className="w-4 h-4" />} onClick={() => printAll('current')} loading={busy} disabled={visible.length === 0}>
               Print All
             </Button>

@@ -176,7 +176,7 @@ export default function CustomerInvoiceSummaryPanel() {
   };
 
   return (
-    <div className="space-y-4">
+    <div className="min-w-0 space-y-4">
       {/* Header */}
       <div className="flex items-center gap-2">
         <button
@@ -197,8 +197,8 @@ export default function CustomerInvoiceSummaryPanel() {
 
       {/* Report inputs */}
       <Card>
-        <div className="flex flex-wrap items-end gap-3">
-          <div className="min-w-[14rem]">
+        <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:flex-wrap sm:items-end">
+          <div className="w-full min-w-0 sm:min-w-[14rem] sm:w-auto">
             <label className="block text-xs font-medium text-secondary mb-1" htmlFor="cis-customer">Customer</label>
             <select
               id="cis-customer"
@@ -213,27 +213,27 @@ export default function CustomerInvoiceSummaryPanel() {
               ))}
             </select>
           </div>
-          <div>
+          <div className="w-full sm:w-auto">
             <label className="block text-xs font-medium text-secondary mb-1" htmlFor="cis-heading-date">Heading Date</label>
             <input
               id="cis-heading-date"
               type="date"
               value={headingDate}
               onChange={(e) => setHeadingDate(e.target.value)}
-              className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-crx-green focus:outline-none focus:ring-2 focus:ring-crx-green/20 sm:w-auto"
             />
           </div>
-          <div>
+          <div className="w-full sm:w-auto">
             <label className="block text-xs font-medium text-secondary mb-1" htmlFor="cis-discount-date">Discount Date</label>
             <input
               id="cis-discount-date"
               type="date"
               value={discountDate}
               onChange={(e) => setDiscountDate(e.target.value)}
-              className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-crx-green focus:outline-none focus:ring-2 focus:ring-crx-green/20 sm:w-auto"
             />
           </div>
-          <div>
+          <div className="w-full sm:w-auto">
             <label className="block text-xs font-medium text-secondary mb-1" htmlFor="cis-terms">Terms</label>
             <input
               id="cis-terms"
@@ -241,10 +241,10 @@ export default function CustomerInvoiceSummaryPanel() {
               value={terms}
               onChange={(e) => setTerms(e.target.value)}
               placeholder="e.g. Net 30"
-              className="px-3 py-2 text-sm border border-gray-200 rounded-lg w-40 focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-crx-green focus:outline-none focus:ring-2 focus:ring-crx-green/20 sm:w-40"
             />
           </div>
-          <div className="flex-1 min-w-[14rem]">
+          <div className="w-full min-w-0 flex-1 sm:min-w-[14rem]">
             <label className="block text-xs font-medium text-secondary mb-1" htmlFor="cis-comment">Invoice Comment</label>
             <input
               id="cis-comment"
@@ -389,8 +389,8 @@ function SummarySection({
       <div className="px-4 py-3 border-b border-gray-100">
         <h4 className="text-sm font-semibold text-nav-dark">{title}</h4>
       </div>
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
+      <div className="max-w-full overflow-x-auto overscroll-x-contain">
+        <table className="min-w-[36rem] w-full text-sm">
           <thead>
             <tr className="border-b border-gray-100 text-left text-xs text-secondary uppercase tracking-wide">
               <th className="px-3 py-2 font-medium">Date</th>

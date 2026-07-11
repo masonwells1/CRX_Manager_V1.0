@@ -25,6 +25,7 @@ import {
 import type { Invoice, InvoiceStatus } from '../../types';
 import { formatCents as fmt } from '../../lib/money';
 import { SkeletonTable, SkeletonCard } from '../ui/Skeleton';
+import MobileCardList from '../ui/MobileCardList';
 import { getSeasonDates } from '../../utils/season';
 
 // Field / Application invoices are the SECOND, segregated sale type (the work CRX
@@ -61,6 +62,11 @@ const statusBadge = (status: InvoiceStatus) => {
   const s = map[status] || { variant: 'default' as const, label: status };
   return <Badge variant={s.variant}>{s.label}</Badge>;
 };
+
+const invoicePath = (row: FieldInvoiceRow): string =>
+  !row.job_id && !row.blend_ticket_id && (row.status === 'draft' || row.status === 'unposted')
+    ? `/invoices/field-app/${row.id}`
+    : `/field-invoices/${row.id}`;
 
 export default function FieldInvoicesListPanel() {
   const navigate = useNavigate();
@@ -447,14 +453,14 @@ export default function FieldInvoicesListPanel() {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="min-w-0 space-y-4">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col items-stretch justify-between gap-3 sm:flex-row sm:items-center">
         <div>
           <h2 className="text-xl font-semibold font-heading text-nav-dark">Field Invoices</h2>
           <p className="text-xs text-secondary mt-0.5">Application sales — work applied with CRX equipment. Separate from Chemical Sales.</p>
         </div>
-        <div className="flex gap-2 flex-wrap justify-end">
+        <div className="grid grid-cols-1 gap-2 sm:flex sm:flex-wrap sm:justify-end">
           <Button
             variant="secondary"
             size="sm"
@@ -639,7 +645,34 @@ export default function FieldInvoicesListPanel() {
 
       {/* Data Table */}
       <Card padding={false}>
-        <div className="p-5">
+        {filtered.length === 0 && (
+          <p className="px-4 py-8 text-center text-sm text-secondary md:hidden">No field invoices match this view.</p>
+        )}
+        <MobileCardList
+          rows={filtered}
+          getRowKey={(row) => row.id}
+          getRowLabel={(row) => `Open invoice ${row.invoice_number} for ${row.customer_name}`}
+          onRowClick={(row) => navigate(invoicePath(row))}
+          className="p-3"
+          renderCard={(row) => (
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="truncate font-semibold text-nav-dark">{row.customer_name}</p>
+                <p className="mt-1 text-xs text-secondary">#{row.invoice_number} · {new Date(row.invoice_date + 'T00:00:00').toLocaleDateString()}</p>
+                <div className="mt-2">{statusBadge(row.status)}</div>
+              </div>
+              <div className="flex-shrink-0 text-right">
+                <p className="font-semibold text-nav-dark">{fmt(row.total_amount_cents)}</p>
+                <p className={row.balance_cents > 0 ? 'mt-1 text-xs font-semibold text-red-600' : 'mt-1 text-xs text-crx-green'}>
+                  {fmt(row.balance_cents)} due
+                </p>
+                <span className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-crx-green">
+                  Open <FileText className="h-3.5 w-3.5" />
+                </span>
+              </div>
+            </div>
+          )}
+          desktop={<div className="p-5">
           <DataTable<FieldInvoiceRow>
             data={filtered}
             columns={columns.filter((c) => isInvoiceColumnVisible(listSettings, c.key))}
@@ -659,9 +692,7 @@ export default function FieldInvoicesListPanel() {
                 //    Also any posted field invoice. A blend-ticket field invoice has
                 //    job_id NULL but blend_ticket_id set; routing it to the per-acre
                 //    editor would load zero locations and fail to save. (Codex r13)
-                !row.job_id && !row.blend_ticket_id && (row.status === 'draft' || row.status === 'unposted')
-                  ? `/invoices/field-app/${row.id}`
-                  : `/field-invoices/${row.id}`
+                invoicePath(row)
               )
             }
             emptyTitle="No field invoices yet"
@@ -684,7 +715,8 @@ export default function FieldInvoicesListPanel() {
               </div>
             }
           />
-        </div>
+        </div>}
+        />
       </Card>
     </div>
   );

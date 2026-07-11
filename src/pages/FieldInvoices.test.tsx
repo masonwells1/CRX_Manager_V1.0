@@ -2,6 +2,10 @@ import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import FieldInvoices from './FieldInvoices';
+import listPanelSource from '../components/field-invoices/FieldInvoicesListPanel.tsx?raw';
+import postedPanelSource from '../components/field-invoices/FieldInvoicesPostedPanel.tsx?raw';
+import unpostedPanelSource from '../components/field-invoices/FieldInvoicesUnpostedPanel.tsx?raw';
+import unbilledPanelSource from '../components/field-invoices/UnbilledApplicationsPanel.tsx?raw';
 
 const query = {
   select: vi.fn(),
@@ -75,5 +79,28 @@ describe('FieldInvoices', () => {
     expect(screen.getByRole('tab', { name: 'By Customer' })).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByRole('tabpanel')).toHaveTextContent('Customer invoices panel');
     await waitFor(() => expect(screen.getByRole('tab', { name: /Drafts/ })).toHaveTextContent('0'));
+  });
+
+  it('keeps the workflow constrained and horizontally scrollable at 375px', async () => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 375 });
+    window.dispatchEvent(new Event('resize'));
+
+    const { container } = render(
+      <MemoryRouter initialEntries={['/field-invoices?tab=unbilled']}>
+        <FieldInvoices />
+      </MemoryRouter>
+    );
+
+    expect(container.firstElementChild).toHaveClass('min-w-0');
+    expect(screen.getByRole('tablist')).toHaveClass('overflow-x-auto', 'flex-nowrap');
+    expect(screen.getAllByRole('tab')).toHaveLength(5);
+    await waitFor(() => expect(screen.getByRole('tab', { name: /Drafts/ })).toHaveTextContent('0'));
+  });
+
+  it('keeps mobile card fallbacks and bounded scroll containers on invoice panels', () => {
+    expect(listPanelSource).toContain('<MobileCardList');
+    expect(postedPanelSource).toContain('<MobileCardList');
+    expect(unpostedPanelSource).toContain('<MobileCardList');
+    expect(unbilledPanelSource).toContain('max-w-full overflow-x-auto');
   });
 });

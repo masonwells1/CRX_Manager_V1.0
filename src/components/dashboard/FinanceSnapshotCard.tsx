@@ -69,12 +69,12 @@ export default function FinanceSnapshotCard() {
   return (
     <Card>
       <CardHeader title="Finance" accent="Snapshot" />
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 lg:grid-cols-5">
         {tiles.map((t) => (
           <button
             key={t.label}
             onClick={() => navigate(t.to)}
-            className="text-left p-3 rounded-xl border border-gray-100 bg-white hover:border-crx-green/30 hover:shadow transition-all"
+            className="min-h-[44px] rounded-xl border border-gray-100 bg-white p-3 text-left transition-all hover:border-crx-green/30 hover:shadow"
           >
             <div className="flex items-center gap-1.5 mb-1 text-gray-400">
               {t.icon}
