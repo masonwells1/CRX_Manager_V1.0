@@ -4,6 +4,13 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-10 — docs: TODO.md refreshed to verified state + stray `.codex` mirror repaired
+
+Corrected the roadmap/TODO to match live reality and cleared a tooling snag that was blocking commits. Docs-only; no DB, no code, no deploy.
+
+- **TODO.md** rewritten to the verified 2026-07-10 state (checked against the live DB migration list, not the stale doc): U12/U13 (My Day + assignment unification) corrected as SHIPPED LIVE 2026-07-06 (they were wrongly listed as parked); L4 leaked-password reclassified as Pro-plan-gated; label-data load promoted to the #1 owner item (now a data-entry job via the new `/label-data-quality` tool, with the ~105-wrong-EPA-regs caveat); added EPA Waves 4–5, grower portal §7–§10, billing Feature B, F3 WebP retry, the 13 parked migrations, and the post-billing `/foundation-ultra-review` re-run.
+- **Tooling repair:** a stray, half-synced `.codex/` mirror in the primary worktree was tripping the pre-commit `check:agent-workflows` guard and blocking every commit. Root cause = the agent-workflow mirror was redesigned on the still-unmerged `codex/agent-setup-20260710` branch, incompatible with the older checker on `main`. Moved the orphaned mirror aside (gitignored + regenerable) so the guard skips cleanly as designed — no hook bypass.
+
 ## 2026-07-10 — Label Data Quality screen: in-app EPA reg-number check + inline fix (frontend-only; Codex-built + Codex-reviewed)
 
 New admin-only page `/label-data-quality` closes the gap where the EPA data-quality check existed only as a token-gated CLI script (`scripts/epa-data-quality-report.mjs`) the owner couldn't run. It checks every product's saved EPA registration number against the live EPA database, flags the wrong/cancelled/not-found ones, and lets an admin correct one inline with EPA verification.

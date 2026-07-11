@@ -81,6 +81,15 @@ eq(mainPushSource("git push origin main", "feature/x"), "main", "bare main refsp
 eq(mainPushSource("git push", "main"), "HEAD", "plain push on main resolves HEAD");
 eq(mainPushSource("git push origin :main", "x"), "DELETE", "push :main detected as branch deletion");
 eq(mainPushSource("git push origin feature/x", "feature/x"), null, "feature push resolves null");
+// git GLOBAL options between `git` and `push` must not bypass the gate (2026-07-10)
+ok(isGitPush("git -C C:/CRX_Manager push origin main"), "git -C <dir> push detected");
+ok(isGitPush('git -C "C:/My Repo" push origin main'), "git -C quoted dir push detected");
+ok(isGitPush("git --git-dir=.git push origin main"), "git --git-dir push detected");
+ok(isGitPush("git -c core.editor=true push origin main"), "git -c k=v push detected");
+ok(!isGitPush("git -C C:/CRX_Manager status"), "git -C status is not a push");
+eq(mainPushSource("git -C C:/CRX_Manager push origin main", "feature/x"), "main", "git -C push origin main targets main");
+eq(mainPushSource("git -C C:/CRX_Manager push origin HEAD:main", "feature/x"), "HEAD", "git -C HEAD:main resolves HEAD");
+eq(mainPushSource("git -C C:/CRX_Manager push origin feature/x", "feature/x"), null, "git -C feature push resolves null");
 eq(riskyFiles(["src/App.tsx", "supabase/migrations/x.sql"]).length, 1, "migration is risky");
 eq(riskyFiles(["src/App.tsx", "README.md"]).length, 0, "no risky files");
 ok(riskyFiles(["supabase/functions/send-email/index.ts"]).length === 1, "edge fn is risky");
