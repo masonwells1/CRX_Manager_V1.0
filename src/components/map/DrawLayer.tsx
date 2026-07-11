@@ -1,4 +1,4 @@
-import { useCallback } from 'react';
+import { useCallback, useMemo } from 'react';
 import area from '@turf/area';
 import centroid from '@turf/centroid';
 import DrawControl from './DrawControl';
@@ -15,6 +15,8 @@ interface DrawLayerProps {
   /** Multi-polygon mode */
   initialPolygons?: DrawnPolygon[];
   onPolygonsChange?: (polygons: DrawnPolygon[]) => void;
+  /** Lets a field with no saved boundary clear its only in-session part. */
+  allowRemoveSinglePart?: boolean;
   /** Legacy single-polygon mode (backward compat) */
   initialGeoJSON?: Feature<Polygon> | null;
   onBoundaryChange?: (boundary: Feature<Polygon>, acres: number, center: [number, number]) => void;
@@ -25,6 +27,7 @@ interface DrawLayerProps {
 export default function DrawLayer({
   initialPolygons,
   onPolygonsChange,
+  allowRemoveSinglePart = false,
   initialGeoJSON,
   onBoundaryChange,
   onBoundaryDelete,
@@ -32,11 +35,14 @@ export default function DrawLayer({
   const isMultiMode = !!onPolygonsChange;
 
   // Determine initial features for DrawControl
-  const initialFeatures = initialPolygons && initialPolygons.length > 0
-    ? initialPolygons.map((p) => p.polygon)
-    : initialGeoJSON
-    ? [initialGeoJSON]
-    : undefined;
+  const initialFeatures = useMemo(
+    () => initialPolygons && initialPolygons.length > 0
+      ? initialPolygons.map((p) => p.polygon)
+      : initialGeoJSON
+      ? [initialGeoJSON]
+      : undefined,
+    [initialGeoJSON, initialPolygons],
+  );
 
   const handleCreate = useCallback(
     (feature: GeoJSON.Feature) => {
@@ -108,6 +114,7 @@ export default function DrawLayer({
       onDrawCreate={handleCreate}
       onDrawUpdate={handleUpdate}
       onDrawDelete={handleDelete}
+      allowRemoveSinglePart={allowRemoveSinglePart}
     />
   );
 }

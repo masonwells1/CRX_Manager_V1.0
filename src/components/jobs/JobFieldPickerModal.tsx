@@ -4,8 +4,8 @@ import Button from '../ui/Button';
 import Modal from '../ui/Modal';
 import SearchableSelect from '../ui/SearchableSelect';
 import { useToast } from '../ui/Toast';
-import { supabase, assertRpcResult } from '../../lib/db';
 import { Sentry } from '../../lib/sentry';
+import { getCachedFieldsGeojson } from '../../lib/fieldsGeojsonCache';
 import CRXMap from '../map/CRXMap';
 import FieldBoundaryLayer from '../map/FieldBoundaryLayer';
 import FieldMarkerLayer from '../map/FieldMarkerLayer';
@@ -32,9 +32,6 @@ interface JobFieldPickerModalProps {
   /** The job editor already has the authoritative two-acre values in memory. */
   billableAcresById: ReadonlyMap<string, number | null>;
 }
-
-const FIELD_GEOJSON_CACHE_TTL_MS = 5 * 60 * 1000;
-let fieldGeojsonCache: { data: JobFieldPickerField[]; fetchedAt: number } | null = null;
 
 function useDebouncedValue(value: string, delayMs: number): string {
   const [debounced, setDebounced] = useState(value);
@@ -81,17 +78,7 @@ export default function JobFieldPickerModal({
     setLoading(true);
     setLoadError(false);
     try {
-      const now = Date.now();
-      let rows: JobFieldPickerField[];
-      if (fieldGeojsonCache && now - fieldGeojsonCache.fetchedAt < FIELD_GEOJSON_CACHE_TTL_MS) {
-        rows = fieldGeojsonCache.data;
-      } else {
-        const { data, error } = await supabase.rpc('get_fields_with_geojson');
-        if (error) throw error;
-        rows = assertRpcResult<JobFieldPickerField[]>(data, 'get_fields_with_geojson');
-        // Fields rarely change mid-session; closing/reopening after five minutes refreshes this full GeoJSON list.
-        fieldGeojsonCache = { data: rows, fetchedAt: now };
-      }
+      const rows = await getCachedFieldsGeojson();
       setFields(rows.map((field) => withKnownBillableAcres(field, billableAcresById)));
     } catch (error) {
       Sentry.captureException(error, { tags: { component: 'JobFieldPickerModal', action: 'load_fields' } });

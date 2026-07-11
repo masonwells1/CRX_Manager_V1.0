@@ -1,18 +1,23 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Save, Trash2, MapPin, Search, ChevronDown, ChevronUp, AlertTriangle } from 'lucide-react';
+import { ArrowLeft, Save, Trash2, MapPin, Search, ChevronDown, ChevronUp, AlertTriangle, Eye, EyeOff, MapPinned } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
 import Badge from '../components/ui/Badge';
 import UnsavedChangesModal from '../components/ui/UnsavedChangesModal';
+import ConfirmModal from '../components/ui/ConfirmModal';
 import CRXMap from '../components/map/CRXMap';
 import DrawLayer, { type DrawnPolygon } from '../components/map/DrawLayer';
 import AddressSearch from '../components/map/AddressSearch';
+import FieldBoundaryLayer from '../components/map/FieldBoundaryLayer';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { supabase, assertRpcResult } from '../lib/db';
+import { getCachedFieldsGeojson, type FieldsGeojsonRow } from '../lib/fieldsGeojsonCache';
+import { lookupPlss, type PlssLookupResult } from '../lib/plssLookup';
+import { canRemoveSingleBoundary } from '../lib/fieldBoundaryState';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { Sentry } from '../lib/sentry';
 import { computeBounds } from '../hooks/useFitBounds';
@@ -27,7 +32,9 @@ import {
   ACRE_BAND_MAX,
 } from '../lib/fieldGeometry';
 import turfCentroid from '@turf/centroid';
-import type { Feature, Polygon } from 'geojson';
+import turfArea from '@turf/area';
+import { JOB_FIELD_PICKER_MAP_LIMIT, mapFieldsForJobPicker } from '../components/jobs/jobFieldPicker';
+import type { Feature, MultiPolygon, Polygon } from 'geojson';
 import type { Field, Customer } from '../types';
 
 interface BillingSplit {
@@ -38,6 +45,33 @@ interface BillingSplit {
   notes: string;
   price_override_cents: number | null;
   pricing_note: string;
+}
+
+const FIELD_CONTEXT_OVERLAY_STORAGE_KEY = 'crx.fieldSetup.showOtherFieldBoundaries';
+const BOUNDS_CHANGE_EPSILON = 0.000001;
+
+function isBoundaryGeometry(value: unknown): value is Polygon | MultiPolygon {
+  if (!value || typeof value !== 'object') return false;
+  const geometry = value as { type?: unknown; coordinates?: unknown };
+  return (geometry.type === 'Polygon' || geometry.type === 'MultiPolygon') && Array.isArray(geometry.coordinates);
+}
+
+function boundaryPartsFromGeometry(geometry: Polygon | MultiPolygon, fieldId: string): DrawnPolygon[] {
+  const polygons = geometry.type === 'Polygon' ? [geometry.coordinates] : geometry.coordinates;
+  return polygons.map((coordinates, index) => {
+    const polygon: Feature<Polygon> = {
+      type: 'Feature',
+      id: `legacy-${fieldId}-${index}`,
+      properties: {},
+      geometry: { type: 'Polygon', coordinates },
+    };
+    return {
+      drawId: `legacy-${fieldId}-${index}`,
+      polygon,
+      acres: Math.round((turfArea(polygon) / 4046.8564224) * 100) / 100,
+      label: `Part ${index + 1}`,
+    };
+  });
 }
 
 export default function FieldSetup() {
@@ -72,14 +106,25 @@ export default function FieldSetup() {
   const [saving, setSaving] = useState(false);
 
   // Map / geo state
-  const [boundaryGeoJSON, setBoundaryGeoJSON] = useState<Feature<Polygon> | null>(null);
+  const [boundaryGeoJSON, setBoundaryGeoJSON] = useState<Feature<Polygon | MultiPolygon> | null>(null);
   const [drawnPolygons, setDrawnPolygons] = useState<DrawnPolygon[]>([]);
-  const [boundaryAcres, setBoundaryAcres] = useState<number | null>(null);   // turf preview for a single drawn boundary
   const [geometryDirty, setGeometryDirty] = useState(false);                 // boundary drawn/changed this session?
   const loadedOverrideRef = useRef<number | null>(null);                     // override_acres at load (to detect changes)
   const loadedHadBoundaryRef = useRef(false);                                // did the loaded field have a saved boundary?
   const [mapCenter, setMapCenter] = useState<[number, number] | undefined>(undefined);
   const [mapZoom, setMapZoom] = useState<number | undefined>(undefined);
+  const [overlayMapCenter, setOverlayMapCenter] = useState<[number, number]>([-89, 40]);
+  const [otherFields, setOtherFields] = useState<FieldsGeojsonRow[]>([]);
+  const [showOtherFieldBoundaries, setShowOtherFieldBoundaries] = useState(() => {
+    try {
+      return window.localStorage.getItem(FIELD_CONTEXT_OVERLAY_STORAGE_KEY) !== 'false';
+    } catch {
+      return true;
+    }
+  });
+  const [partPendingDelete, setPartPendingDelete] = useState<DrawnPolygon | null>(null);
+  const [legalLookupLoading, setLegalLookupLoading] = useState(false);
+  const [pendingLegalLookup, setPendingLegalLookup] = useState<PlssLookupResult | null>(null);
 
   // Customer search for the owner dropdown
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -100,6 +145,38 @@ export default function FieldSetup() {
     if (!boundaryGeoJSON) return null;
     return computeBounds([JSON.stringify(boundaryGeoJSON.geometry)]);
   }, [boundaryGeoJSON]);
+
+  const legalLookupPoint = useMemo(() => {
+    const geometry = drawnPolygons[0]?.polygon ?? boundaryGeoJSON;
+    if (!geometry) return null;
+    try {
+      const coordinates = turfCentroid(geometry).geometry.coordinates;
+      if (typeof coordinates[0] !== 'number' || typeof coordinates[1] !== 'number') return null;
+      return { longitude: coordinates[0], latitude: coordinates[1] };
+    } catch {
+      return null;
+    }
+  }, [boundaryGeoJSON, drawnPolygons]);
+
+  const overlayFields = useMemo(() => {
+    const editedFieldId = field.id ?? (isNew ? null : id);
+    return otherFields.filter((otherField) => otherField.id !== editedFieldId);
+  }, [field.id, id, isNew, otherFields]);
+
+  const nearbyOverlayFields = useMemo(
+    () => mapFieldsForJobPicker(overlayFields, JOB_FIELD_PICKER_MAP_LIMIT, overlayMapCenter),
+    [overlayFields, overlayMapCenter],
+  );
+
+  // Mapbox also emits move-end for zooms whose center did not change. Preserve the existing
+  // center tuple for those events so the field-drawing subtree keeps its stable inputs.
+  const handleMapMoveEnd = useCallback((nextCenter: [number, number]) => {
+    setOverlayMapCenter((currentCenter) => (
+      currentCenter[0] === nextCenter[0] && currentCenter[1] === nextCenter[1]
+        ? currentCenter
+        : nextCenter
+    ));
+  }, []);
 
   // Duplicate detection
   const [duplicateWarning, setDuplicateWarning] = useState('');
@@ -147,6 +224,7 @@ export default function FieldSetup() {
       setOwnerName(cust?.farm_name || '');
 
       // Fetch GeoJSON for map display
+      let loadedBoundary: Feature<Polygon | MultiPolygon> | null = null;
       const { data: geoData, error: geoError } = await supabase.rpc('get_field_geojson', { p_field_id: id });
       if (geoError) {
         Sentry.captureException(geoError, { tags: { source: 'fetch', action: 'load_field_geometry' } });
@@ -157,8 +235,11 @@ export default function FieldSetup() {
         const geo = geoRows[0];
         if (geo.boundary_geojson) {
           try {
-            const parsed = JSON.parse(geo.boundary_geojson);
-            setBoundaryGeoJSON({ type: 'Feature', properties: {}, geometry: parsed });
+            const parsed: unknown = JSON.parse(geo.boundary_geojson);
+            if (isBoundaryGeometry(parsed)) {
+              loadedBoundary = { type: 'Feature', properties: {}, geometry: parsed };
+              setBoundaryGeoJSON(loadedBoundary);
+            }
             if (geo.centroid_geojson) {
               const centroid = JSON.parse(geo.centroid_geojson);
               if (centroid?.coordinates) {
@@ -178,22 +259,27 @@ export default function FieldSetup() {
         }
       }
 
-      // Load multi-polygon data if available
+      // Load multi-polygon data if available. Older boundaries without field_polygons are
+      // converted into the same DrawnPolygon state so adding a second part is additive too.
       const { data: polyData, error: polyError } = await supabase.rpc('get_field_polygons', { p_field_id: id });
+      let loadedPolygons: DrawnPolygon[] = [];
       if (!polyError && polyData) {
         const polyRows = assertRpcResult<Array<{ id: string; polygon_geojson: object; label: string | null; acres: number | null; sort_order: number }>>(polyData, 'get_field_polygons');
         if (polyRows.length > 0) {
-          const loaded: DrawnPolygon[] = polyRows.map((p, i) => ({
+          loadedPolygons = polyRows.map((p, i) => ({
             drawId: p.id,
             // id MUST mirror drawId so DrawLayer/MapboxDraw maps a later edit/delete of this
             // saved polygon back to the right row (it matches by feature.id === drawId).
             polygon: { type: 'Feature' as const, id: p.id, properties: {}, geometry: p.polygon_geojson as GeoJSON.Polygon },
             acres: p.acres ?? 0,
-            label: p.label || `Polygon ${i + 1}`,
+            label: p.label || `Part ${i + 1}`,
           }));
-          setDrawnPolygons(loaded);
         }
       }
+      if (loadedPolygons.length === 0 && loadedBoundary) {
+        loadedPolygons = boundaryPartsFromGeometry(loadedBoundary.geometry, id);
+      }
+      setDrawnPolygons(loadedPolygons);
 
       // Auto-expand sections with data
       if (data.fsa_farm_number || data.fsa_tract_number || data.fsa_field_number) {
@@ -235,6 +321,38 @@ export default function FieldSetup() {
     }
   }, [id, isNew, fetchCustomers, fetchField]);
 
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        FIELD_CONTEXT_OVERLAY_STORAGE_KEY,
+        showOtherFieldBoundaries ? 'true' : 'false',
+      );
+    } catch {
+      // Local preference is optional; the map still works when storage is unavailable.
+    }
+  }, [showOtherFieldBoundaries]);
+
+  useEffect(() => {
+    if (!showOtherFieldBoundaries) return;
+    let active = true;
+    const loadOtherFields = async () => {
+      try {
+        const rows = await getCachedFieldsGeojson();
+        if (active) setOtherFields(rows);
+      } catch (error: unknown) {
+        Sentry.captureException(error instanceof Error ? error : new Error(String(error)), {
+          tags: { component: 'FieldSetup', action: 'load_other_field_boundaries' },
+        });
+        if (active) {
+          setOtherFields([]);
+          toast('error', 'Could not load other field boundaries.');
+        }
+      }
+    };
+    void loadOtherFields();
+    return () => { active = false; };
+  }, [showOtherFieldBoundaries, toast]);
+
   const update = (key: string, value: unknown) => setField((f) => ({ ...f, [key]: value }));
 
   const splitTotal = billingSplits.reduce((sum, s) => sum + s.split_pct, 0);
@@ -244,7 +362,7 @@ export default function FieldSetup() {
   const measuredPreview =
     drawnPolygons.length > 0
       ? Math.round(drawnPolygons.reduce((s, p) => s + p.acres, 0) * 100) / 100
-      : (boundaryAcres ?? field.measured_acres ?? null);
+      : (field.measured_acres ?? null);
   const billable = billableAcres(field.override_acres, measuredPreview, field.total_acres);
 
   // Duplicate field name check
@@ -394,6 +512,7 @@ export default function FieldSetup() {
               if (bErr) throw bErr;
               assertRpcResult(bData, 'set_field_boundary');
               saveFieldBoundaryIdem.resetKey();
+              loadedHadBoundaryRef.current = true; // a newly persisted boundary cannot be removed in this editor
               setGeometryDirty(false);   // boundary persisted — don't re-measure on a later attribute-only save
             } catch (geoError) {
               Sentry.captureException(geoError instanceof Error ? geoError : new Error(String(geoError)), { tags: { source: 'critical_action', action: 'set_field_boundary' } });
@@ -457,20 +576,62 @@ export default function FieldSetup() {
     setSaving(false);
   };
 
-  // Handle boundary changes from DrawLayer. The polygon area is captured as the measured
-  // PREVIEW only — it never clobbers the billable override (the #1 defect this fixes).
-  const handleBoundaryChange = useCallback((boundary: Feature<Polygon>, acres: number, center: [number, number]) => {
-    setBoundaryGeoJSON(boundary);
-    setBoundaryAcres(Math.round(acres * 100) / 100);
+  const handlePolygonsChange = useCallback((polygons: DrawnPolygon[]) => {
+    setDrawnPolygons(polygons);
+    const combinedGeometry = buildBoundaryGeometry(polygons.map((polygon) => polygon.polygon), null);
+    if (!combinedGeometry) {
+      setBoundaryGeoJSON(null);
+    } else {
+      const combinedBoundary: Feature<Polygon | MultiPolygon> = {
+        type: 'Feature',
+        properties: {},
+        geometry: combinedGeometry,
+      };
+      const nextBounds = computeBounds([JSON.stringify(combinedGeometry)]);
+      setBoundaryGeoJSON((current) => {
+        if (!current || !nextBounds) return combinedBoundary;
+        const currentBounds = computeBounds([JSON.stringify(current.geometry)]);
+        const boundsChanged = !currentBounds || currentBounds.some(
+          (value, index) => Math.abs(value - nextBounds[index]) > BOUNDS_CHANGE_EPSILON,
+        );
+        return boundsChanged ? combinedBoundary : current;
+      });
+    }
     if (initialLoadDone.current) { setGeometryDirty(true); setIsDirty(true); }
-    setMapCenter(center);
+    if (polygons.length > 0) {
+      const center = turfCentroid(polygons[0].polygon);
+      setMapCenter([center.geometry.coordinates[0], center.geometry.coordinates[1]]);
+    }
   }, []);
 
-  const handleBoundaryDelete = useCallback(() => {
-    setBoundaryGeoJSON(null);
-    setBoundaryAcres(null);
-    if (initialLoadDone.current) { setGeometryDirty(true); setIsDirty(true); }
+  const applyLegalLookup = useCallback((lookup: PlssLookupResult) => {
+    setField((current) => ({
+      ...current,
+      legal_description: lookup.legalDescription,
+    }));
   }, []);
+
+  const handleLegalLookup = useCallback(async () => {
+    if (!legalLookupPoint) return;
+    setLegalLookupLoading(true);
+    try {
+      const lookup = await lookupPlss(legalLookupPoint);
+      const hasLegalDescription = Boolean(field.legal_description?.trim());
+      if (hasLegalDescription) {
+        setPendingLegalLookup(lookup);
+      } else {
+        applyLegalLookup(lookup);
+        toast('success', 'Legal description filled from the field boundary');
+      }
+    } catch (error: unknown) {
+      Sentry.captureException(error instanceof Error ? error : new Error(String(error)), {
+        tags: { component: 'FieldSetup', action: 'legal_lookup' },
+      });
+      toast('error', 'Legal lookup unavailable');
+    } finally {
+      setLegalLookupLoading(false);
+    }
+  }, [applyLegalLookup, field.legal_description, legalLookupPoint, toast]);
 
   // Address search handler — fly map to selected location
   const handleAddressSelect = useCallback((lng: number, lat: number) => {
@@ -607,6 +768,22 @@ export default function FieldSetup() {
                 value={field.state || ''}
                 onChange={(e) => update('state', e.target.value)}
               />
+              <div className="sm:col-span-2 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-gray-50 px-3 py-2">
+                <p className="text-xs text-secondary">Use the drawn field location to fill the legal description.</p>
+                <span title={legalLookupPoint ? 'Look up the PLSS legal description from this field boundary' : 'Draw a field boundary before using legal lookup'}>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    icon={<MapPinned className="h-4 w-4" />}
+                    onClick={() => void handleLegalLookup()}
+                    disabled={!legalLookupPoint}
+                    loading={legalLookupLoading}
+                  >
+                    Legal lookup
+                  </Button>
+                </span>
+              </div>
               <div>
                 <Input
                   label="Acres to bill"
@@ -934,10 +1111,24 @@ export default function FieldSetup() {
         {/* Right Panel — Map */}
         <div className="lg:col-span-5">
           <Card className="lg:sticky lg:top-4">
-            <CardHeader title="Field" accent="Location" />
+            <CardHeader
+              title="Field"
+              accent="Location"
+              action={
+                <button
+                  type="button"
+                  onClick={() => setShowOtherFieldBoundaries((show) => !show)}
+                  title={showOtherFieldBoundaries ? 'Hide other fields on this map' : 'Show other fields on this map'}
+                  aria-label={showOtherFieldBoundaries ? 'Hide other fields on this map' : 'Show other fields on this map'}
+                  className="rounded-lg p-2 text-secondary transition-colors hover:bg-gray-100 hover:text-nav-dark"
+                >
+                  {showOtherFieldBoundaries ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
+                </button>
+              }
+            />
             <p className="text-xs text-secondary mb-3">
-              {boundaryGeoJSON
-                ? 'Click the polygon to edit, or use the trash icon to remove it.'
+              {drawnPolygons.length > 0
+                ? 'Use Redraw boundary or Add another section below the map. Remove a section from its confirmed list.'
                 : 'Use the polygon tool (top-left of map) to draw this field\'s boundary.'}
             </p>
             <CRXMap
@@ -946,43 +1137,35 @@ export default function FieldSetup() {
               bounds={initialBounds}
               showLocateMe
               showLayerToggle
+              onMapMoveEnd={handleMapMoveEnd}
               className="h-[400px] w-full"
             >
+              {showOtherFieldBoundaries && (
+                <FieldBoundaryLayer fields={nearbyOverlayFields} showLabels />
+              )}
               <AddressSearch onSelect={handleAddressSelect} />
               <DrawLayer
-                initialPolygons={drawnPolygons.length > 0 ? drawnPolygons : undefined}
-                onPolygonsChange={(polys) => {
-                  setDrawnPolygons(polys);
-                  if (initialLoadDone.current) { setGeometryDirty(true); setIsDirty(true); }
-                  if (polys.length > 0) {
-                    const center = turfCentroid(polys[0].polygon);
-                    setMapCenter([center.geometry.coordinates[0], center.geometry.coordinates[1]]);
-                  }
-                }}
-                initialGeoJSON={drawnPolygons.length === 0 ? boundaryGeoJSON : undefined}
-                onBoundaryChange={drawnPolygons.length === 0 ? handleBoundaryChange : undefined}
-                onBoundaryDelete={drawnPolygons.length === 0 ? handleBoundaryDelete : undefined}
+                initialPolygons={drawnPolygons}
+                onPolygonsChange={handlePolygonsChange}
+                allowRemoveSinglePart={canRemoveSingleBoundary(loadedHadBoundaryRef.current)}
               />
             </CRXMap>
             {/* Polygon list panel */}
-            {drawnPolygons.length > 0 && (
+            {drawnPolygons.length > 1 && (
               <div className="mt-3 space-y-2">
-                <p className="text-xs font-medium text-secondary">Drawn Polygons</p>
+                <p className="text-xs font-medium text-secondary">Field sections</p>
                 {drawnPolygons.map((poly, idx) => (
                   <div key={poly.drawId} className="flex items-center gap-3 p-2 border border-gray-100 rounded-lg">
                     <div className="w-3 h-3 rounded-full bg-crx-green flex-shrink-0" />
-                    {/* Read-only: parts are auto-labelled; set_field_boundary regenerates
-                        field_polygons from the measured geometry (labels are not persisted). */}
-                    <span className="flex-1 text-sm px-2 py-1 text-nav-dark truncate">{poly.label || `Part ${idx + 1}`}</span>
-                    <span className="text-xs text-secondary whitespace-nowrap">{poly.acres.toFixed(2)} ac</span>
+                    <span className="flex-1 text-sm text-nav-dark truncate">
+                      Part {idx + 1} of {drawnPolygons.length} &mdash; {poly.acres.toFixed(2)} ac
+                    </span>
                     <button
-                      onClick={() => {
-                        // a side-panel delete changes the geometry → re-measure + warn on unsaved nav
-                        setDrawnPolygons((prev) => prev.filter((_, i) => i !== idx));
-                        setGeometryDirty(true);
-                        setIsDirty(true);
-                      }}
-                      className="text-gray-400 hover:text-red-500 p-1"
+                      type="button"
+                      onClick={() => setPartPendingDelete(poly)}
+                      title={`Delete part ${idx + 1}`}
+                      aria-label={`Delete part ${idx + 1}`}
+                      className="p-1 text-gray-400 hover:text-red-500"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
@@ -994,11 +1177,6 @@ export default function FieldSetup() {
                 </div>
               </div>
             )}
-            {drawnPolygons.length === 0 && boundaryGeoJSON && (
-              <p className="text-xs text-secondary mt-2">
-                Boundary drawn — acreage auto-calculated from polygon area.
-              </p>
-            )}
           </Card>
         </div>
       </div>
@@ -1007,6 +1185,33 @@ export default function FieldSetup() {
         open={blocker.state === 'blocked'}
         onStay={() => blocker.reset?.()}
         onLeave={() => blocker.proceed?.()}
+      />
+
+      <ConfirmModal
+        open={partPendingDelete !== null}
+        onClose={() => setPartPendingDelete(null)}
+        onConfirm={() => {
+          if (!partPendingDelete) return;
+          handlePolygonsChange(drawnPolygons.filter((polygon) => polygon.drawId !== partPendingDelete.drawId));
+          setPartPendingDelete(null);
+        }}
+        title="Delete field section?"
+        message="This removes only this section from the field boundary. Save the field to apply the updated boundary."
+        confirmLabel="Delete section"
+        variant="danger"
+      />
+
+      <ConfirmModal
+        open={pendingLegalLookup !== null}
+        onClose={() => setPendingLegalLookup(null)}
+        onConfirm={() => {
+          if (pendingLegalLookup) applyLegalLookup(pendingLegalLookup);
+          setPendingLegalLookup(null);
+        }}
+        title="Replace legal description?"
+        message="Legal lookup found a new Section, Township, and Range. Replace the legal description you entered?"
+        confirmLabel="Replace description"
+        variant="warning"
       />
     </div>
   );

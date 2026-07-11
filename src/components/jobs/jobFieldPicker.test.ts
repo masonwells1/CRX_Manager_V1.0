@@ -45,4 +45,11 @@ describe('jobFieldPicker', () => {
     expect(mapFieldsForJobPicker(manyFields)).toHaveLength(JOB_FIELD_PICKER_MAP_LIMIT);
     expect(manyFields).toHaveLength(JOB_FIELD_PICKER_MAP_LIMIT + 1);
   });
+
+  it('uses centroid distance when a map center is supplied for a capped map', () => {
+    const near = { ...fields[0], id: 'near', centroid_geojson: '{"type":"Point","coordinates":[-89.01,40.01]}' };
+    const far = { ...fields[0], id: 'far', centroid_geojson: '{"type":"Point","coordinates":[-90,41]}' };
+
+    expect(mapFieldsForJobPicker([far, near], 1, [-89, 40]).map((field) => field.id)).toEqual(['near']);
+  });
 });

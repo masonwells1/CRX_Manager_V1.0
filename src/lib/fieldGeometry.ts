@@ -38,7 +38,7 @@ export function drawingRingMetrics(
  */
 export function buildBoundaryGeometry(
   polygons: Feature<Polygon>[],
-  singleBoundary: Feature<Polygon> | null,
+  singleBoundary: Feature<Polygon | MultiPolygon> | null,
 ): Polygon | MultiPolygon | null {
   if (polygons.length > 0) {
     return {

@@ -1,4 +1,4 @@
-import { Pencil, Plus, Check, RotateCcw } from 'lucide-react';
+import { Pencil, Plus, Check, RotateCcw, Trash2 } from 'lucide-react';
 
 export interface DrawingHudProps {
   /** True while mapbox-gl-draw is in draw_polygon mode (the user is placing corners). */
@@ -21,6 +21,10 @@ export interface DrawingHudProps {
   onDone: () => void;
   /** Abandon ONLY the in-progress polygon and restart it (does not touch committed parts). */
   onStartOver: () => void;
+  /** Shows the full-clear action only for a single boundary that has not been saved. */
+  canRemoveSinglePart?: boolean;
+  /** Clear the single unsaved boundary from both Mapbox Draw and the confirmed part list. */
+  onRemoveSinglePart?: () => void;
 }
 
 const MIN_CORNERS = 3;
@@ -42,26 +46,53 @@ export default function DrawingHud({
   onReplace,
   onDone,
   onStartOver,
+  canRemoveSinglePart = false,
+  onRemoveSinglePart,
 }: DrawingHudProps) {
-  // Not drawing: show one clear, SAFE entry point (the #1 fix — staff couldn't find how to
-  // start/finish). The action is part-count aware so it is always honest and never wipes
-  // multiple parts: 0 -> draw the boundary; exactly 1 -> redraw (replace that single boundary);
-  // 2+ (an imported multi-part field) -> add another part (additive, never destructive).
-  // Removing a part is done granularly via the native trash control / the per-part list in the form.
+  // Not drawing: make both replacement and the additive multi-part workflow explicit. The extra
+  // section action never clears an existing polygon; a full clear is only exposed for an unsaved
+  // single-part boundary.
   if (!isDrawing) {
     const single = partCount === 1;
     const empty = partCount === 0;
     const label = empty ? 'Draw field boundary' : single ? 'Redraw boundary' : 'Draw another part';
     return (
-      <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-10">
-        <button
-          type="button"
-          onClick={single ? onReplace : onStartDrawing}
-          className="flex items-center gap-2 bg-crx-green text-white rounded-lg shadow-md px-4 py-2.5 text-sm font-semibold hover:bg-crx-green/90 transition-colors"
-        >
-          {empty || single ? <Pencil className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
-          {label}
-        </button>
+      <div className="absolute bottom-4 left-1/2 z-10 w-[min(92%,30rem)] -translate-x-1/2">
+        <div className="rounded-lg border border-gray-200 bg-white p-2 shadow-md">
+          <div className="flex flex-wrap items-center justify-center gap-2">
+            <button
+              type="button"
+              onClick={single ? onReplace : onStartDrawing}
+              className="flex items-center gap-2 rounded-lg bg-crx-green px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-crx-green/90"
+            >
+              {empty || single ? <Pencil className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
+              {label}
+            </button>
+            {!empty && (
+              <button
+                type="button"
+                onClick={onStartDrawing}
+                className="flex items-center gap-1.5 rounded-lg border border-crx-green/30 px-3 py-2.5 text-sm font-semibold text-crx-green transition-colors hover:bg-crx-green-light"
+              >
+                <Plus className="h-4 w-4" />
+                Add another section
+              </button>
+            )}
+            {single && canRemoveSinglePart && onRemoveSinglePart && (
+              <button
+                type="button"
+                onClick={onRemoveSinglePart}
+                className="flex items-center gap-1.5 rounded-lg border border-red-200 px-3 py-2.5 text-sm font-semibold text-red-600 transition-colors hover:bg-red-50"
+              >
+                <Trash2 className="h-4 w-4" />
+                Remove section
+              </button>
+            )}
+          </div>
+          <p className="px-2 pt-2 text-center text-xs text-secondary">
+            Field split by a road or creek? Draw each piece &mdash; they save as ONE field.
+          </p>
+        </div>
       </div>
     );
   }

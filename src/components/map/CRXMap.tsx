@@ -29,6 +29,8 @@ export interface CRXMapProps {
   className?: string;
   children?: ReactNode;
   onMapLoad?: (map: MapRef) => void;
+  /** Fired after navigation settles so consumers can cheaply refresh viewport-dependent work. */
+  onMapMoveEnd?: (center: [number, number]) => void;
 }
 
 const DEFAULT_CENTER: [number, number] = [-89.0, 40.0];
@@ -47,6 +49,7 @@ export default function CRXMap({
   className = 'h-[500px] w-full',
   children,
   onMapLoad,
+  onMapMoveEnd,
 }: CRXMapProps) {
   const [viewState, setViewState] = useState({
     longitude: center[0],
@@ -110,6 +113,10 @@ export default function CRXMap({
     setViewState((prev) => ({ ...prev, longitude, latitude, zoom: 15 }));
   }, []);
 
+  const handleMoveEnd = useCallback((evt: { viewState: { longitude: number; latitude: number } }) => {
+    onMapMoveEnd?.([evt.viewState.longitude, evt.viewState.latitude]);
+  }, [onMapMoveEnd]);
+
   if (!MAPBOX_TOKEN) {
     return (
       <div className={`${className} bg-gray-100 rounded-lg flex items-center justify-center border border-gray-200`}>
@@ -129,6 +136,7 @@ export default function CRXMap({
         key={reloadKey}
         {...viewState}
         onMove={(evt) => setViewState(evt.viewState)}
+        onMoveEnd={handleMoveEnd}
         mapboxAccessToken={MAPBOX_TOKEN}
         mapStyle={BASE_LAYERS[effectiveLayer]}
         style={{ width: '100%', height: '100%' }}

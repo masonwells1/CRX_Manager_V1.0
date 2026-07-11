@@ -5,12 +5,14 @@ import '@mapbox/mapbox-gl-draw/dist/mapbox-gl-draw.css';
 import type { GeoJSON } from 'geojson';
 import DrawingHud from './DrawingHud';
 import { drawingRingMetrics } from '../../lib/fieldGeometry';
+import { shouldSyncInitialDrawFeatures } from '../../lib/fieldBoundaryState';
 
 interface DrawControlProps {
   onDrawCreate?: (feature: GeoJSON.Feature) => void;
   onDrawUpdate?: (feature: GeoJSON.Feature) => void;
   onDrawDelete?: (featureIds: string[]) => void;
   initialGeoJSON?: GeoJSON.Feature | GeoJSON.Feature[] | null;
+  allowRemoveSinglePart?: boolean;
 }
 
 interface HudState {
@@ -27,6 +29,7 @@ export default function DrawControl({
   onDrawUpdate,
   onDrawDelete,
   initialGeoJSON,
+  allowRemoveSinglePart = false,
 }: DrawControlProps) {
   const drawRef = useRef<MapboxDraw | null>(null);
   const [hud, setHud] = useState<HudState>(EMPTY_HUD);
@@ -94,7 +97,9 @@ export default function DrawControl({
         displayControlsDefault: false,
         controls: {
           polygon: true,
-          trash: true,
+          // Boundary parts are removed from FieldSetup's confirmed part list so an accidental
+          // tap on the map controls cannot silently discard a saved section.
+          trash: false,
         },
         defaultMode: 'simple_select',
         styles: [
@@ -194,6 +199,9 @@ export default function DrawControl({
   const loadInitial = useCallback(() => {
     const d = drawRef.current;
     if (!initialGeoJSON || !d) return;
+    // A map move can re-render the parent while the user is placing a new section. Do not
+    // replace Draw's feature collection in that mode: deleteAll() would erase the sketch.
+    if (!shouldSyncInitialDrawFeatures(d.getMode())) return;
     try {
       d.deleteAll();
       const features = Array.isArray(initialGeoJSON) ? initialGeoJSON : [initialGeoJSON];
@@ -248,6 +256,17 @@ export default function DrawControl({
     d.changeMode('draw_polygon');
   }, []);
 
+  const handleRemoveSinglePart = useCallback(() => {
+    const d = drawRef.current;
+    if (!d || d.getMode() === 'draw_polygon') return;
+    const ids = d.getAll().features.map((feature) => feature.id as string).filter(Boolean);
+    if (ids.length !== 1) return;
+    // deleteAll() is silent, so keep FieldSetup's confirmed list in sync explicitly.
+    d.deleteAll();
+    cbRef.current.onDrawDelete?.(ids);
+    recompute();
+  }, [recompute]);
+
   return (
     <DrawingHud
       isDrawing={hud.isDrawing}
@@ -258,6 +277,8 @@ export default function DrawControl({
       onReplace={handleReplaceBoundary}
       onDone={handleDone}
       onStartOver={handleStartOver}
+      canRemoveSinglePart={allowRemoveSinglePart}
+      onRemoveSinglePart={handleRemoveSinglePart}
     />
   );
 }

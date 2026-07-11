@@ -94,8 +94,26 @@ export function selectedJobPickerAcres(
 export function mapFieldsForJobPicker(
   fields: readonly JobFieldPickerField[],
   limit = JOB_FIELD_PICKER_MAP_LIMIT,
+  center?: readonly [number, number],
 ): JobFieldPickerField[] {
-  return fields.slice(0, limit);
+  if (!center) return fields.slice(0, limit);
+  const distanceFromCenter = (field: JobFieldPickerField): number => {
+    if (!field.centroid_geojson) return Number.POSITIVE_INFINITY;
+    try {
+      const parsed: unknown = JSON.parse(field.centroid_geojson);
+      if (!parsed || typeof parsed !== 'object') return Number.POSITIVE_INFINITY;
+      const coordinates = (parsed as { coordinates?: unknown }).coordinates;
+      if (!Array.isArray(coordinates) || typeof coordinates[0] !== 'number' || typeof coordinates[1] !== 'number') {
+        return Number.POSITIVE_INFINITY;
+      }
+      // Squared degrees are sufficient for ordering a capped map result and avoid needless
+      // trigonometry over every field while the map is being moved.
+      return (coordinates[0] - center[0]) ** 2 + (coordinates[1] - center[1]) ** 2;
+    } catch {
+      return Number.POSITIVE_INFINITY;
+    }
+  };
+  return [...fields].sort((left, right) => distanceFromCenter(left) - distanceFromCenter(right)).slice(0, limit);
 }
 
 export function toJobFieldPickerSelection(field: JobFieldPickerField): JobFieldPickerSelection {

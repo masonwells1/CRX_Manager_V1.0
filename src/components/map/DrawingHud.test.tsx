@@ -30,12 +30,33 @@ describe('DrawingHud', () => {
     expect(baseProps.onStartDrawing).toHaveBeenCalledTimes(1);
   });
 
-  it('offers a single-boundary "Redraw boundary" (replace) at exactly 1 part', () => {
+  it('offers a single-boundary redraw and a non-destructive additional section at exactly 1 part', () => {
     render(<DrawingHud {...baseProps} partCount={1} />);
     const btn = screen.getByRole('button', { name: /redraw boundary/i });
     fireEvent.click(btn);
     expect(baseProps.onReplace).toHaveBeenCalledTimes(1);
     expect(baseProps.onStartDrawing).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: /add another section/i }));
+    expect(baseProps.onStartDrawing).toHaveBeenCalledTimes(1);
+    expect(screen.getByText(/field split by a road or creek/i)).toBeInTheDocument();
+  });
+
+  it('offers a full clear only when the single part has not been saved', () => {
+    const onRemoveSinglePart = vi.fn();
+    const { rerender } = render(<DrawingHud {...baseProps} partCount={1} onRemoveSinglePart={onRemoveSinglePart} />);
+    expect(screen.queryByRole('button', { name: /remove section/i })).not.toBeInTheDocument();
+
+    rerender(
+      <DrawingHud
+        {...baseProps}
+        partCount={1}
+        canRemoveSinglePart
+        onRemoveSinglePart={onRemoveSinglePart}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /remove section/i }));
+    expect(onRemoveSinglePart).toHaveBeenCalledTimes(1);
   });
 
   it('offers an ADDITIVE "Draw another part" at 2+ parts (never wipes existing parts)', () => {

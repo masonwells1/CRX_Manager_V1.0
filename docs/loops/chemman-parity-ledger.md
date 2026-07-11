@@ -23,11 +23,11 @@ Loop start (UTC): 2026-07-11T16:20Z (Step 0)
 | M4 | SHIPPED (mostly ALREADY-SHIPPED) | luna (verdict: sol) | 1 | none | (sha at push) | CLEAN |
 | M5 | SHIPPED (frontend-only — no migration needed) | terra (verdict: sol) | 2 | none | (sha at push) | CLEAN (pass 2) |
 | M6 | SHIPPED | sol (migration) + terra (UI); verdicts sol | 3 | 20260713000000 APPLIED LIVE (v20260711202349) | (sha at push) | CLEAN (pass 2) |
-| M7 | pending | terra | – | – | – | – |
-| M8 | pending | terra | – | – | – | – |
+| M7 | SHIPPED (combined Fields-UX unit) | terra (verdicts: sol) | 4* | none | (sha at push) | CLEAN (pass 4) |
+| M8 | SHIPPED (combined Fields-UX unit) | terra | – | none | – | – |
 | M9 | pending | sol+terra | – | – | – | – |
-| M10 | pending | terra | – | – | – | – |
-| M11 | pending | terra | – | – | – | – |
+| M10 | SHIPPED (combined Fields-UX unit; scoped to legal_description) | terra | – | none | – | – |
+| M11 | ALREADY-SHIPPED (verified) | n/a | 0 | none | n/a | n/a |
 | M12 | DONE (research) | sonnet subagent | 1 | none | docs/walkthroughs/fsa-boundary-research.md | n/a |
 
 ## Per-unit PROOF log
@@ -77,3 +77,9 @@ Loop start (UTC): 2026-07-11T16:20Z (Step 0)
 - Review kills: 3 dead Save buttons (uninvoked handlers — BLOCKER both reviewers), status-gate bypass, and Sol's pass-1 five blockers incl. the safety-critical condensed-sum (532 lb printed as one tank) — now per-load "× N each" semantics.
 - Deferred to owner: invalidate loads_done when job acres change after marking (documented; out-of-range marks are inert meanwhile).
 - PROOF — Ran: typecheck ✓ lint ✓ scoped tests 51 ✓ full suite ✓ build ✓; live table SELECT (relrowsecurity=true); 2 Opus + 2 Sonnet reviews + 2 Sol verdicts. · Saw: CLEAN final; migration in live migration list. · Not verified: interactive multi-worksheet flow (top of the morning checklist).
+
+### M7+M8+M10 — Fields-UX unit (SHIPPED, one diff)
+- M7: "+ Add another section" affordance + parts list w/ per-part delete + helper copy (multi-part was already supported server-side; this makes it discoverable). M8: all-fields context overlay while editing (shared 5-min geojson cache extracted to fieldsGeojsonCache.ts, 300-cap, eye toggle persisted, non-interactive). M10: Legal Lookup via public BLM PLSS — honestly scoped to legal_description only (the PLSS layer carries no county data; county/state fill removed after Sol checked the live schema); CSP connect-src gained gis.blm.gov (would have been dead in prod).
+- Review kills across 4 rounds (findings converged 2→2→1→0): map re-frame after draws, single-unsaved-part removal (saved boundaries stay protected), stale loadedHadBoundaryRef desync, CSP block, and a pan-during-draw sketch-erase blocker (DrawControl sync now skips during active draw + stable initialPolygons identity). *Round-cap deviation logged: 4 rounds, same convergence rationale as M1/M2.*
+- Acre authority verified untouched by reviewer (server ST_Multi normalization; attribute-only saves still skip set_field_boundary).
+- PROOF — Ran: typecheck ✓ lint ✓ scoped tests 70-72 ✓ full suite ✓ build ✓; 1 Sonnet deep review + 4 Sol verdict passes. · Saw: CLEAN final. · Not verified: interactive draw/lookup flow (morning checklist).
