@@ -49,7 +49,9 @@ import { computeSeason } from '../utils/season';
 import { recipeItemToChemRowSeed, chemRowsToRecipeItems, getLastRecipeId, setLastRecipeId } from '../lib/recipeHelpers';
 import { programItemToChemRowSeed, parseCropPrograms, orderProgramsForJob, type CropProgram } from '../lib/cropProgramHelpers';
 import { moveItem, moveUp, moveDown } from '../lib/routeOrder';
+import { billableAcres } from '../lib/fieldGeometry';
 import AppliedRecordsManager from '../components/jobs/AppliedRecordsManager';
+import type { JobFieldPickerSelection } from '../components/jobs/jobFieldPicker';
 import ApplicationServicePicker from '../components/field-app/ApplicationServicePicker';
 import WatchdogFlagBanner from '../components/watchdog/WatchdogFlagBanner';
 // U13 (#15-21/#111): job-scoped "Dispatch Locations" — reuses the SAME 3-step
@@ -60,6 +62,8 @@ import type { DispatchLocation } from '../lib/dispatchWizard';
 // the user actually opens the Map / Logs tab — not on every JobDetail page load (matters
 // on field/mobile connections). JobAttachments is light, so it stays a static import.
 const JobFieldMap = lazy(() => import('../components/jobs/JobFieldMap'));
+// The picker contains Mapbox GL, so keep it out of the normal job-editor load.
+const JobFieldPickerModal = lazy(() => import('../components/jobs/JobFieldPickerModal'));
 import JobAttachments from '../components/jobs/JobAttachments';
 import QuickTaskModal from '../components/team/QuickTaskModal';
 import ConfirmModal from '../components/ui/ConfirmModal';
@@ -288,6 +292,10 @@ export default function JobDetail() {
   // Lookup data
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [allFields, setAllFields] = useState<Field[]>([]);
+  // The field picker and manual field selector derive billable acres from this
+  // lookup. Keep those entry points closed until the lookup has succeeded so
+  // neither can fall back to legacy total_acres while it is unavailable.
+  const [fieldsLookupReady, setFieldsLookupReady] = useState(false);
   const [allProducts, setAllProducts] = useState<Product[]>([]);
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [applicators, setApplicators] = useState<Profile[]>([]);
@@ -1192,6 +1200,7 @@ export default function JobDetail() {
 
   // Sub-collections
   const [fieldRows, setFieldRows] = useState<FieldRow[]>([]);
+  const [fieldPickerOpen, setFieldPickerOpen] = useState(false);
   const [growerShareFieldNames, setGrowerShareFieldNames] = useState<string[]>([]);
   // Field-app parity #5: index of the field row currently being dragged to set
   // the applicator route order (null when no drag is in progress).
@@ -1398,6 +1407,7 @@ export default function JobDetail() {
   }, [formSnapshot, loading]);
 
   const loadLookups = async () => {
+    setFieldsLookupReady(false);
     const [custResult, fieldResult, prodResult, vehicleResult, appResult, recipeResult] = await Promise.all([
       supabase.from('customers').select('*').eq('is_active', true).order('farm_name'),
       supabase.from('fields').select('*').order('field_name'),
@@ -1408,7 +1418,10 @@ export default function JobDetail() {
       supabase.from('blend_recipes').select('*').eq('is_active', true).order('name'),
     ]);
     setCustomers((custResult.data || []) as Customer[]);
-    setAllFields((fieldResult.data || []) as Field[]);
+    if (!fieldResult.error) {
+      setAllFields((fieldResult.data || []) as Field[]);
+      setFieldsLookupReady(true);
+    }
     setAllProducts((prodResult.data || []) as Product[]);
     setVehicles((vehicleResult.data || []) as Vehicle[]);
     setApplicators((appResult.data || []) as Profile[]);
@@ -1694,6 +1707,10 @@ export default function JobDetail() {
 
   // Computed
   const customerFields = allFields.filter(f => !customerId || f.customer_id === customerId);
+  const jobPickerBillableAcresById = useMemo(
+    () => new Map(allFields.map((field) => [field.id, billableAcres(field.override_acres, field.measured_acres, field.total_acres)])),
+    [allFields],
+  );
   const totalAcres = fieldRows.reduce((sum, f) => sum + (parseFloat(f.acres_to_treat) || 0), 0);
   // #53/#54: a customer-supplied product is applied but not billed and cost us
   // nothing — it contributes 0 to both job totals (mirrors the server's $0 line).
@@ -2707,6 +2724,30 @@ export default function JobDetail() {
   const addFieldRow = () => {
     setFieldRows([...fieldRows, { field_id: '', field_name: '', acres_to_treat: '', planted_acres: '', crop: '', strip: '', pests: '', sort_order: fieldRows.length }]);
   };
+  const addPickerFieldRows = (selections: JobFieldPickerSelection[]) => {
+    const existingIds = new Set(fieldRows.map((field) => field.field_id).filter(Boolean));
+    const newSelections = selections.filter((selection) => !existingIds.has(selection.field_id));
+    if (newSelections.length === 0) {
+      setFieldPickerOpen(false);
+      return;
+    }
+
+    const newRows = newSelections.map((selection, index) => ({
+      field_id: selection.field_id,
+      field_name: selection.field_name,
+      acres_to_treat: selection.billable_acres?.toString() ?? '',
+      planted_acres: '',
+      crop: selection.crop ?? '',
+      strip: '',
+      pests: '',
+      sort_order: fieldRows.length + index,
+    }));
+    const updatedRows = [...fieldRows, ...newRows];
+    setFieldRows(updatedRows);
+    newSelections.forEach((selection) => seedSharesForField(selection.field_id));
+    recomputeChemQtyFromAcres(updatedRows);
+    setFieldPickerOpen(false);
+  };
   const removeFieldRow = (i: number) => {
     const removed = fieldRows[i];
     const updated = fieldRows.filter((_, idx) => idx !== i);
@@ -2721,8 +2762,9 @@ export default function JobDetail() {
     if (key === 'field_id') {
       const f = allFields.find(af => af.id === value);
       updated[i].field_name = f?.field_name || '';
-      if (f && f.total_acres && !updated[i].acres_to_treat) {
-        updated[i].acres_to_treat = f.total_acres.toString();
+      const defaultAcres = f && billableAcres(f.override_acres, f.measured_acres, f.total_acres);
+      if (defaultAcres != null && !updated[i].acres_to_treat) {
+        updated[i].acres_to_treat = defaultAcres.toString();
       }
       if (f && f.crop_type && !updated[i].crop) {
         updated[i].crop = f.crop_type;
@@ -3234,9 +3276,26 @@ export default function JobDetail() {
             <div className="flex items-center justify-between mb-1">
               <h2 className="text-lg font-semibold text-nav-dark">Fields ({fieldRows.length})</h2>
               {canEdit && (
-                <Button size="sm" variant="secondary" onClick={addFieldRow} disabled={!customerId}>
-                  <Plus className="w-4 h-4" /> Add Field
-                </Button>
+                <div className="flex flex-wrap justify-end gap-2">
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => setFieldPickerOpen(true)}
+                    disabled={!fieldsLookupReady}
+                    title={!fieldsLookupReady ? 'Loading fields…' : undefined}
+                  >
+                    <MapPin className="w-4 h-4" /> Select locations on map
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={addFieldRow}
+                    disabled={!customerId || !fieldsLookupReady}
+                    title={!fieldsLookupReady ? 'Loading fields…' : undefined}
+                  >
+                    <Plus className="w-4 h-4" /> Add Field
+                  </Button>
+                </div>
               )}
             </div>
             {fieldRows.length > 1 && (
@@ -3417,6 +3476,18 @@ export default function JobDetail() {
             )}
           </Card>
         </>
+      )}
+
+      {fieldPickerOpen && (
+        <Suspense fallback={null}>
+          <JobFieldPickerModal
+            open={fieldPickerOpen}
+            onClose={() => setFieldPickerOpen(false)}
+            onAdd={addPickerFieldRows}
+            alreadyOnJobIds={new Set(fieldRows.map((field) => field.field_id).filter(Boolean))}
+            billableAcresById={jobPickerBillableAcresById}
+          />
+        </Suspense>
       )}
 
       {/* ─────────────── CHEMICALS / CHARGES TAB ─────────────── */}

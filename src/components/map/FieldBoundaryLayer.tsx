@@ -1,11 +1,13 @@
 import { useMemo, useEffect } from 'react';
 import { Source, Layer, useMap } from 'react-map-gl/mapbox';
 import { billableAcres } from '../../lib/fieldGeometry';
-import type { Field } from '../../types';
+import type { Customer, Field } from '../../types';
 
-interface FieldWithCustomer extends Field {
-  customer_name?: string;
-}
+type FieldWithCustomer = Pick<Field, 'id' | 'field_name' | 'total_acres' | 'crop_type' | 'boundary_geojson' | 'override_acres' | 'measured_acres'> & {
+  customer_name?: string | null;
+  customer?: Pick<Customer, 'farm_name'> | null;
+  billable_acres?: number | null;
+};
 
 interface FieldBoundaryLayerProps {
   fields: FieldWithCustomer[];
@@ -13,6 +15,9 @@ interface FieldBoundaryLayerProps {
   onFieldClick?: (fieldId: string) => void;
   /** Phase 6 (2026-04-30): when set, fields with id in this set render highlighted. Lets the map double as a selection picker. */
   selectedIds?: Set<string>;
+  /** Hover state can be shared with a companion table. */
+  hoveredId?: string | null;
+  onFieldHover?: (fieldId: string | null) => void;
 }
 
 export default function FieldBoundaryLayer({
@@ -20,6 +25,8 @@ export default function FieldBoundaryLayer({
   showLabels = true,
   onFieldClick,
   selectedIds,
+  hoveredId,
+  onFieldHover,
 }: FieldBoundaryLayerProps) {
   const geojson = useMemo(() => {
     const features = fields
@@ -30,7 +37,7 @@ export default function FieldBoundaryLayer({
             typeof f.boundary_geojson === 'string'
               ? JSON.parse(f.boundary_geojson)
               : f.boundary_geojson;
-          const b = billableAcres(f.override_acres, f.measured_acres, f.total_acres);
+          const b = f.billable_acres ?? billableAcres(f.override_acres, f.measured_acres, f.total_acres);
           return {
             type: 'Feature' as const,
             properties: {
@@ -45,6 +52,7 @@ export default function FieldBoundaryLayer({
               // Phase 6: stamp selection state into the feature so paint
               // expressions can pick it up. Re-derived whenever selectedIds changes.
               selected: selectedIds ? selectedIds.has(f.id) : false,
+              hovered: hoveredId === f.id,
             },
             geometry,
           };
@@ -55,7 +63,7 @@ export default function FieldBoundaryLayer({
       .filter((f): f is NonNullable<typeof f> => f !== null);
 
     return { type: 'FeatureCollection' as const, features };
-  }, [fields, selectedIds]);
+  }, [fields, hoveredId, selectedIds]);
 
   // Click handler for boundary polygons
   const { current: map } = useMap();
@@ -71,23 +79,41 @@ export default function FieldBoundaryLayer({
         if (fieldId) onFieldClick(fieldId);
       }
     };
-    const handleMouseEnter = () => {
+    const handleMouseMove = (e: mapboxgl.MapMouseEvent) => {
       map.getCanvas().style.cursor = 'pointer';
+      const features = map.queryRenderedFeatures(e.point, {
+        layers: ['field-boundaries-fill'],
+      });
+      onFieldHover!(features[0]?.properties?.id ?? null);
     };
     const handleMouseLeave = () => {
       map.getCanvas().style.cursor = '';
+      onFieldHover?.(null);
+    };
+    const handleMouseEnter = () => {
+      map.getCanvas().style.cursor = 'pointer';
     };
 
     map.on('click', 'field-boundaries-fill', handleClick);
-    map.on('mouseenter', 'field-boundaries-fill', handleMouseEnter);
-    map.on('mouseleave', 'field-boundaries-fill', handleMouseLeave);
+    if (onFieldHover) {
+      map.on('mousemove', 'field-boundaries-fill', handleMouseMove);
+      map.on('mouseleave', 'field-boundaries-fill', handleMouseLeave);
+    } else {
+      map.on('mouseenter', 'field-boundaries-fill', handleMouseEnter);
+      map.on('mouseleave', 'field-boundaries-fill', handleMouseLeave);
+    }
 
     return () => {
       map.off('click', 'field-boundaries-fill', handleClick);
-      map.off('mouseenter', 'field-boundaries-fill', handleMouseEnter);
-      map.off('mouseleave', 'field-boundaries-fill', handleMouseLeave);
+      if (onFieldHover) {
+        map.off('mousemove', 'field-boundaries-fill', handleMouseMove);
+        map.off('mouseleave', 'field-boundaries-fill', handleMouseLeave);
+      } else {
+        map.off('mouseenter', 'field-boundaries-fill', handleMouseEnter);
+        map.off('mouseleave', 'field-boundaries-fill', handleMouseLeave);
+      }
     };
-  }, [map, onFieldClick]);
+  }, [map, onFieldClick, onFieldHover]);
 
   return (
     <Source id="field-boundaries" type="geojson" data={geojson}>
@@ -95,18 +121,18 @@ export default function FieldBoundaryLayer({
         id="field-boundaries-fill"
         type="fill"
         paint={{
-          'fill-color': '#28A26A',
+          'fill-color': ['case', ['get', 'selected'], '#f59e0b', ['get', 'hovered'], '#2563eb', '#28A26A'],
           // Phase 6: selected fields render at higher opacity so the user can see
           // which ones are picked at a glance — without losing the unselected ones.
-          'fill-opacity': ['case', ['get', 'selected'], 0.55, 0.18],
+          'fill-opacity': ['case', ['get', 'selected'], 0.6, ['get', 'hovered'], 0.4, 0.18],
         }}
       />
       <Layer
         id="field-boundaries-outline"
         type="line"
         paint={{
-          'line-color': ['case', ['get', 'selected'], '#0f5132', '#28A26A'],
-          'line-width': ['case', ['get', 'selected'], 3, 2],
+          'line-color': ['case', ['get', 'selected'], '#b45309', ['get', 'hovered'], '#1d4ed8', '#28A26A'],
+          'line-width': ['case', ['get', 'selected'], 3, ['get', 'hovered'], 3, 2],
         }}
       />
       {showLabels && (

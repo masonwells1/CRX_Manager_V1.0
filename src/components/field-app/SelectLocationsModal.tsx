@@ -229,7 +229,7 @@ export default function SelectLocationsModal({
                   {filtered.map((f) => (
                     <tr
                       key={f.id}
-                      className={`hover:bg-gray-50 cursor-pointer ${selectedIds.has(f.id) ? 'bg-crx-green/5' : ''}`}
+                      className={`hover:bg-gray-50 cursor-pointer ${selectedIds.has(f.id) ? 'bg-amber-500/10' : ''}`}
                       onClick={() => toggleField(f.id)}
                     >
                       {/* Phase 6 (2026-04-30): stop event propagation here so

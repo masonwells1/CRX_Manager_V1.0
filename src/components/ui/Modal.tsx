@@ -9,7 +9,7 @@ interface ModalProps {
   children: ReactNode;
   footer?: ReactNode;
   maxWidth?: string;
-  size?: 'default' | 'large';
+  size?: 'default' | 'large' | 'fullscreen';
 }
 
 const FOCUSABLE = 'a[href], button:not([disabled]), textarea, input, select, [tabindex]:not([tabindex="-1"])';
@@ -24,11 +24,13 @@ export default function Modal({
   maxWidth,
   size = 'default',
 }: ModalProps) {
-  const desktopSizeClass = maxWidth === 'max-w-2xl'
-    ? 'md:max-w-2xl'
-    : size === 'large'
-      ? 'md:max-w-4xl'
-      : 'md:max-w-lg';
+  const panelSizeClass = size === 'fullscreen'
+    ? 'h-[100dvh] max-h-[100dvh] max-w-full rounded-none'
+    : `h-[100dvh] max-h-[100dvh] max-w-full rounded-none ${maxWidth === 'max-w-2xl'
+      ? 'md:max-w-2xl'
+      : size === 'large'
+        ? 'md:max-w-4xl'
+        : 'md:max-w-lg'} md:mx-4 md:h-auto md:max-h-[90vh] md:rounded-xl`;
   const dialogRef = useRef<HTMLDivElement>(null);
   const titleId = useRef(`modal-title-${Math.random().toString(36).slice(2, 8)}`).current;
 
@@ -102,9 +104,8 @@ export default function Modal({
         ref={dialogRef}
         data-modal-panel
         className={`
-          relative flex h-[100dvh] max-h-[100dvh] w-full max-w-full flex-col
-          rounded-none bg-white shadow-xl border border-gray-100
-          ${desktopSizeClass} md:mx-4 md:h-auto md:max-h-[90vh] md:rounded-xl
+          relative flex w-full flex-col bg-white shadow-xl border border-gray-100
+          ${panelSizeClass}
           animate-in fade-in zoom-in-95
         `}
       >

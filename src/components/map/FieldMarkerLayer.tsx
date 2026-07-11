@@ -1,11 +1,19 @@
 import { useState, useMemo } from 'react';
 import { Marker, Popup } from 'react-map-gl/mapbox';
-import type { Field } from '../../types';
+import type { Customer, Field } from '../../types';
+import { billableAcres } from '../../lib/fieldGeometry';
+
+type MappableField = Pick<Field, 'id' | 'field_name' | 'total_acres' | 'crop_type' | 'centroid_geojson' | 'boundary_geojson' | 'override_acres' | 'measured_acres'> & {
+  customer_name?: string | null;
+  customer?: Pick<Customer, 'farm_name'> | null;
+  billable_acres?: number | null;
+};
 
 interface FieldGeo {
   id: string;
   field_name: string;
   total_acres: number | null;
+  billable_acres: number | null;
   crop_type: string | null;
   customer_name?: string;
   lng: number;
@@ -13,16 +21,27 @@ interface FieldGeo {
 }
 
 interface FieldMarkerLayerProps {
-  fields: Field[];
+  fields: MappableField[];
   onFieldClick?: (fieldId: string) => void;
   /** When true, shows markers for ALL fields with centroids. When false (default), only for fields WITHOUT boundaries */
   showAll?: boolean;
+  selectedIds?: ReadonlySet<string>;
+  hoveredId?: string | null;
+  onFieldHover?: (fieldId: string | null) => void;
+  /** A selection picker should toggle directly instead of opening the information popup. */
+  selectOnClick?: boolean;
+  showLabels?: boolean;
 }
 
 export default function FieldMarkerLayer({
   fields,
   onFieldClick,
   showAll = false,
+  selectedIds,
+  hoveredId,
+  onFieldHover,
+  selectOnClick = false,
+  showLabels = false,
 }: FieldMarkerLayerProps) {
   const [selected, setSelected] = useState<FieldGeo | null>(null);
 
@@ -39,9 +58,10 @@ export default function FieldMarkerLayer({
             id: f.id,
             field_name: f.field_name,
             total_acres: f.total_acres,
+            billable_acres: f.billable_acres ?? billableAcres(f.override_acres, f.measured_acres, f.total_acres),
             crop_type: f.crop_type,
             customer_name:
-              (f as Field & { customer_name?: string }).customer_name ||
+              f.customer_name ||
               f.customer?.farm_name,
             lng: geo.coordinates[0],
             lat: geo.coordinates[1],
@@ -66,12 +86,28 @@ export default function FieldMarkerLayer({
           anchor="center"
           onClick={(e) => {
             e.originalEvent.stopPropagation();
+            if (selectOnClick) {
+              onFieldClick?.(m.id);
+              return;
+            }
             setSelected(m);
           }}
         >
           <div
-            className="w-4 h-4 rounded-full bg-crx-green border-2 border-white shadow-md cursor-pointer hover:scale-125 transition-transform"
-          />
+            onMouseEnter={() => onFieldHover?.(m.id)}
+            onMouseLeave={() => onFieldHover?.(null)}
+            className="relative cursor-pointer"
+          >
+            <div className={`h-4 w-4 rounded-full border-2 border-white shadow-md transition-transform hover:scale-125 ${
+              selectedIds?.has(m.id) ? 'bg-amber-500' : hoveredId === m.id ? 'bg-blue-600' : 'bg-crx-green'
+            }`} />
+            {showLabels && (
+              <span className="pointer-events-none absolute left-1/2 top-5 -translate-x-1/2 whitespace-nowrap rounded bg-black/70 px-1.5 py-0.5 text-center text-[10px] font-medium text-white shadow">
+                {m.field_name}<br />
+                {m.billable_acres == null ? <>&mdash;</> : `${m.billable_acres.toLocaleString()} ac`}
+              </span>
+            )}
+          </div>
         </Marker>
       ))}
 
@@ -88,9 +124,9 @@ export default function FieldMarkerLayer({
         >
           <div className="text-xs px-1 py-1 space-y-0.5">
             <p className="font-semibold text-nav-dark">{selected.field_name}</p>
-            {selected.total_acres && (
+            {selected.billable_acres != null && (
               <p className="text-secondary">
-                {selected.total_acres.toLocaleString()} acres
+                {selected.billable_acres.toLocaleString()} acres
               </p>
             )}
             {selected.crop_type && (

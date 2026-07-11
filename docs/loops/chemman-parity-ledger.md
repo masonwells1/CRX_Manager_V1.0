@@ -19,7 +19,7 @@ Loop start (UTC): 2026-07-11T16:20Z (Step 0)
 |---|---|---|---|---|---|---|
 | M1 | SHIPPED | terra (verdicts: sol) | 4* | none (frontend-only) | 2fc3f33d (on main) | CLEAN (pass 3) |
 | M2 | SHIPPED | terra (verdicts: sol) | 4* | none (frontend-only) | (sha at push) | CLEAN (pass 3) |
-| M3 | pending | terra | – | – | – | – |
+| M3 | SHIPPED | terra (verdicts: sol) | 3 | none (frontend-only) | (sha at push) | CLEAN (pass 2) |
 | M4 | pending | terra | – | – | – | – |
 | M5 | pending | sol+terra | – | – | – | – |
 | M6 | pending | sol+terra | – | – | – | – |
@@ -44,6 +44,17 @@ Loop start (UTC): 2026-07-11T16:20Z (Step 0)
 - *Round-cap deviation again: 4 rounds (build + 3 converging fix rounds, findings 4→2→0). Same reasoning as M1; logged. Spec-quality lesson folded forward: RLS-error-vs-empty and per-group bounds now go into specs upfront.*
 - Product notes for Mason: billing-split table (with customer phone numbers, ChemMan-style — he praised this in the video) defaults ON; map pages always keep their identifying header even with banner off.
 - PROOF — Ran: typecheck ✓ lint ✓ focused tests 13 ✓ full suite 3284 ✓ build ✓; 2 review agents + 3 Sol verdict passes. · Saw: CLEAN final verdict; bannerless sheets keep a job-number line; none-maps skips all fetches. · Not verified: visual print of a real job (Sprint-P spot-check next, covers M1+M2 together).
+
+### Sprint-P deployment spot-check (PASSED, 2026-07-11 ~13:20 CT)
+- Vercel: M1 deploy (2fc3f33d) READY → superseded by M2 deploy dpl_yTFvY3iGyoc8LPmfvmvmcf7QBBa9 (7d0e8f6c) READY on production.
+- Deployed-bundle grep: `assets/PrintOptionsDialog--nMwtTlr.js` present at croprxsolutions.app containing the `applicator_print_options` marker. Sprint P is live.
+- Remaining human check for the morning: print one real job packet (2+ fields, options at defaults) and eyeball the map pages + label placement.
+
+### M3 — Map-based "Select Locations" field picker (SHIPPED)
+- Mason's #1 feature: full-screen picker on the job editor — customer/crop/name/county filters, satellite map + table, selections ACCUMULATE across filter changes, running acres total, 300-boundary render cap (table stays uncapped), token-absent table fallback, 5-min geojson cache, on-job fields excluded (toast on map click). Shared layers gained optional hover/selection props; Modal gained 'fullscreen'.
+- Review fixes: mousemove hit-testing gated on onFieldHover (was a perf regression for ALL 6 existing map consumers); manual-add vs picker acres-default parity (both billable now — two-acre model); SelectLocationsModal tint match; billableAcresById required; P1 race gated (picker disabled until field lookup loads, else legacy acres could be written into acres_to_treat).
+- Within round cap: build + 2 fix rounds.
+- PROOF — Ran: typecheck ✓ lint ✓ scoped tests 197 ✓ full suite 3292 ✓ build ✓; regression reviewer enumerated all shared-component consumers; 2 Sol verdict passes. · Saw: CLEAN final verdict; DispatchBoard/Modal/pages-render suites green. · Not verified: live interactive use (morning check: open a job → Select locations on map → search a crop across customers → add).
 
 ### M12 — FSA boundary data research (DONE)
 - Key finding: commercial "FSA CLU" products (incl. ChemMan's likely vendor AgriData Surety) resell a frozen 2008 snapshot; recommendation = build click-to-adopt on USDA Crop Sequence Boundaries (free, public domain, multi-year windows) + existing draw/edit tools; fallback ReportAll parcel API. Owner decision needed before any build.
