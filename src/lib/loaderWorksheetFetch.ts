@@ -20,11 +20,12 @@
  * this THROWS so the caller aborts the worksheet and never stamps printed_at — the
  * same complete-or-refused rule the #11 chemical report uses (shared resolver).
  */
-import { supabase } from './db';
+import { supabase, supabaseUntyped } from './db';
 import { resolveBilledCustomers } from './billedCustomersResolver';
 import { isGallonCapacityUnit } from './loaderWorksheet';
 import type { LoaderWorksheetPdfData } from './loaderWorksheetPdf';
 import type { ApplicatorSheetCustomer } from './applicatorSheetData';
+import type { JobLoaderWorksheet } from '../types';
 
 /** Raw row shape from the loader-worksheet fetch (only the columns we read). */
 interface LoaderJobRow {
@@ -39,6 +40,11 @@ interface LoaderJobRow {
   vehicle: { vehicle_name: string | null; capacity_gallons: number | null; capacity_unit: string | null } | null;
   job_fields: Array<{ field_id: string | null; acres_to_treat: number | null }> | null;
   job_chemicals: Array<{ quantity: number | null; unit: string | null; product: { product_name: string | null } | null }> | null;
+}
+
+interface WorksheetVehicleRow {
+  id: string;
+  vehicle_name: string | null;
 }
 
 /**
@@ -62,6 +68,32 @@ export async function fetchLoaderWorksheetData(jobIds: string[]): Promise<Loader
   if (error) throw error;
 
   const rows = (data || []) as unknown as LoaderJobRow[];
+
+  // Saved worksheet scenarios are intentionally fetched separately instead of as
+  // an embedded relationship: the selected partial-unique row must replace the
+  // legacy capacity/rate/comment only when it exists. A read error is fatal — a
+  // silent legacy fallback could print the wrong tank plan.
+  const { data: savedWorksheetData, error: savedWorksheetError } = await supabaseUntyped
+    .from('job_loader_worksheets')
+    .select('id, job_id, vehicle_id, capacity_gal, carrier_rate_gpa, load_balance_mode, per_load_acres, loads_done, comment, is_selected, created_by, created_at, updated_at')
+    .in('job_id', jobIds)
+    .eq('is_selected', true);
+  if (savedWorksheetError) throw savedWorksheetError;
+  const selectedWorksheets = (savedWorksheetData ?? []) as unknown as JobLoaderWorksheet[];
+  const selectedWorksheetByJob = new Map(selectedWorksheets.map((worksheet) => [worksheet.job_id, worksheet]));
+
+  const worksheetVehicleIds = [...new Set(selectedWorksheets.map((worksheet) => worksheet.vehicle_id).filter((id): id is string => !!id))];
+  const worksheetVehicleNameById = new Map<string, string>();
+  if (worksheetVehicleIds.length > 0) {
+    const { data: worksheetVehicles, error: worksheetVehiclesError } = await supabase
+      .from('vehicles')
+      .select('id, vehicle_name')
+      .in('id', worksheetVehicleIds);
+    if (worksheetVehiclesError) throw worksheetVehiclesError;
+    ((worksheetVehicles ?? []) as WorksheetVehicleRow[]).forEach((vehicle) => {
+      if (vehicle.vehicle_name) worksheetVehicleNameById.set(vehicle.id, vehicle.vehicle_name);
+    });
+  }
 
   // Resolve applicator names via the public profile view (never a profiles embed).
   const applicatorIds = [...new Set(rows.map((r) => r.applicator_id).filter((x): x is string => !!x))];
@@ -96,7 +128,13 @@ export async function fetchLoaderWorksheetData(jobIds: string[]): Promise<Loader
   return jobIds
     .map((jid) => byId.get(jid))
     .filter((r): r is LoaderJobRow => !!r)
-    .map((r) => mapRowToPdfData(r, nameById, customersByJob.get(r.id) ?? []));
+    .map((r) => mapRowToPdfData(
+      r,
+      nameById,
+      customersByJob.get(r.id) ?? [],
+      selectedWorksheetByJob.get(r.id),
+      worksheetVehicleNameById,
+    ));
 }
 
 /** Map one fetched job row to the shared LoaderWorksheetPdfData. */
@@ -104,6 +142,8 @@ function mapRowToPdfData(
   r: LoaderJobRow,
   nameById: Map<string, string>,
   billedCustomers: ApplicatorSheetCustomer[],
+  selectedWorksheet?: JobLoaderWorksheet,
+  worksheetVehicleNameById: Map<string, string> = new Map(),
 ): LoaderWorksheetPdfData {
   const totalAcres = (r.job_fields || []).reduce((s, f) => s + (f.acres_to_treat || 0), 0);
 
@@ -123,11 +163,13 @@ function mapRowToPdfData(
     scheduled_date: r.job_date,
     scheduled_time: r.scheduled_time,
     applicator_name: r.applicator_id ? (nameById.get(r.applicator_id) ?? null) : null,
-    vehicle_name: r.vehicle?.vehicle_name ?? null,
+    vehicle_name: selectedWorksheet?.vehicle_id
+      ? (worksheetVehicleNameById.get(selectedWorksheet.vehicle_id) ?? 'Manual')
+      : (selectedWorksheet ? 'Manual' : r.vehicle?.vehicle_name ?? null),
     total_acres: totalAcres,
-    carrier_rate_gpa: r.carrier_rate_gpa,
-    tank_capacity: effectiveCapacity,
-    capacity_unit: capacityUnit,
+    carrier_rate_gpa: selectedWorksheet ? selectedWorksheet.carrier_rate_gpa : r.carrier_rate_gpa,
+    tank_capacity: selectedWorksheet ? selectedWorksheet.capacity_gal : effectiveCapacity,
+    capacity_unit: selectedWorksheet ? 'gal' : capacityUnit,
     products: (r.job_chemicals || [])
       .filter((c) => c.product?.product_name || c.quantity != null)
       .map((c) => ({
@@ -135,6 +177,9 @@ function mapRowToPdfData(
         total_quantity: c.quantity,
         unit: c.unit,
       })),
-    loader_comment: r.loader_comment,
+    loader_comment: selectedWorksheet ? selectedWorksheet.comment : r.loader_comment,
+    load_balance_mode: selectedWorksheet?.load_balance_mode,
+    per_load_acres: selectedWorksheet?.per_load_acres,
+    loads_done: selectedWorksheet?.loads_done,
   };
 }

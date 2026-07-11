@@ -22,7 +22,7 @@ Loop start (UTC): 2026-07-11T16:20Z (Step 0)
 | M3 | SHIPPED | terra (verdicts: sol) | 3 | none (frontend-only) | (sha at push) | CLEAN (pass 2) |
 | M4 | SHIPPED (mostly ALREADY-SHIPPED) | luna (verdict: sol) | 1 | none | (sha at push) | CLEAN |
 | M5 | SHIPPED (frontend-only — no migration needed) | terra (verdict: sol) | 2 | none | (sha at push) | CLEAN (pass 2) |
-| M6 | pending | sol+terra | – | – | – | – |
+| M6 | SHIPPED | sol (migration) + terra (UI); verdicts sol | 3 | 20260713000000 APPLIED LIVE (v20260711202349) | (sha at push) | CLEAN (pass 2) |
 | M7 | pending | terra | – | – | – | – |
 | M8 | pending | terra | – | – | – | – |
 | M9 | pending | sol+terra | – | – | – | – |
@@ -66,3 +66,14 @@ Loop start (UTC): 2026-07-11T16:20Z (Step 0)
 ### M5 — Vessel-being-loaded picker (SHIPPED, frontend-only)
 - Grounding shrank it: vehicles table + fleet CRUD + capacity auto-fill already existed. Built: loader-tab vessel picker (assigned vehicle default + any ACTIVE gallon-unit vehicle, e.g. the 3,200-gal tender), capacity persists via existing loader_tank_capacity override, PDF prints "Vehicle X · Loading: N gal", category datalist adds "Tender". Fixed in round 2: non-gallon vessels excluded (matches isGallonCapacityUnit fallback semantics); vessel state reset on new-job navigation.
 - PROOF — Ran: typecheck ✓ lint ✓ vessel+loader tests 25+ ✓ full suite ✓; Sol verdicts (findings→CLEAN). · Saw: CLEAN. · Not verified: interactive tender flow (morning check).
+
+### Event log
+- 2026-07-11 ~14:45 CT: Codex usage limit hit mid-M6a (no migration file written). Reset at 15:02 CT — waiting it out per §6 (a 17-min cooldown, not a stall). All shipped work committed+pushed before the event.
+- 2026-07-11 ~15:40 CT: M6a migration job_loader_worksheets APPLIED LIVE (proof f9103e78…, RLS verified on). Post-apply invariant sweeps 14/15 PASS; 1 pre-existing allowlist-bookkeeping drift (anon-exec-secdef: 3 inert trigger fns — enforce_blend_ticket_fields_billed_lock, fields_acre_authority_guard, recalc_product_price_per_acre — predate tonight; morning item: allowlist or revoke-anon hygiene). Registry refresh delegated.
+
+### M6 — Multiple loader worksheets per job (SHIPPED; migration LIVE)
+- M6a migration 20260713000000_job_loader_worksheets: Sol-written; Opus rls-security CLEAN (created_by WITH CHECK hardening applied per its advisory) + Opus migration-drift CLEAN (7/7); rolled-back live smoke passed twice (original + amended); apply-guard proof f9103e78…; APPLIED LIVE = registry high-water v20260711202349; RLS verified on; post-apply sweeps 14/15 (1 pre-existing bookkeeping item). Registry refreshed live-introspection + synced to both checkouts; stale flag cleared.
+- M6b UI: worksheet list (Select/Edit/Delete, atomic two-step selection w/ 23505 + refetch-on-any-failure + explicit no-selection banner), add/edit with vessel picker, per-load acres editing (capacity-validated), full-loads-remainder mode (ChemMan 133.33/133.33/78.00 reference test), tap-loads-done (out-of-range inert), individual/condensed display, legacy path byte-identical, PDF prints from the selected worksheet.
+- Review kills: 3 dead Save buttons (uninvoked handlers — BLOCKER both reviewers), status-gate bypass, and Sol's pass-1 five blockers incl. the safety-critical condensed-sum (532 lb printed as one tank) — now per-load "× N each" semantics.
+- Deferred to owner: invalidate loads_done when job acres change after marking (documented; out-of-range marks are inert meanwhile).
+- PROOF — Ran: typecheck ✓ lint ✓ scoped tests 51 ✓ full suite ✓ build ✓; live table SELECT (relrowsecurity=true); 2 Opus + 2 Sonnet reviews + 2 Sol verdicts. · Saw: CLEAN final; migration in live migration list. · Not verified: interactive multi-worksheet flow (top of the morning checklist).

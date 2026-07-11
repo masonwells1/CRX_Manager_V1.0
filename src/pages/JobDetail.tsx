@@ -31,6 +31,7 @@ import {
 import { generateChemicalApplicationReportPdf } from '../lib/chemicalApplicationReportPdf';
 import { resolveBilledCustomers } from '../lib/billedCustomersResolver';
 import { generateLoaderWorksheetPdf } from '../lib/loaderWorksheetPdf';
+import { fetchLoaderWorksheetData } from '../lib/loaderWorksheetFetch';
 import { computeLoaderWorksheet, isGallonCapacityUnit } from '../lib/loaderWorksheet';
 import {
   ASSIGNED_VEHICLE_VESSEL_VALUE,
@@ -70,6 +71,9 @@ const JobFieldMap = lazy(() => import('../components/jobs/JobFieldMap'));
 // The picker contains Mapbox GL, so keep it out of the normal job-editor load.
 const JobFieldPickerModal = lazy(() => import('../components/jobs/JobFieldPickerModal'));
 import JobAttachments from '../components/jobs/JobAttachments';
+import { LegacyLoaderWorksheet } from '../components/jobs/LegacyLoaderWorksheet';
+import { LoaderWorksheetsPanel } from '../components/jobs/LoaderWorksheetsPanel';
+import type { LoaderWorksheetDisplayMode } from '../lib/loaderWorksheets';
 import QuickTaskModal from '../components/team/QuickTaskModal';
 import ConfirmModal from '../components/ui/ConfirmModal';
 import RelatedNotes from '../components/team/RelatedNotes';
@@ -353,6 +357,7 @@ export default function JobDetail() {
   const [savedJobVehicleId, setSavedJobVehicleId] = useState<string | null>(null);
   // #10: Loader Worksheet print in progress.
   const [printingLoader, setPrintingLoader] = useState(false);
+  const [loaderDisplayMode, setLoaderDisplayMode] = useState<LoaderWorksheetDisplayMode>('individual');
   // The applicator currently saved on the job — the license gate only fires on a CHANGE
   const [savedApplicatorId, setSavedApplicatorId] = useState<string | null>(null);
   // U12: mirrors savedApplicatorId — lets performSave detect a RESCHEDULE
@@ -1123,21 +1128,20 @@ export default function JobDetail() {
     }
     setPrintingLoader(true);
     try {
-      // Billed customers via the SECURITY DEFINER RPC (saved job_field_shares →
-      // field_billing_defaults → primary customer_id), which resolves the CO-billed
-      // customers an applicator's customers_select RLS hides. A saved job resolves via
-      // the RPC and ABORTS (no PDF/stamp) if resolution is incomplete; a brand-new
-      // unsaved job uses the in-memory "Customer"/primary fallback.
-      let loaderCustomers: ApplicatorSheetData['customers'] = [];
+      // Saved jobs always go through the shared fetcher. It resolves a selected
+      // saved worksheet first (or the untouched legacy fields when none is
+      // selected), so the detail print and Jobs-list bulk print cannot diverge.
       if (!isNew && id) {
-        const resolved = await resolveBilledCustomers(id);
-        if (!resolved.complete) {
-          toast('error', 'Could not complete the loader worksheet — some billed-customer data could not be resolved. Try again.');
+        const [savedWorksheetData] = await fetchLoaderWorksheetData([id]);
+        if (!savedWorksheetData) {
+          toast('error', 'Could not load the saved loader worksheet for printing.');
           setPrintingLoader(false);
           return;
         }
-        loaderCustomers = resolved.customers;
+        await generateLoaderWorksheetPdf({ ...savedWorksheetData, display_mode: loaderDisplayMode });
       } else {
+        // A brand-new, unsaved job still prints exactly from its form state.
+        let loaderCustomers: ApplicatorSheetData['customers'] = [];
         const billedIds = [...new Set((shareRows.length > 0 ? shareRows.map((s) => s.customer_id) : [customerId]).filter(Boolean))];
         const custMap = new Map<string, { customer_name: string; account_number: string | null }>();
         billedIds.forEach((cid) => {
@@ -1151,35 +1155,28 @@ export default function JobDetail() {
           custMap.set(`${name}|${c?.account_number ?? ''}`, { customer_name: name, account_number: c?.account_number ?? null });
         }
         loaderCustomers = [...custMap.values()];
+        await generateLoaderWorksheetPdf({
+          job_number: jobNumber || 'draft',
+          customers: loaderCustomers,
+          scheduled_date: jobDate,
+          scheduled_time: scheduledTime || null,
+          applicator_name: applicators.find((a) => a.id === applicatorId)?.full_name || null,
+          vehicle_name: selectedVehicle?.vehicle_name || savedVehicleName || null,
+          total_acres: totalAcres,
+          // Pass the raw carrier rate so the PDF matches the in-page preview.
+          carrier_rate_gpa: !Number.isNaN(parsedCarrierRate) && parsedCarrierRate > 0 ? parsedCarrierRate : null,
+          tank_capacity: effectiveCapacity,
+          capacity_unit: (tankCapacity.trim() !== '' && effectiveCapacity === overrideCapacity) ? 'gal' : (assignedVehicleCapacityUnit || 'gal'),
+          products: chemRows
+            .filter((c) => c.product_id)
+            .map((c) => ({
+              product_name: c.product_name || 'Product',
+              total_quantity: c.quantity.trim() === '' ? null : parseFloat(c.quantity),
+              unit: c.unit || null,
+            })),
+          loader_comment: loaderComment || null,
+        });
       }
-
-      await generateLoaderWorksheetPdf({
-        job_number: jobNumber || 'draft',
-        customers: loaderCustomers,
-        scheduled_date: jobDate,
-        scheduled_time: scheduledTime || null,
-        applicator_name: applicators.find((a) => a.id === applicatorId)?.full_name || null,
-        vehicle_name: selectedVehicle?.vehicle_name || savedVehicleName || null,
-        total_acres: totalAcres,
-        // Pass the RAW parsed carrier rate (the same value the in-page preview's
-        // computeLoaderWorksheet consumed) — NOT the 4dp-rounded display value — so
-        // the PDF recomputes the identical split and can't disagree with the screen
-        // for a high-precision rate near a tank-capacity boundary (Codex).
-        carrier_rate_gpa: !Number.isNaN(parsedCarrierRate) && parsedCarrierRate > 0 ? parsedCarrierRate : null,
-        tank_capacity: effectiveCapacity,
-        capacity_unit: (tankCapacity.trim() !== '' && effectiveCapacity === overrideCapacity) ? 'gal' : (assignedVehicleCapacityUnit || 'gal'),
-        products: chemRows
-          .filter((c) => c.product_id)
-          .map((c) => ({
-            product_name: c.product_name || 'Product',
-            // Preserve a real 0 (only a BLANK quantity → null), matching the raw-quantity
-            // convention the bulk loaderWorksheetFetch path uses, so single-job and bulk
-            // loader worksheets print identical totals for a zero-quantity line.
-            total_quantity: c.quantity.trim() === '' ? null : parseFloat(c.quantity),
-            unit: c.unit || null,
-          })),
-        loader_comment: loaderComment || null,
-      });
 
       // Stamp printed status + who (ChemMan "Printed" column). Best-effort.
       if (!isNew && id) {
@@ -3727,7 +3724,8 @@ export default function JobDetail() {
       {activeTab === 'loader' && (
         <Card>
           <h2 className="text-lg font-semibold text-nav-dark mb-3">Loader Worksheet</h2>
-
+          {isNew ? (
+            <>
           {/* Inputs: carrier rate (gal/acre) drives spray volume; tank capacity is
               the per-job override (blank = use the assigned vehicle's capacity). */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
@@ -3856,6 +3854,53 @@ export default function JobDetail() {
               placeholder="Instructions for the loader (mix order, etc.)..."
             />
           </div>
+            </>
+          ) : (
+            <LoaderWorksheetsPanel
+              jobId={id!}
+              vehicles={vehicles}
+              jobVehicleId={vehicleId || null}
+              totalAcres={totalAcres}
+              products={chemRows
+                .filter((chemical) => chemical.product_id)
+                .map((chemical) => ({
+                  product_name: chemical.product_name || 'Product',
+                  total_quantity: chemical.quantity.trim() === '' ? null : parseFloat(chemical.quantity),
+                  unit: chemical.unit || null,
+                }))}
+              defaultCarrierRateGpa={!Number.isNaN(parsedCarrierRate) ? parsedCarrierRate : null}
+              legacyWorksheet={{
+                vehicleId: vehicleId || null,
+                capacityGal: effectiveCapacity,
+                carrierRateGpa: !Number.isNaN(parsedCarrierRate) ? parsedCarrierRate : null,
+                comment: loaderComment || null,
+              }}
+              legacyContent={
+                <LegacyLoaderWorksheet
+                  carrierRateGpa={carrierRateGpa}
+                  onCarrierRateChange={setCarrierRateGpa}
+                  loaderVesselId={loaderVesselId}
+                  loaderVesselOptions={loaderVesselOptions}
+                  onVesselChange={(selectedVesselId) => {
+                    setLoaderVesselId(selectedVesselId);
+                    setTankCapacity(capacityForLoaderVesselSelection(selectedVesselId, loaderVesselOptions));
+                  }}
+                  tankCapacity={tankCapacity}
+                  onTankCapacityChange={setTankCapacity}
+                  assignedVehicleCapacity={assignedVehicleCapacity}
+                  assignedVehicleName={savedVehicleName}
+                  assignedVehicleCapacityUnit={assignedVehicleCapacityUnit}
+                  loaderWorksheet={loaderWorksheet}
+                  loaderComment={loaderComment}
+                  onLoaderCommentChange={setLoaderComment}
+                  canEdit={canEdit}
+                />
+              }
+              canEdit={canEdit}
+              displayMode={loaderDisplayMode}
+              onDisplayModeChange={setLoaderDisplayMode}
+            />
+          )}
         </Card>
       )}
 

@@ -37,6 +37,9 @@ export interface LoaderProductInput {
   unit: string | null;
 }
 
+/** How the worksheet assigns acres/product quantities across the computed loads. */
+export type LoaderLoadBalanceMode = 'proportional' | 'full_loads_remainder';
+
 /** The inputs the worksheet split needs. */
 export interface LoaderWorksheetInput {
   /** Sum of acres across the job's fields. */
@@ -46,6 +49,10 @@ export interface LoaderWorksheetInput {
   /** Tank capacity in gallons (per-job override, else the vehicle's). NULL/0 => invalid. */
   tank_capacity: number | null;
   products: LoaderProductInput[];
+  /** Defaults to proportional, preserving the original worksheet behavior. */
+  mode?: LoaderLoadBalanceMode;
+  /** Optional user-edited acres for each computed load. Must sum to total_acres within 0.01 acre. */
+  perLoadAcresOverride?: number[];
 }
 
 /** One product's amount within one specific load. */
@@ -113,6 +120,24 @@ export function isGallonCapacityUnit(unit: string | null | undefined): boolean {
 export const MAX_LOADS = 200;
 
 /**
+ * Allowed difference between the job acres and a user-entered per-load total.
+ * Kept public so every worksheet surface uses the same validation rule.
+ */
+export const LOAD_ACRES_TOLERANCE = 0.01;
+
+/**
+ * A manual load may be fractionally above its nominal capacity to absorb normal
+ * field-entry rounding, but never enough to turn a 500-gallon tank into a
+ * 1,500-gallon load. Kept deliberately small and shared by every caller of the
+ * worksheet math.
+ */
+export const MANUAL_LOAD_CAPACITY_TOLERANCE = 0.005;
+
+function formatGallons(value: number): string {
+  return round4(value).toLocaleString(undefined, { maximumFractionDigits: 4 });
+}
+
+/**
  * Compute the loader worksheet (loads + per-load per-product split) from the job's
  * acres, carrier rate, tank capacity, and products. Pure + tested.
  *
@@ -155,17 +180,85 @@ export function computeLoaderWorksheet(input: LoaderWorksheetInput): LoaderWorks
       invalid_reason: `That tank capacity would need ${loadsCount.toLocaleString()} loads — check the capacity (it looks too small).`,
     };
   }
+
+  const mode = input.mode ?? 'proportional';
+  const acresOverride = input.perLoadAcresOverride;
+  let perLoadAcres: number[] | null = null;
+
+  if (acresOverride !== undefined) {
+    if (acresOverride.length !== loadsCount) {
+      return {
+        ...base,
+        spray_volume: sprayVolume,
+        loads_count: loadsCount,
+        valid: false,
+        invalid_reason: `Enter acres for all ${loadsCount} loads.`,
+      };
+    }
+
+    if (acresOverride.some((acres) => !Number.isFinite(acres) || acres < 0)) {
+      return {
+        ...base,
+        spray_volume: sprayVolume,
+        loads_count: loadsCount,
+        valid: false,
+        invalid_reason: 'Per-load acres must be valid non-negative numbers.',
+      };
+    }
+
+    const overrideTotal = acresOverride.reduce((sum, acres) => sum + acres, 0);
+    // Small epsilon keeps an exact 0.01-acre difference valid despite binary
+    // floating-point representation (for example, 100 - 99.99).
+    if (Math.abs(overrideTotal - totalAcres) > LOAD_ACRES_TOLERANCE + Number.EPSILON * Math.max(1, Math.abs(totalAcres))) {
+      return {
+        ...base,
+        spray_volume: sprayVolume,
+        loads_count: loadsCount,
+        valid: false,
+        invalid_reason: `Per-load acres must total ${round4(totalAcres)} acres (currently ${round4(overrideTotal)}).`,
+      };
+    }
+
+    const allowedVolume = capacity * (1 + MANUAL_LOAD_CAPACITY_TOLERANCE);
+    const overCapacityIndex = acresOverride.findIndex((acres) =>
+      acres * carrier > allowedVolume + Number.EPSILON * Math.max(1, allowedVolume),
+    );
+    if (overCapacityIndex !== -1) {
+      const neededVolume = acresOverride[overCapacityIndex] * carrier;
+      return {
+        ...base,
+        spray_volume: sprayVolume,
+        loads_count: loadsCount,
+        valid: false,
+        invalid_reason: `Load ${overCapacityIndex + 1} needs ${formatGallons(neededVolume)} gal — tank holds ${formatGallons(capacity)} gal.`,
+      };
+    }
+
+    perLoadAcres = [...acresOverride];
+  } else if (mode === 'full_loads_remainder') {
+    const fullLoadAcres = capacity / carrier;
+    perLoadAcres = Array.from({ length: loadsCount }, (_, i) =>
+      i < loadsCount - 1
+        ? fullLoadAcres
+        : Math.max(0, totalAcres - fullLoadAcres * (loadsCount - 1)),
+    );
+  }
+
   // Remainder volume of the last (partial) load. When the volume divides evenly,
   // the last load is a FULL load and there is no partial remainder.
-  const remainder = round4(sprayVolume - capacity * (loadsCount - 1));
-  const lastIsPartial = remainder > 0 && remainder < capacity;
+  const autoRemainder = round4(sprayVolume - capacity * (loadsCount - 1));
 
-  // Per-load VOLUME for each load: full loads carry `capacity`; the final load
-  // carries the remainder (= capacity when it divides evenly).
-  const loadVolumes: number[] = [];
-  for (let i = 0; i < loadsCount; i++) {
-    loadVolumes.push(i < loadsCount - 1 ? round4(capacity) : remainder);
-  }
+  // Overrides change the working gallons as well as the product split. Automatic
+  // proportional/full-remainder modes keep the original capacity/remainder volume
+  // calculation byte-for-byte so existing callers receive the same values.
+  const loadVolumes: number[] = perLoadAcres !== null && acresOverride !== undefined
+    ? perLoadAcres.map((acres) => round4(acres * carrier))
+    : Array.from({ length: loadsCount }, (_, i) =>
+      i < loadsCount - 1 ? round4(capacity) : autoRemainder,
+    );
+
+  const remainder = loadVolumes[loadsCount - 1];
+  const lastIsPartial = remainder > 0 && remainder < capacity;
 
   // Split each product across the loads in proportion to each load's volume share.
   // The first loadsCount-1 loads get their proportional (rounded) amount; the LAST
@@ -192,7 +285,10 @@ export function computeLoaderWorksheet(input: LoaderWorksheetInput): LoaderWorks
         // more than what's left. With many loads + a tiny total, the rounded shares
         // could otherwise sum ABOVE the total before the last load (Codex) — the cap
         // keeps the column sum exactly == total, with no overfill and no negative.
-        amount = Math.min(round4(total * (loadVolumes[i] / sprayVolume)), Math.max(0, remaining));
+        const share = perLoadAcres === null
+          ? loadVolumes[i] / sprayVolume
+          : perLoadAcres[i] / totalAcres;
+        amount = Math.min(round4(total * share), Math.max(0, remaining));
       } else {
         // Last load: exactly the residual so the column sums to the product total.
         amount = Math.max(0, remaining);

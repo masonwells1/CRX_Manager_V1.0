@@ -6,7 +6,7 @@
     "regenerate_with": "node scripts/regenerate-schema-registry.mjs --from-introspection <queries.json> (queries documented in the script header)",
     "purpose": "Single source of truth for hooks: generated columns, status enums, ALL parseable CHECK IN-lists, NOT NULL columns, full column lists, sequences, tables-with/without updated_at, applied-migration high water.",
     "note": "For a fresh refresh from the live DB, ask Claude Code: 'regenerate the schema-registry from Supabase' (/regen-schema-registry). skipped_constraints lists every CHECK the hooks can NOT validate — review it when touching those tables.",
-    "migrations_high_water": "20260711150108"
+    "migrations_high_water": "20260711202349"
   },
   "generated_columns": [
     {
@@ -707,6 +707,15 @@
       ],
       "nullable": true
     },
+    "job_loader_worksheets.load_balance_mode": {
+      "values": [
+        "proportional",
+        "full_loads_remainder"
+      ],
+      "constraints": [
+        "job_loader_worksheets_load_balance_mode_check"
+      ]
+    },
     "job_location_dispatches.dispatch_status": {
       "values": [
         "dispatched",
@@ -1388,6 +1397,30 @@
       "constraint": "job_field_shares_split_pct_check",
       "def": "CHECK (((split_pct > (0)::numeric) AND (split_pct <= (100)::numeric)))",
       "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "job_loader_worksheets",
+      "constraint": "job_loader_worksheets_capacity_gal_check",
+      "def": "CHECK ((capacity_gal > (0)::numeric))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "job_loader_worksheets",
+      "constraint": "job_loader_worksheets_carrier_rate_gpa_check",
+      "def": "CHECK (((carrier_rate_gpa IS NULL) OR (carrier_rate_gpa >= (0)::numeric)))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "job_loader_worksheets",
+      "constraint": "job_loader_worksheets_loads_done_check",
+      "def": "CHECK ((jsonb_typeof(loads_done) = 'array'::text))",
+      "reason": "unparseable — hooks do NOT validate this constraint"
+    },
+    {
+      "table": "job_loader_worksheets",
+      "constraint": "job_loader_worksheets_per_load_acres_check",
+      "def": "CHECK (((per_load_acres IS NULL) OR (jsonb_typeof(per_load_acres) = 'array'::text)))",
+      "reason": "conditional/multi-column — not a single-column IN-list; hooks do NOT validate this constraint"
     },
     {
       "table": "job_location_dispatches",
@@ -2332,6 +2365,20 @@
       ],
       "with_default": [
         "id"
+      ]
+    },
+    "job_loader_worksheets": {
+      "no_default": [
+        "job_id",
+        "capacity_gal"
+      ],
+      "with_default": [
+        "id",
+        "load_balance_mode",
+        "loads_done",
+        "is_selected",
+        "created_at",
+        "updated_at"
       ]
     },
     "job_location_dispatches": {
@@ -3976,6 +4023,21 @@
       "crop",
       "strip",
       "pests"
+    ],
+    "job_loader_worksheets": [
+      "id",
+      "job_id",
+      "vehicle_id",
+      "capacity_gal",
+      "carrier_rate_gpa",
+      "load_balance_mode",
+      "per_load_acres",
+      "loads_done",
+      "comment",
+      "is_selected",
+      "created_by",
+      "created_at",
+      "updated_at"
     ],
     "job_location_dispatches": [
       "id",

@@ -2310,6 +2310,25 @@ export interface JobAttachment {
   uploaded_at: string;
 }
 
+/** One saved vehicle/tank loader worksheet scenario for a field job. */
+export interface JobLoaderWorksheet {
+  id: string;
+  job_id: string;
+  vehicle_id: string | null;
+  capacity_gal: number;
+  carrier_rate_gpa: number | null;
+  load_balance_mode: 'proportional' | 'full_loads_remainder';
+  /** Null means the load acres are auto-computed. */
+  per_load_acres: number[] | null;
+  /** Zero-based indexes of loads marked complete. */
+  loads_done: number[];
+  comment: string | null;
+  is_selected: boolean;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 /**
  * Field-app parity #36 (2026-06-26): a per-LOCATION dispatch record. One current
  * dispatch per job_field (location); a location is dispatched to an applicator OR

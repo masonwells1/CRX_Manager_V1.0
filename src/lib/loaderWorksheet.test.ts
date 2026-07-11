@@ -264,6 +264,87 @@ describe('computeLoaderWorksheet — per-load split sums EXACTLY to the product 
   });
 });
 
+describe('computeLoaderWorksheet — load balance modes + per-load acres overrides', () => {
+  it('matches the ChemMan full-loads/remainder reference case', () => {
+    const ws = computeLoaderWorksheet({
+      total_acres: 344.67,
+      carrier_rate_gpa: 15,
+      tank_capacity: 2000,
+      mode: 'full_loads_remainder',
+      products: [{ product_name: 'AMS', total_quantity: 689.34, unit: 'lb' }],
+    });
+
+    expect(ws.valid).toBe(true);
+    expect(ws.loads_count).toBe(3);
+    expect(ws.loads.map((load) => Math.round((load.volume / 15) * 100) / 100)).toEqual([133.33, 133.33, 78]);
+    expect(ws.loads[2].is_partial).toBe(true);
+    expect(sumProductAcrossLoads(ws, 'AMS')).toBe(689.34);
+    // Last load takes the exact 4dp residual after the two full loads.
+    expect(ws.loads[2].products[0].amount).toBe(156.0066);
+  });
+
+  it('recomputes load volumes and product amounts from a per-load acres override', () => {
+    const ws = computeLoaderWorksheet({
+      total_acres: 100,
+      carrier_rate_gpa: 15,
+      tank_capacity: 500,
+      products: [{ product_name: 'Roundup', total_quantity: 120, unit: 'gal' }],
+      perLoadAcresOverride: [33.3, 33.3, 33.4],
+    });
+
+    expect(ws.valid).toBe(true);
+    expect(ws.loads.map((load) => load.volume)).toEqual([499.5, 499.5, 501]);
+    expect(ws.loads.map((load) => load.products[0].amount)).toEqual([39.96, 39.96, 40.08]);
+    expect(sumProductAcrossLoads(ws, 'Roundup')).toBe(120);
+  });
+
+  it('rejects a manual load that exceeds the tank capacity', () => {
+    const ws = computeLoaderWorksheet({
+      total_acres: 100,
+      carrier_rate_gpa: 15,
+      tank_capacity: 500,
+      products: [],
+      perLoadAcresOverride: [20, 30, 50],
+    });
+
+    expect(ws.valid).toBe(false);
+    expect(ws.invalid_reason).toBe('Load 3 needs 750 gal — tank holds 500 gal.');
+  });
+
+  it('rejects a per-load acres override whose length or total does not match the plan', () => {
+    const wrongLength = computeLoaderWorksheet({
+      total_acres: 100,
+      carrier_rate_gpa: 15,
+      tank_capacity: 500,
+      products: [],
+      perLoadAcresOverride: [50, 50],
+    });
+    expect(wrongLength.valid).toBe(false);
+    expect(wrongLength.invalid_reason).toMatch(/all 3 loads/i);
+
+    const wrongTotal = computeLoaderWorksheet({
+      total_acres: 100,
+      carrier_rate_gpa: 15,
+      tank_capacity: 500,
+      products: [],
+      perLoadAcresOverride: [20, 30, 40],
+    });
+    expect(wrongTotal.valid).toBe(false);
+    expect(wrongTotal.invalid_reason).toMatch(/must total/i);
+  });
+
+  it('keeps explicit proportional mode identical to the default regression output', () => {
+    const input: LoaderWorksheetInput = {
+      total_acres: 100,
+      carrier_rate_gpa: 16,
+      tank_capacity: 500,
+      products: [{ product_name: 'Roundup', total_quantity: 160, unit: 'gal' }],
+    };
+
+    expect(computeLoaderWorksheet({ ...input, mode: 'proportional' })).toEqual(computeLoaderWorksheet(input));
+  });
+});
+
 describe('isGallonCapacityUnit', () => {
   it('treats gallon units (and blank/default) as gallons', () => {
     for (const u of ['gal', 'Gallon', 'GALLONS', 'gl', '', null, undefined, '  gal  ']) {

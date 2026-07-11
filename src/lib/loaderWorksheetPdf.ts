@@ -22,9 +22,17 @@ import { COMPANY_NAME, COMPANY_CITY, COMPANY_FOOTER_INTERNAL } from './companyIn
 import { fmtNum, type ApplicatorSheetCustomer } from './applicatorSheetData';
 import {
   computeLoaderWorksheet,
+  type LoaderLoad,
+  type LoaderLoadBalanceMode,
   type LoaderProductInput,
   type LoaderWorksheet,
 } from './loaderWorksheet';
+import {
+  condensedLoaderLoadLabel,
+  condenseLoaderLoads,
+  type LoaderWorksheetDisplayMode,
+  validLoaderLoadDone,
+} from './loaderWorksheets';
 
 /** Format a YYYY-MM-DD as a local date string (no timezone shift). */
 function fmtDate(d: string): string {
@@ -69,6 +77,53 @@ export interface LoaderWorksheetPdfData {
   capacity_unit: string | null;
   products: LoaderProductInput[];
   loader_comment: string | null;
+  /** Saved worksheet fields. Omitted keeps legacy PDFs byte-for-byte compatible. */
+  load_balance_mode?: LoaderLoadBalanceMode;
+  per_load_acres?: number[] | null;
+  loads_done?: number[];
+  display_mode?: LoaderWorksheetDisplayMode;
+}
+
+export interface LoaderWorksheetPdfLoadColumn {
+  label: string;
+  loads: LoaderLoad[];
+  /** The ONE tank mix shown in this column; never a sum across a condensed group. */
+  load: LoaderLoad;
+  done: boolean;
+}
+
+/**
+ * Resolve saved worksheet inputs and the requested display shape before drawing.
+ * Exported for focused tests so the selected-row print path is covered without a
+ * browser PDF download.
+ */
+export function buildLoaderWorksheetPdfPlan(data: LoaderWorksheetPdfData): {
+  worksheet: LoaderWorksheet;
+  columns: LoaderWorksheetPdfLoadColumn[];
+} {
+  const worksheet = computeLoaderWorksheet({
+    total_acres: data.total_acres,
+    carrier_rate_gpa: data.carrier_rate_gpa,
+    tank_capacity: data.tank_capacity,
+    mode: data.load_balance_mode,
+    perLoadAcresOverride: data.per_load_acres ?? undefined,
+    products: data.products,
+  });
+  const loadsDone = validLoaderLoadDone(data.loads_done ?? [], worksheet.loads_count);
+  const columns = data.display_mode === 'condensed'
+    ? condenseLoaderLoads(worksheet.loads, loadsDone).map((group) => ({
+      label: condensedLoaderLoadLabel(group),
+      loads: group.loads,
+      load: group.loads[0],
+      done: group.done,
+    }))
+    : worksheet.loads.map((load, index) => ({
+      label: `Load ${load.load_number}`,
+      loads: [load],
+      load,
+      done: loadsDone.includes(index),
+    }));
+  return { worksheet, columns };
 }
 
 /**
@@ -135,12 +190,8 @@ function drawLoaderWorksheet(
   autoTable: typeof import('jspdf-autotable').default,
   data: LoaderWorksheetPdfData,
 ): void {
-  const ws: LoaderWorksheet = computeLoaderWorksheet({
-    total_acres: data.total_acres,
-    carrier_rate_gpa: data.carrier_rate_gpa,
-    tank_capacity: data.tank_capacity,
-    products: data.products,
-  });
+  const plan = buildLoaderWorksheetPdfPlan(data);
+  const ws = plan.worksheet;
 
   const pageW = doc.internal.pageSize.getWidth();
   const margin = 40;
@@ -180,20 +231,24 @@ function drawLoaderWorksheet(
   const carrier = data.carrier_rate_gpa != null && data.carrier_rate_gpa > 0
     ? `${fmtNum(data.carrier_rate_gpa)} gal/ac`
     : '________';
+  const summaryRows: string[][] = [
+    ['Applicator', data.applicator_name || '________________', 'Vehicle', `${data.vehicle_name || '________________'} · Loading: ${cap}`],
+    ['Tank Capacity', cap, 'Carrier Rate', carrier],
+    ['Total Acres', fmtNum(data.total_acres) || '0', 'Spray Volume', ws.valid ? `${fmtNum(ws.spray_volume)} gal` : '—'],
+    [
+      'Loads Needed',
+      ws.valid ? String(ws.loads_count) : 'Invalid — enter capacity & carrier rate',
+      'Partial Last Load',
+      ws.valid && ws.partial_load_volume > 0 ? `${fmtNum(ws.partial_load_volume)} gal` : (ws.valid ? 'None (loads divide evenly)' : '—'),
+    ],
+  ];
+  if (data.load_balance_mode !== undefined) {
+    summaryRows.push(['Load Balance', data.load_balance_mode === 'full_loads_remainder' ? 'Full loads + remainder' : 'Proportional', '', '']);
+  }
   autoTable(doc, {
     startY: y,
     margin: { left: margin, right: margin },
-    body: [
-      ['Applicator', data.applicator_name || '________________', 'Vehicle', `${data.vehicle_name || '________________'} \u00b7 Loading: ${cap}`],
-      ['Tank Capacity', cap, 'Carrier Rate', carrier],
-      ['Total Acres', fmtNum(data.total_acres) || '0', 'Spray Volume', ws.valid ? `${fmtNum(ws.spray_volume)} gal` : '—'],
-      [
-        'Loads Needed',
-        ws.valid ? String(ws.loads_count) : 'Invalid — enter capacity & carrier rate',
-        'Partial Last Load',
-        ws.valid && ws.partial_load_volume > 0 ? `${fmtNum(ws.partial_load_volume)} gal` : (ws.valid ? 'None (loads divide evenly)' : '—'),
-      ],
-    ],
+    body: summaryRows,
     styles: { fontSize: 9.5, cellPadding: 5 },
     columnStyles: {
       0: { fontStyle: 'bold', textColor: CHARCOAL, cellWidth: 110 },
@@ -229,8 +284,9 @@ function drawLoaderWorksheet(
     // Columns: Product | Load 1 | Load 2 | … | Total. Each load header notes its
     // volume (and "(partial)" for the last partial load).
     const head: string[] = ['Product'];
-    ws.loads.forEach((l) => {
-      head.push(`Load ${l.load_number}\n${fmtNum(l.volume)} gal${l.is_partial ? ' (partial)' : ''}`);
+    plan.columns.forEach((column) => {
+      const each = column.loads.length > 1 ? ' each' : '';
+      head.push(`${column.done ? '✓ ' : ''}${column.label}\n${fmtNum(column.load.volume)} gal${column.load.is_partial ? ' (partial)' : ''}${each}`);
     });
     head.push('Total');
 
@@ -241,17 +297,16 @@ function drawLoaderWorksheet(
     // across loads at the same index (independently per duplicate row).
     const body: string[][] = data.products.map((p, pi) => {
       const row: string[] = [p.unit ? `${p.product_name} (${p.unit})` : p.product_name];
-      let rowTotal = 0;
-      ws.loads.forEach((l) => {
-        const lp = l.products[pi];
-        if (lp) {
-          rowTotal = Math.round((rowTotal + lp.amount) * 10000) / 10000;
-          row.push(fmtNum(lp.amount));
-        } else {
+      plan.columns.forEach((column) => {
+        const amount = column.load.products[pi]?.amount;
+        if (amount == null) {
           row.push('—');
+          return;
         }
+        row.push(`${column.done ? '✓ ' : ''}${fmtNum(amount)}${column.loads.length > 1 ? ' each' : ''}`);
       });
-      row.push(fmtNum(rowTotal));
+      const rowTotal = ws.loads.reduce((sum, load) => sum + (load.products[pi]?.amount ?? 0), 0);
+      row.push(fmtNum(Math.round(rowTotal * 10000) / 10000));
       return row;
     });
 
