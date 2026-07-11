@@ -45,8 +45,18 @@ import {
   Send,
   FileText,
   Truck,
+  ShoppingCart,
+  Package,
+  Warehouse,
+  ClipboardCheck,
+  Plus,
+  ClipboardList,
+  PackageSearch,
+  Zap,
+  Inbox,
+  CheckSquare,
 } from 'lucide-react';
-import Card from '../components/ui/Card';
+import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
 import Modal from '../components/ui/Modal';
@@ -60,6 +70,7 @@ import { localToday, localDatePlusDays, parseLocalDate } from '../lib/dateUtils'
 import { SkeletonCard } from '../components/ui/Skeleton';
 import type { WatchdogFlag } from '../types';
 import { useAuth } from '../contexts/AuthContext';
+import FinanceSnapshotCard from '../components/dashboard/FinanceSnapshotCard';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -181,6 +192,35 @@ interface CockpitData {
   watchdogLoadOk: boolean;
 }
 
+interface MorningSummaryRpc {
+  active_orders_count: number | string;
+  open_quotes_draft: number | string;
+  open_quotes_sent: number | string;
+  pending_deliveries_count: number | string;
+  open_pos_count: number | string;
+  inventory_available: number | string;
+  inventory_prebooked: number | string;
+  on_order_units: number | string;
+  on_order_po_count: number | string;
+  committed_units: number | string;
+  committed_order_count: number | string;
+}
+
+interface MorningSummaryData {
+  activeOrdersCount: number;
+  openQuotesDraft: number;
+  openQuotesSent: number;
+  pendingDeliveriesCount: number;
+  openPosCount: number;
+  inventoryAvailable: number;
+  inventoryPrebooked: number;
+  onOrderUnits: number;
+  onOrderPoCount: number;
+  committedUnits: number;
+  committedOrderCount: number;
+  programCompletionPct: number | null;
+}
+
 type RawUnbilledJob = {
   id: string;
   job_number: string;
@@ -279,6 +319,21 @@ type RawProductName = {
 
 const TILE_LIMIT = 50;
 
+const emptyMorningSummary: MorningSummaryData = {
+  activeOrdersCount: 0,
+  openQuotesDraft: 0,
+  openQuotesSent: 0,
+  pendingDeliveriesCount: 0,
+  openPosCount: 0,
+  inventoryAvailable: 0,
+  inventoryPrebooked: 0,
+  onOrderUnits: 0,
+  onOrderPoCount: 0,
+  committedUnits: 0,
+  committedOrderCount: 0,
+  programCompletionPct: null,
+};
+
 // ── Helper components ─────────────────────────────────────────────────────────
 
 function AllClear({ label }: { label: string }) {
@@ -325,6 +380,29 @@ function TileHeader({
   );
 }
 
+function LinkedCard({ to, children }: { to: string; children: React.ReactNode }) {
+  const navigate = useNavigate();
+  const open = () => navigate(to);
+
+  return (
+    <Card
+      hover
+      role="button"
+      tabIndex={0}
+      className="cursor-pointer"
+      onClick={open}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          open();
+        }
+      }}
+    >
+      {children}
+    </Card>
+  );
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 
 export default function OfficeCockpit() {
@@ -334,6 +412,8 @@ export default function OfficeCockpit() {
   const isAdmin = profile?.role === 'admin';
 
   const [loading, setLoading] = useState(true);
+  const [morningSummary, setMorningSummary] = useState<MorningSummaryData>(emptyMorningSummary);
+  const [morningSummaryLoadOk, setMorningSummaryLoadOk] = useState(false);
   const [data, setData] = useState<CockpitData>({
     unbilledJobs: [],
     postableInvoices: [],
@@ -512,6 +592,11 @@ export default function OfficeCockpit() {
         .order('expires_at', { ascending: true }),
     ]);
 
+    // Kept OUT of Promise.all: the assertRpcResult coverage checker only
+    // counts `= await supabase.rpc(...)` captures (see assertRpcCoverage.test.ts).
+    const morningSummaryRes = await supabase.rpc('operational_dashboard_summary');
+    const programCompletionRes = await supabase.rpc('get_program_completion');
+
     const rawCompletedDeliveries = (completedDeliveriesRes.data || []) as RawCompletedDelivery[];
     const completedDeliveryCandidates = rawCompletedDeliveries.filter(
       (row): row is RawCompletedDelivery & { order_id: string } => row.order_id != null
@@ -572,6 +657,57 @@ export default function OfficeCockpit() {
       }
     }
 
+    let morningSummaryValidationError: Error | null = null;
+    let programCompletionValidationError: Error | null = null;
+    let programCompletionPct: number | null = null;
+    if (!programCompletionRes.error && programCompletionRes.data) {
+      try {
+        const programs = assertRpcResult<Array<{ completion_pct: number | string }>>(
+          programCompletionRes.data,
+          'get_program_completion'
+        );
+        if (programs.length > 0) {
+          const totalPct = programs.reduce((sum, program) => sum + (Number(program.completion_pct) || 0), 0);
+          programCompletionPct = Math.round(totalPct / programs.length);
+        } else {
+          programCompletionPct = 0;
+        }
+      } catch (error) {
+        programCompletionValidationError = error instanceof Error
+          ? error
+          : new Error('Invalid get_program_completion response');
+      }
+    }
+    let nextMorningSummary = emptyMorningSummary;
+    let nextMorningSummaryLoadOk = false;
+    if (!morningSummaryRes.error && morningSummaryRes.data) {
+      try {
+        const summary = assertRpcResult<MorningSummaryRpc>(
+          morningSummaryRes.data,
+          'operational_dashboard_summary'
+        );
+        nextMorningSummary = {
+          activeOrdersCount: Number(summary.active_orders_count) || 0,
+          openQuotesDraft: Number(summary.open_quotes_draft) || 0,
+          openQuotesSent: Number(summary.open_quotes_sent) || 0,
+          pendingDeliveriesCount: Number(summary.pending_deliveries_count) || 0,
+          openPosCount: Number(summary.open_pos_count) || 0,
+          inventoryAvailable: Number(summary.inventory_available) || 0,
+          inventoryPrebooked: Number(summary.inventory_prebooked) || 0,
+          onOrderUnits: Number(summary.on_order_units) || 0,
+          onOrderPoCount: Number(summary.on_order_po_count) || 0,
+          committedUnits: Number(summary.committed_units) || 0,
+          committedOrderCount: Number(summary.committed_order_count) || 0,
+          programCompletionPct,
+        };
+        nextMorningSummaryLoadOk = true;
+      } catch (error) {
+        morningSummaryValidationError = error instanceof Error
+          ? error
+          : new Error('Invalid operational_dashboard_summary response');
+      }
+    }
+
     const errors = [
       unbilledJobsRes.error,
       postableInvRes.error,
@@ -589,6 +725,10 @@ export default function OfficeCockpit() {
       expiringLicRes.error,
       overdueARRes.error,
       needsDispatchRes.error,
+      morningSummaryRes.error,
+      morningSummaryValidationError,
+      programCompletionRes.error,
+      programCompletionValidationError,
     ].filter(Boolean);
 
     if (errors.length > 0) {
@@ -762,6 +902,8 @@ export default function OfficeCockpit() {
       plannedBookingAttentionLoadOk,
       watchdogLoadOk,
     });
+    setMorningSummary(nextMorningSummary);
+    setMorningSummaryLoadOk(nextMorningSummaryLoadOk);
     setLastRefreshed(new Date());
     setLoading(false);
   }, [toast]);
@@ -1510,6 +1652,226 @@ export default function OfficeCockpit() {
         </Card>
 
       </div>
+
+      {/* The owner-approved morning sequence keeps exception queues first. */}
+      <section className="space-y-4">
+        <div>
+          <h2 className="text-sm font-semibold text-secondary uppercase tracking-wide mb-3">Morning Snapshot</h2>
+          {!morningSummaryLoadOk ? (
+            <Card>
+              <p className="text-sm text-gray-400">Operational KPI summary is unavailable right now. Refresh to retry.</p>
+            </Card>
+          ) : (
+            <div className="grid grid-cols-2 xl:grid-cols-5 gap-3">
+              <LinkedCard to="/orders">
+                <div className="flex items-center gap-2 mb-2">
+                  <div className="w-8 h-8 rounded-lg bg-blue-50 flex items-center justify-center">
+                    <ShoppingCart className="w-4 h-4 text-blue-600" />
+                  </div>
+                  <span className="text-sm text-secondary">Active Orders</span>
+                </div>
+                <p className="text-2xl font-semibold font-heading text-nav-dark">{morningSummary.activeOrdersCount}</p>
+              </LinkedCard>
+
+              <LinkedCard to="/quotes">
+                <div className="flex items-center gap-2 mb-2">
+                  <div className="w-8 h-8 rounded-lg bg-purple-50 flex items-center justify-center">
+                    <FileText className="w-4 h-4 text-purple-600" />
+                  </div>
+                  <span className="text-sm text-secondary">Open Quotes</span>
+                </div>
+                <p className="text-2xl font-semibold font-heading text-nav-dark">
+                  {morningSummary.openQuotesDraft + morningSummary.openQuotesSent}
+                </p>
+                <div className="flex gap-2 mt-1">
+                  <Badge variant="draft" size="sm">{morningSummary.openQuotesDraft} draft</Badge>
+                  <Badge variant="sent" size="sm">{morningSummary.openQuotesSent} sent</Badge>
+                </div>
+              </LinkedCard>
+
+              <LinkedCard to="/deliveries">
+                <div className="flex items-center gap-2 mb-2">
+                  <div className="w-8 h-8 rounded-lg bg-green-50 flex items-center justify-center">
+                    <Truck className="w-4 h-4 text-green-600" />
+                  </div>
+                  <span className="text-sm text-secondary">Pending Deliveries</span>
+                </div>
+                <p className="text-2xl font-semibold font-heading text-nav-dark">{morningSummary.pendingDeliveriesCount}</p>
+              </LinkedCard>
+
+              <LinkedCard to="/purchase-orders">
+                <div className="flex items-center gap-2 mb-2">
+                  <div className="w-8 h-8 rounded-lg bg-teal-50 flex items-center justify-center">
+                    <Package className="w-4 h-4 text-teal-600" />
+                  </div>
+                  <span className="text-sm text-secondary">Open POs</span>
+                </div>
+                <p className="text-2xl font-semibold font-heading text-nav-dark">{morningSummary.openPosCount}</p>
+              </LinkedCard>
+
+              <LinkedCard to="/program-tracker">
+                <div className="flex items-center gap-2 mb-2">
+                  <div className="w-8 h-8 rounded-lg bg-emerald-50 flex items-center justify-center">
+                    <CheckSquare className="w-4 h-4 text-emerald-600" />
+                  </div>
+                  <span className="text-sm text-secondary">Program Progress</span>
+                </div>
+                <p className="text-2xl font-semibold font-heading text-nav-dark">
+                  {morningSummary.programCompletionPct === null ? '—' : `${morningSummary.programCompletionPct}%`}
+                </p>
+              </LinkedCard>
+            </div>
+          )}
+        </div>
+
+        {isAdmin && <FinanceSnapshotCard />}
+      </section>
+
+      <section>
+        <h2 className="text-sm font-semibold text-secondary uppercase tracking-wide mb-3">Inventory Position</h2>
+        {!morningSummaryLoadOk ? (
+          <Card>
+            <p className="text-sm text-gray-400">Inventory position is unavailable until the operational summary loads.</p>
+          </Card>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <LinkedCard to="/inventory">
+              <div className="flex items-center gap-3 mb-3">
+                <div className="w-10 h-10 rounded-lg bg-amber-50 flex items-center justify-center">
+                  <Warehouse className="w-5 h-5 text-amber-600" />
+                </div>
+                <span className="text-sm text-secondary">Floor Stock</span>
+              </div>
+              <p className="text-2xl font-semibold font-heading text-nav-dark">
+                {morningSummary.inventoryAvailable.toLocaleString()} <span className="text-sm font-normal text-secondary">units</span>
+              </p>
+              <div className="flex gap-3 mt-1">
+                <span className="text-xs text-crx-green">{(morningSummary.inventoryAvailable - morningSummary.inventoryPrebooked).toLocaleString()} free</span>
+                <span className="text-xs text-amber-600">{morningSummary.inventoryPrebooked.toLocaleString()} pre-booked</span>
+              </div>
+            </LinkedCard>
+
+            <LinkedCard to="/purchase-orders">
+              <div className="flex items-center gap-3 mb-3">
+                <div className="w-10 h-10 rounded-lg bg-sky-50 flex items-center justify-center">
+                  <Package className="w-5 h-5 text-sky-600" />
+                </div>
+                <span className="text-sm text-secondary">On Order</span>
+              </div>
+              <p className="text-2xl font-semibold font-heading text-nav-dark">
+                {morningSummary.onOrderUnits.toLocaleString()} <span className="text-sm font-normal text-secondary">units</span>
+              </p>
+              <p className="text-xs text-secondary mt-1">Across {morningSummary.onOrderPoCount} open PO(s)</p>
+            </LinkedCard>
+
+            <LinkedCard to="/orders">
+              <div className="flex items-center gap-3 mb-3">
+                <div className="w-10 h-10 rounded-lg bg-violet-50 flex items-center justify-center">
+                  <ClipboardCheck className="w-5 h-5 text-violet-600" />
+                </div>
+                <span className="text-sm text-secondary">Committed</span>
+              </div>
+              <p className="text-2xl font-semibold font-heading text-nav-dark">
+                {morningSummary.committedUnits.toLocaleString()} <span className="text-sm font-normal text-secondary">units</span>
+              </p>
+              <p className="text-xs text-secondary mt-1">Across {morningSummary.committedOrderCount} active order(s)</p>
+            </LinkedCard>
+          </div>
+        )}
+      </section>
+
+      {(isAdmin || profile?.role === 'sales_rep') && (
+        <Card>
+          <CardHeader title="Quick" accent="Actions" />
+          <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-5 gap-3">
+            <button
+              onClick={() => navigate('/deliveries?quickDeliver=1')}
+              className="flex flex-col items-center gap-2 p-4 rounded-xl border border-gray-100 bg-white hover:bg-crx-green-tint hover:border-crx-green/20 transition-all cursor-pointer group"
+            >
+              <div className="w-10 h-10 rounded-lg bg-crx-green/10 group-hover:bg-crx-green/20 flex items-center justify-center transition-colors">
+                <Zap className="w-5 h-5 text-crx-green" />
+              </div>
+              <span className="text-sm font-medium text-nav-dark">Sell &amp; Deliver Now</span>
+            </button>
+            <button
+              onClick={() => navigate('/quotes/new')}
+              className="flex flex-col items-center gap-2 p-4 rounded-xl border border-gray-100 bg-white hover:bg-crx-green-tint hover:border-crx-green/20 transition-all cursor-pointer group"
+            >
+              <div className="w-10 h-10 rounded-lg bg-purple-50 group-hover:bg-purple-100 flex items-center justify-center transition-colors">
+                <FileText className="w-5 h-5 text-purple-600" />
+              </div>
+              <span className="text-sm font-medium text-nav-dark">New Quote</span>
+            </button>
+            <button
+              onClick={() => navigate('/jobs/new')}
+              className="flex flex-col items-center gap-2 p-4 rounded-xl border border-gray-100 bg-white hover:bg-crx-green-tint hover:border-crx-green/20 transition-all cursor-pointer group"
+            >
+              <div className="w-10 h-10 rounded-lg bg-sky-50 group-hover:bg-sky-100 flex items-center justify-center transition-colors">
+                <ClipboardList className="w-5 h-5 text-sky-600" />
+              </div>
+              <span className="text-sm font-medium text-nav-dark">New Job</span>
+            </button>
+            <button
+              onClick={() => navigate('/orders/new')}
+              className="flex flex-col items-center gap-2 p-4 rounded-xl border border-gray-100 bg-white hover:bg-crx-green-tint hover:border-crx-green/20 transition-all cursor-pointer group"
+            >
+              <div className="w-10 h-10 rounded-lg bg-blue-50 group-hover:bg-blue-100 flex items-center justify-center transition-colors">
+                <Plus className="w-5 h-5 text-blue-600" />
+              </div>
+              <span className="text-sm font-medium text-nav-dark">New Order</span>
+            </button>
+            <button
+              onClick={() => navigate('/to-ship')}
+              className="flex flex-col items-center gap-2 p-4 rounded-xl border border-crx-green/30 bg-crx-green-tint hover:bg-crx-green/10 hover:border-crx-green/40 transition-all cursor-pointer group"
+            >
+              <div className="w-10 h-10 rounded-lg bg-crx-green/10 group-hover:bg-crx-green/20 flex items-center justify-center transition-colors">
+                <PackageSearch className="w-5 h-5 text-crx-green" />
+              </div>
+              <span className="text-sm font-medium text-nav-dark">To-Ship</span>
+            </button>
+          </div>
+          <div className="mt-4 border-t border-gray-100 pt-4">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <button
+                onClick={() => navigate('/deliveries/new')}
+                className="flex flex-col items-center gap-2 p-4 rounded-xl border border-gray-100 bg-gray-50/60 hover:bg-crx-green-tint hover:border-crx-green/20 transition-all cursor-pointer group"
+              >
+                <div className="w-10 h-10 rounded-lg bg-green-50 group-hover:bg-green-100 flex items-center justify-center transition-colors">
+                  <Truck className="w-5 h-5 text-green-600" />
+                </div>
+                <span className="text-sm font-medium text-nav-dark">Schedule Delivery</span>
+              </button>
+              <button
+                onClick={() => navigate('/purchase-orders/new')}
+                className="flex flex-col items-center gap-2 p-4 rounded-xl border border-gray-100 bg-gray-50/60 hover:bg-crx-green-tint hover:border-crx-green/20 transition-all cursor-pointer group"
+              >
+                <div className="w-10 h-10 rounded-lg bg-teal-50 group-hover:bg-teal-100 flex items-center justify-center transition-colors">
+                  <Package className="w-5 h-5 text-teal-600" />
+                </div>
+                <span className="text-sm font-medium text-nav-dark">New PO</span>
+              </button>
+              <button
+                onClick={() => navigate('/inventory')}
+                className="flex flex-col items-center gap-2 p-4 rounded-xl border border-gray-100 bg-gray-50/60 hover:bg-crx-green-tint hover:border-crx-green/20 transition-all cursor-pointer group"
+              >
+                <div className="w-10 h-10 rounded-lg bg-amber-50 group-hover:bg-amber-100 flex items-center justify-center transition-colors">
+                  <Warehouse className="w-5 h-5 text-amber-600" />
+                </div>
+                <span className="text-sm font-medium text-nav-dark">Inventory</span>
+              </button>
+              <button
+                onClick={() => navigate('/receiving')}
+                className="flex flex-col items-center gap-2 p-4 rounded-xl border border-gray-100 bg-gray-50/60 hover:bg-crx-green-tint hover:border-crx-green/20 transition-all cursor-pointer group"
+              >
+                <div className="w-10 h-10 rounded-lg bg-indigo-50 group-hover:bg-indigo-100 flex items-center justify-center transition-colors">
+                  <Inbox className="w-5 h-5 text-indigo-600" />
+                </div>
+                <span className="text-sm font-medium text-nav-dark">Receiving</span>
+              </button>
+            </div>
+          </div>
+        </Card>
+      )}
 
       {/* §4: Post-all-clean confirmation — in-app modal (no confirm()/alert()). */}
       <Modal
