@@ -1,0 +1,40 @@
+[0.0-4.0] Then the other piece of it. So okay, we got done apple cut
+[4.4-8.0] Applicating so then I already put in the as applied
+[8.0-12.4] But my sprayer guy can type here and put add as applied data
+[13.0-17.5] He could put his name the sprayer the time he started when he ended
+[21.2-24.0] And I mean I've already done it and then he could come in here
+[24.0-29.4] And he can actually type in what he didn't didn't do but I mean it's just it's really really
+[30.0-33.6] Really good then also on this job
+[34.2-41.4] For my I can change the the location like I want my sprayer guy to spray Huffington field first
+[41.4-43.4] Hawk I can change the order
+[44.1-48.8] And that'll print out too. Just so this sprayer knows how I want him to route himself
+[50.6-52.6] Also I can
+[53.5-55.6] Upload log files from the sprayer
+[57.7-59.7] So I'm gonna I'm gonna go ahead and do
+[60.2-64.5] The loader sheet so this is for the blending man who's blending the loads
+[65.0-69.7] He can select whether he wants to blend individual loads or condensed loads
+[71.3-73.8] You know I can go in here and change
+[74.5-79.3] Anything I want I mean I you can you can tell it how many gallon is you know
+[79.3-85.2] I'm gonna mix up a five thousand gallon batch to tender to the sprayer or the sprayer can come in and
+[85.2-89.4] And you know do whatever so I can you know here's my I can fill in
+[90.0-94.2] You know all the information the ground crew that's basically who's mixing the load
+[95.5-103.2] Whether I want full loads so target rate nacre. I want 15 gallon that means I need four fill ups
+[104.8-106.7] Or I can I'm gonna load my tanker
+[106.7-111.9] So I'm just gonna put say I got a five thousand gallon tank I can fill in to that's gonna take two loads
+[112.4-117.4] At 15 gallon per acre it shows the product the rate per acre
+[117.4-122.9] So the total amount that we need to apply to this job and then since I'm doing
+[124.1-126.9] So here if we have a two thousand
+[127.6-128.6] gallon
+[128.6-132.7] Tank that we're gonna mix into it already breaks out load one
+[133.3-141.7] Load two load three this makes it so easy and it erases the manual airs with us making blend tickets
+[141.7-148.1] So you know first time the tank comes in he needs to add two hundred and sixty six pounds of ammonium sulfate
+[148.3-151.0] He's a two gallon of spray fix
+[151.1-155.0] They needs to add you know have a total of two thousand gallons
+[155.0-158.3] So he needs to add the rest of water and then you can also edit these
+[158.7-164.6] You know then the last load you know would be only a seventy eight acre load and there's the product quality
+[166.2-168.2] So then I can print that out
+[168.2-170.2] and
+[171.7-177.5] You know I can even edit things in here, but I mean it's just it works really nice I
+[178.1-180.2] Can just give this to the blending guy
+[180.2-186.5] So he you know load one load two you do these amounts and then on the third load to finish the job
+[187.0-190.8] Here's how much he needs it makes our workflow really nice

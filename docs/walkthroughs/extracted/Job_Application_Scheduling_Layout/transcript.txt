@@ -1,0 +1,93 @@
+[0.0-4.4] Okay, here's the walkthrough of what I like about Kimman.
+[4.4-9.4] I love their billing, like their dispatch on application.
+[9.5-14.1] So when I go to like schedule a job out, I hit add.
+[15.9-20.9] Then what I really like is everything being
+[21.8-24.4] on the same screen.
+[25.4-27.6] That's about the biggest thing.
+[27.6-30.2] And I can add any location.
+[30.2-31.8] So I click this button
+[33.7-38.7] and then I can just type corn and search.
+[42.3-46.4] And then every acre of corn that we have in our system
+[46.4-51.4] pulls up no matter who the customer is.
+[51.4-56.4] I can also filter by just what customer I want to look at.
+[58.8-63.8] But like I can go in here and select this field
+[65.1-68.2] that's owned by Next Generation Farms.
+[68.2-70.5] This field is by Huffington's.
+[71.6-75.0] Then I can select this field and then, okay,
+[75.0-78.0] I want, then I can just sort by say
+[78.0-79.9] an Annapolis Crane customer.
+[80.9-84.4] So then now it's just showing, or wait a minute, here.
+[86.2-89.3] I can put in like Mason Wells' name
+[89.3-91.6] and then it's just Mason Wells' corn.
+[94.0-95.8] So okay, here's my job.
+[95.8-97.5] You can see my customers, you know,
+[97.5-99.9] you can see all the fields over here.
+[99.9-103.1] So this field is owned by Huffington Farm,
+[103.1-105.4] Golf West is Next Generation Farm,
+[105.4-107.7] Billing Split and the Fake Field.
+[108.6-110.8] So I have in there for testing and the Hog Farm,
+[110.8-113.4] which is a 50-50 split of Mason Clayton.
+[113.4-115.6] I can hit select locations.
+[117.3-121.2] It has who the customer it is, what the field name is,
+[121.2-123.9] how many acres we have it logged at.
+[123.9-127.6] And then after I put in,
+[127.6-131.0] then I can actually come in here and say,
+[131.0-134.8] I, after I spray it, my applicator can go,
+[134.8-137.8] I've sprayed 105 acres there.
+[137.8-142.1] I sprayed 82 acres there.
+[142.1-147.1] I sprayed 112, 22 acres there, whatever it is.
+[148.9-153.9] I then, you know, I can put in the product, the rate,
+[157.8-160.0] you know, anything that I sprayed in there
+[160.0-164.0] and then I put in the Hagee chemical application,
+[164.0-166.6] you know, so I can build the application here.
+[168.6-170.1] You know, I can put the diluent rate,
+[170.1-172.4] so I spray in a 15-gallon per acre.
+[172.4-174.0] Then I can put the applicator,
+[174.0-175.5] who's the one spraying it?
+[175.5-180.0] So Andrew Shelton and he is in the Hagee.
+[182.3-183.5] Job's done.
+[185.0-187.6] I hit add applied info.
+[187.6-191.7] So Andrew in the Hagee.
+[192.7-195.1] I put the date, which is the day.
+[196.5-200.0] I can hit get weather and it automatically pulls
+[200.0-202.3] in all the weather and I can save the job.
+[204.5-205.4] I love it.
+[206.4-210.3] So then you can see, here's the job that we just did.
+[210.3-211.8] It is a fun to side job.
+[211.8-214.3] So I got it tagged as fun to side.
+[214.3-216.4] Here's the fields.
+[216.4-219.4] It shows the total acres, the remaining,
+[219.4-222.5] there's zero acres left on this job.
+[222.5-225.9] But if I would have selected that the job,
+[225.9-227.6] the fields weren't fully finished,
+[227.6-229.9] then it would say I have remainder there.
+[229.9-233.3] So then what I can do is I can hit edit
+[233.3-235.6] and then I can transfer this to an invoice,
+[235.6-236.7] which I'm not gonna do,
+[236.7-239.4] because that's gonna affect real customers.
+[239.4-244.4] But then it would split out based off of the acres,
+[244.8-245.8] you know, up here,
+[247.0-249.0] based off of the acres I type in,
+[249.0-252.4] I actually applied, it will split this product
+[252.4-255.1] and application out accordingly.
+[255.1-258.5] It's a phenomenal, phenomenal feature.
+[258.5-261.0] I can also, you know, see the job.
+[262.5-264.4] It's just a really good layout.
+[264.4-267.1] I mean, it is the best.
+[267.1-269.3] Then I can hit applicator report
+[273.5-278.5] and I can print out application maps
+[279.4-283.2] for, so like here, like I can,
+[283.2-286.3] I can just, like I wanna do a combine.
+[286.3-288.3] So display map type combined,
+[288.3-290.2] I can select whether or not I wanna show
+[290.2-292.3] what's in the tank mix.
+[292.3-293.6] I can hit print.
+[299.0-302.2] And then it shows the acres, the billing splits,
+[302.2-305.0] the phone numbers, the customers.
+[305.0-307.2] It shows a grand overview of all the jobs
+[307.2-308.3] we need to do.
+[310.0-311.4] It's phenomenal.
+[311.4-313.2] And then it also will,
+[313.2-316.3] it also, if I selected it, would select,
+[316.3-320.1] it would have blow-ups of just each individual field as well.
+[320.1-321.5] So this is what I love.

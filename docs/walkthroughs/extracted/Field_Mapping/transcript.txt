@@ -1,0 +1,36 @@
+[0.0-6.5] The other piece that is that Kenman is still way better at than our app is adding fields.
+[6.5-9.5] So like I can have all the fields. It's so easy.
+[9.5-11.5] Our app is too cluttered.
+[11.5-15.5] You have to go to too many screens to see all the fields here.
+[15.5-17.5] It's every single field in the entire system.
+[17.5-23.5] I can select by, you know, customer.
+[23.5-28.5] I'll put my name in Mason and then here's all my fields.
+[29.0-33.0] I really like, I just, I really do like it.
+[33.0-43.0] I can upload maps from like John Deere field view or anywhere and it'll automatically log it on a map.
+[43.0-47.0] But then when I go to add fields, this is what's way better.
+[47.0-55.0] I can either, I can see every customer's field that's in our system on the screen at the same time.
+[55.5-61.5] I can also click this button down here to not show it if it gets cluttered.
+[61.5-65.5] But you can add obstacles like I have oil wells here.
+[65.5-70.5] So I have little windmills just so my sprayer guys know where there's obstacles at in the field.
+[72.5-76.5] Like on this field, you know, I got them all marked in there and makes it really nice.
+[76.5-79.5] So I'm going to add a field here.
+[80.0-86.0] I'm going to call it fake field 40.
+[89.0-90.0] Hit edit map.
+[90.0-93.0] I can see FSA boundaries.
+[95.0-97.0] It has map box, Google sat.
+[97.0-99.0] I can switch to road view or enhance street.
+[99.0-107.0] But oops, I can just click off the FSA boundaries.
+[107.0-110.5] So I don't even have to manually do it.
+[110.5-113.5] It makes it really nice.
+[113.5-115.5] So there's, you know, all the different sections.
+[115.5-117.5] It's 51.96 acres.
+[117.5-123.5] I can hit legal look up and based off the coordinates that automatically pulls in the section,
+[123.5-130.5] township, range, you know, everything else, then I can put in the customer.
+[131.0-138.0] See, I want this customer is 50% share on this field and then Mason wells the other 50%.
+[138.0-146.0] Then I can also click edit and I can edit those FSA boundaries, the auto pulled in.
+[148.0-153.0] Or I can, I can draw multiple polygons.
+[157.0-159.0] And it all saves as one field in our app.
+[159.0-165.5] You can only do one polygon, but most times fields are broken up in different sections.
+[165.5-169.5] And so we need to be able to add this and then we're going to save it.
+[169.5-172.5] And then if I select this field for a job, it knows the billing splits,
+[172.5-174.5] knows the acres, it's really slick.
