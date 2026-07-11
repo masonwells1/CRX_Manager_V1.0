@@ -84,12 +84,12 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(
 <div id="header">
   <h1>⬡ CRX Manager — Architecture Map</h1>
   <!-- __STATS_START__ -->
-  <span id="stat-line" style="color:var(--muted);font-size:.8rem">90 routes · 210 RPC calls · 0 issues · Updated Jul 10, 2026</span>
+  <span id="stat-line" style="color:var(--muted);font-size:.8rem">90 routes · 210 RPC calls · 1 issues · Updated Jul 10, 2026</span>
   <!-- __STATS_END__ -->
   <div id="tabs">
     <button class="tab active" onclick="showTab('graph')">Graph</button>
     <button class="tab" onclick="showTab('lifecycle')">Lifecycles</button>
-    <button class="tab" onclick="showTab('problems')">Problems <span id="prob-count" style="background:#ef4444;color:#fff;border-radius:10px;padding:0 6px;font-size:.7rem;margin-left:4px">0</span></button>
+    <button class="tab" onclick="showTab('problems')">Problems <span id="prob-count" style="background:#ef4444;color:#fff;border-radius:10px;padding:0 6px;font-size:.7rem;margin-left:4px">1</span></button>
   </div>
 </div>
 
@@ -417,8 +417,12 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(
 
   <!-- __AUTO_PROBLEMS_START__ -->
       <div class="prob-section">
-        <h3>Auto-detected Problems</h3>
-        <div class="prob-item info"><strong>None found</strong><p>No orphan pages, broken links, dead RPCs, or unguarded financial-table writes detected in the current codebase.</p></div>
+        <h3>Auto-detected Orphan Pages (no inbound navigation) (1 found)</h3>
+        <div class="prob-item ">
+          <strong>Orphan page: /receiving/quick</strong>
+          <p>Route exists (component: Navigate) but nothing references it — no sidebar link, no navigate() call, no nav-config entry. Only reachable by typing the URL directly.</p>
+          <span class="loc">src/App.tsx</span>
+        </div>
       </div><!-- __AUTO_PROBLEMS_END__ -->
 
 </div>
@@ -697,27 +701,11 @@ const NODES = [
       "problem": false
     },
     {
-      "id": "receiving-log",
-      "label": "ReceivingLog",
+      "id": "receiving",
+      "label": "Receiving",
       "type": "page-sales",
       "group": "Supply",
       "path": "/receiving",
-      "problem": false
-    },
-    {
-      "id": "receiving-hub",
-      "label": "ReceivingHub",
-      "type": "page-sales",
-      "group": "Supply",
-      "path": "/receiving-hub",
-      "problem": false
-    },
-    {
-      "id": "quick-receive",
-      "label": "QuickReceive",
-      "type": "page-sales",
-      "group": "Supply",
-      "path": "/receiving/quick",
       "problem": false
     },
     {
@@ -1758,7 +1746,7 @@ const EDGES = [
     },
     {
       "s": "office-cockpit",
-      "t": "receiving-log",
+      "t": "receiving",
       "type": "nav"
     },
     {
@@ -1842,11 +1830,6 @@ const EDGES = [
       "type": "nav"
     },
     {
-      "s": "quick-receive",
-      "t": "receiving-log",
-      "type": "nav"
-    },
-    {
       "s": "quote-builder",
       "t": "quotes",
       "type": "nav"
@@ -1869,21 +1852,6 @@ const EDGES = [
     {
       "s": "quotes",
       "t": "order-detail",
-      "type": "nav"
-    },
-    {
-      "s": "receiving-hub",
-      "t": "purchase-order-detail",
-      "type": "nav"
-    },
-    {
-      "s": "receiving-log",
-      "t": "purchase-order-detail",
-      "type": "nav"
-    },
-    {
-      "s": "receiving-log",
-      "t": "quick-receive",
       "type": "nav"
     },
     {
@@ -2142,11 +2110,6 @@ const EDGES = [
       "type": "rpc"
     },
     {
-      "s": "quick-receive",
-      "t": "r-inventory",
-      "type": "rpc"
-    },
-    {
       "s": "quote-builder",
       "t": "r-quote",
       "type": "rpc"
@@ -2159,11 +2122,6 @@ const EDGES = [
     {
       "s": "rebates",
       "t": "r-rebate",
-      "type": "rpc"
-    },
-    {
-      "s": "receiving-hub",
-      "t": "r-inventory",
       "type": "rpc"
     },
     {

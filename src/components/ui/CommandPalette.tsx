@@ -140,7 +140,7 @@ const EXTRA_PAGES: { path: string; label: string; pageKey?: string; allRoles?: b
   { path: '/quotes/new', label: 'New Quote/Booking', pageKey: 'quotes' },
   { path: '/orders/new', label: 'New Order', pageKey: 'orders' },
   { path: '/purchase-orders/new', label: 'New Purchase Order', pageKey: 'purchase-orders' },
-  { path: '/receiving/quick', label: 'Quick Receive', pageKey: 'receiving' },
+  { path: '/receiving?tab=quick', label: 'Quick Receive', pageKey: 'receiving' },
   { path: '/deliveries/new', label: 'New Delivery', pageKey: 'deliveries' },
   { path: '/deliveries?quickDeliver=1', label: 'Sell & Deliver Now', pageKey: 'deliveries' },
   { path: '/sales-reports?tab=by_product', label: 'Sales by Product (Product Mix)', pageKey: 'sales-reports' },

@@ -13,23 +13,23 @@ import {
   RotateCcw,
   Search,
 } from 'lucide-react';
-import Card, { CardHeader } from '../components/ui/Card';
-import Button from '../components/ui/Button';
-import Badge from '../components/ui/Badge';
-import { useToast } from '../components/ui/Toast';
-import { useAuth } from '../contexts/AuthContext';
-import { supabase, assertRpcResult } from '../lib/db';
-import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
-import { Sentry } from '../lib/sentry';
-import HelpTip from '../components/ui/HelpTip';
-import { notifyDamagedReceiving } from '../lib/notificationTriggers';
-import { formatUSD as fmt } from '../lib/money';
+import Card, { CardHeader } from '../ui/Card';
+import Button from '../ui/Button';
+import Badge from '../ui/Badge';
+import { useToast } from '../ui/Toast';
+import { useAuth } from '../../contexts/AuthContext';
+import { supabase, assertRpcResult } from '../../lib/db';
+import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
+import { Sentry } from '../../lib/sentry';
+import HelpTip from '../ui/HelpTip';
+import { notifyDamagedReceiving } from '../../lib/notificationTriggers';
+import { formatUSD as fmt } from '../../lib/money';
 import type {
   Product,
   ReceivingCondition,
   QuickReceiveItem,
   QuickReceiveMatchResult,
-} from '../types';
+} from '../../types';
 
 /* ─── helpers ─── */
 let keyCounter = 0;
@@ -59,7 +59,7 @@ const conditionVariant = (c: string): 'success' | 'error' | 'warning' | 'default
 };
 
 /* ═══════════════════════════════════════════════════════════════════ */
-export default function QuickReceive() {
+export default function QuickReceivePanel() {
   const navigate = useNavigate();
   const { profile } = useAuth();
   const { toast } = useToast();
@@ -343,7 +343,7 @@ export default function QuickReceive() {
       const receivingRecordIds = (data as Record<string, unknown> | null)?.receiving_record_ids as string[] | undefined;
       if (receivingRecordIds && receivingRecordIds.length > 0) {
         try {
-          const { downloadReceivingPdf } = await import('../lib/receivingPdf');
+          const { downloadReceivingPdf } = await import('../../lib/receivingPdf');
           await downloadReceivingPdf({
             po_number: 'Quick Receive',
             vendor: vendor || 'Multiple / Unknown',
@@ -398,7 +398,7 @@ export default function QuickReceive() {
     <div className="space-y-4">
       {/* ── Header ── */}
       <button
-        onClick={() => navigate('/receiving')}
+        onClick={() => navigate('/receiving?tab=log')}
         className="flex items-center gap-2 text-sm text-secondary hover:text-nav-dark transition-colors"
       >
         <ArrowLeft className="w-4 h-4" />

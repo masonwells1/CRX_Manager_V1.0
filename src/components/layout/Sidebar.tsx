@@ -132,8 +132,7 @@ const officeNavigation: NavEntry[] = [
         { path: '/products', label: 'Products', icon: <Package className="w-4 h-4" /> },
         { path: '/brand-vs-generic', label: 'Brand vs Generic', icon: <Scale className="w-4 h-4" /> },
         { path: '/purchase-orders', label: 'Purchase Orders', icon: <ShoppingCart className="w-4 h-4" /> },
-        { path: '/receiving-hub', label: 'Receiving (Hub)', icon: <PackageSearch className="w-4 h-4" /> },
-        { path: '/receiving', label: 'Receiving Log', icon: <PackageCheck className="w-4 h-4" /> },
+        { path: '/receiving', label: 'Receiving', icon: <PackageCheck className="w-4 h-4" /> },
         { path: '/cycle-counts', label: 'Cycle Counts', icon: <ClipboardCheck className="w-4 h-4" />, roles: ['admin'] },
       ],
     },
@@ -250,7 +249,6 @@ function getVisibleItems(items: NavSubItem[], userRole: UserRole | undefined, de
 function categoryHasActiveRoute(items: NavSubItem[], pathname: string): boolean {
   return items.some((item) => {
     if (item.path === '/') return pathname === '/';
-    // Segment-aware so e.g. /receiving-hub doesn't also light up /receiving.
     return pathname === item.path || pathname.startsWith(item.path + '/');
   });
 }
@@ -302,7 +300,6 @@ export default function Sidebar({ mobileOpen, onClose }: SidebarProps) {
 
   const isRouteActive = (path: string) => {
     if (path === '/') return location.pathname === '/';
-    // Segment-aware so e.g. /receiving-hub doesn't also light up /receiving.
     return location.pathname === path || location.pathname.startsWith(path + '/');
   };
 

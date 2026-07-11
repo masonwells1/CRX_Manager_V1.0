@@ -1,18 +1,18 @@
 import { useEffect, useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { PackageCheck, Search, Truck, ArrowRight, PackagePlus, AlertTriangle } from 'lucide-react';
-import Card from '../components/ui/Card';
-import Button from '../components/ui/Button';
-import Modal from '../components/ui/Modal';
-import { SkeletonCard } from '../components/ui/Skeleton';
-import EmptyState from '../components/ui/EmptyState';
-import { supabase, assertRpcResult } from '../lib/db';
-import { runCriticalAction } from '../lib/criticalAction';
-import { Sentry } from '../lib/sentry';
-import { useToast } from '../components/ui/Toast';
-import { useAuth } from '../contexts/AuthContext';
-import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
-import type { InventoryPositionRow } from '../types';
+import Card from '../ui/Card';
+import Button from '../ui/Button';
+import Modal from '../ui/Modal';
+import { SkeletonCard } from '../ui/Skeleton';
+import EmptyState from '../ui/EmptyState';
+import { supabase, assertRpcResult } from '../../lib/db';
+import { runCriticalAction } from '../../lib/criticalAction';
+import { Sentry } from '../../lib/sentry';
+import { useToast } from '../ui/Toast';
+import { useAuth } from '../../contexts/AuthContext';
+import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
+import type { InventoryPositionRow } from '../../types';
 
 // F5 — Receiving Hub: "To-Ship for inbound". Search a product and see every open
 // purchase-order line for it across vendors (ordered − received), with a
@@ -61,7 +61,7 @@ type ProductGroup = {
 const fmtUnits = (n: number) =>
   new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(n || 0);
 
-export default function ReceivingHub() {
+export default function ReceivingHubPanel() {
   const navigate = useNavigate();
   const { toast } = useToast();
   const { profile } = useAuth();

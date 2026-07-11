@@ -45,8 +45,7 @@ export const PAGE_PERMISSIONS: PagePermission[] = [
   { key: 'products', path: '/products', label: 'Products', category: 'Inventory & Buying', roles: ['admin', 'sales_rep'] },
   { key: 'brand-vs-generic', path: '/brand-vs-generic', label: 'Brand vs Generic', category: 'Inventory & Buying', roles: ['admin', 'sales_rep'] },
   { key: 'purchase-orders', path: '/purchase-orders', label: 'Purchase Orders', category: 'Inventory & Buying', roles: ['admin', 'sales_rep'] },
-  { key: 'receiving-hub', path: '/receiving-hub', label: 'Receiving (Hub)', category: 'Inventory & Buying', roles: ['admin', 'sales_rep'] },
-  { key: 'receiving', path: '/receiving', label: 'Receiving Log', category: 'Inventory & Buying', roles: ['admin', 'sales_rep'] },
+  { key: 'receiving', path: '/receiving', label: 'Receiving', category: 'Inventory & Buying', roles: ['admin', 'sales_rep'] },
   { key: 'cycle-counts', path: '/cycle-counts', label: 'Cycle Counts', category: 'Inventory & Buying', roles: ['admin'] },
 
   // Money
@@ -119,6 +118,12 @@ export function getPageKeyFromPath(pathname: string): string | null {
     return 'field-invoices';
   }
 
+  // The legacy standalone hub route redirects into the consolidated Receiving
+  // page and therefore shares its single permission/deny-list key.
+  if (firstSegment === 'receiving-hub') {
+    return 'receiving';
+  }
+
   const found = PAGE_PERMISSIONS.find((p) => p.key === firstSegment);
   return found ? found.key : null;
 }
@@ -152,6 +157,9 @@ export function hasPageAccess(
   if (!page) return false;
 
   if (!page.roles.includes(role)) return false;
+  // Preserve existing profile restrictions created before the Receiving Hub
+  // and Log were consolidated into one permissionable page.
+  if (pageKey === 'receiving' && deniedPages.includes('receiving-hub')) return false;
   if (deniedPages.includes(pageKey)) return false;
   return true;
 }

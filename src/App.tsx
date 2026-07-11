@@ -80,9 +80,7 @@ const PrepayWorkspace = lazy(() => import('./pages/PrepayWorkspace'));
 const PaymentAllocation = lazy(() => import('./pages/PaymentAllocation'));
 const PaymentHistory = lazy(() => import('./pages/PaymentHistory'));
 const DeliveryRemainders = lazy(() => import('./pages/DeliveryRemainders'));
-const ReceivingLog = lazy(() => import('./pages/ReceivingLog'));
-const ReceivingHub = lazy(() => import('./pages/ReceivingHub'));
-const QuickReceive = lazy(() => import('./pages/QuickReceive'));
+const Receiving = lazy(() => import('./pages/Receiving'));
 const FinancialDashboard = lazy(() => import('./pages/FinancialDashboard'));
 const AccountsPayable = lazy(() => import('./pages/AccountsPayable'));
 const VendorBills = lazy(() => import('./pages/VendorBills'));
@@ -222,9 +220,10 @@ const router = createBrowserRouter([
           { path: 'recipes', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><BlendRecipes /></ProtectedRoute> },
           { path: 'cycle-counts', element: <ProtectedRoute allowedRoles={['admin']}><CycleCounts /></ProtectedRoute> },
           { path: 'returns', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><Returns /></ProtectedRoute> },
-          { path: 'receiving', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><ReceivingLog /></ProtectedRoute> },
-          { path: 'receiving-hub', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><ReceivingHub /></ProtectedRoute> },
-          { path: 'receiving/quick', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><QuickReceive /></ProtectedRoute> },
+          { path: 'receiving', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><Receiving /></ProtectedRoute> },
+          // Kept for bookmarks; the former pages now live as query-addressable tabs.
+          { path: 'receiving-hub', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><Navigate to="/receiving?tab=hub" replace /></ProtectedRoute> },
+          { path: 'receiving/quick', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><Navigate to="/receiving?tab=quick" replace /></ProtectedRoute> },
           { path: 'purchase-orders', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><PurchaseOrders /></ProtectedRoute> },
           { path: 'purchase-orders/new', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><NewPurchaseOrder /></ProtectedRoute> },
           { path: 'purchase-orders/:id', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><PurchaseOrderDetail /></ProtectedRoute> },

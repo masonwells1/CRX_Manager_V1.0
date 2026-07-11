@@ -14,7 +14,7 @@ const pageMeta: Record<string, { title: string; accent: string }> = {
   '/field': { title: 'My Field', accent: 'Jobs' },
   '/fields': { title: 'Field', accent: 'Management' },
   '/purchase-orders': { title: 'Supplier', accent: 'Purchase Orders' },
-  '/receiving': { title: 'Receiving', accent: 'Log' },
+  '/receiving': { title: 'Receiving', accent: 'Workspace' },
   '/returns': { title: 'Returns', accent: '& RMA' },
   '/blend-tickets': { title: 'Blend', accent: 'Tickets' },
   '/recipes': { title: 'Blend', accent: 'Recipes' },
