@@ -61,6 +61,7 @@ const ARaging = lazy(() => import('./pages/ARaging'));
 const AccountsReceivable = lazy(() => import('./pages/AccountsReceivable'));
 const Compliance = lazy(() => import('./pages/Compliance'));
 const LabelReview = lazy(() => import('./pages/LabelReview'));
+const LabelDataQuality = lazy(() => import('./pages/LabelDataQuality'));
 const WatchdogExceptions = lazy(() => import('./pages/WatchdogExceptions'));
 const OfficeCockpit = lazy(() => import('./pages/OfficeCockpit'));
 const Rebates = lazy(() => import('./pages/Rebates'));
@@ -246,6 +247,7 @@ const router = createBrowserRouter([
           { path: 'compliance', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><Compliance /></ProtectedRoute> },
           { path: 'lot-trace', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><LotTrace /></ProtectedRoute> },
           { path: 'label-review', element: <ProtectedRoute allowedRoles={['admin']}><LabelReview /></ProtectedRoute> },
+          { path: 'label-data-quality', element: <ProtectedRoute allowedRoles={['admin']}><LabelDataQuality /></ProtectedRoute> },
           { path: 'watchdog', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><WatchdogExceptions /></ProtectedRoute> },
           { path: 'office-cockpit', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><OfficeCockpit /></ProtectedRoute> },
           { path: 'rebates', element: <ProtectedRoute allowedRoles={['admin']}><Rebates /></ProtectedRoute> },

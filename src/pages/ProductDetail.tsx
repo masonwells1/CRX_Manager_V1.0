@@ -13,6 +13,7 @@ import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { logActivity } from '../lib/activityLogger';
 import { assertRpcResult, checkMutationResult, supabase, supabaseUntyped } from '../lib/db';
 import { localToday } from '../lib/dateUtils';
+import { waitForEpaRequestSlot } from '../lib/epaRequestThrottle';
 import { Sentry } from '../lib/sentry';
 import { unitOptionsForForm, isKnownUnit } from '../lib/units';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
@@ -401,6 +402,8 @@ export default function ProductDetail() {
     setEpaLookupResult(null);
     setEpaLookupRegNumber('');
     try {
+      const slotReady = await waitForEpaRequestSlot(() => false);
+      if (!slotReady) return;
       const { data, error } = await supabase.functions.invoke<EpaLookupResult>('epa-lookup', {
         body: { regNumber },
       });

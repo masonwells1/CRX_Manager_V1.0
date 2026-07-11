@@ -4,6 +4,15 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-10 — Label Data Quality screen: in-app EPA reg-number check + inline fix (frontend-only; Codex-built + Codex-reviewed)
+
+New admin-only page `/label-data-quality` closes the gap where the EPA data-quality check existed only as a token-gated CLI script (`scripts/epa-data-quality-report.mjs`) the owner couldn't run. It checks every product's saved EPA registration number against the live EPA database, flags the wrong/cancelled/not-found ones, and lets an admin correct one inline with EPA verification.
+
+- **The gap:** 595 active products, 299 with an EPA reg number, but ~105/204 distinct regs point at a DIFFERENT EPA product (e.g. Callisto's stored `100-885` is actually EPA "Dividend XL", inactive). Wrong regs poison all downstream label data, and the finding lived only in the CLI report.
+- **What shipped (frontend only — zero DB / zero edge-fn):** page reuses the already-live `epa-lookup` edge function + the `src/lib/epaDataQualityReport.ts` classifier + `get_label_coverage_report`. "Run EPA check" iterates distinct regs through a **shared rate-limiter** (≤30/min + spacing, shared across bulk run, inline verify, and ProductDetail's lookup) with progress + cancel; results table filterable by finding type; inline "Verify → Save" corrects `products.epa_registration` (Save unlocks only after the typed number resolves to a real EPA product) and writes the change to `activity_feed`.
+- **Loop model (Codex builds + reviews itself; Claude orchestrates + verifies + pushes):** Codex built + self-reviewed; an independent Codex review-gate found 0 blocker/high + 4 improvements (shared throttle, activity-log the correction, two test-honesty gaps) — all **fixed by Codex**, re-verified. Full suite 203 files / 3209 tests green; typecheck/lint/build green. Live read-only EPA smoke proved the Callisto mismatch is caught and the correct reg (`100-1131` → "Callisto Herbicide") verifies.
+- **Note:** EPA's public data provides signal word + reg verification only — NOT REI/PHI (those stay manual / deferred label-OCR). This tool fixes reg numbers + unlocks signal-word fill; it does not complete REI/PHI.
+
 ## 2026-07-10 — Billing-day money loop: worklist ALREADY SHIPPED by parallel work; M4 (dead-RPC posting-policy alignment) + Feature A (auto-split drafts on full delivery) built + SHIPPED LIVE; Feature B parked
 
 Ran `/run-loop docs/loops/billing-day-money-loop-2026-07-08.md` (worktree `C:\CRX_BillingFix`). **Verify-first found the entire worklist already live** via parallel sessions between the mission doc's date (07-08) and launch (07-10) — no rebuild needed: C1/C2 (Sprint D `20260710120000`/`130000`), C3 (U18 negative-stock + Office Cockpit hold-expiry + AR-aging prepay column), M1 (U1 overdue-on-Payments), M2 (U2 #34 per-delivery auto-invoice guard), M3 (`allocate_payment` `OVER_ALLOCATED` sum-vs-check guard), S1 (U7 `20260707070000` delivery split-billing). The loop was a verification pass that **prevented re-implementing 7 already-live units.** Two new pieces were built + shipped; a third parked at design review.
