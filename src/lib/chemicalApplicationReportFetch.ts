@@ -41,6 +41,9 @@ interface ReportJobRow {
   job_date: string;
   scheduled_time: string | null;
   applicator_id: string | null;
+  loader_comment: string | null;
+  customer: { farm_name: string | null; account_number: string | null } | null;
+  vehicle: { vehicle_name: string | null } | null;
   job_fields: Array<{
     field_id: string | null;
     acres_to_treat: number | null;
@@ -70,16 +73,26 @@ interface ProductLabel {
   product_form: 'liquid' | 'dry' | null;
 }
 
+interface ReportFetchOptions {
+  /** Defaults to true so the Chemical Application Report remains compliance-strict. */
+  strict?: boolean;
+}
+
 /**
  * Fetch the Chemical Application Report data for one job and return the SHARED
  * ApplicatorSheetData (route order applied, gal/lb computed). Returns null when the
  * job no longer exists. The PDF generator / data mapper consume this directly.
  */
-export async function fetchChemicalApplicationReportData(jobId: string): Promise<ApplicatorSheetData | null> {
+export async function fetchChemicalApplicationReportData(
+  jobId: string,
+  { strict = true }: ReportFetchOptions = {},
+): Promise<ApplicatorSheetData | null> {
   const { data, error } = await supabase
     .from('jobs')
     .select(`
-      id, job_number, job_date, scheduled_time, applicator_id,
+      id, job_number, job_date, scheduled_time, applicator_id, loader_comment,
+      customer:customers(farm_name, account_number),
+      vehicle:vehicles(vehicle_name),
       job_fields(field_id, acres_to_treat, crop, pests, sort_order,
         field:fields(field_name, county, state, crop_type)),
       job_chemicals(product_id, quantity, unit, rate_per_acre, rate_unit, rei_hours, phi_days, sort_order,
@@ -131,10 +144,19 @@ export async function fetchChemicalApplicationReportData(jobId: string): Promise
   // customers an applicator's customers_select RLS hides. If resolution is incomplete
   // (a billed customer with no resolvable name) this is a COMPLIANCE document — ABORT
   // (throw) so the caller never prints a silently-partial PDF or stamps printed_at.
-  const { customers: billedCustomers, complete } = await resolveBilledCustomers(jobId);
-  if (!complete) {
+  const { customers: resolvedCustomers, complete } = await resolveBilledCustomers(jobId);
+  if (strict && !complete) {
     throw new Error('Some billed customers on this job could not be resolved — the chemical report cannot be completed.');
   }
+  // Applicator sheets are operational crew documents, not compliance records. Mirror
+  // JobDetail's non-strict path: keep every customer the resolver could name and, if
+  // it named none, retain the primary customer or a visible "Customer" placeholder.
+  const billedCustomers = !strict && resolvedCustomers.length === 0
+    ? [{
+        customer_name: r.customer?.farm_name?.trim() || 'Customer',
+        account_number: r.customer?.account_number ?? null,
+      }]
+    : resolvedCustomers;
 
   const fields: RawSheetField[] = (r.job_fields || [])
     .filter((f) => f.field_id)
@@ -176,9 +198,17 @@ export async function fetchChemicalApplicationReportData(jobId: string): Promise
     scheduled_date: r.job_date,
     scheduled_time: r.scheduled_time,
     applicator_name: applicatorName,
-    vehicle_name: null, // not shown on the chemical report
+    vehicle_name: strict ? null : r.vehicle?.vehicle_name ?? null,
     fields,
     products,
-    loader_comment: null,
+    loader_comment: strict ? null : r.loader_comment ?? null,
   });
+}
+
+/**
+ * Fetch data for an internal applicator sheet. Unlike the compliance report,
+ * incomplete billed-customer resolution falls back to a printable placeholder.
+ */
+export function fetchApplicatorSheetData(jobId: string): Promise<ApplicatorSheetData | null> {
+  return fetchChemicalApplicationReportData(jobId, { strict: false });
 }

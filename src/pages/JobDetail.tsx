@@ -19,6 +19,7 @@ import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { getLicenseStatus, licenseStatusLabel } from '../lib/licenseStatus';
 import { generateWpsNoticePdf } from '../lib/wpsNoticePdf';
 import { generateApplicatorSheetPdf } from '../lib/applicatorSheetPdf';
+import { fetchJobMapImages } from '../lib/jobMapImages';
 import {
   buildApplicatorSheetData,
   parseCustomConfig,
@@ -1034,7 +1035,8 @@ export default function JobDetail() {
         customCfg = parseCustomConfig((cfgRow as { setting_value?: string } | null)?.setting_value ?? null);
       }
 
-      await generateApplicatorSheetPdf(sheetData, format, customCfg);
+      const maps = !isNew && id ? await fetchJobMapImages(id) : null;
+      await generateApplicatorSheetPdf({ ...sheetData, maps }, format, customCfg);
 
       // Stamp printed status + who (ChemMan "Printed" column). Best-effort.
       if (!isNew && id) {

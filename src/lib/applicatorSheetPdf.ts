@@ -287,6 +287,97 @@ function themeFor(format: ApplicatorSheetFormat, custom: ApplicatorSheetCustomCo
   };
 }
 
+function customerLine(data: ApplicatorSheetData): string {
+  return data.customers.length > 0
+    ? data.customers.map((customer) => customer.customer_name).join(', ')
+    : 'Customer';
+}
+
+function formatCoordinate(value: number | null): string | null {
+  return value != null && Number.isFinite(value) ? value.toFixed(6) : null;
+}
+
+/** Add a single satellite-map page. Invalid image data leaves no blank PDF page. */
+function appendMapPage(
+  doc: JsPDFWithAutoTable,
+  data: ApplicatorSheetData,
+  title: string,
+  details: string,
+  dataUrl: string,
+): void {
+  const existingPageCount = doc.getNumberOfPages();
+  try {
+    doc.addPage();
+    const pageW = doc.internal.pageSize.getWidth();
+    const pageH = doc.internal.pageSize.getHeight();
+    const margin = 40;
+    const detailLineHeight = 10.5;
+    const allDetailLines = doc.splitTextToSize(details, pageW - margin * 2) as string[];
+    const detailLines = allDetailLines.length <= 3
+      ? allDetailLines
+      : [...allDetailLines.slice(0, 2), `${allDetailLines[2].trim().replace(/…+$/, '')}…`];
+    // One or two header-detail lines retain the original 68pt band/88pt image
+    // position. Each allowed extra line grows the band before its text is drawn.
+    const bandHeight = 68 + Math.max(0, detailLines.length - 2) * detailLineHeight;
+    const imageY = bandHeight + 20;
+
+    doc.setFillColor(...CRX_GREEN);
+    doc.rect(0, 0, pageW, bandHeight, 'F');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(15);
+    doc.setTextColor(255, 255, 255);
+    doc.text(title, margin, 27);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.text(`Job ${data.job_number}`, pageW - margin, 27, { align: 'right' });
+    doc.text(detailLines, margin, 47);
+
+    let imageWidth = pageW - margin * 2;
+    let imageHeight = imageWidth * 0.7;
+    const properties = doc.getImageProperties(dataUrl);
+    if (properties.width > 0 && properties.height > 0) {
+      imageHeight = imageWidth * (properties.height / properties.width);
+    }
+    const maxImageHeight = pageH - imageY - 70;
+    if (imageHeight > maxImageHeight) {
+      imageHeight = maxImageHeight;
+      imageWidth = imageHeight * (properties.width / properties.height);
+    }
+    doc.addImage(dataUrl, 'PNG', (pageW - imageWidth) / 2, imageY, imageWidth, imageHeight);
+  } catch {
+    // Map images are strictly optional. Remove the just-added page so a malformed
+    // response cannot leave a blank page in an otherwise usable field sheet.
+    doc.deletePage(existingPageCount + 1);
+  }
+}
+
+/** Append optional overview and per-field satellite map pages after the crew sheet. */
+function appendMapPages(doc: JsPDFWithAutoTable, data: ApplicatorSheetData): void {
+  if (!data.maps) return;
+  const jobCustomer = customerLine(data);
+  if (data.maps.overview) {
+    appendMapPage(
+      doc,
+      data,
+      'Job Field Map — Overview',
+      `Job ${data.job_number} · ${jobCustomer}`,
+      data.maps.overview,
+    );
+  }
+  data.maps.perField.forEach((field) => {
+    const lat = formatCoordinate(field.centroidLat);
+    const lng = formatCoordinate(field.centroidLng);
+    const location = lat && lng ? `Lat: ${lat}, Lng: ${lng}` : null;
+    const details = [
+      field.fieldName,
+      field.customerName,
+      `${fmtNum(field.acres) || '—'} acres`,
+      location,
+    ].filter((part): part is string => part !== null).join(' · ');
+    appendMapPage(doc, data, 'Job Field Map', details, field.dataUrl);
+  });
+}
+
 /**
  * Generate and download an applicator field sheet in the requested format.
  *
@@ -308,6 +399,7 @@ export async function generateApplicatorSheetPdf(
   const theme = themeFor(format, custom);
 
   drawSheet(doc, autoTable, data, theme);
+  appendMapPages(doc, data);
 
   // Footer on every page (drawn last so page count is final).
   const pageCount = doc.getNumberOfPages();

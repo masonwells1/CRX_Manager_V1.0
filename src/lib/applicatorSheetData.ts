@@ -18,6 +18,7 @@
  * order — `buildApplicatorSheetData` re-sorts defensively.
  */
 import { toGallonOrLbEquivalent } from './chemCalculator';
+import type { JobMapImages } from './jobMapImages';
 
 // ── Custom-format layout config (mirrors the app_settings 'applicator_sheet_custom' key) ──
 
@@ -172,6 +173,8 @@ export interface ApplicatorSheetData {
   total_acres: number;
   /** Free-text loader comment shown on the sheet (NOT internal_memo). */
   loader_comment: string | null;
+  /** Optional static satellite maps fetched by the print caller for saved jobs. */
+  maps?: JobMapImages | null;
 }
 
 // ── Raw input shapes (what JobDetail hands in) ───────────────────────────────

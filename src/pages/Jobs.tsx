@@ -20,8 +20,10 @@ import { downloadReportPdf, type ReportPdfColumn } from '../lib/reportPdf';
 import { buildJobListPrintData, computeJobListTotals } from '../lib/jobListPrint';
 import { fetchLoaderWorksheetData } from '../lib/loaderWorksheetFetch';
 import { generateLoaderWorksheetBatchPdf, generateLoaderWorksheetPdf } from '../lib/loaderWorksheetPdf';
-import { fetchChemicalApplicationReportData } from '../lib/chemicalApplicationReportFetch';
+import { fetchApplicatorSheetData, fetchChemicalApplicationReportData } from '../lib/chemicalApplicationReportFetch';
 import { generateChemicalApplicationReportPdf } from '../lib/chemicalApplicationReportPdf';
+import { generateApplicatorSheetPdf } from '../lib/applicatorSheetPdf';
+import { fetchJobMapImages } from '../lib/jobMapImages';
 import { fetchChemicalSummaryData } from '../lib/chemicalSummaryReportFetch';
 import { buildChemicalSummaryReportData, chemicalSummaryCsvRows } from '../lib/chemicalSummaryReportData';
 import { generateChemicalSummaryReportPdf } from '../lib/chemicalSummaryReportPdf';
@@ -276,6 +278,9 @@ export default function Jobs() {
   const [projectedExporting, setProjectedExporting] = useState(false);
   // Field-app parity #14: bulk Master Mix Summary (combined tank mix + per-capacity loads).
   const [masterMixExporting, setMasterMixExporting] = useState(false);
+  // Original applicator-sheet print state for the row and selection actions.
+  const [sheetExporting, setSheetExporting] = useState(false);
+  const [rowSheetId, setRowSheetId] = useState<string | null>(null);
   // #10: per-row Loader Worksheet print in progress (the job id being generated).
   const [rowLoaderId, setRowLoaderId] = useState<string | null>(null);
   // #11: per-row Chemical Application Report print in progress (job id being generated).
@@ -1050,6 +1055,94 @@ export default function Jobs() {
     setRowChemReportId(null);
   };
 
+  // Print one Original applicator sheet from the list. The shared fetcher produces
+  // the same route-ordered fields/products as the JobDetail sheet, while maps are
+  // deliberately best-effort so a missing token never blocks the crew packet.
+  const handleRowApplicatorSheet = async (jobId: string) => {
+    setRowSheetId(jobId);
+    try {
+      const data = await fetchApplicatorSheetData(jobId);
+      if (!data || data.products.length === 0 || data.fields.length === 0) {
+        toast('error', 'This job needs fields and chemicals before printing an applicator sheet.');
+        return;
+      }
+      const maps = await fetchJobMapImages(jobId);
+      await generateApplicatorSheetPdf({ ...data, maps }, 'original', null);
+      try {
+        const stamp = await supabase
+          .from('jobs')
+          .update({ printed_at: new Date().toISOString(), last_printed_by: profile?.id ?? null })
+          .eq('id', jobId)
+          .select('id');
+        checkMutationResult(stamp, 'Stamp applicator-sheet print');
+        fetchJobs();
+      } catch { /* non-blocking — the PDF already generated */ }
+      if (profile) logActivity({ event: 'applicator_sheet_printed', description: `Original Applicator Report generated for job ${data.job_number}`, performedBy: profile.id, entityType: 'job', entityId: jobId });
+      toast('success', 'Applicator sheet generated');
+    } catch (err) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'jobs_row_applicator_sheet' } });
+      toast('error', sanitizeError(err));
+    } finally {
+      setRowSheetId(null);
+    }
+  };
+
+  // Generate individual Original applicator sheets in selection order. This stays
+  // intentionally sequential: a large selection must not fire dozens of Mapbox
+  // static-image requests concurrently.
+  const handleApplicatorSheets = async () => {
+    setSheetExporting(true);
+    try {
+      const printedIds: string[] = [];
+      const failedJobNumbers: string[] = [];
+      const skippedJobNumbers: string[] = [];
+      for (const job of selectedRows) {
+        try {
+          const data = await fetchApplicatorSheetData(job.id);
+          if (!data || data.products.length === 0 || data.fields.length === 0) {
+            skippedJobNumbers.push(job.job_number);
+            continue;
+          }
+          const maps = await fetchJobMapImages(job.id);
+          await generateApplicatorSheetPdf({ ...data, maps }, 'original', null);
+          printedIds.push(job.id);
+        } catch (err) {
+          failedJobNumbers.push(job.job_number);
+          if (failedJobNumbers.length === 1) {
+            Sentry.captureException(err instanceof Error ? err : new Error(String(err)), {
+              extra: { context: 'jobs_bulk_applicator_sheets', job_id: job.id, job_number: job.job_number },
+            });
+          }
+        }
+      }
+      if (printedIds.length === 0) {
+        if (failedJobNumbers.length === 0 && skippedJobNumbers.length === 0) {
+          toast('error', 'No selected jobs have the fields and chemicals needed for an applicator sheet.');
+        }
+        if (skippedJobNumbers.length > 0) toast('error', `Skipped (no fields/chemicals): ${skippedJobNumbers.join(', ')}`);
+        if (failedJobNumbers.length > 0) toast('error', `Failed: ${failedJobNumbers.join(', ')}`);
+        return;
+      }
+      try {
+        const stamp = await supabase
+          .from('jobs')
+          .update({ printed_at: new Date().toISOString(), last_printed_by: profile?.id ?? null })
+          .in('id', printedIds)
+          .select('id');
+        checkMutationResult(stamp, 'Stamp applicator-sheet prints');
+        fetchJobs();
+      } catch { /* non-blocking — the PDFs already generated */ }
+      toast('success', `Generated ${printedIds.length} sheet(s)`);
+      if (skippedJobNumbers.length > 0) toast('error', `Skipped (no fields/chemicals): ${skippedJobNumbers.join(', ')}`);
+      if (failedJobNumbers.length > 0) toast('error', `Failed: ${failedJobNumbers.join(', ')}`);
+    } catch (err) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'jobs_bulk_applicator_sheets' } });
+      toast('error', sanitizeError(err));
+    } finally {
+      setSheetExporting(false);
+    }
+  };
+
   // Field-app parity #12: Chemical Summary Report over the checkbox-SELECTED jobs.
   // Sums each chemical/product's total applied quantity across all selected jobs
   // (keyed by product + unit), re-derives the gal/lb-equivalent from the SUMMED
@@ -1305,6 +1398,7 @@ export default function Jobs() {
     { key: 'tags', label: 'Edit Job Tags', icon: <Tag className="w-4 h-4" />, onClick: () => openMutatingAction(() => setBulkTagsOpen(true)) },
     { key: 'csv', label: 'Export CSV', icon: <Download className="w-4 h-4" />, onClick: handleExportCSV },
     { key: 'pdf', label: 'Download PDF', icon: <FileText className="w-4 h-4" />, onClick: handleExportPDF, loading: exporting },
+    { key: 'applicator-sheet', label: 'Applicator Sheets', icon: <Printer className="w-4 h-4" />, onClick: handleApplicatorSheets, loading: sheetExporting },
     { key: 'loader', label: 'Loader Worksheet', icon: <Truck className="w-4 h-4" />, onClick: handleLoaderWorksheets, loading: loaderExporting },
     { key: 'chem-summary', label: 'Chemical Summary Report', icon: <ClipboardList className="w-4 h-4" />, onClick: handleChemicalSummaryReport, loading: summaryExporting },
     { key: 'projected-use', label: 'Projected Use Report', icon: <PackageOpen className="w-4 h-4" />, onClick: handleProjectedUseReport, loading: projectedExporting },
@@ -1375,6 +1469,16 @@ export default function Jobs() {
             className="text-secondary hover:text-crx-green disabled:opacity-40 transition-colors"
           >
             <Truck className="w-3.5 h-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); handleRowApplicatorSheet(r.id); }}
+            disabled={rowSheetId === r.id}
+            title="Print Applicator Sheet"
+            aria-label={`Print applicator sheet for job ${r.job_number}`}
+            className="text-secondary hover:text-crx-green disabled:opacity-40 transition-colors"
+          >
+            <Printer className="w-3.5 h-3.5" />
           </button>
           {/* #11: per-row Chemical Application Report entry point — the official
               per-job chemical record, reachable directly from the job list for ANY

@@ -17,7 +17,7 @@ Loop start (UTC): 2026-07-11T16:20Z (Step 0)
 
 | Unit | Status | Tier | Rounds | Migration | Commit | Verdict |
 |---|---|---|---|---|---|---|
-| M1 | pending | terra | – | – | – | – |
+| M1 | SHIPPED | terra (verdicts: sol) | 4* | none (frontend-only) | (sha below) | CLEAN (pass 3) |
 | M2 | pending | terra | – | – | – | – |
 | M3 | pending | terra | – | – | – | – |
 | M4 | pending | terra | – | – | – | – |
@@ -28,8 +28,16 @@ Loop start (UTC): 2026-07-11T16:20Z (Step 0)
 | M9 | pending | sol+terra | – | – | – | – |
 | M10 | pending | terra | – | – | – | – |
 | M11 | pending | terra | – | – | – | – |
-| M12 | pending | research | – | – | – | – |
+| M12 | DONE (research) | sonnet subagent | 1 | none | docs/walkthroughs/fsa-boundary-research.md | n/a |
 
 ## Per-unit PROOF log
 
-(appended as units complete)
+### M1 — Maps in the applicator PDF (SHIPPED)
+- Built by Codex Terra; reviewed by Sonnet pdf-output-reviewer + Sonnet convention reviewer + Sol adversarial verdicts (3 passes → CLEAN).
+- *Round-cap deviation: 4 build rounds, one past the mission's 3-round cap. Justification: every round strictly converged (7→3→0 findings); round 4 was a 3-line safety micro-fix (null-acres fallback, tolerance-0 fill variant, RLS-hidden customer label) on a crew-facing printed document. Parking the unit over that trade was judged worse for Mason. Logged transparently.*
+- Fixed during review: letterbox label drift (aspect-matched image dims from simplified geometry), header/image collision, strict-vs-lenient fetcher split (compliance report unchanged), loader_comment/vehicle on list prints, bulk partial-failure + skip reporting, job acres_to_treat (not whole-field acres) with omit-on-unknown, per-fetch 10s AbortController timeout.
+- DEFERRED (pre-existing, need small migrations — morning-report items): applicator print-stamp silently fails under jobs_update RLS (affects existing print buttons too); get_job_fields_with_geojson not visible to location-dispatched applicators (affects existing JobFieldMap too).
+- PROOF — Ran: typecheck ✓ lint ✓ full unit-scope tests 28+11 ✓ (incl. letterbox label-position test, hanging-fetch timeout test, page-count regression tests); 3 independent review passes. · Saw: CLEAN verdict; all formats append overview + per-field pages only when maps present. · Not verified: a real print against live Mapbox + live job (visual PDF check) — scheduled as the Sprint-P deployment spot-check after M2 ships; graceful no-token path IS test-covered.
+
+### M12 — FSA boundary data research (DONE)
+- Key finding: commercial "FSA CLU" products (incl. ChemMan's likely vendor AgriData Surety) resell a frozen 2008 snapshot; recommendation = build click-to-adopt on USDA Crop Sequence Boundaries (free, public domain, multi-year windows) + existing draw/edit tools; fallback ReportAll parcel API. Owner decision needed before any build.

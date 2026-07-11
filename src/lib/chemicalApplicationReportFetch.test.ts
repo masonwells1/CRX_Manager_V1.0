@@ -21,7 +21,7 @@ const { mockFrom, mockResolveBilledCustomers } = vi.hoisted(() => ({
 vi.mock('./db', () => ({ supabase: { from: mockFrom } }));
 vi.mock('./billedCustomersResolver', () => ({ resolveBilledCustomers: mockResolveBilledCustomers }));
 
-import { fetchChemicalApplicationReportData } from './chemicalApplicationReportFetch';
+import { fetchApplicatorSheetData, fetchChemicalApplicationReportData } from './chemicalApplicationReportFetch';
 
 // A minimal saved-job row (one field, one chemical) — the customer billing comes from
 // the mocked resolver, NOT this row.
@@ -31,6 +31,9 @@ const JOB_ROW = {
   job_date: '2026-06-25',
   scheduled_time: null,
   applicator_id: null,
+  loader_comment: 'Load the north tank first.',
+  customer: { farm_name: 'Parity Test Farm', account_number: 'PTF-11' },
+  vehicle: { vehicle_name: 'Hagie STS-16' },
   job_fields: [
     {
       field_id: 'f1',
@@ -143,6 +146,18 @@ describe('fetchChemicalApplicationReportData — billed-customer resolution', ()
     await expect(fetchChemicalApplicationReportData('job-1')).rejects.toThrow(
       /billed customers .* could not be resolved/i
     );
+  });
+
+  it('keeps the applicator sheet lenient for incomplete billing and includes job-only sheet details', async () => {
+    wireSupabase(JOB_ROW, PRODUCT_LABEL_ROWS);
+    mockResolveBilledCustomers.mockResolvedValue({ complete: false, customers: [] });
+
+    const data = await fetchApplicatorSheetData('job-1');
+
+    expect(data).not.toBeNull();
+    expect(data!.customers).toEqual([{ customer_name: 'Parity Test Farm', account_number: 'PTF-11' }]);
+    expect(data!.vehicle_name).toBe('Hagie STS-16');
+    expect(data!.loader_comment).toBe('Load the north tank first.');
   });
 
   it('propagates a resolver throw (e.g. caller not authorized to view the job)', async () => {
