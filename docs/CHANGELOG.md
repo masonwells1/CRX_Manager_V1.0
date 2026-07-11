@@ -4,6 +4,46 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-11 — Mobile overhaul loop COMPLETE on feat/mobile-overhaul-2026-07 (6 commits, frontend-only): bottom nav + drawer, compact TopBar/scrollable Tabs/PageHeader, Jobs/Dispatch/Inventory/Receiving phone cards, Cockpit+Field Invoices 375px pass, full-screen modals + PWA polish. All gates green. Awaiting Mason 'push it'.
+
+Mobile overhaul loop COMPLETE on feat/mobile-overhaul-2026-07 (6 commits, frontend-only): bottom nav + drawer, compact TopBar/scrollable Tabs/PageHeader, Jobs/Dispatch/Inventory/Receiving phone cards, Cockpit+Field Invoices 375px pass, full-screen modals + PWA polish. All gates green. Awaiting Mason 'push it'.
+
+- **Commits this session** (git log --since=12.hours --author=Mason):
+  - `247789e0 feat(mobile): M2.3 Office Cockpit + Field Invoices single-column phone layout`
+  - `e37396f6 feat(mobile): M3 full-screen mobile modals, bottom-nav-aware toasts, PWA polish`
+  - `6fd895f0 feat(mobile): M2.2 Inventory & Receiving phone cards + mobile Quick Receive form`
+  - `c936f470 feat(mobile): M2.1 MobileCardList primitive + Jobs & Dispatch phone cards`
+  - `d1fd7e0b feat(mobile): M1.2 compact TopBar, scrollable Tabs, stacking PageHeader below md`
+  - `e163e2e5 feat(mobile): M1.1 bottom navigation bar + slide-out drawer below md breakpoint`
+  - `e4f125da Merge remote-tracking branch 'origin/main' into feat/ui-overhaul-2026-07`
+  - `4ae9a7f2 chore(registry): refresh schema-registry from live introspection (high-water 20260711140150)`
+  - `af721cdc Merge remote-tracking branch 'origin/main' into feat/ui-overhaul-2026-07`
+  - `d46477d8 docs: changelog for UI overhaul session`
+  - `abe21bde feat(ui): Phase 3 polish — branded PageHeader app-wide + shared Tabs in Inventory`
+  - `3e89a801 fix(guards): live-testdata classifier strips dollar-quoted machine content`
+  - `9b257db3 fix(ap): closed-period gates on record/void vendor payment + void vendor bill (applied live)`
+  - `98498229 Merge remote-tracking branch 'origin/main' into claude/inspiring-proskuriakova-7d5713`
+  - `8271b1c2 chore(hunt): add Phase-3 money dimensions (returns/AP/PO-receiving/finance-prepay)`
+- **Migrations touched** (last 15 commits (fallback)):
+  - `supabase/migrations/20260712200000_ap_period_close_gates.sql`
+  - `supabase/migrations/20260712190000_blend_ticket_order_lock_ticket.sql`
+  - `supabase/migrations/20260712180000_dashboard_unbilled_deliveries_ignores_soft_deleted.sql`
+  - `supabase/migrations/20260712170000_unbilled_delivery_guard_ignores_soft_deleted.sql`
+  - `supabase/migrations/20260712160000_void_invoice_isactive_and_period_guards.sql`
+  - `supabase/migrations/20260712150000_fix_billing_m4_p1_featurea_p2.sql`
+  - `supabase/migrations/20260712135000_m4_batch_post_invoices_policy_align.sql`
+  - `supabase/migrations/20260712140000_a_auto_split_drafts_on_full_delivery.sql`
+  - `supabase/migrations/20260712130000_credit_limit_count_unposted.sql`
+  - `supabase/migrations/20260711021000_credit_apply_balance_lever.sql`
+  - `supabase/migrations/20260711020000_credit_apply_balance_lever.sql`
+  - `supabase/migrations/20260711030000_credit_memo_applications_ledger.sql`
+  - `supabase/migrations/20260711040000_apply_credit_memo_to_invoice.sql`
+  - `supabase/migrations/20260711050000_credit_apply_reversal_and_lifecycle.sql`
+  - `supabase/migrations/20260711060000_credit_apply_four_lever_consumers.sql`
+  - `supabase/migrations/20260712120000_save_job_applied_record_payload_conflict_guard.sql`
+  - `supabase/migrations/20260711020000_save_job_applied_record_idempotency.sql`
+  - `supabase/migrations/20260711010000_u18c_morning_cron_utc_fix.sql`
+
 ## 2026-07-11 — UI overhaul loop complete: Office Cockpit = single morning screen (queues top, KPIs+inventory below); field invoices 5→1, receiving 3→1, prepay 2→1, integrity 2→1 tabbed pages with redirects; branded PageHeader app-wide; shared Tabs primitive (incl. Inventory). 7 commits on feat/ui-overhaul-2026-07, all gates green, awaiting Mason's push.
 
 UI overhaul loop complete: Office Cockpit = single morning screen (queues top, KPIs+inventory below); field invoices 5→1, receiving 3→1, prepay 2→1, integrity 2→1 tabbed pages with redirects; branded PageHeader app-wide; shared Tabs primitive (incl. Inventory). 7 commits on feat/ui-overhaul-2026-07, all gates green, awaiting Mason's push.
