@@ -6,6 +6,8 @@
  * URL limit, and returns PNG data URLs that a PDF renderer can draw directly.
  */
 import { supabase, assertRpcResult } from './db';
+import { fieldObstacleToGeoJsonFeature } from './fieldObstacles';
+import type { FieldObstacle } from '../types';
 
 const MAPBOX_STYLE = 'mapbox/satellite-streets-v12';
 const MAPBOX_STATIC_URL = `https://api.mapbox.com/styles/v1/${MAPBOX_STYLE}/static`;
@@ -306,24 +308,45 @@ function boundaryFeature(field: ParsedJobField, includeFill: boolean, tolerance:
   return { type: 'Feature', properties, geometry: simplifyGeometry(field.geometry, tolerance) };
 }
 
+function obstacleFeature(obstacle: FieldObstacle): BoundaryFeature | null {
+  const feature = fieldObstacleToGeoJsonFeature(obstacle);
+  if (!feature) return null;
+  return {
+    type: 'Feature',
+    properties: { ...feature.properties },
+    geometry: {
+      type: 'Point',
+      coordinates: [feature.geometry.coordinates[0], feature.geometry.coordinates[1]],
+    },
+  };
+}
+
 function staticImageUrl(features: BoundaryFeature[], options: BuildStaticUrlOptions): string {
   const collection: BoundaryFeatureCollection = { type: 'FeatureCollection', features };
   const encodedOverlay = encodeURIComponent(JSON.stringify(collection));
   return `${MAPBOX_STATIC_URL}/geojson(${encodedOverlay})/auto/${options.width}x${options.height}?access_token=${encodeURIComponent(options.token)}&padding=${options.padding}`;
 }
 
-function buildStaticImageUrl(fields: ParsedJobField[], options: BuildStaticUrlOptions): StaticImageBuild | null {
-  for (const includeFill of [true, false]) {
-    const features = fields.map((field) => boundaryFeature(field, includeFill, 0));
-    const url = staticImageUrl(features, options);
-    if (url.length <= MAX_STATIC_URL_LENGTH) return { url, features };
-  }
-  for (const includeFill of [true, false]) {
-    for (const tolerance of SIMPLIFY_TOLERANCES.slice(1)) {
-      const features = fields.map((field) => boundaryFeature(field, includeFill, tolerance));
+function buildStaticImageUrl(
+  fields: ParsedJobField[],
+  obstacleFeatures: BoundaryFeature[],
+  options: BuildStaticUrlOptions,
+): StaticImageBuild | null {
+  for (const tolerance of SIMPLIFY_TOLERANCES) {
+    const filledBoundaries = fields.map((field) => boundaryFeature(field, true, tolerance));
+    // Obstacle points are useful but expendable. Under URL pressure, remove them
+    // before removing the field fill, then simplify the boundary as a last resort.
+    if (tolerance === 0 && obstacleFeatures.length > 0) {
+      const features = [...filledBoundaries, ...obstacleFeatures];
       const url = staticImageUrl(features, options);
       if (url.length <= MAX_STATIC_URL_LENGTH) return { url, features };
     }
+    const filledUrl = staticImageUrl(filledBoundaries, options);
+    if (filledUrl.length <= MAX_STATIC_URL_LENGTH) return { url: filledUrl, features: filledBoundaries };
+
+    const outlineBoundaries = fields.map((field) => boundaryFeature(field, false, tolerance));
+    const outlineUrl = staticImageUrl(outlineBoundaries, options);
+    if (outlineUrl.length <= MAX_STATIC_URL_LENGTH) return { url: outlineUrl, features: outlineBoundaries };
   }
   return null;
 }
@@ -451,13 +474,16 @@ function viewportBoundsForOptions(
 }
 
 /** Build a stable aspect-matched overview URL from the exact simplified overlay. */
-function buildOverviewStaticImage(fields: ParsedJobField[], token: string): (StaticImageBuild & { options: BuildStaticUrlOptions }) | null {
+function buildOverviewStaticImage(
+  fields: ParsedJobField[],
+  token: string,
+): (StaticImageBuild & { options: BuildStaticUrlOptions }) | null {
   let options: BuildStaticUrlOptions = { width: 1280, height: 1280, padding: 40, token };
   // Width/height contribute only a few URL characters, but repeat until the URL
   // simplification choice and aspect calculation agree so labels use the exact
   // geometry Mapbox receives.
   for (let attempt = 0; attempt < 4; attempt += 1) {
-    const built = buildStaticImageUrl(fields, options);
+    const built = buildStaticImageUrl(fields, [], options);
     if (!built) return null;
     const matchedOptions = overviewOptionsForFeatures(built.features, options);
     if (matchedOptions.width === options.width && matchedOptions.height === options.height) {
@@ -584,6 +610,26 @@ async function customerNamesById(customerIds: string[]): Promise<Map<string, str
   return names;
 }
 
+async function fieldObstacleFeatures(fieldIds: string[]): Promise<BoundaryFeature[]> {
+  if (fieldIds.length === 0) return [];
+  try {
+    const { data, error } = await supabase
+      .from('field_obstacles')
+      .select('*')
+      .in('field_id', fieldIds);
+    if (error) {
+      console.warn('Unable to load field obstacles for applicator-sheet maps.', error);
+      return [];
+    }
+    return ((data ?? []) as unknown as FieldObstacle[])
+      .map(obstacleFeature)
+      .filter((feature): feature is BoundaryFeature => feature !== null);
+  } catch (error) {
+    console.warn('Unable to load field obstacles for applicator-sheet maps.', error);
+    return [];
+  }
+}
+
 /**
  * Fetch the satellite overview and close-up maps for one saved job.
  *
@@ -642,6 +688,7 @@ export async function fetchJobMapImages(
       return null;
     }
 
+    const obstacles = await fieldObstacleFeatures(fields.map((field) => field.id));
     const customerNames = await customerNamesById([...new Set(fields.map((field) => field.customerId))]);
     const widthOverride = opts.widthPx;
     const heightOverride = opts.heightPx;
@@ -671,7 +718,8 @@ export async function fetchJobMapImages(
     const perField: JobFieldMapImage[] = [];
     if (opts.perField !== false) {
       for (const field of fields) {
-        const image = buildStaticImageUrl([field], perFieldOptions);
+        const fieldObstacles = obstacles.filter((feature) => feature.properties.field_id === field.id);
+        const image = buildStaticImageUrl([field], fieldObstacles, perFieldOptions);
         if (!image) {
           console.warn(`Skipping map for ${field.name} because its geometry exceeds Mapbox URL limits.`);
           continue;

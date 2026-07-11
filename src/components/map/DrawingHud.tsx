@@ -25,6 +25,8 @@ export interface DrawingHudProps {
   canRemoveSinglePart?: boolean;
   /** Clear the single unsaved boundary from both Mapbox Draw and the confirmed part list. */
   onRemoveSinglePart?: () => void;
+  /** Temporarily prevents boundary edits while another map interaction is active. */
+  disabled?: boolean;
 }
 
 const MIN_CORNERS = 3;
@@ -48,6 +50,7 @@ export default function DrawingHud({
   onStartOver,
   canRemoveSinglePart = false,
   onRemoveSinglePart,
+  disabled = false,
 }: DrawingHudProps) {
   // Not drawing: make both replacement and the additive multi-part workflow explicit. The extra
   // section action never clears an existing polygon; a full clear is only exposed for an unsaved
@@ -57,12 +60,13 @@ export default function DrawingHud({
     const empty = partCount === 0;
     const label = empty ? 'Draw field boundary' : single ? 'Redraw boundary' : 'Draw another part';
     return (
-      <div className="absolute bottom-4 left-1/2 z-10 w-[min(92%,30rem)] -translate-x-1/2">
+      <div className={`absolute bottom-4 left-1/2 z-10 w-[min(92%,30rem)] -translate-x-1/2 ${disabled ? 'pointer-events-none opacity-60' : ''}`}>
         <div className="rounded-lg border border-gray-200 bg-white p-2 shadow-md">
           <div className="flex flex-wrap items-center justify-center gap-2">
             <button
               type="button"
               onClick={single ? onReplace : onStartDrawing}
+              disabled={disabled}
               className="flex items-center gap-2 rounded-lg bg-crx-green px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-crx-green/90"
             >
               {empty || single ? <Pencil className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
@@ -72,6 +76,7 @@ export default function DrawingHud({
               <button
                 type="button"
                 onClick={onStartDrawing}
+                disabled={disabled}
                 className="flex items-center gap-1.5 rounded-lg border border-crx-green/30 px-3 py-2.5 text-sm font-semibold text-crx-green transition-colors hover:bg-crx-green-light"
               >
                 <Plus className="h-4 w-4" />
@@ -82,6 +87,7 @@ export default function DrawingHud({
               <button
                 type="button"
                 onClick={onRemoveSinglePart}
+                disabled={disabled}
                 className="flex items-center gap-1.5 rounded-lg border border-red-200 px-3 py-2.5 text-sm font-semibold text-red-600 transition-colors hover:bg-red-50"
               >
                 <Trash2 className="h-4 w-4" />
@@ -100,7 +106,7 @@ export default function DrawingHud({
   const ready = corners >= MIN_CORNERS;
 
   return (
-    <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-10 w-[min(92%,28rem)]">
+    <div className={`absolute bottom-4 left-1/2 -translate-x-1/2 z-10 w-[min(92%,28rem)] ${disabled ? 'pointer-events-none opacity-60' : ''}`}>
       <div className="bg-white rounded-lg shadow-lg border border-gray-200 overflow-hidden">
         {/* Instructions */}
         <div className="px-3 py-2 bg-crx-green-light border-b border-crx-green/20">
@@ -128,6 +134,7 @@ export default function DrawingHud({
             <button
               type="button"
               onClick={onStartOver}
+              disabled={disabled}
               className="flex items-center gap-1.5 rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium text-secondary hover:bg-gray-50 transition-colors"
             >
               <RotateCcw className="w-3.5 h-3.5" />
@@ -136,7 +143,7 @@ export default function DrawingHud({
             <button
               type="button"
               onClick={onDone}
-              disabled={!ready}
+              disabled={disabled || !ready}
               title={ready ? 'Finish this boundary' : `Place at least ${MIN_CORNERS} corners`}
               className="flex items-center gap-1.5 rounded-lg bg-crx-green px-3 py-1.5 text-xs font-semibold text-white hover:bg-crx-green/90 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
             >

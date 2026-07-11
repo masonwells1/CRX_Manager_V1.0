@@ -13,6 +13,10 @@ interface DrawControlProps {
   onDrawDelete?: (featureIds: string[]) => void;
   initialGeoJSON?: GeoJSON.Feature | GeoJSON.Feature[] | null;
   allowRemoveSinglePart?: boolean;
+  /** Prevents starting or changing a boundary while another map mode is active. */
+  disabled?: boolean;
+  /** Reports whether Mapbox Draw is currently collecting boundary vertices. */
+  onDrawingStateChange?: (isDrawing: boolean) => void;
 }
 
 interface HudState {
@@ -24,25 +28,40 @@ interface HudState {
 
 const EMPTY_HUD: HudState = { isDrawing: false, partCount: 0, acres: 0, corners: 0 };
 
+// Mapbox Draw's normal selection modes allow existing boundary polygons to be dragged. During
+// obstacle placement, use a deliberately handler-free mode so those billable boundaries remain
+// visible but cannot receive clicks or drags.
+const STATIC_MODE: MapboxDraw.DrawCustomMode = {
+  onSetup: () => ({}),
+  toDisplayFeatures: (_state, geojson, display) => display(geojson),
+};
+
 export default function DrawControl({
   onDrawCreate,
   onDrawUpdate,
   onDrawDelete,
   initialGeoJSON,
   allowRemoveSinglePart = false,
+  disabled = false,
+  onDrawingStateChange,
 }: DrawControlProps) {
   const drawRef = useRef<MapboxDraw | null>(null);
+  const mapRef = useRef<{ getContainer: () => HTMLElement } | null>(null);
   const [hud, setHud] = useState<HudState>(EMPTY_HUD);
   const hudRef = useRef<HudState>(EMPTY_HUD);
   // Stable references for the draw.* listeners so onRemove can actually detach them.
   const listenersRef = useRef<Record<string, (e: unknown) => void>>({});
+  // The control is registered once, so its map event listeners must read the current disabled
+  // state rather than the value from their initial render.
+  const disabledRef = useRef(disabled);
+  disabledRef.current = disabled;
   // react-map-gl registers the useControl onAdd ONCE (its effect has [] deps), so the draw.*
   // listeners would otherwise close over the FIRST render's parent callbacks. DrawLayer rebuilds
   // its handlers as the polygon list grows (multi-part fields), so route through a ref kept current
   // every render — without this, committing a 2nd/3rd part fires a stale handler that overwrites
   // the earlier parts (the geometry that bills). Single-boundary callbacks are stable, so unaffected.
-  const cbRef = useRef({ onDrawCreate, onDrawUpdate, onDrawDelete });
-  cbRef.current = { onDrawCreate, onDrawUpdate, onDrawDelete };
+  const cbRef = useRef({ onDrawCreate, onDrawUpdate, onDrawDelete, onDrawingStateChange });
+  cbRef.current = { onDrawCreate, onDrawUpdate, onDrawDelete, onDrawingStateChange };
 
   // Read the current draw state straight off the mapbox-gl-draw instance and push it to the
   // HUD. Driven by draw.render (fires on every mouse move while drawing) so the acreage forms
@@ -89,12 +108,14 @@ export default function DrawControl({
     }
     hudRef.current = next;
     setHud(next);
+    cbRef.current.onDrawingStateChange?.(drawing);
   }, []);
 
   const draw = useControl<MapboxDraw>(
     () =>
       new MapboxDraw({
         displayControlsDefault: false,
+        keybindings: false,
         controls: {
           polygon: true,
           // Boundary parts are removed from FieldSetup's confirmed part list so an accidental
@@ -102,6 +123,10 @@ export default function DrawControl({
           trash: false,
         },
         defaultMode: 'simple_select',
+        modes: {
+          ...MapboxDraw.modes,
+          static: STATIC_MODE,
+        },
         styles: [
           // Polygon fill
           {
@@ -153,6 +178,7 @@ export default function DrawControl({
         ],
       }),
     ({ map }) => {
+      mapRef.current = map;
       const onCreate = (e: unknown) => {
         const features = (e as { features?: GeoJSON.Feature[] }).features;
         if (features && features.length > 0) cbRef.current.onDrawCreate?.(features[0]);
@@ -168,7 +194,16 @@ export default function DrawControl({
         cbRef.current.onDrawDelete?.(features?.map((f) => f.id as string) || []);
         recompute();
       };
-      const onModeChange = (e: unknown) => recompute((e as { mode?: string }).mode);
+      const onModeChange = (e: unknown) => {
+        const mode = (e as { mode?: string }).mode;
+        // Keyboard bindings are disabled, but plugins and programmatic callers can still enter a
+        // draw mode. Keep obstacle placement fail-closed by returning Draw to its inert mode.
+        if (disabledRef.current && mode !== 'static') {
+          drawRef.current?.changeMode('static');
+          return;
+        }
+        recompute(mode);
+      };
       const onRender = () => recompute();
 
       listenersRef.current = {
@@ -194,6 +229,26 @@ export default function DrawControl({
     { position: 'top-left' }
   );
   drawRef.current = draw;
+
+  // Mapbox Draw's built-in polygon button lives outside React. Disable that button and the
+  // React HUD together so obstacle-placement clicks cannot accidentally add a boundary vertex.
+  // More importantly, static mode makes every existing boundary inert while the map click is
+  // reserved for placing an obstacle pin.
+  useEffect(() => {
+    const d = drawRef.current;
+    if (d) {
+      if (disabled) d.changeMode('static');
+      else d.changeMode('simple_select');
+    }
+
+    const buttons = mapRef.current?.getContainer().querySelectorAll<HTMLButtonElement>(
+      '.mapbox-gl-draw_ctrl-draw-btn',
+    ) ?? [];
+    buttons.forEach((button) => {
+      button.disabled = disabled;
+      button.setAttribute('aria-disabled', String(disabled));
+    });
+  }, [disabled]);
 
   // Load initial geometry when available — supports single feature or array
   const loadInitial = useCallback(() => {
@@ -279,6 +334,7 @@ export default function DrawControl({
       onStartOver={handleStartOver}
       canRemoveSinglePart={allowRemoveSinglePart}
       onRemoveSinglePart={handleRemoveSinglePart}
+      disabled={disabled}
     />
   );
 }

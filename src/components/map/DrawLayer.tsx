@@ -17,6 +17,10 @@ interface DrawLayerProps {
   onPolygonsChange?: (polygons: DrawnPolygon[]) => void;
   /** Lets a field with no saved boundary clear its only in-session part. */
   allowRemoveSinglePart?: boolean;
+  /** Temporarily prevents boundary editing without unmounting Mapbox Draw. */
+  disabled?: boolean;
+  /** Reports whether the user is currently placing boundary vertices. */
+  onDrawingStateChange?: (isDrawing: boolean) => void;
   /** Legacy single-polygon mode (backward compat) */
   initialGeoJSON?: Feature<Polygon> | null;
   onBoundaryChange?: (boundary: Feature<Polygon>, acres: number, center: [number, number]) => void;
@@ -28,6 +32,8 @@ export default function DrawLayer({
   initialPolygons,
   onPolygonsChange,
   allowRemoveSinglePart = false,
+  disabled = false,
+  onDrawingStateChange,
   initialGeoJSON,
   onBoundaryChange,
   onBoundaryDelete,
@@ -115,6 +121,8 @@ export default function DrawLayer({
       onDrawUpdate={handleUpdate}
       onDrawDelete={handleDelete}
       allowRemoveSinglePart={allowRemoveSinglePart}
+      disabled={disabled}
+      onDrawingStateChange={onDrawingStateChange}
     />
   );
 }

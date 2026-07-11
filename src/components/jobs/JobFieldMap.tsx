@@ -12,10 +12,12 @@ import Card from '../ui/Card';
 import CRXMap from '../map/CRXMap';
 import FieldBoundaryLayer from '../map/FieldBoundaryLayer';
 import FieldMarkerLayer from '../map/FieldMarkerLayer';
+import FieldObstacleLayer from '../map/FieldObstacleLayer';
+import { useToast } from '../ui/Toast';
 import { useFitBounds } from '../../hooks/useFitBounds';
 import { supabase, assertRpcResult } from '../../lib/db';
 import { Sentry } from '../../lib/sentry';
-import type { Field } from '../../types';
+import type { Field, FieldObstacle } from '../../types';
 import { getJobFieldRouteNumbers } from './jobFieldRouteOrder';
 
 // Exactly the columns get_job_fields_with_geojson returns.
@@ -70,7 +72,9 @@ interface JobFieldMapProps {
 
 export default function JobFieldMap({ jobId }: JobFieldMapProps) {
   const navigate = useNavigate();
+  const { toast } = useToast();
   const [jobFields, setJobFields] = useState<JobMapField[]>([]);
+  const [obstacles, setObstacles] = useState<FieldObstacle[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -78,6 +82,7 @@ export default function JobFieldMap({ jobId }: JobFieldMapProps) {
     async function load() {
       if (!jobId) {
         setJobFields([]);
+        setObstacles([]);
         setLoading(false);
         return;
       }
@@ -90,12 +95,36 @@ export default function JobFieldMap({ jobId }: JobFieldMapProps) {
         });
         if (error) throw error;
         const rows = assertRpcResult<JobMapFieldRow[]>(data, 'get_job_fields_with_geojson');
-        if (!cancelled) setJobFields(rows.map(toField));
+        const nextFields = rows.map(toField);
+        let nextObstacles: FieldObstacle[] = [];
+        const fieldIds = nextFields.map((field) => field.id);
+        if (fieldIds.length > 0) {
+          try {
+            const obstacleResult = await supabase
+              .from('field_obstacles')
+              .select('*')
+              .in('field_id', fieldIds);
+            if (obstacleResult.error) throw obstacleResult.error;
+            nextObstacles = (obstacleResult.data ?? []) as unknown as FieldObstacle[];
+          } catch (obstacleError: unknown) {
+            Sentry.captureException(obstacleError instanceof Error ? obstacleError : new Error(String(obstacleError)), {
+              tags: { source: 'fetch', action: 'job_field_obstacles' },
+            });
+            if (!cancelled) toast('error', 'Could not load field obstacles.');
+          }
+        }
+        if (!cancelled) {
+          setJobFields(nextFields);
+          setObstacles(nextObstacles);
+        }
       } catch (err) {
         Sentry.captureException(err instanceof Error ? err : new Error(String(err)), {
           tags: { source: 'fetch', action: 'job_field_map' },
         });
-        if (!cancelled) setJobFields([]);
+        if (!cancelled) {
+          setJobFields([]);
+          setObstacles([]);
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -104,7 +133,7 @@ export default function JobFieldMap({ jobId }: JobFieldMapProps) {
     return () => {
       cancelled = true;
     };
-  }, [jobId]);
+  }, [jobId, toast]);
 
   const fieldsWithGeometry = useMemo(
     () => jobFields.filter((f) => f.boundary_geojson || f.centroid_geojson),
@@ -117,10 +146,14 @@ export default function JobFieldMap({ jobId }: JobFieldMapProps) {
   const routeNumberById = useMemo(() => getJobFieldRouteNumbers(jobFields), [jobFields]);
 
   const geoStrings = useMemo(
-    () => fieldsWithGeometry.flatMap((f) => [f.boundary_geojson, f.centroid_geojson]),
-    [fieldsWithGeometry]
+    () => [
+      ...fieldsWithGeometry.flatMap((f) => [f.boundary_geojson, f.centroid_geojson]),
+      ...obstacles.map((obstacle) => JSON.stringify(obstacle.point_geojson)),
+    ],
+    [fieldsWithGeometry, obstacles]
   );
   const bounds = useFitBounds(geoStrings);
+  const hasMapGeometry = fieldsWithGeometry.length > 0 || obstacles.length > 0;
 
   if (loading) {
     return (
@@ -149,7 +182,7 @@ export default function JobFieldMap({ jobId }: JobFieldMapProps) {
         Field Map ({jobFields.length} location{jobFields.length === 1 ? '' : 's'})
       </h2>
 
-      {fieldsWithGeometry.length > 0 ? (
+      {hasMapGeometry ? (
         <CRXMap
           className="h-[480px] w-full rounded-lg overflow-hidden"
           showLayerToggle
@@ -169,6 +202,7 @@ export default function JobFieldMap({ jobId }: JobFieldMapProps) {
             showAll
             onFieldClick={(fieldId) => navigate(`/fields/${fieldId}/dashboard`)}
           />
+          <FieldObstacleLayer obstacles={obstacles} interactive={false} />
         </CRXMap>
       ) : (
         <div className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-4 text-amber-800">

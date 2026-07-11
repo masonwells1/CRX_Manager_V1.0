@@ -31,6 +31,8 @@ export interface CRXMapProps {
   onMapLoad?: (map: MapRef) => void;
   /** Fired after navigation settles so consumers can cheaply refresh viewport-dependent work. */
   onMapMoveEnd?: (center: [number, number]) => void;
+  /** Fired when the map surface is clicked. Marker/layer handlers may stop propagation. */
+  onMapClick?: (longitude: number, latitude: number) => void;
 }
 
 const DEFAULT_CENTER: [number, number] = [-89.0, 40.0];
@@ -50,6 +52,7 @@ export default function CRXMap({
   children,
   onMapLoad,
   onMapMoveEnd,
+  onMapClick,
 }: CRXMapProps) {
   const [viewState, setViewState] = useState({
     longitude: center[0],
@@ -137,6 +140,7 @@ export default function CRXMap({
         {...viewState}
         onMove={(evt) => setViewState(evt.viewState)}
         onMoveEnd={handleMoveEnd}
+        onClick={(evt) => onMapClick?.(evt.lngLat.lng, evt.lngLat.lat)}
         mapboxAccessToken={MAPBOX_TOKEN}
         mapStyle={BASE_LAYERS[effectiveLayer]}
         style={{ width: '100%', height: '100%' }}

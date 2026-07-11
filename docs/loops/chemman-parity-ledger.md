@@ -25,7 +25,7 @@ Loop start (UTC): 2026-07-11T16:20Z (Step 0)
 | M6 | SHIPPED | sol (migration) + terra (UI); verdicts sol | 3 | 20260713000000 APPLIED LIVE (v20260711202349) | (sha at push) | CLEAN (pass 2) |
 | M7 | SHIPPED (combined Fields-UX unit) | terra (verdicts: sol) | 4* | none | (sha at push) | CLEAN (pass 4) |
 | M8 | SHIPPED (combined Fields-UX unit) | terra | – | none | – | – |
-| M9 | pending | sol+terra | – | – | – | – |
+| M9 | SHIPPED | sol (migration) + terra (UI); verdicts sol | 4* | 20260713010000 APPLIED LIVE (v20260711224658) | (sha at push) | CLEAN (pass 3) |
 | M10 | SHIPPED (combined Fields-UX unit; scoped to legal_description) | terra | – | none | – | – |
 | M11 | ALREADY-SHIPPED (verified) | n/a | 0 | none | n/a | n/a |
 | M12 | DONE (research) | sonnet subagent | 1 | none | docs/walkthroughs/fsa-boundary-research.md | n/a |
@@ -83,3 +83,9 @@ Loop start (UTC): 2026-07-11T16:20Z (Step 0)
 - Review kills across 4 rounds (findings converged 2→2→1→0): map re-frame after draws, single-unsaved-part removal (saved boundaries stay protected), stale loadedHadBoundaryRef desync, CSP block, and a pan-during-draw sketch-erase blocker (DrawControl sync now skips during active draw + stable initialPolygons identity). *Round-cap deviation logged: 4 rounds, same convergence rationale as M1/M2.*
 - Acre authority verified untouched by reviewer (server ST_Multi normalization; attribute-only saves still skip set_field_boundary).
 - PROOF — Ran: typecheck ✓ lint ✓ scoped tests 70-72 ✓ full suite ✓ build ✓; 1 Sonnet deep review + 4 Sol verdict passes. · Saw: CLEAN final. · Not verified: interactive draw/lookup flow (morning checklist).
+
+### M9 — Field obstacle markers (SHIPPED; migration LIVE)
+- Migration 20260713010000_field_obstacles: Opus rls-security found SELECT USING(true) broader than parent fields policy → tightened to admin/sales/applicator (reviewer's prescribed one-liner) before apply; drift CLEAN; smokes passed; proof 7262a448…; APPLIED LIVE (registry v20260711224658, refreshed + synced, flag cleared); RLS verified on; sweeps re-run 15/15 vs known baseline (no new violations).
+- UI: FieldSetup add-obstacle click-to-drop (kind/label, ConfirmModal delete, office-only writes), read-only pins on JobFieldMap (+failure toast), obstacle points on printed per-field close-ups (dropped first under URL pressure), red danger styling.
+- Review kills (4 rounds, converging): obstacle-mode unmounting DrawLayer destroyed mid-sketch boundaries (now stays mounted + entry blocked during draw); pins swallowing draw clicks (non-interactive while drawing); STATIC MapboxDraw mode during obstacle placement (drag couldn't move billable geometry); keyboard "3" bypass (keybindings:false + modechange snap-back). *Round-cap deviation logged, same convergence rationale.*
+- PROOF — Ran: typecheck ✓ lint ✓ scoped tests 17-28 ✓ full suite ✓ build ✓; live table SELECT (relrowsecurity=true); 2 Opus + 1 Sonnet reviews + 3 Sol verdicts. · Saw: CLEAN final. · Not verified: interactive pin-drop (morning checklist item 6).

@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { mockRpc, mockFrom, mockIn, mockEq } = vi.hoisted(() => ({
+const { mockRpc, mockFrom, mockIn, mockObstacleIn, mockEq } = vi.hoisted(() => ({
   mockRpc: vi.fn(),
   mockFrom: vi.fn(),
   mockIn: vi.fn(),
+  mockObstacleIn: vi.fn(),
   mockEq: vi.fn(),
 }));
 
@@ -39,9 +40,13 @@ function setupRpc(boundary = squareBoundary, centroid?: [number, number], acresT
     if (table === 'job_fields') {
       return { select: vi.fn().mockReturnValue({ eq: mockEq }) };
     }
+    if (table === 'field_obstacles') {
+      return { select: vi.fn().mockReturnValue({ in: mockObstacleIn }) };
+    }
     return { select: vi.fn().mockReturnValue({ in: mockIn }) };
   });
   mockEq.mockResolvedValue({ data: [{ field_id: 'field-1', acres_to_treat: acresToTreat }], error: null });
+  mockObstacleIn.mockResolvedValue({ data: [], error: null });
   mockIn.mockResolvedValue({ data: [{ id: 'customer-1', farm_name: 'Smith Farm' }], error: null });
 }
 
@@ -104,6 +109,95 @@ describe('fetchJobMapImages', () => {
 
     expect(result?.perField).toHaveLength(1);
     expect(result?.perField[0].acres).toBe(10);
+  });
+
+  it('adds small red obstacle points to a per-field close-up overlay', async () => {
+    setupRpc();
+    mockObstacleIn.mockResolvedValue({
+      data: [{
+        id: 'obstacle-1',
+        field_id: 'field-1',
+        kind: 'oil_well',
+        label: 'West well',
+        point_geojson: { type: 'Point', coordinates: [-89.04, 39.16] },
+        created_by: 'user-1',
+        created_at: '2026-07-11T12:00:00Z',
+        updated_at: '2026-07-11T12:00:00Z',
+      }],
+      error: null,
+    });
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      blob: async () => new Blob(['png'], { type: 'image/png' }),
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    await fetchJobMapImages('job-1', { overview: false });
+
+    expect(mockObstacleIn).toHaveBeenCalledWith('field_id', ['field-1']);
+    const url = String(mockFetch.mock.calls[0][0]);
+    const encodedOverlay = url.match(/geojson\((.+)\)\/auto/);
+    const overlay = JSON.parse(decodeURIComponent(encodedOverlay?.[1] ?? '')) as {
+      features: Array<{ geometry: { type: string }; properties: Record<string, string> }>;
+    };
+    const marker = overlay.features.find((feature) => feature.geometry.type === 'Point');
+    expect(marker?.properties).toMatchObject({
+      kind: 'oil_well',
+      label: 'West well',
+      'marker-color': '#dc2626',
+      'marker-size': 'small',
+    });
+  });
+
+  it('drops oversized obstacle points before dropping the field fill', async () => {
+    setupRpc();
+    mockObstacleIn.mockResolvedValue({
+      data: [{
+        id: 'obstacle-1',
+        field_id: 'field-1',
+        kind: 'other',
+        label: 'x'.repeat(8_000),
+        point_geojson: { type: 'Point', coordinates: [-89.04, 39.16] },
+        created_by: 'user-1',
+        created_at: '2026-07-11T12:00:00Z',
+        updated_at: '2026-07-11T12:00:00Z',
+      }],
+      error: null,
+    });
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      blob: async () => new Blob(['png'], { type: 'image/png' }),
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    await fetchJobMapImages('job-1', { overview: false });
+
+    const url = String(mockFetch.mock.calls[0][0]);
+    const encodedOverlay = url.match(/geojson\((.+)\)\/auto/);
+    const overlay = JSON.parse(decodeURIComponent(encodedOverlay?.[1] ?? '')) as {
+      features: Array<{ geometry: { type: string }; properties: Record<string, string | number> }>;
+    };
+    expect(overlay.features.some((feature) => feature.geometry.type === 'Point')).toBe(false);
+    expect(overlay.features[0].properties).toMatchObject({
+      fill: '#FFD700',
+      'fill-opacity': 0.15,
+    });
+  });
+
+  it('still builds map images when the obstacle fetch fails', async () => {
+    setupRpc();
+    mockObstacleIn.mockResolvedValue({ data: null, error: new Error('obstacles unavailable') });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      blob: async () => new Blob(['png'], { type: 'image/png' }),
+    }));
+
+    const result = await fetchJobMapImages('job-1', { overview: false });
+
+    expect(result?.perField).toHaveLength(1);
   });
 
   it('draws an overview acreage label at the Mercator-matched position for a non-square bbox', async () => {

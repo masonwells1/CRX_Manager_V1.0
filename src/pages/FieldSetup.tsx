@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Save, Trash2, MapPin, Search, ChevronDown, ChevronUp, AlertTriangle, Eye, EyeOff, MapPinned } from 'lucide-react';
+import { ArrowLeft, Save, Trash2, MapPin, Search, ChevronDown, ChevronUp, AlertTriangle, Eye, EyeOff, MapPinned, Plus, X } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
@@ -11,10 +11,11 @@ import CRXMap from '../components/map/CRXMap';
 import DrawLayer, { type DrawnPolygon } from '../components/map/DrawLayer';
 import AddressSearch from '../components/map/AddressSearch';
 import FieldBoundaryLayer from '../components/map/FieldBoundaryLayer';
+import FieldObstacleLayer from '../components/map/FieldObstacleLayer';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
-import { supabase, assertRpcResult } from '../lib/db';
+import { supabase, assertRpcResult, checkMutationResult } from '../lib/db';
 import { getCachedFieldsGeojson, type FieldsGeojsonRow } from '../lib/fieldsGeojsonCache';
 import { lookupPlss, type PlssLookupResult } from '../lib/plssLookup';
 import { canRemoveSingleBoundary } from '../lib/fieldBoundaryState';
@@ -34,8 +35,13 @@ import {
 import turfCentroid from '@turf/centroid';
 import turfArea from '@turf/area';
 import { JOB_FIELD_PICKER_MAP_LIMIT, mapFieldsForJobPicker } from '../components/jobs/jobFieldPicker';
+import {
+  canEnterObstacleMode,
+  FIELD_OBSTACLE_KINDS,
+  FIELD_OBSTACLE_KIND_LABELS,
+} from '../lib/fieldObstacles';
 import type { Feature, MultiPolygon, Polygon } from 'geojson';
-import type { Field, Customer } from '../types';
+import type { Field, Customer, FieldObstacle, FieldObstacleKind } from '../types';
 
 interface BillingSplit {
   customer_id: string;
@@ -125,6 +131,15 @@ export default function FieldSetup() {
   const [partPendingDelete, setPartPendingDelete] = useState<DrawnPolygon | null>(null);
   const [legalLookupLoading, setLegalLookupLoading] = useState(false);
   const [pendingLegalLookup, setPendingLegalLookup] = useState<PlssLookupResult | null>(null);
+  const [obstacles, setObstacles] = useState<FieldObstacle[]>([]);
+  const [addObstacleMode, setAddObstacleMode] = useState(false);
+  const [isBoundaryDrawing, setIsBoundaryDrawing] = useState(false);
+  const [pendingObstaclePoint, setPendingObstaclePoint] = useState<[number, number] | null>(null);
+  const [obstacleKind, setObstacleKind] = useState<FieldObstacleKind>('oil_well');
+  const [obstacleLabel, setObstacleLabel] = useState('');
+  const [savingObstacle, setSavingObstacle] = useState(false);
+  const [deletingObstacle, setDeletingObstacle] = useState(false);
+  const [obstaclePendingDelete, setObstaclePendingDelete] = useState<FieldObstacle | null>(null);
 
   // Customer search for the owner dropdown
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -167,6 +182,22 @@ export default function FieldSetup() {
     () => mapFieldsForJobPicker(overlayFields, JOB_FIELD_PICKER_MAP_LIMIT, overlayMapCenter),
     [overlayFields, overlayMapCenter],
   );
+
+  const canManageObstacles = profile?.role === 'admin' || profile?.role === 'sales_rep';
+  const obstaclesForMap = useMemo(() => {
+    if (!pendingObstaclePoint || !id || isNew) return obstacles;
+    const pending: FieldObstacle = {
+      id: 'pending-obstacle',
+      field_id: id,
+      kind: obstacleKind,
+      label: obstacleLabel.trim() || 'New obstacle',
+      point_geojson: { type: 'Point', coordinates: pendingObstaclePoint },
+      created_by: profile?.id ?? null,
+      created_at: '',
+      updated_at: '',
+    };
+    return [...obstacles, pending];
+  }, [id, isNew, obstacleKind, obstacleLabel, obstacles, pendingObstaclePoint, profile?.id]);
 
   // Mapbox also emits move-end for zooms whose center did not change. Preserve the existing
   // center tuple for those events so the field-drawing subtree keeps its stable inputs.
@@ -320,6 +351,30 @@ export default function FieldSetup() {
       setTimeout(() => { initialLoadDone.current = true; }, 0);
     }
   }, [id, isNew, fetchCustomers, fetchField]);
+
+  useEffect(() => {
+    if (isNew || !id) {
+      setObstacles([]);
+      return;
+    }
+    let active = true;
+    const loadObstacles = async () => {
+      const { data, error } = await supabase
+        .from('field_obstacles')
+        .select('*')
+        .eq('field_id', id)
+        .order('created_at');
+      if (!active) return;
+      if (error) {
+        setObstacles([]);
+        toast('error', 'Could not load field obstacles.');
+        return;
+      }
+      setObstacles((data ?? []) as unknown as FieldObstacle[]);
+    };
+    void loadObstacles();
+    return () => { active = false; };
+  }, [id, isNew, toast]);
 
   useEffect(() => {
     try {
@@ -638,6 +693,86 @@ export default function FieldSetup() {
     setMapCenter([lng, lat]);
     setMapZoom(16);
   }, []);
+
+  const handleMapClick = useCallback((longitude: number, latitude: number) => {
+    if (!addObstacleMode || !canManageObstacles || isNew) return;
+    setPendingObstaclePoint([longitude, latitude]);
+  }, [addObstacleMode, canManageObstacles, isNew]);
+
+  const resetObstacleDraft = useCallback(() => {
+    setPendingObstaclePoint(null);
+    setObstacleKind('oil_well');
+    setObstacleLabel('');
+  }, []);
+
+  const handleObstacleModeToggle = useCallback(() => {
+    if (addObstacleMode) {
+      setAddObstacleMode(false);
+      resetObstacleDraft();
+      return;
+    }
+
+    if (!canEnterObstacleMode(isBoundaryDrawing)) {
+      toast('error', 'Finish or cancel the boundary before adding an obstacle.');
+      return;
+    }
+
+    resetObstacleDraft();
+    setAddObstacleMode(true);
+  }, [addObstacleMode, isBoundaryDrawing, resetObstacleDraft, toast]);
+
+  const handleAddObstacle = async () => {
+    if (!id || isNew || !profile || !canManageObstacles || !pendingObstaclePoint) return;
+    setSavingObstacle(true);
+    try {
+      const result = await supabase
+        .from('field_obstacles')
+        .insert({
+          field_id: id,
+          kind: obstacleKind,
+          label: obstacleLabel.trim() || null,
+          point_geojson: { type: 'Point', coordinates: pendingObstaclePoint },
+          created_by: profile.id,
+        })
+        .select('*')
+        .single();
+      checkMutationResult(result, 'Add field obstacle');
+      setObstacles((current) => [...current, result.data as unknown as FieldObstacle]);
+      resetObstacleDraft();
+      setAddObstacleMode(false);
+      toast('success', 'Obstacle added');
+    } catch (error: unknown) {
+      Sentry.captureException(error instanceof Error ? error : new Error(String(error)), {
+        tags: { component: 'FieldSetup', action: 'add_field_obstacle' },
+      });
+      toast('error', 'Could not add obstacle.');
+    } finally {
+      setSavingObstacle(false);
+    }
+  };
+
+  const handleDeleteObstacle = async () => {
+    if (!obstaclePendingDelete || !canManageObstacles) return;
+    setDeletingObstacle(true);
+    try {
+      const result = await supabase
+        .from('field_obstacles')
+        .delete()
+        .eq('id', obstaclePendingDelete.id)
+        .select('id');
+      checkMutationResult(result, 'Delete field obstacle');
+      setObstacles((current) => current.filter((obstacle) => obstacle.id !== obstaclePendingDelete.id));
+      setObstaclePendingDelete(null);
+      toast('success', 'Obstacle deleted');
+    } catch (error: unknown) {
+      Sentry.captureException(error instanceof Error ? error : new Error(String(error)), {
+        tags: { component: 'FieldSetup', action: 'delete_field_obstacle' },
+      });
+      toast('error', 'Could not delete obstacle.');
+    } finally {
+      setDeletingObstacle(false);
+    }
+  };
 
   const filteredCustomers = customers.filter((c) =>
     c.farm_name.toLowerCase().includes(customerSearch.toLowerCase())
@@ -1138,7 +1273,8 @@ export default function FieldSetup() {
               showLocateMe
               showLayerToggle
               onMapMoveEnd={handleMapMoveEnd}
-              className="h-[400px] w-full"
+              onMapClick={handleMapClick}
+              className={`h-[400px] w-full ${addObstacleMode ? 'cursor-crosshair' : ''}`}
             >
               {showOtherFieldBoundaries && (
                 <FieldBoundaryLayer fields={nearbyOverlayFields} showLabels />
@@ -1148,8 +1284,55 @@ export default function FieldSetup() {
                 initialPolygons={drawnPolygons}
                 onPolygonsChange={handlePolygonsChange}
                 allowRemoveSinglePart={canRemoveSingleBoundary(loadedHadBoundaryRef.current)}
+                disabled={addObstacleMode}
+                onDrawingStateChange={setIsBoundaryDrawing}
               />
+              <FieldObstacleLayer obstacles={obstaclesForMap} interactive={!addObstacleMode && !isBoundaryDrawing} />
             </CRXMap>
+            {addObstacleMode && (
+              <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3">
+                {!pendingObstaclePoint ? (
+                  <p className="text-sm text-amber-800">Click the map where the obstacle is located.</p>
+                ) : (
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                      <div>
+                        <label htmlFor="field-obstacle-kind" className="mb-1 block text-xs font-medium text-secondary">
+                          Obstacle type
+                        </label>
+                        <select
+                          id="field-obstacle-kind"
+                          value={obstacleKind}
+                          onChange={(event) => setObstacleKind(event.target.value as FieldObstacleKind)}
+                          className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm focus:border-crx-green focus:outline-none focus:ring-2 focus:ring-crx-green/20"
+                        >
+                          {FIELD_OBSTACLE_KINDS.map((kind) => (
+                            <option key={kind} value={kind}>{FIELD_OBSTACLE_KIND_LABELS[kind]}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label htmlFor="field-obstacle-label" className="mb-1 block text-xs font-medium text-secondary">
+                          Obstacle label (optional)
+                        </label>
+                        <input
+                          id="field-obstacle-label"
+                          type="text"
+                          value={obstacleLabel}
+                          onChange={(event) => setObstacleLabel(event.target.value)}
+                          placeholder="e.g. North windmill"
+                          className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm focus:border-crx-green focus:outline-none focus:ring-2 focus:ring-crx-green/20"
+                        />
+                      </div>
+                    </div>
+                    <div className="flex justify-end gap-2">
+                      <Button type="button" variant="ghost" size="sm" onClick={resetObstacleDraft}>Choose another point</Button>
+                      <Button type="button" size="sm" onClick={() => void handleAddObstacle()} loading={savingObstacle}>Save obstacle</Button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
             {/* Polygon list panel */}
             {drawnPolygons.length > 1 && (
               <div className="mt-3 space-y-2">
@@ -1177,6 +1360,56 @@ export default function FieldSetup() {
                 </div>
               </div>
             )}
+            <div className="mt-4 border-t border-gray-100 pt-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-semibold text-nav-dark">Obstacles</h3>
+                  <p className="text-xs text-secondary">Pins shown to the field crew and on printed close-up maps.</p>
+                </div>
+                {canManageObstacles && !isNew && (
+                  <Button
+                    type="button"
+                    variant={addObstacleMode ? 'ghost' : 'secondary'}
+                    size="sm"
+                    icon={addObstacleMode ? <X className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
+                    onClick={handleObstacleModeToggle}
+                  >
+                    {addObstacleMode ? 'Cancel obstacle' : 'Add obstacle'}
+                  </Button>
+                )}
+              </div>
+              {isNew ? (
+                <p className="mt-3 text-xs text-secondary">Save this field before adding obstacle pins.</p>
+              ) : obstacles.length === 0 ? (
+                <p className="mt-3 text-xs text-secondary">No obstacles marked for this field.</p>
+              ) : (
+                <ul className="mt-3 space-y-2">
+                  {obstacles.map((obstacle) => {
+                    const kindLabel = FIELD_OBSTACLE_KIND_LABELS[obstacle.kind];
+                    const displayLabel = obstacle.label?.trim() || kindLabel;
+                    return (
+                      <li key={obstacle.id} className="flex items-center gap-2 rounded-lg border border-amber-100 bg-amber-50/60 px-3 py-2">
+                        <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-red-600 ring-2 ring-red-100" />
+                        <span className="min-w-0 flex-1 truncate text-sm text-nav-dark">
+                          {displayLabel}{displayLabel !== kindLabel ? <> &mdash; <span className="text-secondary">{kindLabel}</span></> : null}
+                        </span>
+                        {canManageObstacles && (
+                          <button
+                            type="button"
+                            onClick={() => setObstaclePendingDelete(obstacle)}
+                            title={`Delete ${displayLabel}`}
+                            aria-label={`Delete obstacle ${displayLabel}`}
+                            className="rounded p-1 text-gray-400 hover:bg-white hover:text-red-600"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
           </Card>
         </div>
       </div>
@@ -1212,6 +1445,17 @@ export default function FieldSetup() {
         message="Legal lookup found a new Section, Township, and Range. Replace the legal description you entered?"
         confirmLabel="Replace description"
         variant="warning"
+      />
+
+      <ConfirmModal
+        open={obstaclePendingDelete !== null}
+        onClose={() => setObstaclePendingDelete(null)}
+        onConfirm={() => void handleDeleteObstacle()}
+        title="Delete obstacle?"
+        message="This removes the obstacle pin from field maps and future printed close-up pages."
+        confirmLabel="Delete obstacle"
+        variant="danger"
+        loading={deletingObstacle}
       />
     </div>
   );

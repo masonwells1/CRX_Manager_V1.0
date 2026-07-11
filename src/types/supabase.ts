@@ -2765,6 +2765,47 @@ export type Database = {
           },
         ]
       }
+      field_obstacles: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          field_id: string
+          id: string
+          kind: string
+          label: string | null
+          point_geojson: Json
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          field_id: string
+          id?: string
+          kind: string
+          label?: string | null
+          point_geojson: Json
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          field_id?: string
+          id?: string
+          kind?: string
+          label?: string | null
+          point_geojson?: Json
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "field_obstacles_field_id_fkey"
+            columns: ["field_id"]
+            isOneToOne: false
+            referencedRelation: "fields"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       field_polygons: {
         Row: {
           acres: number | null

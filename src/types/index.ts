@@ -1543,6 +1543,26 @@ export interface Field {
   billing_defaults?: FieldBillingDefault[];
 }
 
+export type FieldObstacleKind =
+  | 'oil_well'
+  | 'windmill'
+  | 'tower'
+  | 'tree_line'
+  | 'power_line'
+  | 'waterway'
+  | 'other';
+
+export interface FieldObstacle {
+  id: string;
+  field_id: string;
+  kind: FieldObstacleKind;
+  label: string | null;
+  point_geojson: { type: 'Point'; coordinates: [number, number] };
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 // Result shapes for the two-acre RPCs (migration 20260623130000)
 export interface SetFieldBoundaryResult {
   field_id: string;
