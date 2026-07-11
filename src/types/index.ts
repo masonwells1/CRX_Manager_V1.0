@@ -77,6 +77,41 @@ export interface Product {
   updated_at: string;
 }
 
+// ─── EPA PPLS Lookup ────────────────────────────────────────────────────────
+// Keep this shape in sync with supabase/functions/epa-lookup/logic.ts.
+
+export type EpaRegistrationType = 'section3' | 'distributor';
+export type EpaSignalWordCanonical = 'Danger' | 'Warning' | 'Caution';
+
+export interface EpaActiveIngredient {
+  name: string;
+  percent: number | null;
+  pcCode: string | null;
+  casNumber: string | null;
+}
+
+export interface EpaLabelPdf {
+  fileName: string;
+  acceptedDate: string | null;
+  url: string;
+}
+
+export interface EpaLookupResult {
+  found: boolean;
+  regType: EpaRegistrationType;
+  eparegno: string | null;
+  productname: string | null;
+  signalWordCanonical: EpaSignalWordCanonical | null;
+  needsManual: boolean;
+  manufacturer: string | null;
+  rupYn: 'Yes' | 'No' | null;
+  productStatus: string | null;
+  isCancelled: boolean;
+  activeIngredients: EpaActiveIngredient[];
+  latestLabelPdfUrl: string | null;
+  labelPdfs: EpaLabelPdf[];
+}
+
 // ─── Label Drafts (§1 AI Label-Data Backfill) ───────────────────────────────
 
 export type LabelDraftConfidence = 'high' | 'medium' | 'low';
@@ -1119,7 +1154,11 @@ export interface Invoice {
   total_amount_cents: number;
   paid_amount_cents: number;
   prepay_applied_cents: number;
-  balance_cents: number; // generated column
+  /** Credit-memo application lever (mig 20260711020000). Non-negative on both row types;
+   * on a credit_memo it is credit applied OUT, on a real invoice it is credit received IN.
+   * Written only by apply_credit_memo_to_invoice / reverse_credit_memo_application. */
+  credit_applied_cents: number;
+  balance_cents: number; // generated column (5 levers, type-aware: credit adds on memos, subtracts on invoices)
 
   // Posting workflow
   posted_by: string | null;
@@ -1210,6 +1249,21 @@ export interface Invoice {
   salesman?: Profile;
   items?: InvoiceItem[];
   shares?: InvoiceShare[];
+}
+
+/** One application of a credit memo to an open invoice (mig 20260711030000).
+ * Immutable/append-only: a reversal stamps reversed_at/by/reason, never deletes.
+ * Written only by apply_credit_memo_to_invoice / reverse_credit_memo_application. */
+export interface CreditMemoApplication {
+  id: string;
+  credit_memo_id: string;
+  target_invoice_id: string;
+  amount_cents: number;
+  applied_by: string;
+  applied_at: string;
+  reversed_at: string | null;
+  reversed_by: string | null;
+  reversal_reason: string | null;
 }
 
 export interface InvoiceItem {
@@ -2381,6 +2435,16 @@ export interface JobAppliedRecord {
   end_tach: number | null;
   net_tach: number | null;
   created_by: string | null;
+  // Insert-once dedup token for the CREATE path (save_job_applied_record). Set only
+  // on a new record; a retried create replays the same key and a partial UNIQUE index
+  // collapses it to the first row (no duplicate applied-record). NULL on legacy rows
+  // and never set on edit. Not surfaced in the UI.
+  idempotency_key: string | null;
+  // md5 fingerprint of the create request stamped alongside idempotency_key on a keyed
+  // create. On a retried create the server compares it: identical -> replay (dedup);
+  // different -> raises APPLIED_RECORD_ALREADY_SAVED_DIFFERENT so a corrected retry
+  // surfaces a conflict instead of silently dropping the correction. Internal; not in UI.
+  idempotency_request_hash: string | null;
   created_at: string;
   updated_at: string;
 }

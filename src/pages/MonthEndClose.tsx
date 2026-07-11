@@ -9,6 +9,7 @@ import { Calendar, CheckCircle, AlertCircle, FileText, Download, Lock, RotateCcw
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
+import PageHeader from '../components/ui/PageHeader';
 import Modal from '../components/ui/Modal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
@@ -420,13 +421,11 @@ export default function MonthEndClose() {
 
   return (
     <div className="space-y-4">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-xl font-semibold font-heading text-nav-dark">Month-End Close</h2>
-          <p className="text-sm text-secondary mt-1">Review and close accounting periods</p>
-        </div>
-        <div className="flex gap-2 items-center">
+      <PageHeader
+        title="Month-End Close"
+        subtitle="Review and close accounting periods"
+        actions={(
+          <div className="flex gap-2 items-center">
           {/* A9 month/year picker — view/close any month. STRUCTURAL race guard (Codex R6):
               the selects are disabled while a fetch (loading) OR a close (closing) is in
               flight, so at most ONE is ever in play — no stale response / post-close refresh
@@ -480,8 +479,9 @@ export default function MonthEndClose() {
               Roll the Month
             </Button>
           )}
-        </div>
-      </div>
+          </div>
+        )}
+      />
 
       {/* Current Period Status */}
       <Card>

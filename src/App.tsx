@@ -39,8 +39,7 @@ const CropPrograms = lazy(() => import('./pages/CropPrograms'));
 const TeamBoard = lazy(() => import('./pages/TeamBoard'));
 const Notifications = lazy(() => import('./pages/Notifications'));
 const SettingsPage = lazy(() => import('./pages/SettingsPage'));
-const IntegrityReport = lazy(() => import('./pages/IntegrityReport'));
-const IntegrityCleanup = lazy(() => import('./pages/IntegrityCleanup'));
+const Integrity = lazy(() => import('./pages/Integrity'));
 // Payments.tsx removed — PaymentAllocation is now the sole payment page at /payments
 const Fields = lazy(() => import('./pages/Fields'));
 const FieldSetup = lazy(() => import('./pages/FieldSetup'));
@@ -49,10 +48,6 @@ const BlendTickets = lazy(() => import('./pages/BlendTickets').then(m => ({ defa
 const BlendTicketDetail = lazy(() => import('./pages/BlendTicketDetail').then(m => ({ default: m.BlendTicketDetail })));
 const Invoices = lazy(() => import('./pages/Invoices'));
 const FieldInvoices = lazy(() => import('./pages/FieldInvoices'));
-const FieldInvoicesUnposted = lazy(() => import('./pages/FieldInvoicesUnposted'));
-const FieldInvoicesPosted = lazy(() => import('./pages/FieldInvoicesPosted'));
-const CustomerInvoiceSummary = lazy(() => import('./pages/CustomerInvoiceSummary'));
-const UnbilledApplications = lazy(() => import('./pages/UnbilledApplications'));
 const InvoiceDetail = lazy(() => import('./pages/InvoiceDetail'));
 const BlendRecipes = lazy(() => import('./pages/BlendRecipes'));
 const CycleCounts = lazy(() => import('./pages/CycleCounts'));
@@ -61,6 +56,7 @@ const ARaging = lazy(() => import('./pages/ARaging'));
 const AccountsReceivable = lazy(() => import('./pages/AccountsReceivable'));
 const Compliance = lazy(() => import('./pages/Compliance'));
 const LabelReview = lazy(() => import('./pages/LabelReview'));
+const LabelDataQuality = lazy(() => import('./pages/LabelDataQuality'));
 const WatchdogExceptions = lazy(() => import('./pages/WatchdogExceptions'));
 const OfficeCockpit = lazy(() => import('./pages/OfficeCockpit'));
 const Rebates = lazy(() => import('./pages/Rebates'));
@@ -78,14 +74,11 @@ const FieldView = lazy(() => import('./pages/FieldView'));
 const MonthEndClose = lazy(() => import('./pages/MonthEndClose'));
 const CommissionPayments = lazy(() => import('./pages/CommissionPayments'));
 const CustomerTransactionReview = lazy(() => import('./pages/CustomerTransactionReview'));
-const PrepaymentManager = lazy(() => import('./pages/PrepaymentManager'));
-const PrepayWorkspace = lazy(() => import('./pages/PrepayWorkspace'));
+const Prepay = lazy(() => import('./pages/Prepay'));
 const PaymentAllocation = lazy(() => import('./pages/PaymentAllocation'));
 const PaymentHistory = lazy(() => import('./pages/PaymentHistory'));
 const DeliveryRemainders = lazy(() => import('./pages/DeliveryRemainders'));
-const ReceivingLog = lazy(() => import('./pages/ReceivingLog'));
-const ReceivingHub = lazy(() => import('./pages/ReceivingHub'));
-const QuickReceive = lazy(() => import('./pages/QuickReceive'));
+const Receiving = lazy(() => import('./pages/Receiving'));
 const FinancialDashboard = lazy(() => import('./pages/FinancialDashboard'));
 const AccountsPayable = lazy(() => import('./pages/AccountsPayable'));
 const VendorBills = lazy(() => import('./pages/VendorBills'));
@@ -109,6 +102,18 @@ function PageLoader() {
       <div className="w-8 h-8 border-4 border-crx-green border-t-transparent rounded-full animate-spin" />
     </div>
   );
+}
+
+interface LegacyTabRedirectProps {
+  to: string;
+  tab: string;
+}
+
+function LegacyTabRedirect({ to, tab }: LegacyTabRedirectProps) {
+  const { search } = useLocation();
+  const params = new URLSearchParams(search);
+  params.set('tab', tab);
+  return <Navigate to={`${to}?${params.toString()}`} replace />;
 }
 
 /**
@@ -211,16 +216,11 @@ const router = createBrowserRouter([
           { path: 'invoices/field-app/:id', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><FieldApplicationInvoice /></ProtectedRoute> },
           { path: 'invoices/:id', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><InvoiceDetail routeArea="chemical" /></ProtectedRoute> },
           { path: 'field-invoices', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><FieldInvoices /></ProtectedRoute> },
-          // Field-app parity #22: dedicated "Unposted" working tray. Static path
-          // — must precede field-invoices/:id (React Router prefers static segments).
-          { path: 'field-invoices/unposted', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><FieldInvoicesUnposted /></ProtectedRoute> },
-          // Field-app parity #23: dedicated "Posted" committed list. Static path
-          // — must precede field-invoices/:id (React Router prefers static segments).
-          { path: 'field-invoices/posted', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><FieldInvoicesPosted /></ProtectedRoute> },
-          { path: 'field-invoices/unbilled', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><UnbilledApplications /></ProtectedRoute> },
-          // Field-app parity #34: combined Customer Invoice Summary (unposted chem
-          // sales + unposted field-app). Static path — must precede field-invoices/:id.
-          { path: 'field-invoices/summary', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><CustomerInvoiceSummary /></ProtectedRoute> },
+          // Kept for bookmarks; all workflow views now live as query-addressable tabs.
+          { path: 'field-invoices/unposted', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><Navigate to="/field-invoices?tab=drafts" replace /></ProtectedRoute> },
+          { path: 'field-invoices/posted', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><Navigate to="/field-invoices?tab=posted" replace /></ProtectedRoute> },
+          { path: 'field-invoices/unbilled', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><Navigate to="/field-invoices?tab=unbilled" replace /></ProtectedRoute> },
+          { path: 'field-invoices/summary', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><Navigate to="/field-invoices?tab=customer" replace /></ProtectedRoute> },
           // Field-invoice detail (job-built quantity invoices + posted field invoices)
           // reuses the generic invoice editor but under the field-invoices permission
           // (getPageKeyFromPath maps /field-invoices/* -> 'field-invoices'). #3 edit-path.
@@ -230,9 +230,10 @@ const router = createBrowserRouter([
           { path: 'recipes', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><BlendRecipes /></ProtectedRoute> },
           { path: 'cycle-counts', element: <ProtectedRoute allowedRoles={['admin']}><CycleCounts /></ProtectedRoute> },
           { path: 'returns', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><Returns /></ProtectedRoute> },
-          { path: 'receiving', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><ReceivingLog /></ProtectedRoute> },
-          { path: 'receiving-hub', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><ReceivingHub /></ProtectedRoute> },
-          { path: 'receiving/quick', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><QuickReceive /></ProtectedRoute> },
+          { path: 'receiving', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><Receiving /></ProtectedRoute> },
+          // Kept for bookmarks; the former pages now live as query-addressable tabs.
+          { path: 'receiving-hub', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><Navigate to="/receiving?tab=hub" replace /></ProtectedRoute> },
+          { path: 'receiving/quick', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><Navigate to="/receiving?tab=quick" replace /></ProtectedRoute> },
           { path: 'purchase-orders', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><PurchaseOrders /></ProtectedRoute> },
           { path: 'purchase-orders/new', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><NewPurchaseOrder /></ProtectedRoute> },
           { path: 'purchase-orders/:id', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><PurchaseOrderDetail /></ProtectedRoute> },
@@ -246,6 +247,7 @@ const router = createBrowserRouter([
           { path: 'compliance', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><Compliance /></ProtectedRoute> },
           { path: 'lot-trace', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><LotTrace /></ProtectedRoute> },
           { path: 'label-review', element: <ProtectedRoute allowedRoles={['admin']}><LabelReview /></ProtectedRoute> },
+          { path: 'label-data-quality', element: <ProtectedRoute allowedRoles={['admin']}><LabelDataQuality /></ProtectedRoute> },
           { path: 'watchdog', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><WatchdogExceptions /></ProtectedRoute> },
           { path: 'office-cockpit', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><OfficeCockpit /></ProtectedRoute> },
           { path: 'rebates', element: <ProtectedRoute allowedRoles={['admin']}><Rebates /></ProtectedRoute> },
@@ -274,13 +276,16 @@ const router = createBrowserRouter([
           // Admin only
           { path: 'financial-dashboard', element: <ProtectedRoute allowedRoles={['admin']}><FinancialDashboard /></ProtectedRoute> },
           { path: 'month-end', element: <ProtectedRoute allowedRoles={['admin']}><MonthEndClose /></ProtectedRoute> },
-          { path: 'integrity-report', element: <ProtectedRoute allowedRoles={['admin']}><IntegrityReport /></ProtectedRoute> },
-          { path: 'integrity-cleanup', element: <ProtectedRoute allowedRoles={['admin']}><IntegrityCleanup /></ProtectedRoute> },
+          { path: 'integrity', element: <ProtectedRoute allowedRoles={['admin']}><Integrity /></ProtectedRoute> },
+          // Kept for bookmarks; the former pages now live as query-addressable tabs.
+          { path: 'integrity-report', element: <ProtectedRoute allowedRoles={['admin']}><LegacyTabRedirect to="/integrity" tab="report" /></ProtectedRoute> },
+          { path: 'integrity-cleanup', element: <ProtectedRoute allowedRoles={['admin']}><LegacyTabRedirect to="/integrity" tab="cleanup" /></ProtectedRoute> },
           { path: 'commission-payments', element: <ProtectedRoute allowedRoles={['admin']}><CommissionPayments /></ProtectedRoute> },
           { path: 'customer-transactions', element: <ProtectedRoute allowedRoles={['admin']}><CustomerTransactionReview /></ProtectedRoute> },
-          { path: 'prepayments', element: <ProtectedRoute allowedRoles={['admin']}><PrepaymentManager /></ProtectedRoute> },
+          { path: 'prepay', element: <ProtectedRoute allowedRoles={['admin']}><Prepay /></ProtectedRoute> },
+          { path: 'prepayments', element: <ProtectedRoute allowedRoles={['admin']}><LegacyTabRedirect to="/prepay" tab="manager" /></ProtectedRoute> },
           { path: 'accounts-receivable', element: <ProtectedRoute allowedRoles={['admin']}><AccountsReceivable /></ProtectedRoute> },
-          { path: 'prepay-workspace', element: <ProtectedRoute allowedRoles={['admin']}><PrepayWorkspace /></ProtectedRoute> },
+          { path: 'prepay-workspace', element: <ProtectedRoute allowedRoles={['admin']}><LegacyTabRedirect to="/prepay" tab="workspace" /></ProtectedRoute> },
           { path: 'accounts-payable', element: <ProtectedRoute allowedRoles={['admin']}><AccountsPayable /></ProtectedRoute> },
           { path: 'accounts-payable/bills', element: <ProtectedRoute allowedRoles={['admin']}><VendorBills /></ProtectedRoute> },
           { path: 'accounts-payable/bills/new', element: <ProtectedRoute allowedRoles={['admin']}><NewVendorBill /></ProtectedRoute> },

@@ -1,12 +1,12 @@
 {
   "_meta": {
     "registry_version": 2,
-    "generated_at": "2026-07-10",
+    "generated_at": "2026-07-11",
     "generated_from": "Supabase project rhyzpcqhnizqbxphqdkr — public schema introspection",
     "regenerate_with": "node scripts/regenerate-schema-registry.mjs --from-introspection <queries.json> (queries documented in the script header)",
     "purpose": "Single source of truth for hooks: generated columns, status enums, ALL parseable CHECK IN-lists, NOT NULL columns, full column lists, sequences, tables-with/without updated_at, applied-migration high water.",
     "note": "For a fresh refresh from the live DB, ask Claude Code: 'regenerate the schema-registry from Supabase' (/regen-schema-registry). skipped_constraints lists every CHECK the hooks can NOT validate — review it when touching those tables.",
-    "migrations_high_water": "20260711000000"
+    "migrations_high_water": "20260711140150"
   },
   "generated_columns": [
     {
@@ -17,7 +17,7 @@
     {
       "table": "invoices",
       "column": "balance_cents",
-      "expression": "(((total_amount_cents - paid_amount_cents) - prepay_applied_cents) - write_off_cents)"
+      "expression": "((((total_amount_cents - paid_amount_cents) - prepay_applied_cents) - write_off_cents) +\nCASE\n    WHEN (invoice_type = 'credit_memo'::text) THEN credit_applied_cents\n    ELSE (- credit_applied_cents)\nEND)"
     },
     {
       "table": "job_applied_records",
@@ -213,6 +213,7 @@
     "commission_payment_items",
     "commissions",
     "cost_history",
+    "credit_memo_applications",
     "customer_addresses",
     "customer_application_rates",
     "cycle_count_items",
@@ -1185,6 +1186,24 @@
       "reason": "conditional/multi-column — not a single-column IN-list; hooks do NOT validate this constraint"
     },
     {
+      "table": "credit_memo_applications",
+      "constraint": "credit_memo_applications_amount_cents_check",
+      "def": "CHECK ((amount_cents > 0))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "credit_memo_applications",
+      "constraint": "credit_memo_apps_distinct",
+      "def": "CHECK ((credit_memo_id <> target_invoice_id))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "credit_memo_applications",
+      "constraint": "credit_memo_apps_reversal_complete",
+      "def": "CHECK ((((reversed_at IS NULL) AND (reversed_by IS NULL) AND (reversal_reason IS NULL)) OR ((reversed_at IS NOT NULL) AND (reversed_by IS NOT NULL) AND (reversal_reason IS NOT NULL))))",
+      "reason": "conditional/multi-column — not a single-column IN-list; hooks do NOT validate this constraint"
+    },
+    {
       "table": "delivery_items",
       "constraint": "chk_di_quantity",
       "def": "CHECK ((quantity > (0)::numeric))",
@@ -1260,6 +1279,24 @@
       "table": "invoices",
       "constraint": "invoices_balance_non_negative",
       "def": "CHECK (((invoice_type = 'credit_memo'::text) OR (balance_cents >= 0)))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "invoices",
+      "constraint": "invoices_credit_applied_non_negative",
+      "def": "CHECK ((credit_applied_cents >= 0))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "invoices",
+      "constraint": "invoices_credit_memo_balance_nonpositive",
+      "def": "CHECK (((invoice_type <> 'credit_memo'::text) OR (balance_cents <= 0)))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "invoices",
+      "constraint": "invoices_credit_memo_total_nonpositive",
+      "def": "CHECK (((invoice_type <> 'credit_memo'::text) OR (total_amount_cents <= 0)))",
       "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
     },
     {
@@ -1779,6 +1816,18 @@
         "changed_at"
       ]
     },
+    "credit_memo_applications": {
+      "no_default": [
+        "credit_memo_id",
+        "target_invoice_id",
+        "amount_cents",
+        "applied_by"
+      ],
+      "with_default": [
+        "id",
+        "applied_at"
+      ]
+    },
     "customer_addresses": {
       "no_default": [
         "customer_id"
@@ -2175,7 +2224,8 @@
         "updated_at",
         "write_off_cents",
         "pricing_pending",
-        "discount_earned_cents"
+        "discount_earned_cents",
+        "credit_applied_cents"
       ]
     },
     "job_applied_info": {
@@ -3288,6 +3338,17 @@
       "change_note",
       "changed_at"
     ],
+    "credit_memo_applications": [
+      "id",
+      "credit_memo_id",
+      "target_invoice_id",
+      "amount_cents",
+      "applied_by",
+      "applied_at",
+      "reversed_at",
+      "reversed_by",
+      "reversal_reason"
+    ],
     "customer_addresses": [
       "id",
       "customer_id",
@@ -3764,7 +3825,6 @@
       "total_cost_cents",
       "is_quick_delivery",
       "write_off_cents",
-      "balance_cents",
       "invoice_group_id",
       "application_service_id",
       "delivery_id",
@@ -3788,7 +3848,9 @@
       "end_weather_time",
       "end_weather_source",
       "weather_manual_override",
-      "diluent_rate_gpa"
+      "diluent_rate_gpa",
+      "credit_applied_cents",
+      "balance_cents"
     ],
     "job_applied_info": [
       "id",
@@ -3846,7 +3908,9 @@
       "end_weather_source",
       "beginning_tach",
       "end_tach",
-      "net_tach"
+      "net_tach",
+      "idempotency_key",
+      "idempotency_request_hash"
     ],
     "job_attachments": [
       "id",

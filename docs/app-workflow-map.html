@@ -84,12 +84,12 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(
 <div id="header">
   <h1>⬡ CRX Manager — Architecture Map</h1>
   <!-- __STATS_START__ -->
-  <span id="stat-line" style="color:var(--muted);font-size:.8rem">89 routes · 209 RPC calls · 0 issues · Updated Jul 11, 2026</span>
+  <span id="stat-line" style="color:var(--muted);font-size:.8rem">92 routes · 210 RPC calls · 5 issues · Updated Jul 11, 2026</span>
   <!-- __STATS_END__ -->
   <div id="tabs">
     <button class="tab active" onclick="showTab('graph')">Graph</button>
     <button class="tab" onclick="showTab('lifecycle')">Lifecycles</button>
-    <button class="tab" onclick="showTab('problems')">Problems <span id="prob-count" style="background:#ef4444;color:#fff;border-radius:10px;padding:0 6px;font-size:.7rem;margin-left:4px">0</span></button>
+    <button class="tab" onclick="showTab('problems')">Problems <span id="prob-count" style="background:#ef4444;color:#fff;border-radius:10px;padding:0 6px;font-size:.7rem;margin-left:4px">5</span></button>
   </div>
 </div>
 
@@ -417,8 +417,32 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(
 
   <!-- __AUTO_PROBLEMS_START__ -->
       <div class="prob-section">
-        <h3>Auto-detected Problems</h3>
-        <div class="prob-item info"><strong>None found</strong><p>No orphan pages, broken links, dead RPCs, or unguarded financial-table writes detected in the current codebase.</p></div>
+        <h3>Auto-detected Orphan Pages (no inbound navigation) (5 found)</h3>
+        <div class="prob-item ">
+          <strong>Orphan page: /receiving/quick</strong>
+          <p>Route exists (component: Navigate) but nothing references it — no sidebar link, no navigate() call, no nav-config entry. Only reachable by typing the URL directly.</p>
+          <span class="loc">src/App.tsx</span>
+        </div>
+        <div class="prob-item ">
+          <strong>Orphan page: /integrity-report</strong>
+          <p>Route exists (component: LegacyTabRedirect) but nothing references it — no sidebar link, no navigate() call, no nav-config entry. Only reachable by typing the URL directly.</p>
+          <span class="loc">src/App.tsx</span>
+        </div>
+        <div class="prob-item ">
+          <strong>Orphan page: /integrity-cleanup</strong>
+          <p>Route exists (component: LegacyTabRedirect) but nothing references it — no sidebar link, no navigate() call, no nav-config entry. Only reachable by typing the URL directly.</p>
+          <span class="loc">src/App.tsx</span>
+        </div>
+        <div class="prob-item ">
+          <strong>Orphan page: /prepayments</strong>
+          <p>Route exists (component: LegacyTabRedirect) but nothing references it — no sidebar link, no navigate() call, no nav-config entry. Only reachable by typing the URL directly.</p>
+          <span class="loc">src/App.tsx</span>
+        </div>
+        <div class="prob-item ">
+          <strong>Orphan page: /prepay-workspace</strong>
+          <p>Route exists (component: LegacyTabRedirect) but nothing references it — no sidebar link, no navigate() call, no nav-config entry. Only reachable by typing the URL directly.</p>
+          <span class="loc">src/App.tsx</span>
+        </div>
       </div><!-- __AUTO_PROBLEMS_END__ -->
 
 </div>
@@ -649,35 +673,11 @@ const NODES = [
       "problem": false
     },
     {
-      "id": "field-invoices-unposted",
-      "label": "FieldInvoicesUnposted",
+      "id": "navigate",
+      "label": "Navigate",
       "type": "page-sales",
       "group": "Customers",
       "path": "/field-invoices/unposted",
-      "problem": false
-    },
-    {
-      "id": "field-invoices-posted",
-      "label": "FieldInvoicesPosted",
-      "type": "page-sales",
-      "group": "Customers",
-      "path": "/field-invoices/posted",
-      "problem": false
-    },
-    {
-      "id": "unbilled-applications",
-      "label": "UnbilledApplications",
-      "type": "page-sales",
-      "group": "Customers",
-      "path": "/field-invoices/unbilled",
-      "problem": false
-    },
-    {
-      "id": "customer-invoice-summary",
-      "label": "CustomerInvoiceSummary",
-      "type": "page-sales",
-      "group": "Customers",
-      "path": "/field-invoices/summary",
       "problem": false
     },
     {
@@ -721,27 +721,11 @@ const NODES = [
       "problem": false
     },
     {
-      "id": "receiving-log",
-      "label": "ReceivingLog",
+      "id": "receiving",
+      "label": "Receiving",
       "type": "page-sales",
       "group": "Supply",
       "path": "/receiving",
-      "problem": false
-    },
-    {
-      "id": "receiving-hub",
-      "label": "ReceivingHub",
-      "type": "page-sales",
-      "group": "Supply",
-      "path": "/receiving-hub",
-      "problem": false
-    },
-    {
-      "id": "quick-receive",
-      "label": "QuickReceive",
-      "type": "page-sales",
-      "group": "Supply",
-      "path": "/receiving/quick",
       "problem": false
     },
     {
@@ -846,6 +830,14 @@ const NODES = [
       "type": "page-admin",
       "group": "Core",
       "path": "/label-review",
+      "problem": false
+    },
+    {
+      "id": "label-data-quality",
+      "label": "LabelDataQuality",
+      "type": "page-admin",
+      "group": "Core",
+      "path": "/label-data-quality",
       "problem": false
     },
     {
@@ -1017,20 +1009,20 @@ const NODES = [
       "problem": false
     },
     {
-      "id": "integrity-report",
-      "label": "IntegrityReport",
+      "id": "integrity",
+      "label": "Integrity",
       "type": "page-admin",
       "group": "Finance",
-      "path": "/integrity-report",
+      "path": "/integrity",
       "problem": false
     },
     {
-      "id": "integrity-cleanup",
-      "label": "IntegrityCleanup",
+      "id": "legacy-tab-redirect",
+      "label": "LegacyTabRedirect",
       "type": "page-admin",
       "group": "Finance",
-      "path": "/integrity-cleanup",
-      "problem": false
+      "path": "/integrity-report",
+      "problem": true
     },
     {
       "id": "commission-payments",
@@ -1049,11 +1041,11 @@ const NODES = [
       "problem": false
     },
     {
-      "id": "prepayment-manager",
-      "label": "PrepaymentManager",
+      "id": "prepay",
+      "label": "Prepay",
       "type": "page-admin",
       "group": "Finance",
-      "path": "/prepayments",
+      "path": "/prepay",
       "problem": false
     },
     {
@@ -1062,14 +1054,6 @@ const NODES = [
       "type": "page-admin",
       "group": "Core",
       "path": "/accounts-receivable",
-      "problem": false
-    },
-    {
-      "id": "prepay-workspace",
-      "label": "PrepayWorkspace",
-      "type": "page-admin",
-      "group": "Finance",
-      "path": "/prepay-workspace",
       "problem": false
     },
     {
@@ -1383,78 +1367,8 @@ const EDGES = [
       "type": "nav"
     },
     {
-      "s": "customer-invoice-summary",
-      "t": "field-invoices",
-      "type": "nav"
-    },
-    {
       "s": "customers",
       "t": "customer-detail",
-      "type": "nav"
-    },
-    {
-      "s": "dashboard",
-      "t": "quote-builder",
-      "type": "nav"
-    },
-    {
-      "s": "dashboard",
-      "t": "job-detail",
-      "type": "nav"
-    },
-    {
-      "s": "dashboard",
-      "t": "new-order",
-      "type": "nav"
-    },
-    {
-      "s": "dashboard",
-      "t": "to-ship",
-      "type": "nav"
-    },
-    {
-      "s": "dashboard",
-      "t": "new-delivery",
-      "type": "nav"
-    },
-    {
-      "s": "dashboard",
-      "t": "new-purchase-order",
-      "type": "nav"
-    },
-    {
-      "s": "dashboard",
-      "t": "inventory-page",
-      "type": "nav"
-    },
-    {
-      "s": "dashboard",
-      "t": "receiving-log",
-      "type": "nav"
-    },
-    {
-      "s": "dashboard",
-      "t": "orders",
-      "type": "nav"
-    },
-    {
-      "s": "dashboard",
-      "t": "quotes",
-      "type": "nav"
-    },
-    {
-      "s": "dashboard",
-      "t": "deliveries",
-      "type": "nav"
-    },
-    {
-      "s": "dashboard",
-      "t": "purchase-orders",
-      "type": "nav"
-    },
-    {
-      "s": "dashboard",
-      "t": "program-tracker",
       "type": "nav"
     },
     {
@@ -1464,7 +1378,22 @@ const EDGES = [
     },
     {
       "s": "dashboard",
+      "t": "deliveries",
+      "type": "nav"
+    },
+    {
+      "s": "dashboard",
       "t": "delivery-detail",
+      "type": "nav"
+    },
+    {
+      "s": "dashboard",
+      "t": "quotes",
+      "type": "nav"
+    },
+    {
+      "s": "dashboard",
+      "t": "orders",
       "type": "nav"
     },
     {
@@ -1548,51 +1477,6 @@ const EDGES = [
       "type": "nav"
     },
     {
-      "s": "field-invoices",
-      "t": "customer-detail",
-      "type": "nav"
-    },
-    {
-      "s": "field-invoices",
-      "t": "field-invoices-unposted",
-      "type": "nav"
-    },
-    {
-      "s": "field-invoices",
-      "t": "field-invoices-posted",
-      "type": "nav"
-    },
-    {
-      "s": "field-invoices",
-      "t": "unbilled-applications",
-      "type": "nav"
-    },
-    {
-      "s": "field-invoices",
-      "t": "customer-invoice-summary",
-      "type": "nav"
-    },
-    {
-      "s": "field-invoices",
-      "t": "field-application-invoice",
-      "type": "nav"
-    },
-    {
-      "s": "field-invoices-posted",
-      "t": "field-invoices",
-      "type": "nav"
-    },
-    {
-      "s": "field-invoices-unposted",
-      "t": "field-invoices",
-      "type": "nav"
-    },
-    {
-      "s": "field-invoices-unposted",
-      "t": "field-application-invoice",
-      "type": "nav"
-    },
-    {
       "s": "field-route",
       "t": "deliveries",
       "type": "nav"
@@ -1635,11 +1519,6 @@ const EDGES = [
     {
       "s": "field-stop",
       "t": "delivery-detail",
-      "type": "nav"
-    },
-    {
-      "s": "financial-dashboard",
-      "t": "prepay-workspace",
       "type": "nav"
     },
     {
@@ -1789,7 +1668,7 @@ const EDGES = [
     },
     {
       "s": "office-cockpit",
-      "t": "unbilled-applications",
+      "t": "navigate",
       "type": "nav"
     },
     {
@@ -1810,11 +1689,6 @@ const EDGES = [
     {
       "s": "office-cockpit",
       "t": "quote-builder",
-      "type": "nav"
-    },
-    {
-      "s": "office-cockpit",
-      "t": "field-invoices-unposted",
       "type": "nav"
     },
     {
@@ -1858,6 +1732,31 @@ const EDGES = [
       "type": "nav"
     },
     {
+      "s": "office-cockpit",
+      "t": "new-order",
+      "type": "nav"
+    },
+    {
+      "s": "office-cockpit",
+      "t": "to-ship",
+      "type": "nav"
+    },
+    {
+      "s": "office-cockpit",
+      "t": "new-delivery",
+      "type": "nav"
+    },
+    {
+      "s": "office-cockpit",
+      "t": "new-purchase-order",
+      "type": "nav"
+    },
+    {
+      "s": "office-cockpit",
+      "t": "receiving",
+      "type": "nav"
+    },
+    {
       "s": "order-detail",
       "t": "invoice-detail",
       "type": "nav"
@@ -1898,13 +1797,13 @@ const EDGES = [
       "type": "nav"
     },
     {
-      "s": "prepay-workspace",
-      "t": "prepayment-manager",
+      "s": "product-detail",
+      "t": "products",
       "type": "nav"
     },
     {
       "s": "product-detail",
-      "t": "products",
+      "t": "label-review",
       "type": "nav"
     },
     {
@@ -1933,11 +1832,6 @@ const EDGES = [
       "type": "nav"
     },
     {
-      "s": "quick-receive",
-      "t": "receiving-log",
-      "type": "nav"
-    },
-    {
       "s": "quote-builder",
       "t": "quotes",
       "type": "nav"
@@ -1963,21 +1857,6 @@ const EDGES = [
       "type": "nav"
     },
     {
-      "s": "receiving-hub",
-      "t": "purchase-order-detail",
-      "type": "nav"
-    },
-    {
-      "s": "receiving-log",
-      "t": "purchase-order-detail",
-      "type": "nav"
-    },
-    {
-      "s": "receiving-log",
-      "t": "quick-receive",
-      "type": "nav"
-    },
-    {
       "s": "to-ship",
       "t": "customer-detail",
       "type": "nav"
@@ -1990,11 +1869,6 @@ const EDGES = [
     {
       "s": "to-ship",
       "t": "delivery-detail",
-      "type": "nav"
-    },
-    {
-      "s": "unbilled-applications",
-      "t": "field-invoices",
       "type": "nav"
     },
     {
@@ -2113,11 +1987,6 @@ const EDGES = [
       "type": "rpc"
     },
     {
-      "s": "field-invoices-unposted",
-      "t": "r-invoice",
-      "type": "rpc"
-    },
-    {
       "s": "field-stop",
       "t": "r-delivery",
       "type": "rpc"
@@ -2130,16 +1999,6 @@ const EDGES = [
     {
       "s": "financial-dashboard",
       "t": "r-report",
-      "type": "rpc"
-    },
-    {
-      "s": "integrity-cleanup",
-      "t": "r-inventory",
-      "type": "rpc"
-    },
-    {
-      "s": "integrity-cleanup",
-      "t": "r-invoice",
       "type": "rpc"
     },
     {
@@ -2194,6 +2053,11 @@ const EDGES = [
     },
     {
       "s": "office-cockpit",
+      "t": "r-report",
+      "type": "rpc"
+    },
+    {
+      "s": "office-cockpit",
       "t": "r-invoice",
       "type": "rpc"
     },
@@ -2218,11 +2082,6 @@ const EDGES = [
       "type": "rpc"
     },
     {
-      "s": "prepayment-manager",
-      "t": "r-invoice",
-      "type": "rpc"
-    },
-    {
       "s": "purchase-order-detail",
       "t": "r-inventory",
       "type": "rpc"
@@ -2238,11 +2097,6 @@ const EDGES = [
       "type": "rpc"
     },
     {
-      "s": "quick-receive",
-      "t": "r-inventory",
-      "type": "rpc"
-    },
-    {
       "s": "quote-builder",
       "t": "r-quote",
       "type": "rpc"
@@ -2255,11 +2109,6 @@ const EDGES = [
     {
       "s": "rebates",
       "t": "r-rebate",
-      "type": "rpc"
-    },
-    {
-      "s": "receiving-hub",
-      "t": "r-inventory",
       "type": "rpc"
     },
     {
@@ -2285,11 +2134,6 @@ const EDGES = [
     {
       "s": "to-ship",
       "t": "r-inventory",
-      "type": "rpc"
-    },
-    {
-      "s": "unbilled-applications",
-      "t": "r-job",
       "type": "rpc"
     },
     {

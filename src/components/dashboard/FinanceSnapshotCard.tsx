@@ -4,6 +4,7 @@ import { DollarSign, Clock, Wallet, Package, TrendingUp, AlertTriangle, ChevronR
 import Card, { CardHeader } from '../ui/Card';
 import { supabase, assertRpcResult } from '../../lib/db';
 import { Sentry } from '../../lib/sentry';
+import { formatUSD } from '../../lib/money';
 
 // F6 — admin-only "Finance Snapshot" on the home Dashboard. Reuses the existing
 // financial_dashboard_summary RPC (the same one /financial-dashboard uses; values
@@ -18,9 +19,6 @@ type FinRpc = {
   customers_over_credit_count?: number | string;
   ar_aging_buckets?: { days_61_90?: number | string; days_90_plus?: number | string } | null;
 };
-
-const fmt = (n: number) =>
-  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(n || 0);
 
 const TONE: Record<string, string> = {
   red: 'text-red-600',
@@ -61,11 +59,11 @@ export default function FinanceSnapshotCard() {
   const overCredit = Number(d.customers_over_credit_count) || 0;
 
   const tiles: { label: string; value: string; icon: React.ReactNode; to: string; tone: string }[] = [
-    { label: 'Open AR', value: fmt(ar), icon: <DollarSign className="w-4 h-4" />, to: '/accounts-receivable', tone: ar > 0 ? 'red' : 'green' },
-    { label: 'Overdue 60+', value: fmt(overdue60), icon: <Clock className="w-4 h-4" />, to: '/ar-aging', tone: overdue60 > 0 ? 'red' : 'green' },
-    { label: 'Unused Prepay', value: fmt(prepay), icon: <Wallet className="w-4 h-4" />, to: '/accounts-receivable?tab=prepayments', tone: 'green' },
-    { label: 'On Order', value: fmt(onOrder), icon: <Package className="w-4 h-4" />, to: '/receiving-hub', tone: 'teal' },
-    { label: 'Period Profit', value: fmt(profit), icon: <TrendingUp className="w-4 h-4" />, to: '/financial-dashboard', tone: 'navy' },
+    { label: 'Open AR', value: formatUSD(ar), icon: <DollarSign className="w-4 h-4" />, to: '/accounts-receivable', tone: ar > 0 ? 'red' : 'green' },
+    { label: 'Overdue 60+', value: formatUSD(overdue60), icon: <Clock className="w-4 h-4" />, to: '/ar-aging', tone: overdue60 > 0 ? 'red' : 'green' },
+    { label: 'Unused Prepay', value: formatUSD(prepay), icon: <Wallet className="w-4 h-4" />, to: '/accounts-receivable?tab=prepayments', tone: 'green' },
+    { label: 'On Order', value: formatUSD(onOrder), icon: <Package className="w-4 h-4" />, to: '/receiving-hub', tone: 'teal' },
+    { label: 'Period Profit', value: formatUSD(profit), icon: <TrendingUp className="w-4 h-4" />, to: '/financial-dashboard', tone: 'navy' },
   ];
 
   return (

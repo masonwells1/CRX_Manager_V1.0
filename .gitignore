@@ -51,6 +51,9 @@ backups/
 # Working data for perf sweep / one-off analyses (regenerable from advisor + DB)
 .perf-sweep-data/
 
+# Generated EPA catalog data-quality manifest/report (contains live product data)
+.epa-data-quality/
+
 # Vercel CLI working directory
 .vercel/
 

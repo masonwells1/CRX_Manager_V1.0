@@ -11,7 +11,14 @@
 // Tool NAMES that must never be auto-approved during an unattended run: live
 // prod mutations and branch/project lifecycle ops. Matched case-insensitively
 // against the (possibly MCP-prefixed) tool name.
-const DENY_TOOLNAME_RE = /(apply_migration|deploy_edge_function|deploy_to_vercel|deploy_project|reset_branch|delete_branch|merge_branch|rebase_branch|pause_project|restore_project|push_files|create_or_update_file|delete_file|merge_pull_request|start_process|interact_with_process|write_file|edit_block|move_file|set_config_value)/i;
+//
+// NOTE (Mason, 2026-07-10, explicit + repeated): apply_migration and execute_sql
+// are DELIBERATELY NOT in this set — Mason owns this live DB and does not want SQL
+// or migration applies to gate during an unattended run. They remain protected by
+// the migration-apply-guard hook (a migration cannot apply without a recent
+// 3-reviewer proof file) and by settings.json permissions.deny. Deploys, pushes,
+// branch/project lifecycle, and destructive file/db ops STAY blocked here.
+const DENY_TOOLNAME_RE = /(deploy_edge_function|deploy_to_vercel|deploy_project|reset_branch|delete_branch|merge_branch|rebase_branch|pause_project|restore_project|push_files|create_or_update_file|delete_file|merge_pull_request|start_process|interact_with_process|write_file|edit_block|move_file|set_config_value)/i;
 
 // Bash command shapes that must never be auto-approved: history rewrites,
 // destructive deletes, pushes/deploys, DB resets, secret writes, hook bypass.
@@ -98,7 +105,9 @@ export function overnightGateDecision(toolName, toolInput) {
     const fp = String(input.file_path || input.path || "");
     return /session-state/.test(fp) ? "allow-through" : "deny-until-armed";
   }
-  if (/execute_sql|apply_migration|deploy/i.test(name)) return "deny-until-armed";
+  // execute_sql / apply_migration intentionally omitted (Mason 2026-07-10): SQL and
+  // migration applies do not gate on the overnight handshake either. Deploys still do.
+  if (/deploy/i.test(name)) return "deny-until-armed";
   return "allow-through";
 }
 

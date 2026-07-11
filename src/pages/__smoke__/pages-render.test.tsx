@@ -217,11 +217,12 @@ const COVERED = new Set<string>([
   'Fields',
   'FinancialDashboard',
   'GettingStarted',
-  'IntegrityCleanup',
-  'IntegrityReport',
+  'Integrity',
   'InventoryPage',
   'InvoiceDetail',
   'Invoices',
+  'Orders',
+  'Quotes',
 ]);
 
 function pickComponent(mod: Record<string, unknown>): React.ComponentType | null {

@@ -45,23 +45,20 @@ export const PAGE_PERMISSIONS: PagePermission[] = [
   { key: 'products', path: '/products', label: 'Products', category: 'Inventory & Buying', roles: ['admin', 'sales_rep'] },
   { key: 'brand-vs-generic', path: '/brand-vs-generic', label: 'Brand vs Generic', category: 'Inventory & Buying', roles: ['admin', 'sales_rep'] },
   { key: 'purchase-orders', path: '/purchase-orders', label: 'Purchase Orders', category: 'Inventory & Buying', roles: ['admin', 'sales_rep'] },
-  { key: 'receiving-hub', path: '/receiving-hub', label: 'Receiving (Hub)', category: 'Inventory & Buying', roles: ['admin', 'sales_rep'] },
-  { key: 'receiving', path: '/receiving', label: 'Receiving Log', category: 'Inventory & Buying', roles: ['admin', 'sales_rep'] },
+  { key: 'receiving', path: '/receiving', label: 'Receiving', category: 'Inventory & Buying', roles: ['admin', 'sales_rep'] },
   { key: 'cycle-counts', path: '/cycle-counts', label: 'Cycle Counts', category: 'Inventory & Buying', roles: ['admin'] },
 
   // Money
   { key: 'payments', path: '/payments', label: 'Record Payments', category: 'Money', roles: ['admin', 'sales_rep'] },
   { key: 'accounts-receivable', path: '/accounts-receivable', label: 'A/R Workspace', category: 'Money', roles: ['admin'] },
   { key: 'ar-aging', path: '/ar-aging', label: 'A/R Aging', category: 'Money', roles: ['admin'] },
-  { key: 'prepayments', path: '/prepayments', label: 'Prepayments', category: 'Money', roles: ['admin'] },
+  { key: 'prepay', path: '/prepay', label: 'Prepay', category: 'Money', roles: ['admin'] },
   { key: 'customer-transactions', path: '/customer-transactions', label: 'Customer Transactions', category: 'Money', roles: ['admin'] },
-  { key: 'prepay-workspace', path: '/prepay-workspace', label: 'Prepay Workspace', category: 'Money', roles: ['admin'] },
   { key: 'accounts-payable', path: '/accounts-payable', label: 'A/P & Vendor Bills', category: 'Money', roles: ['admin'] },
   { key: 'commission-payments', path: '/commission-payments', label: 'Commissions', category: 'Money', roles: ['admin'] },
   { key: 'rebates', path: '/rebates', label: 'Rebates', category: 'Money', roles: ['admin'] },
   { key: 'month-end', path: '/month-end', label: 'Month-End Close', category: 'Money', roles: ['admin'] },
-  { key: 'integrity-report', path: '/integrity-report', label: 'Data Integrity — Report', category: 'Money', roles: ['admin'] },
-  { key: 'integrity-cleanup', path: '/integrity-cleanup', label: 'Data Integrity — Cleanup', category: 'Money', roles: ['admin'] },
+  { key: 'integrity', path: '/integrity', label: 'Data Integrity', category: 'Money', roles: ['admin'] },
   { key: 'payment-history', path: '/payment-history', label: 'Payment History', category: 'Money', roles: ['admin'] },
 
   // Compliance & Records
@@ -69,6 +66,7 @@ export const PAGE_PERMISSIONS: PagePermission[] = [
   { key: 'lot-trace', path: '/lot-trace', label: 'Lot Trace (recall lookup)', category: 'Compliance & Records', roles: ['admin', 'sales_rep'] },
   { key: 'watchdog', path: '/watchdog', label: 'Watchdog Flags', category: 'Compliance & Records', roles: ['admin', 'sales_rep'] },
   { key: 'label-review', path: '/label-review', label: 'Label Review', category: 'Compliance & Records', roles: ['admin'] },
+  { key: 'label-data-quality', path: '/label-data-quality', label: 'Label Data Quality', category: 'Compliance & Records', roles: ['admin'] },
   { key: 'blend-tickets', path: '/blend-tickets', label: 'Blend Tickets (OCR)', category: 'Compliance & Records', roles: ['admin', 'sales_rep'] },
 
   // Insights
@@ -118,6 +116,17 @@ export function getPageKeyFromPath(pathname: string): string | null {
     return 'field-invoices';
   }
 
+  // Legacy standalone routes redirect into consolidated tabbed pages and
+  // therefore share each destination's single permission/deny-list key.
+  const legacyPageKey: Record<string, string> = {
+    'receiving-hub': 'receiving',
+    prepayments: 'prepay',
+    'prepay-workspace': 'prepay',
+    'integrity-report': 'integrity',
+    'integrity-cleanup': 'integrity',
+  };
+  if (legacyPageKey[firstSegment]) return legacyPageKey[firstSegment];
+
   const found = PAGE_PERMISSIONS.find((p) => p.key === firstSegment);
   return found ? found.key : null;
 }
@@ -151,6 +160,11 @@ export function hasPageAccess(
   if (!page) return false;
 
   if (!page.roles.includes(role)) return false;
+  // Preserve profile restrictions saved under route keys that existed before
+  // these standalone pages were consolidated.
+  if (pageKey === 'receiving' && deniedPages.includes('receiving-hub')) return false;
+  if (pageKey === 'prepay' && deniedPages.some((key) => key === 'prepayments' || key === 'prepay-workspace')) return false;
+  if (pageKey === 'integrity' && deniedPages.some((key) => key === 'integrity-report' || key === 'integrity-cleanup')) return false;
   if (deniedPages.includes(pageKey)) return false;
   return true;
 }

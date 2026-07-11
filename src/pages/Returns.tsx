@@ -10,6 +10,7 @@ import BulkActionBar from '../components/ui/BulkActionBar';
 import BulkDeleteConfirmModal from '../components/ui/BulkDeleteConfirmModal';
 import ConfirmModal from '../components/ui/ConfirmModal';
 import ReasonModal from '../components/ui/ReasonModal';
+import PageHeader from '../components/ui/PageHeader';
 import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
@@ -579,15 +580,18 @@ export default function Returns() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <h2 className="text-xl font-semibold font-heading text-nav-dark">Returns / RMA</h2>
+      <PageHeader
+        title="Returns"
+        accent="/ RMA"
+        actions={(
+          <>
           {canBulkAction && <BulkActionBar selectedCount={selectedCount} actions={bulkActions} onDeselectAll={clearSelection} />}
-        </div>
-        <Button icon={<Plus className="w-4 h-4" />} onClick={openCreate}>
-          New Return
-        </Button>
-      </div>
+          <Button icon={<Plus className="w-4 h-4" />} onClick={openCreate}>
+            New Return
+          </Button>
+          </>
+        )}
+      />
 
       <Card padding={false}>
         <div className="p-5">

@@ -67,22 +67,22 @@
       "mcp__supabase__generate_typescript_types",
       "mcp__supabase__search_docs",
       "Workflow",
-      "ScheduleWakeup"
+      "ScheduleWakeup",
+      "Bash(git push:*)",
+      "mcp__50e15046-cf2c-49da-b8df-ceef27768f63__execute_sql",
+      "mcp__50e15046-cf2c-49da-b8df-ceef27768f63__apply_migration",
+      "mcp__supabase__execute_sql",
+      "mcp__supabase__apply_migration",
+      "mcp__claude_ai_Supabase__execute_sql",
+      "mcp__claude_ai_Supabase__apply_migration"
     ],
     "ask": [
-      "Bash(git push:*)",
       "Bash(vercel --prod:*)",
       "Bash(vercel --production:*)",
       "Bash(supabase functions deploy:*)",
       "Bash(npx supabase functions deploy:*)",
-      "mcp__50e15046-cf2c-49da-b8df-ceef27768f63__execute_sql",
-      "mcp__50e15046-cf2c-49da-b8df-ceef27768f63__apply_migration",
       "mcp__50e15046-cf2c-49da-b8df-ceef27768f63__deploy_edge_function",
-      "mcp__supabase__execute_sql",
-      "mcp__supabase__apply_migration",
       "mcp__supabase__deploy_edge_function",
-      "mcp__claude_ai_Supabase__execute_sql",
-      "mcp__claude_ai_Supabase__apply_migration",
       "mcp__claude_ai_Supabase__deploy_edge_function",
       "Bash(gh pr merge:*)",
       "mcp__github__push_files",
@@ -124,42 +124,42 @@
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/sql-safety.mjs\"",
-            "timeout": 5
+            "timeout": 15
           },
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/money-safety.mjs\"",
-            "timeout": 5
+            "timeout": 15
           },
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/idempotency-body-check.mjs\"",
-            "timeout": 5
+            "timeout": 15
           },
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/rls-on-new-tables.mjs\"",
-            "timeout": 5
+            "timeout": 15
           },
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/status-enum-check.mjs\"",
-            "timeout": 5
+            "timeout": 15
           },
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/generated-column-check.mjs\"",
-            "timeout": 5
+            "timeout": 15
           },
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/env-guard.mjs\"",
-            "timeout": 5
+            "timeout": 15
           },
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/grant-change-guard.mjs\"",
-            "timeout": 5
+            "timeout": 15
           }
         ]
       },
@@ -169,17 +169,17 @@
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/bash-safety.mjs\"",
-            "timeout": 5
+            "timeout": 15
           },
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/active-area-guard.mjs\"",
-            "timeout": 5
+            "timeout": 15
           },
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/codex-push-guard.mjs\"",
-            "timeout": 5
+            "timeout": 15
           }
         ]
       },
@@ -189,22 +189,22 @@
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/migration-apply-guard.mjs\"",
-            "timeout": 5
+            "timeout": 15
           },
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/hold-latch-guard.mjs\"",
-            "timeout": 5
+            "timeout": 15
           },
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/live-testdata-guard.mjs\"",
-            "timeout": 5
+            "timeout": 15
           },
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/unattended-autopilot.mjs\"",
-            "timeout": 5
+            "timeout": 15
           }
         ]
       }
@@ -216,7 +216,7 @@
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/posttooluse-migration.mjs\"",
-            "timeout": 5
+            "timeout": 15
           },
           {
             "type": "command",
@@ -231,7 +231,7 @@
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/registry-freshness.mjs\"",
-            "timeout": 5
+            "timeout": 15
           }
         ]
       }
@@ -243,12 +243,12 @@
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/stop-verify.mjs\"",
-            "timeout": 5
+            "timeout": 15
           },
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/stop-wrap.mjs\"",
-            "timeout": 5
+            "timeout": 15
           }
         ]
       }
@@ -259,37 +259,37 @@
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/dangerous-phrase-warning.mjs\"",
-            "timeout": 5
+            "timeout": 15
           },
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/codex-gauntlet-reminder.mjs\"",
-            "timeout": 5
+            "timeout": 15
           },
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/agent-pair-review-reminder.mjs\"",
-            "timeout": 5
+            "timeout": 15
           },
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/codex-to-claude-handoff-reminder.mjs\"",
-            "timeout": 5
+            "timeout": 15
           },
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/ship-intent-reminder.mjs\"",
-            "timeout": 5
+            "timeout": 15
           },
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/hold-latch-prompt.mjs\"",
-            "timeout": 5
+            "timeout": 15
           },
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/autopilot-intent-reminder.mjs\"",
-            "timeout": 5
+            "timeout": 15
           }
         ]
       }
@@ -311,7 +311,7 @@
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/session-snapshot.mjs\"",
-            "timeout": 5
+            "timeout": 15
           },
           {
             "type": "command",

@@ -15,6 +15,7 @@ import { Package, Search, AlertTriangle, CheckCircle2, Truck, Users, DollarSign,
 import Card from '../components/ui/Card';
 import Badge from '../components/ui/Badge';
 import HelpTip from '../components/ui/HelpTip';
+import PageHeader from '../components/ui/PageHeader';
 import { useToast } from '../components/ui/Toast';
 import { supabase, assertRpcResult } from '../lib/db';
 import { Sentry } from '../lib/sentry';
@@ -335,13 +336,10 @@ export default function ToShip() {
 
   return (
     <div className="space-y-4">
-      <div>
-        <h2 className="text-xl font-semibold font-heading text-nav-dark flex items-center">
-          To-Ship
-          <HelpTip text="Everything you still owe customers, in one place. Demand comes from open order lines (confirmed / partially fulfilled). Free stock and inbound-PO come from your live inventory position. Read-only." className="ml-1" />
-        </h2>
-        <p className="text-sm text-secondary mt-0.5">What you still owe customers — search a product to see who's waiting.</p>
-      </div>
+      <PageHeader
+        title="To-Ship"
+        subtitle={<>What you still owe customers — search a product to see who's waiting. <HelpTip text="Everything you still owe customers, in one place. Demand comes from open order lines (confirmed / partially fulfilled). Free stock and inbound-PO come from your live inventory position. Read-only." /></>}
+      />
 
       {/* Section switcher */}
       <div className="inline-flex rounded-lg border border-gray-200 overflow-hidden">

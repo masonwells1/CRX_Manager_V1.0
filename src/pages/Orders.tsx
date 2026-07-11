@@ -25,6 +25,7 @@ import type { OrderSummaryData } from '../lib/orderSummaryPdf';
 import type { PickListData } from '../lib/orderPickListPdf';
 import { SkeletonTable } from '../components/ui/Skeleton';
 import HelpTip from '../components/ui/HelpTip';
+import PageHeader from '../components/ui/PageHeader';
 import type { Order } from '../types';
 import { getSeasonDates } from '../utils/season';
 
@@ -568,24 +569,26 @@ export default function Orders() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between flex-wrap gap-2">
-        <div className="flex-1 flex items-center gap-3">
-          <h2 className="text-2xl font-bold text-nav-dark">Orders</h2>
-          {canBulkAction && (
-            <BulkActionBar selectedCount={selectedCount} actions={bulkActions} onDeselectAll={clearSelection} />
-          )}
-        </div>
-        <div className="flex items-center gap-2">
-          <Button variant="secondary" onClick={() => setShowImportModal(true)}>
-            <Upload className="w-4 h-4" />
-            Import Orders
-          </Button>
-          <Button onClick={() => navigate('/orders/new')}>
-            <Plus className="w-4 h-4" />
-            New Order
-          </Button>
-        </div>
-      </div>
+      <PageHeader
+        title="Orders"
+        actions={
+          <>
+            {canBulkAction && (
+              <BulkActionBar selectedCount={selectedCount} actions={bulkActions} onDeselectAll={clearSelection} />
+            )}
+            <div className="flex items-center gap-2">
+              <Button variant="secondary" onClick={() => setShowImportModal(true)}>
+                <Upload className="w-4 h-4" />
+                Import Orders
+              </Button>
+              <Button onClick={() => navigate('/orders/new')}>
+                <Plus className="w-4 h-4" />
+                New Order
+              </Button>
+            </div>
+          </>
+        }
+      />
 
       <Card padding={false}>
         <div className="p-5">

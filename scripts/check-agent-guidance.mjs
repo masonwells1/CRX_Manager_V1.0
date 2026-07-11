@@ -33,19 +33,31 @@ record(/explicit approval in the current conversation/i.test(agents), "AGENTS.md
 
 const allow = new Set(settings.permissions?.allow || []);
 const ask = new Set(settings.permissions?.ask || []);
-const sensitive = [
+// Mason's decision 2026-07-11 (re-affirming 2026-07-05): no permission popups for
+// push / SQL / migrations — the deterministic hooks (codex-push-guard,
+// live-testdata-guard DDL block, migration-apply-guard proof file) are the real
+// gate, plus his explicit OK in chat per AGENTS.md. These must be auto-allowed
+// so the popup never returns, and must never fall into ask/deny silently.
+const hookGated = [
   "Bash(git push:*)",
   "mcp__50e15046-cf2c-49da-b8df-ceef27768f63__execute_sql",
   "mcp__50e15046-cf2c-49da-b8df-ceef27768f63__apply_migration",
-  "mcp__50e15046-cf2c-49da-b8df-ceef27768f63__deploy_edge_function",
   "mcp__supabase__execute_sql",
   "mcp__supabase__apply_migration",
-  "mcp__supabase__deploy_edge_function",
   "mcp__claude_ai_Supabase__execute_sql",
   "mcp__claude_ai_Supabase__apply_migration",
+];
+for (const permission of hookGated) {
+  record(allow.has(permission), `${permission} is auto-allowed (deterministic hook is the gate)`);
+  record(!ask.has(permission), `${permission} does not prompt`);
+}
+// Edge-function deploys have no deterministic hook backstop — they keep the popup.
+const mustAsk = [
+  "mcp__50e15046-cf2c-49da-b8df-ceef27768f63__deploy_edge_function",
+  "mcp__supabase__deploy_edge_function",
   "mcp__claude_ai_Supabase__deploy_edge_function",
 ];
-for (const permission of sensitive) {
+for (const permission of mustAsk) {
   record(!allow.has(permission), `${permission} is not auto-allowed`);
   record(ask.has(permission), `${permission} requires approval`);
 }

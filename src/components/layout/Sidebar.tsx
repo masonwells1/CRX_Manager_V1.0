@@ -15,6 +15,7 @@ import {
   ClipboardCheck,
   ClipboardList,
   CreditCard,
+  DatabaseZap,
   DollarSign,
   FileText,
   FlaskConical,
@@ -131,8 +132,7 @@ const officeNavigation: NavEntry[] = [
         { path: '/products', label: 'Products', icon: <Package className="w-4 h-4" /> },
         { path: '/brand-vs-generic', label: 'Brand vs Generic', icon: <Scale className="w-4 h-4" /> },
         { path: '/purchase-orders', label: 'Purchase Orders', icon: <ShoppingCart className="w-4 h-4" /> },
-        { path: '/receiving-hub', label: 'Receiving (Hub)', icon: <PackageSearch className="w-4 h-4" /> },
-        { path: '/receiving', label: 'Receiving Log', icon: <PackageCheck className="w-4 h-4" /> },
+        { path: '/receiving', label: 'Receiving', icon: <PackageCheck className="w-4 h-4" /> },
         { path: '/cycle-counts', label: 'Cycle Counts', icon: <ClipboardCheck className="w-4 h-4" />, roles: ['admin'] },
       ],
     },
@@ -144,14 +144,12 @@ const officeNavigation: NavEntry[] = [
       items: [
         { path: '/payments', label: 'Record Payments', icon: <DollarSign className="w-4 h-4" /> },
         { path: '/accounts-receivable', label: 'A/R Workspace', icon: <CreditCard className="w-4 h-4" />, roles: ['admin'] },
-        { path: '/prepay-workspace', label: 'Prepay Workspace', icon: <ArrowLeftRight className="w-4 h-4" />, roles: ['admin'] },
+        { path: '/prepay', label: 'Prepay', icon: <ArrowLeftRight className="w-4 h-4" />, roles: ['admin'] },
         { path: '/accounts-payable', label: 'A/P & Vendor Bills', icon: <Receipt className="w-4 h-4" />, roles: ['admin'] },
-        { path: '/field-invoices/summary', label: 'Unposted Invoice Summary', icon: <ClipboardList className="w-4 h-4" /> },
         { path: '/commission-payments', label: 'Commissions', icon: <Banknote className="w-4 h-4" />, roles: ['admin'] },
         { path: '/rebates', label: 'Rebates', icon: <BadgeDollarSign className="w-4 h-4" />, roles: ['admin'] },
         { path: '/month-end', label: 'Month-End Close', icon: <CalendarCheck className="w-4 h-4" />, roles: ['admin'] },
-        { path: '/integrity-report', label: 'Data Integrity — Report', icon: <ShieldAlert className="w-4 h-4" />, roles: ['admin'] },
-        { path: '/integrity-cleanup', label: 'Data Integrity — Cleanup', icon: <Wrench className="w-4 h-4" />, roles: ['admin'] },
+        { path: '/integrity', label: 'Data Integrity', icon: <ShieldAlert className="w-4 h-4" />, roles: ['admin'] },
       ],
     },
   },
@@ -164,6 +162,7 @@ const officeNavigation: NavEntry[] = [
         { path: '/lot-trace', label: 'Lot Trace (recall lookup)', icon: <PackageSearch className="w-4 h-4" /> },
         { path: '/watchdog', label: 'Watchdog Flags', icon: <ShieldAlert className="w-4 h-4" /> },
         { path: '/label-review', label: 'Label Review', icon: <FlaskConical className="w-4 h-4" />, roles: ['admin'] },
+        { path: '/label-data-quality', label: 'Label Data Quality', icon: <DatabaseZap className="w-4 h-4" />, roles: ['admin'] },
         { path: '/blend-tickets', label: 'Blend Tickets (OCR)', icon: <Image className="w-4 h-4" /> },
       ],
     },
@@ -249,7 +248,6 @@ function getVisibleItems(items: NavSubItem[], userRole: UserRole | undefined, de
 function categoryHasActiveRoute(items: NavSubItem[], pathname: string): boolean {
   return items.some((item) => {
     if (item.path === '/') return pathname === '/';
-    // Segment-aware so e.g. /receiving-hub doesn't also light up /receiving.
     return pathname === item.path || pathname.startsWith(item.path + '/');
   });
 }
@@ -301,7 +299,6 @@ export default function Sidebar({ mobileOpen, onClose }: SidebarProps) {
 
   const isRouteActive = (path: string) => {
     if (path === '/') return location.pathname === '/';
-    // Segment-aware so e.g. /receiving-hub doesn't also light up /receiving.
     return location.pathname === path || location.pathname.startsWith(path + '/');
   };
 

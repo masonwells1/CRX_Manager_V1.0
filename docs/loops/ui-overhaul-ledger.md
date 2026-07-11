@@ -1,0 +1,28 @@
+# UI Overhaul Loop — Ledger
+
+## Morning report (updated as the loop runs)
+- Loop started 2026-07-10 ~22:30 local. Autopilot armed to ~08:25.
+- Phase 1 DONE + committed (c0bb5089): Office Cockpit is the single morning screen (action queues on top, KPI/money strip + inventory position below); Dashboard slimmed to reports-only. PROOF — Ran: typecheck, lint, vitest (3210 passed), production build, plus OfficeCockpit render test asserting queue → KPI → inventory → quick-actions order. Saw: all green.
+- PARKED FOR MASON — publishing to GitHub/main: the autopilot hard guard blocks `git push` on unattended runs by design (it outranks the chat authorization). All green work is committed on `feat/ui-overhaul-2026-07`. In the morning, say "push it" and the branch + main fast-forward go out in one step (pre-push typecheck/build will run then).
+- Phase 2 DONE (4 commits): field invoices 5→1, receiving 3→1, prepay 2→1, integrity 2→1 — all tabbed with redirects; ~3,000 duplicate lines removed.
+- Phase 3 DONE (1 commit): branded PageHeader adopted app-wide; Inventory uses shared Tabs.
+- ALL PHASES COMPLETE. The ONE next step: Mason says "push it" → branch + main go out (pre-push typecheck/build runs then; Vercel deploys main automatically).
+
+## Units
+| Unit | Phase | Status | Codex model | Rounds | Proof |
+|---|---|---|---|---|---|
+| 1.1 Merge Dashboard KPIs/inventory/quick-actions into OfficeCockpit (queues on top) | 1 | DONE @c0bb5089 | gpt-5.6-terra | 2 | render test + 4 gates green |
+| 1.2 Slim Dashboard to pure reports page | 1 | DONE @c0bb5089 (Codex merged into 1.1) | gpt-5.6-terra | 2 | same gates |
+| 2.0 Shared Tabs primitive + tests | 2 | DONE | gpt-5.6-sol | 1 | typecheck + 4/4 Tabs tests (render, switch, keyboard, badges) |
+| 2.1 Field-invoice consolidation (5 pages → 1 tabbed) | 2 | DONE | gpt-5.6-terra | 1 | net −3,000 lines; redirects live; 3216 tests + 4 gates green; Codex dev-server route check (login wall = expected) |
+| 2.2 Receiving consolidation (3 → 1) | 2 | DONE | gpt-5.6-sol | 1 | tabbed page + redirects; 3221 tests + 4 gates green |
+| 2.3 Prepay consolidation (2 → 1) | 2 | DONE | gpt-5.6-sol | 1 | tabbed page + redirects; 3228 tests + 4 gates green |
+| 2.4 Integrity consolidation (2 → 1) | 2 | DONE | gpt-5.6-sol (bundled w/ 2.3) | 1 | same gates |
+| 3.1 Shared PageHeader + adopt everywhere | 3 | DONE | gpt-5.6-sol ×2 parallel (draft rescued from interrupted Sonnet run) | 2 | 8 core + ~20 remaining pages; combined gates green |
+| 3.2 InventoryPage adopts shared Tabs | 3 | DONE | gpt-5.6-luna | 1 | 33 focused tests; combined gates green |
+
+## Phase 3 combined proof
+PROOF — Ran: typecheck, lint, vitest full suite (210 files / 3235 passed), production build over all 31 Phase-3 files. Saw: all green. Codex CLI stalled 4× during Phase 3 (startup transport hang); fixed by kill + re-dispatch with a 5-minute log-activity watchdog; final run used 3 parallel Codex agents with disjoint file ownership.
+
+## Parked questions for Mason
+(none yet)

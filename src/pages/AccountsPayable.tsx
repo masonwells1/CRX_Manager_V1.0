@@ -8,6 +8,7 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { DollarSign, Clock, AlertTriangle, FileText, Plus } from 'lucide-react';
 import Card from '../components/ui/Card';
+import PageHeader from '../components/ui/PageHeader';
 import Button from '../components/ui/Button';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import { useToast } from '../components/ui/Toast';
@@ -141,18 +142,20 @@ export default function AccountsPayable() {
 
   return (
     <div className="space-y-4">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <h2 className="text-xl font-semibold font-heading text-nav-dark">Accounts Payable</h2>
-        <div className="flex gap-2">
+      <PageHeader
+        title="Accounts"
+        accent="Payable"
+        actions={(
+          <div className="flex gap-2">
           <Button variant="secondary" onClick={() => navigate('/accounts-payable/bills')}>
             <FileText className="w-4 h-4 mr-1" /> View All Bills
           </Button>
           <Button icon={<Plus className="w-4 h-4" />} onClick={() => navigate('/accounts-payable/bills/new')}>
             New Bill
           </Button>
-        </div>
-      </div>
+          </div>
+        )}
+      />
 
       {/* Summary Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">

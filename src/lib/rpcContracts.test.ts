@@ -1338,6 +1338,10 @@ describe('RPC contract: save_blend_recipe', () => {
 const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   'adjust_inventory',
   'allocate_payment',
+  // credit-memo RPCs (landed on main 2026-07-10) — classified WITH idempotency: verified against
+  // live pg_proc that each body uses check_idempotency/save scoped to its own operation. They were
+  // added to src/types/supabase.ts but never classified here, which left main RED for all sessions.
+  'apply_credit_memo_to_invoice',
   'apply_remaining_prepayments',
   'approve_return',
   'batch_apply_all_prepayments',
@@ -1346,6 +1350,10 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   'batch_post_invoices',
   'batch_reschedule_deliveries',
   'batch_void_invoices',
+  // label-draft + watchdog RPCs (applied live, no migration file) — classified WITH
+  // idempotency 2026-07-11: verified against live pg_proc that each body caches its
+  // result in idempotency_keys scoped to its own operation and replays on a repeat key.
+  'bulk_create_label_drafts',
   'bulk_import_order',
   'cancel_cycle_count',
   'cancel_delivery',
@@ -1353,6 +1361,10 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   'cancel_purchase_order',
   'cancel_return',
   'close_accounting_period',
+  // close_quote_* (Layer 2, in-migration): bodies use the canonical idempotency_keys block.
+  'close_quote_as_applied',
+  'close_quote_as_short',
+  'commit_label_draft',
   'complete_cycle_count',
   'complete_delivery',
   'complete_job',
@@ -1364,6 +1376,7 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   'create_direct_order',
   'create_followup_delivery',
   'create_invoice_from_order',
+  'create_label_draft',
   'create_order_from_blend_ticket',
   'create_quick_delivery',
   'create_rebate_claim',
@@ -1371,6 +1384,7 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   'delete_invoices',
   'delete_prepay_credit',
   'delete_purchase_order',
+  'dismiss_watchdog_flag',
   'duplicate_quote',
   'edit_delivery',
   'edit_prepay_credit',
@@ -1397,6 +1411,7 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   'retire_inventory_item',
   'reverse_blend_ticket_approval',
   'reverse_completed_cycle_count',
+  'reverse_credit_memo_application', // credit-memo (landed 2026-07-10) — WITH idempotency (see apply_credit_memo_to_invoice note above)
   'reverse_write_off',
   'revert_quote_status',
   'save_blend_recipe',
@@ -1404,6 +1419,7 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   'save_customer',
   'save_invoice',
   'save_job',
+  'save_job_applied_record',
   'save_purchase_order',
   'save_quote',
   'transfer_invoice_to_job',
@@ -1515,8 +1531,15 @@ const MIGRATIONS_DIR = join(
  */
 const IDEMPOTENCY_BODY_EXEMPT: Record<
   string,
-  'verified-live' | 'natural' | 'gap' | 'non-mutating'
+  'verified-live' | 'natural' | 'gap' | 'non-mutating' | 'table-unique'
 > = {
+  //  - 'table-unique'   : idempotency is enforced NOT via the idempotency_keys table
+  //                       but by a dedicated column + PARTIAL UNIQUE index on the RPC's
+  //                       own table, with a catch-unique-violation replay. Used when the
+  //                       RPC is SECURITY INVOKER (so it cannot call the owner-only
+  //                       check_idempotency/save_idempotency helpers) and must preserve
+  //                       caller RLS. Verified by its own dedicated test below.
+  save_job_applied_record: 'table-unique',
   // disk scan can't resolve the latest body; live body_uses_idem=true (2026-05-29)
   create_rebate_claim: 'verified-live',
   manual_inventory_add: 'verified-live',
@@ -1628,5 +1651,152 @@ describe('Idempotency BODY verification (reads migration SQL)', () => {
       (rpc) => !MUTATING_RPCS_WITH_IDEMPOTENCY.includes(rpc)
     );
     expect(orphans).toEqual([]);
+  });
+});
+
+// -------------------------------------------------------------------------
+// Idempotency COVERAGE DRIFT — fail-closed guard driven by the generated types.
+//
+// Live Foundation Gauntlet Section 6 MED-1 (2026-07-08): the hand-maintained
+// WITH/MISSING lists went stale and a NEW mutating RPC (save_job_applied_record)
+// shipped with no double-submit protection while every list-membership test above
+// stayed green. Root cause: nothing cross-checked the lists against the CURRENT
+// set of RPCs.
+//
+// src/types/supabase.ts is generated from the live DB (`generate_typescript_types`)
+// and is the deterministic, in-repo source of every RPC's real argument shape. This
+// block parses it and FAILS when a NEW RPC declares p_idempotency_key without being
+// classified — so the guardrail can no longer stay green through a stale list.
+// -------------------------------------------------------------------------
+
+/** RPC names whose generated Args include p_idempotency_key. */
+function generatedRpcsDeclaringIdempotencyKey(): Set<string> {
+  const supabaseTypesPath = join(
+    dirname(fileURLToPath(import.meta.url)),
+    '..',
+    'types',
+    'supabase.ts'
+  );
+  const src = readFileSync(supabaseTypesPath, 'utf8').replace(/\r\n/g, '\n');
+  const start = src.indexOf('Functions: {');
+  const end = src.indexOf('\n    CompositeTypes', start);
+  const block = src.slice(start, end === -1 ? undefined : end);
+  // Each RPC is declared at a 6-space indent: `      <name>:`
+  const nameRe = /\n {6}([a-z_][a-z0-9_]*):/g;
+  const marks: { name: string; idx: number }[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = nameRe.exec(block))) marks.push({ name: m[1], idx: m.index });
+  const out = new Set<string>();
+  for (let i = 0; i < marks.length; i++) {
+    const s = marks[i].idx;
+    const e = i + 1 < marks.length ? marks[i + 1].idx : block.length;
+    if (/p_idempotency_key\??:/.test(block.slice(s, e))) out.add(marks[i].name);
+  }
+  return out;
+}
+
+/**
+ * DATED BACKLOG (2026-07-10): RPCs that declare p_idempotency_key in the generated
+ * types but are not yet in the WITH/MISSING lists. Most are genuinely covered in the
+ * DB (their bodies use the canonical helpers) and simply predate the hand-lists; a
+ * few are read-only report signatures. This set exists ONLY so the fail-closed guard
+ * below passes today while a NEW, unclassified mutator trips it.
+ *
+ * SHRINK THIS over time: when you properly classify one (move it into
+ * MUTATING_RPCS_WITH_IDEMPOTENCY or MUTATING_RPCS_MISSING_IDEMPOTENCY, verifying its
+ * body), delete it from here. Do NOT add to it to silence a failure — a new name here
+ * means a new mutating RPC shipped without being reviewed for double-submit safety.
+ */
+const IDEM_PARAM_UNTRIAGED_BASELINE = new Set<string>([
+  'admin_update_profile', 'apply_prepay_to_invoice', 'assign_job_applicator',
+  'batch_approve_blend_tickets', 'batch_reject_blend_tickets',
+  'confirm_job_notification_sent', 'consolidate_draft_invoices', 'create_inventory_hold',
+  'create_invoice_for_unbilled_delivery', 'create_invoice_from_blend_ticket',
+  'create_job_from_quote_section', 'create_planned_holds', 'create_prepay_check_splits',
+  'create_quote_from_template', 'create_quote_version', 'create_return', 'create_rush_order',
+  'create_split_invoices_from_order', 'delete_vendor', 'dispatch_job_locations',
+  'draw_down_quote', 'get_expiring_planned_holds', 'link_fields_to_parent',
+  'load_recipe_into_job', 'log_failed_notification', 'mark_inventory_row_verified',
+  'notify_damaged_receiving', 'post_invoice_group', 'price_order',
+  'reconcile_negative_inventory', 'record_job_post_notifications',
+  'record_job_pre_notifications', 'reject_return', 'restore_quote_version',
+  'reverse_receiving_record', 'rollover_quote_to_season', 'save_blend_ticket_fields',
+  'save_field_app_invoice', 'save_field_crop_history', 'save_field_geometry',
+  'save_field_polygons', 'save_quote_template', 'save_vendor',
+  'set_application_record_lots', 'set_field_boundary', 'set_field_override_acres',
+  'start_job', 'undispatch_job_locations', 'unlink_field_from_parent', 'unpost_invoice',
+  'unpost_invoice_group', 'update_field_app_applied_info', 'update_field_app_invoice_billing',
+  'update_vendor_bill', 'void_vendor_payment',
+]);
+
+describe('Idempotency coverage drift (generated-types driven, fail-closed)', () => {
+  it('save_job_applied_record declares p_idempotency_key in the generated types (regression lock for Section 6 HIGH-1)', () => {
+    expect(generatedRpcsDeclaringIdempotencyKey().has('save_job_applied_record')).toBe(true);
+    expect(MUTATING_RPCS_WITH_IDEMPOTENCY).toContain('save_job_applied_record');
+  });
+
+  it('save_job_applied_record body enforces idempotency via its own column + partial unique index (table-unique mechanism)', () => {
+    // It is SECURITY INVOKER, so it cannot use the owner-only check_idempotency /
+    // save_idempotency helpers; the dedup is the idempotency_key column + a
+    // catch-unique-violation replay. Verify that mechanism is actually present.
+    const body = latestFunctionBody('save_job_applied_record');
+    expect(body).not.toBeNull();
+    expect(/idempotency_key/i.test(body as string)).toBe(true);
+    expect(/unique_violation/i.test(body as string)).toBe(true);
+    // Guard against a silent flip to the helper path that this exemption would mask.
+    expect(IDEMPOTENCY_BODY_EXEMPT.save_job_applied_record).toBe('table-unique');
+    // The catch-unique-violation replay is only correct if the PARTIAL UNIQUE index
+    // actually exists — without it, two same-key creates BOTH insert and the dedup
+    // silently breaks while this test would otherwise stay green (Codex P2). Assert
+    // the index DDL is present in the migrations.
+    const hasPartialUniqueIndex = getMigrationFiles().some((f) =>
+      /CREATE\s+UNIQUE\s+INDEX[\s\S]*?job_applied_records[\s\S]*?\(\s*idempotency_key\s*\)[\s\S]*?WHERE\s+idempotency_key\s+IS\s+NOT\s+NULL/i.test(
+        f.content
+      )
+    );
+    expect(hasPartialUniqueIndex).toBe(true);
+  });
+
+  it('every covered RPC (except non-mutating reads) declares p_idempotency_key in the generated types', () => {
+    const generated = generatedRpcsDeclaringIdempotencyKey();
+    const offenders = MUTATING_RPCS_WITH_IDEMPOTENCY.filter(
+      (rpc) => IDEMPOTENCY_BODY_EXEMPT[rpc] !== 'non-mutating' && !generated.has(rpc)
+    );
+    // A covered RPC no longer declaring the param = it lost idempotency in a re-emit,
+    // or the name drifted. Re-verify against the live DB and fix the SQL or the list.
+    expect(offenders).toEqual([]);
+  });
+
+  it('NO new RPC that DECLARES p_idempotency_key ships unclassified (fail-closed on param-declaring RPCs)', () => {
+    // SCOPE / KNOWN LIMIT (Codex P2, 2026-07-10): this catches a new RPC that
+    // *declares* p_idempotency_key but was never classified, PLUS covered-list drift
+    // (the test above). It does NOT catch the original Section 6 failure class — a
+    // new mutating RPC that OMITS the param entirely — because "mutating" cannot be
+    // determined from src/types/supabase.ts (no function body). Closing that fully
+    // needs a refreshed LIVE pg_proc body-mutation snapshot (the gauntlet's own
+    // recommendation); tracked as a follow-up. This guard is a strict improvement
+    // over the prior hand-list, not a complete mutator gate — do not read it as one.
+    const generated = generatedRpcsDeclaringIdempotencyKey();
+    const classified = new Set([
+      ...MUTATING_RPCS_WITH_IDEMPOTENCY,
+      ...MUTATING_RPCS_MISSING_IDEMPOTENCY,
+    ]);
+    const untracked = [...generated].filter((rpc) => !classified.has(rpc));
+    const unexpected = untracked.filter((rpc) => !IDEM_PARAM_UNTRIAGED_BASELINE.has(rpc)).sort();
+    // A name here is a NEW param-declaring RPC that was never classified for
+    // double-submit safety. Add it to MUTATING_RPCS_WITH_IDEMPOTENCY (after verifying
+    // its body honors the key) or MUTATING_RPCS_MISSING_IDEMPOTENCY. Do NOT add it to
+    // IDEM_PARAM_UNTRIAGED_BASELINE to silence this.
+    expect(unexpected).toEqual([]);
+  });
+
+  it('untriaged baseline shrinks honestly — it must not list an already-classified RPC', () => {
+    const classified = new Set([
+      ...MUTATING_RPCS_WITH_IDEMPOTENCY,
+      ...MUTATING_RPCS_MISSING_IDEMPOTENCY,
+    ]);
+    const stale = [...IDEM_PARAM_UNTRIAGED_BASELINE].filter((rpc) => classified.has(rpc)).sort();
+    // If one of these was properly classified, REMOVE it from the baseline.
+    expect(stale).toEqual([]);
   });
 });

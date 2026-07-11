@@ -3,9 +3,10 @@ import { useSearchParams } from 'react-router-dom';
 import { supabase, assertRpcResult } from '../lib/db';
 import { formatUSD } from '../lib/money';
 import Card from '../components/ui/Card';
+import PageHeader from '../components/ui/PageHeader';
 import ARaging from './ARaging';
 import PaymentHistory from './PaymentHistory';
-import PrepaymentManager from './PrepaymentManager';
+import PrepaymentManagerPanel from '../components/prepay/PrepaymentManagerPanel';
 import CustomerTransactionReview from './CustomerTransactionReview';
 
 // F4: one Accounts Receivable workspace that gathers the four previously-separate
@@ -65,12 +66,11 @@ export default function AccountsReceivable() {
 
   return (
     <div className="space-y-4">
-      <div>
-        <h2 className="text-xl font-semibold font-heading text-nav-dark">Accounts Receivable</h2>
-        <p className="text-xs text-secondary mt-0.5">
-          Aging, payments, prepayments, and the customer ledger — in one place.
-        </p>
-      </div>
+      <PageHeader
+        title="Accounts"
+        accent="Receivable"
+        subtitle="Aging, payments, prepayments, and the customer ledger — in one place."
+      />
 
       {owed !== null && (
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -115,7 +115,7 @@ export default function AccountsReceivable() {
       <div>
         {tab === 'aging' && <ARaging />}
         {tab === 'payments' && <PaymentHistory />}
-        {tab === 'prepayments' && <PrepaymentManager />}
+        {tab === 'prepayments' && <PrepaymentManagerPanel />}
         {tab === 'ledger' && <CustomerTransactionReview />}
       </div>
     </div>
