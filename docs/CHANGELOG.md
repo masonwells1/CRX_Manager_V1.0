@@ -4,6 +4,40 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-11 — UI overhaul loop complete: Office Cockpit = single morning screen (queues top, KPIs+inventory below); field invoices 5→1, receiving 3→1, prepay 2→1, integrity 2→1 tabbed pages with redirects; branded PageHeader app-wide; shared Tabs primitive (incl. Inventory). 7 commits on feat/ui-overhaul-2026-07, all gates green, awaiting Mason's push.
+
+UI overhaul loop complete: Office Cockpit = single morning screen (queues top, KPIs+inventory below); field invoices 5→1, receiving 3→1, prepay 2→1, integrity 2→1 tabbed pages with redirects; branded PageHeader app-wide; shared Tabs primitive (incl. Inventory). 7 commits on feat/ui-overhaul-2026-07, all gates green, awaiting Mason's push.
+
+- **Commits this session** (git log --since=12.hours --author=Mason):
+  - `abe21bde feat(ui): Phase 3 polish — branded PageHeader app-wide + shared Tabs in Inventory`
+  - `f37a2e72 feat(ui): consolidate prepay (2->1) and integrity (2->1) into tabbed pages`
+  - `f9b4e556 feat(ui): consolidate 3 receiving pages into one tabbed screen`
+  - `ee1e85c6 feat(ui): consolidate 5 field-invoice pages into one tabbed screen`
+  - `84a2c34d feat(ui): shared Tabs primitive (underline style, keyboard + ARIA, count badges)`
+  - `c0bb5089 feat(ui): Phase 1 — merge Dashboard KPIs/inventory/quick-actions into Office Cockpit (queues first)`
+  - `aa48624f feat(products): in-app Label Data Quality screen — EPA reg-number check + inline fix`
+  - `91a7e971 fix(billing): resolve 2 Codex findings on M4 + Feature A (applied live)`
+- **Migrations touched** (last 15 commits (fallback)):
+  - `supabase/migrations/20260712150000_fix_billing_m4_p1_featurea_p2.sql`
+  - `supabase/migrations/20260712135000_m4_batch_post_invoices_policy_align.sql`
+  - `supabase/migrations/20260712140000_a_auto_split_drafts_on_full_delivery.sql`
+  - `supabase/migrations/20260712130000_credit_limit_count_unposted.sql`
+  - `supabase/migrations/20260711021000_credit_apply_balance_lever.sql`
+  - `supabase/migrations/20260711020000_credit_apply_balance_lever.sql`
+  - `supabase/migrations/20260711030000_credit_memo_applications_ledger.sql`
+  - `supabase/migrations/20260711040000_apply_credit_memo_to_invoice.sql`
+  - `supabase/migrations/20260711050000_credit_apply_reversal_and_lifecycle.sql`
+  - `supabase/migrations/20260711060000_credit_apply_four_lever_consumers.sql`
+  - `supabase/migrations/20260712120000_save_job_applied_record_payload_conflict_guard.sql`
+  - `supabase/migrations/20260711020000_save_job_applied_record_idempotency.sql`
+  - `supabase/migrations/20260711010000_u18c_morning_cron_utc_fix.sql`
+  - `supabase/migrations/20260711000000_a9_close_period_guards.sql`
+  - `supabase/migrations/20260710120000_d2_reserve_side_unit_normalization.sql`
+  - `supabase/migrations/20260710130000_d1_logbook_snapshot_preference.sql`
+  - `supabase/migrations/20260710003000_u18b_morning_checks_fixes.sql`
+  - `supabase/migrations/20260709230000_u18_safety_nets.sql`
+  - `supabase/migrations/20260709233000_u17_email_log_select_own.sql`
+
 ## 2026-07-10 — Label Data Quality screen: in-app EPA reg-number check + inline fix (frontend-only; Codex-built + Codex-reviewed)
 
 New admin-only page `/label-data-quality` closes the gap where the EPA data-quality check existed only as a token-gated CLI script (`scripts/epa-data-quality-report.mjs`) the owner couldn't run. It checks every product's saved EPA registration number against the live EPA database, flags the wrong/cancelled/not-found ones, and lets an admin correct one inline with EPA verification.
