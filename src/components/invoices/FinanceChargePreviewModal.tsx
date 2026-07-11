@@ -195,6 +195,7 @@ export default function FinanceChargePreviewModal({
                     <th className="px-3 py-2.5 text-left font-medium text-secondary">Customer</th>
                     <th className="px-3 py-2.5 text-left font-medium text-secondary">Acct #</th>
                     <th className="px-3 py-2.5 text-right font-medium text-secondary">Overdue Balance</th>
+                    <th className="px-3 py-2.5 text-right font-medium text-secondary">Credit on File</th>
                     <th className="px-3 py-2.5 text-center font-medium text-secondary">Rate</th>
                     <th className="px-3 py-2.5 text-center font-medium text-secondary">Grace</th>
                     <th className="px-3 py-2.5 text-center font-medium text-secondary">Days Late</th>
@@ -221,6 +222,18 @@ export default function FinanceChargePreviewModal({
                       <td className="px-3 py-2.5 text-secondary">{p.account_number || '—'}</td>
                       <td className="px-3 py-2.5 text-right font-mono text-red-600">
                         {fmtCents(p.overdue_balance_cents)}
+                      </td>
+                      <td className="px-3 py-2.5 text-right">
+                        {p.open_credit_cents > 0 ? (
+                          <span
+                            className="font-mono text-amber-600 font-semibold"
+                            title="Customer holds unapplied credit - consider applying it to the invoice before charging interest"
+                          >
+                            {fmtCents(p.open_credit_cents)}
+                          </span>
+                        ) : (
+                          <span className="text-secondary">—</span>
+                        )}
                       </td>
                       <td className="px-3 py-2.5 text-center">
                         <Badge variant="info">{p.charge_rate}%</Badge>

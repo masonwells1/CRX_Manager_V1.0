@@ -36,7 +36,7 @@ import { SkeletonTable, SkeletonCard } from '../components/ui/Skeleton';
 import type { ARAgingRow as BaseARagingRow, CustomerStatementRow, SeasonComparisonRow, DetailedStatementData, StatementOptions } from '../types';
 
 type TabKey = 'aging' | 'statement' | 'season';
-type ARAgingRow = BaseARagingRow & { prepay_balance_cents: number | null };
+type ARAgingRow = BaseARagingRow & { prepay_balance_cents: number | null; open_credit_cents: number | null };
 
 export default function ARaging() {
   const { toast } = useToast();
@@ -271,6 +271,17 @@ export default function ARaging() {
       },
     },
     {
+      key: 'open_credit_cents',
+      header: 'Credit on file',
+      sortable: true,
+      render: (r) => {
+        const openCredit = r.open_credit_cents ?? 0;
+        return openCredit > 0
+          ? <span className="font-mono text-amber-600" title="Unapplied credit memo balance - apply it to an invoice before dunning or charging interest">{fmtCents(openCredit)}</span>
+          : <span className="text-secondary">—</span>;
+      },
+    },
+    {
       key: 'invoice_count' as keyof ARAgingRow,
       header: '',
       render: (r) => (
@@ -492,6 +503,7 @@ export default function ARaging() {
           // cents-consistent total instead of reading this field directly.
           total_balance: number;
           max_days_past_due: number;
+          open_credit_cents: number;
           invoices: ARReminderInvoice[];
         };
         const candidates = assertRpcResult<ARReminderCandidate[]>(data, 'get_ar_reminder_candidates');
@@ -504,9 +516,25 @@ export default function ARaging() {
         let sent = 0;
         let skipped = 0;
         let failed = 0;
+        let heldForCredit = 0;
 
         for (const cust of candidates) {
           const reminderLevel = cust.max_days_past_due >= 90 ? 90 : cust.max_days_past_due >= 60 ? 60 : 30;
+
+          // codex-driven hunt cycle 3: the RPC returns total_balance in dollars, but
+          // the email rendered fmtCents(custTotalCents) — a field that does
+          // not exist — so the outstanding total showed as $NaN. Sum the per-invoice
+          // balance_cents (all > 0; the RPC filters balance_cents > 0) for a correct,
+          // cents-consistent total.
+          const custTotalCents = cust.invoices.reduce((sum, inv) => sum + inv.balance_cents, 0);
+
+          // Option B (Mason, 2026-07-11): never dun an account whose unapplied
+          // credit-memo balance fully covers the overdue total — hold it so the
+          // office applies the credit instead of emailing a past-due notice.
+          if (custTotalCents > 0 && (cust.open_credit_cents ?? 0) >= custTotalCents) {
+            heldForCredit++;
+            continue;
+          }
 
           // Check dedup — skip if already sent today at this level
           const { data: existing } = await supabase
@@ -529,13 +557,6 @@ export default function ARaging() {
               <td style="padding:6px 12px;border:1px solid #e2e8f0;font-size:13px;text-align:right;">${inv.days_past_due} days</td>
             </tr>`)
             .join('');
-
-          // codex-driven hunt cycle 3: the RPC returns total_balance in dollars, but
-          // the email rendered fmtCents(custTotalCents) — a field that does
-          // not exist — so the outstanding total showed as $NaN. Sum the per-invoice
-          // balance_cents (all > 0; the RPC filters balance_cents > 0) for a correct,
-          // cents-consistent total.
-          const custTotalCents = cust.invoices.reduce((sum, inv) => sum + inv.balance_cents, 0);
 
           const urgencyColor = reminderLevel >= 90 ? '#dc2626' : reminderLevel >= 60 ? '#d97706' : '#2563eb';
           const urgencyLabel = reminderLevel >= 90 ? 'URGENT' : reminderLevel >= 60 ? 'Past Due' : 'Reminder';
@@ -617,11 +638,12 @@ export default function ARaging() {
           }
         }
 
-        logActivity({ event: 'ar_reminders_sent', description: `Sent ${sent} AR reminder(s) to overdue customers (${skipped} skipped/deduped, ${failed} failed)`, performedBy: profile.id, entityType: 'system' });
+        logActivity({ event: 'ar_reminders_sent', description: `Sent ${sent} AR reminder(s) to overdue customers (${skipped} skipped/deduped, ${failed} failed, ${heldForCredit} held: credit on file covers balance)`, performedBy: profile.id, entityType: 'system' });
+        const heldNote = heldForCredit > 0 ? `, ${heldForCredit} held (credit on file covers balance — apply it)` : '';
         if (failed > 0) {
-          toast('error', `Sent ${sent} AR reminder(s) — ${failed} FAILED to send${skipped > 0 ? `, ${skipped} skipped (already sent today)` : ''}`);
+          toast('error', `Sent ${sent} AR reminder(s) — ${failed} FAILED to send${skipped > 0 ? `, ${skipped} skipped (already sent today)` : ''}${heldNote}`);
         } else {
-          toast('success', `Sent ${sent} AR reminder(s)${skipped > 0 ? `, ${skipped} skipped (already sent today)` : ''}`);
+          toast('success', `Sent ${sent} AR reminder(s)${skipped > 0 ? `, ${skipped} skipped (already sent today)` : ''}${heldNote}`);
         }
       },
       toast,

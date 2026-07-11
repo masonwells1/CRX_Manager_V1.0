@@ -296,7 +296,9 @@ export default function AppliedRecordsManager({
         p_record: { ...patch, id: editingId ?? '', job_id: jobId, created_by: performedBy } as unknown as Json,
         p_fields: fieldRows as unknown as Json,
         p_crew: (catalogUnavailable ? null : crewRows) as unknown as Json,
-        p_idempotency_key: isCreate ? getKey() : null,
+        // undefined omits the param → RPC's NULL default; same semantics as passing
+        // null, which the stricter supabase-js typing no longer allows here.
+        p_idempotency_key: isCreate ? getKey() : undefined,
       });
       if (error) throw error;
       assertRpcResult<{ record_id: string }>(data, 'save_job_applied_record');

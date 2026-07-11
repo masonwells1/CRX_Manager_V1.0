@@ -102,7 +102,7 @@ export default function CustomerDetail() {
   const [quotePlannedFilter, setQuotePlannedFilter] = useState(false);
 
   // Financials tab state
-  interface AgingRow { customer_id: string; farm_name: string; current_amount: number; days_30: number; days_60: number; days_90: number; over_90: number; total_outstanding: number }
+  interface AgingRow { customer_id: string; farm_name: string; current_amount: number; days_30: number; days_60: number; days_90: number; over_90: number; total_outstanding: number; open_credit_cents?: number | null }
   interface TxnRow { transaction_date: string; transaction_type: string; reference_number: string; amount_cents: number; running_balance: number }
   interface PrepayRow { id: string; bucket_label: string; original_amount_cents: number; balance_cents: number }
   const [aging, setAging] = useState<AgingRow | null>(null);
@@ -1357,6 +1357,11 @@ export default function CustomerDetail() {
                             </div>
                           ))}
                         </div>
+                        {(aging.open_credit_cents ?? 0) > 0 && (
+                          <p className="text-xs text-amber-600 mt-2">
+                            Credit on file: {fmt((aging.open_credit_cents ?? 0) / 100)} in unapplied credit memos — apply before dunning or finance charges
+                          </p>
+                        )}
                       </div>
                     );
                   })()}

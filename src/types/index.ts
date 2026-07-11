@@ -1443,6 +1443,7 @@ export interface PrepayCredit {
   source_reference: string | null;
   bucket_label: string | null;
   quote_id: string | null; // roadmap #6: earmark a prepay credit to a booking (quote)
+  allocation_set_id: string | null; // the payment whose overpayment minted this credit (null for manual credits)
   created_by: string | null;
   created_at: string;
   updated_at: string;
@@ -2555,6 +2556,7 @@ export interface CustomerBalanceRow {
   total_paid: number;
   prepay_applied: number;
   outstanding_balance: number;
+  open_credit: number;
   invoice_count: number;
   oldest_unpaid_date: string | null;
 }
@@ -2754,6 +2756,7 @@ export interface FinanceChargePreview {
   days_overdue: number;
   charge_amount_cents: number;
   finance_charge_enabled: boolean;
+  open_credit_cents: number;
 }
 
 // Sprint 17: Year-End Customer Summary

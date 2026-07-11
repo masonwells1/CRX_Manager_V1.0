@@ -416,7 +416,10 @@ export default function FieldSetup() {
           try {
             const { data: oData, error: oErr } = await supabase.rpc('set_field_override_acres', {
               p_field_id: savedFieldId,
-              p_override_acres: field.override_acres ?? null,
+              // NULL intentionally clears the override (reverts to measured acres) — the RPC
+              // accepts NULL by design, but Supabase typegen can't express a nullable
+              // required arg, so the generated type says `number`. Cast is safe.
+              p_override_acres: (field.override_acres ?? null) as unknown as number,
               p_performed_by: profile!.id,
               p_idempotency_key: ovIdemKey,
             });

@@ -583,6 +583,7 @@ export default function Reports() {
         { key: 'total_invoiced', header: 'Invoiced', format: fmtCSV },
         { key: 'total_paid', header: 'Paid', format: fmtCSV },
         { key: 'outstanding_balance', header: 'Balance', format: fmtCSV },
+        { key: 'open_credit', header: 'Credit Available', format: fmtCSV },
         { key: 'invoice_count', header: 'Invoices' },
         { key: 'oldest_unpaid_date', header: 'Oldest Unpaid', format: fmtDateCSV },
       ], 'customer_balance_listing');
@@ -699,6 +700,7 @@ export default function Reports() {
     { key: 'total_invoiced', header: 'Invoiced', sortable: true, render: (r) => <span className="font-mono">{fmt(r.total_invoiced)}</span> },
     { key: 'total_paid', header: 'Paid', sortable: true, render: (r) => <span className="font-mono">{fmt(r.total_paid)}</span> },
     { key: 'outstanding_balance', header: 'Balance', sortable: true, render: (r) => <span className={`font-mono font-bold ${r.outstanding_balance > 0 ? 'text-red-600' : 'text-crx-green'}`}>{fmt(r.outstanding_balance)}</span> },
+    { key: 'open_credit', header: 'Credit Available', sortable: true, render: (r) => r.open_credit > 0 ? <span className="font-mono text-amber-600">{fmt(r.open_credit)}</span> : <span className="text-secondary">—</span> },
     { key: 'invoice_count', header: 'Invoices', sortable: true },
     { key: 'oldest_unpaid_date', header: 'Oldest Unpaid', sortable: true, render: (r) => r.oldest_unpaid_date ? new Date(r.oldest_unpaid_date + 'T00:00:00').toLocaleDateString() : '-' },
   ];

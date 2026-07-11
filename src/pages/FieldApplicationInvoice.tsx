@@ -1494,6 +1494,12 @@ export default function FieldApplicationInvoice() {
         // #1: structured START/END weather params (nulls clear the columns when a
         // set is blank — same "blank intentionally clears" semantics as the text fields).
         const weatherParams = buildWeatherRpcParams(startWeather, endWeather);
+        // supabase-js now rejects explicit nulls for defaulted RPC params; omitting the
+        // param (undefined) hits the same NULL default, so null → undefined is equivalent
+        // and preserves the "blank set clears the columns" semantics.
+        const weatherRpcParams = Object.fromEntries(
+          Object.entries(weatherParams).map(([k, v]) => [k, v ?? undefined]),
+        ) as { [K in keyof typeof weatherParams]: NonNullable<(typeof weatherParams)[K]> | undefined };
         const appliedResult = await supabase.rpc('update_field_app_applied_info', {
           p_invoice_ids: ids,
           // Omit (undefined) when blank → the RPC's NULL default clears the column,
@@ -1506,7 +1512,7 @@ export default function FieldApplicationInvoice() {
           // weather columns. The RPC only writes them on TRUE, so a stale old-bundle tab (which
           // omits this and the weather params) can't silently erase captured weather.
           p_update_weather: true,
-          ...weatherParams,
+          ...weatherRpcParams,
           // #2: persist the diluent RATE (gal/acre). blank → null (clears the column).
           // p_update_diluent: TRUE — this UI intends to write diluent; a stale old-bundle
           // caller omits it (defaults false) so it can never erase a recorded rate. The
