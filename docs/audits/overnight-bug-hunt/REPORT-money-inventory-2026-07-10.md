@@ -17,9 +17,9 @@ Nothing was pushed to `main`. Nothing live was changed. The one built migration 
 
 ---
 
-## READY TO APPLY (1) — one tap from you
+## ✅ APPLIED LIVE (1)
 
-### ✅ `void_invoice` hardening — migration `20260712160000_void_invoice_isactive_and_period_guards.sql`
+### ✅ `void_invoice` hardening — migration `20260712160000_void_invoice_isactive_and_period_guards.sql` — **APPLIED LIVE 2026-07-11** (live md5 verified `6a36e488…`, matches the byte-proven target)
 Fixes **two** issues in the invoice-void function at once (both are strictly *adding a safety check* — they can't break anything a legitimate active admin does):
 
 1. **A deactivated admin could still void invoices.** The void function checked "are you an admin?" but not "is your account still active?" — every other money function checks both. So an offboarded admin whose login still worked could reverse invoices (which reverses AR, restores customer prepay, cancels commissions). Fix: also require the account be active. *(Severity: medium — real access-control gap, but needs a deactivated-yet-still-logged-in admin.)*
