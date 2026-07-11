@@ -32,6 +32,11 @@ import { generateChemicalApplicationReportPdf } from '../lib/chemicalApplication
 import { resolveBilledCustomers } from '../lib/billedCustomersResolver';
 import { generateLoaderWorksheetPdf } from '../lib/loaderWorksheetPdf';
 import { computeLoaderWorksheet, isGallonCapacityUnit } from '../lib/loaderWorksheet';
+import {
+  ASSIGNED_VEHICLE_VESSEL_VALUE,
+  buildLoaderVesselOptions,
+  capacityForLoaderVesselSelection,
+} from '../lib/loaderVesselOptions';
 import { overrideSaveApplicatorId, shouldReassignApplicatorAfterSave, canGenerateWpsNotice, anySelectedFieldSharesLoading } from '../lib/jobSaveHelpers';
 import { fetchCurrentWeather, parseCentroid } from '../lib/weatherCapture';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
@@ -335,6 +340,9 @@ export default function JobDetail() {
   // persisted via the direct .update() after save_job (frozen RPC contract).
   const [carrierRateGpa, setCarrierRateGpa] = useState('');
   const [tankCapacity, setTankCapacity] = useState('');
+  // The vessel selection is convenience UI only. The persisted job value remains
+  // loader_tank_capacity, so a reloaded job intentionally starts at Assigned vehicle.
+  const [loaderVesselId, setLoaderVesselId] = useState(ASSIGNED_VEHICLE_VESSEL_VALUE);
   // #10: the assigned vehicle's capacity from the SAVED job embed — survives even
   // when that vehicle is inactive (the active-only `vehicles` lookup wouldn't carry
   // it), so the loader worksheet doesn't false-trip the "enter capacity" state.
@@ -1514,6 +1522,7 @@ export default function JobDetail() {
     // #10 loader-worksheet inputs (numbers stored as strings in the form).
     setCarrierRateGpa(j.carrier_rate_gpa != null ? String(j.carrier_rate_gpa) : '');
     setTankCapacity(j.loader_tank_capacity != null ? String(j.loader_tank_capacity) : '');
+    setLoaderVesselId(ASSIGNED_VEHICLE_VESSEL_VALUE);
     // Quote traceability (typed via JobDbRow)
     if (j.quote_id) {
       setQuoteLinkage({ quote_id: j.quote_id, quote_number: j.quote?.quote_number || '', section_name: j.quote_section?.section_name || '' });
@@ -1653,6 +1662,8 @@ export default function JobDetail() {
         await fetchJob();
       } else {
         setGrowerShareFieldNames([]);
+        setLoaderVesselId(ASSIGNED_VEHICLE_VESSEL_VALUE);
+        setTankCapacity('');
         const { data, error } = await supabase.rpc('next_job_number');
         if (!error && data) setJobNumber(assertRpcResult<string>(data, 'next_job_number'));
         const recipeParam = searchParams.get('recipe_id');
@@ -1745,6 +1756,7 @@ export default function JobDetail() {
   const assignedVehicleCapacity = isGallonCapacityUnit(assignedVehicleCapacityUnit)
     ? rawAssignedVehicleCapacity
     : null;
+  const loaderVesselOptions = useMemo(() => buildLoaderVesselOptions(vehicles), [vehicles]);
   const savedVehicleName = selectedVehicle
     ? selectedVehicle.vehicle_name
     : (assignedVehicleIsInactive && savedVehicleCapacity ? savedVehicleCapacity.name : null);
@@ -3734,7 +3746,22 @@ export default function JobDetail() {
               <p className="mt-1 text-xs text-secondary">Spray volume = total acres × carrier rate.</p>
             </div>
             <div>
-              <label className="block text-sm font-medium text-nav-dark mb-1">Tank Capacity (gal)</label>
+              <label className="block text-sm font-medium text-nav-dark mb-1">Vessel being loaded</label>
+              <select
+                value={loaderVesselId}
+                onChange={(e) => {
+                  const selectedVesselId = e.target.value;
+                  setLoaderVesselId(selectedVesselId);
+                  setTankCapacity(capacityForLoaderVesselSelection(selectedVesselId, loaderVesselOptions));
+                }}
+                disabled={!canEdit}
+                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:bg-gray-50"
+              >
+                {loaderVesselOptions.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+              <label className="block text-sm font-medium text-nav-dark mt-3 mb-1">Tank Capacity (gal)</label>
               <input
                 type="number"
                 value={tankCapacity}

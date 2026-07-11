@@ -184,7 +184,7 @@ function drawLoaderWorksheet(
     startY: y,
     margin: { left: margin, right: margin },
     body: [
-      ['Applicator', data.applicator_name || '________________', 'Vehicle', data.vehicle_name || '________________'],
+      ['Applicator', data.applicator_name || '________________', 'Vehicle', `${data.vehicle_name || '________________'} \u00b7 Loading: ${cap}`],
       ['Tank Capacity', cap, 'Carrier Rate', carrier],
       ['Total Acres', fmtNum(data.total_acres) || '0', 'Spray Volume', ws.valid ? `${fmtNum(ws.spray_volume)} gal` : '—'],
       [

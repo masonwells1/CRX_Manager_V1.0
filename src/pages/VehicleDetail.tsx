@@ -13,7 +13,7 @@ import { supabase, checkMutationResult } from '../lib/db';
 import { Sentry } from '../lib/sentry';
 import type { Vehicle, VehicleType, VehicleStatus } from '../types';
 
-const CATEGORIES = ['Sprayer', 'Airplane', 'Helicopter', 'Drone', 'Spreader', 'Truck', 'Other'];
+const CATEGORY_SUGGESTIONS = ['Sprayer', 'Tender', 'Spreader', 'Drone', 'Other'];
 
 export default function VehicleDetail() {
   const { id } = useParams();
@@ -204,17 +204,19 @@ export default function VehicleDetail() {
             </select>
           </div>
           <div>
-            <label className="block text-sm font-medium text-nav-dark mb-1">Category</label>
-            <select
+            <Input
+              id="vehicle-category"
+              label="Category"
               value={form.category}
               onChange={(e) => updateField('category', e.target.value)}
-              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
-            >
-              <option value="">Select category...</option>
-              {CATEGORIES.map((c) => (
-                <option key={c} value={c}>{c}</option>
+              list="vehicle-category-suggestions"
+              placeholder="e.g. Tender"
+            />
+            <datalist id="vehicle-category-suggestions">
+              {CATEGORY_SUGGESTIONS.map((category) => (
+                <option key={category} value={category} />
               ))}
-            </select>
+            </datalist>
           </div>
           <div className="flex gap-3">
             <Input
