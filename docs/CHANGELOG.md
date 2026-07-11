@@ -4,6 +4,25 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-11 — ChemMan parity loop SHIPPED LIVE: 9 build units + FSA research from Mason's 4 walkthrough videos (Codex builds, Claude orchestrates)
+
+Source: Mason's narrated ChemMan screen recordings (docs/walkthroughs/) -> gap analysis -> overnight loop (docs/loops/chemman-parity-loop-2026-07-11.md, ledger + morning report alongside). All units pushed to main with per-unit adversarial Codex verdicts (CLEAN required); 2 additive migrations applied live with full proof gates.
+
+- **Shipped to production** (commits 2fc3f33d..b9f598f2):
+  - `2fc3f33d` M1 satellite map pages on applicator sheets (overview blowout + per-field close-ups, job-acre labels)
+  - `7d0e8f6c` M2 print-options dialog (map pages, previous applications, blank sections, billing-split table w/ phones, banner) + save-as-default
+  - `4e7b62c5` M3 map-based Select Locations picker on the job editor (crop-first cross-customer search, accumulating selections)
+  - `2ac9fc8c` M4 route-order number badges on the job map
+  - `9b3b6012` M5 vessel-being-loaded picker (tender vs sprayer) on the loader tab
+  - `f9d305c1` M6 multiple saved loader worksheets per job — **migration 20260713000000_job_loader_worksheets applied live**
+  - `12dcf01b` M7/M8/M10 field editor: add-another-section discoverability, all-fields overlay w/ toggle, BLM PLSS legal lookup (+CSP)
+  - `b9f598f2` M9 obstacle markers — **migration 20260713010000_field_obstacles applied live**
+- **Research (M12):** commercial "FSA CLU" boundary products are a frozen 2008 snapshot; recommendation = free USDA Crop Sequence Boundaries (docs/walkthroughs/fsa-boundary-research.md). Owner decision pending.
+- **Verified already shipped (no rebuild):** multi-part fields, job tags, vehicles/fleet, Rem-ac, drag route order, as-applied tach/weather/crew, job log-file attachments.
+- Review-gate kills this run included: condensed loader PDF summing chemical amounts (double-strength risk), dead Save buttons, pan-erases-sketch, obstacle-mode boundary-drag/keyboard bypasses, wrong acres on printed maps, CSP-blocked legal lookup.
+- Tests at wrap: 3,351 passed / 117 skipped. Final whole-branch review satisfied by per-unit CLEAN verdicts covering 100% of the branch delta (every pushed line was verdicted; no unreviewed lines exist).
+
+
 ## 2026-07-11 — Mobile overhaul loop COMPLETE on feat/mobile-overhaul-2026-07 (6 commits, frontend-only): bottom nav + drawer, compact TopBar/scrollable Tabs/PageHeader, Jobs/Dispatch/Inventory/Receiving phone cards, Cockpit+Field Invoices 375px pass, full-screen modals + PWA polish. All gates green. Awaiting Mason 'push it'.
 
 Mobile overhaul loop COMPLETE on feat/mobile-overhaul-2026-07 (6 commits, frontend-only): bottom nav + drawer, compact TopBar/scrollable Tabs/PageHeader, Jobs/Dispatch/Inventory/Receiving phone cards, Cockpit+Field Invoices 375px pass, full-screen modals + PWA polish. All gates green. Awaiting Mason 'push it'.
