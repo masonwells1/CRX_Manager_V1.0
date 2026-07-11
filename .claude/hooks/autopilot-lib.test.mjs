@@ -13,8 +13,14 @@ let pass = 0;
 function ok(cond, msg) { assert.ok(cond, msg); pass++; }
 function eq(a, b, msg) { assert.equal(a, b, msg); pass++; }
 
+// ── SQL/migration: Mason-authorized to auto-run unattended (2026-07-10) ────
+// apply_migration + execute_sql are intentionally NOT denied — Mason owns this live
+// DB and does not want them to gate. The migration-apply-guard hook (reviewer proof)
+// remains the real backstop for migrations.
+eq(autopilotDecision("mcp__supabase__apply_migration", { query: "..." }), "allow", "apply_migration allowed (Mason 2026-07-10)");
+eq(autopilotDecision("mcp__supabase__execute_sql", { query: "..." }), "allow", "execute_sql allowed (Mason 2026-07-10)");
+
 // ── deny-set: prod-touching + destructive must NEVER be auto-approved ─────
-eq(autopilotDecision("mcp__supabase__apply_migration", { query: "..." }), "deny", "apply_migration denied");
 eq(autopilotDecision("mcp__supabase__deploy_edge_function", {}), "deny", "deploy_edge_function denied");
 eq(autopilotDecision("mcp__x__deploy_to_vercel", {}), "deny", "deploy_to_vercel denied");
 eq(autopilotDecision("Bash", { command: "git push origin main" }), "deny", "git push denied");
@@ -44,7 +50,8 @@ ok(!intentFresh(JSON.stringify({ created: new Date(Date.now() - 2 * 3600e3).toIS
 ok(!intentFresh("not json"), "malformed intent ignored");
 eq(overnightGateDecision("Edit", { file_path: "src/pages/Foo.tsx" }), "deny-until-armed", "edit blocked until armed");
 eq(overnightGateDecision("Bash", { command: "git add -A && git commit -m x" }), "deny-until-armed", "commit blocked until armed");
-eq(overnightGateDecision("mcp__supabase__execute_sql", { query: "SELECT 1" }), "deny-until-armed", "sql blocked until armed");
+eq(overnightGateDecision("mcp__supabase__execute_sql", { query: "SELECT 1" }), "allow-through", "sql passes even before arm (Mason 2026-07-10)");
+eq(overnightGateDecision("mcp__x__deploy_edge_function", {}), "deny-until-armed", "deploy still blocked until armed");
 eq(overnightGateDecision("Bash", { command: "node .claude/hooks/autopilot-arm.mjs --hours 8" }), "allow-through", "arm command passes");
 eq(overnightGateDecision("Bash", { command: "rm .claude/session-state/OVERNIGHT-INTENT.flag" }), "allow-through", "clearing intent flag passes");
 eq(overnightGateDecision("Bash", { command: "git status" }), "allow-through", "git status passes");
