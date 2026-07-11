@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "generated_at": "2026-06-13T18:52:06.647Z",
+    "generated_at": "2026-07-11T00:22:20.143Z",
     "generator": "node scripts/generate-caller-graph.mjs",
     "purpose": "C5 control — caller graph consumed by .claude/hooks/grant-change-guard.mjs to force per-function caller analysis on GRANT/REVOKE migrations (B10) and branch-accurate Edge guards (B8).",
     "scanned_dirs": [
@@ -14,18 +14,18 @@
       "__mocks__/",
       "node_modules/"
     ],
-    "files_scanned": 230,
+    "files_scanned": 326,
     "live_queried_at": "2026-06-10T18:57:18.713Z",
     "live_data_reused": true,
     "counts": {
-      "rpc_functions_called": 161,
-      "rpc_callsites": 205,
+      "rpc_functions_called": 204,
+      "rpc_callsites": 296,
       "edge_caller_keys": 5,
       "edge_action_branch_keys": 1,
       "edge_callsites": 7,
       "cron_jobs": 3,
       "cron_functions_called": 3,
-      "secdef_executable_functions": 213,
+      "secdef_executable_functions": 212,
       "zero_caller_authenticated": 62,
       "dynamic_rpc_warnings": 0
     }
@@ -33,52 +33,53 @@
   "rpc_callers": {
     "adjust_inventory": [
       "src/components/inventory/BatchAdjustModal.tsx:92",
-      "src/pages/InventoryPage.tsx:588"
+      "src/pages/InventoryPage.tsx:604"
     ],
     "admin_update_profile": [
-      "src/pages/SettingsPage.tsx:337"
+      "src/pages/SettingsPage.tsx:553"
     ],
     "allocate_payment": [
-      "src/lib/offlineSync.ts:149",
-      "src/pages/InvoiceDetail.tsx:613",
-      "src/pages/PaymentAllocation.tsx:272"
+      "src/lib/offlineSync.ts:162",
+      "src/pages/InvoiceDetail.tsx:820",
+      "src/pages/PaymentAllocation.tsx:285"
+    ],
+    "apply_credit_memo_to_invoice": [
+      "src/pages/InvoiceDetail.tsx:889"
     ],
     "apply_remaining_prepayments": [
-      "src/pages/PrepaymentManager.tsx:382"
+      "src/pages/PrepaymentManager.tsx:390"
     ],
     "apply_write_off": [
       "src/components/invoices/WriteOffModal.tsx:66"
     ],
     "approve_return": [
-      "src/pages/Returns.tsx:296"
+      "src/pages/Returns.tsx:286"
     ],
     "assign_job_applicator": [
-      "src/pages/DispatchBoard.tsx:155",
-      "src/pages/JobDetail.tsx:499"
+      "src/pages/JobDetail.tsx:1955"
     ],
     "batch_apply_all_prepayments": [
-      "src/pages/PrepaymentManager.tsx:418"
+      "src/pages/PrepaymentManager.tsx:426"
     ],
     "batch_apply_prepayments": [
       "src/pages/PrepayWorkspace.tsx:196"
     ],
     "batch_approve_blend_tickets": [
-      "src/pages/BlendTickets.tsx:251"
+      "src/pages/BlendTicketDetail.tsx:393",
+      "src/pages/BlendTickets.tsx:260"
     ],
     "batch_cancel_deliveries": [
-      "src/pages/Deliveries.tsx:461"
-    ],
-    "batch_post_invoices": [
-      "src/pages/Invoices.tsx:191"
+      "src/pages/Deliveries.tsx:605"
     ],
     "batch_reject_blend_tickets": [
-      "src/pages/BlendTickets.tsx:282"
+      "src/pages/BlendTicketDetail.tsx:422",
+      "src/pages/BlendTickets.tsx:291"
     ],
     "batch_reschedule_deliveries": [
-      "src/pages/Deliveries.tsx:614"
+      "src/pages/Deliveries.tsx:758"
     ],
     "batch_void_invoices": [
-      "src/pages/Invoices.tsx:221"
+      "src/pages/Invoices.tsx:289"
     ],
     "bulk_import_order": [
       "src/components/orders/BulkOrderImport.tsx:377"
@@ -87,145 +88,201 @@
       "src/pages/CycleCounts.tsx:340"
     ],
     "cancel_delivery": [
-      "src/lib/offlineSync.ts:173",
-      "src/pages/DeliveryDetail.tsx:535"
+      "src/lib/offlineSync.ts:186",
+      "src/pages/DeliveryDetail.tsx:557"
     ],
     "cancel_order": [
-      "src/lib/offlineSync.ts:179",
-      "src/pages/OrderDetail.tsx:498"
+      "src/lib/offlineSync.ts:192",
+      "src/pages/OrderDetail.tsx:560"
     ],
     "cancel_purchase_order": [
-      "src/pages/PurchaseOrderDetail.tsx:512",
+      "src/pages/PurchaseOrderDetail.tsx:517",
       "src/pages/PurchaseOrders.tsx:414"
     ],
     "cancel_return": [
-      "src/pages/Returns.tsx:355"
+      "src/pages/Returns.tsx:348"
     ],
     "check_customer_credit_limit": [
-      "src/pages/NewOrder.tsx:405",
-      "src/pages/QuoteBuilder.tsx:1456"
+      "src/lib/creditLimit.ts:18",
+      "src/pages/NewOrder.tsx:548",
+      "src/pages/QuoteBuilder.tsx:2122",
+      "src/pages/Quotes.tsx:216"
     ],
     "check_duplicate_blend_ticket": [
-      "src/pages/BlendTicketDetail.tsx:245"
+      "src/pages/BlendTicketDetail.tsx:249"
     ],
     "check_remainder_reminders": [
-      "src/pages/Dashboard.tsx:331"
+      "src/pages/Dashboard.tsx:339"
     ],
     "close_accounting_period": [
-      "src/pages/MonthEndClose.tsx:171"
+      "src/pages/MonthEndClose.tsx:287"
+    ],
+    "close_quote_as_applied": [
+      "src/pages/QuoteBuilder.tsx:1425"
+    ],
+    "close_quote_as_short": [
+      "src/pages/QuoteBuilder.tsx:1465"
+    ],
+    "commit_label_draft": [
+      "src/pages/LabelReview.tsx:293"
     ],
     "complete_cycle_count": [
       "src/pages/CycleCounts.tsx:305"
     ],
     "complete_delivery": [
-      "src/lib/offlineSync.ts:143",
-      "src/pages/DeliveryDetail.tsx:780"
+      "src/lib/offlineSync.ts:156",
+      "src/pages/Deliveries.tsx:428",
+      "src/pages/DeliveryDetail.tsx:815",
+      "src/pages/FieldStop.tsx:330"
     ],
     "complete_job": [
-      "src/lib/offlineSync.ts:167",
-      "src/pages/JobDetail.tsx:643"
+      "src/lib/offlineSync.ts:180",
+      "src/pages/FieldView.tsx:578",
+      "src/pages/JobDetail.tsx:2399"
     ],
     "confirm_delivery": [
-      "src/lib/offlineSync.ts:185",
-      "src/pages/DeliveryDetail.tsx:711"
+      "src/lib/offlineSync.ts:198",
+      "src/pages/Deliveries.tsx:416",
+      "src/pages/DeliveryDetail.tsx:738",
+      "src/pages/FieldStop.tsx:204"
+    ],
+    "confirm_job_notification_sent": [
+      "src/pages/FieldApplicationInvoice.tsx:2148",
+      "src/pages/JobDetail.tsx:555",
+      "src/pages/JobDetail.tsx:727"
+    ],
+    "consolidate_draft_invoices": [
+      "src/pages/OrderDetail.tsx:944"
     ],
     "convert_quote_to_order": [
-      "src/pages/QuoteBuilder.tsx:1427"
+      "src/pages/QuoteBuilder.tsx:2093",
+      "src/pages/Quotes.tsx:183"
     ],
     "create_application_record_from_blend_ticket": [
-      "src/pages/BlendTicketDetail.tsx:681"
+      "src/pages/BlendTicketDetail.tsx:733"
     ],
     "create_commission_payment": [
-      "src/pages/CommissionPayments.tsx:224",
-      "src/pages/Reports.tsx:468"
+      "src/pages/CommissionPayments.tsx:273",
+      "src/pages/Reports.tsx:475"
     ],
     "create_delivery_with_items": [
-      "src/pages/NewDelivery.tsx:391"
+      "src/pages/NewDelivery.tsx:410"
     ],
     "create_direct_order": [
-      "src/pages/NewOrder.tsx:366"
+      "src/pages/NewOrder.tsx:514"
     ],
     "create_followup_delivery": [
-      "src/pages/DeliveryDetail.tsx:687",
+      "src/pages/DeliveryDetail.tsx:714",
       "src/pages/DeliveryRemainders.tsx:112"
     ],
     "create_inventory_hold": [
-      "src/pages/InventoryPage.tsx:345"
+      "src/pages/InventoryPage.tsx:351"
     ],
     "create_invoice_for_unbilled_delivery": [
-      "src/pages/IntegrityCleanup.tsx:316"
+      "src/pages/DeliveryDetail.tsx:1087",
+      "src/pages/IntegrityCleanup.tsx:392"
     ],
     "create_invoice_from_blend_ticket": [
-      "src/pages/BlendTicketDetail.tsx:608"
+      "src/pages/BlendTicketDetail.tsx:630"
     ],
     "create_invoice_from_order": [
-      "src/pages/OrderDetail.tsx:680"
+      "src/pages/OrderDetail.tsx:834"
     ],
     "create_job_from_quote_section": [
-      "src/pages/QuoteBuilder.tsx:1217"
+      "src/pages/QuoteBuilder.tsx:1849"
+    ],
+    "create_label_draft": [
+      "src/pages/LabelReview.tsx:376",
+      "src/pages/ProductDetail.tsx:494"
     ],
     "create_order_from_blend_ticket": [
-      "src/pages/BlendTicketDetail.tsx:644"
+      "src/pages/BlendTicketDetail.tsx:696"
     ],
     "create_planned_holds": [
-      "src/pages/QuoteBuilder.tsx:915"
+      "src/pages/QuoteBuilder.tsx:1197"
     ],
     "create_prepay_check_splits": [
-      "src/pages/PrepaymentManager.tsx:337"
+      "src/pages/PrepaymentManager.tsx:345"
     ],
     "create_quick_delivery": [
-      "src/components/deliveries/QuickDeliveryModal.tsx:232"
+      "src/components/deliveries/QuickDeliveryModal.tsx:348"
     ],
     "create_quote_from_template": [
-      "src/pages/QuoteBuilder.tsx:969"
+      "src/pages/QuoteBuilder.tsx:1253"
     ],
     "create_quote_version": [
-      "src/pages/QuoteBuilder.tsx:1129"
+      "src/pages/QuoteBuilder.tsx:1616",
+      "src/pages/QuoteBuilder.tsx:1737"
     ],
     "create_rebate_claim": [
       "src/pages/Rebates.tsx:297"
     ],
+    "create_return": [
+      "src/pages/Returns.tsx:226"
+    ],
+    "create_rush_order": [
+      "src/pages/NewOrder.tsx:478"
+    ],
+    "create_split_invoices_from_order": [
+      "src/pages/OrderDetail.tsx:818"
+    ],
     "create_vendor_bill": [
       "src/pages/NewVendorBill.tsx:146"
     ],
+    "delete_invoices": [
+      "src/pages/FieldApplicationInvoice.tsx:1830",
+      "src/pages/Invoices.tsx:423"
+    ],
     "delete_prepay_credit": [
-      "src/pages/PrepaymentManager.tsx:250"
+      "src/pages/PrepaymentManager.tsx:253"
     ],
     "delete_vendor": [
       "src/pages/Vendors.tsx:152"
     ],
     "derive_customer_shares_from_fields": [
-      "src/pages/FieldApplicationInvoice.tsx:252"
+      "src/pages/FieldApplicationInvoice.tsx:1198"
+    ],
+    "dismiss_watchdog_flag": [
+      "src/components/watchdog/WatchdogFlagBanner.tsx:185",
+      "src/pages/WatchdogExceptions.tsx:316"
+    ],
+    "dispatch_job_locations": [
+      "src/components/dispatch/DispatchWizard.tsx:214",
+      "src/pages/DispatchBoard.tsx:1219"
     ],
     "draw_down_quote": [
-      "src/pages/QuoteBuilder.tsx:1306"
+      "src/pages/QuoteBuilder.tsx:1960"
     ],
     "duplicate_quote": [
-      "src/pages/CustomerDetail.tsx:978",
-      "src/pages/Quotes.tsx:50"
+      "src/pages/CustomerDetail.tsx:1001",
+      "src/pages/Quotes.tsx:110"
     ],
     "edit_delivery": [
-      "src/pages/DeliveryDetail.tsx:502"
+      "src/pages/DeliveryDetail.tsx:524"
     ],
     "edit_prepay_credit": [
-      "src/pages/PrepaymentManager.tsx:209"
+      "src/pages/PrepaymentManager.tsx:212"
     ],
     "financial_dashboard_summary": [
       "src/components/dashboard/DailyBrief.tsx:48",
+      "src/components/dashboard/FinanceSnapshotCard.tsx:40",
       "src/pages/FinancialDashboard.tsx:184"
     ],
     "generate_batch_statements": [
-      "src/pages/MonthEndClose.tsx:224"
+      "src/pages/MonthEndClose.tsx:346"
     ],
     "generate_finance_charges": [
-      "src/components/invoices/FinanceChargePreviewModal.tsx:114"
+      "src/components/invoices/FinanceChargePreviewModal.tsx:112"
+    ],
+    "generate_order_number": [
+      "src/pages/BlendTicketDetail.tsx:680"
     ],
     "generate_quote_number": [
-      "src/pages/QuoteBuilder.tsx:335"
+      "src/pages/QuoteBuilder.tsx:549"
     ],
     "generate_ticket_number": [
-      "src/components/blendtickets/BulkTicketUpload.tsx:118",
-      "src/components/blendtickets/ManualTicketCreate.tsx:159"
+      "src/components/blendtickets/BulkTicketUpload.tsx:121",
+      "src/components/blendtickets/ManualTicketCreate.tsx:164"
     ],
     "get_ap_aging": [
       "src/pages/AccountsPayable.tsx:43"
@@ -235,101 +292,150 @@
     ],
     "get_ar_aging": [
       "src/components/team/CustomerContextCard.tsx:44",
-      "src/pages/ARaging.tsx:90",
-      "src/pages/CustomerDetail.tsx:281"
+      "src/pages/ARaging.tsx:98",
+      "src/pages/AccountsReceivable.tsx:42",
+      "src/pages/CustomerDetail.tsx:284"
     ],
     "get_ar_reminder_candidates": [
-      "src/pages/ARaging.tsx:463"
+      "src/pages/ARaging.tsx:482"
     ],
     "get_batch_year_end_summaries": [
-      "src/pages/MonthEndClose.tsx:270",
-      "src/pages/Reports.tsx:414"
+      "src/pages/MonthEndClose.tsx:393",
+      "src/pages/Reports.tsx:421"
+    ],
+    "get_booking_settlement": [
+      "src/pages/QuoteBuilder.tsx:412"
     ],
     "get_bottom_line_pnl": [
-      "src/pages/Reports.tsx:253"
+      "src/pages/Reports.tsx:256"
     ],
     "get_chemical_history": [
-      "src/pages/Reports.tsx:296"
+      "src/pages/Reports.tsx:299"
     ],
     "get_commission_balance_report": [
-      "src/pages/Reports.tsx:278"
+      "src/pages/Reports.tsx:281"
     ],
     "get_customer_balance_listing": [
-      "src/pages/Reports.tsx:271"
+      "src/pages/Reports.tsx:274"
     ],
     "get_customer_farm_group": [
-      "src/pages/SalesReports.tsx:132"
+      "src/pages/SalesReports.tsx:138"
     ],
     "get_customer_statement": [
-      "src/pages/ARaging.tsx:138",
-      "src/pages/ARaging.tsx:352",
-      "src/pages/CustomerDetail.tsx:287"
+      "src/pages/ARaging.tsx:146",
+      "src/pages/ARaging.tsx:371",
+      "src/pages/CustomerDetail.tsx:290"
     ],
     "get_customer_summary": [
-      "src/components/customers/CustomerSummaryBar.tsx:44"
+      "src/components/customers/CustomerSummaryBar.tsx:46"
     ],
     "get_customer_transaction_review": [
       "src/pages/CustomerTransactionReview.tsx:43"
     ],
     "get_customer_year_end_summary": [
-      "src/pages/CustomerDetail.tsx:533",
-      "src/pages/Reports.tsx:429"
+      "src/pages/CustomerDetail.tsx:539",
+      "src/pages/Reports.tsx:436"
     ],
     "get_dashboard_action_items": [
-      "src/components/dashboard/ActionQueue.tsx:143"
+      "src/components/dashboard/ActionQueue.tsx:194"
     ],
     "get_detailed_statement_data": [
-      "src/pages/ARaging.tsx:382",
-      "src/pages/ARaging.tsx:428",
-      "src/pages/ARaging.tsx:615"
+      "src/pages/ARaging.tsx:401",
+      "src/pages/ARaging.tsx:447",
+      "src/pages/ARaging.tsx:644"
+    ],
+    "get_dispatch_board_jobs": [
+      "src/pages/DispatchBoard.tsx:186"
+    ],
+    "get_dispatch_stock_status": [
+      "src/pages/DispatchBoard.tsx:399"
+    ],
+    "get_dispatched_list": [
+      "src/pages/DispatchBoard.tsx:1151",
+      "src/pages/FieldView.tsx:204"
+    ],
+    "get_expiring_planned_holds": [
+      "src/pages/OfficeCockpit.tsx:392"
     ],
     "get_field_dashboard": [
-      "src/pages/FieldDashboard.tsx:65"
+      "src/pages/FieldDashboard.tsx:71"
     ],
     "get_field_geojson": [
-      "src/pages/FieldSetup.tsx:131",
-      "src/pages/JobDetail.tsx:434"
+      "src/pages/FieldApplicationInvoice.tsx:475",
+      "src/pages/FieldSetup.tsx:150",
+      "src/pages/JobDetail.tsx:1758"
     ],
     "get_field_polygons": [
-      "src/pages/FieldSetup.tsx:163"
+      "src/pages/FieldSetup.tsx:182"
+    ],
+    "get_fields_geojson_by_ids": [
+      "src/pages/DispatchBoard.tsx:458",
+      "src/pages/FieldView.tsx:303"
     ],
     "get_fields_with_geojson": [
-      "src/pages/CustomerDetail.tsx:178",
-      "src/pages/FieldDashboard.tsx:81",
-      "src/pages/Fields.tsx:61"
+      "src/pages/CustomerDetail.tsx:181",
+      "src/pages/FieldDashboard.tsx:87",
+      "src/pages/Fields.tsx:66"
     ],
     "get_gross_sales_report": [
-      "src/pages/Reports.tsx:260"
+      "src/pages/Reports.tsx:263"
     ],
     "get_inventory_cost_report": [
-      "src/pages/Reports.tsx:306"
+      "src/pages/Reports.tsx:309"
     ],
     "get_inventory_forecast": [
-      "src/pages/InventoryPage.tsx:265"
+      "src/pages/InventoryPage.tsx:269"
     ],
     "get_inventory_position": [
-      "src/pages/InventoryPage.tsx:168"
+      "src/pages/InventoryPage.tsx:172",
+      "src/pages/ReceivingHub.tsx:101",
+      "src/pages/ToShip.tsx:167"
+    ],
+    "get_job_billed_customers": [
+      "src/lib/billedCustomersResolver.ts:56"
+    ],
+    "get_job_fields_with_geojson": [
+      "src/components/jobs/JobFieldMap.tsx:84"
+    ],
+    "get_job_inventory_shortfalls": [
+      "src/pages/OfficeCockpit.tsx:386"
+    ],
+    "get_job_proof_data": [
+      "src/pages/FieldApplicationInvoice.tsx:2005",
+      "src/pages/FieldApplicationInvoice.tsx:2134"
+    ],
+    "get_jobs_billed_customers": [
+      "src/pages/Jobs.tsx:560"
+    ],
+    "get_label_coverage_report": [
+      "src/pages/LabelReview.tsx:234"
     ],
     "get_logbook_by_applicator": [
-      "src/components/reports/LogbookReport.tsx:93"
+      "src/components/reports/LogbookReport.tsx:95"
     ],
     "get_logbook_by_customer": [
-      "src/components/reports/LogbookReport.tsx:86"
+      "src/components/reports/LogbookReport.tsx:88"
     ],
     "get_logbook_by_field": [
-      "src/components/reports/LogbookReport.tsx:100"
+      "src/components/reports/LogbookReport.tsx:102"
     ],
     "get_logbook_faa": [
-      "src/components/reports/LogbookReport.tsx:112"
+      "src/components/reports/LogbookReport.tsx:114"
+    ],
+    "get_lot_application_trace": [
+      "src/lib/lotRpc.ts:63"
     ],
     "get_monthly_summary": [
-      "src/pages/MonthEndClose.tsx:99"
+      "src/pages/MonthEndClose.tsx:151"
     ],
     "get_notes_for_entity": [
       "src/components/team/RelatedNotes.tsx:38"
     ],
+    "get_open_booking_rollover": [
+      "src/pages/Quotes.tsx:85"
+    ],
     "get_program_completion": [
-      "src/pages/Dashboard.tsx:314",
+      "src/pages/Dashboard.tsx:323",
       "src/pages/ProgramTracker.tsx:53"
     ],
     "get_receiving_log": [
@@ -338,17 +444,20 @@
     "get_receiving_summary": [
       "src/pages/ReceivingLog.tsx:80"
     ],
+    "get_recent_lots_for_product": [
+      "src/lib/lotRpc.ts:44"
+    ],
     "get_rup_sales_register": [
       "src/pages/Compliance.tsx:165"
     ],
     "get_sales_detail_report": [
-      "src/pages/SalesReports.tsx:162"
+      "src/pages/SalesReports.tsx:168"
     ],
     "get_sales_summary_report": [
-      "src/pages/SalesReports.tsx:170"
+      "src/pages/SalesReports.tsx:176"
     ],
     "get_season_comparison": [
-      "src/pages/ARaging.tsx:105"
+      "src/pages/ARaging.tsx:113"
     ],
     "get_team_board_deliveries": [
       "src/components/team/TodaysDeliveries.tsx:104"
@@ -356,198 +465,266 @@
     "get_team_workload": [
       "src/components/team/WorkloadView.tsx:47"
     ],
+    "get_watchdog_flags": [
+      "src/components/watchdog/WatchdogFlagBanner.tsx:81",
+      "src/pages/OfficeCockpit.tsx:376",
+      "src/pages/OfficeCockpit.tsx:841",
+      "src/pages/WatchdogExceptions.tsx:92"
+    ],
     "get_yesterday_delivery_recap": [
       "src/components/team/YesterdayRecap.tsx:20"
     ],
     "global_search": [
-      "src/components/ui/CommandPalette.tsx:243"
+      "src/components/ui/CommandPalette.tsx:250"
     ],
     "issue_return_credit": [
-      "src/pages/Returns.tsx:417"
+      "src/pages/Returns.tsx:410"
     ],
     "link_blend_ticket_to_order": [
-      "src/pages/BlendTicketDetail.tsx:1340",
-      "src/pages/BlendTicketDetail.tsx:559"
+      "src/pages/BlendTicketDetail.tsx:1377",
+      "src/pages/BlendTicketDetail.tsx:581"
     ],
     "link_fields_to_parent": [
-      "src/pages/Fields.tsx:223"
-    ],
-    "load_recipe_into_job": [
-      "src/pages/JobDetail.tsx:717"
+      "src/pages/Fields.tsx:247"
     ],
     "log_failed_notification": [
-      "src/lib/notificationTriggers.ts:37",
-      "src/pages/Dashboard.tsx:336",
-      "src/pages/Dashboard.tsx:348"
+      "src/lib/notificationTriggers.ts:38",
+      "src/pages/Dashboard.tsx:344",
+      "src/pages/Dashboard.tsx:356"
     ],
     "manual_inventory_add": [
-      "src/pages/InventoryPage.tsx:469"
+      "src/pages/InventoryPage.tsx:477"
     ],
     "mark_inventory_row_verified": [
-      "src/pages/IntegrityCleanup.tsx:281"
+      "src/pages/IntegrityCleanup.tsx:357"
     ],
     "match_quick_receive_items": [
-      "src/lib/offlineSync.ts:191",
+      "src/lib/offlineSync.ts:204",
       "src/pages/QuickReceive.tsx:191"
     ],
     "next_cycle_count_number": [
       "src/pages/CycleCounts.tsx:155"
     ],
+    "next_job_number": [
+      "src/pages/JobDetail.tsx:1633"
+    ],
     "next_po_number": [
       "src/components/purchase-orders/BulkPOImport.tsx:339",
-      "src/pages/NewPurchaseOrder.tsx:165"
-    ],
-    "next_return_number": [
-      "src/pages/Returns.tsx:222"
+      "src/pages/NewPurchaseOrder.tsx:180"
     ],
     "notify_damaged_receiving": [
-      "src/lib/notificationTriggers.ts:278"
+      "src/lib/notificationTriggers.ts:419"
     ],
     "operational_dashboard_summary": [
-      "src/pages/Dashboard.tsx:267"
+      "src/pages/Dashboard.tsx:276"
     ],
     "post_commission_payment": [
-      "src/pages/CommissionPayments.tsx:262"
+      "src/pages/CommissionPayments.tsx:311"
     ],
     "post_invoice": [
-      "src/pages/FieldApplicationInvoice.tsx:487",
-      "src/pages/InvoiceDetail.tsx:551"
+      "src/pages/FieldApplicationInvoice.tsx:1640",
+      "src/pages/FieldInvoicesUnposted.tsx:425",
+      "src/pages/InvoiceDetail.tsx:671",
+      "src/pages/Invoices.tsx:244",
+      "src/pages/OfficeCockpit.tsx:890",
+      "src/pages/OrderDetail.tsx:918"
     ],
     "post_invoice_group": [
-      "src/pages/FieldApplicationInvoice.tsx:478",
-      "src/pages/InvoiceDetail.tsx:542"
+      "src/pages/FieldApplicationInvoice.tsx:1631",
+      "src/pages/FieldInvoicesUnposted.tsx:400",
+      "src/pages/InvoiceDetail.tsx:662"
     ],
     "preview_field_app_invoice_split": [
-      "src/pages/FieldApplicationInvoice.tsx:328"
+      "src/pages/FieldApplicationInvoice.tsx:1280"
     ],
     "preview_finance_charges": [
       "src/components/invoices/FinanceChargePreviewModal.tsx:50"
     ],
+    "price_order": [
+      "src/pages/OrderDetail.tsx:995"
+    ],
     "reassign_delivery": [
-      "src/pages/Deliveries.tsx:697",
-      "src/pages/DeliveryDetail.tsx:598"
+      "src/pages/Deliveries.tsx:841",
+      "src/pages/DeliveryDetail.tsx:625"
     ],
     "receive_po_items": [
-      "src/lib/offlineSync.ts:155",
-      "src/pages/InventoryPage.tsx:556",
-      "src/pages/PurchaseOrderDetail.tsx:248",
-      "src/pages/QuickReceive.tsx:314"
+      "src/lib/offlineSync.ts:168",
+      "src/pages/InventoryPage.tsx:572",
+      "src/pages/PurchaseOrderDetail.tsx:253",
+      "src/pages/QuickReceive.tsx:314",
+      "src/pages/ReceivingHub.tsx:185"
     ],
     "receive_return": [
-      "src/pages/Returns.tsx:391"
+      "src/pages/Returns.tsx:384"
     ],
     "reconcile_negative_inventory": [
-      "src/pages/IntegrityCleanup.tsx:256"
+      "src/pages/IntegrityCleanup.tsx:332"
+    ],
+    "record_job_post_notifications": [
+      "src/pages/FieldApplicationInvoice.tsx:2088",
+      "src/pages/JobDetail.tsx:667"
+    ],
+    "record_job_pre_notifications": [
+      "src/pages/JobDetail.tsx:491"
     ],
     "record_vendor_payment": [
       "src/pages/VendorBillDetail.tsx:151"
     ],
+    "refresh_watchdog_flags": [
+      "src/components/watchdog/WatchdogFlagBanner.tsx:126",
+      "src/pages/OfficeCockpit.tsx:840",
+      "src/pages/WatchdogExceptions.tsx:117"
+    ],
+    "reject_return": [
+      "src/pages/Returns.tsx:316"
+    ],
     "release_expired_quote_holds": [
-      "src/pages/Dashboard.tsx:343"
+      "src/pages/Dashboard.tsx:351"
     ],
     "release_inventory_hold": [
-      "src/pages/InventoryPage.tsx:437"
+      "src/pages/InventoryPage.tsx:443"
     ],
     "reopen_accounting_period": [
-      "src/pages/MonthEndClose.tsx:198"
+      "src/pages/MonthEndClose.tsx:315"
     ],
     "restore_quote_version": [
-      "src/pages/QuoteBuilder.tsx:1181"
+      "src/pages/QuoteBuilder.tsx:1801"
     ],
     "retire_inventory_item": [
-      "src/pages/InventoryPage.tsx:628"
+      "src/pages/InventoryPage.tsx:644"
     ],
     "reverse_completed_cycle_count": [
       "src/pages/CycleCounts.tsx:373"
     ],
     "reverse_receiving_record": [
-      "src/pages/PurchaseOrderDetail.tsx:377",
+      "src/pages/PurchaseOrderDetail.tsx:382",
       "src/pages/ReceivingLog.tsx:190"
     ],
     "reverse_write_off": [
-      "src/pages/InvoiceDetail.tsx:653"
+      "src/pages/InvoiceDetail.tsx:920"
+    ],
+    "revert_quote_status": [
+      "src/pages/QuoteBuilder.tsx:1506"
     ],
     "rollover_quote_to_season": [
-      "src/pages/QuoteBuilder.tsx:985"
+      "src/pages/QuoteBuilder.tsx:1269"
     ],
     "save_blend_recipe": [
-      "src/pages/BlendRecipes.tsx:202"
+      "src/pages/BlendRecipes.tsx:208",
+      "src/pages/BlendRecipes.tsx:257",
+      "src/pages/JobDetail.tsx:2625"
     ],
     "save_blend_ticket": [
-      "src/pages/BlendTicketDetail.tsx:357"
+      "src/pages/BlendTicketDetail.tsx:363"
     ],
     "save_blend_ticket_fields": [
-      "src/pages/BlendTicketDetail.tsx:434"
+      "src/pages/BlendTicketDetail.tsx:450"
     ],
     "save_customer": [
-      "src/pages/CustomerDetail.tsx:483"
+      "src/pages/CustomerDetail.tsx:487"
     ],
     "save_field": [
-      "src/components/fields/BulkFieldImport.tsx:346",
-      "src/pages/FieldSetup.tsx:320"
+      "src/components/fields/BulkFieldImport.tsx:438",
+      "src/pages/FieldSetup.tsx:361"
     ],
     "save_field_app_invoice": [
-      "src/pages/FieldApplicationInvoice.tsx:370"
+      "src/pages/FieldApplicationInvoice.tsx:1417"
     ],
-    "save_field_geometry": [
-      "src/components/fields/BulkFieldImport.tsx:362",
-      "src/pages/FieldSetup.tsx:366"
-    ],
-    "save_field_polygons": [
-      "src/pages/FieldSetup.tsx:346"
+    "save_field_crop_history": [
+      "src/pages/FieldDashboard.tsx:753"
     ],
     "save_invoice": [
-      "src/pages/InvoiceDetail.tsx:507"
+      "src/pages/InvoiceDetail.tsx:627"
     ],
     "save_job": [
-      "src/pages/JobDetail.tsx:552"
+      "src/pages/JobDetail.tsx:2163"
+    ],
+    "save_job_applied_record": [
+      "src/components/jobs/AppliedRecordsManager.tsx:295"
     ],
     "save_purchase_order": [
-      "src/pages/NewPurchaseOrder.tsx:191",
-      "src/pages/PurchaseOrderDetail.tsx:456"
+      "src/pages/NewPurchaseOrder.tsx:206",
+      "src/pages/PurchaseOrderDetail.tsx:461"
     ],
     "save_quote": [
-      "src/pages/QuoteBuilder.tsx:873"
+      "src/pages/QuoteBuilder.tsx:1155"
     ],
     "save_quote_template": [
-      "src/pages/QuoteBuilder.tsx:948"
+      "src/pages/QuoteBuilder.tsx:1232"
     ],
     "save_vendor": [
       "src/pages/Vendors.tsx:130"
     ],
+    "set_application_record_lots": [
+      "src/lib/lotRpc.ts:51"
+    ],
+    "set_field_boundary": [
+      "src/components/fields/BulkFieldImport.tsx:455",
+      "src/pages/FieldSetup.tsx:388"
+    ],
+    "set_field_override_acres": [
+      "src/components/fields/BulkFieldImport.tsx:487",
+      "src/pages/FieldSetup.tsx:417"
+    ],
     "start_job": [
-      "src/pages/JobDetail.tsx:621"
+      "src/pages/FieldView.tsx:459",
+      "src/pages/JobDetail.tsx:2361",
+      "src/pages/JobDetail.tsx:2389"
+    ],
+    "transfer_invoice_to_job": [
+      "src/pages/FieldApplicationInvoice.tsx:2206",
+      "src/pages/InvoiceDetail.tsx:772"
     ],
     "transfer_job_to_invoice": [
-      "src/pages/JobDetail.tsx:693"
+      "src/pages/JobDetail.tsx:2454",
+      "src/pages/UnbilledApplications.tsx:185"
     ],
     "transition_rebate_claim": [
       "src/pages/Rebates.tsx:336"
     ],
+    "undispatch_job_locations": [
+      "src/pages/DispatchBoard.tsx:1273"
+    ],
     "unlink_blend_ticket_from_order": [
-      "src/pages/BlendTicketDetail.tsx:585"
+      "src/pages/BlendTicketDetail.tsx:607"
+    ],
+    "unpost_invoice": [
+      "src/pages/FieldApplicationInvoice.tsx:1702",
+      "src/pages/FieldInvoicesPosted.tsx:399",
+      "src/pages/InvoiceDetail.tsx:739"
+    ],
+    "unpost_invoice_group": [
+      "src/pages/FieldApplicationInvoice.tsx:1687",
+      "src/pages/InvoiceDetail.tsx:726"
     ],
     "update_cycle_count_item": [
       "src/pages/CycleCounts.tsx:252"
     ],
+    "update_field_app_applied_info": [
+      "src/pages/FieldApplicationInvoice.tsx:1497"
+    ],
+    "update_field_app_invoice_billing": [
+      "src/pages/FieldApplicationInvoice.tsx:1563"
+    ],
     "update_order_items": [
-      "src/lib/offlineSync.ts:161",
-      "src/pages/OrderDetail.tsx:428"
+      "src/lib/offlineSync.ts:174",
+      "src/pages/OrderDetail.tsx:495"
     ],
     "update_vendor_bill": [
       "src/pages/VendorBillDetail.tsx:211"
     ],
     "void_commission_payment": [
-      "src/pages/CommissionPayments.tsx:294"
+      "src/pages/CommissionPayments.tsx:343"
     ],
     "void_delivery": [
-      "src/pages/DeliveryDetail.tsx:565"
+      "src/pages/DeliveryDetail.tsx:592"
     ],
     "void_invoice": [
-      "src/pages/InvoiceDetail.tsx:571"
+      "src/pages/FieldApplicationInvoice.tsx:1760",
+      "src/pages/InvoiceDetail.tsx:691"
     ],
     "void_order": [
-      "src/pages/OrderDetail.tsx:565"
+      "src/pages/OrderDetail.tsx:625"
     ],
     "void_payment": [
       "src/pages/PaymentHistory.tsx:151"
@@ -561,21 +738,21 @@
   },
   "edge_callers": {
     "create-user": [
-      "src/pages/SettingsPage.tsx:261"
+      "src/pages/SettingsPage.tsx:477"
     ],
     "create-user?action=reset_password": [
-      "src/pages/SettingsPage.tsx:394"
+      "src/pages/SettingsPage.tsx:610"
     ],
     "process-blend-ticket": [
-      "src/components/blendtickets/BulkTicketUpload.tsx:204",
+      "src/components/blendtickets/BulkTicketUpload.tsx:207",
       "src/hooks/useOCRProcessor.ts:60",
-      "src/pages/BlendTicketDetail.tsx:459"
+      "src/pages/BlendTicketDetail.tsx:475"
     ],
     "process-document": [
       "src/lib/documentOCR.ts:179"
     ],
     "send-email": [
-      "src/lib/emailService.ts:49"
+      "src/lib/emailService.ts:56"
     ]
   },
   "cron_callers": {
@@ -682,6 +859,16 @@
       "revoke_risk": "caution — called internally by other SQL functions (owner-executed; REVOKE usually safe, verify)"
     },
     {
+      "name": "batch_post_invoices",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false,
+      "in_rls_policy": null,
+      "is_trigger_function": null,
+      "called_by_other_function": null,
+      "revoke_risk": "candidate — zero callers found anywhere"
+    },
+    {
       "name": "calculate_billing_splits",
       "args": null,
       "auth_exec": true,
@@ -742,16 +929,6 @@
       "revoke_risk": "candidate — zero callers found anywhere"
     },
     {
-      "name": "create_split_invoices_from_order",
-      "args": null,
-      "auth_exec": true,
-      "anon_exec": false,
-      "in_rls_policy": false,
-      "is_trigger_function": false,
-      "called_by_other_function": false,
-      "revoke_risk": "candidate — zero callers found anywhere"
-    },
-    {
       "name": "dashboard_summary",
       "args": null,
       "auth_exec": true,
@@ -803,16 +980,6 @@
     },
     {
       "name": "get_customer_delivery_remainders",
-      "args": null,
-      "auth_exec": true,
-      "anon_exec": false,
-      "in_rls_policy": false,
-      "is_trigger_function": false,
-      "called_by_other_function": false,
-      "revoke_risk": "candidate — zero callers found anywhere"
-    },
-    {
-      "name": "get_expiring_planned_holds",
       "args": null,
       "auth_exec": true,
       "anon_exec": false,
@@ -892,6 +1059,16 @@
       "revoke_risk": "DO-NOT-REVOKE-BLINDLY — load-bearing for triggers/RLS evaluation"
     },
     {
+      "name": "load_recipe_into_job",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false,
+      "in_rls_policy": null,
+      "is_trigger_function": null,
+      "called_by_other_function": null,
+      "revoke_risk": "candidate — zero callers found anywhere"
+    },
+    {
       "name": "log_comment_activity",
       "args": null,
       "auth_exec": true,
@@ -952,14 +1129,14 @@
       "revoke_risk": "caution — called internally by other SQL functions (owner-executed; REVOKE usually safe, verify)"
     },
     {
-      "name": "next_job_number",
+      "name": "next_return_number",
       "args": null,
       "auth_exec": true,
       "anon_exec": true,
-      "in_rls_policy": false,
-      "is_trigger_function": false,
-      "called_by_other_function": true,
-      "revoke_risk": "caution — called internally by other SQL functions (owner-executed; REVOKE usually safe, verify)"
+      "in_rls_policy": null,
+      "is_trigger_function": null,
+      "called_by_other_function": null,
+      "revoke_risk": "candidate — zero callers found anywhere"
     },
     {
       "name": "notify_mentioned_users_in_comment",
@@ -1062,13 +1239,23 @@
       "revoke_risk": "candidate — zero callers found anywhere"
     },
     {
-      "name": "revert_quote_status",
+      "name": "save_field_geometry",
       "args": null,
       "auth_exec": true,
       "anon_exec": false,
-      "in_rls_policy": false,
-      "is_trigger_function": false,
-      "called_by_other_function": false,
+      "in_rls_policy": null,
+      "is_trigger_function": null,
+      "called_by_other_function": null,
+      "revoke_risk": "candidate — zero callers found anywhere"
+    },
+    {
+      "name": "save_field_polygons",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false,
+      "in_rls_policy": null,
+      "is_trigger_function": null,
+      "called_by_other_function": null,
       "revoke_risk": "candidate — zero callers found anywhere"
     },
     {
