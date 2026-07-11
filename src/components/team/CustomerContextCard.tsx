@@ -7,6 +7,7 @@ interface CustomerContext {
   assigned_tier: number;
   credit_limit_cents: number;
   total_outstanding: number;
+  open_credit_cents: number;
   open_orders: number;
   last_delivery_date: string | null;
 }
@@ -63,6 +64,7 @@ export default function CustomerContextCard({ customerId }: Props) {
           assigned_tier: custRes.data.assigned_tier ?? 1,
           credit_limit_cents: custRes.data.credit_limit_cents ?? 0,
           total_outstanding: Number((arRow as Record<string, unknown>)?.total_outstanding ?? 0),
+          open_credit_cents: Number((arRow as Record<string, unknown>)?.open_credit_cents ?? 0),
           open_orders: ordersRes.count ?? 0,
           last_delivery_date: delRes.data?.[0]?.completed_at ?? null,
         };
@@ -112,6 +114,12 @@ export default function CustomerContextCard({ customerId }: Props) {
         <DollarSign className="w-3 h-3" />
         AR: {arDisplay}
       </span>
+      {ctx.open_credit_cents > 0 && (
+        <span className="flex items-center gap-1 text-amber-600" title="Unapplied credit memos on file">
+          <DollarSign className="w-3 h-3" />
+          Credit: ${(ctx.open_credit_cents / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+        </span>
+      )}
       <span className="flex items-center gap-1 text-gray-600">
         <ShoppingCart className="w-3 h-3" />
         {ctx.open_orders} open order{ctx.open_orders !== 1 ? 's' : ''}

@@ -41,6 +41,7 @@ const makePreviews = (): FinanceChargePreview[] => [
     days_overdue: 45,
     charge_amount_cents: 7500,
     finance_charge_enabled: true,
+    open_credit_cents: 40000,
   },
   {
     customer_id: 'c2',
@@ -52,6 +53,7 @@ const makePreviews = (): FinanceChargePreview[] => [
     days_overdue: 120,
     charge_amount_cents: 3000,
     finance_charge_enabled: true,
+    open_credit_cents: 0,
   },
 ];
 
