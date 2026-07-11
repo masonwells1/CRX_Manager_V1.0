@@ -39,7 +39,7 @@ type PORaw = {
   items: POItemRaw[] | null;
 };
 
-type POLine = {
+export type POLine = {
   po_id: string;
   po_item_id: string;
   po_number: string;
@@ -291,7 +291,7 @@ export default function ReceivingHubPanel() {
                     </div>
                     {/* Commitment snapshot from get_inventory_position */}
                     {p && (
-                      <div className="flex items-center gap-3 text-xs">
+                      <div className="grid w-full grid-cols-3 gap-2 text-xs md:flex md:w-auto md:items-center md:gap-3">
                         <Snapshot label="On Floor" value={p.quantity_available} />
                         <Snapshot label="On Hold" value={p.holds_qty} tone="amber" />
                         <Snapshot label="On Order" value={p.quantity_on_order} tone="teal" />
@@ -301,7 +301,18 @@ export default function ReceivingHubPanel() {
                     )}
                   </div>
 
-                  <div className="mt-3 overflow-x-auto">
+                  <ReceivingHubLineCards
+                    lines={g.lines}
+                    productName={g.product_name}
+                    onReceive={(line) => {
+                      receiveIdem.resetKey();
+                      setReceiveTarget({ line, product_name: g.product_name });
+                      setReceiveQty(String(line.remaining));
+                    }}
+                    onOpen={(line) => navigate(`/purchase-orders/${line.po_id}`)}
+                  />
+
+                  <div className="mt-3 hidden overflow-x-auto md:block" data-testid="receiving-hub-desktop-table">
                     <table className="w-full text-sm">
                       <thead>
                         <tr className="text-secondary border-b border-gray-100">
@@ -377,6 +388,7 @@ export default function ReceivingHubPanel() {
             <input
               id="receive-qty"
               type="number"
+              inputMode="decimal"
               value={receiveQty}
               readOnly
               aria-readonly="true"
@@ -398,6 +410,71 @@ export default function ReceivingHubPanel() {
           </div>
         </div>
       </Modal>
+    </div>
+  );
+}
+
+export function ReceivingHubLineCards({
+  lines,
+  productName,
+  onReceive,
+  onOpen,
+}: {
+  lines: POLine[];
+  productName: string;
+  onReceive: (line: POLine) => void;
+  onOpen: (line: POLine) => void;
+}) {
+  return (
+    <div className="mt-3 space-y-3 md:hidden" data-testid="receiving-hub-mobile-cards">
+      {lines.map((line) => (
+        <article key={line.po_item_id} className="min-w-0 rounded-xl border border-gray-200 bg-gray-50 p-3">
+          <div className="flex min-w-0 items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="truncate font-medium text-nav-dark">{line.vendor}</p>
+              <p className="mt-0.5 text-xs text-secondary">
+                PO <span className="font-semibold text-crx-green">{line.po_number}</span>
+                {' · '}{line.expected_date ? new Date(line.expected_date + 'T00:00:00').toLocaleDateString() : 'Arrival unknown'}
+              </p>
+            </div>
+            <span className="shrink-0 rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-700">
+              {fmtUnits(line.remaining)} remaining
+            </span>
+          </div>
+
+          <dl className="mt-3 grid grid-cols-2 gap-2 text-sm">
+            <div>
+              <dt className="text-xs text-secondary">Ordered</dt>
+              <dd className="font-mono font-medium text-nav-dark">{fmtUnits(line.ordered)}</dd>
+            </div>
+            <div>
+              <dt className="text-xs text-secondary">Received</dt>
+              <dd className="font-mono font-medium text-nav-dark">{fmtUnits(line.received)}</dd>
+            </div>
+          </dl>
+
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => onReceive(line)}
+              className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-crx-green px-3 text-sm font-medium text-white"
+              aria-label={`Receive ${productName} from ${line.vendor}`}
+            >
+              <PackagePlus className="h-4 w-4" />
+              Receive
+            </button>
+            <button
+              type="button"
+              onClick={() => onOpen(line)}
+              className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-gray-200 bg-white px-3 text-sm font-medium text-crx-green"
+              aria-label={`Open purchase order ${line.po_number}`}
+            >
+              Open PO
+              <ArrowRight className="h-4 w-4" />
+            </button>
+          </div>
+        </article>
+      ))}
     </div>
   );
 }

@@ -427,7 +427,7 @@ export default function QuickReceivePanel() {
           {/* Vendor + Storage */}
           <Card>
             <CardHeader title="Shipment" accent="Info" />
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4" data-testid="quick-receive-shipment-fields">
               <div>
                 <label className="block text-sm font-medium text-secondary mb-1">
                   Vendor <span className="text-xs text-gray-400">(optional — helps match POs)</span>
@@ -438,7 +438,7 @@ export default function QuickReceivePanel() {
                   onChange={(e) => setVendor(e.target.value)}
                   list="qr-vendor-list"
                   placeholder="Enter or select vendor..."
-                  className="w-full px-3 py-2.5 text-sm text-nav-dark bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  className="min-h-11 w-full px-3 py-2.5 text-base md:text-sm text-nav-dark bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 />
                 <datalist id="qr-vendor-list">
                   {vendors.map((v) => (
@@ -451,7 +451,7 @@ export default function QuickReceivePanel() {
                 <select
                   value={storageLocation}
                   onChange={(e) => setStorageLocation(e.target.value)}
-                  className="w-full px-3 py-2.5 text-sm text-nav-dark bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  className="min-h-11 w-full px-3 py-2.5 text-base md:text-sm text-nav-dark bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 >
                   {STORAGE_LOCATIONS.map((loc) => (
                     <option key={loc} value={loc}>
@@ -496,9 +496,9 @@ export default function QuickReceivePanel() {
                     className="border border-gray-100 rounded-lg p-4 hover:border-crx-green/30 transition-colors"
                   >
                     {/* Main row: product + qty */}
-                    <div className="flex items-center gap-3">
+                    <div className="flex flex-wrap items-center gap-3 md:flex-nowrap">
                       {/* Product selector */}
-                      <div className="flex-1 min-w-0">
+                      <div className="w-full min-w-0 md:flex-1">
                         {item.product_id ? (
                           <button
                             onClick={() => {
@@ -529,16 +529,18 @@ export default function QuickReceivePanel() {
                       </div>
 
                       {/* Quantity */}
-                      <div className="w-28">
+                      <div className="w-full md:w-28">
                         <input
                           type="number"
+                          inputMode="decimal"
+                          aria-label="Quantity received"
                           value={item.quantity || ''}
                           onChange={(e) =>
                             updateItem(item.key, 'quantity', parseFloat(e.target.value) || 0)
                           }
                           min="0"
                           placeholder="Qty"
-                          className="w-full px-3 py-2.5 text-sm text-center font-medium border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                          className="min-h-11 w-full px-3 py-2.5 text-base md:text-sm text-center font-medium border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                         />
                       </div>
 
@@ -568,13 +570,13 @@ export default function QuickReceivePanel() {
 
                     {/* Expanded detail fields */}
                     {expandedItems.has(item.key) && (
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-3 pt-3 border-t border-gray-50">
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-3 pt-3 border-t border-gray-50">
                         <div>
                           <label className="block text-xs font-medium text-secondary mb-1">Condition</label>
                           <select
                             value={item.condition}
                             onChange={(e) => updateItem(item.key, 'condition', e.target.value)}
-                            className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-crx-green/30 focus:border-crx-green"
+                            className="min-h-11 w-full px-3 py-2.5 text-base md:text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-crx-green/30 focus:border-crx-green"
                           >
                             {CONDITIONS.map((c) => (
                               <option key={c.value} value={c.value}>
@@ -592,7 +594,7 @@ export default function QuickReceivePanel() {
                             value={item.lot_number}
                             onChange={(e) => updateItem(item.key, 'lot_number', e.target.value)}
                             placeholder="e.g. T-1234"
-                            className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-crx-green/30 focus:border-crx-green"
+                            className="min-h-11 w-full px-3 py-2.5 text-base md:text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-crx-green/30 focus:border-crx-green"
                           />
                         </div>
                         <div>
@@ -602,7 +604,7 @@ export default function QuickReceivePanel() {
                             value={item.notes}
                             onChange={(e) => updateItem(item.key, 'notes', e.target.value)}
                             placeholder="Any issues..."
-                            className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-crx-green/30 focus:border-crx-green"
+                            className="min-h-11 w-full px-3 py-2.5 text-base md:text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-crx-green/30 focus:border-crx-green"
                           />
                         </div>
                       </div>

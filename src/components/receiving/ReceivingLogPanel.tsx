@@ -27,6 +27,7 @@ import HelpTip from '../ui/HelpTip';
 import { exportToCSV } from '../../lib/csvExport';
 import { downloadReportPdf } from '../../lib/reportPdf';
 import type { ReceivingRecord, ReceivingSummary, Profile } from '../../types';
+import ReceivingLogMobileCards from './ReceivingLogMobileCards';
 
 /* ─── Condition badge helpers ─── */
 const conditionVariant = (c: string): 'success' | 'error' | 'warning' | 'default' => {
@@ -58,6 +59,7 @@ export default function ReceivingLogPanel() {
   const [receivedByFilter, setReceivedByFilter] = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
+  const [mobileSearch, setMobileSearch] = useState('');
 
   /* Lookup data */
   const [staffProfiles, setStaffProfiles] = useState<Profile[]>([]);
@@ -320,13 +322,21 @@ export default function ReceivingLogPanel() {
   ];
 
   const columns = canBulkAction ? [checkboxCol, ...dataColumns] : dataColumns;
+  const mobileRecords = useMemo(() => {
+    const query = mobileSearch.trim().toLowerCase();
+    if (!query) return records;
+    return records.filter((record) =>
+      [record.po_number, record.vendor, record.product_name, record.lot_number, record.notes]
+        .some((value) => String(value ?? '').toLowerCase().includes(query))
+    );
+  }, [mobileSearch, records]);
 
   return (
     <div className="space-y-4">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-        <div className="flex items-center gap-3 min-w-0">
-          <h2 className="text-xl font-semibold font-heading text-nav-dark whitespace-nowrap">
+        <div className="flex min-w-0 flex-col items-start gap-3 md:flex-row md:items-center">
+          <h2 className="text-xl font-semibold font-heading text-nav-dark md:whitespace-nowrap">
             Receiving Log
             <HelpTip text="Full audit trail of everything received. Filter by vendor, condition, or date range. Reverse a receiving record if there was an error — inventory and PO quantities will be adjusted automatically." className="ml-1" />
           </h2>
@@ -396,7 +406,82 @@ export default function ReceivingLogPanel() {
 
       {/* Data Table */}
       <Card padding={false}>
-        <div className="p-5">
+        <div className="space-y-3 p-3 md:hidden">
+          <label htmlFor="receiving-log-mobile-search" className="sr-only">Search receiving log</label>
+          <input
+            id="receiving-log-mobile-search"
+            type="search"
+            value={mobileSearch}
+            onChange={(e) => setMobileSearch(e.target.value)}
+            placeholder="Search PO, vendor, product, lot..."
+            className="min-h-11 w-full rounded-lg border border-gray-200 px-3 py-2.5 text-base focus:border-crx-green focus:outline-none focus:ring-2 focus:ring-crx-green/20"
+          />
+          <div className="grid grid-cols-2 gap-2">
+            <select
+              value={conditionFilter}
+              onChange={(e) => setConditionFilter(e.target.value)}
+              aria-label="Filter mobile log by condition"
+              className="min-h-11 min-w-0 rounded-lg border border-gray-200 px-2 text-sm"
+            >
+              <option value="">All Conditions</option>
+              <option value="good">Good</option>
+              <option value="damaged">Damaged</option>
+              <option value="short">Short</option>
+              <option value="wrong_product">Wrong Product</option>
+              <option value="mixed">Mixed</option>
+            </select>
+            <select
+              value={receivedByFilter}
+              onChange={(e) => setReceivedByFilter(e.target.value)}
+              aria-label="Filter mobile log by staff"
+              className="min-h-11 min-w-0 rounded-lg border border-gray-200 px-2 text-sm"
+            >
+              <option value="">All Staff</option>
+              {staffProfiles.map((staff) => <option key={staff.id} value={staff.id}>{staff.full_name}</option>)}
+            </select>
+          </div>
+          {vendors.length > 0 && (
+            <select
+              value={vendorFilter}
+              onChange={(e) => setVendorFilter(e.target.value)}
+              aria-label="Filter mobile log by vendor"
+              className="min-h-11 w-full rounded-lg border border-gray-200 px-2 text-sm"
+            >
+              <option value="">All Vendors</option>
+              {vendors.map((vendorName) => <option key={vendorName} value={vendorName}>{vendorName}</option>)}
+            </select>
+          )}
+          <div className="grid grid-cols-2 gap-2">
+            <input
+              type="date"
+              value={dateFrom}
+              onChange={(e) => setDateFrom(e.target.value)}
+              aria-label="Mobile date from"
+              className="min-h-11 min-w-0 rounded-lg border border-gray-200 px-2 text-sm"
+            />
+            <input
+              type="date"
+              value={dateTo}
+              onChange={(e) => setDateTo(e.target.value)}
+              aria-label="Mobile date to"
+              className="min-h-11 min-w-0 rounded-lg border border-gray-200 px-2 text-sm"
+            />
+          </div>
+          {canBulkAction && records.length > 0 && (
+            <button type="button" onClick={toggleAll} className="min-h-11 w-full rounded-lg border border-gray-200 text-sm font-medium text-secondary">
+              {allSelected ? 'Deselect All' : 'Select All'}
+            </button>
+          )}
+          <ReceivingLogMobileCards
+            records={mobileRecords}
+            canSelect={canBulkAction}
+            selected={selected}
+            onToggleSelect={toggleSelect}
+            onOpen={(record) => navigate(`/purchase-orders/${record.purchase_order_id}`)}
+          />
+        </div>
+
+        <div className="hidden p-5 md:block" data-testid="receiving-log-desktop-table">
           <DataTable<ReceivingRecord>
             data={records}
             columns={columns}

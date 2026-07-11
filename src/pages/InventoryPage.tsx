@@ -19,6 +19,7 @@ import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { logActivity } from '../lib/activityLogger';
 import TransactionLedgerModal from '../components/inventory/TransactionLedgerModal';
 import BatchAdjustModal from '../components/inventory/BatchAdjustModal';
+import InventoryPositionMobileCards from '../components/inventory/InventoryPositionMobileCards';
 import ConfirmModal from '../components/ui/ConfirmModal';
 import ReasonModal from '../components/ui/ReasonModal';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
@@ -67,6 +68,7 @@ export default function InventoryPage() {
   const [holds, setHolds] = useState<HoldWithRelations[]>([]);
   const [loading, setLoading] = useState(true);
   const [locationFilter, setLocationFilter] = useState('');
+  const [mobileSearch, setMobileSearch] = useState('');
   const [locations, setLocations] = useState<string[]>([]);
   const [activeTab, setActiveTab] = useState<'inventory' | 'forecast'>('inventory');
   const [forecastData, setForecastData] = useState<Array<{
@@ -668,6 +670,9 @@ export default function InventoryPage() {
     if (reorderFilter && !i.is_low_stock) return false;
     return true;
   });
+  const mobileFiltered = filtered.filter((item) =>
+    item.product_name.toLowerCase().includes(mobileSearch.trim().toLowerCase())
+  );
 
   const toggleSelect = (id: string) => {
     setSelectedIds((prev) => {
@@ -1038,7 +1043,7 @@ export default function InventoryPage() {
                   {items.map((item) => (
                     <div
                       key={item.id}
-                      className="flex items-center justify-between p-3 bg-red-50 border border-red-100 rounded-lg"
+                      className="flex flex-col gap-3 rounded-lg border border-red-100 bg-red-50 p-3 md:flex-row md:items-center md:justify-between"
                     >
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-medium text-nav-dark truncate">{item.product_name}</p>
@@ -1046,7 +1051,7 @@ export default function InventoryPage() {
                           {item.location || 'No location'} &middot; Unit: {item.inventory_unit || item.unit_size || '-'}
                         </p>
                       </div>
-                      <div className="flex items-center gap-6 text-sm">
+                      <div className="grid w-full grid-cols-2 gap-3 text-sm sm:grid-cols-4 md:flex md:w-auto md:items-center md:gap-6">
                         <div className="text-center">
                           <p className="text-xs text-secondary">Available</p>
                           <p className="font-semibold text-red-600">{item.quantity_available}</p>
@@ -1069,7 +1074,7 @@ export default function InventoryPage() {
                           onClick={() => navigate(`/purchase-orders/new?product=${item.product_id}`)}
                           title="Create a purchase order for this product"
                           aria-label={`Reorder ${item.product_name}`}
-                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-crx-green text-white text-xs font-medium hover:bg-crx-green/90 transition-colors flex-shrink-0"
+                          className="col-span-2 inline-flex min-h-11 items-center justify-center gap-1.5 rounded-lg bg-crx-green px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-crx-green/90 sm:col-span-4 md:min-h-0 md:flex-shrink-0"
                         >
                           <ShoppingCart className="w-3.5 h-3.5" />
                           Reorder
@@ -1085,7 +1090,58 @@ export default function InventoryPage() {
       })()}
 
       <Card padding={false}>
-        <div className="p-5">
+        <div className="border-b border-gray-100 p-3 md:hidden">
+          <label htmlFor="inventory-mobile-search" className="sr-only">Search products</label>
+          <input
+            id="inventory-mobile-search"
+            type="search"
+            value={mobileSearch}
+            onChange={(e) => setMobileSearch(e.target.value)}
+            placeholder="Search products..."
+            className="min-h-11 w-full rounded-lg border border-gray-200 px-3 py-2.5 text-base focus:border-crx-green focus:outline-none focus:ring-2 focus:ring-crx-green/20"
+          />
+          <div className="mt-2 grid grid-cols-2 gap-2">
+            <select
+              value={locationFilter}
+              onChange={(e) => setLocationFilter(e.target.value)}
+              aria-label="Filter inventory cards by location"
+              className="min-h-11 min-w-0 rounded-lg border border-gray-200 px-2 text-sm focus:border-crx-green focus:outline-none focus:ring-2 focus:ring-crx-green/20"
+            >
+              <option value="">All Locations</option>
+              {locations.map((location) => <option key={location} value={location}>{location}</option>)}
+            </select>
+            <button
+              type="button"
+              onClick={() => setReorderFilter(!reorderFilter)}
+              className={`min-h-11 rounded-lg border px-3 text-sm font-medium ${
+                reorderFilter ? 'border-red-200 bg-red-50 text-red-700' : 'border-gray-200 text-secondary'
+              }`}
+            >
+              Needs Reorder
+            </button>
+          </div>
+        </div>
+
+        <InventoryPositionMobileCards
+          rows={mobileFiltered}
+          isAdmin={isAdmin}
+          selectedIds={selectedIds}
+          onToggleSelect={toggleSelect}
+          onViewHistory={(row) => {
+            setLedgerProductId(row.product_id);
+            setLedgerProductName(row.product_name);
+            setLedgerOpen(true);
+          }}
+          onReceive={openReceiveModal}
+          onAdjust={(id) => {
+            adjustIdem.resetKey();
+            setSelectedId(id);
+            setAdjustOpen(true);
+          }}
+          onDelete={handleDelete}
+        />
+
+        <div className="hidden p-5 md:block">
           <EditableDataTable<InventoryRow>
             data={filtered}
             columns={columns}

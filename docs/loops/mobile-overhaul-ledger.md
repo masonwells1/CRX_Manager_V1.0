@@ -9,7 +9,7 @@
 | M1.1 Bottom nav + drawer | DONE | gpt-5.6-terra | 1 | 23/23 nav+drawer tests at narrow viewport; lint/typecheck/3,242 tests/build green; dev server served 200 |
 | M1.2 TopBar/Tabs/PageHeader mobile | DONE | gpt-5.6-terra | 1 | 15/15 mobile tests at 375px; full suite 3,248 + lint/typecheck/build green |
 | M2.1 Jobs & Dispatch cards | DONE | gpt-5.6-terra | 1 | MobileCardList primitive + Jobs/Dispatch cards; 8 focused mobile tests; full suite 3,255 + lint/typecheck/build green |
-| M2.2 Inventory & Receiving cards | QUEUED | gpt-5.6-sol | — | — |
+| M2.2 Inventory & Receiving cards | DONE | gpt-5.6-sol | 1 | 7/7 focused mobile tests; combined gates green (3,255 tests + lint/typecheck/build); dev server rendered clean at 375×812 (login wall = expected) |
 | M2.3 Today + Field Invoices pass | QUEUED | gpt-5.6-sol | — | — |
 | M3.1 Full-screen modals + toasts | QUEUED | gpt-5.6-luna | — | — |
 | M3.2 PWA manifest/update polish | QUEUED | gpt-5.6-luna | — | — |
