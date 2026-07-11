@@ -14,8 +14,8 @@
 | 2.0 Shared Tabs primitive + tests | 2 | DONE | gpt-5.6-sol | 1 | typecheck + 4/4 Tabs tests (render, switch, keyboard, badges) |
 | 2.1 Field-invoice consolidation (5 pages → 1 tabbed) | 2 | DONE | gpt-5.6-terra | 1 | net −3,000 lines; redirects live; 3216 tests + 4 gates green; Codex dev-server route check (login wall = expected) |
 | 2.2 Receiving consolidation (3 → 1) | 2 | DONE | gpt-5.6-sol | 1 | tabbed page + redirects; 3221 tests + 4 gates green |
-| 2.3 Prepay consolidation (2 → 1) | 2 | QUEUED | sol | — | — |
-| 2.4 Integrity consolidation (2 → 1) | 2 | QUEUED | luna | — | — |
+| 2.3 Prepay consolidation (2 → 1) | 2 | DONE | gpt-5.6-sol | 1 | tabbed page + redirects; 3228 tests + 4 gates green |
+| 2.4 Integrity consolidation (2 → 1) | 2 | DONE | gpt-5.6-sol (bundled w/ 2.3) | 1 | same gates |
 | 3.1 Shared PageHeader + adopt everywhere | 3 | QUEUED | sol | — | — |
 | 3.2 Spacing/Card consistency + InventoryPage adopts Tabs | 3 | QUEUED | luna | — | — |
 

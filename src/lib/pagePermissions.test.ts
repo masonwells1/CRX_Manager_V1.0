@@ -72,6 +72,16 @@ describe('getPageKeyFromPath', () => {
   it('maps the legacy receiving hub route to the consolidated receiving permission', () => {
     expect(getPageKeyFromPath('/receiving-hub')).toBe('receiving');
   });
+
+  it('maps legacy prepay routes to the consolidated prepay permission', () => {
+    expect(getPageKeyFromPath('/prepayments')).toBe('prepay');
+    expect(getPageKeyFromPath('/prepay-workspace')).toBe('prepay');
+  });
+
+  it('maps legacy integrity routes to the consolidated integrity permission', () => {
+    expect(getPageKeyFromPath('/integrity-report')).toBe('integrity');
+    expect(getPageKeyFromPath('/integrity-cleanup')).toBe('integrity');
+  });
 });
 
 // ── hasPageAccess ───────────────────────────────────────────────────────

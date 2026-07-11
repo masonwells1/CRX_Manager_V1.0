@@ -5,7 +5,7 @@ import { formatUSD } from '../lib/money';
 import Card from '../components/ui/Card';
 import ARaging from './ARaging';
 import PaymentHistory from './PaymentHistory';
-import PrepaymentManager from './PrepaymentManager';
+import PrepaymentManagerPanel from '../components/prepay/PrepaymentManagerPanel';
 import CustomerTransactionReview from './CustomerTransactionReview';
 
 // F4: one Accounts Receivable workspace that gathers the four previously-separate
@@ -115,7 +115,7 @@ export default function AccountsReceivable() {
       <div>
         {tab === 'aging' && <ARaging />}
         {tab === 'payments' && <PaymentHistory />}
-        {tab === 'prepayments' && <PrepaymentManager />}
+        {tab === 'prepayments' && <PrepaymentManagerPanel />}
         {tab === 'ledger' && <CustomerTransactionReview />}
       </div>
     </div>

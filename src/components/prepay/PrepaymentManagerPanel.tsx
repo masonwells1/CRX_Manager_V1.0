@@ -6,22 +6,22 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { DollarSign, Zap, RefreshCw, Plus, ArrowRight, X, ChevronDown, ChevronUp, Pencil, Trash2 } from 'lucide-react';
-import Card from '../components/ui/Card';
-import Button from '../components/ui/Button';
-import Badge from '../components/ui/Badge';
-import Input from '../components/ui/Input';
-import DataTable, { type Column } from '../components/ui/DataTable';
-import Modal from '../components/ui/Modal';
-import { useToast } from '../components/ui/Toast';
-import { useAuth } from '../contexts/AuthContext';
-import { supabase, assertRpcResult } from '../lib/db';
-import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
-import { exportToCSV, fmtCSV } from '../lib/csvExport';
-import { runCriticalAction } from '../lib/criticalAction';
-import { Sentry } from '../lib/sentry';
-import { parseDollarsToCents } from '../lib/parseCents';
-import { logActivity } from '../lib/activityLogger';
-import { formatCents as fmt } from '../lib/money';
+import Card from '../ui/Card';
+import Button from '../ui/Button';
+import Badge from '../ui/Badge';
+import Input from '../ui/Input';
+import DataTable, { type Column } from '../ui/DataTable';
+import Modal from '../ui/Modal';
+import { useToast } from '../ui/Toast';
+import { useAuth } from '../../contexts/AuthContext';
+import { supabase, assertRpcResult } from '../../lib/db';
+import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
+import { exportToCSV, fmtCSV } from '../../lib/csvExport';
+import { runCriticalAction } from '../../lib/criticalAction';
+import { Sentry } from '../../lib/sentry';
+import { parseDollarsToCents } from '../../lib/parseCents';
+import { logActivity } from '../../lib/activityLogger';
+import { formatCents as fmt } from '../../lib/money';
 
 interface CustomerPrepay {
   [k: string]: unknown;
@@ -50,7 +50,7 @@ interface BucketSplit {
   amount: string; // dollar string
 }
 
-export default function PrepaymentManager() {
+export default function PrepaymentManagerPanel() {
   const { profile } = useAuth();
   const { toast } = useToast();
   const navigate = useNavigate();
@@ -508,7 +508,7 @@ export default function PrepaymentManager() {
             icon={<ArrowRight className="w-3 h-3" />}
             onClick={(e: React.MouseEvent) => {
               e.stopPropagation();
-              navigate(`/prepay-workspace?customer=${r.id}`);
+              navigate(`/prepay?tab=workspace&customer=${r.id}`);
             }}
             showChevron={false}
           >

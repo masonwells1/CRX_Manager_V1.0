@@ -84,12 +84,12 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(
 <div id="header">
   <h1>⬡ CRX Manager — Architecture Map</h1>
   <!-- __STATS_START__ -->
-  <span id="stat-line" style="color:var(--muted);font-size:.8rem">90 routes · 210 RPC calls · 1 issues · Updated Jul 10, 2026</span>
+  <span id="stat-line" style="color:var(--muted);font-size:.8rem">92 routes · 210 RPC calls · 5 issues · Updated Jul 10, 2026</span>
   <!-- __STATS_END__ -->
   <div id="tabs">
     <button class="tab active" onclick="showTab('graph')">Graph</button>
     <button class="tab" onclick="showTab('lifecycle')">Lifecycles</button>
-    <button class="tab" onclick="showTab('problems')">Problems <span id="prob-count" style="background:#ef4444;color:#fff;border-radius:10px;padding:0 6px;font-size:.7rem;margin-left:4px">1</span></button>
+    <button class="tab" onclick="showTab('problems')">Problems <span id="prob-count" style="background:#ef4444;color:#fff;border-radius:10px;padding:0 6px;font-size:.7rem;margin-left:4px">5</span></button>
   </div>
 </div>
 
@@ -417,10 +417,30 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(
 
   <!-- __AUTO_PROBLEMS_START__ -->
       <div class="prob-section">
-        <h3>Auto-detected Orphan Pages (no inbound navigation) (1 found)</h3>
+        <h3>Auto-detected Orphan Pages (no inbound navigation) (5 found)</h3>
         <div class="prob-item ">
           <strong>Orphan page: /receiving/quick</strong>
           <p>Route exists (component: Navigate) but nothing references it — no sidebar link, no navigate() call, no nav-config entry. Only reachable by typing the URL directly.</p>
+          <span class="loc">src/App.tsx</span>
+        </div>
+        <div class="prob-item ">
+          <strong>Orphan page: /integrity-report</strong>
+          <p>Route exists (component: LegacyTabRedirect) but nothing references it — no sidebar link, no navigate() call, no nav-config entry. Only reachable by typing the URL directly.</p>
+          <span class="loc">src/App.tsx</span>
+        </div>
+        <div class="prob-item ">
+          <strong>Orphan page: /integrity-cleanup</strong>
+          <p>Route exists (component: LegacyTabRedirect) but nothing references it — no sidebar link, no navigate() call, no nav-config entry. Only reachable by typing the URL directly.</p>
+          <span class="loc">src/App.tsx</span>
+        </div>
+        <div class="prob-item ">
+          <strong>Orphan page: /prepayments</strong>
+          <p>Route exists (component: LegacyTabRedirect) but nothing references it — no sidebar link, no navigate() call, no nav-config entry. Only reachable by typing the URL directly.</p>
+          <span class="loc">src/App.tsx</span>
+        </div>
+        <div class="prob-item ">
+          <strong>Orphan page: /prepay-workspace</strong>
+          <p>Route exists (component: LegacyTabRedirect) but nothing references it — no sidebar link, no navigate() call, no nav-config entry. Only reachable by typing the URL directly.</p>
           <span class="loc">src/App.tsx</span>
         </div>
       </div><!-- __AUTO_PROBLEMS_END__ -->
@@ -989,20 +1009,20 @@ const NODES = [
       "problem": false
     },
     {
-      "id": "integrity-report",
-      "label": "IntegrityReport",
+      "id": "integrity",
+      "label": "Integrity",
       "type": "page-admin",
       "group": "Finance",
-      "path": "/integrity-report",
+      "path": "/integrity",
       "problem": false
     },
     {
-      "id": "integrity-cleanup",
-      "label": "IntegrityCleanup",
+      "id": "legacy-tab-redirect",
+      "label": "LegacyTabRedirect",
       "type": "page-admin",
       "group": "Finance",
-      "path": "/integrity-cleanup",
-      "problem": false
+      "path": "/integrity-report",
+      "problem": true
     },
     {
       "id": "commission-payments",
@@ -1021,11 +1041,11 @@ const NODES = [
       "problem": false
     },
     {
-      "id": "prepayment-manager",
-      "label": "PrepaymentManager",
+      "id": "prepay",
+      "label": "Prepay",
       "type": "page-admin",
       "group": "Finance",
-      "path": "/prepayments",
+      "path": "/prepay",
       "problem": false
     },
     {
@@ -1034,14 +1054,6 @@ const NODES = [
       "type": "page-admin",
       "group": "Core",
       "path": "/accounts-receivable",
-      "problem": false
-    },
-    {
-      "id": "prepay-workspace",
-      "label": "PrepayWorkspace",
-      "type": "page-admin",
-      "group": "Finance",
-      "path": "/prepay-workspace",
       "problem": false
     },
     {
@@ -1511,11 +1523,6 @@ const EDGES = [
     },
     {
       "s": "financial-dashboard",
-      "t": "prepay-workspace",
-      "type": "nav"
-    },
-    {
-      "s": "financial-dashboard",
       "t": "commission-payments",
       "type": "nav"
     },
@@ -1790,11 +1797,6 @@ const EDGES = [
       "type": "nav"
     },
     {
-      "s": "prepay-workspace",
-      "t": "prepayment-manager",
-      "type": "nav"
-    },
-    {
       "s": "product-detail",
       "t": "products",
       "type": "nav"
@@ -2000,16 +2002,6 @@ const EDGES = [
       "type": "rpc"
     },
     {
-      "s": "integrity-cleanup",
-      "t": "r-inventory",
-      "type": "rpc"
-    },
-    {
-      "s": "integrity-cleanup",
-      "t": "r-invoice",
-      "type": "rpc"
-    },
-    {
       "s": "inventory-page",
       "t": "r-inventory",
       "type": "rpc"
@@ -2087,11 +2079,6 @@ const EDGES = [
     {
       "s": "payment-history",
       "t": "r-payment",
-      "type": "rpc"
-    },
-    {
-      "s": "prepayment-manager",
-      "t": "r-invoice",
       "type": "rpc"
     },
     {

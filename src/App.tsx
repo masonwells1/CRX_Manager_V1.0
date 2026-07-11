@@ -39,8 +39,7 @@ const CropPrograms = lazy(() => import('./pages/CropPrograms'));
 const TeamBoard = lazy(() => import('./pages/TeamBoard'));
 const Notifications = lazy(() => import('./pages/Notifications'));
 const SettingsPage = lazy(() => import('./pages/SettingsPage'));
-const IntegrityReport = lazy(() => import('./pages/IntegrityReport'));
-const IntegrityCleanup = lazy(() => import('./pages/IntegrityCleanup'));
+const Integrity = lazy(() => import('./pages/Integrity'));
 // Payments.tsx removed — PaymentAllocation is now the sole payment page at /payments
 const Fields = lazy(() => import('./pages/Fields'));
 const FieldSetup = lazy(() => import('./pages/FieldSetup'));
@@ -75,8 +74,7 @@ const FieldView = lazy(() => import('./pages/FieldView'));
 const MonthEndClose = lazy(() => import('./pages/MonthEndClose'));
 const CommissionPayments = lazy(() => import('./pages/CommissionPayments'));
 const CustomerTransactionReview = lazy(() => import('./pages/CustomerTransactionReview'));
-const PrepaymentManager = lazy(() => import('./pages/PrepaymentManager'));
-const PrepayWorkspace = lazy(() => import('./pages/PrepayWorkspace'));
+const Prepay = lazy(() => import('./pages/Prepay'));
 const PaymentAllocation = lazy(() => import('./pages/PaymentAllocation'));
 const PaymentHistory = lazy(() => import('./pages/PaymentHistory'));
 const DeliveryRemainders = lazy(() => import('./pages/DeliveryRemainders'));
@@ -104,6 +102,18 @@ function PageLoader() {
       <div className="w-8 h-8 border-4 border-crx-green border-t-transparent rounded-full animate-spin" />
     </div>
   );
+}
+
+interface LegacyTabRedirectProps {
+  to: string;
+  tab: string;
+}
+
+function LegacyTabRedirect({ to, tab }: LegacyTabRedirectProps) {
+  const { search } = useLocation();
+  const params = new URLSearchParams(search);
+  params.set('tab', tab);
+  return <Navigate to={`${to}?${params.toString()}`} replace />;
 }
 
 /**
@@ -266,13 +276,16 @@ const router = createBrowserRouter([
           // Admin only
           { path: 'financial-dashboard', element: <ProtectedRoute allowedRoles={['admin']}><FinancialDashboard /></ProtectedRoute> },
           { path: 'month-end', element: <ProtectedRoute allowedRoles={['admin']}><MonthEndClose /></ProtectedRoute> },
-          { path: 'integrity-report', element: <ProtectedRoute allowedRoles={['admin']}><IntegrityReport /></ProtectedRoute> },
-          { path: 'integrity-cleanup', element: <ProtectedRoute allowedRoles={['admin']}><IntegrityCleanup /></ProtectedRoute> },
+          { path: 'integrity', element: <ProtectedRoute allowedRoles={['admin']}><Integrity /></ProtectedRoute> },
+          // Kept for bookmarks; the former pages now live as query-addressable tabs.
+          { path: 'integrity-report', element: <ProtectedRoute allowedRoles={['admin']}><LegacyTabRedirect to="/integrity" tab="report" /></ProtectedRoute> },
+          { path: 'integrity-cleanup', element: <ProtectedRoute allowedRoles={['admin']}><LegacyTabRedirect to="/integrity" tab="cleanup" /></ProtectedRoute> },
           { path: 'commission-payments', element: <ProtectedRoute allowedRoles={['admin']}><CommissionPayments /></ProtectedRoute> },
           { path: 'customer-transactions', element: <ProtectedRoute allowedRoles={['admin']}><CustomerTransactionReview /></ProtectedRoute> },
-          { path: 'prepayments', element: <ProtectedRoute allowedRoles={['admin']}><PrepaymentManager /></ProtectedRoute> },
+          { path: 'prepay', element: <ProtectedRoute allowedRoles={['admin']}><Prepay /></ProtectedRoute> },
+          { path: 'prepayments', element: <ProtectedRoute allowedRoles={['admin']}><LegacyTabRedirect to="/prepay" tab="manager" /></ProtectedRoute> },
           { path: 'accounts-receivable', element: <ProtectedRoute allowedRoles={['admin']}><AccountsReceivable /></ProtectedRoute> },
-          { path: 'prepay-workspace', element: <ProtectedRoute allowedRoles={['admin']}><PrepayWorkspace /></ProtectedRoute> },
+          { path: 'prepay-workspace', element: <ProtectedRoute allowedRoles={['admin']}><LegacyTabRedirect to="/prepay" tab="workspace" /></ProtectedRoute> },
           { path: 'accounts-payable', element: <ProtectedRoute allowedRoles={['admin']}><AccountsPayable /></ProtectedRoute> },
           { path: 'accounts-payable/bills', element: <ProtectedRoute allowedRoles={['admin']}><VendorBills /></ProtectedRoute> },
           { path: 'accounts-payable/bills/new', element: <ProtectedRoute allowedRoles={['admin']}><NewVendorBill /></ProtectedRoute> },

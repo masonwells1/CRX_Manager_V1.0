@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ShieldAlert, ShieldCheck, RefreshCw, AlertTriangle, CheckCircle2 } from 'lucide-react';
-import { runReconciliationChecks, type ReconciliationReport } from '../lib/reconciliation';
-import { useToast } from '../components/ui/Toast';
+import { runReconciliationChecks, type ReconciliationReport } from '../../lib/reconciliation';
+import { useToast } from '../ui/Toast';
 
-export default function IntegrityReport() {
+export default function IntegrityReportPanel() {
   const { toast } = useToast();
   const [report, setReport] = useState<ReconciliationReport | null>(null);
   const [loading, setLoading] = useState(true);

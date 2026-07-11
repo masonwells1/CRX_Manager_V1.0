@@ -35,7 +35,6 @@ import {
   Plane,
   Image,
   ClipboardCheck,
-  ArrowLeftRight,
   ShieldAlert,
   LayoutGrid,
 } from 'lucide-react';
@@ -118,8 +117,8 @@ const PAGE_ICON_MAP: Record<string, React.ReactNode> = {
   '/financial-dashboard': <LayoutDashboard className="w-4 h-4" />,
   '/ar-aging': <Clock className="w-4 h-4" />,
   '/accounts-payable': <Receipt className="w-4 h-4" />,
-  '/prepayments': <Wallet className="w-4 h-4" />,
-  '/prepay-workspace': <ArrowLeftRight className="w-4 h-4" />,
+  '/prepay': <Wallet className="w-4 h-4" />,
+  '/integrity': <ShieldAlert className="w-4 h-4" />,
   '/commission-payments': <Banknote className="w-4 h-4" />,
   '/customer-transactions': <CreditCard className="w-4 h-4" />,
   '/month-end': <CalendarCheck className="w-4 h-4" />,

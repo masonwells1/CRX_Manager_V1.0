@@ -52,15 +52,13 @@ export const PAGE_PERMISSIONS: PagePermission[] = [
   { key: 'payments', path: '/payments', label: 'Record Payments', category: 'Money', roles: ['admin', 'sales_rep'] },
   { key: 'accounts-receivable', path: '/accounts-receivable', label: 'A/R Workspace', category: 'Money', roles: ['admin'] },
   { key: 'ar-aging', path: '/ar-aging', label: 'A/R Aging', category: 'Money', roles: ['admin'] },
-  { key: 'prepayments', path: '/prepayments', label: 'Prepayments', category: 'Money', roles: ['admin'] },
+  { key: 'prepay', path: '/prepay', label: 'Prepay', category: 'Money', roles: ['admin'] },
   { key: 'customer-transactions', path: '/customer-transactions', label: 'Customer Transactions', category: 'Money', roles: ['admin'] },
-  { key: 'prepay-workspace', path: '/prepay-workspace', label: 'Prepay Workspace', category: 'Money', roles: ['admin'] },
   { key: 'accounts-payable', path: '/accounts-payable', label: 'A/P & Vendor Bills', category: 'Money', roles: ['admin'] },
   { key: 'commission-payments', path: '/commission-payments', label: 'Commissions', category: 'Money', roles: ['admin'] },
   { key: 'rebates', path: '/rebates', label: 'Rebates', category: 'Money', roles: ['admin'] },
   { key: 'month-end', path: '/month-end', label: 'Month-End Close', category: 'Money', roles: ['admin'] },
-  { key: 'integrity-report', path: '/integrity-report', label: 'Data Integrity — Report', category: 'Money', roles: ['admin'] },
-  { key: 'integrity-cleanup', path: '/integrity-cleanup', label: 'Data Integrity — Cleanup', category: 'Money', roles: ['admin'] },
+  { key: 'integrity', path: '/integrity', label: 'Data Integrity', category: 'Money', roles: ['admin'] },
   { key: 'payment-history', path: '/payment-history', label: 'Payment History', category: 'Money', roles: ['admin'] },
 
   // Compliance & Records
@@ -118,11 +116,16 @@ export function getPageKeyFromPath(pathname: string): string | null {
     return 'field-invoices';
   }
 
-  // The legacy standalone hub route redirects into the consolidated Receiving
-  // page and therefore shares its single permission/deny-list key.
-  if (firstSegment === 'receiving-hub') {
-    return 'receiving';
-  }
+  // Legacy standalone routes redirect into consolidated tabbed pages and
+  // therefore share each destination's single permission/deny-list key.
+  const legacyPageKey: Record<string, string> = {
+    'receiving-hub': 'receiving',
+    prepayments: 'prepay',
+    'prepay-workspace': 'prepay',
+    'integrity-report': 'integrity',
+    'integrity-cleanup': 'integrity',
+  };
+  if (legacyPageKey[firstSegment]) return legacyPageKey[firstSegment];
 
   const found = PAGE_PERMISSIONS.find((p) => p.key === firstSegment);
   return found ? found.key : null;
@@ -157,9 +160,11 @@ export function hasPageAccess(
   if (!page) return false;
 
   if (!page.roles.includes(role)) return false;
-  // Preserve existing profile restrictions created before the Receiving Hub
-  // and Log were consolidated into one permissionable page.
+  // Preserve profile restrictions saved under route keys that existed before
+  // these standalone pages were consolidated.
   if (pageKey === 'receiving' && deniedPages.includes('receiving-hub')) return false;
+  if (pageKey === 'prepay' && deniedPages.some((key) => key === 'prepayments' || key === 'prepay-workspace')) return false;
+  if (pageKey === 'integrity' && deniedPages.some((key) => key === 'integrity-report' || key === 'integrity-cleanup')) return false;
   if (deniedPages.includes(pageKey)) return false;
   return true;
 }
