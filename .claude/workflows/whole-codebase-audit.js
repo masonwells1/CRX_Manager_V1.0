@@ -16,7 +16,7 @@ export const meta = {
 // ---------------------------------------------------------------------------
 const PREAMBLE = [
   'You are auditing the CRX Manager codebase (React 18 + TypeScript + Vite + Supabase + Tailwind) at C:\\CRX_Manager.',
-  'It is a production agricultural-retail ERP. Money is stored as bigint cents (display ÷100). The app spans dozens of pages, ~100 tables, 200+ RPCs, 450+ migrations, and 7 Edge Functions; treat any count as a lead to confirm live, never a fact.',
+  'It is a production agricultural-retail ERP. Money is stored as bigint cents (display ÷100). The app spans 80+ pages, ~114 tables, ~286 callable RPCs, 619+ migrations, and 6 Edge Functions; treat any count as a lead to confirm live, never a fact.',
   '',
   'GROUND TRUTH: Use the actual repo on disk AND the LIVE Supabase database. The Supabase MCP tools are available — load them with ToolSearch (e.g. query "execute_sql" or "supabase list tables"). Live project id is rhyzpcqhnizqbxphqdkr. You MAY run read-only SQL (SELECT, pg_catalog, information_schema) to ground every finding against the live DB.',
   '',

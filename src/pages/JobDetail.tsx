@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState , useCallback, useMemo, lazy, Suspense } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import { Save, Plus, Trash2, Check, FileText, Beaker, Ban, MessageSquarePlus, Printer, CloudSun, MapPin, Truck, ClipboardList, FlaskConical, Bell, History, BookmarkPlus, GripVertical, ChevronUp, ChevronDown, Map as MapIcon, ShieldAlert, CalendarClock, AlertTriangle } from 'lucide-react';
+import { Save, Plus, Trash2, Check, FileText, Beaker, Ban, MessageSquarePlus, Printer, CloudSun, MapPin, Truck, ClipboardList, FlaskConical, Bell, History, BookmarkPlus, GripVertical, ChevronUp, ChevronDown, Map as MapIcon, ShieldAlert, CalendarClock, AlertTriangle, Sprout, Send } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
+import SearchableSelect from '../components/ui/SearchableSelect';
 import Badge, { type BadgeVariant } from '../components/ui/Badge';
 import Modal from '../components/ui/Modal';
 import UnsavedChangesModal from '../components/ui/UnsavedChangesModal';
@@ -11,7 +12,9 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { logActivity } from '../lib/activityLogger';
+import { notifyApplicatorDispatched, notifyApplicatorRescheduled, notifyApplicatorUndispatched } from '../lib/notificationTriggers';
 import { supabase, checkMutationResult, assertRpcResult, hasRpcCode, RpcErrorCodes, sanitizeError } from '../lib/db';
+import { warnIfOverCreditLimit } from '../lib/creditLimit';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { getLicenseStatus, licenseStatusLabel } from '../lib/licenseStatus';
 import { generateWpsNoticePdf } from '../lib/wpsNoticePdf';
@@ -33,6 +36,7 @@ import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
 import { applyChemEdit, recomputeChemRowForAcres, reconcileChemAutofillUnits, sumAcres, toGallonOrLbEquivalent } from '../lib/chemCalculator';
 import { compareToMaxRate, phiHarvestWarning } from '../lib/labelGuardrails';
+import { unitOptionsForForm, isKnownUnit } from '../lib/units';
 import {
   LABEL_RATE_GUARDRAIL_MODE_KEY,
   DEFAULT_GUARDRAIL_MODE,
@@ -41,9 +45,15 @@ import {
 } from '../lib/labelGuardrailSetting';
 import { computeSeason } from '../utils/season';
 import { recipeItemToChemRowSeed, chemRowsToRecipeItems, getLastRecipeId, setLastRecipeId } from '../lib/recipeHelpers';
+import { programItemToChemRowSeed, parseCropPrograms, orderProgramsForJob, type CropProgram } from '../lib/cropProgramHelpers';
 import { moveItem, moveUp, moveDown } from '../lib/routeOrder';
 import AppliedRecordsManager from '../components/jobs/AppliedRecordsManager';
+import ApplicationServicePicker from '../components/field-app/ApplicationServicePicker';
 import WatchdogFlagBanner from '../components/watchdog/WatchdogFlagBanner';
+// U13 (#15-21/#111): job-scoped "Dispatch Locations" — reuses the SAME 3-step
+// wizard the Dispatch Board uses, pre-scoped + pre-selected to this job.
+import DispatchWizard from '../components/dispatch/DispatchWizard';
+import type { DispatchLocation } from '../lib/dispatchWizard';
 // Codex #16 P2: lazy-load the map component so the mapbox bundle is only fetched when
 // the user actually opens the Map / Logs tab — not on every JobDetail page load (matters
 // on field/mobile connections). JobAttachments is light, so it stays a static import.
@@ -53,7 +63,7 @@ import QuickTaskModal from '../components/team/QuickTaskModal';
 import ConfirmModal from '../components/ui/ConfirmModal';
 import RelatedNotes from '../components/team/RelatedNotes';
 import { Sentry } from '../lib/sentry';
-import type { JobStatus, Customer, Product, Field, Vehicle, Profile, BlendRecipe, BlendRecipeItem, LinkedEntityType, JobNotification } from '../types';
+import type { JobStatus, Customer, Product, Field, Vehicle, Profile, BlendRecipe, BlendRecipeItem, LinkedEntityType, JobNotification, UnitConversion } from '../types';
 import type { Json } from '../types/supabase';
 import { sendEmail } from '../lib/emailService';
 import {
@@ -81,6 +91,8 @@ interface JobDbRow {
   applicator_id?: string | null;
   vehicle_id?: string | null;
   recipe_id?: string | null;
+  /** U3 (#52): drives the per-acre service fee on transfer_job_to_invoice. */
+  application_service_id?: string | null;
   notes?: string | null;
   batch_id?: string | null;
   // Field-app parity #1: scheduling + memo fields.
@@ -125,6 +137,7 @@ interface JobDbRow {
     phi_days?: number | null;
     warehouse?: string | null;
     vendor?: string | null;
+    customer_supplied?: boolean | null;
     sort_order: number;
     product?: { product_name: string } | null;
   }>;
@@ -161,7 +174,16 @@ interface JobDbRow {
 
 interface SaveJobResult { job_id: string }
 interface CompleteJobResult { record_number: string }
-interface TransferJobResult { invoice_id: string; invoice_number: string }
+interface TransferJobResult {
+  invoice_id: string;
+  // single-owner path returns the invoice number; the multi-owner group path returns
+  // the group fields instead (U7). invoice_id is always the anchor member to navigate to.
+  invoice_number?: string;
+  invoice_ids?: string[];
+  invoice_group_id?: string;
+  invoice_count?: number;
+  split?: boolean;
+}
 
 const statusVariant: Record<JobStatus, BadgeVariant> = {
   scheduled: 'info',
@@ -198,6 +220,9 @@ interface ChemRow {
   phi_days: string;
   warehouse: string;
   vendor: string;
+  /** #53/#54: grower brought this product — apply it, but don't deduct our
+   *  inventory or bill for it. Persisted to job_chemicals.customer_supplied. */
+  customer_supplied: boolean;
   sort_order: number;
   /** UI-only (NOT persisted): which field the user last drove — so an acreage
    *  change re-derives the OTHER field and never silently rewrites a
@@ -271,7 +296,10 @@ export default function JobDetail() {
   // Job form
   const [jobNumber, setJobNumber] = useState('');
   const [status, setStatus] = useState<JobStatus>('scheduled');
-  const [customerId, setCustomerId] = useState('');
+  // #23: pre-fill the customer when arriving from a customer page
+  // (/jobs/new?customer_id=…). Only for a NEW job; existing jobs load their own
+  // customer in fetchJob. A stale/bogus id simply renders as no selection.
+  const [customerId, setCustomerId] = useState(() => (isNew ? (searchParams.get('customer_id') ?? '') : ''));
   const [jobDate, setJobDate] = useState(localToday());
   const [scheduledTime, setScheduledTime] = useState('');
   const [applicatorId, setApplicatorId] = useState('');
@@ -309,8 +337,22 @@ export default function JobDetail() {
   const [printingLoader, setPrintingLoader] = useState(false);
   // The applicator currently saved on the job — the license gate only fires on a CHANGE
   const [savedApplicatorId, setSavedApplicatorId] = useState<string | null>(null);
+  // U12: mirrors savedApplicatorId — lets performSave detect a RESCHEDULE
+  // (job_date changed while the same applicator stays assigned) so the
+  // assigned applicator can be notified.
+  const [savedJobDate, setSavedJobDate] = useState<string | null>(null);
+  // U12 Codex R3 #2: true when the CURRENT applicator holds an ACTIVE
+  // ('dispatched') job_location_dispatches row on this job. The assignment-
+  // unification migration authorizes such a dispatchee to start/complete the
+  // job server-side — this state lets the Start/Complete buttons show for them
+  // (previously only the legacy jobs.applicator_id assignee saw them).
+  const [hasActiveDispatch, setHasActiveDispatch] = useState(false);
   const [showLicenseOverrideConfirm, setShowLicenseOverrideConfirm] = useState(false);
   const assignIdem = useIdempotencyKey('assign_job_applicator', profile?.id || '');
+  // U13 (#15-21/#111): job-scoped Dispatch Locations wizard.
+  const [dispatchWizardOpen, setDispatchWizardOpen] = useState(false);
+  const [dispatchWizardLocations, setDispatchWizardLocations] = useState<DispatchLocation[]>([]);
+  const [dispatchWizardLoading, setDispatchWizardLoading] = useState(false);
   // B3: WPS pre-application notice PDF
   const [printingWps, setPrintingWps] = useState(false);
   // #9: applicator field sheet (Original / Custom / Enhanced) print picker.
@@ -1128,12 +1170,19 @@ export default function JobDetail() {
 
   const [vehicleId, setVehicleId] = useState('');
   const [recipeId, setRecipeId] = useState('');
+  // U3 (#52): optional per-acre machine fee (e.g. Hagie Y-Drop). NULL = no service fee.
+  const [applicationServiceId, setApplicationServiceId] = useState<string | null>(null);
+  // U3 follow-up (Codex P2): true only while the current applicationServiceId came
+  // from a customer's default, not the user's hand. An auto-filled value must be
+  // RE-evaluated when the customer changes (a manual pick is never clobbered).
+  const svcAutoFilledRef = useRef(false);
   const [notes, setNotes] = useState('');
   const [batchId, setBatchId] = useState('');
   const [quoteLinkage, setQuoteLinkage] = useState<{ quote_id: string; quote_number: string; section_name: string } | null>(null);
 
   // Sub-collections
   const [fieldRows, setFieldRows] = useState<FieldRow[]>([]);
+  const [growerShareFieldNames, setGrowerShareFieldNames] = useState<string[]>([]);
   // Field-app parity #5: index of the field row currently being dragged to set
   // the applicator route order (null when no drag is in progress).
   const [dragFieldIndex, setDragFieldIndex] = useState<number | null>(null);
@@ -1158,6 +1207,14 @@ export default function JobDetail() {
   // is_active filter (Codex P2), so a now-INACTIVE product on a saved job still gets its
   // label max for the guardrail (allProducts is active-only). Authoritative over allProducts.
   const [jobProductLabels, setJobProductLabels] = useState<Map<string, { max_label_rate: number | null; max_label_rate_unit: string | null }>>(new Map());
+  const [unitConversions, setUnitConversions] = useState<UnitConversion[]>([]);
+
+  useEffect(() => {
+    supabase.from('unit_conversions').select('*').order('unit').then(({ data, error }) => {
+      if (error) return;
+      setUnitConversions((data || []) as UnitConversion[]);
+    });
+  }, []);
   // Per-field customer shares, keyed by field. Empty until a field is added /
   // shares are loaded — then defaulted from field_billing_defaults.
   const [shareRows, setShareRows] = useState<ShareRow[]>([]);
@@ -1194,6 +1251,11 @@ export default function JobDetail() {
 
   // Recipe load modal
   const [showRecipeModal, setShowRecipeModal] = useState(false);
+  // P2-4: crop-program templates loadable into the job chemicals (append-only).
+  const [cropPrograms, setCropPrograms] = useState<CropProgram[]>([]);
+  const [showProgramModal, setShowProgramModal] = useState(false);
+  const [selectedProgramId, setSelectedProgramId] = useState('');
+  const [loadingProgram, setLoadingProgram] = useState(false);
   const [selectedRecipeId, setSelectedRecipeId] = useState('');
   const [loadingRecipe, setLoadingRecipe] = useState(false);
   // 'replace' wipes the current chem lines; 'append' merges the recipe in (so a
@@ -1210,11 +1272,11 @@ export default function JobDetail() {
 
   // A stable string of every editable form field — the unit of dirty comparison.
   const formSnapshot = useCallback(() => JSON.stringify({
-    customerId, jobDate, scheduledTime, applicatorId, vehicleId, notes, batchId,
+    customerId, jobDate, scheduledTime, applicatorId, vehicleId, applicationServiceId, notes, batchId,
     callDate, dateProposed, timeProposed, scheduleDate, dateExpires, consultantId, groundCrewId,
     loaderComment, additionalInfo, internalMemo, carrierRateGpa, tankCapacity,
     fieldRows, chemRows, shareRows,
-  }), [customerId, jobDate, scheduledTime, applicatorId, vehicleId, notes, batchId,
+  }), [customerId, jobDate, scheduledTime, applicatorId, vehicleId, applicationServiceId, notes, batchId,
        callDate, dateProposed, timeProposed, scheduleDate, dateExpires, consultantId, groundCrewId,
        loaderComment, additionalInfo, internalMemo, carrierRateGpa, tankCapacity,
        fieldRows, chemRows, shareRows]);
@@ -1298,6 +1360,17 @@ export default function JobDetail() {
     return { overRateCount: overRateProducts.length, overRateProducts, phiHarvestWarnCount };
   }, [chemRows, allProducts, labelMaxFor, jobEarliestHarvestDate, jobDate]);
 
+  // SAFE-SCOPE U7: a job is "multi-owner" when its fields' billed shares span more
+  // than one distinct customer — the same customer set transfer_job_to_invoice
+  // bills from (job_fields <-> field_billing_defaults GROUP BY customer_id). On a
+  // multi-owner job, Transfer to Invoice collapses every owner into ONE invoice
+  // to the primary tenant; other owners' shares show as unpayable annotations.
+  const distinctBilledCustomers = useMemo(
+    () => new Set(shareRows.map((s) => s.customer_id).filter(Boolean)),
+    [shareRows]
+  );
+  const isMultiOwner = distinctBilledCustomers.size > 1;
+
   // Single dirty engine: when no baseline is set yet, ADOPT the current form as the
   // clean baseline (but only once the load has settled, so we don't adopt a half-
   // populated form); thereafter compare. fetchJob / the new-job init reset the
@@ -1341,6 +1414,11 @@ export default function JobDetail() {
       .from('app_settings').select('setting_value').eq('setting_key', LABEL_RATE_GUARDRAIL_MODE_KEY).maybeSingle();
     setGuardrailMode(parseGuardrailMode((grResult.data as { setting_value?: string } | null)?.setting_value ?? null));
     setGuardrailModeLoaded(true);
+
+    // P2-4: load reusable crop-program templates (for "Load Program" into chemicals).
+    const cpResult = await supabase
+      .from('app_settings').select('setting_value').eq('setting_key', 'crop_programs').maybeSingle();
+    setCropPrograms(parseCropPrograms((cpResult.data as { setting_value?: string } | null)?.setting_value ?? null));
 
     // Staff-held license rows for the license-gate badge + pre-save check (B5)
     const licResult = await supabase
@@ -1387,6 +1465,7 @@ export default function JobDetail() {
     setStatus(j.status);
     setCustomerId(j.customer_id);
     setJobDate(j.job_date);
+    setSavedJobDate(j.job_date);
     setScheduledTime(j.scheduled_time || '');
     setApplicatorId(j.applicator_id || '');
     setSavedApplicatorId(j.applicator_id || null);
@@ -1396,6 +1475,7 @@ export default function JobDetail() {
     setSavedJobVehicleId(j.vehicle_id || null);
     setSavedVehicleCapacity(j.vehicle ? { name: j.vehicle.vehicle_name ?? null, gallons: j.vehicle.capacity_gallons ?? null, unit: j.vehicle.capacity_unit ?? null } : null);
     setRecipeId(j.recipe_id || '');
+    setApplicationServiceId(j.application_service_id || null);
     setNotes(j.notes || '');
     setBatchId(j.batch_id || '');
     setCallDate(j.call_date || '');
@@ -1435,6 +1515,34 @@ export default function JobDetail() {
           sort_order: f.sort_order,
         }))
     );
+
+    // U16b: best-effort advisory before transfer. The transfer RPC remains the
+    // pricing authority; a failed read simply leaves the banner hidden.
+    const jobFields = j.job_fields || [];
+    const jobFieldIds = Array.from(new Set(jobFields.map((field) => field.field_id).filter(Boolean)));
+    if (jobFieldIds.length > 0) {
+      const { data: growerShareRows, error: growerShareError } = await supabase
+        .from('field_billing_defaults')
+        .select('field_id')
+        .in('field_id', jobFieldIds)
+        .not('price_override_cents', 'is', null);
+      if (growerShareError) {
+        Sentry.captureException(growerShareError, { tags: { source: 'fetch', page: 'job-detail', context: 'grower_share_banner' } });
+        setGrowerShareFieldNames([]);
+      } else {
+        const overrideIds = new Set(
+          ((growerShareRows || []) as Array<{ field_id: string }>).map((row) => row.field_id),
+        );
+        setGrowerShareFieldNames(Array.from(new Set(
+          jobFields
+            .filter((field) => overrideIds.has(field.field_id))
+            .map((field) => field.field?.field_name || '')
+            .filter(Boolean),
+        )));
+      }
+    } else {
+      setGrowerShareFieldNames([]);
+    }
 
     // Load saved shares; then SEED defaults for any field that has no saved
     // shares (existing jobs created before this migration, or a field never
@@ -1491,6 +1599,7 @@ export default function JobDetail() {
         phi_days: c.phi_days?.toString() || '',
         warehouse: c.warehouse || '',
         vendor: c.vendor || '',
+        customer_supplied: c.customer_supplied ?? false,
         sort_order: c.sort_order,
       }))
     );
@@ -1520,6 +1629,7 @@ export default function JobDetail() {
       if (!isNew && id) {
         await fetchJob();
       } else {
+        setGrowerShareFieldNames([]);
         const { data, error } = await supabase.rpc('next_job_number');
         if (!error && data) setJobNumber(assertRpcResult<string>(data, 'next_job_number'));
         const recipeParam = searchParams.get('recipe_id');
@@ -1529,6 +1639,34 @@ export default function JobDetail() {
       }
     })();
   }, [id, fetchJob, isNew, searchParams]);
+
+  // U12 Codex R3 #2: does the current APPLICATOR hold an active ('dispatched')
+  // job_location_dispatches row on this job? The assignment-unification migration
+  // authorizes such a dispatchee to start/complete server-side, so the UI gate
+  // must match. The probe deliberately has NO applicator_id filter (A3), so a
+  // CREW-member dispatch also lights the gate: RLS scopes the read to the caller's
+  // own rows + their active crew's rows, and start_job (via _is_dispatched_to_me's
+  // crew branch) and complete_job (direct ground_crew_members check) authorize
+  // crew members server-side. Best-effort: any error leaves the gate false (office
+  // roles never depend on it, and the RPC stays authoritative for the stricter
+  // rules either way).
+  useEffect(() => {
+    setHasActiveDispatch(false);
+    if (isNew || !id || !profile?.id || role !== 'applicator') {
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      const res = await supabase
+        .from('job_location_dispatches')
+        .select('id')
+        .eq('job_id', id)
+        .eq('dispatch_status', 'dispatched')
+        .limit(1);
+      if (!cancelled) setHasActiveDispatch(!res.error && (res.data?.length ?? 0) > 0);
+    })();
+    return () => { cancelled = true; };
+  }, [id, isNew, profile, role]);
 
   // Field-app parity #16: keep the active tab in sync with the ?tab= param AFTER mount.
   // The useState initializer only reads ?tab= once, so a same-route param change (e.g.
@@ -1547,8 +1685,10 @@ export default function JobDetail() {
   // Computed
   const customerFields = allFields.filter(f => !customerId || f.customer_id === customerId);
   const totalAcres = fieldRows.reduce((sum, f) => sum + (parseFloat(f.acres_to_treat) || 0), 0);
-  const totalCostCents = chemRows.reduce((sum, c) => sum + Math.round((parseFloat(c.quantity) || 0) * (parseInt(c.cost_per_unit_cents) || 0)), 0);
-  const totalPriceCents = chemRows.reduce((sum, c) => sum + Math.round((parseFloat(c.quantity) || 0) * (parseInt(c.price_per_unit_cents) || 0)), 0);
+  // #53/#54: a customer-supplied product is applied but not billed and cost us
+  // nothing — it contributes 0 to both job totals (mirrors the server's $0 line).
+  const totalCostCents = chemRows.reduce((sum, c) => sum + (c.customer_supplied ? 0 : Math.round((parseFloat(c.quantity) || 0) * (parseInt(c.cost_per_unit_cents) || 0))), 0);
+  const totalPriceCents = chemRows.reduce((sum, c) => sum + (c.customer_supplied ? 0 : Math.round((parseFloat(c.quantity) || 0) * (parseInt(c.price_per_unit_cents) || 0))), 0);
 
   // Loader worksheet (#10) — the spray tank is sized by SPRAY VOLUME, not by the
   // sum of chemical gallons. Spray volume = total acres × the carrier rate (gal/
@@ -1824,6 +1964,94 @@ export default function JobDetail() {
     assignIdem.resetKey();
   };
 
+  // U13 (#15-21/#111): open the Dispatch Board wizard SCOPED to just this job's
+  // locations, pre-selected. Requires a SAVED, non-dirty job — the wizard needs
+  // real job_fields.id values (only exist after save_job has run), and any
+  // unsaved edit could change which locations should be offered.
+  const openDispatchWizard = async () => {
+    if (isNew || !id) {
+      toast('error', 'Save the job before dispatching its locations.');
+      return;
+    }
+    if (isDirty) {
+      toast('error', 'Save the job before dispatching its locations — the wizard must match the saved record.');
+      return;
+    }
+    setDispatchWizardLoading(true);
+    try {
+      const [jfRes, dispatchRes] = await Promise.all([
+        supabase
+          .from('job_fields')
+          .select('id, acres_to_treat, field:fields(field_name)')
+          .eq('job_id', id)
+          .order('sort_order'),
+        supabase
+          .from('job_location_dispatches')
+          .select('job_field_id, applicator_id, crew_id')
+          .eq('job_id', id)
+          .eq('dispatch_status', 'dispatched'),
+      ]);
+      if (jfRes.error) throw jfRes.error;
+      if (dispatchRes.error) throw dispatchRes.error;
+
+      type JfRow = { id: string; acres_to_treat: number | null; field?: { field_name?: string } | null };
+      const jfRows = (jfRes.data || []) as JfRow[];
+      if (jfRows.length === 0) {
+        toast('error', 'This job has no field locations to dispatch — add a location on the Locations tab first.');
+        setDispatchWizardLoading(false);
+        return;
+      }
+
+      type DispatchRow = { job_field_id: string; applicator_id: string | null; crew_id: string | null };
+      const currentByField = new Map<string, DispatchRow>();
+      ((dispatchRes.data || []) as DispatchRow[]).forEach((d) => currentByField.set(d.job_field_id, d));
+
+      const customerName = customers.find((c) => c.id === customerId)?.farm_name || 'Customer';
+      // U13 (Codex R2 #3): legacy fallback — a saved job can carry a whole-job
+      // jobs.applicator_id with NO per-location dispatch rows yet (assigned
+      // before the U13 triggers landed; no backfill). Treat that applicator as
+      // each such location's current assignee so the "Currently: X" chip
+      // renders and the steal-confirmation still fires when reassigning away
+      // from them. The wizard only opens on a NON-DIRTY job, so
+      // savedApplicatorId is the authoritative saved value.
+      const jobLevelAssignee: DispatchLocation['currentAssignee'] = savedApplicatorId
+        ? {
+            kind: 'applicator',
+            id: savedApplicatorId,
+            name: applicators.find((ap) => ap.id === savedApplicatorId)?.full_name || 'Unknown applicator',
+          }
+        : null;
+      const locs: DispatchLocation[] = jfRows.map((jf) => {
+        const d = currentByField.get(jf.id);
+        let currentAssignee: DispatchLocation['currentAssignee'] = null;
+        if (d?.applicator_id) {
+          const a = applicators.find((ap) => ap.id === d.applicator_id);
+          currentAssignee = { kind: 'applicator', id: d.applicator_id, name: a?.full_name || 'Unknown applicator' };
+        } else if (d?.crew_id) {
+          const c = groundCrews.find((gc) => gc.id === d.crew_id);
+          currentAssignee = { kind: 'crew', id: d.crew_id, name: c?.name || 'Unknown crew' };
+        } else {
+          currentAssignee = jobLevelAssignee;
+        }
+        return {
+          jobFieldId: jf.id,
+          jobId: id,
+          jobNumber,
+          customerName,
+          fieldName: jf.field?.field_name || 'Field',
+          acres: jf.acres_to_treat ?? null,
+          currentAssignee,
+        };
+      });
+      setDispatchWizardLocations(locs);
+      setDispatchWizardOpen(true);
+    } catch (err) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'open_job_dispatch_wizard', jobId: id } });
+      toast('error', 'Could not load this job’s locations for dispatch — try again.');
+    }
+    setDispatchWizardLoading(false);
+  };
+
   const performSave = async (licenseOverride: boolean, overrideReasonForAudit?: string) => {
     setSaving(true);
     try {
@@ -1834,6 +2062,7 @@ export default function JobDetail() {
         applicator_id: overrideSaveApplicatorId({ licenseOverride, isNew, applicatorId, savedApplicatorId }),
         vehicle_id: vehicleId || null,
         recipe_id: recipeId || null,
+        application_service_id: applicationServiceId,
         notes: notes || null,
         batch_id: batchId || null,
         total_acres: totalAcres,
@@ -1883,8 +2112,52 @@ export default function JobDetail() {
         phi_days: c.phi_days || null,
         warehouse: c.warehouse || null,
         vendor: c.vendor || null,
+        customer_supplied: c.customer_supplied || false,
         sort_order: i,
       }));
+
+      const newAssigneeIsApplicator = applicators.some((p) => p.id === applicatorId && p.role === 'applicator');
+      // Mirrors the trigger's role='applicator' + active guard; the picker is active-only, so we never notify about a displacement that didn't happen.
+      const isWholeJobApplicatorReassign = !isNew && !!applicatorId && applicatorId !== savedApplicatorId && newAssigneeIsApplicator;
+      const newApplicatorId = applicatorId || null;
+      const custNameForNotify = customers.find((c) => c.id === customerId)?.farm_name || 'Unknown';
+      let displacedApplicatorIds: string[] = [];
+      // This pre-save snapshot is not atomic with save; concurrent dispatch edits or a retry-after-commit can mis-target advisory notifications.
+      // That best-effort window is accepted because notifications are advisory and the server data remains correct.
+      if (isWholeJobApplicatorReassign) {
+        try {
+          const dispRes = await supabase
+            .from('job_location_dispatches')
+            .select('applicator_id')
+            .eq('job_id', id!)
+            .eq('dispatch_status', 'dispatched')
+            .not('applicator_id', 'is', null);
+          if (dispRes.error) throw dispRes.error;
+          displacedApplicatorIds = [...new Set(
+            (dispRes.data || [])
+              .map((r) => r.applicator_id)
+              .filter((aid): aid is string => !!aid),
+          )];
+        } catch (snapshotErr) {
+          Sentry.captureException(snapshotErr instanceof Error ? snapshotErr : new Error(String(snapshotErr)), { extra: { context: 'snapshot_displaced_dispatchees' } });
+        }
+      }
+
+      let displacementCommitted = false;
+      // A2: fire as soon as a displacement commits so no later fallible sub-step or
+      // early return can silently drop the split-assignee un-dispatch notices.
+      const notifyDisplacedApplicators = (savedJobId: string) => {
+        if (!isWholeJobApplicatorReassign || !displacementCommitted) return;
+        const notified = new Set<string>();
+        if (newApplicatorId) notified.add(newApplicatorId);
+        if (savedApplicatorId) notified.add(savedApplicatorId);
+        if (profile?.id) notified.add(profile.id);
+        for (const idToNotify of displacedApplicatorIds) {
+          if (notified.has(idToNotify)) continue;
+          notified.add(idToNotify);
+          void notifyApplicatorUndispatched(idToNotify, jobNumber || '', custNameForNotify, savedJobId);
+        }
+      };
 
       const idemKey = saveJobIdem.getKey();
       const { data, error } = await supabase.rpc('save_job', {
@@ -1897,8 +2170,13 @@ export default function JobDetail() {
       });
 
       if (error) throw error;
+      if (isWholeJobApplicatorReassign && !licenseOverride) {
+        displacementCommitted = true;
+        notifyDisplacedApplicators(id as string);
+      }
       saveJobIdem.resetKey();
       const result = assertRpcResult<SaveJobResult>(data, 'save_job');
+      const savedJobIdForNotify = isNew ? result.job_id : (id as string);
 
       // Field-app parity #6 + #10: persist the ground crew AND the loader-worksheet
       // inputs (carrier rate + per-job tank-capacity override) via a direct
@@ -1960,6 +2238,10 @@ export default function JobDetail() {
       if (shouldReassignApplicatorAfterSave({ licenseOverride, applicatorId, savedApplicatorId })) {
         try {
           await assignWithOverride(isNew ? result.job_id : id!);
+          if (isWholeJobApplicatorReassign) {
+            displacementCommitted = true;
+            notifyDisplacedApplicators(savedJobIdForNotify);
+          }
         } catch (assignErr) {
           Sentry.captureException(assignErr instanceof Error ? assignErr : new Error(String(assignErr)), { extra: { context: 'assign_job_applicator_after_save' } });
           toast('error', isNew
@@ -1990,12 +2272,63 @@ export default function JobDetail() {
         await writeOverrideAudit(overrideReasonForAudit, isNew ? result.job_id : (id || null));
       }
 
+      // U12: notify the assigned applicator on dispatch / reschedule / undispatch.
+      // Best-effort (each notify* fn swallows its own errors into Sentry via
+      // logNotificationFailure) — never blocks the save that already committed.
+      // Applicators previously got NO notification at all for any of these three
+      // (verified: no notify*/createNotification call existed around this save
+      // path before U12).
+      if (newApplicatorId && newApplicatorId !== savedApplicatorId) {
+        void notifyApplicatorDispatched(newApplicatorId, jobNumber || '', custNameForNotify, jobDate, savedJobIdForNotify);
+      } else if (newApplicatorId && newApplicatorId === savedApplicatorId && jobDate !== savedJobDate) {
+        void notifyApplicatorRescheduled(newApplicatorId, jobNumber || '', custNameForNotify, jobDate, savedJobIdForNotify);
+      }
+      if (savedApplicatorId && savedApplicatorId !== newApplicatorId) {
+        void notifyApplicatorUndispatched(savedApplicatorId, jobNumber || '', custNameForNotify, savedJobIdForNotify);
+      }
+
+      // U12 Codex R5 #1: a reschedule must ALSO reach the active PER-LOCATION
+      // dispatch assignees, not just the legacy jobs.applicator_id (the branches
+      // above never see wizard-dispatched applicators). Fetch this job's active
+      // ('dispatched') applicator rows, dedupe, and skip anyone already covered:
+      // the legacy applicator (notified above — the dispatched notice carries the
+      // new date too) and the saver themselves. Best-effort like the others —
+      // each notify* self-swallows; a fetch failure only logs to Sentry and never
+      // blocks the already-committed save. Skipped for a brand-new job (its id
+      // was just minted — no dispatch rows can exist). RLS: the saver here is an
+      // office role (the save UI is isEditable-gated), which reads all rows.
+      if (!isNew && jobDate !== savedJobDate) {
+        void (async () => {
+          try {
+            const dispRes = await supabase
+              .from('job_location_dispatches')
+              .select('applicator_id')
+              .eq('job_id', savedJobIdForNotify)
+              .eq('dispatch_status', 'dispatched')
+              .not('applicator_id', 'is', null);
+            if (dispRes.error) throw dispRes.error;
+            const notified = new Set<string>();
+            if (newApplicatorId) notified.add(newApplicatorId);
+            if (profile?.id) notified.add(profile.id);
+            for (const r of (dispRes.data || []) as { applicator_id: string | null }[]) {
+              if (!r.applicator_id || notified.has(r.applicator_id)) continue;
+              notified.add(r.applicator_id);
+              void notifyApplicatorRescheduled(r.applicator_id, jobNumber || '', custNameForNotify, jobDate, savedJobIdForNotify);
+            }
+          } catch (notifyErr) {
+            Sentry.captureException(notifyErr instanceof Error ? notifyErr : new Error(String(notifyErr)), { extra: { context: 'notify_dispatchees_rescheduled' } });
+          }
+        })();
+      }
+
       toast('success', isNew ? 'Job created' : 'Job saved');
       setIsDirty(false);
       setSavedApplicatorId(applicatorId || null);
+      setSavedJobDate(jobDate);
 
       if (isNew) {
         navigate(`/jobs/${result.job_id}`);
+        void warnIfOverCreditLimit(customerId, toast);
       } else {
         await fetchJob();
       }
@@ -2046,6 +2379,22 @@ export default function JobDetail() {
   const handleComplete = async () => {
     setCompleting(true);
     try {
+      // #68: after-the-fact completion — the office is recording a job that was
+      // already sprayed. complete_job requires status 'in_progress', so if the job
+      // is still 'scheduled' start it first (chained) to skip the click-wait-click
+      // Start→Complete dance. Timing is approximate; a start/end-time field on the
+      // modal is the nicer follow-up the review noted.
+      if (status === 'scheduled') {
+        const startKey = startJobIdem.getKey();
+        const { data: startData, error: startErr } = await supabase.rpc('start_job', {
+          p_job_id: id!,
+          p_performed_by: profile!.id,
+          p_idempotency_key: startKey,
+        });
+        if (startErr) throw startErr;
+        assertRpcResult(startData, 'start_job');
+        startJobIdem.resetKey();
+      }
       const idemKey = completeJobIdem.getKey();
       const { data, error } = await supabase.rpc('complete_job', {
         p_job_id: id!,
@@ -2063,7 +2412,13 @@ export default function JobDetail() {
       await fetchJob();
     } catch (err: unknown) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'complete_job' } });
-      toast('error', err instanceof Error ? err.message : 'Failed to complete job');
+      // U12 Codex R5 #2: same translation as FieldView — a dispatch-only
+      // applicator on a SPLIT job gets the RPC's raw authorization rejection;
+      // explain the business reason instead.
+      const completeMsg = err instanceof Error ? err.message : 'Failed to complete job';
+      toast('error', completeMsg.includes('Not authorized to complete this job')
+        ? 'This job is split with another applicator or crew — the office will complete and close it.'
+        : completeMsg);
     }
     setCompleting(false);
   };
@@ -2104,12 +2459,31 @@ export default function JobDetail() {
       if (error) throw error;
       transferJobIdem.resetKey();
       const result = assertRpcResult<TransferJobResult>(data, 'transfer_job_to_invoice');
-      toast('success', `Invoice ${result.invoice_number} created`);
       setIsDirty(false);
+      if (result.split && (result.invoice_count ?? 0) > 1) {
+        // U7 multi-owner split: one payable invoice was created per field owner. Navigate to
+        // the anchor (primary owner) member; the invoice view links to the sibling invoices.
+        toast('success', `Created ${result.invoice_count} split invoices — one per field owner`);
+      } else {
+        toast('success', `Invoice ${result.invoice_number} created`);
+      }
       navigate(`/field-invoices/${result.invoice_id}`);
     } catch (err: unknown) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'transfer_job_to_invoice' } });
-      toast('error', err instanceof Error ? err.message : 'Failed to transfer to invoice');
+      if (hasRpcCode(err, RpcErrorCodes.BLEND_TICKET_ALREADY_BILLED)) {
+        // U6 #91b: a blend ticket for this job was already billed — invoicing the job
+        // too would double-bill. Point the user at the existing bill instead.
+        toast('error', 'A blend ticket for this job has already been billed. Invoicing the job as well would double-charge the customer — void that blend-ticket invoice first if you meant to re-bill here.');
+      } else if (hasRpcCode(err, RpcErrorCodes.SPLIT_OVERRIDE_UNSUPPORTED)) {
+        // U7: a multi-owner job with per-field $/acre price overrides can't be percentage-split.
+        toast('error', 'This job has more than one field owner AND per-field $/acre pricing, which the automatic split does not support. Bill it as a single invoice, or price each owner in the field-application invoice editor.');
+      } else if (hasRpcCode(err, RpcErrorCodes.FIELD_SPLIT_NOT_100)) {
+        toast('error', 'One of this job’s fields has ownership splits that don’t add up to 100%. Fix the field billing splits, then transfer again.');
+      } else if (hasRpcCode(err, RpcErrorCodes.SPLIT_NO_ACRES)) {
+        toast('error', 'This multi-owner job has no billable acres to split. Enter acres to treat on its fields, then transfer again.');
+      } else {
+        toast('error', err instanceof Error ? err.message : 'Failed to transfer to invoice');
+      }
     }
     setTransferring(false);
   };
@@ -2178,6 +2552,56 @@ export default function JobDetail() {
   };
 
   const handleLoadRecipe = () => loadRecipeById(selectedRecipeId, recipeMode);
+
+  // P2-4: load a crop program's products into the chem rows. APPENDS (owner
+  // decision 2026-07-03) — never wipes existing lines; the user reviews + Saves.
+  // Reads the in-memory program (no fetch); mirrors loadRecipeById's seed → acres
+  // re-derive so a loaded line reflects THIS job's acreage.
+  const loadProgramById = async (programId: string) => {
+    if (loadingProgram) return; // in-flight guard: a double-click must not append twice
+    const program = cropPrograms.find((p) => p.id === programId);
+    if (!program) return;
+    if (program.items.length === 0) {
+      toast('error', 'That program has no products.');
+      return;
+    }
+    setLoadingProgram(true);
+    try {
+    const cust = customers.find((c) => c.id === customerId);
+    const tier = (cust?.assigned_tier ?? 1) as 1 | 2 | 3;
+    const acres = sumAcres(fieldRows);
+
+    // Build a product lookup that ALSO includes any since-deactivated products the
+    // program references (allProducts is is_active=true only) so cost/price/REI/PHI
+    // are still correct — otherwise a discontinued line would load at $0 with no
+    // label data (Codex P2). Mirrors the applicator-sheet compliance fetch by id.
+    const byId = new Map(allProducts.map((p) => [p.id, p] as const));
+    const missingIds = [...new Set(program.items.map((it) => it.product_id).filter((id) => id && !byId.has(id)))];
+    if (missingIds.length > 0) {
+      const { data: extra, error: extraErr } = await supabase.from('products').select('*').in('id', missingIds);
+      if (extraErr) {
+        Sentry.captureException(extraErr, { tags: { source: 'fetch', action: 'load_program_inactive_products' } });
+      } else {
+        (extra as Product[] | null)?.forEach((p) => byId.set(p.id, p));
+      }
+    }
+
+    const seeds: ChemRow[] = program.items.map((item, idx) => {
+      const product = byId.get(item.product_id);
+      const seed = programItemToChemRowSeed(item, product, tier);
+      const row = acres > 0
+        ? recomputeChemRowForAcres({ ...seed, sort_order: idx }, acres)
+        : { ...seed, sort_order: idx };
+      return row as ChemRow;
+    });
+    setChemRows((prev) => [...prev, ...seeds].map((c, i) => ({ ...c, sort_order: i })));
+    toast('success', `Added ${program.items.length} product${program.items.length === 1 ? '' : 's'} from "${program.name}" — review and Save.`);
+    setShowProgramModal(false);
+    setSelectedProgramId('');
+    } finally {
+      setLoadingProgram(false);
+    }
+  };
 
   /** One-click "use last used recipe" — loads the per-browser last recipe (replace). */
   const handleUseLastRecipe = () => {
@@ -2363,10 +2787,16 @@ export default function JobDetail() {
       product_id: '', product_name: '', quantity: '0', unit: '', rate_per_acre: '', rate_unit: '',
       cost_per_unit_cents: '0', price_per_unit_cents: '0',
       diluent_rate: '', rei_hours: '', phi_days: '', warehouse: '', vendor: '',
+      customer_supplied: false,
       sort_order: chemRows.length,
     }]);
   };
   const removeChemRow = (i: number) => setChemRows(chemRows.filter((_, idx) => idx !== i));
+  const toggleChemSupplied = (i: number) => {
+    const updated = [...chemRows];
+    updated[i] = { ...updated[i], customer_supplied: !updated[i].customer_supplied };
+    setChemRows(updated);
+  };
   const updateChemRow = (i: number, key: keyof ChemRow, value: string) => {
     const updated = [...chemRows];
     updated[i] = { ...updated[i], [key]: value };
@@ -2427,8 +2857,30 @@ export default function JobDetail() {
   }
 
   const canEdit = isEditable && (isNew || status === 'scheduled' || status === 'in_progress');
-  const canComplete = !isNew && status === 'in_progress';
-  const canTransfer = !isNew && status === 'completed';
+  // U12: the assigned applicator (job-level applicator_id match — mirrors the
+  // existing AppliedRecordsManager canEdit gate a few hundred lines down) can
+  // see Start/Complete on THEIR OWN job even though isEditable is office-only.
+  // Verified server-side: start_job/complete_job already authorize
+  // `is_applicator() AND jobs.applicator_id = actor` (and, after migration
+  // 20260706060000, a per-location dispatchee too) — this UI gate was simply
+  // narrower than what the RPC already allowed, hiding a legitimate action.
+  const isAssignedApplicator = profile?.role === 'applicator' && !!applicatorId && applicatorId === profile?.id;
+  // U12 Codex R3 #2: an applicator holding an ACTIVE per-location dispatch row
+  // (hasActiveDispatch) can also start/complete — mirrors the assignment-
+  // unification migration's server-side authorization. Cancel/Transfer stay
+  // office-only (isEditable) — deliberately NOT widened.
+  const canStart = !isNew && status === 'scheduled' && (isEditable || isAssignedApplicator || hasActiveDispatch);
+  // #68: also allow completing a still-'scheduled' job (sprayed earlier, keyed in
+  // now). handleComplete chains start_job → complete_job so the office skips the
+  // fake Start-then-Complete click. Start Job also stays available for the
+  // start-now-spray-later flow.
+  const canComplete = !isNew && (status === 'in_progress' || status === 'scheduled') && (isEditable || isAssignedApplicator || hasActiveDispatch);
+  // Cancel/Transfer are OFFICE decisions (cancelling work or converting it to a
+  // billable invoice) — not verified-safe to hand an applicator: Cancel had NO
+  // role gate at all before U12 (any of admin/sales_rep/applicator viewing this
+  // page could click it), and Transfer's only gate was the job's status.
+  const canCancel = !isNew && (status === 'scheduled' || status === 'in_progress') && isEditable;
+  const canTransfer = !isNew && status === 'completed' && isEditable;
 
   // Selectable customers for a share row = the field owner + any customer (cross-bill).
   const shareInputCls = 'w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg disabled:bg-gray-50';
@@ -2491,23 +2943,55 @@ export default function JobDetail() {
               </Button>
             </>
           )}
-          {!isNew && (status === 'scheduled' || status === 'in_progress') && (
+          {canCancel && (
             <Button variant="danger" onClick={() => setShowCancelConfirm(true)} loading={cancelling}>
               <Ban className="w-4 h-4" />
               Cancel Job
             </Button>
           )}
-          {!isNew && status === 'scheduled' && isEditable && (
-            <Button variant="secondary" onClick={handleStart} loading={starting} disabled={starting}>
+          {canStart && (
+            <Button
+              variant="secondary"
+              onClick={() => {
+                // U3 (Codex R2 P1): starting refetches the job and resets the dirty
+                // baseline — an unsaved Application Service (or any edit) would be
+                // silently lost and the later invoice would under-bill. Save first.
+                if (isDirty) {
+                  toast('warning', 'You have unsaved changes — click Save Changes first, then start the job.');
+                  return;
+                }
+                void handleStart();
+              }}
+              loading={starting}
+              disabled={starting}
+            >
               <Check className="w-4 h-4" />
               Start Job
             </Button>
           )}
           {canComplete && (
-            <Button variant="secondary" onClick={() => { completeJobIdem.resetKey(); setShowCompleteModal(true); }}>
+            <Button
+              variant="secondary"
+              onClick={() => {
+                // U3 (Codex P1): completion reads billing-impacting fields (e.g. the
+                // Application Service) from the DATABASE — unsaved edits would be
+                // silently lost and the invoice would under-bill. Save first.
+                if (isDirty) {
+                  toast('warning', 'You have unsaved changes — click Save Changes first, then complete the job.');
+                  return;
+                }
+                completeJobIdem.resetKey();
+                setShowCompleteModal(true);
+              }}
+            >
               <Check className="w-4 h-4" />
               Complete Job
             </Button>
+          )}
+          {canTransfer && growerShareFieldNames.length > 0 && (
+            <div className="max-w-sm px-3 py-1.5 rounded-lg bg-blue-50 text-xs text-blue-800">
+              Grower-share override active on <strong>{growerShareFieldNames.join(', ')}</strong> — the invoice will bill those growers at the override rate.
+            </div>
           )}
           {canTransfer && (
             <Button variant="secondary" onClick={() => setShowTransferConfirm(true)} loading={transferring}>
@@ -2543,7 +3027,23 @@ export default function JobDetail() {
             <label className="block text-sm font-medium text-nav-dark mb-1">Customer *</label>
             <select
               value={customerId}
-              onChange={(e) => { setCustomerId(e.target.value); setFieldRows([]); setShareRows([]); }}
+              onChange={(e) => {
+                const newCustomerId = e.target.value;
+                setCustomerId(newCustomerId);
+                setFieldRows([]);
+                setShareRows([]);
+                // New jobs only: prefill the application service from the
+                // customer's default. A MANUAL pick is never clobbered, but an
+                // AUTO-FILLED one is re-evaluated on every customer change
+                // (Codex P2: Customer A's default must not silently ride into
+                // Customer B's job and bill the wrong per-acre fee).
+                if (isNew && (!applicationServiceId || svcAutoFilledRef.current)) {
+                  const selected = customers.find((c) => c.id === newCustomerId);
+                  const def = selected?.default_application_service_id ?? null;
+                  setApplicationServiceId(def);
+                  svcAutoFilledRef.current = def !== null;
+                }
+              }}
               disabled={!canEdit}
               className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:bg-gray-50"
             >
@@ -2591,6 +3091,24 @@ export default function JobDetail() {
                 </p>
               );
             })()}
+            {/* U13 (#15-21/#111): saving this dropdown auto-syncs a whole-job
+                per-location dispatch via a DB trigger (no click needed). This
+                button is for the OTHER case — splitting the job across
+                different applicators/crews per location, or reviewing/
+                reassigning an existing split. */}
+            {/* Codex R4 P2: only render for dispatchable statuses — the wizard's
+                RPC rejects anything else with JOB_NOT_DISPATCHABLE at Finish. */}
+            {!isNew && isEditable && (status === 'scheduled' || status === 'in_progress') && (
+              <button
+                type="button"
+                onClick={openDispatchWizard}
+                disabled={dispatchWizardLoading}
+                className="mt-1.5 inline-flex items-center gap-1.5 text-xs font-medium text-crx-green hover:underline disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <Send className="w-3.5 h-3.5" />
+                {dispatchWizardLoading ? 'Loading locations…' : 'Dispatch Locations'}
+              </button>
+            )}
           </div>
           <div>
             <label className="block text-sm font-medium text-nav-dark mb-1">Vehicle</label>
@@ -2605,6 +3123,20 @@ export default function JobDetail() {
                 <option key={v.id} value={v.id}>{v.vehicle_name} ({v.vehicle_type})</option>
               ))}
             </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-nav-dark mb-1">Application Service</label>
+            <ApplicationServicePicker
+              value={applicationServiceId}
+              onChange={(v) => {
+                // Any change through the picker is the user's hand — from here
+                // on, customer switches must not overwrite it (Codex P2).
+                svcAutoFilledRef.current = false;
+                setApplicationServiceId(v);
+              }}
+              disabled={!canEdit}
+            />
+            <p className="mt-1 text-xs text-gray-500">Adds a per-acre machine fee to this job's invoice.</p>
           </div>
           <Input
             label="Batch ID"
@@ -2778,17 +3310,13 @@ export default function JobDetail() {
                       <div className="grid grid-cols-2 md:grid-cols-7 gap-2 items-end">
                         <div className="col-span-2 md:col-span-2">
                           <label className="block text-xs font-medium text-secondary mb-1">Field</label>
-                          <select
+                          <SearchableSelect
+                            options={customerFields.map((cf) => ({ value: cf.id, label: cf.field_name }))}
                             value={f.field_id}
-                            onChange={(e) => updateFieldRow(i, 'field_id', e.target.value)}
+                            onChange={(value) => updateFieldRow(i, 'field_id', value)}
                             disabled={!canEdit}
-                            className={shareInputCls}
-                          >
-                            <option value="">Select field...</option>
-                            {customerFields.map((cf) => (
-                              <option key={cf.id} value={cf.id}>{cf.field_name}</option>
-                            ))}
-                          </select>
+                            placeholder="Select field..."
+                          />
                         </div>
                         <div>
                           <label className="block text-xs font-medium text-secondary mb-1">Acres</label>
@@ -2836,17 +3364,13 @@ export default function JobDetail() {
                           <div className="space-y-1.5">
                             {fieldShares.map((s) => (
                               <div key={s.idx} className="flex items-center gap-2">
-                                <select
+                                <SearchableSelect
+                                  options={customers.map((c) => ({ value: c.id, label: c.farm_name }))}
                                   value={s.customer_id}
-                                  onChange={(e) => updateShareRow(s.idx, 'customer_id', e.target.value)}
+                                  onChange={(value) => updateShareRow(s.idx, 'customer_id', value)}
                                   disabled={!canEdit}
-                                  className="flex-1 px-2 py-1 text-sm border border-gray-200 rounded disabled:bg-gray-50"
-                                >
-                                  <option value="">Select customer...</option>
-                                  {customers.map((c) => (
-                                    <option key={c.id} value={c.id}>{c.farm_name}</option>
-                                  ))}
-                                </select>
+                                  placeholder="Select customer..."
+                                />
                                 <input
                                   type="number" min={0} max={100} step="0.01"
                                   value={s.split_pct}
@@ -2896,6 +3420,12 @@ export default function JobDetail() {
                   <Beaker className="w-4 h-4" /> Select Recipe
                 </Button>
               )}
+              {canEdit && cropPrograms.some((p) => p.is_active) && (
+                <Button size="sm" variant="secondary" onClick={() => { setSelectedProgramId(''); setShowProgramModal(true); }}
+                  title="Add a saved crop program's products to this job">
+                  <Sprout className="w-4 h-4" /> Load Program
+                </Button>
+              )}
               {canEdit && lastRecipeId && recipes.some((r) => r.id === lastRecipeId) && (
                 <Button size="sm" variant="secondary" onClick={handleUseLastRecipe} loading={loadingRecipe}
                   title={`Load "${recipes.find((r) => r.id === lastRecipeId)?.name || 'last recipe'}" (replaces current chemicals)`}>
@@ -2936,11 +3466,13 @@ export default function JobDetail() {
                     <div className="grid grid-cols-12 gap-2 items-end">
                       <div className="col-span-12 md:col-span-3">
                         <label className="block text-xs font-medium text-secondary mb-1">Chemical</label>
-                        <select value={c.product_id} onChange={(e) => updateChemRow(i, 'product_id', e.target.value)}
-                          disabled={!canEdit} className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg disabled:bg-gray-50">
-                          <option value="">Select product...</option>
-                          {allProducts.map((p) => (<option key={p.id} value={p.id}>{p.product_name}</option>))}
-                        </select>
+                        <SearchableSelect
+                          options={allProducts.map((p) => ({ value: p.id, label: p.product_name }))}
+                          value={c.product_id}
+                          onChange={(value) => updateChemRow(i, 'product_id', value)}
+                          disabled={!canEdit}
+                          placeholder="Select product..."
+                        />
                       </div>
                       <div className="col-span-6 md:col-span-2">
                         <label className="block text-xs font-medium text-secondary mb-1">Warehouse</label>
@@ -2961,8 +3493,17 @@ export default function JobDetail() {
                         {/* The per-acre RATE unit (e.g. pt/ac) — this is what the job
                             list summary and the WPS notice read from rate_unit. */}
                         <label className="block text-xs font-medium text-secondary mb-1">Rate Unit</label>
-                        <input type="text" value={c.rate_unit} onChange={(e) => updateChemRow(i, 'rate_unit', e.target.value)}
-                          disabled={!canEdit} placeholder="pt/ac" className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg disabled:bg-gray-50" />
+                        <select value={c.rate_unit} onChange={(e) => updateChemRow(i, 'rate_unit', e.target.value)}
+                          disabled={!canEdit} className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg disabled:bg-gray-50">
+                          <option value="">-- unit --</option>
+                          {/* WaveB: canonical bare units filtered by product form (Codex P2); grandfather a legacy/mismatched value */}
+                          {c.rate_unit && !isKnownUnit(unitConversions, previewForm, c.rate_unit) && (
+                            <option value={c.rate_unit}>{c.rate_unit} (existing)</option>
+                          )}
+                          {unitOptionsForForm(unitConversions, previewForm).map((uc) => (
+                            <option key={uc.id} value={uc.unit}>{uc.unit}</option>
+                          ))}
+                        </select>
                       </div>
                       <div className="col-span-4 md:col-span-1 flex items-end">
                         {canEdit && (
@@ -2983,8 +3524,17 @@ export default function JobDetail() {
                         {/* Measure unit of the total applied (e.g. GAL / LB) — drives the
                             gallon/lb conversion and the loader-worksheet total. */}
                         <label className="block text-xs font-medium text-secondary mb-1">Unit</label>
-                        <input type="text" value={c.unit} onChange={(e) => updateChemRow(i, 'unit', e.target.value)}
-                          disabled={!canEdit} placeholder="gal/lb" className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg disabled:bg-gray-50" />
+                        <select value={c.unit} onChange={(e) => updateChemRow(i, 'unit', e.target.value)}
+                          disabled={!canEdit} className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg disabled:bg-gray-50">
+                          <option value="">-- unit --</option>
+                          {/* WaveB: canonical bare units filtered by product form (Codex P2); grandfather a legacy/mismatched value */}
+                          {c.unit && !isKnownUnit(unitConversions, previewForm, c.unit) && (
+                            <option value={c.unit}>{c.unit} (existing)</option>
+                          )}
+                          {unitOptionsForForm(unitConversions, previewForm).map((uc) => (
+                            <option key={uc.id} value={uc.unit}>{uc.unit}</option>
+                          ))}
+                        </select>
                       </div>
                       <div className="col-span-6 md:col-span-1">
                         <label className="block text-xs font-medium text-secondary mb-1">Equiv.</label>
@@ -3019,6 +3569,20 @@ export default function JobDetail() {
                         <input type="number" value={c.price_per_unit_cents} onChange={(e) => updateChemRow(i, 'price_per_unit_cents', e.target.value)}
                           disabled={!canEdit} step="1" className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg disabled:bg-gray-50" />
                       </div>
+                    </div>
+                    {/* #53/#54: grower-supplied product — applied but not deducted or billed. */}
+                    <div className="flex items-center gap-2 pt-1">
+                      <input
+                        type="checkbox"
+                        id={`cust-supp-${i}`}
+                        checked={c.customer_supplied}
+                        onChange={() => toggleChemSupplied(i)}
+                        disabled={!canEdit}
+                        className="h-4 w-4 rounded border-gray-300 text-crx-green focus:ring-crx-green disabled:opacity-50"
+                      />
+                      <label htmlFor={`cust-supp-${i}`} className="text-xs font-medium text-secondary select-none">
+                        Customer supplied &mdash; apply it, but don&rsquo;t deduct our inventory or bill for this product
+                      </label>
                     </div>
                     {/* §5 Label-Rate Guardrails: rate-vs-max + PHI-vs-harvest on the job mix
                         grid (unit-safe; never blocks here — the save gate handles block mode).
@@ -3439,6 +4003,12 @@ export default function JobDetail() {
           <p className="text-sm text-secondary">
             Record weather conditions and actual application data. This will create an application record and deduct inventory.
           </p>
+          {status === 'scheduled' && (
+            <div className="flex items-start gap-2 p-2.5 rounded-lg bg-blue-50 text-xs text-blue-800">
+              <Check className="w-4 h-4 flex-shrink-0 mt-0.5" />
+              <span>This job hasn&apos;t been started yet &mdash; completing it will mark it started and finished in one step (for a job sprayed earlier and recorded now).</span>
+            </div>
+          )}
           {jobFieldCentroid && (
             <Button variant="ghost" size="sm" onClick={handleFetchWeather} loading={fetchingWeather}>
               <CloudSun className="w-4 h-4" />
@@ -3512,6 +4082,37 @@ export default function JobDetail() {
             <Button variant="secondary" onClick={() => setShowRecipeModal(false)}>Cancel</Button>
             <Button onClick={handleLoadRecipe} disabled={!selectedRecipeId} loading={loadingRecipe}>
               <Beaker className="w-4 h-4" /> Load Recipe
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* P2-4: Load Crop Program Modal (append-only) */}
+      <Modal open={showProgramModal} onClose={() => setShowProgramModal(false)} title="Load Crop Program">
+        <div className="space-y-4">
+          <p className="text-sm text-secondary">
+            Add a saved crop program's products (with their per-acre rates) to this job. The lines are <strong>added</strong> to the current chemicals and stay editable — review them and Save the job to keep them. Programs matching this job's crop are listed first.
+          </p>
+          <div>
+            <label className="block text-xs font-medium text-secondary mb-1">Program</label>
+            <select
+              value={selectedProgramId}
+              onChange={(e) => setSelectedProgramId(e.target.value)}
+              aria-label="Select crop program"
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg"
+            >
+              <option value="">Select program...</option>
+              {orderProgramsForJob(cropPrograms, fieldRows.map((f) => f.crop)).map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name} — {p.crop_type} {p.season} ({p.items.length} product{p.items.length === 1 ? '' : 's'})
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="secondary" onClick={() => setShowProgramModal(false)}>Cancel</Button>
+            <Button onClick={() => loadProgramById(selectedProgramId)} disabled={!selectedProgramId || loadingProgram} loading={loadingProgram}>
+              <Sprout className="w-4 h-4" /> Load Program
             </Button>
           </div>
         </div>
@@ -3667,7 +4268,9 @@ export default function JobDetail() {
         onClose={() => setShowTransferConfirm(false)}
         onConfirm={() => { setShowTransferConfirm(false); handleTransferToInvoice(); }}
         title="Transfer to Invoice"
-        message="Transfer this job to an invoice? This will create a new invoice from the job chemicals."
+        message={isMultiOwner
+          ? `This job has fields billed to more than one owner. Transfer to Invoice creates ONE invoice to ${customers.find((c) => c.id === customerId)?.farm_name || 'the primary customer'}; each landlord's share shows on statements but CANNOT be paid separately (per-owner billing for spray jobs is coming soon). Continue only if the tenant is collecting from the other owners.`
+          : 'Transfer this job to an invoice? This will create a new invoice from the job chemicals.'}
         confirmLabel="Transfer to Invoice"
         variant="warning"
         loading={transferring}
@@ -3701,6 +4304,21 @@ export default function JobDetail() {
         confirmLabel={postSendCopy.confirmLabel}
         variant="warning"
         loading={sendingPostNotice}
+      />
+
+      {/* U13 (#15-21/#111): job-scoped Dispatch Locations wizard. */}
+      <DispatchWizard
+        open={dispatchWizardOpen}
+        onClose={() => setDispatchWizardOpen(false)}
+        locations={dispatchWizardLocations}
+        initialSelectedIds={dispatchWizardLocations.map((l) => l.jobFieldId)}
+        applicators={applicators
+          .filter((a) => a.role === 'applicator')
+          .map((a) => ({ id: a.id, full_name: a.full_name }))}
+        crews={groundCrews}
+        performedBy={profile?.id || ''}
+        isAdmin={role === 'admin'}
+        onDispatched={() => setDispatchWizardOpen(false)}
       />
     </div>
   );

@@ -3,6 +3,7 @@ import { Plus, Trash2, Save, AlertCircle, Beaker } from 'lucide-react';
 import Button from '../ui/Button';
 import Card from '../ui/Card';
 import Input from '../ui/Input';
+import SearchableSelect from '../ui/SearchableSelect';
 import { supabase, assertRpcResult, checkMutationResult } from '../../lib/db';
 import { useAuth } from '../../contexts/AuthContext';
 import { logActivity } from '../../lib/activityLogger';
@@ -136,7 +137,11 @@ export function ManualTicketCreate({ customers, onComplete }: ManualTicketCreate
   }
 
   function updateProduct(tempId: string, field: keyof ManualProduct, value: string | number | null) {
-    setProducts(products.map(p => (p.tempId === tempId ? { ...p, [field]: value } : p)));
+    // Functional updater: the product-select onChange fires updateProduct twice back-to-back
+    // (product_id then product_name). Reading `products` from the closure made the second call
+    // overwrite the first (product_id was lost -> $0 pricing / FK crash on create-order). Using
+    // the previous-state form composes both updates correctly.
+    setProducts(prev => prev.map(p => (p.tempId === tempId ? { ...p, [field]: value } : p)));
   }
 
   function removeProduct(tempId: string) {
@@ -246,18 +251,12 @@ export function ManualTicketCreate({ customers, onComplete }: ManualTicketCreate
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div className="md:col-span-2">
             <label className="block text-sm font-medium text-gray-700 mb-1">Customer</label>
-            <select
+            <SearchableSelect
+              options={customers.map((customer) => ({ value: customer.id, label: customer.farm_name }))}
               value={formData.customer_id}
-              onChange={(e) => setFormData({ ...formData, customer_id: e.target.value })}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            >
-              <option value="">Select Customer</option>
-              {customers.map(customer => (
-                <option key={customer.id} value={customer.id}>
-                  {customer.farm_name}
-                </option>
-              ))}
-            </select>
+              onChange={(value) => setFormData({ ...formData, customer_id: value })}
+              placeholder="Select Customer"
+            />
           </div>
 
           <div>
@@ -455,24 +454,18 @@ export function ManualTicketCreate({ customers, onComplete }: ManualTicketCreate
             <div key={product.tempId} className="grid grid-cols-12 gap-3 items-start p-4 bg-gray-50 rounded-lg">
               <div className="col-span-12 md:col-span-3">
                 <label className="block text-xs font-medium text-gray-700 mb-1">Product</label>
-                <select
+                <SearchableSelect
+                  options={allProducts.map((p) => ({ value: p.id, label: p.product_name }))}
                   value={product.product_id || ''}
-                  onChange={(e) => {
-                    updateProduct(product.tempId, 'product_id', e.target.value || null);
-                    const selected = allProducts.find(p => p.id === e.target.value);
+                  onChange={(value) => {
+                    updateProduct(product.tempId, 'product_id', value || null);
+                    const selected = allProducts.find(p => p.id === value);
                     if (selected) {
                       updateProduct(product.tempId, 'product_name', selected.product_name);
                     }
                   }}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                >
-                  <option value="">Select Product</option>
-                  {allProducts.map(p => (
-                    <option key={p.id} value={p.id}>
-                      {p.product_name}
-                    </option>
-                  ))}
-                </select>
+                  placeholder="Select Product"
+                />
               </div>
 
               <div className="col-span-4 md:col-span-1">

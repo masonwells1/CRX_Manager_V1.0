@@ -7,6 +7,7 @@ import LoginPage from './components/auth/LoginPage';
 import ForgotPasswordPage from './components/auth/ForgotPasswordPage';
 import ResetPasswordPage from './components/auth/ResetPasswordPage';
 import ProtectedRoute from './components/auth/ProtectedRoute';
+import RoleLanding from './components/auth/RoleLanding';
 import AppLayout from './components/layout/AppLayout';
 import { checkEnvVars, EnvErrorScreen } from './components/EnvCheck';
 import { trackNavigation } from './lib/metrics';
@@ -60,6 +61,7 @@ const ARaging = lazy(() => import('./pages/ARaging'));
 const AccountsReceivable = lazy(() => import('./pages/AccountsReceivable'));
 const Compliance = lazy(() => import('./pages/Compliance'));
 const LabelReview = lazy(() => import('./pages/LabelReview'));
+const LabelDataQuality = lazy(() => import('./pages/LabelDataQuality'));
 const WatchdogExceptions = lazy(() => import('./pages/WatchdogExceptions'));
 const OfficeCockpit = lazy(() => import('./pages/OfficeCockpit'));
 const Rebates = lazy(() => import('./pages/Rebates'));
@@ -183,7 +185,8 @@ const router = createBrowserRouter([
           element: <RouteShell />,
           children: [
           // All authenticated roles
-          { index: true, element: <Dashboard /> },
+          { index: true, element: <RoleLanding /> },
+          { path: 'dashboard', element: <Dashboard /> },
           { path: 'team-board', element: <TeamBoard /> },
           { path: 'notifications', element: <Notifications /> },
           { path: 'getting-started', element: <GettingStarted /> },
@@ -244,6 +247,7 @@ const router = createBrowserRouter([
           { path: 'compliance', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><Compliance /></ProtectedRoute> },
           { path: 'lot-trace', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><LotTrace /></ProtectedRoute> },
           { path: 'label-review', element: <ProtectedRoute allowedRoles={['admin']}><LabelReview /></ProtectedRoute> },
+          { path: 'label-data-quality', element: <ProtectedRoute allowedRoles={['admin']}><LabelDataQuality /></ProtectedRoute> },
           { path: 'watchdog', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><WatchdogExceptions /></ProtectedRoute> },
           { path: 'office-cockpit', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><OfficeCockpit /></ProtectedRoute> },
           { path: 'rebates', element: <ProtectedRoute allowedRoles={['admin']}><Rebates /></ProtectedRoute> },

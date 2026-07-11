@@ -5,7 +5,7 @@ Drive a coding job from "implement" all the way to "reviewed, committed, and rea
 Autonomy boundary (Mason's standing choice — do not exceed without asking):
 - **Migrations:** NEVER apply migrations to the live DB without Mason's explicit approval in the current conversation.
 - **Edge functions:** NEVER deploy an edge function without Mason's explicit approval.
-- **Prod push:** AUTO-PUSH is authorized (Mason, 2026-06-16). Once this pipeline is green (Step 4 clean + Step 2/2.5 pass) and the pre-push hook's typecheck+build pass, push to `main` WITHOUT asking. `main` = live croprxsolutions.app; Vercel rollback is one click if a problem surfaces.
+- **Prod push:** NEVER push `main` or a production branch without Mason's explicit approval in the current conversation. `main` is live at croprxsolutions.app.
 
 ## Step 0 — Set up a branch
 
@@ -124,15 +124,15 @@ This gate runs the Codex *review* automatically; it never pushes by itself — t
 
 ## Step 7 — Docs + commit (on the branch)
 
-Update the docs the change touched (per CLAUDE.md "Keeping Docs In Sync"): CLAUDE.md Snapshot counts, `docs/reference/migration-history.md`, `rpc-functions.md`, `pages-routes.md`, `database-schema.md`, `docs/CHANGELOG.md` as applicable.
+Update the docs the change touched: `docs/reference/migration-history.md`, `rpc-functions.md`, `pages-routes.md`, `database-schema.md`, `docs/CHANGELOG.md`, and the relevant workflow doc as applicable. Do not add volatile counts to AGENTS.md or CLAUDE.md.
 
 Before committing, run `node scripts/check-doc-drift.mjs` — fix any drift it reports (stale counts, missing migration-history rows) rather than committing around it.
 
 Re-verify the branch (`git branch --show-current`), then commit **on the branch** with a clear message. The husky pre-commit hook re-runs lint/build/test — if it rejects, fix and retry (never `--no-verify`).
 
-## Step 8 — Auto-push (pipeline green), then present the result
+## Step 8 — Present the production decision and stop
 
-Once Step 4 is clean and Step 2/2.5 are green, **push to `main` automatically** — Mason's standing auto-push authorization (2026-06-16): no approval click for regular code. The pre-push hook re-runs typecheck+build as the final gate, so a non-compiling change can't go out. (If this change involved a live migration or an edge-function deploy, those already stopped for Mason's explicit OK in Step 5 / Step 6 — only the *code push* is automatic.) Then print the summary:
+Once Step 4 is clean and Step 2/2.5 are green, present the branch, commit, verification evidence, migration/deploy state, and the exact push or production action you recommend. Then stop and ask Mason for explicit approval. Do not treat an old standing authorization as approval for the current change.
 
 ```
 ═══════════════════════════════════════════════════
@@ -154,20 +154,18 @@ Migration: <applied live + smoke-tested / none>
 Codex:    <verdict: SHIP / SHIP-WITH-FOLLOWUPS after N fixes / not worthy / CLI down → packet pending>
 Deferred: <MED/LOW items accepted, if any>
 
-─── PUSHED ──────────────────────────────────────────
-  Auto-pushed to main (pipeline was green). Vercel is
-  deploying; one-click rollback if anything looks off.
-  (A live migration / edge-fn deploy would have stopped
-   for your OK earlier — none here, or noted above.)
+─── READY — NOT PUSHED ──────────────────────────────
+  Production action: <exact command/action proposed>
+  Waiting for Mason's explicit approval in this conversation.
 ```
 
-The code push is automatic once green; only live migrations and edge-function deploys wait for Mason.
+After Mason explicitly approves, perform only the approved action, inspect the result, and report the production evidence. A push approval does not also approve a migration or Edge Function deploy.
 
 ## Hard Rules
-- Auto-push regular code once the pipeline is green (Mason's standing authorization). NEVER auto-apply a live migration or auto-deploy an edge function — those two still need Mason's explicit OK in the turn.
+- NEVER push `main` or a production branch without Mason's explicit approval in the current conversation.
 - NEVER apply a migration without Mason's explicit approval in the current conversation, the two reviewers clean, and the proof file written (the guard enforces this; don't try to route around it).
 - NEVER report the gate "clean" while any confirmed BLOCKER/HIGH is open, even if lint/build/test pass.
 - NEVER skip the review fan-out to "save time" — it is the entire point of `/ship`.
 - NEVER `--no-verify`, `@ts-ignore`, or `any` (except `reportPdf.ts` columnStyles).
-- Auto-applying a live migration is not allowed; auto-deploying an edge function is not allowed. Auto-pushing regular code once the pipeline is green IS allowed (Mason authorized it 2026-06-16).
+- Auto-applying a live migration, auto-deploying an Edge Function, and auto-pushing a production branch are not allowed.
 - If a required safety gate is unavailable (e.g. a reviewer can't run), STOP and hand off — do not self-certify. (Mason's prod-gate-discipline rule.)

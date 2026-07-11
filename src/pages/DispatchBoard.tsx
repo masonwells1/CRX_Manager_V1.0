@@ -9,7 +9,7 @@
  * Job rows show: Job Nbr + customer, applied-of-total acres ('X of Y ac'), a
  * PENDING/ACTIVE status badge, and 'Assigned To: <name>' when dispatched.
  * An OPTIONS menu offers: Filter Jobs By Recipe (#39 stub), More Search Options,
- * Switch View, Add New Job, Reload List.
+ * Switch View, Reload List. Add New Job is a visible header action.
  *
  * One shared filter object (`filters`) drives BOTH views, so switching map<->list
  * keeps the same active filter set (criterion #6).
@@ -50,7 +50,7 @@ import DispatchWizard from '../components/dispatch/DispatchWizard';
 import { usePageMeta } from '../hooks/usePageMeta';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, assertRpcResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
+import { supabase, supabaseUntyped, assertRpcResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
 import ConfirmModal from '../components/ui/ConfirmModal';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import type { Json } from '../types/supabase';
@@ -69,8 +69,9 @@ import {
   type DispatchedListRow,
   type DispatchedAssigneeFilter,
 } from '../lib/dispatchDisplay';
+import { notifyApplicatorDispatched, notifyApplicatorUndispatched } from '../lib/notificationTriggers';
 import { aggregateAssignedTo, type DispatchLocation } from '../lib/dispatchWizard';
-import type { Job, Profile, Field, InventoryPositionRow } from '../types';
+import type { Job, Profile, Field, DispatchStockRow } from '../types';
 
 type NavSection = 'map' | 'list' | 'dispatch' | 'dispatched';
 
@@ -89,6 +90,11 @@ interface JobChemNeed {
   product_name: string;
   quantity: number;
   unit: string | null;
+  inventory_unit: string | null;
+  product_form: string | null;
+  /** U4 (#53): grower-supplied — applied but demands nothing from OUR shed, so it
+   *  must not trip the stock light (the stock RPC excludes it server-side too). */
+  customer_supplied: boolean;
 }
 const STOCK_SEVERITY: Record<JobStockStatus, number> = { unknown: 0, ok: 1, low: 2, short: 3 };
 const worseStock = (a: JobStockStatus, b: JobStockStatus): JobStockStatus =>
@@ -349,10 +355,12 @@ export default function DispatchBoard() {
             .map((j) => j.id)
         : [];
       const chemByJob: Record<string, JobChemNeed[]> = {};
-      // available − prebooked SUMMED across a product's locations; holds_qty is
-      // product-level (the same value on every location row) so it's captured once.
-      const freeByProduct: Record<string, { availLessPrebooked: number; holds: number; reorder: number }> = {};
-      let positionLoaded = false;
+      // Layer 2 (B3): per-(job,product) stock-light inputs from the dedicated,
+      // role-gated RPC. `free` EXCLUDES this job's own hold and `demand` is already
+      // unit-converted server-side — replaces the client-side get_inventory_position
+      // compute + fieldAppPricedQuantity.
+      const dispatchStock: Record<string, Record<string, { demand: number; free: number; reorder: number; hasInv: boolean }>> = {};
+      let stockLoaded = false;
       if (activeJobIds.length > 0) {
         // Product needs for the schedulable jobs. Chunk the job-id filter (a bare .in()
         // of up to ~500 UUIDs can exceed the request-URL limit) AND page each chunk for
@@ -363,42 +371,44 @@ export default function DispatchBoard() {
           for (let from = 0; ; from += DISPATCH_PAGE) {
             const chemRes = await supabase
               .from('job_chemicals')
-              .select('job_id, product_id, quantity, unit, product:products(product_name)')
+              .select('job_id, product_id, quantity, unit, customer_supplied, product:products(product_name, inventory_unit, product_form)')
               .in('job_id', idChunk)
               .range(from, from + DISPATCH_PAGE - 1);
             if (chemRes.error) {
               Sentry.captureException(chemRes.error, { tags: { source: 'fetch', action: 'dispatch_job_chemicals' } });
               break;
             }
-            const rows = (chemRes.data || []) as Array<{ job_id: string; product_id: string; quantity: number | null; unit: string | null; product?: { product_name?: string } | null }>;
+            const rows = (chemRes.data || []) as unknown as Array<{ job_id: string; product_id: string; quantity: number | null; unit: string | null; customer_supplied?: boolean | null; product?: { product_name?: string; inventory_unit?: string | null; product_form?: string | null } | null }>;
             for (const c of rows) {
               (chemByJob[c.job_id] ||= []).push({
                 product_id: c.product_id,
                 product_name: c.product?.product_name || 'Product',
                 quantity: Number(c.quantity) || 0,
                 unit: c.unit,
+                inventory_unit: c.product?.inventory_unit ?? null,
+                product_form: c.product?.product_form ?? null,
+                customer_supplied: c.customer_supplied ?? false,
               });
             }
             if (rows.length < DISPATCH_PAGE) break;
           }
         }
-        // Today's free stock per product from the canonical position RPC (single call).
-        const { data: posData, error: posErr } = await supabase.rpc('get_inventory_position');
-        if (posErr) {
-          Sentry.captureException(posErr, { tags: { source: 'fetch', action: 'dispatch_inventory_position' } });
+        // Stock-light inputs for exactly the schedulable jobs. Free per (job,product)
+        // already excludes that job's OWN reservation server-side (still conservative
+        // for every OTHER program's hold; never warns a job against itself).
+        const { data: dsData, error: dsErr } = await supabaseUntyped.rpc('get_dispatch_stock_status', { p_job_ids: activeJobIds });
+        if (dsErr) {
+          Sentry.captureException(dsErr, { tags: { source: 'fetch', action: 'dispatch_stock_status' } });
         } else {
-          const posRows = assertRpcResult<InventoryPositionRow[]>(posData, 'get_inventory_position') || [];
-          positionLoaded = true;
-          for (const r of posRows) {
-            // Sum available−prebooked across the product's locations; holds_qty is
-            // product-level (same on every location row) so it's captured once.
-            // CONSERVATIVE by design: free = available − prebooked − ALL active holds, so
-            // the light never falsely says "ok" when stock is reserved for another program.
-            // The cost is that a job backed by its OWN planned-quote hold may over-warn
-            // (harmless — it just prompts an inventory check); precise per-job reservation
-            // attribution is Layer 2.
-            const acc = (freeByProduct[r.product_id] ||= { availLessPrebooked: 0, holds: r.holds_qty, reorder: r.reorder_point });
-            acc.availLessPrebooked += r.quantity_available - r.quantity_prebooked;
+          const dsRows = assertRpcResult<DispatchStockRow[]>(dsData, 'get_dispatch_stock_status') || [];
+          stockLoaded = true;
+          for (const r of dsRows) {
+            (dispatchStock[r.job_id] ||= {})[r.product_id] = {
+              demand: Number(r.demand_qty) || 0,
+              free: Number(r.free_excluding_own_hold) || 0,
+              reorder: Number(r.reorder_point) || 0,
+              hasInv: r.has_inventory === true,
+            };
           }
         }
       }
@@ -408,20 +418,25 @@ export default function DispatchBoard() {
           return { ...j, chemicals: [], stock_status: 'unknown' as JobStockStatus };
         }
         const chems = chemByJob[j.id] || [];
-        // If the position lookup failed (or the job has no products), show 'unknown'
+        // If the stock lookup failed (or the job has no products), show 'unknown'
         // rather than painting every job red on a transient RPC error — don't cry wolf.
-        if (!positionLoaded || chems.length === 0) {
+        if (!stockLoaded || chems.length === 0) {
           return { ...j, chemicals: chems, stock_status: 'unknown' as JobStockStatus };
         }
+        const stockForJob = dispatchStock[j.id] || {};
         let status: JobStockStatus = 'ok';
         for (const c of chems) {
           if (c.quantity <= 0) continue;
-          const pos = freeByProduct[c.product_id];
-          // No inventory record for a product the job needs = a real shortfall signal.
-          if (!pos) { status = worseStock(status, 'short'); continue; }
-          const free = pos.availLessPrebooked - pos.holds;
-          if (c.quantity > free) status = worseStock(status, 'short');
-          else if (free - c.quantity <= pos.reorder) status = worseStock(status, 'low');
+          // U4 (#53, Codex R2): grower-supplied product — the stock RPC returns no
+          // row for it BY DESIGN; skip it here too or the missing row reads as short.
+          if (c.customer_supplied) continue;
+          // demand + free come from the RPC keyed by (job, product): demand is already
+          // unit-converted and free already excludes THIS job's own hold. A missing row
+          // or no inventory record for a needed product = a real shortfall signal.
+          const s = stockForJob[c.product_id];
+          if (!s || !s.hasInv) { status = worseStock(status, 'short'); continue; }
+          if (s.demand > s.free) status = worseStock(status, 'short');
+          else if (s.free - s.demand <= s.reorder) status = worseStock(status, 'low');
         }
         return { ...j, chemicals: chems, stock_status: status };
       });
@@ -634,6 +649,14 @@ export default function DispatchBoard() {
                 </button>
               )}
 
+              <button
+                type="button"
+                onClick={() => navigate('/jobs/new')}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-crx-green px-3 py-2.5 text-sm font-medium text-white hover:bg-crx-green-hover min-h-[44px]"
+              >
+                <Plus className="w-4 h-4" /> Add New Job
+              </button>
+
               {/* OPTIONS menu (criterion #5) */}
               <div className="relative" ref={optionsRef}>
                 <button
@@ -692,13 +715,6 @@ export default function DispatchBoard() {
                     >
                       {activeView === 'map' ? <ListIcon className="w-4 h-4 text-slate-400" /> : <MapIcon className="w-4 h-4 text-slate-400" />}
                       Switch View ({activeView === 'map' ? 'to List' : 'to Map'})
-                    </button>
-                    <button
-                      role="menuitem"
-                      onClick={() => navigate('/jobs/new')}
-                      className="w-full flex items-center gap-3 px-4 py-3 text-sm text-slate-200 hover:bg-slate-700 min-h-[44px]"
-                    >
-                      <Plus className="w-4 h-4 text-slate-400" /> Add New Job
                     </button>
                     <button
                       role="menuitem"
@@ -932,7 +948,7 @@ export default function DispatchBoard() {
           <div className="relative w-full max-w-sm h-full bg-slate-900 border-l border-slate-800 p-5 overflow-y-auto">
             <div className="flex items-center justify-between mb-5">
               <h2 className="text-base font-semibold flex items-center gap-2"><SlidersHorizontal className="w-5 h-5 text-crx-green" /> More Search Options</h2>
-              <button onClick={() => setMoreSearchOpen(false)} className="p-2 rounded-lg hover:bg-slate-800 text-slate-400"><X className="w-5 h-5" /></button>
+              <button aria-label="Close search options" onClick={() => setMoreSearchOpen(false)} className="p-2 rounded-lg hover:bg-slate-800 text-slate-400"><X className="w-5 h-5" /></button>
             </div>
             <div className="space-y-4">
               <label className="block">
@@ -1145,7 +1161,8 @@ function DispatchedList({ applicators, crews, performedBy, canDispatch, isAdmin,
         all.push(...rowsPage);
         if (rowsPage.length < DISPATCH_PAGE) break;
       }
-      setRows(all);
+      // The RPC includes a 7-day completed tail for FieldView's Done section; the office board hides it.
+      setRows(all.filter((r) => r.dispatch_status === 'dispatched'));
     } catch (err) {
       Sentry.captureException(err, { tags: { source: 'fetch', action: 'get_dispatched_list' } });
       toast('error', 'Failed to load the dispatched list');
@@ -1210,6 +1227,18 @@ function DispatchedList({ applicators, crews, performedBy, canDispatch, isAdmin,
       assertRpcResult<{ dispatched: number }>(data, 'dispatch_job_locations');
       reassignKeysRef.current.delete(scope); // confirmed success → next reassign of this intent is a new action
       toast('success', `Reassigned ${row.field_name || 'location'}${licenseOverride ? ' (license override)' : ''}`);
+
+      // U12: notify the NEW applicator they got this location, and — if the
+      // PREVIOUS assignee was a different applicator — notify them it's off
+      // their plate. Crews are skipped (no single user to notify). Best-effort;
+      // never blocks the already-committed reassign.
+      if (kind === 'applicator') {
+        void notifyApplicatorDispatched(id, row.job_number, row.customer_name || 'Unknown', null, row.job_id);
+      }
+      if (row.applicator_id && row.applicator_id !== (kind === 'applicator' ? id : null)) {
+        void notifyApplicatorUndispatched(row.applicator_id, row.job_number, row.customer_name || 'Unknown', row.job_id);
+      }
+
       setReassignFor(null);
       setReassignChoice('');
       await fetchRows();
@@ -1256,6 +1285,12 @@ function DispatchedList({ applicators, crews, performedBy, canDispatch, isAdmin,
       // stale row disappears (Codex #37 final-3 P3).
       if (res.undispatched > 0) {
         toast('success', `Undispatched ${row.field_name || 'location'}`);
+        // U12: tell the applicator this location is off their plate. Skipped
+        // for a crew dispatch (no single user) and skipped when undispatched=0
+        // (nothing actually changed — see the else branch below).
+        if (row.applicator_id) {
+          void notifyApplicatorUndispatched(row.applicator_id, row.job_number, row.customer_name || 'Unknown', row.job_id);
+        }
       } else {
         toast('info', 'This location was already undispatched or its job is no longer active — list refreshed.');
       }

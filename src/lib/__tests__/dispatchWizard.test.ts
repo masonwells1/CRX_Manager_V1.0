@@ -10,6 +10,7 @@ import {
   buildDispatchPayload,
   summarizeDispatch,
   aggregateAssignedTo,
+  locationsBeingStolen,
   DISPATCH_STEPS,
   type AssignmentMap,
   type DispatchAssignee,
@@ -135,5 +136,32 @@ describe('aggregateAssignedTo', () => {
   });
   it('sorts the distinct names for a stable label', () => {
     expect(aggregateAssignedTo(['Zed', 'Abe'], null)).toBe('Abe, Zed');
+  });
+});
+
+describe('locationsBeingStolen', () => {
+  it('is empty when a location has no currentAssignee (never dispatched)', () => {
+    const stolen = locationsBeingStolen(new Set(['jf-a']), { 'jf-a': APP1 }, LOCATIONS);
+    expect(stolen).toEqual([]);
+  });
+  it('is empty when the chosen assignee matches the current one', () => {
+    const withCurrent: DispatchLocation[] = [{ ...LOCATIONS[0], currentAssignee: APP1 }];
+    const stolen = locationsBeingStolen(new Set(['jf-a']), { 'jf-a': APP1 }, withCurrent);
+    expect(stolen).toEqual([]);
+  });
+  it('flags a location being reassigned away from a DIFFERENT current assignee', () => {
+    const withCurrent: DispatchLocation[] = [{ ...LOCATIONS[0], currentAssignee: APP1 }];
+    const stolen = locationsBeingStolen(new Set(['jf-a']), { 'jf-a': APP2 }, withCurrent);
+    expect(stolen.map((l) => l.jobFieldId)).toEqual(['jf-a']);
+  });
+  it('flags a location being reassigned from an applicator to a crew', () => {
+    const withCurrent: DispatchLocation[] = [{ ...LOCATIONS[0], currentAssignee: APP1 }];
+    const stolen = locationsBeingStolen(new Set(['jf-a']), { 'jf-a': CREW1 }, withCurrent);
+    expect(stolen.map((l) => l.jobFieldId)).toEqual(['jf-a']);
+  });
+  it('ignores unselected or unassigned-in-this-session locations', () => {
+    const withCurrent: DispatchLocation[] = [{ ...LOCATIONS[0], currentAssignee: APP1 }];
+    expect(locationsBeingStolen(new Set(), { 'jf-a': APP2 }, withCurrent)).toEqual([]);
+    expect(locationsBeingStolen(new Set(['jf-a']), {}, withCurrent)).toEqual([]);
   });
 });

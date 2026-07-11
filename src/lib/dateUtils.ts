@@ -53,3 +53,31 @@ export function localDatePlusDays(days: number): string {
   date.setDate(date.getDate() + days);
   return formatLocalDate(date);
 }
+
+export const BUSINESS_TIMEZONE = 'America/Chicago';
+
+/**
+ * Today's date as YYYY-MM-DD in BUSINESS_TIMEZONE, regardless of the viewer's own clock.
+ *
+ * Most date-only operations in this file deliberately use the user's local timezone.
+ * Month-end close is the exception: it is a company-wide accounting event, so whether
+ * a month has ended must be based on Crop RX's business timezone, not the browser timezone.
+ */
+export function todayInBusinessTz(now: Date = new Date()): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: BUSINESS_TIMEZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(now);
+
+  const year = parts.find((part) => part.type === 'year')?.value ?? '';
+  const month = parts.find((part) => part.type === 'month')?.value ?? '';
+  const day = parts.find((part) => part.type === 'day')?.value ?? '';
+
+  if (!year || !month || !day) {
+    throw new Error('Unable to format today in the business timezone');
+  }
+
+  return `${year}-${month}-${day}`;
+}

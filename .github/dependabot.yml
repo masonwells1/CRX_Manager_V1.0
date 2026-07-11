@@ -1,0 +1,26 @@
+version: 2
+updates:
+  # npm dependencies — weekly, Mondays 06:00.
+  # Minor + patch version bumps are grouped into ONE PR; majors fall outside
+  # the group and arrive as separate PRs. Security updates are not affected
+  # by this schedule — Dependabot raises those on its own default cadence.
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+    groups:
+      minor-and-patch:
+        applies-to: version-updates
+        update-types:
+          - "minor"
+          - "patch"
+
+  # GitHub Actions workflow dependencies — same weekly cadence.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"

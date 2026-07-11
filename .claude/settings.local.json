@@ -14,10 +14,7 @@
       "Bash(git pull:*)",
       "Bash(git stash:*)",
       "Bash(grep:*)",
-      "mcp__Claude_Preview__preview_start",
-      "Bash(cp \"C:/CRX_CreditMemo/.claude/schema-registry.json\" \"C:/CRX_Manager/.claude/schema-registry.json\")",
-      "Read(//c/CRX_CreditMemo/.claude/**)",
-      "Bash(rm \"C:/CRX_Manager/.claude/session-state/REGISTRY-STALE.flag\" && echo \"REMOVED\"; echo \"---confirm gone---\"; if [ -e \"C:/CRX_Manager/.claude/session-state/REGISTRY-STALE.flag\" ]; then echo \"STILL PRESENT\"; else echo \"GONE\"; fi)"
+      "mcp__Claude_Preview__preview_start"
     ]
   }
 }

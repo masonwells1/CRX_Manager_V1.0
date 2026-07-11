@@ -33,6 +33,7 @@ export interface Product {
   product_name: string;
   sku: string | null;
   category: string | null;
+  use_timing?: string | null;
   vendor: string | null;
   manufacturer: string | null;
   container_size: number | null;
@@ -74,6 +75,41 @@ export interface Product {
   is_active: boolean;
   created_at: string;
   updated_at: string;
+}
+
+// ─── EPA PPLS Lookup ────────────────────────────────────────────────────────
+// Keep this shape in sync with supabase/functions/epa-lookup/logic.ts.
+
+export type EpaRegistrationType = 'section3' | 'distributor';
+export type EpaSignalWordCanonical = 'Danger' | 'Warning' | 'Caution';
+
+export interface EpaActiveIngredient {
+  name: string;
+  percent: number | null;
+  pcCode: string | null;
+  casNumber: string | null;
+}
+
+export interface EpaLabelPdf {
+  fileName: string;
+  acceptedDate: string | null;
+  url: string;
+}
+
+export interface EpaLookupResult {
+  found: boolean;
+  regType: EpaRegistrationType;
+  eparegno: string | null;
+  productname: string | null;
+  signalWordCanonical: EpaSignalWordCanonical | null;
+  needsManual: boolean;
+  manufacturer: string | null;
+  rupYn: 'Yes' | 'No' | null;
+  productStatus: string | null;
+  isCancelled: boolean;
+  activeIngredients: EpaActiveIngredient[];
+  latestLabelPdfUrl: string | null;
+  labelPdfs: EpaLabelPdf[];
 }
 
 // ─── Label Drafts (§1 AI Label-Data Backfill) ───────────────────────────────
@@ -165,6 +201,7 @@ export interface Customer {
   other_acres: number | null;
   payment_terms: string | null;
   default_commission_split: CommissionSplit | null;
+  default_application_service_id?: string | null;
   credit_limit_cents: number | null;
   finance_charge_rate: number | null;
   finance_charge_enabled: boolean;
@@ -192,7 +229,7 @@ export interface CustomerAddress {
   created_at: string;
 }
 
-export type QuoteStatus = 'draft' | 'sent' | 'revised' | 'accepted' | 'declined' | 'expired' | 'cancelled';
+export type QuoteStatus = 'draft' | 'sent' | 'revised' | 'accepted' | 'declined' | 'expired' | 'cancelled' | 'closed_by_application' | 'closed_short';
 
 export interface Quote {
   id: string;
@@ -264,6 +301,19 @@ export interface QuoteItem {
 // all quote_items on every edit, which would wipe item-level draw history.
 export interface QuoteProductDraw {
   id: string;
+  quote_id: string;
+  product_id: string;
+  quantity_drawn: number;
+  created_at: string;
+  updated_at: string;
+}
+
+// Layer 2: per-(job, product) draw-down of a parent planned quote's booking by
+// a scheduled job. Mirrors QuoteProductDraw; lives in its own table because the
+// job_chemicals writers recreate all chemical lines on every edit.
+export interface JobProductDraw {
+  id: string;
+  job_id: string;
   quote_id: string;
   product_id: string;
   quantity_drawn: number;
@@ -400,6 +450,11 @@ export interface Order {
   pricing_escalation_sent_at: string | null;
   notes: string | null;
   program_notes: string | null;
+  /** U7 SAFE-SCOPE: set true by complete_delivery when a delivered order has
+   * field/acre allocations — the mono-bill auto-draft is skipped and the order
+   * is queued for a manual "Create Split Invoices" pass. Cleared back to false
+   * once create_split_invoices_from_order successfully bills it. */
+  needs_split_billing?: boolean | null;
   created_at: string;
   updated_at: string;
   customer?: Customer;
@@ -489,7 +544,7 @@ export interface Inventory {
   product?: Product;
 }
 
-export type InventoryHoldType = 'manual' | 'crop_program';
+export type InventoryHoldType = 'manual' | 'crop_program' | 'job';
 
 export interface InventoryHold {
   id: string;
@@ -512,6 +567,9 @@ export interface InventoryHold {
 // Wave B.3 — return shape of the get_inventory_position() RPC.
 // One row per (product, location). net_position = quantity_available - quantity_prebooked + quantity_on_order.
 // holds_qty and planned_qty are reported separately; they are NOT subtracted from net_position.
+// Layer 2 (B2): holds_qty still sums ALL active holds; job_holds_qty is the job-type
+// SUBSET of holds_qty (a breakout, not additive to totals). planned_qty is now the
+// quantity-aware unreserved remainder per line (no longer all-or-nothing dedup).
 export interface InventoryPositionRow {
   inventory_id: string | null;
   product_id: string;
@@ -527,12 +585,27 @@ export interface InventoryPositionRow {
   quantity_prebooked: number;
   quantity_on_order: number;
   holds_qty: number;
+  job_holds_qty: number;
   planned_qty: number;
   delivered_ytd: number;
   net_position: number;
   reorder_point: number;
   min_stock_level: number;
   is_low_stock: boolean;
+}
+
+// Layer 2 (B3) — return shape of get_dispatch_stock_status(uuid[]). One row per
+// (job, product) the schedulable job needs. free_excluding_own_hold subtracts every
+// active hold EXCEPT this job's own job-hold, so the dispatch light never warns a job
+// against its own reservation. demand_qty is already converted to the product's
+// inventory unit server-side. has_inventory=false means no stock record → treat as short.
+export interface DispatchStockRow {
+  job_id: string;
+  product_id: string;
+  demand_qty: number;
+  has_inventory: boolean;
+  free_excluding_own_hold: number;
+  reorder_point: number;
 }
 
 export type DeliveryStatus = 'scheduled' | 'in_progress' | 'completed' | 'cancelled' | 'voided';
@@ -709,7 +782,13 @@ export interface ReceivingSummary {
 
 export interface Commission {
   id: string;
-  order_id: string;
+  /** Source order (chemical-sale channel). NULL on job-sourced rows (U8). */
+  order_id: string | null;
+  /** Source job (application channel, U8). NULL on order-sourced rows. */
+  job_id: string | null;
+  /** The field_application invoice that minted a job commission (U8) — reversal
+   *  and payout-void liveness are generation-precise on this. NULL on order rows. */
+  invoice_id: string | null;
   customer_id: string;
   recipient: string;
   recipient_user_id: string | null;
@@ -1075,7 +1154,11 @@ export interface Invoice {
   total_amount_cents: number;
   paid_amount_cents: number;
   prepay_applied_cents: number;
-  balance_cents: number; // generated column
+  /** Credit-memo application lever (mig 20260711020000). Non-negative on both row types;
+   * on a credit_memo it is credit applied OUT, on a real invoice it is credit received IN.
+   * Written only by apply_credit_memo_to_invoice / reverse_credit_memo_application. */
+  credit_applied_cents: number;
+  balance_cents: number; // generated column (5 levers, type-aware: credit adds on memos, subtracts on invoices)
 
   // Posting workflow
   posted_by: string | null;
@@ -1166,6 +1249,21 @@ export interface Invoice {
   salesman?: Profile;
   items?: InvoiceItem[];
   shares?: InvoiceShare[];
+}
+
+/** One application of a credit memo to an open invoice (mig 20260711030000).
+ * Immutable/append-only: a reversal stamps reversed_at/by/reason, never deletes.
+ * Written only by apply_credit_memo_to_invoice / reverse_credit_memo_application. */
+export interface CreditMemoApplication {
+  id: string;
+  credit_memo_id: string;
+  target_invoice_id: string;
+  amount_cents: number;
+  applied_by: string;
+  applied_at: string;
+  reversed_at: string | null;
+  reversed_by: string | null;
+  reversal_reason: string | null;
 }
 
 export interface InvoiceItem {
@@ -1866,6 +1964,9 @@ export interface ApplicationRecord {
   source_id: string;
   customer_id: string;
   applicator_id: string | null;
+  /** U10 (#106b, 2026-07-06) — as-of-application snapshots; profiles rows mutate but the legal record must not. */
+  applicator_name: string | null;
+  applicator_license_number: string | null;
   /** DEPRECATED — single-field anchor. Phase 2 (2026-04-30): multi-field detail lives in application_record_fields. */
   field_id: string | null;
   application_date: string;
@@ -2019,6 +2120,10 @@ export interface Job {
   invoice_id: string | null;
   quote_id: string | null;
   quote_section_id: string | null;
+  /** U8 (#99, 2026-07-06): commission split snapshot copied from the quote at
+   *  scheduling — read by transfer_job_to_invoice to mint application-channel
+   *  commissions (chemical-line profit only). */
+  commission_split: CommissionSplit | null;
   /** Phase 4 (2026-04-30): drives per-acre service fee on transfer_job_to_invoice. */
   application_service_id: string | null;
   // Field-app parity #1 (2026-06-24): ChemMan scheduling + memo fields.
@@ -2240,6 +2345,10 @@ export interface JobChemical {
   phi_days: number | null;
   warehouse: string | null;
   vendor: string | null;
+  // #53/#54 (2026-07-06): grower supplied this product — applied but NOT deducted
+  // from our inventory and NOT billed (a $0 informational invoice line). It still
+  // appears in the application_records legal product_data (flagged customer_supplied).
+  customer_supplied: boolean;
   sort_order: number;
   // Joined
   product?: Product;
@@ -2326,6 +2435,16 @@ export interface JobAppliedRecord {
   end_tach: number | null;
   net_tach: number | null;
   created_by: string | null;
+  // Insert-once dedup token for the CREATE path (save_job_applied_record). Set only
+  // on a new record; a retried create replays the same key and a partial UNIQUE index
+  // collapses it to the first row (no duplicate applied-record). NULL on legacy rows
+  // and never set on edit. Not surfaced in the UI.
+  idempotency_key: string | null;
+  // md5 fingerprint of the create request stamped alongside idempotency_key on a keyed
+  // create. On a retried create the server compares it: identical -> replay (dedup);
+  // different -> raises APPLIED_RECORD_ALREADY_SAVED_DIFFERENT so a corrected retry
+  // surfaces a conflict instead of silently dropping the correction. Internal; not in UI.
+  idempotency_request_hash: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -3138,4 +3257,23 @@ export interface RefreshWatchdogFlagsResult {
   flags_total: number;
   flags_deleted: number;
   scope: string;
+}
+
+// Data-integrity sentinel (20260704120000): one row per NEW integrity break
+// found by the daily run_data_integrity_sweep() cron. Admin-only read/resolve;
+// rows are inserted only by the SECURITY DEFINER sweep, never by the client.
+export type IntegrityAlertType =
+  | 'negative_inventory'
+  | 'negative_invoice_balance'
+  | 'stale_quote_hold'
+  | 'booking_overdraw';
+
+export interface IntegrityAlert {
+  id: string;
+  alert_type: IntegrityAlertType;
+  entity_table: string;
+  entity_id: string;
+  details: Record<string, unknown>;
+  detected_at: string;
+  resolved_at: string | null;
 }

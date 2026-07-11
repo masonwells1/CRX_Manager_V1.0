@@ -32,6 +32,7 @@ const baseRaw = (over: Partial<RawFieldInvoiceRow>): RawFieldInvoiceRow => ({
   total_amount_cents: 12345,
   paid_amount_cents: 0,
   prepay_applied_cents: 0,
+  credit_applied_cents: 0,
   balance_cents: 12345,
   posted_by: null,
   posted_at: null,

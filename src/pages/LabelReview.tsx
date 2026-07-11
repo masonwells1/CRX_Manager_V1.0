@@ -37,11 +37,13 @@ import { supabaseUntyped, assertRpcResult } from '../lib/db';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { logActivity } from '../lib/activityLogger';
 import { usePageMeta } from '../hooks/usePageMeta';
+import { unitOptionsForForm, isKnownUnit } from '../lib/units';
 import type {
   ProductLabelDraft,
   LabelCoverageReport,
   CommitLabelDraftResult,
   LabelDraftStatus,
+  UnitConversion,
 } from '../types';
 
 // ─── helpers ────────────────────────────────────────────────────────────────
@@ -174,6 +176,14 @@ export default function LabelReview() {
   // ── edit/review modal ──
   const [editDraft, setEditDraft]   = useState<ProductLabelDraft | null>(null);
   const [editState, setEditState]   = useState<EditState | null>(null);
+  const [unitConversions, setUnitConversions] = useState<UnitConversion[]>([]);
+
+  useEffect(() => {
+    supabaseUntyped.from('unit_conversions').select('*').order('unit')
+      .then((res: { data: UnitConversion[] | null; error: unknown }) => {
+        if (!res.error && res.data) setUnitConversions(res.data);
+      });
+  }, []);
   const [forceOverwrite, setForceOverwrite] = useState(false);
   const [committing, setCommitting] = useState(false);
 
@@ -748,12 +758,20 @@ export default function LabelReview() {
                       step="0.01"
                       className="w-24"
                     />
-                    <Input
+                    <select
                       value={editState.max_label_rate_unit}
                       onChange={e => setEditState(s => s ? { ...s, max_label_rate_unit: e.target.value } : s)}
-                      placeholder="oz/acre"
-                      className="w-24"
-                    />
+                      className="w-24 px-2 py-1.5 text-sm border border-gray-200 rounded-lg"
+                    >
+                      <option value="">unit</option>
+                      {/* WaveB: canonical bare units (per-acre label max); grandfather a legacy value */}
+                      {editState.max_label_rate_unit && !isKnownUnit(unitConversions, null, editState.max_label_rate_unit) && (
+                        <option value={editState.max_label_rate_unit}>{editState.max_label_rate_unit} (existing)</option>
+                      )}
+                      {unitOptionsForForm(unitConversions, null).map((uc) => (
+                        <option key={uc.id} value={uc.unit}>{uc.unit}</option>
+                      ))}
+                    </select>
                   </div>
                 </div>
               </div>

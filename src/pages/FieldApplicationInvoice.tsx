@@ -150,6 +150,9 @@ const TABS: { key: TabKey; label: string; icon: React.ReactNode }[] = [
 function fieldAppError(err: unknown): string {
   if (hasRpcCode(err, RpcErrorCodes.ZERO_APPLIED_ACRES)) return 'A location has 0 or blank applied acres. Open the Locations tab and enter the acres sprayed for each field.';
   if (hasRpcCode(err, RpcErrorCodes.ACTOR_MISMATCH)) return 'Your sign-in could not be verified. Refresh the page and try again.';
+  // U7: this invoice is one member of a multi-owner split group — it can't be reversed
+  // member-by-member (that would reopen the job while the other owners' invoices stay live).
+  if (hasRpcCode(err, RpcErrorCodes.JOB_BILLED_AS_GROUP)) return 'This job was invoiced as a multi-owner split. To return it to scheduling, void each owner’s invoice — voiding the last one reopens the job.';
   // check_period_open() raises a plain-English sentence ("Date X falls in closed
   // accounting period (...)"), which sanitizeError passes through readably — no token to match.
   return sanitizeError(err);
@@ -248,6 +251,7 @@ export default function FieldApplicationInvoice() {
   const [locations, setLocations] = useState<FieldLocation[]>([]);
   const [chemicals, setChemicals] = useState<ChemicalLine[]>([]);
   const [shares, setShares] = useState<CustomerShareResult[]>([]);
+  const [growerShareFieldNames, setGrowerShareFieldNames] = useState<string[]>([]);
 
   // §5 (Label-Rate Guardrails): the configurable policy (warn vs block). WARN is the
   // shipped/empty default and NEVER blocks the save. Loaded from app_settings once.
@@ -385,6 +389,7 @@ export default function FieldApplicationInvoice() {
   // ([B1.5]), so the picker is read-only for sales_reps and a non-admin save
   // always sends their own id.
   const isAdmin = profile?.role === 'admin';
+  const isAdminOrRep = isAdmin || profile?.role === 'sales_rep';
 
   // #24: load the Consultant picker list from profile_public_view (admin /
   // sales_rep / applicator, active only). profile_public_view is the non-PII view
@@ -1021,6 +1026,11 @@ export default function FieldApplicationInvoice() {
             vendor: (it.vendor as string | null) ?? null,
             product_form: (it.product_form as 'liquid' | 'dry' | null) ?? null,
             epa_registration: (it.epa_registration as string | null) || undefined,
+            // U4 (Codex R4): rehydrate manual pricing — a persisted manual price
+            // (price_source='manual') or ANY product-less line (no tier fallback
+            // exists) must reload as manual_override=true, or the next save would
+            // treat the price as tier-derived and zero a custom line's charge.
+            manual_override: (it.price_source as string | null) === 'manual' || it.product_id == null,
             // §5: hydrated label data (null when the product has none / fetch failed).
             max_label_rate: label?.max_label_rate ?? null,
             max_label_rate_unit: label?.max_label_rate_unit ?? null,
@@ -1087,6 +1097,45 @@ export default function FieldApplicationInvoice() {
   useEffect(() => {
     fetchInvoice();
   }, [fetchInvoice]);
+
+  // U16b: surface fields using all-inclusive grower-share pricing. This follows the
+  // currently selected/loaded locations, so it works for both a saved invoice and a
+  // new invoice before Preview. Read-only and best-effort; the server remains the
+  // pricing authority if this advisory lookup fails.
+  useEffect(() => {
+    const fieldIds = Array.from(new Set(locations.map((location) => location.field_id).filter(Boolean)));
+    if (fieldIds.length === 0) {
+      setGrowerShareFieldNames([]);
+      return;
+    }
+
+    let cancelled = false;
+    (async () => {
+      const { data, error } = await supabase
+        .from('field_billing_defaults')
+        .select('field_id')
+        .in('field_id', fieldIds)
+        .not('price_override_cents', 'is', null);
+      if (cancelled) return;
+      if (error) {
+        Sentry.captureException(error, { tags: { source: 'fetch', page: 'field-application-invoice', context: 'grower_share_banner' } });
+        setGrowerShareFieldNames([]);
+        return;
+      }
+
+      const overrideIds = new Set(
+        ((data || []) as Array<{ field_id: string }>).map((row) => row.field_id),
+      );
+      setGrowerShareFieldNames(
+        Array.from(new Set(
+          locations
+            .filter((location) => overrideIds.has(location.field_id))
+            .map((location) => location.field_name),
+        )),
+      );
+    })();
+    return () => { cancelled = true; };
+  }, [locations]);
 
   // #41 (SHARED HISTORY): load the SAME customer-facing job_notifications log the job
   // shows, keyed by THIS invoice's source job_id. Reading by job_id (not invoice id)
@@ -1740,7 +1789,7 @@ export default function FieldApplicationInvoice() {
     ['draft', 'unposted'].includes(status) &&
     (siblings.length === 0 || siblings.every((s) => ['draft', 'unposted'].includes(s.status)))
   );
-  const canPost = !isNew && canEdit;
+  const canPost = !isNew && canEdit && isAdminOrRep;
   // #28: Unpost is available when this saved invoice (or any group member) is
   // posted/overdue — the inverse condition to Post. paid/voided/cancelled invoices
   // are NOT unpostable here (the RPC also refuses them); a paid invoice must have
@@ -2192,7 +2241,7 @@ export default function FieldApplicationInvoice() {
 
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <button onClick={() => navigate('/field-invoices')} className="p-1 rounded hover:bg-gray-100">
+          <button aria-label="Back to field invoices" onClick={() => navigate('/field-invoices')} className="p-1 rounded hover:bg-gray-100">
             <ArrowLeft className="w-5 h-5" />
           </button>
           <div>
@@ -2644,6 +2693,11 @@ export default function FieldApplicationInvoice() {
 
         {activeTab === 'customers' && (
           <div className="p-4">
+            {growerShareFieldNames.length > 0 && (
+              <div className="mb-4 px-3 py-2 bg-blue-50 border-l-4 border-blue-300 text-xs text-blue-800 rounded">
+                Grower-share pricing is active on: <strong>{growerShareFieldNames.join(', ')}</strong> — chemicals bill at the per-acre override; product lines print &apos;— included in grower share&apos; at $0 for those growers.
+              </div>
+            )}
             {!previewData && shares.length > 0 && (
               <div className="mb-4 px-3 py-2 bg-amber-50 border-l-4 border-amber-300 text-xs text-amber-800 rounded">
                 Click <strong>Preview</strong> to see exact per-customer amounts (server-computed with tier, grower-share overrides, and service fees applied).

@@ -22,6 +22,7 @@ const REQUIRED_NUMERIC_FIELDS: Array<keyof InventoryPositionRow> = [
   'quantity_prebooked',
   'quantity_on_order',
   'holds_qty',
+  'job_holds_qty',
   'planned_qty',
   'delivered_ytd',
   'net_position',

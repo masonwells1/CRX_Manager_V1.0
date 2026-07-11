@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo , useCallback, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { parseLocalDate, localDatePlusDays } from '../lib/dateUtils';
+import { parseLocalDate, localDatePlusDays, localToday } from '../lib/dateUtils';
 import { Plus, Upload, Copy, Download, FileText, Trash2, Layers, ChevronDown, ChevronUp, PackageCheck, AlertTriangle } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -12,7 +12,7 @@ import ConfirmModal from '../components/ui/ConfirmModal';
 import BulkQuoteImport from '../components/quotes/BulkQuoteImport';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, assertRpcResult, checkMutationResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
+import { supabase, supabaseUntyped, assertRpcResult, checkMutationResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection';
 import { exportToCSV, fmtCSV, fmtDateCSV } from '../lib/csvExport';
@@ -371,16 +371,23 @@ export default function Quotes() {
       // Open bookings with partial draw-downs must not be soft-deleted:
       // deletion changes no status, so the hold-release trigger never fires —
       // the booking's reserved inventory would stay held on a hidden quote.
-      const { data: drawnRows, error: drawnErr } = await supabase
-        .from('quote_product_draws')
-        .select('quote_id')
-        .in('quote_id', ids)
-        .gt('quantity_drawn', 0);
-      if (drawnErr) throw drawnErr;
-      const drawnIds = new Set((drawnRows || []).map((d) => d.quote_id));
+      // Layer 2 (§6.5 / Codex round-5 P2): a job reservation is a SECOND draw ledger
+      // (job_product_draws) and the FK only cascades on HARD deletes, so a quote with
+      // a live job draw must be skipped here too — else it's hidden while its booking
+      // stays consumed by a schedulable/invoiceable job.
+      const [orderDrawnRes, jobDrawnRes] = await Promise.all([
+        supabase.from('quote_product_draws').select('quote_id').in('quote_id', ids).gt('quantity_drawn', 0),
+        supabaseUntyped.from('job_product_draws').select('quote_id').in('quote_id', ids).gt('quantity_drawn', 0),
+      ]);
+      if (orderDrawnRes.error) throw orderDrawnRes.error;
+      if (jobDrawnRes.error) throw jobDrawnRes.error;
+      const drawnIds = new Set<string>([
+        ...(orderDrawnRes.data || []).map((d) => d.quote_id),
+        ...(jobDrawnRes.data || []).map((d: { quote_id: string }) => d.quote_id),
+      ]);
       if (drawnIds.size > 0) {
         const blocked = selectedRows.filter((q) => drawnIds.has(q.id));
-        toast('warning', `${blocked.length} booking(s) with draw-downs skipped — close the booking (draw or cancel the remainder) before deleting: ${blocked.map((q) => q.quote_number).join(', ')}`);
+        toast('warning', `${blocked.length} booking(s) with draw-downs or job reservations skipped — close the booking (draw/cancel the remainder or the job) before deleting: ${blocked.map((q) => q.quote_number).join(', ')}`);
         ids = ids.filter((id) => !drawnIds.has(id));
         if (ids.length === 0) {
           setDeleting(false);
@@ -429,7 +436,7 @@ export default function Quotes() {
       render: (row) => (
         <>
           <Badge variant={statusToBadgeVariant[row.status] || 'default'}>
-            {row.status.replace('_', ' ')}
+            {row.status === 'closed_by_application' ? 'Fulfilled (Applied)' : row.status === 'closed_short' ? 'Closed — Short' : row.status.replace('_', ' ')}
           </Badge>
           {row.is_planned && (
             <span className="ml-1 px-1.5 py-0.5 text-[10px] font-medium bg-amber-100 text-amber-800 rounded">
@@ -461,7 +468,14 @@ export default function Quotes() {
       key: 'expires_at',
       header: 'Expires',
       sortable: true,
-      render: (row) => (row.expires_at ? parseLocalDate(row.expires_at).toLocaleDateString() : '-'),
+      render: (row) => {
+        if (!row.expires_at) return '-';
+        const isPastDue = (row.status === 'sent' || row.status === 'revised') && row.expires_at.slice(0, 10) < localToday();
+        const date = parseLocalDate(row.expires_at).toLocaleDateString();
+        return isPastDue ? (
+          <span className="text-red-600 font-medium">{date} (past due)</span>
+        ) : date;
+      },
     },
     {
       key: 'id',
@@ -482,6 +496,7 @@ export default function Quotes() {
             onClick={(e) => handleDuplicate(row.id, e)}
             className="p-1.5 rounded-lg text-gray-400 hover:text-crx-green hover:bg-crx-green-light transition-colors"
             title="Duplicate this quote"
+            aria-label="Duplicate this quote"
           >
             <Copy className="w-4 h-4" />
           </button>
@@ -626,6 +641,8 @@ export default function Quotes() {
                   <option value="declined">Declined</option>
                   <option value="expired">Expired</option>
                   <option value="cancelled">Cancelled</option>
+                  <option value="closed_by_application">Fulfilled (Applied)</option>
+                  <option value="closed_short">{'Closed — Short'}</option>
                 </select>
                 <button
                   onClick={() => setPlannedFilter(!plannedFilter)}

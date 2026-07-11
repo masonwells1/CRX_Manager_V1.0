@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
-import { ShieldAlert, RefreshCw, AlertTriangle, FileText, Wrench, PackageCheck } from 'lucide-react';
-import { supabase, assertRpcResult } from '../lib/db';
+import { ShieldAlert, RefreshCw, AlertTriangle, FileText, Wrench, PackageCheck, Activity } from 'lucide-react';
+import { supabase, supabaseUntyped, assertRpcResult, checkMutationResult } from '../lib/db';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../components/ui/Toast';
 import Button from '../components/ui/Button';
@@ -44,6 +44,60 @@ interface ManufacturedRow {
   updated_at: string;
 }
 
+type SentinelAlertType =
+  | 'negative_inventory'
+  | 'negative_invoice_balance'
+  | 'stale_quote_hold'
+  | 'booking_overdraw';
+
+interface IntegrityAlertRow {
+  id: string;
+  alert_type: SentinelAlertType;
+  entity_table: string;
+  entity_id: string;
+  details: Record<string, unknown> | null;
+  detected_at: string;
+}
+
+function shortId(v: unknown): string {
+  return String(v ?? '').slice(0, 8);
+}
+
+// Turn a raw sentinel alert (type + jsonb details) into a plain-English row for
+// the admin. The sweep only records IDs + a small details blob, so we format
+// per type; unknown values are coerced to strings (details is jsonb → unknown).
+function describeAlert(a: IntegrityAlertRow): { title: string; detail: string } {
+  const d = (a.details || {}) as Record<string, unknown>;
+  const g = (k: string) => (d[k] === undefined || d[k] === null ? '?' : String(d[k]));
+  switch (a.alert_type) {
+    case 'negative_inventory':
+      return {
+        title: 'Negative inventory',
+        detail: `Net on-hand: ${g('net_quantity_available')} (product ${shortId(a.entity_id)})`,
+      };
+    case 'negative_invoice_balance': {
+      const cents = typeof d.balance_cents === 'number' ? d.balance_cents : null;
+      const bal = cents != null ? `$${(cents / 100).toFixed(2)}` : g('balance_cents');
+      return {
+        title: 'Negative invoice balance',
+        detail: `Invoice ${g('invoice_number')} — balance ${bal} (${g('status')})`,
+      };
+    }
+    case 'stale_quote_hold':
+      return {
+        title: 'Stuck inventory hold',
+        detail: `Quote ${shortId(d.quote_id)} is ${g('quote_status')} but a hold of ${g('quantity')} is still active`,
+      };
+    case 'booking_overdraw':
+      return {
+        title: 'Booking overdrawn',
+        detail: `Drew ${g('quantity_drawn')} vs booked ${g('booking_cap')} (quote ${shortId(d.quote_id)})`,
+      };
+    default:
+      return { title: String(a.alert_type), detail: '' };
+  }
+}
+
 export default function IntegrityCleanup() {
   const { profile } = useAuth();
   const { toast } = useToast();
@@ -59,6 +113,8 @@ export default function IntegrityCleanup() {
   const [overReceived, setOverReceived] = useState<OverReceivedRow[]>([]);
   const [unbilled, setUnbilled] = useState<UnbilledDeliveryRow[]>([]);
   const [manufactured, setManufactured] = useState<ManufacturedRow[]>([]);
+  const [alerts, setAlerts] = useState<IntegrityAlertRow[]>([]);
+  const [resolveBusy, setResolveBusy] = useState<Record<string, boolean>>({});
 
   // Per-row reconcile inputs
   const [reconcileInputs, setReconcileInputs] = useState<Record<string, { qty: string; reason: string; busy: boolean }>>({});
@@ -73,7 +129,7 @@ export default function IntegrityCleanup() {
       // failure (e.g. the manufactured_at_delivery query erroring during the
       // window between code deploy and migration apply) doesn't drop the
       // three other sections' data.
-      const [negSettled, overSettled, unbilledSettled, manufacturedSettled] = await Promise.allSettled([
+      const [negSettled, overSettled, unbilledSettled, manufacturedSettled, alertsSettled] = await Promise.allSettled([
         supabase
           .from('inventory')
           .select('id, product_id, location, quantity_available, quantity_prebooked, quantity_on_order, product:products(product_name)')
@@ -93,12 +149,20 @@ export default function IntegrityCleanup() {
           .select('id, product_id, location, quantity_available, updated_at, product:products(product_name)')
           .eq('manufactured_at_delivery', true)
           .order('updated_at', { ascending: false }),
+        // integrity_alerts is admin-only (RLS) and not yet in the generated types —
+        // query via the untyped client; open alerts have resolved_at IS NULL.
+        supabaseUntyped
+          .from('integrity_alerts')
+          .select('id, alert_type, entity_table, entity_id, details, detected_at')
+          .is('resolved_at', null)
+          .order('detected_at', { ascending: false }),
       ]);
 
       const negRes = negSettled.status === 'fulfilled' ? negSettled.value : { data: null, error: negSettled.reason };
       const overRes = overSettled.status === 'fulfilled' ? overSettled.value : { data: null, error: overSettled.reason };
       const unbilledRes = unbilledSettled.status === 'fulfilled' ? unbilledSettled.value : { data: null, error: unbilledSettled.reason };
       const manufacturedRes = manufacturedSettled.status === 'fulfilled' ? manufacturedSettled.value : { data: null, error: manufacturedSettled.reason };
+      const alertsRes = alertsSettled.status === 'fulfilled' ? alertsSettled.value : { data: null, error: alertsSettled.reason };
 
       // Report any individual-section failures to Sentry so we can detect
       // deploy-ordering issues, but don't block the other sections from rendering.
@@ -107,6 +171,7 @@ export default function IntegrityCleanup() {
         ['over-received POs', overSettled],
         ['unbilled deliveries', unbilledSettled],
         ['manufactured-at-delivery rows', manufacturedSettled],
+        ['integrity alerts', alertsSettled],
       ].forEach(([label, settled]) => {
         if ((settled as PromiseSettledResult<unknown>).status === 'rejected') {
           const reason = (settled as PromiseRejectedResult).reason;
@@ -189,6 +254,10 @@ export default function IntegrityCleanup() {
         );
       }
 
+      if (alertsRes.data) {
+        setAlerts(alertsRes.data as unknown as IntegrityAlertRow[]);
+      }
+
       // Filter unbilled deliveries client-side (the .not.exists pattern is awkward in PostgREST)
       if (unbilledRes.data) {
         const allCompleted = unbilledRes.data as unknown as Array<{
@@ -201,13 +270,20 @@ export default function IntegrityCleanup() {
         }>;
         const orderIds = allCompleted.map((d) => d.order_id);
         if (orderIds.length > 0) {
+          // U2 #34: bill-tracking is per-DELIVERY, not per-order. A delivery is "billed"
+          // only if an active invoice is tied to THIS delivery, or an order-level invoice
+          // (delivery_id IS NULL) covers the whole order. An invoice tied to a DIFFERENT
+          // delivery on the same order must NOT hide this delivery — mirrors the
+          // complete_delivery auto-invoice guard.
           const { data: invoiceRows } = await supabase
             .from('invoices')
-            .select('order_id')
+            .select('order_id, delivery_id')
             .in('order_id', orderIds)
             .not('status', 'in', '("voided","cancelled")');
-          const billedOrderIds = new Set(((invoiceRows || []) as { order_id: string }[]).map((i: { order_id: string }) => i.order_id));
-          const filtered = allCompleted.filter((d) => !billedOrderIds.has(d.order_id));
+          const invRows = (invoiceRows || []) as { order_id: string; delivery_id: string | null }[];
+          const billedDeliveryIds = new Set(invRows.filter((i) => i.delivery_id).map((i) => i.delivery_id as string));
+          const orderLevelBilledOrderIds = new Set(invRows.filter((i) => !i.delivery_id).map((i) => i.order_id));
+          const filtered = allCompleted.filter((d) => !billedDeliveryIds.has(d.id) && !orderLevelBilledOrderIds.has(d.order_id));
           setUnbilled(
             filtered.map((d) => {
               const c = Array.isArray(d.customer) ? d.customer[0] : d.customer;
@@ -330,6 +406,28 @@ export default function IntegrityCleanup() {
     }
   };
 
+  const handleResolveAlert = async (alertId: string) => {
+    setResolveBusy((prev) => ({ ...prev, [alertId]: true }));
+    try {
+      // Admin-only UPDATE gated by RLS (integrity_alerts_update_admin). Setting
+      // resolved_at also re-arms the daily sweep for that entity — a NEW break of
+      // the same kind will alarm again.
+      const result = await supabaseUntyped
+        .from('integrity_alerts')
+        .update({ resolved_at: new Date().toISOString() })
+        .eq('id', alertId)
+        .select();
+      checkMutationResult(result, 'Resolve integrity alert');
+      toast('success', 'Alert marked resolved');
+      await fetchAll();
+    } catch (err) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)));
+      toast('error', err instanceof Error ? err.message : 'Could not resolve alert');
+    } finally {
+      setResolveBusy((prev) => ({ ...prev, [alertId]: false }));
+    }
+  };
+
   if (loading) {
     return <div className="p-6 text-gray-600">Loading cleanup data…</div>;
   }
@@ -359,6 +457,59 @@ export default function IntegrityCleanup() {
           {refreshing ? 'Refreshing…' : 'Refresh'}
         </button>
       </div>
+
+      {/* Section 0: Data-integrity sentinel alerts (daily 06:45 UTC sweep) */}
+      <section className="space-y-3">
+        <header className="flex items-center gap-2">
+          <Activity className="w-5 h-5 text-crx-green" />
+          <h2 className="text-lg font-semibold text-gray-900">Data-integrity alerts</h2>
+          <span className="text-sm text-gray-500">({alerts.length} open)</span>
+        </header>
+        <p className="text-xs text-gray-500 ml-7 max-w-3xl">
+          Found automatically by the daily sweep (runs 06:45 UTC): new negative inventory,
+          negative invoice balances, inventory holds stuck on closed quotes, and over-drawn
+          bookings. This is warn-only — nothing was changed automatically. Investigate the
+          record, fix it if needed, then mark the alert resolved (a brand-new problem of the
+          same kind will alert again).
+        </p>
+        {alerts.length === 0 ? (
+          <p className="text-sm text-gray-500 ml-7">No open alerts. The daily sweep found nothing new.</p>
+        ) : (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 overflow-hidden">
+            <table className="w-full text-sm">
+              <thead className="bg-amber-100 text-left text-amber-900">
+                <tr>
+                  <th className="px-3 py-2 font-medium">Type</th>
+                  <th className="px-3 py-2 font-medium">Detail</th>
+                  <th className="px-3 py-2 font-medium">Detected</th>
+                  <th className="px-3 py-2"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {alerts.map((a) => {
+                  const info = describeAlert(a);
+                  return (
+                    <tr key={a.id} className="border-t border-amber-200">
+                      <td className="px-3 py-2 font-medium text-gray-900">{info.title}</td>
+                      <td className="px-3 py-2 text-gray-700">{info.detail}</td>
+                      <td className="px-3 py-2 text-gray-700">{new Date(a.detected_at).toLocaleString()}</td>
+                      <td className="px-3 py-2">
+                        <Button
+                          variant="secondary"
+                          onClick={() => handleResolveAlert(a.id)}
+                          loading={resolveBusy[a.id]}
+                        >
+                          Mark resolved
+                        </Button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
 
       {/* Section 1: Negative inventory */}
       <section className="space-y-3">

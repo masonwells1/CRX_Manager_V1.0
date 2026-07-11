@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef , useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Save, Check, X, Plus, Trash2, Image as ImageIcon, AlertCircle, Link2, Unlink, ShoppingCart, ClipboardCheck, RefreshCw, MapPin, FileText } from 'lucide-react';
-import { supabase, checkMutationResult, assertRpcResult } from '../lib/db';
+import { supabase, checkMutationResult, assertRpcResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
@@ -10,10 +10,12 @@ import { useAuth } from '../contexts/AuthContext';
 import Button from '../components/ui/Button';
 import Card from '../components/ui/Card';
 import Input from '../components/ui/Input';
+import SearchableSelect from '../components/ui/SearchableSelect';
 import Badge from '../components/ui/Badge';
 import Modal from '../components/ui/Modal';
 import Skeleton from '../components/ui/Skeleton';
 import UnsavedChangesModal from '../components/ui/UnsavedChangesModal';
+import HelpTip from '../components/ui/HelpTip';
 import ConfirmModal from '../components/ui/ConfirmModal';
 import { usePageMeta } from '../hooks/usePageMeta';
 import { useToast } from '../components/ui/Toast';
@@ -484,9 +486,15 @@ export function BlendTicketDetail() {
   }
 
   function updateProduct(index: number, field: keyof BlendTicketProduct, value: BlendTicketProduct[keyof BlendTicketProduct]) {
-    const updated = [...products];
-    updated[index] = { ...updated[index], [field]: value };
-    setProducts(updated);
+    // Functional updater: the product-select onChange fires updateProduct twice back-to-back
+    // (product_id then product_name). Reading `products` from the closure made the second call
+    // overwrite the first (product_id was lost -> $0 pricing / FK crash on create-order). Using
+    // the previous-state form composes both updates correctly.
+    setProducts(prev => {
+      const updated = [...prev];
+      updated[index] = { ...updated[index], [field]: value };
+      return updated;
+    });
   }
 
   async function addProduct() {
@@ -624,7 +632,14 @@ export function BlendTicketDetail() {
           p_created_by: profile.id,
           p_idempotency_key: key,
         });
-        if (error) throw error;
+        if (error) {
+          // U6 #91a: the ticket's job already has a live invoice — billing the ticket
+          // too would double-charge. Give a plain-English reason instead of the raw token.
+          if (hasRpcCode(error, RpcErrorCodes.JOB_ALREADY_INVOICED)) {
+            throw new Error('This blend ticket is tied to a job that has already been invoiced. Billing the ticket too would double-charge the customer — void that job invoice first if you meant to re-bill here.');
+          }
+          throw error;
+        }
         // Phase 1 (2026-04-29): RPC return shape changed from uuid to
         // { invoice_ids: string[], invoice_group_id: string | null }.
         // Multi-customer fields produce grouped split invoices; single-customer
@@ -648,6 +663,29 @@ export function BlendTicketDetail() {
       successMessage: 'Invoice created from blend ticket',
       sentryTag: 'create_invoice_from_blend_ticket',
     });
+  }
+
+  async function openCreateOrderModal() {
+    if (!ticket?.customer_id) {
+      toast('error', 'Please assign a customer first');
+      return;
+    }
+
+    setNewOrderNumber('');
+    setNewOrderDate(localToday());
+    setNewOrderNotes('');
+    setShowCreateOrderModal(true);
+
+    try {
+      const { data, error } = await supabase.rpc('generate_order_number');
+      if (error) throw error;
+      const generatedOrderNumber = assertRpcResult<string>(data, 'generate_order_number');
+      // Preserve anything the user typed while the asynchronous prefill was loading.
+      setNewOrderNumber((current) => current.trim() ? current : generatedOrderNumber);
+    } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'generate_order_number' } });
+      toast('warning', 'Could not prefill an order number. Enter one to continue.');
+    }
   }
 
   async function handleCreateOrder() {
@@ -843,18 +881,12 @@ export function BlendTicketDetail() {
               <label className="block text-sm font-medium text-gray-700 mb-1">
                 Customer
               </label>
-              <select
+              <SearchableSelect
+                options={customers.map((customer) => ({ value: customer.id, label: customer.farm_name }))}
                 value={formData.customer_id}
-                onChange={(e) => setFormData({ ...formData, customer_id: e.target.value })}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              >
-                <option value="">Select Customer</option>
-                {customers.map(customer => (
-                  <option key={customer.id} value={customer.id}>
-                    {customer.farm_name}
-                  </option>
-                ))}
-              </select>
+                onChange={(value) => setFormData({ ...formData, customer_id: value })}
+                placeholder="Select Customer"
+              />
             </div>
 
             <div>
@@ -892,8 +924,9 @@ export function BlendTicketDetail() {
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
+              <label className="text-sm font-medium text-gray-700 mb-1 flex items-center">
                 Link to Job
+                <HelpTip className="ml-1" text="Linking connects this ticket to a scheduled application job — the 'we apply it' path. It does not bill anything on its own: the customer is billed later, either from the job (Transfer to Invoice) or directly here with Create Invoice. Do one or the other for a given application, never both, or you double-charge." />
               </label>
               <select
                 value={selectedJobId}
@@ -1083,24 +1116,18 @@ export function BlendTicketDetail() {
                 <label className="block text-xs font-medium text-gray-700 mb-1">
                   Product
                 </label>
-                <select
+                <SearchableSelect
+                  options={allProducts.map((p) => ({ value: p.id, label: p.product_name }))}
                   value={product.product_id || ''}
-                  onChange={(e) => {
-                    updateProduct(index, 'product_id', e.target.value || null);
-                    const selectedProduct = allProducts.find(p => p.id === e.target.value);
+                  onChange={(value) => {
+                    updateProduct(index, 'product_id', value || null);
+                    const selectedProduct = allProducts.find(p => p.id === value);
                     if (selectedProduct) {
                       updateProduct(index, 'product_name', selectedProduct.product_name);
                     }
                   }}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                >
-                  <option value="">Select Product</option>
-                  {allProducts.map(p => (
-                    <option key={p.id} value={p.id}>
-                      {p.product_name}
-                    </option>
-                  ))}
-                </select>
+                  placeholder="Select Product"
+                />
               </div>
 
               <div className="col-span-4 md:col-span-1">
@@ -1249,23 +1276,19 @@ export function BlendTicketDetail() {
               <div key={idx} className="grid grid-cols-12 gap-3 items-end">
                 <div className="col-span-5">
                   <label className="block text-xs font-medium text-gray-600 mb-1">Field</label>
-                  <select
+                  <SearchableSelect
+                    options={availableFields
+                      .filter(f => !ticket.customer_id || f.customer_id === ticket.customer_id || f.customer_id === tf.customer_id)
+                      .map((f) => ({ value: f.id, label: f.field_name }))}
                     value={tf.field_id}
-                    onChange={(e) => {
+                    onChange={(value) => {
                       const updated = [...ticketFields];
-                      const selectedField = availableFields.find(f => f.id === e.target.value);
-                      updated[idx] = { ...updated[idx], field_id: e.target.value, field_name: selectedField?.field_name || '', customer_id: selectedField?.customer_id || tf.customer_id };
+                      const selectedField = availableFields.find(f => f.id === value);
+                      updated[idx] = { ...updated[idx], field_id: value, field_name: selectedField?.field_name || '', customer_id: selectedField?.customer_id || tf.customer_id };
                       setTicketFields(updated);
                     }}
-                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
-                  >
-                    <option value="">Select field...</option>
-                    {availableFields
-                      .filter(f => !ticket.customer_id || f.customer_id === ticket.customer_id || f.customer_id === tf.customer_id)
-                      .map(f => (
-                        <option key={f.id} value={f.id}>{f.field_name}</option>
-                      ))}
-                  </select>
+                    placeholder="Select field..."
+                  />
                 </div>
                 <div className="col-span-4">
                   <label className="block text-xs font-medium text-gray-600 mb-1">Planned Acres</label>
@@ -1415,24 +1438,17 @@ export function BlendTicketDetail() {
             <p className="text-sm text-gray-500">
               This blend ticket is not linked to any order. Link it to an existing order or create a new one.
             </p>
-            <div className="flex gap-2">
+            <div className="flex gap-2 items-center">
               <Button variant="secondary" size="sm" onClick={openLinkModal}>
                 <Link2 className="h-4 w-4" />
                 Link to Existing Order
               </Button>
-              <Button size="sm" onClick={() => {
-                if (!ticket.customer_id) {
-                  toast('error', 'Please assign a customer first');
-                  return;
-                }
-                setNewOrderNumber('');
-                setNewOrderDate(localToday());
-                setNewOrderNotes('');
-                setShowCreateOrderModal(true);
-              }}>
+              <HelpTip text="Link to Order attaches this ticket to an EXISTING sales order — the 'chemical sale' path where we deliver the product and the order draws it from inventory. Use this when the customer is buying the chemical, not us applying it." />
+              <Button size="sm" onClick={openCreateOrderModal}>
                 <ShoppingCart className="h-4 w-4" />
                 Create Order from Ticket
               </Button>
+              <HelpTip text="Create Order builds a NEW sales order from this ticket's products at tier pricing — also the 'chemical sale' path (we deliver, inventory is drawn). Use this when there is no existing order to link to." />
             </div>
           </div>
         )}
@@ -1451,6 +1467,7 @@ export function BlendTicketDetail() {
               <h3 className="text-sm font-semibold text-nav-dark flex items-center gap-2">
                 <FileText className="h-4 w-4 text-crx-green" />
                 Direct Invoice
+                <HelpTip text="Create Invoice bills the customer NOW straight from this ticket — the 'we applied it' path (a field-application invoice; no order or delivery needed). Choose this OR the job's Transfer to Invoice for a given application, never both, or the customer is billed twice." />
               </h3>
               <p className="text-xs text-secondary mt-1">
                 Create an invoice directly from this blend ticket — no order required.
@@ -1633,10 +1650,13 @@ export function BlendTicketDetail() {
           </>
         )}
         {ticket.review_status === 'approved' && (
-          <Button variant="secondary" onClick={handleCreateApplicationRecord} loading={creatingAppRecord}>
-            <ClipboardCheck className="h-4 w-4" />
-            Create App Record
-          </Button>
+          <span className="inline-flex items-center gap-1">
+            <Button variant="secondary" onClick={handleCreateApplicationRecord} loading={creatingAppRecord}>
+              <ClipboardCheck className="h-4 w-4" />
+              Create App Record
+            </Button>
+            <HelpTip text="Create Application Record files the legal as-applied record (product, field, date, rate) for compliance. It does NOT bill anyone — it's the regulatory paperwork, separate from Create Invoice (billing) and from linking to an order or job." />
+          </span>
         )}
         <Button onClick={handleSave} disabled={saving}>
           <Save className="h-4 w-4" />

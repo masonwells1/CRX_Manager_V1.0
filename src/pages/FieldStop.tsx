@@ -5,7 +5,7 @@
  * reuses the existing delivery RPCs/components; never edits DeliveryDetail.tsx.
  *
  * Flow: status-driven entry (scheduled → Arrive; in_progress → Verify) →
- * Verify items (full/short) → Signature → Photo (optional) → Review & Complete
+ * Verify items (full/short) → Signature → Review & Complete (optional photo)
  * → Done. Completion mirrors DeliveryDetail.handleComplete exactly (same
  * rpcParams, signature upload, notifications, customer email, invoice surfacing)
  * and queues offline ONLY for already-in_progress stops. See
@@ -18,7 +18,6 @@ import {
   Camera, PenLine, CheckCircle2, ClipboardCheck, FileText,
 } from 'lucide-react';
 import SignatureCanvas from '../components/ui/SignatureCanvas';
-import ConfirmModal from '../components/ui/ConfirmModal';
 import { supabase, assertRpcResult, sanitizeError, checkMutationResult } from '../lib/db';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../components/ui/Toast';
@@ -58,8 +57,8 @@ interface StopDelivery {
   customer: { farm_name: string | null; email: string | null; contact_name: string | null } | null;
 }
 
-type Step = 'arrive' | 'verify' | 'sign' | 'photo' | 'review' | 'done';
-const STEP_ORDER: Step[] = ['arrive', 'verify', 'sign', 'photo', 'review', 'done'];
+type Step = 'arrive' | 'verify' | 'sign' | 'review' | 'done';
+const STEP_ORDER: Step[] = ['arrive', 'verify', 'sign', 'review', 'done'];
 
 export default function FieldStop() {
   const { id } = useParams<{ id: string }>();
@@ -85,9 +84,9 @@ export default function FieldStop() {
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [step, setStep] = useState<Step>('arrive');
   const [signedBy, setSignedBy] = useState('');
+  const [noOnePresent, setNoOnePresent] = useState(false);
   const [signatureDataUrl, setSignatureDataUrl] = useState<string | null>(null);
   const [emailOnComplete, setEmailOnComplete] = useState(true);
-  const [completeConfirmOpen, setCompleteConfirmOpen] = useState(false);
   const [autoInvoiceNumber, setAutoInvoiceNumber] = useState<string | null>(null);
 
   const fetchPhotos = useCallback(async () => {
@@ -281,7 +280,7 @@ export default function FieldStop() {
   const requestComplete = () => {
     if (!signedBy.trim()) { toast('error', 'Enter who signed for the delivery'); return; }
     if (!hasAnyQty) { toast('error', 'At least one item must have a quantity above zero'); return; }
-    setCompleteConfirmOpen(true);
+    void handleComplete();
   };
 
   const handleComplete = async () => {
@@ -289,7 +288,6 @@ export default function FieldStop() {
     // Stale-route guard (H3): a fast stop-to-stop switch must never complete the
     // WRONG stop — the route id is fresh but component state could still lag.
     if (delivery.id !== id) { toast('error', 'This stop just changed — please retry'); return; }
-    setCompleteConfirmOpen(false);
     setCompleting(true);
 
     const quantitiesJson = isPartial
@@ -533,6 +531,20 @@ export default function FieldStop() {
 
       {step === 'sign' && (
         <div className="bg-white border border-gray-200 rounded-xl p-4">
+          <label className="flex items-center gap-2 text-sm text-gray-700 mb-4">
+            <input
+              type="checkbox"
+              checked={noOnePresent}
+              onChange={(e) => {
+                const checked = e.target.checked;
+                setNoOnePresent(checked);
+                setSignedBy(checked ? 'No one present — left at site' : '');
+                if (checked) setSignatureDataUrl(null);
+              }}
+              className="w-4 h-4"
+            />
+            No one present — left at site
+          </label>
           <label htmlFor="signed-by" className="block text-sm font-medium text-gray-700 mb-1">Signed by (name)</label>
           <input
             id="signed-by"
@@ -540,43 +552,41 @@ export default function FieldStop() {
             value={signedBy}
             onChange={(e) => setSignedBy(e.target.value)}
             placeholder="Who received the delivery?"
-            className="w-full border border-gray-300 rounded-lg px-3 py-2 mb-4"
+            disabled={noOnePresent}
+            className={`w-full border border-gray-300 rounded-lg px-3 py-2 mb-4 ${noOnePresent ? 'bg-gray-100 text-gray-500 cursor-not-allowed' : ''}`}
             autoComplete="off"
           />
-          <SignatureCanvas onSignatureChange={setSignatureDataUrl} label="Customer signs with their finger" height={160} />
-          <button type="button" disabled={!signedBy.trim()} onClick={() => setStep('photo')} className="w-full mt-4 flex items-center justify-center gap-2 bg-crx-green text-white font-semibold rounded-xl py-4 text-lg active:scale-[0.99] disabled:opacity-50">
-            <PenLine className="w-5 h-5" /> Continue to Photo
+          <div className={noOnePresent ? 'pointer-events-none opacity-50' : ''} aria-disabled={noOnePresent}>
+            <SignatureCanvas key={noOnePresent ? 'signature-skipped' : 'signature-capture'} onSignatureChange={setSignatureDataUrl} label="Customer signs with their finger" height={160} disabled={noOnePresent} />
+          </div>
+          {noOnePresent && <p className="text-xs text-gray-500 mt-2">Signature skipped because no one was present.</p>}
+          <button type="button" disabled={!signedBy.trim()} onClick={() => setStep('review')} className="w-full mt-4 flex items-center justify-center gap-2 bg-crx-green text-white font-semibold rounded-xl py-4 text-lg active:scale-[0.99] disabled:opacity-50">
+            <PenLine className="w-5 h-5" /> Continue to Review
           </button>
-          {!signedBy.trim() && <p className="text-xs text-amber-700 mt-2 text-center">Enter who signed to continue.</p>}
-        </div>
-      )}
-
-      {step === 'photo' && (
-        <div className="bg-white border border-gray-200 rounded-xl p-4">
-          <input ref={fileInputRef} type="file" accept="image/*" capture="environment" multiple onChange={handlePhotoUpload} className="hidden" />
-          {photos.length > 0 && (
-            <div className="flex flex-wrap gap-2 mb-3">
-              {photos.map((p) => (
-                <img key={p.id} src={p.image_url} alt={p.caption || 'Delivery photo'} className="w-20 h-20 object-cover rounded-lg border border-gray-200" />
-              ))}
-            </div>
-          )}
-          {isOnline ? (
-            <button type="button" disabled={uploadingPhoto || photos.length >= 10} onClick={() => fileInputRef.current?.click()} className="w-full flex items-center justify-center gap-2 border border-gray-300 text-gray-700 font-medium rounded-xl py-3 mb-3 active:scale-[0.99] disabled:opacity-50">
-              <Camera className="w-5 h-5" /> {uploadingPhoto ? 'Uploading…' : 'Take Photo'}
-            </button>
-          ) : (
-            <p className="flex items-center gap-2 text-sm text-amber-700 mb-3"><WifiOff className="w-4 h-4" /> Photos can only be uploaded while online — reconnect to add photos.</p>
-          )}
-          <button type="button" onClick={() => setStep('review')} className="w-full flex items-center justify-center gap-2 bg-crx-green text-white font-semibold rounded-xl py-4 text-lg active:scale-[0.99]">
-            {photos.length > 0 ? 'Continue to Finish' : 'Skip — No Photo'}
-            <ChevronRight className="w-5 h-5" />
-          </button>
+          {!signedBy.trim() && <p className="text-xs text-amber-700 mt-2 text-center">Enter who signed or choose no one present to continue.</p>}
         </div>
       )}
 
       {step === 'review' && (
         <div className="bg-white border border-gray-200 rounded-xl p-4">
+          <section className="mb-4">
+            <h2 className="text-sm font-medium text-gray-700 mb-2">Add photo (optional)</h2>
+            <input ref={fileInputRef} type="file" accept="image/*" capture="environment" multiple onChange={handlePhotoUpload} className="hidden" />
+            {photos.length > 0 && (
+              <div className="flex flex-wrap gap-2 mb-3">
+                {photos.map((p) => (
+                  <img key={p.id} src={p.image_url} alt={p.caption || 'Delivery photo'} className="w-20 h-20 object-cover rounded-lg border border-gray-200" />
+                ))}
+              </div>
+            )}
+            {isOnline ? (
+              <button type="button" disabled={uploadingPhoto || photos.length >= 10} onClick={() => fileInputRef.current?.click()} className="w-full flex items-center justify-center gap-2 border border-gray-300 text-gray-700 font-medium rounded-xl py-3 active:scale-[0.99] disabled:opacity-50">
+                <Camera className="w-5 h-5" /> {uploadingPhoto ? 'Uploading…' : 'Take Photo'}
+              </button>
+            ) : (
+              <p className="flex items-center gap-2 text-sm text-amber-700"><WifiOff className="w-4 h-4" /> Photos can only be uploaded while online — reconnect to add photos.</p>
+            )}
+          </section>
           <dl className="text-sm space-y-1.5 mb-4">
             <div className="flex justify-between"><dt className="text-gray-500">Delivery</dt><dd className="font-medium">{isPartial ? `Partial — ${shortCount} short` : 'Full delivery'}</dd></div>
             <div className="flex justify-between"><dt className="text-gray-500">Signed by</dt><dd className="font-medium">{signedBy || '—'}</dd></div>
@@ -595,6 +605,8 @@ export default function FieldStop() {
               You're offline — the delivery saves now and the completion syncs when you reconnect. The signature image, photos, customer receipt, and notifications are <strong>not sent for an offline completion</strong>. Complete online if the customer needs a receipt.
             </div>
           )}
+
+          <p className="text-sm text-gray-600 mb-3">Inventory will be deducted and a draft invoice created.</p>
 
           <button type="button" disabled={completing} onClick={requestComplete} className="w-full flex items-center justify-center gap-2 bg-crx-green text-white font-semibold rounded-xl py-4 text-lg active:scale-[0.99] disabled:opacity-50">
             <ClipboardCheck className="w-6 h-6" /> Complete Delivery
@@ -618,16 +630,6 @@ export default function FieldStop() {
         </div>
       )}
 
-      <ConfirmModal
-        open={completeConfirmOpen}
-        onClose={() => setCompleteConfirmOpen(false)}
-        onConfirm={handleComplete}
-        title="Complete this delivery?"
-        message="Inventory will be deducted and a draft invoice created."
-        confirmLabel="Complete"
-        variant="info"
-        loading={completing}
-      />
     </div>
   );
 }

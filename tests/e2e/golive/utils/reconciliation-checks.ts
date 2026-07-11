@@ -57,7 +57,14 @@ export interface PaymentAllocationRow {
 }
 
 export interface CommissionRow {
-  order_id: string;
+  /** NULL on job-sourced rows (U8) — exactly one of order_id/job_id is set. */
+  order_id: string | null;
+  /** NULL on order-sourced rows. */
+  job_id?: string | null;
+  /** U8: the minting invoice — job rows group per GENERATION. */
+  invoice_id?: string | null;
+  /** Cancelled rows are excluded from split-sum grouping (void→re-invoice leaves them). */
+  status?: string | null;
   order_number: string;
   split_percentage: number;
 }
@@ -245,11 +252,26 @@ export function checkInvoiceBalances(invoices: InvoiceRow[]): Discrepancy[] {
 }
 
 export function checkCommissionSplits(commissions: CommissionRow[]): Discrepancy[] {
+  // U8 (2026-07-06, mirror of src/lib/reconciliation.ts): key on the lineage-
+  // qualified id (job rows have order_id NULL — a raw key would collapse every
+  // job into one `null` bucket), and skip cancelled generations left behind by
+  // a void→re-invoice cycle so a healthy job isn't reported as a 200% split.
   const byOrder = new Map<string, { orderNumber: string; totalPct: number }>();
+  // Codex R8/R9 P2 (mirror of src/lib/reconciliation.ts): generation keying + a
+  // bucket with ANY cancelled row is a reversal artifact and is excluded whole.
+  const keyOf = (c: CommissionRow): string =>
+    c.order_id
+      ?? (c.invoice_id ? `jobinv:${c.invoice_id}` : c.job_id ? `job:${c.job_id}` : 'unlinked');
+  const reversedBuckets = new Set<string>();
   for (const c of commissions) {
-    const entry = byOrder.get(c.order_id) ?? { orderNumber: c.order_number, totalPct: 0 };
+    if (c.status === 'cancelled') reversedBuckets.add(keyOf(c));
+  }
+  for (const c of commissions) {
+    const key = keyOf(c);
+    if (reversedBuckets.has(key)) continue;
+    const entry = byOrder.get(key) ?? { orderNumber: c.order_number, totalPct: 0 };
     entry.totalPct += c.split_percentage;
-    byOrder.set(c.order_id, entry);
+    byOrder.set(key, entry);
   }
 
   const issues: Discrepancy[] = [];

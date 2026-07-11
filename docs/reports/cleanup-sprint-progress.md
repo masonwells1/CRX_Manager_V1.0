@@ -15,3 +15,5 @@ Phase 23 (DB CHECK constraints on inventory buckets) unlocks when negatives=0 fo
 | 2026-06-12 | — | — | — | Routine did not produce a data row (no entry recorded) |
 | 2026-06-19 | 17 | 15 | 59 | No change — zero rows resolved (6 consecutive stalled weeks) |
 | 2026-06-26 | 17 | 15 | 59 | No change — zero rows resolved (7 consecutive stalled weeks) |
+| 2026-07-03 | 17 | 15 | 59 | No change — zero rows resolved (8 consecutive stalled weeks) |
+| 2026-07-10 | 17 | 15 | 59 | No change — zero rows resolved (9 consecutive stalled weeks) |

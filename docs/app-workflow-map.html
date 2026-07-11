@@ -84,7 +84,7 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(
 <div id="header">
   <h1>⬡ CRX Manager — Architecture Map</h1>
   <!-- __STATS_START__ -->
-  <span id="stat-line" style="color:var(--muted);font-size:.8rem">88 routes · 204 RPC calls · 0 issues · Updated Jul 10, 2026</span>
+  <span id="stat-line" style="color:var(--muted);font-size:.8rem">90 routes · 210 RPC calls · 0 issues · Updated Jul 10, 2026</span>
   <!-- __STATS_END__ -->
   <div id="tabs">
     <button class="tab active" onclick="showTab('graph')">Graph</button>
@@ -465,11 +465,19 @@ const NODES = [
       "problem": false
     },
     {
+      "id": "role-landing",
+      "label": "RoleLanding",
+      "type": "page-all",
+      "group": "Core",
+      "path": "/",
+      "problem": false
+    },
+    {
       "id": "dashboard",
       "label": "Dashboard",
       "type": "page-all",
       "group": "Core",
-      "path": "/",
+      "path": "/dashboard",
       "problem": false
     },
     {
@@ -838,6 +846,14 @@ const NODES = [
       "type": "page-admin",
       "group": "Core",
       "path": "/label-review",
+      "problem": false
+    },
+    {
+      "id": "label-data-quality",
+      "label": "LabelDataQuality",
+      "type": "page-admin",
+      "group": "Core",
+      "path": "/label-data-quality",
       "problem": false
     },
     {
@@ -1386,7 +1402,12 @@ const EDGES = [
     },
     {
       "s": "dashboard",
-      "t": "to-ship",
+      "t": "quote-builder",
+      "type": "nav"
+    },
+    {
+      "s": "dashboard",
+      "t": "job-detail",
       "type": "nav"
     },
     {
@@ -1396,12 +1417,17 @@ const EDGES = [
     },
     {
       "s": "dashboard",
-      "t": "new-purchase-order",
+      "t": "to-ship",
       "type": "nav"
     },
     {
       "s": "dashboard",
       "t": "new-delivery",
+      "type": "nav"
+    },
+    {
+      "s": "dashboard",
+      "t": "new-purchase-order",
       "type": "nav"
     },
     {
@@ -1691,11 +1717,6 @@ const EDGES = [
     },
     {
       "s": "invoices",
-      "t": "field-application-invoice",
-      "type": "nav"
-    },
-    {
-      "s": "invoices",
       "t": "invoice-detail",
       "type": "nav"
     },
@@ -1745,6 +1766,11 @@ const EDGES = [
       "type": "nav"
     },
     {
+      "s": "new-order",
+      "t": "quote-builder",
+      "type": "nav"
+    },
+    {
       "s": "new-purchase-order",
       "t": "purchase-order-detail",
       "type": "nav"
@@ -1766,12 +1792,32 @@ const EDGES = [
     },
     {
       "s": "office-cockpit",
+      "t": "payment-allocation",
+      "type": "nav"
+    },
+    {
+      "s": "office-cockpit",
       "t": "unbilled-applications",
       "type": "nav"
     },
     {
       "s": "office-cockpit",
       "t": "job-detail",
+      "type": "nav"
+    },
+    {
+      "s": "office-cockpit",
+      "t": "jobs",
+      "type": "nav"
+    },
+    {
+      "s": "office-cockpit",
+      "t": "quotes",
+      "type": "nav"
+    },
+    {
+      "s": "office-cockpit",
+      "t": "quote-builder",
       "type": "nav"
     },
     {
@@ -1786,12 +1832,22 @@ const EDGES = [
     },
     {
       "s": "office-cockpit",
-      "t": "watchdog-exceptions",
+      "t": "invoices",
       "type": "nav"
     },
     {
       "s": "office-cockpit",
-      "t": "jobs",
+      "t": "deliveries",
+      "type": "nav"
+    },
+    {
+      "s": "office-cockpit",
+      "t": "delivery-detail",
+      "type": "nav"
+    },
+    {
+      "s": "office-cockpit",
+      "t": "watchdog-exceptions",
       "type": "nav"
     },
     {
@@ -1857,6 +1913,11 @@ const EDGES = [
     {
       "s": "product-detail",
       "t": "products",
+      "type": "nav"
+    },
+    {
+      "s": "product-detail",
+      "t": "label-review",
       "type": "nav"
     },
     {
@@ -2050,13 +2111,13 @@ const EDGES = [
       "type": "rpc"
     },
     {
-      "s": "delivery-remainders",
-      "t": "r-delivery",
+      "s": "delivery-detail",
+      "t": "r-invoice",
       "type": "rpc"
     },
     {
-      "s": "dispatch-board",
-      "t": "r-inventory",
+      "s": "delivery-remainders",
+      "t": "r-delivery",
       "type": "rpc"
     },
     {
@@ -2072,6 +2133,11 @@ const EDGES = [
     {
       "s": "field-stop",
       "t": "r-delivery",
+      "type": "rpc"
+    },
+    {
+      "s": "field-view",
+      "t": "r-job",
       "type": "rpc"
     },
     {
@@ -2232,6 +2298,11 @@ const EDGES = [
     {
       "s": "to-ship",
       "t": "r-inventory",
+      "type": "rpc"
+    },
+    {
+      "s": "unbilled-applications",
+      "t": "r-job",
       "type": "rpc"
     },
     {

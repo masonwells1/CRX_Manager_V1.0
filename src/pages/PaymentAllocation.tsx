@@ -149,7 +149,10 @@ export default function PaymentAllocation() {
       .from('invoices')
       .select('id, invoice_number, invoice_date, due_date, invoice_type, total_amount_cents, balance_cents')
       .eq('customer_id', customerId)
-      .eq('status', 'posted')
+      // U1 (#41): include 'overdue' — the 6am cron flips past-due posted invoices to
+      // 'overdue', which made exactly the invoices checks arrive for vanish from this
+      // list. allocate_payment already accepts both statuses.
+      .in('status', ['posted', 'overdue'])
       .gt('balance_cents', 0)
       .is('deleted_at', null)
       .order('invoice_date', { ascending: true })

@@ -32,6 +32,16 @@ interface DeliveryItemDraft {
   notes: string | null;
 }
 
+function isValidDateParam(value: string | null): value is string {
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+
+  const parsed = new Date(`${value}T00:00:00`);
+  return !Number.isNaN(parsed.getTime())
+    && parsed.getFullYear() === Number(value.slice(0, 4))
+    && parsed.getMonth() + 1 === Number(value.slice(5, 7))
+    && parsed.getDate() === Number(value.slice(8, 10));
+}
+
 export default function NewDelivery() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -51,6 +61,8 @@ export default function NewDelivery() {
   const { warning: driverWarning, check: checkDriverLoad, dismiss: dismissDriverWarning } = useOverloadedDriverCheck();
 
   const preselectedOrderId = searchParams.get('order') || '';
+  const customerIdParam = searchParams.get('customer_id') || '';
+  const scheduledDateParam = searchParams.get('date');
 
   const [orders, setOrders] = useState<(Order & { customer_name: string })[]>([]);
   const [selectedOrderId, setSelectedOrderId] = useState(preselectedOrderId);
@@ -62,7 +74,9 @@ export default function NewDelivery() {
 
   const [selectedAddressId, setSelectedAddressId] = useState('');
   const [selectedDriverId, setSelectedDriverId] = useState('');
-  const [scheduledDate, setScheduledDate] = useState(localToday());
+  const [scheduledDate, setScheduledDate] = useState(() => (
+    isValidDateParam(scheduledDateParam) ? scheduledDateParam : localToday()
+  ));
   const [scheduledTime, setScheduledTime] = useState('');
   const [deliveryNotes, setDeliveryNotes] = useState('');
 
@@ -98,12 +112,17 @@ export default function NewDelivery() {
   const blocker = useUnsavedChanges(isDirty);
 
   const fetchOrders = useCallback(async () => {
-    const { data, error } = await supabase
+    let orderQuery = supabase
       .from('orders')
       .select('*, customer:customers(farm_name)')
       .in('status', ['confirmed', 'partially_fulfilled'])
-      .is('deleted_at', null)
-      .order('order_date', { ascending: false });
+      .is('deleted_at', null);
+
+    if (customerIdParam) {
+      orderQuery = orderQuery.eq('customer_id', customerIdParam);
+    }
+
+    const { data, error } = await orderQuery.order('order_date', { ascending: false });
 
     if (error) {
       toast('error', 'Failed to load orders: ' + error.message);
@@ -117,7 +136,7 @@ export default function NewDelivery() {
     }));
     setOrders(rows as (Order & { customer_name: string })[]);
     setLoadingOrders(false);
-  }, [toast]);
+  }, [customerIdParam, toast]);
 
   const fetchDrivers = useCallback(async () => {
     // PR-07 follow-up: driver picker only uses d.id + d.full_name + d.role; safe via view.

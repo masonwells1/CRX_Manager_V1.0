@@ -2,88 +2,88 @@ import type { UserRole } from '../types';
 
 export interface PagePermission {
   key: string;
+  path: string;
   label: string;
   category: string;
   roles: UserRole[];
 }
 
 /**
- * Canonical list of all permissionable pages.
- * Dashboard, Team Board, Notifications, and Settings are excluded
- * (always accessible per existing role rules).
- *
- * Every protected route in App.tsx MUST have an entry here, otherwise the
- * deny-list (`profile.denied_pages`) silently does nothing for that route.
+ * Canonical list of all permissionable pages. Every protected route in
+ * App.tsx MUST have an entry here, otherwise the deny-list
+ * (`profile.denied_pages`) silently does nothing for that route.
  * `pagePermissions.test.ts` enforces this — adding a Route without an entry
  * fails CI.
  */
 export const PAGE_PERMISSIONS: PagePermission[] = [
-  // Onboarding
-  { key: 'getting-started', label: 'Getting Started', category: 'Onboarding', roles: ['admin', 'sales_rep', 'driver', 'applicator'] },
+  // Sell & Deliver
+  { key: 'quotes', path: '/quotes', label: 'Quotes & Bookings', category: 'Sell & Deliver', roles: ['admin', 'sales_rep'] },
+  { key: 'orders', path: '/orders', label: 'Orders', category: 'Sell & Deliver', roles: ['admin', 'sales_rep'] },
+  { key: 'deliveries', path: '/deliveries', label: 'Deliveries', category: 'Sell & Deliver', roles: ['admin', 'sales_rep', 'driver'] },
+  { key: 'my-route', path: '/my-route', label: 'My Route', category: 'Sell & Deliver', roles: ['admin', 'sales_rep', 'driver'] },
+  { key: 'delivery-remainders', path: '/delivery-remainders', label: 'Remainders', category: 'Sell & Deliver', roles: ['admin', 'sales_rep'] },
+  { key: 'invoices', path: '/invoices', label: 'Invoices — Chemical', category: 'Sell & Deliver', roles: ['admin', 'sales_rep'] },
+  { key: 'returns', path: '/returns', label: 'Returns', category: 'Sell & Deliver', roles: ['admin', 'sales_rep'] },
+  { key: 'to-ship', path: '/to-ship', label: 'To-Ship (Load-Out Board)', category: 'Sell & Deliver', roles: ['admin', 'sales_rep'] },
 
-  // Sales
-  { key: 'quotes', label: 'Quotes', category: 'Sales', roles: ['admin', 'sales_rep'] },
-  { key: 'orders', label: 'Orders', category: 'Sales', roles: ['admin', 'sales_rep'] },
-  { key: 'invoices', label: 'Invoices', category: 'Sales', roles: ['admin', 'sales_rep'] },
-  { key: 'field-invoices', label: 'Field Invoices', category: 'Sales', roles: ['admin', 'sales_rep'] },
-  { key: 'payments', label: 'Payments', category: 'Sales', roles: ['admin', 'sales_rep'] },
+  // Spray Fields
+  { key: 'jobs', path: '/jobs', label: 'Job Schedule', category: 'Spray Fields', roles: ['admin', 'sales_rep', 'applicator'] },
+  { key: 'dispatch', path: '/dispatch', label: 'Dispatch Board', category: 'Spray Fields', roles: ['admin', 'sales_rep', 'applicator'] },
+  { key: 'field-invoices', path: '/field-invoices', label: 'Field Invoices', category: 'Spray Fields', roles: ['admin', 'sales_rep'] },
+  { key: 'application-records', path: '/application-records', label: 'Record Book (Applications)', category: 'Spray Fields', roles: ['admin', 'sales_rep', 'applicator'] },
+  { key: 'program-tracker', path: '/program-tracker', label: 'Program Tracker', category: 'Spray Fields', roles: ['admin', 'sales_rep'] },
+  { key: 'recipes', path: '/recipes', label: 'Blend Recipes', category: 'Spray Fields', roles: ['admin', 'sales_rep'] },
+  { key: 'field', path: '/field', label: 'Field View (phone preview)', category: 'Spray Fields', roles: ['admin', 'sales_rep', 'applicator'] },
 
-  // Customers
-  { key: 'customers', label: 'Customers', category: 'Customers', roles: ['admin', 'sales_rep'] },
-  { key: 'fields', label: 'Fields', category: 'Customers', roles: ['admin', 'sales_rep'] },
-  { key: 'crop-programs', label: 'Crop Programs', category: 'Customers', roles: ['admin', 'sales_rep'] },
+  // Customers & Fields
+  { key: 'customers', path: '/customers', label: 'Customers', category: 'Customers & Fields', roles: ['admin', 'sales_rep'] },
+  { key: 'fields', path: '/fields', label: 'Fields & Maps', category: 'Customers & Fields', roles: ['admin', 'sales_rep'] },
+  { key: 'crop-programs', path: '/crop-programs', label: 'Crop Programs', category: 'Customers & Fields', roles: ['admin', 'sales_rep'] },
 
-  // Products
-  { key: 'products', label: 'Products', category: 'Products', roles: ['admin', 'sales_rep'] },
-  { key: 'brand-vs-generic', label: 'Brand vs Generic', category: 'Products', roles: ['admin', 'sales_rep'] },
-  { key: 'recipes', label: 'Blend Recipes', category: 'Products', roles: ['admin', 'sales_rep'] },
+  // Inventory & Buying
+  { key: 'inventory', path: '/inventory', label: 'Inventory', category: 'Inventory & Buying', roles: ['admin', 'sales_rep'] },
+  { key: 'products', path: '/products', label: 'Products', category: 'Inventory & Buying', roles: ['admin', 'sales_rep'] },
+  { key: 'brand-vs-generic', path: '/brand-vs-generic', label: 'Brand vs Generic', category: 'Inventory & Buying', roles: ['admin', 'sales_rep'] },
+  { key: 'purchase-orders', path: '/purchase-orders', label: 'Purchase Orders', category: 'Inventory & Buying', roles: ['admin', 'sales_rep'] },
+  { key: 'receiving-hub', path: '/receiving-hub', label: 'Receiving (Hub)', category: 'Inventory & Buying', roles: ['admin', 'sales_rep'] },
+  { key: 'receiving', path: '/receiving', label: 'Receiving Log', category: 'Inventory & Buying', roles: ['admin', 'sales_rep'] },
+  { key: 'cycle-counts', path: '/cycle-counts', label: 'Cycle Counts', category: 'Inventory & Buying', roles: ['admin'] },
 
-  // Operations
-  { key: 'jobs', label: 'Job Schedule', category: 'Operations', roles: ['admin', 'sales_rep', 'applicator'] },
-  { key: 'deliveries', label: 'Deliveries', category: 'Operations', roles: ['admin', 'sales_rep', 'driver'] },
-  { key: 'my-route', label: 'My Route', category: 'Operations', roles: ['admin', 'sales_rep', 'driver'] },
-  { key: 'delivery-remainders', label: 'Remainders', category: 'Operations', roles: ['admin', 'sales_rep'] },
-  { key: 'to-ship', label: 'To-Ship', category: 'Operations', roles: ['admin', 'sales_rep'] },
-  { key: 'vehicles', label: 'Vehicles', category: 'Operations', roles: ['admin'] },
-  { key: 'blend-tickets', label: 'Blend Tickets', category: 'Operations', roles: ['admin', 'sales_rep'] },
-  { key: 'application-records', label: 'App Records', category: 'Operations', roles: ['admin', 'sales_rep', 'applicator'] },
-  { key: 'application-services', label: 'Application Services', category: 'Operations', roles: ['admin'] },
-  { key: 'dispatch', label: 'Dispatch', category: 'Operations', roles: ['admin', 'sales_rep', 'applicator'] },
-  { key: 'field', label: 'My Field Jobs', category: 'Operations', roles: ['admin', 'sales_rep', 'applicator'] },
-  { key: 'program-tracker', label: 'Program Tracker', category: 'Operations', roles: ['admin', 'sales_rep'] },
+  // Money
+  { key: 'payments', path: '/payments', label: 'Record Payments', category: 'Money', roles: ['admin', 'sales_rep'] },
+  { key: 'accounts-receivable', path: '/accounts-receivable', label: 'A/R Workspace', category: 'Money', roles: ['admin'] },
+  { key: 'ar-aging', path: '/ar-aging', label: 'A/R Aging', category: 'Money', roles: ['admin'] },
+  { key: 'prepayments', path: '/prepayments', label: 'Prepayments', category: 'Money', roles: ['admin'] },
+  { key: 'customer-transactions', path: '/customer-transactions', label: 'Customer Transactions', category: 'Money', roles: ['admin'] },
+  { key: 'prepay-workspace', path: '/prepay-workspace', label: 'Prepay Workspace', category: 'Money', roles: ['admin'] },
+  { key: 'accounts-payable', path: '/accounts-payable', label: 'A/P & Vendor Bills', category: 'Money', roles: ['admin'] },
+  { key: 'commission-payments', path: '/commission-payments', label: 'Commissions', category: 'Money', roles: ['admin'] },
+  { key: 'rebates', path: '/rebates', label: 'Rebates', category: 'Money', roles: ['admin'] },
+  { key: 'month-end', path: '/month-end', label: 'Month-End Close', category: 'Money', roles: ['admin'] },
+  { key: 'integrity-report', path: '/integrity-report', label: 'Data Integrity — Report', category: 'Money', roles: ['admin'] },
+  { key: 'integrity-cleanup', path: '/integrity-cleanup', label: 'Data Integrity — Cleanup', category: 'Money', roles: ['admin'] },
+  { key: 'payment-history', path: '/payment-history', label: 'Payment History', category: 'Money', roles: ['admin'] },
 
-  // Inventory
-  { key: 'inventory', label: 'Inventory', category: 'Inventory', roles: ['admin', 'sales_rep'] },
-  { key: 'cycle-counts', label: 'Cycle Counts', category: 'Inventory', roles: ['admin'] },
-  { key: 'purchase-orders', label: 'Supplier POs', category: 'Inventory', roles: ['admin', 'sales_rep'] },
-  { key: 'receiving', label: 'Receiving', category: 'Inventory', roles: ['admin', 'sales_rep'] },
-  { key: 'receiving-hub', label: 'Receiving Hub', category: 'Inventory', roles: ['admin', 'sales_rep'] },
-  { key: 'returns', label: 'Returns', category: 'Inventory', roles: ['admin', 'sales_rep'] },
+  // Compliance & Records
+  { key: 'compliance', path: '/compliance', label: 'Licenses & RUP Register', category: 'Compliance & Records', roles: ['admin', 'sales_rep'] },
+  { key: 'lot-trace', path: '/lot-trace', label: 'Lot Trace (recall lookup)', category: 'Compliance & Records', roles: ['admin', 'sales_rep'] },
+  { key: 'watchdog', path: '/watchdog', label: 'Watchdog Flags', category: 'Compliance & Records', roles: ['admin', 'sales_rep'] },
+  { key: 'label-review', path: '/label-review', label: 'Label Review', category: 'Compliance & Records', roles: ['admin'] },
+  { key: 'label-data-quality', path: '/label-data-quality', label: 'Label Data Quality', category: 'Compliance & Records', roles: ['admin'] },
+  { key: 'blend-tickets', path: '/blend-tickets', label: 'Blend Tickets (OCR)', category: 'Compliance & Records', roles: ['admin', 'sales_rep'] },
 
-  // Finance
-  { key: 'accounts-receivable', label: 'Accounts Receivable', category: 'Finance', roles: ['admin'] },
-  { key: 'ar-aging', label: 'AR Aging', category: 'Finance', roles: ['admin'] },
-  { key: 'accounts-payable', label: 'Accounts Payable', category: 'Finance', roles: ['admin'] },
-  { key: 'vendors', label: 'Vendors', category: 'Finance', roles: ['admin'] },
-  { key: 'prepayments', label: 'Prepayments', category: 'Finance', roles: ['admin'] },
-  { key: 'prepay-workspace', label: 'Prepay Workspace', category: 'Finance', roles: ['admin'] },
-  { key: 'commission-payments', label: 'Commission Pay', category: 'Finance', roles: ['admin'] },
-  { key: 'customer-transactions', label: 'Transactions', category: 'Finance', roles: ['admin'] },
-  { key: 'month-end', label: 'Month-End', category: 'Finance', roles: ['admin'] },
-  { key: 'integrity-report', label: 'Integrity Report', category: 'Finance', roles: ['admin'] },
-  { key: 'integrity-cleanup', label: 'Integrity Cleanup', category: 'Finance', roles: ['admin'] },
-  { key: 'rebates', label: 'Rebates', category: 'Finance', roles: ['admin'] },
-  { key: 'payment-history', label: 'Payment History', category: 'Finance', roles: ['admin'] },
-  { key: 'financial-dashboard', label: 'Financial Dashboard', category: 'Finance', roles: ['admin'] },
+  // Insights
+  { key: 'dashboard', path: '/dashboard', label: 'Overview (KPI Dashboard)', category: 'Insights', roles: ['admin', 'sales_rep'] },
+  { key: 'office-cockpit', path: '/office-cockpit', label: 'Today', category: 'Insights', roles: ['admin', 'sales_rep'] },
+  { key: 'reports', path: '/reports', label: 'Reports Library', category: 'Insights', roles: ['admin', 'sales_rep'] },
+  { key: 'sales-reports', path: '/sales-reports', label: 'Sales Reports', category: 'Insights', roles: ['admin', 'sales_rep'] },
+  { key: 'financial-dashboard', path: '/financial-dashboard', label: 'Financial Dashboard', category: 'Insights', roles: ['admin'] },
 
-  // Reports
-  { key: 'reports', label: 'Reports', category: 'Reports', roles: ['admin', 'sales_rep'] },
-  { key: 'sales-reports', label: 'Sales Reports', category: 'Reports', roles: ['admin', 'sales_rep'] },
-  { key: 'compliance', label: 'Compliance', category: 'Reports', roles: ['admin', 'sales_rep'] },
-  { key: 'lot-trace', label: 'Lot Trace', category: 'Reports', roles: ['admin', 'sales_rep'] },
-  { key: 'label-review', label: 'Label Review', category: 'Reports', roles: ['admin'] },
-  { key: 'watchdog', label: 'Watchdog Flags', category: 'Reports', roles: ['admin', 'sales_rep'] },
-  { key: 'office-cockpit', label: 'Office Cockpit', category: 'Reports', roles: ['admin', 'sales_rep'] },
+  // Setup & Admin
+  { key: 'vehicles', path: '/vehicles', label: 'Vehicles', category: 'Setup & Admin', roles: ['admin'] },
+  { key: 'application-services', path: '/application-services', label: 'Application Services (fees)', category: 'Setup & Admin', roles: ['admin'] },
+  { key: 'vendors', path: '/vendors', label: 'Vendors', category: 'Setup & Admin', roles: ['admin'] },
+  { key: 'getting-started', path: '/getting-started', label: 'Getting Started (help)', category: 'Setup & Admin', roles: ['admin', 'sales_rep', 'driver', 'applicator'] },
 ];
 
 /**
@@ -99,7 +99,6 @@ export const EXEMPT_ROUTE_SEGMENTS: ReadonlySet<string> = new Set([
   'login',
   'forgot-password',
   'reset-password',
-  'dashboard',
   'settings',
   'team-board',
   'notifications',
@@ -108,23 +107,18 @@ export const EXEMPT_ROUTE_SEGMENTS: ReadonlySet<string> = new Set([
 /**
  * Extract the page key from a route pathname.
  * e.g., '/quotes/new' → 'quotes', '/customers/abc-123' → 'customers'
- * Returns null for non-permissionable paths (dashboard, team-board, etc.)
+ * Returns null for non-permissionable paths (team-board, settings, etc.)
  */
 export function getPageKeyFromPath(pathname: string): string | null {
-  // Strip leading slash, take first segment
   const segments = pathname.replace(/^\//, '').split('/');
   const firstSegment = segments[0] || '';
 
   // The field-application invoice editor is mounted under /invoices/field-app/*
-  // for route-reuse, but it belongs to the SEPARATE Field Invoices area. Gate it
-  // by the 'field-invoices' permission, not Chemical Sales 'invoices', so a user
-  // granted Field Invoices (but denied Invoices) can still open/edit/post a field
-  // invoice — and vice-versa. (Segregation requirement; Codex Phase-1a R2.)
+  // for route-reuse, but it belongs to the SEPARATE Field Invoices area.
   if (firstSegment === 'invoices' && segments[1] === 'field-app') {
     return 'field-invoices';
   }
 
-  // Check if it matches a known page key
   const found = PAGE_PERMISSIONS.find((p) => p.key === firstSegment);
   return found ? found.key : null;
 }
@@ -132,11 +126,11 @@ export function getPageKeyFromPath(pathname: string): string | null {
 /**
  * Returns true when a path's first segment is intentionally exempt from
  * PAGE_PERMISSIONS coverage (e.g. /settings, /login, /team-board).
- * The root path ('/' or '') is also exempt — it's the dashboard.
+ * The root path ('/' or '') is also exempt — it is the role landing redirect.
  */
 export function isExemptRoute(pathname: string): boolean {
   const firstSegment = pathname.replace(/^\//, '').split('/')[0] || '';
-  if (firstSegment === '') return true; // root → dashboard, no permission needed
+  if (firstSegment === '') return true;
   return EXEMPT_ROUTE_SEGMENTS.has(firstSegment);
 }
 
@@ -152,34 +146,23 @@ export function hasPageAccess(
   pageKey: string
 ): boolean {
   if (!role) return false;
-
-  // Admins are never restricted
   if (role === 'admin') return true;
 
-  // Find the page definition
   const page = PAGE_PERMISSIONS.find((p) => p.key === pageKey);
-  if (!page) return false; // Unknown page key — deny by default (fail-closed)
+  if (!page) return false;
 
-  // Role must be allowed
   if (!page.roles.includes(role)) return false;
-
-  // Check deny list
   if (deniedPages.includes(pageKey)) return false;
-
   return true;
 }
 
-/**
- * Get all pages accessible by a given role (before deny-list filtering).
- */
+/** Get all pages accessible by a given role (before deny-list filtering). */
 export function getPagesForRole(role: UserRole): PagePermission[] {
   if (role === 'admin') return PAGE_PERMISSIONS;
   return PAGE_PERMISSIONS.filter((p) => p.roles.includes(role));
 }
 
-/**
- * Get unique categories from a list of pages, preserving order.
- */
+/** Get unique categories from a list of pages, preserving order. */
 export function getCategories(pages: PagePermission[]): string[] {
   const seen = new Set<string>();
   const result: string[] = [];

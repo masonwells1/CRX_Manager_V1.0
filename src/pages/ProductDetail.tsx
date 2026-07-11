@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState , useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Save, DollarSign } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, DollarSign, ExternalLink, Search, Save } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Combobox from '../components/ui/Combobox';
@@ -11,9 +11,103 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { logActivity } from '../lib/activityLogger';
-import { supabase, checkMutationResult } from '../lib/db';
+import { assertRpcResult, checkMutationResult, supabase, supabaseUntyped } from '../lib/db';
+import { localToday } from '../lib/dateUtils';
+import { waitForEpaRequestSlot } from '../lib/epaRequestThrottle';
 import { Sentry } from '../lib/sentry';
-import type { Product, CostHistory, UnitConversion } from '../types';
+import { unitOptionsForForm, isKnownUnit } from '../lib/units';
+import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
+import type { CostHistory, EpaLookupResult, Product, UnitConversion } from '../types';
+
+function hasText(value: string | null | undefined): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function namesClearlyDiffer(productName: string | null | undefined, epaName: string | null): boolean {
+  if (!hasText(productName) || !hasText(epaName)) return false;
+
+  const normalize = (value: string) => value
+    .normalize('NFKD')
+    .toLowerCase()
+    .replace(/[®™]/g, '')
+    .replace(/&/g, ' and ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+
+  const current = normalize(productName);
+  const epa = normalize(epaName);
+  const currentCompact = current.replace(/\s+/g, '');
+  const epaCompact = epa.replace(/\s+/g, '');
+  if (currentCompact === epaCompact
+      || currentCompact.includes(epaCompact)
+      || epaCompact.includes(currentCompact)) {
+    return false;
+  }
+
+  const currentTokens = new Set(current.split(' ').filter((token) => token.length >= 3));
+  const epaTokens = epa.split(' ').filter((token) => token.length >= 3);
+  return !epaTokens.some((token) => currentTokens.has(token));
+}
+
+function isEpaLookupResult(value: unknown): value is EpaLookupResult {
+  if (!value || typeof value !== 'object') return false;
+  const result = value as Partial<EpaLookupResult>;
+  const nullableString = (field: unknown) => field === null || typeof field === 'string';
+  const canonicalSignalWord = result.signalWordCanonical === null
+    || result.signalWordCanonical === 'Danger'
+    || result.signalWordCanonical === 'Warning'
+    || result.signalWordCanonical === 'Caution';
+  const activeIngredientsValid = Array.isArray(result.activeIngredients)
+    && result.activeIngredients.every((ingredient) => (
+      ingredient
+      && typeof ingredient === 'object'
+      && typeof ingredient.name === 'string'
+      && (ingredient.percent === null
+        || (typeof ingredient.percent === 'number' && Number.isFinite(ingredient.percent)))
+      && nullableString(ingredient.pcCode)
+      && nullableString(ingredient.casNumber)
+    ));
+  const labelPdfsValid = Array.isArray(result.labelPdfs)
+    && result.labelPdfs.every((pdf) => (
+      pdf
+      && typeof pdf === 'object'
+      && typeof pdf.fileName === 'string'
+      && nullableString(pdf.acceptedDate)
+      && typeof pdf.url === 'string'
+    ));
+  return typeof result.found === 'boolean'
+    && (result.regType === 'section3' || result.regType === 'distributor')
+    && nullableString(result.eparegno)
+    && nullableString(result.productname)
+    && canonicalSignalWord
+    && typeof result.needsManual === 'boolean'
+    && nullableString(result.manufacturer)
+    && (result.rupYn === null || result.rupYn === 'Yes' || result.rupYn === 'No')
+    && nullableString(result.productStatus)
+    && typeof result.isCancelled === 'boolean'
+    && nullableString(result.latestLabelPdfUrl)
+    && activeIngredientsValid
+    && labelPdfsValid;
+}
+
+async function epaFunctionErrorMessage(error: unknown): Promise<string> {
+  if (error && typeof error === 'object' && 'context' in error) {
+    const context = (error as { context?: unknown }).context;
+    if (typeof Response !== 'undefined' && context instanceof Response) {
+      try {
+        const payload = await context.clone().json() as { error?: unknown };
+        if (typeof payload.error === 'string' && payload.error.trim()) return payload.error;
+      } catch {
+        // Fall through to the SDK error message when the response is not JSON.
+      }
+    }
+  }
+  if (error && typeof error === 'object' && 'message' in error
+      && typeof (error as { message?: unknown }).message === 'string') {
+    return (error as { message: string }).message;
+  }
+  return 'EPA lookup failed. Please try again.';
+}
 
 export default function ProductDetail() {
   const { id } = useParams();
@@ -60,6 +154,15 @@ export default function ProductDetail() {
   const [costModal, setCostModal] = useState(false);
   const [newCost, setNewCost] = useState('');
   const [costNote, setCostNote] = useState('');
+  const [persistedLabelFields, setPersistedLabelFields] = useState<{
+    signalWord: Product['signal_word'];
+    epaRegistration: string | null;
+  }>({ signalWord: null, epaRegistration: null });
+  const [epaLookupResult, setEpaLookupResult] = useState<EpaLookupResult | null>(null);
+  const [epaLookupRegNumber, setEpaLookupRegNumber] = useState('');
+  const [epaLookupLoading, setEpaLookupLoading] = useState(false);
+  const [epaDraftCreating, setEpaDraftCreating] = useState(false);
+  const epaDraftKey = useIdempotencyKey('create_label_draft', profile?.id ?? '');
 
   // Track dirty state for unsaved changes warning
   const [isDirty, setIsDirty] = useState(false);
@@ -78,7 +181,14 @@ export default function ProductDetail() {
       setLoading(false);
       return;
     }
-    if (data) setProduct(data as Product);
+    if (data) {
+      const loadedProduct = data as Product;
+      setProduct(loadedProduct);
+      setPersistedLabelFields({
+        signalWord: loadedProduct.signal_word,
+        epaRegistration: loadedProduct.epa_registration,
+      });
+    }
     setLoading(false);
     setTimeout(() => { initialLoadDone.current = true; }, 0);
   }, [id, toast]);
@@ -221,6 +331,10 @@ export default function ProductDetail() {
           .eq('id', id!)
           .select();
         checkMutationResult(result, 'Update product');
+        setPersistedLabelFields({
+          signalWord: product.signal_word ?? null,
+          epaRegistration: product.epa_registration?.trim() || null,
+        });
         setIsDirty(false);
         toast('success', 'Product updated');
         logActivity({ event: 'product_updated', description: `Product ${product.product_name} updated`, performedBy: profile!.id, entityType: 'product', entityId: id });
@@ -277,7 +391,149 @@ export default function ProductDetail() {
     }
   };
 
-  const update = (field: string, value: unknown) => setProduct((p) => ({ ...p, [field]: value }));
+  const handleEpaLookup = async () => {
+    const regNumber = product.epa_registration?.trim() ?? '';
+    if (!regNumber) {
+      toast('warning', 'Enter an EPA registration number first.');
+      return;
+    }
+
+    setEpaLookupLoading(true);
+    setEpaLookupResult(null);
+    setEpaLookupRegNumber('');
+    try {
+      const slotReady = await waitForEpaRequestSlot(() => false);
+      if (!slotReady) return;
+      const { data, error } = await supabase.functions.invoke<EpaLookupResult>('epa-lookup', {
+        body: { regNumber },
+      });
+      if (error) throw new Error(await epaFunctionErrorMessage(error));
+      if (data && typeof data === 'object' && 'error' in data
+          && typeof (data as { error?: unknown }).error === 'string') {
+        throw new Error((data as { error: string }).error);
+      }
+      if (!isEpaLookupResult(data)) {
+        throw new Error('EPA lookup returned an invalid response. Please try again.');
+      }
+
+      setEpaLookupResult(data);
+      setEpaLookupRegNumber(regNumber);
+      if (!data.found) {
+        toast('warning', `EPA did not find registration ${regNumber}.`);
+      }
+    } catch (err) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), {
+        tags: { source: 'edge_function', action: 'epa_lookup' },
+      });
+      toast('error', err instanceof Error ? err.message : 'EPA lookup failed. Please try again.');
+    } finally {
+      setEpaLookupLoading(false);
+    }
+  };
+
+  const handleCreateEpaDraft = async () => {
+    if (!profile || !id || isNew || !epaLookupResult?.found) return;
+
+    const currentRegNumber = product.epa_registration?.trim() ?? '';
+    if (!currentRegNumber || currentRegNumber !== epaLookupRegNumber) {
+      toast('warning', 'The EPA registration changed after lookup. Look it up again before applying.');
+      return;
+    }
+
+    const validatedRegNumber = epaLookupResult.eparegno?.trim();
+    if (!validatedRegNumber) {
+      toast('error', 'EPA did not return a validated registration number.');
+      return;
+    }
+
+    const existingSignalWord = hasText(persistedLabelFields.signalWord)
+      ? persistedLabelFields.signalWord.trim()
+      : null;
+    const existingRegistration = hasText(persistedLabelFields.epaRegistration)
+      ? persistedLabelFields.epaRegistration.trim()
+      : null;
+
+    // A product's label data may only be filled from a lookup of ITS OWN saved
+    // registration number. If it already has a (different) saved registration,
+    // applying data from an unrelated lookup would attach the wrong hazard word
+    // to it — empty-fields-only keeps the saved (mismatched) registration while
+    // still filling the signal word from the unrelated lookup. Block that.
+    // (Codex ship-gate blocker, 2026-07-10 — regulatory-data corruption.)
+    if (existingRegistration && existingRegistration !== validatedRegNumber) {
+      toast(
+        'warning',
+        "This lookup is for a different registration number than the one saved on this product. To fill its label data, look up the product's own saved registration number, or correct the saved number first.",
+      );
+      return;
+    }
+
+    const proposedSignalWord = !existingSignalWord && !epaLookupResult.needsManual
+      ? epaLookupResult.signalWordCanonical
+      : null;
+    const proposedRegistration = !existingRegistration ? validatedRegNumber : null;
+
+    if (!proposedSignalWord && !proposedRegistration && !epaLookupResult.needsManual) {
+      toast('warning', 'Nothing to apply — the supported product fields are already filled.');
+      return;
+    }
+
+    const sourceNotes = [`EPA PPLS lookup ${validatedRegNumber} ${localToday()}`];
+    if (epaLookupResult.needsManual) {
+      sourceNotes.push('EPA signal word was unrecognized and was omitted for manual review.');
+    } else if (existingSignalWord && epaLookupResult.signalWordCanonical
+        && existingSignalWord !== epaLookupResult.signalWordCanonical) {
+      sourceNotes.push(
+        `Signal word differs: product has ${existingSignalWord}; EPA reports ${epaLookupResult.signalWordCanonical}. Omitted per empty-fields-only policy.`,
+      );
+    }
+    if (existingRegistration && existingRegistration !== validatedRegNumber) {
+      sourceNotes.push(
+        `EPA registration differs: product has ${existingRegistration}; EPA validated ${validatedRegNumber}. Omitted per empty-fields-only policy.`,
+      );
+    }
+
+    setEpaDraftCreating(true);
+    try {
+      const { data, error } = await supabaseUntyped.rpc('create_label_draft', {
+        p_product_id: id,
+        p_signal_word: proposedSignalWord,
+        p_epa_registration: proposedRegistration,
+        p_source_note: sourceNotes.join(' '),
+        p_confidence: epaLookupResult.needsManual ? 'medium' : 'high',
+        p_status: epaLookupResult.needsManual ? 'needs_manual' : 'pending',
+        p_idempotency_key: epaDraftKey.getKey(),
+      });
+      if (error) throw error;
+      const draftId = assertRpcResult<string>(data, 'create_label_draft');
+      await logActivity({
+        event: 'label_draft_created',
+        description: `Created EPA label draft ${draftId} for product ${id}`,
+        performedBy: profile.id,
+        entityType: 'product',
+        entityId: id,
+      });
+      epaDraftKey.resetKey();
+      toast('success', 'EPA draft created — review it before applying any product changes.');
+      navigate('/label-review');
+    } catch (err) {
+      const message = err && typeof err === 'object' && 'message' in err
+        && typeof (err as { message?: unknown }).message === 'string'
+        ? (err as { message: string }).message
+        : String(err);
+      toast('error', `Could not create EPA draft: ${message}`);
+    } finally {
+      setEpaDraftCreating(false);
+    }
+  };
+
+  const update = (field: string, value: unknown) => {
+    setProduct((p) => ({ ...p, [field]: value }));
+    if (field === 'epa_registration'
+        && (typeof value !== 'string' || value.trim() !== epaLookupRegNumber)) {
+      setEpaLookupResult(null);
+      setEpaLookupRegNumber('');
+    }
+  };
 
   if (loading) {
     return <div className="animate-pulse space-y-4"><div className="h-8 bg-gray-200 rounded w-1/3" /><div className="h-64 bg-gray-200 rounded" /></div>;
@@ -292,10 +548,30 @@ export default function ProductDetail() {
     );
   }
 
+  const epaNameMismatch = Boolean(
+    epaLookupResult?.found
+      && epaLookupResult.regType !== 'distributor'
+      && namesClearlyDiffer(product.product_name, epaLookupResult.productname),
+  );
+  const epaRupValue = epaLookupResult?.rupYn === 'Yes'
+    ? true
+    : epaLookupResult?.rupYn === 'No'
+      ? false
+      : null;
+  const epaRupMismatch = epaLookupResult?.found
+    && epaRupValue !== null
+    && epaRupValue !== Boolean(product.is_rup);
+  const persistedSignalWord = hasText(persistedLabelFields.signalWord)
+    ? persistedLabelFields.signalWord.trim()
+    : null;
+  const persistedRegistration = hasText(persistedLabelFields.epaRegistration)
+    ? persistedLabelFields.epaRegistration.trim()
+    : null;
+
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-3">
-        <button onClick={() => navigate('/products')} className="p-2 rounded-lg hover:bg-white hover:shadow-sm transition-all text-secondary">
+        <button aria-label="Back to products" onClick={() => navigate('/products')} className="p-2 rounded-lg hover:bg-white hover:shadow-sm transition-all text-secondary">
           <ArrowLeft className="w-5 h-5" />
         </button>
         <h2 className="text-lg font-semibold font-heading text-nav-dark">
@@ -313,9 +589,48 @@ export default function ProductDetail() {
               <Input label="Product Name" required value={product.product_name || ''} onChange={(e) => update('product_name', e.target.value)} disabled={!isAdmin} />
               <Input label="SKU" value={product.sku || ''} onChange={(e) => update('sku', e.target.value)} disabled={!isAdmin} />
               <Combobox label="Category" value={product.category || ''} onChange={(v) => update('category', v)} options={categoryOptions} disabled={!isAdmin} placeholder="Type or select..." />
+              {(product.category === 'Herbicide' || product.category === 'Foliar Fertilizer') && (
+                <Combobox
+                  label="Use Timing"
+                  value={product.use_timing || ''}
+                  onChange={(v) => update('use_timing', v || null)}
+                  options={product.category === 'Foliar Fertilizer'
+                    ? ['Foliar']
+                    : ['Post-Emergence', 'Pre-Emerge Corn', 'Pre-Emerge Soybean', 'Volunteer Corn', 'Range/Pasture/Turf']}
+                  disabled={!isAdmin}
+                  placeholder="Type or select..."
+                />
+              )}
               <Combobox label="Vendor" value={product.vendor || ''} onChange={(v) => update('vendor', v)} options={vendorOptions} disabled={!isAdmin} placeholder="Type or select..." />
               <Combobox label="Manufacturer" value={product.manufacturer || ''} onChange={(v) => update('manufacturer', v)} options={manufacturerOptions} disabled={!isAdmin} placeholder="Type or select..." />
-              <Input label="EPA Registration" value={product.epa_registration || ''} onChange={(e) => update('epa_registration', e.target.value)} disabled={!isAdmin} placeholder="e.g., 34704-69" />
+              <div>
+                <div className="flex items-end gap-2">
+                  <Input
+                    label="EPA Registration"
+                    value={product.epa_registration || ''}
+                    onChange={(e) => update('epa_registration', e.target.value)}
+                    disabled={!isAdmin}
+                    placeholder="e.g., 34704-69"
+                  />
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    showChevron={false}
+                    icon={<Search className="w-4 h-4" />}
+                    loading={epaLookupLoading}
+                    disabled={!isAdmin}
+                    onClick={() => void handleEpaLookup()}
+                    className="mb-px shrink-0"
+                  >
+                    Look up EPA
+                  </Button>
+                </div>
+                {isNew && (
+                  <p className="mt-1 text-xs text-secondary">
+                    You can preview EPA data now, but save the product before creating a review draft.
+                  </p>
+                )}
+              </div>
               <div className="flex items-center gap-4">
                 <label className="flex items-center gap-2 cursor-pointer">
                   <input
@@ -361,6 +676,147 @@ export default function ProductDetail() {
                 placeholder="From label, e.g. 30"
               />
             </div>
+
+            {epaLookupResult && (
+              <div className="mt-5 border-t border-gray-100 pt-5" aria-live="polite">
+                {!epaLookupResult.found ? (
+                  <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
+                    <div className="flex items-start gap-2 text-amber-900">
+                      <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" />
+                      <div>
+                        <p className="font-semibold">No EPA registration found</p>
+                        <p className="mt-1 text-sm">
+                          EPA returned no record for {epaLookupRegNumber}. Check the number and try again.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-4 rounded-lg border border-gray-200 bg-gray-50 p-4">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <h3 className="font-semibold text-nav-dark">EPA lookup preview</h3>
+                        <p className="text-xs text-secondary">
+                          Report-only details stay here; only eligible empty fields enter Label Review.
+                        </p>
+                      </div>
+                      {epaLookupResult.latestLabelPdfUrl && (
+                        <a
+                          href={epaLookupResult.latestLabelPdfUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1.5 text-sm font-medium text-crx-green hover:underline"
+                        >
+                          Latest label PDF
+                          <ExternalLink className="h-4 w-4" />
+                        </a>
+                      )}
+                    </div>
+
+                    {(epaNameMismatch
+                      || epaLookupResult.isCancelled
+                      || epaLookupResult.regType === 'distributor'
+                      || epaRupMismatch
+                      || epaLookupResult.needsManual) && (
+                      <div className="space-y-2" aria-label="EPA lookup warnings">
+                        {epaLookupResult.isCancelled && (
+                          <div className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-900">
+                            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                            <span><strong>Cancelled registration:</strong> informational only; no product status is changed.</span>
+                          </div>
+                        )}
+                        {epaLookupResult.regType === 'distributor' && (
+                          <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                            <span><strong>Distributor sub-registration:</strong> a different trade name is expected and is not treated as a mismatch.</span>
+                          </div>
+                        )}
+                        {epaNameMismatch && (
+                          <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                            <span><strong>Suspected product mismatch:</strong> EPA calls this “{epaLookupResult.productname}”; verify the registration before proceeding.</span>
+                          </div>
+                        )}
+                        {epaRupMismatch && (
+                          <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                            <span><strong>RUP differs:</strong> EPA reports {epaLookupResult.rupYn}, while this product is marked {product.is_rup ? 'Yes' : 'No'}. No automatic change will be made.</span>
+                          </div>
+                        )}
+                        {epaLookupResult.needsManual && (
+                          <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                            <span><strong>Signal word needs manual review:</strong> no unrecognized EPA value will be placed in the draft.</span>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    <dl className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2 lg:grid-cols-3">
+                      <div><dt className="text-xs font-medium uppercase tracking-wide text-secondary">EPA product name</dt><dd className="mt-0.5 font-medium text-nav-dark">{epaLookupResult.productname ?? 'Not provided'}</dd></div>
+                      <div><dt className="text-xs font-medium uppercase tracking-wide text-secondary">Signal word</dt><dd className="mt-0.5 font-medium text-nav-dark">{epaLookupResult.needsManual ? 'Needs manual review' : epaLookupResult.signalWordCanonical ?? 'No signal word'}</dd></div>
+                      <div><dt className="text-xs font-medium uppercase tracking-wide text-secondary">Manufacturer</dt><dd className="mt-0.5 font-medium text-nav-dark">{epaLookupResult.manufacturer ?? 'Not provided'}</dd></div>
+                      <div><dt className="text-xs font-medium uppercase tracking-wide text-secondary">Restricted use (RUP)</dt><dd className="mt-0.5 font-medium text-nav-dark">{epaLookupResult.rupYn ?? 'Not provided'}</dd></div>
+                      <div><dt className="text-xs font-medium uppercase tracking-wide text-secondary">Product status</dt><dd className="mt-0.5 font-medium text-nav-dark">{epaLookupResult.productStatus ?? 'Not provided'}</dd></div>
+                      <div><dt className="text-xs font-medium uppercase tracking-wide text-secondary">Registration type</dt><dd className="mt-0.5 font-medium text-nav-dark">{epaLookupResult.regType === 'distributor' ? 'Distributor sub-registration' : 'Section 3'}</dd></div>
+                    </dl>
+
+                    <div>
+                      <p className="text-xs font-medium uppercase tracking-wide text-secondary">Active ingredients</p>
+                      {epaLookupResult.activeIngredients.length > 0 ? (
+                        <ul className="mt-1 space-y-1 text-sm text-nav-dark">
+                          {epaLookupResult.activeIngredients.map((ingredient) => (
+                            <li key={`${ingredient.name}-${ingredient.pcCode ?? ingredient.casNumber ?? 'unknown'}`}>
+                              {ingredient.name}{ingredient.percent != null ? ` — ${ingredient.percent}%` : ''}
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="mt-1 text-sm text-secondary">Not provided</p>
+                      )}
+                    </div>
+
+                    <div className="rounded-lg border border-gray-200 bg-white p-3 text-sm">
+                      <p className="font-semibold text-nav-dark">Draft preview (empty fields only)</p>
+                      <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                        <div>
+                          <span className="text-secondary">Signal word: </span>
+                          {persistedSignalWord
+                            ? persistedSignalWord === epaLookupResult.signalWordCanonical
+                              ? 'Already set — not included in draft'
+                              : 'Differs — review in Label Review'
+                            : epaLookupResult.needsManual
+                              ? 'Omitted — manual review required'
+                              : epaLookupResult.signalWordCanonical ?? 'Verified as no signal word'}
+                        </div>
+                        <div>
+                          <span className="text-secondary">EPA registration: </span>
+                          {persistedRegistration
+                            ? persistedRegistration === epaLookupResult.eparegno
+                              ? 'Already set — not included in draft'
+                              : 'Differs — review in Label Review'
+                            : epaLookupResult.eparegno}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <p className="max-w-2xl text-xs text-secondary">
+                        This creates a draft only. The product is not changed until an admin reviews and commits it in Label Review.
+                      </p>
+                      <Button
+                        type="button"
+                        onClick={() => void handleCreateEpaDraft()}
+                        loading={epaDraftCreating}
+                        disabled={isNew}
+                      >
+                        Apply to product
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Product Form */}
             <div className="border-t border-gray-100 pt-4 mt-4">
@@ -447,15 +903,13 @@ export default function ProductDetail() {
                   className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:opacity-50 disabled:bg-gray-50"
                 >
                   <option value="">-- Select --</option>
-                  {unitConversions
-                    .filter((uc) => {
-                      const form = product.product_form;
-                      if (!form) return true;
-                      return uc.unit_type === form || uc.unit_type === 'both';
-                    })
-                    .map((uc) => (
-                      <option key={uc.id} value={uc.unit}>{uc.unit}</option>
-                    ))}
+                  {/* WaveB: grandfather a legacy value the form filter would otherwise hide, so a save can't blank it */}
+                  {!isKnownUnit(unitConversions, product.product_form, product.inventory_unit) && (
+                    <option value={product.inventory_unit || ''}>{product.inventory_unit} (existing)</option>
+                  )}
+                  {unitOptionsForForm(unitConversions, product.product_form).map((uc) => (
+                    <option key={uc.id} value={uc.unit}>{uc.unit}</option>
+                  ))}
                 </select>
               </div>
             </div>
@@ -467,7 +921,24 @@ export default function ProductDetail() {
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <Input label="Suggested Rate" value={product.suggested_rate || ''} onChange={(e) => update('suggested_rate', e.target.value)} disabled={!isAdmin} />
                 <Input label="Rate Per Acre" type="number" value={product.rate_per_acre ?? ''} onChange={(e) => update('rate_per_acre', e.target.value ? parseFloat(e.target.value) : null)} disabled={!isAdmin} />
-                <Input label="Rate Unit" value={product.rate_unit || ''} onChange={(e) => update('rate_unit', e.target.value)} disabled={!isAdmin} />
+                <div>
+                  <label className="block text-sm font-medium text-secondary mb-1">Rate Unit</label>
+                  <select
+                    value={product.rate_unit || ''}
+                    onChange={(e) => update('rate_unit', e.target.value)}
+                    disabled={!isAdmin}
+                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:opacity-50 disabled:bg-gray-50"
+                  >
+                    <option value="">-- Select --</option>
+                    {/* WaveB: grandfather a legacy value the form filter would otherwise hide, so a save can't blank it */}
+                    {!isKnownUnit(unitConversions, product.product_form, product.rate_unit) && (
+                      <option value={product.rate_unit || ''}>{product.rate_unit} (existing)</option>
+                    )}
+                    {unitOptionsForForm(unitConversions, product.product_form).map((uc) => (
+                      <option key={uc.id} value={uc.unit}>{uc.unit}</option>
+                    ))}
+                  </select>
+                </div>
               </div>
             </div>
 
@@ -532,6 +1003,15 @@ export default function ProductDetail() {
                       <span className="text-sm font-medium text-secondary">{(product.tier1_gross_margin * 100).toFixed(1)}%</span>
                     </div>
                   )}
+                  {product.tier1_price_per_acre != null && (
+                    <div
+                      className="px-3 py-2 bg-gray-50 rounded-lg border border-gray-100"
+                      title="Auto-calculated from the tier price and the product's label rate. Refreshes when you save."
+                    >
+                      <span className="text-xs text-gray-500">Per acre (label rate): </span>
+                      <span className="text-sm font-medium text-secondary">${product.tier1_price_per_acre.toFixed(2)} / acre</span>
+                    </div>
+                  )}
                 </div>
                 <div className="space-y-3">
                   <h4 className="text-sm font-medium text-secondary">Tier 2</h4>
@@ -541,6 +1021,15 @@ export default function ProductDetail() {
                     <div className="px-3 py-2 bg-gray-50 rounded-lg border border-gray-100">
                       <span className="text-xs text-gray-500">Gross Margin: </span>
                       <span className="text-sm font-medium text-secondary">{(product.tier2_gross_margin * 100).toFixed(1)}%</span>
+                    </div>
+                  )}
+                  {product.tier2_price_per_acre != null && (
+                    <div
+                      className="px-3 py-2 bg-gray-50 rounded-lg border border-gray-100"
+                      title="Auto-calculated from the tier price and the product's label rate. Refreshes when you save."
+                    >
+                      <span className="text-xs text-gray-500">Per acre (label rate): </span>
+                      <span className="text-sm font-medium text-secondary">${product.tier2_price_per_acre.toFixed(2)} / acre</span>
                     </div>
                   )}
                 </div>
@@ -555,6 +1044,15 @@ export default function ProductDetail() {
                     <div className="px-3 py-2 bg-gray-50 rounded-lg border border-gray-100">
                       <span className="text-xs text-gray-500">Gross Margin: </span>
                       <span className="text-sm font-medium text-secondary">{(product.tier3_gross_margin * 100).toFixed(1)}%</span>
+                    </div>
+                  )}
+                  {product.tier3_price_per_acre != null && (
+                    <div
+                      className="px-3 py-2 bg-gray-50 rounded-lg border border-gray-100"
+                      title="Auto-calculated from the tier price and the product's label rate. Refreshes when you save."
+                    >
+                      <span className="text-xs text-gray-500">Per acre (label rate): </span>
+                      <span className="text-sm font-medium text-secondary">${product.tier3_price_per_acre.toFixed(2)} / acre</span>
                     </div>
                   )}
                 </div>

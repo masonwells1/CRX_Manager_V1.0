@@ -14,14 +14,17 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, act } from '@testing-library/react';
 import FieldAppChemicalEntry, { type ChemicalLine } from './FieldAppChemicalEntry';
 
-const { mockFrom, mockLimit } = vi.hoisted(() => {
+const { mockFrom, mockLimit, mockSelectOrder } = vi.hoisted(() => {
   const mockLimit = vi.fn().mockResolvedValue({ data: [], error: null });
   const mockOrder = vi.fn().mockReturnValue({ limit: mockLimit });
   const mockOr = vi.fn().mockReturnValue({ order: mockOrder });
   const mockEq = vi.fn().mockReturnValue({ or: mockOr });
-  const mockSelect = vi.fn().mockReturnValue({ eq: mockEq });
+  // .select().eq()...limit() = product search; .select().order() = the WaveB
+  // unit_conversions fetch (resolves directly to a thenable).
+  const mockSelectOrder = vi.fn().mockResolvedValue({ data: [], error: null });
+  const mockSelect = vi.fn().mockReturnValue({ eq: mockEq, order: mockSelectOrder });
   const mockFrom = vi.fn().mockReturnValue({ select: mockSelect });
-  return { mockFrom, mockLimit };
+  return { mockFrom, mockLimit, mockSelectOrder };
 });
 
 vi.mock('../../lib/db', () => ({
@@ -248,6 +251,56 @@ describe('FieldAppChemicalEntry', () => {
   it('shows NO gl/lb line for an unrecognized unit', async () => {
     await renderEntry({ chemicals: [makeLine({ quantity: 80, rate_unit: 'widgets' })] });
     expect(screen.queryByText(/= .* (lb|gal)/i)).not.toBeInTheDocument();
+  });
+
+  it('WaveB (Codex R2b): a MANUAL line (no product) prices identity in the rate unit — a dry Lb rate does NOT drop the preview to $0', async () => {
+    // Root cause: `unit` defaults to 'oz', so the old `unit || rate_unit` converted a manual
+    // 'lb' rate against 'oz' (cross-family in the liquid table -> null -> $0) while
+    // save_field_app_invoice prices a manual line in the rate unit itself (identity) and still
+    // billed non-zero. The fix gates on product_id like the server does.
+    // 3/ac x 50 ac = 150 lb; 150 x $5.00 = $750.00 (75000c) — identity, NOT 0.
+    const onChange = vi.fn();
+    const manual = makeLine({
+      id: 'manual_lb', product_id: null, product_name: 'Custom Dry Mix',
+      rate_per_acre: 2, rate_unit: 'lb', unit: 'oz', unit_price_cents: 500,
+      product_form: null,
+    });
+    await renderEntry({ chemicals: [manual], totalAppliedAcres: 50, onChemicalsChange: onChange });
+    const rateInput = screen.getByDisplayValue('2');
+    fireEvent.change(rateInput, { target: { value: '3' } });
+    const next = onChange.mock.calls[onChange.mock.calls.length - 1][0] as ChemicalLine[];
+    expect(next[0].quantity).toBe(150);
+    expect(next[0].extended_cents).toBe(75000);   // identity pricing — NOT 0
+  });
+
+  it('WaveB (Codex R2c): changing a MANUAL line UM syncs unit + price_unit so the saved invoice item is labeled in the selected unit', async () => {
+    // The server has no product inventory unit for a manual line, so it stores/labels the invoice
+    // item in the value the parent sends as unit_size (= `unit`). If `unit` stayed 'oz' while the
+    // rate unit changed to 'lb', the line would BILL lb but PRINT "oz". Fix: unit/price_unit follow
+    // the rate unit for manual lines.
+    mockSelectOrder.mockResolvedValueOnce({
+      data: [
+        { id: 'u-oz', unit: 'oz', unit_type: 'both' },
+        { id: 'u-lb', unit: 'lb', unit_type: 'dry' },
+      ],
+      error: null,
+    });
+    const onChange = vi.fn();
+    const manual = makeLine({
+      id: 'manual_um', product_id: null, product_name: 'Custom Mix',
+      rate_unit: 'oz', unit: 'oz', price_unit: 'oz',
+    });
+    await renderEntry({ chemicals: [manual], totalAppliedAcres: 50, onChemicalsChange: onChange });
+
+    // The unit_conversions fetch populates the UM dropdown; wait for the 'lb' option to appear.
+    const lbOption = await screen.findByRole('option', { name: 'lb' });
+    const umSelect = lbOption.closest('select') as HTMLSelectElement;
+    await act(async () => { fireEvent.change(umSelect, { target: { value: 'lb' } }); });
+
+    const next = onChange.mock.calls[onChange.mock.calls.length - 1][0] as ChemicalLine[];
+    expect(next[0].rate_unit).toBe('lb');
+    expect(next[0].unit).toBe('lb');        // synced (was the stale 'oz')
+    expect(next[0].price_unit).toBe('lb');  // synced (Price-UM column no longer stale)
   });
 
   it('renders editable Warehouse and Vendor inputs that round-trip through onChemicalsChange', async () => {

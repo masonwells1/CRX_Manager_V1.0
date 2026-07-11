@@ -64,10 +64,23 @@
 -- =============================================================================
 WITH population AS (
   SELECT i.id, i.invoice_number, i.customer_id, i.status, i.invoice_type,
-         i.paid_amount_cents, i.prepay_applied_cents, i.write_off_cents
+         i.paid_amount_cents, i.prepay_applied_cents, i.write_off_cents,
+         i.credit_applied_cents
   FROM invoices i
   WHERE i.deleted_at IS NULL
     AND i.status IN ('posted', 'overdue', 'paid')
+),
+-- credit-memo apply (mig 20260711030000): the 5th balance lever. An invoice is on
+-- exactly one side of any application (a memo is never a target and vice-versa), so
+-- SUM over both role-columns yields that invoice's own applied total.
+credit_ledger AS (
+  SELECT inv_id, SUM(amount_cents)::bigint AS cents
+  FROM (
+    SELECT credit_memo_id    AS inv_id, amount_cents FROM credit_memo_applications WHERE reversed_at IS NULL
+    UNION ALL
+    SELECT target_invoice_id AS inv_id, amount_cents FROM credit_memo_applications WHERE reversed_at IS NULL
+  ) x
+  GROUP BY inv_id
 ),
 wo_ledger AS (
   SELECT invoice_id, SUM(amount_cents)::bigint AS cents
@@ -143,5 +156,20 @@ FROM population p
 LEFT JOIN alloc_ledger al          ON al.invoice_id = p.id
 LEFT JOIN legacy_payment_ledger lp ON lp.invoice_id = p.id
 WHERE p.paid_amount_cents <> COALESCE(al.cents, 0) + COALESCE(lp.cents, 0)
+
+UNION ALL
+
+SELECT
+  'invoice:' || p.id::text || ':credit',
+  'credit_applied_drift'::text,
+  p.customer_id,
+  COALESCE(cr.cents, 0),
+  p.credit_applied_cents,
+  'invoice ' || p.invoice_number || ' (' || p.status || '): cached credit_applied_cents='
+    || p.credit_applied_cents::text || ' but SUM(unreversed credit_memo_applications)='
+    || COALESCE(cr.cents, 0)::text
+FROM population p
+LEFT JOIN credit_ledger cr ON cr.inv_id = p.id
+WHERE p.credit_applied_cents <> COALESCE(cr.cents, 0)
 
 ORDER BY violation_type, identity_key;

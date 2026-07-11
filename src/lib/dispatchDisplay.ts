@@ -164,6 +164,14 @@ export interface DispatchedListRow {
   job_number: string;
   /** The job lifecycle status (scheduled/in_progress/...) — drives the row badge. */
   job_status: string;
+  /** jobs.job_date (U12) — lets the FieldView card show the date without an
+   *  expand-triggered fetch, and drives the Today-first sort / Done section. */
+  job_date: string | null;
+  /** job_fields.field_id — the master fields.id for this dispatched location
+   *  (U12 Codex P1). Returned by get_dispatched_list so the FieldView Complete
+   *  form can build complete_job's field_acres payload ({field_id, acres_applied}).
+   *  Null when the job_field has no master field linked. */
+  field_id: string | null;
   dispatch_status: string;
   assignee_kind: 'applicator' | 'crew';
   applicator_id: string | null;
@@ -236,6 +244,8 @@ export interface FieldViewJobCard {
   job_id: string;
   job_number: string;
   job_status: string;
+  /** jobs.job_date (U12) — see DispatchedListRow.job_date. */
+  job_date: string | null;
   customer_name: string | null;
   job_applied_acres: number | null;
   job_total_acres: number | null;
@@ -255,12 +265,12 @@ export interface FieldViewJobCard {
  * job_number (stable, matches the RPC's own ORDER BY) so the list never reshuffles
  * between reloads.
  *
- * `field_id` is optional on the row: `get_dispatched_list` doesn't return it today, so
- * the map plotting falls back to the separately-fetched job_fields when it's absent.
- * Passing it through keeps the helper forward-compatible and unit-testable.
+ * `field_id` is carried onto each card location (U12 Codex P1: get_dispatched_list
+ * now returns it) so the Complete form can address complete_job's per-field
+ * applied-acres override; a location with a null field_id stays display-only there.
  */
 export function groupDispatchedByJob(
-  rows: (DispatchedListRow & { field_id?: string | null })[]
+  rows: DispatchedListRow[]
 ): FieldViewJobCard[] {
   const byJob = new Map<string, FieldViewJobCard>();
   for (const r of rows) {
@@ -270,6 +280,7 @@ export function groupDispatchedByJob(
         job_id: r.job_id,
         job_number: r.job_number,
         job_status: r.job_status,
+        job_date: r.job_date,
         customer_name: r.customer_name,
         job_applied_acres: r.job_applied_acres,
         job_total_acres: r.job_total_acres,
@@ -369,4 +380,94 @@ export function chemicalChargeCents(
   const price = toNum(pricePerUnitCents);
   if (qty <= 0 || price <= 0) return 0;
   return Math.round(qty * price);
+}
+
+/**
+ * Terminal job-lifecycle statuses (CLAUDE.md Job lifecycle:
+ * `scheduled → in_progress → completed → cancelled → invoiced`). A terminal
+ * job's dispatch has nothing left for the applicator to DO — it belongs in
+ * the FieldView "Done" section, not mixed in with today's actionable work.
+ */
+export function isTerminalJobStatus(status: string): boolean {
+  return status === 'completed' || status === 'cancelled' || status === 'invoiced';
+}
+
+/** The two FieldView sections: today-first actionable jobs, and a Done tail. */
+export interface FieldViewCardGroups {
+  active: FieldViewJobCard[];
+  done: FieldViewJobCard[];
+}
+
+/**
+ * Split + sort the caller's job cards for the FieldView "My Day" list (U12).
+ *
+ * Design decision (mission #22/#24-33 — "hide terminal jobs by default" vs.
+ * "return them with status so the UI can show a Done section"): the LATTER.
+ * get_dispatched_list still returns every currently-dispatched row regardless
+ * of the job's lifecycle status (unchanged — filtering server-side would give
+ * an applicator no way to see what they just finished today), and the CLIENT
+ * groups: non-terminal jobs sort TODAY-first (job_date === today) then by
+ * ascending job_date (nulls last), tie-broken by job_number; terminal jobs
+ * move to a separate `done` bucket, most-recently-dated first, so a completed
+ * job doesn't visually compete with today's remaining work but isn't hidden
+ * either. `todayStr` is caller-supplied (e.g. `localToday()`) so this stays a
+ * pure, framework-free, unit-testable function (no `Date.now()` inside).
+ *
+ * Current behavior: the job-terminal trigger closes dispatch rows as
+ * 'completed'/'cancelled', and get_dispatched_list returns active 'dispatched'
+ * rows plus the last seven days of 'completed' rows. The Done bucket is therefore
+ * bounded by that seven-day window.
+ */
+export function groupFieldViewCards(
+  cards: FieldViewJobCard[],
+  todayStr: string
+): FieldViewCardGroups {
+  const active: FieldViewJobCard[] = [];
+  const done: FieldViewJobCard[] = [];
+  for (const c of cards) {
+    if (isTerminalJobStatus(c.job_status)) done.push(c);
+    else active.push(c);
+  }
+
+  active.sort((a, b) => {
+    const aToday = a.job_date === todayStr;
+    const bToday = b.job_date === todayStr;
+    if (aToday !== bToday) return aToday ? -1 : 1;
+    const ad = a.job_date ?? '9999-99-99'; // undated sorts last
+    const bd = b.job_date ?? '9999-99-99';
+    if (ad !== bd) return ad < bd ? -1 : 1;
+    return a.job_number.localeCompare(b.job_number);
+  });
+
+  done.sort((a, b) => {
+    const ad = a.job_date ?? '';
+    const bd = b.job_date ?? '';
+    if (ad !== bd) return ad > bd ? -1 : 1; // most-recent first
+    return a.job_number.localeCompare(b.job_number);
+  });
+
+  return { active, done };
+}
+
+/**
+ * The strictest (longest) REI/PHI across a job's chemical mix (U12, criterion
+ * "REI/PHI line when label data exists"). A job applies ALL its listed
+ * chemicals together, so the field isn't safe to re-enter / harvest until the
+ * LONGEST of any product's re-entry/pre-harvest interval has passed — mirrors
+ * how `compareToMaxRate`/label guardrails already treat a job's chemical set.
+ * Returns null for a value when NO chemical in the mix has that label field on
+ * file (matches the live reality that 0/604 products have REI/PHI data today —
+ * the UI shows nothing for a job whose products aren't labeled yet, never a
+ * misleading 0).
+ */
+export function maxLabelReiPhi(
+  chemicals: { rei_hours: number | null | undefined; phi_days: number | null | undefined }[]
+): { reiHours: number | null; phiDays: number | null } {
+  let reiHours: number | null = null;
+  let phiDays: number | null = null;
+  for (const c of chemicals) {
+    if (typeof c.rei_hours === 'number' && (reiHours === null || c.rei_hours > reiHours)) reiHours = c.rei_hours;
+    if (typeof c.phi_days === 'number' && (phiDays === null || c.phi_days > phiDays)) phiDays = c.phi_days;
+  }
+  return { reiHours, phiDays };
 }

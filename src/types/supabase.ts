@@ -366,6 +366,8 @@ export type Database = {
           application_date: string
           application_time: string | null
           applicator_id: string | null
+          applicator_license_number: string | null
+          applicator_name: string | null
           created_at: string
           created_by: string | null
           customer_id: string
@@ -389,6 +391,8 @@ export type Database = {
           application_date: string
           application_time?: string | null
           applicator_id?: string | null
+          applicator_license_number?: string | null
+          applicator_name?: string | null
           created_at?: string
           created_by?: string | null
           customer_id: string
@@ -412,6 +416,8 @@ export type Database = {
           application_date?: string
           application_time?: string | null
           applicator_id?: string | null
+          applicator_license_number?: string | null
+          applicator_name?: string | null
           created_at?: string
           created_by?: string | null
           customer_id?: string
@@ -1393,8 +1399,10 @@ export type Database = {
           customer_name: string | null
           deleted_at: string | null
           id: string
+          invoice_id: string | null
+          job_id: string | null
           order_date: string | null
-          order_id: string
+          order_id: string | null
           order_number: string | null
           order_profit: number
           paid_date: string | null
@@ -1412,8 +1420,10 @@ export type Database = {
           customer_name?: string | null
           deleted_at?: string | null
           id?: string
+          invoice_id?: string | null
+          job_id?: string | null
           order_date?: string | null
-          order_id: string
+          order_id?: string | null
           order_number?: string | null
           order_profit?: number
           paid_date?: string | null
@@ -1431,8 +1441,10 @@ export type Database = {
           customer_name?: string | null
           deleted_at?: string | null
           id?: string
+          invoice_id?: string | null
+          job_id?: string | null
           order_date?: string | null
-          order_id?: string
+          order_id?: string | null
           order_number?: string | null
           order_profit?: number
           paid_date?: string | null
@@ -1449,6 +1461,20 @@ export type Database = {
             columns: ["customer_id"]
             isOneToOne: false
             referencedRelation: "customers"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "commissions_invoice_id_fkey"
+            columns: ["invoice_id"]
+            isOneToOne: false
+            referencedRelation: "invoices"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "commissions_job_id_fkey"
+            columns: ["job_id"]
+            isOneToOne: false
+            referencedRelation: "jobs"
             referencedColumns: ["id"]
           },
           {
@@ -2332,51 +2358,6 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
-      }
-      document_processing_log: {
-        Row: {
-          confidence: number | null
-          created_at: string
-          document_type: string
-          error_message: string | null
-          file_name: string
-          file_size_bytes: number | null
-          id: string
-          items_extracted: number | null
-          page_count: number | null
-          processing_time_ms: number | null
-          success: boolean
-          user_id: string
-        }
-        Insert: {
-          confidence?: number | null
-          created_at?: string
-          document_type: string
-          error_message?: string | null
-          file_name: string
-          file_size_bytes?: number | null
-          id?: string
-          items_extracted?: number | null
-          page_count?: number | null
-          processing_time_ms?: number | null
-          success?: boolean
-          user_id: string
-        }
-        Update: {
-          confidence?: number | null
-          created_at?: string
-          document_type?: string
-          error_message?: string | null
-          file_name?: string
-          file_size_bytes?: number | null
-          id?: string
-          items_extracted?: number | null
-          page_count?: number | null
-          processing_time_ms?: number | null
-          success?: boolean
-          user_id?: string
-        }
-        Relationships: []
       }
       email_log: {
         Row: {
@@ -3633,6 +3614,7 @@ export type Database = {
           payment_terms: string | null
           posted_at: string | null
           posted_by: string | null
+          credit_applied_cents: number
           prepay_applied_cents: number
           pricing_pending: boolean
           purchase_order_ref: string | null
@@ -3683,6 +3665,7 @@ export type Database = {
           payment_terms?: string | null
           posted_at?: string | null
           posted_by?: string | null
+          credit_applied_cents?: number
           prepay_applied_cents?: number
           pricing_pending?: boolean
           purchase_order_ref?: string | null
@@ -3733,6 +3716,7 @@ export type Database = {
           payment_terms?: string | null
           posted_at?: string | null
           posted_by?: string | null
+          credit_applied_cents?: number
           prepay_applied_cents?: number
           pricing_pending?: boolean
           purchase_order_ref?: string | null
@@ -4531,6 +4515,7 @@ export type Database = {
           batch_ref: string | null
           call_date: string | null
           carrier_rate_gpa: number | null
+          commission_split: Json | null
           consultant_id: string | null
           created_at: string
           created_by: string | null
@@ -4577,6 +4562,7 @@ export type Database = {
           batch_ref?: string | null
           call_date?: string | null
           carrier_rate_gpa?: number | null
+          commission_split?: Json | null
           consultant_id?: string | null
           created_at?: string
           created_by?: string | null
@@ -4622,6 +4608,7 @@ export type Database = {
           batch_ref?: string | null
           call_date?: string | null
           carrier_rate_gpa?: number | null
+          commission_split?: Json | null
           consultant_id?: string | null
           created_at?: string
           created_by?: string | null
@@ -7923,6 +7910,25 @@ export type Database = {
         }
         Returns: Json
       }
+      apply_credit_memo_to_invoice: {
+        Args: {
+          p_amount_cents: number
+          p_credit_memo_id: string
+          p_idempotency_key?: string
+          p_performed_by?: string
+          p_target_invoice_id: string
+        }
+        Returns: string
+      }
+      reverse_credit_memo_application: {
+        Args: {
+          p_application_id: string
+          p_idempotency_key?: string
+          p_performed_by?: string
+          p_reason: string
+        }
+        Returns: Json
+      }
       apply_prepay_to_invoice: {
         Args: {
           p_amount_cents: number
@@ -8158,6 +8164,7 @@ export type Database = {
       }
       complete_delivery: {
         Args: {
+          p_completed_at?: string
           p_delivery_id: string
           p_idempotency_key?: string
           p_issue_notes?: string
@@ -8359,16 +8366,6 @@ export type Database = {
           p_splits: Json
         }
         Returns: Json
-      }
-      create_prepay_credit: {
-        Args: {
-          p_amount_cents: number
-          p_customer_id: string
-          p_notes?: string
-          p_payment_method?: string
-          p_reference_number?: string
-        }
-        Returns: string
       }
       create_quick_delivery: {
         Args: {
@@ -9231,10 +9228,12 @@ export type Database = {
         Args: {
           p_idempotency_key?: string
           p_location: string
+          p_min_stock_level?: number
           p_notes?: string
           p_performed_by?: string
           p_product_id: string
           p_quantity: number
+          p_reorder_point?: number
           p_unit_cost?: number
           p_unit_size?: string
         }
@@ -9863,6 +9862,22 @@ export type Database = {
         }
         Returns: Json
       }
+      save_field_crop_history: {
+        Args: {
+          p_crop_type: string
+          p_field_id: string
+          p_harvest_date?: string
+          p_idempotency_key?: string
+          p_notes?: string
+          p_performed_by?: string
+          p_planting_date?: string
+          p_season: number
+          p_variety?: string
+          p_yield_per_acre?: number
+          p_yield_unit?: string
+        }
+        Returns: Json
+      }
       save_field_geometry: {
         Args: {
           p_boundary_geojson?: string
@@ -9929,6 +9944,7 @@ export type Database = {
         Args: {
           p_crew?: Json
           p_fields: Json
+          p_idempotency_key?: string | null
           p_record: Json
         }
         Returns: Json

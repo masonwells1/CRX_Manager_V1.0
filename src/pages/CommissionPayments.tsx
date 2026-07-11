@@ -1,6 +1,6 @@
 /**
  * CommissionPayments — Commission payment management page
- * Unposted/Posted tabs, create from unpaid commissions, post workflow.
+ * Unposted/Posted/Voided tabs, create from unpaid commissions, post workflow.
  *
  * Sprint 10: Commission Payment Lifecycle
  */
@@ -56,7 +56,7 @@ export default function CommissionPayments() {
   const postPaymentIdem = useIdempotencyKey('post_commission_payment', profile?.id || '');
   const voidPaymentIdem = useIdempotencyKey('void_commission_payment', profile?.id || '');
 
-  const [tab, setTab] = useState<'unposted' | 'posted'>('unposted');
+  const [tab, setTab] = useState<'unposted' | 'posted' | 'voided'>('unposted');
   const [payments, setPayments] = useState<CommissionPaymentRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [posting, setPosting] = useState<string | null>(null);
@@ -141,7 +141,7 @@ export default function CommissionPayments() {
     const { data, error } = await supabase
       .from('commissions')
       .select(`
-        id, order_id, customer_id, order_date, commission_amount,
+        id, order_id, job_id, customer_id, order_date, commission_amount,
         recipient_user_id
       `)
       // Only PENDING commissions are payable. `.neq('status','paid')` also leaked
@@ -159,11 +159,13 @@ export default function CommissionPayments() {
     const rowsRaw = (data || []) as Array<Record<string, unknown> & {
       recipient_user_id?: string | null;
       order_id?: string | null;
+      job_id?: string | null;
       customer_id?: string | null;
     }>;
 
     const recipientUserIds = [...new Set(rowsRaw.map((c) => c.recipient_user_id).filter(Boolean) as string[])];
     const orderIds = [...new Set(rowsRaw.map((c) => c.order_id).filter(Boolean) as string[])];
+    const jobIds = [...new Set(rowsRaw.map((c) => c.job_id).filter(Boolean) as string[])];
     const customerIds = [...new Set(rowsRaw.map((c) => c.customer_id).filter(Boolean) as string[])];
 
     const recipientMap: Record<string, string> = {};
@@ -184,6 +186,17 @@ export default function CommissionPayments() {
       (orders || []).forEach((o: { id: string | null; order_number: string | null }) => { if (o.id) orderMap[o.id] = o.order_number ?? ''; });
     }
 
+    // U8: job-sourced commissions (application channel) have order_id NULL —
+    // resolve their job_number so the source column isn't blank.
+    const jobMap: Record<string, string> = {};
+    if (jobIds.length > 0) {
+      const { data: jobs } = await supabase
+        .from('jobs')
+        .select('id, job_number')
+        .in('id', jobIds);
+      (jobs || []).forEach((j: { id: string | null; job_number: string | null }) => { if (j.id) jobMap[j.id] = j.job_number ?? ''; });
+    }
+
     const customerMap: Record<string, string> = {};
     if (customerIds.length > 0) {
       const { data: customers } = await supabase
@@ -196,7 +209,11 @@ export default function CommissionPayments() {
     setUnpaidCommissions(
       rowsRaw.map((c) => ({
         ...c,
-        order_number: c.order_id ? orderMap[c.order_id as string] || '' : '',
+        order_number: c.order_id
+          ? orderMap[c.order_id as string] || ''
+          : c.job_id
+            ? (jobMap[c.job_id as string] ? `Job ${jobMap[c.job_id as string]}` : '')
+            : '',
         customer_name: c.customer_id ? customerMap[c.customer_id as string] || '' : '',
         recipient_name: c.recipient_user_id ? recipientMap[c.recipient_user_id] || 'Unknown' : 'Unknown',
       })) as unknown as UnpaidCommission[],
@@ -401,8 +418,8 @@ export default function CommissionPayments() {
       key: 'status',
       header: 'Status',
       render: (r) => (
-        <Badge variant={r.status === 'posted' ? 'success' : 'warning'}>
-          {r.status === 'posted' ? 'Posted' : 'Unposted'}
+        <Badge variant={r.status === 'posted' ? 'success' : r.status === 'voided' ? 'error' : 'warning'}>
+          {r.status === 'posted' ? 'Posted' : r.status === 'voided' ? 'Voided' : 'Unposted'}
         </Badge>
       ),
     },
@@ -539,7 +556,7 @@ export default function CommissionPayments() {
 
       {/* Tab bar */}
       <div className="flex gap-1 bg-gray-100 p-1 rounded-lg w-fit">
-        {(['unposted', 'posted'] as const).map((t) => (
+        {(['unposted', 'posted', 'voided'] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -547,7 +564,7 @@ export default function CommissionPayments() {
               tab === t ? 'bg-white text-nav-dark shadow-sm' : 'text-secondary hover:text-nav-dark'
             }`}
           >
-            {t === 'unposted' ? 'Unposted' : 'Posted'}
+            {t === 'unposted' ? 'Unposted' : t === 'posted' ? 'Posted' : 'Voided'}
           </button>
         ))}
       </div>
@@ -562,7 +579,7 @@ export default function CommissionPayments() {
             searchPlaceholder="Search payments..."
             searchKeys={['payment_number', 'recipient_name', 'reference_number']}
             emptyTitle="No commission payments"
-            emptyDescription={tab === 'unposted' ? 'Create a payment to get started' : 'No posted payments yet'}
+            emptyDescription={tab === 'unposted' ? 'Create a payment to get started' : tab === 'posted' ? 'No posted payments yet' : 'No voided payments yet'}
             loading={loading}
           />
         </div>

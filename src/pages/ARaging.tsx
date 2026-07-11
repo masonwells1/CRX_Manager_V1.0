@@ -33,9 +33,10 @@ import { useAuth } from '../contexts/AuthContext';
 import { computeSeason } from '../utils/season';
 import { localToday, parseLocalDate, localDatePlusDays } from '../lib/dateUtils';
 import { SkeletonTable, SkeletonCard } from '../components/ui/Skeleton';
-import type { ARAgingRow, CustomerStatementRow, SeasonComparisonRow, DetailedStatementData, StatementOptions } from '../types';
+import type { ARAgingRow as BaseARagingRow, CustomerStatementRow, SeasonComparisonRow, DetailedStatementData, StatementOptions } from '../types';
 
 type TabKey = 'aging' | 'statement' | 'season';
+type ARAgingRow = BaseARagingRow & { prepay_balance_cents: number | null };
 
 export default function ARaging() {
   const { toast } = useToast();
@@ -254,9 +255,20 @@ export default function ARaging() {
     },
     {
       key: 'total_outstanding',
-      header: 'Total',
+      header: 'Total Outstanding',
       sortable: true,
       render: (r) => <span className="font-mono font-semibold">{fmt(r.total_outstanding)}</span>,
+    },
+    {
+      key: 'prepay_balance_cents',
+      header: 'Prepay on file',
+      sortable: true,
+      render: (r) => {
+        const prepayBalance = r.prepay_balance_cents ?? 0;
+        return prepayBalance > 0
+          ? <span className="font-mono text-crx-green">{fmtCents(prepayBalance)}</span>
+          : <span className="text-secondary">—</span>;
+      },
     },
     {
       key: 'invoice_count' as keyof ARAgingRow,
@@ -485,7 +497,7 @@ export default function ARaging() {
         const candidates = assertRpcResult<ARReminderCandidate[]>(data, 'get_ar_reminder_candidates');
 
         if (candidates.length === 0) {
-          toast('info', 'No customers with 30+ day overdue invoices');
+          toast('info', 'No customers are overdue past the AR reminder threshold');
           return;
         }
 
@@ -1149,7 +1161,7 @@ export default function ARaging() {
         onClose={() => setShowARReminderConfirm(false)}
         onConfirm={handleSendARReminders}
         title="Send AR Reminders"
-        message="Send AR reminder emails to all customers with 30+ day overdue invoices?"
+        message="Send AR reminder emails to every customer overdue past the AR reminder threshold (set in Settings)?"
         confirmLabel="Send Emails"
         variant="info"
         loading={sendingReminders}

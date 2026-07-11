@@ -61,6 +61,7 @@ import {
 } from '../components/jobs/jobFilters';
 import type { Job, JobStatus, JobTag, GroundCrew, JobBatch } from '../types';
 import type { Json } from '../types/supabase';
+import { aggregateAssignedTo } from '../lib/dispatchWizard';
 
 interface JobChemSummary {
   product_name: string;
@@ -75,6 +76,16 @@ interface JobCustomerSummary {
 
 type JobRow = Job & {
   customer_name: string;
+  /**
+   * U13 (#15-21/#111 + Codex R1 #3): the DISPATCH-AWARE assignee label — the
+   * per-location dispatch assignee names (a job split across two applicators/
+   * crews shows BOTH), falling back to the whole-job applicator's name when
+   * there are no active per-location dispatches; '-' when neither exists
+   * (mirrors DispatchBoard's aggregateAssignedTo). ONE field feeds the cell,
+   * sort, search, CSV/PDF export, and the jobListPrint path, so they can never
+   * disagree — and the 'applicator_name' key keeps the List-Settings column
+   * registry + users' saved visibility settings working unchanged.
+   */
   applicator_name: string;
   vehicle_name: string;
   field_count: number;
@@ -102,6 +113,12 @@ type JobRow = Job & {
   chemicalNames: string[];
   /** Field-app parity #3: the named batch this job belongs to (null = none). */
   batch_name: string | null;
+  /**
+   * U13 (Codex R1 #2): true for a SCHEDULED job with NO active ('dispatched')
+   * per-location row AND no legacy whole-job applicator_id — a whole-job-assigned
+   * job is NOT "needs dispatch" (matches the migration's unassigned_jobs rule).
+   */
+  needs_dispatch: boolean;
 };
 
 const statusVariant: Record<JobStatus, BadgeVariant> = {
@@ -118,6 +135,8 @@ const OVERFLOW_LIMIT = 2;
 // Field-app parity #15: the keys the DataTable's in-table quick-search matches.
 // Shared so the on-screen table and the PRINT search the SAME columns (paper ==
 // screen). Must match the `searchKeys` passed to <DataTable>.
+// U13 (Codex R1 #3): applicator_name is now the DISPATCH-AWARE label (incl.
+// crews + split jobs), so search/sort/export all match what the cell shows.
 const JOB_TABLE_SEARCH_KEYS = ['job_number', 'customers_search', 'applicator_name'];
 
 // Crop season = October 1 to September 30
@@ -414,7 +433,8 @@ export default function Jobs() {
         job_fields(crop, field:fields(field_name, crop_type, county, state)),
         job_chemicals(rate_per_acre, rate_unit, product:products(product_name)),
         job_tag_assignments(tag:job_tags(id, name, color, created_by, created_at, updated_at)),
-        batch:job_batches(name)
+        batch:job_batches(name),
+        job_location_dispatches(applicator_id, crew_id, dispatch_status)
       `)
       .is('deleted_at', null)
       .order('job_date', { ascending: false })
@@ -425,7 +445,25 @@ export default function Jobs() {
     if (applied.startDate) query = query.gte('job_date', applied.startDate);
     if (applied.endDate) query = query.lte('job_date', applied.endDate);
     if (applied.jobNumber.trim()) query = query.ilike('job_number', `%${applied.jobNumber.trim()}%`);
-    if (applied.applicatorIds.length > 0) query = query.in('applicator_id', applied.applicatorIds);
+    // U13 (Codex R2 #2): the Applicators filter must match jobs assigned via
+    // EITHER the legacy whole-job applicator_id OR an ACTIVE per-location
+    // dispatch — filtering only jobs.applicator_id would drop a job whose
+    // selected applicator appears solely through the dispatch wizard. Pull the
+    // matching dispatch job_ids first (single indexed query), then OR them in
+    // SERVER-side — same pattern as the customer-share filter below, so the
+    // newest-N fetch cap applies to the correct (union) match set.
+    if (applied.applicatorIds.length > 0) {
+      const { data: dispJobs } = await supabase
+        .from('job_location_dispatches')
+        .select('job_id')
+        .in('applicator_id', applied.applicatorIds)
+        .eq('dispatch_status', 'dispatched');
+      const dispJobIds = [...new Set(((dispJobs || []) as { job_id: string }[]).map((d) => d.job_id))];
+      const appList = applied.applicatorIds.join(',');
+      query = dispJobIds.length > 0
+        ? query.or(`applicator_id.in.(${appList}),id.in.(${dispJobIds.join(',')})`)
+        : query.in('applicator_id', applied.applicatorIds);
+    }
     if (applied.vehicleIds.length > 0) query = query.in('vehicle_id', applied.vehicleIds);
     if (applied.typeIds.length > 0) query = query.in('application_service_id', applied.typeIds);
     if (applied.groundCrewIds.length > 0) query = query.in('ground_crew_id', applied.groundCrewIds);
@@ -464,7 +502,9 @@ export default function Jobs() {
       job_chemicals?: Array<{ rate_per_acre?: number | null; rate_unit?: string | null; product?: { product_name?: string } }>;
       job_tag_assignments?: Array<{ tag?: JobTag | null }>;
       batch?: { name?: string } | null;
+      job_location_dispatches?: Array<{ applicator_id?: string | null; crew_id?: string | null; dispatch_status?: string }>;
       applicator_id?: string | null;
+      status?: JobStatus;
       created_by?: string | null;
       updated_by?: string | null;
       last_printed_by?: string | null;
@@ -474,8 +514,17 @@ export default function Jobs() {
     // the newest window, so older jobs are NOT in scope for the client-side filters.
     setAtFetchCap(raw.length === JOBS_FETCH_LIMIT);
 
+    // U13 (Codex R2 #1): the batch must ALSO include the ACTIVE per-location
+    // dispatch applicator_ids — a dispatch-only/split assignee isn't in any of
+    // the job-level columns, and a missing nameMap entry would aggregate to
+    // null and render the Applicators cell as '-'.
     const profileIds = [...new Set(
-      raw.flatMap((j) => [j.applicator_id, j.created_by, j.updated_by, j.last_printed_by]).filter(Boolean) as string[]
+      raw.flatMap((j) => [
+        j.applicator_id, j.created_by, j.updated_by, j.last_printed_by,
+        ...(j.job_location_dispatches || [])
+          .filter((d) => d.dispatch_status === 'dispatched')
+          .map((d) => d.applicator_id),
+      ]).filter(Boolean) as string[]
     )];
     const nameMap: Record<string, string> = {};
     if (profileIds.length > 0) {
@@ -484,6 +533,18 @@ export default function Jobs() {
         .select('id, full_name')
         .in('id', profileIds);
       (profs || []).forEach((a: { id: string | null; full_name: string | null }) => { if (a.id) nameMap[a.id] = a.full_name ?? ''; });
+    }
+
+    // U13 (#15-21/#111): resolve crew names for the per-location dispatch
+    // aggregation below (job_location_dispatches.crew_id has no embed here —
+    // ground_crews isn't in the jobs select — so look them up in one batch).
+    const dispatchCrewIds = [...new Set(
+      raw.flatMap((j) => (j.job_location_dispatches || []).map((d) => d.crew_id)).filter(Boolean) as string[]
+    )];
+    const crewNameMap: Record<string, string> = {};
+    if (dispatchCrewIds.length > 0) {
+      const { data: crewRows } = await supabase.from('ground_crews').select('id, name').in('id', dispatchCrewIds);
+      (crewRows || []).forEach((c: { id: string; name: string }) => { crewNameMap[c.id] = c.name; });
     }
 
     // Field-app FIX 2 (Wave 2a security): resolve each job's BILLED customers via the
@@ -565,10 +626,25 @@ export default function Jobs() {
         .filter(Boolean) as JobTag[];
       jobTags.sort((a, b) => a.name.localeCompare(b.name));
 
+      // U13 (#15-21/#111): aggregate per-location ACTIVE dispatch assignee names
+      // (a split job shows BOTH), falling back to the whole-job applicator —
+      // mirrors DispatchBoard's aggregateAssignedTo exactly so the two screens
+      // never disagree on "who has this job".
+      const activeDispatches = (j.job_location_dispatches || []).filter((d) => d.dispatch_status === 'dispatched');
+      const dispatchNames = activeDispatches.map((d) =>
+        d.applicator_id ? (nameMap[d.applicator_id] || null) : d.crew_id ? (crewNameMap[d.crew_id] || null) : null
+      );
+      const jobLevelApplicatorName = j.applicator_id ? nameMap[j.applicator_id] || null : null;
+      const assignedToLabel = aggregateAssignedTo(dispatchNames, jobLevelApplicatorName) || '-';
+      // Codex R1 #2: a legacy whole-job applicator_id counts as ASSIGNED — only
+      // scheduled jobs with neither an active dispatch nor a job-level
+      // applicator "need dispatch" (matches the migration's unassigned_jobs).
+      const needsDispatch = j.status === 'scheduled' && activeDispatches.length === 0 && !j.applicator_id;
+
       return {
         ...(j as unknown as Job),
         customer_name: j.customer?.farm_name || 'Unknown',
-        applicator_name: j.applicator_id ? nameMap[j.applicator_id] || '-' : '-',
+        applicator_name: assignedToLabel,
         vehicle_name: j.vehicle?.vehicle_name || '-',
         field_count: Array.isArray(j.job_fields) ? j.job_fields.length : 0,
         customers: jobCustomers,
@@ -585,6 +661,7 @@ export default function Jobs() {
         states,
         chemicalNames,
         batch_name: j.batch?.name ?? null,
+        needs_dispatch: needsDispatch,
       };
     });
     setJobs(rows);
@@ -618,6 +695,9 @@ export default function Jobs() {
     setDraft(emptyJobFilters);
     setApplied(emptyJobFilters);
     setShowMore(false);
+    // U13 (Codex R4 P2): the quick-filter lives outside the shared JobFilters
+    // state, so Clear All must reset it explicitly or the table stays filtered.
+    setNeedsDispatchOnly(false);
   }, []);
 
   // Date presets write the draft AND apply immediately (a one-click shortcut).
@@ -634,6 +714,11 @@ export default function Jobs() {
   // type/crew/job#) so a job must clear EVERY active filter. The table, totals,
   // and selection all read this single filtered view so they never disagree
   // (criteria #2 + #5 + #6).
+  // U13 (#15-21/#111): "Needs Dispatch only" — a lightweight, LOCAL quick
+  // filter (not plumbed into the shared JobFilters/jobFilters.ts facts system,
+  // to keep this change additive and low-risk). Off by default.
+  const [needsDispatchOnly, setNeedsDispatchOnly] = useState(false);
+
   const visibleJobs = useMemo(() => {
     return jobs.filter((j) => {
       // Field-app parity #8: "Show Completed Jobs" toggle. When OFF, hide
@@ -641,6 +726,9 @@ export default function Jobs() {
       // which read this same view). An explicit status filter that DOES include
       // 'completed' wins — the user clearly asked for them.
       if (!listSettings.showCompleted && j.status === 'completed' && !applied.statuses.includes('completed')) {
+        return false;
+      }
+      if (needsDispatchOnly && !j.needs_dispatch) {
         return false;
       }
       const facts: JobFilterFacts = {
@@ -653,7 +741,7 @@ export default function Jobs() {
       };
       return jobMatchesClientFilters(facts, applied);
     });
-  }, [jobs, applied, listSettings.showCompleted]);
+  }, [jobs, applied, listSettings.showCompleted, needsDispatchOnly]);
 
   // Field-app parity #15: the EXACT rows the table shows = visibleJobs after the
   // DataTable's own in-table search + column sort (which the table applies itself
@@ -775,7 +863,8 @@ export default function Jobs() {
       { key: 'job_date', header: 'Date', format: (v) => fmtDateCSV(v as string) },
       { key: 'status', header: 'Status' },
       { key: 'customer_name', header: 'Customer' },
-      { key: 'applicator_name', header: 'Applicator' },
+      // U13 (Codex R1 #3): applicator_name is the dispatch-aware label.
+      { key: 'applicator_name', header: 'Applicators' },
       { key: 'total_acres', header: 'Total Acres', format: (v) => fmtCSV(v as number) },
       { key: 'remaining_acres', header: 'Remaining Acres', format: (v) => fmtCSV(v as number) },
       { key: 'vehicle_name', header: 'Vehicle' },
@@ -792,7 +881,8 @@ export default function Jobs() {
         { header: 'Date', key: 'job_date', format: (v) => v ? new Date(String(v)).toLocaleDateString() : '-' },
         { header: 'Status', key: 'status' },
         { header: 'Customer', key: 'customer_name' },
-        { header: 'Applicator', key: 'applicator_name' },
+        // U13 (Codex R1 #3): applicator_name is the dispatch-aware label.
+        { header: 'Applicators', key: 'applicator_name' },
         { header: 'Tot. ac', key: 'total_acres', align: 'right', format: (v) => v ? Number(v).toLocaleString() : '-' },
         { header: 'Rem. ac', key: 'remaining_acres', align: 'right', format: (v) => v != null ? Number(v).toLocaleString() : '-' },
         { header: 'Price', key: 'total_price_cents', align: 'right', format: (v) => v ? fmtCents(Number(v)) : '-' },
@@ -1346,9 +1436,25 @@ export default function Jobs() {
       ),
     },
     {
+      // U13 (Codex R1 #3): applicator_name IS the dispatch-aware label now, so
+      // sort (row[key]) matches the rendered value — and the key stays
+      // 'applicator_name' so the List-Settings visibility registry still maps.
       key: 'applicator_name',
       header: 'Applicators',
       sortable: true,
+      render: (r) => (
+        <span className="inline-flex items-center gap-1.5">
+          <span>{r.applicator_name}</span>
+          {r.needs_dispatch && (
+            <span
+              className="inline-flex items-center px-1.5 py-0.5 text-[11px] font-medium bg-amber-50 text-amber-700 border border-amber-200 rounded"
+              title="Scheduled with no dispatched applicator or crew"
+            >
+              Needs Dispatch
+            </span>
+          )}
+        </span>
+      ),
     },
     {
       key: 'crops',
@@ -1794,6 +1900,20 @@ export default function Jobs() {
 
       <Card padding={false}>
         <div className="p-5">
+          {/* U13 (#15-21/#111): "Needs Dispatch only" quick filter — jobs
+              scheduled with no active per-location dispatch. */}
+          <div className="flex items-center gap-2 mb-2">
+            <button
+              onClick={() => setNeedsDispatchOnly((v) => !v)}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
+                needsDispatchOnly
+                  ? 'bg-amber-50 border-amber-300 text-amber-800'
+                  : 'bg-white border-gray-200 text-secondary hover:bg-gray-50'
+              }`}
+            >
+              Needs Dispatch only {needsDispatchOnly && `(${jobs.filter((j) => j.needs_dispatch).length})`}
+            </button>
+          </div>
           <DataTable
             data={visibleJobs as unknown as Record<string, unknown>[]}
             columns={columns as unknown as Column<Record<string, unknown>>[]}

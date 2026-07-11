@@ -70,7 +70,7 @@ export default function InventoryPage() {
   const [activeTab, setActiveTab] = useState<'inventory' | 'forecast'>('inventory');
   const [forecastData, setForecastData] = useState<Array<{
     product_id: string; product_name: string; sku: string | null;
-    needed_month: string; planned_demand: number; current_available: number;
+    needed_month: string; planned_demand: number; job_demand: number; current_available: number;
     prebooked: number; on_order: number; quote_count: number; customer_count: number;
   }>>([]);
   const [forecastLoading, setForecastLoading] = useState(false);
@@ -102,6 +102,8 @@ export default function InventoryPage() {
   const [addQty, setAddQty] = useState('');
   const [addUnitSize, setAddUnitSize] = useState('');
   const [addUnitCost, setAddUnitCost] = useState('');
+  const [addReorderPoint, setAddReorderPoint] = useState('');
+  const [addMinStock, setAddMinStock] = useState('');
   const [adding, setAdding] = useState(false);
   const [productSearch, setProductSearch] = useState('');
   const [holdsExpanded, setHoldsExpanded] = useState(true);
@@ -312,6 +314,8 @@ export default function InventoryPage() {
     setAddQty('');
     setAddUnitSize('');
     setAddUnitCost('');
+    setAddReorderPoint('');
+    setAddMinStock('');
     setProductSearch('');
     setAddOpen(true);
   };
@@ -468,6 +472,8 @@ export default function InventoryPage() {
     setAdding(true);
 
     const unitCost = addUnitCost ? parseFloat(addUnitCost) : null;
+    const reorderPoint = addReorderPoint ? parseFloat(addReorderPoint) : null;
+    const minStock = addMinStock ? parseFloat(addMinStock) : null;
     const { data: manualAddData, error } = await supabase.rpc('manual_inventory_add', {
       p_product_id: addProductId,
       p_location: addLocation || 'Main Warehouse',
@@ -476,6 +482,8 @@ export default function InventoryPage() {
       p_performed_by: profile?.id || undefined,
       p_notes: qty > 0 ? `Initial inventory record created with ${qty} units` : undefined,
       p_unit_cost: unitCost && unitCost > 0 ? unitCost : undefined,
+      p_reorder_point: reorderPoint != null && reorderPoint >= 0 ? reorderPoint : undefined,
+      p_min_stock_level: minStock != null && minStock >= 0 ? minStock : undefined,
       p_idempotency_key: manualAddIdem.getKey(),
     });
     if (!error) assertRpcResult(manualAddData, 'manual_inventory_add');
@@ -874,6 +882,7 @@ export default function InventoryPage() {
                   onClick={(e) => { e.stopPropagation(); openReceiveModal(row.id); }}
                   className="p-1.5 rounded hover:bg-gray-100 text-secondary"
                   title="Receive Shipment"
+                  aria-label="Receive Shipment"
                 >
                   <ArrowDownToLine className="w-4 h-4" />
                 </button>
@@ -881,6 +890,7 @@ export default function InventoryPage() {
                   onClick={(e) => { e.stopPropagation(); adjustIdem.resetKey(); setSelectedId(row.id); setAdjustOpen(true); }}
                   className="p-1.5 rounded hover:bg-gray-100 text-secondary"
                   title="Manual Adjustment"
+                  aria-label="Manual Adjustment"
                 >
                   <Pencil className="w-4 h-4" />
                 </button>
@@ -888,6 +898,7 @@ export default function InventoryPage() {
                   onClick={(e) => { e.stopPropagation(); handleDelete(row.id); }}
                   className="p-1.5 rounded hover:bg-red-50 text-red-600"
                   title="Delete Inventory Item"
+                  aria-label="Delete Inventory Item"
                 >
                   <Trash2 className="w-4 h-4" />
                 </button>
@@ -1168,9 +1179,11 @@ export default function InventoryPage() {
                       <td className="py-3 px-3 text-secondary">{hold.customer_name || '—'}</td>
                       <td className="py-3 px-3">
                         <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
-                          hold.hold_type === 'manual' ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700'
+                          hold.hold_type === 'manual' ? 'bg-blue-100 text-blue-700'
+                            : hold.hold_type === 'job' ? 'bg-emerald-100 text-emerald-700'
+                            : 'bg-purple-100 text-purple-700'
                         }`}>
-                          {hold.hold_type === 'manual' ? 'Manual' : 'Program'}
+                          {hold.hold_type === 'manual' ? 'Manual' : hold.hold_type === 'job' ? 'Job' : 'Program'}
                         </span>
                       </td>
                       <td className="py-3 px-3 text-secondary text-xs max-w-xs truncate">{hold.notes || '—'}</td>
@@ -1180,13 +1193,22 @@ export default function InventoryPage() {
                       <td className="py-3 px-3 text-secondary text-xs">{hold.creator_name}</td>
                       {isAdmin && (
                         <td className="py-3 px-3">
-                          <button
-                            onClick={() => handleReleaseHold(hold.id)}
-                            disabled={releasingHoldId === hold.id}
-                            className="text-xs text-red-600 hover:text-red-700 font-medium disabled:opacity-50"
-                          >
-                            {releasingHoldId === hold.id ? 'Releasing...' : 'Release'}
-                          </button>
+                          {hold.hold_type === 'job' ? (
+                            <span
+                              className="text-xs text-secondary"
+                              title="Job reservations release automatically when the job completes, cancels, or is rescheduled."
+                            >
+                              Auto
+                            </span>
+                          ) : (
+                            <button
+                              onClick={() => handleReleaseHold(hold.id)}
+                              disabled={releasingHoldId === hold.id}
+                              className="text-xs text-red-600 hover:text-red-700 font-medium disabled:opacity-50"
+                            >
+                              {releasingHoldId === hold.id ? 'Releasing...' : 'Release'}
+                            </button>
+                          )}
                         </td>
                       )}
                     </tr>
@@ -1229,6 +1251,10 @@ export default function InventoryPage() {
                         <th className="px-4 py-3 text-left font-medium text-secondary">Needed</th>
                         <th className="px-4 py-3 text-right font-medium text-secondary">Planned Demand</th>
                         <th className="px-4 py-3 text-right font-medium text-secondary">
+                          Jobs
+                          <HelpTip text="The portion of Planned Demand from scheduled / in-progress field jobs that reserved this product (bucketed by job date). The remainder is crop-program quote bookings." className="ml-1" />
+                        </th>
+                        <th className="px-4 py-3 text-right font-medium text-secondary">
                           Available
                           <HelpTip text="Physical stock right now (raw quantity_available). The Inventory tab shows 'Net Position' = Available − Prebooked + On Order; this column shows just the Available component so you can see all three numbers (Available, On Order, Gap) separately." className="ml-1" />
                         </th>
@@ -1251,6 +1277,7 @@ export default function InventoryPage() {
                               {new Date(row.needed_month + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}
                             </td>
                             <td className="px-4 py-3 text-right font-mono">{row.planned_demand.toLocaleString()}</td>
+                            <td className="px-4 py-3 text-right font-mono text-purple-600">{row.job_demand.toLocaleString()}</td>
                             <td className="px-4 py-3 text-right font-mono">{row.current_available.toLocaleString()}</td>
                             <td className="px-4 py-3 text-right font-mono text-teal-600">{row.on_order.toLocaleString()}</td>
                             <td className="px-4 py-3 text-right font-mono">
@@ -1435,6 +1462,31 @@ export default function InventoryPage() {
             />
             <p className="text-xs text-secondary mt-1">
               For record-keeping only — does not change the product's pricing or cost.
+            </p>
+          </div>
+          <div>
+            <div className="grid grid-cols-2 gap-3">
+              <Input
+                label="Reorder Point (optional)"
+                type="number"
+                min="0"
+                step="any"
+                value={addReorderPoint}
+                onChange={(e) => setAddReorderPoint(e.target.value)}
+                placeholder="e.g. 50"
+              />
+              <Input
+                label="Min Stock (optional)"
+                type="number"
+                min="0"
+                step="any"
+                value={addMinStock}
+                onChange={(e) => setAddMinStock(e.target.value)}
+                placeholder="e.g. 20"
+              />
+            </div>
+            <p className="text-xs text-secondary mt-1">
+              Reorder point flags this item on the "Needs Reorder" list when stock runs low. Leave blank to set later.
             </p>
           </div>
           <div className="flex justify-end gap-2">

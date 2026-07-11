@@ -71,6 +71,9 @@ export default function ApplicationRecords() {
   const fetchRecords = useCallback(async () => {
     setLoading(true);
     // PR-07 follow-up: dropped applicator FK embed; resolve via profile_public_view.
+    // U10 (2026-07-06): prefer the applicator_name snapshot column (as-of-application,
+    // immune to later profile edits) and only fall back to the profiles join for old
+    // rows where it's NULL. `select('*', ...)` below already includes the snapshot cols.
     let query = supabase
       .from('application_records')
       .select(`
@@ -95,8 +98,19 @@ export default function ApplicationRecords() {
       return;
     }
 
+    const typedRows = (data || []) as Array<Record<string, unknown> & {
+      customer?: { farm_name?: string };
+      field?: { field_name?: string };
+      vehicle?: { vehicle_name?: string };
+      applicator_id?: string | null;
+      applicator_name?: string | null;
+    }>;
+
+    // U10 snapshot columns (applicator_name/applicator_license_number) are filled for NEW
+    // records; old rows have them NULL and still need the profiles-join fallback below.
     const applicatorIds = [...new Set(
-      ((data || []) as Array<{ applicator_id?: string | null }>)
+      typedRows
+        .filter((r) => !r.applicator_name)
         .map((r) => r.applicator_id)
         .filter(Boolean) as string[]
     )];
@@ -109,10 +123,10 @@ export default function ApplicationRecords() {
       (applicators || []).forEach((a: { id: string | null; full_name: string | null }) => { if (a.id) applicatorMap[a.id] = a.full_name || '-'; });
     }
 
-    const rows: AppRecordRow[] = ((data || []) as Array<Record<string, unknown> & { customer?: { farm_name?: string }; field?: { field_name?: string }; vehicle?: { vehicle_name?: string }; applicator_id?: string | null }>).map((r) => ({
+    const rows: AppRecordRow[] = typedRows.map((r) => ({
       ...r,
       customer_name: r.customer?.farm_name || 'Unknown',
-      applicator_name: r.applicator_id ? applicatorMap[r.applicator_id] || '-' : '-',
+      applicator_name: r.applicator_name || (r.applicator_id ? applicatorMap[r.applicator_id] || '-' : '-'),
       field_name: r.field?.field_name || '-',
       vehicle_name: r.vehicle?.vehicle_name || '-',
       product_count: Array.isArray(r.product_data) ? r.product_data.length : 0,

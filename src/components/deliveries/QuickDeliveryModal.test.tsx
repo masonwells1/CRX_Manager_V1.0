@@ -3,12 +3,12 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, act } from '@testing-library/react';
+import { render, screen, fireEvent, act, waitFor } from '@testing-library/react';
 import QuickDeliveryModal from './QuickDeliveryModal';
 
 // ── Mocks ────────────────────────────────────────────────────────────────
 
-const { mockFrom, mockRpc, mockToast, mockNavigate } = vi.hoisted(() => {
+const { mockFrom, mockRpc, mockToast, mockNavigate, mockLimit } = vi.hoisted(() => {
   const mockOrder = vi.fn().mockReturnThis();
   const mockIn = vi.fn().mockReturnThis();
   const mockEq = vi.fn().mockReturnThis();
@@ -28,13 +28,21 @@ const { mockFrom, mockRpc, mockToast, mockNavigate } = vi.hoisted(() => {
   mockOrder.mockReturnValue({ eq: mockEq, in: mockIn, or: mockOr, order: mockOrder, limit: mockLimit, select: mockSelect });
   // Products + drivers use .order() at the end which resolves the promise
   mockOrder.mockResolvedValue({ data: [], error: null });
-  const mockFrom = vi.fn().mockReturnValue({ select: mockSelect });
+  // U9: the stock lookup queries terminate in .eq() / .in() (no .order()), so they
+  // need their own resolved-promise terminals or the component's Promise.all hangs.
+  const mockStockEq = vi.fn().mockResolvedValue({ data: [], error: null });
+  const mockStockIn = vi.fn().mockResolvedValue({ data: [], error: null });
+  const mockStockSelect = vi.fn().mockReturnValue({ eq: mockStockEq, in: mockStockIn });
+  const mockFrom = vi.fn().mockImplementation((table: string) =>
+    table === 'inventory' || table === 'purchase_order_items'
+      ? { select: mockStockSelect }
+      : { select: mockSelect });
 
   const mockRpc = vi.fn().mockResolvedValue({ data: null, error: null });
   const mockToast = vi.fn();
   const mockNavigate = vi.fn();
 
-  return { mockFrom, mockRpc, mockToast, mockNavigate, mockSelect, mockEq, mockOrder, mockIn, mockOr };
+  return { mockFrom, mockRpc, mockToast, mockNavigate, mockSelect, mockEq, mockOrder, mockIn, mockOr, mockLimit };
 });
 
 vi.mock('../../lib/db', () => ({
@@ -64,7 +72,12 @@ vi.mock('../../hooks/useIdempotencyKey', () => ({
 // ── Tests ────────────────────────────────────────────────────────────────
 
 describe('QuickDeliveryModal', () => {
-  const defaultProps = {
+  const defaultProps: {
+    open: boolean;
+    onClose: () => void;
+    onCreated: () => void;
+    initialCustomerId?: string;
+  } = {
     open: true,
     onClose: vi.fn(),
     onCreated: vi.fn(),
@@ -102,6 +115,47 @@ describe('QuickDeliveryModal', () => {
   it('shows customer search input', async () => {
     await renderModal();
     expect(screen.getByPlaceholderText(/search by farm name/i)).toBeInTheDocument();
+  });
+
+  it('pre-selects the initial customer when the modal opens', async () => {
+    mockLimit.mockResolvedValueOnce({
+      data: [{ id: 'customer-1', farm_name: 'North Farm', account_number: '104', assigned_tier: 2 }],
+      error: null,
+    });
+
+    await renderModal({ ...defaultProps, initialCustomerId: 'customer-1' });
+
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText(/search by farm name/i)).toHaveValue('North Farm (104)');
+    });
+  });
+
+  it('does not override customer search after the user edits it', async () => {
+    mockLimit.mockResolvedValueOnce({
+      data: [{ id: 'customer-1', farm_name: 'North Farm', account_number: '104', assigned_tier: 2 }],
+      error: null,
+    });
+
+    const { rerender } = await renderModal({ ...defaultProps, initialCustomerId: 'customer-1' });
+    const input = screen.getByPlaceholderText(/search by farm name/i);
+
+    await waitFor(() => {
+      expect(input).toHaveValue('North Farm (104)');
+    });
+
+    fireEvent.change(input, { target: { value: 'South Farm' } });
+    expect(input).toHaveValue('South Farm');
+
+    rerender(<QuickDeliveryModal {...defaultProps} initialCustomerId="customer-1" />);
+
+    expect(input).toHaveValue('South Farm');
+  });
+
+  it('leaves the customer picker empty without an initial customer', async () => {
+    await renderModal();
+
+    expect(screen.getByPlaceholderText(/search by farm name/i)).toHaveValue('');
+    expect(mockFrom).not.toHaveBeenCalledWith('customers');
   });
 
   it('shows Add Product button', async () => {

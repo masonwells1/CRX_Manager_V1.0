@@ -23,10 +23,12 @@ import {
   XCircle,
   Ban,
   Undo2,
+  MoreHorizontal,
 } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
+import SearchableSelect from '../components/ui/SearchableSelect';
 import Modal from '../components/ui/Modal';
 import ConfirmModal from '../components/ui/ConfirmModal';
 import UnsavedChangesModal from '../components/ui/UnsavedChangesModal';
@@ -34,16 +36,18 @@ import { useToast } from '../components/ui/Toast';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import { useAuth } from '../contexts/AuthContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
-import { supabase, assertRpcResult, checkMutationResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
+import { supabase, supabaseUntyped, assertRpcResult, checkMutationResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { logActivity } from '../lib/activityLogger';
 import { formatUSD, formatCents } from '../lib/money';
+import { catalogPricePerAcre } from '../lib/quoteCalc';
 import { notifyLargeOrder, notifyCreditLimitExceeded } from '../lib/notificationTriggers';
+import { warnIfOverCreditLimit } from '../lib/creditLimit';
 import { sendOrderConfirmedEmail } from '../lib/orderConfirmedEmail';
 import { trackBusinessEvent } from '../lib/metrics';
-import { localDatePlusDays } from '../lib/dateUtils';
+import { localDatePlusDays, localToday, parseLocalDate } from '../lib/dateUtils';
 import { downloadQuotePdf, generateQuotePdf } from '../lib/quotePdf';
 import { sendEmail, pdfToBase64, buildEmailHtml } from '../lib/emailService';
 import { checkRUPCompliance } from '../lib/rupCompliance';
@@ -66,6 +70,7 @@ import type {
   CommissionSplit,
   QuoteStatus,
   BookingSettlement,
+  JobStatus,
 } from '../types';
 import type { Json } from '../types/supabase';
 
@@ -108,6 +113,31 @@ interface LocalItem {
   price_unit: string | null;
 }
 
+interface FieldOption {
+  id: string;
+  field_name: string;
+  customer_id: string | null;
+  total_acres: number | null;
+  measured_acres: number | null;
+  override_acres: number | null;
+}
+
+interface ActivePlannedHold {
+  product_id: string;
+  quantity: number;
+  expires_at: string | null;
+}
+
+interface DrawRow {
+  product_id: string;
+  product_name: string;
+  booked: number;
+  drawn: number;
+  remaining: number;
+  qty: string;
+  unit: string | null;
+}
+
 let keyCounter = 0;
 function nextKey() {
   return `_k${++keyCounter}`;
@@ -136,6 +166,18 @@ function makeEmptyItem(): LocalItem {
     calc_mode: 'rate_acres',
     price_unit: null,
   };
+}
+
+function hasUserEnteredItemValues(item: LocalItem): boolean {
+  return item.notes !== null
+    || item.price_override !== null
+    || item.actual_rate !== null
+    || item.rate_unit !== null
+    || item.acres !== null
+    || item.total_units_needed !== null
+    || item.unit_size !== null
+    || item.price_unit !== null
+    || item.calc_mode !== 'rate_acres';
 }
 
 function makeEmptySection(order: number): LocalSection {
@@ -169,11 +211,13 @@ export default function QuoteBuilder() {
   const drawDownIdem = useIdempotencyKey('draw_down_quote', profile?.id || '');
   const revertStatusIdem = useIdempotencyKey('revert_quote_status', profile?.id || '');
   const emailQuoteIdem = useIdempotencyKey('send_email_quote', profile?.id || '');
+  const closeAppliedIdem = useIdempotencyKey('close_quote_as_applied', profile?.id || '');
+  const closeShortIdem = useIdempotencyKey('close_quote_as_short', profile?.id || '');
 
   // Partial booking draw-down (sell-side roadmap #1): pull part of the booked
   // quantities into an order; the quote stays open with the remaining balance.
   const [showDrawModal, setShowDrawModal] = useState(false);
-  const [drawRows, setDrawRows] = useState<Array<{ product_id: string; product_name: string; booked: number; drawn: number; remaining: number; qty: string }>>([]);
+  const [drawRows, setDrawRows] = useState<DrawRow[]>([]);
   const [drawLoading, setDrawLoading] = useState(false);
   const [drawing, setDrawing] = useState(false);
   // Booking settlement (roadmap #6c): read-only booked/drawn/remaining + prepay
@@ -188,6 +232,8 @@ export default function QuoteBuilder() {
   const [converting, setConverting] = useState(false);
   const [quoteCreatedAt, setQuoteCreatedAt] = useState<string | null>(null);
   const [confirmConvertOpen, setConfirmConvertOpen] = useState(false);
+  const [confirmBookAsOrderOpen, setConfirmBookAsOrderOpen] = useState(false);
+  const [bookingAsOrder, setBookingAsOrder] = useState(false);
   const [duplicateOrderConfirmOpen, setDuplicateOrderConfirmOpen] = useState(false);
   const [duplicateOrderMsg, setDuplicateOrderMsg] = useState('');
 
@@ -209,13 +255,15 @@ export default function QuoteBuilder() {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [unitConversions, setUnitConversions] = useState<UnitConversion[]>([]);
-  const [fields, setFields] = useState<{ id: string; field_name: string; customer_id: string | null }[]>([]);
+  const [fields, setFields] = useState<FieldOption[]>([]);
+  const [activePlannedHolds, setActivePlannedHolds] = useState<ActivePlannedHold[]>([]);
 
   const [productSearchOpen, setProductSearchOpen] = useState<{
     sectionKey: string;
     itemKey: string;
   } | null>(null);
   const [productQuery, setProductQuery] = useState('');
+  const [keepProductPickerOpen, setKeepProductPickerOpen] = useState(false);
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
   const [rupWarnings, setRupWarnings] = useState<string[]>([]);
   const [quoteVersions, setQuoteVersions] = useState<QuoteVersion[]>([]);
@@ -230,11 +278,26 @@ export default function QuoteBuilder() {
   const [confirmDeclineOpen, setConfirmDeclineOpen] = useState(false);
   const [confirmCancelOpen, setConfirmCancelOpen] = useState(false);
   const [statusActionLoading, setStatusActionLoading] = useState(false);
+  // Close a booking we fulfilled by APPLYING product (job applications), as
+  // opposed to delivering it (convert/draw = chemical sale). Distinct terminal
+  // status; releases any un-applied leftover; never double-bills. (owner 2026-07-03)
+  const [confirmCloseAppliedOpen, setConfirmCloseAppliedOpen] = useState(false);
+  const [closingApplied, setClosingApplied] = useState(false);
+  // Close a booking the customer ABANDONED (walked away / took only part): the
+  // un-fulfilled remainder is released back to free inventory. Distinct terminal
+  // status 'closed_short'; never bills. The escape hatch for a partially-drawn
+  // booking that Decline/Cancel/Expire refuse (BOOKING_PARTIALLY_DRAWN). (#1)
+  const [confirmCloseShortOpen, setConfirmCloseShortOpen] = useState(false);
+  const [closingShort, setClosingShort] = useState(false);
+  // Draft bookings CAN be scheduled server-side (a pre-planned draft is valid),
+  // but we warn first because the booking hasn't been sent to the customer. (#103)
+  const [confirmDraftScheduleKey, setConfirmDraftScheduleKey] = useState<string | null>(null);
   const [showRevertModal, setShowRevertModal] = useState(false);
   const [revertReason, setRevertReason] = useState('');
   const [reverting, setReverting] = useState(false);
   // #3 Stage A: email the quote PDF to the grower via the send-email Edge Function.
   const [emailingGrower, setEmailingGrower] = useState(false);
+  const [lastQuoteEmailAt, setLastQuoteEmailAt] = useState<string | null>(null);
   const [customerView, setCustomerView] = useState(false);
   const [showPreviewModal, setShowPreviewModal] = useState(false);
 
@@ -253,6 +316,10 @@ export default function QuoteBuilder() {
   const [templateDescription, setTemplateDescription] = useState('');
   const [showRolloverModal, setShowRolloverModal] = useState(false);
   const [rolloverSeason, setRolloverSeason] = useState(new Date().getFullYear() + 1);
+  const [createOrderMenuOpen, setCreateOrderMenuOpen] = useState(false);
+  const [moreActionsOpen, setMoreActionsOpen] = useState(false);
+  const createOrderMenuRef = useRef<HTMLDivElement>(null);
+  const moreActionsRef = useRef<HTMLDivElement>(null);
 
   // Track dirty state for unsaved changes warning
   const [isDirty, setIsDirty] = useState(false);
@@ -267,10 +334,8 @@ export default function QuoteBuilder() {
   // handleEmailToGrower explicitly supports re-sending an already-sent quote (it only
   // freezes a version on the FIRST send from draft/revised).
   const canSend = ['draft', 'revised', 'sent'].includes(currentStatus);
-  const canConvert = currentStatus === 'sent';
-  // draw_down_quote accepts BOTH 'sent' and 'revised' bookings — keep the
-  // Partial Order button in parity with the RPC (whole-convert stays
-  // sent-only by design). 2026-06-10 error-prevention review §3 LOW.
+  const canConvert = ['sent', 'revised'].includes(currentStatus);
+  // Both whole conversion and draw_down_quote accept sent/revised bookings.
   const canDraw = currentStatus === 'sent' || currentStatus === 'revised';
 
   // Quote lifecycle terminal/reopen actions (roadmap #5). The status-transition
@@ -279,8 +344,55 @@ export default function QuoteBuilder() {
   const isAdmin = profile?.role === 'admin';
   const canCancel = isEditing && ['draft', 'sent', 'revised'].includes(currentStatus);
   const canDecline = isEditing && ['sent', 'revised'].includes(currentStatus);
+  // "Close — fulfilled by application" is only for a PLANNED open booking (the
+  // application channel), in parity with the close_quote_as_applied RPC
+  // (sent/revised + is_planned). A plain non-planned sales quote uses convert/
+  // decline, not this. (Codex 2026-07-03 P2)
+  const canCloseApplied = isEditing && isPlanned && ['sent', 'revised'].includes(currentStatus);
+  // "Close — Short" (customer walked away, release the remainder) is for ANY open
+  // booking (planned or not) — parity with close_quote_as_short, which does NOT
+  // require is_planned (a non-planned open booking can also be abandoned; it just
+  // has no crop holds to release). (#1)
+  const canCloseShort = isEditing && ['sent', 'revised'].includes(currentStatus);
+  // A booking only takes new scheduled jobs while it's not terminal AND not
+  // 'accepted' — parity with create_job_from_quote_section's status guard: once a
+  // booking is closed/declined/cancelled/expired it's terminal, and 'accepted'
+  // means it was converted to a chemical SALE (order) so scheduling a job would
+  // double-count the product (finding #103 — QUOTE_ALREADY_CONVERTED). Draft
+  // stays schedulable (warn-only). (#103)
+  const canScheduleJobs = isPlanned && !['accepted', 'declined', 'expired', 'cancelled', 'closed_by_application', 'closed_short'].includes(currentStatus);
+  // Show an inline explanation where the Schedule-Job button would be, on an
+  // accepted planned booking, so the user knows to make a standalone job. (#103)
+  const scheduleBlockedAccepted = isPlanned && currentStatus === 'accepted';
   const canRevert = isEditing && isAdmin && ['accepted', 'declined', 'expired', 'cancelled'].includes(currentStatus);
   const revertLabel = currentStatus === 'accepted' ? 'Un-accept' : 'Reopen';
+
+  useEffect(() => {
+    if (!createOrderMenuOpen && !moreActionsOpen) return;
+
+    const closeMenusOnOutsideClick = (event: MouseEvent) => {
+      if (
+        !createOrderMenuRef.current?.contains(event.target as Node)
+        && !moreActionsRef.current?.contains(event.target as Node)
+      ) {
+        setCreateOrderMenuOpen(false);
+        setMoreActionsOpen(false);
+      }
+    };
+    const closeMenusOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setCreateOrderMenuOpen(false);
+        setMoreActionsOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', closeMenusOnOutsideClick);
+    document.addEventListener('keydown', closeMenusOnEscape);
+    return () => {
+      document.removeEventListener('mousedown', closeMenusOnOutsideClick);
+      document.removeEventListener('keydown', closeMenusOnEscape);
+    };
+  }, [createOrderMenuOpen, moreActionsOpen]);
 
   // Mark dirty whenever user changes form data (after initial load)
   useEffect(() => {
@@ -307,6 +419,53 @@ export default function QuoteBuilder() {
     })();
     return () => { cancelled = true; };
   }, [isEditing, quoteId, currentStatus]);
+
+  const loadActivePlannedHolds = useCallback(async (targetQuoteId: string) => {
+    const { data, error } = await supabase
+      .from('inventory_holds')
+      .select('product_id, quantity, expires_at')
+      .eq('hold_type', 'crop_program')
+      .eq('source_id', targetQuoteId)
+      .eq('is_active', true);
+    if (error) {
+      setActivePlannedHolds([]);
+      return;
+    }
+    setActivePlannedHolds((data || []) as ActivePlannedHold[]);
+  }, []);
+
+  useEffect(() => {
+    if (!isPlanned || !quoteId) {
+      setActivePlannedHolds([]);
+      return;
+    }
+    void loadActivePlannedHolds(quoteId);
+  }, [isPlanned, quoteId, loadActivePlannedHolds]);
+
+  const loadQuoteEmailStatus = useCallback(async (targetQuoteNumber: string) => {
+    // send-email records this quote reference as its attachment_name, not resource_id.
+    const { data, error } = await supabase
+      .from('email_log')
+      .select('created_at')
+      .eq('email_type', 'quote')
+      .eq('attachment_name', `Quote-${targetQuoteNumber}.pdf`)
+      .eq('status', 'sent')
+      .order('created_at', { ascending: false })
+      .limit(1);
+    if (error) {
+      setLastQuoteEmailAt(null);
+      return;
+    }
+    setLastQuoteEmailAt(data?.[0]?.created_at ?? null);
+  }, []);
+
+  useEffect(() => {
+    if (!quoteId || !quoteNumber) {
+      setLastQuoteEmailAt(null);
+      return;
+    }
+    void loadQuoteEmailStatus(quoteNumber);
+  }, [quoteId, quoteNumber, loadQuoteEmailStatus]);
 
   // RUP compliance check when the customer or the PRODUCT SET changes. Keyed by a
   // stable product-set string (NOT `sections`) so editing quantities/prices/notes
@@ -364,7 +523,7 @@ export default function QuoteBuilder() {
       supabase.from('customers').select('*').eq('is_active', true).order('farm_name'),
       supabase.from('products').select('*').eq('is_active', true).order('product_name'),
       supabase.from('unit_conversions').select('*'),
-      supabase.from('fields').select('id, field_name, customer_id').eq('is_active', true).order('field_name'),
+      supabase.from('fields').select('id, field_name, customer_id, total_acres, measured_acres, override_acres').eq('is_active', true).order('field_name'),
     ]);
 
     if (custRes.error) {
@@ -382,7 +541,7 @@ export default function QuoteBuilder() {
     setCustomers((custRes.data || []) as Customer[]);
     setProducts((prodRes.data || []) as Product[]);
     setUnitConversions((convRes.data || []) as UnitConversion[]);
-    setFields((fieldsRes.data || []) as { id: string; field_name: string; customer_id: string | null }[]);
+    setFields((fieldsRes.data || []) as FieldOption[]);
   }, [toast]);
 
   const generateQuoteNumber = async () => {
@@ -480,6 +639,20 @@ export default function QuoteBuilder() {
     }));
 
     setSections(localSections.length > 0 ? localSections : [makeEmptySection(1)]);
+
+    // U13 (#111): which sections already have a job scheduled from them, so the
+    // badge renders and the "Schedule Job" button hides on load (not just after
+    // a fresh schedule this session).
+    const { data: sectionJobsData } = await supabase
+      .from('jobs')
+      .select('id, job_number, status, quote_section_id')
+      .eq('quote_id', quoteId)
+      .is('deleted_at', null)
+      .not('quote_section_id', 'is', null);
+    const sectionJobMap: Record<string, { id: string; job_number: string; status: JobStatus }> = {};
+    ((sectionJobsData || []) as { id: string; job_number: string; status: JobStatus; quote_section_id: string }[])
+      .forEach((j) => { sectionJobMap[j.quote_section_id] = { id: j.id, job_number: j.job_number, status: j.status }; });
+    setSectionJobs(sectionJobMap);
 
     // Fetch version history for this quote
     const { data: versionsData } = await supabase
@@ -683,6 +856,29 @@ export default function QuoteBuilder() {
     );
   };
 
+  const closeProductPicker = () => {
+    if (productSearchOpen) {
+      const { sectionKey, itemKey } = productSearchOpen;
+      setSections((prev) =>
+        prev.map((section) => {
+          if (section._key !== sectionKey) return section;
+          const targetItem = section.items.find((item) => item._key === itemKey);
+          if (!targetItem || targetItem.product_id || hasUserEnteredItemValues(targetItem)) return section;
+
+          return {
+            ...section,
+            items: section.items
+              .filter((item) => item._key !== itemKey)
+              .map((item, index) => ({ ...item, sort_order: index + 1 })),
+          };
+        })
+      );
+    }
+    setProductSearchOpen(null);
+    setProductQuery('');
+    setKeepProductPickerOpen(false);
+  };
+
   const assignProduct = (sectionKey: string, itemKey: string, product: Product) => {
     const pricePerUnit = getTierPrice(product, tier);
     setSections((prev) =>
@@ -711,8 +907,13 @@ export default function QuoteBuilder() {
         };
       })
     );
-    setProductSearchOpen(null);
-    setProductQuery('');
+    if (keepProductPickerOpen) {
+      const nextItemKey = addItem(sectionKey);
+      setProductSearchOpen({ sectionKey, itemKey: nextItemKey });
+      setProductQuery('');
+      return;
+    }
+    closeProductPicker();
   };
 
   const addSection = () => {
@@ -738,16 +939,42 @@ export default function QuoteBuilder() {
     );
   };
 
-  const addItem = (sectionKey: string) => {
+  const handleSectionFieldChange = (sectionKey: string, fieldId: string | null) => {
+    updateSectionField(sectionKey, 'field_id', fieldId);
+    const field = fields.find((candidate) => candidate.id === fieldId);
+    // Documented field-acre precedence: override → measured → legacy total.
+    const effectiveAcres = field?.override_acres ?? field?.measured_acres ?? field?.total_acres;
+    if (effectiveAcres == null) return;
+
+    setSections((prev) =>
+      prev.map((section) => {
+        if (section._key !== sectionKey) return section;
+        return {
+          ...section,
+          items: section.items.map((item) => {
+            if ((item.acres ?? 0) !== 0) return item;
+            return recalcItem({
+              ...item,
+              acres: effectiveAcres,
+              calc_mode: item.calc_mode === 'units_direct' ? 'units_direct' : 'rate_acres',
+            }, tier);
+          }),
+        };
+      })
+    );
+  };
+
+  function addItem(sectionKey: string): string {
+    const newItem = makeEmptyItem();
     setSections((prev) =>
       prev.map((sec) => {
         if (sec._key !== sectionKey) return sec;
-        const newItem = makeEmptyItem();
         newItem.sort_order = sec.items.length + 1;
         return { ...sec, items: [...sec.items, newItem] };
       })
     );
-  };
+    return newItem._key;
+  }
 
   const removeItem = (sectionKey: string, itemKey: string) => {
     setSections((prev) =>
@@ -977,6 +1204,7 @@ export default function QuoteBuilder() {
           assertRpcResult(holdData, 'create_planned_holds');
           plannedHoldsIdem.resetKey();
           toast('success', 'Inventory holds created for planned program');
+          await loadActivePlannedHolds(result);
         }
       } else if (!isPlanned && wasPlanned) {
         // Release holds when toggled off — zero rows is valid (no holds may exist)
@@ -989,6 +1217,7 @@ export default function QuoteBuilder() {
         if (releaseResult.error) toast('error', 'Failed to release inventory holds: ' + releaseResult.error.message);
         else if (releaseResult.data && releaseResult.data.length > 0) checkMutationResult(releaseResult, 'Release inventory holds');
         setWasPlanned(false);
+        setActivePlannedHolds([]);
       }
 
       if (!isEditing) navigate(`/quotes/${result}`, { replace: true });
@@ -1132,15 +1361,26 @@ export default function QuoteBuilder() {
     const verb = newStatus === 'declined' ? 'decline' : 'cancel';
     setStatusActionLoading(true);
     try {
-      const { data: draws, error: drawErr } = await supabase
-        .from('quote_product_draws')
-        .select('quantity_drawn')
-        .eq('quote_id', id)
-        .gt('quantity_drawn', 0)
-        .limit(1);
-      if (drawErr) throw drawErr;
-      if (draws && draws.length > 0) {
-        toast('warning', `This booking has partial draw-downs — close it from its orders (draw or cancel the remaining balance) before you ${verb} the quote.`);
+      const [orderDrawsRes, jobDrawsRes] = await Promise.all([
+        supabase
+          .from('quote_product_draws')
+          .select('quantity_drawn')
+          .eq('quote_id', id)
+          .gt('quantity_drawn', 0)
+          .limit(1),
+        // Layer 2: a job reservation also blocks a terminal transition — the
+        // _enforce_quote_terminal_not_drawn trigger now counts job draws too.
+        supabaseUntyped
+          .from('job_product_draws')
+          .select('quantity_drawn')
+          .eq('quote_id', id)
+          .gt('quantity_drawn', 0)
+          .limit(1),
+      ]);
+      if (orderDrawsRes.error) throw orderDrawsRes.error;
+      if (jobDrawsRes.error) throw jobDrawsRes.error;
+      if ((orderDrawsRes.data && orderDrawsRes.data.length > 0) || (jobDrawsRes.data && jobDrawsRes.data.length > 0)) {
+        toast('warning', `This booking has partial draw-downs or job reservations — close it from its orders/jobs (draw or cancel the remaining balance) before you ${verb} the quote.`);
         return;
       }
       const result = await supabase
@@ -1166,6 +1406,88 @@ export default function QuoteBuilder() {
       setStatusActionLoading(false);
       setConfirmDeclineOpen(false);
       setConfirmCancelOpen(false);
+    }
+  };
+
+  // Close a booking we fulfilled by APPLYING product for the customer (job
+  // applications), NOT by delivering it (convert/draw = chemical sale). Flips to
+  // the distinct terminal status 'closed_by_application' via the actor-bound,
+  // idempotent close_quote_as_applied RPC, which releases any un-applied leftover
+  // back to free inventory and reports how much. Never double-bills — the
+  // customer was already billed through each job's application invoice. (owner 2026-07-03)
+  const handleCloseAsApplied = async () => {
+    if (!id) return;
+    setClosingApplied(true);
+    try {
+      const idemKey = closeAppliedIdem.getKey();
+      // supabaseUntyped: close_quote_as_applied is a Layer 2 RPC not yet in the
+      // generated types (matches get_dispatch_stock_status / job_product_draws usage).
+      const { data, error } = await supabaseUntyped.rpc('close_quote_as_applied', {
+        p_quote_id: id,
+        p_performed_by: profile!.id,
+        p_idempotency_key: idemKey,
+      });
+      if (error) throw error;
+      closeAppliedIdem.resetKey();
+      const result = assertRpcResult<{ status: string; released_units?: number; active_jobs_remaining?: number; warnings?: string[] }>(data, 'close_quote_as_applied');
+      setStatus('closed_by_application');
+      setIsDirty(false);
+      const warnings = result.warnings || [];
+      toast('success', warnings.length > 0
+        ? `Booking closed — fulfilled by application. ${warnings.join('. ')}.`
+        : 'Booking closed — fulfilled by application.');
+    } catch (err) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { tags: { source: 'mutation', action: 'close_quote_as_applied' } });
+      if (hasRpcCode(err, RpcErrorCodes.BOOKING_CLOSED)) {
+        toast('warning', 'This booking is no longer open — refresh the page to see its current status.');
+      } else {
+        toast('error', err instanceof Error ? err.message : 'Failed to close the booking');
+      }
+    } finally {
+      setClosingApplied(false);
+      setConfirmCloseAppliedOpen(false);
+    }
+  };
+
+  // Close a booking the customer ABANDONED (walked away, or drew only part and
+  // never took the rest). Flips to the terminal status 'closed_short' via the
+  // actor-bound, idempotent close_quote_as_short RPC, which releases the
+  // un-fulfilled remainder back to free inventory. Never bills — any drawn
+  // portion was already billed via its order; the remainder was never billed.
+  // Refuses if scheduled/in-progress jobs still exist (BOOKING_HAS_ACTIVE_JOBS). (#1)
+  const handleCloseAsShort = async () => {
+    if (!id) return;
+    setClosingShort(true);
+    try {
+      const idemKey = closeShortIdem.getKey();
+      // supabaseUntyped: close_quote_as_short is a new RPC not yet in the
+      // generated types (matches close_quote_as_applied usage).
+      const { data, error } = await supabaseUntyped.rpc('close_quote_as_short', {
+        p_quote_id: id,
+        p_performed_by: profile!.id,
+        p_idempotency_key: idemKey,
+      });
+      if (error) throw error;
+      closeShortIdem.resetKey();
+      const result = assertRpcResult<{ status: string; released_units?: number; warnings?: string[] }>(data, 'close_quote_as_short');
+      setStatus('closed_short');
+      setIsDirty(false);
+      const warnings = result.warnings || [];
+      toast('success', warnings.length > 0
+        ? `Booking closed short. ${warnings.join('. ')}.`
+        : 'Booking closed short.');
+    } catch (err) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { tags: { source: 'mutation', action: 'close_quote_as_short' } });
+      if (hasRpcCode(err, RpcErrorCodes.BOOKING_HAS_ACTIVE_JOBS)) {
+        toast('warning', 'This booking still has scheduled or in-progress jobs. Cancel or complete them first, then close the booking as short.');
+      } else if (hasRpcCode(err, RpcErrorCodes.BOOKING_CLOSED)) {
+        toast('warning', 'This booking is no longer open — refresh the page to see its current status.');
+      } else {
+        toast('error', err instanceof Error ? err.message : 'Failed to close the booking');
+      }
+    } finally {
+      setClosingShort(false);
+      setConfirmCloseShortOpen(false);
     }
   };
 
@@ -1383,6 +1705,7 @@ export default function QuoteBuilder() {
       } else {
         toast('success', `Quote emailed to ${selectedCustomer.email}`);
       }
+      await loadQuoteEmailStatus(quoteNumber);
       await logActivity({
         event: 'quote_emailed',
         description: `Quote ${quoteNumber} emailed to ${selectedCustomer.email}`,
@@ -1399,30 +1722,47 @@ export default function QuoteBuilder() {
     }
   };
 
-  const handleMarkPresented = async () => {
-    if (!quoteId || !profile) return;
+  const handleMarkPresented = async (): Promise<boolean> => {
+    if (!quoteId) {
+      toast('error', 'Save the quote first, then mark it presented');
+      return false;
+    }
+    if (!profile) return false;
     // Save current state first
     const savedId = await saveQuote(status === 'draft' ? 'draft' : status);
-    if (!savedId) return;
-    // Create version snapshot via RPC
-    const presVerIdemKey = createVersionIdem.getKey();
-    const { data: versionData, error } = await supabase.rpc('create_quote_version', {
-      p_quote_id: savedId,
-      p_performed_by: profile.id,
-      p_method: 'presented',
-      p_idempotency_key: presVerIdemKey,
-    });
-    if (error) { toast('error', 'Failed to mark as presented'); return; }
-    const ver = assertRpcResult<{ version_number: number }>(versionData, 'create_quote_version');
-    createVersionIdem.resetKey();
-    await logActivity({ event: 'quote_presented', description: `Quote ${quoteNumber} V${ver.version_number} marked as presented to ${selectedCustomer?.farm_name || 'customer'}`, performedBy: profile.id, entityType: 'quote', entityId: savedId, customerId });
-    toast('success', `Quote marked as presented (V${ver.version_number})`);
-    setShowPreviewModal(false);
-    if (previewPdfUrl) URL.revokeObjectURL(previewPdfUrl);
-    setPreviewPdfUrl(null);
-    setStatus('sent');
-    setIsDirty(false);
-    fetchVersions();
+    if (!savedId) return false;
+    try {
+      // Create version snapshot via RPC
+      const presVerIdemKey = createVersionIdem.getKey();
+      const { data: versionData, error } = await supabase.rpc('create_quote_version', {
+        p_quote_id: savedId,
+        p_performed_by: profile.id,
+        p_method: 'presented',
+        p_idempotency_key: presVerIdemKey,
+      });
+      if (error) throw error;
+      const ver = assertRpcResult<{ version_number: number }>(versionData, 'create_quote_version');
+      createVersionIdem.resetKey();
+      setShowPreviewModal(false);
+      if (previewPdfUrl) URL.revokeObjectURL(previewPdfUrl);
+      setPreviewPdfUrl(null);
+      setStatus('sent');
+      setIsDirty(false);
+      fetchVersions();
+      try {
+        await logActivity({ event: 'quote_presented', description: `Quote ${quoteNumber} V${ver.version_number} marked as presented to ${selectedCustomer?.farm_name || 'customer'}`, performedBy: profile.id, entityType: 'quote', entityId: savedId, customerId });
+      } catch (logError) {
+        // The version/status change already committed. Do not strand Book as Order
+        // because the secondary activity-feed write failed.
+        Sentry.captureException(logError instanceof Error ? logError : new Error(String(logError)), { tags: { source: 'activity_log', action: 'quote_presented' } });
+      }
+      toast('success', `Quote marked as presented (V${ver.version_number})`);
+      return true;
+    } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { tags: { source: 'critical_action', action: 'create_quote_version' } });
+      toast('error', 'Failed to mark as presented');
+      return false;
+    }
   };
 
   const AVAILABLE_PDF_COLUMNS = [
@@ -1487,10 +1827,22 @@ export default function QuoteBuilder() {
     window.location.reload();
   };
   const [schedulingJobSectionKey, setSchedulingJobSectionKey] = useState<string | null>(null);
+  // U13 (#111): quote_section.id -> the job already scheduled from it (if any).
+  // Populated by fetchQuote + updated locally right after a successful schedule
+  // so the badge/hide-button logic never needs a full page reload.
+  const [sectionJobs, setSectionJobs] = useState<Record<string, { id: string; job_number: string; status: JobStatus }>>({});
 
   const handleScheduleJob = async (sectionKey: string) => {
     const sec = sections.find((s) => s._key === sectionKey);
     if (!sec?.id || !quoteId || !profile) return;
+    // U13 (#111): create_job_from_quote_section only inserts a job_fields row
+    // `IF v_section.field_id IS NOT NULL` — a field-less section would silently
+    // create a job with ZERO locations (no acres, nothing to apply chemicals on
+    // or dispatch). Block here rather than let that job get created.
+    if (!sec.field_id) {
+      toast('error', 'Select a Field for this section before scheduling a job — a job needs a location to apply chemicals on and to dispatch.');
+      return;
+    }
     setSchedulingJobSectionKey(sectionKey);
     try {
       const idemKey = scheduleJobIdem.getKey();
@@ -1503,8 +1855,26 @@ export default function QuoteBuilder() {
       if (error) throw error;
       const result = assertRpcResult<{ job_id: string }>(data, 'create_job_from_quote_section');
       scheduleJobIdem.resetKey();
+      // U13 (#111): record the badge immediately (no reload needed) + it also
+      // hides the "Schedule Job" button for this section (the RPC would reject
+      // a second job for the same section anyway — this makes that visible
+      // BEFORE the user clicks, instead of via an error toast).
+      setSectionJobs((prev) => ({ ...prev, [sec.id as string]: { id: result.job_id, job_number: '(new)', status: 'scheduled' } }));
       toast('success', `Job scheduled from "${sec.section_name}"`);
       navigate(`/jobs/${result.job_id}`);
+      void (async () => {
+        try {
+          const { data: createdJob, error: createdJobError } = await supabase
+            .from('jobs')
+            .select('customer_id')
+            .eq('id', result.job_id)
+            .single();
+          if (createdJobError) return;
+          void warnIfOverCreditLimit(createdJob.customer_id, toast);
+        } catch {
+          // Non-blocking — the job is already committed and navigation has started.
+        }
+      })();
     } catch (err: unknown) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'schedule_job_from_quote' } });
       toast('error', err instanceof Error ? err.message : 'Failed to schedule job');
@@ -1516,14 +1886,8 @@ export default function QuoteBuilder() {
   // Partial booking draw-down: open the modal with the per-product balance
   const openDrawDownModal = async () => {
     if (!id) return;
-    // Guardrail parity with handleConvertToOrder: a booking drawn months after
-    // it was created may carry stale prices. First click surfaces the
-    // GuardrailBanner below the header; "Continue Anyway" lets the next click
-    // through. (2026-06-10 error-prevention review §3 LOW.)
-    if (quoteCreatedAt) {
-      const fresh = checkStaleQuote(quoteCreatedAt);
-      if (!fresh && !staleWarning?.dismissed) return;
-    }
+    // Draw-down bills at this quote's locked prices, so a current-price stale guard
+    // would be misleading and block the first click without protecting the customer.
     if (isDirty) {
       toast('warning', 'Save the quote before drawing down the booking');
       return;
@@ -1531,14 +1895,23 @@ export default function QuoteBuilder() {
     setDrawLoading(true);
     setShowDrawModal(true);
     try {
-      const [itemsRes, drawsRes] = await Promise.all([
+      const [itemsRes, drawsRes, jobDrawsRes] = await Promise.all([
         supabase.from('quote_items').select('product_id, total_units_needed').eq('quote_id', id),
         supabase.from('quote_product_draws').select('product_id, quantity_drawn').eq('quote_id', id),
+        // Layer 2 (§6.5): a job reservation also consumes the drawable booking, so the
+        // modal's remaining MUST subtract job draws too — otherwise it shows too much
+        // and lets the user submit an amount draw_down_quote now rejects as
+        // BOOKING_OVERDRAWN. Fold job draws into `drawn` (order + job) so drawn +
+        // remaining = booked, matching the server-side balance.
+        supabaseUntyped.from('job_product_draws').select('product_id, quantity_drawn').eq('quote_id', id),
       ]);
       if (itemsRes.error) throw itemsRes.error;
       if (drawsRes.error) throw drawsRes.error;
+      if (jobDrawsRes.error) throw jobDrawsRes.error;
       const drawnByProduct = new Map<string, number>();
       (drawsRes.data || []).forEach((d) => drawnByProduct.set(d.product_id, Number(d.quantity_drawn) || 0));
+      (jobDrawsRes.data || []).forEach((d: { product_id: string; quantity_drawn: number | null }) =>
+        drawnByProduct.set(d.product_id, (drawnByProduct.get(d.product_id) || 0) + (Number(d.quantity_drawn) || 0)));
       const bookedByProduct = new Map<string, number>();
       (itemsRes.data || []).forEach((it) => {
         if (!it.product_id) return;
@@ -1551,6 +1924,7 @@ export default function QuoteBuilder() {
           return {
             product_id: productId,
             product_name: products.find((p) => p.id === productId)?.product_name || 'Unknown product',
+            unit: products.find((p) => p.id === productId)?.inventory_unit ?? null,
             booked,
             drawn,
             remaining: Math.max(booked - drawn, 0),
@@ -1658,7 +2032,7 @@ export default function QuoteBuilder() {
       } catch { /* ignore — don't block conversion if check fails */ }
     }
 
-    executeConvertToOrder();
+    await executeConvertToOrder();
   };
 
   const executeConvertToOrder = async () => {
@@ -1674,15 +2048,27 @@ export default function QuoteBuilder() {
     // don't risk the destructive pre-accept.
     if (id) {
       try {
-        const { data: drawCheck, error: drawCheckError } = await supabase
-          .from('quote_product_draws')
-          .select('quantity_drawn')
-          .eq('quote_id', id)
-          .gt('quantity_drawn', 0)
-          .limit(1);
-        if (drawCheckError) throw drawCheckError;
-        if (drawCheck && drawCheck.length > 0) {
-          toast('warning', 'This booking has partial draw-downs — use "Partial Order" to draw the remaining balance instead of converting.');
+        const [orderDrawRes, jobDrawRes] = await Promise.all([
+          supabase
+            .from('quote_product_draws')
+            .select('quantity_drawn')
+            .eq('quote_id', id)
+            .gt('quantity_drawn', 0)
+            .limit(1),
+          // Layer 2: a job reservation also makes the booking partially drawn —
+          // whole conversion would re-order units a job already holds/bills (§6.5).
+          // job_product_draws isn't in the generated types yet → untyped client.
+          supabaseUntyped
+            .from('job_product_draws')
+            .select('quantity_drawn')
+            .eq('quote_id', id)
+            .gt('quantity_drawn', 0)
+            .limit(1),
+        ]);
+        if (orderDrawRes.error) throw orderDrawRes.error;
+        if (jobDrawRes.error) throw jobDrawRes.error;
+        if ((orderDrawRes.data && orderDrawRes.data.length > 0) || (jobDrawRes.data && jobDrawRes.data.length > 0)) {
+          toast('warning', 'This booking has partial draw-downs or job reservations — use "Partial Order" to draw the remaining balance instead of converting.');
           setConverting(false);
           return;
         }
@@ -1752,6 +2138,63 @@ export default function QuoteBuilder() {
       navigate(`/orders/${result.order_id}`);
     } catch (error: unknown) {
       Sentry.captureException(error, { tags: { source: 'critical_action', action: 'convert_quote_to_order' } });
+
+      // Lost-response-after-commit must not resurrect the booking (push-gate P1).
+      let liveQuoteStatus: string | null = null;
+      try {
+        const { data: liveQuote, error: liveQuoteError } = await supabase
+          .from('quotes')
+          .select('status')
+          .eq('id', savedId)
+          .maybeSingle();
+        if (liveQuoteError) throw liveQuoteError;
+        liveQuoteStatus = liveQuote?.status ?? null;
+      } catch {
+        // A failed verification leaves the conversion outcome unknown. Do not
+        // write a recovery status without proving the quote is still open.
+      }
+
+      if (liveQuoteStatus === 'accepted') {
+        let createdOrderId: string | null = null;
+        try {
+          const { data: createdOrders, error: createdOrderError } = await supabase
+            .from('orders')
+            .select('id')
+            .eq('quote_id', savedId)
+            .is('deleted_at', null)
+            .order('created_at', { ascending: false })
+            .limit(1);
+          if (createdOrderError) throw createdOrderError;
+          createdOrderId = createdOrders?.[0]?.id ?? null;
+        } catch (orderLookupError) {
+          Sentry.captureException(orderLookupError, { tags: { source: 'read', action: 'find_order_after_committed_quote_convert' } });
+        }
+
+        if (createdOrderId) {
+          toast('success', 'The order was created — opening it');
+          setIsDirty(false);
+          navigate(`/orders/${createdOrderId}`);
+        } else {
+          toast('warning', 'The quote was accepted, but its order could not be found — check the Orders page');
+          try {
+            await fetchQuote(savedId);
+          } catch (refetchError) {
+            Sentry.captureException(refetchError, { tags: { source: 'read', action: 'refetch_quote_after_committed_convert' } });
+          }
+        }
+        setConverting(false);
+        return;
+      }
+
+      if (liveQuoteStatus === null) {
+        // The conversion RPC is transactional, so a genuine failure leaves the
+        // status unchanged. A recovery write is only safe after a successful
+        // read proves the quote was not accepted.
+        toast('warning', 'Could not verify the outcome — check the Orders page before retrying; the quote status was left unchanged.');
+        setConverting(false);
+        return;
+      }
+
       // Friendly mapping for the booking guards (server-side backstop for the
       // pre-check above — e.g. a draw landed from another tab mid-convert).
       if (hasRpcCode(error, RpcErrorCodes.BOOKING_PARTIALLY_DRAWN)) {
@@ -1768,9 +2211,10 @@ export default function QuoteBuilder() {
         || 'Failed to create order';
       toast('error', errMsg);
       }
-      // Bug #29 fix: Revert quote status since conversion failed
-      // Use the status BEFORE conversion (was 'accepted' from saveQuote, revert to previous)
-      const revertTo = status === 'accepted' ? 'sent' : (status || 'sent');
+      // A successful status check proved the quote was not accepted. A draft can
+      // only reach this path through Book as Order, whose mark-presented step
+      // already committed it as sent; keep it sent so normal Convert remains.
+      const revertTo = status === 'accepted' || status === 'draft' ? 'sent' : (status || 'sent');
       try {
         const revertResult = await supabase.from('quotes').update({ status: revertTo }).eq('id', savedId).select();
         checkMutationResult(revertResult, 'Revert quote status');
@@ -1783,6 +2227,46 @@ export default function QuoteBuilder() {
       }
     }
     setConverting(false);
+  };
+
+  // U16b: one-step booking for a clean, saved draft. Mark Presented uses the
+  // existing create_quote_version path (snapshot + sent), then the existing
+  // conversion handler applies all stale/duplicate/draw-down guards. If the
+  // first step succeeds but conversion fails, executeConvertToOrder restores the
+  // quote to sent, so staff can retry with the normal Convert button.
+  const handleBookAsOrder = async () => {
+    setBookingAsOrder(true);
+    try {
+      // A lost mark-sent response leaves the DB sent while the UI thinks draft —
+      // resume the chain from the true state (push-gate P2).
+      let alreadyMarkedSent = false;
+      if (quoteId) {
+        try {
+          const { data: liveQuote, error: liveQuoteError } = await supabase
+            .from('quotes')
+            .select('status')
+            .eq('id', quoteId)
+            .maybeSingle();
+          if (liveQuoteError) throw liveQuoteError;
+          const liveStatus = liveQuote?.status;
+          if (liveStatus === 'sent' || liveStatus === 'revised') {
+            setStatus(liveStatus);
+            alreadyMarkedSent = true;
+          }
+        } catch {
+          // If the live-status check fails, continue with the existing flow.
+        }
+      }
+
+      if (!alreadyMarkedSent) {
+        const markedSent = await handleMarkPresented();
+        if (!markedSent) return;
+      }
+      setConfirmBookAsOrderOpen(false);
+      await handleConvertToOrder();
+    } finally {
+      setBookingAsOrder(false);
+    }
   };
 
   const filteredProducts = useMemo(() => {
@@ -1838,7 +2322,7 @@ export default function QuoteBuilder() {
           )}
           {isEditing && (
             <Badge variant={statusToBadgeVariant[status] || 'default'}>
-              {status}
+              {status === 'closed_by_application' ? 'Fulfilled (Applied)' : status === 'closed_short' ? 'Closed — Short' : status}
             </Badge>
           )}
           <label className="flex items-center gap-2 text-sm ml-4">
@@ -1869,17 +2353,6 @@ export default function QuoteBuilder() {
           >
             Save Draft
           </Button>
-          <button
-            onClick={() => setCustomerView(!customerView)}
-            className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-lg border transition-colors ${
-              customerView
-                ? 'bg-crx-green text-white border-crx-green'
-                : 'border-gray-200 text-secondary hover:border-crx-green hover:text-crx-green'
-            }`}
-          >
-            {customerView ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-            Customer View
-          </button>
           <Button
             variant="secondary"
             icon={<Download className="w-4 h-4" />}
@@ -1888,26 +2361,70 @@ export default function QuoteBuilder() {
           >
             Download PDF
           </Button>
-          {quoteId && (
-            <>
-              <button
-                onClick={() => setShowSaveTemplateModal(true)}
-                className="flex items-center gap-2 px-3 py-1.5 text-sm border border-gray-200 rounded-lg hover:bg-gray-50"
-              >
-                <Copy className="w-4 h-4" />
-                Save as Template
-              </button>
-              <HelpTip text="Saves this quote's structure as a reusable template. Great for customers who reorder the same products each season." className="ml-1" />
-              <button
-                onClick={() => setShowRolloverModal(true)}
-                className="flex items-center gap-2 px-3 py-1.5 text-sm border border-gray-200 rounded-lg hover:bg-gray-50"
-              >
-                <RotateCcw className="w-4 h-4" />
-                Roll Over to New Season
-              </button>
-              <HelpTip text="Copies this planned program into the next season (Oct–Sep) with the same products and quantities. Dates update automatically." className="ml-1" />
-            </>
-          )}
+          <div
+            className="relative"
+            ref={moreActionsRef}
+            onBlur={(event) => {
+              if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                setMoreActionsOpen(false);
+              }
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => setMoreActionsOpen((open) => !open)}
+              aria-label="More actions"
+              aria-haspopup="menu"
+              aria-expanded={moreActionsOpen}
+              className="inline-flex items-center justify-center rounded-lg border border-gray-200 p-2 text-secondary transition-colors hover:border-crx-green hover:text-crx-green"
+            >
+              <MoreHorizontal className="w-4 h-4" />
+            </button>
+            {moreActionsOpen && (
+              <div role="menu" className="absolute right-0 z-30 mt-2 w-60 rounded-lg border border-gray-200 bg-white py-1 shadow-lg">
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setCustomerView(!customerView);
+                    setMoreActionsOpen(false);
+                  }}
+                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-nav-dark hover:bg-gray-50"
+                >
+                  {customerView ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  Customer View
+                </button>
+                {quoteId && (
+                  <>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setShowSaveTemplateModal(true);
+                        setMoreActionsOpen(false);
+                      }}
+                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-nav-dark hover:bg-gray-50"
+                    >
+                      <Copy className="w-4 h-4" />
+                      Save as Template
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setShowRolloverModal(true);
+                        setMoreActionsOpen(false);
+                      }}
+                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-nav-dark hover:bg-gray-50"
+                    >
+                      <RotateCcw className="w-4 h-4" />
+                      Roll Over to New Season
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
           {canSend && (
             <Button
               variant="primary"
@@ -1917,32 +2434,70 @@ export default function QuoteBuilder() {
               Preview Quote
             </Button>
           )}
-          {isEditing && canConvert && (
-            <>
+          {isEditing && quoteId && currentStatus === 'draft' && !isDirty && (
+            <Button
+              variant="secondary"
+              icon={<ShoppingCart className="w-4 h-4" />}
+              showChevron={false}
+              onClick={() => setConfirmBookAsOrderOpen(true)}
+              loading={bookingAsOrder}
+            >
+              Book as Order
+            </Button>
+          )}
+          {isEditing && (canConvert || canDraw) && (
+            <div
+              className="relative"
+              ref={createOrderMenuRef}
+              onBlur={(event) => {
+                if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                  setCreateOrderMenuOpen(false);
+                }
+              }}
+            >
               <Button
                 variant="primary"
                 icon={<ShoppingCart className="w-4 h-4" />}
-                onClick={() => setConfirmConvertOpen(true)}
-                loading={converting}
-              >
-                Convert to Order
-              </Button>
-              <HelpTip text="Creates a confirmed order from this quote. Inventory holds transfer to the order and the customer gets a confirmation email." className="ml-1" />
-            </>
-          )}
-          {isEditing && canDraw && (
-            <>
-              <Button
-                variant="secondary"
-                icon={<PackageOpen className="w-4 h-4" />}
                 showChevron={false}
-                onClick={openDrawDownModal}
-                loading={drawLoading}
+                onClick={() => setCreateOrderMenuOpen((open) => !open)}
+                aria-haspopup="menu"
+                aria-expanded={createOrderMenuOpen}
               >
-                Partial Order
+                Create Order ▾
               </Button>
-              <HelpTip text="Pull part of this booking into an order — e.g. send 200 of the 500 booked gallons. The quote keeps the remaining balance and stays open until fully drawn." className="ml-1" />
-            </>
+              {createOrderMenuOpen && (
+                <div role="menu" className="absolute right-0 z-30 mt-2 w-64 rounded-lg border border-gray-200 bg-white py-1 shadow-lg">
+                  <button
+                    type="button"
+                    role="menuitem"
+                    disabled={!canConvert || converting}
+                    title={canConvert ? undefined : 'Whole-booking conversion is available after the quote is sent or revised.'}
+                    onClick={() => {
+                      setConfirmConvertOpen(true);
+                      setCreateOrderMenuOpen(false);
+                    }}
+                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-nav-dark hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <ShoppingCart className="w-4 h-4" />
+                    Convert whole booking
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    disabled={!canDraw || drawLoading}
+                    title={canDraw ? undefined : 'Partial draw-down is available after the quote is sent or revised.'}
+                    onClick={() => {
+                      openDrawDownModal();
+                      setCreateOrderMenuOpen(false);
+                    }}
+                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-nav-dark hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <PackageOpen className="w-4 h-4" />
+                    Draw part of booking…
+                  </button>
+                </div>
+              )}
+            </div>
           )}
           {isEditing && currentStatus === 'sent' && (
             <Button
@@ -1954,6 +2509,34 @@ export default function QuoteBuilder() {
             >
               Revise Quote
             </Button>
+          )}
+          {canCloseApplied && (
+            <>
+              <Button
+                variant="secondary"
+                icon={<CheckCircle className="w-4 h-4" />}
+                showChevron={false}
+                onClick={() => setConfirmCloseAppliedOpen(true)}
+                loading={closingApplied}
+              >
+                Close — Applied
+              </Button>
+              <HelpTip text="Use this when WE applied this booking's product for the customer (job applications), instead of delivering it. It closes the booking as fulfilled by application and releases any un-applied product back to free inventory. The customer was already billed through each job's application invoice — this never bills again." className="ml-1" />
+            </>
+          )}
+          {canCloseShort && (
+            <>
+              <Button
+                variant="secondary"
+                icon={<PackageOpen className="w-4 h-4" />}
+                showChevron={false}
+                onClick={() => setConfirmCloseShortOpen(true)}
+                loading={closingShort}
+              >
+                Close — Short
+              </Button>
+              <HelpTip text="Use this when the customer walked away from this booking (or took only part of it) and won't take the rest. It closes the booking and releases the un-fulfilled remainder back to free inventory. Any product already drawn was billed on its order — this never bills again. This is the way to close a booking that Decline/Cancel refuse because it was partially drawn." className="ml-1" />
+            </>
           )}
           {canDecline && (
             <Button
@@ -2007,10 +2590,7 @@ export default function QuoteBuilder() {
         </div>
       </div>
 
-      {/* Stale-quote warning for the Partial Order path — the convert path
-          shows this banner inside its confirm modal, but openDrawDownModal
-          returns before any modal opens, so surface it at page level here.
-          Renders nothing unless a warning is active and undismissed. */}
+      {/* Covers a stale warning left active when the convert-confirm modal closes; draw-down no longer raises it. */}
       {!confirmConvertOpen && (
         <GuardrailBanner warning={staleWarning} onDismiss={dismissStaleWarning} />
       )}
@@ -2079,12 +2659,18 @@ export default function QuoteBuilder() {
                 </thead>
                 <tbody>
                   {bookingSettlement.lines.map((ln) => (
-                    <tr key={ln.product_id} className="border-b border-gray-50">
-                      <td className="px-2 py-1">{ln.product_name ?? '—'}</td>
-                      <td className="px-2 py-1 text-right">{ln.booked_qty}</td>
-                      <td className="px-2 py-1 text-right">{ln.drawn_qty}</td>
-                      <td className="px-2 py-1 text-right">{ln.remaining_qty}</td>
-                    </tr>
+                    (() => {
+                      const unit = products.find((product) => product.id === ln.product_id)?.inventory_unit;
+                      const suffix = unit ? ` ${unit}` : '';
+                      return (
+                        <tr key={ln.product_id} className="border-b border-gray-50">
+                          <td className="px-2 py-1">{ln.product_name ?? '—'}</td>
+                          <td className="px-2 py-1 text-right">{ln.booked_qty}{suffix}</td>
+                          <td className="px-2 py-1 text-right">{ln.drawn_qty}{suffix}</td>
+                          <td className="px-2 py-1 text-right">{ln.remaining_qty}{suffix}</td>
+                        </tr>
+                      );
+                    })()
                   ))}
                 </tbody>
               </table>
@@ -2373,18 +2959,12 @@ export default function QuoteBuilder() {
             <label className="block text-sm font-medium text-secondary mb-1">
               Customer
             </label>
-            <select
+            <SearchableSelect
+              options={customers.map((c) => ({ value: c.id, label: c.farm_name }))}
               value={customerId}
-              onChange={(e) => handleCustomerChange(e.target.value)}
-              className="w-full px-3 py-2 text-sm text-nav-dark bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
-            >
-              <option value="">Select a customer...</option>
-              {customers.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.farm_name}
-                </option>
-              ))}
-            </select>
+              onChange={handleCustomerChange}
+              placeholder="Select a customer..."
+            />
           </div>
           <div>
             <label className="block text-sm font-medium text-secondary mb-1">
@@ -2455,6 +3035,7 @@ export default function QuoteBuilder() {
                   <button
                     onClick={() => toggleSectionCollapse(sec._key)}
                     className="p-1 rounded hover:bg-gray-100 text-secondary"
+                    aria-label={isCollapsed ? 'Expand section' : 'Collapse section'}
                   >
                     {isCollapsed ? (
                       <ChevronDown className="w-4 h-4" />
@@ -2471,25 +3052,65 @@ export default function QuoteBuilder() {
                     className="text-sm font-semibold font-heading text-nav-dark bg-transparent border-none outline-none focus:ring-0 flex-1"
                     placeholder="Section name"
                   />
+                  {/* U13 (#111): per-section job badge — a section that already has a
+                      scheduled job links straight to it (and the Schedule Job button
+                      below hides, since a 2nd job per section is rejected server-side). */}
+                  {sec.id && sectionJobs[sec.id] && (
+                    <button
+                      type="button"
+                      onClick={() => navigate(`/jobs/${sectionJobs[sec.id as string].id}`)}
+                      className="flex-shrink-0"
+                      title="Open the job scheduled from this section"
+                    >
+                      <Badge variant={statusToBadgeVariant[sectionJobs[sec.id as string].status] || 'info'}>
+                        Job {sectionJobs[sec.id as string].job_number}
+                      </Badge>
+                    </button>
+                  )}
                   <span className="text-sm font-mono text-secondary">
                     {fmt(sectionTotal)}
                   </span>
                   {isPlanned && (
-                    <div className="flex items-center gap-2 ml-2">
-                      <label className="text-xs text-secondary whitespace-nowrap flex items-center">Needed By:<HelpTip text="This is when the customer needs the product — different from the quote expiration. Used for inventory forecasting and delivery scheduling." className="ml-1" /></label>
-                      <input
-                        type="date"
-                        value={sec.needed_by_date || ''}
-                        onChange={(e) => updateSectionField(sec._key, 'needed_by_date', e.target.value || null)}
-                        className="text-sm border border-gray-200 rounded px-2 py-1"
-                      />
-                    </div>
+                    <>
+                      <div className="flex items-center gap-2 ml-2">
+                        <label className="text-xs text-secondary whitespace-nowrap flex items-center">Needed By:<HelpTip text="This is when the customer needs the product — different from the quote expiration. Used for inventory forecasting and delivery scheduling." className="ml-1" /></label>
+                        <input
+                          type="date"
+                          value={sec.needed_by_date || ''}
+                          onChange={(e) => updateSectionField(sec._key, 'needed_by_date', e.target.value || null)}
+                          className="text-sm border border-gray-200 rounded px-2 py-1"
+                        />
+                      </div>
+                      {/* Holds have one row per quote item; this per-section view aggregates the quote's matching rows for each product. */}
+                      {quoteId && activePlannedHolds.length > 0 && (
+                        <div className="ml-2 flex flex-col items-start gap-0.5 text-xs text-secondary">
+                          {Array.from(new Set(sec.items.map((item) => item.product_id).filter(Boolean))).map((productId) => {
+                            const holds = activePlannedHolds.filter((candidate) => candidate.product_id === productId);
+                            if (holds.length === 0) return null;
+                            const heldQuantity = holds.reduce((sum, hold) => sum + hold.quantity, 0);
+                            const earliestExpiry = holds.reduce<string | null>((earliest, hold) => {
+                              if (hold.expires_at == null) return earliest;
+                              return earliest == null || hold.expires_at < earliest ? hold.expires_at : earliest;
+                            }, null);
+                            const unit = products.find((product) => product.id === productId)?.inventory_unit;
+                            const isLapsed = earliestExpiry != null && earliestExpiry.slice(0, 10) <= localToday();
+                            return (
+                              <span key={productId}>
+                                Held: {heldQuantity}{unit ? ` ${unit}` : ''} &middot; {earliestExpiry ? (
+                                  <>expires <span className={isLapsed ? 'text-red-600 font-medium' : undefined}>{parseLocalDate(earliestExpiry.slice(0, 10)).toLocaleDateString()}{isLapsed ? ' (lapsed)' : ''}</span></>
+                                ) : 'no expiry (no needed-by date)'}
+                              </span>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </>
                   )}
                   <div className="flex items-center gap-2 ml-2">
                     <label className="text-xs text-secondary whitespace-nowrap">Field:</label>
                     <select
                       value={sec.field_id || ''}
-                      onChange={(e) => updateSectionField(sec._key, 'field_id', e.target.value || null)}
+                      onChange={(e) => handleSectionFieldChange(sec._key, e.target.value || null)}
                       className="text-sm border border-gray-200 rounded px-2 py-1 max-w-[180px]"
                     >
                       <option value="">— None —</option>
@@ -2512,15 +3133,23 @@ export default function QuoteBuilder() {
                   >
                     Add Item
                   </Button>
-                  {isPlanned && quoteId && sec.id && sec.items.length > 0 && (
-                    <Button variant="ghost" size="sm" icon={<CalendarClock className="w-3 h-3" />} showChevron={false} onClick={() => handleScheduleJob(sec._key)} loading={schedulingJobSectionKey === sec._key}>
+                  {canScheduleJobs && quoteId && sec.id && sec.items.length > 0 && !sectionJobs[sec.id] && (
+                    <Button variant="ghost" size="sm" icon={<CalendarClock className="w-3 h-3" />} showChevron={false} onClick={() => currentStatus === 'draft' ? setConfirmDraftScheduleKey(sec._key) : handleScheduleJob(sec._key)} loading={schedulingJobSectionKey === sec._key}>
                       Schedule Job
                     </Button>
+                  )}
+                  {scheduleBlockedAccepted && quoteId && sec.id && sec.items.length > 0 && (
+                    <span className="inline-flex items-center gap-1 text-xs text-secondary">
+                      <XCircle className="w-3 h-3 text-orange-500" />
+                      Sold — make a standalone job
+                      <HelpTip text="This booking was accepted and converted to a chemical sale (order). To do field work, create a standalone job from the Jobs page — scheduling from a sold booking would double-count the product." />
+                    </span>
                   )}
                   {sections.length > 1 && (
                     <button
                       onClick={() => removeSection(sec._key)}
                       className="p-1.5 rounded-lg text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors"
+                      aria-label="Remove section"
                     >
                       <Trash2 className="w-4 h-4" />
                     </button>
@@ -2831,6 +3460,7 @@ export default function QuoteBuilder() {
                               <button
                                 onClick={() => removeItem(sec._key, item._key)}
                                 className="p-1 rounded text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors"
+                                aria-label="Remove line item"
                               >
                                 <Trash2 className="w-3.5 h-3.5" />
                               </button>
@@ -2920,10 +3550,7 @@ export default function QuoteBuilder() {
 
       <Modal
         open={productSearchOpen !== null}
-        onClose={() => {
-          setProductSearchOpen(null);
-          setProductQuery('');
-        }}
+        onClose={closeProductPicker}
         title="Select"
         accent="Product"
         maxWidth="max-w-2xl"
@@ -2940,13 +3567,27 @@ export default function QuoteBuilder() {
               autoFocus
             />
           </div>
+          <label className="inline-flex items-center gap-2 text-sm text-secondary cursor-pointer">
+            <input
+              type="checkbox"
+              checked={keepProductPickerOpen}
+              onChange={(e) => setKeepProductPickerOpen(e.target.checked)}
+              className="rounded border-gray-300 text-crx-green focus:ring-crx-green"
+            />
+            Keep open &mdash; add several
+          </label>
           <div className="max-h-80 overflow-y-auto divide-y divide-gray-50">
             {filteredProducts.length === 0 ? (
               <p className="text-sm text-secondary py-4 text-center">
                 No products found
               </p>
             ) : (
-              filteredProducts.map((p) => (
+              filteredProducts.map((p) => {
+                // P2-5: catalog $/acre at this tier, computed correctly from the
+                // product's own rate + units (NOT the broken tierN_price_per_acre
+                // columns) — matches what the line will show once added.
+                const perAcre = catalogPricePerAcre(p, tier, unitConversions);
+                return (
                 <button
                   key={p.id}
                   onClick={() => {
@@ -2975,9 +3616,15 @@ export default function QuoteBuilder() {
                     <p className="text-xs text-gray-400">
                       T{tier} price
                     </p>
+                    {perAcre != null && (
+                      <p className="text-xs font-mono text-crx-green" title={`Approx. $/acre at tier ${tier}, applied at this product's standard rate`}>
+                        {fmt(perAcre)}/ac
+                      </p>
+                    )}
                   </div>
                 </button>
-              ))
+                );
+              })
             )}
           </div>
         </div>
@@ -3075,16 +3722,16 @@ export default function QuoteBuilder() {
             Download PDF
           </Button>
           <Button
-            variant="primary"
+            variant="secondary"
             icon={<CheckCircle className="w-4 h-4" />}
             onClick={handleMarkPresented}
             disabled={status !== 'draft' && status !== 'revised'}
           >
             Mark as Presented
           </Button>
-          <HelpTip text="Sends the quote PDF to the customer's email and locks it as 'Sent'. A version snapshot is saved automatically so you can always see what the customer received." className="ml-1" />
+          <HelpTip text="Marks the quote as sent WITHOUT emailing &mdash; use when you presented it in person" className="ml-1" />
           <Button
-            variant="secondary"
+            variant="primary"
             icon={<Send className="w-4 h-4" />}
             showChevron={false}
             onClick={handleEmailToGrower}
@@ -3092,6 +3739,12 @@ export default function QuoteBuilder() {
           >
             Email to Grower
           </Button>
+          {lastQuoteEmailAt && (
+            <span className="inline-flex items-center rounded-full bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700">
+              Emailed {new Date(lastQuoteEmailAt).toLocaleDateString()} ✓
+            </span>
+          )}
+          <HelpTip text="Emails the quote PDF to the grower and logs it" className="ml-1" />
         </div>
       </Modal>
 
@@ -3167,24 +3820,27 @@ export default function QuoteBuilder() {
                     {drawRows.map((row, idx) => (
                       <tr key={row.product_id} className="border-b last:border-0">
                         <td className="py-2 pr-2">{row.product_name}</td>
-                        <td className="py-2 pr-2 text-right">{row.booked}</td>
-                        <td className="py-2 pr-2 text-right">{row.drawn}</td>
-                        <td className="py-2 pr-2 text-right font-medium">{row.remaining}</td>
+                        <td className="py-2 pr-2 text-right">{row.booked}{row.unit ? ` ${row.unit}` : ''}</td>
+                        <td className="py-2 pr-2 text-right">{row.drawn}{row.unit ? ` ${row.unit}` : ''}</td>
+                        <td className="py-2 pr-2 text-right font-medium">{row.remaining}{row.unit ? ` ${row.unit}` : ''}</td>
                         <td className="py-2 text-right">
-                          <input
-                            type="number"
-                            min={0}
-                            max={row.remaining}
-                            step="any"
-                            value={row.qty}
-                            disabled={row.remaining <= 0}
-                            onChange={(e) => {
-                              const next = [...drawRows];
-                              next[idx] = { ...row, qty: e.target.value };
-                              setDrawRows(next);
-                            }}
-                            className="w-24 px-2 py-1 text-sm text-right border border-gray-200 rounded-lg disabled:bg-gray-50"
-                          />
+                          <div className="inline-flex items-center gap-1">
+                            <input
+                              type="number"
+                              min={0}
+                              max={row.remaining}
+                              step="any"
+                              value={row.qty}
+                              disabled={row.remaining <= 0}
+                              onChange={(e) => {
+                                const next = [...drawRows];
+                                next[idx] = { ...row, qty: e.target.value };
+                                setDrawRows(next);
+                              }}
+                              className="w-24 px-2 py-1 text-sm text-right border border-gray-200 rounded-lg disabled:bg-gray-50"
+                            />
+                            {row.unit && <span className="text-xs text-secondary">{row.unit}</span>}
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -3247,6 +3903,18 @@ export default function QuoteBuilder() {
       )}
 
       <ConfirmModal
+        open={confirmBookAsOrderOpen}
+        onClose={() => setConfirmBookAsOrderOpen(false)}
+        onConfirm={handleBookAsOrder}
+        title="Book as Order"
+        message="Mark this quote as sent and convert it to an order now?"
+        confirmLabel="Book as Order"
+        variant="info"
+        icon={ShoppingCart}
+        loading={bookingAsOrder || converting}
+      />
+
+      <ConfirmModal
         open={confirmDeclineOpen}
         onClose={() => setConfirmDeclineOpen(false)}
         onConfirm={() => setTerminalStatus('declined')}
@@ -3268,6 +3936,38 @@ export default function QuoteBuilder() {
         variant="danger"
         icon={Ban}
         loading={statusActionLoading}
+      />
+
+      <ConfirmModal
+        open={confirmCloseAppliedOpen}
+        onClose={() => setConfirmCloseAppliedOpen(false)}
+        onConfirm={handleCloseAsApplied}
+        title="Close — Fulfilled by Application"
+        message={`Close booking ${quoteNumber} as fulfilled by application (WE applied the product for the customer)? Any product still un-applied is released back to free inventory. The customer was already billed through each job's application invoice, so this never bills again. This is terminal.`}
+        confirmLabel="Close Booking"
+        icon={CheckCircle}
+        loading={closingApplied}
+      />
+
+      <ConfirmModal
+        open={confirmCloseShortOpen}
+        onClose={() => setConfirmCloseShortOpen(false)}
+        onConfirm={handleCloseAsShort}
+        title="Close — Short (customer walked away)"
+        message={`Close booking ${quoteNumber} short? Use this when the customer won't take the rest of this booking. The un-fulfilled remainder is released back to free inventory. Any product already drawn was billed on its order, so this never bills again. This is terminal. (If jobs are still scheduled against this booking, cancel or complete them first.)`}
+        confirmLabel="Close Booking"
+        icon={PackageOpen}
+        loading={closingShort}
+      />
+
+      <ConfirmModal
+        open={!!confirmDraftScheduleKey}
+        onClose={() => setConfirmDraftScheduleKey(null)}
+        onConfirm={() => { const k = confirmDraftScheduleKey; setConfirmDraftScheduleKey(null); if (k) handleScheduleJob(k); }}
+        title="Schedule job from a draft booking?"
+        message="This booking is still a draft — it hasn't been sent to the customer yet. You can schedule a job now, but the booking and its pricing may still change before it's sent. Continue?"
+        confirmLabel="Schedule Anyway"
+        icon={CalendarClock}
       />
 
       {showRevertModal && (

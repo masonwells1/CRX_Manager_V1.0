@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Save, Send, Ban, Plus, Trash2, Search, DollarSign, FileText, Printer, Truck, Mail, RotateCcw, AlertTriangle,
 } from 'lucide-react';
@@ -78,9 +78,11 @@ const statusBadge = (status: InvoiceStatus) => {
 export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'chemical' } = {}) {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { profile } = useAuth();
   const { toast } = useToast();
   const isAdmin = profile?.role === 'admin';
+  const isAdminOrRep = isAdmin || profile?.role === 'sales_rep';
   const saveIdem = useIdempotencyKey('save_invoice', profile?.id || '');
   const postIdem = useIdempotencyKey('post_invoice', profile?.id || '');
   const voidIdem = useIdempotencyKey('void_invoice', profile?.id || '');
@@ -90,14 +92,14 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
   // idempotency cache hits resolve correctly.
   const payIdem = useIdempotencyKey('allocate_payment', profile?.id || '');
   const reverseWoIdem = useIdempotencyKey('reverse_write_off', profile?.id || '');
+  const applyCreditIdem = useIdempotencyKey('apply_credit_memo_to_invoice', profile?.id || '');
   // #27: reverse "Transfer to Scheduling" — push a job-built field invoice back to
   // its source job. This is the editor a TRANSFERRED field invoice actually opens in
   // (a transferred invoice has a job_id but NO field_app_locations, so the #24
   // discriminator routes it here, not to the per-acre FieldApplicationInvoice).
   const transferToSchedulingIdem = useIdempotencyKey('transfer_invoice_to_job', profile?.id || '');
-  // #28: Unpost — reverse a posting on a posted field-application invoice (returns it
-  // to the editable Unposted list). Surfaced here so a TRANSFERRED field invoice (which
-  // opens in THIS generic editor, not the per-acre one) can be unposted in place.
+  // #28/U16b: Unpost — reverse a posting on a posted field-application or chemical-sale
+  // invoice (returns it to the editable Unposted list). The RPC is type-agnostic.
   // #28/FIX 4: per-invoice AND per-group key cache so a retry reuses the same key while a
   // different invoice/group always gets its own. A single invoice uses unpost_invoice
   // (keyed by id); a SPLIT GROUP routes through the atomic unpost_invoice_group (FIX 4 —
@@ -106,10 +108,11 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
   const unpostKeysRef = useRef<Record<string, string>>({});
   const { warning: creditWarning, check: checkCreditLimit, dismiss: dismissCreditWarning } = useCreditLimitCheck();
   const isNew = id === 'new';
+  const isMiscChargeLocked = isNew && searchParams.get('type') === 'misc_charge';
 
   // Invoice header
   const [invoice, setInvoice] = useState<Partial<Invoice>>({
-    invoice_type: 'chemical_sale',
+    invoice_type: isMiscChargeLocked ? 'misc_charge' : 'chemical_sale',
     status: 'draft',
     invoice_date: localToday(),
     customer_id: '',
@@ -161,7 +164,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
   const [showVoidModal, setShowVoidModal] = useState(false);
   const [voidReason, setVoidReason] = useState('');
   const [voiding, setVoiding] = useState(false);
-  // #28: Unpost confirm + in-flight (field-application invoices only).
+  // #28/U16b: Unpost confirm + in-flight (field-application and chemical-sale invoices).
   const [showUnpostModal, setShowUnpostModal] = useState(false);
   const [unposting, setUnposting] = useState(false);
 
@@ -176,6 +179,13 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
   const [payRef, setPayRef] = useState('');
   const [payNotes, setPayNotes] = useState('');
   const [payingInvoice, setPayingInvoice] = useState(false);
+  // Apply Credit Memo (credit-memo apply, 2026-07-10): apply an available same-customer
+  // credit memo against this open invoice via apply_credit_memo_to_invoice (net-zero).
+  const [showApplyCreditModal, setShowApplyCreditModal] = useState(false);
+  const [availableCredits, setAvailableCredits] = useState<Array<{ id: string; invoice_number: string; balance_cents: number }>>([]);
+  const [selectedCreditId, setSelectedCreditId] = useState('');
+  const [applyCreditAmount, setApplyCreditAmount] = useState('');
+  const [applyingCredit, setApplyingCredit] = useState(false);
 
   // Parent order context
   const [parentOrder, setParentOrder] = useState<{ id: string; order_number: string } | null>(null);
@@ -694,10 +704,10 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
     setVoiding(false);
   };
 
-  // #28: Unpost invoice — reverse a posting (posted/overdue -> unposted) on a
-  // field-application invoice, returning it to the editable Unposted list. The gated
-  // RPC refuses a paid/voided invoice, one with payments/prepay applied, or one in a
-  // closed accounting period — surfaced here as a toast.
+  // #28/U16b: Unpost invoice — reverse a posting (posted/overdue -> unposted) on a
+  // field-application or chemical-sale invoice, returning it to the editable Unposted
+  // list. The RPC refuses a paid/voided invoice, one with payments/prepay applied, or
+  // one in a closed accounting period — surfaced here as a toast.
   // FIX 4 (Wave 2a): a SPLIT GROUP routes through unpost_invoice_group, which unposts
   // ALL members in ONE transaction (all-or-nothing) — a single in-JS member loop could
   // leave a half-unposted group. A single invoice still uses unpost_invoice.
@@ -840,6 +850,62 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
       toast('error', sanitizeError(err));
     }
     setPayingInvoice(false);
+  };
+
+  // Apply a credit memo to THIS open invoice. Loads the customer's available (posted, negative-
+  // balance) credit memos, then calls apply_credit_memo_to_invoice — net-zero: it lowers this
+  // invoice's balance and consumes the credit, flipping the invoice to paid when it hits 0.
+  const openApplyCredit = async () => {
+    if (!invoice?.customer_id) { toast('error', 'This invoice has no customer linked'); return; }
+    const { data, error } = await supabase
+      .from('invoices')
+      .select('id, invoice_number, balance_cents')
+      .eq('customer_id', invoice.customer_id)
+      .eq('invoice_type', 'credit_memo')
+      .eq('status', 'posted')
+      .lt('balance_cents', 0)
+      .is('deleted_at', null)
+      .order('invoice_date', { ascending: true });
+    if (error) { toast('error', sanitizeError(error)); return; }
+    const credits = (data || []) as Array<{ id: string; invoice_number: string; balance_cents: number }>;
+    if (credits.length === 0) { toast('info', 'This customer has no available credit memos to apply'); return; }
+    const first = credits[0];
+    setAvailableCredits(credits);
+    setSelectedCreditId(first.id);
+    // default the amount to the smaller of the credit's available balance and what this invoice owes
+    setApplyCreditAmount((Math.min(-first.balance_cents, invoice.balance_cents || 0) / 100).toFixed(2));
+    applyCreditIdem.resetKey();
+    setShowApplyCreditModal(true);
+  };
+
+  const handleApplyCredit = async () => {
+    const amountCents = parseDollarsToCents(applyCreditAmount);
+    if (amountCents <= 0) { toast('error', 'Enter a valid amount to apply'); return; }
+    if (!selectedCreditId) { toast('error', 'Select a credit memo to apply'); return; }
+    if (!profile) { toast('error', 'Cannot apply credit — profile not loaded. Please refresh.'); return; }
+    setApplyingCredit(true);
+    try {
+      const key = applyCreditIdem.getKey();
+      const { data, error } = await supabase.rpc('apply_credit_memo_to_invoice', {
+        p_credit_memo_id: selectedCreditId,
+        p_target_invoice_id: id!,
+        p_amount_cents: amountCents,
+        p_performed_by: profile.id,
+        p_idempotency_key: key,
+      });
+      if (error) throw error;
+      assertRpcResult(data, 'apply_credit_memo_to_invoice');
+      applyCreditIdem.resetKey();
+      toast('success', `Applied ${fmt(amountCents)} credit to this invoice`);
+      setShowApplyCreditModal(false);
+      setSelectedCreditId('');
+      setApplyCreditAmount('');
+      if (id) fetchInvoice(id);
+    } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'apply_credit_memo_to_invoice' } });
+      toast('error', sanitizeError(err));
+    }
+    setApplyingCredit(false);
   };
 
   const handleReverseWriteOff = async () => {
@@ -1108,7 +1174,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
             </Button>
           )}
           <GuardrailBanner warning={creditWarning} onDismiss={dismissCreditWarning} />
-          {!isNew && editable && isAdmin && (
+          {!isNew && editable && isAdminOrRep && (
             <Button variant="secondary" icon={<Send className="w-4 h-4" />} onClick={openPostConfirm} loading={posting}>
               Post
             </Button>
@@ -1160,7 +1226,9 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
               Email
             </Button>
           )}
-          {!isNew && invoice.status === 'posted' && isAdmin && (
+          {/* U1 (#41): posted OR overdue — an overdue invoice is the one a check most
+              often arrives for; allocate_payment and apply_write_off both accept it. */}
+          {!isNew && (invoice.status === 'posted' || invoice.status === 'overdue') && isAdmin && (
             <>
               <Button
                 variant="secondary"
@@ -1184,15 +1252,28 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
               </Button>
             </>
           )}
-          {/* #28: Unpost — reverse a posting on a field-application invoice back to the
-              Unposted list. Surfaced here because a TRANSFERRED field invoice opens in
-              this generic editor (job_id, no field_app_locations). Posted/overdue only;
-              the RPC refuses one with payments/prepay or in a closed period.
-              FIX 5 (Wave 2a): NOT admin-gated — unpost_invoice/_group explicitly allow
-              sales_rep, and the Posted list + per-acre editor already offer sales reps
-              Unpost. (Void stays admin-only below.) */}
-          {!isNew && invoice.invoice_type === 'field_application'
-            && (invoice.status === 'posted' || invoice.status === 'overdue') && (
+          {/* Apply Credit (credit-memo apply, 2026-07-10): admin+sales_rep, on a posted/overdue
+              non-credit invoice that still owes — put an available same-customer credit memo
+              against it. */}
+          {!isNew && invoice.invoice_type !== 'credit_memo'
+            && (invoice.status === 'posted' || invoice.status === 'overdue')
+            && (invoice.balance_cents || 0) > 0 && isAdminOrRep && (
+              <Button
+                variant="secondary"
+                icon={<RotateCcw className="w-4 h-4" />}
+                onClick={openApplyCredit}
+                showChevron={false}
+              >
+                Apply Credit
+              </Button>
+          )}
+          {/* #28/U16b: Unpost — reverse a posting on a field-application or chemical-sale
+              invoice back to the Unposted list. Posted/overdue only; the RPC refuses one
+              with payments/prepay or in a closed period.
+              U16b: explicitly gated to admin/sales_rep, matching the RPC. (Void stays
+              admin-only below.) */}
+          {!isNew && (invoice.invoice_type === 'field_application' || invoice.invoice_type === 'chemical_sale')
+            && (invoice.status === 'posted' || invoice.status === 'overdue') && isAdminOrRep && (
               <Button
                 variant="secondary"
                 icon={<RotateCcw className="w-4 h-4" />}
@@ -1273,13 +1354,15 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
 
             {/* Type — locked to a read-only label on the segregated field route
                  (Codex P2): a field invoice must not be reclassified to Chemical
-                 Sales from the field-invoices area. */}
+                 Sales from the field-invoices area. A new misc-charge entry is
+                 locked in the selector below. */}
             <div>
               <label className="text-sm font-medium text-nav-dark">Invoice Type</label>
               {editable && routeArea !== 'field' ? (
                 <select
                   value={invoice.invoice_type || 'chemical_sale'}
                   onChange={(e) => setInvoice((prev) => ({ ...prev, invoice_type: e.target.value as InvoiceType }))}
+                  disabled={isMiscChargeLocked}
                   className="mt-1 w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 >
                   <option value="chemical_sale">Chemical Sale</option>
@@ -1292,6 +1375,9 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
                 </select>
               ) : (
                 <p className="mt-1 text-sm capitalize">{(invoice.invoice_type || '').replace(/_/g, ' ')}</p>
+              )}
+              {isMiscChargeLocked && (
+                <p className="mt-1 text-sm text-gray-500">Locked — opened as a Misc Charge</p>
               )}
             </div>
 
@@ -1701,6 +1787,43 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
         </div>
       </Modal>
 
+      {/* Apply Credit Memo Modal (credit-memo apply, 2026-07-10) */}
+      <Modal open={showApplyCreditModal} onClose={() => setShowApplyCreditModal(false)} title="Apply Credit Memo">
+        <div className="space-y-4">
+          <div>
+            <label className="text-sm font-medium text-nav-dark">Credit Memo</label>
+            <select
+              value={selectedCreditId}
+              onChange={(e) => {
+                const c = availableCredits.find((x) => x.id === e.target.value);
+                setSelectedCreditId(e.target.value);
+                if (c) setApplyCreditAmount((Math.min(-c.balance_cents, invoice?.balance_cents || 0) / 100).toFixed(2));
+              }}
+              className="mt-1 w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+            >
+              {availableCredits.map((c) => (
+                <option key={c.id} value={c.id}>{c.invoice_number} — {fmt(-c.balance_cents)} available</option>
+              ))}
+            </select>
+          </div>
+          <Input
+            label="Amount to apply ($)"
+            type="number"
+            value={applyCreditAmount}
+            onChange={(e) => setApplyCreditAmount(e.target.value)}
+            min={0}
+            step={0.01}
+          />
+          <p className="text-xs text-gray-500">
+            This invoice owes {fmt(invoice?.balance_cents || 0)}. Applying a credit lowers the balance — it doesn&apos;t move money.
+          </p>
+          <div className="flex justify-end gap-3">
+            <Button variant="ghost" onClick={() => setShowApplyCreditModal(false)}>Cancel</Button>
+            <Button onClick={handleApplyCredit} loading={applyingCredit} disabled={!selectedCreditId}>Apply Credit</Button>
+          </div>
+        </div>
+      </Modal>
+
       {/* Reverse Write-Off Modal (admin only) */}
       <Modal open={showReverseWoModal} onClose={() => { setShowReverseWoModal(false); setReverseWoReason(''); }} title="Reverse Write-Off">
         <div className="space-y-4">
@@ -1779,7 +1902,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
         loading={transferringToScheduling}
       />
 
-      {/* #28: Unpost confirm — reverse a posting back to the Unposted list. */}
+      {/* #28/U16b: Unpost confirm — reverse a posting back to the Unposted list. */}
       <ConfirmModal
         open={showUnpostModal}
         onClose={() => setShowUnpostModal(false)}

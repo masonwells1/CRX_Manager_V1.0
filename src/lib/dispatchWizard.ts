@@ -37,6 +37,15 @@ export interface DispatchLocation {
   /** fields.field_name (or a fallback label). */
   fieldName: string;
   acres: number | null;
+  /**
+   * U13 (#15-21/#111): the location's CURRENT active ('dispatched') assignee,
+   * if any — populated by callers that pre-fetch job_location_dispatches (e.g.
+   * JobDetail's job-scoped "Dispatch Locations" button). Optional/undefined for
+   * callers that don't track it (e.g. the DispatchBoard's board-wide wizard,
+   * unchanged) — no chip/steal-confirmation renders for those, so this is fully
+   * backward compatible.
+   */
+  currentAssignee?: DispatchAssignee | null;
 }
 
 /**
@@ -206,4 +215,30 @@ export function aggregateAssignedTo(
   }
   const fallback = (jobLevelApplicatorName ?? '').trim();
   return fallback === '' ? null : fallback;
+}
+
+/**
+ * U13 (#15-21/#111): which SELECTED, fully-assigned locations would be
+ * reassigned AWAY from a DIFFERENT existing assignee ("stolen" from whoever
+ * currently has them). A location with no currentAssignee (never dispatched)
+ * or whose chosen assignee is the SAME as its current one is never "stolen".
+ * Pure so the Step-3 steal-confirmation gate is unit-testable without mounting
+ * the wizard.
+ */
+export function locationsBeingStolen(
+  selected: ReadonlySet<string>,
+  map: AssignmentMap,
+  locations: ReadonlyArray<DispatchLocation>
+): DispatchLocation[] {
+  const byId = new Map(locations.map((l) => [l.jobFieldId, l]));
+  const stolen: DispatchLocation[] = [];
+  for (const jobFieldId of selected) {
+    const loc = byId.get(jobFieldId);
+    const chosen = map[jobFieldId];
+    if (!loc || !chosen || !loc.currentAssignee) continue;
+    if (loc.currentAssignee.kind !== chosen.kind || loc.currentAssignee.id !== chosen.id) {
+      stolen.push(loc);
+    }
+  }
+  return stolen;
 }

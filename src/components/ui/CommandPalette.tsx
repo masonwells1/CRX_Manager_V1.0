@@ -37,9 +37,12 @@ import {
   ClipboardCheck,
   ArrowLeftRight,
   ShieldAlert,
+  LayoutGrid,
 } from 'lucide-react';
 import { supabase, assertRpcResult } from '../../lib/db';
 import { getRecentItems } from '../../lib/recentPages';
+import { PAGE_PERMISSIONS, hasPageAccess } from '../../lib/pagePermissions';
+import { useAuth } from '../../contexts/AuthContext';
 import type { GlobalSearchResult, SearchEntityType } from '../../types';
 
 // ── Types ──────────────────────────────────────────────────────────
@@ -87,7 +90,9 @@ const ENTITY_PATHS: Record<SearchEntityType, string> = {
 
 // Page icon mapping for common pages
 const PAGE_ICON_MAP: Record<string, React.ReactNode> = {
-  '/': <LayoutDashboard className="w-4 h-4" />,
+  '/dashboard': <LayoutDashboard className="w-4 h-4" />,
+  '/office-cockpit': <LayoutGrid className="w-4 h-4" />,
+  '/to-ship': <PackageSearch className="w-4 h-4" />,
   '/quotes': <FileText className="w-4 h-4" />,
   '/orders': <ClipboardList className="w-4 h-4" />,
   '/invoices': <Receipt className="w-4 h-4" />,
@@ -129,62 +134,25 @@ const PAGE_ICON_MAP: Record<string, React.ReactNode> = {
   '/getting-started': <BookOpen className="w-4 h-4" />,
 };
 
-// All navigable pages for client-side fuzzy search
-const ALL_PAGES: { path: string; label: string }[] = [
-  { path: '/', label: 'Operations Dashboard' },
-  { path: '/quotes', label: 'Quotes' },
-  { path: '/quotes/new', label: 'New Quote' },
-  { path: '/orders', label: 'Orders' },
-  { path: '/orders/new', label: 'New Order' },
-  { path: '/invoices', label: 'Invoices' },
-  { path: '/payments', label: 'Payments' },
-  { path: '/customers', label: 'Customers' },
-  { path: '/fields', label: 'Fields' },
-  { path: '/crop-programs', label: 'Crop Programs' },
-  { path: '/products', label: 'Products' },
-  { path: '/brand-vs-generic', label: 'Brand vs Generic' },
-  { path: '/recipes', label: 'Blend Recipes' },
-  { path: '/inventory', label: 'Inventory' },
-  { path: '/cycle-counts', label: 'Cycle Counts' },
-  { path: '/purchase-orders', label: 'Supplier POs' },
-  { path: '/purchase-orders/new', label: 'New Purchase Order' },
-  { path: '/receiving', label: 'Receiving' },
-  { path: '/receiving/quick', label: 'Quick Receive' },
-  { path: '/receiving-hub', label: 'Receiving Hub' },
-  { path: '/to-ship', label: 'To Ship (Command Center)' },
-  { path: '/returns', label: 'Returns' },
-  { path: '/jobs', label: 'Job Schedule' },
-  { path: '/dispatch', label: 'Dispatch Board' },
-  { path: '/deliveries', label: 'Deliveries' },
-  { path: '/deliveries/new', label: 'New Delivery' },
-  { path: '/delivery-remainders', label: 'Delivery Remainders' },
-  { path: '/vehicles', label: 'Vehicles' },
-  { path: '/blend-tickets', label: 'Blend Tickets' },
-  { path: '/application-records', label: 'Application Records' },
-  { path: '/financial-dashboard', label: 'Financial Dashboard' },
-  { path: '/accounts-receivable', label: 'Accounts Receivable' },
-  { path: '/ar-aging', label: 'AR Aging' },
-  { path: '/field-invoices', label: 'Field Invoices' },
-  { path: '/accounts-payable', label: 'Accounts Payable' },
-  { path: '/prepayments', label: 'Prepayments' },
-  { path: '/prepay-workspace', label: 'Prepay Workspace' },
-  { path: '/commission-payments', label: 'Commission Payments' },
-  { path: '/customer-transactions', label: 'Customer Transactions' },
-  { path: '/month-end', label: 'Month-End Close' },
-  { path: '/rebates', label: 'Rebates' },
-  { path: '/reports', label: 'Reports' },
-  { path: '/sales-reports', label: 'Sales Reports' },
-  // Individual reports, deep-linked so typing the report name jumps straight to it (F1c).
-  { path: '/sales-reports?tab=by_product', label: 'Sales by Product (Product Mix)' },
-  { path: '/sales-reports?tab=by_customer', label: 'Sales by Customer (Customer Profitability)' },
-  { path: '/sales-reports?tab=by_sales_rep', label: 'Sales by Sales Rep' },
-  { path: '/sales-reports?tab=by_month', label: 'Sales by Month' },
-  { path: '/compliance', label: 'Compliance' },
-  { path: '/lot-trace', label: 'Lot Trace' },
-  { path: '/watchdog', label: 'Watchdog Flags' },
-  { path: '/team-board', label: 'Team Board' },
-  { path: '/settings', label: 'Settings' },
-  { path: '/getting-started', label: 'Getting Started' },
+// Commands without a PAGE_PERMISSIONS entry: creation/deep links and global
+// routes. Permission pages themselves are derived below from the canonical list.
+const EXTRA_PAGES: { path: string; label: string; pageKey?: string; allRoles?: boolean; adminOnly?: boolean }[] = [
+  { path: '/quotes/new', label: 'New Quote/Booking', pageKey: 'quotes' },
+  { path: '/orders/new', label: 'New Order', pageKey: 'orders' },
+  { path: '/purchase-orders/new', label: 'New Purchase Order', pageKey: 'purchase-orders' },
+  { path: '/receiving/quick', label: 'Quick Receive', pageKey: 'receiving' },
+  { path: '/deliveries/new', label: 'New Delivery', pageKey: 'deliveries' },
+  { path: '/deliveries?quickDeliver=1', label: 'Sell & Deliver Now', pageKey: 'deliveries' },
+  { path: '/sales-reports?tab=by_product', label: 'Sales by Product (Product Mix)', pageKey: 'sales-reports' },
+  { path: '/sales-reports?tab=by_customer', label: 'Sales by Customer (Customer Profitability)', pageKey: 'sales-reports' },
+  { path: '/sales-reports?tab=by_sales_rep', label: 'Sales by Sales Rep', pageKey: 'sales-reports' },
+  { path: '/sales-reports?tab=by_month', label: 'Sales by Month', pageKey: 'sales-reports' },
+  // Global routes without a PAGE_PERMISSIONS entry. Team Board + Notifications
+  // are all-role; Settings is admin-only (mirrors its route gate) — these must
+  // NOT be swept up in the office-role gate below (gauntlet confirm-round P3).
+  { path: '/team-board', label: 'Team Board', allRoles: true },
+  { path: '/notifications', label: 'Notifications', allRoles: true },
+  { path: '/settings', label: 'Settings', adminOnly: true },
 ];
 
 // ── Helpers ────────────────────────────────────────────────────────
@@ -213,6 +181,7 @@ function getPageIcon(path: string): React.ReactNode {
 // ── Component ──────────────────────────────────────────────────────
 
 export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
+  const { role: authRole, deniedPages, loading: authLoading } = useAuth();
   const navigate = useNavigate();
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -221,6 +190,27 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
   const [entityResults, setEntityResults] = useState<GlobalSearchResult[]>([]);
   const [loading, setLoading] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout>>();
+  // AppLayout is withheld while auth loads; the fallback keeps isolated component
+  // renders using AuthContext's loading default equivalent to the prior admin tests.
+  const role = authRole ?? (authLoading ? 'admin' : null);
+  const availablePages = useMemo(() => {
+    if (!role) return [];
+
+    const permissionPages = PAGE_PERMISSIONS
+      .filter((page) => page.roles.includes(role) && hasPageAccess(role, deniedPages, page.key))
+      .map((page) => ({ path: page.path, label: page.label }));
+    const isOfficeRole = role === 'admin' || role === 'sales_rep';
+    const extraPages = EXTRA_PAGES
+      .filter((page) => {
+        if (page.allRoles) return true;
+        if (page.adminOnly) return role === 'admin';
+        // Office deep-links: office role + the linked page's deny-list gate.
+        return isOfficeRole && (!page.pageKey || hasPageAccess(role, deniedPages, page.pageKey));
+      })
+      .map(({ path, label }) => ({ path, label }));
+
+    return [...permissionPages, ...extraPages];
+  }, [deniedPages, role]);
 
   // Reset state when opening
   useEffect(() => {
@@ -298,7 +288,7 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
     }
 
     // Pages (client-side fuzzy match, instant)
-    const matchingPages = ALL_PAGES.filter((p) => fuzzyMatch(trimmed, p.label));
+    const matchingPages = availablePages.filter((p) => fuzzyMatch(trimmed, p.label));
     for (const p of matchingPages.slice(0, 5)) {
       items.push({
         id: `page-${p.path}`,
@@ -321,7 +311,7 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
     }
 
     return items.slice(0, 25);
-  }, [query, entityResults]);
+  }, [query, entityResults, availablePages]);
 
   // Reset active index when results change
   useEffect(() => {

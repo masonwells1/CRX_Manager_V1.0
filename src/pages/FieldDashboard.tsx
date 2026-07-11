@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft,
   Pencil,
+  Plus,
   Sprout,
   MapPin,
   Calendar,
@@ -17,8 +18,13 @@ import Card from '../components/ui/Card';
 import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
 import DataTable, { type Column } from '../components/ui/DataTable';
+import Modal from '../components/ui/Modal';
+import Input from '../components/ui/Input';
+import Select from '../components/ui/Select';
 import { useToast } from '../components/ui/Toast';
-import { supabase, assertRpcResult } from '../lib/db';
+import { useAuth } from '../contexts/AuthContext';
+import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
+import { supabase, assertRpcResult, sanitizeError } from '../lib/db';
 import { Sentry } from '../lib/sentry';
 import { exportToCSV, fmtDateCSV } from '../lib/csvExport';
 import { computeBounds } from '../hooks/useFitBounds';
@@ -281,7 +287,12 @@ export default function FieldDashboard() {
         <DetailsTab field={field} activity={recent_activity} />
       )}
       {activeTab === 'crop_history' && (
-        <CropHistoryTab history={cropHistory} currentCrop={field.crop_type} />
+        <CropHistoryTab
+          history={cropHistory}
+          currentCrop={field.crop_type}
+          fieldId={id || ''}
+          onSaved={fetchDashboard}
+        />
       )}
     </div>
   );
@@ -635,7 +646,136 @@ function DetailsTab({
 
 /* ─── Crop History Tab ─────────────────────────────────────────── */
 
-function CropHistoryTab({ history, currentCrop }: { history: CropHistoryRecord[]; currentCrop: string | null }) {
+interface CropForm {
+  season: number;
+  crop_type: string;
+  variety: string;
+  planting_date: string;
+  harvest_date: string;
+  yield_per_acre: string;
+  yield_unit: string;
+  notes: string;
+}
+
+// Season runs Oct 1 → Sep 30 and is labelled by its END year (matches the DB
+// compute_season: months >= October belong to next year's season).
+function currentSeasonYear(): number {
+  const now = new Date();
+  return now.getMonth() + 1 >= 10 ? now.getFullYear() + 1 : now.getFullYear();
+}
+
+function blankCropForm(): CropForm {
+  return {
+    season: currentSeasonYear(),
+    crop_type: '',
+    variety: '',
+    planting_date: '',
+    harvest_date: '',
+    yield_per_acre: '',
+    yield_unit: '',
+    notes: '',
+  };
+}
+
+function CropHistoryTab({
+  history,
+  currentCrop,
+  fieldId,
+  onSaved,
+}: {
+  history: CropHistoryRecord[];
+  currentCrop: string | null;
+  fieldId: string;
+  onSaved: () => void;
+}) {
+  const { role, profile } = useAuth();
+  const { toast } = useToast();
+  const { getKey, resetKey } = useIdempotencyKey('save_field_crop_history', profile?.id || '');
+  const canEdit = role === 'admin' || role === 'sales_rep';
+
+  const [editOpen, setEditOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [editingSeason, setEditingSeason] = useState<number | null>(null);
+  const [form, setForm] = useState<CropForm>(blankCropForm);
+
+  const cur = currentSeasonYear();
+  const existingSeasons = new Set(history.map((h) => h.season));
+  const seasonOptions = Array.from({ length: 8 }, (_, i) => cur + 1 - i).map((s) => ({
+    value: String(s),
+    label: `${s - 1}–${s}`,
+  }));
+  // Add mode may only target a season that has no row yet. Editing an existing
+  // season goes through the pencil (which prefills), so a blank Add can never
+  // upsert NULLs over an existing season's variety/dates/yield/notes.
+  const addSeasonOptions = seasonOptions.filter((o) => !existingSeasons.has(Number(o.value)));
+
+  const openAdd = () => {
+    resetKey();
+    setEditingSeason(null);
+    const firstFree = addSeasonOptions[0]?.value;
+    setForm({ ...blankCropForm(), season: firstFree ? Number(firstFree) : cur });
+    setEditOpen(true);
+  };
+
+  const openEdit = (r: CropHistoryRecord) => {
+    resetKey();
+    setEditingSeason(r.season);
+    setForm({
+      season: r.season,
+      crop_type: r.crop_type || '',
+      variety: r.variety || '',
+      planting_date: r.planting_date || '',
+      harvest_date: r.harvest_date || '',
+      yield_per_acre: r.yield_per_acre != null ? String(r.yield_per_acre) : '',
+      yield_unit: r.yield_unit || '',
+      notes: r.notes || '',
+    });
+    setEditOpen(true);
+  };
+
+  const handleSave = async () => {
+    const crop = form.crop_type.trim();
+    if (!crop) {
+      toast('error', 'Crop is required');
+      return;
+    }
+    if (editingSeason == null && existingSeasons.has(form.season)) {
+      toast('error', 'That season already has an entry — edit it from the list instead.');
+      return;
+    }
+    if (form.harvest_date && form.planting_date && form.harvest_date < form.planting_date) {
+      toast('error', 'Harvest date cannot be before the planting date');
+      return;
+    }
+    setSaving(true);
+    try {
+      const yieldNum = form.yield_per_acre ? parseFloat(form.yield_per_acre) : null;
+      const { data, error } = await supabase.rpc('save_field_crop_history', {
+        p_field_id: fieldId,
+        p_season: form.season,
+        p_crop_type: crop,
+        p_variety: form.variety.trim() || undefined,
+        p_planting_date: form.planting_date || undefined,
+        p_harvest_date: form.harvest_date || undefined,
+        p_yield_per_acre: yieldNum != null && !Number.isNaN(yieldNum) ? yieldNum : undefined,
+        p_yield_unit: form.yield_unit.trim() || undefined,
+        p_notes: form.notes.trim() || undefined,
+        p_performed_by: profile?.id || undefined,
+        p_idempotency_key: getKey(),
+      });
+      if (error) throw error;
+      assertRpcResult(data, 'save_field_crop_history');
+      resetKey();
+      toast('success', 'Crop history saved');
+      setEditOpen(false);
+      onSaved();
+    } catch (err) {
+      toast('error', sanitizeError(err));
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const columns: Column<CropHistoryRecord>[] = [
     {
       key: 'season',
@@ -658,6 +798,23 @@ function CropHistoryTab({ history, currentCrop }: { history: CropHistoryRecord[]
       render: (r) => r.yield_per_acre != null ? `${r.yield_per_acre.toLocaleString()} ${r.yield_unit || ''}` : '—',
     },
     { key: 'notes', header: 'Notes', render: (r) => r.notes || '—' },
+    ...(canEdit
+      ? [{
+          key: '_actions',
+          header: '',
+          render: (r: CropHistoryRecord) => (
+            <button
+              type="button"
+              onClick={() => openEdit(r)}
+              className="p-1.5 rounded hover:bg-gray-100 text-secondary hover:text-nav-dark transition-colors"
+              title="Edit crop history entry"
+              aria-label={`Edit ${r.season - 1}–${r.season} crop history`}
+            >
+              <Pencil className="w-4 h-4" />
+            </button>
+          ),
+        } satisfies Column<CropHistoryRecord>]
+      : []),
   ];
 
   return (
@@ -673,6 +830,13 @@ function CropHistoryTab({ history, currentCrop }: { history: CropHistoryRecord[]
           </div>
         </Card>
       )}
+      {canEdit && (
+        <div className="flex justify-end">
+          <Button icon={<Plus className="w-4 h-4" />} onClick={openAdd}>
+            Add Entry
+          </Button>
+        </div>
+      )}
       <Card padding={false}>
         <div className="p-5">
           <DataTable<CropHistoryRecord>
@@ -682,10 +846,108 @@ function CropHistoryTab({ history, currentCrop }: { history: CropHistoryRecord[]
             searchPlaceholder="Search crop history..."
             searchKeys={['crop_type', 'variety', 'notes']}
             emptyTitle="No crop history"
-            emptyDescription="Crop history is auto-recorded when the field's crop type changes between seasons."
+            emptyDescription={
+              canEdit
+                ? 'Add a crop record, or it is auto-recorded when the field’s crop type changes between seasons.'
+                : 'Crop history is auto-recorded when the field’s crop type changes between seasons.'
+            }
           />
         </div>
       </Card>
+
+      {canEdit && (
+        <Modal
+          open={editOpen}
+          onClose={() => setEditOpen(false)}
+          title={editingSeason != null ? 'Edit' : 'Add'}
+          accent="Crop History"
+        >
+          <div className="space-y-4">
+            <Select
+              label="Season"
+              options={
+                editingSeason != null
+                  ? [{ value: String(form.season), label: `${form.season - 1}–${form.season}` }]
+                  : addSeasonOptions
+              }
+              value={String(form.season)}
+              onChange={(e) => setForm({ ...form, season: Number(e.target.value) })}
+              disabled={editingSeason != null}
+              placeholder={
+                editingSeason == null && addSeasonOptions.length === 0
+                  ? 'All recent seasons already have entries'
+                  : undefined
+              }
+            />
+            {editingSeason != null && (
+              <p className="-mt-2 text-xs text-secondary">
+                One record per season — editing the {editingSeason - 1}–{editingSeason} entry.
+              </p>
+            )}
+            {editingSeason == null && addSeasonOptions.length === 0 && (
+              <p className="-mt-2 text-xs text-amber-600">
+                Every recent season already has an entry — edit one from the list instead.
+              </p>
+            )}
+            <Input
+              label="Crop"
+              value={form.crop_type}
+              onChange={(e) => setForm({ ...form, crop_type: e.target.value })}
+              placeholder="e.g. Corn, Soybeans"
+              required
+            />
+            <Input
+              label="Variety (optional)"
+              value={form.variety}
+              onChange={(e) => setForm({ ...form, variety: e.target.value })}
+              placeholder="e.g. DKC62-08"
+            />
+            <div className="grid grid-cols-2 gap-3">
+              <Input
+                label="Planting Date (optional)"
+                type="date"
+                value={form.planting_date}
+                onChange={(e) => setForm({ ...form, planting_date: e.target.value })}
+              />
+              <Input
+                label="Harvest Date (optional)"
+                type="date"
+                value={form.harvest_date}
+                onChange={(e) => setForm({ ...form, harvest_date: e.target.value })}
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <Input
+                label="Yield / Acre (optional)"
+                type="number"
+                min="0"
+                step="any"
+                value={form.yield_per_acre}
+                onChange={(e) => setForm({ ...form, yield_per_acre: e.target.value })}
+                placeholder="e.g. 220"
+              />
+              <Input
+                label="Yield Unit (optional)"
+                value={form.yield_unit}
+                onChange={(e) => setForm({ ...form, yield_unit: e.target.value })}
+                placeholder="e.g. bu"
+              />
+            </div>
+            <Input
+              label="Notes (optional)"
+              value={form.notes}
+              onChange={(e) => setForm({ ...form, notes: e.target.value })}
+              placeholder="Any notes about this season"
+            />
+            <div className="flex justify-end gap-2">
+              <Button variant="secondary" onClick={() => setEditOpen(false)}>Cancel</Button>
+              <Button onClick={handleSave} disabled={saving}>
+                {saving ? 'Saving...' : 'Save'}
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }

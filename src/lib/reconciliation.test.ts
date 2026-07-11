@@ -301,7 +301,7 @@ describe('checkInvoicePayments', () => {
 
   it('returns empty when paid amounts match allocations', () => {
     const invoices: InvoiceRow[] = [
-      { id: 'i1', invoice_number: 'INV-001', order_id: 'ord1', paid_amount_cents: 5000, prepay_applied_cents: 0, write_off_cents: 0, total_amount_cents: 10000, balance_cents: 5000 },
+      { id: 'i1', invoice_number: 'INV-001', invoice_type: 'chemical_sale', order_id: 'ord1', paid_amount_cents: 5000, prepay_applied_cents: 0, write_off_cents: 0, credit_applied_cents: 0,total_amount_cents: 10000, balance_cents: 5000 },
     ];
     const allocations: InvoiceLineAllocationRow[] = [
       { invoice_id: 'i1', amount_cents: 3000 },
@@ -313,7 +313,7 @@ describe('checkInvoicePayments', () => {
 
   it('detects over-counted paid amount', () => {
     const invoices: InvoiceRow[] = [
-      { id: 'i1', invoice_number: 'INV-001', order_id: 'ord1', paid_amount_cents: 8000, prepay_applied_cents: 0, write_off_cents: 0, total_amount_cents: 10000, balance_cents: 2000 },
+      { id: 'i1', invoice_number: 'INV-001', invoice_type: 'chemical_sale', order_id: 'ord1', paid_amount_cents: 8000, prepay_applied_cents: 0, write_off_cents: 0, credit_applied_cents: 0,total_amount_cents: 10000, balance_cents: 2000 },
     ];
     const allocations: InvoiceLineAllocationRow[] = [
       { invoice_id: 'i1', amount_cents: 5000 },
@@ -327,7 +327,7 @@ describe('checkInvoicePayments', () => {
 
   it('handles invoices with no allocations', () => {
     const invoices: InvoiceRow[] = [
-      { id: 'i1', invoice_number: 'INV-001', order_id: 'ord1', paid_amount_cents: 0, prepay_applied_cents: 0, write_off_cents: 0, total_amount_cents: 10000, balance_cents: 10000 },
+      { id: 'i1', invoice_number: 'INV-001', invoice_type: 'chemical_sale', order_id: 'ord1', paid_amount_cents: 0, prepay_applied_cents: 0, write_off_cents: 0, credit_applied_cents: 0,total_amount_cents: 10000, balance_cents: 10000 },
     ];
     const allocations: InvoiceLineAllocationRow[] = [];
 
@@ -336,7 +336,7 @@ describe('checkInvoicePayments', () => {
 
   it('handles invoice with paid amount but no allocations', () => {
     const invoices: InvoiceRow[] = [
-      { id: 'i1', invoice_number: 'INV-001', order_id: 'ord1', paid_amount_cents: 3000, prepay_applied_cents: 0, write_off_cents: 0, total_amount_cents: 10000, balance_cents: 7000 },
+      { id: 'i1', invoice_number: 'INV-001', invoice_type: 'chemical_sale', order_id: 'ord1', paid_amount_cents: 3000, prepay_applied_cents: 0, write_off_cents: 0, credit_applied_cents: 0,total_amount_cents: 10000, balance_cents: 7000 },
     ];
     const allocations: InvoiceLineAllocationRow[] = [];
 
@@ -347,7 +347,7 @@ describe('checkInvoicePayments', () => {
 
   it('tolerates ±1 cent rounding', () => {
     const invoices: InvoiceRow[] = [
-      { id: 'i1', invoice_number: 'INV-001', order_id: 'ord1', paid_amount_cents: 5001, prepay_applied_cents: 0, write_off_cents: 0, total_amount_cents: 10000, balance_cents: 4999 },
+      { id: 'i1', invoice_number: 'INV-001', invoice_type: 'chemical_sale', order_id: 'ord1', paid_amount_cents: 5001, prepay_applied_cents: 0, write_off_cents: 0, credit_applied_cents: 0,total_amount_cents: 10000, balance_cents: 4999 },
     ];
     const allocations: InvoiceLineAllocationRow[] = [
       { invoice_id: 'i1', amount_cents: 5000 },
@@ -362,7 +362,7 @@ describe('checkInvoicePayments', () => {
 describe('checkInvoiceBalances', () => {
   it('returns empty when balance = total - paid - prepay', () => {
     const invoices: InvoiceRow[] = [
-      { id: 'i1', invoice_number: 'INV-001', order_id: 'o1', total_amount_cents: 10000, paid_amount_cents: 3000, prepay_applied_cents: 2000, write_off_cents: 0, balance_cents: 5000 },
+      { id: 'i1', invoice_number: 'INV-001', invoice_type: 'chemical_sale', order_id: 'o1', total_amount_cents: 10000, paid_amount_cents: 3000, prepay_applied_cents: 2000, write_off_cents: 0, credit_applied_cents: 0,balance_cents: 5000 },
     ];
 
     expect(checkInvoiceBalances(invoices)).toEqual([]);
@@ -370,7 +370,7 @@ describe('checkInvoiceBalances', () => {
 
   it('detects corrupted balance column', () => {
     const invoices: InvoiceRow[] = [
-      { id: 'i1', invoice_number: 'INV-001', order_id: 'o1', total_amount_cents: 10000, paid_amount_cents: 3000, prepay_applied_cents: 2000, write_off_cents: 0, balance_cents: 9999 },
+      { id: 'i1', invoice_number: 'INV-001', invoice_type: 'chemical_sale', order_id: 'o1', total_amount_cents: 10000, paid_amount_cents: 3000, prepay_applied_cents: 2000, write_off_cents: 0, credit_applied_cents: 0,balance_cents: 9999 },
     ];
 
     const result = checkInvoiceBalances(invoices);
@@ -381,7 +381,7 @@ describe('checkInvoiceBalances', () => {
 
   it('handles fully paid invoices', () => {
     const invoices: InvoiceRow[] = [
-      { id: 'i1', invoice_number: 'INV-001', order_id: 'o1', total_amount_cents: 5000, paid_amount_cents: 5000, prepay_applied_cents: 0, write_off_cents: 0, balance_cents: 0 },
+      { id: 'i1', invoice_number: 'INV-001', invoice_type: 'chemical_sale', order_id: 'o1', total_amount_cents: 5000, paid_amount_cents: 5000, prepay_applied_cents: 0, write_off_cents: 0, credit_applied_cents: 0,balance_cents: 0 },
     ];
 
     expect(checkInvoiceBalances(invoices)).toEqual([]);
@@ -389,7 +389,7 @@ describe('checkInvoiceBalances', () => {
 
   it('handles invoices with only prepay', () => {
     const invoices: InvoiceRow[] = [
-      { id: 'i1', invoice_number: 'INV-001', order_id: 'o1', total_amount_cents: 10000, paid_amount_cents: 0, prepay_applied_cents: 10000, write_off_cents: 0, balance_cents: 0 },
+      { id: 'i1', invoice_number: 'INV-001', invoice_type: 'chemical_sale', order_id: 'o1', total_amount_cents: 10000, paid_amount_cents: 0, prepay_applied_cents: 10000, write_off_cents: 0, credit_applied_cents: 0,balance_cents: 0 },
     ];
 
     expect(checkInvoiceBalances(invoices)).toEqual([]);
@@ -400,9 +400,9 @@ describe('checkInvoiceBalances', () => {
     // every written-off invoice to be flagged as a discrepancy.
     const invoices: InvoiceRow[] = [
       // $100 invoice, $30 paid, $20 prepay, $50 write-off → balance $0
-      { id: 'i1', invoice_number: 'INV-001', order_id: 'o1', total_amount_cents: 10000, paid_amount_cents: 3000, prepay_applied_cents: 2000, write_off_cents: 5000, balance_cents: 0 },
+      { id: 'i1', invoice_number: 'INV-001', invoice_type: 'chemical_sale', order_id: 'o1', total_amount_cents: 10000, paid_amount_cents: 3000, prepay_applied_cents: 2000, write_off_cents: 5000, credit_applied_cents: 0,balance_cents: 0 },
       // $200 invoice, $0 paid, $0 prepay, $50 write-off → balance $150
-      { id: 'i2', invoice_number: 'INV-002', order_id: 'o2', total_amount_cents: 20000, paid_amount_cents: 0, prepay_applied_cents: 0, write_off_cents: 5000, balance_cents: 15000 },
+      { id: 'i2', invoice_number: 'INV-002', invoice_type: 'chemical_sale', order_id: 'o2', total_amount_cents: 20000, paid_amount_cents: 0, prepay_applied_cents: 0, write_off_cents: 5000, credit_applied_cents: 0,balance_cents: 15000 },
     ];
 
     expect(checkInvoiceBalances(invoices)).toEqual([]);
@@ -410,8 +410,8 @@ describe('checkInvoiceBalances', () => {
 
   it('checks multiple invoices independently', () => {
     const invoices: InvoiceRow[] = [
-      { id: 'i1', invoice_number: 'INV-001', order_id: 'o1', total_amount_cents: 10000, paid_amount_cents: 5000, prepay_applied_cents: 0, write_off_cents: 0, balance_cents: 5000 }, // OK
-      { id: 'i2', invoice_number: 'INV-002', order_id: 'o2', total_amount_cents: 20000, paid_amount_cents: 10000, prepay_applied_cents: 5000, write_off_cents: 0, balance_cents: 999 }, // BAD: should be 5000
+      { id: 'i1', invoice_number: 'INV-001', invoice_type: 'chemical_sale', order_id: 'o1', total_amount_cents: 10000, paid_amount_cents: 5000, prepay_applied_cents: 0, write_off_cents: 0, credit_applied_cents: 0,balance_cents: 5000 }, // OK
+      { id: 'i2', invoice_number: 'INV-002', invoice_type: 'chemical_sale', order_id: 'o2', total_amount_cents: 20000, paid_amount_cents: 10000, prepay_applied_cents: 5000, write_off_cents: 0, credit_applied_cents: 0,balance_cents: 999 }, // BAD: should be 5000
     ];
 
     const result = checkInvoiceBalances(invoices);
@@ -474,6 +474,75 @@ describe('checkCommissionSplits', () => {
     const result = checkCommissionSplits(commissions);
     expect(result).toHaveLength(1);
     expect(result[0].entity).toBe('ORD-002');
+  });
+
+  // U8: job-sourced commissions have order_id NULL — each job must group on its
+  // own job_id bucket, never collapse into one shared `null` bucket.
+  it('groups job-sourced commissions per job, not into one null bucket', () => {
+    const commissions: CommissionRow[] = [
+      { order_id: null, job_id: 'j1', order_number: 'Job JOB-001', split_percentage: 60 },
+      { order_id: null, job_id: 'j1', order_number: 'Job JOB-001', split_percentage: 40 },
+      { order_id: null, job_id: 'j2', order_number: 'Job JOB-002', split_percentage: 100 },
+    ];
+
+    // Two valid 100% jobs; a raw order_id key would sum them to 200 and misreport.
+    expect(checkCommissionSplits(commissions)).toEqual([]);
+  });
+
+  it('flags a job whose splits do not sum to 100 without touching other jobs', () => {
+    const commissions: CommissionRow[] = [
+      { order_id: null, job_id: 'j1', order_number: 'Job JOB-001', split_percentage: 100 },
+      { order_id: null, job_id: 'j2', order_number: 'Job JOB-002', split_percentage: 70 },
+    ];
+
+    const result = checkCommissionSplits(commissions);
+    expect(result).toHaveLength(1);
+    expect(result[0].entityId).toBe('job:j2');
+    expect(result[0].actual).toBe(70);
+  });
+
+  it('keeps order and job buckets separate when both channels are present', () => {
+    const commissions: CommissionRow[] = [
+      { order_id: 'o1', job_id: null, order_number: 'ORD-001', split_percentage: 100 },
+      { order_id: null, job_id: 'j1', order_number: 'Job JOB-001', split_percentage: 100 },
+    ];
+
+    expect(checkCommissionSplits(commissions)).toEqual([]);
+  });
+
+  // Codex R1 P2: a void→re-invoice cycle leaves a cancelled generation beside the
+  // live one on the same job — cancelled rows must not inflate the split sum.
+  it('excludes cancelled commissions so a re-invoiced job is not a false 200%', () => {
+    const commissions: CommissionRow[] = [
+      { order_id: null, job_id: 'j1', status: 'cancelled', order_number: 'Job JOB-001', split_percentage: 100 },
+      { order_id: null, job_id: 'j1', status: 'pending', order_number: 'Job JOB-001', split_percentage: 100 },
+    ];
+
+    expect(checkCommissionSplits(commissions)).toEqual([]);
+  });
+
+  // Codex R8 P2: a PAID row that survives a void (admin-notified, kept on the
+  // ledger) shares job_id with the re-invoice's fresh set but not invoice_id —
+  // generations must group separately, each summing to 100.
+  it('groups job commissions per invoice generation, not per job', () => {
+    const commissions: CommissionRow[] = [
+      { order_id: null, job_id: 'j1', invoice_id: 'inv1', status: 'paid', order_number: 'Job JOB-001', split_percentage: 100 },
+      { order_id: null, job_id: 'j1', invoice_id: 'inv2', status: 'pending', order_number: 'Job JOB-001', split_percentage: 100 },
+    ];
+
+    expect(checkCommissionSplits(commissions)).toEqual([]);
+  });
+
+  // Codex R9 P2: a partial generation (one recipient paid + siblings cancelled by
+  // a void) legitimately totals under 100 — the whole bucket is a reversal
+  // artifact and must be excluded, not misreported as split corruption.
+  it('excludes a paid-survivor generation whose siblings were cancelled', () => {
+    const commissions: CommissionRow[] = [
+      { order_id: null, job_id: 'j1', invoice_id: 'inv1', status: 'paid', order_number: 'Job JOB-001', split_percentage: 60 },
+      { order_id: null, job_id: 'j1', invoice_id: 'inv1', status: 'cancelled', order_number: 'Job JOB-001', split_percentage: 40 },
+    ];
+
+    expect(checkCommissionSplits(commissions)).toEqual([]);
   });
 
   it('handles empty commissions list', () => {

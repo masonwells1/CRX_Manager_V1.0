@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   ArrowLeft,
   Save,
@@ -8,12 +8,12 @@ import {
   Search,
   RotateCcw,
   AlertTriangle,
+  X,
 } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
 import Modal from '../components/ui/Modal';
-import ConfirmModal from '../components/ui/ConfirmModal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, assertRpcResult } from '../lib/db';
@@ -28,7 +28,9 @@ import { sendOrderConfirmedEmail } from '../lib/orderConfirmedEmail';
 import { checkRUPCompliance } from '../lib/rupCompliance';
 import { logActivity } from '../lib/activityLogger';
 import { trackBusinessEvent } from '../lib/metrics';
-import { localToday, localDatePlusDays } from '../lib/dateUtils';
+import { localToday } from '../lib/dateUtils';
+import SearchableSelect from '../components/ui/SearchableSelect';
+import { fetchOpenBookings, type OpenBooking } from '../lib/openBookings';
 import type { Product, Customer } from '../types';
 
 interface LocalItem {
@@ -70,6 +72,7 @@ function makeEmptyItem(): LocalItem {
 
 export default function NewOrder() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { toast } = useToast();
   const { profile } = useAuth();
   const createOrderIdem = useIdempotencyKey('create_direct_order', profile?.id || '');
@@ -81,9 +84,12 @@ export default function NewOrder() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
+  const customerIdParam = searchParams.get('customer_id') || '';
+  const customerParamApplied = useRef(false);
   const [customerId, setCustomerId] = useState('');
   const [orderName, setOrderName] = useState('');
   const [orderDate, setOrderDate] = useState(localToday());
+  const [requestedDeliveryDate, setRequestedDeliveryDate] = useState('');
   const [customerPoNumber, setCustomerPoNumber] = useState('');
   const [notes, setNotes] = useState('');
   const [items, setItems] = useState<LocalItem[]>([makeEmptyItem()]);
@@ -152,7 +158,9 @@ export default function NewOrder() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loading]);
 
-  const [duplicateWarning, setDuplicateWarning] = useState<string | null>(null);
+  const [duplicateProductNames, setDuplicateProductNames] = useState<string[]>([]);
+  const [openBookings, setOpenBookings] = useState<OpenBooking[]>([]);
+  const [openBookingsDismissed, setOpenBookingsDismissed] = useState(false);
   const [showProductModal, setShowProductModal] = useState(false);
   const [selectedItemKey, setSelectedItemKey] = useState<string | null>(null);
   const [productSearch, setProductSearch] = useState('');
@@ -265,6 +273,104 @@ export default function NewOrder() {
 
   const customerTier = customers.find((c) => c.id === customerId)?.assigned_tier || 1;
 
+  const handleCustomerChange = useCallback((newId: string) => {
+    if (!newId) {
+      // An empty id is a cleared picker, not a re-tiering event; overrides must survive until a REAL customer pick re-tiers.
+      setCustomerId('');
+      return;
+    }
+
+    setCustomerId(newId);
+    // Recalculate all items with the new customer's tier, clearing overrides.
+    const newTier = customers.find((customer) => customer.id === newId)?.assigned_tier || 1;
+    setItems((previousItems) =>
+      previousItems.map((item) => recalcItem({ ...item, price_override: null }, newTier))
+    );
+  }, [customers, recalcItem]);
+
+  // A delivery or customer detail page can hand a customer into order entry.
+  // Apply the query parameter once after the customer list loads, then leave all
+  // subsequent choices to the user.
+  useEffect(() => {
+    if (loading || customerParamApplied.current) return;
+    customerParamApplied.current = true;
+
+    if (customerIdParam && customers.some((customer) => customer.id === customerIdParam)) {
+      handleCustomerChange(customerIdParam);
+    }
+  }, [customerIdParam, customers, handleCustomerChange, loading]);
+
+  useEffect(() => {
+    if (!customerId) {
+      setOpenBookings([]);
+      setOpenBookingsDismissed(false);
+      return;
+    }
+
+    let cancelled = false;
+    setOpenBookings([]);
+    setOpenBookingsDismissed(false);
+    fetchOpenBookings(customerId).then((bookings) => {
+      if (!cancelled) setOpenBookings(bookings);
+    });
+
+    return () => { cancelled = true; };
+  }, [customerId]);
+
+  const selectedProductKey = [...new Set(items.map((item) => item.product_id).filter(Boolean))]
+    .sort()
+    .join(',');
+  useEffect(() => {
+    if (!customerId || !selectedProductKey) {
+      setDuplicateProductNames([]);
+      return;
+    }
+
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      try {
+        const productIds = selectedProductKey.split(',');
+        const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString();
+        const { data: recentOrders, error: recentOrdersError } = await supabase
+          .from('orders')
+          .select('id')
+          .eq('customer_id', customerId)
+          .is('deleted_at', null)
+          .gte('created_at', twoDaysAgo);
+
+        if (recentOrdersError) throw recentOrdersError;
+        const orderIds = ((recentOrders || []) as Array<{ id: string }>).map((order) => order.id);
+        if (!orderIds.length) {
+          if (!cancelled) setDuplicateProductNames([]);
+          return;
+        }
+
+        const { data: recentOrderItems, error: recentOrderItemsError } = await supabase
+          .from('order_items')
+          .select('product_id')
+          .in('order_id', orderIds)
+          .in('product_id', productIds);
+
+        if (recentOrderItemsError) throw recentOrderItemsError;
+        const duplicateProductIds = [...new Set(
+          ((recentOrderItems || []) as Array<{ product_id: string }>).map((item) => item.product_id)
+        )];
+        const productNames = duplicateProductIds.map(
+          (productId) => products.find((product) => product.id === productId)?.product_name || 'Selected product'
+        );
+        if (!cancelled) setDuplicateProductNames(productNames);
+      } catch {
+        // This is a best-effort warning only. A failed lookup must never block a sale.
+        if (!cancelled) setDuplicateProductNames([]);
+      }
+    }, 500);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [customerId, products, selectedProductKey]);
+
   const addItem = () => {
     setItems([...items, makeEmptyItem()]);
   };
@@ -337,25 +443,6 @@ export default function NewOrder() {
       toast('error', 'Please wait for profile to load');
       return;
     }
-
-    // Duplicate order warning: check for recent orders for same customer
-    try {
-      const sevenDaysAgo = localDatePlusDays(-7);
-      const { data: recentOrders } = await supabase
-        .from('orders')
-        .select('order_number, order_date')
-        .eq('customer_id', customerId)
-        .is('deleted_at', null)
-        .gte('order_date', sevenDaysAgo)
-        .order('order_date', { ascending: false })
-        .limit(1);
-      if (recentOrders && recentOrders.length > 0) {
-        const recent = recentOrders[0];
-        const daysAgo = Math.ceil((Date.now() - new Date(recent.order_date + 'T00:00:00').getTime()) / 86400000);
-        setDuplicateWarning(`This customer already has order ${recent.order_number} from ${daysAgo} day(s) ago. Create another?`);
-        return;
-      }
-    } catch { /* ignore — don't block order creation if check fails */ }
 
     // Guardrail: check credit limit before creating order. SKIP for field staff
     // (#2 Codex round 2 HIGH): their order is an UNPRICED rush order ($0), so the
@@ -477,7 +564,11 @@ export default function NewOrder() {
         // transition to gate on). Fire-and-forget; helper swallows its own errors.
         sendOrderConfirmedEmail(orderId);
 
-        navigate(`/orders/${orderId}`);
+        if (requestedDeliveryDate) {
+          navigate(`/deliveries/new?order=${encodeURIComponent(orderId)}&date=${encodeURIComponent(requestedDeliveryDate)}`);
+        } else {
+          navigate(`/orders/${orderId}`);
+        }
       },
       toast,
       successMessage: 'Order created successfully',
@@ -524,10 +615,18 @@ export default function NewOrder() {
             <p className="text-sm text-secondary">{priceLater ? 'Ship now, price later — rush order (unpriced)' : 'Create a direct order'}</p>
           </div>
         </div>
-        <Button onClick={handleSave} disabled={saving}>
-          <Save className="w-4 h-4" />
-          {saving ? 'Creating...' : 'Create Order'}
-        </Button>
+        <div className="flex flex-col items-end gap-2">
+          {duplicateProductNames.length > 0 && (
+            <div className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800" role="status">
+              <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600" />
+              <span>This customer ordered {duplicateProductNames.join(', ')} in the last 2 days — possible duplicate.</span>
+            </div>
+          )}
+          <Button onClick={handleSave} disabled={saving}>
+            <Save className="w-4 h-4" />
+            {saving ? 'Creating...' : 'Create Order'}
+          </Button>
+        </div>
       </div>
 
       <GuardrailBanner warning={creditWarning} onDismiss={dismissCreditWarning} />
@@ -546,6 +645,38 @@ export default function NewOrder() {
       <Card>
         <CardHeader title="Order Information" />
         <div className="p-5 space-y-4">
+          {openBookings.length > 0 && !openBookingsDismissed && (
+            <div className="flex items-start gap-3 rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900">
+              <div className="min-w-0 flex-1">
+                <p>
+                  This customer has {openBookings.length} open booking{openBookings.length === 1 ? '' : 's'} —{' '}
+                  {openBookings.map((booking, index) => (
+                    <span key={booking.id}>
+                      {index > 0 && ', '}
+                      <button
+                        type="button"
+                        onClick={() => navigate(`/quotes/${booking.id}`)}
+                        className="font-medium underline decoration-blue-400 underline-offset-2 hover:text-blue-700"
+                      >
+                        Quote {booking.quote_number}
+                      </button>
+                    </span>
+                  ))}.
+                </p>
+                <p className="mt-1 text-blue-800">
+                  Product on a booking should usually be DRAWN from it (locked price) instead of a new order.
+                </p>
+              </div>
+              <button
+                type="button"
+                aria-label="Dismiss open bookings notice"
+                onClick={() => setOpenBookingsDismissed(true)}
+                className="rounded p-1 text-blue-500 hover:bg-blue-100 hover:text-blue-700"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          )}
           <label className="flex items-center gap-2 text-sm">
             <input
               type="checkbox"
@@ -563,31 +694,18 @@ export default function NewOrder() {
             </div>
           )}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-nav-dark mb-1">
-                Customer *
-              </label>
-              <select
-                value={customerId}
-                onChange={(e) => {
-                  const newId = e.target.value;
-                  setCustomerId(newId);
-                  // Recalc all items with new customer tier, clearing price overrides
-                  const newTier = customers.find((c) => c.id === newId)?.assigned_tier || 1;
-                  setItems((prev) =>
-                    prev.map((item) => recalcItem({ ...item, price_override: null }, newTier))
-                  );
-                }}
-                className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
-              >
-                <option value="">Select customer...</option>
-                {customers.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.farm_name}
-                  </option>
-                ))}
-              </select>
-            </div>
+            <SearchableSelect
+              label="Customer"
+              required
+              value={customerId}
+              onChange={handleCustomerChange}
+              options={customers.map((customer) => ({
+                value: customer.id,
+                label: customer.farm_name,
+                sublabel: customer.account_number || undefined,
+              }))}
+              placeholder="Search by farm name or account number..."
+            />
 
             {/* Codex round-4 P2: hide Order Name + Order Date in rush/price-later
                 mode — create_rush_order persists neither (it ships at CURRENT_DATE
@@ -619,6 +737,15 @@ export default function NewOrder() {
                   onChange={(e) => setOrderDate(e.target.value)}
                 />
               </div>
+            )}
+
+            {!priceLater && (
+              <Input
+                label="Requested delivery (optional) — schedules next"
+                type="date"
+                value={requestedDeliveryDate}
+                onChange={(e) => setRequestedDeliveryDate(e.target.value)}
+              />
             )}
 
             <div>
@@ -744,6 +871,7 @@ export default function NewOrder() {
                                 ? getTierPrice(products.find((p) => p.id === item.product_id)!, customerTier)
                                 : 0
                             )}`}
+                            aria-label="Reset price to catalog"
                             className="p-1.5 rounded text-amber-500 hover:text-amber-700 hover:bg-amber-100 transition-colors flex-shrink-0"
                           >
                             <RotateCcw className="w-4 h-4" />
@@ -878,19 +1006,6 @@ export default function NewOrder() {
           </div>
         </Card>
       )}
-
-      <ConfirmModal
-        open={!!duplicateWarning}
-        onClose={() => setDuplicateWarning(null)}
-        onConfirm={() => {
-          setDuplicateWarning(null);
-          submitOrder();
-        }}
-        title="Duplicate Order Warning"
-        message={duplicateWarning || ''}
-        confirmLabel="Create Order"
-        variant="warning"
-      />
 
       <Modal
         open={showProductModal}

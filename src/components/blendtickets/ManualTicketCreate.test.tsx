@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 
 // Fully chainable Supabase query-builder mock
 function chainable(resolveWith: unknown = { data: [], error: null }) {
@@ -23,8 +23,19 @@ function chainable(resolveWith: unknown = { data: [], error: null }) {
   return builder;
 }
 
+// Product catalog returned for the `products` table so the product <select> has options.
+const TEST_PRODUCTS = [
+  { id: 'p1', product_name: 'Roundup PowerMax', is_active: true },
+  { id: 'p2', product_name: 'Atrazine 4L', is_active: true },
+];
+
 vi.mock('../../lib/db', () => ({
-  supabase: { from: vi.fn(() => chainable()), rpc: vi.fn(() => chainable()) },
+  supabase: {
+    from: vi.fn((table: string) =>
+      chainable(table === 'products' ? { data: TEST_PRODUCTS, error: null } : { data: [], error: null })
+    ),
+    rpc: vi.fn(() => chainable()),
+  },
 }));
 
 vi.mock('../../contexts/AuthContext', () => ({
@@ -58,5 +69,35 @@ describe('ManualTicketCreate', () => {
   it('renders product section', () => {
     render(<ManualTicketCreate {...defaultProps} />);
     expect(screen.getAllByText(/product/i).length).toBeGreaterThan(0);
+  });
+
+  // A1 regression guard: the product-select onChange calls updateProduct twice back-to-back
+  // (product_id then product_name). With a stale-closure updateProduct the second call overwrote
+  // the first and product_id was lost (select reverted to ''), causing $0 pricing / FK crash.
+  // The functional-updater fix must keep BOTH the id and the name.
+  it('persists product_id when a product is selected (no stale-closure wipe)', async () => {
+    render(<ManualTicketCreate {...defaultProps} />);
+
+    // Add a blank product line (the product picker only renders per product row).
+    fireEvent.click(screen.getByRole('button', { name: /add product/i }));
+
+    const productInput = screen.getByPlaceholderText('Select Product');
+    fireEvent.click(productInput);
+    fireEvent.change(productInput, { target: { value: 'Roundup' } });
+
+    // Wait for the async product catalog to load into the open product picker.
+    const productOption = await screen.findByRole('option', { name: 'Roundup PowerMax' });
+
+    // Select a product — fires the double updateProduct.
+    fireEvent.mouseDown(productOption);
+    fireEvent.click(productOption);
+
+    // product_name must be applied too.
+    expect(productInput).toHaveValue('Roundup PowerMax');
+
+    // Reopen the picker so the selected option exposes the persisted product_id.
+    fireEvent.click(productInput);
+    const selectedProductOption = await screen.findByRole('option', { name: 'Roundup PowerMax' });
+    expect(selectedProductOption).toHaveAttribute('aria-selected', 'true');
   });
 });

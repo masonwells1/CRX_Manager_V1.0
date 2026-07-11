@@ -2,6 +2,7 @@ import { useLocation } from 'react-router-dom';
 
 const pageMeta: Record<string, { title: string; accent: string }> = {
   '/': { title: 'Operational', accent: 'Dashboard' },
+  '/dashboard': { title: 'Operational', accent: 'Dashboard' },
   '/products': { title: 'Product', accent: 'Master' },
   '/customers': { title: 'Customer', accent: 'Database' },
   '/quotes': { title: 'Quote', accent: 'Builder' },
@@ -25,6 +26,7 @@ const pageMeta: Record<string, { title: string; accent: string }> = {
   '/application-records': { title: 'Application', accent: 'Records' },
   '/lot-trace': { title: 'Lot', accent: 'Trace' },
   '/label-review': { title: 'Label', accent: 'Review' },
+  '/label-data-quality': { title: 'Label Data', accent: 'Quality' },
   '/delivery-remainders': { title: 'Delivery', accent: 'Remainders' },
   '/brand-vs-generic': { title: 'Brand vs', accent: 'Generic' },
   '/reports': { title: 'Reports', accent: 'Dashboard' },

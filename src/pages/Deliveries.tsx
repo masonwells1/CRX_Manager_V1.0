@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo , useCallback, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Plus,
   Truck,
@@ -80,6 +80,25 @@ const priorityBadge = (p: string) => {
   return <Badge variant={s.variant}>{s.label}</Badge>;
 };
 
+// Default list order keeps today's work first, followed by upcoming then recent past deliveries.
+const compareDefaultDeliveryOrder = (a: DeliveryRow, b: DeliveryRow, todayDate: string) => {
+  const bucketFor = (scheduledDate: string) => (
+    scheduledDate === todayDate ? 1 : scheduledDate > todayDate ? 2 : 3
+  );
+  const aBucket = bucketFor(a.scheduled_date);
+  const bBucket = bucketFor(b.scheduled_date);
+  if (aBucket !== bBucket) return aBucket - bBucket;
+
+  if (a.scheduled_date !== b.scheduled_date) {
+    return aBucket === 3
+      ? b.scheduled_date.localeCompare(a.scheduled_date)
+      : a.scheduled_date.localeCompare(b.scheduled_date);
+  }
+
+  const numberComparison = String(a.delivery_number ?? a.id).localeCompare(String(b.delivery_number ?? b.id));
+  return numberComparison || a.id.localeCompare(b.id);
+};
+
 const SELECTABLE_STATUSES = ['scheduled', 'in_progress'];
 const DATE_PRESETS = [
   { value: '', label: 'All Dates' },
@@ -94,6 +113,7 @@ export default function Deliveries() {
   const batchRescheduleIdem = useIdempotencyKey('batch_reschedule_deliveries', profile?.id || '');
   const reassignIdem = useIdempotencyKey('reassign_delivery', profile?.id || '');
   // F3 act-from-list: complete an in_progress delivery in place (signed-by popup).
+  const confirmIdem = useIdempotencyKey('confirm_delivery', profile?.id || '');
   const completeIdem = useIdempotencyKey('complete_delivery', profile?.id || '');
   const [completeTarget, setCompleteTarget] = useState<DeliveryRow | null>(null);
   // Send the in-app completion notification at most once per delivery. complete_delivery
@@ -102,8 +122,10 @@ export default function Deliveries() {
   // driver/admin notifications on that replay (Codex P2).
   const notifiedCompletionFor = useRef<Set<string>>(new Set());
   const [signedBy, setSignedBy] = useState('');
+  const [deliveredOnDate, setDeliveredOnDate] = useState(today());
   const [completing, setCompleting] = useState(false);
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { toast } = useToast();
   const [deliveries, setDeliveries] = useState<DeliveryRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -145,6 +167,7 @@ export default function Deliveries() {
 
   /* Quick Delivery modal */
   const [quickDeliveryOpen, setQuickDeliveryOpen] = useState(false);
+  const [quickDeliveryInitialCustomerId, setQuickDeliveryInitialCustomerId] = useState<string>();
 
   /* View mode: list or calendar */
   const [viewMode, setViewMode] = useState<'list' | 'calendar'>('list');
@@ -165,6 +188,28 @@ export default function Deliveries() {
   // customers-page permission: this blocks drivers (not in the page's roles — Codex
   // P1) AND a sales rep who has /customers in their deny-list (Codex P2).
   const canPeekCustomer = hasPageAccess(role, deniedPages, 'customers');
+
+  // Consume a Quick Delivery deep link per navigation. The param strip is the
+  // re-entry guard; a repeat deep link re-adds the param and re-opens the modal.
+  useEffect(() => {
+    if (searchParams.get('quickDeliver') !== '1') return;
+    if (!role) return;
+
+    if (canQuickDeliver) {
+      setQuickDeliveryInitialCustomerId(searchParams.get('customer_id') || undefined);
+      setQuickDeliveryOpen(true);
+    }
+
+    const nextSearchParams = new URLSearchParams(searchParams);
+    nextSearchParams.delete('quickDeliver');
+    nextSearchParams.delete('customer_id');
+    setSearchParams(nextSearchParams, { replace: true });
+  }, [canQuickDeliver, role, searchParams, setSearchParams]);
+
+  const closeQuickDelivery = () => {
+    setQuickDeliveryOpen(false);
+    setQuickDeliveryInitialCustomerId(undefined);
+  };
 
   const fetchDrivers = useCallback(async () => {
     // PR-07 follow-up: driver filter dropdown only uses d.id + d.full_name; safe via view.
@@ -213,9 +258,14 @@ export default function Deliveries() {
     let query = supabase
       .from('deliveries')
       .select('*, customer:customers(farm_name, parent_customer_id)')
-      .neq('status', 'cancelled')
       .order('scheduled_date', { ascending: false })
       .limit(500);
+
+    if (statusFilter === 'cancelled' || statusFilter === 'voided') {
+      query = query.eq('status', statusFilter);
+    } else {
+      query = query.not('status', 'in', '("cancelled","voided")');
+    }
 
     // Driver sees only their deliveries
     if (isDriver && profile?.id) {
@@ -301,7 +351,8 @@ export default function Deliveries() {
       farm_group_name: d.customer?.parent_customer_id ? parentNameMap[d.customer.parent_customer_id] || null : null,
     }));
 
-    setDeliveries(rows);
+    const todayForSort = today();
+    setDeliveries(rows.sort((a, b) => compareDefaultDeliveryOrder(a, b, todayForSort)));
 
     // Inventory shortage check for active (non-completed) deliveries
     const activeIds = rows
@@ -347,28 +398,46 @@ export default function Deliveries() {
     }
 
     setLoading(false);
-  }, [isDriver, profile, toast]);
+  }, [isDriver, profile, statusFilter, toast]);
 
-  // F3 act-from-list: complete an in_progress delivery in full, in place.
-  // Uses the same complete_delivery RPC DeliveryDetail calls (in_progress-only,
-  // actor-bound, idempotent). p_quantities omitted = deliver in full; partial
-  // deliveries + signature image + issue flags stay on the detail page.
+  // F3 act-from-list: complete a delivery in full, in place. Scheduled deliveries
+  // are confirmed first; p_quantities omitted = deliver in full. Partial deliveries,
+  // signature image, and issue flags stay on the detail page.
   const handleCompleteConfirm = async () => {
     if (!completeTarget || !profile) return;
     if (!signedBy.trim()) { toast('error', 'Please enter a signature name'); return; }
     const target = completeTarget;
     const idemKey = completeIdem.getKey();
+    let confirmed = false;
     // Route through runCriticalAction for parity with this page's other mutations.
-    await runCriticalAction({
+    const completed = await runCriticalAction({
       action: async () => {
+        if (target.status === 'scheduled') {
+          const { data, error } = await supabase.rpc('confirm_delivery', {
+            p_delivery_id: target.id,
+            p_idempotency_key: confirmIdem.getKey(),
+          });
+          if (error) throw error;
+          assertRpcResult(data, 'confirm_delivery');
+          confirmIdem.resetKey();
+          confirmed = true;
+        }
+
+        // completeIdem is intentionally retained until onSuccess, so a retry after a
+        // lost response replays the same complete_delivery request idempotently.
         const { data, error } = await supabase.rpc('complete_delivery', {
           p_delivery_id: target.id,
           p_signed_by: signedBy.trim(),
           p_performed_by: profile.id,
           p_idempotency_key: idemKey,
+          // Use local midday so the ISO timestamp stays on the selected delivery date.
+          ...(deliveredOnDate && deliveredOnDate !== today()
+            ? { p_completed_at: new Date(deliveredOnDate + 'T12:00:00').toISOString() }
+            : {}),
         });
         if (error) throw error;
         assertRpcResult(data, 'complete_delivery');
+        return true;
       },
       toast,
       setLoading: setCompleting,
@@ -387,9 +456,20 @@ export default function Deliveries() {
         }
         setCompleteTarget(null);
         setSignedBy('');
+        setDeliveredOnDate(today());
         fetchDeliveries();
       },
     });
+
+    if (!completed && confirmed) {
+      // Confirm succeeded so the delivery is now in_progress; keep the modal open
+      // with the SAME retained complete-key (completeIdem only resets on success)
+      // so a retry replays idempotently. If the failed call actually committed
+      // server-side, the replay returns the cached result and onSuccess (including
+      // the completion notification) still fires.
+      setCompleteTarget((prev) => (prev && prev.id === target.id ? { ...prev, status: 'in_progress' } : prev));
+      await fetchDeliveries();
+    }
   };
 
   useEffect(() => {
@@ -842,7 +922,10 @@ export default function Deliveries() {
                 size="sm"
                 variant="secondary"
                 icon={<Zap className="w-4 h-4" />}
-                onClick={() => setQuickDeliveryOpen(true)}
+                onClick={() => {
+                  setQuickDeliveryInitialCustomerId(undefined);
+                  setQuickDeliveryOpen(true);
+                }}
               >
                 Quick Delivery
               </Button>
@@ -926,7 +1009,8 @@ export default function Deliveries() {
         {/* Quick Delivery Modal */}
         <QuickDeliveryModal
           open={quickDeliveryOpen}
-          onClose={() => setQuickDeliveryOpen(false)}
+          onClose={closeQuickDelivery}
+          initialCustomerId={quickDeliveryInitialCustomerId}
         />
       </div>
     );
@@ -1043,15 +1127,22 @@ export default function Deliveries() {
       key: 'actions',
       header: '',
       render: (row) =>
-        row.status === 'in_progress' ? (
+        row.status === 'in_progress' || row.status === 'scheduled' ? (
           <button
-            onClick={(e) => { e.stopPropagation(); completeIdem.resetKey(); setCompleteTarget(row); setSignedBy(''); }}
-            title="Mark this delivery complete"
-            aria-label={`Mark delivery ${row.delivery_number} complete`}
+            onClick={(e) => {
+              e.stopPropagation();
+              completeIdem.resetKey();
+              if (row.status === 'scheduled') confirmIdem.resetKey();
+              setCompleteTarget(row);
+              setSignedBy('');
+              setDeliveredOnDate(today());
+            }}
+            title={row.status === 'scheduled' ? 'Mark this delivery delivered' : 'Mark this delivery complete'}
+            aria-label={`Mark delivery ${row.delivery_number} ${row.status === 'scheduled' ? 'delivered' : 'complete'}`}
             className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium text-crx-green border border-crx-green/30 hover:bg-crx-green-light transition-colors"
           >
             <CheckCircle2 className="w-3.5 h-3.5" />
-            Complete
+            {row.status === 'scheduled' ? 'Mark Delivered' : 'Complete'}
           </button>
         ) : null,
     },
@@ -1157,7 +1248,10 @@ export default function Deliveries() {
             <Button
               variant="secondary"
               icon={<Zap className="w-4 h-4" />}
-              onClick={() => setQuickDeliveryOpen(true)}
+              onClick={() => {
+                setQuickDeliveryInitialCustomerId(undefined);
+                setQuickDeliveryOpen(true);
+              }}
             >
               Quick Delivery
             </Button>
@@ -1294,6 +1388,8 @@ export default function Deliveries() {
                   <option value="scheduled">Scheduled</option>
                   <option value="in_progress">In Progress</option>
                   <option value="completed">Completed</option>
+                  <option value="cancelled">Cancelled</option>
+                  <option value="voided">Voided</option>
                 </select>
                 <select
                   value={driverFilter}
@@ -1397,7 +1493,8 @@ export default function Deliveries() {
       {/* Quick Delivery Modal */}
       <QuickDeliveryModal
         open={quickDeliveryOpen}
-        onClose={() => setQuickDeliveryOpen(false)}
+        onClose={closeQuickDelivery}
+        initialCustomerId={quickDeliveryInitialCustomerId}
       />
 
       <CustomerDrawer
@@ -1409,8 +1506,8 @@ export default function Deliveries() {
 
       <Modal
         open={!!completeTarget}
-        onClose={() => { setCompleteTarget(null); setSignedBy(''); }}
-        title="Mark Delivery Complete"
+        onClose={() => { setCompleteTarget(null); setSignedBy(''); setDeliveredOnDate(today()); }}
+        title={completeTarget?.status === 'scheduled' ? 'Mark Delivered' : 'Mark Delivery Complete'}
       >
         <div className="space-y-4">
           <p className="text-sm text-secondary">
@@ -1418,6 +1515,11 @@ export default function Deliveries() {
             <span className="font-medium text-nav-dark">{completeTarget?.customer_name}</span> — all items delivered in full.
             For a partial delivery, or to email the customer their receipt, open the delivery instead.
           </p>
+          {completeTarget?.status === 'scheduled' && (
+            <p className="text-sm text-secondary">
+              This will confirm and complete the delivery in one step. Inventory is deducted and a draft invoice is created.
+            </p>
+          )}
           <div>
             <label htmlFor="complete-signed-by" className="block text-xs font-medium text-secondary mb-1">Signed by</label>
             <input
@@ -1429,10 +1531,22 @@ export default function Deliveries() {
               className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
             />
           </div>
+          <div>
+            <label htmlFor="delivered-on" className="block text-xs font-medium text-secondary mb-1">Delivered on</label>
+            <input
+              id="delivered-on"
+              type="date"
+              value={deliveredOnDate}
+              onChange={(e) => setDeliveredOnDate(e.target.value)}
+              max={todayStr}
+              className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+            />
+            <p className="mt-1 text-xs text-secondary">Recording a delivery that already happened? Set the real date — it becomes the invoice date.</p>
+          </div>
           <div className="flex justify-end gap-3 pt-2">
-            <Button variant="ghost" onClick={() => { setCompleteTarget(null); setSignedBy(''); }}>Cancel</Button>
+            <Button variant="ghost" onClick={() => { setCompleteTarget(null); setSignedBy(''); setDeliveredOnDate(today()); }}>Cancel</Button>
             <Button icon={<CheckCircle2 className="w-4 h-4" />} onClick={handleCompleteConfirm} loading={completing} disabled={!signedBy.trim()}>
-              Mark Complete
+              {completeTarget?.status === 'scheduled' ? 'Mark Delivered' : 'Mark Complete'}
             </Button>
           </div>
         </div>

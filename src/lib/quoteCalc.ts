@@ -133,6 +133,40 @@ export function recalcItem(
   };
 }
 
+/**
+ * A product's CATALOG price PER ACRE at a tier — the cost/acre if applied at its
+ * OWN standard rate_per_acre. Computed the SAME way recalcItem prices a line's
+ * per-acre (tierPrice × rateInOz / inventoryUnitFactorOz), so the value shown in
+ * the product picker equals the line's $/acre once the product is added at its
+ * default rate. Reference-only, for comparing products by cost-per-acre (P2-5).
+ *
+ * Deliberately recomputes rather than reading products.tierN_price_per_acre.
+ * Those stored columns are now maintained CORRECTLY (unit-fixed 2026-07-03,
+ * migration 20260702190000 — same formula as here), but we recompute live so the
+ * picker always reflects the VIEWING customer's tier and can never lag a save.
+ * (Before that fix they used a unit-inconsistent formula — rate in oz over
+ * container_size in gal — and were wildly wrong: ~43% over $500/acre, up to $16k.)
+ *
+ * Returns null when the product has no positive rate_per_acre, or the inventory
+ * unit doesn't convert (factor 0) — never a fabricated number.
+ */
+export function catalogPricePerAcre(
+  product: Product,
+  tierNum: number,
+  conversions: UnitConversion[]
+): number | null {
+  const rate = product.rate_per_acre;
+  if (rate == null || !Number.isFinite(rate) || rate <= 0) return null;
+  const inventoryUnitFactorOz = getConversionFactor(
+    product.inventory_unit || product.unit_size,
+    conversions
+  );
+  if (!(inventoryUnitFactorOz > 0)) return null;
+  const rateInOz = rate * getConversionFactor(product.rate_unit, conversions);
+  const perAcre = getTierPrice(product, tierNum) * (rateInOz / inventoryUnitFactorOz);
+  return Math.round(perAcre * 100) / 100;
+}
+
 /** Compute quote-level totals from items */
 export function computeQuoteTotals(items: CalcItem[]): {
   totalPrice: number;

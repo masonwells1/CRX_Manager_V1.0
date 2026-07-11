@@ -16,7 +16,7 @@ import { supabase } from './db';
 import type { Json } from '../types/supabase';
 import { Sentry } from './sentry';
 import { createNotification, notifyAdmins } from './activityLogger';
-import { localToday, formatLocalDate } from './dateUtils';
+import { localToday, formatLocalDate, parseLocalDate } from './dateUtils';
 
 /**
  * Log a notification failure to the failed_notifications table.
@@ -171,7 +171,7 @@ export async function notifyDriverAssigned(
     await createNotification(
       driverId,
       'New Delivery Assigned',
-      `You've been assigned delivery ${deliveryNumber} for ${customerName} on ${new Date(scheduledDate).toLocaleDateString()}`,
+      `You've been assigned delivery ${deliveryNumber} for ${customerName} on ${parseLocalDate(scheduledDate).toLocaleDateString()}`,
       'delivery_assigned',
       'delivery',
       deliveryId
@@ -181,6 +181,105 @@ export async function notifyDriverAssigned(
       context: 'notifyDriverAssigned',
       driverId,
       deliveryNumber,
+    });
+  }
+}
+
+/**
+ * Notify an applicator when a job is dispatched/assigned to them — either the
+ * whole-job legacy assign (JobDetail assigning jobs.applicator_id) or a
+ * per-location dispatch (DispatchWizard / DispatchBoard reassign). Mirrors
+ * notifyDriverAssigned's shape exactly. U12 (2026-07-06): applicators had NO
+ * notification at all before this — verified by grepping JobDetail.tsx/
+ * DispatchWizard.tsx/DispatchBoard.tsx for any notify-style/createNotification
+ * call around the assign/dispatch RPCs; none existed.
+ */
+export async function notifyApplicatorDispatched(
+  applicatorId: string,
+  jobNumber: string,
+  customerName: string,
+  jobDate: string | null,
+  jobId: string
+) {
+  try {
+    // parseLocalDate, not new Date(): jobs.job_date is a bare YYYY-MM-DD, which
+    // new Date() parses as UTC midnight → the message names the PREVIOUS day in
+    // US timezones (U12 Codex P2).
+    const dateLabel = jobDate ? parseLocalDate(jobDate).toLocaleDateString() : 'an upcoming date';
+    await createNotification(
+      applicatorId,
+      'New Job Assigned',
+      `You've been assigned job ${jobNumber} for ${customerName} on ${dateLabel}`,
+      'job_dispatched',
+      'job',
+      jobId
+    );
+  } catch (err) {
+    await logNotificationFailure('job_dispatched', err, 'job', jobId, {
+      context: 'notifyApplicatorDispatched',
+      applicatorId,
+      jobNumber,
+    });
+  }
+}
+
+/**
+ * Notify an applicator when a job THEY were assigned to gets rescheduled to a
+ * different date (job_date changed while the same applicator stays assigned).
+ */
+export async function notifyApplicatorRescheduled(
+  applicatorId: string,
+  jobNumber: string,
+  customerName: string,
+  newJobDate: string | null,
+  jobId: string
+) {
+  try {
+    // parseLocalDate — same UTC-midnight-shift reason as notifyApplicatorDispatched.
+    const dateLabel = newJobDate ? parseLocalDate(newJobDate).toLocaleDateString() : 'an unscheduled date';
+    await createNotification(
+      applicatorId,
+      'Job Rescheduled',
+      `Job ${jobNumber} for ${customerName} was moved to ${dateLabel}`,
+      'job_rescheduled',
+      'job',
+      jobId
+    );
+  } catch (err) {
+    await logNotificationFailure('job_rescheduled', err, 'job', jobId, {
+      context: 'notifyApplicatorRescheduled',
+      applicatorId,
+      jobNumber,
+    });
+  }
+}
+
+/**
+ * Notify an applicator when they're REMOVED from a job — the whole-job
+ * applicator was changed/cleared, or their per-location dispatch was
+ * undispatched/reassigned to someone else. Lets them know it's off their plate
+ * without them discovering it only when the card silently disappears.
+ */
+export async function notifyApplicatorUndispatched(
+  applicatorId: string,
+  jobNumber: string,
+  customerName: string,
+  jobId: string
+) {
+  try {
+    await createNotification(
+      applicatorId,
+      'Job Removed From Your Schedule',
+      `Job ${jobNumber} for ${customerName} is no longer assigned to you`,
+      'job_undispatched',
+      'job',
+      jobId
+    );
+  } catch (err) {
+    await logNotificationFailure('job_undispatched', err, 'job', jobId, {
+      context: 'notifyApplicatorUndispatched',
+      applicatorId,
+      jobNumber,
     });
   }
 }
@@ -514,7 +613,7 @@ export async function notifyDeliveryCompleted(
 
 /**
  * Run all periodic notification checks.
- * Call this once from Dashboard on load.
+ * Retired from Dashboard-load in favor of the run_morning_notification_checks cron (U18).
  */
 export async function runPeriodicNotificationChecks() {
   await Promise.all([

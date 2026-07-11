@@ -1,10 +1,13 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { RefreshCw, Tractor, ClipboardCheck, ArrowRight } from 'lucide-react';
+import { RefreshCw, Tractor, ClipboardCheck, ArrowRight, CheckCircle2 } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
+import ConfirmModal from '../components/ui/ConfirmModal';
 import { useToast } from '../components/ui/Toast';
-import { supabase } from '../lib/db';
+import { useAuth } from '../contexts/AuthContext';
+import { supabase, assertRpcResult, sanitizeError } from '../lib/db';
+import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { Sentry } from '../lib/sentry';
 import { SkeletonCard } from '../components/ui/Skeleton';
 import { formatCents as fmt } from '../lib/money';
@@ -24,7 +27,8 @@ import { formatCents as fmt } from '../lib/money';
 // application_records.invoice_id, so billed/no-charge work could still show as
 // "unbilled". The two source-of-truth backlogs above are the correct view.
 //
-// READ-ONLY: it lists and links out to the source screens — it writes nothing.
+// Job rows can be billed here through the same guarded RPC as JobDetail. Blend-ticket
+// rows remain navigate-only because that billing path has a parked commission follow-up.
 // (Lives under /field-invoices/* so it inherits the Field Invoices permission.)
 
 const QUERY_LIMIT = 500;
@@ -49,6 +53,22 @@ interface Section {
   rowPath: (id: string) => string;   // where a row click goes (the specific record)
 }
 
+interface TransferJobInvoiceResult {
+  invoice_id: string;
+  invoice_number?: string;
+  invoice_count?: number;
+  split?: boolean;
+}
+
+interface JobInvoiceKeyControls {
+  getKey: () => string;
+  resetKey: () => void;
+}
+
+interface PendingJobInvoice extends JobInvoiceKeyControls {
+  row: UnbilledRow;
+}
+
 type RawRow = Record<string, unknown> & { customer?: { farm_name?: string } | null };
 
 function mapRows(data: RawRow[] | null, refKey: string, dateKey: string, amountKey?: string): UnbilledRow[] {
@@ -62,12 +82,61 @@ function mapRows(data: RawRow[] | null, refKey: string, dateKey: string, amountK
   }));
 }
 
+function CreateJobInvoiceButton({
+  row,
+  profileId,
+  disabled,
+  onRequest,
+  onRegister,
+}: {
+  row: UnbilledRow;
+  profileId: string;
+  disabled: boolean;
+  onRequest: (intent: PendingJobInvoice) => void;
+  onRegister: (jobId: string, controls: JobInvoiceKeyControls | null) => void;
+}) {
+  const { getKey, resetKey } = useIdempotencyKey('transfer_job_to_invoice', profileId);
+
+  useEffect(() => {
+    onRegister(row.id, { getKey, resetKey });
+    return () => onRegister(row.id, null);
+  }, [getKey, onRegister, resetKey, row.id]);
+
+  return (
+    <Button
+      size="sm"
+      showChevron={false}
+      disabled={disabled}
+      onClick={(event) => {
+        event.stopPropagation();
+        onRequest({ row, getKey, resetKey });
+      }}
+    >
+      Create Invoice
+    </Button>
+  );
+}
+
 export default function UnbilledApplications() {
   const navigate = useNavigate();
   const { toast } = useToast();
+  const { profile } = useAuth();
   const [loading, setLoading] = useState(true);
   const [jobs, setJobs] = useState<UnbilledRow[]>([]);
   const [tickets, setTickets] = useState<UnbilledRow[]>([]);
+  const [pendingJobInvoice, setPendingJobInvoice] = useState<PendingJobInvoice | null>(null);
+  const [creatingInvoice, setCreatingInvoice] = useState(false);
+  const [lastCreatedMessage, setLastCreatedMessage] = useState<string | null>(null);
+  const [billNextReady, setBillNextReady] = useState(false);
+  const jobInvoiceKeysRef = useRef<Map<string, JobInvoiceKeyControls>>(new Map());
+
+  const registerJobInvoiceKeys = useCallback((jobId: string, controls: JobInvoiceKeyControls | null) => {
+    if (controls) {
+      jobInvoiceKeysRef.current.set(jobId, controls);
+    } else {
+      jobInvoiceKeysRef.current.delete(jobId);
+    }
+  }, []);
 
   const fetchAll = useCallback(async () => {
     setLoading(true);
@@ -107,6 +176,59 @@ export default function UnbilledApplications() {
   useEffect(() => {
     fetchAll();
   }, [fetchAll]);
+
+  const handleCreateInvoice = async () => {
+    if (!profile || !pendingJobInvoice) return;
+    setCreatingInvoice(true);
+
+    try {
+      const { data, error } = await supabase.rpc('transfer_job_to_invoice', {
+        p_job_id: pendingJobInvoice.row.id,
+        p_performed_by: profile.id,
+        p_idempotency_key: pendingJobInvoice.getKey(),
+      });
+      if (error) throw error;
+
+      const result = assertRpcResult<TransferJobInvoiceResult>(data, 'transfer_job_to_invoice');
+      pendingJobInvoice.resetKey();
+
+      const remainingJobs = jobs.filter((job) => job.id !== pendingJobInvoice.row.id);
+      const successMessage = result.invoice_number
+        ? `Invoice ${result.invoice_number} created`
+        : result.split && (result.invoice_count ?? 0) > 1
+          ? `${result.invoice_count} split invoices created`
+          : 'Invoice created';
+
+      setJobs(remainingJobs);
+      setPendingJobInvoice(null);
+      setLastCreatedMessage(successMessage);
+      setBillNextReady(remainingJobs.length > 0);
+      toast('success', successMessage);
+    } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), {
+        extra: { context: 'transfer_job_to_invoice', jobId: pendingJobInvoice.row.id },
+      });
+      toast('error', sanitizeError(err));
+    } finally {
+      setCreatingInvoice(false);
+    }
+  };
+
+  const handleBillNext = () => {
+    const nextJob = jobs[0];
+    if (!nextJob) {
+      setBillNextReady(false);
+      return;
+    }
+
+    const keyControls = jobInvoiceKeysRef.current.get(nextJob.id);
+    if (!keyControls) {
+      toast('error', 'The next job is still loading. Please try again.');
+      return;
+    }
+
+    setPendingJobInvoice({ row: nextJob, ...keyControls });
+  };
 
   const sections: Section[] = [
     {
@@ -173,6 +295,20 @@ export default function UnbilledApplications() {
         </div>
       </div>
 
+      {lastCreatedMessage && (
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3">
+          <div className="flex items-center gap-2 text-sm font-medium text-emerald-800">
+            <CheckCircle2 className="w-5 h-5 text-crx-green flex-shrink-0" />
+            <span>{lastCreatedMessage}</span>
+          </div>
+          {billNextReady && jobs.length > 0 && (
+            <Button size="sm" showChevron={false} onClick={handleBillNext}>
+              Bill next ({jobs.length} left)
+            </Button>
+          )}
+        </div>
+      )}
+
       {/* Summary cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         {sections.map((s) => (
@@ -216,6 +352,9 @@ export default function UnbilledApplications() {
                       <th className="py-2 pr-4 font-medium text-right">Acres</th>
                       <th className="py-2 pr-4 font-medium text-right">Est. $</th>
                       <th className="py-2 pr-4 font-medium text-right">Waiting</th>
+                      {s.key === 'jobs' && profile && (
+                        <th className="py-2 font-medium text-right">Action</th>
+                      )}
                     </tr>
                   </thead>
                   <tbody>
@@ -231,6 +370,17 @@ export default function UnbilledApplications() {
                         <td className="py-2 pr-4 text-right">{row.acres != null ? row.acres : '—'}</td>
                         <td className="py-2 pr-4 text-right">{row.amount_cents != null ? fmt(row.amount_cents) : '—'}</td>
                         <td className="py-2 pr-4 text-right text-secondary">{daysWaiting(row.date)}</td>
+                        {s.key === 'jobs' && profile && (
+                          <td className="py-2 text-right">
+                            <CreateJobInvoiceButton
+                              row={row}
+                              profileId={profile.id}
+                              disabled={creatingInvoice}
+                              onRequest={setPendingJobInvoice}
+                              onRegister={registerJobInvoiceKeys}
+                            />
+                          </td>
+                        )}
                       </tr>
                     ))}
                   </tbody>
@@ -245,6 +395,21 @@ export default function UnbilledApplications() {
           </div>
         </Card>
       ))}
+
+      <ConfirmModal
+        open={pendingJobInvoice !== null}
+        onClose={() => {
+          if (!creatingInvoice) setPendingJobInvoice(null);
+        }}
+        onConfirm={() => { void handleCreateInvoice(); }}
+        title="Create Invoice"
+        message={pendingJobInvoice
+          ? `Create the invoice for job ${pendingJobInvoice.row.ref}? This bills the job's chemicals + application fee.`
+          : ''}
+        confirmLabel="Create Invoice"
+        variant="info"
+        loading={creatingInvoice}
+      />
     </div>
   );
 }

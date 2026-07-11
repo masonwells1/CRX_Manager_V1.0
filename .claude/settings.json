@@ -55,7 +55,6 @@
       "mcp__50e15046-cf2c-49da-b8df-ceef27768f63__get_publishable_keys",
       "mcp__50e15046-cf2c-49da-b8df-ceef27768f63__generate_typescript_types",
       "mcp__50e15046-cf2c-49da-b8df-ceef27768f63__search_docs",
-      "mcp__50e15046-cf2c-49da-b8df-ceef27768f63__execute_sql",
       "mcp__supabase__list_tables",
       "mcp__supabase__list_migrations",
       "mcp__supabase__list_extensions",
@@ -67,18 +66,24 @@
       "mcp__supabase__get_edge_function",
       "mcp__supabase__generate_typescript_types",
       "mcp__supabase__search_docs",
-      "mcp__supabase__execute_sql",
-      "Bash(git push:*)",
       "Workflow",
       "ScheduleWakeup"
     ],
     "ask": [
-      "mcp__50e15046-cf2c-49da-b8df-ceef27768f63__deploy_edge_function",
-      "mcp__supabase__deploy_edge_function",
-      "mcp__50e15046-cf2c-49da-b8df-ceef27768f63__apply_migration",
-      "mcp__supabase__apply_migration",
+      "Bash(git push:*)",
+      "Bash(vercel --prod:*)",
+      "Bash(vercel --production:*)",
       "Bash(supabase functions deploy:*)",
       "Bash(npx supabase functions deploy:*)",
+      "mcp__50e15046-cf2c-49da-b8df-ceef27768f63__execute_sql",
+      "mcp__50e15046-cf2c-49da-b8df-ceef27768f63__apply_migration",
+      "mcp__50e15046-cf2c-49da-b8df-ceef27768f63__deploy_edge_function",
+      "mcp__supabase__execute_sql",
+      "mcp__supabase__apply_migration",
+      "mcp__supabase__deploy_edge_function",
+      "mcp__claude_ai_Supabase__execute_sql",
+      "mcp__claude_ai_Supabase__apply_migration",
+      "mcp__claude_ai_Supabase__deploy_edge_function",
       "Bash(gh pr merge:*)",
       "mcp__github__push_files",
       "mcp__github__create_or_update_file",
@@ -119,42 +124,42 @@
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/sql-safety.mjs\"",
-            "timeout": 15
+            "timeout": 5
           },
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/money-safety.mjs\"",
-            "timeout": 15
+            "timeout": 5
           },
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/idempotency-body-check.mjs\"",
-            "timeout": 15
+            "timeout": 5
           },
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/rls-on-new-tables.mjs\"",
-            "timeout": 15
+            "timeout": 5
           },
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/status-enum-check.mjs\"",
-            "timeout": 15
+            "timeout": 5
           },
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/generated-column-check.mjs\"",
-            "timeout": 15
+            "timeout": 5
           },
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/env-guard.mjs\"",
-            "timeout": 15
+            "timeout": 5
           },
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/grant-change-guard.mjs\"",
-            "timeout": 15
+            "timeout": 5
           }
         ]
       },
@@ -164,17 +169,17 @@
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/bash-safety.mjs\"",
-            "timeout": 15
+            "timeout": 5
           },
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/active-area-guard.mjs\"",
-            "timeout": 15
+            "timeout": 5
           },
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/codex-push-guard.mjs\"",
-            "timeout": 15
+            "timeout": 5
           }
         ]
       },
@@ -184,22 +189,22 @@
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/migration-apply-guard.mjs\"",
-            "timeout": 15
+            "timeout": 5
           },
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/hold-latch-guard.mjs\"",
-            "timeout": 15
+            "timeout": 5
           },
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/live-testdata-guard.mjs\"",
-            "timeout": 15
+            "timeout": 5
           },
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/unattended-autopilot.mjs\"",
-            "timeout": 15
+            "timeout": 5
           }
         ]
       }
@@ -211,7 +216,7 @@
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/posttooluse-migration.mjs\"",
-            "timeout": 15
+            "timeout": 5
           },
           {
             "type": "command",
@@ -226,7 +231,7 @@
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/registry-freshness.mjs\"",
-            "timeout": 15
+            "timeout": 5
           }
         ]
       }
@@ -238,12 +243,12 @@
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/stop-verify.mjs\"",
-            "timeout": 15
+            "timeout": 5
           },
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/stop-wrap.mjs\"",
-            "timeout": 15
+            "timeout": 5
           }
         ]
       }
@@ -254,37 +259,37 @@
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/dangerous-phrase-warning.mjs\"",
-            "timeout": 15
+            "timeout": 5
           },
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/codex-gauntlet-reminder.mjs\"",
-            "timeout": 15
+            "timeout": 5
           },
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/agent-pair-review-reminder.mjs\"",
-            "timeout": 15
+            "timeout": 5
           },
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/codex-to-claude-handoff-reminder.mjs\"",
-            "timeout": 15
+            "timeout": 5
           },
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/ship-intent-reminder.mjs\"",
-            "timeout": 15
+            "timeout": 5
           },
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/hold-latch-prompt.mjs\"",
-            "timeout": 15
+            "timeout": 5
           },
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/autopilot-intent-reminder.mjs\"",
-            "timeout": 15
+            "timeout": 5
           }
         ]
       }
@@ -306,7 +311,7 @@
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/session-snapshot.mjs\"",
-            "timeout": 15
+            "timeout": 5
           },
           {
             "type": "command",
@@ -320,7 +325,7 @@
           },
           {
             "type": "prompt",
-            "prompt": "You are starting a new session on the CRX Manager project. Silently read CLAUDE.md from the project root and docs/workflows/SAFE_DEVELOPMENT_RULES.md, then briefly confirm context is loaded. CRITICAL CONTEXT: Mason has ZERO coding experience — always explain in plain English; show a plan and wait for approval before editing files; never assume he knows code terminology."
+            "prompt": "You are starting a new session on the CRX Manager project. Silently read AGENTS.md (the shared contract), CLAUDE.md (Claude-only routing), and docs/workflows/SAFE_DEVELOPMENT_RULES.md, then briefly confirm context is loaded. CRITICAL CONTEXT: Mason has ZERO coding experience — always explain in plain English; show a plan and wait for approval before multi-file or risky edits; never assume he knows code terminology."
           }
         ]
       }

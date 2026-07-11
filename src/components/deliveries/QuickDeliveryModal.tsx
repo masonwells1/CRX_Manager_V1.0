@@ -2,7 +2,7 @@
  * QuickDeliveryModal — Creates an ad-hoc delivery with auto-created order + draft invoice.
  * Used when a driver gets a phone call and needs to grab product and go.
  */
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AlertTriangle, Plus, Search, Trash2, Zap } from 'lucide-react';
 import Modal from '../ui/Modal';
@@ -16,6 +16,7 @@ import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
 import { localToday } from '../../lib/dateUtils';
 import { Sentry } from '../../lib/sentry';
 import { formatCents as fmtCurrency } from '../../lib/money';
+import { fetchOpenBookings, type OpenBooking } from '../../lib/openBookings';
 import type { Product, Profile } from '../../types';
 
 interface QuickItem {
@@ -38,12 +39,14 @@ interface QuickDeliveryModalProps {
   open: boolean;
   onClose: () => void;
   onCreated?: () => void;
+  initialCustomerId?: string;
 }
 
 export default function QuickDeliveryModal({
   open,
   onClose,
   onCreated,
+  initialCustomerId,
 }: QuickDeliveryModalProps) {
   const navigate = useNavigate();
   const { profile, role } = useAuth();
@@ -55,12 +58,20 @@ export default function QuickDeliveryModal({
   const [customerResults, setCustomerResults] = useState<CustomerOption[]>([]);
   const [selectedCustomer, setSelectedCustomer] = useState<CustomerOption | null>(null);
   const [showCustomerDropdown, setShowCustomerDropdown] = useState(false);
+  const [openBookings, setOpenBookings] = useState<OpenBooking[]>([]);
+  const selectedCustomerRef = useRef<CustomerOption | null>(null);
+  const wasOpenRef = useRef(false);
 
   // Products
   const [products, setProducts] = useState<Product[]>([]);
   const [showProductModal, setShowProductModal] = useState(false);
   const [productSearch, setProductSearch] = useState('');
   const [items, setItems] = useState<QuickItem[]>([]);
+  // Stock lookup for the product picker (On Floor + Net position, incl. on-order).
+  const [inventoryByProduct, setInventoryByProduct] = useState<Record<string, { available: number; prebooked: number; onOrder: number }>>({});
+  // U9 (Codex): when the stock lookup itself failed, HIDE the numbers rather
+  // than showing a misleading "On Floor: 0" for every product.
+  const [stockLookupFailed, setStockLookupFailed] = useState(false);
 
   // Drivers
   const [drivers, setDrivers] = useState<Profile[]>([]);
@@ -103,6 +114,50 @@ export default function QuickDeliveryModal({
     fetchData();
   }, [open, profile, toast]);
 
+  // U9 (#14): stock numbers for the product picker — a SEPARATE non-blocking
+  // lookup so the modal (and its tests) never wait on it. Main Warehouse only
+  // (Codex P2): the quick-delivery RPC validates and deducts ONLY this location.
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const [inventoryRes, poRes] = await Promise.all([
+          supabase.from('inventory').select('product_id, quantity_available, quantity_prebooked').eq('location', 'Main Warehouse'),
+          supabase
+            .from('purchase_order_items')
+            .select('product_id, quantity_ordered, quantity_received, purchase_orders!inner(status)')
+            .in('purchase_orders.status', ['submitted', 'partially_received']),
+        ]);
+        if (cancelled) return;
+        if (inventoryRes.error || poRes.error) {
+          // Non-fatal (the modal still works) but don't render fake zeros (Codex).
+          Sentry.captureException(inventoryRes.error || poRes.error, { extra: { context: 'QuickDeliveryModal.stockLookup' } });
+          setStockLookupFailed(true);
+          return;
+        }
+        setStockLookupFailed(false);
+        const invMap: Record<string, { available: number; prebooked: number; onOrder: number }> = {};
+        for (const row of (inventoryRes.data || []) as Array<{ product_id: string; quantity_available: number; quantity_prebooked: number }>) {
+          if (!invMap[row.product_id]) invMap[row.product_id] = { available: 0, prebooked: 0, onOrder: 0 };
+          invMap[row.product_id].available += Number(row.quantity_available);
+          invMap[row.product_id].prebooked += Number(row.quantity_prebooked);
+        }
+        for (const poi of (poRes.data || []) as Array<{ product_id: string; quantity_ordered: number; quantity_received: number }>) {
+          if (!invMap[poi.product_id]) invMap[poi.product_id] = { available: 0, prebooked: 0, onOrder: 0 };
+          invMap[poi.product_id].onOrder += Number(poi.quantity_ordered) - Number(poi.quantity_received);
+        }
+        setInventoryByProduct(invMap);
+      } catch (err) {
+        if (!cancelled) {
+          Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'QuickDeliveryModal.stockLookup' } });
+          setStockLookupFailed(true);
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [open]);
+
   // Customer search debounce
   useEffect(() => {
     if (customerSearch.length < 2 || selectedCustomer) {
@@ -136,8 +191,26 @@ export default function QuickDeliveryModal({
     return () => clearTimeout(timer);
   }, [customerSearch, selectedCustomer, toast]);
 
+  const selectedCustomerId = selectedCustomer?.id;
+  useEffect(() => {
+    if (!selectedCustomerId) {
+      setOpenBookings([]);
+      return;
+    }
+
+    let cancelled = false;
+    setOpenBookings([]);
+    fetchOpenBookings(selectedCustomerId).then((bookings) => {
+      if (!cancelled) setOpenBookings(bookings);
+    });
+
+    return () => { cancelled = true; };
+  }, [selectedCustomerId]);
+
   const selectCustomer = useCallback((c: CustomerOption) => {
+    selectedCustomerRef.current = c;
     setSelectedCustomer(c);
+    setOpenBookings([]);
     setCustomerSearch(c.farm_name + (c.account_number ? ` (${c.account_number})` : ''));
     setShowCustomerDropdown(false);
 
@@ -156,8 +229,51 @@ export default function QuickDeliveryModal({
     );
   }, [products]);
 
+  const selectCustomerRef = useRef(selectCustomer);
+  useEffect(() => {
+    selectCustomerRef.current = selectCustomer;
+  }, [selectCustomer]);
+
+  // Deep links can supply a customer ID. Fetch it only as the modal opens so a
+  // re-render while the modal is open never overrides the user's selection.
+  useEffect(() => {
+    const justOpened = open && !wasOpenRef.current;
+    wasOpenRef.current = open;
+
+    if (!justOpened || !initialCustomerId || selectedCustomerRef.current) return;
+
+    let cancelled = false;
+    const fetchInitialCustomer = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('customers')
+          .select('id, farm_name, account_number, assigned_tier')
+          .eq('id', initialCustomerId)
+          .eq('is_active', true)
+          .limit(1);
+
+        if (error) {
+          Sentry.captureException(error, { extra: { context: 'QuickDeliveryModal.fetchInitialCustomer' } });
+          return;
+        }
+
+        const customer = ((data || []) as CustomerOption[])[0];
+        if (!cancelled && customer && !selectedCustomerRef.current) {
+          selectCustomerRef.current(customer);
+        }
+      } catch (err) {
+        Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'QuickDeliveryModal.fetchInitialCustomer' } });
+      }
+    };
+
+    fetchInitialCustomer();
+    return () => { cancelled = true; };
+  }, [open, initialCustomerId]);
+
   const clearCustomer = () => {
+    selectedCustomerRef.current = null;
     setSelectedCustomer(null);
+    setOpenBookings([]);
     setCustomerSearch('');
   };
 
@@ -248,7 +364,7 @@ export default function QuickDeliveryModal({
       if (error) throw error;
       quickDeliveryIdem.resetKey();
 
-      const result = assertRpcResult<{ delivery_id: string; delivery_number: string; invoice_number: string | null; credit_warning?: boolean }>(data, 'create_quick_delivery');
+      const result = assertRpcResult<{ delivery_id: string; delivery_number: string; invoice_number: string | null; credit_warning?: boolean; stock_warning?: boolean; short_stock_count?: number }>(data, 'create_quick_delivery');
       const invoiceMsg = result.invoice_number
         ? ` with draft invoice ${result.invoice_number}`
         : ' (no invoice created)';
@@ -259,12 +375,20 @@ export default function QuickDeliveryModal({
       // admins server-side (Codex P2: do NOT re-run check_customer_credit_limit
       // here — it excludes drafts so it'd miss the just-created delivery crossing
       // the limit, and would double-notify). Just surface the RPC's flag.
+      // U9 #101 (warn-not-block): create_quick_delivery no longer errors on short stock —
+      // it proceeds, flags the ledger row, notifies admins, and returns stock_warning.
+      if (result.stock_warning) {
+        const shortN = result.short_stock_count ?? 0;
+        toast('warning', `Delivery created, but ${shortN} product(s) were short on stock — net inventory may go negative. Admins have been notified to review.`);
+      }
       if (result.credit_warning) {
         toast('warning', `Heads up: this delivery puts ${selectedCustomer.farm_name} over their credit limit. Admins have been notified.`);
       }
 
       // Reset form
+      selectedCustomerRef.current = null;
       setSelectedCustomer(null);
+      setOpenBookings([]);
       setCustomerSearch('');
       setItems([]);
       setDeliveryNotes('');
@@ -286,7 +410,9 @@ export default function QuickDeliveryModal({
 
   const handleClose = () => {
     if (!submitting) {
+      selectedCustomerRef.current = null;
       setSelectedCustomer(null);
+      setOpenBookings([]);
       setCustomerSearch('');
       setItems([]);
       setDeliveryNotes('');
@@ -322,7 +448,11 @@ export default function QuickDeliveryModal({
               value={customerSearch}
               onChange={(e) => {
                 setCustomerSearch(e.target.value);
-                if (selectedCustomer) setSelectedCustomer(null);
+                if (selectedCustomer) {
+                  selectedCustomerRef.current = null;
+                  setSelectedCustomer(null);
+                  setOpenBookings([]);
+                }
               }}
               placeholder="Search by farm name or account number..."
             />
@@ -356,6 +486,21 @@ export default function QuickDeliveryModal({
               </div>
             )}
           </div>
+
+          {openBookings.length > 0 && (
+            <div className="-mt-3 flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-900">
+              <span>
+                {openBookings.length} open booking{openBookings.length === 1 ? '' : 's'} — consider drawing from Quote {openBookings[0].quote_number} instead
+              </span>
+              <button
+                type="button"
+                onClick={() => navigate(`/quotes/${openBookings[0].id}`)}
+                className="shrink-0 font-medium text-blue-700 underline underline-offset-2 hover:text-blue-900"
+              >
+                View quote
+              </button>
+            </div>
+          )}
 
           {/* Items */}
           <div>
@@ -541,7 +686,12 @@ export default function QuickDeliveryModal({
           </div>
 
           <div className="max-h-96 overflow-y-auto space-y-2">
-            {filteredProducts.map((product) => (
+            {filteredProducts.map((product) => {
+              const tierPriceCents = getTierPrice(product);
+              const inv = inventoryByProduct[product.id];
+              const onFloor = inv ? inv.available : 0;
+              const netPos = inv ? inv.onOrder + inv.available - inv.prebooked : 0;
+              return (
               <button
                 key={product.id}
                 onClick={() => addProduct(product)}
@@ -553,12 +703,23 @@ export default function QuickDeliveryModal({
                 )}
                 <div className="flex items-center gap-4 mt-2 text-xs text-secondary">
                   {product.unit_size && <span>Size: {product.unit_size}</span>}
-                  {product.tier1_price != null && (
-                    <span>Price: {fmtCurrency(Math.round(product.tier1_price * 100))}</span>
+                  {showPricing && tierPriceCents > 0 && (
+                    <span className="text-crx-green font-medium">Price: {fmtCurrency(tierPriceCents)}</span>
+                  )}
+                  {!stockLookupFailed && (
+                    <>
+                      <span className={onFloor > 0 ? 'text-blue-600' : 'text-gray-400'}>
+                        On Floor: {onFloor.toLocaleString()}
+                      </span>
+                      <span className={netPos > 0 ? 'text-emerald-600' : netPos < 0 ? 'text-red-600' : 'text-gray-400'}>
+                        Net: {netPos.toLocaleString()}
+                      </span>
+                    </>
                   )}
                 </div>
               </button>
-            ))}
+              );
+            })}
           </div>
 
           {filteredProducts.length === 0 && (

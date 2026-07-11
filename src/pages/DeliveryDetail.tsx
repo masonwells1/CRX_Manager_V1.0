@@ -66,6 +66,14 @@ const PRIORITY_BADGE: Record<string, BadgeVariant> = {
   urgent: 'error',
 };
 
+interface CreateDeliveryInvoiceResult {
+  success: boolean;
+  delivery_id: string;
+  invoice_id: string;
+  invoice_number: string;
+  total_cents: number;
+}
+
 
 export default function DeliveryDetail() {
   const { id } = useParams<{ id: string }>();
@@ -79,6 +87,7 @@ export default function DeliveryDetail() {
   const completeIdem = useIdempotencyKey('complete_delivery', profile?.id || '');
   const voidIdem = useIdempotencyKey('void_delivery', profile?.id || '');
   const reassignIdem = useIdempotencyKey('reassign_delivery', profile?.id || '');
+  const createInvoiceIdem = useIdempotencyKey('create_invoice_for_unbilled_delivery', profile?.id || '');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [delivery, setDelivery] = useState<Delivery | null>(null);
@@ -148,6 +157,10 @@ export default function DeliveryDetail() {
   // Complete delivery confirm state
   const [completeConfirmOpen, setCompleteConfirmOpen] = useState(false);
 
+  // Office re-bill state for a completed delivery with no active covering invoice.
+  const [createInvoiceConfirmOpen, setCreateInvoiceConfirmOpen] = useState(false);
+  const [creatingInvoice, setCreatingInvoice] = useState(false);
+
   // Photo upload state
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
 
@@ -167,7 +180,7 @@ export default function DeliveryDetail() {
   // Related invoices (cross-link via shared order)
   const [relatedInvoices, setRelatedInvoices] = useState<Array<{
     id: string; invoice_number: string; invoice_date: string; status: string;
-    total_amount_cents: number;
+    total_amount_cents: number; delivery_id: string | null;
   }>>([]);
 
   // Sibling deliveries + quote context for transaction thread
@@ -182,6 +195,13 @@ export default function DeliveryDetail() {
   const canVoid = isAdmin && delivery?.status === 'completed';
   const isAssignedDriver = isDriver && profile?.id === delivery?.assigned_driver;
   const canConfirm = (isAdminOrRep || isAssignedDriver) && delivery?.status === 'scheduled';
+  // Mirrors the server's per-delivery coverage guard (U2 #34).
+  const hasActiveRelatedInvoice = relatedInvoices.some(
+    (invoice) => !['voided', 'cancelled'].includes(invoice.status)
+      && (invoice.delivery_id === delivery?.id || invoice.delivery_id == null)
+  );
+  // RPC is admin-only (finding #78's backfill twin); sales_reps bill jobs, not stray deliveries.
+  const canCreateInvoice = isAdmin && delivery?.status === 'completed' && !hasActiveRelatedInvoice;
 
   const fetchDelivery = useCallback(async () => {
     const { data: delData, error: delError } = await supabase
@@ -239,7 +259,7 @@ export default function DeliveryDetail() {
               .maybeSingle(),
             supabase
               .from('invoices')
-              .select('id, invoice_number, invoice_date, status, total_amount_cents')
+              .select('id, invoice_number, invoice_date, status, total_amount_cents, delivery_id')
               .eq('order_id', del.order_id)
               .order('invoice_date', { ascending: false }),
           ]);
@@ -264,6 +284,7 @@ export default function DeliveryDetail() {
               invoice_date: inv.invoice_date as string,
               status: inv.status as string,
               total_amount_cents: Number(inv.total_amount_cents || 0),
+              delivery_id: inv.delivery_id as string | null,
             }))
           );
 
@@ -843,6 +864,14 @@ export default function DeliveryDetail() {
       const invoiceId = autoInvoice?.auto_invoice?.invoice_id;
       if (invoiceId) setAutoInvoiceId(invoiceId);
 
+      // U9 (#37): complete_delivery now warns-not-blocks on short stock. It
+      // proceeded, flagged the ledger row for review, and notified admins.
+      const stockResult = completeResult as { stock_warning?: boolean; short_stock_count?: number } | null;
+      if (stockResult?.stock_warning) {
+        const shortN = stockResult.short_stock_count ?? 0;
+        toast('warning', `Delivery completed, but ${shortN} product(s) were short — on-hand inventory went negative. Admins have been notified to review.`);
+      }
+
       if (invoiceNum) {
         toast('success', isPartialDelivery
           ? `Delivery completed (partial). Draft invoice ${invoiceNum} created.`
@@ -1047,6 +1076,37 @@ export default function DeliveryDetail() {
       toast('error', sanitizeError(err));
     }
     setSendingEmail(false);
+  };
+
+  // U16a: office-visible twin of IntegrityCleanup's admin-only backfill (finding #78).
+  const handleCreateInvoice = async () => {
+    if (!delivery || !profile) return;
+    setCreatingInvoice(true);
+
+    try {
+      const { data, error } = await supabase.rpc('create_invoice_for_unbilled_delivery', {
+        p_delivery_id: delivery.id,
+        p_performed_by: profile.id,
+        p_idempotency_key: createInvoiceIdem.getKey(),
+      });
+      if (error) throw error;
+
+      const result = assertRpcResult<CreateDeliveryInvoiceResult>(
+        data,
+        'create_invoice_for_unbilled_delivery'
+      );
+      createInvoiceIdem.resetKey();
+      setCreateInvoiceConfirmOpen(false);
+      toast('success', `Invoice ${result.invoice_number} created`);
+      await fetchDelivery();
+    } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), {
+        extra: { context: 'create_invoice_for_unbilled_delivery', deliveryId: delivery.id },
+      });
+      toast('error', sanitizeError(err));
+    } finally {
+      setCreatingInvoice(false);
+    }
   };
 
   // ── Loading / Not Found ────────────────────────────────────────────────
@@ -1529,6 +1589,17 @@ export default function DeliveryDetail() {
                 loading={reassigning}
               >
                 Take Delivery
+              </Button>
+            )}
+            {canCreateInvoice && (
+              <Button
+                size="sm"
+                icon={<FileText className="w-4 h-4" />}
+                showChevron={false}
+                onClick={() => setCreateInvoiceConfirmOpen(true)}
+                disabled={creatingInvoice}
+              >
+                Create Invoice
               </Button>
             )}
             <Button
@@ -2424,6 +2495,19 @@ export default function DeliveryDetail() {
         prefillTitle={`Follow up: ${delivery.delivery_number}`}
         prefillContent={`Customer: ${customer?.farm_name || 'Unknown'}\nDriver: ${driver?.full_name || 'Unassigned'}\nDate: ${delivery.scheduled_date}`}
         prefillAssignee={delivery.assigned_driver || ''}
+      />
+
+      <ConfirmModal
+        open={createInvoiceConfirmOpen}
+        onClose={() => {
+          if (!creatingInvoice) setCreateInvoiceConfirmOpen(false);
+        }}
+        onConfirm={() => { void handleCreateInvoice(); }}
+        title="Create Invoice"
+        message={`Create a draft invoice for completed delivery ${delivery.delivery_number}?`}
+        confirmLabel="Create Invoice"
+        variant="info"
+        loading={creatingInvoice}
       />
 
       {/* Reassign confirm modal */}

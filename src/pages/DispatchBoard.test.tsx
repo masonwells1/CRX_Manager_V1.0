@@ -134,6 +134,12 @@ vi.mock('../lib/db', () => {
       // never called; a benign default keeps the mock total.
       rpc: vi.fn().mockResolvedValue({ data: [], error: null }),
     },
+    // Layer 2 (B3): the dispatch stock light now reads get_dispatch_stock_status via
+    // supabaseUntyped. An empty result keeps the light benign (jobs still render); these
+    // tests assert row/badge/assigned-to rendering, not a specific stock color.
+    supabaseUntyped: {
+      rpc: vi.fn().mockResolvedValue({ data: [], error: null }),
+    },
     assertRpcResult: (data: unknown) => data,
   };
 });
@@ -186,15 +192,16 @@ describe('DispatchBoard (dark field/tablet view)', () => {
     expect(screen.getAllByText('Assigned To:')).toHaveLength(1);
   });
 
-  it('exposes an OPTIONS menu with the five required entries', async () => {
+  it('keeps job tools in Options and promotes Add New Job to the header', async () => {
     renderDispatchBoard();
+    expect(await screen.findByRole('button', { name: 'Add New Job' })).toBeInTheDocument();
     const optionsBtn = await screen.findByRole('button', { name: /options/i });
     fireEvent.click(optionsBtn);
     const menu = screen.getByRole('menu');
     expect(within(menu).getByText('Filter Jobs By Recipe')).toBeInTheDocument();
     expect(within(menu).getByText('More Search Options')).toBeInTheDocument();
     expect(within(menu).getByText(/Switch View/)).toBeInTheDocument();
-    expect(within(menu).getByText('Add New Job')).toBeInTheDocument();
+    expect(within(menu).queryByText('Add New Job')).not.toBeInTheDocument();
     expect(within(menu).getByText('Reload List')).toBeInTheDocument();
   });
 

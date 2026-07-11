@@ -28,7 +28,7 @@ TABLES = [
     "cost_history", "customer_addresses", "customer_application_rates",
     "customers", "cycle_count_items", "cycle_counts", "deliveries",
     "delivery_items", "delivery_photos", "delivery_remainders",
-    "document_processing_log", "email_log", "failed_notifications",
+    "email_log", "failed_notifications",
     "field_app_location_shares", "field_app_locations",
     "field_billing_defaults", "field_crop_history", "field_polygons", "fields",
     "finance_charges", "financial_audit_log", "idempotency_keys",

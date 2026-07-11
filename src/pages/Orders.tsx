@@ -51,6 +51,8 @@ export default function Orders() {
   const [planFilter, setPlanFilter] = useState('');
   // Ship-now/price-later (sell-side #2): filter unpriced rush orders.
   const [pricingFilter, setPricingFilter] = useState('');
+  // U7 SAFE-SCOPE: filter orders complete_delivery queued for manual split billing.
+  const [splitFilter, setSplitFilter] = useState('');
   const [showImportModal, setShowImportModal] = useState(false);
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -205,6 +207,7 @@ export default function Orders() {
     if (planFilter === 'planned' && !o.is_planned) return false;
     if (planFilter === 'committed' && o.is_planned) return false;
     if (pricingFilter && o.pricing_status !== pricingFilter) return false;
+    if (splitFilter && !o.needs_split_billing) return false;
     return true;
   });
 
@@ -486,6 +489,11 @@ export default function Orders() {
           {row.is_planned && (
             <Badge variant="warning">Planned</Badge>
           )}
+          {row.needs_split_billing && (
+            <span title="Delivered with field/acre allocations — auto-invoice was skipped; create split invoices from the order.">
+              <Badge variant="warning">Needs Split Billing</Badge>
+            </span>
+          )}
           {row.active_delivery_count > 0 && row.earliest_delivery_date && (
             <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-xs font-medium bg-blue-50 text-blue-700 border border-blue-200">
               <Truck className="w-3 h-3" />
@@ -614,6 +622,7 @@ export default function Orders() {
                   <option value="partially_fulfilled">Partially Fulfilled</option>
                   <option value="fulfilled">Fulfilled</option>
                   <option value="cancelled">Cancelled</option>
+                  <option value="voided">Voided</option>
                 </select>
                 <select
                   value={planFilter}
@@ -634,6 +643,15 @@ export default function Orders() {
                   <option value="">All Pricing</option>
                   <option value="needs_pricing">Needs Pricing</option>
                   <option value="priced">Priced</option>
+                </select>
+                <select
+                  value={splitFilter}
+                  onChange={(e) => setSplitFilter(e.target.value)}
+                  aria-label="Filter by split billing status"
+                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                >
+                  <option value="">All Orders</option>
+                  <option value="needs_split">Needs Split Billing</option>
                 </select>
                 {canBulkAction && filtered.length > 0 && (
                   <button

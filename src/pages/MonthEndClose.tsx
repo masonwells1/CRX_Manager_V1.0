@@ -4,7 +4,7 @@
  *
  * Sprint 10: Month-End Close
  */
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { Calendar, CheckCircle, AlertCircle, FileText, Download, Lock, RotateCcw } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -19,6 +19,7 @@ import { logActivity } from '../lib/activityLogger';
 import { downloadBatchStatements } from '../lib/statementPdf';
 import { downloadBatchYearEndSummaries } from '../lib/yearEndSummaryPdf';
 import { formatCents as fmt } from '../lib/money';
+import { todayInBusinessTz } from '../lib/dateUtils';
 import StatementPrintDialog from '../components/statements/StatementPrintDialog';
 import YearEndSummaryDialog from '../components/reports/YearEndSummaryDialog';
 import type { DetailedStatementData, StatementOptions, YearEndSummaryData } from '../types';
@@ -44,16 +45,18 @@ interface MonthlySummary {
 }
 
 
-function getCurrentPeriod(): { start: string; end: string; label: string } {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = now.getMonth();
+// A9: period for an arbitrary (year, month) so month-end can view/close ANY month,
+// not just the current one. `month` is 0-indexed (JS Date convention).
+function getPeriodForMonth(year: number, month: number): { start: string; end: string; label: string } {
   const start = `${year}-${String(month + 1).padStart(2, '0')}-01`;
   const lastDay = new Date(year, month + 1, 0).getDate();
   const end = `${year}-${String(month + 1).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
-  const label = now.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+  const label = new Date(year, month, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
   return { start, end, label };
 }
+
+const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December'];
 
 export default function MonthEndClose() {
   const { profile } = useAuth();
@@ -84,17 +87,61 @@ export default function MonthEndClose() {
   const [needsPricingError, setNeedsPricingError] = useState(false);
   const [yeLoading, setYeLoading] = useState(false);
 
-  const current = getCurrentPeriod();
+  // A9: month/year picker — defaults to the current business-clock month.
+  const [initialBusinessToday] = useState(() => todayInBusinessTz());
+  const [selectedYear, setSelectedYear] = useState(() => Number(initialBusinessToday.slice(0, 4)));
+  const [selectedMonth, setSelectedMonth] = useState(() => Number(initialBusinessToday.slice(5, 7)) - 1);
+  const current = getPeriodForMonth(selectedYear, selectedMonth);
+  const todayStr = todayInBusinessTz();
+  const businessYear = Number(todayStr.slice(0, 4));
+  // A9: a period may only be closed once it has ENDED (owner rule, 2026-07-10).
+  // Compares the period's END (not its start) — the old `start > today` check let an
+  // admin close the current, in-progress month.
+  const periodHasEnded = current.end < todayStr;
+  const closeableOn = new Date(selectedYear, selectedMonth + 1, 1).toLocaleDateString('en-US', {
+    month: 'long',
+    day: 'numeric',
+    year: 'numeric',
+  });
+
+  // A9 (Codex P1): monotonic token to ignore stale in-flight fetch responses when the
+  // admin switches period mid-load (a slower OLD-period response must not overwrite the
+  // NEW period's state, or close would use another month's checklist).
+  const fetchTokenRef = useRef(0);
+
+  // A9 (Codex R4): change the selected period AND clear its period-scoped state in the SAME
+  // synchronous update, so no render ever treats the prior period's checklist/summary as
+  // valid for the newly selected month (closes the one-render-frame stale-state window).
+  const changePeriod = (year: number, month: number) => {
+    // A9 (Codex R5): invalidate any in-flight fetch for the OLD period SYNCHRONOUSLY, the
+    // instant the period changes — otherwise a stale response resolving in the gap before
+    // fetchData's own token bump could still set the old summary under the new period.
+    fetchTokenRef.current++;
+    setSelectedYear(year);
+    setSelectedMonth(month);
+    setLoading(true);       // show the spinner immediately — no flash of an empty checklist
+    setSummary(null);
+    setReviewedPayments(false);
+    setReviewedCommissions(false);
+    setReviewedNeedsPricing(false);
+  };
 
   const fetchData = useCallback(async () => {
+    const token = ++fetchTokenRef.current;
     setLoading(true);
+    // A9 (Codex P1): reset the per-period review confirmations so a checkbox ticked for a
+    // previously-viewed month never carries into the month being loaded now.
+    setReviewedPayments(false);
+    setReviewedCommissions(false);
+    setReviewedNeedsPricing(false);
 
     // Fetch existing periods
     const { data: periodData, error: periodError } = await supabase
       .from('accounting_periods')
       .select('*')
       .order('period_end', { ascending: false })
-      .limit(12);
+      .limit(36);
+    if (token !== fetchTokenRef.current) return;  // superseded by a newer period request
     if (periodError) {
       toast('error', 'Failed to load accounting periods');
     }
@@ -105,8 +152,14 @@ export default function MonthEndClose() {
       p_period_start: current.start,
       p_period_end: current.end,
     });
+    if (token !== fetchTokenRef.current) return;  // superseded by a newer period request
     if (!error && summaryData) {
       setSummary(assertRpcResult<MonthlySummary>(summaryData, 'get_monthly_summary'));
+    } else {
+      // A9 (Codex P1): fail-closed — never leave the PRIOR period's summary driving the
+      // checklist for the month now selected. No summary => allChecksPassed is false.
+      setSummary(null);
+      if (error) toast('error', 'Could not load the summary for this period — review before closing.');
     }
 
     // Ship-now/price-later (#2 v3): count unpriced rush orders dated on/before this
@@ -118,6 +171,7 @@ export default function MonthEndClose() {
       .not('status', 'in', '("cancelled","voided")')  // Codex P2: terminal orders aren't unbilled revenue
       .is('deleted_at', null)
       .lte('order_date', current.end);
+    if (token !== fetchTokenRef.current) return;  // superseded by a newer period request
     // Codex round-4 P1: FAIL CLOSED. If this query fails (permissions, connectivity,
     // migration/deploy mismatch), a `npCount || 0` would mark the checklist "no
     // unpriced orders" and let the period be closed over unbilled revenue. Surface
@@ -138,6 +192,14 @@ export default function MonthEndClose() {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  // A9 (Codex P2): each selected period is a distinct close intent. Reset the close
+  // idempotency key whenever the period changes, so a lost response after a successful
+  // server-side close can't replay that prior result onto a different month.
+  useEffect(() => {
+    closePeriodIdem.resetKey();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [current.start, current.end]);
 
   const currentPeriodStatus = periods.find(
     (p) => p.period_start === current.start && p.period_end === current.end,
@@ -200,11 +262,23 @@ export default function MonthEndClose() {
       ]
     : [];
 
-  const allChecksPassed = checklist.every((c) => c.done);
+  // Fail-closed: never enable close without a loaded summary for THIS period
+  // (an empty checklist otherwise makes .every() vacuously true — Codex P1).
+  const allChecksPassed = summary !== null && checklist.every((c) => c.done);
 
   const handleClose = async () => {
     if (!profile) {
       toast('error', 'Cannot close period — profile not loaded. Please refresh.');
+      return;
+    }
+    if (!periodHasEnded) {
+      toast('error', 'Cannot close a period that has not ended yet.');
+      return;
+    }
+    // A9 (Codex R4): self-guard so even a programmatic call can't close a period whose
+    // checklist (for THIS selected period) isn't satisfied — not only the disabled button.
+    if (!allChecksPassed) {
+      toast('error', 'Complete the close checklist for this period before closing.');
       return;
     }
     setClosing(true);
@@ -352,7 +426,35 @@ export default function MonthEndClose() {
           <h2 className="text-xl font-semibold font-heading text-nav-dark">Month-End Close</h2>
           <p className="text-sm text-secondary mt-1">Review and close accounting periods</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 items-center">
+          {/* A9 month/year picker — view/close any month. STRUCTURAL race guard (Codex R6):
+              the selects are disabled while a fetch (loading) OR a close (closing) is in
+              flight, so at most ONE is ever in play — no stale response / post-close refresh
+              can land under a newly-selected period. This makes the whole period-switch race
+              class impossible by construction; the reactive guards (token, fail-closed
+              summary, per-period idempotency reset) are defense-in-depth backup. */}
+          <select
+            value={selectedMonth}
+            onChange={(e) => changePeriod(selectedYear, Number(e.target.value))}
+            disabled={loading || closing}
+            className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-crx-green focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
+            aria-label="Month to review"
+          >
+            {MONTH_NAMES.map((m, i) => (
+              <option key={m} value={i}>{m}</option>
+            ))}
+          </select>
+          <select
+            value={selectedYear}
+            onChange={(e) => changePeriod(Number(e.target.value), selectedMonth)}
+            disabled={loading || closing}
+            className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-crx-green focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
+            aria-label="Year to review"
+          >
+            {Array.from({ length: 3 }, (_, k) => businessYear - 2 + k).map((y) => (
+              <option key={y} value={y}>{y}</option>
+            ))}
+          </select>
           <Button
             variant="secondary"
             icon={<Download className="w-4 h-4" />}
@@ -373,7 +475,7 @@ export default function MonthEndClose() {
             <Button
               icon={<Lock className="w-4 h-4" />}
               onClick={() => setShowCloseModal(true)}
-              disabled={!allChecksPassed}
+              disabled={!allChecksPassed || !periodHasEnded}
             >
               Roll the Month
             </Button>
@@ -497,6 +599,14 @@ export default function MonthEndClose() {
               <div className="mt-4 p-3 bg-amber-50 border border-amber-200 rounded-lg">
                 <p className="text-sm text-amber-800">
                   Resolve all checklist items before closing the period.
+                </p>
+              </div>
+            )}
+
+            {!periodHasEnded && (
+              <div className="mt-4 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                <p className="text-sm text-amber-800">
+                  This month has not ended yet. It can be closed on {closeableOn}.
                 </p>
               </div>
             )}

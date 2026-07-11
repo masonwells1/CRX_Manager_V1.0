@@ -106,6 +106,10 @@ export const RpcErrorCodes = {
   BOOKING_FULLY_DRAWN: 'BOOKING_FULLY_DRAWN',
   BOOKING_DRAW_ORDER_LOCKED: 'BOOKING_DRAW_ORDER_LOCKED',
   EMPTY_DRAW: 'EMPTY_DRAW',
+  // close_quote_as_short — refuses while scheduled/in-progress jobs still exist (U5 #1)
+  BOOKING_HAS_ACTIVE_JOBS: 'BOOKING_HAS_ACTIVE_JOBS',
+  // create_job_from_quote_section — an accepted booking is a chemical sale; make a standalone job (U5 #103)
+  QUOTE_ALREADY_CONVERTED: 'QUOTE_ALREADY_CONVERTED',
   // post_invoice / post_invoice_group ship-now-price-later gate (sell-side roadmap #2)
   PRICING_INCOMPLETE: 'PRICING_INCOMPLETE',
   // price_order (sell-side roadmap #2 v2)
@@ -186,6 +190,24 @@ export const RpcErrorCodes = {
   // record_job_post_notifications — field-app #41 post-application customer notice
   JOB_NOT_POST_NOTIFIABLE: 'JOB_NOT_POST_NOTIFIABLE',
   NOTIFICATION_NOT_FOUND: 'NOTIFICATION_NOT_FOUND',
+  // save_field_crop_history — A12 crop-history editor (structure-fix loop, 2026-07-02)
+  FIELD_NOT_FOUND: 'FIELD_NOT_FOUND',
+  CROP_TYPE_REQUIRED: 'CROP_TYPE_REQUIRED',
+  // U6 blend<->job double-bill cross-guards (2026-07-06)
+  // create_invoice_from_blend_ticket — ticket's job already has a live invoice
+  JOB_ALREADY_INVOICED: 'JOB_ALREADY_INVOICED',
+  // transfer_job_to_invoice — a blend ticket for this job is already billed
+  BLEND_TICKET_ALREADY_BILLED: 'BLEND_TICKET_ALREADY_BILLED',
+  // transfer_job_to_invoice (U7 multi-owner split) — a job whose fields carry per-field
+  // $/acre price overrides cannot be split by percentage (bill it as a single invoice)
+  SPLIT_OVERRIDE_UNSUPPORTED: 'SPLIT_OVERRIDE_UNSUPPORTED',
+  // transfer_job_to_invoice (U7) — a billed field's splits do not total 100%
+  FIELD_SPLIT_NOT_100: 'FIELD_SPLIT_NOT_100',
+  // transfer_job_to_invoice (U7) — a multi-owner job with zero billable acres
+  SPLIT_NO_ACRES: 'SPLIT_NO_ACRES',
+  // transfer_invoice_to_job (U7) — this invoice is one member of a multi-owner group;
+  // return the job to scheduling by voiding each owner invoice instead
+  JOB_BILLED_AS_GROUP: 'JOB_BILLED_AS_GROUP',
 } as const;
 
 export type RpcErrorCode = (typeof RpcErrorCodes)[keyof typeof RpcErrorCodes];

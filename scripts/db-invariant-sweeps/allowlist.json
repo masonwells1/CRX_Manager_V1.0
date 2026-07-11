@@ -333,12 +333,6 @@
     },
     {
       "predicate": "ungated-secdef-mutators",
-      "violation_key": "create_order_from_blend_ticket(p_blend_ticket_id uuid, p_order_number text, p_order_date date, p_notes text, p_performed_by uuid, p_idempotency_key text)",
-      "justification": "Transitively role-gated: body calls link_blend_ticket_to_order(...) which runs PERFORM require_admin_or_sales_rep() in the same transaction, so an unauthorized caller's order/order_items/inventory INSERTs are rolled back (verified live pg_get_functiondef 2026-06-10). No direct auth helper token in body so predicate (b) flags it. HARDENING CANDIDATE: front-load a require_admin_or_sales_rep() call at the top so the gate runs before any mutation rather than at link time.",
-      "dated": "2026-06-10"
-    },
-    {
-      "predicate": "ungated-secdef-mutators",
       "violation_key": "log_failed_notification(p_notification_type text, p_entity_type text, p_entity_id uuid, p_error_message text, p_payload jsonb, p_idempotency_key text)",
       "justification": "Frontend/cron-called failed-notification logging helper (callers: Dashboard.tsx, notificationTriggers.ts). Insert-only into failed_notifications; no financial mutation, no privilege escalation, no PII read. Intentionally left ungated per 2026-06-09 round-3 disposition (a hard auth.uid() gate would break its cron/service_role callers). Verified live pg_get_functiondef 2026-06-10.",
       "dated": "2026-06-10"
