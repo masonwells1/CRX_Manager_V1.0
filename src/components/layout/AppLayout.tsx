@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
 import Sidebar from './Sidebar';
+import MobileBottomNav from './MobileBottomNav';
 import TopBar from './TopBar';
 import OfflineBanner from '../ui/OfflineBanner';
 import CommandPalette from '../ui/CommandPalette';
@@ -12,6 +13,8 @@ export default function AppLayout() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const { title, accent } = usePageMeta();
   const location = useLocation();
+  const openMobileNav = useCallback(() => setMobileOpen(true), []);
+  const closeMobileNav = useCallback(() => setMobileOpen(false), []);
 
   // Record page visits for command palette recent items (full title)
   useEffect(() => {
@@ -40,19 +43,20 @@ export default function AppLayout() {
       >
         Skip to main content
       </a>
-      <Sidebar mobileOpen={mobileOpen} onClose={() => setMobileOpen(false)} />
+      <Sidebar mobileOpen={mobileOpen} onClose={closeMobileNav} />
       <div className="flex-1 flex flex-col min-w-0">
         <TopBar
-          onMenuClick={() => setMobileOpen(true)}
+          onMenuClick={openMobileNav}
           onSearchClick={() => setPaletteOpen(true)}
           title={title}
           accent={accent}
         />
         <OfflineBanner />
-        <main id="main-content" className="flex-1 p-4 lg:p-6">
+        <main id="main-content" className="flex-1 p-4 pb-[calc(4.5rem+env(safe-area-inset-bottom))] md:p-4 lg:p-6">
           <Outlet />
         </main>
       </div>
+      <MobileBottomNav onMoreClick={openMobileNav} moreOpen={mobileOpen} />
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
     </div>
   );

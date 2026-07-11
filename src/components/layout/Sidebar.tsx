@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import {
   ArrowLeftRight,
@@ -264,6 +264,7 @@ export default function Sidebar({ mobileOpen, onClose }: SidebarProps) {
   const location = useLocation();
   const userRole = profile?.role;
   const navigation = getNavigationForRole(userRole);
+  const mobileDrawerRef = useRef<HTMLElement>(null);
 
   // Expanded category id (null = collapsed sidebar, string = that category is open)
   const [openCategory, setOpenCategory] = useState<string | null>(() => {
@@ -288,6 +289,66 @@ export default function Sidebar({ mobileOpen, onClose }: SidebarProps) {
       // ignore storage errors
     }
   }, [openCategory]);
+
+  useEffect(() => {
+    if (!mobileOpen) return;
+
+    const drawer = mobileDrawerRef.current;
+    if (!drawer) return;
+
+    const focusableSelector = [
+      'a[href]',
+      'button:not([disabled])',
+      'input:not([disabled])',
+      'select:not([disabled])',
+      'textarea:not([disabled])',
+      '[tabindex]:not([tabindex="-1"])',
+    ].join(',');
+    const previousOverflow = document.body.style.overflow;
+    const focusableElements = () => Array.from(drawer.querySelectorAll<HTMLElement>(focusableSelector));
+    const firstFocusable = focusableElements()[0];
+
+    document.body.style.overflow = 'hidden';
+    firstFocusable?.focus();
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+
+      if (event.key !== 'Tab') return;
+
+      const focusable = focusableElements();
+      if (focusable.length === 0) {
+        event.preventDefault();
+        drawer.focus();
+        return;
+      }
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [mobileOpen, onClose]);
+
+  useEffect(() => {
+    const drawer = mobileDrawerRef.current as (HTMLElement & { inert?: boolean }) | null;
+    if (drawer) drawer.inert = !mobileOpen;
+  }, [mobileOpen]);
 
   const toggleCategory = useCallback((categoryId: string) => {
     setOpenCategory((prev) => (prev === categoryId ? null : categoryId));
@@ -442,29 +503,40 @@ export default function Sidebar({ mobileOpen, onClose }: SidebarProps) {
     <>
       {/* Mobile overlay */}
       {mobileOpen && (
-        <div className="fixed inset-0 bg-black/40 z-40 lg:hidden" onClick={onClose} aria-hidden="true" />
+        <button
+          type="button"
+          tabIndex={-1}
+          aria-label="Dismiss navigation backdrop"
+          className="fixed inset-0 z-40 bg-black/40 md:hidden"
+          onClick={onClose}
+        />
       )}
 
       {/* Mobile sidebar — full-width drawer, always expanded items */}
       <aside
-        role="navigation"
-        aria-label="Main navigation"
+        ref={mobileDrawerRef}
+        id="mobile-navigation-drawer"
+        role="dialog"
+        aria-label="Navigation menu"
+        aria-modal={mobileOpen}
+        aria-hidden={!mobileOpen}
+        tabIndex={-1}
         className={`
           fixed top-0 left-0 h-full w-64 bg-nav-dark z-50
           flex flex-col
           transition-transform duration-200 ease-in-out
-          lg:hidden
-          ${mobileOpen ? 'translate-x-0' : '-translate-x-full'}
+          md:hidden
+          ${mobileOpen ? 'translate-x-0' : 'pointer-events-none -translate-x-full'}
         `}
       >
         <div className="flex items-center justify-between px-5 py-5 border-b border-white/10">
           <img src={logoWhite} alt="Crop RX Solutions" className="h-10 w-auto" />
-          <button onClick={onClose} aria-label="Close navigation menu" className="text-gray-400 hover:text-white p-1">
+          <button onClick={onClose} aria-label="Close navigation menu" className="min-h-11 min-w-11 text-gray-400 hover:text-white p-1">
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        <nav className="flex-1 py-3 overflow-y-auto">
+        <nav aria-label="Main navigation" className="flex-1 py-3 overflow-y-auto">
           <div className="space-y-0.5">{renderNavEntries(true)}</div>
         </nav>
 
@@ -497,7 +569,7 @@ export default function Sidebar({ mobileOpen, onClose }: SidebarProps) {
         role="navigation"
         aria-label="Main navigation"
         className={`
-          hidden lg:flex flex-col flex-shrink-0
+          hidden md:flex flex-col flex-shrink-0
           h-screen sticky top-0
           bg-nav-dark
           transition-[width] duration-200 ease-in-out

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
 const mockProfile = vi.fn();
@@ -99,5 +99,31 @@ describe('Sidebar', () => {
     mockProfile.mockReturnValue({ id: '1', role: 'admin', full_name: 'Admin User' });
     renderSidebar();
     expect(screen.getAllByRole('navigation').length).toBeGreaterThan(0);
+  });
+
+  it('closes the mobile drawer with Escape', () => {
+    mockProfile.mockReturnValue({ id: '1', role: 'admin', full_name: 'Admin User' });
+    const onClose = vi.fn();
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <Sidebar mobileOpen onClose={onClose} />
+      </MemoryRouter>
+    );
+
+    expect(screen.getByRole('dialog', { name: 'Navigation menu' })).toHaveAttribute('aria-modal', 'true');
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it('traps focus within the open mobile drawer', () => {
+    mockProfile.mockReturnValue({ id: '1', role: 'driver', full_name: 'Driver User' });
+    renderSidebar(true);
+
+    const closeButton = screen.getByRole('button', { name: 'Close navigation menu' });
+    const signOutButton = screen.getAllByRole('button', { name: 'Sign Out' })[0];
+    signOutButton.focus();
+    fireEvent.keyDown(document, { key: 'Tab' });
+
+    expect(closeButton).toHaveFocus();
   });
 });

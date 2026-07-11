@@ -45,7 +45,7 @@ export default function TopBar({ onMenuClick, onSearchClick, title, accent }: To
           <button
             onClick={onMenuClick}
             aria-label="Open navigation menu"
-            className="lg:hidden p-2 rounded-lg text-secondary hover:bg-white hover:shadow-sm transition-all"
+            className="md:hidden min-h-11 min-w-11 p-2 rounded-lg text-secondary hover:bg-white hover:shadow-sm transition-all"
           >
             <Menu className="w-5 h-5" />
           </button>
