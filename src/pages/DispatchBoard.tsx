@@ -47,6 +47,7 @@ import CRXMap from '../components/map/CRXMap';
 import FieldBoundaryLayer from '../components/map/FieldBoundaryLayer';
 import ErrorBoundary from '../components/ErrorBoundary';
 import DispatchWizard from '../components/dispatch/DispatchWizard';
+import MobileCardList from '../components/ui/MobileCardList';
 import { usePageMeta } from '../hooks/usePageMeta';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
@@ -651,6 +652,15 @@ export default function DispatchBoard() {
 
               <button
                 type="button"
+                onClick={() => setMoreSearchOpen(true)}
+                aria-label="Open dispatch filters"
+                className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg bg-slate-800 px-3 py-2.5 text-sm font-medium text-slate-100 hover:bg-slate-700 md:hidden"
+              >
+                <SlidersHorizontal className="h-4 w-4" /> Filters
+              </button>
+
+              <button
+                type="button"
                 onClick={() => navigate('/jobs/new')}
                 className="inline-flex items-center gap-1.5 rounded-lg bg-crx-green px-3 py-2.5 text-sm font-medium text-white hover:bg-crx-green-hover min-h-[44px]"
               >
@@ -832,7 +842,34 @@ export default function DispatchBoard() {
                       <p className="text-slate-400">No jobs match the current filters.</p>
                     </div>
                   ) : (
-                    visibleJobs.map((job) => {
+                    <MobileCardList
+                      rows={visibleJobs}
+                      getRowKey={(job) => job.id}
+                      getRowLabel={(job) => `Open job ${job.job_number}`}
+                      onRowClick={(job) => navigate(`/jobs/${job.id}`)}
+                      className="text-slate-100"
+                      cardClassName="!border-slate-800 !bg-slate-900 hover:!border-slate-600 hover:!bg-slate-900"
+                      renderCard={(job) => {
+                        const badge = jobStatusToDispatchBadge(job.status);
+                        return (
+                          <div className="space-y-2">
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <p className="truncate text-sm font-semibold text-slate-100">{job.customer_name || 'Unknown customer'}</p>
+                                <p className="mt-0.5 truncate text-xs text-slate-400">{job.field_names || 'No field assigned'}</p>
+                              </div>
+                              <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-bold tracking-wide ${badge.className}`}>
+                                {badge.label}
+                              </span>
+                            </div>
+                            <p className="truncate text-sm text-slate-200">{(job.chemicals ?? []).map((chemical) => chemical.product_name).join(', ') || 'No product or blend'}</p>
+                            <p className="text-xs text-slate-400">Scheduled: {job.job_date ? new Date(`${job.job_date}T00:00:00`).toLocaleDateString() : 'Not scheduled'}</p>
+                          </div>
+                        );
+                      }}
+                      desktop={(
+                        <>
+                    {visibleJobs.map((job) => {
                       const badge = jobStatusToDispatchBadge(job.status);
                       const selected = selectedJobId === job.id;
                       const showAssign = section === 'dispatch' && canDispatch;
@@ -932,7 +969,10 @@ export default function DispatchBoard() {
                           )}
                         </div>
                       );
-                    })
+                    })}
+                        </>
+                      )}
+                    />
                   )}
                 </div>
               </>

@@ -5,6 +5,7 @@ import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge, { type BadgeVariant } from '../components/ui/Badge';
 import DataTable, { type Column } from '../components/ui/DataTable';
+import MobileCardList from '../components/ui/MobileCardList';
 import { applyTableSearchSort, type SortDir } from '../lib/tableSearchSort';
 import BulkActionBar from '../components/ui/BulkActionBar';
 import BulkDeleteConfirmModal from '../components/ui/BulkDeleteConfirmModal';
@@ -246,6 +247,7 @@ export default function Jobs() {
   const [draft, setDraft] = useState<JobFilters>(emptyJobFilters);
   const [applied, setApplied] = useState<JobFilters>(emptyJobFilters);
   const [showMore, setShowMore] = useState(false);
+  const [showMobileFilters, setShowMobileFilters] = useState(false);
   // Reference lists for the multi-select pickers.
   const [customers, setCustomers] = useState<{ id: string; farm_name: string }[]>([]);
   const [applicators, setApplicators] = useState<{ id: string; full_name: string }[]>([]);
@@ -1668,7 +1670,17 @@ export default function Jobs() {
           the first row; secondary filters behind a MORE expander. An explicit
           SEARCH applies the draft; CLEAR ALL resets everything. */}
       <Card>
-        <div className="space-y-3">
+        <button
+          type="button"
+          onClick={() => setShowMobileFilters((open) => !open)}
+          aria-expanded={showMobileFilters}
+          aria-controls="jobs-mobile-filters"
+          className="flex min-h-[44px] w-full items-center justify-between rounded-lg border border-gray-200 px-3 py-2 text-left text-sm font-medium text-nav-dark md:hidden"
+        >
+          <span>Filters{activeCount > 0 ? ` (${activeCount})` : ''}</span>
+          {showMobileFilters ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+        </button>
+        <div id="jobs-mobile-filters" className={`${showMobileFilters ? 'block' : 'hidden'} space-y-3 md:block`}>
           {/* Primary row */}
           <div className="flex flex-wrap items-end gap-3">
             <div>
@@ -1914,31 +1926,56 @@ export default function Jobs() {
               Needs Dispatch only {needsDispatchOnly && `(${jobs.filter((j) => j.needs_dispatch).length})`}
             </button>
           </div>
-          <DataTable
-            data={visibleJobs as unknown as Record<string, unknown>[]}
-            columns={columns as unknown as Column<Record<string, unknown>>[]}
-            searchable
-            searchPlaceholder="Search jobs..."
-            searchKeys={JOB_TABLE_SEARCH_KEYS}
-            // Field-app parity #15: lift the in-table search + sort so the PRINT and
-            // bottom totals read the EXACT displayed rows (displayedJobs).
-            searchValue={tableSearch}
-            onSearchChange={setTableSearch}
-            sortState={tableSort}
-            onSortChange={setTableSort}
-            emptyTitle="No jobs found"
-            emptyDescription="Create your first job to get started with scheduling."
-            loading={loading}
-            filters={
-              canBulkAction && visibleJobs.length > 0 ? (
-                <button
-                  onClick={toggleAll}
-                  className="px-3 py-2 text-xs font-medium text-secondary hover:text-nav-dark transition-colors"
-                >
-                  {allSelected ? 'Deselect All' : 'Select All'}
-                </button>
-              ) : undefined
-            }
+          <MobileCardList
+            rows={displayedJobs}
+            getRowKey={(job) => job.id}
+            getRowLabel={(job) => `Open job ${job.job_number}`}
+            onRowClick={(job) => navigate(`/jobs/${job.id}`)}
+            renderCard={(job) => (
+              <div className="space-y-2">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold text-nav-dark">
+                      {job.customers.map((customer) => customer.customer_name).join(', ') || 'Unknown customer'}
+                    </p>
+                    <p className="mt-0.5 truncate text-xs text-secondary">{job.locations.join(', ') || 'No field assigned'}</p>
+                  </div>
+                  <Badge variant={statusVariant[job.status]}>{job.status.replace('_', ' ')}</Badge>
+                </div>
+                <p className="truncate text-sm text-nav-dark">{job.chemicals.map((chemical) => chemical.product_name).join(', ') || 'No product or blend'}</p>
+                <p className="text-xs text-secondary">
+                  Scheduled: {job.job_date ? parseLocalDate(job.job_date).toLocaleDateString() : 'Not scheduled'}
+                </p>
+              </div>
+            )}
+            desktop={(
+              <DataTable
+                data={visibleJobs as unknown as Record<string, unknown>[]}
+                columns={columns as unknown as Column<Record<string, unknown>>[]}
+                searchable
+                searchPlaceholder="Search jobs..."
+                searchKeys={JOB_TABLE_SEARCH_KEYS}
+                // Field-app parity #15: lift the in-table search + sort so the PRINT and
+                // bottom totals read the EXACT displayed rows (displayedJobs).
+                searchValue={tableSearch}
+                onSearchChange={setTableSearch}
+                sortState={tableSort}
+                onSortChange={setTableSort}
+                emptyTitle="No jobs found"
+                emptyDescription="Create your first job to get started with scheduling."
+                loading={loading}
+                filters={
+                  canBulkAction && visibleJobs.length > 0 ? (
+                    <button
+                      onClick={toggleAll}
+                      className="px-3 py-2 text-xs font-medium text-secondary hover:text-nav-dark transition-colors"
+                    >
+                      {allSelected ? 'Deselect All' : 'Select All'}
+                    </button>
+                  ) : undefined
+                }
+              />
+            )}
           />
           {/* Bottom totals row — sums the currently-DISPLAYED jobs (visibleJobs
               after the table's in-table search/sort), matching what's on screen

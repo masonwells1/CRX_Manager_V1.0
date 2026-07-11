@@ -213,4 +213,16 @@ describe('DispatchBoard (dark field/tablet view)', () => {
     fireEvent.click(screen.getByText('View Map'));
     expect(screen.getByTestId('crx-map')).toBeInTheDocument();
   });
+
+  it('provides a narrow-viewport job card and a toggleable filters panel', async () => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 375 });
+    renderDispatchBoard();
+
+    const mobileCard = await screen.findByRole('button', { name: 'Open job FJOB-002' });
+    expect(mobileCard).toHaveClass('min-h-[44px]');
+    expect(mobileCard.parentElement).toHaveClass('md:hidden');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open dispatch filters' }));
+    expect(screen.getByRole('dialog', { name: 'More search options' })).toBeInTheDocument();
+  });
 });
