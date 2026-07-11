@@ -525,7 +525,8 @@ export default function OfficeCockpit() {
         .from('invoices')
         .select('order_id, delivery_id')
         .in('order_id', deliveryOrderIds)
-        .not('status', 'in', '("voided","cancelled")');
+        .not('status', 'in', '("voided","cancelled")')
+        .is('deleted_at', null);
       deliveryInvoiceError = invoiceCoverageRes.error;
       activeDeliveryInvoices = (invoiceCoverageRes.data || []) as DeliveryInvoiceCoverageRow[];
     }

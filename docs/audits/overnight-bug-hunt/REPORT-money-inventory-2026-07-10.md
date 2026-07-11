@@ -17,7 +17,21 @@ Nothing was pushed to `main`. Nothing live was changed. The one built migration 
 
 ---
 
-## ✅ APPLIED LIVE (1)
+## ✅ APPLIED LIVE (3)
+
+> After you told me (repeatedly) to stop gating SQL, I removed the autopilot block on migrations/SQL (deploys, pushes, and destructive ops stay blocked; the migration reviewer-proof gate stays). These three then went live tonight, each fully reviewed + Codex-approved + byte-identity-proven, with the applied result verified against the live database.
+
+### ✅ 1. `void_invoice` hardening — migration `20260712160000` — **APPLIED LIVE 2026-07-11** (live md5 `6a36e488…` matches the byte-proven target)
+
+### ✅ 2. Delivery re-billing no longer blocked by a soft-deleted invoice — migration `20260712170000` — **APPLIED LIVE 2026-07-11**
+`create_invoice_for_unbilled_delivery` counted a **soft-deleted** draft invoice as active coverage (because `delete_invoices` sets `deleted_at` but leaves `status='draft'`), so once you soft-deleted a delivery's draft invoice to redo it, the system refused to ever re-bill that delivery — stranded revenue with no path to fix it. Added one filter (`AND deleted_at IS NULL`). Reviewers CLEAN, Codex SHIP, body byte-identity proven (`ea23ba23…`), verified live (1 overload, fix present).
+
+### ✅ 3. Office Cockpit "Delivered, not invoiced" tile — frontend `OfficeCockpit.tsx` — committed
+The same root cause on the cockpit side: a delivery whose only invoice was soft-deleted wrongly counted as "covered" and vanished from the tile. Added `.is('deleted_at', null)` to the coverage query. Typecheck clean.
+
+---
+
+### (original ready-to-apply write-up, for reference)
 
 ### ✅ `void_invoice` hardening — migration `20260712160000_void_invoice_isactive_and_period_guards.sql` — **APPLIED LIVE 2026-07-11** (live md5 verified `6a36e488…`, matches the byte-proven target)
 Fixes **two** issues in the invoice-void function at once (both are strictly *adding a safety check* — they can't break anything a legitimate active admin does):
@@ -44,6 +58,8 @@ Fixes **two** issues in the invoice-void function at once (both are strictly *ad
 **#5 — Two people creating an order from the same blend ticket at once can double-book it.** *(rpc: create_order_from_blend_ticket)* This function reads the ticket without a row-lock, so two simultaneous sessions (different order numbers) can both create an order and both reserve inventory for one ticket — a duplicate order + double prebook. Its two sibling functions both lock the row; this one doesn't. Fix: add the same row-lock. *Codex: REAL. Needs two concurrent operators on one ticket.*
 
 **#6 — Blend-ticket order idempotency replay returns a truncated result.** *(rpc: create_order_from_blend_ticket)* On a duplicate/retried call, the cached replay payload is missing fields the first call returned, so a caller relying on the full shape could misbehave. Fix: return the same payload shape on replay. *Confirmed by the adversarial verifier; low.*
+
+**#7 — Same soft-deleted-invoice root cause, two more spots (server-side).** The fix I applied covered the delivery re-billing block (`create_invoice_for_unbilled_delivery`) and the cockpit tile. Two sibling guards still count a soft-deleted invoice as coverage and want the same one-line `AND ... deleted_at IS NULL`: (a) `complete_delivery`'s auto-invoice guard (that path is OFF by default, and the function is large — parked to fix carefully, not hand-edit a 25 KB function overnight), and (b) `get_dashboard_action_items` #9 unbilled-deliveries item. Both dormant. *Codex: REAL.*
 
 *(One more candidate — `void_delivery` recomputing order status without a lock — was **refuted** on close inspection and dropped. That's the verification working.)*
 
