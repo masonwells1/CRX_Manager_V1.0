@@ -37,6 +37,22 @@ describe('ToastProvider + useToast', () => {
     expect(screen.getByText('Saved!')).toBeInTheDocument();
   });
 
+  it('keeps the toast viewport above the mobile bottom navigation and safe area', () => {
+    window.innerWidth = 375;
+    render(
+      <ToastProvider>
+        <ToastTrigger type="success" message="Saved!" />
+      </ToastProvider>
+    );
+
+    fireEvent.click(screen.getByText('Show Toast'));
+
+    expect(document.querySelector('[data-toast-viewport]')).toHaveClass(
+      'bottom-[calc(4.5rem+env(safe-area-inset-bottom)+0.75rem)]',
+      'md:bottom-4'
+    );
+  });
+
   it('shows an error toast with alert role', () => {
     render(
       <ToastProvider>

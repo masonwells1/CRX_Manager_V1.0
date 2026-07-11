@@ -21,6 +21,28 @@ describe('Modal', () => {
     expect(screen.getByText('Modal content here')).toBeInTheDocument();
   });
 
+  it('uses a full-height mobile panel with a scrollable body and sticky footer', () => {
+    window.innerWidth = 375;
+    render(
+      <Modal
+        open={true}
+        onClose={() => {}}
+        title="Mobile Modal"
+        footer={<button type="button">Save</button>}
+      >
+        <p>Scrollable content</p>
+      </Modal>
+    );
+
+    const panel = document.querySelector('[data-modal-panel]');
+    const body = document.querySelector('[data-modal-body]');
+    const footer = document.querySelector('[data-modal-footer]');
+
+    expect(panel).toHaveClass('h-[100dvh]', 'max-w-full', 'md:h-auto');
+    expect(body).toHaveClass('min-h-0', 'flex-1', 'overflow-y-auto');
+    expect(footer).toHaveClass('sticky', 'shrink-0', 'pb-[calc(1rem+env(safe-area-inset-bottom))]');
+  });
+
   it('renders the title', () => {
     render(
       <Modal open={true} onClose={() => {}} title="My Title">

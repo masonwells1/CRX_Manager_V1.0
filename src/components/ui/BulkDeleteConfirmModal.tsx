@@ -47,7 +47,27 @@ export default function BulkDeleteConfirmModal({
   };
 
   return (
-    <Modal open={open} onClose={onClose} title={titleMap[actionWord]}>
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={titleMap[actionWord]}
+      footer={
+        <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+          <Button variant="ghost" onClick={onClose} className="min-h-11 w-full sm:w-auto">
+            Cancel
+          </Button>
+          <Button
+            variant="danger"
+            icon={<Icon className="w-4 h-4" />}
+            onClick={onConfirm}
+            loading={loading}
+            className="min-h-11 w-full sm:w-auto"
+          >
+            {actionWord === 'delete' ? 'Delete' : actionWord === 'deactivate' ? 'Deactivate' : 'Cancel'} {count} {label}
+          </Button>
+        </div>
+      }
+    >
       <div className="space-y-4">
         <div className={`flex items-center gap-3 p-3 ${colors.bg} rounded-lg`}>
           <Icon className={`w-5 h-5 ${colors.icon} flex-shrink-0`} />
@@ -57,19 +77,6 @@ export default function BulkDeleteConfirmModal({
           </p>
         </div>
 
-        <div className="flex justify-end gap-3 pt-2">
-          <Button variant="ghost" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button
-            variant="danger"
-            icon={<Icon className="w-4 h-4" />}
-            onClick={onConfirm}
-            loading={loading}
-          >
-            {actionWord === 'delete' ? 'Delete' : actionWord === 'deactivate' ? 'Deactivate' : 'Cancel'} {count} {label}
-          </Button>
-        </div>
       </div>
     </Modal>
   );

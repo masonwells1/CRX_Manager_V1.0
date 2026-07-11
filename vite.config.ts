@@ -28,12 +28,15 @@ export default defineConfig({
       includeAssets: ['pwa-icon.svg', 'apple-touch-icon.png'],
       manifest: {
         name: 'Crop RX Solutions',
-        short_name: 'CRX',
+        short_name: 'CRX Manager',
         description: 'Crop RX Solutions - Agricultural Distribution Management',
+        id: '/',
+        lang: 'en-US',
         theme_color: '#28A26A',
         background_color: '#F9F7F2',
         display: 'standalone',
         orientation: 'any',
+        categories: ['business', 'productivity'],
         start_url: '/',
         scope: '/',
         icons: [

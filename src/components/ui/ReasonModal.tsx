@@ -89,7 +89,28 @@ export default function ReasonModal({
   };
 
   return (
-    <Modal open={open} onClose={onClose} title={title}>
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={title}
+      footer={
+        <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+          <Button variant="ghost" onClick={onClose} disabled={loading} className="min-h-11 w-full sm:w-auto">
+            Cancel
+          </Button>
+          <Button
+            variant={variant === 'info' ? 'primary' : 'danger'}
+            icon={<Icon className="w-4 h-4" />}
+            onClick={handleConfirm}
+            loading={loading}
+            disabled={loading}
+            className="min-h-11 w-full sm:w-auto"
+          >
+            {confirmLabel}
+          </Button>
+        </div>
+      }
+    >
       <div className="space-y-4">
         <div className={`flex items-start gap-3 p-3 ${styles.bg} rounded-lg`}>
           <Icon className={`w-5 h-5 ${styles.icon} flex-shrink-0 mt-0.5`} />
@@ -123,20 +144,6 @@ export default function ReasonModal({
           )}
         </div>
 
-        <div className="flex justify-end gap-3 pt-2">
-          <Button variant="ghost" onClick={onClose} disabled={loading}>
-            Cancel
-          </Button>
-          <Button
-            variant={variant === 'info' ? 'primary' : 'danger'}
-            icon={<Icon className="w-4 h-4" />}
-            onClick={handleConfirm}
-            loading={loading}
-            disabled={loading}
-          >
-            {confirmLabel}
-          </Button>
-        </div>
       </div>
     </Modal>
   );

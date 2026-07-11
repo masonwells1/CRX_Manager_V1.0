@@ -34,6 +34,20 @@ describe('UnsavedChangesModal', () => {
     expect(screen.getByText('Stay')).toBeInTheDocument();
   });
 
+  it('uses a full-height mobile panel with a separate action bar', () => {
+    window.innerWidth = 375;
+    render(
+      <UnsavedChangesModal open={true} onStay={() => {}} onLeave={() => {}} />
+    );
+
+    const dialog = screen.getByRole('alertdialog');
+    const panel = dialog.querySelector('[data-modal-panel]');
+    const actionBar = screen.getByRole('button', { name: 'Stay' }).parentElement;
+
+    expect(panel).toHaveClass('h-[100dvh]', 'max-w-full', 'md:h-auto');
+    expect(actionBar).toHaveClass('sticky', 'shrink-0', 'pb-[calc(1rem+env(safe-area-inset-bottom))]');
+  });
+
   it('calls onLeave when Leave button is clicked', () => {
     const onLeave = vi.fn();
     render(

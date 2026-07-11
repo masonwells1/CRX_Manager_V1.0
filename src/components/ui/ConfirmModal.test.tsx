@@ -28,6 +28,7 @@ describe('ConfirmModal', () => {
     render(<ConfirmModal {...defaultProps} />);
     expect(screen.getByText('Cancel')).toBeInTheDocument();
     expect(screen.getByText('Confirm')).toBeInTheDocument();
+    expect(document.querySelector('[data-modal-footer]')).toBeInTheDocument();
   });
 
   it('calls onClose when Cancel is clicked', () => {

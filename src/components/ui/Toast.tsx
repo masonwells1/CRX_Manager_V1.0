@@ -54,14 +54,19 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   return (
     <ToastContext.Provider value={{ toast: addToast }}>
       {children}
-      <div className="fixed bottom-4 right-4 z-[100] flex flex-col gap-2" role="status" aria-live="polite">
+      <div
+        data-toast-viewport
+        className="fixed inset-x-3 bottom-[calc(4.5rem+env(safe-area-inset-bottom)+0.75rem)] z-[100] flex flex-col gap-2 md:inset-x-auto md:bottom-4 md:right-4"
+        role="status"
+        aria-live="polite"
+      >
         {toasts.map((t) => (
           <div
             key={t.id}
             role={t.type === 'error' ? 'alert' : 'status'}
             aria-live={t.type === 'error' ? 'assertive' : 'polite'}
             className={`
-              flex items-center gap-3 px-4 py-3 rounded-lg border shadow-lg
+              flex w-full items-center gap-3 rounded-lg border px-4 py-3 shadow-lg md:w-auto md:max-w-sm
               ${bgClasses[t.type]}
               animate-in slide-in-from-right
             `}

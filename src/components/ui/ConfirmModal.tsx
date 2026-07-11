@@ -43,14 +43,13 @@ export default function ConfirmModal({
   const Icon = icon || defaultIcons[variant];
 
   return (
-    <Modal open={open} onClose={onClose} title={title}>
-      <div className="space-y-4">
-        <div className={`flex items-center gap-3 p-3 ${styles.bg} rounded-lg`}>
-          <Icon className={`w-5 h-5 ${styles.icon} flex-shrink-0`} />
-          <p className={`text-sm ${styles.text}`}>{message}</p>
-        </div>
-        <div className="flex justify-end gap-3 pt-2">
-          <Button variant="ghost" onClick={onClose}>
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={title}
+      footer={
+        <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+          <Button variant="ghost" onClick={onClose} className="min-h-11 w-full sm:w-auto">
             Cancel
           </Button>
           <Button
@@ -58,9 +57,17 @@ export default function ConfirmModal({
             icon={<Icon className="w-4 h-4" />}
             onClick={onConfirm}
             loading={loading}
+            className="min-h-11 w-full sm:w-auto"
           >
             {confirmLabel}
           </Button>
+        </div>
+      }
+    >
+      <div className="space-y-4">
+        <div className={`flex items-center gap-3 p-3 ${styles.bg} rounded-lg`}>
+          <Icon className={`w-5 h-5 ${styles.icon} flex-shrink-0`} />
+          <p className={`text-sm ${styles.text}`}>{message}</p>
         </div>
       </div>
     </Modal>

@@ -7,6 +7,7 @@ interface ModalProps {
   title: string;
   accent?: string;
   children: ReactNode;
+  footer?: ReactNode;
   maxWidth?: string;
   size?: 'default' | 'large';
 }
@@ -19,10 +20,15 @@ export default function Modal({
   title,
   accent,
   children,
+  footer,
   maxWidth,
   size = 'default',
 }: ModalProps) {
-  const sizeClass = maxWidth || (size === 'large' ? 'max-w-4xl' : 'max-w-lg');
+  const desktopSizeClass = maxWidth === 'max-w-2xl'
+    ? 'md:max-w-2xl'
+    : size === 'large'
+      ? 'md:max-w-4xl'
+      : 'md:max-w-lg';
   const dialogRef = useRef<HTMLDivElement>(null);
   const titleId = useRef(`modal-title-${Math.random().toString(36).slice(2, 8)}`).current;
 
@@ -94,13 +100,15 @@ export default function Modal({
       />
       <div
         ref={dialogRef}
+        data-modal-panel
         className={`
-          relative bg-white rounded-xl shadow-xl border border-gray-100
-          w-full mx-4 ${sizeClass} max-h-[90vh] overflow-y-auto
+          relative flex h-[100dvh] max-h-[100dvh] w-full max-w-full flex-col
+          rounded-none bg-white shadow-xl border border-gray-100
+          ${desktopSizeClass} md:mx-4 md:h-auto md:max-h-[90vh] md:rounded-xl
           animate-in fade-in zoom-in-95
         `}
       >
-        <div className="flex items-center justify-between p-5 border-b border-gray-100">
+        <div className="flex shrink-0 items-center justify-between border-b border-gray-100 p-4 pt-[calc(1rem+env(safe-area-inset-top))] md:p-5">
           <h2 id={titleId} className="text-lg font-semibold font-heading text-nav-dark">
             {title}
             {accent && <span className="split-heading-accent"> {accent}</span>}
@@ -113,7 +121,17 @@ export default function Modal({
             <X className="w-5 h-5" />
           </button>
         </div>
-        <div className="p-5">{children}</div>
+        <div data-modal-body className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-4 md:p-5">
+          {children}
+        </div>
+        {footer && (
+          <div
+            data-modal-footer
+            className="sticky bottom-0 shrink-0 border-t border-gray-100 bg-white p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] md:p-5"
+          >
+            {footer}
+          </div>
+        )}
       </div>
     </div>
   );
