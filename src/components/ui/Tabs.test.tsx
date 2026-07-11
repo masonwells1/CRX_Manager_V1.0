@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import Tabs, { type TabItem } from './Tabs';
 
@@ -23,6 +23,14 @@ function ControlledTabs() {
 }
 
 describe('Tabs', () => {
+  beforeAll(() => {
+    Element.prototype.scrollIntoView = vi.fn();
+  });
+
+  beforeEach(() => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 375 });
+  });
+
   it('renders an accessible tab list and the active panel', () => {
     render(<ControlledTabs />);
 
@@ -78,5 +86,31 @@ describe('Tabs', () => {
     expect(within(screen.getByRole('tab', { name: /Inventory/ })).getByText('12')).toBeInTheDocument();
     expect(within(screen.getByRole('tab', { name: /Forecast/ })).getByText('0')).toBeInTheDocument();
     expect(within(screen.getByRole('tab', { name: 'Orders' })).queryByText(/\d/)).not.toBeInTheDocument();
+  });
+
+  it('keeps mobile tabs on one touch-scrollable row with an edge-fade hint', () => {
+    render(<ControlledTabs />);
+
+    const tabList = screen.getByRole('tablist', { name: 'Inventory views' });
+    expect(tabList).toHaveClass('flex-nowrap', 'overflow-x-auto', '[-webkit-overflow-scrolling:touch]');
+    expect(tabList.parentElement).toHaveClass('relative');
+    expect(tabList.parentElement?.querySelector('[aria-hidden="true"]')).toHaveClass(
+      'bg-gradient-to-l',
+      'md:hidden'
+    );
+  });
+
+  it('scrolls the newly active tab into view', () => {
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+    render(<ControlledTabs />);
+
+    fireEvent.click(screen.getByRole('tab', { name: /Forecast/ }));
+
+    expect(scrollIntoView).toHaveBeenLastCalledWith({
+      behavior: 'smooth',
+      block: 'nearest',
+      inline: 'nearest',
+    });
   });
 });

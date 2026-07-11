@@ -14,9 +14,9 @@ export interface PageHeaderProps {
  */
 export default function PageHeader({ title, accent, subtitle, actions }: PageHeaderProps) {
   return (
-    <header className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
-      <div>
-        <h1 className="text-2xl font-semibold font-heading text-nav-dark">
+    <header className="flex min-w-0 flex-col justify-between gap-3 sm:flex-row sm:items-center">
+      <div className="min-w-0">
+        <h1 className="truncate text-2xl font-semibold font-heading text-nav-dark sm:overflow-visible sm:whitespace-normal">
           {title}
           {accent && (
             <>
@@ -27,7 +27,7 @@ export default function PageHeader({ title, accent, subtitle, actions }: PageHea
         </h1>
         {subtitle && <p className="mt-1 text-sm text-secondary">{subtitle}</p>}
       </div>
-      {actions && <div className="flex flex-wrap items-center justify-end gap-2">{actions}</div>}
+      {actions && <div className="flex w-full flex-wrap items-center justify-start gap-2 sm:w-auto sm:justify-end">{actions}</div>}
     </header>
   );
 }

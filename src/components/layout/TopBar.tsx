@@ -40,8 +40,8 @@ export default function TopBar({ onMenuClick, onSearchClick, title, accent }: To
 
   return (
     <header className="sticky top-0 z-30 bg-cream/80 backdrop-blur-md border-b border-gray-200/50">
-      <div className="flex items-center justify-between h-16 px-4 lg:px-6">
-        <div className="flex items-center gap-3">
+      <div className="flex h-14 items-center justify-between px-2.5 md:h-16 md:px-4 lg:px-6">
+        <div className="flex min-w-0 flex-1 items-center gap-1.5 md:gap-3">
           <button
             onClick={onMenuClick}
             aria-label="Open navigation menu"
@@ -49,24 +49,24 @@ export default function TopBar({ onMenuClick, onSearchClick, title, accent }: To
           >
             <Menu className="w-5 h-5" />
           </button>
-          <h1 className="text-xl font-semibold font-heading text-nav-dark">
+          <h1 className="min-w-0 truncate text-lg font-semibold font-heading text-nav-dark md:overflow-visible md:whitespace-normal md:text-xl">
             {title}
             {accent && <span className="split-heading-accent"> {accent}</span>}
           </h1>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex shrink-0 items-center gap-1 md:gap-2">
           <button
             onClick={onSearchClick}
             aria-label="Search (Ctrl+K)"
-            className="flex items-center gap-2 px-3 py-2 rounded-lg text-secondary border border-gray-200/70 bg-white/60 hover:bg-white hover:shadow-sm transition-all"
+            className="flex min-h-11 min-w-11 items-center justify-center gap-2 rounded-lg border border-gray-200/70 bg-white/60 px-2 py-2 text-secondary transition-all hover:bg-white hover:shadow-sm md:min-h-0 md:min-w-0 md:px-3"
           >
             <Search className="w-4 h-4" />
             <span className="hidden md:inline text-sm">Search…</span>
             <kbd className="hidden md:inline text-[11px] border border-gray-200 rounded px-1.5 py-0.5">⌘K</kbd>
           </button>
           {allowedNewMenuItems.length > 0 && (
-            <div className="relative" onBlur={closeWhenFocusLeaves}>
+            <div className="relative hidden md:block" onBlur={closeWhenFocusLeaves}>
               <button
                 type="button"
                 onClick={() => setNewMenuOpen((open) => !open)}
@@ -107,7 +107,9 @@ export default function TopBar({ onMenuClick, onSearchClick, title, accent }: To
               )}
             </div>
           )}
-          <NotificationsPanel />
+          <div className="[&>div>button]:min-h-11 [&>div>button]:min-w-11 md:[&>div>button]:min-h-0 md:[&>div>button]:min-w-0">
+            <NotificationsPanel />
+          </div>
         </div>
       </div>
     </header>

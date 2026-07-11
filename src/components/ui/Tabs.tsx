@@ -1,4 +1,4 @@
-import { useId, useRef, type KeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useId, useRef, type KeyboardEvent, type ReactNode } from 'react';
 
 export interface TabItem {
   key: string;
@@ -24,6 +24,18 @@ export default function Tabs({
 }: TabsProps) {
   const id = useId().replace(/:/g, '');
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
+
+  useEffect(() => {
+    const activeIndex = tabs.findIndex((tab) => tab.key === activeKey);
+    const activeTab = activeIndex >= 0 ? tabRefs.current[activeIndex] : null;
+    if (typeof activeTab?.scrollIntoView === 'function') {
+      activeTab.scrollIntoView({
+        behavior: 'smooth',
+        block: 'nearest',
+        inline: 'nearest',
+      });
+    }
+  }, [activeKey, tabs]);
 
   const selectTab = (index: number) => {
     const tab = tabs[index];
@@ -59,53 +71,59 @@ export default function Tabs({
 
   return (
     <div className={`font-sub ${className}`}>
-      <div
-        role="tablist"
-        aria-label={ariaLabel}
-        className="flex gap-1 overflow-x-auto border-b border-gray-200"
-      >
-        {tabs.map((tab, index) => {
-          const isActive = tab.key === activeKey;
-          const tabId = `${id}-tab-${index}`;
-          const panelId = `${id}-panel-${index}`;
+      <div className="relative">
+        <div
+          role="tablist"
+          aria-label={ariaLabel}
+          className="flex flex-nowrap gap-1 overflow-x-auto border-b border-gray-200 [-webkit-overflow-scrolling:touch]"
+        >
+          {tabs.map((tab, index) => {
+            const isActive = tab.key === activeKey;
+            const tabId = `${id}-tab-${index}`;
+            const panelId = `${id}-panel-${index}`;
 
-          return (
-            <button
-              key={tab.key}
-              ref={(element) => { tabRefs.current[index] = element; }}
-              id={tabId}
-              type="button"
-              role="tab"
-              aria-selected={isActive}
-              aria-controls={panelId}
-              tabIndex={isActive ? 0 : -1}
-              onClick={() => onChange(tab.key)}
-              onKeyDown={(event) => handleKeyDown(event, index)}
-              className={`
-                -mb-px inline-flex shrink-0 items-center gap-2 border-b-2 px-4 py-2
-                text-sm font-medium whitespace-nowrap transition-colors
-                focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-crx-green/30
-                focus-visible:ring-offset-2
-                ${isActive
-                  ? 'border-crx-green text-crx-green'
-                  : 'border-transparent text-secondary hover:text-nav-dark'}
-              `}
-            >
-              <span>{tab.label}</span>
-              {tab.count !== undefined && (
-                <span
-                  className={`inline-flex min-w-5 items-center justify-center rounded-full px-1.5 py-0.5 text-xs font-medium leading-none ${
-                    isActive
-                      ? 'bg-crx-green-light text-crx-green'
-                      : 'bg-gray-100 text-gray-600'
-                  }`}
-                >
-                  {tab.count}
-                </span>
-              )}
-            </button>
-          );
-        })}
+            return (
+              <button
+                key={tab.key}
+                ref={(element) => { tabRefs.current[index] = element; }}
+                id={tabId}
+                type="button"
+                role="tab"
+                aria-selected={isActive}
+                aria-controls={panelId}
+                tabIndex={isActive ? 0 : -1}
+                onClick={() => onChange(tab.key)}
+                onKeyDown={(event) => handleKeyDown(event, index)}
+                className={`
+                  -mb-px inline-flex shrink-0 items-center gap-2 border-b-2 px-4 py-2
+                  text-sm font-medium whitespace-nowrap transition-colors
+                  focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-crx-green/30
+                  focus-visible:ring-offset-2
+                  ${isActive
+                    ? 'border-crx-green text-crx-green'
+                    : 'border-transparent text-secondary hover:text-nav-dark'}
+                `}
+              >
+                <span>{tab.label}</span>
+                {tab.count !== undefined && (
+                  <span
+                    className={`inline-flex min-w-5 items-center justify-center rounded-full px-1.5 py-0.5 text-xs font-medium leading-none ${
+                      isActive
+                        ? 'bg-crx-green-light text-crx-green'
+                        : 'bg-gray-100 text-gray-600'
+                    }`}
+                  >
+                    {tab.count}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-y-0 right-0 w-8 bg-gradient-to-l from-cream via-cream/80 to-transparent md:hidden"
+        />
       </div>
 
       {tabs.map((tab, index) => {
