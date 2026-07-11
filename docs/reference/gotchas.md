@@ -88,7 +88,7 @@ The AP RPC trio (`create_vendor_bill`, `record_vendor_payment`, `void_vendor_bil
 | Rule | Detail |
 |------|--------|
 | Closed-period guard on bill creation | `create_vendor_bill` calls `check_period_open(p_bill_date::date)` — same gate as `post_invoice`. Bills outside the open period raise. |
-| Closed-period guard on payment recording | NO. Per Q8: payment recording is not the posting equivalent — bill creation is. Recording payment against an open bill always allowed. |
+| Closed-period guard on payment recording | YES since 20260712200000 (2026-07-11): record_vendor_payment gates on check_period_open(p_payment_date) — a payment belongs to its OWN period (same convention as AR allocate_payment per 20260513110000), so old bills stay payable with a current-dated payment; only backdating into a closed month raises. void_vendor_payment/void_vendor_bill gate on the original document date. (Supersedes the 2026-05-10 Q8 answer, which predated the AR payment-date gates.) |
 | Idempotency on all 3 RPCs | All 3 use the canonical pattern above. Pre-PR-04 idempotency was missing entirely. |
 | Audit log integration | `financial_audit_log` CHECK now allows `vendor_bill`, `vendor_payment`, `purchase_order` entity types and `vendor_bill_created`, `vendor_bill_voided`, `vendor_payment_recorded` operations. Pre-PR-04, AP RPCs couldn't write to the audit log at all. |
 | `vendor_bills.balance_cents` GENERATED ALWAYS | `(total_cents - paid_cents)`. NEVER UPDATE — let it recompute. |

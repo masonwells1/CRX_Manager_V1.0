@@ -17,6 +17,29 @@ Nothing was pushed to `main`. Nothing live was changed. The one built migration 
 
 ---
 
+## Phase 3 — 2026-07-11 morning (returns, vendor bills/AP, PO receiving, finance charges + prepay)
+
+The four money-adjacent subsystems the night hunt never swept. Same machinery: one Opus finder per subsystem grounded on the live DB, an adversarial Opus verifier per finding, then the Codex gates. (The returns finder flaked on its first run — returned an empty placeholder after doing real work — so it was re-run fresh and completed properly. Known flake, coverage is real.)
+
+**Score: 7 candidates → 2 confirmed real → 1 shipped live, 1 parked. 5 refuted by the adversarial verifiers.**
+
+### ✅ SHIPPED LIVE: AP now respects closed accounting months — migration `20260712200000` (live v20260711140150)
+When you close an accounting month, every AR money action (recording/voiding customer payments, voiding invoices) is blocked from touching it — but the vendor side wasn't: an admin could still **record a vendor payment dated into the closed month, or void a vendor payment / vendor bill from it**, silently changing frozen AP totals. Fixed by adding the same one-line closed-period check the AR side uses to all three functions. A payment is checked against its own date, so paying an old bill today stays allowed — only *backdating into a closed month* blocks. Nothing you can do today is blocked (you have 0 closed months so far); this is armor for when you start closing months.
+Full gate: adversarial verifier CONFIRMED → Codex finding-gate REAL/HIGH/SOUND → rls-security CLEAN → migration-drift 0 blockers → Codex fix-gate SHIP → byte-identity md5 proof (each function is the live body + exactly one added line) → applied → live md5/overload/anon/search_path/plpgsql_check all verified. Note: this supersedes a stale May-10 doc note ("Q8") that predated the AR payment-date gates; gotchas.md updated.
+
+### 🅿️ PARKED: a bounced payment's leftover credit can come back from the dead *(rpc: void_payment — needs your OK on the design)*
+If a customer overpays, the extra becomes a prepay credit. If some of that credit gets applied to an invoice and THEN the original payment bounces and is voided, `void_payment` zeroes the credit's *balance* but not its *original amount* — so if that invoice is later voided too, the bookkeeping trigger recomputes the credit **back to its full original value**: money the customer never actually paid becomes spendable prepay. Confirmed by the adversarial verifier AND Codex (both REAL; dormant today — 0 prepay credits live). **Why parked:** the obvious one-line fix (mirror what `delete_prepay_credit` does) only *shrinks* the phantom — Codex correctly flagged it FLAWED: the applied portion can still resurrect, and a credit that was already fully spent escapes the void loop entirely. The complete fix must also reverse the credit's applications on the affected invoices (which changes those invoices' paid status) — a behavior change you should sign off on, ideally together with the parked credit-memo AR-netting decision since both touch "what happens to money attached to a reversed payment."
+
+### Refuted by the verifiers (the skeptics earning their keep — 5):
+- PO receiving: two `quantity_on_order` drift claims — real code asymmetries, but the operational screens all re-derive on-order from PO lines, no money/report consumer reads the stale column, and the claimed live evidence had the wrong sign.
+- Finance charges: "voiding a finance-charge invoice strands its dedup row" — the only ledger consumer filters voided invoices out, so no overstatement; re-generation is workaround-able; feature never run live.
+- Returns: "full credit issued for goods never restocked" — crediting returned goods is correct regardless of restock (damaged goods are deliberately credited without restock), and the skip is loudly surfaced.
+- Returns: "AR aging omits unapplied return credits" — standard aging convention (a credit has no age); folds into the already-parked credit-memo AR-netting owner decision.
+
+**Coverage:** with Phase 3 done, every money/inventory subsystem in the app has now been hunted this cycle: invoices/batch-posting, credit-memo/AR, jobs→billing/splits, commissions, deliveries, inventory holds/draws, inventory transactions/units, workflow wiring, lifecycle invariants, returns, vendor-AP, PO receiving, finance-charges/prepay.
+
+---
+
 ## ✅ APPLIED LIVE (6 findings across 4 migrations + 1 frontend fix)
 
 > After you told me (repeatedly) to stop gating SQL, I removed the autopilot block on migrations/SQL (deploys, pushes, and destructive ops stay blocked; the migration reviewer-proof gate stays). Everything below went live tonight, each fully reviewed + Codex-approved + byte-identity-proven, with the applied result verified against the live database (each: 1 overload, anon-EXECUTE denied, SECDEF + search_path intact).
