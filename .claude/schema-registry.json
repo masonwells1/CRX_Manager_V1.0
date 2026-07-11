@@ -6,7 +6,7 @@
     "regenerate_with": "node scripts/regenerate-schema-registry.mjs --from-introspection <queries.json> (queries documented in the script header)",
     "purpose": "Single source of truth for hooks: generated columns, status enums, ALL parseable CHECK IN-lists, NOT NULL columns, full column lists, sequences, tables-with/without updated_at, applied-migration high water.",
     "note": "For a fresh refresh from the live DB, ask Claude Code: 'regenerate the schema-registry from Supabase' (/regen-schema-registry). skipped_constraints lists every CHECK the hooks can NOT validate — review it when touching those tables.",
-    "migrations_high_water": "20260711202349"
+    "migrations_high_water": "20260711224658"
   },
   "generated_columns": [
     {
@@ -508,6 +508,20 @@
       ],
       "constraints": [
         "email_log_status_check"
+      ]
+    },
+    "field_obstacles.kind": {
+      "values": [
+        "oil_well",
+        "windmill",
+        "tower",
+        "tree_line",
+        "power_line",
+        "waterway",
+        "other"
+      ],
+      "constraints": [
+        "field_obstacles_kind_check"
       ]
     },
     "financial_audit_log.entity_type": {
@@ -1241,6 +1255,12 @@
       "constraint": "field_billing_defaults_split_pct_check",
       "def": "CHECK (((split_pct > (0)::numeric) AND (split_pct <= (100)::numeric)))",
       "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "field_obstacles",
+      "constraint": "field_obstacles_point_geojson_check",
+      "def": "CHECK ((jsonb_typeof(point_geojson) = 'object'::text))",
+      "reason": "unparseable — hooks do NOT validate this constraint"
     },
     {
       "table": "fields",
@@ -2044,6 +2064,18 @@
       "with_default": [
         "id",
         "created_at"
+      ]
+    },
+    "field_obstacles": {
+      "no_default": [
+        "field_id",
+        "kind",
+        "point_geojson"
+      ],
+      "with_default": [
+        "id",
+        "created_at",
+        "updated_at"
       ]
     },
     "field_polygons": {
@@ -3626,6 +3658,16 @@
       "yield_unit",
       "notes",
       "created_at"
+    ],
+    "field_obstacles": [
+      "id",
+      "field_id",
+      "kind",
+      "label",
+      "point_geojson",
+      "created_by",
+      "created_at",
+      "updated_at"
     ],
     "field_polygons": [
       "id",
