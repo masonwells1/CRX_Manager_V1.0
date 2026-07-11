@@ -9,6 +9,8 @@
 - `products` - Product master (product_name, sku, category, vendor, tier1-4 pricing, EPA reg, RUP status, signal_word, rei_hours [WPS restricted-entry interval], phi_days [pre-harvest interval], product_form, notes [grower description], internal_notes [internal only])
 - `cost_history` - Cost change audit log (product_id, old/new costs and prices, change_note)
 - `fields` - Farm fields (customer_id, field_name, county, acres, FSA numbers, Mapbox polygon geometry)
+- `field_obstacles` - Point hazards pinned to fields (kind, optional label, GeoJSON Point, created_by). Readable by admin/sales/applicators (matches fields); maintained by admin/sales reps.
+- `job_loader_worksheets` - Saved loader/tank scenarios per job (capacity, balancing mode, per-load acres, loads-done, one selected per job). Reads follow job visibility; office-only writes.
 - `field_billing_defaults` - Per-field billing splits (field_id, customer_id, split_pct)
 - `field_polygons` - Multi-polygon support per field (field_id, polygon_geojson jsonb, label, acres, sort_order). Sibling to `fields.parent_field_id` grouping; migration 20260334900000 (Field Management V3)
 - `vehicles` - Ground/air application equipment (type, capacity, registration, FAA N-number or DOT#, status)
@@ -201,6 +203,8 @@
 | cycle_counts | Admin | Admin | Admin | Admin |
 | cycle_count_items | Admin | Admin | Admin | Admin |
 | fields | Admin / Sales Rep (assigned customer) | Admin / Sales Rep | Admin / Sales Rep | Admin |
+| field_obstacles | Admin / Sales Rep / Applicator | Admin / Sales Rep | Admin / Sales Rep | Admin / Sales Rep |
+| job_loader_worksheets | Job-visible (Admin / Sales / assigned Applicator / dispatched) | Admin / Sales Rep | Admin / Sales Rep | Admin / Sales Rep |
 | field_billing_defaults | Admin / Sales Rep | Admin / Sales Rep | Admin / Sales Rep | Admin / Sales Rep |
 | returns | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
 | return_items | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |

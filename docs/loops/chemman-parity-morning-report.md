@@ -46,6 +46,7 @@ The "click a parcel to adopt the boundary" feature you liked: every vendor selli
 - `get_job_fields_with_geojson` isn't visible to location-dispatched applicators (pre-existing) — map pages/JobFieldMap render empty for them; needs an RPC visibility migration.
 - Invariant-sweep allowlist bookkeeping: 3 inert trigger functions flagged by the anon-exec sweep predate tonight (one from a parallel branch) — allowlist or revoke-anon hygiene pass.
 - Equipment-format exports (John Deere/Shapefile/KML) — rank-6 gap, not selected tonight; future candidate.
+- Pre-existing reference-doc drift (npm run check:docs): 4 credit-memo migrations (20260711030000-060000, from the July 8-10 credit-memo build) missing from migration-history.md, plus stale count claims (654 vs 674) and page-count claim (82 vs 75). Mechanical fix, belongs to a docs-sync pass — not touched tonight to avoid mis-describing another loop’s money migrations.
 
 ## Honesty section
 
