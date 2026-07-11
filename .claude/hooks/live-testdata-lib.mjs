@@ -38,14 +38,79 @@ const TRUNCATE_RE = /(?:^|;)\s*truncate\b/im;
 const FIN_UPDATE_RE = new RegExp(`\\bupdate\\s+(?:public\\.)?"?(${tableAlt(FINANCIAL_TABLES)})"?\\b`, "i");
 const MONEY_COL_RE = /\b[a-z_]*(?:cents|amount|total|balance|price|rate|paid)[a-z_]*\s*=/i;
 
+// A DO body is hand-written SQL that EXECUTES immediately (a DO block can even
+// COMMIT mid-transaction), so unlike a stored function body it must stay visible
+// to the classifier. Matches "DO $tag$" and "DO LANGUAGE plpgsql $tag$".
+const DO_PREFIX_RE = /\bdo(?:\s+language\s+[a-z_][a-z0-9_]*)?\s*$/i;
+
+// Strip dollar-quoted string bodies ($function$...$function$, $$...$$, any
+// $tag$...$tag$ pair) so classification sees only top-level hand-written SQL —
+// an INSERT INTO financial_audit_log inside a CREATE OR REPLACE FUNCTION body
+// being re-emitted by a BEGIN;...;ROLLBACK; smoke is machine content, not a
+// hand-written audit-log write. Single-quoted literals and comments are walked
+// (not stripped) so a stray $$ inside them can't open a fake quote span that
+// swallows real statements. DO bodies are kept (they execute). An unterminated
+// dollar-quote leaves the rest untouched (fail closed).
+export function stripDollarQuoted(sql) {
+  const src = String(sql || "");
+  let out = "";
+  let i = 0;
+  const n = src.length;
+  while (i < n) {
+    const ch = src[i];
+    if (ch === "'") {
+      let j = i + 1;
+      while (j < n) {
+        if (src[j] === "'" && src[j + 1] === "'") { j += 2; continue; }
+        if (src[j] === "'") { j++; break; }
+        j++;
+      }
+      out += src.slice(i, j); i = j; continue;
+    }
+    if (ch === "-" && src[i + 1] === "-") {
+      let j = src.indexOf("\n", i);
+      if (j === -1) j = n;
+      out += src.slice(i, j); i = j; continue;
+    }
+    if (ch === "/" && src[i + 1] === "*") {
+      let depth = 1, j = i + 2;
+      while (j < n && depth > 0) {
+        if (src[j] === "/" && src[j + 1] === "*") { depth++; j += 2; continue; }
+        if (src[j] === "*" && src[j + 1] === "/") { depth--; j += 2; continue; }
+        j++;
+      }
+      out += src.slice(i, j); i = j; continue;
+    }
+    if (ch === "$") {
+      const tag = /^\$([A-Za-z_][A-Za-z0-9_]*)?\$/.exec(src.slice(i, i + 66));
+      if (tag) {
+        const open = tag[0];
+        const close = src.indexOf(open, i + open.length);
+        if (close === -1) { out += src.slice(i); break; }
+        const end = close + open.length;
+        out += DO_PREFIX_RE.test(out) ? src.slice(i, end) : " ";
+        i = end; continue;
+      }
+    }
+    out += ch; i++;
+  }
+  return out;
+}
+
 // Returns { block: false } | { block: true, kind, reason }
 export function classifySql(query) {
   const q = String(query || "");
   if (!q) return { block: false };
 
+  // Pattern checks run against the stripped text (machine content removed).
+  // The rolled-back-smoke structure below still reads the ORIGINAL text: the
+  // RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK' marker lives inside a DO body, and a
+  // COMMIT anywhere (even inside a DO body) must keep disqualifying the batch.
+  const t = stripDollarQuoted(q);
+
   // 1. financial_audit_log is append-only, written only by triggers/RPCs — a Hard
   //    Red Line. No [E2E] exemption; only REAL-DATA-OK (checked by the guard) overrides.
-  if (AUDIT_LOG_WRITE_RE.test(q)) {
+  if (AUDIT_LOG_WRITE_RE.test(t)) {
     return {
       block: true,
       kind: "audit-log-write",
@@ -54,7 +119,7 @@ export function classifySql(query) {
   }
 
   // 2. TRUNCATE has no legitimate execute_sql use against the live DB.
-  if (TRUNCATE_RE.test(q)) {
+  if (TRUNCATE_RE.test(t)) {
     return {
       block: true,
       kind: "truncate",
@@ -73,7 +138,7 @@ export function classifySql(query) {
   const txWrapped = /^\s*begin\s*;[\s\S]*;\s*rollback\s*;?\s*$/i.test(q);
   const smokeAbort = /raise\s+exception\s+'?SMOKE_PASS_ROLLBACK/i.test(q);
   const rolledBack = !hasCommitStmt && (txWrapped || smokeAbort);
-  if (!rolledBack && (DDL_STMT_RE.test(q) || GRANT_REVOKE_RE.test(q))) {
+  if (!rolledBack && (DDL_STMT_RE.test(t) || GRANT_REVOKE_RE.test(t))) {
     return {
       block: true,
       kind: "raw-ddl",
@@ -82,24 +147,24 @@ export function classifySql(query) {
   }
 
   // 4. Clearly-fake test data is fine for ordinary data writes.
-  if (q.includes("[E2E]")) return { block: false };
+  if (t.includes("[E2E]")) return { block: false };
 
   let m;
-  if ((m = INSERT_RE.exec(q))) {
+  if ((m = INSERT_RE.exec(t))) {
     return {
       block: true,
       kind: "real-insert",
       reason: `This INSERTs into the live business table "${m[1]}" without the [E2E] fake-data marker. On the LIVE app, use only clearly-fake [E2E]-prefixed entities for analysis (and delete them when done). If Mason explicitly asked for a REAL write, first create .claude/session-state/REAL-DATA-OK to record his authorization, then retry.`,
     };
   }
-  if ((m = DELETE_RE.exec(q))) {
+  if ((m = DELETE_RE.exec(t))) {
     return {
       block: true,
       kind: "financial-delete",
       reason: `This DELETEs from the live financial table "${m[1]}". Deleting real financial records is Mason's call — surface the record IDs in your findings instead of acting. (Override: he authorizes via .claude/session-state/REAL-DATA-OK.)`,
     };
   }
-  if ((m = CANCEL_VOID_RE.exec(q))) {
+  if ((m = CANCEL_VOID_RE.exec(t))) {
     return {
       block: true,
       kind: "financial-cancel",
@@ -108,8 +173,8 @@ export function classifySql(query) {
   }
 
   // 5. Money-amount edits on financial tables (SET clause only, not the WHERE part).
-  if ((m = FIN_UPDATE_RE.exec(q))) {
-    const afterSet = q.slice(m.index).match(/\bset\b([\s\S]*)/i);
+  if ((m = FIN_UPDATE_RE.exec(t))) {
+    const afterSet = t.slice(m.index).match(/\bset\b([\s\S]*)/i);
     const setClause = afterSet ? afterSet[1].split(/\bwhere\b/i)[0] : "";
     if (MONEY_COL_RE.test(setClause)) {
       return {

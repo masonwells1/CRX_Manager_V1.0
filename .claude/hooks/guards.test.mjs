@@ -61,6 +61,33 @@ ok(classifySql("DELETE FROM financial_audit_log WHERE note LIKE '%[E2E]%'").bloc
 eq(classifySql("UPDATE invoices SET total_cents = 100 WHERE id=1").kind, "financial-amount-update", "money column update blocked");
 ok(!classifySql("UPDATE invoices SET notes = 'call back' WHERE total_cents = 500").block, "money col only in WHERE clause allowed");
 
+// ── dollar-quoted machine content (2026-07-11) ───────────────────────────
+// Function bodies re-emitted by a BEGIN;...;ROLLBACK; migration smoke are
+// machine content — only top-level hand-written statements may classify.
+eq(classifySql("INSERT INTO financial_audit_log (action) VALUES ('x')").kind, "audit-log-write", "bare audit-log insert still blocked");
+ok(!classifySql("SELECT $function$ INSERT INTO financial_audit_log (action) VALUES ('x'); $function$::text").block, "audit-log insert inside $function$ body is machine content, allowed");
+const moneyRpcSmoke = [
+  "BEGIN;",
+  "CREATE OR REPLACE FUNCTION public.record_vendor_payment(p_id uuid) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER AS $function$",
+  "BEGIN",
+  "  INSERT INTO financial_audit_log (action, details) VALUES ('vendor_payment', '{}');",
+  "  UPDATE invoices SET status = 'voided', total_cents = 0 WHERE id = p_id;",
+  "  DELETE FROM payments WHERE invoice_id = p_id;",
+  "  RETURN '{}'::jsonb;",
+  "END;",
+  "$function$;",
+  "ROLLBACK;",
+].join("\n");
+ok(!classifySql(moneyRpcSmoke).block, "BEGIN;<money-RPC re-emit>;ROLLBACK; smoke allowed");
+eq(classifySql("CREATE OR REPLACE FUNCTION public.f() RETURNS void LANGUAGE sql AS $function$ INSERT INTO financial_audit_log (a) VALUES (1); $function$;").kind, "raw-ddl", "un-rolled-back re-emit still blocked, but as raw-ddl not audit-log-write");
+// DO bodies EXECUTE immediately — stripping must not hide them.
+eq(classifySql("DO $$ BEGIN INSERT INTO financial_audit_log (a) VALUES (1); END $$;").kind, "audit-log-write", "audit-log insert inside a DO body still blocked");
+ok(!classifySql("DO $$ BEGIN PERFORM public.record_vendor_payment('00000000-0000-0000-0000-000000000000'); RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK'; END $$;").block, "DO-block smoke calling a money RPC still allowed");
+// A $$ inside a plain string literal must not open a quote span that swallows real SQL.
+eq(classifySql("SELECT 'a$$b'; INSERT INTO financial_audit_log (a) VALUES (1); SELECT 'c$$d';").kind, "audit-log-write", "$$ inside string literals cannot hide a real audit-log write");
+// COMMIT inside a DO body can really commit — it must still disqualify a "rolled-back" batch.
+ok(classifySql("BEGIN; CREATE TABLE t (id int); DO $$ BEGIN PERFORM 1; COMMIT; END $$; ROLLBACK;").block, "COMMIT inside a DO body still disqualifies the smoke wrapper");
+
 // ── codex-push ───────────────────────────────────────────────────────────
 ok(isGitPush("git push origin main"), "detects push");
 ok(!isGitPush("git status"), "non-push");
