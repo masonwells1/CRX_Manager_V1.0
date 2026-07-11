@@ -23,7 +23,9 @@ import { generateLoaderWorksheetBatchPdf, generateLoaderWorksheetPdf } from '../
 import { fetchApplicatorSheetData, fetchChemicalApplicationReportData } from '../lib/chemicalApplicationReportFetch';
 import { generateChemicalApplicationReportPdf } from '../lib/chemicalApplicationReportPdf';
 import { generateApplicatorSheetPdf } from '../lib/applicatorSheetPdf';
-import { fetchJobMapImages } from '../lib/jobMapImages';
+import { prepareApplicatorSheetPrintData } from '../lib/applicatorSheetPrintData';
+import { loadApplicatorPrintOptions } from '../lib/applicatorPrintOptions';
+import { parseCustomConfig, SHEET_FORMAT_LABELS, type ApplicatorSheetCustomConfig } from '../lib/applicatorSheetData';
 import { fetchChemicalSummaryData } from '../lib/chemicalSummaryReportFetch';
 import { buildChemicalSummaryReportData, chemicalSummaryCsvRows } from '../lib/chemicalSummaryReportData';
 import { generateChemicalSummaryReportPdf } from '../lib/chemicalSummaryReportPdf';
@@ -44,6 +46,7 @@ import JobTagsBulkModal from '../components/jobs/JobTagsBulkModal';
 import GroundCrewsManager from '../components/jobs/GroundCrewsManager';
 import JobBatchesManager from '../components/jobs/JobBatchesManager';
 import JobBatchAssignModal from '../components/jobs/JobBatchAssignModal';
+import PrintOptionsDialog, { type ApplicatorPrintSelection } from '../components/jobs/PrintOptionsDialog';
 import JobMassEditModal from '../components/jobs/JobMassEditModal';
 import ListSettingsModal from '../components/jobs/ListSettingsModal';
 import {
@@ -281,6 +284,7 @@ export default function Jobs() {
   // Original applicator-sheet print state for the row and selection actions.
   const [sheetExporting, setSheetExporting] = useState(false);
   const [rowSheetId, setRowSheetId] = useState<string | null>(null);
+  const [printOptionsOpen, setPrintOptionsOpen] = useState(false);
   // #10: per-row Loader Worksheet print in progress (the job id being generated).
   const [rowLoaderId, setRowLoaderId] = useState<string | null>(null);
   // #11: per-row Chemical Application Report print in progress (job id being generated).
@@ -1066,8 +1070,16 @@ export default function Jobs() {
         toast('error', 'This job needs fields and chemicals before printing an applicator sheet.');
         return;
       }
-      const maps = await fetchJobMapImages(jobId);
-      await generateApplicatorSheetPdf({ ...data, maps }, 'original', null);
+      // Row printing stays one-click: use the saved packet defaults with the
+      // Original format, because format itself is intentionally not persisted.
+      const options = await loadApplicatorPrintOptions();
+      const printableData = await prepareApplicatorSheetPrintData(jobId, data, options);
+      await generateApplicatorSheetPdf(printableData, 'original', null, {
+        includeBillingSplits: options.includeBillingSplits,
+        blankSections: options.blankSections,
+        includePreviousApplications: options.includePreviousApplications,
+        showBanner: options.showBanner,
+      });
       try {
         const stamp = await supabase
           .from('jobs')
@@ -1087,12 +1099,21 @@ export default function Jobs() {
     }
   };
 
-  // Generate individual Original applicator sheets in selection order. This stays
+  // Generate individual applicator-sheet packets in selection order. This stays
   // intentionally sequential: a large selection must not fire dozens of Mapbox
   // static-image requests concurrently.
-  const handleApplicatorSheets = async () => {
+  const handleApplicatorSheets = async ({ format, options }: ApplicatorPrintSelection) => {
     setSheetExporting(true);
     try {
+      let customConfig: ApplicatorSheetCustomConfig | null = null;
+      if (format === 'custom') {
+        const { data: configRow } = await supabase
+          .from('app_settings')
+          .select('setting_value')
+          .eq('setting_key', 'applicator_sheet_custom')
+          .maybeSingle();
+        customConfig = parseCustomConfig((configRow as { setting_value?: string | null } | null)?.setting_value);
+      }
       const printedIds: string[] = [];
       const failedJobNumbers: string[] = [];
       const skippedJobNumbers: string[] = [];
@@ -1103,8 +1124,13 @@ export default function Jobs() {
             skippedJobNumbers.push(job.job_number);
             continue;
           }
-          const maps = await fetchJobMapImages(job.id);
-          await generateApplicatorSheetPdf({ ...data, maps }, 'original', null);
+          const printableData = await prepareApplicatorSheetPrintData(job.id, data, options);
+          await generateApplicatorSheetPdf(printableData, format, customConfig, {
+            includeBillingSplits: options.includeBillingSplits,
+            blankSections: options.blankSections,
+            includePreviousApplications: options.includePreviousApplications,
+            showBanner: options.showBanner,
+          });
           printedIds.push(job.id);
         } catch (err) {
           failedJobNumbers.push(job.job_number);
@@ -1132,9 +1158,10 @@ export default function Jobs() {
         checkMutationResult(stamp, 'Stamp applicator-sheet prints');
         fetchJobs();
       } catch { /* non-blocking — the PDFs already generated */ }
-      toast('success', `Generated ${printedIds.length} sheet(s)`);
+      toast('success', `Generated ${printedIds.length} ${SHEET_FORMAT_LABELS[format]} sheet(s)`);
       if (skippedJobNumbers.length > 0) toast('error', `Skipped (no fields/chemicals): ${skippedJobNumbers.join(', ')}`);
       if (failedJobNumbers.length > 0) toast('error', `Failed: ${failedJobNumbers.join(', ')}`);
+      setPrintOptionsOpen(false);
     } catch (err) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'jobs_bulk_applicator_sheets' } });
       toast('error', sanitizeError(err));
@@ -1398,7 +1425,7 @@ export default function Jobs() {
     { key: 'tags', label: 'Edit Job Tags', icon: <Tag className="w-4 h-4" />, onClick: () => openMutatingAction(() => setBulkTagsOpen(true)) },
     { key: 'csv', label: 'Export CSV', icon: <Download className="w-4 h-4" />, onClick: handleExportCSV },
     { key: 'pdf', label: 'Download PDF', icon: <FileText className="w-4 h-4" />, onClick: handleExportPDF, loading: exporting },
-    { key: 'applicator-sheet', label: 'Applicator Sheets', icon: <Printer className="w-4 h-4" />, onClick: handleApplicatorSheets, loading: sheetExporting },
+    { key: 'applicator-sheet', label: 'Applicator Sheets', icon: <Printer className="w-4 h-4" />, onClick: () => setPrintOptionsOpen(true), loading: sheetExporting },
     { key: 'loader', label: 'Loader Worksheet', icon: <Truck className="w-4 h-4" />, onClick: handleLoaderWorksheets, loading: loaderExporting },
     { key: 'chem-summary', label: 'Chemical Summary Report', icon: <ClipboardList className="w-4 h-4" />, onClick: handleChemicalSummaryReport, loading: summaryExporting },
     { key: 'projected-use', label: 'Projected Use Report', icon: <PackageOpen className="w-4 h-4" />, onClick: handleProjectedUseReport, loading: projectedExporting },
@@ -2168,6 +2195,12 @@ export default function Jobs() {
         settings={listSettings}
         onChange={updateListSettings}
         saving={savingSettings}
+      />
+
+      <PrintOptionsDialog
+        open={printOptionsOpen}
+        onClose={() => setPrintOptionsOpen(false)}
+        onPrint={handleApplicatorSheets}
       />
     </div>
   );

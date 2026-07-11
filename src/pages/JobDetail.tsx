@@ -19,7 +19,8 @@ import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { getLicenseStatus, licenseStatusLabel } from '../lib/licenseStatus';
 import { generateWpsNoticePdf } from '../lib/wpsNoticePdf';
 import { generateApplicatorSheetPdf } from '../lib/applicatorSheetPdf';
-import { fetchJobMapImages } from '../lib/jobMapImages';
+import { prepareApplicatorSheetPrintData } from '../lib/applicatorSheetPrintData';
+import PrintOptionsDialog, { type ApplicatorPrintSelection } from '../components/jobs/PrintOptionsDialog';
 import {
   buildApplicatorSheetData,
   parseCustomConfig,
@@ -356,8 +357,8 @@ export default function JobDetail() {
   const [dispatchWizardLoading, setDispatchWizardLoading] = useState(false);
   // B3: WPS pre-application notice PDF
   const [printingWps, setPrintingWps] = useState(false);
-  // #9: applicator field sheet (Original / Custom / Enhanced) print picker.
-  const [sheetPickerOpen, setSheetPickerOpen] = useState(false);
+  // Applicator-sheet packet options (format, maps, history, hand-fill blocks).
+  const [printOptionsOpen, setPrintOptionsOpen] = useState(false);
   const [generatingSheet, setGeneratingSheet] = useState<ApplicatorSheetFormat | null>(null);
   // #11: Chemical Application Report (per-job chemical-centric PDF) print in progress.
   const [generatingChemReport, setGeneratingChemReport] = useState(false);
@@ -1004,10 +1005,10 @@ export default function JobDetail() {
     });
   };
 
-  // #9: generate the Applicator Field Sheet in one of three formats. Built from
+  // Generate the Applicator Field Sheet packet in the chosen format. Built from
   // the SAVED job (blocked while dirty, like the WPS notice) so the printed
   // figures match the persisted record. Fields print IN ROUTE ORDER (sort_order).
-  const handleGenerateSheet = async (format: ApplicatorSheetFormat) => {
+  const handleGenerateSheet = async ({ format, options }: ApplicatorPrintSelection) => {
     if (!canGenerateWpsNotice({ isDirty })) {
       toast('error', 'Save the job before printing the field sheet — it must match the saved record.');
       return;
@@ -1035,8 +1036,15 @@ export default function JobDetail() {
         customCfg = parseCustomConfig((cfgRow as { setting_value?: string } | null)?.setting_value ?? null);
       }
 
-      const maps = !isNew && id ? await fetchJobMapImages(id) : null;
-      await generateApplicatorSheetPdf({ ...sheetData, maps }, format, customCfg);
+      const printableData = !isNew && id
+        ? await prepareApplicatorSheetPrintData(id, sheetData, options)
+        : sheetData;
+      await generateApplicatorSheetPdf(printableData, format, customCfg, {
+        includeBillingSplits: options.includeBillingSplits,
+        blankSections: options.blankSections,
+        includePreviousApplications: options.includePreviousApplications,
+        showBanner: options.showBanner,
+      });
 
       // Stamp printed status + who (ChemMan "Printed" column). Best-effort.
       if (!isNew && id) {
@@ -1044,7 +1052,7 @@ export default function JobDetail() {
         try { checkMutationResult(stampRes, 'Stamp printed_at'); } catch { /* non-blocking */ }
       }
       if (profile) logActivity({ event: 'applicator_sheet_printed', description: `${SHEET_FORMAT_LABELS[format]} generated for job ${jobNumber}`, performedBy: profile.id, entityType: 'job', entityId: id });
-      setSheetPickerOpen(false);
+      setPrintOptionsOpen(false);
     } catch (err) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'applicator_sheet_pdf' } });
       toast('error', 'Failed to generate field sheet');
@@ -2927,7 +2935,7 @@ export default function JobDetail() {
         <div className="flex items-center gap-2">
           {!isNew && fieldRows.some((f) => f.field_id) && chemRows.some((c) => c.product_id) && (
             <>
-              <Button variant="secondary" onClick={() => setSheetPickerOpen(true)} loading={generatingSheet !== null}>
+              <Button variant="secondary" onClick={() => setPrintOptionsOpen(true)} loading={generatingSheet !== null}>
                 <ClipboardList className="w-4 h-4" />
                 Field Sheet
               </Button>
@@ -4147,35 +4155,11 @@ export default function JobDetail() {
         </div>
       </Modal>
 
-      {/* #9: Applicator Field Sheet format picker (Original / Custom / Enhanced). */}
-      <Modal open={sheetPickerOpen} onClose={() => setSheetPickerOpen(false)} title="Print Applicator Field Sheet">
-        <div className="space-y-3">
-          <p className="text-sm text-secondary">
-            The crew's carry sheet — fields in route order with the tank mix, plus blank spaces to record as-applied acres and start/end weather in the field. Choose a format:
-          </p>
-          {(['original', 'custom', 'enhanced'] as ApplicatorSheetFormat[]).map((fmt) => (
-            <button
-              key={fmt}
-              type="button"
-              onClick={() => handleGenerateSheet(fmt)}
-              disabled={generatingSheet !== null}
-              className="w-full flex items-start gap-3 rounded-lg border border-gray-200 p-3 text-left hover:border-crx-green hover:bg-green-50 disabled:opacity-50 transition-colors"
-            >
-              <ClipboardList className="w-5 h-5 text-crx-green mt-0.5 flex-shrink-0" />
-              <span>
-                <span className="block text-sm font-medium text-charcoal">
-                  {SHEET_FORMAT_LABELS[fmt]}{generatingSheet === fmt ? ' …' : ''}
-                </span>
-                <span className="block text-xs text-secondary mt-0.5">
-                  {fmt === 'original' && 'Compact: job #, customers + IDs, fields (acres/crop/pest), chemicals with rate/acre.'}
-                  {fmt === 'custom' && 'Same data as Enhanced, with the company header/logo/footer and columns set in Settings.'}
-                  {fmt === 'enhanced' && 'Adds total applied + gallon/lb conversion, applicator, vehicle, date, and per-product REI/PHI.'}
-                </span>
-              </span>
-            </button>
-          ))}
-        </div>
-      </Modal>
+      <PrintOptionsDialog
+        open={printOptionsOpen}
+        onClose={() => setPrintOptionsOpen(false)}
+        onPrint={handleGenerateSheet}
+      />
 
       {/* §5: block-mode over-label-rate admin override — a required reason; logs it then
           saves. Only reached in 'block' mode for an admin. Never a hard wall. */}

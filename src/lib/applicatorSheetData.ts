@@ -117,6 +117,8 @@ export function serializeCustomConfig(cfg: ApplicatorSheetCustomConfig): string 
 
 /** One field/location on the sheet, already placed in route order. */
 export interface ApplicatorSheetField {
+  /** Saved field id, used to attach optional application-history sections. */
+  field_id?: string;
   /** 1-based stop number = sort_order + 1. */
   stop: number;
   field_name: string;
@@ -160,6 +162,28 @@ export interface ApplicatorSheetCustomer {
   account_number: string | null;
 }
 
+/** One prior application shown under a field on the operational sheet. */
+export interface PreviousApplicationRecord {
+  date: string;
+  summary: string;
+  applicator: string | null;
+}
+
+/** Prior applications for one saved field, already limited and sorted newest first. */
+export interface PreviousFieldApplications {
+  fieldId: string;
+  fieldName: string;
+  records: PreviousApplicationRecord[];
+}
+
+/** One customer allocation shown in the optional billing-split table. */
+export interface ApplicatorSheetBillingSplit {
+  customerName: string;
+  acres: number | null;
+  percentOfJob: number | null;
+  phone: string | null;
+}
+
 /** The full, format-agnostic sheet payload. All three layouts read this. */
 export interface ApplicatorSheetData {
   job_number: string;
@@ -175,6 +199,10 @@ export interface ApplicatorSheetData {
   loader_comment: string | null;
   /** Optional static satellite maps fetched by the print caller for saved jobs. */
   maps?: JobMapImages | null;
+  /** Optional prior-application history, fetched only when the print option is on. */
+  previousApplications?: PreviousFieldApplications[];
+  /** Optional billed-customer allocation rows for the operational packet. */
+  billingSplits?: ApplicatorSheetBillingSplit[];
 }
 
 // ── Raw input shapes (what JobDetail hands in) ───────────────────────────────
@@ -242,6 +270,7 @@ export function buildApplicatorSheetData(input: BuildSheetInput): ApplicatorShee
   // not guaranteed). Re-number stops 1..n after sorting.
   const orderedFields = [...input.fields].sort((a, b) => a.sort_order - b.sort_order);
   const fields: ApplicatorSheetField[] = orderedFields.map((f, i) => ({
+    field_id: f.field_id,
     stop: i + 1,
     field_name: f.field_name,
     county: f.county,

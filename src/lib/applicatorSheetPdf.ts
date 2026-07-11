@@ -82,40 +82,67 @@ interface SheetTheme {
   columns: ApplicatorSheetColumns;
   /** Enhanced/Custom show totals, conversions, REI/PHI, applicator/vehicle. */
   enhanced: boolean;
+  /** Whether to draw the standard or custom company header band. */
+  showBanner: boolean;
+}
+
+/** Packet-level options selected in the shared print-options dialog. */
+export interface ApplicatorSheetPdfOptions {
+  includeBillingSplits?: boolean;
+  blankSections?: number;
+  includePreviousApplications?: boolean;
+  showBanner?: boolean;
 }
 
 /**
  * Draw one applicator sheet with the given theme. Shared by all three formats so
  * the body layout is identical and only the header/columns differ.
  */
-function drawSheet(doc: JsPDFWithAutoTable, autoTable: typeof import('jspdf-autotable').default, data: ApplicatorSheetData, theme: SheetTheme): void {
+function drawSheet(
+  doc: JsPDFWithAutoTable,
+  autoTable: typeof import('jspdf-autotable').default,
+  data: ApplicatorSheetData,
+  theme: SheetTheme,
+  options: Required<ApplicatorSheetPdfOptions>,
+): void {
   const pageW = doc.internal.pageSize.getWidth();
   const margin = 40;
   let y = margin;
 
   // ── Header band ────────────────────────────────────────────────────────────
-  doc.setFillColor(...CRX_GREEN);
-  doc.rect(0, 0, pageW, 56, 'F');
-  let titleX = margin;
-  if (theme.logoDataUrl) {
-    // Best-effort: a bad/oversized data URL must never break the sheet.
-    try {
-      doc.addImage(theme.logoDataUrl, 'PNG', margin, 10, 36, 36);
-      titleX = margin + 46;
-    } catch { /* skip logo, keep generating */ }
+  if (theme.showBanner) {
+    doc.setFillColor(...CRX_GREEN);
+    doc.rect(0, 0, pageW, 56, 'F');
+    let titleX = margin;
+    if (theme.logoDataUrl) {
+      // Best-effort: a bad/oversized data URL must never break the sheet.
+      try {
+        doc.addImage(theme.logoDataUrl, 'PNG', margin, 10, 36, 36);
+        titleX = margin + 46;
+      } catch { /* skip logo, keep generating */ }
+    }
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(15);
+    doc.setTextColor(255, 255, 255);
+    doc.text(theme.title, titleX, 26);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.text(theme.companyName, titleX, 40);
+    if (theme.companyAddress) doc.text(theme.companyAddress, titleX, 50);
+    doc.setFontSize(9);
+    doc.text(`Job ${data.job_number}`, pageW - margin, 26, { align: 'right' });
+    doc.text(`Scheduled: ${fmtDate(data.scheduled_date)}${data.scheduled_time ? ` ${data.scheduled_time}` : ''}`, pageW - margin, 40, { align: 'right' });
+    y = 74;
+  } else {
+    // Without the banner, retain the job-specific identifier so same-day crew
+    // sheets remain distinguishable at a glance.
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.setTextColor(...CHARCOAL);
+    doc.text(`Job ${data.job_number} — ${theme.title}`, margin, y);
+    doc.text(fmtDate(data.scheduled_date), pageW - margin, y, { align: 'right' });
+    y += 16;
   }
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(15);
-  doc.setTextColor(255, 255, 255);
-  doc.text(theme.title, titleX, 26);
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(9);
-  doc.text(theme.companyName, titleX, 40);
-  if (theme.companyAddress) doc.text(theme.companyAddress, titleX, 50);
-  doc.setFontSize(9);
-  doc.text(`Job ${data.job_number}`, pageW - margin, 26, { align: 'right' });
-  doc.text(`Scheduled: ${fmtDate(data.scheduled_date)}${data.scheduled_time ? ` ${data.scheduled_time}` : ''}`, pageW - margin, 40, { align: 'right' });
-  y = 74;
 
   // ── Job / applicator info line ──────────────────────────────────────────────
   doc.setTextColor(...CHARCOAL);
@@ -172,6 +199,31 @@ function drawSheet(doc: JsPDFWithAutoTable, autoTable: typeof import('jspdf-auto
   });
   y = doc.lastAutoTable.finalY + 18;
 
+  // ── Billing splits ─────────────────────────────────────────────────────────
+  if (options.includeBillingSplits && data.billingSplits && data.billingSplits.length > 0) {
+    y = ensureRoom(doc, y, 70, margin);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(11);
+    doc.setTextColor(...CHARCOAL);
+    doc.text('Billing Splits', margin, y);
+    y += 6;
+    autoTable(doc, {
+      startY: y,
+      margin: { left: margin, right: margin },
+      head: [['Customer', 'Acres', '% of Job', 'Phone']],
+      body: data.billingSplits.map((split) => [
+        split.customerName,
+        split.acres != null ? fmtNum(split.acres) : '—',
+        split.percentOfJob != null ? `${fmtNum(split.percentOfJob)}%` : '—',
+        split.phone || '—',
+      ]),
+      styles: { fontSize: 9, cellPadding: 4 },
+      headStyles: { fillColor: CRX_GREEN, textColor: 255, fontStyle: 'bold' },
+      alternateRowStyles: { fillColor: ALT_ROW_BG },
+    });
+    y = doc.lastAutoTable.finalY + 16;
+  }
+
   // ── Tank mix / chemical list ────────────────────────────────────────────────
   y = ensureRoom(doc, y, 70, margin);
   doc.setFont('helvetica', 'bold');
@@ -209,6 +261,33 @@ function drawSheet(doc: JsPDFWithAutoTable, autoTable: typeof import('jspdf-auto
   });
   y = doc.lastAutoTable.finalY + 16;
 
+  // ── Previous applications by field ─────────────────────────────────────────
+  if (options.includePreviousApplications && data.previousApplications) {
+    data.previousApplications.forEach((fieldHistory) => {
+      if (fieldHistory.records.length === 0) return;
+      y = ensureRoom(doc, y, Math.min(300, 42 + 30 + fieldHistory.records.length * 24), margin);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(10);
+      doc.setTextColor(...CHARCOAL);
+      doc.text(`Previous applications — ${fieldHistory.fieldName}`, margin, y);
+      y += 6;
+      autoTable(doc, {
+        startY: y,
+        margin: { left: margin, right: margin },
+        head: [['Date', 'Products + rates', 'Applicator']],
+        body: fieldHistory.records.map((record) => [
+          fmtDate(record.date),
+          record.summary,
+          record.applicator || '—',
+        ]),
+        styles: { fontSize: 8.5, cellPadding: 4 },
+        headStyles: { fillColor: CRX_GREEN, textColor: 255, fontStyle: 'bold' },
+        alternateRowStyles: { fillColor: ALT_ROW_BG },
+      });
+      y = doc.lastAutoTable.finalY + 14;
+    });
+  }
+
   // ── Loader comment ──────────────────────────────────────────────────────────
   if (data.loader_comment && data.loader_comment.trim()) {
     y = ensureRoom(doc, y, 44, margin);
@@ -226,39 +305,43 @@ function drawSheet(doc: JsPDFWithAutoTable, autoTable: typeof import('jspdf-auto
   }
 
   // ── Blank as-applied / start-end weather hand-fill area (EVERY format) ───────
-  y = ensureRoom(doc, y, 130, margin);
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(11);
-  doc.setTextColor(...CHARCOAL);
-  doc.text('Record As-Applied (fill in the field)', margin, y);
-  y += 6;
+  const sectionCount = 1 + Math.min(5, Math.max(0, Math.round(options.blankSections)));
+  for (let section = 0; section < sectionCount; section += 1) {
+    y = ensureRoom(doc, y, 180, margin);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(11);
+    doc.setTextColor(...CHARCOAL);
+    doc.text(section === 0 ? 'Record As-Applied (fill in the field)' : `Additional Application Record ${section}`, margin, y);
+    y += 6;
 
-  // A blank weather grid: START and END rows × wind dir / wind mph / temp / humidity.
-  autoTable(doc, {
-    startY: y,
-    margin: { left: margin, right: margin },
-    head: [['', 'Wind Dir.', 'Wind (mph)', 'Temp (F)', 'Humidity (%)', 'Time']],
-    body: [
-      ['Start', '', '', '', '', ''],
-      ['End', '', '', '', '', ''],
-    ],
-    styles: { fontSize: 9, cellPadding: 6, minCellHeight: 22 },
-    headStyles: { fillColor: CRX_GREEN, textColor: 255, fontStyle: 'bold' },
-    columnStyles: { 0: { fontStyle: 'bold' } },
-  });
-  y = doc.lastAutoTable.finalY + 14;
+    // A blank weather grid: START and END rows × wind dir / wind mph / temp / humidity.
+    autoTable(doc, {
+      startY: y,
+      margin: { left: margin, right: margin },
+      head: [['', 'Wind Dir.', 'Wind (mph)', 'Temp (F)', 'Humidity (%)', 'Time']],
+      body: [
+        ['Start', '', '', '', '', ''],
+        ['End', '', '', '', '', ''],
+      ],
+      styles: { fontSize: 9, cellPadding: 6, minCellHeight: 22 },
+      headStyles: { fillColor: CRX_GREEN, textColor: 255, fontStyle: 'bold' },
+      columnStyles: { 0: { fontStyle: 'bold' } },
+    });
+    y = doc.lastAutoTable.finalY + 14;
 
-  // Signature + actual-acres lines.
-  y = ensureRoom(doc, y, 50, margin);
-  doc.setDrawColor(160, 160, 160);
-  doc.setFontSize(9);
-  doc.setTextColor(...GRAY);
-  doc.setFont('helvetica', 'normal');
-  const half = (pageW - margin * 2 - 20) / 2;
-  doc.line(margin, y + 16, margin + half, y + 16);
-  doc.text('Total acres actually applied', margin, y + 26);
-  doc.line(margin + half + 20, y + 16, pageW - margin, y + 16);
-  doc.text('Applicator signature / date', margin + half + 20, y + 26);
+    // Signature + actual-acres lines accompany every extra hand-fill block.
+    y = ensureRoom(doc, y, 50, margin);
+    doc.setDrawColor(160, 160, 160);
+    doc.setFontSize(9);
+    doc.setTextColor(...GRAY);
+    doc.setFont('helvetica', 'normal');
+    const half = (pageW - margin * 2 - 20) / 2;
+    doc.line(margin, y + 16, margin + half, y + 16);
+    doc.text('Total acres actually applied', margin, y + 26);
+    doc.line(margin + half + 20, y + 16, pageW - margin, y + 16);
+    doc.text('Applicator signature / date', margin + half + 20, y + 26);
+    y += 42;
+  }
 }
 
 /** Build the per-format theme. */
@@ -274,6 +357,7 @@ function themeFor(format: ApplicatorSheetFormat, custom: ApplicatorSheetCustomCo
       footerText: (cfg?.footer_text?.trim()) || null,
       columns: cfg?.columns || { ...DEFAULT_SHEET_COLUMNS },
       enhanced: true, // Custom carries the SAME data as Enhanced
+      showBanner: true,
     };
   }
   return {
@@ -284,6 +368,7 @@ function themeFor(format: ApplicatorSheetFormat, custom: ApplicatorSheetCustomCo
     footerText: null,
     columns: { ...DEFAULT_SHEET_COLUMNS },
     enhanced: format === 'enhanced',
+    showBanner: true,
   };
 }
 
@@ -385,20 +470,28 @@ function appendMapPages(doc: JsPDFWithAutoTable, data: ApplicatorSheetData): voi
  * @param format  'original' | 'custom' | 'enhanced'
  * @param custom  the parsed Custom config (only used for the 'custom' format;
  *                pass null for Original/Enhanced)
+ * @param options packet-level inclusion and layout toggles from the print dialog
  */
 export async function generateApplicatorSheetPdf(
   data: ApplicatorSheetData,
   format: ApplicatorSheetFormat,
   custom: ApplicatorSheetCustomConfig | null,
+  options: ApplicatorSheetPdfOptions = {},
   filename?: string,
 ): Promise<void> {
   const { default: jsPDF } = await import('jspdf');
   const { default: autoTable } = await import('jspdf-autotable');
 
   const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'letter' }) as unknown as JsPDFWithAutoTable;
-  const theme = themeFor(format, custom);
+  const theme = { ...themeFor(format, custom), showBanner: options.showBanner !== false };
+  const resolvedOptions: Required<ApplicatorSheetPdfOptions> = {
+    includeBillingSplits: options.includeBillingSplits !== false,
+    blankSections: options.blankSections ?? 0,
+    includePreviousApplications: options.includePreviousApplications !== false,
+    showBanner: options.showBanner !== false,
+  };
 
-  drawSheet(doc, autoTable, data, theme);
+  drawSheet(doc, autoTable, data, theme, resolvedOptions);
   appendMapPages(doc, data);
 
   // Footer on every page (drawn last so page count is final).

@@ -25,6 +25,7 @@ Mason, after the 4-video gap analysis was presented, chose via structured interv
 3. **Vehicles:** yes — and explicitly include **tenders**: *"most of time we are loading a tender (3,200g tank) that goes to sprayer, sometimes the sprayer itself pulls in and we load directly into it (1,000g or so)."* The loader worksheet must let you pick the **vessel being loaded** (tender or sprayer) and use ITS capacity.
 4. **FSA click-to-adopt boundaries:** research it, build later — the loop produces a data-source options report only.
 5. **Ship gate = "Ship live as it goes":** each finished feature pushes to main and deploys overnight; additive migrations apply live through the full gates.
+6. **Push mechanics under autopilot (Mason, 2026-07-11, this conversation, explicit option choice):** autopilot's hard deny-set blocks `git push` while armed. Mason authorized the **disarm → push → re-arm** pattern: ONLY after a CLEAN Codex verdict + green gates, briefly disarm autopilot (`autopilot-arm.mjs --off`), push that unit, immediately re-arm. Each use is logged in the ledger. This authorization covers pushes only — migrations/edge-fn/data-deletion gates are untouched.
 
 ## Model routing (pick per unit, note the tier in the ledger)
 

@@ -128,4 +128,50 @@ describe('generateApplicatorSheetPdf map pages', () => {
     expect(mockDoc.text.mock.calls.some((call) => Array.isArray(call[0])
       && call[0][2] === 'Lat: 39.150000, Lng: -89.050000…')).toBe(true);
   });
+
+  it('renders enabled billing, history, and extra hand-fill sections', async () => {
+    await generateApplicatorSheetPdf(makeSheetData({
+      billingSplits: [{ customerName: 'Smith Farm', acres: 40, percentOfJob: 100, phone: '555-0100' }],
+      previousApplications: [{
+        fieldId: 'field-1',
+        fieldName: 'North 40',
+        records: [{ date: '2026-07-01', summary: 'Atrazine (1 qt/ac)', applicator: 'Casey Crew' }],
+      }],
+    }), 'enhanced', null, {
+      includeBillingSplits: true,
+      includePreviousApplications: true,
+      blankSections: 2,
+      showBanner: true,
+    });
+
+    const renderedText = mockDoc.text.mock.calls.flat(Infinity).filter((value: unknown): value is string => typeof value === 'string');
+    expect(renderedText).toContain('Billing Splits');
+    expect(renderedText).toContain('Previous applications — North 40');
+    expect(renderedText).toContain('Additional Application Record 1');
+    expect(renderedText).toContain('Additional Application Record 2');
+    expect(mockDoc.rect).toHaveBeenCalledWith(0, 0, 612, 56, 'F');
+  });
+
+  it('omits disabled optional sections and the company header band', async () => {
+    await generateApplicatorSheetPdf(makeSheetData({
+      billingSplits: [{ customerName: 'Smith Farm', acres: 40, percentOfJob: 100, phone: '555-0100' }],
+      previousApplications: [{
+        fieldId: 'field-1',
+        fieldName: 'North 40',
+        records: [{ date: '2026-07-01', summary: 'Atrazine (1 qt/ac)', applicator: 'Casey Crew' }],
+      }],
+    }), 'original', null, {
+      includeBillingSplits: false,
+      includePreviousApplications: false,
+      blankSections: 0,
+      showBanner: false,
+    });
+
+    const renderedText = mockDoc.text.mock.calls.flat(Infinity).filter((value: unknown): value is string => typeof value === 'string');
+    expect(renderedText).not.toContain('Billing Splits');
+    expect(renderedText).not.toContain('Previous applications — North 40');
+    expect(renderedText).not.toContain('Additional Application Record 1');
+    expect(renderedText).toContain('Job JOB-2026-001 — Original Applicator Report');
+    expect(mockDoc.rect).not.toHaveBeenCalled();
+  });
 });
