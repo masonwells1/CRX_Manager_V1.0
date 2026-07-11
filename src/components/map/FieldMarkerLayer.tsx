@@ -31,6 +31,8 @@ interface FieldMarkerLayerProps {
   /** A selection picker should toggle directly instead of opening the information popup. */
   selectOnClick?: boolean;
   showLabels?: boolean;
+  /** Optional per-field label rendered as a small badge beside the marker dot. */
+  labelById?: Map<string, string>;
 }
 
 export default function FieldMarkerLayer({
@@ -42,6 +44,7 @@ export default function FieldMarkerLayer({
   onFieldHover,
   selectOnClick = false,
   showLabels = false,
+  labelById,
 }: FieldMarkerLayerProps) {
   const [selected, setSelected] = useState<FieldGeo | null>(null);
 
@@ -101,6 +104,11 @@ export default function FieldMarkerLayer({
             <div className={`h-4 w-4 rounded-full border-2 border-white shadow-md transition-transform hover:scale-125 ${
               selectedIds?.has(m.id) ? 'bg-amber-500' : hoveredId === m.id ? 'bg-blue-600' : 'bg-crx-green'
             }`} />
+            {labelById?.get(m.id) ? (
+              <span className="pointer-events-none absolute -right-2 -top-2 z-10 flex h-4 min-w-4 items-center justify-center rounded-full border border-white bg-gray-900 px-0.5 text-[9px] font-bold leading-none text-white shadow">
+                {labelById.get(m.id)}
+              </span>
+            ) : null}
             {showLabels && (
               <span className="pointer-events-none absolute left-1/2 top-5 -translate-x-1/2 whitespace-nowrap rounded bg-black/70 px-1.5 py-0.5 text-center text-[10px] font-medium text-white shadow">
                 {m.field_name}<br />

@@ -20,7 +20,7 @@ Loop start (UTC): 2026-07-11T16:20Z (Step 0)
 | M1 | SHIPPED | terra (verdicts: sol) | 4* | none (frontend-only) | 2fc3f33d (on main) | CLEAN (pass 3) |
 | M2 | SHIPPED | terra (verdicts: sol) | 4* | none (frontend-only) | (sha at push) | CLEAN (pass 3) |
 | M3 | SHIPPED | terra (verdicts: sol) | 3 | none (frontend-only) | (sha at push) | CLEAN (pass 2) |
-| M4 | pending | terra | – | – | – | – |
+| M4 | SHIPPED (mostly ALREADY-SHIPPED) | luna (verdict: sol) | 1 | none | (sha at push) | CLEAN |
 | M5 | pending | sol+terra | – | – | – | – |
 | M6 | pending | sol+terra | – | – | – | – |
 | M7 | pending | terra | – | – | – | – |
@@ -55,6 +55,10 @@ Loop start (UTC): 2026-07-11T16:20Z (Step 0)
 - Review fixes: mousemove hit-testing gated on onFieldHover (was a perf regression for ALL 6 existing map consumers); manual-add vs picker acres-default parity (both billable now — two-acre model); SelectLocationsModal tint match; billableAcresById required; P1 race gated (picker disabled until field lookup loads, else legacy acres could be written into acres_to_treat).
 - Within round cap: build + 2 fix rounds.
 - PROOF — Ran: typecheck ✓ lint ✓ scoped tests 197 ✓ full suite 3292 ✓ build ✓; regression reviewer enumerated all shared-component consumers; 2 Sol verdict passes. · Saw: CLEAN final verdict; DispatchBoard/Modal/pages-render suites green. · Not verified: live interactive use (morning check: open a job → Select locations on map → search a crop across customers → add).
+
+### M4 — Jobs-grid parity touches (SHIPPED; mostly ALREADY-SHIPPED)
+- Grounding: Rem-ac column (list/CSV/PDF/footer) and drag-reorder route order (field-app parity #5) were ALREADY live from a parallel loop. Only missing sliver built: 1-based route-number badges on the job map (numbered pins + boundary-label prefix), via optional labelById on the shared layers (default absent = unchanged).
+- PROOF — Ran: typecheck ✓ lint ✓ jobFieldRouteOrder tests ✓; 29-line diff self-reviewed line-by-line; Sol verdict pass 1. · Saw: CLEAN. · Not verified: visual (morning check with the route-order drag).
 
 ### M12 — FSA boundary data research (DONE)
 - Key finding: commercial "FSA CLU" products (incl. ChemMan's likely vendor AgriData Surety) resell a frozen 2008 snapshot; recommendation = build click-to-adopt on USDA Crop Sequence Boundaries (free, public domain, multi-year windows) + existing draw/edit tools; fallback ReportAll parcel API. Owner decision needed before any build.

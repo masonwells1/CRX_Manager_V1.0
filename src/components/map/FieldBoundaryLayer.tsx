@@ -12,6 +12,8 @@ type FieldWithCustomer = Pick<Field, 'id' | 'field_name' | 'total_acres' | 'crop
 interface FieldBoundaryLayerProps {
   fields: FieldWithCustomer[];
   showLabels?: boolean;
+  /** Optional per-field prefix for boundary labels, such as a route number. */
+  labelById?: Map<string, string>;
   onFieldClick?: (fieldId: string) => void;
   /** Phase 6 (2026-04-30): when set, fields with id in this set render highlighted. Lets the map double as a selection picker. */
   selectedIds?: Set<string>;
@@ -23,6 +25,7 @@ interface FieldBoundaryLayerProps {
 export default function FieldBoundaryLayer({
   fields,
   showLabels = true,
+  labelById,
   onFieldClick,
   selectedIds,
   hoveredId,
@@ -38,13 +41,16 @@ export default function FieldBoundaryLayer({
               ? JSON.parse(f.boundary_geojson)
               : f.boundary_geojson;
           const b = f.billable_acres ?? billableAcres(f.override_acres, f.measured_acres, f.total_acres);
+          const fieldLabel = labelById?.get(f.id)
+            ? `${labelById.get(f.id)} · ${f.field_name}`
+            : f.field_name;
           return {
             type: 'Feature' as const,
             properties: {
               id: f.id,
               field_name: f.field_name,
               // Map label shows the field name with its billable acres beneath it.
-              label: b != null ? `${f.field_name}\n${b} ac` : f.field_name,
+              label: b != null ? `${fieldLabel}\n${b} ac` : fieldLabel,
               total_acres: f.total_acres,
               crop_type: f.crop_type,
               customer_name:
@@ -63,7 +69,7 @@ export default function FieldBoundaryLayer({
       .filter((f): f is NonNullable<typeof f> => f !== null);
 
     return { type: 'FeatureCollection' as const, features };
-  }, [fields, hoveredId, selectedIds]);
+  }, [fields, hoveredId, labelById, selectedIds]);
 
   // Click handler for boundary polygons
   const { current: map } = useMap();

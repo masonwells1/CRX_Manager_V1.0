@@ -16,6 +16,7 @@ import { useFitBounds } from '../../hooks/useFitBounds';
 import { supabase, assertRpcResult } from '../../lib/db';
 import { Sentry } from '../../lib/sentry';
 import type { Field } from '../../types';
+import { getJobFieldRouteNumbers } from './jobFieldRouteOrder';
 
 // Exactly the columns get_job_fields_with_geojson returns.
 interface JobMapFieldRow {
@@ -30,8 +31,10 @@ interface JobMapFieldRow {
   sort_order: number | null;
 }
 
+type JobMapField = Field & { sort_order: number | null };
+
 /** Map a scoped RPC row into the Field shape the map layers consume. */
-function toField(r: JobMapFieldRow): Field {
+function toField(r: JobMapFieldRow): JobMapField {
   return {
     id: r.id,
     customer_id: r.customer_id,
@@ -54,6 +57,7 @@ function toField(r: JobMapFieldRow): Field {
     is_active: true,
     centroid_geojson: r.centroid_geojson,
     boundary_geojson: r.boundary_geojson,
+    sort_order: r.sort_order,
     created_at: '',
     updated_at: '',
   };
@@ -66,7 +70,7 @@ interface JobFieldMapProps {
 
 export default function JobFieldMap({ jobId }: JobFieldMapProps) {
   const navigate = useNavigate();
-  const [jobFields, setJobFields] = useState<Field[]>([]);
+  const [jobFields, setJobFields] = useState<JobMapField[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -110,6 +114,7 @@ export default function JobFieldMap({ jobId }: JobFieldMapProps) {
     () => jobFields.filter((f) => !f.boundary_geojson && !f.centroid_geojson),
     [jobFields]
   );
+  const routeNumberById = useMemo(() => getJobFieldRouteNumbers(jobFields), [jobFields]);
 
   const geoStrings = useMemo(
     () => fieldsWithGeometry.flatMap((f) => [f.boundary_geojson, f.centroid_geojson]),
@@ -153,12 +158,14 @@ export default function JobFieldMap({ jobId }: JobFieldMapProps) {
         >
           <FieldBoundaryLayer
             fields={fieldsWithGeometry}
+            labelById={routeNumberById}
             onFieldClick={(fieldId) => navigate(`/fields/${fieldId}/dashboard`)}
           />
           {/* Codex P3: pass onFieldClick so the marker popup's "View Dashboard" action
               actually navigates (it renders a dead button without a handler). */}
           <FieldMarkerLayer
             fields={fieldsWithGeometry}
+            labelById={routeNumberById}
             showAll
             onFieldClick={(fieldId) => navigate(`/fields/${fieldId}/dashboard`)}
           />
