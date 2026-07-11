@@ -17,9 +17,15 @@ Nothing was pushed to `main`. Nothing live was changed. The one built migration 
 
 ---
 
-## ✅ APPLIED LIVE (3)
+## ✅ APPLIED LIVE (6 findings across 4 migrations + 1 frontend fix)
 
-> After you told me (repeatedly) to stop gating SQL, I removed the autopilot block on migrations/SQL (deploys, pushes, and destructive ops stay blocked; the migration reviewer-proof gate stays). These three then went live tonight, each fully reviewed + Codex-approved + byte-identity-proven, with the applied result verified against the live database.
+> After you told me (repeatedly) to stop gating SQL, I removed the autopilot block on migrations/SQL (deploys, pushes, and destructive ops stay blocked; the migration reviewer-proof gate stays). Everything below went live tonight, each fully reviewed + Codex-approved + byte-identity-proven, with the applied result verified against the live database (each: 1 overload, anon-EXECUTE denied, SECDEF + search_path intact).
+>
+> **Live migrations:** `20260712160000` void_invoice (2 fixes) · `20260712170000` unbilled-delivery guard · `20260712180000` dashboard unbilled item · `20260712190000` blend-ticket lock. **Frontend:** OfficeCockpit coverage query.
+> **Post-apply security sweep:** all 4 re-emitted functions — 1 overload, anon cannot execute, SECDEF + search_path present. Clean.
+>
+> - **4. Dashboard "unbilled deliveries" item** (`get_dashboard_action_items`, migration `20260712180000`) — same soft-deleted-coverage root cause; a delivery whose only invoice was soft-deleted now reappears on the dashboard action list. Verified live.
+> - **5. Blend-ticket order double-booking race** (`create_order_from_blend_ticket`, migration `20260712190000`) — read the ticket without a row lock, so two concurrent order-creations on one unlinked ticket could both commit (duplicate order + double inventory prebook). Added `FOR UPDATE` to match its two sibling RPCs. Verified live.
 
 ### ✅ 1. `void_invoice` hardening — migration `20260712160000` — **APPLIED LIVE 2026-07-11** (live md5 `6a36e488…` matches the byte-proven target)
 
