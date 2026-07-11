@@ -1338,6 +1338,10 @@ describe('RPC contract: save_blend_recipe', () => {
 const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   'adjust_inventory',
   'allocate_payment',
+  // credit-memo RPCs (landed on main 2026-07-10) — classified WITH idempotency: verified against
+  // live pg_proc that each body uses check_idempotency/save scoped to its own operation. They were
+  // added to src/types/supabase.ts but never classified here, which left main RED for all sessions.
+  'apply_credit_memo_to_invoice',
   'apply_remaining_prepayments',
   'approve_return',
   'batch_apply_all_prepayments',
@@ -1397,6 +1401,7 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   'retire_inventory_item',
   'reverse_blend_ticket_approval',
   'reverse_completed_cycle_count',
+  'reverse_credit_memo_application', // credit-memo (landed 2026-07-10) — WITH idempotency (see apply_credit_memo_to_invoice note above)
   'reverse_write_off',
   'revert_quote_status',
   'save_blend_recipe',
