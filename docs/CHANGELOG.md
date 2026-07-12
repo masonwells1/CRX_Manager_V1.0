@@ -16,7 +16,7 @@ Overnight continuation of the 2026-07-11 parity loop (Mason: "finish everything 
 - **Frontend:** all 10 direct print-stamp updates (JobDetail 4, Jobs 6) swapped to `src/lib/printStamp.ts` RPC helper (Codex Luna build; full suite 3,355 passed / 0 failed).
 - **Tooling:** hold-latch HOLD_RE false positive fixed ("don't stop" latched a work-freeze mid-run; now negation-aware).
 - **Docs:** migration-history backfilled + counts corrected (654 → 677, 4 credit-memo rows added); pages-routes count fixed; `npm run check:docs` fully green.
-- Parked for Mason (unchanged): phones-on-crew-sheet default, loads-done drift warning, CSB click-to-adopt prototype green-light.
+- **CSB click-to-adopt SHIPPED (Mason green-lit it in the morning):** 'Adopt USDA boundary' button in the field editor — click a farm field on the satellite map, preview its USDA-derived boundary with acres + crop, one click adopts it into the normal boundary pipeline. 65,593 public-domain USDA CSB 2016-2023 boundaries shipped as static tiles covering the service area (commit fe5b0d4f; zero DB changes; compliance 0-blocker + Codex Sol round-2 SHIP after round-1 fixes). Decisions logged: phone numbers stay ON by default; no loads-done drift warning.
 
 ---
 

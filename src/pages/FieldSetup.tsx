@@ -234,6 +234,15 @@ export default function FieldSetup() {
   const [isDirty, setIsDirty] = useState(false);
   const initialLoadDone = useRef(false);
   const blocker = useUnsavedChanges(isDirty);
+  // Post-create navigation happens via this state so it fires on a render where
+  // isDirty=false has committed — see the comment at the setter in handleSave.
+  const [postSaveNavTarget, setPostSaveNavTarget] = useState<string | null>(null);
+  useEffect(() => {
+    if (postSaveNavTarget && !isDirty) {
+      setPostSaveNavTarget(null); // clear before navigating — route reuse must not replay it
+      navigate(postSaveNavTarget, { replace: true });
+    }
+  }, [postSaveNavTarget, isDirty, navigate]);
 
   useEffect(() => {
     if (!initialLoadDone.current) return;
@@ -637,7 +646,10 @@ export default function FieldSetup() {
         setIsDirty(false);
         if (isNew) {
           toast('success', 'Field created');
-          navigate(`/fields/${data}`, { replace: true });
+          // Deferred: navigating here directly races the unsaved-changes blocker —
+          // it evaluates against the still-committed dirty=true render and shows a
+          // false "Unsaved Changes" prompt after every successful create.
+          setPostSaveNavTarget(`/fields/${data}`);
         } else {
           toast('success', 'Field updated');
         }

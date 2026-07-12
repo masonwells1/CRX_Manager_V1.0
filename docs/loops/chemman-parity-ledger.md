@@ -99,3 +99,10 @@ Loop start (UTC): 2026-07-11T16:20Z (Step 0)
 - **Migration 20260713040000_revoke_anon_trigger_fn_exec APPLIED LIVE (v20260712020748)**: anon/PUBLIC EXECUTE revoked on the 3 flagged inert trigger fns. PROOF — has_function_privilege('anon', …) = false on all 3.
 - **Frontend print-stamp swap (Codex Luna build)**: `src/lib/printStamp.ts` (+test) and all 10 direct stamp updates in JobDetail.tsx (4) / Jobs.tsx (6) now call the RPC; non-blocking semantics preserved. PROOF — typecheck ✓ lint ✓ full suite 3355 passed/0 failed ✓ assertRpcCoverage ✓.
 - **Docs drift closed**: migration-history.md 654→677 + 7 backfill/new rows (4 credit-memo + tonight's 3) + stale duplicate title removed; pages-routes 82→75 pages. PROOF — `npm run check:docs` PASS on every check.
+
+### CSB click-to-adopt prototype — SHIPPED (2026-07-12 morning, Mason: "continue build till done"; phones stay ON, no drift warning — both zero-change decisions)
+
+- Data: no hosted CSB service exists (official viewer is a GEE app; NASS offers national-ZIP downloads only) → extracted 65,593 polygons for the Crawford-area service region + demo region from the fiboa GeoParquet (public domain, CSB 2016-2023) via remote DuckDB bbox queries (row-group pruning; 4×4 chunked w/ retries after a transient TProtocolException). 10 static tiles, 42 MB, simplified 8m in EPSG:5070 (equal-area → exact precomputed acres), served same-origin from public/csb/.
+- Build: Codex Terra one round; my 2 surgical MED fixes (self-overlap filter, per-adoption drawId token) + Sol round-1 P1 fix (no geometry adds while a save is in flight) + 2 NITs (bounds precomputed at tile parse; unmount invalidates in-flight lookups).
+- Gates: compliance-reviewer 0 BLOCKER/0 HIGH (2 MED fixed); Codex Sol round-1 BLOCK → all findings fixed → round-2 SHIP zero findings; typecheck/lint/build green.
+- PROOF — Ran: full vitest suite 3,365 passed / 0 failed; data-level lookup at the [E2E] North 150 centroid returns a 131.3-ac Corn polygon from tile -89.5_39.5. Pushed fe5b0d4f → main (disarm→push→re-arm, logged). Live browser verification: see addendum below after deploy.
