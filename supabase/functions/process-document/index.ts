@@ -21,7 +21,7 @@ function getAllowedOrigin(): string {
 const corsHeaders = {
   "Access-Control-Allow-Origin": getAllowedOrigin(),
   "Access-Control-Allow-Methods": "POST, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization, apikey, x-client-info",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization, apikey, x-client-info, x-supabase-api-version, x-request-id",
 };
 
 function jsonResponse(body: Record<string, unknown>, status = 200) {

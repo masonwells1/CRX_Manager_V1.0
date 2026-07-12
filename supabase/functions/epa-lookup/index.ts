@@ -60,7 +60,7 @@ const corsHeaders = {
   "Access-Control-Allow-Origin": getAllowedOrigin(),
   "Access-Control-Allow-Methods": "POST, OPTIONS",
   "Access-Control-Allow-Headers":
-    "Content-Type, Authorization, apikey, x-client-info",
+    "Content-Type, Authorization, apikey, x-client-info, x-supabase-api-version, x-request-id",
 };
 
 function jsonResponse(body: unknown, status = 200): Response {
