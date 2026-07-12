@@ -67,3 +67,18 @@ The "click a parcel to adopt the boundary" feature you liked: every vendor selli
 - Final whole-branch review: satisfied by per-unit CLEAN verdicts covering 100% of the branch delta — every pushed line was individually verdicted; no unreviewed lines exist.
 - Docs sync: CHANGELOG entry added; ledger complete with per-unit PROOF lines; this report final.
 - Tests at wrap: 3,351 passed / 117 skipped. Loop ran ~11:20 to ~18:10 CT.
+
+## LIVE VERIFICATION ADDENDUM (2026-07-11 evening — Mason + Claude, driving his Chrome on production)
+
+Checklist executed together on croprxsolutions.app using [E2E] Farm Alpha (per live-testdata convention; both test jobs cancelled after):
+
+1. ✅ **Map pages print** — JOB-2026-0004 packet: 3 pages (crew sheet → "Job Field Map — Overview" → "North 150 · 39.09 acres · Lat/Lng" close-up), yellow boundary + centered acre label on real satellite imagery. Visual proof extracted from the PDF and shared.
+2. ✅ **Print dialog** — all options render on the deployed build; saved defaults load from app_settings; previous-applications toggle exercised.
+3. ✅ **Map field picker** — cross-customer field list, fit-bounds, map-click⇄table selection sync, "Add 1 Location" landed the field on the job.
+4. ✅ **Loader worksheets** — vessel picker auto-filled Hagie STS-12 @1,200 gal; live math (586.35 gal → 1 load); saved a full_loads_remainder worksheet (row verified in job_loader_worksheets with created_by attribution); atomic Select worked; honest "no worksheet selected" banner shown pre-selection.
+5. ✅ **Field editor** — "+ Add another section" + split-field helper copy present; **Legal lookup filled "Sec 31, T16N R01E" live from the BLM service** (CSP fix verified); Obstacles section present with crew/printed-maps copy.
+6. ⚠️ Obstacle pin-drop and the all-fields overlay toggle were confirmed present but not click-exercised (map-canvas automation limits) — 30-second manual check whenever convenient.
+
+**Bug found & filed during verification (chip spawned):** after "Save Changes" succeeds on JobDetail, the dirty flag never clears — printing is blocked ("save the job before printing") and navigation nags until a page reload. Reproduced twice. Workaround until fixed: reload the job page before printing.
+
+**Data notes:** only ONE field in the live system has a drawn boundary ([E2E] North 150) — Elevator/Lindley 100 were never mapped, so real-job packets print text-only until boundaries exist. That's the onboarding gap the CSB click-to-adopt prototype would close fastest. Print stamps: printed_at was set on JOB-2026-0001 (test job) and the [E2E] jobs by our test prints.
