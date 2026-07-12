@@ -3319,3 +3319,24 @@ export interface IntegrityAlert {
   detected_at: string;
   resolved_at: string | null;
 }
+
+// Weekly automated in-DB backup store (admin-read-only; written by the
+// run_weekly_db_backup pg_cron routine). Ops-only — no UI consumes it today.
+export interface BackupSnapshot {
+  id: number;
+  taken_at: string;
+  table_name: string;
+  row_count: number;
+  data: unknown[];
+}
+
+// One row per weekly backup run (admin-read-only). `succeeded` is false if any
+// table failed; retention pruning is skipped on a failed run. Ops-only.
+export interface BackupRun {
+  id: number;
+  ran_at: string;
+  tables_backed_up: number;
+  rows_backed_up: number;
+  failed: string[];
+  succeeded: boolean;
+}
