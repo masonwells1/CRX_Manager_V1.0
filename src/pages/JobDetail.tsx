@@ -288,6 +288,14 @@ export default function JobDetail() {
   // every successful save/start/complete (which re-run fetchJob).
   const [isDirty, setIsDirty] = useState(false);
   const baselineRef = useRef<string | null>(null);
+  // Post-save refetch race guard: fetchJob nulls the baseline BEFORE its network
+  // read resolves, and loading stays false on refetches — so any render in that
+  // window (the save handler's own state sets, for one) would adopt the STALE
+  // pre-refetch form as "clean", leaving isDirty stuck true once fresh rows land.
+  // While the guard is up, adoption waits; the settle tick forces one adoption
+  // pass on the render that contains the fully-refetched state.
+  const baselineSettleGuardRef = useRef(false);
+  const [baselineSettleTick, setBaselineSettleTick] = useState(0);
   const blocker = useUnsavedChanges(isDirty);
   // Field-app parity #16: allow a deep-link to a tab (e.g. the Jobs-list "Map / Logs"
   // row action opens /jobs/:id?tab=map_logs). Falls back to 'locations'.
@@ -1402,14 +1410,19 @@ export default function JobDetail() {
   useEffect(() => {
     const snap = formSnapshot();
     if (baselineRef.current === null) {
-      if (!loading) {
+      // Don't adopt while a refetch is still settling — a render fired between
+      // fetchJob nulling the baseline and its state landing would otherwise
+      // freeze the STALE form as "clean" (live bug 2026-07-11: isDirty stuck
+      // true after every save until a page reload). The settle tick re-runs
+      // this effect on the fully-refetched render.
+      if (!loading && !baselineSettleGuardRef.current) {
         baselineRef.current = snap;
         setIsDirty(false);
       }
       return;
     }
     setIsDirty(snap !== baselineRef.current);
-  }, [formSnapshot, loading]);
+  }, [formSnapshot, loading, baselineSettleTick]);
 
   const loadLookups = async () => {
     setFieldsLookupReady(false);
@@ -1462,7 +1475,9 @@ export default function JobDetail() {
 
   const fetchJob = useCallback(async () => {
     // Drop the baseline so the freshly-loaded form is re-adopted as clean once it
-    // settles (also covers post-save refetches where loading stays false).
+    // settles (also covers post-save refetches where loading stays false). The
+    // settle guard defers adoption until this fetch's state has actually rendered.
+    baselineSettleGuardRef.current = true;
     baselineRef.current = null;
     const { data, error } = await supabase
       // PR-07 follow-up: dropped applicator FK embed — full_name isn't read
@@ -1483,6 +1498,7 @@ export default function JobDetail() {
       .single();
 
     if (error || !data) {
+      baselineSettleGuardRef.current = false;
       toast('error', 'Job not found');
       navigate('/jobs');
       return;
@@ -1646,6 +1662,10 @@ export default function JobDetail() {
     }
 
     setLoading(false);
+    // Everything this fetch sets is now queued in THIS batch — drop the guard and
+    // tick so the dirty engine adopts the baseline on the settled render.
+    baselineSettleGuardRef.current = false;
+    setBaselineSettleTick((t) => t + 1);
     // initialLoadDone is armed by the loading-settle effect (rAF after loading=false).
   }, [id, toast, navigate]);
 
