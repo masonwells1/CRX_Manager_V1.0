@@ -6,7 +6,7 @@
     "regenerate_with": "node scripts/regenerate-schema-registry.mjs --from-introspection <queries.json> (queries documented in the script header)",
     "purpose": "Single source of truth for hooks: generated columns, status enums, ALL parseable CHECK IN-lists, NOT NULL columns, full column lists, sequences, tables-with/without updated_at, applied-migration high water.",
     "note": "For a fresh refresh from the live DB, ask Claude Code: 'regenerate the schema-registry from Supabase' (/regen-schema-registry). skipped_constraints lists every CHECK the hooks can NOT validate — review it when touching those tables.",
-    "migrations_high_water": "20260712020748"
+    "migrations_high_water": "20260712175823"
   },
   "generated_columns": [
     {
@@ -205,6 +205,8 @@
     "application_record_fields",
     "application_record_lots",
     "ar_reminder_tracking",
+    "backup_runs",
+    "backup_snapshots",
     "blend_recipe_items",
     "blend_ticket_fields",
     "blend_ticket_images",
@@ -1728,6 +1730,29 @@
         "sent_date"
       ]
     },
+    "backup_runs": {
+      "no_default": [
+        "tables_backed_up",
+        "rows_backed_up",
+        "succeeded"
+      ],
+      "with_default": [
+        "id",
+        "ran_at",
+        "failed"
+      ]
+    },
+    "backup_snapshots": {
+      "no_default": [
+        "table_name",
+        "row_count",
+        "data"
+      ],
+      "with_default": [
+        "id",
+        "taken_at"
+      ]
+    },
     "blend_recipe_items": {
       "no_default": [
         "recipe_id",
@@ -3236,6 +3261,21 @@
       "sent_date",
       "email_log_id",
       "created_at"
+    ],
+    "backup_runs": [
+      "id",
+      "ran_at",
+      "tables_backed_up",
+      "rows_backed_up",
+      "failed",
+      "succeeded"
+    ],
+    "backup_snapshots": [
+      "id",
+      "taken_at",
+      "table_name",
+      "row_count",
+      "data"
     ],
     "blend_recipe_items": [
       "id",
