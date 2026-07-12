@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 import type { EpaLookupResult } from '../../supabase/functions/epa-lookup/logic.ts';
 import {
   buildFindingsForRegistration,
+  buildMissingEpaFinding,
   classifyRegistrationNumber,
   groupProductsByRegistration,
+  trustedAvailableSignalWord,
   type EpaDataQualityProduct,
 } from './epaDataQualityReport';
 
@@ -13,6 +15,7 @@ const product = (
   id: 'product-1',
   product_name: '2,4-D Amine',
   epa_registration: '62719-524',
+  epaRegistrationDb: '62719-524',
   is_rup: false,
   signal_word: null,
   ...overrides,
@@ -72,6 +75,47 @@ describe('EPA data-quality finding classification', () => {
       .not.toContain('SIGNAL_WORD_AVAILABLE');
   });
 
+  it('creates an actionable finding for a pesticide with no EPA number', () => {
+    const finding = buildMissingEpaFinding(product({ epa_registration: '' }));
+
+    expect(finding).toMatchObject({
+      type: 'MISSING_EPA',
+      level: 'action',
+      registrationNumber: '',
+    });
+  });
+
+  it('offers an EPA signal word only when no registration trust breaker exists', () => {
+    const base = buildFindingsForRegistration(
+      '62719-524',
+      classifyRegistrationNumber('62719-524'),
+      [product({ product_name: 'FOREFRONT R&P' })],
+      epa(),
+    );
+    expect(trustedAvailableSignalWord(base)).toBe('Danger');
+
+    expect(trustedAvailableSignalWord([
+      ...base,
+      { ...base[0], type: 'DISTRIBUTOR_NAME_DIFF' },
+      { ...base[0], type: 'RUP_DISAGREE' },
+    ])).toBe('Danger');
+
+    for (const result of [
+      epa({ productname: 'Unrelated Product' }),
+      epa({ isCancelled: true, productStatus: 'Cancelled' }),
+      epa({ needsManual: true, signalWordCanonical: null }),
+      epa({ found: false }),
+    ]) {
+      const findings = buildFindingsForRegistration(
+        '62719-524',
+        classifyRegistrationNumber('62719-524'),
+        [product()],
+        result,
+      );
+      expect(trustedAvailableSignalWord(findings)).toBeNull();
+    }
+  });
+
   it('reports cancellation, RUP disagreement, and manual signal words', () => {
     const findingTypes = types('62719-524', [product()], epa({
       isCancelled: true,
@@ -104,5 +148,13 @@ describe('EPA data-quality finding classification', () => {
     expect([...groups.keys()]).toEqual(['62719-524']);
     expect(groups.get('62719-524')?.map((item) => item.id))
       .toEqual(['product-a', 'product-b']);
+  });
+
+  it('preserves the raw database registration while grouping on its trimmed value', () => {
+    const groups = groupProductsByRegistration([
+      product({ epa_registration: '62719-524', epaRegistrationDb: ' 62719-524 ' }),
+    ]);
+
+    expect(groups.get('62719-524')?.[0].epaRegistrationDb).toBe(' 62719-524 ');
   });
 });

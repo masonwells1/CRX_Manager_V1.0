@@ -10,8 +10,10 @@ export interface EpaDataQualityProduct {
   id: string;
   product_name: string;
   epa_registration: string;
+  epaRegistrationDb: string;
   is_rup: boolean;
   signal_word: string | null;
+  category?: string | null;
 }
 
 export type EpaDataQualityFindingType =
@@ -22,6 +24,7 @@ export type EpaDataQualityFindingType =
   | 'UNSUPPORTED_REGNUM'
   | 'NOT_FOUND'
   | 'SIGNAL_WORD_AVAILABLE'
+  | 'MISSING_EPA'
   | 'NEEDS_MANUAL'
   | 'LOOKUP_ERROR';
 
@@ -93,6 +96,50 @@ function finding(
     message,
     ...values,
   };
+}
+
+/**
+ * Products without a registration are intentionally not sent to the EPA lookup.
+ * They still need an action finding so an admin can use the verified correction flow.
+ */
+export function buildMissingEpaFinding(product: EpaDataQualityProduct): EpaDataQualityFinding {
+  return finding(
+    'MISSING_EPA',
+    'action',
+    '',
+    product,
+    'This pesticide has no EPA registration number saved. Enter a number and verify it against EPA before saving.',
+    { ourValue: null, epaValue: null },
+  );
+}
+
+const SIGNAL_WORD_TRUST_BREAKERS = new Set<EpaDataQualityFindingType>([
+  'NAME_MISMATCH',
+  'CANCELLED',
+  'NOT_FOUND',
+  'UNSUPPORTED_REGNUM',
+  'NEEDS_MANUAL',
+  'LOOKUP_ERROR',
+]);
+
+/**
+ * Returns the EPA signal word only when this row has a matched, trusted EPA
+ * record. Distributor trade-name differences and RUP disagreement are not
+ * registration trust failures, so they do not prevent this narrow fill.
+ */
+export function trustedAvailableSignalWord(
+  findings: EpaDataQualityFinding[],
+): 'Danger' | 'Warning' | 'Caution' | null {
+  if (findings.some((item) => SIGNAL_WORD_TRUST_BREAKERS.has(item.type))) {
+    return null;
+  }
+
+  const available = findings.find((item) => item.type === 'SIGNAL_WORD_AVAILABLE');
+  return available?.epaValue === 'Danger'
+    || available?.epaValue === 'Warning'
+    || available?.epaValue === 'Caution'
+    ? available.epaValue
+    : null;
 }
 
 export function buildFindingsForRegistration(
