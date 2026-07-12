@@ -2,29 +2,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
 import { captureEdgeException } from "../_shared/sentry.ts";
 import { requireActiveProfile } from "../_shared/auth.ts";
-
-// IMPORTANT: Set ALLOWED_ORIGIN in Supabase Function secrets for production.
-// e.g. supabase secrets set ALLOWED_ORIGIN=https://your-domain.com
-// 2026-05-16 (ultra-review P3 #7): removed silent prod-URL fallback. Missing
-// secret now fails loud, matching the PR-16 pattern used by every other
-// hardened Edge Function. Hides deployment misconfiguration is worse than
-// boot failure — at least boot failure is loud.
-function getAllowedOrigin(): string {
-  const origin = Deno.env.get("ALLOWED_ORIGIN");
-  if (origin) return origin;
-  const url = Deno.env.get("SUPABASE_URL") || "";
-  if (url.includes("localhost") || url.includes("127.0.0.1")) return "http://localhost:5173";
-  throw new Error(
-    "ALLOWED_ORIGIN env var is required for production deployments. " +
-      "Set via: supabase secrets set ALLOWED_ORIGIN=https://your-domain.com",
-  );
-}
-
-const corsHeaders = {
-  "Access-Control-Allow-Origin": getAllowedOrigin(),
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization, apikey, x-client-info, x-supabase-api-version, x-request-id",
-};
+import { corsHeaders, preflightResponse } from "../_shared/cors.ts";
 
 function jsonResponse(body: Record<string, unknown>, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -35,10 +13,7 @@ function jsonResponse(body: Record<string, unknown>, status = 200) {
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
-    return new Response(null, {
-      status: 200,
-      headers: corsHeaders,
-    });
+    return preflightResponse(req);
   }
 
   // Authenticate caller

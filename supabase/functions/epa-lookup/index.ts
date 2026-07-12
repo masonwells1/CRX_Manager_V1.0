@@ -2,6 +2,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
 import { requireActiveProfile } from "../_shared/auth.ts";
 import { captureEdgeException } from "../_shared/sentry.ts";
+import { corsHeaders, preflightResponse } from "../_shared/cors.ts";
 import {
   classifyRegistrationNumber,
   type EpaLookupResult,
@@ -42,26 +43,6 @@ const rateLimits = new Map<string, RateLimitEntry>();
 
 class RequestBodyTooLargeError extends Error {}
 class UpstreamResponseError extends Error {}
-
-function getAllowedOrigin(): string {
-  const origin = Deno.env.get("ALLOWED_ORIGIN");
-  if (origin) return origin;
-  const url = Deno.env.get("SUPABASE_URL") || "";
-  if (url.includes("localhost") || url.includes("127.0.0.1")) {
-    return "http://localhost:5173";
-  }
-  throw new Error(
-    "ALLOWED_ORIGIN env var is required for production deployments. " +
-      "Set via: supabase secrets set ALLOWED_ORIGIN=https://your-domain.com",
-  );
-}
-
-const corsHeaders = {
-  "Access-Control-Allow-Origin": getAllowedOrigin(),
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
-  "Access-Control-Allow-Headers":
-    "Content-Type, Authorization, apikey, x-client-info, x-supabase-api-version, x-request-id",
-};
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -264,7 +245,7 @@ async function fetchEpaLookup(
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
-    return new Response(null, { status: 200, headers: corsHeaders });
+    return preflightResponse(req);
   }
   if (req.method !== "POST") {
     return jsonResponse({ error: "Method not allowed." }, 405);

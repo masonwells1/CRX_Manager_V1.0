@@ -2,26 +2,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
 import { captureEdgeException } from "../_shared/sentry.ts";
 import { requireActiveProfile } from "../_shared/auth.ts";
-
-// IMPORTANT: Set ALLOWED_ORIGIN in Supabase Function secrets for production.
-// e.g. supabase secrets set ALLOWED_ORIGIN=https://your-domain.com
-function getAllowedOrigin(): string {
-  const origin = Deno.env.get("ALLOWED_ORIGIN");
-  if (origin) return origin;
-  const url = Deno.env.get("SUPABASE_URL") || "";
-  if (url.includes("localhost") || url.includes("127.0.0.1")) return "http://localhost:5173";
-  // PR-16: removed silent fallback — missing env var now throws.
-  throw new Error(
-    "ALLOWED_ORIGIN env var is required for production deployments. " +
-      "Set via: supabase secrets set ALLOWED_ORIGIN=https://your-domain.com",
-  );
-}
-
-const corsHeaders = {
-  "Access-Control-Allow-Origin": getAllowedOrigin(),
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization, apikey, x-client-info, x-supabase-api-version, x-request-id",
-};
+import { corsHeaders, preflightResponse } from "../_shared/cors.ts";
 
 function jsonResponse(body: Record<string, unknown>, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -763,7 +744,7 @@ async function callVisionAPI(
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
-    return new Response(null, { status: 200, headers: corsHeaders });
+    return preflightResponse(req);
   }
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
