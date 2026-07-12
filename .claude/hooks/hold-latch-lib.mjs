@@ -5,7 +5,7 @@
 // across turns — it just halts the current runaway work until he speaks again.
 
 // Mason wants to halt / pause / is only scoping a future session.
-const HOLD_RE = /(\bstop\b|\bpause\b|\bhold (on|up|off)\b|cancel (all |the )?background|good stopping point|not (working|building) on (it|this|that) yet|just (getting|scoping|scope|the framework|framing)|only (scoping|planning|framing)|don'?t (build|code|implement|write code|start) yet|for a (fresh|future|new) session)/i;
+const HOLD_RE = /((?<!(don'?t|won'?t|never|not) )(?<!(don'?t|won'?t) ever )\bstop\b|(?<!(don'?t|won'?t|never|not) )(?<!(don'?t|won'?t) ever )\bpause\b|\bhold (on|up|off)\b|cancel (all |the )?background|good stopping point|not (working|building) on (it|this|that) yet|just (getting|scoping|scope|the framework|framing)|only (scoping|planning|framing)|don'?t (build|code|implement|write code|start) yet|for a (fresh|future|new) session)/i;
 
 // An affirmative "carry on" — not required to clear (any non-hold prompt clears),
 // but used to phrase the confirmation.

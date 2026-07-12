@@ -4,6 +4,22 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-12 — ChemMan parity follow-ups: print-stamp RPC, dispatched-crew map visibility, grant hygiene (overnight hands-free run)
+
+Overnight continuation of the 2026-07-11 parity loop (Mason: "finish everything and live").
+
+- **Save-bug fix proven live** (commit c3146236, from the evening session): save → immediate print now works without a reload; verified on production with a control repro on the pre-fix build.
+- **Migrations applied live:**
+  - `20260713020000_stamp_job_printed_rpc` (v20260712020715) — print-audit stamping RPC for every job-visible role; fixes applicator prints never recording printed_at (jobs_update RLS is admin/sales-only). Codex P2 hardening included (visibility-before-idempotency, cross-job key refusal). Proven via rolled-back authenticated-role smoke (5 asserts).
+  - `20260713030000_geojson_rpc_dispatched_visibility` (v20260712020737) — location-dispatched crews now get field boundaries on job maps and printed map pages.
+  - `20260713040000_revoke_anon_trigger_fn_exec` (v20260712020748) — anon EXECUTE revoked on 3 inert trigger fns; clears the standing invariant-sweep drift (post-apply sweeps 15/15 PASS).
+- **Frontend:** all 10 direct print-stamp updates (JobDetail 4, Jobs 6) swapped to `src/lib/printStamp.ts` RPC helper (Codex Luna build; full suite 3,355 passed / 0 failed).
+- **Tooling:** hold-latch HOLD_RE false positive fixed ("don't stop" latched a work-freeze mid-run; now negation-aware).
+- **Docs:** migration-history backfilled + counts corrected (654 → 677, 4 credit-memo rows added); pages-routes count fixed; `npm run check:docs` fully green.
+- Parked for Mason (unchanged): phones-on-crew-sheet default, loads-done drift warning, CSB click-to-adopt prototype green-light.
+
+---
+
 ## 2026-07-11 — ChemMan parity loop SHIPPED LIVE: 9 build units + FSA research from Mason's 4 walkthrough videos (Codex builds, Claude orchestrates)
 
 Source: Mason's narrated ChemMan screen recordings (docs/walkthroughs/) -> gap analysis -> overnight loop (docs/loops/chemman-parity-loop-2026-07-11.md, ledger + morning report alongside). All units pushed to main with per-unit adversarial Codex verdicts (CLEAN required); 2 additive migrations applied live with full proof gates.

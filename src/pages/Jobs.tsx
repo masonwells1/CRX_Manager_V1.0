@@ -33,6 +33,7 @@ import { fetchProjectedUseData } from '../lib/projectedUseReportFetch';
 import { buildProjectedUseReportData, projectedUseCsvRows } from '../lib/projectedUseReportData';
 import { generateProjectedUseReportPdf } from '../lib/projectedUseReportPdf';
 import { fetchMasterMixSummaryData } from '../lib/masterMixSummaryFetch';
+import { stampJobPrinted } from '../lib/printStamp';
 import { buildMasterMixSummaryData } from '../lib/masterMixSummaryData';
 import { generateMasterMixSummaryPdf } from '../lib/masterMixSummaryPdf';
 import { sanitizeError } from '../lib/errorSanitizer';
@@ -968,12 +969,7 @@ export default function Jobs() {
       // stamp must not undo the already-downloaded PDF. Refresh so the list's
       // Last Printed By column reflects the print.
       try {
-        const stamp = await supabase
-          .from('jobs')
-          .update({ printed_at: new Date().toISOString(), last_printed_by: profile?.id ?? null })
-          .in('id', ids)
-          .select('id');
-        checkMutationResult(stamp, 'Stamp loader-worksheet print');
+        await Promise.all(ids.map((jobId) => stampJobPrinted(jobId)));
         fetchJobs();
       } catch { /* non-blocking — the PDF already generated */ }
       toast('success', `Generated loader worksheets for ${data.length} job(s)`);
@@ -999,12 +995,7 @@ export default function Jobs() {
       }
       await generateLoaderWorksheetPdf(data[0]);
       try {
-        const stamp = await supabase
-          .from('jobs')
-          .update({ printed_at: new Date().toISOString(), last_printed_by: profile?.id ?? null })
-          .eq('id', jobId)
-          .select('id');
-        checkMutationResult(stamp, 'Stamp loader-worksheet print');
+        await stampJobPrinted(jobId);
         fetchJobs();
       } catch { /* non-blocking — the PDF already generated */ }
       toast('success', 'Loader worksheet generated');
@@ -1040,12 +1031,7 @@ export default function Jobs() {
       }
       await generateChemicalApplicationReportPdf(data);
       try {
-        const stamp = await supabase
-          .from('jobs')
-          .update({ printed_at: new Date().toISOString(), last_printed_by: profile?.id ?? null })
-          .eq('id', jobId)
-          .select('id');
-        checkMutationResult(stamp, 'Stamp chemical-report print');
+        await stampJobPrinted(jobId);
         fetchJobs();
       } catch { /* non-blocking — the PDF already generated */ }
       // Audit the compliance-document print in the activity feed (mirrors the
@@ -1081,12 +1067,7 @@ export default function Jobs() {
         showBanner: options.showBanner,
       });
       try {
-        const stamp = await supabase
-          .from('jobs')
-          .update({ printed_at: new Date().toISOString(), last_printed_by: profile?.id ?? null })
-          .eq('id', jobId)
-          .select('id');
-        checkMutationResult(stamp, 'Stamp applicator-sheet print');
+        await stampJobPrinted(jobId);
         fetchJobs();
       } catch { /* non-blocking — the PDF already generated */ }
       if (profile) logActivity({ event: 'applicator_sheet_printed', description: `Original Applicator Report generated for job ${data.job_number}`, performedBy: profile.id, entityType: 'job', entityId: jobId });
@@ -1150,12 +1131,7 @@ export default function Jobs() {
         return;
       }
       try {
-        const stamp = await supabase
-          .from('jobs')
-          .update({ printed_at: new Date().toISOString(), last_printed_by: profile?.id ?? null })
-          .in('id', printedIds)
-          .select('id');
-        checkMutationResult(stamp, 'Stamp applicator-sheet prints');
+        await Promise.all(printedIds.map((jobId) => stampJobPrinted(jobId)));
         fetchJobs();
       } catch { /* non-blocking — the PDFs already generated */ }
       toast('success', `Generated ${printedIds.length} ${SHEET_FORMAT_LABELS[format]} sheet(s)`);
@@ -1219,12 +1195,7 @@ export default function Jobs() {
       // undo the already-downloaded report.
       const includedIds = summary.included_jobs.map((j) => j.job_id);
       try {
-        const stamp = await supabase
-          .from('jobs')
-          .update({ printed_at: new Date().toISOString(), last_printed_by: profile?.id ?? null })
-          .in('id', includedIds)
-          .select('id');
-        checkMutationResult(stamp, 'Stamp chemical-summary print');
+        await Promise.all(includedIds.map((jobId) => stampJobPrinted(jobId)));
         fetchJobs();
       } catch { /* non-blocking — the report already generated */ }
       // includedIds is non-empty here (fetched.length > 0 was guarded above), so the

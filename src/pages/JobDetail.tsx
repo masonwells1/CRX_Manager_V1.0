@@ -33,6 +33,7 @@ import { resolveBilledCustomers } from '../lib/billedCustomersResolver';
 import { generateLoaderWorksheetPdf } from '../lib/loaderWorksheetPdf';
 import { fetchLoaderWorksheetData } from '../lib/loaderWorksheetFetch';
 import { computeLoaderWorksheet, isGallonCapacityUnit } from '../lib/loaderWorksheet';
+import { stampJobPrinted } from '../lib/printStamp';
 import {
   ASSIGNED_VEHICLE_VESSEL_VALUE,
   buildLoaderVesselOptions,
@@ -884,8 +885,7 @@ export default function JobDetail() {
       // Stamp the printed status (ChemMan "Printed" column) + who printed it.
       // Best-effort: a failed stamp must not block the already-generated PDF.
       if (!isNew && id) {
-        const stampRes = await supabase.from('jobs').update({ printed_at: new Date().toISOString(), last_printed_by: profile?.id ?? null }).eq('id', id).select();
-        try { checkMutationResult(stampRes, 'Stamp printed_at'); } catch { /* non-blocking */ }
+        try { await stampJobPrinted(id); } catch { /* non-blocking */ }
       }
       if (profile) logActivity({ event: 'wps_notice_printed', description: `WPS pre-application notice generated for job ${jobNumber}`, performedBy: profile.id, entityType: 'job', entityId: id });
     } catch (err) {
@@ -1077,8 +1077,7 @@ export default function JobDetail() {
 
       // Stamp printed status + who (ChemMan "Printed" column). Best-effort.
       if (!isNew && id) {
-        const stampRes = await supabase.from('jobs').update({ printed_at: new Date().toISOString(), last_printed_by: profile?.id ?? null }).eq('id', id).select();
-        try { checkMutationResult(stampRes, 'Stamp printed_at'); } catch { /* non-blocking */ }
+        try { await stampJobPrinted(id); } catch { /* non-blocking */ }
       }
       if (profile) logActivity({ event: 'applicator_sheet_printed', description: `${SHEET_FORMAT_LABELS[format]} generated for job ${jobNumber}`, performedBy: profile.id, entityType: 'job', entityId: id });
       setPrintOptionsOpen(false);
@@ -1113,8 +1112,7 @@ export default function JobDetail() {
       await generateChemicalApplicationReportPdf(sheetData);
       // Stamp printed status + who (ChemMan "Printed" column). Best-effort.
       if (!isNew && id) {
-        const stampRes = await supabase.from('jobs').update({ printed_at: new Date().toISOString(), last_printed_by: profile?.id ?? null }).eq('id', id).select();
-        try { checkMutationResult(stampRes, 'Stamp printed_at'); } catch { /* non-blocking */ }
+        try { await stampJobPrinted(id); } catch { /* non-blocking */ }
       }
       if (profile) logActivity({ event: 'chemical_application_report_printed', description: `Chemical Application Report generated for job ${jobNumber}`, performedBy: profile.id, entityType: 'job', entityId: id });
     } catch (err) {
@@ -1188,8 +1186,7 @@ export default function JobDetail() {
 
       // Stamp printed status + who (ChemMan "Printed" column). Best-effort.
       if (!isNew && id) {
-        const stampRes = await supabase.from('jobs').update({ printed_at: new Date().toISOString(), last_printed_by: profile?.id ?? null }).eq('id', id).select();
-        try { checkMutationResult(stampRes, 'Stamp printed_at'); } catch { /* non-blocking */ }
+        try { await stampJobPrinted(id); } catch { /* non-blocking */ }
       }
       if (profile) logActivity({ event: 'loader_worksheet_printed', description: `Loader worksheet generated for job ${jobNumber}`, performedBy: profile.id, entityType: 'job', entityId: id });
     } catch (err) {
