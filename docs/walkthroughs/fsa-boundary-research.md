@@ -48,3 +48,9 @@ USDA's **Crop Sequence Boundaries** dataset, by contrast, is free, public domain
 One clear next step: confirm the latest CSB window on the NASS page, pull its shapefile for Illinois/Indiana, load it into the map, and try the "click a parcel → adopt boundary → edit" flow against a few known Crawford County fields to see how well it lines up before committing engineering time. If CSB boundaries prove too rough in practice, the fallback upgrade path is a ReportAll USA API trial (cheapest, best-documented parcel API) as a supplemental "ownership outline" layer — not a CLU purchase.
 
 **Skip:** licensing AgriData/Surety, LandID, or a 2008 CLU reseller. They cost money for boundary data that is provably the same age or older than the free CSB alternative, and none offer a materially better legal footing than "use for reference only."
+
+## Prototype shipped 2026-07-12
+
+FieldSetup now lazily loads public-domain USDA CSB 2016–2023 static tiles from `public/csb/` for click-to-adopt previews.
+The offline extraction pipeline lives under `scripts/csb-extract`; regeneration metadata is recorded in `public/csb/manifest.json`.
+Adopted shapes remain editable and are server-measured only through the existing boundary RPC.

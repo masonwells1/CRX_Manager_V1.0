@@ -1,0 +1,57 @@
+{
+ "tileSizeDeg": 0.5,
+ "dataset": "USDA NASS Crop Sequence Boundaries 2016-2023 (via fiboa/source.coop, public domain)",
+ "generated": "2026-07-12",
+ "tiles": [
+  {
+   "key": "-89.5_39.5",
+   "count": 6120,
+   "bytes": 3863937
+  },
+  {
+   "key": "-89.5_40.0",
+   "count": 1073,
+   "bytes": 683370
+  },
+  {
+   "key": "-89.0_39.5",
+   "count": 1629,
+   "bytes": 1042084
+  },
+  {
+   "key": "-89.0_40.0",
+   "count": 257,
+   "bytes": 169808
+  },
+  {
+   "key": "-88.5_38.5",
+   "count": 10715,
+   "bytes": 6079148
+  },
+  {
+   "key": "-88.5_39.0",
+   "count": 8949,
+   "bytes": 5072573
+  },
+  {
+   "key": "-88.0_38.5",
+   "count": 14837,
+   "bytes": 8722900
+  },
+  {
+   "key": "-88.0_39.0",
+   "count": 12168,
+   "bytes": 7170835
+  },
+  {
+   "key": "-87.5_38.5",
+   "count": 8669,
+   "bytes": 5442104
+  },
+  {
+   "key": "-87.5_39.0",
+   "count": 6840,
+   "bytes": 3876229
+  }
+ ]
+}

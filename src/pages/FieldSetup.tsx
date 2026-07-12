@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Save, Trash2, MapPin, Search, ChevronDown, ChevronUp, AlertTriangle, Eye, EyeOff, MapPinned, Plus, X } from 'lucide-react';
+import { ArrowLeft, Save, Trash2, MapPin, Search, ChevronDown, ChevronUp, AlertTriangle, Eye, EyeOff, MapPinned, MousePointerSquareDashed, Plus, X } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
@@ -12,12 +12,15 @@ import DrawLayer, { type DrawnPolygon } from '../components/map/DrawLayer';
 import AddressSearch from '../components/map/AddressSearch';
 import FieldBoundaryLayer from '../components/map/FieldBoundaryLayer';
 import FieldObstacleLayer from '../components/map/FieldObstacleLayer';
+import { Layer, Source } from 'react-map-gl/mapbox';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { supabase, assertRpcResult, checkMutationResult } from '../lib/db';
 import { getCachedFieldsGeojson, type FieldsGeojsonRow } from '../lib/fieldsGeojsonCache';
 import { lookupPlss, type PlssLookupResult } from '../lib/plssLookup';
+import { CsbLookupError, findCsbFeatureAt, type CsbFeature } from '../lib/csbLookup';
+import { CsbAdoptError, csbFeatureToDrawnParts } from '../lib/csbAdopt';
 import { canRemoveSingleBoundary } from '../lib/fieldBoundaryState';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { Sentry } from '../lib/sentry';
@@ -55,6 +58,17 @@ interface BillingSplit {
 
 const FIELD_CONTEXT_OVERLAY_STORAGE_KEY = 'crx.fieldSetup.showOtherFieldBoundaries';
 const BOUNDS_CHANGE_EPSILON = 0.000001;
+const MAPBOX_TOKEN_AVAILABLE = Boolean(import.meta.env.VITE_MAPBOX_TOKEN as string | undefined);
+
+interface OverlappingField {
+  field_id?: unknown;
+  field_name?: unknown;
+  overlap_pct?: unknown;
+}
+
+function isOverlappingField(value: unknown): value is OverlappingField {
+  return typeof value === 'object' && value !== null;
+}
 
 function isBoundaryGeometry(value: unknown): value is Polygon | MultiPolygon {
   if (!value || typeof value !== 'object') return false;
@@ -133,6 +147,9 @@ export default function FieldSetup() {
   const [pendingLegalLookup, setPendingLegalLookup] = useState<PlssLookupResult | null>(null);
   const [obstacles, setObstacles] = useState<FieldObstacle[]>([]);
   const [addObstacleMode, setAddObstacleMode] = useState(false);
+  const [adoptCsbMode, setAdoptCsbMode] = useState(false);
+  const [csbLookupLoading, setCsbLookupLoading] = useState(false);
+  const [pendingCsbFeature, setPendingCsbFeature] = useState<CsbFeature | null>(null);
   const [isBoundaryDrawing, setIsBoundaryDrawing] = useState(false);
   const [pendingObstaclePoint, setPendingObstaclePoint] = useState<[number, number] | null>(null);
   const [obstacleKind, setObstacleKind] = useState<FieldObstacleKind>('oil_well');
@@ -140,6 +157,7 @@ export default function FieldSetup() {
   const [savingObstacle, setSavingObstacle] = useState(false);
   const [deletingObstacle, setDeletingObstacle] = useState(false);
   const [obstaclePendingDelete, setObstaclePendingDelete] = useState<FieldObstacle | null>(null);
+  const csbLookupRequestRef = useRef(0);
 
   // Customer search for the owner dropdown
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -659,6 +677,39 @@ export default function FieldSetup() {
     }
   }, []);
 
+  const checkCsbOverlap = useCallback((polygons: DrawnPolygon[]) => {
+    if (!field.customer_id) return;
+    const geometry = buildBoundaryGeometry(polygons.map((polygon) => polygon.polygon), null);
+    if (!geometry) return;
+
+    void (async () => {
+      try {
+        const { data, error } = await supabase.rpc('find_overlapping_fields', {
+          p_boundary_geojson: JSON.stringify(geometry),
+          p_customer_id: field.customer_id,
+        });
+        if (error) throw error;
+        const rows = assertRpcResult<unknown>(data, 'find_overlapping_fields');
+        const overlap = Array.isArray(rows)
+          ? rows.find((row) => isOverlappingField(row)
+            // The field being edited overlaps its own saved boundary ~100% —
+            // warn only about OTHER fields.
+            && (isNew || row.field_id !== id)
+            && typeof row.field_name === 'string'
+            && typeof row.overlap_pct === 'number'
+            && row.overlap_pct >= 80)
+          : undefined;
+        if (overlap && typeof overlap.field_name === 'string') {
+          toast('warning', `This boundary overlaps ${overlap.field_name} by 80% or more.`);
+        }
+      } catch (error: unknown) {
+        Sentry.captureException(error instanceof Error ? error : new Error(String(error)), {
+          tags: { component: 'FieldSetup', action: 'check_csb_boundary_overlap' },
+        });
+      }
+    })();
+  }, [field.customer_id, id, isNew, toast]);
+
   const applyLegalLookup = useCallback((lookup: PlssLookupResult) => {
     setField((current) => ({
       ...current,
@@ -694,16 +745,97 @@ export default function FieldSetup() {
     setMapZoom(16);
   }, []);
 
-  const handleMapClick = useCallback((longitude: number, latitude: number) => {
-    if (!addObstacleMode || !canManageObstacles || isNew) return;
-    setPendingObstaclePoint([longitude, latitude]);
-  }, [addObstacleMode, canManageObstacles, isNew]);
-
   const resetObstacleDraft = useCallback(() => {
     setPendingObstaclePoint(null);
     setObstacleKind('oil_well');
     setObstacleLabel('');
   }, []);
+
+  const clearCsbPreview = useCallback(() => {
+    csbLookupRequestRef.current += 1;
+    setPendingCsbFeature(null);
+    setCsbLookupLoading(false);
+  }, []);
+
+  const finishCsbAdopt = useCallback(() => {
+    clearCsbPreview();
+    setAdoptCsbMode(false);
+  }, [clearCsbPreview]);
+
+  const handleCsbMapClick = useCallback(async (longitude: number, latitude: number) => {
+    if (saving) return; // no new previews while a save is in flight
+    const requestId = csbLookupRequestRef.current + 1;
+    csbLookupRequestRef.current = requestId;
+    setPendingCsbFeature(null);
+    setCsbLookupLoading(true);
+    try {
+      const result = await findCsbFeatureAt({ lng: longitude, lat: latitude });
+      if (csbLookupRequestRef.current !== requestId) return;
+      if (result.kind === 'no-coverage') {
+        toast('info', 'No USDA boundary data loaded for this area yet.');
+      } else if (result.kind === 'no-field') {
+        toast('info', 'No USDA field boundary at that spot.');
+      } else {
+        setPendingCsbFeature(result.feature);
+      }
+    } catch (error: unknown) {
+      if (csbLookupRequestRef.current !== requestId) return;
+      Sentry.captureException(error instanceof Error ? error : new Error(String(error)), {
+        tags: { component: 'FieldSetup', action: 'lookup_csb_boundary' },
+      });
+      toast('error', error instanceof CsbLookupError ? 'USDA boundary lookup is unavailable.' : 'Could not look up the USDA boundary.');
+    } finally {
+      if (csbLookupRequestRef.current === requestId) setCsbLookupLoading(false);
+    }
+  }, [saving, toast]);
+
+  // Invalidate any in-flight USDA lookup on unmount so a late response can't
+  // toast onto whatever page the user navigated to.
+  useEffect(() => () => {
+    csbLookupRequestRef.current += 1;
+  }, []);
+
+  const handleCsbModeToggle = useCallback(() => {
+    if (adoptCsbMode) {
+      finishCsbAdopt();
+      return;
+    }
+    if (isBoundaryDrawing) return;
+    setAddObstacleMode(false);
+    resetObstacleDraft();
+    clearCsbPreview();
+    setAdoptCsbMode(true);
+  }, [adoptCsbMode, clearCsbPreview, finishCsbAdopt, isBoundaryDrawing, resetObstacleDraft]);
+
+  const handleAddCsbBoundary = useCallback(() => {
+    // Save snapshots the polygon list when it starts and clears the dirty flag
+    // when it finishes — a part added mid-save would LOOK saved but never
+    // persist. Block geometry adds while a save is in flight.
+    if (!pendingCsbFeature || saving) return;
+    try {
+      const adopted = csbFeatureToDrawnParts(pendingCsbFeature, drawnPolygons.length);
+      const nextPolygons = [...drawnPolygons, ...adopted.parts];
+      handlePolygonsChange(nextPolygons);
+      clearCsbPreview();
+      const total = Math.round(nextPolygons.reduce((sum, polygon) => sum + polygon.acres, 0) * 10) / 10;
+      toast('success', `USDA boundary added. ${total.toFixed(1)} ac total.`);
+      checkCsbOverlap(nextPolygons);
+    } catch (error: unknown) {
+      Sentry.captureException(error instanceof Error ? error : new Error(String(error)), {
+        tags: { component: 'FieldSetup', action: 'adopt_csb_boundary' },
+      });
+      toast('error', error instanceof CsbAdoptError ? error.message : 'Could not adopt the USDA boundary.');
+    }
+  }, [checkCsbOverlap, clearCsbPreview, drawnPolygons, handlePolygonsChange, pendingCsbFeature, saving, toast]);
+
+  const handleMapClick = useCallback((longitude: number, latitude: number) => {
+    if (adoptCsbMode) {
+      void handleCsbMapClick(longitude, latitude);
+      return;
+    }
+    if (!addObstacleMode || !canManageObstacles || isNew) return;
+    setPendingObstaclePoint([longitude, latitude]);
+  }, [adoptCsbMode, addObstacleMode, canManageObstacles, handleCsbMapClick, isNew]);
 
   const handleObstacleModeToggle = useCallback(() => {
     if (addObstacleMode) {
@@ -717,9 +849,10 @@ export default function FieldSetup() {
       return;
     }
 
+    finishCsbAdopt();
     resetObstacleDraft();
     setAddObstacleMode(true);
-  }, [addObstacleMode, isBoundaryDrawing, resetObstacleDraft, toast]);
+  }, [addObstacleMode, finishCsbAdopt, isBoundaryDrawing, resetObstacleDraft, toast]);
 
   const handleAddObstacle = async () => {
     if (!id || isNew || !profile || !canManageObstacles || !pendingObstaclePoint) return;
@@ -1250,15 +1383,31 @@ export default function FieldSetup() {
               title="Field"
               accent="Location"
               action={
-                <button
-                  type="button"
-                  onClick={() => setShowOtherFieldBoundaries((show) => !show)}
-                  title={showOtherFieldBoundaries ? 'Hide other fields on this map' : 'Show other fields on this map'}
-                  aria-label={showOtherFieldBoundaries ? 'Hide other fields on this map' : 'Show other fields on this map'}
-                  className="rounded-lg p-2 text-secondary transition-colors hover:bg-gray-100 hover:text-nav-dark"
-                >
-                  {showOtherFieldBoundaries ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
-                </button>
+                <div className="flex items-center gap-1">
+                  {MAPBOX_TOKEN_AVAILABLE && (
+                    <span title={isBoundaryDrawing ? 'Finish or cancel the boundary sketch before adopting a USDA boundary' : 'Click a USDA field boundary on the map to preview it'}>
+                      <Button
+                        type="button"
+                        variant={adoptCsbMode ? 'ghost' : 'secondary'}
+                        size="sm"
+                        icon={adoptCsbMode ? <X className="h-4 w-4" /> : <MousePointerSquareDashed className="h-4 w-4" />}
+                        onClick={handleCsbModeToggle}
+                        disabled={isBoundaryDrawing}
+                      >
+                        {adoptCsbMode ? 'Cancel USDA' : 'Adopt USDA boundary'}
+                      </Button>
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setShowOtherFieldBoundaries((show) => !show)}
+                    title={showOtherFieldBoundaries ? 'Hide other fields on this map' : 'Show other fields on this map'}
+                    aria-label={showOtherFieldBoundaries ? 'Hide other fields on this map' : 'Show other fields on this map'}
+                    className="rounded-lg p-2 text-secondary transition-colors hover:bg-gray-100 hover:text-nav-dark"
+                  >
+                    {showOtherFieldBoundaries ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
+                  </button>
+                </div>
               }
             />
             <p className="text-xs text-secondary mb-3">
@@ -1274,21 +1423,53 @@ export default function FieldSetup() {
               showLayerToggle
               onMapMoveEnd={handleMapMoveEnd}
               onMapClick={handleMapClick}
-              className={`h-[400px] w-full ${addObstacleMode ? 'cursor-crosshair' : ''}`}
+              className={`h-[400px] w-full ${addObstacleMode || adoptCsbMode ? 'cursor-crosshair' : ''}`}
             >
               {showOtherFieldBoundaries && (
                 <FieldBoundaryLayer fields={nearbyOverlayFields} showLabels />
+              )}
+              {pendingCsbFeature && (
+                <Source id="csb-preview" type="geojson" data={pendingCsbFeature}>
+                  <Layer
+                    id="csb-preview-fill"
+                    type="fill"
+                    paint={{ 'fill-color': '#f59e0b', 'fill-opacity': 0.22 }}
+                  />
+                  <Layer
+                    id="csb-preview-outline"
+                    type="line"
+                    layout={{ 'line-cap': 'round', 'line-join': 'round' }}
+                    paint={{ 'line-color': '#b45309', 'line-width': 3, 'line-dasharray': [2, 1.5] }}
+                  />
+                </Source>
               )}
               <AddressSearch onSelect={handleAddressSelect} />
               <DrawLayer
                 initialPolygons={drawnPolygons}
                 onPolygonsChange={handlePolygonsChange}
                 allowRemoveSinglePart={canRemoveSingleBoundary(loadedHadBoundaryRef.current)}
-                disabled={addObstacleMode}
+                disabled={addObstacleMode || adoptCsbMode}
                 onDrawingStateChange={setIsBoundaryDrawing}
               />
-              <FieldObstacleLayer obstacles={obstaclesForMap} interactive={!addObstacleMode && !isBoundaryDrawing} />
+              <FieldObstacleLayer obstacles={obstaclesForMap} interactive={!addObstacleMode && !adoptCsbMode && !isBoundaryDrawing} />
             </CRXMap>
+            {adoptCsbMode && (
+              <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3">
+                <p className="text-sm text-amber-800">Click a field to preview its USDA boundary &mdash; USDA CSB 2016&ndash;2023 (beta)</p>
+                {csbLookupLoading && <p className="mt-2 text-xs text-amber-700">Looking up USDA boundary&hellip;</p>}
+                {pendingCsbFeature && !csbLookupLoading && (
+                  <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+                    <p className="text-sm font-medium text-amber-900">
+                      ~{pendingCsbFeature.properties.acres.toFixed(1)} ac &middot; {pendingCsbFeature.properties.crop || 'Unknown crop'}
+                    </p>
+                    <div className="flex gap-2">
+                      <Button type="button" variant="ghost" size="sm" onClick={finishCsbAdopt}>Cancel</Button>
+                      <Button type="button" size="sm" onClick={handleAddCsbBoundary} disabled={saving}>Add boundary</Button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
             {addObstacleMode && (
               <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3">
                 {!pendingObstaclePoint ? (
