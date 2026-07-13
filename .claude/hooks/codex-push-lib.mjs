@@ -144,11 +144,19 @@ export function mainPushIsForced(cmd, currentBranch) {
 }
 
 // Bulk modes are too broad for an unattended agent: they can update or delete
-// multiple remote refs without naming them in the command.
+// multiple remote refs without naming them in the command. Git accepts
+// unambiguous long-option abbreviations (`--mirr`, `--al` — Codex round-4), so
+// match any `--` token that is a prefix (length ≥ 3) of a bulk option;
+// ambiguous prefixes git would reject anyway, and over-denying them is safe.
+const BULK_PUSH_OPTS = ["--all", "--branches", "--mirror", "--prune"];
 export function pushUsesBulkMode(cmd) {
   const args = String(cmd || "").match(GIT_PUSH_RE)?.[1] || "";
   const tokens = splitShellArgs(args);
-  return tokens.some((token) => ["--all", "--branches", "--mirror", "--prune"].includes(token));
+  return tokens.some((token) => {
+    if (!token.startsWith("--") || token.length < 3) return false;
+    const bare = token.split("=")[0];
+    return BULK_PUSH_OPTS.some((opt) => opt.startsWith(bare));
+  });
 }
 
 // A changed file is "risky" (needs an independent Codex verdict) when it touches

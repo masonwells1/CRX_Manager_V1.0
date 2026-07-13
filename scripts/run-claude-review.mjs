@@ -177,6 +177,9 @@ function getGitContext(scope, commit) {
   return {
     branch: runGit(["branch", "--show-current"], "unknown"),
     status: runGit(["status", "--short"], ""),
+    // Captured BEFORE the review runs — the proof must bind to what was
+    // actually reviewed, not whatever HEAD is afterwards (Codex round-4 TOCTOU).
+    headSha: runGit(["rev-parse", "HEAD"], ""),
     changedFiles: changed.split(/\r?\n/).filter(Boolean),
     stagedFiles: runGit(["diff", "--cached", "--name-only"], "")
       .split(/\r?\n/)
@@ -336,10 +339,15 @@ export function runClaudeReview(options) {
     // Only the real Claude subprocess can reach this point. A clean committed
     // base-main review mints the exact-HEAD proof; failures, NEEDS-WORK, dirty
     // worktrees, and unparseable verdicts revoke any prior proof.
-    const proofVerdict = gitContext.status.trim()
+    // TOCTOU (Codex round-4): re-read HEAD and the worktree AFTER the review;
+    // if anything moved while Claude was reviewing (parallel session commit or
+    // checkout), the review no longer describes HEAD — revoke, never mint.
+    const headSha = runGit(["rev-parse", "HEAD"], "");
+    const contextUnchanged = headSha && headSha === gitContext.headSha &&
+      !runGit(["status", "--short"], "dirty").trim();
+    const proofVerdict = (gitContext.status.trim() || !contextUnchanged)
       ? null
       : claudeReviewProofVerdict({ status: result.status, stdout: result.stdout });
-    const headSha = runGit(["rev-parse", "HEAD"], "");
     if (proofVerdict && /^[0-9a-f]{40}$/i.test(headSha)) {
       const proofPath = writeClaudePushProof({ headSha, verdict: proofVerdict });
       process.stdout.write(`Claude push proof written to ${proofPath}\n`);
