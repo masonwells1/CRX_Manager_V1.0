@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -17,6 +17,36 @@ export function slugify(value) {
 
 export function defaultClaudeReviewOutputPath({ root = ROOT } = {}) {
   return path.join(root, ".claude", "session-state", "claude-review-latest.txt");
+}
+
+export function claudeReviewProofVerdict({ status, stdout } = {}) {
+  if (status !== 0) return null;
+  const match = String(stdout || "").match(
+    /^\s*(?:#{1,6}\s*)?(?:\*\*)?Verdict(?:\*\*)?\s*:\s*(SHIP-WITH-FOLLOWUPS|SHIP|NEEDS-WORK)\b/im,
+  );
+  if (!match || match[1].toUpperCase() === "NEEDS-WORK") return null;
+  return "clean";
+}
+
+function claudePushProofPath(root = ROOT) {
+  return path.join(root, ".claude", "session-state", "claude-review-push.json");
+}
+
+function writeClaudePushProof({ root = ROOT, headSha, verdict }) {
+  const proofPath = claudePushProofPath(root);
+  mkdirSync(path.dirname(proofPath), { recursive: true });
+  writeFileSync(proofPath, `${JSON.stringify({
+    claude_ran: true,
+    verdict,
+    head_sha: headSha,
+    timestamp: new Date().toISOString(),
+  }, null, 2)}\n`, "utf8");
+  return proofPath;
+}
+
+function clearClaudePushProof(root = ROOT) {
+  const proofPath = claudePushProofPath(root);
+  if (existsSync(proofPath)) unlinkSync(proofPath);
 }
 
 function usage() {
@@ -274,6 +304,21 @@ export function runClaudeReview(options) {
 
   writeReviewOutput(output, result);
   process.stdout.write(`Claude review written to ${output}\n`);
+  if (options.scope === "base-main") {
+    // Only the real Claude subprocess can reach this point. A clean committed
+    // base-main review mints the exact-HEAD proof; failures, NEEDS-WORK, dirty
+    // worktrees, and unparseable verdicts revoke any prior proof.
+    const proofVerdict = gitContext.status.trim()
+      ? null
+      : claudeReviewProofVerdict({ status: result.status, stdout: result.stdout });
+    const headSha = runGit(["rev-parse", "HEAD"], "");
+    if (proofVerdict && /^[0-9a-f]{40}$/i.test(headSha)) {
+      const proofPath = writeClaudePushProof({ headSha, verdict: proofVerdict });
+      process.stdout.write(`Claude push proof written to ${proofPath}\n`);
+    } else {
+      clearClaudePushProof();
+    }
+  }
   if (result.error) {
     process.stderr.write(`${result.error.message}\n`);
     return { status: 1, output, prompt };

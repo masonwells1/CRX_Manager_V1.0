@@ -9,6 +9,8 @@ import {
   gitPushCwd,
   mainPushIsForced,
   mainPushSource,
+  pushIsForced,
+  pushUsesBulkMode,
   proofValid,
   riskyFiles,
 } from "./codex-push-lib.mjs";
@@ -20,6 +22,9 @@ assert.equal(mainPushSource("git push origin HEAD:main", "feature"), "HEAD");
 assert.equal(mainPushSource("git -C ../repo push origin release:main", "feature"), "release");
 assert.equal(mainPushSource("git push origin :main", "feature"), "DELETE");
 assert.equal(mainPushSource("git push origin feature", "feature"), null);
+assert.equal(mainPushSource("git push --all origin", "feature"), "main");
+assert.equal(mainPushSource("git push origin --branches", "feature"), "main");
+assert.equal(mainPushSource("git push --mirror origin", "feature"), "main");
 
 assert.equal(mainPushIsForced("git push origin main --force", "feature"), true);
 assert.equal(mainPushIsForced("git push origin main -f", "feature"), true);
@@ -31,6 +36,16 @@ assert.equal(mainPushIsForced("git -C . push --force origin main", "feature"), t
 assert.equal(mainPushIsForced("git push -uf origin main", "feature"), true);
 assert.equal(mainPushIsForced("git push origin feature --force", "feature"), false);
 assert.equal(mainPushIsForced("git push origin HEAD:main", "feature"), false);
+assert.equal(pushIsForced("git push origin feature --force", "feature"), true);
+assert.equal(pushIsForced("git push --all origin --force", "feature"), true);
+assert.equal(pushIsForced("git push origin --all -f", "feature"), true);
+assert.equal(pushIsForced("git push origin +feature", "feature"), true);
+assert.equal(pushIsForced("git push origin feature", "feature"), false);
+assert.equal(pushUsesBulkMode("git push --all origin"), true);
+assert.equal(pushUsesBulkMode("git push origin --branches"), true);
+assert.equal(pushUsesBulkMode("git push origin --mirror"), true);
+assert.equal(pushUsesBulkMode("git push origin --prune"), true);
+assert.equal(pushUsesBulkMode("git push origin feature"), false);
 
 assert.equal(gitPushCwd("git -C ../repo push origin HEAD:main", "C:/work/current"), path.resolve("C:/work/repo"));
 assert.equal(gitPushCwd("git -C .. -C sibling push origin HEAD:main", "C:/work/current"), path.resolve("C:/work/sibling"));

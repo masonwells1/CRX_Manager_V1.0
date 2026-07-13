@@ -53,7 +53,12 @@ export function mainPushSource(cmd, currentBranch) {
   const c = String(cmd || "");
   const m = c.match(GIT_PUSH_RE);
   if (!m) return null;
-  const args = splitShellArgs(m[1]).filter((a) => !a.startsWith("-"));
+  const tokens = splitShellArgs(m[1]);
+  // Whole-refspace push modes do not name main in a refspec, but they still
+  // include it. Treat local main as the source so callers cannot stand down
+  // merely because the command used `--all`/`--branches`/`--mirror`.
+  if (tokens.some((token) => ["--all", "--branches", "--mirror"].includes(token))) return "main";
+  const args = tokens.filter((a) => !a.startsWith("-"));
   const refspecs = args.slice(1); // args[0] = remote, if present
   if (refspecs.length === 0) return currentBranch === "main" ? "HEAD" : null;
   for (const rs of refspecs) {
@@ -74,12 +79,12 @@ export function pushTargetsMain(cmd, currentBranch) {
   return mainPushSource(cmd, currentBranch) !== null;
 }
 
-// A main-bound push is forced when it carries any history-rewriting force flag
-// anywhere after `push`, or uses Git's `+<src>:<dst>` force-refspec syntax.
-// This must be checked before diff/risk classification: a rewind can make the
-// three-dot diff empty and would otherwise look harmless.
-export function mainPushIsForced(cmd, currentBranch) {
-  if (mainPushSource(cmd, currentBranch) === null) return false;
+// Any push is forced when it carries a history-rewriting force flag anywhere
+// after `push`, or uses Git's `+<src>:<dst>` force-refspec syntax. This scan is
+// deliberately independent of target resolution: AGENTS.md requires approval
+// before force-pushing ANY branch, and an implicit target such as `--all` must
+// not make force intent disappear.
+export function pushIsForced(cmd) {
   const args = String(cmd || "").match(GIT_PUSH_RE)?.[1] || "";
   const tokens = splitShellArgs(args);
   const forceFlag = tokens.some((token) =>
@@ -89,6 +94,19 @@ export function mainPushIsForced(cmd, currentBranch) {
   );
   const forceRefspec = tokens.some((token) => token.startsWith("+") && token.length > 1);
   return forceFlag || forceRefspec;
+}
+
+// Back-compat helper for callers that specifically care about main.
+export function mainPushIsForced(cmd, currentBranch) {
+  return mainPushSource(cmd, currentBranch) !== null && pushIsForced(cmd);
+}
+
+// Bulk modes are too broad for an unattended agent: they can update or delete
+// multiple remote refs without naming them in the command.
+export function pushUsesBulkMode(cmd) {
+  const args = String(cmd || "").match(GIT_PUSH_RE)?.[1] || "";
+  const tokens = splitShellArgs(args);
+  return tokens.some((token) => ["--all", "--branches", "--mirror", "--prune"].includes(token));
 }
 
 // A changed file is "risky" (needs an independent Codex verdict) when it touches

@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   buildClaudeCommandArgs,
   buildClaudeReviewPrompt,
+  claudeReviewProofVerdict,
   defaultClaudeReviewOutputPath,
   parseReviewArgs,
   slugify,
@@ -65,5 +66,11 @@ assert.deepEqual(commandArgs, [
 // SECURITY: the prompt must NOT be a CLI arg (it's passed via stdin) so shell
 // metacharacters can't reach cmd.exe on Windows.
 assert.ok(!commandArgs.includes(prompt), "prompt must not be passed as a CLI arg");
+
+assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "## Verdict: SHIP\nClean." }), "clean");
+assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "Verdict: SHIP-WITH-FOLLOWUPS\nNo blockers." }), "clean");
+assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "## Verdict: NEEDS-WORK\nOne blocker." }), null);
+assert.equal(claudeReviewProofVerdict({ status: 1, stdout: "## Verdict: SHIP" }), null);
+assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "No explicit verdict" }), null);
 
 console.log("OK - run-claude-review helpers passed.");

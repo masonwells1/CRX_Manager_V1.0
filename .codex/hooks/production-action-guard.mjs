@@ -10,13 +10,16 @@ import {
   contentIsRisky,
   gitPushCwd,
   isGitPush,
-  mainPushIsForced,
   mainPushSource,
+  pushIsForced,
+  pushUsesBulkMode,
   riskyFiles,
 } from "../../.claude/hooks/codex-push-lib.mjs";
 
 const LIVE_TOOL_ACTIONS = /(?:apply_migration|deploy_edge_function|delete_branch)$/i;
 const GITHUB_MERGE_TOOL = /merge_pull_request$/i;
+const GITHUB_TOOL = /(?:^|__)github__/i;
+const NODE_REPL_TOOL = /(?:^|__)node[_-]?repl(?:__|$)/i;
 const CLAUDE_PROOF_RELATIVE = [".claude", "session-state", "claude-review-push.json"];
 
 function normalize(value) {
@@ -72,10 +75,10 @@ function proofRequirement(headSha, riskDescription, detail) {
   return denied(
     `CODEX PRODUCTION GATE: ${riskDescription}\n\n` +
     `${detail}\n\n` +
-    `Claude must actually review the exact diff in this session, then write ` +
-    `.claude/session-state/claude-review-push.json by running:\n` +
-    `  node scripts/write-claude-push-proof.mjs --verdict clean\n` +
-    `(or --verdict blockers-fixed after verified fixes). Required JSON: ` +
+    `Claude must actually review the exact diff in this session by running ` +
+    `node scripts/run-claude-review.mjs --scope base-main. A successful ` +
+    `SHIP/SHIP-WITH-FOLLOWUPS review writes .claude/session-state/claude-review-push.json. ` +
+    `Required JSON: ` +
     `{\"claude_ran\":true,\"verdict\":\"clean|blockers-fixed\",` +
     `\"head_sha\":\"${headSha || "<exact pushed SHA>"}\",\"timestamp\":\"<ISO-8601, 0-30 minutes old>\"}. ` +
     `The proof is exact-SHA-bound; future-dated, stale, malformed, or BOM-corrupted proof is refused.`
@@ -183,8 +186,12 @@ function ghMergeRequest(command) {
 }
 
 function ghApiMergeRequest(command) {
-  if (!/(?:^|\s)(?:"[^"]*[\\/]gh\.exe"|\S*[\\/]gh(?:\.exe)?|gh(?:\.exe)?)\s+api\b/i.test(String(command || ""))) {
+  const text = String(command || "");
+  if (!/(?:^|\s)(?:"[^"]*[\\/]gh\.exe"|\S*[\\/]gh(?:\.exe)?|gh(?:\.exe)?)\s+api\b/i.test(text)) {
     return null;
+  }
+  if (/\sapi\s+graphql\b/i.test(text) && /\bmergePullRequest\b/i.test(text)) {
+    return { unsupportedGraphql: true };
   }
   const words = shellWords(command);
   let method = "GET";
@@ -200,11 +207,57 @@ function ghApiMergeRequest(command) {
       method = word.slice("--method=".length).toUpperCase();
       continue;
     }
-    if (/^\/?repos\/[^/]+\/[^/]+\/pulls\/\d+\/merge$/i.test(word)) endpoint = word;
+    if (/^-X\S+/i.test(word)) {
+      method = word.slice(2).toUpperCase();
+      continue;
+    }
+    const normalizedEndpoint = word
+      .replace(/^https:\/\/api\.github\.com\//i, "")
+      .replace(/^\//, "");
+    if (/^repos\/[^/]+\/[^/]+\/pulls\/\d+\/merge$/i.test(normalizedEndpoint)) {
+      endpoint = normalizedEndpoint;
+    }
   }
   if (method !== "PUT" || !endpoint) return null;
-  const match = endpoint.match(/^\/?repos\/([^/]+)\/([^/]+)\/pulls\/(\d+)\/merge$/i);
+  const match = endpoint.match(/^repos\/([^/]+)\/([^/]+)\/pulls\/(\d+)\/merge$/i);
   return match ? { selector: match[3], repo: `${match[1]}/${match[2]}` } : null;
+}
+
+function ghApiMutates(command) {
+  const text = String(command || "");
+  if (!/(?:^|\s)(?:"[^"]*[\\/]gh\.exe"|\S*[\\/]gh(?:\.exe)?|gh(?:\.exe)?)\s+api\b/i.test(text)) {
+    return false;
+  }
+  if (/\sapi\s+graphql\b/i.test(text) && /\bmutation\b/i.test(text)) return true;
+  const words = shellWords(text);
+  let method = "GET";
+  let methodExplicit = false;
+  let hasFields = false;
+  for (let index = 0; index < words.length; index += 1) {
+    const word = words[index];
+    if (word === "-X" || word === "--method") {
+      method = String(words[index + 1] || "").toUpperCase();
+      methodExplicit = true;
+      index += 1;
+    } else if (word.startsWith("--method=")) {
+      method = word.slice("--method=".length).toUpperCase();
+      methodExplicit = true;
+    } else if (/^-X\S+/i.test(word)) {
+      method = word.slice(2).toUpperCase();
+      methodExplicit = true;
+    } else if (["-f", "-F", "--field", "--raw-field", "--input"].includes(word) ||
+               /^(?:--field|--raw-field|--input)=/.test(word)) {
+      hasFields = true;
+    }
+  }
+  if (["POST", "PUT", "PATCH", "DELETE"].includes(method)) return true;
+  return !methodExplicit && hasFields; // gh defaults field-bearing API calls to POST
+}
+
+function githubToolIsReadOnly(toolName) {
+  const leaf = String(toolName || "").split("__").pop() || "";
+  return /^(?:get|list|search|read|resolve|download|check)_/i.test(leaf) ||
+    /_(?:read|get|list|search)$/i.test(leaf);
 }
 
 function mcpMergeRequest(toolInput) {
@@ -275,6 +328,10 @@ export function evaluateProductionAction({
 } = {}) {
   const name = String(toolName);
 
+  if (NODE_REPL_TOOL.test(name)) {
+    return denied("CODEX PRODUCTION GATE: node_repl is disabled in this repository because it can launch uninspected git/GitHub write processes outside the production guard.");
+  }
+
   if (LIVE_TOOL_ACTIONS.test(name)) {
     return denied("Live migrations, edge-function deployments, and protected-branch deletion remain outside Codex's standing authorization.");
   }
@@ -296,26 +353,44 @@ export function evaluateProductionAction({
     });
   }
 
+  if (GITHUB_TOOL.test(name) && !githubToolIsReadOnly(name)) {
+    return denied("CODEX PRODUCTION GATE: direct GitHub write tools are blocked because they bypass the reviewed git push and Husky pipeline. Use a normal feature-branch commit/push workflow.");
+  }
+
   const command = String(toolInput.command ?? toolInput.cmd ?? "").trim();
   if (!command) return { blocked: false };
 
   const commandSegments = command.split(/(?:&&|\|\||;|\r?\n)/).map((segment) => segment.trim()).filter(Boolean);
   for (const segment of commandSegments) {
     const ghRequest = ghMergeRequest(segment) || ghApiMergeRequest(segment);
-    if (!ghRequest) continue;
-    const result = gatePullRequestMerge({
-      request: ghRequest,
-      repoDir: path.resolve(repoDir),
-      nowMs,
-      runGit,
-      runGh,
-    });
-    if (result.blocked) return result;
+    if (ghRequest?.unsupportedGraphql) {
+      return denied("CODEX PRODUCTION GATE: GraphQL mergePullRequest mutations are denied because the guard cannot safely resolve and verify their PR head/checks. Use `gh pr merge <number>` instead.");
+    }
+    if (ghRequest) {
+      const result = gatePullRequestMerge({
+        request: ghRequest,
+        repoDir: path.resolve(repoDir),
+        nowMs,
+        runGit,
+        runGh,
+      });
+      if (result.blocked) return result;
+      continue;
+    }
+    if (ghApiMutates(segment)) {
+      return denied("CODEX PRODUCTION GATE: unrecognized mutating `gh api` calls are blocked because they can bypass the reviewed branch/push workflow.");
+    }
   }
 
   for (const segment of commandSegments.filter((part) => isGitPush(part))) {
     if (/--git-dir|--work-tree/i.test(segment)) {
       return denied("CODEX PRODUCTION GATE: pushes using explicit --git-dir/--work-tree contexts are denied because the guard cannot safely bind them to the inspected worktree. Use `git -C <repo> push` instead.");
+    }
+    if (pushUsesBulkMode(segment)) {
+      return denied("CODEX PRODUCTION GATE: bulk push modes (`--all`/`--branches`/`--mirror`/`--prune`) can alter multiple remote refs and are always denied. Push one explicit branch/refspec instead.");
+    }
+    if (pushIsForced(segment)) {
+      return denied("CODEX PRODUCTION GATE: force-pushing any branch rewrites shared history and requires Mason's explicit approval.");
     }
     const pushRepoDir = gitPushCwd(segment, repoDir);
     let currentBranch = normalize(branch).toLowerCase();
@@ -337,9 +412,6 @@ export function evaluateProductionAction({
       return denied("CODEX PRODUCTION GATE: `git push origin :main` deletes the production branch and is always denied.");
     }
     if (sourceRef) {
-      if (mainPushIsForced(segment, currentBranch)) {
-        return denied("CODEX PRODUCTION GATE: force-pushing production main rewrites shared history and is always denied.");
-      }
       const result = gateMainChange({ repoDir: pushRepoDir, sourceRef, nowMs, runGit });
       if (result.blocked) return result;
     }

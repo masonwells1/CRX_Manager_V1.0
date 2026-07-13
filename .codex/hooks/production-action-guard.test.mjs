@@ -10,7 +10,7 @@ import { evaluateProductionAction, isClearlyReadOnlySql, pullRequestChecksGreen 
 
 const projectRoot = process.cwd();
 const guardPath = path.join(projectRoot, ".codex", "hooks", "production-action-guard.mjs");
-const proofWriterPath = path.join(projectRoot, "scripts", "write-claude-push-proof.mjs");
+const claudeGuardPath = path.join(projectRoot, ".claude", "hooks", "codex-push-guard.mjs");
 const tempRoots = [];
 
 function git(cwd, args) {
@@ -56,6 +56,17 @@ function evaluatePush(repo, nowMs = Date.now(), command = "git push origin HEAD:
   });
 }
 
+function runClaudePushGuard(command, projectDir) {
+  const env = { ...process.env, CLAUDE_PROJECT_DIR: projectDir };
+  for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX"]) delete env[key];
+  return spawnSync(process.execPath, [claudeGuardPath], {
+    cwd: projectRoot,
+    env,
+    encoding: "utf8",
+    input: JSON.stringify({ tool_name: "Bash", tool_input: { command } }),
+  });
+}
+
 try {
   assert.equal(isClearlyReadOnlySql("select count(*) from invoices"), true);
   assert.equal(isClearlyReadOnlySql("with totals as (select 1) select * from totals"), true);
@@ -68,6 +79,11 @@ try {
   assert.equal(evaluateProductionAction({ toolName: "mcp__supabase__delete_branch" }).blocked, true);
   assert.equal(evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: "vercel --prod" } }).blocked, true);
   assert.equal(evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: "npm run build" } }).blocked, false);
+  assert.equal(evaluateProductionAction({ toolName: "mcp__node_repl__node_repl", toolInput: { code: "1 + 1" } }).blocked, true);
+  assert.equal(evaluateProductionAction({ toolName: "mcp__github__push_files", toolInput: { branch: "main" } }).blocked, true);
+  assert.equal(evaluateProductionAction({ toolName: "mcp__github__create_or_update_file", toolInput: { branch: "main" } }).blocked, true);
+  assert.equal(evaluateProductionAction({ toolName: "mcp__github__delete_file", toolInput: { branch: "main" } }).blocked, true);
+  assert.equal(evaluateProductionAction({ toolName: "mcp__github__get_file_contents", toolInput: { path: "README.md" } }).blocked, false);
 
   const ordinary = makeRepo("src/components/Label.tsx", "export const label = 'ordinary';\n");
   assert.equal(evaluatePush(ordinary.repo).blocked, false, "non-risky main push allowed without proof");
@@ -99,6 +115,9 @@ try {
     "git -C . push --force origin main",
     "git push origin main --force-with-lease",
     "git push -uf origin main",
+    "git push origin feature/test --force",
+    "git push --all origin --force",
+    "git push origin --all --force",
   ]) {
     assert.equal(evaluateProductionAction({
       toolName: "PowerShell",
@@ -106,6 +125,30 @@ try {
       repoDir: risky.repo,
     }).blocked, true, `force-style main push denied: ${command}`);
   }
+  for (const command of [
+    "git push --all origin",
+    "git push origin --branches",
+    "git push origin --mirror",
+    "git push origin --prune",
+  ]) {
+    assert.equal(evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command },
+      repoDir: risky.repo,
+    }).blocked, true, `bulk push denied: ${command}`);
+  }
+
+  let claudeGuard = runClaudePushGuard(`git -C "${risky.repo}" push origin HEAD:main`, projectRoot);
+  assert.equal(claudeGuard.status, 0);
+  assert.match(claudeGuard.stdout, /"permissionDecision":"deny"/, "Claude guard inspects the git -C selected worktree");
+  claudeGuard = runClaudePushGuard(`git -C "${risky.repo}" push origin feature\/test --force`, projectRoot);
+  assert.match(claudeGuard.stdout, /"permissionDecision":"deny"/, "Claude guard denies force pushes to non-main branches");
+  claudeGuard = runClaudePushGuard(`git -C "${risky.repo}" push --all origin`, projectRoot);
+  assert.match(claudeGuard.stdout, /"permissionDecision":"deny"/, "Claude guard denies implicit bulk pushes");
+  claudeGuard = runClaudePushGuard(`git -C "${risky.repo}" push origin feature/test && git -C "${risky.repo}" push origin HEAD:main`, projectRoot);
+  assert.match(claudeGuard.stdout, /"permissionDecision":"deny"/, "Claude guard inspects every push in a command chain");
+  claudeGuard = runClaudePushGuard(`git -C "${risky.repo}" push origin feature/test`, projectRoot);
+  assert.equal(claudeGuard.stdout, "", "Claude guard still allows an ordinary feature-branch push");
 
   assert.equal(evaluatePush(risky.repo, now).blocked, true, "risky main push denied without proof");
 
@@ -210,6 +253,23 @@ try {
   }).blocked, false, "gh API merge route uses the same green-CI and proof gate");
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
+    toolInput: { command: "gh api -X PUT https://api.github.com/repos/crop/crx/pulls/123/merge -f merge_method=squash" },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: () => mainPrJson,
+  }).blocked, false, "full-URL gh API merge route uses the same gate");
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh api graphql -f query='mutation{mergePullRequest(input:{pullRequestId:\"PR_1\"}){pullRequest{id}}}'" },
+    repoDir: risky.repo,
+  }).blocked, true, "GraphQL mergePullRequest mutations deny closed");
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh api -X PUT repos/crop/crx/contents/file.txt -f branch=main" },
+    repoDir: risky.repo,
+  }).blocked, true, "unrecognized mutating gh API calls are denied");
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
     toolInput: { command: "gh pr merge 123 --squash" },
     repoDir: risky.repo,
     nowMs: now,
@@ -255,11 +315,7 @@ try {
   assert.equal(deniedProcess.status, 0);
   assert.match(deniedProcess.stdout, /"permissionDecision":"deny"/);
 
-  const proofWriter = spawnSync(process.execPath, [proofWriterPath, "--verdict", "clean"], {
-    cwd: risky.repo,
-    encoding: "utf8",
-  });
-  assert.equal(proofWriter.status, 0, proofWriter.stderr);
+  writeProof(risky.repo, valid);
   assert.equal(JSON.parse((await import("node:fs")).readFileSync(proofPath(risky.repo), "utf8")).head_sha, risky.sha);
 
   const allowedProcess = spawnSync(process.execPath, [guardPath], {
@@ -271,7 +327,7 @@ try {
   assert.equal(allowedProcess.stdout, "", "allow path stays silent for Codex hook compatibility");
 
   console.log(`TRANSCRIPT DENY (no proof): exit=${deniedProcess.status} stdout=${deniedProcess.stdout}`);
-  console.log(`TRANSCRIPT ALLOW (valid helper-written proof): exit=${allowedProcess.status} stdout=${JSON.stringify(allowedProcess.stdout)}`);
+  console.log(`TRANSCRIPT ALLOW (valid wrapper-shaped proof): exit=${allowedProcess.status} stdout=${JSON.stringify(allowedProcess.stdout)}`);
   console.log("OK - production action guard checks passed.");
 } finally {
   for (const root of tempRoots) rmSync(root, { recursive: true, force: true });
