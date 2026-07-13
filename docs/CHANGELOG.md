@@ -4,6 +4,12 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-13 — Prose sync: skills/commands/docs brought in line with the settled migration policy + ledger guard
+
+A 3-agent audit of the whole agent surface (all skills, all commands, hook message text, core safety docs) found 8 files still describing the pre-2026-07-13 world; all fixed, no logic changes. `run-loop.md` no longer tells armed unattended loops that a live migration always pauses for an in-chat OK (it now states the settled rule: interactive = ask; armed hands-free = migration-apply-guard's full proof + Codex gate; destructive = never autonomous) and documents the 3-state autopilot flag. `deploy-check`, `create-migration`, and `explain-migration` skills lose their blanket "always needs explicit approval / NEVER apply automatically" claims in favor of the same settled rule; `explain-migration` now points at `/migration-review`//`/codex-review` instead of the deprecated `codex-cross-review`. `preflight.md`, `ship.md`, `SAFE_DEVELOPMENT_RULES.md`, and `AGENT_ONBOARDING.md` now mention the pre-commit ledger guard where they enumerate commit gates. `autopilot-lib.mjs` header comment now describes the real dual-proof gate. Everything else scanned CLEAN. Bonus fix found during the sync: `scripts/sync-agent-workflows.mjs` was extracting adapter titles from `# ` lines *inside fenced code blocks* (a bash comment became the skill title) — it now strips fences first, repairing three garbled Codex adapters (`overnight-bug-hunt`, `codex-driven-bug-hunt`, `review-workflow`).
+
+---
+
 ## 2026-07-13 — Ledger guard: agent-surface changes must be logged in the same commit (hard, pre-commit)
 
 Mason's ask: force agents to keep a ledger of changes, findings, and decisions — as a hard guard, not prose. New `scripts/check-ledger-update.mjs` runs first in `.husky/pre-commit` and **blocks** any commit that stages agent-surface/policy files (`.claude/commands|skills|hooks|workflows|settings.json`, `AGENTS.md`, `CLAUDE.md`, `.husky/`, guard scripts) without also staging a ledger update (`docs/CHANGELOG.md`, any `docs/manual/*.md`, `agent-guardrails.md`, or a `docs/loops/` ledger). 31 assertions (`scripts/check-ledger-update.test.mjs`, added to `test:correction-guards` — 560 total). The guard covers itself: changing it requires a ledger line too.

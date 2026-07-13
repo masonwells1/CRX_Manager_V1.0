@@ -104,6 +104,6 @@ Docs updated:
 ## Important Safety Rules
 
 - NEVER modify an existing migration file — only create new ones
-- NEVER apply the migration automatically — the user decides when to push
+- NEVER apply the migration automatically from this skill — this skill only writes the file. Applying goes through `/migration-review` + migration-apply-guard: interactive session = Mason's in-chat OK; pre-authorized armed hands-free run = full proof + Codex gate (settled 2026-07-13); destructive = never autonomous
 - NEVER commit automatically — the user decides when to commit
 - If the SQL could be destructive (DROP TABLE, DROP COLUMN), warn the user clearly before writing the file

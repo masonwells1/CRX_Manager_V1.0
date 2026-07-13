@@ -32,14 +32,14 @@ Definition of done: <what ends the loop — e.g. "every worklist item DONE (prov
 Delivery gate:      <what will NOT happen without his OK — e.g. "no live migration apply, no edge-fn deploy, no data deletion, no merge/push to main">
 ```
 
-If Mason is present, a one-word go ("go" / "run it") is enough. If this is an armed unattended run (autopilot flag verified, not assumed), print the summary and proceed.
+If Mason is present, a one-word go ("go" / "run it") is enough. If this is an armed unattended run (autopilot flag verified, not assumed — and remember the flag is 3-state: absent = interactive rules, active = hands-free gates, stale/expired/malformed = authorization LAPSED and ALL live applies park; never delete or rewrite the flag), print the summary and proceed.
 
 ## Step 4: Execute the mission doc start-to-finish
 
 Follow the doc **exactly as written** — its hard gates, per-cycle protocol, worklist order, and ledger requirements are the contract. While executing:
 
 - **Keep momentum on reversible work.** Don't pause to ask "should I keep going?" between cycles.
-- **Pause ONLY at the hard gates:** applying a live migration, deploying an edge function, or deleting data — each needs Mason's explicit OK in the current conversation (and the doc may gate more, e.g. "never push to main"; the doc's gates add to these, never replace them).
+- **Pause ONLY at the hard gates:** deploying an edge function or deleting data always needs Mason's explicit OK in the current conversation. A live migration apply follows the settled 2026-07-13 rule: in an interactive session it needs Mason's in-chat OK; in a pre-authorized armed run it may apply hands-free ONLY through migration-apply-guard's full proof gate (hash-bound reviewer proof with both reviewers + hash-bound Codex proof, both fresh), and a DESTRUCTIVE migration never applies autonomously, armed or not. (The doc may gate more, e.g. "never push to main"; the doc's gates add to these, never replace them.)
 - **Stop/pause from Mason = hard halt.** Checkpoint the ledger, then stop (see memory: `feedback_stop-pause-scope-are-hard-halts`).
 - **Prove each cycle ran** per the doc's protocol (PROOF — Ran: … · Saw: … lines in the ledger) — tests passing alone is not proof.
 - At the end, land the doc's definition-of-done deliverables (ledger handoff, parked-migration apply-order, plain-English summary for Mason) before declaring the loop finished.
@@ -49,4 +49,4 @@ Follow the doc **exactly as written** — its hard gates, per-cycle protocol, wo
 - NEVER skip or soften Step 1. A mission doc that fails validation does not run — period.
 - NEVER launch into a worktree another session may own without Mason's answer.
 - NEVER invent an ad-hoc loop variant because the doc is incomplete — incomplete docs go back to Mason.
-- The three irreversible actions (live migration apply / edge-fn deploy / data deletion) stay gated no matter what the mission doc says.
+- Edge-fn deploys and data deletion stay gated on Mason's explicit OK no matter what the mission doc says. Live migration applies stay behind migration-apply-guard no matter what the doc says — interactive = in-chat OK; armed hands-free = full proof + Codex gate; destructive = never autonomous (settled 2026-07-13).

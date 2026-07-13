@@ -100,7 +100,7 @@ RECOMMENDED NEXT STEPS
 ──────────────────────
 <Pick one:
  - "Safe to apply via Supabase MCP — say 'apply it' to proceed."
- - "BEFORE applying: run /codex-cross-review on this migration." (if uncertain)
+ - "BEFORE applying: run /migration-review (or /codex-review) on this migration." (if uncertain)
  - "DO NOT apply yet. Fix these issues first: <list>"
  - "Dispatch the rls-security-reviewer + migration-drift-reviewer subagents first
     so we don't repeat the B7/B8/B9 class of bug.">
@@ -108,7 +108,7 @@ RECOMMENDED NEXT STEPS
 
 ## Step 6: Wait for Mason's Decision
 
-Do NOT auto-apply. Do NOT auto-commit. Mason reads the explanation, asks follow-up questions, and decides what to do.
+Do NOT auto-apply. Do NOT auto-commit. Mason reads the explanation, asks follow-up questions, and decides what to do. (In a pre-authorized armed hands-free run, the apply decision instead flows through migration-apply-guard's proof + Codex gate per the settled 2026-07-13 policy — but /explain-migration itself is an interactive, explain-to-Mason skill, so within this skill you always wait.)
 
 If Mason asks "should I apply this?", give an honest answer based on the safety check, NOT a default yes.
 

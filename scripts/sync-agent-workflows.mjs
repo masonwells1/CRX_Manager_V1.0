@@ -31,7 +31,10 @@ function walkFiles(root) {
 }
 
 function commandTitle(markdown, fallback) {
-  const heading = markdown.match(/^#\s+(.+)$/m)?.[1]?.trim();
+  // A "# ..." line inside a ``` fence (e.g. a bash comment in an example) is not
+  // a heading — strip fenced blocks before looking for the H1.
+  const withoutFences = markdown.replace(/```[\s\S]*?```/g, "");
+  const heading = withoutFences.match(/^#\s+(.+)$/m)?.[1]?.trim();
   return heading || fallback.split("-").map((part) => part[0]?.toUpperCase() + part.slice(1)).join(" ");
 }
 

@@ -17,6 +17,7 @@ Categorize the changed files:
 - **PDF code** changed → set `PDF_CHANGED=true` (any file under `src/` that contains `from 'jspdf'` or `from 'jspdf-autotable'`)
 - **Edge Function** changed → set `EDGE_CHANGED=true` (any `supabase/functions/**/*.ts`)
 - **Schema registry** changed → set `REGISTRY_CHANGED=true` (`.claude/schema-registry.json`)
+- **Agent surface** changed → set `AGENT_SURFACE_CHANGED=true` (any `.claude/{commands,skills,hooks,workflows,agents}/` file, `.claude/settings.json`, `AGENTS.md`, `CLAUDE.md`, `.husky/`, `scripts/check-*`, `scripts/validate-*`, `scripts/verify-*`, or `scripts/sync-agent-workflows.mjs`)
 
 ## Step 2: Dispatch reviewer subagents (in PARALLEL)
 
@@ -46,7 +47,7 @@ npm run build
 npm run test -- --reporter=verbose 2>&1 | tail -15
 ```
 
-These also run automatically when Mason types `git commit` (via husky pre-commit hook). Running them here just surfaces failures earlier so Mason can fix before the commit attempt rejects. `npm run typecheck` is included (ordered before build, mirroring the hook) because `npm run build` (vite/esbuild) only *transpiles* — it never type-checks, so a pure type error (e.g. `TS2349`) passes build green but is then rejected by the commit's typecheck; that exact gap shipped a Field Mode prod crash on 2026-06-14.
+These also run automatically when Mason types `git commit` (via husky pre-commit hook). Running them here just surfaces failures earlier so Mason can fix before the commit attempt rejects. The pre-commit hook ALSO runs the hard ledger guard (`scripts/check-ledger-update.mjs`, 2026-07-13): if `AGENT_SURFACE_CHANGED` is true and the commit stages no ledger file (`docs/CHANGELOG.md`, any `docs/manual/*.md`, `docs/reference/agent-guardrails.md`, or a `docs/loops/` ledger), the commit is rejected — warn about this in the preflight report so the ledger entry gets written BEFORE the commit attempt, and never suggest `--no-verify`. `npm run typecheck` is included (ordered before build, mirroring the hook) because `npm run build` (vite/esbuild) only *transpiles* — it never type-checks, so a pure type error (e.g. `TS2349`) passes build green but is then rejected by the commit's typecheck; that exact gap shipped a Field Mode prod crash on 2026-06-14.
 
 ## Step 3b: Prevention-control checks
 

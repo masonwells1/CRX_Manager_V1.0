@@ -97,7 +97,7 @@ Report the largest JS chunks. Warn if any single chunk is > 500KB.
 ╚══════════════════════════════════════════╝
 ```
 
-If ready: note that the deploy trigger IS the push — pushing `main` deploys production via Vercel's git integration (there is no separate deploy step). A push of regular reversible code with everything green is covered by Mason's standing 2026-06-16 auto-push authorization; report it explicitly. A direct `vercel --prod` deploy outside the push path, an Edge Function deploy, or anything involving a live migration still needs Mason's explicit yes.
+If ready: note that the deploy trigger IS the push — pushing `main` deploys production via Vercel's git integration (there is no separate deploy step). A push of regular reversible code with everything green is covered by Mason's standing 2026-06-16 auto-push authorization; report it explicitly. A direct `vercel --prod` deploy outside the push path or an Edge Function deploy still needs Mason's explicit yes. A live migration apply follows the settled 2026-07-13 rule: interactive session = Mason's in-chat OK; pre-authorized armed hands-free run = migration-apply-guard's full proof gate (hash-bound dual-reviewer proof + hash-bound Codex proof, both fresh ≤30 min); destructive migrations never apply autonomously.
 If blocked: List every issue that needs fixing first.
 
 ## Rules
@@ -106,4 +106,4 @@ If blocked: List every issue that needs fixing first.
 - NEVER push/deploy if tests have new failures
 - NEVER push/deploy if secrets are found in source code
 - NEVER push/deploy with unapplied migrations pending without surfacing them (warn — Mason decides the ordering)
-- Edge Function deploys, direct Vercel CLI deploys, and live migration applies always need Mason's explicit approval; only the regular push-to-`main` path is covered by the standing authorization
+- Edge Function deploys and direct Vercel CLI deploys always need Mason's explicit approval; only the regular push-to-`main` path is covered by the standing authorization. Live migration applies need his in-chat OK in an interactive session — the one exception is a pre-authorized armed hands-free run passing migration-apply-guard's full proof + Codex gate (destructive migrations: never autonomous)

@@ -67,7 +67,8 @@ These are mandatory safety rules for anyone (human or AI) making changes to CRX 
 | Rule | Consequence of breaking |
 |------|------------------------|
 | NEVER remove the pre-commit hook | Removes the safety net that catches errors before commits |
-| NEVER commit with `--no-verify` | Bypasses lint + build + test checks |
+| NEVER commit with `--no-verify` | Bypasses lint + build + test checks and the ledger guard |
+| NEVER commit agent-surface changes without a ledger update in the same commit | The pre-commit ledger guard (`scripts/check-ledger-update.mjs`, 2026-07-13) blocks commits that stage `.claude/{commands,skills,hooks,workflows,agents}/`, `.claude/settings.json`, `AGENTS.md`, `CLAUDE.md`, `.husky/`, or guard scripts with no `docs/CHANGELOG.md` / `docs/manual/*.md` / `docs/reference/agent-guardrails.md` / `docs/loops/` update — policy changes must leave a written record Mason can find |
 | NEVER add `@ts-ignore` or `any` types | Hides bugs that TypeScript would catch |
 | NEVER install additional CSS frameworks | Tailwind CSS only — other frameworks cause conflicts |
 | NEVER install additional icon libraries | Lucide React only — keeps bundle size consistent |

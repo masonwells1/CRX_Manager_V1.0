@@ -74,7 +74,7 @@ These are not code bugs — they're *how an agent convinced itself something was
 
 ## The guard net will stop you — that's normal
 
-This project has a real, enforced safety net: PreToolUse hooks that refuse a Write/Edit that matches a known bug pattern, a migration-apply-guard that requires a fresh review proof before `apply_migration` runs, a push-guard that requires a Codex verdict before a risky push, and Stop/PostToolUse hooks that force verification and flag loose ends. Full behavior is documented in `docs/reference/agent-guardrails.md` — read it, don't re-derive it here.
+This project has a real, enforced safety net: PreToolUse hooks that refuse a Write/Edit that matches a known bug pattern, a migration-apply-guard that requires a fresh review proof before `apply_migration` runs, a push-guard that requires a Codex verdict before a risky push, a pre-commit ledger guard that blocks agent-surface commits with no ledger update staged alongside, and Stop/PostToolUse hooks that force verification and flag loose ends. Full behavior is documented in `docs/reference/agent-guardrails.md` — read it, don't re-derive it here.
 
 If a guard blocks you, the correct response is to **fix the underlying problem the guard is pointing at** — never to look for a way around it, disable it, edit the hook, or add an exemption comment you're not sure is warranted. If you genuinely believe a guard is wrong (a false positive on legitimate code), say so to Mason in plain English and let him decide — don't silently bypass it and don't unilaterally change guard config.
 

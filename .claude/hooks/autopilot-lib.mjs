@@ -15,8 +15,11 @@
 // NOTE (Mason, 2026-07-10, explicit + repeated): apply_migration and execute_sql
 // are DELIBERATELY NOT in this set — Mason owns this live DB and does not want SQL
 // or migration applies to gate during an unattended run. They remain protected by
-// the migration-apply-guard hook (a migration cannot apply without a recent
-// 3-reviewer proof file) and by settings.json permissions.deny. Deploys, pushes,
+// the migration-apply-guard hook (settled 2026-07-13: an armed apply needs a fresh
+// hash-bound reviewer proof naming BOTH rls-security-reviewer and
+// migration-drift-reviewer PLUS a fresh hash-bound codex-review-mig-<name>.json
+// Codex proof, ≤30 min each; destructive migrations are refused outright while
+// armed) and by settings.json permissions.deny. Deploys, pushes,
 // branch/project lifecycle, and destructive file/db ops STAY blocked here.
 const DENY_TOOLNAME_RE = /(deploy_edge_function|deploy_to_vercel|deploy_project|reset_branch|delete_branch|merge_branch|rebase_branch|pause_project|restore_project|push_files|create_or_update_file|delete_file|merge_pull_request|start_process|interact_with_process|write_file|edit_block|move_file|set_config_value)/i;
 
