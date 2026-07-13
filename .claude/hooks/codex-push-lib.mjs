@@ -55,8 +55,17 @@ export function pushContextIsAmbiguous(cmd) {
 
 export function reviewProofPathMentioned(value) {
   const text = String(value || "").replace(/\\/g, "/");
-  return /(?:^|\s|["'])\.?\/?(?:[^\s"']+\/)*\.claude\/session-state\/(?:claude-review-push\.json|codex-review-[^\s/"']+\.json)(?:$|\s|["'])/i.test(text) ||
-    /\.claude\/session-state\/(?:claude-review-push\.json|codex-review-[^\s/"']+\.json)/i.test(text);
+  // Match both full paths and bare basenames. The latter matters when a shell
+  // changed into session-state on a previous tool call: `printf ... >
+  // codex-review-forged.json` must still be recognized without the directory
+  // appearing in the second command.
+  return /(?:^|[\s"'=:\/])(?:claude-review-push\.json|codex-review-[^\s/"']+\.json)(?:$|[\s"'])/i.test(text);
+}
+
+export function reviewStateDirectoryMentioned(value) {
+  const text = String(value || "").replace(/\\/g, "/");
+  return /(?:^|[\s"'=:\/])(?:\.?\/?(?:[^\s"']+\/)*\.claude\/session-state)(?:$|[\s/"'])/i.test(text) ||
+    /\.claude\/session-state/i.test(text);
 }
 
 // Which LOCAL ref is this push landing on main? Returns:

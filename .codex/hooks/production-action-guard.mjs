@@ -15,6 +15,7 @@ import {
   pushIsForced,
   pushUsesBulkMode,
   reviewProofPathMentioned,
+  reviewStateDirectoryMentioned,
   riskyFiles,
 } from "../../.claude/hooks/codex-push-lib.mjs";
 
@@ -23,9 +24,20 @@ const GITHUB_MERGE_TOOL = /merge_pull_request$/i;
 const GITHUB_TOOL = /(?:^|__)github__/i;
 const NODE_REPL_TOOL = /(?:^|__)node[_-]?repl(?:__|$)/i;
 const CLAUDE_PROOF_RELATIVE = [".claude", "session-state", "claude-review-push.json"];
+const PROTECTED_HARNESS_PATH_RE = /(?:^|[\\/])(?:\.claude[\\/]hooks[\\/](?:codex-push-(?:guard|lib)|review-proof-guard)\.mjs|\.codex[\\/]hooks[\\/]production-action-guard\.mjs|scripts[\\/]run-claude-review\.mjs|\.claude[\\/]settings\.json|\.codex[\\/]hooks\.json)$/i;
+const PROTECTED_HARNESS_FRAGMENT_RE = /(?:^|[\\/])(?:\.claude[\\/]hooks[\\/](?:codex-push-(?:guard|lib)|review-proof-guard)\.mjs|\.codex[\\/]hooks[\\/]production-action-guard\.mjs|scripts[\\/]run-claude-review\.mjs|\.claude[\\/]settings\.json|\.codex[\\/]hooks\.json)(?:$|[\s"'])/i;
 
 function normalize(value) {
   return String(value || "").trim().replace(/\s+/g, " ");
+}
+
+function protectedHarnessPathMentioned(value) {
+  return PROTECTED_HARNESS_PATH_RE.test(String(value || "").trim());
+}
+
+function usesDynamicProcessEval(command) {
+  const text = String(command || "");
+  return /(?:^|[\s"'\\/])node(?:\.exe)?["']?\s+(?:(?:--[a-z-]+(?:=[^\s]+)?|-{1,2}[a-z-]+)\s+)*(?:-e|--eval|-p|--print)(?:\s|=|$)/i.test(text);
 }
 
 function denied(reason) {
@@ -61,7 +73,11 @@ export function isClearlyReadOnlySql(sql) {
     "round", "rtrim", "split_part", "sqrt", "string_agg", "substring", "sum", "to_char", "to_date",
     "to_json", "to_jsonb", "to_regclass", "to_regprocedure", "trim", "upper", "version",
   ]);
-  const structuralWords = new Set(["as", "exists", "filter", "in", "over", "values"]);
+  const structuralWords = new Set([
+    "and", "as", "by", "case", "else", "exists", "filter", "from", "group",
+    "having", "in", "join", "not", "on", "or", "order", "over", "select",
+    "then", "values", "when", "where",
+  ]);
   if (/"(?:[^"]|"")+"\s*\(/.test(value)) return false;
   const functionRe = /\b(?:([a-z_][\w$]*)\.)?([a-z_][\w$]*)\s*\(/gi;
   let match;
@@ -384,6 +400,10 @@ export function evaluateProductionAction({
   if (pathCandidates.some((candidate) => reviewProofPathMentioned(candidate))) {
     return denied("CODEX PRODUCTION GATE: review proof files are wrapper-owned and cannot be written, edited, moved, or deleted directly.");
   }
+  const mutatingFileTool = /(?:write|edit|delete|move|rename|patch|replace|create|update)/i.test(name);
+  if (mutatingFileTool && pathCandidates.some((candidate) => protectedHarnessPathMentioned(candidate))) {
+    return denied("CODEX PRODUCTION GATE: the production/review harness is a security boundary and cannot be changed through a direct file-write tool. Use the reviewed maintenance workflow with Mason's approval.");
+  }
 
   if (NODE_REPL_TOOL.test(name)) {
     return denied("CODEX PRODUCTION GATE: node_repl is disabled in this repository because it can launch uninspected git/GitHub write processes outside the production guard.");
@@ -425,6 +445,17 @@ export function evaluateProductionAction({
 
   if (reviewProofPathMentioned(command)) {
     return denied("CODEX PRODUCTION GATE: direct shell access to review proof files is blocked. Run the real review wrapper instead.");
+  }
+  const changesDirectory = /(?:^|[;&|\r\n()]|\s)(?:cd(?:\s+\/d)?|chdir|pushd|set-location)\s+/i.test(command);
+  if ((changesDirectory && reviewStateDirectoryMentioned(command)) || reviewStateDirectoryMentioned(actionRepoDir)) {
+    return denied("CODEX PRODUCTION GATE: the wrapper-owned review state directory cannot be used as an interactive shell working directory.");
+  }
+  if (usesDynamicProcessEval(command)) {
+    return denied("CODEX PRODUCTION GATE: Node eval/print modes are blocked because generated code can hide uninspected git or GitHub writes. Put ordinary diagnostic code in a reviewed script instead.");
+  }
+  const shellMutatesPath = /(?:>|\b(?:set-content|add-content|out-file|remove-item|move-item|copy-item|rm|mv|cp|del|erase|sed\s+-i|perl\s+-pi|apply_patch)\b)/i.test(command);
+  if (shellMutatesPath && PROTECTED_HARNESS_FRAGMENT_RE.test(command)) {
+    return denied("CODEX PRODUCTION GATE: direct shell mutation of the production/review harness is blocked. Use the reviewed maintenance workflow with Mason's approval.");
   }
   if (isGitPush(command) && pushContextIsAmbiguous(command)) {
     return denied("CODEX PRODUCTION GATE: directory-changing or GIT_DIR/GIT_WORK_TREE-prefixed pushes cannot be bound safely to the inspected worktree. Use `git -C <repo> push`.");

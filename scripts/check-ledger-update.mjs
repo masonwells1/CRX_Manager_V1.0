@@ -25,6 +25,7 @@ const TRIGGER_RES = [
   // verifiers, and the workflow mirror-sync.
   /^scripts\/(check-|validate-|verify-)[^/]+$/,
   /^scripts\/sync-agent-workflows\.mjs$/,
+  /^scripts\/run-claude-review\.mjs$/,
 ];
 
 // Any ONE of these staged alongside satisfies the ledger requirement.

@@ -7,7 +7,10 @@
 
 import { readFileSync } from "node:fs";
 
-import { reviewProofPathMentioned } from "./codex-push-lib.mjs";
+import {
+  reviewProofPathMentioned,
+  reviewStateDirectoryMentioned,
+} from "./codex-push-lib.mjs";
 
 function deny(reason) {
   process.stdout.write(JSON.stringify({
@@ -28,6 +31,8 @@ try {
 }
 
 const input = payload?.tool_input || payload?.toolInput || {};
+const toolName = String(payload?.tool_name || payload?.toolName || "");
+const hookCwd = String(payload?.cwd || input.cwd || input.workdir || "");
 const pathCandidates = [
   input.file_path,
   input.filePath,
@@ -43,6 +48,18 @@ if (pathCandidates.some((candidate) => reviewProofPathMentioned(candidate))) {
 const command = String(input.command ?? input.cmd ?? "");
 if (reviewProofPathMentioned(command)) {
   deny("REVIEW PROOF GUARD: direct shell access to Claude/Codex review proof JSON is blocked. Run the real review wrapper instead.");
+}
+
+// Claude's Bash cwd persists across calls. Deny entering the wrapper-owned
+// state directory, and fail closed on shell activity already running there, so
+// a two-call `cd` + bare-filename write cannot evade the path matcher.
+const shellTool = /(?:bash|powershell|shell|terminal)/i.test(toolName);
+const changesDirectory = /(?:^|[;&|\r\n()]|\s)(?:cd(?:\s+\/d)?|chdir|pushd|set-location)\s+/i.test(command);
+if (shellTool && changesDirectory && reviewStateDirectoryMentioned(command)) {
+  deny("REVIEW PROOF GUARD: the review state directory is wrapper-owned and cannot become an interactive shell working directory.");
+}
+if (shellTool && reviewStateDirectoryMentioned(hookCwd)) {
+  deny("REVIEW PROOF GUARD: shell commands from the wrapper-owned review state directory are blocked. Return to the repository root and run the real review wrapper.");
 }
 
 process.exit(0);

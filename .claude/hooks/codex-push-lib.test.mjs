@@ -13,6 +13,7 @@ import {
   pushContextIsAmbiguous,
   pushUsesBulkMode,
   reviewProofPathMentioned,
+  reviewStateDirectoryMentioned,
   proofValid,
   riskyFiles,
 } from "./codex-push-lib.mjs";
@@ -65,7 +66,10 @@ assert.equal(pushContextIsAmbiguous("GIT_WORK_TREE=/tmp/other git push origin ma
 assert.equal(pushContextIsAmbiguous("git -C C:/other push origin main"), false);
 assert.equal(reviewProofPathMentioned(".claude/session-state/claude-review-push.json"), true);
 assert.equal(reviewProofPathMentioned("C:\\repo\\.claude\\session-state\\codex-review-abc.json"), true);
+assert.equal(reviewProofPathMentioned("printf {} > codex-review-forged.json"), true);
 assert.equal(reviewProofPathMentioned(".claude/session-state/claude-review-latest.txt"), false);
+assert.equal(reviewStateDirectoryMentioned("cd .claude/session-state"), true);
+assert.equal(reviewStateDirectoryMentioned("C:\\repo\\.claude\\session-state"), true);
 
 // Codex round-2 (2026-07-13): unambiguous long-option abbreviations count as force.
 assert.equal(mainPushIsForced("git push origin main --force-w", "feature"), true);

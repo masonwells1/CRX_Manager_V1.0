@@ -3,7 +3,7 @@
 **From:** Claude (Fable 5), 2026-07-13 session
 **To:** Codex (gpt-5.5+), executing in this repo with workspace-write
 **Authorized by:** Mason Wells (owner), in-chat, 2026-07-13
-**Status when you read this:** design approved in principle; the CODE does not exist yet. You are building it. It goes LIVE only after Claude cross-review + Mason's explicit merge OK — see "How this lands" at the bottom.
+**Status when you read this:** implementation branch exists but is not active. Claude review round 4 returned NEEDS-WORK because repository-owned hooks cannot be the sole trust boundary for an agent with arbitrary local process/file access. It goes LIVE only after GitHub protects `main` with a required-PR + passing-check rule, Claude re-reviews the final branch cleanly, and Mason explicitly approves the merge — see "How this lands" at the bottom.
 
 ---
 
@@ -49,7 +49,7 @@ Codex gets the **same standing authorization Claude has, mirrored**:
 - Path: `.claude/session-state/claude-review-push.json` (session-state dir of the repo the push runs from).
 - Shape: `{ "claude_ran": true, "verdict": "clean" | "blockers-fixed", "head_sha": "<full SHA of the exact commit being pushed>", "timestamp": "<ISO-8601>" }`.
 - Validation: reuse `proofValid()` from `codex-push-lib.mjs` if you can parameterize the `codex_ran`/`claude_ran` key cleanly; otherwise add a sibling `claudeProofValid()` **in `codex-push-lib.mjs`** (shared lib, one source of truth) with identical semantics: exact `head_sha` match, verdict whitelist, timestamp age within [0, 30 min] — **future-dated timestamps must fail** (bind age as `0 <= age <= 30min`, not just `< 30min`).
-- Who writes it: the real Claude CLI wrapper, after actually reviewing the committed base-main diff in-session. Round-2 review removed the standalone `--verdict` writer because it allowed self-certification; `scripts/run-claude-review.mjs --scope base-main` now invokes the fixed `claude` executable, writes BOM-free proof only after a successful SHIP/SHIP-WITH-FOLLOWUPS result, and revokes proof on NEEDS-WORK/failure. Round-3 added `review-proof-guard.mjs` so native, MCP, and shell tools cannot directly write/edit/move/delete Claude or Codex review proof JSON.
+- Who writes it: the real Claude CLI wrapper, after actually reviewing the committed base-main diff in-session. Round 2 removed the standalone `--verdict` writer because it allowed self-certification. Round 4 pins the absolute installed Claude Code binary with no shell/PATH resolution, requires exactly one terminal `FINAL_VERDICT`, writes BOM-free proof only after SHIP/SHIP-WITH-FOLLOWUPS, and revokes proof on NEEDS-WORK/failure. `review-proof-guard.mjs` blocks direct native/MCP/shell proof access, bare proof filenames, and persistent-cwd entry into the proof directory. These repository hooks are defense-in-depth only; GitHub's server-side protected-branch rule is the non-forgeable outer gate.
 
 ### 4c. Close the ledger-guard gap on your own surface
 
@@ -83,4 +83,4 @@ Codex gets the **same standing authorization Claude has, mirrored**:
 3. One commit (or a small clean series) on the branch, ledger entry included, branch pushed to origin.
 4. Handback summary (plain English, for Mason + Claude): what changed, file list, test counts, the two proof transcripts, anything you found that contradicted this spec, and the proposed `AGENTS.md` wording.
 
-After handback: Claude reviews the diff (`/codex-review` in reverse — Claude is the second model here), Mason gives the explicit merge OK, and the merge to `main` is what activates the grant.
+After handback: Mason explicitly approves the GitHub `main` protection change, Claude reviews the final diff (`/codex-review` in reverse — Claude is the second model here), Mason gives the explicit merge OK, and only then does the merge to `main` activate the grant.

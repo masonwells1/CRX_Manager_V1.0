@@ -56,14 +56,14 @@ function evaluatePush(repo, nowMs = Date.now(), command = "git push origin HEAD:
   });
 }
 
-function runClaudePushGuard(command, projectDir) {
+function runClaudePushGuard(command, projectDir, payloadCwd = "") {
   const env = { ...process.env, CLAUDE_PROJECT_DIR: projectDir };
   for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX"]) delete env[key];
   return spawnSync(process.execPath, [claudeGuardPath], {
     cwd: projectRoot,
     env,
     encoding: "utf8",
-    input: JSON.stringify({ tool_name: "Bash", tool_input: { command } }),
+    input: JSON.stringify({ tool_name: "Bash", cwd: payloadCwd || undefined, tool_input: { command } }),
   });
 }
 
@@ -71,6 +71,8 @@ try {
   assert.equal(isClearlyReadOnlySql("select count(*) from invoices"), true);
   assert.equal(isClearlyReadOnlySql("select pg_get_functiondef('public.safe()'::regprocedure)"), true);
   assert.equal(isClearlyReadOnlySql("with totals as (select 1) select * from totals"), true);
+  assert.equal(isClearlyReadOnlySql("select * from invoices where (status = 'open') and not (balance_cents = 0) order by (created_at)"), true);
+  assert.equal(isClearlyReadOnlySql("select i.id from invoices i join customers c on (c.id = i.customer_id) group by (i.id)"), true);
   assert.equal(isClearlyReadOnlySql("update invoices set status = 'paid'"), false);
   assert.equal(isClearlyReadOnlySql("with changed as (delete from invoices returning *) select * from changed"), false);
   assert.equal(isClearlyReadOnlySql("select allocate_payment('x', 100)"), false);
@@ -92,6 +94,13 @@ try {
   assert.equal(evaluateProductionAction({ toolName: "Write", toolInput: { file_path: ".claude/session-state/claude-review-push.json" } }).blocked, true);
   assert.equal(evaluateProductionAction({ toolName: "Edit", toolInput: { file_path: ".claude/session-state/codex-review-abc.json" } }).blocked, true);
   assert.equal(evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: "echo {} > .claude/session-state/claude-review-push.json" } }).blocked, true);
+  assert.equal(evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: "cd .claude/session-state" } }).blocked, true);
+  assert.equal(evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: "printf {} > codex-review-forged.json" } }).blocked, true);
+  assert.equal(evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: "printf {} > harmless.json", cwd: ".claude/session-state" } }).blocked, true);
+  assert.equal(evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: "node -e \"require('child_process').execSync('git pu'+'sh origin main')\"" } }).blocked, true);
+  assert.equal(evaluateProductionAction({ toolName: "Write", toolInput: { file_path: ".codex/hooks/production-action-guard.mjs" } }).blocked, true);
+  assert.equal(evaluateProductionAction({ toolName: "Edit", toolInput: { file_path: "scripts/run-claude-review.mjs" } }).blocked, true);
+  assert.equal(evaluateProductionAction({ toolName: "Read", toolInput: { file_path: "scripts/run-claude-review.mjs" } }).blocked, false);
   assert.equal(evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: "node scripts/run-claude-review.mjs --scope base-main" } }).blocked, false);
 
   const ordinary = makeRepo("src/components/Label.tsx", "export const label = 'ordinary';\n");
@@ -105,6 +114,9 @@ try {
     head_sha: risky.sha,
     timestamp: new Date(now).toISOString(),
   };
+
+  const movedShellGuard = runClaudePushGuard("git push origin HEAD:main", ordinary.repo, risky.repo);
+  assert.match(movedShellGuard.stdout, /"permissionDecision":"deny"/, "Claude guard inspects the hook payload cwd after a prior shell cd");
 
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",

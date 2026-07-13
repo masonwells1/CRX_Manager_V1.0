@@ -41,7 +41,12 @@ if (pushContextIsAmbiguous(cmd)) {
   deny("CODEX GATE: directory-changing or GIT_DIR/GIT_WORK_TREE-prefixed pushes cannot be bound safely to the inspected worktree. Use `git -C <repo> push`.");
 }
 
-const projectDir = path.resolve(process.env.CLAUDE_PROJECT_DIR || process.cwd());
+// Claude's shell cwd can persist across tool calls. The hook payload's cwd is
+// therefore the authoritative repository context for this specific push; the
+// session-wide CLAUDE_PROJECT_DIR is only a fallback.
+const projectDir = path.resolve(
+  payload?.cwd || payload?.tool_input?.cwd || process.env.CLAUDE_PROJECT_DIR || process.cwd(),
+);
 function git(args, cwd) {
   const env = { ...process.env };
   for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX"]) delete env[key];
