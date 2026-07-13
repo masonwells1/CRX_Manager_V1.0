@@ -107,6 +107,8 @@ try {
     "rm .claude/hooks/review-proof-guard.mjs",
     "rm .claude/hooks/codex-push-guard.mjs;ls",
     "rm .claude/hooks/codex-push-guard.mjs|cat",
+    "Remove-Item a.mjs,.claude/hooks/codex-push-guard.mjs",
+    "copy x .codex/hooks/production-action-guard.mjs>nul",
     "sed -i s/a/b/ .codex/hooks/production-action-guard.mjs",
     "printf x > .claude/hooks/codex-push-guard.mjs",
   ]) {
@@ -116,6 +118,8 @@ try {
     toolName: "apply_patch",
     toolInput: { patch: "*** Update File: .codex/hooks/production-action-guard.mjs\n@@\n-old\n+new" },
   }).blocked, true, "structured apply_patch cannot rewrite the production harness");
+  assert.equal(evaluateProductionAction({ toolName: "Write", toolInput: { file_path: ".claude/hooks/live-testdata-lib.mjs" } }).blocked, true);
+  assert.equal(evaluateProductionAction({ toolName: "Write", toolInput: { file_path: ".codex/hooks/codex-hook-adapter.mjs" } }).blocked, true);
   assert.equal(evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: "node scripts/run-claude-review.mjs --scope base-main" } }).blocked, false);
 
   const ordinary = makeRepo("src/components/Label.tsx", "export const label = 'ordinary';\n");

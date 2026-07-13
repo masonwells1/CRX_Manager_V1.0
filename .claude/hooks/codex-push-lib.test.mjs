@@ -71,6 +71,9 @@ assert.equal(reviewProofPathMentioned("printf {} >claude-review-push.json"), tru
 assert.equal(reviewProofPathMentioned("rm codex-review-x.json;ls"), true);
 assert.equal(reviewProofPathMentioned("cat claude-review-push.json|more"), true);
 assert.equal(reviewProofPathMentioned("rm codex-review-x.json)"), true);
+assert.equal(reviewProofPathMentioned("Remove-Item a.json,claude-review-push.json"), true);
+assert.equal(reviewProofPathMentioned("copy forged.json claude-review-push.json>nul"), true);
+assert.equal(reviewProofPathMentioned("my-claude-review-push.json.bak"), false);
 assert.equal(reviewProofPathMentioned(".claude/session-state/claude-review-latest.txt"), false);
 assert.equal(reviewStateDirectoryMentioned("cd .claude/session-state"), true);
 assert.equal(reviewStateDirectoryMentioned("cd .claude && cd session-state"), true);

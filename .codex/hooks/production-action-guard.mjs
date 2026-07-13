@@ -25,8 +25,9 @@ const GITHUB_MERGE_TOOL = /merge_pull_request$/i;
 const GITHUB_TOOL = /(?:^|__)github__/i;
 const NODE_REPL_TOOL = /(?:^|__)node[_-]?repl(?:__|$)/i;
 const CLAUDE_PROOF_RELATIVE = [".claude", "session-state", "claude-review-push.json"];
-const PROTECTED_HARNESS_PATH_RE = /(?:^|[\\/])(?:\.claude[\\/]hooks[\\/](?:codex-push-(?:guard|lib)|review-proof-guard)\.mjs|\.codex[\\/]hooks[\\/]production-action-guard\.mjs|scripts[\\/]run-claude-review\.mjs|\.claude[\\/]settings\.json|\.codex[\\/]hooks\.json)$/i;
-const PROTECTED_HARNESS_FRAGMENT_RE = /(?:^|[\s"'=<>|\\/])(?:\.claude[\\/]hooks[\\/](?:codex-push-(?:guard|lib)|review-proof-guard)\.mjs|\.codex[\\/]hooks[\\/]production-action-guard\.mjs|scripts[\\/]run-claude-review\.mjs|\.claude[\\/]settings\.json|\.codex[\\/]hooks\.json)(?:$|[\s"';|&()])/i;
+const PROTECTED_HARNESS_SOURCE = String.raw`(?:\.claude[\\/]hooks[\\/](?:codex-push-(?:guard|lib)|review-proof-guard|live-testdata-lib)\.mjs|\.codex[\\/]hooks[\\/](?:production-action-guard|codex-hook-adapter)\.mjs|scripts[\\/]run-claude-review\.mjs|\.claude[\\/]settings\.json|\.codex[\\/]hooks\.json)`;
+const PROTECTED_HARNESS_PATH_RE = new RegExp(`(?:^|[\\/])${PROTECTED_HARNESS_SOURCE}$`, "i");
+const PROTECTED_HARNESS_FRAGMENT_RE = new RegExp(`(?<![\\w.-])${PROTECTED_HARNESS_SOURCE}(?![\\w.-])`, "i");
 
 function normalize(value) {
   return String(value || "").trim().replace(/\s+/g, " ");

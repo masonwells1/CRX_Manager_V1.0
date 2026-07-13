@@ -24,6 +24,8 @@ Claude review round 5 validated the design reframing and most round-4 fixes, the
 
 Claude review round 6 returned SHIP-WITH-FOLLOWUPS with no blocker/high findings and minted an exact-SHA clean proof. Its three MED consistency follow-ups are now closed: proof and harness path matchers share trailing shell-separator coverage (`;`, `|`, `&`, parentheses), and structured `apply_patch` free-form bodies are scanned for critical harness destinations just like proof destinations. Regression tests cover each reported spelling.
 
+Claude review round 7 again returned SHIP-WITH-FOLLOWUPS with no blocker/high findings and an exact-SHA clean proof. The two pre-activation follow-ups now use the durable form Claude recommended: proof/harness matchers use filename-character boundaries instead of enumerating shell delimiters, and the protected harness set includes both `live-testdata-lib.mjs` (the read-only SQL classifier dependency) and `codex-hook-adapter.mjs` (the Codex hook dispatcher). Tests cover comma-separated PowerShell paths, no-space output redirects, and direct writes to both dependencies.
+
 ---
 
 ## 2026-07-13 — Auto-cleanup of finished worktrees/branches (SessionStart guard)

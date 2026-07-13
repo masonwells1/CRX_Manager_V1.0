@@ -59,7 +59,11 @@ export function reviewProofPathMentioned(value) {
   // changed into session-state on a previous tool call: `printf ... >
   // codex-review-forged.json` must still be recognized without the directory
   // appearing in the second command.
-  return /(?:^|[\s"'=:>\x3c|\/])(?:claude-review-push\.json|codex-review-[^\s/"']+\.json)(?:$|[\s"';|&()])/i.test(text);
+  // Filename-character boundaries avoid an endless delimiter allowlist: shell
+  // separators, commas, redirects, parentheses, and future punctuation all
+  // delimit the protected basename, while embedded lookalikes such as
+  // `my-claude-review-push.json.bak` do not match.
+  return /(?<![\w.-])(?:claude-review-push\.json|codex-review-[^\s/"']+\.json)(?![\w.-])/i.test(text);
 }
 
 export function reviewStateDirectoryMentioned(value) {
