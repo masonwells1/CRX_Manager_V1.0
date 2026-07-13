@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { evaluateProductionAction, isClearlyReadOnlySql } from "./production-action-guard.mjs";
+import { evaluateProductionAction, isClearlyReadOnlySql, pullRequestChecksGreen } from "./production-action-guard.mjs";
 
 const projectRoot = process.cwd();
 const guardPath = path.join(projectRoot, ".codex", "hooks", "production-action-guard.mjs");
@@ -91,6 +91,21 @@ try {
     toolInput: { command: "git push origin :main" },
     repoDir: risky.repo,
   }).blocked, true, "deleting main stays denied");
+  for (const command of [
+    "git push origin main --force",
+    "git push origin main -f",
+    "git push origin +HEAD:main",
+    "git push origin \"+HEAD:main\"",
+    "git -C . push --force origin main",
+    "git push origin main --force-with-lease",
+    "git push -uf origin main",
+  ]) {
+    assert.equal(evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command },
+      repoDir: risky.repo,
+    }).blocked, true, `force-style main push denied: ${command}`);
+  }
 
   assert.equal(evaluatePush(risky.repo, now).blocked, true, "risky main push denied without proof");
 
@@ -145,8 +160,40 @@ try {
     repoDir: risky.repo,
   }).blocked, true, "ambiguous explicit git-dir contexts deny closed");
 
-  const mainPrJson = JSON.stringify({ baseRefName: "main", headRefName: "feature/test", headRefOid: risky.sha });
+  const greenChecks = [
+    { __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS", name: "build" },
+    { __typename: "StatusContext", state: "SUCCESS", context: "Vercel" },
+  ];
+  const mainPr = {
+    baseRefName: "main",
+    headRefName: "feature/test",
+    headRefOid: risky.sha,
+    mergeStateStatus: "CLEAN",
+    statusCheckRollup: greenChecks,
+  };
+  const mainPrJson = JSON.stringify(mainPr);
   const featurePrJson = JSON.stringify({ baseRefName: "develop", headRefName: "feature/test", headRefOid: risky.sha });
+  assert.equal(pullRequestChecksGreen(mainPr), true, "clean PR with completed passing checks is green");
+  assert.equal(pullRequestChecksGreen({ ...mainPr, mergeStateStatus: "BLOCKED" }), false, "blocked merge state is not green");
+  assert.equal(pullRequestChecksGreen({ ...mainPr, statusCheckRollup: [] }), false, "missing checks are not green");
+  assert.equal(pullRequestChecksGreen({
+    ...mainPr,
+    statusCheckRollup: [{ __typename: "CheckRun", status: "IN_PROGRESS", conclusion: "" }],
+  }), false, "pending checks are not green");
+  assert.equal(pullRequestChecksGreen({
+    ...mainPr,
+    statusCheckRollup: [{ __typename: "StatusContext", state: "FAILURE" }],
+  }), false, "failed status contexts are not green");
+
+  unlinkSync(proofPath(risky.repo));
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh pr merge 123 --squash" },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: () => mainPrJson,
+  }).blocked, true, "risky gh merge to main is denied without Claude proof");
+  writeProof(risky.repo, valid);
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
     toolInput: { command: "gh pr merge 123 --squash" },
@@ -154,6 +201,24 @@ try {
     nowMs: now,
     runGh: () => mainPrJson,
   }).blocked, false, "gh PR merge to main uses the same valid proof gate");
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh api -X PUT repos/crop/crx/pulls/123/merge -f merge_method=squash" },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: () => mainPrJson,
+  }).blocked, false, "gh API merge route uses the same green-CI and proof gate");
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh pr merge 123 --squash" },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: () => JSON.stringify({
+      ...mainPr,
+      mergeStateStatus: "UNSTABLE",
+      statusCheckRollup: [{ __typename: "CheckRun", status: "IN_PROGRESS", conclusion: "" }],
+    }),
+  }).blocked, true, "gh PR merge denies when GitHub checks are not green");
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
     toolInput: { command: '"C:\\Program Files\\GitHub CLI\\gh.exe" pr merge 123 --squash' },

@@ -24,6 +24,10 @@ function unquoteShellArg(value) {
   return text;
 }
 
+function splitShellArgs(value) {
+  return String(value || "").match(/"[^"]*"|'[^']*'|\S+/g)?.map(unquoteShellArg) || [];
+}
+
 // Resolve the repository directory selected by one or more `git -C` options.
 // Git applies repeated -C values from left to right, so preserve that behavior.
 export function gitPushCwd(cmd, fallbackCwd) {
@@ -49,7 +53,7 @@ export function mainPushSource(cmd, currentBranch) {
   const c = String(cmd || "");
   const m = c.match(GIT_PUSH_RE);
   if (!m) return null;
-  const args = m[1].trim().split(/\s+/).filter(Boolean).filter((a) => !a.startsWith("-"));
+  const args = splitShellArgs(m[1]).filter((a) => !a.startsWith("-"));
   const refspecs = args.slice(1); // args[0] = remote, if present
   if (refspecs.length === 0) return currentBranch === "main" ? "HEAD" : null;
   for (const rs of refspecs) {
@@ -68,6 +72,23 @@ export function mainPushSource(cmd, currentBranch) {
 // Back-compat boolean used by tests/other callers.
 export function pushTargetsMain(cmd, currentBranch) {
   return mainPushSource(cmd, currentBranch) !== null;
+}
+
+// A main-bound push is forced when it carries any history-rewriting force flag
+// anywhere after `push`, or uses Git's `+<src>:<dst>` force-refspec syntax.
+// This must be checked before diff/risk classification: a rewind can make the
+// three-dot diff empty and would otherwise look harmless.
+export function mainPushIsForced(cmd, currentBranch) {
+  if (mainPushSource(cmd, currentBranch) === null) return false;
+  const args = String(cmd || "").match(GIT_PUSH_RE)?.[1] || "";
+  const tokens = splitShellArgs(args);
+  const forceFlag = tokens.some((token) =>
+    /^--force(?:-with-lease)?(?:=\S+)?$/.test(token) ||
+    token === "--force-if-includes" ||
+    /^-[A-Za-z]*f[A-Za-z]*$/.test(token)
+  );
+  const forceRefspec = tokens.some((token) => token.startsWith("+") && token.length > 1);
+  return forceFlag || forceRefspec;
 }
 
 // A changed file is "risky" (needs an independent Codex verdict) when it touches

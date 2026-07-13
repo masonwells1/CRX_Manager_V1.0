@@ -10,6 +10,7 @@ import {
   contentIsRisky,
   gitPushCwd,
   isGitPush,
+  mainPushIsForced,
   mainPushSource,
   riskyFiles,
 } from "../../.claude/hooks/codex-push-lib.mjs";
@@ -77,7 +78,7 @@ function proofRequirement(headSha, riskDescription, detail) {
     `(or --verdict blockers-fixed after verified fixes). Required JSON: ` +
     `{\"claude_ran\":true,\"verdict\":\"clean|blockers-fixed\",` +
     `\"head_sha\":\"${headSha || "<exact pushed SHA>"}\",\"timestamp\":\"<ISO-8601, 0-30 minutes old>\"}. ` +
-    `The proof is exact-SHA-bound; future-dated, stale, malformed, BOM-corrupted, or self-certified proof is refused.`
+    `The proof is exact-SHA-bound; future-dated, stale, malformed, or BOM-corrupted proof is refused.`
   );
 }
 
@@ -181,6 +182,31 @@ function ghMergeRequest(command) {
   return { selector, repo };
 }
 
+function ghApiMergeRequest(command) {
+  if (!/(?:^|\s)(?:"[^"]*[\\/]gh\.exe"|\S*[\\/]gh(?:\.exe)?|gh(?:\.exe)?)\s+api\b/i.test(String(command || ""))) {
+    return null;
+  }
+  const words = shellWords(command);
+  let method = "GET";
+  let endpoint = "";
+  for (let index = 0; index < words.length; index += 1) {
+    const word = words[index];
+    if (word === "-X" || word === "--method") {
+      method = String(words[index + 1] || "").toUpperCase();
+      index += 1;
+      continue;
+    }
+    if (word.startsWith("--method=")) {
+      method = word.slice("--method=".length).toUpperCase();
+      continue;
+    }
+    if (/^\/?repos\/[^/]+\/[^/]+\/pulls\/\d+\/merge$/i.test(word)) endpoint = word;
+  }
+  if (method !== "PUT" || !endpoint) return null;
+  const match = endpoint.match(/^\/?repos\/([^/]+)\/([^/]+)\/pulls\/(\d+)\/merge$/i);
+  return match ? { selector: match[3], repo: `${match[1]}/${match[2]}` } : null;
+}
+
 function mcpMergeRequest(toolInput) {
   const selector = toolInput.pull_number ?? toolInput.pullNumber ?? toolInput.pullRequestNumber ?? toolInput.number ?? "";
   const owner = toolInput.owner ?? toolInput.organization ?? "";
@@ -192,11 +218,28 @@ function mcpMergeRequest(toolInput) {
 function resolvePullRequest({ request, repoDir, runGh }) {
   const args = ["pr", "view"];
   if (request.selector) args.push(request.selector);
-  args.push("--json", "baseRefName,headRefName,headRefOid");
+  args.push("--json", "baseRefName,headRefName,headRefOid,mergeStateStatus,statusCheckRollup");
   if (request.repo) args.push("--repo", request.repo);
   const data = JSON.parse(runGh(args, repoDir));
   if (!data?.baseRefName || !data?.headRefOid) throw new Error("GitHub did not return baseRefName and headRefOid");
   return data;
+}
+
+export function pullRequestChecksGreen(pullRequest) {
+  if (String(pullRequest?.mergeStateStatus || "").toUpperCase() !== "CLEAN") return false;
+  const checks = pullRequest?.statusCheckRollup;
+  if (!Array.isArray(checks) || checks.length === 0) return false;
+  return checks.every((check) => {
+    if (check?.__typename === "StatusContext") {
+      return String(check.state || "").toUpperCase() === "SUCCESS";
+    }
+    if (check?.__typename === "CheckRun") {
+      const status = String(check.status || "").toUpperCase();
+      const conclusion = String(check.conclusion || "").toUpperCase();
+      return status === "COMPLETED" && ["SUCCESS", "NEUTRAL", "SKIPPED"].includes(conclusion);
+    }
+    return false;
+  });
 }
 
 function gatePullRequestMerge({ request, repoDir, nowMs, runGit, runGh }) {
@@ -213,6 +256,11 @@ function gatePullRequestMerge({ request, repoDir, nowMs, runGit, runGh }) {
     return denied(`CODEX PRODUCTION GATE: merges to protected branch ${base} remain blocked.`);
   }
   if (base !== "main") return { blocked: false };
+  if (!pullRequestChecksGreen(pullRequest)) {
+    return denied(
+      "CODEX PRODUCTION GATE: this pull request is not merge-ready with a fully green GitHub pipeline. Wait until mergeStateStatus is CLEAN and every reported check is completed successfully, neutral, or skipped."
+    );
+  }
   return gateMainChange({ repoDir, sourceSha: pullRequest.headRefOid, nowMs, runGit });
 }
 
@@ -248,12 +296,12 @@ export function evaluateProductionAction({
     });
   }
 
-  const command = normalize(toolInput.command ?? toolInput.cmd ?? "");
+  const command = String(toolInput.command ?? toolInput.cmd ?? "").trim();
   if (!command) return { blocked: false };
 
   const commandSegments = command.split(/(?:&&|\|\||;|\r?\n)/).map((segment) => segment.trim()).filter(Boolean);
   for (const segment of commandSegments) {
-    const ghRequest = ghMergeRequest(segment);
+    const ghRequest = ghMergeRequest(segment) || ghApiMergeRequest(segment);
     if (!ghRequest) continue;
     const result = gatePullRequestMerge({
       request: ghRequest,
@@ -289,6 +337,9 @@ export function evaluateProductionAction({
       return denied("CODEX PRODUCTION GATE: `git push origin :main` deletes the production branch and is always denied.");
     }
     if (sourceRef) {
+      if (mainPushIsForced(segment, currentBranch)) {
+        return denied("CODEX PRODUCTION GATE: force-pushing production main rewrites shared history and is always denied.");
+      }
       const result = gateMainChange({ repoDir: pushRepoDir, sourceRef, nowMs, runGit });
       if (result.blocked) return result;
     }

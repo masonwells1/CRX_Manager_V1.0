@@ -102,7 +102,7 @@
             "type": "command",
             "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/production-action-guard.mjs\"",
             "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$root = git rev-parse --show-toplevel; node (Join-Path $root '.codex/hooks/production-action-guard.mjs')\"",
-            "timeout": 5
+            "timeout": 15
           }
         ]
       }

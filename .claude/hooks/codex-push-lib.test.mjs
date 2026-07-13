@@ -7,6 +7,7 @@ import {
   claudeProofValid,
   contentIsRisky,
   gitPushCwd,
+  mainPushIsForced,
   mainPushSource,
   proofValid,
   riskyFiles,
@@ -19,6 +20,17 @@ assert.equal(mainPushSource("git push origin HEAD:main", "feature"), "HEAD");
 assert.equal(mainPushSource("git -C ../repo push origin release:main", "feature"), "release");
 assert.equal(mainPushSource("git push origin :main", "feature"), "DELETE");
 assert.equal(mainPushSource("git push origin feature", "feature"), null);
+
+assert.equal(mainPushIsForced("git push origin main --force", "feature"), true);
+assert.equal(mainPushIsForced("git push origin main -f", "feature"), true);
+assert.equal(mainPushIsForced("git push origin main --force-with-lease", "feature"), true);
+assert.equal(mainPushIsForced("git push origin main --force-with-lease=refs/heads/main:abc", "feature"), true);
+assert.equal(mainPushIsForced("git push origin +HEAD:main", "feature"), true);
+assert.equal(mainPushIsForced("git push origin \"+HEAD:main\"", "feature"), true);
+assert.equal(mainPushIsForced("git -C . push --force origin main", "feature"), true);
+assert.equal(mainPushIsForced("git push -uf origin main", "feature"), true);
+assert.equal(mainPushIsForced("git push origin feature --force", "feature"), false);
+assert.equal(mainPushIsForced("git push origin HEAD:main", "feature"), false);
 
 assert.equal(gitPushCwd("git -C ../repo push origin HEAD:main", "C:/work/current"), path.resolve("C:/work/repo"));
 assert.equal(gitPushCwd("git -C .. -C sibling push origin HEAD:main", "C:/work/current"), path.resolve("C:/work/sibling"));

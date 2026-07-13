@@ -15,6 +15,8 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 
 **Proposed decision:** Codex may push or merge ordinary reversible code to `main` once the full green pipeline passes. A main-bound diff classified as risky by the shared `.claude/hooks/codex-push-lib.mjs` path/content rules additionally requires a real Claude review of that exact commit in the current session and a fresh SHA-bound proof at `.claude/session-state/claude-review-push.json`. The Codex production guard applies this rule to direct pushes, `git -C` forms, `gh pr merge`, and GitHub MCP merge tools, and fails closed when it cannot verify the ref, diff, PR target, or proof.
 
+**Review hardening:** force intent is checked before diff classification and always denied for main-bound `--force`, `-f`, `--force-with-lease`, or `+` refspec pushes. Server-side merge routes (`gh pr merge`, direct `gh api .../pulls/<n>/merge`, and GitHub MCP merge tools) must report `mergeStateStatus=CLEAN` and a non-empty rollup with every check completed in an accepted green state before the risk/proof gate can allow them.
+
 **Unchanged boundaries:** this grant never covers deleting `main`, force-pushing, live migrations or data writes, edge-function deploys, secrets/auth/permission changes, or bypassing Husky. Codex's Supabase access remains read-only. The initial harness branch may only be pushed to its feature branch; Claude cross-review plus Mason's explicit merge OK activates the grant.
 
 **Why:** Mason wants the same momentum for either primary coding agent, while preserving a deterministic second-model gate on money, database, security, and other high-blast-radius changes.

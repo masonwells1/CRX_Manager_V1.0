@@ -13,7 +13,7 @@
 import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
-import { isGitPush, mainPushSource, riskyFiles, contentIsRisky, proofValid } from "./codex-push-lib.mjs";
+import { isGitPush, mainPushIsForced, mainPushSource, riskyFiles, contentIsRisky, proofValid } from "./codex-push-lib.mjs";
 
 function passthrough() { process.exit(0); }               // emit nothing → normal flow (git push is allow-listed)
 function deny(reason) {
@@ -42,6 +42,9 @@ const srcRef = mainPushSource(cmd, branch);
 if (!srcRef) passthrough();
 if (srcRef === "DELETE") {
   deny("CODEX GATE: `git push origin :main` DELETES the production main branch. Never do this. If a bad commit landed, use the /rollback runbook (compensating commit / Vercel promote-previous) instead.");
+}
+if (mainPushIsForced(cmd, branch)) {
+  deny("CODEX GATE: force-pushing production main rewrites shared history and is always blocked. Use a normal reviewed push, a compensating commit, or the /rollback runbook.");
 }
 
 // Need origin/main to diff against; if absent, fail open.
