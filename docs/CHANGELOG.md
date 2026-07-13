@@ -4,6 +4,12 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-13 — Ledger guard: agent-surface changes must be logged in the same commit (hard, pre-commit)
+
+Mason's ask: force agents to keep a ledger of changes, findings, and decisions — as a hard guard, not prose. New `scripts/check-ledger-update.mjs` runs first in `.husky/pre-commit` and **blocks** any commit that stages agent-surface/policy files (`.claude/commands|skills|hooks|workflows|settings.json`, `AGENTS.md`, `CLAUDE.md`, `.husky/`, guard scripts) without also staging a ledger update (`docs/CHANGELOG.md`, any `docs/manual/*.md`, `agent-guardrails.md`, or a `docs/loops/` ledger). 31 assertions (`scripts/check-ledger-update.test.mjs`, added to `test:correction-guards` — 560 total). The guard covers itself: changing it requires a ledger line too.
+
+---
+
 ## 2026-07-13 — SETTLED: hands-free live-migration applies in pre-authorized runs (hard guard, 5 Codex rounds)
 
 Mason settled the parked owner decision: an overnight/hands-free run he explicitly pre-authorized (armed autopilot flag) may apply a live migration WITHOUT a per-migration in-chat OK — but only through the full hard proof gate, and NEVER for destructive migrations. Enforced in `migration-apply-guard.mjs` (hard, not prose):

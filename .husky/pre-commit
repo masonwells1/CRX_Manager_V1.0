@@ -1,5 +1,17 @@
 #!/usr/bin/env sh
 
+# --- Ledger guard (HARD, Mason 2026-07-13): an agent-surface/policy change must
+# carry a ledger update (CHANGELOG / DECISION_LOG / KNOWN_ISSUES / manual doc /
+# loop ledger) in the SAME commit. Cheap check, so it runs FIRST — fail fast
+# before the expensive lint/build steps. sh -e note: the || branch makes the
+# block message print before the exit.
+echo "📒 Checking ledger requirement (agent-surface changes must be logged)..."
+node scripts/check-ledger-update.mjs || {
+  echo ""
+  echo "❌ LEDGER MISSING — commit blocked. Stage a CHANGELOG/DECISION_LOG/KNOWN_ISSUES update describing this change."
+  exit 1
+}
+
 # --- SQL Migration Validation (prevents known anti-patterns) ---
 echo "🛡️ Validating SQL migrations..."
 bash scripts/validate-sql.sh
