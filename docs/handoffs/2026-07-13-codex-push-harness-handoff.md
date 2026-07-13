@@ -3,7 +3,7 @@
 **From:** Claude (Fable 5), 2026-07-13 session
 **To:** Codex (gpt-5.5+), executing in this repo with workspace-write
 **Authorized by:** Mason Wells (owner), in-chat, 2026-07-13
-**Status when you read this:** implementation branch exists but is not active. Claude review rounds 6 and 7 returned SHIP-WITH-FOLLOWUPS with no blocker/high findings and exact-SHA clean proofs; every reported pre-activation MED follow-up was then fixed with regression tests, using filename-character boundaries rather than another separator list. Repository-owned hooks still cannot be the sole trust boundary for an agent with arbitrary local process/file access. It goes LIVE only after GitHub protects `main` with a required-PR + passing-check rule, Claude re-reviews the final follow-up commit cleanly, and Mason explicitly approves the merge — see "How this lands" at the bottom.
+**Status when you read this:** implementation branch exists but is not active. Claude review rounds 6 and 7 returned SHIP-WITH-FOLLOWUPS with no blocker/high findings and exact-SHA clean proofs; every reported pre-activation MED follow-up was then fixed with regression tests, using filename-character boundaries rather than another separator list. Round 8 caught and fixed one Windows-only regex escaping regression with explicit backslash-path coverage. Repository-owned hooks still cannot be the sole trust boundary for an agent with arbitrary local process/file access. It goes LIVE only after GitHub protects `main` with a required-PR + passing-check rule, Claude re-reviews the final follow-up commit cleanly, and Mason explicitly approves the merge — see "How this lands" at the bottom.
 
 ---
 

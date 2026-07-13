@@ -26,6 +26,8 @@ Claude review round 6 returned SHIP-WITH-FOLLOWUPS with no blocker/high findings
 
 Claude review round 7 again returned SHIP-WITH-FOLLOWUPS with no blocker/high findings and an exact-SHA clean proof. The two pre-activation follow-ups now use the durable form Claude recommended: proof/harness matchers use filename-character boundaries instead of enumerating shell delimiters, and the protected harness set includes both `live-testdata-lib.mjs` (the read-only SQL classifier dependency) and `codex-hook-adapter.mjs` (the Codex hook dispatcher). Tests cover comma-separated PowerShell paths, no-space output redirects, and direct writes to both dependencies.
 
+Claude review round 8 caught a Windows-only escaping regression in the new structured harness-path matcher. The regex construction now uses `String.raw`, preserving both `/` and `\` separators, with direct Write/Edit regression tests for Windows absolute/relative paths to Claude hooks, Codex hooks, and the review wrapper.
+
 ---
 
 ## 2026-07-13 — Auto-cleanup of finished worktrees/branches (SessionStart guard)
