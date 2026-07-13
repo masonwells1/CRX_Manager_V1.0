@@ -50,4 +50,4 @@ try {
 // Verify the flag actually took (prove it, don't assume).
 const ok = existsSync(flagPath) && flagActive(readFileSync(flagPath, "utf8"), Date.now()).active;
 if (!ok) { console.error("Arm wrote the flag but verification failed — do NOT tell Mason it's armed."); process.exit(1); }
-console.log(`AUTOPILOT: ON until ${expires} (${hours}h). Loops won't stall on permission prompts; push/deploy/live-migration/destructive actions are STILL blocked.`);
+console.log(`AUTOPILOT: ON until ${expires} (${hours}h). Loops won't stall on permission prompts; push/deploy/destructive actions are STILL blocked. Live migrations may apply hands-free through the full proof gate (hash-bound reviewer proof + hash-bound Codex proof codex-review-mig-<name>.json — settled 2026-07-13 policy); DESTRUCTIVE migrations are refused while armed, and if this arming EXPIRES all applies park until Mason returns.`);

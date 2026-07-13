@@ -67,6 +67,24 @@ const UPDATE_ANY_RE = new RegExp(`\\bupdate\\s+${QUAL}(${tableAlt(BUSINESS_TABLE
 // to the classifier. Matches "DO $tag$" and "DO LANGUAGE plpgsql $tag$".
 const DO_PREFIX_RE = /\bdo(?:\s+language\s+[a-z_][a-z0-9_]*)?\s*$/i;
 
+// Comments are legal between DO and its dollar quote (`DO /* x */ $$...$$`,
+// `DO -- note\n$$...$$`) and used to hide the executable body from the DO
+// check (Codex P1 2026-07-13 round 3). Strip trailing comments/whitespace from
+// the already-emitted text before testing the DO prefix. Used ONLY for that
+// test — never for output — so an over-strip can only make MORE text visible
+// to the classifiers (the safe direction).
+function stripTrailingComments(s) {
+  let t = s;
+  let prev;
+  do {
+    prev = t;
+    t = t.replace(/\s+$/, "");
+    t = t.replace(/\/\*(?:[^*]|\*(?!\/))*\*\/$/, "");
+    t = t.replace(/--[^\n]*$/, "");
+  } while (t !== prev);
+  return t;
+}
+
 // Strip dollar-quoted string bodies ($function$...$function$, $$...$$, any
 // $tag$...$tag$ pair) so classification sees only top-level hand-written SQL —
 // an INSERT INTO financial_audit_log inside a CREATE OR REPLACE FUNCTION body
@@ -75,7 +93,7 @@ const DO_PREFIX_RE = /\bdo(?:\s+language\s+[a-z_][a-z0-9_]*)?\s*$/i;
 // (not stripped) so a stray $$ inside them can't open a fake quote span that
 // swallows real statements. DO bodies are kept (they execute). An unterminated
 // dollar-quote leaves the rest untouched (fail closed).
-export function stripDollarQuoted(sql) {
+function stripDollarQuotedCore(sql, keepBody) {
   const src = String(sql || "");
   let out = "";
   let i = 0;
@@ -112,9 +130,82 @@ export function stripDollarQuoted(sql) {
         const close = src.indexOf(open, i + open.length);
         if (close === -1) { out += src.slice(i); break; }
         const end = close + open.length;
-        out += DO_PREFIX_RE.test(out) ? src.slice(i, end) : " ";
+        out += keepBody(out) ? src.slice(i, end) : " ";
         i = end; continue;
       }
+    }
+    out += ch; i++;
+  }
+  return out;
+}
+
+export function stripDollarQuoted(sql) {
+  return stripDollarQuotedCore(sql, (out) => DO_PREFIX_RE.test(stripTrailingComments(out)));
+}
+
+// Function-definition bodies ONLY: a dollar-quote is stripped iff the last
+// non-comment token before it is `AS` (the CREATE FUNCTION body marker in
+// this repo's migration style). EVERYTHING ELSE — DO blocks with comments
+// anywhere in their prefix, unknown or obfuscated forms — stays VISIBLE.
+// Default-keep is the fail-safe direction (Codex P1 2026-07-13 round 4: the
+// DO-prefix allowlist kept being bypassable by legal comment placement; an
+// over-kept body can only cause a false PARK, never hidden data loss).
+const FN_BODY_PREFIX_RE = /\bas\s*$/i;
+function stripFunctionBodiesOnly(sql) {
+  return stripDollarQuotedCore(sql, (out) => !FN_BODY_PREFIX_RE.test(stripTrailingComments(out)));
+}
+
+// Quote-aware comment removal. String literals, quoted identifiers, and
+// dollar-quoted spans are copied VERBATIM — a `/*` or `--` inside them is data,
+// not a comment (Codex P1 2026-07-13 round 5: `SELECT '/*'; DELETE FROM
+// customers; SELECT '*/';` let a raw-regex comment strip swallow the real
+// DELETE). Real comments become a single space. Side effect: a comment INSIDE
+// a kept dollar-quoted body (e.g. a DO block) is no longer stripped, so prose
+// like `-- never TRUNCATE` in a DO body can false-positive — that parks the
+// migration for Mason, which is the safe direction.
+export function stripCommentsQuoteAware(sql) {
+  const src = String(sql || "");
+  let out = "";
+  let i = 0;
+  const n = src.length;
+  while (i < n) {
+    const ch = src[i];
+    if (ch === "'") {
+      let j = i + 1;
+      while (j < n) {
+        if (src[j] === "'" && src[j + 1] === "'") { j += 2; continue; }
+        if (src[j] === "'") { j++; break; }
+        j++;
+      }
+      out += src.slice(i, j); i = j; continue;
+    }
+    if (ch === '"') {
+      let j = i + 1;
+      while (j < n && src[j] !== '"') j++;
+      out += src.slice(i, j + 1); i = j + 1; continue;
+    }
+    if (ch === "$") {
+      const tag = /^\$([A-Za-z_][A-Za-z0-9_]*)?\$/.exec(src.slice(i, i + 66));
+      if (tag) {
+        const open = tag[0];
+        const close = src.indexOf(open, i + open.length);
+        const end = close === -1 ? n : close + open.length;
+        out += src.slice(i, end); i = end; continue;
+      }
+    }
+    if (ch === "-" && src[i + 1] === "-") {
+      let j = src.indexOf("\n", i);
+      if (j === -1) j = n;
+      out += " "; i = j; continue;
+    }
+    if (ch === "/" && src[i + 1] === "*") {
+      let depth = 1, j = i + 2;
+      while (j < n && depth > 0) {
+        if (src[j] === "/" && src[j + 1] === "*") { depth++; j += 2; continue; }
+        if (src[j] === "*" && src[j + 1] === "/") { depth--; j += 2; continue; }
+        j++;
+      }
+      out += " "; i = j; continue;
     }
     out += ch; i++;
   }
@@ -220,6 +311,51 @@ export function classifySql(query) {
   }
 
   return { block: false };
+}
+
+// ── Destructive-migration classifier (Mason's settled 2026-07-13 policy) ─────
+// Detects APPLY-TIME data destruction in a migration's SQL: DROP TABLE,
+// ALTER TABLE ... DROP COLUMN, TRUNCATE, or ANY top-level DELETE FROM. Runs
+// against stripDollarQuoted() output, so a DELETE inside a CREATE FUNCTION
+// body (which does NOT execute at apply time) doesn't count — but a DO block's
+// body does (it executes immediately).
+// The DELETE rule is deliberately GENERIC — no table allowlist (Codex P1
+// 2026-07-13 round 2: a hard-coded list missed live tables like invoice_shares
+// and finance_charges; in a migration, a top-level DELETE is rare enough that
+// every one deserves Mason's eyes). DROP POLICY/INDEX/TRIGGER/FUNCTION/
+// CONSTRAINT are routine schema hygiene and deliberately do NOT match.
+// Comments are removed before matching so prose like "-- never TRUNCATE here"
+// can't false-positive. Conservative by design: used by migration-apply-guard
+// to refuse a destructive apply in a hands-free run — a false positive parks
+// the migration for the morning, a false negative would delete data with
+// nobody watching.
+export function destructiveMigrationCheck(sql) {
+  // Strip ONLY clear function-definition bodies (AS $$...$$) — everything
+  // else, including DO blocks however commented, stays visible (default-keep).
+  const stripped = stripFunctionBodiesOnly(String(sql || ""));
+  if (!stripped) return { destructive: false };
+  // Quote-aware, NOT raw regex: a `/*` inside a string literal must not open a
+  // fake comment span that swallows a real DELETE (Codex P1 round 5).
+  const t = stripCommentsQuoteAware(stripped);
+  if (/\bdrop\s+table\b/i.test(t)) return { destructive: true, reason: "DROP TABLE" };
+  // DOMAIN/TYPE/EXTENSION drops can CASCADE into data-bearing columns/tables;
+  // any of them in a migration is rare enough to deserve Mason's eyes
+  // (Codex P1 2026-07-13 round 4).
+  if (/\bdrop\s+(?:schema|database|owned|domain|type|extension)\b/i.test(t)) return { destructive: true, reason: "DROP SCHEMA/DATABASE/OWNED/DOMAIN/TYPE/EXTENSION" };
+  // `COLUMN` is OPTIONAL in ALTER TABLE ... DROP <col> (Codex P1 round 4).
+  // Match any ALTER TABLE ... DROP <thing> EXCEPT the non-data forms:
+  // DROP CONSTRAINT, and the ALTER COLUMN sub-forms DROP NOT NULL / DROP
+  // DEFAULT / DROP IDENTITY / DROP EXPRESSION.
+  if (/\balter\s+table\b[^;]*\bdrop\s+(?!constraint\b|not\s+null\b|default\b|identity\b|expression\b)/i.test(t)) {
+    return { destructive: true, reason: "ALTER TABLE ... DROP [COLUMN]" };
+  }
+  if (/\btruncate\b/i.test(t)) return { destructive: true, reason: "TRUNCATE" };
+  if (/\bdelete\s+from\b/i.test(t)) return { destructive: true, reason: "top-level DELETE FROM (any table)" };
+  // MERGE can delete matched rows (WHEN MATCHED THEN DELETE) — and is rare
+  // enough in a migration that ANY top-level MERGE deserves Mason's eyes
+  // (Codex P1 2026-07-13 round 3).
+  if (/\bmerge\s+into\b/i.test(t)) return { destructive: true, reason: "MERGE INTO (can delete matched rows)" };
+  return { destructive: false };
 }
 
 export { BUSINESS_TABLES, FINANCIAL_TABLES };

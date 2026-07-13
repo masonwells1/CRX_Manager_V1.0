@@ -9,6 +9,50 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 
 ---
 
+## 2026-07-13 — SETTLED: pre-authorized runs may apply live migrations without a per-migration in-chat OK
+
+**Decision (Mason, in-chat, 2026-07-13):** the migration-apply approval question flagged on
+2026-07-13 is settled as option (b), with a hard carve-out. A live migration apply is authorized
+when BOTH hold:
+
+1. **The hard proof gate passes (never loosens):** a fresh same-session migration-apply-guard
+   proof (rls-security-reviewer + migration-drift-reviewer), plus a real Codex verdict this
+   session for any SQL/RLS/money change.
+2. **Mason authorized the run**, in one of two forms:
+   - his in-chat OK in the current conversation (the default whenever he is present), or
+   - a **pre-authorized hands-free run**: Mason explicitly asked for the run and autopilot is
+     armed (`node .claude/hooks/autopilot-arm.mjs --hours N`) — the unexpired armed flag is the
+     durable record of that authorization. No per-migration in-chat OK is needed during such a run.
+
+**Never autonomous, even in an armed run:** destructive migrations — apply-time DROP TABLE,
+DROP COLUMN, TRUNCATE, or ANY top-level DELETE FROM (deliberately no table allowlist; deleted
+data has no one-click rollback on the free Supabase plan — no PITR) — plus edge-function
+deploys, data deletion outside migrations, and secrets/auth/permission changes. Those always
+park for Mason's fresh in-chat yes. The dedicated read-only bug-hunt loop (`loop-guard.mjs`
+worktrees) stays read-only by design — this decision does not touch it.
+
+**Hard enforcement (same day, hardened across two Codex adversarial rounds):**
+`migration-apply-guard.mjs` recognizes three states. Flag absent → interactive rules. Flag
+ACTIVE → hands-free rules: destructive migrations refused outright (default-keep SQL
+classifier — DROP TABLE/SCHEMA/TYPE/DOMAIN, DROP [COLUMN], TRUNCATE, any top-level DELETE,
+MERGE; function bodies exempt, DO blocks always visible); non-destructive applies additionally
+require BOTH a hash-bound reviewer proof (`queryHash` exactly matching the transmitted SQL)
+AND a hash-bound Codex proof (`codex-review-mig-<name>.json`: matching `queryHash`, passing
+`verdict`, fresh `timestamp`). Flag exists but EXPIRED/malformed → the authorization has
+LAPSED: ALL applies are blocked (fail closed) until Mason re-arms or disarms in person
+(`autopilot-arm.mjs --off` deletes the flag). The proof files remain self-attested —
+an honest-mistake net, not malicious-agent proof (documented residual, KNOWN_ISSUES §4b).
+
+**Why:** Mason wants overnight loops to run genuinely hands-free; the proof gate is the real
+(hard, adversarial, same-session) safety layer, and the armed-autopilot flag makes his
+pre-authorization explicit and expiring rather than an assumed standing blessing.
+
+**What this forbids/implies:** never apply on a stale or prior-session proof; never treat a
+past run's arming as covering a new run; an interactive session with Mason present still asks
+in chat; destructive migrations always stop regardless of arming.
+
+---
+
 ## 2026-07-12/13 — Backup strategy: weekly off-site + weekly in-DB snapshot
 
 **Decision:** Two independent weekly backups run: an encrypted `pg_dump` pushed to the private
@@ -33,10 +77,9 @@ live-DB apply is irreversible enough to need a real, current, adversarial second
 rubber-stamp.
 **What this forbids/implies:** never apply a live migration on a stale or "prior session"
 verdict; the proof file must be generated in the current session. In an ordinary interactive
-session, still get Mason's in-chat OK (or point to a mission/loop document where he explicitly
-pre-authorized applies for that run) — the proof gate is a floor, not a substitute for his
-authorization. (Note 2026-07-13: repo prose and session reminders disagree on whether the
-proof gate alone suffices; flagged for Mason to settle — until then, take the stricter reading.)
+session, still get Mason's in-chat OK — the proof gate is a floor, not a substitute for his
+authorization. (The wording ambiguity about pre-authorized loops is SETTLED — see the
+2026-07-13 entry above: armed autopilot + proof gate suffices in a hands-free run.)
 
 ---
 

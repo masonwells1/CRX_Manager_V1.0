@@ -26,10 +26,12 @@ For multi-file or risky work, present a short plain-English plan, name the files
 
 Standing push policy (Mason, 2026-06-16): regular, reversible code may be pushed to `main` without a fresh approval once the full pipeline is green — review clean, tests passing, and the pre-push hook's typecheck/build succeeding. A push to `main` deploys production via Vercel; the one-click rollback there is the accepted safety net. This authorization covers ordinary code only and never extends to the gated actions below.
 
+Standing hands-free migration policy (Mason, 2026-07-13): in a **pre-authorized hands-free run** — Mason explicitly asked for the run AND autopilot is armed (`node .claude/hooks/autopilot-arm.mjs --hours N`; the unexpired flag is the durable record) — a live migration may apply without a per-migration in-chat OK, provided the hard proof gate passes: fresh same-session migration-apply-guard proof plus a real Codex verdict this session for SQL/RLS/money changes. Migrations that DELETE/TRUNCATE business rows or DROP data-bearing tables/columns are **never** autonomous, armed or not. In an ordinary interactive session, a live apply still gets Mason's in-chat OK. Canonical text: `docs/manual/DECISION_LOG.md` (2026-07-13 entry).
+
 Always get Mason's explicit approval in the current conversation before:
 
 - force-pushing any branch, or pushing work that has not passed the full green pipeline;
-- applying a live database migration or changing live data;
+- applying a live database migration or changing live data (subject to the 2026-07-13 hands-free-run exception above);
 - deploying an edge function, or any production deploy outside the normal push-to-`main` path;
 - deleting data;
 - changing secrets, authentication, permissions, billing, or customer-visible production state beyond what a reviewed regular-code push inherently changes.

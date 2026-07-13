@@ -86,12 +86,12 @@ If a guard blocks you, the correct response is to **fix the underlying problem t
 |---|---|---|
 | Wrote or changed a **migration** | `/migration-review` | Produces the apply-guard proof for that migration; doesn't review unrelated frontend changes or push the migration live itself |
 | Any **SQL / RLS / money / edge-fn** change, before push | `codex-review` | A real Codex verdict *this session* — not a stale/queued one; doesn't replace the migration-review proof for `apply_migration` |
-| A **substantive feature** end to end | `/ship` pipeline | Includes the review fan-out; under the standing 2026-06-16 policy it may auto-push regular code once fully green, but it always stops before a live migration apply, edge-function deploy, or data deletion — those need Mason's fresh yes |
+| A **substantive feature** end to end | `/ship` pipeline | Includes the review fan-out; under the standing 2026-06-16 policy it may auto-push regular code once fully green. It stops before an edge-function deploy or data deletion (always), and before a live migration apply in interactive sessions — in a Mason-pre-authorized hands-free run with autopilot armed, a migration may apply via the proof gate (2026-07-13 policy; destructive migrations still stop) |
 | "**Is the whole app healthy?**" | `/audit` or `spot-check-prod` (live) | A point-in-time health read; doesn't fix anything it finds, and doesn't substitute for reviewing your specific change |
 | Broad **foundation safety** sweep | `codex-gauntlet` (foundation mode) / `review-workflow` | Wide and read-only; not scoped to your one change, so still run a focused review on what you actually touched |
 | **Two-model reconciliation** (Claude vs Codex disagree, or you want both) | `agent-pair-review` | Compares notes between models; doesn't apply fixes itself |
 
-Direct reviews are read-only. PR comment posting defaults to dry-run. None of these workflows may push, deploy, apply a live migration, mutate/delete live data, or expose secrets without the approval `AGENTS.md` requires — if a workflow's output implies one of those actions, that action still needs Mason's explicit go-ahead in this conversation.
+Direct reviews are read-only. PR comment posting defaults to dry-run. None of these workflows may push, deploy, apply a live migration, mutate/delete live data, or expose secrets without the authorization `AGENTS.md` requires — for migrations that means Mason's in-chat OK, or a hands-free run he pre-authorized with autopilot armed (2026-07-13 policy); for deploys and deletion it always means his explicit go-ahead in this conversation.
 
 ---
 

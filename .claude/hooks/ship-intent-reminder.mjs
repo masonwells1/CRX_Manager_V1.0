@@ -7,7 +7,9 @@
 //
 // SAFETY: this NEVER authorizes a prod action beyond the recorded push policy —
 // it injects the single canonical PUSH_POLICY (auto-push once green; hard gates =
-// live migration / edge deploy / data deletion stay Mason-only).
+// edge deploy / data deletion stay Mason-only, live migration per the settled
+// 2026-07-13 rule: interactive = ask, armed hands-free run = proof gate,
+// destructive = never autonomous).
 //
 // It only injects context (additionalContext) — it cannot force a tool call, and a
 // false-positive is harmless (the reminder itself says: if this is a question or a

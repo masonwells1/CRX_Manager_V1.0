@@ -4,6 +4,18 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-13 — SETTLED: hands-free live-migration applies in pre-authorized runs (hard guard, 5 Codex rounds)
+
+Mason settled the parked owner decision: an overnight/hands-free run he explicitly pre-authorized (armed autopilot flag) may apply a live migration WITHOUT a per-migration in-chat OK — but only through the full hard proof gate, and NEVER for destructive migrations. Enforced in `migration-apply-guard.mjs` (hard, not prose):
+
+- **Interactive (no flag):** unchanged — reviewer proof unblocks the tool; Mason's in-chat OK authorizes the apply.
+- **Armed (fresh flag):** requires the hash-bound reviewer proof (exact `queryHash`, both reviewer names, fresh) PLUS a content-bound Codex proof `codex-review-mig-<name>.json` (same `queryHash`, clean/ship verdict, <30 min, from an actual /codex-review run this session). Destructive SQL (DROP TABLE/SCHEMA/TYPE/DOMAIN/…, ALTER…DROP col, TRUNCATE, any top-level DELETE, MERGE) is refused outright — park for the morning.
+- **Stale/malformed flag:** authorization LAPSED — ALL applies park until Mason re-arms or disarms in person (fail closed).
+- Destructive classifier survived 5 adversarial Codex rounds (comment/string-literal/dollar-quote hiding tricks all closed; quote-aware default-keep lexer). 57 dedicated guard assertions (`migration-apply-guard.test.mjs`, in the pre-commit suite — 529 total). Timestamp freshness bounded to [0, 30 min] so future-dated proofs fail. Canonical policy text: `docs/manual/DECISION_LOG.md` (2026-07-13); residuals documented in KNOWN_ISSUES §4b.
+- Reconciled everywhere the old "always ask" rule lived: AGENTS.md, CLAUDE.md, /ship, /migration-review, autopilot arm/reminder/unattended hooks, agent-guardrails.md, OWNER_PLAYBOOK (+ artifact page), AGENT_ONBOARDING.
+
+---
+
 ## 2026-07-13 — Operating Manual sprint: docs/manual/ synthesis layer, guard-net hardening (5 Codex rounds), owner playbook
 
 Fable legacy sprint — durable infrastructure so future/cheaper agents keep top-tier quality. Docs + agent tooling only; no `src/`, no migrations, no live writes.

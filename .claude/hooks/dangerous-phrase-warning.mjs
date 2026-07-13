@@ -88,7 +88,7 @@ const rules = [
     pattern: /\bauto[_\s-]?(commit|push|deploy|merge)\b/,
     label: "AUTO-COMMIT/PUSH/DEPLOY",
     why: `Automation is fine for regular code, but NOT for the hard gates. ${PUSH_POLICY}`,
-    alternatives: "Route the work through /ship — it reviews, tests, and auto-pushes green code to main on its own, and still STOPS for Mason's explicit OK at the hard gates (applying a live migration, deploying an edge function, deleting data)."
+    alternatives: "Route the work through /ship — it reviews, tests, and auto-pushes green code to main on its own, and still STOPS for Mason's explicit OK at the hard gates (deploying an edge function, deleting data, and live migration applies outside an armed hands-free run — see the 2026-07-13 policy in the PUSH POLICY above)."
   },
   {
     pattern: /\bbypass\s+(check_period_open|period[_\s-]?open|closed[_\s-]?period)\b/,

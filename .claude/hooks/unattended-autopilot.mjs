@@ -30,7 +30,7 @@ function allow() {
   process.exit(0);
 }
 function deny(name) {
-  process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: `AUTOPILOT: "${name}" is in the never-auto-approve set (push / deploy / live migration / destructive delete / secret write). Autopilot suppresses ordinary permission prompts but NOT these — they need Mason's explicit OK. Disarm with: node .claude/hooks/autopilot-arm.mjs --off` } }));
+  process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: `AUTOPILOT: "${name}" is in the never-auto-approve set (push / deploy / destructive delete / secret write). Autopilot suppresses ordinary permission prompts but NOT these — they need Mason's explicit OK. (Live migrations are gated separately: migration-apply-guard's proof gate, which also hard-refuses DESTRUCTIVE migrations while armed — Mason's settled 2026-07-13 policy.) Disarm with: node .claude/hooks/autopilot-arm.mjs --off` } }));
   process.exit(0);
 }
 

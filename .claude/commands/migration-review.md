@@ -42,8 +42,10 @@ The workflow runs `rls-security-reviewer` + `migration-drift-reviewer` + `typesc
 2. Show Mason each real blocker in plain English: what it is, where (`location`), why it matters, and the recommended fix.
 3. Offer to fix them. After fixing, re-run this command — the workflow re-verifies, and only a clean pass produces a proof.
 
-### 4. Apply (only after a clean proof exists, and only with Mason's explicit go-ahead)
-The proof unblocks `apply_migration`; it does not authorize it. Per Mason's standing rules, still explain the migration (offer `/explain-migration`) and wait for his approval before the apply call.
+### 4. Apply (only after a clean proof exists, and only with Mason's authorization)
+The proof unblocks `apply_migration`; it does not authorize it. Two authorization paths (settled 2026-07-13 policy):
+- **Interactive session (default):** explain the migration (offer `/explain-migration`) and wait for Mason's in-chat approval before the apply call.
+- **Pre-authorized hands-free run** (Mason explicitly asked for the run AND autopilot is armed): no per-migration ask, but the Codex gate is mandatory — run `/codex-review` on the migration (an actual verdict this session), then write the content-bound Codex proof `codex-review-mig-<safe-name>.json` (`queryHash` of the exact transmitted SQL + `verdict` + `timestamp`); the apply-guard refuses hands-free applies without it, and refuses DESTRUCTIVE migrations (data deletes, schema/table/column/type drops, MERGE) outright — park those for Mason.
 
 ## Hard rules
 - **Read-only review.** The workflow and this review step never edit code, apply migrations, or deploy.
