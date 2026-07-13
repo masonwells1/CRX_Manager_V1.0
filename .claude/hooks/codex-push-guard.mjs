@@ -60,9 +60,10 @@ function git(args, cwd) {
 }
 
 // Inspect every push in a chained/multiline command. A harmless first push must
-// not hide a later main-bound push.
+// not hide a later main-bound push. Single `|` splits too (Codex round-4):
+// both sides of a pipeline execute.
 const pushCommands = cmd
-  .split(/(?:&&|\|\||;|\r?\n)/)
+  .split(/(?:&&|\|\|?|;|\r?\n)/)
   .map((segment) => segment.trim())
   .filter((segment) => isGitPush(segment));
 

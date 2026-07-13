@@ -71,6 +71,14 @@ assert.equal(reviewProofPathMentioned(".claude/session-state/claude-review-lates
 assert.equal(reviewStateDirectoryMentioned("cd .claude/session-state"), true);
 assert.equal(reviewStateDirectoryMentioned("C:\\repo\\.claude\\session-state"), true);
 
+// Codex round-4 (2026-07-13): abbreviated bulk options count as bulk mode.
+assert.equal(pushUsesBulkMode("git push origin --mirr"), true);
+assert.equal(pushUsesBulkMode("git push origin --al"), true);
+assert.equal(pushUsesBulkMode("git push origin --pru"), true);
+assert.equal(pushUsesBulkMode("git push origin --bran"), true);
+assert.equal(pushUsesBulkMode("git push origin --tags"), false, "--tags is not a bulk-ref mode");
+assert.equal(pushUsesBulkMode("git push origin feature"), false);
+
 // Codex round-2 (2026-07-13): unambiguous long-option abbreviations count as force.
 assert.equal(mainPushIsForced("git push origin main --force-w", "feature"), true);
 assert.equal(mainPushIsForced("git push origin main --force-with", "feature"), true);

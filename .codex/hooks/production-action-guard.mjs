@@ -18,6 +18,7 @@ import {
   reviewStateDirectoryMentioned,
   riskyFiles,
 } from "../../.claude/hooks/codex-push-lib.mjs";
+import { stripCommentsQuoteAware } from "../../.claude/hooks/live-testdata-lib.mjs";
 
 const LIVE_TOOL_ACTIONS = /(?:apply_migration|deploy_edge_function|delete_branch)$/i;
 const GITHUB_MERGE_TOOL = /merge_pull_request$/i;
@@ -45,12 +46,17 @@ function denied(reason) {
 }
 
 export function isClearlyReadOnlySql(sql) {
-  const withoutComments = String(sql || "")
-    .replace(/\/\*[\s\S]*?\*\//g, " ")
-    .replace(/--[^\r\n]*/g, " ");
-  // Remove string literal contents before looking for semicolons/functions so
-  // harmless text cannot masquerade as SQL syntax.
-  const value = normalize(withoutComments.replace(/'(?:''|[^'])*'/g, "''"));
+  // Comment stripping MUST be quote-aware (Codex round-4): naive comment
+  // removal first lets `SELECT '--'; DELETE …` hide the mutation inside what
+  // looks like a comment. stripCommentsQuoteAware (shared, 5 adversarial
+  // rounds on the migration guard) removes comments while leaving '…', "…",
+  // and $tag$…$tag$ contents intact; string literals are then blanked.
+  const withoutComments = stripCommentsQuoteAware(String(sql || ""));
+  const value = normalize(
+    withoutComments
+      .replace(/\$([A-Za-z_][A-Za-z0-9_]*)?\$[\s\S]*?\$\1\$/g, "''")
+      .replace(/'(?:''|[^'])*'/g, "''")
+  );
   const statement = value.replace(/;+\s*$/, "");
   if (statement.includes(";")) return false;
   if (!/^(?:select|with|explain|show)\b/i.test(value)) return false;
@@ -214,9 +220,18 @@ function shellWords(value) {
 }
 
 function ghMergeRequest(command) {
-  const match = String(command || "").match(/(?:^|\s)(?:"[^"]*[\\/]gh\.exe"|\S*[\\/]gh(?:\.exe)?|gh(?:\.exe)?)\s+pr\s+merge\b([^;&|]*)/i);
-  if (!match) return null;
-  const words = shellWords(match[1]);
+  // Global flags may sit between `gh`, `pr`, and `merge` (`gh -R o/r pr merge`,
+  // `gh pr -R o/r merge` — Codex round-4). Require the gh binary, then scan the
+  // segment's words for `pr` followed later by `merge`; parse flags across the
+  // whole segment. Over-matching (e.g. `gh pr view merge-notes`) only routes a
+  // read through the gate, which fails safe.
+  const text = String(command || "");
+  if (!/(?:^|\s)(?:"[^"]*[\\/]gh\.exe"|\S*[\\/]gh(?:\.exe)?|gh(?:\.exe)?)(?:\s|$)/i.test(text)) return null;
+  const words = shellWords(text);
+  const prIndex = words.findIndex((word) => word.toLowerCase() === "pr");
+  if (prIndex === -1) return null;
+  const mergeIndex = words.findIndex((word, index) => index > prIndex && word.toLowerCase() === "merge");
+  if (mergeIndex === -1) return null;
   const valueFlags = new Set(["--repo", "-R", "--match-head-commit", "--subject", "--body"]);
   let selector = "";
   let repo = "";
@@ -232,7 +247,7 @@ function ghMergeRequest(command) {
       index += 1;
       continue;
     }
-    if (!word.startsWith("-") && !selector) selector = word;
+    if (index > mergeIndex && !word.startsWith("-") && !selector) selector = word;
   }
   return { selector, repo };
 }
@@ -465,7 +480,9 @@ export function evaluateProductionAction({
     return denied("CODEX PRODUCTION GATE: pushes with GIT_DIR/GIT_WORK_TREE tool environment overrides are denied. Use `git -C <repo> push`.");
   }
 
-  const commandSegments = command.split(/(?:&&|\|\||;|\r?\n)/).map((segment) => segment.trim()).filter(Boolean);
+  // Split on single `|` too (Codex round-4): `git push a | git push b` runs
+  // BOTH pushes in a shell pipeline, so every pipeline stage is a segment.
+  const commandSegments = command.split(/(?:&&|\|\|?|;|\r?\n)/).map((segment) => segment.trim()).filter(Boolean);
   for (const segment of commandSegments) {
     const ghRequest = ghMergeRequest(segment) || ghApiMergeRequest(segment);
     if (ghRequest?.unsupportedGraphql) {

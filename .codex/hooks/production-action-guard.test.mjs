@@ -407,6 +407,50 @@ try {
     runGh: () => mainPrJson,
   }).blocked, true, "GraphQL merge mutations are denied outright even with a valid proof present");
 
+  // ── Codex round-4 regressions (2026-07-13) ────────────────────────────────
+  // R4-1: comment markers inside string literals cannot hide a mutation.
+  assert.equal(isClearlyReadOnlySql("SELECT '--'; DELETE FROM invoices"), false, "comment-in-string cannot hide DELETE");
+  assert.equal(isClearlyReadOnlySql("SELECT '/*'; DROP TABLE invoices"), false, "block-comment-in-string cannot hide DROP");
+  assert.equal(isClearlyReadOnlySql("select 'it''s -- fine'"), true, "escaped quote with comment text stays readable");
+  // R4-2: gh global/repo flags between gh, pr, and merge are still gated.
+  for (const command of [
+    "gh -R crop/crx pr merge 123",
+    "gh pr -R crop/crx merge 123",
+  ]) {
+    assert.equal(evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command },
+      repoDir: risky.repo,
+      nowMs: now,
+      runGh: () => JSON.stringify({ ...mainPr, mergeStateStatus: "UNSTABLE" }),
+    }).blocked, true, `flag-separated gh merge is gated: ${command}`);
+  }
+  // R4-3: single-pipe pipelines run every stage — the later main push is seen.
+  {
+    const proofWasValid = evaluatePush(risky.repo, now).blocked === false;
+    assert.equal(evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command: "git push origin feature/test | git push origin main --force" },
+      repoDir: risky.repo,
+      nowMs: now,
+    }).blocked, true, "piped force main push is inspected and denied");
+    assert.ok(proofWasValid, "sanity: proof was valid, so the deny came from the pipe stage");
+  }
+  // R4-4: abbreviated bulk options are still bulk.
+  for (const command of [
+    "git push origin --mirr",
+    "git push origin --al",
+    "git push origin --pru",
+    "git push origin --bran",
+  ]) {
+    assert.equal(evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command },
+      repoDir: risky.repo,
+      nowMs: now,
+    }).blocked, true, `abbreviated bulk push denied: ${command}`);
+  }
+
   // R2-3: option-based deletion of main is DELETE, denied regardless of proof.
   for (const command of [
     "git push origin --delete main",
