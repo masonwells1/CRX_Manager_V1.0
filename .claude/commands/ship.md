@@ -1,11 +1,11 @@
-Drive a coding job from "implement" all the way to "reviewed, committed, and ready for Mason's production decision" — hands-off through the review-and-fix gate, pausing at the human gates Mason requires: **approve any live migration apply** and **approve the push to prod**. The independent Codex cross-review now runs automatically via the headless `codex` CLI when the change warrants it (it's a read-only gate, like the reviewer subagents) — no copy-paste. This is the autonomous "work till completion" pipeline; it orchestrates the existing subagents, workflows, and hooks rather than reinventing them.
+Drive a coding job from "implement" all the way to "reviewed, committed, and shipped" — hands-off through the review-and-fix gate, pausing only at the human gates Mason requires: **any live migration apply**, **any edge-function deploy**, and **any data deletion**. Regular, reversible code that has passed the full green pipeline pushes to `main` under Mason's standing 2026-06-16 authorization (see Step 8). The independent Codex cross-review now runs automatically via the headless `codex` CLI when the change warrants it (it's a read-only gate, like the reviewer subagents) — no copy-paste. This is the autonomous "work till completion" pipeline; it orchestrates the existing subagents, workflows, and hooks rather than reinventing them.
 
 **The job** is everything after `/ship` (e.g. `/ship add a CSV export button to the AR aging report`). If no job text was given, ask Mason what the job is, then proceed.
 
-Autonomy boundary (Mason's standing choice — do not exceed without asking):
+Autonomy boundary (Mason's standing choices — do not exceed without asking):
 - **Migrations:** NEVER apply migrations to the live DB without Mason's explicit approval in the current conversation.
 - **Edge functions:** NEVER deploy an edge function without Mason's explicit approval.
-- **Prod push:** NEVER push `main` or a production branch without Mason's explicit approval in the current conversation. `main` is live at croprxsolutions.app.
+- **Prod push:** regular, reversible code MAY be pushed to `main` without a fresh approval once the full pipeline is green — review clean, tests passing, pre-push typecheck/build succeeding (Mason's standing policy, 2026-06-16; a push to `main` deploys croprxsolutions.app via Vercel, with one-click rollback as the safety net). The standing authorization NEVER covers: force-pushes, pushes that skipped any part of the green pipeline, migrations, edge-function deploys, data deletion, or secrets/auth/permission changes — those always stop for Mason's explicit OK in the current conversation.
 
 ## Step 0 — Set up a branch
 
@@ -130,9 +130,12 @@ Before committing, run `node scripts/check-doc-drift.mjs` — fix any drift it r
 
 Re-verify the branch (`git branch --show-current`), then commit **on the branch** with a clear message. The husky pre-commit hook re-runs lint/build/test — if it rejects, fix and retry (never `--no-verify`).
 
-## Step 8 — Present the production decision and stop
+## Step 8 — The production decision
 
-Once Step 4 is clean and Step 2/2.5 are green, present the branch, commit, verification evidence, migration/deploy state, and the exact push or production action you recommend. Then stop and ask Mason for explicit approval. Do not treat an old standing authorization as approval for the current change.
+Once Step 4 is clean and Step 2/2.5 are green, present the branch, commit, verification evidence, migration/deploy state, and the exact production action. Then:
+
+- **Regular, reversible code only** (no live migration in this job, no Edge Function deploy, no data deletion, every gate ran and came back green — including the Codex verdict when the change was Codex-worthy): push under Mason's standing auto-push authorization (2026-06-16), verify the deploy, and report the push and evidence explicitly. Do not ask for a fresh yes — the green pipeline IS the authorization for this class of change.
+- **Anything else** (a live migration was part of the job, an Edge Function deploy is proposed, data would be deleted, or any required gate ran degraded/unavailable): stop and ask Mason for explicit approval of that specific action. Do not treat the push authorization — or any older approval — as covering these.
 
 ```
 ═══════════════════════════════════════════════════
@@ -154,18 +157,18 @@ Migration: <applied live + smoke-tested / none>
 Codex:    <verdict: SHIP / SHIP-WITH-FOLLOWUPS after N fixes / not worthy / CLI down → packet pending>
 Deferred: <MED/LOW items accepted, if any>
 
-─── READY — NOT PUSHED ──────────────────────────────
-  Production action: <exact command/action proposed>
-  Waiting for Mason's explicit approval in this conversation.
+─── <PUSHED (standing auto-push policy) | READY — WAITING ON MASON> ───
+  Production action: <exact command/action taken or proposed>
+  <For gated actions: Waiting for Mason's explicit approval in this conversation.>
 ```
 
-After Mason explicitly approves, perform only the approved action, inspect the result, and report the production evidence. A push approval does not also approve a migration or Edge Function deploy.
+For gated actions, after Mason explicitly approves, perform only the approved action, inspect the result, and report the production evidence. A push approval does not also approve a migration or Edge Function deploy — each gated action needs its own yes.
 
 ## Hard Rules
-- NEVER push `main` or a production branch without Mason's explicit approval in the current conversation.
+- NEVER push work that has not passed the FULL green pipeline. Pushes of regular reversible code after a fully green pipeline are covered by Mason's standing 2026-06-16 authorization — report every push explicitly, never silently. Force-pushes always require Mason's explicit approval.
 - NEVER apply a migration without Mason's explicit approval in the current conversation, the two reviewers clean, and the proof file written (the guard enforces this; don't try to route around it).
 - NEVER report the gate "clean" while any confirmed BLOCKER/HIGH is open, even if lint/build/test pass.
 - NEVER skip the review fan-out to "save time" — it is the entire point of `/ship`.
 - NEVER `--no-verify`, `@ts-ignore`, or `any` (except `reportPdf.ts` columnStyles).
-- Auto-applying a live migration, auto-deploying an Edge Function, and auto-pushing a production branch are not allowed.
+- Auto-applying a live migration, auto-deploying an Edge Function, and deleting data are never covered by the auto-push authorization — those always wait for Mason's explicit yes.
 - If a required safety gate is unavailable (e.g. a reviewer can't run), STOP and hand off — do not self-certify. (Mason's prod-gate-discipline rule.)

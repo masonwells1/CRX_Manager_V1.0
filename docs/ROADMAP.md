@@ -1,8 +1,28 @@
 # CRX Manager — Roadmap
 
-> **Last updated:** 2026-06-15 | **Owner:** Mason Wells
+> **Last updated:** 2026-07-13 | **Owner:** Mason Wells
 >
 > _Q1 brainstorm docs were moved to `docs/archive/2026-Q1-brainstorms/` and the links below repointed (2026-05-31). Feature statuses for Priorities 1–6 reflect the March planning cycle; for current system state see `CLAUDE.md`._
+
+---
+
+## Shipped since last update (2026-06-15 → 2026-07-13)
+
+A large amount landed in this window — see `docs/CHANGELOG.md` for full detail on each. Two categories:
+
+**Items that were open rows on this roadmap and have since shipped** (moved out of their tables below, left a pointer in place):
+- **C3** — As-applied vs. billed reconciliation report ("bill every acre you applied") — ✅ **Shipped 2026-06-21** as the Field Invoices "Unbilled Applications" reconciliation view (`/field-invoices/unbilled`), part of the As-Applied / Field Invoices feature merge.
+
+**Major work that shipped in this window but was never an itemized row on this roadmap** (built off later strategic reviews / owner requests, not this document — listed here only so this file doesn't read as if nothing happened; don't expect a 1:1 row match above):
+- Sell-side quote-lifecycle roadmap items #2–#7 (booking draw-downs, partial-order conversion, and related quote/order flow work) — shipped live 2026-06-21.
+- Field mapping + per-acre billing: two-acre model, shapefile/KML/GeoJSON import, and the USDA Crop Sequence Boundary "click-to-adopt" tool — shipped 2026-06-23 through 2026-07-12.
+- ChemMan-parity feature set (map pages, print options, loader worksheets, dispatch/field-editor polish) — 10+ units shipped 2026-07-11/12.
+- Mobile overhaul + UI overhaul (bottom nav, phone-card layouts, Office Cockpit consolidation) — shipped 2026-07-11.
+- Credit-memo apply (apply a credit memo to an open invoice) — shipped 2026-07-10.
+- EPA label lookup Stage 1 (per-product "Look up EPA" + data-quality report) and the in-app Label Data Quality bulk-fix tool — shipped 2026-07-10.
+- Inventory-aware scheduling Layer 2 (job reservations draw against bookings) — shipped 2026-07-02.
+- Weekly in-database backup (pg_cron) and the off-site encrypted GitHub backup — shipped 2026-07-12/13.
+- Workflow-waves (U14–U20) daily-flow/billing/booking/nav fixes and the Today/Office Cockpit dashboard consolidation — shipped 2026-07-09 through 2026-07-11.
 
 ---
 
@@ -38,12 +58,12 @@
 | A3 | Online quote approval/e-sign in portal (likely industry-first) | M | TODO |
 | A4 | Autopay + scheduled payments | M | TODO |
 | C1 | ISOXML/ADAPT as-applied file upload → proposed application records (review queue) | L | TODO |
-| C3 | As-applied vs. billed reconciliation report ("bill every acre you applied") | S | TODO |
+| C3 | As-applied vs. billed reconciliation report ("bill every acre you applied") | S | ✅ Shipped 2026-06-21 — see "Shipped since last update" section above |
 | B2 | Dicamba 72-hour record auto-draft | M | TODO |
 | B4 | REI/PHI tracking per field + dispatch warnings | M | TODO |
 | E4 | Field-level profitability (margin per acre per field/customer/season) | M | TODO |
 | D2 | Vendor price-sheet ingestion → proposed cost updates | M | TODO |
-| E1 | Driver/applicator mobile workspace (refactor DeliveryDetail into task-first flow) | L | ✅ v1 Done (2026-06-14 — **Field Mode** `/my-route` + `/my-route/:id`, `assign_job_applicator`; PR #80/#81 merged + live). Follow-ups: on-device pass + offline replay. |
+| E1 | Driver/applicator mobile workspace (refactor DeliveryDetail into task-first flow) | L | ✅ v1 Done (2026-06-14 — **Field Mode** `/my-route` + `/my-route/:id`, `assign_job_applicator`; PR #80/#81 merged + live). ✅ On-device pass Done (2026-07-11 — mobile overhaul: bottom nav/drawer, compact TopBar, phone-card layouts for Jobs/Dispatch/Inventory/Receiving, full-screen modals, PWA polish). Remaining follow-up: offline replay. |
 
 ### H3 — Multi-year: the defensible end-state
 | ID | Item | Notes |

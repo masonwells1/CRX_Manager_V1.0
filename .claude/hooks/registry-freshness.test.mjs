@@ -107,6 +107,78 @@ try {
   ok(r.stdout.includes('"allow"'), "sql-safety allows the same write when no flag exists");
   ok(!r.stdout.includes('"deny"'), "no deny without the flag");
 
+  // ── FIX 3 (2026-07-13) — DROP CONSTRAINT / DROP SEQUENCE now flag the registry ──
+  const dirF = path.join(tmpRoot, "f");
+  mkdirSync(dirF, { recursive: true });
+  r = runHook("registry-freshness.mjs", {
+    tool_name: "mcp__supabase__apply_migration",
+    tool_input: { project_id: "x", name: "drop_constraint_test", query: "ALTER TABLE invoices DROP CONSTRAINT invoices_balance_non_negative;" },
+  }, dirF);
+  ok(existsSync(flagPathIn(dirF)), "DROP CONSTRAINT applies -> flag written");
+  const outF = JSON.parse(r.stdout);
+  ok(outF.hookSpecificOutput.additionalContext.includes("DROP CONSTRAINT"), "context names DROP CONSTRAINT as the matched DDL");
+
+  const dirG = path.join(tmpRoot, "g");
+  mkdirSync(dirG, { recursive: true });
+  r = runHook("registry-freshness.mjs", {
+    tool_name: "mcp__supabase__apply_migration",
+    tool_input: { project_id: "x", name: "drop_sequence_test", query: "DROP SEQUENCE cm_invoice_number_seq;" },
+  }, dirG);
+  ok(existsSync(flagPathIn(dirG)), "DROP SEQUENCE applies -> flag written");
+  const outG = JSON.parse(r.stdout);
+  ok(outG.hookSpecificOutput.additionalContext.includes("DROP SEQUENCE"), "context names DROP SEQUENCE as the matched DDL");
+
+  // Sanity: an ADD CONSTRAINT-only migration (no DROP) still matches via the
+  // pre-existing ADD CONSTRAINT pattern, unaffected by the new patterns.
+  const dirH = path.join(tmpRoot, "h");
+  mkdirSync(dirH, { recursive: true });
+  r = runHook("registry-freshness.mjs", {
+    tool_name: "mcp__supabase__apply_migration",
+    tool_input: { project_id: "x", name: "add_constraint_test", query: "ALTER TABLE invoices ADD CONSTRAINT chk_x CHECK (total_cents >= 0);" },
+  }, dirH);
+  ok(existsSync(flagPathIn(dirH)), "ADD CONSTRAINT still applies -> flag written (unaffected by FIX 3)");
+
+  // ── FIX 4 (2026-07-13) — cross-worktree flag sharing, end-to-end ────────
+  // A live apply from inside a git WORKTREE must be visible to sql-safety.mjs
+  // running in the MAIN checkout (or a sibling worktree) — not just the
+  // worktree that made the apply. Uses a real `git worktree add`.
+  function git(args, cwd) {
+    return spawnSync("git", args, { cwd, encoding: "utf8" });
+  }
+  const mainRepo = path.join(tmpRoot, "fix4-main");
+  mkdirSync(mainRepo, { recursive: true });
+  git(["init", "-q"], mainRepo);
+  git(["-c", "user.email=test@test.com", "-c", "user.name=test", "commit", "--allow-empty", "-q", "-m", "init"], mainRepo);
+  const wtDir = path.join(tmpRoot, "fix4-wt");
+  git(["worktree", "add", "-q", "-b", "fix4-wt-branch", wtDir], mainRepo);
+
+  // Apply (with registry-relevant DDL) happens FROM the worktree.
+  r = runHook("registry-freshness.mjs", {
+    tool_name: "mcp__supabase__apply_migration",
+    tool_input: { project_id: "x", name: "fix4_from_worktree", query: "CREATE TABLE fix4_test (id int);" },
+  }, wtDir);
+  eq(r.status, 0, "FIX4: apply from worktree exits 0");
+  ok(existsSync(flagPathIn(mainRepo)), "FIX4: flag lands at the MAIN checkout's session-state dir");
+  ok(existsSync(flagPathIn(wtDir)), "FIX4: flag ALSO lands at the worktree's own session-state dir");
+
+  // sql-safety.mjs run from the MAIN checkout (which never applied anything
+  // itself) must still see the stale registry and DENY a new migration write.
+  r = benignMigrationWrite(mainRepo);
+  ok(r.stdout.includes('"deny"'), "FIX4: sql-safety in the MAIN checkout denies after a worktree-side apply");
+  ok(r.stdout.includes("REGISTRY STALE"), "FIX4: main-checkout deny names the stale registry");
+
+  // A SIBLING worktree (that never applied anything and never wrote a flag
+  // itself) must also see the stale registry via the shared common path.
+  const siblingWt = path.join(tmpRoot, "fix4-wt-sibling");
+  git(["worktree", "add", "-q", "-b", "fix4-wt-sibling-branch", siblingWt], mainRepo);
+  r = benignMigrationWrite(siblingWt);
+  ok(r.stdout.includes('"deny"'), "FIX4: sql-safety in a SIBLING worktree also denies (shared common path)");
+
+  try {
+    git(["worktree", "remove", "--force", wtDir], mainRepo);
+    git(["worktree", "remove", "--force", siblingWt], mainRepo);
+  } catch { /* best-effort cleanup */ }
+
   console.log(`registry-freshness: ${pass} assertions passed`);
 } finally {
   rmSync(tmpRoot, { recursive: true, force: true });

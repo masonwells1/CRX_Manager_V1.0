@@ -13,7 +13,7 @@
 import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
-import { isGitPush, mainPushSource, riskyFiles, proofValid } from "./codex-push-lib.mjs";
+import { isGitPush, mainPushSource, riskyFiles, contentIsRisky, proofValid } from "./codex-push-lib.mjs";
 
 function passthrough() { process.exit(0); }               // emit nothing → normal flow (git push is allow-listed)
 function deny(reason) {
@@ -56,7 +56,20 @@ let files = [];
 try { files = git(["diff", "--name-only", `origin/main...${srcSha}`]).split("\n").map((s) => s.trim()).filter(Boolean); } catch { passthrough(); }
 
 const risky = riskyFiles(files);
-if (risky.length === 0) passthrough(); // ordinary code push — auto-push authorized, allow
+
+// FIX 4 (2026-07-13): even when no file's PATH matches the risky patterns, the
+// diff's CONTENT might still touch money/financial-audit-log/prepay logic in a
+// file outside the usual risky paths. Only bother computing the full diff text
+// when the cheaper path check found nothing — this stays a no-op for the
+// common case (ordinary non-money pushes never pay this cost).
+let contentFlagged = false;
+if (risky.length === 0) {
+  try {
+    const diffText = git(["diff", `origin/main...${srcSha}`]);
+    if (contentIsRisky(diffText)) contentFlagged = true;
+  } catch { /* fail open on this EXTRA check only — path-based risk already cleared */ }
+}
+if (risky.length === 0 && !contentFlagged) passthrough(); // ordinary code push — auto-push authorized, allow
 
 const headSha = srcSha; // proof binds to the pushed ref's sha
 
@@ -76,11 +89,14 @@ try {
 
 if (valid) passthrough();
 
+const riskyDescription = risky.length > 0
+  ? `changes ${risky.length} risky file(s) that need an independent Codex verdict FIRST:\n` +
+    risky.slice(0, 6).map((f) => "  " + f).join("\n") +
+    (risky.length > 6 ? `\n  ... and ${risky.length - 6} more` : "")
+  : "changes content that matches a money/financial-audit pattern (_cents, balance_cents, financial_audit_log, allocate_payment, apply_prepay) even though no changed file's PATH looked risky";
+
 deny(
-  `CODEX GATE: this push to main changes ${risky.length} risky file(s) that need an independent Codex verdict FIRST:\n` +
-  risky.slice(0, 6).map((f) => "  " + f).join("\n") +
-  (risky.length > 6 ? `\n  ... and ${risky.length - 6} more` : "") +
-  `\n\n"Review is queued/scheduled" is NOT reviewed. Before pushing:\n` +
+  `CODEX GATE: this push to main ${riskyDescription}\n\n"Review is queued/scheduled" is NOT reviewed. Before pushing:\n` +
   `  1. Run /codex-review (the headless codex CLI) on this diff.\n` +
   `  2. Fix any blockers and re-review until clean.\n` +
   `  3. It writes .claude/session-state/codex-review-<sha>.json {codex_ran:true, verdict:"clean", head_sha:"${headSha || "<HEAD>"}", timestamp:"<ISO>"}.\n` +

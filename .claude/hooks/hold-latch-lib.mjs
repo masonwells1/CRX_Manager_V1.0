@@ -4,6 +4,8 @@
 // and his NEXT message. Any non-hold prompt clears it, so it can never get stuck
 // across turns — it just halts the current runaway work until he speaks again.
 
+import { DENY_TOOLNAME_RE } from "./autopilot-lib.mjs";
+
 // Mason wants to halt / pause / is only scoping a future session.
 const HOLD_RE = /((?<!(don'?t|won'?t|never|not) )(?<!(don'?t|won'?t) ever )\bstop\b|(?<!(don'?t|won'?t|never|not) )(?<!(don'?t|won'?t) ever )\bpause\b|\bhold (on|up|off)\b|cancel (all |the )?background|good stopping point|not (working|building) on (it|this|that) yet|just (getting|scoping|scope|the framework|framing)|only (scoping|planning|framing)|don'?t (build|code|implement|write code|start) yet|for a (fresh|future|new) session)/i;
 
@@ -23,7 +25,19 @@ export function isResumePhrase(prompt) {
 // allowed so Claude can still answer, checkpoint, and write a plan.
 const ALLOW_WRITE_PATH_RE = /(\.claude[\\/]session-state|scratchpad|SCOPE\.md$|PROGRESS|\.md$)/i;
 const BUILD_BASH_RE = /(git\s+(commit|push|merge|rebase|cherry-pick|tag)\b|supabase\s+db|apply_migration|deploy|npm\s+publish|vercel\s)/i;
-const MUTATE_TOOLNAME_RE = /(apply_migration|deploy_edge_function|deploy_to_vercel|deploy_project|merge_branch|reset_branch)/i;
+
+// hold-latch's mutate-tool set must be a SUPERSET of autopilot's deny set (2026-07-13
+// audit, FIX 3): a "stop" from Mason should pause at least every tool autopilot
+// refuses to auto-approve unattended (push_files, create_or_update_file,
+// merge_pull_request, delete_file, delete_branch, rebase_branch, the Desktop
+// Commander mutating tools, etc.), PLUS a few hold-latch-only additions that
+// autopilot deliberately allows (apply_migration/create_directory/kill_process —
+// Mason 2026-07-10 wants SQL/migrations to keep running unattended overnight,
+// but a mid-session "stop" should still pause them). Sharing DENY_TOOLNAME_RE
+// as the base means the two lists can't silently drift apart; guards.test.mjs
+// asserts the superset property directly against the live import.
+const HOLD_LATCH_EXTRA_RE = /(apply_migration|create_directory|kill_process)/i;
+const MUTATE_TOOLNAME_RE = new RegExp(`(?:${DENY_TOOLNAME_RE.source}|${HOLD_LATCH_EXTRA_RE.source})`, "i");
 
 export function isBuildActionUnderHold(toolName, toolInput) {
   const name = String(toolName || "");

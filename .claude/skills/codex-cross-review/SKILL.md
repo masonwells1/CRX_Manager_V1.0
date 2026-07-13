@@ -1,9 +1,11 @@
 ---
 name: codex-cross-review
-description: Generate a structured Codex review-prompt document for cross-validating a finding, fix, or proposed change before acting on it. Per Mason's preference, major findings should be re-reviewed by Codex (a second LLM) and the prompt + handoff document should land in docs/audits/. Use when the user has a security finding, a proposed remediation, an audit conclusion, or any significant code/SQL change that warrants independent verification before applying.
+description: FALLBACK ONLY — do not choose this when the headless Codex CLI works; use codex-review instead (it runs the review directly, no copy-paste). This legacy path generates a structured Codex review-prompt document in docs/audits/ for manual handoff. Valid uses today - the Codex CLI is missing/broken, or Mason explicitly asks for a durable paste-able review packet.
 ---
 
-# Codex Cross-Review
+# Codex Cross-Review (legacy fallback)
+
+> **Deprecated as a first choice (2026-07-13).** The `codex-review` skill supersedes this workflow whenever the `codex` CLI is available — it gets a real verdict back into the session instead of a document Mason must ferry by hand. Reach for this file only when the CLI path is unavailable or a durable handoff packet is explicitly wanted. The live evidence gates below (Step 2) remain the canonical spec and are referenced by other workflows.
 
 Templates a review-prompt doc in `docs/audits/` so Mason can hand the same context to Codex (or another reviewer LLM) for an independent second opinion. This matches the workflow recorded in `feedback_codex_cross_review_workflow` memory.
 

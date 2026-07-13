@@ -4,7 +4,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
-export function normalizeHookOutput(output) {
+export function normalizeHookOutput(output, warn = (msg) => process.stderr.write(msg)) {
   const trimmed = output.trim();
   if (!trimmed) return "";
 
@@ -12,6 +12,12 @@ export function normalizeHookOutput(output) {
     const parsed = JSON.parse(trimmed);
     const hookOutput = parsed?.hookSpecificOutput;
     if (hookOutput?.permissionDecision === "allow" && hookOutput.updatedInput === undefined) {
+      // Swallowing the allow payload must not swallow its loud fail-open
+      // warning (Codex P2 2026-07-13 round 5): the schema-registry hooks
+      // attach a systemMessage when they had to skip their check — forward
+      // it on stderr so the Codex side still hears it.
+      const sysMsg = parsed?.systemMessage ?? hookOutput?.systemMessage;
+      if (typeof sysMsg === "string" && sysMsg) warn(`${sysMsg}\n`);
       return "";
     }
   } catch {

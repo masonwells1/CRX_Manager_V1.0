@@ -7,6 +7,7 @@
 ## Session Routing
 
 - At session start, read `AGENTS.md`, then load `docs/workflows/SAFE_DEVELOPMENT_RULES.md` and only the workflow/reference files relevant to the task.
+- `docs/manual/` is the synthesis layer: `AGENT_ONBOARDING.md` for a first session, `DECISION_LOG.md` before re-opening a settled decision, `KNOWN_ISSUES.md` before treating a bug as new, `OWNER_PLAYBOOK.md` when Mason asks "how do I…". Whoever changes a command, policy, or ships/parks work updates the affected manual file in the same change.
 - Use `docs/reference/gotchas.md` when working around project-specific behavior.
 - Use `.claude/schema-registry.json` for current schema-aware hook checks; refresh it after approved schema changes.
 - Treat `docs/CHANGELOG.md`, `docs/reference/`, and active loop/ledger files as the location for changing project status and counts.

@@ -3,9 +3,11 @@
 // Fires after a Supabase MCP `apply_migration` call. If the applied SQL contains
 // DDL that changes what .claude/schema-registry.json describes (tables, columns,
 // CHECK constraints, enums, generated columns), the registry is now STALE — and
-// the 4 PreToolUse guards that read it (sql-safety, status-enum-check,
-// generated-column-check, rls-on-new-tables) all FAIL OPEN on stale data, so
-// they could wave through the exact bug class they exist to catch.
+// the 3 PreToolUse guards that actually read it (sql-safety, status-enum-check,
+// generated-column-check) all FAIL OPEN on stale data, so they could wave
+// through the exact bug class they exist to catch. (rls-on-new-tables.mjs does
+// NOT read the registry — it checks migration content directly — so it is not
+// in this list.)
 //
 // On match:
 //   1. Writes .claude/session-state/REGISTRY-STALE.flag  ({ created, migration_hint })
@@ -18,8 +20,8 @@
 // registry is refreshed and the flag is deleted.
 // FAIL-OPEN: any error here exits 0 silently — this hook never breaks a session.
 
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import path from "node:path";
+import { readFileSync } from "node:fs";
+import { writeStaleFlag } from "./registry-freshness-lib.mjs";
 
 try {
   let payload;
@@ -52,35 +54,38 @@ try {
     [/\bDROP\s+COLUMN\b/i, "DROP COLUMN"],
     [/\bRENAME\s+(?:COLUMN\b|TO\b)/i, "RENAME COLUMN/TO"],
     [/\bADD\s+CONSTRAINT\b/i, "ADD CONSTRAINT"],
+    [/\bDROP\s+CONSTRAINT\b/i, "DROP CONSTRAINT"],
     [/\bCHECK\s*\(/i, "CHECK (...)"],
     [/\bALTER\s+COLUMN\b/i, "ALTER COLUMN"],
     [/\bGENERATED\s+ALWAYS\b/i, "GENERATED ALWAYS"],
     [/\bCREATE\s+TYPE\b[\s\S]{0,300}?\bAS\s+ENUM\b/i, "CREATE TYPE ... AS ENUM"],
+    [/\bDROP\s+SEQUENCE\b/i, "DROP SEQUENCE"],
   ];
   const matched = ddlPatterns.filter(([re]) => re.test(sql)).map(([, label]) => label);
   if (matched.length === 0) process.exit(0);
 
   const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
-  const stateDir = path.join(projectDir, ".claude", "session-state");
-  const flagPath = path.join(stateDir, "REGISTRY-STALE.flag");
   const created = new Date().toISOString();
   const migrationHint = migName || matched[0];
 
-  let flagWritten = false;
-  try {
-    mkdirSync(stateDir, { recursive: true });
-    writeFileSync(flagPath, JSON.stringify({ created, migration_hint: migrationHint }, null, 2) + "\n");
-    flagWritten = true;
-  } catch { /* fail-open — the additionalContext below still tells Claude what to do */ }
+  // FIX 4 (cross-worktree flag sharing): write to BOTH the shared main-checkout
+  // location (resolved via `git rev-parse --git-common-dir`) AND the local
+  // projectDir location, so a flag written from inside a worktree is visible
+  // to sessions running elsewhere (main checkout or a sibling worktree).
+  // Falls back to local-only when git resolution fails — see registry-freshness-lib.mjs.
+  const { written } = writeStaleFlag(projectDir, { created, migration_hint: migrationHint });
+  const flagWritten = written.length > 0;
 
   const context =
     `REGISTRY FRESHNESS — the migration just applied to LIVE ("${migrationHint}") contains ` +
     `schema-registry-relevant DDL (${matched.join(", ")}). The schema snapshot at ` +
-    `.claude/schema-registry.json that powers 4 PreToolUse safety hooks is now STALE, and those ` +
+    `.claude/schema-registry.json that powers 3 PreToolUse safety hooks is now STALE, and those ` +
     `hooks FAIL OPEN on stale data — they could miss the very bug class they exist to catch.\n\n` +
     `Do this NOW, before writing any more migrations:\n` +
-    `1. Run the /regen-schema-registry skill's LIVE-INTROSPECTION refresh: run queries Q1-Q5 ` +
-    `(documented in the header of scripts/regenerate-schema-registry.mjs) via Supabase MCP ` +
+    `1. Run the /regen-schema-registry skill's LIVE-INTROSPECTION refresh: run queries Q1-Q6 ` +
+    `(documented in the header of scripts/regenerate-schema-registry.mjs — Q6 applied_names is ` +
+    `REQUIRED after an MCP apply, since the server assigns a version BELOW the filename stamp ` +
+    `and only the name list proves the migration applied) via Supabase MCP ` +
     `execute_sql, assemble the JSON, then run ` +
     `\`node scripts/regenerate-schema-registry.mjs --from-introspection <file.json>\`. ` +
     `The script's DEFAULT mode (no args) only re-stamps the timestamp — that does NOT count as a refresh.\n` +

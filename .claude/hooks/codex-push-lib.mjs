@@ -46,15 +46,36 @@ export function pushTargetsMain(cmd, currentBranch) {
 }
 
 // A changed file is "risky" (needs an independent Codex verdict) when it touches
-// migrations, edge functions, or obviously money/RLS-shaped code.
+// migrations, edge functions, or obviously money/RLS-shaped code. src/lib/db.ts
+// (the ONLY Supabase client per CLAUDE.md) and src/lib/sentry.ts (the ONLY
+// Sentry import point) are added here (2026-07-13 audit, FIX 4): both are
+// single choke points where a bad change has outsized, hard-to-notice blast
+// radius (every RPC call / every error report in the app), so they belong in
+// the same "needs a second set of eyes" bucket as migrations/edge functions.
 const RISKY_PATH_RES = [
   /(^|\/)supabase\/migrations\//i,
   /(^|\/)supabase\/functions\//i,
   /(^|\/)rls[_-]/i,
   /policy|grant/i,
+  /(^|\/)src\/lib\/db\.ts$/i,
+  /(^|\/)src\/lib\/sentry(\.ts|\/)/i,
 ];
 export function riskyFiles(files) {
   return (files || []).filter((f) => RISKY_PATH_RES.some((re) => re.test(String(f || ""))));
+}
+
+// A push can also be risky by CONTENT even when no file's PATH matches the
+// patterns above — e.g. a helper file outside the usual risky paths that still
+// touches cents-math or writes financial_audit_log / prepay / payment-allocation
+// logic. Checked against the full diff TEXT (not just file names).
+// NOTE: `_cents` is a SUFFIX on identifiers like total_cents/balance_cents/
+// extended_cents — a leading \b would never match there (underscore is a \w
+// character, so there's no word boundary between "total" and "_cents"). Only
+// the trailing \b is meaningful for that one; the other three are matched as
+// whole identifiers.
+const RISKY_CONTENT_RE = /_cents\b|\bfinancial_audit_log\b|\ballocate_payment\b|\bapply_prepay\b/;
+export function contentIsRisky(diffText) {
+  return RISKY_CONTENT_RE.test(String(diffText || ""));
 }
 
 // Validate a Codex-review proof object against the current HEAD and clock.
@@ -72,4 +93,4 @@ export function proofValid(data, headSha, nowMs) {
   return true;
 }
 
-export { RISKY_PATH_RES };
+export { RISKY_PATH_RES, RISKY_CONTENT_RE };

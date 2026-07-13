@@ -25,6 +25,18 @@
 //
 // Bug pattern: issue_return_credit declared the parameter and threw it away,
 // so retries silently created duplicate credits (9b36cd2).
+//
+// FIX 6 (2026-07-13 audit — "idempotency unscoped-lookup variant"): being
+// correctly WIRED (both a check and a record step present) is not the same as
+// being correctly SCOPED. The restore_quote_version bug class (Codex
+// 2026-06-08, fixed at scale by migration 20260611211058) was 22 live RPCs
+// whose lookup filtered ONLY on idempotency_key with no operation filter — a
+// key collision across two DIFFERENT operations silently honored the wrong
+// cached result. This hook now also requires the lookup itself to reference
+// `operation` (a literal or a parameter) — for the direct pattern, inside the
+// SAME lookup statement; for the helper pattern, as a second argument to
+// check_idempotency(). Conservative by design: it only fires when the lookup
+// clearly carries NO operation reference at all.
 
 import { readFileSync } from "node:fs";
 
@@ -34,6 +46,32 @@ function out(decision, reason) {
     : { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow" } };
   process.stdout.write(JSON.stringify(payload));
   process.exit(0);
+}
+
+// Split a call's argument text on top-level commas (ignoring commas inside
+// nested parens or quoted strings) so we can conservatively count arguments —
+// e.g. distinguish check_idempotency(p_idempotency_key) [1 arg, unscoped] from
+// check_idempotency(p_idempotency_key, 'my_op') [2 args, scoped].
+function splitTopLevelArgs(argsText) {
+  const args = [];
+  let depth = 0;
+  let cur = "";
+  let inStr = false;
+  let strCh = "";
+  for (const ch of String(argsText || "")) {
+    if (inStr) {
+      cur += ch;
+      if (ch === strCh) inStr = false;
+      continue;
+    }
+    if (ch === "'" || ch === '"') { inStr = true; strCh = ch; cur += ch; continue; }
+    if (ch === "(") { depth++; cur += ch; continue; }
+    if (ch === ")") { depth--; cur += ch; continue; }
+    if (ch === "," && depth === 0) { args.push(cur); cur = ""; continue; }
+    cur += ch;
+  }
+  args.push(cur);
+  return args.map((a) => a.trim()).filter((a) => a !== "");
 }
 
 let payload;
@@ -58,6 +96,7 @@ if (/--\s*idempotency-body-check:\s*exempt/i.test(content)) {
 const fnRe = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+([\w.]+)\s*\(([^)]*?)\)[\s\S]*?AS\s+(\$\w*\$)([\s\S]*?)\3/gi;
 
 const violations = [];
+try {
 let match;
 while ((match = fnRe.exec(content)) !== null) {
   const fnName = match[1];
@@ -79,7 +118,67 @@ while ((match = fnRe.exec(content)) !== null) {
   const callsSaveHelper = /\bsave_idempotency\s*\(/i.test(body);
   const helperWired = callsCheckHelper && callsSaveHelper;
 
-  if (directWired || helperWired) continue;
+  if (directWired || helperWired) {
+    // FIX 6: wired is not the same as SCOPED. Check the lookup itself for an
+    // operation reference before accepting this function as correctly guarded.
+    if (directWired) {
+      const stmtRe = /FROM\s+idempotency_keys\s+WHERE\s+idempotency_key\s*=\s*p_idempotency_key([\s\S]*?);/i;
+      const stmtMatch = stmtRe.exec(body);
+      const clause = stmtMatch ? stmtMatch[1] : "";
+      if (!/\boperation\b/i.test(clause)) {
+        violations.push(
+          `Function ${fnName}: the idempotency_keys lookup filters ONLY on idempotency_key with no operation scoping — ` +
+          `this is the restore_quote_version bug class (Codex 2026-06-08, fixed at scale by migration 20260611211058): ` +
+          `a key collision across two DIFFERENT operations will silently short-circuit the wrong one. ` +
+          `Add "AND operation = '${fnName}'" (or an operation-bearing parameter) to the lookup's WHERE clause.`
+        );
+      }
+    }
+    if (helperWired) {
+      const checkCalls = [...body.matchAll(/\bcheck_idempotency\s*\(([^)]*)\)/gi)];
+      const unscopedCheckCall = checkCalls.some((call) => splitTopLevelArgs(call[1]).length < 2);
+      if (unscopedCheckCall) {
+        violations.push(
+          `Function ${fnName}: check_idempotency() is called with no operation argument — ` +
+          `this is the restore_quote_version bug class (Codex 2026-06-08, fixed at scale by migration 20260611211058): ` +
+          `a key collision across two DIFFERENT operations will silently short-circuit the wrong one. ` +
+          `Call check_idempotency(p_idempotency_key, '${fnName}') (or an operation-bearing parameter).`
+        );
+      }
+      // Codex P1 2026-07-13: two args isn't enough — a check under one operation
+      // string with a save under a DIFFERENT one means every retry misses the
+      // cached result and replays the mutation. Compare the two operation
+      // literals when both are plain string literals (conservative: any
+      // non-literal/parameterized operation is left to the reviewers).
+      const literalOp = (args) => {
+        const parts = splitTopLevelArgs(args);
+        if (parts.length < 2) return null;
+        const m = /^\s*'((?:[^']|'')*)'\s*$/.exec(parts[1]);
+        return m ? m[1] : null;
+      };
+      const saveCalls = [...body.matchAll(/\bsave_idempotency\s*\(([^)]*)\)/gi)];
+      const checkOps = checkCalls.map((c) => literalOp(c[1])).filter((v) => v !== null);
+      const saveOps = saveCalls.map((c) => literalOp(c[1])).filter((v) => v !== null);
+      // Every pairing must close, not just one (Codex P2 round 3): a check op
+      // with no matching save replays that branch; a save op with no matching
+      // check is never consulted. Only literal ops are judged — parameterized
+      // ones stay with the reviewers.
+      if (checkOps.length > 0 && saveOps.length > 0) {
+        const unsavedChecks = checkOps.filter((op) => !saveOps.includes(op));
+        const uncheckedSaves = saveOps.filter((op) => !checkOps.includes(op));
+        if (unsavedChecks.length > 0 || uncheckedSaves.length > 0) {
+          const parts = [];
+          if (unsavedChecks.length) parts.push(`check_idempotency() operation(s) [${unsavedChecks.map((o) => `'${o}'`).join(", ")}] have no matching save_idempotency() — those branches replay on every retry`);
+          if (uncheckedSaves.length) parts.push(`save_idempotency() operation(s) [${uncheckedSaves.map((o) => `'${o}'`).join(", ")}] are never checked — their saved results are dead`);
+          violations.push(
+            `Function ${fnName}: mismatched idempotency operation keys — ${parts.join("; ")} ` +
+            `(the exact duplicate-execution class this guard exists for). Every operation literal must appear in BOTH calls.`
+          );
+        }
+      }
+    }
+    continue;
+  }
 
   const missing = [];
   if (callsCheckHelper !== callsSaveHelper) {
@@ -91,6 +190,11 @@ while ((match = fnRe.exec(content)) !== null) {
     if (!writesKey) missing.push("does not record the key after mutating (no INSERT INTO idempotency_keys, no save_idempotency() call)");
   }
   violations.push(`Function ${fnName}: ${missing.join("; ")}.`);
+}
+} catch (err) {
+  // FAIL-OPEN, but loud: a broken hook must never brick the session.
+  process.stderr.write(`idempotency-body-check.mjs internal error (allowing): ${err && err.message ? err.message : err}\n`);
+  out("allow");
 }
 
 if (violations.length > 0) {

@@ -97,13 +97,13 @@ Report the largest JS chunks. Warn if any single chunk is > 500KB.
 ╚══════════════════════════════════════════╝
 ```
 
-If ready: Ask the user if they want you to deploy now (via Vercel).
+If ready: note that the deploy trigger IS the push — pushing `main` deploys production via Vercel's git integration (there is no separate deploy step). A push of regular reversible code with everything green is covered by Mason's standing 2026-06-16 auto-push authorization; report it explicitly. A direct `vercel --prod` deploy outside the push path, an Edge Function deploy, or anything involving a live migration still needs Mason's explicit yes.
 If blocked: List every issue that needs fixing first.
 
 ## Rules
 
-- NEVER deploy if lint, typecheck, or build fails
-- NEVER deploy if tests have new failures
-- NEVER deploy if secrets are found in source code
-- NEVER deploy if there are unapplied migrations (warn, don't block — user decides)
-- NEVER auto-deploy without explicit user approval
+- NEVER push/deploy if lint, typecheck, or build fails
+- NEVER push/deploy if tests have new failures
+- NEVER push/deploy if secrets are found in source code
+- NEVER push/deploy with unapplied migrations pending without surfacing them (warn — Mason decides the ordering)
+- Edge Function deploys, direct Vercel CLI deploys, and live migration applies always need Mason's explicit approval; only the regular push-to-`main` path is covered by the standing authorization

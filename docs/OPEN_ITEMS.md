@@ -1,9 +1,3 @@
 # Open Items
 
-Deferred findings that survived the Sprints A–G audit cycle. Address when capacity allows.
-
----
-
-_All previously deferred items are now resolved (see `docs/CHANGELOG.md` and `docs/reference/migration-history.md` entry 266 for the order-share guard, and the 2026-05-04 a11y cleanup in `FieldAppChemicalEntry.tsx`)._
-
-<!-- New deferred items go below this line. Format: numbered section with Priority / Area / Source / Fix needed. -->
+This file is retired as of 2026-07-13 — the Sprint A–G audit format it tracked is long closed out. Current open issues and deferred findings now live in `docs/manual/KNOWN_ISSUES.md`; check there instead of here. (That file is being introduced this sprint — if it doesn't exist yet in your checkout, treat this repo as having no tracked open items and check `docs/CHANGELOG.md` / `docs/audits/` for anything recently parked instead.)

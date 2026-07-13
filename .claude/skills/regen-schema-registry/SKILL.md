@@ -1,6 +1,6 @@
 ---
 name: regen-schema-registry
-description: Regenerate `.claude/schema-registry.json` from the live Supabase database. The schema registry is the source of truth that powers 4 of the PreToolUse hooks (status-enum-check, generated-column-check, sql-safety, rls-on-new-tables) and the 2 review subagents. Use after applying any migration that creates a new status enum, generated column, or table — otherwise the hooks will be working from stale data and may miss the very class of bug they're supposed to catch. The registry-freshness PostToolUse hook writes `.claude/session-state/REGISTRY-STALE.flag` after a live apply with registry-relevant DDL — this skill's live-introspection refresh is how that flag gets cleared.
+description: Regenerate `.claude/schema-registry.json` from the live Supabase database. The schema registry is the source of truth that powers 3 of the PreToolUse hooks (status-enum-check, generated-column-check, sql-safety), the session-staleness check, and the 2 review subagents. Use after applying any migration that creates a new status enum, generated column, or table — otherwise the hooks will be working from stale data and may miss the very class of bug they're supposed to catch. The registry-freshness PostToolUse hook writes `.claude/session-state/REGISTRY-STALE.flag` after a live apply with registry-relevant DDL — this skill's live-introspection refresh is how that flag gets cleared.
 ---
 
 # Regenerate Schema Registry
@@ -13,7 +13,13 @@ Wraps `scripts/regenerate-schema-registry.mjs` with the surrounding hygiene that
 
 ## Step 1: Do a REAL Refresh (live introspection — not the stamp)
 
-1. Run the 5 read-only queries documented in the header of `scripts/regenerate-schema-registry.mjs` (Q1 migrations_high_water, Q2 sequences, Q3 generated_columns, Q4 check_constraints, Q5 columns) via Supabase MCP `execute_sql` on project rhyzpcqhnizqbxphqdkr — one statement per call (the MCP drops all but the last statement in a multi-statement call).
+0. **FIRST, before running any query**, record the refresh start time — Step 5 uses it as the cutoff for clearing stale flags (a flag created after this moment belongs to a live apply this refresh may not capture):
+
+```bash
+node -e "const fs=require('node:fs');fs.mkdirSync('.claude/session-state',{recursive:true});fs.writeFileSync('.claude/session-state/registry-refresh-start.txt',new Date().toISOString())"
+```
+
+1. Run the 6 read-only queries documented in the header of `scripts/regenerate-schema-registry.mjs` (Q1 migrations_high_water, Q2 sequences, Q3 generated_columns, Q4 check_constraints, Q5 columns, Q6 applied_names) via Supabase MCP `execute_sql` on project rhyzpcqhnizqbxphqdkr — one statement per call (the MCP drops all but the last statement in a multi-statement call). Do NOT skip Q6 — it powers the name-based staleness comparison; without it the script only carries forward the previous (possibly behind) name list.
 2. Assemble the results into one JSON object (exact input format is in the script header) and save it to a temp file.
 3. Run:
 
@@ -69,7 +75,13 @@ If `.claude/session-state/REGISTRY-STALE.flag` exists (written by the registry-f
 3. The file **content** actually changed vs before the refresh (Step 2's diff shows more than a `generated_at` bump). A timestamp-only diff means a stamp run happened — that does NOT clear the flag; go back to Step 1.
    - Exception: if a genuine `--from-introspection` run produced an EMPTY diff, the registry was already accurate — that also verifies freshness. Say so explicitly, then delete the flag.
 
-Then delete the flag file and confirm it's gone. If sql-safety.mjs was blocking migration writes, it stops blocking as soon as the flag is deleted.
+Then clear the flag from **EVERY** location — since 2026-07-13 the flag is written to the main checkout's `.claude/session-state/` AND the applying worktree's, and any sibling worktree may hold its own copy; leaving any one behind keeps migration writes blocked there. Use the shared helper, which sweeps the main checkout + all worktrees and prints exactly what it deleted. The cutoff is the refresh START stamp recorded in Step 1.0 — a flag created after that moment belongs to a live apply your introspection snapshot may not include and must be left in place (go refresh again instead):
+
+```bash
+node -e "const{pathToFileURL}=require('node:url');const{readFileSync}=require('node:fs');const cutoff=readFileSync('.claude/session-state/registry-refresh-start.txt','utf8').trim();import(pathToFileURL(process.cwd()+'/.claude/hooks/registry-freshness-lib.mjs').href).then(m=>console.log(JSON.stringify(m.clearStaleFlag(process.cwd(),{cutoffIso:cutoff}))))"
+```
+
+The cutoff is the moment Step 1.0 stamped BEFORE the first introspection query — NOT the registry file's completion time. (An apply that lands mid-refresh, after a query ran but before the registry was written, would be OLDER than the registry's mtime, so a completion-time cutoff would wrongly delete its flag — Codex P1 2026-07-13 round 5.) If `registry-refresh-start.txt` is missing, you skipped Step 1.0 — do NOT substitute a newer timestamp; go back and redo the refresh from Step 1.0. (`pathToFileURL` is required — a raw `import("C:/...")` fails on Windows with `ERR_UNSUPPORTED_ESM_URL_SCHEME`.) Confirm the printed `removed` list covers every location where the flag existed, and that `kept` is empty — a non-empty `kept` means an apply happened during/after your refresh: do not force-delete it, run the refresh again from Step 1.0. If sql-safety.mjs was blocking migration writes, it stops blocking as soon as all flags are gone.
 
 ## Step 6: Print Summary
 

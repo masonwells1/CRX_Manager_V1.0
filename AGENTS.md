@@ -14,22 +14,25 @@ This is the shared, project-level contract for every coding agent in this reposi
 ## Start Here
 
 1. Inspect `git status --short --branch` before doing anything that writes.
-2. Read `docs/workflows/SAFE_DEVELOPMENT_RULES.md` for any multi-file, data, money, security, production, migration, permission, or customer-facing task.
-3. Read `docs/reference/gotchas.md` and the relevant file under `docs/workflows/` for the area being changed.
-4. Treat executable code, migrations, live read-only evidence, and current grants as stronger evidence than prose or old handoffs.
-5. Claude workflow logic lives under `.claude/`; Codex-facing skills under `.agents/` are generated adapters. Do not maintain two independent workflow implementations.
+2. If this is your first session in this repo, read `docs/manual/AGENT_ONBOARDING.md`; the rest of `docs/manual/` (architecture, decision log, known issues, current state) is the synthesis layer — check `docs/manual/DECISION_LOG.md` before re-opening a settled design question and `docs/manual/KNOWN_ISSUES.md` before claiming a bug is new.
+3. Read `docs/workflows/SAFE_DEVELOPMENT_RULES.md` for any multi-file, data, money, security, production, migration, permission, or customer-facing task.
+4. Read `docs/reference/gotchas.md` and the relevant file under `docs/workflows/` for the area being changed.
+5. Treat executable code, migrations, live read-only evidence, and current grants as stronger evidence than prose or old handoffs.
+6. Claude workflow logic lives under `.claude/`; Codex-facing skills under `.agents/` are generated adapters. Do not maintain two independent workflow implementations.
 
 ## Plan and Approval Gates
 
 For multi-file or risky work, present a short plain-English plan, name the files or systems expected to change, and wait for Mason's approval before writing or making the live-changing move. Tiny, obvious, reversible fixes may proceed directly.
 
+Standing push policy (Mason, 2026-06-16): regular, reversible code may be pushed to `main` without a fresh approval once the full pipeline is green — review clean, tests passing, and the pre-push hook's typecheck/build succeeding. A push to `main` deploys production via Vercel; the one-click rollback there is the accepted safety net. This authorization covers ordinary code only and never extends to the gated actions below.
+
 Always get Mason's explicit approval in the current conversation before:
 
-- pushing `main`, a production branch, or force-pushing any branch;
-- deploying to production;
+- force-pushing any branch, or pushing work that has not passed the full green pipeline;
 - applying a live database migration or changing live data;
+- deploying an edge function, or any production deploy outside the normal push-to-`main` path;
 - deleting data;
-- changing secrets, authentication, permissions, billing, or customer-visible production state.
+- changing secrets, authentication, permissions, billing, or customer-visible production state beyond what a reviewed regular-code push inherently changes.
 
 Never commit `.env` files or reveal keys. Never use `--no-verify`. Never use destructive recovery such as `git reset --hard`, broad discard-all commands, or recursive force-delete unless Mason explicitly requests that exact action after the risk is explained.
 

@@ -7,13 +7,21 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
-function out(decision, reason) {
+function out(decision, reason, systemMessage) {
   const payload = decision === "block"
     ? { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason } }
     : { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow" } };
+  if (decision !== "block" && systemMessage) payload.systemMessage = systemMessage;
   process.stdout.write(JSON.stringify(payload));
   process.exit(0);
 }
+
+// FIX 2 (loud fail-open): registry missing/unparseable means this hook can't
+// validate anything — still allow (fail-open by design), but say so loudly
+// instead of silently waving everything through.
+const REGISTRY_UNREADABLE_WARNING =
+  "⚠ generated-column-check: schema-registry unreadable/stale — GENERATED-column " +
+  "UPDATE guard SKIPPED. Run /regen-schema-registry.";
 
 let payload;
 try {
@@ -40,7 +48,7 @@ let registry;
 try {
   registry = JSON.parse(readFileSync(registryPath, "utf8"));
 } catch {
-  out("allow");
+  out("allow", null, REGISTRY_UNREADABLE_WARNING);
 }
 
 const generated = registry.generated_columns || [];

@@ -19,14 +19,16 @@
 //   Marker `-- sql-safety: exempt-registry` skips rules 6-8 only (rules 1-5 always run).
 //   Rules 6-8 fail-open when the registry is missing or still v1-shaped.
 
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { readStaleFlag } from "./registry-freshness-lib.mjs";
 
-function out(decision, reason) {
+function out(decision, reason, systemMessage) {
   const payload = decision === "block"
     ? { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason } }
     : { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow" } };
+  if (decision !== "block" && systemMessage) payload.systemMessage = systemMessage;
   process.stdout.write(JSON.stringify(payload));
   process.exit(0);
 }
@@ -48,25 +50,34 @@ if (!filePath.endsWith(".sql") || !filePath.includes("supabase/migrations/")) {
 const content = payload?.tool_input?.content || payload?.tool_input?.new_string || "";
 if (!content) out("allow");
 
-// ─── Registry-freshness gate (A8, 2026-07-04) ────────────────────────────
-// A live apply_migration this session contained registry-relevant DDL, so
-// registry-freshness.mjs (PostToolUse) wrote .claude/session-state/REGISTRY-STALE.flag.
-// Until the registry is refreshed, rules 6-8 below (and the 3 other registry-backed
-// hooks) are checking against a schema that no longer exists — block new migration
-// writes rather than validate them against stale data.
+// ─── Registry-freshness gate (A8, 2026-07-04; FIX 4 cross-worktree, 2026-07-13) ──
+// A live apply_migration this session (in THIS worktree or ANY other — see FIX 4
+// below) contained registry-relevant DDL, so registry-freshness.mjs (PostToolUse)
+// wrote a REGISTRY-STALE.flag. Until the registry is refreshed, rules 6-8 below
+// (and the 2 other registry-backed hooks: status-enum-check, generated-column-check)
+// are checking against a schema that no longer exists — block new migration writes
+// rather than validate them against stale data.
 // The existing `-- sql-safety: exempt-registry` marker skips this gate too.
+//
+// FIX 4: the flag can live in either the LOCAL (this projectDir's) session-state
+// directory or the SHARED main-checkout one (resolved via `git rev-parse
+// --git-common-dir`) — a live apply from a sibling worktree writes to the shared
+// location, which this checkout would otherwise never see. Flag present in EITHER
+// location counts as stale. See registry-freshness-lib.mjs.
 if (!/--\s*sql-safety:\s*exempt-registry/i.test(content)) {
   try {
     const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
-    const staleFlag = path.join(projectDir, ".claude", "session-state", "REGISTRY-STALE.flag");
-    if (existsSync(staleFlag)) {
+    const { stale, path: flagPath } = readStaleFlag(projectDir);
+    if (stale) {
       out("block",
         "REGISTRY STALE: the schema snapshot that powers the safety hooks (.claude/schema-registry.json) " +
         "is stale from the last live apply — a migration changed the live database and the registry has not " +
         "been refreshed, so every registry-backed check could be blind to what just changed. " +
         "Refresh it FIRST via the /regen-schema-registry skill's live-introspection mode " +
         "(the script's default mode only re-stamps the timestamp — that is NOT a refresh), " +
-        "verify the registry content actually changed, then delete .claude/session-state/REGISTRY-STALE.flag " +
+        "verify the registry content actually changed, then delete the flag " +
+        `(found at: ${flagPath} — also check for/delete its counterpart in the OTHER location, ` +
+        "local checkout vs. shared main-checkout .claude/session-state/, if one exists) " +
         "and retry this write. " +
         "(Escape hatch: add `-- sql-safety: exempt-registry` with a justification comment, same as rules 6-8.)");
     }
@@ -243,4 +254,14 @@ if (violations.length > 0) {
       : ""));
 }
 
-out("allow");
+// FIX 2 (loud fail-open): rules 6-8 are silently disabled when the registry is
+// missing or still v1-shaped (no columns/not_null_columns/sequences keys) — say
+// so loudly instead of letting a migration write pass with no indication those
+// checks never ran. The explicit exempt-registry marker is a deliberate opt-out,
+// not a failure, so it does not warn.
+const registryStaleWarning = (!hasV2 && !registryExempt)
+  ? "⚠ sql-safety: schema-registry unreadable/stale — rules 6-8 (NOT NULL / unknown-column / " +
+    "unknown-sequence checks) SKIPPED. Run /regen-schema-registry."
+  : undefined;
+
+out("allow", null, registryStaleWarning);

@@ -80,6 +80,17 @@ if [ $AGENT_EXIT -ne 0 ]; then
 fi
 
 echo ""
+echo "🛡️  Running guard-hook regression tests..."
+npm run test:correction-guards 2>&1
+GUARD_EXIT=$?
+
+if [ $GUARD_EXIT -ne 0 ]; then
+  echo ""
+  echo "❌ GUARD-HOOK TESTS FAILED — commit blocked. A safety hook regressed; fix it before committing."
+  exit 1
+fi
+
+echo ""
 echo "📋 Checking doc drift (counts in CLAUDE.md / migration-history.md vs disk)..."
 # husky runs this script under `sh -e`, so a bare failing command aborts the
 # whole hook before any $? check — the || branch is what makes this step

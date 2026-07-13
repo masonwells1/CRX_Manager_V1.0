@@ -3,29 +3,54 @@
 > Extracted from `CLAUDE.md` on 2026-06-15 to keep the always-loaded file lean. This is the full reference for the
 > automated safety net; `CLAUDE.md` keeps only a short summary + a pointer here. Regenerate the schema registry the
 > hooks read after schema changes: `node scripts/regenerate-schema-registry.mjs`.
+>
+> Last reconciled against `.claude/settings.json` hook wiring on 2026-07-13 (guard-hardening pass: `mcp-tool-guard.mjs` added; `bash-safety.mjs`, `hold-latch-lib.mjs`, `codex-push-lib.mjs`, `live-testdata-lib.mjs`, `idempotency-body-check.mjs` broadened — see their rows below).
 
 ---
 
 ### Schema-Aware PreToolUse Hooks (`.claude/hooks/`)
-These run when Claude Code tries to Write or Edit a file — they refuse the write if it violates a known bug pattern. They read `.claude/schema-registry.json` (regenerate via `node scripts/regenerate-schema-registry.mjs`).
+These mostly run when Claude Code tries to Write or Edit a file — they refuse the write if it violates a known bug pattern. They read `.claude/schema-registry.json` (regenerate via `node scripts/regenerate-schema-registry.mjs`). The exception is `migration-apply-guard.mjs`, which is wired to the `*` (all-tools) PreToolUse matcher and only acts on Supabase MCP `apply_migration` calls, not Write/Edit.
 
 | Hook | What it blocks | Bug it prevents |
 |------|----------------|-----------------|
-| `sql-safety.mjs` | `pg_get_functiondef`, wrong idempotency columns, `updated_at` on tables that lack it | March 2026 40-bug incident |
+| `sql-safety.mjs` | `pg_get_functiondef`, wrong idempotency columns, `updated_at` on tables that lack it; also blocks ANY new migration-file write while `.claude/session-state/REGISTRY-STALE.flag` exists (see Registry-staleness lifecycle below) | March 2026 40-bug incident |
 | `money-safety.mjs` | `parseFloat()` on `*_cents` variables | Float rounding in money math |
-| `idempotency-body-check.mjs` | RPC declares `p_idempotency_key` but body doesn't read/write `idempotency_keys` | `9b36cd2` — `issue_return_credit` regression |
+| `idempotency-body-check.mjs` | RPC declares `p_idempotency_key` but body doesn't read/write `idempotency_keys`; **and (2026-07-13) a lookup that reads `idempotency_keys`/`check_idempotency()` with NO operation-scoping condition** (`operation = '...'` literal or an operation-bearing parameter) — a correctly-WIRED lookup can still be incorrectly SCOPED | `9b36cd2` — `issue_return_credit` regression; restore_quote_version bug class (Codex 2026-06-08, fixed at scale by migration `20260611211058`) |
 | `rls-on-new-tables.mjs` | New table without `ENABLE ROW LEVEL SECURITY` + `CREATE POLICY` | Prevents future RLS regressions |
 | `status-enum-check.mjs` | Writing a status string that isn't in the DB CHECK constraint | `4a25aea` — `'void'` vs `'voided'` |
 | `generated-column-check.mjs` | UPDATE on a GENERATED column (e.g. `invoices.balance_cents`) | `a419da8` — `reverse_write_off` |
 | `env-guard.mjs` | Any write/edit of `.env*` files; hard-coded JWT-shaped literals or `service_role` references in `src/` | Service-role-key leakage into frontend / transcripts |
+| `grant-change-guard.mjs` | Write/Edit to a migration with GRANT/REVOKE on a function — if a REVOKE target (`authenticated`/`anon`/`PUBLIC`) has known callers in `.claude/caller-graph.json` and the migration lacks a `-- caller-analysis: <fn> :: <disposition>` justification line, the write is denied | B10 — a REVOKE migration broke production because caller analysis covered only 2 of 6 functions |
 | `migration-apply-guard.mjs` | Supabase MCP `apply_migration` calls — refused unless `.claude/session-state/migration-review-<name>.json` proof exists from a recent (<30 min) `rls-security-reviewer` + `migration-drift-reviewer` run | B7/B8/B9 class — applying migrations without parallel-session review |
 
-### UserPromptSubmit Hooks (`.claude/hooks/`)
-These run when Mason submits a prompt, BEFORE Claude reads it. They inject extra context via `additionalContext` — they don't block — so Mason's intent is preserved while Claude is forced to slow down on risky wording.
+### Bash/PowerShell PreToolUse Hook (`.claude/hooks/`)
+Runs on the `Bash|PowerShell` matcher, before a shell command executes. Deterministic regex, hard-blocking (not advisory).
 
-| Hook | What it warns on | Why |
+| Hook | What it blocks |
+|------|----------------|
+| `bash-safety.mjs` (+ shared `bash-safety-lib.mjs`) | Force push, `git reset --hard`, discard-all (`git checkout .` / `git restore .`), `git clean -f`, `--no-verify`, recursive `rm -rf` targeting `src`/`supabase`/`docs`, uninstalling a core dependency, staging `.env` for commit, shell-redirect writes to `.env*` (e.g. `echo X > .env`, added 2026-07-13), `supabase db push`/`migration repair`/`db reset`, `dropdb`/`createdb`, force-deleting `main`/`master`/`production`, `git push --mirror`/`--prune`, `git filter-branch`/`filter-repo`, `rm -rf /<path>` outside known scratch dirs, suspicious `npm run reset/nuke/wipe`, `DROP TABLE`/`DROP SCHEMA`/`TRUNCATE` via `psql`/`supabase sql`, Bash-based modification (redirect or `sed`/`perl`/`awk -i`) of an EXISTING file under `supabase/migrations/` (creating new migration files is allowed), **and (2026-07-13, npm-script indirection) the RESOLVED body of any `npm run <script>` target from `package.json`** — recursing into scripts it calls, max depth 3, so a dangerous command hidden behind an innocuous script name is still caught. The whole pattern table now lives in `bash-safety-lib.mjs`, shared with `mcp-tool-guard.mjs` below (one source of truth, no drift) |
+
+Two more Bash-matcher PreToolUse guards — `active-area-guard.mjs` and `codex-push-guard.mjs` — are documented in the Correction-mined guards table further down this page.
+
+### MCP Tool Guard (`.claude/hooks/`)
+Runs on the `*` (all-tools) PreToolUse matcher. Added 2026-07-13 to close the "Desktop Commander blind spot": `bash-safety.mjs` only gates the `Bash|PowerShell` tool matcher, but Desktop Commander's MCP tools can run the exact same shell commands, or touch the exact same protected paths, without ever going through the Bash or Write/Edit matchers those other hooks are wired to.
+
+| Hook | What it blocks |
+|------|----------------|
+| `mcp-tool-guard.mjs` (+ shared `bash-safety-lib.mjs`) | Desktop Commander `start_process`/`interact_with_process`: the extracted command/input text against the SAME dangerous-command + migration-modify patterns `bash-safety.mjs` enforces (shared table, so a fix landed in one hook is a fix landed in both). Desktop Commander `write_file`/`edit_block`/`move_file`/`create_directory`: denies a target path that is `.env*`, an EXISTING file under `supabase/migrations/`, `.claude/settings.json`, or any `.claude/hooks/*.mjs` file — message: "use the native Edit/Write tools so the guard hooks can inspect this change." `kill_process`/`set_config_value` are matched by the tool-name regex but not specifically gated (no command/path signal to check against these patterns; `set_config_value` already requires "ask" approval in `settings.json`) — a deliberate, documented judgment call, not an oversight |
+
+### UserPromptSubmit Hooks (`.claude/hooks/`)
+These run when Mason submits a prompt, BEFORE Claude reads it. They inject extra context via `additionalContext` — they don't block — so Mason's intent is preserved while Claude is forced to slow down on risky wording or nudged toward the right workflow.
+
+| Hook | What it warns on / reminds | Why |
 |------|------------------|-----|
 | `dangerous-phrase-warning.mjs` | "drop/delete migration", "drop/truncate table", "force push", "no-verify", "service_role in frontend", "disable RLS", "rebase published", "auto-commit/push/deploy", "bypass check_period_open", "edit financial_audit_log" | Forces Claude to explain consequences + offer safer alternative + get explicit confirmation before acting on phrasing that has caused incidents |
+| `codex-gauntlet-reminder.mjs` | Plain-English review/ship/push wording where the object is the code change itself (domain-word-aware — "is the herbicide safe" doesn't false-trigger) | Reminds Claude to route through the Codex Review Gauntlet instead of self-certifying |
+| `agent-pair-review-reminder.mjs` | Requests for Claude and Codex to both review the same work | Reminds Claude to route through `/agent-pair-review` |
+| `codex-to-claude-handoff-reminder.mjs` | Plain-English requests for Claude to review or continue Codex's work | Reminds Claude that direct review is preferred, with durable handoff as the continuation fallback |
+| `ship-intent-reminder.mjs` | Build/fix/ship/push/"go live"/"do it" intent | Reminds Claude to drive the work through the `/ship` pipeline rather than requiring Mason to know slash commands; only ever restates the standing push policy, never authorizes a prod action itself |
+
+`hold-latch-prompt.mjs` and `autopilot-intent-reminder.mjs` are also UserPromptSubmit hooks — see the Correction-mined guards table below for what they do.
 
 ### SessionStart Hooks (`.claude/hooks/`)
 Run when a new session begins. Inject `additionalContext` so Claude sees state-drift warnings up front.
@@ -33,7 +58,7 @@ Run when a new session begins. Inject `additionalContext` so Claude sees state-d
 | Hook | What it surfaces |
 |------|------------------|
 | `session-snapshot.mjs` | Git porcelain snapshot (so Stop hook can tell session-scoped changes from prior WIP) |
-| `session-staleness.mjs` | Schema registry behind registry-relevant migrations (without false alarms for cron/data-only migrations), uncommitted files from a prior session |
+| `session-staleness.mjs` | Schema registry behind registry-relevant migrations (without false alarms for cron/data-only migrations); uncommitted files from a prior session; weekly DB backup missing or older than 8 days (`backups/LATEST-OK.json`, stamped by `scripts/backup-db.mjs` — Supabase FREE plan has no point-in-time recovery) |
 
 ### Stop Hooks (`.claude/hooks/`)
 Run when a session ends. Block until Claude addresses loose ends.
@@ -44,12 +69,15 @@ Run when a session ends. Block until Claude addresses loose ends.
 | `stop-wrap.mjs` | Uncommitted files, written-but-unapplied migrations, edited-but-undeployed Edge Functions, learning-capture prompt on substantive sessions |
 
 ### PostToolUse Hooks (`.claude/hooks/`)
-These run AFTER a successful Write/Edit. They can't block (file is already written) but they surface issues back to Claude immediately.
+These run AFTER a tool call completes. The Write|Edit-matched pair below can't block (the file is already written) but surfaces issues back to Claude immediately; `registry-freshness.mjs` runs on the `*` matcher (all tools) and specifically watches for Supabase MCP `apply_migration` calls.
 
 | Hook | What it does | Why |
 |------|--------------|-----|
 | `posttooluse-migration.mjs` | Reminds Claude to update migration-history.md + regenerate schema registry after a migration edit | Prevents doc drift |
 | `eslint-autofix.mjs` | Runs `npx eslint --fix` on edited `.ts`/`.tsx` files in `src/` (skips tests, migrations, edge functions) | Catches import-order/local-rules/lint issues at edit time instead of at pre-commit |
+| `registry-freshness.mjs` | Watchdog (A8, 2026-07-04): after a live `apply_migration` call, scans the applied SQL for registry-relevant DDL (`CREATE`/`DROP TABLE`, `ADD`/`DROP`/`RENAME COLUMN`, `ALTER TABLE ... ADD`, `ADD CONSTRAINT`, `CHECK (...)`, `ALTER COLUMN`, `GENERATED ALWAYS`, `CREATE TYPE ... AS ENUM`). On a match, writes `.claude/session-state/REGISTRY-STALE.flag` and injects a reminder to refresh the registry. Fail-open (never breaks the session on error). | Stops the 4 schema-aware PreToolUse hooks (`sql-safety`, `status-enum-check`, `generated-column-check`, `rls-on-new-tables`) from silently validating against a schema snapshot that a live change just made stale |
+
+**Registry-staleness lifecycle:** `registry-freshness.mjs` writes the flag the moment a live `apply_migration` contains registry-relevant DDL. While the flag exists, `sql-safety.mjs` (PreToolUse) blocks any new migration-file write (escape hatch: `-- sql-safety: exempt-registry` with a justification comment). The flag is cleared only by running the `/regen-schema-registry` skill's LIVE-INTROSPECTION refresh — querying live Supabase (Q1-Q5 in `scripts/regenerate-schema-registry.mjs`'s header) via MCP `execute_sql`, then `node scripts/regenerate-schema-registry.mjs --from-introspection <file.json>` — and confirming the registry's `_meta.generated_at` and content hash actually changed before deleting `.claude/session-state/REGISTRY-STALE.flag`. The script's no-argument default mode only re-stamps the timestamp; that does **not** count as a refresh and does not justify clearing the flag.
 
 ### Subagents (`.claude/agents/`)
 Specialized reviewers invoked via the `Agent` tool. They run in their own context window and return only a summary — perfect for parallel review without polluting the main session.
@@ -74,12 +102,20 @@ Built from a workflow that mined the last 50 sessions (524 Mason-typed messages 
 |------|-------|--------------|----------------------------------------|
 | `stop-verify.mjs` (+ `stop-verify-lib.mjs`) | Stop | When session code changed, BLOCKS "done" unless the transcript shows real verification (a `PROOF —` block, or a preview/WebFetch/prod-fetch/`execute_sql`). "Tests pass" is no longer accepted as proof. Bounded to 2 blocks/change-set (fails open). | #1 correction (16×): "is it really live?", "the icons still aren't there", "are the branches merged?". Escape: post `PROOF — Ran: … · Saw: … · Not verified: …`. |
 | `worktree-awareness.mjs` (+ `-lib`) | SessionStart | Injects the list of sibling worktrees, each with branch + merged-into-origin/main + dirty count. Silent when solo. | "I have another session working on that", "is it already merged?" — claiming done blind to parallel work. |
-| `codex-push-guard.mjs` (+ `-lib`) | PreToolUse(Bash) | Blocks `git push` from `main` when the diff (`origin/main...HEAD`) touches `supabase/migrations|functions` (or RLS/policy files) unless a fresh, HEAD-bound Codex proof (`.claude/session-state/codex-review-<sha>.json`, <30 min, `codex_ran:true`, clean verdict) exists. Non-risky pushes pass. | "has codex reviewed all of these?" — shipping risky code with the Codex gate skipped or treated as queued. |
+| `codex-push-guard.mjs` (+ `-lib`) | PreToolUse(Bash) | Blocks `git push` from `main` when the diff (`origin/main...HEAD`) touches `supabase/migrations|functions` (or RLS/policy files, or — 2026-07-13 — `src/lib/db.ts`/`src/lib/sentry.ts`, the app's single Supabase-client and Sentry choke points) unless a fresh, HEAD-bound Codex proof (`.claude/session-state/codex-review-<sha>.json`, <30 min, `codex_ran:true`, clean verdict) exists. Also (2026-07-13) flags a push as risky by CONTENT — the full diff text matching `_cents`/`balance_cents`/`financial_audit_log`/`allocate_payment`/`apply_prepay` — even when no changed file's PATH looked risky. Non-risky pushes pass. | "has codex reviewed all of these?" — shipping risky code with the Codex gate skipped or treated as queued. |
 | `unattended-autopilot.mjs` (+ `-lib`, `autopilot-arm.mjs`) | PreToolUse(*) | OFF unless an unexpired `.claude/session-state/AUTOPILOT.on` flag exists. When armed, auto-approves tool calls EXCEPT a hard deny-set (push, deploy, live migration, destructive delete, secret write) so an overnight loop never stalls on prompts. Arm: `node .claude/hooks/autopilot-arm.mjs --hours N`; disarm: `--off`. | "it keeps asking for permission… I'm going to bed" — reassurance instead of actually granting hands-free permission. |
 | `autopilot-intent-reminder.mjs` | UserPromptSubmit | On "run it overnight / never ask / going to bed", tells Claude to ARM autopilot, not just reassure. | Same as above — makes the complaint drive an action. |
-| `hold-latch-prompt.mjs` + `hold-latch-guard.mjs` (+ `-lib`) | UserPromptSubmit + PreToolUse(*) | "stop / pause / cancel background / just scoping" latches `hold.json`; the guard then blocks build/commit/migrate/deploy tools (reads, tests, and session-state/SCOPE.md writes stay allowed). Any next message clears it — can't stick across turns. | "lets just stop here, cancel all background work" — momentum past an explicit stop. |
-| `live-testdata-guard.mjs` (+ `live-testdata-lib.mjs`) | PreToolUse(*) | Blocks `execute_sql` that INSERTs into a live business table without `[E2E]`, or DELETE/void of a financial table. Override: create `.claude/session-state/REAL-DATA-OK`. | "use only fake fields/customers… delete them after"; cancel/void of real financial records is Mason's job. |
+| `hold-latch-prompt.mjs` + `hold-latch-guard.mjs` (+ `-lib`) | UserPromptSubmit + PreToolUse(*) | "stop / pause / cancel background / just scoping" latches `hold.json`; the guard then blocks build/commit/migrate/deploy tools (reads, tests, and session-state/SCOPE.md writes stay allowed). Any next message clears it — can't stick across turns. Its mutate-tool set is (2026-07-13) a SUPERSET of `autopilot-lib.mjs`'s deny set — shared via import, so it covers `push_files`/`create_or_update_file`/`merge_pull_request`/`delete_file`/`delete_branch`/`rebase_branch`/the Desktop Commander mutating tools too, plus hold-latch-only additions (`apply_migration`/`create_directory`/`kill_process`) that autopilot deliberately allows unattended but a mid-session "stop" should still pause; `guards.test.mjs` asserts the superset property against the live import so the two lists can't drift apart. | "lets just stop here, cancel all background work" — momentum past an explicit stop. |
+| `live-testdata-guard.mjs` (+ `live-testdata-lib.mjs`) | PreToolUse(*) | Blocks `execute_sql` that INSERTs into a live business table without `[E2E]`, or DELETE/void of a financial table. Also (2026-07-13) blocks ANY OTHER UPDATE against a live business table without `[E2E]` — the same standard already applied to INSERT (previously only money-column UPDATEs and cancel/void status UPDATEs were caught; a plain `UPDATE customers SET phone = ...` with no marker used to sail through). Override: create `.claude/session-state/REAL-DATA-OK`. | "use only fake fields/customers… delete them after"; cancel/void of real financial records is Mason's job. |
 | `active-area-guard.mjs` | PreToolUse(Bash) | Blocks destructive ops (`rm -rf`, `git worktree remove`, `git branch -D`, `git clean -f`, force-push) against a folder/branch listed in `.claude/active-areas.json`. Inert when that file is absent. | "we're working in beyond-parity now, don't mess with it" — sweeping a folder marked active. |
+
+### Conditionally-wired guards
+
+These two are not always "on" for a given session — one is only *registered* in specific worktrees, the other is registered everywhere but only *active* when armed.
+
+**`loop-guard.mjs`** — a hard PreToolUse guard, but it is **not** in the shared `.claude/settings.json` above. It's registered only in specific autonomous-loop worktrees' own `.claude/settings.local.json` (e.g. `C:\CRX_MainDebug`, for the unattended Codex-driven bug-hunt loop). Where it is registered, it hard-blocks: any `git push`, `git commit` off the designated loop branch, `apply_migration`/deploy tools, and live-DB write SQL (read-only `SELECT` and a strict `BEGIN…ROLLBACK` validation stay allowed) — turning the loop's prose gates into locked doors so a misbehaving or prompt-injected loop session physically cannot ship or mutate live data. Self-gated to its own worktree path, so it is inert (not present at all) in Mason's normal sessions and the main checkout.
+
+**`unattended-autopilot.mjs`** — registered in every session (shared PreToolUse(*) matcher, table above), but a no-op unless `.claude/session-state/AUTOPILOT.on` is present and unexpired. Its hard deny-set (push, deploy, live migration, destructive delete, secret write) applies even when armed — autopilot only removes prompt friction for otherwise-safe calls, backstopped by `settings.json` `permissions.deny` and `bash-safety.mjs`/`migration-apply-guard.mjs`.
 
 **Full audit (manual):** `scripts/validate-sql-migrations.sh` — scans ALL migration files. Run with `--idempotency-only` for focused check.
 

@@ -3,7 +3,7 @@
 // Machine-checkable reference-doc claims vs repository reality.
 // Always-loaded AGENTS.md and CLAUDE.md intentionally contain no volatile counts.
 
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync, readdirSync, existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -42,6 +42,34 @@ row("pages-routes route count", routeClaim ?? "missing", routeRows,
 
 row("live DB migration count", "live", "skipped", "SKIP",
   "plain Node check is local-only; verify via the read-only Supabase connector when current live state matters");
+
+// Every hook wired in settings.json must be documented in agent-guardrails.md,
+// so the doc future agents are routed to can never silently fall behind the guard net.
+const settingsRaw = read(".claude/settings.json");
+const guardrails = read("docs/reference/agent-guardrails.md");
+const wiredHooks = [...new Set(
+  [...settingsRaw.matchAll(/\.claude[\\/]hooks[\\/]([\w.-]+\.mjs)/g)].map((m) => m[1])
+)];
+const undocumentedHooks = wiredHooks.filter((name) => !guardrails.includes(name));
+row("wired hooks documented in agent-guardrails.md", wiredHooks.length, wiredHooks.length - undocumentedHooks.length,
+  undocumentedHooks.length === 0 ? "PASS" : "FAIL",
+  undocumentedHooks.length ? `undocumented: ${undocumentedHooks.join(", ")}` : "");
+
+// Operating-manual docs must exist and carry a "Last verified:" stamp so staleness is visible.
+const manualDocs = [
+  "ARCHITECTURE.md", "DECISION_LOG.md", "KNOWN_ISSUES.md",
+  "CURRENT_STATE.md", "OWNER_PLAYBOOK.md", "AGENT_ONBOARDING.md",
+];
+for (const doc of manualDocs) {
+  const rel = `docs/manual/${doc}`;
+  if (!existsSync(path.join(ROOT, rel))) {
+    row(`manual doc ${doc}`, "exists", "missing", "FAIL");
+    continue;
+  }
+  const stamped = /^\*{0,2}Last verified:?\*{0,2}\s*\d{4}-\d{2}-\d{2}/m.test(read(rel));
+  row(`manual doc ${doc}`, "Last verified stamp", stamped ? "present" : "missing",
+    stamped ? "PASS" : "FAIL");
+}
 
 console.log("check-doc-drift");
 for (const item of rows) {

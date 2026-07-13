@@ -75,6 +75,9 @@ jobs:
       - name: Run TypeScript type check
         run: npm run typecheck
 
+      - name: Guard-hook regression tests (safety net must not regress)
+        run: npm run test:correction-guards
+
       - name: Run Vitest unit tests + coverage (ratchet thresholds)
         env:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}

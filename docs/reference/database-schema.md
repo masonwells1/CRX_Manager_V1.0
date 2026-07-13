@@ -1,6 +1,6 @@
-# Database Schema Reference (111 Tables + 2 views)
+# Database Schema Reference (122 Tables + 2 views)
 
-> Count as of 2026-06-29 includes the `feat/fieldapp-parity` branch's new field-app tables (job_applied_records, job_applied_record_fields/crew, job_tags, job_tag_assignments, job_batches, ground_crews, ground_crew_members, job_location_dispatches, job_attachments, job_notifications, user_list_settings, etc.) — applied LOCALLY only, not yet in live `schema_migrations`. The per-table sections below are not yet exhaustively backfilled for every new field-app table; see `docs/reference/migration-history.md` (Field-application parity build section) and `src/types/index.ts`.
+> Count as of 2026-07-13, verified live against Supabase project `rhyzpcqhnizqbxphqdkr` (`SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE'` / `'VIEW'`). The `feat/fieldapp-parity` field-app tables mentioned in earlier revisions of this doc (job_applied_records, job_applied_record_fields/crew, job_tags, job_tag_assignments, job_batches, ground_crews, ground_crew_members, job_location_dispatches, job_attachments, job_notifications, user_list_settings) shipped to live long ago and are no longer branch-only — that caveat is removed. The per-table sections below are a curated tour, not an exhaustive enumeration of all 122 tables; **`.claude/schema-registry.json`** (refreshed from live introspection) is the machine-readable source of truth for current columns, constraints, and enum values — prefer it over this prose doc when a fact is load-bearing.
 
 ## Core Business
 - `profiles` - Users (id refs auth.users, email, full_name, role, phone, is_active, applicator_license_number, faa_certificate_number)

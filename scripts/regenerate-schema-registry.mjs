@@ -21,9 +21,12 @@
 //     "sequences":             [ { "sequence_name": "..." }, ... ],
 //     "generated_columns":     [ { "table_name": "...", "column_name": "...", "generation_expression": "..." }, ... ],
 //     "check_constraints":     [ { "table_name": "...", "constraint_name": "...", "def": "CHECK (...)" }, ... ],
-//     "columns":               [ { "table_name": "...", "cols": [...], "not_null_no_default": [...], "not_null_with_default": [...] }, ... ]
+//     "columns":               [ { "table_name": "...", "cols": [...], "not_null_no_default": [...], "not_null_with_default": [...] }, ... ],
+//     "applied_names":         [ { "name": "..." }, ... ]   -- OPTIONAL, see Q6 below
 //   }
 //   (status_enums and tables_without_updated_at are DERIVED — no separate query needed.)
+//   applied_names is OPTIONAL for backward compatibility: input without this key still
+//   works exactly as before, it just omits _meta.applied_migration_names from the output.
 //
 // QUERIES TO RUN (read-only, public schema, via Supabase MCP execute_sql):
 //
@@ -65,6 +68,13 @@
 //     GROUP BY c.table_name ORDER BY c.table_name;
 //     -- If the MCP response is too large, split with `AND c.table_name <= 'mmm'` /
 //     -- `AND c.table_name > 'mmm'` and concatenate the row arrays.
+//
+// (Q6) applied_names (OPTIONAL — powers name-based staleness comparison in
+//      session-staleness.mjs; server-assigned `version` can be LOWER than the
+//      migration filename's timestamp for migrations applied via the Supabase
+//      MCP, which makes the numeric high-water compare false-positive forever
+//      on those migrations. Name matching sidesteps that):
+//     SELECT name FROM supabase_migrations.schema_migrations ORDER BY name;
 //
 // CHEAPEST WORKFLOW:
 //   Open Claude Code in this repo and say: "regenerate the schema-registry from Supabase"
@@ -192,6 +202,27 @@ function rebuildFromIntrospection(inputArg) {
   const sequences = data.sequences.map(r => r.sequence_name).sort();
   const highWater = data.migrations_high_water[0]?.high_water || null;
 
+  // applied_names (Q6): sorted list of every migration `name` in
+  // supabase_migrations.schema_migrations live. When the input omits it,
+  // CARRY FORWARD the previous registry's list rather than dropping the field —
+  // dropping it would silently push session-staleness back onto the numeric
+  // version comparison whose false positives the name list exists to fix
+  // (Codex P2 2026-07-13). A carried-forward list can only be *behind* (names
+  // only ever get added), which at worst re-warns about a recently applied
+  // migration — the safe direction.
+  let appliedMigrationNames = Array.isArray(data.applied_names)
+    ? [...new Set(data.applied_names.map(r => String(r.name)))].sort()
+    : null;
+  if (!appliedMigrationNames) {
+    try {
+      const previous = JSON.parse(readFileSync(registryPath, "utf8"));
+      if (Array.isArray(previous?._meta?.applied_migration_names)) {
+        appliedMigrationNames = previous._meta.applied_migration_names;
+        console.warn("applied_names not in introspection input — carried forward the previous registry's applied_migration_names (run Q6 next refresh to update it).");
+      }
+    } catch { /* no previous registry to carry from */ }
+  }
+
   const registry = {
     _meta: {
       registry_version: 2,
@@ -201,6 +232,7 @@ function rebuildFromIntrospection(inputArg) {
       purpose: "Single source of truth for hooks: generated columns, status enums, ALL parseable CHECK IN-lists, NOT NULL columns, full column lists, sequences, tables-with/without updated_at, applied-migration high water.",
       note: "For a fresh refresh from the live DB, ask Claude Code: 'regenerate the schema-registry from Supabase' (/regen-schema-registry). skipped_constraints lists every CHECK the hooks can NOT validate — review it when touching those tables.",
       migrations_high_water: highWater,
+      ...(appliedMigrationNames ? { applied_migration_names: appliedMigrationNames } : {}),
     },
     generated_columns: generatedColumns,
     status_enums: statusEnums,
@@ -234,6 +266,7 @@ function rebuildFromIntrospection(inputArg) {
   console.log(`  columns: ${Object.keys(columns).length} tables | tables_without_updated_at: ${tablesWithoutUpdatedAt.length}`);
   console.log(`  not_null_columns: ${Object.keys(notNullColumns).length} tables | sequences: ${sequences.length}`);
   console.log(`  migrations_high_water: ${highWater}`);
+  console.log(`  applied_migration_names: ${appliedMigrationNames ? appliedMigrationNames.length : "(not provided — Q6 omitted, session-staleness falls back to numeric compare)"}`);
   if (skipped.length > 0) {
     console.log(`\n⚠️  ${skipped.length} CHECK constraint(s) could not be parsed into value sets — the hooks do NOT validate these:`);
     for (const s of skipped) console.log(`   - ${s.table}.${s.constraint}: ${s.reason}`);

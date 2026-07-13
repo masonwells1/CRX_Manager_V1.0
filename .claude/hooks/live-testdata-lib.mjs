@@ -13,20 +13,34 @@ const BUSINESS_TABLES = [
   "quotes", "quote_items", "deliveries", "delivery_items", "blend_tickets",
   "jobs", "job_fields", "returns", "return_items", "payments", "commissions",
   "commission_payments",
+  // Codex P1 2026-07-13: the AP/prepay/credit/inventory side was missing, so a
+  // raw UPDATE against these live tables slipped past the catch-all entirely.
+  // Every name verified against .claude/schema-registry.json columns.
+  "vendor_bills", "vendor_payments", "purchase_orders", "prepay_credits",
+  "prepay_applications", "credit_memo_applications", "inventory_transactions",
+  "inventory", "inventory_holds",
+  "fields", "job_applied_records", "allocation_sets", "write_offs",
 ];
 const FINANCIAL_TABLES = [
   "invoices", "orders", "payments", "commissions", "commission_payments", "financial_audit_log",
+  "vendor_bills", "vendor_payments", "prepay_credits", "prepay_applications",
+  "credit_memo_applications", "allocation_sets", "write_offs",
+  "inventory", "inventory_holds", "inventory_transactions",
 ];
 
 function tableAlt(tables) {
   return tables.map((t) => t.replace(/[^a-z_]/g, "")).join("|");
 }
-const INSERT_RE = new RegExp(`\\binsert\\s+into\\s+(?:public\\.)?"?(${tableAlt(BUSINESS_TABLES)})"?\\b`, "i");
-const DELETE_RE = new RegExp(`\\bdelete\\s+from\\s+(?:public\\.)?"?(${tableAlt(FINANCIAL_TABLES)})"?\\b`, "i");
-const CANCEL_VOID_RE = new RegExp(`\\bupdate\\s+(?:public\\.)?"?(${tableAlt(FINANCIAL_TABLES)})"?\\b[\\s\\S]*?\\bset\\b[\\s\\S]*?status\\s*=\\s*'(cancelled|voided)'`, "i");
+// Qualification prefix: bare, `public.`, `"public".`, or quoted table — all
+// valid SQL forms. Codex P1 2026-07-13 round 3: `UPDATE "public"."customers"`
+// evaded the earlier `(?:public\.)?` prefix entirely.
+const QUAL = `(?:"?public"?\\s*\\.\\s*)?"?`;
+const INSERT_RE = new RegExp(`\\binsert\\s+into\\s+${QUAL}(${tableAlt(BUSINESS_TABLES)})"?\\b`, "i");
+const DELETE_RE = new RegExp(`\\bdelete\\s+from\\s+${QUAL}(${tableAlt(FINANCIAL_TABLES)})"?\\b`, "i");
+const CANCEL_VOID_RE = new RegExp(`\\bupdate\\s+${QUAL}(${tableAlt(FINANCIAL_TABLES)})"?\\b[\\s\\S]*?\\bset\\b[\\s\\S]*?status\\s*=\\s*'(cancelled|voided)'`, "i");
 
 // Any hand-written touch of the append-only audit log — [E2E] does NOT exempt this.
-const AUDIT_LOG_WRITE_RE = /\b(?:insert\s+into|update|delete\s+from)\s+(?:public\.)?"?financial_audit_log\b/i;
+const AUDIT_LOG_WRITE_RE = new RegExp(`\\b(?:insert\\s+into|update|delete\\s+from)\\s+${QUAL}financial_audit_log\\b`, "i");
 
 // Statement-anchored DDL (start of batch or after a `;`). `create temp`/`temporary`
 // tables are legitimate scratch space for analysis and stay allowed.
@@ -35,8 +49,18 @@ const GRANT_REVOKE_RE = /(?:^|;)\s*(?:grant|revoke)\b/im;
 const TRUNCATE_RE = /(?:^|;)\s*truncate\b/im;
 
 // Money-ish column assignment (column name on the LEFT of `=`) on a financial table.
-const FIN_UPDATE_RE = new RegExp(`\\bupdate\\s+(?:public\\.)?"?(${tableAlt(FINANCIAL_TABLES)})"?\\b`, "i");
+const FIN_UPDATE_RE = new RegExp(`\\bupdate\\s+${QUAL}(${tableAlt(FINANCIAL_TABLES)})"?\\b`, "i");
 const MONEY_COL_RE = /\b[a-z_]*(?:cents|amount|total|balance|price|rate|paid)[a-z_]*\s*=/i;
+
+// FIX 5 (2026-07-13 audit — "live-testdata UPDATE gap"): ANY UPDATE against a
+// live business table, without [E2E]/REAL-DATA-OK, is a real-data write just
+// like an un-marked INSERT — even when it doesn't touch a money column or set
+// a cancel/void status. (Before this, "UPDATE customers SET phone = ...
+// WHERE id = 5" with no [E2E] marker sailed straight through.) This is a
+// catch-all checked AFTER the more specific INSERT/DELETE/cancel-void/
+// money-column rules above, so their more specific "kind"/message still wins
+// when they match; this only fires for everything else.
+const UPDATE_ANY_RE = new RegExp(`\\bupdate\\s+${QUAL}(${tableAlt(BUSINESS_TABLES)})"?\\b`, "i");
 
 // A DO body is hand-written SQL that EXECUTES immediately (a DO block can even
 // COMMIT mid-transaction), so unlike a stored function body it must stay visible
@@ -183,6 +207,16 @@ export function classifySql(query) {
         reason: `This UPDATEs a money column on the live financial table "${m[1]}" via raw SQL. Real financial amounts change only through the app's RPCs (or Mason's explicit REAL-DATA-OK authorization) — surface the row IDs and the proposed correction instead.`,
       };
     }
+  }
+
+  // 6. FIX 5 catch-all: any OTHER UPDATE against a real (non-[E2E]) business
+  //    table — same standard already applied to INSERT above.
+  if ((m = UPDATE_ANY_RE.exec(t))) {
+    return {
+      block: true,
+      kind: "real-update",
+      reason: `This UPDATEs the live business table "${m[1]}" without the [E2E] fake-data marker. On the LIVE app, use only clearly-fake [E2E]-prefixed entities for analysis (and delete them when done). If Mason explicitly asked for a REAL write, first create .claude/session-state/REAL-DATA-OK to record his authorization, then retry.`,
+    };
   }
 
   return { block: false };

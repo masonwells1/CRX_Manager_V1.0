@@ -8,7 +8,8 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { isHoldPhrase, isResumePhrase, isBuildActionUnderHold } from "./hold-latch-lib.mjs";
 import { classifySql } from "./live-testdata-lib.mjs";
-import { isGitPush, pushTargetsMain, mainPushSource, riskyFiles, proofValid } from "./codex-push-lib.mjs";
+import { isGitPush, pushTargetsMain, mainPushSource, riskyFiles, contentIsRisky, proofValid } from "./codex-push-lib.mjs";
+import { DENY_TOOLNAME_RE } from "./autopilot-lib.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 let pass = 0;
@@ -28,6 +29,34 @@ ok(!isBuildActionUnderHold("Write", { file_path: ".claude/session-state/hold.jso
 ok(!isBuildActionUnderHold("Write", { file_path: "docs/SCOPE.md" }), "SCOPE.md allowed under hold");
 ok(!isBuildActionUnderHold("Bash", { command: "npm run test" }), "tests allowed under hold");
 ok(!isBuildActionUnderHold("Read", { file_path: "x" }), "read allowed under hold");
+
+// ── hold-latch tool coverage (FIX 3, 2026-07-13) ─────────────────────────
+// hold-latch's mutate-tool set must be a SUPERSET of autopilot's deny set —
+// import the LIVE autopilot deny regex and assert every one of its alternatives
+// is also caught by hold-latch, so the two lists can never silently drift apart.
+{
+  const denyAlts = DENY_TOOLNAME_RE.source.replace(/^\(|\)$/g, "").split("|");
+  ok(denyAlts.length > 5, "sanity: parsed several deny alternatives out of autopilot-lib");
+  for (const name of denyAlts) {
+    ok(isBuildActionUnderHold(name, {}), `hold-latch covers autopilot deny-set tool: ${name}`);
+  }
+}
+// hold-latch-only additions beyond autopilot's deny set (autopilot deliberately
+// allows these unattended; a mid-session "stop" should still pause them).
+ok(isBuildActionUnderHold("mcp__x__create_directory", {}), "create_directory blocked under hold");
+ok(isBuildActionUnderHold("mcp__Desktop_Commander__kill_process", {}), "kill_process blocked under hold");
+// Desktop Commander mutating tools specifically (2026-07-13 audit blind spot)
+ok(isBuildActionUnderHold("mcp__Desktop_Commander__start_process", {}), "DC start_process blocked under hold");
+ok(isBuildActionUnderHold("mcp__Desktop_Commander__interact_with_process", {}), "DC interact_with_process blocked under hold");
+ok(isBuildActionUnderHold("mcp__Desktop_Commander__write_file", {}), "DC write_file blocked under hold");
+ok(isBuildActionUnderHold("mcp__Desktop_Commander__edit_block", {}), "DC edit_block blocked under hold");
+ok(isBuildActionUnderHold("mcp__Desktop_Commander__move_file", {}), "DC move_file blocked under hold");
+ok(isBuildActionUnderHold("mcp__github__push_files", {}), "GitHub push_files blocked under hold");
+ok(isBuildActionUnderHold("mcp__github__create_or_update_file", {}), "GitHub create_or_update_file blocked under hold");
+ok(isBuildActionUnderHold("mcp__github__delete_file", {}), "GitHub delete_file blocked under hold");
+ok(isBuildActionUnderHold("mcp__github__merge_pull_request", {}), "GitHub merge_pull_request blocked under hold");
+ok(isBuildActionUnderHold("mcp__supabase__delete_branch", {}), "delete_branch blocked under hold");
+ok(isBuildActionUnderHold("mcp__supabase__rebase_branch", {}), "rebase_branch blocked under hold");
 
 // ── live-testdata ────────────────────────────────────────────────────────
 ok(classifySql("INSERT INTO customers (name) VALUES ('Acme Farm')").block, "real customer insert blocked");
@@ -59,7 +88,35 @@ eq(classifySql("TRUNCATE public.orders;").kind, "truncate", "truncate blocked");
 eq(classifySql("UPDATE financial_audit_log SET description='x' WHERE id=1").kind, "audit-log-write", "audit log update blocked");
 ok(classifySql("DELETE FROM financial_audit_log WHERE note LIKE '%[E2E]%'").block, "audit log delete blocked even with [E2E]");
 eq(classifySql("UPDATE invoices SET total_cents = 100 WHERE id=1").kind, "financial-amount-update", "money column update blocked");
-ok(!classifySql("UPDATE invoices SET notes = 'call back' WHERE total_cents = 500").block, "money col only in WHERE clause allowed");
+// FIX 5 (2026-07-13, "live-testdata UPDATE gap"): a plain UPDATE on a real
+// (non-[E2E]) business table is now blocked too, matching INSERT's treatment —
+// even when the SET clause never touches a money column. Before this fix, this
+// exact statement was allowed (see the old test name below) — that was the gap.
+eq(classifySql("UPDATE invoices SET notes = 'call back' WHERE total_cents = 500").kind, "real-update", "money col only in WHERE clause no longer exempts the UPDATE (generic real-update catch-all, FIX 5)");
+
+// ── live-testdata UPDATE gap (FIX 5, 2026-07-13) ─────────────────────────
+ok(classifySql("UPDATE customers SET phone = '555-0100' WHERE id = 1").block, "real customer UPDATE without [E2E] blocked");
+eq(classifySql("UPDATE customers SET phone = '555-0100' WHERE id = 1").kind, "real-update", "kind reported for generic business-table UPDATE");
+ok(!classifySql("UPDATE customers SET phone = '555-0100' WHERE id = 1 -- [E2E]").block, "[E2E]-marked UPDATE allowed");
+ok(!classifySql("UPDATE some_log_table SET x = 1 WHERE id = 1").block, "UPDATE on a non-business table allowed");
+// Codex P1 2026-07-13: AP/prepay/inventory tables were missing from the lists.
+ok(classifySql("UPDATE vendor_bills SET notes = 'x' WHERE id = 1").block, "raw UPDATE of vendor_bills (AP side) blocked");
+ok(classifySql("UPDATE prepay_credits SET memo = 'x' WHERE id = 1").block, "raw UPDATE of prepay_credits blocked");
+ok(classifySql("UPDATE inventory_transactions SET notes = 'x' WHERE id = 1").block, "raw UPDATE of inventory_transactions blocked");
+ok(!classifySql("UPDATE vendor_bills SET notes = '[E2E] test' WHERE id = 1").block, "[E2E]-marked vendor_bills UPDATE stays allowed");
+ok(classifySql("DELETE FROM vendor_payments WHERE id = 1").block, "DELETE from vendor_payments (now financial) blocked");
+// Codex P1 round 3: fully quoted schema qualification must not evade the classifier.
+ok(classifySql('UPDATE "public"."customers" SET phone = \'555\' WHERE id = 1').block, 'UPDATE "public"."customers" (quoted qualification) blocked');
+ok(classifySql('INSERT INTO "public"."invoices" (id) VALUES (1)').block, 'INSERT INTO "public"."invoices" (quoted qualification) blocked');
+ok(classifySql('UPDATE public . "orders" SET notes = \'x\' WHERE id = 1').block, "spaced qualification still blocked");
+// Codex P1 round 4: live stock tables were missing from the lists.
+ok(classifySql("UPDATE inventory SET quantity = 0 WHERE id = 1").block, "raw UPDATE of inventory (live stock) blocked");
+ok(classifySql("UPDATE inventory_holds SET quantity = 0 WHERE id = 1").block, "raw UPDATE of inventory_holds blocked");
+ok(classifySql("DELETE FROM inventory_transactions WHERE id = 1").block, "DELETE from inventory_transactions blocked");
+ok(!classifySql("SELECT * FROM customers WHERE id = 1").block, "SELECT still allowed (not an UPDATE)");
+// More specific classifications still win over the generic catch-all:
+eq(classifySql("UPDATE invoices SET status = 'voided' WHERE id = 5").kind, "financial-cancel", "cancel/void still classified specifically, not as generic real-update");
+eq(classifySql("DELETE FROM invoices WHERE id = 5").kind, "financial-delete", "financial delete still classified specifically");
 
 // ── dollar-quoted machine content (2026-07-11) ───────────────────────────
 // Function bodies re-emitted by a BEGIN;...;ROLLBACK; migration smoke are
@@ -120,6 +177,16 @@ eq(mainPushSource("git -C C:/CRX_Manager push origin feature/x", "feature/x"), n
 eq(riskyFiles(["src/App.tsx", "supabase/migrations/x.sql"]).length, 1, "migration is risky");
 eq(riskyFiles(["src/App.tsx", "README.md"]).length, 0, "no risky files");
 ok(riskyFiles(["supabase/functions/send-email/index.ts"]).length === 1, "edge fn is risky");
+// FIX 4 (2026-07-13): single-choke-point files are risky by PATH too.
+ok(riskyFiles(["src/lib/db.ts"]).length === 1, "src/lib/db.ts is risky");
+ok(riskyFiles(["src/lib/sentry.ts"]).length === 1, "src/lib/sentry.ts is risky");
+eq(riskyFiles(["src/lib/other.ts"]).length, 0, "an unrelated src/lib file is not risky by path");
+// FIX 4: content-level risk check (fires even when no PATH pattern matches).
+ok(contentIsRisky("+  const total_cents = a + b;"), "diff touching _cents flagged risky by content");
+ok(contentIsRisky("+  await allocate_payment(x, y);"), "diff calling allocate_payment flagged risky by content");
+ok(contentIsRisky("+  insert into financial_audit_log (...) values (...);"), "diff touching financial_audit_log flagged risky by content");
+ok(contentIsRisky("+  apply_prepay(customer_id, amount);"), "diff calling apply_prepay flagged risky by content");
+ok(!contentIsRisky("+  const label = 'hello world';"), "an ordinary diff is not flagged risky by content");
 const good = { codex_ran: true, verdict: "clean", head_sha: "abc", timestamp: new Date().toISOString() };
 ok(proofValid(good, "abc", Date.now()), "valid proof");
 ok(!proofValid(good, "different", Date.now()), "wrong HEAD → invalid");
@@ -145,5 +212,14 @@ eq(r.stdout.trim(), "", "live-testdata-guard silent on [E2E] insert");
 // live-testdata-guard: a REAL insert → deny
 r = runHook("live-testdata-guard.mjs", { tool_name: "mcp__supabase__execute_sql", tool_input: { query: "INSERT INTO customers (name) VALUES ('Real Farm')" } });
 ok(r.stdout.includes("deny"), "live-testdata-guard denies real insert");
+// live-testdata-guard: a REAL update on a business table (no [E2E]) → deny (FIX 5)
+r = runHook("live-testdata-guard.mjs", { tool_name: "mcp__supabase__execute_sql", tool_input: { query: "UPDATE customers SET phone = '555-0100' WHERE id = 1" } });
+ok(r.stdout.includes("deny"), "live-testdata-guard denies real business-table update (FIX 5)");
+// codex-push-guard: a non-push command → silent passthrough (plain git push of a
+// non-risky file needs no proof either — covered at the riskyFiles level above;
+// this proves the hook doesn't even fire outside a push).
+r = runHook("codex-push-guard.mjs", { tool_name: "Bash", tool_input: { command: "git status" } });
+eq(r.status, 0, "codex-push-guard exits 0 on non-push command");
+eq(r.stdout.trim(), "", "codex-push-guard silent on non-push command");
 
 console.log(`guards: ${pass} assertions passed`);

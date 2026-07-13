@@ -4,6 +4,18 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-13 — Operating Manual sprint: docs/manual/ synthesis layer, guard-net hardening (5 Codex rounds), owner playbook
+
+Fable legacy sprint — durable infrastructure so future/cheaper agents keep top-tier quality. Docs + agent tooling only; no `src/`, no migrations, no live writes.
+
+- **New `docs/manual/` synthesis layer (6 docs):** ARCHITECTURE, DECISION_LOG, KNOWN_ISSUES (single consolidated open-issues view — corrected 5 stale "open HIGH" beliefs against live evidence), CURRENT_STATE (live counts), OWNER_PLAYBOOK (plain-English; also published as a claude.ai artifact page), AGENT_ONBOARDING (8 recurring bug classes + review routing). Each stamped `Last verified` + update triggers; existence and stamps machine-checked by `npm run check:docs`.
+- **Policy reconciliation:** `AGENTS.md`, `CLAUDE.md`, and `/ship` now all state the standing 2026-06-16 push policy (green-pipeline regular code auto-pushes to `main`; migrations/edge-deploys/deletion/secrets always gated). One wording variant (migration-apply in-chat OK vs proof-gate-only in pre-authorized loops) parked as an owner decision in DECISION_LOG.
+- **Guard-net hardening, 5 adversarial Codex review rounds (28 findings: 27 fixed with tests, 1 dispositioned):** new server-agnostic `mcp-tool-guard.mjs` (closes the Desktop-Commander/`mcp__filesystem` blind spot incl. path traversal, whole-dir moves, and ALL migration writes via MCP); `bash-safety-lib.mjs` extraction (npm script-body recursion incl. pre/post lifecycle, `.env` redirect writes); cross-worktree REGISTRY-STALE flag fan-out with race-safe cutoff clearing; idempotency check↔save operation pairing; expanded business/financial table sets; loud fail-open warnings preserved through the Codex adapter. 472 guard assertions now run in `.husky/pre-commit` and CI. Disposition doc: `docs/audits/2026-07-13-claude-disposition-of-codex-guard-hardening.md`.
+- **Ground-truth refresh:** schema registry regenerated from live introspection + new `applied_migration_names` name-based staleness check (kills the false "registry BEHIND" session warning); `agent-guardrails.md` reconciled to all 31 wired hooks; reference docs (schema/RPC/pages/gotchas/ROADMAP/OPEN_ITEMS) refreshed.
+- **Agent-surface simplification:** `codex-cross-review` demoted to explicit fallback; command/skill twins deduped via sync; review-routing decision table in AGENT_ONBOARDING.
+
+---
+
 ## 2026-07-12 — ChemMan parity follow-ups: print-stamp RPC, dispatched-crew map visibility, grant hygiene (overnight hands-free run)
 
 Overnight continuation of the 2026-07-11 parity loop (Mason: "finish everything and live").

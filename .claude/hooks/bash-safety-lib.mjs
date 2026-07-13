@@ -1,0 +1,189 @@
+// Shared dangerous-command pattern table for bash-safety.mjs (Bash|PowerShell
+// PreToolUse) AND mcp-tool-guard.mjs (Desktop Commander start_process /
+// interact_with_process PreToolUse). Single source of truth so a fix landed in
+// one hook is a fix landed in both — Desktop Commander's process tools can run
+// the exact same shell commands bash-safety.mjs was built to catch, and until
+// this file existed, routing a command through Desktop Commander instead of the
+// Bash tool silently skipped every one of these checks (2026-07-13 audit finding).
+//
+// Behavior of the checks below is UNCHANGED from the original inline bash-safety.mjs
+// table — this is a pure extraction, plus one net-new pattern (shell-redirect writes
+// to .env, explicitly called for by the audit) and the npm-script-indirection helpers.
+
+import { readFileSync, existsSync } from "node:fs";
+import path from "node:path";
+
+// Ordered [pattern, reason] checks. First match wins. Verbatim from the
+// original bash-safety.mjs inline table (2026-07 extraction), plus one addition
+// marked below.
+export const DANGEROUS_CMD_CHECKS = [
+  [/git\s+push\s+(--force\b|-f\b|--force-with-lease\b)/, "Blocked force push. Force pushing rewrites remote history. Push to a new branch instead."],
+  [/git\s+reset\s+--hard\b/, "Blocked `git reset --hard`. Permanently destroys uncommitted work. Use `git stash` or `git restore <file>`."],
+  [/git\s+checkout\s+\.\s*(?:$|;|&|\|)/, "Blocked discard-all. Use targeted `git restore <file>`."],
+  [/git\s+restore\s+\.\s*(?:$|;|&|\|)/, "Blocked discard-all. Use targeted `git restore <file>`."],
+  [/git\s+clean\s+-[A-Za-z]*[fdx][A-Za-z]*\b/, "Blocked `git clean -f`. Permanently deletes untracked files. Review with `git clean -n` first."],
+  [/--no-verify\b/, "Blocked `--no-verify`. Pre-commit hooks prevent bugs — fix the underlying issue."],
+  [/\brm\s+-[A-Za-z]*r[A-Za-z]*f?[A-Za-z]*\s+(?:\.\.?\s*(?:$|;|&|\|)|\.\.?\/(?:src|supabase|docs)(?:\b|\/)|\/?(?:src|supabase|docs)(?:\b|\/))/, "Blocked recursive deletion of project source/migrations/docs."],
+  [/\bnpm\s+uninstall\s+(?:react|@supabase\/supabase-js|vite|typescript)\b/, "Blocked uninstall of a core dependency."],
+  [/git\s+add\s+[^&|;]*\.env(?:\b|$)/, "Blocked staging of .env. Secrets must never be committed."],
+  [/npx\s+supabase\s+db\s+push\b/, "Blocked `supabase db push`. Test migrations locally first."],
+  [/npx\s+supabase\s+migration\s+repair\b/, "Blocked `supabase migration repair`. Causes migration history drift."],
+  [/(?:npx\s+)?supabase\s+db\s+reset\b/, "Blocked `supabase db reset`. This wipes the entire local Supabase DB and re-runs all 356 migrations from scratch — minutes of work plus loss of any local test data. If you really need to reset, run it manually in a terminal where you can see the warnings."],
+  [/\b(?:dropdb|createdb)\b/, "Blocked `dropdb`/`createdb`. Destructive at the database level — if you need a fresh DB, do it via Supabase dashboard with explicit confirmation."],
+  [/\bgit\s+branch\s+(?:-D|--delete\s+--force)\s+(?:main|master|production)\b/, "Blocked force-delete of main/master/production branch. Almost never the right move."],
+  [/\bgit\s+push\s+(?:--mirror|--prune)\b/, "Blocked `git push --mirror`/`--prune`. These can wipe remote branches in one shot."],
+  [/\bgit\s+filter-(branch|repo)\b/, "Blocked `git filter-branch`/`filter-repo`. Rewrites entire repo history — destructive and slow."],
+  [/\brm\s+-[A-Za-z]*r[A-Za-z]*f?[A-Za-z]*\s+\/(?!tmp|var\/tmp|c\/CRX_Manager\/\.playwright-mcp|c\/CRX_Manager\/\.claude\/worktrees)/, "Blocked `rm -rf /<path>` outside known-safe scratch areas. Use a more specific path."],
+  [/\bnpm\s+run\s+(?:reset|nuke|wipe)\b/, "Blocked suspicious `npm run reset/nuke/wipe`. Verify what this script does first."],
+  // NET-NEW (2026-07-13 mcp-tool-guard audit): shell-redirect writes to .env were
+  // only blocked at `git add` time, never at write time — a plain `echo X > .env`
+  // (or Desktop Commander running the same shell command) sailed through. This
+  // closes that gap for BOTH bash-safety.mjs and mcp-tool-guard.mjs.
+  // NOTE: `\s*` after the redirect, not `\s+` — `echo SECRET>.env` is valid shell
+  // with NO space (Codex P2 2026-07-13 caught the whitespace-required bypass).
+  // Tracked non-secret templates (.env.example/.template/.sample) stay allowed,
+  // matching env-guard.mjs's exemptions (Codex P2 round 4).
+  [/(?:>>?\s*|\btee\b\s+)['"]?[^\s'";|&]*\.env(?!(?:\.[\w-]+)*\.(?:example|template|sample)\b)(?:\.[\w-]+)?\b/, "Blocked shell-redirect write to .env*. Secrets must never be written this way."],
+];
+
+// Destructive raw SQL via psql/supabase CLI (kept as its own exported check
+// since the original file ran it as a second, independent condition).
+export function checkDestructiveSql(cmd) {
+  const text = String(cmd || "");
+  if (/\b(?:DROP\s+TABLE|DROP\s+SCHEMA|TRUNCATE)\b/i.test(text) && /(psql|supabase\s+sql|--?c\s)/i.test(text)) {
+    return "Blocked destructive SQL via psql/supabase. Add a migration instead.";
+  }
+  return null;
+}
+
+// Run raw text against the ordered pattern table + the destructive-SQL rule.
+// Returns the FIRST matching reason, or null. This is the literal-command check
+// only — no npm-script resolution (see checkCommandDeep for that).
+export function checkDangerousCommand(cmd) {
+  const text = String(cmd || "");
+  if (!text) return null;
+  for (const [re, reason] of DANGEROUS_CMD_CHECKS) {
+    if (re.test(text)) return reason;
+  }
+  return checkDestructiveSql(text);
+}
+
+// Bash-based modification of an EXISTING file under supabase/migrations/ (via
+// output redirect, or sed/perl/awk -i). Returns a reason or null. Verbatim
+// extraction of the original bash-safety.mjs logic.
+const MIGRATION_MODIFY_RES = [
+  /(?:>>?|2>&1\s*>>?)\s*['"]?([^\s'";|&<>]*supabase[\\/]migrations[\\/][^\s'";|&<>]+)/g,
+  /(?:sed|perl|awk)\s+-[A-Za-z]*i[A-Za-z]*\b[^|;&]*?([^\s'";|&<>]*supabase[\\/]migrations[\\/][^\s'";|&<>]+)/g,
+];
+
+export function checkMigrationModify(cmd, cwd) {
+  const text = String(cmd || "");
+  if (!text) return null;
+  const base = cwd || process.cwd();
+  for (const re of MIGRATION_MODIFY_RES) {
+    re.lastIndex = 0;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      const target = m[1].replace(/^['"]|['"]$/g, "");
+      const abs = path.isAbsolute(target) ? target : path.resolve(base, target);
+      try {
+        if (existsSync(abs)) {
+          return `Blocked modification of existing migration file: ${target}. Existing migrations must never be edited — create a NEW migration that supersedes it.`;
+        }
+      } catch { /* ignore, fail open on this one path */ }
+    }
+  }
+  return null;
+}
+
+// ── npm-script indirection (FIX 2, 2026-07-13) ──────────────────────────────
+// `npm run foo` can hide an arbitrary dangerous command inside package.json's
+// scripts.foo, which the literal-command regex table above never sees. Resolve
+// the script's body text (recursing into scripts IT calls, max depth 3) and run
+// the same checks against the resolved text too.
+
+export function extractNpmRunNames(cmd) {
+  const names = [];
+  // Accepts valid npm variants (Codex P1 2026-07-13 round 3): options before
+  // and after the subcommand (`npm -s run x`, `npm run --silent x`) and the
+  // `run-script` alias — option tokens must not be mistaken for script names.
+  const re = /\bnpm\s+(?:-{1,2}[\w-]+(?:=\S+)?\s+)*(?:run|run-script)\s+(?:-{1,2}[\w-]+(?:=\S+)?\s+)*([\w:.-]+)/g;
+  let m;
+  const text = String(cmd || "");
+  while ((m = re.exec(text)) !== null) names.push(m[1]);
+  return names;
+}
+
+// Resolve one script name to an array of script-body texts: itself, plus every
+// script reachable via `npm run X` inside it, up to maxDepth levels, with a
+// `seen` set so a cyclical script graph can't recurse forever.
+export function resolveNpmScriptChain(scripts, name, depth = 0, maxDepth = 3, seen = new Set()) {
+  if (depth > maxDepth || !scripts || typeof scripts !== "object") return [];
+  if (seen.has(name)) return [];
+  seen.add(name);
+  const out = [];
+  const text = scripts[name];
+  if (typeof text === "string") {
+    out.push(text);
+    for (const nested of extractNpmRunNames(text)) {
+      out.push(...resolveNpmScriptChain(scripts, nested, depth + 1, maxDepth, seen));
+    }
+  }
+  // npm auto-runs pre<name>/post<name> around any script — a dangerous command
+  // hidden there rides along with an innocent `npm run <name>` (Codex P1
+  // 2026-07-13 round 4). Resolve them even when scripts[name] itself is absent.
+  for (const lifecycle of [`pre${name}`, `post${name}`]) {
+    if (typeof scripts[lifecycle] === "string") {
+      out.push(...resolveNpmScriptChain(scripts, lifecycle, depth + 1, maxDepth, seen));
+    }
+  }
+  return out;
+}
+
+// Read package.json's `scripts` map from `cwd`. Returns null (never throws) if
+// the file is unreadable or unparsable — callers MUST warn-and-allow (skip the
+// script-body check, do not block) in that case; a broken/missing package.json
+// must never brick the hook.
+export function readPackageScripts(cwd) {
+  try {
+    const raw = readFileSync(path.join(cwd || process.cwd(), "package.json"), "utf8");
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed.scripts === "object" && parsed.scripts !== null ? parsed.scripts : {};
+  } catch {
+    return null;
+  }
+}
+
+// The full command check used by both hooks: literal command text first, then
+// (only if clean) every `npm run X` target's resolved script body, recursively.
+// Returns the first matching reason, or null.
+export function checkCommandDeep(cmd, cwd) {
+  const direct = checkDangerousCommand(cmd);
+  if (direct) return direct;
+
+  const names = extractNpmRunNames(cmd);
+  if (names.length === 0) return null;
+
+  const scripts = readPackageScripts(cwd);
+  if (scripts === null) {
+    // FAIL-OPEN, but loud: package.json missing/unparsable — skip the resolved-
+    // script check rather than block or crash.
+    process.stderr.write("bash-safety-lib: could not read/parse package.json — skipping npm-script-body check (warn-and-allow)\n");
+    return null;
+  }
+
+  const seen = new Set();
+  for (const name of names) {
+    for (const resolved of resolveNpmScriptChain(scripts, name, 0, 3, seen)) {
+      // Run BOTH check families on the resolved body — a script that rewrites an
+      // existing migration is as dangerous as one that force-pushes (Codex P1
+      // 2026-07-13: only checkDangerousCommand ran here, so npm indirection
+      // still bypassed the migration-immutability guard).
+      const reason = checkDangerousCommand(resolved) || checkMigrationModify(resolved, cwd);
+      if (reason) return `${reason} (found inside \`npm run ${name}\`'s script body)`;
+    }
+  }
+  return null;
+}
+
+export { MIGRATION_MODIFY_RES };

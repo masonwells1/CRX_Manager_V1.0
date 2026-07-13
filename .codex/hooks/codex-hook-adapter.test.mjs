@@ -9,6 +9,33 @@ const root = path.resolve("C:/example/CRX_Manager");
 assert.equal(normalizeHookOutput(""), "");
 assert.equal(normalizeHookOutput(JSON.stringify({ hookSpecificOutput: { permissionDecision: "allow" } })), "");
 assert.match(normalizeHookOutput(JSON.stringify({ hookSpecificOutput: { permissionDecision: "deny" } })), /deny/);
+
+// Codex P2 2026-07-13 round 5: a swallowed allow payload must still forward its
+// loud fail-open systemMessage (top-level or nested) to the warn channel.
+{
+  const warnings = [];
+  const warn = (m) => warnings.push(m);
+  assert.equal(
+    normalizeHookOutput(
+      JSON.stringify({ systemMessage: "⚠ registry unreadable — check SKIPPED", hookSpecificOutput: { permissionDecision: "allow" } }),
+      warn,
+    ),
+    "",
+  );
+  assert.equal(warnings.length, 1, "top-level systemMessage forwarded once");
+  assert.match(warnings[0], /check SKIPPED/);
+
+  warnings.length = 0;
+  normalizeHookOutput(
+    JSON.stringify({ hookSpecificOutput: { permissionDecision: "allow", systemMessage: "nested warn" } }),
+    warn,
+  );
+  assert.match(warnings[0], /nested warn/, "nested systemMessage forwarded");
+
+  warnings.length = 0;
+  normalizeHookOutput(JSON.stringify({ hookSpecificOutput: { permissionDecision: "allow" } }), warn);
+  assert.equal(warnings.length, 0, "no systemMessage → no warning");
+}
 assert.equal(
   resolveSharedHook(root, ".claude/hooks/sql-safety.mjs"),
   path.resolve(root, ".claude/hooks/sql-safety.mjs"),

@@ -1,0 +1,168 @@
+#!/usr/bin/env node
+// Tests for idempotency-body-check.mjs, including FIX 6 (2026-07-13 audit —
+// "idempotency unscoped-lookup variant" / restore_quote_version bug class).
+// Spawns the real hook with crafted Write-tool stdin payloads.
+// Run: node .claude/hooks/idempotency-body-check.test.mjs
+
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+let pass = 0;
+function ok(c, m) { assert.ok(c, m); pass++; }
+function eq(a, b, m) { assert.equal(a, b, m); pass++; }
+
+function runHook(content, filePath = "supabase/migrations/20260713000000_test.sql") {
+  const payload = { tool_input: { file_path: filePath, content } };
+  return spawnSync(process.execPath, [path.join(__dirname, "idempotency-body-check.mjs")], {
+    input: JSON.stringify(payload),
+    encoding: "utf8",
+  });
+}
+function isDeny(r) { return r.stdout.includes('"permissionDecision":"deny"'); }
+
+function fn(body, params = "p_idempotency_key text DEFAULT NULL::text") {
+  return `CREATE OR REPLACE FUNCTION public.test_fn(${params}) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public', 'pg_temp' AS $function$\n${body}\n$function$;`;
+}
+
+// ── pre-existing behavior: not a migration file / no content / exempt marker ──
+let r = runHook("whatever", "src/pages/Foo.tsx");
+eq(r.status, 0, "non-migration file exits 0");
+ok(!isDeny(r), "non-.sql file never denied (allowed)");
+
+r = runHook("-- idempotency-body-check: exempt\n" + fn("INSERT INTO idempotency_keys (idempotency_key) VALUES (p_idempotency_key);"));
+ok(!isDeny(r), "file-level exempt marker skips the check entirely");
+
+// ── existing half-wired behavior (unchanged) ───────────────────────────────
+r = runHook(fn(`
+  IF p_idempotency_key IS NOT NULL THEN
+    SELECT result FROM check_idempotency(p_idempotency_key, 'test_fn');
+  END IF;
+  INSERT INTO customers (name) VALUES ('x');
+`));
+ok(isDeny(r), "half-wired (check but no save helper) still blocked");
+
+r = runHook(fn(`
+  INSERT INTO customers (name) VALUES ('x');
+  PERFORM save_idempotency(p_idempotency_key, 'test_fn', '{}'::jsonb);
+`));
+ok(isDeny(r), "half-wired (save but no check helper) still blocked");
+
+r = runHook(fn(`
+  UPDATE customers SET name = 'x' WHERE id = 1;
+`));
+ok(isDeny(r), "declares p_idempotency_key, mutates, but never touches idempotency_keys at all — still blocked");
+
+// non-mutating function with the param declared: allowed (existing behavior)
+r = runHook(fn(`SELECT p_idempotency_key;`));
+ok(!isDeny(r), "no mutation in body — allowed regardless of idempotency wiring");
+
+// ── FIX 6: direct pattern, UNSCOPED lookup (restore_quote_version bug class) ──
+r = runHook(fn(`
+  DECLARE v_existing text;
+  BEGIN
+  SELECT result INTO v_existing FROM idempotency_keys WHERE idempotency_key = p_idempotency_key;
+  INSERT INTO customers (name) VALUES ('x');
+  INSERT INTO idempotency_keys (idempotency_key, operation, result) VALUES (p_idempotency_key, 'test_fn', '{}');
+  END;
+`));
+ok(isDeny(r), "direct lookup with NO operation filter is blocked (FIX 6)");
+ok(r.stdout.includes("restore_quote_version"), "block message cites the restore_quote_version bug class");
+
+// ── FIX 6: direct pattern, SCOPED lookup — allowed ──────────────────────────
+r = runHook(fn(`
+  DECLARE v_existing text;
+  BEGIN
+  SELECT result INTO v_existing FROM idempotency_keys WHERE idempotency_key = p_idempotency_key AND operation = 'test_fn';
+  INSERT INTO customers (name) VALUES ('x');
+  INSERT INTO idempotency_keys (idempotency_key, operation, result) VALUES (p_idempotency_key, 'test_fn', '{}');
+  END;
+`));
+ok(!isDeny(r), "direct lookup WITH an operation filter is allowed");
+
+// ── FIX 6: helper pattern, check_idempotency() called with NO operation arg ──
+r = runHook(fn(`
+  DECLARE v_existing jsonb;
+  BEGIN
+  SELECT result INTO v_existing FROM (SELECT check_idempotency(p_idempotency_key) AS result) x;
+  INSERT INTO customers (name) VALUES ('x');
+  PERFORM save_idempotency(p_idempotency_key, 'test_fn', '{}'::jsonb);
+  END;
+`));
+ok(isDeny(r), "check_idempotency() called with only 1 arg (no operation) is blocked (FIX 6)");
+ok(r.stdout.includes("restore_quote_version"), "helper-pattern block message also cites restore_quote_version");
+
+// ── FIX 6: helper pattern, check_idempotency() called WITH operation arg ────
+r = runHook(fn(`
+  DECLARE v_existing jsonb;
+  BEGIN
+  SELECT check_idempotency(p_idempotency_key, 'test_fn') INTO v_existing;
+  INSERT INTO customers (name) VALUES ('x');
+  PERFORM save_idempotency(p_idempotency_key, 'test_fn', '{}'::jsonb);
+  END;
+`));
+ok(!isDeny(r), "check_idempotency() called with an operation literal is allowed");
+
+// operation-bearing PARAMETER (not a literal) also satisfies the scoping check
+r = runHook(fn(`
+  DECLARE v_existing jsonb;
+  BEGIN
+  SELECT check_idempotency(p_idempotency_key, v_operation_name) INTO v_existing;
+  INSERT INTO customers (name) VALUES ('x');
+  PERFORM save_idempotency(p_idempotency_key, v_operation_name, '{}'::jsonb);
+  END;
+`));
+ok(!isDeny(r), "check_idempotency() called with an operation-bearing parameter is allowed");
+
+// ── Codex P1 2026-07-13: mismatched check/save operation LITERALS — the saved
+//    result is never found on retry, so the mutation replays every time ───────
+r = runHook(fn(`
+  DECLARE v_existing jsonb;
+  BEGIN
+  SELECT check_idempotency(p_idempotency_key, 'wrong_op') INTO v_existing;
+  INSERT INTO customers (name) VALUES ('x');
+  PERFORM save_idempotency(p_idempotency_key, 'test_fn', '{}'::jsonb);
+  END;
+`));
+ok(isDeny(r), "mismatched check/save operation literals are blocked");
+ok(r.stdout.includes("mismatched") || r.stdout.includes("NEVER found"), "mismatch block message explains the replay consequence");
+
+// mixed literal + parameter: conservative, allowed (reviewers own non-literal cases)
+r = runHook(fn(`
+  DECLARE v_existing jsonb;
+  BEGIN
+  SELECT check_idempotency(p_idempotency_key, 'test_fn') INTO v_existing;
+  INSERT INTO customers (name) VALUES ('x');
+  PERFORM save_idempotency(p_idempotency_key, v_operation_name, '{}'::jsonb);
+  END;
+`));
+ok(!isDeny(r), "literal check + parameterized save is left to reviewers (allowed)");
+
+// Codex P2 round 3: EVERY pairing must close — a shared literal is not enough.
+r = runHook(fn(`
+  DECLARE v_existing jsonb;
+  BEGIN
+  SELECT check_idempotency(p_idempotency_key, 'op_a') INTO v_existing;
+  SELECT check_idempotency(p_idempotency_key, 'op_b') INTO v_existing;
+  INSERT INTO customers (name) VALUES ('x');
+  PERFORM save_idempotency(p_idempotency_key, 'op_a', '{}'::jsonb);
+  PERFORM save_idempotency(p_idempotency_key, 'op_c', '{}'::jsonb);
+  END;
+`));
+ok(isDeny(r), "partial intersection (op_b unchecked-save op_c) is still blocked");
+
+r = runHook(fn(`
+  DECLARE v_existing jsonb;
+  BEGIN
+  SELECT check_idempotency(p_idempotency_key, 'op_a') INTO v_existing;
+  SELECT check_idempotency(p_idempotency_key, 'op_b') INTO v_existing;
+  INSERT INTO customers (name) VALUES ('x');
+  PERFORM save_idempotency(p_idempotency_key, 'op_a', '{}'::jsonb);
+  PERFORM save_idempotency(p_idempotency_key, 'op_b', '{}'::jsonb);
+  END;
+`));
+ok(!isDeny(r), "two fully-closed operation pairings are allowed");
+
+console.log(`idempotency-body-check: ${pass} assertions passed`);
