@@ -4,6 +4,12 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-13 — Auto-cleanup of finished worktrees/branches (SessionStart guard)
+
+Recurring toil: merged branches and finished worktrees pile up and get swept by hand. Now a deterministic guard does it. New `.claude/hooks/worktree-cleanup.mjs` (+ pure classifier `worktree-cleanup-lib.mjs`, wired into `SessionStart` before `worktree-awareness`) removes a worktree/branch **only** when it is provably finished — fully merged into `origin/main` (via `git cherry`, so squash/rebase merges count too) **AND** clean **AND** unlocked **AND** not the active session **AND** not a protected branch (`main`/`master`) **AND** (for worktrees) under `.claude/worktrees/`. A session can't delete its own active worktree, so each new session sweeps the *previous* finished ones. Anything with unmerged commits, uncommitted changes, a lock, or a manual long-lived checkout (`C:\CRX_Manager`, `C:\CRX_Layer2`, …) is kept and reported; every deletion prints a recovery SHA; fail-open (stale/missing `origin/main` → does nothing). 25-assertion safety classifier in `worktree-cleanup-lib.test.mjs` (added to `test:correction-guards`). Proven end-to-end: dry-run on the live fleet removes nothing (all active/locked/unmerged), and `--write` on a throwaway merged worktree removes it while leaving the active worktree + real unmerged branches untouched. Dry-run anytime: `node .claude/hooks/worktree-cleanup.mjs --report`.
+
+---
+
 ## 2026-07-13 — Fix: `.gitattributes` pins the agent-workflow surface to LF (un-sticks every commit on Windows)
 
 `origin/main` failed its own pre-commit guard `scripts/check-agent-workflows.mjs` on Windows, blocking every commit. Root cause was line endings, not content: `core.autocrlf=true` with no `.gitattributes` rewrote the generated Codex adapter files under `.agents/` to CRLF on checkout, while the generator (`scripts/sync-agent-workflows.mjs`) emits LF — so the byte-for-byte check reported 18 files "stale" (identical text, different EOLs). The committed blobs were already correct LF; the failure only reproduced on `autocrlf=true` (Windows) checkouts. Fix is a new `.gitattributes` pinning `.agents/**`, `.claude/skills/**`, and `.claude/commands/**` to `text eol=lf` so the generator's inputs and outputs stay LF on every platform, making the check deterministic and the fix durable across fresh checkouts. No workflow logic changed — line-ending policy only.

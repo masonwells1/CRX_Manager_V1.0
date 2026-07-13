@@ -59,6 +59,7 @@ Run when a new session begins. Inject `additionalContext` so Claude sees state-d
 |------|------------------|
 | `session-snapshot.mjs` | Git porcelain snapshot (so Stop hook can tell session-scoped changes from prior WIP) |
 | `session-staleness.mjs` | Schema registry behind registry-relevant migrations (without false alarms for cron/data-only migrations); uncommitted files from a prior session; weekly DB backup missing or older than 8 days (`backups/LATEST-OK.json`, stamped by `scripts/backup-db.mjs` — Supabase FREE plan has no point-in-time recovery) |
+| `worktree-cleanup.mjs` (+ `-lib`) | Auto-removes FINISHED worktrees/branches so they stop piling up (Mason 2026-07-13). A session can't delete its own active worktree, so each new session sweeps the PREVIOUS finished ones. Removes an item ONLY when the pure classifier (`worktree-cleanup-lib.mjs`, `git cherry`-based so squash/rebase merges count) proves it is fully merged into `origin/main` AND clean AND unlocked AND not the active session AND not a protected branch AND (for worktrees) under `.claude/worktrees/`. Anything with unmerged commits, uncommitted changes, a lock, or a manual long-lived checkout is KEPT and reported. Prints a recovery SHA for every deletion. Fail-open (stale/missing `origin/main` → does nothing). Dry-run: `node .claude/hooks/worktree-cleanup.mjs --report`. Tests: `worktree-cleanup-lib.test.mjs` (in `test:correction-guards`). |
 
 ### Stop Hooks (`.claude/hooks/`)
 Run when a session ends. Block until Claude addresses loose ends.

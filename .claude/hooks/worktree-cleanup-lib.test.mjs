@@ -1,0 +1,98 @@
+#!/usr/bin/env node
+// Tests for the worktree-cleanup safety classifier.
+// Run: node .claude/hooks/worktree-cleanup-lib.test.mjs
+
+import assert from "node:assert/strict";
+import {
+  classifyWorktree, classifyBranch, planCleanup, normPath,
+  PROTECTED_BRANCHES, HARNESS_MARKER,
+} from "./worktree-cleanup-lib.mjs";
+
+let pass = 0;
+function eq(a, b, msg) { assert.deepEqual(a, b, msg); pass++; }
+function ok(cond, msg) { assert.ok(cond, msg); pass++; }
+
+const CUR = "C:/CRX_Manager/.claude/worktrees/active-abc123";
+const ctx = { currentPath: CUR };
+
+// A worktree that passes EVERY gate → removed.
+const finished = {
+  path: "C:/CRX_Manager/.claude/worktrees/done-xyz789",
+  branch: "chore/done", detached: false, locked: false, dirty: false, merged: true,
+};
+eq(classifyWorktree(finished, ctx), { action: "remove", reason: "merged-clean" }, "finished harness worktree → remove");
+
+// ── Each gate, in isolation, must FLIP the verdict to keep ──
+
+// 1. active session (the worktree we're standing in) — even if merged+clean.
+eq(classifyWorktree({ ...finished, path: CUR }, ctx).action, "keep", "active session never removed");
+eq(classifyWorktree({ ...finished, path: CUR }, ctx).reason, "active-session", "active reason");
+// case/slash-insensitive path match
+eq(classifyWorktree({ ...finished, path: CUR.replace(/\//g, "\\").toUpperCase() }, ctx).reason, "active-session",
+  "active match is slash/case-insensitive");
+
+// 2. detached / no branch
+eq(classifyWorktree({ ...finished, detached: true }, ctx).reason, "detached", "detached → keep");
+eq(classifyWorktree({ ...finished, branch: null }, ctx).reason, "detached", "no branch → keep");
+
+// 3. protected branch
+for (const b of PROTECTED_BRANCHES) {
+  eq(classifyWorktree({ ...finished, branch: b }, ctx).reason, "protected-branch", `${b} protected`);
+}
+
+// 4. locked worktree (an active/held session)
+eq(classifyWorktree({ ...finished, locked: true }, ctx).reason, "locked", "locked → keep");
+
+// 5. dirty (uncommitted work)
+eq(classifyWorktree({ ...finished, dirty: true }, ctx).reason, "dirty", "dirty → keep");
+
+// 6. unmerged (real un-shipped commits)
+eq(classifyWorktree({ ...finished, merged: false }, ctx).reason, "unmerged", "unmerged → keep");
+
+// 7. not under .claude/worktrees/ (a manual long-lived checkout) — never auto-removed
+eq(classifyWorktree({ ...finished, path: "C:/CRX_Layer2" }, ctx).reason, "not-harness",
+  "manual worktree outside .claude/worktrees → keep");
+eq(classifyWorktree({ ...finished, path: "C:/CRX_Manager" }, ctx).reason, "not-harness", "repo root → keep");
+
+// Gate PRECEDENCE: a dirty + unmerged manual worktree still keeps (any single gate is enough);
+// and active beats everything.
+ok(classifyWorktree({ ...finished, path: CUR, dirty: true, merged: false, locked: true }, ctx).reason === "active-session",
+  "active takes precedence over all other gates");
+
+// ── Orphan branch classifier ──
+eq(classifyBranch({ branch: "claude/dead", merged: true, checkedOut: false }, {}),
+  { action: "remove", reason: "merged" }, "merged orphan branch → remove");
+eq(classifyBranch({ branch: "claude/live", merged: false, checkedOut: false }, {}).reason, "unmerged",
+  "unmerged orphan branch → keep");
+eq(classifyBranch({ branch: "main", merged: true, checkedOut: false }, {}).reason, "protected-branch",
+  "main branch → keep");
+eq(classifyBranch({ branch: "feat/x", merged: true, checkedOut: true }, {}).reason, "checked-out",
+  "checked-out branch → keep (handled by worktree pass)");
+
+// ── planCleanup end-to-end (mirrors this session's real fleet) ──
+const plan = planCleanup({
+  worktrees: [
+    { path: CUR, branch: "claude/active", merged: false, dirty: false, locked: false, detached: false }, // active
+    { path: "C:/CRX_Manager/.claude/worktrees/finished-1", branch: "chore/f1", merged: true, dirty: false, locked: false, detached: false }, // remove
+    { path: "C:/CRX_Manager/.claude/worktrees/locked-1", branch: "wt-sync", merged: true, dirty: false, locked: true, detached: false }, // keep (locked)
+    { path: "C:/CRX_Layer2", branch: "main", merged: true, dirty: false, locked: false, detached: false }, // keep (protected+manual)
+  ],
+  branches: [
+    { branch: "claude/merged-orphan", merged: true, checkedOut: false }, // remove
+    { branch: "claude/overnight-bug-hunt", merged: false, checkedOut: false }, // keep (unmerged)
+  ],
+}, ctx);
+eq(plan.removeWorktrees.map((w) => w.branch), ["chore/f1"], "only the finished harness worktree is removed");
+eq(plan.removeBranches.map((b) => b.branch), ["claude/merged-orphan"], "only the merged orphan branch is removed");
+eq(plan.keep.length, 4, "everything else is kept with a reason (active + locked + protected/manual + unmerged orphan)");
+ok(plan.keep.every((k) => typeof k.reason === "string" && k.reason), "every kept item carries a reason");
+
+// invariant: nothing unmerged is EVER in a remove list
+const allRemoved = [...plan.removeWorktrees, ...plan.removeBranches];
+ok(allRemoved.every((x) => x.merged === true), "SAFETY: no unmerged item is ever removed");
+
+// normPath sanity
+eq(normPath("C:\\A\\B\\"), "c:/a/b", "normPath lowercases + forward-slashes + strips trailing");
+ok(HARNESS_MARKER === "/.claude/worktrees/", "harness marker stable");
+
+console.log(`worktree-cleanup-lib: ${pass} assertions passed`);
