@@ -9,6 +9,18 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 
 ---
 
+## 2026-07-13 — DRAFT: Codex standing push/merge authorization (mirror of Claude's)
+
+**Status: pending Mason's merge OK.** Mason authorized the design and this implementation branch on 2026-07-13, but the grant does not become active until Claude independently reviews the branch and Mason explicitly approves its merge.
+
+**Proposed decision:** Codex may push or merge ordinary reversible code to `main` once the full green pipeline passes. A main-bound diff classified as risky by the shared `.claude/hooks/codex-push-lib.mjs` path/content rules additionally requires a real Claude review of that exact commit in the current session and a fresh SHA-bound proof at `.claude/session-state/claude-review-push.json`. The Codex production guard applies this rule to direct pushes, `git -C` forms, `gh pr merge`, and GitHub MCP merge tools, and fails closed when it cannot verify the ref, diff, PR target, or proof.
+
+**Unchanged boundaries:** this grant never covers deleting `main`, force-pushing, live migrations or data writes, edge-function deploys, secrets/auth/permission changes, or bypassing Husky. Codex's Supabase access remains read-only. The initial harness branch may only be pushed to its feature branch; Claude cross-review plus Mason's explicit merge OK activates the grant.
+
+**Why:** Mason wants the same momentum for either primary coding agent, while preserving a deterministic second-model gate on money, database, security, and other high-blast-radius changes.
+
+---
+
 ## 2026-07-13 — SETTLED: pre-authorized runs may apply live migrations without a per-migration in-chat OK
 
 **Decision (Mason, in-chat, 2026-07-13):** the migration-apply approval question flagged on

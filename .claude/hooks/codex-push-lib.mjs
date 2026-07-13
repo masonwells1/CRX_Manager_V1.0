@@ -1,4 +1,6 @@
-// Pure helpers for codex-push-guard.mjs.
+// Shared helpers for Claude's and Codex's production-push guards.
+
+import path from "node:path";
 
 // Does the git command push (to main)? We fire on any `git push`; the hook then
 // checks whether the push actually TARGETS main before doing anything.
@@ -9,8 +11,31 @@ const GIT_ARG = `(?:"[^"]*"|'[^']*'|\\S+)`;
 const GIT_GLOBAL_OPTS =
   `(?:\\s+(?:-C\\s+${GIT_ARG}|-c\\s+${GIT_ARG}|--git-dir(?:=${GIT_ARG}|\\s+${GIT_ARG})|--work-tree(?:=${GIT_ARG}|\\s+${GIT_ARG})|--no-pager|--literal-pathspecs|--exec-path(?:=${GIT_ARG})?))*`;
 const GIT_PUSH_RE = new RegExp(`\\bgit${GIT_GLOBAL_OPTS}\\s+push\\b([^;&|]*)`);
+const GIT_PUSH_PREFIX_RE = new RegExp(`\\bgit(${GIT_GLOBAL_OPTS})\\s+push\\b`);
 export function isGitPush(cmd) {
   return GIT_PUSH_RE.test(String(cmd || ""));
+}
+
+function unquoteShellArg(value) {
+  const text = String(value || "");
+  if ((text.startsWith('"') && text.endsWith('"')) || (text.startsWith("'") && text.endsWith("'"))) {
+    return text.slice(1, -1);
+  }
+  return text;
+}
+
+// Resolve the repository directory selected by one or more `git -C` options.
+// Git applies repeated -C values from left to right, so preserve that behavior.
+export function gitPushCwd(cmd, fallbackCwd) {
+  const base = path.resolve(fallbackCwd || process.cwd());
+  const prefix = String(cmd || "").match(GIT_PUSH_PREFIX_RE)?.[1] || "";
+  const optionRe = new RegExp(`(?:^|\\s)-C\\s+(${GIT_ARG})`, "g");
+  let cwd = base;
+  let match;
+  while ((match = optionRe.exec(prefix)) !== null) {
+    cwd = path.resolve(cwd, unquoteShellArg(match[1]));
+  }
+  return cwd;
 }
 
 // Which LOCAL ref is this push landing on main? Returns:
@@ -78,19 +103,27 @@ export function contentIsRisky(diffText) {
   return RISKY_CONTENT_RE.test(String(diffText || ""));
 }
 
-// Validate a Codex-review proof object against the current HEAD and clock.
-// Requires codex_ran===true, a clean/blockers-fixed verdict, head_sha === current
-// HEAD (so a proof can't be reused after new commits), and a timestamp within 30min.
-export function proofValid(data, headSha, nowMs) {
-  if (!data || data.codex_ran !== true) return false;
+function reviewProofValid(data, headSha, nowMs, ranKey) {
+  if (!data || data[ranKey] !== true) return false;
   const v = String(data.verdict || "");
   if (v !== "clean" && v !== "blockers-fixed") return false;
-  if (headSha && data.head_sha && data.head_sha !== headSha) return false;
+  if (headSha && data.head_sha !== headSha) return false;
   const t = data.timestamp ? Date.parse(data.timestamp) : NaN;
   if (!Number.isFinite(t)) return false;
   const now = typeof nowMs === "number" ? nowMs : Date.now();
-  if (now - t > 30 * 60 * 1000) return false;
+  const age = now - t;
+  if (age < 0 || age > 30 * 60 * 1000) return false;
   return true;
+}
+
+// Validate Claude's existing Codex-review proof shape.
+export function proofValid(data, headSha, nowMs) {
+  return reviewProofValid(data, headSha, nowMs, "codex_ran");
+}
+
+// Mirror validation for Codex's Claude-review proof shape.
+export function claudeProofValid(data, headSha, nowMs) {
+  return reviewProofValid(data, headSha, nowMs, "claude_ran");
 }
 
 export { RISKY_PATH_RES, RISKY_CONTENT_RE };

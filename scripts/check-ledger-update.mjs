@@ -17,6 +17,7 @@ import { execFileSync } from "node:child_process";
 const TRIGGER_RES = [
   /^\.claude\/(commands|skills|hooks|workflows|agents)\//,
   /^\.claude\/settings\.json$/,
+  /^\.codex\//,
   /^AGENTS\.md$/,
   /^CLAUDE\.md$/,
   /^\.husky\//,
