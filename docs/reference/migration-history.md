@@ -1,4 +1,4 @@
-# Migration History (684 migrations)
+# Migration History (685 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
@@ -1068,6 +1068,7 @@ These 10 historical migrations apply by timestamp order like all others; they si
 | 666 | 20260713060300 | **APPLIED LIVE 2026-07-13 (bug-hunt D). Payment idempotency race-fix.** Recreates `allocate_payment` replacing check-then-act idempotency with an atomic up-front `INSERT ... ON CONFLICT (idempotency_key) DO NOTHING` claim (concurrent same-key callers block on the unique index → exactly one payment; sequential replay returns the cached result). Money math byte-identical; also REVOKEs the latent anon/PUBLIC EXECUTE grant. |
 | 667 | 20260713060400 | **APPLIED LIVE 2026-07-13 (fix E, Codex-Sol BLOCK #1 on #663). Split-guard concurrency.** Recreates `_enforce_field_billing_defaults_sum_100` adding a per-field `pg_advisory_xact_lock` before the sum (id-ordered for deadlock safety), so two simultaneous first-time inserts on one field can't each pass and leave it at 200%. |
 | 668 | 20260713060500 | **APPLIED LIVE 2026-07-13 (fix F, Codex-Sol BLOCK #2 on #664). Reversal admin-only.** Recreates `reverse_application_record` changing the role gate from `(is_admin() OR is_sales_rep())` to `is_admin()` only — realigns the reversal with the admin-only privilege of the dropped `app_records_delete` policy (no silent authority expansion). Body byte-identical otherwise. |
+| 669 | 20260713060600 | **APPLIED LIVE 2026-07-13 (fix G, Codex-Sol BLOCK on #667). Split-guard global lock.** Recreates `_enforce_field_billing_defaults_sum_100` replacing the per-field advisory lock (#667) with a SINGLE GLOBAL `pg_advisory_xact_lock(hashtext('field_billing_defaults_sum_100'))`. The per-field lock could deadlock across a multi-field deferred-trigger transaction (A,B vs B,A); one constant key removes the lock-ordering cycle entirely while keeping the same-field 200% race closed. rls+drift+smoke+Codex-Sol SHIP; verified live. |
 
 > **Money-inventory night hunt (2026-07-10/11):** rows 645–648 above + a frontend `OfficeCockpit.tsx` `.is('deleted_at', null)` fix. Report: `docs/audits/overnight-bug-hunt/REPORT-money-inventory-2026-07-10.md`. Parked (behavior-change or 25KB-fn, need owner review): complete_delivery date-basis + soft-deleted guard, update_order_items batched-commission block, save_invoice split-group lock, credit-memo AR-netting (owner policy). **Phase 3 (2026-07-11, returns/vendor-AP/PO-receiving/finance-prepay):** row 649 shipped; 1 parked (void_payment overpayment-credit resurrection — Codex rated the simple fix FLAWED, needs the application-reversal design); 5 refuted.
 
