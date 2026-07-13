@@ -351,6 +351,86 @@ try {
     runGh: () => { throw new Error("unavailable"); },
   }).blocked, true, "merge target lookup failures deny closed");
 
+  // ── Codex round-2 regressions (2026-07-13 review of this harness) ─────────
+  // R2-1: the Codex GitHub app's input spelling is recognized AND the guard
+  // verifies the SAME PR number the tool will merge.
+  let sawSelector = "";
+  assert.equal(evaluateProductionAction({
+    toolName: "mcp__codex_apps__github_merge_pull_request",
+    toolInput: { repository_full_name: "crop/crx", pr_number: 123 },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: (args) => { sawSelector = args.join(" "); return mainPrJson; },
+  }).blocked, false, "Codex-app merge input spelling is recognized and gated");
+  assert.match(sawSelector, /\b123\b/, "guard verifies the exact requested PR number");
+  assert.match(sawSelector, /crop\/crx/, "guard verifies against the exact requested repo");
+  assert.equal(evaluateProductionAction({
+    toolName: "mcp__github__merge_pull_request",
+    toolInput: { unexpected_key: true },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: () => mainPrJson,
+  }).blocked, true, "merge tool without a parseable PR number denies closed");
+
+  // R2-2: attached/alternate gh api method spellings and GraphQL mutations.
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh api -XPUT repos/crop/crx/pulls/123/merge" },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: () => JSON.stringify({ ...mainPr, mergeStateStatus: "UNSTABLE" }),
+  }).blocked, true, "attached -XPUT gh api merge is gated (denied on non-green checks)");
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh api --method=POST repos/crop/crx/pulls/123/merge" },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: () => JSON.stringify({ ...mainPr, mergeStateStatus: "UNSTABLE" }),
+  }).blocked, true, "non-PUT mutating methods on the merge endpoint are gated too");
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: 'gh api graphql -f query="mutation { mergePullRequest(input: {pullRequestId: \\"x\\"}) { clientMutationId } }"' },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: () => mainPrJson,
+  }).blocked, true, "GraphQL merge mutations are denied outright even with a valid proof present");
+
+  // R2-3: option-based deletion of main is DELETE, denied regardless of proof.
+  for (const command of [
+    "git push origin --delete main",
+    "git push origin -d main",
+    "git push origin --del main",
+    "git push --delete origin main",
+  ]) {
+    assert.equal(evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command },
+      repoDir: risky.repo,
+      nowMs: now,
+    }).blocked, true, `option-based main deletion denied: ${command}`);
+  }
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "git push origin --delete feature/test" },
+    repoDir: risky.repo,
+    nowMs: now,
+  }).blocked, false, "deleting a feature branch stays allowed");
+
+  // R2-4: abbreviated force options are force intent, denied despite valid proof.
+  for (const command of [
+    "git push origin main --force-w",
+    "git push origin main --force-with",
+    "git push origin main --force-if",
+    "git push origin main --force-with-lease=main",
+  ]) {
+    assert.equal(evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command },
+      repoDir: risky.repo,
+      nowMs: now,
+    }).blocked, true, `abbreviated force main push denied: ${command}`);
+  }
+
   unlinkSync(proofPath(risky.repo));
   const deniedProcess = spawnSync(process.execPath, [guardPath], {
     cwd: risky.repo,

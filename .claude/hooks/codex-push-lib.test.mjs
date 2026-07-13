@@ -31,6 +31,13 @@ assert.equal(mainPushSource("git push --all origin", "feature"), "main");
 assert.equal(mainPushSource("git push origin --branches", "feature"), "main");
 assert.equal(mainPushSource("git push --mirror origin", "feature"), "main");
 
+// Codex round-2 (2026-07-13): option-based deletion of main.
+assert.equal(mainPushSource("git push origin --delete main", "feature"), "DELETE");
+assert.equal(mainPushSource("git push origin -d main", "feature"), "DELETE");
+assert.equal(mainPushSource("git push origin --del main", "feature"), "DELETE");
+assert.equal(mainPushSource("git push --delete origin main", "feature"), "DELETE");
+assert.equal(mainPushSource("git push origin --delete feature/test", "feature"), null);
+
 assert.equal(mainPushIsForced("git push origin main --force", "feature"), true);
 assert.equal(mainPushIsForced("git push origin main -f", "feature"), true);
 assert.equal(mainPushIsForced("git push origin main --force-with-lease", "feature"), true);
@@ -59,6 +66,12 @@ assert.equal(pushContextIsAmbiguous("git -C C:/other push origin main"), false);
 assert.equal(reviewProofPathMentioned(".claude/session-state/claude-review-push.json"), true);
 assert.equal(reviewProofPathMentioned("C:\\repo\\.claude\\session-state\\codex-review-abc.json"), true);
 assert.equal(reviewProofPathMentioned(".claude/session-state/claude-review-latest.txt"), false);
+
+// Codex round-2 (2026-07-13): unambiguous long-option abbreviations count as force.
+assert.equal(mainPushIsForced("git push origin main --force-w", "feature"), true);
+assert.equal(mainPushIsForced("git push origin main --force-with", "feature"), true);
+assert.equal(mainPushIsForced("git push origin main --force-if", "feature"), true);
+assert.equal(mainPushIsForced("git push origin main --follow-tags", "feature"), false, "--follow-tags is not force intent");
 
 assert.equal(gitPushCwd("git -C ../repo push origin HEAD:main", "C:/work/current"), path.resolve("C:/work/repo"));
 assert.equal(gitPushCwd("git -C .. -C sibling push origin HEAD:main", "C:/work/current"), path.resolve("C:/work/sibling"));

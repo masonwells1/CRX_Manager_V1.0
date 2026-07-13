@@ -297,9 +297,13 @@ function githubToolIsReadOnly(toolName) {
 }
 
 function mcpMergeRequest(toolInput) {
-  const selector = toolInput.pull_number ?? toolInput.pullNumber ?? toolInput.pullRequestNumber ?? toolInput.number ?? "";
+  // Key spellings differ per connector: the GitHub MCP uses pull_number/owner/repo,
+  // the Codex GitHub app uses pr_number/repository_full_name (Codex review 2026-07-13).
+  const selector = toolInput.pull_number ?? toolInput.pullNumber ?? toolInput.pullRequestNumber ??
+    toolInput.pr_number ?? toolInput.prNumber ?? toolInput.number ?? "";
   const owner = toolInput.owner ?? toolInput.organization ?? "";
-  const repository = toolInput.repo ?? toolInput.repository ?? toolInput.repoName ?? "";
+  const repository = toolInput.repo ?? toolInput.repository ?? toolInput.repoName ??
+    toolInput.repository_full_name ?? toolInput.repositoryFullName ?? toolInput.full_name ?? "";
   const repo = String(repository).includes("/") ? String(repository) : (owner && repository ? `${owner}/${repository}` : "");
   return { selector: String(selector), repo };
 }
@@ -397,8 +401,14 @@ export function evaluateProductionAction({
   }
 
   if (GITHUB_MERGE_TOOL.test(name)) {
+    const request = mcpMergeRequest(toolInput);
+    if (!request.selector) {
+      return denied(
+        "CODEX PRODUCTION GATE: could not determine WHICH pull request this merge tool targets from its inputs, so the merge is denied (fail closed) — the guard must never verify one PR while the tool merges another."
+      );
+    }
     return gatePullRequestMerge({
-      request: mcpMergeRequest(toolInput),
+      request,
       repoDir: actionRepoDir,
       nowMs,
       runGit,

@@ -71,11 +71,20 @@ export function mainPushSource(cmd, currentBranch) {
   const m = c.match(GIT_PUSH_RE);
   if (!m) return null;
   const tokens = splitShellArgs(m[1]);
+  // Option-based deletion: `git push origin --delete main` / `-d main`. Git
+  // accepts unambiguous long-option abbreviations, and the only push option
+  // starting "--de" is --delete, so any --de… token is delete intent (Codex
+  // review 2026-07-13: these forms used to classify as an ordinary main push).
+  const deleteIntent = tokens.some((t) => /^--de\S*$/.test(t) || /^-[A-Za-z]*d[A-Za-z]*$/.test(t));
+  const argsAll = tokens.filter((a) => !a.startsWith("-"));
+  if (deleteIntent && argsAll.slice(1).some((a) => a.replace(/^refs\/heads\//, "") === "main")) {
+    return "DELETE";
+  }
   // Whole-refspace push modes do not name main in a refspec, but they still
   // include it. Treat local main as the source so callers cannot stand down
   // merely because the command used `--all`/`--branches`/`--mirror`.
   if (tokens.some((token) => ["--all", "--branches", "--mirror"].includes(token))) return "main";
-  const args = tokens.filter((a) => !a.startsWith("-"));
+  const args = argsAll;
   const refspecs = args.slice(1); // args[0] = remote, if present
   if (refspecs.length === 0) return currentBranch === "main" ? "HEAD" : null;
   for (const rs of refspecs) {
@@ -104,9 +113,12 @@ export function pushTargetsMain(cmd, currentBranch) {
 export function pushIsForced(cmd) {
   const args = String(cmd || "").match(GIT_PUSH_RE)?.[1] || "";
   const tokens = splitShellArgs(args);
+  // Any long option starting "--force" is force intent: git accepts unambiguous
+  // abbreviations (`--force-w` = --force-with-lease), and every valid abbreviation
+  // of a force option itself starts with "--force" — anything shorter ("--forc")
+  // is ambiguous and git rejects it (Codex review 2026-07-13).
   const forceFlag = tokens.some((token) =>
-    /^--force(?:-with-lease)?(?:=\S+)?$/.test(token) ||
-    token === "--force-if-includes" ||
+    /^--force(?:$|[-=])/.test(token) ||
     /^-[A-Za-z]*f[A-Za-z]*$/.test(token)
   );
   const forceRefspec = tokens.some((token) => token.startsWith("+") && token.length > 1);
