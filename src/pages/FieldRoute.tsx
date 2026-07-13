@@ -16,9 +16,19 @@ import { Truck, Wifi, WifiOff, ChevronRight, RefreshCw, PackageCheck, AlertTrian
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import { supabase } from '../lib/db';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
-import { getPendingCount } from '../lib/offlineQueue';
+import { useAuth } from '../contexts/AuthContext';
+import { getQueueSummary, type OfflineQueueSummary } from '../lib/offlineQueue';
 import { parseLocalDate } from '../lib/dateUtils';
 import { Sentry } from '../lib/sentry';
+
+const EMPTY_QUEUE_SUMMARY: OfflineQueueSummary = {
+  ownedTotal: 0,
+  ownedAutoSyncable: 0,
+  ownedNeedsAttention: 0,
+  otherUserTotal: 0,
+  ownerUnknownTotal: 0,
+  nextAutoSyncAt: null,
+};
 
 interface StopRow {
   id: string;
@@ -48,11 +58,12 @@ function formatStopDate(dateStr: string | null): string {
 export default function FieldRoute() {
   const navigate = useNavigate();
   const isOnline = useOnlineStatus();
+  const { profile } = useAuth();
 
   const [stops, setStops] = useState<StopRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
-  const [pendingCount, setPendingCount] = useState(0);
+  const [queueSummary, setQueueSummary] = useState<OfflineQueueSummary>(EMPTY_QUEUE_SUMMARY);
 
   const fetchStops = useCallback(async () => {
     setLoading(true);
@@ -90,11 +101,23 @@ export default function FieldRoute() {
 
   useEffect(() => {
     let active = true;
-    getPendingCount()
-      .then((c) => { if (active) setPendingCount(c); })
-      .catch(() => { /* IndexedDB unavailable — ignore */ });
-    return () => { active = false; };
-  }, [isOnline, stops]);
+    const checkQueue = () => {
+      getQueueSummary(profile?.id ?? null)
+        .then((summary) => { if (active) setQueueSummary(summary); })
+        .catch(() => { /* IndexedDB unavailable — ignore */ });
+    };
+    checkQueue();
+    const interval = setInterval(checkQueue, 5000);
+    return () => {
+      active = false;
+      clearInterval(interval);
+    };
+  }, [isOnline, profile?.id, stops]);
+
+  const ownedWaiting = queueSummary.ownedTotal - queueSummary.ownedNeedsAttention;
+  const hasSavedOfflineWork = queueSummary.ownedTotal > 0
+    || queueSummary.otherUserTotal > 0
+    || queueSummary.ownerUnknownTotal > 0;
 
   return (
     <div className="max-w-2xl mx-auto px-4 py-4">
@@ -121,10 +144,16 @@ export default function FieldRoute() {
       >
         {isOnline ? <Wifi className="w-4 h-4" /> : <WifiOff className="w-4 h-4" />}
         {isOnline ? 'Online' : 'Offline — changes save locally'}
-        {pendingCount > 0 && (
+        {hasSavedOfflineWork && (
           <span className="ml-auto inline-flex items-center gap-1 text-amber-800">
             <PackageCheck className="w-4 h-4" />
-            {pendingCount} waiting to sync
+            {queueSummary.ownedNeedsAttention > 0
+              ? `${queueSummary.ownedNeedsAttention} need attention`
+              : ownedWaiting > 0
+                ? `${ownedWaiting} waiting to sync`
+                : queueSummary.otherUserTotal > 0
+                  ? 'Another user has saved offline work'
+                  : 'Older offline work needs support'}
           </span>
         )}
       </div>
