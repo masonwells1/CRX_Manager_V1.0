@@ -8,10 +8,11 @@ import path from "node:path";
 // `git --git-dir=... push`, `git -c k=v push` — which used to bypass the gate
 // entirely (observed 2026-07-10: a `git -C` push slipped past this guard).
 const GIT_ARG = `(?:"[^"]*"|'[^']*'|\\S+)`;
+const GIT_BIN = `(?:"[^"]*[\\\\/]git(?:\\.exe)?"|'[^']*[\\\\/]git(?:\\.exe)?'|(?:\\S*[\\\\/])?git(?:\\.exe)?)`;
 const GIT_GLOBAL_OPTS =
   `(?:\\s+(?:-C\\s+${GIT_ARG}|-c\\s+${GIT_ARG}|--git-dir(?:=${GIT_ARG}|\\s+${GIT_ARG})|--work-tree(?:=${GIT_ARG}|\\s+${GIT_ARG})|--no-pager|--literal-pathspecs|--exec-path(?:=${GIT_ARG})?))*`;
-const GIT_PUSH_RE = new RegExp(`\\bgit${GIT_GLOBAL_OPTS}\\s+push\\b([^;&|]*)`);
-const GIT_PUSH_PREFIX_RE = new RegExp(`\\bgit(${GIT_GLOBAL_OPTS})\\s+push\\b`);
+const GIT_PUSH_RE = new RegExp(`(?:^|\\s)${GIT_BIN}${GIT_GLOBAL_OPTS}\\s+push\\b([^;&|]*)`, "i");
+const GIT_PUSH_PREFIX_RE = new RegExp(`(?:^|\\s)${GIT_BIN}(${GIT_GLOBAL_OPTS})\\s+push\\b`, "i");
 export function isGitPush(cmd) {
   return GIT_PUSH_RE.test(String(cmd || ""));
 }
@@ -40,6 +41,22 @@ export function gitPushCwd(cmd, fallbackCwd) {
     cwd = path.resolve(cwd, unquoteShellArg(match[1]));
   }
   return cwd;
+}
+
+// Shell directory changes and git context environment variables apply outside
+// the git argv, so the ref parser cannot safely bind them to a worktree. Deny
+// these forms and require the explicit, inspectable `git -C <repo> push` form.
+export function pushContextIsAmbiguous(cmd) {
+  const text = String(cmd || "");
+  if (!isGitPush(text)) return false;
+  return /(?:^|[;&|\r\n()]|\s)(?:cd(?:\s+\/d)?|chdir|pushd|popd|set-location|pop-location)\s+/i.test(text) ||
+    /(?:\$env:|\benv\s+|\bset\s+|^|[;&|\r\n]\s*)(?:GIT_DIR|GIT_WORK_TREE)\s*=/i.test(text);
+}
+
+export function reviewProofPathMentioned(value) {
+  const text = String(value || "").replace(/\\/g, "/");
+  return /(?:^|\s|["'])\.?\/?(?:[^\s"']+\/)*\.claude\/session-state\/(?:claude-review-push\.json|codex-review-[^\s/"']+\.json)(?:$|\s|["'])/i.test(text) ||
+    /\.claude\/session-state\/(?:claude-review-push\.json|codex-review-[^\s/"']+\.json)/i.test(text);
 }
 
 // Which LOCAL ref is this push landing on main? Returns:

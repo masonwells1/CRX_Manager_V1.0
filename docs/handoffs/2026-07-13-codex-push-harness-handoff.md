@@ -49,7 +49,7 @@ Codex gets the **same standing authorization Claude has, mirrored**:
 - Path: `.claude/session-state/claude-review-push.json` (session-state dir of the repo the push runs from).
 - Shape: `{ "claude_ran": true, "verdict": "clean" | "blockers-fixed", "head_sha": "<full SHA of the exact commit being pushed>", "timestamp": "<ISO-8601>" }`.
 - Validation: reuse `proofValid()` from `codex-push-lib.mjs` if you can parameterize the `codex_ran`/`claude_ran` key cleanly; otherwise add a sibling `claudeProofValid()` **in `codex-push-lib.mjs`** (shared lib, one source of truth) with identical semantics: exact `head_sha` match, verdict whitelist, timestamp age within [0, 30 min] — **future-dated timestamps must fail** (bind age as `0 <= age <= 30min`, not just `< 30min`).
-- Who writes it: the real Claude CLI wrapper, after actually reviewing the committed base-main diff in-session. Round-2 review removed the standalone `--verdict` writer because it allowed self-certification; `scripts/run-claude-review.mjs --scope base-main` now writes BOM-free proof only after a successful SHIP/SHIP-WITH-FOLLOWUPS result and revokes proof on NEEDS-WORK/failure.
+- Who writes it: the real Claude CLI wrapper, after actually reviewing the committed base-main diff in-session. Round-2 review removed the standalone `--verdict` writer because it allowed self-certification; `scripts/run-claude-review.mjs --scope base-main` now invokes the fixed `claude` executable, writes BOM-free proof only after a successful SHIP/SHIP-WITH-FOLLOWUPS result, and revokes proof on NEEDS-WORK/failure. Round-3 added `review-proof-guard.mjs` so native, MCP, and shell tools cannot directly write/edit/move/delete Claude or Codex review proof JSON.
 
 ### 4c. Close the ledger-guard gap on your own surface
 

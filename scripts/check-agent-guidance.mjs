@@ -70,6 +70,7 @@ record(!/C:\\\\CRX_Manager/i.test(codexHooksText), ".codex/hooks.json has no har
 record(allHooks.length > 0 && allHooks.every((hook) => hook.command && hook.commandWindows), "every Codex command hook has POSIX and Windows commands", `${allHooks.length} hooks`);
 record(codexHooksText.includes(".claude/hooks/sql-safety.mjs"), "Codex invokes shared Claude hook sources");
 record(codexHooksText.includes("production-action-guard.mjs"), "Codex production action guard is registered");
+record(codexHooksText.includes("review-proof-guard.mjs"), "Codex review proof guard is registered");
 record(!gitignore.split(/\r?\n/).some((line) => line.trim() === ".agents/" || line.trim() === ".codex/"), "tracked agent configuration is not blanket-ignored");
 record(read(".codex/config.toml").includes("read_only=true"), "Codex Supabase MCP is read-only");
 

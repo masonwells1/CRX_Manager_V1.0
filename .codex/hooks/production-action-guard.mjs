@@ -11,8 +11,10 @@ import {
   gitPushCwd,
   isGitPush,
   mainPushSource,
+  pushContextIsAmbiguous,
   pushIsForced,
   pushUsesBulkMode,
+  reviewProofPathMentioned,
   riskyFiles,
 } from "../../.claude/hooks/codex-push-lib.mjs";
 
@@ -31,12 +33,46 @@ function denied(reason) {
 }
 
 export function isClearlyReadOnlySql(sql) {
-  const value = normalize(sql)
+  const withoutComments = String(sql || "")
     .replace(/\/\*[\s\S]*?\*\//g, " ")
-    .replace(/--[^\r\n]*/g, " ")
-    .trim();
+    .replace(/--[^\r\n]*/g, " ");
+  // Remove string literal contents before looking for semicolons/functions so
+  // harmless text cannot masquerade as SQL syntax.
+  const value = normalize(withoutComments.replace(/'(?:''|[^'])*'/g, "''"));
+  const statement = value.replace(/;+\s*$/, "");
+  if (statement.includes(";")) return false;
   if (!/^(?:select|with|explain|show)\b/i.test(value)) return false;
-  return !/\b(?:insert|update|delete|merge|truncate|alter|drop|create|grant|revoke|comment|vacuum|reindex|cluster|refresh|call|copy)\b/i.test(value);
+  if (/\b(?:insert|update|delete|merge|truncate|alter|drop|create|grant|revoke|comment|vacuum|reindex|cluster|refresh|call|copy|set|reset|notify|listen|unlisten|lock|discard|execute|perform)\b/i.test(value)) {
+    return false;
+  }
+
+  // SELECT can invoke mutating SECURITY DEFINER RPCs. Allow only a narrow set
+  // of known read-only PostgreSQL built-ins; every application/custom function
+  // call fails closed and must use a purpose-built read-only connector/tool.
+  const readOnlyFunctions = new Set([
+    "abs", "age", "array_agg", "array_length", "avg", "cardinality", "ceil", "ceiling",
+    "char_length", "coalesce", "col_description", "concat", "concat_ws", "count",
+    "current_setting", "date_part", "date_trunc", "extract", "floor", "format", "greatest",
+    "json_agg", "json_array_length", "json_build_object", "json_object_agg", "json_typeof",
+    "jsonb_agg", "jsonb_array_length", "jsonb_build_object", "jsonb_object_agg", "jsonb_typeof",
+    "least", "length", "lower", "ltrim", "max", "min", "now", "nullif", "obj_description",
+    "pg_get_constraintdef", "pg_get_expr", "pg_get_functiondef", "pg_get_indexdef", "pg_get_viewdef",
+    "pg_typeof", "quote_ident", "quote_literal", "regexp_match", "regexp_matches", "regexp_replace",
+    "round", "rtrim", "split_part", "sqrt", "string_agg", "substring", "sum", "to_char", "to_date",
+    "to_json", "to_jsonb", "to_regclass", "to_regprocedure", "trim", "upper", "version",
+  ]);
+  const structuralWords = new Set(["as", "exists", "filter", "in", "over", "values"]);
+  if (/"(?:[^"]|"")+"\s*\(/.test(value)) return false;
+  const functionRe = /\b(?:([a-z_][\w$]*)\.)?([a-z_][\w$]*)\s*\(/gi;
+  let match;
+  while ((match = functionRe.exec(value)) !== null) {
+    const schema = String(match[1] || "").toLowerCase();
+    const name = String(match[2] || "").toLowerCase();
+    if (structuralWords.has(name)) continue;
+    if (schema === "auth" && name === "uid") continue;
+    if (!readOnlyFunctions.has(name)) return false;
+  }
+  return true;
 }
 
 function defaultRunGit(args, cwd) {
@@ -327,6 +363,23 @@ export function evaluateProductionAction({
   runGh = defaultRunGh,
 } = {}) {
   const name = String(toolName);
+  const baseRepoDir = path.resolve(repoDir);
+  const requestedWorkingDir = toolInput.workdir ?? toolInput.cwd ?? "";
+  const actionRepoDir = requestedWorkingDir
+    ? path.resolve(baseRepoDir, String(requestedWorkingDir))
+    : baseRepoDir;
+
+  const pathCandidates = [
+    toolInput.file_path,
+    toolInput.filePath,
+    toolInput.path,
+    toolInput.target,
+    toolInput.source,
+    toolInput.destination,
+  ];
+  if (pathCandidates.some((candidate) => reviewProofPathMentioned(candidate))) {
+    return denied("CODEX PRODUCTION GATE: review proof files are wrapper-owned and cannot be written, edited, moved, or deleted directly.");
+  }
 
   if (NODE_REPL_TOOL.test(name)) {
     return denied("CODEX PRODUCTION GATE: node_repl is disabled in this repository because it can launch uninspected git/GitHub write processes outside the production guard.");
@@ -346,7 +399,7 @@ export function evaluateProductionAction({
   if (GITHUB_MERGE_TOOL.test(name)) {
     return gatePullRequestMerge({
       request: mcpMergeRequest(toolInput),
-      repoDir: path.resolve(repoDir),
+      repoDir: actionRepoDir,
       nowMs,
       runGit,
       runGh,
@@ -360,6 +413,17 @@ export function evaluateProductionAction({
   const command = String(toolInput.command ?? toolInput.cmd ?? "").trim();
   if (!command) return { blocked: false };
 
+  if (reviewProofPathMentioned(command)) {
+    return denied("CODEX PRODUCTION GATE: direct shell access to review proof files is blocked. Run the real review wrapper instead.");
+  }
+  if (isGitPush(command) && pushContextIsAmbiguous(command)) {
+    return denied("CODEX PRODUCTION GATE: directory-changing or GIT_DIR/GIT_WORK_TREE-prefixed pushes cannot be bound safely to the inspected worktree. Use `git -C <repo> push`.");
+  }
+  const suppliedEnv = toolInput.env && typeof toolInput.env === "object" ? toolInput.env : {};
+  if (isGitPush(command) && Object.keys(suppliedEnv).some((key) => /^(?:GIT_DIR|GIT_WORK_TREE)$/i.test(key))) {
+    return denied("CODEX PRODUCTION GATE: pushes with GIT_DIR/GIT_WORK_TREE tool environment overrides are denied. Use `git -C <repo> push`.");
+  }
+
   const commandSegments = command.split(/(?:&&|\|\||;|\r?\n)/).map((segment) => segment.trim()).filter(Boolean);
   for (const segment of commandSegments) {
     const ghRequest = ghMergeRequest(segment) || ghApiMergeRequest(segment);
@@ -369,7 +433,7 @@ export function evaluateProductionAction({
     if (ghRequest) {
       const result = gatePullRequestMerge({
         request: ghRequest,
-        repoDir: path.resolve(repoDir),
+        repoDir: actionRepoDir,
         nowMs,
         runGit,
         runGh,
@@ -392,9 +456,9 @@ export function evaluateProductionAction({
     if (pushIsForced(segment)) {
       return denied("CODEX PRODUCTION GATE: force-pushing any branch rewrites shared history and requires Mason's explicit approval.");
     }
-    const pushRepoDir = gitPushCwd(segment, repoDir);
-    let currentBranch = normalize(branch).toLowerCase();
-    if (!currentBranch || pushRepoDir !== path.resolve(repoDir)) {
+    const pushRepoDir = gitPushCwd(segment, actionRepoDir);
+    let currentBranch = requestedWorkingDir ? "" : normalize(branch).toLowerCase();
+    if (!currentBranch || pushRepoDir !== actionRepoDir) {
       try {
         currentBranch = normalize(runGit(["rev-parse", "--abbrev-ref", "HEAD"], pushRepoDir)).toLowerCase();
       } catch (error) {

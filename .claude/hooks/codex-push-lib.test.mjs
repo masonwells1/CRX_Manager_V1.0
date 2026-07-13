@@ -10,7 +10,9 @@ import {
   mainPushIsForced,
   mainPushSource,
   pushIsForced,
+  pushContextIsAmbiguous,
   pushUsesBulkMode,
+  reviewProofPathMentioned,
   proofValid,
   riskyFiles,
 } from "./codex-push-lib.mjs";
@@ -19,6 +21,9 @@ const now = Date.parse("2026-07-13T18:00:00.000Z");
 const sha = "a".repeat(40);
 
 assert.equal(mainPushSource("git push origin HEAD:main", "feature"), "HEAD");
+assert.equal(mainPushSource("git.exe push origin HEAD:main", "feature"), "HEAD");
+assert.equal(mainPushSource('"C:\\Program Files\\Git\\cmd\\git.exe" push origin HEAD:main', "feature"), "HEAD");
+assert.equal(mainPushSource("/usr/bin/git push origin HEAD:main", "feature"), "HEAD");
 assert.equal(mainPushSource("git -C ../repo push origin release:main", "feature"), "release");
 assert.equal(mainPushSource("git push origin :main", "feature"), "DELETE");
 assert.equal(mainPushSource("git push origin feature", "feature"), null);
@@ -46,6 +51,14 @@ assert.equal(pushUsesBulkMode("git push origin --branches"), true);
 assert.equal(pushUsesBulkMode("git push origin --mirror"), true);
 assert.equal(pushUsesBulkMode("git push origin --prune"), true);
 assert.equal(pushUsesBulkMode("git push origin feature"), false);
+assert.equal(pushContextIsAmbiguous("cd C:/other && git push origin main"), true);
+assert.equal(pushContextIsAmbiguous("Set-Location C:/other; git.exe push origin main"), true);
+assert.equal(pushContextIsAmbiguous("$env:GIT_DIR='C:/other/.git'; git push origin main"), true);
+assert.equal(pushContextIsAmbiguous("GIT_WORK_TREE=/tmp/other git push origin main"), true);
+assert.equal(pushContextIsAmbiguous("git -C C:/other push origin main"), false);
+assert.equal(reviewProofPathMentioned(".claude/session-state/claude-review-push.json"), true);
+assert.equal(reviewProofPathMentioned("C:\\repo\\.claude\\session-state\\codex-review-abc.json"), true);
+assert.equal(reviewProofPathMentioned(".claude/session-state/claude-review-latest.txt"), false);
 
 assert.equal(gitPushCwd("git -C ../repo push origin HEAD:main", "C:/work/current"), path.resolve("C:/work/repo"));
 assert.equal(gitPushCwd("git -C .. -C sibling push origin HEAD:main", "C:/work/current"), path.resolve("C:/work/sibling"));

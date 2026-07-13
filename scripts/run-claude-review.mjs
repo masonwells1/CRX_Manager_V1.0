@@ -28,6 +28,12 @@ export function claudeReviewProofVerdict({ status, stdout } = {}) {
   return "clean";
 }
 
+export function claudeExecutable() {
+  // Deliberately ignore CLAUDE_BIN: an environment override could point at a
+  // fake executable that prints SHIP and forge the wrapper-owned push proof.
+  return "claude";
+}
+
 function claudePushProofPath(root = ROOT) {
   return path.join(root, ".claude", "session-state", "claude-review-push.json");
 }
@@ -291,7 +297,7 @@ export function runClaudeReview(options) {
     return { status: 0, output, prompt };
   }
 
-  const claudeBin = process.env.CLAUDE_BIN || "claude";
+  const claudeBin = claudeExecutable();
   const result = spawnSync(claudeBin, buildClaudeCommandArgs(), {
     cwd: ROOT,
     encoding: "utf8",

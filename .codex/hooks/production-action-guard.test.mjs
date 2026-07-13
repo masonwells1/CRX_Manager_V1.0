@@ -69,9 +69,14 @@ function runClaudePushGuard(command, projectDir) {
 
 try {
   assert.equal(isClearlyReadOnlySql("select count(*) from invoices"), true);
+  assert.equal(isClearlyReadOnlySql("select pg_get_functiondef('public.safe()'::regprocedure)"), true);
   assert.equal(isClearlyReadOnlySql("with totals as (select 1) select * from totals"), true);
   assert.equal(isClearlyReadOnlySql("update invoices set status = 'paid'"), false);
   assert.equal(isClearlyReadOnlySql("with changed as (delete from invoices returning *) select * from changed"), false);
+  assert.equal(isClearlyReadOnlySql("select allocate_payment('x', 100)"), false);
+  assert.equal(isClearlyReadOnlySql("select public.\"allocate_payment\"('x', 100)"), false);
+  assert.equal(isClearlyReadOnlySql("select set_config('role', 'service_role', true)"), false);
+  assert.equal(isClearlyReadOnlySql("select 1; select 2"), false);
 
   assert.equal(evaluateProductionAction({ toolName: "mcp__supabase__execute_sql", toolInput: { query: "select 1" } }).blocked, false);
   assert.equal(evaluateProductionAction({ toolName: "mcp__supabase__execute_sql", toolInput: { query: "delete from invoices" } }).blocked, true);
@@ -84,6 +89,10 @@ try {
   assert.equal(evaluateProductionAction({ toolName: "mcp__github__create_or_update_file", toolInput: { branch: "main" } }).blocked, true);
   assert.equal(evaluateProductionAction({ toolName: "mcp__github__delete_file", toolInput: { branch: "main" } }).blocked, true);
   assert.equal(evaluateProductionAction({ toolName: "mcp__github__get_file_contents", toolInput: { path: "README.md" } }).blocked, false);
+  assert.equal(evaluateProductionAction({ toolName: "Write", toolInput: { file_path: ".claude/session-state/claude-review-push.json" } }).blocked, true);
+  assert.equal(evaluateProductionAction({ toolName: "Edit", toolInput: { file_path: ".claude/session-state/codex-review-abc.json" } }).blocked, true);
+  assert.equal(evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: "echo {} > .claude/session-state/claude-review-push.json" } }).blocked, true);
+  assert.equal(evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: "node scripts/run-claude-review.mjs --scope base-main" } }).blocked, false);
 
   const ordinary = makeRepo("src/components/Label.tsx", "export const label = 'ordinary';\n");
   assert.equal(evaluatePush(ordinary.repo).blocked, false, "non-risky main push allowed without proof");
@@ -118,6 +127,7 @@ try {
     "git push origin feature/test --force",
     "git push --all origin --force",
     "git push origin --all --force",
+    "git.exe push origin main --force",
   ]) {
     assert.equal(evaluateProductionAction({
       toolName: "PowerShell",
@@ -125,6 +135,30 @@ try {
       repoDir: risky.repo,
     }).blocked, true, `force-style main push denied: ${command}`);
   }
+
+  assert.equal(evaluatePush(risky.repo, now, "git.exe push origin HEAD:main").blocked, true, "git.exe main push is gated");
+  assert.equal(evaluatePush(risky.repo, now, '"C:\\Program Files\\Git\\cmd\\git.exe" push origin HEAD:main').blocked, true, "quoted full-path git.exe main push is gated");
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: `cd "${risky.repo}" && git push origin HEAD:main` },
+    repoDir: projectRoot,
+  }).blocked, true, "directory-changing push chains deny closed");
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "$env:GIT_DIR='C:/other/.git'; git push origin main" },
+    repoDir: projectRoot,
+  }).blocked, true, "GIT_DIR-prefixed pushes deny closed");
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "git push origin main", env: { GIT_WORK_TREE: "C:/other" } },
+    repoDir: projectRoot,
+  }).blocked, true, "tool environment git context overrides deny closed");
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "git push origin HEAD:main", workdir: risky.repo },
+    repoDir: projectRoot,
+    nowMs: now,
+  }).blocked, true, "tool workdir is the repository inspected for a main push");
   for (const command of [
     "git push --all origin",
     "git push origin --branches",
@@ -149,6 +183,17 @@ try {
   assert.match(claudeGuard.stdout, /"permissionDecision":"deny"/, "Claude guard inspects every push in a command chain");
   claudeGuard = runClaudePushGuard(`git -C "${risky.repo}" push origin feature/test`, projectRoot);
   assert.equal(claudeGuard.stdout, "", "Claude guard still allows an ordinary feature-branch push");
+  claudeGuard = runClaudePushGuard(`git.exe -C "${risky.repo}" push origin HEAD:main`, projectRoot);
+  assert.match(claudeGuard.stdout, /"permissionDecision":"deny"/, "Claude guard gates git.exe pushes");
+  claudeGuard = runClaudePushGuard(`cd "${risky.repo}" && git push origin HEAD:main`, projectRoot);
+  assert.match(claudeGuard.stdout, /"permissionDecision":"deny"/, "Claude guard denies directory-changing push chains");
+  claudeGuard = runClaudePushGuard(`$env:GIT_DIR='${risky.repo}\\.git'; git push origin main`, projectRoot);
+  assert.match(claudeGuard.stdout, /"permissionDecision":"deny"/, "Claude guard denies GIT_DIR-prefixed pushes");
+
+  const noOrigin = makeRepo("supabase/migrations/20260713000001_no_origin.sql", "select 1;\n");
+  git(noOrigin.repo, ["update-ref", "-d", "refs/remotes/origin/main"]);
+  claudeGuard = runClaudePushGuard(`git -C "${noOrigin.repo}" push origin HEAD:main`, projectRoot);
+  assert.match(claudeGuard.stdout, /"permissionDecision":"deny"/, "Claude guard fails closed when origin/main is unavailable");
 
   assert.equal(evaluatePush(risky.repo, now).blocked, true, "risky main push denied without proof");
 

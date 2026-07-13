@@ -20,6 +20,7 @@ import {
   isGitPush,
   mainPushSource,
   proofValid,
+  pushContextIsAmbiguous,
   pushIsForced,
   pushUsesBulkMode,
   riskyFiles,
@@ -36,6 +37,9 @@ try { payload = JSON.parse(readFileSync(0, "utf8")); } catch { passthrough(); }
 
 const cmd = String(payload?.tool_input?.command || "");
 if (!isGitPush(cmd)) passthrough();
+if (pushContextIsAmbiguous(cmd)) {
+  deny("CODEX GATE: directory-changing or GIT_DIR/GIT_WORK_TREE-prefixed pushes cannot be bound safely to the inspected worktree. Use `git -C <repo> push`.");
+}
 
 const projectDir = path.resolve(process.env.CLAUDE_PROJECT_DIR || process.cwd());
 function git(args, cwd) {
@@ -82,14 +86,18 @@ for (const pushCmd of pushCommands) {
     deny("CODEX GATE: `git push origin :main` DELETES the production main branch. Never do this. If a bad commit landed, use the /rollback runbook (compensating commit / Vercel promote-previous) instead.");
   }
 
-  // Need origin/main to diff against; a repo without that remote-tracking ref is
-  // outside this CRX production gate and git will handle the push normally.
-  try { git(["rev-parse", "--verify", "--quiet", "origin/main"], pushRepoDir); } catch { continue; }
+  try {
+    git(["rev-parse", "--verify", "--quiet", "origin/main"], pushRepoDir);
+  } catch (error) {
+    deny(`CODEX GATE: could not resolve origin/main for the selected push repository, so the push is denied. ${error?.message || error}`);
+  }
 
   let srcSha = "";
   try {
     srcSha = git(["rev-parse", "--verify", srcRef === "HEAD" ? "HEAD" : srcRef], pushRepoDir);
-  } catch { continue; } // unresolved source will be rejected by git itself
+  } catch (error) {
+    deny(`CODEX GATE: could not resolve the exact ref being pushed to main, so the push is denied. ${error?.message || error}`);
+  }
 
   let files = [];
   try {
@@ -97,14 +105,18 @@ for (const pushCmd of pushCommands) {
       .split(/\r?\n/)
       .map((s) => s.trim())
       .filter(Boolean);
-  } catch { continue; }
+  } catch (error) {
+    deny(`CODEX GATE: could not inspect the main-bound diff, so the push is denied. ${error?.message || error}`);
+  }
 
   const risky = riskyFiles(files);
   let contentFlagged = false;
   if (risky.length === 0) {
     try {
       contentFlagged = contentIsRisky(git(["diff", `origin/main...${srcSha}`], pushRepoDir));
-    } catch { /* path-based risk already cleared; let git handle a broken diff */ }
+    } catch (error) {
+      deny(`CODEX GATE: could not inspect the full main-bound diff for money/security risk, so the push is denied. ${error?.message || error}`);
+    }
   }
   if (risky.length === 0 && !contentFlagged) continue;
 

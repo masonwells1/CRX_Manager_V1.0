@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   buildClaudeCommandArgs,
   buildClaudeReviewPrompt,
+  claudeExecutable,
   claudeReviewProofVerdict,
   defaultClaudeReviewOutputPath,
   parseReviewArgs,
@@ -72,5 +73,8 @@ assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "Verdict: SHIP-WITH-F
 assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "## Verdict: NEEDS-WORK\nOne blocker." }), null);
 assert.equal(claudeReviewProofVerdict({ status: 1, stdout: "## Verdict: SHIP" }), null);
 assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "No explicit verdict" }), null);
+process.env.CLAUDE_BIN = "fake-claude-that-prints-ship";
+assert.equal(claudeExecutable(), "claude", "CLAUDE_BIN cannot replace the reviewed executable");
+delete process.env.CLAUDE_BIN;
 
 console.log("OK - run-claude-review helpers passed.");
