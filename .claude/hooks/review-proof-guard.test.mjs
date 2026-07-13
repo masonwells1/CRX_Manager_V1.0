@@ -21,6 +21,7 @@ for (const payload of [
   { tool_name: "Bash", tool_input: { command: "echo {} > .claude/session-state/claude-review-push.json" } },
   { tool_name: "PowerShell", tool_input: { command: "Remove-Item .claude/session-state/codex-review-abc.json" } },
   { tool_name: "Bash", tool_input: { command: "cd .claude/session-state" } },
+  { tool_name: "Bash", tool_input: { command: "cd .claude && cd session-state && printf '{}' >claude-review-push.json" } },
   { tool_name: "Bash", cwd: "C:\\repo\\.claude\\session-state", tool_input: { command: "printf {} > harmless-name.json" } },
   { tool_name: "Bash", tool_input: { command: "printf {} > codex-review-forged.json" } },
 ]) {

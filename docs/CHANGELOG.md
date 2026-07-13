@@ -18,6 +18,8 @@ Claude review round 3 confirmed all 27 round-2 attack vectors were closed, then 
 
 Claude review round 4 confirmed the push-command parser held against every prior bypass, but demonstrated the remaining trust-boundary problem: repository-owned hooks cannot be the only wall against an agent that can edit the repository and launch arbitrary local processes. Local follow-ups now block persistent-cwd proof writes, use Claude's per-call cwd, pin the absolute native Claude Code binary with `shell:false`, require exactly one terminal `FINAL_VERDICT`, deny Node eval/print process-launch routes, protect the critical harness from direct write tools, make common parenthesized read-only SQL diagnostics usable, and put `run-claude-review.mjs` under the ledger guard. These are defense-in-depth only. Before activation, GitHub must enforce a server-side `main` branch rule requiring a pull request and passing status checks; the repository currently has no ruleset/branch protection, so the branch remains intentionally unmerged.
 
+Claude review round 5 validated the design reframing and most round-4 fixes, then found two natural command spellings missing from the local matchers. Regression coverage now denies normal-space `rm`/`sed -i`/redirect mutations of harness files, no-space proof redirects such as `>claude-review-push.json`, split state-directory entry (`cd .claude && cd session-state`), and Node stdin execution (`node -` / piped code). Documentation deliberately describes these as recognized direct-route blocks, not proof against arbitrary obfuscation or a substitute for GitHub branch protection.
+
 ---
 
 ## 2026-07-13 — Auto-cleanup of finished worktrees/branches (SessionStart guard)

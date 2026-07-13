@@ -59,13 +59,17 @@ export function reviewProofPathMentioned(value) {
   // changed into session-state on a previous tool call: `printf ... >
   // codex-review-forged.json` must still be recognized without the directory
   // appearing in the second command.
-  return /(?:^|[\s"'=:\/])(?:claude-review-push\.json|codex-review-[^\s/"']+\.json)(?:$|[\s"'])/i.test(text);
+  return /(?:^|[\s"'=:>\x3c|\/])(?:claude-review-push\.json|codex-review-[^\s/"']+\.json)(?:$|[\s"'])/i.test(text);
 }
 
 export function reviewStateDirectoryMentioned(value) {
   const text = String(value || "").replace(/\\/g, "/");
   return /(?:^|[\s"'=:\/])(?:\.?\/?(?:[^\s"']+\/)*\.claude\/session-state)(?:$|[\s/"'])/i.test(text) ||
-    /\.claude\/session-state/i.test(text);
+    /\.claude\/session-state/i.test(text) ||
+    // Deny the component steps too. Otherwise `cd .claude` followed by `cd
+    // session-state` can assemble the protected cwd without either command
+    // containing the contiguous full path.
+    /(?:^|[;&|\r\n()]|\s)(?:cd(?:\s+\/d)?|chdir|pushd|set-location)\s+["']?(?:\.claude|session-state)(?:["']?(?:$|[;&|\s]))/i.test(text);
 }
 
 // Which LOCAL ref is this push landing on main? Returns:

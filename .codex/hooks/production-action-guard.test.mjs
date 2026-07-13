@@ -98,9 +98,18 @@ try {
   assert.equal(evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: "printf {} > codex-review-forged.json" } }).blocked, true);
   assert.equal(evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: "printf {} > harmless.json", cwd: ".claude/session-state" } }).blocked, true);
   assert.equal(evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: "node -e \"require('child_process').execSync('git pu'+'sh origin main')\"" } }).blocked, true);
+  assert.equal(evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: "echo code | node" } }).blocked, true);
+  assert.equal(evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: "node -" } }).blocked, true);
   assert.equal(evaluateProductionAction({ toolName: "Write", toolInput: { file_path: ".codex/hooks/production-action-guard.mjs" } }).blocked, true);
   assert.equal(evaluateProductionAction({ toolName: "Edit", toolInput: { file_path: "scripts/run-claude-review.mjs" } }).blocked, true);
   assert.equal(evaluateProductionAction({ toolName: "Read", toolInput: { file_path: "scripts/run-claude-review.mjs" } }).blocked, false);
+  for (const command of [
+    "rm .claude/hooks/review-proof-guard.mjs",
+    "sed -i s/a/b/ .codex/hooks/production-action-guard.mjs",
+    "printf x > .claude/hooks/codex-push-guard.mjs",
+  ]) {
+    assert.equal(evaluateProductionAction({ toolName: "PowerShell", toolInput: { command } }).blocked, true, `natural harness mutation denied: ${command}`);
+  }
   assert.equal(evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: "node scripts/run-claude-review.mjs --scope base-main" } }).blocked, false);
 
   const ordinary = makeRepo("src/components/Label.tsx", "export const label = 'ordinary';\n");
