@@ -9,10 +9,12 @@
  * card can't render; combined with `npm run typecheck` in the gate it closes
  * the regression.
  */
-import { describe, it, expect, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { beforeEach, describe, it, expect, vi } from 'vitest';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import FieldRoute from './FieldRoute';
+
+const getQueueSummaryMock = vi.hoisted(() => vi.fn());
 
 vi.mock('react-router-dom', async () => {
   const actual = await vi.importActual('react-router-dom');
@@ -24,7 +26,7 @@ vi.mock('../contexts/AuthContext', () => ({
 vi.mock('../components/ui/Toast', () => ({ useToast: () => ({ toast: vi.fn() }) }));
 vi.mock('../lib/sentry', () => ({ Sentry: { captureException: vi.fn() } }));
 vi.mock('../hooks/useOnlineStatus', () => ({ useOnlineStatus: () => true }));
-vi.mock('../lib/offlineQueue', () => ({ getPendingCount: () => Promise.resolve(0) }));
+vi.mock('../lib/offlineQueue', () => ({ getQueueSummary: getQueueSummaryMock }));
 
 vi.mock('../lib/db', () => {
   const stopRow = {
@@ -42,6 +44,17 @@ vi.mock('../lib/db', () => {
 });
 
 describe('FieldRoute — stops list renders (F1 regression guard)', () => {
+  beforeEach(() => {
+    getQueueSummaryMock.mockResolvedValue({
+      ownedTotal: 0,
+      ownedAutoSyncable: 0,
+      ownedNeedsAttention: 0,
+      otherUserTotal: 0,
+      ownerUnknownTotal: 0,
+      nextAutoSyncAt: null,
+    });
+  });
+
   it('renders a stop card with its status badge without crashing', async () => {
     render(<MemoryRouter><FieldRoute /></MemoryRouter>);
     await waitFor(() => expect(screen.getByText('Wells Farm')).toBeInTheDocument());
@@ -50,5 +63,36 @@ describe('FieldRoute — stops list renders (F1 regression guard)', () => {
     // called as a function. Its presence proves the card rendered.
     expect(screen.getByText('In progress')).toBeInTheDocument();
     expect(screen.queryByText('No open stops right now')).not.toBeInTheDocument();
+  });
+
+  it('does not claim another user\'s saved work is waiting for the current user to sync', async () => {
+    getQueueSummaryMock.mockResolvedValue({
+      ownedTotal: 0,
+      ownedAutoSyncable: 0,
+      ownedNeedsAttention: 0,
+      otherUserTotal: 1,
+      ownerUnknownTotal: 0,
+      nextAutoSyncAt: null,
+    });
+
+    render(<MemoryRouter><FieldRoute /></MemoryRouter>);
+
+    expect(await screen.findByText('Another user has saved offline work')).toBeInTheDocument();
+    expect(screen.queryByText('1 waiting to sync')).not.toBeInTheDocument();
+  });
+
+  it('refreshes its offline-work summary after the background banner can sync', async () => {
+    vi.useFakeTimers();
+    try {
+      render(<MemoryRouter><FieldRoute /></MemoryRouter>);
+      await act(async () => { await Promise.resolve(); });
+      const callsBeforeInterval = getQueueSummaryMock.mock.calls.length;
+      expect(callsBeforeInterval).toBeGreaterThan(0);
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+      expect(getQueueSummaryMock.mock.calls.length).toBeGreaterThan(callsBeforeInterval);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

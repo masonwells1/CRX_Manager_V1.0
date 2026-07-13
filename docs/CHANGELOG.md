@@ -4,6 +4,12 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-13 — Offline work Stage 1A: retained failures, bounded retries, and shared-device ownership
+
+Offline delivery/job completions are no longer silently deleted after three failures or seven days. IndexedDB writes now wait for transaction commit; replay uses persisted 30-second/2-minute/10-minute delays; conflicts, permanent failures, and ownerless legacy records remain saved as needs-attention work. New queue entries are bound to the authenticated profile, and another user's records are skipped without RPC execution or retry changes. The global banner and My Route status now distinguish current-user waiting work, needs-attention work, other-user work, and legacy work instead of reporting a false success or a misleading sync count. Wholesale sync errors re-arm automatically after a bounded cooldown, and terminal needs-attention states alert Sentry for office visibility. No database, live-data, signature/photo, email, or notification behavior changed. Stage 1B/2 recovery work remains parked in `docs/manual/KNOWN_ISSUES.md`.
+
+---
+
 ## 2026-07-13 — Auto-cleanup of finished worktrees/branches (SessionStart guard)
 
 Recurring toil: merged branches and finished worktrees pile up and get swept by hand. Now a deterministic guard does it. New `.claude/hooks/worktree-cleanup.mjs` (+ pure classifier `worktree-cleanup-lib.mjs`, wired into `SessionStart` before `worktree-awareness`) removes a worktree/branch **only** when it is provably finished — fully merged into `origin/main` (via `git cherry`, so squash/rebase merges count too) **AND** clean **AND** unlocked **AND** not the active session **AND** not a protected branch (`main`/`master`) **AND** (for worktrees) under `.claude/worktrees/`. A session can't delete its own active worktree, so each new session sweeps the *previous* finished ones. Anything with unmerged commits, uncommitted changes, a lock, or a manual long-lived checkout (`C:\CRX_Manager`, `C:\CRX_Layer2`, …) is kept and reported; every deletion prints a recovery SHA; fail-open (stale/missing `origin/main` → does nothing). 25-assertion safety classifier in `worktree-cleanup-lib.test.mjs` (added to `test:correction-guards`). Proven end-to-end: dry-run on the live fleet removes nothing (all active/locked/unmerged), and `--write` on a throwaway merged worktree removes it while leaving the active worktree + real unmerged branches untouched. Dry-run anytime: `node .claude/hooks/worktree-cleanup.mjs --report`.

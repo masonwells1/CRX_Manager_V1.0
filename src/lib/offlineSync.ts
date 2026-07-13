@@ -7,14 +7,27 @@ import { Sentry } from './sentry';
 import type { Database } from '../types/supabase';
 import {
   getPendingActions,
+  getActionOwnerUserId,
+  OFFLINE_MAX_RETRIES,
   removeAction,
   updateAction,
-  clearFailedActions,
-  clearStaleActions,
   type PendingAction,
 } from './offlineQueue';
 
-export const MAX_RETRIES = 3;
+export const MAX_RETRIES = OFFLINE_MAX_RETRIES;
+export const RETRY_DELAYS_MS = [30_000, 2 * 60_000, 10 * 60_000] as const;
+const MAX_SESSION_MISMATCH_DEFERRALS = 3;
+
+export interface OfflineSyncResult {
+  synced: number;
+  failed: number;
+  deferred: number;
+  skippedOtherUser: number;
+  needsAttention: number;
+  conflicts: string[];
+}
+
+let activeSync: { userId: string; promise: Promise<OfflineSyncResult> } | null = null;
 
 /** Known RPC-name union from the generated DB types. */
 type FunctionName = keyof Database['public']['Functions'];
@@ -28,21 +41,96 @@ type FunctionArgs<N extends FunctionName> = Database['public']['Functions'][N] e
 /**
  * Process all pending actions in the offline queue.
  * Called automatically when the browser comes back online.
- * Also cleans up stale/failed actions to prevent IndexedDB bloat.
- * Returns the number of successfully synced actions.
+ * Unresolved actions are never automatically deleted. A single in-memory
+ * promise prevents overlapping replay loops within the current browser tab.
  */
-export async function syncPendingActions(): Promise<{ synced: number; failed: number; cleaned: number; conflicts: string[] }> {
-  // Cleanup: remove permanently failed + stale actions first
-  const cleanedFailed = await clearFailedActions(MAX_RETRIES);
-  const cleanedStale = await clearStaleActions();
-  const cleaned = cleanedFailed + cleanedStale;
+export function syncPendingActions(
+  currentUserId: string,
+  options: { force?: boolean } = {}
+): Promise<OfflineSyncResult> {
+  if (activeSync) {
+    if (activeSync.userId === currentUserId && !options.force) return activeSync.promise;
+    return activeSync.promise.then(() => syncPendingActions(currentUserId, options));
+  }
+
+  const promise: Promise<OfflineSyncResult> = processPendingActions(currentUserId, options).finally(() => {
+    if (activeSync?.promise === promise) activeSync = null;
+  });
+  activeSync = { userId: currentUserId, promise };
+  return promise;
+}
+
+async function processPendingActions(
+  currentUserId: string,
+  { force = false }: { force?: boolean }
+): Promise<OfflineSyncResult> {
+  const now = Date.now();
+  const attemptTimestamp = new Date(now).toISOString();
 
   const actions = await getPendingActions();
   let synced = 0;
   let failed = 0;
+  let deferred = 0;
+  let skippedOtherUser = 0;
+  let needsAttention = 0;
   const conflicts: string[] = [];
 
-  for (const action of actions) {
+  for (const storedAction of actions) {
+    const ownerUserId = getActionOwnerUserId(storedAction);
+    if (!ownerUserId) {
+      needsAttention++;
+      if (storedAction.status !== 'needs_attention' || storedAction.lastError !== 'Offline action owner could not be determined') {
+        const message = 'Offline action owner could not be determined';
+        await updateAction({
+          ...storedAction,
+          status: 'needs_attention',
+          lastError: message,
+        });
+        captureNeedsAttention(storedAction, 'owner_unknown', message);
+      }
+      continue;
+    }
+
+    // Shared device safety: another user's session must never execute, age, or
+    // consume retries for the original user's saved work.
+    if (ownerUserId !== currentUserId) {
+      skippedOtherUser++;
+      continue;
+    }
+
+    let action = storedAction;
+    if (!action.ownerUserId) {
+      action = { ...action, ownerUserId };
+      await updateAction(action);
+    }
+
+    const alreadyNeedsAttention = action.status === 'needs_attention' || action.retryCount >= MAX_RETRIES;
+    if (!force && alreadyNeedsAttention) {
+      needsAttention++;
+      continue;
+    }
+
+    const performedBy = action.params.p_performed_by;
+    if (typeof performedBy === 'string' && performedBy !== ownerUserId) {
+      const message = 'Offline action actor does not match its saved owner';
+      failed++;
+      needsAttention++;
+      await updateAction({
+        ...action,
+        status: 'needs_attention',
+        nextAttemptAt: undefined,
+        lastError: message,
+      });
+      captureNeedsAttention(action, 'actor_owner_mismatch', message);
+      continue;
+    }
+
+    const nextAttemptMs = action.nextAttemptAt ? new Date(action.nextAttemptAt).getTime() : 0;
+    if (!force && Number.isFinite(nextAttemptMs) && nextAttemptMs > now) {
+      deferred++;
+      continue;
+    }
+
     try {
       await executeAction(action);
       await removeAction(action.id!);
@@ -60,18 +148,63 @@ export async function syncPendingActions(): Promise<{ synced: number; failed: nu
         conflicts.push(errMsg);
         await updateAction({
           ...action,
-          retryCount: MAX_RETRIES, // Mark as permanently failed
+          retryCount: Math.max(action.retryCount, MAX_RETRIES),
+          status: 'needs_attention',
+          nextAttemptAt: undefined,
+          lastAttemptAt: attemptTimestamp,
           lastError: errMsg,
         });
         failed++;
+        needsAttention++;
+        captureNeedsAttention(action, 'conflict', errMsg);
+        continue;
+      }
+
+      // The authenticated Supabase session may have changed while an earlier
+      // action was awaiting its RPC. Do not consume a retry or quarantine the
+      // original user's work; apply only a short persisted cooldown so a stale
+      // auth context cannot create another immediate replay loop.
+      if (isSessionMismatch(errMsg)) {
+        const sessionMismatchCount = (action.sessionMismatchCount ?? 0) + 1;
+        const needsSessionReview = sessionMismatchCount >= MAX_SESSION_MISMATCH_DEFERRALS;
+        await updateAction({
+          ...action,
+          status: needsSessionReview ? 'needs_attention' : 'retry_wait',
+          nextAttemptAt: needsSessionReview
+            ? undefined
+            : new Date(now + RETRY_DELAYS_MS[0]).toISOString(),
+          lastAttemptAt: attemptTimestamp,
+          sessionMismatchCount,
+          lastError: needsSessionReview
+            ? 'Sync session could not be verified after repeated attempts'
+            : 'Sync session changed before this action could finish',
+        });
+        if (needsSessionReview) {
+          failed++;
+          needsAttention++;
+          captureNeedsAttention(
+            action,
+            'session_mismatch_limit',
+            'Sync session could not be verified after repeated attempts'
+          );
+        } else {
+          deferred++;
+        }
         continue;
       }
 
       const newRetryCount = action.retryCount + 1;
+      const permanentFailure = isPermanentFailure(errMsg) || newRetryCount >= MAX_RETRIES;
+      const nextAttemptAt = permanentFailure
+        ? undefined
+        : new Date(now + retryDelayMs(newRetryCount)).toISOString();
 
       await updateAction({
         ...action,
         retryCount: newRetryCount,
+        status: permanentFailure ? 'needs_attention' : 'retry_wait',
+        nextAttemptAt,
+        lastAttemptAt: attemptTimestamp,
         lastError: errMsg,
       });
 
@@ -79,10 +212,11 @@ export async function syncPendingActions(): Promise<{ synced: number; failed: nu
       // aren't invisible to oncall. Permanent failures (retryCount >= MAX)
       // get level=error; intermediate retries get level=warning.
       Sentry.captureException(error, {
-        level: newRetryCount >= MAX_RETRIES ? 'error' : 'warning',
+        level: permanentFailure ? 'error' : 'warning',
         tags: { source: 'offlineSync', operation: action.operation },
         extra: {
           actionId: action.id,
+          ownerUserId,
           retryCount: newRetryCount,
           maxRetries: MAX_RETRIES,
           entityTable: action.entityTable,
@@ -90,13 +224,44 @@ export async function syncPendingActions(): Promise<{ synced: number; failed: nu
         },
       });
 
-      if (newRetryCount >= MAX_RETRIES) {
-        failed++;
-      }
+      failed++;
+      if (permanentFailure) needsAttention++;
     }
   }
 
-  return { synced, failed, cleaned, conflicts };
+  return { synced, failed, deferred, skippedOtherUser, needsAttention, conflicts };
+}
+
+function retryDelayMs(retryCount: number): number {
+  return RETRY_DELAYS_MS[Math.min(Math.max(retryCount - 1, 0), RETRY_DELAYS_MS.length - 1)];
+}
+
+function isSessionMismatch(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return normalized.includes('does not match authenticated user')
+    || normalized.includes('not authenticated');
+}
+
+function captureNeedsAttention(action: PendingAction, reason: string, message: string): void {
+  Sentry.captureException(new Error(message), {
+    level: 'error',
+    tags: { source: 'offlineSync', operation: action.operation, reason },
+    extra: {
+      actionId: action.id,
+      ownerUserId: getActionOwnerUserId(action),
+      retryCount: action.retryCount,
+      entityTable: action.entityTable,
+      entityId: action.entityId,
+    },
+  });
+}
+
+function isPermanentFailure(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return normalized.includes('no longer exists')
+    || normalized.includes('unknown offline operation')
+    || normalized.includes('not authorized')
+    || normalized.includes('must be in_progress');
 }
 
 /**

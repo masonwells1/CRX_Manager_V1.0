@@ -7,6 +7,8 @@
 const DB_NAME = 'crx_offline_queue';
 const DB_VERSION = 1;
 const STORE_NAME = 'pending_actions';
+const LEGACY_OWNER_INFERENCE_OPERATIONS = new Set(['complete_delivery', 'complete_job']);
+export const OFFLINE_MAX_RETRIES = 4;
 
 export interface PendingAction {
   id?: number;
@@ -14,6 +16,16 @@ export interface PendingAction {
   params: Record<string, unknown>;
   createdAt: string;
   retryCount: number;
+  /** Authenticated user who created the action. Prevents cross-user replay on shared devices. */
+  ownerUserId?: string;
+  /** Current queue state. Missing on legacy records and treated as pending. */
+  status?: 'pending' | 'retry_wait' | 'needs_attention';
+  /** Earliest time an automatic retry may run. */
+  nextAttemptAt?: string;
+  /** Timestamp of the most recent replay attempt. */
+  lastAttemptAt?: string;
+  /** Consecutive authenticated-session mismatches, capped before manual review. */
+  sessionMismatchCount?: number;
   lastError?: string;
   /** Entity table for conflict detection (e.g. 'deliveries', 'orders') */
   entityTable?: string;
@@ -53,8 +65,20 @@ export async function queueAction(action: Omit<PendingAction, 'id'>): Promise<nu
     const tx = db.transaction(STORE_NAME, 'readwrite');
     const store = tx.objectStore(STORE_NAME);
     const request = store.add(action);
-    request.onsuccess = () => resolve(request.result as number);
-    request.onerror = () => reject(request.error);
+    let actionId: number | undefined;
+
+    request.onsuccess = () => {
+      actionId = request.result as number;
+    };
+    tx.oncomplete = () => {
+      if (actionId === undefined) {
+        reject(new Error('Offline action transaction completed without an action ID'));
+        return;
+      }
+      resolve(actionId);
+    };
+    tx.onerror = () => reject(tx.error ?? request.error ?? new Error('Failed to save offline action'));
+    tx.onabort = () => reject(tx.error ?? request.error ?? new Error('Offline action save was aborted'));
   });
 }
 
@@ -81,8 +105,9 @@ export async function removeAction(id: number): Promise<void> {
     const tx = db.transaction(STORE_NAME, 'readwrite');
     const store = tx.objectStore(STORE_NAME);
     const request = store.delete(id);
-    request.onsuccess = () => resolve();
-    request.onerror = () => reject(request.error);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error ?? request.error ?? new Error('Failed to remove offline action'));
+    tx.onabort = () => reject(tx.error ?? request.error ?? new Error('Offline action removal was aborted'));
   });
 }
 
@@ -95,8 +120,9 @@ export async function updateAction(action: PendingAction): Promise<void> {
     const tx = db.transaction(STORE_NAME, 'readwrite');
     const store = tx.objectStore(STORE_NAME);
     const request = store.put(action);
-    request.onsuccess = () => resolve();
-    request.onerror = () => reject(request.error);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error ?? request.error ?? new Error('Failed to update offline action'));
+    tx.onabort = () => reject(tx.error ?? request.error ?? new Error('Offline action update was aborted'));
   });
 }
 
@@ -115,37 +141,88 @@ export async function getPendingCount(): Promise<number> {
 }
 
 /**
- * Remove all actions that have exceeded MAX_RETRIES (permanently failed).
- * Returns the number of cleared actions.
- */
-export async function clearFailedActions(maxRetries: number = 3): Promise<number> {
-  const actions = await getPendingActions();
-  const failed = actions.filter((a) => a.retryCount >= maxRetries);
-  for (const action of failed) {
-    await removeAction(action.id!);
-  }
-  return failed.length;
-}
-
-/**
- * Remove actions older than the given age in milliseconds.
- * Default: 7 days. Prevents stale data from accumulating.
- */
-export async function clearStaleActions(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): Promise<number> {
-  const actions = await getPendingActions();
-  const cutoff = Date.now() - maxAgeMs;
-  const stale = actions.filter((a) => new Date(a.createdAt).getTime() < cutoff);
-  for (const action of stale) {
-    await removeAction(action.id!);
-  }
-  return stale.length;
-}
-
-/**
  * Get only the permanently failed actions (retryCount >= maxRetries).
  * Useful for surfacing failed items to the user in a dashboard.
  */
-export async function getFailedActions(maxRetries: number = 3): Promise<PendingAction[]> {
+export async function getFailedActions(maxRetries: number = OFFLINE_MAX_RETRIES): Promise<PendingAction[]> {
   const actions = await getPendingActions();
-  return actions.filter((a) => a.retryCount >= maxRetries);
+  return actions.filter((a) => a.status === 'needs_attention' || a.retryCount >= maxRetries);
+}
+
+/**
+ * Resolve the owner of new and legacy actions without assigning them to the
+ * currently logged-in user. The two active offline operations already carry
+ * p_performed_by in their RPC params, so old records can be recovered safely.
+ */
+export function getActionOwnerUserId(action: PendingAction): string | null {
+  if (typeof action.ownerUserId === 'string' && action.ownerUserId.length > 0) {
+    return action.ownerUserId;
+  }
+  if (!LEGACY_OWNER_INFERENCE_OPERATIONS.has(action.operation)) {
+    return null;
+  }
+  const performedBy = action.params.p_performed_by;
+  return typeof performedBy === 'string' && performedBy.length > 0 ? performedBy : null;
+}
+
+export interface OfflineQueueSummary {
+  ownedTotal: number;
+  ownedAutoSyncable: number;
+  ownedNeedsAttention: number;
+  otherUserTotal: number;
+  ownerUnknownTotal: number;
+  /** Earliest retry time among the current user's actions; null means retry now. */
+  nextAutoSyncAt: string | null;
+}
+
+/**
+ * Summarize the queue without exposing another user's payload on a shared device.
+ */
+export async function getQueueSummary(currentUserId: string | null): Promise<OfflineQueueSummary> {
+  const actions = await getPendingActions();
+  let ownedTotal = 0;
+  let ownedAutoSyncable = 0;
+  let ownedNeedsAttention = 0;
+  let otherUserTotal = 0;
+  let ownerUnknownTotal = 0;
+  let nextAutoSyncAt: string | null = null;
+  let hasImmediateAction = false;
+
+  for (const action of actions) {
+    const ownerUserId = getActionOwnerUserId(action);
+    if (!ownerUserId) {
+      ownerUnknownTotal++;
+      continue;
+    }
+    if (!currentUserId || ownerUserId !== currentUserId) {
+      otherUserTotal++;
+      continue;
+    }
+
+    ownedTotal++;
+    const needsAttention = action.status === 'needs_attention' || action.retryCount >= OFFLINE_MAX_RETRIES;
+    if (needsAttention) {
+      ownedNeedsAttention++;
+      continue;
+    }
+
+    ownedAutoSyncable++;
+    if (!action.nextAttemptAt) {
+      hasImmediateAction = true;
+      nextAutoSyncAt = null;
+      continue;
+    }
+    if (!hasImmediateAction && (!nextAutoSyncAt || action.nextAttemptAt < nextAutoSyncAt)) {
+      nextAutoSyncAt = action.nextAttemptAt;
+    }
+  }
+
+  return {
+    ownedTotal,
+    ownedAutoSyncable,
+    ownedNeedsAttention,
+    otherUserTotal,
+    ownerUnknownTotal,
+    nextAutoSyncAt,
+  };
 }

@@ -47,6 +47,7 @@ backups/
 .claude/session-state/
 .claude/settings.local.json
 .playwright-mcp/
+.playwright-cli/
 
 # Working data for perf sweep / one-off analyses (regenerable from advisor + DB)
 .perf-sweep-data/
