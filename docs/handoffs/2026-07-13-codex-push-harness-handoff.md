@@ -3,7 +3,7 @@
 **From:** Claude (Fable 5), 2026-07-13 session
 **To:** Codex (gpt-5.5+), executing in this repo with workspace-write
 **Authorized by:** Mason Wells (owner), in-chat, 2026-07-13
-**Status when you read this:** implementation branch exists but is not active. Claude review round 4 returned NEEDS-WORK because repository-owned hooks cannot be the sole trust boundary for an agent with arbitrary local process/file access. It goes LIVE only after GitHub protects `main` with a required-PR + passing-check rule, Claude re-reviews the final branch cleanly, and Mason explicitly approves the merge — see "How this lands" at the bottom.
+**Status when you read this:** implementation branch exists but is not active. Claude review round 6 returned SHIP-WITH-FOLLOWUPS with no blocker/high findings and an exact-SHA clean proof; its three MED matcher consistency follow-ups were then fixed with regression tests. Repository-owned hooks still cannot be the sole trust boundary for an agent with arbitrary local process/file access. It goes LIVE only after GitHub protects `main` with a required-PR + passing-check rule, Claude re-reviews the final follow-up commit cleanly, and Mason explicitly approves the merge — see "How this lands" at the bottom.
 
 ---
 

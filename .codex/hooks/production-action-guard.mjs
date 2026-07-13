@@ -26,7 +26,7 @@ const GITHUB_TOOL = /(?:^|__)github__/i;
 const NODE_REPL_TOOL = /(?:^|__)node[_-]?repl(?:__|$)/i;
 const CLAUDE_PROOF_RELATIVE = [".claude", "session-state", "claude-review-push.json"];
 const PROTECTED_HARNESS_PATH_RE = /(?:^|[\\/])(?:\.claude[\\/]hooks[\\/](?:codex-push-(?:guard|lib)|review-proof-guard)\.mjs|\.codex[\\/]hooks[\\/]production-action-guard\.mjs|scripts[\\/]run-claude-review\.mjs|\.claude[\\/]settings\.json|\.codex[\\/]hooks\.json)$/i;
-const PROTECTED_HARNESS_FRAGMENT_RE = /(?:^|[\s"'=<>|\\/])(?:\.claude[\\/]hooks[\\/](?:codex-push-(?:guard|lib)|review-proof-guard)\.mjs|\.codex[\\/]hooks[\\/]production-action-guard\.mjs|scripts[\\/]run-claude-review\.mjs|\.claude[\\/]settings\.json|\.codex[\\/]hooks\.json)(?:$|[\s"'])/i;
+const PROTECTED_HARNESS_FRAGMENT_RE = /(?:^|[\s"'=<>|\\/])(?:\.claude[\\/]hooks[\\/](?:codex-push-(?:guard|lib)|review-proof-guard)\.mjs|\.codex[\\/]hooks[\\/]production-action-guard\.mjs|scripts[\\/]run-claude-review\.mjs|\.claude[\\/]settings\.json|\.codex[\\/]hooks\.json)(?:$|[\s"';|&()])/i;
 
 function normalize(value) {
   return String(value || "").trim().replace(/\s+/g, " ");
@@ -414,11 +414,20 @@ export function evaluateProductionAction({
     toolInput.source,
     toolInput.destination,
   ];
-  if (pathCandidates.some((candidate) => reviewProofPathMentioned(candidate))) {
+  const patchCandidates = [
+    toolInput.patch,
+    toolInput.diff,
+    toolInput.input,
+    toolInput.changes,
+  ];
+  if ([...pathCandidates, ...patchCandidates].some((candidate) => reviewProofPathMentioned(candidate))) {
     return denied("CODEX PRODUCTION GATE: review proof files are wrapper-owned and cannot be written, edited, moved, or deleted directly.");
   }
   const mutatingFileTool = /(?:write|edit|delete|move|rename|patch|replace|create|update)/i.test(name);
-  if (mutatingFileTool && pathCandidates.some((candidate) => protectedHarnessPathMentioned(candidate))) {
+  if (mutatingFileTool && (
+    pathCandidates.some((candidate) => protectedHarnessPathMentioned(candidate)) ||
+    patchCandidates.some((candidate) => PROTECTED_HARNESS_FRAGMENT_RE.test(String(candidate || "")))
+  )) {
     return denied("CODEX PRODUCTION GATE: the production/review harness is a security boundary and cannot be changed through a direct file-write tool. Use the reviewed maintenance workflow with Mason's approval.");
   }
 

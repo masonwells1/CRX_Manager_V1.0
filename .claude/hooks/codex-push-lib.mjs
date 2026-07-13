@@ -59,7 +59,7 @@ export function reviewProofPathMentioned(value) {
   // changed into session-state on a previous tool call: `printf ... >
   // codex-review-forged.json` must still be recognized without the directory
   // appearing in the second command.
-  return /(?:^|[\s"'=:>\x3c|\/])(?:claude-review-push\.json|codex-review-[^\s/"']+\.json)(?:$|[\s"'])/i.test(text);
+  return /(?:^|[\s"'=:>\x3c|\/])(?:claude-review-push\.json|codex-review-[^\s/"']+\.json)(?:$|[\s"';|&()])/i.test(text);
 }
 
 export function reviewStateDirectoryMentioned(value) {

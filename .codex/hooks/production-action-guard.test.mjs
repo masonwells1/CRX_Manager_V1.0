@@ -105,11 +105,17 @@ try {
   assert.equal(evaluateProductionAction({ toolName: "Read", toolInput: { file_path: "scripts/run-claude-review.mjs" } }).blocked, false);
   for (const command of [
     "rm .claude/hooks/review-proof-guard.mjs",
+    "rm .claude/hooks/codex-push-guard.mjs;ls",
+    "rm .claude/hooks/codex-push-guard.mjs|cat",
     "sed -i s/a/b/ .codex/hooks/production-action-guard.mjs",
     "printf x > .claude/hooks/codex-push-guard.mjs",
   ]) {
     assert.equal(evaluateProductionAction({ toolName: "PowerShell", toolInput: { command } }).blocked, true, `natural harness mutation denied: ${command}`);
   }
+  assert.equal(evaluateProductionAction({
+    toolName: "apply_patch",
+    toolInput: { patch: "*** Update File: .codex/hooks/production-action-guard.mjs\n@@\n-old\n+new" },
+  }).blocked, true, "structured apply_patch cannot rewrite the production harness");
   assert.equal(evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: "node scripts/run-claude-review.mjs --scope base-main" } }).blocked, false);
 
   const ordinary = makeRepo("src/components/Label.tsx", "export const label = 'ordinary';\n");

@@ -22,6 +22,8 @@ Claude review round 4 confirmed the push-command parser held against every prior
 
 Claude review round 5 validated the design reframing and most round-4 fixes, then found two natural command spellings missing from the local matchers. Regression coverage now denies normal-space `rm`/`sed -i`/redirect mutations of harness files, no-space proof redirects such as `>claude-review-push.json`, split state-directory entry (`cd .claude && cd session-state`), and Node stdin execution (`node -` / piped code). Documentation deliberately describes these as recognized direct-route blocks, not proof against arbitrary obfuscation or a substitute for GitHub branch protection.
 
+Claude review round 6 returned SHIP-WITH-FOLLOWUPS with no blocker/high findings and minted an exact-SHA clean proof. Its three MED consistency follow-ups are now closed: proof and harness path matchers share trailing shell-separator coverage (`;`, `|`, `&`, parentheses), and structured `apply_patch` free-form bodies are scanned for critical harness destinations just like proof destinations. Regression tests cover each reported spelling.
+
 ---
 
 ## 2026-07-13 — Auto-cleanup of finished worktrees/branches (SessionStart guard)
