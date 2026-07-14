@@ -1,6 +1,6 @@
-# RPC Functions Reference (306 callable RPCs + 70 trigger/internal functions — live DB as of 2026-07-13)
+# RPC Functions Reference (311 callable RPCs + 71 trigger functions — live DB as of 2026-07-14)
 
-> Function inventory verified live against Supabase project `rhyzpcqhnizqbxphqdkr` (`pg_proc` joined to `pg_namespace` where `nspname='public'`, split by `prorettype = 'trigger'::regtype`): **306 callable RPCs**, **70 trigger functions**. This supersedes the earlier 2026-06-29 branch-HEAD snapshot (270 + 56), which was measured against a local throwaway DB before the field-app parity migrations and subsequent sprints (ChemMan parity, credit-memo apply, workflow waves, weekly backup, etc.) shipped live.
+> Function inventory verified live against Supabase project `rhyzpcqhnizqbxphqdkr` (`pg_proc` joined to `pg_namespace` where `nspname='public'`, split by `prorettype = 'trigger'::regtype`): **311 callable RPCs**, **71 trigger functions**. This supersedes the earlier 2026-06-29 branch-HEAD snapshot (270 + 56), which was measured against a local throwaway DB before the field-app parity migrations and subsequent sprints (ChemMan parity, credit-memo apply, workflow waves, weekly backup, offline receipts, etc.) shipped live.
 >
 > **2026-07-13 note:** the section-by-section inventory below (Atomic Save/Delete, Order & Delivery, Invoice & Payments, …) is a **curated snapshot last verified 2026-06-29** and has not been re-audited function-by-function against the live count above — treat the live DB (or `.claude/schema-registry.json` for structural facts) as authoritative if a specific function's existence, signature, or behavior is load-bearing. The detailed sections below document the notable functions, not an exhaustive per-function enumeration.
 
@@ -12,9 +12,9 @@
 
 ---
 
-## Offline Action Receipts — QUEUED, NOT LIVE
+## Offline Action Receipts — LIVE
 
-The queued offline-receipt migrations add five callable RPCs after the live baseline above; they are deliberately not included in the live count until all three migrations are applied and the catalog is re-introspected.
+The three offline-receipt migrations were applied live on 2026-07-14 and add five callable RPCs included in the live count above.
 
 - `stage_offline_action(p_client_action_id, p_operation, p_entity_id, p_schema_version, p_client_created_at, p_payload, p_idempotency_key, p_entity_snapshot_at)` → jsonb — active-user staging gate for only `complete_delivery` and `complete_job`; validates/canonicalizes bounded payloads, checks current target/assignment visibility, and atomically claims the permanent action UUID + idempotency key. When the optional queued `updated_at` snapshot no longer matches, the receipt becomes `TARGET_STATE_CONFLICT` review work before any completion RPC runs; an exact replay still returns an already-committed receipt, preserving lost-response recovery. Changed UUID/key/snapshot reuse raises. Queued guards serialize new staging per actor and distinguish the 250-per-rolling-day `OFFLINE_STAGE_DAILY_CAP` from the 500-unresolved-item `OFFLINE_STAGE_REVIEW_BACKLOG`; exact action-ID replays remain readable at either limit. The SQL defaults remain `NULL` to preserve CRX's one-overload mutator convention, but `StageOfflineActionArgs` requires the key for app callers.
 - `process_offline_action(p_client_action_id, p_idempotency_key)` → jsonb — owner-bound processor. Locks the receipt, rechecks the saved delivery/job snapshot immediately before mutation, refuses legacy rows with no snapshot, calls exactly one current canonical completion RPC, validates its result, and commits the business mutation + `succeeded` receipt in the same database transaction. Target drift and deterministic business conflicts become sanitized `needs_review`; retryable infrastructure failures rethrow and leave the receipt safely `received`. `ProcessOfflineActionArgs` requires the key even though the SQL signature keeps the project-standard default.

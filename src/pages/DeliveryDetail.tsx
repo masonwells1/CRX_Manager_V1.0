@@ -25,7 +25,7 @@ import { notifyDeliveryRemainder, notifyDeliveryCompleted } from '../lib/notific
 import { checkRUPCompliance } from '../lib/rupCompliance';
 import StartDeliveryModal from '../components/deliveries/StartDeliveryModal';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
-import { queueAction } from '../lib/offlineQueue';
+import { getOfflineStorageErrorMessage, queueAction } from '../lib/offlineQueue';
 import type { Json } from '../types/supabase';
 import { compressImage } from '../lib/imageCompression';
 import { parseLocalDate } from '../lib/dateUtils';
@@ -812,8 +812,8 @@ export default function DeliveryDetail() {
         });
         completeIdem.resetKey();
         toast('success', 'Delivery saved offline — it will retry when connected and remain saved if it needs attention');
-      } catch {
-        toast('error', 'Failed to save offline. Please try again.');
+      } catch (error) {
+        toast('error', getOfflineStorageErrorMessage(error));
       }
       setCompleting(false);
       return;

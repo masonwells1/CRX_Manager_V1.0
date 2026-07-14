@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-14
 **Branch:** `codex/offline-receipt-activation-guards`
-**Live state:** unchanged; all three offline-receipt migrations remain queued
+**Live state:** all three offline-receipt migrations applied and post-apply structure/RLS/grants verified on 2026-07-14; browser rollout remains on this feature branch until merge
 
 ## Scope
 

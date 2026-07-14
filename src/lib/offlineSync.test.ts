@@ -46,6 +46,7 @@ vi.mock('./offlineReceipts', async (importOriginal) => {
 });
 
 import { MAX_RETRIES, syncPendingActions } from './offlineSync';
+import { OfflineReceiptSyncError } from './offlineReceipts';
 
 const EMPTY_RESULT = {
   synced: 0,
@@ -372,6 +373,35 @@ describe('syncPendingActions', () => {
       lastError: expect.stringContaining('remains saved and will retry automatically'),
     }));
     expect(result).toEqual({ ...EMPTY_RESULT, deferred: 1 });
+  });
+
+  it('stages a permanent office-visible receipt when the target cannot be read', async () => {
+    const unreadableTarget = makeAction({ snapshotAt: undefined });
+    mockGetPendingActions.mockResolvedValue([unreadableTarget]);
+    mockFrom.mockReturnValue({
+      select: () => ({
+        eq: () => ({
+          maybeSingle: () => Promise.resolve({ data: null, error: null }),
+        }),
+      }),
+    });
+    mockExecuteDurable.mockRejectedValue(new OfflineReceiptSyncError(
+      'The server kept this action for office review.',
+      'needs_attention',
+    ));
+
+    const result = await syncPendingActions('user-1');
+
+    expect(mockPersistSnapshot).not.toHaveBeenCalled();
+    expect(mockExecuteDurable).toHaveBeenCalledWith(expect.objectContaining({
+      clientActionId: unreadableTarget.clientActionId,
+      snapshotAt: undefined,
+    }));
+    expect(mockUpdateAction).toHaveBeenLastCalledWith(expect.objectContaining({
+      status: 'needs_attention',
+      lastError: 'The server kept this action for office review.',
+    }));
+    expect(result).toEqual({ ...EMPTY_RESULT, failed: 1, needsAttention: 1 });
   });
 
   it('quarantines and reports an actor that differs from the saved owner', async () => {

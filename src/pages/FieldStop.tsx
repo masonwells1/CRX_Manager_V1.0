@@ -23,7 +23,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../components/ui/Toast';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
-import { queueAction } from '../lib/offlineQueue';
+import { getOfflineStorageErrorMessage, queueAction } from '../lib/offlineQueue';
 import { compressImage } from '../lib/imageCompression';
 import { logActivity } from '../lib/activityLogger';
 import { notifyDeliveryCompleted, notifyDeliveryRemainder } from '../lib/notificationTriggers';
@@ -322,8 +322,8 @@ export default function FieldStop() {
         completeIdem.resetKey();
         toast('success', 'Delivery saved offline — it will retry when connected and remain saved if it needs attention');
         setStep('done');
-      } catch {
-        toast('error', 'Failed to save offline. Please try again.');
+      } catch (error) {
+        toast('error', getOfflineStorageErrorMessage(error));
       }
       setCompleting(false);
       return;

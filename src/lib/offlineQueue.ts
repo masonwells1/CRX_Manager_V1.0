@@ -13,6 +13,15 @@ export const OFFLINE_MAX_RETRIES = 4;
 export const OFFLINE_DB_UPGRADE_BLOCKED_MESSAGE =
   'Offline storage could not update because CRX Manager is open in another tab or app window. Close the other CRX Manager tabs and try again.';
 
+export function getOfflineStorageErrorMessage(
+  error: unknown,
+  fallback = 'Failed to save offline. Please try again.',
+): string {
+  return error instanceof Error && error.message === OFFLINE_DB_UPGRADE_BLOCKED_MESSAGE
+    ? OFFLINE_DB_UPGRADE_BLOCKED_MESSAGE
+    : fallback;
+}
+
 export interface PendingAction {
   id?: number;
   operation: string;

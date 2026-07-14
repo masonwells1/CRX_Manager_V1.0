@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import type { OfflineQueueSummary } from '../../lib/offlineQueue';
+import {
+  OFFLINE_DB_UPGRADE_BLOCKED_MESSAGE,
+  type OfflineQueueSummary,
+} from '../../lib/offlineQueue';
 
 const mockIsOnline = vi.fn();
 const mockGetQueueSummary = vi.fn();
@@ -14,9 +17,13 @@ vi.mock('../../contexts/AuthContext', () => ({
   useAuth: () => ({ profile: { id: 'user-1' } }),
 }));
 
-vi.mock('../../lib/offlineQueue', () => ({
-  getQueueSummary: (userId: string | null) => mockGetQueueSummary(userId),
-}));
+vi.mock('../../lib/offlineQueue', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../lib/offlineQueue')>();
+  return {
+    ...actual,
+    getQueueSummary: (userId: string | null) => mockGetQueueSummary(userId),
+  };
+});
 
 vi.mock('../../lib/offlineSync', () => ({
   RETRY_DELAYS_MS: [30_000, 120_000, 600_000],
@@ -61,6 +68,14 @@ describe('OfflineBanner', () => {
     mockIsOnline.mockReturnValue(false);
     render(<OfflineBanner />);
     expect(screen.getByText('You are offline.')).toBeInTheDocument();
+  });
+
+  it('shows the actionable recovery message when another tab blocks storage upgrade', async () => {
+    mockGetQueueSummary.mockRejectedValue(new Error(OFFLINE_DB_UPGRADE_BLOCKED_MESSAGE));
+
+    render(<OfflineBanner />);
+
+    expect(await screen.findByText(OFFLINE_DB_UPGRADE_BLOCKED_MESSAGE)).toBeInTheDocument();
   });
 
   it('shows retained needs-attention work truthfully', async () => {

@@ -8,7 +8,11 @@ import { WifiOff, RefreshCw, CheckCircle2, ClipboardList } from 'lucide-react';
 import { Sentry } from '../../lib/sentry';
 import { useOnlineStatus } from '../../hooks/useOnlineStatus';
 import { useAuth } from '../../contexts/AuthContext';
-import { getQueueSummary, type OfflineQueueSummary } from '../../lib/offlineQueue';
+import {
+  getOfflineStorageErrorMessage,
+  getQueueSummary,
+  type OfflineQueueSummary,
+} from '../../lib/offlineQueue';
 import { RETRY_DELAYS_MS, syncPendingActions, type OfflineSyncResult } from '../../lib/offlineSync';
 import OfflineWorkPanel from './OfflineWorkPanel';
 
@@ -32,6 +36,7 @@ export default function OfflineBanner() {
   const [syncError, setSyncError] = useState(false);
   const [syncResult, setSyncResult] = useState<OfflineSyncResult | null>(null);
   const [syncRetryAt, setSyncRetryAt] = useState<number | null>(null);
+  const [storageError, setStorageError] = useState<string | null>(null);
   const [workPanelOpen, setWorkPanelOpen] = useState(false);
   const syncingRef = useRef(false);
   const successTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -40,8 +45,10 @@ export default function OfflineBanner() {
   const checkQueue = useCallback(async () => {
     try {
       setSummary(await getQueueSummary(currentUserId));
-    } catch {
-      // IndexedDB not available
+      setStorageError(null);
+    } catch (error) {
+      const message = getOfflineStorageErrorMessage(error, '');
+      if (message) setStorageError(message);
     }
   }, [currentUserId]);
 
@@ -107,7 +114,7 @@ export default function OfflineBanner() {
   const ownedWaiting = summary.ownedTotal - summary.ownedNeedsAttention - summary.ownedOfficeResolved;
 
   // Show nothing if online and no pending actions and no sync result
-  if (isOnline && unresolvedTotal === 0 && (!syncResult || syncResult.synced === 0)) {
+  if (isOnline && unresolvedTotal === 0 && !storageError && (!syncResult || syncResult.synced === 0)) {
     return null;
   }
 
@@ -163,6 +170,9 @@ export default function OfflineBanner() {
         )}
         {syncError && (
           <span className="text-red-600">Sync failed — please try again</span>
+        )}
+        {storageError && (
+          <span className="text-red-700 font-medium">{storageError}</span>
         )}
       </div>
 

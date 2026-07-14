@@ -19,6 +19,7 @@ import {
   getFailedActions,
   getActionOwnerUserId,
   getQueueSummary,
+  getOfflineStorageErrorMessage,
   OFFLINE_DB_UPGRADE_BLOCKED_MESSAGE,
   OFFLINE_MAX_RETRIES,
   type PendingAction,
@@ -52,6 +53,13 @@ beforeEach(() => {
 // ── queueAction ──────────────────────────────────────────────────────────
 
 describe('queueAction', () => {
+  it('surfaces the blocked-upgrade recovery message and hides unrelated internals', () => {
+    expect(getOfflineStorageErrorMessage(new Error(OFFLINE_DB_UPGRADE_BLOCKED_MESSAGE)))
+      .toBe(OFFLINE_DB_UPGRADE_BLOCKED_MESSAGE);
+    expect(getOfflineStorageErrorMessage(new Error('private IndexedDB detail')))
+      .toBe('Failed to save offline. Please try again.');
+  });
+
   it('rejects visibly instead of hanging when another tab blocks the IndexedDB upgrade', async () => {
     const legacyOpen = indexedDB.open('crx_offline_queue', 1);
     legacyOpen.onupgradeneeded = () => {

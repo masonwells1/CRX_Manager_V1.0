@@ -1,8 +1,8 @@
 # Offline Work Durability Plan
 
-> **Status update — 2026-07-14:** Stage 1A is merged. The approved Stage 1B feature branch now integrates permanent receipts into the two real producers, retains local work until server-proven success, adds distinct cap/backlog handling, exposes a safe device panel, and adds audited non-destructive office resolution. The three migrations remain queued and production is unchanged. Signature/photo replay, notification/email replay, cross-tab lease, and general duplicate/conflict policy remain deferred.
+> **Status update — 2026-07-14:** Stage 1A is merged. The approved Stage 1B feature branch now integrates permanent receipts into the two real producers, retains local work until server-proven success, adds distinct cap/backlog handling, exposes a safe device panel, and adds audited non-destructive office resolution. All three migrations are live and verified; the browser rollout remains pending this branch merge. Signature/photo replay, notification/email replay, cross-tab lease, and general duplicate/conflict policy remain deferred.
 
-**Status:** STAGE 1B BROWSER + OFFICE RECOVERY PROVEN LOCALLY — migrations queued; no live data changed
+**Status:** STAGE 1B DATABASE LIVE + VERIFIED — browser and office UI pending feature-branch merge
 **Date:** 2026-07-13
 **Risk:** HIGH — delivery completion changes inventory and order/invoice state; job completion changes inventory and application records
 

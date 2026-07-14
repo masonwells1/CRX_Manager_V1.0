@@ -41,10 +41,10 @@ async function recoverDurableSnapshot(action: PendingAction): Promise<PendingAct
     );
   }
   if (!response.data || typeof response.data.updated_at !== 'string') {
-    throw new OfflineReceiptSyncError(
-      'This saved action no longer has a matching delivery or job. Office review is required.',
-      'needs_attention',
-    );
+    // Do not quarantine this only on the device. Staging without a snapshot
+    // lets the server create a permanent TARGET_NOT_FOUND / LEGACY_OUTCOME_UNKNOWN
+    // receipt that the office can see and resolve.
+    return action;
   }
 
   return persistSnapshotIfMissing(action.id, response.data.updated_at, entityTable);
