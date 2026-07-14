@@ -4,6 +4,7 @@ import type { PendingAction } from './offlineQueue';
 const mockRpc = vi.fn();
 const mockFrom = vi.fn();
 const mockCaptureException = vi.fn();
+const mockExecuteDurable = vi.fn();
 vi.mock('./sentry', () => ({
   Sentry: { captureException: (...args: unknown[]) => mockCaptureException(...args) },
 }));
@@ -23,7 +24,6 @@ vi.mock('./db', () => ({
 const mockGetPendingActions = vi.fn();
 const mockRemoveAction = vi.fn().mockResolvedValue(undefined);
 const mockUpdateAction = vi.fn().mockResolvedValue(undefined);
-
 vi.mock('./offlineQueue', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./offlineQueue')>();
   return {
@@ -34,7 +34,16 @@ vi.mock('./offlineQueue', async (importOriginal) => {
   };
 });
 
+vi.mock('./offlineReceipts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./offlineReceipts')>();
+  return {
+    ...actual,
+    executeDurableOfflineAction: (action: PendingAction) => mockExecuteDurable(action),
+  };
+});
+
 import { MAX_RETRIES, syncPendingActions } from './offlineSync';
+import { OfflineReceiptSyncError } from './offlineReceipts';
 
 const EMPTY_RESULT = {
   synced: 0,
@@ -49,7 +58,19 @@ function makeAction(overrides: Partial<PendingAction> = {}): PendingAction {
   return {
     id: 1,
     operation: 'complete_delivery',
-    params: { p_delivery_id: 'd-1', p_performed_by: 'user-1' },
+    params: {
+      p_delivery_id: 'd-1',
+      p_signed_by: 'Driver',
+      p_performed_by: 'user-1',
+      p_idempotency_key: 'complete_delivery:user-1:test-key',
+    },
+    entityId: 'd-1',
+    entityTable: 'deliveries',
+    snapshotAt: '2026-07-13T12:00:00.000Z',
+    receiptOrigin: 'native',
+    clientActionId: '11111111-1111-4111-8111-111111111111',
+    idempotencyKey: 'complete_delivery:user-1:test-key',
+    schemaVersion: 1,
     createdAt: '2026-07-13T12:00:00.000Z',
     retryCount: 0,
     ownerUserId: 'user-1',
@@ -59,7 +80,21 @@ function makeAction(overrides: Partial<PendingAction> = {}): PendingAction {
 }
 
 beforeEach(() => {
-  vi.clearAllMocks();
+  mockRpc.mockReset();
+  mockFrom.mockReset();
+  mockCaptureException.mockReset();
+  mockExecuteDurable.mockReset();
+  mockGetPendingActions.mockReset();
+  mockRemoveAction.mockReset().mockResolvedValue(undefined);
+  mockUpdateAction.mockReset().mockResolvedValue(undefined);
+  mockExecuteDurable.mockImplementation(async (action: PendingAction) => {
+    const response = await mockRpc(action.operation, action.params);
+    if (response.error) throw response.error;
+    if (response.data === null || response.data === undefined) {
+      throw new Error(`${action.operation} returned no data — operation may have been denied`);
+    }
+    return response.data;
+  });
 });
 
 describe('syncPendingActions', () => {
@@ -76,7 +111,9 @@ describe('syncPendingActions', () => {
 
     expect(mockRpc).toHaveBeenCalledWith('complete_delivery', {
       p_delivery_id: 'd-1',
+      p_signed_by: 'Driver',
       p_performed_by: 'user-1',
+      p_idempotency_key: 'complete_delivery:user-1:test-key',
     });
     expect(mockRemoveAction).toHaveBeenCalledWith(1);
     expect(result).toEqual({ ...EMPTY_RESULT, synced: 1 });
@@ -174,6 +211,125 @@ describe('syncPendingActions', () => {
     expect(result).toEqual({ ...EMPTY_RESULT, needsAttention: 1 });
   });
 
+  it('quarantines one malformed legacy receipt without stopping the remaining queue', async () => {
+    mockGetPendingActions.mockResolvedValue([
+      makeAction({
+        clientActionId: undefined,
+        idempotencyKey: undefined,
+        schemaVersion: undefined,
+        params: {
+          p_delivery_id: 'd-legacy',
+          p_signed_by: 'Driver',
+          p_performed_by: 'user-1',
+        },
+      }),
+      makeAction({ id: 2, clientActionId: '22222222-2222-4222-8222-222222222222' }),
+    ]);
+    mockRpc.mockResolvedValue({ data: { success: true }, error: null });
+
+    const result = await syncPendingActions('user-1');
+
+    expect(mockUpdateAction).toHaveBeenCalledWith(expect.objectContaining({
+      id: 1,
+      retryCount: 0,
+      status: 'needs_attention',
+      lastError: expect.stringContaining('Durable offline actions require an idempotency key'),
+    }));
+    expect(mockCaptureException).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({
+        tags: expect.objectContaining({ reason: 'legacy_receipt_identity_missing' }),
+      })
+    );
+    expect(mockRemoveAction).toHaveBeenCalledWith(2);
+    expect(result).toEqual({ ...EMPTY_RESULT, synced: 1, needsAttention: 1 });
+  });
+
+  it('keeps pre-receipt work without a queue-time snapshot in office review', async () => {
+    const legacy = makeAction({
+      clientActionId: undefined,
+      idempotencyKey: undefined,
+      schemaVersion: undefined,
+      receiptOrigin: undefined,
+      snapshotAt: undefined,
+      entityTable: undefined,
+    });
+    mockGetPendingActions.mockResolvedValue([legacy]);
+    mockExecuteDurable.mockRejectedValue(new OfflineReceiptSyncError(
+      'The server kept this action for office review.',
+      'needs_attention',
+    ));
+
+    const result = await syncPendingActions('user-1');
+
+    expect(mockExecuteDurable).toHaveBeenCalledWith(expect.objectContaining({
+      receiptOrigin: 'legacy',
+      snapshotAt: undefined,
+      entityTable: undefined,
+    }));
+    expect(mockRemoveAction).not.toHaveBeenCalled();
+    expect(result).toEqual({ ...EMPTY_RESULT, failed: 1, needsAttention: 1 });
+  });
+
+  it('keeps a native field completion without a queue-time snapshot in office review', async () => {
+    const nativeFieldAction = makeAction({
+      operation: 'complete_job',
+      entityId: 'job-1',
+      entityTable: 'jobs',
+      receiptOrigin: 'native',
+      snapshotAt: undefined,
+      params: {
+        p_job_id: 'job-1',
+        p_performed_by: 'user-1',
+        p_idempotency_key: 'complete_job:user-1:test-key',
+      },
+    });
+    mockGetPendingActions.mockResolvedValue([nativeFieldAction]);
+    mockExecuteDurable.mockRejectedValue(new OfflineReceiptSyncError(
+      'The server kept this action for office review.',
+      'needs_attention',
+    ));
+
+    const result = await syncPendingActions('user-1');
+
+    expect(mockExecuteDurable).toHaveBeenCalledWith(expect.objectContaining({
+      operation: 'complete_job',
+      receiptOrigin: 'native',
+      snapshotAt: undefined,
+      entityTable: 'jobs',
+    }));
+    expect(mockRemoveAction).not.toHaveBeenCalled();
+    expect(result).toEqual({ ...EMPTY_RESULT, failed: 1, needsAttention: 1 });
+  });
+
+  it('stages a permanent office-visible receipt when the target cannot be read', async () => {
+    const unreadableTarget = makeAction({ snapshotAt: undefined });
+    mockGetPendingActions.mockResolvedValue([unreadableTarget]);
+    mockFrom.mockReturnValue({
+      select: () => ({
+        eq: () => ({
+          maybeSingle: () => Promise.resolve({ data: null, error: null }),
+        }),
+      }),
+    });
+    mockExecuteDurable.mockRejectedValue(new OfflineReceiptSyncError(
+      'The server kept this action for office review.',
+      'needs_attention',
+    ));
+
+    const result = await syncPendingActions('user-1');
+
+    expect(mockExecuteDurable).toHaveBeenCalledWith(expect.objectContaining({
+      clientActionId: unreadableTarget.clientActionId,
+      snapshotAt: undefined,
+    }));
+    expect(mockUpdateAction).toHaveBeenLastCalledWith(expect.objectContaining({
+      status: 'needs_attention',
+      lastError: 'The server kept this action for office review.',
+    }));
+    expect(result).toEqual({ ...EMPTY_RESULT, failed: 1, needsAttention: 1 });
+  });
+
   it('quarantines and reports an actor that differs from the saved owner', async () => {
     mockGetPendingActions.mockResolvedValue([
       makeAction({ params: { p_delivery_id: 'd-1', p_performed_by: 'different-user' } }),
@@ -257,6 +413,7 @@ describe('syncPendingActions', () => {
   it('retains a conflict as needs attention without calling the business RPC', async () => {
     mockGetPendingActions.mockResolvedValue([
       makeAction({
+        operation: 'cancel_delivery',
         entityTable: 'deliveries',
         entityId: 'd-1',
         snapshotAt: '2026-07-13T12:00:00.000Z',
@@ -289,6 +446,24 @@ describe('syncPendingActions', () => {
       needsAttention: 1,
       conflicts: [expect.stringContaining('Conflict:')],
     }));
+  });
+
+  it('consults the permanent receipt before a durable action even when its local snapshot is stale', async () => {
+    mockGetPendingActions.mockResolvedValue([
+      makeAction({
+        entityTable: 'deliveries',
+        entityId: 'd-1',
+        snapshotAt: '2026-07-13T12:00:00.000Z',
+      }),
+    ]);
+    mockRpc.mockResolvedValue({ data: { status: 'succeeded' }, error: null });
+
+    const result = await syncPendingActions('user-1');
+
+    expect(mockFrom).not.toHaveBeenCalled();
+    expect(mockExecuteDurable).toHaveBeenCalledTimes(1);
+    expect(mockRemoveAction).toHaveBeenCalledWith(1);
+    expect(result).toEqual({ ...EMPTY_RESULT, synced: 1 });
   });
 
   it('shares one in-flight replay promise within a browser tab', async () => {
@@ -406,7 +581,9 @@ describe('syncPendingActions', () => {
   });
 
   it('quarantines unknown operations instead of deleting them', async () => {
-    mockGetPendingActions.mockResolvedValue([makeAction({ operation: 'unknown_op' })]);
+    mockGetPendingActions.mockResolvedValue([
+      makeAction({ operation: 'unknown_op', entityTable: undefined, snapshotAt: undefined }),
+    ]);
 
     const result = await syncPendingActions('user-1');
 
@@ -422,7 +599,13 @@ describe('syncPendingActions', () => {
   it('continues processing remaining actions when one fails', async () => {
     mockGetPendingActions.mockResolvedValue([
       makeAction({ id: 20 }),
-      makeAction({ id: 21, operation: 'allocate_payment', params: { p_performed_by: 'user-1' } }),
+      makeAction({
+        id: 21,
+        operation: 'allocate_payment',
+        params: { p_performed_by: 'user-1' },
+        entityTable: undefined,
+        snapshotAt: undefined,
+      }),
     ]);
     mockRpc
       .mockResolvedValueOnce({ error: { message: 'temporary failure' } })

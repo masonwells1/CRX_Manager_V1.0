@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS public.offline_action_receipts (
   entity_id uuid NOT NULL,
   schema_version integer NOT NULL,
   client_created_at timestamptz NOT NULL,
+  entity_snapshot_at timestamptz,
   request_payload jsonb NOT NULL,
   idempotency_key text NOT NULL UNIQUE,
   status text NOT NULL DEFAULT 'received',
@@ -105,6 +106,11 @@ CREATE TABLE IF NOT EXISTS public.offline_action_receipts (
     )
 );
 
+-- Preview/dev databases may already have the earlier queued table shape.
+-- Keep the queued migration safely re-runnable without leaving schema drift.
+ALTER TABLE public.offline_action_receipts
+  ADD COLUMN IF NOT EXISTS entity_snapshot_at timestamptz;
+
 CREATE INDEX IF NOT EXISTS idx_offline_action_receipts_actor_status
   ON public.offline_action_receipts (actor_id, status);
 
@@ -167,6 +173,10 @@ COMMENT ON TABLE public.offline_action_receipts IS
 -- needs_review (office-visible) rather than discarded.
 -- =============================================================================
 
+DROP FUNCTION IF EXISTS public.stage_offline_action(
+  uuid, text, uuid, integer, timestamptz, jsonb, text
+);
+
 CREATE OR REPLACE FUNCTION public.stage_offline_action(
   p_client_action_id uuid,
   p_operation text,
@@ -174,7 +184,8 @@ CREATE OR REPLACE FUNCTION public.stage_offline_action(
   p_schema_version integer,
   p_client_created_at timestamptz,
   p_payload jsonb,
-  p_idempotency_key text DEFAULT NULL
+  p_idempotency_key text DEFAULT NULL,
+  p_entity_snapshot_at timestamptz DEFAULT NULL
 )
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -199,11 +210,14 @@ DECLARE
   v_timestamp timestamptz;
   v_assigned_driver uuid;
   v_job_applicator uuid;
+  v_target_updated_at timestamptz;
   v_target_exists boolean := false;
   v_authorized boolean := false;
   v_initial_status text := 'received';
   v_failure_code text;
   v_failure_summary text;
+  v_payload_requires_review boolean := false;
+  v_payload_review_summary text;
   v_now timestamptz := now();
 BEGIN
   IF v_actor IS NULL THEN
@@ -311,13 +325,17 @@ BEGIN
         RAISE EXCEPTION 'PAYLOAD_INVALID: completed_at must be an ISO timestamp';
       END;
       IF v_timestamp > v_now + interval '5 minutes' THEN
-        RAISE EXCEPTION 'PAYLOAD_INVALID: completed_at cannot be more than 5 minutes in the future';
+        v_payload_requires_review := true;
+        v_payload_review_summary := 'The saved completion time is ahead of the server clock. Office review is required.';
+      ELSIF v_timestamp < v_now - interval '14 days' THEN
+        v_payload_requires_review := true;
+        v_payload_review_summary := 'The saved completion time is more than 14 days old. Office review is required before posting into a prior period.';
       END IF;
       v_canonical := v_canonical || jsonb_build_object('completed_at', to_jsonb(v_timestamp));
     END IF;
 
-    SELECT d.assigned_driver
-      INTO v_assigned_driver
+    SELECT d.assigned_driver, d.updated_at
+      INTO v_assigned_driver, v_target_updated_at
       FROM public.deliveries d
      WHERE d.id = p_entity_id;
     v_target_exists := FOUND;
@@ -336,7 +354,8 @@ BEGIN
           AND di.delivery_id = p_entity_id
       )
     ) THEN
-      RAISE EXCEPTION 'PAYLOAD_INVALID: quantity item does not belong to delivery';
+      v_payload_requires_review := true;
+      v_payload_review_summary := 'A saved delivery item no longer belongs to this delivery. Office review is required.';
     END IF;
 
   ELSE
@@ -440,8 +459,8 @@ BEGIN
       v_canonical := v_canonical || jsonb_build_object('field_acres', v_canonical_field_acres);
     END IF;
 
-    SELECT j.applicator_id
-      INTO v_job_applicator
+    SELECT j.applicator_id, j.updated_at
+      INTO v_job_applicator, v_target_updated_at
       FROM public.jobs j
      WHERE j.id = p_entity_id;
     v_target_exists := FOUND;
@@ -513,7 +532,8 @@ BEGIN
           AND jf.field_id = (e.value->>'field_id')::uuid
       )
     ) THEN
-      RAISE EXCEPTION 'PAYLOAD_INVALID: field_id does not belong to job';
+      v_payload_requires_review := true;
+      v_payload_review_summary := 'A saved field no longer belongs to this job. Office review is required.';
     END IF;
   END IF;
 
@@ -525,15 +545,28 @@ BEGIN
     v_initial_status := 'needs_review';
     v_failure_code := 'NOT_AUTHORIZED';
     v_failure_summary := 'The current user is no longer authorized to complete this delivery or job.';
+  ELSIF p_entity_snapshot_at IS NULL THEN
+    v_initial_status := 'needs_review';
+    v_failure_code := 'LEGACY_OUTCOME_UNKNOWN';
+    v_failure_summary := 'This saved action does not include a target snapshot. Office review is required before it can run.';
+  ELSIF p_entity_snapshot_at IS NOT NULL
+        AND v_target_updated_at IS DISTINCT FROM p_entity_snapshot_at THEN
+    v_initial_status := 'needs_review';
+    v_failure_code := 'TARGET_STATE_CONFLICT';
+    v_failure_summary := 'The delivery or job changed after this action was saved offline. Office review is required.';
+  ELSIF v_payload_requires_review THEN
+    v_initial_status := 'needs_review';
+    v_failure_code := 'PAYLOAD_INVALID';
+    v_failure_summary := v_payload_review_summary;
   END IF;
 
   INSERT INTO public.offline_action_receipts (
     client_action_id, actor_id, operation, entity_id, schema_version,
-    client_created_at, request_payload, idempotency_key,
+    client_created_at, entity_snapshot_at, request_payload, idempotency_key,
     status, failure_code, failure_summary, needs_review_at
   ) VALUES (
     p_client_action_id, v_actor, p_operation, p_entity_id, p_schema_version,
-    p_client_created_at, v_canonical, p_idempotency_key,
+    p_client_created_at, p_entity_snapshot_at, v_canonical, p_idempotency_key,
     v_initial_status, v_failure_code, v_failure_summary,
     CASE WHEN v_initial_status = 'needs_review' THEN v_now ELSE NULL END
   )
@@ -560,6 +593,7 @@ BEGIN
      OR v_existing.entity_id IS DISTINCT FROM p_entity_id
      OR v_existing.schema_version IS DISTINCT FROM p_schema_version
      OR v_existing.client_created_at IS DISTINCT FROM p_client_created_at
+     OR v_existing.entity_snapshot_at IS DISTINCT FROM p_entity_snapshot_at
      OR v_existing.idempotency_key IS DISTINCT FROM p_idempotency_key
      OR v_existing.request_payload IS DISTINCT FROM v_canonical THEN
     RAISE EXCEPTION 'OFFLINE_ACTION_ID_REUSE';
@@ -608,6 +642,7 @@ DECLARE
   v_message text;
   v_failure_code text;
   v_failure_summary text;
+  v_target_updated_at timestamptz;
 BEGIN
   IF v_actor IS NULL THEN
     RAISE EXCEPTION 'AUTH_REQUIRED';
@@ -652,6 +687,49 @@ BEGIN
   END IF;
   IF v_receipt.status = 'needs_review' THEN
     RAISE EXCEPTION 'OFFLINE_ACTION_NEEDS_REVIEW';
+  END IF;
+
+  -- Re-check immediately before the canonical mutation. This closes the gap
+  -- where staging committed as received, the target changed, and processing
+  -- retried later after a weak-connection interruption.
+  IF v_receipt.entity_snapshot_at IS NOT NULL THEN
+    IF v_receipt.operation = 'complete_delivery' THEN
+      SELECT d.updated_at INTO v_target_updated_at
+      FROM public.deliveries d
+      WHERE d.id = v_receipt.entity_id;
+    ELSE
+      SELECT j.updated_at INTO v_target_updated_at
+      FROM public.jobs j
+      WHERE j.id = v_receipt.entity_id;
+    END IF;
+  END IF;
+
+  IF v_receipt.entity_snapshot_at IS NULL
+     OR v_target_updated_at IS DISTINCT FROM v_receipt.entity_snapshot_at THEN
+    v_failure_code := CASE
+      WHEN v_receipt.entity_snapshot_at IS NULL THEN 'LEGACY_OUTCOME_UNKNOWN'
+      ELSE 'TARGET_STATE_CONFLICT'
+    END;
+    v_failure_summary := CASE
+      WHEN v_receipt.entity_snapshot_at IS NULL
+        THEN 'This saved action does not include a target snapshot. Office review is required before it can run.'
+      ELSE 'The delivery or job changed after this action reached the server. Office review is required.'
+    END;
+    UPDATE public.offline_action_receipts
+       SET status = 'needs_review',
+           failure_code = v_failure_code,
+           failure_summary = v_failure_summary,
+           needs_review_at = now()
+     WHERE client_action_id = p_client_action_id;
+    RETURN jsonb_build_object(
+      'client_action_id', v_receipt.client_action_id,
+      'operation', v_receipt.operation,
+      'entity_id', v_receipt.entity_id,
+      'status', 'needs_review',
+      'failure_code', v_failure_code,
+      'failure_summary', v_failure_summary,
+      'attempt_count', v_receipt.attempt_count
+    );
   END IF;
 
   IF v_receipt.attempt_count >= 50 THEN
@@ -874,21 +952,21 @@ BEGIN
 END;
 $function$;
 
-REVOKE ALL ON FUNCTION public.stage_offline_action(uuid, text, uuid, integer, timestamptz, jsonb, text)
+REVOKE ALL ON FUNCTION public.stage_offline_action(uuid, text, uuid, integer, timestamptz, jsonb, text, timestamptz)
   FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION public.process_offline_action(uuid, text)
   FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION public.get_offline_action_status(uuid)
   FROM PUBLIC, anon;
 
-GRANT EXECUTE ON FUNCTION public.stage_offline_action(uuid, text, uuid, integer, timestamptz, jsonb, text)
+GRANT EXECUTE ON FUNCTION public.stage_offline_action(uuid, text, uuid, integer, timestamptz, jsonb, text, timestamptz)
   TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.process_offline_action(uuid, text)
   TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.get_offline_action_status(uuid)
   TO authenticated, service_role;
 
-COMMENT ON FUNCTION public.stage_offline_action(uuid, text, uuid, integer, timestamptz, jsonb, text) IS
+COMMENT ON FUNCTION public.stage_offline_action(uuid, text, uuid, integer, timestamptz, jsonb, text, timestamptz) IS
   'Validates and permanently stages one approved offline completion under an immutable client UUID.';
 COMMENT ON FUNCTION public.process_offline_action(uuid, text) IS
   'Processes one staged offline completion; canonical business mutation and success receipt commit atomically.';
@@ -966,13 +1044,13 @@ BEGIN
     RAISE EXCEPTION 'post-check: authenticated must not have direct receipt table privileges';
   END IF;
 
-  IF has_function_privilege('anon', 'public.stage_offline_action(uuid,text,uuid,integer,timestamptz,jsonb,text)', 'EXECUTE')
+  IF has_function_privilege('anon', 'public.stage_offline_action(uuid,text,uuid,integer,timestamptz,jsonb,text,timestamptz)', 'EXECUTE')
      OR has_function_privilege('anon', 'public.process_offline_action(uuid,text)', 'EXECUTE')
      OR has_function_privilege('anon', 'public.get_offline_action_status(uuid)', 'EXECUTE') THEN
     RAISE EXCEPTION 'post-check: anon must not execute offline receipt RPCs';
   END IF;
 
-  IF NOT has_function_privilege('authenticated', 'public.stage_offline_action(uuid,text,uuid,integer,timestamptz,jsonb,text)', 'EXECUTE')
+  IF NOT has_function_privilege('authenticated', 'public.stage_offline_action(uuid,text,uuid,integer,timestamptz,jsonb,text,timestamptz)', 'EXECUTE')
      OR NOT has_function_privilege('authenticated', 'public.process_offline_action(uuid,text)', 'EXECUTE')
      OR NOT has_function_privilege('authenticated', 'public.get_offline_action_status(uuid)', 'EXECUTE') THEN
     RAISE EXCEPTION 'post-check: authenticated must execute all offline receipt RPCs';

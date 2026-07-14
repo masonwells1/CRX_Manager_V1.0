@@ -12,11 +12,11 @@ BEGIN;
 DROP FUNCTION IF EXISTS public.get_offline_action_status(uuid);
 DROP FUNCTION IF EXISTS public.process_offline_action(uuid, text);
 DROP FUNCTION IF EXISTS public.stage_offline_action(
-  uuid, text, uuid, integer, timestamptz, jsonb, text
+  uuid, text, uuid, integer, timestamptz, jsonb, text, timestamptz
 );
 DROP TABLE IF EXISTS public.offline_action_receipts;
 
-\ir ../../supabase/migrations/20260714024811_offline_action_receipts.sql
+\ir ../../supabase/migrations/20260714171331_offline_action_receipts.sql
 \ir smoke-offline-action-receipts.sql
 
 -- Unreachable by design: the smoke must terminate with SMOKE_PASS_ROLLBACK.

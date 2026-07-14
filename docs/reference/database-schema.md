@@ -1,6 +1,6 @@
-# Database Schema Reference (122 Tables + 2 views)
+# Database Schema Reference (123 Tables + 2 views)
 
-> Count as of 2026-07-13, verified live against Supabase project `rhyzpcqhnizqbxphqdkr` (`SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE'` / `'VIEW'`). The `feat/fieldapp-parity` field-app tables mentioned in earlier revisions of this doc (job_applied_records, job_applied_record_fields/crew, job_tags, job_tag_assignments, job_batches, ground_crews, ground_crew_members, job_location_dispatches, job_attachments, job_notifications, user_list_settings) shipped to live long ago and are no longer branch-only — that caveat is removed. The per-table sections below are a curated tour, not an exhaustive enumeration of all 122 tables; **`.claude/schema-registry.json`** (refreshed from live introspection) is the machine-readable source of truth for current columns, constraints, and enum values — prefer it over this prose doc when a fact is load-bearing.
+> Count as of 2026-07-14, verified live against Supabase project `rhyzpcqhnizqbxphqdkr` (`SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE'` / `'VIEW'`). The per-table sections below are a curated tour, not an exhaustive enumeration of all 123 tables; **`.claude/schema-registry.json`** (refreshed from live introspection) is the machine-readable source of truth for current columns, constraints, and enum values — prefer it over this prose doc when a fact is load-bearing.
 
 ## Core Business
 - `profiles` - Users (id refs auth.users, email, full_name, role, phone, is_active, applicator_license_number, faa_certificate_number)
@@ -139,7 +139,7 @@
 
 ## System / Infrastructure
 - `idempotency_keys` - Idempotent operation cache (idempotency_key UNIQUE, operation, result jsonb, expires_at — auto-cleanup after 24h)
-- `offline_action_receipts` — **QUEUED, NOT LIVE** (`20260714024811`): permanent server acknowledgement for approved offline `complete_delivery` / `complete_job` actions. Immutable client action UUID + permanent idempotency key, statuses `received` / `succeeded` / `needs_review`, sanitized office-review failures, RPC-only writes. This queued table is not included in the live 122-table heading count yet.
+- `offline_action_receipts` — **LIVE** (`20260714171331`, `20260714171800`, `20260714172135`, `20260714203709`): permanent server acknowledgement for approved offline `complete_delivery` / `complete_job` actions. Immutable client action UUID + permanent idempotency key + optional queued entity `updated_at` snapshot, statuses `received` / `succeeded` / `needs_review`, sanitized target/payload-drift failures, audited `already_completed` / `abandoned` office-resolution metadata, and target-row locking from the final snapshot check through canonical completion. Office resolution never changes the receipt to `succeeded`, never reruns the business action, and never deletes the receipt. Direct authenticated table access remains denied; clients use sanitized RPCs.
 - `rate_limit_log` - Rate limiting tracker (user_id, operation, created_at — accessed only by SECURITY DEFINER functions)
 - `rate_limits` - Per-user sliding-window counter (user_id, action_name, window_start, request_count — accessed only by SECURITY DEFINER functions)
 
@@ -223,7 +223,7 @@
 | order_shares | Admin / Sales Rep | Admin / Sales Rep | - | Admin |
 | document_processing_log | Own user_id | Own user_id | - | - |
 | idempotency_keys | - (SECURITY DEFINER only) | - (SECURITY DEFINER only) | - | - |
-| offline_action_receipts *(queued, not live)* | Owner / Admin / Sales via sanitized RPC only | - (SECURITY DEFINER RPC only) | - (SECURITY DEFINER RPC only) | - |
+| offline_action_receipts | Owner / Admin / Sales via sanitized RPC only | - (SECURITY DEFINER RPC only) | - (SECURITY DEFINER RPC only) | - |
 | rate_limit_log | - (SECURITY DEFINER only) | - (SECURITY DEFINER only) | - | - |
 | note_tags | All authenticated | All authenticated | Admin / Own | Admin |
 | team_note_tags | All authenticated | All authenticated | - | All authenticated |

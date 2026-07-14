@@ -25,7 +25,7 @@ import { notifyDeliveryRemainder, notifyDeliveryCompleted } from '../lib/notific
 import { checkRUPCompliance } from '../lib/rupCompliance';
 import StartDeliveryModal from '../components/deliveries/StartDeliveryModal';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
-import { queueAction } from '../lib/offlineQueue';
+import { getOfflineStorageErrorMessage, queueAction } from '../lib/offlineQueue';
 import type { Json } from '../types/supabase';
 import { compressImage } from '../lib/imageCompression';
 import { parseLocalDate } from '../lib/dateUtils';
@@ -776,11 +776,13 @@ export default function DeliveryDetail() {
       : null;
 
     const idemKey = completeIdem.getKey();
+    const completedAt = new Date().toISOString();
     const rpcParams: {
       p_delivery_id: string;
       p_signed_by: string;
       p_performed_by?: string;
       p_idempotency_key?: string;
+      p_completed_at?: string;
       p_quantities?: Json;
       p_issue_type?: string;
       p_issue_notes?: string;
@@ -796,18 +798,22 @@ export default function DeliveryDetail() {
 
     if (!isOnline) {
       try {
+        const offlineRpcParams = { ...rpcParams, p_completed_at: completedAt };
         await queueAction({
           operation: 'complete_delivery',
-          params: rpcParams,
+          params: offlineRpcParams,
           createdAt: new Date().toISOString(),
           retryCount: 0,
           ownerUserId: profile.id,
           status: 'pending',
+          entityTable: 'deliveries',
+          entityId: delivery.id,
+          snapshotAt: delivery.updated_at ?? undefined,
         });
         completeIdem.resetKey();
         toast('success', 'Delivery saved offline — it will retry when connected and remain saved if it needs attention');
-      } catch {
-        toast('error', 'Failed to save offline. Please try again.');
+      } catch (error) {
+        toast('error', getOfflineStorageErrorMessage(error));
       }
       setCompleting(false);
       return;

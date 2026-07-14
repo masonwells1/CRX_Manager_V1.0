@@ -90,7 +90,7 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
-import { queueAction } from '../lib/offlineQueue';
+import { getOfflineStorageErrorMessage, queueAction } from '../lib/offlineQueue';
 import { supabase, assertRpcResult, sanitizeError } from '../lib/db';
 import { Sentry } from '../lib/sentry';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
@@ -569,8 +569,8 @@ export default function FieldView() {
         toast('success', `Job ${card.job_number} saved offline — it will retry when connected and remain saved if it needs attention`);
         setCompleteFormOpenFor(null);
         setCompleteForm(emptyCompleteForm());
-      } catch {
-        toast('error', 'Failed to save offline. Please try again.');
+      } catch (error) {
+        toast('error', getOfflineStorageErrorMessage(error));
       }
       setCompleting(false);
       return;

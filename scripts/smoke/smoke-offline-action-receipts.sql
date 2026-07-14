@@ -8,8 +8,9 @@
 --
 -- It also proves action/idempotency reuse rejection, owner binding, office-only
 -- cross-user status reads, missing-target and unauthorized-action retention,
--- deterministic conflict classification, future-clock rejection, RPC-only
--- table writes, sanitized status output, and the expected grants. The terminal
+-- deterministic conflict classification, future-clock rejection, the sanitized
+-- office review queue, audited/idempotent manual resolution, RPC-only table
+-- writes, sanitized status output, and the expected grants. The terminal
 -- SMOKE_PASS_ROLLBACK exception rolls back every fixture and business mutation.
 -- =============================================================================
 
@@ -33,6 +34,7 @@ DECLARE
   v_missing_action uuid := gen_random_uuid();
   v_unauthorized_action uuid := gen_random_uuid();
   v_clock_skew_action uuid := gen_random_uuid();
+  v_old_clock_action uuid := gen_random_uuid();
   v_client_time timestamptz := clock_timestamp() - interval '5 minutes';
   v_delivery_key text := '[SMOKE] offline-delivery-' || v_suffix;
   v_job_key text := '[SMOKE] offline-job-' || v_suffix;
@@ -40,6 +42,8 @@ DECLARE
   v_missing_key text := '[SMOKE] offline-missing-' || v_suffix;
   v_unauthorized_key text := '[SMOKE] offline-unauthorized-' || v_suffix;
   v_clock_skew_key text := '[SMOKE] offline-clock-skew-' || v_suffix;
+  v_old_clock_key text := '[SMOKE] offline-old-clock-' || v_suffix;
+  v_resolution_key text := '[SMOKE] offline-resolution-' || v_suffix;
   v_payload jsonb;
   v_result jsonb;
   v_replay jsonb;
@@ -59,12 +63,12 @@ BEGIN
   SELECT id INTO v_field_user
   FROM public.profiles
   WHERE id <> v_admin
-    AND role IN ('driver', 'applicator')
+    AND role = 'applicator'
     AND is_active = true
   ORDER BY created_at
   LIMIT 1;
   IF v_field_user IS NULL THEN
-    RAISE EXCEPTION 'SMOKE_SETUP: no active driver/applicator profile found';
+    RAISE EXCEPTION 'SMOKE_SETUP: no active applicator profile found';
   END IF;
 
   -- ----------------------------------------------------------- P1 no auth
@@ -79,6 +83,29 @@ BEGIN
     IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
     IF SQLERRM NOT LIKE 'AUTH_REQUIRED%' THEN
       RAISE EXCEPTION 'SMOKE_FAIL: no-auth stage expected AUTH_REQUIRED, got %', SQLERRM;
+    END IF;
+  END;
+
+  BEGIN
+    PERFORM public.get_offline_action_review_queue(false, 100, 0);
+    RAISE EXCEPTION 'SMOKE_FAIL: no-auth review queue was allowed';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF SQLERRM NOT LIKE 'AUTH_REQUIRED%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: no-auth review queue expected AUTH_REQUIRED, got %', SQLERRM;
+    END IF;
+  END;
+
+  BEGIN
+    PERFORM public.resolve_offline_action(
+      gen_random_uuid(), 'abandoned', 'Smoke no-auth resolution note',
+      '[SMOKE] no-auth-resolution-' || v_suffix
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: no-auth review resolution was allowed';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF SQLERRM NOT LIKE 'AUTH_REQUIRED%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: no-auth resolution expected AUTH_REQUIRED, got %', SQLERRM;
     END IF;
   END;
 
@@ -188,34 +215,43 @@ BEGIN
     'completed_at', to_jsonb(clock_timestamp() - interval '1 minute')
   );
 
-  BEGIN
-    PERFORM public.stage_offline_action(
-      v_clock_skew_action, 'complete_delivery', v_delivery, 1,
-      v_client_time,
-      jsonb_set(
-        v_payload,
-        '{completed_at}',
-        to_jsonb(clock_timestamp() + interval '10 minutes')
-      ),
-      v_clock_skew_key
-    );
-    RAISE EXCEPTION 'SMOKE_FAIL: future completed_at was staged';
-  EXCEPTION WHEN OTHERS THEN
-    IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
-    IF SQLERRM NOT LIKE 'PAYLOAD_INVALID: completed_at cannot be more than 5 minutes in the future%' THEN
-      RAISE EXCEPTION 'SMOKE_FAIL: future completed_at expected PAYLOAD_INVALID, got %', SQLERRM;
-    END IF;
-  END;
-  IF EXISTS (
-    SELECT 1 FROM public.offline_action_receipts
-    WHERE client_action_id = v_clock_skew_action
-  ) THEN
-    RAISE EXCEPTION 'SMOKE_FAIL: rejected future completed_at left a receipt';
+  v_result := public.stage_offline_action(
+    v_clock_skew_action, 'complete_delivery', v_delivery, 1,
+    v_client_time,
+    jsonb_set(
+      v_payload,
+      '{completed_at}',
+      to_jsonb(clock_timestamp() + interval '10 minutes')
+    ),
+    v_clock_skew_key,
+    (SELECT d.updated_at FROM public.deliveries d WHERE d.id = v_delivery)
+  );
+  IF v_result->>'status' IS DISTINCT FROM 'needs_review'
+     OR v_result->>'failure_code' IS DISTINCT FROM 'PAYLOAD_INVALID' THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: future completed_at was not retained for office review: %', v_result;
+  END IF;
+
+  v_result := public.stage_offline_action(
+    v_old_clock_action, 'complete_delivery', v_delivery, 1,
+    v_client_time,
+    jsonb_set(
+      v_payload,
+      '{completed_at}',
+      to_jsonb(clock_timestamp() - interval '30 days')
+    ),
+    v_old_clock_key,
+    (SELECT d.updated_at FROM public.deliveries d WHERE d.id = v_delivery)
+  );
+  IF v_result->>'status' IS DISTINCT FROM 'needs_review'
+     OR v_result->>'failure_code' IS DISTINCT FROM 'PAYLOAD_INVALID'
+     OR v_result->>'failure_summary' NOT ILIKE '%more than 14 days old%' THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: old completed_at was not retained for office review: %', v_result;
   END IF;
 
   v_result := public.stage_offline_action(
     v_delivery_action, 'complete_delivery', v_delivery, 1,
-    v_client_time, v_payload, v_delivery_key
+    v_client_time, v_payload, v_delivery_key,
+    (SELECT d.updated_at FROM public.deliveries d WHERE d.id = v_delivery)
   );
   IF v_result->>'status' IS DISTINCT FROM 'received' THEN
     RAISE EXCEPTION 'SMOKE_FAIL: delivery stage did not return received: %', v_result;
@@ -226,7 +262,8 @@ BEGIN
     v_delivery_action, 'complete_delivery', v_delivery, 1,
     v_client_time,
     jsonb_set(v_payload, ARRAY['quantities', v_delivery_item::text], '2'::jsonb),
-    v_delivery_key
+    v_delivery_key,
+    (SELECT d.updated_at FROM public.deliveries d WHERE d.id = v_delivery)
   );
   IF v_replay IS DISTINCT FROM v_result THEN
     RAISE EXCEPTION 'SMOKE_FAIL: equivalent delivery stage replay changed: % vs %', v_replay, v_result;
@@ -236,7 +273,8 @@ BEGIN
     PERFORM public.stage_offline_action(
       v_delivery_action, 'complete_delivery', v_delivery, 1,
       v_client_time, jsonb_set(v_payload, '{signed_by}', '"Different"'::jsonb),
-      v_delivery_key
+      v_delivery_key,
+      (SELECT d.updated_at FROM public.deliveries d WHERE d.id = v_delivery)
     );
     RAISE EXCEPTION 'SMOKE_FAIL: action UUID reuse with changed payload was allowed';
   EXCEPTION WHEN OTHERS THEN
@@ -249,7 +287,8 @@ BEGIN
   BEGIN
     PERFORM public.stage_offline_action(
       gen_random_uuid(), 'complete_delivery', v_delivery, 1,
-      v_client_time, v_payload, v_delivery_key
+      v_client_time, v_payload, v_delivery_key,
+      (SELECT d.updated_at FROM public.deliveries d WHERE d.id = v_delivery)
     );
     RAISE EXCEPTION 'SMOKE_FAIL: idempotency-key reuse across action UUIDs was allowed';
   EXCEPTION WHEN OTHERS THEN
@@ -287,7 +326,8 @@ BEGIN
 
   v_result := public.stage_offline_action(
     v_unauthorized_action, 'complete_delivery', v_delivery, 1,
-    v_client_time, v_payload, v_unauthorized_key
+    v_client_time, v_payload, v_unauthorized_key,
+    (SELECT d.updated_at FROM public.deliveries d WHERE d.id = v_delivery)
   );
   IF v_result->>'status' IS DISTINCT FROM 'needs_review'
      OR v_result->>'failure_code' IS DISTINCT FROM 'NOT_AUTHORIZED' THEN
@@ -355,7 +395,8 @@ BEGIN
 
   v_result := public.stage_offline_action(
     v_job_action, 'complete_job', v_job, 1,
-    v_client_time, v_payload, v_job_key
+    v_client_time, v_payload, v_job_key,
+    (SELECT j.updated_at FROM public.jobs j WHERE j.id = v_job)
   );
   IF v_result->>'status' IS DISTINCT FROM 'received' THEN
     RAISE EXCEPTION 'SMOKE_FAIL: job stage did not return received: %', v_result;
@@ -395,7 +436,8 @@ BEGIN
 
   v_result := public.stage_offline_action(
     v_conflict_action, 'complete_job', v_conflict_job, 1,
-    v_client_time, '{}'::jsonb, v_conflict_key
+    v_client_time, '{}'::jsonb, v_conflict_key,
+    (SELECT j.updated_at FROM public.jobs j WHERE j.id = v_conflict_job)
   );
   IF v_result->>'status' IS DISTINCT FROM 'received' THEN
     RAISE EXCEPTION 'SMOKE_FAIL: conflict receipt did not stage as received: %', v_result;
@@ -441,6 +483,29 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_FAIL: receipt owner cannot read own missing-target status: %', v_status;
   END IF;
 
+  BEGIN
+    PERFORM public.get_offline_action_review_queue(false, 100, 0);
+    RAISE EXCEPTION 'SMOKE_FAIL: field user opened the office review queue';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF SQLERRM NOT LIKE 'NOT_AUTHORIZED%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: field review queue expected NOT_AUTHORIZED, got %', SQLERRM;
+    END IF;
+  END;
+
+  BEGIN
+    PERFORM public.resolve_offline_action(
+      v_missing_action, 'abandoned', 'Smoke field-user resolution note',
+      '[SMOKE] field-resolution-' || v_suffix
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: field user resolved an office receipt';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF SQLERRM NOT LIKE 'NOT_AUTHORIZED%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: field resolution expected NOT_AUTHORIZED, got %', SQLERRM;
+    END IF;
+  END;
+
   -- Active office users can inspect another actor's sanitized review status.
   PERFORM set_config(
     'request.jwt.claims',
@@ -462,6 +527,108 @@ BEGIN
       RAISE EXCEPTION 'SMOKE_FAIL: cross-actor office process expected ACTOR_MISMATCH, got %', SQLERRM;
     END IF;
   END;
+
+  -- The office queue exposes safe metadata but never raw payload/key fields.
+  v_result := public.get_offline_action_review_queue(false, 100, 0);
+  IF NOT EXISTS (
+    SELECT 1
+    FROM jsonb_array_elements(v_result->'items') item
+    WHERE item->>'client_action_id' = v_missing_action::text
+  ) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: unresolved receipt missing from office queue: %', v_result;
+  END IF;
+  IF EXISTS (
+    SELECT 1
+    FROM jsonb_array_elements(v_result->'items') item
+    WHERE item ? 'request_payload' OR item ? 'idempotency_key'
+  ) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: office queue leaked a payload or idempotency key: %', v_result;
+  END IF;
+
+  v_result := public.resolve_offline_action(
+    v_missing_action,
+    'abandoned',
+    'Smoke confirms this action must not run.',
+    v_resolution_key
+  );
+  IF v_result->>'status' IS DISTINCT FROM 'needs_review'
+     OR v_result->>'review_resolution' IS DISTINCT FROM 'abandoned'
+     OR v_result->>'resolved_by' IS DISTINCT FROM v_admin::text
+     OR v_result ? 'request_payload'
+     OR v_result ? 'idempotency_key' THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: office resolution result is wrong or unsafe: %', v_result;
+  END IF;
+
+  v_replay := public.resolve_offline_action(
+    v_missing_action,
+    'abandoned',
+    'Smoke confirms this action must not run.',
+    v_resolution_key
+  );
+  IF v_replay IS DISTINCT FROM v_result THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: exact resolution replay changed: % vs %', v_replay, v_result;
+  END IF;
+
+  BEGIN
+    PERFORM public.resolve_offline_action(
+      v_missing_action,
+      'already_completed',
+      'Smoke confirms this action must not run.',
+      v_resolution_key
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: conflicting resolution reused an idempotency key';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF SQLERRM NOT LIKE 'IDEMPOTENCY_ARGUMENT_MISMATCH%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: conflicting resolution expected IDEMPOTENCY_ARGUMENT_MISMATCH, got %', SQLERRM;
+    END IF;
+  END;
+
+  SELECT count(*) INTO v_count
+  FROM public.activity_feed
+  WHERE event_type = 'offline_action_resolved'
+    AND description LIKE '%' || left(v_missing_action::text, 8) || '%';
+  IF v_count <> 1 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: resolution wrote % audit events, expected 1', v_count;
+  END IF;
+
+  v_status := public.get_offline_action_review_queue(false, 100, 0);
+  IF EXISTS (
+    SELECT 1 FROM jsonb_array_elements(v_status->'items') item
+    WHERE item->>'client_action_id' = v_missing_action::text
+  ) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: resolved receipt remained in unresolved queue: %', v_status;
+  END IF;
+
+  v_status := public.get_offline_action_review_queue(true, 100, 0);
+  IF NOT EXISTS (
+    SELECT 1 FROM jsonb_array_elements(v_status->'items') item
+    WHERE item->>'client_action_id' = v_missing_action::text
+      AND item->>'review_resolution' = 'abandoned'
+      AND item->>'resolved_by' = v_admin::text
+  ) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: resolved receipt missing from historical queue: %', v_status;
+  END IF;
+
+  -- The original owner can observe the safe office decision.
+  PERFORM set_config(
+    'request.jwt.claims',
+    json_build_object('sub', v_field_user, 'role', 'authenticated')::text,
+    true
+  );
+  v_status := public.get_offline_action_status(v_missing_action);
+  IF v_status->>'review_resolution' IS DISTINCT FROM 'abandoned'
+     OR v_status->>'resolved_by' IS DISTINCT FROM v_admin::text
+     OR v_status ? 'request_payload'
+     OR v_status ? 'idempotency_key' THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: receipt owner resolution status is wrong or unsafe: %', v_status;
+  END IF;
+
+  PERFORM set_config(
+    'request.jwt.claims',
+    json_build_object('sub', v_admin, 'role', 'authenticated')::text,
+    true
+  );
 
   -- ----------------------------------------------------- validation/grants
   BEGIN
@@ -486,21 +653,25 @@ BEGIN
 
   IF has_function_privilege(
        'anon',
-       'public.stage_offline_action(uuid,text,uuid,integer,timestamptz,jsonb,text)',
+       'public.stage_offline_action(uuid,text,uuid,integer,timestamptz,jsonb,text,timestamptz)',
        'EXECUTE'
      )
      OR has_function_privilege('anon', 'public.process_offline_action(uuid,text)', 'EXECUTE')
-     OR has_function_privilege('anon', 'public.get_offline_action_status(uuid)', 'EXECUTE') THEN
+     OR has_function_privilege('anon', 'public.get_offline_action_status(uuid)', 'EXECUTE')
+     OR has_function_privilege('anon', 'public.get_offline_action_review_queue(boolean,integer,integer)', 'EXECUTE')
+     OR has_function_privilege('anon', 'public.resolve_offline_action(uuid,text,text,text)', 'EXECUTE') THEN
     RAISE EXCEPTION 'SMOKE_FAIL: anon can execute an offline receipt RPC';
   END IF;
 
   IF NOT has_function_privilege(
        'authenticated',
-       'public.stage_offline_action(uuid,text,uuid,integer,timestamptz,jsonb,text)',
+       'public.stage_offline_action(uuid,text,uuid,integer,timestamptz,jsonb,text,timestamptz)',
        'EXECUTE'
      )
      OR NOT has_function_privilege('authenticated', 'public.process_offline_action(uuid,text)', 'EXECUTE')
-     OR NOT has_function_privilege('authenticated', 'public.get_offline_action_status(uuid)', 'EXECUTE') THEN
+     OR NOT has_function_privilege('authenticated', 'public.get_offline_action_status(uuid)', 'EXECUTE')
+     OR NOT has_function_privilege('authenticated', 'public.get_offline_action_review_queue(boolean,integer,integer)', 'EXECUTE')
+     OR NOT has_function_privilege('authenticated', 'public.resolve_offline_action(uuid,text,text,text)', 'EXECUTE') THEN
     RAISE EXCEPTION 'SMOKE_FAIL: authenticated cannot execute every offline receipt RPC';
   END IF;
 

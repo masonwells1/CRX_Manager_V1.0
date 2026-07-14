@@ -5351,6 +5351,7 @@ export type Database = {
           client_created_at: string
           created_at: string
           entity_id: string
+          entity_snapshot_at: string | null
           failure_code: string | null
           failure_summary: string | null
           idempotency_key: string
@@ -5359,7 +5360,11 @@ export type Database = {
           operation: string
           received_at: string
           request_payload: Json
+          resolved_at: string | null
+          resolved_by: string | null
           result: Json | null
+          review_note: string | null
+          review_resolution: string | null
           schema_version: number
           status: string
           succeeded_at: string | null
@@ -5372,6 +5377,7 @@ export type Database = {
           client_created_at: string
           created_at?: string
           entity_id: string
+          entity_snapshot_at?: string | null
           failure_code?: string | null
           failure_summary?: string | null
           idempotency_key: string
@@ -5380,7 +5386,11 @@ export type Database = {
           operation: string
           received_at?: string
           request_payload: Json
+          resolved_at?: string | null
+          resolved_by?: string | null
           result?: Json | null
+          review_note?: string | null
+          review_resolution?: string | null
           schema_version: number
           status?: string
           succeeded_at?: string | null
@@ -5393,6 +5403,7 @@ export type Database = {
           client_created_at?: string
           created_at?: string
           entity_id?: string
+          entity_snapshot_at?: string | null
           failure_code?: string | null
           failure_summary?: string | null
           idempotency_key?: string
@@ -5401,7 +5412,11 @@ export type Database = {
           operation?: string
           received_at?: string
           request_payload?: Json
+          resolved_at?: string | null
+          resolved_by?: string | null
           result?: Json | null
+          review_note?: string | null
+          review_resolution?: string | null
           schema_version?: number
           status?: string
           succeeded_at?: string | null
@@ -5418,6 +5433,20 @@ export type Database = {
           {
             foreignKeyName: "offline_action_receipts_actor_id_fkey"
             columns: ["actor_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "offline_action_receipts_resolved_by_fkey"
+            columns: ["resolved_by"]
+            isOneToOne: false
+            referencedRelation: "profile_public_view"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "offline_action_receipts_resolved_by_fkey"
+            columns: ["resolved_by"]
             isOneToOne: false
             referencedRelation: "profiles"
             referencedColumns: ["id"]
@@ -9907,6 +9936,14 @@ export type Database = {
         Args: { p_client_action_id: string }
         Returns: Json
       }
+      get_offline_action_review_queue: {
+        Args: {
+          p_include_resolved?: boolean
+          p_limit?: number
+          p_offset?: number
+        }
+        Returns: Json
+      }
       get_open_booking_rollover: {
         Args: { p_customer_id?: string; p_season?: number }
         Returns: Json
@@ -10505,6 +10542,15 @@ export type Database = {
         Args: { p_client_action_id: string; p_idempotency_key?: string }
         Returns: Json
       }
+      resolve_offline_action: {
+        Args: {
+          p_client_action_id: string
+          p_idempotency_key?: string
+          p_note: string
+          p_resolution: string
+        }
+        Returns: Json
+      }
       product_price_per_acre: {
         Args: {
           p_inventory_unit: string
@@ -10945,6 +10991,7 @@ export type Database = {
           p_client_action_id: string
           p_client_created_at: string
           p_entity_id: string
+          p_entity_snapshot_at?: string
           p_idempotency_key?: string
           p_operation: string
           p_payload: Json

@@ -1,12 +1,12 @@
 {
   "_meta": {
     "registry_version": 2,
-    "generated_at": "2026-07-13",
+    "generated_at": "2026-07-14",
     "generated_from": "Supabase project rhyzpcqhnizqbxphqdkr — public schema introspection",
     "regenerate_with": "node scripts/regenerate-schema-registry.mjs --from-introspection <queries.json> (queries documented in the script header)",
     "purpose": "Single source of truth for hooks: generated columns, status enums, ALL parseable CHECK IN-lists, NOT NULL columns, full column lists, sequences, tables-with/without updated_at, applied-migration high water.",
     "note": "For a fresh refresh from the live DB, ask Claude Code: 'regenerate the schema-registry from Supabase' (/regen-schema-registry). skipped_constraints lists every CHECK the hooks can NOT validate — review it when touching those tables.",
-    "migrations_high_water": "20260713010553",
+    "migrations_high_water": "20260714203709",
     "applied_migration_names": [
       "20260207_gap_analysis_fixes.sql",
       "20260209050000_inventory_overhaul",
@@ -218,6 +218,9 @@
       "20260713060400_fix_field_split_constraint_concurrency",
       "20260713060500_fix_reverse_application_record_admin_only",
       "20260713060600_fix_field_split_global_lock",
+      "20260714024811_offline_action_receipts",
+      "20260714070000_offline_action_receipt_stage_limits",
+      "20260714122626_offline_action_review_resolution",
       "a1_dispatched_list_recent_completed",
       "a1b_dispatched_to_me_completed_tail",
       "accounting_and_integrity_fixes",
@@ -540,6 +543,7 @@
       "gross_sales_report_column_fix",
       "grower_share_pricing",
       "guard_prepay_with_period_check",
+      "harden_commission_payment_creation",
       "harden_maintenance_secdef_revoke_authenticated",
       "harden_storage_buckets_mime_size",
       "high_priority_fixes",
@@ -584,6 +588,7 @@
       "notes_pipeline_flow",
       "notification_rpcs_canonical_idempotency",
       "number_generation_sequences",
+      "offline_action_target_lock",
       "operational_dashboard_summary",
       "order_item_field_allocations",
       "order_items_cost_at_time_snapshot",
@@ -894,6 +899,11 @@
       "processing",
       "completed",
       "failed"
+    ],
+    "offline_action_receipts.status": [
+      "received",
+      "succeeded",
+      "needs_review"
     ],
     "orders.pricing_status": [
       "priced",
@@ -1560,6 +1570,56 @@
       ],
       "constraints": [
         "ocr_processing_queue_status_check"
+      ]
+    },
+    "offline_action_receipts.failure_code": {
+      "values": [
+        "ACTOR_MISMATCH",
+        "IDEMPOTENCY_KEY_REUSE",
+        "LEGACY_OUTCOME_UNKNOWN",
+        "NOT_AUTHORIZED",
+        "PAYLOAD_INVALID",
+        "PAYLOAD_TOO_LARGE",
+        "RESULT_INVALID",
+        "RETRY_LIMIT",
+        "TARGET_NOT_FOUND",
+        "TARGET_STATE_CONFLICT",
+        "UNEXPECTED_SERVER_ERROR",
+        "UNSUPPORTED_OPERATION",
+        "UNSUPPORTED_SCHEMA_VERSION"
+      ],
+      "constraints": [
+        "offline_action_receipts_failure_code_check"
+      ],
+      "nullable": true
+    },
+    "offline_action_receipts.operation": {
+      "values": [
+        "complete_delivery",
+        "complete_job"
+      ],
+      "constraints": [
+        "offline_action_receipts_operation_check"
+      ]
+    },
+    "offline_action_receipts.review_resolution": {
+      "values": [
+        "already_completed",
+        "abandoned"
+      ],
+      "constraints": [
+        "offline_action_receipts_review_resolution_check"
+      ],
+      "nullable": true
+    },
+    "offline_action_receipts.status": {
+      "values": [
+        "received",
+        "succeeded",
+        "needs_review"
+      ],
+      "constraints": [
+        "offline_action_receipts_status_check"
       ]
     },
     "orders.pricing_status": {
@@ -2247,6 +2307,48 @@
       "constraint": "jobs_loader_tank_capacity_pos",
       "def": "CHECK (((loader_tank_capacity IS NULL) OR (loader_tank_capacity > (0)::numeric)))",
       "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "offline_action_receipts",
+      "constraint": "offline_action_receipts_attempt_count_check",
+      "def": "CHECK (((attempt_count >= 0) AND (attempt_count <= 50)))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "offline_action_receipts",
+      "constraint": "offline_action_receipts_idempotency_key_check",
+      "def": "CHECK (((btrim(idempotency_key) <> ''::text) AND (length(idempotency_key) <= 200)))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "offline_action_receipts",
+      "constraint": "offline_action_receipts_payload_shape_check",
+      "def": "CHECK ((jsonb_typeof(request_payload) = 'object'::text))",
+      "reason": "unparseable — hooks do NOT validate this constraint"
+    },
+    {
+      "table": "offline_action_receipts",
+      "constraint": "offline_action_receipts_payload_size_check",
+      "def": "CHECK ((pg_column_size(request_payload) <= 65536))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "offline_action_receipts",
+      "constraint": "offline_action_receipts_review_resolution_shape_check",
+      "def": "CHECK ((((review_resolution IS NULL) AND (review_note IS NULL) AND (resolved_at IS NULL) AND (resolved_by IS NULL)) OR ((status = 'needs_review'::text) AND (review_resolution IS NOT NULL) AND (review_note IS NOT NULL) AND ((length(btrim(review_note)) >= 10) AND (length(btrim(review_note)) <= 1000)) AND (resolved_at IS NOT NULL) AND (resolved_by IS NOT NULL))))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "offline_action_receipts",
+      "constraint": "offline_action_receipts_schema_version_check",
+      "def": "CHECK ((schema_version = 1))",
+      "reason": "unparseable — hooks do NOT validate this constraint"
+    },
+    {
+      "table": "offline_action_receipts",
+      "constraint": "offline_action_receipts_state_shape_check",
+      "def": "CHECK ((((status = 'received'::text) AND (result IS NULL) AND (failure_code IS NULL) AND (failure_summary IS NULL) AND (succeeded_at IS NULL) AND (needs_review_at IS NULL)) OR ((status = 'succeeded'::text) AND (result IS NOT NULL) AND (failure_code IS NULL) AND (failure_summary IS NULL) AND (succeeded_at IS NOT NULL) AND (needs_review_at IS NULL)) OR ((status = 'needs_review'::text) AND (result IS NULL) AND (failure_code IS NOT NULL) AND (failure_summary IS NOT NULL) AND (succeeded_at IS NULL) AND (needs_review_at IS NOT NULL))))",
+      "reason": "conditional/multi-column — not a single-column IN-list; hooks do NOT validate this constraint"
     },
     {
       "table": "order_item_field_allocations",
@@ -3321,6 +3423,25 @@
         "priority",
         "retry_count",
         "max_retries",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    "offline_action_receipts": {
+      "no_default": [
+        "client_action_id",
+        "actor_id",
+        "operation",
+        "entity_id",
+        "schema_version",
+        "client_created_at",
+        "request_payload",
+        "idempotency_key"
+      ],
+      "with_default": [
+        "status",
+        "attempt_count",
+        "received_at",
         "created_at",
         "updated_at"
       ]
@@ -5023,6 +5144,32 @@
       "max_retries",
       "created_at",
       "updated_at"
+    ],
+    "offline_action_receipts": [
+      "client_action_id",
+      "actor_id",
+      "operation",
+      "entity_id",
+      "schema_version",
+      "client_created_at",
+      "entity_snapshot_at",
+      "request_payload",
+      "idempotency_key",
+      "status",
+      "result",
+      "failure_code",
+      "failure_summary",
+      "attempt_count",
+      "last_attempt_at",
+      "succeeded_at",
+      "needs_review_at",
+      "received_at",
+      "created_at",
+      "updated_at",
+      "review_resolution",
+      "review_note",
+      "resolved_at",
+      "resolved_by"
     ],
     "order_item_field_allocations": [
       "id",

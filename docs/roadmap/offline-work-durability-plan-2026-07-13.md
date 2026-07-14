@@ -1,8 +1,8 @@
 # Offline Work Durability Plan
 
-> **Status update — 2026-07-13:** The original Stage 1 below was narrowed by the independent Codex/Claude review. Mason approved the revised Stage 1A in `docs/audits/2026-07-13-agent-pair-review-offline-work-durability.md`, and that retention/ownership/backoff/browser-safety slice has now been implemented. The panel, signature/photo replay, notification/email replay, cross-tab lease, duplicate policy, conflict redesign, and server receipt remain deferred.
+> **Status update — 2026-07-14:** Stage 1A is merged. The approved Stage 1B feature branch now integrates permanent receipts into the two real producers, retains local work until server-proven success, adds distinct cap/backlog handling, exposes a safe device panel, and adds audited non-destructive office resolution. All three migrations are live and verified; the browser rollout remains pending this branch merge. Signature/photo replay, notification/email replay, cross-tab lease, and general duplicate/conflict policy remain deferred.
 
-**Status:** STAGE 1A IMPLEMENTED AND BROWSER-PROVEN LOCALLY — awaiting final re-review/merge; no migration or live data changed
+**Status:** STAGE 1B DATABASE LIVE + VERIFIED — browser and office UI pending feature-branch merge
 **Date:** 2026-07-13
 **Risk:** HIGH — delivery completion changes inventory and order/invoice state; job completion changes inventory and application records
 

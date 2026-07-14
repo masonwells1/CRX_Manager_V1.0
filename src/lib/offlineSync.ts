@@ -9,10 +9,16 @@ import {
   getPendingActions,
   getActionOwnerUserId,
   OFFLINE_MAX_RETRIES,
+  prepareLegacyQueuedAction,
   removeAction,
   updateAction,
   type PendingAction,
 } from './offlineQueue';
+import {
+  executeDurableOfflineAction,
+  isDurableOfflineOperation,
+  OfflineReceiptSyncError,
+} from './offlineReceipts';
 
 export const MAX_RETRIES = OFFLINE_MAX_RETRIES;
 export const RETRY_DELAYS_MS = [30_000, 2 * 60_000, 10 * 60_000] as const;
@@ -104,6 +110,37 @@ async function processPendingActions(
       await updateAction(action);
     }
 
+    // Version-1 IndexedDB rows are never rewritten during schema upgrade. Give
+    // an approved legacy delivery/job action its permanent receipt identity
+    // lazily, then persist that identity before the first network request.
+    if (
+      isDurableOfflineOperation(action.operation)
+      && (!action.clientActionId || !action.idempotencyKey || action.schemaVersion !== 1)
+    ) {
+      try {
+        const { id, ...withoutId } = action;
+        action = { ...await prepareLegacyQueuedAction(withoutId), id };
+        await updateAction(action);
+      } catch (error: unknown) {
+        const detail = error instanceof Error ? error.message : 'receipt identity could not be created';
+        const message = `Legacy offline action needs manual review: ${detail}`;
+        needsAttention++;
+        await updateAction({
+          ...action,
+          status: 'needs_attention',
+          nextAttemptAt: undefined,
+          lastError: message,
+        });
+        captureNeedsAttention(action, 'legacy_receipt_identity_missing', message);
+        continue;
+      }
+    }
+
+    if (action.status === 'office_resolved') {
+      needsAttention++;
+      continue;
+    }
+
     const alreadyNeedsAttention = action.status === 'needs_attention' || action.retryCount >= MAX_RETRIES;
     if (!force && alreadyNeedsAttention) {
       needsAttention++;
@@ -132,6 +169,10 @@ async function processPendingActions(
     }
 
     try {
+      // Never synthesize a missing queue-time snapshot after reconnecting.
+      // Doing so would accept office edits made during the offline window as
+      // the action's baseline. The durable server path stages these actions as
+      // permanent LEGACY_OUTCOME_UNKNOWN review work instead.
       await executeAction(action);
       await removeAction(action.id!);
       synced++;
@@ -142,6 +183,36 @@ async function processPendingActions(
         : typeof errObj?.message === 'string'
           ? errObj.message
           : 'Unknown error';
+
+      if (error instanceof OfflineReceiptSyncError) {
+        if (error.disposition === 'retry_later') {
+          await updateAction({
+            ...action,
+            status: 'retry_wait',
+            nextAttemptAt: new Date(now + (error.retryAfterMs ?? RETRY_DELAYS_MS[0])).toISOString(),
+            lastAttemptAt: attemptTimestamp,
+            lastError: error.message,
+          });
+          deferred++;
+          continue;
+        }
+
+        const receipt = error.receipt;
+        await updateAction({
+          ...action,
+          status: error.disposition === 'office_resolved' ? 'office_resolved' : 'needs_attention',
+          nextAttemptAt: undefined,
+          lastAttemptAt: attemptTimestamp,
+          lastError: error.message,
+          officeResolution: receipt?.review_resolution ?? action.officeResolution,
+          officeResolutionNote: receipt?.review_note ?? action.officeResolutionNote,
+          officeResolvedAt: receipt?.resolved_at ?? action.officeResolvedAt,
+        });
+        if (error.disposition === 'needs_attention') failed++;
+        needsAttention++;
+        captureNeedsAttention(action, error.disposition, error.message);
+        continue;
+      }
 
       // Track conflicts separately so UI can show them
       if (errMsg.startsWith('Conflict:')) {
@@ -272,7 +343,7 @@ async function executeAction(action: PendingAction): Promise<void> {
   const { operation, params } = action;
 
   // Conflict detection: if we captured a snapshot, check for server-side changes
-  if (action.snapshotAt && action.entityTable && action.entityId) {
+  if (!isDurableOfflineOperation(operation) && action.snapshotAt && action.entityTable && action.entityId) {
     // entityTable is a runtime-dynamic name; for typing we treat it as a table
     // known to carry `updated_at` (the conflict path is only ever used for such
     // tables — deliveries/orders). The runtime value is still action.entityTable.
@@ -318,9 +389,7 @@ async function executeAction(action: PendingAction): Promise<void> {
   // sites. See LogbookReport.tsx for the canonical example of this shape.
   switch (operation) {
     case 'complete_delivery': {
-      const { data, error } = await supabase.rpc('complete_delivery', params as FunctionArgs<'complete_delivery'>);
-      if (error) throw error;
-      assertRpcResult(data, 'complete_delivery');
+      await executeDurableOfflineAction(action);
       return;
     }
     case 'allocate_payment': {
@@ -342,9 +411,7 @@ async function executeAction(action: PendingAction): Promise<void> {
       return;
     }
     case 'complete_job': {
-      const { data, error } = await supabase.rpc('complete_job', params as FunctionArgs<'complete_job'>);
-      if (error) throw error;
-      assertRpcResult(data, 'complete_job');
+      await executeDurableOfflineAction(action);
       return;
     }
     case 'cancel_delivery': {

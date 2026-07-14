@@ -56,7 +56,7 @@ not part of this proof runner.
 
 - A security review found that an authenticated account could otherwise stage
   unlimited permanent rows by repeatedly naming missing targets.
-- Follow-up migration `20260714070000_offline_action_receipt_stage_limits.sql`
+- Follow-up migration `20260714171800_offline_action_receipt_stage_limits.sql`
   serializes new staging per actor, allows existing action-ID replays, limits
   new receipts to 250 per rolling 24 hours, and refuses every new receipt once
   an actor already has 500 unresolved review rows.
