@@ -309,6 +309,8 @@ export default function FieldStop() {
           params: rpcParams,
           createdAt: new Date().toISOString(),
           retryCount: 0,
+          ownerUserId: profile.id,
+          status: 'pending',
           // Engage offlineSync's stale-write guard: if this delivery is
           // completed/cancelled elsewhere while we're offline, replay surfaces
           // a Conflict instead of silently dropping the queued completion.
@@ -317,7 +319,7 @@ export default function FieldStop() {
           snapshotAt: delivery.updated_at ?? undefined,
         });
         completeIdem.resetKey();
-        toast('success', 'Delivery saved offline — will sync when you reconnect');
+        toast('success', 'Delivery saved offline — it will retry when connected and remain saved if it needs attention');
         setStep('done');
       } catch {
         toast('error', 'Failed to save offline. Please try again.');
@@ -617,7 +619,7 @@ export default function FieldStop() {
       {step === 'done' && (
         <div className="bg-white border border-gray-200 rounded-xl p-6 text-center">
           <CheckCircle2 className="w-14 h-14 text-green-600 mx-auto mb-3" />
-          <p className="text-lg font-semibold text-gray-900">{isOnline ? 'Delivery complete' : 'Saved offline — will sync'}</p>
+          <p className="text-lg font-semibold text-gray-900">{isOnline ? 'Delivery complete' : 'Saved offline — sync pending'}</p>
           <p className="text-sm text-gray-500 mt-1">Signed by {signedBy}</p>
           {autoInvoiceNumber && (
             <p className="inline-flex items-center gap-1 text-sm text-gray-700 mt-3">

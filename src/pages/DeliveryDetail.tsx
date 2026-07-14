@@ -801,9 +801,11 @@ export default function DeliveryDetail() {
           params: rpcParams,
           createdAt: new Date().toISOString(),
           retryCount: 0,
+          ownerUserId: profile.id,
+          status: 'pending',
         });
         completeIdem.resetKey();
-        toast('success', 'Delivery saved offline — will sync when you reconnect');
+        toast('success', 'Delivery saved offline — it will retry when connected and remain saved if it needs attention');
       } catch {
         toast('error', 'Failed to save offline. Please try again.');
       }

@@ -559,12 +559,14 @@ export default function FieldView() {
           params: rpcParams as Record<string, unknown>,
           createdAt: new Date().toISOString(),
           retryCount: 0,
+          ownerUserId: profile.id,
+          status: 'pending',
           entityTable: 'jobs',
           entityId: card.job_id,
           snapshotAt: detail?.jobUpdatedAt ?? undefined,
         });
         completeIdem.resetKey();
-        toast('success', `Job ${card.job_number} saved offline — will sync when you reconnect`);
+        toast('success', `Job ${card.job_number} saved offline — it will retry when connected and remain saved if it needs attention`);
         setCompleteFormOpenFor(null);
         setCompleteForm(emptyCompleteForm());
       } catch {

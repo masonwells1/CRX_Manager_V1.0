@@ -5,8 +5,8 @@
  * @vitest-environment node
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
-import { IDBFactory } from 'fake-indexeddb';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { IDBFactory, IDBObjectStore } from 'fake-indexeddb';
 
 import {
   queueAction,
@@ -14,9 +14,10 @@ import {
   removeAction,
   updateAction,
   getPendingCount,
-  clearFailedActions,
-  clearStaleActions,
   getFailedActions,
+  getActionOwnerUserId,
+  getQueueSummary,
+  OFFLINE_MAX_RETRIES,
   type PendingAction,
 } from './offlineQueue';
 
@@ -25,9 +26,11 @@ import {
 function makeAction(overrides: Partial<Omit<PendingAction, 'id'>> = {}): Omit<PendingAction, 'id'> {
   return {
     operation: 'complete_delivery',
-    params: { delivery_id: 'del-001', signed_by: 'John Smith' },
+    params: { p_delivery_id: 'del-001', p_signed_by: 'John Smith', p_performed_by: 'user-1' },
     createdAt: new Date().toISOString(),
     retryCount: 0,
+    ownerUserId: 'user-1',
+    status: 'pending',
     ...overrides,
   };
 }
@@ -40,6 +43,48 @@ beforeEach(() => {
 // ── queueAction ──────────────────────────────────────────────────────────
 
 describe('queueAction', () => {
+  it('does not resolve until the IndexedDB transaction completes', async () => {
+    let signalRequestSuccess: () => void = () => {};
+    const requestSucceeded = new Promise<void>((resolve) => { signalRequestSuccess = resolve; });
+    const originalAdd = IDBObjectStore.prototype.add;
+    const addSpy = vi.spyOn(IDBObjectStore.prototype, 'add').mockImplementation(function (this: IDBObjectStore, value, key) {
+      const request = key === undefined
+        ? originalAdd.call(this, value)
+        : originalAdd.call(this, value, key);
+      request.addEventListener('success', signalRequestSuccess);
+      return request;
+    });
+    let settled = false;
+
+    try {
+      const pendingWrite = queueAction(makeAction()).finally(() => { settled = true; });
+      await requestSucceeded;
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      await pendingWrite;
+      expect(settled).toBe(true);
+    } finally {
+      addSpy.mockRestore();
+    }
+  });
+
+  it('rejects when the IndexedDB transaction aborts after request success', async () => {
+    const originalAdd = IDBObjectStore.prototype.add;
+    const addSpy = vi.spyOn(IDBObjectStore.prototype, 'add').mockImplementation(function (this: IDBObjectStore, value, key) {
+      const request = key === undefined
+        ? originalAdd.call(this, value)
+        : originalAdd.call(this, value, key);
+      request.addEventListener('success', () => request.transaction?.abort());
+      return request;
+    });
+
+    try {
+      await expect(queueAction(makeAction())).rejects.toBeInstanceOf(Error);
+    } finally {
+      addSpy.mockRestore();
+    }
+  });
+
   it('stores an action and returns a numeric ID', async () => {
     const id = await queueAction(makeAction());
     expect(typeof id).toBe('number');
@@ -125,6 +170,30 @@ describe('getPendingCount', () => {
 // ── removeAction ─────────────────────────────────────────────────────────
 
 describe('removeAction', () => {
+  it('does not resolve until the delete transaction completes', async () => {
+    const id = await queueAction(makeAction());
+    let signalRequestSuccess: () => void = () => {};
+    const requestSucceeded = new Promise<void>((resolve) => { signalRequestSuccess = resolve; });
+    const originalDelete = IDBObjectStore.prototype.delete;
+    const deleteSpy = vi.spyOn(IDBObjectStore.prototype, 'delete').mockImplementation(function (this: IDBObjectStore, query) {
+      const request = originalDelete.call(this, query);
+      request.addEventListener('success', signalRequestSuccess);
+      return request;
+    });
+    let settled = false;
+
+    try {
+      const pendingDelete = removeAction(id).finally(() => { settled = true; });
+      await requestSucceeded;
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      await pendingDelete;
+      expect(settled).toBe(true);
+    } finally {
+      deleteSpy.mockRestore();
+    }
+  });
+
   it('removes an action by ID', async () => {
     const id = await queueAction(makeAction());
     await removeAction(id);
@@ -149,6 +218,33 @@ describe('removeAction', () => {
 // ── updateAction ─────────────────────────────────────────────────────────
 
 describe('updateAction', () => {
+  it('does not resolve until the update transaction completes', async () => {
+    await queueAction(makeAction());
+    const [action] = await getPendingActions();
+    let signalRequestSuccess: () => void = () => {};
+    const requestSucceeded = new Promise<void>((resolve) => { signalRequestSuccess = resolve; });
+    const originalPut = IDBObjectStore.prototype.put;
+    const putSpy = vi.spyOn(IDBObjectStore.prototype, 'put').mockImplementation(function (this: IDBObjectStore, value, key) {
+      const request = key === undefined
+        ? originalPut.call(this, value)
+        : originalPut.call(this, value, key);
+      request.addEventListener('success', signalRequestSuccess);
+      return request;
+    });
+    let settled = false;
+
+    try {
+      const pendingUpdate = updateAction({ ...action, retryCount: 1 }).finally(() => { settled = true; });
+      await requestSucceeded;
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      await pendingUpdate;
+      expect(settled).toBe(true);
+    } finally {
+      putSpy.mockRestore();
+    }
+  });
+
   it('updates retryCount', async () => {
     await queueAction(makeAction());
     const actions = await getPendingActions();
@@ -184,74 +280,64 @@ describe('updateAction', () => {
   });
 });
 
-// ── clearFailedActions ───────────────────────────────────────────────────
+// ── retention and ownership ──────────────────────────────────────────────
 
-describe('clearFailedActions', () => {
-  it('removes actions with retryCount >= maxRetries', async () => {
-    await queueAction(makeAction({ retryCount: 5 }));
-    await queueAction(makeAction({ retryCount: 0 }));
-    const cleared = await clearFailedActions(3);
-    expect(cleared).toBe(1);
-    const remaining = await getPendingActions();
-    expect(remaining).toHaveLength(1);
-    expect(remaining[0].retryCount).toBe(0);
+describe('retention and ownership', () => {
+  it('retains actions that exceeded the retry limit', async () => {
+    await queueAction(makeAction({ retryCount: 5, status: 'needs_attention' }));
+    const failed = await getFailedActions(3);
+    expect(failed).toHaveLength(1);
+    expect(await getPendingCount()).toBe(1);
   });
 
-  it('returns 0 when no failed actions exist', async () => {
-    await queueAction(makeAction({ retryCount: 1 }));
-    const cleared = await clearFailedActions(3);
-    expect(cleared).toBe(0);
-  });
-
-  it('uses default maxRetries of 3', async () => {
-    await queueAction(makeAction({ retryCount: 3 }));
-    await queueAction(makeAction({ retryCount: 2 }));
-    const cleared = await clearFailedActions();
-    expect(cleared).toBe(1);
-  });
-
-  it('clears all failed actions when all exceed maxRetries', async () => {
-    await queueAction(makeAction({ retryCount: 5 }));
-    await queueAction(makeAction({ retryCount: 10 }));
-    const cleared = await clearFailedActions(3);
-    expect(cleared).toBe(2);
-    const count = await getPendingCount();
-    expect(count).toBe(0);
-  });
-});
-
-// ── clearStaleActions ────────────────────────────────────────────────────
-
-describe('clearStaleActions', () => {
-  it('removes actions older than maxAgeMs', async () => {
-    const oldDate = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString(); // 10 days ago
+  it('retains actions older than seven days', async () => {
+    const oldDate = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString();
     await queueAction(makeAction({ createdAt: oldDate }));
-    await queueAction(makeAction()); // fresh
-    const cleared = await clearStaleActions(7 * 24 * 60 * 60 * 1000); // 7 days
-    expect(cleared).toBe(1);
-    const remaining = await getPendingActions();
-    expect(remaining).toHaveLength(1);
+    expect(await getPendingActions()).toHaveLength(1);
   });
 
-  it('preserves recent actions', async () => {
-    await queueAction(makeAction()); // just now
-    const cleared = await clearStaleActions(7 * 24 * 60 * 60 * 1000);
-    expect(cleared).toBe(0);
-    const count = await getPendingCount();
-    expect(count).toBe(1);
+  it('infers the owner of a legacy action from p_performed_by', () => {
+    const legacy = makeAction({ ownerUserId: undefined });
+    expect(getActionOwnerUserId(legacy)).toBe('user-1');
   });
 
-  it('returns 0 when queue is empty', async () => {
-    const cleared = await clearStaleActions();
-    expect(cleared).toBe(0);
+  it('does not assign an owner when a legacy action has no p_performed_by', () => {
+    const legacy = makeAction({ ownerUserId: undefined, params: { p_delivery_id: 'del-001' } });
+    expect(getActionOwnerUserId(legacy)).toBeNull();
   });
 
-  it('uses custom maxAgeMs', async () => {
-    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
-    await queueAction(makeAction({ createdAt: twoHoursAgo }));
-    // 1 hour threshold — 2-hour-old action should be cleared
-    const cleared = await clearStaleActions(1 * 60 * 60 * 1000);
-    expect(cleared).toBe(1);
+  it('does not infer a legacy owner for an unapproved offline operation', () => {
+    const legacy = makeAction({
+      operation: 'allocate_payment',
+      ownerUserId: undefined,
+      params: { p_performed_by: 'user-1' },
+    });
+    expect(getActionOwnerUserId(legacy)).toBeNull();
+  });
+
+  it('summarizes current-user, other-user, and ownerless actions separately', async () => {
+    await queueAction(makeAction());
+    await queueAction(makeAction({ ownerUserId: 'user-2', params: { p_performed_by: 'user-2' } }));
+    await queueAction(makeAction({ ownerUserId: undefined, params: { p_delivery_id: 'legacy' } }));
+    await queueAction(makeAction({ retryCount: 3, status: 'needs_attention' }));
+
+    const summary = await getQueueSummary('user-1');
+    expect(summary).toEqual({
+      ownedTotal: 2,
+      ownedAutoSyncable: 1,
+      ownedNeedsAttention: 1,
+      otherUserTotal: 1,
+      ownerUnknownTotal: 1,
+      nextAutoSyncAt: null,
+    });
+  });
+
+  it('returns the earliest scheduled retry for the current user', async () => {
+    await queueAction(makeAction({ status: 'retry_wait', nextAttemptAt: '2026-07-13T12:10:00.000Z' }));
+    await queueAction(makeAction({ status: 'retry_wait', nextAttemptAt: '2026-07-13T12:05:00.000Z' }));
+
+    const summary = await getQueueSummary('user-1');
+    expect(summary.nextAutoSyncAt).toBe('2026-07-13T12:05:00.000Z');
   });
 });
 
@@ -272,9 +358,9 @@ describe('getFailedActions', () => {
     expect(failed).toEqual([]);
   });
 
-  it('uses default maxRetries of 3', async () => {
-    await queueAction(makeAction({ retryCount: 3 }));
-    await queueAction(makeAction({ retryCount: 2 }));
+  it('uses the shared default retry limit', async () => {
+    await queueAction(makeAction({ retryCount: OFFLINE_MAX_RETRIES }));
+    await queueAction(makeAction({ retryCount: OFFLINE_MAX_RETRIES - 1 }));
     const failed = await getFailedActions();
     expect(failed).toHaveLength(1);
   });

@@ -1,11 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { PendingAction } from './offlineQueue';
 
-// Mock supabase
 const mockRpc = vi.fn();
+const mockFrom = vi.fn();
+const mockCaptureException = vi.fn();
+vi.mock('./sentry', () => ({
+  Sentry: { captureException: (...args: unknown[]) => mockCaptureException(...args) },
+}));
 vi.mock('./db', () => ({
-  supabase: { rpc: (...args: unknown[]) => mockRpc(...args) },
-  // assertRpcResult is used in executeAction to catch silent {data:null,error:null}
-  // responses (audit 2026-05-16 P1 #3). Mock the same behavior as the real impl.
+  supabase: {
+    rpc: (...args: unknown[]) => mockRpc(...args),
+    from: (...args: unknown[]) => mockFrom(...args),
+  },
   assertRpcResult: <T,>(data: unknown, rpcName: string): T => {
     if (data === null || data === undefined) {
       throw new Error(`${rpcName} returned no data — operation may have been denied`);
@@ -14,155 +20,433 @@ vi.mock('./db', () => ({
   },
 }));
 
-// Mock offlineQueue
 const mockGetPendingActions = vi.fn();
 const mockRemoveAction = vi.fn().mockResolvedValue(undefined);
 const mockUpdateAction = vi.fn().mockResolvedValue(undefined);
-const mockClearFailedActions = vi.fn().mockResolvedValue(0);
-const mockClearStaleActions = vi.fn().mockResolvedValue(0);
-const mockGetFailedActions = vi.fn().mockResolvedValue([]);
 
-vi.mock('./offlineQueue', () => ({
-  getPendingActions: () => mockGetPendingActions(),
-  removeAction: (id: number) => mockRemoveAction(id),
-  updateAction: (action: unknown) => mockUpdateAction(action),
-  clearFailedActions: (...args: unknown[]) => mockClearFailedActions(...args),
-  clearStaleActions: (...args: unknown[]) => mockClearStaleActions(...args),
-  getFailedActions: (...args: unknown[]) => mockGetFailedActions(...args),
-}));
+vi.mock('./offlineQueue', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./offlineQueue')>();
+  return {
+    ...actual,
+    getPendingActions: () => mockGetPendingActions(),
+    removeAction: (id: number) => mockRemoveAction(id),
+    updateAction: (action: unknown) => mockUpdateAction(action),
+  };
+});
 
-import { syncPendingActions } from './offlineSync';
+import { MAX_RETRIES, syncPendingActions } from './offlineSync';
+
+const EMPTY_RESULT = {
+  synced: 0,
+  failed: 0,
+  deferred: 0,
+  skippedOtherUser: 0,
+  needsAttention: 0,
+  conflicts: [],
+};
+
+function makeAction(overrides: Partial<PendingAction> = {}): PendingAction {
+  return {
+    id: 1,
+    operation: 'complete_delivery',
+    params: { p_delivery_id: 'd-1', p_performed_by: 'user-1' },
+    createdAt: '2026-07-13T12:00:00.000Z',
+    retryCount: 0,
+    ownerUserId: 'user-1',
+    status: 'pending',
+    ...overrides,
+  };
+}
 
 beforeEach(() => {
   vi.clearAllMocks();
 });
 
 describe('syncPendingActions', () => {
-  it('returns { synced: 0, failed: 0 } when queue is empty', async () => {
+  it('returns an empty result when the queue is empty', async () => {
     mockGetPendingActions.mockResolvedValue([]);
-    const result = await syncPendingActions();
-    expect(result).toEqual({ synced: 0, failed: 0, cleaned: 0, conflicts: [] });
+    await expect(syncPendingActions('user-1')).resolves.toEqual(EMPTY_RESULT);
   });
 
-  it('syncs a complete_delivery action successfully', async () => {
-    mockGetPendingActions.mockResolvedValue([
-      { id: 1, operation: 'complete_delivery', params: { delivery_id: 'd-1' }, createdAt: '2026-01-01', retryCount: 0 },
-    ]);
+  it('syncs and removes a current-user action after a successful RPC', async () => {
+    mockGetPendingActions.mockResolvedValue([makeAction()]);
     mockRpc.mockResolvedValue({ data: { success: true }, error: null });
 
-    const result = await syncPendingActions();
+    const result = await syncPendingActions('user-1');
 
-    expect(mockRpc).toHaveBeenCalledWith('complete_delivery', { delivery_id: 'd-1' });
+    expect(mockRpc).toHaveBeenCalledWith('complete_delivery', {
+      p_delivery_id: 'd-1',
+      p_performed_by: 'user-1',
+    });
     expect(mockRemoveAction).toHaveBeenCalledWith(1);
-    expect(result).toEqual({ synced: 1, failed: 0, cleaned: 0, conflicts: [] });
+    expect(result).toEqual({ ...EMPTY_RESULT, synced: 1 });
   });
 
-  it('syncs a allocate_payment action successfully', async () => {
-    mockGetPendingActions.mockResolvedValue([
-      { id: 2, operation: 'allocate_payment', params: { amount: 100 }, createdAt: '2026-01-01', retryCount: 0 },
-    ]);
-    mockRpc.mockResolvedValue({ data: { success: true }, error: null });
+  it('retains a failed action and schedules a delayed retry', async () => {
+    mockGetPendingActions.mockResolvedValue([makeAction()]);
+    mockRpc.mockResolvedValue({ error: { message: 'network timeout' } });
 
-    const result = await syncPendingActions();
+    const result = await syncPendingActions('user-1');
 
-    expect(mockRpc).toHaveBeenCalledWith('allocate_payment', { amount: 100 });
-    expect(mockRemoveAction).toHaveBeenCalledWith(2);
-    expect(result).toEqual({ synced: 1, failed: 0, cleaned: 0, conflicts: [] });
-  });
-
-  it('increments retryCount on RPC error (under max retries)', async () => {
-    mockGetPendingActions.mockResolvedValue([
-      { id: 3, operation: 'complete_delivery', params: {}, createdAt: '2026-01-01', retryCount: 0 },
-    ]);
-    mockRpc.mockResolvedValue({ error: { message: 'timeout' } });
-
-    const result = await syncPendingActions();
-
-    expect(mockUpdateAction).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 3, retryCount: 1, lastError: 'timeout' })
-    );
     expect(mockRemoveAction).not.toHaveBeenCalled();
-    expect(result).toEqual({ synced: 0, failed: 0, cleaned: 0, conflicts: [] }); // not "failed" until max retries
+    expect(mockUpdateAction).toHaveBeenCalledWith(expect.objectContaining({
+      id: 1,
+      retryCount: 1,
+      status: 'retry_wait',
+      nextAttemptAt: expect.any(String),
+      lastAttemptAt: expect.any(String),
+      lastError: 'network timeout',
+    }));
+    expect(result).toEqual({ ...EMPTY_RESULT, failed: 1 });
   });
 
-  it('marks as failed after reaching max retries (3)', async () => {
-    mockGetPendingActions.mockResolvedValue([
-      { id: 4, operation: 'allocate_payment', params: {}, createdAt: '2026-01-01', retryCount: 2 },
-    ]);
+  it('retains an action as needs attention after the retry limit', async () => {
+    mockGetPendingActions.mockResolvedValue([makeAction({ retryCount: MAX_RETRIES - 1 })]);
     mockRpc.mockResolvedValue({ error: { message: 'still failing' } });
 
-    const result = await syncPendingActions();
+    const result = await syncPendingActions('user-1');
 
-    expect(mockUpdateAction).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 4, retryCount: 3, lastError: 'still failing' })
-    );
-    expect(result).toEqual({ synced: 0, failed: 1, cleaned: 0, conflicts: [] });
+    expect(mockRemoveAction).not.toHaveBeenCalled();
+    expect(mockUpdateAction).toHaveBeenCalledWith(expect.objectContaining({
+      retryCount: MAX_RETRIES,
+      status: 'needs_attention',
+      nextAttemptAt: undefined,
+    }));
+    expect(result).toEqual({ ...EMPTY_RESULT, failed: 1, needsAttention: 1 });
   });
 
-  it('handles unknown operations by failing them', async () => {
+  it('persists the 10-minute retry before the final attempt limit', async () => {
+    mockGetPendingActions.mockResolvedValue([makeAction({ retryCount: MAX_RETRIES - 2 })]);
+    mockRpc.mockResolvedValue({ error: { message: 'still offline' } });
+
+    const result = await syncPendingActions('user-1');
+
+    expect(mockUpdateAction).toHaveBeenCalledWith(expect.objectContaining({
+      retryCount: MAX_RETRIES - 1,
+      status: 'retry_wait',
+      nextAttemptAt: expect.any(String),
+    }));
+    expect(result).toEqual({ ...EMPTY_RESULT, failed: 1 });
+  });
+
+  it('does not execute or age another user\'s action', async () => {
     mockGetPendingActions.mockResolvedValue([
-      { id: 5, operation: 'unknown_op', params: {}, createdAt: '2026-01-01', retryCount: 0 },
+      makeAction({ ownerUserId: 'user-2', params: { p_performed_by: 'user-2' }, retryCount: 2 }),
     ]);
 
-    const result = await syncPendingActions();
+    const result = await syncPendingActions('user-1');
 
-    expect(mockUpdateAction).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 5, retryCount: 1, lastError: expect.stringContaining('Unknown offline operation') })
-    );
-    expect(result).toEqual({ synced: 0, failed: 0, cleaned: 0, conflicts: [] });
+    expect(mockRpc).not.toHaveBeenCalled();
+    expect(mockUpdateAction).not.toHaveBeenCalled();
+    expect(mockRemoveAction).not.toHaveBeenCalled();
+    expect(result).toEqual({ ...EMPTY_RESULT, skippedOtherUser: 1 });
   });
 
-  it('processes multiple actions in sequence', async () => {
+  it('infers and persists a legacy owner before replay', async () => {
+    mockGetPendingActions.mockResolvedValue([makeAction({ ownerUserId: undefined })]);
+    mockRpc.mockResolvedValue({ data: { success: true }, error: null });
+
+    const result = await syncPendingActions('user-1');
+
+    expect(mockUpdateAction).toHaveBeenCalledWith(expect.objectContaining({ ownerUserId: 'user-1' }));
+    expect(mockRpc).toHaveBeenCalledTimes(1);
+    expect(mockRemoveAction).toHaveBeenCalledWith(1);
+    expect(result).toEqual({ ...EMPTY_RESULT, synced: 1 });
+  });
+
+  it('quarantines ownerless legacy work without consuming a retry', async () => {
     mockGetPendingActions.mockResolvedValue([
-      { id: 10, operation: 'complete_delivery', params: { a: 1 }, createdAt: '2026-01-01', retryCount: 0 },
-      { id: 11, operation: 'allocate_payment', params: { b: 2 }, createdAt: '2026-01-01', retryCount: 0 },
-      { id: 12, operation: 'receive_po_items', params: { c: 3 }, createdAt: '2026-01-01', retryCount: 0 },
+      makeAction({ ownerUserId: undefined, params: { p_delivery_id: 'd-1' } }),
+    ]);
+
+    const result = await syncPendingActions('user-1');
+
+    expect(mockRpc).not.toHaveBeenCalled();
+    expect(mockUpdateAction).toHaveBeenCalledWith(expect.objectContaining({
+      retryCount: 0,
+      status: 'needs_attention',
+      lastError: 'Offline action owner could not be determined',
+    }));
+    expect(mockCaptureException).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ tags: expect.objectContaining({ reason: 'owner_unknown' }) })
+    );
+    expect(result).toEqual({ ...EMPTY_RESULT, needsAttention: 1 });
+  });
+
+  it('quarantines and reports an actor that differs from the saved owner', async () => {
+    mockGetPendingActions.mockResolvedValue([
+      makeAction({ params: { p_delivery_id: 'd-1', p_performed_by: 'different-user' } }),
+    ]);
+
+    const result = await syncPendingActions('user-1');
+
+    expect(mockRpc).not.toHaveBeenCalled();
+    expect(mockUpdateAction).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'needs_attention',
+      lastError: 'Offline action actor does not match its saved owner',
+    }));
+    expect(mockCaptureException).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ tags: expect.objectContaining({ reason: 'actor_owner_mismatch' }) })
+    );
+    expect(result).toEqual({ ...EMPTY_RESULT, failed: 1, needsAttention: 1 });
+  });
+
+  it('quarantines a legacy operation that is not approved for owner inference', async () => {
+    mockGetPendingActions.mockResolvedValue([
+      makeAction({
+        operation: 'allocate_payment',
+        ownerUserId: undefined,
+        params: { p_performed_by: 'user-1' },
+      }),
+    ]);
+
+    const result = await syncPendingActions('user-1');
+
+    expect(mockRpc).not.toHaveBeenCalled();
+    expect(mockUpdateAction).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'needs_attention',
+      retryCount: 0,
+      lastError: 'Offline action owner could not be determined',
+    }));
+    expect(mockCaptureException).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ tags: expect.objectContaining({ reason: 'owner_unknown' }) })
+    );
+    expect(result).toEqual({ ...EMPTY_RESULT, needsAttention: 1 });
+  });
+
+  it('defers an action until nextAttemptAt without calling the RPC', async () => {
+    mockGetPendingActions.mockResolvedValue([
+      makeAction({ status: 'retry_wait', nextAttemptAt: '2999-01-01T00:00:00.000Z' }),
+    ]);
+
+    const result = await syncPendingActions('user-1');
+
+    expect(mockRpc).not.toHaveBeenCalled();
+    expect(mockUpdateAction).not.toHaveBeenCalled();
+    expect(result).toEqual({ ...EMPTY_RESULT, deferred: 1 });
+  });
+
+  it('does not auto-retry an action already marked needs attention', async () => {
+    mockGetPendingActions.mockResolvedValue([
+      makeAction({ retryCount: MAX_RETRIES, status: 'needs_attention' }),
+    ]);
+
+    const result = await syncPendingActions('user-1');
+
+    expect(mockRpc).not.toHaveBeenCalled();
+    expect(mockRemoveAction).not.toHaveBeenCalled();
+    expect(result).toEqual({ ...EMPTY_RESULT, needsAttention: 1 });
+  });
+
+  it('allows a manual retry of an action that needs attention', async () => {
+    mockGetPendingActions.mockResolvedValue([
+      makeAction({ retryCount: MAX_RETRIES, status: 'needs_attention' }),
     ]);
     mockRpc.mockResolvedValue({ data: { success: true }, error: null });
 
-    const result = await syncPendingActions();
+    const result = await syncPendingActions('user-1', { force: true });
 
-    expect(mockRpc).toHaveBeenCalledTimes(3);
-    expect(mockRemoveAction).toHaveBeenCalledTimes(3);
-    expect(result).toEqual({ synced: 3, failed: 0, cleaned: 0, conflicts: [] });
+    expect(mockRpc).toHaveBeenCalledTimes(1);
+    expect(mockRemoveAction).toHaveBeenCalledWith(1);
+    expect(result).toEqual({ ...EMPTY_RESULT, synced: 1 });
+  });
+
+  it('retains a conflict as needs attention without calling the business RPC', async () => {
+    mockGetPendingActions.mockResolvedValue([
+      makeAction({
+        entityTable: 'deliveries',
+        entityId: 'd-1',
+        snapshotAt: '2026-07-13T12:00:00.000Z',
+      }),
+    ]);
+    const maybeSingle = vi.fn().mockResolvedValue({
+      data: { updated_at: '2026-07-13T12:05:00.000Z' },
+      error: null,
+    });
+    const eq = vi.fn(() => ({ maybeSingle }));
+    const select = vi.fn(() => ({ eq }));
+    mockFrom.mockReturnValue({ select });
+
+    const result = await syncPendingActions('user-1');
+
+    expect(mockRpc).not.toHaveBeenCalled();
+    expect(mockRemoveAction).not.toHaveBeenCalled();
+    expect(mockUpdateAction).toHaveBeenCalledWith(expect.objectContaining({
+      retryCount: MAX_RETRIES,
+      status: 'needs_attention',
+      nextAttemptAt: undefined,
+      lastError: expect.stringContaining('Conflict:'),
+    }));
+    expect(mockCaptureException).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ tags: expect.objectContaining({ reason: 'conflict' }) })
+    );
+    expect(result).toEqual(expect.objectContaining({
+      failed: 1,
+      needsAttention: 1,
+      conflicts: [expect.stringContaining('Conflict:')],
+    }));
+  });
+
+  it('shares one in-flight replay promise within a browser tab', async () => {
+    mockGetPendingActions.mockResolvedValue([makeAction()]);
+    let resolveRpc: (value: unknown) => void = () => {};
+    mockRpc.mockReturnValue(new Promise((resolve) => { resolveRpc = resolve; }));
+
+    const first = syncPendingActions('user-1');
+    const second = syncPendingActions('user-1');
+
+    expect(second).toBe(first);
+    resolveRpc({ data: { success: true }, error: null });
+    await expect(first).resolves.toEqual({ ...EMPTY_RESULT, synced: 1 });
+    expect(mockGetPendingActions).toHaveBeenCalledTimes(1);
+    expect(mockRpc).toHaveBeenCalledTimes(1);
+  });
+
+  it('queues a different user behind the active replay instead of sharing its result', async () => {
+    mockGetPendingActions
+      .mockResolvedValueOnce([makeAction({ ownerUserId: 'user-1' })])
+      .mockResolvedValueOnce([
+        makeAction({
+          id: 2,
+          ownerUserId: 'user-2',
+          params: { p_delivery_id: 'd-2', p_performed_by: 'user-2' },
+        }),
+      ]);
+    let resolveFirstRpc: (value: unknown) => void = () => {};
+    mockRpc
+      .mockReturnValueOnce(new Promise((resolve) => { resolveFirstRpc = resolve; }))
+      .mockResolvedValueOnce({ data: { success: true }, error: null });
+
+    const first = syncPendingActions('user-1');
+    const second = syncPendingActions('user-2');
+
+    expect(second).not.toBe(first);
+    resolveFirstRpc({ data: { success: true }, error: null });
+    await expect(first).resolves.toEqual({ ...EMPTY_RESULT, synced: 1 });
+    await expect(second).resolves.toEqual({ ...EMPTY_RESULT, synced: 1 });
+    expect(mockGetPendingActions).toHaveBeenCalledTimes(2);
+    expect(mockRpc).toHaveBeenCalledTimes(2);
+  });
+
+  it('queues a forced same-user replay behind a non-forced active replay', async () => {
+    mockGetPendingActions
+      .mockResolvedValueOnce([makeAction()])
+      .mockResolvedValueOnce([]);
+    let resolveFirstRpc: (value: unknown) => void = () => {};
+    mockRpc.mockReturnValueOnce(new Promise((resolve) => { resolveFirstRpc = resolve; }));
+
+    const first = syncPendingActions('user-1');
+    const forced = syncPendingActions('user-1', { force: true });
+
+    expect(forced).not.toBe(first);
+    resolveFirstRpc({ data: { success: true }, error: null });
+    await expect(first).resolves.toEqual({ ...EMPTY_RESULT, synced: 1 });
+    await expect(forced).resolves.toEqual(EMPTY_RESULT);
+    expect(mockGetPendingActions).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not consume a retry when the authenticated session changes during replay', async () => {
+    mockGetPendingActions.mockResolvedValue([makeAction({ retryCount: 1 })]);
+    mockRpc.mockResolvedValue({
+      error: { message: 'p_performed_by does not match authenticated user' },
+    });
+
+    const result = await syncPendingActions('user-1');
+
+    expect(mockUpdateAction).toHaveBeenCalledWith(expect.objectContaining({
+      retryCount: 1,
+      status: 'retry_wait',
+      nextAttemptAt: expect.any(String),
+      sessionMismatchCount: 1,
+      lastError: 'Sync session changed before this action could finish',
+    }));
+    expect(result).toEqual({ ...EMPTY_RESULT, deferred: 1 });
+  });
+
+  it('treats an expired unauthenticated session as a deferred session mismatch', async () => {
+    mockGetPendingActions.mockResolvedValue([makeAction({ retryCount: 1 })]);
+    mockRpc.mockResolvedValue({ error: { message: 'Not authenticated' } });
+
+    const result = await syncPendingActions('user-1');
+
+    expect(mockUpdateAction).toHaveBeenCalledWith(expect.objectContaining({
+      retryCount: 1,
+      status: 'retry_wait',
+      sessionMismatchCount: 1,
+    }));
+    expect(result).toEqual({ ...EMPTY_RESULT, deferred: 1 });
+  });
+
+  it('caps repeated authenticated-session mismatch deferrals as needs attention', async () => {
+    mockGetPendingActions.mockResolvedValue([
+      makeAction({ retryCount: 1, sessionMismatchCount: 2 }),
+    ]);
+    mockRpc.mockResolvedValue({
+      error: { message: 'p_performed_by does not match authenticated user' },
+    });
+
+    const result = await syncPendingActions('user-1');
+
+    expect(mockUpdateAction).toHaveBeenCalledWith(expect.objectContaining({
+      retryCount: 1,
+      status: 'needs_attention',
+      nextAttemptAt: undefined,
+      sessionMismatchCount: 3,
+      lastError: 'Sync session could not be verified after repeated attempts',
+    }));
+    expect(mockCaptureException).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ tags: expect.objectContaining({ reason: 'session_mismatch_limit' }) })
+    );
+    expect(result).toEqual({ ...EMPTY_RESULT, failed: 1, needsAttention: 1 });
+  });
+
+  it('quarantines unknown operations instead of deleting them', async () => {
+    mockGetPendingActions.mockResolvedValue([makeAction({ operation: 'unknown_op' })]);
+
+    const result = await syncPendingActions('user-1');
+
+    expect(mockRemoveAction).not.toHaveBeenCalled();
+    expect(mockUpdateAction).toHaveBeenCalledWith(expect.objectContaining({
+      retryCount: 1,
+      status: 'needs_attention',
+      lastError: expect.stringContaining('Unknown offline operation'),
+    }));
+    expect(result).toEqual({ ...EMPTY_RESULT, failed: 1, needsAttention: 1 });
   });
 
   it('continues processing remaining actions when one fails', async () => {
     mockGetPendingActions.mockResolvedValue([
-      { id: 20, operation: 'complete_delivery', params: {}, createdAt: '2026-01-01', retryCount: 0 },
-      { id: 21, operation: 'allocate_payment', params: {}, createdAt: '2026-01-01', retryCount: 0 },
+      makeAction({ id: 20 }),
+      makeAction({ id: 21, operation: 'allocate_payment', params: { p_performed_by: 'user-1' } }),
     ]);
-    // First call fails, second succeeds
     mockRpc
-      .mockResolvedValueOnce({ error: { message: 'fail' } })
+      .mockResolvedValueOnce({ error: { message: 'temporary failure' } })
       .mockResolvedValueOnce({ data: { success: true }, error: null });
 
-    const result = await syncPendingActions();
+    const result = await syncPendingActions('user-1');
 
-    expect(result).toEqual({ synced: 1, failed: 0, cleaned: 0, conflicts: [] });
-    expect(mockUpdateAction).toHaveBeenCalledTimes(1); // failed one
-    expect(mockRemoveAction).toHaveBeenCalledTimes(1); // synced one
+    expect(mockUpdateAction).toHaveBeenCalledTimes(1);
+    expect(mockRemoveAction).toHaveBeenCalledWith(21);
+    expect(result).toEqual({ ...EMPTY_RESULT, synced: 1, failed: 1 });
   });
 
-  // Audit 2026-05-16 P1 #3 regression coverage: { data: null, error: null }
-  // (RLS denial on a SELECT chain, trigger fail-soft path, etc.) must NOT
-  // remove the queued action. It should throw and increment retryCount.
-  it('does not mark action as synced when RPC returns null data with no error', async () => {
-    mockGetPendingActions.mockResolvedValue([
-      { id: 30, operation: 'complete_delivery', params: { delivery_id: 'd-1' }, createdAt: '2026-01-01', retryCount: 0 },
-    ]);
+  it('retains an action when an RPC returns null data with no error', async () => {
+    mockGetPendingActions.mockResolvedValue([makeAction()]);
     mockRpc.mockResolvedValue({ data: null, error: null });
 
-    const result = await syncPendingActions();
+    const result = await syncPendingActions('user-1');
 
     expect(mockRemoveAction).not.toHaveBeenCalled();
-    expect(mockUpdateAction).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: 30,
-        retryCount: 1,
-        lastError: expect.stringContaining('returned no data'),
-      })
-    );
-    expect(result).toEqual({ synced: 0, failed: 0, cleaned: 0, conflicts: [] });
+    expect(mockUpdateAction).toHaveBeenCalledWith(expect.objectContaining({
+      retryCount: 1,
+      status: 'retry_wait',
+      lastError: expect.stringContaining('returned no data'),
+    }));
+    expect(result).toEqual({ ...EMPTY_RESULT, failed: 1 });
   });
 });
