@@ -701,6 +701,69 @@ export interface DeliveryRemainder {
   order_number?: string;
 }
 
+// Stage 1B-1A durable acknowledgement for delivery/job work captured offline.
+// Browser code reads the sanitized RPC result, never the table directly.
+export type OfflineActionOperation = 'complete_delivery' | 'complete_job';
+export type OfflineActionReceiptStatus = 'received' | 'succeeded' | 'needs_review';
+export type OfflineActionFailureCode =
+  | 'ACTOR_MISMATCH'
+  | 'IDEMPOTENCY_KEY_REUSE'
+  | 'LEGACY_OUTCOME_UNKNOWN'
+  | 'NOT_AUTHORIZED'
+  | 'PAYLOAD_INVALID'
+  | 'PAYLOAD_TOO_LARGE'
+  | 'RESULT_INVALID'
+  | 'RETRY_LIMIT'
+  | 'TARGET_NOT_FOUND'
+  | 'TARGET_STATE_CONFLICT'
+  | 'UNEXPECTED_SERVER_ERROR'
+  | 'UNSUPPORTED_OPERATION'
+  | 'UNSUPPORTED_SCHEMA_VERSION';
+
+export type OfflineActionRpcErrorCode =
+  | OfflineActionFailureCode
+  | 'AUTH_REQUIRED'
+  | 'OFFLINE_ACTION_ID_REUSE'
+  | 'OFFLINE_ACTION_NEEDS_REVIEW'
+  | 'OFFLINE_STAGE_CONFLICT';
+
+// The database keeps DEFAULT NULL to satisfy CRX's one-overload mutator rule,
+// but every app caller must supply a real key. These stricter app-layer types
+// prevent the generated optional parameter from leaking into browser code.
+export interface StageOfflineActionArgs {
+  p_client_action_id: string;
+  p_operation: OfflineActionOperation;
+  p_entity_id: string;
+  p_schema_version: number;
+  p_client_created_at: string;
+  p_payload: Record<string, unknown>;
+  p_idempotency_key: string;
+}
+
+export interface ProcessOfflineActionArgs {
+  p_client_action_id: string;
+  p_idempotency_key: string;
+}
+
+export interface OfflineActionStatusResult {
+  client_action_id: string;
+  actor_id?: string;
+  operation: OfflineActionOperation;
+  entity_id: string;
+  schema_version: number;
+  client_created_at?: string;
+  status: OfflineActionReceiptStatus;
+  result: Record<string, unknown> | null;
+  failure_code: OfflineActionFailureCode | null;
+  failure_summary: string | null;
+  attempt_count: number;
+  last_attempt_at?: string | null;
+  received_at?: string;
+  succeeded_at?: string | null;
+  needs_review_at?: string | null;
+  updated_at: string;
+}
+
 export type POStatus = 'draft' | 'submitted' | 'partially_received' | 'fully_received' | 'cancelled';
 
 export interface PurchaseOrder {

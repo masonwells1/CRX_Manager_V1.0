@@ -139,6 +139,7 @@
 
 ## System / Infrastructure
 - `idempotency_keys` - Idempotent operation cache (idempotency_key UNIQUE, operation, result jsonb, expires_at — auto-cleanup after 24h)
+- `offline_action_receipts` — **QUEUED, NOT LIVE** (`20260714024811`): permanent server acknowledgement for approved offline `complete_delivery` / `complete_job` actions. Immutable client action UUID + permanent idempotency key, statuses `received` / `succeeded` / `needs_review`, sanitized office-review failures, RPC-only writes. This queued table is not included in the live 122-table heading count yet.
 - `rate_limit_log` - Rate limiting tracker (user_id, operation, created_at — accessed only by SECURITY DEFINER functions)
 - `rate_limits` - Per-user sliding-window counter (user_id, action_name, window_start, request_count — accessed only by SECURITY DEFINER functions)
 
@@ -222,6 +223,7 @@
 | order_shares | Admin / Sales Rep | Admin / Sales Rep | - | Admin |
 | document_processing_log | Own user_id | Own user_id | - | - |
 | idempotency_keys | - (SECURITY DEFINER only) | - (SECURITY DEFINER only) | - | - |
+| offline_action_receipts *(queued, not live)* | Owner / Admin / Sales via sanitized RPC only | - (SECURITY DEFINER RPC only) | - (SECURITY DEFINER RPC only) | - |
 | rate_limit_log | - (SECURITY DEFINER only) | - (SECURITY DEFINER only) | - | - |
 | note_tags | All authenticated | All authenticated | Admin / Own | Admin |
 | team_note_tags | All authenticated | All authenticated | - | All authenticated |
