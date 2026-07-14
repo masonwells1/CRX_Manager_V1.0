@@ -26,6 +26,7 @@ const TRIGGER_RES = [
   /^scripts\/(check-|validate-|verify-)[^/]+$/,
   /^scripts\/sync-agent-workflows\.mjs$/,
   /^scripts\/run-claude-review\.mjs$/,
+  /^scripts\/write-codex-push-proof\.mjs$/,
 ];
 
 // Any ONE of these staged alongside satisfies the ledger requirement.

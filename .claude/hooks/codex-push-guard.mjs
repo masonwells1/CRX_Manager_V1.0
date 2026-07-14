@@ -152,9 +152,9 @@ for (const pushCmd of pushCommands) {
 
   deny(
     `CODEX GATE: this push to main ${riskyDescription}\n\n"Review is queued/scheduled" is NOT reviewed. Before pushing:\n` +
-    `  1. Run /codex-review (the headless codex CLI) on this diff.\n` +
-    `  2. Fix any blockers and re-review until clean.\n` +
-    `  3. It writes .claude/session-state/codex-review-<sha>.json {codex_ran:true, verdict:"clean", head_sha:"${headSha || "<HEAD>"}", timestamp:"<ISO>"}.\n` +
+    `  1. Run: node scripts/write-codex-push-proof.mjs — it runs an independent read-only Codex review of this exact HEAD (origin/main...HEAD) and requires a machine verdict.\n` +
+    `  2. If Codex flags blockers, fix them and re-run until it reports clean; only a clean verdict on a stable, clean worktree mints the proof.\n` +
+    `  3. On success it writes the HEAD-bound proof {codex_ran:true, verdict:"clean", head_sha:"${headSha || "<HEAD>"}", timestamp:"<ISO>"} for you — never hand-write it (review-proof-guard blocks that).\n` +
     `  4. Retry the push.\n` +
     `If the Codex CLI is unavailable, PARK the change and tell Mason — do not self-certify. (Proof is HEAD-bound + expires in 30min.)`
   );
