@@ -106,6 +106,10 @@ try {
   assert.equal(evaluateProductionAction({ toolName: "Edit", toolInput: { file_path: "repo\\scripts\\run-claude-review.mjs" } }).blocked, true);
   assert.equal(evaluateProductionAction({ toolName: "Edit", toolInput: { file_path: "scripts/run-claude-review.mjs" } }).blocked, true);
   assert.equal(evaluateProductionAction({ toolName: "Read", toolInput: { file_path: "scripts/run-claude-review.mjs" } }).blocked, false);
+  // The Codex-proof producer is protected exactly like the Claude-proof wrapper.
+  assert.equal(evaluateProductionAction({ toolName: "Edit", toolInput: { file_path: "scripts/write-codex-push-proof.mjs" } }).blocked, true);
+  assert.equal(evaluateProductionAction({ toolName: "Write", toolInput: { file_path: "repo\\scripts\\write-codex-push-proof.mjs" } }).blocked, true);
+  assert.equal(evaluateProductionAction({ toolName: "Read", toolInput: { file_path: "scripts/write-codex-push-proof.mjs" } }).blocked, false);
   for (const command of [
     "rm .claude/hooks/review-proof-guard.mjs",
     "rm .claude/hooks/codex-push-guard.mjs;ls",

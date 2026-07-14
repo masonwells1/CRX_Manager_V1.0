@@ -107,6 +107,7 @@ assert.deepEqual(
     ".github/workflows/ci.yml",
     ".husky/pre-push",
     "scripts/run-claude-review.mjs",
+    "scripts/write-codex-push-proof.mjs",
   ]),
   [
     ".claude/hooks/codex-push-lib.mjs",
@@ -114,9 +115,13 @@ assert.deepEqual(
     ".github/workflows/ci.yml",
     ".husky/pre-push",
     "scripts/run-claude-review.mjs",
+    "scripts/write-codex-push-proof.mjs",
   ],
   "guardrail and CI self-modifications always require second-model review",
 );
+// The sole Codex-proof producer must itself be risky: a later edit to it cannot
+// slip to main without an independent second-model review of that edit.
+assert.deepEqual(riskyFiles(["scripts/write-codex-push-proof.mjs"]), ["scripts/write-codex-push-proof.mjs"]);
 assert.equal(contentIsRisky("+ const total_cents = 100"), true);
 assert.equal(contentIsRisky("+ const title = 'ordinary'"), false);
 

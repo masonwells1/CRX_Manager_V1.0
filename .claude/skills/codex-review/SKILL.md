@@ -120,6 +120,23 @@ Notes:
 `/codex-review` NEVER pushes or deploys. When the verdict is clean, report it and stop —
 the prod-push approval is Mason's, per the standing gate.
 
+**If the goal is a risky push to `main`** — the diff touches migrations / edge functions /
+RLS-policy files / `src/lib/db.ts` / `src/lib/sentry`, or the diff text matches the money
+patterns — `.claude/hooks/codex-push-guard.mjs` requires a fresh, HEAD-bound Codex proof and
+blocks any attempt to hand-write it. Mint it the sanctioned way; do NOT write the JSON yourself:
+
+```bash
+node scripts/write-codex-push-proof.mjs
+```
+
+That wrapper runs an independent read-only `codex exec` review of the exact HEAD (`origin/main...HEAD`)
+whose fixed prompt requires Codex to end with a machine token (`CODEX_PROOF_VERDICT: CLEAN|BLOCKERS`);
+ONLY on a terminal CLEAN token with a stable clean worktree does it write the HEAD-bound proof
+(`.claude/session-state/codex-review-<sha>.json`) for you. The step-3 `tee` capture above is a
+human-readable transcript, not the proof — the transcript alone never satisfies the gate. If the
+wrapper reports BLOCKERS or a dirty/moved tree, fix or commit and re-run; never self-certify. The
+push still needs Mason's go.
+
 ## General task handoff (not just review)
 
 To delegate a *task* (not a diff review) to Codex — e.g. "have Codex independently

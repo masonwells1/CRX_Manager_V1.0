@@ -196,6 +196,7 @@ const RISKY_PATH_RES = [
   /(^|\/)\.github\/workflows\//i,
   /(^|\/)\.husky\//i,
   /(^|\/)scripts\/run-claude-review\.mjs$/i,
+  /(^|\/)scripts\/write-codex-push-proof\.mjs$/i,
 ];
 export function riskyFiles(files) {
   return (files || []).filter((f) => RISKY_PATH_RES.some((re) => re.test(String(f || ""))));
