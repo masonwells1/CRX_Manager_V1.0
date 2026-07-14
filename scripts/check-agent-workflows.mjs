@@ -51,6 +51,7 @@ const required = [
   ".codex/hooks.json",
   ".codex/hooks/codex-hook-adapter.mjs",
   ".codex/hooks/production-action-guard.mjs",
+  ".claude/hooks/review-proof-guard.mjs",
   "scripts/run-claude-review.mjs",
   "scripts/post-agent-review-to-pr.mjs",
   "scripts/sync-agent-workflows.mjs",
@@ -84,6 +85,8 @@ for (const reminder of [
 }
 
 requireIncludes(".codex/hooks.json", codexHooksText, ".claude/hooks/sql-safety.mjs");
+requireIncludes(".claude/settings.json", claudeSettingsText, "review-proof-guard.mjs");
+requireIncludes(".codex/hooks.json", codexHooksText, "review-proof-guard.mjs");
 requireIncludes(".codex/hooks.json", codexHooksText, "production-action-guard.mjs");
 requireIncludes(".codex/config.toml", contents.get(".codex/config.toml"), "read_only=true");
 requireIncludes(".claude/commands/claude-review.md", contents.get(".claude/commands/claude-review.md"), "node scripts/run-claude-review.mjs");

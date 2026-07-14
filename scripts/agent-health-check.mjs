@@ -50,7 +50,9 @@ export function checkCodexHookPortability(hooksJson) {
   if (serialized.includes("C:\\CRX_Manager")) return check("FAIL", ".codex/hooks.json portability", "hard-coded C:\\CRX_Manager path found");
   if (commands.some((hook) => !hook.command || !hook.commandWindows)) return check("FAIL", ".codex/hooks.json portability", "each command hook needs command and commandWindows");
   if (serialized.includes("sync-from-claude.ps1")) return check("FAIL", ".codex/hooks.json portability", "SessionStart must not rewrite tracked hooks");
-  if (!serialized.includes(".claude/hooks/sql-safety.mjs") || !serialized.includes("production-action-guard.mjs")) {
+  if (!serialized.includes(".claude/hooks/sql-safety.mjs") ||
+      !serialized.includes("production-action-guard.mjs") ||
+      !serialized.includes("review-proof-guard.mjs")) {
     return check("FAIL", ".codex/hooks.json portability", "shared hook source or production guard missing");
   }
   return check("PASS", ".codex/hooks.json portability", `${commands.length} worktree-aware command hooks`);
@@ -234,6 +236,7 @@ function buildHealthChecks(root = ROOT) {
     ".codex/hooks.json",
     ".codex/hooks/codex-hook-adapter.mjs",
     ".codex/hooks/production-action-guard.mjs",
+    ".claude/hooks/review-proof-guard.mjs",
     "scripts/run-claude-review.mjs",
     "scripts/agent-health-check.mjs",
     "scripts/post-agent-review-to-pr.mjs",

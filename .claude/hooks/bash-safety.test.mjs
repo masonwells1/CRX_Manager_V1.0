@@ -150,6 +150,20 @@ r = runHook({ tool_name: "Bash", tool_input: { command: "git push --force origin
 eq(r.status, 0, "bash-safety.mjs exits 0 on dangerous command");
 ok(r.stdout.includes('"permissionDecision":"deny"'), "bash-safety.mjs denies a force push");
 
+for (const command of [
+  "git push origin feature/test --force",
+  "git push --all origin --force",
+  "git push origin --all --force",
+  "git -C . push origin feature/test -uf",
+  "git push origin +feature/test",
+  "git push --all origin",
+  "git push origin --branches",
+]) {
+  r = runHook({ tool_name: "Bash", tool_input: { command } });
+  eq(r.status, 0, `bash-safety exits 0 after denying: ${command}`);
+  ok(r.stdout.includes('"permissionDecision":"deny"'), `bash-safety denies force/bulk push: ${command}`);
+}
+
 // ── Codex P1 round 3: valid npm option forms must still resolve script names ──
 eq(extractNpmRunNames("npm run --silent dangerous")[0], "dangerous", "npm run --silent <name> resolves the name, not the flag");
 eq(extractNpmRunNames("npm -s run dangerous")[0], "dangerous", "npm -s run <name> resolves");
