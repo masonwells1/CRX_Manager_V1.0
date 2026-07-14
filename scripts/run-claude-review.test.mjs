@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
+import path from "node:path";
 
 import {
   buildClaudeCommandArgs,
@@ -12,6 +13,7 @@ import {
   claudeExecutable,
   claudeReviewProofVerdict,
   defaultClaudeReviewOutputPath,
+  getGitContext,
   parseClaudeReviewJson,
   parseReviewArgs,
   slugify,
@@ -73,20 +75,31 @@ const unreadableEvidence = buildUntrackedEvidence(untrackedList, () => {
 });
 assert.deepEqual(unreadableEvidence.errors, ["new-test.ts: simulated read race"]);
 assert.match(unreadableEvidence.evidence, /new-test\.ts:UNREADABLE/);
+const failedDiffContext = getGitContext("base-main", null, (_command, args) => {
+  if (args[0] === "diff" && args[1] === "--binary") {
+    throw new Error("simulated tracked-diff failure");
+  }
+  if (args[0] === "merge-base") return "base123";
+  if (args[0] === "rev-parse") return "head123";
+  return "";
+});
+assert.match(
+  failedDiffContext.scopeEvidenceErrors.join("\n"),
+  /git diff --binary base123 failed: simulated tracked-diff failure/,
+  "a failed required tracked-diff read must block review proof",
+);
+const testRoot = path.resolve("tmp", "CRX_Manager");
+const defaultOutput = defaultClaudeReviewOutputPath({ root: testRoot });
 assert.equal(
-  defaultClaudeReviewOutputPath({
-    root: "C:\\CRX_Manager",
-    date: "2026-06-14",
-    topic: "Pair Review Setup",
-  }),
-  "C:\\CRX_Manager\\.claude\\session-state\\claude-review-latest.txt",
+  defaultOutput,
+  path.join(testRoot, ".claude", "session-state", "claude-review-latest.txt"),
 );
 assert.equal(
   archiveClaudeReviewOutputPath({
-    outputPath: "C:\\CRX_Manager\\.claude\\session-state\\claude-review-latest.txt",
+    outputPath: defaultOutput,
     runId: "run-123",
   }),
-  "C:\\CRX_Manager\\.claude\\session-state\\history\\claude-review-run-123.txt",
+  path.join(testRoot, ".claude", "session-state", "history", "claude-review-run-123.txt"),
 );
 
 const prompt = buildClaudeReviewPrompt({

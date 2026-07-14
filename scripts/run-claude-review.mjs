@@ -174,16 +174,19 @@ function sha256(value) {
   ).digest("hex");
 }
 
-function runGit(args, fallback = "") {
+function runGit(args, fallback = "", errors = null, executeGit = execFileSync) {
   try {
-    return execFileSync("git", args, {
+    return executeGit("git", args, {
       cwd: ROOT,
       encoding: "utf8",
       timeout: 10_000,
       maxBuffer: 50 * 1024 * 1024,
       stdio: ["ignore", "pipe", "ignore"],
     }).trim();
-  } catch {
+  } catch (error) {
+    if (errors) {
+      errors.push(`git ${args.join(" ")} failed: ${error.message || String(error)}`);
+    }
     return fallback;
   }
 }
@@ -208,47 +211,55 @@ export function buildUntrackedEvidence(
   return { evidence, errors };
 }
 
-function getGitContext(scope, commit) {
+export function getGitContext(scope, commit, executeGit = execFileSync) {
   // The changed-file list must reflect the REVIEW SCOPE, not always the working
   // tree: base-main diffs the merge-base with origin/main (what this branch added
   // since it forked — committed + uncommitted), commit diffs that one commit, and
   // uncommitted (default) diffs the working tree vs HEAD.
   let changed;
   let scopeEvidence;
+  const scopeEvidenceErrors = [];
+  const requiredGit = (args, fallback = "") => runGit(
+    args,
+    fallback,
+    scopeEvidenceErrors,
+    executeGit,
+  );
+  const optionalGit = (args, fallback = "") => runGit(args, fallback, null, executeGit);
   const untracked = scope === "commit"
     ? ""
-    : runGit(["ls-files", "--others", "--exclude-standard"], "");
+    : requiredGit(["ls-files", "--others", "--exclude-standard"]);
   const untrackedResult = buildUntrackedEvidence(untracked);
   const untrackedEvidence = untrackedResult.evidence;
   if (scope === "base-main") {
-    const base = runGit(["merge-base", "origin/main", "HEAD"], "origin/main");
-    const tracked = runGit(["diff", "--name-only", base], "");
+    const base = requiredGit(["merge-base", "origin/main", "HEAD"]);
+    const tracked = requiredGit(["diff", "--name-only", base]);
     changed = [tracked, untracked].filter(Boolean).join("\n");
-    scopeEvidence = `${runGit(["diff", "--binary", base], "")}\n${untrackedEvidence}`;
+    scopeEvidence = `${requiredGit(["diff", "--binary", base])}\n${untrackedEvidence}`;
   } else if (scope === "commit" && commit) {
-    changed = runGit(["diff-tree", "--no-commit-id", "--name-only", "-r", commit], "");
-    scopeEvidence = runGit(["show", "--format=", "--binary", commit], "");
+    changed = requiredGit(["diff-tree", "--no-commit-id", "--name-only", "-r", commit]);
+    scopeEvidence = requiredGit(["show", "--format=", "--binary", commit]);
   } else {
     // uncommitted: working-tree changes vs HEAD PLUS untracked-new files
     // (git diff omits untracked — a brand-new migration/script/hook would be missed).
-    const tracked = runGit(["diff", "--name-only", "HEAD"], "");
+    const tracked = requiredGit(["diff", "--name-only", "HEAD"]);
     changed = [tracked, untracked].filter(Boolean).join("\n");
-    scopeEvidence = `${runGit(["diff", "--binary", "HEAD"], "")}\n${untrackedEvidence}`;
+    scopeEvidence = `${requiredGit(["diff", "--binary", "HEAD"])}\n${untrackedEvidence}`;
   }
   return {
-    branch: runGit(["branch", "--show-current"], "unknown"),
-    head: runGit(["rev-parse", "HEAD"], "unknown"),
-    status: runGit(["status", "--short"], ""),
+    branch: optionalGit(["branch", "--show-current"], "unknown"),
+    head: optionalGit(["rev-parse", "HEAD"], "unknown"),
+    status: optionalGit(["status", "--short"]),
     // Captured BEFORE the review runs — the proof must bind to what was
     // actually reviewed, not whatever HEAD is afterwards (Codex round-4 TOCTOU).
-    headSha: runGit(["rev-parse", "HEAD"], ""),
+    headSha: requiredGit(["rev-parse", "HEAD"]),
     changedFiles: changed.split(/\r?\n/).filter(Boolean),
-    stagedFiles: runGit(["diff", "--cached", "--name-only"], "")
+    stagedFiles: optionalGit(["diff", "--cached", "--name-only"])
       .split(/\r?\n/)
       .filter(Boolean),
     scopeContentHash: sha256(scopeEvidence || ""),
     scopeEvidence,
-    scopeEvidenceErrors: untrackedResult.errors,
+    scopeEvidenceErrors: [...scopeEvidenceErrors, ...untrackedResult.errors],
   };
 }
 
@@ -511,7 +522,7 @@ export function runClaudeReview(options) {
     const result = {
       status: 1,
       stdout: "",
-      stderr: `Unable to bind all untracked file bytes into the review scope:\n${gitContext.scopeEvidenceErrors.join("\n")}`,
+      stderr: `Unable to bind complete Git evidence into the review scope:\n${gitContext.scopeEvidenceErrors.join("\n")}`,
     };
     const capture = {
       runId,
