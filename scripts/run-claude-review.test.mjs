@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
+import path from "node:path";
 
 import {
   buildClaudeCommandArgs,
@@ -31,7 +32,7 @@ assert.equal(
     date: "2026-06-14",
     topic: "Pair Review Setup",
   }),
-  "C:\\CRX_Manager\\.claude\\session-state\\claude-review-latest.txt",
+  path.join("C:\\CRX_Manager", ".claude", "session-state", "claude-review-latest.txt"),
 );
 
 const prompt = buildClaudeReviewPrompt({
