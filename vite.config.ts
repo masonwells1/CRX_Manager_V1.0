@@ -9,9 +9,9 @@ const liveSchemaServiceRoleKey =
   process.env.CRX_LIVE_SCHEMA_SERVICE_ROLE_KEY?.trim();
 const liveSchemaProductionUrl = 'https://rhyzpcqhnizqbxphqdkr.supabase.co';
 
-// Unit tests are deliberately isolated from Supabase. The live-schema CI job
-// must opt in explicitly and provide both credentials; otherwise a typo or a
-// missing secret could turn the live gate into a silently skipped mock run.
+// Unit tests are deliberately isolated from Supabase. A trusted live-schema
+// run must opt in explicitly and provide both credentials; otherwise a typo or
+// a missing secret could turn the live gate into a silently skipped mock run.
 if (liveSchemaTests && (!liveSchemaUrl || !liveSchemaServiceRoleKey)) {
   throw new Error(
     'CRX_LIVE_SCHEMA_TESTS=true requires VITE_SUPABASE_URL and CRX_LIVE_SCHEMA_SERVICE_ROLE_KEY.',

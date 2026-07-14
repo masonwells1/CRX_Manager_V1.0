@@ -64,6 +64,8 @@ Only `VERIFIED` findings may be counted as confirmed and only evidence-backed `R
 
 Reviewer wrappers must pin the requested model and effort, enforce a timeout, and record the requested/resolved model, CLI version, repo HEAD, scope fingerprint, prompt hash, terminal reason, and permission denials. A timeout or invalid structured response is `BLOCKED` even when the process launcher itself exits successfully.
 
+The direct Claude wrapper supplies the exact scoped diff as untrusted prompt data and permits only `Read`, `Grep`, and `Glob`; Bash and write-capable tools are denied. Any attempted denied tool still makes the review `BLOCKED`. The default branch-review timeout is 15 minutes because an evidence-backed Opus pass can legitimately exceed five minutes.
+
 ## Prevention Actions
 
 For each confirmed BLOCKER or HIGH, add the strongest practical prevention action:
@@ -81,7 +83,7 @@ The gauntlet is a **review** layer — it catches *semantic* classes (actor-forg
 
 - **Type errors** → `npm run typecheck` runs in `.husky/pre-commit` and `/ship` verify. (`npm run build` is vite/esbuild — it transpiles, it does **not** type-check.)
 - **Untyped DB access** (`.select('*')` + `as` casts), **unhandled Supabase `{ error }`** (returned, not thrown), **pages that throw on mount** → ESLint contract rules + a render-smoke test (see `docs/audits/2026-06-14-field-mode-error-retrospective-and-prevention-spec.md` and the reconciliation in `…-gauntlet-vs-fieldmode-controls-reconciliation.md`).
-- **Schema drift** → the live-schema Vitest job must prove it used the configured live/staging URL; a forced mock URL or skipped suite is not a pass.
+- **Schema drift** → the live-schema Vitest suite fails closed when a trusted operator explicitly supplies live credentials, but GitHub automation is intentionally parked until a least-privilege credential exists. A mock, skipped, missing-secret, or unexecuted suite is `BLOCKED`/`UNVERIFIED`, never a pass.
 - **Mutating RPC idempotency** → inventory must start from the current mutator set and require a key or an explicit evidence-backed exemption; scanning only RPCs that already declare a key is not coverage.
 - **Browser integration** → E2E setup must fail closed unless a non-production target and credentials are configured. Production fixtures are never the CI default.
 

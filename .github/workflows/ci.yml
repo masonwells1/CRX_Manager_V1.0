@@ -105,46 +105,6 @@ jobs:
           VITE_MAPBOX_TOKEN: ${{ secrets.VITE_MAPBOX_TOKEN }}
         run: npm run build
 
-  live-schema-validation:
-    name: Live Schema Validation (Read-Only)
-    runs-on: ubuntu-latest
-    needs: lint-typecheck-test
-    # Repository secrets are unavailable to untrusted pull requests. Skipping
-    # this entire job there is explicit; pushes to main must execute the real
-    # read-only schema suite and fail if its credentials are unavailable.
-    if: github.event_name == 'push'
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v7
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version-file: '.nvmrc'
-
-      - name: Cache node_modules
-        uses: actions/cache@v6
-        id: cache-node-modules
-        with:
-          path: node_modules
-          key: node-modules-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
-          restore-keys: |
-            node-modules-${{ runner.os }}-
-
-      - name: Install dependencies
-        if: steps.cache-node-modules.outputs.cache-hit != 'true'
-        run: npm ci
-
-      - name: Run live schema contracts
-        env:
-          CRX_LIVE_SCHEMA_TESTS: 'true'
-          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
-          # execute_sql_readonly is intentionally revoked from anon/authenticated.
-          # This server-only secret is scoped to the read-only metadata test.
-          CRX_LIVE_SCHEMA_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-        run: npx vitest run src/lib/schemaIntegrityLive.test.ts
-
   e2e-smoke:
     name: E2E Smoke Tests
     runs-on: ubuntu-latest

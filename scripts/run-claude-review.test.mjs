@@ -34,6 +34,7 @@ assert.equal(parsed.model, "opus");
 assert.equal(parsed.effort, "xhigh");
 assert.equal(parsed.timeoutMs, 240_000);
 assert.equal(parsed.dryRun, true);
+assert.equal(parseReviewArgs(["--scope", "base-main"]).timeoutMs, 900_000);
 
 assert.throws(
   () => parseReviewArgs(["--scope", "uncommitted", "--effort", "ultra"]),
@@ -99,6 +100,7 @@ const prompt = buildClaudeReviewPrompt({
     "scripts/run-claude-review.mjs",
   ],
   stagedFiles: [],
+  scopeEvidence: "diff --git a/package.json b/package.json\n+  \\\"test:new\\\": \\\"node test.mjs\\\"",
 });
 
 assert.match(prompt, /independent Claude review/i);
@@ -110,6 +112,9 @@ assert.match(prompt, /BLOCKER \/ HIGH \/ MED \/ LOW \/ NIT/);
 assert.match(prompt, /verdict: SHIP \/ SHIP-WITH-FOLLOWUPS \/ NEEDS-WORK/i);
 assert.match(prompt, /FINAL_VERDICT: SHIP/);
 assert.match(prompt, /package\.json/);
+assert.match(prompt, /BEGIN UNTRUSTED SCOPED DIFF/);
+assert.match(prompt, /diff --git a\/package\.json b\/package\.json/);
+assert.match(prompt, /Use only Read, Grep, and Glob; do not call Bash/i);
 
 const commandArgs = buildClaudeCommandArgs();
 assert.deepEqual(commandArgs, [
@@ -121,10 +126,12 @@ assert.deepEqual(commandArgs, [
   "--output-format",
   "json",
   "--permission-mode",
-  "plan",
+  "dontAsk",
+  "--allowedTools",
+  "Read,Grep,Glob",
   "--no-session-persistence",
   "--disallowedTools",
-  "Edit,Write,NotebookEdit",
+  "Bash,Edit,Write,NotebookEdit",
 ]);
 // SECURITY: the prompt must NOT be a CLI arg (it's passed via stdin) so shell
 // metacharacters can't reach cmd.exe on Windows.

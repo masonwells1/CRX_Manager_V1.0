@@ -8,8 +8,9 @@
  * WHEN THESE RUN:
  *   - Skipped by default when VITE_SUPABASE_URL = 'https://test.supabase.co' (mock)
  *   - Run automatically when pointed at a real Supabase instance
- *   - In CI: opt in with CRX_LIVE_SCHEMA_TESTS=true and provide the live URL
- *     plus CRX_LIVE_SCHEMA_SERVICE_ROLE_KEY (server-only; never VITE-prefixed)
+ *   - In a trusted local/agent run: opt in with CRX_LIVE_SCHEMA_TESTS=true and
+ *     provide the live URL plus CRX_LIVE_SCHEMA_SERVICE_ROLE_KEY
+ *     (server-only; never VITE-prefixed)
  *
  * WHAT THEY VERIFY:
  *   1. Critical columns exist with expected data types
@@ -41,7 +42,7 @@ const supabase = isLiveDB
 /**
  * Helper: run a SQL query via Supabase RPC.
  * execute_sql_readonly is deliberately revoked from anon/authenticated and is
- * callable only by service_role/postgres. This CI-only client is never bundled
+ * callable only by service_role/postgres. This test-only client is never bundled
  * into the application and performs SELECT/WITH metadata checks only.
  */
 async function queryInformationSchema(sql: string) {
