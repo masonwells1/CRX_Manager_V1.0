@@ -86,8 +86,8 @@ jobs:
 
       - name: Run Vitest unit tests + coverage (ratchet thresholds)
         # Unit/coverage tests deliberately use the mock Supabase values from
-        # vite.config.ts. Live schema verification is a separate fail-closed
-        # job below so the two modes cannot silently bleed into each other.
+        # vite.config.ts. Live schema verification stays a trusted opt-in run
+        # until a least-privilege CI credential or disposable database exists.
         run: npm run test:coverage
 
       - name: Upload coverage report

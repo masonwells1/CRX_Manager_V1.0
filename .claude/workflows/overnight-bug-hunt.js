@@ -239,11 +239,17 @@ const A = (() => {
   if (typeof args === 'string') { try { return JSON.parse(args) } catch { return {} } }
   return args
 })()
+const HAS_ONLY = Object.prototype.hasOwnProperty.call(A, 'only')
+const INVALID_ONLY = HAS_ONLY && !Array.isArray(A.only)
 const REQUESTED_ONLY = Array.isArray(A.only) && A.only.length ? [...new Set(A.only)] : []
 const UNKNOWN_ONLY = REQUESTED_ONLY.filter((key) => !DIMENSIONS.some((d) => d.key === key))
+const HAS_PHASE = Object.prototype.hasOwnProperty.call(A, 'phase') && A.phase !== undefined && A.phase !== null
+const KNOWN_PHASES = new Set(DIMENSIONS.map((d) => String(d.phase)))
+const INVALID_PHASE = !REQUESTED_ONLY.length && HAS_PHASE && !KNOWN_PHASES.has(String(A.phase))
 const SELECTED = (() => {
+  if (INVALID_ONLY || INVALID_PHASE) return []
   if (REQUESTED_ONLY.length) return DIMENSIONS.filter((d) => REQUESTED_ONLY.includes(d.key))
-  if (A.phase === 1 || A.phase === 2 || A.phase === '1' || A.phase === '2') return DIMENSIONS.filter((d) => String(d.phase) === String(A.phase))
+  if (HAS_PHASE) return DIMENSIONS.filter((d) => String(d.phase) === String(A.phase))
   return DIMENSIONS.filter((d) => d.phase === 1) // default: Phase 1 (billing engine)
 })()
 
@@ -347,6 +353,18 @@ const selectionBlocked = UNKNOWN_ONLY.map((key) => ({
   status: 'BLOCKED',
   reason: `Unknown requested subsystem: ${String(key)}`,
 }))
+if (INVALID_ONLY) selectionBlocked.push({
+  dimension: 'only',
+  phase: 'Selection',
+  status: 'BLOCKED',
+  reason: 'Invalid subsystem selection: args.only must be an array.',
+})
+if (INVALID_PHASE) selectionBlocked.push({
+  dimension: 'phase',
+  phase: 'Selection',
+  status: 'BLOCKED',
+  reason: `Unknown requested phase: ${String(A.phase)}`,
+})
 const all = [...selectionBlocked, ...results.flat().filter(Boolean)]
 const confirmed = all.filter((f) => f.status === 'VERIFIED')
 const refuted = all.filter((f) => f.status === 'REFUTED')

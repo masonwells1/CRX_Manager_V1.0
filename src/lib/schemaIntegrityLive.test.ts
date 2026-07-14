@@ -11,6 +11,8 @@
  *   - In a trusted local/agent run: opt in with CRX_LIVE_SCHEMA_TESTS=true and
  *     provide the live URL plus CRX_LIVE_SCHEMA_SERVICE_ROLE_KEY
  *     (server-only; never VITE-prefixed)
+ *   - Run only this suite with `npm run test:schema-live`; do not point the
+ *     entire unit suite at a live project
  *
  * WHAT THEY VERIFY:
  *   1. Critical columns exist with expected data types

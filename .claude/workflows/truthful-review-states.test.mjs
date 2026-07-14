@@ -183,6 +183,39 @@ for (const workflow of ['./overnight-bug-hunt.js', './money-inventory-hunt.js'])
 }
 
 for (const workflow of ['./overnight-bug-hunt.js', './money-inventory-hunt.js']) {
+  for (const args of [{ phase: 99 }, { only: 'invoices-core' }]) {
+    const { result } = await executeWorkflow(
+      workflow,
+      async (_prompt, options) => {
+        throw new Error(`Invalid selection must not dispatch a finder: ${options.label}`)
+      },
+      args
+    )
+
+    assert.equal(result.overallStatus, 'BLOCKED', `${workflow}: invalid selection must block`)
+    assert.equal(result.complete, false)
+    assert.equal(result.clean, false)
+    assert.equal(result.blocked.length, 1)
+    assert.equal(result.subsystemsRun.length, 0, 'invalid selection must not silently run Phase 1')
+  }
+}
+
+{
+  const { result } = await executeWorkflow(
+    './money-inventory-hunt.js',
+    async (_prompt, options) => {
+      if (options.label?.startsWith('hunt:')) return completeLayer()
+      throw new Error(`No verifier expected for an empty finder: ${options.label}`)
+    },
+    { phase: 3 }
+  )
+
+  assert.equal(result.overallStatus, 'VERIFIED', 'a known Phase 3 must run instead of falling back')
+  assert.ok(result.subsystemsRun.length > 0)
+  assert.ok(result.subsystemsRun.includes('returns-credits'))
+}
+
+for (const workflow of ['./overnight-bug-hunt.js', './money-inventory-hunt.js']) {
   const { result } = await executeWorkflow(
     workflow,
     async (_prompt, options) => {
@@ -263,7 +296,9 @@ for (const workflow of ['./overnight-bug-hunt.js', './money-inventory-hunt.js'])
     throw new Error(`MED findings do not enter the BLOCKER/HIGH verifier: ${options.label}`)
   })
 
-  assert.equal(result.overallStatus, 'BLOCKED', 'unverified MED/LOW evidence must not produce a clean run')
+  assert.equal(result.overallStatus, 'VERIFIED', 'complete MED/LOW evidence is not an unavailable-source blocker')
+  assert.equal(result.complete, true)
+  assert.equal(result.clean, false, 'a complete run with findings must not be called clean')
   assert.equal(result.lowerSeverity.length, 1)
   assert.equal(result.unverified.length, 0, 'MED/LOW must appear in one bucket, not be duplicated')
 }

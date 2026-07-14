@@ -253,9 +253,9 @@ const unverified = [
   ...malformedFindings,
   ...blockedPartialFindings,
 ]
-// MED/LOW remain in their single severity bucket, but because this workflow
-// does not adversarially verify them they still prevent a VERIFIED/clean run.
-const overallStatus = blockedLayers.length || unverified.length || lowerSeverity.length ? 'BLOCKED' : 'VERIFIED'
+// MED/LOW remain in their single severity bucket. They do not mean evidence
+// collection was blocked, but they do prevent the run from being called clean.
+const overallStatus = blockedLayers.length || unverified.length ? 'BLOCKED' : 'VERIFIED'
 
 log('Reviewer-independence limitation: finder and verifier agents use the same workflow runtime/model family unless the caller routes them differently.')
 
@@ -269,7 +269,7 @@ return {
   layers: LAYERS.map((l) => l.key),
   overallStatus,
   complete: overallStatus === 'VERIFIED',
-  clean: overallStatus === 'VERIFIED' && confirmed.length === 0,
+  clean: overallStatus === 'VERIFIED' && confirmed.length === 0 && lowerSeverity.length === 0,
   reviewerIndependence: {
     independentModelFamilies: false,
     limitation: 'Finder and verifier agents may use the same model family; verdicts are adversarial but not cross-family independent.',
