@@ -216,11 +216,23 @@ export function contentIsRisky(diffText) {
   return RISKY_CONTENT_RE.test(String(diffText || ""));
 }
 
-function reviewProofValid(data, headSha, nowMs, ranKey) {
+function reviewProofValid(data, headSha, nowMs, ranKey, expectedBaseSha) {
   if (!data || data[ranKey] !== true) return false;
   const v = String(data.verdict || "");
   if (v !== "clean" && v !== "blockers-fixed") return false;
   if (headSha && data.head_sha !== headSha) return false;
+  // Base-SHA binding: a proof records the exact origin/main it was reviewed
+  // against (base_sha). origin/main can advance — a sibling session fetches a
+  // just-merged commit — WITHOUT dirtying the worktree or moving HEAD, which
+  // would otherwise leave a HEAD-bound-only proof valid even though the diff the
+  // guard now gates (origin/main...HEAD) is no longer the diff that was
+  // reviewed. When the caller supplies the base it is gating against, the proof
+  // must carry a matching base_sha; a proof with no base_sha (pre-hardening) or a
+  // stale/mismatched base fails closed and forces a fresh review. The check is
+  // gated on `expectedBaseSha` exactly like the head_sha check above so the
+  // shared validator stays usable in base-agnostic unit contexts; both real
+  // guards always pass the resolved origin/main.
+  if (expectedBaseSha && data.base_sha !== expectedBaseSha) return false;
   const t = data.timestamp ? Date.parse(data.timestamp) : NaN;
   if (!Number.isFinite(t)) return false;
   const now = typeof nowMs === "number" ? nowMs : Date.now();
@@ -230,13 +242,13 @@ function reviewProofValid(data, headSha, nowMs, ranKey) {
 }
 
 // Validate Claude's existing Codex-review proof shape.
-export function proofValid(data, headSha, nowMs) {
-  return reviewProofValid(data, headSha, nowMs, "codex_ran");
+export function proofValid(data, headSha, nowMs, expectedBaseSha) {
+  return reviewProofValid(data, headSha, nowMs, "codex_ran", expectedBaseSha);
 }
 
 // Mirror validation for Codex's Claude-review proof shape.
-export function claudeProofValid(data, headSha, nowMs) {
-  return reviewProofValid(data, headSha, nowMs, "claude_ran");
+export function claudeProofValid(data, headSha, nowMs, expectedBaseSha) {
+  return reviewProofValid(data, headSha, nowMs, "claude_ran", expectedBaseSha);
 }
 
 export { RISKY_PATH_RES, RISKY_CONTENT_RE };

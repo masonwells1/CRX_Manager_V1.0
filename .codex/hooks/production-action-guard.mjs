@@ -144,15 +144,20 @@ function proofRequirement(headSha, riskDescription, detail) {
     `SHIP/SHIP-WITH-FOLLOWUPS review writes .claude/session-state/claude-review-push.json. ` +
     `Required JSON: ` +
     `{\"claude_ran\":true,\"verdict\":\"clean|blockers-fixed\",` +
-    `\"head_sha\":\"${headSha || "<exact pushed SHA>"}\",\"timestamp\":\"<ISO-8601, 0-30 minutes old>\"}. ` +
-    `The proof is exact-SHA-bound; future-dated, stale, malformed, or BOM-corrupted proof is refused.`
+    `\"head_sha\":\"${headSha || "<exact pushed SHA>"}\",\"base_sha\":\"<origin/main at review time>\",` +
+    `\"timestamp\":\"<ISO-8601, 0-30 minutes old>\"}. ` +
+    `The proof is bound to both the exact pushed SHA and the origin/main base; future-dated, stale, base-moved, malformed, or BOM-corrupted proof is refused.`
   );
 }
 
 function gateMainChange({ repoDir, sourceRef, sourceSha, nowMs, runGit }) {
   let headSha = sourceSha || "";
+  let baseSha = "";
   try {
-    runGit(["rev-parse", "--verify", "--quiet", "origin/main"], repoDir);
+    // Resolve the exact origin/main this change is gated against so the Claude
+    // proof can be required to match the SAME base it was reviewed on; a moved
+    // origin/main (e.g. a sibling merge fetched locally) forces a fresh review.
+    baseSha = runGit(["rev-parse", "--verify", "--quiet", "origin/main"], repoDir);
     if (!headSha) {
       const ref = sourceRef === "HEAD" ? "HEAD" : sourceRef;
       headSha = runGit(["rev-parse", "--verify", `${ref}^{commit}`], repoDir);
@@ -205,11 +210,11 @@ function gateMainChange({ repoDir, sourceRef, sourceSha, nowMs, runGit }) {
   } catch (error) {
     return proofRequirement(headSha, riskDescription, `Claude proof could not be parsed: ${error?.message || error}`);
   }
-  if (!claudeProofValid(proof, headSha, nowMs)) {
+  if (!claudeProofValid(proof, headSha, nowMs, baseSha)) {
     return proofRequirement(
       headSha,
       riskDescription,
-      "Claude proof is stale, future-dated, bound to a different SHA, has the wrong verdict/ran key, or is otherwise invalid."
+      "Claude proof is stale, future-dated, bound to a different HEAD or a different origin/main base, has the wrong verdict/ran key, or is otherwise invalid."
     );
   }
 
