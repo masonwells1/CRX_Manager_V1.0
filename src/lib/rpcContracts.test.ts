@@ -1343,6 +1343,7 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   // added to src/types/supabase.ts but never classified here, which left main RED for all sessions.
   'apply_credit_memo_to_invoice',
   'apply_remaining_prepayments',
+  'apply_write_off',
   'approve_return',
   'batch_apply_all_prepayments',
   'batch_apply_prepayments',
@@ -1418,6 +1419,7 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   'save_blend_recipe',
   'save_blend_ticket',
   'save_customer',
+  'save_field',
   'save_invoice',
   'save_job',
   'save_job_applied_record',
@@ -1434,6 +1436,7 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   'void_commission_payment',
   'void_delivery',
   'void_invoice',
+  'void_order',
   'void_payment',
   'void_vendor_bill',
 ];
@@ -1444,10 +1447,7 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
  * move it from this list to MUTATING_RPCS_WITH_IDEMPOTENCY above.
  */
 const MUTATING_RPCS_MISSING_IDEMPOTENCY: string[] = [
-  'apply_write_off',
-  'save_field',
   'update_blend_ticket_billing_status',
-  'void_order',
 ];
 
 describe('Idempotency Key Coverage', () => {
@@ -1465,10 +1465,10 @@ describe('Idempotency Key Coverage', () => {
     expect(unique.size).toBe(MUTATING_RPCS_MISSING_IDEMPOTENCY.length);
   });
 
-  it('missing list is small and shrinking (currently 4)', () => {
+  it('missing list is small and shrinking (currently 1)', () => {
     // If you added idempotency to one of the missing RPCs, update both lists
     // and lower this number. The goal is zero.
-    expect(MUTATING_RPCS_MISSING_IDEMPOTENCY.length).toBeLessThanOrEqual(4);
+    expect(MUTATING_RPCS_MISSING_IDEMPOTENCY.length).toBeLessThanOrEqual(1);
   });
 
   it('no RPC appears in both lists', () => {
@@ -1678,8 +1678,11 @@ describe('Idempotency BODY verification (reads migration SQL)', () => {
 // classified — so the guardrail can no longer stay green through a stale list.
 // -------------------------------------------------------------------------
 
-/** RPC names whose generated Args include p_idempotency_key. */
-function generatedRpcsDeclaringIdempotencyKey(): Set<string> {
+type GeneratedRpcShape = { name: string; source: string };
+type MigrationFunctionDefinition = { body: string; definition: string; fileName: string };
+
+/** Current RPC names and Args blocks from the generated Supabase types. */
+function generatedRpcShapes(): GeneratedRpcShape[] {
   const supabaseTypesPath = join(
     dirname(fileURLToPath(import.meta.url)),
     '..',
@@ -1695,14 +1698,166 @@ function generatedRpcsDeclaringIdempotencyKey(): Set<string> {
   const marks: { name: string; idx: number }[] = [];
   let m: RegExpExecArray | null;
   while ((m = nameRe.exec(block))) marks.push({ name: m[1], idx: m.index });
-  const out = new Set<string>();
+  const out: GeneratedRpcShape[] = [];
   for (let i = 0; i < marks.length; i++) {
     const s = marks[i].idx;
     const e = i + 1 < marks.length ? marks[i + 1].idx : block.length;
-    if (/p_idempotency_key\??:/.test(block.slice(s, e))) out.add(marks[i].name);
+    out.push({ name: marks[i].name, source: block.slice(s, e) });
   }
   return out;
 }
+
+/** RPC names whose generated Args include p_idempotency_key. */
+function generatedRpcsDeclaringIdempotencyKey(): Set<string> {
+  return new Set(
+    generatedRpcShapes()
+      .filter(({ source }) => /p_idempotency_key\??:/.test(source))
+      .map(({ name }) => name)
+  );
+}
+
+/**
+ * Build the current disk-side function inventory from migration history.
+ * Later definitions replace earlier definitions with the same name, matching
+ * PostgreSQL's CREATE OR REPLACE behavior closely enough for the non-overloaded
+ * application RPCs this guard covers. Intersecting this with generated types
+ * removes dropped functions and trigger-only helpers from the client RPC set.
+ */
+function latestMigrationFunctions(): Map<string, MigrationFunctionDefinition> {
+  const latest = new Map<string, MigrationFunctionDefinition>();
+  const signature = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:public\.)?"?([a-z_][a-z0-9_]*)"?\s*\(/gi;
+  for (const file of getMigrationFiles()) {
+    let match: RegExpExecArray | null;
+    while ((match = signature.exec(file.content))) {
+      const after = file.content.slice(match.index);
+      const nextDefinition = after.slice(match[0].length).search(/\bCREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\b/i);
+      const definition = nextDefinition === -1
+        ? after
+        : after.slice(0, match[0].length + nextDefinition);
+      const bodyMatch = definition.match(/\bAS\s+\$([A-Za-z_]*)\$([\s\S]*?)\$\1\$/i);
+      if (bodyMatch) {
+        latest.set(match[1], {
+          body: bodyMatch[2],
+          definition,
+          fileName: file.name,
+        });
+      }
+    }
+  }
+  return latest;
+}
+
+function latestMigrationFunctionBodies(): Map<string, string> {
+  return new Map(
+    [...latestMigrationFunctions()].map(([name, value]) => [name, value.body]),
+  );
+}
+
+function stripSqlComments(body: string): string {
+  return body
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/--[^\r\n]*/g, ' ');
+}
+
+/** Direct data-changing statements. Transaction/control keywords are excluded. */
+function functionBodyMutates(body: string): boolean {
+  const sql = stripSqlComments(body);
+  return /\b(?:INSERT\s+INTO|UPDATE\s+(?:ONLY\s+)?(?:public\.)?[a-z_"]|DELETE\s+FROM|MERGE\s+INTO|TRUNCATE\s+(?:TABLE\s+)?)/i.test(sql);
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** Direct DML plus wrappers that call another discovered mutator. */
+function transitiveMutatingFunctionNames(bodies: Map<string, string>): Set<string> {
+  const mutators = new Set(
+    [...bodies].filter(([, body]) => functionBodyMutates(body)).map(([name]) => name),
+  );
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const [name, body] of bodies) {
+      if (mutators.has(name)) continue;
+      const sql = stripSqlComments(body);
+      const callsKnownMutator = [...mutators].some((mutator) =>
+        new RegExp(`\\b${escapeRegExp(mutator)}\\s*\\(`, 'i').test(sql),
+      );
+      if (callsKnownMutator) {
+        mutators.add(name);
+        changed = true;
+      }
+    }
+  }
+  return mutators;
+}
+
+function registryMigrationHighWater(): string {
+  const registryPath = join(
+    dirname(fileURLToPath(import.meta.url)),
+    '..',
+    '..',
+    '.claude',
+    'schema-registry.json'
+  );
+  const registry = JSON.parse(readFileSync(registryPath, 'utf8')) as {
+    _meta?: { migrations_high_water?: string };
+  };
+  return registry._meta?.migrations_high_water || '';
+}
+
+/**
+ * Generated RPCs plus mutators introduced after the generated schema snapshot.
+ * The latter closes the normal pre-apply gap where a PR migration exists before
+ * src/types/supabase.ts can truthfully be regenerated from production.
+ */
+function generatedMutatingRpcInventory(): Set<string> {
+  const generatedNames = new Set(generatedRpcShapes().map(({ name }) => name));
+  const functions = latestMigrationFunctions();
+  const mutators = transitiveMutatingFunctionNames(latestMigrationFunctionBodies());
+  const highWater = registryMigrationHighWater();
+  return new Set([...mutators].filter((name) => {
+    const timestamp = functions.get(name)?.fileName.match(/^\d{14}/)?.[0] || '';
+    return generatedNames.has(name) || (timestamp !== '' && timestamp > highWater);
+  }));
+}
+
+const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
+  'reverse_application_record',
+  'stamp_job_printed',
+]);
+
+/**
+ * Discovered mutating RPCs for which replay safety does not use p_idempotency_key.
+ * Every exemption needs a concrete mechanism/reason. This is intentionally
+ * separate from the missing-key backlog: an ordinary business mutator belongs
+ * in MUTATING_RPCS_MISSING_IDEMPOTENCY and must eventually be fixed.
+ */
+const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
+  _insert_commissions_for_job: 'internal helper; caller owns idempotency and direct EXECUTE is revoked',
+  _insert_commissions_for_order: 'internal helper; caller owns idempotency and direct EXECUTE is revoked',
+  _reverse_credit_memo_application: 'internal helper called only by idempotent credit-memo reversal RPCs',
+  _sync_job_holds: 'internal convergent hold-sync helper; direct client EXECUTE is revoked',
+  _sync_planned_holds: 'internal convergent hold-sync helper called within parent transactions',
+  _sync_quote_job_reservations: 'internal convergent reservation-sync helper called by parent RPCs',
+  auto_expire_quotes: 'service-role maintenance sets only currently-expirable quote statuses',
+  check_idempotency: 'idempotency infrastructure helper; mutation only purges an expired key',
+  check_rate_limit: 'rate-limit counter intentionally records every invocation, including retries',
+  check_remainder_reminders: 'maintenance reminder sweep uses persisted sent markers to deduplicate',
+  check_unpriced_orders: 'cron reminder sweep uses persisted reminder and escalation sent markers',
+  mark_overdue_invoices: 'service-role maintenance updates only invoices currently eligible as overdue',
+  recompute_job_applied_acres: 'trigger-only derived-total recomputation; direct client EXECUTE is revoked',
+  reconcile_prepay_balances: 'convergent repair sets balances to recomputed ledger truth',
+  refresh_watchdog_flags: 'convergent watchdog rebuild deduplicates flags by persisted natural key',
+  release_expired_quote_holds: 'maintenance releases only holds that remain in the expired state',
+  reserve_job_inventory: 'frontend-callable wrapper over rebuild-from-scratch _sync_job_holds; replays converge and return current shortfalls',
+  retry_failed_notifications: 'service-role retry worker advances persisted failed-notification state',
+  run_weekly_db_backup: 'cron-only backup routine; EXECUTE is revoked from anon and authenticated',
+  run_data_integrity_sweep: 'convergent integrity repair recomputes current invariant state',
+  run_morning_notification_checks: 'cron sweep has persisted per-recipient notification deduplication',
+  save_idempotency: 'idempotency infrastructure helper that stores the parent operation result',
+  settle_applied_record_acres: 'trigger-only derived-acre recomputation; direct client EXECUTE is revoked',
+};
 
 /**
  * DATED BACKLOG (2026-07-10): RPCs that declare p_idempotency_key in the generated
@@ -1739,6 +1894,76 @@ const IDEM_PARAM_UNTRIAGED_BASELINE = new Set<string>([
 ]);
 
 describe('Idempotency coverage drift (generated-types driven, fail-closed)', () => {
+  it('classifies wrappers that mutate only by calling another function', () => {
+    const syntheticBodies = new Map([
+      ['internal_writer', 'BEGIN INSERT INTO public.example(id) VALUES (1); END'],
+      ['client_wrapper', 'BEGIN PERFORM internal_writer(); END'],
+      ['pure_reader', 'BEGIN RETURN QUERY SELECT 1; END'],
+    ]);
+    expect([...transitiveMutatingFunctionNames(syntheticBodies)].sort()).toEqual([
+      'client_wrapper',
+      'internal_writer',
+    ]);
+  });
+
+  it('every generated direct or indirect mutating RPC is classified even when it omits p_idempotency_key', () => {
+    const mutators = generatedMutatingRpcInventory();
+    const declaresKey = generatedRpcsDeclaringIdempotencyKey();
+    const classified = new Set([
+      ...MUTATING_RPCS_WITH_IDEMPOTENCY,
+      ...MUTATING_RPCS_MISSING_IDEMPOTENCY,
+      ...MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY,
+      ...Object.keys(MUTATOR_INVENTORY_EXEMPT),
+    ]);
+    const unclassified = [...mutators]
+      .filter((rpc) => !declaresKey.has(rpc) && !classified.has(rpc))
+      .sort();
+
+    // A parser regression must not turn the inventory empty and create a false green.
+    expect(mutators.size).toBeGreaterThanOrEqual(100);
+
+    // This is the Section 6 escape-class guard: a new function that mutates
+    // directly or by calling a discovered mutating helper and
+    // omits p_idempotency_key is still discovered from its migration body and
+    // fails here until explicitly classified. Never baseline a business mutator
+    // as exempt merely to make this test green.
+    expect(unclassified).toEqual([]);
+  });
+
+  it('migration-only idempotent RPCs are explicit and really declare the key', () => {
+    const generatedNames = new Set(generatedRpcShapes().map(({ name }) => name));
+    const functions = latestMigrationFunctions();
+    const stale = [...MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY].filter((rpc) => {
+      const definition = functions.get(rpc)?.definition || '';
+      return generatedNames.has(rpc) || !/p_idempotency_key\s+text/i.test(definition);
+    });
+    expect(stale).toEqual([]);
+  });
+
+  it('mutator inventory exemptions are current, explicit, and non-empty', () => {
+    const mutators = generatedMutatingRpcInventory();
+    const declaresKey = generatedRpcsDeclaringIdempotencyKey();
+    const stale = Object.keys(MUTATOR_INVENTORY_EXEMPT)
+      .filter((rpc) => !mutators.has(rpc) || declaresKey.has(rpc));
+    const vague = Object.entries(MUTATOR_INVENTORY_EXEMPT)
+      .filter(([, reason]) => reason.trim().length < 25)
+      .map(([rpc]) => rpc);
+    expect(stale).toEqual([]);
+    expect(vague).toEqual([]);
+  });
+
+  it('missing-idempotency backlog remains present and keyless in generated types', () => {
+    const generatedNames = new Set(generatedRpcShapes().map(({ name }) => name));
+    const declaresKey = generatedRpcsDeclaringIdempotencyKey();
+    const stale = MUTATING_RPCS_MISSING_IDEMPOTENCY
+      // Some live-confirmed backlog bodies are not reconstructable from the
+      // consolidated disk migrations, so generated existence/Args are the
+      // honest deterministic check here.
+      .filter((rpc) => !generatedNames.has(rpc) || declaresKey.has(rpc))
+      .sort();
+    expect(stale).toEqual([]);
+  });
+
   it('save_job_applied_record declares p_idempotency_key in the generated types (regression lock for Section 6 HIGH-1)', () => {
     expect(generatedRpcsDeclaringIdempotencyKey().has('save_job_applied_record')).toBe(true);
     expect(MUTATING_RPCS_WITH_IDEMPOTENCY).toContain('save_job_applied_record');

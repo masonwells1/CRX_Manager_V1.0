@@ -28,19 +28,20 @@ const BUG_CLASSES = [
 
 // ===========================================================================
 // KNOWN — already found + dispositioned by the 2026-06-15/16 nightly-debug
-// mission, or accepted-by-design. Finders DROP these (report only NEW signal).
+// mission, or accepted-by-design. Re-verify these leads; never blindly suppress them.
 // Sourced from docs/audits/nightly-debug/{LEDGER,accepted-findings}.json.
 // ===========================================================================
 const KNOWN_DROP = [
-  'ACCEPTED BY DESIGN (never report): profile_public_view uses SECURITY DEFINER semantics by design; the ~53 anon-executable SECURITY DEFINER functions are accepted inert grant-debt (each self-gates on auth.uid()/require_admin as its first statement); commissions.commission_amount is numeric dollars by design; reportPdf.ts columnStyles uses the one allowed `any`; customer RLS is intentionally lower-bound-only; the leaked-password toggle is an owner dashboard item; invoices has NO order_id-OR-blend CHECK by design (RPC convention; credit memos exempt).',
-  'ALREADY FIXED LIVE by nightly-debug (do NOT re-report): save_quote canonical idempotency + transition-map trim (20260616204400); void_delivery canonical idempotency rich-replay (20260616201800); blend-ticket + field-app invoice_created audit rows (20260616191740); delete_invoices admin-only audited soft-delete (20260617031416); the invoice paid-status dead-end guard (20260616120604); allocate_payment sum<=total guard (20260616121105); order_shares aggregate-100% guard (20260616121521); quote terminal-not-drawn \'expired\' guard (20260616115308); create_quick_delivery stamps invoice.delivery_id; complete_delivery partial re-bill joins on order_item_id; void_order logs void_delivery_reversal; cancel_delivery prebook-release + lock-order-before-quick-cancel; update_order_items same-product per-line profit/margin refresh (20260617123503); blend-ticket link/unlink actor bound to auth.uid() (a3ba49c); commission recompute on order-item edit (4b93cdc).',
-  'KNOWN-PARKED / KNOWN-DEFERRED (do NOT re-surface as new — reference the artifact if you find a NEW angle): delivery_items terminal-states-unlocked lock (PARKED-05, folded into update_order_items rewrite); create_split_invoices_from_order multi-field per-line rounding (needs field-aware redesign, dormant on live); draw_down_quote weighted-avg price is an accepted v1 simplification; create_prepay_credit was DROPPED live 2026-07-03 (mig 20260702180000) — do not report it as unused OR as missing; the freeform-vs-SCREAMING_SNAKE auth-error token sweep is a deferred owner decision.',
+  'PRIOR DISPOSITIONS TO RE-VERIFY, NOT SUPPRESS: profile_public_view uses SECURITY DEFINER semantics by design; the ~53 anon-executable SECURITY DEFINER functions were accepted inert grant-debt (each was expected to self-gate on auth.uid()/require_admin); commissions.commission_amount is numeric dollars by design; reportPdf.ts columnStyles had one allowed `any`; customer RLS was intentionally lower-bound-only; the leaked-password toggle was an owner dashboard item; invoices had no order_id-OR-blend CHECK by design (RPC convention; credit memos exempt). Re-read current evidence and report any drift or invalidated assumption.',
+  'PRIOR FIXES TO RE-VERIFY: save_quote canonical idempotency + transition-map trim (20260616204400); void_delivery canonical idempotency rich-replay (20260616201800); blend-ticket + field-app invoice_created audit rows (20260616191740); delete_invoices admin-only audited soft-delete (20260617031416); the invoice paid-status dead-end guard (20260616120604); allocate_payment sum<=total guard (20260616121105); order_shares aggregate-100% guard (20260616121521); quote terminal-not-drawn \'expired\' guard (20260616115308); create_quick_delivery stamps invoice.delivery_id; complete_delivery partial re-bill joins on order_item_id; void_order logs void_delivery_reversal; cancel_delivery prebook-release + lock-order-before-quick-cancel; update_order_items same-product per-line profit/margin refresh (20260617123503); blend-ticket link/unlink actor bound to auth.uid() (a3ba49c); commission recompute on order-item edit (4b93cdc). Confirm current code and reopen regressions or incomplete fixes with current evidence.',
+  'PRIOR PARKED / DEFERRED DECISIONS TO RE-VERIFY: delivery_items terminal-states-unlocked lock (PARKED-05, folded into update_order_items rewrite); create_split_invoices_from_order multi-field per-line rounding (needs field-aware redesign, dormant on live); draw_down_quote weighted-avg price is an accepted v1 simplification; create_prepay_credit was dropped live 2026-07-03 (mig 20260702180000); the freeform-vs-SCREAMING_SNAKE auth-error token sweep is a deferred owner decision. Reference the prior artifact, but report current drift, activation, invalidated assumptions, or a materially new risk angle.',
 ].join('\n')
 
 const PREAMBLE = [
   'You are hunting REAL bugs and flawed logic in the CRX Manager codebase (React 18 + TypeScript + Vite + Supabase + Tailwind) at the repo root of THIS worktree. It is a production agricultural-retail ERP. Money is stored as bigint cents (display ÷100).',
   '',
   'GROUND TRUTH: Use the actual repo on disk AND the LIVE Supabase database (production project id rhyzpcqhnizqbxphqdkr). The Supabase MCP tools are available — load them with ToolSearch (e.g. query "execute_sql"). You MAY run read-only SQL (SELECT, pg_catalog, information_schema, pg_get_functiondef) to ground every finding. The live DB reflects `main`; this worktree is based on `main`, so code and live DB are coherent.',
+  'EVIDENCE STATUS: Return executionStatus=BLOCKED if any required repo or live-DB source is unavailable. An empty findings array may be VERIFIED only after the requested sources ran; summarize them concretely in evidenceSummary.',
   '',
   'HARD RULES (do not violate):',
   '- READ-ONLY. NEVER call apply_migration. NEVER run mutating SQL (no INSERT/UPDATE/DELETE/DDL). SELECT + introspection only.',
@@ -52,7 +53,7 @@ const PREAMBLE = [
   'THE 8 BUG CLASSES YOU ARE HUNTING (find NEW instances of these — this is the whole point):',
   BUG_CLASSES,
   '',
-  'DO NOT RE-REPORT THE KNOWN SET:',
+  'PRIOR DISPOSITIONS — RE-VERIFY, DO NOT BLINDLY SUPPRESS:',
   KNOWN_DROP,
   '',
   'For each finding also set:',
@@ -64,6 +65,8 @@ const FINDINGS_SCHEMA = {
   type: 'object',
   additionalProperties: false,
   properties: {
+    executionStatus: { type: 'string', enum: ['VERIFIED', 'BLOCKED'] },
+    evidenceSummary: { type: 'string', description: 'Concrete files/queries checked, or the exact required-source blocker.' },
     dimension: { type: 'string' },
     summary: { type: 'string', description: 'One short paragraph: what you checked and the overall health of this subsystem.' },
     findings: {
@@ -88,19 +91,66 @@ const FINDINGS_SCHEMA = {
       },
     },
   },
-  required: ['dimension', 'summary', 'findings'],
+  required: ['executionStatus', 'evidenceSummary', 'dimension', 'summary', 'findings'],
 }
 
 const VERDICT_SCHEMA = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    isReal: { type: 'boolean', description: 'true ONLY if independently confirmed with concrete evidence.' },
-    revisedSeverity: { type: 'string', enum: ['BLOCKER', 'HIGH', 'MEDIUM', 'LOW', 'FALSE_POSITIVE'] },
+    status: { type: 'string', enum: ['VERIFIED', 'REFUTED', 'UNVERIFIED'], description: 'Use UNVERIFIED when access, tools, or evidence are incomplete.' },
+    revisedSeverity: { type: 'string', enum: ['BLOCKER', 'HIGH', 'MEDIUM', 'LOW', 'FALSE_POSITIVE', 'UNVERIFIED'] },
     reasoning: { type: 'string' },
     verifiedAgainst: { type: 'string', description: 'Exactly what you checked — the read-only SQL you ran, or the file:line you read.' },
   },
-  required: ['isReal', 'revisedSeverity', 'reasoning', 'verifiedAgainst'],
+  required: ['status', 'revisedSeverity', 'reasoning', 'verifiedAgainst'],
+}
+
+const REQUIRED_FINDING_FIELDS = ['title', 'dedupeKey', 'bugClass', 'severity', 'fixKind', 'area', 'file', 'evidence', 'impact', 'recommendation', 'confidence']
+
+function isNonEmptyString(value) {
+  return typeof value === 'string' && value.trim().length > 0
+}
+
+function isCompleteReview(review) {
+  return Boolean(
+    review &&
+      review.executionStatus === 'VERIFIED' &&
+      isNonEmptyString(review.evidenceSummary) &&
+      Array.isArray(review.findings) &&
+      isNonEmptyString(review.summary)
+  )
+}
+
+function isCompleteFinding(finding) {
+  return Boolean(finding && REQUIRED_FINDING_FIELDS.every((field) => isNonEmptyString(finding[field])))
+}
+
+function normalizeVerdict(verdict) {
+  if (
+    !verdict ||
+    !['VERIFIED', 'REFUTED', 'UNVERIFIED'].includes(verdict.status) ||
+    !isNonEmptyString(verdict.reasoning) ||
+    !isNonEmptyString(verdict.verifiedAgainst) ||
+    (verdict.status === 'VERIFIED' && verdict.revisedSeverity === 'FALSE_POSITIVE') ||
+    (verdict.status === 'VERIFIED' && verdict.revisedSeverity === 'UNVERIFIED') ||
+    (verdict.status === 'REFUTED' && verdict.revisedSeverity !== 'FALSE_POSITIVE') ||
+    (verdict.status === 'UNVERIFIED' && verdict.revisedSeverity !== 'UNVERIFIED')
+  ) {
+    return {
+      status: 'UNVERIFIED',
+      revisedSeverity: null,
+      reasoning: 'Verifier returned no structured verdict, contradictory fields, or omitted required evidence.',
+      verifiedAgainst: 'No complete verifier evidence returned.',
+      malformed: true,
+      isReal: null,
+    }
+  }
+
+  return {
+    ...verdict,
+    isReal: verdict.status === 'VERIFIED' ? true : verdict.status === 'REFUTED' ? false : null,
+  }
 }
 
 // ===========================================================================
@@ -189,9 +239,17 @@ const A = (() => {
   if (typeof args === 'string') { try { return JSON.parse(args) } catch { return {} } }
   return args
 })()
+const HAS_ONLY = Object.prototype.hasOwnProperty.call(A, 'only')
+const INVALID_ONLY = HAS_ONLY && !Array.isArray(A.only)
+const REQUESTED_ONLY = Array.isArray(A.only) && A.only.length ? [...new Set(A.only)] : []
+const UNKNOWN_ONLY = REQUESTED_ONLY.filter((key) => !DIMENSIONS.some((d) => d.key === key))
+const HAS_PHASE = Object.prototype.hasOwnProperty.call(A, 'phase') && A.phase !== undefined && A.phase !== null
+const KNOWN_PHASES = new Set(DIMENSIONS.map((d) => String(d.phase)))
+const INVALID_PHASE = !REQUESTED_ONLY.length && HAS_PHASE && !KNOWN_PHASES.has(String(A.phase))
 const SELECTED = (() => {
-  if (Array.isArray(A.only) && A.only.length) return DIMENSIONS.filter((d) => A.only.includes(d.key))
-  if (A.phase === 1 || A.phase === 2 || A.phase === '1' || A.phase === '2') return DIMENSIONS.filter((d) => String(d.phase) === String(A.phase))
+  if (INVALID_ONLY || INVALID_PHASE) return []
+  if (REQUESTED_ONLY.length) return DIMENSIONS.filter((d) => REQUESTED_ONLY.includes(d.key))
+  if (HAS_PHASE) return DIMENSIONS.filter((d) => String(d.phase) === String(A.phase))
   return DIMENSIONS.filter((d) => d.phase === 1) // default: Phase 1 (billing engine)
 })()
 
@@ -199,7 +257,7 @@ function verifyPrompt(d, f) {
   return [
     PREAMBLE,
     '',
-    'ADVERSARIAL VERIFICATION. A prior finder (subsystem: ' + d.key + ') reported the finding below. Your job is to REFUTE it. Default to isReal=false unless you independently confirm it with hard evidence against the CURRENT code on disk and the LIVE database (read-only).',
+    'ADVERSARIAL VERIFICATION. A prior finder (subsystem: ' + d.key + ') reported the finding below. Your job is to challenge it against the CURRENT code on disk and the LIVE database (read-only). REFUTED requires concrete counter-evidence; missing or inconclusive evidence is UNVERIFIED.',
     '',
     'FINDING:',
     '- Title: ' + f.title,
@@ -215,9 +273,9 @@ function verifyPrompt(d, f) {
     '2. Is it already mitigated — a trigger, an RLS policy, a PreToolUse hook, a CHECK constraint, a deployed-vs-disk difference, a documented ACCEPTED exception, or already-fixed-live per the KNOWN set above?',
     '3. Is the severity calibrated? Is the bug actually REACHABLE (or is the subsystem dormant — 0 live rows — which caps severity)?',
     '',
-    'Set isReal=true ONLY with concrete evidence. Use revisedSeverity=FALSE_POSITIVE if refuted. In verifiedAgainst, state exactly what you ran or read.',
+    'Return status=VERIFIED only with concrete evidence. Return REFUTED + revisedSeverity=FALSE_POSITIVE only with concrete counter-evidence. Return status=UNVERIFIED + revisedSeverity=UNVERIFIED when access, tools, or evidence are incomplete. In verifiedAgainst, state exactly what you ran or read.',
     '',
-    'IMPORTANT: finish by returning your verdict via the StructuredOutput tool — never prose-only. If still uncertain, return isReal=false / FALSE_POSITIVE rather than stopping.',
+    'IMPORTANT: finish by returning your verdict via the StructuredOutput tool — never prose-only. Uncertainty is UNVERIFIED, never REFUTED or FALSE_POSITIVE.',
   ].join('\n')
 }
 
@@ -235,27 +293,84 @@ const results = await pipeline(
       phase: 'Find',
       schema: FINDINGS_SCHEMA,
     }),
-  (review, d) =>
-    parallel(
-      ((review && review.findings) || []).map((f) => () =>
+  (review, d) => {
+    if (!isCompleteReview(review)) {
+      const blockedReason = review?.executionStatus === 'BLOCKED'
+        ? `Finder reported blocked evidence: ${review.evidenceSummary || review.summary || 'unspecified blocker'}`
+        : 'Finder returned no VERIFIED evidence status or omitted evidence/findings/summary.'
+      const partialFindings = Array.isArray(review?.findings)
+        ? review.findings.map((f) => ({
+            ...f,
+            dimension: d.key,
+            phase: d.phase,
+            status: 'UNVERIFIED',
+            reason: `${blockedReason} Partial finding preserved without adversarial verification.`,
+          }))
+        : []
+      return [{
+        dimension: d.key,
+        phase: d.phase,
+        status: 'BLOCKED',
+        reason: blockedReason,
+      }, ...partialFindings]
+    }
+
+    const malformed = review.findings
+      .filter((f) => !isCompleteFinding(f))
+      .map((f) => ({
+        ...f,
+        dimension: d.key,
+        phase: d.phase,
+        status: 'UNVERIFIED',
+        reason: 'Finder omitted required location/evidence fields.',
+      }))
+
+    return parallel(
+      review.findings.filter(isCompleteFinding).map((f) => () =>
         agent(verifyPrompt(d, f), {
           label: 'verify:' + d.key + ':' + f.severity,
           phase: 'Verify',
           schema: VERDICT_SCHEMA,
-        }).then((v) => ({
-          ...f,
-          dimension: d.key,
-          phase: d.phase,
-          verdict: v,
-          finalSeverity: v && v.revisedSeverity && v.revisedSeverity !== 'FALSE_POSITIVE' ? v.revisedSeverity : f.severity,
-        }))
+        }).then((v) => {
+          const verdict = normalizeVerdict(v)
+          return {
+            ...f,
+            dimension: d.key,
+            phase: d.phase,
+            status: verdict.status,
+            verdict,
+            finalSeverity: verdict.status === 'VERIFIED' && verdict.revisedSeverity ? verdict.revisedSeverity : f.severity,
+          }
+        })
       )
-    )
+    ).then((verified) => [...verified, ...malformed])
+  }
 )
 
-const all = results.flat().filter(Boolean)
-const confirmed = all.filter((f) => f.verdict && f.verdict.isReal)
-const refuted = all.filter((f) => !f.verdict || !f.verdict.isReal)
+const selectionBlocked = UNKNOWN_ONLY.map((key) => ({
+  dimension: String(key),
+  phase: 'Selection',
+  status: 'BLOCKED',
+  reason: `Unknown requested subsystem: ${String(key)}`,
+}))
+if (INVALID_ONLY) selectionBlocked.push({
+  dimension: 'only',
+  phase: 'Selection',
+  status: 'BLOCKED',
+  reason: 'Invalid subsystem selection: args.only must be an array.',
+})
+if (INVALID_PHASE) selectionBlocked.push({
+  dimension: 'phase',
+  phase: 'Selection',
+  status: 'BLOCKED',
+  reason: `Unknown requested phase: ${String(A.phase)}`,
+})
+const all = [...selectionBlocked, ...results.flat().filter(Boolean)]
+const confirmed = all.filter((f) => f.status === 'VERIFIED')
+const refuted = all.filter((f) => f.status === 'REFUTED')
+const unverified = all.filter((f) => f.status === 'UNVERIFIED')
+const blocked = all.filter((f) => f.status === 'BLOCKED')
+const overallStatus = blocked.length || unverified.length ? 'BLOCKED' : 'VERIFIED'
 
 const order = { BLOCKER: 0, HIGH: 1, MEDIUM: 2, LOW: 3 }
 confirmed.sort((a, b) => (order[a.finalSeverity] ?? 9) - (order[b.finalSeverity] ?? 9))
@@ -274,12 +389,23 @@ log(
     bySeverity.BLOCKER + ' BLOCKER / ' + bySeverity.HIGH + ' HIGH / ' +
     bySeverity.MEDIUM + ' MEDIUM / ' + bySeverity.LOW + ' LOW); ' +
     autoFixable + ' auto-fixable (green), ' + parked + ' need a migration/edge-fn/data change (park); ' +
-    refuted.length + ' refuted.'
+    refuted.length + ' refuted; ' + unverified.length + ' unverified; ' + blocked.length + ' blocked.'
 )
+
+log('Reviewer-independence limitation: finder and verifier agents use the same workflow runtime/model family unless the caller routes them differently.')
 
 return {
   subsystemsRun: SELECTED.map((d) => d.key),
-  counts: { confirmed: confirmed.length, refuted: refuted.length, bySeverity, autoFixable, parked },
+  overallStatus,
+  complete: overallStatus === 'VERIFIED',
+  clean: overallStatus === 'VERIFIED' && confirmed.length === 0,
+  counts: { confirmed: confirmed.length, refuted: refuted.length, unverified: unverified.length, blocked: blocked.length, bySeverity, autoFixable, parked },
   confirmed,
   refuted,
+  unverified,
+  blocked,
+  reviewerIndependence: {
+    independentModelFamilies: false,
+    limitation: 'Finder and verifier agents may use the same model family; verdicts are adversarial but not cross-family independent.',
+  },
 }

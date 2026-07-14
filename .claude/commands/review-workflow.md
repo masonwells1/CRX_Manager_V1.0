@@ -36,18 +36,25 @@ Invoke the `review-workflow` Workflow (no args needed). It runs four layers conc
 - **Layer D — Business-logic invariant sweep** (money-as-cents, RLS on every table, idempotency, SECURITY DEFINER `search_path`, immutability, no overload collisions, advisors, `updated_at` on the wrong tables).
 
 It returns:
-`{ confirmed[], refuted[], lowerSeverity[], verifiedSafe[], layers[], counts: { blocker, high, med, low } }`.
+`{ confirmed[], refuted[], unverified[], blocked[], lowerSeverity[], verifiedSafe[], layers[], overallStatus, complete, clean, counts }`.
+
+Each finder layer must explicitly return `executionStatus=VERIFIED` plus a non-empty `evidenceSummary`, or `executionStatus=BLOCKED` with the unavailable source named. A schema-shaped empty result without that proof is incomplete, not clean.
 
 - `confirmed` — BLOCKER/HIGH findings that survived adversarial verification. These go in the report.
 - `refuted` — flagged but disproven on re-check. These go in the report's **"Verified safe"** section (so the next review doesn't re-chase them).
-- `lowerSeverity` — MED/LOW reported as-is.
+- `lowerSeverity` — MED/LOW reported once in their severity bucket and marked `UNVERIFIED`; because this workflow does not adversarially verify them, any entry prevents a clean/complete verdict.
+- `unverified` — findings whose required evidence or verifier output is incomplete. These stay visible and never count as refuted or clean.
+- `blocked` — missing/malformed review layers or unavailable required evidence. Any entry forces `overallStatus=BLOCKED`, `complete=false`, and `clean=false`.
+
+Only `VERIFIED` and evidence-backed `REFUTED` are terminal evidence states. A missing layer, missing verifier, timeout, tool denial, malformed structured response, or uncited finding is `UNVERIFIED`/`BLOCKED`; it must never satisfy a clean/dry/ship gate.
 - `verifiedSafe` — leads the layers self-disproved while reviewing.
 
 ## Step 2 — Synthesize
 
 De-duplicate across layers. The workflow already assigned severity and verified BLOCKER/HIGH, so:
-- Keep `confirmed` (BLOCKER/HIGH) + `lowerSeverity` (MED/LOW) as the findings.
+- Keep `confirmed` (BLOCKER/HIGH) + `lowerSeverity` (MED/LOW) as findings, and put `unverified` / `blocked` in a visible incomplete-evidence section.
 - Move `refuted` + `verifiedSafe` into the "Verified safe" section — do NOT report them as problems.
+- If `overallStatus=BLOCKED`, the report verdict must say the audit is incomplete even when `confirmed` is empty.
 - Severity definitions: **BLOCKER** = data-loss / money-correctness / RLS bypass / an entity that can get stranded (fix before building anything new). **HIGH** = real bug with a workaround. **MED** = drift/inconsistency that's safe today but will confuse later. **LOW** = docs/cosmetic.
 
 ## Step 3 — Write the report

@@ -49,7 +49,9 @@ Read `docs/audits/overnight-bug-hunt/{LEDGER.json,PHASE-PLAN.md}`. Pick the next
 ### Step 1 — Hunt (Workflow, read-only)
 Run the find+verify Workflow for this slice:
 > `Workflow({ scriptPath: ".claude/workflows/overnight-bug-hunt.js", args: { only: ["<keys>"] } })`
-It returns `confirmed` (adversarially verified) + `refuted`. **Dedupe `confirmed` against `LEDGER.json` and `accepted-findings.json`** — drop anything already seen/fixed/accepted. What remains are this cycle's candidates.
+It returns `confirmed`, `refuted`, `unverified`, `blocked`, `overallStatus`, `complete`, and `clean`. **Dedupe `confirmed` against `LEDGER.json` and `accepted-findings.json`** — drop anything already seen/fixed/accepted. What remains are this cycle's candidates. Never dedupe or discard `unverified`/`blocked`; they are incomplete evidence that must stay visible.
+
+Every finder must return `executionStatus=VERIFIED` with a concrete non-empty `evidenceSummary`, or `executionStatus=BLOCKED` naming the unavailable source. A schema-shaped empty result without that proof breaks the dry-cycle streak.
 
 ### Step 2 — CODEX FINDING-GATE (independent confirmation)
 Hand the candidate findings to Codex as an independent second model (gpt-5.5). **Always invoke Codex through the `node scripts/overnight-codex-gate.mjs` wrapper** — it rides the `Bash(node scripts/:*)` permission allow-list, so an UNATTENDED run never pauses for approval (a raw `codex exec` is NOT allow-listed and would stall the loop). The wrapper resolves the binary version-proof, runs `codex exec --sandbox read-only`, and closes stdin. Write the candidate digest to a file first, then:
@@ -95,7 +97,7 @@ Add one prevention action, strongest first: a **regression test that FAILS on th
 ### Step 7 — Ledger + report + schedule next cycle
 - Append every candidate (confirmed/refuted/fixed/parked) to `LEDGER.json` with its `dedupeKey`, tier, status, and cycle number. Update `PHASE-PLAN.md` (mark drained subsystems). Update `REPORT.md`.
 - **Self-sustain:** schedule the next cycle with `ScheduleWakeup` (delay 1200–1800s; same continuation prompt), unless a stop condition is met.
-- **Stop conditions:** (a) **3 consecutive dry cycles** (no new confirmed findings) → both phases drained; (b) it's morning (~07:00 America/Chicago) and Mason will be back; (c) Mason says stop. On stop, write the final `REPORT.md` summary and do NOT reschedule.
+- **Stop conditions:** (a) **3 consecutive complete dry cycles** (`overallStatus=VERIFIED`, `complete=true`, `clean=true`, no `unverified`/`blocked`, and no new confirmed findings) → both phases drained; (b) it's morning (~07:00 America/Chicago) and Mason will be back; (c) Mason says stop. A timeout, missing layer/verifier, skipped required gate, or unavailable live source breaks the dry-cycle streak. On stop, write the final `REPORT.md` summary and do NOT reschedule.
 
 ## Morning handoff (what Mason reads)
 

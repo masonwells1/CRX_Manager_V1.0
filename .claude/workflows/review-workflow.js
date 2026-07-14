@@ -16,12 +16,14 @@ export const meta = {
 // problems that were ALL false once someone read the code (Returns "broken",
 // /notifications "orphan", "drop get_field_geojson" would have caused an outage).
 const GROUND_RULE =
-  'TRUST NOTHING PRE-WRITTEN. The workflow map (docs/app-workflow-map.html), CLAUDE.md lifecycles, and prior docs/audits are leads to CONFIRM by reading actual code and querying the live Supabase DB — never facts. A finding with no file:line, constraint name, or migration citation does not belong in the output. Explicitly separate "verified real" from "looked suspicious but checked out fine".'
+  'TRUST NOTHING PRE-WRITTEN. The workflow map (docs/app-workflow-map.html), CLAUDE.md lifecycles, and prior docs/audits are leads to CONFIRM by reading actual code and querying the live Supabase DB — never facts. Return executionStatus=BLOCKED if any required code or live-DB evidence source is unavailable; an empty findings array is valid only with executionStatus=VERIFIED and a concrete evidenceSummary. A finding with no file:line, constraint name, or migration citation does not belong in the output. Explicitly separate "verified real" from "looked suspicious but checked out fine".'
 
 const FINDINGS = {
   type: 'object',
   additionalProperties: false,
   properties: {
+    executionStatus: { type: 'string', enum: ['VERIFIED', 'BLOCKED'] },
+    evidenceSummary: { type: 'string', description: 'Concrete files, commands, and live queries successfully checked, or the exact access blocker.' },
     findings: {
       type: 'array',
       items: {
@@ -31,10 +33,11 @@ const FINDINGS = {
           severity: { type: 'string', enum: ['BLOCKER', 'HIGH', 'MED', 'LOW'] },
           title: { type: 'string' },
           location: { type: 'string', description: 'file:line, constraint name, or migration filename' },
+          evidence: { type: 'string', description: 'Concrete code, database, or command evidence supporting the finding.' },
           detail: { type: 'string' },
           recommendation: { type: 'string' },
         },
-        required: ['severity', 'title', 'detail', 'recommendation'],
+        required: ['severity', 'title', 'location', 'evidence', 'detail', 'recommendation'],
       },
     },
     verifiedSafe: {
@@ -44,17 +47,68 @@ const FINDINGS = {
     },
     summary: { type: 'string' },
   },
-  required: ['findings', 'summary'],
+  required: ['executionStatus', 'evidenceSummary', 'findings', 'summary'],
 }
 
 const VERDICT = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    isReal: { type: 'boolean', description: 'true = genuine issue; false = refuted / false positive' },
+    status: {
+      type: 'string',
+      enum: ['VERIFIED', 'REFUTED', 'UNVERIFIED'],
+      description: 'VERIFIED = independently confirmed; REFUTED = independently disproved; UNVERIFIED = evidence was unavailable or inconclusive.',
+    },
     reasoning: { type: 'string' },
+    verifiedAgainst: { type: 'string', description: 'Exact file:line, SQL result, or command used for the verdict.' },
   },
-  required: ['isReal', 'reasoning'],
+  required: ['status', 'reasoning', 'verifiedAgainst'],
+}
+
+const NON_EMPTY_FINDING_FIELDS = ['title', 'location', 'evidence', 'detail', 'recommendation']
+
+function isNonEmptyString(value) {
+  return typeof value === 'string' && value.trim().length > 0
+}
+
+function isCompleteLayerReview(review) {
+  return Boolean(
+    review &&
+      review.executionStatus === 'VERIFIED' &&
+      isNonEmptyString(review.evidenceSummary) &&
+      Array.isArray(review.findings) &&
+      isNonEmptyString(review.summary)
+  )
+}
+
+function isCompleteFinding(finding) {
+  return Boolean(
+    finding &&
+      ['BLOCKER', 'HIGH', 'MED', 'LOW'].includes(finding.severity) &&
+      NON_EMPTY_FINDING_FIELDS.every((field) => isNonEmptyString(finding[field]))
+  )
+}
+
+function normalizeVerdict(verdict) {
+  if (
+    !verdict ||
+    !['VERIFIED', 'REFUTED', 'UNVERIFIED'].includes(verdict.status) ||
+    !isNonEmptyString(verdict.reasoning) ||
+    !isNonEmptyString(verdict.verifiedAgainst)
+  ) {
+    return {
+      status: 'UNVERIFIED',
+      reasoning: 'Verifier returned no structured verdict or omitted required evidence.',
+      verifiedAgainst: 'No complete verifier evidence returned.',
+      malformed: true,
+      isReal: null,
+    }
+  }
+
+  return {
+    ...verdict,
+    isReal: verdict.status === 'VERIFIED' ? true : verdict.status === 'REFUTED' ? false : null,
+  }
 }
 
 const LAYERS = [
@@ -126,17 +180,43 @@ const reviews = await parallel(
   )
 )
 
-const tagged = reviews
-  .map((r, i) => ({ r, layer: LAYERS[i].key }))
-  .filter((x) => x.r)
+const tagged = reviews.map((r, i) => ({ r, layer: LAYERS[i].key }))
+const blockedLayers = tagged
+  .filter((x) => !isCompleteLayerReview(x.r))
+  .map((x) => ({
+    status: 'BLOCKED',
+    layer: x.layer,
+    reason: x.r?.executionStatus === 'BLOCKED'
+      ? `Review layer reported blocked evidence: ${x.r.evidenceSummary || x.r.summary || 'unspecified blocker'}`
+      : 'Review layer returned no VERIFIED evidence status or omitted evidence/findings/summary.',
+  }))
+const completeLayers = tagged.filter((x) => isCompleteLayerReview(x.r))
+const blockedPartialFindings = tagged
+  .filter((x) => !isCompleteLayerReview(x.r) && Array.isArray(x.r?.findings))
+  .flatMap((x) => x.r.findings.map((f) => ({
+    ...f,
+    layer: x.layer,
+    status: 'UNVERIFIED',
+    reason: 'Review layer was blocked or incomplete; partial finding preserved without adversarial verification.',
+  })))
 
-const allFindings = tagged.flatMap((x) => (x.r.findings || []).map((f) => ({ ...f, layer: x.layer })))
-const verifiedSafe = tagged.flatMap((x) => (x.r.verifiedSafe || []).map((s) => ({ layer: x.layer, note: s })))
+const allLayerFindings = completeLayers.flatMap((x) => x.r.findings.map((f) => ({ ...f, layer: x.layer })))
+const malformedFindings = allLayerFindings
+  .filter((f) => !isCompleteFinding(f))
+  .map((f) => ({
+    ...f,
+    status: 'UNVERIFIED',
+    reason: 'Finder omitted a required location/evidence field; this finding was not silently dropped or refuted.',
+  }))
+const allFindings = allLayerFindings.filter(isCompleteFinding)
+const verifiedSafe = completeLayers.flatMap((x) => (x.r.verifiedSafe || []).map((s) => ({ layer: x.layer, note: s })))
 
 // Only BLOCKER + HIGH get the expensive adversarial pass — that is where false
 // positives do real damage (they pollute the report and waste a fix cycle).
 const toVerify = allFindings.filter((f) => f.severity === 'BLOCKER' || f.severity === 'HIGH')
-const lowerSeverity = allFindings.filter((f) => f.severity === 'MED' || f.severity === 'LOW')
+const lowerSeverity = allFindings
+  .filter((f) => f.severity === 'MED' || f.severity === 'LOW')
+  .map((f) => ({ ...f, status: 'UNVERIFIED', reason: 'MED/LOW findings do not receive adversarial verification in this workflow.' }))
 
 phase('Verify')
 log(`${toVerify.length} BLOCKER/HIGH finding(s) to adversarially verify; ${lowerSeverity.length} MED/LOW reported as-is.`)
@@ -149,33 +229,58 @@ const verified = await parallel(
           `A review layer flagged this ${f.severity} on CRX Manager:\n\n` +
             `Title: ${f.title}\nLocation: ${f.location || '(none given)'}\nDetail: ${f.detail}\n\n` +
             `Your job is to REFUTE it. Read the actual code and query the live DB yourself. ` +
-            `If you cannot independently confirm it is a real problem that would bite a real user, answer isReal=false. ` +
-            `Only isReal=true when you have verified it against code/DB.`,
+            `Return VERIFIED only when concrete evidence confirms a real user-facing problem, REFUTED only when concrete evidence disproves it, ` +
+            `and UNVERIFIED when tools, access, or evidence are missing. Uncertainty must never be reported as refuted.`,
           { schema: VERDICT, phase: 'Verify', label: `verify:${f.title.slice(0, 24)}#${n}` }
         )
       )
     ).then((votes) => {
-      const v = votes.filter(Boolean)
-      // Survives only if at least one skeptic still confirms it real despite trying to refute.
-      const confirmed = v.filter((x) => x.isReal).length >= 1
-      return { ...f, confirmed, votes: v }
+      const v = votes.map(normalizeVerdict)
+      // Both requested verifiers must return evidence before a finding can be
+      // refuted. A missing/malformed/inconclusive vote remains UNVERIFIED.
+      const complete = v.length === 2 && v.every((x) => !x.malformed && x.status !== 'UNVERIFIED')
+      const status = !complete ? 'UNVERIFIED' : v.some((x) => x.status === 'VERIFIED') ? 'VERIFIED' : 'REFUTED'
+      return { ...f, status, confirmed: status === 'VERIFIED', votes: v }
     })
   )
 )
 
-const confirmed = verified.filter(Boolean).filter((f) => f.confirmed)
-const refuted = verified.filter(Boolean).filter((f) => !f.confirmed)
+const verifiedResults = verified.filter(Boolean)
+const confirmed = verifiedResults.filter((f) => f.status === 'VERIFIED')
+const refuted = verifiedResults.filter((f) => f.status === 'REFUTED')
+const unverified = [
+  ...verifiedResults.filter((f) => f.status === 'UNVERIFIED'),
+  ...malformedFindings,
+  ...blockedPartialFindings,
+]
+// MED/LOW remain in their single severity bucket. They do not mean evidence
+// collection was blocked, but they do prevent the run from being called clean.
+const overallStatus = blockedLayers.length || unverified.length ? 'BLOCKED' : 'VERIFIED'
+
+log('Reviewer-independence limitation: finder and verifier agents use the same workflow runtime/model family unless the caller routes them differently.')
 
 return {
   confirmed, // verified BLOCKER/HIGH — these go in the report
   refuted, // checked and dismissed — feed into the "Verified safe" section
+  unverified, // missing/inconclusive evidence — never clean or refuted
+  blocked: blockedLayers,
   lowerSeverity, // MED/LOW reported as-is
   verifiedSafe, // leads the layers already self-disproved
   layers: LAYERS.map((l) => l.key),
+  overallStatus,
+  complete: overallStatus === 'VERIFIED',
+  clean: overallStatus === 'VERIFIED' && confirmed.length === 0 && lowerSeverity.length === 0,
+  reviewerIndependence: {
+    independentModelFamilies: false,
+    limitation: 'Finder and verifier agents may use the same model family; verdicts are adversarial but not cross-family independent.',
+  },
   counts: {
     blocker: confirmed.filter((f) => f.severity === 'BLOCKER').length,
     high: confirmed.filter((f) => f.severity === 'HIGH').length,
     med: lowerSeverity.filter((f) => f.severity === 'MED').length,
     low: lowerSeverity.filter((f) => f.severity === 'LOW').length,
+    refuted: refuted.length,
+    unverified: unverified.length,
+    blocked: blockedLayers.length,
   },
 }

@@ -104,7 +104,7 @@ The AP RPC trio (`create_vendor_bill`, `record_vendor_payment`, `void_vendor_bil
 | Rule | Why |
 |------|-----|
 | `E2E_TEST_EMAIL` + `E2E_TEST_PASSWORD` env vars are MANDATORY | Hard-coded fallback was rotated and removed (was `mason@croprxsolutions.com` / live password). Tests now throw at startup if missing. See `docs/CONTRIBUTING.md`. |
-| Pointing E2E at production requires `E2E_ALLOW_PROD=true` | `assertNotProductionWithoutOverride()` in `tests/e2e/utils/safety-guards.ts` checks `VITE_SUPABASE_URL` for the prod project ref. Production setup is currently the default — see PR-23 (BLOCKED) for staging. |
+| E2E is staging-only; production has no override | `resolveSafeE2EConfig()` requires `E2E_TARGET_ENV=staging` plus staging URL/key and categorically rejects the production project. Playwright also blocks while direct production endpoint literals remain. PR-23 staging is still BLOCKED. |
 | All E2E-created entities MUST use `[E2E]` prefix | `globalSetup` creates shared `[E2E]` fixtures, `globalTeardown` deletes anything matching the prefix. Bare entity names leak across runs and pollute prod. Reuse fixtures from `tests/e2e/fixtures/e2e-constants.ts`. |
 
 ---

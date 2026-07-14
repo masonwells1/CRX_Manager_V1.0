@@ -3,6 +3,26 @@ import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
 import { sentryVitePlugin } from '@sentry/vite-plugin';
 
+const liveSchemaTests = process.env.CRX_LIVE_SCHEMA_TESTS === 'true';
+const liveSchemaUrl = process.env.VITE_SUPABASE_URL?.trim();
+const liveSchemaServiceRoleKey =
+  process.env.CRX_LIVE_SCHEMA_SERVICE_ROLE_KEY?.trim();
+const liveSchemaProductionUrl = 'https://rhyzpcqhnizqbxphqdkr.supabase.co';
+
+// Unit tests are deliberately isolated from Supabase. A trusted live-schema
+// run must opt in explicitly and provide both credentials; otherwise a typo or
+// a missing secret could turn the live gate into a silently skipped mock run.
+if (liveSchemaTests && (!liveSchemaUrl || !liveSchemaServiceRoleKey)) {
+  throw new Error(
+    'CRX_LIVE_SCHEMA_TESTS=true requires VITE_SUPABASE_URL and CRX_LIVE_SCHEMA_SERVICE_ROLE_KEY.',
+  );
+}
+if (liveSchemaTests && liveSchemaUrl !== liveSchemaProductionUrl) {
+  throw new Error(
+    `CRX_LIVE_SCHEMA_TESTS=true must target ${liveSchemaProductionUrl}; refusing mock, staging, or unknown URLs.`,
+  );
+}
+
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [
@@ -108,11 +128,19 @@ export default defineConfig({
     environment: 'jsdom',
     include: ['src/**/*.test.{ts,tsx}'],
     setupFiles: ['src/setupTests.ts'],
-    env: {
-      NODE_ENV: 'test',
-      VITE_SUPABASE_URL: 'https://test.supabase.co',
-      VITE_SUPABASE_ANON_KEY: 'test-anon-key',
-    },
+    env: liveSchemaTests
+      ? {
+          NODE_ENV: 'test',
+          VITE_SUPABASE_URL: liveSchemaUrl!,
+          // The live schema suite reads this key from process.env directly.
+          // Never expose the service-role key through a VITE_* variable.
+          VITE_SUPABASE_ANON_KEY: 'live-schema-key-is-server-only',
+        }
+      : {
+          NODE_ENV: 'test',
+          VITE_SUPABASE_URL: 'https://test.supabase.co',
+          VITE_SUPABASE_ANON_KEY: 'test-anon-key',
+        },
     coverage: {
       provider: 'v8',
       reporter: ['text', 'text-summary', 'html'],
@@ -129,10 +157,13 @@ export default defineConfig({
       // 13.0). The gate catches regressions but never fails on current code.
       // Raise these as coverage improves; NEVER lower them.
       thresholds: {
-        lines: 21,
-        branches: 14,
-        functions: 11,
-        statements: 20,
+        // Phase 1 gauntlet ratchet: keep the floor close to the measured
+        // 2026-07-13 baseline (37.77 / 28.77 / 25.49 / 35.93) so coverage
+        // cannot nearly halve while CI remains green. Raise, never lower.
+        lines: 36,
+        branches: 27,
+        functions: 24,
+        statements: 34,
       },
     },
   },

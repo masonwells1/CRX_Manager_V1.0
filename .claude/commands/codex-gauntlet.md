@@ -86,6 +86,8 @@ If the branch has both committed and uncommitted work and Mason did not specify 
 
 ### Step 2: Evidence Gates
 
+Every required gate and reviewer must end as `VERIFIED`, `REFUTED`, `UNVERIFIED`, or `BLOCKED`. Only complete evidence can be `VERIFIED`; only a specific finding disproved with cited evidence can be `REFUTED`. Missing output, timeouts, skipped suites, permission denials, unavailable live sources, and malformed responses are `UNVERIFIED`/`BLOCKED` and can never count as clean, dry, `SHIP`, or `SHIP-WITH-FOLLOWUPS`.
+
 Inspect the diff. If it touches migrations, RPCs, RLS, money, inventory, invoices, payments, commissions, Edge Functions, or business workflow transitions, run:
 
 ```bash

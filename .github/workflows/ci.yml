@@ -78,13 +78,16 @@ jobs:
       - name: Guard-hook regression tests (safety net must not regress)
         run: npm run test:correction-guards
 
-      - name: Agent workflow and hook wiring tests
+      - name: Agent workflow truth-state and sync tests
         run: npm run test:agent-workflows
 
+      - name: RPC contract and idempotency inventory tests
+        run: npm run test:contracts
+
       - name: Run Vitest unit tests + coverage (ratchet thresholds)
-        env:
-          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
-          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+        # Unit/coverage tests deliberately use the mock Supabase values from
+        # vite.config.ts. Live schema verification stays a trusted opt-in run
+        # until a least-privilege CI credential or disposable database exists.
         run: npm run test:coverage
 
       - name: Upload coverage report
@@ -115,9 +118,11 @@ jobs:
     # TO RE-ENABLE:
     #   1. Create the `crx-manager-staging` Supabase project.
     #   2. Add GitHub secrets STAGING_SUPABASE_URL + STAGING_SUPABASE_ANON_KEY.
-    #   3. Update the `Run E2E smoke tests` step env block below to use the
-    #      STAGING_* secrets instead of VITE_SUPABASE_URL/ANON_KEY.
-    #   4. Change `if: false` back to `if: github.event_name == 'push'`.
+    #   3. Add staging-only E2E_TEST_EMAIL + E2E_TEST_PASSWORD credentials.
+    #   4. Migrate every direct production endpoint in tests/e2e to the
+    #      canonical E2E staging environment (the config blocks until then).
+    #   5. Prove the staging values pass the fail-closed Playwright config.
+    #   6. Change `if: false` back to `if: github.event_name == 'push'`.
     if: false
 
     steps:
@@ -147,8 +152,11 @@ jobs:
 
       - name: Run E2E smoke tests
         env:
-          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
-          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          E2E_TARGET_ENV: staging
+          E2E_SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
+          E2E_SUPABASE_ANON_KEY: ${{ secrets.STAGING_SUPABASE_ANON_KEY }}
+          VITE_SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.STAGING_SUPABASE_ANON_KEY }}
           VITE_MAPBOX_TOKEN: ${{ secrets.VITE_MAPBOX_TOKEN }}
           VITE_SENTRY_DSN: ${{ secrets.VITE_SENTRY_DSN }}
           E2E_TEST_EMAIL: ${{ secrets.E2E_TEST_EMAIL }}
