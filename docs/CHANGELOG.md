@@ -6,7 +6,7 @@ All significant development milestones, in reverse chronological order.
 
 ## 2026-07-14 — Agent workflow tests added to required GitHub CI
 
-The required `Lint, Type Check, Test, Build` GitHub job now runs `npm run test:agent-workflows` after the lower-level correction-guard suite. This moves the end-to-end Codex production-action guard simulation, Claude review-wrapper tests, hook-adapter checks, and Claude/Codex workflow-wiring parity checks from a local-only Husky gate into the server-enforced pull-request pipeline. A pull request can no longer report the required CI check green when those agent workflow or hook-registration tests fail.
+The required `Lint, Type Check, Test, Build` GitHub job now runs `npm run test:agent-workflows` after the lower-level correction-guard suite. This moves the end-to-end Codex production-action guard simulation, Claude review-wrapper tests, hook-adapter checks, and Claude/Codex workflow-wiring parity checks from a local-only Husky gate into the server-enforced pull-request pipeline. A pull request can no longer report the required CI check green when those agent workflow or hook-registration tests fail. The first Linux run immediately exposed a Windows-only separator assumption in `run-claude-review.test.mjs`; its expected output path now uses Node's native `path.join`, so the same wrapper behavior is asserted correctly on Windows and Linux.
 
 ---
 
