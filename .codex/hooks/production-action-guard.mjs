@@ -8,6 +8,7 @@ import path from "node:path";
 import {
   claudeProofValid,
   contentIsRisky,
+  extractPatchDestinations,
   gitPushCwd,
   isGitPush,
   mainPushSource,
@@ -22,7 +23,9 @@ import { stripCommentsQuoteAware } from "../../.claude/hooks/live-testdata-lib.m
 
 const LIVE_TOOL_ACTIONS = /(?:apply_migration|deploy_edge_function|delete_branch)$/i;
 const GITHUB_MERGE_TOOL = /merge_pull_request$/i;
-const GITHUB_TOOL = /(?:^|__)github__/i;
+// Both MCP naming (mcp__github__create_file) and app naming
+// (mcp__codex_apps__github_create_file) — Codex round-5.
+const GITHUB_TOOL = /(?:^|__)github_{1,2}/i;
 const NODE_REPL_TOOL = /(?:^|__)node[_-]?repl(?:__|$)/i;
 const CLAUDE_PROOF_RELATIVE = [".claude", "session-state", "claude-review-push.json"];
 const PROTECTED_HARNESS_SOURCE = String.raw`(?:\.claude[\\/]hooks[\\/](?:codex-push-(?:guard|lib)|review-proof-guard|live-testdata-lib)\.mjs|\.codex[\\/]hooks[\\/](?:production-action-guard|codex-hook-adapter)\.mjs|scripts[\\/]run-claude-review\.mjs|\.claude[\\/]settings\.json|\.codex[\\/]hooks\.json)`;
@@ -316,7 +319,10 @@ function ghApiMutates(command) {
       method = word.slice(2).toUpperCase();
       methodExplicit = true;
     } else if (["-f", "-F", "--field", "--raw-field", "--input"].includes(word) ||
-               /^(?:--field|--raw-field|--input)=/.test(word)) {
+               /^(?:--field|--raw-field|--input)=/.test(word) ||
+               /^-[fF]\S/.test(word)) {
+      // The /^-[fF]\S/ arm catches gh's attached short-value form
+      // (`-fquery=...`, `-Fbase=main`) — Codex round-5.
       hasFields = true;
     }
   }
@@ -325,7 +331,10 @@ function ghApiMutates(command) {
 }
 
 function githubToolIsReadOnly(toolName) {
-  const leaf = String(toolName || "").split("__").pop() || "";
+  // App-style names keep a `github_` prefix on the leaf
+  // (mcp__codex_apps__github_get_file) — strip it before classifying
+  // (Codex round-5).
+  const leaf = (String(toolName || "").split("__").pop() || "").replace(/^github_/i, "");
   return /^(?:get|list|search|read|resolve|download|check)_/i.test(leaf) ||
     /_(?:read|get|list|search)$/i.test(leaf);
 }
@@ -415,19 +424,17 @@ export function evaluateProductionAction({
     toolInput.source,
     toolInput.destination,
   ];
-  const patchCandidates = [
-    toolInput.patch,
-    toolInput.diff,
-    toolInput.input,
-    toolInput.changes,
-  ];
-  if ([...pathCandidates, ...patchCandidates].some((candidate) => reviewProofPathMentioned(candidate))) {
+  // Classify patch payloads by their DESTINATION headers, not the whole body —
+  // documentation patches legitimately mention guard/proof paths in prose
+  // (Codex round-5 false positive).
+  const patchDestinations = [toolInput.patch, toolInput.diff, toolInput.input, toolInput.changes]
+    .flatMap((payloadText) => extractPatchDestinations(payloadText));
+  if ([...pathCandidates, ...patchDestinations].some((candidate) => reviewProofPathMentioned(candidate))) {
     return denied("CODEX PRODUCTION GATE: review proof files are wrapper-owned and cannot be written, edited, moved, or deleted directly.");
   }
   const mutatingFileTool = /(?:write|edit|delete|move|rename|patch|replace|create|update)/i.test(name);
   if (mutatingFileTool && (
-    pathCandidates.some((candidate) => protectedHarnessPathMentioned(candidate)) ||
-    patchCandidates.some((candidate) => PROTECTED_HARNESS_FRAGMENT_RE.test(String(candidate || "")))
+    [...pathCandidates, ...patchDestinations].some((candidate) => protectedHarnessPathMentioned(candidate))
   )) {
     return denied("CODEX PRODUCTION GATE: the production/review harness is a security boundary and cannot be changed through a direct file-write tool. Use the reviewed maintenance workflow with Mason's approval.");
   }

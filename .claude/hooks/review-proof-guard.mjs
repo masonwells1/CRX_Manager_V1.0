@@ -8,6 +8,7 @@
 import { readFileSync } from "node:fs";
 
 import {
+  extractPatchDestinations,
   reviewProofPathMentioned,
   reviewStateDirectoryMentioned,
 } from "./codex-push-lib.mjs";
@@ -41,13 +42,11 @@ const pathCandidates = [
   input.source,
   input.destination,
   // Patch-style tools (Codex apply_patch) carry the DESTINATION inside a
-  // free-form payload rather than a path field (Codex round-4) — scan those
-  // payloads too. Deliberately NOT scanning Write's `content`: docs may
-  // legitimately mention the proof path; Write's target is file_path above.
-  input.patch,
-  input.diff,
-  input.input,
-  input.changes,
+  // free-form payload rather than a path field (Codex round-4). Scan only the
+  // patch's destination headers, NOT its whole body — added prose may
+  // legitimately mention proof paths in documentation (Codex round-5). Write's
+  // `content` is likewise deliberately not scanned; its target is file_path.
+  ...[input.patch, input.diff, input.input, input.changes].flatMap((payloadText) => extractPatchDestinations(payloadText)),
 ];
 if (pathCandidates.some((candidate) => reviewProofPathMentioned(candidate))) {
   deny("REVIEW PROOF GUARD: Claude/Codex review proof files are wrapper-owned. Run the real review workflow; do not write, edit, move, or delete proof JSON directly.");

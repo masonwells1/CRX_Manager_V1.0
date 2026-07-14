@@ -47,6 +47,19 @@ const LIVE_PG_PROC_COUNT = 364; // count(DISTINCT proname); FULL REGEN 2026-07-1
 
 const LIVE_FUNCTIONS = new Set(LIVE_PG_PROC_NAMES_CSV.split(','));
 
+// Functions introduced by a checked-in migration that is intentionally queued
+// but not yet applied to production. Keep this exception narrow and tied to the
+// exact migration source; remove it when the live snapshot is regenerated after
+// the migration is applied.
+const QUEUED_MIGRATION_FUNCTIONS = {
+  '20260714024811_offline_action_receipts.sql': [
+    'process_offline_action',
+    'stage_offline_action',
+  ],
+} as const;
+
+const QUEUED_FUNCTIONS = new Set<string>(Object.values(QUEUED_MIGRATION_FUNCTIONS).flat());
+
 // -------------------------------------------------------------------------
 // Fixture-array extraction from sibling test files (source text, not import)
 // -------------------------------------------------------------------------
@@ -82,6 +95,16 @@ describe('Live pg_proc snapshot integrity', () => {
     expect(new Set(names).size).toBe(names.length);
     expect(names).toEqual([...names].sort());
   });
+
+  it('queued-function exceptions exist in their exact migration source', () => {
+    const migrationsDir = join(HERE, '..', '..', 'supabase', 'migrations');
+    for (const [migration, functions] of Object.entries(QUEUED_MIGRATION_FUNCTIONS)) {
+      const source = readFileSync(join(migrationsDir, migration), 'utf8');
+      for (const rpc of functions) {
+        expect(source).toMatch(new RegExp(`CREATE\\s+OR\\s+REPLACE\\s+FUNCTION\\s+public\\.${rpc}\\s*\\(`, 'i'));
+      }
+    }
+  });
 });
 
 describe('rpcContracts.test.ts fixture arrays vs live pg_proc', () => {
@@ -94,7 +117,7 @@ describe('rpcContracts.test.ts fixture arrays vs live pg_proc', () => {
       'rpcContracts.test.ts'
     );
     expect(fixture.length).toBeGreaterThanOrEqual(78); // vacuous-pass guard
-    const ghosts = fixture.filter((rpc) => !LIVE_FUNCTIONS.has(rpc));
+    const ghosts = fixture.filter((rpc) => !LIVE_FUNCTIONS.has(rpc) && !QUEUED_FUNCTIONS.has(rpc));
     // If this fails, an RPC was dropped/renamed in the DB but its fixture
     // entry lingers (the record_payment class). Remove it from the fixture
     // (and from IDEMPOTENCY_BODY_EXEMPT if present) — or, if the RPC should
