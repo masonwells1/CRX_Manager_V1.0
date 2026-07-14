@@ -214,6 +214,7 @@ const COVERED = new Set<string>([
   'InventoryPage',
   'InvoiceDetail',
   'Invoices',
+  'OfflineWorkReview',
   'Orders',
   'Quotes',
 ]);

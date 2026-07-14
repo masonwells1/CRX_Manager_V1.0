@@ -61,6 +61,9 @@ export default function OfflineWorkReview() {
         data,
         'get_offline_action_review_queue',
       );
+      if (!Array.isArray(result.items) || typeof result.total !== 'number') {
+        throw new Error('get_offline_action_review_queue returned an invalid result');
+      }
       setItems(result.items);
       setTotal(result.total);
     } catch (error) {

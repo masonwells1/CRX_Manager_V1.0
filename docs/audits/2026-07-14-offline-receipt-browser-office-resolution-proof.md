@@ -1,7 +1,7 @@
 # Offline Receipt Browser + Office Resolution Proof
 
-**Date:** 2026-07-14  
-**Branch:** `codex/offline-receipt-activation-guards`  
+**Date:** 2026-07-14
+**Branch:** `codex/offline-receipt-activation-guards`
 **Live state:** unchanged; all three offline-receipt migrations remain queued
 
 ## Scope
@@ -36,9 +36,9 @@ Command:
 node scripts/smoke/prove-offline-action-review-resolution.mjs
 ```
 
-Latest retained office-resolution database: `crx_offline_resolution_proof_mrkqlf8x`
+Latest retained office-resolution database: `crx_offline_resolution_proof_mrkqz1l5`
 
-Latest retained concurrency/interruption database: `crx_offline_receipts_failure_proof_mrkqlf93`
+Latest retained concurrency/interruption database: `crx_offline_receipts_failure_proof_mrkqyf81`
 
 Observed results:
 
@@ -60,7 +60,7 @@ Observed results:
 
 ## Browser and automated verification
 
-- `npm run test`: 243 files passed; 3,420 tests passed; 118 skipped.
+- `npm run test`: 244 files passed; 3,439 tests passed; 117 skipped.
 - `npm run typecheck`: passed.
 - `npm run lint`: passed.
 - `npm run build`: passed; Vite emitted the existing large-chunk warning only.
@@ -90,7 +90,7 @@ Claude Opus then performed a separate review of the current uncommitted branch a
 3. a backlog-blocked action required a manual retry after the backlog cleared;
 4. editing an office resolution after a failed submit could reuse an incompatible idempotency key.
 
-The second Opus pass confirmed all four fixes, then found one additional HIGH and two MEDIUM issues. Those were fixed: target snapshots now become server-side `TARGET_STATE_CONFLICT` receipts without defeating lost-response recovery; the panel cannot spend retries while offline; and device-clock `p_completed_at` is sent only for genuinely offline deliveries. The third Opus pass returned 0 BLOCKER / 0 HIGH and confirmed those fixes, then identified the stage-to-process drift window, missing legacy snapshots, and the procedural database-before-frontend gate as MEDIUM. The first two are now closed by the process-time snapshot recheck and fail-closed legacy receipt; the third is enforced operationally by keeping the PR draft/unmerged until live database verification. Remaining low follow-ups are automatic device discovery of office resolutions, visibility for old `received` receipts, pagination/count polish, a lower bound for offline timestamps, and stale-tab release-note wording. The redundant partial-index note is non-blocking. One exact-commit Claude review remains required by the push guard.
+The second Opus pass confirmed all four fixes, then found one additional HIGH and two MEDIUM issues. Those were fixed: target snapshots now become server-side `TARGET_STATE_CONFLICT` receipts without defeating lost-response recovery; the panel cannot spend retries while offline; and device-clock `p_completed_at` is sent only for genuinely offline deliveries. The third Opus pass returned 0 BLOCKER / 0 HIGH and confirmed those fixes, then identified the stage-to-process drift window, missing legacy snapshots, and the procedural database-before-frontend gate as MEDIUM. The first two are now closed by the process-time snapshot recheck and fail-closed legacy receipt; the third is enforced operationally by keeping the PR draft/unmerged until live database verification. Remaining low follow-ups are automatic device discovery of office resolutions, visibility for old `received` receipts, pagination/count polish, a lower bound for offline timestamps, and stale-tab release-note wording. The redundant partial-index note is non-blocking. The push guard separately records the required final exact-commit Claude review in generated session state.
 
 ## Required release order
 
