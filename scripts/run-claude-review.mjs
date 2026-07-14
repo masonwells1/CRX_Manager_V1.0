@@ -61,13 +61,17 @@ function claudePushProofPath(root = ROOT) {
   return path.join(root, ".claude", "session-state", "claude-review-push.json");
 }
 
-function writeClaudePushProof({ root = ROOT, headSha, verdict }) {
+function writeClaudePushProof({ root = ROOT, headSha, baseSha, verdict }) {
   const proofPath = claudePushProofPath(root);
   mkdirSync(path.dirname(proofPath), { recursive: true });
   writeFileSync(proofPath, `${JSON.stringify({
     claude_ran: true,
     verdict,
     head_sha: headSha,
+    // The origin/main this base-main review was taken against. The production
+    // guard requires it to still equal origin/main at push/merge time, so a
+    // moved base forces a fresh review.
+    base_sha: baseSha,
     timestamp: new Date().toISOString(),
   }, null, 2)}\n`, "utf8");
   return proofPath;
@@ -218,6 +222,10 @@ export function getGitContext(scope, commit, executeGit = execFileSync) {
   // uncommitted (default) diffs the working tree vs HEAD.
   let changed;
   let scopeEvidence;
+  // origin/main TIP the review is taken against (only meaningful for base-main;
+  // the protected-push proof is bound to it). Captured BEFORE the review so the
+  // proof records exactly what was compared, and re-checked after (TOCTOU).
+  let baseSha = "";
   const scopeEvidenceErrors = [];
   const requiredGit = (args, fallback = "") => runGit(
     args,
@@ -236,6 +244,10 @@ export function getGitContext(scope, commit, executeGit = execFileSync) {
     const tracked = requiredGit(["diff", "--name-only", base]);
     changed = [tracked, untracked].filter(Boolean).join("\n");
     scopeEvidence = `${requiredGit(["diff", "--binary", base])}\n${untrackedEvidence}`;
+    // Bind the push proof to the origin/main TIP (what the guard resolves), not
+    // the merge-base. requiredGit records a failure so an unresolvable base
+    // blocks the review instead of minting an unbound proof.
+    baseSha = requiredGit(["rev-parse", "origin/main"]);
   } else if (scope === "commit" && commit) {
     const ancestry = requiredGit(["rev-list", "--parents", "-n", "1", commit]);
     const [, firstParent] = ancestry.trim().split(/\s+/);
@@ -265,6 +277,7 @@ export function getGitContext(scope, commit, executeGit = execFileSync) {
     // Captured BEFORE the review runs — the proof must bind to what was
     // actually reviewed, not whatever HEAD is afterwards (Codex round-4 TOCTOU).
     headSha: requiredGit(["rev-parse", "HEAD"]),
+    baseSha,
     changedFiles: changed.split(/\r?\n/).filter(Boolean),
     stagedFiles: optionalGit(["diff", "--cached", "--name-only"])
       .split(/\r?\n/)
@@ -602,18 +615,22 @@ export function runClaudeReview(options) {
   process.stdout.write(`Claude review ${executionState}: ${output}\n`);
   process.stdout.write(`Per-run capture: ${archiveOutput}\n`);
   if (options.scope === "base-main") {
-    // Bind protected-push proof to the exact clean HEAD that was reviewed.
-    // Re-read both after Claude returns so a concurrent commit cannot inherit
-    // a verdict produced for an older tree.
+    // Bind protected-push proof to the exact clean HEAD that was reviewed AND to
+    // the origin/main it was reviewed against. Re-read all three after Claude
+    // returns so a concurrent commit (HEAD moved) or a sibling merge fetched
+    // locally (origin/main moved) cannot inherit a verdict produced for an older
+    // tree/base.
     const headSha = runGit(["rev-parse", "HEAD"], "");
+    const baseSha = runGit(["rev-parse", "origin/main"], "");
     const contextUnchanged = headSha && headSha === gitContext.headSha &&
+      baseSha && baseSha === gitContext.baseSha &&
       !runGit(["status", "--short"], "dirty").trim();
     const proofVerdict = executionState === "VERIFIED" &&
       !gitContext.status.trim() && contextUnchanged
       ? claudeReviewProofVerdict({ status: result.status, stdout: parsed.result })
       : null;
-    if (proofVerdict && /^[0-9a-f]{40}$/i.test(headSha)) {
-      const proofPath = writeClaudePushProof({ headSha, verdict: proofVerdict });
+    if (proofVerdict && /^[0-9a-f]{40}$/i.test(headSha) && /^[0-9a-f]{40}$/i.test(baseSha)) {
+      const proofPath = writeClaudePushProof({ headSha, baseSha, verdict: proofVerdict });
       process.stdout.write(`Claude push proof written to ${proofPath}\n`);
     } else {
       clearClaudePushProof();
