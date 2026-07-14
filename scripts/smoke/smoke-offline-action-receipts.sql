@@ -7,10 +7,10 @@
 --   stage -> immutable replay -> process -> durable success lookup -> replay
 --
 -- It also proves action/idempotency reuse rejection, owner binding, office-only
--- cross-user status reads, missing-target retention, deterministic conflict
--- classification, RPC-only table writes, sanitized status output, and the
--- expected grants. The terminal SMOKE_PASS_ROLLBACK exception rolls back every
--- fixture and business mutation.
+-- cross-user status reads, missing-target and unauthorized-action retention,
+-- deterministic conflict classification, future-clock rejection, RPC-only
+-- table writes, sanitized status output, and the expected grants. The terminal
+-- SMOKE_PASS_ROLLBACK exception rolls back every fixture and business mutation.
 -- =============================================================================
 
 DO $smoke$
@@ -31,11 +31,15 @@ DECLARE
   v_job_action uuid := gen_random_uuid();
   v_conflict_action uuid := gen_random_uuid();
   v_missing_action uuid := gen_random_uuid();
+  v_unauthorized_action uuid := gen_random_uuid();
+  v_clock_skew_action uuid := gen_random_uuid();
   v_client_time timestamptz := clock_timestamp() - interval '5 minutes';
   v_delivery_key text := '[SMOKE] offline-delivery-' || v_suffix;
   v_job_key text := '[SMOKE] offline-job-' || v_suffix;
   v_conflict_key text := '[SMOKE] offline-conflict-' || v_suffix;
   v_missing_key text := '[SMOKE] offline-missing-' || v_suffix;
+  v_unauthorized_key text := '[SMOKE] offline-unauthorized-' || v_suffix;
+  v_clock_skew_key text := '[SMOKE] offline-clock-skew-' || v_suffix;
   v_payload jsonb;
   v_result jsonb;
   v_replay jsonb;
@@ -184,6 +188,31 @@ BEGIN
     'completed_at', to_jsonb(clock_timestamp() - interval '1 minute')
   );
 
+  BEGIN
+    PERFORM public.stage_offline_action(
+      v_clock_skew_action, 'complete_delivery', v_delivery, 1,
+      v_client_time,
+      jsonb_set(
+        v_payload,
+        '{completed_at}',
+        to_jsonb(clock_timestamp() + interval '10 minutes')
+      ),
+      v_clock_skew_key
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: future completed_at was staged';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF SQLERRM NOT LIKE 'PAYLOAD_INVALID: completed_at cannot be more than 5 minutes in the future%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: future completed_at expected PAYLOAD_INVALID, got %', SQLERRM;
+    END IF;
+  END;
+  IF EXISTS (
+    SELECT 1 FROM public.offline_action_receipts
+    WHERE client_action_id = v_clock_skew_action
+  ) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: rejected future completed_at left a receipt';
+  END IF;
+
   v_result := public.stage_offline_action(
     v_delivery_action, 'complete_delivery', v_delivery, 1,
     v_client_time, v_payload, v_delivery_key
@@ -255,6 +284,20 @@ BEGIN
       RAISE EXCEPTION 'SMOKE_FAIL: expected NOT_AUTHORIZED, got %', SQLERRM;
     END IF;
   END;
+
+  v_result := public.stage_offline_action(
+    v_unauthorized_action, 'complete_delivery', v_delivery, 1,
+    v_client_time, v_payload, v_unauthorized_key
+  );
+  IF v_result->>'status' IS DISTINCT FROM 'needs_review'
+     OR v_result->>'failure_code' IS DISTINCT FROM 'NOT_AUTHORIZED' THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: unauthorized action was not retained safely: %', v_result;
+  END IF;
+  v_status := public.get_offline_action_status(v_unauthorized_action);
+  IF v_status->>'actor_id' IS DISTINCT FROM v_field_user::text
+     OR v_status->>'failure_code' IS DISTINCT FROM 'NOT_AUTHORIZED' THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: unauthorized receipt owner status failed: %', v_status;
+  END IF;
 
   PERFORM set_config(
     'request.jwt.claims',

@@ -8,7 +8,7 @@
   "specs": {
     "stage_offline_action": {
       "chain": "smoke-offline-action-receipts.sql",
-      "description": "Stage 1B-1A permanent receipt chain: complete_delivery and complete_job stage -> immutable canonical replay -> canonical process -> durable sanitized status -> replay without duplicate inventory/application work; action UUID and idempotency reuse rejection; actor-bound processing; owner and office status visibility; missing-target retention; deterministic state-conflict review; RPC-only writes; grants. Self-contained fixtures and terminal rollback.",
+      "description": "Stage 1B-1A permanent receipt chain: complete_delivery and complete_job stage -> immutable canonical replay -> canonical process -> durable sanitized status -> replay without duplicate inventory/application work; action UUID and idempotency reuse rejection; actor-bound processing; owner and office status visibility; missing-target and unauthorized-action retention; future completion-clock rejection without a receipt; deterministic state-conflict review; RPC-only writes; grants. Self-contained fixtures and terminal rollback.",
       "covers": ["stage_offline_action", "process_offline_action", "get_offline_action_status", "complete_delivery", "complete_job"]
     },
     "set_field_boundary": {

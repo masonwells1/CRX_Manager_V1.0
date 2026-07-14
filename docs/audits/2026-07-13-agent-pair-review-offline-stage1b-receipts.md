@@ -85,3 +85,17 @@ This review approves only the **design as ready for implementation planning**. T
 5. build browser integration only after the database contract is proven.
 
 No commit, push, merge, deployment, or live migration was performed in this design review.
+
+## Implementation follow-up — 2026-07-14
+
+Mason subsequently approved the implementation pass. This section records proof that happened after the design review; it does not change the original review's provenance.
+
+- Current live `complete_delivery` and `complete_job` signatures, bodies, grants, and actor/idempotency behavior were refreshed read-only before the SQL was drafted.
+- The migration compiled on disposable local database `crx_offline_receipts_20260714`, cloned from the existing local CRX Supabase stack and brought to the current live dependency shape.
+- `scripts/smoke/smoke-offline-action-receipts.sql` executed there through its required terminal `SMOKE_PASS_ROLLBACK` signal. It proved both canonical success paths, exact replay without duplicate inventory/application work, owner binding, safe review retention, RPC-only writes, and grants without persisting fixtures.
+- The disposable proof did not claim a true two-session concurrency race or forced connection termination; those remain pre-live proof items.
+- Claude Opus 4.6 first returned `NEEDS-WORK` in session `377e1e95-7479-40a5-ae23-8f88ef724104`. Codex resolved the substantive classification, replay, type, and smoke findings while retaining the project-required `p_idempotency_key text DEFAULT NULL` signature and enforcing a required key at runtime and in app-layer types.
+- Claude Opus 4.6 re-reviewed the implementation in session `99d98cde-a1d2-4bfb-96a7-c3f0f3880742` and returned `SHIP-WITH-FOLLOWUPS` with no blockers.
+- The exact-commit wrapper review of `58f9f35c` also returned `SHIP-WITH-FOLLOWUPS`. Its claim that PostgreSQL had never parsed or smoked the migration was incorrect because the disposable proof above had already run, but it correctly identified future device-clock handling and broad English error matching. The follow-up commit rejects completion timestamps more than five minutes ahead before writing a receipt, narrows classification to exact canonical message contracts, adds apply-time drift checks, and extends the rollback smoke.
+
+The migration remains queued and unapplied live. A fresh exact-HEAD Claude review is required after this follow-up commit and before push.

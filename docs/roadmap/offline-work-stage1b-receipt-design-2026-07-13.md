@@ -1,6 +1,6 @@
 # Offline Work Stage 1B — Permanent Receipt Design
 
-**Status:** DESIGN ONLY — no migration, product code, live data, or deployment is approved by this document
+**Status:** IMPLEMENTED ON FEATURE BRANCH — migration is queued and has not been applied live
 **Date:** 2026-07-13
 **Risk:** HIGH — the supported actions change inventory, delivery/order/invoice state, jobs, and application records
 
@@ -351,4 +351,4 @@ Proceed to a migration implementation plan only if the independent review agrees
 4. local deletion requires an exact matching permanent success receipt;
 5. the first slice remains limited to two operations and excludes manual destructive resolution.
 
-Until that review and Mason's next approval, this document authorizes no SQL, product-code, live-service, commit, push, merge, or deployment action.
+Mason approved the implementation pass on 2026-07-13. The migration and proof chain now exist on the feature branch, but live application remains subject to the migration-review proof gate. Browser integration remains a later slice.

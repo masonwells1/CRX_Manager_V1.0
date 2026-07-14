@@ -310,6 +310,9 @@ BEGIN
       EXCEPTION WHEN invalid_datetime_format OR datetime_field_overflow THEN
         RAISE EXCEPTION 'PAYLOAD_INVALID: completed_at must be an ISO timestamp';
       END;
+      IF v_timestamp > v_now + interval '5 minutes' THEN
+        RAISE EXCEPTION 'PAYLOAD_INVALID: completed_at cannot be more than 5 minutes in the future';
+      END IF;
       v_canonical := v_canonical || jsonb_build_object('completed_at', to_jsonb(v_timestamp));
     END IF;
 
@@ -729,15 +732,18 @@ BEGIN
     IF v_message = 'OFFLINE_RESULT_INVALID' THEN
       v_failure_code := 'RESULT_INVALID';
       v_failure_summary := 'The business action returned an unexpected result. Office review is required.';
-    ELSIF v_message ILIKE '%not authorized%' THEN
+    ELSIF v_message IN (
+      'Not authorized to complete this delivery',
+      'Not authorized to complete this job'
+    ) THEN
       v_failure_code := 'NOT_AUTHORIZED';
       v_failure_summary := 'The current user is not authorized to complete this delivery or job.';
-    ELSIF v_message ILIKE '%not found%' THEN
+    ELSIF v_message LIKE 'Delivery not found:%'
+       OR v_message LIKE 'Job not found:%' THEN
       v_failure_code := 'TARGET_NOT_FOUND';
       v_failure_summary := 'The referenced delivery or job no longer exists.';
-    ELSIF v_message ILIKE '%in_progress%'
-       OR v_message ILIKE '%current status%'
-       OR v_message ILIKE '%already completed%' THEN
+    ELSIF v_message LIKE 'Delivery must be in_progress to complete%'
+       OR v_message LIKE 'Job must be in_progress before completion.%' THEN
       v_failure_code := 'TARGET_STATE_CONFLICT';
       v_failure_summary := 'The delivery or job changed after this offline action was saved. Office comparison is required.';
     ELSIF v_message ILIKE '%IDEMPOTENCY%CROSS%OP%'
@@ -897,6 +903,8 @@ DO $verify$
 DECLARE
   v_count integer;
   v_rls boolean;
+  v_delivery_source text;
+  v_job_source text;
 BEGIN
   SELECT c.relrowsecurity
     INTO v_rls
@@ -915,6 +923,26 @@ BEGIN
     AND p.proname IN ('stage_offline_action', 'process_offline_action', 'get_offline_action_status');
   IF v_count <> 3 THEN
     RAISE EXCEPTION 'post-check: expected exactly 3 offline receipt RPC overloads, found %', v_count;
+  END IF;
+
+  SELECT p.prosrc INTO v_delivery_source
+  FROM pg_proc p
+  WHERE p.oid = 'public.complete_delivery(uuid,text,uuid,jsonb,text,text,text,timestamptz)'::regprocedure;
+  IF v_delivery_source IS NULL
+     OR strpos(v_delivery_source, 'Not authorized to complete this delivery') = 0
+     OR strpos(v_delivery_source, 'Delivery not found:') = 0
+     OR strpos(v_delivery_source, 'Delivery must be in_progress to complete') = 0 THEN
+    RAISE EXCEPTION 'post-check: complete_delivery business-error contract drifted';
+  END IF;
+
+  SELECT p.prosrc INTO v_job_source
+  FROM pg_proc p
+  WHERE p.oid = 'public.complete_job(uuid,jsonb,uuid,text)'::regprocedure;
+  IF v_job_source IS NULL
+     OR strpos(v_job_source, 'Not authorized to complete this job') = 0
+     OR strpos(v_job_source, 'Job not found:') = 0
+     OR strpos(v_job_source, 'Job must be in_progress before completion') = 0 THEN
+    RAISE EXCEPTION 'post-check: complete_job business-error contract drifted';
   END IF;
 
   IF EXISTS (
