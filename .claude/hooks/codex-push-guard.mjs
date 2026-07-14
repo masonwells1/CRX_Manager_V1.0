@@ -132,7 +132,10 @@ for (const pushCmd of pushCommands) {
   try {
     if (existsSync(stateDir)) {
       for (const f of readdirSync(stateDir)) {
-        if (!/^codex-review-.*\.json$/.test(f)) continue;
+        // Charset must be no wider than review-proof-guard's path matcher, or a
+        // forged proof named outside the matcher (e.g. with a space) could be
+        // written unguarded yet still load here (Codex round-5).
+        if (!/^codex-review-[A-Za-z0-9_.-]+\.json$/.test(f)) continue;
         let data;
         try { data = JSON.parse(readFileSync(path.join(stateDir, f), "utf8")); } catch { continue; }
         if (proofValid(data, headSha, Date.now())) { valid = true; break; }
