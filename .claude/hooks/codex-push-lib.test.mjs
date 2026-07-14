@@ -98,6 +98,24 @@ assert.equal(gitPushCwd("git -C ../repo push origin HEAD:main", "C:/work/current
 assert.equal(gitPushCwd("git -C .. -C sibling push origin HEAD:main", "C:/work/current"), path.resolve("C:/work/sibling"));
 
 assert.deepEqual(riskyFiles(["src/pages/Home.tsx", "supabase/migrations/1.sql"]), ["supabase/migrations/1.sql"]);
+assert.deepEqual(
+  riskyFiles([
+    "src/pages/Home.tsx",
+    ".claude/hooks/codex-push-lib.mjs",
+    ".codex/hooks/production-action-guard.mjs",
+    ".github/workflows/ci.yml",
+    ".husky/pre-push",
+    "scripts/run-claude-review.mjs",
+  ]),
+  [
+    ".claude/hooks/codex-push-lib.mjs",
+    ".codex/hooks/production-action-guard.mjs",
+    ".github/workflows/ci.yml",
+    ".husky/pre-push",
+    "scripts/run-claude-review.mjs",
+  ],
+  "guardrail and CI self-modifications always require second-model review",
+);
 assert.equal(contentIsRisky("+ const total_cents = 100"), true);
 assert.equal(contentIsRisky("+ const title = 'ordinary'"), false);
 

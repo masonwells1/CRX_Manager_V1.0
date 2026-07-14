@@ -163,13 +163,11 @@ export function pushUsesBulkMode(cmd) {
   });
 }
 
-// A changed file is "risky" (needs an independent Codex verdict) when it touches
-// migrations, edge functions, or obviously money/RLS-shaped code. src/lib/db.ts
-// (the ONLY Supabase client per CLAUDE.md) and src/lib/sentry.ts (the ONLY
-// Sentry import point) are added here (2026-07-13 audit, FIX 4): both are
-// single choke points where a bad change has outsized, hard-to-notice blast
-// radius (every RPC call / every error report in the app), so they belong in
-// the same "needs a second set of eyes" bucket as migrations/edge functions.
+// A changed file is "risky" (needs an independent second-model verdict) when it
+// touches migrations, edge functions, money/RLS-shaped code, or the guardrail
+// machinery that decides whether a change can reach main. Guard hooks, CI,
+// Husky, and the review wrapper are explicit here so a self-modification cannot
+// avoid independent review merely because its diff lacks a money keyword.
 const RISKY_PATH_RES = [
   /(^|\/)supabase\/migrations\//i,
   /(^|\/)supabase\/functions\//i,
@@ -177,6 +175,11 @@ const RISKY_PATH_RES = [
   /policy|grant/i,
   /(^|\/)src\/lib\/db\.ts$/i,
   /(^|\/)src\/lib\/sentry(\.ts|\/)/i,
+  /(^|\/)\.claude\/hooks\//i,
+  /(^|\/)\.codex\/hooks\//i,
+  /(^|\/)\.github\/workflows\//i,
+  /(^|\/)\.husky\//i,
+  /(^|\/)scripts\/run-claude-review\.mjs$/i,
 ];
 export function riskyFiles(files) {
   return (files || []).filter((f) => RISKY_PATH_RES.some((re) => re.test(String(f || ""))));

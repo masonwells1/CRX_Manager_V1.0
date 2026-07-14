@@ -128,6 +128,13 @@ try {
   const ordinary = makeRepo("src/components/Label.tsx", "export const label = 'ordinary';\n");
   assert.equal(evaluatePush(ordinary.repo).blocked, false, "non-risky main push allowed without proof");
 
+  const guardrailChange = makeRepo(".claude/hooks/codex-push-lib.mjs", "export const ordinary = true;\n");
+  assert.equal(
+    evaluatePush(guardrailChange.repo).blocked,
+    true,
+    "guardrail self-modification requires Claude proof even without risky content keywords",
+  );
+
   const risky = makeRepo("supabase/migrations/20260713000000_test.sql", "select 1;\n");
   const now = Date.now();
   const valid = {
