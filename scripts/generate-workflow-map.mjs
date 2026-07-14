@@ -705,6 +705,31 @@ function patch(html, startMarker, endMarker, newContent) {
   return html.slice(0, s + startMarker.length) + newContent + html.slice(e);
 }
 
+function validateQuoteLifecycleCoverage(html) {
+  const typeSource = read('src/types/index.ts');
+  const typeMatch = /export\s+type\s+QuoteStatus\s*=\s*([^;]+);/.exec(typeSource);
+  if (!typeMatch) throw new Error('Could not parse QuoteStatus from src/types/index.ts');
+
+  const expected = [...typeMatch[1].matchAll(/'([a-z][a-z0-9_]*)'/g)].map((m) => m[1]);
+  if (expected.length === 0) throw new Error('QuoteStatus contained no string literals');
+
+  const quoteMatch = /<!-- QUOTE -->([\s\S]*?)<!-- ORDER -->/.exec(html);
+  if (!quoteMatch) throw new Error('Could not isolate the Quote Lifecycle SVG');
+
+  const rendered = new Set(
+    [...quoteMatch[1].matchAll(/<g\b[^>]*>((?:(?!<\/g>)[\s\S])*?)<\/g>/g)]
+      .map((groupMatch) => /<text\b[^>]*>\s*([a-z][a-z0-9_]*)\s*<\/text>/.exec(groupMatch[1])?.[1])
+      .filter((status) => status !== undefined)
+  );
+  const missing = expected.filter((status) => !rendered.has(status));
+  const unexpected = [...rendered].filter((status) => !expected.includes(status));
+  if (missing.length > 0 || unexpected.length > 0) {
+    throw new Error(
+      `Quote Lifecycle SVG status nodes differ from QuoteStatus; missing: ${missing.join(', ') || 'none'}; unexpected: ${unexpected.join(', ') || 'none'}`
+    );
+  }
+}
+
 // ─────────────────────────────────────────────
 // 13.  Main
 // ─────────────────────────────────────────────
@@ -774,6 +799,8 @@ function main() {
     '<!-- __AUTO_PROBLEMS_END__ -->',
     renderAutoProblems(problems)
   );
+
+  validateQuoteLifecycleCoverage(html);
 
   writeFileSync(HTML_OUT, html, 'utf8');
   console.log(`✅ docs/app-workflow-map.html updated (${(html.length / 1024).toFixed(0)} KB)`);

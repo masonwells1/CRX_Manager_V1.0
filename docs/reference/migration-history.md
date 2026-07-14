@@ -1,13 +1,16 @@
-# Migration History (687 migrations)
+# Migration History (690 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
-## Queued 2026-07-14 — NOT YET APPLIED LIVE
+## Local 2026-07-14 changes and MCP-stamped live migrations
 
 | # | Timestamp | Description |
 |---|-----------|-------------|
-| 687 | 20260714070000 | **QUEUED — Bound permanent offline-receipt staging.** Adds an actor-serialized insert guard and supporting received-time index. Exact client-action replays remain available, while new receipts are capped at 250 per rolling 24 hours and unresolved `needs_review` rows at 500 per actor. The trigger helper is `SECURITY DEFINER`, fixed to `public, pg_temp`, and trigger-only (no PUBLIC/anon/authenticated EXECUTE). Disposable proof confirmed the 251st new action is rejected without affecting existing replays. **No live apply has occurred.** |
-| 686 | 20260714024811 | **QUEUED — Stage 1B-1A permanent offline action receipts.** Adds RPC-only `offline_action_receipts` with permanent action/idempotency uniqueness, bounded canonical payloads, active-owner/office status visibility, and explicit `received` / `succeeded` / `needs_review` states. Adds `stage_offline_action`, `process_offline_action`, and `get_offline_action_status`; processing calls only the existing canonical `complete_delivery` / `complete_job` functions, with the business mutation and success receipt in one transaction. Static SQL scan: clean. Disposable-clone compile: pass. Rolled-back end-to-end smoke: pass for both branches, exact replay/no duplicate inventory or application record, owner binding, missing-target and unauthorized-action retention, future-clock rejection before receipt creation, deterministic state-conflict review, direct-write denial, and grants. **No live apply has occurred; live table/RPC counts remain unchanged.** |
+| 690 | 20260714185631 | **LOCAL — Harden `is_admin()` search path.** Re-emits the canonical active-admin helper with `SET search_path = public, pg_temp`, qualifies `public.profiles`, and self-checks the active-admin contract used by RLS/admin RPC gates. **Not applied live.** |
+| 689 | 20260714185130 | **LOCAL — Gate batch prepay application to admins.** Re-emits `batch_apply_prepayments(jsonb, uuid, text)` with the same signature, idempotency, period-close, and money behavior, but enforces the source-controlled active-aware `is_admin()` helper before replay or mutation. Explicit grants converge to authenticated/service-role only. **Not applied live.** |
+| 688 | 20260714185129 | **LOCAL — Require active admins for commission payout RLS.** Replaces five role-only `commission_payments` / `commission_payment_items` policies with the canonical active-aware `is_admin()` helper and verifies their exact identities. **Not applied live.** |
+| 687 | 20260714070000 | **APPLIED LIVE — MCP-stamped version `20260714171800`.** Adds an actor-serialized insert guard and supporting received-time index. Exact client-action replays remain available, while new receipts are capped at 250 per rolling 24 hours and unresolved `needs_review` rows at 500 per actor. Disposable proof confirmed the 251st new action is rejected without affecting existing replays. The live `supabase_migrations.schema_migrations` ledger records this filename in `name` under apply-time `version`, so do not infer application state from the filename prefix alone. |
+| 686 | 20260714024811 | **APPLIED LIVE — MCP-stamped version `20260714171331`.** Adds RPC-only `offline_action_receipts` plus `stage_offline_action`, `process_offline_action`, and `get_offline_action_status`. Static SQL and disposable smoke previously passed. The live ledger records this filename in `name` under apply-time `version`, so do not infer application state from the filename prefix alone. |
 
 > ✅ **Doc-debt cleared 2026-05-17.** Entries #322–#345 backfilled in the main table below. See `docs/archive/2026-spring/2026-05-13-pr59-codex-review-summary.md` and `docs/CHANGELOG.md` for deeper context on each fix.
 
