@@ -125,19 +125,38 @@ assert.deepEqual(riskyFiles(["scripts/write-codex-push-proof.mjs"]), ["scripts/w
 assert.equal(contentIsRisky("+ const total_cents = 100"), true);
 assert.equal(contentIsRisky("+ const title = 'ordinary'"), false);
 
-const codexProof = { codex_ran: true, verdict: "clean", head_sha: sha, timestamp: new Date(now).toISOString() };
+const base = "c".repeat(40);
+const codexProof = { codex_ran: true, verdict: "clean", head_sha: sha, base_sha: base, timestamp: new Date(now).toISOString() };
 assert.equal(proofValid(codexProof, sha, now), true);
 assert.equal(proofValid({ ...codexProof, timestamp: new Date(now - 30 * 60 * 1000).toISOString() }, sha, now), true);
 assert.equal(proofValid({ ...codexProof, timestamp: new Date(now - 30 * 60 * 1000 - 1).toISOString() }, sha, now), false);
 assert.equal(proofValid({ ...codexProof, timestamp: new Date(now + 1).toISOString() }, sha, now), false);
 assert.equal(proofValid({ ...codexProof, head_sha: "" }, sha, now), false);
 
-const claudeProof = { claude_ran: true, verdict: "blockers-fixed", head_sha: sha, timestamp: new Date(now).toISOString() };
+// Base-SHA binding (2026-07-14): when the guard supplies the origin/main it is
+// gating against, the proof's base_sha must match. A moved base — origin/main
+// advanced by a sibling merge fetched locally, without touching HEAD or the
+// worktree — must invalidate a proof that would otherwise still look fresh.
+assert.equal(proofValid(codexProof, sha, now, base), true, "matching base_sha passes");
+assert.equal(proofValid(codexProof, sha, now, "d".repeat(40)), false, "moved base (base_sha mismatch) → invalid");
+assert.equal(
+  proofValid({ ...codexProof, base_sha: undefined }, sha, now, base),
+  false,
+  "pre-hardening proof with no base_sha fails closed once a base is required",
+);
+// Backward-compat: with no base expectation supplied the base check is skipped,
+// mirroring how the head_sha check is gated on a supplied headSha.
+assert.equal(proofValid({ ...codexProof, base_sha: undefined }, sha, now), true, "base check is skipped when no base is expected");
+
+const claudeProof = { claude_ran: true, verdict: "blockers-fixed", head_sha: sha, base_sha: base, timestamp: new Date(now).toISOString() };
 assert.equal(claudeProofValid(claudeProof, sha, now), true);
 assert.equal(claudeProofValid({ ...claudeProof, claude_ran: false }, sha, now), false);
 assert.equal(claudeProofValid({ ...claudeProof, verdict: "ship" }, sha, now), false);
 assert.equal(claudeProofValid({ ...claudeProof, head_sha: "b".repeat(40) }, sha, now), false);
 assert.equal(claudeProofValid({ ...claudeProof, timestamp: new Date(now + 60_000).toISOString() }, sha, now), false);
+assert.equal(claudeProofValid(claudeProof, sha, now, base), true, "matching base_sha passes (Claude proof)");
+assert.equal(claudeProofValid(claudeProof, sha, now, "d".repeat(40)), false, "moved base → invalid (Claude proof)");
+assert.equal(claudeProofValid({ ...claudeProof, base_sha: undefined }, sha, now, base), false, "no base_sha fails closed when a base is required (Claude proof)");
 
 // Codex round-5 (2026-07-13): patch DESTINATIONS, not whole-body mentions.
 assert.deepEqual(

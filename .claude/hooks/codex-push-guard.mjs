@@ -92,8 +92,12 @@ for (const pushCmd of pushCommands) {
     deny("CODEX GATE: `git push origin :main` DELETES the production main branch. Never do this. If a bad commit landed, use the /rollback runbook (compensating commit / Vercel promote-previous) instead.");
   }
 
+  let baseSha = "";
   try {
-    git(["rev-parse", "--verify", "--quiet", "origin/main"], pushRepoDir);
+    // Capture the exact origin/main the diff is gated against, so the proof can
+    // be bound to the SAME base it was reviewed on (a moved base forces a fresh
+    // review). `--verify` prints the resolved sha on success.
+    baseSha = git(["rev-parse", "--verify", "--quiet", "origin/main"], pushRepoDir);
   } catch (error) {
     deny(`CODEX GATE: could not resolve origin/main for the selected push repository, so the push is denied. ${error?.message || error}`);
   }
@@ -138,7 +142,7 @@ for (const pushCmd of pushCommands) {
         if (!/^codex-review-[A-Za-z0-9_.-]+\.json$/.test(f)) continue;
         let data;
         try { data = JSON.parse(readFileSync(path.join(stateDir, f), "utf8")); } catch { continue; }
-        if (proofValid(data, headSha, Date.now())) { valid = true; break; }
+        if (proofValid(data, headSha, Date.now(), baseSha)) { valid = true; break; }
       }
     }
   } catch { /* unreadable means no proof */ }
@@ -156,7 +160,7 @@ for (const pushCmd of pushCommands) {
     `  2. If Codex flags blockers, fix them and re-run until it reports clean; only a clean verdict on a stable, clean worktree mints the proof.\n` +
     `  3. On success it writes the HEAD-bound proof {codex_ran:true, verdict:"clean", head_sha:"${headSha || "<HEAD>"}", timestamp:"<ISO>"} for you — never hand-write it (review-proof-guard blocks that).\n` +
     `  4. Retry the push.\n` +
-    `If the Codex CLI is unavailable, PARK the change and tell Mason — do not self-certify. (Proof is HEAD-bound + expires in 30min.)`
+    `If the Codex CLI is unavailable, PARK the change and tell Mason — do not self-certify. (Proof is bound to this exact HEAD and to origin/main; it expires in 30min, and a moved base forces a fresh review.)`
   );
 }
 

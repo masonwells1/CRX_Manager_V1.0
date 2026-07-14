@@ -39,6 +39,7 @@ This runner makes those queries **standing executable gates** that run **before*
 | `overloads.sql` | (f) public proname with >1 signature | **zero** (no allowlist case) |
 | `status-literals.sql` | (g) function writes a literal outside a column's CHECK set | **zero** (regex approximation — see file header for FP/FN modes) |
 | `plpgsql-check.sql` | (h) 42703/42804/missing-relation static analysis | **ACTIVE** — extension installed 2026-06-10 (`20260610192229`); first scan: **30 errors / 11 live functions** (see `docs/audits/2026-06-10-error-prevention-execution-log.md` §4 — each needs its own /ship fix; treat that list as the baseline until fixed, do NOT allowlist) |
+| `commission-admin-active.sql` | commission payment admin RLS uses the active-aware `is_admin()` helper | **zero** (missing or role-only policies are violations) |
 
 ## When it runs
 

@@ -247,6 +247,30 @@ export default function CommissionPayments() {
     .filter((c) => selectedCommissions.has(c.id))
     .reduce((sum, c) => sum + c.commission_amount, 0);
 
+  const fetchCreatedPaymentSummary = async (paymentId: string) => {
+    const [paymentResult, itemResult] = await Promise.all([
+      supabase
+        .from('commission_payments')
+        .select('payment_number,total_amount')
+        .eq('id', paymentId)
+        .maybeSingle(),
+      supabase
+        .from('commission_payment_items')
+        .select('*', { count: 'exact', head: true })
+        .eq('commission_payment_id', paymentId),
+    ]);
+
+    if (paymentResult.error || itemResult.error || !paymentResult.data) {
+      return null;
+    }
+
+    return {
+      paymentNumber: paymentResult.data.payment_number || '',
+      totalAmount: Number(paymentResult.data.total_amount || 0),
+      itemCount: itemResult.count || 0,
+    };
+  };
+
   const toggleCommission = (id: string) => {
     setSelectedCommissions((prev) => {
       const next = new Set(prev);
@@ -283,18 +307,23 @@ export default function CommissionPayments() {
       if (error) throw error;
       const paymentId = assertRpcResult<string>(data, 'create_commission_payment');
       createPaymentIdem.resetKey();
+      const createdSummary = await fetchCreatedPaymentSummary(paymentId);
       // Audit #11: surface commission events in the activity feed (DB side
       // already writes financial_audit_log; activity_feed is the user-facing one).
       if (profile) {
         await logActivity({
           event: 'commission_payment_created',
-          description: `Commission payment created for ${fmt(selectedTotal)} (${selectedCommissions.size} commission(s))`,
+          description: createdSummary
+            ? `Commission payment ${createdSummary.paymentNumber} created for ${fmt(createdSummary.totalAmount)} (${createdSummary.itemCount} commission(s))`
+            : 'Commission payment created',
           performedBy: profile.id,
           entityType: 'commission_payment',
           entityId: paymentId,
         });
       }
-      toast('success', `Commission payment created: ${fmt(selectedTotal)}`);
+      toast('success', createdSummary
+        ? `Commission payment ${createdSummary.paymentNumber} created: ${fmt(createdSummary.totalAmount)}`
+        : 'Commission payment created');
       setShowCreate(false);
       fetchPayments();
     } catch (err: unknown) {
