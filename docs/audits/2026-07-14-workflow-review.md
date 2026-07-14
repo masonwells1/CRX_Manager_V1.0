@@ -2,7 +2,7 @@
 
 ## Verdict
 
-**NEEDS-WORK ON LIVE UNTIL MIGRATED; FIXED LOCALLY.** The current `origin/main` foundation is broadly coherent and all deterministic application checks plus all 15 original linked-production invariant predicates passed, but one dormant authorization gap exists live: a deactivated admin with an unexpired token can still read or mutate commission payout tables because five live RLS policies check `role = 'admin'` without also checking `is_active`. No inactive admin profiles exist live today, so this is not a current incident. The confirmed fixes are now implemented in three unapplied migrations plus deterministic regression coverage.
+**NEEDS-WORK ON LIVE UNTIL MIGRATED; FIXED LOCALLY.** The audited foundation is broadly coherent and all deterministic application checks plus all 15 original linked-production invariant predicates passed, but one dormant authorization gap existed live during the audit: a deactivated admin with an unexpired token could still use role-only commission payout RLS policies. No inactive admin profiles existed live at the time, so this was not a current incident. After reconciling with PR #127, source now preserves the no-direct-table-write hardening from `20260714180000_harden_commission_payment_creation.sql`; this branch's follow-up migration only re-emits the two remaining read policies with the active-aware, schema-qualified, single-evaluation `public.is_admin()` form and adds deterministic regression coverage. Production still needs the queued migrations applied before live has the reviewed final state.
 
 Claude reviewed only the five retained issues, as requested. Two official wrapper attempts were blocked when Claude Opus exhausted its turn limit without returning a result; a direct structured Claude Opus recovery then confirmed all five as real with no false positives and downgraded the quote-map issue from MED to LOW. Terra and Luna performed independent internal lanes, and Sol reconciled the final implementation review.
 
@@ -31,7 +31,7 @@ None.
 
 ### HIGH (1)
 
-- **Deactivated admins retain direct commission payout table access.** Five live INSERT/SELECT/UPDATE policies on `commission_payments` and `commission_payment_items` check only `profiles.role = 'admin'`; the authenticated role also has the corresponding table privileges. The disk source is `supabase/migrations/20260511050000_perf_auth_rls_initplan.sql:200-253`. This conflicts with the database-level deactivation contract and the canonical `is_admin()` helper, which requires `is_active = true` at `supabase/migrations/20260209200000_tier1_audit_fixes.sql:53-66`. Live evidence showed `inactive_admin_profiles = 0`, so the gap is dormant today. **Recommendation:** replace those five policy expressions with `is_admin()` and add a linked-live regression predicate that fails when a privileged policy omits active-profile enforcement. Confidence: high.
+- **Deactivated admins retain live commission payout policy access until the queued hardening is applied.** At audit time, five live INSERT/SELECT/UPDATE policies on `commission_payments` and `commission_payment_items` checked only `profiles.role = 'admin'`; the authenticated role also had corresponding table privileges. The historical disk source was `supabase/migrations/20260511050000_perf_auth_rls_initplan.sql:200-253`. This conflicted with the database-level deactivation contract and the canonical `is_admin()` helper, which requires `is_active = true` at `supabase/migrations/20260209200000_tier1_audit_fixes.sql:53-66`. Live evidence showed `inactive_admin_profiles = 0`, so the gap was dormant. After this branch merged PR #127, source-level direct table writes remain closed by `20260714180000_harden_commission_payment_creation.sql`; the remaining PR #128 remediation is the read-policy InitPlan/schema-qualified `public.is_admin()` rewrite plus a linked-live regression predicate that fails if active-profile enforcement is omitted or direct external write policies are reintroduced. Confidence: high.
 
 ### MED (1)
 
@@ -46,7 +46,7 @@ None.
 
 ## Local remediation status
 
-- `20260714185129_fix_commission_admin_policies.sql` replaces the five role-only policies with active-aware `is_admin()` checks. The new `commission-admin-active.sql` live predicate returns exactly five violations before apply and zero after applying the migration to a disposable clone.
+- `20260714185129_fix_commission_admin_policies.sql` preserves PR #127's no-direct-table-write posture, re-emits only the two commission payout read policies with active-aware `public.is_admin()` InitPlan checks, and self-verifies that direct external write policies were not reintroduced. The new `commission-admin-active.sql` live predicate flags role-only or otherwise inactive-blind read policies plus any direct external write policy, and returned zero after applying the migration to a disposable clone.
 - `20260714185130_gate_batch_prepay_admin.sql` enforces active-admin authorization before replay or mutation, preserves the function identity and money/idempotency behavior, and converges grants to authenticated/service-role with no anonymous access. Disposable proof: active admin succeeded; active sales rep and inactive admin were rejected with SQLSTATE `42501`.
 - `20260714185631_harden_is_admin_search_path.sql` re-emits `is_admin()` with `SET search_path = public, pg_temp` and a qualified `public.profiles` reference. Read-only live proof before apply showed production already has `search_path=public, pg_temp`; the normalized live body length is 158 with MD5 `4d8dd82e752bab77bb07f98529a39b98`, matching the expected active-admin body shape before qualification.
 - The quote map, stale retired-RPC prose, live-RPC snapshot, production-call coverage, and reference docs are repaired locally.
@@ -115,6 +115,6 @@ Remediation verification:
 
 ## Before you add features — prioritized punch list
 
-1. Replace the five commission payout RLS role-only checks with active-aware `is_admin()` policies and add a live policy regression predicate.
+1. Apply the queued commission payout hardening so live matches source: no direct external table-write policies, active-aware `public.is_admin()` read policies, and the standing live policy regression predicate.
 2. Refresh and harden the live-RPC snapshot so literal frontend calls are checked against a trusted catalog rather than a self-copied constant.
 3. Generate the quote lifecycle diagram from shared status metadata, then remove the retired `create_invoice_from_delivery()` note.

@@ -35,7 +35,12 @@ function makeRepo(changePath, changeContent) {
   writeFileSync(target, changeContent, "utf8");
   git(repo, ["add", changePath]);
   git(repo, ["commit", "-m", "test change"]);
-  return { repo, sha: git(repo, ["rev-parse", "HEAD"]) };
+  return {
+    repo,
+    sha: git(repo, ["rev-parse", "HEAD"]),
+    // origin/main tip the guard resolves + binds the proof's base_sha to.
+    base: git(repo, ["rev-parse", "origin/main"]),
+  };
 }
 
 function proofPath(repo) {
@@ -145,6 +150,7 @@ try {
     claude_ran: true,
     verdict: "clean",
     head_sha: risky.sha,
+    base_sha: risky.base,
     timestamp: new Date(now).toISOString(),
   };
 
@@ -253,6 +259,15 @@ try {
 
   writeProof(risky.repo, { ...valid, head_sha: "f".repeat(40) });
   assert.equal(evaluatePush(risky.repo, now).blocked, true, "wrong-SHA proof denied");
+
+  // Base-SHA binding: a proof reviewed against a DIFFERENT origin/main (the base
+  // moved after review) is denied even though HEAD, verdict, and freshness are
+  // all fine.
+  writeProof(risky.repo, { ...valid, base_sha: "e".repeat(40) });
+  assert.equal(evaluatePush(risky.repo, now).blocked, true, "proof bound to a moved origin/main base is denied");
+  // A proof with no base_sha at all fails closed once the guard resolves a base.
+  writeProof(risky.repo, { claude_ran: true, verdict: "clean", head_sha: risky.sha, timestamp: new Date(now).toISOString() });
+  assert.equal(evaluatePush(risky.repo, now).blocked, true, "base-less proof fails closed under base binding");
 
   writeProof(risky.repo, { ...valid, verdict: "ship" });
   assert.equal(evaluatePush(risky.repo, now).blocked, true, "wrong-verdict proof denied");
