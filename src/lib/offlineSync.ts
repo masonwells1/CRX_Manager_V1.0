@@ -9,7 +9,6 @@ import {
   getPendingActions,
   getActionOwnerUserId,
   OFFLINE_MAX_RETRIES,
-  persistSnapshotIfMissing,
   prepareLegacyQueuedAction,
   removeAction,
   updateAction,
@@ -24,31 +23,6 @@ import {
 export const MAX_RETRIES = OFFLINE_MAX_RETRIES;
 export const RETRY_DELAYS_MS = [30_000, 2 * 60_000, 10 * 60_000] as const;
 const MAX_SESSION_MISMATCH_DEFERRALS = 3;
-
-async function recoverDurableSnapshot(action: PendingAction): Promise<PendingAction> {
-  if (!action.id || !action.entityId) return action;
-
-  const entityTable = action.operation === 'complete_delivery' ? 'deliveries' : 'jobs';
-  const response = entityTable === 'deliveries'
-    ? await supabase.from('deliveries').select('updated_at').eq('id', action.entityId).maybeSingle()
-    : await supabase.from('jobs').select('updated_at').eq('id', action.entityId).maybeSingle();
-
-  if (response.error) {
-    throw new OfflineReceiptSyncError(
-      'The current server version of this saved action could not be checked. It remains saved and will retry automatically.',
-      'retry_later',
-      RETRY_DELAYS_MS[0],
-    );
-  }
-  if (!response.data || typeof response.data.updated_at !== 'string') {
-    // Do not quarantine this only on the device. Staging without a snapshot
-    // lets the server create a permanent TARGET_NOT_FOUND / LEGACY_OUTCOME_UNKNOWN
-    // receipt that the office can see and resolve.
-    return action;
-  }
-
-  return persistSnapshotIfMissing(action.id, response.data.updated_at, entityTable);
-}
 
 export interface OfflineSyncResult {
   synced: number;
@@ -195,16 +169,10 @@ async function processPendingActions(
     }
 
     try {
-      // A durable action can lack a snapshot when it predates receipts or when
-      // the field card was never expanded before going offline. Recover the
-      // current target version once, atomically save it across tabs, and let
-      // the server recheck it immediately before the canonical mutation.
-      if (
-        isDurableOfflineOperation(action.operation)
-        && !action.snapshotAt
-      ) {
-        action = await recoverDurableSnapshot(action);
-      }
+      // Never synthesize a missing queue-time snapshot after reconnecting.
+      // Doing so would accept office edits made during the offline window as
+      // the action's baseline. The durable server path stages these actions as
+      // permanent LEGACY_OUTCOME_UNKNOWN review work instead.
       await executeAction(action);
       await removeAction(action.id!);
       synced++;

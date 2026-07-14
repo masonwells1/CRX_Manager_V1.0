@@ -31,6 +31,12 @@ const LIMIT_MIGRATION = path.join(
   'migrations',
   '20260714171800_offline_action_receipt_stage_limits.sql'
 );
+const TARGET_LOCK_MIGRATION = path.join(
+  REPO_ROOT,
+  'supabase',
+  'migrations',
+  '20260714203709_offline_action_target_lock.sql'
+);
 const FIXTURES = path.join(
   REPO_ROOT,
   'scripts',
@@ -308,6 +314,52 @@ async function proveConcurrent(fixture, label, stateReader, countField) {
   return { lock_observed: true, receipt, business };
 }
 
+async function proveConcurrentTargetEdit(fixture, entityKind) {
+  if (!['delivery', 'job'].includes(entityKind)) fail(`unsupported target-edit entity kind: ${entityKind}`);
+  const entity = validateUuid(fixture.entity_id, `target-race ${entityKind} entity_id`);
+  const table = entityKind === 'delivery' ? 'deliveries' : 'jobs';
+  const officeApp = `crx_proof_target_edit_${entityKind}_office`;
+  const processorApp = `crx_proof_target_edit_${entityKind}_processor`;
+  const office = startSql(`
+BEGIN;
+UPDATE public.${table}
+   SET updated_at = updated_at + interval '1 second'
+ WHERE id = ${sqlLiteral(entity)}::uuid;
+SELECT pg_sleep(4);
+COMMIT;
+`, officeApp);
+
+  await waitForActivity(
+    officeApp,
+    (row) => row.wait_event === 'PgSleep',
+    `office edit to pause while holding the ${entityKind} row lock`
+  );
+
+  const processor = startSql(processSql(fixture, false), processorApp);
+  await waitForActivity(
+    processorApp,
+    (row) => row.wait_event_type === 'Lock',
+    'offline processor to block on the concurrent office target edit'
+  );
+
+  const [officeDone, processorDone] = await Promise.all([office.completed, processor.completed]);
+  assert.equal(officeDone.code, 0, `office target edit failed: ${officeDone.stderr}`);
+  const result = parseProcessResult(processorDone, 'target-edit processor');
+  assert.equal(result.status, 'needs_review', 'target-edit race did not route to review');
+  assert.equal(result.failure_code, 'TARGET_STATE_CONFLICT', 'target-edit race returned the wrong failure code');
+
+  const receipt = receiptState(fixture);
+  const business = entityKind === 'delivery' ? deliveryState(fixture) : jobState(fixture);
+  assert.equal(receipt.status, 'needs_review', 'target-edit receipt did not remain reviewable');
+  assert.equal(receipt.attempt_count, 0, 'target-edit race incorrectly counted a canonical attempt');
+  assert.equal(receipt.failure_code, 'TARGET_STATE_CONFLICT', 'stored target-edit failure code is wrong');
+  assert.equal(business.status, 'in_progress', `target-edit race completed the ${entityKind}`);
+  const mutationCount = entityKind === 'delivery' ? business.ledger_count : business.application_record_count;
+  assert.equal(Number(mutationCount), 0, `target-edit race wrote ${entityKind} business output`);
+
+  return { lock_observed: true, result, receipt, business };
+}
+
 async function proveConcurrentStageLimit(firstFixture, secondFixture) {
   const clientCreatedAt = new Date(Date.now() - 5 * 60 * 1000).toISOString();
   const firstApp = 'crx_proof_stage_limit_first';
@@ -490,6 +542,7 @@ $preflight$;
 
   const migrationSql = readFileSync(MIGRATION, 'utf8');
   const limitMigrationSql = readFileSync(LIMIT_MIGRATION, 'utf8');
+  const targetLockMigrationSql = readFileSync(TARGET_LOCK_MIGRATION, 'utf8');
   const fixtureSql = readFileSync(FIXTURES, 'utf8');
   const setupSql = `
 BEGIN;
@@ -499,6 +552,7 @@ DROP FUNCTION IF EXISTS public.stage_offline_action(uuid, text, uuid, integer, t
 DROP TABLE IF EXISTS public.offline_action_receipts CASCADE;
 ${migrationSql}
 ${limitMigrationSql}
+${targetLockMigrationSql}
 ${fixtureSql}
 COMMIT;
 `;
@@ -512,6 +566,8 @@ FROM public.offline_receipt_failure_proof_control c;
 `);
   for (const label of [
     'concurrency_delivery',
+    'target_race_delivery',
+    'target_race_job',
     'interrupted_delivery',
     'lost_response_delivery',
     'concurrency_job',
@@ -542,6 +598,18 @@ async function main() {
     'ledger_count'
   );
 
+  console.log('[proof] racing a concurrent office target edit against offline processing');
+  const targetEditDeliveryConcurrency = await proveConcurrentTargetEdit(
+    fixtures.target_race_delivery,
+    'delivery'
+  );
+
+  console.log('[proof] racing a concurrent office job edit against offline processing');
+  const targetEditJobConcurrency = await proveConcurrentTargetEdit(
+    fixtures.target_race_job,
+    'job'
+  );
+
   console.log('[proof] racing two complete_job processors');
   const jobConcurrency = await proveConcurrent(
     fixtures.concurrency_job,
@@ -560,6 +628,8 @@ async function main() {
     database: DATABASE,
     stage_limit_concurrency: stageLimitConcurrency,
     delivery_concurrency: deliveryConcurrency,
+    target_edit_delivery_concurrency: targetEditDeliveryConcurrency,
+    target_edit_job_concurrency: targetEditJobConcurrency,
     job_concurrency: jobConcurrency,
     interrupted_connection: interruptedConnection,
     lost_response_after_commit: lostResponseAfterCommit,

@@ -167,6 +167,57 @@ BEGIN
   INSERT INTO public.offline_receipt_failure_proof_control
   VALUES ('concurrency_delivery', v_admin, v_delivery, v_action, v_key);
 
+  -- ----------------------------------------- target-edit race delivery
+  INSERT INTO public.orders (
+    order_number, customer_id, status, booking_draw
+  ) VALUES (
+    '[PROOF] TARGET-RACE-ORDER-' || v_suffix, v_customer, 'confirmed', false
+  ) RETURNING id INTO v_order;
+
+  INSERT INTO public.order_items (
+    order_id, product_id, product_name, price_per_unit, cost_per_unit,
+    total_units_needed, total_price, profit, net_margin,
+    quantity_delivered, quantity_remaining
+  ) VALUES (
+    v_order, v_product, '[PROOF] target race delivery line', 10, 6,
+    2, 20, 8, 40, 0, 2
+  ) RETURNING id INTO v_order_item;
+
+  INSERT INTO public.deliveries (
+    delivery_number, order_id, customer_id, assigned_driver,
+    scheduled_date, status, created_by
+  ) VALUES (
+    '[PROOF] TARGET-RACE-DEL-' || v_suffix, v_order, v_customer, NULL,
+    CURRENT_DATE, 'scheduled', v_admin
+  ) RETURNING id INTO v_delivery;
+
+  INSERT INTO public.delivery_items (
+    delivery_id, order_item_id, product_id, quantity,
+    quantity_delivered, unit_size
+  ) VALUES (v_delivery, v_order_item, v_product, 2, 0, 'GL')
+  RETURNING id INTO v_delivery_item;
+
+  UPDATE public.deliveries SET status = 'in_progress' WHERE id = v_delivery;
+
+  v_action := gen_random_uuid();
+  v_key := '[PROOF] target-race-delivery-' || v_suffix;
+  v_payload := jsonb_build_object(
+    'signed_by', 'Target Race Receiver',
+    'quantities', jsonb_build_object(v_delivery_item::text, 2),
+    'issue_type', 'none',
+    'completed_at', to_jsonb(clock_timestamp() - interval '1 minute')
+  );
+  v_result := public.stage_offline_action(
+    v_action, 'complete_delivery', v_delivery, 1,
+    clock_timestamp() - interval '5 minutes', v_payload, v_key,
+    (SELECT d.updated_at FROM public.deliveries d WHERE d.id = v_delivery)
+  );
+  IF v_result->>'status' IS DISTINCT FROM 'received' THEN
+    RAISE EXCEPTION 'PROOF_SETUP: target-race delivery did not stage: %', v_result;
+  END IF;
+  INSERT INTO public.offline_receipt_failure_proof_control
+  VALUES ('target_race_delivery', v_admin, v_delivery, v_action, v_key);
+
   -- ------------------------------------------------ interruption delivery
   INSERT INTO public.orders (
     order_number, customer_id, status, booking_draw
@@ -323,6 +374,31 @@ BEGIN
   INSERT INTO public.offline_receipt_failure_proof_control
   VALUES ('concurrency_job', v_admin, v_job, v_action, v_key);
 
+  -- ---------------------------------------------- target-edit race job
+  INSERT INTO public.jobs (
+    job_number, customer_id, status, job_date, season,
+    total_acres, total_price_cents, total_cost_cents, created_by
+  ) VALUES (
+    '[PROOF] TARGET-RACE-JOB-' || v_suffix, v_customer, 'scheduled', CURRENT_DATE,
+    extract(year FROM CURRENT_DATE)::integer, 1, 0, 0, v_admin
+  ) RETURNING id INTO v_job;
+
+  UPDATE public.jobs SET status = 'in_progress' WHERE id = v_job;
+
+  v_action := gen_random_uuid();
+  v_key := '[PROOF] target-race-job-' || v_suffix;
+  v_payload := '{}'::jsonb;
+  v_result := public.stage_offline_action(
+    v_action, 'complete_job', v_job, 1,
+    clock_timestamp() - interval '5 minutes', v_payload, v_key,
+    (SELECT j.updated_at FROM public.jobs j WHERE j.id = v_job)
+  );
+  IF v_result->>'status' IS DISTINCT FROM 'received' THEN
+    RAISE EXCEPTION 'PROOF_SETUP: target-race job did not stage: %', v_result;
+  END IF;
+  INSERT INTO public.offline_receipt_failure_proof_control
+  VALUES ('target_race_job', v_admin, v_job, v_action, v_key);
+
   -- Build 500 old needs-review rows, prove that even a valid new `received`
   -- action is refused, then remove the synthetic backlog before other proofs.
   INSERT INTO public.offline_action_receipts (
@@ -361,7 +437,7 @@ BEGIN
   DELETE FROM public.offline_action_receipts
   WHERE idempotency_key LIKE '[PROOF] backlog-' || v_suffix || '-%';
 
-  -- Leave this actor at 249 recent receipts (four business fixtures + 245
+  -- Leave this actor at 249 recent receipts (six business fixtures + 243
   -- synthetic rows). The JS harness races two new actions for the final slot.
   INSERT INTO public.offline_action_receipts (
     client_action_id, actor_id, operation, entity_id, schema_version,
@@ -374,7 +450,7 @@ BEGIN
     '[PROOF] rate-seed-' || v_suffix || '-' || g::text,
     'needs_review', 'TARGET_NOT_FOUND',
     'The referenced delivery or job no longer exists.', clock_timestamp()
-  FROM generate_series(1, 245) g;
+  FROM generate_series(1, 243) g;
 
   INSERT INTO public.offline_receipt_failure_proof_control
   VALUES

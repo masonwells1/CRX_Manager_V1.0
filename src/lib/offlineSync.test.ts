@@ -24,8 +24,6 @@ vi.mock('./db', () => ({
 const mockGetPendingActions = vi.fn();
 const mockRemoveAction = vi.fn().mockResolvedValue(undefined);
 const mockUpdateAction = vi.fn().mockResolvedValue(undefined);
-const mockPersistSnapshot = vi.fn();
-
 vi.mock('./offlineQueue', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./offlineQueue')>();
   return {
@@ -33,7 +31,6 @@ vi.mock('./offlineQueue', async (importOriginal) => {
     getPendingActions: () => mockGetPendingActions(),
     removeAction: (id: number) => mockRemoveAction(id),
     updateAction: (action: unknown) => mockUpdateAction(action),
-    persistSnapshotIfMissing: (...args: unknown[]) => mockPersistSnapshot(...args),
   };
 });
 
@@ -90,7 +87,6 @@ beforeEach(() => {
   mockGetPendingActions.mockReset();
   mockRemoveAction.mockReset().mockResolvedValue(undefined);
   mockUpdateAction.mockReset().mockResolvedValue(undefined);
-  mockPersistSnapshot.mockReset();
   mockExecuteDurable.mockImplementation(async (action: PendingAction) => {
     const response = await mockRpc(action.operation, action.params);
     if (response.error) throw response.error;
@@ -249,8 +245,7 @@ describe('syncPendingActions', () => {
     expect(result).toEqual({ ...EMPTY_RESULT, synced: 1, needsAttention: 1 });
   });
 
-  it('recovers and persists a current server snapshot before replaying pre-receipt work', async () => {
-    const recoveredSnapshot = '2026-07-14T12:05:00.000Z';
+  it('keeps pre-receipt work without a queue-time snapshot in office review', async () => {
     const legacy = makeAction({
       clientActionId: undefined,
       idempotencyKey: undefined,
@@ -260,44 +255,23 @@ describe('syncPendingActions', () => {
       entityTable: undefined,
     });
     mockGetPendingActions.mockResolvedValue([legacy]);
-    mockFrom.mockReturnValue({
-      select: () => ({
-        eq: () => ({
-          maybeSingle: () => Promise.resolve({ data: { updated_at: recoveredSnapshot }, error: null }),
-        }),
-      }),
-    });
-    mockPersistSnapshot.mockImplementation(async (
-      id: number,
-      snapshotAt: string,
-      entityTable: 'deliveries' | 'jobs',
-    ) => ({
-      ...legacy,
-      id,
-      clientActionId: '55555555-5555-4555-8555-555555555555',
-      idempotencyKey: legacy.params.p_idempotency_key,
-      schemaVersion: 1,
-      receiptOrigin: 'legacy',
-      entityTable,
-      snapshotAt,
-    }));
-    mockRpc.mockResolvedValue({ data: { success: true }, error: null });
+    mockExecuteDurable.mockRejectedValue(new OfflineReceiptSyncError(
+      'The server kept this action for office review.',
+      'needs_attention',
+    ));
 
     const result = await syncPendingActions('user-1');
 
-    expect(mockFrom).toHaveBeenCalledWith('deliveries');
-    expect(mockPersistSnapshot).toHaveBeenCalledWith(1, recoveredSnapshot, 'deliveries');
     expect(mockExecuteDurable).toHaveBeenCalledWith(expect.objectContaining({
       receiptOrigin: 'legacy',
-      snapshotAt: recoveredSnapshot,
-      entityTable: 'deliveries',
+      snapshotAt: undefined,
+      entityTable: undefined,
     }));
-    expect(mockRemoveAction).toHaveBeenCalledWith(1);
-    expect(result).toEqual({ ...EMPTY_RESULT, synced: 1 });
+    expect(mockRemoveAction).not.toHaveBeenCalled();
+    expect(result).toEqual({ ...EMPTY_RESULT, failed: 1, needsAttention: 1 });
   });
 
-  it('recovers a missing snapshot for a native field job completion before replay', async () => {
-    const recoveredSnapshot = '2026-07-14T12:10:00.000Z';
+  it('keeps a native field completion without a queue-time snapshot in office review', async () => {
     const nativeFieldAction = makeAction({
       operation: 'complete_job',
       entityId: 'job-1',
@@ -311,68 +285,21 @@ describe('syncPendingActions', () => {
       },
     });
     mockGetPendingActions.mockResolvedValue([nativeFieldAction]);
-    mockFrom.mockReturnValue({
-      select: () => ({
-        eq: () => ({
-          maybeSingle: () => Promise.resolve({ data: { updated_at: recoveredSnapshot }, error: null }),
-        }),
-      }),
-    });
-    mockPersistSnapshot.mockImplementation(async (
-      id: number,
-      snapshotAt: string,
-      entityTable: 'deliveries' | 'jobs',
-    ) => ({
-      ...nativeFieldAction,
-      id,
-      entityTable,
-      snapshotAt,
-    }));
-    mockRpc.mockResolvedValue({ data: { success: true }, error: null });
+    mockExecuteDurable.mockRejectedValue(new OfflineReceiptSyncError(
+      'The server kept this action for office review.',
+      'needs_attention',
+    ));
 
     const result = await syncPendingActions('user-1');
 
-    expect(mockFrom).toHaveBeenCalledWith('jobs');
-    expect(mockPersistSnapshot).toHaveBeenCalledWith(1, recoveredSnapshot, 'jobs');
     expect(mockExecuteDurable).toHaveBeenCalledWith(expect.objectContaining({
       operation: 'complete_job',
       receiptOrigin: 'native',
-      snapshotAt: recoveredSnapshot,
+      snapshotAt: undefined,
       entityTable: 'jobs',
     }));
-    expect(mockRemoveAction).toHaveBeenCalledWith(1);
-    expect(result).toEqual({ ...EMPTY_RESULT, synced: 1 });
-  });
-
-  it('defers legacy snapshot recovery without consuming a retry when lookup fails', async () => {
-    const legacy = makeAction({
-      clientActionId: undefined,
-      idempotencyKey: undefined,
-      schemaVersion: undefined,
-      receiptOrigin: undefined,
-      snapshotAt: undefined,
-      entityTable: undefined,
-    });
-    mockGetPendingActions.mockResolvedValue([legacy]);
-    mockFrom.mockReturnValue({
-      select: () => ({
-        eq: () => ({
-          maybeSingle: () => Promise.resolve({ data: null, error: { message: 'network timeout' } }),
-        }),
-      }),
-    });
-
-    const result = await syncPendingActions('user-1');
-
-    expect(mockPersistSnapshot).not.toHaveBeenCalled();
-    expect(mockExecuteDurable).not.toHaveBeenCalled();
-    expect(mockUpdateAction).toHaveBeenLastCalledWith(expect.objectContaining({
-      retryCount: 0,
-      status: 'retry_wait',
-      nextAttemptAt: expect.any(String),
-      lastError: expect.stringContaining('remains saved and will retry automatically'),
-    }));
-    expect(result).toEqual({ ...EMPTY_RESULT, deferred: 1 });
+    expect(mockRemoveAction).not.toHaveBeenCalled();
+    expect(result).toEqual({ ...EMPTY_RESULT, failed: 1, needsAttention: 1 });
   });
 
   it('stages a permanent office-visible receipt when the target cannot be read', async () => {
@@ -392,7 +319,6 @@ describe('syncPendingActions', () => {
 
     const result = await syncPendingActions('user-1');
 
-    expect(mockPersistSnapshot).not.toHaveBeenCalled();
     expect(mockExecuteDurable).toHaveBeenCalledWith(expect.objectContaining({
       clientActionId: unreadableTarget.clientActionId,
       snapshotAt: undefined,
