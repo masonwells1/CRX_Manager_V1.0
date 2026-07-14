@@ -51,6 +51,8 @@ function finalPolicyStatements(): Map<string, string> {
 }
 
 describe('commission payout gauntlet guards', () => {
+  const activeAdminPolicyPattern = /USING\s*\(\s*\(*\s*(?:SELECT\s+)?(?:public\.)?is_admin\(\)\s*\)*\s*\)/i;
+
   it('create_commission_payment rejects stale selections instead of inserting a pending subset', () => {
     const definition = latestFunctionDefinition('create_commission_payment');
 
@@ -77,8 +79,8 @@ describe('commission payout gauntlet guards', () => {
       expect(policies.get(policy), `${policy} should not be recreated`).toBeUndefined();
     }
 
-    expect(policies.get('commission_payment_items.commission_payment_items_select_admin')).toMatch(/USING\s*\(\s*is_admin\(\)\s*\)/i);
-    expect(policies.get('commission_payments.commission_payments_select_admin')).toMatch(/USING\s*\(\s*is_admin\(\)\s*\)/i);
+    expect(policies.get('commission_payment_items.commission_payment_items_select_admin')).toMatch(activeAdminPolicyPattern);
+    expect(policies.get('commission_payments.commission_payments_select_admin')).toMatch(activeAdminPolicyPattern);
   });
 
   it('commissions SELECT policy no longer authorizes by legacy full-name text', () => {

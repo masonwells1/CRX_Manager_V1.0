@@ -146,7 +146,7 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(
     <!-- QUOTE -->
     <div class="lc-card">
       <h3>Quote Lifecycle</h3>
-      <svg viewBox="0 0 440 260" xmlns="http://www.w3.org/2000/svg">
+      <svg viewBox="0 0 440 330" xmlns="http://www.w3.org/2000/svg">
         <defs><marker id="arr" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#8892a4"/></marker>
         <marker id="arr-g" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#28A26A"/></marker>
         <marker id="arr-r" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#ef4444"/></marker></defs>
@@ -157,7 +157,9 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(
         <g><rect x="300" y="60" width="76" height="28" rx="6" fill="#1a1d27" stroke="#28A26A" stroke-width="2"/><text x="338" y="79" text-anchor="middle" fill="#28A26A" font-size="11" font-family="monospace">accepted</text></g>
         <g><rect x="300" y="110" width="70" height="28" rx="6" fill="#1a1d27" stroke="#ef4444" stroke-width="1.5"/><text x="335" y="129" text-anchor="middle" fill="#ef4444" font-size="11" font-family="monospace">declined</text></g>
         <g><rect x="300" y="160" width="68" height="28" rx="6" fill="#1a1d27" stroke="#f59e0b" stroke-width="1.5"/><text x="334" y="179" text-anchor="middle" fill="#f59e0b" font-size="11" font-family="monospace">expired</text></g>
-        <g><rect x="10" y="200" width="76" height="28" rx="6" fill="#1a1d27" stroke="#6b7280" stroke-width="1.5"/><text x="48" y="219" text-anchor="middle" fill="#6b7280" font-size="11" font-family="monospace">cancelled</text></g>
+        <g><rect x="95" y="205" width="145" height="28" rx="6" fill="#1a1d27" stroke="#a855f7" stroke-width="1.5"/><text x="167.5" y="224" text-anchor="middle" fill="#a855f7" font-size="9" font-family="monospace">closed_by_application</text></g>
+        <g><rect x="270" y="205" width="110" height="28" rx="6" fill="#1a1d27" stroke="#a855f7" stroke-width="1.5"/><text x="325" y="224" text-anchor="middle" fill="#a855f7" font-size="10" font-family="monospace">closed_short</text></g>
+        <g><rect x="10" y="260" width="76" height="28" rx="6" fill="#1a1d27" stroke="#6b7280" stroke-width="1.5"/><text x="48" y="279" text-anchor="middle" fill="#6b7280" font-size="11" font-family="monospace">cancelled</text></g>
         <!-- cross-entity output -->
         <g><rect x="300" y="10" width="80" height="28" rx="6" fill="#1a1d27" stroke="#a855f7" stroke-width="1.5" stroke-dasharray="4,2"/><text x="340" y="29" text-anchor="middle" fill="#a855f7" font-size="10" font-family="monospace">→ ORDER</text></g>
         <!-- arrows -->
@@ -168,11 +170,15 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(
         <line x1="268" y1="132" x2="298" y2="166" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#arr)"/>
         <line x1="338" y1="60" x2="338" y2="40" stroke="#a855f7" stroke-width="1.5" marker-end="url(#arr)"/>
         <text x="180" y="100" text-anchor="middle" fill="#28A26A" font-size="9">convert_quote_to_order()</text>
-        <line x1="140" y1="138" x2="60" y2="198" stroke="#6b7280" stroke-width="1" stroke-dasharray="3,2" marker-end="url(#arr)"/>
-        <text x="85" y="175" fill="#6b7280" font-size="8">cancel</text>
+        <line x1="140" y1="138" x2="145" y2="203" stroke="#a855f7" stroke-width="1" stroke-dasharray="3,2" marker-end="url(#arr)"/>
+        <line x1="140" y1="138" x2="300" y2="203" stroke="#a855f7" stroke-width="1" stroke-dasharray="3,2" marker-end="url(#arr)"/>
+        <line x1="234" y1="138" x2="190" y2="203" stroke="#a855f7" stroke-width="1" stroke-dasharray="3,2" marker-end="url(#arr)"/>
+        <line x1="234" y1="138" x2="330" y2="203" stroke="#a855f7" stroke-width="1" stroke-dasharray="3,2" marker-end="url(#arr)"/>
+        <line x1="140" y1="138" x2="60" y2="258" stroke="#6b7280" stroke-width="1" stroke-dasharray="3,2" marker-end="url(#arr)"/>
+        <text x="82" y="225" fill="#6b7280" font-size="8">cancel</text>
         <!-- legend note -->
-        <text x="10" y="248" fill="#8892a4" font-size="9">* sent → revised on re-edit; expired via cron auto_expire_quotes()</text>
-        <text x="10" y="258" fill="#8892a4" font-size="9">cancel available from draft/sent/revised; declined &amp; expired auto-release holds</text>
+        <text x="10" y="310" fill="#8892a4" font-size="9">* sent → revised on re-edit; closed states are terminal draw-down outcomes</text>
+        <text x="10" y="322" fill="#8892a4" font-size="9">cancel from draft/sent/revised; declined &amp; expired auto-release holds</text>
       </svg>
     </div>
 
@@ -370,9 +376,9 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(
       <p>Documented at CLAUDE.md Business Logic Lifecycles (<code>Commission Payment (batch): unposted → posted → voided</code>). Stale note retained for provenance; no action. (2026-06-08 workflow review LOW.)</p>
       <span class="loc">CLAUDE.md:198-202</span>
     </div>
-    <div class="prob-item warn"><strong>Two RPCs appear UI-unused (optional cleanup)</strong>
-      <p><code>dashboard_summary()</code> (superseded by <code>operational_dashboard_summary()</code>) and <code>create_invoice_from_delivery()</code> are not called from any page. They ARE referenced in rpcContracts.test.ts / schemaIntegrity.test.ts contract lists, so dropping them means updating those tests too. Destructive on a live prod DB and low value — only do it if you specifically want the cleanup.</p>
-      <span class="loc">src/lib/rpcContracts.test.ts · src/lib/schemaIntegrity.test.ts</span>
+    <div class="prob-item warn"><strong>One legacy RPC appears UI-unused (optional cleanup)</strong>
+      <p><code>dashboard_summary()</code> is superseded by <code>operational_dashboard_summary()</code> and is not called from any page. Dropping a live RPC is destructive and low value, so only do it as a separately reviewed cleanup.</p>
+      <span class="loc">docs/reference/rpc-functions.md</span>
     </div>
     <div class="prob-item info"><strong>Fields delete has no app-level reference guard (optional)</strong>
       <p><span class="loc">Fields.tsx:194</span> deletes via <code>checkMutationResult</code> + ConfirmModal (safe), but has no pre-delete check for active quotes/orders/deliveries referencing the field. Whether this matters depends on the FK ON DELETE rule — if FKs are RESTRICT, the DB already blocks it; if CASCADE, a guard would prevent silent data loss. Worth confirming the FK rule before adding anything.</p>
