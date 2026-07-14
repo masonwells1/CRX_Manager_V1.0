@@ -1679,6 +1679,7 @@ describe('Idempotency BODY verification (reads migration SQL)', () => {
 // -------------------------------------------------------------------------
 
 type GeneratedRpcShape = { name: string; source: string };
+type MigrationFunctionDefinition = { body: string; definition: string; fileName: string };
 
 /** Current RPC names and Args blocks from the generated Supabase types. */
 function generatedRpcShapes(): GeneratedRpcShape[] {
@@ -1722,8 +1723,8 @@ function generatedRpcsDeclaringIdempotencyKey(): Set<string> {
  * application RPCs this guard covers. Intersecting this with generated types
  * removes dropped functions and trigger-only helpers from the client RPC set.
  */
-function latestMigrationFunctionBodies(): Map<string, string> {
-  const latest = new Map<string, string>();
+function latestMigrationFunctions(): Map<string, MigrationFunctionDefinition> {
+  const latest = new Map<string, MigrationFunctionDefinition>();
   const signature = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:public\.)?"?([a-z_][a-z0-9_]*)"?\s*\(/gi;
   for (const file of getMigrationFiles()) {
     let match: RegExpExecArray | null;
@@ -1734,10 +1735,22 @@ function latestMigrationFunctionBodies(): Map<string, string> {
         ? after
         : after.slice(0, match[0].length + nextDefinition);
       const bodyMatch = definition.match(/\bAS\s+\$([A-Za-z_]*)\$([\s\S]*?)\$\1\$/i);
-      if (bodyMatch) latest.set(match[1], bodyMatch[2]);
+      if (bodyMatch) {
+        latest.set(match[1], {
+          body: bodyMatch[2],
+          definition,
+          fileName: file.name,
+        });
+      }
     }
   }
   return latest;
+}
+
+function latestMigrationFunctionBodies(): Map<string, string> {
+  return new Map(
+    [...latestMigrationFunctions()].map(([name, value]) => [name, value.body]),
+  );
 }
 
 function stripSqlComments(body: string): string {
@@ -1779,14 +1792,40 @@ function transitiveMutatingFunctionNames(bodies: Map<string, string>): Set<strin
   return mutators;
 }
 
-/** Current generated RPCs whose latest body performs DML directly or through a helper. */
+function registryMigrationHighWater(): string {
+  const registryPath = join(
+    dirname(fileURLToPath(import.meta.url)),
+    '..',
+    '..',
+    '.claude',
+    'schema-registry.json'
+  );
+  const registry = JSON.parse(readFileSync(registryPath, 'utf8')) as {
+    _meta?: { migrations_high_water?: string };
+  };
+  return registry._meta?.migrations_high_water || '';
+}
+
+/**
+ * Generated RPCs plus mutators introduced after the generated schema snapshot.
+ * The latter closes the normal pre-apply gap where a PR migration exists before
+ * src/types/supabase.ts can truthfully be regenerated from production.
+ */
 function generatedMutatingRpcInventory(): Set<string> {
   const generatedNames = new Set(generatedRpcShapes().map(({ name }) => name));
-  return new Set(
-    [...transitiveMutatingFunctionNames(latestMigrationFunctionBodies())]
-      .filter((name) => generatedNames.has(name)),
-  );
+  const functions = latestMigrationFunctions();
+  const mutators = transitiveMutatingFunctionNames(latestMigrationFunctionBodies());
+  const highWater = registryMigrationHighWater();
+  return new Set([...mutators].filter((name) => {
+    const timestamp = functions.get(name)?.fileName.match(/^\d{14}/)?.[0] || '';
+    return generatedNames.has(name) || (timestamp !== '' && timestamp > highWater);
+  }));
 }
+
+const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
+  'reverse_application_record',
+  'stamp_job_printed',
+]);
 
 /**
  * Discovered mutating RPCs for which replay safety does not use p_idempotency_key.
@@ -1813,6 +1852,7 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
   release_expired_quote_holds: 'maintenance releases only holds that remain in the expired state',
   reserve_job_inventory: 'frontend-callable wrapper over rebuild-from-scratch _sync_job_holds; replays converge and return current shortfalls',
   retry_failed_notifications: 'service-role retry worker advances persisted failed-notification state',
+  run_weekly_db_backup: 'cron-only backup routine; EXECUTE is revoked from anon and authenticated',
   run_data_integrity_sweep: 'convergent integrity repair recomputes current invariant state',
   run_morning_notification_checks: 'cron sweep has persisted per-recipient notification deduplication',
   save_idempotency: 'idempotency infrastructure helper that stores the parent operation result',
@@ -1872,6 +1912,7 @@ describe('Idempotency coverage drift (generated-types driven, fail-closed)', () 
     const classified = new Set([
       ...MUTATING_RPCS_WITH_IDEMPOTENCY,
       ...MUTATING_RPCS_MISSING_IDEMPOTENCY,
+      ...MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY,
       ...Object.keys(MUTATOR_INVENTORY_EXEMPT),
     ]);
     const unclassified = [...mutators]
@@ -1887,6 +1928,16 @@ describe('Idempotency coverage drift (generated-types driven, fail-closed)', () 
     // fails here until explicitly classified. Never baseline a business mutator
     // as exempt merely to make this test green.
     expect(unclassified).toEqual([]);
+  });
+
+  it('migration-only idempotent RPCs are explicit and really declare the key', () => {
+    const generatedNames = new Set(generatedRpcShapes().map(({ name }) => name));
+    const functions = latestMigrationFunctions();
+    const stale = [...MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY].filter((rpc) => {
+      const definition = functions.get(rpc)?.definition || '';
+      return generatedNames.has(rpc) || !/p_idempotency_key\s+text/i.test(definition);
+    });
+    expect(stale).toEqual([]);
   });
 
   it('mutator inventory exemptions are current, explicit, and non-empty', () => {

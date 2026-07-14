@@ -139,6 +139,23 @@ for (const workflow of ['./overnight-bug-hunt.js', './money-inventory-hunt.js'])
   const { result } = await executeWorkflow(
     workflow,
     async (_prompt, options) => {
+      if (options.label?.startsWith('hunt:')) return completeLayer()
+      throw new Error(`No verifier expected for an empty finder: ${options.label}`)
+    },
+    { only: ['invoices-core', 'typo-subsystem'] }
+  )
+
+  assert.equal(result.overallStatus, 'BLOCKED', `${workflow}: unknown subsystem must block`)
+  assert.equal(result.complete, false)
+  assert.equal(result.clean, false)
+  assert.equal(result.blocked.length, 1)
+  assert.equal(result.blocked[0].dimension, 'typo-subsystem')
+}
+
+for (const workflow of ['./overnight-bug-hunt.js', './money-inventory-hunt.js']) {
+  const { result } = await executeWorkflow(
+    workflow,
+    async (_prompt, options) => {
       if (options.label?.startsWith('hunt:')) return null
       throw new Error(`A verifier must not run after a missing finder: ${options.label}`)
     },

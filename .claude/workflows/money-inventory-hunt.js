@@ -236,8 +236,10 @@ const A = (() => {
   if (typeof args === 'string') { try { return JSON.parse(args) } catch { return {} } }
   return args
 })()
+const REQUESTED_ONLY = Array.isArray(A.only) && A.only.length ? [...new Set(A.only)] : []
+const UNKNOWN_ONLY = REQUESTED_ONLY.filter((key) => !DIMENSIONS.some((d) => d.key === key))
 const SELECTED = (() => {
-  if (Array.isArray(A.only) && A.only.length) return DIMENSIONS.filter((d) => A.only.includes(d.key))
+  if (REQUESTED_ONLY.length) return DIMENSIONS.filter((d) => REQUESTED_ONLY.includes(d.key))
   if (A.phase === 1 || A.phase === 2 || A.phase === '1' || A.phase === '2') return DIMENSIONS.filter((d) => String(d.phase) === String(A.phase))
   return DIMENSIONS.filter((d) => d.phase === 1) // default: Phase 1 (billing engine)
 })()
@@ -330,7 +332,13 @@ const results = await pipeline(
   }
 )
 
-const all = results.flat().filter(Boolean)
+const selectionBlocked = UNKNOWN_ONLY.map((key) => ({
+  dimension: String(key),
+  phase: 'Selection',
+  status: 'BLOCKED',
+  reason: `Unknown requested subsystem: ${String(key)}`,
+}))
+const all = [...selectionBlocked, ...results.flat().filter(Boolean)]
 const confirmed = all.filter((f) => f.status === 'VERIFIED')
 const refuted = all.filter((f) => f.status === 'REFUTED')
 const unverified = all.filter((f) => f.status === 'UNVERIFIED')
