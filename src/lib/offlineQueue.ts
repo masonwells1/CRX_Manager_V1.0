@@ -274,17 +274,17 @@ export async function updateAction(action: PendingAction): Promise<void> {
 }
 
 /**
- * Persist the first server snapshot recovered for a pre-receipt action.
+ * Persist the first server snapshot recovered for a durable action.
  * The read and write share one IndexedDB transaction, so two tabs racing the
- * same legacy row both converge on the first stored snapshot.
+ * same row both converge on the first stored snapshot.
  */
-export async function persistLegacySnapshotIfMissing(
+export async function persistSnapshotIfMissing(
   actionId: number,
   snapshotAt: string,
   entityTable: 'deliveries' | 'jobs',
 ): Promise<PendingAction> {
   if (!Number.isInteger(actionId) || actionId <= 0) {
-    throw new Error('Legacy offline action is missing its local queue ID');
+    throw new Error('Offline action is missing its local queue ID');
   }
   if (!Number.isFinite(new Date(snapshotAt).getTime())) {
     throw new Error('Legacy offline action received an invalid server snapshot');

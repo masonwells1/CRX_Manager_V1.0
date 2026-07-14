@@ -24,7 +24,7 @@ vi.mock('./db', () => ({
 const mockGetPendingActions = vi.fn();
 const mockRemoveAction = vi.fn().mockResolvedValue(undefined);
 const mockUpdateAction = vi.fn().mockResolvedValue(undefined);
-const mockPersistLegacySnapshot = vi.fn();
+const mockPersistSnapshot = vi.fn();
 
 vi.mock('./offlineQueue', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./offlineQueue')>();
@@ -33,7 +33,7 @@ vi.mock('./offlineQueue', async (importOriginal) => {
     getPendingActions: () => mockGetPendingActions(),
     removeAction: (id: number) => mockRemoveAction(id),
     updateAction: (action: unknown) => mockUpdateAction(action),
-    persistLegacySnapshotIfMissing: (...args: unknown[]) => mockPersistLegacySnapshot(...args),
+    persistSnapshotIfMissing: (...args: unknown[]) => mockPersistSnapshot(...args),
   };
 });
 
@@ -67,6 +67,9 @@ function makeAction(overrides: Partial<PendingAction> = {}): PendingAction {
       p_idempotency_key: 'complete_delivery:user-1:test-key',
     },
     entityId: 'd-1',
+    entityTable: 'deliveries',
+    snapshotAt: '2026-07-13T12:00:00.000Z',
+    receiptOrigin: 'native',
     clientActionId: '11111111-1111-4111-8111-111111111111',
     idempotencyKey: 'complete_delivery:user-1:test-key',
     schemaVersion: 1,
@@ -79,7 +82,14 @@ function makeAction(overrides: Partial<PendingAction> = {}): PendingAction {
 }
 
 beforeEach(() => {
-  vi.clearAllMocks();
+  mockRpc.mockReset();
+  mockFrom.mockReset();
+  mockCaptureException.mockReset();
+  mockExecuteDurable.mockReset();
+  mockGetPendingActions.mockReset();
+  mockRemoveAction.mockReset().mockResolvedValue(undefined);
+  mockUpdateAction.mockReset().mockResolvedValue(undefined);
+  mockPersistSnapshot.mockReset();
   mockExecuteDurable.mockImplementation(async (action: PendingAction) => {
     const response = await mockRpc(action.operation, action.params);
     if (response.error) throw response.error;
@@ -256,7 +266,7 @@ describe('syncPendingActions', () => {
         }),
       }),
     });
-    mockPersistLegacySnapshot.mockImplementation(async (
+    mockPersistSnapshot.mockImplementation(async (
       id: number,
       snapshotAt: string,
       entityTable: 'deliveries' | 'jobs',
@@ -275,11 +285,59 @@ describe('syncPendingActions', () => {
     const result = await syncPendingActions('user-1');
 
     expect(mockFrom).toHaveBeenCalledWith('deliveries');
-    expect(mockPersistLegacySnapshot).toHaveBeenCalledWith(1, recoveredSnapshot, 'deliveries');
+    expect(mockPersistSnapshot).toHaveBeenCalledWith(1, recoveredSnapshot, 'deliveries');
     expect(mockExecuteDurable).toHaveBeenCalledWith(expect.objectContaining({
       receiptOrigin: 'legacy',
       snapshotAt: recoveredSnapshot,
       entityTable: 'deliveries',
+    }));
+    expect(mockRemoveAction).toHaveBeenCalledWith(1);
+    expect(result).toEqual({ ...EMPTY_RESULT, synced: 1 });
+  });
+
+  it('recovers a missing snapshot for a native field job completion before replay', async () => {
+    const recoveredSnapshot = '2026-07-14T12:10:00.000Z';
+    const nativeFieldAction = makeAction({
+      operation: 'complete_job',
+      entityId: 'job-1',
+      entityTable: 'jobs',
+      receiptOrigin: 'native',
+      snapshotAt: undefined,
+      params: {
+        p_job_id: 'job-1',
+        p_performed_by: 'user-1',
+        p_idempotency_key: 'complete_job:user-1:test-key',
+      },
+    });
+    mockGetPendingActions.mockResolvedValue([nativeFieldAction]);
+    mockFrom.mockReturnValue({
+      select: () => ({
+        eq: () => ({
+          maybeSingle: () => Promise.resolve({ data: { updated_at: recoveredSnapshot }, error: null }),
+        }),
+      }),
+    });
+    mockPersistSnapshot.mockImplementation(async (
+      id: number,
+      snapshotAt: string,
+      entityTable: 'deliveries' | 'jobs',
+    ) => ({
+      ...nativeFieldAction,
+      id,
+      entityTable,
+      snapshotAt,
+    }));
+    mockRpc.mockResolvedValue({ data: { success: true }, error: null });
+
+    const result = await syncPendingActions('user-1');
+
+    expect(mockFrom).toHaveBeenCalledWith('jobs');
+    expect(mockPersistSnapshot).toHaveBeenCalledWith(1, recoveredSnapshot, 'jobs');
+    expect(mockExecuteDurable).toHaveBeenCalledWith(expect.objectContaining({
+      operation: 'complete_job',
+      receiptOrigin: 'native',
+      snapshotAt: recoveredSnapshot,
+      entityTable: 'jobs',
     }));
     expect(mockRemoveAction).toHaveBeenCalledWith(1);
     expect(result).toEqual({ ...EMPTY_RESULT, synced: 1 });
@@ -305,7 +363,7 @@ describe('syncPendingActions', () => {
 
     const result = await syncPendingActions('user-1');
 
-    expect(mockPersistLegacySnapshot).not.toHaveBeenCalled();
+    expect(mockPersistSnapshot).not.toHaveBeenCalled();
     expect(mockExecuteDurable).not.toHaveBeenCalled();
     expect(mockUpdateAction).toHaveBeenLastCalledWith(expect.objectContaining({
       retryCount: 0,
@@ -567,7 +625,9 @@ describe('syncPendingActions', () => {
   });
 
   it('quarantines unknown operations instead of deleting them', async () => {
-    mockGetPendingActions.mockResolvedValue([makeAction({ operation: 'unknown_op' })]);
+    mockGetPendingActions.mockResolvedValue([
+      makeAction({ operation: 'unknown_op', entityTable: undefined, snapshotAt: undefined }),
+    ]);
 
     const result = await syncPendingActions('user-1');
 
@@ -583,7 +643,13 @@ describe('syncPendingActions', () => {
   it('continues processing remaining actions when one fails', async () => {
     mockGetPendingActions.mockResolvedValue([
       makeAction({ id: 20 }),
-      makeAction({ id: 21, operation: 'allocate_payment', params: { p_performed_by: 'user-1' } }),
+      makeAction({
+        id: 21,
+        operation: 'allocate_payment',
+        params: { p_performed_by: 'user-1' },
+        entityTable: undefined,
+        snapshotAt: undefined,
+      }),
     ]);
     mockRpc
       .mockResolvedValueOnce({ error: { message: 'temporary failure' } })

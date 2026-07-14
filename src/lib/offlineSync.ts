@@ -9,7 +9,7 @@ import {
   getPendingActions,
   getActionOwnerUserId,
   OFFLINE_MAX_RETRIES,
-  persistLegacySnapshotIfMissing,
+  persistSnapshotIfMissing,
   prepareLegacyQueuedAction,
   removeAction,
   updateAction,
@@ -25,8 +25,8 @@ export const MAX_RETRIES = OFFLINE_MAX_RETRIES;
 export const RETRY_DELAYS_MS = [30_000, 2 * 60_000, 10 * 60_000] as const;
 const MAX_SESSION_MISMATCH_DEFERRALS = 3;
 
-async function recoverLegacyDurableSnapshot(action: PendingAction): Promise<PendingAction> {
-  if (!action.id || !action.entityId || action.receiptOrigin !== 'legacy') return action;
+async function recoverDurableSnapshot(action: PendingAction): Promise<PendingAction> {
+  if (!action.id || !action.entityId) return action;
 
   const entityTable = action.operation === 'complete_delivery' ? 'deliveries' : 'jobs';
   const response = entityTable === 'deliveries'
@@ -35,19 +35,19 @@ async function recoverLegacyDurableSnapshot(action: PendingAction): Promise<Pend
 
   if (response.error) {
     throw new OfflineReceiptSyncError(
-      'The current server version of this older saved action could not be checked. It remains saved and will retry automatically.',
+      'The current server version of this saved action could not be checked. It remains saved and will retry automatically.',
       'retry_later',
       RETRY_DELAYS_MS[0],
     );
   }
   if (!response.data || typeof response.data.updated_at !== 'string') {
     throw new OfflineReceiptSyncError(
-      'This older saved action no longer has a matching delivery or job. Office review is required.',
+      'This saved action no longer has a matching delivery or job. Office review is required.',
       'needs_attention',
     );
   }
 
-  return persistLegacySnapshotIfMissing(action.id, response.data.updated_at, entityTable);
+  return persistSnapshotIfMissing(action.id, response.data.updated_at, entityTable);
 }
 
 export interface OfflineSyncResult {
@@ -195,16 +195,15 @@ async function processPendingActions(
     }
 
     try {
-      // Pre-receipt production rows cannot contain the snapshot introduced by
-      // this release. Recover the current target version once, atomically save
-      // it across tabs, and let the server recheck it immediately before the
-      // canonical mutation. New rows never use this compatibility path.
+      // A durable action can lack a snapshot when it predates receipts or when
+      // the field card was never expanded before going offline. Recover the
+      // current target version once, atomically save it across tabs, and let
+      // the server recheck it immediately before the canonical mutation.
       if (
         isDurableOfflineOperation(action.operation)
-        && action.receiptOrigin === 'legacy'
         && !action.snapshotAt
       ) {
-        action = await recoverLegacyDurableSnapshot(action);
+        action = await recoverDurableSnapshot(action);
       }
       await executeAction(action);
       await removeAction(action.id!);

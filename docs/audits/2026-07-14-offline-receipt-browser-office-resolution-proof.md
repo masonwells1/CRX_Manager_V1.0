@@ -23,7 +23,7 @@
 - `process_offline_action` rechecks the same snapshot immediately before the canonical mutation, closing the stage-to-process interruption window; a legacy row with no snapshot is retained as `LEGACY_OUTCOME_UNKNOWN` review work and cannot run.
 - A stage replay returning the older base `needs_review` shape fetches full sanitized status, allowing the original device to discover an office decision.
 - Two tabs upgrading the same legacy IndexedDB row derive the same SHA-256-based receipt UUID before any network request.
-- A genuine pre-receipt production row is marked as legacy, reads the current target snapshot once, and atomically retains the first snapshot across racing tabs before staging. This preserves already-saved work while the server still catches every target change after recovery and before mutation.
+- Any durable action missing a target snapshot reads the current server version once and atomically retains the first snapshot across racing tabs before staging. This preserves both pre-receipt production work and native field completions saved from an unexpanded card while the server still catches every target change after recovery and before mutation.
 - A blocked IndexedDB version upgrade rejects with an actionable close-other-tabs message instead of leaving an offline save pending forever; opened connections also close after use and on future version changes.
 - A daily-cap or unresolved-backlog response waits one hour without consuming a retry, so saved work resumes automatically after pressure clears.
 - Actionable offline drift (a moved job field, moved delivery item, or slightly fast completion clock) creates a sanitized `PAYLOAD_INVALID` office-review receipt; malformed and oversized payloads still fail closed.
@@ -63,13 +63,13 @@ Observed results:
 
 ## Browser and automated verification
 
-- `npm run test`: 244 files passed; 3,442 tests passed; 117 skipped.
+- `npm run test`: 244 files passed; 3,443 tests passed; 117 skipped.
 - `npm run typecheck`: passed.
 - `npm run lint`: passed.
 - `npm run build`: passed; Vite emitted the existing large-chunk warning only.
 - `npm run check:docs`: passed with 688 migrations, 76 pages, and 83 routes indexed.
 - `npm run test:agent-workflows`: passed.
-- Focused queue/receipt/sync/panel/office-page/route/idempotency suites passed: 7 files, 84 tests, including a real blocked IndexedDB v1-to-v2 upgrade simulation, racing legacy snapshot recovery, retry-safe lookup failure, and offline-only completion timestamps.
+- Focused queue/receipt/sync/panel/office-page/route/idempotency suites passed: 7 files, 85 tests, including a real blocked IndexedDB v1-to-v2 upgrade simulation, racing snapshot recovery, a native field-job completion saved without a snapshot, retry-safe lookup failure, and offline-only completion timestamps.
 - Real headed Chromium loaded the branch preview and login shell without an application error after inheriting the main checkout's existing Vite environment in-process.
 - Authenticated route rendering could not be performed in the real browser because no `E2E_TEST_EMAIL` / `E2E_TEST_PASSWORD` is configured. No production user credential was used. The office page, confirmation flow, activation-pending message, safe payload boundary, local acknowledgement, and concurrent-office refresh are covered by component tests.
 
@@ -95,7 +95,9 @@ Claude Opus then performed a separate review of the current uncommitted branch a
 
 The second Opus pass confirmed all four fixes, then found one additional HIGH and two MEDIUM issues. Those were fixed: target snapshots now become server-side `TARGET_STATE_CONFLICT` receipts without defeating lost-response recovery; the panel cannot spend retries while offline; and device-clock `p_completed_at` is sent only for genuinely offline deliveries. The third Opus pass returned 0 BLOCKER / 0 HIGH and confirmed those fixes, then identified the stage-to-process drift window, missing legacy snapshots, and the procedural database-before-frontend gate as MEDIUM. The process-time snapshot recheck and fail-closed unknown-snapshot receipt closed the first two; the third is enforced operationally by keeping the PR draft/unmerged until live database verification.
 
-The first exact-commit Opus pass after the final `main` rebase returned `SHIP-WITH-FOLLOWUPS` but correctly elevated one rollout-compatibility issue: offline work saved by the pre-receipt production build had no snapshot and would have required manual office re-entry. That path is now hardened by the explicit legacy origin plus atomic current-snapshot recovery described above, matching the old app's behavior for already-saved rows while preserving all post-recovery drift guards. The same pass identified the missing old-clock lower bound, which is now closed by the 14-day review boundary. Remaining follow-ups are automatic device discovery of office resolutions, office visibility for old `received` receipts, pagination/count polish, and stale-tab release-note wording. The redundant partial-index note is non-blocking. The push guard separately records the required fresh final exact-commit Claude review in generated session state.
+The first exact-commit Opus pass after the final `main` rebase returned `SHIP-WITH-FOLLOWUPS` but correctly elevated one rollout-compatibility issue: offline work saved by the pre-receipt production build had no snapshot and would have required manual office re-entry. That path is now hardened by the explicit legacy origin plus atomic current-snapshot recovery described above, matching the old app's behavior for already-saved rows while preserving all post-recovery drift guards. The same pass identified the missing old-clock lower bound, which is now closed by the 14-day review boundary.
+
+The next exact-commit Opus pass confirmed the legacy fix, concurrency behavior, interruption recovery, old-clock boundary, and migration ordering, then found the same missing-snapshot risk on newly saved native field-job work when the applicator had not expanded the job card before losing connectivity. Snapshot recovery now applies to every durable action missing that value, and the native field path has a focused regression test. Remaining follow-ups are automatic device discovery of office resolutions, office visibility for old `received` receipts, pagination/count polish, and stale-tab release-note wording. The redundant partial-index note is non-blocking. The push guard separately records the required fresh final exact-commit Claude review in generated session state.
 
 ## Required release order
 

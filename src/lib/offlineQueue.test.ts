@@ -11,7 +11,7 @@ import { IDBFactory, IDBObjectStore } from 'fake-indexeddb';
 import {
   queueAction,
   prepareLegacyQueuedAction,
-  persistLegacySnapshotIfMissing,
+  persistSnapshotIfMissing,
   getPendingActions,
   removeAction,
   updateAction,
@@ -105,8 +105,8 @@ describe('queueAction', () => {
     const secondSnapshot = '2026-07-14T12:01:00.000Z';
 
     const [firstTab, secondTab] = await Promise.all([
-      persistLegacySnapshotIfMissing(actionId, firstSnapshot, 'deliveries'),
-      persistLegacySnapshotIfMissing(actionId, secondSnapshot, 'deliveries'),
+      persistSnapshotIfMissing(actionId, firstSnapshot, 'deliveries'),
+      persistSnapshotIfMissing(actionId, secondSnapshot, 'deliveries'),
     ]);
 
     expect(firstTab.snapshotAt).toBe(secondTab.snapshotAt);
