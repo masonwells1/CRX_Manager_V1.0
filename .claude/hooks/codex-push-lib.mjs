@@ -163,6 +163,22 @@ export function pushUsesBulkMode(cmd) {
   });
 }
 
+// Extract the DESTINATION paths from a free-form patch payload (Codex
+// apply_patch envelopes and unified diffs). Guards must classify a patch by
+// where it WRITES, not by every path its added prose happens to mention —
+// whole-body scans false-positive on documentation that discusses guard files
+// (Codex round-5).
+export function extractPatchDestinations(text) {
+  const out = [];
+  const re = /^(?:\*{3}\s*(?:Add|Update|Delete|Move(?:\s+to)?)\s+File:\s*(.+?)\s*$|\+{3}\s+(?:b\/)?(\S+)|-{3}\s+(?:a\/)?(\S+)|rename\s+to\s+(\S+)\s*$)/gim;
+  let match;
+  while ((match = re.exec(String(text || ""))) !== null) {
+    const dest = match[1] || match[2] || match[3] || match[4];
+    if (dest && dest !== "/dev/null") out.push(dest);
+  }
+  return out;
+}
+
 // A changed file is "risky" (needs an independent second-model verdict) when it
 // touches migrations, edge functions, money/RLS-shaped code, or the guardrail
 // machinery that decides whether a change can reach main. Guard hooks, CI,

@@ -14,6 +14,7 @@ import {
   pushUsesBulkMode,
   reviewProofPathMentioned,
   reviewStateDirectoryMentioned,
+  extractPatchDestinations,
   proofValid,
   riskyFiles,
 } from "./codex-push-lib.mjs";
@@ -132,5 +133,21 @@ assert.equal(claudeProofValid({ ...claudeProof, claude_ran: false }, sha, now), 
 assert.equal(claudeProofValid({ ...claudeProof, verdict: "ship" }, sha, now), false);
 assert.equal(claudeProofValid({ ...claudeProof, head_sha: "b".repeat(40) }, sha, now), false);
 assert.equal(claudeProofValid({ ...claudeProof, timestamp: new Date(now + 60_000).toISOString() }, sha, now), false);
+
+// Codex round-5 (2026-07-13): patch DESTINATIONS, not whole-body mentions.
+assert.deepEqual(
+  extractPatchDestinations("*** Add File: .claude/session-state/claude-review-push.json\n+{}"),
+  [".claude/session-state/claude-review-push.json"],
+);
+assert.deepEqual(
+  extractPatchDestinations("*** Update File: docs/reference/agent-guardrails.md\n+guard lives at .codex/hooks/production-action-guard.mjs"),
+  ["docs/reference/agent-guardrails.md"],
+  "prose mentions inside the patch body are NOT destinations",
+);
+assert.deepEqual(
+  extractPatchDestinations("--- a/src/a.ts\n+++ b/src/b.ts\n+// mentions .claude/session-state/claude-review-push.json"),
+  ["src/a.ts", "src/b.ts"],
+  "unified-diff headers are destinations; body mentions are not",
+);
 
 console.log("OK - codex push shared library checks passed.");
