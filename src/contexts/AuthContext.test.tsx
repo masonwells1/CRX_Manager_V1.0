@@ -6,8 +6,9 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { renderHook, act } from '@testing-library/react';
-import type { ReactNode } from 'react';
+import { render, renderHook, act, fireEvent, screen, waitFor } from '@testing-library/react';
+import { useState, type ReactNode } from 'react';
+import { MemoryRouter } from 'react-router-dom';
 
 // ── Mock Supabase (vi.hoisted to avoid hoisting issues) ──────────────────
 
@@ -67,6 +68,7 @@ vi.mock('../lib/db', () => ({
 }));
 
 import { AuthProvider, useAuth } from './AuthContext';
+import ProtectedRoute from '../components/auth/ProtectedRoute';
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -91,6 +93,22 @@ const makeSession = (overrides: Record<string, unknown> = {}) => ({
 
 function wrapper({ children }: { children: ReactNode }) {
   return <AuthProvider>{children}</AuthProvider>;
+}
+
+function StatefulForm() {
+  const [value, setValue] = useState('');
+  return (
+    <input
+      aria-label="Unsaved form field"
+      value={value}
+      onChange={(event) => setValue(event.target.value)}
+    />
+  );
+}
+
+function AuthStatusProbe() {
+  const { loading, profile } = useAuth();
+  return <div data-testid="auth-status">{`${loading}:${profile?.is_active ?? 'none'}`}</div>;
 }
 
 /** Helper to mock the full Supabase from().select().eq().maybeSingle() chain */
@@ -303,6 +321,138 @@ describe('AuthContext', () => {
       expect(result.current.profile?.full_name).toBe('Test User');
     });
 
+    it('preserves an open form when SIGNED_IN repeats for the same user', async () => {
+      const session = makeSession();
+      const profile = makeProfile();
+      mockGetSession.mockResolvedValue({ data: { session }, error: null });
+      mockProfileQuery({ data: profile, error: null });
+
+      render(
+        <AuthProvider>
+          <MemoryRouter initialEntries={['/orders/new']}>
+            <ProtectedRoute allowedRoles={['admin', 'sales_rep']}>
+              <StatefulForm />
+            </ProtectedRoute>
+          </MemoryRouter>
+        </AuthProvider>,
+      );
+
+      const input = await screen.findByLabelText('Unsaved form field');
+      fireEvent.change(input, { target: { value: 'Keep this unsaved entry' } });
+
+      const profileFetchCount = mockFrom.mock.calls.length;
+      const neverResolvingProfile = new Promise(() => {});
+      const mockMaybeSinglePending = vi.fn().mockReturnValue(neverResolvingProfile);
+      const mockEqPending = vi.fn().mockReturnValue({ maybeSingle: mockMaybeSinglePending });
+      const mockSelectPending = vi.fn().mockReturnValue({ eq: mockEqPending });
+      mockFrom.mockReturnValue({ select: mockSelectPending });
+
+      act(() => {
+        triggerAuthChange('SIGNED_IN', makeSession({ access_token: 'reconfirmed-token' }));
+      });
+
+      await waitFor(() => {
+        expect(screen.getByLabelText('Unsaved form field')).toHaveValue('Keep this unsaved entry');
+      });
+      expect(mockFrom).toHaveBeenCalledTimes(profileFetchCount + 1);
+    });
+
+    it('keeps the existing profile object when a silent refresh is unchanged', async () => {
+      const session = makeSession();
+      const profile = makeProfile();
+      mockGetSession.mockResolvedValue({ data: { session }, error: null });
+      mockProfileQuery({ data: profile, error: null });
+
+      const { result } = renderHook(() => useAuth(), { wrapper });
+      await act(async () => {});
+      await act(async () => {});
+      await act(async () => {});
+
+      const originalProfile = result.current.profile;
+      mockProfileQuery({ data: { ...profile }, error: null });
+
+      await act(async () => {
+        triggerAuthChange('SIGNED_IN', makeSession({ access_token: 'reconfirmed-token' }));
+      });
+      await act(async () => {});
+
+      expect(result.current.profile).toBe(originalProfile);
+    });
+
+    it('enforces deactivation from a silent same-user refresh without loading first', async () => {
+      const session = makeSession();
+      const profile = makeProfile();
+      mockGetSession.mockResolvedValue({ data: { session }, error: null });
+      mockProfileQuery({ data: profile, error: null });
+
+      render(
+        <AuthProvider>
+          <AuthStatusProbe />
+          <MemoryRouter initialEntries={['/orders/new']}>
+            <ProtectedRoute allowedRoles={['admin', 'sales_rep']}>
+              <StatefulForm />
+            </ProtectedRoute>
+          </MemoryRouter>
+        </AuthProvider>,
+      );
+
+      await screen.findByLabelText('Unsaved form field');
+      mockProfileQuery({ data: makeProfile({ is_active: false }), error: null });
+
+      act(() => {
+        triggerAuthChange('SIGNED_IN', makeSession({ access_token: 'reconfirmed-token' }));
+      });
+
+      await waitFor(() => {
+        expect(screen.getByTestId('auth-status')).toHaveTextContent('false:false');
+        expect(screen.queryByLabelText('Unsaved form field')).not.toBeInTheDocument();
+      });
+    });
+
+    it('reloads permissions when SIGNED_IN changes to a different user', async () => {
+      const firstSession = makeSession();
+      mockGetSession.mockResolvedValue({ data: { session: firstSession }, error: null });
+      mockProfileQuery({ data: makeProfile(), error: null });
+
+      const { result } = renderHook(() => useAuth(), { wrapper });
+      await act(async () => {});
+      await act(async () => {});
+      await act(async () => {});
+
+      expect(result.current.role).toBe('admin');
+
+      let resolveSecondProfile!: (value: { data: unknown; error: null }) => void;
+      const secondProfilePromise = new Promise<{ data: unknown; error: null }>((resolve) => {
+        resolveSecondProfile = resolve;
+      });
+      const mockMaybeSingleSecond = vi.fn().mockReturnValue(secondProfilePromise);
+      const mockEqSecond = vi.fn().mockReturnValue({ maybeSingle: mockMaybeSingleSecond });
+      const mockSelectSecond = vi.fn().mockReturnValue({ eq: mockEqSecond });
+      mockFrom.mockReturnValue({ select: mockSelectSecond });
+
+      act(() => {
+        triggerAuthChange('SIGNED_IN', makeSession({
+          user: { id: 'user-456', email: 'driver@example.com' },
+          access_token: 'driver-token',
+        }));
+      });
+
+      expect(result.current.loading).toBe(true);
+
+      await act(async () => {
+        resolveSecondProfile({
+          data: makeProfile({ id: 'user-456', role: 'driver', denied_pages: ['/reports'] }),
+          error: null,
+        });
+        await secondProfilePromise;
+      });
+
+      expect(result.current.loading).toBe(false);
+      expect(result.current.session?.user.id).toBe('user-456');
+      expect(result.current.role).toBe('driver');
+      expect(result.current.deniedPages).toEqual(['/reports']);
+    });
+
     it('skips INITIAL_SESSION (handled by getSession)', async () => {
       const session = makeSession();
       mockProfileQuery({ data: makeProfile(), error: null });
@@ -425,6 +575,32 @@ describe('AuthContext', () => {
       // State should be cleared even though signOut threw
       expect(result.current.session).toBeNull();
       expect(result.current.profile).toBeNull();
+    });
+
+    it('does not restore a session after a network-failed signOut', async () => {
+      mockSignOut.mockRejectedValue(new Error('Network error'));
+      const session = makeSession();
+      mockGetSession.mockResolvedValue({ data: { session }, error: null });
+      mockProfileQuery({ data: makeProfile(), error: null });
+
+      const { result } = renderHook(() => useAuth(), { wrapper });
+      await act(async () => {});
+      await act(async () => {});
+      await act(async () => {});
+
+      await act(async () => {
+        await result.current.signOut();
+      });
+
+      const profileFetchCount = mockFrom.mock.calls.length;
+      act(() => {
+        triggerAuthChange('SIGNED_IN', makeSession({ access_token: 'stale-refreshed-token' }));
+      });
+
+      expect(result.current.session).toBeNull();
+      expect(result.current.profile).toBeNull();
+      expect(result.current.loading).toBe(false);
+      expect(mockFrom).toHaveBeenCalledTimes(profileFetchCount);
     });
   });
 
