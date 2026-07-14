@@ -106,4 +106,4 @@ The next exact-commit Opus pass confirmed the legacy fix, concurrency behavior, 
 3. Verify the live table/RPC/grant/function state and run a safe post-apply receipt smoke.
 4. Only then merge the frontend PR.
 
-Merging the frontend before the database rollout would make offline durable calls target RPCs that do not exist live, so this branch must remain unmerged until step 3 succeeds.
+Steps 2 and 3 completed on 2026-07-14. Supabase applied the migrations as live stamps `20260714171331`, `20260714171800`, and `20260714172135`; structural/RLS/grant checks passed, the full delivery + job + office-resolution chain ended in `SMOKE_PASS_ROLLBACK`, zero smoke rows persisted, and all 15 database invariant sweeps returned zero unallowlisted violations. The database-before-frontend gate is therefore cleared. Step 1 must be repeated against the final rebased commit before step 4.

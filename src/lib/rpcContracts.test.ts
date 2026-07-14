@@ -1853,7 +1853,6 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
   release_expired_quote_holds: 'maintenance releases only holds that remain in the expired state',
   reserve_job_inventory: 'frontend-callable wrapper over rebuild-from-scratch _sync_job_holds; replays converge and return current shortfalls',
   retry_failed_notifications: 'service-role retry worker advances persisted failed-notification state',
-  run_weekly_db_backup: 'cron-only backup routine; EXECUTE is revoked from anon and authenticated',
   run_data_integrity_sweep: 'convergent integrity repair recomputes current invariant state',
   run_morning_notification_checks: 'cron sweep has persisted per-recipient notification deduplication',
   save_idempotency: 'idempotency infrastructure helper that stores the parent operation result',

@@ -23,13 +23,13 @@ const MIGRATION = path.join(
   REPO_ROOT,
   'supabase',
   'migrations',
-  '20260714024811_offline_action_receipts.sql'
+  '20260714171331_offline_action_receipts.sql'
 );
 const LIMIT_MIGRATION = path.join(
   REPO_ROOT,
   'supabase',
   'migrations',
-  '20260714070000_offline_action_receipt_stage_limits.sql'
+  '20260714171800_offline_action_receipt_stage_limits.sql'
 );
 const FIXTURES = path.join(
   REPO_ROOT,

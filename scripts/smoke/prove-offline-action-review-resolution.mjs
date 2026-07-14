@@ -22,9 +22,9 @@ const SALES = '5da61655-13ac-4930-9121-a5fd365ec416';
 const APPLICATOR_1 = '00000000-0000-0000-0000-0000000000a1';
 const APPLICATOR_2 = '00000000-0000-0000-0000-0000000000a2';
 const MIGRATIONS = [
-  '20260714024811_offline_action_receipts.sql',
-  '20260714070000_offline_action_receipt_stage_limits.sql',
-  '20260714122626_offline_action_review_resolution.sql',
+  '20260714171331_offline_action_receipts.sql',
+  '20260714171800_offline_action_receipt_stage_limits.sql',
+  '20260714172135_offline_action_review_resolution.sql',
 ].map((name) => path.join(ROOT, 'supabase', 'migrations', name));
 const SETUP = path.join(ROOT, 'scripts', 'smoke', 'setup-offline-action-review-resolution-proof.sql');
 

@@ -52,11 +52,11 @@ const LIVE_FUNCTIONS = new Set(LIVE_PG_PROC_NAMES_CSV.split(','));
 // exact migration source; remove it when the live snapshot is regenerated after
 // the migration is applied.
 const QUEUED_MIGRATION_FUNCTIONS = {
-  '20260714024811_offline_action_receipts.sql': [
+  '20260714171331_offline_action_receipts.sql': [
     'process_offline_action',
     'stage_offline_action',
   ],
-  '20260714122626_offline_action_review_resolution.sql': [
+  '20260714172135_offline_action_review_resolution.sql': [
     'get_offline_action_review_queue',
     'resolve_offline_action',
   ],

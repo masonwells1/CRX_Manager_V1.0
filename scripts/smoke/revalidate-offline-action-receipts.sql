@@ -16,7 +16,7 @@ DROP FUNCTION IF EXISTS public.stage_offline_action(
 );
 DROP TABLE IF EXISTS public.offline_action_receipts;
 
-\ir ../../supabase/migrations/20260714024811_offline_action_receipts.sql
+\ir ../../supabase/migrations/20260714171331_offline_action_receipts.sql
 \ir smoke-offline-action-receipts.sql
 
 -- Unreachable by design: the smoke must terminate with SMOKE_PASS_ROLLBACK.
