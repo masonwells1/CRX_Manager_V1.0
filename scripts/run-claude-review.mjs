@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync, spawnSync } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -29,6 +30,9 @@ function usage() {
     "  --topic <text>        Short label for the review",
     "  --prompt-file <path>  Extra prompt/context file to append",
     "  --output <path>       Output file (default .claude/session-state/claude-review-latest.txt)",
+    "  --model <alias>       Claude model alias/id (default opus)",
+    "  --effort <level>      low|medium|high|xhigh|max (default high)",
+    "  --timeout-ms <ms>     Hard timeout; timeout is BLOCKED (default 300000)",
     "  --dry-run             Print the prompt instead of calling Claude",
   ].join("\n");
 }
@@ -41,6 +45,9 @@ export function parseReviewArgs(argv) {
     topic: "claude-review",
     output: null,
     promptFile: null,
+    model: "opus",
+    effort: "high",
+    timeoutMs: 300_000,
     dryRun: false,
   };
 
@@ -59,6 +66,12 @@ export function parseReviewArgs(argv) {
       parsed.output = argv[++i] || null;
     } else if (arg === "--prompt-file") {
       parsed.promptFile = argv[++i] || null;
+    } else if (arg === "--model") {
+      parsed.model = argv[++i] || "";
+    } else if (arg === "--effort") {
+      parsed.effort = argv[++i] || "";
+    } else if (arg === "--timeout-ms") {
+      parsed.timeoutMs = Number(argv[++i]);
     } else if (arg === "--dry-run") {
       parsed.dryRun = true;
     } else if (arg === "--help" || arg === "-h") {
@@ -81,8 +94,26 @@ export function parseReviewArgs(argv) {
   if (parsed.scope === "commit" && !parsed.commit) {
     throw new Error("--commit <sha> is required when --scope commit is used.");
   }
+  if (!parsed.model) {
+    throw new Error("--model must not be empty.");
+  }
+  if (!/^[A-Za-z0-9._:-]+$/.test(parsed.model)) {
+    throw new Error("--model may contain only letters, numbers, dot, underscore, colon, or hyphen.");
+  }
+  if (!["low", "medium", "high", "xhigh", "max"].includes(parsed.effort)) {
+    throw new Error("--effort must be low, medium, high, xhigh, or max.");
+  }
+  if (!Number.isInteger(parsed.timeoutMs) || parsed.timeoutMs < 1_000 || parsed.timeoutMs > 3_600_000) {
+    throw new Error("--timeout-ms must be an integer between 1000 and 3600000.");
+  }
 
   return parsed;
+}
+
+function sha256(value) {
+  return createHash("sha256").update(
+    typeof value === "string" || Buffer.isBuffer(value) ? value : String(value),
+  ).digest("hex");
 }
 
 function runGit(args, fallback = "") {
@@ -91,11 +122,32 @@ function runGit(args, fallback = "") {
       cwd: ROOT,
       encoding: "utf8",
       timeout: 10_000,
+      maxBuffer: 50 * 1024 * 1024,
       stdio: ["ignore", "pipe", "ignore"],
     }).trim();
   } catch {
     return fallback;
   }
+}
+
+export function buildUntrackedEvidence(
+  untracked,
+  readFile = (relativePath) => readFileSync(path.join(ROOT, relativePath)),
+) {
+  const errors = [];
+  const evidence = untracked
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((relativePath) => {
+      try {
+        return `${relativePath}:${sha256(readFile(relativePath))}`;
+      } catch (error) {
+        errors.push(`${relativePath}: ${error.message || String(error)}`);
+        return `${relativePath}:UNREADABLE`;
+      }
+    })
+    .join("\n");
+  return { evidence, errors };
 }
 
 function getGitContext(scope, commit) {
@@ -104,26 +156,49 @@ function getGitContext(scope, commit) {
   // since it forked — committed + uncommitted), commit diffs that one commit, and
   // uncommitted (default) diffs the working tree vs HEAD.
   let changed;
+  let scopeEvidence;
+  const untracked = scope === "commit"
+    ? ""
+    : runGit(["ls-files", "--others", "--exclude-standard"], "");
+  const untrackedResult = buildUntrackedEvidence(untracked);
+  const untrackedEvidence = untrackedResult.evidence;
   if (scope === "base-main") {
     const base = runGit(["merge-base", "origin/main", "HEAD"], "origin/main");
-    changed = runGit(["diff", "--name-only", base], "");
+    const tracked = runGit(["diff", "--name-only", base], "");
+    changed = [tracked, untracked].filter(Boolean).join("\n");
+    scopeEvidence = `${runGit(["diff", "--binary", base], "")}\n${untrackedEvidence}`;
   } else if (scope === "commit" && commit) {
     changed = runGit(["diff-tree", "--no-commit-id", "--name-only", "-r", commit], "");
+    scopeEvidence = runGit(["show", "--format=", "--binary", commit], "");
   } else {
     // uncommitted: working-tree changes vs HEAD PLUS untracked-new files
     // (git diff omits untracked — a brand-new migration/script/hook would be missed).
     const tracked = runGit(["diff", "--name-only", "HEAD"], "");
-    const untracked = runGit(["ls-files", "--others", "--exclude-standard"], "");
     changed = [tracked, untracked].filter(Boolean).join("\n");
+    scopeEvidence = `${runGit(["diff", "--binary", "HEAD"], "")}\n${untrackedEvidence}`;
   }
   return {
     branch: runGit(["branch", "--show-current"], "unknown"),
+    head: runGit(["rev-parse", "HEAD"], "unknown"),
     status: runGit(["status", "--short"], ""),
     changedFiles: changed.split(/\r?\n/).filter(Boolean),
     stagedFiles: runGit(["diff", "--cached", "--name-only"], "")
       .split(/\r?\n/)
       .filter(Boolean),
+    scopeContentHash: sha256(scopeEvidence || ""),
+    scopeEvidenceErrors: untrackedResult.errors,
   };
+}
+
+export function buildScopeFingerprint(gitContext, scope, commit) {
+  return sha256(JSON.stringify({
+    head: gitContext.head,
+    scope,
+    commit: commit || null,
+    status: gitContext.status,
+    changedFiles: gitContext.changedFiles,
+    scopeContentHash: gitContext.scopeContentHash,
+  }));
 }
 
 function readOptionalPromptFile(promptFile) {
@@ -210,33 +285,116 @@ export function buildClaudeReviewPrompt({
 // passed as an arg would then be parsed by cmd.exe, letting `&`, `|`, `>` in a
 // --reason / --prompt-file / audit doc inject commands. The prompt is fed via
 // stdin instead (claude -p reads it from stdin); these args carry only fixed flags.
-export function buildClaudeCommandArgs({ outputFormat = "text", permissionMode = "plan" } = {}) {
+export function buildClaudeCommandArgs({
+  outputFormat = "json",
+  permissionMode = "plan",
+  model = "opus",
+  effort = "high",
+} = {}) {
   return [
     "-p",
+    "--model",
+    model,
+    "--effort",
+    effort,
     "--output-format",
     outputFormat,
     "--permission-mode",
     permissionMode,
+    "--no-session-persistence",
+    "--disallowedTools",
+    "Edit,Write,NotebookEdit",
   ];
 }
 
-function writeReviewOutput(outputPath, result) {
+export function parseClaudeReviewJson(stdout) {
+  try {
+    const parsed = JSON.parse(stdout || "");
+    const resolvedModels = Object.keys(parsed.modelUsage || {});
+    const permissionDenials = Array.isArray(parsed.permission_denials) ? parsed.permission_denials : [];
+    const complete = parsed.type === "result"
+      && parsed.subtype === "success"
+      && parsed.is_error === false
+      && parsed.terminal_reason === "completed"
+      && typeof parsed.result === "string"
+      && parsed.result.trim().length > 0
+      && permissionDenials.length === 0;
+    return {
+      complete,
+      result: typeof parsed.result === "string" ? parsed.result : "",
+      resolvedModels,
+      permissionDenials,
+      terminalReason: parsed.terminal_reason || "unknown",
+      raw: parsed,
+    };
+  } catch {
+    return {
+      complete: false,
+      result: "",
+      resolvedModels: [],
+      permissionDenials: [],
+      terminalReason: "invalid-json",
+      raw: null,
+    };
+  }
+}
+
+export function classifyClaudeExecution(result, parsed) {
+  return result.status === 0 && !result.error && parsed.complete ? "VERIFIED" : "BLOCKED";
+}
+
+export function claudeExecutionExitStatus(result, executionState) {
+  if (executionState === "BLOCKED") return 1;
+  return result.status === 0 && !result.error ? 0 : 1;
+}
+
+export function archiveClaudeReviewOutputPath({ outputPath, runId }) {
+  return path.join(path.dirname(outputPath), "history", `claude-review-${runId}.txt`);
+}
+
+function writeReviewOutput(outputPath, capture) {
   mkdirSync(path.dirname(outputPath), { recursive: true });
   const body = [
     `# Claude Review Capture`,
     ``,
-    `Generated: ${new Date().toISOString()}`,
-    `Exit code: ${result.status ?? "unknown"}`,
+    `Run ID: ${capture.runId}`,
+    `Generated: ${capture.generatedAt}`,
+    `Execution state: ${capture.executionState}`,
+    `Exit code: ${capture.result.status ?? "unknown"}`,
+    `Requested model: ${capture.model}`,
+    `Resolved model(s): ${capture.parsed.resolvedModels.join(", ") || "unavailable"}`,
+    `Effort: ${capture.effort}`,
+    `Claude CLI: ${capture.cliVersion}`,
+    `Timeout ms: ${capture.timeoutMs}`,
+    `Repo HEAD: ${capture.head}`,
+    `Scope fingerprint: ${capture.scopeFingerprint}`,
+    `Prompt sha256: ${capture.promptHash}`,
+    `Terminal reason: ${capture.parsed.terminalReason}`,
+    `Permission denials: ${capture.parsed.permissionDenials.length}`,
     ``,
-    `## STDOUT`,
+    `## Review`,
     ``,
-    result.stdout || "",
+    capture.parsed.result || "No complete Claude verdict was returned. This run is BLOCKED.",
     ``,
     `## STDERR`,
     ``,
-    result.stderr || "",
+    capture.result.stderr || "",
+    ``,
+    `## Raw Claude JSON`,
+    ``,
+    capture.result.stdout || "",
   ].join("\n");
   writeFileSync(outputPath, body, "utf8");
+}
+
+function getClaudeCliVersion(claudeBin) {
+  const version = spawnSync(claudeBin, ["--version"], {
+    cwd: ROOT,
+    encoding: "utf8",
+    timeout: 10_000,
+    shell: process.platform === "win32",
+  });
+  return (version.stdout || version.stderr || "unavailable").trim() || "unavailable";
 }
 
 export function runClaudeReview(options) {
@@ -262,26 +420,109 @@ export function runClaudeReview(options) {
   }
 
   const claudeBin = process.env.CLAUDE_BIN || "claude";
-  const result = spawnSync(claudeBin, buildClaudeCommandArgs(), {
+  const cliVersion = getClaudeCliVersion(claudeBin);
+  if (gitContext.scopeEvidenceErrors.length > 0) {
+    const runId = `${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID().slice(0, 8)}`;
+    const generatedAt = new Date().toISOString();
+    const scopeFingerprint = buildScopeFingerprint(gitContext, options.scope, options.commit);
+    const parsed = {
+      complete: false,
+      result: "",
+      resolvedModels: [],
+      permissionDenials: [],
+      terminalReason: "scope-evidence-unreadable",
+      raw: null,
+    };
+    const result = {
+      status: 1,
+      stdout: "",
+      stderr: `Unable to bind all untracked file bytes into the review scope:\n${gitContext.scopeEvidenceErrors.join("\n")}`,
+    };
+    const capture = {
+      runId,
+      generatedAt,
+      executionState: "BLOCKED",
+      model: options.model,
+      effort: options.effort,
+      timeoutMs: options.timeoutMs,
+      cliVersion,
+      head: gitContext.head,
+      scopeFingerprint,
+      promptHash: sha256(prompt),
+      parsed,
+      result,
+    };
+    const archiveOutput = archiveClaudeReviewOutputPath({ outputPath: output, runId });
+    writeReviewOutput(archiveOutput, capture);
+    writeReviewOutput(output, capture);
+    process.stdout.write(`Claude review BLOCKED: ${output}\n`);
+    process.stdout.write(`Per-run capture: ${archiveOutput}\n`);
+    process.stderr.write(result.stderr + "\n");
+    return { status: 1, output, archiveOutput, prompt, executionState: "BLOCKED" };
+  }
+  const result = spawnSync(claudeBin, buildClaudeCommandArgs({
+    model: options.model,
+    effort: options.effort,
+  }), {
     cwd: ROOT,
     encoding: "utf8",
     maxBuffer: 50 * 1024 * 1024,
+    timeout: options.timeoutMs,
     // Prompt via stdin (not argv) so shell metacharacters in it can never reach
     // cmd.exe — see buildClaudeCommandArgs. shell stays on for the Windows .cmd shim.
     input: prompt,
     shell: process.platform === "win32",
   });
 
-  writeReviewOutput(output, result);
-  process.stdout.write(`Claude review written to ${output}\n`);
+  const parsed = parseClaudeReviewJson(result.stdout);
+  const runId = `${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID().slice(0, 8)}`;
+  const generatedAt = new Date().toISOString();
+  const scopeFingerprint = buildScopeFingerprint(
+    gitContext,
+    options.scope,
+    options.commit,
+  );
+  const executionState = classifyClaudeExecution(result, parsed);
+  const capture = {
+    runId,
+    generatedAt,
+    executionState,
+    model: options.model,
+    effort: options.effort,
+    timeoutMs: options.timeoutMs,
+    cliVersion,
+    head: gitContext.head,
+    scopeFingerprint,
+    promptHash: sha256(prompt),
+    parsed,
+    result,
+  };
+  const archiveOutput = archiveClaudeReviewOutputPath({ outputPath: output, runId });
+  writeReviewOutput(archiveOutput, capture);
+  writeReviewOutput(output, capture);
+  process.stdout.write(`Claude review ${executionState}: ${output}\n`);
+  process.stdout.write(`Per-run capture: ${archiveOutput}\n`);
+  if (executionState === "BLOCKED") {
+    if (result.error?.code === "ETIMEDOUT") {
+      process.stderr.write(`Claude review timed out after ${options.timeoutMs} ms; verdict is BLOCKED.\n`);
+    } else if (result.error) {
+      process.stderr.write(`${result.error.message}\n`);
+    } else {
+      process.stderr.write(result.stderr || "Claude returned incomplete output; verdict is BLOCKED.\n");
+    }
+    return {
+      status: claudeExecutionExitStatus(result, executionState),
+      output,
+      archiveOutput,
+      prompt,
+      executionState,
+    };
+  }
   if (result.error) {
     process.stderr.write(`${result.error.message}\n`);
-    return { status: 1, output, prompt };
+    return { status: 1, output, archiveOutput, prompt, executionState: "BLOCKED" };
   }
-  if (result.status !== 0) {
-    process.stderr.write(result.stderr || `Claude exited ${result.status}\n`);
-  }
-  return { status: result.status ?? 1, output, prompt };
+  return { status: 0, output, archiveOutput, prompt, executionState };
 }
 
 function main() {

@@ -8,7 +8,8 @@
  * WHEN THESE RUN:
  *   - Skipped by default when VITE_SUPABASE_URL = 'https://test.supabase.co' (mock)
  *   - Run automatically when pointed at a real Supabase instance
- *   - In CI: set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to real values
+ *   - In CI: opt in with CRX_LIVE_SCHEMA_TESTS=true and provide the live URL
+ *     plus CRX_LIVE_SCHEMA_SERVICE_ROLE_KEY (server-only; never VITE-prefixed)
  *
  * WHAT THEY VERIFY:
  *   1. Critical columns exist with expected data types
@@ -26,16 +27,22 @@ import { assertRpcResult } from './db';
 // ─── Setup ────────────────────────────────────────────────────────────
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || '';
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
+const supabaseServiceRoleKey =
+  process.env.CRX_LIVE_SCHEMA_SERVICE_ROLE_KEY || '';
 const isLiveDB = supabaseUrl !== '' && !supabaseUrl.includes('test.supabase.co');
 
 // Create a real client only when pointing at a live DB
-const supabase = isLiveDB ? createClient(supabaseUrl, supabaseAnonKey) : null;
+const supabase = isLiveDB
+  ? createClient(supabaseUrl, supabaseServiceRoleKey, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    })
+  : null;
 
 /**
  * Helper: run a SQL query via Supabase RPC.
- * Uses the pg_catalog and information_schema views which are readable
- * by the anon role in Supabase.
+ * execute_sql_readonly is deliberately revoked from anon/authenticated and is
+ * callable only by service_role/postgres. This CI-only client is never bundled
+ * into the application and performs SELECT/WITH metadata checks only.
  */
 async function queryInformationSchema(sql: string) {
   if (!supabase) throw new Error('No live DB connection');
@@ -227,21 +234,38 @@ describe.skipIf(!isLiveDB)('Live DB: Foreign Key Targets', () => {
 describe.skipIf(!isLiveDB)('Live DB: RLS Enabled on All Business Tables', () => {
   it('all required tables have RLS enabled', async () => {
     const result = await queryInformationSchema(`
-      SELECT tablename, rowsecurity
-      FROM pg_tables
-      WHERE schemaname = 'public'
-        AND tablename = ANY(ARRAY[${TABLES_REQUIRING_RLS.map(t => `'${t}'`).join(',')}])
+      SELECT t.tablename, t.rowsecurity, count(p.policyname)::int AS policy_count
+      FROM pg_tables t
+      LEFT JOIN pg_policies p
+        ON p.schemaname = t.schemaname
+       AND p.tablename = t.tablename
+      WHERE t.schemaname = 'public'
+        AND t.tablename <> 'spatial_ref_sys'
+      GROUP BY t.tablename, t.rowsecurity
+      ORDER BY t.tablename
     `);
 
-    const tableMap = new Map(result.map((r: { tablename: string; rowsecurity: boolean }) => [r.tablename, r.rowsecurity]));
+    const tableMap = new Map(
+      result.map((r: { tablename: string; rowsecurity: boolean; policy_count: number | string }) => [
+        r.tablename,
+        { rowsecurity: r.rowsecurity, policyCount: Number(r.policy_count) },
+      ]),
+    );
+
+    expect(result.length, 'Live public-table inventory unexpectedly returned no tables').toBeGreaterThan(0);
 
     for (const table of TABLES_REQUIRING_RLS) {
-      const hasRLS = tableMap.get(table);
-      if (hasRLS === undefined) {
-        // Table might not exist yet (migration not applied) — skip
-        continue;
-      }
-      expect(hasRLS, `SECURITY: RLS is NOT enabled on ${table}`).toBe(true);
+      const tableState = tableMap.get(table);
+      expect(tableState, `SCHEMA DRIFT: expected live table ${table} is missing`).toBeDefined();
+      expect(tableState?.rowsecurity, `SECURITY: RLS is NOT enabled on ${table}`).toBe(true);
+    }
+
+    for (const [table, tableState] of tableMap) {
+      expect(tableState.rowsecurity, `SECURITY: public table ${table} has RLS disabled`).toBe(true);
+      expect(
+        tableState.policyCount,
+        `SECURITY: public table ${table} has RLS enabled but no policies`,
+      ).toBeGreaterThan(0);
     }
   });
 });

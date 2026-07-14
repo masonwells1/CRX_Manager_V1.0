@@ -51,6 +51,19 @@ Use this when Mason asks for a broad app safety review.
 5. Convert recurring confirmed bug classes into prevention actions.
 6. Stop with a compact verdict and report path.
 
+## Evidence Truth States
+
+Every review layer and verifier must end in exactly one execution state:
+
+- `VERIFIED` — the layer returned complete, evidence-backed output.
+- `REFUTED` — a specific finding was checked and disproven with cited evidence.
+- `UNVERIFIED` — output exists but is malformed, incomplete, or lacks required evidence.
+- `BLOCKED` — the reviewer, live source, or required tool timed out or was unavailable.
+
+Only `VERIFIED` findings may be counted as confirmed and only evidence-backed `REFUTED` findings may be counted as safe. `UNVERIFIED` and `BLOCKED` never count as refuted, clean, dry, `SHIP`, or `SHIP-WITH-FOLLOWUPS`. A missing layer is a visible blocked layer, not something to filter out of the result.
+
+Reviewer wrappers must pin the requested model and effort, enforce a timeout, and record the requested/resolved model, CLI version, repo HEAD, scope fingerprint, prompt hash, terminal reason, and permission denials. A timeout or invalid structured response is `BLOCKED` even when the process launcher itself exits successfully.
+
 ## Prevention Actions
 
 For each confirmed BLOCKER or HIGH, add the strongest practical prevention action:
@@ -68,6 +81,9 @@ The gauntlet is a **review** layer — it catches *semantic* classes (actor-forg
 
 - **Type errors** → `npm run typecheck` runs in `.husky/pre-commit` and `/ship` verify. (`npm run build` is vite/esbuild — it transpiles, it does **not** type-check.)
 - **Untyped DB access** (`.select('*')` + `as` casts), **unhandled Supabase `{ error }`** (returned, not thrown), **pages that throw on mount** → ESLint contract rules + a render-smoke test (see `docs/audits/2026-06-14-field-mode-error-retrospective-and-prevention-spec.md` and the reconciliation in `…-gauntlet-vs-fieldmode-controls-reconciliation.md`).
+- **Schema drift** → the live-schema Vitest job must prove it used the configured live/staging URL; a forced mock URL or skipped suite is not a pass.
+- **Mutating RPC idempotency** → inventory must start from the current mutator set and require a key or an explicit evidence-backed exemption; scanning only RPCs that already declare a key is not coverage.
+- **Browser integration** → E2E setup must fail closed unless a non-production target and credentials are configured. Production fixtures are never the CI default.
 
 When a confirmed finding belongs to one of these classes, route it to the gate (so the class can't recur) rather than expecting the next review to notice it again.
 

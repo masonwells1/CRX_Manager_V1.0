@@ -7,8 +7,9 @@ live in [`CLAUDE.md`](../CLAUDE.md) at the repo root.
 
 ## E2E tests (Playwright)
 
-E2E tests run against the live Supabase project. They sign in with a real
-user account and seed/teardown shared `[E2E]`-prefixed fixtures.
+E2E tests are staging-only. They sign in with a staging test account and
+seed/teardown shared `[E2E]`-prefixed fixtures. Production is categorically
+rejected; there is no override.
 
 ### Required env vars
 
@@ -16,16 +17,22 @@ These must be set before any `playwright` command, including
 `npm run test:e2e`. The test runner refuses to start without them — there is
 no hardcoded credential fallback (PR-05).
 
-| Var                  | Purpose                                                | Example                              |
-| -------------------- | ------------------------------------------------------ | ------------------------------------ |
-| `E2E_TEST_EMAIL`     | The login email of the E2E test account.               | `mason@croprxsolutions.com`          |
-| `E2E_TEST_PASSWORD`  | That account's password.                               | (your password — never commit this)  |
+| Var | Purpose |
+| --- | --- |
+| `E2E_TARGET_ENV` | Must be exactly `staging`. |
+| `E2E_SUPABASE_URL` | Non-production staging Supabase URL. |
+| `E2E_SUPABASE_ANON_KEY` | Staging anon key. |
+| `E2E_TEST_EMAIL` | Staging E2E account email. |
+| `E2E_TEST_PASSWORD` | Staging E2E account password. |
 
 Set them via your shell, or put them in a `.env` file at the repo root that
 `playwright.config.ts` auto-loads at startup:
 
 ```bash
-E2E_TEST_EMAIL=mason@croprxsolutions.com
+E2E_TARGET_ENV=staging
+E2E_SUPABASE_URL=https://your-staging-project.supabase.co
+E2E_SUPABASE_ANON_KEY=...staging anon key...
+E2E_TEST_EMAIL=e2e@example.com
 E2E_TEST_PASSWORD=...your password here...
 ```
 
@@ -33,29 +40,19 @@ E2E_TEST_PASSWORD=...your password here...
 
 ### Production-Supabase guardrail
 
-Today the SUPABASE_URL is hardcoded in
-`tests/e2e/fixtures/setup-fixtures.ts` to the production project
-(`rhyzpcqhnizqbxphqdkr`). This means E2E tests CURRENTLY run against live data.
-That's an accepted-but-uncomfortable state — PR-23 will introduce a separate
-staging Supabase project to remove this risk entirely.
-
-In the meantime, the safety guard in
+The safety guard in
 [`tests/e2e/utils/safety-guards.ts`](../tests/e2e/utils/safety-guards.ts)
-(`assertNotProductionWithoutOverride`) refuses to run if `VITE_SUPABASE_URL`
-is set to the production project ref WITHOUT `E2E_ALLOW_PROD=true`. This
-catches the future case where the hardcoded URL becomes env-driven.
-
-If you intentionally want to run E2E against production:
-
-```bash
-E2E_ALLOW_PROD=true npm run test:e2e
-```
+requires explicit staging configuration, rejects the production project, and
+has no production escape hatch. Playwright also refuses to start while direct
+production endpoint literals remain in E2E source. The suite remains disabled
+in CI until PR-23 supplies staging and those literals/token-key assumptions are
+migrated.
 
 ### Test data convention
 
 ALL test-created entities MUST use the `[E2E]` prefix in their name. The
 teardown step deletes every row matching `[E2E]%`. Entities without the
-prefix won't get cleaned up and will pollute production.
+prefix won't get cleaned up and will pollute staging.
 
 Use the shared fixtures from
 [`tests/e2e/fixtures/e2e-constants.ts`](../tests/e2e/fixtures/e2e-constants.ts)

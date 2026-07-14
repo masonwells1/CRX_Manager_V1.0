@@ -78,10 +78,16 @@ jobs:
       - name: Guard-hook regression tests (safety net must not regress)
         run: npm run test:correction-guards
 
+      - name: Agent workflow truth-state and sync tests
+        run: npm run test:agent-workflows
+
+      - name: RPC contract and idempotency inventory tests
+        run: npm run test:contracts
+
       - name: Run Vitest unit tests + coverage (ratchet thresholds)
-        env:
-          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
-          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+        # Unit/coverage tests deliberately use the mock Supabase values from
+        # vite.config.ts. Live schema verification is a separate fail-closed
+        # job below so the two modes cannot silently bleed into each other.
         run: npm run test:coverage
 
       - name: Upload coverage report
@@ -99,6 +105,46 @@ jobs:
           VITE_MAPBOX_TOKEN: ${{ secrets.VITE_MAPBOX_TOKEN }}
         run: npm run build
 
+  live-schema-validation:
+    name: Live Schema Validation (Read-Only)
+    runs-on: ubuntu-latest
+    needs: lint-typecheck-test
+    # Repository secrets are unavailable to untrusted pull requests. Skipping
+    # this entire job there is explicit; pushes to main must execute the real
+    # read-only schema suite and fail if its credentials are unavailable.
+    if: github.event_name == 'push'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: '.nvmrc'
+
+      - name: Cache node_modules
+        uses: actions/cache@v6
+        id: cache-node-modules
+        with:
+          path: node_modules
+          key: node-modules-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            node-modules-${{ runner.os }}-
+
+      - name: Install dependencies
+        if: steps.cache-node-modules.outputs.cache-hit != 'true'
+        run: npm ci
+
+      - name: Run live schema contracts
+        env:
+          CRX_LIVE_SCHEMA_TESTS: 'true'
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          # execute_sql_readonly is intentionally revoked from anon/authenticated.
+          # This server-only secret is scoped to the read-only metadata test.
+          CRX_LIVE_SCHEMA_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: npx vitest run src/lib/schemaIntegrityLive.test.ts
+
   e2e-smoke:
     name: E2E Smoke Tests
     runs-on: ubuntu-latest
@@ -112,9 +158,11 @@ jobs:
     # TO RE-ENABLE:
     #   1. Create the `crx-manager-staging` Supabase project.
     #   2. Add GitHub secrets STAGING_SUPABASE_URL + STAGING_SUPABASE_ANON_KEY.
-    #   3. Update the `Run E2E smoke tests` step env block below to use the
-    #      STAGING_* secrets instead of VITE_SUPABASE_URL/ANON_KEY.
-    #   4. Change `if: false` back to `if: github.event_name == 'push'`.
+    #   3. Add staging-only E2E_TEST_EMAIL + E2E_TEST_PASSWORD credentials.
+    #   4. Migrate every direct production endpoint in tests/e2e to the
+    #      canonical E2E staging environment (the config blocks until then).
+    #   5. Prove the staging values pass the fail-closed Playwright config.
+    #   6. Change `if: false` back to `if: github.event_name == 'push'`.
     if: false
 
     steps:
@@ -144,8 +192,11 @@ jobs:
 
       - name: Run E2E smoke tests
         env:
-          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
-          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          E2E_TARGET_ENV: staging
+          E2E_SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
+          E2E_SUPABASE_ANON_KEY: ${{ secrets.STAGING_SUPABASE_ANON_KEY }}
+          VITE_SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.STAGING_SUPABASE_ANON_KEY }}
           VITE_MAPBOX_TOKEN: ${{ secrets.VITE_MAPBOX_TOKEN }}
           VITE_SENTRY_DSN: ${{ secrets.VITE_SENTRY_DSN }}
           E2E_TEST_EMAIL: ${{ secrets.E2E_TEST_EMAIL }}

@@ -1,7 +1,11 @@
 import { defineConfig, devices } from '@playwright/test';
-import { readFileSync, existsSync } from 'fs';
+import { readFileSync, existsSync, readdirSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import {
+  assertNoProductionEndpointReferences,
+  resolveSafeE2EConfig,
+} from './tests/e2e/utils/safety-guards';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -20,6 +24,25 @@ if (existsSync(envPath)) {
     }
   }
 }
+
+// Resolve one staging-only source of truth before Playwright starts either the
+// app or the fixture mutators. Missing or production configuration fails while
+// loading the config, before any browser or data-changing setup can run.
+const e2eConfig = resolveSafeE2EConfig();
+process.env.VITE_SUPABASE_URL = e2eConfig.supabaseUrl;
+process.env.VITE_SUPABASE_ANON_KEY = e2eConfig.supabaseAnonKey;
+
+const e2eRoot = resolve(__dirname, 'tests/e2e');
+const e2eSources = readdirSync(e2eRoot, {
+  recursive: true,
+  withFileTypes: true,
+})
+  .filter((entry) => entry.isFile() && entry.name.endsWith('.ts'))
+  .map((entry) => {
+    const path = resolve(entry.parentPath, entry.name);
+    return { path, content: readFileSync(path, 'utf-8') };
+  });
+assertNoProductionEndpointReferences(e2eSources);
 
 export default defineConfig({
   testDir: './tests/e2e',
@@ -50,7 +73,9 @@ export default defineConfig({
   webServer: {
     command: 'npm run dev',
     url: 'http://localhost:5173',
-    reuseExistingServer: !process.env.CI,
+    // Never reuse an unknown server: it may have been started with production
+    // Vite credentials even though fixtures are correctly pointed at staging.
+    reuseExistingServer: false,
     timeout: 120000,
   },
 });

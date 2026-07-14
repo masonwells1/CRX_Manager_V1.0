@@ -12,10 +12,12 @@
  */
 
 import { E2E_PREFIX } from './e2e-constants';
+import { resolveSafeE2EConfig } from '../utils/safety-guards';
 
-const SUPABASE_URL = 'https://rhyzpcqhnizqbxphqdkr.supabase.co';
-const ANON_KEY =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJoeXpwY3Fobml6cWJ4cGhxZGtyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAzOTM2NDAsImV4cCI6MjA4NTk2OTY0MH0.WR0vAi_KeGF0OoJ8_dFH7uW6ael9M5xnm6OUo2IZy7U';
+const {
+  supabaseUrl: SUPABASE_URL,
+  supabaseAnonKey: ANON_KEY,
+} = resolveSafeE2EConfig();
 
 async function getAuthToken(): Promise<string> {
   // PR-05: fail-closed — no hardcoded credential fallback

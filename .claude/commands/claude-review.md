@@ -49,24 +49,31 @@ If the scope is unclear, ask Mason one short question.
 Use the wrapper so the same safety prompt and output location are used every time:
 
 ```powershell
-node scripts/run-claude-review.mjs --scope uncommitted --reason "<what Claude should review>"
+node scripts/run-claude-review.mjs --scope uncommitted --model opus --effort high --timeout-ms 300000 --reason "<what Claude should review>"
 ```
 
 For a branch review:
 
 ```powershell
-node scripts/run-claude-review.mjs --scope base-main --reason "<what Claude should review>"
+node scripts/run-claude-review.mjs --scope base-main --model opus --effort high --timeout-ms 300000 --reason "<what Claude should review>"
 ```
 
 For one commit:
 
 ```powershell
-node scripts/run-claude-review.mjs --scope commit --commit <sha> --reason "<what Claude should review>"
+node scripts/run-claude-review.mjs --scope commit --commit <sha> --model opus --effort high --timeout-ms 300000 --reason "<what Claude should review>"
 ```
 
 The wrapper captures Claude's output at:
 
 `.claude/session-state/claude-review-latest.txt`
+
+It also writes a unique per-run capture under `.claude/session-state/history/` and records the requested/resolved model, effort, CLI version, repo HEAD, scope fingerprint, prompt hash, terminal reason, and permission denials.
+
+The wrapper emits one execution state:
+
+- `VERIFIED` — Claude returned a complete structured result with no permission denials.
+- `BLOCKED` — timeout, CLI failure, invalid/missing output, or denied evidence access. `BLOCKED` is never a clean review and never satisfies a ship or dry-cycle gate.
 
 ## Step 3 - Reconcile
 
@@ -75,6 +82,8 @@ Read `.claude/session-state/claude-review-latest.txt` and classify each Claude f
 - `agree`
 - `disagree`
 - `needs more evidence`
+
+Stop reconciliation if the capture says `Execution state: BLOCKED`; report the exact blocker and retry or use the documented handoff fallback.
 
 Verify BLOCKER and HIGH findings against source, tests, migration evidence, smoke results, or live read-only DB evidence before acting.
 

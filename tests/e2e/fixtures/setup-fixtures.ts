@@ -15,11 +15,12 @@ import {
   TEST_PRODUCT_GAMMA,
   TEST_VENDOR,
 } from './e2e-constants';
-import { assertNotProductionWithoutOverride } from '../utils/safety-guards';
+import { resolveSafeE2EConfig } from '../utils/safety-guards';
 
-const SUPABASE_URL = 'https://rhyzpcqhnizqbxphqdkr.supabase.co';
-const ANON_KEY =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJoeXpwY3Fobml6cWJ4cGhxZGtyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAzOTM2NDAsImV4cCI6MjA4NTk2OTY0MH0.WR0vAi_KeGF0OoJ8_dFH7uW6ael9M5xnm6OUo2IZy7U';
+const {
+  supabaseUrl: SUPABASE_URL,
+  supabaseAnonKey: ANON_KEY,
+} = resolveSafeE2EConfig();
 
 /**
  * Get a JWT token by signing in with the E2E test account.
@@ -116,9 +117,6 @@ async function ensureFixture(
  * Main setup function — called by Playwright globalSetup.
  */
 export default async function setupFixtures(): Promise<void> {
-  // PR-05: refuse to run if pointed at prod without explicit acknowledgement
-  assertNotProductionWithoutOverride();
-
   console.log('\n🔧 E2E Setup: Creating shared test fixtures...\n');
 
   const token = await getAuthToken();
