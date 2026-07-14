@@ -1,3 +1,5 @@
+import type { Json } from './supabase';
+
 export type UserRole = 'admin' | 'sales_rep' | 'driver' | 'applicator';
 export type ProductForm = 'liquid' | 'dry';
 export type ContainerType = 'Jug' | 'Drum' | 'Pallet' | 'Mini-Bulk' | 'Shuttle' | 'Bag' | 'Tote' | 'Ea' | 'Jar';
@@ -725,7 +727,8 @@ export type OfflineActionRpcErrorCode =
   | 'AUTH_REQUIRED'
   | 'OFFLINE_ACTION_ID_REUSE'
   | 'OFFLINE_ACTION_NEEDS_REVIEW'
-  | 'OFFLINE_STAGE_CONFLICT';
+  | 'OFFLINE_STAGE_CONFLICT'
+  | 'OFFLINE_STAGE_RATE_LIMIT';
 
 // The database keeps DEFAULT NULL to satisfy CRX's one-overload mutator rule,
 // but every app caller must supply a real key. These stricter app-layer types
@@ -736,7 +739,7 @@ export interface StageOfflineActionArgs {
   p_entity_id: string;
   p_schema_version: number;
   p_client_created_at: string;
-  p_payload: Record<string, unknown>;
+  p_payload: { [key: string]: Json | undefined };
   p_idempotency_key: string;
 }
 
