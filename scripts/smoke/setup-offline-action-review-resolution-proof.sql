@@ -50,7 +50,35 @@ DECLARE
   v_entity uuid;
   v_key text;
   v_label text;
+  v_admin uuid;
+  v_customer uuid;
+  v_order uuid;
+  v_delivery uuid;
 BEGIN
+  SELECT id INTO v_admin
+  FROM public.profiles
+  WHERE role = 'admin' AND is_active = true
+  ORDER BY created_at
+  LIMIT 1;
+  SELECT customer_id INTO v_customer
+  FROM public.jobs
+  ORDER BY created_at
+  LIMIT 1;
+  IF v_admin IS NULL OR v_customer IS NULL THEN
+    RAISE EXCEPTION 'PROOF_SETUP: admin and customer fixtures are required';
+  END IF;
+
+  INSERT INTO public.orders (order_number, customer_id, status, booking_draw)
+  VALUES ('[PROOF] OLD-CLOCK-ORDER-' || substr(md5(random()::text), 1, 8), v_customer, 'confirmed', false)
+  RETURNING id INTO v_order;
+  INSERT INTO public.deliveries (
+    delivery_number, order_id, customer_id, assigned_driver,
+    scheduled_date, status, created_by
+  ) VALUES (
+    '[PROOF] OLD-CLOCK-DEL-' || substr(md5(random()::text), 1, 8),
+    v_order, v_customer, NULL, CURRENT_DATE, 'scheduled', v_admin
+  ) RETURNING id INTO v_delivery;
+
   FOREACH v_label IN ARRAY ARRAY['primary', 'race', 'owner_status', 'same_key_a', 'same_key_b'] LOOP
     v_action := gen_random_uuid();
     v_entity := gen_random_uuid();

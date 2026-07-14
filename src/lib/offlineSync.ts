@@ -9,6 +9,7 @@ import {
   getPendingActions,
   getActionOwnerUserId,
   OFFLINE_MAX_RETRIES,
+  persistLegacySnapshotIfMissing,
   prepareLegacyQueuedAction,
   removeAction,
   updateAction,
@@ -23,6 +24,31 @@ import {
 export const MAX_RETRIES = OFFLINE_MAX_RETRIES;
 export const RETRY_DELAYS_MS = [30_000, 2 * 60_000, 10 * 60_000] as const;
 const MAX_SESSION_MISMATCH_DEFERRALS = 3;
+
+async function recoverLegacyDurableSnapshot(action: PendingAction): Promise<PendingAction> {
+  if (!action.id || !action.entityId || action.receiptOrigin !== 'legacy') return action;
+
+  const entityTable = action.operation === 'complete_delivery' ? 'deliveries' : 'jobs';
+  const response = entityTable === 'deliveries'
+    ? await supabase.from('deliveries').select('updated_at').eq('id', action.entityId).maybeSingle()
+    : await supabase.from('jobs').select('updated_at').eq('id', action.entityId).maybeSingle();
+
+  if (response.error) {
+    throw new OfflineReceiptSyncError(
+      'The current server version of this older saved action could not be checked. It remains saved and will retry automatically.',
+      'retry_later',
+      RETRY_DELAYS_MS[0],
+    );
+  }
+  if (!response.data || typeof response.data.updated_at !== 'string') {
+    throw new OfflineReceiptSyncError(
+      'This older saved action no longer has a matching delivery or job. Office review is required.',
+      'needs_attention',
+    );
+  }
+
+  return persistLegacySnapshotIfMissing(action.id, response.data.updated_at, entityTable);
+}
 
 export interface OfflineSyncResult {
   synced: number;
@@ -169,6 +195,17 @@ async function processPendingActions(
     }
 
     try {
+      // Pre-receipt production rows cannot contain the snapshot introduced by
+      // this release. Recover the current target version once, atomically save
+      // it across tabs, and let the server recheck it immediately before the
+      // canonical mutation. New rows never use this compatibility path.
+      if (
+        isDurableOfflineOperation(action.operation)
+        && action.receiptOrigin === 'legacy'
+        && !action.snapshotAt
+      ) {
+        action = await recoverLegacyDurableSnapshot(action);
+      }
       await executeAction(action);
       await removeAction(action.id!);
       synced++;

@@ -327,6 +327,9 @@ BEGIN
       IF v_timestamp > v_now + interval '5 minutes' THEN
         v_payload_requires_review := true;
         v_payload_review_summary := 'The saved completion time is ahead of the server clock. Office review is required.';
+      ELSIF v_timestamp < v_now - interval '14 days' THEN
+        v_payload_requires_review := true;
+        v_payload_review_summary := 'The saved completion time is more than 14 days old. Office review is required before posting into a prior period.';
       END IF;
       v_canonical := v_canonical || jsonb_build_object('completed_at', to_jsonb(v_timestamp));
     END IF;

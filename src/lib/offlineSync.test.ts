@@ -24,6 +24,7 @@ vi.mock('./db', () => ({
 const mockGetPendingActions = vi.fn();
 const mockRemoveAction = vi.fn().mockResolvedValue(undefined);
 const mockUpdateAction = vi.fn().mockResolvedValue(undefined);
+const mockPersistLegacySnapshot = vi.fn();
 
 vi.mock('./offlineQueue', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./offlineQueue')>();
@@ -32,6 +33,7 @@ vi.mock('./offlineQueue', async (importOriginal) => {
     getPendingActions: () => mockGetPendingActions(),
     removeAction: (id: number) => mockRemoveAction(id),
     updateAction: (action: unknown) => mockUpdateAction(action),
+    persistLegacySnapshotIfMissing: (...args: unknown[]) => mockPersistLegacySnapshot(...args),
   };
 });
 
@@ -234,6 +236,84 @@ describe('syncPendingActions', () => {
     );
     expect(mockRemoveAction).toHaveBeenCalledWith(2);
     expect(result).toEqual({ ...EMPTY_RESULT, synced: 1, needsAttention: 1 });
+  });
+
+  it('recovers and persists a current server snapshot before replaying pre-receipt work', async () => {
+    const recoveredSnapshot = '2026-07-14T12:05:00.000Z';
+    const legacy = makeAction({
+      clientActionId: undefined,
+      idempotencyKey: undefined,
+      schemaVersion: undefined,
+      receiptOrigin: undefined,
+      snapshotAt: undefined,
+      entityTable: undefined,
+    });
+    mockGetPendingActions.mockResolvedValue([legacy]);
+    mockFrom.mockReturnValue({
+      select: () => ({
+        eq: () => ({
+          maybeSingle: () => Promise.resolve({ data: { updated_at: recoveredSnapshot }, error: null }),
+        }),
+      }),
+    });
+    mockPersistLegacySnapshot.mockImplementation(async (
+      id: number,
+      snapshotAt: string,
+      entityTable: 'deliveries' | 'jobs',
+    ) => ({
+      ...legacy,
+      id,
+      clientActionId: '55555555-5555-4555-8555-555555555555',
+      idempotencyKey: legacy.params.p_idempotency_key,
+      schemaVersion: 1,
+      receiptOrigin: 'legacy',
+      entityTable,
+      snapshotAt,
+    }));
+    mockRpc.mockResolvedValue({ data: { success: true }, error: null });
+
+    const result = await syncPendingActions('user-1');
+
+    expect(mockFrom).toHaveBeenCalledWith('deliveries');
+    expect(mockPersistLegacySnapshot).toHaveBeenCalledWith(1, recoveredSnapshot, 'deliveries');
+    expect(mockExecuteDurable).toHaveBeenCalledWith(expect.objectContaining({
+      receiptOrigin: 'legacy',
+      snapshotAt: recoveredSnapshot,
+      entityTable: 'deliveries',
+    }));
+    expect(mockRemoveAction).toHaveBeenCalledWith(1);
+    expect(result).toEqual({ ...EMPTY_RESULT, synced: 1 });
+  });
+
+  it('defers legacy snapshot recovery without consuming a retry when lookup fails', async () => {
+    const legacy = makeAction({
+      clientActionId: undefined,
+      idempotencyKey: undefined,
+      schemaVersion: undefined,
+      receiptOrigin: undefined,
+      snapshotAt: undefined,
+      entityTable: undefined,
+    });
+    mockGetPendingActions.mockResolvedValue([legacy]);
+    mockFrom.mockReturnValue({
+      select: () => ({
+        eq: () => ({
+          maybeSingle: () => Promise.resolve({ data: null, error: { message: 'network timeout' } }),
+        }),
+      }),
+    });
+
+    const result = await syncPendingActions('user-1');
+
+    expect(mockPersistLegacySnapshot).not.toHaveBeenCalled();
+    expect(mockExecuteDurable).not.toHaveBeenCalled();
+    expect(mockUpdateAction).toHaveBeenLastCalledWith(expect.objectContaining({
+      retryCount: 0,
+      status: 'retry_wait',
+      nextAttemptAt: expect.any(String),
+      lastError: expect.stringContaining('remains saved and will retry automatically'),
+    }));
+    expect(result).toEqual({ ...EMPTY_RESULT, deferred: 1 });
   });
 
   it('quarantines and reports an actor that differs from the saved owner', async () => {

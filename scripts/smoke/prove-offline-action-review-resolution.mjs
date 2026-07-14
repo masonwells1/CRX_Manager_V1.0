@@ -194,7 +194,10 @@ SELECT json_build_object(
   'snapshot_client_action_id', gen_random_uuid(),
   'process_drift_client_action_id', gen_random_uuid(),
   'missing_snapshot_client_action_id', gen_random_uuid(),
+  'old_clock_client_action_id', gen_random_uuid(),
   'client_created_at', now(),
+  'delivery_id', (SELECT d.id FROM public.deliveries d ORDER BY d.created_at LIMIT 1),
+  'delivery_updated_at', (SELECT d.updated_at FROM public.deliveries d ORDER BY d.created_at LIMIT 1),
   'job_id', (SELECT j.id FROM public.jobs j ORDER BY j.created_at LIMIT 1),
   'job_updated_at', (SELECT j.updated_at FROM public.jobs j ORDER BY j.created_at LIMIT 1),
   'stale_snapshot_at', (
@@ -217,6 +220,7 @@ SELECT json_build_object(
 )::text;
 `, 'payload drift target');
   assert.ok(payloadDriftTarget.job_id, 'proof template must contain a job');
+  assert.ok(payloadDriftTarget.delivery_id, 'proof template must contain a delivery');
   assert.ok(payloadDriftTarget.field_id, 'proof template must contain a field outside the selected job');
   const payloadDriftKey = `[PROOF] payload-drift-${Date.now().toString(36)}`;
   const payloadDriftStatement = `SELECT public.stage_offline_action(
@@ -256,6 +260,26 @@ SELECT json_build_object(
     && item.failure_code === 'PAYLOAD_INVALID'
   )));
   assert.equal(JSON.stringify(payloadDriftQueue).includes('field_acres'), false);
+
+  const oldClockKey = `[PROOF] old-clock-${Date.now().toString(36)}`;
+  const oldClockReceipt = jsonResult(sql(authenticated(ADMIN, `
+SELECT public.stage_offline_action(
+  ${literal(payloadDriftTarget.old_clock_client_action_id)}::uuid,
+  'complete_delivery',
+  ${literal(payloadDriftTarget.delivery_id)}::uuid,
+  1,
+  ${literal(payloadDriftTarget.client_created_at)}::timestamptz,
+  jsonb_build_object(
+    'signed_by', 'Old Clock Proof',
+    'completed_at', to_jsonb(now() - interval '30 days')
+  ),
+  ${literal(oldClockKey)},
+  ${literal(payloadDriftTarget.delivery_updated_at)}::timestamptz
+)::text;
+`)), 'old device clock receipt');
+  assert.equal(oldClockReceipt.status, 'needs_review');
+  assert.equal(oldClockReceipt.failure_code, 'PAYLOAD_INVALID');
+  assert.match(oldClockReceipt.failure_summary, /more than 14 days old/i);
 
   const targetDriftKey = `[PROOF] target-drift-${Date.now().toString(36)}`;
   const targetDriftStatement = `SELECT public.stage_offline_action(

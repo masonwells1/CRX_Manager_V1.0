@@ -33,6 +33,7 @@ DECLARE
   v_missing_action uuid := gen_random_uuid();
   v_unauthorized_action uuid := gen_random_uuid();
   v_clock_skew_action uuid := gen_random_uuid();
+  v_old_clock_action uuid := gen_random_uuid();
   v_client_time timestamptz := clock_timestamp() - interval '5 minutes';
   v_delivery_key text := '[SMOKE] offline-delivery-' || v_suffix;
   v_job_key text := '[SMOKE] offline-job-' || v_suffix;
@@ -40,6 +41,7 @@ DECLARE
   v_missing_key text := '[SMOKE] offline-missing-' || v_suffix;
   v_unauthorized_key text := '[SMOKE] offline-unauthorized-' || v_suffix;
   v_clock_skew_key text := '[SMOKE] offline-clock-skew-' || v_suffix;
+  v_old_clock_key text := '[SMOKE] offline-old-clock-' || v_suffix;
   v_payload jsonb;
   v_result jsonb;
   v_replay jsonb;
@@ -202,6 +204,23 @@ BEGIN
   IF v_result->>'status' IS DISTINCT FROM 'needs_review'
      OR v_result->>'failure_code' IS DISTINCT FROM 'PAYLOAD_INVALID' THEN
     RAISE EXCEPTION 'SMOKE_FAIL: future completed_at was not retained for office review: %', v_result;
+  END IF;
+
+  v_result := public.stage_offline_action(
+    v_old_clock_action, 'complete_delivery', v_delivery, 1,
+    v_client_time,
+    jsonb_set(
+      v_payload,
+      '{completed_at}',
+      to_jsonb(clock_timestamp() - interval '30 days')
+    ),
+    v_old_clock_key,
+    (SELECT d.updated_at FROM public.deliveries d WHERE d.id = v_delivery)
+  );
+  IF v_result->>'status' IS DISTINCT FROM 'needs_review'
+     OR v_result->>'failure_code' IS DISTINCT FROM 'PAYLOAD_INVALID'
+     OR v_result->>'failure_summary' NOT ILIKE '%more than 14 days old%' THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: old completed_at was not retained for office review: %', v_result;
   END IF;
 
   v_result := public.stage_offline_action(

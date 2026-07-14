@@ -11,6 +11,7 @@ import { IDBFactory, IDBObjectStore } from 'fake-indexeddb';
 import {
   queueAction,
   prepareLegacyQueuedAction,
+  persistLegacySnapshotIfMissing,
   getPendingActions,
   removeAction,
   updateAction,
@@ -93,7 +94,28 @@ describe('queueAction', () => {
     expect(firstTab).toMatchObject({
       idempotencyKey: 'complete_delivery:user-1:test-key',
       schemaVersion: 1,
+      receiptOrigin: 'legacy',
       entityId: 'del-001',
+    });
+  });
+
+  it('makes two tabs converge on the first persisted legacy snapshot', async () => {
+    const actionId = await queueAction(makeAction({ receiptOrigin: 'legacy', snapshotAt: undefined }));
+    const firstSnapshot = '2026-07-14T12:00:00.000Z';
+    const secondSnapshot = '2026-07-14T12:01:00.000Z';
+
+    const [firstTab, secondTab] = await Promise.all([
+      persistLegacySnapshotIfMissing(actionId, firstSnapshot, 'deliveries'),
+      persistLegacySnapshotIfMissing(actionId, secondSnapshot, 'deliveries'),
+    ]);
+
+    expect(firstTab.snapshotAt).toBe(secondTab.snapshotAt);
+    expect([firstSnapshot, secondSnapshot]).toContain(firstTab.snapshotAt);
+    expect((await getPendingActions())[0]).toMatchObject({
+      id: actionId,
+      receiptOrigin: 'legacy',
+      entityTable: 'deliveries',
+      snapshotAt: firstTab.snapshotAt,
     });
   });
 

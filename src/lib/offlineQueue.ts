@@ -36,6 +36,8 @@ export interface PendingAction {
   idempotencyKey?: string;
   /** Receipt schema sent to stage_offline_action. */
   schemaVersion?: 1;
+  /** Whether the durable identity was created when queued or recovered from a pre-receipt row. */
+  receiptOrigin?: 'native' | 'legacy';
   /** Office resolution remains local until the original user acknowledges it. */
   officeResolution?: 'already_completed' | 'abandoned';
   officeResolutionNote?: string;
@@ -159,6 +161,7 @@ export function prepareQueuedAction(action: Omit<PendingAction, 'id'>): Omit<Pen
     clientActionId: action.clientActionId ?? crypto.randomUUID(),
     idempotencyKey,
     schemaVersion: 1,
+    receiptOrigin: action.receiptOrigin ?? 'native',
     entityId,
   };
 }
@@ -199,7 +202,7 @@ export async function prepareLegacyQueuedAction(
   const hex = Array.from(uuidBytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
   const clientActionId = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 
-  return prepareQueuedAction({ ...action, clientActionId });
+  return prepareQueuedAction({ ...action, clientActionId, receiptOrigin: 'legacy' });
 }
 
 /**
@@ -266,6 +269,76 @@ export async function updateAction(action: PendingAction): Promise<void> {
     tx.onabort = () => {
       db.close();
       reject(tx.error ?? request.error ?? new Error('Offline action update was aborted'));
+    };
+  });
+}
+
+/**
+ * Persist the first server snapshot recovered for a pre-receipt action.
+ * The read and write share one IndexedDB transaction, so two tabs racing the
+ * same legacy row both converge on the first stored snapshot.
+ */
+export async function persistLegacySnapshotIfMissing(
+  actionId: number,
+  snapshotAt: string,
+  entityTable: 'deliveries' | 'jobs',
+): Promise<PendingAction> {
+  if (!Number.isInteger(actionId) || actionId <= 0) {
+    throw new Error('Legacy offline action is missing its local queue ID');
+  }
+  if (!Number.isFinite(new Date(snapshotAt).getTime())) {
+    throw new Error('Legacy offline action received an invalid server snapshot');
+  }
+
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readwrite');
+    const store = tx.objectStore(STORE_NAME);
+    const getRequest = store.get(actionId);
+    let result: PendingAction | undefined;
+    let failure: Error | DOMException | null = null;
+
+    getRequest.onsuccess = () => {
+      const current = getRequest.result as PendingAction | undefined;
+      if (!current) {
+        failure = new Error('Legacy offline action disappeared before its snapshot was saved');
+        tx.abort();
+        return;
+      }
+      if (current.snapshotAt) {
+        result = current;
+        return;
+      }
+
+      result = {
+        ...current,
+        entityTable,
+        snapshotAt,
+        receiptOrigin: 'legacy',
+      };
+      const putRequest = store.put(result);
+      putRequest.onerror = () => {
+        failure = putRequest.error;
+      };
+    };
+    getRequest.onerror = () => {
+      failure = getRequest.error;
+    };
+    tx.oncomplete = () => {
+      db.close();
+      if (!result) {
+        reject(failure ?? new Error('Legacy offline snapshot transaction completed without an action'));
+        return;
+      }
+      resolve(result);
+    };
+    tx.onerror = () => {
+      db.close();
+      reject(failure ?? tx.error ?? getRequest.error ?? new Error('Failed to save legacy offline snapshot'));
+    };
+    tx.onabort = () => {
+      db.close();
+      reject(failure ?? tx.error ?? new Error('Legacy offline snapshot save was aborted'));
     };
   });
 }
