@@ -1,6 +1,12 @@
-# Migration History (685 migrations)
+# Migration History (686 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
+
+## Queued 2026-07-14 — NOT YET APPLIED LIVE
+
+| # | Timestamp | Description |
+|---|-----------|-------------|
+| 686 | 20260714024811 | **QUEUED — Stage 1B-1A permanent offline action receipts.** Adds RPC-only `offline_action_receipts` with permanent action/idempotency uniqueness, bounded canonical payloads, active-owner/office status visibility, and explicit `received` / `succeeded` / `needs_review` states. Adds `stage_offline_action`, `process_offline_action`, and `get_offline_action_status`; processing calls only the existing canonical `complete_delivery` / `complete_job` functions, with the business mutation and success receipt in one transaction. Static SQL scan: clean. Disposable-clone compile: pass. Rolled-back end-to-end smoke: pass for both branches, exact replay/no duplicate inventory or application record, owner binding, missing-target retention, deterministic state-conflict review, direct-write denial, and grants. **No live apply has occurred; live table/RPC counts remain unchanged.** |
 
 > ✅ **Doc-debt cleared 2026-05-17.** Entries #322–#345 backfilled in the main table below. See `docs/archive/2026-spring/2026-05-13-pr59-codex-review-summary.md` and `docs/CHANGELOG.md` for deeper context on each fix.
 

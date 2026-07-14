@@ -5343,6 +5343,87 @@ export type Database = {
           },
         ]
       }
+      offline_action_receipts: {
+        Row: {
+          actor_id: string
+          attempt_count: number
+          client_action_id: string
+          client_created_at: string
+          created_at: string
+          entity_id: string
+          failure_code: string | null
+          failure_summary: string | null
+          idempotency_key: string
+          last_attempt_at: string | null
+          needs_review_at: string | null
+          operation: string
+          received_at: string
+          request_payload: Json
+          result: Json | null
+          schema_version: number
+          status: string
+          succeeded_at: string | null
+          updated_at: string
+        }
+        Insert: {
+          actor_id: string
+          attempt_count?: number
+          client_action_id: string
+          client_created_at: string
+          created_at?: string
+          entity_id: string
+          failure_code?: string | null
+          failure_summary?: string | null
+          idempotency_key: string
+          last_attempt_at?: string | null
+          needs_review_at?: string | null
+          operation: string
+          received_at?: string
+          request_payload: Json
+          result?: Json | null
+          schema_version: number
+          status?: string
+          succeeded_at?: string | null
+          updated_at?: string
+        }
+        Update: {
+          actor_id?: string
+          attempt_count?: number
+          client_action_id?: string
+          client_created_at?: string
+          created_at?: string
+          entity_id?: string
+          failure_code?: string | null
+          failure_summary?: string | null
+          idempotency_key?: string
+          last_attempt_at?: string | null
+          needs_review_at?: string | null
+          operation?: string
+          received_at?: string
+          request_payload?: Json
+          result?: Json | null
+          schema_version?: number
+          status?: string
+          succeeded_at?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "offline_action_receipts_actor_id_fkey"
+            columns: ["actor_id"]
+            isOneToOne: false
+            referencedRelation: "profile_public_view"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "offline_action_receipts_actor_id_fkey"
+            columns: ["actor_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       ocr_processing_queue: {
         Row: {
           blend_ticket_id: string
@@ -9822,6 +9903,10 @@ export type Database = {
           isSetofReturn: true
         }
       }
+      get_offline_action_status: {
+        Args: { p_client_action_id: string }
+        Returns: Json
+      }
       get_open_booking_rollover: {
         Args: { p_customer_id?: string; p_season?: number }
         Returns: Json
@@ -10416,6 +10501,10 @@ export type Database = {
         }
         Returns: Json
       }
+      process_offline_action: {
+        Args: { p_client_action_id: string; p_idempotency_key?: string }
+        Returns: Json
+      }
       product_price_per_acre: {
         Args: {
           p_inventory_unit: string
@@ -10850,6 +10939,18 @@ export type Database = {
       settle_applied_record_acres: {
         Args: { p_record_id: string }
         Returns: undefined
+      }
+      stage_offline_action: {
+        Args: {
+          p_client_action_id: string
+          p_client_created_at: string
+          p_entity_id: string
+          p_idempotency_key?: string
+          p_operation: string
+          p_payload: Json
+          p_schema_version: number
+        }
+        Returns: Json
       }
       start_job: {
         Args: {

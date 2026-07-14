@@ -1399,6 +1399,7 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   'manual_inventory_add',
   'post_commission_payment',
   'post_invoice',
+  'process_offline_action',
   'reassign_delivery',
   'receive_po_items',
   'receive_return',
@@ -1422,6 +1423,7 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   'save_job_applied_record',
   'save_purchase_order',
   'save_quote',
+  'stage_offline_action',
   'transfer_invoice_to_job',
   'transfer_job_to_invoice',
   'transition_rebate_claim',
@@ -1531,7 +1533,7 @@ const MIGRATIONS_DIR = join(
  */
 const IDEMPOTENCY_BODY_EXEMPT: Record<
   string,
-  'verified-live' | 'natural' | 'gap' | 'non-mutating' | 'table-unique'
+  'verified-live' | 'natural' | 'gap' | 'non-mutating' | 'table-unique' | 'receipt-unique'
 > = {
   //  - 'table-unique'   : idempotency is enforced NOT via the idempotency_keys table
   //                       but by a dedicated column + PARTIAL UNIQUE index on the RPC's
@@ -1540,6 +1542,13 @@ const IDEMPOTENCY_BODY_EXEMPT: Record<
   //                       check_idempotency/save_idempotency helpers) and must preserve
   //                       caller RLS. Verified by its own dedicated test below.
   save_job_applied_record: 'table-unique',
+  // Stage 1B-1A uses the permanent receipt's UNIQUE idempotency_key claim.
+  // The processor locks that same receipt, verifies the exact key, returns
+  // terminal success without re-running, and forwards the key to the canonical
+  // completion RPC. The rolled-back smoke proves both business branches replay
+  // without a second inventory/application-record effect.
+  process_offline_action: 'receipt-unique',
+  stage_offline_action: 'receipt-unique',
   // disk scan can't resolve the latest body; live body_uses_idem=true (2026-05-29)
   create_rebate_claim: 'verified-live',
   manual_inventory_add: 'verified-live',

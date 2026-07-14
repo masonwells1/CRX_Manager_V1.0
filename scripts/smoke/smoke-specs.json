@@ -6,6 +6,11 @@
     "spec_contract": "Keys are the primary RPC under test. 'covers' lists every RPC the chain exercises - run-smoke.mjs --spec <rpc> matches keys AND covers entries, so one chain can certify several RPCs. Every migration that touches an RPC must have or extend a spec covering it."
   },
   "specs": {
+    "stage_offline_action": {
+      "chain": "smoke-offline-action-receipts.sql",
+      "description": "Stage 1B-1A permanent receipt chain: complete_delivery and complete_job stage -> immutable canonical replay -> canonical process -> durable sanitized status -> replay without duplicate inventory/application work; action UUID and idempotency reuse rejection; actor-bound processing; owner and office status visibility; missing-target retention; deterministic state-conflict review; RPC-only writes; grants. Self-contained fixtures and terminal rollback.",
+      "covers": ["stage_offline_action", "process_offline_action", "get_offline_action_status", "complete_delivery", "complete_job"]
+    },
     "set_field_boundary": {
       "chain": "smoke-set_field_boundary.sql",
       "description": "Field-acre-billing acreage RPCs (migrations 20260623120000/130000): a ~40-ac polygon measures sane geodesic acres (acres_source='measured'); the 0.1-5000 band rejects oversize (AREA_OUT_OF_BAND); a typed override SURVIVES a redraw (set_field_boundary never touches override_acres); idempotent replay returns the same result; the fields_acre_authority trigger blocks a direct measured_acres write.",
