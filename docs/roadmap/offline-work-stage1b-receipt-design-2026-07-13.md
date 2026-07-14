@@ -1,6 +1,6 @@
 # Offline Work Stage 1B — Permanent Receipt Design
 
-**Status:** IMPLEMENTED ON FEATURE BRANCH — migration is queued and has not been applied live
+**Status:** FULL BROWSER + OFFICE RECOVERY IMPLEMENTED ON FEATURE BRANCH — three migrations are queued and have not been applied live
 **Date:** 2026-07-13
 **Risk:** HIGH — the supported actions change inventory, delivery/order/invoice state, jobs, and application records
 
@@ -15,6 +15,12 @@ This closes the dangerous uncertainty window:
 3. the phone cannot tell whether it is safe to retry or delete the local action.
 
 Stage 1A keeps that uncertain action in the browser. Stage 1B gives the office and the returning device a server record that can answer what happened.
+
+## Implementation update — 2026-07-14
+
+The approved browser integration and audited office-resolution slice is now implemented and locally proven. Approved delivery/job completions receive a permanent client action ID before the first network request; reconnection stages and processes through the receipt RPCs; the browser deletes only a server-proven `succeeded` item. Daily-cap and unresolved-backlog responses wait without consuming a retry, actionable field/item/clock drift becomes office-visible review work, blocked IndexedDB upgrades fail visibly, and office-resolved items stay on the device until the original user acknowledges the permanent decision.
+
+The office page exposes only sanitized metadata and records either `already_completed` or `abandoned` with a required note, resolver, timestamp, idempotency key, and audit event. It never impersonates the original actor, calls `process_offline_action`, changes the receipt to `succeeded`, or deletes the receipt. A disposable local database proved role restrictions, exact replay, conflicting-key rejection, a real two-session resolution race, and backlog release. Production remains unchanged until the migrations are separately approved and applied.
 
 ## Recommendation
 
@@ -166,7 +172,8 @@ Responsibilities:
 5. construct the stored payload server-side from allowlisted arguments;
 6. insert the receipt as `received` with an atomic conflict pattern—`INSERT ... ON CONFLICT DO NOTHING`, followed by a read and exact immutable-field comparison; never use a check-then-insert sequence;
 7. fail closed on any identity/payload mismatch for a reused client ID;
-8. perform the same target/assignment authorization needed to stage that operation without weakening the canonical RPC's authorization.
+8. perform the same target/assignment authorization needed to stage that operation without weakening the canonical RPC's authorization;
+9. compare the optional queued delivery/job `updated_at` snapshot on the server and retain a changed target as sanitized `TARGET_STATE_CONFLICT` review work; exact replay of an existing receipt must still return its permanent outcome.
 
 ### `process_offline_action(p_client_action_id uuid, p_idempotency_key text)`
 

@@ -304,16 +304,17 @@ export default function FieldStop() {
     // OFFLINE — only reachable for in_progress stops (Arrive is online-only).
     if (!isOnline) {
       try {
+        const offlineRpcParams = { ...rpcParams, p_completed_at: new Date().toISOString() };
         await queueAction({
           operation: 'complete_delivery',
-          params: rpcParams,
+          params: offlineRpcParams,
           createdAt: new Date().toISOString(),
           retryCount: 0,
           ownerUserId: profile.id,
           status: 'pending',
-          // Engage offlineSync's stale-write guard: if this delivery is
-          // completed/cancelled elsewhere while we're offline, replay surfaces
-          // a Conflict instead of silently dropping the queued completion.
+          // The durable receipt compares this snapshot on the server. A changed
+          // delivery becomes office review work without defeating lost-response
+          // recovery for a receipt that already succeeded.
           entityTable: 'deliveries',
           entityId: id,
           snapshotAt: delivery.updated_at ?? undefined,

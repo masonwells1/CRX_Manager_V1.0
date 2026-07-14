@@ -4,17 +4,19 @@
  * Auto-syncs when the connection comes back.
  */
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { WifiOff, RefreshCw, CheckCircle2 } from 'lucide-react';
+import { WifiOff, RefreshCw, CheckCircle2, ClipboardList } from 'lucide-react';
 import { Sentry } from '../../lib/sentry';
 import { useOnlineStatus } from '../../hooks/useOnlineStatus';
 import { useAuth } from '../../contexts/AuthContext';
 import { getQueueSummary, type OfflineQueueSummary } from '../../lib/offlineQueue';
 import { RETRY_DELAYS_MS, syncPendingActions, type OfflineSyncResult } from '../../lib/offlineSync';
+import OfflineWorkPanel from './OfflineWorkPanel';
 
 const EMPTY_SUMMARY: OfflineQueueSummary = {
   ownedTotal: 0,
   ownedAutoSyncable: 0,
   ownedNeedsAttention: 0,
+  ownedOfficeResolved: 0,
   otherUserTotal: 0,
   ownerUnknownTotal: 0,
   nextAutoSyncAt: null,
@@ -30,6 +32,7 @@ export default function OfflineBanner() {
   const [syncError, setSyncError] = useState(false);
   const [syncResult, setSyncResult] = useState<OfflineSyncResult | null>(null);
   const [syncRetryAt, setSyncRetryAt] = useState<number | null>(null);
+  const [workPanelOpen, setWorkPanelOpen] = useState(false);
   const syncingRef = useRef(false);
   const successTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -101,7 +104,7 @@ export default function OfflineBanner() {
   }, [currentUserId, handleSync, isOnline, summary.nextAutoSyncAt, summary.ownedAutoSyncable, syncRetryAt]);
 
   const unresolvedTotal = summary.ownedTotal + summary.otherUserTotal + summary.ownerUnknownTotal;
-  const ownedWaiting = summary.ownedTotal - summary.ownedNeedsAttention;
+  const ownedWaiting = summary.ownedTotal - summary.ownedNeedsAttention - summary.ownedOfficeResolved;
 
   // Show nothing if online and no pending actions and no sync result
   if (isOnline && unresolvedTotal === 0 && (!syncResult || syncResult.synced === 0)) {
@@ -138,6 +141,11 @@ export default function OfflineBanner() {
             {summary.ownedNeedsAttention} offline action{summary.ownedNeedsAttention !== 1 ? 's need' : ' needs'} attention — saved safely on this device
           </span>
         )}
+        {summary.ownedOfficeResolved > 0 && (
+          <span className="text-blue-700 font-medium">
+            {summary.ownedOfficeResolved} office resolution{summary.ownedOfficeResolved !== 1 ? 's are' : ' is'} ready for your acknowledgement
+          </span>
+        )}
         {summary.otherUserTotal > 0 && (
           <span className="text-amber-800 font-medium">
             Offline work for another user is safely stored on this device. Sign in as that user to sync it.
@@ -158,16 +166,39 @@ export default function OfflineBanner() {
         )}
       </div>
 
-      {isOnline && summary.ownedTotal > 0 && (
-        <button
-          type="button"
-          onClick={() => void handleSync(true)}
-          disabled={syncing}
-          className="flex shrink-0 items-center gap-1 text-blue-600 hover:text-blue-700 font-medium"
-        >
-          <RefreshCw className={`h-4 w-4 ${syncing ? 'animate-spin' : ''}`} />
-          {syncing ? 'Syncing...' : summary.ownedNeedsAttention > 0 ? 'Try Again' : 'Sync Now'}
-        </button>
+      {currentUserId && summary.ownedTotal > 0 && (
+        <div className="flex shrink-0 items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setWorkPanelOpen(true)}
+            className="flex min-h-11 items-center gap-1 text-blue-700 hover:text-blue-800 font-medium"
+          >
+            <ClipboardList className="h-4 w-4" />
+            Review
+          </button>
+          {isOnline && ownedWaiting + summary.ownedNeedsAttention > 0 && (
+            <button
+              type="button"
+              onClick={() => void handleSync(true)}
+              disabled={syncing}
+              className="flex min-h-11 items-center gap-1 text-blue-600 hover:text-blue-700 font-medium"
+            >
+              <RefreshCw className={`h-4 w-4 ${syncing ? 'animate-spin' : ''}`} />
+              {syncing ? 'Syncing...' : summary.ownedNeedsAttention > 0 ? 'Try Again' : 'Sync Now'}
+            </button>
+          )}
+        </div>
+      )}
+
+      {currentUserId && (
+        <OfflineWorkPanel
+          open={workPanelOpen}
+          currentUserId={currentUserId}
+          isOnline={isOnline}
+          onClose={() => setWorkPanelOpen(false)}
+          onRetry={() => handleSync(true)}
+          onChanged={checkQueue}
+        />
       )}
     </div>
   );

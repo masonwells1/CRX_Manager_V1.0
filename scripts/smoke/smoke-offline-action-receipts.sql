@@ -188,34 +188,26 @@ BEGIN
     'completed_at', to_jsonb(clock_timestamp() - interval '1 minute')
   );
 
-  BEGIN
-    PERFORM public.stage_offline_action(
-      v_clock_skew_action, 'complete_delivery', v_delivery, 1,
-      v_client_time,
-      jsonb_set(
-        v_payload,
-        '{completed_at}',
-        to_jsonb(clock_timestamp() + interval '10 minutes')
-      ),
-      v_clock_skew_key
-    );
-    RAISE EXCEPTION 'SMOKE_FAIL: future completed_at was staged';
-  EXCEPTION WHEN OTHERS THEN
-    IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
-    IF SQLERRM NOT LIKE 'PAYLOAD_INVALID: completed_at cannot be more than 5 minutes in the future%' THEN
-      RAISE EXCEPTION 'SMOKE_FAIL: future completed_at expected PAYLOAD_INVALID, got %', SQLERRM;
-    END IF;
-  END;
-  IF EXISTS (
-    SELECT 1 FROM public.offline_action_receipts
-    WHERE client_action_id = v_clock_skew_action
-  ) THEN
-    RAISE EXCEPTION 'SMOKE_FAIL: rejected future completed_at left a receipt';
+  v_result := public.stage_offline_action(
+    v_clock_skew_action, 'complete_delivery', v_delivery, 1,
+    v_client_time,
+    jsonb_set(
+      v_payload,
+      '{completed_at}',
+      to_jsonb(clock_timestamp() + interval '10 minutes')
+    ),
+    v_clock_skew_key,
+    (SELECT d.updated_at FROM public.deliveries d WHERE d.id = v_delivery)
+  );
+  IF v_result->>'status' IS DISTINCT FROM 'needs_review'
+     OR v_result->>'failure_code' IS DISTINCT FROM 'PAYLOAD_INVALID' THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: future completed_at was not retained for office review: %', v_result;
   END IF;
 
   v_result := public.stage_offline_action(
     v_delivery_action, 'complete_delivery', v_delivery, 1,
-    v_client_time, v_payload, v_delivery_key
+    v_client_time, v_payload, v_delivery_key,
+    (SELECT d.updated_at FROM public.deliveries d WHERE d.id = v_delivery)
   );
   IF v_result->>'status' IS DISTINCT FROM 'received' THEN
     RAISE EXCEPTION 'SMOKE_FAIL: delivery stage did not return received: %', v_result;
@@ -226,7 +218,8 @@ BEGIN
     v_delivery_action, 'complete_delivery', v_delivery, 1,
     v_client_time,
     jsonb_set(v_payload, ARRAY['quantities', v_delivery_item::text], '2'::jsonb),
-    v_delivery_key
+    v_delivery_key,
+    (SELECT d.updated_at FROM public.deliveries d WHERE d.id = v_delivery)
   );
   IF v_replay IS DISTINCT FROM v_result THEN
     RAISE EXCEPTION 'SMOKE_FAIL: equivalent delivery stage replay changed: % vs %', v_replay, v_result;
@@ -236,7 +229,8 @@ BEGIN
     PERFORM public.stage_offline_action(
       v_delivery_action, 'complete_delivery', v_delivery, 1,
       v_client_time, jsonb_set(v_payload, '{signed_by}', '"Different"'::jsonb),
-      v_delivery_key
+      v_delivery_key,
+      (SELECT d.updated_at FROM public.deliveries d WHERE d.id = v_delivery)
     );
     RAISE EXCEPTION 'SMOKE_FAIL: action UUID reuse with changed payload was allowed';
   EXCEPTION WHEN OTHERS THEN
@@ -249,7 +243,8 @@ BEGIN
   BEGIN
     PERFORM public.stage_offline_action(
       gen_random_uuid(), 'complete_delivery', v_delivery, 1,
-      v_client_time, v_payload, v_delivery_key
+      v_client_time, v_payload, v_delivery_key,
+      (SELECT d.updated_at FROM public.deliveries d WHERE d.id = v_delivery)
     );
     RAISE EXCEPTION 'SMOKE_FAIL: idempotency-key reuse across action UUIDs was allowed';
   EXCEPTION WHEN OTHERS THEN
@@ -355,7 +350,8 @@ BEGIN
 
   v_result := public.stage_offline_action(
     v_job_action, 'complete_job', v_job, 1,
-    v_client_time, v_payload, v_job_key
+    v_client_time, v_payload, v_job_key,
+    (SELECT j.updated_at FROM public.jobs j WHERE j.id = v_job)
   );
   IF v_result->>'status' IS DISTINCT FROM 'received' THEN
     RAISE EXCEPTION 'SMOKE_FAIL: job stage did not return received: %', v_result;
@@ -395,7 +391,8 @@ BEGIN
 
   v_result := public.stage_offline_action(
     v_conflict_action, 'complete_job', v_conflict_job, 1,
-    v_client_time, '{}'::jsonb, v_conflict_key
+    v_client_time, '{}'::jsonb, v_conflict_key,
+    (SELECT j.updated_at FROM public.jobs j WHERE j.id = v_conflict_job)
   );
   IF v_result->>'status' IS DISTINCT FROM 'received' THEN
     RAISE EXCEPTION 'SMOKE_FAIL: conflict receipt did not stage as received: %', v_result;
@@ -486,7 +483,7 @@ BEGIN
 
   IF has_function_privilege(
        'anon',
-       'public.stage_offline_action(uuid,text,uuid,integer,timestamptz,jsonb,text)',
+       'public.stage_offline_action(uuid,text,uuid,integer,timestamptz,jsonb,text,timestamptz)',
        'EXECUTE'
      )
      OR has_function_privilege('anon', 'public.process_offline_action(uuid,text)', 'EXECUTE')
@@ -496,7 +493,7 @@ BEGIN
 
   IF NOT has_function_privilege(
        'authenticated',
-       'public.stage_offline_action(uuid,text,uuid,integer,timestamptz,jsonb,text)',
+       'public.stage_offline_action(uuid,text,uuid,integer,timestamptz,jsonb,text,timestamptz)',
        'EXECUTE'
      )
      OR NOT has_function_privilege('authenticated', 'public.process_offline_action(uuid,text)', 'EXECUTE')

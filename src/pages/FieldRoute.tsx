@@ -25,6 +25,7 @@ const EMPTY_QUEUE_SUMMARY: OfflineQueueSummary = {
   ownedTotal: 0,
   ownedAutoSyncable: 0,
   ownedNeedsAttention: 0,
+  ownedOfficeResolved: 0,
   otherUserTotal: 0,
   ownerUnknownTotal: 0,
   nextAutoSyncAt: null,
@@ -114,7 +115,9 @@ export default function FieldRoute() {
     };
   }, [isOnline, profile?.id, stops]);
 
-  const ownedWaiting = queueSummary.ownedTotal - queueSummary.ownedNeedsAttention;
+  const ownedWaiting = queueSummary.ownedTotal
+    - queueSummary.ownedNeedsAttention
+    - queueSummary.ownedOfficeResolved;
   const hasSavedOfflineWork = queueSummary.ownedTotal > 0
     || queueSummary.otherUserTotal > 0
     || queueSummary.ownerUnknownTotal > 0;
@@ -147,7 +150,9 @@ export default function FieldRoute() {
         {hasSavedOfflineWork && (
           <span className="ml-auto inline-flex items-center gap-1 text-amber-800">
             <PackageCheck className="w-4 h-4" />
-            {queueSummary.ownedNeedsAttention > 0
+            {queueSummary.ownedOfficeResolved > 0
+              ? `${queueSummary.ownedOfficeResolved} office resolution${queueSummary.ownedOfficeResolved !== 1 ? 's' : ''} to acknowledge`
+              : queueSummary.ownedNeedsAttention > 0
               ? `${queueSummary.ownedNeedsAttention} need attention`
               : ownedWaiting > 0
                 ? `${ownedWaiting} waiting to sync`

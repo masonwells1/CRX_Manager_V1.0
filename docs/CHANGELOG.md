@@ -4,6 +4,14 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-14 — Offline receipt browser integration and audited office resolution (queued, not live)
+
+The feature branch now gives offline delivery/job completions a permanent client action ID before their first replay, stages them through the queued Supabase receipt contract, and removes the browser copy only after the server proves `succeeded`. The server compares the queued delivery/job `updated_at` snapshot before running a completion, so office edits become `TARGET_STATE_CONFLICT` review work while a committed lost-response replay still returns the permanent result. Daily-cap and unresolved-review-backlog errors defer without consuming retries; actionable field/item/clock drift becomes an office-visible review receipt; office-resolved items require acknowledgement before the device copy is removed. IndexedDB upgrades fail visibly when an older tab blocks them instead of leaving field saves spinning forever, and manual retry is unavailable while offline. Device completion time is attached only to an offline save, so ordinary online completion keeps the server clock. A new Saved Offline Work panel shows safe metadata and support IDs without raw payloads.
+
+The queued `20260714122626_offline_action_review_resolution.sql` migration adds an admin/sales-only sanitized review queue and an idempotent, audited `already_completed` / `abandoned` decision. That decision never impersonates the field user, reruns inventory/application work, marks the receipt succeeded, or deletes the receipt. A disposable local database proved access rules, sanitized output, exact replay, conflicting-key rejection, original-owner recovery, one-winner concurrent resolution, audit-event uniqueness, backlog release, and distinct 250/day and 500-unresolved guards. **No migration has been applied live and this frontend must not merge before the database rollout is separately approved.**
+
+---
+
 ## 2026-07-14 — Agent workflow tests added to required GitHub CI
 
 The required `Lint, Type Check, Test, Build` GitHub job now runs `npm run test:agent-workflows` after the lower-level correction-guard suite. This moves the end-to-end Codex production-action guard simulation, Claude review-wrapper tests, hook-adapter checks, and Claude/Codex workflow-wiring parity checks from a local-only Husky gate into the server-enforced pull-request pipeline. A pull request can no longer report the required CI check green when those agent workflow or hook-registration tests fail. The first Linux run immediately exposed a Windows-only separator assumption in `run-claude-review.test.mjs`; its expected output path now uses Node's native `path.join`, so the same wrapper behavior is asserted correctly on Windows and Linux.

@@ -56,6 +56,10 @@ const QUEUED_MIGRATION_FUNCTIONS = {
     'process_offline_action',
     'stage_offline_action',
   ],
+  '20260714122626_offline_action_review_resolution.sql': [
+    'get_offline_action_review_queue',
+    'resolve_offline_action',
+  ],
 } as const;
 
 const QUEUED_FUNCTIONS = new Set<string>(Object.values(QUEUED_MIGRATION_FUNCTIONS).flat());

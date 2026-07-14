@@ -158,7 +158,8 @@ BEGIN
   );
   v_result := public.stage_offline_action(
     v_action, 'complete_delivery', v_delivery, 1,
-    clock_timestamp() - interval '5 minutes', v_payload, v_key
+    clock_timestamp() - interval '5 minutes', v_payload, v_key,
+    (SELECT d.updated_at FROM public.deliveries d WHERE d.id = v_delivery)
   );
   IF v_result->>'status' IS DISTINCT FROM 'received' THEN
     RAISE EXCEPTION 'PROOF_SETUP: concurrency delivery did not stage: %', v_result;
@@ -208,7 +209,8 @@ BEGIN
   );
   v_result := public.stage_offline_action(
     v_action, 'complete_delivery', v_delivery, 1,
-    clock_timestamp() - interval '5 minutes', v_payload, v_key
+    clock_timestamp() - interval '5 minutes', v_payload, v_key,
+    (SELECT d.updated_at FROM public.deliveries d WHERE d.id = v_delivery)
   );
   IF v_result->>'status' IS DISTINCT FROM 'received' THEN
     RAISE EXCEPTION 'PROOF_SETUP: interrupted delivery did not stage: %', v_result;
@@ -258,7 +260,8 @@ BEGIN
   );
   v_result := public.stage_offline_action(
     v_action, 'complete_delivery', v_delivery, 1,
-    clock_timestamp() - interval '5 minutes', v_payload, v_key
+    clock_timestamp() - interval '5 minutes', v_payload, v_key,
+    (SELECT d.updated_at FROM public.deliveries d WHERE d.id = v_delivery)
   );
   IF v_result->>'status' IS DISTINCT FROM 'received' THEN
     RAISE EXCEPTION 'PROOF_SETUP: lost-response delivery did not stage: %', v_result;
@@ -311,7 +314,8 @@ BEGIN
   );
   v_result := public.stage_offline_action(
     v_action, 'complete_job', v_job, 1,
-    clock_timestamp() - interval '5 minutes', v_payload, v_key
+    clock_timestamp() - interval '5 minutes', v_payload, v_key,
+    (SELECT j.updated_at FROM public.jobs j WHERE j.id = v_job)
   );
   IF v_result->>'status' IS DISTINCT FROM 'received' THEN
     RAISE EXCEPTION 'PROOF_SETUP: concurrency job did not stage: %', v_result;
@@ -343,7 +347,8 @@ BEGIN
     PERFORM public.stage_offline_action(
       gen_random_uuid(), 'complete_job', v_job, 1,
       clock_timestamp() - interval '5 minutes', v_payload,
-      '[PROOF] backlog-blocked-' || v_suffix
+      '[PROOF] backlog-blocked-' || v_suffix,
+      (SELECT j.updated_at FROM public.jobs j WHERE j.id = v_job)
     );
     RAISE EXCEPTION 'PROOF_SETUP: backlog guard allowed a new received action';
   EXCEPTION WHEN OTHERS THEN

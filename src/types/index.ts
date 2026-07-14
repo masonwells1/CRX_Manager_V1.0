@@ -707,6 +707,7 @@ export interface DeliveryRemainder {
 // Browser code reads the sanitized RPC result, never the table directly.
 export type OfflineActionOperation = 'complete_delivery' | 'complete_job';
 export type OfflineActionReceiptStatus = 'received' | 'succeeded' | 'needs_review';
+export type OfflineActionReviewResolution = 'already_completed' | 'abandoned';
 export type OfflineActionFailureCode =
   | 'ACTOR_MISMATCH'
   | 'IDEMPOTENCY_KEY_REUSE'
@@ -728,7 +729,14 @@ export type OfflineActionRpcErrorCode =
   | 'OFFLINE_ACTION_ID_REUSE'
   | 'OFFLINE_ACTION_NEEDS_REVIEW'
   | 'OFFLINE_STAGE_CONFLICT'
-  | 'OFFLINE_STAGE_RATE_LIMIT';
+  | 'OFFLINE_STAGE_RATE_LIMIT'
+  | 'OFFLINE_STAGE_DAILY_CAP'
+  | 'OFFLINE_STAGE_REVIEW_BACKLOG'
+  | 'OFFLINE_RESOLUTION_INVALID'
+  | 'OFFLINE_ACTION_NOT_REVIEWABLE'
+  | 'OFFLINE_ACTION_ALREADY_RESOLVED'
+  | 'REASON_REQUIRED'
+  | 'IDEMPOTENCY_ARGUMENT_MISMATCH';
 
 // The database keeps DEFAULT NULL to satisfy CRX's one-overload mutator rule,
 // but every app caller must supply a real key. These stricter app-layer types
@@ -741,6 +749,7 @@ export interface StageOfflineActionArgs {
   p_client_created_at: string;
   p_payload: { [key: string]: Json | undefined };
   p_idempotency_key: string;
+  p_entity_snapshot_at?: string;
 }
 
 export interface ProcessOfflineActionArgs {
@@ -748,22 +757,83 @@ export interface ProcessOfflineActionArgs {
   p_idempotency_key: string;
 }
 
-export interface OfflineActionStatusResult {
+/** Shape shared by stage/process responses. Individual states omit fields that do not apply. */
+export interface OfflineActionReceiptResult {
   client_action_id: string;
-  actor_id?: string;
   operation: OfflineActionOperation;
   entity_id: string;
-  schema_version: number;
   client_created_at?: string;
   status: OfflineActionReceiptStatus;
+  result?: Record<string, unknown> | null;
+  failure_code?: OfflineActionFailureCode | null;
+  failure_summary?: string | null;
+  attempt_count?: number;
+  received_at?: string;
+  review_resolution?: OfflineActionReviewResolution | null;
+  review_note?: string | null;
+  resolved_at?: string | null;
+  resolved_by?: string | null;
+  updated_at?: string;
+}
+
+/** Full sanitized lookup returned by get_offline_action_status. */
+export interface OfflineActionStatusResult extends OfflineActionReceiptResult {
+  actor_id: string;
+  schema_version: number;
   result: Record<string, unknown> | null;
   failure_code: OfflineActionFailureCode | null;
   failure_summary: string | null;
   attempt_count: number;
   last_attempt_at?: string | null;
-  received_at?: string;
+  received_at: string;
   succeeded_at?: string | null;
   needs_review_at?: string | null;
+  updated_at: string;
+}
+
+export interface OfflineActionReviewQueueItem {
+  client_action_id: string;
+  actor_id: string;
+  actor_name: string;
+  operation: OfflineActionOperation;
+  entity_id: string;
+  failure_code: OfflineActionFailureCode;
+  failure_summary: string;
+  attempt_count: number;
+  client_created_at: string;
+  received_at: string;
+  needs_review_at: string;
+  updated_at: string;
+  review_resolution: OfflineActionReviewResolution | null;
+  review_note: string | null;
+  resolved_at: string | null;
+  resolved_by: string | null;
+  resolver_name: string | null;
+}
+
+export interface OfflineActionReviewQueueResult {
+  items: OfflineActionReviewQueueItem[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface ResolveOfflineActionArgs {
+  p_client_action_id: string;
+  p_resolution: OfflineActionReviewResolution;
+  p_note: string;
+  p_idempotency_key: string;
+}
+
+export interface ResolveOfflineActionResult {
+  client_action_id: string;
+  operation: OfflineActionOperation;
+  entity_id: string;
+  status: 'needs_review';
+  review_resolution: OfflineActionReviewResolution;
+  review_note: string;
+  resolved_at: string;
+  resolved_by: string;
   updated_at: string;
 }
 

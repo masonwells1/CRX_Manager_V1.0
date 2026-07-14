@@ -65,6 +65,7 @@ export const PAGE_PERMISSIONS: PagePermission[] = [
   { key: 'compliance', path: '/compliance', label: 'Licenses & RUP Register', category: 'Compliance & Records', roles: ['admin', 'sales_rep'] },
   { key: 'lot-trace', path: '/lot-trace', label: 'Lot Trace (recall lookup)', category: 'Compliance & Records', roles: ['admin', 'sales_rep'] },
   { key: 'watchdog', path: '/watchdog', label: 'Watchdog Flags', category: 'Compliance & Records', roles: ['admin', 'sales_rep'] },
+  { key: 'offline-work-review', path: '/offline-work-review', label: 'Offline Work Review', category: 'Compliance & Records', roles: ['admin', 'sales_rep'] },
   { key: 'label-review', path: '/label-review', label: 'Label Review', category: 'Compliance & Records', roles: ['admin'] },
   { key: 'label-data-quality', path: '/label-data-quality', label: 'Label Data Quality', category: 'Compliance & Records', roles: ['admin'] },
   { key: 'blend-tickets', path: '/blend-tickets', label: 'Blend Tickets (OCR)', category: 'Compliance & Records', roles: ['admin', 'sales_rep'] },

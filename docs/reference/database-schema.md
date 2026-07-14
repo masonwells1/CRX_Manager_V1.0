@@ -139,7 +139,7 @@
 
 ## System / Infrastructure
 - `idempotency_keys` - Idempotent operation cache (idempotency_key UNIQUE, operation, result jsonb, expires_at — auto-cleanup after 24h)
-- `offline_action_receipts` — **QUEUED, NOT LIVE** (`20260714024811`): permanent server acknowledgement for approved offline `complete_delivery` / `complete_job` actions. Immutable client action UUID + permanent idempotency key, statuses `received` / `succeeded` / `needs_review`, sanitized office-review failures, RPC-only writes. This queued table is not included in the live 122-table heading count yet.
+- `offline_action_receipts` — **QUEUED, NOT LIVE** (`20260714024811`, `20260714070000`, `20260714122626`): permanent server acknowledgement for approved offline `complete_delivery` / `complete_job` actions. Immutable client action UUID + permanent idempotency key + optional queued entity `updated_at` snapshot, statuses `received` / `succeeded` / `needs_review`, sanitized target/payload-drift failures, and audited `already_completed` / `abandoned` office-resolution metadata. Office resolution never changes the receipt to `succeeded`, never reruns the business action, and never deletes the receipt. Direct authenticated table access remains denied; clients use sanitized RPCs. This queued table is not included in the live 122-table heading count yet.
 - `rate_limit_log` - Rate limiting tracker (user_id, operation, created_at — accessed only by SECURITY DEFINER functions)
 - `rate_limits` - Per-user sliding-window counter (user_id, action_name, window_start, request_count — accessed only by SECURITY DEFINER functions)
 

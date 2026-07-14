@@ -495,7 +495,7 @@ $preflight$;
 BEGIN;
 DROP FUNCTION IF EXISTS public.process_offline_action(uuid, text);
 DROP FUNCTION IF EXISTS public.get_offline_action_status(uuid);
-DROP FUNCTION IF EXISTS public.stage_offline_action(uuid, text, uuid, integer, timestamptz, jsonb, text);
+DROP FUNCTION IF EXISTS public.stage_offline_action(uuid, text, uuid, integer, timestamptz, jsonb, text, timestamptz);
 DROP TABLE IF EXISTS public.offline_action_receipts CASCADE;
 ${migrationSql}
 ${limitMigrationSql}

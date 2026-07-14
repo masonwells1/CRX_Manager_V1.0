@@ -1408,6 +1408,7 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   'record_vendor_payment',
   'release_inventory_hold',
   'reopen_accounting_period',
+  'resolve_offline_action',
   'restore_cancelled_delivery',
   'restore_cancelled_order',
   'retire_inventory_item',

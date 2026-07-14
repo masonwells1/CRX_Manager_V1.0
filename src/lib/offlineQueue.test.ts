@@ -10,6 +10,7 @@ import { IDBFactory, IDBObjectStore } from 'fake-indexeddb';
 
 import {
   queueAction,
+  prepareLegacyQueuedAction,
   getPendingActions,
   removeAction,
   updateAction,
@@ -17,6 +18,7 @@ import {
   getFailedActions,
   getActionOwnerUserId,
   getQueueSummary,
+  OFFLINE_DB_UPGRADE_BLOCKED_MESSAGE,
   OFFLINE_MAX_RETRIES,
   type PendingAction,
 } from './offlineQueue';
@@ -26,7 +28,13 @@ import {
 function makeAction(overrides: Partial<Omit<PendingAction, 'id'>> = {}): Omit<PendingAction, 'id'> {
   return {
     operation: 'complete_delivery',
-    params: { p_delivery_id: 'del-001', p_signed_by: 'John Smith', p_performed_by: 'user-1' },
+    params: {
+      p_delivery_id: 'del-001',
+      p_signed_by: 'John Smith',
+      p_performed_by: 'user-1',
+      p_idempotency_key: 'complete_delivery:user-1:test-key',
+    },
+    entityId: 'del-001',
     createdAt: new Date().toISOString(),
     retryCount: 0,
     ownerUserId: 'user-1',
@@ -43,6 +51,52 @@ beforeEach(() => {
 // ── queueAction ──────────────────────────────────────────────────────────
 
 describe('queueAction', () => {
+  it('rejects visibly instead of hanging when another tab blocks the IndexedDB upgrade', async () => {
+    const legacyOpen = indexedDB.open('crx_offline_queue', 1);
+    legacyOpen.onupgradeneeded = () => {
+      legacyOpen.result.createObjectStore('pending_actions', { keyPath: 'id', autoIncrement: true });
+    };
+    const legacyDb = await new Promise<IDBDatabase>((resolve, reject) => {
+      legacyOpen.onsuccess = () => resolve(legacyOpen.result);
+      legacyOpen.onerror = () => reject(legacyOpen.error);
+    });
+
+    try {
+      const guardedRead = Promise.race([
+        getPendingActions(),
+        new Promise<PendingAction[]>((_, reject) => {
+          setTimeout(() => reject(new Error('IndexedDB upgrade remained pending')), 250);
+        }),
+      ]);
+
+      await expect(guardedRead).rejects.toThrow(OFFLINE_DB_UPGRADE_BLOCKED_MESSAGE);
+    } finally {
+      legacyDb.close();
+    }
+  });
+
+  it('derives the same permanent receipt ID when two tabs upgrade one legacy action', async () => {
+    const legacy = makeAction({
+      createdAt: '2026-07-13T12:00:00.000Z',
+      clientActionId: undefined,
+      idempotencyKey: undefined,
+      schemaVersion: undefined,
+    });
+
+    const [firstTab, secondTab] = await Promise.all([
+      prepareLegacyQueuedAction(legacy),
+      prepareLegacyQueuedAction({ ...legacy, params: { ...legacy.params } }),
+    ]);
+
+    expect(firstTab.clientActionId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    expect(secondTab.clientActionId).toBe(firstTab.clientActionId);
+    expect(firstTab).toMatchObject({
+      idempotencyKey: 'complete_delivery:user-1:test-key',
+      schemaVersion: 1,
+      entityId: 'del-001',
+    });
+  });
+
   it('does not resolve until the IndexedDB transaction completes', async () => {
     let signalRequestSuccess: () => void = () => {};
     const requestSucceeded = new Promise<void>((resolve) => { signalRequestSuccess = resolve; });
@@ -262,11 +316,11 @@ describe('updateAction', () => {
   });
 
   it('preserves other fields when updating', async () => {
-    await queueAction(makeAction({ operation: 'complete_delivery', params: { id: 'd-1' } }));
+    await queueAction(makeAction({ operation: 'test_operation', params: { id: 'd-1' } }));
     const actions = await getPendingActions();
     await updateAction({ ...actions[0], retryCount: 3 });
     const updated = await getPendingActions();
-    expect(updated[0].operation).toBe('complete_delivery');
+    expect(updated[0].operation).toBe('test_operation');
     expect(updated[0].params).toEqual({ id: 'd-1' });
   });
 
@@ -317,8 +371,8 @@ describe('retention and ownership', () => {
 
   it('summarizes current-user, other-user, and ownerless actions separately', async () => {
     await queueAction(makeAction());
-    await queueAction(makeAction({ ownerUserId: 'user-2', params: { p_performed_by: 'user-2' } }));
-    await queueAction(makeAction({ ownerUserId: undefined, params: { p_delivery_id: 'legacy' } }));
+    await queueAction(makeAction({ operation: 'test_other', ownerUserId: 'user-2', params: { p_performed_by: 'user-2' } }));
+    await queueAction(makeAction({ operation: 'legacy_unknown', ownerUserId: undefined, params: { p_delivery_id: 'legacy' } }));
     await queueAction(makeAction({ retryCount: 3, status: 'needs_attention' }));
 
     const summary = await getQueueSummary('user-1');
@@ -326,6 +380,7 @@ describe('retention and ownership', () => {
       ownedTotal: 2,
       ownedAutoSyncable: 1,
       ownedNeedsAttention: 1,
+      ownedOfficeResolved: 0,
       otherUserTotal: 1,
       ownerUnknownTotal: 1,
       nextAutoSyncAt: null,

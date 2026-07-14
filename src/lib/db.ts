@@ -208,6 +208,15 @@ export const RpcErrorCodes = {
   // transfer_invoice_to_job (U7) — this invoice is one member of a multi-owner group;
   // return the job to scheduling by voiding each owner invoice instead
   JOB_BILLED_AS_GROUP: 'JOB_BILLED_AS_GROUP',
+  // Permanent offline receipt staging/review guards (Stage 1B).
+  OFFLINE_STAGE_RATE_LIMIT: 'OFFLINE_STAGE_RATE_LIMIT',
+  OFFLINE_STAGE_DAILY_CAP: 'OFFLINE_STAGE_DAILY_CAP',
+  OFFLINE_STAGE_REVIEW_BACKLOG: 'OFFLINE_STAGE_REVIEW_BACKLOG',
+  OFFLINE_ACTION_NEEDS_REVIEW: 'OFFLINE_ACTION_NEEDS_REVIEW',
+  OFFLINE_RESOLUTION_INVALID: 'OFFLINE_RESOLUTION_INVALID',
+  OFFLINE_ACTION_NOT_REVIEWABLE: 'OFFLINE_ACTION_NOT_REVIEWABLE',
+  OFFLINE_ACTION_ALREADY_RESOLVED: 'OFFLINE_ACTION_ALREADY_RESOLVED',
+  IDEMPOTENCY_ARGUMENT_MISMATCH: 'IDEMPOTENCY_ARGUMENT_MISMATCH',
 } as const;
 
 export type RpcErrorCode = (typeof RpcErrorCodes)[keyof typeof RpcErrorCodes];

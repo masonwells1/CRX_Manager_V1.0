@@ -29,6 +29,7 @@ const EMPTY_SUMMARY: OfflineQueueSummary = {
   ownedTotal: 0,
   ownedAutoSyncable: 0,
   ownedNeedsAttention: 0,
+  ownedOfficeResolved: 0,
   otherUserTotal: 0,
   ownerUnknownTotal: 0,
   nextAutoSyncAt: null,
