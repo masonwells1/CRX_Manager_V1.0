@@ -4,6 +4,12 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-14 — Agent workflow tests added to required GitHub CI
+
+The required `Lint, Type Check, Test, Build` GitHub job now runs `npm run test:agent-workflows` after the lower-level correction-guard suite. This moves the end-to-end Codex production-action guard simulation, Claude review-wrapper tests, hook-adapter checks, and Claude/Codex workflow-wiring parity checks from a local-only Husky gate into the server-enforced pull-request pipeline. A pull request can no longer report the required CI check green when those agent workflow or hook-registration tests fail.
+
+---
+
 ## 2026-07-13 — Codex standing main-push harness (pending clean Claude re-review + Mason merge OK)
 
 Codex now has a hard-gated mirror of Claude's standing push authorization, implemented on `codex/self-push-harness-2026-07-13` but not active on `main` until this branch is reviewed and merged. `.codex/hooks/production-action-guard.mjs` allows a non-risky diff to target `main` while Husky still enforces the green pipeline; risky paths/content reuse `.claude/hooks/codex-push-lib.mjs` and require a fresh, exact-HEAD, 0–30-minute Claude proof at `.claude/session-state/claude-review-push.json`. Direct `git push`, `git -C ... push`, `gh pr merge`, and GitHub MCP merge routes share the same gate and fail closed when git, PR metadata, diffs, or proof JSON cannot be verified. Main deletion, live migrations/data writes, edge-function/production deploy commands, secrets/auth/permission changes, and protected `master`/`production` routes remain blocked. A successful real `scripts/run-claude-review.mjs --scope base-main` run now writes BOM-free proof JSON itself; there is no standalone self-certification command. The shared proof validator rejects missing HEAD bindings and future timestamps for both agents. The ledger guard covers every `.codex/` change, and dedicated guard/library tests are part of `test:correction-guards`.
