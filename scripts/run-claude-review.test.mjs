@@ -88,6 +88,23 @@ assert.match(
   /git diff --binary base123 failed: simulated tracked-diff failure/,
   "a failed required tracked-diff read must block review proof",
 );
+const mergeCommitCalls = [];
+const mergeCommitContext = getGitContext("commit", "merge123", (_command, args) => {
+  mergeCommitCalls.push(args);
+  if (args[0] === "rev-list") return "merge123 parent1 parent2";
+  if (args[0] === "diff" && args[1] === "--name-only") return "resolved-file.mjs";
+  if (args[0] === "diff" && args[1] === "--binary") return "diff --git a/resolved-file.mjs b/resolved-file.mjs";
+  if (args[0] === "rev-parse") return "head123";
+  return "";
+});
+assert.deepEqual(mergeCommitContext.changedFiles, ["resolved-file.mjs"]);
+assert.match(mergeCommitContext.scopeEvidence, /resolved-file\.mjs/);
+assert.ok(
+  mergeCommitCalls.some((args) =>
+    args[0] === "diff" && args[1] === "--binary" && args[2] === "parent1" && args[3] === "merge123"
+  ),
+  "merge-commit evidence must be diffed against its first parent",
+);
 const testRoot = path.resolve("tmp", "CRX_Manager");
 const defaultOutput = defaultClaudeReviewOutputPath({ root: testRoot });
 assert.equal(

@@ -237,8 +237,20 @@ export function getGitContext(scope, commit, executeGit = execFileSync) {
     changed = [tracked, untracked].filter(Boolean).join("\n");
     scopeEvidence = `${requiredGit(["diff", "--binary", base])}\n${untrackedEvidence}`;
   } else if (scope === "commit" && commit) {
-    changed = requiredGit(["diff-tree", "--no-commit-id", "--name-only", "-r", commit]);
-    scopeEvidence = requiredGit(["show", "--format=", "--binary", commit]);
+    const ancestry = requiredGit(["rev-list", "--parents", "-n", "1", commit]);
+    const [, firstParent] = ancestry.trim().split(/\s+/);
+    if (firstParent) {
+      // Plain `git show` / `diff-tree` emits no patch for merge commits. Bind
+      // commit review to the change introduced relative to its first parent,
+      // matching GitHub's normal view of a merge commit.
+      changed = requiredGit(["diff", "--name-only", firstParent, commit]);
+      scopeEvidence = requiredGit(["diff", "--binary", firstParent, commit]);
+    } else {
+      // Root commit: there is no parent, so ask diff-tree to compare against
+      // the empty tree explicitly.
+      changed = requiredGit(["diff-tree", "--root", "--no-commit-id", "--name-only", "-r", commit]);
+      scopeEvidence = requiredGit(["show", "--format=", "--binary", commit]);
+    }
   } else {
     // uncommitted: working-tree changes vs HEAD PLUS untracked-new files
     // (git diff omits untracked — a brand-new migration/script/hook would be missed).
