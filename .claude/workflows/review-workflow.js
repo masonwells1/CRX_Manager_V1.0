@@ -191,6 +191,14 @@ const blockedLayers = tagged
       : 'Review layer returned no VERIFIED evidence status or omitted evidence/findings/summary.',
   }))
 const completeLayers = tagged.filter((x) => isCompleteLayerReview(x.r))
+const blockedPartialFindings = tagged
+  .filter((x) => !isCompleteLayerReview(x.r) && Array.isArray(x.r?.findings))
+  .flatMap((x) => x.r.findings.map((f) => ({
+    ...f,
+    layer: x.layer,
+    status: 'UNVERIFIED',
+    reason: 'Review layer was blocked or incomplete; partial finding preserved without adversarial verification.',
+  })))
 
 const allLayerFindings = completeLayers.flatMap((x) => x.r.findings.map((f) => ({ ...f, layer: x.layer })))
 const malformedFindings = allLayerFindings
@@ -243,6 +251,7 @@ const refuted = verifiedResults.filter((f) => f.status === 'REFUTED')
 const unverified = [
   ...verifiedResults.filter((f) => f.status === 'UNVERIFIED'),
   ...malformedFindings,
+  ...blockedPartialFindings,
 ]
 // MED/LOW remain in their single severity bucket, but because this workflow
 // does not adversarially verify them they still prevent a VERIFIED/clean run.

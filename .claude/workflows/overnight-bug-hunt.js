@@ -289,14 +289,24 @@ const results = await pipeline(
     }),
   (review, d) => {
     if (!isCompleteReview(review)) {
+      const blockedReason = review?.executionStatus === 'BLOCKED'
+        ? `Finder reported blocked evidence: ${review.evidenceSummary || review.summary || 'unspecified blocker'}`
+        : 'Finder returned no VERIFIED evidence status or omitted evidence/findings/summary.'
+      const partialFindings = Array.isArray(review?.findings)
+        ? review.findings.map((f) => ({
+            ...f,
+            dimension: d.key,
+            phase: d.phase,
+            status: 'UNVERIFIED',
+            reason: `${blockedReason} Partial finding preserved without adversarial verification.`,
+          }))
+        : []
       return [{
         dimension: d.key,
         phase: d.phase,
         status: 'BLOCKED',
-        reason: review?.executionStatus === 'BLOCKED'
-          ? `Finder reported blocked evidence: ${review.evidenceSummary || review.summary || 'unspecified blocker'}`
-          : 'Finder returned no VERIFIED evidence status or omitted evidence/findings/summary.',
-      }]
+        reason: blockedReason,
+      }, ...partialFindings]
     }
 
     const malformed = review.findings

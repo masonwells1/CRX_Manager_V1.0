@@ -57,6 +57,36 @@ function completeFinding() {
 }
 
 {
+  const partialFinding = {
+    severity: 'HIGH',
+    title: 'Partial source-backed finding',
+    location: 'src/example.ts:12',
+    evidence: 'The repository source shows the unsafe assignment.',
+    detail: 'Live database confirmation was unavailable.',
+    recommendation: 'Confirm live state before fixing.',
+  }
+  const { result } = await executeWorkflow('./review-workflow.js', async (_prompt, options) => {
+    if (options.label === 'layer:B-lifecycle') {
+      return {
+        executionStatus: 'BLOCKED',
+        evidenceSummary: 'Repository source was read, but the live database was unavailable.',
+        summary: 'Partial evidence only.',
+        findings: [partialFinding],
+        verifiedSafe: [],
+      }
+    }
+    if (options.label?.startsWith('layer:')) return completeLayer()
+    throw new Error(`A blocked layer finding must not reach verification: ${options.label}`)
+  })
+
+  assert.equal(result.overallStatus, 'BLOCKED')
+  assert.equal(result.blocked.length, 1)
+  assert.equal(result.unverified.length, 1, 'blocked-layer findings must remain visible')
+  assert.equal(result.unverified[0].title, partialFinding.title)
+  assert.equal(result.unverified[0].status, 'UNVERIFIED')
+}
+
+{
   const { result } = await executeWorkflow('./review-workflow.js', async (_prompt, options) => {
     if (options.label === 'layer:B-lifecycle') {
       return { findings: [], summary: 'Live database was unavailable.', verifiedSafe: [] }
@@ -166,6 +196,32 @@ for (const workflow of ['./overnight-bug-hunt.js', './money-inventory-hunt.js'])
   assert.equal(result.clean, false)
   assert.equal(result.refuted.length, 0, `${workflow}: missing finder output must not look refuted`)
   assert.equal(result.blocked.length, 1)
+}
+
+for (const workflow of ['./overnight-bug-hunt.js', './money-inventory-hunt.js']) {
+  const partialFinding = completeFinding()
+  const { result } = await executeWorkflow(
+    workflow,
+    async (_prompt, options) => {
+      if (options.label?.startsWith('hunt:')) {
+        return {
+          executionStatus: 'BLOCKED',
+          evidenceSummary: 'Repository source was read, but the live database was unavailable.',
+          summary: 'Partial evidence only.',
+          findings: [partialFinding],
+          verifiedSafe: [],
+        }
+      }
+      throw new Error(`A blocked finder finding must not reach verification: ${options.label}`)
+    },
+    { only: ['invoices-core'] }
+  )
+
+  assert.equal(result.overallStatus, 'BLOCKED')
+  assert.equal(result.blocked.length, 1)
+  assert.equal(result.unverified.length, 1, `${workflow}: blocked findings must remain visible`)
+  assert.equal(result.unverified[0].title, partialFinding.title)
+  assert.equal(result.unverified[0].status, 'UNVERIFIED')
 }
 
 {
