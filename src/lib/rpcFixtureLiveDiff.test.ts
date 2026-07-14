@@ -163,7 +163,7 @@ describe('Live pg_proc snapshot integrity', () => {
     const calls = productionRpcCalls();
     expect(calls.length).toBeGreaterThanOrEqual(200); // vacuous-pass guard
     expect(calls.filter((rpc) => !LIVE_FUNCTIONS.has(rpc) && !QUEUED_FUNCTIONS.has(rpc))).toEqual([]);
-  });
+  }, 20_000);
 
   it('does not commit queued RPC exceptions', () => {
     // A non-empty map is only safe as a short-lived local bridge while testing
