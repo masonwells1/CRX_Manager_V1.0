@@ -1,53 +1,554 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
-const PRODUCTION_BRANCHES = new Set(["main", "master", "production"]);
+import {
+  claudeProofValid,
+  contentIsRisky,
+  gitPushCwd,
+  isGitPush,
+  mainPushSource,
+  pushContextIsAmbiguous,
+  pushIsForced,
+  pushUsesBulkMode,
+  reviewProofPathMentioned,
+  reviewStateDirectoryMentioned,
+  riskyFiles,
+} from "../../.claude/hooks/codex-push-lib.mjs";
+import { stripCommentsQuoteAware } from "../../.claude/hooks/live-testdata-lib.mjs";
+
 const LIVE_TOOL_ACTIONS = /(?:apply_migration|deploy_edge_function|delete_branch)$/i;
+const GITHUB_MERGE_TOOL = /merge_pull_request$/i;
+const GITHUB_TOOL = /(?:^|__)github__/i;
+const NODE_REPL_TOOL = /(?:^|__)node[_-]?repl(?:__|$)/i;
+const CLAUDE_PROOF_RELATIVE = [".claude", "session-state", "claude-review-push.json"];
+const PROTECTED_HARNESS_SOURCE = String.raw`(?:\.claude[\\/]hooks[\\/](?:codex-push-(?:guard|lib)|review-proof-guard|live-testdata-lib)\.mjs|\.codex[\\/]hooks[\\/](?:production-action-guard|codex-hook-adapter)\.mjs|scripts[\\/]run-claude-review\.mjs|\.claude[\\/]settings\.json|\.codex[\\/]hooks\.json)`;
+const PROTECTED_HARNESS_PATH_RE = new RegExp(String.raw`(?:^|[\\/])${PROTECTED_HARNESS_SOURCE}$`, "i");
+const PROTECTED_HARNESS_FRAGMENT_RE = new RegExp(`(?<![\\w.-])${PROTECTED_HARNESS_SOURCE}(?![\\w.-])`, "i");
 
 function normalize(value) {
   return String(value || "").trim().replace(/\s+/g, " ");
 }
 
-export function isClearlyReadOnlySql(sql) {
-  const value = normalize(sql)
-    .replace(/\/\*[\s\S]*?\*\//g, " ")
-    .replace(/--[^\r\n]*/g, " ")
-    .trim();
-  if (!/^(?:select|with|explain|show)\b/i.test(value)) return false;
-  return !/\b(?:insert|update|delete|merge|truncate|alter|drop|create|grant|revoke|comment|vacuum|reindex|cluster|refresh|call|copy)\b/i.test(value);
+function protectedHarnessPathMentioned(value) {
+  return PROTECTED_HARNESS_PATH_RE.test(String(value || "").trim());
 }
 
-export function evaluateProductionAction({ toolName = "", toolInput = {}, branch = "" } = {}) {
+function usesDynamicProcessEval(command) {
+  const text = String(command || "");
+  return /(?:^|[\s"'\\/])node(?:\.exe)?["']?\s+(?:(?:--[a-z-]+(?:=[^\s]+)?|-{1,2}[a-z-]+)\s+)*(?:-e|--eval|-p|--print)(?:\s|=|$)/i.test(text) ||
+    /(?:^|[|;&]\s*)node(?:\.exe)?["']?\s*(?:-|$)/i.test(text) ||
+    /\|\s*(?:"[^"]*[\\/]node(?:\.exe)?"|'[^']*[\\/]node(?:\.exe)?'|(?:\S*[\\/])?node(?:\.exe)?)\s*(?:-|$)/i.test(text);
+}
+
+function denied(reason) {
+  return { blocked: true, reason };
+}
+
+export function isClearlyReadOnlySql(sql) {
+  // Comment stripping MUST be quote-aware (Codex round-4): naive comment
+  // removal first lets `SELECT '--'; DELETE …` hide the mutation inside what
+  // looks like a comment. stripCommentsQuoteAware (shared, 5 adversarial
+  // rounds on the migration guard) removes comments while leaving '…', "…",
+  // and $tag$…$tag$ contents intact; string literals are then blanked.
+  const withoutComments = stripCommentsQuoteAware(String(sql || ""));
+  const value = normalize(
+    withoutComments
+      .replace(/\$([A-Za-z_][A-Za-z0-9_]*)?\$[\s\S]*?\$\1\$/g, "''")
+      .replace(/'(?:''|[^'])*'/g, "''")
+  );
+  const statement = value.replace(/;+\s*$/, "");
+  if (statement.includes(";")) return false;
+  if (!/^(?:select|with|explain|show)\b/i.test(value)) return false;
+  if (/\b(?:insert|update|delete|merge|truncate|alter|drop|create|grant|revoke|comment|vacuum|reindex|cluster|refresh|call|copy|set|reset|notify|listen|unlisten|lock|discard|execute|perform)\b/i.test(value)) {
+    return false;
+  }
+
+  // SELECT can invoke mutating SECURITY DEFINER RPCs. Allow only a narrow set
+  // of known read-only PostgreSQL built-ins; every application/custom function
+  // call fails closed and must use a purpose-built read-only connector/tool.
+  const readOnlyFunctions = new Set([
+    "abs", "age", "array_agg", "array_length", "avg", "cardinality", "ceil", "ceiling",
+    "char_length", "coalesce", "col_description", "concat", "concat_ws", "count",
+    "current_setting", "date_part", "date_trunc", "extract", "floor", "format", "greatest",
+    "json_agg", "json_array_length", "json_build_object", "json_object_agg", "json_typeof",
+    "jsonb_agg", "jsonb_array_length", "jsonb_build_object", "jsonb_object_agg", "jsonb_typeof",
+    "least", "length", "lower", "ltrim", "max", "min", "now", "nullif", "obj_description",
+    "pg_get_constraintdef", "pg_get_expr", "pg_get_functiondef", "pg_get_indexdef", "pg_get_viewdef",
+    "pg_typeof", "quote_ident", "quote_literal", "regexp_match", "regexp_matches", "regexp_replace",
+    "round", "rtrim", "split_part", "sqrt", "string_agg", "substring", "sum", "to_char", "to_date",
+    "to_json", "to_jsonb", "to_regclass", "to_regprocedure", "trim", "upper", "version",
+  ]);
+  const structuralWords = new Set([
+    "and", "as", "by", "case", "else", "exists", "filter", "from", "group",
+    "having", "in", "join", "not", "on", "or", "order", "over", "select",
+    "then", "values", "when", "where",
+  ]);
+  if (/"(?:[^"]|"")+"\s*\(/.test(value)) return false;
+  const functionRe = /\b(?:([a-z_][\w$]*)\.)?([a-z_][\w$]*)\s*\(/gi;
+  let match;
+  while ((match = functionRe.exec(value)) !== null) {
+    const schema = String(match[1] || "").toLowerCase();
+    const name = String(match[2] || "").toLowerCase();
+    if (structuralWords.has(name)) continue;
+    if (schema === "auth" && name === "uid") continue;
+    if (!readOnlyFunctions.has(name)) return false;
+  }
+  return true;
+}
+
+function defaultRunGit(args, cwd) {
+  const env = { ...process.env };
+  for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX"]) delete env[key];
+  return execFileSync("git", args, {
+    cwd,
+    env,
+    encoding: "utf8",
+    timeout: 5000,
+    stdio: ["ignore", "pipe", "pipe"],
+  }).trim();
+}
+
+function defaultRunGh(args, cwd) {
+  const candidates = process.platform === "win32"
+    ? ["gh", "C:\\Program Files\\GitHub CLI\\gh.exe"]
+    : ["gh"];
+  let lastError;
+  for (const executable of candidates) {
+    try {
+      return execFileSync(executable, args, {
+        cwd,
+        encoding: "utf8",
+        timeout: 5000,
+        stdio: ["ignore", "pipe", "pipe"],
+      }).trim();
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError || new Error("GitHub CLI is unavailable");
+}
+
+function proofRequirement(headSha, riskDescription, detail) {
+  return denied(
+    `CODEX PRODUCTION GATE: ${riskDescription}\n\n` +
+    `${detail}\n\n` +
+    `Claude must actually review the exact diff in this session by running ` +
+    `node scripts/run-claude-review.mjs --scope base-main. A successful ` +
+    `SHIP/SHIP-WITH-FOLLOWUPS review writes .claude/session-state/claude-review-push.json. ` +
+    `Required JSON: ` +
+    `{\"claude_ran\":true,\"verdict\":\"clean|blockers-fixed\",` +
+    `\"head_sha\":\"${headSha || "<exact pushed SHA>"}\",\"timestamp\":\"<ISO-8601, 0-30 minutes old>\"}. ` +
+    `The proof is exact-SHA-bound; future-dated, stale, malformed, or BOM-corrupted proof is refused.`
+  );
+}
+
+function gateMainChange({ repoDir, sourceRef, sourceSha, nowMs, runGit }) {
+  let headSha = sourceSha || "";
+  try {
+    runGit(["rev-parse", "--verify", "--quiet", "origin/main"], repoDir);
+    if (!headSha) {
+      const ref = sourceRef === "HEAD" ? "HEAD" : sourceRef;
+      headSha = runGit(["rev-parse", "--verify", `${ref}^{commit}`], repoDir);
+    } else {
+      headSha = runGit(["rev-parse", "--verify", `${headSha}^{commit}`], repoDir);
+    }
+  } catch (error) {
+    return denied(
+      `CODEX PRODUCTION GATE: could not resolve origin/main or the exact ref being sent to main, so the operation is denied (fail closed). ${error?.message || error}`
+    );
+  }
+
+  let changedFiles;
+  try {
+    changedFiles = runGit(["diff", "--name-only", `origin/main...${headSha}`], repoDir)
+      .split(/\r?\n/)
+      .map((file) => file.trim())
+      .filter(Boolean);
+  } catch (error) {
+    return denied(
+      `CODEX PRODUCTION GATE: could not inspect origin/main...${headSha}, so the operation is denied (fail closed). ${error?.message || error}`
+    );
+  }
+
+  const risky = riskyFiles(changedFiles);
+  let contentFlagged = false;
+  if (risky.length === 0) {
+    try {
+      contentFlagged = contentIsRisky(runGit(["diff", `origin/main...${headSha}`], repoDir));
+    } catch (error) {
+      return denied(
+        `CODEX PRODUCTION GATE: could not inspect the full diff for money/security risk, so the operation is denied (fail closed). ${error?.message || error}`
+      );
+    }
+  }
+
+  if (risky.length === 0 && !contentFlagged) return { blocked: false };
+
+  const riskDescription = risky.length > 0
+    ? `the main-bound diff changes ${risky.length} risky file(s): ${risky.slice(0, 6).join(", ")}${risky.length > 6 ? ", ..." : ""}`
+    : "the main-bound diff contains money or financial-audit identifiers even though its paths look ordinary";
+  const proofPath = path.join(repoDir, ...CLAUDE_PROOF_RELATIVE);
+  if (!existsSync(proofPath)) {
+    return proofRequirement(headSha, riskDescription, `Missing required Claude proof: ${proofPath}`);
+  }
+
+  let proof;
+  try {
+    proof = JSON.parse(readFileSync(proofPath, "utf8"));
+  } catch (error) {
+    return proofRequirement(headSha, riskDescription, `Claude proof could not be parsed: ${error?.message || error}`);
+  }
+  if (!claudeProofValid(proof, headSha, nowMs)) {
+    return proofRequirement(
+      headSha,
+      riskDescription,
+      "Claude proof is stale, future-dated, bound to a different SHA, has the wrong verdict/ran key, or is otherwise invalid."
+    );
+  }
+
+  return { blocked: false };
+}
+
+function shellWords(value) {
+  return String(value || "").match(/"[^"]*"|'[^']*'|\S+/g)?.map((word) => {
+    if ((word.startsWith('"') && word.endsWith('"')) || (word.startsWith("'") && word.endsWith("'"))) {
+      return word.slice(1, -1);
+    }
+    return word;
+  }) || [];
+}
+
+function ghMergeRequest(command) {
+  // Global flags may sit between `gh`, `pr`, and `merge` (`gh -R o/r pr merge`,
+  // `gh pr -R o/r merge` — Codex round-4). Require the gh binary, then scan the
+  // segment's words for `pr` followed later by `merge`; parse flags across the
+  // whole segment. Over-matching (e.g. `gh pr view merge-notes`) only routes a
+  // read through the gate, which fails safe.
+  const text = String(command || "");
+  if (!/(?:^|\s)(?:"[^"]*[\\/]gh\.exe"|\S*[\\/]gh(?:\.exe)?|gh(?:\.exe)?)(?:\s|$)/i.test(text)) return null;
+  const words = shellWords(text);
+  const prIndex = words.findIndex((word) => word.toLowerCase() === "pr");
+  if (prIndex === -1) return null;
+  const mergeIndex = words.findIndex((word, index) => index > prIndex && word.toLowerCase() === "merge");
+  if (mergeIndex === -1) return null;
+  const valueFlags = new Set(["--repo", "-R", "--match-head-commit", "--subject", "--body"]);
+  let selector = "";
+  let repo = "";
+  for (let index = 0; index < words.length; index += 1) {
+    const word = words[index];
+    if (word.startsWith("--repo=")) {
+      repo = word.slice("--repo=".length);
+      continue;
+    }
+    if (valueFlags.has(word)) {
+      const value = words[index + 1] || "";
+      if (word === "--repo" || word === "-R") repo = value;
+      index += 1;
+      continue;
+    }
+    if (index > mergeIndex && !word.startsWith("-") && !selector) selector = word;
+  }
+  return { selector, repo };
+}
+
+function ghApiMergeRequest(command) {
+  const text = String(command || "");
+  if (!/(?:^|\s)(?:"[^"]*[\\/]gh\.exe"|\S*[\\/]gh(?:\.exe)?|gh(?:\.exe)?)\s+api\b/i.test(text)) {
+    return null;
+  }
+  if (/\sapi\s+graphql\b/i.test(text) && /\bmergePullRequest\b/i.test(text)) {
+    return { unsupportedGraphql: true };
+  }
+  const words = shellWords(command);
+  let method = "GET";
+  let endpoint = "";
+  for (let index = 0; index < words.length; index += 1) {
+    const word = words[index];
+    if (word === "-X" || word === "--method") {
+      method = String(words[index + 1] || "").toUpperCase();
+      index += 1;
+      continue;
+    }
+    if (word.startsWith("--method=")) {
+      method = word.slice("--method=".length).toUpperCase();
+      continue;
+    }
+    if (/^-X\S+/i.test(word)) {
+      method = word.slice(2).toUpperCase();
+      continue;
+    }
+    const normalizedEndpoint = word
+      .replace(/^https:\/\/api\.github\.com\//i, "")
+      .replace(/^\//, "");
+    if (/^repos\/[^/]+\/[^/]+\/pulls\/\d+\/merge$/i.test(normalizedEndpoint)) {
+      endpoint = normalizedEndpoint;
+    }
+  }
+  if (method !== "PUT" || !endpoint) return null;
+  const match = endpoint.match(/^repos\/([^/]+)\/([^/]+)\/pulls\/(\d+)\/merge$/i);
+  return match ? { selector: match[3], repo: `${match[1]}/${match[2]}` } : null;
+}
+
+function ghApiMutates(command) {
+  const text = String(command || "");
+  if (!/(?:^|\s)(?:"[^"]*[\\/]gh\.exe"|\S*[\\/]gh(?:\.exe)?|gh(?:\.exe)?)\s+api\b/i.test(text)) {
+    return false;
+  }
+  if (/\sapi\s+graphql\b/i.test(text) && /\bmutation\b/i.test(text)) return true;
+  const words = shellWords(text);
+  let method = "GET";
+  let methodExplicit = false;
+  let hasFields = false;
+  for (let index = 0; index < words.length; index += 1) {
+    const word = words[index];
+    if (word === "-X" || word === "--method") {
+      method = String(words[index + 1] || "").toUpperCase();
+      methodExplicit = true;
+      index += 1;
+    } else if (word.startsWith("--method=")) {
+      method = word.slice("--method=".length).toUpperCase();
+      methodExplicit = true;
+    } else if (/^-X\S+/i.test(word)) {
+      method = word.slice(2).toUpperCase();
+      methodExplicit = true;
+    } else if (["-f", "-F", "--field", "--raw-field", "--input"].includes(word) ||
+               /^(?:--field|--raw-field|--input)=/.test(word)) {
+      hasFields = true;
+    }
+  }
+  if (["POST", "PUT", "PATCH", "DELETE"].includes(method)) return true;
+  return !methodExplicit && hasFields; // gh defaults field-bearing API calls to POST
+}
+
+function githubToolIsReadOnly(toolName) {
+  const leaf = String(toolName || "").split("__").pop() || "";
+  return /^(?:get|list|search|read|resolve|download|check)_/i.test(leaf) ||
+    /_(?:read|get|list|search)$/i.test(leaf);
+}
+
+function mcpMergeRequest(toolInput) {
+  // Key spellings differ per connector: the GitHub MCP uses pull_number/owner/repo,
+  // the Codex GitHub app uses pr_number/repository_full_name (Codex review 2026-07-13).
+  const selector = toolInput.pull_number ?? toolInput.pullNumber ?? toolInput.pullRequestNumber ??
+    toolInput.pr_number ?? toolInput.prNumber ?? toolInput.number ?? "";
+  const owner = toolInput.owner ?? toolInput.organization ?? "";
+  const repository = toolInput.repo ?? toolInput.repository ?? toolInput.repoName ??
+    toolInput.repository_full_name ?? toolInput.repositoryFullName ?? toolInput.full_name ?? "";
+  const repo = String(repository).includes("/") ? String(repository) : (owner && repository ? `${owner}/${repository}` : "");
+  return { selector: String(selector), repo };
+}
+
+function resolvePullRequest({ request, repoDir, runGh }) {
+  const args = ["pr", "view"];
+  if (request.selector) args.push(request.selector);
+  args.push("--json", "baseRefName,headRefName,headRefOid,mergeStateStatus,statusCheckRollup");
+  if (request.repo) args.push("--repo", request.repo);
+  const data = JSON.parse(runGh(args, repoDir));
+  if (!data?.baseRefName || !data?.headRefOid) throw new Error("GitHub did not return baseRefName and headRefOid");
+  return data;
+}
+
+export function pullRequestChecksGreen(pullRequest) {
+  if (String(pullRequest?.mergeStateStatus || "").toUpperCase() !== "CLEAN") return false;
+  const checks = pullRequest?.statusCheckRollup;
+  if (!Array.isArray(checks) || checks.length === 0) return false;
+  return checks.every((check) => {
+    if (check?.__typename === "StatusContext") {
+      return String(check.state || "").toUpperCase() === "SUCCESS";
+    }
+    if (check?.__typename === "CheckRun") {
+      const status = String(check.status || "").toUpperCase();
+      const conclusion = String(check.conclusion || "").toUpperCase();
+      return status === "COMPLETED" && ["SUCCESS", "NEUTRAL", "SKIPPED"].includes(conclusion);
+    }
+    return false;
+  });
+}
+
+function gatePullRequestMerge({ request, repoDir, nowMs, runGit, runGh }) {
+  let pullRequest;
+  try {
+    pullRequest = resolvePullRequest({ request, repoDir, runGh });
+  } catch (error) {
+    return denied(
+      `CODEX PRODUCTION GATE: could not determine the pull request's base branch and exact head SHA, so the merge is denied (fail closed). ${error?.message || error}`
+    );
+  }
+  const base = normalize(pullRequest.baseRefName).toLowerCase();
+  if (base === "master" || base === "production") {
+    return denied(`CODEX PRODUCTION GATE: merges to protected branch ${base} remain blocked.`);
+  }
+  if (base !== "main") return { blocked: false };
+  if (!pullRequestChecksGreen(pullRequest)) {
+    return denied(
+      "CODEX PRODUCTION GATE: this pull request is not merge-ready with a fully green GitHub pipeline. Wait until mergeStateStatus is CLEAN and every reported check is completed successfully, neutral, or skipped."
+    );
+  }
+  return gateMainChange({ repoDir, sourceSha: pullRequest.headRefOid, nowMs, runGit });
+}
+
+export function evaluateProductionAction({
+  toolName = "",
+  toolInput = {},
+  branch = "",
+  repoDir = process.cwd(),
+  nowMs = Date.now(),
+  runGit = defaultRunGit,
+  runGh = defaultRunGh,
+} = {}) {
   const name = String(toolName);
-  const currentBranch = normalize(branch).toLowerCase();
+  const baseRepoDir = path.resolve(repoDir);
+  const requestedWorkingDir = toolInput.workdir ?? toolInput.cwd ?? "";
+  const actionRepoDir = requestedWorkingDir
+    ? path.resolve(baseRepoDir, String(requestedWorkingDir))
+    : baseRepoDir;
+
+  const pathCandidates = [
+    toolInput.file_path,
+    toolInput.filePath,
+    toolInput.path,
+    toolInput.target,
+    toolInput.source,
+    toolInput.destination,
+  ];
+  const patchCandidates = [
+    toolInput.patch,
+    toolInput.diff,
+    toolInput.input,
+    toolInput.changes,
+  ];
+  if ([...pathCandidates, ...patchCandidates].some((candidate) => reviewProofPathMentioned(candidate))) {
+    return denied("CODEX PRODUCTION GATE: review proof files are wrapper-owned and cannot be written, edited, moved, or deleted directly.");
+  }
+  const mutatingFileTool = /(?:write|edit|delete|move|rename|patch|replace|create|update)/i.test(name);
+  if (mutatingFileTool && (
+    pathCandidates.some((candidate) => protectedHarnessPathMentioned(candidate)) ||
+    patchCandidates.some((candidate) => PROTECTED_HARNESS_FRAGMENT_RE.test(String(candidate || "")))
+  )) {
+    return denied("CODEX PRODUCTION GATE: the production/review harness is a security boundary and cannot be changed through a direct file-write tool. Use the reviewed maintenance workflow with Mason's approval.");
+  }
+
+  if (NODE_REPL_TOOL.test(name)) {
+    return denied("CODEX PRODUCTION GATE: node_repl is disabled in this repository because it can launch uninspected git/GitHub write processes outside the production guard.");
+  }
 
   if (LIVE_TOOL_ACTIONS.test(name)) {
-    return { blocked: true, reason: "Live migrations and production deployments require Mason's explicit approval and must be run outside the default Codex guard." };
+    return denied("Live migrations, edge-function deployments, and protected-branch deletion remain outside Codex's standing authorization.");
   }
 
   if (/execute_sql$/i.test(name)) {
     const sql = toolInput.query ?? toolInput.sql ?? "";
     if (!isClearlyReadOnlySql(sql)) {
-      return { blocked: true, reason: "Codex only permits clearly read-only SQL by default. Live data or schema changes require Mason's explicit approval." };
+      return denied("Codex only permits clearly read-only SQL. Live data and schema changes remain blocked.");
     }
   }
 
-  const command = normalize(toolInput.command ?? toolInput.cmd ?? "");
+  if (GITHUB_MERGE_TOOL.test(name)) {
+    const request = mcpMergeRequest(toolInput);
+    if (!request.selector) {
+      return denied(
+        "CODEX PRODUCTION GATE: could not determine WHICH pull request this merge tool targets from its inputs, so the merge is denied (fail closed) — the guard must never verify one PR while the tool merges another."
+      );
+    }
+    return gatePullRequestMerge({
+      request,
+      repoDir: actionRepoDir,
+      nowMs,
+      runGit,
+      runGh,
+    });
+  }
+
+  if (GITHUB_TOOL.test(name) && !githubToolIsReadOnly(name)) {
+    return denied("CODEX PRODUCTION GATE: direct GitHub write tools are blocked because they bypass the reviewed git push and Husky pipeline. Use a normal feature-branch commit/push workflow.");
+  }
+
+  const command = String(toolInput.command ?? toolInput.cmd ?? "").trim();
   if (!command) return { blocked: false };
 
-  const explicitProductionPush = /\bgit\s+push\b[^\r\n]*(?:\s|:)(main|master|production)(?:\s|$)/i.test(command);
-  const commandSegments = command.split(/(?:&&|\|\||;|\r?\n)/).map((segment) => segment.trim());
-  const genericPush = commandSegments.some((segment) => {
-    if (!/^git\s+push\b/i.test(segment)) return false;
-    const args = segment.split(/\s+/).slice(2);
-    const positional = args.filter((arg) => !arg.startsWith("-"));
-    return positional.length <= 1;
-  });
-  if (explicitProductionPush || (genericPush && PRODUCTION_BRANCHES.has(currentBranch))) {
-    return { blocked: true, reason: "Production branch pushes require Mason's explicit confirmation and are blocked by the default Codex guard." };
+  if (reviewProofPathMentioned(command)) {
+    return denied("CODEX PRODUCTION GATE: direct shell access to review proof files is blocked. Run the real review wrapper instead.");
+  }
+  const changesDirectory = /(?:^|[;&|\r\n()]|\s)(?:cd(?:\s+\/d)?|chdir|pushd|set-location)\s+/i.test(command);
+  if ((changesDirectory && reviewStateDirectoryMentioned(command)) || reviewStateDirectoryMentioned(actionRepoDir)) {
+    return denied("CODEX PRODUCTION GATE: the wrapper-owned review state directory cannot be used as an interactive shell working directory.");
+  }
+  if (usesDynamicProcessEval(command)) {
+    return denied("CODEX PRODUCTION GATE: Node eval/print modes are blocked because generated code can hide uninspected git or GitHub writes. Put ordinary diagnostic code in a reviewed script instead.");
+  }
+  const shellMutatesPath = /(?:>|\b(?:set-content|add-content|out-file|remove-item|move-item|copy-item|rm|mv|cp|del|erase|sed\s+-i|perl\s+-pi|apply_patch)\b)/i.test(command);
+  if (shellMutatesPath && PROTECTED_HARNESS_FRAGMENT_RE.test(command)) {
+    return denied("CODEX PRODUCTION GATE: direct shell mutation of the production/review harness is blocked. Use the reviewed maintenance workflow with Mason's approval.");
+  }
+  if (isGitPush(command) && pushContextIsAmbiguous(command)) {
+    return denied("CODEX PRODUCTION GATE: directory-changing or GIT_DIR/GIT_WORK_TREE-prefixed pushes cannot be bound safely to the inspected worktree. Use `git -C <repo> push`.");
+  }
+  const suppliedEnv = toolInput.env && typeof toolInput.env === "object" ? toolInput.env : {};
+  if (isGitPush(command) && Object.keys(suppliedEnv).some((key) => /^(?:GIT_DIR|GIT_WORK_TREE)$/i.test(key))) {
+    return denied("CODEX PRODUCTION GATE: pushes with GIT_DIR/GIT_WORK_TREE tool environment overrides are denied. Use `git -C <repo> push`.");
+  }
+
+  // Split on single `|` too (Codex round-4): `git push a | git push b` runs
+  // BOTH pushes in a shell pipeline, so every pipeline stage is a segment.
+  const commandSegments = command.split(/(?:&&|\|\|?|;|\r?\n)/).map((segment) => segment.trim()).filter(Boolean);
+  for (const segment of commandSegments) {
+    const ghRequest = ghMergeRequest(segment) || ghApiMergeRequest(segment);
+    if (ghRequest?.unsupportedGraphql) {
+      return denied("CODEX PRODUCTION GATE: GraphQL mergePullRequest mutations are denied because the guard cannot safely resolve and verify their PR head/checks. Use `gh pr merge <number>` instead.");
+    }
+    if (ghRequest) {
+      const result = gatePullRequestMerge({
+        request: ghRequest,
+        repoDir: actionRepoDir,
+        nowMs,
+        runGit,
+        runGh,
+      });
+      if (result.blocked) return result;
+      continue;
+    }
+    if (ghApiMutates(segment)) {
+      return denied("CODEX PRODUCTION GATE: unrecognized mutating `gh api` calls are blocked because they can bypass the reviewed branch/push workflow.");
+    }
+  }
+
+  for (const segment of commandSegments.filter((part) => isGitPush(part))) {
+    if (/--git-dir|--work-tree/i.test(segment)) {
+      return denied("CODEX PRODUCTION GATE: pushes using explicit --git-dir/--work-tree contexts are denied because the guard cannot safely bind them to the inspected worktree. Use `git -C <repo> push` instead.");
+    }
+    if (pushUsesBulkMode(segment)) {
+      return denied("CODEX PRODUCTION GATE: bulk push modes (`--all`/`--branches`/`--mirror`/`--prune`) can alter multiple remote refs and are always denied. Push one explicit branch/refspec instead.");
+    }
+    if (pushIsForced(segment)) {
+      return denied("CODEX PRODUCTION GATE: force-pushing any branch rewrites shared history and requires Mason's explicit approval.");
+    }
+    const pushRepoDir = gitPushCwd(segment, actionRepoDir);
+    let currentBranch = requestedWorkingDir ? "" : normalize(branch).toLowerCase();
+    if (!currentBranch || pushRepoDir !== actionRepoDir) {
+      try {
+        currentBranch = normalize(runGit(["rev-parse", "--abbrev-ref", "HEAD"], pushRepoDir)).toLowerCase();
+      } catch (error) {
+        return denied(`CODEX PRODUCTION GATE: could not determine the push branch, so the push is denied (fail closed). ${error?.message || error}`);
+      }
+    }
+
+    if (/\bgit\b[^\r\n;&|]*\bpush\b[^\r\n;&|]*(?:\s|:)(master|production)(?:\s|$)/i.test(segment) ||
+        ((currentBranch === "master" || currentBranch === "production") && /\bgit\b[^\r\n;&|]*\bpush\b/i.test(segment))) {
+      return denied("CODEX PRODUCTION GATE: pushes to master/production remain blocked.");
+    }
+
+    const sourceRef = mainPushSource(segment, currentBranch);
+    if (sourceRef === "DELETE") {
+      return denied("CODEX PRODUCTION GATE: `git push origin :main` deletes the production branch and is always denied.");
+    }
+    if (sourceRef) {
+      const result = gateMainChange({ repoDir: pushRepoDir, sourceRef, nowMs, runGit });
+      if (result.blocked) return result;
+    }
   }
 
   const productionDeploy =
@@ -56,21 +557,10 @@ export function evaluateProductionAction({ toolName = "", toolInput = {}, branch
     /\bsupabase\s+(?:db\s+push|migration\s+up)\b/i.test(command) ||
     /\b(?:npm|pnpm|yarn)\s+(?:run\s+)?deploy\b/i.test(command);
   if (productionDeploy) {
-    return { blocked: true, reason: "Production deployments and live migration commands require Mason's explicit approval and are blocked by the default Codex guard." };
+    return denied("Production deployments, edge-function deploys, and live migration commands remain blocked for Codex.");
   }
 
   return { blocked: false };
-}
-
-function currentGitBranch() {
-  try {
-    return execFileSync("git", ["branch", "--show-current"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-  } catch {
-    return "";
-  }
 }
 
 function readStdin() {
@@ -82,30 +572,38 @@ function readStdin() {
   });
 }
 
-async function main() {
-  const raw = await readStdin();
-  const payload = raw.trim() ? JSON.parse(raw) : {};
-  const result = evaluateProductionAction({
-    toolName: payload.tool_name ?? payload.toolName ?? "",
-    toolInput: payload.tool_input ?? payload.toolInput ?? {},
-    branch: currentGitBranch(),
-  });
-  // Codex treats a plain Claude-style "allow" payload as noisy/failed output.
-  // A successful hook with no output means allow; emit JSON only for a denial.
-  if (!result.blocked) return;
+function writeDenial(reason) {
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
       permissionDecision: "deny",
-      ...(result.reason ? { permissionDecisionReason: result.reason } : {}),
+      ...(reason ? { permissionDecisionReason: reason } : {}),
     },
   }));
+}
+
+async function main() {
+  const raw = await readStdin();
+  let payload;
+  try {
+    payload = raw.trim() ? JSON.parse(raw) : {};
+  } catch (error) {
+    writeDenial(`CODEX PRODUCTION GATE: hook input could not be parsed, so the action is denied (fail closed). ${error?.message || error}`);
+    return;
+  }
+  const result = evaluateProductionAction({
+    toolName: payload.tool_name ?? payload.toolName ?? "",
+    toolInput: payload.tool_input ?? payload.toolInput ?? {},
+    repoDir: process.env.CODEX_PROJECT_DIR || process.cwd(),
+  });
+  // Codex treats allow payloads as noisy/failed hook output. Silence means allow.
+  if (!result.blocked) return;
+  writeDenial(result.reason);
 }
 
 const invokedPath = process.argv[1] ? path.resolve(process.argv[1]) : "";
 if (invokedPath === path.resolve(fileURLToPath(import.meta.url))) {
   main().catch((error) => {
-    process.stderr.write(`${error.message}\n`);
-    process.exitCode = 1;
+    writeDenial(`CODEX PRODUCTION GATE: unexpected guard failure; action denied. ${error?.message || error}`);
   });
 }

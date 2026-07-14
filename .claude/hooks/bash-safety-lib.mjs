@@ -17,7 +17,7 @@ import path from "node:path";
 // original bash-safety.mjs inline table (2026-07 extraction), plus one addition
 // marked below.
 export const DANGEROUS_CMD_CHECKS = [
-  [/git\s+push\s+(--force\b|-f\b|--force-with-lease\b)/, "Blocked force push. Force pushing rewrites remote history. Push to a new branch instead."],
+  [/\bgit\b[^\r\n;&|]*\bpush\b[^\r\n;&|]*(?:--force(?:-with-lease)?(?:=\S+)?\b|--force-if-includes\b|(?:^|\s)-[A-Za-z]*f[A-Za-z]*\b|(?:^|\s)\+\S+)/, "Blocked force push. Force pushing any branch requires Mason's explicit approval."],
   [/git\s+reset\s+--hard\b/, "Blocked `git reset --hard`. Permanently destroys uncommitted work. Use `git stash` or `git restore <file>`."],
   [/git\s+checkout\s+\.\s*(?:$|;|&|\|)/, "Blocked discard-all. Use targeted `git restore <file>`."],
   [/git\s+restore\s+\.\s*(?:$|;|&|\|)/, "Blocked discard-all. Use targeted `git restore <file>`."],
@@ -31,7 +31,7 @@ export const DANGEROUS_CMD_CHECKS = [
   [/(?:npx\s+)?supabase\s+db\s+reset\b/, "Blocked `supabase db reset`. This wipes the entire local Supabase DB and re-runs all 356 migrations from scratch — minutes of work plus loss of any local test data. If you really need to reset, run it manually in a terminal where you can see the warnings."],
   [/\b(?:dropdb|createdb)\b/, "Blocked `dropdb`/`createdb`. Destructive at the database level — if you need a fresh DB, do it via Supabase dashboard with explicit confirmation."],
   [/\bgit\s+branch\s+(?:-D|--delete\s+--force)\s+(?:main|master|production)\b/, "Blocked force-delete of main/master/production branch. Almost never the right move."],
-  [/\bgit\s+push\s+(?:--mirror|--prune)\b/, "Blocked `git push --mirror`/`--prune`. These can wipe remote branches in one shot."],
+  [/\bgit\b[^\r\n;&|]*\bpush\b[^\r\n;&|]*(?:--mirror|--prune|--all|--branches)\b/, "Blocked bulk `git push` mode (`--all`/`--branches`/`--mirror`/`--prune`). Use one explicit branch/refspec at a time."],
   [/\bgit\s+filter-(branch|repo)\b/, "Blocked `git filter-branch`/`filter-repo`. Rewrites entire repo history — destructive and slow."],
   [/\brm\s+-[A-Za-z]*r[A-Za-z]*f?[A-Za-z]*\s+\/(?!tmp|var\/tmp|c\/CRX_Manager\/\.playwright-mcp|c\/CRX_Manager\/\.claude\/worktrees)/, "Blocked `rm -rf /<path>` outside known-safe scratch areas. Use a more specific path."],
   [/\bnpm\s+run\s+(?:reset|nuke|wipe)\b/, "Blocked suspicious `npm run reset/nuke/wipe`. Verify what this script does first."],

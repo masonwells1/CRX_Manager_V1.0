@@ -17,6 +17,7 @@ import { execFileSync } from "node:child_process";
 const TRIGGER_RES = [
   /^\.claude\/(commands|skills|hooks|workflows|agents)\//,
   /^\.claude\/settings\.json$/,
+  /^\.codex\//,
   /^AGENTS\.md$/,
   /^CLAUDE\.md$/,
   /^\.husky\//,
@@ -24,6 +25,7 @@ const TRIGGER_RES = [
   // verifiers, and the workflow mirror-sync.
   /^scripts\/(check-|validate-|verify-)[^/]+$/,
   /^scripts\/sync-agent-workflows\.mjs$/,
+  /^scripts\/run-claude-review\.mjs$/,
 ];
 
 // Any ONE of these staged alongside satisfies the ledger requirement.

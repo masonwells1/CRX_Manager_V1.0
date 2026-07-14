@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -18,6 +19,63 @@ export function slugify(value) {
 
 export function defaultClaudeReviewOutputPath({ root = ROOT } = {}) {
   return path.join(root, ".claude", "session-state", "claude-review-latest.txt");
+}
+
+export function claudeReviewProofVerdict({ status, stdout } = {}) {
+  if (status !== 0) return null;
+  const lines = String(stdout || "").trim().split(/\r?\n/);
+  const matches = lines
+    .map((line) => line.match(/^FINAL_VERDICT:\s*(SHIP-WITH-FOLLOWUPS|SHIP|NEEDS-WORK)\s*$/i))
+    .filter(Boolean);
+  // Exactly one terminal machine-readable verdict is required. This prevents
+  // a quoted/injected `Verdict: SHIP` earlier in free-form review prose from
+  // winning a first-match regex and minting proof.
+  if (matches.length !== 1 || !/^FINAL_VERDICT:/i.test(lines.at(-1) || "")) return null;
+  if (matches[0][1].toUpperCase() === "NEEDS-WORK") return null;
+  return "clean";
+}
+
+export function claudeExecutable({
+  platform = process.platform,
+  homeDir = homedir(),
+  pathExists = existsSync,
+} = {}) {
+  // Do not resolve through PATH or CLAUDE_BIN. The official npm-installed
+  // Claude Code binary is selected from fixed platform locations so a
+  // per-command environment override cannot impersonate the reviewer.
+  const candidates = platform === "win32"
+    ? [path.win32.join(homeDir, "AppData", "Roaming", "npm", "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe")]
+    : [
+      path.join(homeDir, ".npm-global", "lib", "node_modules", "@anthropic-ai", "claude-code", "bin", "claude"),
+      "/usr/local/lib/node_modules/@anthropic-ai/claude-code/bin/claude",
+      "/opt/homebrew/lib/node_modules/@anthropic-ai/claude-code/bin/claude",
+    ];
+  const selected = candidates.find((candidate) => pathExists(candidate));
+  if (!selected) {
+    throw new Error(`Trusted Claude Code executable not found in fixed install locations for ${platform}. Reinstall @anthropic-ai/claude-code globally; PATH overrides are intentionally refused.`);
+  }
+  return selected;
+}
+
+function claudePushProofPath(root = ROOT) {
+  return path.join(root, ".claude", "session-state", "claude-review-push.json");
+}
+
+function writeClaudePushProof({ root = ROOT, headSha, verdict }) {
+  const proofPath = claudePushProofPath(root);
+  mkdirSync(path.dirname(proofPath), { recursive: true });
+  writeFileSync(proofPath, `${JSON.stringify({
+    claude_ran: true,
+    verdict,
+    head_sha: headSha,
+    timestamp: new Date().toISOString(),
+  }, null, 2)}\n`, "utf8");
+  return proofPath;
+}
+
+function clearClaudePushProof(root = ROOT) {
+  const proofPath = claudePushProofPath(root);
+  if (existsSync(proofPath)) unlinkSync(proofPath);
 }
 
 function usage() {
@@ -181,6 +239,9 @@ function getGitContext(scope, commit) {
     branch: runGit(["branch", "--show-current"], "unknown"),
     head: runGit(["rev-parse", "HEAD"], "unknown"),
     status: runGit(["status", "--short"], ""),
+    // Captured BEFORE the review runs — the proof must bind to what was
+    // actually reviewed, not whatever HEAD is afterwards (Codex round-4 TOCTOU).
+    headSha: runGit(["rev-parse", "HEAD"], ""),
     changedFiles: changed.split(/\r?\n/).filter(Boolean),
     stagedFiles: runGit(["diff", "--cached", "--name-only"], "")
       .split(/\r?\n/)
@@ -271,6 +332,7 @@ export function buildClaudeReviewPrompt({
     "- each finding must cite file:line evidence",
     "- explicitly say where you agree or disagree with Codex's position",
     "- exact next step for Mason in plain English",
+    "- end with exactly one final line: FINAL_VERDICT: SHIP, FINAL_VERDICT: SHIP-WITH-FOLLOWUPS, or FINAL_VERDICT: NEEDS-WORK",
   ];
 
   if (extraContext) {
@@ -280,11 +342,9 @@ export function buildClaudeReviewPrompt({
   return lines.join("\n");
 }
 
-// SECURITY: the prompt is deliberately NOT an argv element. On Windows the
-// `claude` launcher is a .cmd shim, so the spawn needs shell:true — and a prompt
-// passed as an arg would then be parsed by cmd.exe, letting `&`, `|`, `>` in a
-// --reason / --prompt-file / audit doc inject commands. The prompt is fed via
-// stdin instead (claude -p reads it from stdin); these args carry only fixed flags.
+// SECURITY: the prompt is deliberately NOT an argv element. It is untrusted
+// review content and is fed via stdin; argv carries fixed flags only. The
+// wrapper launches a pinned absolute binary without a shell.
 export function buildClaudeCommandArgs({
   outputFormat = "json",
   permissionMode = "plan",
@@ -392,7 +452,7 @@ function getClaudeCliVersion(claudeBin) {
     cwd: ROOT,
     encoding: "utf8",
     timeout: 10_000,
-    shell: process.platform === "win32",
+    shell: false,
   });
   return (version.stdout || version.stderr || "unavailable").trim() || "unavailable";
 }
@@ -419,7 +479,7 @@ export function runClaudeReview(options) {
     return { status: 0, output, prompt };
   }
 
-  const claudeBin = process.env.CLAUDE_BIN || "claude";
+  const claudeBin = claudeExecutable();
   const cliVersion = getClaudeCliVersion(claudeBin);
   if (gitContext.scopeEvidenceErrors.length > 0) {
     const runId = `${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID().slice(0, 8)}`;
@@ -469,9 +529,10 @@ export function runClaudeReview(options) {
     maxBuffer: 50 * 1024 * 1024,
     timeout: options.timeoutMs,
     // Prompt via stdin (not argv) so shell metacharacters in it can never reach
-    // cmd.exe — see buildClaudeCommandArgs. shell stays on for the Windows .cmd shim.
+    // a command interpreter. The executable is an absolute native binary and
+    // shell:false prevents PATH/cmd.exe resolution entirely.
     input: prompt,
-    shell: process.platform === "win32",
+    shell: false,
   });
 
   const parsed = parseClaudeReviewJson(result.stdout);
@@ -502,6 +563,24 @@ export function runClaudeReview(options) {
   writeReviewOutput(output, capture);
   process.stdout.write(`Claude review ${executionState}: ${output}\n`);
   process.stdout.write(`Per-run capture: ${archiveOutput}\n`);
+  if (options.scope === "base-main") {
+    // Bind protected-push proof to the exact clean HEAD that was reviewed.
+    // Re-read both after Claude returns so a concurrent commit cannot inherit
+    // a verdict produced for an older tree.
+    const headSha = runGit(["rev-parse", "HEAD"], "");
+    const contextUnchanged = headSha && headSha === gitContext.headSha &&
+      !runGit(["status", "--short"], "dirty").trim();
+    const proofVerdict = executionState === "VERIFIED" &&
+      !gitContext.status.trim() && contextUnchanged
+      ? claudeReviewProofVerdict({ status: result.status, stdout: parsed.result })
+      : null;
+    if (proofVerdict && /^[0-9a-f]{40}$/i.test(headSha)) {
+      const proofPath = writeClaudePushProof({ headSha, verdict: proofVerdict });
+      process.stdout.write(`Claude push proof written to ${proofPath}\n`);
+    } else {
+      clearClaudePushProof();
+    }
+  }
   if (executionState === "BLOCKED") {
     if (result.error?.code === "ETIMEDOUT") {
       process.stderr.write(`Claude review timed out after ${options.timeoutMs} ms; verdict is BLOCKED.\n`);

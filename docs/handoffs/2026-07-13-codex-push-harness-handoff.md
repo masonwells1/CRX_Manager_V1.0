@@ -3,7 +3,7 @@
 **From:** Claude (Fable 5), 2026-07-13 session
 **To:** Codex (gpt-5.5+), executing in this repo with workspace-write
 **Authorized by:** Mason Wells (owner), in-chat, 2026-07-13
-**Status when you read this:** design approved in principle; the CODE does not exist yet. You are building it. It goes LIVE only after Claude cross-review + Mason's explicit merge OK — see "How this lands" at the bottom.
+**Status when you read this:** implementation branch exists but is not active. GitHub now protects `main`: pull requests are required, both real CI jobs must pass on an up-to-date branch, administrators are included, and force-push/deletion are disabled. Claude review rounds 6–9 closed the reported harness gaps, and the post-protection activation review found one additional HIGH self-modification gap: guard hooks, CI, Husky, and the Claude review wrapper were not explicit risky paths. Those surfaces now always require second-model review, with focused and end-to-end regression coverage. Repository-owned hooks still cannot be the sole trust boundary for an agent with arbitrary local process/file access. It goes LIVE only after Claude re-reviews this final follow-up commit cleanly and Mason explicitly approves the merge — see "How this lands" at the bottom.
 
 ---
 
@@ -49,7 +49,7 @@ Codex gets the **same standing authorization Claude has, mirrored**:
 - Path: `.claude/session-state/claude-review-push.json` (session-state dir of the repo the push runs from).
 - Shape: `{ "claude_ran": true, "verdict": "clean" | "blockers-fixed", "head_sha": "<full SHA of the exact commit being pushed>", "timestamp": "<ISO-8601>" }`.
 - Validation: reuse `proofValid()` from `codex-push-lib.mjs` if you can parameterize the `codex_ran`/`claude_ran` key cleanly; otherwise add a sibling `claudeProofValid()` **in `codex-push-lib.mjs`** (shared lib, one source of truth) with identical semantics: exact `head_sha` match, verdict whitelist, timestamp age within [0, 30 min] — **future-dated timestamps must fail** (bind age as `0 <= age <= 30min`, not just `< 30min`).
-- Who writes it: Claude, after actually reviewing your diff in-session (the mirror of `scripts/write-apply-proofs.mjs`). Add a small helper `scripts/write-claude-push-proof.mjs` that takes `--verdict` and stamps `head_sha` from `git rev-parse HEAD` — **written with Node, never PowerShell** (PowerShell adds a UTF-8 BOM that breaks JSON.parse; this has bitten twice).
+- Who writes it: the real Claude CLI wrapper, after actually reviewing the committed base-main diff in-session. Round 2 removed the standalone `--verdict` writer because it allowed self-certification. Round 4 pins the absolute installed Claude Code binary with no shell/PATH resolution, requires exactly one terminal `FINAL_VERDICT`, writes BOM-free proof only after SHIP/SHIP-WITH-FOLLOWUPS, and revokes proof on NEEDS-WORK/failure. `review-proof-guard.mjs` blocks recognized direct native/MCP/shell proof access, bare/no-space proof filenames, and contiguous or split entry into the proof directory. Arbitrarily obfuscated local process/file access is outside this hook's security model; GitHub's server-side protected-branch rule is the non-forgeable outer gate.
 
 ### 4c. Close the ledger-guard gap on your own surface
 
@@ -83,4 +83,4 @@ Codex gets the **same standing authorization Claude has, mirrored**:
 3. One commit (or a small clean series) on the branch, ledger entry included, branch pushed to origin.
 4. Handback summary (plain English, for Mason + Claude): what changed, file list, test counts, the two proof transcripts, anything you found that contradicted this spec, and the proposed `AGENTS.md` wording.
 
-After handback: Claude reviews the diff (`/codex-review` in reverse — Claude is the second model here), Mason gives the explicit merge OK, and the merge to `main` is what activates the grant.
+After handback: Mason explicitly approves the GitHub `main` protection change, Claude reviews the final diff (`/codex-review` in reverse — Claude is the second model here), Mason gives the explicit merge OK, and only then does the merge to `main` activate the grant.

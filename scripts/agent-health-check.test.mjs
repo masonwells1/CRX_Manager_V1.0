@@ -71,6 +71,11 @@ try {
               command: "node \"$(git rev-parse --show-toplevel)/.codex/hooks/production-action-guard.mjs\"",
               commandWindows: "powershell -Command production-action-guard.mjs",
             },
+            {
+              type: "command",
+              command: "node \"$(git rev-parse --show-toplevel)/.codex/hooks/codex-hook-adapter.mjs\" \".claude/hooks/review-proof-guard.mjs\"",
+              commandWindows: "powershell -Command review-proof-guard.mjs",
+            },
           ],
         },
       ],
