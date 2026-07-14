@@ -105,6 +105,25 @@ assert.ok(
   ),
   "merge-commit evidence must be diffed against its first parent",
 );
+// base-main scope binds the push proof to the origin/main TIP (what the guard
+// resolves), not the merge-base. getGitContext must capture that tip up front.
+const baseMainContext = getGitContext("base-main", null, (_command, args) => {
+  if (args[0] === "merge-base") return "mergebase123";
+  if (args[0] === "rev-parse" && args[1] === "origin/main") return "originmaintip456";
+  if (args[0] === "rev-parse") return "head789";
+  if (args[0] === "diff") return "";
+  if (args[0] === "ls-files") return "";
+  return "";
+});
+assert.equal(baseMainContext.baseSha, "originmaintip456", "base-main context binds base_sha to the origin/main tip");
+assert.equal(baseMainContext.headSha, "head789", "base-main context still captures HEAD");
+// Non-base-main scopes carry no base binding (the proof is only written for base-main).
+const uncommittedContext = getGitContext("uncommitted", null, (_command, args) => {
+  if (args[0] === "rev-parse") return "head789";
+  return "";
+});
+assert.equal(uncommittedContext.baseSha, "", "non-base-main scope leaves base_sha empty");
+
 const testRoot = path.resolve("tmp", "CRX_Manager");
 const defaultOutput = defaultClaudeReviewOutputPath({ root: testRoot });
 assert.equal(

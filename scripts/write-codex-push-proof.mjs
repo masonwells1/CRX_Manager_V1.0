@@ -148,11 +148,15 @@ export function codexReviewProofVerdict({ status, stdout } = {}) {
 // ── proof shape ─────────────────────────────────────────────────────────────
 // Mirrors what codex-push-guard's `proofValid` (in codex-push-lib.mjs) accepts:
 // codex_ran:true, verdict in {clean, blockers-fixed}, exact head_sha, ISO ts.
-export function buildCodexPushProof({ headSha, verdict, timestamp = new Date().toISOString() }) {
+export function buildCodexPushProof({ headSha, baseSha, verdict, timestamp = new Date().toISOString() }) {
   return {
     codex_ran: true,
     verdict,
     head_sha: headSha,
+    // The origin/main the review was taken against. The push guard requires this
+    // to still equal origin/main at push time, so a base that moved after review
+    // (a sibling merge fetched locally) forces a fresh review.
+    base_sha: baseSha,
     timestamp,
   };
 }
@@ -161,11 +165,11 @@ export function codexPushProofPath(root, headSha) {
   return path.join(root, ".claude", "session-state", `codex-review-${headSha}.json`);
 }
 
-function writeCodexPushProof({ root, headSha, verdict }) {
+function writeCodexPushProof({ root, headSha, baseSha, verdict }) {
   const proofPath = codexPushProofPath(root, headSha);
   mkdirSync(path.dirname(proofPath), { recursive: true });
   // Node write → clean UTF-8, no BOM (a BOM breaks the guard's JSON.parse).
-  writeFileSync(proofPath, `${JSON.stringify(buildCodexPushProof({ headSha, verdict }), null, 2)}\n`, "utf8");
+  writeFileSync(proofPath, `${JSON.stringify(buildCodexPushProof({ headSha, baseSha, verdict }), null, 2)}\n`, "utf8");
   return proofPath;
 }
 
@@ -326,6 +330,7 @@ export function run(argv = process.argv.slice(2)) {
   // session committed / checked out, or edits appeared), the review no longer
   // describes HEAD — revoke, never mint.
   const headBefore = runGit(["rev-parse", "HEAD"], { cwd: root });
+  const baseBefore = runGit(["rev-parse", GUARDED_BASE], { cwd: root });
   const cleanBefore = worktreeIsClean(root);
 
   const result = spawnSync(codexBin, args, {
@@ -355,22 +360,29 @@ export function run(argv = process.argv.slice(2)) {
   }
 
   const headAfter = runGit(["rev-parse", "HEAD"], { cwd: root });
+  const baseAfter = runGit(["rev-parse", GUARDED_BASE], { cwd: root });
   const cleanAfter = worktreeIsClean(root);
   const verdict = codexReviewProofVerdict({ status: result.status, stdout: result.stdout });
 
   // Both status reads must SUCCEED and be clean, and HEAD must be an unchanged
   // 40-hex sha. A failed git status (STATUS_UNAVAILABLE sentinel) makes
   // worktreeIsClean false, so it can never be mistaken for a clean tree.
+  // origin/main must also be an unchanged 40-hex sha: the proof records the base
+  // it was reviewed against, and if the base shifted mid-review the review no
+  // longer describes origin/main...HEAD, so mint nothing.
   const contextStable =
     headAfter &&
     headAfter === headBefore &&
     /^[0-9a-f]{40}$/i.test(headAfter) &&
+    baseAfter &&
+    baseAfter === baseBefore &&
+    /^[0-9a-f]{40}$/i.test(baseAfter) &&
     cleanBefore &&
     cleanAfter;
 
   if (verdict && contextStable) {
-    const proofPath = writeCodexPushProof({ root, headSha: headAfter, verdict });
-    process.stdout.write(`Codex push proof written to ${proofPath} (verdict: ${verdict}, head ${headAfter}).\n`);
+    const proofPath = writeCodexPushProof({ root, headSha: headAfter, baseSha: baseAfter, verdict });
+    process.stdout.write(`Codex push proof written to ${proofPath} (verdict: ${verdict}, head ${headAfter}, base ${baseAfter}).\n`);
     return 0;
   }
 
@@ -382,8 +394,8 @@ export function run(argv = process.argv.slice(2)) {
     );
   } else {
     process.stderr.write(
-      "Codex returned clean, but the worktree/HEAD was dirty or moved during the review, so the proof " +
-      "cannot be bound to a stable commit. Commit or stash your changes on a clean tree, then re-run.\n",
+      "Codex returned clean, but the worktree/HEAD/origin-main was dirty or moved during the review, so the proof " +
+      "cannot be bound to a stable commit + base. Commit or stash your changes on a clean tree (and re-fetch if origin/main moved), then re-run.\n",
     );
   }
   return 1;

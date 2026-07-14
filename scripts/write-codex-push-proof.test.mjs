@@ -126,23 +126,28 @@ assert.equal(
 
 // ── proof shape cross-checked against the real guard ─────────────────────────
 const HEAD = "a".repeat(40);
+const BASE = "c".repeat(40);
 const now = Date.parse("2026-07-14T12:00:00.000Z");
-const proof = buildCodexPushProof({ headSha: HEAD, verdict: "clean", timestamp: "2026-07-14T11:59:00.000Z" });
+const proof = buildCodexPushProof({ headSha: HEAD, baseSha: BASE, verdict: "clean", timestamp: "2026-07-14T11:59:00.000Z" });
 assert.equal(proof.codex_ran, true);
 assert.equal(proof.verdict, "clean");
 assert.equal(proof.head_sha, HEAD);
+assert.equal(proof.base_sha, BASE, "proof records the reviewed origin/main base");
 assert.ok(proof.timestamp, "proof carries a timestamp");
 // The minted proof must PASS the guard's own validator for the exact head.
 assert.equal(proofValid(proof, HEAD, now), true, "minted proof validates against codex-push-guard's proofValid");
-// …and be rejected for the wrong head / stale / bad verdict.
+// …and against the guard's full check including the base it gates on.
+assert.equal(proofValid(proof, HEAD, now, BASE), true, "minted proof validates against the exact head AND base");
+// …and be rejected for the wrong head / moved base / stale / bad verdict.
 assert.equal(proofValid(proof, "b".repeat(40), now), false, "wrong head_sha → invalid");
+assert.equal(proofValid(proof, HEAD, now, "d".repeat(40)), false, "moved origin/main base → invalid");
 assert.equal(
-  proofValid(buildCodexPushProof({ headSha: HEAD, verdict: "clean", timestamp: "2026-07-14T11:00:00.000Z" }), HEAD, now),
+  proofValid(buildCodexPushProof({ headSha: HEAD, baseSha: BASE, verdict: "clean", timestamp: "2026-07-14T11:00:00.000Z" }), HEAD, now),
   false,
   "31-minute-old proof → invalid (expired)",
 );
 assert.equal(
-  proofValid(buildCodexPushProof({ headSha: HEAD, verdict: "not-a-verdict", timestamp: "2026-07-14T11:59:00.000Z" }), HEAD, now),
+  proofValid(buildCodexPushProof({ headSha: HEAD, baseSha: BASE, verdict: "not-a-verdict", timestamp: "2026-07-14T11:59:00.000Z" }), HEAD, now),
   false,
   "unrecognized verdict → invalid",
 );
