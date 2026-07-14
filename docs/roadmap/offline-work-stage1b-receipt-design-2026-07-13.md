@@ -168,7 +168,7 @@ Responsibilities:
 7. fail closed on any identity/payload mismatch for a reused client ID;
 8. perform the same target/assignment authorization needed to stage that operation without weakening the canonical RPC's authorization.
 
-### `process_offline_action(p_client_action_id uuid)`
+### `process_offline_action(p_client_action_id uuid, p_idempotency_key text)`
 
 Responsibilities:
 

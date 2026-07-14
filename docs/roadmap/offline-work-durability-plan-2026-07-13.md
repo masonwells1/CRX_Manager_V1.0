@@ -147,7 +147,7 @@ Security requirements:
 ### Replay shape
 
 1. `stage_offline_action(...)` stores or returns the receipt using `client_action_id` as the permanent key.
-2. `process_offline_action(client_action_id)` reads the staged payload and explicitly calls the matching canonical RPC.
+2. `process_offline_action(client_action_id, idempotency_key)` reads the staged payload and explicitly calls the matching canonical RPC.
 3. The business call and success receipt are committed together. A lost HTTP response can then be recovered by reading the receipt instead of repeating inventory work.
 4. Failures are captured as `needs_review` without deleting the payload.
 5. The browser removes its local copy only after it reads `succeeded` for the same `client_action_id`.
