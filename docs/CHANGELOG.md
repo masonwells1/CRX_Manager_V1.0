@@ -4,6 +4,12 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-15 — Registry-freshness test harness isolation
+
+The registry-freshness runtime helper and copied hook harnesses now run Git and spawned-hook probes with a Git-clean child environment. Git hooks inherit repository-local `GIT_*` context, so the harness now consults `git rev-parse --local-env-vars` and removes those bindings plus indexed `GIT_CONFIG_KEY_n` / `GIT_CONFIG_VALUE_n` entries before spawning; the runtime flag-sharing helper strips the same class before resolving worktrees. Synthetic stale-registry flags can no longer resolve against real CRX worktrees.
+
+---
+
 ## 2026-07-15 — Return lifecycle direct-update hardening live
 
 The Section 8 gauntlet follow-up is live as Supabase ledger version `20260715132146` (`20260715115155_harden_return_lifecycle_updates`). Return lifecycle/audit fields are now RPC-owned: direct `returns` table writes can still delete requested/rejected/cancelled rows, but active returns cannot be soft-deleted or hard-deleted, so they stay visible to terminal-order guards; request timestamp, approval, receipt, cancellation, credit, and status fields require a vetted return RPC flag or the existing scoped admin override. `approve_return` and `cancel_return` also reject NULL actor arguments instead of writing blank attribution, and a standing `returns-lifecycle-rpc-owned` invariant sweep covers the bug class.
