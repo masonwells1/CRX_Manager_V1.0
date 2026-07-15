@@ -37,7 +37,7 @@ interface CommissionPaymentRow {
   posted_at: string | null;
   notes: string | null;
   created_at: string;
-  item_count: number;
+  item_count: number | null;
 }
 
 interface UnpaidCommission {
@@ -112,20 +112,32 @@ export default function CommissionPayments() {
 
     // Get item counts
     const rows: CommissionPaymentRow[] = [];
+    let hasUnverifiedItemCount = false;
     for (const p of (data || []) as Array<Record<string, unknown> & { recipient_id?: string | null }>) {
-      const { count } = await supabase
+      const { count, error: itemCountError } = await supabase
         .from('commission_payment_items')
         .select('*', { count: 'exact', head: true })
         .eq('commission_payment_id', p.id as string);
 
+      if (itemCountError || count === null) {
+        hasUnverifiedItemCount = true;
+        Sentry.captureException(
+          itemCountError ?? new Error('Commission item count was unavailable'),
+          { extra: { context: 'load_commission_payment_item_count', paymentId: p.id } },
+        );
+      }
+
       rows.push({
         ...p,
         recipient_name: p.recipient_id ? recipientMap[p.recipient_id] || 'Unknown' : 'Unknown',
-        item_count: count || 0,
+        item_count: itemCountError || count === null ? null : count,
       } as CommissionPaymentRow);
     }
 
     setPayments(rows);
+    if (hasUnverifiedItemCount) {
+      toast('error', 'Some commission payment item counts could not be verified. Posting is disabled for those rows.');
+    }
     setLoading(false);
   }, [toast]);
 
@@ -442,7 +454,16 @@ export default function CommissionPayments() {
     {
       key: 'item_count',
       header: 'Items',
-      render: (r) => <span className="text-secondary">{r.item_count} commission(s)</span>,
+      render: (r) => r.item_count === null ? (
+        <span
+          className="text-xs font-medium text-amber-700"
+          title="The linked commission count could not be verified. Refresh before posting."
+        >
+          Count unavailable
+        </span>
+      ) : (
+        <span className="text-secondary">{r.item_count} commission(s)</span>
+      ),
     },
     {
       key: 'status',
@@ -460,22 +481,42 @@ export default function CommissionPayments() {
             header: '',
             render: (r: CommissionPaymentRow) => (
               <div className="flex justify-end gap-2">
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  icon={<Send className="w-3 h-3" />}
-                  onClick={(e: React.MouseEvent) => {
-                    e.stopPropagation();
-                    // Codex P2 fix: reset key so different post-target uses fresh intent.
-                    postPaymentIdem.resetKey();
-                    setPostTargetId(r.id);
-                    setShowPostConfirm(true);
-                  }}
-                  loading={posting === r.id}
-                  showChevron={false}
-                >
-                  Post
-                </Button>
+                {r.item_count === null ? (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    icon={<Send className="w-3 h-3" />}
+                    disabled
+                    title="Posting is disabled because the linked commission count could not be verified. Refresh and try again."
+                    showChevron={false}
+                  >
+                    Post
+                  </Button>
+                ) : r.item_count > 0 ? (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    icon={<Send className="w-3 h-3" />}
+                    onClick={(e: React.MouseEvent) => {
+                      e.stopPropagation();
+                      // Codex P2 fix: reset key so different post-target uses fresh intent.
+                      postPaymentIdem.resetKey();
+                      setPostTargetId(r.id);
+                      setShowPostConfirm(true);
+                    }}
+                    loading={posting === r.id}
+                    showChevron={false}
+                  >
+                    Post
+                  </Button>
+                ) : (
+                  <span
+                    className="inline-flex items-center rounded-md bg-red-50 px-2 py-1 text-xs font-medium text-red-700"
+                    title="This legacy payment batch has no commission items and cannot be posted. Void it or rebuild it."
+                  >
+                    Empty batch
+                  </span>
+                )}
                 <Button
                   size="sm"
                   variant="danger"
@@ -624,7 +665,7 @@ export default function CommissionPayments() {
             <RotateCcw className="w-5 h-5 text-red-600 flex-shrink-0" />
             <p className="text-sm text-red-800">
               You are about to void payment <strong>{voidTarget?.payment_number}</strong> ({fmt(voidTarget?.total_amount || 0)}).
-              Its {voidTarget?.item_count} linked commission(s) will be reset to <strong>pending</strong> and can be re-paid later &mdash;
+              Its {voidTarget?.item_count ?? 'unverified number of'} linked commission(s) will be reset to <strong>pending</strong> and can be re-paid later &mdash;
               except any whose order was since cancelled or voided, which will be <strong>closed out</strong> (not re-payable).
             </p>
           </div>

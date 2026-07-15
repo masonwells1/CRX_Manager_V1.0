@@ -47,7 +47,9 @@ interface SupabaseLike {
   from: (table: string) => {
     select: (cols: string) => {
       eq: (col: string, val: string) => {
-        maybeSingle: () => Promise<{
+        // PostgrestBuilder is awaitable (PromiseLike), but intentionally does
+        // not implement the full Promise surface such as catch/finally.
+        maybeSingle: () => PromiseLike<{
           data: ActiveProfile | null;
           error: { message: string } | null;
         }>;
@@ -57,11 +59,14 @@ interface SupabaseLike {
 }
 
 export async function requireActiveProfile(
-  adminClient: SupabaseLike,
+  // Accept unknown at the boundary so Deno does not recursively instantiate
+  // SupabaseClient's full generated schema just to prove this tiny query shape.
+  adminClient: unknown,
   callerId: string,
   allowedRoles?: readonly string[],
 ): Promise<ProfileGateResult> {
-  const { data, error } = await adminClient
+  const client = adminClient as SupabaseLike;
+  const { data, error } = await client
     .from("profiles")
     .select("role, is_active")
     .eq("id", callerId)

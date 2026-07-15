@@ -54,6 +54,33 @@ Two modes:
   rollback fired — nothing persisted).
 - Any other error, or no error at all → **FAIL**; report the message verbatim.
 
+The full-gauntlet chain also proves the versioned `save_blend_ticket` contract:
+normal save, exact idempotent replay, required-version rejection, OCR-processing
+rejection, and stale-edit rejection both before and after an OCR commit.
+
+## Disposable concurrency companion
+
+Single-transaction smoke chains cannot create real lock contention. The
+gauntlet migrations therefore have a separate two-session proof:
+
+```bash
+node scripts/smoke/prove-gauntlet-idempotency-concurrency.mjs
+```
+
+It loads the checked-in `check_idempotency`, inline-insert trigger, and linked
+blend-ticket header/product lock definitions verbatim into a uniquely named
+`crx-gauntlet-idem-proof-*` PostgreSQL container. The container has no network,
+stores PostgreSQL data in tmpfs, never reads a DB URL, and is force-removed in
+`finally` after success or failure. The proof races both the canonical helper
+path and a legacy business-work-before-inline-ledger path, requiring one effect,
+one ledger row, exact replay for the helper caller, and
+`IDEMPOTENCY_CONCURRENT_REPLAY_RETRY` plus full effect rollback for the legacy
+loser. It also races link-first and product-first transactions to prove the
+parent-row lock serializes edits and rejects a product edit that loses to a link.
+The same disposable database loads the checked-in atomic OCR commit function
+and proves three real two-session losers roll back cleanly: approval-first,
+link-first, and lease-change-first.
+
 Safety notes:
 
 - Chains run as table owner; direct fixture INSERTs bypass RLS but the RPCs

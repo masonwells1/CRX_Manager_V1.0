@@ -2,7 +2,9 @@
 
 Read-only queue for the recurring CRX Live Foundation Gauntlet. Each run reviews one section against current repo code plus live Supabase database structure only, writes one dated report, updates this index, then stops.
 
-Last updated: 2026-07-08
+Last updated: 2026-07-14
+
+The July 14 full all-section run supersedes the older per-row queue notes below for current risk and remediation status. See [2026-07-14-full-gauntlet-codex-only-remediation.md](2026-07-14-full-gauntlet-codex-only-remediation.md). The table remains as section history until the fixes are deployed and production-verified.
 
 ## Current Queue
 
@@ -32,4 +34,4 @@ This file was present before the Section 5 run and was not modified by this auto
 
 ## Next Section
 
-Section 7 - Commissions, commission splits, entity recipients, payout batches, cancellations/voids.
+All 15 sections completed. The next recurring run restarts at Section 1 after this remediation is live and production-verified.

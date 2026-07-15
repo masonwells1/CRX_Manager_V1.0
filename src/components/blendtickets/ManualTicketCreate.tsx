@@ -1,12 +1,12 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Plus, Trash2, Save, AlertCircle, Beaker } from 'lucide-react';
 import Button from '../ui/Button';
 import Card from '../ui/Card';
 import Input from '../ui/Input';
 import SearchableSelect from '../ui/SearchableSelect';
-import { supabase, assertRpcResult, checkMutationResult } from '../../lib/db';
+import { supabase, assertRpcResult } from '../../lib/db';
 import { useAuth } from '../../contexts/AuthContext';
-import { logActivity } from '../../lib/activityLogger';
+import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
 import { validateBlendMath } from '../../lib/blendMathValidator';
 import { localToday } from '../../lib/dateUtils';
 import type { Customer, Product, BlendRecipe, BlendRecipeItem } from '../../types';
@@ -28,35 +28,241 @@ interface ManualProduct {
   lot_number: string;
 }
 
+interface ManualTicketPayload {
+  [key: string]: string | number | null;
+  customer_id: string;
+  ticket_date: string | null;
+  ticket_time: string | null;
+  job_number: string | null;
+  invoice_number: string | null;
+  driver_name: string | null;
+  applicator_name: string | null;
+  mixer_name: string | null;
+  tank_number: string | null;
+  vehicle_info: string | null;
+  field_names: string | null;
+  total_acres: number | null;
+  application_rate: string | null;
+  total_volume: number | null;
+  total_volume_unit: string | null;
+  notes: string | null;
+}
+
+interface ManualTicketProductPayload {
+  [key: string]: string | number | null;
+  product_id: string | null;
+  product_name: string;
+  quantity: number;
+  unit: string | null;
+  rate_per_acre: number | null;
+  rate_per_acre_unit: string | null;
+  lot_number: string | null;
+  sequence_order: number;
+}
+
+interface PersistedUncertainManualTicket {
+  version: 1;
+  userId: string;
+  ticketId: string;
+  idempotencyKey: string;
+  expiresAt: number;
+  ticketPayload: ManualTicketPayload;
+  products: ManualTicketProductPayload[];
+}
+
+const UNCERTAIN_MANUAL_TICKET_TTL_MS = 2 * 60 * 60 * 1000;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const uncertainManualTicketStorageKey = (userId: string) =>
+  `crx:blend-ticket-manual:uncertain:v1:${userId}`;
+
+const initialManualFormData = () => ({
+  customer_id: '',
+  ticket_date: localToday(),
+  ticket_time: '',
+  job_number: '',
+  invoice_number: '',
+  driver_name: '',
+  applicator_name: '',
+  mixer_name: '',
+  tank_number: '',
+  vehicle_info: '',
+  field_names: '',
+  total_acres: '',
+  application_rate: '',
+  total_volume: '',
+  total_volume_unit: '',
+  notes: '',
+});
+
+function isNullableBoundedString(value: unknown, maxLength: number): boolean {
+  return value === null || (typeof value === 'string' && value.length <= maxLength);
+}
+
+function isNullableFiniteNumber(value: unknown): boolean {
+  return value === null || (typeof value === 'number' && Number.isFinite(value));
+}
+
+function readPersistedUncertainManualTicket(userId: string): PersistedUncertainManualTicket | null {
+  const key = uncertainManualTicketStorageKey(userId);
+  try {
+    const raw = window.sessionStorage.getItem(key);
+    if (!raw) return null;
+    if (raw.length > 128 * 1024) {
+      window.sessionStorage.removeItem(key);
+      return null;
+    }
+    const value = JSON.parse(raw) as Partial<PersistedUncertainManualTicket>;
+    const payload = value.ticketPayload as Partial<ManualTicketPayload> | undefined;
+    const products = Array.isArray(value.products) ? value.products : [];
+    const validPayload = payload
+      && typeof payload.customer_id === 'string'
+      && payload.customer_id.length > 0
+      && payload.customer_id.length <= 64
+      && isNullableBoundedString(payload.ticket_date, 32)
+      && isNullableBoundedString(payload.ticket_time, 64)
+      && isNullableBoundedString(payload.job_number, 128)
+      && isNullableBoundedString(payload.invoice_number, 128)
+      && isNullableBoundedString(payload.driver_name, 256)
+      && isNullableBoundedString(payload.applicator_name, 256)
+      && isNullableBoundedString(payload.mixer_name, 256)
+      && isNullableBoundedString(payload.tank_number, 128)
+      && isNullableBoundedString(payload.vehicle_info, 512)
+      && isNullableBoundedString(payload.field_names, 2_000)
+      && isNullableFiniteNumber(payload.total_acres)
+      && isNullableBoundedString(payload.application_rate, 128)
+      && isNullableFiniteNumber(payload.total_volume)
+      && isNullableBoundedString(payload.total_volume_unit, 64)
+      && isNullableBoundedString(payload.notes, 10_000);
+    const validProducts = products.length <= 200 && products.every((product, index) => product
+      && isNullableBoundedString(product.product_id, 64)
+      && typeof product.product_name === 'string'
+      && product.product_name.length <= 512
+      && typeof product.quantity === 'number'
+      && Number.isFinite(product.quantity)
+      && isNullableBoundedString(product.unit, 64)
+      && isNullableFiniteNumber(product.rate_per_acre)
+      && isNullableBoundedString(product.rate_per_acre_unit, 64)
+      && isNullableBoundedString(product.lot_number, 256)
+      && product.sequence_order === index + 1);
+    const valid = value.version === 1
+      && value.userId === userId
+      && typeof value.ticketId === 'string'
+      && UUID_PATTERN.test(value.ticketId)
+      && typeof value.idempotencyKey === 'string'
+      && value.idempotencyKey.length > 0
+      && value.idempotencyKey.length <= 256
+      && typeof value.expiresAt === 'number'
+      && value.expiresAt > Date.now()
+      && validPayload
+      && validProducts;
+    if (!valid) {
+      window.sessionStorage.removeItem(key);
+      return null;
+    }
+    return value as PersistedUncertainManualTicket;
+  } catch {
+    try { window.sessionStorage.removeItem(key); } catch { /* best effort */ }
+    return null;
+  }
+}
+
 export function ManualTicketCreate({ customers, onComplete }: ManualTicketCreateProps) {
   const { profile } = useAuth();
+  const { getKey: getCreateKey, resetKey: resetCreateKey } = useIdempotencyKey(
+    'create_blend_ticket',
+    profile?.id || '',
+  );
+  const persistedAttemptRef = useRef<PersistedUncertainManualTicket | null>(null);
+  const loadedUserIdRef = useRef<string | null | undefined>(undefined);
+  const [ticketAttemptId, setTicketAttemptId] = useState<string>(() => crypto.randomUUID());
 
-  const [formData, setFormData] = useState({
-    customer_id: '',
-    ticket_date: localToday(),
-    ticket_time: '',
-    job_number: '',
-    invoice_number: '',
-    driver_name: '',
-    applicator_name: '',
-    mixer_name: '',
-    tank_number: '',
-    vehicle_info: '',
-    field_names: '',
-    total_acres: '',
-    application_rate: '',
-    total_volume: '',
-    total_volume_unit: '',
-    notes: '',
-  });
+  const [formData, setFormData] = useState(initialManualFormData);
 
   const [products, setProducts] = useState<ManualProduct[]>([]);
   const [allProducts, setAllProducts] = useState<Product[]>([]);
   const [recipes, setRecipes] = useState<(BlendRecipe & { items: BlendRecipeItem[] })[]>([]);
   const [selectedRecipeId, setSelectedRecipeId] = useState('');
   const [saving, setSaving] = useState(false);
+  const [attemptUncertain, setAttemptUncertain] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]);
+
+  const clearPersistedAttempt = () => {
+    persistedAttemptRef.current = null;
+    if (!profile?.id) return;
+    try {
+      window.sessionStorage.removeItem(uncertainManualTicketStorageKey(profile.id));
+    } catch {
+      // Storage is a best-effort reload guard; the current mount is still safe.
+    }
+  };
+
+  const persistAttempt = (attempt: PersistedUncertainManualTicket) => {
+    persistedAttemptRef.current = attempt;
+    try {
+      window.sessionStorage.setItem(
+        uncertainManualTicketStorageKey(attempt.userId),
+        JSON.stringify(attempt),
+      );
+    } catch {
+      // Privacy/quota settings must not interrupt creation. The exact attempt
+      // remains frozen in memory for retry while this component stays mounted.
+    }
+  };
+
+  useEffect(() => {
+    const userId = profile?.id || null;
+    const isFirstUserLoad = loadedUserIdRef.current === undefined;
+    const userChanged = !isFirstUserLoad && loadedUserIdRef.current !== userId;
+    loadedUserIdRef.current = userId;
+
+    if (userChanged) {
+      persistedAttemptRef.current = null;
+      resetCreateKey();
+      setTicketAttemptId(crypto.randomUUID());
+      setFormData(initialManualFormData());
+      setProducts([]);
+      setSelectedRecipeId('');
+      setAttemptUncertain(false);
+      setError(null);
+    }
+    if (!userId) return;
+
+    const persisted = readPersistedUncertainManualTicket(userId);
+    if (!persisted) return;
+    persistedAttemptRef.current = persisted;
+    setTicketAttemptId(persisted.ticketId);
+    setFormData({
+      customer_id: persisted.ticketPayload.customer_id,
+      ticket_date: persisted.ticketPayload.ticket_date || localToday(),
+      ticket_time: persisted.ticketPayload.ticket_time || '',
+      job_number: persisted.ticketPayload.job_number || '',
+      invoice_number: persisted.ticketPayload.invoice_number || '',
+      driver_name: persisted.ticketPayload.driver_name || '',
+      applicator_name: persisted.ticketPayload.applicator_name || '',
+      mixer_name: persisted.ticketPayload.mixer_name || '',
+      tank_number: persisted.ticketPayload.tank_number || '',
+      vehicle_info: persisted.ticketPayload.vehicle_info || '',
+      field_names: persisted.ticketPayload.field_names || '',
+      total_acres: persisted.ticketPayload.total_acres?.toString() || '',
+      application_rate: persisted.ticketPayload.application_rate || '',
+      total_volume: persisted.ticketPayload.total_volume?.toString() || '',
+      total_volume_unit: persisted.ticketPayload.total_volume_unit || '',
+      notes: persisted.ticketPayload.notes || '',
+    });
+    setProducts(persisted.products.map((product) => ({
+      tempId: crypto.randomUUID(),
+      product_id: product.product_id,
+      product_name: product.product_name,
+      quantity: product.quantity,
+      unit: product.unit || '',
+      rate_per_acre: product.rate_per_acre,
+      rate_per_acre_unit: product.rate_per_acre_unit || '',
+      lot_number: product.lot_number || '',
+    })));
+    setAttemptUncertain(true);
+    setError('A previous manual ticket save may have completed. Retry this exact ticket before creating another.');
+  }, [profile?.id, resetCreateKey]);
 
   useEffect(() => {
     const loadData = async () => {
@@ -160,78 +366,109 @@ export function ManualTicketCreate({ customers, onComplete }: ManualTicketCreate
     setSaving(true);
 
     try {
-      // Generate ticket number
-      const { data: ticketNumberData, error: ticketNumErr } = await supabase.rpc('generate_ticket_number');
-      if (ticketNumErr) throw ticketNumErr;
-      const ticketNumber = assertRpcResult<string>(ticketNumberData, 'generate_ticket_number');
+      const ticketPayload: ManualTicketPayload = {
+        customer_id: formData.customer_id,
+        ticket_date: formData.ticket_date || null,
+        ticket_time: formData.ticket_time || null,
+        job_number: formData.job_number || null,
+        invoice_number: formData.invoice_number || null,
+        driver_name: formData.driver_name || null,
+        applicator_name: formData.applicator_name || null,
+        mixer_name: formData.mixer_name || null,
+        tank_number: formData.tank_number || null,
+        vehicle_info: formData.vehicle_info || null,
+        field_names: formData.field_names || null,
+        total_acres: formData.total_acres ? parseFloat(formData.total_acres) : null,
+        application_rate: formData.application_rate || null,
+        total_volume: formData.total_volume ? parseFloat(formData.total_volume) : null,
+        total_volume_unit: formData.total_volume_unit || null,
+        notes: formData.notes || null,
+      };
+      const productPayload: ManualTicketProductPayload[] = products.map((product, index) => ({
+        product_id: product.product_id,
+        product_name: product.product_name,
+        quantity: product.quantity,
+        unit: product.unit || null,
+        rate_per_acre: product.rate_per_acre,
+        rate_per_acre_unit: product.rate_per_acre_unit || null,
+        lot_number: product.lot_number || null,
+        sequence_order: index + 1,
+      }));
+      const attempt = attemptUncertain && persistedAttemptRef.current
+        ? {
+            ...persistedAttemptRef.current,
+            expiresAt: Date.now() + UNCERTAIN_MANUAL_TICKET_TTL_MS,
+          }
+        : {
+            version: 1 as const,
+            userId: profile.id,
+            ticketId: ticketAttemptId,
+            idempotencyKey: getCreateKey(),
+            expiresAt: Date.now() + UNCERTAIN_MANUAL_TICKET_TTL_MS,
+            ticketPayload,
+            products: productPayload,
+          };
 
-      // Insert blend ticket
-      const { data: ticket, error: ticketErr } = await supabase
-        .from('blend_tickets')
-        .insert({
-          ticket_number: ticketNumber,
-          uploaded_by: profile.id,
-          upload_date: new Date().toISOString(),
-          status: 'completed',
-          review_status: 'unreviewed',
-          source: 'manual',
-          ocr_confidence_score: 100,
-          signature_detected: false,
-          customer_id: formData.customer_id || null,
-          ticket_date: formData.ticket_date || null,
-          ticket_time: formData.ticket_time || null,
-          job_number: formData.job_number || null,
-          invoice_number: formData.invoice_number || null,
-          driver_name: formData.driver_name || null,
-          applicator_name: formData.applicator_name || null,
-          mixer_name: formData.mixer_name || null,
-          tank_number: formData.tank_number || null,
-          vehicle_info: formData.vehicle_info || null,
-          field_names: formData.field_names || null,
-          total_acres: formData.total_acres ? parseFloat(formData.total_acres) : null,
-          application_rate: formData.application_rate || null,
-          total_volume: formData.total_volume ? parseFloat(formData.total_volume) : null,
-          total_volume_unit: formData.total_volume_unit || null,
-          notes: formData.notes || null,
-        })
-        .select()
-        .single();
+      // Persist before the request so a reload while the RPC is in flight still
+      // recovers the exact identity and payload instead of creating a duplicate.
+      persistAttempt(attempt);
+      const { data, error: createError } = await supabase.rpc('create_blend_ticket', {
+        p_ticket_id: attempt.ticketId,
+        p_ticket_payload: attempt.ticketPayload,
+        p_products: attempt.products,
+        p_images: [],
+        p_enqueue_ocr: false,
+        p_performed_by: profile.id,
+        p_idempotency_key: attempt.idempotencyKey,
+      });
 
-      if (ticketErr) throw ticketErr;
-      if (!ticket) throw new Error('Failed to create ticket');
-
-      // Insert products
-      if (products.length > 0) {
-        const productInserts = products.map((p, i) => ({
-          blend_ticket_id: ticket.id,
-          product_id: p.product_id || null,
-          product_name: p.product_name,
-          quantity: p.quantity,
-          unit: p.unit || null,
-          rate_per_acre: p.rate_per_acre || null,
-          rate_per_acre_unit: p.rate_per_acre_unit || null,
-          lot_number: p.lot_number || null,
-          sequence_order: i + 1,
-          confidence_score: 100,
-          manually_corrected: false,
-        }));
-
-        const prodResult = await supabase
-          .from('blend_ticket_products')
-          .insert(productInserts)
-          .select();
-
-        if (prodResult.error) throw prodResult.error;
-        checkMutationResult(prodResult, 'Insert blend_ticket_products');
+      if (createError) {
+        const lookup = await supabase
+          .from('blend_tickets')
+          .select('id')
+          .eq('id', attempt.ticketId)
+          .maybeSingle();
+        if (lookup.error) {
+          setAttemptUncertain(true);
+          throw new Error(`Save outcome is uncertain. Retry this same ticket without editing: ${createError.message}`);
+        }
+        if (!lookup.data) {
+          clearPersistedAttempt();
+          resetCreateKey();
+          setTicketAttemptId(crypto.randomUUID());
+          setAttemptUncertain(false);
+          throw createError;
+        }
+      } else {
+        const result = assertRpcResult<{
+          success: boolean;
+          ticket_id: string;
+          ticket_number: string;
+        }>(data, 'create_blend_ticket');
+        if (!result.success || result.ticket_id !== attempt.ticketId) {
+          throw new Error('Blend ticket retry identity mismatch');
+        }
       }
 
-      // Log activity
-      await logActivity({ event: 'blend_ticket_created', description: `Blend ticket ${ticketNumber} created manually`, performedBy: profile.id, entityType: 'blend_ticket', entityId: ticket.id, customerId: formData.customer_id || undefined });
-
+      clearPersistedAttempt();
+      resetCreateKey();
+      setTicketAttemptId(crypto.randomUUID());
+      setAttemptUncertain(false);
       onComplete();
     } catch (err: unknown) {
-      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'Error creating manual ticket' } });
-      setError(err instanceof Error ? err.message : 'Failed to create ticket');
+      Sentry.captureException(
+        err instanceof Error ? err : new Error(String(err)),
+        { extra: { context: 'Error creating manual ticket' } },
+      );
+      const message = err instanceof Error ? err.message : 'Failed to create ticket';
+      if (persistedAttemptRef.current) {
+        setAttemptUncertain(true);
+        setError(message.toLowerCase().includes('outcome is uncertain')
+          ? message
+          : `Save outcome is uncertain. Retry this same ticket without editing: ${message}`);
+      } else {
+        setError(message);
+      }
     } finally {
       setSaving(false);
     }
@@ -239,6 +476,7 @@ export function ManualTicketCreate({ customers, onComplete }: ManualTicketCreate
 
   return (
     <div className="space-y-6">
+      <fieldset disabled={saving || attemptUncertain} className="contents">
       <Card className="p-6">
         <h2 className="text-lg font-semibold mb-4">Create Manual Blend Ticket</h2>
 
@@ -539,6 +777,8 @@ export function ManualTicketCreate({ customers, onComplete }: ManualTicketCreate
         </div>
       </Card>
 
+      </fieldset>
+
       {warnings.length > 0 && (
         <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 space-y-1">
           <div className="flex items-center gap-2 text-yellow-800 font-medium text-sm">
@@ -557,7 +797,7 @@ export function ManualTicketCreate({ customers, onComplete }: ManualTicketCreate
         </Button>
         <Button onClick={handleSave} disabled={saving}>
           <Save className="h-4 w-4" />
-          {saving ? 'Saving...' : 'Create Ticket'}
+          {saving ? 'Saving...' : attemptUncertain ? 'Retry Same Ticket' : 'Create Ticket'}
         </Button>
       </div>
     </div>

@@ -42,6 +42,8 @@ Migrations `20260714220000` through `20260714224000` preserve existing public si
 - `check_idempotency(...)` and `save_idempotency(...)` reject whitespace-only keys with `IDEMPOTENCY_KEY_REQUIRED`; `NULL` remains the explicit opt-out handled by callers that allow non-idempotent execution.
 
 ## Atomic Save/Delete
+- `commit_blend_ticket_ocr_result(p_blend_ticket_id, p_queue_id, p_lease_token, p_ticket_update, p_products, p_idempotency_key)` → jsonb — **LIVE (`20260714230100`, 2026-07-15)**. Service-role only. Locks and rechecks the current unreviewed/unlinked/unbilled ticket plus the owned OCR queue lease, preserves manual/current fields, replaces non-manual OCR products, and completes the queue in one transaction.
+- `create_blend_ticket(p_ticket_id, p_ticket_payload, p_products, p_images, p_enqueue_ocr, p_performed_by, p_idempotency_key)` → jsonb — **LIVE (`20260714230100`, 2026-07-15)**. Active admin/sales only; one transaction creates the ticket, products, bounded image metadata, optional OCR queue row, and activity entry. Uses a caller-stable ticket UUID and canonical exact-result replay.
 - `save_quote()` — upsert quote + items; validates commission splits sum to 100%
 - `save_job()` — upsert job + chemicals
 - `save_customer()` — upsert customer; validates commission splits server-side (recipient required, no duplicates, each percentage >0 and <=100, total 100%)
@@ -63,7 +65,7 @@ Migrations `20260714220000` through `20260714224000` preserve existing public si
 - `convert_quote_to_order()` — whole-quote conversion; also releases inventory holds linked to the quote. Copies `qi.notes` to `order_items.notes` and aggregates section_header_notes into `orders.program_notes`. Since `20260610145253`: rejects draft/declined/expired/cancelled quotes (`BOOKING_CLOSED`), rejects partially-drawn quotes (`BOOKING_PARTIALLY_DRAWN`), and marks all products fully drawn in `quote_product_draws`
 - `draw_down_quote(p_quote_id, p_draws, …)` — **partial booking draw-down** (sell-side roadmap #1 v1, `20260610145253`): pulls part of a sent/revised quote's booked quantities into a new confirmed order at the quote's locked (booking-weighted) price; tracks per-product balances in `quote_product_draws`; decrements the quote's active holds FIFO (drawn qty moves to `quantity_prebooked` — Net Free invariant); overdraw blocked (`BOOKING_OVERDRAWN`); final draw sets the quote `accepted`. admin/sales_rep, strict-actor, idempotent
 - `create_direct_order()` — create order without a quote; warns (not blocks) on low inventory using net position. Role-gated `admin`/`sales_rep` (`INSUFFICIENT_ROLE`) since `20260610142204` — audit W1 closed an RPC-direct hole where any authenticated user could create orders. Accepts `p_customer_po_number` (since `20260614142939`) so the SECDEF RPC sets `orders.customer_po_number` directly — the post-create `orders.update()` it replaced failed for `sales_rep` under the admin-only `orders_update` RLS.
-- `create_order_from_blend_ticket()` — create order from linked blend ticket
+- `create_order_from_blend_ticket(p_blend_ticket_id, p_order_number, p_order_date, p_notes, p_performed_by, p_idempotency_key)` — **LIVE (`20260714230200`, 2026-07-15):** creates and atomically links an order only from a completed, approved, unbilled ticket with a customer and nonempty fully matched active positive products. Exact first result is cached for replay.
 - `cancel_order()` — cancels order, releases prebooked inventory. **F7 (2026-05-07):** no longer adds `v_hold.quantity` to `inventory.quantity_available` when deactivating planned-quote holds — holds are soft reservations that never debited it.
 - `update_order_items()` — update items on an existing order
 - `confirm_delivery()` — scheduled -> in_progress transition
@@ -103,7 +105,7 @@ Migrations `20260714220000` through `20260714224000` preserve existing public si
 ## Inventory & Receiving
 - `adjust_inventory()` — manual inventory adjustment with reason
 - `manual_inventory_add()` — add inventory manually (does not override product unit cost)
-- `receive_po_items()` — per-item condition/lot/notes/storage, creates receiving_records
+- `receive_po_items(p_items, p_performed_by, p_idempotency_key, p_allow_over_receive)` — per-item condition/lot/notes/storage, creates receiving records. **LIVE (`20260714230000`, 2026-07-15):** linewise PO completion; actual overreceive requires admin plus per-item `over_receive_reason`, which is appended to the server audit note.
 - `release_inventory_hold()` — release a specific inventory hold
 - `create_planned_holds()` — Creates inventory holds for planned quote sections
 - `create_inventory_hold(p_product_id, p_customer_id, p_quantity, p_hold_type, p_expires_at, p_notes, p_performed_by, p_force, p_force_reason, p_idempotency_key)` — server-side manual hold creation with FOR UPDATE lock + atomic check against today's free stock (`available − prebooked − active holds`). Blocks negative-going holds by default; admin can pass `p_force=true` with a non-blank `p_force_reason` to override (mirrors PO over-receive admin-override). SECURITY DEFINER, search_path = public, pg_temp. Phase 4 P4-3 (2026-05-07). Replaces the bare `inventory_holds` insert from `InventoryPage.tsx`. **F1 (2026-05-07):** `FORCE_REQUIRES_REASON` / `FORCE_REQUIRES_ADMIN` checks hoisted above the inventory threshold so they fire unconditionally when `p_force=true`, fixing a NULL-concat crash on the sufficient-inventory force path.
@@ -127,8 +129,8 @@ Migrations `20260714220000` through `20260714224000` preserve existing public si
 - `create_application_record_from_blend_ticket(p_blend_ticket_id, p_performed_by, p_idempotency_key)` → uuid[] — create application records from blend ticket data (one per field, returns array of record IDs)
 
 ## Blend Ticket Linkage
-- `link_blend_ticket_to_order()` — link a blend ticket to an existing order
-- `unlink_blend_ticket_from_order()` — remove blend ticket / order linkage
+- `link_blend_ticket_to_order(p_blend_ticket_id, p_order_id, p_item_mappings, p_performed_by, p_idempotency_key)` — **LIVE (`20260714230200`, 2026-07-15):** requires completed/approved/unbilled/customer/nonempty/fully matched ticket state; every explicit or automatic mapping must cover a matching selected-order item; zero-link success raises.
+- `unlink_blend_ticket_from_order(p_blend_ticket_id, p_performed_by, p_idempotency_key)` — **LIVE (`20260714230200`, 2026-07-15):** locks the ticket and removes mappings only while it is unbilled and has no active invoice or application record; linked billing/compliance provenance cannot be erased.
 
 ## Blend Ticket Phase 1
 - `batch_approve_blend_tickets(p_ticket_ids, p_approved_by, p_idempotency_key)` — bulk approve completed+unreviewed tickets
@@ -259,7 +261,7 @@ Migrations `20260714220000` through `20260714224000` preserve existing public si
 
 ## Inventory Forecasting
 - `get_inventory_forecast(p_months_ahead integer DEFAULT 6)` → Returns jsonb array of planned demand vs supply by product and month. SECURITY DEFINER, search_path = public, pg_temp
-- `get_inventory_position()` → Returns jsonb array, one row per (product, location) for active products. Fields: `inventory_id`, `product_id`, `product_name`, `inventory_unit`, `container_size`, `container_type`, `vendor`, `current_cost`, `location`, `unit_size`, `quantity_available`, `quantity_prebooked`, `quantity_on_order`, `holds_qty`, `planned_qty`, `delivered_ytd` (season-to-date), `net_position` (= available − prebooked + on_order), `reorder_point`, `min_stock_level`, `is_low_stock`. Read-only; replaces 4 separate fetches in InventoryPage. Holds and planned-quote demand are RETURNED separately, not subtracted from `net_position`. SECURITY DEFINER, search_path = public, pg_temp
+- `get_inventory_position()` → Returns jsonb array, one row per (product, location) for active products. Fields: `inventory_id`, `product_id`, `product_name`, `inventory_unit`, `container_size`, `container_type`, `vendor`, `current_cost`, `location`, `unit_size`, `quantity_available`, `quantity_prebooked`, `quantity_on_order`, `holds_qty`, `planned_qty`, `delivered_ytd` (season-to-date), `net_position` (= available − prebooked + on_order), `reorder_point`, `min_stock_level`, `is_low_stock`. Read-only; replaces 4 separate fetches in InventoryPage. Holds and planned-quote demand are RETURNED separately, not subtracted from `net_position`. SECURITY DEFINER, search_path = public, pg_temp. **LIVE (`20260714230000`, 2026-07-15):** explicitly requires active admin or sales role.
 
 ## Seasonal Rollover
 - `rollover_quote_to_season(p_quote_id uuid, p_new_season integer, p_performed_by uuid, p_idempotency_key text DEFAULT NULL)` → Returns jsonb with new quote_id, quote_number, season. Creates duplicate quote with updated pricing for the new season. SECURITY DEFINER, search_path = public, pg_temp
@@ -332,7 +334,7 @@ These are NOT called directly from the frontend. They power triggers, guards, an
 ### Auth & Security
 - `_is_admin_override()` — internal admin check for RLS policies
 - `handle_new_user()` — triggered on `auth.users` INSERT, auto-creates `profiles` row
-- `check_idempotency()` — check if an idempotency key has been used
+- `check_idempotency(p_key, p_operation)` — check if an idempotency key has been used. **LIVE (`20260714230000`, 2026-07-15):** takes a key-only transaction advisory lock so same-operation retries serialize and cross-operation reuse fails before business mutation. A trigger forces legacy inline-key concurrent losers to roll back.
 - `save_idempotency()` — persist an idempotency key result
 - `check_rate_limit()` — rate limiting check
 - `cleanup_rate_limits()` — cron-callable cleanup of expired rate-limit rows. EXECUTE revoked from anon/authenticated — service_role/cron only.
@@ -380,7 +382,7 @@ These are NOT called directly from the frontend. They power triggers, guards, an
 - `notify_mentioned_users_in_comment()` — notify users @mentioned in comments
 
 ### Blend Ticket Helpers
-- `update_blend_ticket_billing_status()` — update billing status on blend ticket changes
+- `update_blend_ticket_billing_status(p_blend_ticket_id, p_payment_status, p_performed_by, p_idempotency_key)` — **LIVE (`20260714230000`, 2026-07-15):** active admin/sales, strict actor, ticket row lock, canonical exact-result replay, one overload.
 - `sync_blend_ticket_payment_status()` → trigger — auto-syncs blend ticket payment_status when linked invoice is voided
 
 ### Crop History
@@ -420,6 +422,6 @@ These are NOT called directly from the frontend. They power triggers, guards, an
 - `release-expired-quote-holds` and `check-remainder-reminders` now run on pg_cron schedule (Phase 19) at 6:15 / 6:30 UTC daily. Frontend Dashboard.tsx still triggers both — belt-and-suspenders since RPCs are idempotent.
 - Edge Function lockdown: `send-email` now requires `customer_id`, validates `to` matches customer email, allowlists `email_type` per role (driver = `delivery_completed` only), drivers must supply `resource_type='delivery'` + assigned-driver auth, attachment cap 5/10MB, rate limit 50/hour. `process-blend-ticket` now requires applicator to be the ticket uploader. Both gain Sentry alerting via `_shared/sentry.ts`.
 - `create_commission_payment(p_commission_ids, p_payment_method, p_reference, p_payment_date, p_notes, p_performed_by, p_idempotency_key)` -> uuid — **Phase 20 rewrite + 20260714180000 hardening:** no longer flips commissions to `paid` status. The `paid` transition now happens in `post_commission_payment`. Double-pay guard checks `commission_payment_items` membership in non-voided payments, and stale selections now fail if any selected commission is missing, non-pending, soft-deleted, or already batched.
-- `post_commission_payment(p_payment_id, p_performed_by, p_idempotency_key)` -> jsonb `{success, payment_id, payment_number, commissions_paid}` — **Phase 20 rewrite:** now sets `commissions.status = 'paid'` and `paid_date = payment_date`. Now properly accepts idempotency key (was missing despite frontend passing it). Returns jsonb instead of void.
+- `post_commission_payment(p_payment_id, p_performed_by, p_idempotency_key)` -> jsonb `{success, payment_id, payment_number, commissions_paid}` — **Phase 20 rewrite:** sets `commissions.status = 'paid'` and `paid_date = payment_date`; accepts idempotency key and returns jsonb. **LIVE (`20260714230000`, 2026-07-15):** rejects zero-item batches and any header/item total mismatch before mutation.
 - `reconcile_negative_inventory(p_inventory_id, p_new_quantity, p_reason, p_performed_by, p_idempotency_key)` -> jsonb — **Phase 22 cleanup:** admin sets correct on-hand for a row in negative state; delta becomes paired `inventory_transactions` audit row with reason. Used by `/integrity-cleanup` page.
 - `create_invoice_for_unbilled_delivery(p_delivery_id, p_performed_by, p_idempotency_key)` -> jsonb `{success, delivery_id, invoice_id, invoice_number, total_cents}` — **Phase 22 cleanup:** factors Phase 15's auto-invoice logic into a manual-trigger RPC for the 60 historical completed deliveries that pre-date Phase 15. Refuses if delivery is not `completed`, has no `order_id`, or order already has an active invoice.

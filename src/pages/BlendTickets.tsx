@@ -216,9 +216,35 @@ export function BlendTickets() {
   };
 
   const handleDelete = async () => {
+    const lifecycleLocked = selectedRows.filter((ticket) =>
+      ticket.order_link_status === 'linked' ||
+      ticket.payment_status === 'billed' ||
+      ticket.status === 'pending' ||
+      ticket.status === 'processing'
+    );
+    if (lifecycleLocked.length > 0) {
+      toast('error', 'Unlink, unbill, and finish OCR before deleting the selected blend tickets.');
+      setDeleteModalOpen(false);
+      return;
+    }
     setDeleting(true);
     try {
       const ids = selectedRows.map((t) => t.id);
+      const { data: applicationRecords, error: applicationRecordsError } = await supabase
+        .from('application_records')
+        .select('source_id')
+        .eq('source_type', 'blend_ticket')
+        .in('source_id', ids)
+        .limit(1);
+      if (applicationRecordsError) throw applicationRecordsError;
+      if (applicationRecords?.length) {
+        toast(
+          'error',
+          'Reverse the application records linked to the selected blend tickets before deleting them.'
+        );
+        return;
+      }
+
       const result = await supabase
         .from('blend_tickets')
         .update({ deleted_at: new Date().toISOString() })
@@ -230,15 +256,22 @@ export function BlendTickets() {
       loadData();
     } catch (err) {
       toast('error', sanitizeError(err));
+    } finally {
+      setDeleting(false);
+      setDeleteModalOpen(false);
     }
-    setDeleting(false);
-    setDeleteModalOpen(false);
   };
 
   // Only tickets that are completed + unreviewed are eligible for batch approve
   const approvableIds = selectedRows
     .filter((t) => t.status === 'completed' && t.review_status === 'unreviewed')
     .map((t) => t.id);
+  const hasLifecycleLockedDelete = selectedRows.some((ticket) =>
+    ticket.order_link_status === 'linked' ||
+    ticket.payment_status === 'billed' ||
+    ticket.status === 'pending' ||
+    ticket.status === 'processing'
+  );
 
   // Codex P2 fix (PR #59, 2026-05-16): reset batch idempotency keys when the
   // approvable selection changes. Page-scoped keys would otherwise carry over
@@ -337,7 +370,14 @@ export function BlendTickets() {
       : []),
     { key: 'csv', label: 'Export CSV', icon: <Download className="w-4 h-4" />, onClick: handleExportCSV },
     { key: 'pdf', label: 'Download PDF', icon: <FileText className="w-4 h-4" />, onClick: handleExportPDF, loading: exporting },
-    { key: 'delete', label: 'Delete Tickets', icon: <Trash2 className="w-4 h-4" />, onClick: () => setDeleteModalOpen(true), variant: 'danger' as const },
+    {
+      key: 'delete',
+      label: 'Delete Tickets',
+      icon: <Trash2 className="w-4 h-4" />,
+      onClick: () => setDeleteModalOpen(true),
+      variant: 'danger' as const,
+      disabled: hasLifecycleLockedDelete,
+    },
   ];
 
   function getStatusBadge(status: string) {

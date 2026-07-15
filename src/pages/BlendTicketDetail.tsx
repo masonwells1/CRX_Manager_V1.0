@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef , useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Save, Check, X, Plus, Trash2, Image as ImageIcon, AlertCircle, Link2, Unlink, ShoppingCart, ClipboardCheck, RefreshCw, MapPin, FileText } from 'lucide-react';
-import { supabase, checkMutationResult, assertRpcResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
+import { supabase, assertRpcResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
@@ -53,8 +53,13 @@ export function BlendTicketDetail() {
   const [warnings, setWarnings] = useState<string[]>([]);
   const [showRawOcr, setShowRawOcr] = useState(false);
   const [isDirty, setIsDirty] = useState(false);
+  const [fieldsDirty, setFieldsDirty] = useState(false);
+  const [saveHydrationRequired, setSaveHydrationRequired] = useState(false);
+  const [hasApplicationRecord, setHasApplicationRecord] = useState(false);
+  const [hasActiveInvoice, setHasActiveInvoice] = useState(false);
   const initialLoadDone = useRef(false);
-  const blocker = useUnsavedChanges(isDirty);
+  const hasUnsavedChanges = isDirty || fieldsDirty || saveHydrationRequired;
+  const blocker = useUnsavedChanges(hasUnsavedChanges);
 
   // Jobs for job linking (B6)
   const [availableJobs, setAvailableJobs] = useState<Pick<Job, 'id' | 'job_number' | 'job_date' | 'status'>[]>([]);
@@ -109,9 +114,72 @@ export function BlendTicketDetail() {
     notes: '',
   });
 
+  const contentLocked = Boolean(ticket && (
+    ticket.order_link_status === 'linked'
+    || ticket.payment_status !== 'unbilled'
+    || hasActiveInvoice
+    || hasApplicationRecord
+  ));
+  // The blend_ticket_fields trigger deliberately does not lock on order linkage.
+  // It rejects only when an active direct invoice or application-record
+  // provenance exists, so keep this predicate narrower than contentLocked.
+  // payment_status is maintained by the billing lifecycle and is also the
+  // fail-closed proxy when invoice SELECT RLS hides another user's invoice.
+  const fieldsLocked = Boolean(ticket && (
+    ticket.payment_status !== 'unbilled'
+    || hasActiveInvoice
+    || hasApplicationRecord
+  ));
+  const fieldControlsDisabled = fieldsLocked || saveHydrationRequired;
+
+  const orderActionBlockReason = !ticket
+    ? 'Blend ticket is still loading.'
+    : hasUnsavedChanges
+      ? 'Save your ticket changes before creating, linking, or billing downstream records.'
+      : hasActiveInvoice
+        ? 'This blend ticket has an active invoice. Void or cancel that invoice before creating or linking an order.'
+        : ticket.status !== 'completed'
+          ? 'Complete OCR processing before creating or linking an order.'
+          : ticket.review_status !== 'approved'
+            ? 'Approve this blend ticket before creating or linking an order.'
+            : ticket.payment_status !== 'unbilled'
+              ? 'Only an unbilled blend ticket can create or link an order.'
+              : ticket.order_link_status !== 'unlinked'
+                ? 'This blend ticket is already linked to an order.'
+                : products.length === 0
+                  ? 'Add at least one product before creating or linking an order.'
+                  : products.some((product) => !product.product_id || product.quantity <= 0 || product.product?.is_active !== true)
+                    ? 'Match every product to the active catalog and enter a positive quantity first.'
+                    : null;
+
+  const invoiceActionBlockReason = !ticket
+    ? 'Blend ticket is still loading.'
+    : hasUnsavedChanges
+      ? 'Save your ticket changes before creating an invoice.'
+      : hasActiveInvoice
+        ? 'This blend ticket already has an active invoice. Void or cancel it before creating another invoice.'
+        : ticket.order_link_status === 'linked'
+          ? 'This blend ticket is linked to a sales order. Bill through the order path instead of creating a direct invoice.'
+          : !ticket.customer_id
+            ? 'Assign a customer before creating an invoice.'
+            : products.length === 0
+              ? 'Add at least one product before creating an invoice.'
+              : null;
+
+  const canReprocessOcr = ticket?.source === 'ocr'
+    && ticket.review_status === 'unreviewed'
+    && ticket.order_link_status === 'unlinked'
+    && ticket.payment_status === 'unbilled'
+    && !hasUnsavedChanges;
+
   const loadTicketData = useCallback(async () => {
+    const wasTrackingDirty = initialLoadDone.current;
+    // Every call is a server hydration (initial load or an explicit refetch),
+    // not a user edit. Suppress the form/products effects until all hydrated
+    // state has rendered, then re-arm dirty tracking in the animation frame.
+    initialLoadDone.current = false;
     try {
-      const [ticketResult, imagesResult, productsResult, allProductsResult, customersResult, fieldsResult, linkedResult, jobsResult] = await Promise.all([
+      const [ticketResult, imagesResult, productsResult, allProductsResult, customersResult, fieldsResult, linkedResult, jobsResult, applicationRecordResult, activeInvoiceResult] = await Promise.all([
         // PR-07 follow-up: dropped uploader/reviewer/salesman FK embeds;
         // resolved via profile_public_view post-fetch (see below).
         supabase
@@ -156,12 +224,27 @@ export function BlendTicketDetail() {
           .select('id, job_number, job_date, status')
           .is('deleted_at', null)
           .order('job_date', { ascending: false })
-          .limit(200)
+          .limit(200),
+        supabase
+          .from('application_records')
+          .select('id')
+          .eq('source_type', 'blend_ticket')
+          .eq('source_id', id!)
+          .limit(1),
+        supabase
+          .from('invoices')
+          .select('id')
+          .eq('blend_ticket_id', id!)
+          .is('deleted_at', null)
+          .or('status.is.null,status.not.in.(voided,cancelled)')
+          .limit(1)
       ]);
 
       if (ticketResult.error) throw ticketResult.error;
       if (imagesResult.error) throw imagesResult.error;
       if (productsResult.error) throw productsResult.error;
+      if (applicationRecordResult.error) throw applicationRecordResult.error;
+      if (activeInvoiceResult.error) throw activeInvoiceResult.error;
 
       // PR-07 follow-up: resolve uploader/reviewer/salesman names via
       // profile_public_view (safe columns only). UI uses .full_name.
@@ -186,17 +269,34 @@ export function BlendTicketDetail() {
       setTicket(enrichedTicket as BlendTicket);
 
       const fetchedImages = imagesResult.data || [];
+      let unavailableImageCount = 0;
       const imagesWithSignedUrls = await Promise.all(
         fetchedImages.map(async (img: BlendTicketImage) => {
           if (img.storage_path) {
-            const { data } = await supabase.storage
+            const { data, error: signedUrlError } = await supabase.storage
               .from('blend-ticket-images')
               .createSignedUrl(img.storage_path, 3600);
-            return { ...img, image_url: data?.signedUrl || img.image_url };
+            if (signedUrlError || !data?.signedUrl) {
+              unavailableImageCount += 1;
+              const signingFailure = signedUrlError
+                || new Error(`Failed to sign blend ticket image ${img.id}`);
+              Sentry.captureException(
+                signingFailure,
+                { level: 'warning', extra: { context: 'blend_ticket_image_sign', imageId: img.id } },
+              );
+              return { ...img, image_url: '' };
+            }
+            return { ...img, image_url: data.signedUrl };
           }
           return img;
         })
       );
+      if (unavailableImageCount > 0) {
+        toast(
+          'warning',
+          `${unavailableImageCount} ticket image${unavailableImageCount === 1 ? '' : 's'} could not be loaded. The rest of the ticket is still available.`,
+        );
+      }
       setImages(imagesWithSignedUrls);
       setProducts((productsResult.data || []) as BlendTicketProduct[]);
       setAllProducts((allProductsResult.data || []) as Product[]);
@@ -205,23 +305,25 @@ export function BlendTicketDetail() {
       setAvailableFields(allFields);
       setLinkedOrders((linkedResult.data || []) as BlendTicketToOrderItem[]);
       setAvailableJobs((jobsResult.data || []) as Pick<Job, 'id' | 'job_number' | 'job_date' | 'status'>[]);
+      setHasApplicationRecord((applicationRecordResult.data || []).length > 0);
+      setHasActiveInvoice((activeInvoiceResult.data || []).length > 0);
       setSelectedJobId(ticketResult.data.job_id || '');
       // Fetch application services for dropdown
       const { data: svcData } = await supabase.from('application_services').select('id, name, vehicle_id').eq('is_active', true).order('sort_order');
       setAppServices(svcData || []);
 
       // Load existing blend_ticket_fields
-      const { data: btfData } = await supabase
+      const { data: btfData, error: btfError } = await supabase
         .from('blend_ticket_fields')
         .select('field_id, customer_id, planned_acres, sort_order')
         .eq('blend_ticket_id', id!)
         .order('sort_order');
-      if (btfData?.length) {
-        setTicketFields(btfData.map((btf: { field_id: string; customer_id: string | null; planned_acres: number | null }) => {
+      if (btfError) throw btfError;
+      setTicketFields((btfData || []).map((btf: { field_id: string; customer_id: string | null; planned_acres: number | null }) => {
           const f = allFields.find(af => af.id === btf.field_id);
           return { field_id: btf.field_id, customer_id: btf.customer_id, planned_acres: btf.planned_acres?.toString() || '', field_name: f?.field_name || '' };
         }));
-      }
+      setFieldsDirty(false);
 
       setFormData({
         customer_id: ticketResult.data.customer_id || '',
@@ -242,6 +344,7 @@ export function BlendTicketDetail() {
         total_volume_unit: ticketResult.data.total_volume_unit || '',
         notes: ticketResult.data.notes || '',
       });
+      setSaveHydrationRequired(false);
       // Mark initial load complete so future changes trigger isDirty
       requestAnimationFrame(() => { initialLoadDone.current = true; });
       // Duplicate detection (informational only)
@@ -288,6 +391,9 @@ export function BlendTicketDetail() {
         // Non-critical: suggestion just won't appear
       }
     } catch (error) {
+      // A failed refetch did not replace local state, so preserve the prior
+      // tracking mode and keep subsequent user edits protected.
+      initialLoadDone.current = wasTrackingDirty;
       Sentry.captureException(error, { tags: { source: 'fetch', page: 'blend_ticket_detail' } });
       toast('error', 'Failed to load blend ticket. Please try again.');
     } finally {
@@ -324,10 +430,31 @@ export function BlendTicketDetail() {
 
   async function handleSave() {
     if (!ticket) return;
+    // A successful save can be followed by a failed hydration request. In
+    // that state the local ticket still carries the pre-save concurrency
+    // token, so a no-change retry must be a no-op instead of submitting a
+    // guaranteed stale snapshot.
+    if (saveHydrationRequired) {
+      toast('error', 'The changes were saved, but the refreshed ticket could not be loaded. Reopen this ticket before saving again.');
+      return;
+    }
+    if (fieldsDirty) {
+      toast('error', 'Save the Application Fields section before saving ticket details.');
+      return;
+    }
+    if (reprocessing || ticket.status === 'processing') {
+      toast('error', 'Wait for OCR processing to finish before saving ticket details.');
+      return;
+    }
+    if (contentLocked) {
+      toast('error', 'Ticket details are locked after billing or order linkage.');
+      return;
+    }
 
     await runCriticalAction({
       action: async () => {
         const ticketPayload = {
+          _expected_updated_at: ticket.updated_at,
           customer_id: formData.customer_id || null,
           ticket_date: formData.ticket_date || null,
           ticket_time: formData.ticket_time || null,
@@ -357,6 +484,7 @@ export function BlendTicketDetail() {
           lot_number: p.lot_number,
           rate_per_acre: p.rate_per_acre,
           rate_per_acre_unit: p.rate_per_acre_unit,
+          sequence_order: p.sequence_order,
         }));
 
         const saveKey = saveIdem.getKey();
@@ -371,6 +499,9 @@ export function BlendTicketDetail() {
         assertRpcResult(saveData, 'save_blend_ticket');
         saveIdem.resetKey();
 
+        // Remain fail-closed until loadTicketData replaces the pre-save
+        // updated_at token. A failed hydration leaves this guard armed.
+        setSaveHydrationRequired(true);
         setIsDirty(false);
         await loadTicketData();
       },
@@ -383,6 +514,10 @@ export function BlendTicketDetail() {
   async function handleApprove() {
     if (!ticket || !profile) return;
     setApproveConfirmOpen(false);
+    if (hasUnsavedChanges) {
+      toast('error', 'Save your ticket changes before approving it.');
+      return;
+    }
 
     await runCriticalAction({
       action: async () => {
@@ -412,6 +547,10 @@ export function BlendTicketDetail() {
   async function handleReject() {
     if (!ticket || !profile) return;
     setRejectConfirmOpen(false);
+    if (hasUnsavedChanges) {
+      toast('error', 'Save or discard your ticket changes before rejecting it.');
+      return;
+    }
 
     await runCriticalAction({
       action: async () => {
@@ -439,7 +578,15 @@ export function BlendTicketDetail() {
   }
 
   async function handleSaveFields() {
-    if (!ticket || !profile || ticketFields.length === 0) return;
+    if (!ticket || !profile || !fieldsDirty) return;
+    if (fieldsLocked) {
+      toast('error', 'Application fields are locked after invoicing or application record creation.');
+      return;
+    }
+    if (saveHydrationRequired) {
+      toast('error', 'The refreshed ticket could not be loaded. Reopen this ticket before changing its lifecycle state.');
+      return;
+    }
     setSavingFields(true);
     try {
       const payload = ticketFields.map(tf => ({
@@ -456,6 +603,7 @@ export function BlendTicketDetail() {
       if (error) throw error;
       assertRpcResult(data, 'save_blend_ticket_fields');
       fieldsIdem.resetKey();
+      setFieldsDirty(false);
       await logActivity({ event: 'blend_ticket_fields_saved', description: `Saved ${payload.length} field assignments for ${ticket.ticket_number}`, performedBy: profile.id, entityType: 'blend_ticket', entityId: ticket.id });
       toast('success', `Saved ${payload.length} field assignment${payload.length !== 1 ? 's' : ''}`);
     } catch (err: unknown) {
@@ -465,15 +613,75 @@ export function BlendTicketDetail() {
     setSavingFields(false);
   }
 
+  function addTicketField() {
+    if (!ticket) return;
+    if (fieldsLocked) {
+      toast('error', 'Application fields are locked after invoicing or application record creation.');
+      return;
+    }
+    if (saveHydrationRequired) {
+      toast('error', 'The refreshed ticket could not be loaded. Reopen this ticket before editing application fields.');
+      return;
+    }
+    setTicketFields(previous => [
+      ...previous,
+      { field_id: '', customer_id: ticket.customer_id, planned_acres: '', field_name: '' },
+    ]);
+    setFieldsDirty(true);
+  }
+
+  function updateTicketField(index: number, updates: Partial<(typeof ticketFields)[number]>) {
+    if (fieldsLocked) {
+      toast('error', 'Application fields are locked after invoicing or application record creation.');
+      return;
+    }
+    if (saveHydrationRequired) {
+      toast('error', 'The refreshed ticket could not be loaded. Reopen this ticket before editing application fields.');
+      return;
+    }
+    setTicketFields(previous => previous.map((field, fieldIndex) => (
+      fieldIndex === index ? { ...field, ...updates } : field
+    )));
+    setFieldsDirty(true);
+  }
+
+  function removeTicketField(index: number) {
+    if (fieldsLocked) {
+      toast('error', 'Application fields are locked after invoicing or application record creation.');
+      return;
+    }
+    if (saveHydrationRequired) {
+      toast('error', 'The refreshed ticket could not be loaded. Reopen this ticket before editing application fields.');
+      return;
+    }
+    setTicketFields(previous => previous.filter((_, fieldIndex) => fieldIndex !== index));
+    setFieldsDirty(true);
+  }
+
   async function handleReprocessOCR() {
     if (!ticket || !profile) return;
     setReprocessConfirmOpen(false);
+    if (!canReprocessOcr) {
+      toast('error', 'OCR can only be reprocessed while the ticket is unreviewed, unlinked, and unbilled.');
+      return;
+    }
     setReprocessing(true);
     try {
-      const { data: imgs } = await supabase.from('blend_ticket_images').select('image_url').eq('blend_ticket_id', ticket.id).order('upload_order').limit(1);
+      const { data: imgs, error: imageLookupError } = await supabase.from('blend_ticket_images').select('id').eq('blend_ticket_id', ticket.id).order('upload_order').limit(1);
+      if (imageLookupError) throw imageLookupError;
       if (!imgs?.length) { toast('error', 'No image found'); setReprocessing(false); return; }
-      const resp = await supabase.functions.invoke('process-blend-ticket', { body: { blend_ticket_id: ticket.id, image_url: imgs[0].image_url, reprocess: true } });
+      const resp = await supabase.functions.invoke('process-blend-ticket', { body: { blend_ticket_id: ticket.id, reprocess: true } });
       if (resp.error) throw resp.error;
+      const edgeResult = resp.data as { success?: boolean; status?: string; error?: string } | null;
+      if (edgeResult?.status === 'already_processing') {
+        toast('info', 'OCR is already processing this ticket.');
+        await loadTicketData();
+        setReprocessing(false);
+        return;
+      }
+      if (!edgeResult?.success) {
+        throw new Error(edgeResult?.error || 'OCR re-processing did not complete');
+      }
       toast('success', 'OCR re-processing complete');
       await logActivity({ event: 'blend_ticket_reprocessed', description: `Re-processed OCR for ${ticket.ticket_number}`, performedBy: profile.id, entityType: 'blend_ticket', entityId: ticket.id });
       initialLoadDone.current = false;
@@ -486,6 +694,10 @@ export function BlendTicketDetail() {
   }
 
   function updateProduct(index: number, field: keyof BlendTicketProduct, value: BlendTicketProduct[keyof BlendTicketProduct]) {
+    if (contentLocked) {
+      toast('error', 'Ticket details are locked after billing, order linkage, or application record creation.');
+      return;
+    }
     // Functional updater: the product-select onChange fires updateProduct twice back-to-back
     // (product_id then product_name). Reading `products` from the closure made the second call
     // overwrite the first (product_id was lost -> $0 pricing / FK crash on create-order). Using
@@ -497,10 +709,15 @@ export function BlendTicketDetail() {
     });
   }
 
-  async function addProduct() {
+  function addProduct() {
     if (!ticket) return;
+    if (contentLocked) {
+      toast('error', 'Ticket details are locked after billing, order linkage, or application record creation.');
+      return;
+    }
 
-    const newProduct = {
+    const newProduct: BlendTicketProduct = {
+      id: crypto.randomUUID(),
       blend_ticket_id: ticket.id,
       product_id: null,
       product_name: '',
@@ -512,45 +729,34 @@ export function BlendTicketDetail() {
       sequence_order: products.length + 1,
       confidence_score: 0,
       manually_corrected: true,
+      unit_cost_cents: null,
+      unit_price_cents: null,
+      created_at: new Date().toISOString(),
     };
-
-    const { data, error } = await supabase
-      .from('blend_ticket_products')
-      .insert(newProduct)
-      .select()
-      .single();
-
-    if (error) {
-      toast('error', 'Failed to add product: ' + error.message);
-      return;
-    }
-    if (data) {
-      setProducts([...products, data as BlendTicketProduct]);
-    }
+    // Add/remove are part of the version-checked save snapshot. Persisting a
+    // blank row here would advance the parent version and make this page's own
+    // next Save stale; keeping it local also avoids abandoned blank DB rows.
+    setProducts(previous => [...previous, newProduct]);
   }
 
-  async function removeProduct(index: number) {
+  function removeProduct(index: number) {
+    if (contentLocked) {
+      toast('error', 'Ticket details are locked after billing, order linkage, or application record creation.');
+      return;
+    }
     setRemoveProductConfirmOpen(false);
     setRemoveProductIndex(null);
-    const product = products[index];
-
-    await runCriticalAction({
-      action: async () => {
-        const deleteResult = await supabase
-          .from('blend_ticket_products')
-          .delete()
-          .eq('id', product.id)
-          .select();
-        checkMutationResult(deleteResult, 'Delete blend ticket product');
-      },
-      toast,
-      sentryTag: 'remove_blend_ticket_product',
-      onSuccess: () => setProducts(products.filter((_, i) => i !== index)),
-    });
+    setProducts(previous => previous
+      .filter((_, productIndex) => productIndex !== index)
+      .map((product, productIndex) => ({ ...product, sequence_order: productIndex + 1 })));
   }
 
   // Phase 3: Order linkage handlers
   async function openLinkModal() {
+    if (orderActionBlockReason) {
+      toast('error', orderActionBlockReason);
+      return;
+    }
     if (!ticket?.customer_id) {
       toast('error', 'Please assign a customer before linking to an order');
       return;
@@ -575,6 +781,10 @@ export function BlendTicketDetail() {
 
   async function handleLinkToOrder() {
     if (!ticket || !selectedOrderId || !profile) return;
+    if (orderActionBlockReason) {
+      toast('error', orderActionBlockReason);
+      return;
+    }
     setLinking(true);
     try {
       const linkKey = linkIdem.getKey();
@@ -602,6 +812,22 @@ export function BlendTicketDetail() {
   async function handleUnlink() {
     if (!ticket || !profile) return;
     setUnlinkConfirmOpen(false);
+    if (saveHydrationRequired) {
+      toast('error', 'The refreshed ticket could not be loaded. Reopen this ticket before changing its lifecycle state.');
+      return;
+    }
+    if (hasActiveInvoice) {
+      toast('error', 'This blend ticket has an active invoice and cannot be unlinked. Void or cancel the invoice first.');
+      return;
+    }
+    if (hasApplicationRecord) {
+      toast('error', 'This blend ticket has an application record and cannot be unlinked. Reverse or remove that application record first.');
+      return;
+    }
+    if (ticket.payment_status !== 'unbilled') {
+      toast('error', 'A billed blend ticket cannot be unlinked from its order.');
+      return;
+    }
     try {
       const unlinkKey = unlinkIdem.getKey();
       const { data, error } = await supabase.rpc('unlink_blend_ticket_from_order', {
@@ -623,6 +849,11 @@ export function BlendTicketDetail() {
 
   async function handleCreateInvoice() {
     if (!ticket || !profile) return;
+    setCreateInvoiceConfirmOpen(false);
+    if (invoiceActionBlockReason) {
+      toast('error', invoiceActionBlockReason);
+      return;
+    }
 
     await runCriticalAction({
       action: async () => {
@@ -666,6 +897,10 @@ export function BlendTicketDetail() {
   }
 
   async function openCreateOrderModal() {
+    if (orderActionBlockReason) {
+      toast('error', orderActionBlockReason);
+      return;
+    }
     if (!ticket?.customer_id) {
       toast('error', 'Please assign a customer first');
       return;
@@ -690,6 +925,10 @@ export function BlendTicketDetail() {
 
   async function handleCreateOrder() {
     if (!ticket || !profile || !newOrderNumber.trim()) return;
+    if (orderActionBlockReason) {
+      toast('error', orderActionBlockReason);
+      return;
+    }
     setLinking(true);
     try {
       const createOrderKey = createOrderIdem.getKey();
@@ -721,12 +960,20 @@ export function BlendTicketDetail() {
 
   function handleCreateApplicationRecord() {
     if (!ticket || !profile) return;
+    if (hasUnsavedChanges) {
+      toast('error', 'Save your ticket changes before creating an application record.');
+      return;
+    }
     setAppRecordConfirmOpen(true);
   }
 
   async function executeCreateApplicationRecord() {
     if (!ticket || !profile) return;
     setAppRecordConfirmOpen(false);
+    if (hasUnsavedChanges) {
+      toast('error', 'Save your ticket changes before creating an application record.');
+      return;
+    }
     setCreatingAppRecord(true);
     try {
       const appRecKey = appRecordIdem.getKey();
@@ -738,6 +985,10 @@ export function BlendTicketDetail() {
       if (error) throw error;
       assertRpcResult(appRecData, 'create_application_record_from_blend_ticket');
       appRecordIdem.resetKey();
+      // The record exists before this page is refreshed, so arm the same
+      // downstream lock immediately and do not allow a newly dirty field draft
+      // that the database trigger would reject.
+      setHasApplicationRecord(true);
       logActivity({ event: 'application_record_created', description: `Application record created from blend ticket ${ticket.ticket_number}`, performedBy: profile.id, entityType: 'blend_ticket', entityId: ticket.id, customerId: ticket.customer_id || undefined });
       toast('success', 'Application record created successfully');
     } catch (err: unknown) {
@@ -769,7 +1020,11 @@ export function BlendTicketDetail() {
   }
 
   return (
-    <div className="space-y-6">
+    <fieldset
+      disabled={saving || savingFields}
+      className="m-0 min-w-0 space-y-6 border-0 p-0"
+      aria-busy={saving || savingFields}
+    >
       <Breadcrumbs items={[
         { label: 'Blend Tickets', href: '/blend-tickets' },
         { label: ticket.ticket_number },
@@ -820,11 +1075,17 @@ export function BlendTicketDetail() {
           {images.length > 0 ? (
             <div className="space-y-4">
               <div className="aspect-[4/3] bg-gray-100 rounded-lg overflow-hidden border border-gray-200">
-                <img
-                  src={images[selectedImageIndex]?.image_url}
-                  alt="Ticket"
-                  className="w-full h-full object-contain"
-                />
+                {images[selectedImageIndex]?.image_url ? (
+                  <img
+                    src={images[selectedImageIndex].image_url}
+                    alt="Ticket"
+                    className="w-full h-full object-contain"
+                  />
+                ) : (
+                  <div className="flex h-full items-center justify-center px-6 text-center text-sm text-gray-500">
+                    Image temporarily unavailable. Reload to try again.
+                  </div>
+                )}
               </div>
 
               {images.length > 1 && (
@@ -839,11 +1100,17 @@ export function BlendTicketDetail() {
                           : 'border-gray-200 hover:border-gray-300'
                       }`}
                     >
-                      <img
-                        src={image.image_url}
-                        alt={`Ticket ${index + 1}`}
-                        className="w-full h-full object-cover"
-                      />
+                      {image.image_url ? (
+                        <img
+                          src={image.image_url}
+                          alt={`Ticket ${index + 1}`}
+                          className="w-full h-full object-cover"
+                        />
+                      ) : (
+                        <span className="flex h-full items-center justify-center px-1 text-center text-xs text-gray-500">
+                          Unavailable
+                        </span>
+                      )}
                     </button>
                   ))}
                 </div>
@@ -873,6 +1140,11 @@ export function BlendTicketDetail() {
           )}
         </Card>
 
+        <fieldset
+          disabled={contentLocked}
+          className="m-0 min-w-0 border-0 p-0"
+          aria-label="Ticket details editor"
+        >
         <Card className="p-6">
           <h2 className="text-lg font-semibold mb-4">Ticket Information</h2>
 
@@ -1094,8 +1366,14 @@ export function BlendTicketDetail() {
             </div>
           </div>
         </Card>
+        </fieldset>
       </div>
 
+      <fieldset
+        disabled={contentLocked}
+        className="m-0 min-w-0 border-0 p-0"
+        aria-label="Ticket products editor"
+      >
       <Card className="p-6">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold">Products</h2>
@@ -1194,6 +1472,7 @@ export function BlendTicketDetail() {
                 <Button
                   variant="ghost"
                   size="sm"
+                  aria-label="Remove product"
                   onClick={() => { setRemoveProductIndex(index); setRemoveProductConfirmOpen(true); }}
                   className="text-red-600 hover:text-red-700 hover:bg-red-50"
                 >
@@ -1244,8 +1523,10 @@ export function BlendTicketDetail() {
           )}
         </div>
       </Card>
+      </fieldset>
 
       {/* Application Fields Section */}
+      <fieldset disabled={fieldControlsDisabled} aria-disabled={fieldControlsDisabled} className="contents">
       <Card className="p-6">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold flex items-center gap-2">
@@ -1257,12 +1538,13 @@ export function BlendTicketDetail() {
               <Button
                 size="sm"
                 variant="secondary"
-                onClick={() => setTicketFields([...ticketFields, { field_id: '', customer_id: ticket.customer_id, planned_acres: '', field_name: '' }])}
+                onClick={addTicketField}
+                disabled={fieldControlsDisabled}
               >
                 <Plus className="h-4 w-4" /> Add Field
               </Button>
-              {ticketFields.length > 0 && (
-                <Button size="sm" onClick={handleSaveFields} loading={savingFields}>
+              {fieldsDirty && (
+                <Button size="sm" onClick={handleSaveFields} loading={savingFields} disabled={fieldControlsDisabled}>
                   <Save className="h-4 w-4" /> Save Fields
                 </Button>
               )}
@@ -1282,12 +1564,15 @@ export function BlendTicketDetail() {
                       .map((f) => ({ value: f.id, label: f.field_name }))}
                     value={tf.field_id}
                     onChange={(value) => {
-                      const updated = [...ticketFields];
                       const selectedField = availableFields.find(f => f.id === value);
-                      updated[idx] = { ...updated[idx], field_id: value, field_name: selectedField?.field_name || '', customer_id: selectedField?.customer_id || tf.customer_id };
-                      setTicketFields(updated);
+                      updateTicketField(idx, {
+                        field_id: value,
+                        field_name: selectedField?.field_name || '',
+                        customer_id: selectedField?.customer_id || tf.customer_id,
+                      });
                     }}
                     placeholder="Select field..."
+                    disabled={fieldControlsDisabled}
                   />
                 </div>
                 <div className="col-span-4">
@@ -1295,12 +1580,9 @@ export function BlendTicketDetail() {
                   <input
                     type="number"
                     value={tf.planned_acres}
-                    onChange={(e) => {
-                      const updated = [...ticketFields];
-                      updated[idx] = { ...updated[idx], planned_acres: e.target.value };
-                      setTicketFields(updated);
-                    }}
+                    onChange={(e) => updateTicketField(idx, { planned_acres: e.target.value })}
                     placeholder="0"
+                    disabled={fieldControlsDisabled}
                     className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                   />
                 </div>
@@ -1309,7 +1591,9 @@ export function BlendTicketDetail() {
                     <Button
                       size="sm"
                       variant="secondary"
-                      onClick={() => setTicketFields(ticketFields.filter((_, i) => i !== idx))}
+                      aria-label="Remove application field"
+                      onClick={() => removeTicketField(idx)}
+                      disabled={fieldControlsDisabled}
                       className="text-red-600 hover:text-red-700 hover:bg-red-50"
                     >
                       <Trash2 className="h-4 w-4" />
@@ -1337,6 +1621,7 @@ export function BlendTicketDetail() {
           </p>
         )}
       </Card>
+      </fieldset>
 
       {/* Phase 3: Order Linkage Section */}
       <Card className="p-6">
@@ -1359,7 +1644,7 @@ export function BlendTicketDetail() {
           </div>
         </div>
 
-        {suggestedOrder && ticket.order_link_status === 'unlinked' && (
+        {suggestedOrder && !orderActionBlockReason && (
           <div className="flex items-center justify-between gap-3 bg-blue-50 border border-blue-200 text-blue-800 rounded-lg px-4 py-3 text-sm mb-4">
             <div className="flex items-center gap-2">
               <ShoppingCart className="h-4 w-4 flex-shrink-0" />
@@ -1428,7 +1713,20 @@ export function BlendTicketDetail() {
                 );
               })()}
             </div>
-            <Button variant="secondary" size="sm" onClick={() => setUnlinkConfirmOpen(true)} className="text-red-600">
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => setUnlinkConfirmOpen(true)}
+              className="text-red-600"
+              disabled={saveHydrationRequired || hasActiveInvoice || hasApplicationRecord || ticket.payment_status !== 'unbilled'}
+              title={hasActiveInvoice
+                ? 'Active invoices must be voided or cancelled before unlinking'
+                : hasApplicationRecord
+                  ? 'Application records must be reversed or removed before unlinking'
+                : ticket.payment_status !== 'unbilled'
+                  ? 'Billed tickets must remain linked to their order'
+                  : undefined}
+            >
               <Unlink className="h-4 w-4" />
               Unlink from Order
             </Button>
@@ -1438,13 +1736,18 @@ export function BlendTicketDetail() {
             <p className="text-sm text-gray-500">
               This blend ticket is not linked to any order. Link it to an existing order or create a new one.
             </p>
+            {orderActionBlockReason && (
+              <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
+                {orderActionBlockReason}
+              </p>
+            )}
             <div className="flex gap-2 items-center">
-              <Button variant="secondary" size="sm" onClick={openLinkModal}>
+              <Button variant="secondary" size="sm" onClick={openLinkModal} disabled={Boolean(orderActionBlockReason)}>
                 <Link2 className="h-4 w-4" />
                 Link to Existing Order
               </Button>
               <HelpTip text="Link to Order attaches this ticket to an EXISTING sales order — the 'chemical sale' path where we deliver the product and the order draws it from inventory. Use this when the customer is buying the chemical, not us applying it." />
-              <Button size="sm" onClick={openCreateOrderModal}>
+              <Button size="sm" onClick={openCreateOrderModal} disabled={Boolean(orderActionBlockReason)}>
                 <ShoppingCart className="h-4 w-4" />
                 Create Order from Ticket
               </Button>
@@ -1477,16 +1780,14 @@ export function BlendTicketDetail() {
               size="sm"
               onClick={() => setCreateInvoiceConfirmOpen(true)}
               loading={creatingInvoice}
-              disabled={!ticket.customer_id || products.length === 0}
+          disabled={Boolean(invoiceActionBlockReason)}
             >
               <FileText className="h-4 w-4" />
               Create Invoice
             </Button>
           </div>
-          {(!ticket.customer_id || products.length === 0) && (
-            <p className="text-xs text-yellow-600 mt-2">
-              {!ticket.customer_id ? 'Assign a customer before creating an invoice.' : 'No products on this ticket.'}
-            </p>
+          {invoiceActionBlockReason && (
+            <p className="text-xs text-yellow-600 mt-2">{invoiceActionBlockReason}</p>
           )}
         </Card>
       )}
@@ -1542,7 +1843,7 @@ export function BlendTicketDetail() {
           )}
           <div className="flex justify-end gap-2 pt-2">
             <Button variant="secondary" onClick={() => setShowLinkModal(false)}>Cancel</Button>
-            <Button onClick={handleLinkToOrder} disabled={!selectedOrderId || linking} loading={linking}>
+            <Button onClick={handleLinkToOrder} disabled={!selectedOrderId || linking || Boolean(orderActionBlockReason)} loading={linking}>
               <Link2 className="h-4 w-4" />
               Link to Order
             </Button>
@@ -1586,7 +1887,7 @@ export function BlendTicketDetail() {
           </div>
           <div className="flex justify-end gap-2 pt-2">
             <Button variant="secondary" onClick={() => setShowCreateOrderModal(false)}>Cancel</Button>
-            <Button onClick={handleCreateOrder} disabled={!newOrderNumber.trim() || linking} loading={linking}>
+            <Button onClick={handleCreateOrder} disabled={!newOrderNumber.trim() || linking || Boolean(orderActionBlockReason)} loading={linking}>
               <ShoppingCart className="h-4 w-4" />
               Create Order
             </Button>
@@ -1629,7 +1930,12 @@ export function BlendTicketDetail() {
 
       <div className="flex justify-end gap-3">
         {ticket.source === 'ocr' && (
-          <Button variant="secondary" onClick={() => setReprocessConfirmOpen(true)} loading={reprocessing}>
+          <Button
+            variant="secondary"
+            onClick={() => setReprocessConfirmOpen(true)}
+            loading={reprocessing}
+            disabled={!canReprocessOcr}
+          >
             <RefreshCw className="h-4 w-4" />
             Re-process OCR
           </Button>
@@ -1639,11 +1945,11 @@ export function BlendTicketDetail() {
         </Button>
         {ticket.status === 'completed' && ticket.review_status === 'unreviewed' && (
           <>
-            <Button variant="secondary" onClick={() => setRejectConfirmOpen(true)} className="text-red-600 hover:text-red-700">
+            <Button variant="secondary" onClick={() => setRejectConfirmOpen(true)} disabled={hasUnsavedChanges} className="text-red-600 hover:text-red-700">
               <X className="h-4 w-4" />
               Reject
             </Button>
-            <Button variant="secondary" onClick={() => setApproveConfirmOpen(true)} className="text-green-600 hover:text-green-700">
+            <Button variant="secondary" onClick={() => setApproveConfirmOpen(true)} disabled={hasUnsavedChanges} className="text-green-600 hover:text-green-700">
               <Check className="h-4 w-4" />
               Approve
             </Button>
@@ -1651,14 +1957,17 @@ export function BlendTicketDetail() {
         )}
         {ticket.review_status === 'approved' && (
           <span className="inline-flex items-center gap-1">
-            <Button variant="secondary" onClick={handleCreateApplicationRecord} loading={creatingAppRecord}>
+            <Button variant="secondary" onClick={handleCreateApplicationRecord} loading={creatingAppRecord} disabled={hasUnsavedChanges}>
               <ClipboardCheck className="h-4 w-4" />
               Create App Record
             </Button>
             <HelpTip text="Create Application Record files the legal as-applied record (product, field, date, rate) for compliance. It does NOT bill anyone — it's the regulatory paperwork, separate from Create Invoice (billing) and from linking to an order or job." />
           </span>
         )}
-        <Button onClick={handleSave} disabled={saving}>
+        <Button
+          onClick={handleSave}
+          disabled={saveHydrationRequired || saving || fieldsDirty || reprocessing || ticket.status === 'processing' || contentLocked}
+        >
           <Save className="h-4 w-4" />
           {saving ? 'Saving...' : 'Save Changes'}
         </Button>
@@ -1727,10 +2036,10 @@ export function BlendTicketDetail() {
         onClose={() => setReprocessConfirmOpen(false)}
         onConfirm={handleReprocessOCR}
         title="Re-process OCR"
-        message="This will re-run OCR on the ticket image and may overwrite current values. Continue?"
+        message="This will re-run OCR on the stored images, preserve existing manual values, and refresh unmatched OCR products. Continue?"
         confirmLabel="Re-process"
         variant="warning"
       />
-    </div>
+    </fieldset>
   );
 }
