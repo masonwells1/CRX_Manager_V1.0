@@ -51,6 +51,11 @@
       "description": "THE canonical return->credit chain: create_return derives immutable lines from delivered order items -> parent source retarget is blocked -> approve -> receive/restock -> void/cancel refuse the received return even with non-restock line flags -> issue a posted credit memo -> stable replay -> statement single-count -> unapply -> re-issue; only the exact verified production source-free RMA remains finishable while every other source-free row is rejected even if backdated.",
       "covers": ["create_return", "approve_return", "receive_return", "issue_return_credit", "void_order", "cancel_order", "get_customer_statement", "unapply_credit_memo"]
     },
+    "cancel_return": {
+      "chain": "smoke-cancel-return-chain.sql",
+      "description": "Return cancellation lifecycle chain: create_return -> approve_return -> receive_return, then active soft-delete and hard-delete are rejected, NULL/forged cancel actors are rejected without mutation, cancel_return reverses received inventory, stamps cancellation/activity/reversal attribution, clears restocked flags, and idempotent replay creates no duplicate reversal.",
+      "covers": ["cancel_return", "create_return", "approve_return", "receive_return"]
+    },
     "batch_apply_prepayments": {
       "chain": "smoke-batch-prepay-admin-gate.sql",
       "description": "Batch-prepay boundary: active non-admin denied, forged actor denied, active admin positive control succeeds, replay is stable, blank idempotency keys are rejected by both shared helpers, and the shared transaction advisory lock is present.",
