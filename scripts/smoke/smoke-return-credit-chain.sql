@@ -2,8 +2,8 @@
 -- SMOKE TEST (rolled back by design): the CANONICAL return->credit chain
 -- ----------------------------------------------------------------------------
 -- THE CHAIN (the exact one B1 was falsely declared "fixed" without, 2026-06-09):
---   create return (direct insert - no create-RPC exists; the UI inserts
---   returns + return_items directly)
+--   create_return (server derives product, quantity ceiling, and price from
+--                  delivered order lines; caller price is ignored)
 --     -> approve_return        (requested -> approved)
 --     -> receive_return        (approved -> received; restock + inventory txn)
 --     -> issue_return_credit   (received -> credited; posted credit_memo
@@ -51,10 +51,15 @@ DECLARE
   v_admin        uuid;
   v_suffix       text := substr(md5(random()::text), 1, 8);
   v_customer_id  uuid;
+  v_other_customer_id uuid;
   v_product_id   uuid;
   v_inventory_id uuid;
   v_order_id     uuid;
+  v_order_item_1 uuid;
+  v_order_item_2 uuid;
   v_return_id    uuid;
+  v_legacy_return_id uuid;
+  v_future_unlinked_return_id uuid;
   v_credit_id    uuid;
   v_credit_id2   uuid;
   v_credit_num   text;
@@ -98,6 +103,9 @@ BEGIN
   INSERT INTO customers (farm_name)
   VALUES ('[SMOKE] Return Credit Farm ' || v_suffix)
   RETURNING id INTO v_customer_id;
+  INSERT INTO customers (farm_name)
+  VALUES ('[SMOKE] Wrong Return Credit Farm ' || v_suffix)
+  RETURNING id INTO v_other_customer_id;
 
   INSERT INTO products (product_name)
   VALUES ('[SMOKE] RCC Herbicide ' || v_suffix)
@@ -117,19 +125,100 @@ BEGIN
   VALUES ('SMK-RCC-' || v_suffix, v_customer_id, v_admin)
   RETURNING id INTO v_order_id;
 
-  -- The return itself: no create-RPC exists; mirror the UI's direct insert.
-  -- status defaults 'requested'; 'overstock' is in returns_reason_check;
-  -- requested_by FKs auth.users (a real profile id satisfies it).
-  INSERT INTO returns (return_number, order_id, customer_id, reason, requested_by)
-  VALUES ('SMK-RCC-RET-' || v_suffix, v_order_id, v_customer_id, 'overstock', v_admin)
-  RETURNING id INTO v_return_id;
+  INSERT INTO order_items (
+    order_id, product_id, product_name, price_per_unit, total_units_needed,
+    unit_size, total_price, quantity_delivered, quantity_remaining
+  ) VALUES (
+    v_order_id, v_product_id, '[SMOKE] RCC Herbicide ' || v_suffix,
+    10, 10, 'gal', 100, 10, 0
+  ) RETURNING id INTO v_order_item_1;
+  INSERT INTO order_items (
+    order_id, product_id, product_name, price_per_unit, total_units_needed,
+    unit_size, total_price, quantity_delivered, quantity_remaining
+  ) VALUES (
+    v_order_id, v_product_id, '[SMOKE] RCC Herbicide ' || v_suffix,
+    10, 5, 'gal', 50, 5, 0
+  ) RETURNING id INTO v_order_item_2;
 
-  -- Two restockable lines: 10 @ $10.00 + 5 @ $10.00 = $150.00 credit
-  INSERT INTO return_items (return_id, product_id, product_name, quantity,
-    unit, unit_price_cents, extended_cents, condition, restock, sort_order)
-  VALUES
-    (v_return_id, v_product_id, '[SMOKE] RCC Herbicide ' || v_suffix, 10, 'gal', 1000, 10000, 'unopened', true, 0),
-    (v_return_id, v_product_id, '[SMOKE] RCC Herbicide ' || v_suffix, 5,  'gal', 1000, 5000,  'unopened', true, 1);
+  -- A void already restores delivered inventory. The return path must reject
+  -- that order or receiving the return could restore the same stock twice.
+  PERFORM set_config('app.admin_override', 'true', true);
+  UPDATE orders SET status = 'voided' WHERE id = v_order_id;
+  PERFORM set_config('app.admin_override', 'false', true);
+  BEGIN
+    PERFORM create_return(
+      jsonb_build_object(
+        'customer_id', v_customer_id, 'order_id', v_order_id,
+        'reason', 'overstock'
+      ),
+      jsonb_build_array(jsonb_build_object(
+        'order_item_id', v_order_item_1, 'quantity', 1,
+        'condition', 'unopened', 'restock', true
+      )),
+      'smk-rcc-' || v_suffix || '-voided-create'
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: return was created from a voided order';
+  EXCEPTION WHEN OTHERS THEN
+    v_reason := SQLERRM;
+    IF v_reason LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_reason NOT LIKE 'RETURN_SOURCE_ORDER_INACTIVE%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: expected inactive-order create rejection, got %', v_reason;
+    END IF;
+  END;
+  PERFORM set_config('app.admin_override', 'true', true);
+  UPDATE orders SET status = 'confirmed' WHERE id = v_order_id;
+  PERFORM set_config('app.admin_override', 'false', true);
+
+  -- Caller-supplied product/price fields are deliberately false. The RPC must
+  -- ignore them and derive two restockable lines worth $150 from the order.
+  v_res := create_return(
+    jsonb_build_object(
+      'customer_id', v_customer_id, 'order_id', v_order_id,
+      'reason', 'overstock'
+    ),
+    jsonb_build_array(
+      jsonb_build_object(
+        'order_item_id', v_order_item_1, 'product_id', gen_random_uuid(),
+        'quantity', 10, 'unit_price_cents', 1,
+        'condition', 'unopened', 'restock', true, 'sort_order', 0
+      ),
+      jsonb_build_object(
+        'order_item_id', v_order_item_2, 'product_id', gen_random_uuid(),
+        'quantity', 5, 'unit_price_cents', 1,
+        'condition', 'unopened', 'restock', true, 'sort_order', 1
+      )
+    ),
+    'smk-rcc-' || v_suffix || '-create'
+  );
+  v_return_id := (v_res->>'return_id')::uuid;
+  IF v_return_id IS NULL OR COALESCE((v_res->>'item_count')::int, 0) <> 2 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: create_return returned %', v_res;
+  END IF;
+  SELECT count(*) INTO v_n
+  FROM return_items
+  WHERE return_id = v_return_id
+    AND product_id = v_product_id
+    AND unit_price_cents = 1000
+    AND extended_cents IN (10000, 5000)
+    AND order_item_id IN (v_order_item_1, v_order_item_2);
+  IF v_n <> 2 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: create_return did not preserve authoritative order-line source (rows=%)', v_n;
+  END IF;
+
+  BEGIN
+    UPDATE returns SET customer_id = v_other_customer_id WHERE id = v_return_id;
+    RAISE EXCEPTION 'SMOKE_FAIL: return customer source was mutable';
+  EXCEPTION WHEN OTHERS THEN
+    v_reason := SQLERRM;
+    IF v_reason LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_reason NOT LIKE 'RETURN_SOURCE_IMMUTABLE%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: expected immutable return-source rejection, got %', v_reason;
+    END IF;
+  END;
+  SELECT customer_id INTO v_uuid FROM returns WHERE id = v_return_id;
+  IF v_uuid IS DISTINCT FROM v_customer_id THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: rejected customer retarget changed return source to %', v_uuid;
+  END IF;
 
   -- --------------------------------------------------------------------
   -- 2. approve_return: requested -> approved
@@ -143,6 +232,10 @@ BEGIN
   IF v_status <> 'approved' THEN
     RAISE EXCEPTION 'SMOKE_FAIL: return status after approve = %, expected approved', v_status;
   END IF;
+
+  PERFORM set_config('app.admin_override', 'true', true);
+  UPDATE orders SET status = 'partially_fulfilled' WHERE id = v_order_id;
+  PERFORM set_config('app.admin_override', 'false', true);
 
   -- --------------------------------------------------------------------
   -- 3. receive_return: approved -> received; restock 15 units
@@ -164,11 +257,100 @@ BEGIN
   IF v_n <> 2 THEN
     RAISE EXCEPTION 'SMOKE_FAIL: expected 2 ''returned'' inventory_transactions, found %', v_n;
   END IF;
+  SELECT received_by INTO v_by FROM returns WHERE id = v_return_id;
+  IF v_by IS DISTINCT FROM v_admin THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: received return actor = %, expected %', v_by, v_admin;
+  END IF;
+  SELECT count(*) INTO v_n FROM inventory_transactions
+  WHERE product_id = v_product_id
+    AND transaction_type = 'returned'
+    AND performed_by IS DISTINCT FROM v_admin;
+  IF v_n <> 0 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: % returned inventory transaction(s) lost actor attribution', v_n;
+  END IF;
   SELECT count(*) INTO v_n FROM return_items
   WHERE return_id = v_return_id AND restocked = false;
   IF v_n <> 0 THEN
     RAISE EXCEPTION 'SMOKE_FAIL: % return_items still flagged restocked=false after receive', v_n;
   END IF;
+
+  -- Terminal order paths must refuse every received return, even if line flags
+  -- say non-restockable/not-restocked. Otherwise void restores delivered stock
+  -- or cancel strands the return without a valid credit source.
+  UPDATE return_items
+     SET restock = false, restocked = false
+   WHERE return_id = v_return_id;
+  BEGIN
+    PERFORM void_order(
+      v_order_id, v_admin, 'smoke restocked-return guard',
+      'smk-rcc-' || v_suffix || '-void-after-receive'
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: order with a received non-restock return was voided';
+  EXCEPTION WHEN OTHERS THEN
+    v_reason := SQLERRM;
+    IF v_reason LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_reason NOT LIKE 'ORDER_HAS_RECEIVED_RETURN%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: expected received-return void rejection, got %', v_reason;
+    END IF;
+  END;
+  BEGIN
+    PERFORM cancel_order(
+      v_order_id, v_admin, 'smk-rcc-' || v_suffix || '-cancel-after-receive'
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: order with a received non-restock return was cancelled';
+  EXCEPTION WHEN OTHERS THEN
+    v_reason := SQLERRM;
+    IF v_reason LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_reason NOT LIKE 'ORDER_HAS_RECEIVED_RETURN%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: expected received-return cancel rejection, got %', v_reason;
+    END IF;
+  END;
+  UPDATE return_items
+     SET restock = true, restocked = true
+   WHERE return_id = v_return_id;
+  UPDATE orders SET status = 'fulfilled' WHERE id = v_order_id;
+  SELECT quantity_available INTO v_qty FROM inventory WHERE id = v_inventory_id;
+  IF v_qty IS DISTINCT FROM 115 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: rejected order void changed inventory to %, expected 115', v_qty;
+  END IF;
+
+  -- A return may be received before its source order is later voided. Credit
+  -- issuance must re-check the order and refuse that now-invalid money path.
+  PERFORM set_config('app.admin_override', 'true', true);
+  UPDATE orders SET status = 'voided' WHERE id = v_order_id;
+  PERFORM set_config('app.admin_override', 'false', true);
+  BEGIN
+    PERFORM issue_return_credit(v_return_id, v_admin, 'smk-rcc-' || v_suffix || '-voided-credit');
+    RAISE EXCEPTION 'SMOKE_FAIL: return credit was issued after source order void';
+  EXCEPTION WHEN OTHERS THEN
+    v_reason := SQLERRM;
+    IF v_reason LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_reason NOT LIKE 'RETURN_SOURCE_ORDER_INACTIVE%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: expected inactive-order credit rejection, got %', v_reason;
+    END IF;
+  END;
+  PERFORM set_config('app.admin_override', 'true', true);
+  UPDATE orders SET status = 'fulfilled' WHERE id = v_order_id;
+  PERFORM set_config('app.admin_override', 'false', true);
+
+  -- A legacy/service-role price mutation must be caught before the credit RPC
+  -- delegates to the historical implementation that sums extended_cents.
+  UPDATE return_items
+     SET unit_price_cents = 1, extended_cents = 10
+   WHERE return_id = v_return_id AND order_item_id = v_order_item_1;
+  BEGIN
+    PERFORM issue_return_credit(v_return_id, v_admin, 'smk-rcc-' || v_suffix || '-tampered');
+    RAISE EXCEPTION 'SMOKE_FAIL: tampered return price was credited';
+  EXCEPTION WHEN OTHERS THEN
+    v_reason := SQLERRM;
+    IF v_reason LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_reason NOT LIKE 'RETURN_SOURCE_NOT_VERIFIED%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: expected RETURN_SOURCE_NOT_VERIFIED, got %', v_reason;
+    END IF;
+  END;
+  UPDATE return_items
+     SET unit_price_cents = 1000, extended_cents = 10000
+   WHERE return_id = v_return_id AND order_item_id = v_order_item_1;
 
   -- --------------------------------------------------------------------
   -- 4. issue_return_credit: received -> credited; posted credit_memo
@@ -309,6 +491,60 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_FAIL: statement after re-issue: credit_rows=%, total_rows=%, sum=% (expected 1/1/-15000)',
       v_credit_rows, v_total_rows, v_stmt_sum;
   END IF;
+
+  -- --------------------------------------------------------------------
+  -- 9. One-time legacy compatibility is pinned to the exact production RMA
+  --    and immutable line values. Any other source-free row -- even one
+  --    backdated before the hardening boundary -- must remain blocked.
+  -- --------------------------------------------------------------------
+  v_legacy_return_id := '0cb556ed-467a-4949-866d-8d9edbb09522'::uuid;
+  IF NOT EXISTS (
+    SELECT 1 FROM returns
+    WHERE id = v_legacy_return_id AND status = 'approved' AND order_id IS NULL
+  ) THEN
+    RAISE EXCEPTION 'SMOKE_SETUP: exact legacy RMA is not in the expected approved state';
+  END IF;
+
+  v_res := receive_return(
+    v_legacy_return_id, v_admin, 'smk-rcc-' || v_suffix || '-legacy-receive'
+  );
+  IF v_res->>'status' IS DISTINCT FROM 'received' THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: legacy receive returned %', v_res;
+  END IF;
+  v_res := issue_return_credit(
+    v_legacy_return_id, v_admin, 'smk-rcc-' || v_suffix || '-legacy-credit'
+  );
+  IF COALESCE((v_res->>'credit_amount_cents')::bigint, 0) <> 113955 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: legacy credit returned % (expected 113955 cents)', v_res;
+  END IF;
+
+  PERFORM set_config('app.return_rpc', 'true', true);
+  INSERT INTO returns (
+    return_number, customer_id, order_id, reason, requested_by, status,
+    approved_by, approved_at, created_at
+  ) VALUES (
+    'SMK-FORGED-LEGACY-' || v_suffix, v_customer_id, NULL, 'overstock', v_admin,
+    'approved', v_admin, now(), timestamptz '2026-04-30 20:48:18+00'
+  ) RETURNING id INTO v_future_unlinked_return_id;
+  INSERT INTO return_items (
+    return_id, order_item_id, product_id, product_name, quantity, unit,
+    unit_price_cents, extended_cents, condition, restock
+  ) VALUES (
+    v_future_unlinked_return_id, NULL, v_product_id, '[SMOKE] forbidden source-free line',
+    1, 'gal', 7597, 7597, 'unopened', true
+  );
+  BEGIN
+    PERFORM receive_return(
+      v_future_unlinked_return_id, v_admin, 'smk-rcc-' || v_suffix || '-forged-legacy-unlinked'
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: new source-free return was received';
+  EXCEPTION WHEN OTHERS THEN
+    v_reason := SQLERRM;
+    IF v_reason LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_reason NOT LIKE 'RETURN_SOURCE_NOT_VERIFIED%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: expected source-free receive rejection, got %', v_reason;
+    END IF;
+  END;
 
   -- --------------------------------------------------------------------
   -- Full chain passed - force rollback of everything above.

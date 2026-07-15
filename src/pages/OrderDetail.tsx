@@ -30,6 +30,7 @@ import RelatedNotes from '../components/team/RelatedNotes';
 import TransactionThread from '../components/ui/TransactionThread';
 import { downloadOrderSummaryPdf } from '../lib/orderSummaryPdf';
 import { downloadPickListPdf } from '../lib/orderPickListPdf';
+import { buildInvoicePostTargets } from '../lib/invoiceBatchPosting';
 import type { OrderSummaryData } from '../lib/orderSummaryPdf';
 import type { PickListData } from '../lib/orderPickListPdf';
 import type { Order, OrderItem, OrderShare, OrderItemFieldAllocation, Customer, Invoice, Delivery, Product, LinkedEntityType } from '../types';
@@ -63,8 +64,8 @@ export default function OrderDetail() {
   const splitInvoiceIdem = useIdempotencyKey('create_split_invoices_from_order', profile?.id || '');
   // Latest order id the route is showing — older in-flight fetches bail (M6 stale guard).
   const activeOrderIdRef = useRef<string | undefined>(undefined);
-  // Per-invoice idempotency keys for "post all drafts" (M7) — keyed ref cache so a
-  // network-retry reuses each invoice's key and the server dedup matches.
+  // Per-target idempotency keys for "post all drafts" (M7) — keyed by standalone
+  // invoice or split group so a network retry reuses the server dedup boundary.
   const postDraftKeysRef = useRef<Record<string, string>>({});
   const [order, setOrder] = useState<Order | null>(null);
   const [items, setItems] = useState<OrderItem[]>([]);
@@ -880,11 +881,13 @@ export default function OrderDetail() {
   };
 
   // #4 billing cockpit: post every draft/unposted invoice on this order in one
-  // action. Each post_invoice is its own txn; PRICING_INCOMPLETE / period errors
-  // are surfaced per-invoice without aborting the rest.
+  // action. Standalone invoices post independently; split siblings post as one
+  // atomic group. PRICING_INCOMPLETE / period errors remain isolated per target.
   const handlePostAllDrafts = async () => {
+    if (!profile) { toast('error', 'You must be signed in to post invoices.'); return; }
     const drafts = invoices.filter((i) => i.status === 'draft' || i.status === 'unposted');
     if (drafts.length === 0) { toast('warning', 'No draft invoices to post.'); return; }
+    const targets = buildInvoicePostTargets(drafts);
     setPostingAll(true);
     let posted = 0;
     let alreadyPosted = 0;
@@ -892,34 +895,47 @@ export default function OrderDetail() {
     // Codex round-6 P2: post_invoice's status guard is NOT a silent no-op — it RAISES
     // on an already-posted invoice. So a lost response (post committed server-side, but
     // the client got a network error) would make a retry report a false failure. Guard
-    // each post with a fresh status re-check: if a prior attempt already posted this
-    // invoice, skip it (count as done) instead of re-posting and raising. This makes
-    // the bulk action safely retryable on ambiguous network failures. The postingAll
-    // loading state still blocks concurrent double-clicks.
-    for (const inv of drafts) {
+    // each target with a fresh status re-check: if a prior attempt already posted
+    // it, skip it (count as done) instead of raising. The idempotency cache is keyed
+    // to the exact standalone/group RPC boundary.
+    for (const target of targets) {
       try {
-        const { data: cur, error: curErr } = await supabase
-          .from('invoices').select('status').eq('id', inv.id).single();
+        const statusQuery = supabase.from('invoices').select('status').is('deleted_at', null);
+        const { data: currentRows, error: curErr } = target.operation === 'post_invoice_group'
+          ? await statusQuery.eq('invoice_group_id', target.invoiceGroupId!)
+          : await statusQuery.eq('id', target.invoiceId!);
         if (curErr) throw curErr;
-        if (cur && cur.status !== 'draft' && cur.status !== 'unposted') {
-          alreadyPosted++;            // a prior attempt already posted it — done, not an error
+        if (currentRows && currentRows.length > 0 && currentRows.every(
+          (row) => row.status !== 'draft' && row.status !== 'unposted'
+        )) {
+          alreadyPosted += target.selectedIds.length;
           continue;
         }
-        // M7: per-invoice idempotency key from a keyed ref cache so a network-retry
-        // (post committed server-side but response lost) reuses the SAME key per
-        // invoice and the server dedup matches instead of double-posting. Generated
-        // once per invoice; the cache resets on a clean run (below).
-        if (!postDraftKeysRef.current[inv.id]) {
-          postDraftKeysRef.current[inv.id] = generateIdempotencyKey('post_invoice', `${profile?.id || ''}:${inv.id}`);
+        if (!postDraftKeysRef.current[target.key]) {
+          postDraftKeysRef.current[target.key] = generateIdempotencyKey(
+            target.operation,
+            `${profile.id}:${target.scopeId}`,
+          );
         }
-        const postKey = postDraftKeysRef.current[inv.id];
-        // post_invoice RETURNS void → no result to assert. Use the canonical
-        // void-RPC pattern (.throwOnError(), no `=` capture).
-        await supabase.rpc('post_invoice', { p_invoice_id: inv.id, p_idempotency_key: postKey }).throwOnError();
-        posted++;
+        if (target.operation === 'post_invoice_group') {
+          const { data, error } = await supabase.rpc('post_invoice_group', {
+            p_invoice_group_id: target.invoiceGroupId!,
+            p_performed_by: profile.id,
+            p_idempotency_key: postDraftKeysRef.current[target.key],
+          });
+          if (error) throw error;
+          assertRpcResult(data, 'post_invoice_group');
+        } else {
+          await supabase.rpc('post_invoice', {
+            p_invoice_id: target.invoiceId!,
+            p_idempotency_key: postDraftKeysRef.current[target.key],
+          }).throwOnError();
+        }
+        posted += target.selectedIds.length;
+        delete postDraftKeysRef.current[target.key];
       } catch (err) {
-        if (hasRpcCode(err, RpcErrorCodes.PRICING_INCOMPLETE)) errors.push(`${inv.invoice_number}: needs pricing first`);
-        else errors.push(`${inv.invoice_number}: ${err instanceof Error ? err.message : 'failed to post'}`);
+        if (hasRpcCode(err, RpcErrorCodes.PRICING_INCOMPLETE)) errors.push(`${target.label}: needs pricing first`);
+        else errors.push(`${target.label}: ${err instanceof Error ? err.message : 'failed to post'}`);
       }
     }
     if (alreadyPosted > 0 && posted === 0 && errors.length === 0) {

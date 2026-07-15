@@ -214,6 +214,24 @@ describe('FieldApplicationInvoice — new invoice (no id)', () => {
     expect(Array.isArray(args.p_chemicals)).toBe(true);
   });
 
+  it('disables invoice inputs while Save is in flight', async () => {
+    let resolveSave!: (value: { data: { invoice_ids: string[]; invoice_group_id: null }; error: null }) => void;
+    mockRpc.mockImplementationOnce(() => new Promise((resolve) => { resolveSave = resolve; }));
+    await renderPage();
+
+    const invoiceNumberInput = screen.getByPlaceholderText('Auto-generated');
+    fireEvent.change(invoiceNumberInput, { target: { value: 'FA-DRAFT' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/i }));
+
+    await waitFor(() => expect(invoiceNumberInput).toBeDisabled());
+    expect(screen.getByRole('button', { name: /^Save$/i })).toBeDisabled();
+
+    await act(async () => {
+      resolveSave({ data: { invoice_ids: ['new-inv-1'], invoice_group_id: null }, error: null });
+    });
+    await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith('/invoices/field-app/new-inv-1', { replace: true }));
+  });
+
   it('navigates to the new invoice URL after Save returns invoice_ids', async () => {
     mockRpc.mockResolvedValueOnce({
       data: { invoice_ids: ['new-inv-1'], invoice_group_id: null },

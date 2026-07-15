@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo , useCallback } from 'react';
+import { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import { Plus, CheckCircle, XCircle, ArrowDownToLine, DollarSign, Download, FileText, Trash2, Ban } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -21,7 +21,7 @@ import { exportToCSV } from '../lib/csvExport';
 import { downloadReportPdf } from '../lib/reportPdf';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { logActivity } from '../lib/activityLogger';
-import type { Return, ReturnItem, Customer, Product, Order, ReturnStatus, ReturnReason, ReturnItemCondition } from '../types';
+import type { Return, ReturnItem, Customer, Order, ReturnStatus, ReturnReason, ReturnItemCondition } from '../types';
 
 type ReturnRow = Return & {
   customer_name: string;
@@ -49,6 +49,7 @@ const STATUS_BADGE: Record<ReturnStatus, { variant: 'info' | 'warning' | 'succes
 };
 
 interface EditItem {
+  order_item_id: string;
   product_id: string;
   product_name: string;
   quantity: number;
@@ -57,6 +58,18 @@ interface EditItem {
   condition: ReturnItemCondition;
   restock: boolean;
   notes: string;
+  max_quantity: number;
+}
+
+interface ReturnableOrderItem {
+  id: string;
+  product_id: string;
+  product_name: string;
+  price_per_unit: number;
+  quantity_delivered: number;
+  quantity_returnable: number;
+  unit_size: string | null;
+  section_name: string | null;
 }
 
 export default function Returns() {
@@ -75,7 +88,6 @@ export default function Returns() {
   // Create modal
   const [showCreate, setShowCreate] = useState(false);
   const [customers, setCustomers] = useState<Customer[]>([]);
-  const [products, setProducts] = useState<Product[]>([]);
   const [creating, setCreating] = useState(false);
   const [newForm, setNewForm] = useState({
     customer_id: '',
@@ -86,6 +98,9 @@ export default function Returns() {
   });
   const [newItems, setNewItems] = useState<EditItem[]>([]);
   const [customerOrders, setCustomerOrders] = useState<Order[]>([]);
+  const [orderItems, setOrderItems] = useState<ReturnableOrderItem[]>([]);
+  const customerOrdersRequestRef = useRef(0);
+  const orderItemsRequestRef = useRef(0);
 
   // Detail modal
   const [showDetail, setShowDetail] = useState(false);
@@ -153,15 +168,60 @@ export default function Returns() {
   }, [fetchReturns]);
 
   const loadCreateData = async () => {
-    const [custRes, prodRes] = await Promise.all([
-      supabase.from('customers').select('id, farm_name, assigned_tier').eq('is_active', true).order('farm_name'),
-      supabase.from('products').select('*').eq('is_active', true).order('product_name'),
-    ]);
+    const custRes = await supabase.from('customers').select('id, farm_name, assigned_tier').eq('is_active', true).order('farm_name');
     setCustomers((custRes.data || []) as unknown as Customer[]);
-    setProducts((prodRes.data || []) as Product[]);
+  };
+
+  const loadOrderItems = async (orderId: string) => {
+    const requestId = ++orderItemsRequestRef.current;
+    setNewItems([]);
+    if (!orderId) { setOrderItems([]); return; }
+    const [itemsResult, priorReturnsResult] = await Promise.all([
+      supabase
+        .from('order_items')
+        .select('id, product_id, product_name, price_per_unit, quantity_delivered, unit_size, section_name')
+        .eq('order_id', orderId)
+        .gt('quantity_delivered', 0)
+        .order('sort_order'),
+      supabase
+        .from('returns')
+        .select('items:return_items(order_item_id, quantity)')
+        .eq('order_id', orderId)
+        .is('deleted_at', null)
+        .not('status', 'in', '("rejected","cancelled")'),
+    ]);
+    // A slower response for the previously selected order must not overwrite the
+    // product list for the order currently shown in the form.
+    if (requestId !== orderItemsRequestRef.current) return;
+    if (itemsResult.error || priorReturnsResult.error) {
+      toast('error', 'Could not determine the remaining returnable quantities');
+      setOrderItems([]);
+      return;
+    }
+    const priorQuantityByOrderItem = new Map<string, number>();
+    const priorReturns = (priorReturnsResult.data || []) as unknown as Array<{
+      items: Array<{ order_item_id: string | null; quantity: number }> | null;
+    }>;
+    for (const priorReturn of priorReturns) {
+      for (const item of priorReturn.items || []) {
+        if (!item.order_item_id) continue;
+        priorQuantityByOrderItem.set(
+          item.order_item_id,
+          (priorQuantityByOrderItem.get(item.order_item_id) || 0) + Number(item.quantity),
+        );
+      }
+    }
+    const returnableItems = ((itemsResult.data || []) as Omit<ReturnableOrderItem, 'quantity_returnable'>[])
+      .map((item) => ({
+        ...item,
+        quantity_returnable: Math.max(0, Number(item.quantity_delivered) - (priorQuantityByOrderItem.get(item.id) || 0)),
+      }))
+      .filter((item) => item.quantity_returnable > 0);
+    setOrderItems(returnableItems);
   };
 
   const loadCustomerOrders = async (customerId: string) => {
+    const requestId = ++customerOrdersRequestRef.current;
     if (!customerId) {
       setCustomerOrders([]);
       return;
@@ -173,21 +233,25 @@ export default function Returns() {
       .in('status', ['confirmed', 'partially_fulfilled', 'fulfilled'])
       .is('deleted_at', null)
       .order('order_date', { ascending: false });
+    if (requestId !== customerOrdersRequestRef.current) return;
     setCustomerOrders((data || []) as Order[]);
   };
 
   const openCreate = () => {
+    customerOrdersRequestRef.current += 1;
+    orderItemsRequestRef.current += 1;
     loadCreateData();
     setNewForm({ customer_id: '', order_id: '', reason: 'defective', reason_notes: '', notes: '' });
     setNewItems([]);
     setCustomerOrders([]);
+    setOrderItems([]);
     setShowCreate(true);
   };
 
   const addItem = () => {
     setNewItems([
       ...newItems,
-      { product_id: '', product_name: '', quantity: 1, unit: 'ea', unit_price_cents: 0, condition: 'unopened', restock: true, notes: '' },
+      { order_item_id: '', product_id: '', product_name: '', quantity: 1, unit: 'ea', unit_price_cents: 0, condition: 'unopened', restock: true, notes: '', max_quantity: 0 },
     ]);
   };
 
@@ -207,15 +271,24 @@ export default function Returns() {
       toast('error', 'Please select a customer');
       return;
     }
+    if (!newForm.order_id) {
+      toast('error', 'Select the original order so quantities and credit prices can be verified');
+      return;
+    }
     if (newItems.length === 0) {
       toast('error', 'Add at least one return item');
       return;
     }
 
     // Validate all items have a product selected (prevent empty UUID)
-    const invalidItems = newItems.filter(item => !item.product_id);
+    const invalidItems = newItems.filter(item => !item.order_item_id || !item.product_id || item.quantity <= 0 || item.quantity > item.max_quantity);
     if (invalidItems.length > 0) {
       toast('error', `Please select a product for all ${invalidItems.length} item(s)`);
+      return;
+    }
+    const selectedOrderItemIds = newItems.map((item) => item.order_item_id);
+    if (new Set(selectedOrderItemIds).size !== selectedOrderItemIds.length) {
+      toast('error', 'Each delivered order item can only be returned once per return');
       return;
     }
 
@@ -233,6 +306,7 @@ export default function Returns() {
             notes: newForm.notes || null,
           },
           p_items: newItems.map((item, idx) => ({
+            order_item_id: item.order_item_id,
             product_id: item.product_id,
             product_name: item.product_name,
             quantity: item.quantity,
@@ -246,10 +320,8 @@ export default function Returns() {
           p_idempotency_key: createKey,
         });
         if (error) throw error;
-        const created = assertRpcResult<{ return_id: string; return_number: string; item_count: number }>(data, 'create_return');
+        assertRpcResult<{ return_id: string; return_number: string; item_count: number }>(data, 'create_return');
         createIdem.resetKey();
-
-        await logActivity({ event: 'return_requested', description: `Return ${created.return_number} requested for ${newItems.length} product(s)`, performedBy: profile.id, entityType: 'return', entityId: created.return_id, customerId: newForm.customer_id });
       },
       toast,
       setLoading: setCreating,
@@ -641,7 +713,16 @@ export default function Returns() {
       </Card>
 
       {/* Create Return Modal */}
-      <Modal open={showCreate} onClose={() => setShowCreate(false)} title="New Return / RMA" size="large">
+      <Modal
+        open={showCreate}
+        onClose={() => {
+          customerOrdersRequestRef.current += 1;
+          orderItemsRequestRef.current += 1;
+          setShowCreate(false);
+        }}
+        title="New Return / RMA"
+        size="large"
+      >
         <div className="space-y-4">
           <div className="grid grid-cols-2 gap-4">
             <div>
@@ -650,6 +731,9 @@ export default function Returns() {
                 value={newForm.customer_id}
                 onChange={(e) => {
                   setNewForm({ ...newForm, customer_id: e.target.value, order_id: '' });
+                  orderItemsRequestRef.current += 1;
+                  setNewItems([]);
+                  setOrderItems([]);
                   loadCustomerOrders(e.target.value);
                 }}
                 className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
@@ -661,13 +745,16 @@ export default function Returns() {
               </select>
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Related Order (Optional)</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Original Order *</label>
               <select
                 value={newForm.order_id}
-                onChange={(e) => setNewForm({ ...newForm, order_id: e.target.value })}
+                onChange={(e) => {
+                  setNewForm({ ...newForm, order_id: e.target.value });
+                  loadOrderItems(e.target.value);
+                }}
                 className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
               >
-                <option value="">No linked order</option>
+                <option value="">Select Order</option>
                 {customerOrders.map((o) => (
                   <option key={o.id} value={o.id}>{o.order_number} ({new Date(o.order_date + 'T00:00:00').toLocaleDateString()})</option>
                 ))}
@@ -702,7 +789,7 @@ export default function Returns() {
           <div>
             <div className="flex items-center justify-between mb-2">
               <label className="text-sm font-medium text-gray-700">Return Items</label>
-              <Button size="sm" variant="secondary" onClick={addItem}>
+              <Button size="sm" variant="secondary" onClick={addItem} disabled={!newForm.order_id}>
                 <Plus className="w-3 h-3" /> Add Item
               </Button>
             </div>
@@ -710,34 +797,40 @@ export default function Returns() {
               {newItems.map((item, idx) => (
                 <div key={idx} className="flex gap-2 items-center p-2 bg-gray-50 rounded-lg">
                   <select
-                    value={item.product_id}
+                    value={item.order_item_id}
                     onChange={(e) => {
-                      const p = products.find((pr) => pr.id === e.target.value);
+                      const p = orderItems.find((orderItem) => orderItem.id === e.target.value);
                       const updated = [...newItems];
                       updated[idx] = {
                         ...updated[idx],
-                        product_id: e.target.value,
+                        order_item_id: e.target.value,
+                        product_id: p?.product_id || '',
                         product_name: p?.product_name || '',
+                        unit: p?.unit_size || 'ea',
+                        unit_price_cents: p ? Math.round(Number(p.price_per_unit) * 100) : 0,
+                        max_quantity: p ? p.quantity_returnable : 0,
                       };
-                      if (p) {
-                        const selectedCust = customers.find((c) => c.id === newForm.customer_id);
-                        const tier = selectedCust?.assigned_tier || 1;
-                        const tierPrice = tier === 3 ? p.tier3_price : tier === 2 ? p.tier2_price : p.tier1_price;
-                        updated[idx].unit_price_cents = Math.round((tierPrice || p.tier1_price || 0) * 100);
-                      }
                       setNewItems(updated);
                     }}
                     className="flex-1 px-2 py-1.5 text-sm border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green"
                   >
                     <option value="">Select Product</option>
-                    {products.map((p) => (
-                      <option key={p.id} value={p.id}>{p.product_name}</option>
-                    ))}
+                    {orderItems
+                      .filter((p) => (
+                        p.id === item.order_item_id
+                        || !newItems.some((other, otherIdx) => otherIdx !== idx && other.order_item_id === p.id)
+                      ))
+                      .map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.product_name} — {p.section_name || 'No section'} — ${Number(p.price_per_unit).toFixed(2)}/{p.unit_size || 'ea'} (returnable {p.quantity_returnable} of {p.quantity_delivered})
+                      </option>
+                      ))}
                   </select>
                   <input
                     type="number"
                     step="0.01"
                     min="0"
+                    max={item.max_quantity || undefined}
                     value={item.quantity || ''}
                     onChange={(e) => updateItem(idx, 'quantity', parseFloat(e.target.value) || 0)}
                     placeholder="Qty"

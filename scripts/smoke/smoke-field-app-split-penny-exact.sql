@@ -17,6 +17,9 @@
 --   P4  — ACRE conservation: SUM(per-customer share acres) == total applied acres.
 --   P5  — IDEMPOTENT: re-running save with the SAME idempotency key does NOT
 --          create a second set of invoices (no double-split on a double-click).
+--   P6  — SAVE/POST SERIALIZATION: the public save owns a row-lock/recheck
+--          wrapper, and a save attempted after real group posting is rejected
+--          before any invoice child rows are rebuilt.
 --
 -- Ends in RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK'.
 -- ============================================================================
@@ -41,6 +44,11 @@ DECLARE
   v_locations jsonb;
   v_chemicals jsonb;
   v_inv_count int;
+  v_item_count int;
+  v_item_count_after int;
+  v_err text;
+  v_save_source text;
+  v_post_group_source text;
 BEGIN
   SELECT id INTO v_admin FROM profiles WHERE role='admin' AND is_active=true ORDER BY created_at LIMIT 1;
   IF v_admin IS NULL THEN RAISE EXCEPTION 'SMOKE_SETUP: no admin'; END IF;
@@ -184,6 +192,76 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_FAIL(P5): double-split created % invoices for the two customers (exp 2)', v_inv_count;
   END IF;
 
-  RAISE NOTICE 'SMOKE OK: 2 invoices, grand=% c, sum=% c, shares=% c, acres=%, idempotent', v_grand, v_sum, v_share_sum, v_acres;
+  -- P6: use the real posting path, then prove a later save is rejected without
+  -- deleting/rebuilding any invoice lines. The catalog assertions pin the
+  -- concurrency mechanism itself because a single SQL session cannot interleave
+  -- two transactions deterministically.
+  SELECT prosrc INTO v_save_source
+  FROM pg_proc
+  WHERE oid = 'public.save_field_app_invoice(uuid,jsonb,jsonb,jsonb,uuid,uuid,text)'::regprocedure;
+  IF v_save_source NOT LIKE '%FOR UPDATE%'
+     OR v_save_source NOT LIKE '%LIMIT 1%'
+     OR v_save_source NOT LIKE '%v_locked_status NOT IN%'
+     OR v_save_source NOT LIKE '%_save_field_app_invoice_impl_20260714%' THEN
+    RAISE EXCEPTION 'SMOKE_FAIL(P6): public save lost its lock/recheck wrapper';
+  END IF;
+  IF has_function_privilege(
+       'authenticated',
+       'public._save_field_app_invoice_impl_20260714(uuid,jsonb,jsonb,jsonb,uuid,uuid,text)',
+       'EXECUTE'
+     ) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL(P6): authenticated can bypass the save lock wrapper';
+  END IF;
+  SELECT prosrc INTO v_post_group_source
+  FROM pg_proc
+  WHERE oid = 'public.post_invoice_group(uuid,uuid,text)'::regprocedure;
+  IF v_post_group_source NOT LIKE '%LIMIT 1%'
+     OR v_post_group_source NOT LIKE '%ORDER BY id%'
+     OR v_post_group_source NOT LIKE '%FOR UPDATE%'
+     OR v_post_group_source NOT LIKE '%check_idempotency%'
+     OR v_post_group_source NOT LIKE '%_post_invoice_impl_20260714%' THEN
+    RAISE EXCEPTION 'SMOKE_FAIL(P6): group post lost anchor/ordered locking';
+  END IF;
+
+  BEGIN
+    PERFORM post_invoice(v_ids[1], 'smoke-split-direct-post-' || v_sfx);
+    RAISE EXCEPTION 'SMOKE_FAIL(P6): one split-group member posted directly';
+  EXCEPTION WHEN OTHERS THEN
+    v_err := SQLERRM;
+    IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_err NOT LIKE 'GROUP_POST_REQUIRED%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL(P6): wrong direct group-member post error: %', v_err;
+    END IF;
+  END;
+
+  PERFORM post_invoice_group(v_group, v_admin, 'smoke-split-post-' || v_sfx);
+  SELECT count(*) INTO v_item_count
+  FROM invoice_items
+  WHERE invoice_id = ANY(v_ids);
+
+  BEGIN
+    PERFORM save_field_app_invoice(
+      v_ids[1],
+      jsonb_build_object('invoice_date', CURRENT_DATE::text, 'header_notes', '[SMOKE] late save'),
+      v_locations, v_chemicals, v_admin, NULL, 'smoke-split-late-save-' || v_sfx
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL(P6): save succeeded after group posting';
+  EXCEPTION WHEN OTHERS THEN
+    v_err := SQLERRM;
+    IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_err NOT LIKE 'Cannot edit field app invoice with status:%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL(P6): wrong post-then-save error: %', v_err;
+    END IF;
+  END;
+
+  SELECT count(*) INTO v_item_count_after
+  FROM invoice_items
+  WHERE invoice_id = ANY(v_ids);
+  IF v_item_count_after IS DISTINCT FROM v_item_count THEN
+    RAISE EXCEPTION 'SMOKE_FAIL(P6): rejected late save changed invoice items from % to %',
+      v_item_count, v_item_count_after;
+  END IF;
+
+  RAISE NOTICE 'SMOKE OK: 2 invoices, grand=% c, sum=% c, shares=% c, acres=%, idempotent, save/post locked', v_grand, v_sum, v_share_sum, v_acres;
   RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK';
 END $smoke$;

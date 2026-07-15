@@ -1207,15 +1207,8 @@ export default function QuoteBuilder() {
           await loadActivePlannedHolds(result);
         }
       } else if (!isPlanned && wasPlanned) {
-        // Release holds when toggled off — zero rows is valid (no holds may exist)
-        const releaseResult = await supabase.from('inventory_holds')
-          .update({ is_active: false, updated_at: new Date().toISOString() })
-          .eq('source_id', result)
-          .eq('is_active', true)
-          .select();
-        // Zero rows is valid (no holds may exist), so only check for actual errors
-        if (releaseResult.error) toast('error', 'Failed to release inventory holds: ' + releaseResult.error.message);
-        else if (releaseResult.data && releaseResult.data.length > 0) checkMutationResult(releaseResult, 'Release inventory holds');
+        // save_quote synchronizes planned holds in the same database transaction;
+        // no second client-side table mutation or not-yet-live RPC is needed.
         setWasPlanned(false);
         setActivePlannedHolds([]);
       }

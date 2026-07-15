@@ -1394,6 +1394,10 @@ export default function FieldApplicationInvoice() {
 
   const performSave = async (overrideReasonForAudit?: string) => {
     if (!profile) return;
+    if (fetchingWeather !== null) {
+      toast('error', 'Wait for Get Weather to finish before saving.');
+      return;
+    }
     // [B1.1] Never bill 0 / blank applied acres. The server rejects it
     // (ZERO_APPLIED_ACRES); block here too with a clear message so the user fixes
     // it before the round-trip rather than seeing a raw RPC error. (The empty-
@@ -1617,7 +1621,10 @@ export default function FieldApplicationInvoice() {
       if (isNew && ids[0]) {
         navigate(`/invoices/field-app/${ids[0]}`, { replace: true });
       } else {
-        fetchInvoice();
+        // Keep the form frozen until the server copy has finished hydrating.
+        // Otherwise a quick edit after the RPC but before this reload resolves
+        // can be overwritten by the older fetch response.
+        await fetchInvoice();
       }
     } catch (err) {
       Sentry.captureException(err, { tags: { rpc: 'save_field_app_invoice' } });
@@ -1629,6 +1636,19 @@ export default function FieldApplicationInvoice() {
 
   const handlePost = async () => {
     if (!profile || !id) return;
+    // Saving is a multi-step financial write (invoice, applied info, billing details).
+    // Never let Post race it or commit stale form values. The button is disabled too,
+    // but this guard also covers a queued/double-clicked handler.
+    if (saving || fetchingWeather !== null) {
+      toast('error', fetchingWeather !== null
+        ? 'Wait for the weather lookup to finish before posting.'
+        : 'Wait for the invoice save to finish before posting.');
+      return;
+    }
+    if (dirty) {
+      toast('error', 'Save all invoice changes before posting.');
+      return;
+    }
     setPosting(true);
     try {
       const key = postIdem.getKey();
@@ -1650,7 +1670,7 @@ export default function FieldApplicationInvoice() {
       }
       postIdem.resetKey();
       toast('success', invoiceGroupId ? 'Invoice group posted' : 'Invoice posted');
-      fetchInvoice();
+      await fetchInvoice();
     } catch (err) {
       Sentry.captureException(err, { tags: { rpc: invoiceGroupId ? 'post_invoice_group' : 'post_invoice' } });
       toast('error', `Post failed: ${fieldAppError(err)}`);
@@ -2283,7 +2303,20 @@ export default function FieldApplicationInvoice() {
             </Button>
           )}
           {!isNew && canPost && (
-            <Button variant="secondary" size="sm" icon={<Send className="w-4 h-4" />} onClick={() => setShowPostConfirm(true)} loading={posting} disabled={posting}>
+            <Button
+              variant="secondary"
+              size="sm"
+              icon={<Send className="w-4 h-4" />}
+              onClick={() => {
+                if (dirty) {
+                  toast('error', 'Save all invoice changes before posting.');
+                  return;
+                }
+                setShowPostConfirm(true);
+              }}
+              loading={posting}
+              disabled={posting || saving || fetchingWeather !== null}
+            >
               {invoiceGroupId ? `Post Group (${siblings.length || 1})` : 'Post'}
             </Button>
           )}
@@ -2351,7 +2384,12 @@ export default function FieldApplicationInvoice() {
             Cancel
           </Button>
           {canEdit && (
-            <Button icon={<Save className="w-4 h-4" />} onClick={handleSave} loading={saving} disabled={saving}>
+            <Button
+              icon={<Save className="w-4 h-4" />}
+              onClick={handleSave}
+              loading={saving}
+              disabled={saving || posting || fetchingWeather !== null}
+            >
               Save
             </Button>
           )}
@@ -2394,6 +2432,11 @@ export default function FieldApplicationInvoice() {
           </div>
         </Card>
       )}
+
+      {/* A save snapshots the current form into one RPC. Disable every editable
+          control until that RPC settles so a mid-flight keystroke cannot be erased
+          when the saved invoice is reloaded. Posting uses the same guard. */}
+      <fieldset disabled={saving || posting} className="contents" aria-busy={saving || posting}>
 
       {/* Phase 1: sibling banner for grouped split invoices */}
       {invoiceGroupId && siblings.length > 1 && (
@@ -3160,6 +3203,8 @@ export default function FieldApplicationInvoice() {
           </div>
         )}
       </Card>
+
+      </fieldset>
 
       <SelectLocationsModal
         isOpen={showLocationsModal}

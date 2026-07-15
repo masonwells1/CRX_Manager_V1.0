@@ -6,6 +6,11 @@
     "spec_contract": "Keys are the primary RPC under test. 'covers' lists every RPC the chain exercises - run-smoke.mjs --spec <rpc> matches keys AND covers entries, so one chain can certify several RPCs. Every migration that touches an RPC must have or extend a spec covering it."
   },
   "specs": {
+    "remaining_money_inventory_hardening": {
+      "chain": "smoke-remaining-money-inventory-hardening.sql",
+      "description": "Final money/inventory audit chain: voided orders disappear from detail, summary, gross-sales, and finance-dashboard revenue; inactive sales/admin profiles are rejected; only an active admin can use the PO over-receive flag, NULL cannot bypass the quantity ceiling, and a real admin 11-against-10 receipt succeeds; anonymous gross-sales execution and authenticated direct payment-table writes are absent. Self-contained fixtures and terminal rollback.",
+      "covers": ["get_sales_detail_report", "get_sales_summary_report", "get_gross_sales_report", "financial_dashboard_summary", "receive_po_items", "payments"]
+    },
     "stage_offline_action": {
       "chain": "smoke-offline-action-receipts.sql",
       "description": "Permanent offline receipt chain: complete_delivery and complete_job stage -> immutable canonical replay -> canonical process -> durable sanitized status -> replay without duplicate inventory/application work; actor-bound processing; owner and office status visibility; missing-target and unauthorized-action retention; deterministic state-conflict review; sanitized office queue; audited, idempotent manual resolution; RPC-only writes; grants. Self-contained fixtures and terminal rollback.",
@@ -43,8 +48,18 @@
     },
     "issue_return_credit": {
       "chain": "smoke-return-credit-chain.sql",
-      "description": "THE canonical return->credit chain (the B1/B2 class): direct-insert return -> approve_return -> receive_return (restock + inventory txns) -> issue_return_credit (posted credit_memo, credited_by stamped, both audit rows) -> idempotent replay (no double-issue) -> get_customer_statement counts the credit EXACTLY once -> unapply_credit_memo (memo voided, return back to received, total_credit_cents back to 0 NOT NULL) -> statement back to zero -> re-issue works.",
-      "covers": ["approve_return", "receive_return", "issue_return_credit", "get_customer_statement", "unapply_credit_memo"]
+      "description": "THE canonical return->credit chain: create_return derives immutable lines from delivered order items -> parent source retarget is blocked -> approve -> receive/restock -> void/cancel refuse the received return even with non-restock line flags -> issue a posted credit memo -> stable replay -> statement single-count -> unapply -> re-issue; only the exact verified production source-free RMA remains finishable while every other source-free row is rejected even if backdated.",
+      "covers": ["create_return", "approve_return", "receive_return", "issue_return_credit", "void_order", "cancel_order", "get_customer_statement", "unapply_credit_memo"]
+    },
+    "batch_apply_prepayments": {
+      "chain": "smoke-batch-prepay-admin-gate.sql",
+      "description": "Batch-prepay boundary: active non-admin denied, forged actor denied, active admin positive control succeeds, replay is stable, blank idempotency keys are rejected by both shared helpers, and the shared transaction advisory lock is present.",
+      "covers": ["batch_apply_prepayments", "check_idempotency", "save_idempotency"]
+    },
+    "complete_cycle_count": {
+      "chain": "smoke-cycle-count-concurrency-guards.sql",
+      "description": "Cycle-count complete/reverse chain: quantity changes 100->112->100, both replays are stable, lifecycle states advance correctly, and both wrappers retain inventory row locks.",
+      "covers": ["complete_cycle_count", "reverse_completed_cycle_count"]
     },
     "update_order_items": {
       "chain": "smoke-order-draw-lock.sql",
@@ -64,7 +79,7 @@
     "create_planned_holds": {
       "chain": "smoke-planned-holds-drawn-sync.sql",
       "description": "Authoritative planned-hold sync (Codex r2 #3, migration 20260611132115): active holds always equal booked − drawn per product after create_planned_holds, save_quote (Draft/Revise/Present), and restore_quote_version, with FIFO consumption so per-item expiry (needed_by+14d) follows the still-reserved tail; rebuild-after-draw no longer re-reserves drawn quantity; is_planned switched off + save releases all holds server-side.",
-      "covers": ["create_planned_holds", "_sync_planned_holds", "save_quote", "restore_quote_version", "draw_down_quote"]
+      "covers": ["create_planned_holds", "release_planned_holds", "_sync_planned_holds", "save_quote", "restore_quote_version", "draw_down_quote"]
     },
     "draw_down_quote": {
       "chain": "smoke-auth-probe-template.sql",
@@ -83,8 +98,8 @@
     },
     "save_field_app_invoice": {
       "chain": "smoke-field-app-split-penny-exact.sql",
-      "description": "Field-app parity #26 (no migration — proves the live split engine): a multi-customer field auto-splits into ONE invoice PER billing customer sharing an invoice_group_id; the split is PENNY-EXACT on an INDIVISIBLE total (price 1501c, rate 0.01, 1/3-2/3 split -> A=500c + B=1001c = 1501c odd; the per-customer pieces round independently yet sum to exactly the preview grand_total_cents — no remainder lost); invoice_shares.amount_cents ties per-customer and in total; per-customer share acres conserve to the applied acres (100.02); and an idempotent re-run (same key) returns the SAME invoice ids with no double-split.",
-      "covers": ["save_field_app_invoice", "preview_field_app_invoice_split"]
+      "description": "Field-app parity and save/post serialization: a multi-customer field auto-splits into ONE invoice PER billing customer sharing an invoice_group_id; the split is PENNY-EXACT on an INDIVISIBLE total (price 1501c, rate 0.01, 1/3-2/3 split -> A=500c + B=1001c = 1501c odd); invoice_shares and acres tie exactly; an idempotent retry creates no duplicate; save/group-post serialize on the immutable group ID before ordered row locking; and a save after real group posting is rejected before invoice lines can change.",
+      "covers": ["save_field_app_invoice", "preview_field_app_invoice_split", "post_invoice_group"]
     },
     "save_invoice": {
       "chain": "smoke-save-invoice-field-app.sql",
