@@ -1,7 +1,7 @@
 # Return INSERT Survivor — Live Apply Evidence
 
 **Date:** 2026-07-15
-**Status:** APPLIED LIVE — Supabase ledger `20260715203911` / `20260715182757_park_returns_creation_rpc_only`
+**Status:** APPLIED LIVE — checked-in migration `20260715203911_park_returns_creation_rpc_only.sql`; Supabase ledger version `20260715203911`, apply-time name `20260715182757_park_returns_creation_rpc_only`
 **Base inspected:** `c4f7b4c5` (current `origin/main`, PR #133 merge)
 
 ## Finding
@@ -10,7 +10,7 @@
 
 ## Applied migration
 
-Migration `supabase/migrations/20260715182757_park_returns_creation_rpc_only.sql`:
+Migration `supabase/migrations/20260715203911_park_returns_creation_rpc_only.sql`:
 
 - drops the known `returns_insert` policy and revokes direct `returns` INSERT from `PUBLIC`, `anon`, and `authenticated`;
 - preserves all existing `returns` UPDATE/DELETE grants and policies, leaving soft-delete/lifecycle enforcement to the existing July 15 triggers;
@@ -40,7 +40,7 @@ Disposable proof:
 
 Live post-apply verification:
 
-- Ledger row: `20260715203911` / `20260715182757_park_returns_creation_rpc_only`.
+- Ledger row: version `20260715203911`; apply-time name `20260715182757_park_returns_creation_rpc_only`.
 - `public.returns` INSERT/FOR ALL policies: `0`.
 - `anon` and `authenticated` direct `public.returns` INSERT privileges: `false`.
 - `public.return_items` INSERT/UPDATE/DELETE/FOR ALL policies: `0`.

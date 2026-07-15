@@ -1,5 +1,7 @@
--- PARKED DRAFT ONLY (2026-07-15): DO NOT APPLY without the normal migration
--- review, disposable/local database proof, and Mason's explicit apply approval.
+-- APPLIED LIVE (2026-07-15): Supabase ledger version 20260715203911 recorded
+-- this migration under name 20260715182757_park_returns_creation_rpc_only.
+-- Keep the checked-in filename on the ledger version so local reconciliation
+-- and registry high-water checks agree with live state.
 --
 -- Section 5-8 closure survivor: public.returns still had the original
 -- role-only returns_insert RLS policy plus an authenticated INSERT privilege.
@@ -16,7 +18,7 @@
 --
 -- Deliberately preserved: public.returns UPDATE/DELETE privileges and policies.
 -- The July 15 lifecycle trigger still governs allowed soft-delete and lifecycle
--- behavior, so this draft does not broaden or remove those existing paths.
+-- behavior, so this migration does not broaden or remove those existing paths.
 
 DROP POLICY IF EXISTS returns_insert ON public.returns;
 REVOKE INSERT ON TABLE public.returns FROM PUBLIC, anon, authenticated;

@@ -8,7 +8,7 @@ const read = (...parts: string[]) => readFileSync(join(root, ...parts), 'utf8').
 const migration = read(
   'supabase',
   'migrations',
-  '20260715182757_park_returns_creation_rpc_only.sql',
+  '20260715203911_park_returns_creation_rpc_only.sql',
 );
 const predicate = read(
   'scripts',
@@ -18,7 +18,7 @@ const predicate = read(
 );
 const smoke = read('scripts', 'smoke', 'smoke-return-credit-chain.sql');
 
-describe('parked return creation write boundary', () => {
+describe('applied return creation write boundary', () => {
   it('closes header INSERT without revoking guarded return UPDATE/DELETE', () => {
     const returnTableRevokes = migration
       .replace(/^--.*$/gm, '')
@@ -26,7 +26,8 @@ describe('parked return creation write boundary', () => {
       .map((statement) => statement.replace(/\s+/g, ' ').trim())
       .filter((statement) => /REVOKE/i.test(statement) && /ON TABLE public\.returns/i.test(statement));
 
-    expect(migration).toContain('PARKED DRAFT ONLY');
+    expect(migration).toContain('APPLIED LIVE (2026-07-15)');
+    expect(migration).toContain('Supabase ledger version 20260715203911');
     expect(migration).toMatch(/DROP POLICY IF EXISTS returns_insert ON public\.returns;/i);
     expect(returnTableRevokes).toEqual([
       'REVOKE INSERT ON TABLE public.returns FROM PUBLIC, anon, authenticated',
