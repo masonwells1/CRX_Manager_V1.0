@@ -10,6 +10,12 @@ Migration `20260715203911_park_returns_creation_rpc_only.sql` was applied live a
 
 ---
 
+## 2026-07-15 — U12/U13 stale-draft cleanup and RPC #40 documentation (local-only)
+
+Deleted the stale U12/U13 scratch draft folders after verifying their complete backend/frontend behavior had already shipped in `f4a23220` (`20260707010000` / `20260707011000`) and `153f0600` (`20260707020000`) respectively. Documented business-workflow review #40 as an owner wire-vs-retire decision; the orphaned `get_customer_delivery_remainders` RPC was not changed and no retirement migration was created. The no-caller `setup-blend-tickets-storage` source was retained because a same-session read-only live inventory found version 18 ACTIVE; no live undeploy occurred, and retirement is parked for a separate approved session.
+
+---
+
 ## 2026-07-15 — Registry-freshness test harness isolation
 
 The registry-freshness runtime helper and copied hook harnesses now run Git and spawned-hook probes with a Git-clean child environment. Git hooks inherit repository-local `GIT_*` context, so the harness now consults `git rev-parse --local-env-vars` and removes those bindings plus indexed `GIT_CONFIG_KEY_n` / `GIT_CONFIG_VALUE_n` entries before spawning; the runtime flag-sharing helper strips the same class before resolving worktrees. Synthetic stale-registry flags can no longer resolve against real CRX worktrees.
