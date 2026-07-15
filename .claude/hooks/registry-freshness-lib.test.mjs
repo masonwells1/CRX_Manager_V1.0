@@ -16,13 +16,19 @@ import {
   readStaleFlag,
   clearStaleFlag,
 } from "./registry-freshness-lib.mjs";
+import { scratchHookEnvironment } from "./git-test-env.mjs";
 
 let pass = 0;
 function ok(c, m) { assert.ok(c, m); pass++; }
 function eq(a, b, m) { assert.equal(a, b, m); pass++; }
 
 function git(args, cwd) {
-  return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  return execFileSync("git", args, {
+    cwd,
+    encoding: "utf8",
+    env: scratchHookEnvironment(cwd, process.env),
+    stdio: ["ignore", "pipe", "pipe"],
+  }).trim();
 }
 
 const tmpRoot = mkdtempSync(path.join(os.tmpdir(), "registry-freshness-lib-test-"));

@@ -18,15 +18,19 @@ import { fileURLToPath } from "node:url";
 import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { scratchHookEnvironment } from "./git-test-env.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 let pass = 0;
 function ok(c, m) { assert.ok(c, m); pass++; }
 
 function runCopiedHook(hooksDir, scriptName, payload) {
+  const projectDir = path.dirname(path.dirname(hooksDir));
   return spawnSync(process.execPath, [path.join(hooksDir, scriptName)], {
     input: JSON.stringify(payload),
     encoding: "utf8",
+    env: scratchHookEnvironment(projectDir),
+    cwd: projectDir,
   });
 }
 

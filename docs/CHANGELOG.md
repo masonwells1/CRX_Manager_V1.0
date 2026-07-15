@@ -4,6 +4,18 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-15 — Return creation RPC-only boundary live
+
+Migration `20260715203911_park_returns_creation_rpc_only.sql` was applied live as Supabase ledger version `20260715203911`; Supabase recorded the migration name as `20260715182757_park_returns_creation_rpc_only` because that was the apply-time name. This landed after Sol xhigh adversarial review returned `VERDICT: PASS` and disposable proof replayed the exact migration, exact return-credit smoke (`SMOKE_PASS_ROLLBACK`), and exact standing invariant. The migration removes the role-only `returns_insert` policy and external `returns` INSERT privilege so authenticated admin/sales users cannot bypass the canonical `create_return` RPC. It also revokes direct external INSERT/UPDATE/DELETE privileges on `return_items`, whose application and lifecycle writers are already privileged return RPCs. Existing `returns` UPDATE/DELETE behavior is deliberately preserved behind the July 15 lifecycle/status triggers. Post-apply live catalog checks confirmed zero return INSERT policies, no anon/authenticated direct `returns` INSERT, zero return-item mutation policies, no anon/authenticated direct return-item DML, authenticated/service-role `create_return` execution retained, anon execution denied, and the standing return invariant returned zero rows.
+
+---
+
+## 2026-07-15 — Registry-freshness test harness isolation
+
+The registry-freshness runtime helper and copied hook harnesses now run Git and spawned-hook probes with a Git-clean child environment. Git hooks inherit repository-local `GIT_*` context, so the harness now consults `git rev-parse --local-env-vars` and removes those bindings plus indexed `GIT_CONFIG_KEY_n` / `GIT_CONFIG_VALUE_n` entries before spawning; the runtime flag-sharing helper strips the same class before resolving worktrees. Synthetic stale-registry flags can no longer resolve against real CRX worktrees.
+
+---
+
 ## 2026-07-15 — Return lifecycle direct-update hardening live
 
 The Section 8 gauntlet follow-up is live as Supabase ledger version `20260715132146` (`20260715115155_harden_return_lifecycle_updates`). Return lifecycle/audit fields are now RPC-owned: direct `returns` table writes can still delete requested/rejected/cancelled rows, but active returns cannot be soft-deleted or hard-deleted, so they stay visible to terminal-order guards; request timestamp, approval, receipt, cancellation, credit, and status fields require a vetted return RPC flag or the existing scoped admin override. `approve_return` and `cancel_return` also reject NULL actor arguments instead of writing blank attribution, and a standing `returns-lifecycle-rpc-owned` invariant sweep covers the bug class.
