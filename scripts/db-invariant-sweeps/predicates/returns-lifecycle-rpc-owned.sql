@@ -6,10 +6,12 @@
 -- must also reject NULL/forged actor arguments instead of writing nullable
 -- attribution. Direct soft-delete and hard-delete must remain limited to
 -- requested/rejected/cancelled returns so active returns stay visible to
--- terminal order guards.
+-- terminal order guards. Return creation is RPC-owned too: returns must have
+-- no INSERT/FOR ALL policy and browser roles must have no INSERT privilege;
+-- return_items must have neither mutation policies nor browser-role DML.
 -- Historical catch: 2026-07-15 Live Foundation Gauntlet Section 8.
 -- Contract: EXPECT ZERO rows. Missing trigger coverage or nullable actor gates
--- are violations.
+-- are violations, as is any reopened direct return creation/item-write path.
 
 WITH trigger_guard AS (
   SELECT t.tgname,
@@ -78,4 +80,44 @@ SELECT 'cancel_return(uuid, text, uuid, text)' AS violation_key,
       AND prosrc NOT LIKE '%p_performed_by IS NOT NULL AND%'
       AND prosrc LIKE '%cancelled_by = v_actor%'
       AND prosrc LIKE '%performed_by, notes%'
- );
+ )
+
+UNION ALL
+
+SELECT 'returns:external-insert-policy' AS violation_key,
+       'public.returns must not have an INSERT or FOR ALL policy; create_return is the canonical creation path' AS reason
+ WHERE EXISTS (
+   SELECT 1
+     FROM pg_policy p
+    WHERE p.polrelid = 'public.returns'::regclass
+      AND p.polcmd IN ('a', '*')
+ )
+
+UNION ALL
+
+SELECT 'returns:browser-insert-privilege' AS violation_key,
+       'anon/authenticated must not hold direct INSERT on public.returns' AS reason
+ WHERE has_table_privilege('authenticated', 'public.returns', 'INSERT')
+    OR has_table_privilege('anon', 'public.returns', 'INSERT')
+
+UNION ALL
+
+SELECT 'return_items:external-mutation-policy' AS violation_key,
+       'public.return_items must not have INSERT/UPDATE/DELETE/FOR ALL policies' AS reason
+ WHERE EXISTS (
+   SELECT 1
+     FROM pg_policy p
+    WHERE p.polrelid = 'public.return_items'::regclass
+      AND p.polcmd IN ('a', 'w', 'd', '*')
+ )
+
+UNION ALL
+
+SELECT 'return_items:browser-mutation-privilege' AS violation_key,
+       'anon/authenticated must not hold direct INSERT, UPDATE, or DELETE on public.return_items' AS reason
+ WHERE has_table_privilege('authenticated', 'public.return_items', 'INSERT')
+    OR has_table_privilege('authenticated', 'public.return_items', 'UPDATE')
+    OR has_table_privilege('authenticated', 'public.return_items', 'DELETE')
+    OR has_table_privilege('anon', 'public.return_items', 'INSERT')
+    OR has_table_privilege('anon', 'public.return_items', 'UPDATE')
+    OR has_table_privilege('anon', 'public.return_items', 'DELETE');

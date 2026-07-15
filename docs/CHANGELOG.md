@@ -4,6 +4,12 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-15 — Return creation RPC-only boundary drafted and parked (not applied)
+
+Draft migration `20260715182757_park_returns_creation_rpc_only.sql` removes the role-only `returns_insert` policy and external `returns` INSERT privilege so authenticated admin/sales users cannot bypass the canonical `create_return` RPC. It also revokes direct external INSERT/UPDATE/DELETE privileges on `return_items`, whose application and lifecycle writers are already privileged return RPCs. Existing `returns` UPDATE/DELETE behavior is deliberately preserved behind the July 15 lifecycle/status triggers. The standing return invariant now catches future INSERT-policy/grant drift, and the rollback-only return-credit smoke adds real authenticated-role denial probes plus the successful `create_return` path. **Parked only: the migration was not applied, no live data or schema was changed, and the schema registry was not refreshed.**
+
+---
+
 ## 2026-07-15 — Registry-freshness test harness isolation
 
 The registry-freshness runtime helper and copied hook harnesses now run Git and spawned-hook probes with a Git-clean child environment. Git hooks inherit repository-local `GIT_*` context, so the harness now consults `git rev-parse --local-env-vars` and removes those bindings plus indexed `GIT_CONFIG_KEY_n` / `GIT_CONFIG_VALUE_n` entries before spawning; the runtime flag-sharing helper strips the same class before resolving worktrees. Synthetic stale-registry flags can no longer resolve against real CRX worktrees.

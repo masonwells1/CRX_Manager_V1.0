@@ -2,8 +2,10 @@
 -- SMOKE TEST (rolled back by design): the CANONICAL return->credit chain
 -- ----------------------------------------------------------------------------
 -- THE CHAIN (the exact one B1 was falsely declared "fixed" without, 2026-06-09):
+--   authenticated direct returns INSERT -> 42501 (table path closed)
 --   create_return (server derives product, quantity ceiling, and price from
 --                  delivered order lines; caller price is ignored)
+--     -> authenticated direct return_items UPDATE -> 42501 (lines RPC-owned)
 --     -> approve_return        (requested -> approved)
 --     -> receive_return        (approved -> received; restock + inventory txn)
 --     -> issue_return_credit   (received -> credited; posted credit_memo
@@ -140,6 +142,47 @@ BEGIN
     10, 5, 'gal', 50, 5, 0
   ) RETURNING id INTO v_order_item_2;
 
+  -- The migration closes both layers: there is no INSERT/FOR ALL RLS policy,
+  -- and authenticated has no inherited direct INSERT table privilege.
+  IF EXISTS (
+    SELECT 1 FROM pg_policy
+    WHERE polrelid = 'public.returns'::regclass
+      AND polcmd IN ('a', '*')
+  ) OR has_table_privilege('authenticated', 'public.returns', 'INSERT')
+     OR has_table_privilege('anon', 'public.returns', 'INSERT') THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: public.returns direct INSERT catalog boundary is open';
+  END IF;
+  IF NOT has_function_privilege(
+    'authenticated', 'public.create_return(jsonb,jsonb,text)', 'EXECUTE'
+  ) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: authenticated lost canonical create_return EXECUTE';
+  END IF;
+
+  -- A real active admin JWT still cannot bypass create_return with PostgREST's
+  -- authenticated database role. Keep the role switch outside the denial block
+  -- so a runner that cannot assume `authenticated` fails instead of passing for
+  -- the wrong reason.
+  SET LOCAL ROLE authenticated;
+  IF current_user <> 'authenticated' THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: SET LOCAL ROLE authenticated did not take effect (current_user=%)', current_user;
+  END IF;
+  BEGIN
+    INSERT INTO public.returns (
+      return_number, customer_id, order_id, reason, requested_by, status
+    ) VALUES (
+      'SMK-DIRECT-' || v_suffix, v_customer_id, v_order_id,
+      'overstock', v_admin, 'requested'
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: authenticated direct return header INSERT was allowed';
+  EXCEPTION
+    WHEN insufficient_privilege THEN
+      NULL;
+    WHEN OTHERS THEN
+      IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+      RAISE EXCEPTION 'SMOKE_FAIL: expected direct returns INSERT 42501, got % (%)', SQLERRM, SQLSTATE;
+  END;
+  RESET ROLE;
+
   -- A void already restores delivered inventory. The return path must reject
   -- that order or receiving the return could restore the same stock twice.
   PERFORM set_config('app.admin_override', 'true', true);
@@ -204,6 +247,37 @@ BEGIN
   IF v_n <> 2 THEN
     RAISE EXCEPTION 'SMOKE_FAIL: create_return did not preserve authoritative order-line source (rows=%)', v_n;
   END IF;
+
+  IF EXISTS (
+    SELECT 1 FROM pg_policy
+    WHERE polrelid = 'public.return_items'::regclass
+      AND polcmd IN ('a', 'w', 'd', '*')
+  ) OR has_table_privilege('authenticated', 'public.return_items', 'INSERT')
+     OR has_table_privilege('authenticated', 'public.return_items', 'UPDATE')
+     OR has_table_privilege('authenticated', 'public.return_items', 'DELETE')
+     OR has_table_privilege('anon', 'public.return_items', 'INSERT')
+     OR has_table_privilege('anon', 'public.return_items', 'UPDATE')
+     OR has_table_privilege('anon', 'public.return_items', 'DELETE') THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: public.return_items direct mutation catalog boundary is open';
+  END IF;
+
+  SET LOCAL ROLE authenticated;
+  IF current_user <> 'authenticated' THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: SET LOCAL ROLE authenticated did not take effect (current_user=%)', current_user;
+  END IF;
+  BEGIN
+    UPDATE public.return_items
+       SET notes = 'direct authenticated bypass'
+     WHERE return_id = v_return_id;
+    RAISE EXCEPTION 'SMOKE_FAIL: authenticated direct return_items UPDATE was allowed';
+  EXCEPTION
+    WHEN insufficient_privilege THEN
+      NULL;
+    WHEN OTHERS THEN
+      IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+      RAISE EXCEPTION 'SMOKE_FAIL: expected direct return_items UPDATE 42501, got % (%)', SQLERRM, SQLSTATE;
+  END;
+  RESET ROLE;
 
   BEGIN
     UPDATE returns SET customer_id = v_other_customer_id WHERE id = v_return_id;
