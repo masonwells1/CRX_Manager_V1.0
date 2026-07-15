@@ -1,12 +1,12 @@
 {
   "_meta": {
     "registry_version": 2,
-    "generated_at": "2026-07-14",
+    "generated_at": "2026-07-15",
     "generated_from": "Supabase project rhyzpcqhnizqbxphqdkr — public schema introspection",
     "regenerate_with": "node scripts/regenerate-schema-registry.mjs --from-introspection <queries.json> (queries documented in the script header)",
     "purpose": "Single source of truth for hooks: generated columns, status enums, ALL parseable CHECK IN-lists, NOT NULL columns, full column lists, sequences, tables-with/without updated_at, applied-migration high water.",
     "note": "For a fresh refresh from the live DB, ask Claude Code: 'regenerate the schema-registry from Supabase' (/regen-schema-registry). skipped_constraints lists every CHECK the hooks can NOT validate — review it when touching those tables.",
-    "migrations_high_water": "20260714203709",
+    "migrations_high_water": "20260715203911",
     "applied_migration_names": [
       "20260207_gap_analysis_fixes.sql",
       "20260209050000_inventory_overhaul",
@@ -221,6 +221,11 @@
       "20260714024811_offline_action_receipts",
       "20260714070000_offline_action_receipt_stage_limits",
       "20260714122626_offline_action_review_resolution",
+      "20260714185129_fix_commission_admin_policies",
+      "20260714185130_gate_batch_prepay_admin",
+      "20260714185631_harden_is_admin_search_path",
+      "20260715115155_harden_return_lifecycle_updates",
+      "20260715182757_park_returns_creation_rpc_only",
       "a1_dispatched_list_recent_completed",
       "a1b_dispatched_to_me_completed_tail",
       "accounting_and_integrity_fixes",
@@ -301,10 +306,12 @@
       "batch_year_end_and_cleanup",
       "blend_invoice_app_service_guard",
       "blend_invoice_column_fix",
+      "blend_ticket_access_and_atomicity",
       "blend_ticket_app_record_for_update",
       "blend_ticket_app_record_short_stock_and_ledger_fix",
       "blend_ticket_app_record_time_cast_fix",
       "blend_ticket_invoice_for_update",
+      "blend_ticket_order_lifecycle",
       "blend_ticket_single_app_record_per_ticket",
       "browser_smoke_test_fixes",
       "bulk_idempotency_wiring",
@@ -402,6 +409,7 @@
       "failed_notifications_table",
       "field_app_applied_info",
       "field_app_rpcs",
+      "field_app_save_post_lock",
       "field_app_workflow_phase1",
       "field_app_workflow_phase10",
       "field_app_workflow_phase11",
@@ -532,6 +540,7 @@
       "fix_void_invoice_prepay_column_name",
       "fix_yesterday_recap_issue_description_column",
       "gap_analysis_fixes_2",
+      "gauntlet_core_guards",
       "geojson_rpc_dispatched_visibility",
       "get_customer_summary_rpc",
       "get_dashboard_action_items_rpc",
@@ -590,6 +599,7 @@
       "number_generation_sequences",
       "offline_action_target_lock",
       "operational_dashboard_summary",
+      "order_and_cycle_count_concurrency_guards",
       "order_item_field_allocations",
       "order_items_cost_at_time_snapshot",
       "order_po_number_and_shares_v2",
@@ -668,6 +678,7 @@
       "recompute_pending_commissions_on_order_item_edit",
       "record_vendor_payment_rpc",
       "release_holds_on_quote_cancel",
+      "remaining_money_inventory_hardening",
       "rename_invoice_temperature",
       "repair_order_balances_from_double_count",
       "reporting_rpcs_financial_v3",
@@ -677,6 +688,7 @@
       "restore_quote_version_drawn_guard",
       "restore_rpcs_admin_override",
       "restore_rpcs_strict_actor",
+      "return_credit_source_of_truth",
       "returns_add_credited_by_column",
       "returns_cancellation_check",
       "returns_lifecycle_rebuild",
@@ -716,6 +728,7 @@
       "security_audit_auth_uid_enforcement",
       "sentinel_exclude_credit_memos",
       "server_authoritative_quote_math",
+      "shared_idempotency_and_hold_hardening",
       "signature_privacy_signed_urls",
       "slim_dashboard_summary",
       "smart_pricing_rpc",
@@ -2015,6 +2028,18 @@
       "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
     },
     {
+      "table": "blend_ticket_products",
+      "constraint": "blend_ticket_products_finite_numbers",
+      "def": "CHECK ((((quantity)::text <> ALL (ARRAY['NaN'::text, 'Infinity'::text, '-Infinity'::text])) AND ((rate_per_acre IS NULL) OR ((rate_per_acre)::text <> ALL (ARRAY['NaN'::text, 'Infinity'::text, '-Infinity'::text]))) AND ((confidence_score)::text <> ALL (ARRAY['NaN'::text, 'Infinity'::text, '-Infinity'::text]))))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "blend_tickets",
+      "constraint": "blend_tickets_finite_numbers",
+      "def": "CHECK ((((total_acres IS NULL) OR ((total_acres)::text <> ALL (ARRAY['NaN'::text, 'Infinity'::text, '-Infinity'::text]))) AND ((total_volume IS NULL) OR ((total_volume)::text <> ALL (ARRAY['NaN'::text, 'Infinity'::text, '-Infinity'::text])))))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
       "table": "blend_tickets",
       "constraint": "blend_tickets_ocr_confidence_score_check",
       "def": "CHECK (((ocr_confidence_score >= (0)::numeric) AND (ocr_confidence_score <= (100)::numeric)))",
@@ -2453,6 +2478,12 @@
       "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
     },
     {
+      "table": "return_items",
+      "constraint": "return_items_positive_quantity_check",
+      "def": "CHECK ((quantity > (0)::numeric))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
       "table": "returns",
       "constraint": "returns_cancelled_has_reason_check",
       "def": "CHECK (((status <> 'cancelled'::text) OR (cancellation_reason IS NOT NULL)))",
@@ -2690,7 +2721,8 @@
       "no_default": [
         "blend_ticket_id",
         "order_item_id",
-        "order_id"
+        "order_id",
+        "blend_ticket_product_id"
       ],
       "with_default": [
         "id",
@@ -2712,7 +2744,8 @@
         "updated_at",
         "order_link_status",
         "payment_status",
-        "source"
+        "source",
+        "manually_corrected_fields"
       ]
     },
     "commission_payment_items": {
@@ -4242,7 +4275,8 @@
       "quantity_applied",
       "notes",
       "created_at",
-      "created_by"
+      "created_by",
+      "blend_ticket_product_id"
     ],
     "blend_tickets": [
       "id",
@@ -4284,7 +4318,8 @@
       "vehicle_id",
       "source",
       "job_id",
-      "application_service_id"
+      "application_service_id",
+      "manually_corrected_fields"
     ],
     "commission_payment_items": [
       "id",
@@ -5143,7 +5178,9 @@
       "retry_count",
       "max_retries",
       "created_at",
-      "updated_at"
+      "updated_at",
+      "lease_token",
+      "lease_heartbeat_at"
     ],
     "offline_action_receipts": [
       "client_action_id",

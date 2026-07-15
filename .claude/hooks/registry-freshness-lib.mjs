@@ -22,13 +22,43 @@
 //
 // Falls back to the local-only path when git resolution fails for any reason
 // (non-git directory, git not installed, spawn error, timeout) — this stays
-// fail-open, matching every other guard in this repo.
+// fail-open, matching every other guard in this repo. Git commands deliberately
+// strip repository-local GIT_* environment values first; otherwise a guard or
+// test launched from inside a Git hook can resolve the parent checkout even when
+// `cwd` points at a scratch project.
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 
 const FLAG_RELATIVE = [".claude", "session-state", "REGISTRY-STALE.flag"];
+const GIT_LOCAL_ENV_NAMES = [
+  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+  "GIT_CONFIG",
+  "GIT_CONFIG_PARAMETERS",
+  "GIT_CONFIG_COUNT",
+  "GIT_OBJECT_DIRECTORY",
+  "GIT_DIR",
+  "GIT_WORK_TREE",
+  "GIT_IMPLICIT_WORK_TREE",
+  "GIT_GRAFT_FILE",
+  "GIT_INDEX_FILE",
+  "GIT_NO_REPLACE_OBJECTS",
+  "GIT_REPLACE_REF_BASE",
+  "GIT_PREFIX",
+  "GIT_SHALLOW_FILE",
+  "GIT_COMMON_DIR",
+];
+const INDEXED_GIT_CONFIG_ENV_RE = /^GIT_CONFIG_(?:KEY|VALUE)_\d+$/;
+
+function gitCleanEnv(inheritedEnv = process.env) {
+  const env = { ...inheritedEnv };
+  for (const name of GIT_LOCAL_ENV_NAMES) delete env[name];
+  for (const name of Object.keys(env)) {
+    if (INDEXED_GIT_CONFIG_ENV_RE.test(name)) delete env[name];
+  }
+  return env;
+}
 
 // Resolve the main checkout's working-tree root via `git rev-parse
 // --git-common-dir`, run from `projectDir`. Returns an absolute path, or null
@@ -38,6 +68,7 @@ export function resolveMainCheckoutRoot(projectDir, execFileSyncFn = execFileSyn
   try {
     const out = execFileSyncFn("git", ["rev-parse", "--git-common-dir"], {
       cwd: projectDir,
+      env: gitCleanEnv(),
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
       timeout: 5000,
@@ -98,6 +129,7 @@ export function listWorktreeRoots(projectDir, execFileSyncFn = execFileSync) {
   try {
     const out = execFileSyncFn("git", ["worktree", "list", "--porcelain"], {
       cwd: projectDir,
+      env: gitCleanEnv(),
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
       timeout: 5000,

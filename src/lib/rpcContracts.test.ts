@@ -1365,6 +1365,7 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   // close_quote_* (Layer 2, in-migration): bodies use the canonical idempotency_keys block.
   'close_quote_as_applied',
   'close_quote_as_short',
+  'commit_blend_ticket_ocr_result',
   'commit_label_draft',
   'complete_cycle_count',
   'complete_delivery',
@@ -1372,6 +1373,7 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   'confirm_delivery',
   'convert_quote_to_order',
   'create_application_record_from_blend_ticket',
+  'create_blend_ticket',
   'create_commission_payment',
   'create_delivery_with_items',
   'create_direct_order',
@@ -1432,6 +1434,7 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   'transition_rebate_claim',
   'unapply_credit_memo',
   'unlink_blend_ticket_from_order',
+  'update_blend_ticket_billing_status',
   'update_cycle_count_item',
   'update_order_items',
   'void_commission_payment',
@@ -1447,9 +1450,7 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
  * Track the gap here so it shrinks over time. When you add idempotency to one,
  * move it from this list to MUTATING_RPCS_WITH_IDEMPOTENCY above.
  */
-const MUTATING_RPCS_MISSING_IDEMPOTENCY: string[] = [
-  'update_blend_ticket_billing_status',
-];
+const MUTATING_RPCS_MISSING_IDEMPOTENCY: string[] = [];
 
 describe('Idempotency Key Coverage', () => {
   it('covers at least 78 mutating RPCs with p_idempotency_key', () => {
@@ -1466,10 +1467,8 @@ describe('Idempotency Key Coverage', () => {
     expect(unique.size).toBe(MUTATING_RPCS_MISSING_IDEMPOTENCY.length);
   });
 
-  it('missing list is small and shrinking (currently 1)', () => {
-    // If you added idempotency to one of the missing RPCs, update both lists
-    // and lower this number. The goal is zero.
-    expect(MUTATING_RPCS_MISSING_IDEMPOTENCY.length).toBeLessThanOrEqual(1);
+  it('has no known mutating RPCs missing idempotency', () => {
+    expect(MUTATING_RPCS_MISSING_IDEMPOTENCY).toEqual([]);
   });
 
   it('no RPC appears in both lists', () => {
@@ -1823,10 +1822,7 @@ function generatedMutatingRpcInventory(): Set<string> {
   }));
 }
 
-const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
-  'reverse_application_record',
-  'stamp_job_printed',
-]);
+const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([]);
 
 /**
  * Discovered mutating RPCs for which replay safety does not use p_idempotency_key.
@@ -1855,43 +1851,11 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
   retry_failed_notifications: 'service-role retry worker advances persisted failed-notification state',
   run_data_integrity_sweep: 'convergent integrity repair recomputes current invariant state',
   run_morning_notification_checks: 'cron sweep has persisted per-recipient notification deduplication',
+  run_weekly_db_backup: 'cron-only maintenance with authenticated and anonymous EXECUTE revoked; each dated snapshot is independently retained and pruned',
   save_idempotency: 'idempotency infrastructure helper that stores the parent operation result',
   settle_applied_record_acres: 'trigger-only derived-acre recomputation; direct client EXECUTE is revoked',
 };
 
-/**
- * DATED BACKLOG (2026-07-10): RPCs that declare p_idempotency_key in the generated
- * types but are not yet in the WITH/MISSING lists. Most are genuinely covered in the
- * DB (their bodies use the canonical helpers) and simply predate the hand-lists; a
- * few are read-only report signatures. This set exists ONLY so the fail-closed guard
- * below passes today while a NEW, unclassified mutator trips it.
- *
- * SHRINK THIS over time: when you properly classify one (move it into
- * MUTATING_RPCS_WITH_IDEMPOTENCY or MUTATING_RPCS_MISSING_IDEMPOTENCY, verifying its
- * body), delete it from here. Do NOT add to it to silence a failure — a new name here
- * means a new mutating RPC shipped without being reviewed for double-submit safety.
- */
-const IDEM_PARAM_UNTRIAGED_BASELINE = new Set<string>([
-  'admin_update_profile', 'apply_prepay_to_invoice', 'assign_job_applicator',
-  'batch_approve_blend_tickets', 'batch_reject_blend_tickets',
-  'confirm_job_notification_sent', 'consolidate_draft_invoices', 'create_inventory_hold',
-  'create_invoice_for_unbilled_delivery', 'create_invoice_from_blend_ticket',
-  'create_job_from_quote_section', 'create_planned_holds', 'create_prepay_check_splits',
-  'create_quote_from_template', 'create_quote_version', 'create_return', 'create_rush_order',
-  'create_split_invoices_from_order', 'delete_vendor', 'dispatch_job_locations',
-  'draw_down_quote', 'get_expiring_planned_holds', 'link_fields_to_parent',
-  'load_recipe_into_job', 'log_failed_notification', 'mark_inventory_row_verified',
-  'notify_damaged_receiving', 'post_invoice_group', 'price_order',
-  'reconcile_negative_inventory', 'record_job_post_notifications',
-  'record_job_pre_notifications', 'reject_return', 'restore_quote_version',
-  'reverse_receiving_record', 'rollover_quote_to_season', 'save_blend_ticket_fields',
-  'save_field_app_invoice', 'save_field_crop_history', 'save_field_geometry',
-  'save_field_polygons', 'save_quote_template', 'save_vendor',
-  'set_application_record_lots', 'set_field_boundary', 'set_field_override_acres',
-  'start_job', 'undispatch_job_locations', 'unlink_field_from_parent', 'unpost_invoice',
-  'unpost_invoice_group', 'update_field_app_applied_info', 'update_field_app_invoice_billing',
-  'update_vendor_bill', 'void_vendor_payment',
-]);
 
 describe('Idempotency coverage drift (generated-types driven, fail-closed)', () => {
   it('classifies wrappers that mutate only by calling another function', () => {
@@ -2001,36 +1965,23 @@ describe('Idempotency coverage drift (generated-types driven, fail-closed)', () 
     expect(offenders).toEqual([]);
   });
 
-  it('NO new RPC that DECLARES p_idempotency_key ships unclassified (fail-closed on param-declaring RPCs)', () => {
-    // SCOPE / KNOWN LIMIT (Codex P2, 2026-07-10): this catches a new RPC that
-    // *declares* p_idempotency_key but was never classified, PLUS covered-list drift
-    // (the test above). It does NOT catch the original Section 6 failure class — a
-    // new mutating RPC that OMITS the param entirely — because "mutating" cannot be
-    // determined from src/types/supabase.ts (no function body). Closing that fully
-    // needs a refreshed LIVE pg_proc body-mutation snapshot (the gauntlet's own
-    // recommendation); tracked as a follow-up. This guard is a strict improvement
-    // over the prior hand-list, not a complete mutator gate — do not read it as one.
-    const generated = generatedRpcsDeclaringIdempotencyKey();
-    const classified = new Set([
-      ...MUTATING_RPCS_WITH_IDEMPOTENCY,
-      ...MUTATING_RPCS_MISSING_IDEMPOTENCY,
-    ]);
-    const untracked = [...generated].filter((rpc) => !classified.has(rpc));
-    const unexpected = untracked.filter((rpc) => !IDEM_PARAM_UNTRIAGED_BASELINE.has(rpc)).sort();
-    // A name here is a NEW param-declaring RPC that was never classified for
-    // double-submit safety. Add it to MUTATING_RPCS_WITH_IDEMPOTENCY (after verifying
-    // its body honors the key) or MUTATING_RPCS_MISSING_IDEMPOTENCY. Do NOT add it to
-    // IDEM_PARAM_UNTRIAGED_BASELINE to silence this.
-    expect(unexpected).toEqual([]);
-  });
+  it('every key-declaring generated mutator has a real replay mechanism', () => {
+    const generatedWithKey = generatedRpcsDeclaringIdempotencyKey();
+    const mutators = generatedMutatingRpcInventory();
+    const functions = latestMigrationFunctions();
 
-  it('untriaged baseline shrinks honestly — it must not list an already-classified RPC', () => {
-    const classified = new Set([
-      ...MUTATING_RPCS_WITH_IDEMPOTENCY,
-      ...MUTATING_RPCS_MISSING_IDEMPOTENCY,
-    ]);
-    const stale = [...IDEM_PARAM_UNTRIAGED_BASELINE].filter((rpc) => classified.has(rpc)).sort();
-    // If one of these was properly classified, REMOVE it from the baseline.
-    expect(stale).toEqual([]);
+    const offenders = [...generatedWithKey]
+      .filter((rpc) => mutators.has(rpc))
+      .filter((rpc) => {
+        if (rpc in IDEMPOTENCY_BODY_EXEMPT) return false;
+        const body = functions.get(rpc)?.body || latestFunctionBody(rpc) || '';
+        return !bodyUsesIdempotency(body);
+      })
+      .sort();
+
+    // This replaces the old 55-name untriaged baseline. A param alone is never
+    // treated as coverage: every discovered mutator must use the canonical
+    // ledger helpers or carry a narrow, evidence-backed exemption.
+    expect(offenders).toEqual([]);
   });
 });

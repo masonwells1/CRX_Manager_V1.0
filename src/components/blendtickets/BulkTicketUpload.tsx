@@ -1,17 +1,15 @@
-import { useState, useRef } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { Upload, X, Image as ImageIcon, AlertCircle } from 'lucide-react';
 import Button from '../ui/Button';
 import Card from '../ui/Card';
 import Input from '../ui/Input';
-import { supabase, checkMutationResult, assertRpcResult } from '../../lib/db';
+import { supabase, assertRpcResult } from '../../lib/db';
 import { useAuth } from '../../contexts/AuthContext';
 import { compressImage } from '../../lib/imageCompression';
 import { localToday } from '../../lib/dateUtils';
 import { Sentry } from '../../lib/sentry';
 import type { Customer } from '../../types';
-import type { Database } from '../../types/supabase';
-
-type BlendTicketInsert = Database['public']['Tables']['blend_tickets']['Insert'];
+import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
 
 interface ImageFile {
   file: File;
@@ -24,8 +22,81 @@ interface BulkTicketUploadProps {
   onUploadComplete: () => void;
 }
 
+interface PersistedUncertainUpload {
+  version: 1;
+  userId: string;
+  ticketId: string;
+  idempotencyKey: string;
+  expiresAt: number;
+  ticketPayload: {
+    customer_id: string | null;
+    ticket_date: string | null;
+    driver_name: string | null;
+    tank_number: string | null;
+  };
+  images: Array<{
+    storage_path: string;
+    file_size: number;
+    mime_type: string;
+    upload_order: number;
+  }>;
+}
+
+const UNCERTAIN_UPLOAD_TTL_MS = 2 * 60 * 60 * 1000;
+const uncertainUploadStorageKey = (userId: string) => `crx:blend-ticket-upload:uncertain:v1:${userId}`;
+
+function readPersistedUncertainUpload(userId: string): PersistedUncertainUpload | null {
+  try {
+    const key = uncertainUploadStorageKey(userId);
+    const raw = window.sessionStorage.getItem(key);
+    if (!raw) return null;
+    const value = JSON.parse(raw) as Partial<PersistedUncertainUpload>;
+    const ticketId = typeof value.ticketId === 'string' ? value.ticketId : '';
+    const images = Array.isArray(value.images) ? value.images : [];
+    const valid = value.version === 1
+      && value.userId === userId
+      && ticketId.length <= 64
+      && typeof value.idempotencyKey === 'string'
+      && value.idempotencyKey.length > 0
+      && value.idempotencyKey.length <= 256
+      && typeof value.expiresAt === 'number'
+      && value.expiresAt > Date.now()
+      && typeof value.ticketPayload === 'object'
+      && value.ticketPayload !== null
+      && images.length > 0
+      && images.length <= 20
+      && images.every((image) => image
+        && typeof image.storage_path === 'string'
+        && image.storage_path.startsWith(`${ticketId}/`)
+        && image.storage_path.length <= 160
+        && Number.isInteger(image.file_size)
+        && image.file_size >= 1
+        && image.file_size <= 10 * 1024 * 1024
+        && ['image/jpeg', 'image/png', 'image/webp'].includes(image.mime_type)
+        && Number.isInteger(image.upload_order)
+        && image.upload_order >= 1
+        && image.upload_order <= 20);
+    if (!valid) {
+      window.sessionStorage.removeItem(key);
+      return null;
+    }
+    return value as PersistedUncertainUpload;
+  } catch {
+    return null;
+  }
+}
+
 export function BulkTicketUpload({ customers, onUploadComplete }: BulkTicketUploadProps) {
   const { profile } = useAuth();
+  const { getKey: getUploadKey, resetKey: resetUploadKey } = useIdempotencyKey(
+    'create_blend_ticket',
+    profile?.id || '',
+  );
+  const ticketAttemptIdRef = useRef<string | null>(null);
+  const commitMayHaveOccurredRef = useRef(false);
+  const persistedAttemptRef = useRef<PersistedUncertainUpload | null>(null);
+  const loadedUserIdRef = useRef<string | null | undefined>(undefined);
+  const [attemptUncertain, setAttemptUncertain] = useState(false);
   const [images, setImages] = useState<ImageFile[]>([]);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
@@ -36,6 +107,63 @@ export function BulkTicketUpload({ customers, onUploadComplete }: BulkTicketUplo
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isDragging, setIsDragging] = useState(false);
+
+  const clearPersistedAttempt = () => {
+    persistedAttemptRef.current = null;
+    if (!profile?.id) return;
+    try {
+      window.sessionStorage.removeItem(uncertainUploadStorageKey(profile.id));
+    } catch {
+      // Storage is a best-effort reload guard; in-memory reconciliation remains active.
+    }
+  };
+
+  const persistUncertainAttempt = (attempt: PersistedUncertainUpload) => {
+    persistedAttemptRef.current = attempt;
+    try {
+      window.sessionStorage.setItem(uncertainUploadStorageKey(attempt.userId), JSON.stringify(attempt));
+    } catch {
+      // Quota/privacy settings must not interrupt the upload. The current mount
+      // still retains the exact intent in memory.
+    }
+  };
+
+  useEffect(() => {
+    const userId = profile?.id || null;
+    const isFirstUserLoad = loadedUserIdRef.current === undefined;
+    const userChanged = !isFirstUserLoad && loadedUserIdRef.current !== userId;
+    loadedUserIdRef.current = userId;
+
+    if (userChanged) {
+      persistedAttemptRef.current = null;
+      ticketAttemptIdRef.current = null;
+      commitMayHaveOccurredRef.current = false;
+      resetUploadKey();
+      setImages((previous) => {
+        previous.forEach((image) => URL.revokeObjectURL(image.preview));
+        return [];
+      });
+      setSelectedCustomerId('');
+      setTicketDate(localToday());
+      setDriverName('');
+      setTankNumber('');
+      setAttemptUncertain(false);
+      setUploadProgress(0);
+      setError(null);
+    }
+    if (!userId) return;
+    const persisted = readPersistedUncertainUpload(userId);
+    if (!persisted) return;
+    persistedAttemptRef.current = persisted;
+    ticketAttemptIdRef.current = persisted.ticketId;
+    commitMayHaveOccurredRef.current = true;
+    setSelectedCustomerId(persisted.ticketPayload.customer_id || '');
+    setTicketDate(persisted.ticketPayload.ticket_date || localToday());
+    setDriverName(persisted.ticketPayload.driver_name || '');
+    setTankNumber(persisted.ticketPayload.tank_number || '');
+    setAttemptUncertain(true);
+    setError('A previous upload may have completed. Check its status before starting another upload.');
+  }, [profile?.id, resetUploadKey]);
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
@@ -49,6 +177,7 @@ export function BulkTicketUpload({ customers, onUploadComplete }: BulkTicketUplo
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(false);
+    if (isUploading || attemptUncertain) return;
     const files = Array.from(e.dataTransfer.files);
     handleFiles(files);
   };
@@ -64,6 +193,7 @@ export function BulkTicketUpload({ customers, onUploadComplete }: BulkTicketUplo
   const ALLOWED_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 
   const handleFiles = (files: File[]) => {
+    if (isUploading || attemptUncertain) return;
     const validFiles = files.filter(file => {
       if (!ALLOWED_TYPES.includes(file.type)) {
         setError('Only JPEG, PNG, and WebP images are allowed');
@@ -92,6 +222,7 @@ export function BulkTicketUpload({ customers, onUploadComplete }: BulkTicketUplo
   };
 
   const removeImage = (id: string) => {
+    if (isUploading || attemptUncertain) return;
     setImages(prev => {
       const removed = prev.find(img => img.id === id);
       if (removed) {
@@ -101,8 +232,43 @@ export function BulkTicketUpload({ customers, onUploadComplete }: BulkTicketUplo
     });
   };
 
+  const finishCommittedUpload = (ticketId: string) => {
+    // Trigger server-side OCR processing via Edge Function (non-blocking).
+    // Supabase may resolve failures as { error } instead of rejecting.
+    void supabase.functions.invoke('process-blend-ticket', {
+      body: { blend_ticket_id: ticketId },
+    }).then(({ error: invokeError }) => {
+      if (invokeError) throw invokeError;
+    }).catch((err) => {
+      // Non-fatal: the fallback polling in useOCRProcessor will pick it up.
+      Sentry.captureException(
+        err instanceof Error ? err : new Error(String(err)),
+        {
+          level: 'warning',
+          extra: { context: 'Edge Function trigger failed — will retry via polling' },
+        },
+      );
+    });
+
+    resetUploadKey();
+    clearPersistedAttempt();
+    ticketAttemptIdRef.current = null;
+    commitMayHaveOccurredRef.current = false;
+    setAttemptUncertain(false);
+    images.forEach(img => URL.revokeObjectURL(img.preview));
+    setImages([]);
+    setSelectedCustomerId('');
+    setTicketDate(localToday());
+    setDriverName('');
+    setTankNumber('');
+    setUploadProgress(0);
+    onUploadComplete();
+    setError(null);
+  };
+
   const handleUpload = async () => {
-    if (images.length === 0) {
+    const restoredAttempt = persistedAttemptRef.current;
+    if (images.length === 0 && !restoredAttempt) {
       setError('Please select at least one image');
       return;
     }
@@ -112,126 +278,208 @@ export function BulkTicketUpload({ customers, onUploadComplete }: BulkTicketUplo
       return;
     }
 
+    const ticketId = restoredAttempt?.ticketId || ticketAttemptIdRef.current || crypto.randomUUID();
+    ticketAttemptIdRef.current = ticketId;
+
     setIsUploading(true);
     setError(null);
     setUploadProgress(0);
 
-    try {
-      const { data: ticketNumberData, error: ticketError } = await supabase
-        .rpc('generate_ticket_number');
-
-      if (ticketError) throw ticketError;
-      const ticketNumber = assertRpcResult<string>(ticketNumberData, 'generate_ticket_number');
-
-      const ticketData: BlendTicketInsert = {
-        ticket_number: ticketNumber,
-        uploaded_by: profile!.id,
-        upload_date: new Date().toISOString(),
-        status: 'pending',
-        review_status: 'unreviewed',
-        ocr_confidence_score: 0,
-      };
-
-      if (selectedCustomerId) {
-        ticketData.customer_id = selectedCustomerId;
-      }
-
-      if (ticketDate) {
-        ticketData.ticket_date = ticketDate;
-      }
-
-      if (driverName) {
-        ticketData.driver_name = driverName;
-      }
-
-      if (tankNumber) {
-        ticketData.tank_number = tankNumber;
-      }
-
-      const { data: ticket, error: insertError } = await supabase
+    // An earlier lost RPC + lookup response is indeterminate. Reconcile before
+    // uploading any bytes again: a committed ticket must keep its canonical
+    // objects unchanged, while a proven absence may safely retry the frozen
+    // intent with the same UUID and idempotency key.
+    if (commitMayHaveOccurredRef.current) {
+      const priorLookup = await supabase
         .from('blend_tickets')
-        .insert(ticketData)
-        .select()
-        .single();
+        .select('id, ticket_number')
+        .eq('id', ticketId)
+        .maybeSingle();
+      if (priorLookup.error) {
+        setAttemptUncertain(true);
+        setError('Upload status is still uncertain. No files were changed; retry to check again.');
+        setIsUploading(false);
+        return;
+      }
+      if (priorLookup.data) {
+        setUploadProgress(100);
+        finishCommittedUpload(ticketId);
+        setIsUploading(false);
+        return;
+      }
+      commitMayHaveOccurredRef.current = false;
+      setAttemptUncertain(false);
+    }
 
-      if (insertError) throw insertError;
+    // The object prefix is derived only from the stable ticket UUID so a retry
+    // across midnight/month-end cannot upload into a second orphan folder.
+    const folderPath = ticketId;
+    const uploadedPaths: string[] = restoredAttempt
+      ? restoredAttempt.images.map((image) => image.storage_path)
+      : [];
+    // Any failure before the atomic RPC starts is definitely uncommitted and
+    // must remove objects already uploaded by an earlier loop iteration. Once
+    // the RPC starts, a transport failure is indeterminate until lookup proves
+    // whether the ticket committed.
+    let definiteRollback = !commitMayHaveOccurredRef.current;
 
-      const folderPath = `${new Date().getFullYear()}/${String(new Date().getMonth() + 1).padStart(2, '0')}/${ticket.id}`;
+    const cleanupUploadedObjects = async (): Promise<boolean> => {
+      if (uploadedPaths.length === 0) return true;
+      const { error: cleanupError } = await supabase.storage
+        .from('blend-ticket-images')
+        .remove(uploadedPaths);
+      if (cleanupError) {
+        Sentry.captureException(new Error(cleanupError.message), {
+          level: 'warning',
+          extra: { context: 'Failed to clean up uncommitted blend-ticket uploads', ticketId },
+        });
+        return false;
+      }
+      return true;
+    };
 
-      for (let i = 0; i < images.length; i++) {
-        const image = images[i];
-        const compressedFile = await compressImage(image.file);
-        const fileExt = compressedFile.name.split('.').pop();
-        const fileName = `${i + 1}.${fileExt}`;
-        const filePath = `${folderPath}/${fileName}`;
+    try {
+      const imageMetadata: Array<{
+        storage_path: string;
+        file_size: number;
+        mime_type: string;
+        upload_order: number;
+      }> = restoredAttempt ? [...restoredAttempt.images] : [];
+
+      for (let i = restoredAttempt ? images.length : 0; i < images.length; i++) {
+        const compressedFile = await compressImage(images[i].file);
+        if (!ALLOWED_TYPES.includes(compressedFile.type)) {
+          throw new Error('Compressed image type must be JPEG, PNG, or WebP');
+        }
+        if (compressedFile.size < 1 || compressedFile.size > 10 * 1024 * 1024) {
+          throw new Error('Compressed image must be between 1 byte and 10MB');
+        }
+
+        const fileExt = compressedFile.type === 'image/png'
+          ? 'png'
+          : compressedFile.type === 'image/webp'
+            ? 'webp'
+            : 'jpg';
+        const filePath = `${folderPath}/${i + 1}.${fileExt}`;
+        // Include the attempted path before awaiting Storage: a lost upload
+        // response can still mean the object was written and needs cleanup.
+        uploadedPaths.push(filePath);
 
         const { error: uploadError } = await supabase.storage
           .from('blend-ticket-images')
-          .upload(filePath, compressedFile);
+          .upload(filePath, compressedFile, {
+            contentType: compressedFile.type,
+            upsert: true,
+          });
 
         if (uploadError) throw uploadError;
 
-        const { data: urlData, error: urlError } = await supabase.storage
-          .from('blend-ticket-images')
-          .createSignedUrl(filePath, 60 * 60 * 24 * 365);
-
-        if (urlError) {
-          Sentry.captureException(new Error(String(urlError.message)), { extra: { context: 'Failed to create signed URL' } });
-        }
-
-        const imgResult = await supabase.from('blend_ticket_images').insert({
-          blend_ticket_id: ticket.id,
+        imageMetadata.push({
           storage_path: filePath,
-          image_url: urlData?.signedUrl || filePath,
           file_size: compressedFile.size,
           mime_type: compressedFile.type,
           upload_order: i + 1,
-        }).select();
-        if (imgResult.error) throw imgResult.error;
-        checkMutationResult(imgResult, 'Insert blend_ticket_images record');
-
-        setUploadProgress(Math.round(((i + 1) / images.length) * 100));
+        });
+        setUploadProgress(Math.round(((i + 1) / images.length) * 90));
       }
 
-      const ocrResult = await supabase.from('ocr_processing_queue').insert({
-        blend_ticket_id: ticket.id,
-        status: 'pending',
-        priority: 0,
-        retry_count: 0,
-        max_retries: 3,
-      }).select();
-      if (ocrResult.error) throw ocrResult.error;
-      checkMutationResult(ocrResult, 'Insert ocr_processing_queue record');
+      const ticketPayload = restoredAttempt?.ticketPayload ?? {
+        customer_id: selectedCustomerId || null,
+        ticket_date: ticketDate || null,
+        driver_name: driverName || null,
+        tank_number: tankNumber || null,
+      };
+      const idempotencyKey = restoredAttempt?.idempotencyKey ?? getUploadKey();
+      const frozenAttempt: PersistedUncertainUpload = restoredAttempt ?? {
+        version: 1,
+        userId: profile.id,
+        ticketId,
+        idempotencyKey,
+        expiresAt: Date.now() + UNCERTAIN_UPLOAD_TTL_MS,
+        ticketPayload,
+        images: imageMetadata,
+      };
+      persistUncertainAttempt(frozenAttempt);
 
-      // Trigger server-side OCR processing via Edge Function (non-blocking)
-      supabase.functions.invoke('process-blend-ticket', {
-        body: { blend_ticket_id: ticket.id },
-      }).catch((err) => {
-        // Non-fatal: the fallback polling in useOCRProcessor will pick it up
-        Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { level: 'warning', extra: { context: 'Edge Function trigger failed — will retry via polling' } });
+      definiteRollback = false;
+      commitMayHaveOccurredRef.current = true;
+      const { data, error: createError } = await supabase.rpc('create_blend_ticket', {
+        p_ticket_id: ticketId,
+        p_ticket_payload: ticketPayload,
+        p_products: [],
+        p_images: imageMetadata,
+        p_enqueue_ocr: true,
+        p_performed_by: profile.id,
+        p_idempotency_key: idempotencyKey,
       });
 
-      images.forEach(img => URL.revokeObjectURL(img.preview));
-      setImages([]);
-      setSelectedCustomerId('');
-      setTicketDate(localToday());
-      setDriverName('');
-      setTankNumber('');
-      setUploadProgress(0);
+      if (createError) {
+        // Distinguish a definite transaction failure from an indeterminate lost
+        // response. If the ticket exists, the atomic RPC committed and its
+        // uploaded objects must be retained.
+        const lookup = await supabase
+          .from('blend_tickets')
+          .select('id, ticket_number')
+          .eq('id', ticketId)
+          .maybeSingle();
 
-      onUploadComplete();
+        if (lookup.error) {
+          setAttemptUncertain(true);
+          throw createError;
+        }
+        if (!lookup.data) {
+          definiteRollback = true;
+          commitMayHaveOccurredRef.current = false;
+          throw createError;
+        }
+      } else {
+        const result = assertRpcResult<{
+          success: boolean;
+          ticket_id: string;
+          ticket_number: string;
+        }>(data, 'create_blend_ticket');
+        if (!result.success || result.ticket_id !== ticketId) {
+          definiteRollback = true;
+          commitMayHaveOccurredRef.current = false;
+          throw new Error('Blend ticket retry identity mismatch; uploaded files were not attached');
+        }
+      }
 
-      setError(null);
+      setUploadProgress(100);
+      finishCommittedUpload(ticketId);
     } catch (err: unknown) {
-      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'Upload error' } });
-      setError(err instanceof Error ? err.message : 'Failed to upload images');
+      const commitStatusUncertain = !definiteRollback && commitMayHaveOccurredRef.current;
+      if (commitStatusUncertain) {
+        // A rejected RPC promise is just as indeterminate as a resolved
+        // transport error: PostgreSQL may have committed before the response
+        // was lost. Keep the frozen UUID/key/objects and force reconciliation
+        // before allowing the user to change or retry the upload intent.
+        setAttemptUncertain(true);
+      }
+      if (definiteRollback) {
+        const cleaned = await cleanupUploadedObjects();
+        if (cleaned) {
+          resetUploadKey();
+          clearPersistedAttempt();
+          ticketAttemptIdRef.current = null;
+          commitMayHaveOccurredRef.current = false;
+          setAttemptUncertain(false);
+        }
+      }
+      Sentry.captureException(
+        err instanceof Error ? err : new Error(String(err)),
+        { extra: { context: 'Upload error', ticketId, definiteRollback } },
+      );
+      setError(commitStatusUncertain
+        ? 'Upload status is uncertain. No files were changed; retry to check again.'
+        : err instanceof Error ? err.message : 'Failed to upload images');
     } finally {
       setIsUploading(false);
     }
   };
-
   const totalSize = images.reduce((sum, img) => sum + img.file.size, 0);
   const totalSizeMB = (totalSize / (1024 * 1024)).toFixed(2);
+  const intentLocked = isUploading || attemptUncertain;
 
   return (
     <Card className="p-6">
@@ -246,7 +494,7 @@ export function BulkTicketUpload({ customers, onUploadComplete }: BulkTicketUplo
             <select
               value={selectedCustomerId}
               onChange={(e) => setSelectedCustomerId(e.target.value)}
-              disabled={isUploading}
+              disabled={intentLocked}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             >
               <option value="">Select Customer</option>
@@ -266,7 +514,7 @@ export function BulkTicketUpload({ customers, onUploadComplete }: BulkTicketUplo
               type="date"
               value={ticketDate}
               onChange={(e) => setTicketDate(e.target.value)}
-              disabled={isUploading}
+              disabled={intentLocked}
             />
           </div>
 
@@ -279,7 +527,7 @@ export function BulkTicketUpload({ customers, onUploadComplete }: BulkTicketUplo
               value={driverName}
               onChange={(e) => setDriverName(e.target.value)}
               placeholder="Enter driver name"
-              disabled={isUploading}
+              disabled={intentLocked}
             />
           </div>
 
@@ -292,7 +540,7 @@ export function BulkTicketUpload({ customers, onUploadComplete }: BulkTicketUplo
               value={tankNumber}
               onChange={(e) => setTankNumber(e.target.value)}
               placeholder="Enter tank number"
-              disabled={isUploading}
+              disabled={intentLocked}
             />
           </div>
         </div>
@@ -314,7 +562,7 @@ export function BulkTicketUpload({ customers, onUploadComplete }: BulkTicketUplo
             accept="image/jpeg,image/png,image/webp"
             onChange={handleFileSelect}
             className="hidden"
-            disabled={isUploading}
+            disabled={intentLocked}
           />
 
           <Upload className="mx-auto h-12 w-12 text-gray-400 mb-4" />
@@ -326,7 +574,7 @@ export function BulkTicketUpload({ customers, onUploadComplete }: BulkTicketUplo
           </p>
           <Button
             onClick={() => fileInputRef.current?.click()}
-            disabled={isUploading}
+            disabled={intentLocked}
           >
             Select Images
           </Button>
@@ -338,7 +586,7 @@ export function BulkTicketUpload({ customers, onUploadComplete }: BulkTicketUplo
               <p className="text-sm font-medium text-gray-700">
                 {images.length} image{images.length !== 1 ? 's' : ''} selected ({totalSizeMB} MB)
               </p>
-              {!isUploading && (
+              {!intentLocked && (
                 <Button
                   variant="ghost"
                   size="sm"
@@ -362,7 +610,7 @@ export function BulkTicketUpload({ customers, onUploadComplete }: BulkTicketUplo
                       className="w-full h-full object-cover"
                     />
                   </div>
-                  {!isUploading && (
+                  {!intentLocked && (
                     <button
                       onClick={() => removeImage(image.id)}
                       className="absolute top-2 right-2 p-1 bg-red-500 text-white rounded-full hover:bg-red-600 transition-colors"
@@ -407,17 +655,24 @@ export function BulkTicketUpload({ customers, onUploadComplete }: BulkTicketUplo
             onClick={() => {
               images.forEach(img => URL.revokeObjectURL(img.preview));
               setImages([]);
+              clearPersistedAttempt();
+              ticketAttemptIdRef.current = null;
+              commitMayHaveOccurredRef.current = false;
               setError(null);
             }}
-            disabled={isUploading || images.length === 0}
+            disabled={intentLocked || images.length === 0}
           >
             Cancel
           </Button>
           <Button
             onClick={handleUpload}
-            disabled={isUploading || images.length === 0}
+            disabled={isUploading || (images.length === 0 && !attemptUncertain)}
           >
-            {isUploading ? 'Uploading...' : `Upload ${images.length} Image${images.length !== 1 ? 's' : ''}`}
+            {isUploading
+              ? 'Uploading...'
+              : attemptUncertain
+                ? 'Check Upload Status & Retry'
+                : `Upload ${images.length} Image${images.length !== 1 ? 's' : ''}`}
           </Button>
         </div>
 

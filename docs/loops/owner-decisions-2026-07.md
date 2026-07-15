@@ -118,8 +118,9 @@ For each, decide **wire** (finish the UI/plumbing) or **retire** (drop the dead 
 | CropPrograms + ProgramTracker | Write-only; nothing consumes crop programs | Wire "Apply Program" into jobs (Phase 4.2) OR retire |
 | Per-acre tier columns (`tier1/2/3_price_per_acre`) | Trigger-maintained on 560 products, ZERO readers | Surface in QuoteBuilder OR drop the trigger |
 | Dead tables (legacy `payments`, `order_line_allocations`, `rate_limit_log`, `document_processing_log`, jobs.tags/batch_id, receipt_pdf_url, `create_prepay_credit`) | 0 rows / UI-invisible; the legacy `payments` table is a booby-trap 2nd payment path | Retire in one dead-code migration |
+| `get_customer_delivery_remainders` RPC (business-workflow review #40) | Defined and secured by `20260529214355_revoke_anon_execute_on_report_dashboard_secdef.sql`, but has zero repository callers | Wire a per-customer remainders card OR retire it in a separately reviewed migration |
 
-→ Pick wire/retire per row (or "leave for now"). None applied yet.
+→ Pick wire/retire per row (or "leave for now"). The #40 RPC remains unchanged in this cleanup; retirement needs a later owner decision and explicitly approved migration. None applied yet.
 
 ---
 

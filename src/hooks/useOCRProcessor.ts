@@ -48,18 +48,23 @@ export function useOCRProcessor(enabled: boolean = true) {
       setIsProcessing(true);
 
       for (const item of queueItems) {
-        // Skip items that are actively processing (started less than 2 minutes ago)
-        if (item.status === 'processing' && item.started_at) {
-          const startedAt = new Date(item.started_at).getTime();
+        // Skip items whose owned worker lease is still healthy. The heartbeat
+        // advances after every bounded image/Vision call; started_at is only a
+        // compatibility fallback until the queued migration is live-generated.
+        const leaseHeartbeat = (item as typeof item & { lease_heartbeat_at?: string | null }).lease_heartbeat_at;
+        const leaseTimestamp = leaseHeartbeat || item.started_at;
+        if (item.status === 'processing' && leaseTimestamp) {
+          const startedAt = new Date(leaseTimestamp).getTime();
           const twoMinutesAgo = Date.now() - 2 * 60 * 1000;
           if (startedAt > twoMinutesAgo) continue;
         }
 
         // Re-trigger the Edge Function for stuck/pending items
         try {
-          await supabase.functions.invoke('process-blend-ticket', {
+          const { error: invokeError } = await supabase.functions.invoke('process-blend-ticket', {
             body: { blend_ticket_id: item.blend_ticket_id },
           });
+          if (invokeError) throw invokeError;
           setProcessedCount(prev => prev + 1);
         } catch (err) {
           Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'Failed to re-trigger OCR for ticket', blend_ticket_id: item.blend_ticket_id } });

@@ -3,12 +3,37 @@ import { createClient } from "npm:@supabase/supabase-js@2.57.4";
 import { captureEdgeException } from "../_shared/sentry.ts";
 import { requireActiveProfile } from "../_shared/auth.ts";
 import { corsHeaders, preflightResponse } from "../_shared/cors.ts";
+import {
+  fetchSignedBlendImage,
+  startSerializedLeaseHeartbeat,
+  validateBlendImageRecords,
+} from "./guards.ts";
 
 function jsonResponse(body: Record<string, unknown>, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
     headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
+}
+
+function assertRpcResult<T>(data: unknown, rpcName: string): T {
+  if (data === null || data === undefined) {
+    throw new Error(`${rpcName} returned no data`);
+  }
+  return data as T;
+}
+
+const OCR_NETWORK_TIMEOUT_MS = 45_000;
+const OCR_LEASE_STALE_MS = 2 * 60 * 1000;
+const OCR_LEASE_HEARTBEAT_INTERVAL_MS = 30_000;
+
+function bytesToBase64(bytes: Uint8Array): string {
+  const chunkSize = 0x8000;
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
 }
 
 // ─── OCR Text Parsing (CropRx Blend Ticket format) ─────────────────────────
@@ -116,8 +141,10 @@ function parseDateString(dateStr: string): string | null {
   let year = parseInt(match[3], 10);
 
   if (year < 100) year += 2000;
-  if (month < 1 || month > 12 || day < 1 || day > 31 || year < 2000 ||
-    year > 2099) return null;
+  if (
+    month < 1 || month > 12 || day < 1 || day > 31 || year < 2000 ||
+    year > 2099
+  ) return null;
 
   return `${year}-${String(month).padStart(2, "0")}-${
     String(day).padStart(2, "0")
@@ -184,9 +211,23 @@ function looksLikeLabel(line: string): boolean {
   if (/^[a-z\s]+:/i.test(line)) return true;
   if (/^\d[\d,]*\.?\d*$/.test(line.trim())) return true;
   const headers = [
-    "total acres", "total volume", "application rate", "product",
-    "rate/", "notes", "signature", "invoice", "mixer", "vehicle",
-    "applicator", "customer", "date", "time", "job", "driver", "tank",
+    "total acres",
+    "total volume",
+    "application rate",
+    "product",
+    "rate/",
+    "notes",
+    "signature",
+    "invoice",
+    "mixer",
+    "vehicle",
+    "applicator",
+    "customer",
+    "date",
+    "time",
+    "job",
+    "driver",
+    "tank",
   ];
   return headers.some((h) => lower.startsWith(h) || lower === h);
 }
@@ -353,9 +394,7 @@ function parseMultiLineProducts(
 
       if (numericValues.length > 0) {
         const ratePerAcre = numericValues[0] || null;
-        const totalProduct = numericValues.length > 1
-          ? numericValues[1]
-          : null;
+        const totalProduct = numericValues.length > 1 ? numericValues[1] : null;
         const qtyStr = totalProduct || ratePerAcre || "0";
         const qtyMatch = qtyStr.match(/([\d,]+\.?\d*)/);
         const quantity = qtyMatch
@@ -438,8 +477,10 @@ function extractProducts(lines: string[]): ParsedTicketData["products"] {
     const line = lines[i].trim();
     if (line.length === 0) continue;
     const lower = line.toLowerCase();
-    if (lower.includes("signature") || lower.includes("signed") ||
-        lower.includes("notes:")) break;
+    if (
+      lower.includes("signature") || lower.includes("signed") ||
+      lower.includes("notes:")
+    ) break;
     productLines.push(line);
   }
 
@@ -478,9 +519,7 @@ function parseProductLine(
       const qtyMatch = (totalProduct || ratePerAcre || "").match(
         /([\d,]+\.?\d*)/,
       );
-      const quantity = qtyMatch
-        ? parseFloat(qtyMatch[1].replace(/,/g, ""))
-        : 0;
+      const quantity = qtyMatch ? parseFloat(qtyMatch[1].replace(/,/g, "")) : 0;
       const unitMatch = (totalProduct || ratePerAcre || "").match(
         /(gal|gallon|gallons|lb|lbs|oz|qt|pt|pint|quart|l|ml)/i,
       );
@@ -718,6 +757,7 @@ async function callVisionAPI(
     `https://vision.googleapis.com/v1/images:annotate?key=${apiKey}`,
     {
       method: "POST",
+      signal: AbortSignal.timeout(OCR_NETWORK_TIMEOUT_MS),
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         requests: [
@@ -774,13 +814,15 @@ Deno.serve(async (req: Request) => {
   }
 
   // Codex audit F1 (P1, 2026-05-16): is_active gate enforced server-side.
-  // Only admin, sales_rep, and applicator can process blend tickets.
+  // Blend-ticket routes are office-only, so the Edge boundary is office-only too.
   const adminClient = createClient(supabaseUrl, serviceRoleKey);
-  const gate = await requireActiveProfile(adminClient, caller.id, ["admin", "sales_rep", "applicator"]);
+  const gate = await requireActiveProfile(adminClient, caller.id, [
+    "admin",
+    "sales_rep",
+  ]);
   if ("error" in gate) {
     return jsonResponse({ error: gate.error }, gate.status);
   }
-  const callerProfile = gate.profile;
 
   let blendTicketId: string;
   let isReprocess = false;
@@ -799,16 +841,17 @@ Deno.serve(async (req: Request) => {
     return jsonResponse({ error: "blend_ticket_id is required" }, 400);
   }
 
-  // Sprint F #2 — per-resource auth.
-  // Previously, any authenticated admin/sales/applicator could OCR any
-  // blend ticket. Now: applicators can only process tickets they uploaded;
-  // admin/sales remain unrestricted. Lookup happens before any service-role
-  // mutation so we never queue or processing-flag a ticket the caller has
-  // no business touching.
+  // Confirm the ticket exists before any service-role mutation.
   const { data: ticketAuth, error: ticketAuthErr } = await adminClient
     .from("blend_tickets")
-    .select("id, uploaded_by, status")
+    .select(`
+      id, uploaded_by, status, review_status, order_link_status, payment_status,
+      customer_id, ticket_date, driver_name, tank_number, applicator_name,
+      job_number, ticket_time, vehicle_info, mixer_name, field_names,
+      total_acres, application_rate, total_volume, invoice_number, notes
+    `)
     .eq("id", blendTicketId)
+    .is("deleted_at", null)
     .maybeSingle();
 
   if (ticketAuthErr) {
@@ -817,29 +860,60 @@ Deno.serve(async (req: Request) => {
   if (!ticketAuth) {
     return jsonResponse({ error: "Blend ticket not found" }, 404);
   }
+
   if (
-    callerProfile.role === "applicator" &&
-    ticketAuth.uploaded_by !== caller.id
+    ticketAuth.review_status !== "unreviewed" ||
+    ticketAuth.order_link_status !== "unlinked" ||
+    ticketAuth.payment_status !== "unbilled"
   ) {
-    return jsonResponse(
-      {
-        error:
-          "Applicators may only process blend tickets they uploaded",
-      },
-      403,
-    );
+    return jsonResponse({
+      error: "OCR requires an unreviewed, unlinked, unbilled blend ticket",
+    }, 409);
   }
 
-  // Find or create queue entry
-  const { data: existingQueue } = await adminClient
+  const [invoiceGuard, applicationGuard] = await Promise.all([
+    adminClient.from("invoices").select("id")
+      .eq("blend_ticket_id", blendTicketId)
+      .is("deleted_at", null)
+      .not("status", "in", '("voided","cancelled")')
+      .limit(1),
+    adminClient.from("application_records").select("id")
+      .eq("source_type", "blend_ticket").eq("source_id", blendTicketId).limit(
+        1,
+      ),
+  ]);
+  if (invoiceGuard.error || applicationGuard.error) {
+    return jsonResponse({ error: "Blend ticket lifecycle lookup failed" }, 500);
+  }
+  if (
+    (invoiceGuard.data?.length ?? 0) > 0 ||
+    (applicationGuard.data?.length ?? 0) > 0
+  ) {
+    return jsonResponse({
+      error: "OCR cannot run after billing or application-record creation",
+    }, 409);
+  }
+
+  // Every execution, including reprocess, must own a real queue row.
+  const { data: existingQueue, error: queueLookupError } = await adminClient
     .from("ocr_processing_queue")
     .select("*")
     .eq("blend_ticket_id", blendTicketId)
-    .in("status", ["pending", "processing"])
+    .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
 
-  const queueId = existingQueue?.id;
+  if (queueLookupError) {
+    return jsonResponse({ error: "OCR queue lookup failed" }, 500);
+  }
+  if (!existingQueue) {
+    return jsonResponse({ error: "OCR queue entry is required" }, 409);
+  }
+
+  const queueId = existingQueue.id;
+  const leaseToken = crypto.randomUUID();
+  let leaseHeartbeat: ReturnType<typeof startSerializedLeaseHeartbeat> | null =
+    null;
 
   try {
     // 2026-05-16 ultra-review P2 #6: every critical write now destructures
@@ -848,41 +922,114 @@ Deno.serve(async (req: Request) => {
     // processing forever, missing products, etc.) and the function still
     // reported success.
 
-    // Atomically CLAIM the queue row so two concurrent invocations for the same
-    // ticket can't both run OCR and interleave the product delete/insert.
-    // (Whole-codebase audit 2026-05-30, finding M3.) The previous unconditional
-    // UPDATE let a poller-fired second invocation — which saw the row still
-    // 'pending' before the first invocation flipped it — proceed in parallel,
-    // producing duplicate extracted product rows. We claim a 'pending' row, OR a
-    // 'processing' row whose started_at is stale (>2 min, the poller's stuck-job
-    // recovery window). A fresh 'processing' row means another invocation is
-    // actively working this ticket, so we bail.
-    if (queueId) {
-      const staleBefore = new Date(Date.now() - 2 * 60 * 1000).toISOString();
-      const nowIso = new Date().toISOString();
-      const { data: claimed, error: qProcErr } = await adminClient
-        .from("ocr_processing_queue")
-        .update({ status: "processing", started_at: nowIso, updated_at: nowIso })
-        .eq("id", queueId)
-        .or(`status.eq.pending,and(status.eq.processing,started_at.lt.${staleBefore})`)
-        .select("id");
-      if (qProcErr) throw new Error(`Failed to claim queue ${queueId} as processing: ${qProcErr.message}`);
-      if (!claimed || claimed.length === 0) {
-        // Lost the race: another invocation is already actively processing this
-        // ticket. Bail without re-running OCR or touching product rows.
-        return jsonResponse(
-          { status: "already_processing", blend_ticket_id: blendTicketId },
-          200,
-        );
-      }
+    const staleBefore = new Date(Date.now() - OCR_LEASE_STALE_MS).toISOString();
+    const nowIso = new Date().toISOString();
+    const claimValues = {
+      status: "processing",
+      started_at: nowIso,
+      completed_at: null,
+      error_message: null,
+      lease_token: leaseToken,
+      lease_heartbeat_at: nowIso,
+      updated_at: nowIso,
+      ...(isReprocess ? { retry_count: 0 } : {}),
+    };
+
+    let claimQuery = adminClient.from("ocr_processing_queue")
+      .update(claimValues).eq("id", queueId);
+    if (existingQueue.status === "pending") {
+      claimQuery = claimQuery.eq("status", "pending");
+    } else if (existingQueue.status === "processing") {
+      claimQuery = claimQuery.eq("status", "processing").or(
+        `lease_heartbeat_at.lt.${staleBefore},and(lease_heartbeat_at.is.null,started_at.lt.${staleBefore})`,
+      );
+    } else if (
+      isReprocess && ["completed", "failed"].includes(existingQueue.status)
+    ) {
+      claimQuery = claimQuery.eq("status", existingQueue.status);
+    } else {
+      return jsonResponse({
+        status: "not_queued",
+        blend_ticket_id: blendTicketId,
+      }, 409);
     }
 
-    // Mark ticket as processing (critical — UI shows stale state if this fails)
-    const { error: tProcErr } = await adminClient
+    const { data: claimed, error: qProcErr } = await claimQuery.select("id");
+    if (qProcErr) {
+      throw new Error(
+        `Failed to claim queue ${queueId} as processing: ${qProcErr.message}`,
+      );
+    }
+    if (!claimed || claimed.length === 0) {
+      return jsonResponse(
+        { status: "already_processing", blend_ticket_id: blendTicketId },
+        200,
+      );
+    }
+
+    const refreshLease = async () => {
+      const heartbeat = new Date().toISOString();
+      const { data, error } = await adminClient.from("ocr_processing_queue")
+        .update({ lease_heartbeat_at: heartbeat, updated_at: heartbeat })
+        .eq("id", queueId)
+        .eq("lease_token", leaseToken)
+        .eq("status", "processing")
+        .select("id");
+      if (error || !data?.length) {
+        throw new Error(`OCR queue lease lost for ${queueId}`);
+      }
+    };
+    leaseHeartbeat = startSerializedLeaseHeartbeat(
+      refreshLease,
+      OCR_LEASE_HEARTBEAT_INTERVAL_MS,
+    );
+
+    // CAS the processing transition against the lifecycle snapshot. Approval,
+    // linking, billing, or another status change after the initial read wins;
+    // this worker then releases its lease without overwriting that newer state.
+    const { data: processingTicket, error: tProcErr } = await adminClient
       .from("blend_tickets")
       .update({ status: "processing" })
-      .eq("id", blendTicketId);
-    if (tProcErr) throw new Error(`Failed to mark ticket ${blendTicketId} as processing: ${tProcErr.message}`);
+      .eq("id", blendTicketId)
+      .is("deleted_at", null)
+      .eq("status", ticketAuth.status)
+      .eq("review_status", "unreviewed")
+      .eq("order_link_status", "unlinked")
+      .eq("payment_status", "unbilled")
+      .select("id");
+    if (tProcErr) {
+      throw new Error(
+        `Failed to mark ticket ${blendTicketId} as processing: ${tProcErr.message}`,
+      );
+    }
+    if (!processingTicket?.length) {
+      await leaseHeartbeat.stop();
+      leaseHeartbeat.throwIfFailed();
+      leaseHeartbeat = null;
+      const releasedStatus = isReprocess ? existingQueue.status : "pending";
+      const { data: releasedLease, error: releaseError } = await adminClient
+        .from("ocr_processing_queue")
+        .update({
+          status: releasedStatus,
+          lease_token: null,
+          lease_heartbeat_at: null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", queueId)
+        .eq("lease_token", leaseToken)
+        .eq("status", "processing")
+        .select("id");
+      if (releaseError || !releasedLease?.length) {
+        throw new Error(
+          `OCR lifecycle changed and owned queue lease could not be released: ${
+            releaseError?.message ?? "lease lost"
+          }`,
+        );
+      }
+      return jsonResponse({
+        error: "Blend ticket lifecycle changed before OCR began",
+      }, 409);
+    }
 
     // Fetch images
     const { data: images, error: imgErr } = await adminClient
@@ -892,39 +1039,26 @@ Deno.serve(async (req: Request) => {
       .order("upload_order");
 
     if (imgErr) throw imgErr;
-    if (!images || images.length === 0) {
-      throw new Error("No images found for ticket");
-    }
+    validateBlendImageRecords(images, blendTicketId);
 
     // OCR each image via Google Vision AI
     let combinedText = "";
     for (const image of images) {
-      let imageUrl = image.image_url;
-      if (image.storage_path) {
-        const { data: signedData } = await adminClient.storage
-          .from("blend-ticket-images")
-          .createSignedUrl(image.storage_path, 3600);
-        if (signedData?.signedUrl) imageUrl = signedData.signedUrl;
-      }
+      await leaseHeartbeat.refreshNow();
 
-      const response = await fetch(imageUrl);
-      if (!response.ok) {
-        console.warn(
-          `Failed to fetch image ${image.id}: ${response.status}`,
-        );
-        continue;
-      }
-
-      const arrayBuffer = await response.arrayBuffer();
-      const base64 = btoa(
-        new Uint8Array(arrayBuffer).reduce(
-          (data, byte) => data + String.fromCharCode(byte),
-          "",
-        ),
+      const bytes = await fetchSignedBlendImage(
+        image,
+        (path) =>
+          adminClient.storage.from("blend-ticket-images")
+            .createSignedUrl(path, 3600),
+        fetch,
+        OCR_NETWORK_TIMEOUT_MS,
       );
+      const base64 = bytesToBase64(bytes);
 
       const text = await callVisionAPI(base64, visionApiKey);
       combinedText += text + "\n\n";
+      await leaseHeartbeat.refreshNow();
     }
 
     if (combinedText.trim().length === 0) {
@@ -935,15 +1069,19 @@ Deno.serve(async (req: Request) => {
     const parsedData = parseOCRText(combinedText);
 
     // Fuzzy match products & customers
-    const { data: products } = await adminClient
+    const { data: products, error: productsError } = await adminClient
       .from("products")
       .select("id, product_name, is_active")
       .eq("is_active", true);
 
-    const { data: customers } = await adminClient
+    const { data: customers, error: customersError } = await adminClient
       .from("customers")
       .select("id, farm_name, contact_name, is_active")
       .eq("is_active", true);
+
+    if (productsError || customersError) {
+      throw new Error("Failed to load OCR product/customer reference data");
+    }
 
     let matchedCustomerId: string | null = null;
     if (parsedData.customerName && customers) {
@@ -951,116 +1089,108 @@ Deno.serve(async (req: Request) => {
       if (matched) matchedCustomerId = matched.id;
     }
 
-    // Update blend ticket with ALL extracted fields
+    // Preserve explicit/manual values. OCR fills blanks; it never silently
+    // replaces customer/date/driver/tank or clears a field with parsed NULL.
     const ticketUpdate: Record<string, unknown> = {
       status: parsedData.overallConfidence >= 70 ? "completed" : "needs_review",
       raw_ocr_text: combinedText,
       ocr_confidence_score: parsedData.overallConfidence,
-      ticket_date: parsedData.ticketDate,
-      driver_name: parsedData.driverName,
-      tank_number: parsedData.tankNumber,
-      applicator_name: parsedData.applicatorName,
       signature_detected: parsedData.signatureDetected,
-      // Extended CropRx fields
-      job_number: parsedData.jobNumber,
-      ticket_time: parsedData.ticketTime,
-      vehicle_info: parsedData.vehicleInfo,
-      mixer_name: parsedData.mixerName,
-      field_names: parsedData.fieldNames,
-      total_acres: parsedData.totalAcres,
-      application_rate: parsedData.applicationRate,
-      total_volume: parsedData.totalVolume,
-      invoice_number: parsedData.invoiceNumber,
-      notes: parsedData.notes,
       updated_at: new Date().toISOString(),
     };
 
-    if (matchedCustomerId) {
+    const fillIfBlank = (column: string, current: unknown, parsed: unknown) => {
+      if (
+        (current === null || current === "") && parsed !== null && parsed !== ""
+      ) {
+        ticketUpdate[column] = parsed;
+      }
+    };
+    fillIfBlank("ticket_date", ticketAuth.ticket_date, parsedData.ticketDate);
+    fillIfBlank("driver_name", ticketAuth.driver_name, parsedData.driverName);
+    fillIfBlank("tank_number", ticketAuth.tank_number, parsedData.tankNumber);
+    fillIfBlank(
+      "applicator_name",
+      ticketAuth.applicator_name,
+      parsedData.applicatorName,
+    );
+    fillIfBlank("job_number", ticketAuth.job_number, parsedData.jobNumber);
+    fillIfBlank("ticket_time", ticketAuth.ticket_time, parsedData.ticketTime);
+    fillIfBlank(
+      "vehicle_info",
+      ticketAuth.vehicle_info,
+      parsedData.vehicleInfo,
+    );
+    fillIfBlank("mixer_name", ticketAuth.mixer_name, parsedData.mixerName);
+    fillIfBlank("field_names", ticketAuth.field_names, parsedData.fieldNames);
+    fillIfBlank("total_acres", ticketAuth.total_acres, parsedData.totalAcres);
+    fillIfBlank(
+      "application_rate",
+      ticketAuth.application_rate,
+      parsedData.applicationRate,
+    );
+    fillIfBlank(
+      "total_volume",
+      ticketAuth.total_volume,
+      parsedData.totalVolume,
+    );
+    fillIfBlank(
+      "invoice_number",
+      ticketAuth.invoice_number,
+      parsedData.invoiceNumber,
+    );
+    fillIfBlank("notes", ticketAuth.notes, parsedData.notes);
+
+    if (!ticketAuth.customer_id && matchedCustomerId) {
       ticketUpdate.customer_id = matchedCustomerId;
     }
 
-    // Update ticket with parsed data (critical — this IS the OCR result)
-    const { error: tUpdateErr } = await adminClient
-      .from("blend_tickets")
-      .update(ticketUpdate)
-      .eq("id", blendTicketId);
-    if (tUpdateErr) throw new Error(`Failed to update ticket ${blendTicketId} with parsed data: ${tUpdateErr.message}`);
+    await leaseHeartbeat.refreshNow();
 
-    // Codex audit F3 (P2, 2026-05-16): on reprocess, wipe existing rows BEFORE
-    // re-inserting so retries/reprocesses don't append duplicates. The
-    // manually_corrected=false filter preserves any rows the user has hand-
-    // edited via BlendTicketDetail's product edit UI — those are sacred.
-    // (Supersedes the earlier remote-only commit 740e9d9 that unconditionally
-    // wiped every product row including user-corrected ones.)
-    //
-    // Even on first-time runs there's a risk: if a prior attempt failed
-    // mid-loop (after some inserts committed), the retry would also duplicate.
-    // To guard against that without nuking user edits, we also wipe on
-    // first-time runs when ANY non-manual rows already exist for this ticket
-    // (indicating a prior partial run).
-    if (isReprocess) {
-      const { error: delErr } = await adminClient
-        .from("blend_ticket_products")
-        .delete()
-        .eq("blend_ticket_id", blendTicketId)
-        .eq("manually_corrected", false);
-      if (delErr) throw new Error(`Failed to clear prior product rows for reprocess: ${delErr.message}`);
-    } else {
-      // First-time run safety net: detect prior partial-failure rows and
-      // remove them so this attempt doesn't compound the duplication.
-      const { data: priorRows, error: countErr } = await adminClient
-        .from("blend_ticket_products")
-        .select("id")
-        .eq("blend_ticket_id", blendTicketId)
-        .eq("manually_corrected", false)
-        .limit(1);
-      if (countErr) throw new Error(`Failed to check for prior product rows: ${countErr.message}`);
-      if (priorRows && priorRows.length > 0) {
-        const { error: delErr } = await adminClient
-          .from("blend_ticket_products")
-          .delete()
-          .eq("blend_ticket_id", blendTicketId)
-          .eq("manually_corrected", false);
-        if (delErr) throw new Error(`Failed to clear stale product rows from prior partial run: ${delErr.message}`);
-      }
-    }
-
-    // Insert product records (critical — each row IS extracted product data)
-    for (let i = 0; i < parsedData.products.length; i++) {
-      const prod = parsedData.products[i];
-      let matchedProductId: string | null = null;
-
-      if (products) {
-        const matched = fuzzyMatchProduct(prod.productName, products);
-        if (matched) matchedProductId = matched.id;
-      }
-
-      const { error: prodInsertErr } = await adminClient.from("blend_ticket_products").insert({
-        blend_ticket_id: blendTicketId,
-        product_id: matchedProductId,
+    const ocrProducts = parsedData.products.map((prod, index) => {
+      const matched = products
+        ? fuzzyMatchProduct(prod.productName, products)
+        : null;
+      return {
+        product_id: matched?.id ?? null,
         product_name: prod.productName,
         quantity: prod.quantity,
         unit: prod.unit,
         lot_number: prod.lotNumber,
-        sequence_order: i + 1,
+        sequence_order: index + 1,
         confidence_score: prod.confidenceScore,
-        manually_corrected: false,
-      });
-      if (prodInsertErr) throw new Error(`Failed to insert product row ${i + 1} for ticket ${blendTicketId}: ${prodInsertErr.message}`);
-    }
+      };
+    });
 
-    // Mark queue complete (critical — queue stays "processing" forever otherwise, blocking retry logic)
-    if (queueId) {
-      const { error: qCompleteErr } = await adminClient
-        .from("ocr_processing_queue")
-        .update({
-          status: "completed",
-          completed_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", queueId);
-      if (qCompleteErr) throw new Error(`Failed to mark queue ${queueId} as completed: ${qCompleteErr.message}`);
+    // The database function fences on this worker's queue lease, locks and
+    // rechecks current ticket lifecycle, preserves fields edited during OCR,
+    // replaces non-manual product rows, and completes the queue atomically.
+    const { data: commitResult, error: commitError } = await adminClient.rpc(
+      "commit_blend_ticket_ocr_result",
+      {
+        p_blend_ticket_id: blendTicketId,
+        p_queue_id: queueId,
+        p_lease_token: leaseToken,
+        p_ticket_update: ticketUpdate,
+        p_products: ocrProducts,
+        p_idempotency_key: `ocr-commit:${queueId}:${leaseToken}`,
+      },
+    );
+    if (commitError) {
+      throw new Error(
+        `Failed to atomically commit OCR result: ${commitError.message}`,
+      );
     }
+    assertRpcResult<Record<string, unknown>>(
+      commitResult,
+      "commit_blend_ticket_ocr_result",
+    );
+    // The atomic commit has consumed and cleared the lease. Stop and await the
+    // recurring loop before any non-critical notification work or response.
+    // A refresh that lost the race to this successful terminal commit is safe
+    // to ignore because the commit itself proved ownership under row lock.
+    await leaseHeartbeat.stop();
+    leaseHeartbeat = null;
 
     // Notify uploader
     const { data: ticket } = await adminClient
@@ -1073,22 +1203,29 @@ Deno.serve(async (req: Request) => {
       // Notification is non-critical (audit #28 + reviewer's recommendation):
       // OCR processing already succeeded; missing notification doesn't roll back
       // the work. Capture to Sentry so we know if it stops working systemically.
-      const { error: notifErr } = await adminClient.from("notifications").insert({
-        user_id: ticket.uploaded_by,
-        title: "Blend Ticket Processed",
-        message:
-          `Ticket ${ticket.ticket_number} has been processed with ${parsedData.overallConfidence}% confidence`,
-        notification_type: "blend_ticket_processed",
-        related_entity_type: "blend_ticket",
-        related_entity_id: blendTicketId,
-      });
+      const { error: notifErr } = await adminClient.from("notifications")
+        .insert({
+          user_id: ticket.uploaded_by,
+          title: "Blend Ticket Processed",
+          message:
+            `Ticket ${ticket.ticket_number} has been processed with ${parsedData.overallConfidence}% confidence`,
+          notification_type: "blend_ticket_processed",
+          related_entity_type: "blend_ticket",
+          related_entity_id: blendTicketId,
+        });
       if (notifErr) {
-        console.warn("[process-blend-ticket] post-success notification insert failed:", notifErr);
+        console.warn(
+          "[process-blend-ticket] post-success notification insert failed:",
+          notifErr,
+        );
         await captureEdgeException(notifErr, {
           function: "process-blend-ticket",
           level: "warning",
           tags: { phase: "post-success-notification" },
-          extra: { blend_ticket_id: blendTicketId, uploaded_by: ticket.uploaded_by },
+          extra: {
+            blend_ticket_id: blendTicketId,
+            uploaded_by: ticket.uploaded_by,
+          },
           user: { id: caller.id },
         });
       }
@@ -1113,12 +1250,26 @@ Deno.serve(async (req: Request) => {
       status: ticketUpdate.status,
     });
   } catch (err) {
-    console.warn("OCR processing error:", err);
-    const errorMessage = err instanceof Error ? err.message : "Unknown error";
+    let processingError = err;
+    if (leaseHeartbeat) {
+      await leaseHeartbeat.stop();
+      try {
+        leaseHeartbeat.throwIfFailed();
+      } catch (leaseError) {
+        // Lease loss takes precedence over coincident downstream errors: it is
+        // the authoritative reason this worker may no longer mutate state.
+        processingError = leaseError;
+      }
+      leaseHeartbeat = null;
+    }
+    console.warn("OCR processing error:", processingError);
+    const errorMessage = processingError instanceof Error
+      ? processingError.message
+      : "Unknown error";
 
     // Sprint F #7 — alert on OCR processing failures (high-impact: blend
     // ticket stuck in pending/needs_review state until someone notices).
-    await captureEdgeException(err, {
+    await captureEdgeException(processingError, {
       function: "process-blend-ticket",
       level: "error",
       tags: { blend_ticket_id: blendTicketId },
@@ -1131,74 +1282,121 @@ Deno.serve(async (req: Request) => {
     // captured to Sentry above). Capture each failure separately so we can
     // diagnose if cleanup itself is broken.
     if (queueId && existingQueue) {
-      const newRetryCount = (existingQueue.retry_count || 0) + 1;
+      const newRetryCount =
+        (isReprocess ? 0 : (existingQueue.retry_count || 0)) + 1;
 
       if (newRetryCount >= (existingQueue.max_retries || 3)) {
-        const { error: qFailErr } = await adminClient
+        const { data: failedLease, error: qFailErr } = await adminClient
           .from("ocr_processing_queue")
           .update({
             status: "failed",
             error_message: errorMessage,
             retry_count: newRetryCount,
             completed_at: new Date().toISOString(),
+            lease_token: null,
+            lease_heartbeat_at: null,
             updated_at: new Date().toISOString(),
           })
-          .eq("id", queueId);
+          .eq("id", queueId)
+          .eq("lease_token", leaseToken)
+          .select("id");
         if (qFailErr) {
-          console.warn("[process-blend-ticket] catch-cleanup: queue->failed write failed:", qFailErr);
+          console.warn(
+            "[process-blend-ticket] catch-cleanup: queue->failed write failed:",
+            qFailErr,
+          );
           await captureEdgeException(qFailErr, {
             function: "process-blend-ticket",
             level: "warning",
             tags: { phase: "catch-cleanup-queue-failed" },
-            extra: { queueId, blend_ticket_id: blendTicketId, original_error: errorMessage },
+            extra: {
+              queueId,
+              blend_ticket_id: blendTicketId,
+              original_error: errorMessage,
+            },
           });
         }
 
-        const { error: tFailErr } = await adminClient
-          .from("blend_tickets")
-          .update({ status: "failed" })
-          .eq("id", blendTicketId);
-        if (tFailErr) {
-          console.warn("[process-blend-ticket] catch-cleanup: ticket->failed write failed:", tFailErr);
-          await captureEdgeException(tFailErr, {
-            function: "process-blend-ticket",
-            level: "warning",
-            tags: { phase: "catch-cleanup-ticket-failed" },
-            extra: { blend_ticket_id: blendTicketId, original_error: errorMessage },
-          });
+        if (failedLease?.length) {
+          const { error: tFailErr } = await adminClient
+            .from("blend_tickets")
+            .update({ status: "failed" })
+            .eq("id", blendTicketId)
+            .eq("status", "processing")
+            .eq("review_status", "unreviewed")
+            .eq("order_link_status", "unlinked")
+            .eq("payment_status", "unbilled");
+          if (tFailErr) {
+            console.warn(
+              "[process-blend-ticket] catch-cleanup: ticket->failed write failed:",
+              tFailErr,
+            );
+            await captureEdgeException(tFailErr, {
+              function: "process-blend-ticket",
+              level: "warning",
+              tags: { phase: "catch-cleanup-ticket-failed" },
+              extra: {
+                blend_ticket_id: blendTicketId,
+                original_error: errorMessage,
+              },
+            });
+          }
         }
       } else {
-        const { error: qPendingErr } = await adminClient
+        const { data: pendingLease, error: qPendingErr } = await adminClient
           .from("ocr_processing_queue")
           .update({
             status: "pending",
             error_message: errorMessage,
             retry_count: newRetryCount,
+            lease_token: null,
+            lease_heartbeat_at: null,
             updated_at: new Date().toISOString(),
           })
-          .eq("id", queueId);
+          .eq("id", queueId)
+          .eq("lease_token", leaseToken)
+          .select("id");
         if (qPendingErr) {
-          console.warn("[process-blend-ticket] catch-cleanup: queue->pending write failed:", qPendingErr);
+          console.warn(
+            "[process-blend-ticket] catch-cleanup: queue->pending write failed:",
+            qPendingErr,
+          );
           await captureEdgeException(qPendingErr, {
             function: "process-blend-ticket",
             level: "warning",
             tags: { phase: "catch-cleanup-queue-pending" },
-            extra: { queueId, blend_ticket_id: blendTicketId, original_error: errorMessage },
+            extra: {
+              queueId,
+              blend_ticket_id: blendTicketId,
+              original_error: errorMessage,
+            },
           });
         }
 
-        const { error: tPendingErr } = await adminClient
-          .from("blend_tickets")
-          .update({ status: "pending" })
-          .eq("id", blendTicketId);
-        if (tPendingErr) {
-          console.warn("[process-blend-ticket] catch-cleanup: ticket->pending write failed:", tPendingErr);
-          await captureEdgeException(tPendingErr, {
-            function: "process-blend-ticket",
-            level: "warning",
-            tags: { phase: "catch-cleanup-ticket-pending" },
-            extra: { blend_ticket_id: blendTicketId, original_error: errorMessage },
-          });
+        if (pendingLease?.length) {
+          const { error: tPendingErr } = await adminClient
+            .from("blend_tickets")
+            .update({ status: "pending" })
+            .eq("id", blendTicketId)
+            .eq("status", "processing")
+            .eq("review_status", "unreviewed")
+            .eq("order_link_status", "unlinked")
+            .eq("payment_status", "unbilled");
+          if (tPendingErr) {
+            console.warn(
+              "[process-blend-ticket] catch-cleanup: ticket->pending write failed:",
+              tPendingErr,
+            );
+            await captureEdgeException(tPendingErr, {
+              function: "process-blend-ticket",
+              level: "warning",
+              tags: { phase: "catch-cleanup-ticket-pending" },
+              extra: {
+                blend_ticket_id: blendTicketId,
+                original_error: errorMessage,
+              },
+            });
+          }
         }
       }
     }

@@ -239,11 +239,12 @@ export default function PurchaseOrderDetail() {
       }
     }
 
-    // Append over-receive reason to per-item notes for the audit trail.
+    // Send the reason as a dedicated field. The RPC decides which locked line
+    // is actually over-received and appends the audit marker server-side.
     const finalPayload = wouldOverReceive
       ? itemsPayload.map((ip) => ({
           ...ip,
-          notes: [ip.notes, `OVER-RECEIVE: ${overReceiveReason.trim()}`].filter(Boolean).join(' | '),
+          over_receive_reason: overReceiveReason.trim(),
         }))
       : itemsPayload;
 

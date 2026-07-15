@@ -6,32 +6,136 @@
 
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
-import { mkdtempSync, existsSync, readFileSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { mkdtempSync, existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, chmodSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { gitLocalEnvironmentNames, scratchHookEnvironment } from "./git-test-env.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 let pass = 0;
 function ok(c, m) { assert.ok(c, m); pass++; }
 function eq(a, b, m) { assert.equal(a, b, m); pass++; }
 
-function runHook(file, payload, projectDir) {
+function runHook(file, payload, projectDir, inheritedEnv = process.env) {
   return spawnSync(process.execPath, [path.join(__dirname, file)], {
     input: JSON.stringify(payload),
     encoding: "utf8",
-    env: { ...process.env, CLAUDE_PROJECT_DIR: projectDir },
+    env: scratchHookEnvironment(projectDir, inheritedEnv),
+    cwd: projectDir,
   });
 }
 
 const tmpRoot = mkdtempSync(path.join(os.tmpdir(), "registry-freshness-test-"));
 const flagPathIn = (dir) => path.join(dir, ".claude", "session-state", "REGISTRY-STALE.flag");
+function git(args, cwd) {
+  return spawnSync("git", args, {
+    cwd,
+    encoding: "utf8",
+    env: scratchHookEnvironment(cwd, process.env),
+  });
+}
 
 try {
+  let r;
+  // Inherited Git hook context must not bind a scratch child to another
+  // checkout. This mirrors a normal `git commit` parent environment.
+  const contaminatedParent = path.join(tmpRoot, "contaminated-parent");
+  mkdirSync(contaminatedParent, { recursive: true });
+  git(["init", "-q"], contaminatedParent);
+  const dirIsolated = path.join(tmpRoot, "isolated");
+  mkdirSync(dirIsolated, { recursive: true });
+  const allRepositoryLocalGitEnv = Object.fromEntries(
+    gitLocalEnvironmentNames().map((name) => [name, `inherited-${name}`]),
+  );
+  const contaminatedEnv = {
+    ...process.env,
+    ...allRepositoryLocalGitEnv,
+    GIT_DIR: path.join(contaminatedParent, ".git"),
+    GIT_WORK_TREE: contaminatedParent,
+    GIT_INDEX_FILE: path.join(contaminatedParent, ".git", "index"),
+    GIT_CONFIG_COUNT: "1",
+    GIT_CONFIG_KEY_0: "test.hookcontext",
+    GIT_CONFIG_VALUE_0: "parent",
+  };
+  const sanitizedEnv = scratchHookEnvironment(dirIsolated, contaminatedEnv);
+  ok(
+    gitLocalEnvironmentNames().every((name) => !Object.hasOwn(sanitizedEnv, name)),
+    "every Git repository-local environment variable is stripped from scratch hooks",
+  );
+  ok(
+    !Object.hasOwn(sanitizedEnv, "GIT_CONFIG_KEY_0") && !Object.hasOwn(sanitizedEnv, "GIT_CONFIG_VALUE_0"),
+    "indexed Git config key/value variables are stripped with GIT_CONFIG_COUNT",
+  );
+  eq(sanitizedEnv.CLAUDE_PROJECT_DIR, dirIsolated, "scratch hook env preserves the scratch CLAUDE_PROJECT_DIR");
+  r = runHook("registry-freshness.mjs", {
+    tool_name: "mcp__supabase__apply_migration",
+    tool_input: { project_id: "x", name: "inherited_git_context", query: "CREATE TABLE x (id int);" },
+  }, dirIsolated, contaminatedEnv);
+  eq(r.status, 0, "inherited Git context does not break scratch hook execution");
+  ok(existsSync(flagPathIn(dirIsolated)), "inherited Git context writes only the scratch flag");
+  ok(!existsSync(flagPathIn(contaminatedParent)), "inherited Git context does not write a parent-worktree flag");
+
+  // Real Git hook launch: Git itself exports repository-local GIT_* variables
+  // to hooks. This is the regression path that synthetic env maps missed.
+  const realHookParent = path.join(tmpRoot, "real-hook-parent");
+  mkdirSync(realHookParent, { recursive: true });
+  git(["init", "-q"], realHookParent);
+  const realHookScratch = path.join(tmpRoot, "real-hook-scratch");
+  const realHookResultPath = path.join(tmpRoot, "real-hook-result.json");
+  const realHookHelper = path.join(tmpRoot, "real-hook-helper.mjs");
+  writeFileSync(realHookHelper, `
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import path from "node:path";
+
+const { gitLocalEnvironmentNames, scratchHookEnvironment } = await import(${JSON.stringify(pathToFileURL(path.join(__dirname, "git-test-env.mjs")).href)});
+const scratchDir = ${JSON.stringify(realHookScratch)};
+const parentDir = ${JSON.stringify(realHookParent)};
+const registryFreshness = ${JSON.stringify(path.join(__dirname, "registry-freshness.mjs"))};
+const resultPath = ${JSON.stringify(realHookResultPath)};
+mkdirSync(scratchDir, { recursive: true });
+
+const inheritedNames = gitLocalEnvironmentNames().filter((name) => Object.hasOwn(process.env, name));
+const result = spawnSync(process.execPath, [registryFreshness], {
+  input: JSON.stringify({
+    tool_name: "mcp__supabase__apply_migration",
+    tool_input: { project_id: "x", name: "real_git_hook_context", query: "CREATE TABLE real_git_hook_context (id int);" },
+  }),
+  encoding: "utf8",
+  cwd: scratchDir,
+  env: scratchHookEnvironment(scratchDir, process.env),
+});
+
+const summary = {
+  status: result.status,
+  stdout: result.stdout,
+  stderr: result.stderr,
+  inheritedNames,
+  scratchFlag: existsSync(path.join(scratchDir, ".claude", "session-state", "REGISTRY-STALE.flag")),
+  parentFlag: existsSync(path.join(parentDir, ".claude", "session-state", "REGISTRY-STALE.flag")),
+};
+writeFileSync(resultPath, JSON.stringify(summary, null, 2));
+process.exit(summary.status === 0 && summary.inheritedNames.length > 0 && summary.scratchFlag && !summary.parentFlag ? 0 : 1);
+`);
+  const hookPath = path.join(realHookParent, ".git", "hooks", "pre-commit");
+  writeFileSync(hookPath, `#!/bin/sh\nnode "${realHookHelper.replaceAll("\\", "/")}"\n`);
+  chmodSync(hookPath, 0o755);
+  r = git([
+    "-c", "user.email=test@test.com",
+    "-c", "user.name=test",
+    "commit", "--allow-empty", "-q", "-m", "real hook env isolation",
+  ], realHookParent);
+  eq(r.status, 0, "real git pre-commit hook can run scratch registry-freshness child");
+  const realHookSummary = JSON.parse(readFileSync(realHookResultPath, "utf8"));
+  ok(realHookSummary.inheritedNames.length > 0, "real git hook exported repository-local Git env vars");
+  ok(realHookSummary.scratchFlag, "real git hook child writes only the scratch flag");
+  ok(!realHookSummary.parentFlag, "real git hook child does not write a parent-worktree flag");
+
   // ── (a) apply_migration with registry-relevant DDL → flag written + context emitted ─
   const dirA = path.join(tmpRoot, "a");
   mkdirSync(dirA, { recursive: true });
-  let r = runHook("registry-freshness.mjs", {
+  r = runHook("registry-freshness.mjs", {
     tool_name: "mcp__supabase__apply_migration",
     tool_input: { project_id: "rhyzpcqhnizqbxphqdkr", name: "20990101000000_test_table", query: "CREATE TABLE x (id int);" },
   }, dirA);
@@ -142,9 +246,6 @@ try {
   // A live apply from inside a git WORKTREE must be visible to sql-safety.mjs
   // running in the MAIN checkout (or a sibling worktree) — not just the
   // worktree that made the apply. Uses a real `git worktree add`.
-  function git(args, cwd) {
-    return spawnSync("git", args, { cwd, encoding: "utf8" });
-  }
   const mainRepo = path.join(tmpRoot, "fix4-main");
   mkdirSync(mainRepo, { recursive: true });
   git(["init", "-q"], mainRepo);
