@@ -158,4 +158,22 @@ describe('useOCRProcessor', () => {
 
     expect(mockCaptureException).toHaveBeenCalled();
   });
+
+  it('treats a resolved Edge Function error as failure and does not increment processedCount', async () => {
+    mockLimit.mockResolvedValueOnce({
+      data: [{ blend_ticket_id: 'bt-1', status: 'pending', retry_count: 0 }],
+      error: null,
+    });
+    mockInvoke.mockResolvedValueOnce({
+      data: null,
+      error: { message: 'Edge Function returned 500' },
+    });
+
+    const { result } = renderHook(() => useOCRProcessor(true));
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+
+    expect(mockCaptureException).toHaveBeenCalled();
+    expect(result.current.processedCount).toBe(0);
+  });
 });

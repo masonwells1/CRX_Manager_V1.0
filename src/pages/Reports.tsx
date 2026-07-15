@@ -449,7 +449,7 @@ export default function Reports() {
     setYeLoading(false);
   };
 
-  // ─── Commission mark-paid (original) ────────────────────────
+  // ─── Commission payment-batch creation ──────────────────────
   const handleMarkPaid = async () => {
     if (selectedCommissions.size === 0) { toast('error', 'Select at least one commission'); return; }
     // Only pending commissions can be marked paid
@@ -470,7 +470,7 @@ export default function Reports() {
         byRecipient.get(rid)!.push(c.id);
       }
 
-      let totalPaid = 0;
+      let totalBatched = 0;
       for (const [, ids] of byRecipient) {
         const { data, error } = await supabase.rpc('create_commission_payment', {
           p_commission_ids: ids,
@@ -486,11 +486,11 @@ export default function Reports() {
         });
         if (error) throw new Error(error.message);
         assertRpcResult<string>(data, 'create_commission_payment');
-        totalPaid += ids.length;
+        totalBatched += ids.length;
       }
 
-      toast('success', `${totalPaid} commission(s) marked as paid (${byRecipient.size} payment${byRecipient.size > 1 ? 's' : ''} created)`);
-      if (profile) logActivity({ event: 'commissions_paid', description: `${totalPaid} commission(s) marked as paid via Reports`, performedBy: profile.id });
+      toast('success', `${totalBatched} commission(s) added to ${byRecipient.size} unposted payment batch${byRecipient.size > 1 ? 'es' : ''}. Review and post ${byRecipient.size > 1 ? 'them' : 'it'} in Commission Payments.`);
+      if (profile) logActivity({ event: 'commission_payment_batch_created', description: `${totalBatched} commission(s) added to unposted payment batches via Reports`, performedBy: profile.id });
       fetchCommissions();
     } catch (err: unknown) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'mark_commissions_paid' } });
@@ -890,7 +890,7 @@ export default function Reports() {
                 {selectedCommissions.size > 0 && <span className="text-sm text-secondary">{selectedCommissions.size} selected</span>}
               </div>
               {isAdmin && selectedCommissions.size > 0 && (
-                <Button size="sm" icon={<CheckCircle2 className="w-4 h-4" />} onClick={handleMarkPaid} loading={markingPaid}>Mark as Paid</Button>
+                <Button size="sm" icon={<CheckCircle2 className="w-4 h-4" />} onClick={handleMarkPaid} loading={markingPaid}>Create Payment Batch</Button>
               )}
             </div>
           )}

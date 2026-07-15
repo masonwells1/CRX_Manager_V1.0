@@ -1148,14 +1148,15 @@ export interface BlendTicket {
   payment_status: BlendTicketPaymentStatus;
   job_id: string | null;
   application_service_id: string | null;
+  manually_corrected_fields: string[];
   created_at: string;
   updated_at: string;
-  uploader?: Profile;
-  reviewer?: Profile;
-  customer?: Customer;
-  field?: Field;
+  uploader?: Pick<Profile, 'id' | 'full_name'> | null;
+  reviewer?: Pick<Profile, 'id' | 'full_name'> | null;
+  customer?: Pick<Customer, 'id' | 'farm_name'> | null;
+  field?: Pick<Field, 'id' | 'field_name'> | null;
   job?: Job;
-  salesman?: Profile;
+  salesman?: Pick<Profile, 'id' | 'full_name'> | null;
   applicator?: Profile;
   vehicle?: Vehicle;
   application_service?: ApplicationService;
@@ -1200,6 +1201,7 @@ export interface BlendTicketImage {
 export interface BlendTicketToOrderItem {
   id: string;
   blend_ticket_id: string;
+  blend_ticket_product_id: string;
   order_item_id: string;
   order_id: string;
   quantity_applied: number | null;
