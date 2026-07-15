@@ -4,9 +4,9 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
-## 2026-07-15 — Return creation RPC-only boundary drafted and parked (not applied)
+## 2026-07-15 — Return creation RPC-only boundary live
 
-Draft migration `20260715182757_park_returns_creation_rpc_only.sql` removes the role-only `returns_insert` policy and external `returns` INSERT privilege so authenticated admin/sales users cannot bypass the canonical `create_return` RPC. It also revokes direct external INSERT/UPDATE/DELETE privileges on `return_items`, whose application and lifecycle writers are already privileged return RPCs. Existing `returns` UPDATE/DELETE behavior is deliberately preserved behind the July 15 lifecycle/status triggers. The standing return invariant now catches future INSERT-policy/grant drift, and the rollback-only return-credit smoke adds real authenticated-role denial probes plus the successful `create_return` path. **Parked only: the migration was not applied, no live data or schema was changed, and the schema registry was not refreshed.**
+Migration `20260715182757_park_returns_creation_rpc_only.sql` was applied live as Supabase ledger `20260715203911` / `20260715182757_park_returns_creation_rpc_only` after Sol xhigh adversarial review returned `VERDICT: PASS` and disposable proof replayed the exact migration, exact return-credit smoke (`SMOKE_PASS_ROLLBACK`), and exact standing invariant. The migration removes the role-only `returns_insert` policy and external `returns` INSERT privilege so authenticated admin/sales users cannot bypass the canonical `create_return` RPC. It also revokes direct external INSERT/UPDATE/DELETE privileges on `return_items`, whose application and lifecycle writers are already privileged return RPCs. Existing `returns` UPDATE/DELETE behavior is deliberately preserved behind the July 15 lifecycle/status triggers. Post-apply live catalog checks confirmed zero return INSERT policies, no anon/authenticated direct `returns` INSERT, zero return-item mutation policies, no anon/authenticated direct return-item DML, authenticated/service-role `create_return` execution retained, anon execution denied, and the standing return invariant returned zero rows.
 
 ---
 
