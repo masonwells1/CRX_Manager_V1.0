@@ -2,7 +2,7 @@
  * OrderDetail.test.tsx — Tests for the order detail page
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 
 const { mockFrom, mockRpc, mockToast, mockNavigate } = vi.hoisted(() => ({
@@ -163,5 +163,48 @@ describe('OrderDetail', () => {
     // errored) with one honest Cancel Order action.
     await waitFor(() => expect(screen.getByText('Cancel Order')).toBeInTheDocument());
     expect(screen.queryByText('Change Status')).not.toBeInTheDocument();
+  });
+
+  it('posts split draft invoices through one atomic group RPC', async () => {
+    const orderData = {
+      id: 'ord-123', order_number: 'ORD-0099', status: 'confirmed', customer_id: 'cust-1',
+      order_date: '2026-03-15', total_cents: 50000, total_cost: 30000, total_price: 50000,
+      total_profit: 20000, total_margin_pct: 40, order_name: 'Spring Order', notes: '',
+      created_at: '2026-03-15T00:00:00Z', delivery_priority: 'normal', po_number: null,
+    };
+    const splitDrafts = [
+      {
+        id: 'inv-1', invoice_number: 'INV-1', invoice_group_id: 'group-1',
+        status: 'draft', invoice_type: 'chemical_sale', invoice_date: '2026-03-15',
+        due_date: null, total_amount_cents: 25000, balance_cents: 25000,
+      },
+      {
+        id: 'inv-2', invoice_number: 'INV-2', invoice_group_id: 'group-1',
+        status: 'draft', invoice_type: 'chemical_sale', invoice_date: '2026-03-15',
+        due_date: null, total_amount_cents: 25000, balance_cents: 25000,
+      },
+    ];
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'orders') return buildChain({ data: orderData, error: null });
+      if (table === 'invoices') return buildChain({ data: splitDrafts, error: null });
+      return buildChain({ data: [], error: null });
+    });
+    mockRpc.mockResolvedValue({
+      data: { posted_invoice_ids: ['inv-1', 'inv-2'], member_count: 2 },
+      error: null,
+    });
+
+    renderOrderDetail();
+    const postButton = await screen.findByRole('button', { name: /post all drafts/i });
+    fireEvent.click(postButton);
+
+    await waitFor(() => expect(mockRpc).toHaveBeenCalledWith(
+      'post_invoice_group',
+      expect.objectContaining({
+        p_invoice_group_id: 'group-1',
+        p_performed_by: 'user-1',
+      }),
+    ));
+    expect(mockRpc.mock.calls.some(([name]) => name === 'post_invoice')).toBe(false);
   });
 });

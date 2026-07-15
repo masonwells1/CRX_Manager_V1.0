@@ -141,7 +141,7 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_FAIL: (e) after restore holds pa=% (expected 150)', v_pa_total;
   END IF;
 
-  -- (f) plan switched off: next save releases everything
+  -- (f) plan switched off: save_quote releases everything transactionally.
   UPDATE quotes SET is_planned = false WHERE id = v_q;
   v_payload := v_payload || jsonb_build_object('status', 'revised');
   v_res := save_quote(v_q, v_payload, v_sections, v_admin, NULL);

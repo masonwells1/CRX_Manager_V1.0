@@ -25,6 +25,7 @@ import { formatCents as fmt } from '../lib/money';
 import { SkeletonTable, SkeletonCard } from '../components/ui/Skeleton';
 import { getSeasonDates } from '../utils/season';
 import { generateIdempotencyKey } from '../lib/idempotency';
+import { buildInvoicePostTargets, describeInvoicePostScope } from '../lib/invoiceBatchPosting';
 import PageHeader from '../components/ui/PageHeader';
 
 type InvoiceRow = Invoice & { customer_name: string; salesman_name: string | null; order_number: string | null };
@@ -86,8 +87,8 @@ export default function Invoices() {
   const batchDeleteIdem = useIdempotencyKey('delete_invoices', profile?.id || '');
   const canPostInvoices = profile?.role === 'admin' || profile?.role === 'sales_rep';
   const isAdmin = profile?.role === 'admin';
-  // post_invoice is called once per selected invoice. Keep a stable key for each
-  // invoice across a failed/network-lost retry, and clear only that key on success.
+  // Keep one stable key per standalone invoice or split group across a
+  // failed/network-lost retry, and clear only that action's key on success.
   const postKeysRef = useRef<Record<string, string>>({});
   // Reset the remaining batch keys whenever the selected set changes (Codex P2 fix).
   // See the `selectedKey` derivation + useEffect below.
@@ -211,49 +212,63 @@ export default function Invoices() {
   // Determine what's selected for action buttons
   const selectedInvoices = invoices.filter((i) => selected.has(i.id));
   const selectedPostable = selectedInvoices.filter((i) => ['draft', 'unposted'].includes(i.status));
+  const postConfirmation = describeInvoicePostScope(selectedPostable);
   const selectedVoidable = selectedInvoices.filter((i) => ['posted', 'overdue'].includes(i.status));
   const selectedDeletable = selectedInvoices.filter((i) => ['draft', 'voided'].includes(i.status));
   const selectableStatuses = ['draft', 'unposted', 'posted', 'voided'];
 
-  // Batch post — post_invoice is admin+sales_rep while batch_post_invoices is
-  // admin-only/all-or-nothing. Process each invoice independently so good rows
-  // still post and the user gets an exact failure summary for the rest.
+  // Batch post — standalone invoices post independently, while split invoices
+  // are deduplicated by group and posted atomically through post_invoice_group.
+  // This preserves partial success across unrelated actions without allowing a
+  // single group member to bypass the server's GROUP_POST_REQUIRED guard.
   const handleBatchPost = async () => {
     setShowPostModal(false);
     if (!profile || !canPostInvoices) {
       toast('error', 'Admin or sales access is required to post invoices');
       return;
     }
-    const targets = selectedPostable.map((i) => ({ id: i.id, invoice_number: i.invoice_number }));
+    const targets = buildInvoicePostTargets(selectedPostable);
     if (targets.length === 0) {
       toast('error', 'No postable invoices selected');
       return;
     }
-
     await runCriticalAction({
       action: async () => {
-        let posted = 0;
+        let completedActions = 0;
         const failures: string[] = [];
         const failedIds: string[] = [];
         for (const target of targets) {
-          if (!postKeysRef.current[target.id]) {
-            postKeysRef.current[target.id] = generateIdempotencyKey('post_invoice', `${profile.id}:${target.id}`);
+          if (!postKeysRef.current[target.key]) {
+            postKeysRef.current[target.key] = generateIdempotencyKey(
+              target.operation,
+              `${profile.id}:${target.scopeId}`,
+            );
           }
           try {
-            // post_invoice RETURNS void — the canonical void-RPC pattern is
-            // .throwOnError() with no result capture.
-            await supabase.rpc('post_invoice', {
-              p_invoice_id: target.id,
-              p_idempotency_key: postKeysRef.current[target.id],
-            }).throwOnError();
-            posted += 1;
-            delete postKeysRef.current[target.id];
-          } catch (err: unknown) {
-            failedIds.push(target.id);
-            if (hasRpcCode(err, RpcErrorCodes.PRICING_INCOMPLETE)) {
-              failures.push(`${target.invoice_number}: needs pricing first`);
+            if (target.operation === 'post_invoice_group') {
+              const { data, error } = await supabase.rpc('post_invoice_group', {
+                p_invoice_group_id: target.invoiceGroupId!,
+                p_performed_by: profile.id,
+                p_idempotency_key: postKeysRef.current[target.key],
+              });
+              if (error) throw error;
+              assertRpcResult(data, 'post_invoice_group');
             } else {
-              failures.push(`${target.invoice_number}: ${sanitizeError(err)}`);
+              // post_invoice RETURNS void — the canonical void-RPC pattern is
+              // .throwOnError() with no result capture.
+              await supabase.rpc('post_invoice', {
+                p_invoice_id: target.invoiceId!,
+                p_idempotency_key: postKeysRef.current[target.key],
+              }).throwOnError();
+            }
+            completedActions++;
+            delete postKeysRef.current[target.key];
+          } catch (err: unknown) {
+            failedIds.push(...target.selectedIds);
+            if (hasRpcCode(err, RpcErrorCodes.PRICING_INCOMPLETE)) {
+              failures.push(`${target.label}: needs pricing first`);
+            } else {
+              failures.push(`${target.label}: ${sanitizeError(err)}`);
             }
           }
         }
@@ -265,12 +280,12 @@ export default function Invoices() {
           setSelected(new Set(failedIds));
           const shown = failures.slice(0, 3).join(' | ');
           const extra = failures.length > 3 ? ` | +${failures.length - 3} more` : '';
-          throw new Error(`Posted ${posted}/${targets.length}. Failed: ${shown}${extra}`);
+          throw new Error(`Completed ${completedActions}/${targets.length} posting action(s). Failed: ${shown}${extra}`);
         }
         setSelected(new Set());
       },
       toast,
-      successMessage: `Posted ${targets.length} invoice(s)`,
+      successMessage: 'Posting completed for the selected invoices and full split groups',
       setLoading: setPosting,
       sentryTag: 'batch_post_invoices_client_loop',
     });
@@ -864,8 +879,8 @@ export default function Invoices() {
         onClose={() => setShowPostModal(false)}
         onConfirm={handleBatchPost}
         title="Post Selected Invoices"
-        message={`Post ${selectedPostable.length} selected invoices? Posting locks them into AR.`}
-        confirmLabel={`Post ${selectedPostable.length}`}
+        message={postConfirmation.message}
+        confirmLabel={postConfirmation.confirmLabel}
         variant="info"
         icon={Send}
         loading={posting}

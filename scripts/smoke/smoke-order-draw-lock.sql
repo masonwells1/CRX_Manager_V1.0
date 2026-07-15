@@ -39,6 +39,7 @@ DECLARE
   v_admin uuid;
   v_customer uuid;
   v_product uuid;
+  v_product_2 uuid;
   v_q uuid;
   v_q2 uuid;
   v_sec uuid;
@@ -209,8 +210,49 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_FAIL: (d) control edit blocked or wrong, qty=%', v_qty;
   END IF;
 
+  -- (e) An item id from a different order must be rejected before the large
+  -- implementation can mutate either order.
+  BEGIN
+    PERFORM update_order_items(v_o2,
+      jsonb_build_array(jsonb_build_object(
+        'id', v_item_a, 'product_id', v_product,
+        'price_per_unit', 10, 'total_units_needed', 250)),
+      v_admin, NULL);
+    RAISE EXCEPTION 'SMOKE_FAIL: (e) cross-order item id was allowed';
+  EXCEPTION WHEN OTHERS THEN
+    v_err := SQLERRM;
+    IF v_err LIKE 'SMOKE_FAIL%' THEN RAISE; END IF;
+    IF v_err NOT LIKE 'ORDER_ITEM_MISMATCH%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: (e) expected ORDER_ITEM_MISMATCH, got: %', v_err;
+    END IF;
+  END;
+  SELECT total_units_needed INTO v_qty FROM order_items WHERE id = v_item_2;
+  IF v_qty IS DISTINCT FROM 250 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: (e) control order changed despite rejection, qty=%', v_qty;
+  END IF;
+
+  -- (f) Adding a product with no inventory snapshot creates that row before
+  -- prebooking, so the ledger and physical snapshot cannot diverge.
+  INSERT INTO products (product_name, current_cost, tier1_price, unit_size)
+  VALUES ('[SMOKE] Draw Lock New Product ' || v_suffix, 3, 7, 'gal')
+  RETURNING id INTO v_product_2;
+  PERFORM update_order_items(v_o2,
+    jsonb_build_array(
+      jsonb_build_object(
+        'id', v_item_2, 'product_id', v_product,
+        'price_per_unit', 10, 'total_units_needed', 250),
+      jsonb_build_object(
+        'product_id', v_product_2, 'product_name', '[SMOKE] added item',
+        'price_per_unit', 7, 'total_units_needed', 7, 'unit_size', 'gal')
+    ), v_admin, NULL);
+  SELECT quantity_prebooked INTO v_qty FROM inventory
+  WHERE product_id = v_product_2 AND location = 'Main Warehouse';
+  IF v_qty IS DISTINCT FROM 7 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: (f) new product snapshot/prebook qty=%, expected 7', v_qty;
+  END IF;
+
   -- --------------------------------------------------------------------
-  -- (e) Deactivated admin: must be rejected by the active-actor guard
+  -- (g) Deactivated admin: must be rejected by the active-actor guard
   --     (txn-local flip — rolled back with everything else)
   -- --------------------------------------------------------------------
   UPDATE profiles SET is_active = false WHERE id = v_admin;
@@ -220,17 +262,17 @@ BEGIN
         'id', v_item_2, 'product_id', v_product,
         'price_per_unit', 10, 'total_units_needed', 240)),
       v_admin, NULL);
-    RAISE EXCEPTION 'SMOKE_FAIL: (e) deactivated admin was ALLOWED to edit';
+    RAISE EXCEPTION 'SMOKE_FAIL: (g) deactivated admin was ALLOWED to edit';
   EXCEPTION WHEN OTHERS THEN
     v_err := SQLERRM;
     IF v_err LIKE 'SMOKE_FAIL%' THEN RAISE; END IF;
     IF v_err NOT LIKE 'INSUFFICIENT_ROLE%' THEN
-      RAISE EXCEPTION 'SMOKE_FAIL: (e) expected INSUFFICIENT_ROLE, got: %', v_err;
+      RAISE EXCEPTION 'SMOKE_FAIL: (g) expected INSUFFICIENT_ROLE, got: %', v_err;
     END IF;
   END;
   SELECT total_units_needed INTO v_qty FROM order_items WHERE id = v_item_2;
   IF v_qty IS DISTINCT FROM 250 THEN
-    RAISE EXCEPTION 'SMOKE_FAIL: (e) state changed despite rejection, qty=%', v_qty;
+    RAISE EXCEPTION 'SMOKE_FAIL: (g) state changed despite rejection, qty=%', v_qty;
   END IF;
 
   -- --------------------------------------------------------------------
