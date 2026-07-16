@@ -12,6 +12,11 @@ import { useAuth } from '../contexts/AuthContext';
 import { supabase, sanitizeError, assertRpcResult } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
+import {
+  purchaseOrderCentsToDollars,
+  purchaseOrderLineTotalCents,
+  purchaseOrderUnitCostCents,
+} from '../lib/purchaseOrderMoney';
 import { notifyDamagedReceiving, notifyOverReceive } from '../lib/notificationTriggers';
 import { logActivity } from '../lib/activityLogger';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
@@ -468,6 +473,7 @@ export default function PurchaseOrderDetail() {
         unit_size: item.unit_size || null,
         quantity_ordered: parseFloat(item.quantity_ordered),
         unit_cost: parseFloat(item.unit_cost),
+        unit_cost_cents: purchaseOrderUnitCostCents(parseFloat(item.unit_cost)),
         quantity_received: item.quantity_received || 0,
       }));
 
@@ -710,7 +716,9 @@ export default function PurchaseOrderDetail() {
                     </td>
                     <td className="px-4 py-3 font-mono">{fmt(item.unit_cost)}</td>
                     <td className="px-4 py-3 font-mono">
-                      {fmt(item.quantity_ordered * item.unit_cost)}
+                      {fmt(purchaseOrderCentsToDollars(
+                        purchaseOrderLineTotalCents(item.quantity_ordered, item.unit_cost),
+                      ))}
                     </td>
                   </tr>
                 ))}

@@ -23,7 +23,7 @@
     },
     "save_purchase_order": {
       "chain": "smoke-save-purchase-order-status-lock.sql",
-      "description": "Purchase-order lifecycle correction: an active sales rep cannot create a submitted PO through save_purchase_order, creates and idempotently replays a draft, edits it without changing status, cannot transition status through ordinary save, submits through the dedicated idempotent submit_purchase_order RPC, cannot downgrade the submitted PO through save, and cancels it through the dedicated idempotent cancel_purchase_order RPC. An active non-office user is denied. Self-contained fixture and terminal rollback.",
+      "description": "Purchase-order lifecycle and cents correction: fractional-cent costs are rejected; an active sales rep cannot create a submitted PO through save_purchase_order, creates and idempotently replays a draft with a fractional quantity and penny-exact integer-cent header and line costs, edits it without changing status, cannot transition status through ordinary save, submits through the dedicated idempotent submit_purchase_order RPC, cannot downgrade the submitted PO through save, and cancels it through the dedicated idempotent cancel_purchase_order RPC. An active non-office user is denied. Self-contained fixture and terminal rollback.",
       "covers": ["save_purchase_order", "submit_purchase_order", "cancel_purchase_order"]
     },
     "gauntlet_money_workflows": {

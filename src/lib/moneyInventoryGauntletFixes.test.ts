@@ -36,6 +36,7 @@ const deliveryPeriodRewriteGuard = source(
 const deliveryScheduledDateRewriteGuard = source(
   'supabase/migrations/20260716183442_guard_delivery_scheduled_date_rewrites.sql',
 );
+const purchaseOrderCents = source('supabase/migrations/20260716183501_purchase_order_integer_cents.sql');
 const completeDelivery = access.slice(0, access.indexOf('CREATE OR REPLACE FUNCTION public.void_delivery'));
 
 describe('money and inventory gauntlet fixes', () => {
@@ -227,6 +228,27 @@ describe('money and inventory gauntlet fixes', () => {
     expect(saveHandler.indexOf("supabase.rpc('save_purchase_order'")).toBeLessThan(
       saveHandler.indexOf("supabase.rpc('submit_purchase_order'"),
     );
+  });
+
+  it('calculates purchase-order costs in integer cents', () => {
+    const centsSaveFunction = purchaseOrderCents.slice(
+      purchaseOrderCents.indexOf('CREATE OR REPLACE FUNCTION public.save_purchase_order('),
+      purchaseOrderCents.indexOf('REVOKE EXECUTE ON FUNCTION public.save_purchase_order('),
+    );
+    expect(purchaseOrderCents).toContain('unit_cost_cents bigint');
+    expect(purchaseOrderCents).toContain('total_cost_cents bigint');
+    expect(centsSaveFunction).toContain('v_total_cost_cents bigint := 0');
+    expect(centsSaveFunction).toContain('round(\n      COALESCE((v_item->>\'quantity_ordered\')::numeric, 0)');
+    expect(purchaseOrderCents).toContain('PO_UNIT_COST_FRACTIONAL_CENT');
+    expect(centsSaveFunction).not.toContain('v_total_cost numeric');
+
+    for (const path of [
+      'src/pages/NewPurchaseOrder.tsx',
+      'src/pages/PurchaseOrderDetail.tsx',
+      'src/components/purchase-orders/BulkPOImport.tsx',
+    ]) {
+      expect(source(path)).toContain('unit_cost_cents: purchaseOrderUnitCostCents(');
+    }
   });
 
   it('keeps every revoked money and inventory table mutation behind an RPC', () => {

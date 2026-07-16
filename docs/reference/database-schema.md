@@ -34,8 +34,8 @@
 - `inventory` - Stock per product per location (quantity_available, quantity_prebooked, quantity_on_order, reorder_point, min_stock_level, manufactured_at_delivery — P4-7 phantom-row flag, default false)
 - `inventory_transactions` - Audit trail (transaction_type CHECK: received/booked/delivered/returned/adjusted/transferred/job_applied/cancelled_delivery_reversal/void_delivery_reversal/prebooked/released/prebook_reconciliation)
 - `inventory_holds` - Reserved inventory (quantity, hold_type: manual/crop_program, expires_at, is_active, source_id — links to quote for auto-release on accept/decline/expire)
-- `purchase_orders` - Supplier POs (po_number, vendor, status, total_cost)
-- `purchase_order_items` - PO line items (quantity_ordered, quantity_received, unit_cost)
+- `purchase_orders` - Supplier POs (po_number, vendor, status, exact dollar `total_cost`, generated bigint `total_cost_cents`)
+- `purchase_order_items` - PO line items (quantity_ordered, quantity_received, exact dollar `unit_cost`, generated bigint `unit_cost_cents`)
 
 ## Deliveries
 - `deliveries` - Delivery headers (delivery_number, order_id, assigned_driver, scheduled_date, status, signature_url, priority, delivery_window_start/end, cancelled_at/by, cancel_reason, issue_type, issue_notes, is_quick_delivery)

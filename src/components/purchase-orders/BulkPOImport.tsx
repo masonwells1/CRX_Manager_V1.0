@@ -12,6 +12,11 @@ import { generateIdempotencyKey } from '../../lib/idempotency';
 import { Sentry } from '../../lib/sentry';
 import { formatUSD as fmt } from '../../lib/money';
 import type { Product } from '../../types';
+import {
+  purchaseOrderCentsToDollars,
+  purchaseOrderLineTotalCents,
+  purchaseOrderUnitCostCents,
+} from '../../lib/purchaseOrderMoney';
 
 // ---------- interfaces ----------
 
@@ -387,6 +392,7 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
           product_name: item.matched_product!.product_name,
           quantity_ordered: item.quantity_ordered,
           unit_cost: item.unit_cost,
+          unit_cost_cents: purchaseOrderUnitCostCents(item.unit_cost),
           unit_size: item.unit_size || null,
           quantity_received: 0,
           notes: item.notes || null,
@@ -549,7 +555,10 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
             {/* Parsed POs accordion */}
             <div className="space-y-3 max-h-[500px] overflow-y-auto">
               {parsedPOs.map((po, poIdx) => {
-                const poTotal = po.items.reduce((s, i) => s + i.quantity_ordered * i.unit_cost, 0);
+                const poTotal = purchaseOrderCentsToDollars(po.items.reduce(
+                  (sum, item) => sum + purchaseOrderLineTotalCents(item.quantity_ordered, item.unit_cost),
+                  0,
+                ));
                 const hasErrors = po.parse_errors.length > 0;
                 const hasItems = po.items.length > 0;
 
@@ -767,7 +776,9 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
                                       />
                                     </td>
                                     <td className="px-3 py-2 font-mono text-sm text-nav-dark">
-                                      {fmt(item.quantity_ordered * item.unit_cost)}
+                                      {fmt(purchaseOrderCentsToDollars(
+                                        purchaseOrderLineTotalCents(item.quantity_ordered, item.unit_cost),
+                                      ))}
                                     </td>
                                     <td className="px-3 py-2">
                                       <button
