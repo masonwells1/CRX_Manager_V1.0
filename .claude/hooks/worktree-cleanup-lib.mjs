@@ -14,6 +14,18 @@
 
 export const PROTECTED_BRANCHES = ["main", "master"];
 
+// A worktree touched within this window is treated as a LIVE session and never
+// auto-removed — even if it looks merged+clean+unlocked (2026-07-16 scaffolding
+// review: a sibling session's SessionStart sweep deleted an actively-running,
+// unlocked, merged-clean worktree because only the CURRENT session's own path was
+// protected). "Touched" = the newest mtime of the worktree's git index/HEAD/reflog
+// OR its .claude/session-state — including the SESSION-HEARTBEAT marker that
+// session-heartbeat.mjs stamps on EVERY tool call, so even a long read-only
+// session (which makes no git writes) stays live inside the window. Recoverable
+// either way, but losing an in-use checkout mid-session is disruptive; locking is
+// the belt, this heartbeat is the suspenders for sessions that didn't lock.
+export const ACTIVE_WINDOW_MS = 3 * 60 * 60 * 1000; // 3 hours
+
 // A worktree is treated as harness-managed (safe to auto-remove) only when it
 // lives under `.claude/worktrees/`. Mason's long-lived manual checkouts
 // (C:\CRX_Manager, C:\CRX_Layer2, …) live elsewhere and are never auto-removed.
@@ -29,19 +41,30 @@ export function normPath(p) {
 }
 
 // Decide the fate of ONE worktree.
-//   fact: { path, branch, detached, locked, dirty, merged }
+//   fact: { path, branch, detached, locked, dirty, merged, lastActivityMs? }
 //     - merged: true iff the branch has ZERO commits whose patch is not already
 //       in origin/main (computed by the runner via `git cherry`, so squash/rebase
 //       merges count as merged — a plain ancestor check would miss those).
-//   ctx:  { currentPath, protectedBranches = PROTECTED_BRANCHES, harnessMarker = HARNESS_MARKER }
+//     - lastActivityMs: newest mtime (ms) of the worktree's git index/HEAD/reflog
+//       or .claude/session-state; omit/0 if unknown.
+//   ctx:  { currentPath, nowMs?, activeWindowMs?, protectedBranches, harnessMarker }
 // Returns { action: "remove" | "keep", reason } where reason is a short code.
 export function classifyWorktree(fact, ctx = {}) {
   const protectedBranches = ctx.protectedBranches || PROTECTED_BRANCHES;
   const harnessMarker = (ctx.harnessMarker || HARNESS_MARKER).toLowerCase();
+  const nowMs = typeof ctx.nowMs === "number" ? ctx.nowMs : Date.now();
+  const activeWindowMs = typeof ctx.activeWindowMs === "number" ? ctx.activeWindowMs : ACTIVE_WINDOW_MS;
   const path = normPath(fact.path);
 
   // 1. Never touch the worktree this very session is running in.
   if (path && path === normPath(ctx.currentPath)) return { action: "keep", reason: "active-session" };
+  // 1b. Never touch a worktree with recent activity — a live SIBLING session,
+  //     even if merged+clean+unlocked. Guards the observed failure where a
+  //     sibling's SessionStart sweep deleted an in-use checkout.
+  if (typeof fact.lastActivityMs === "number" && fact.lastActivityMs > 0 &&
+      nowMs - fact.lastActivityMs < activeWindowMs) {
+    return { action: "keep", reason: "recently-active" };
+  }
   // 2. Detached HEAD or no branch — nothing to safely reason about; leave it.
   if (fact.detached || !fact.branch) return { action: "keep", reason: "detached" };
   // 3. Protected branches are never removed.

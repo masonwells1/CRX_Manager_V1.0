@@ -18,8 +18,9 @@
 //   --report          DRY RUN: print the plan in plain text, delete nothing
 //   --write           perform cleanup and print a plain-text report (manual use)
 
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, statSync, readdirSync } from "node:fs";
 import { execFileSync, spawnSync } from "node:child_process";
+import path from "node:path";
 import { parseWorktreePorcelain } from "./worktree-awareness-lib.mjs";
 import { planCleanup, HARNESS_MARKER } from "./worktree-cleanup-lib.mjs";
 
@@ -98,6 +99,28 @@ try {
     return r.ok ? r.out.split("\n").some((l) => l.trim()) : true; // unreadable → assume dirty (keep)
   }
 
+  // Newest mtime (ms) among a worktree's live-activity markers: its git index,
+  // HEAD, reflog (touched on every commit/checkout/merge), and anything under
+  // .claude/session-state (hook state an active session writes continuously).
+  // A recent value means a LIVE session — the classifier keeps it. Best-effort;
+  // any error contributes nothing (0), so a worktree is never KEPT-forever on a
+  // read error, only removed when it also looks provably finished.
+  function lastActivityMs(wtPath) {
+    if (!wtPath || !existsSync(wtPath)) return 0;
+    const mtime = (p) => { try { return statSync(p).mtimeMs; } catch { return 0; } };
+    let newest = 0;
+    for (const rel of ["index", "HEAD", "logs/HEAD"]) {
+      const gp = gitTry(["rev-parse", "--git-path", rel], wtPath);
+      if (gp.ok) newest = Math.max(newest, mtime(path.resolve(wtPath, gp.out.trim())));
+    }
+    const stateDir = path.join(wtPath, ".claude", "session-state");
+    try {
+      newest = Math.max(newest, mtime(stateDir));
+      for (const name of readdirSync(stateDir)) newest = Math.max(newest, mtime(path.join(stateDir, name)));
+    } catch { /* no session-state → contributes nothing */ }
+    return newest;
+  }
+
   // Build worktree facts.
   const worktreeFacts = entries.map((e) => ({
     path: e.path,
@@ -106,6 +129,7 @@ try {
     locked: lockedPaths.has(e.path),
     dirty: e.detached || !e.branch ? false : dirty(e.path),
     merged: e.detached || !e.branch ? false : isMerged(e.branch),
+    lastActivityMs: lastActivityMs(e.path),
   }));
   const worktreeBranches = new Set(entries.map((e) => e.branch).filter(Boolean));
 
@@ -116,7 +140,7 @@ try {
     .filter((b) => !worktreeBranches.has(b))
     .map((b) => ({ branch: b, checkedOut: false, merged: isMerged(b) }));
 
-  const plan = planCleanup({ worktrees: worktreeFacts, branches: branchFacts }, { currentPath: currentTop });
+  const plan = planCleanup({ worktrees: worktreeFacts, branches: branchFacts }, { currentPath: currentTop, nowMs: Date.now() });
 
   // Snapshot recovery SHAs BEFORE deleting anything.
   const shaOf = (ref) => (gitTry(["rev-parse", "--short", ref]).out || "").trim();
