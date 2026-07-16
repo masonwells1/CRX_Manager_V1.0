@@ -17,6 +17,10 @@ DECLARE
   v_edit_items jsonb;
   v_status text;
   v_vendor text;
+  v_total_cost numeric;
+  v_total_cost_cents bigint;
+  v_saved_unit_cost numeric;
+  v_saved_unit_cost_cents bigint;
   v_count bigint;
   v_err text;
   v_suffix text := substr(md5(random()::text), 1, 8);
@@ -53,8 +57,9 @@ BEGIN
   v_items := jsonb_build_array(jsonb_build_object(
     'product_id', v_product,
     'product_name', v_product_name,
-    'quantity_ordered', 5,
-    'unit_cost', v_unit_cost,
+    'quantity_ordered', 10.125,
+    'unit_cost', 3.33,
+    'unit_cost_cents', 333,
     'unit_size', v_unit_size,
     'quantity_received', 0
   ));
@@ -94,6 +99,34 @@ BEGIN
   IF v_count <> 0 THEN
     RAISE EXCEPTION 'SMOKE_FAIL: rejected initial status left % PO rows', v_count;
   END IF;
+
+  -- Fractional-cent legacy payloads are rejected before any row is written.
+  BEGIN
+    PERFORM save_purchase_order(
+      NULL,
+      jsonb_build_object(
+        'po_number', v_invalid_number || '-FRACTION',
+        'vendor', '[SMOKE] Fractional Cent',
+        'status', 'draft'
+      ),
+      jsonb_build_array(jsonb_build_object(
+        'product_id', v_product,
+        'product_name', v_product_name,
+        'quantity_ordered', 1,
+        'unit_cost', 3.331,
+        'unit_size', v_unit_size
+      )),
+      v_sales,
+      NULL
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: fractional-cent PO unit cost was accepted';
+  EXCEPTION WHEN OTHERS THEN
+    v_err := SQLERRM;
+    IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_err NOT LIKE 'PO_UNIT_COST_FRACTIONAL_CENT:%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: wrong fractional-cent error: %', v_err;
+    END IF;
+  END;
 
   -- Positive path: save one draft and prove exact idempotent replay.
   v_result := save_purchase_order(
@@ -136,23 +169,37 @@ BEGIN
   SELECT id INTO v_item
   FROM purchase_order_items
   WHERE purchase_order_id = v_po;
+  SELECT total_cost, total_cost_cents
+    INTO v_total_cost, v_total_cost_cents
+  FROM purchase_orders
+  WHERE id = v_po;
+  SELECT unit_cost, unit_cost_cents
+    INTO v_saved_unit_cost, v_saved_unit_cost_cents
+  FROM purchase_order_items
+  WHERE id = v_item;
   SELECT count(*) INTO v_count
   FROM activity_feed
   WHERE related_entity_type = 'purchase_order'
     AND related_entity_id = v_po
     AND event_type = 'po_created';
   IF v_status <> 'draft' OR v_vendor <> '[SMOKE] Draft Vendor'
-     OR v_item IS NULL OR v_count <> 1 THEN
-    RAISE EXCEPTION 'SMOKE_FAIL: draft/replay state status=% vendor=% item=% create_events=%',
-      v_status, v_vendor, v_item, v_count;
+     OR v_item IS NULL OR v_count <> 1
+     OR v_total_cost IS DISTINCT FROM 33.72::numeric
+     OR v_total_cost_cents IS DISTINCT FROM 3372::bigint
+     OR v_saved_unit_cost IS DISTINCT FROM 3.33::numeric
+     OR v_saved_unit_cost_cents IS DISTINCT FROM 333::bigint THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: draft/replay state status=% vendor=% item=% events=% total=% cents=% unit=% unit_cents=%',
+      v_status, v_vendor, v_item, v_count, v_total_cost, v_total_cost_cents,
+      v_saved_unit_cost, v_saved_unit_cost_cents;
   END IF;
 
   v_edit_items := jsonb_build_array(jsonb_build_object(
     'id', v_item,
     'product_id', v_product,
     'product_name', v_product_name,
-    'quantity_ordered', 5,
-    'unit_cost', v_unit_cost,
+    'quantity_ordered', 10.125,
+    'unit_cost', 3.33,
+    'unit_cost_cents', 333,
     'unit_size', v_unit_size,
     'quantity_received', 0
   ));

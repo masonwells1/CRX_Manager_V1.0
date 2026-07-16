@@ -6,7 +6,7 @@
     "regenerate_with": "node scripts/regenerate-schema-registry.mjs --from-introspection <queries.json> (queries documented in the script header)",
     "purpose": "Single source of truth for hooks: generated columns, status enums, ALL parseable CHECK IN-lists, NOT NULL columns, full column lists, sequences, tables-with/without updated_at, applied-migration high water.",
     "note": "For a fresh refresh from the live DB, ask Claude Code: 'regenerate the schema-registry from Supabase' (/regen-schema-registry). skipped_constraints lists every CHECK the hooks can NOT validate — review it when touching those tables.",
-    "migrations_high_water": "20260716174220",
+    "migrations_high_water": "20260716184406",
     "applied_migration_names": [
       "20260207_gap_analysis_fixes.sql",
       "20260209050000_inventory_overhaul",
@@ -231,6 +231,7 @@
       "20260716160000_fix_idempotency_committed_replay_guard",
       "20260716170559_crm_set_primary_contact",
       "20260716173342_authorize_delivery_before_replay",
+      "20260716183501_purchase_order_integer_cents",
       "a1_dispatched_list_recent_completed",
       "a1b_dispatched_to_me_completed_tail",
       "accounting_and_integrity_fixes",
@@ -561,6 +562,7 @@
       "grower_share_pricing",
       "guard_delivery_closed_periods",
       "guard_delivery_period_rewrites",
+      "guard_delivery_scheduled_date_rewrites",
       "guard_prepay_with_period_check",
       "harden_commission_payment_creation",
       "harden_maintenance_secdef_revoke_authenticated",
@@ -825,6 +827,16 @@
       "table": "jobs",
       "column": "remaining_acres",
       "expression": "GREATEST((COALESCE(total_acres, (0)::numeric) - COALESCE(applied_acres, (0)::numeric)), (0)::numeric)"
+    },
+    {
+      "table": "purchase_order_items",
+      "column": "unit_cost_cents",
+      "expression": "(round((unit_cost * (100)::numeric)))::bigint"
+    },
+    {
+      "table": "purchase_orders",
+      "column": "total_cost_cents",
+      "expression": "(round((total_cost * (100)::numeric)))::bigint"
     },
     {
       "table": "vendor_bills",
@@ -2575,6 +2587,18 @@
       "table": "purchase_order_items",
       "constraint": "chk_poi_qty_received",
       "def": "CHECK ((quantity_received >= (0)::numeric))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "purchase_order_items",
+      "constraint": "purchase_order_items_unit_cost_whole_cents",
+      "def": "CHECK (((unit_cost >= (0)::numeric) AND (unit_cost = ((unit_cost_cents)::numeric / 100.0))))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "purchase_orders",
+      "constraint": "purchase_orders_total_cost_whole_cents",
+      "def": "CHECK (((total_cost >= (0)::numeric) AND (total_cost = ((total_cost_cents)::numeric / 100.0))))",
       "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
     },
     {
@@ -5639,7 +5663,8 @@
       "quantity_received",
       "unit_size",
       "notes",
-      "product_name"
+      "product_name",
+      "unit_cost_cents"
     ],
     "purchase_orders": [
       "id",
@@ -5655,7 +5680,8 @@
       "updated_at",
       "cancelled_at",
       "cancelled_by",
-      "cancel_reason"
+      "cancel_reason",
+      "total_cost_cents"
     ],
     "quote_items": [
       "id",

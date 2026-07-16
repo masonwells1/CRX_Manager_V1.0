@@ -6750,6 +6750,7 @@ export type Database = {
           quantity_ordered: number
           quantity_received: number
           unit_cost: number
+          unit_cost_cents: number | null
           unit_size: string | null
         }
         Insert: {
@@ -6761,6 +6762,7 @@ export type Database = {
           quantity_ordered?: number
           quantity_received?: number
           unit_cost?: number
+          unit_cost_cents?: number | null
           unit_size?: string | null
         }
         Update: {
@@ -6772,6 +6774,7 @@ export type Database = {
           quantity_ordered?: number
           quantity_received?: number
           unit_cost?: number
+          unit_cost_cents?: number | null
           unit_size?: string | null
         }
         Relationships: [
@@ -6812,6 +6815,7 @@ export type Database = {
           status: string
           submitted_date: string | null
           total_cost: number
+          total_cost_cents: number | null
           updated_at: string
           vendor: string
         }
@@ -6828,6 +6832,7 @@ export type Database = {
           status?: string
           submitted_date?: string | null
           total_cost?: number
+          total_cost_cents?: number | null
           updated_at?: string
           vendor?: string
         }
@@ -6844,6 +6849,7 @@ export type Database = {
           status?: string
           submitted_date?: string | null
           total_cost?: number
+          total_cost_cents?: number | null
           updated_at?: string
           vendor?: string
         }
@@ -9107,6 +9113,19 @@ export type Database = {
         }
         Returns: undefined
       }
+      _complete_delivery_authorized_impl: {
+        Args: {
+          p_completed_at?: string
+          p_delivery_id: string
+          p_idempotency_key?: string
+          p_issue_notes?: string
+          p_issue_type?: string
+          p_performed_by?: string
+          p_quantities?: Json
+          p_signed_by: string
+        }
+        Returns: Json
+      }
       _insert_commissions_for_job: {
         Args: {
           p_commission_date?: string
@@ -9141,6 +9160,10 @@ export type Database = {
       _post_invoice_impl_20260714: {
         Args: { p_idempotency_key?: string; p_invoice_id: string }
         Returns: undefined
+      }
+      _purchase_order_item_unit_cost_cents: {
+        Args: { p_item: Json }
+        Returns: number
       }
       _receive_return_impl_20260714: {
         Args: {
@@ -11508,14 +11531,6 @@ export type Database = {
       }
       season_end_date: { Args: { p_season: number }; Returns: string }
       season_start_date: { Args: { p_season: number }; Returns: string }
-      submit_purchase_order: {
-        Args: {
-          p_idempotency_key?: string
-          p_performed_by: string
-          p_po_id: string
-        }
-        Returns: Json
-      }
       set_application_record_lots: {
         Args: {
           p_application_record_id: string
