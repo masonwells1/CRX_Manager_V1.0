@@ -1,6 +1,6 @@
 # Supplier Pricing, Price History & Product Variants — Plan
 
-**Date:** 2026-07-16 (rev 4 — incorporates Codex gpt-5.6 adversarial review, same day; rev 2 added pre-season replacement cost + pricing worksheet; rev 3 extended the worksheet to all routinely-edited product fields)
+**Date:** 2026-07-16 (rev 5 — Mason's decision: NO AI extraction of supplier PDFs, manual-entry-only ingestion; rev 4 incorporated the Codex adversarial review; rev 2–3 added pre-season replacement cost, the pricing worksheet, and whole-product fields)
 **Status:** PROPOSED — awaiting Mason's approval of the architecture decision
 **Branch:** `claude/supplier-pricing-strategy-9c6129` (planning only, no code in this session)
 **Advisors:** Claude (grounding + synthesis) with Codex gpt-5.6 ("Sol 5.6") — advisory round + full adversarial review (verdict folded into this rev; see §11)
@@ -80,13 +80,17 @@ New tables store integer cents; `products.current_cost`/tier prices remain legac
 ### 5a. What we will NOT call "inventory cost" (honesty rule)
 `inventory` and `receiving_records` carry no cost; without lot-level costing, "cost of what's on hand" is not computable. The worksheet/product page therefore shows **"last paid (date)"** and **"recent-PO weighted average"** — both derived from PO lines and labeled as such. True on-hand costing (receipt-cost lots, remaining quantities, FIFO/weighted-average allocation, adjustments, reconciliation) is a **separate future design**, explicitly out of scope here.
 
-## 6. PDF ingestion (hybrid pipeline)
+## 6. Supplier price ingestion — manual entry only (Mason's decision, 2026-07-16)
 
-1. Keep Vision OCR for page → text/layout.
-2. **Add an LLM extraction step** (Anthropic API call in the edge function) converting OCR output into the strict import-row schema — replaces the brittle regex as primary parser for varied supplier formats. Share provider strategy with the parked vendor-bill (X6/D1) pilot so we run ONE document-AI approach, not two.
-3. Deterministic validation after the LLM: cents parsing, UOM/pack checks, duplicate detection, vendor alias resolution. The LLM extracts; it never authorizes.
-4. **Mandatory review screen** before anything becomes an observation: supplier + sheet date; every row with page ref + confidence; proposed product match; current cost vs newest vs cheapest-comparable; new/changed/unchanged/cannot-compare status; only high-confidence rows preselected; approval summary states plainly *"You are adding N supplier observations. You are changing ZERO sell prices."*
-5. **Acceptance gate before this ships:** a test corpus of real supplier PDFs (Mason supplies 3–5 actual monthly sheets, ideally one per supplier) must pass extraction+review with measured accuracy. Unreadable/degenerate sheets get an exception path: manual entry into the same staging tables (usable from day one, LLM or not). Source documents are retained in storage for audit.
+**Owner decision (rev 5): NO automated extraction from supplier PDFs — no LLM, no OCR parsing of price sheets.** Mason judged machine-read prices too risky; supplier prices enter the system only through human-entered, staged, reviewed data.
+
+The workflow:
+1. **Supplier quote sheet** — a downloadable .xlsx template per supplier (same format contract as §6b): one row per linked product showing the product, the supplier's last known price + date, pack/UOM — with editable columns for new price, effective date, and price kind (list/quote/contract/promo). Mason (or staff) transcribes from the supplier's PDF while reading it.
+2. Upload → **staged import** (`supplier_price_imports`/`_rows`) → deterministic validation (cents parsing, UOM/pack checks, duplicate detection, alias resolution) → **review screen**: every row, new/changed/unchanged/cannot-compare status, approval summary stating plainly *"You are adding N supplier observations. You are changing ZERO sell prices."*
+3. The source PDF can be attached to the import for provenance/audit — stored, never parsed.
+4. Quick single-quote entry (one product, one supplier, one price — e.g. a phone quote) goes through the same staging + review path.
+
+**AI extraction is explicitly PARKED, not designed-in.** If monthly transcription proves too tedious in practice, it can be revisited later — the staging/review architecture is deliberately shaped so an extraction step could slot in front of the same review gate without any redesign. Re-opening it is an owner decision.
 
 ## 6b. The product & pricing worksheet — owner-controlled round-trip (Phase 1 centerpiece)
 
@@ -96,7 +100,7 @@ Mason's preferred control surface is a spreadsheet, so the primary batch-edit wo
 
 **Export** (one click, one row per product; variant rows grouped by family once Phase 3 lands). Column groups:
 - **Identity** (read-only, protected): product_id, product, SKU, category, pack/unit, `row_version`
-- **Market evidence** (read-only, AI/import-fed): latest price + date **per supplier** (quoted package price AND normalized per-inventory-unit cost), best comparable = **replacement cost today**, or "cannot compare"
+- **Market evidence** (read-only, fed by approved supplier-quote imports §6): latest price + date **per supplier** (quoted package price AND normalized per-inventory-unit cost), best comparable = **replacement cost today**, or "cannot compare"
 - **Purchase evidence** (read-only): on-hand qty, **last paid + date**, **recent-PO weighted average** (per §5a labels)
 - **Current pricing** (read-only): current cost basis, tier 1/2/3 margins + prices
 - **Editable — pricing**: `pricing_mode` per row (**margin-driven**: new cost + margins, server computes prices; or **price-driven**: new cost + explicit tier prices, server reconciles margins — one mode per row, both never compete), + optional note
@@ -109,11 +113,11 @@ Mason's preferred control surface is a spreadsheet, so the primary batch-edit wo
 - **Regulatory/label fields stay OFF the editable set** (EPA registration, signal word, REI/PHI, max label rate) — curated by the EPA-verified label-data tooling; read-only here.
 - Pricing edits → `cost_history` (via the single writer); product-info edits → `activity_feed` entries with old→new values.
 
-**Division of labor**: AI (PDF pipeline, §6) keeps market-evidence columns fresh; Mason alone edits decision columns.
+**Division of labor**: the supplier quote sheets (§6) keep market-evidence columns fresh; only the product worksheet's decision columns change sell pricing — and only Mason edits those.
 
 ## 6c. Retiring the unsafe legacy path (Phase 1a, first)
 
-`BulkPricingImport` currently lets an OCR'd PDF directly overwrite `current_cost` + tier prices (and the margin trigger then rewrites sell prices). **Before anything else ships:** its price-list/PDF mode is rerouted to create staged imports only (§6's pipeline), and its direct product writes are removed. Any surviving manual CSV pricing path must use the same preview/apply RPC as the worksheet. This closes the "bad scan silently reprices a grower's quote" hole — the single biggest business risk both reviewers identified.
+`BulkPricingImport` currently lets an OCR'd PDF directly overwrite `current_cost` + tier prices (and the margin trigger then rewrites sell prices). **Before anything else ships:** its price-list/PDF OCR mode is retired outright (per Mason's rev-5 no-machine-read decision, there is no automated replacement), and its direct product writes are removed. Any surviving manual CSV pricing path must use the same preview/apply RPC as the worksheet. This closes the "bad scan silently reprices a grower's quote" hole — the single biggest business risk both reviewers identified.
 
 ## 7. Variants / return-policy pricing (least-disruptive path)
 
@@ -133,16 +137,13 @@ Instead:
 - Worksheet round-trip for the **pricing columns**: .xlsx contract, row_version, preview/apply RPCs, atomic change-sets, single-writer history
 - Single history writer (trigger + frontend insert removal)
 
-### Phase 1b — Supplier evidence MVP (no LLM needed to be useful)
+### Phase 1b — Supplier evidence (complete ingestion, manual-only per §6)
 - Vendor dedup + `vendor_aliases` (+ review flow) + `legacy_vendor_resolution`
 - `product_supplier_links` (with conversion factors), staging tables, `supplier_price_observations` (append-only enforced)
-- Manual/CSV staged entry of supplier quotes — Mason can start tracking suppliers immediately
+- Supplier quote sheets (.xlsx template per supplier) + quick single-quote entry — both staged + reviewed
 - Comparison surface (per-supplier latest + normalized cost + cannot-compare) and the supplier-filterable product price-history view
-- PO backfill through reviewed vendor resolution
-
-### Phase 1c — Document automation
-- LLM extraction into the same staging tables, gated by the real-PDF acceptance corpus (§6.5)
 - Market-evidence columns of the worksheet export go live from observations
+- PO backfill through reviewed vendor resolution
 
 ### Phase 2 — Governed cost basis
 - `product_cost_basis` + "select basis → preview sell-price impact → confirm" workflow
@@ -153,19 +154,20 @@ Instead:
 - `product_families`, policy attributes, classify the 163 variants (no merges)
 - Picker + return-blocking enforcement (§7)
 
-### Separate future project (explicitly parked)
+### Separate future projects (explicitly parked)
 - True on-hand inventory costing (lot-level, §5a)
+- **AI/OCR extraction of supplier price sheets** — parked by Mason's decision 2026-07-16 (§6); re-opening it is an owner decision
 
 ### Explicitly NOT building (YAGNI)
-Automated vendor selection; automatic sell-price changes from imports; PO `vendor_id` FK migration; rebate optimization; freight allocation; catalog/SKU rewrite. **Never cut:** supplier identity, staged approval, immutable observations, the §6c retirement of the legacy write path.
+Automated vendor selection; automatic sell-price changes from imports; machine-read price sheets (parked above); PO `vendor_id` FK migration; rebate optimization; freight allocation; catalog/SKU rewrite. **Never cut:** supplier identity, staged approval, immutable observations, the §6c retirement of the legacy write path.
 
 ## 9. Open owner decisions
 
-1. **Approve this architecture** (observation layer + never-auto-change-sell-prices + owner-controlled worksheet; rev 4 = adversarially hardened version). Recommended: yes.
-2. **Anthropic API key** — needed for Phase 1c LLM extraction (same key unblocks the parked vendor-bill pilot; already TODO owner-action #6). Phases 1a/1b don't wait on it.
-3. **Vendor merges** — confirm "The Anderson's"="The Andersons" and "Van Deist"="Van Diest" (already an open TODO item).
-4. **Real PDF samples** — 3–5 actual supplier price-sheet PDFs (ideally one per supplier) for the Phase 1c acceptance corpus.
-5. **Priority** — where Phase 1a/1b slot against the current roadmap (CRM Phase 2, etc.).
+1. **Approve this architecture** (observation layer + never-auto-change-sell-prices + owner-controlled worksheet; adversarially hardened rev 4, manual-ingestion rev 5). Recommended: yes.
+2. **Vendor merges** — confirm "The Anderson's"="The Andersons" and "Van Deist"="Van Diest" (already an open TODO item).
+3. **Priority** — where Phase 1a/1b slot against the current roadmap (CRM Phase 2, etc.).
+
+*(SETTLED 2026-07-16 by Mason: no AI/OCR extraction of supplier PDFs — manual staged entry only. This also removed the Anthropic-API-key and PDF-sample-corpus asks from this project; the vendor-bill pilot's key need is unrelated and stands on its own.)*
 
 ## 10. What Mason sees, per want (alignment check)
 
@@ -173,7 +175,7 @@ Automated vendor selection; automatic sell-price changes from imports; PO `vendo
 |---|---|
 | A. Compare 2–3 suppliers, know who's cheapest | §4a comparison surface (normalized or "cannot compare"), Phase 1b |
 | B. Price history per product per supplier | §5 supplier-filterable history view + PO backfill, Phase 1b |
-| C. Monthly PDF price sheets | §6 pipeline + acceptance corpus + manual fallback, Phase 1c (manual/CSV staging works from 1b) |
+| C. Monthly PDF price sheets | §6 supplier quote sheets (transcribe from PDF into a prefilled .xlsx, staged + reviewed), Phase 1b — AI extraction parked by Mason's decision |
 | D. Tote/no-return variants, scalable | §7 families + enforcement, Phase 3 |
 | E. Replacement cost vs actual cost, pre-season | §3 dual display with honest labels (§5a), Phases 1a–1b |
 | F. Spreadsheet control of pricing | §6b atomic round-trip, Phase 1a |
@@ -182,3 +184,5 @@ Automated vendor selection; automatic sell-price changes from imports; PO `vendo
 ## 11. Adversarial review record (2026-07-16)
 
 Codex gpt-5.6 reviewed rev 3 adversarially (full context of Mason's wants; read the plan + code read-only). Verdict: architecture right, rev 3 not approvable as written. All three BLOCKERs and all HIGH/MED findings were accepted and folded into this rev 4: legacy BulkPricingImport write path must be retired first (→ §6c, Phase 1a); worksheet needed atomic versioned apply + one pricing mode per row (→ §6b); "on-hand weighted average cost" was not computable and is now honestly labeled (→ §5a); plus comparability model (§4a), reviewed legacy vendor resolution, single history writer, DB-enforced immutability, .xlsx format contract, alias review, SKU-gated link reuse, RPC money boundary, real-PDF acceptance corpus, family enforcement, and the safety-first phase re-cut (§8). Both models jointly defend: no merging of variant rows, observation/cost-basis separation, human review before observations count, no automatic sell-price changes, cheapest-as-recommendation-only.
+
+**Rev 5 addendum:** Mason then decided to drop AI extraction entirely (§6) — a strictly risk-reducing change relative to the reviewed rev 4 (it removes the extraction failure modes; every remaining ingestion path is human-entered + staged + reviewed). The rev-4 safety machinery (staging, review gate, atomic worksheet apply, §6c retirement) is unchanged.
