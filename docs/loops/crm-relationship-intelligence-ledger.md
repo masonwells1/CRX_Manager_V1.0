@@ -21,7 +21,7 @@ Statuses: TODO / BUILDING / GATE / DONE / PARKED(reason)
 ## Phase 2 — Grower intelligence + prep card
 | unit | builder | status | commit | proof |
 |---|---|---|---|---|
-| 2.1 customer_facts migration | terra | TODO | — | — |
+| 2.1 customer_facts migration | terra | GATE | staged | PROOF — Ran: lint+typecheck+build+full vitest (terra) · Saw: green; 20260716181306_crm_customer_facts.sql; gauntlet next |
 | 2.2 facts UI + review queue | luna | TODO | — | — |
 | 2.3 prep card | luna | TODO | — | — |
 | 2.4 purchase intelligence | terra | TODO | — | — |
