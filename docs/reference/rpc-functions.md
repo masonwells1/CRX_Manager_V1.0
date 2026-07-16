@@ -1,6 +1,6 @@
-# RPC Functions Reference (311 callable overloads across 303 names + 71 trigger/internal functions — live DB as of 2026-07-14)
+# RPC Functions Reference (324 callable overloads across 316 names + 78 trigger/internal functions — live DB as of 2026-07-16)
 
-> Function inventory verified live against Supabase project `rhyzpcqhnizqbxphqdkr` (`pg_proc` joined to `pg_namespace` where `nspname='public'`, split by `prorettype = 'trigger'::regtype`): **311 callable overloads across 303 distinct names**, **71 trigger/internal function names**, **374 total public function names**. This supersedes the earlier 2026-06-29 branch-HEAD snapshot (270 + 56), which was measured against a local throwaway DB before the field-app parity migrations and subsequent sprints shipped live.
+> Function inventory verified live against Supabase project `rhyzpcqhnizqbxphqdkr` (`pg_proc` joined to `pg_namespace` where `nspname='public'`, split by `prorettype = 'trigger'::regtype`): **324 callable overloads across 316 distinct names**, **78 trigger/internal function names**, **394 total public function names**. This supersedes the earlier 2026-06-29 branch-HEAD snapshot (270 + 56), which was measured against a local throwaway DB before the field-app parity migrations and subsequent sprints shipped live.
 >
 > **2026-07-13 note:** the section-by-section inventory below (Atomic Save/Delete, Order & Delivery, Invoice & Payments, …) is a **curated snapshot last verified 2026-06-29** and has not been re-audited function-by-function against the live count above — treat the live DB (or `.claude/schema-registry.json` for structural facts) as authoritative if a specific function's existence, signature, or behavior is load-bearing. The detailed sections below document the notable functions, not an exhaustive per-function enumeration.
 
@@ -26,7 +26,26 @@ The four offline-receipt migrations were applied live on 2026-07-14 and add five
 
 The receipt table has no authenticated direct table grants; all writes are RPC-only. The rollback smoke registry entry `stage_offline_action` covers the base receipt RPCs plus both canonical completion branches; the dedicated disposable resolution proof covers office roles, audit/idempotency, concurrency, and cap release.
 
-## Money and Inventory Hardening — QUEUED, NOT LIVE
+## Money and Inventory Hardening — LIVE
+
+### 2026-07-15 gauntlet fixes — APPLIED LIVE 2026-07-16
+
+Migrations `20260716120104`, `20260716120112`, and `20260716120120` were applied live in that order after migration review and Mason's explicit approval. Post-apply catalog checks verified one `submit_purchase_order` overload, one backward-compatible `create_prepay_check_splits` overload, fixed search paths, narrow execution grants, and RPC-only write grants on the protected PO/receiving/AP/prepay tables; all 17 database invariant sweeps matched the established allowlist.
+
+**Promotion order followed:** all three migrations were applied and verified in timestamp
+order before merging/deploying the coupled frontend. `PurchaseOrderDetail` calls
+the now-live `submit_purchase_order` RPC.
+PO create/import/edit/submit/cancel remains available to active admins and sales reps;
+receiving reversal remains admin-only. `save_purchase_order` and
+`submit_purchase_order` and `cancel_purchase_order` write their own `activity_feed` rows atomically, so the
+browser must not duplicate those audit events.
+
+- `complete_delivery(...)` requires an active profile and uses the effective Chicago completion date for the closed-period warning and generated draft invoice. `void_delivery(...)` now relies on the active-aware admin helper.
+- `save_purchase_order(...)` is the browser-facing PO create/edit path, while `submit_purchase_order(...)` performs a status-only draft submission without resaving a possibly stale vendor, note, quantity, or cost snapshot. Any received line's product, ordered quantity, unit, and cost are immutable until receiving is reversed. Direct authenticated PO, PO-line, receiving-record, vendor-bill/payment, and prepay table writes are revoked.
+- `save_invoice(...)` permits an orderless invoice only when it is an explicit `misc_charge` starting in draft; chemical sales still require an order or blend ticket.
+- `get_customer_statement(...)` includes non-reversed write-offs on their Chicago business date; `get_ap_dashboard_summary(...)` excludes voided vendor payments; finance-charge preview/generation reject future business dates.
+- `create_prepay_check_splits(p_customer_id, p_reference_number, p_splits, p_performed_by, p_idempotency_key, p_expected_total_cents DEFAULT NULL)` replaces the old five-argument identity with a single backward-compatible identity. Stale clients may omit the trailing total; current clients send it and the RPC rejects any penny mismatch. The vetted active-admin `batch_apply_prepayments(...)` manual-allocation workspace is unchanged; only the separate automatic apply-remaining/apply-all paths stay disabled.
+- `get_inventory_position()` clamps each PO line's remaining amount at zero and nets delivery-specific reversals on the original delivery date; order-level void reversals are paired back to the original order/product instead of their later ledger timestamp.
 
 Migrations `20260714220000` through `20260714224000` preserve existing public signatures and harden their implementations. They do not change the live function-name total above; renamed field-app save and invoice-post implementations become owner-only internal helpers when this queued stack is applied.
 
@@ -49,8 +68,9 @@ Migrations `20260714220000` through `20260714224000` preserve existing public si
 - `save_customer()` — upsert customer; validates commission splits server-side (recipient required, no duplicates, each percentage >0 and <=100, total 100%)
 - `save_blend_ticket()` — upsert blend ticket + items
 - `save_blend_recipe(p_recipe_id uuid, p_name text, p_recipe_type text, p_items jsonb, ...)` — atomic create-or-replace for blend recipes. For updates, DELETE + INSERT items happen in the same transaction so a failed insert rolls back the DELETE too — closes audit #34 (BlendRecipes wiped items on failed save). Migration 20260513010000.
-- `save_purchase_order()` — upsert PO + items
-- `save_invoice()` — upsert invoice + items. **U8 (2026-07-06):** on a job invoice edit, recomputes its pending job commission(s) from the new chemical-line profit (COGS×qty + penny reconciliation on the last row); guarded by `JOB_HAS_BATCHED_COMMISSIONS` (active payout batch) / `JOB_COMMISSIONS_PAID`.
+- `save_purchase_order()` — upsert PO + items. **Live gauntlet hardening (`20260716120104`):** blocks edits/removal of received line evidence and is the browser's PO create/edit boundary after direct table writes were revoked.
+- `submit_purchase_order(p_po_id, p_performed_by, p_idempotency_key?)` — **Live (`20260716120104`).** Active admin/sales_rep, idempotent draft → submitted status transition that locks the PO row and never resaves stale draft fields.
+- `save_invoice()` — upsert invoice + items. **U8 (2026-07-06):** on a job invoice edit, recomputes its pending job commission(s) from the new chemical-line profit (COGS×qty + penny reconciliation on the last row); guarded by `JOB_HAS_BATCHED_COMMISSIONS` (active payout batch) / `JOB_COMMISSIONS_PAID`. **Live gauntlet hardening (`20260716120112`):** explicitly permits orderless draft miscellaneous charges while preserving the order/blend requirement for chemical sales.
 - `save_field()` — upsert field record
 - `delete_purchase_order()` — soft-delete PO (must be draft)
 - `duplicate_quote()` — deep-clone quote + items with new number; canonical idempotency wired in migration 20260526090000
@@ -152,7 +172,7 @@ Migrations `20260714220000` through `20260714224000` preserve existing public si
 - `create_prepay_credit()` — create prepay credit for a customer
 - `reconcile_prepay_balances()` — reconcile prepay balances across all customers
 - `cancel_return(p_return_id, p_reason, p_performed_by, p_idempotency_key)` → jsonb — admin/sales_rep, strict-actor. Cancels a return at any non-terminal stage (requested/approved/received → cancelled); brackets the status write with `app.admin_override`.
-- `create_prepay_check_splits(p_customer_id, p_reference_number, p_splits, p_performed_by, p_idempotency_key)` → jsonb — records one customer check split into multiple labeled prepay buckets (PrepaymentManager "Split Check" entry).
+- `create_prepay_check_splits(p_customer_id, p_reference_number, p_splits, p_performed_by, p_idempotency_key, p_expected_total_cents DEFAULT NULL)` → jsonb — records one customer check split into multiple labeled prepay buckets; the trailing default preserves old/stale client calls while current clients assert the independent check total.
 - `edit_prepay_credit(p_credit_id, p_new_balance_cents, p_reference_number, p_bucket_label, p_notes, p_performed_by, p_idempotency_key)` → jsonb — admin-only, strict-actor edit of a prepay credit (balance/reference/label).
 - `delete_prepay_credit(p_credit_id, p_reason, p_performed_by, p_idempotency_key)` → jsonb — admin-only, strict-actor soft-delete/void of a prepay credit.
 - `increment_customer_prepay(p_customer_id, p_amount_cents, p_idempotency_key)` → void — internal helper that bumps a customer's prepay balance (called from payment/overpayment paths).
@@ -239,7 +259,7 @@ Migrations `20260714220000` through `20260714224000` preserve existing public si
 - `update_vendor_bill(p_bill_id, p_subtotal_cents, p_adjustment_cents, p_bill_date, p_due_date, p_notes, p_idempotency_key)` → jsonb — admin-only (PR-14). Edits an unpaid bill with no active payments. Re-runs `check_period_open(bill_date)` since the date may change. Recomputes `total_cents`. `bill_number` is NOT editable (uniqueness invariant). Audit log with `operation_type='vendor_bill_updated'`. Returns `{success, bill_id, old_total_cents, new_total_cents}`. Canonical idempotency.
 - `void_vendor_bill(p_vendor_bill_id, p_reason, p_idempotency_key)` → void — admin-only. Voids a bill; populates `voided_at`/`voided_by`/`void_reason` columns (PR-04 added these). **Hard-blocks if any active (non-voided) payments exist regardless of bill status** (audit-fix-2 codex F3). Workflow: void each payment via `void_vendor_payment` first, then void the bill. Audit log with `operation_type='vendor_bill_voided'`. Canonical idempotency. Frontend (`VendorBillDetail.tsx:268`) uses `.throwOnError()` since there's no return payload to assert. Docs corrected 2026-05-16 (ultra-review P3 #8).
 - `void_vendor_payment(p_payment_id, p_reason, p_idempotency_key)` → jsonb — admin-only (PR-13). Reverses a wrong vendor payment. Locks payment + bill, validates payment isn't already voided, decrements `paid_cents` (balance recomputes via GENERATED), recalculates bill status (`paid` / `partially_paid` / `unpaid`), populates payment void columns. `REASON_REQUIRED` raised on blank reason. Audit log with `operation_type='vendor_payment_voided'`.
-- `cancel_purchase_order(p_po_id, p_reason, p_performed_by, p_idempotency_key)` → jsonb — admin-only. Soft-cancels a PO. PR-22b adds: refuses with `PO_HAS_ACTIVE_BILLS` if any non-voided vendor_bills reference the PO. Existing checks: refuses if any items have `quantity_received > 0` or status is already `fully_received`.
+- `cancel_purchase_order(p_po_id, p_reason, p_performed_by, p_idempotency_key)` → jsonb — active admin/sales_rep. Soft-cancels a PO. The local 2026-07-15 gauntlet follow-up aligns this role gate with PO create/edit/submit and checks authorization before idempotency replay. PR-22b adds: refuses with `PO_HAS_ACTIVE_BILLS` if any non-voided vendor_bills reference the PO. Existing checks: refuses if any items have `quantity_received > 0` or status is already `fully_received`.
 - `delete_purchase_order(p_po_id, p_performed_by, p_idempotency_key)` → jsonb — admin-only (PR-10 wired idempotency). PR-22b adds: refuses with `PO_HAS_LINKED_BILLS` if ANY vendor_bills reference the PO (stricter than cancel; even voided bills count since delete is permanent). DELETEs the PO + items.
 - `save_vendor(p_vendor_id, p_payload jsonb, p_idempotency_key)` → jsonb — admin-only (PR-25). INSERT-or-UPDATE; pass NULL `p_vendor_id` to create. Partial-update pattern: `p_payload ? key` to differentiate "update to NULL" from "preserve existing." Vendor name required.
 - `delete_vendor(p_vendor_id, p_idempotency_key)` → jsonb — admin-only (PR-25). Soft-delete via `deleted_at`. Refuses if any unpaid `vendor_bills` exist. PO check intentionally omitted (purchase_orders uses legacy `vendor` TEXT column, not `vendor_id` — FK migration is out of scope per CLAUDE.md "What's NOT in this plan").

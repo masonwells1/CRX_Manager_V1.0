@@ -9,13 +9,13 @@ import Input from '../components/ui/Input';
 import Select from '../components/ui/Select';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, sanitizeError, checkMutationResult, assertRpcResult } from '../lib/db';
+import { supabase, sanitizeError, assertRpcResult } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { notifyDamagedReceiving, notifyOverReceive } from '../lib/notificationTriggers';
 import { logActivity } from '../lib/activityLogger';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
-import { localToday, parseLocalDate } from '../lib/dateUtils';
+import { parseLocalDate } from '../lib/dateUtils';
 import { formatUSD as fmt } from '../lib/money';
 import QuickTaskModal from '../components/team/QuickTaskModal';
 import RelatedNotes from '../components/team/RelatedNotes';
@@ -47,6 +47,10 @@ export default function PurchaseOrderDetail() {
   const { toast } = useToast();
   const receiveIdem = useIdempotencyKey('receive_po_items', profile?.id || '');
   const savePOIdem = useIdempotencyKey('save_purchase_order', profile?.id || '');
+  const {
+    getKey: getSubmitPOKey,
+    resetKey: resetSubmitPOKey,
+  } = useIdempotencyKey('submit_purchase_order', `${profile?.id || ''}:${id || ''}`);
   const cancelPOIdem = useIdempotencyKey('cancel_purchase_order', profile?.id || '');
   const reverseIdem = useIdempotencyKey('reverse_receiving_record', profile?.id || '');
   const [po, setPo] = useState<PurchaseOrder | null>(null);
@@ -66,6 +70,12 @@ export default function PurchaseOrderDetail() {
   const [allowOverReceive, setAllowOverReceive] = useState(false);
   const [overReceiveReason, setOverReceiveReason] = useState('');
 
+  // React Router can reuse this component when only the route parameter changes.
+  // Never let a lost-response retry key from one PO replay a different PO's result.
+  useEffect(() => {
+    resetSubmitPOKey();
+  }, [id, resetSubmitPOKey]);
+
   /* Edit modal state */
   const [editOpen, setEditOpen] = useState(false);
   const [cancelOpen, setCancelOpen] = useState(false);
@@ -81,6 +91,7 @@ export default function PurchaseOrderDetail() {
     id: string;
     product_id: string;
     product_name: string;
+    unit_size: string;
     quantity_ordered: string;
     unit_cost: string;
     quantity_received: number;
@@ -100,7 +111,8 @@ export default function PurchaseOrderDetail() {
   const [reversing, setReversing] = useState(false);
 
   const isAdmin = role === 'admin';
-  const canReceive = role === 'admin' || role === 'sales_rep';
+  const canManagePO = role === 'admin' || role === 'sales_rep';
+  const canReceive = canManagePO;
 
   const fetchPO = useCallback(async () => {
     const { data: poData } = await supabase
@@ -416,6 +428,7 @@ export default function PurchaseOrderDetail() {
       id: item.id,
       product_id: item.product_id,
       product_name: (item.product as unknown as { product_name: string })?.product_name || 'Unknown',
+      unit_size: item.unit_size || '',
       quantity_ordered: String(item.quantity_ordered),
       unit_cost: String(item.unit_cost),
       quantity_received: item.quantity_received,
@@ -452,7 +465,7 @@ export default function PurchaseOrderDetail() {
         id: item.id,  // Send ID so backend can UPDATE in-place (critical for partially received POs)
         product_id: item.product_id,
         product_name: item.product_name,
-        unit_size: (item as unknown as { unit_size?: string }).unit_size,
+        unit_size: item.unit_size || null,
         quantity_ordered: parseFloat(item.quantity_ordered),
         unit_cost: parseFloat(item.unit_cost),
         quantity_received: item.quantity_received || 0,
@@ -494,14 +507,19 @@ export default function PurchaseOrderDetail() {
     }
     setSaving(true);
     try {
-      const result = await supabase
-        .from('purchase_orders')
-        .update({ status: 'submitted', submitted_date: localToday() })
-        .eq('id', id!)
-        .select();
-      checkMutationResult(result, 'Submit purchase order');
+      // Submission is a separate intent from editing. Keep this key across a
+      // lost-response retry so the RPC replays the committed submit instead of
+      // applying a stale draft snapshot.
+      const submitKey = getSubmitPOKey();
+      const { data, error } = await supabase.rpc('submit_purchase_order', {
+        p_po_id: id!,
+        p_performed_by: profile.id,
+        p_idempotency_key: submitKey,
+      });
+      if (error) throw error;
+      assertRpcResult(data, 'submit_purchase_order');
+      resetSubmitPOKey();
       toast('success', `Purchase order ${po.po_number} submitted`);
-      await logActivity({ event: 'po_submitted', description: `PO ${po.po_number} submitted`, performedBy: profile.id, entityType: 'purchase_order', entityId: po.id });
       fetchPO();
     } catch (err: unknown) {
       toast('error', sanitizeError(err));
@@ -578,7 +596,7 @@ export default function PurchaseOrderDetail() {
               Receive Items
             </Button>
           )}
-          {canReceive && po.status === 'draft' && (
+          {canManagePO && po.status === 'draft' && (
             <Button icon={<Send className="w-4 h-4" />} onClick={handleSubmitPO} loading={saving}>
               Submit PO
             </Button>
@@ -591,12 +609,12 @@ export default function PurchaseOrderDetail() {
           >
             Create Task
           </Button>
-          {canReceive && po.status !== 'cancelled' && po.status !== 'fully_received' && (
+          {canManagePO && po.status !== 'cancelled' && po.status !== 'fully_received' && (
             <>
               <Button variant="secondary" icon={<Pencil className="w-4 h-4" />} onClick={openEditModal}>
                 Edit
               </Button>
-              {isAdmin && (po.status === 'draft' || po.status === 'submitted') && (
+              {canManagePO && (po.status === 'draft' || po.status === 'submitted') && (
                 <Button variant="danger" icon={<Ban className="w-4 h-4" />} onClick={() => { cancelPOIdem.resetKey(); setCancelOpen(true); }}>
                   Cancel PO
                 </Button>
@@ -1074,7 +1092,7 @@ export default function PurchaseOrderDetail() {
                     {isReceived ? (
                       <>
                         <p className="text-sm font-medium text-nav-dark">{item.product_name}</p>
-                        <p className="text-xs text-amber-600">🔒 Received: {item.quantity_received} (locked)</p>
+                        <p className="text-xs text-amber-600">Received line locked · {item.quantity_received} received</p>
                       </>
                     ) : editProductSearch === idx ? (
                       <div className="relative">
@@ -1094,7 +1112,12 @@ export default function PurchaseOrderDetail() {
                                 className="w-full text-left px-3 py-2 hover:bg-gray-50 text-sm"
                                 onClick={() => {
                                   const newItems = [...editItems];
-                                  newItems[idx] = { ...newItems[idx], product_id: p.id, product_name: p.product_name };
+                                  newItems[idx] = {
+                                    ...newItems[idx],
+                                    product_id: p.id,
+                                    product_name: p.product_name,
+                                    unit_size: p.unit_size || '',
+                                  };
                                   setEditItems(newItems);
                                   setEditProductSearch(null);
                                   setEditProductQuery('');
@@ -1134,6 +1157,7 @@ export default function PurchaseOrderDetail() {
                       min="0"
                       step="0.01"
                       value={item.quantity_ordered}
+                      disabled={item.quantity_received > 0}
                       onChange={(e) => {
                         const newItems = [...editItems];
                         newItems[idx].quantity_ordered = e.target.value;
@@ -1148,6 +1172,7 @@ export default function PurchaseOrderDetail() {
                       min="0"
                       step="0.01"
                       value={item.unit_cost}
+                      disabled={item.quantity_received > 0}
                       onChange={(e) => {
                         const newItems = [...editItems];
                         newItems[idx].unit_cost = e.target.value;

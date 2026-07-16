@@ -51,6 +51,24 @@ describe('useIdempotencyKey', () => {
     expect(keyBefore!).toBe(keyAfter!);
   });
 
+  it('issues a fresh key when the operation scope changes without a remount', () => {
+    const { result, rerender } = renderHook(
+      ({ operation, userId }) => useIdempotencyKey(operation, userId),
+      { initialProps: { operation: 'submit_purchase_order', userId: 'user-5:po-a' } },
+    );
+
+    let firstKey: string;
+    act(() => { firstKey = result.current.getKey(); });
+
+    rerender({ operation: 'submit_purchase_order', userId: 'user-5:po-b' });
+
+    let secondKey: string;
+    act(() => { secondKey = result.current.getKey(); });
+
+    expect(firstKey!).not.toBe(secondKey!);
+    expect(secondKey!).toMatch(/^submit_purchase_order:user-5:po-b:/);
+  });
+
   it('simulates retry scenario: error keeps same key, success resets', () => {
     const { result } = renderHook(() => useIdempotencyKey('complete_delivery', 'driver-3'));
 
