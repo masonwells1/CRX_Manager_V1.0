@@ -1554,6 +1554,10 @@ const IDEMPOTENCY_BODY_EXEMPT: Record<
   // The public wrapper authorizes active customer scope before delegating to
   // the directly non-executable implementation that owns canonical replay.
   save_invoice: 'delegated',
+  // The public wrapper hydrates an omitted cost only for a recognized existing
+  // line, then delegates to the directly non-executable integer-cents writer
+  // that owns the canonical replay lookup/save.
+  save_purchase_order: 'delegated',
   //  - 'table-unique'   : idempotency is enforced NOT via the idempotency_keys table
   //                       but by a dedicated column + PARTIAL UNIQUE index on the RPC's
   //                       own table, with a catch-unique-violation replay. Used when the
@@ -1690,6 +1694,23 @@ describe('Idempotency BODY verification (reads migration SQL)', () => {
     expect(implementationSource).toContain("v_existing := check_idempotency(p_idempotency_key, 'save_invoice')");
     expect(implementationSource).toContain("PERFORM save_idempotency(p_idempotency_key, 'save_invoice'");
     expect(IDEMPOTENCY_BODY_EXEMPT.save_invoice).toBe('delegated');
+  });
+
+  it('save_purchase_order hydrates omitted cost before delegating to its idempotent implementation', () => {
+    const files = getMigrationFiles();
+    const wrapper = files.find(
+      ({ name }) => name === '20260716213000_preserve_purchase_order_omitted_cost.sql'
+    )?.content;
+    const implementationSource = files.find(
+      ({ name }) => name === '20260716183501_purchase_order_integer_cents.sql'
+    )?.content;
+
+    expect(wrapper).toContain('RENAME TO _save_purchase_order_cost_input_impl');
+    expect(wrapper).toMatch(/REVOKE ALL ON FUNCTION public\._save_purchase_order_cost_input_impl[\s\S]*FROM PUBLIC, anon, authenticated, service_role/);
+    expect(wrapper).toMatch(/poi\.purchase_order_id = p_po_id[\s\S]*RETURN public\._save_purchase_order_cost_input_impl/);
+    expect(implementationSource).toContain("v_existing := check_idempotency(p_idempotency_key, 'save_purchase_order')");
+    expect(implementationSource).toContain("PERFORM save_idempotency(p_idempotency_key, 'save_purchase_order'");
+    expect(IDEMPOTENCY_BODY_EXEMPT.save_purchase_order).toBe('delegated');
   });
 
   it("every 'gap' exemption genuinely still lacks body idempotency (forces removal when fixed)", () => {

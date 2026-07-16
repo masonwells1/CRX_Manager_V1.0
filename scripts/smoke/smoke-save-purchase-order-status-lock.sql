@@ -220,6 +220,43 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_FAIL: legal draft edit produced status=% vendor=%', v_status, v_vendor;
   END IF;
 
+  -- An existing-line edit may omit the unchanged cost. The wrapper must feed
+  -- the stored integer-cent value into every downstream calculation so neither
+  -- the line nor the header silently resets to zero.
+  v_edit_items := jsonb_build_array(jsonb_build_object(
+    'id', v_item,
+    'product_id', v_product,
+    'product_name', v_product_name,
+    'quantity_ordered', 10.125,
+    'unit_size', v_unit_size,
+    'quantity_received', 0
+  ));
+  PERFORM save_purchase_order(
+    v_po,
+    jsonb_build_object(
+      'vendor', '[SMOKE] Cost-Preserving Draft Vendor',
+      'status', 'draft'
+    ),
+    v_edit_items,
+    v_sales,
+    'smk-po-omit-cost-' || v_suffix
+  );
+  SELECT total_cost, total_cost_cents
+    INTO v_total_cost, v_total_cost_cents
+  FROM purchase_orders
+  WHERE id = v_po;
+  SELECT unit_cost, unit_cost_cents
+    INTO v_saved_unit_cost, v_saved_unit_cost_cents
+  FROM purchase_order_items
+  WHERE id = v_item;
+  IF v_total_cost IS DISTINCT FROM 33.72::numeric
+     OR v_total_cost_cents IS DISTINCT FROM 3372::bigint
+     OR v_saved_unit_cost IS DISTINCT FROM 3.33::numeric
+     OR v_saved_unit_cost_cents IS DISTINCT FROM 333::bigint THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: omitted cost changed money header=% cents=% line=% line_cents=%',
+      v_total_cost, v_total_cost_cents, v_saved_unit_cost, v_saved_unit_cost_cents;
+  END IF;
+
   -- Status transitions are owned by dedicated lifecycle RPCs.
   BEGIN
     PERFORM save_purchase_order(

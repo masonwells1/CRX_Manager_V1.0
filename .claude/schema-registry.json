@@ -1,12 +1,12 @@
 {
   "_meta": {
     "registry_version": 2,
-    "generated_at": "2026-07-17",
+    "generated_at": "2026-07-16",
     "generated_from": "Supabase project rhyzpcqhnizqbxphqdkr — public schema introspection",
     "regenerate_with": "node scripts/regenerate-schema-registry.mjs --from-introspection <queries.json> (queries documented in the script header)",
     "purpose": "Single source of truth for hooks: generated columns, status enums, ALL parseable CHECK IN-lists, NOT NULL columns, full column lists, sequences, tables-with/without updated_at, applied-migration high water.",
     "note": "For a fresh refresh from the live DB, ask Claude Code: 'regenerate the schema-registry from Supabase' (/regen-schema-registry). skipped_constraints lists every CHECK the hooks can NOT validate — review it when touching those tables.",
-    "migrations_high_water": "20260717013736",
+    "migrations_high_water": "20260716213829",
     "applied_migration_names": [
       "20260207_gap_analysis_fixes.sql",
       "20260209050000_inventory_overhaul",
@@ -236,8 +236,6 @@
       "20260716183501_purchase_order_integer_cents",
       "20260716195012_crm_supersede_fact_expiry",
       "20260716213000_preserve_purchase_order_omitted_cost",
-      "20260716214423_crm_call_lists",
-      "20260717013415_crm_customer_documents",
       "a1_dispatched_list_recent_completed",
       "a1b_dispatched_to_me_completed_tail",
       "accounting_and_integrity_fixes",
@@ -340,8 +338,6 @@
       "canonical_commission_math_create_quick_delivery",
       "canonical_commission_math_helpers",
       "cleanup_fake_cycle_counts_and_rebates_v2",
-      "close_adversarial_money_inventory_gaps",
-      "close_final_purchase_order_release_gaps",
       "code_review_rpc_hardening",
       "commission_payment_for_update_fix",
       "commission_payments",
@@ -565,7 +561,6 @@
       "get_field_dashboard_rpc",
       "get_inventory_position_rpc",
       "global_search_rpc",
-      "globalize_bulk_po_import_intents",
       "go_live_remediation",
       "grant_authenticated_on_frontend_secdef_helpers",
       "gross_sales_report_column_fix",
@@ -1085,7 +1080,6 @@
     "order_shares",
     "payments",
     "prepay_applications",
-    "purchase_order_import_intents",
     "purchase_order_items",
     "quote_items",
     "quote_sections",
@@ -1274,30 +1268,6 @@
         "customer_contacts_preferred_contact_method_check"
       ],
       "nullable": true
-    },
-    "customer_documents.document_type": {
-      "values": [
-        "license",
-        "permit",
-        "contract",
-        "map",
-        "invoice_copy",
-        "other"
-      ],
-      "constraints": [
-        "customer_documents_document_type_check"
-      ]
-    },
-    "customer_documents.source": {
-      "values": [
-        "rep",
-        "ai_receptionist",
-        "system",
-        "web_store"
-      ],
-      "constraints": [
-        "customer_documents_source_check"
-      ]
     },
     "customer_facts.category": {
       "values": [
@@ -2235,30 +2205,6 @@
       "reason": "conditional/multi-column — not a single-column IN-list; hooks do NOT validate this constraint"
     },
     {
-      "table": "customer_documents",
-      "constraint": "customer_documents_effective_expiration_check",
-      "def": "CHECK (((expiration_date IS NULL) OR (effective_date IS NULL) OR (expiration_date >= effective_date)))",
-      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
-    },
-    {
-      "table": "customer_documents",
-      "constraint": "customer_documents_path_matches_customer_check",
-      "def": "CHECK (((split_part(storage_path, '/'::text, 1) = (customer_id)::text) AND (split_part(storage_path, '/'::text, 2) <> ''::text) AND (storage_path !~~ '%/%/%'::text)))",
-      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
-    },
-    {
-      "table": "customer_documents",
-      "constraint": "customer_documents_size_bytes_check",
-      "def": "CHECK ((size_bytes > 0))",
-      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
-    },
-    {
-      "table": "customer_documents",
-      "constraint": "customer_documents_soft_delete_stamp_check",
-      "def": "CHECK ((((deleted_at IS NULL) AND (deleted_by IS NULL)) OR ((deleted_at IS NOT NULL) AND (deleted_by IS NOT NULL))))",
-      "reason": "conditional/multi-column — not a single-column IN-list; hooks do NOT validate this constraint"
-    },
-    {
       "table": "customer_facts",
       "constraint": "customer_facts_ai_source_interaction_check",
       "def": "CHECK (((source <> 'ai_receptionist'::text) OR (source_interaction_id IS NOT NULL)))",
@@ -2715,12 +2661,6 @@
       "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
     },
     {
-      "table": "purchase_order_import_intents",
-      "constraint": "purchase_order_import_intents_key_not_blank",
-      "def": "CHECK ((btrim(intent_key) <> ''::text))",
-      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
-    },
-    {
       "table": "purchase_order_items",
       "constraint": "chk_poi_qty_ordered",
       "def": "CHECK ((quantity_ordered >= (0)::numeric))",
@@ -3122,23 +3062,6 @@
         "is_decision_maker",
         "is_billing_contact",
         "is_active",
-        "created_at",
-        "updated_at"
-      ]
-    },
-    "customer_documents": {
-      "no_default": [
-        "customer_id",
-        "document_type",
-        "storage_path",
-        "filename",
-        "mime_type",
-        "size_bytes",
-        "uploaded_by"
-      ],
-      "with_default": [
-        "id",
-        "source",
         "created_at",
         "updated_at"
       ]
@@ -3992,17 +3915,6 @@
         "denied_pages"
       ]
     },
-    "purchase_order_import_intents": {
-      "no_default": [
-        "actor_id",
-        "intent_key",
-        "purchase_order_id"
-      ],
-      "with_default": [
-        "id",
-        "created_at"
-      ]
-    },
     "purchase_order_items": {
       "no_default": [
         "purchase_order_id",
@@ -4802,25 +4714,6 @@
       "is_billing_contact",
       "is_active",
       "notes",
-      "created_at",
-      "updated_at"
-    ],
-    "customer_documents": [
-      "id",
-      "customer_id",
-      "contact_id",
-      "document_type",
-      "storage_path",
-      "filename",
-      "mime_type",
-      "size_bytes",
-      "uploaded_by",
-      "source",
-      "effective_date",
-      "expiration_date",
-      "notes",
-      "deleted_at",
-      "deleted_by",
       "created_at",
       "updated_at"
     ],
@@ -5878,13 +5771,6 @@
       "applicator_license_number",
       "faa_certificate_number",
       "denied_pages"
-    ],
-    "purchase_order_import_intents": [
-      "id",
-      "actor_id",
-      "intent_key",
-      "purchase_order_id",
-      "created_at"
     ],
     "purchase_order_items": [
       "id",

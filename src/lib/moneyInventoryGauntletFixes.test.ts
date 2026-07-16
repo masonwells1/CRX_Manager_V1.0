@@ -37,6 +37,9 @@ const deliveryScheduledDateRewriteGuard = source(
   'supabase/migrations/20260716183442_guard_delivery_scheduled_date_rewrites.sql',
 );
 const purchaseOrderCents = source('supabase/migrations/20260716183501_purchase_order_integer_cents.sql');
+const purchaseOrderOmittedCost = source(
+  'supabase/migrations/20260716213000_preserve_purchase_order_omitted_cost.sql',
+);
 const financialScope = source('supabase/migrations/20260716190000_harden_sales_financial_scope.sql');
 const invoiceExistingCustomerScope = source(
   'supabase/migrations/20260716210000_harden_invoice_existing_customer_scope.sql',
@@ -264,6 +267,21 @@ describe('money and inventory gauntlet fixes', () => {
     ]) {
       expect(source(path)).toContain('unit_cost_cents: purchaseOrderUnitCostCents(');
     }
+  });
+
+  it('preserves an existing PO line cost when an edit omits cost fields', () => {
+    expect(purchaseOrderOmittedCost).toContain(
+      'RENAME TO _save_purchase_order_cost_input_impl',
+    );
+    expect(purchaseOrderOmittedCost).toContain("NOT (item.value ? 'unit_cost')");
+    expect(purchaseOrderOmittedCost).toContain("NOT (item.value ? 'unit_cost_cents')");
+    expect(purchaseOrderOmittedCost).toContain(
+      "jsonb_build_object('unit_cost_cents', poi.unit_cost_cents)",
+    );
+    expect(purchaseOrderOmittedCost).toContain('poi.purchase_order_id = p_po_id');
+    expect(purchaseOrderOmittedCost).toContain(
+      'REVOKE ALL ON FUNCTION public._save_purchase_order_cost_input_impl',
+    );
   });
 
   it('authorizes invoice saves and statements against active customer assignment before replay', () => {
