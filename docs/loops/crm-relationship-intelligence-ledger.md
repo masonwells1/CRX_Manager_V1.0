@@ -21,10 +21,10 @@ Statuses: TODO / BUILDING / GATE / DONE / PARKED(reason)
 ## Phase 2 — Grower intelligence + prep card
 | unit | builder | status | commit | proof |
 |---|---|---|---|---|
-| 2.1 customer_facts migration | terra | GATE | staged | PROOF — Ran: lint+typecheck+build+full vitest (terra) · Saw: green; 20260716181306_crm_customer_facts.sql; gauntlet next |
+| 2.1 customer_facts migration | terra | DONE | 33c57a0c | PROOF — Ran: drift CLEAN, RLS BLOCKED→3 fixes→CLEAN (attempt 4 after 3× API-529 deaths), Codex APPROVE; LIVE apply via guard · Saw: {success:true}; rolled-back-transaction lifecycle smoke as real admin: insert pending → review verified → supersede → old retired+linked, new verified, current_verified_count=1; unauthenticated call correctly DENIED |
 | 2.2 facts UI + review queue | luna | TODO | — | — |
 | 2.3 prep card | luna | TODO | — | — |
-| 2.4 purchase intelligence | terra | GATE | staged | PROOF — Ran: lint+typecheck+build+rpcContracts (terra) · Saw: green; 20260716182318_crm_purchase_intelligence.sql (4 read-only SECDEF RPCs); gauntlet next |
+| 2.4 purchase intelligence | terra | DONE | 33c57a0c | PROOF — Ran: drift CLEAN (all identifiers registry-verified), RLS CLEAN, Codex BLOCK→2 fixes (open_workflow_counts per Sol amendment 8; top_products product-only)→APPROVE round 2; LIVE apply · Saw: {success:true}; prep card returns full payload for [E2E] Farm Beta under admin identity; authz gate rejects unauthenticated caller |
 | 2.G phase gate | orchestrator | TODO | — | — |
 
 ## Phase 3 — Seasonal worklists
