@@ -11746,6 +11746,7 @@ export type Database = {
       supersede_customer_fact: {
         Args: {
           p_confidence: number
+          p_expires_at: string
           p_fact_id: string
           p_idempotency_key?: string
           p_value_json: Json
