@@ -1,16 +1,19 @@
 -- Post-apply rollback-only proof for the delivery closed-period invariant.
 -- Exercises the real complete_delivery and void_delivery RPCs, verifies that
--- rejected calls leak no partial side effects, proves both open-period paths,
--- and rolls back every fixture through the terminal exception.
+-- rejected calls leak no partial side effects, proves authorization runs before
+-- a cached completion replay, proves both open-period paths, and rolls back
+-- every fixture through the terminal exception.
 DO $smoke$
 DECLARE
   v_admin uuid;
+  v_unauthorized uuid;
   v_suffix text := substr(md5(random()::text), 1, 8);
   v_customer uuid;
   v_product uuid;
   v_order uuid;
   v_order_item uuid;
   v_delivery uuid;
+  v_legacy_delivery uuid;
   v_delivery_item uuid;
   v_closed_period uuid;
   v_open_period uuid;
@@ -23,6 +26,7 @@ DECLARE
   v_status text;
   v_invoice_status text;
   v_completed_date date;
+  v_legacy_scheduled_date date;
   v_available numeric;
   v_available_after_complete numeric;
   v_prebooked numeric;
@@ -42,6 +46,17 @@ BEGIN
 
   IF v_admin IS NULL THEN
     RAISE EXCEPTION 'SMOKE_SETUP: active admin required';
+  END IF;
+
+  SELECT id INTO v_unauthorized
+  FROM public.profiles
+  WHERE is_active = true
+    AND role NOT IN ('admin', 'sales_rep', 'driver')
+  ORDER BY created_at
+  LIMIT 1;
+
+  IF v_unauthorized IS NULL THEN
+    RAISE EXCEPTION 'SMOKE_SETUP: active non-delivery profile required';
   END IF;
 
   SELECT gs::date INTO v_closed_date
@@ -249,6 +264,48 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_FAIL: open completion did not create its draft invoice: %', v_invoice_status;
   END IF;
 
+  -- A valid key now has a committed result. A different active user must still
+  -- pass current delivery authorization before that cached result is visible.
+  PERFORM set_config(
+    'request.jwt.claims',
+    json_build_object('sub', v_unauthorized, 'role', 'authenticated')::text,
+    true
+  );
+
+  BEGIN
+    PERFORM public.complete_delivery(
+      v_delivery,
+      'Smoke Receiver',
+      v_unauthorized,
+      jsonb_build_object(v_delivery_item::text, 2),
+      NULL,
+      NULL,
+      v_complete_open_key,
+      v_open_at
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: unauthorized caller received cached completion result';
+  EXCEPTION WHEN OTHERS THEN
+    v_err := SQLERRM;
+    IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_err <> 'Not authorized to complete this delivery' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: wrong unauthorized-replay error: %', v_err;
+    END IF;
+  END;
+
+  PERFORM set_config(
+    'request.jwt.claims',
+    json_build_object('sub', v_admin, 'role', 'authenticated')::text,
+    true
+  );
+
+  SELECT count(*) INTO v_count
+  FROM public.idempotency_keys
+  WHERE idempotency_key = v_complete_open_key
+    AND operation = 'complete_delivery';
+  IF v_count <> 1 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: unauthorized replay changed completion cache count to %', v_count;
+  END IF;
+
   -- A browser-authorized direct rewrite cannot move a completed delivery into
   -- a closed period. This exercises the table path, not an RPC wrapper.
   BEGIN
@@ -273,6 +330,40 @@ BEGIN
   IF v_completed_date <> v_open_date THEN
     RAISE EXCEPTION 'SMOKE_FAIL: rejected completed new-date rewrite changed date to %',
       v_completed_date;
+  END IF;
+
+  -- Legacy voided rows can lack completed_at and therefore use scheduled_date
+  -- as their effective accounting date. Prove a scheduled_date-only table
+  -- rewrite cannot move that history into a closed period.
+  INSERT INTO public.deliveries (
+    delivery_number, order_id, customer_id, assigned_driver,
+    scheduled_date, status, completed_at, created_by
+  ) VALUES (
+    '[SMOKE] LEGACY-VOID-' || v_suffix, v_order, v_customer, NULL,
+    v_open_date, 'voided', NULL, v_admin
+  ) RETURNING id INTO v_legacy_delivery;
+
+  BEGIN
+    EXECUTE 'SET LOCAL ROLE authenticated';
+    UPDATE public.deliveries
+    SET scheduled_date = v_closed_date
+    WHERE id = v_legacy_delivery;
+    EXECUTE 'RESET ROLE';
+    RAISE EXCEPTION 'SMOKE_FAIL: legacy voided delivery moved into a closed period';
+  EXCEPTION WHEN OTHERS THEN
+    v_err := SQLERRM;
+    IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_err NOT LIKE 'Date % falls in closed accounting period %' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: wrong legacy voided new-date rewrite error: %', v_err;
+    END IF;
+  END;
+
+  SELECT scheduled_date INTO v_legacy_scheduled_date
+  FROM public.deliveries
+  WHERE id = v_legacy_delivery;
+  IF v_legacy_scheduled_date <> v_open_date THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: rejected legacy voided new-date rewrite changed date to %',
+      v_legacy_scheduled_date;
   END IF;
 
   -- Freeze the completion date, then prove void_delivery is atomic too.
@@ -355,6 +446,31 @@ BEGIN
     AND operation = 'void_delivery';
   IF v_count <> 0 THEN
     RAISE EXCEPTION 'SMOKE_FAIL: closed void cached an idempotency result';
+  END IF;
+
+  -- v_open_date is closed at this point. The same legacy row cannot move out
+  -- of that frozen period through a scheduled_date-only authenticated update.
+  BEGIN
+    EXECUTE 'SET LOCAL ROLE authenticated';
+    UPDATE public.deliveries
+    SET scheduled_date = v_second_open_date
+    WHERE id = v_legacy_delivery;
+    EXECUTE 'RESET ROLE';
+    RAISE EXCEPTION 'SMOKE_FAIL: legacy voided delivery moved out of a closed period';
+  EXCEPTION WHEN OTHERS THEN
+    v_err := SQLERRM;
+    IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_err NOT LIKE 'Date % falls in closed accounting period %' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: wrong legacy voided old-date rewrite error: %', v_err;
+    END IF;
+  END;
+
+  SELECT scheduled_date INTO v_legacy_scheduled_date
+  FROM public.deliveries
+  WHERE id = v_legacy_delivery;
+  IF v_legacy_scheduled_date <> v_open_date THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: rejected legacy voided old-date rewrite changed date to %',
+      v_legacy_scheduled_date;
   END IF;
 
   -- Reopen only the disposable smoke period and prove the normal void path.

@@ -27,8 +27,14 @@ const money = source('supabase/migrations/20260716120112_gauntlet_money_workflow
 const inventory = source('supabase/migrations/20260716120120_gauntlet_inventory_accuracy.sql');
 const poInitialStatus = source('supabase/migrations/20260716144353_lock_purchase_order_initial_status.sql');
 const deliveryPeriodGuard = source('supabase/migrations/20260716152906_guard_delivery_closed_periods.sql');
+const committedReplayGuard = source(
+  'supabase/migrations/20260716160000_fix_idempotency_committed_replay_guard.sql',
+);
 const deliveryPeriodRewriteGuard = source(
   'supabase/migrations/20260716172956_guard_delivery_period_rewrites.sql',
+);
+const deliveryScheduledDateRewriteGuard = source(
+  'supabase/migrations/20260716183442_guard_delivery_scheduled_date_rewrites.sql',
 );
 const completeDelivery = access.slice(0, access.indexOf('CREATE OR REPLACE FUNCTION public.void_delivery'));
 
@@ -80,6 +86,34 @@ describe('money and inventory gauntlet fixes', () => {
     expect(deliveryPeriodRewriteGuard).toContain('SECURITY DEFINER\nSET search_path = public, pg_temp');
     expect(deliveryPeriodRewriteGuard).not.toContain('app.admin_override');
     expect(deliveryPeriodRewriteGuard).toContain(
+      'REVOKE EXECUTE ON FUNCTION public.enforce_delivery_accounting_period()\n  FROM anon, authenticated',
+    );
+  });
+
+  it('watches scheduled-date-only rewrites of terminal delivery history', () => {
+    const triggerFunctionBody = deliveryScheduledDateRewriteGuard.slice(
+      0,
+      deliveryScheduledDateRewriteGuard.indexOf('$function$;'),
+    );
+
+    expect(deliveryScheduledDateRewriteGuard).toContain(
+      'BEFORE INSERT OR UPDATE OF status, completed_at, scheduled_date ON public.deliveries',
+    );
+    expect(
+      triggerFunctionBody.match(
+        /OLD\.scheduled_date IS DISTINCT FROM NEW\.scheduled_date/g,
+      )?.length,
+    ).toBe(3);
+    expect(deliveryScheduledDateRewriteGuard).toContain(
+      "v_trigger_definition NOT LIKE '%UPDATE OF status, completed_at, scheduled_date%'",
+    );
+    expect(deliveryScheduledDateRewriteGuard).toContain(
+      'PERFORM public.check_period_open(v_old_effective_date)',
+    );
+    expect(deliveryScheduledDateRewriteGuard).toContain(
+      'PERFORM public.check_period_open(v_new_effective_date)',
+    );
+    expect(deliveryScheduledDateRewriteGuard).toContain(
       'REVOKE EXECUTE ON FUNCTION public.enforce_delivery_accounting_period()\n  FROM anon, authenticated',
     );
   });
@@ -233,6 +267,18 @@ describe('money and inventory gauntlet fixes', () => {
 
     expect(directMutations).toEqual([]);
   }, 20_000);
+
+  it('allows allocate_payment to replay a committed atomic claim without weakening legacy loser rollback', () => {
+    expect(committedReplayGuard).toContain("NEW.operation = 'allocate_payment'");
+    expect(committedReplayGuard).toContain("NEW.result->>'_contract' = 'allocate_payment_v1'");
+    expect(committedReplayGuard).toContain("NEW.result->'response' = 'null'::jsonb");
+    expect(committedReplayGuard).toContain('RETURN NULL;');
+    expect(committedReplayGuard).toContain('IDEMPOTENCY_CROSS_OP_KEY_REUSE:');
+    expect(committedReplayGuard).toContain('IDEMPOTENCY_CONCURRENT_REPLAY_RETRY:');
+    expect(committedReplayGuard.indexOf("NEW.operation = 'allocate_payment'")).toBeLessThan(
+      committedReplayGuard.indexOf('IDEMPOTENCY_CONCURRENT_REPLAY_RETRY:'),
+    );
+  });
 
   it('allows only explicit draft misc charges to bypass the order or blend source rule', () => {
     expect(money).toContain("<> 'misc_charge'");

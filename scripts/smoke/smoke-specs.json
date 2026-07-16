@@ -8,7 +8,7 @@
   "specs": {
     "enforce_delivery_accounting_period": {
       "chain": "smoke-delivery-accounting-period-guard.sql",
-      "description": "Delivery closed-period invariant: the real complete_delivery RPC rejects a closed business date without changing delivery, inventory, order lines, invoices, ledger, or idempotency state; an open-date completion succeeds; authenticated direct rewrites cannot move completed history into or out of a closed period; the real admin void_delivery RPC then rejects once that completion date is closed without leaking any reversal; reopening the disposable period permits the normal void path, and authenticated direct rewrites cannot move the voided history into a closed period. Self-contained fixtures and terminal rollback.",
+      "description": "Delivery closed-period, rewrite, and replay-authorization invariant: the real complete_delivery RPC rejects a closed business date without side effects; an open-date completion succeeds; a different active but unauthorized user is denied before its committed result can replay; authenticated direct rewrites cannot move completed history or legacy scheduled-date-backed terminal history into or out of a closed period; the real admin void_delivery RPC rejects once the completion date is closed without leaking a reversal; reopening the disposable period permits the normal void path. Self-contained fixtures and terminal rollback.",
       "covers": ["enforce_delivery_accounting_period", "complete_delivery", "void_delivery"]
     },
     "create_blend_ticket": {
@@ -23,8 +23,13 @@
     },
     "save_purchase_order": {
       "chain": "smoke-save-purchase-order-status-lock.sql",
-      "description": "Purchase-order lifecycle correction: an active sales rep cannot create a submitted PO through save_purchase_order, creates and idempotently replays a draft, edits it without changing status, cannot transition status through ordinary save, submits through the dedicated idempotent submit_purchase_order RPC, and cannot downgrade the submitted PO through save. An active non-office user is denied. Self-contained fixture and terminal rollback.",
-      "covers": ["save_purchase_order", "submit_purchase_order"]
+      "description": "Purchase-order lifecycle correction: an active sales rep cannot create a submitted PO through save_purchase_order, creates and idempotently replays a draft, edits it without changing status, cannot transition status through ordinary save, submits through the dedicated idempotent submit_purchase_order RPC, cannot downgrade the submitted PO through save, and cancels it through the dedicated idempotent cancel_purchase_order RPC. An active non-office user is denied. Self-contained fixture and terminal rollback.",
+      "covers": ["save_purchase_order", "submit_purchase_order", "cancel_purchase_order"]
+    },
+    "gauntlet_money_workflows": {
+      "chain": "smoke-gauntlet-money-workflows.sql",
+      "description": "Money-workflow correction chain: get_ap_dashboard_summary excludes a voided vendor payment while counting an active one; preview_finance_charges and generate_finance_charges share the same overdue balance and penny-exact charge, reject future dates without side effects, and generate/replay one unposted charge invoice; create_prepay_check_splits rejects a mismatched independent check total without side effects, then creates and idempotently replays two exact prepay buckets. Self-contained fixtures and terminal rollback.",
+      "covers": ["get_ap_dashboard_summary", "preview_finance_charges", "generate_finance_charges", "create_prepay_check_splits"]
     },
     "stage_offline_action": {
       "chain": "smoke-offline-action-receipts.sql",
@@ -93,8 +98,8 @@
     },
     "get_customer_statement": {
       "chain": "smoke-customer_statement_blind_spots.sql",
-      "description": "Statement blind-spot fix (CHIP task_25d25699, migration 20260611131549): legacy, NULL-order, and allocation-set payments each appear exactly once; paid/overdue invoices keep their charge lines; soft-deleted payments excluded; credit memo single-count; unapplied overpayment prepay NOT pre-counted (DEDUP RULE); idempotent allocate_payment replay does not double-count; running balance never negative; unknown-actor auth probe rejected by the in-body gate.",
-      "covers": ["get_customer_statement", "allocate_payment", "record_invoice_payment"]
+      "description": "Statement blind-spot fix (CHIP task_25d25699, migrations 20260611131549 + 20260716160000): legacy, NULL-order, and allocation-set payments each appear exactly once; paid/overdue invoices keep their charge lines; soft-deleted payments excluded; credit memo single-count; unapplied overpayment prepay NOT pre-counted (DEDUP RULE); the exact same allocate_payment key is replayed after the committed result and must return the cached result without a second allocation set or statement change (regression proof for the atomic idempotency-claim guard); running balance never negative; unknown-actor auth probe rejected by the in-body gate.",
+      "covers": ["get_customer_statement", "allocate_payment", "record_invoice_payment", "_guard_idempotency_key_insert"]
     },
     "create_planned_holds": {
       "chain": "smoke-planned-holds-drawn-sync.sql",

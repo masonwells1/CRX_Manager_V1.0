@@ -1,4 +1,4 @@
-# Migration History (712 migrations)
+# Migration History (715 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
@@ -18,11 +18,27 @@ Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 > as `20260716152906`; every completed/voided delivery transition now calls the
 > central `check_period_open()` guard and rolls back its whole caller on a
 > closed business date.
+> The final payment replay smoke then exposed that the shared idempotency insert
+> trigger rejected `allocate_payment`'s already-committed atomic claim forever.
+> The reviewed correction applied as ledger version `20260716165801`; it
+> restores exact cached replay only for the versioned empty claim while keeping
+> legacy post-mutation duplicate inserts rollback-only.
 > Post-apply adversarial checking then proved an authenticated direct update
 > could move terminal delivery history across that boundary by rewriting
 > `completed_at`. The follow-up applied as `20260716172956` checks both the
 > stored and requested business dates, so terminal history cannot move into or
 > out of a closed period.
+> The completed remediation branch's final review also found that
+> `complete_delivery` returned an already-committed result before checking the
+> caller's current authority. Its reviewed wrapper applied as ledger version
+> `20260716174220` and authorizes the active actor before delegating to the
+> directly non-executable implementation.
+> The final exact-SHA review found the same boundary could still be crossed on
+> legacy voided rows whose effective date falls back to `scheduled_date`,
+> because a scheduled-date-only update did not fire the prior trigger. The
+> reviewed correction applied as `20260716183442`; the trigger now watches
+> `status`, `completed_at`, and `scheduled_date`, and checks both sides of every
+> terminal-history rewrite.
 >
 > **Local post-edit proof (2026-07-15):** all three files executed in timestamp
 > order inside one Postgres transaction and rolled back. Catalog checks observed
@@ -41,7 +57,10 @@ Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
 | # | Timestamp | Description |
 |---|-----------|-------------|
+| 715 | 20260716183442 | **APPLIED LIVE 2026-07-16. Legacy delivery scheduled-date rewrite lock.** Re-emits `enforce_delivery_accounting_period()` and recreates its trigger to watch `status`, `completed_at`, and `scheduled_date`. A legacy completed or voided row whose business date falls back to `scheduled_date` can no longer move into or out of a closed accounting period through a scheduled-date-only update. The function remains `SECURITY DEFINER` with fixed `public, pg_temp` search path and no PUBLIC/anon/authenticated direct execution. The migration and expanded workflow smoke first passed together in a rolled-back production-schema transaction; after apply, the full live smoke passed again with `SMOKE_PASS_ROLLBACK`. Catalog verification confirmed the three watched columns, the scheduled-date body predicate, and restricted grants. Supabase ledger version/name: `20260716183442` / `guard_delivery_scheduled_date_rewrites`. |
+| 714 | 20260716173342 | **APPLIED LIVE 2026-07-16 as ledger version `20260716174220`. Delivery replay authorization boundary.** Renames the proven `complete_delivery` body to a directly non-executable internal implementation and places the public signature behind a fixed-search-path `SECURITY DEFINER` wrapper. The wrapper requires `auth.uid()`, canonical actor matching, an active profile, and either admin/sales authority or assignment as the delivery's driver before the internal body can inspect its idempotency cache. Existing completion, business-date, inventory, invoice, and replay behavior remains unchanged for authorized callers. A rollback-only pre-apply run and the post-apply live smoke both completed a real delivery, then proved a different active unauthorized user could not retrieve that committed result with the same key. Anonymous wrapper execution and authenticated/service-role internal execution are denied. Supabase ledger version/name: `20260716174220` / `20260716173342_authorize_delivery_before_replay`. |
 | 709 | 20260716172956 | **APPLIED LIVE 2026-07-16. Delivery terminal-date rewrite lock.** Re-emits only `enforce_delivery_accounting_period()` so every status/`completed_at` rewrite of an existing completed or voided delivery checks both the stored Chicago business date and the requested Chicago business date. This closes authenticated direct-table paths that could move terminal delivery history into or out of a closed accounting period while preserving ordinary open-period completion and voiding. The function remains `SECURITY DEFINER` with fixed `public, pg_temp` search path and no PUBLIC/anon/authenticated direct execution. Pre-apply and post-apply live smokes exercised the real completion/void RPCs plus authenticated direct rewrites in both directions and ended in `SMOKE_PASS_ROLLBACK`; catalog verification found one enabled trigger and zero `plpgsql_check` errors. Supabase ledger version/name: `20260716172956` / `guard_delivery_period_rewrites`. |
+| 713 | 20260716160000 | **APPLIED LIVE 2026-07-16 as ledger version `20260716165801`. Committed payment replay correction.** Re-emits `_guard_idempotency_key_insert()` so a duplicate `allocate_payment_v1` atomic claim with a NULL response returns `NULL` from the `BEFORE INSERT` trigger, allowing the existing `ROW_COUNT = 0` branch to validate the request and return the cached committed response. Cross-operation reuse still raises, and same-operation legacy final-result inserts still raise `IDEMPOTENCY_CONCURRENT_REPLAY_RETRY`, preserving rollback of any business work performed before those older inserts. The full allocate-payment/customer-statement chain passed before apply in a rolled-back transaction and again against the deployed function with `SMOKE_PASS_ROLLBACK`; direct anon/authenticated trigger-function execution remains revoked. Supabase ledger version/name: `20260716165801` / `20260716160000_fix_idempotency_committed_replay_guard`. |
 | 708 | 20260716152906 | **APPLIED LIVE 2026-07-16. Delivery closed-period invariant.** Adds a database-level `BEFORE INSERT OR UPDATE OF status, completed_at` trigger on `deliveries`. Completed transitions use the effective Chicago completion date; voided transitions use the original Chicago completion date with the scheduled date as a legacy fallback. Both call `check_period_open()` without honoring `admin_override`, so closed-period completion/void attempts roll back the entire RPC—including inventory, order-line, invoice, warning, ledger, and idempotency side effects—while open-period paths continue normally. Post-apply live proof used the real `complete_delivery` and admin `void_delivery` RPCs and ended in `SMOKE_PASS_ROLLBACK`; catalog verification found one enabled trigger, fixed `public, pg_temp` search path, no anon/authenticated direct function execution, and zero `plpgsql_check` errors. Supabase ledger version/name: `20260716152906` / `guard_delivery_closed_periods`. |
 | 707 | 20260716144353 | **APPLIED LIVE 2026-07-16. Purchase-order lifecycle-status lock.** Re-emits `save_purchase_order()` so every new PO must start as `draft` and ordinary edits must preserve the current status; submission, receiving, and cancellation remain dedicated lifecycle RPCs. The New Purchase Order page preserves its one-click Submit action by saving the draft first and then calling `submit_purchase_order` with an independent retry key. The retry path reuses the same PO number and idempotency key after a lost save response. This closes the final independent Codex release-review blocker and the adjacent edit bypass without rewriting the already-applied gauntlet migration. Supabase ledger version/name: `20260716144353` / `lock_purchase_order_initial_status`. |
 | 706 | 20260716120120 | **APPLIED LIVE 2026-07-16. Money/inventory gauntlet inventory accuracy.** Re-emits `get_inventory_position()` so each PO line contributes no less than zero on-order quantity and delivered-YTD nets delivery-specific reversals on the original delivery date while pairing order-level void reversals back to the original order/product. The inventory ledger UI now shows authoritative on-floor/prebooked totals from this RPC instead of reconstructing a misleading current balance from incomplete historical rows, and surfaces `requires_review` transactions. |
