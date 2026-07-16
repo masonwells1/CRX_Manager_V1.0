@@ -1,5 +1,12 @@
 # EPA Label-Data Lookup & Backfill — Implementation Plan (v2)
 
+> ⚠️ **STALE-PLAN BANNER (added 2026-07-16):** Stage 1 (Wave 1 per-product lookup +
+> data-quality report) and the `/label-data-quality` bulk-fix tool **shipped live
+> 2026-07-10** — do not rebuild from this doc. Still open: Waves 4–5 backfill of the
+> ~105 wrong stored EPA reg numbers (data-entry, owner-gated — root `TODO.md`) and
+> Stage 2 OCR REI/PHI (deliberately deferred safety trap). Verify live state before
+> acting on anything below.
+
 **Author:** Claude (Opus 4.8) · **Date:** 2026-07-10 · **Status:** v2 — reworked after Codex advisory review
 (verdict on v1: *rework before loop*). All accepted findings folded in below. Ready for loop-spec confirmation.
 **Owner:** Mason (zero coding experience — this doc leads in plain English)
