@@ -251,12 +251,23 @@ ERROR: CREATE INDEX CONCURRENTLY cannot run inside a transaction block
 
 For this project there are three valid application paths, listed in order of preference:
 
-| Path | How it handles CONCURRENTLY | When to use |
-|------|-----------------------------|-------------|
-| Supabase MCP `execute_sql` per-statement | No transaction wrap — each statement runs alone | **The only sanctioned live path.** Same workflow as perf sweep #3; still requires the migration-review gate + authorization from Step 3 first. |
-| Direct `psql -f file.sql` | No implicit transaction wrap, works directly | Local dev only. NEVER use against production. |
+**There is currently NO autonomous live path for a CONCURRENTLY migration — it parks for Mason.**
+Every route is hard-blocked by design (verified 2026-07-16, Codex review):
 
-**Blocked paths:** `apply_migration` MCP — wraps in a transaction, fails immediately on CONCURRENTLY. `supabase db push` (any spelling, with or without `npx`) — blocked by the bash-safety hook (pattern table in `.claude/hooks/bash-safety-lib.mjs`) because it applies ALL pending local migrations at once, bypassing the review gate.
+| Path | Why it does not work |
+|------|----------------------|
+| `apply_migration` MCP | Wraps the file in a transaction — CONCURRENTLY fails immediately. |
+| Supabase MCP `execute_sql` | `live-testdata-guard` denies raw DDL outside a `BEGIN;...ROLLBACK;` smoke test ("schema changes must travel the migration gauntlet") — and CONCURRENTLY cannot run inside a transaction, so the smoke-test escape does not apply either. Historical note: perf sweep #3 (2026-05-11) used this path BEFORE the guard existed; that workflow is closed now. |
+| `supabase db push` / `supabase migration up` (any spelling) | Blocked by the bash-safety hook — they apply ALL pending local migrations at once, bypassing the review gate. |
+| Direct `psql -f file.sql` | Local dev only. NEVER against production. |
+
+What to actually do: (1) for small or low-write tables, use plain `CREATE INDEX IF NOT EXISTS`
+(no CONCURRENTLY) in an ordinary migration through the normal Step 3 gate — this covers almost
+every case; (2) for a genuinely hot, large table, write the CONCURRENTLY migration, run
+`/migration-review` on it, then PARK it and ask Mason — applying it is one of the few remaining
+owner actions (he runs it himself, or a future wave extends the guard with a proof-gated
+CONCURRENTLY path). Do NOT look for a way around the guards — that is the incident class this
+document exists to prevent.
 
 ### File template
 
@@ -267,11 +278,11 @@ For this project there are three valid application paths, listed in order of pre
 --
 -- supabase-no-transaction
 --
--- DEPLOYMENT NOTE: Contains CREATE INDEX CONCURRENTLY. MUST NOT be applied
--- via apply_migration MCP (wraps in transaction → fails). Apply via
--- per-statement execute_sql through the Supabase MCP — after the migration
--- has passed /migration-review and the Step 3 authorization. CLI apply paths
--- (supabase migration up / db push) are blocked by the bash-safety hook.
+-- DEPLOYMENT NOTE: Contains CREATE INDEX CONCURRENTLY. NO autonomous live
+-- path exists for this file (apply_migration fails on the transaction wrap;
+-- execute_sql DDL is guard-blocked; CLI applies are guard-blocked). After
+-- /migration-review passes, PARK it for Mason — see the CONCURRENTLY section
+-- of DATABASE_CHANGE_CHECKLIST.md.
 --
 -- IF NOT EXISTS makes the file replay-safe — re-running is a no-op.
 
@@ -291,5 +302,5 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_<table>_<column>
 2. **Put the `-- supabase-no-transaction` marker on its own line near the top.** Supabase CLI looks for the literal substring.
 3. **Always pair with `IF NOT EXISTS`** so the migration is replay-safe (CONCURRENTLY can leave invalid indexes behind on failure; `IF NOT EXISTS` won't re-attempt a name that already exists, so check `pg_indexes WHERE indisvalid = false` after a failed run and DROP any invalid index manually before retry).
 4. **Verification block goes in a separate execution**, not inside the file. CONCURRENTLY can't run alongside other statements in one transaction, and a verification SELECT inside the file would force one.
-5. **Apply via per-statement `execute_sql`** through the Supabase MCP — the ONLY sanctioned live path for CONCURRENTLY files, and only after /migration-review + the Step 3 authorization. Do NOT use `apply_migration` MCP (transaction wrap fails), and do NOT use `supabase migration up` / `supabase db push` (blocked — they bypass the review gate).
+5. **Run `/migration-review`, then PARK the file for Mason** — there is no autonomous live path for CONCURRENTLY files (see the table above: apply_migration fails on the transaction wrap, execute_sql DDL and CLI applies are hard-blocked by the guards). Prefer plain `CREATE INDEX IF NOT EXISTS` through the normal gate whenever the table is small or low-traffic.
 6. **After apply, query `pg_indexes`** to confirm all expected `idx_*` names exist and `indisvalid = true`.
