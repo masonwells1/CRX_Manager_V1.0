@@ -16,6 +16,57 @@ interface SessionStorageLike {
 
 const STORAGE_PREFIX = 'crx:bulk-po-import-pending:';
 const MAX_PENDING_AGE_MS = 24 * 60 * 60 * 1000;
+const MAX_IMPORTED_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+
+export interface BulkPOIntentItem {
+  productId: string | null;
+  quantityOrdered: number;
+  unitCostCents: number;
+  unitSize: string;
+  notes: string;
+}
+
+export interface BulkPOIntentDocument {
+  vendorName: string;
+  invoiceNumber: string;
+  invoiceDate: string;
+  items: BulkPOIntentItem[];
+}
+
+function normalizeIdentityText(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+/**
+ * Stable business-document identity used across file reselection and reorder.
+ * File name, browser file position, size, and modified time are deliberately
+ * excluded: those can change without changing the vendor document itself.
+ */
+export function buildBulkPOIntentKey(document: BulkPOIntentDocument): string | null {
+  const items = document.items
+    .filter((item) => item.productId && item.quantityOrdered > 0)
+    .map((item) => ({
+      product_id: item.productId,
+      quantity_ordered: item.quantityOrdered,
+      unit_cost_cents: item.unitCostCents,
+      unit_size: normalizeIdentityText(item.unitSize),
+      notes: normalizeIdentityText(item.notes),
+    }))
+    .sort((left, right) => {
+      const leftKey = JSON.stringify(left);
+      const rightKey = JSON.stringify(right);
+      return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
+    });
+
+  if (items.length === 0) return null;
+
+  return JSON.stringify({
+    vendor_name: normalizeIdentityText(document.vendorName),
+    invoice_number: normalizeIdentityText(document.invoiceNumber),
+    invoice_date: document.invoiceDate,
+    items,
+  });
+}
 
 function storageKey(profileId: string): string {
   return `${STORAGE_PREFIX}${profileId}`;
@@ -31,11 +82,13 @@ export function loadPendingBulkPOIntents(
     if (!raw) return {};
     const parsed = JSON.parse(raw) as PendingBulkPOIntents;
     const fresh = Object.fromEntries(
-      Object.entries(parsed).filter(([, entry]) =>
-        typeof entry?.idempotencyKey === 'string'
-        && typeof entry?.updatedAt === 'number'
-        && now - entry.updatedAt <= MAX_PENDING_AGE_MS,
-      ),
+      Object.entries(parsed).filter(([, entry]) => {
+        if (typeof entry?.idempotencyKey !== 'string' || typeof entry?.updatedAt !== 'number') {
+          return false;
+        }
+        const maxAge = entry.status === 'imported' ? MAX_IMPORTED_AGE_MS : MAX_PENDING_AGE_MS;
+        return now - entry.updatedAt <= maxAge;
+      }),
     );
     if (Object.keys(fresh).length === 0) storage.removeItem(storageKey(profileId));
     else if (Object.keys(fresh).length !== Object.keys(parsed).length) {

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  buildBulkPOIntentKey,
   ensurePendingBulkPOIntent,
   isImportedBulkPOIntent,
   loadPendingBulkPOIntents,
@@ -17,6 +18,35 @@ function fakeStorage() {
 }
 
 describe('bulk PO import retry state', () => {
+  it('uses stable document content across file reorder and line reorder', () => {
+    const firstDocument = {
+      vendorName: '  Vendor A ',
+      invoiceNumber: 'INV-100',
+      invoiceDate: '2026-07-16',
+      items: [
+        { productId: 'product-b', quantityOrdered: 2, unitCostCents: 450, unitSize: 'GAL', notes: '' },
+        { productId: 'product-a', quantityOrdered: 1, unitCostCents: 300, unitSize: 'EA', notes: 'Seed' },
+      ],
+    };
+    const secondDocument = {
+      vendorName: 'Vendor B',
+      invoiceNumber: 'INV-200',
+      invoiceDate: '2026-07-17',
+      items: [
+        { productId: 'product-c', quantityOrdered: 3, unitCostCents: 125, unitSize: 'LB', notes: '' },
+      ],
+    };
+
+    const firstSelection = [firstDocument, secondDocument].map(buildBulkPOIntentKey);
+    const reorderedSelection = [
+      secondDocument,
+      { ...firstDocument, vendorName: 'vendor a', items: [...firstDocument.items].reverse() },
+    ].map(buildBulkPOIntentKey);
+
+    expect(new Set(reorderedSelection)).toEqual(new Set(firstSelection));
+    expect(firstSelection.every(Boolean)).toBe(true);
+  });
+
   it('reuses pending work and persists successful imports across close/reopen', () => {
     const storage = fakeStorage();
     const createKey = vi.fn()
@@ -55,5 +85,26 @@ describe('bulk PO import retry state', () => {
     savePendingBulkPOIntents(storage, 'sales-1', pending);
 
     expect(loadPendingBulkPOIntents(storage, 'sales-1', 24 * 60 * 60 * 1000 + 1_001)).toEqual({});
+  });
+
+  it('retains successful import markers for 30 days', () => {
+    const storage = fakeStorage();
+    const pending = {};
+    ensurePendingBulkPOIntent(pending, 'intent-A', () => 'idem-imported', 1_000);
+    markBulkPOIntentImported(pending, 'intent-A', 'po-id', 2_000);
+    savePendingBulkPOIntents(storage, 'sales-1', pending);
+
+    const afterOneDay = loadPendingBulkPOIntents(
+      storage,
+      'sales-1',
+      24 * 60 * 60 * 1000 + 2_001,
+    );
+    expect(isImportedBulkPOIntent(afterOneDay, 'intent-A')).toBe(true);
+
+    expect(loadPendingBulkPOIntents(
+      storage,
+      'sales-1',
+      30 * 24 * 60 * 60 * 1000 + 2_001,
+    )).toEqual({});
   });
 });

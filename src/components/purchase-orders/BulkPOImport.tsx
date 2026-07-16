@@ -18,6 +18,7 @@ import {
   purchaseOrderUnitCostCents,
 } from '../../lib/purchaseOrderMoney';
 import {
+  buildBulkPOIntentKey,
   ensurePendingBulkPOIntent,
   isImportedBulkPOIntent,
   loadPendingBulkPOIntents,
@@ -60,23 +61,16 @@ interface BulkPOImportProps {
 
 // ---------- helpers ----------
 
-function buildBulkPOIntentKey(po: ParsedPO): string | null {
-  const validItems = po.items.filter((item) => item.matched_product && item.quantity_ordered > 0);
-  if (validItems.length === 0) return null;
-
-  return JSON.stringify({
-    source_file: po.source_file,
-    source_index: po.source_index,
-    source_size: po.source_size,
-    source_last_modified: po.source_last_modified,
-    vendor_name: po.vendor_name.trim(),
-    invoice_number: po.invoice_number,
-    invoice_date: po.invoice_date,
-    items: validItems.map((item) => ({
-      product_id: item.matched_product!.id,
-      quantity_ordered: item.quantity_ordered,
-      unit_cost_cents: purchaseOrderUnitCostCents(item.unit_cost),
-      unit_size: item.unit_size,
+function buildParsedPOIntentKey(po: ParsedPO): string | null {
+  return buildBulkPOIntentKey({
+    vendorName: po.vendor_name,
+    invoiceNumber: po.invoice_number,
+    invoiceDate: po.invoice_date,
+    items: po.items.map((item) => ({
+      productId: item.matched_product?.id ?? null,
+      quantityOrdered: item.quantity_ordered,
+      unitCostCents: purchaseOrderUnitCostCents(item.unit_cost),
+      unitSize: item.unit_size,
       notes: item.notes,
     })),
   });
@@ -218,7 +212,7 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
 
   useEffect(() => {
     if (!profile?.id || pendingProfileRef.current === profile.id) return;
-    pendingIntentsRef.current = loadPendingBulkPOIntents(sessionStorage, profile.id);
+    pendingIntentsRef.current = loadPendingBulkPOIntents(localStorage, profile.id);
     pendingProfileRef.current = profile.id;
   }, [profile?.id]);
 
@@ -397,7 +391,7 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
           continue;
         }
 
-        const intentKey = buildBulkPOIntentKey(po);
+        const intentKey = buildParsedPOIntentKey(po);
         if (!intentKey) {
           failedCount++;
           continue;
@@ -415,7 +409,7 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
             `${profile.id}:bulk:${po.source_file}:${po.source_index}`,
           ),
         );
-        savePendingBulkPOIntents(sessionStorage, profile.id, pendingIntentsRef.current);
+        savePendingBulkPOIntents(localStorage, profile.id, pendingIntentsRef.current);
 
         // Cache the number with the intent as well as the idempotency key. A
         // lost response must retry the same PO without burning another number.
@@ -428,7 +422,7 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
           }
           pendingIntent.poNumber = assertRpcResult<string>(poNumData, 'next_po_number');
           pendingIntent.updatedAt = Date.now();
-          savePendingBulkPOIntents(sessionStorage, profile.id, pendingIntentsRef.current);
+          savePendingBulkPOIntents(localStorage, profile.id, pendingIntentsRef.current);
         }
         const poNumber = pendingIntent.poNumber;
 
@@ -465,7 +459,7 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
         if (poError || !poData) throw poError;
         const savedPO = assertRpcResult<{ po_id: string }>(poData, 'save_purchase_order');
         markBulkPOIntentImported(pendingIntentsRef.current, intentKey, savedPO.po_id);
-        savePendingBulkPOIntents(sessionStorage, profile.id, pendingIntentsRef.current);
+        savePendingBulkPOIntents(localStorage, profile.id, pendingIntentsRef.current);
 
         successCount++;
         newSuccessCount++;
@@ -483,7 +477,7 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
       onSuccess();
     }
     if (skippedCount > 0) {
-      toast('info', `Skipped ${skippedCount} document${skippedCount !== 1 ? 's' : ''} already imported in this session.`);
+      toast('info', `Skipped ${skippedCount} document${skippedCount !== 1 ? 's' : ''} already imported in the last 30 days.`);
     }
     if (failedCount > 0) {
       toast('error', `${failedCount} purchase order${failedCount !== 1 ? 's' : ''} failed. Review and retry; successful imports will be skipped.`);
@@ -510,7 +504,7 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
   const totalMatched = parsedPOs?.reduce((sum, po) => sum + po.items.filter((i) => i.matched_product).length, 0) ?? 0;
   const totalUnmatched = parsedPOs?.reduce((sum, po) => sum + po.items.filter((i) => !i.matched_product).length, 0) ?? 0;
   const importablePOs = parsedPOs?.filter((po) => {
-    const intentKey = buildBulkPOIntentKey(po);
+    const intentKey = buildParsedPOIntentKey(po);
     return intentKey !== null && !isImportedBulkPOIntent(pendingIntentsRef.current, intentKey);
   }).length ?? 0;
 
@@ -613,7 +607,7 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
                 ));
                 const hasErrors = po.parse_errors.length > 0;
                 const hasItems = po.items.length > 0;
-                const intentKey = buildBulkPOIntentKey(po);
+                const intentKey = buildParsedPOIntentKey(po);
                 const importedIntent = intentKey ? pendingIntentsRef.current[intentKey] : undefined;
                 const alreadyImported = importedIntent?.status === 'imported';
 

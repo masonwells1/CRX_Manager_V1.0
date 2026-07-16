@@ -185,13 +185,14 @@ describe('money and inventory gauntlet fixes', () => {
     const idempotencyHook = source('src/hooks/useIdempotencyKey.ts');
     const submitHandler = detail.slice(detail.indexOf('const handleSubmitPO'), detail.indexOf('const handleCancel'));
     expect(bulkImport).toContain("supabase.rpc('save_purchase_order'");
-    expect(bulkImport).toContain('source_index: po.source_index');
+    expect(bulkImport).toContain('buildParsedPOIntentKey(po)');
+    expect(bulkImport).not.toContain('source_index: po.source_index');
     expect(bulkImport).toContain('ensurePendingBulkPOIntent(');
     expect(bulkImport).toContain('pendingIntent.poNumber');
     expect(bulkImport).toContain('p_idempotency_key: pendingIntent.idempotencyKey');
     expect(bulkImport).toContain('isImportedBulkPOIntent(pendingIntentsRef.current, intentKey)');
     expect(bulkImport).toContain('markBulkPOIntentImported(pendingIntentsRef.current, intentKey, savedPO.po_id)');
-    expect(bulkImport).toContain('savePendingBulkPOIntents(sessionStorage, profile.id');
+    expect(bulkImport).toContain('savePendingBulkPOIntents(localStorage, profile.id');
     expect(bulkImport).toContain('setUploadResults(failedCount === 0');
     expect(idempotency).toContain('const uuid = crypto.randomUUID()');
     expect(idempotencyHook).toContain('keyRef.current.scope !== scope');
