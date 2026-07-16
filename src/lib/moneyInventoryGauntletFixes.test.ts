@@ -8,7 +8,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, '..', '..');
 
 function source(path: string): string {
-  return readFileSync(join(ROOT, path), 'utf8');
+  return readFileSync(join(ROOT, path), 'utf8').replace(/\r\n/g, '\n');
 }
 
 function sourceFiles(path: string): string[] {
@@ -25,6 +25,7 @@ function sourceFiles(path: string): string[] {
 const access = source('supabase/migrations/20260716120104_gauntlet_access_boundaries.sql');
 const money = source('supabase/migrations/20260716120112_gauntlet_money_workflows.sql');
 const inventory = source('supabase/migrations/20260716120120_gauntlet_inventory_accuracy.sql');
+const poInitialStatus = source('supabase/migrations/20260716144353_lock_purchase_order_initial_status.sql');
 const completeDelivery = access.slice(0, access.indexOf('CREATE OR REPLACE FUNCTION public.void_delivery'));
 
 describe('money and inventory gauntlet fixes', () => {
@@ -120,6 +121,38 @@ describe('money and inventory gauntlet fixes', () => {
     expect(purchaseOrders).toContain("const canManagePO = role === 'admin' || role === 'sales_rep'");
     expect(purchaseOrders).toContain("{canManagePO && activeTab === 'all' && (");
     expect(detail).not.toMatch(/handleSubmitPO[\s\S]*?savePOIdem\.resetKey\(\)[\s\S]*?setSaving\(true\)/);
+  });
+
+  it('requires every new purchase order to start as a draft', () => {
+    const statusGuard = "IF v_is_new AND COALESCE(p_po_payload->>'status', 'draft') <> 'draft' THEN";
+    expect(poInitialStatus).toContain(statusGuard);
+    expect(poInitialStatus).toContain('INVALID_INITIAL_PO_STATUS');
+    expect(poInitialStatus.indexOf(statusGuard)).toBeLessThan(
+      poInitialStatus.indexOf("check_idempotency(p_idempotency_key, 'save_purchase_order')"),
+    );
+    expect(poInitialStatus).not.toContain("IF v_new_status <> 'draft' THEN");
+    expect(poInitialStatus).toContain("v_new_status := 'draft';");
+    expect(poInitialStatus).toContain("v_new_status IS NOT NULL AND v_new_status <> v_existing_status");
+    expect(poInitialStatus).toContain('PO_STATUS_RPC_REQUIRED');
+    expect(poInitialStatus).not.toContain("v_new_status IN ('partially_received', 'fully_received', 'cancelled')");
+
+    const newPurchaseOrder = source('src/pages/NewPurchaseOrder.tsx');
+    const saveHandler = newPurchaseOrder.slice(
+      newPurchaseOrder.indexOf("const handleSave = async"),
+      newPurchaseOrder.indexOf('const filteredProducts'),
+    );
+    expect(saveHandler).toContain("status: 'draft'");
+    expect(saveHandler).not.toContain('status: submitStatus');
+    expect(saveHandler).toContain("supabase.rpc('submit_purchase_order'");
+    expect(saveHandler).toContain('p_po_id: poId');
+    expect(saveHandler).toContain("const shouldSaveDraft = submitStatus === 'draft' || !poId || isDirty");
+    expect(saveHandler).toContain('pendingPoNumbersRef.current[idemKey]');
+    expect(saveHandler).toContain('delete pendingPoNumbersRef.current[idemKey]');
+    expect(newPurchaseOrder).toContain("useIdempotencyKey('submit_purchase_order', profile?.id || '')");
+    expect(saveHandler).toContain("assertRpcResult<{ po_id: string; status: string }>(submitData, 'submit_purchase_order')");
+    expect(saveHandler.indexOf("supabase.rpc('save_purchase_order'")).toBeLessThan(
+      saveHandler.indexOf("supabase.rpc('submit_purchase_order'"),
+    );
   });
 
   it('keeps every revoked money and inventory table mutation behind an RPC', () => {

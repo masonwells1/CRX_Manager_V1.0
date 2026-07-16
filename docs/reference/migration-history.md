@@ -1,4 +1,4 @@
-# Migration History (706 migrations)
+# Migration History (707 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
@@ -9,6 +9,9 @@ Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 > the coupled frontend was merged. PO create/import/edit/submit/cancel authority remains
 > available to active admins and sales reps, matching Mason's explicit
 > 2026-07-16 workflow decision; receiving reversal remains admin-only.
+> The independent release review then found one remaining status-bypass path;
+> the reviewed correction was applied as `20260716144353` and forces ordinary
+> saves to remain in their current lifecycle state.
 >
 > **Local post-edit proof (2026-07-15):** all three files executed in timestamp
 > order inside one Postgres transaction and rolled back. Catalog checks observed
@@ -27,6 +30,7 @@ Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
 | # | Timestamp | Description |
 |---|-----------|-------------|
+| 707 | 20260716144353 | **APPLIED LIVE 2026-07-16. Purchase-order lifecycle-status lock.** Re-emits `save_purchase_order()` so every new PO must start as `draft` and ordinary edits must preserve the current status; submission, receiving, and cancellation remain dedicated lifecycle RPCs. The New Purchase Order page preserves its one-click Submit action by saving the draft first and then calling `submit_purchase_order` with an independent retry key. The retry path reuses the same PO number and idempotency key after a lost save response. This closes the final independent Codex release-review blocker and the adjacent edit bypass without rewriting the already-applied gauntlet migration. Supabase ledger version/name: `20260716144353` / `lock_purchase_order_initial_status`. |
 | 706 | 20260716120120 | **APPLIED LIVE 2026-07-16. Money/inventory gauntlet inventory accuracy.** Re-emits `get_inventory_position()` so each PO line contributes no less than zero on-order quantity and delivered-YTD nets delivery-specific reversals on the original delivery date while pairing order-level void reversals back to the original order/product. The inventory ledger UI now shows authoritative on-floor/prebooked totals from this RPC instead of reconstructing a misleading current balance from incomplete historical rows, and surfaces `requires_review` transactions. |
 | 705 | 20260716120112 | **APPLIED LIVE 2026-07-16. Money/inventory gauntlet money workflows.** Allows only explicit draft `misc_charge` invoices to be created without an order/blend source; adds active write-offs to customer statements on their Chicago business date; excludes voided vendor payments from AP paid-this-month; rejects future finance-charge preview/generation dates; and makes prepay check splits penny-exact against an explicit expected total. Replaces the old five-argument `create_prepay_check_splits` identity with one backward-compatible six-argument identity: the original five named arguments stay in order and trailing `p_expected_total_cents bigint DEFAULT NULL` lets stale PWA callers keep working while new callers send the independent penny assertion. The vetted active-admin manual allocation wrapper is unchanged. |
 | 704 | 20260716120104 | **APPLIED LIVE 2026-07-16. Money/inventory gauntlet access boundaries.** Requires active delivery actors, aligns closed-period delivery checks and generated invoice dates to the effective Chicago completion date, requires an active admin for delivery voids, locks received PO product/quantity/unit/cost evidence, moves bulk import and edit flows onto active-admin-or-sales `save_purchase_order`, adds active-admin-or-sales status-only `submit_purchase_order` so stale screens cannot overwrite PO fields during submission, aligns `cancel_purchase_order` with that same active-admin-or-sales authority while preserving its bill/receiving guards, writes PO create/update/submit/cancel activity inside those database transactions, and revokes authenticated direct writes on PO/receiving/AP/prepay tables while preserving reads and vetted SECURITY DEFINER RPCs. |
