@@ -4,6 +4,18 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-16 — Scaffolding review Wave 3: hard doc-freshness gates + verified manual corrections
+
+The root-cause theme of the 2026-07-16 scaffolding review was staleness — the manual/reference layer going out of date while its "Last verified" prose promised otherwise. Wave 3 turns that promise into a checked fact and fixes the specific stale docs (each correction verified against the live database first):
+
+- **Manual-freshness gate (HARD):** `check-doc-drift.mjs` now FAILS when `CURRENT_STATE.md` or `KNOWN_ISSUES.md` claims a "Last verified" date older than the newest `supabase/migrations/` file. A migration dated after the stamp means the live-state docs weren't re-checked. Green today (stamps 2026-07-16 ≥ newest migration 2026-07-15); fires the moment a future migration lands without a stamp bump. Both fail/pass directions proven.
+- **Ledger guard extended to migrations:** a commit adding a `supabase/migrations/*.sql` file must now stage a ledger update (CHANGELOG / a manual doc / migration-history.md) in the same commit — a live-schema change can no longer land with zero doc trail. Tests updated.
+- **KNOWN_ISSUES.md corrections (verified live):** the `save_field_app_invoice:no-row-lock` finding marked RESOLVED (migration `20260714224000` applied the `FOR UPDATE` locks live 2026-07-14; confirmed in the live function body); the "frontend rollout pending PR" heading corrected — that rollout landed via PR #133 (merged 2026-07-15, `c4f7b4c5`).
+- **QUOTE_TO_DELIVERY.md corrections (verified live):** removed the dropped `orders.total_paid`/`balance_due` columns (AR is derived from `invoices.balance_cents`) and fixed the `invoice_items` line-total column name to `extended_cents` (was `line_total_cents`).
+- **RLS_SECURITY_GUIDE.md:** the "Full RLS Policy Matrix" now carries a loud staleness banner — it's a hand-kept snapshot already contradicted by July migrations (returns/return_items/payments write policies revoked); query live `pg_policies`, don't trust the prose, and never re-add a revoked policy to make reality match the doc.
+
+---
+
 ## 2026-07-16 — Scaffolding design review + Wave 1 guard/doc fixes (junior-handover hardening)
 
 Full 10-dimension design review of the agent scaffolding (report: `docs/audits/2026-07-16-scaffolding-design-review.md`; independent Codex cross-review verdict: agree-with-changes, its scope escalations adopted). Wave 1 closes the confirmed BLOCKERs — every documented path around the live-DB guard net — plus the highest-risk Theme-1 gap:

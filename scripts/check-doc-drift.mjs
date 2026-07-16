@@ -71,6 +71,30 @@ for (const doc of manualDocs) {
     stamped ? "PASS" : "FAIL");
 }
 
+// HARD freshness gate (2026-07-16 scaffolding review): the two docs that describe
+// LIVE state must not claim a "Last verified" date OLDER than the newest migration
+// on disk. A migration dated after the stamp means the schema/behavior changed
+// after the doc was last checked — so its freshness promise is stale. This is the
+// forcing function the manual layer lacked: within 48h of shipping, KNOWN_ISSUES
+// listed an applied-live fix as "parked" while claiming same-day re-verification.
+// Bump the stamp ONLY after actually re-reading the doc against live state.
+const newestMigDate = migrations
+  .map((name) => name.match(/^(\d{8})/)?.[1])
+  .filter(Boolean)
+  .sort()
+  .at(-1); // YYYYMMDD of the newest migration
+for (const doc of ["CURRENT_STATE.md", "KNOWN_ISSUES.md"]) {
+  const rel = `docs/manual/${doc}`;
+  if (!existsSync(path.join(ROOT, rel))) continue; // the "stamp present" check above already failed this
+  const m = read(rel).match(/Last verified:?\*{0,2}\s*(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) continue; // no parseable stamp — already a FAIL above
+  const stampDate = `${m[1]}${m[2]}${m[3]}`; // YYYYMMDD
+  const fresh = !newestMigDate || stampDate >= newestMigDate;
+  row(`manual freshness ${doc}`, `stamp >= newest migration (${newestMigDate ?? "none"})`, `stamp ${stampDate}`,
+    fresh ? "PASS" : "FAIL",
+    fresh ? "" : `migration ${newestMigDate} is newer than this doc's "Last verified" stamp — re-verify the doc against live state (list_migrations / the live schema), correct anything stale, THEN bump the stamp. Do not bump the date without re-reading.`);
+}
+
 console.log("check-doc-drift");
 for (const item of rows) {
   console.log(`${item.status.padEnd(4)} ${item.check}: claim=${item.claim} actual=${item.actual}${item.note ? ` - ${item.note}` : ""}`);
