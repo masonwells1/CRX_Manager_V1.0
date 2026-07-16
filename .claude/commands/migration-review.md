@@ -19,23 +19,21 @@ The workflow runs `rls-security-reviewer` + `migration-drift-reviewer` + `typesc
 `{ migration, verdict: 'clean' | 'blocked', realBlockers[], refutedBlockers[], allFindings[], reviewers[] }`.
 
 ### 3a. If verdict is `'clean'`
-1. Get a real current UTC timestamp (the workflow cannot — its clock is disabled). Run:
-   `(Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")`
-2. Write the proof file to `.claude/session-state/migration-review-<safe-name>.json` where `<safe-name>` is the migration name with every char outside `[A-Za-z0-9_.-]` replaced by `_`, then truncated to 80 characters (this matches the guard's own slug rule). Content:
-   ```json
-   {
-     "migration": "<migration name or filename>",
-     "timestamp": "<the ISO timestamp from step 1>",
-     "reviewers": ["rls-security-reviewer", "migration-drift-reviewer"],
-     "findings": "clean",
-     "queryHash": "<sha256 of the exact migration SQL — see note>"
-   }
+1. Stamp the proof with the sanctioned wrapper — do NOT hand-write the JSON (it computes
+   the timestamp, the guard's slug rule, and the content-binding `queryHash` from the
+   on-disk file itself):
    ```
-   (The reviewers list is provenance-only — the migration-apply-guard hook validates findings + queryHash, not this list.)
-   Use `"findings": "blockers-fixed"` instead if blockers were found and fixed earlier this session.
-   `queryHash` binds the proof to this exact SQL so an edit-after-review can't slip through. Reliable way to get it: when Mason approves the apply (step 4), attempt the `apply_migration` call once — the guard prints the expected SHA-256 — paste that into `queryHash` and retry. (Omitting it still works but loses the content-binding protection.)
-   IMPORTANT: the `migration` value must substring-match the `name` you will pass to `apply_migration`, or the guard won't match the proof. The proof expires after 30 minutes.
-3. Tell Mason it's clean, list any MED/LOW findings as FYI (not blockers), and list the `refutedBlockers` so he can see what was checked and dismissed.
+   node scripts/write-apply-proofs.mjs <migration-name-without-.sql>
+   ```
+   The wrapper ALWAYS runs a real, read-only review with the trusted Codex CLI and mints
+   the proof pair (reviewer half + second-model half) only on a CLEAN machine verdict —
+   there is no way to stamp a proof without that run (a BLOCKERS or failed run mints
+   nothing; fix the findings or park the migration).
+   IMPORTANT: the migration name must substring-match the `name` you will pass to
+   `apply_migration`, or the guard won't match the proof. Proofs expire after 30 minutes.
+   If the migration is edited after stamping, the hash no longer matches — re-run the
+   review, then re-stamp.
+2. Tell Mason it's clean, list any MED/LOW findings as FYI (not blockers), and list the `refutedBlockers` so he can see what was checked and dismissed.
 
 ### 3b. If verdict is `'blocked'`
 1. Do NOT write a proof file. Do NOT apply.
@@ -45,7 +43,7 @@ The workflow runs `rls-security-reviewer` + `migration-drift-reviewer` + `typesc
 ### 4. Apply (only after a clean proof exists, and only with Mason's authorization)
 The proof unblocks `apply_migration`; it does not authorize it. Two authorization paths (settled 2026-07-13 policy):
 - **Interactive session (default):** explain the migration (offer `/explain-migration`) and wait for Mason's in-chat approval before the apply call.
-- **Pre-authorized hands-free run** (Mason explicitly asked for the run AND autopilot is armed): no per-migration ask, but the Codex gate is mandatory — run `/codex-review` on the migration (an actual verdict this session), then write the content-bound Codex proof `codex-review-mig-<safe-name>.json` (`queryHash` of the exact transmitted SQL + `verdict` + `timestamp`); the apply-guard refuses hands-free applies without it, and refuses DESTRUCTIVE migrations (data deletes, schema/table/column/type drops, MERGE) outright — park those for Mason.
+- **Pre-authorized hands-free run** (Mason explicitly asked for the run AND autopilot is armed): no per-migration ask, but the Codex gate is mandatory — run `node scripts/write-apply-proofs.mjs <mig-name>`, which runs the trusted Codex CLI itself and mints the content-bound proof pair only on a CLEAN machine verdict (hand-writing the proof is blocked by review-proof-guard, by design). The apply-guard refuses hands-free applies without it, and refuses DESTRUCTIVE migrations (data deletes, schema/table/column/type drops, MERGE) outright — park those for Mason.
 
 ## Hard rules
 - **Read-only review.** The workflow and this review step never edit code, apply migrations, or deploy.

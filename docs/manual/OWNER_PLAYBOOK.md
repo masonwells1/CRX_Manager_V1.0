@@ -1,6 +1,6 @@
 # Owner Playbook — how to run CRX Manager through Claude and Codex
 
-**Last verified:** 2026-07-13
+**Last verified:** 2026-07-16
 **Update triggers:** when commands/skills/policies change (the agent that changes them updates this file).
 
 This is your manual, Mason. You never have to remember a slash command (a typed
@@ -65,7 +65,7 @@ Some actions are irreversible enough, or risky enough, that no amount of automat
 
 **What counts as approval:** a clear, current "yes" — "yes, apply it," "go ahead," "do it," "approved" — or, for migrations only, a hands-free run you explicitly started (the armed autopilot flag is the proof, and it expires on its own). Silence, a thumbs-up on something else, or "you always have my blessing for this kind of thing" does not count. If the agent is about to deploy an Edge Function or delete data and hasn't shown you exactly what it's about to run and waited for your answer, stop it.
 
-**A note on pushing regular code to `main`** (the branch that is live at croprxsolutions.app the moment anything lands on it): you gave a standing authorization (2026-06-16) for agents to push **regular, reversible code** to `main` automatically once the full pipeline is green — review clean, tests passing, and the pre-push typecheck/build succeeding — because a bad frontend deploy is a one-click rollback in Vercel. That authorization covers ordinary code only. Edge Function deploys and data deletion are **never** covered by it, and migrations are covered only inside a hands-free run you started, as described above. If you ever want any of this to wait for your yes again, just say so and an agent will update the policy everywhere it's written down.
+**A note on landing regular code on `main`** (the branch that is live at croprxsolutions.app the moment anything lands on it): you gave a standing authorization (2026-06-16) for agents to land **regular, reversible code** on `main` automatically once the full pipeline is green — review clean, tests passing, and the pre-push typecheck/build succeeding — because a bad frontend deploy is a one-click rollback in Vercel. Since 2026-07-14, nobody (agent or human) can push straight to `main` — GitHub itself rejects it — so "landing" always means: push a branch, open a pull request (a proposed change GitHub holds for checks), wait for the automatic Vercel build check to pass, then merge. That authorization covers ordinary code only. Edge Function deploys and data deletion are **never** covered by it, and migrations are covered only inside a hands-free run you started, as described above. If you ever want any of this to wait for your yes again, just say so and an agent will update the policy everywhere it's written down.
 
 ---
 
