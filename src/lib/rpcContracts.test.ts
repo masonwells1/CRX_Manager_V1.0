@@ -1426,6 +1426,10 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   'reverse_credit_memo_application', // credit-memo (landed 2026-07-10) — WITH idempotency (see apply_credit_memo_to_invoice note above)
   'reverse_write_off',
   'revert_quote_status',
+  // CRM Phase 2 fact RPCs (migration 20260716181306_crm_customer_facts) — classified WITH
+  // idempotency 2026-07-16 after the types regen landed them in src/types/supabase.ts:
+  // both declare p_idempotency_key and replay via check_idempotency/save_idempotency.
+  'review_customer_fact',
   'save_blend_recipe',
   'save_blend_ticket',
   'save_customer',
@@ -1436,6 +1440,7 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   'save_purchase_order',
   'save_quote',
   'stage_offline_action',
+  'supersede_customer_fact',
   'transfer_invoice_to_job',
   'transfer_job_to_invoice',
   'transition_rebate_claim',
