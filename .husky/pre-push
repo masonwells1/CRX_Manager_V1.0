@@ -25,4 +25,15 @@ if [ $BUILD_EXIT -ne 0 ]; then
 fi
 
 echo ""
+echo "🗺️ Refreshing local Graphify architecture map when code or database structure changed..."
+node scripts/graphify-refresh.mjs --if-relevant
+GRAPHIFY_EXIT=$?
+
+if [ $GRAPHIFY_EXIT -ne 0 ]; then
+  echo ""
+  echo "⚠️ Graphify refresh skipped or failed — continuing because Graphify is an optional local navigation aid."
+  echo "   Run npm run graph:refresh after installing Graphify to restore the local architecture map."
+fi
+
+echo ""
 echo "✅ Type check and build passed — pushing to GitHub."
