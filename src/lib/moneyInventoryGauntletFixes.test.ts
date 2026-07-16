@@ -8,7 +8,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, '..', '..');
 
 function source(path: string): string {
-  return readFileSync(join(ROOT, path), 'utf8');
+  return readFileSync(join(ROOT, path), 'utf8').replace(/\r\n/g, '\n');
 }
 
 function sourceFiles(path: string): string[] {
