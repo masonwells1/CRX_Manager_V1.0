@@ -26,6 +26,8 @@ import CustomerSummaryBar from '../components/customers/CustomerSummaryBar';
 import YearEndSummaryDialog from '../components/reports/YearEndSummaryDialog';
 import CustomerContacts, { CustomerInteractionsHistory } from '../components/customers/CustomerContacts';
 import LogInteractionModal from '../components/customers/LogInteractionModal';
+import CustomerFacts from '../components/customers/CustomerFacts';
+import CustomerPrepCard from '../components/customers/CustomerPrepCard';
 import { downloadYearEndSummaryPdf } from '../lib/yearEndSummaryPdf';
 import type { YearEndSummaryOptions } from '../lib/yearEndSummaryPdf';
 import type { YearEndSummaryData } from '../types';
@@ -85,7 +87,7 @@ export default function CustomerDetail() {
   const [addresses, setAddresses] = useState<Partial<CustomerAddress>[]>([]);
   const [loading, setLoading] = useState(!isNew);
   const [saving, setSaving] = useState(false);
-  const [tab, setTab] = useState<'info' | 'contacts' | 'timeline' | 'fields' | 'quotes' | 'orders' | 'deliveries' | 'financials' | 'history'>('info');
+  const [tab, setTab] = useState<'info' | 'contacts' | 'knowledge' | 'timeline' | 'fields' | 'quotes' | 'orders' | 'deliveries' | 'financials' | 'history'>('info');
   const [timeline, setTimeline] = useState<ActivityFeedItem[]>([]);
   const [timelineLoading, setTimelineLoading] = useState(false);
 
@@ -534,7 +536,7 @@ export default function CustomerDetail() {
     );
   }
 
-  const tabs = ['info', 'contacts', 'timeline', 'fields', 'quotes', 'orders', 'deliveries', 'financials', 'history'] as const;
+  const tabs = ['info', 'contacts', 'knowledge', 'timeline', 'fields', 'quotes', 'orders', 'deliveries', 'financials', 'history'] as const;
 
   const handleGenerateSummary = async (season: number, options: YearEndSummaryOptions) => {
     if (!id || isNew) return;
@@ -634,6 +636,7 @@ export default function CustomerDetail() {
 
       {(tab === 'info' || isNew) && (
         <div className="space-y-4">
+          {!isNew && id && <CustomerPrepCard customerId={id} />}
           <Card>
             <CardHeader title="Contact" accent="Information" />
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -865,6 +868,10 @@ export default function CustomerDetail() {
 
       {tab === 'contacts' && !isNew && id && profile && (
         <CustomerContacts customerId={id} performedBy={profile.id} />
+      )}
+
+      {tab === 'knowledge' && !isNew && id && profile && (
+        <CustomerFacts customerId={id} userId={profile.id} />
       )}
 
       {tab === 'timeline' && !isNew && (

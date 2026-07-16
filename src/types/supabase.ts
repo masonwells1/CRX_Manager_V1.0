@@ -1900,6 +1900,122 @@ export type Database = {
           },
         ]
       }
+      customer_facts: {
+        Row: {
+          category: string
+          confidence: number | null
+          created_at: string
+          customer_id: string
+          entered_by: string | null
+          expires_at: string | null
+          fact_key: string
+          id: string
+          review_note: string | null
+          reviewed_at: string | null
+          reviewed_by: string | null
+          source: string
+          source_interaction_id: string | null
+          status: string
+          superseded_at: string | null
+          superseded_by: string | null
+          updated_at: string
+          value_json: Json | null
+          value_text: string | null
+        }
+        Insert: {
+          category: string
+          confidence?: number | null
+          created_at?: string
+          customer_id: string
+          entered_by?: string | null
+          expires_at?: string | null
+          fact_key: string
+          id?: string
+          review_note?: string | null
+          reviewed_at?: string | null
+          reviewed_by?: string | null
+          source?: string
+          source_interaction_id?: string | null
+          status?: string
+          superseded_at?: string | null
+          superseded_by?: string | null
+          updated_at?: string
+          value_json?: Json | null
+          value_text?: string | null
+        }
+        Update: {
+          category?: string
+          confidence?: number | null
+          created_at?: string
+          customer_id?: string
+          entered_by?: string | null
+          expires_at?: string | null
+          fact_key?: string
+          id?: string
+          review_note?: string | null
+          reviewed_at?: string | null
+          reviewed_by?: string | null
+          source?: string
+          source_interaction_id?: string | null
+          status?: string
+          superseded_at?: string | null
+          superseded_by?: string | null
+          updated_at?: string
+          value_json?: Json | null
+          value_text?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "customer_facts_customer_id_fkey"
+            columns: ["customer_id"]
+            isOneToOne: false
+            referencedRelation: "customers"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "customer_facts_customer_interaction_fkey"
+            columns: ["customer_id", "source_interaction_id"]
+            isOneToOne: false
+            referencedRelation: "customer_interactions"
+            referencedColumns: ["customer_id", "id"]
+          },
+          {
+            foreignKeyName: "customer_facts_entered_by_fkey"
+            columns: ["entered_by"]
+            isOneToOne: false
+            referencedRelation: "profile_public_view"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "customer_facts_entered_by_fkey"
+            columns: ["entered_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "customer_facts_reviewed_by_fkey"
+            columns: ["reviewed_by"]
+            isOneToOne: false
+            referencedRelation: "profile_public_view"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "customer_facts_reviewed_by_fkey"
+            columns: ["reviewed_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "customer_facts_superseded_by_fkey"
+            columns: ["superseded_by"]
+            isOneToOne: false
+            referencedRelation: "customer_facts"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       customer_interactions: {
         Row: {
           contact_id: string | null
@@ -6750,6 +6866,7 @@ export type Database = {
           quantity_ordered: number
           quantity_received: number
           unit_cost: number
+          unit_cost_cents: number | null
           unit_size: string | null
         }
         Insert: {
@@ -6761,6 +6878,7 @@ export type Database = {
           quantity_ordered?: number
           quantity_received?: number
           unit_cost?: number
+          unit_cost_cents?: number | null
           unit_size?: string | null
         }
         Update: {
@@ -6772,6 +6890,7 @@ export type Database = {
           quantity_ordered?: number
           quantity_received?: number
           unit_cost?: number
+          unit_cost_cents?: number | null
           unit_size?: string | null
         }
         Relationships: [
@@ -6812,6 +6931,7 @@ export type Database = {
           status: string
           submitted_date: string | null
           total_cost: number
+          total_cost_cents: number | null
           updated_at: string
           vendor: string
         }
@@ -6828,6 +6948,7 @@ export type Database = {
           status?: string
           submitted_date?: string | null
           total_cost?: number
+          total_cost_cents?: number | null
           updated_at?: string
           vendor?: string
         }
@@ -6844,6 +6965,7 @@ export type Database = {
           status?: string
           submitted_date?: string | null
           total_cost?: number
+          total_cost_cents?: number | null
           updated_at?: string
           vendor?: string
         }
@@ -9107,6 +9229,19 @@ export type Database = {
         }
         Returns: undefined
       }
+      _complete_delivery_authorized_impl: {
+        Args: {
+          p_completed_at?: string
+          p_delivery_id: string
+          p_idempotency_key?: string
+          p_issue_notes?: string
+          p_issue_type?: string
+          p_performed_by?: string
+          p_quantities?: Json
+          p_signed_by: string
+        }
+        Returns: Json
+      }
       _insert_commissions_for_job: {
         Args: {
           p_commission_date?: string
@@ -9141,6 +9276,10 @@ export type Database = {
       _post_invoice_impl_20260714: {
         Args: { p_idempotency_key?: string; p_invoice_id: string }
         Returns: undefined
+      }
+      _purchase_order_item_unit_cost_cents: {
+        Args: { p_item: Json }
+        Returns: number
       }
       _receive_return_impl_20260714: {
         Args: {
@@ -10089,6 +10228,15 @@ export type Database = {
           is_parent: boolean
         }[]
       }
+      get_customer_lapsed_products: {
+        Args: { p_customer_id: string }
+        Returns: Json
+      }
+      get_customer_prep_card: { Args: { p_customer_id: string }; Returns: Json }
+      get_customer_purchase_summary: {
+        Args: { p_customer_id: string; p_season?: string }
+        Returns: Json
+      }
       get_customer_statement: {
         Args: {
           p_customer_id: string
@@ -10512,6 +10660,16 @@ export type Database = {
           lot_number: string
           receiving_record_id: string
           source: string
+        }[]
+      }
+      get_rep_customer_purchase_flags: {
+        Args: { p_season?: string }
+        Returns: {
+          customer_id: string
+          farm_name: string
+          lapsed: boolean
+          last_season_cents: number
+          this_season_cents: number
         }[]
       }
       get_rup_sales_register: {
@@ -11326,6 +11484,15 @@ export type Database = {
         }
         Returns: Json
       }
+      review_customer_fact: {
+        Args: {
+          p_fact_id: string
+          p_idempotency_key?: string
+          p_review_note?: string
+          p_verdict: string
+        }
+        Returns: Json
+      }
       rollover_quote_to_season: {
         Args: {
           p_idempotency_key?: string
@@ -11573,6 +11740,16 @@ export type Database = {
           p_idempotency_key?: string
           p_performed_by: string
           p_po_id: string
+        }
+        Returns: Json
+      }
+      supersede_customer_fact: {
+        Args: {
+          p_confidence: number
+          p_fact_id: string
+          p_idempotency_key?: string
+          p_value_json: Json
+          p_value_text: string
         }
         Returns: Json
       }

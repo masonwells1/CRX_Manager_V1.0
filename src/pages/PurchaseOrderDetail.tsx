@@ -115,7 +115,7 @@ export default function PurchaseOrderDetail() {
         .from('purchase_order_items')
         .select('*, product:products(product_name)')
         .eq('purchase_order_id', id!);
-      setItems((itemsData || []) as PurchaseOrderItem[]);
+      setItems((itemsData || []) as unknown as PurchaseOrderItem[]);
     }
     setLoading(false);
   }, [id]);

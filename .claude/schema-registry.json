@@ -6,7 +6,7 @@
     "regenerate_with": "node scripts/regenerate-schema-registry.mjs --from-introspection <queries.json> (queries documented in the script header)",
     "purpose": "Single source of truth for hooks: generated columns, status enums, ALL parseable CHECK IN-lists, NOT NULL columns, full column lists, sequences, tables-with/without updated_at, applied-migration high water.",
     "note": "For a fresh refresh from the live DB, ask Claude Code: 'regenerate the schema-registry from Supabase' (/regen-schema-registry). skipped_constraints lists every CHECK the hooks can NOT validate — review it when touching those tables.",
-    "migrations_high_water": "20260716161259",
+    "migrations_high_water": "20260716185713",
     "applied_migration_names": [
       "20260207_gap_analysis_fixes.sql",
       "20260209050000_inventory_overhaul",
@@ -228,6 +228,12 @@
       "20260715182757_park_returns_creation_rpc_only",
       "20260716124223_crm_contacts_identities",
       "20260716125826_crm_interactions",
+      "20260716160000_fix_idempotency_committed_replay_guard",
+      "20260716170559_crm_set_primary_contact",
+      "20260716173342_authorize_delivery_before_replay",
+      "20260716181306_crm_customer_facts",
+      "20260716182318_crm_purchase_intelligence",
+      "20260716183501_purchase_order_integer_cents",
       "a1_dispatched_list_recent_completed",
       "a1b_dispatched_to_me_completed_tail",
       "accounting_and_integrity_fixes",
@@ -557,6 +563,8 @@
       "gross_sales_report_column_fix",
       "grower_share_pricing",
       "guard_delivery_closed_periods",
+      "guard_delivery_period_rewrites",
+      "guard_delivery_scheduled_date_rewrites",
       "guard_prepay_with_period_check",
       "harden_commission_payment_creation",
       "harden_maintenance_secdef_revoke_authenticated",
@@ -823,6 +831,16 @@
       "expression": "GREATEST((COALESCE(total_acres, (0)::numeric) - COALESCE(applied_acres, (0)::numeric)), (0)::numeric)"
     },
     {
+      "table": "purchase_order_items",
+      "column": "unit_cost_cents",
+      "expression": "(round((unit_cost * (100)::numeric)))::bigint"
+    },
+    {
+      "table": "purchase_orders",
+      "column": "total_cost_cents",
+      "expression": "(round((total_cost * (100)::numeric)))::bigint"
+    },
+    {
       "table": "vendor_bills",
       "column": "balance_cents",
       "expression": "(total_cents - COALESCE(paid_cents, (0)::bigint))"
@@ -864,6 +882,11 @@
       "pending",
       "paid",
       "cancelled"
+    ],
+    "customer_facts.status": [
+      "pending_review",
+      "verified",
+      "rejected"
     ],
     "cycle_counts.status": [
       "in_progress",
@@ -1239,6 +1262,40 @@
         "customer_contacts_preferred_contact_method_check"
       ],
       "nullable": true
+    },
+    "customer_facts.category": {
+      "values": [
+        "product_preference",
+        "constraint",
+        "operating_preference",
+        "agronomy",
+        "relationship",
+        "communication"
+      ],
+      "constraints": [
+        "customer_facts_category_check"
+      ]
+    },
+    "customer_facts.source": {
+      "values": [
+        "rep",
+        "ai_receptionist",
+        "system",
+        "web_store"
+      ],
+      "constraints": [
+        "customer_facts_source_check"
+      ]
+    },
+    "customer_facts.status": {
+      "values": [
+        "pending_review",
+        "verified",
+        "rejected"
+      ],
+      "constraints": [
+        "customer_facts_status_check"
+      ]
     },
     "customer_interactions.interaction_type": {
       "values": [
@@ -2142,6 +2199,42 @@
       "reason": "conditional/multi-column — not a single-column IN-list; hooks do NOT validate this constraint"
     },
     {
+      "table": "customer_facts",
+      "constraint": "customer_facts_ai_source_interaction_check",
+      "def": "CHECK (((source <> 'ai_receptionist'::text) OR (source_interaction_id IS NOT NULL)))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "customer_facts",
+      "constraint": "customer_facts_confidence_check",
+      "def": "CHECK (((confidence IS NULL) OR ((confidence >= (0)::numeric) AND (confidence <= (1)::numeric))))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "customer_facts",
+      "constraint": "customer_facts_fact_key_check",
+      "def": "CHECK (((fact_key = lower(btrim(fact_key))) AND (fact_key <> ''::text)))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "customer_facts",
+      "constraint": "customer_facts_review_stamp_check",
+      "def": "CHECK ((((status = 'pending_review'::text) AND (reviewed_by IS NULL) AND (reviewed_at IS NULL)) OR ((status = ANY (ARRAY['verified'::text, 'rejected'::text])) AND (reviewed_by IS NOT NULL) AND (reviewed_at IS NOT NULL))))",
+      "reason": "conditional/multi-column — not a single-column IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "customer_facts",
+      "constraint": "customer_facts_value_check",
+      "def": "CHECK ((((value_text IS NULL) <> (value_json IS NULL)) AND ((value_text IS NULL) OR (btrim(value_text) <> ''::text))))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "customer_facts",
+      "constraint": "customer_facts_value_json_check",
+      "def": "CHECK (((value_json IS NULL) OR (jsonb_typeof(value_json) = ANY (ARRAY['object'::text, 'array'::text]))))",
+      "reason": "conditional/multi-column — not a single-column IN-list; hooks do NOT validate this constraint"
+    },
+    {
       "table": "customer_interactions",
       "constraint": "customer_interactions_direction_check",
       "def": "CHECK (((direction = ANY (ARRAY['inbound'::text, 'outbound'::text])) OR (direction IS NULL)))",
@@ -2574,6 +2667,18 @@
       "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
     },
     {
+      "table": "purchase_order_items",
+      "constraint": "purchase_order_items_unit_cost_whole_cents",
+      "def": "CHECK (((unit_cost >= (0)::numeric) AND (unit_cost = ((unit_cost_cents)::numeric / 100.0))))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "purchase_orders",
+      "constraint": "purchase_orders_total_cost_whole_cents",
+      "def": "CHECK (((total_cost >= (0)::numeric) AND (total_cost = ((total_cost_cents)::numeric / 100.0))))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
       "table": "quote_product_draws",
       "constraint": "quote_product_draws_quantity_drawn_check",
       "def": "CHECK ((quantity_drawn >= (0)::numeric))",
@@ -2951,6 +3056,20 @@
         "is_decision_maker",
         "is_billing_contact",
         "is_active",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    "customer_facts": {
+      "no_default": [
+        "customer_id",
+        "category",
+        "fact_key"
+      ],
+      "with_default": [
+        "id",
+        "status",
+        "source",
         "created_at",
         "updated_at"
       ]
@@ -4592,6 +4711,27 @@
       "created_at",
       "updated_at"
     ],
+    "customer_facts": [
+      "id",
+      "customer_id",
+      "category",
+      "fact_key",
+      "value_text",
+      "value_json",
+      "confidence",
+      "status",
+      "source",
+      "source_interaction_id",
+      "entered_by",
+      "reviewed_by",
+      "reviewed_at",
+      "review_note",
+      "expires_at",
+      "superseded_at",
+      "superseded_by",
+      "created_at",
+      "updated_at"
+    ],
     "customer_interactions": [
       "id",
       "customer_id",
@@ -5635,7 +5775,8 @@
       "quantity_received",
       "unit_size",
       "notes",
-      "product_name"
+      "product_name",
+      "unit_cost_cents"
     ],
     "purchase_orders": [
       "id",
@@ -5651,7 +5792,8 @@
       "updated_at",
       "cancelled_at",
       "cancelled_by",
-      "cancel_reason"
+      "cancel_reason",
+      "total_cost_cents"
     ],
     "quote_items": [
       "id",

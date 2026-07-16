@@ -1419,6 +1419,10 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   'reverse_credit_memo_application', // credit-memo (landed 2026-07-10) — WITH idempotency (see apply_credit_memo_to_invoice note above)
   'reverse_write_off',
   'revert_quote_status',
+  // CRM Phase 2 fact RPCs (migration 20260716181306_crm_customer_facts) — classified WITH
+  // idempotency 2026-07-16 after the types regen landed them in src/types/supabase.ts:
+  // both declare p_idempotency_key and replay via check_idempotency/save_idempotency.
+  'review_customer_fact',
   'save_blend_recipe',
   'save_blend_ticket',
   'save_customer',
@@ -1429,6 +1433,7 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   'save_purchase_order',
   'save_quote',
   'stage_offline_action',
+  'supersede_customer_fact',
   'transfer_invoice_to_job',
   'transfer_job_to_invoice',
   'transition_rebate_claim',
@@ -1852,11 +1857,9 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
   run_data_integrity_sweep: 'convergent integrity repair recomputes current invariant state',
   run_morning_notification_checks: 'cron sweep has persisted per-recipient notification deduplication',
   run_weekly_db_backup: 'cron-only maintenance with authenticated and anonymous EXECUTE revoked; each dated snapshot is independently retained and pruned',
-  review_customer_fact: 'convergent fact review; replays with the same verdict settle to the same reviewed state; SECDEF authz mirrors get_customer_statement',
   save_idempotency: 'idempotency infrastructure helper that stores the parent operation result',
   set_primary_customer_contact: 'convergent primary-contact promotion; replays settle to the same single-primary state; SECURITY INVOKER under customer RLS',
   settle_applied_record_acres: 'trigger-only derived-acre recomputation; direct client EXECUTE is revoked',
-  supersede_customer_fact: 'idempotency-key guarded supersession; replay returns the stored result; SECDEF authz mirrors get_customer_statement',
 };
 
 
