@@ -213,7 +213,7 @@ if (validProof) {
         `MIGRATION APPLY GUARD (hands-free run): the second-model gate is not satisfied for ` +
         `"${migName || "(unnamed)"}" (${!codexProof ? "no Codex proof file" : !cvOk ? "verdict is not clean/ship" : !cvHashOk ? "queryHash does not match the transmitted SQL" : "proof timestamp is not within the last 30 minutes"}). ` +
         `Autonomous applies require a fresh, content-bound Codex verdict (Mason's settled 2026-07-13 ` +
-        `policy). Run: node scripts/write-apply-proofs.mjs --codex ${migName || "<migName>"} — it runs the ` +
+        `policy). Run: node scripts/write-apply-proofs.mjs ${migName || "<migName>"} — it runs the ` +
         `trusted Codex CLI itself and mints the content-bound proof ONLY on a CLEAN machine verdict. ` +
         `Do NOT hand-write the proof JSON (review-proof-guard blocks any command naming it, by design). ` +
         `A BLOCKERS verdict or a failed Codex run does NOT qualify — fix the findings or PARK the ` +
@@ -234,8 +234,8 @@ out("block",
   `  3. Once both return clean (or "blockers-fixed"), stamp the proof with the wrapper\n` +
   `     (it computes the content hash itself — do not hand-write the JSON):\n` +
   `       node scripts/write-apply-proofs.mjs ${migName || "<migName>"}\n` +
-  `     (For SQL/RLS/money changes add --codex to also run the required second-model\n` +
-  `      review: node scripts/write-apply-proofs.mjs --codex ${migName || "<migName>"})\n` +
+  `     (The wrapper ALWAYS runs a real Codex review of the file and mints nothing\n` +
+  `      without a CLEAN machine verdict — a BLOCKERS or failed run means fix or park.)\n` +
   `  4. AUTHORIZATION — the proof gate is a floor, NOT the authorization: in an\n` +
   `     ordinary interactive session, get Mason's explicit in-chat OK before applying.\n` +
   `     (Only a Mason-pre-authorized hands-free run with autopilot armed may apply\n` +

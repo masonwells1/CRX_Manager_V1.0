@@ -1,26 +1,27 @@
 #!/usr/bin/env node
-// One-shot helper: write migration-apply-guard proof files for migrations that
-// passed BOTH review subagents (rls-security-reviewer + migration-drift-reviewer)
-// this session. Pass the migration NAMES (without .sql) as args; only those get
-// a proof. Written with Node (clean UTF-8, no BOM — a BOM blocks the guard
-// hook's JSON parse).
+// The ONLY sanctioned producer of migration-apply-guard proof files. Pass the
+// migration NAMES (without .sql) as args. For EACH migration it runs a real,
+// read-only review with the trusted Codex CLI (same trusted-binary resolution +
+// terminal machine-token verdict as scripts/write-codex-push-proof.mjs) and —
+// ONLY on a CLEAN machine verdict with the file content unchanged — mints BOTH
+// proofs the guard checks: migration-review-<name>.json (reviewer half) and
+// codex-review-mig-<name>.json (second-model half). Written with Node (clean
+// UTF-8, no BOM — a BOM blocks the guard hook's JSON parse).
 //
 // queryHash is computed from the on-disk migration file (CRLF→LF normalized) —
 // hands-free applies REQUIRE it to match the transmitted SQL exactly (Codex P1
 // 2026-07-13); if your apply call sends different bytes (e.g. trailing newline
 // stripped), the guard prints the expected hash to paste in.
 //
-// --codex: ALSO mint the separate content-bound Codex proof
-// (codex-review-mig-<name>.json) that hands-free applies require. This flag
-// RUNS the trusted Codex CLI itself (same trusted-binary resolution + terminal
-// machine-token verdict as scripts/write-codex-push-proof.mjs) and writes the
-// proof ONLY when Codex's own verdict token is CLEAN and the migration file did
-// not change while Codex was reviewing. There is deliberately NO way to pass a
-// verdict in from the command line:
-//   --codex-verdict <v> was REMOVED 2026-07-16 (scaffolding design review +
-//   Codex cross-review): a caller-supplied verdict let one command mint the
-//   second-model gate without any second model running — a rubber stamp on the
-//   most dangerous action in the system (live DB migration).
+// There is deliberately NO way to stamp a proof without the Codex run:
+//   --codex-verdict <v> was REMOVED 2026-07-16 (scaffolding design review):
+//   a caller-supplied verdict let one command mint the second-model gate
+//   without any second model running.
+//   Unconditional reviewer-proof stamping was REMOVED the same day (Codex
+//   round-3 review of PR #142): a "clean, both reviewers ran" JSON written on
+//   the caller's say-so is assertion, not evidence. The subagent reviewers
+//   still run per /migration-review (their findings drive the fix loop); the
+//   machine verdict here is what makes the stamped proof evidence.
 import { writeFileSync, mkdirSync, readFileSync, existsSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
@@ -36,16 +37,24 @@ const rawArgs = process.argv.slice(2);
 if (rawArgs.includes('--codex-verdict')) {
   console.error(
     '--codex-verdict was removed (2026-07-16): a CLI-supplied verdict let a session\n' +
-    'mint the second-model gate without Codex actually running. Use --codex instead —\n' +
-    'it runs the trusted Codex CLI itself and only mints on a CLEAN machine verdict.'
+    'mint the second-model gate without Codex actually running. Just pass the\n' +
+    'migration name(s) — the wrapper now always runs the trusted Codex CLI itself\n' +
+    'and only mints on a CLEAN machine verdict.'
   );
   process.exit(2);
 }
 
-const runCodex = rawArgs.includes('--codex');
+// The Codex run is NOT optional (Codex round-3 review of the 2026-07-16 wave 1
+// PR): a wrapper that stamps a "clean, both reviewers ran" proof purely on the
+// caller's say-so is a self-certification path, however honest the caller. Every
+// proof this wrapper mints — the reviewer half AND the Codex half — is therefore
+// backed by a real, machine-verdict Codex review of the exact file content. The
+// subagent reviewers still run per /migration-review (their findings drive the
+// fix loop); this machine verdict is what makes the stamped JSON evidence rather
+// than assertion. `--codex` is accepted as a no-op for backward compatibility.
 const names = rawArgs.filter((a) => a !== '--codex');
 if (names.length === 0) {
-  console.error('usage: node scripts/write-apply-proofs.mjs [--codex] <migName> [<migName> ...]');
+  console.error('usage: node scripts/write-apply-proofs.mjs <migName> [<migName> ...]   (runs a trusted Codex review per migration; no flags)');
   process.exit(1);
 }
 
@@ -89,44 +98,26 @@ let exitCode = 0;
 
 for (const name of names) {
   const safe = name.replace(/[^A-Za-z0-9_.-]/g, '_').slice(0, 80);
-  const ts = new Date().toISOString();
-  const proof = {
-    migration: name,
-    timestamp: ts,
-    reviewers: ['rls-security-reviewer', 'migration-drift-reviewer'],
-    findings: 'clean',
-  };
   const migFile = path.join(process.cwd(), 'supabase', 'migrations', `${name}.sql`);
-  let queryHash = null;
-  if (existsSync(migFile)) {
-    queryHash = hashFile(migFile);
-    proof.queryHash = queryHash;
-  } else {
-    console.warn(`WARN: ${migFile} not found — proof written WITHOUT queryHash; hands-free applies will refuse it until you add the hash the guard prints.`);
-  }
-  const file = path.join(stateDir, `migration-review-${safe}.json`);
-  writeFileSync(file, JSON.stringify(proof, null, 2), { encoding: 'utf8' });
-  console.log(`wrote ${file}`);
-
-  if (!runCodex) continue;
-
-  // ── machine-minted Codex half ──────────────────────────────────────────────
-  if (!queryHash) {
-    console.error(`--codex: cannot review ${name} — migration file not found. No Codex proof minted.`);
+  if (!existsSync(migFile)) {
+    console.error(`ERROR: ${migFile} not found — nothing can be reviewed, so NO proof is minted for "${name}".`);
     exitCode = 1;
     continue;
   }
+  const queryHash = hashFile(migFile);
+
   let codexBin;
   try {
     codexBin = codexExecutable();
   } catch (error) {
     console.error(String(error.message || error));
+    console.error('No proof minted — PARK the migration for Mason rather than self-certifying.');
     exitCode = 2;
     continue;
   }
   const migRelPath = path.posix.join('supabase', 'migrations', `${name}.sql`);
   const prompt = buildMigrationReviewPrompt(migRelPath);
-  console.log(`--codex: running trusted Codex review of ${migRelPath} (this can take a few minutes)...`);
+  console.log(`Running trusted Codex review of ${migRelPath} (this can take a few minutes)...`);
   const result = spawnSync(codexBin, [
     'exec', '--sandbox', 'read-only', '-C', process.cwd(), '-c', 'approval_policy=never', prompt,
   ], {
@@ -140,19 +131,34 @@ for (const name of names) {
   });
   const capturePath = path.join(stateDir, `codex-review-mig-${safe}-capture.txt`);
   writeFileSync(capturePath, `exit=${result.status}\n\nSTDOUT\n${result.stdout || ''}\n\nSTDERR\n${result.stderr || ''}\n`, 'utf8');
-  console.log(`--codex: review output captured to ${capturePath}`);
+  console.log(`Review output captured to ${capturePath}`);
 
   const verdict = codexReviewProofVerdict({ status: result.status, stdout: result.stdout });
   const hashAfter = existsSync(migFile) ? hashFile(migFile) : null;
   if (verdict === 'clean' && hashAfter === queryHash) {
+    const ts = new Date().toISOString();
+    // Reviewer half — stamped ONLY alongside the machine verdict. The reviewers
+    // list records which subagents the /migration-review flow ran; the machine
+    // verdict below is the evidence that an independent model actually judged
+    // this exact content clean.
+    const reviewerFile = path.join(stateDir, `migration-review-${safe}.json`);
+    writeFileSync(reviewerFile, JSON.stringify({
+      migration: name,
+      timestamp: ts,
+      reviewers: ['rls-security-reviewer', 'migration-drift-reviewer'],
+      findings: 'clean',
+      queryHash,
+      codexMachineVerdict: 'clean',
+    }, null, 2), { encoding: 'utf8' });
+    console.log(`wrote ${reviewerFile}`);
     const codexFile = path.join(stateDir, `codex-review-mig-${safe}.json`);
-    writeFileSync(codexFile, JSON.stringify({ queryHash, verdict: 'clean', timestamp: new Date().toISOString() }, null, 2), { encoding: 'utf8' });
+    writeFileSync(codexFile, JSON.stringify({ queryHash, verdict: 'clean', timestamp: ts }, null, 2), { encoding: 'utf8' });
     console.log(`wrote ${codexFile} (Codex machine verdict: CLEAN)`);
   } else if (verdict !== 'clean') {
-    console.error(`--codex: Codex did NOT return a terminal CLEAN token for ${name} — no Codex proof minted. Fix the findings in the capture, or PARK the migration for Mason. Never self-certify.`);
+    console.error(`Codex did NOT return a terminal CLEAN token for ${name} — NO proofs minted. Fix the findings in the capture, or PARK the migration for Mason. Never self-certify.`);
     exitCode = 1;
   } else {
-    console.error(`--codex: ${name}.sql changed while Codex was reviewing — the verdict no longer describes this content. No Codex proof minted; re-run on the final file.`);
+    console.error(`${name}.sql changed while Codex was reviewing — the verdict no longer describes this content. NO proofs minted; re-run on the final file.`);
     exitCode = 1;
   }
 }

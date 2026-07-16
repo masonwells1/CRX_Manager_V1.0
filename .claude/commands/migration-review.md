@@ -25,12 +25,10 @@ The workflow runs `rls-security-reviewer` + `migration-drift-reviewer` + `typesc
    ```
    node scripts/write-apply-proofs.mjs <migration-name-without-.sql>
    ```
-   For a SQL/RLS/money migration that will apply in a hands-free run, add `--codex` —
-   it runs the trusted Codex CLI itself and mints the second-model proof only on a
-   CLEAN machine verdict:
-   ```
-   node scripts/write-apply-proofs.mjs --codex <migration-name-without-.sql>
-   ```
+   The wrapper ALWAYS runs a real, read-only review with the trusted Codex CLI and mints
+   the proof pair (reviewer half + second-model half) only on a CLEAN machine verdict —
+   there is no way to stamp a proof without that run (a BLOCKERS or failed run mints
+   nothing; fix the findings or park the migration).
    IMPORTANT: the migration name must substring-match the `name` you will pass to
    `apply_migration`, or the guard won't match the proof. Proofs expire after 30 minutes.
    If the migration is edited after stamping, the hash no longer matches — re-run the
@@ -45,7 +43,7 @@ The workflow runs `rls-security-reviewer` + `migration-drift-reviewer` + `typesc
 ### 4. Apply (only after a clean proof exists, and only with Mason's authorization)
 The proof unblocks `apply_migration`; it does not authorize it. Two authorization paths (settled 2026-07-13 policy):
 - **Interactive session (default):** explain the migration (offer `/explain-migration`) and wait for Mason's in-chat approval before the apply call.
-- **Pre-authorized hands-free run** (Mason explicitly asked for the run AND autopilot is armed): no per-migration ask, but the Codex gate is mandatory — run `node scripts/write-apply-proofs.mjs --codex <mig-name>`, which runs the trusted Codex CLI itself and mints the content-bound Codex proof only on a CLEAN machine verdict (hand-writing the proof is blocked by review-proof-guard, by design). The apply-guard refuses hands-free applies without it, and refuses DESTRUCTIVE migrations (data deletes, schema/table/column/type drops, MERGE) outright — park those for Mason.
+- **Pre-authorized hands-free run** (Mason explicitly asked for the run AND autopilot is armed): no per-migration ask, but the Codex gate is mandatory — run `node scripts/write-apply-proofs.mjs <mig-name>`, which runs the trusted Codex CLI itself and mints the content-bound proof pair only on a CLEAN machine verdict (hand-writing the proof is blocked by review-proof-guard, by design). The apply-guard refuses hands-free applies without it, and refuses DESTRUCTIVE migrations (data deletes, schema/table/column/type drops, MERGE) outright — park those for Mason.
 
 ## Hard rules
 - **Read-only review.** The workflow and this review step never edit code, apply migrations, or deploy.
