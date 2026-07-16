@@ -6,7 +6,7 @@
     "regenerate_with": "node scripts/regenerate-schema-registry.mjs --from-introspection <queries.json> (queries documented in the script header)",
     "purpose": "Single source of truth for hooks: generated columns, status enums, ALL parseable CHECK IN-lists, NOT NULL columns, full column lists, sequences, tables-with/without updated_at, applied-migration high water.",
     "note": "For a fresh refresh from the live DB, ask Claude Code: 'regenerate the schema-registry from Supabase' (/regen-schema-registry). skipped_constraints lists every CHECK the hooks can NOT validate — review it when touching those tables.",
-    "migrations_high_water": "20260716144353",
+    "migrations_high_water": "20260716172956",
     "applied_migration_names": [
       "20260207_gap_analysis_fixes.sql",
       "20260209050000_inventory_overhaul",
@@ -226,6 +226,10 @@
       "20260714185631_harden_is_admin_search_path",
       "20260715115155_harden_return_lifecycle_updates",
       "20260715182757_park_returns_creation_rpc_only",
+      "20260716124223_crm_contacts_identities",
+      "20260716125826_crm_interactions",
+      "20260716160000_fix_idempotency_committed_replay_guard",
+      "20260716170559_crm_set_primary_contact",
       "a1_dispatched_list_recent_completed",
       "a1b_dispatched_to_me_completed_tail",
       "accounting_and_integrity_fixes",
@@ -554,6 +558,8 @@
       "grant_authenticated_on_frontend_secdef_helpers",
       "gross_sales_report_column_fix",
       "grower_share_pricing",
+      "guard_delivery_closed_periods",
+      "guard_delivery_period_rewrites",
       "guard_prepay_with_period_check",
       "harden_commission_payment_creation",
       "harden_maintenance_secdef_revoke_authenticated",
@@ -1224,6 +1230,41 @@
       ],
       "constraints": [
         "commissions_status_check"
+      ]
+    },
+    "customer_contacts.preferred_contact_method": {
+      "values": [
+        "phone",
+        "text",
+        "email"
+      ],
+      "constraints": [
+        "customer_contacts_preferred_contact_method_check"
+      ],
+      "nullable": true
+    },
+    "customer_interactions.interaction_type": {
+      "values": [
+        "call",
+        "visit",
+        "meeting",
+        "text",
+        "email",
+        "voicemail"
+      ],
+      "constraints": [
+        "customer_interactions_type_check"
+      ]
+    },
+    "customer_interactions.source": {
+      "values": [
+        "rep",
+        "ai_receptionist",
+        "system",
+        "web_store"
+      ],
+      "constraints": [
+        "customer_interactions_source_check"
       ]
     },
     "customers.assigned_tier": {
@@ -2086,6 +2127,48 @@
       "reason": "conditional/multi-column — not a single-column IN-list; hooks do NOT validate this constraint"
     },
     {
+      "table": "customer_contacts",
+      "constraint": "customer_contacts_identity_present_check",
+      "def": "CHECK (((btrim(COALESCE(name, ''::text)) <> ''::text) OR (btrim(COALESCE(phone_display, ''::text)) <> ''::text) OR (btrim(COALESCE(phone_e164, ''::text)) <> ''::text) OR (btrim(COALESCE(email, ''::text)) <> ''::text)))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "customer_contacts",
+      "constraint": "customer_contacts_phone_e164_check",
+      "def": "CHECK (((phone_e164 IS NULL) OR (phone_e164 ~ '^\\+[1-9][0-9]{7,14}$'::text)))",
+      "reason": "conditional/multi-column — not a single-column IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "customer_contacts",
+      "constraint": "customer_contacts_primary_active_check",
+      "def": "CHECK (((NOT is_primary) OR is_active))",
+      "reason": "conditional/multi-column — not a single-column IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "customer_interactions",
+      "constraint": "customer_interactions_direction_check",
+      "def": "CHECK (((direction = ANY (ARRAY['inbound'::text, 'outbound'::text])) OR (direction IS NULL)))",
+      "reason": "conditional/multi-column — not a single-column IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "customer_interactions",
+      "constraint": "customer_interactions_duration_seconds_check",
+      "def": "CHECK (((duration_seconds IS NULL) OR (duration_seconds >= 0)))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "customer_interactions",
+      "constraint": "customer_interactions_outcome_check",
+      "def": "CHECK (((outcome = ANY (ARRAY['connected'::text, 'left_voicemail'::text, 'no_answer'::text, 'busy'::text, 'follow_up_needed'::text, 'order_placed'::text, 'resolved'::text, 'other'::text])) OR (outcome IS NULL)))",
+      "reason": "conditional/multi-column — not a single-column IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "customer_interactions",
+      "constraint": "customer_interactions_provider_external_call_id_check",
+      "def": "CHECK (((provider IS NULL) = (external_call_id IS NULL)))",
+      "reason": "unparseable — hooks do NOT validate this constraint"
+    },
+    {
       "table": "delivery_items",
       "constraint": "chk_di_quantity",
       "def": "CHECK ((quantity > (0)::numeric))",
@@ -2095,6 +2178,18 @@
       "table": "delivery_remainders",
       "constraint": "delivery_remainders_quantity_remaining_check",
       "def": "CHECK ((quantity_remaining > (0)::numeric))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "external_identities",
+      "constraint": "external_identities_external_id_nonblank_check",
+      "def": "CHECK ((btrim(external_id) <> ''::text))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "external_identities",
+      "constraint": "external_identities_provider_nonblank_check",
+      "def": "CHECK ((btrim(provider) <> ''::text))",
       "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
     },
     {
@@ -2126,6 +2221,18 @@
       "constraint": "chk_no_self_parent",
       "def": "CHECK ((parent_field_id IS DISTINCT FROM id))",
       "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "interaction_transcripts",
+      "constraint": "interaction_transcripts_extraction_check",
+      "def": "CHECK (((extraction IS NULL) OR (jsonb_typeof(extraction) = 'object'::text)))",
+      "reason": "conditional/multi-column — not a single-column IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "interaction_transcripts",
+      "constraint": "interaction_transcripts_recording_consent_status_check",
+      "def": "CHECK (((recording_consent_status = ANY (ARRAY['granted'::text, 'announced'::text, 'declined'::text, 'not_applicable'::text])) OR (recording_consent_status IS NULL)))",
+      "reason": "conditional/multi-column — not a single-column IN-list; hooks do NOT validate this constraint"
     },
     {
       "table": "inventory",
@@ -2836,6 +2943,34 @@
         "created_at"
       ]
     },
+    "customer_contacts": {
+      "no_default": [
+        "customer_id"
+      ],
+      "with_default": [
+        "id",
+        "is_primary",
+        "can_place_orders",
+        "is_decision_maker",
+        "is_billing_contact",
+        "is_active",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    "customer_interactions": {
+      "no_default": [
+        "customer_id",
+        "interaction_type"
+      ],
+      "with_default": [
+        "id",
+        "source",
+        "occurred_at",
+        "created_at",
+        "updated_at"
+      ]
+    },
     "customers": {
       "no_default": [
         "farm_name"
@@ -2938,6 +3073,18 @@
       "with_default": [
         "id",
         "status"
+      ]
+    },
+    "external_identities": {
+      "no_default": [
+        "customer_id",
+        "provider",
+        "external_id"
+      ],
+      "with_default": [
+        "id",
+        "created_at",
+        "updated_at"
       ]
     },
     "failed_notifications": {
@@ -3116,6 +3263,16 @@
       ],
       "with_default": [
         "baselined_at"
+      ]
+    },
+    "interaction_transcripts": {
+      "no_default": [
+        "interaction_id"
+      ],
+      "with_default": [
+        "id",
+        "created_at",
+        "updated_at"
       ]
     },
     "inventory": {
@@ -4420,6 +4577,42 @@
       "created_by",
       "created_at"
     ],
+    "customer_contacts": [
+      "id",
+      "customer_id",
+      "name",
+      "role",
+      "phone_display",
+      "phone_e164",
+      "email",
+      "preferred_contact_method",
+      "is_primary",
+      "can_place_orders",
+      "is_decision_maker",
+      "is_billing_contact",
+      "is_active",
+      "notes",
+      "created_at",
+      "updated_at"
+    ],
+    "customer_interactions": [
+      "id",
+      "customer_id",
+      "contact_id",
+      "interaction_type",
+      "direction",
+      "source",
+      "occurred_at",
+      "duration_seconds",
+      "outcome",
+      "summary",
+      "owner_user_id",
+      "created_by",
+      "provider",
+      "external_call_id",
+      "created_at",
+      "updated_at"
+    ],
     "customers": [
       "id",
       "farm_name",
@@ -4564,6 +4757,17 @@
       "idempotency_key",
       "created_by",
       "created_at"
+    ],
+    "external_identities": [
+      "id",
+      "customer_id",
+      "contact_id",
+      "provider",
+      "external_id",
+      "verified_at",
+      "verified_by",
+      "created_at",
+      "updated_at"
     ],
     "failed_notifications": [
       "id",
@@ -4743,6 +4947,23 @@
       "product_id",
       "quantity_at_baseline",
       "baselined_at"
+    ],
+    "interaction_transcripts": [
+      "id",
+      "interaction_id",
+      "transcript",
+      "ai_summary",
+      "extraction",
+      "recording_path",
+      "recording_consent_status",
+      "recording_consent_at",
+      "recording_consent_method",
+      "recording_disclosed_at",
+      "ai_disclosed_at",
+      "disclosure_version",
+      "retention_expires_at",
+      "created_at",
+      "updated_at"
     ],
     "inventory": [
       "id",

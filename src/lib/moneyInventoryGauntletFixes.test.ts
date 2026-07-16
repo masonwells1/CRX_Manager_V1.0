@@ -26,6 +26,10 @@ const access = source('supabase/migrations/20260716120104_gauntlet_access_bounda
 const money = source('supabase/migrations/20260716120112_gauntlet_money_workflows.sql');
 const inventory = source('supabase/migrations/20260716120120_gauntlet_inventory_accuracy.sql');
 const poInitialStatus = source('supabase/migrations/20260716144353_lock_purchase_order_initial_status.sql');
+const deliveryPeriodGuard = source('supabase/migrations/20260716152906_guard_delivery_closed_periods.sql');
+const deliveryPeriodRewriteGuard = source(
+  'supabase/migrations/20260716172956_guard_delivery_period_rewrites.sql',
+);
 const completeDelivery = access.slice(0, access.indexOf('CREATE OR REPLACE FUNCTION public.void_delivery'));
 
 describe('money and inventory gauntlet fixes', () => {
@@ -42,6 +46,42 @@ describe('money and inventory gauntlet fixes', () => {
     expect(voidDelivery).toContain("(v_delivery.completed_at AT TIME ZONE 'America/Chicago')::date");
     expect(voidDelivery).toContain('v_effective_completion_date BETWEEN period_start AND period_end');
     expect(voidDelivery).not.toContain('v_delivery.scheduled_date BETWEEN period_start AND period_end');
+  });
+
+  it('hard-blocks completed and voided delivery transitions in closed accounting periods', () => {
+    expect(deliveryPeriodGuard).toContain('CREATE OR REPLACE FUNCTION public.enforce_delivery_accounting_period()');
+    expect(deliveryPeriodGuard).toContain('SECURITY DEFINER\nSET search_path = public, pg_temp');
+    expect(deliveryPeriodGuard).toContain("NEW.status = 'completed'");
+    expect(deliveryPeriodGuard).toContain("NEW.status = 'voided'");
+    expect(deliveryPeriodGuard.match(/PERFORM public\.check_period_open\(v_effective_date\)/g)?.length).toBe(4);
+    expect(deliveryPeriodGuard).toContain(
+      'BEFORE INSERT OR UPDATE OF status, completed_at ON public.deliveries',
+    );
+    expect(deliveryPeriodGuard).not.toContain('app.admin_override');
+    expect(deliveryPeriodGuard).toContain(
+      'REVOKE EXECUTE ON FUNCTION public.enforce_delivery_accounting_period()\n  FROM anon, authenticated',
+    );
+  });
+
+  it('checks both sides of terminal delivery date rewrites', () => {
+    expect(deliveryPeriodRewriteGuard).toContain("OLD.status IN ('completed', 'voided')");
+    expect(deliveryPeriodRewriteGuard).toContain('OLD.status IS DISTINCT FROM NEW.status');
+    expect(deliveryPeriodRewriteGuard).toContain(
+      'OLD.completed_at IS DISTINCT FROM NEW.completed_at',
+    );
+    expect(deliveryPeriodRewriteGuard).toContain('v_old_effective_date');
+    expect(deliveryPeriodRewriteGuard).toContain('v_new_effective_date');
+    expect(deliveryPeriodRewriteGuard).toContain(
+      'PERFORM public.check_period_open(v_old_effective_date)',
+    );
+    expect(deliveryPeriodRewriteGuard).toContain(
+      'PERFORM public.check_period_open(v_new_effective_date)',
+    );
+    expect(deliveryPeriodRewriteGuard).toContain('SECURITY DEFINER\nSET search_path = public, pg_temp');
+    expect(deliveryPeriodRewriteGuard).not.toContain('app.admin_override');
+    expect(deliveryPeriodRewriteGuard).toContain(
+      'REVOKE EXECUTE ON FUNCTION public.enforce_delivery_accounting_period()\n  FROM anon, authenticated',
+    );
   });
 
   it('makes money and inventory tables RPC-only for authenticated clients', () => {
