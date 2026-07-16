@@ -67,9 +67,9 @@ When an item here ships or is decided, update this file AND `docs/manual/KNOWN_I
 - **X5 portal prework (P1 customer-org model, P3 server-side PDFs)** — before any portal UI.
 - **X6 vendor-bill extraction pilot (D1/T13)** — after owner action 6.
 - **#117** — `auto_draft_skipped` activity-feed row (small; verified not built).
-- **F3 WebP for `process-document`** — was blocked on a transient deploy 500 on 2026-07-10;
-  all 7 edge fns were redeployed 2026-07-12 (CORS fix), so this is **likely already live —
-  verify the deployed version includes the WebP change before re-deploying**.
+- ~~**F3 WebP for `process-document`**~~ **RESOLVED — verified 2026-07-16:** the deployed
+  v18 source contains the WebP/BMP/TIFF magic-byte allow-list (commented "Codex bug-hunt
+  F3"); the 2026-07-12 CORS redeploy carried it live. No redeploy needed.
 
 ## 🅿️ 3. Parked / deferred on purpose (pointers — KNOWN_ISSUES has full detail)
 
