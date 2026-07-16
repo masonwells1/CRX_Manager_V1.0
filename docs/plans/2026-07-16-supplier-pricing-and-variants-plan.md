@@ -1,6 +1,6 @@
 # Supplier Pricing, Price History & Product Variants — Plan
 
-**Date:** 2026-07-16 (rev 2, same day — pre-season replacement-cost + pricing-worksheet refinements from Mason)
+**Date:** 2026-07-16 (rev 3, same day — rev 2 added pre-season replacement cost + pricing worksheet; rev 3 extends the worksheet to all routinely-edited product fields)
 **Status:** PROPOSED — awaiting Mason's approval of the architecture decision
 **Branch:** `claude/supplier-pricing-strategy-9c6129` (planning only, no code in this session)
 **Advisors:** Claude (grounding + synthesis) with Codex gpt-5.6 ("Sol 5.6") architecture review
@@ -77,16 +77,20 @@ One row per uploaded document (vendor_id, document_date, parser_version, status:
 4. **Mandatory review screen** before anything becomes an observation: supplier + sheet date; every row with page ref + confidence; proposed product match; current cost vs newest vs cheapest-comparable; new/changed/unchanged/cannot-compare status; only high-confidence rows preselected; approval summary states plainly *"You are adding N supplier observations. You are changing ZERO sell prices."*
 5. Separate, later action: "use these approved prices as cost basis → preview resulting tier-price changes → confirm." The two approvals are never combined.
 
-## 6b. The pricing worksheet — owner-controlled round-trip (Phase 1 centerpiece)
+## 6b. The product & pricing worksheet — owner-controlled round-trip (Phase 1 centerpiece)
 
-Mason's preferred control surface is a spreadsheet, so the primary sell-price workflow is **export → edit in Excel → import → diff → approve**, not an in-app editor:
+Mason's preferred control surface is a spreadsheet, so the primary batch-edit workflow for product data is **export → edit in Excel → import → diff → approve**, not an in-app editor. Rev 3: the sheet carries ALL routinely-edited product fields, not just pricing.
 
-**Export** (one click, one row per product; variant rows grouped by family once Phase 3 lands):
-- Identity: product, SKU, category, pack/unit
-- Market evidence (read-only, AI/import-fed): latest price + date **per supplier** (2–3 columns), best comparable = **replacement cost today**
-- Ownership evidence (read-only): on-hand qty, weighted-avg cost of on-hand, last-paid price + date (from POs)
-- Current state (read-only): current cost basis, tier 1/2/3 margins + prices
-- **Editable columns**: new cost basis, new tier margins/prices (+ optional note)
+**Export** (one click, one row per product; variant rows grouped by family once Phase 3 lands). Columns in four groups:
+- **Identity** (read-only): product, SKU, category, pack/unit
+- **Market evidence** (read-only, AI/import-fed): latest price + date **per supplier** (2–3 columns), best comparable = **replacement cost today**; on-hand qty, weighted-avg cost of on-hand, last-paid price + date (from POs); current cost basis + tier 1/2/3 margins/prices
+- **Editable — pricing**: new cost basis, new tier margins/prices (+ optional note)
+- **Editable — product info**: `suggested_rate`, `rate_per_acre`, `rate_unit`, `use_timing`, `internal_notes`, `notes` / external quoting note (NEW column `quoting_notes` if audit shows `notes` isn't already quote-facing — decide at build time), plus other low-risk descriptive fields as needed
+
+**Editable-field guardrails (rev 3):**
+- `rate_unit` is money-adjacent: `save_quote` joins `LOWER(rate_unit)` against the frozen-key `unit_conversions` table, so a bad value silently breaks/rescales future quote pricing. The import validates `rate_unit` against the allowed unit list (the DB's `trg_validate_product_units` is the backstop) and flags every rate_unit change loudly in the preview.
+- **Regulatory/label fields stay OFF the editable set** (EPA registration, signal word, REI/PHI, max label rate): they're curated through the EPA-verified label-data tooling with its own trust gates; bulk-editing them here could clobber verified corrections. They can appear read-only for context.
+- Pricing edits write `cost_history`; product-info edits write `activity_feed` entries with old→new values in the description, so non-price changes get a visible trail too.
 
 **Import**: upload the edited file → system diffs ONLY the editable columns against current values → preview screen shows each change including the tier prices that will result (per the margin trigger) → Mason approves → writes happen with `cost_history` rows noting "pricing worksheet YYYY-MM-DD". Unchanged rows are untouched; malformed cells are rejected per-row, never silently guessed.
 
@@ -111,7 +115,7 @@ Instead:
 - Vendor dedup + `vendor_aliases`
 - `product_supplier_links`, staged imports, `supplier_price_observations`; derived replacement-cost + inventory-cost views
 - Hybrid OCR+LLM extraction feeding staged observations (review before approve)
-- **Pricing worksheet round-trip (§6b)** — export with per-supplier replacement costs + inventory cost, Mason edits, diff-preview (incl. margin-trigger tier-price effects), approve, history written
+- **Product & pricing worksheet round-trip (§6b)** — export with per-supplier replacement costs + inventory cost + editable pricing AND product-info fields (use rates, notes), Mason edits, diff-preview (incl. margin-trigger tier-price effects + loud rate_unit warnings), approve, history written
 - Product page: show replacement cost + inventory cost alongside current cost basis
 - Backfill matchable PO actual-cost facts
 - Supplier price sheets never write sell prices directly; only the worksheet approval path (and the existing product page) does
