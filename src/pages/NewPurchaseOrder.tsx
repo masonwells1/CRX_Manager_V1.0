@@ -12,7 +12,6 @@ import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { supabase, assertRpcResult } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
-import { localToday } from '../lib/dateUtils';
 import { formatUSD as fmt } from '../lib/money';
 import type { Product } from '../types';
 
@@ -53,8 +52,13 @@ export default function NewPurchaseOrder() {
   // Track dirty state for unsaved changes warning
   const [isDirty, setIsDirty] = useState(false);
   const initialLoadDone = useRef(false);
+  // Keep the allocated number tied to the idempotent save attempt. If the
+  // server commits but the response is lost, retrying must send the same PO
+  // number with the same key instead of consuming and displaying a new one.
+  const pendingPoNumbersRef = useRef<Record<string, string>>({});
   const blocker = useUnsavedChanges(isDirty);
   const saveIdem = useIdempotencyKey('save_purchase_order', profile?.id || '');
+  const submitIdem = useIdempotencyKey('submit_purchase_order', profile?.id || '');
 
   // Codex P2 fix (PR #59, 2026-05-16): reset saveIdem when PO intent changes.
   // Page stays mounted after failed/lost-response submit; without reset,
@@ -174,63 +178,94 @@ export default function NewPurchaseOrder() {
 
     await runCriticalAction({
       action: async () => {
+        let poId = savedPoId;
+        const isFirstSave = !poId;
+
         // Only generate a PO number on first save
         let poNumber = savedPoNumber;
-        if (!poNumber) {
-          const { data: rpcNumber, error: rpcError } = await supabase.rpc('next_po_number');
-          if (rpcError || !rpcNumber) {
-            throw new Error(rpcError?.message || 'Failed to generate PO number');
+        // A retry after the draft was saved but submit's response was uncertain
+        // must replay submit directly. Re-saving could try to downgrade an
+        // already-submitted PO back to draft.
+        const shouldSaveDraft = submitStatus === 'draft' || !poId || isDirty;
+
+        if (shouldSaveDraft) {
+          const idemKey = saveIdem.getKey();
+          poNumber = poNumber || pendingPoNumbersRef.current[idemKey] || null;
+          if (!poNumber) {
+            const { data: rpcNumber, error: rpcError } = await supabase.rpc('next_po_number');
+            if (rpcError || !rpcNumber) {
+              throw new Error(rpcError?.message || 'Failed to generate PO number');
+            }
+            poNumber = assertRpcResult<string>(rpcNumber, 'next_po_number');
+            pendingPoNumbersRef.current[idemKey] = poNumber;
           }
-          poNumber = assertRpcResult<string>(rpcNumber, 'next_po_number');
+
+          const poPayload = {
+            po_number: poNumber,
+            vendor: vendor.trim(),
+            status: 'draft',
+            submitted_date: null,
+            expected_delivery_date: expectedDate || null,
+            notes: notes || null,
+          };
+
+          const itemsPayload = validItems.map((i) => ({
+            product_id: i.product_id,
+            product_name: products.find((p) => p.id === i.product_id)?.product_name || null,
+            quantity_ordered: i.quantity_ordered,
+            unit_cost: i.unit_cost,
+            unit_size: i.unit_size || null,
+            quantity_received: 0,
+          }));
+
+          const { data, error } = await supabase.rpc('save_purchase_order', {
+            p_po_id: poId,
+            p_po_payload: poPayload,
+            p_items: itemsPayload,
+            p_performed_by: profile.id,
+            p_idempotency_key: idemKey,
+          });
+
+          if (error) throw error;
+
+          const result = assertRpcResult<{ po_id: string }>(data, 'save_purchase_order');
+          poId = result.po_id;
+          if (!poId) throw new Error('Purchase order save did not return an ID');
+          delete pendingPoNumbersRef.current[idemKey];
+          saveIdem.resetKey();
+
+          if (isFirstSave) {
+            setSavedPoId(poId);
+            setSavedPoNumber(poNumber);
+          }
+
+          // The form now matches the durable draft. If submit fails, the user
+          // can retry without recreating or unnecessarily resaving the PO.
+          setIsDirty(false);
         }
 
-        const poPayload = {
-          po_number: poNumber,
-          vendor: vendor.trim(),
-          status: submitStatus,
-          submitted_date: submitStatus === 'submitted' ? localToday() : null,
-          expected_delivery_date: expectedDate || null,
-          notes: notes || null,
-        };
+        if (!poId) throw new Error('Purchase order ID is unavailable');
 
-        const itemsPayload = validItems.map((i) => ({
-          product_id: i.product_id,
-          product_name: products.find((p) => p.id === i.product_id)?.product_name || null,
-          quantity_ordered: i.quantity_ordered,
-          unit_cost: i.unit_cost,
-          unit_size: i.unit_size || null,
-          quantity_received: 0,
-        }));
-
-        const idemKey = saveIdem.getKey();
-        const { data, error } = await supabase.rpc('save_purchase_order', {
-          p_po_id: savedPoId as string,
-          p_po_payload: poPayload,
-          p_items: itemsPayload,
-          p_performed_by: profile.id,
-          p_idempotency_key: idemKey,
-        });
-
-        if (error) throw error;
-        saveIdem.resetKey();
-
-        const result = assertRpcResult<{ po_id: string }>(data, 'save_purchase_order');
-        const isFirstSave = !savedPoId;
-        const returnedId = result.po_id;
-
-        if (isFirstSave && returnedId) {
-          setSavedPoId(returnedId);
-          setSavedPoNumber(poNumber);
+        if (submitStatus === 'submitted') {
+          const submitKey = submitIdem.getKey();
+          const { data: submitData, error: submitError } = await supabase.rpc('submit_purchase_order', {
+            p_po_id: poId,
+            p_performed_by: profile.id,
+            p_idempotency_key: submitKey,
+          });
+          if (submitError) throw submitError;
+          assertRpcResult<{ po_id: string; status: string }>(submitData, 'submit_purchase_order');
+          submitIdem.resetKey();
         }
 
         setIsDirty(false);
-        navigate(`/purchase-orders/${returnedId || savedPoId}`, { replace: true });
+        navigate(`/purchase-orders/${poId}`, { replace: true });
 
         return { poNumber, isFirstSave };
       },
       toast,
       successMessage: submitStatus === 'submitted'
-        ? `Purchase order ${savedPoNumber || '(new)'} submitted`
+        ? 'Purchase order submitted'
         : !savedPoId ? 'Draft created' : 'Draft saved',
       setLoading: setSaving,
       sentryTag: 'save_purchase_order',

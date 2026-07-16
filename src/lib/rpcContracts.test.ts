@@ -132,22 +132,25 @@ interface SaveCustomerParams {
 }
 
 interface SavePurchaseOrderParams {
-  p_id: string | null;
-  p_vendor: string;
-  p_status: string;
-  p_submitted_date: string | null;
-  p_expected_delivery_date: string | null;
-  p_notes: string | null;
+  p_po_id: string | null;
+  p_po_payload: {
+    po_number: string;
+    vendor: string;
+    status: 'draft';
+    submitted_date: null;
+    expected_delivery_date: string | null;
+    notes: string | null;
+  };
   p_items: Array<{
-    id: string | null;
     product_id: string;
+    product_name: string | null;
     quantity_ordered: number;
     unit_cost: number;
-    quantity_received: number;
     unit_size: string | null;
-    notes: string | null;
+    quantity_received: 0;
   }>;
   p_performed_by: string;
+  p_idempotency_key?: string;
 }
 
 interface ReceivePOItemsParams {
@@ -422,26 +425,30 @@ describe('RPC contract: save_customer', () => {
 describe('RPC contract: save_purchase_order', () => {
   it('accepts valid params', () => {
     const params = assertShape<SavePurchaseOrderParams>({
-      p_id: null,
-      p_vendor: 'Acme Chemicals',
-      p_status: 'draft',
-      p_submitted_date: null,
-      p_expected_delivery_date: '2026-03-15',
-      p_notes: null,
+      p_po_id: null,
+      p_po_payload: {
+        po_number: 'PO-2026-0001',
+        vendor: 'Acme Chemicals',
+        status: 'draft',
+        submitted_date: null,
+        expected_delivery_date: '2026-03-15',
+        notes: null,
+      },
       p_items: [
         {
-          id: null,
           product_id: 'prod-uuid',
+          product_name: 'Example Product',
           quantity_ordered: 100,
           unit_cost: 10.50,
           quantity_received: 0,
           unit_size: 'Gallon',
-          notes: null,
         },
       ],
       p_performed_by: 'user-uuid',
+      p_idempotency_key: 'save_purchase_order:user-uuid:intent-1',
     });
     expect(params.p_items).toHaveLength(1);
+    expect(params.p_po_payload.status).toBe('draft');
   });
 });
 
@@ -1533,8 +1540,12 @@ const MIGRATIONS_DIR = join(
  */
 const IDEMPOTENCY_BODY_EXEMPT: Record<
   string,
-  'verified-live' | 'natural' | 'gap' | 'non-mutating' | 'table-unique' | 'receipt-unique'
+  'verified-live' | 'natural' | 'gap' | 'non-mutating' | 'table-unique' | 'receipt-unique' | 'delegated'
 > = {
+  // The live public wrapper authorizes before delegating to the unchanged,
+  // directly non-executable implementation that owns the canonical replay
+  // lookup/save. A dedicated test below pins that indirection and both grants.
+  complete_delivery: 'delegated',
   //  - 'table-unique'   : idempotency is enforced NOT via the idempotency_keys table
   //                       but by a dedicated column + PARTIAL UNIQUE index on the RPC's
   //                       own table, with a catch-unique-violation replay. Used when the
@@ -1632,6 +1643,23 @@ describe('Idempotency BODY verification (reads migration SQL)', () => {
     const body = latestFunctionBody('save_job');
     expect(body).not.toBeNull();
     expect(bodyUsesIdempotency(body as string)).toBe(true);
+  });
+
+  it('complete_delivery authorizes before delegating to its idempotent internal implementation', () => {
+    const files = getMigrationFiles();
+    const wrapper = files.find(
+      ({ name }) => name === '20260716173342_authorize_delivery_before_replay.sql'
+    )?.content;
+    const implementationSource = files.find(
+      ({ name }) => name === '20260716120104_gauntlet_access_boundaries.sql'
+    )?.content;
+
+    expect(wrapper).toContain('RENAME TO _complete_delivery_authorized_impl');
+    expect(wrapper).toMatch(/REVOKE EXECUTE ON FUNCTION public\._complete_delivery_authorized_impl[\s\S]*FROM PUBLIC, anon, authenticated, service_role/);
+    expect(wrapper).toMatch(/Not authorized to complete this delivery[\s\S]*RETURN public\._complete_delivery_authorized_impl/);
+    expect(implementationSource).toContain("v_existing := check_idempotency(p_idempotency_key, 'complete_delivery')");
+    expect(implementationSource).toContain("PERFORM save_idempotency(p_idempotency_key, 'complete_delivery', v_result)");
+    expect(IDEMPOTENCY_BODY_EXEMPT.complete_delivery).toBe('delegated');
   });
 
   it("every 'gap' exemption genuinely still lacks body idempotency (forces removal when fixed)", () => {

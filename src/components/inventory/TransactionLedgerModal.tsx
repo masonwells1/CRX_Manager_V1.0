@@ -4,7 +4,7 @@ import {
   Pencil, Lock, Unlock, XCircle, Undo2, FlaskConical,
 } from 'lucide-react';
 import Modal from '../ui/Modal';
-import { supabase, sanitizeError } from '../../lib/db';
+import { supabase, sanitizeError, assertRpcResult } from '../../lib/db';
 
 interface Transaction {
   id: string;
@@ -22,6 +22,18 @@ interface Transaction {
   order: { order_number: string; customer: { farm_name: string } | null } | null;
   purchase_order: { po_number: string } | null;
   delivery: { delivery_number: string } | null;
+  requires_review: boolean;
+}
+
+interface InventoryPositionRow {
+  product_id: string;
+  quantity_available: number;
+  quantity_prebooked: number;
+}
+
+interface InventoryPositionSummary {
+  onFloor: number;
+  prebooked: number;
 }
 
 interface Props {
@@ -76,24 +88,21 @@ export function signedQuantity(qty: number, type: string): number {
   }
 }
 
-/** Exported for testing */
+/** Use the inventory table/RPC as current truth; the historical ledger can be incomplete. */
 // eslint-disable-next-line react-refresh/only-export-components
-export function computeRunningBalance(txns: Array<{ quantity: number; transaction_type: string }>): number[] {
-  const balances: number[] = [];
-  let running = 0;
-  for (const t of txns) {
-    if (t.transaction_type === 'prebook_reconciliation') {
-      // A signed correction to quantity_prebooked. In this modal's net-free
-      // running balance (booked/prebooked subtract, released adds back), an
-      // INCREASE in prebooked reduces the balance — the row still displays
-      // the signed correction as-is via signedQuantity.
-      running += -t.quantity;
-    } else {
-      running += signedQuantity(t.quantity, t.transaction_type);
-    }
-    balances.push(running);
-  }
-  return balances;
+export function summarizeInventoryPosition(
+  rows: InventoryPositionRow[],
+  productId: string,
+): InventoryPositionSummary {
+  return rows
+    .filter((row) => row.product_id === productId)
+    .reduce(
+      (summary, row) => ({
+        onFloor: summary.onFloor + Number(row.quantity_available || 0),
+        prebooked: summary.prebooked + Number(row.quantity_prebooked || 0),
+      }),
+      { onFloor: 0, prebooked: 0 },
+    );
 }
 
 /** Build a human-readable reference string from the transaction's linked entities */
@@ -109,11 +118,13 @@ export default function TransactionLedgerModal({ open, onClose, productId, produ
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [position, setPosition] = useState<InventoryPositionSummary | null>(null);
 
   useEffect(() => {
     if (!open || !productId) return;
     setLoading(true);
     setError('');
+    setPosition(null);
 
     // PR-07 follow-up: dropped performer FK embed; resolved via profile_public_view.
     (async () => {
@@ -132,6 +143,14 @@ export default function TransactionLedgerModal({ open, onClose, productId, produ
         setLoading(false);
         return;
       }
+      const { data: positionData, error: positionError } = await supabase.rpc('get_inventory_position');
+      if (positionError) {
+        setError(sanitizeError(positionError));
+        setLoading(false);
+        return;
+      }
+      const positionRows = assertRpcResult<InventoryPositionRow[]>(positionData, 'get_inventory_position');
+      setPosition(summarizeInventoryPosition(positionRows, productId));
       const performerIds = [...new Set(
         ((data || []) as Array<{ performed_by?: string | null }>)
           .map((t) => t.performed_by)
@@ -156,7 +175,7 @@ export default function TransactionLedgerModal({ open, onClose, productId, produ
     })();
   }, [open, productId]);
 
-  const balances = computeRunningBalance(transactions);
+  const reviewCount = transactions.filter((transaction) => transaction.requires_review).length;
 
   return (
     <Modal open={open} onClose={onClose} title="Transaction" accent="Ledger" maxWidth="max-w-6xl">
@@ -165,18 +184,23 @@ export default function TransactionLedgerModal({ open, onClose, productId, produ
       {loading && <p className="text-sm text-secondary py-8 text-center">Loading transactions...</p>}
       {error && <p className="text-sm text-red-600 py-4">{error}</p>}
 
+      {!loading && !error && position && (
+        <div className="flex flex-wrap gap-4 mb-3 text-xs text-secondary">
+          <span>{transactions.length} transaction{transactions.length !== 1 ? 's' : ''}</span>
+          <span>On floor: <strong className="text-nav-dark font-mono">{position.onFloor}</strong></span>
+          <span>Prebooked: <strong className="text-nav-dark font-mono">{position.prebooked}</strong></span>
+          {reviewCount > 0 && (
+            <span className="font-medium text-amber-700">{reviewCount} transaction{reviewCount !== 1 ? 's' : ''} need review</span>
+          )}
+        </div>
+      )}
+
       {!loading && !error && transactions.length === 0 && (
         <p className="text-sm text-secondary py-8 text-center">No transactions found for this product.</p>
       )}
 
       {!loading && transactions.length > 0 && (
         <>
-          {/* Summary bar */}
-          <div className="flex flex-wrap gap-4 mb-3 text-xs text-secondary">
-            <span>{transactions.length} transaction{transactions.length !== 1 ? 's' : ''}</span>
-            <span>Current balance: <strong className="text-nav-dark font-mono">{balances[balances.length - 1]}</strong></span>
-          </div>
-
           <div className="max-h-[65vh] overflow-y-auto border rounded-lg">
             <table className="w-full text-sm">
               <thead className="sticky top-0 bg-gray-50 border-b z-10">
@@ -184,7 +208,6 @@ export default function TransactionLedgerModal({ open, onClose, productId, produ
                   <th className="py-2.5 px-3">Date</th>
                   <th className="py-2.5 px-3">Type</th>
                   <th className="py-2.5 px-3 text-right">Qty</th>
-                  <th className="py-2.5 px-3 text-right">Balance</th>
                   <th className="py-2.5 px-3">Customer</th>
                   <th className="py-2.5 px-3">Reference</th>
                   <th className="py-2.5 px-3">By</th>
@@ -192,7 +215,7 @@ export default function TransactionLedgerModal({ open, onClose, productId, produ
                 </tr>
               </thead>
               <tbody>
-                {transactions.map((t, i) => {
+                {transactions.map((t) => {
                   const config = TYPE_CONFIG[t.transaction_type] || {
                     label: t.transaction_type,
                     color: 'text-gray-600',
@@ -205,7 +228,7 @@ export default function TransactionLedgerModal({ open, onClose, productId, produ
                   const customerName = t.order?.customer?.farm_name || '';
 
                   return (
-                    <tr key={t.id} className="border-b border-gray-100 hover:bg-gray-50/70 align-top">
+                    <tr key={t.id} className={`border-b border-gray-100 hover:bg-gray-50/70 align-top ${t.requires_review ? 'bg-amber-50/60' : ''}`}>
                       <td className="py-2 px-3 text-xs text-secondary whitespace-nowrap">
                         {new Date(t.created_at).toLocaleDateString()}{' '}
                         <span className="text-gray-400">
@@ -217,12 +240,14 @@ export default function TransactionLedgerModal({ open, onClose, productId, produ
                           <Icon className="w-3 h-3 flex-shrink-0" />
                           {config.label}
                         </span>
+                        {t.requires_review && (
+                          <span className="ml-2 inline-flex rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-800">
+                            Review required
+                          </span>
+                        )}
                       </td>
                       <td className={`py-2 px-3 text-right font-mono font-medium whitespace-nowrap ${isPositive ? 'text-crx-green' : displayQty === 0 ? 'text-gray-500' : 'text-red-600'}`}>
                         {isPositive ? '+' : ''}{displayQty}
-                      </td>
-                      <td className="py-2 px-3 text-right font-mono text-nav-dark whitespace-nowrap">
-                        {balances[i]}
                       </td>
                       <td className="py-2 px-3 text-xs text-secondary">
                         {customerName || <span className="text-gray-300">—</span>}

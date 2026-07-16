@@ -72,8 +72,8 @@ export default function PurchaseOrders() {
   const [outstandingLoading, setOutstandingLoading] = useState(false);
   const [vendorFilter, setVendorFilter] = useState('');
 
-  const isAdmin = role === 'admin';
-  const canBulkAction = role === 'admin' || role === 'sales_rep';
+  const canManagePO = role === 'admin' || role === 'sales_rep';
+  const canBulkAction = canManagePO;
 
   const fetchPOs = useCallback(async () => {
     const { data, error } = await supabase
@@ -469,7 +469,7 @@ export default function PurchaseOrders() {
               onDeselectAll={clearSelection}
             />
           )}
-        {isAdmin && activeTab === 'all' && (
+        {canManagePO && activeTab === 'all' && (
           <div className="flex gap-2">
             <Button
               variant="secondary"
@@ -606,7 +606,7 @@ export default function PurchaseOrders() {
                 emptyTitle="No purchase orders"
                 emptyDescription="Create a PO to order products from vendors"
                 emptyAction={
-                  isAdmin ? (
+                  canManagePO ? (
                     <Button icon={<Plus className="w-4 h-4" />} onClick={() => navigate('/purchase-orders/new')}>
                       New PO
                     </Button>

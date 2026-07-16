@@ -5,6 +5,8 @@
 
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { autopilotDecision, flagActive, intentFresh, overnightGateDecision } from "./autopilot-lib.mjs";
@@ -83,10 +85,17 @@ ok(flagActive("").active === false, "empty flag inactive");
 // ── LIVE: hook is inert (emits nothing) when the flag is absent ──────────
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const hookPath = path.join(__dirname, "unattended-autopilot.mjs");
-const r = spawnSync(process.execPath, [hookPath], {
-  input: JSON.stringify({ tool_name: "Bash", tool_input: { command: "rm -rf /" } }),
-  encoding: "utf8",
-});
+const isolatedProjectDir = mkdtempSync(path.join(tmpdir(), "crx-autopilot-inert-"));
+let r;
+try {
+  r = spawnSync(process.execPath, [hookPath], {
+    input: JSON.stringify({ tool_name: "Bash", tool_input: { command: "rm -rf /" } }),
+    encoding: "utf8",
+    env: { ...process.env, CLAUDE_PROJECT_DIR: isolatedProjectDir },
+  });
+} finally {
+  rmSync(isolatedProjectDir, { recursive: true, force: true });
+}
 eq(r.status, 0, "hook exits 0");
 eq(r.stdout.trim(), "", "hook emits NOTHING when flag absent (off by default — defers to normal flow)");
 

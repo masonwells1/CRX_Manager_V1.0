@@ -1,11 +1,59 @@
-# Migration History (706 migrations)
+# Migration History (713 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
+
+> **Live promotion for the 2026-07-15 money/inventory gauntlet:** Supabase
+> applied the reviewed migrations in the required database-first order as
+> `20260716120104`, `20260716120112`, and `20260716120120` on 2026-07-16.
+> Post-apply catalog checks verified the new `submit_purchase_order` RPC before
+> the coupled frontend was merged. PO create/import/edit/submit/cancel authority remains
+> available to active admins and sales reps, matching Mason's explicit
+> 2026-07-16 workflow decision; receiving reversal remains admin-only.
+> The independent release review then found one remaining status-bypass path;
+> the reviewed correction was applied as `20260716144353` and forces ordinary
+> saves to remain in their current lifecycle state.
+> A final exact-SHA reviewer then found that delivery completion and voiding
+> only warned on a closed accounting period before changing inventory,
+> lifecycle, and draft-invoice state. The trigger-level correction was applied
+> as `20260716152906`; every completed/voided delivery transition now calls the
+> central `check_period_open()` guard and rolls back its whole caller on a
+> closed business date.
+> The final payment replay smoke then exposed that the shared idempotency insert
+> trigger rejected `allocate_payment`'s already-committed atomic claim forever.
+> The reviewed correction was applied as ledger version `20260716165801`; it
+> restores exact cached replay only for the versioned empty claim while keeping
+> legacy post-mutation duplicate inserts rollback-only.
+> The final adversarial review then found that `complete_delivery` returned an
+> already-committed idempotency result before checking the caller's current
+> delivery authority. The reviewed correction was applied as ledger version
+> `20260716174220`; the public RPC now validates the active admin/sales role or
+> assigned driver before delegating to the unchanged implementation, whose
+> direct external execution is revoked.
+>
+> **Local post-edit proof (2026-07-15):** all three files executed in timestamp
+> order inside one Postgres transaction and rolled back. Catalog checks observed
+> exactly one `submit_purchase_order` overload and one backward-compatible
+> `create_prepay_check_splits` overload; all five access-boundary RPCs remained
+> `SECURITY DEFINER` with `search_path=public, pg_temp`; anonymous submit and
+> cancel execution were denied, active admin-or-sales role gates were present
+> on save/submit/cancel before idempotency replay, direct authenticated
+> PO/vendor-payment writes were denied, and the stored
+> `void_delivery` body used the effective completion-date period check. The local
+> stack predates two July 14 catalog objects, so the rollback harness first
+> normalized only those two production-verified signatures inside the same
+> disposable transaction.
 
 ## Local and applied-live changes — 2026-07-14
 
 | # | Timestamp | Description |
 |---|-----------|-------------|
+| 710 | 20260716173342 | **APPLIED LIVE 2026-07-16 as ledger version `20260716174220`. Delivery replay authorization boundary.** Renames the proven `complete_delivery` body to a directly non-executable internal implementation and places the public signature behind a fixed-search-path SECURITY DEFINER wrapper. The wrapper requires `auth.uid()`, canonical actor matching, an active profile, and either admin/sales authority or assignment as the delivery's driver before the internal body can inspect its idempotency cache. Existing completion, business-date, inventory, invoice, and replay behavior remains unchanged for authorized callers. The required RLS/security and migration-drift reviewers returned clean after correcting the actor error to canonical `ACTOR_MISMATCH`; a rollback-only pre-apply run and the post-apply live smoke both completed a real delivery, then proved a different active unauthorized user could not retrieve that committed result with the same key. Anonymous wrapper execution and authenticated/service-role internal execution are denied. Supabase ledger version/name: `20260716174220` / `20260716173342_authorize_delivery_before_replay`. |
+| 709 | 20260716160000 | **APPLIED LIVE 2026-07-16 as ledger version `20260716165801`. Committed payment replay correction.** Re-emits `_guard_idempotency_key_insert()` so a duplicate `allocate_payment_v1` atomic claim with a NULL response returns `NULL` from the `BEFORE INSERT` trigger, allowing the existing `ROW_COUNT = 0` branch to validate the request and return the cached committed response. Cross-operation reuse still raises, and same-operation legacy final-result inserts still raise `IDEMPOTENCY_CONCURRENT_REPLAY_RETRY`, preserving rollback of any business work performed before those older inserts. The required security/drift reviewers returned clean; the full allocate-payment/customer-statement chain passed before apply in a rolled-back transaction and again against the deployed function with `SMOKE_PASS_ROLLBACK`; direct anon/authenticated trigger-function execution remains revoked. Supabase ledger version/name: `20260716165801` / `20260716160000_fix_idempotency_committed_replay_guard`. |
+| 708 | 20260716152906 | **APPLIED LIVE 2026-07-16. Delivery closed-period invariant.** Adds a database-level `BEFORE INSERT OR UPDATE OF status, completed_at` trigger on `deliveries`. Completed transitions use the effective Chicago completion date; voided transitions use the original Chicago completion date with the scheduled date as a legacy fallback. Both call `check_period_open()` without honoring `admin_override`, so closed-period completion/void attempts roll back the entire RPC—including inventory, order-line, invoice, warning, ledger, and idempotency side effects—while open-period paths continue normally. Post-apply live proof used the real `complete_delivery` and admin `void_delivery` RPCs and ended in `SMOKE_PASS_ROLLBACK`; catalog verification found one enabled trigger, fixed `public, pg_temp` search path, no anon/authenticated direct function execution, and zero `plpgsql_check` errors. Supabase ledger version/name: `20260716152906` / `guard_delivery_closed_periods`. |
+| 707 | 20260716144353 | **APPLIED LIVE 2026-07-16. Purchase-order lifecycle-status lock.** Re-emits `save_purchase_order()` so every new PO must start as `draft` and ordinary edits must preserve the current status; submission, receiving, and cancellation remain dedicated lifecycle RPCs. The New Purchase Order page preserves its one-click Submit action by saving the draft first and then calling `submit_purchase_order` with an independent retry key. The retry path reuses the same PO number and idempotency key after a lost save response. This closes the final independent Codex release-review blocker and the adjacent edit bypass without rewriting the already-applied gauntlet migration. Supabase ledger version/name: `20260716144353` / `lock_purchase_order_initial_status`. |
+| 706 | 20260716120120 | **APPLIED LIVE 2026-07-16. Money/inventory gauntlet inventory accuracy.** Re-emits `get_inventory_position()` so each PO line contributes no less than zero on-order quantity and delivered-YTD nets delivery-specific reversals on the original delivery date while pairing order-level void reversals back to the original order/product. The inventory ledger UI now shows authoritative on-floor/prebooked totals from this RPC instead of reconstructing a misleading current balance from incomplete historical rows, and surfaces `requires_review` transactions. |
+| 705 | 20260716120112 | **APPLIED LIVE 2026-07-16. Money/inventory gauntlet money workflows.** Allows only explicit draft `misc_charge` invoices to be created without an order/blend source; adds active write-offs to customer statements on their Chicago business date; excludes voided vendor payments from AP paid-this-month; rejects future finance-charge preview/generation dates; and makes prepay check splits penny-exact against an explicit expected total. Replaces the old five-argument `create_prepay_check_splits` identity with one backward-compatible six-argument identity: the original five named arguments stay in order and trailing `p_expected_total_cents bigint DEFAULT NULL` lets stale PWA callers keep working while new callers send the independent penny assertion. The vetted active-admin manual allocation wrapper is unchanged. |
+| 704 | 20260716120104 | **APPLIED LIVE 2026-07-16. Money/inventory gauntlet access boundaries.** Requires active delivery actors, aligns closed-period delivery checks and generated invoice dates to the effective Chicago completion date, requires an active admin for delivery voids, locks received PO product/quantity/unit/cost evidence, moves bulk import and edit flows onto active-admin-or-sales `save_purchase_order`, adds active-admin-or-sales status-only `submit_purchase_order` so stale screens cannot overwrite PO fields during submission, aligns `cancel_purchase_order` with that same active-admin-or-sales authority while preserving its bill/receiving guards, writes PO create/update/submit/cancel activity inside those database transactions, and revokes authenticated direct writes on PO/receiving/AP/prepay tables while preserving reads and vetted SECURITY DEFINER RPCs. |
 | 703 | 20260715203911 | **Applied live as Supabase ledger version `20260715203911`; Supabase recorded apply-time name `20260715182757_park_returns_creation_rpc_only`. Return creation RPC-only boundary.** Drops the external `returns_insert` policy, revokes direct browser-role INSERT on `returns`, revokes direct browser-role INSERT/UPDATE/DELETE on `return_items`, and preserves existing `returns` UPDATE/DELETE behavior behind the July 15 lifecycle/status triggers. Keeps `create_return(jsonb,jsonb,text)` as the authenticated SECURITY DEFINER creation API and adds apply-time catalog assertions for policy/grant drift. Post-apply catalog checks confirmed no direct return header or line-item mutation path for anon/authenticated roles, and the standing return invariant returned zero rows. |
 | 702 | 20260715115155 | **Applied live as Supabase ledger version `20260715132146`. Return lifecycle direct-update hardening.** Adds a return lifecycle trigger that rejects direct authenticated updates to request/approval/receipt/cancellation/credit/status audit fields unless a vetted return RPC set `app.return_rpc` or an existing scoped `admin_override` is active. Direct soft-delete and hard-delete remain limited to requested/rejected/cancelled returns so active returns stay visible to terminal-order guards. Re-emits `approve_return` and `cancel_return` so nullable actor arguments can no longer write NULL attribution; both now require the supplied actor to equal `auth.uid()` and stamp `v_actor`. Adds a standing `returns-lifecycle-rpc-owned` database invariant predicate for this gauntlet class. |
 | 701 | 20260714230200 | **APPLIED LIVE 2026-07-15. Blend-ticket order lifecycle guards.** Re-emits link/create-order/unlink RPCs so only completed, approved, unbilled, customer-assigned tickets with a nonempty set of active, fully matched, positive products can affect an order. Mapping coverage is exact per source line, missing inventory rows are safely upserted, and billed/invoiced/applied tickets cannot be unlinked. Applied after the live link table reverified empty; post-apply rollback smoke and invariant sweeps passed. |

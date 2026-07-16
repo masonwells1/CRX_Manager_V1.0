@@ -47,6 +47,7 @@ vi.mock('../ui/Toast', () => ({
 }));
 
 import BulkPOImport from './BulkPOImport';
+import { buildBulkPOIntentKey } from './bulkPOImportIntent';
 
 describe('BulkPOImport', () => {
   const defaultProps = { open: true, onClose: vi.fn(), onSuccess: vi.fn() };
@@ -60,5 +61,36 @@ describe('BulkPOImport', () => {
   it('does not render when closed', () => {
     render(<BulkPOImport {...defaultProps} open={false} />);
     expect(screen.queryByText(/import pos/i)).not.toBeInTheDocument();
+  });
+
+  it('keeps identical-looking source documents as separate import intents', () => {
+    const sharedIntent = {
+      sourceFile: 'duplicate.pdf',
+      vendorName: 'Vendor',
+      invoiceNumber: 'INV-1',
+      invoiceDate: '2026-07-16',
+      items: [{
+        productId: 'product-1',
+        quantityOrdered: 10,
+        unitCost: 250,
+        unitSize: 'gal',
+        notes: '',
+      }],
+    };
+
+    const firstIntent = {
+      ...sharedIntent,
+      sourceIndex: 0,
+    };
+    const secondIntent = {
+      ...sharedIntent,
+      sourceIndex: 1,
+    };
+
+    const firstKey = buildBulkPOIntentKey(firstIntent);
+    const secondKey = buildBulkPOIntentKey(secondIntent);
+
+    expect(firstKey).not.toBe(secondKey);
+    expect(buildBulkPOIntentKey(firstIntent)).toBe(firstKey);
   });
 });

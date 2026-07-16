@@ -121,6 +121,11 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
     footer_notes: '',
     purchase_order_ref: '',
   });
+  const isOrderlessMiscCharge = !isNew
+    && invoice.invoice_type === 'misc_charge'
+    && !invoice.order_id
+    && !invoice.blend_ticket_id;
+  const isInvoiceTypeLocked = isMiscChargeLocked || isOrderlessMiscCharge;
   const [items, setItems] = useState<LineItem[]>([]);
   const [loading, setLoading] = useState(!isNew);
   const [saving, setSaving] = useState(false);
@@ -1362,7 +1367,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
                 <select
                   value={invoice.invoice_type || 'chemical_sale'}
                   onChange={(e) => setInvoice((prev) => ({ ...prev, invoice_type: e.target.value as InvoiceType }))}
-                  disabled={isMiscChargeLocked}
+                  disabled={isInvoiceTypeLocked}
                   className="mt-1 w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 >
                   <option value="chemical_sale">Chemical Sale</option>
@@ -1376,8 +1381,8 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
               ) : (
                 <p className="mt-1 text-sm capitalize">{(invoice.invoice_type || '').replace(/_/g, ' ')}</p>
               )}
-              {isMiscChargeLocked && (
-                <p className="mt-1 text-sm text-gray-500">Locked — opened as a Misc Charge</p>
+              {isInvoiceTypeLocked && (
+                <p className="mt-1 text-sm text-gray-500">Locked — orderless Misc Charges cannot be reclassified</p>
               )}
             </div>
 

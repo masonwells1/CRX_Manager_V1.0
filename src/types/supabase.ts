@@ -11473,7 +11473,7 @@ export type Database = {
           p_idempotency_key?: string
           p_items: Json
           p_performed_by: string
-          p_po_id: string
+          p_po_id: string | null
           p_po_payload: Json
         }
         Returns: Json
@@ -11508,6 +11508,14 @@ export type Database = {
       }
       season_end_date: { Args: { p_season: number }; Returns: string }
       season_start_date: { Args: { p_season: number }; Returns: string }
+      submit_purchase_order: {
+        Args: {
+          p_idempotency_key?: string
+          p_performed_by: string
+          p_po_id: string
+        }
+        Returns: Json
+      }
       set_application_record_lots: {
         Args: {
           p_application_record_id: string

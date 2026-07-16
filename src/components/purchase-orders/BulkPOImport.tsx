@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Upload, CheckCircle, AlertCircle, ChevronDown, ChevronRight, Trash2, Search, Sparkles } from 'lucide-react';
 import Modal from '../ui/Modal';
 import Button from '../ui/Button';
@@ -6,12 +6,13 @@ import Badge from '../ui/Badge';
 import { useToast } from '../ui/Toast';
 import { useAuth } from '../../contexts/AuthContext';
 import { supabase, assertRpcResult } from '../../lib/db';
-import { logActivity } from '../../lib/activityLogger';
 import { processDocumentWithOCR, isOCRSupported } from '../../lib/documentOCR';
 import { localToday } from '../../lib/dateUtils';
+import { generateIdempotencyKey } from '../../lib/idempotency';
 import { Sentry } from '../../lib/sentry';
 import { formatUSD as fmt } from '../../lib/money';
 import type { Product } from '../../types';
+import { buildBulkPOIntentKey } from './bulkPOImportIntent';
 
 // ---------- interfaces ----------
 
@@ -26,6 +27,7 @@ interface ParsedPOItem {
 }
 
 interface ParsedPO {
+  source_index: number;
   source_file: string;
   vendor_name: string;
   invoice_number: string;
@@ -81,11 +83,17 @@ function fuzzyMatchProductWithScore(
 
 // ---------- Vision OCR parsing ----------
 
-async function parseWithVisionOCR(file: File, filename: string, products: Product[]): Promise<ParsedPO> {
+async function parseWithVisionOCR(
+  file: File,
+  filename: string,
+  products: Product[],
+  sourceIndex: number,
+): Promise<ParsedPO> {
   const result = await processDocumentWithOCR(file, 'purchase_order');
 
   if (!result.success || !result.parsed_data) {
     return {
+      source_index: sourceIndex,
       source_file: filename,
       vendor_name: '',
       invoice_number: '',
@@ -130,6 +138,7 @@ async function parseWithVisionOCR(file: File, filename: string, products: Produc
   });
 
   return {
+    source_index: sourceIndex,
     source_file: filename,
     vendor_name: data.vendor_name || '',
     invoice_number: data.invoice_number || '',
@@ -155,6 +164,9 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
   const [products, setProducts] = useState<Product[]>([]);
   const [vendors, setVendors] = useState<string[]>([]);
   const [showRawText, setShowRawText] = useState<number | null>(null);
+  const poSaveKeysRef = useRef<Record<string, string>>({});
+  const poNumbersRef = useRef<Record<string, string>>({});
+  const importedIntentsRef = useRef<Set<string>>(new Set());
 
   // Product search state
   const [productSearchOpen, setProductSearchOpen] = useState<{ poIdx: number; itemIdx: number } | null>(null);
@@ -198,6 +210,9 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
       setFiles(valid);
       setParsedPOs(null);
       setUploadResults(null);
+      poSaveKeysRef.current = {};
+      poNumbersRef.current = {};
+      importedIntentsRef.current.clear();
     }
     e.target.value = '';
   };
@@ -207,13 +222,14 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
     setParsing(true);
     try {
       const results: ParsedPO[] = [];
-      for (const file of files) {
+      for (const [sourceIndex, file] of files.entries()) {
         try {
-          const parsed = await parseWithVisionOCR(file, file.name, products);
+          const parsed = await parseWithVisionOCR(file, file.name, products, sourceIndex);
           results.push(parsed);
         } catch (err) {
           Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: `Error parsing ${file.name}` } });
           results.push({
+            source_index: sourceIndex,
             source_file: file.name,
             vendor_name: '',
             invoice_number: '',
@@ -335,40 +351,49 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
           continue;
         }
 
-        // Generate PO number via server-side sequence (advisory-locked, race-safe)
-        const { data: poNumData, error: poNumError } = await supabase.rpc('next_po_number');
-        if (poNumError || !poNumData) {
-          Sentry.captureException(new Error(`Failed to generate PO number: ${poNumError?.message || 'no data'}`));
-          failedCount++;
+        const intentKey = buildBulkPOIntentKey({
+          sourceIndex: po.source_index,
+          sourceFile: po.source_file,
+          vendorName: po.vendor_name,
+          invoiceNumber: po.invoice_number,
+          invoiceDate: po.invoice_date,
+          items: validItems.map((item) => ({
+            productId: item.matched_product!.id,
+            quantityOrdered: item.quantity_ordered,
+            unitCost: item.unit_cost,
+            unitSize: item.unit_size,
+            notes: item.notes,
+          })),
+        });
+        if (importedIntentsRef.current.has(intentKey)) {
+          successCount++;
           continue;
         }
-        const poNumber = assertRpcResult<string>(poNumData, 'next_po_number');
+        if (!poSaveKeysRef.current[intentKey]) {
+          poSaveKeysRef.current[intentKey] = generateIdempotencyKey(
+            'save_purchase_order',
+            `${profile.id}:bulk:${po.source_index}:${po.source_file}`,
+          );
+        }
 
-        const totalCost = validItems.reduce((sum, i) => sum + i.quantity_ordered * i.unit_cost, 0);
+        // Cache the number with the intent as well as the idempotency key. A
+        // lost response must retry the same PO without burning another number.
+        if (!poNumbersRef.current[intentKey]) {
+          const { data: poNumData, error: poNumError } = await supabase.rpc('next_po_number');
+          if (poNumError || !poNumData) {
+            Sentry.captureException(new Error(`Failed to generate PO number: ${poNumError?.message || 'no data'}`));
+            failedCount++;
+            continue;
+          }
+          poNumbersRef.current[intentKey] = assertRpcResult<string>(poNumData, 'next_po_number');
+        }
+        const poNumber = poNumbersRef.current[intentKey];
 
         const noteParts = [`Imported from PDF: ${po.source_file}`];
         if (po.invoice_number) noteParts.push(`Vendor ref: ${po.invoice_number}`);
         if (po.invoice_date) noteParts.push(`Vendor date: ${po.invoice_date}`);
 
-        const { data: poData, error: poError } = await supabase
-          .from('purchase_orders')
-          .insert({
-            po_number: poNumber,
-            vendor: po.vendor_name.trim() || 'Unknown Vendor',
-            status: 'draft',
-            submitted_date: null,
-            expected_delivery_date: null,
-            total_cost: totalCost,
-            notes: noteParts.join('. '),
-            created_by: profile.id,
-          })
-          .select('id')
-          .maybeSingle();
-
-        if (poError || !poData) throw poError;
-
-        const itemInserts = validItems.map((item) => ({
-          purchase_order_id: poData.id,
+        const itemsPayload = validItems.map((item) => ({
           product_id: item.matched_product!.id,
           product_name: item.matched_product!.product_name,
           quantity_ordered: item.quantity_ordered,
@@ -377,14 +402,26 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
           quantity_received: 0,
           notes: item.notes || null,
         }));
+        const { data: poData, error: poError } = await supabase.rpc('save_purchase_order', {
+          p_po_id: null,
+          p_po_payload: {
+            po_number: poNumber,
+            vendor: po.vendor_name.trim() || 'Unknown Vendor',
+            status: 'draft',
+            submitted_date: null,
+            expected_delivery_date: null,
+            notes: noteParts.join('. '),
+          },
+          p_items: itemsPayload,
+          p_performed_by: profile.id,
+          p_idempotency_key: poSaveKeysRef.current[intentKey],
+        });
 
-        const { error: itemError } = await supabase
-          .from('purchase_order_items')
-          .insert(itemInserts);
-
-        if (itemError) throw itemError;
-
-        await logActivity({ event: 'po_created', description: `PO ${poNumber} imported from PDF (vendor: ${po.vendor_name || 'Unknown'})`, performedBy: profile.id, entityType: 'purchase_order', entityId: poData.id });
+        if (poError || !poData) throw poError;
+        assertRpcResult<{ po_id: string }>(poData, 'save_purchase_order');
+        importedIntentsRef.current.add(intentKey);
+        delete poSaveKeysRef.current[intentKey];
+        delete poNumbersRef.current[intentKey];
 
         successCount++;
       } catch (error) {
@@ -408,6 +445,9 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
     setUploadResults(null);
     setProductSearchOpen(null);
     setProductQuery('');
+    poSaveKeysRef.current = {};
+    poNumbersRef.current = {};
+    importedIntentsRef.current.clear();
     onClose();
   };
 
@@ -415,6 +455,9 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
     setFiles([]);
     setParsedPOs(null);
     setUploadResults(null);
+    poSaveKeysRef.current = {};
+    poNumbersRef.current = {};
+    importedIntentsRef.current.clear();
   };
 
   // ---------- derived stats ----------
