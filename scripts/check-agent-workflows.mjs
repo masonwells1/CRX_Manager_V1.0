@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { extractClaudeHookRefs, hookManifestParity } from "./agent-manifest-parity.mjs";
 
 const ROOT = path.resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
 const checks = [];
@@ -108,6 +109,21 @@ const sync = spawnSync(process.execPath, [path.join(ROOT, "scripts", "sync-agent
 });
 if (sync.status === 0) pass("Codex workflow adapters are synced", sync.stdout.trim().split(/\r?\n/)[0]);
 else fail("Codex workflow adapters are synced", (sync.stderr || sync.stdout).trim().split(/\r?\n/)[0]);
+
+// Hook-manifest parity: the two manifests wire the SAME shared .claude/hooks/
+// implementations, and a NEW Claude-side guard that isn't also wired for Codex
+// (or explicitly declared Claude-only) would silently never fire for Codex.
+const parity = hookManifestParity({
+  claudeHooks: extractClaudeHookRefs(claudeSettingsText),
+  codexHooks: extractClaudeHookRefs(codexHooksText),
+});
+if (parity.ok) pass("Hook manifests are in parity (or explicitly one-sided)");
+else {
+  const parts = [];
+  if (parity.claudeOnlyUnexpected.length) parts.push(`Claude-only, undeclared: ${parity.claudeOnlyUnexpected.join(", ")} — wire in .codex/hooks.json, or add to CLAUDE_ONLY_HOOKS in scripts/agent-manifest-parity.mjs with the reason`);
+  if (parity.codexOnlyUnexpected.length) parts.push(`Codex-only, undeclared: ${parity.codexOnlyUnexpected.join(", ")} — wire in .claude/settings.json, or add to CODEX_ONLY_HOOKS`);
+  fail("Hook manifests are in parity (or explicitly one-sided)", parts.join(" | "));
+}
 
 try {
   const scripts = JSON.parse(readFileSync(path.join(ROOT, "package.json"), "utf8")).scripts || {};

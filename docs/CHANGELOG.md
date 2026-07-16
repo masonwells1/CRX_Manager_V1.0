@@ -24,6 +24,16 @@ Post-apply PO proof used a real active sales rep and ended in `SMOKE_PASS_ROLLBA
 
 ---
 
+## 2026-07-16 — Scaffolding review Wave 4b: hook-manifest parity guard + CRLF-insensitive adapter check
+
+Two sync-adapter findings from the 2026-07-16 review, both HARD-scaffolding fixes:
+
+- **Hook-manifest parity guard (NEW):** `.claude/settings.json` and `.codex/hooks.json` wire the SAME shared `.claude/hooks/` implementations, but nothing enforced they stay in step — a new Claude-side guard could be added and silently never fire for Codex (the designated builder). `scripts/agent-manifest-parity.mjs` now diffs the two hook-script sets; `check-agent-workflows.mjs` FAILS on any asymmetry that isn't an explicitly-declared one-sided hook (`CLAUDE_ONLY_HOOKS` / `CODEX_ONLY_HOOKS`, each with its reason). Adding a guard now forces a conscious choice: wire it on both sides or declare it one-sided. Current declared Claude-only set: `codex-push-guard`, `pr-merge-guard` (Codex has its own `production-action-guard`), `autopilot-intent-reminder`, `unattended-autopilot`, `worktree-cleanup`, `session-heartbeat`. Tests (`agent-manifest-parity.test.mjs`, wired into `test:agent-workflows`) prove parity today, prove a synthetic drift is caught, and assert every allowlist entry is genuinely one-sided.
+- **CRLF-insensitive adapter compare:** `sync-agent-workflows.mjs --check` byte-compared adapter content, so a checkout where `core.autocrlf` rewrote a `.agents/` file to CRLF reported identical text as "stale" — a false failure that bricked commits in fresh worktrees. `--check` now normalizes line endings before comparing (the committed form stays LF-pinned via `.gitattributes`, and `--write` still self-heals CRLF→LF). Proven: a CRLF-corrupted adapter now passes the check instead of false-failing.
+- **Also:** reconciled `docs/reference/migration-history.md`'s count header (703 → 706) to match the three CRM Phase-1 migrations merged in #145 — their rows were indexed but the header count wasn't bumped, which was failing `check:docs` (and blocking every commit) on current main.
+
+---
+
 ## 2026-07-16 — Scaffolding review Wave 4a: worktree-cleanup heartbeat guard
 
 The SessionStart worktree-cleanup hook protected only the CURRENT session's own worktree, so a **sibling** session's clean, merged, unlocked worktree could be swept while that session was still live — which happened during this review (an active read-only checkout was deleted mid-session). Fix: the classifier now also KEEPS any worktree touched within a 3-hour activity window (`recently-active`), computed from the newest mtime of its git index / HEAD / reflog / `.claude/session-state`. Locking remains the belt; this heartbeat is the suspenders for sessions that didn't lock. Recoverable either way (every deletion still prints a recovery SHA), and a genuinely idle-past-3h finished worktree is still cleaned. `worktree-cleanup-lib.mjs` + runner updated; tests prove both directions (recent → keep, idle-past-window → remove, missing signal → behaves as before). 31 assertions pass.
