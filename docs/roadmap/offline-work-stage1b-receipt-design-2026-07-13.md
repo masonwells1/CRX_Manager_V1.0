@@ -1,6 +1,7 @@
 # Offline Work Stage 1B — Permanent Receipt Design
 
-**Status:** DATABASE FOUNDATION LIVE + VERIFIED — full browser and office recovery implemented on feature branch pending merge
+**Status:** SHIPPED — DB foundation, browser rollout, and office resolution all live on `main` as of 2026-07-15 (PR #124 + verification pass `docs/audits/2026-07-15-offline-stage1b-rollout-verification.md`). Real-phone proof still pending; deferred list in `docs/manual/KNOWN_ISSUES.md` §5. The line below is the historical pre-merge status.
+**Historical status (2026-07-13):** DATABASE FOUNDATION LIVE + VERIFIED — full browser and office recovery implemented on feature branch pending merge
 **Date:** 2026-07-13
 **Risk:** HIGH — the supported actions change inventory, delivery/order/invoice state, jobs, and application records
 

@@ -17,5 +17,7 @@ these are point-in-time ledgers, not current state.
 | `chemman-parity-loop-2026-07-11.md` | `docs/loops/` | Parity loop run log | 2026-07-12 |
 | `chemman-parity-morning-report.md` | `docs/loops/` | Parity loop morning report | 2026-07-12 |
 | `chemman-field-application-research.md` | `docs/research/` | Field-application research notes | — (reference) |
+| `GAP-ANALYSIS.md` | `docs/walkthroughs/` | ChemMan video-walkthrough gap analysis (research input) | — (reference) |
+| `walkthrough-extracted/` | `docs/walkthroughs/extracted/` | Raw video transcripts + per-video analyses behind GAP-ANALYSIS | — (reference) |
 
-Archived 2026-07-13.
+Archived 2026-07-13; walkthrough research added 2026-07-16.
