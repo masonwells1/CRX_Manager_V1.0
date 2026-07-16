@@ -1854,6 +1854,10 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
   run_weekly_db_backup: 'cron-only maintenance with authenticated and anonymous EXECUTE revoked; each dated snapshot is independently retained and pruned',
   save_idempotency: 'idempotency infrastructure helper that stores the parent operation result',
   settle_applied_record_acres: 'trigger-only derived-acre recomputation; direct client EXECUTE is revoked',
+  sync_customer_to_primary_contact:
+    'trigger-only legacy-contact sync (RETURNS trigger, not client-callable); convergent via IS DISTINCT FROM + pg_trigger_depth guards',
+  sync_primary_contact_to_customer:
+    'trigger-only legacy-contact sync (RETURNS trigger, not client-callable); convergent via IS DISTINCT FROM + pg_trigger_depth guards',
 };
 
 
