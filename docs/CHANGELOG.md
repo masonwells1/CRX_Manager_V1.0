@@ -4,6 +4,12 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-15 — Local Graphify architecture workflow
+
+CRX now maintains a local, gitignored Graphify architecture map for agents and reviewers. The scoped corpus covers the operating frontend, migrations, Edge Functions, and selected scripts while excluding historical audit/archive material. A dedicated `npm run graph:refresh` command rebuilds it without sending code to a model; the existing pre-push gate runs it after typecheck/build only when architecture-relevant files changed. A shared Claude/Codex Graphify skill uses focused `affected`, `path`, and `query` traversals to choose the smallest source-review scope before refactors, workflow/migration work, and PR review. The canonical `AGENTS.md` startup contract now tells every agent to invoke that workflow automatically for architecture, multi-file, workflow/migration, debugging, audit, and PR-impact work, so Mason does not have to remember to request it. Graph edges are navigation evidence only — current source and read-only live database proof remain authoritative.
+
+---
+
 ## 2026-07-15 — Return creation RPC-only boundary live
 
 Migration `20260715203911_park_returns_creation_rpc_only.sql` was applied live as Supabase ledger version `20260715203911`; Supabase recorded the migration name as `20260715182757_park_returns_creation_rpc_only` because that was the apply-time name. This landed after Sol xhigh adversarial review returned `VERDICT: PASS` and disposable proof replayed the exact migration, exact return-credit smoke (`SMOKE_PASS_ROLLBACK`), and exact standing invariant. The migration removes the role-only `returns_insert` policy and external `returns` INSERT privilege so authenticated admin/sales users cannot bypass the canonical `create_return` RPC. It also revokes direct external INSERT/UPDATE/DELETE privileges on `return_items`, whose application and lifecycle writers are already privileged return RPCs. Existing `returns` UPDATE/DELETE behavior is deliberately preserved behind the July 15 lifecycle/status triggers. Post-apply live catalog checks confirmed zero return INSERT policies, no anon/authenticated direct `returns` INSERT, zero return-item mutation policies, no anon/authenticated direct return-item DML, authenticated/service-role `create_return` execution retained, anon execution denied, and the standing return invariant returned zero rows.

@@ -1,0 +1,19 @@
+# Keep the working graph focused on operating code and database artifacts.
+# Graphify's ignore parser does not reliably reopen nested paths after a
+# leading `*`, so use explicit exclusions instead of a negated allowlist.
+docs/
+.agents/
+.claude/
+.codex/
+.github/
+.husky/
+.vscode/
+tests/
+node_modules/
+dist/
+graphify-out/
+backups/
+coverage/
+playwright-report/
+test-results/
+scripts/.staging-migrations/
