@@ -4,6 +4,17 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-16 — Scaffolding review Wave 4c: stale-anchor doc corrections
+
+Fixed the stale claims the review flagged in two high-read docs (each verified against current reality this session):
+
+- **`docs/workflows/SAFE_DEVELOPMENT_RULES.md`** (read at the start of every session): "read CLAUDE.md for the hard red lines" → **AGENTS.md** (CLAUDE.md is routing-only); "there are 57 pages" → point at `pages-routes.md` (actual count is 76, and hardcoding it here drifts — this file isn't count-checked); the "wait for approval before starting" rule now carries the AGENTS.md tiny-fix carve-out; the session-end "remind Mason to commit to Git" → the branch → PR → merge landing flow (agents land reviewed code; direct pushes to main are impossible).
+- **`docs/reference/gotchas.md` "Environment Quirks"**: all three rows were stale — `gh` and `tail` are both available and the repo path was wrong (`C:\CRX_Manager`, not `C:\CRX_Manager_V1.0`). Replaced with accurate current facts.
+
+This closes the review's actionable doc-drift items. Remaining review notes (fleet-status "active" cosmetics, untracking the personal `settings.local.json`) are low-value or owner-call.
+
+---
+
 ## 2026-07-16 — Graphify and money/inventory gauntlet release
 
 The Graphify overnight architecture audit and the completed money/inventory gauntlet remediation were reconciled into one release branch. The three reviewed gauntlet migrations were applied live as `20260716120104`, `20260716120112`, and `20260716120120`; they harden delivery authorization and business dates, make purchase-order/receiving/AP/prepayment writes RPC-owned, preserve received PO evidence, correct statement/AP/finance-charge/prepayment money behavior, and repair inventory position and ledger presentation.

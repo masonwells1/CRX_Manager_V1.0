@@ -160,11 +160,13 @@ Setting `updated_at = now()` in an UPDATE on these tables will crash the RPC. Th
 
 ## Environment Quirks
 
+_Corrected 2026-07-16: the three quirks previously listed here were stale — `gh` and `tail` are both available in the current shell, and the repo path was wrong. Verified by using both directly this session._
+
 | Quirk | Workaround |
 |-------|-----------|
-| `gh` CLI not on PATH | Use full path: `/c/Program Files/GitHub CLI/gh.exe` |
-| `tail` is NOT available in this shell | Never pipe to `tail` |
-| Working directory is `C:\CRX_Manager_V1.0` | NOT `C:\Users\pc\CRX_Manager_V1.0` |
+| Repo lives at `C:\CRX_Manager` | Not `C:\CRX_Manager_V1.0` (older layout). Linked worktrees live under `C:\CRX_Manager\.claude\worktrees\`. |
+| Shell is Git Bash (POSIX), not PowerShell/cmd | Use Unix syntax (`/dev/null`, forward slashes, `$VAR`); `gh`, `tail`, `head`, `grep`, `sed` are all available. |
+| `cd` in a compound command can prompt; shell cwd can reset between tool calls | Prefer absolute paths; don't rely on a persisted `cd`. |
 
 ---
 
