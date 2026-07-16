@@ -1,11 +1,11 @@
-Drive a coding job from "implement" all the way to "reviewed, committed, and shipped" — hands-off through the review-and-fix gate, pausing only at the human gates Mason requires: **a live migration apply in an interactive session** (hands-free runs he pre-authorized with armed autopilot may apply via the proof gate — see the autonomy boundary), **any edge-function deploy**, and **any data deletion**. Regular, reversible code that has passed the full green pipeline pushes to `main` under Mason's standing 2026-06-16 authorization (see Step 8). The independent Codex cross-review now runs automatically via the headless `codex` CLI when the change warrants it (it's a read-only gate, like the reviewer subagents) — no copy-paste. This is the autonomous "work till completion" pipeline; it orchestrates the existing subagents, workflows, and hooks rather than reinventing them.
+Drive a coding job from "implement" all the way to "reviewed, committed, and shipped" — hands-off through the review-and-fix gate, pausing only at the human gates Mason requires: **a live migration apply in an interactive session** (hands-free runs he pre-authorized with armed autopilot may apply via the proof gate — see the autonomy boundary), **any edge-function deploy**, and **any data deletion**. Regular, reversible code that has passed the full green pipeline lands on `main` via branch → PR → green checks → merge under Mason's standing 2026-06-16 authorization (mechanics 2026-07-14; see Step 8). The independent Codex cross-review now runs automatically via the headless `codex` CLI when the change warrants it (it's a read-only gate, like the reviewer subagents) — no copy-paste. This is the autonomous "work till completion" pipeline; it orchestrates the existing subagents, workflows, and hooks rather than reinventing them.
 
 **The job** is everything after `/ship` (e.g. `/ship add a CSV export button to the AR aging report`). If no job text was given, ask Mason what the job is, then proceed.
 
 Autonomy boundary (Mason's standing choices — do not exceed without asking):
 - **Migrations:** in an ordinary interactive session, NEVER apply a migration to the live DB without Mason's explicit approval in the current conversation. Settled exception (Mason, 2026-07-13): in a pre-authorized hands-free run — Mason explicitly asked for the run AND autopilot is armed (`node .claude/hooks/autopilot-arm.mjs --hours N`) — a migration may apply without a per-migration in-chat OK once the hard proof gate passes (fresh same-session apply-guard proof + Codex verdict for SQL/RLS/money changes). Migrations that DELETE/TRUNCATE business rows or DROP data-bearing tables/columns are NEVER autonomous, armed or not.
 - **Edge functions:** NEVER deploy an edge function without Mason's explicit approval.
-- **Prod push:** regular, reversible code MAY be pushed to `main` without a fresh approval once the full pipeline is green — review clean, tests passing, pre-push typecheck/build succeeding (Mason's standing policy, 2026-06-16; a push to `main` deploys croprxsolutions.app via Vercel, with one-click rollback as the safety net). The standing authorization NEVER covers: force-pushes, pushes that skipped any part of the green pipeline, migrations, edge-function deploys, data deletion, or secrets/auth/permission changes — those always stop for Mason's explicit OK in the current conversation.
+- **Prod landing:** regular, reversible code MAY land on `main` without a fresh approval once the full pipeline is green — review clean, tests passing, pre-push typecheck/build succeeding (Mason's standing policy, 2026-06-16; mechanics updated 2026-07-14). Since 2026-07-14 the GitHub `protect-main` ruleset makes direct pushes to `main` impossible for everyone — landing means **push the branch → open a PR → required checks pass (Vercel) → merge the PR**. A merge to `main` deploys croprxsolutions.app via Vercel, with one-click rollback as the safety net. The standing authorization NEVER covers: force-pushes, landings that skipped any part of the green pipeline, migrations, edge-function deploys, data deletion, or secrets/auth/permission changes — those always stop for Mason's explicit OK in the current conversation.
 
 ## Step 0 — Set up a branch
 
@@ -89,16 +89,14 @@ MED/LOW findings: fix the cheap ones; list the rest in the final summary as acce
 
 Only after Step 4 is clean for the migration:
 
-1. **Write the apply-guard proof file** so `migration-apply-guard.mjs` allows the apply. Path `.claude/session-state/migration-review-<safe-name>.json`:
-   ```json
-   { "migration": "<filename>", "timestamp": "<current ISO-8601>",
-     "reviewers": ["rls-security-reviewer", "migration-drift-reviewer"],
-     "findings": "clean", "queryHash": "<sha256 of the exact migration SQL>" }
+1. **Stamp the apply-guard proof with the sanctioned wrapper** (never hand-write the JSON — the wrapper computes the guard's slug rule, the timestamp, and the content-binding `queryHash` from the on-disk file):
    ```
-   `queryHash` binds the proof to this exact SQL — if the migration is edited after review, the guard blocks again (content changed = stale review). Easiest way to get it: attempt the apply; the guard prints the expected hash, paste it into `queryHash`, and retry.
+   node scripts/write-apply-proofs.mjs <mig-name-without-.sql>
+   ```
+   If the migration is edited after stamping, the hash no longer matches and the guard blocks again (content changed = stale review) — re-run the Step 3 reviewers, then re-stamp.
 2. Get Mason's authorization — one of two paths (settled 2026-07-13 policy):
    - **Interactive session (default):** STOP and ask Mason for explicit approval to apply the named migration to the live Supabase DB. Do not continue without that approval in the current conversation.
-   - **Pre-authorized hands-free run** (Mason explicitly asked for the run AND autopilot is armed — an unexpired `AUTOPILOT.on` flag): no per-migration ask. Instead, the Codex gate is MANDATORY: run `/codex-review` on the migration NOW (an actual verdict this session), then write the content-bound Codex proof `.claude/session-state/codex-review-mig-<safe-name>.json` — `{ "queryHash": "<sha256 of the exact transmitted SQL>", "verdict": "clean", "timestamp": "<now>" }` (a NEEDS-WORK or failed run does NOT qualify). The reviewer proof must also carry a `queryHash` exactly matching the transmitted SQL. The apply-guard hard-refuses hands-free applies missing any of these, hard-refuses DESTRUCTIVE migrations (data deletes, schema/table/column/type drops, MERGE) outright, and — if the arming EXPIRES mid-run — parks ALL further applies until Mason returns. Park anything refused; never edit or rewrite the flag to get past a block.
+   - **Pre-authorized hands-free run** (Mason explicitly asked for the run AND autopilot is armed — an unexpired `AUTOPILOT.on` flag): no per-migration ask. Instead, the Codex gate is MANDATORY: run `node scripts/write-apply-proofs.mjs --codex <mig-name>` — it runs the trusted Codex CLI itself on this migration and mints the content-bound Codex proof (`codex-review-mig-<safe-name>.json`) ONLY on a CLEAN machine verdict; a BLOCKERS or failed run mints nothing and does NOT qualify. Hand-writing that proof is blocked by review-proof-guard, by design. The apply-guard hard-refuses hands-free applies missing any proof, hard-refuses DESTRUCTIVE migrations (data deletes, schema/table/column/type drops, MERGE) outright, and — if the arming EXPIRES mid-run — parks ALL further applies until Mason returns. Park anything refused; never edit or rewrite the flag to get past a block.
 3. **Only after that authorization:** apply via Supabase MCP `apply_migration`.
 4. **Smoke-chain test (hard rule — chains, not probes):** EVERY RPC the migration creates or modifies must pass its full business-chain spec from `scripts/smoke/smoke-specs.json`. For each touched RPC run `node scripts/smoke/run-smoke.mjs --spec <rpc>`:
    - Runner exits 2 with "no spec covers" → **write or extend a chain first** (per `scripts/smoke/README.md` — investigate live catalog, house conventions, register in `smoke-specs.json`). This is a gate, not a suggestion.
@@ -122,7 +120,7 @@ Then act on the result like any other reviewer:
 
 **Fallback (CLI unavailable):** if `/codex-review` Step 0 can't resolve `codex.exe` or auth is broken, fall back to the manual packet — run `/codex-cross-review` to draft `docs/audits/<date>-codex-<slug>-prompt.md`, then STOP and ask Mason to run Codex + paste the reply. Don't self-certify the gate when it couldn't run (the "required safety gate unavailable → hand off" rule).
 
-This gate runs the Codex *review* automatically; it never pushes by itself — the push happens at Step 8 (automatic once the pipeline is green).
+This gate runs the Codex *review* automatically; it never pushes or merges by itself — the landing happens at Step 8 (automatic once the pipeline is green).
 
 ## Step 7 — Docs + commit (on the branch)
 
@@ -136,7 +134,7 @@ Re-verify the branch (`git branch --show-current`), then commit **on the branch*
 
 Once Step 4 is clean and Step 2/2.5 are green, present the branch, commit, verification evidence, migration/deploy state, and the exact production action. Then:
 
-- **Regular, reversible code only** (no live migration in this job, no Edge Function deploy, no data deletion, every gate ran and came back green — including the Codex verdict when the change was Codex-worthy): push under Mason's standing auto-push authorization (2026-06-16), verify the deploy, and report the push and evidence explicitly. Do not ask for a fresh yes — the green pipeline IS the authorization for this class of change.
+- **Regular, reversible code only** (no live migration in this job, no Edge Function deploy, no data deletion, every gate ran and came back green — including the Codex verdict when the change was Codex-worthy): land under Mason's standing authorization (2026-06-16, mechanics 2026-07-14) — `git push -u origin <branch>` → `gh pr create` → wait for the required Vercel check → `gh pr merge --squash` → verify the deploy, and report the merge and evidence explicitly. Do not ask for a fresh yes — the green pipeline IS the authorization for this class of change. (Direct pushes to `main` are impossible: the `protect-main` ruleset rejects them for everyone.)
 - **Anything else** (a live migration was part of the job, an Edge Function deploy is proposed, data would be deleted, or any required gate ran degraded/unavailable): stop and ask Mason for explicit approval of that specific action. Do not treat the push authorization — or any older approval — as covering these. (Exception: a live migration inside a pre-authorized hands-free run with autopilot armed follows the 2026-07-13 policy in the autonomy boundary — proof gate instead of a per-migration ask; destructive migrations still stop.)
 
 ```
@@ -159,7 +157,7 @@ Migration: <applied live + smoke-tested / none>
 Codex:    <verdict: SHIP / SHIP-WITH-FOLLOWUPS after N fixes / not worthy / CLI down → packet pending>
 Deferred: <MED/LOW items accepted, if any>
 
-─── <PUSHED (standing auto-push policy) | READY — WAITING ON MASON> ───
+─── <MERGED via PR (standing landing policy) | READY — WAITING ON MASON> ───
   Production action: <exact command/action taken or proposed>
   <For gated actions: Waiting for Mason's explicit approval in this conversation.>
 ```

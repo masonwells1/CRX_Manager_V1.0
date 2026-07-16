@@ -103,15 +103,28 @@ CREATE INDEX IF NOT EXISTS ...
 
 ---
 
-## Step 3: Apply the Migration
+## Step 3: Review, THEN Apply the Migration
 
-Since you use the Supabase Dashboard:
+> **Do NOT paste migration SQL into the Supabase Dashboard SQL Editor.** That path skips
+> every guard this project has (migration-review proof, the apply-guard hook, the Codex
+> gate, and Mason's approval) and leaves no record in `schema_migrations` — the file on
+> disk and the live database silently drift apart. It caused exactly the incidents the
+> guard system was built to stop. (Rewritten 2026-07-16 — the old text here predated the
+> guard system and taught the dashboard path.)
 
-1. Open the Supabase SQL Editor at: `https://supabase.com/dashboard/project/rhyzpcqhnizqbxphqdkr/sql`
-2. Paste the entire migration SQL
-3. Click "Run"
-4. Check for errors in the output
-5. If there are errors, fix them and run again (idempotent migrations are safe to re-run)
+The only sanctioned way to apply a migration to the live database:
+
+1. Run `/migration-review` on the migration file. It dispatches the security/drift
+   reviewers and, if clean, stamps the apply-guard proof for this exact file content.
+2. For SQL/RLS/money changes, a real Codex verdict this session is also required
+   (the `/migration-review` flow handles this; the apply-guard checks it).
+3. Get authorization: in an ordinary interactive session, Mason's explicit in-chat OK.
+   In a Mason-pre-authorized hands-free run with autopilot armed, the proof gate itself
+   is the authorization (settled 2026-07-13) — destructive migrations are never autonomous.
+4. Apply via the Supabase MCP `apply_migration` tool (the apply-guard hook verifies the
+   proof and policy before the call is allowed through).
+5. If the apply fails, do NOT retry variations against live — fix the migration file,
+   re-run `/migration-review`, and apply again through the same gate.
 
 ---
 
@@ -212,7 +225,7 @@ The most common database change. Here's the minimal checklist:
 
 1. Create migration file: `supabase/migrations/YYYYMMDDHHMMSS_add_column_name.sql`
 2. SQL: `ALTER TABLE public.table_name ADD COLUMN IF NOT EXISTS column_name TYPE DEFAULT value;`
-3. Apply in Supabase SQL Editor
+3. Apply through `/migration-review` → `apply_migration` (see Step 3 above — never the Dashboard SQL Editor)
 4. Update interface in `src/types/index.ts`
 5. Update components that use this table
 6. Run `npm run typecheck` and `npm run build`
@@ -240,11 +253,10 @@ For this project there are three valid application paths, listed in order of pre
 
 | Path | How it handles CONCURRENTLY | When to use |
 |------|-----------------------------|-------------|
-| Supabase MCP `execute_sql` per-statement | No transaction wrap — each statement runs alone | **Preferred.** Same workflow as perf sweep #3. |
-| `supabase migration up` / `supabase db push` | Honors `-- supabase-no-transaction` marker in the file | If migrating outside the MCP. The marker is a Supabase-CLI feature, not a generic SQL comment. |
+| Supabase MCP `execute_sql` per-statement | No transaction wrap — each statement runs alone | **The only sanctioned live path.** Same workflow as perf sweep #3; still requires the migration-review gate + authorization from Step 3 first. |
 | Direct `psql -f file.sql` | No implicit transaction wrap, works directly | Local dev only. NEVER use against production. |
 
-**Blocked path:** `apply_migration` MCP — wraps in a transaction, fails immediately. The bash-safety hook (`.claude/hooks/bash-safety.mjs:42`) also blocks `npx supabase db push` to enforce manual review.
+**Blocked paths:** `apply_migration` MCP — wraps in a transaction, fails immediately on CONCURRENTLY. `supabase db push` (any spelling, with or without `npx`) — blocked by the bash-safety hook (pattern table in `.claude/hooks/bash-safety-lib.mjs`) because it applies ALL pending local migrations at once, bypassing the review gate.
 
 ### File template
 
@@ -257,8 +269,9 @@ For this project there are three valid application paths, listed in order of pre
 --
 -- DEPLOYMENT NOTE: Contains CREATE INDEX CONCURRENTLY. MUST NOT be applied
 -- via apply_migration MCP (wraps in transaction → fails). Apply via
--- per-statement execute_sql OR supabase migration up (CLI honors the
--- supabase-no-transaction marker above).
+-- per-statement execute_sql through the Supabase MCP — after the migration
+-- has passed /migration-review and the Step 3 authorization. CLI apply paths
+-- (supabase migration up / db push) are blocked by the bash-safety hook.
 --
 -- IF NOT EXISTS makes the file replay-safe — re-running is a no-op.
 
@@ -278,5 +291,5 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_<table>_<column>
 2. **Put the `-- supabase-no-transaction` marker on its own line near the top.** Supabase CLI looks for the literal substring.
 3. **Always pair with `IF NOT EXISTS`** so the migration is replay-safe (CONCURRENTLY can leave invalid indexes behind on failure; `IF NOT EXISTS` won't re-attempt a name that already exists, so check `pg_indexes WHERE indisvalid = false` after a failed run and DROP any invalid index manually before retry).
 4. **Verification block goes in a separate execution**, not inside the file. CONCURRENTLY can't run alongside other statements in one transaction, and a verification SELECT inside the file would force one.
-5. **Apply via per-statement `execute_sql`**, OR via `supabase migration up` / `supabase db push`. Do NOT use `apply_migration` MCP.
+5. **Apply via per-statement `execute_sql`** through the Supabase MCP — the ONLY sanctioned live path for CONCURRENTLY files, and only after /migration-review + the Step 3 authorization. Do NOT use `apply_migration` MCP (transaction wrap fails), and do NOT use `supabase migration up` / `supabase db push` (blocked — they bypass the review gate).
 6. **After apply, query `pg_indexes`** to confirm all expected `idx_*` names exist and `indisvalid = true`.

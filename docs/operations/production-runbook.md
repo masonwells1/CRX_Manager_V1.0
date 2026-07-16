@@ -1,6 +1,6 @@
 # CRX Manager — Production Runbook
 
-**Last updated:** 2026-05-01
+**Last updated:** 2026-07-16 (backup/recovery section rewritten to FREE-plan reality; revert path updated to the PR-only landing flow)
 **Audience:** Mason (owner) and any future on-call admin.
 **Scope:** day-to-day operations, deploys, rollbacks, incident response, and recurring maintenance for the production system.
 
@@ -99,12 +99,16 @@ After deploy, smoke-test by triggering the function from the live app (or via `c
 3. Click "..." → "Promote to Production."
 4. Confirm. Live URL points at the old build within ~30 seconds.
 
-**Alternative — git revert + push:**
+**Alternative — git revert via a PR** (direct pushes to `main` are impossible — the
+`protect-main` ruleset rejects them for everyone):
 ```bash
+git checkout -b revert/<short-name> origin/main
 git revert <bad-commit-sha>
-git push origin main
+git push -u origin revert/<short-name>
+gh pr create --fill && gh pr merge --squash --auto
 ```
-Vercel auto-deploys the revert.
+The merge to `main` auto-deploys the revert via Vercel. (The Vercel dashboard
+rollback above is faster — prefer it mid-incident.)
 
 ### 3.2 Rolling back a database migration
 
@@ -131,23 +135,38 @@ git checkout HEAD -- supabase/functions/<fn-name>/
 
 ## 4. Backups and disaster recovery
 
-### 4.1 What's automatically backed up
+> **Rewritten 2026-07-16.** The old text here described Supabase Pro-plan daily backups
+> and point-in-time recovery. **The org is on the FREE plan — there are NO Supabase
+> daily backups and NO PITR, and no "Restore" button in the dashboard.** The two paths
+> below are the ONLY recovery paths (settled 2026-07-12/13, see `docs/manual/DECISION_LOG.md`).
 
-- **Database:** Supabase takes daily backups for 7 days (Pro plan). Point-in-time recovery (PITR) up to 28 days back if PITR is enabled — confirm in the project settings.
-- **Storage buckets** (blend ticket images, signature uploads): same Supabase backup window.
+### 4.1 What's actually backed up
+
+- **Database (primary, off-site):** a weekly encrypted `pg_dump` pushed to the private
+  GitHub repo `masonwells1/CRX_Backups` by a GitHub Action. This is the real
+  disaster-recovery copy. Trigger a fresh one anytime with the `/backup-db` skill
+  (deterministic half: `node scripts/backup-db.mjs --plan`).
+- **Database (secondary, in-DB):** a weekly `pg_cron` job snapshots every table into the
+  `backup_snapshots` table (migration `20260713050000`), keeping 8 weeks, pruned only on
+  full success. Protects against bad-data mistakes, NOT against losing the database itself.
 - **Edge Function source:** stored in this repo only — git is the backup.
 - **Vercel deployments:** retained ~30 days; you can promote any past deployment.
+- **Storage buckets** (blend ticket images, signature uploads): NOT covered by either
+  backup path above — treat uploads as re-obtainable from the customer if lost.
 
-### 4.2 Restore drill (recommended quarterly)
+### 4.2 Restoring
 
-The first restore should not be the production restore. Run this drill every 3 months to confirm the path works:
+**Bad data written (table intact):** query `backup_snapshots` for the affected table's
+last-known-good rows and write a compensating fix through the normal migration gate.
 
-1. Supabase Dashboard → Project → Database → Backups.
-2. Click "Restore" on yesterday's backup → "Restore to a NEW project" (NEVER overwrite production).
-3. Wait ~5–15 minutes for the restored project to spin up.
-4. Verify a few representative rows: `customers`, `invoices`, recent `inventory_transactions`.
-5. Document the restore time in this section.
-6. Delete the test project after confirming the restore worked.
+**Database lost/corrupted:** clone `masonwells1/CRX_Backups`, decrypt the newest dump
+(key location: Mason's password manager), and restore with `pg_restore`/`psql` against a
+fresh project using the Session-pooler connection string (IPv4). Restore to a NEW
+project first — never overwrite production directly.
+
+**Restore drill (recommended quarterly):** run the database-lost path against a throwaway
+project, verify representative rows (`customers`, `invoices`, recent
+`inventory_transactions`), document the time it took here.
 
 **Last drill:** _none yet — schedule for 2026-08-01_
 

@@ -251,4 +251,105 @@ export function claudeProofValid(data, headSha, nowMs, expectedBaseSha) {
   return reviewProofValid(data, headSha, nowMs, "claude_ran", expectedBaseSha);
 }
 
+// ── PR-merge request detection (2026-07-16 scaffolding review Theme 1) ───────
+// Since the 2026-07-14 `protect-main` ruleset, work lands on main via PR merge,
+// not `git push` — so the merge action needs the same risky-diff Codex gate the
+// push had. These parsers mirror the battle-tested ones in
+// .codex/hooks/production-action-guard.mjs (rounds 4-5 hardening); they live
+// here because .claude/hooks/ is the single source of truth for shared guard
+// logic. Follow-up: production-action-guard should import these instead of
+// carrying its own copies.
+
+// gh binary reference — tolerates quoted absolute paths and gh.exe.
+const GH_BIN_RE = /(?:^|\s)(?:"[^"]*[\\/]gh\.exe"|\S*[\\/]gh(?:\.exe)?|gh(?:\.exe)?)(?:\s|$)/i;
+
+// `gh pr merge` with global flags possibly between words (`gh -R o/r pr merge`).
+// Over-matching (e.g. `gh pr view merge-notes`) only routes a read through the
+// gate, which fails safe.
+export function ghMergeRequest(command) {
+  const text = String(command || "");
+  if (!GH_BIN_RE.test(text)) return null;
+  const words = splitShellArgs(text);
+  const prIndex = words.findIndex((word) => word.toLowerCase() === "pr");
+  if (prIndex === -1) return null;
+  const mergeIndex = words.findIndex((word, index) => index > prIndex && word.toLowerCase() === "merge");
+  if (mergeIndex === -1) return null;
+  // `--disable-auto` cancels a pending auto-merge — it does not land anything,
+  // so the gate stands down for it.
+  if (words.some((word) => word.toLowerCase() === "--disable-auto")) return null;
+  const valueFlags = new Set(["--repo", "-R", "--match-head-commit", "--subject", "--body", "-t", "-b"]);
+  let selector = "";
+  let repo = "";
+  let auto = false;
+  for (let index = 0; index < words.length; index += 1) {
+    const word = words[index];
+    if (word.startsWith("--repo=")) { repo = word.slice("--repo=".length); continue; }
+    if (word.toLowerCase() === "--auto" || word.toLowerCase().startsWith("--auto=")) { auto = true; continue; }
+    if (valueFlags.has(word)) {
+      const value = words[index + 1] || "";
+      if (word === "--repo" || word === "-R") repo = value;
+      index += 1;
+      continue;
+    }
+    if (index > mergeIndex && !word.startsWith("-") && !selector) selector = word;
+  }
+  return { selector, repo, auto };
+}
+
+// `gh api -X PUT repos/o/r/pulls/N/merge`, plus the GraphQL mergePullRequest
+// mutation (unresolvable → caller must deny).
+export function ghApiMergeRequest(command) {
+  const text = String(command || "");
+  if (!/(?:^|\s)(?:"[^"]*[\\/]gh\.exe"|\S*[\\/]gh(?:\.exe)?|gh(?:\.exe)?)\s+api\b/i.test(text)) return null;
+  if (/\sapi\s+graphql\b/i.test(text) && /\bmergePullRequest\b/i.test(text)) {
+    return { unsupportedGraphql: true };
+  }
+  const words = splitShellArgs(text);
+  let method = "GET";
+  let endpoint = "";
+  for (let index = 0; index < words.length; index += 1) {
+    const word = words[index];
+    if (word === "-X" || word === "--method") { method = String(words[index + 1] || "").toUpperCase(); index += 1; continue; }
+    if (word.startsWith("--method=")) { method = word.slice("--method=".length).toUpperCase(); continue; }
+    if (/^-X\S+/i.test(word)) { method = word.slice(2).toUpperCase(); continue; }
+    const normalizedEndpoint = word.replace(/^https:\/\/api\.github\.com\//i, "").replace(/^\//, "");
+    if (/^repos\/[^/]+\/[^/]+\/pulls\/\d+\/merge$/i.test(normalizedEndpoint)) endpoint = normalizedEndpoint;
+  }
+  if (method !== "PUT" || !endpoint) return null;
+  const match = endpoint.match(/^repos\/([^/]+)\/([^/]+)\/pulls\/(\d+)\/merge$/i);
+  return match ? { selector: match[3], repo: `${match[1]}/${match[2]}`, auto: false } : null;
+}
+
+// MCP merge tool inputs — key spellings differ per connector (GitHub MCP uses
+// pull_number/owner/repo; app-style connectors use pr_number/repository_full_name).
+export function mcpMergeRequest(toolInput = {}) {
+  const selector = toolInput.pull_number ?? toolInput.pullNumber ?? toolInput.pullRequestNumber ??
+    toolInput.pr_number ?? toolInput.prNumber ?? toolInput.number ?? "";
+  const owner = toolInput.owner ?? toolInput.organization ?? "";
+  const repository = toolInput.repo ?? toolInput.repository ?? toolInput.repoName ??
+    toolInput.repository_full_name ?? toolInput.repositoryFullName ?? toolInput.full_name ?? "";
+  const repo = String(repository).includes("/") ? String(repository) : (owner && repository ? `${owner}/${repository}` : "");
+  return { selector: String(selector), repo, auto: false };
+}
+
+// Fully-green pipeline: mergeStateStatus CLEAN and every reported check
+// completed successfully / neutral / skipped. Zero reported checks fails closed
+// (the Vercel check is required on main — its absence means "not reported yet").
+export function pullRequestChecksGreen(pullRequest) {
+  if (String(pullRequest?.mergeStateStatus || "").toUpperCase() !== "CLEAN") return false;
+  const checks = pullRequest?.statusCheckRollup;
+  if (!Array.isArray(checks) || checks.length === 0) return false;
+  return checks.every((check) => {
+    if (check?.__typename === "StatusContext") {
+      return String(check.state || "").toUpperCase() === "SUCCESS";
+    }
+    if (check?.__typename === "CheckRun") {
+      const status = String(check.status || "").toUpperCase();
+      const conclusion = String(check.conclusion || "").toUpperCase();
+      return status === "COMPLETED" && ["SUCCESS", "NEUTRAL", "SKIPPED"].includes(conclusion);
+    }
+    return false;
+  });
+}
+
 export { RISKY_PATH_RES, RISKY_CONTENT_RE };

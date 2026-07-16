@@ -96,9 +96,11 @@ Docs updated:
   - docs/reference/rpc-functions.md    (if applicable)
 
 ⚠️  Remember: This migration is LOCAL only.
-    To apply it to your Supabase project, run:
-    supabase db push
-    Or apply it via the Supabase dashboard.
+    Applying it to the live database goes through /migration-review →
+    Supabase MCP apply_migration (interactive session: Mason's in-chat OK;
+    pre-authorized armed hands-free run: full proof + Codex gate, settled
+    2026-07-13). NEVER `supabase db push` and NEVER the dashboard SQL
+    editor — both bypass the review gate and are blocked.
 ```
 
 ## Important Safety Rules
