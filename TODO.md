@@ -27,12 +27,16 @@ When an item here ships or is decided, update this file AND `docs/manual/KNOWN_I
 4. **Label data load + EPA backfill approval** — 0 of ~604 products have full
    label data; ~105 of 204 stored EPA reg numbers are wrong. The `/label-data-quality`
    tool (shipped) makes this data-entry. Gates the whole compliance track.
-5. **Decision packets** (details in `docs/loops/owner-decisions-2026-07.md` + KNOWN_ISSUES §3):
-   junk-data deletes · vendor-name merges · category remap · due-date/Net-30 policy ·
-   wire-vs-retire on 5 dead structures (incl. #40 orphaned RPC) · "wire" as payment method ·
-   #107 auto-draft-on-applicator-completion policy · Sprint D3 halves (blend commission
-   mint + `jobs.commission_split` visibility) · live-data cleanup (8 SEED commission
-   batches, PO-2026-0008/0015, 5 empty deliveries, 1 E2E invoice).
+5. **Decision packets** (details in `docs/loops/owner-decisions-2026-07.md` + KNOWN_ISSUES §3).
+   **Decided 2026-07-16:** due dates = Net 30 + override (build spec in
+   `docs/plans/invoice-due-dates-net30-spec-2026-07-16.md`) · dead structures = KEEP
+   (planned features) · "wire" = already live (stale packet) · junk data = keep test
+   entities tagged `[E2E]` (tagging done live).
+   **Still open:** vendor-name merges · category remap · #107 auto-draft-on-applicator
+   policy · Sprint D3 halves (blend commission mint + `jobs.commission_split` visibility) ·
+   true-junk deletes awaiting line-item OK (8 gibberish blend recipes, 4 zero-link customer
+   rows, vendor `we`, ~5 bad emails, 8 SEED commission batches, PO-2026-0008/0015,
+   5 empty deliveries, 1 E2E invoice).
 6. **Send ~10 real vendor bills + Anthropic API key** — unblocks the D1 extraction pilot.
 7. **Supabase Pro / PITR decision + run the first `/backup-db`** — FREE plan today;
    only ONE in-DB snapshot run exists (verified live) and no off-repo dump has been
@@ -57,9 +61,12 @@ When an item here ships or is decided, update this file AND `docs/manual/KNOWN_I
   high-water `20260715203911`). ~~T2 ledger/docs update~~ **DONE in this cleanup.**
 - **Offline Stage 1B real-phone proof (T5/N3)** — browser rollout is live; run the
   on-device proof (lost-response recovery, two-tab replay, office resolution) with `[E2E]` fixtures.
-- **Dead-structure retirement batch (T4)** — `setup-blend-tickets-storage` edge fn
-  (still deployed v18 ACTIVE, zero callers — needs an approved retirement session);
-  #40 RPC after Mason's wire-vs-retire call. (U12/U13 stale drafts: already deleted.)
+- **Dead-structure retirement batch (T4)** — now only the `setup-blend-tickets-storage`
+  edge fn (still deployed v18 ACTIVE, zero callers — needs an approved retirement session).
+  The #40 RPC + other dead structures are **KEEP per Mason 2026-07-16** (planned features).
+- **Invoice due dates — APPROVED 2026-07-16** — Net 30 default + Net 15/due-on-receipt/
+  custom override; unblocks the parked A8 overdue/aging work. Spec:
+  `docs/plans/invoice-due-dates-net30-spec-2026-07-16.md`. Codex build + full migration gate.
 - **X1 Stripe ACH pay-now links** — after owner action 3.
 - **X2 EPA backfill Waves 4–5 execution** — after owner action 4.
 - **X3 REI/PHI tracking + dispatch warnings (B4/T8), then dicamba 72-hr auto-draft (B2/T9)**.

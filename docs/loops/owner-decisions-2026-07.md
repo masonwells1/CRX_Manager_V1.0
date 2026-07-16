@@ -4,6 +4,17 @@
 These six packets each need a business call (not a coding call). Nothing here is applied yet. Where a fix is
 already drafted-and-parked (Wave A), the packet notes it. Live counts pulled 2026-07-02.
 
+> **Outcomes recorded 2026-07-16 (Mason, in-chat):**
+> - **Packet 3 (junk deletes): PARTIAL.** Keep test entities for E2E/Playwright use, un-commingled —
+>   the two untagged test customers were renamed live with the `[E2E]` prefix. True-junk deletes
+>   (8 `RTJ Recipe…` rows, zero-link customers, vendor `we`, bad emails) still need line-item approval.
+> - **Packet 4 (due dates): DECIDED** — Net 30 default + Net 15 / due-on-receipt / custom-date
+>   override. Build spec: `docs/plans/invoice-due-dates-net30-spec-2026-07-16.md`.
+> - **Packet 5 (wire-vs-retire): SETTLED — KEEP** all five structures (planned features).
+> - **Packet 6 ("wire" method): RESOLVED, packet was stale** — `20260702152000_payment_method_wire.sql`
+>   is applied live; all four CHECK constraints already allow `'wire'` (verified 2026-07-16).
+> - Packets 1 (vendor merges) and 2 (category remap): still open.
+
 **Lead recommendation:** the safest, highest-value first step is **Packet 3 (junk-data deletes)** and **Packet 4
 (due-date policy)** — packet 3 is pure cleanup of obviously-fake rows, and packet 4 unblocks the whole late-AR
 machine (parked migration A8 is waiting on it). The two merge packets (1, 2) re-bucket history, so take those
