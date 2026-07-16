@@ -10,9 +10,9 @@ Statuses: TODO / BUILDING / GATE / DONE / PARKED(reason)
 ## Phase 1 — Contacts + call logging
 | unit | builder | status | commit | proof |
 |---|---|---|---|---|
-| 1.1 contacts+identities migration | terra | TODO | — | — |
-| 1.2 interactions+transcripts migration | terra | TODO | — | — |
-| 1.3 types + registry | terra | TODO | — | — |
+| 1.1 contacts+identities migration | terra | DONE | 425e4c4b | PROOF — Ran: full gauntlet (RLS CLEAN ×2 incl. final-bytes delta, drift CLEAN ×2, Codex APPROVE round 3) then LIVE apply via migration-apply-guard w/ hash-bound proofs · Saw: {success:true}; 134/153 customers backfilled primary contacts, 39 phones E.164-normalized, RLS on ×4 tables; live trigger test on [E2E] Farm Beta: legacy phone edit → contact card synced + normalized to +15551234567, restore synced back, ambiguous 555-0002 correctly left NULL |
+| 1.2 interactions+transcripts migration | terra | DONE | 41732267 | PROOF — Ran: same gauntlet (Codex APPROVE round 2 after provenance-freeze fix) then LIVE apply · Saw: {success:true}; tables live w/ RLS; provenance immutability + rep source='rep' pinning in force |
+| 1.3 types + registry | terra | DONE | d072750e | PROOF — Ran: npm run typecheck (myself, not just builder claim) · Saw: tsc clean; 76 lines, 4 interfaces + 6 unions matching live schema exactly (phone_e164 spot-checked); registry refresh from live introspection delegated, in flight |
 | 1.4 contacts UI | terra | TODO | — | — |
 | 1.5 log-call flow | terra | TODO | — | — |
 | 1.6 timeline integration | terra | TODO | — | — |
@@ -49,7 +49,15 @@ Statuses: TODO / BUILDING / GATE / DONE / PARKED(reason)
 | Morning report + docs + memory | orchestrator | TODO | — |
 
 ## Parked questions (owner decisions — reversible default chosen, keep moving)
-_(none yet)_
+- **save_customer lets ANY sales rep edit ANY customer (incl. credit limit / finance / commission fields)** — pre-existing live gap found by Codex during the Phase-1 gate, NOT created by this loop. Default chosen: left unchanged here (changing a live SECDEF RPC's authorization is its own reviewed change); a task chip was spawned for a dedicated fix session. Mason decides: should non-assigned reps be allowed to edit customers at all (office-manager workflow), or restrict to assigned rep + admin?
+- **Default phone region for E.164 normalization** — default chosen: US (+1). (Sol, Phase 1 sign-off)
+- **Recording/AI-disclosure wording** — default: standard "this call may be recorded" + AI self-ID; Mason to approve final wording before the voice vendor goes live (Phase 5, out of this loop).
+- **Transcript/recording retention + purge procedure** — default: `retention_expires_at` column exists but NO auto-purge is built in this loop; purge design deferred.
+
+## Phase 5 design notes (carry forward)
+- Provenance guard trigger fires for service role too (auth.uid() NULL → is_admin() false). The AI-intake endpoint must INSERT provenance (provider/external_call_id) with the row and never UPDATE it afterward — or Phase 5 adds a service-role bypass to the guard. (RLS re-verify note, 2026-07-16.)
 
 ## Cycle log
-_(append-only; one line per dispatch/gate event with timestamp)_
+- 2026-07-16 ~15:4x — Codex gauntlet round 1 (at cac6652c): BLOCK ×2. File 2 provenance forgery = real gap → FIXED (41732267). File 1 block = PRE-EXISTING save_customer ownership gap (any rep can edit any customer incl. credit fields via SECDEF RPC) → confirmed live, spawned separate remediation task (task chip) + parked question below; counter-analysis sent to Codex round 2. RLS+drift re-verify of final bytes dispatched in parallel.
+- 2026-07-16 ~13:xx — RLS reviewer CLEAN (0 blockers; H1/M1 recs implemented); drift reviewer CLEAN (0 blockers; M2 rec implemented). Live pre-apply checks green (ordering vs gauntlet_* migrations, zero object collisions, customers_update policy compatible with sync triggers). Hard-guard catch: rpcContracts fail-closed test forced classification of the two sync trigger fns.
+- 2026-07-16 ~12:3x — Sol Phase 1 design sign-off: **VERDICT: AMEND** (8 amendments — role-scoped RLS incl. driver/applicator exclusion from notes/transcripts; contact integrity constraints + single-primary partial unique; E.164 validate-or-NULL; external_identities narrowed to provider-issued IDs (`provider`, `verified_at/by`, composite FK); backfill skips blanks/never aborts + pre-apply aggregate; legacy-field sync = guarded bidirectional DB triggers (UI-only sync unsafe — bulk import writes customers directly); interactions get created_by/CHECKs, follow_up_note_id CUT in favor of team_notes linked_entity; transcripts unique per interaction, raw payload jsonb CUT for now, granular consent fields). All adopted into unit briefs. No money-engine touchpoint.
