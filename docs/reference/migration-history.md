@@ -1,11 +1,35 @@
-# Migration History (703 migrations)
+# Migration History (706 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
+
+> **Live promotion for the 2026-07-15 money/inventory gauntlet:** Supabase
+> applied the reviewed migrations in the required database-first order as
+> `20260716120104`, `20260716120112`, and `20260716120120` on 2026-07-16.
+> Post-apply catalog checks verified the new `submit_purchase_order` RPC before
+> the coupled frontend was merged. PO create/import/edit/submit/cancel authority remains
+> available to active admins and sales reps, matching Mason's explicit
+> 2026-07-16 workflow decision; receiving reversal remains admin-only.
+>
+> **Local post-edit proof (2026-07-15):** all three files executed in timestamp
+> order inside one Postgres transaction and rolled back. Catalog checks observed
+> exactly one `submit_purchase_order` overload and one backward-compatible
+> `create_prepay_check_splits` overload; all five access-boundary RPCs remained
+> `SECURITY DEFINER` with `search_path=public, pg_temp`; anonymous submit and
+> cancel execution were denied, active admin-or-sales role gates were present
+> on save/submit/cancel before idempotency replay, direct authenticated
+> PO/vendor-payment writes were denied, and the stored
+> `void_delivery` body used the effective completion-date period check. The local
+> stack predates two July 14 catalog objects, so the rollback harness first
+> normalized only those two production-verified signatures inside the same
+> disposable transaction.
 
 ## Local and applied-live changes — 2026-07-14
 
 | # | Timestamp | Description |
 |---|-----------|-------------|
+| 706 | 20260716120120 | **APPLIED LIVE 2026-07-16. Money/inventory gauntlet inventory accuracy.** Re-emits `get_inventory_position()` so each PO line contributes no less than zero on-order quantity and delivered-YTD nets delivery-specific reversals on the original delivery date while pairing order-level void reversals back to the original order/product. The inventory ledger UI now shows authoritative on-floor/prebooked totals from this RPC instead of reconstructing a misleading current balance from incomplete historical rows, and surfaces `requires_review` transactions. |
+| 705 | 20260716120112 | **APPLIED LIVE 2026-07-16. Money/inventory gauntlet money workflows.** Allows only explicit draft `misc_charge` invoices to be created without an order/blend source; adds active write-offs to customer statements on their Chicago business date; excludes voided vendor payments from AP paid-this-month; rejects future finance-charge preview/generation dates; and makes prepay check splits penny-exact against an explicit expected total. Replaces the old five-argument `create_prepay_check_splits` identity with one backward-compatible six-argument identity: the original five named arguments stay in order and trailing `p_expected_total_cents bigint DEFAULT NULL` lets stale PWA callers keep working while new callers send the independent penny assertion. The vetted active-admin manual allocation wrapper is unchanged. |
+| 704 | 20260716120104 | **APPLIED LIVE 2026-07-16. Money/inventory gauntlet access boundaries.** Requires active delivery actors, aligns closed-period delivery checks and generated invoice dates to the effective Chicago completion date, requires an active admin for delivery voids, locks received PO product/quantity/unit/cost evidence, moves bulk import and edit flows onto active-admin-or-sales `save_purchase_order`, adds active-admin-or-sales status-only `submit_purchase_order` so stale screens cannot overwrite PO fields during submission, aligns `cancel_purchase_order` with that same active-admin-or-sales authority while preserving its bill/receiving guards, writes PO create/update/submit/cancel activity inside those database transactions, and revokes authenticated direct writes on PO/receiving/AP/prepay tables while preserving reads and vetted SECURITY DEFINER RPCs. |
 | 703 | 20260715203911 | **Applied live as Supabase ledger version `20260715203911`; Supabase recorded apply-time name `20260715182757_park_returns_creation_rpc_only`. Return creation RPC-only boundary.** Drops the external `returns_insert` policy, revokes direct browser-role INSERT on `returns`, revokes direct browser-role INSERT/UPDATE/DELETE on `return_items`, and preserves existing `returns` UPDATE/DELETE behavior behind the July 15 lifecycle/status triggers. Keeps `create_return(jsonb,jsonb,text)` as the authenticated SECURITY DEFINER creation API and adds apply-time catalog assertions for policy/grant drift. Post-apply catalog checks confirmed no direct return header or line-item mutation path for anon/authenticated roles, and the standing return invariant returned zero rows. |
 | 702 | 20260715115155 | **Applied live as Supabase ledger version `20260715132146`. Return lifecycle direct-update hardening.** Adds a return lifecycle trigger that rejects direct authenticated updates to request/approval/receipt/cancellation/credit/status audit fields unless a vetted return RPC set `app.return_rpc` or an existing scoped `admin_override` is active. Direct soft-delete and hard-delete remain limited to requested/rejected/cancelled returns so active returns stay visible to terminal-order guards. Re-emits `approve_return` and `cancel_return` so nullable actor arguments can no longer write NULL attribution; both now require the supplied actor to equal `auth.uid()` and stamp `v_actor`. Adds a standing `returns-lifecycle-rpc-owned` database invariant predicate for this gauntlet class. |
 | 701 | 20260714230200 | **APPLIED LIVE 2026-07-15. Blend-ticket order lifecycle guards.** Re-emits link/create-order/unlink RPCs so only completed, approved, unbilled, customer-assigned tickets with a nonempty set of active, fully matched, positive products can affect an order. Mapping coverage is exact per source line, missing inventory rows are safely upserted, and billed/invoiced/applied tickets cannot be unlinked. Applied after the live link table reverified empty; post-apply rollback smoke and invariant sweeps passed. |

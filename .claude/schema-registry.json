@@ -1,12 +1,12 @@
 {
   "_meta": {
     "registry_version": 2,
-    "generated_at": "2026-07-15",
+    "generated_at": "2026-07-16",
     "generated_from": "Supabase project rhyzpcqhnizqbxphqdkr — public schema introspection",
     "regenerate_with": "node scripts/regenerate-schema-registry.mjs --from-introspection <queries.json> (queries documented in the script header)",
     "purpose": "Single source of truth for hooks: generated columns, status enums, ALL parseable CHECK IN-lists, NOT NULL columns, full column lists, sequences, tables-with/without updated_at, applied-migration high water.",
     "note": "For a fresh refresh from the live DB, ask Claude Code: 'regenerate the schema-registry from Supabase' (/regen-schema-registry). skipped_constraints lists every CHECK the hooks can NOT validate — review it when touching those tables.",
-    "migrations_high_water": "20260715203911",
+    "migrations_high_water": "20260716120120",
     "applied_migration_names": [
       "20260207_gap_analysis_fixes.sql",
       "20260209050000_inventory_overhaul",
@@ -540,7 +540,10 @@
       "fix_void_invoice_prepay_column_name",
       "fix_yesterday_recap_issue_description_column",
       "gap_analysis_fixes_2",
+      "gauntlet_access_boundaries",
       "gauntlet_core_guards",
+      "gauntlet_inventory_accuracy",
+      "gauntlet_money_workflows",
       "geojson_rpc_dispatched_visibility",
       "get_customer_summary_rpc",
       "get_dashboard_action_items_rpc",
