@@ -14,6 +14,7 @@ import { supabase, sanitizeError, assertRpcResult, hasRpcCode, RpcErrorCodes } f
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
+import UnsavedChangesModal from '../components/ui/UnsavedChangesModal';
 import { logActivity } from '../lib/activityLogger';
 import { Sentry } from '../lib/sentry';
 import { formatCents as fmt } from '../lib/money';
@@ -381,7 +382,7 @@ export default function FieldApplicationInvoice() {
   // the engine always splits by acres-weighted per-location share.
   const [sharesBasis, setSharesBasis] = useState<CustomerSharesBasis>('location');
 
-  useUnsavedChanges(dirty);
+  const blocker = useUnsavedChanges(dirty);
 
   const isNew = !id;
   // #24: only an ADMIN may attribute the invoice to another consultant. The save
@@ -3447,6 +3448,12 @@ export default function FieldApplicationInvoice() {
           </div>
         </div>
       </Modal>
+
+      <UnsavedChangesModal
+        open={blocker.state === 'blocked'}
+        onStay={() => blocker.reset?.()}
+        onLeave={() => blocker.proceed?.()}
+      />
     </div>
   );
 }
