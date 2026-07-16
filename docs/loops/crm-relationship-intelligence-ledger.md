@@ -24,7 +24,7 @@ Statuses: TODO / BUILDING / GATE / DONE / PARKED(reason)
 | 2.1 customer_facts migration | terra | GATE | staged | PROOF — Ran: lint+typecheck+build+full vitest (terra) · Saw: green; 20260716181306_crm_customer_facts.sql; gauntlet next |
 | 2.2 facts UI + review queue | luna | TODO | — | — |
 | 2.3 prep card | luna | TODO | — | — |
-| 2.4 purchase intelligence | terra | TODO | — | — |
+| 2.4 purchase intelligence | terra | GATE | staged | PROOF — Ran: lint+typecheck+build+rpcContracts (terra) · Saw: green; 20260716182318_crm_purchase_intelligence.sql (4 read-only SECDEF RPCs); gauntlet next |
 | 2.G phase gate | orchestrator | TODO | — | — |
 
 ## Phase 3 — Seasonal worklists
