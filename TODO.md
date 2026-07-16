@@ -14,10 +14,12 @@ When an item here ships or is decided, update this file AND `docs/manual/KNOWN_I
 
 ## 🔴 1. Owner actions (needs Mason — ranked by value unblocked)
 
-1. **Re-base the 18 negative-inventory products** — verified live 2026-07-16
-   (`inventory.quantity_available < 0` = 18 rows). Blocks clean deliveries. Bring
-   physical counts; worksheet: `docs/operations/2026-06-10-negative-inventory-rebase-worksheet.md`.
-   Note: this has been stalled since mid-May (`docs/reports/cleanup-sprint-progress.md`).
+1. ~~**Re-base the 18 negative-inventory products**~~ — **⏸ DEFERRED by Mason 2026-07-16**
+   ("skip and don't worry about it for now"). The 18 rows (verified live:
+   `inventory.quantity_available < 0`) stay as-is until he brings physical counts;
+   worksheet: `docs/operations/2026-06-10-negative-inventory-rebase-worksheet.md`.
+   Deliveries are flowing despite it, so nothing is hard-blocked today. Don't re-raise
+   as the top action — revisit only when Mason asks or a delivery actually fails on it.
 2. **Run a real billing cycle in the app** — order → delivery → invoice → post →
    payment. Live DB still shows **0 payments** (10 invoices: 8 draft / 2 posted).
    Deliveries ARE flowing now (106 live). Afterward ask for the money-audit re-run
@@ -145,7 +147,7 @@ earmark migrations as-is · broad offline money mutations.
 | payments | **0** |
 | jobs / deliveries | 4 / **106** (2026-07-13 snapshot had these reversed) |
 | blend_tickets | 0 |
-| negative inventory rows | 18 |
+| negative inventory rows | 18 (re-base DEFERRED by Mason 2026-07-16) |
 | In-DB backup runs | 1 (weekly pg_cron live) — off-site `/backup-db` dump: none yet |
 | Production | croprxsolutions.app — `main` merges deploy via PR only (branch protection) |
 
