@@ -197,6 +197,12 @@ const RISKY_PATH_RES = [
   /(^|\/)\.husky\//i,
   /(^|\/)scripts\/run-claude-review\.mjs$/i,
   /(^|\/)scripts\/write-codex-push-proof\.mjs$/i,
+  // Reviewer charters are executable review instructions for the migration
+  // proof gate (write-apply-proofs runs each .claude/agents/<reviewer>.md as a
+  // machine-verdict Codex run) — editing one weakens the gate, so charter
+  // changes require the same independent verdict (Codex round-7, PR #142).
+  /(^|\/)\.claude\/agents\//i,
+  /(^|\/)scripts\/write-apply-proofs\.mjs$/i,
 ];
 export function riskyFiles(files) {
   return (files || []).filter((f) => RISKY_PATH_RES.some((re) => re.test(String(f || ""))));
