@@ -17,6 +17,13 @@ import {
   purchaseOrderLineTotalCents,
   purchaseOrderUnitCostCents,
 } from '../../lib/purchaseOrderMoney';
+import {
+  clearPendingBulkPOIntent,
+  ensurePendingBulkPOIntent,
+  loadPendingBulkPOIntents,
+  savePendingBulkPOIntents,
+  type PendingBulkPOIntents,
+} from '../../lib/bulkPOImportRetry';
 
 // ---------- interfaces ----------
 
@@ -32,6 +39,9 @@ interface ParsedPOItem {
 
 interface ParsedPO {
   source_file: string;
+  source_index: number;
+  source_size: number;
+  source_last_modified: number;
   vendor_name: string;
   invoice_number: string;
   invoice_date: string;
@@ -86,12 +96,20 @@ function fuzzyMatchProductWithScore(
 
 // ---------- Vision OCR parsing ----------
 
-async function parseWithVisionOCR(file: File, filename: string, products: Product[]): Promise<ParsedPO> {
+async function parseWithVisionOCR(
+  file: File,
+  filename: string,
+  sourceIndex: number,
+  products: Product[],
+): Promise<ParsedPO> {
   const result = await processDocumentWithOCR(file, 'purchase_order');
 
   if (!result.success || !result.parsed_data) {
     return {
       source_file: filename,
+      source_index: sourceIndex,
+      source_size: file.size,
+      source_last_modified: file.lastModified,
       vendor_name: '',
       invoice_number: '',
       invoice_date: localToday(),
@@ -136,6 +154,9 @@ async function parseWithVisionOCR(file: File, filename: string, products: Produc
 
   return {
     source_file: filename,
+    source_index: sourceIndex,
+    source_size: file.size,
+    source_last_modified: file.lastModified,
     vendor_name: data.vendor_name || '',
     invoice_number: data.invoice_number || '',
     invoice_date: data.invoice_date || localToday(),
@@ -160,8 +181,8 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
   const [products, setProducts] = useState<Product[]>([]);
   const [vendors, setVendors] = useState<string[]>([]);
   const [showRawText, setShowRawText] = useState<number | null>(null);
-  const poSaveKeysRef = useRef<Record<string, string>>({});
-  const poNumbersRef = useRef<Record<string, string>>({});
+  const pendingIntentsRef = useRef<PendingBulkPOIntents>({});
+  const pendingProfileRef = useRef<string | null>(null);
   const importedIntentsRef = useRef<Set<string>>(new Set());
 
   // Product search state
@@ -172,6 +193,12 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
     if (open) fetchProducts();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
+
+  useEffect(() => {
+    if (!profile?.id || pendingProfileRef.current === profile.id) return;
+    pendingIntentsRef.current = loadPendingBulkPOIntents(sessionStorage, profile.id);
+    pendingProfileRef.current = profile.id;
+  }, [profile?.id]);
 
   const fetchProducts = async () => {
     const { data, error } = await supabase
@@ -206,8 +233,6 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
       setFiles(valid);
       setParsedPOs(null);
       setUploadResults(null);
-      poSaveKeysRef.current = {};
-      poNumbersRef.current = {};
       importedIntentsRef.current.clear();
     }
     e.target.value = '';
@@ -218,14 +243,17 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
     setParsing(true);
     try {
       const results: ParsedPO[] = [];
-      for (const file of files) {
+      for (const [sourceIndex, file] of files.entries()) {
         try {
-          const parsed = await parseWithVisionOCR(file, file.name, products);
+          const parsed = await parseWithVisionOCR(file, file.name, sourceIndex, products);
           results.push(parsed);
         } catch (err) {
           Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: `Error parsing ${file.name}` } });
           results.push({
             source_file: file.name,
+            source_index: sourceIndex,
+            source_size: file.size,
+            source_last_modified: file.lastModified,
             vendor_name: '',
             invoice_number: '',
             invoice_date: localToday(),
@@ -336,6 +364,7 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
 
     setUploading(true);
     let successCount = 0;
+    let newSuccessCount = 0;
     let failedCount = 0;
 
     for (const po of importable) {
@@ -348,13 +377,16 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
 
         const intentKey = JSON.stringify({
           source_file: po.source_file,
+          source_index: po.source_index,
+          source_size: po.source_size,
+          source_last_modified: po.source_last_modified,
           vendor_name: po.vendor_name.trim(),
           invoice_number: po.invoice_number,
           invoice_date: po.invoice_date,
           items: validItems.map((item) => ({
             product_id: item.matched_product!.id,
             quantity_ordered: item.quantity_ordered,
-            unit_cost: item.unit_cost,
+            unit_cost_cents: purchaseOrderUnitCostCents(item.unit_cost),
             unit_size: item.unit_size,
             notes: item.notes,
           })),
@@ -363,25 +395,30 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
           successCount++;
           continue;
         }
-        if (!poSaveKeysRef.current[intentKey]) {
-          poSaveKeysRef.current[intentKey] = generateIdempotencyKey(
+        const pendingIntent = ensurePendingBulkPOIntent(
+          pendingIntentsRef.current,
+          intentKey,
+          () => generateIdempotencyKey(
             'save_purchase_order',
-            `${profile.id}:bulk:${po.source_file}`,
-          );
-        }
+            `${profile.id}:bulk:${po.source_file}:${po.source_index}`,
+          ),
+        );
+        savePendingBulkPOIntents(sessionStorage, profile.id, pendingIntentsRef.current);
 
         // Cache the number with the intent as well as the idempotency key. A
         // lost response must retry the same PO without burning another number.
-        if (!poNumbersRef.current[intentKey]) {
+        if (!pendingIntent.poNumber) {
           const { data: poNumData, error: poNumError } = await supabase.rpc('next_po_number');
           if (poNumError || !poNumData) {
             Sentry.captureException(new Error(`Failed to generate PO number: ${poNumError?.message || 'no data'}`));
             failedCount++;
             continue;
           }
-          poNumbersRef.current[intentKey] = assertRpcResult<string>(poNumData, 'next_po_number');
+          pendingIntent.poNumber = assertRpcResult<string>(poNumData, 'next_po_number');
+          pendingIntent.updatedAt = Date.now();
+          savePendingBulkPOIntents(sessionStorage, profile.id, pendingIntentsRef.current);
         }
-        const poNumber = poNumbersRef.current[intentKey];
+        const poNumber = pendingIntent.poNumber;
 
         const noteParts = [`Imported from PDF: ${po.source_file}`];
         if (po.invoice_number) noteParts.push(`Vendor ref: ${po.invoice_number}`);
@@ -410,28 +447,32 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
           },
           p_items: itemsPayload,
           p_performed_by: profile.id,
-          p_idempotency_key: poSaveKeysRef.current[intentKey],
+          p_idempotency_key: pendingIntent.idempotencyKey,
         });
 
         if (poError || !poData) throw poError;
         assertRpcResult<{ po_id: string }>(poData, 'save_purchase_order');
         importedIntentsRef.current.add(intentKey);
-        delete poSaveKeysRef.current[intentKey];
-        delete poNumbersRef.current[intentKey];
+        clearPendingBulkPOIntent(pendingIntentsRef.current, intentKey);
+        savePendingBulkPOIntents(sessionStorage, profile.id, pendingIntentsRef.current);
 
         successCount++;
+        newSuccessCount++;
       } catch (error) {
         Sentry.captureException(error instanceof Error ? error : new Error(String(error)), { extra: { context: 'Error importing PO' } });
         failedCount++;
       }
     }
 
-    setUploadResults({ success: successCount, failed: failedCount });
+    setUploadResults(failedCount === 0 ? { success: successCount, failed: 0 } : null);
     setUploading(false);
 
-    if (successCount > 0) {
-      toast('success', `Imported ${successCount} purchase order${successCount !== 1 ? 's' : ''}`);
+    if (newSuccessCount > 0) {
+      toast('success', `Imported ${newSuccessCount} purchase order${newSuccessCount !== 1 ? 's' : ''}`);
       onSuccess();
+    }
+    if (failedCount > 0) {
+      toast('error', `${failedCount} purchase order${failedCount !== 1 ? 's' : ''} failed. Review and retry; successful imports will be skipped.`);
     }
   };
 
@@ -441,8 +482,6 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
     setUploadResults(null);
     setProductSearchOpen(null);
     setProductQuery('');
-    poSaveKeysRef.current = {};
-    poNumbersRef.current = {};
     importedIntentsRef.current.clear();
     onClose();
   };
@@ -451,8 +490,6 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
     setFiles([]);
     setParsedPOs(null);
     setUploadResults(null);
-    poSaveKeysRef.current = {};
-    poNumbersRef.current = {};
     importedIntentsRef.current.clear();
   };
 

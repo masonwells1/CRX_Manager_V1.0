@@ -1551,6 +1551,9 @@ const IDEMPOTENCY_BODY_EXEMPT: Record<
   // directly non-executable implementation that owns the canonical replay
   // lookup/save. A dedicated test below pins that indirection and both grants.
   complete_delivery: 'delegated',
+  // The public wrapper authorizes active customer scope before delegating to
+  // the directly non-executable implementation that owns canonical replay.
+  save_invoice: 'delegated',
   //  - 'table-unique'   : idempotency is enforced NOT via the idempotency_keys table
   //                       but by a dedicated column + PARTIAL UNIQUE index on the RPC's
   //                       own table, with a catch-unique-violation replay. Used when the
@@ -1665,6 +1668,23 @@ describe('Idempotency BODY verification (reads migration SQL)', () => {
     expect(implementationSource).toContain("v_existing := check_idempotency(p_idempotency_key, 'complete_delivery')");
     expect(implementationSource).toContain("PERFORM save_idempotency(p_idempotency_key, 'complete_delivery', v_result)");
     expect(IDEMPOTENCY_BODY_EXEMPT.complete_delivery).toBe('delegated');
+  });
+
+  it('save_invoice authorizes customer scope before delegating to its idempotent implementation', () => {
+    const files = getMigrationFiles();
+    const wrapper = files.find(
+      ({ name }) => name === '20260716190000_harden_sales_financial_scope.sql'
+    )?.content;
+    const implementationSource = files.find(
+      ({ name }) => name === '20260716120112_gauntlet_money_workflows.sql'
+    )?.content;
+
+    expect(wrapper).toContain('RENAME TO _save_invoice_scoped_impl');
+    expect(wrapper).toMatch(/REVOKE ALL ON FUNCTION public\._save_invoice_scoped_impl[\s\S]*FROM PUBLIC, anon, authenticated, service_role/);
+    expect(wrapper).toMatch(/AND assigned_sales_rep = v_actor[\s\S]*RETURN public\._save_invoice_scoped_impl/);
+    expect(implementationSource).toContain("v_existing := check_idempotency(p_idempotency_key, 'save_invoice')");
+    expect(implementationSource).toContain("PERFORM save_idempotency(p_idempotency_key, 'save_invoice'");
+    expect(IDEMPOTENCY_BODY_EXEMPT.save_invoice).toBe('delegated');
   });
 
   it("every 'gap' exemption genuinely still lacks body idempotency (forces removal when fixed)", () => {

@@ -37,6 +37,13 @@ const deliveryScheduledDateRewriteGuard = source(
   'supabase/migrations/20260716183442_guard_delivery_scheduled_date_rewrites.sql',
 );
 const purchaseOrderCents = source('supabase/migrations/20260716183501_purchase_order_integer_cents.sql');
+const financialScope = source('supabase/migrations/20260716190000_harden_sales_financial_scope.sql');
+const deliveryAggregate = source(
+  'supabase/migrations/20260716191000_aggregate_delivery_stock_preflight.sql',
+);
+const deliveryPeriodPreflight = source(
+  'supabase/migrations/20260716202000_preflight_delivery_accounting_period.sql',
+);
 const completeDelivery = access.slice(0, access.indexOf('CREATE OR REPLACE FUNCTION public.void_delivery'));
 
 describe('money and inventory gauntlet fixes', () => {
@@ -172,9 +179,13 @@ describe('money and inventory gauntlet fixes', () => {
     const idempotencyHook = source('src/hooks/useIdempotencyKey.ts');
     const submitHandler = detail.slice(detail.indexOf('const handleSubmitPO'), detail.indexOf('const handleCancel'));
     expect(bulkImport).toContain("supabase.rpc('save_purchase_order'");
-    expect(bulkImport).toContain('poSaveKeysRef.current[intentKey]');
-    expect(bulkImport).toContain('poNumbersRef.current[intentKey]');
-    expect(bulkImport).toContain('delete poNumbersRef.current[intentKey]');
+    expect(bulkImport).toContain('source_index: po.source_index');
+    expect(bulkImport).toContain('ensurePendingBulkPOIntent(');
+    expect(bulkImport).toContain('pendingIntent.poNumber');
+    expect(bulkImport).toContain('p_idempotency_key: pendingIntent.idempotencyKey');
+    expect(bulkImport).toContain('clearPendingBulkPOIntent(pendingIntentsRef.current, intentKey)');
+    expect(bulkImport).toContain('savePendingBulkPOIntents(sessionStorage, profile.id');
+    expect(bulkImport).toContain('setUploadResults(failedCount === 0');
     expect(idempotency).toContain('const uuid = crypto.randomUUID()');
     expect(idempotencyHook).toContain('keyRef.current.scope !== scope');
     expect(bulkImport).not.toMatch(/\.from\(['"]purchase_orders['"]\)[\s\S]{0,250}\.(?:insert|update|delete|upsert)\(/);
@@ -249,6 +260,92 @@ describe('money and inventory gauntlet fixes', () => {
     ]) {
       expect(source(path)).toContain('unit_cost_cents: purchaseOrderUnitCostCents(');
     }
+  });
+
+  it('authorizes invoice saves and statements against active customer assignment before replay', () => {
+    const saveWrapper = financialScope.slice(
+      financialScope.indexOf('CREATE FUNCTION public.save_invoice('),
+      financialScope.indexOf('ALTER FUNCTION public.get_customer_statement('),
+    );
+    const statementWrapper = financialScope.slice(
+      financialScope.indexOf('CREATE FUNCTION public.get_customer_statement('),
+      financialScope.indexOf('DO $verify$'),
+    );
+
+    expect(financialScope).toContain('RENAME TO _save_invoice_scoped_impl');
+    expect(financialScope).toContain('RENAME TO _get_customer_statement_scoped_impl');
+    expect(financialScope).toContain(
+      'REVOKE ALL ON FUNCTION public._save_invoice_scoped_impl(jsonb, jsonb, text)',
+    );
+    expect(financialScope).toContain(
+      'REVOKE ALL ON FUNCTION public._get_customer_statement_scoped_impl(uuid, date, date)',
+    );
+    expect(saveWrapper).toContain('WHERE id = v_actor\n     AND is_active = true');
+    expect(saveWrapper).toContain('AND assigned_sales_rep = v_actor');
+    expect(saveWrapper).toContain("RAISE EXCEPTION 'CUSTOMER_SCOPE_DENIED'");
+    expect(saveWrapper.indexOf('AND assigned_sales_rep = v_actor')).toBeLessThan(
+      saveWrapper.indexOf('RETURN public._save_invoice_scoped_impl('),
+    );
+    expect(statementWrapper).toContain('AND assigned_sales_rep = v_actor');
+    expect(statementWrapper).toContain("ELSIF v_actor_role IS DISTINCT FROM 'admin' THEN");
+    expect(statementWrapper.indexOf('AND assigned_sales_rep = v_actor')).toBeLessThan(
+      statementWrapper.indexOf('RETURN QUERY'),
+    );
+  });
+
+  it('aggregates repeated delivery products before completion and marks immutable ledger rows at insert', () => {
+    const wrapper = deliveryAggregate.slice(
+      deliveryAggregate.indexOf('CREATE FUNCTION public.complete_delivery('),
+      deliveryAggregate.indexOf('REVOKE ALL ON FUNCTION public.complete_delivery('),
+    );
+
+    expect(deliveryAggregate).toContain('RENAME TO _complete_delivery_aggregate_impl');
+    expect(deliveryAggregate).toContain(
+      'CREATE OR REPLACE FUNCTION public._mark_delivery_aggregate_short_stock()',
+    );
+    expect(deliveryAggregate).toContain('BEFORE INSERT ON public.inventory_transactions');
+    expect(deliveryAggregate).toContain('NEW.requires_review := true');
+    expect(deliveryAggregate).not.toContain('UPDATE public.inventory_transactions');
+    expect(wrapper).toContain('COUNT(*) FILTER (WHERE el.effective_quantity > 0) > 1');
+    expect(wrapper).toContain(
+      'SUM(el.effective_quantity) > COALESCE(inv.quantity_available, 0)',
+    );
+    expect(wrapper).toContain(
+      'MAX(el.effective_quantity) <= COALESCE(inv.quantity_available, 0)',
+    );
+    expect(wrapper).toContain("'app.delivery_aggregate_short_product_ids'");
+    expect(wrapper).toContain("'delivery_short_stock'");
+    expect(wrapper).toContain("'stock_warning', true");
+    expect(wrapper).toContain('UPDATE public.idempotency_keys');
+    expect(wrapper.indexOf("RAISE EXCEPTION 'Not authorized to complete this delivery'")).toBeLessThan(
+      wrapper.indexOf('public.check_idempotency('),
+    );
+    expect(wrapper.indexOf("'app.delivery_aggregate_short_product_ids'")).toBeLessThan(
+      wrapper.indexOf('public._complete_delivery_aggregate_impl('),
+    );
+  });
+
+  it('rejects a closed delivery period before legacy completion side effects', () => {
+    const wrapper = deliveryPeriodPreflight.slice(
+      deliveryPeriodPreflight.indexOf('CREATE FUNCTION public.complete_delivery('),
+      deliveryPeriodPreflight.indexOf('REVOKE ALL ON FUNCTION public.complete_delivery('),
+    );
+
+    expect(deliveryPeriodPreflight).toContain(
+      'RENAME TO _complete_delivery_period_preflight_impl',
+    );
+    expect(deliveryPeriodPreflight).toContain(
+      'REVOKE ALL ON FUNCTION public._complete_delivery_period_preflight_impl(',
+    );
+    expect(wrapper.indexOf("RAISE EXCEPTION 'Not authorized to complete this delivery'")).toBeLessThan(
+      wrapper.indexOf('public.check_idempotency('),
+    );
+    expect(wrapper.indexOf('public.check_idempotency(')).toBeLessThan(
+      wrapper.indexOf('PERFORM public.check_period_open(v_effective_completion_date)'),
+    );
+    expect(wrapper.indexOf('PERFORM public.check_period_open(v_effective_completion_date)')).toBeLessThan(
+      wrapper.indexOf('RETURN public._complete_delivery_period_preflight_impl('),
+    );
   });
 
   it('keeps every revoked money and inventory table mutation behind an RPC', () => {
