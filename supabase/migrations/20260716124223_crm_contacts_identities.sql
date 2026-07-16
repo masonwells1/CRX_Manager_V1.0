@@ -275,6 +275,14 @@ BEGIN
   IF btrim(coalesce(NEW.contact_name, '')) = ''
      AND btrim(coalesce(NEW.phone, '')) = ''
      AND btrim(coalesce(NEW.email, '')) = '' THEN
+    -- All legacy contact info cleared: retire the auto-synced primary contact
+    -- rather than leave it active with stale data. (identity_present CHECK
+    -- forbids blanking the row in place; deactivation preserves history.)
+    UPDATE public.customer_contacts
+    SET is_primary = false,
+        is_active = false
+    WHERE customer_id = NEW.id
+      AND is_primary;
     RETURN NEW;
   END IF;
 
