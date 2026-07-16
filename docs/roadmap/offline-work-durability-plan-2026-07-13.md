@@ -1,8 +1,10 @@
 # Offline Work Durability Plan
 
-> **Status update — 2026-07-14:** Stage 1A is merged. The approved Stage 1B feature branch now integrates permanent receipts into the two real producers, retains local work until server-proven success, adds distinct cap/backlog handling, exposes a safe device panel, and adds audited non-destructive office resolution. All three migrations are live and verified; the browser rollout remains pending this branch merge. Signature/photo replay, notification/email replay, cross-tab lease, and general duplicate/conflict policy remain deferred.
+> **Status update — 2026-07-16:** SHIPPED THROUGH STAGE 1B. The browser rollout landed on `main` via PR #124 before the 2026-07-15 offline verification pass (`docs/audits/2026-07-15-offline-stage1b-rollout-verification.md`) — the "pending this branch merge" language below is historical. Current state and the still-deferred list live in `docs/manual/KNOWN_ISSUES.md` §5; the remaining action is the real-phone proof (roadmap ticket T5).
+>
+> **Status update — 2026-07-14 (historical):** Stage 1A is merged. The approved Stage 1B feature branch now integrates permanent receipts into the two real producers, retains local work until server-proven success, adds distinct cap/backlog handling, exposes a safe device panel, and adds audited non-destructive office resolution. All three migrations are live and verified; the browser rollout remains pending this branch merge. Signature/photo replay, notification/email replay, cross-tab lease, and general duplicate/conflict policy remain deferred.
 
-**Status:** STAGE 1B DATABASE LIVE + VERIFIED — browser and office UI pending feature-branch merge
+**Status:** SHIPPED (DB + browser + office resolution live as of 2026-07-15) — real-phone proof pending
 **Date:** 2026-07-13
 **Risk:** HIGH — delivery completion changes inventory and order/invoice state; job completion changes inventory and application records
 

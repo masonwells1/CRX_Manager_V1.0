@@ -1,6 +1,6 @@
 # CRX Manager — Current State
 
-**Last verified:** 2026-07-13 (snapshot — counts are as-of this date)
+**Last verified:** 2026-07-16 (snapshot — counts are as-of this date)
 **Update triggers:** refresh when a major feature ships or quarterly, whichever first.
 
 ## 1. Reality check
@@ -11,35 +11,41 @@ lifecycle, field mapping and per-acre billing, inventory reservations, credit
 memos, commissions, and a driver-facing Field Mode are all shipped and live.
 The business is **actively using it**, but operational data is still ramping up:
 the database was near-empty on 2026-06-13, and by 2026-07-12 it held roughly
-153 customers and 604 products. As of this snapshot (2026-07-13) those two
-numbers are unchanged, while transactional volume (fields, quotes, orders,
-invoices, jobs) is still small and early — see the table below. Treat this as
-a business still in data-entry / early-adoption phase, not a fully loaded book
-of business.
+153 customers and 604 products. As of this snapshot (2026-07-16) those two
+numbers are unchanged, but **deliveries are now flowing through the app**
+(106 recorded) while payments remain at zero — see the table below. Treat this
+as a business in early adoption: operational usage is real, the money loop
+(invoice → post → payment) has not completed a real cycle yet.
 
 ## 2. Live operational snapshot
 
 Read-only counts against the live database (project `rhyzpcqhnizqbxphqdkr`),
-captured 2026-07-13. These age immediately — re-run before relying on them.
+captured 2026-07-16. These age immediately — re-run before relying on them.
 
 | Table | Count | Notes |
 |---|---|---|
 | customers | 153 | |
 | products | 604 | |
-| fields | 4 | field mapping/per-acre billing shipped, but growers not yet loaded in bulk |
+| fields | 5 | field mapping/per-acre billing shipped, but growers not yet loaded in bulk |
 | quotes | 3 | |
-| orders | 61 | |
-| invoices | 8 | 6 draft / 2 posted |
+| orders | 63 | |
+| invoices | 10 | 8 draft / 2 posted |
 | payments | 0 | none recorded yet |
-| jobs | 104 | spray-job scheduling is the most-used surface so far |
-| deliveries | 0 | none recorded yet |
+| jobs | 4 | |
+| deliveries | 106 | deliveries are the most-used transactional surface |
 | blend_tickets | 0 | none recorded yet |
+| negative inventory | 18 rows | `inventory.quantity_available < 0` — owner re-base pending |
 | backup_snapshots | 1 run (120 table-rows) | weekly in-DB backup automation; first run captured 120 tables |
 
-Note: `payments`, `deliveries`, and `blend_tickets` reading zero does not mean
-those features are broken — it means the business hasn't routed real
-transactions through those paths yet. Verify against code/tests, not against
-these counts, before concluding a feature is unused or unbuilt.
+> **Correction:** the 2026-07-13 snapshot reported jobs = 104 and deliveries = 0;
+> the 2026-07-16 live read shows jobs = 4 and deliveries = 106. The two columns
+> appear to have been transposed in the earlier snapshot (or usage shifted
+> job→delivery in between) — trust the fresher numbers.
+
+Note: `payments` and `blend_tickets` reading zero does not mean those features
+are broken — it means the business hasn't routed real transactions through
+those paths yet. Verify against code/tests, not against these counts, before
+concluding a feature is unused or unbuilt.
 
 ## 3. Shipped feature map
 

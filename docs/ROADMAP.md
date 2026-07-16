@@ -1,8 +1,10 @@
 # CRX Manager — Roadmap
 
-> **Last updated:** 2026-07-13 | **Owner:** Mason Wells
+> **Last updated:** 2026-07-16 | **Owner:** Mason Wells
 >
-> _Q1 brainstorm docs were moved to `docs/archive/2026-Q1-brainstorms/` and the links below repointed (2026-05-31). Feature statuses for Priorities 1–6 reflect the March planning cycle; for current system state see `CLAUDE.md`._
+> ⭐ **Current direction lives in `docs/roadmap/2026-07-15-roadmap-and-execution-plan.md`** (3–6 month plan + engineering ticket board), and the combined open-items list lives in root `TODO.md`. This file remains the item-by-item historical backlog (strategic IDs A1–F3, portal G1–G15, March priorities); its done/TODO statuses were spot-verified against code on 2026-07-16.
+>
+> _Q1 brainstorm docs were moved to `docs/archive/2026-Q1-brainstorms/` and the links below repointed (2026-05-31). Feature statuses for Priorities 1–6 reflect the March planning cycle; for current system state see `docs/manual/CURRENT_STATE.md`._
 
 ---
 
