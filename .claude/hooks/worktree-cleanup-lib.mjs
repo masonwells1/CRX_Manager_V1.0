@@ -14,13 +14,16 @@
 
 export const PROTECTED_BRANCHES = ["main", "master"];
 
-// A worktree touched (git index/HEAD/reflog or .claude/session-state) within this
-// window is treated as a LIVE session and never auto-removed — even if it looks
-// merged+clean+unlocked (2026-07-16 scaffolding review: a sibling session's
-// SessionStart sweep deleted an actively-running, unlocked, merged-clean worktree
-// because only the CURRENT session's own path was protected). Recoverable either
-// way, but losing an in-use checkout mid-session is disruptive; locking is the
-// belt, this heartbeat is the suspenders for sessions that didn't lock.
+// A worktree touched within this window is treated as a LIVE session and never
+// auto-removed — even if it looks merged+clean+unlocked (2026-07-16 scaffolding
+// review: a sibling session's SessionStart sweep deleted an actively-running,
+// unlocked, merged-clean worktree because only the CURRENT session's own path was
+// protected). "Touched" = the newest mtime of the worktree's git index/HEAD/reflog
+// OR its .claude/session-state — including the SESSION-HEARTBEAT marker that
+// session-heartbeat.mjs stamps on EVERY tool call, so even a long read-only
+// session (which makes no git writes) stays live inside the window. Recoverable
+// either way, but losing an in-use checkout mid-session is disruptive; locking is
+// the belt, this heartbeat is the suspenders for sessions that didn't lock.
 export const ACTIVE_WINDOW_MS = 3 * 60 * 60 * 1000; // 3 hours
 
 // A worktree is treated as harness-managed (safe to auto-remove) only when it

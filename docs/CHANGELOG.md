@@ -8,6 +8,8 @@ All significant development milestones, in reverse chronological order.
 
 The SessionStart worktree-cleanup hook protected only the CURRENT session's own worktree, so a **sibling** session's clean, merged, unlocked worktree could be swept while that session was still live — which happened during this review (an active read-only checkout was deleted mid-session). Fix: the classifier now also KEEPS any worktree touched within a 3-hour activity window (`recently-active`), computed from the newest mtime of its git index / HEAD / reflog / `.claude/session-state`. Locking remains the belt; this heartbeat is the suspenders for sessions that didn't lock. Recoverable either way (every deletion still prints a recovery SHA), and a genuinely idle-past-3h finished worktree is still cleaned. `worktree-cleanup-lib.mjs` + runner updated; tests prove both directions (recent → keep, idle-past-window → remove, missing signal → behaves as before). 31 assertions pass.
 
+**Follow-up (Codex review):** git index/HEAD/reflog timestamps aren't refreshed during a long *read-only* session (no commits/checkouts), so those alone could still let an active-but-quiet session's worktree age out. New `session-heartbeat.mjs` hook (wired to PostToolUse `*` + SessionStart) stamps `.claude/session-state/SESSION-HEARTBEAT` on every tool call — the cleanup's mtime scan already reads it, so any session doing *anything* (including reads) stays live inside the window. Fail-open and silent; the marker is gitignored.
+
 ---
 
 ## 2026-07-16 — Scaffolding review Wave 3: hard doc-freshness gates + verified manual corrections
