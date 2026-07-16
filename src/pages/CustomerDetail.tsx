@@ -636,7 +636,8 @@ export default function CustomerDetail() {
 
       {(tab === 'info' || isNew) && (
         <div className="space-y-4">
-          {!isNew && id && <CustomerPrepCard customerId={id} />}
+          {/* key remounts on customer switch — in-flight loads/mutations from the previous customer must never write into this one's view (Sol 2.G r2) */}
+          {!isNew && id && <CustomerPrepCard key={id} customerId={id} />}
           <Card>
             <CardHeader title="Contact" accent="Information" />
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -870,8 +871,9 @@ export default function CustomerDetail() {
         <CustomerContacts customerId={id} performedBy={profile.id} />
       )}
 
+      {/* key remounts on customer switch — see the CustomerPrepCard note above */}
       {tab === 'knowledge' && !isNew && id && profile && (
-        <CustomerFacts customerId={id} userId={profile.id} />
+        <CustomerFacts key={id} customerId={id} userId={profile.id} />
       )}
 
       {tab === 'timeline' && !isNew && (
