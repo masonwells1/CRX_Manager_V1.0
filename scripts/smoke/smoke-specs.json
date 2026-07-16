@@ -16,6 +16,11 @@
       "description": "Final money/inventory audit chain: voided orders disappear from detail, summary, gross-sales, and finance-dashboard revenue; inactive sales/admin profiles are rejected; only an active admin can use the PO over-receive flag, NULL cannot bypass the quantity ceiling, and a real admin 11-against-10 receipt succeeds; anonymous gross-sales execution and authenticated direct payment-table writes are absent. Self-contained fixtures and terminal rollback.",
       "covers": ["get_sales_detail_report", "get_sales_summary_report", "get_gross_sales_report", "financial_dashboard_summary", "receive_po_items", "payments"]
     },
+    "save_purchase_order": {
+      "chain": "smoke-save-purchase-order-status-lock.sql",
+      "description": "Purchase-order lifecycle correction: an active sales rep cannot create a submitted PO through save_purchase_order, creates and idempotently replays a draft, edits it without changing status, cannot transition status through ordinary save, submits through the dedicated idempotent submit_purchase_order RPC, and cannot downgrade the submitted PO through save. An active non-office user is denied. Self-contained fixture and terminal rollback.",
+      "covers": ["save_purchase_order", "submit_purchase_order"]
+    },
     "stage_offline_action": {
       "chain": "smoke-offline-action-receipts.sql",
       "description": "Permanent offline receipt chain: complete_delivery and complete_job stage -> immutable canonical replay -> canonical process -> durable sanitized status -> replay without duplicate inventory/application work; actor-bound processing; owner and office status visibility; missing-target and unauthorized-action retention; deterministic state-conflict review; sanitized office queue; audited, idempotent manual resolution; RPC-only writes; grants. Self-contained fixtures and terminal rollback.",

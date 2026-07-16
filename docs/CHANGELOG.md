@@ -4,6 +4,16 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-16 — Graphify and money/inventory gauntlet release
+
+The Graphify overnight architecture audit and the completed money/inventory gauntlet remediation were reconciled into one release branch. The three reviewed gauntlet migrations were applied live as `20260716120104`, `20260716120112`, and `20260716120120`; they harden delivery authorization and business dates, make purchase-order/receiving/AP/prepayment writes RPC-owned, preserve received PO evidence, correct statement/AP/finance-charge/prepayment money behavior, and repair inventory position and ledger presentation.
+
+An independent release review found one remaining PO lifecycle bypass: ordinary `save_purchase_order` calls could request a received/submitted status. The corrective migration is live as `20260716144353_lock_purchase_order_initial_status`; new POs must start as drafts, ordinary edits preserve the current status, and submission remains owned by `submit_purchase_order`. The New Purchase Order screen still provides one-click Submit by saving the draft first, then submitting with a separate retry key. Lost save responses reuse the same PO number and key; lost submit responses replay submission without resaving.
+
+Post-apply proof used a real active sales rep and ended in `SMOKE_PASS_ROLLBACK`: direct submitted creation and save-based status changes were rejected, draft save/edit and both idempotent replays succeeded, dedicated submission succeeded, and a non-office user was denied. The live function has one overload, fixed `public, pg_temp` search path, no anonymous execution, and retained authenticated/service-role execution behind strict actor and active-role gates. All 17 database invariant sweeps returned zero unallowlisted findings, the global `plpgsql_check` predicate returned zero errors, the schema registry was refreshed to live high-water `20260716144353`, and the full frontend suite passed 3,512 tests plus typecheck, lint, production build, docs, dependency, workflow, and correction-guard checks.
+
+---
+
 ## 2026-07-15 — Local Graphify architecture workflow
 
 CRX now maintains a local, gitignored Graphify architecture map for agents and reviewers. The scoped corpus covers the operating frontend, migrations, Edge Functions, and selected scripts while excluding historical audit/archive material. A dedicated `npm run graph:refresh` command rebuilds it without sending code to a model; the existing pre-push gate runs it after typecheck/build only when architecture-relevant files changed. A shared Claude/Codex Graphify skill uses focused `affected`, `path`, and `query` traversals to choose the smallest source-review scope before refactors, workflow/migration work, and PR review. The canonical `AGENTS.md` startup contract now tells every agent to invoke that workflow automatically for architecture, multi-file, workflow/migration, debugging, audit, and PR-impact work, so Mason does not have to remember to request it. Graph edges are navigation evidence only — current source and read-only live database proof remain authoritative.
