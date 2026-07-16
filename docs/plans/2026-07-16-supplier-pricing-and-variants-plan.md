@@ -1,6 +1,6 @@
 # Supplier Pricing, Price History & Product Variants — Plan
 
-**Date:** 2026-07-16
+**Date:** 2026-07-16 (rev 2, same day — pre-season replacement-cost + pricing-worksheet refinements from Mason)
 **Status:** PROPOSED — awaiting Mason's approval of the architecture decision
 **Branch:** `claude/supplier-pricing-strategy-9c6129` (planning only, no code in this session)
 **Advisors:** Claude (grounding + synthesis) with Codex gpt-5.6 ("Sol 5.6") architecture review
@@ -13,6 +13,8 @@
 2. **Price history** — look at any product and see its historical price over time, per supplier.
 3. **PDF price sheets** — suppliers send large multi-page PDF price lists monthly; updating pricing from them needs to be easy and safe.
 4. **Return-policy pricing** — same chemical is priced differently for "full tote, no returns" vs "custom-filled tote, returns allowed." Today this is handled with duplicate product rows named e.g. `Atrazine 4L - NO RETURN, FULL TOTE - 265G`. Needs a scalable model.
+5. **Pre-season reality (added rev 2)** — **~80% of sales happen pre-season, BEFORE the supplier order exists.** At quote time there is often no owned inventory and no PO cost — the only meaningful cost is **replacement cost** (what a supplier would charge today). In-season, the same product may instead be priced off what's actually sitting in inventory from POs. Both must be visible side by side and both must be tracked over time.
+6. **Owner control (added rev 2)** — Mason wants sell-price updates to run through a workflow HE drives: download a spreadsheet, edit prices in Excel where he can see everything and get it right, upload it back. AI may help fill the market-evidence side (current supplier prices), not the decision side.
 
 ## 2. Current state (verified 2026-07-16 against live DB + code)
 
@@ -29,9 +31,13 @@ There are **three different business facts** currently forced into one `products
 
 | Fact | Meaning | Where it should live |
 |---|---|---|
-| **Supplier price** | "Supplier X offered this item at this cost on this date" | NEW append-only `supplier_price_observations` |
-| **Selected cost basis** | "The cost CRX has deliberately chosen as the input to sell pricing" | `products.current_cost` (Phase 1) → `product_cost_basis` (Phase 2) |
-| **Actual paid cost** | "What CRX actually paid on a received PO line" | `purchase_order_items` (already exists) |
+| **Replacement cost** (supplier price) | "Supplier X offered this item at this cost on this date" → the current best/preferred offer per product is its **replacement cost today**. This is the pricing input for the ~80% of sales made pre-season, before anything is bought. | NEW append-only `supplier_price_observations`; replacement cost per product is DERIVED from the latest comparable observations (view or cached column), never hand-maintained |
+| **Selected cost basis** | "The cost CRX has deliberately chosen as the input to sell pricing" — pre-season this will usually be set FROM replacement cost; in-season it may follow actual inventory cost. Always an explicit owner decision. | `products.current_cost` (Phase 1) → `product_cost_basis` (Phase 2) |
+| **Actual paid / inventory cost** | "What CRX actually paid on a received PO line" → what the on-hand inventory really cost | `purchase_order_items` (already exists); surface last-paid + weighted-average-on-hand as derived views |
+
+**Display rule:** wherever cost appears (product page, pricing worksheet, margin displays), show **both** replacement cost and actual/inventory cost next to the selected basis, each with its as-of date — the pre-season vs in-season difference is then visible instead of implicit.
+
+**Existing-trigger caution:** the live DB has `trigger_calculate_prices_from_margin` — changing `current_cost` already auto-recomputes tier prices from margins. So "update cost basis" IS a sell-price change today. Any workflow that writes `current_cost` must preview the resulting tier prices before saving (the pricing worksheet does this, §6b).
 
 **Rules that follow:**
 - An imported supplier price sheet **never automatically changes sell prices**. It creates observations. Changing the cost basis (and therefore tier prices) is a separate, deliberate, previewed action.
@@ -71,6 +77,23 @@ One row per uploaded document (vendor_id, document_date, parser_version, status:
 4. **Mandatory review screen** before anything becomes an observation: supplier + sheet date; every row with page ref + confidence; proposed product match; current cost vs newest vs cheapest-comparable; new/changed/unchanged/cannot-compare status; only high-confidence rows preselected; approval summary states plainly *"You are adding N supplier observations. You are changing ZERO sell prices."*
 5. Separate, later action: "use these approved prices as cost basis → preview resulting tier-price changes → confirm." The two approvals are never combined.
 
+## 6b. The pricing worksheet — owner-controlled round-trip (Phase 1 centerpiece)
+
+Mason's preferred control surface is a spreadsheet, so the primary sell-price workflow is **export → edit in Excel → import → diff → approve**, not an in-app editor:
+
+**Export** (one click, one row per product; variant rows grouped by family once Phase 3 lands):
+- Identity: product, SKU, category, pack/unit
+- Market evidence (read-only, AI/import-fed): latest price + date **per supplier** (2–3 columns), best comparable = **replacement cost today**
+- Ownership evidence (read-only): on-hand qty, weighted-avg cost of on-hand, last-paid price + date (from POs)
+- Current state (read-only): current cost basis, tier 1/2/3 margins + prices
+- **Editable columns**: new cost basis, new tier margins/prices (+ optional note)
+
+**Import**: upload the edited file → system diffs ONLY the editable columns against current values → preview screen shows each change including the tier prices that will result (per the margin trigger) → Mason approves → writes happen with `cost_history` rows noting "pricing worksheet YYYY-MM-DD". Unchanged rows are untouched; malformed cells are rejected per-row, never silently guessed.
+
+**Division of labor**: AI (PDF import pipeline, §6) keeps the *market-evidence* columns fresh; Mason alone edits the *decision* columns. The export is always regenerable, so a stale downloaded copy can't corrupt anything — the diff is computed against live values at upload time, and any row whose read-only baseline shifted since export is flagged rather than blindly applied.
+
+This also de-risks Phase 1: Excel is the UI, so the build is export + staged-import + diff-preview — no big new in-app pricing screens needed up front.
+
 ## 7. Variants / return-policy pricing (least-disruptive path)
 
 **Do NOT merge the 163 existing variant rows** — live inventory/PO/delivery/invoice references make that high-risk and unnecessary. **Do NOT build a separate variants+inventory subsystem.**
@@ -84,13 +107,14 @@ Instead:
 
 ## 8. Phases
 
-### Phase 1 — Supplier-price intelligence + safe imports (highest value, zero interference with live quoting)
+### Phase 1 — Supplier-price intelligence + the pricing worksheet
 - Vendor dedup + `vendor_aliases`
-- `product_supplier_links`, staged imports, `supplier_price_observations`
-- Hybrid OCR+LLM extraction with the review/approve screen
-- Supplier comparison view + product price-timeline view
+- `product_supplier_links`, staged imports, `supplier_price_observations`; derived replacement-cost + inventory-cost views
+- Hybrid OCR+LLM extraction feeding staged observations (review before approve)
+- **Pricing worksheet round-trip (§6b)** — export with per-supplier replacement costs + inventory cost, Mason edits, diff-preview (incl. margin-trigger tier-price effects), approve, history written
+- Product page: show replacement cost + inventory cost alongside current cost basis
 - Backfill matchable PO actual-cost facts
-- **Touches nothing in** `current_cost`, tier pricing, quotes, inventory
+- Supplier price sheets never write sell prices directly; only the worksheet approval path (and the existing product page) does
 
 ### Phase 2 — Governed cost basis + bulletproof audit
 - `product_cost_basis` + the products price-change trigger
@@ -107,7 +131,7 @@ Automated vendor selection; automatic sell-price changes from imports; PO `vendo
 
 ## 9. Open owner decisions
 
-1. **Approve this architecture** (observation layer + never-auto-change-sell-prices). Recommended: yes.
+1. **Approve this architecture** (observation layer + never-auto-change-sell-prices; rev 2 adds pre-season replacement cost as the headline derived number and the pricing worksheet as the owner-controlled sell-price surface). Recommended: yes.
 2. **Anthropic API key** — the LLM extraction step needs it; the same key unblocks the parked vendor-bill pilot (already TODO owner-action #6).
 3. **Vendor merges** — confirm "The Anderson's"="The Andersons" and "Van Deist"="Van Diest" (already an open TODO item).
 4. **Priority** — where Phase 1 slots against the current roadmap (CRM Phase 2, etc.).
