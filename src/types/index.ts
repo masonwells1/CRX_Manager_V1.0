@@ -231,6 +231,82 @@ export interface CustomerAddress {
   created_at: string;
 }
 
+export type PreferredContactMethod = 'phone' | 'text' | 'email';
+
+export interface CustomerContact {
+  id: string;
+  customer_id: string;
+  name: string | null;
+  role: string | null;
+  phone_display: string | null;
+  phone_e164: string | null;
+  email: string | null;
+  preferred_contact_method: PreferredContactMethod | null;
+  is_primary: boolean;
+  can_place_orders: boolean;
+  is_decision_maker: boolean;
+  is_billing_contact: boolean;
+  is_active: boolean;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ExternalIdentity {
+  id: string;
+  customer_id: string;
+  contact_id: string | null;
+  provider: string;
+  external_id: string;
+  verified_at: string | null;
+  verified_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type InteractionType = 'call' | 'visit' | 'meeting' | 'text' | 'email' | 'voicemail';
+export type InteractionDirection = 'inbound' | 'outbound';
+export type InteractionSource = 'rep' | 'ai_receptionist' | 'system' | 'web_store';
+export type InteractionOutcome = 'connected' | 'left_voicemail' | 'no_answer' | 'busy' | 'follow_up_needed' | 'order_placed' | 'resolved' | 'other';
+export type RecordingConsentStatus = 'granted' | 'announced' | 'declined' | 'not_applicable';
+
+export interface CustomerInteraction {
+  id: string;
+  customer_id: string;
+  contact_id: string | null;
+  interaction_type: InteractionType;
+  direction: InteractionDirection | null;
+  source: InteractionSource;
+  occurred_at: string;
+  duration_seconds: number | null;
+  outcome: InteractionOutcome | null;
+  summary: string | null;
+  owner_user_id: string | null;
+  created_by: string | null;
+  provider: string | null;
+  external_call_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface InteractionTranscript {
+  id: string;
+  interaction_id: string;
+  transcript: string | null;
+  ai_summary: string | null;
+  extraction: Record<string, unknown> | null;
+  recording_path: string | null;
+  recording_consent_status: RecordingConsentStatus | null;
+  recording_consent_at: string | null;
+  recording_consent_method: string | null;
+  recording_disclosed_at: string | null;
+  ai_disclosed_at: string | null;
+  disclosure_version: string | null;
+  retention_expires_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export type QuoteStatus = 'draft' | 'sent' | 'revised' | 'accepted' | 'declined' | 'expired' | 'cancelled' | 'closed_by_application' | 'closed_short';
 
 export interface Quote {
