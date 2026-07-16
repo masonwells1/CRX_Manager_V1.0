@@ -43,6 +43,9 @@ function normalizeIdentityText(value: string): string {
  * excluded: those can change without changing the vendor document itself.
  */
 export function buildBulkPOIntentKey(document: BulkPOIntentDocument): string | null {
+  const invoiceNumber = normalizeIdentityText(document.invoiceNumber);
+  if (!invoiceNumber) return null;
+
   const items = document.items
     .filter((item) => item.productId && item.quantityOrdered > 0)
     .map((item) => ({
@@ -62,10 +65,27 @@ export function buildBulkPOIntentKey(document: BulkPOIntentDocument): string | n
 
   return JSON.stringify({
     vendor_name: normalizeIdentityText(document.vendorName),
-    invoice_number: normalizeIdentityText(document.invoiceNumber),
+    invoice_number: invoiceNumber,
     invoice_date: document.invoiceDate,
     items,
   });
+}
+
+/**
+ * Cross-tab/device idempotency key for one reviewed vendor document. Web
+ * Crypto provides a collision-resistant digest without putting the full PO
+ * contents into the database's unique idempotency index.
+ */
+export async function buildBulkPOIdempotencyKey(
+  profileId: string,
+  intentKey: string,
+): Promise<string> {
+  const digest = await globalThis.crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(`${profileId}\u0000${intentKey}`),
+  );
+  const hex = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
+  return `save_purchase_order:${profileId}:bulk:${hex}`;
 }
 
 function storageKey(profileId: string): string {

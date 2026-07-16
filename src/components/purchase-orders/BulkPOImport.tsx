@@ -8,7 +8,6 @@ import { useAuth } from '../../contexts/AuthContext';
 import { supabase, assertRpcResult } from '../../lib/db';
 import { processDocumentWithOCR, isOCRSupported } from '../../lib/documentOCR';
 import { localToday } from '../../lib/dateUtils';
-import { generateIdempotencyKey } from '../../lib/idempotency';
 import { Sentry } from '../../lib/sentry';
 import { formatUSD as fmt } from '../../lib/money';
 import type { Product } from '../../types';
@@ -19,6 +18,7 @@ import {
 } from '../../lib/purchaseOrderMoney';
 import {
   buildBulkPOIntentKey,
+  buildBulkPOIdempotencyKey,
   ensurePendingBulkPOIntent,
   isImportedBulkPOIntent,
   loadPendingBulkPOIntents,
@@ -393,6 +393,7 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
 
         const intentKey = buildParsedPOIntentKey(po);
         if (!intentKey) {
+          toast('error', `${po.source_file}: enter the vendor invoice number before importing.`);
           failedCount++;
           continue;
         }
@@ -401,13 +402,11 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
           skippedCount++;
           continue;
         }
+        const deterministicIdempotencyKey = await buildBulkPOIdempotencyKey(profile.id, intentKey);
         const pendingIntent = ensurePendingBulkPOIntent(
           pendingIntentsRef.current,
           intentKey,
-          () => generateIdempotencyKey(
-            'save_purchase_order',
-            `${profile.id}:bulk:${po.source_file}:${po.source_index}`,
-          ),
+          () => deterministicIdempotencyKey,
         );
         savePendingBulkPOIntents(localStorage, profile.id, pendingIntentsRef.current);
 
@@ -450,6 +449,7 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
             submitted_date: null,
             expected_delivery_date: null,
             notes: noteParts.join('. '),
+            bulk_import_intent_key: deterministicIdempotencyKey,
           },
           p_items: itemsPayload,
           p_performed_by: profile.id,

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   buildBulkPOIntentKey,
+  buildBulkPOIdempotencyKey,
   ensurePendingBulkPOIntent,
   isImportedBulkPOIntent,
   loadPendingBulkPOIntents,
@@ -45,6 +46,26 @@ describe('bulk PO import retry state', () => {
 
     expect(new Set(reorderedSelection)).toEqual(new Set(firstSelection));
     expect(firstSelection.every(Boolean)).toBe(true);
+  });
+
+  it('requires a vendor invoice number so two legitimate documents cannot collide', () => {
+    expect(buildBulkPOIntentKey({
+      vendorName: 'Vendor A',
+      invoiceNumber: '   ',
+      invoiceDate: '2026-07-16',
+      items: [
+        { productId: 'product-a', quantityOrdered: 1, unitCostCents: 300, unitSize: 'EA', notes: '' },
+      ],
+    })).toBeNull();
+  });
+
+  it('derives the same cross-tab idempotency key for the same reviewed intent', async () => {
+    const first = await buildBulkPOIdempotencyKey('sales-1', 'stable-intent');
+    const second = await buildBulkPOIdempotencyKey('sales-1', 'stable-intent');
+
+    expect(first).toBe(second);
+    expect(first).toMatch(/^save_purchase_order:sales-1:bulk:[a-f0-9]{64}$/);
+    expect(await buildBulkPOIdempotencyKey('sales-2', 'stable-intent')).not.toBe(first);
   });
 
   it('reuses pending work and persists successful imports across close/reopen', () => {

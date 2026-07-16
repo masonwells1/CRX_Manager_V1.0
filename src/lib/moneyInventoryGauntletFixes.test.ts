@@ -50,6 +50,9 @@ const deliveryAggregate = source(
 const deliveryPeriodPreflight = source(
   'supabase/migrations/20260716202000_preflight_delivery_accounting_period.sql',
 );
+const adversarialCloseout = source(
+  'supabase/migrations/20260716224000_close_adversarial_money_inventory_gaps.sql',
+);
 const completeDelivery = access.slice(0, access.indexOf('CREATE OR REPLACE FUNCTION public.void_delivery'));
 
 describe('money and inventory gauntlet fixes', () => {
@@ -285,6 +288,40 @@ describe('money and inventory gauntlet fixes', () => {
     );
   });
 
+  it('serializes PO hydration, validates line identity, and persists one bulk-import claim', () => {
+    const saveWrapper = adversarialCloseout.slice(
+      adversarialCloseout.indexOf('CREATE OR REPLACE FUNCTION public.save_purchase_order('),
+      adversarialCloseout.indexOf('CREATE OR REPLACE FUNCTION public.save_invoice('),
+    );
+    const lockPosition = saveWrapper.indexOf(
+      'FROM public.purchase_orders\n     WHERE id = p_po_id\n     FOR UPDATE',
+    );
+    const hydratePosition = saveWrapper.indexOf(
+      "jsonb_build_object(\n              'unit_cost_cents'",
+    );
+
+    expect(adversarialCloseout).toContain('CREATE TABLE public.purchase_order_import_intents');
+    expect(adversarialCloseout).toContain(
+      'ALTER TABLE public.purchase_order_import_intents ENABLE ROW LEVEL SECURITY',
+    );
+    expect(adversarialCloseout).toContain('purchase_order_import_intents_no_direct_access');
+    expect(adversarialCloseout).toContain(
+      'REVOKE ALL ON TABLE public.purchase_order_import_intents',
+    );
+    expect(saveWrapper).toContain("p_po_payload->>'bulk_import_intent_key'");
+    expect(saveWrapper).toContain(
+      "hashtextextended('bulk_po:' || v_actor::text || ':' || v_bulk_intent_key, 0)",
+    );
+    expect(saveWrapper).toContain("'status', 'already_imported'");
+    expect(saveWrapper).toContain('PO_ITEM_ID_DUPLICATE');
+    expect(saveWrapper).toContain('PO_ITEM_ID_NOT_IN_PURCHASE_ORDER');
+    expect(saveWrapper).toContain(
+      'SUM(round(poi.quantity_ordered * poi.unit_cost_cents)::bigint)',
+    );
+    expect(lockPosition).toBeGreaterThan(-1);
+    expect(hydratePosition).toBeGreaterThan(lockPosition);
+  });
+
   it('authorizes invoice saves and statements against active customer assignment before replay', () => {
     const saveWrapper = invoiceExistingCustomerScope.slice(
       invoiceExistingCustomerScope.indexOf('CREATE OR REPLACE FUNCTION public.save_invoice('),
@@ -316,6 +353,45 @@ describe('money and inventory gauntlet fixes', () => {
     expect(statementWrapper).toContain("ELSIF v_actor_role IS DISTINCT FROM 'admin' THEN");
     expect(statementWrapper.indexOf('AND assigned_sales_rep = v_actor')).toBeLessThan(
       statementWrapper.indexOf('RETURN QUERY'),
+    );
+  });
+
+  it('binds invoice save and post replays to the actual customer before delegation', () => {
+    const saveWrapper = adversarialCloseout.slice(
+      adversarialCloseout.indexOf('CREATE OR REPLACE FUNCTION public.save_invoice('),
+      adversarialCloseout.indexOf('ALTER FUNCTION public.post_invoice(uuid, text)'),
+    );
+    const postWrapper = adversarialCloseout.slice(
+      adversarialCloseout.indexOf('CREATE FUNCTION public.post_invoice('),
+      adversarialCloseout.indexOf('ALTER FUNCTION public.post_invoice_group('),
+    );
+    const groupWrapper = adversarialCloseout.slice(
+      adversarialCloseout.indexOf('CREATE FUNCTION public.post_invoice_group('),
+      adversarialCloseout.indexOf('DO $verify$'),
+    );
+
+    expect(saveWrapper).toContain('v_invoice_id IS DISTINCT FROM v_cached_invoice_id');
+    expect(saveWrapper).toContain(
+      'v_requested_customer_id IS DISTINCT FROM v_cached_customer_id',
+    );
+    expect(saveWrapper).toContain('AND assigned_sales_rep = v_actor');
+    expect(saveWrapper.indexOf("RAISE EXCEPTION 'CUSTOMER_SCOPE_DENIED'")).toBeLessThan(
+      saveWrapper.indexOf('RETURN v_cached_invoice_id'),
+    );
+    expect(adversarialCloseout).toContain('RENAME TO _post_invoice_customer_scope_impl');
+    expect(adversarialCloseout).toContain(
+      'RENAME TO _post_invoice_group_customer_scope_impl',
+    );
+    expect(postWrapper).toContain('v_cached_invoice_id IS DISTINCT FROM p_invoice_id');
+    expect(postWrapper).toContain('AND assigned_sales_rep = v_actor');
+    expect(postWrapper.indexOf("RAISE EXCEPTION 'CUSTOMER_SCOPE_DENIED'")).toBeLessThan(
+      postWrapper.indexOf('PERFORM public._post_invoice_customer_scope_impl('),
+    );
+    expect(groupWrapper).toContain(
+      'customer_row.assigned_sales_rep IS DISTINCT FROM v_actor',
+    );
+    expect(groupWrapper.indexOf("RAISE EXCEPTION 'CUSTOMER_SCOPE_DENIED'")).toBeLessThan(
+      groupWrapper.indexOf('RETURN public._post_invoice_group_customer_scope_impl('),
     );
   });
 
