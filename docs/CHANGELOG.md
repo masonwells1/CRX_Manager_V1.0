@@ -4,6 +4,15 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-16 — Scaffolding review Wave 4c: stale-anchor doc corrections
+
+Fixed the stale claims the review flagged in two high-read docs (each verified against current reality this session):
+
+- **`docs/workflows/SAFE_DEVELOPMENT_RULES.md`** (read at the start of every session): "read CLAUDE.md for the hard red lines" → **AGENTS.md** (CLAUDE.md is routing-only); "there are 57 pages" → point at `pages-routes.md` (actual count is 76, and hardcoding it here drifts — this file isn't count-checked); the "wait for approval before starting" rule now carries the AGENTS.md tiny-fix carve-out; the session-end "remind Mason to commit to Git" → the branch → PR → merge landing flow (agents land reviewed code; direct pushes to main are impossible).
+- **`docs/reference/gotchas.md` "Environment Quirks"**: all three rows were stale — `gh` and `tail` are both available and the repo path was wrong (`C:\CRX_Manager`, not `C:\CRX_Manager_V1.0`). Replaced with accurate current facts.
+
+This closes the review's actionable doc-drift items. Remaining review notes (fleet-status "active" cosmetics, untracking the personal `settings.local.json`) are low-value or owner-call.
+
 ## 2026-07-16 — Scaffolding review Wave 4b: hook-manifest parity guard + CRLF-insensitive adapter check
 
 Two sync-adapter findings from the 2026-07-16 review, both HARD-scaffolding fixes:

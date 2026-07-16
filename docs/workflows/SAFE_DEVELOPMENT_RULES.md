@@ -9,18 +9,18 @@ These are mandatory safety rules for anyone (human or AI) making changes to CRX 
 ## Before Making ANY Change
 
 ### 1. Read the context first
-- Read `CLAUDE.md` to understand the project architecture and hard red lines
+- Read `AGENTS.md` — the canonical contract (hard rules, approval gates, project facts). The hard red lines live there, not in `CLAUDE.md` (which is Claude-only routing).
 - Read the relevant workflow doc in `docs/workflows/` for the area you're working on
 - Read the source files you plan to change
 
 ### 2. Research before coding
 - Search the codebase for existing patterns before writing new code
-- Check if similar functionality already exists (there are 57 pages — don't recreate one)
+- Check if similar functionality already exists (there are many pages — see `docs/reference/pages-routes.md` for the current list — don't recreate one)
 - Look at how the existing code handles the same type of operation
 
 ### 3. Plan before building
 - Write a clear plan listing every file you'll create or modify
-- Show the plan to Mason and wait for approval before starting
+- For multi-file or risky work (data, money, security, production, migrations), show the plan to Mason and wait for approval before starting. **Tiny, obvious, reversible fixes may proceed directly** (per `AGENTS.md`) — don't make a ceremony of a typo fix.
 - Break large changes into small, testable steps
 
 ---
@@ -192,4 +192,4 @@ Before finishing a session:
 - [ ] Activity logging added for new user actions
 - [ ] No `@ts-ignore`, `any`, or `console.log` left in code
 - [ ] Migration safety verified (no function overloads, CHECK constraints complete)
-- [ ] Remind Mason to commit to Git
+- [ ] Land the work the standard way: commit on a branch → open a PR → wait for the required checks (Vercel) → merge. Direct pushes to `main` are impossible (the `protect-main` ruleset); agents land reviewed code themselves under the standing policy — Mason does not hand-commit code.
