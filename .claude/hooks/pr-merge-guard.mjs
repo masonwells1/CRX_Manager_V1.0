@@ -63,6 +63,14 @@ if (GITHUB_MERGE_TOOL.test(toolName)) {
     }
     request = api || ghMergeRequest(segment);
     if (request) break;
+    // Raw REST merges outside gh — curl/wget/Invoke-RestMethod/node fetch — name
+    // the same endpoint but carry auth/context the guard cannot resolve, so they
+    // are denied outright rather than gated (Codex review of this very PR,
+    // 2026-07-16: an authenticated `curl -X PUT .../pulls/N/merge` bypassed the
+    // gate entirely; fail closed and route through gh instead).
+    if (/\/pulls\/[^\s/]+\/merge\b/i.test(segment)) {
+      deny("PR MERGE GATE: raw GitHub REST merge calls (curl/wget/Invoke-RestMethod/fetch against .../pulls/<n>/merge) are denied because the guard cannot resolve and verify the PR's base, head, and checks for them. Use `gh pr merge <number>` so the gate can verify the merge.");
+    }
   }
 }
 if (!request) passthrough();
