@@ -210,7 +210,11 @@ CREATE POLICY external_identities_update ON public.external_identities
       SELECT 1 FROM public.customers c
       WHERE c.id = external_identities.customer_id
         AND c.assigned_sales_rep = (SELECT auth.uid())
-    ))
+    )
+    -- Verified rows are frozen for reps: only admins may edit (or un-verify)
+    -- an identity once verification has been stamped.
+    AND external_identities.verified_at IS NULL
+    AND external_identities.verified_by IS NULL)
   )
   WITH CHECK (
     public.is_admin()
@@ -314,6 +318,14 @@ CREATE TRIGGER customers_sync_to_primary_contact
     OR OLD.phone IS DISTINCT FROM NEW.phone
     OR OLD.email IS DISTINCT FROM NEW.email
   )
+  EXECUTE FUNCTION public.sync_customer_to_primary_contact();
+
+-- New customers (save_customer INSERT branch, bulk import) get their primary
+-- contact immediately; the function early-returns when all fields are blank.
+DROP TRIGGER IF EXISTS customers_sync_to_primary_contact_ins ON public.customers;
+CREATE TRIGGER customers_sync_to_primary_contact_ins
+  AFTER INSERT ON public.customers
+  FOR EACH ROW
   EXECUTE FUNCTION public.sync_customer_to_primary_contact();
 
 DO $$

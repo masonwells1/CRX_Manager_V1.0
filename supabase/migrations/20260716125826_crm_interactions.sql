@@ -57,6 +57,28 @@ CREATE TRIGGER update_customer_interactions_updated_at
   BEFORE UPDATE ON public.customer_interactions
   FOR EACH ROW EXECUTE FUNCTION public.update_updated_at();
 
+-- Attribution audit integrity: created_by is immutable except for admins.
+-- (RLS pins created_by at INSERT; this closes the UPDATE-time gap where a
+-- rep could erase their own attribution or claim an unattributed AI row.)
+CREATE OR REPLACE FUNCTION public.guard_interaction_attribution()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY INVOKER
+AS $$
+BEGIN
+  IF NOT public.is_admin() THEN
+    RAISE EXCEPTION 'created_by is immutable on customer_interactions (admin-only change)';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER customer_interactions_guard_attribution
+  BEFORE UPDATE OF created_by ON public.customer_interactions
+  FOR EACH ROW
+  WHEN (OLD.created_by IS DISTINCT FROM NEW.created_by)
+  EXECUTE FUNCTION public.guard_interaction_attribution();
+
 CREATE TABLE public.interaction_transcripts (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   interaction_id uuid NOT NULL UNIQUE REFERENCES public.customer_interactions(id),
