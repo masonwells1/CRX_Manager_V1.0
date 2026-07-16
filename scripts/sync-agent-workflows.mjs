@@ -93,12 +93,20 @@ function writeExpected(expected) {
   console.log(`Synced ${expected.size - 2} Codex workflow file(s) from .claude.`);
 }
 
+// Compare adapter content IGNORING line endings. The generator emits LF and
+// .gitattributes pins .agents/** to LF, but a checkout where core.autocrlf still
+// rewrote a file to CRLF would otherwise report identical text as "stale" — a
+// false failure that bricked commits in fresh worktrees (2026-07-16 scaffolding
+// review). Line endings are not content drift; the committed form is LF-pinned
+// regardless, so normalizing here tests what the check is FOR (real drift).
+const normalizeEol = (text) => String(text).replace(/\r\n/g, "\n");
+
 function checkExpected(expected) {
   const mismatches = [];
   for (const [relative, content] of expected) {
     const target = path.join(TARGET_ROOT, relative);
     if (!existsSync(target)) mismatches.push(`${relative} is missing`);
-    else if (readFileSync(target, "utf8") !== content) mismatches.push(`${relative} is stale`);
+    else if (normalizeEol(readFileSync(target, "utf8")) !== normalizeEol(content)) mismatches.push(`${relative} is stale`);
   }
   const actualFiles = walkFiles(TARGET_ROOT)
     .map((file) => unix(path.relative(TARGET_ROOT, file)))
