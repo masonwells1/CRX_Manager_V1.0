@@ -11535,6 +11535,10 @@ export type Database = {
         }
         Returns: Json
       }
+      set_primary_customer_contact: {
+        Args: { p_contact_id: string; p_customer_id: string }
+        Returns: Json
+      }
       settle_applied_record_acres: {
         Args: { p_record_id: string }
         Returns: undefined

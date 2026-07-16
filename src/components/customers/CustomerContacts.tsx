@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Edit3, MessageCircle, Phone, Plus, Star, UserX } from 'lucide-react';
-import { assertRpcResult, checkMutationResult, supabase, supabaseUntyped } from '../../lib/db';
+import { assertRpcResult, checkMutationResult, supabase } from '../../lib/db';
 import { logActivity } from '../../lib/activityLogger';
 import { Sentry } from '../../lib/sentry';
 import type { CustomerContact, CustomerInteraction, InteractionOutcome, InteractionType, PreferredContactMethod } from '../../types';
@@ -93,7 +93,7 @@ export default function CustomerContacts({ customerId, performedBy }: CustomerCo
         contactId = result.data?.[0]?.id;
       }
       if (needsPromotion && contactId) {
-        const { data, error } = await supabaseUntyped.rpc('set_primary_customer_contact', { p_customer_id: customerId, p_contact_id: contactId });
+        const { data, error } = await supabase.rpc('set_primary_customer_contact', { p_customer_id: customerId, p_contact_id: contactId });
         if (error) throw error;
         assertRpcResult<{ success: boolean; contact_id: string }>(data, 'set_primary_customer_contact');
       }
