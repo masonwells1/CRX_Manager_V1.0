@@ -4,6 +4,12 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-16 — Scaffolding review Wave 4a: worktree-cleanup heartbeat guard
+
+The SessionStart worktree-cleanup hook protected only the CURRENT session's own worktree, so a **sibling** session's clean, merged, unlocked worktree could be swept while that session was still live — which happened during this review (an active read-only checkout was deleted mid-session). Fix: the classifier now also KEEPS any worktree touched within a 3-hour activity window (`recently-active`), computed from the newest mtime of its git index / HEAD / reflog / `.claude/session-state`. Locking remains the belt; this heartbeat is the suspenders for sessions that didn't lock. Recoverable either way (every deletion still prints a recovery SHA), and a genuinely idle-past-3h finished worktree is still cleaned. `worktree-cleanup-lib.mjs` + runner updated; tests prove both directions (recent → keep, idle-past-window → remove, missing signal → behaves as before). 31 assertions pass.
+
+---
+
 ## 2026-07-16 — Scaffolding review Wave 3: hard doc-freshness gates + verified manual corrections
 
 The root-cause theme of the 2026-07-16 scaffolding review was staleness — the manual/reference layer going out of date while its "Last verified" prose promised otherwise. Wave 3 turns that promise into a checked fact and fixes the specific stale docs (each correction verified against the live database first):
