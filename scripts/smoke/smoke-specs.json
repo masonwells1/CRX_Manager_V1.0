@@ -6,6 +6,11 @@
     "spec_contract": "Keys are the primary RPC under test. 'covers' lists every RPC the chain exercises - run-smoke.mjs --spec <rpc> matches keys AND covers entries, so one chain can certify several RPCs. Every migration that touches an RPC must have or extend a spec covering it."
   },
   "specs": {
+    "enforce_delivery_accounting_period": {
+      "chain": "smoke-delivery-accounting-period-guard.sql",
+      "description": "Delivery closed-period invariant: the real complete_delivery RPC rejects a closed business date without changing delivery, inventory, order lines, invoices, ledger, or idempotency state; an open-date completion succeeds; the real admin void_delivery RPC then rejects once that completion date is closed without leaking any reversal; reopening the disposable period permits the normal void path. Self-contained fixtures and terminal rollback.",
+      "covers": ["enforce_delivery_accounting_period", "complete_delivery", "void_delivery"]
+    },
     "create_blend_ticket": {
       "chain": "smoke-gauntlet-core-blend-guards.sql",
       "description": "Full-gauntlet remediation chain: serialized idempotency plus real helper/legacy races; commission rejection and valid post/replay/audit; inactive/nonfinite/over-receiving guards; atomic manual/OCR creation; optimistic-version ticket save success, exact replay, missing-version rejection, processing rejection, and stale-edit rejection before and after OCR; atomic OCR commit success, field/manual-product preservation, queue completion, invalid/stale/lifecycle rollback, deleted-ticket denial, and replay; exact blend-line mapping and missing-inventory upsert; linked/billed/applied lifecycle, header, product, field, reparent, and soft-delete locks; forged versus direct-invoice billing provenance; active-invoice link/create-order rejection with zero side effects; linked-order and stale-active-invoice direct-billing rejection with zero invoice/commission/idempotency/log effects; cancelled/voided reset; billed/invoice/application/valid unlink paths; RPC-only legal application snapshots; owner/uploader versus cross-sales Storage mutation boundaries; final RLS/Storage commands, grants, and bucket limits. prove-gauntlet-idempotency-concurrency.mjs additionally runs real two-session idempotency, link/product/reparent, approval/OCR, link/OCR, and lease/OCR races in a network-isolated disposable PostgreSQL container. Terminal rollback.",
@@ -18,8 +23,13 @@
     },
     "save_purchase_order": {
       "chain": "smoke-save-purchase-order-status-lock.sql",
-      "description": "Purchase-order lifecycle correction: an active sales rep cannot create a submitted PO through save_purchase_order, creates and idempotently replays a draft, edits it without changing status, cannot transition status through ordinary save, submits through the dedicated idempotent submit_purchase_order RPC, and cannot downgrade the submitted PO through save. An active non-office user is denied. Self-contained fixture and terminal rollback.",
-      "covers": ["save_purchase_order", "submit_purchase_order"]
+      "description": "Purchase-order lifecycle correction: an active sales rep cannot create a submitted PO through save_purchase_order, creates and idempotently replays a draft, edits it without changing status, cannot transition status through ordinary save, submits through the dedicated idempotent submit_purchase_order RPC, cannot downgrade the submitted PO through save, and cancels it through the dedicated idempotent cancel_purchase_order RPC. An active non-office user is denied. Self-contained fixture and terminal rollback.",
+      "covers": ["save_purchase_order", "submit_purchase_order", "cancel_purchase_order"]
+    },
+    "gauntlet_money_workflows": {
+      "chain": "smoke-gauntlet-money-workflows.sql",
+      "description": "Money-workflow correction chain: get_ap_dashboard_summary excludes a voided vendor payment while counting an active one; preview_finance_charges and generate_finance_charges share the same overdue balance and penny-exact charge, reject future dates without side effects, and generate/replay one unposted charge invoice; create_prepay_check_splits rejects a mismatched independent check total without side effects, then creates and idempotently replays two exact prepay buckets. Self-contained fixtures and terminal rollback.",
+      "covers": ["get_ap_dashboard_summary", "preview_finance_charges", "generate_finance_charges", "create_prepay_check_splits"]
     },
     "stage_offline_action": {
       "chain": "smoke-offline-action-receipts.sql",

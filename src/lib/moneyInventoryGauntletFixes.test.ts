@@ -26,6 +26,8 @@ const access = source('supabase/migrations/20260716120104_gauntlet_access_bounda
 const money = source('supabase/migrations/20260716120112_gauntlet_money_workflows.sql');
 const inventory = source('supabase/migrations/20260716120120_gauntlet_inventory_accuracy.sql');
 const poInitialStatus = source('supabase/migrations/20260716144353_lock_purchase_order_initial_status.sql');
+const deliveryPeriodGuard = source('supabase/migrations/20260716152906_guard_delivery_closed_periods.sql');
+const committedReplayGuard = source('supabase/migrations/20260716160000_fix_idempotency_committed_replay_guard.sql');
 const completeDelivery = access.slice(0, access.indexOf('CREATE OR REPLACE FUNCTION public.void_delivery'));
 
 describe('money and inventory gauntlet fixes', () => {
@@ -42,6 +44,21 @@ describe('money and inventory gauntlet fixes', () => {
     expect(voidDelivery).toContain("(v_delivery.completed_at AT TIME ZONE 'America/Chicago')::date");
     expect(voidDelivery).toContain('v_effective_completion_date BETWEEN period_start AND period_end');
     expect(voidDelivery).not.toContain('v_delivery.scheduled_date BETWEEN period_start AND period_end');
+  });
+
+  it('hard-blocks completed and voided delivery transitions in closed accounting periods', () => {
+    expect(deliveryPeriodGuard).toContain('CREATE OR REPLACE FUNCTION public.enforce_delivery_accounting_period()');
+    expect(deliveryPeriodGuard).toContain('SECURITY DEFINER\nSET search_path = public, pg_temp');
+    expect(deliveryPeriodGuard).toContain("NEW.status = 'completed'");
+    expect(deliveryPeriodGuard).toContain("NEW.status = 'voided'");
+    expect(deliveryPeriodGuard.match(/PERFORM public\.check_period_open\(v_effective_date\)/g)?.length).toBe(4);
+    expect(deliveryPeriodGuard).toContain(
+      'BEFORE INSERT OR UPDATE OF status, completed_at ON public.deliveries',
+    );
+    expect(deliveryPeriodGuard).not.toContain('app.admin_override');
+    expect(deliveryPeriodGuard).toContain(
+      'REVOKE EXECUTE ON FUNCTION public.enforce_delivery_accounting_period()\n  FROM anon, authenticated',
+    );
   });
 
   it('makes money and inventory tables RPC-only for authenticated clients', () => {
@@ -230,6 +247,18 @@ describe('money and inventory gauntlet fixes', () => {
     expect(prepayUi).toContain('p_expected_total_cents: totalCents');
     expect(prepayUi).not.toContain('Math.abs(splitTotal - totalCents) > 1');
     expect(workspace).toContain("supabase.rpc('batch_apply_prepayments'");
+  });
+
+  it('allows allocate_payment to replay a committed atomic claim without weakening legacy loser rollback', () => {
+    expect(committedReplayGuard).toContain("NEW.operation = 'allocate_payment'");
+    expect(committedReplayGuard).toContain("NEW.result->>'_contract' = 'allocate_payment_v1'");
+    expect(committedReplayGuard).toContain("NEW.result->'response' = 'null'::jsonb");
+    expect(committedReplayGuard).toContain('RETURN NULL;');
+    expect(committedReplayGuard).toContain('IDEMPOTENCY_CROSS_OP_KEY_REUSE:');
+    expect(committedReplayGuard).toContain('IDEMPOTENCY_CONCURRENT_REPLAY_RETRY:');
+    expect(committedReplayGuard.indexOf("NEW.operation = 'allocate_payment'")).toBeLessThan(
+      committedReplayGuard.indexOf('IDEMPOTENCY_CONCURRENT_REPLAY_RETRY:'),
+    );
   });
 
   it('clamps on-order quantities and nets delivery reversals', () => {

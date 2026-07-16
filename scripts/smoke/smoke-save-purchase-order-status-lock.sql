@@ -240,6 +240,35 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_FAIL: rejected downgrade changed status to %', v_status;
   END IF;
 
+  -- Active sales reps own the full office lifecycle, including cancellation.
+  v_result := cancel_purchase_order(
+    v_po,
+    'sales lifecycle smoke',
+    v_sales,
+    'smk-po-cancel-' || v_suffix
+  );
+  v_replay := cancel_purchase_order(
+    v_po,
+    'sales lifecycle smoke',
+    v_sales,
+    'smk-po-cancel-' || v_suffix
+  );
+  SELECT status INTO v_status FROM purchase_orders WHERE id = v_po;
+  SELECT count(*) INTO v_count
+  FROM activity_feed
+  WHERE related_entity_type = 'purchase_order'
+    AND related_entity_id = v_po
+    AND event_type = 'po_cancelled';
+  IF v_status <> 'cancelled'
+     OR (v_result->>'po_id')::uuid IS DISTINCT FROM v_po
+     OR v_replay IS DISTINCT FROM v_result
+     OR v_count <> 1
+     OR (SELECT cancelled_by FROM purchase_orders WHERE id = v_po) IS DISTINCT FROM v_sales
+     OR (SELECT cancel_reason FROM purchase_orders WHERE id = v_po) <> 'sales lifecycle smoke' THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: sales cancellation/replay state status=% first=% replay=% events=%',
+      v_status, v_result, v_replay, v_count;
+  END IF;
+
   -- Active field users remain outside the office PO-management boundary.
   PERFORM set_config(
     'request.jwt.claims',

@@ -219,6 +219,15 @@ const ALIAS_SCOPED: Record<string, string> = {
 };
 
 /**
+ * Internal non-RPC functions that deliberately inspect another operation's
+ * idempotency row. These do not read or write a cache under their own function
+ * name, so treating the referenced operation as an alias would be misleading.
+ */
+const INTERNAL_OPERATION_REFERENCES: Record<string, string[]> = {
+  _guard_idempotency_key_insert: ['allocate_payment'],
+};
+
+/**
  * GAP LIST — live functions whose idempotency LOOKUP is NOT operation-scoped
  * (`WHERE idempotency_key = p_key` with no operation filter; the historical
  * CLAUDE.md inline copy-paste pattern — snippet fixed 2026-06-11). Their
@@ -384,7 +393,11 @@ describe('Idempotency operation literals in latest disk migrations', () => {
     const offenders: string[] = [];
     for (const [fnName, def] of defs) {
       const literals = operationLiterals(def.body);
-      const expected = new Set([fnName, ALIAS_SCOPED[fnName]].filter(Boolean));
+      const expected = new Set([
+        fnName,
+        ALIAS_SCOPED[fnName],
+        ...(INTERNAL_OPERATION_REFERENCES[fnName] || []),
+      ].filter(Boolean));
       for (const lit of literals) {
         if (!expected.has(lit)) {
           offenders.push(`${fnName} uses operation '${lit}' (in ${def.file})`);
