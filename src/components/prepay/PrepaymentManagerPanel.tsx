@@ -324,8 +324,8 @@ export default function PrepaymentManagerPanel() {
     // M3: use per-split rounded cents to avoid float rounding mismatch
     const splitAmountsCents = validSplits.map((s) => parseDollarsToCents(s.amount));
     const splitTotal = splitAmountsCents.reduce((sum, c) => sum + c, 0);
-    // Allow 1-cent tolerance for floating-point rounding edge cases
-    if (Math.abs(splitTotal - totalCents) > 1) {
+    // Money is already integer cents here, so the totals must match exactly.
+    if (splitTotal !== totalCents) {
       toast('error', `Splits total ($${(splitTotal / 100).toFixed(2)}) must equal check total ($${checkForm.total})`);
       return;
     }
@@ -346,6 +346,7 @@ export default function PrepaymentManagerPanel() {
           p_customer_id: checkForm.customer_id,
           p_reference_number: checkForm.reference_number,
           p_splits: splits,
+          p_expected_total_cents: totalCents,
           p_performed_by: performedBy,
           p_idempotency_key: splitKey,
         });
