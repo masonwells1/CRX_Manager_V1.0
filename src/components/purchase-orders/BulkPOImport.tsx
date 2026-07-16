@@ -18,9 +18,10 @@ import {
   purchaseOrderUnitCostCents,
 } from '../../lib/purchaseOrderMoney';
 import {
-  clearPendingBulkPOIntent,
   ensurePendingBulkPOIntent,
+  isImportedBulkPOIntent,
   loadPendingBulkPOIntents,
+  markBulkPOIntentImported,
   savePendingBulkPOIntents,
   type PendingBulkPOIntents,
 } from '../../lib/bulkPOImportRetry';
@@ -58,6 +59,28 @@ interface BulkPOImportProps {
 }
 
 // ---------- helpers ----------
+
+function buildBulkPOIntentKey(po: ParsedPO): string | null {
+  const validItems = po.items.filter((item) => item.matched_product && item.quantity_ordered > 0);
+  if (validItems.length === 0) return null;
+
+  return JSON.stringify({
+    source_file: po.source_file,
+    source_index: po.source_index,
+    source_size: po.source_size,
+    source_last_modified: po.source_last_modified,
+    vendor_name: po.vendor_name.trim(),
+    invoice_number: po.invoice_number,
+    invoice_date: po.invoice_date,
+    items: validItems.map((item) => ({
+      product_id: item.matched_product!.id,
+      quantity_ordered: item.quantity_ordered,
+      unit_cost_cents: purchaseOrderUnitCostCents(item.unit_cost),
+      unit_size: item.unit_size,
+      notes: item.notes,
+    })),
+  });
+}
 
 function calculateSimilarity(str1: string, str2: string): number {
   if (str1 === str2) return 1;
@@ -183,7 +206,6 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
   const [showRawText, setShowRawText] = useState<number | null>(null);
   const pendingIntentsRef = useRef<PendingBulkPOIntents>({});
   const pendingProfileRef = useRef<string | null>(null);
-  const importedIntentsRef = useRef<Set<string>>(new Set());
 
   // Product search state
   const [productSearchOpen, setProductSearchOpen] = useState<{ poIdx: number; itemIdx: number } | null>(null);
@@ -233,7 +255,6 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
       setFiles(valid);
       setParsedPOs(null);
       setUploadResults(null);
-      importedIntentsRef.current.clear();
     }
     e.target.value = '';
   };
@@ -365,6 +386,7 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
     setUploading(true);
     let successCount = 0;
     let newSuccessCount = 0;
+    let skippedCount = 0;
     let failedCount = 0;
 
     for (const po of importable) {
@@ -375,24 +397,14 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
           continue;
         }
 
-        const intentKey = JSON.stringify({
-          source_file: po.source_file,
-          source_index: po.source_index,
-          source_size: po.source_size,
-          source_last_modified: po.source_last_modified,
-          vendor_name: po.vendor_name.trim(),
-          invoice_number: po.invoice_number,
-          invoice_date: po.invoice_date,
-          items: validItems.map((item) => ({
-            product_id: item.matched_product!.id,
-            quantity_ordered: item.quantity_ordered,
-            unit_cost_cents: purchaseOrderUnitCostCents(item.unit_cost),
-            unit_size: item.unit_size,
-            notes: item.notes,
-          })),
-        });
-        if (importedIntentsRef.current.has(intentKey)) {
+        const intentKey = buildBulkPOIntentKey(po);
+        if (!intentKey) {
+          failedCount++;
+          continue;
+        }
+        if (isImportedBulkPOIntent(pendingIntentsRef.current, intentKey)) {
           successCount++;
+          skippedCount++;
           continue;
         }
         const pendingIntent = ensurePendingBulkPOIntent(
@@ -451,9 +463,8 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
         });
 
         if (poError || !poData) throw poError;
-        assertRpcResult<{ po_id: string }>(poData, 'save_purchase_order');
-        importedIntentsRef.current.add(intentKey);
-        clearPendingBulkPOIntent(pendingIntentsRef.current, intentKey);
+        const savedPO = assertRpcResult<{ po_id: string }>(poData, 'save_purchase_order');
+        markBulkPOIntentImported(pendingIntentsRef.current, intentKey, savedPO.po_id);
         savePendingBulkPOIntents(sessionStorage, profile.id, pendingIntentsRef.current);
 
         successCount++;
@@ -471,6 +482,9 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
       toast('success', `Imported ${newSuccessCount} purchase order${newSuccessCount !== 1 ? 's' : ''}`);
       onSuccess();
     }
+    if (skippedCount > 0) {
+      toast('info', `Skipped ${skippedCount} document${skippedCount !== 1 ? 's' : ''} already imported in this session.`);
+    }
     if (failedCount > 0) {
       toast('error', `${failedCount} purchase order${failedCount !== 1 ? 's' : ''} failed. Review and retry; successful imports will be skipped.`);
     }
@@ -482,7 +496,6 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
     setUploadResults(null);
     setProductSearchOpen(null);
     setProductQuery('');
-    importedIntentsRef.current.clear();
     onClose();
   };
 
@@ -490,14 +503,16 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
     setFiles([]);
     setParsedPOs(null);
     setUploadResults(null);
-    importedIntentsRef.current.clear();
   };
 
   // ---------- derived stats ----------
 
   const totalMatched = parsedPOs?.reduce((sum, po) => sum + po.items.filter((i) => i.matched_product).length, 0) ?? 0;
   const totalUnmatched = parsedPOs?.reduce((sum, po) => sum + po.items.filter((i) => !i.matched_product).length, 0) ?? 0;
-  const importablePOs = parsedPOs?.filter((po) => po.items.some((i) => i.matched_product && i.quantity_ordered > 0)).length ?? 0;
+  const importablePOs = parsedPOs?.filter((po) => {
+    const intentKey = buildBulkPOIntentKey(po);
+    return intentKey !== null && !isImportedBulkPOIntent(pendingIntentsRef.current, intentKey);
+  }).length ?? 0;
 
   const filteredProducts = products.filter((p) => {
     if (!productQuery.trim()) return true;
@@ -598,6 +613,9 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
                 ));
                 const hasErrors = po.parse_errors.length > 0;
                 const hasItems = po.items.length > 0;
+                const intentKey = buildBulkPOIntentKey(po);
+                const importedIntent = intentKey ? pendingIntentsRef.current[intentKey] : undefined;
+                const alreadyImported = importedIntent?.status === 'imported';
 
                 return (
                   <div key={poIdx} className="border border-gray-200 rounded-lg overflow-hidden">
@@ -623,13 +641,16 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
                           {fmt(poTotal)}
                         </p>
                       </div>
-                      {hasErrors && !hasItems && (
+                      {alreadyImported && (
+                        <Badge variant="info">Already imported</Badge>
+                      )}
+                      {!alreadyImported && hasErrors && !hasItems && (
                         <Badge variant="error">Parse Failed</Badge>
                       )}
-                      {hasErrors && hasItems && (
+                      {!alreadyImported && hasErrors && hasItems && (
                         <Badge variant="warning">Partial</Badge>
                       )}
-                      {!hasErrors && hasItems && (
+                      {!alreadyImported && !hasErrors && hasItems && (
                         <Badge variant="success">Ready</Badge>
                       )}
                       <button
@@ -648,6 +669,11 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
                     {/* Expanded content */}
                     {po.expanded && (
                       <div className="p-4 space-y-3">
+                        {alreadyImported && (
+                          <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm text-blue-900">
+                            Already imported as {importedIntent.poNumber || 'a purchase order'}. This document will be skipped unless its reviewed details are changed.
+                          </div>
+                        )}
                         {/* Parse errors */}
                         {po.parse_errors.length > 0 && (
                           <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">

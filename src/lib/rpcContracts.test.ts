@@ -1672,16 +1672,21 @@ describe('Idempotency BODY verification (reads migration SQL)', () => {
 
   it('save_invoice authorizes customer scope before delegating to its idempotent implementation', () => {
     const files = getMigrationFiles();
-    const wrapper = files.find(
+    const initialWrapper = files.find(
       ({ name }) => name === '20260716190000_harden_sales_financial_scope.sql'
+    )?.content;
+    const wrapper = files.find(
+      ({ name }) => name === '20260716210000_harden_invoice_existing_customer_scope.sql'
     )?.content;
     const implementationSource = files.find(
       ({ name }) => name === '20260716120112_gauntlet_money_workflows.sql'
     )?.content;
 
-    expect(wrapper).toContain('RENAME TO _save_invoice_scoped_impl');
-    expect(wrapper).toMatch(/REVOKE ALL ON FUNCTION public\._save_invoice_scoped_impl[\s\S]*FROM PUBLIC, anon, authenticated, service_role/);
-    expect(wrapper).toMatch(/AND assigned_sales_rep = v_actor[\s\S]*RETURN public\._save_invoice_scoped_impl/);
+    expect(initialWrapper).toContain('RENAME TO _save_invoice_scoped_impl');
+    expect(initialWrapper).toMatch(/REVOKE ALL ON FUNCTION public\._save_invoice_scoped_impl[\s\S]*FROM PUBLIC, anon, authenticated, service_role/);
+    expect(wrapper).toMatch(/WHERE id = v_invoice_id[\s\S]*FOR UPDATE/);
+    expect(wrapper).toMatch(/WHERE id = v_existing_customer_id[\s\S]*AND assigned_sales_rep = v_actor/);
+    expect(wrapper).toMatch(/WHERE id = v_target_customer_id[\s\S]*AND assigned_sales_rep = v_actor[\s\S]*RETURN public\._save_invoice_scoped_impl/);
     expect(implementationSource).toContain("v_existing := check_idempotency(p_idempotency_key, 'save_invoice')");
     expect(implementationSource).toContain("PERFORM save_idempotency(p_idempotency_key, 'save_invoice'");
     expect(IDEMPOTENCY_BODY_EXEMPT.save_invoice).toBe('delegated');

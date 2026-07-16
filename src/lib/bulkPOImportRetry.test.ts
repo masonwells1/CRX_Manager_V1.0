@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
-  clearPendingBulkPOIntent,
   ensurePendingBulkPOIntent,
+  isImportedBulkPOIntent,
   loadPendingBulkPOIntents,
+  markBulkPOIntentImported,
   savePendingBulkPOIntents,
 } from './bulkPOImportRetry';
 
@@ -16,7 +17,7 @@ function fakeStorage() {
 }
 
 describe('bulk PO import retry state', () => {
-  it('reuses the same idempotency key and PO number after close/reopen or a lost response', () => {
+  it('reuses pending work and persists successful imports across close/reopen', () => {
     const storage = fakeStorage();
     const createKey = vi.fn()
       .mockReturnValueOnce('idem-first')
@@ -33,10 +34,18 @@ describe('bulk PO import retry state', () => {
     expect(retry).toMatchObject({ idempotencyKey: 'idem-first', poNumber: 'PO-1001' });
     expect(createKey).toHaveBeenCalledTimes(1);
 
-    clearPendingBulkPOIntent(reopened, 'intent-A');
+    markBulkPOIntentImported(reopened, 'intent-A', 'po-id-1001', 3_000);
     savePendingBulkPOIntents(storage, 'sales-1', reopened);
-    const laterImport = ensurePendingBulkPOIntent(reopened, 'intent-A', createKey, 3_000);
-    expect(laterImport.idempotencyKey).toBe('idem-second');
+
+    const afterSuccessReopen = loadPendingBulkPOIntents(storage, 'sales-1', 4_000);
+    expect(isImportedBulkPOIntent(afterSuccessReopen, 'intent-A')).toBe(true);
+    expect(afterSuccessReopen['intent-A']).toMatchObject({
+      idempotencyKey: 'idem-first',
+      poNumber: 'PO-1001',
+      poId: 'po-id-1001',
+      status: 'imported',
+    });
+    expect(createKey).toHaveBeenCalledTimes(1);
   });
 
   it('expires abandoned pending imports after 24 hours', () => {

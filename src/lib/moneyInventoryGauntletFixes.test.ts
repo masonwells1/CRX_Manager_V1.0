@@ -38,6 +38,9 @@ const deliveryScheduledDateRewriteGuard = source(
 );
 const purchaseOrderCents = source('supabase/migrations/20260716183501_purchase_order_integer_cents.sql');
 const financialScope = source('supabase/migrations/20260716190000_harden_sales_financial_scope.sql');
+const invoiceExistingCustomerScope = source(
+  'supabase/migrations/20260716210000_harden_invoice_existing_customer_scope.sql',
+);
 const deliveryAggregate = source(
   'supabase/migrations/20260716191000_aggregate_delivery_stock_preflight.sql',
 );
@@ -183,7 +186,8 @@ describe('money and inventory gauntlet fixes', () => {
     expect(bulkImport).toContain('ensurePendingBulkPOIntent(');
     expect(bulkImport).toContain('pendingIntent.poNumber');
     expect(bulkImport).toContain('p_idempotency_key: pendingIntent.idempotencyKey');
-    expect(bulkImport).toContain('clearPendingBulkPOIntent(pendingIntentsRef.current, intentKey)');
+    expect(bulkImport).toContain('isImportedBulkPOIntent(pendingIntentsRef.current, intentKey)');
+    expect(bulkImport).toContain('markBulkPOIntentImported(pendingIntentsRef.current, intentKey, savedPO.po_id)');
     expect(bulkImport).toContain('savePendingBulkPOIntents(sessionStorage, profile.id');
     expect(bulkImport).toContain('setUploadResults(failedCount === 0');
     expect(idempotency).toContain('const uuid = crypto.randomUUID()');
@@ -263,9 +267,9 @@ describe('money and inventory gauntlet fixes', () => {
   });
 
   it('authorizes invoice saves and statements against active customer assignment before replay', () => {
-    const saveWrapper = financialScope.slice(
-      financialScope.indexOf('CREATE FUNCTION public.save_invoice('),
-      financialScope.indexOf('ALTER FUNCTION public.get_customer_statement('),
+    const saveWrapper = invoiceExistingCustomerScope.slice(
+      invoiceExistingCustomerScope.indexOf('CREATE OR REPLACE FUNCTION public.save_invoice('),
+      invoiceExistingCustomerScope.indexOf('REVOKE ALL ON FUNCTION public.save_invoice('),
     );
     const statementWrapper = financialScope.slice(
       financialScope.indexOf('CREATE FUNCTION public.get_customer_statement('),
@@ -281,9 +285,12 @@ describe('money and inventory gauntlet fixes', () => {
       'REVOKE ALL ON FUNCTION public._get_customer_statement_scoped_impl(uuid, date, date)',
     );
     expect(saveWrapper).toContain('WHERE id = v_actor\n     AND is_active = true');
+    expect(saveWrapper).toContain('WHERE id = v_invoice_id\n     FOR UPDATE');
+    expect(saveWrapper).toContain('WHERE id = v_existing_customer_id');
+    expect(saveWrapper).toContain('WHERE id = v_target_customer_id');
     expect(saveWrapper).toContain('AND assigned_sales_rep = v_actor');
     expect(saveWrapper).toContain("RAISE EXCEPTION 'CUSTOMER_SCOPE_DENIED'");
-    expect(saveWrapper.indexOf('AND assigned_sales_rep = v_actor')).toBeLessThan(
+    expect(saveWrapper.indexOf('WHERE id = v_existing_customer_id')).toBeLessThan(
       saveWrapper.indexOf('RETURN public._save_invoice_scoped_impl('),
     );
     expect(statementWrapper).toContain('AND assigned_sales_rep = v_actor');

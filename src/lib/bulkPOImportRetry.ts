@@ -1,6 +1,8 @@
 export interface PendingBulkPOIntent {
   idempotencyKey: string;
   poNumber?: string;
+  poId?: string;
+  status?: 'pending' | 'imported';
   updatedAt: number;
 }
 
@@ -72,15 +74,29 @@ export function ensurePendingBulkPOIntent(
 
   const created = {
     idempotencyKey: createIdempotencyKey(),
+    status: 'pending' as const,
     updatedAt: now,
   };
   pending[intentKey] = created;
   return created;
 }
 
-export function clearPendingBulkPOIntent(
+export function isImportedBulkPOIntent(
   pending: PendingBulkPOIntents,
   intentKey: string,
+): boolean {
+  return pending[intentKey]?.status === 'imported';
+}
+
+export function markBulkPOIntentImported(
+  pending: PendingBulkPOIntents,
+  intentKey: string,
+  poId: string,
+  now = Date.now(),
 ): void {
-  delete pending[intentKey];
+  const entry = pending[intentKey];
+  if (!entry) return;
+  entry.status = 'imported';
+  entry.poId = poId;
+  entry.updatedAt = now;
 }

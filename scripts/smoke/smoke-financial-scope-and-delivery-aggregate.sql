@@ -23,6 +23,7 @@ DECLARE
   v_available numeric;
   v_count bigint;
   v_notification_count bigint;
+  v_customer_after uuid;
   v_err text;
   v_other_key text := 'smk-fin-scope-other-' || v_suffix;
   v_owned_key text := 'smk-fin-scope-owned-' || v_suffix;
@@ -177,6 +178,39 @@ BEGIN
       RAISE EXCEPTION 'SMOKE_FAIL: wrong invoice edit scope error: %', v_err;
     END IF;
   END;
+
+  -- A sales rep must not bypass the stored-customer check by asking the
+  -- writer to move another customer's invoice onto an assigned customer.
+  BEGIN
+    PERFORM public.save_invoice(
+      jsonb_build_object(
+        'id', v_other_invoice,
+        'customer_id', v_owned_customer,
+        'invoice_type', 'misc_charge',
+        'status', 'draft',
+        'salesman_id', v_sales,
+        'invoice_date', CURRENT_DATE,
+        'header_notes', '[SMOKE] forbidden customer reassignment'
+      ),
+      '[]'::jsonb,
+      'smk-fin-scope-reassign-' || v_suffix
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: sales_rep reassigned an unassigned invoice';
+  EXCEPTION WHEN OTHERS THEN
+    v_err := SQLERRM;
+    IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_err <> 'CUSTOMER_SCOPE_DENIED' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: wrong invoice reassignment scope error: %', v_err;
+    END IF;
+  END;
+
+  SELECT customer_id
+    INTO v_customer_after
+    FROM public.invoices
+   WHERE id = v_other_invoice;
+  IF v_customer_after IS DISTINCT FROM v_other_customer THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: forbidden invoice reassignment changed customer';
+  END IF;
 
   -- Inactive sales profiles must lose both scoped endpoints immediately.
   PERFORM set_config(

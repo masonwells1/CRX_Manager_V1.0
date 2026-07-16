@@ -8,7 +8,7 @@
   "specs": {
     "financial_scope_and_delivery_aggregate": {
       "chain": "smoke-financial-scope-and-delivery-aggregate.sql",
-      "description": "Security and inventory aggregate chain: an active sales rep creates and replays a draft invoice and reads a statement for their assigned customer, but cannot edit or replay an unassigned customer's invoice or read that customer's statement; inactive access is denied. A real delivery with two individually in-stock lines for one product but an aggregate shortage completes under WARN-NOT-BLOCK, returns and caches one warning, marks both append-only delivered ledger rows for review at insertion, emits one activity/notification set, and replays without duplicating warnings. Self-contained fixtures and terminal rollback.",
+      "description": "Security and inventory aggregate chain: an active sales rep creates and replays a draft invoice and reads a statement for their assigned customer, but cannot edit or replay an unassigned customer's invoice, cannot hijack it by requesting reassignment to an assigned customer, and cannot read that customer's statement; inactive access is denied. A real delivery with two individually in-stock lines for one product but an aggregate shortage completes under WARN-NOT-BLOCK, returns and caches one warning, marks both append-only delivered ledger rows for review at insertion, emits one activity/notification set, and replays without duplicating warnings. Self-contained fixtures and terminal rollback.",
       "covers": ["save_invoice", "get_customer_statement", "complete_delivery", "_mark_delivery_aggregate_short_stock"]
     },
     "enforce_delivery_accounting_period": {
