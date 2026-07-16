@@ -57,9 +57,10 @@ CREATE TRIGGER update_customer_interactions_updated_at
   BEFORE UPDATE ON public.customer_interactions
   FOR EACH ROW EXECUTE FUNCTION public.update_updated_at();
 
--- Attribution audit integrity: created_by is immutable except for admins.
--- (RLS pins created_by at INSERT; this closes the UPDATE-time gap where a
--- rep could erase their own attribution or claim an unattributed AI row.)
+-- Provenance + attribution integrity: created_by, source, provider, and
+-- external_call_id are immutable except for admins. (RLS pins created_by and
+-- source at INSERT; this closes the UPDATE-time gap where a rep could erase
+-- attribution, claim an unattributed AI row, or rewrite channel provenance.)
 CREATE OR REPLACE FUNCTION public.guard_interaction_attribution()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -67,16 +68,22 @@ SECURITY INVOKER
 AS $$
 BEGIN
   IF NOT public.is_admin() THEN
-    RAISE EXCEPTION 'created_by is immutable on customer_interactions (admin-only change)';
+    RAISE EXCEPTION 'created_by/source/provider are immutable on customer_interactions (admin-only change)';
   END IF;
   RETURN NEW;
 END;
 $$;
 
 CREATE TRIGGER customer_interactions_guard_attribution
-  BEFORE UPDATE OF created_by ON public.customer_interactions
+  BEFORE UPDATE OF created_by, source, provider, external_call_id
+  ON public.customer_interactions
   FOR EACH ROW
-  WHEN (OLD.created_by IS DISTINCT FROM NEW.created_by)
+  WHEN (
+    OLD.created_by IS DISTINCT FROM NEW.created_by
+    OR OLD.source IS DISTINCT FROM NEW.source
+    OR OLD.provider IS DISTINCT FROM NEW.provider
+    OR OLD.external_call_id IS DISTINCT FROM NEW.external_call_id
+  )
   EXECUTE FUNCTION public.guard_interaction_attribution();
 
 CREATE TABLE public.interaction_transcripts (
@@ -170,8 +177,11 @@ CREATE POLICY customer_interactions_rep_insert ON public.customer_interactions
       WHERE c.id = customer_interactions.customer_id
         AND c.assigned_sales_rep = (SELECT auth.uid())
     )
-    -- Reps must attribute their own entries (audit integrity).
+    -- Reps must attribute their own entries (audit integrity) and may only
+    -- create rep-channel rows: AI/web/system provenance is never rep-writable.
     AND customer_interactions.created_by = (SELECT auth.uid())
+    AND customer_interactions.source = 'rep'
+    AND customer_interactions.provider IS NULL
   );
 CREATE POLICY customer_interactions_admin_update ON public.customer_interactions
   FOR UPDATE TO authenticated
@@ -211,41 +221,14 @@ CREATE POLICY interaction_transcripts_rep_select ON public.interaction_transcrip
         AND c.assigned_sales_rep = (SELECT auth.uid())
     )
   );
+-- Transcript WRITES are admin-only in Phase 1: rep call logging creates no
+-- transcripts, and future AI intake writes via service role (bypasses RLS).
+-- Reps keep read access to transcripts for their assigned customers above.
 CREATE POLICY interaction_transcripts_admin_insert ON public.interaction_transcripts
   FOR INSERT TO authenticated WITH CHECK (public.is_admin());
-CREATE POLICY interaction_transcripts_rep_insert ON public.interaction_transcripts
-  FOR INSERT TO authenticated WITH CHECK (
-    public.is_sales_rep() AND EXISTS (
-      SELECT 1
-      FROM public.customer_interactions ci
-      JOIN public.customers c ON c.id = ci.customer_id
-      WHERE ci.id = interaction_transcripts.interaction_id
-        AND c.assigned_sales_rep = (SELECT auth.uid())
-    )
-  );
 CREATE POLICY interaction_transcripts_admin_update ON public.interaction_transcripts
   FOR UPDATE TO authenticated
   USING (public.is_admin()) WITH CHECK (public.is_admin());
-CREATE POLICY interaction_transcripts_rep_update ON public.interaction_transcripts
-  FOR UPDATE TO authenticated
-  USING (
-    public.is_sales_rep() AND EXISTS (
-      SELECT 1
-      FROM public.customer_interactions ci
-      JOIN public.customers c ON c.id = ci.customer_id
-      WHERE ci.id = interaction_transcripts.interaction_id
-        AND c.assigned_sales_rep = (SELECT auth.uid())
-    )
-  )
-  WITH CHECK (
-    public.is_sales_rep() AND EXISTS (
-      SELECT 1
-      FROM public.customer_interactions ci
-      JOIN public.customers c ON c.id = ci.customer_id
-      WHERE ci.id = interaction_transcripts.interaction_id
-        AND c.assigned_sales_rep = (SELECT auth.uid())
-    )
-  );
 
 REVOKE ALL ON TABLE public.customer_interactions FROM anon, PUBLIC;
 REVOKE ALL ON TABLE public.interaction_transcripts FROM anon, PUBLIC;
