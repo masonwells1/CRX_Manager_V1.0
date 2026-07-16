@@ -118,6 +118,11 @@ CREATE POLICY customer_facts_rep_insert ON public.customer_facts
       status = 'pending_review'
       OR (status = 'verified' AND reviewed_by = (SELECT auth.uid()) AND reviewed_at IS NOT NULL)
     )
+    -- Supersession lineage is RPC-only: a rep cannot insert a row pre-marked
+    -- superseded (which would forge history and dodge the current-verified
+    -- unique index).
+    AND superseded_at IS NULL
+    AND superseded_by IS NULL
   );
 
 REVOKE ALL ON TABLE public.customer_facts FROM anon, PUBLIC;
@@ -146,10 +151,10 @@ BEGIN
   SELECT * INTO v_fact FROM public.customer_facts WHERE id = p_fact_id FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION 'FACT_NOT_FOUND'; END IF;
   IF NOT EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = auth.uid() AND p.is_active)
-     OR NOT (public.is_admin() OR EXISTS (
+     OR NOT (public.is_admin() OR (public.is_sales_rep() AND EXISTS (
        SELECT 1 FROM public.customers c
        WHERE c.id = v_fact.customer_id AND c.assigned_sales_rep = auth.uid()
-     )) THEN
+     ))) THEN
     RAISE EXCEPTION 'FACT_ACCESS_DENIED';
   END IF;
   IF p_idempotency_key IS NOT NULL THEN
@@ -203,10 +208,10 @@ BEGIN
   SELECT * INTO v_fact FROM public.customer_facts WHERE id = p_fact_id FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION 'FACT_NOT_FOUND'; END IF;
   IF NOT EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = auth.uid() AND p.is_active)
-     OR NOT (public.is_admin() OR EXISTS (
+     OR NOT (public.is_admin() OR (public.is_sales_rep() AND EXISTS (
        SELECT 1 FROM public.customers c
        WHERE c.id = v_fact.customer_id AND c.assigned_sales_rep = auth.uid()
-     )) THEN
+     ))) THEN
     RAISE EXCEPTION 'FACT_ACCESS_DENIED';
   END IF;
   IF p_idempotency_key IS NOT NULL THEN
@@ -217,9 +222,13 @@ BEGIN
     RAISE EXCEPTION 'FACT_NOT_CURRENT_VERIFIED';
   END IF;
 
+  -- Three-step order: the self-FK on superseded_by is NOT deferrable, so the
+  -- replacement row must exist before the old row can reference it — and the
+  -- old row must leave the current-verified partial unique index before the
+  -- replacement can enter it. (1) retire old, (2) insert new, (3) link.
   v_new_fact_id := gen_random_uuid();
   UPDATE public.customer_facts
-  SET superseded_at = now(), superseded_by = v_new_fact_id
+  SET superseded_at = now()
   WHERE id = v_fact.id;
 
   INSERT INTO public.customer_facts (
@@ -230,6 +239,10 @@ BEGIN
     v_new_fact_id, v_fact.customer_id, v_fact.category, v_fact.fact_key, p_value_text, p_value_json, p_confidence,
     'verified', 'rep', auth.uid(), auth.uid(), now(), v_fact.expires_at
   );
+
+  UPDATE public.customer_facts
+  SET superseded_by = v_new_fact_id
+  WHERE id = v_fact.id;
 
   v_result := jsonb_build_object('success', true, 'fact_id', v_fact.id, 'replacement_fact_id', v_new_fact_id);
   IF p_idempotency_key IS NOT NULL THEN
