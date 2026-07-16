@@ -61,19 +61,22 @@ BEGIN
       ) ORDER BY ranked.total_revenue_cents DESC, ranked.product_name)
       FROM (
         SELECT
-          COALESCE(p.product_name, ii.description) AS product_name,
+          p.product_name AS product_name,
           SUM(ii.quantity) AS total_qty,
           SUM(ii.extended_cents)::bigint AS total_revenue_cents
         FROM public.invoices i
         JOIN public.invoice_items ii ON ii.invoice_id = i.id
-        LEFT JOIN public.products p ON p.id = ii.product_id
+        JOIN public.products p ON p.id = ii.product_id
         WHERE i.customer_id = p_customer_id
           AND i.season = v_season
           AND i.deleted_at IS NULL
           AND COALESCE(i.invoice_type, 'invoice') <> 'credit_memo'
           AND i.status IN ('posted', 'paid', 'overdue')
-        GROUP BY ii.product_id, COALESCE(p.product_name, ii.description)
-        ORDER BY SUM(ii.extended_cents) DESC, COALESCE(p.product_name, ii.description)
+          -- Products only: service-fee / misc lines have no product_id and
+          -- must not rank in "top products".
+          AND ii.product_id IS NOT NULL
+        GROUP BY ii.product_id, p.product_name
+        ORDER BY SUM(ii.extended_cents) DESC, p.product_name
         LIMIT 10
       ) ranked
     ), '[]'::jsonb)
@@ -208,6 +211,24 @@ BEGIN
         SELECT COUNT(*) FROM public.team_notes tn
         WHERE tn.linked_entity_type = 'customer' AND tn.linked_entity_id = c.id
           AND tn.note_type = 'todo' AND NOT tn.is_completed AND tn.deleted_at IS NULL
+      ),
+      -- Open workflow counts (Sol amendment 8): what is in flight right now.
+      'open_workflow_counts', jsonb_build_object(
+        'quotes', (
+          SELECT COUNT(*) FROM public.quotes q
+          WHERE q.customer_id = c.id AND q.deleted_at IS NULL
+            AND q.status IN ('draft', 'sent', 'revised')
+        ),
+        'orders', (
+          SELECT COUNT(*) FROM public.orders o
+          WHERE o.customer_id = c.id AND o.deleted_at IS NULL
+            AND o.status IN ('confirmed', 'partially_fulfilled')
+        ),
+        'deliveries', (
+          SELECT COUNT(*) FROM public.deliveries d
+          WHERE d.customer_id = c.id AND d.deleted_at IS NULL
+            AND d.status IN ('scheduled', 'in_progress')
+        )
       ),
       'top_verified_facts', COALESCE((
         SELECT jsonb_agg(jsonb_build_object(
