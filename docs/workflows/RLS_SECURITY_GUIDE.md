@@ -137,6 +137,18 @@ Used on: `financial_audit_log`
 
 ## Full RLS Policy Matrix
 
+> ⚠️ **This matrix is a hand-kept, point-in-time snapshot and drifts.** It is NOT
+> the source of truth and is not machine-verified. Later migrations have already
+> changed several rows below — e.g. as of 2026-07-15 the browser roles' direct
+> INSERT on `returns` and INSERT/UPDATE/DELETE on `return_items` were REVOKED
+> (mutations are now RPC-owned; migration `20260715203911`), and `payments`
+> direct writes were removed (`20260714223000`). **Before trusting any row,
+> query the live policies** — `select * from pg_policies where schemaname='public'
+> and tablename='<table>'` (read-only) — and if you're debugging a silent RLS
+> denial, believe `pg_policies`, not this table. Do NOT "fix" reality to match
+> this matrix (re-adding a revoked permissive policy re-opens a closed hole).
+> Last hand-reconciled: pre-2026-07-14 — treat anything touched since as stale.
+
 | Table | SELECT | INSERT | UPDATE | DELETE |
 |-------|--------|--------|--------|--------|
 | profiles | All authenticated | Own/Admin | Own/Admin | - |

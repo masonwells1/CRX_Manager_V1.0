@@ -1,12 +1,14 @@
 #!/usr/bin/env node
 // Pre-commit ledger guard (Mason, 2026-07-13): converts the last SOFT
 // documentation rule into a HARD one. If a commit touches the agent surface —
-// commands, skills, hooks, workflows, settings, the shared contract, or the
-// guard scripts themselves — it must ALSO update at least one ledger file
-// (CHANGELOG, DECISION_LOG, KNOWN_ISSUES, another docs/manual/ file,
-// agent-guardrails.md, or a loop ledger) in the SAME commit. Otherwise a
-// policy or guard change lands with no written record, and Mason (zero code
-// knowledge) has no way to discover what changed or why.
+// commands, skills, hooks, workflows, settings, the shared contract, the guard
+// scripts themselves, OR a database migration (2026-07-16) — it must ALSO update
+// at least one ledger file (CHANGELOG, DECISION_LOG, KNOWN_ISSUES, another
+// docs/manual/ file, agent-guardrails.md, or a loop ledger) in the SAME commit.
+// Otherwise a policy, guard, or live-database change lands with no written
+// record, and Mason (zero code knowledge) has no way to discover what changed or
+// why. Migrations were added because the manual layer went stale within 48h of
+// shipping — a migration that lands with no ledger line is exactly that failure.
 //
 // Runs from .husky/pre-commit (BLOCKING). Examines STAGED files only, so a
 // dirty working tree doesn't false-positive.
@@ -27,13 +29,22 @@ const TRIGGER_RES = [
   /^scripts\/sync-agent-workflows\.mjs$/,
   /^scripts\/run-claude-review\.mjs$/,
   /^scripts\/write-codex-push-proof\.mjs$/,
+  // A new database migration is a live-schema change — it must leave a ledger
+  // trail too (2026-07-16 scaffolding review). Existing migrations are immutable
+  // so only ADDED files realistically hit this; the /ship flow's CHANGELOG +
+  // migration-history update already satisfies it.
+  /^supabase\/migrations\/[^/]+\.sql$/,
 ];
+
+// docs/reference/migration-history.md is the natural ledger companion for a
+// migration commit, so it also satisfies the requirement (added 2026-07-16).
 
 // Any ONE of these staged alongside satisfies the ledger requirement.
 const LEDGER_RES = [
   /^docs\/CHANGELOG\.md$/,
   /^docs\/manual\/[^/]+\.md$/,
   /^docs\/reference\/agent-guardrails\.md$/,
+  /^docs\/reference\/migration-history\.md$/,
   /^docs\/loops\//,
 ];
 
