@@ -203,6 +203,12 @@ const RISKY_PATH_RES = [
   // changes require the same independent verdict (Codex round-7, PR #142).
   /(^|\/)\.claude\/agents\//i,
   /(^|\/)scripts\/write-apply-proofs\.mjs$/i,
+  // The hook-REGISTRATION surfaces: every guard is only active because it is
+  // wired here. A PR that de-registers a guard (removes the pr-merge-guard line,
+  // etc.) touches ONLY these files and would otherwise merge un-gated, disabling
+  // the very gate meant to review it (Codex round-8, PR #142).
+  /(^|\/)\.claude\/settings\.json$/i,
+  /(^|\/)\.codex\/hooks\.json$/i,
 ];
 export function riskyFiles(files) {
   return (files || []).filter((f) => RISKY_PATH_RES.some((re) => re.test(String(f || ""))));
