@@ -23,14 +23,18 @@ import { generateIdempotencyKey } from '../lib/idempotency';
  * }
  */
 export function useIdempotencyKey(operation: string, userId: string) {
-  const keyRef = useRef<string | null>(null);
+  const keyRef = useRef<{ scope: string; key: string } | null>(null);
+  const scope = JSON.stringify([operation, userId]);
 
   const getKey = useCallback((): string => {
-    if (!keyRef.current) {
-      keyRef.current = generateIdempotencyKey(operation, userId);
+    if (!keyRef.current || keyRef.current.scope !== scope) {
+      keyRef.current = {
+        scope,
+        key: generateIdempotencyKey(operation, userId),
+      };
     }
-    return keyRef.current;
-  }, [operation, userId]);
+    return keyRef.current.key;
+  }, [operation, scope, userId]);
 
   const resetKey = useCallback((): void => {
     keyRef.current = null;

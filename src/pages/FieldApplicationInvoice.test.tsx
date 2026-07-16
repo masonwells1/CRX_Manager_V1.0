@@ -27,13 +27,19 @@ const {
   mockToast,
   mockNavigate,
   mockUseParams,
+  mockUseUnsavedChanges,
+  mockBlockerReset,
+  mockBlockerProceed,
 } = vi.hoisted(() => {
   const mockRpc = vi.fn();
   const mockFrom = vi.fn();
   const mockToast = vi.fn();
   const mockNavigate = vi.fn();
   const mockUseParams = vi.fn();
-  return { mockFrom, mockRpc, mockToast, mockNavigate, mockUseParams };
+  const mockUseUnsavedChanges = vi.fn();
+  const mockBlockerReset = vi.fn();
+  const mockBlockerProceed = vi.fn();
+  return { mockFrom, mockRpc, mockToast, mockNavigate, mockUseParams, mockUseUnsavedChanges, mockBlockerReset, mockBlockerProceed };
 });
 
 vi.mock('../lib/db', () => ({
@@ -69,7 +75,7 @@ vi.mock('../hooks/useIdempotencyKey', () => ({
 }));
 
 vi.mock('../hooks/useUnsavedChanges', () => ({
-  useUnsavedChanges: () => {},
+  useUnsavedChanges: mockUseUnsavedChanges,
 }));
 
 vi.mock('react-router-dom', () => ({
@@ -154,6 +160,30 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockUseParams.mockReturnValue({ id: undefined });
   mockRpc.mockResolvedValue({ data: null, error: null });
+  mockUseUnsavedChanges.mockReturnValue({
+    state: 'unblocked',
+    reset: mockBlockerReset,
+    proceed: mockBlockerProceed,
+  });
+});
+
+describe('FieldApplicationInvoice — unsaved navigation', () => {
+  it('renders the shared Stay/Leave prompt and wires both blocker actions', async () => {
+    mockUseUnsavedChanges.mockReturnValue({
+      state: 'blocked',
+      reset: mockBlockerReset,
+      proceed: mockBlockerProceed,
+    });
+    mockFrom.mockImplementation(makeFromMock({}));
+
+    await renderPage();
+
+    expect(screen.getByRole('alertdialog', { name: 'Unsaved Changes' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Stay' }));
+    expect(mockBlockerReset).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole('button', { name: 'Leave' }));
+    expect(mockBlockerProceed).toHaveBeenCalledOnce();
+  });
 });
 
 async function renderPage() {

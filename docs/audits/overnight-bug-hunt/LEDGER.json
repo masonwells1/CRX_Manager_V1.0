@@ -1182,6 +1182,12 @@
       "verdict": "FALSE_POSITIVE",
       "cycle": 26,
       "note": "Refuted: structural claim true (header total_cost_cents left 0) but IMPACT false — get_detailed_statement_data maps line-item ii.extended_cents to a key NAMED total_cost_cents (does not read the header column); invoicePdf.ts declares but never renders total_cost_cents; all cost/margin reports derive from invoice_items not the header; price_order recomputes the header from lines. No real consumer; dormant (0 split invoices). LOW data-cleanliness at most."
+    },
+    {
+      "dedupeKey": "frontend:field-application-invoice:unsaved-navigation-dead-end",
+      "verdict": "FIXED_GREEN",
+      "cycle": 27,
+      "note": "Confirmed: FieldApplicationInvoice called useUnsavedChanges(dirty) but discarded the router blocker and rendered no UnsavedChangesModal, so dirty in-app navigation dead-ended without Stay/Leave controls. Fixed by wiring the existing blocker to the shared modal only; no save/RPC/database behavior changed. Focused test 22/22, typecheck, targeted ESLint, and independent GPT-5.5 post-fix review CLEAN."
     }
   ]
 }
