@@ -297,14 +297,20 @@ export function ghMergeRequest(command) {
 }
 
 // `gh api -X PUT repos/o/r/pulls/N/merge`, plus the GraphQL mergePullRequest
-// mutation (unresolvable → caller must deny).
+// mutation (unresolvable → caller must deny). The `api` subcommand is found by
+// word-scan, NOT by position — global flags may sit between `gh` and `api`
+// (`gh -R o/r api graphql ...` — Codex round-5 finding on this guard's own PR:
+// the position-anchored `gh\s+api` regex let that exact form pass ungated).
 export function ghApiMergeRequest(command) {
   const text = String(command || "");
-  if (!/(?:^|\s)(?:"[^"]*[\\/]gh\.exe"|\S*[\\/]gh(?:\.exe)?|gh(?:\.exe)?)\s+api\b/i.test(text)) return null;
-  if (/\sapi\s+graphql\b/i.test(text) && /\bmergePullRequest\b/i.test(text)) {
+  if (!GH_BIN_RE.test(text)) return null;
+  const words = splitShellArgs(text);
+  const apiIndex = words.findIndex((word) => word.toLowerCase() === "api");
+  if (apiIndex === -1) return null;
+  if (words.some((word, index) => index > apiIndex && word.toLowerCase() === "graphql") &&
+      /\bmergePullRequest\b/i.test(text)) {
     return { unsupportedGraphql: true };
   }
-  const words = splitShellArgs(text);
   let method = "GET";
   let endpoint = "";
   for (let index = 0; index < words.length; index += 1) {
