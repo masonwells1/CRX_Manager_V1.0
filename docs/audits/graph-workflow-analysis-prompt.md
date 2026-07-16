@@ -5,15 +5,17 @@
 
 **What it does:** uses the prebuilt Graphify knowledge graph to find (1) misplaced & duplicated logic, (2) workflow-integrity problems, and (3) structural-health issues — then writes a dated findings report. It **identifies** problems only; it does **not** propose or apply fixes.
 
+**Current setup (2026-07-15):** Graphify is installed locally through `uv` and the graph is scoped by `.graphifyignore` to current application code, migrations, Edge Functions, and selected scripts. It is refreshed automatically before a relevant push and can be refreshed on demand with `npm run graph:refresh`. The graph remains local and gitignored.
+
 ---
 
 ## 0. Scope & honesty rules (read first)
 
-The graph at `graphify-out/graph.json` was built by AST extraction over **`src/pages` + `src/lib` + `src/hooks`** (the TypeScript business layer). Know its limits before you reason about it:
+The graph at `graphify-out/graph.json` was built by AST extraction over the scoped current operating corpus. Know its limits before you reason about it:
 
 - It captures **code structure only**: edge relations are `contains` (a file holds a symbol), `calls` (function→function), and `imports`/`imports_from` (module→module). ~88% of edges are `contains`.
-- It does **NOT** contain database/RPC names. `supabase.rpc('post_invoice')` is a string argument — there is no `post_invoice` node. **Workflow-integrity analysis therefore comes from grepping source, not from the graph.**
-- It does **NOT** include `src/components`, the SQL migrations, the router, or the database. Business flow that runs through those layers is invisible here.
+- It includes SQL migration function/table symbols, but a frontend `supabase.rpc('post_invoice')` is still a string argument. Graphify cannot reliably prove that UI call reaches a particular current database function. **Workflow-integrity analysis therefore comes from the graph plus source greps and live read-only verification.**
+- It includes `src/components`, migrations, Edge Functions, and selected scripts, but it is **not** a live-schema snapshot. Applied migrations can be superseded and production may differ from disk; never use the graph as database truth.
 
 **Hard rules for every finding:**
 1. Cite **`file:line`** for the code AND the **graph evidence** (node id / edge) it came from.
@@ -27,16 +29,10 @@ The graph at `graphify-out/graph.json` was built by AST extraction over **`src/p
 
 ## 1. Refresh the graph first
 
-The graph is local and gitignored, so rebuild it before analyzing (so findings reflect current code). Run via the **Bash tool** (graphify lives in the Bash Python's user site-packages, not PowerShell):
+The graph is local and gitignored, so rebuild it before analyzing (so findings reflect current code):
 
 ```bash
-python -m graphify src/pages src/lib src/hooks --update
-```
-
-If `graphify-out/graph.json` does not exist at all, do a full build instead:
-
-```bash
-python -m graphify src/pages && python -m graphify src/lib --update && python -m graphify src/hooks --update
+npm run graph:refresh
 ```
 
 Then load these inputs:
