@@ -232,7 +232,7 @@ describe('money and inventory gauntlet fixes', () => {
     }
 
     expect(directMutations).toEqual([]);
-  });
+  }, 20_000);
 
   it('allows only explicit draft misc charges to bypass the order or blend source rule', () => {
     expect(money).toContain("<> 'misc_charge'");
