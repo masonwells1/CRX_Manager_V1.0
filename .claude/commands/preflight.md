@@ -38,6 +38,14 @@ If NONE of the categories flipped (e.g., only docs changed), skip to Step 3.
 
 ## Step 3: Local validation suite (in order)
 
+Before the validation suite, if any `src/`, `supabase/migrations/`, `supabase/functions/`, or `scripts/` file changed, refresh the local architecture map:
+
+```bash
+npm run graph:refresh
+```
+
+Use the graph only to scope review efficiently: run `graphify affected "<changed symbol>"` or `graphify path "<page>" "<RPC/function>"` for shared logic, workflow, SQL, or refactor changes. Then verify every material connection in current source and, for database claims, live read-only evidence. The graph is not proof of the live schema.
+
 Run each and capture pass/fail:
 
 ```bash

@@ -18,7 +18,8 @@ This is the shared, project-level contract for every coding agent in this reposi
 3. Read `docs/workflows/SAFE_DEVELOPMENT_RULES.md` for any multi-file, data, money, security, production, migration, permission, or customer-facing task.
 4. Read `docs/reference/gotchas.md` and the relevant file under `docs/workflows/` for the area being changed.
 5. Treat executable code, migrations, live read-only evidence, and current grants as stronger evidence than prose or old handoffs.
-6. Claude workflow logic lives under `.claude/`; Codex-facing skills under `.agents/` are generated adapters. Do not maintain two independent workflow implementations.
+6. For architecture, multi-file planning, workflow/migration tracing, difficult debugging, structural audits, or PR impact analysis, automatically use the local Graphify workflow (`npm run graph:refresh`, then the smallest useful `graphify explain` / `affected` / `path` / `query`) before broad source reading. Use it to narrow scope and save tokens; verify material edges in current source and live read-only evidence.
+7. Claude workflow logic lives under `.claude/`; Codex-facing skills under `.agents/` are generated adapters. Do not maintain two independent workflow implementations.
 
 ## Plan and Approval Gates
 

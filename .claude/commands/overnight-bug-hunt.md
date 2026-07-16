@@ -46,12 +46,24 @@ git fetch origin main && git rev-list --left-right --count origin/main...HEAD
 ```
 Read `docs/audits/overnight-bug-hunt/{LEDGER.json,PHASE-PLAN.md}`. Pick the next undrained subsystem slice (Phase 1 keys first; move to Phase 2 only when every Phase-1 key is marked drained). Decide this cycle's `only:[...]` (1–3 subsystems per cycle keeps each Codex gate focused).
 
+If the run was launched through a mission document under `docs/loops/`, also read its ownership exclusions before selecting work. An excluded finding, subsystem, branch, worktree, or file is **deferred to its owning session**: record the collision in `REPORT.md`, do not investigate it further, and never edit it. Re-check active worktrees before each cycle so a newly-started remediation does not create duplicate fixes.
+
 ### Step 1 — Hunt (Workflow, read-only)
+Refresh the local architecture graph first:
+
+```bash
+npm run graph:refresh
+```
+
+Use the smallest useful Graphify query for the selected slice (`graphify explain`, `affected`, `path`, or a `query` capped at `--budget 1200`). The graph chooses the smallest source surface for the hunt; it is not proof. Record the graph build commit, exact query, and candidate nodes in the cycle report. Verify every material edge in current source and use read-only live evidence for database claims.
+
 Run the find+verify Workflow for this slice:
 > `Workflow({ scriptPath: ".claude/workflows/overnight-bug-hunt.js", args: { only: ["<keys>"] } })`
 It returns `confirmed`, `refuted`, `unverified`, `blocked`, `overallStatus`, `complete`, and `clean`. **Dedupe `confirmed` against `LEDGER.json` and `accepted-findings.json`** — drop anything already seen/fixed/accepted. What remains are this cycle's candidates. Never dedupe or discard `unverified`/`blocked`; they are incomplete evidence that must stay visible.
 
 Every finder must return `executionStatus=VERIFIED` with a concrete non-empty `evidenceSummary`, or `executionStatus=BLOCKED` naming the unavailable source. A schema-shaped empty result without that proof breaks the dry-cycle streak.
+
+Before the Codex finding gate, compare every candidate's files, symbols, RPCs, and lifecycle against the mission document's exclusions and current active worktrees. Collision candidates are deferred, never fixed or counted as a dry-cycle finding.
 
 ### Step 2 — CODEX FINDING-GATE (independent confirmation)
 Hand the candidate findings to Codex as an independent second model (gpt-5.5). **Always invoke Codex through the `node scripts/overnight-codex-gate.mjs` wrapper** — it rides the `Bash(node scripts/:*)` permission allow-list, so an UNATTENDED run never pauses for approval (a raw `codex exec` is NOT allow-listed and would stall the loop). The wrapper resolves the binary version-proof, runs `codex exec --sandbox read-only`, and closes stdin. Write the candidate digest to a file first, then:

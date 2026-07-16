@@ -19,6 +19,8 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "generate-map": "node scripts/generate-workflow-map.mjs",
+    "graph:refresh": "node scripts/graphify-refresh.mjs",
+    "graph:view": "node scripts/graphify-view.mjs",
     "check-doc-drift": "node scripts/check-doc-drift.mjs",
     "verify-deps": "node scripts/verify-deps.mjs",
     "db-sweeps": "node scripts/db-invariant-sweeps/run-sweeps.mjs",
