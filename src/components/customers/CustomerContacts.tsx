@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Edit3, MessageCircle, Phone, Plus, Star, UserX } from 'lucide-react';
-import { checkMutationResult, supabase } from '../../lib/db';
+import { assertRpcResult, checkMutationResult, supabase, supabaseUntyped } from '../../lib/db';
 import { logActivity } from '../../lib/activityLogger';
 import { Sentry } from '../../lib/sentry';
 import type { CustomerContact, CustomerInteraction, InteractionOutcome, InteractionType, PreferredContactMethod } from '../../types';
@@ -19,9 +19,8 @@ const emptyDraft: ContactDraft = { name: '', role: '', phone_display: '', email:
 const methods: PreferredContactMethod[] = ['phone', 'text', 'email'];
 const interactionTypes: InteractionType[] = ['call', 'visit', 'meeting', 'text', 'email', 'voicemail'];
 const interactionOutcomes: InteractionOutcome[] = ['connected', 'left_voicemail', 'no_answer', 'busy', 'follow_up_needed', 'order_placed', 'resolved', 'other'];
-// CRM tables are live; generated Supabase types refresh in the next schema-registry cycle.
-const contactsTable = () => supabase.from('customer_contacts' as 'customers');
-const interactionsTable = () => supabase.from('customer_interactions' as 'customers');
+const contactsTable = () => supabase.from('customer_contacts');
+const interactionsTable = () => supabase.from('customer_interactions');
 
 // Mirrors public.normalize_phone_e164: strip display punctuation, accept US 10/11 digit forms or a valid E.164 value.
 function normalizePhoneE164(value: string): string | null {
@@ -44,9 +43,9 @@ export default function CustomerContacts({ customerId, performedBy }: CustomerCo
 
   const loadContacts = async () => {
     setLoading(true);
-    const { data, error } = await contactsTable().select('*').eq('customer_id' as never, customerId).order('is_active' as never, { ascending: false }).order('is_primary' as never, { ascending: false }).order('name' as never);
+    const { data, error } = await contactsTable().select('*').eq('customer_id', customerId).order('is_active', { ascending: false }).order('is_primary', { ascending: false }).order('name');
     if (error) toast('error', 'Failed to load contacts');
-    setContacts((data || []) as unknown as CustomerContact[]);
+    setContacts((data || []) as CustomerContact[]);
     setLoading(false);
   };
 
@@ -66,17 +65,37 @@ export default function CustomerContacts({ customerId, performedBy }: CustomerCo
     if (!draft.name.trim() && !draft.phone_display.trim() && !draft.email.trim()) { toast('error', 'Add a name, phone number, or email address'); return; }
     setSaving(true);
     try {
-      if (draft.is_primary) {
-        const primaryUpdate = await contactsTable().update({ is_primary: false } as never).eq('customer_id' as never, customerId).eq('is_primary' as never, true).neq('id', editing?.id || '');
-        checkMutationResult(primaryUpdate, 'unset existing primary contact');
-      }
-      const payload = { ...draft, name: draft.name.trim() || null, role: draft.role.trim() || null, phone_display: draft.phone_display.trim() || null, phone_e164: normalizePhoneE164(draft.phone_display), email: draft.email.trim() || null };
+      // Promotion (making a not-already-primary contact primary) must go through
+      // the atomic RPC so the (customer_id) WHERE is_primary unique index never
+      // sees two primaries. Plain field edits keep the direct .update()/.insert().
+      const wasPrimary = editing?.is_primary ?? false;
+      const needsPromotion = draft.is_primary && !wasPrimary;
+      const payload = {
+        name: draft.name.trim() || null,
+        role: draft.role.trim() || null,
+        phone_display: draft.phone_display.trim() || null,
+        phone_e164: normalizePhoneE164(draft.phone_display),
+        email: draft.email.trim() || null,
+        preferred_contact_method: draft.preferred_contact_method,
+        can_place_orders: draft.can_place_orders,
+        is_decision_maker: draft.is_decision_maker,
+        is_billing_contact: draft.is_billing_contact,
+        // When promoting, write the row non-primary first and let the RPC flip it.
+        is_primary: needsPromotion ? false : draft.is_primary,
+      };
+      let contactId = editing?.id;
       if (editing) {
-        const result = await contactsTable().update(payload as never).eq('id', editing.id).select();
+        const result = await contactsTable().update(payload).eq('id', editing.id).select();
         checkMutationResult(result, 'update contact');
       } else {
-        const { error } = await contactsTable().insert({ ...payload, customer_id: customerId } as never);
+        const result = await contactsTable().insert({ ...payload, customer_id: customerId }).select();
+        checkMutationResult(result, 'add contact');
+        contactId = result.data?.[0]?.id;
+      }
+      if (needsPromotion && contactId) {
+        const { data, error } = await supabaseUntyped.rpc('set_primary_customer_contact', { p_customer_id: customerId, p_contact_id: contactId });
         if (error) throw error;
+        assertRpcResult<{ success: boolean; contact_id: string }>(data, 'set_primary_customer_contact');
       }
       await logActivity({ event: editing ? 'contact_updated' : 'contact_added', description: `${editing ? 'Updated' : 'Added'} contact ${draft.name.trim() || draft.phone_display.trim() || draft.email.trim()}`, performedBy, entityType: 'customer_contact', entityId: editing?.id, customerId });
       toast('success', editing ? 'Contact updated' : 'Contact added');
@@ -91,7 +110,7 @@ export default function CustomerContacts({ customerId, performedBy }: CustomerCo
 
   const deactivate = async (contact: CustomerContact) => {
     try {
-      const result = await contactsTable().update({ is_active: false, is_primary: false } as never).eq('id', contact.id).select();
+      const result = await contactsTable().update({ is_active: false, is_primary: false }).eq('id', contact.id).select();
       checkMutationResult(result, 'deactivate contact');
       toast('success', 'Contact deactivated');
       await loadContacts();
@@ -122,12 +141,12 @@ export function CustomerInteractionsHistory({ customerId }: CustomerInteractions
   useEffect(() => { void (async () => {
     setLoading(true);
     const [{ data: interactionData, error }, { data: contactData }] = await Promise.all([
-      interactionsTable().select('*').eq('customer_id' as never, customerId).order('occurred_at' as never, { ascending: false }).limit(50),
-      contactsTable().select('*').eq('customer_id' as never, customerId),
+      interactionsTable().select('*').eq('customer_id', customerId).order('occurred_at', { ascending: false }).limit(50),
+      contactsTable().select('*').eq('customer_id', customerId),
     ]);
     if (error) toast('error', 'Failed to load interactions');
-    const loadedInteractions = (interactionData || []) as unknown as CustomerInteraction[];
-    setInteractions(loadedInteractions); setContacts((contactData || []) as unknown as CustomerContact[]);
+    const loadedInteractions = (interactionData || []) as CustomerInteraction[];
+    setInteractions(loadedInteractions); setContacts((contactData || []) as CustomerContact[]);
     const ownerIds = [...new Set(loadedInteractions.map((item) => item.owner_user_id).filter((value): value is string => Boolean(value)))];
     if (ownerIds.length) { const { data } = await supabase.from('profile_public_view').select('id, full_name').in('id', ownerIds); setNames(Object.fromEntries((data || []).filter((profile): profile is { id: string; full_name: string | null } => Boolean(profile.id)).map((profile) => [profile.id, profile.full_name || 'Unknown user']))); }
     setLoading(false);

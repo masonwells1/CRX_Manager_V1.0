@@ -1853,6 +1853,7 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
   run_morning_notification_checks: 'cron sweep has persisted per-recipient notification deduplication',
   run_weekly_db_backup: 'cron-only maintenance with authenticated and anonymous EXECUTE revoked; each dated snapshot is independently retained and pruned',
   save_idempotency: 'idempotency infrastructure helper that stores the parent operation result',
+  set_primary_customer_contact: 'convergent primary-contact promotion; replays settle to the same single-primary state; SECURITY INVOKER under customer RLS',
   settle_applied_record_acres: 'trigger-only derived-acre recomputation; direct client EXECUTE is revoked',
 };
 

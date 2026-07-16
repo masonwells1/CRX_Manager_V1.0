@@ -102,6 +102,7 @@ export default function CustomerDetail() {
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [quickTaskOpen, setQuickTaskOpen] = useState(false);
   const [logInteractionOpen, setLogInteractionOpen] = useState(false);
+  const [interactionRefresh, setInteractionRefresh] = useState(0);
   const [quotePlannedFilter, setQuotePlannedFilter] = useState(false);
 
   // Financials tab state
@@ -564,7 +565,7 @@ export default function CustomerDetail() {
         <h2 className="text-lg font-semibold font-heading text-nav-dark">
           {isNew ? 'New Customer' : customer.farm_name}
         </h2>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center justify-end gap-2">
           {!isNew && (
             <Button variant="secondary" size="sm" icon={<PhoneCall className="w-4 h-4" />} showChevron={false} onClick={() => setLogInteractionOpen(true)}>
               Log Call
@@ -896,7 +897,7 @@ export default function CustomerDetail() {
               ))}
             </div>
           )}
-          {id && <CustomerInteractionsHistory customerId={id} />}
+          {id && <CustomerInteractionsHistory key={interactionRefresh} customerId={id} />}
         </div>
       )}
 
@@ -1526,7 +1527,7 @@ export default function CustomerDetail() {
       />
 
       {!isNew && id && profile && (
-        <LogInteractionModal open={logInteractionOpen} onClose={() => setLogInteractionOpen(false)} customerId={id} userId={profile.id} customerName={customer.farm_name || 'customer'} />
+        <LogInteractionModal open={logInteractionOpen} onClose={() => setLogInteractionOpen(false)} customerId={id} userId={profile.id} customerName={customer.farm_name || 'customer'} onLogged={() => { setInteractionRefresh((k) => k + 1); if (tab === 'timeline') void fetchTabData('timeline'); }} />
       )}
 
       {!isNew && id && (
