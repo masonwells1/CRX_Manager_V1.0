@@ -82,6 +82,11 @@ ok(r.decision?.permissionDecision === "deny", "PowerShell REST merge denied");
 r = runHook({ tool_name: "Bash", tool_input: { command: "echo docs about /pulls/12/merges endpoint" } });
 ok(r.status === 0 && r.decision === null, "merge-suffixed word boundary respected (merges != merge)");
 
+// Codex round-6: a gh merge earlier in the chain must not exempt later segments.
+r = runHook({ tool_name: "Bash", tool_input: { command: "gh pr merge 5 --squash; curl -X PUT https://api.github.com/repos/o/r/pulls/9/merge" } });
+ok(r.decision?.permissionDecision === "deny", "raw REST merge after a gh merge in the same chain still denied");
+ok(/raw GitHub REST merge/.test(r.decision?.permissionDecisionReason || "") || /fail closed/.test(r.decision?.permissionDecisionReason || ""), "chain deny cites the REST rule or fails closed on PR resolution");
+
 r = runHook({ tool_name: "mcp__Desktop_Commander__read_file", tool_input: { path: "x" } });
 ok(r.status === 0 && r.decision === null, "unrelated MCP tool passes through");
 
