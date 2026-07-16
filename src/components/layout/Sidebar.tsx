@@ -119,6 +119,7 @@ const officeNavigation: NavEntry[] = [
       id: 'customers-fields', label: 'Customers & Fields', icon: <Users className="w-5 h-5" />,
       items: [
         { path: '/customers', label: 'Customers', icon: <Users className="w-4 h-4" /> },
+        { path: '/call-lists', label: 'Call Lists', icon: <ClipboardList className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
         { path: '/fields', label: 'Fields & Maps', icon: <MapPin className="w-4 h-4" /> },
         { path: '/crop-programs', label: 'Crop Programs', icon: <Sprout className="w-4 h-4" /> },
       ],

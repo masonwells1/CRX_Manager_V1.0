@@ -37,6 +37,7 @@ export const PAGE_PERMISSIONS: PagePermission[] = [
 
   // Customers & Fields
   { key: 'customers', path: '/customers', label: 'Customers', category: 'Customers & Fields', roles: ['admin', 'sales_rep'] },
+  { key: 'call-lists', path: '/call-lists', label: 'Call Lists', category: 'Customers & Fields', roles: ['admin', 'sales_rep'] },
   { key: 'fields', path: '/fields', label: 'Fields & Maps', category: 'Customers & Fields', roles: ['admin', 'sales_rep'] },
   { key: 'crop-programs', path: '/crop-programs', label: 'Crop Programs', category: 'Customers & Fields', roles: ['admin', 'sales_rep'] },
 

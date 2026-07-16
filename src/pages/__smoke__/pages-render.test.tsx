@@ -107,8 +107,13 @@ vi.mock('../../contexts/AuthContext', () => ({
   AuthProvider: ({ children }: { children: ReactNode }) => children,
 }));
 
+// The real provider memoizes its context value, so `toast` identity is stable
+// across renders. The mock must honor that contract: pages put `toast` in
+// effect deps, and an unstable stub turns any load-then-toast path into an
+// infinite render loop (worker OOM, 2026-07-16).
+const STABLE_TOAST_CONTEXT = { toast: vi.fn() };
 vi.mock('../../components/ui/Toast', () => ({
-  useToast: () => ({ toast: vi.fn() }),
+  useToast: () => STABLE_TOAST_CONTEXT,
   ToastProvider: ({ children }: { children: ReactNode }) => children,
 }));
 
@@ -193,6 +198,7 @@ const COVERED = new Set<string>([
   'BlendRecipes',
   'BlendTickets',
   'BrandVsGeneric',
+  'CallLists',
   'CommissionPayments',
   'Compliance',
   'CropPrograms',

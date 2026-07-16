@@ -19,6 +19,7 @@ const Products = lazy(() => import('./pages/Products'));
 const ProductDetail = lazy(() => import('./pages/ProductDetail'));
 const Customers = lazy(() => import('./pages/Customers'));
 const CustomerDetail = lazy(() => import('./pages/CustomerDetail'));
+const CallLists = lazy(() => import('./pages/CallLists'));
 const Quotes = lazy(() => import('./pages/Quotes'));
 const QuoteBuilder = lazy(() => import('./pages/QuoteBuilder'));
 const Orders = lazy(() => import('./pages/Orders'));
@@ -201,6 +202,7 @@ const router = createBrowserRouter([
           { path: 'products/:id', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><ProductDetail /></ProtectedRoute> },
           { path: 'customers', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><Customers /></ProtectedRoute> },
           { path: 'customers/:id', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><CustomerDetail /></ProtectedRoute> },
+          { path: 'call-lists', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><CallLists /></ProtectedRoute> },
           { path: 'fields', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><Fields /></ProtectedRoute> },
           { path: 'fields/:id', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><FieldSetup /></ProtectedRoute> },
           { path: 'fields/:id/dashboard', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><FieldDashboard /></ProtectedRoute> },
