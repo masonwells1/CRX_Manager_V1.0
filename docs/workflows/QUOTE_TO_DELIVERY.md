@@ -57,7 +57,7 @@ draft -> sent -> revised -> accepted -> declined -> expired -> cancelled
 ## Stage 2: Order
 
 ### Tables involved
-- `orders` — header (order_number, status, totals, total_paid, balance_due, order_date)
+- `orders` — header (order_number, status, totals, order_date). NOTE: `total_paid` and `balance_due` were DROPPED — accounts receivable is derived from `invoices.balance_cents`, the single source of truth (verified live 2026-07-16).
 - `order_items` — line items (quantity_delivered, quantity_remaining)
 - `commissions` — per-order per-recipient (split_percentage, commission_amount, status, paid_date)
 
@@ -82,7 +82,7 @@ confirmed -> partially_fulfilled -> fulfilled -> cancelled -> voided
 - `update_order_items()` — modify order items (admin only)
 
 ### Rules
-- `total_paid` and `balance_due` track accounts receivable at the order level.
+- Accounts receivable is tracked on `invoices` (`invoices.balance_cents`, GENERATED), NOT on the order. The order header has no `total_paid`/`balance_due` — those columns were dropped.
 - Commission records are created automatically during order creation.
 - Money is stored as bigint cents (display / 100, store * 100).
 - Always use `checkMutationResult()` after writes.
@@ -161,7 +161,7 @@ You **CANNOT** skip from scheduled directly to completed. The in_progress step i
 
 ### Tables involved
 - `invoices` — header (invoice_number, order_id, customer_id, status, balance_cents bigint, due_date)
-- `invoice_items` — line items (quantity, unit_price_cents, line_total_cents)
+- `invoice_items` — line items (quantity, unit_price_cents, extended_cents). NOTE: the line-total column is `extended_cents`, not `line_total_cents` (verified live 2026-07-16).
 - `financial_audit_log` — immutable audit trail for all financial changes
 
 ### Source files
@@ -179,7 +179,7 @@ draft -> unposted -> posted -> paid -> overdue -> voided -> cancelled
 - **voided**: Cancelled. Reverses AR impact.
 
 ### Rules
-- All money is bigint cents: `balance_cents`, `unit_price_cents`, `line_total_cents`.
+- All money is bigint cents: `balance_cents`, `unit_price_cents`, `extended_cents`.
 - Posted invoices are LOCKED — no editing amounts.
 - All changes to invoices are logged in `financial_audit_log` (immutable, append-only).
 - Quick deliveries auto-create a draft invoice.
@@ -237,7 +237,7 @@ If you change one stage, check everything downstream:
 | Order items | Delivery items (locked), invoice items, quantity_remaining |
 | Delivery completion | Inventory levels, order fulfillment status, delivery remainders |
 | Invoice posting | AR aging, payment allocation, finance charges |
-| Payment recording | Order balance_due, invoice balance_cents, prepay credits |
+| Payment recording | invoice balance_cents (AR — the order has no balance_due), prepay credits |
 
 ---
 

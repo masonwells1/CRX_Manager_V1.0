@@ -215,6 +215,11 @@
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/unattended-autopilot.mjs\"",
             "timeout": 15
+          },
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/pr-merge-guard.mjs\"",
+            "timeout": 30
           }
         ]
       }
@@ -242,6 +247,11 @@
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/registry-freshness.mjs\"",
             "timeout": 15
+          },
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/session-heartbeat.mjs\"",
+            "timeout": 10
           }
         ]
       }
@@ -318,6 +328,11 @@
     "SessionStart": [
       {
         "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/session-heartbeat.mjs\"",
+            "timeout": 10
+          },
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/session-snapshot.mjs\"",

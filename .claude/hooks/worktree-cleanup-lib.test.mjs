@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import {
   classifyWorktree, classifyBranch, planCleanup, normPath,
-  PROTECTED_BRANCHES, HARNESS_MARKER,
+  PROTECTED_BRANCHES, HARNESS_MARKER, ACTIVE_WINDOW_MS,
 } from "./worktree-cleanup-lib.mjs";
 
 let pass = 0;
@@ -53,6 +53,27 @@ eq(classifyWorktree({ ...finished, merged: false }, ctx).reason, "unmerged", "un
 eq(classifyWorktree({ ...finished, path: "C:/CRX_Layer2" }, ctx).reason, "not-harness",
   "manual worktree outside .claude/worktrees → keep");
 eq(classifyWorktree({ ...finished, path: "C:/CRX_Manager" }, ctx).reason, "not-harness", "repo root → keep");
+
+// 1b. recent activity (a LIVE sibling session) — even if merged+clean+unlocked.
+//     This is the 2026-07-16 fix: previously only the current session's own path
+//     was protected, so a sibling's sweep deleted an in-use checkout.
+const NOW = 1_700_000_000_000;
+const actCtx = { ...ctx, nowMs: NOW };
+eq(classifyWorktree({ ...finished, lastActivityMs: NOW - 60_000 }, actCtx).reason, "recently-active",
+  "worktree touched 1 min ago → keep (live sibling session)");
+eq(classifyWorktree({ ...finished, lastActivityMs: NOW - (ACTIVE_WINDOW_MS - 1) }, actCtx).reason, "recently-active",
+  "just inside the active window → keep");
+eq(classifyWorktree({ ...finished, lastActivityMs: NOW - (ACTIVE_WINDOW_MS + 60_000) }, actCtx),
+  { action: "remove", reason: "merged-clean" }, "idle past the window → still removed (finished)");
+eq(classifyWorktree({ ...finished, lastActivityMs: 0 }, actCtx).action, "remove",
+  "no activity signal (0) → eligible for removal, never kept-forever on a read miss");
+eq(classifyWorktree({ ...finished, lastActivityMs: undefined }, actCtx).action, "remove",
+  "missing activity fact → behaves like before (removed if finished)");
+// recent activity must NOT rescue an UNMERGED worktree from being kept for the
+// right reason — unmerged is already keep; but a recent+merged one keeps as
+// recently-active, and precedence: active-session still wins over recently-active.
+eq(classifyWorktree({ ...finished, path: CUR, lastActivityMs: NOW - 1000 }, actCtx).reason, "active-session",
+  "active-session still takes precedence over recently-active");
 
 // Gate PRECEDENCE: a dirty + unmerged manual worktree still keeps (any single gate is enough);
 // and active beats everything.

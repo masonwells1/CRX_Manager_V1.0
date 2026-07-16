@@ -99,6 +99,14 @@ assert.equal(gitPushCwd("git -C ../repo push origin HEAD:main", "C:/work/current
 assert.equal(gitPushCwd("git -C .. -C sibling push origin HEAD:main", "C:/work/current"), path.resolve("C:/work/sibling"));
 
 assert.deepEqual(riskyFiles(["src/pages/Home.tsx", "supabase/migrations/1.sql"]), ["supabase/migrations/1.sql"]);
+// Codex round-7 (PR #142): reviewer charters + the proof-minting wrapper are
+// gate machinery — editing them must itself require the second-model verdict.
+assert.deepEqual(riskyFiles([".claude/agents/rls-security-reviewer.md"]), [".claude/agents/rls-security-reviewer.md"]);
+assert.deepEqual(riskyFiles(["scripts/write-apply-proofs.mjs"]), ["scripts/write-apply-proofs.mjs"]);
+// Codex round-8 (PR #142): the hook-registration surfaces — a PR that
+// de-registers a guard by editing only these must still require the verdict.
+assert.deepEqual(riskyFiles([".claude/settings.json"]), [".claude/settings.json"]);
+assert.deepEqual(riskyFiles([".codex/hooks.json"]), [".codex/hooks.json"]);
 assert.deepEqual(
   riskyFiles([
     "src/pages/Home.tsx",

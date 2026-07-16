@@ -29,9 +29,18 @@ ok(!isMachineGenerated("run it overnight and dont ask me"), "overnight phrasing 
 ok(!isMachineGenerated(""), "empty not machine");
 
 // ── PUSH_POLICY is the one canonical, non-contradictory statement ────────
-ok(/AUTO-PUSH to main \(2026-06-16\)/.test(PUSH_POLICY), "policy names the authorization");
+ok(/\(2026-06-16/.test(PUSH_POLICY), "policy names the authorization");
 ok(/HARD GATES/.test(PUSH_POLICY), "policy names the hard gates");
 ok(!/never pushes/i.test(PUSH_POLICY), "policy has no stale never-pushes text");
+// 2026-07-14 branch protection: the constant MUST describe the PR landing path —
+// this is the drift test the 2026-07-16 scaffolding review demanded, so the
+// canonical wording can't silently fall behind AGENTS.md again.
+ok(/branch → PR|PR →|pull request/i.test(PUSH_POLICY), "policy describes the PR landing path");
+ok(/direct pushes to main are impossible/i.test(PUSH_POLICY), "policy states direct main pushes are impossible");
+ok(!/no approval click/.test(PUSH_POLICY), "policy no longer claims click-free direct pushes");
+// The armed-mode carve-out must be stated so this constant can't contradict
+// autopilot-intent-reminder in the same injected context.
+ok(/ARMED hands-free run.*PARK/i.test(PUSH_POLICY), "policy states armed runs park pushes/merges");
 
 // ── no hook still carries the stale contradictory policy text ────────────
 for (const f of readdirSync(__dirname)) {

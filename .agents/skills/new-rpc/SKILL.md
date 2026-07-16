@@ -76,11 +76,15 @@ DECLARE
   v_id uuid;
   v_existing jsonb;
 BEGIN
-  -- Idempotency check
+  -- Idempotency check — the lookup MUST be scoped to THIS function's operation
+  -- name. An unscoped key-only lookup returns ANY operation's cached row on a
+  -- key collision (the restore_quote_version bug class; 22 live RPCs had to be
+  -- swept). idempotency-body-check.mjs hard-denies the unscoped shape.
   IF p_idempotency_key IS NOT NULL THEN
     SELECT result INTO v_existing
       FROM idempotency_keys
-      WHERE idempotency_key = p_idempotency_key;
+      WHERE idempotency_key = p_idempotency_key
+        AND operation = '<function_name>';  -- ALWAYS scope to this function's name
     IF v_existing IS NOT NULL THEN
       RETURN (v_existing->>'id')::uuid;
     END IF;
@@ -103,6 +107,12 @@ BEGIN
   RETURN v_id;
 END;
 $$;
+
+-- Deliberate grants — REQUIRED on every SECURITY DEFINER function. Without
+-- these, anon/PUBLIC can execute it (incident classes B7-B9). Note: REVOKE
+-- FROM PUBLIC alone does NOT de-anon — revoke anon explicitly.
+REVOKE ALL ON FUNCTION public.<function_name>(uuid, text, text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.<function_name>(uuid, text, text) TO authenticated;
 ```
 
 ### SQL Template (for read-only functions)
@@ -124,14 +134,20 @@ BEGIN
   WHERE t.id = p_param1;
 END;
 $$;
+
+-- Deliberate grants — required on read-only SECURITY DEFINER functions too
+REVOKE ALL ON FUNCTION public.<function_name>(uuid) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.<function_name>(uuid) TO authenticated;
 ```
 
 ### CRITICAL Patterns (DO NOT deviate)
 
 - `SECURITY DEFINER` + `SET search_path = public, pg_temp` — ALWAYS together
 - `p_idempotency_key text DEFAULT NULL` — REQUIRED on all mutating functions
+- idempotency lookup MUST include `AND operation = '<function_name>'` — an unscoped lookup is hard-denied by the idempotency hook
 - idempotency_keys columns: `idempotency_key`, `operation`, `result` — NEVER `key`, `entity_type`, `entity_id`
 - `result` column is `jsonb` — NEVER cast to `::text`
+- Deliberate grants on EVERY function: `REVOKE ALL ... FROM PUBLIC, anon;` + `GRANT EXECUTE ... TO authenticated;` — REVOKE FROM PUBLIC alone does NOT de-anon
 - Money values: use `bigint` for cents, NEVER `numeric` or `float` for money storage
 
 ## Step 4: Update TypeScript Types
@@ -150,8 +166,8 @@ Read `docs/reference/rpc-functions.md` and add:
 ### migration-history.md
 Add new row to `docs/reference/migration-history.md`.
 
-### CLAUDE.md
-Update RPC count in the "Current State" line if needed.
+(Do NOT add function/migration counts to `CLAUDE.md` or `AGENTS.md` — volatile counts
+live only in `docs/reference/` files that `npm run check:docs` validates.)
 
 ## Step 6: Verify
 
@@ -181,7 +197,11 @@ Docs updated:
 Build: PASS
 Typecheck: PASS
 
-⚠️  Remember: Run `supabase db push` to apply to your database.
+⚠️  Remember: This migration is LOCAL only. Applying it to the live database goes
+    through `/migration-review` → Supabase MCP `apply_migration` (interactive
+    session: Mason's in-chat OK; pre-authorized armed hands-free run: full proof +
+    Codex gate per the settled 2026-07-13 policy). NEVER `supabase db push` and
+    NEVER the dashboard SQL editor — both bypass the review gate and are blocked.
 ```
 
 ## Safety Rules

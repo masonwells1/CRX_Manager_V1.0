@@ -9,13 +9,12 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ## 1. Open HIGH findings (dormant on live data)
 
-### July 14 full-gauntlet remediation live; frontend rollout pending PR
+### July 14 full-gauntlet remediation — LIVE, frontend rolled out (PR #133 merged 2026-07-15)
 
-The three reviewed migrations were applied live on 2026-07-15 and `process-blend-ticket` is v25 ACTIVE with JWT enforcement. The live schema registry, TypeScript types, and 393-name RPC snapshot were regenerated; the queued-RPC exceptions are gone. The post-apply business chain reached `SMOKE_PASS_ROLLBACK`, and all 17 database invariant sweeps have zero unallowlisted violations. The remaining release action is the reviewed frontend PR/check/merge path.
+The three reviewed migrations were applied live on 2026-07-15 and `process-blend-ticket` is v25 ACTIVE with JWT enforcement. The live schema registry, TypeScript types, and 393-name RPC snapshot were regenerated; the queued-RPC exceptions are gone. The post-apply business chain reached `SMOKE_PASS_ROLLBACK`, and all 17 database invariant sweeps have zero unallowlisted violations. **The frontend rollout landed via PR #133 ("Harden gauntlet money and blend workflows", merged 2026-07-15, commit `c4f7b4c5`) — the release path is complete.** What remains under this heading is owner-side data-cleanup decisions (the bullets below), not code.
 
 - Migration `20260714230100` removed the legacy direct-insert path. Tabs still running the old bundle must refresh before another blend upload; tell office users to use the existing “A new version of the app is ready” prompt (or reload).
-- Finish the green commit/PR/check/merge path without an idle gap. Historical cleanup remains excluded from this release.
-- Separately decide live-data cleanup: eight empty unposted `SEED` commission batches ($1,500 headers), PO-2026-0008's stale fully-received status/open lines, PO-2026-0015's legacy receipt gap, one explicit E2E zero-item invoice, and five historical completed deliveries without items.
+- **Owner decision — live-data cleanup:** eight empty unposted `SEED` commission batches ($1,500 headers), PO-2026-0008's stale fully-received status/open lines, PO-2026-0015's legacy receipt gap, one explicit E2E zero-item invoice, and five historical completed deliveries without items.
 - Reconcile 18 negative inventory rows only from physical counts. Negative stock is intentional discrepancy evidence, not a value to zero-clamp.
 
 The frontend/live-RPC fixture is regenerated and green; both `create_blend_ticket` and `commit_blend_ticket_ocr_result` are present live. Evidence: `docs/audits/gauntlet/2026-07-14-full-gauntlet-codex-only-remediation.md`.
@@ -29,7 +28,7 @@ Genuinely still-open items from that same hunt (checked against `LEDGER.json`, n
 | Item | Severity | Status | Pointer |
 |---|---|---|---|
 | `forgeable-actor:transfer_job_to_invoice:unbound-performed_by` — `p_performed_by` not bound to `auth.uid()` on job→invoice transfer | MEDIUM (Codex split HIGH/MED, settled MEDIUM) | parked, no migration built | LEDGER.json line ~357 |
-| `concurrency:save_field_app_invoice:no-row-lock` — group-edit branch reads status without `FOR UPDATE` | MEDIUM | parked | LEDGER.json line ~498 |
+| `concurrency:save_field_app_invoice:no-row-lock` — group-edit branch read status without `FOR UPDATE` | MEDIUM | **RESOLVED** — `20260714224000_field_app_save_post_lock.sql` wraps `save_field_app_invoice` in `FOR UPDATE` row locks; applied live 2026-07-14, verified in the live function body 2026-07-16 | LEDGER.json line ~498 |
 | `prepay:apply_remaining_prepayments:status-not-paid` | MEDIUM | moot while bulk-apply is hard-blocked (see §6) | LEDGER.json line ~566 |
 | `commissions:commission_pay_picker:blank-order-customer` | MEDIUM | parked for review (frontend, money-domain) | LEDGER.json line ~833 |
 | ~10 further LOW items (doc-count drift, dead-RPC retire candidates, audit-log completeness gaps) | LOW | parked | LEDGER.json `findings` array |

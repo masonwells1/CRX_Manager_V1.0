@@ -43,12 +43,14 @@ Must have 0 failures. Report test count and any failures.
 echo "Local migrations: $(ls supabase/migrations/*.sql | wc -l)"
 ```
 
-Compare to the CLAUDE.md count. If there are NEW migrations that haven't been pushed to Supabase yet, WARN the user:
+Compare against the live database (Supabase MCP `list_migrations`). If there are NEW migrations that haven't been applied to the live database yet, WARN the user:
 
 ```
 ⚠️  You have X new migration(s) not yet applied to production.
-    Run 'supabase db push' BEFORE deploying, or the app will
-    reference tables/columns/functions that don't exist yet.
+    Apply them through /migration-review → apply_migration BEFORE
+    deploying (interactive: Mason's in-chat OK required), or the app
+    will reference tables/columns/functions that don't exist yet.
+    NEVER `supabase db push` — it bypasses the review gate and is blocked.
 ```
 
 ## Step 5: Environment Check
