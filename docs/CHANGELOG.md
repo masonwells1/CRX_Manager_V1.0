@@ -4,6 +4,10 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-16 — Fix: pre-commit blocked ALL commits while autopilot was armed (test hermeticity)
+
+`autopilot-lib.test.mjs`'s live-inertness check spawned the real `unattended-autopilot.mjs` hook and asserted it emits nothing "when the flag is absent" — but never ensured the flag was absent. With a real `AUTOPILOT.on` armed (a hands-free window), the hook correctly DENIED the test's `rm -rf /` sample, the assertion failed, and the husky pre-commit (which runs `test:agent-workflows`) blocked **every commit in the repo for the duration of the armed window** — exactly when autonomous sessions need to commit. Fix is test-only, no guard logic touched: the test now spawns the hook with `CLAUDE_PROJECT_DIR` pointed at an empty temp dir (flag genuinely absent), and adds the inverse live assertion — with an armed unexpired flag in a temp project dir, the same destructive call IS denied. 53 assertions pass, verified while the real repo flag was armed. Found while committing the supplier-pricing plan doc (`docs/plans/2026-07-16-supplier-pricing-and-variants-plan.md`, this same day's planning session).
+
 ## 2026-07-16 — Scaffolding review Wave 4b: hook-manifest parity guard + CRLF-insensitive adapter check
 
 Two sync-adapter findings from the 2026-07-16 review, both HARD-scaffolding fixes:

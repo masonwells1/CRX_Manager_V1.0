@@ -7,6 +7,8 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { autopilotDecision, flagActive, intentFresh, overnightGateDecision } from "./autopilot-lib.mjs";
 
 let pass = 0;
@@ -81,13 +83,32 @@ ok(flagActive(JSON.stringify({ armed_at: "x" })).active === false, "no-expiry fl
 ok(flagActive("").active === false, "empty flag inactive");
 
 // ── LIVE: hook is inert (emits nothing) when the flag is absent ──────────
+// Hermetic via CLAUDE_PROJECT_DIR: the hook resolves AUTOPILOT.on under that
+// dir, so point it at throwaway temp dirs. Without this, a genuinely-armed
+// flag in THIS repo made the assertion fail and pre-commit blocked every
+// commit exactly during hands-free windows (found 2026-07-16).
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const hookPath = path.join(__dirname, "unattended-autopilot.mjs");
-const r = spawnSync(process.execPath, [hookPath], {
+const runHookIn = (projectDir) => spawnSync(process.execPath, [hookPath], {
   input: JSON.stringify({ tool_name: "Bash", tool_input: { command: "rm -rf /" } }),
   encoding: "utf8",
+  env: { ...process.env, CLAUDE_PROJECT_DIR: projectDir },
 });
+const inertDir = mkdtempSync(path.join(tmpdir(), "autopilot-test-inert-"));
+const r = runHookIn(inertDir);
 eq(r.status, 0, "hook exits 0");
 eq(r.stdout.trim(), "", "hook emits NOTHING when flag absent (off by default — defers to normal flow)");
+// Inverse, same live spawn path: with an armed unexpired flag, the deny-set holds.
+const armedDir = mkdtempSync(path.join(tmpdir(), "autopilot-test-armed-"));
+mkdirSync(path.join(armedDir, ".claude", "session-state"), { recursive: true });
+writeFileSync(
+  path.join(armedDir, ".claude", "session-state", "AUTOPILOT.on"),
+  JSON.stringify({ expires: new Date(Date.now() + 3600e3).toISOString(), armed_at: new Date().toISOString(), hours: 1 }),
+);
+const ra = runHookIn(armedDir);
+eq(ra.status, 0, "armed hook exits 0");
+ok(ra.stdout.includes('"permissionDecision":"deny"'), "armed hook DENIES rm -rf live (never-auto-approve set enforced)");
+rmSync(inertDir, { recursive: true, force: true });
+rmSync(armedDir, { recursive: true, force: true });
 
 console.log(`autopilot-lib: ${pass} assertions passed`);
