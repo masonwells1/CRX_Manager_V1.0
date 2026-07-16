@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState , useCallback, lazy, Suspense } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Save, Plus, Trash2, Search, MapPin, FileText, Truck, AlertTriangle, MessageSquarePlus, Copy, ClipboardList, Zap, SprayCan } from 'lucide-react';
+import { Save, Plus, Trash2, Search, MapPin, FileText, Truck, AlertTriangle, MessageSquarePlus, Copy, ClipboardList, Zap, SprayCan, PhoneCall } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
@@ -24,6 +24,8 @@ import { parseDollarsToCents } from '../lib/parseCents';
 import { formatUSD as fmt } from '../lib/money';
 import CustomerSummaryBar from '../components/customers/CustomerSummaryBar';
 import YearEndSummaryDialog from '../components/reports/YearEndSummaryDialog';
+import CustomerContacts, { CustomerInteractionsHistory } from '../components/customers/CustomerContacts';
+import LogInteractionModal from '../components/customers/LogInteractionModal';
 import { downloadYearEndSummaryPdf } from '../lib/yearEndSummaryPdf';
 import type { YearEndSummaryOptions } from '../lib/yearEndSummaryPdf';
 import type { YearEndSummaryData } from '../types';
@@ -83,7 +85,7 @@ export default function CustomerDetail() {
   const [addresses, setAddresses] = useState<Partial<CustomerAddress>[]>([]);
   const [loading, setLoading] = useState(!isNew);
   const [saving, setSaving] = useState(false);
-  const [tab, setTab] = useState<'info' | 'timeline' | 'fields' | 'quotes' | 'orders' | 'deliveries' | 'financials' | 'history'>('info');
+  const [tab, setTab] = useState<'info' | 'contacts' | 'timeline' | 'fields' | 'quotes' | 'orders' | 'deliveries' | 'financials' | 'history'>('info');
   const [timeline, setTimeline] = useState<ActivityFeedItem[]>([]);
   const [timelineLoading, setTimelineLoading] = useState(false);
 
@@ -99,6 +101,7 @@ export default function CustomerDetail() {
   const [showSummaryDialog, setShowSummaryDialog] = useState(false);
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [quickTaskOpen, setQuickTaskOpen] = useState(false);
+  const [logInteractionOpen, setLogInteractionOpen] = useState(false);
   const [quotePlannedFilter, setQuotePlannedFilter] = useState(false);
 
   // Financials tab state
@@ -530,7 +533,7 @@ export default function CustomerDetail() {
     );
   }
 
-  const tabs = ['info', 'timeline', 'fields', 'quotes', 'orders', 'deliveries', 'financials', 'history'] as const;
+  const tabs = ['info', 'contacts', 'timeline', 'fields', 'quotes', 'orders', 'deliveries', 'financials', 'history'] as const;
 
   const handleGenerateSummary = async (season: number, options: YearEndSummaryOptions) => {
     if (!id || isNew) return;
@@ -562,6 +565,11 @@ export default function CustomerDetail() {
           {isNew ? 'New Customer' : customer.farm_name}
         </h2>
         <div className="flex items-center gap-2">
+          {!isNew && (
+            <Button variant="secondary" size="sm" icon={<PhoneCall className="w-4 h-4" />} showChevron={false} onClick={() => setLogInteractionOpen(true)}>
+              Log Call
+            </Button>
+          )}
           {!isNew && (
             <Button
               variant="secondary"
@@ -854,8 +862,12 @@ export default function CustomerDetail() {
         </div>
       )}
 
+      {tab === 'contacts' && !isNew && id && profile && (
+        <CustomerContacts customerId={id} performedBy={profile.id} />
+      )}
+
       {tab === 'timeline' && !isNew && (
-        <div className="space-y-2">
+        <div className="space-y-4">
           {timelineLoading || tabLoading ? (
             <div className="text-center py-8 text-sm text-gray-400">Loading timeline...</div>
           ) : timeline.length === 0 ? (
@@ -884,6 +896,7 @@ export default function CustomerDetail() {
               ))}
             </div>
           )}
+          {id && <CustomerInteractionsHistory customerId={id} />}
         </div>
       )}
 
@@ -1511,6 +1524,10 @@ export default function CustomerDetail() {
         onStay={() => blocker.reset?.()}
         onLeave={() => blocker.proceed?.()}
       />
+
+      {!isNew && id && profile && (
+        <LogInteractionModal open={logInteractionOpen} onClose={() => setLogInteractionOpen(false)} customerId={id} userId={profile.id} customerName={customer.farm_name || 'customer'} />
+      )}
 
       {!isNew && id && (
         <QuickTaskModal
