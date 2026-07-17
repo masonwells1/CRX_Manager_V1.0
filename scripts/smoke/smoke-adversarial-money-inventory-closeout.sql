@@ -1,5 +1,6 @@
 -- Post-apply rollback-only proof for migrations 20260716213000,
--- 20260716224000, 20260716233000, 20260717010000, and 20260717015439.
+-- 20260716224000, 20260716233000, 20260717010000, 20260717015439,
+-- and 20260717032000.
 -- Exercises the exact adversarial findings without retaining business rows.
 DO $smoke$
 DECLARE
@@ -168,6 +169,35 @@ BEGIN
     'smk-po-bulk-first-' || v_suffix
   );
   v_po := (v_first->>'po_id')::uuid;
+
+  -- The exact same request key represents a lost-response retry. It must
+  -- replay the original saved result, not be reclassified as a duplicate.
+  v_replay := public.save_purchase_order(
+    NULL,
+    jsonb_build_object(
+      'po_number', 'SMK-BULK-A-' || v_suffix,
+      'vendor', '[SMOKE] Bulk Intent Vendor',
+      'status', 'draft',
+      'bulk_import_intent_key', v_intent
+    ),
+    jsonb_build_array(
+      jsonb_build_object(
+        'product_id', v_product,
+        'product_name', v_product_name,
+        'quantity_ordered', 10.125,
+        'unit_cost_cents', 333,
+        'unit_size', v_unit_size
+      )
+    ),
+    v_sales,
+    'smk-po-bulk-first-' || v_suffix
+  );
+  IF v_replay->>'status' IS DISTINCT FROM 'saved'
+     OR (v_replay->>'po_id')::uuid IS DISTINCT FROM v_po
+     OR v_replay->>'po_number' IS DISTINCT FROM v_first->>'po_number' THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: same-key bulk replay changed result first=% replay=%',
+      v_first, v_replay;
+  END IF;
 
   -- Another authorized employee can carry a different generic idempotency key
   -- and PO number; the global business-intent claim still returns the first PO.
