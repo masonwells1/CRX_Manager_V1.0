@@ -14,14 +14,18 @@ vi.mock('../ui/Toast', () => ({
   ToastProvider: ({ children }: { children: React.ReactNode }) => children,
 }));
 
-// Chainable query stub that records every .update()/.eq() call per table.
-type Recorded = { table: string; method: string; args: unknown[] };
-const calls: Recorded[] = [];
+// Chainable query stub. Each supabase.from() call gets ITS OWN chain with its
+// own recorded call list — assertions must scope to the one chain that carried
+// .update(), so a predicate on the load query can never satisfy a test about
+// the mutation (Sol final r3).
+type Recorded = { method: string; args: unknown[] };
+type Chain = Record<string, unknown> & { recorded: Recorded[]; table: string };
+const chains: Chain[] = [];
 
-function makeChain(table: string) {
-  const chain: Record<string, unknown> = {};
+function makeChain(table: string): Chain {
+  const chain = { recorded: [], table } as unknown as Chain;
   const record = (method: string) => (...args: unknown[]) => {
-    calls.push({ table, method, args });
+    chain.recorded.push({ method, args });
     return chain;
   };
   for (const method of ['select', 'update', 'insert', 'eq', 'is', 'order', 'limit']) {
@@ -29,8 +33,11 @@ function makeChain(table: string) {
   }
   chain.then = (resolve: (v: unknown) => unknown) =>
     resolve({ data: table === 'customer_contacts' ? [PRIMARY_CONTACT, SECONDARY_CONTACT] : [], error: null, count: null });
+  chains.push(chain);
   return chain;
 }
+
+const updateChains = () => chains.filter((chain) => chain.recorded.some((call) => call.method === 'update'));
 
 vi.mock('../../lib/db', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../lib/db')>();
@@ -53,7 +60,7 @@ const SECONDARY_CONTACT = { ...PRIMARY_CONTACT, id: 'contact-secondary', name: '
 import CustomerContacts from './CustomerContacts';
 
 describe('CustomerContacts primary-protection guards', () => {
-  beforeEach(() => { calls.length = 0; toastSpy.mockClear(); });
+  beforeEach(() => { chains.length = 0; toastSpy.mockClear(); });
   afterEach(cleanup);
 
   it('blocks deactivating the primary contact before any confirm dialog', async () => {
@@ -63,7 +70,7 @@ describe('CustomerContacts primary-protection guards', () => {
     expect(toastSpy).toHaveBeenCalledWith('error', expect.stringContaining('primary'));
     // No confirm dialog and no update issued for the primary.
     expect(screen.queryByText('Deactivate contact')).not.toBeInTheDocument();
-    expect(calls.filter((call) => call.method === 'update')).toHaveLength(0);
+    expect(updateChains()).toHaveLength(0);
   });
 
   it('deactivating a non-primary contact scopes the UPDATE by customer AND current non-primary status', async () => {
@@ -71,8 +78,11 @@ describe('CustomerContacts primary-protection guards', () => {
     await waitFor(() => expect(screen.getByText('Sam Secondary')).toBeInTheDocument());
     fireEvent.click(screen.getByLabelText('Deactivate Sam Secondary'));
     fireEvent.click(screen.getByRole('button', { name: 'Deactivate' }));
-    await waitFor(() => expect(calls.some((call) => call.method === 'update')).toBe(true));
-    const eqArgs = calls.filter((call) => call.method === 'eq').map((call) => call.args);
+    await waitFor(() => expect(updateChains()).toHaveLength(1));
+    // Assert ONLY on the chain that carried .update() — predicates on the load
+    // query must never satisfy this test (Sol final r3).
+    const mutation = updateChains()[0];
+    const eqArgs = mutation.recorded.filter((call) => call.method === 'eq').map((call) => call.args);
     // The stale-state guards: row identity, customer scope, and currently-non-primary.
     expect(eqArgs).toEqual(expect.arrayContaining([
       ['id', 'contact-secondary'],
@@ -88,6 +98,6 @@ describe('CustomerContacts primary-protection guards', () => {
     fireEvent.click(screen.getByLabelText('Primary contact') || screen.getByText('Primary contact'));
     fireEvent.click(screen.getByRole('button', { name: 'Save Contact' }));
     await waitFor(() => expect(toastSpy).toHaveBeenCalledWith('error', expect.stringContaining('promote another contact')));
-    expect(calls.filter((call) => call.method === 'update')).toHaveLength(0);
+    expect(updateChains()).toHaveLength(0);
   });
 });
