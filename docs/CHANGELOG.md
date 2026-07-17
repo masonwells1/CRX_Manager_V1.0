@@ -8,6 +8,10 @@ All significant development milestones, in reverse chronological order.
 
 Split-billing architecture dig + per-line-item custom-split design spec v2 (review-hardened via gpt-5.6-terra xhigh plan review; 4 blockers folded in). Owner workflow settled: field split=default, adjust in unposted draft, unpost reversible. Committed 4b695109; Codex builds next week. No code/DB changes.
 
+## 2026-07-17 — Add CodeRabbit AI PR-review config (.coderabbit.yaml) tuned to CRX hard rules; opened PR #160. GitHub setup inspection: confirmed CodeQL default-setup, secret scanning, Dependabot, protect-main ruleset all active; repo kept public per Mason.
+
+Add CodeRabbit AI PR-review config (.coderabbit.yaml) tuned to CRX hard rules; opened PR #160. GitHub setup inspection: confirmed CodeQL default-setup, secret scanning, Dependabot, protect-main ruleset all active; repo kept public per Mason.
+
 - **Commits this session** (git log --since=12.hours --author=Mason):
   - `774c85e4 Reconcile save_customer migration ledger version to match filename (#159)`
   - `a84534b6 Merge pull request #156 from masonwells1/claude/amazing-ptolemy-9e7e0a`
@@ -15,6 +19,8 @@ Split-billing architecture dig + per-line-item custom-split design spec v2 (revi
   - `b240f7a3 Close money and inventory gauntlet findings (#157)`
   - `bca78b59 feat(crm): customer crops + prep-card top products by volume (owner decisions 2026-07-17) (#154)`
   - `addda7cd Close money and inventory gauntlet gaps (#153)`
+  - `296d2de7 CRM loop closeout: final-gauntlet fixes + morning report (#152)`
+  - `916cc856 CRM Relationship Intelligence — Phase 4: Customer Documents (#151)`
 - **Migrations touched** (last 15 commits (fallback)):
   - `supabase/migrations/20260717063445_bind_bulk_po_replay_content.sql`
   - `supabase/migrations/20260717070900_bind_bulk_po_identity_ascii_fold.sql`

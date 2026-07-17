@@ -1,0 +1,56 @@
+# CodeRabbit configuration for CRX Manager
+# Docs: https://docs.coderabbit.ai/reference/configuration
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+
+language: en-US
+
+# "chill" = fewer style nitpicks, focus on real problems. Mason is a solo,
+# non-coder owner running a live money app; signal matters more than volume.
+reviews:
+  profile: chill
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  review_status: true
+  collapse_walkthrough: false
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches:
+      - main
+
+  # Project-specific review guidance. These mirror the "CRX Hard Rules" in
+  # AGENTS.md so CodeRabbit flags the exact mistakes that have bitten this
+  # codebase before, not just generic style.
+  path_instructions:
+    - path: "supabase/migrations/**"
+      instructions: >-
+        This is a Supabase (PostgreSQL) migration for a live production app.
+        Flag as high severity: any new table that does NOT enable Row Level
+        Security (RLS) with policies in the same file; any SECURITY DEFINER
+        function missing `SET search_path = public, pg_temp`; any mutating RPC
+        that does not accept and enforce `p_idempotency_key text DEFAULT NULL`;
+        any GRANT EXECUTE to anon/public on a function that writes data; any
+        edit to an already-applied migration (migrations must be new files
+        only). Money must be stored as bigint cents — never floating point.
+        A CHECK constraint that changes allowed status values must include all
+        previously allowed values.
+    - path: "src/**"
+      instructions: >-
+        React 18 + TypeScript frontend for a live app. Flag: money handled as
+        floating-point instead of integer cents; missing `assertRpcResult()`
+        after an RPC call or `checkMutationResult()` after `.update()` /
+        `.delete()`; use of `confirm()`, `window.confirm()`, or `alert()`
+        instead of the shared ConfirmModal / toast components; writes to
+        generated columns such as `invoices.balance_cents`; Supabase clients
+        created anywhere other than `src/lib/db.ts`; Sentry imported from
+        anywhere other than `src/lib/sentry`; any hardcoded secret, API key,
+        or service_role key in frontend code.
+    - path: "supabase/functions/**"
+      instructions: >-
+        Supabase Edge Functions. Flag missing or inconsistent CORS handling,
+        and any secret/service-role key that is logged or returned to the
+        client.
+
+chat:
+  auto_reply: true
