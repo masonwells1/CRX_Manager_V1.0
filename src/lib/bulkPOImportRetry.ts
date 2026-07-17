@@ -17,6 +17,8 @@ interface SessionStorageLike {
 const STORAGE_PREFIX = 'crx:bulk-po-import-pending:';
 const MAX_PENDING_AGE_MS = 24 * 60 * 60 * 1000;
 const MAX_IMPORTED_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+const PENDING_KEY_PREFIX = 'h1:';
+const HASHED_PENDING_KEY_PATTERN = /^h1:[a-f0-9]{16}$/;
 
 export interface BulkPOIntentItem {
   productId: string | null;
@@ -33,8 +35,24 @@ export interface BulkPOIntentDocument {
   items: BulkPOIntentItem[];
 }
 
+export function trimBulkPOIdentityBoundary(value: string): string {
+  return value.trim();
+}
+
+export function hasBulkPOIdentityText(value: string): boolean {
+  // Keep the durable identity byte-for-byte compatible with PostgreSQL while
+  // rejecting OCR artifacts that contain no visible text at all.
+  return trimBulkPOIdentityBoundary(value).length > 0;
+}
+
 function normalizeIdentityText(value: string): string {
-  return value.trim().toLowerCase();
+  // Normalize compatibility-equivalent Unicode for browser retry hints. The
+  // PostgreSQL writer independently derives the authoritative durable claim,
+  // so cross-runtime Unicode differences cannot reject or duplicate an import.
+  return trimBulkPOIdentityBoundary(value)
+    .normalize('NFKC')
+    .toLowerCase()
+    .normalize('NFKC');
 }
 
 const DOCUMENT_IDENTITY_SEPARATOR = '\u001f';
@@ -77,6 +95,11 @@ export function normalizeBulkPOInvoiceDate(value: string): string | null {
  * content, but must not let one vendor invoice acquire a second durable claim.
  */
 export function buildBulkPOIntentKey(document: BulkPOIntentDocument): string | null {
+  if (
+    !hasBulkPOIdentityText(document.vendorName)
+    || !hasBulkPOIdentityText(document.invoiceNumber)
+  ) return null;
+
   const vendorName = normalizeIdentityText(document.vendorName);
   const invoiceNumber = normalizeIdentityText(document.invoiceNumber);
   // The claim is global across employees and devices. Without a vendor, two
@@ -115,9 +138,62 @@ export async function buildBulkPOIdempotencyKey(
   return `save_purchase_order:${profileId}:bulk:${await sha256Hex(`${profileId}\u0000${intentKey}`)}`;
 }
 
-/** Stable across users so the server can claim one vendor document globally. */
-export async function buildBulkPODocumentClaimKey(intentKey: string): Promise<string> {
-  return `bulk-po-document:${await sha256Hex(intentKey)}`;
+export function bulkPOImportFailureGuidance(error: unknown): string | null {
+  const message = error instanceof Error
+    ? error.message
+    : typeof error === 'string'
+      ? error
+      : typeof error === 'object' && error !== null && 'message' in error
+        ? String(error.message)
+        : '';
+
+  if (message.includes('BULK_PO_DOCUMENT_CONTENT_CONFLICT')) {
+    return 'This vendor invoice was already imported with different reviewed details. In Supplier POs, search this vendor and invoice number, then edit it instead.';
+  }
+  return null;
+}
+
+/**
+ * Keep normalized vendor/invoice text out of browser storage keys. FNV-1a is
+ * used only as a deterministic local lookup hash; the server's SHA-256 claim
+ * remains the authoritative cross-device duplicate boundary.
+ */
+export function pendingBulkPOIntentStorageKey(intentKey: string): string {
+  let hash = 0xcbf29ce484222325n;
+  for (const byte of new TextEncoder().encode(intentKey)) {
+    hash ^= BigInt(byte);
+    hash = BigInt.asUintN(64, hash * 0x100000001b3n);
+  }
+  return `${PENDING_KEY_PREFIX}${hash.toString(16).padStart(16, '0')}`;
+}
+
+function legacyPendingBulkPOIntentStorageKey(intentKey: string): string {
+  const separatorIndex = intentKey.indexOf(DOCUMENT_IDENTITY_SEPARATOR);
+  if (separatorIndex === -1) {
+    return pendingBulkPOIntentStorageKey(intentKey.trim().toLowerCase());
+  }
+  const vendorName = intentKey.slice(0, separatorIndex).trim().toLowerCase();
+  const invoiceNumber = intentKey.slice(separatorIndex + 1).trim().toLowerCase();
+  return pendingBulkPOIntentStorageKey(
+    `${vendorName}${DOCUMENT_IDENTITY_SEPARATOR}${invoiceNumber}`,
+  );
+}
+
+function canonicalizeLegacyPendingIntentKey(intentKey: string): string {
+  const separatorIndex = intentKey.indexOf(DOCUMENT_IDENTITY_SEPARATOR);
+  if (separatorIndex === -1) return normalizeIdentityText(intentKey);
+  return `${normalizeIdentityText(intentKey.slice(0, separatorIndex))}`
+    + DOCUMENT_IDENTITY_SEPARATOR
+    + normalizeIdentityText(intentKey.slice(separatorIndex + 1));
+}
+
+export function getPendingBulkPOIntent(
+  pending: PendingBulkPOIntents,
+  intentKey: string,
+): PendingBulkPOIntent | undefined {
+  const currentKey = pendingBulkPOIntentStorageKey(intentKey);
+  const legacyBrowserKey = legacyPendingBulkPOIntentStorageKey(intentKey);
+  return pending[currentKey] ?? pending[legacyBrowserKey];
 }
 
 function storageKey(profileId: string): string {
@@ -134,16 +210,22 @@ export function loadPendingBulkPOIntents(
     if (!raw) return {};
     const parsed = JSON.parse(raw) as PendingBulkPOIntents;
     const fresh = Object.fromEntries(
-      Object.entries(parsed).filter(([, entry]) => {
+      Object.entries(parsed).flatMap(([rawKey, entry]) => {
         if (typeof entry?.idempotencyKey !== 'string' || typeof entry?.updatedAt !== 'number') {
-          return false;
+          return [];
         }
         const maxAge = entry.status === 'imported' ? MAX_IMPORTED_AGE_MS : MAX_PENDING_AGE_MS;
-        return now - entry.updatedAt <= maxAge;
+        if (now - entry.updatedAt > maxAge) return [];
+        // Migrate pre-hardening entries on read so raw vendor/invoice identity
+        // disappears from localStorage without losing retry state.
+        const storageIntentKey = HASHED_PENDING_KEY_PATTERN.test(rawKey)
+          ? rawKey
+          : pendingBulkPOIntentStorageKey(canonicalizeLegacyPendingIntentKey(rawKey));
+        return [[storageIntentKey, entry]];
       }),
     );
     if (Object.keys(fresh).length === 0) storage.removeItem(storageKey(profileId));
-    else if (Object.keys(fresh).length !== Object.keys(parsed).length) {
+    else if (JSON.stringify(fresh) !== JSON.stringify(parsed)) {
       storage.setItem(storageKey(profileId), JSON.stringify(fresh));
     }
     return fresh;
@@ -171,8 +253,14 @@ export function ensurePendingBulkPOIntent(
   createIdempotencyKey: () => string,
   now = Date.now(),
 ): PendingBulkPOIntent {
-  const existing = pending[intentKey];
+  const storageIntentKey = pendingBulkPOIntentStorageKey(intentKey);
+  const legacyBrowserKey = legacyPendingBulkPOIntentStorageKey(intentKey);
+  const existing = pending[storageIntentKey] ?? pending[legacyBrowserKey];
   if (existing) {
+    if (legacyBrowserKey !== storageIntentKey && pending[legacyBrowserKey]) {
+      pending[storageIntentKey] = existing;
+      delete pending[legacyBrowserKey];
+    }
     existing.updatedAt = now;
     return existing;
   }
@@ -182,7 +270,7 @@ export function ensurePendingBulkPOIntent(
     status: 'pending' as const,
     updatedAt: now,
   };
-  pending[intentKey] = created;
+  pending[storageIntentKey] = created;
   return created;
 }
 
@@ -190,7 +278,7 @@ export function isImportedBulkPOIntent(
   pending: PendingBulkPOIntents,
   intentKey: string,
 ): boolean {
-  return pending[intentKey]?.status === 'imported';
+  return getPendingBulkPOIntent(pending, intentKey)?.status === 'imported';
 }
 
 export function markBulkPOIntentImported(
@@ -200,7 +288,7 @@ export function markBulkPOIntentImported(
   now = Date.now(),
   poNumber?: string,
 ): void {
-  const entry = pending[intentKey];
+  const entry = getPendingBulkPOIntent(pending, intentKey);
   if (!entry) return;
   entry.status = 'imported';
   entry.poId = poId;

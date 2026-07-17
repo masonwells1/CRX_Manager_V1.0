@@ -6965,6 +6965,7 @@ export type Database = {
       purchase_order_import_intents: {
         Row: {
           actor_id: string
+          content_fingerprint: string | null
           created_at: string
           id: string
           intent_key: string
@@ -6972,6 +6973,7 @@ export type Database = {
         }
         Insert: {
           actor_id: string
+          content_fingerprint?: string | null
           created_at?: string
           id?: string
           intent_key: string
@@ -6979,6 +6981,7 @@ export type Database = {
         }
         Update: {
           actor_id?: string
+          content_fingerprint?: string | null
           created_at?: string
           id?: string
           intent_key?: string
