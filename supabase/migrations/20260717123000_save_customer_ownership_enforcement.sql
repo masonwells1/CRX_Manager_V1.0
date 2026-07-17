@@ -18,6 +18,10 @@
 --       someone else (mirrors customers_update WITH CHECK).
 --     * INSERT branch: non-admin actors must self-assign
 --       (mirrors customers_insert WITH CHECK: assigned_sales_rep = auth.uid()).
+--     * Gate ordering (Codex P2, 2026-07-17): both gates run BEFORE the
+--       check_idempotency early-return, so a cached result is never released to
+--       an actor the gates would reject (e.g. a rep replaying a key after the
+--       customer was reassigned away).
 --
 -- GROUNDED LIVE (project rhyzpcqhnizqbxphqdkr, 2026-07-17):
 --   * Live save_customer def has the role gate but NO ownership check; single
@@ -66,6 +70,38 @@ BEGIN
     RAISE EXCEPTION 'INSUFFICIENT_ROLE';
   END IF;
 
+  -- Ownership gates run BEFORE the idempotency early-return (Codex P2, 2026-07-17):
+  -- check_idempotency is not actor/customer-scoped, so a cached result must never
+  -- be released to an actor the gates below would reject.
+  IF v_actor_role <> 'admin' THEN
+    IF v_is_new THEN
+      -- Mirrors customers_insert WITH CHECK: a sales rep may only create
+      -- customers assigned to themselves; NULL/absent is rejected too.
+      IF (p_customer_payload->>'assigned_sales_rep')::uuid IS DISTINCT FROM v_actor THEN
+        RAISE EXCEPTION 'REP_MUST_SELF_ASSIGN';
+      END IF;
+    ELSE
+      -- Mirrors customers_update USING: non-admin actors may only update
+      -- customers assigned to them. FOR UPDATE holds the row lock through the
+      -- customer/address DML so a concurrent reassignment can't slip between
+      -- this check and the UPDATE.
+      IF NOT EXISTS (
+        SELECT 1 FROM customers
+        WHERE id = p_customer_id
+          AND assigned_sales_rep = v_actor
+        FOR UPDATE
+      ) THEN
+        RAISE EXCEPTION 'NOT_CUSTOMER_OWNER';
+      END IF;
+      -- Mirrors customers_update WITH CHECK: a rep may not hand the customer to
+      -- someone else (absent key leaves the column untouched, which is fine).
+      IF p_customer_payload ? 'assigned_sales_rep'
+         AND (p_customer_payload->>'assigned_sales_rep')::uuid IS DISTINCT FROM v_actor THEN
+        RAISE EXCEPTION 'REP_CANNOT_REASSIGN';
+      END IF;
+    END IF;
+  END IF;
+
   IF p_idempotency_key IS NOT NULL THEN
     v_existing := check_idempotency(p_idempotency_key, 'save_customer');
     IF v_existing IS NOT NULL THEN RETURN v_existing; END IF;
@@ -78,13 +114,6 @@ BEGIN
   END IF;
 
   IF v_is_new THEN
-    -- Ownership gate (mirrors customers_insert WITH CHECK): a sales rep may only
-    -- create customers assigned to themselves; NULL/absent is rejected too.
-    IF v_actor_role <> 'admin'
-       AND (p_customer_payload->>'assigned_sales_rep')::uuid IS DISTINCT FROM v_actor THEN
-      RAISE EXCEPTION 'REP_MUST_SELF_ASSIGN';
-    END IF;
-
     INSERT INTO customers (
       farm_name, contact_name, phone, email, billing_address,
       assigned_tier, assigned_sales_rep, total_acres, corn_acres,
@@ -119,27 +148,6 @@ BEGIN
     ) RETURNING id INTO v_customer_id;
   ELSE
     v_customer_id := p_customer_id;
-
-    -- Ownership gate (mirrors customers_update USING): non-admin actors may only
-    -- update customers assigned to them. FOR UPDATE holds the row lock through
-    -- the customer/address DML so a concurrent reassignment can't slip between
-    -- this check and the UPDATE.
-    IF v_actor_role <> 'admin' THEN
-      IF NOT EXISTS (
-        SELECT 1 FROM customers
-        WHERE id = v_customer_id
-          AND assigned_sales_rep = v_actor
-        FOR UPDATE
-      ) THEN
-        RAISE EXCEPTION 'NOT_CUSTOMER_OWNER';
-      END IF;
-      -- Mirrors customers_update WITH CHECK: a rep may not hand the customer to
-      -- someone else (absent key leaves the column untouched, which is fine).
-      IF p_customer_payload ? 'assigned_sales_rep'
-         AND (p_customer_payload->>'assigned_sales_rep')::uuid IS DISTINCT FROM v_actor THEN
-        RAISE EXCEPTION 'REP_CANNOT_REASSIGN';
-      END IF;
-    END IF;
 
     UPDATE customers SET
       farm_name = COALESCE(p_customer_payload->>'farm_name', farm_name),
