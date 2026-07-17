@@ -3,14 +3,18 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const {
   mockApplyPricing,
+  mockParsePricing,
   mockPreviewPricing,
   mockProductUpdate,
   mockToast,
+  pricingWorkbookFileLimit,
 } = vi.hoisted(() => ({
   mockApplyPricing: vi.fn(),
+  mockParsePricing: vi.fn(),
   mockPreviewPricing: vi.fn(),
   mockProductUpdate: vi.fn(),
   mockToast: vi.fn(),
+  pricingWorkbookFileLimit: 10 * 1024 * 1024,
 }));
 
 const product = {
@@ -68,7 +72,8 @@ vi.mock('../lib/productPricing', () => ({
 
 vi.mock('../lib/productPricingWorkbook', () => ({
   generateProductPricingWorkbook: vi.fn(),
-  parseProductPricingWorkbook: vi.fn(),
+  MAX_PRICING_WORKBOOK_FILE_BYTES: pricingWorkbookFileLimit,
+  parseProductPricingWorkbook: mockParsePricing,
 }));
 
 vi.mock('../components/ui/EditableDataTable', () => ({
@@ -195,5 +200,27 @@ describe('Products governed inline pricing flow', () => {
       idempotencyKey: expect.any(String),
     })));
     expect(mockProductUpdate).not.toHaveBeenCalled();
+  });
+
+  it('rejects an oversized pricing workbook before reading or parsing the file', async () => {
+    const { container } = render(<Products />);
+    await screen.findByRole('button', { name: 'Review Pricing File' });
+    const input = container.querySelector<HTMLInputElement>('input[type="file"][accept^=".xlsx"]')!;
+    const arrayBuffer = vi.fn();
+    const file = new File(['small test payload'], 'oversized.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    Object.defineProperty(file, 'size', { value: pricingWorkbookFileLimit + 1 });
+    Object.defineProperty(file, 'arrayBuffer', { value: arrayBuffer });
+
+    fireEvent.change(input, { target: { files: [file] } });
+
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
+      'error',
+      'Pricing workbooks must be 10 MB or smaller.',
+    ));
+    expect(arrayBuffer).not.toHaveBeenCalled();
+    expect(mockParsePricing).not.toHaveBeenCalled();
+    expect(mockPreviewPricing).not.toHaveBeenCalled();
   });
 });

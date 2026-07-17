@@ -9,6 +9,9 @@ export const PRICING_WORKBOOK_SHEET = 'Pricing Update';
 export const PRICING_WORKBOOK_MANIFEST_SHEET = '_crx_manifest';
 export const PRICING_WORKBOOK_FORMAT_VERSION = 'crx-product-pricing-phase1a-v1';
 export const MAX_PRICING_WORKBOOK_ROWS = 5_000;
+export const MAX_PRICING_WORKBOOK_FILE_BYTES = 10 * 1024 * 1024;
+export const MAX_PRICING_WORKBOOK_UNCOMPRESSED_BYTES = 25 * 1024 * 1024;
+const MAX_PRICING_WORKBOOK_ZIP_ENTRIES = 2_000;
 export const PRICING_WORKBOOK_MIME =
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
@@ -132,6 +135,256 @@ export class PricingWorkbookFormatError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'PricingWorkbookFormatError';
+  }
+}
+
+const ZIP_END_OF_CENTRAL_DIRECTORY_SIGNATURE = 0x06054b50;
+const ZIP_CENTRAL_DIRECTORY_ENTRY_SIGNATURE = 0x02014b50;
+const ZIP_LOCAL_FILE_HEADER_SIGNATURE = 0x04034b50;
+const ZIP_END_OF_CENTRAL_DIRECTORY_BYTES = 22;
+const ZIP_CENTRAL_DIRECTORY_ENTRY_BYTES = 46;
+const ZIP_LOCAL_FILE_HEADER_BYTES = 30;
+const ZIP_MAX_COMMENT_BYTES = 65_535;
+
+interface PricingWorkbookZipEntry {
+  flags: number;
+  compressionMethod: number;
+  compressedSize: number;
+  uncompressedSize: number;
+  localHeaderOffset: number;
+}
+
+function findZipEndOfCentralDirectory(view: DataView): number {
+  const firstPossibleOffset = Math.max(
+    0,
+    view.byteLength - ZIP_END_OF_CENTRAL_DIRECTORY_BYTES - ZIP_MAX_COMMENT_BYTES,
+  );
+  for (
+    let offset = view.byteLength - ZIP_END_OF_CENTRAL_DIRECTORY_BYTES;
+    offset >= firstPossibleOffset;
+    offset -= 1
+  ) {
+    if (
+      view.getUint32(offset, true) === ZIP_END_OF_CENTRAL_DIRECTORY_SIGNATURE
+      && offset
+        + ZIP_END_OF_CENTRAL_DIRECTORY_BYTES
+        + view.getUint16(offset + 20, true) === view.byteLength
+    ) {
+      return offset;
+    }
+  }
+  return -1;
+}
+
+/**
+ * Stream one ZIP entry through the platform inflater without retaining its
+ * output. This measures the real expanded bytes even when hostile directory
+ * metadata lies about the size.
+ */
+async function measurePricingWorkbookZipEntry(
+  arrayBuffer: ArrayBuffer,
+  view: DataView,
+  entry: PricingWorkbookZipEntry,
+  directoryOffset: number,
+  expandedBytesBeforeEntry: number,
+): Promise<number> {
+  if (
+    entry.localHeaderOffset + ZIP_LOCAL_FILE_HEADER_BYTES > directoryOffset
+    || view.getUint32(entry.localHeaderOffset, true) !== ZIP_LOCAL_FILE_HEADER_SIGNATURE
+  ) {
+    throw new PricingWorkbookFormatError('The uploaded .xlsx archive has an invalid local file entry.');
+  }
+
+  const localFlags = view.getUint16(entry.localHeaderOffset + 6, true);
+  const localCompressionMethod = view.getUint16(entry.localHeaderOffset + 8, true);
+  const localFileNameLength = view.getUint16(entry.localHeaderOffset + 26, true);
+  const localExtraLength = view.getUint16(entry.localHeaderOffset + 28, true);
+  if (localFlags !== entry.flags || localCompressionMethod !== entry.compressionMethod) {
+    throw new PricingWorkbookFormatError('The uploaded .xlsx archive has inconsistent file metadata.');
+  }
+
+  const dataOffset = entry.localHeaderOffset
+    + ZIP_LOCAL_FILE_HEADER_BYTES
+    + localFileNameLength
+    + localExtraLength;
+  if (dataOffset > directoryOffset || dataOffset + entry.compressedSize > directoryOffset) {
+    throw new PricingWorkbookFormatError('The uploaded .xlsx archive has an invalid compressed file range.');
+  }
+
+  if (entry.compressionMethod === 0) {
+    if (entry.compressedSize !== entry.uncompressedSize) {
+      throw new PricingWorkbookFormatError('The uploaded .xlsx archive has an invalid stored file size.');
+    }
+    if (expandedBytesBeforeEntry + entry.compressedSize > MAX_PRICING_WORKBOOK_UNCOMPRESSED_BYTES) {
+      throw new PricingWorkbookFormatError(
+        `Pricing workbooks may expand to at most ${MAX_PRICING_WORKBOOK_UNCOMPRESSED_BYTES / 1024 / 1024} MB.`,
+      );
+    }
+    return entry.compressedSize;
+  }
+
+  if (typeof DecompressionStream !== 'function') {
+    throw new PricingWorkbookFormatError('This browser cannot safely inspect compressed pricing workbooks.');
+  }
+
+  const compressedBytes = new Uint8Array(arrayBuffer, dataOffset, entry.compressedSize);
+  const compressedStream = new ReadableStream<BufferSource>({
+    start(controller) {
+      controller.enqueue(compressedBytes);
+      controller.close();
+    },
+  });
+  const reader = compressedStream
+    .pipeThrough(new DecompressionStream('deflate-raw'))
+    .getReader();
+  let actualUncompressedBytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      actualUncompressedBytes += value.byteLength;
+      if (
+        expandedBytesBeforeEntry + actualUncompressedBytes
+        > MAX_PRICING_WORKBOOK_UNCOMPRESSED_BYTES
+      ) {
+        await reader.cancel();
+        throw new PricingWorkbookFormatError(
+          `Pricing workbooks may expand to at most ${MAX_PRICING_WORKBOOK_UNCOMPRESSED_BYTES / 1024 / 1024} MB.`,
+        );
+      }
+    }
+  } catch (error) {
+    if (error instanceof PricingWorkbookFormatError) throw error;
+    throw new PricingWorkbookFormatError('The uploaded .xlsx archive contains invalid compressed data.');
+  } finally {
+    reader.releaseLock();
+  }
+
+  if (actualUncompressedBytes !== entry.uncompressedSize) {
+    throw new PricingWorkbookFormatError('The uploaded .xlsx archive has an invalid expanded file size.');
+  }
+  return actualUncompressedBytes;
+}
+
+/** Validate compressed and actual expanded sizes before ExcelJS loads XML. */
+async function validatePricingWorkbookArchive(arrayBuffer: ArrayBuffer): Promise<void> {
+  if (arrayBuffer.byteLength > MAX_PRICING_WORKBOOK_FILE_BYTES) {
+    throw new PricingWorkbookFormatError(
+      `Pricing workbooks must be ${MAX_PRICING_WORKBOOK_FILE_BYTES / 1024 / 1024} MB or smaller.`,
+    );
+  }
+  if (arrayBuffer.byteLength < ZIP_END_OF_CENTRAL_DIRECTORY_BYTES) {
+    throw new PricingWorkbookFormatError('The uploaded file is not a readable .xlsx workbook.');
+  }
+
+  const view = new DataView(arrayBuffer);
+  const endOffset = findZipEndOfCentralDirectory(view);
+  if (endOffset < 0) {
+    throw new PricingWorkbookFormatError('The uploaded file is not a readable .xlsx workbook.');
+  }
+
+  const commentLength = view.getUint16(endOffset + 20, true);
+  if (endOffset + ZIP_END_OF_CENTRAL_DIRECTORY_BYTES + commentLength !== view.byteLength) {
+    throw new PricingWorkbookFormatError('The uploaded .xlsx archive has an invalid directory.');
+  }
+
+  const diskNumber = view.getUint16(endOffset + 4, true);
+  const directoryDisk = view.getUint16(endOffset + 6, true);
+  const entriesOnDisk = view.getUint16(endOffset + 8, true);
+  const entryCount = view.getUint16(endOffset + 10, true);
+  const directorySize = view.getUint32(endOffset + 12, true);
+  const directoryOffset = view.getUint32(endOffset + 16, true);
+
+  if (
+    diskNumber !== 0
+    || directoryDisk !== 0
+    || entriesOnDisk !== entryCount
+    || entryCount === 0xffff
+    || directorySize === 0xffffffff
+    || directoryOffset === 0xffffffff
+  ) {
+    throw new PricingWorkbookFormatError('Multi-part and ZIP64 pricing workbooks are not supported.');
+  }
+  if (entryCount > MAX_PRICING_WORKBOOK_ZIP_ENTRIES) {
+    throw new PricingWorkbookFormatError('The uploaded .xlsx archive contains too many files.');
+  }
+
+  const directoryEnd = directoryOffset + directorySize;
+  if (directoryOffset > endOffset || directoryEnd > endOffset) {
+    throw new PricingWorkbookFormatError('The uploaded .xlsx archive has an invalid directory.');
+  }
+
+  let offset = directoryOffset;
+  let totalUncompressedBytes = 0;
+  const entries: PricingWorkbookZipEntry[] = [];
+  for (let entryIndex = 0; entryIndex < entryCount; entryIndex += 1) {
+    if (
+      offset + ZIP_CENTRAL_DIRECTORY_ENTRY_BYTES > directoryEnd
+      || view.getUint32(offset, true) !== ZIP_CENTRAL_DIRECTORY_ENTRY_SIGNATURE
+    ) {
+      throw new PricingWorkbookFormatError('The uploaded .xlsx archive has an invalid file entry.');
+    }
+
+    const flags = view.getUint16(offset + 8, true);
+    const compressionMethod = view.getUint16(offset + 10, true);
+    const compressedSize = view.getUint32(offset + 20, true);
+    const uncompressedSize = view.getUint32(offset + 24, true);
+    const fileNameLength = view.getUint16(offset + 28, true);
+    const extraLength = view.getUint16(offset + 30, true);
+    const entryCommentLength = view.getUint16(offset + 32, true);
+    const localHeaderOffset = view.getUint32(offset + 42, true);
+
+    if ((flags & 0x0001) !== 0) {
+      throw new PricingWorkbookFormatError('Encrypted pricing workbooks are not supported.');
+    }
+    if (compressionMethod !== 0 && compressionMethod !== 8) {
+      throw new PricingWorkbookFormatError('The uploaded .xlsx archive uses unsupported compression.');
+    }
+    if (
+      compressedSize === 0xffffffff
+      || uncompressedSize === 0xffffffff
+      || localHeaderOffset === 0xffffffff
+    ) {
+      throw new PricingWorkbookFormatError('ZIP64 pricing workbooks are not supported.');
+    }
+    if (compressedSize === 0 && uncompressedSize > 0) {
+      throw new PricingWorkbookFormatError('The uploaded .xlsx archive has an invalid file size.');
+    }
+
+    totalUncompressedBytes += uncompressedSize;
+    if (totalUncompressedBytes > MAX_PRICING_WORKBOOK_UNCOMPRESSED_BYTES) {
+      throw new PricingWorkbookFormatError(
+        `Pricing workbooks may expand to at most ${MAX_PRICING_WORKBOOK_UNCOMPRESSED_BYTES / 1024 / 1024} MB.`,
+      );
+    }
+
+    entries.push({
+      flags,
+      compressionMethod,
+      compressedSize,
+      uncompressedSize,
+      localHeaderOffset,
+    });
+
+    offset += ZIP_CENTRAL_DIRECTORY_ENTRY_BYTES
+      + fileNameLength
+      + extraLength
+      + entryCommentLength;
+  }
+
+  if (offset !== directoryEnd) {
+    throw new PricingWorkbookFormatError('The uploaded .xlsx archive has an invalid directory size.');
+  }
+
+  let actualExpandedBytes = 0;
+  for (const entry of entries) {
+    actualExpandedBytes += await measurePricingWorkbookZipEntry(
+      arrayBuffer,
+      view,
+      entry,
+      directoryOffset,
+      actualExpandedBytes,
+    );
   }
 }
 
@@ -431,6 +684,7 @@ function parsePricingRow(worksheet: Worksheet, rowNumber: number): PricingWorksh
 export async function parseProductPricingWorkbook(
   arrayBuffer: ArrayBuffer,
 ): Promise<ParsedPricingWorkbook> {
+  await validatePricingWorkbookArchive(arrayBuffer);
   const ExcelJS = await loadExcelJs();
   const workbook = new ExcelJS.Workbook();
   try {

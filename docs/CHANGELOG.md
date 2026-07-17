@@ -4,6 +4,11 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-17 — Supplier Pricing Phase 1a replay and workbook safety correction
+
+- Preserved the already-live supplier-pricing bootstrap's reviewed CRLF bytes in Git while pinning the live zero-cost guard to LF. Clean checkouts now reproduce the exact applied artifacts and the bootstrap-to-guard function-body hash contract instead of failing replay after Git line-ending normalization.
+- Added pre-ExcelJS pricing-workbook limits: 10 MB compressed input, 2,000 ZIP entries, and 25 MB of actual streamed decompression. Oversized files are rejected before `File.arrayBuffer()`, and hostile archives are stopped even if their ZIP directory lies about expanded size.
+
 ## 2026-07-17 — APPLIED save_customer ownership enforcement to live (ledger 20260717123000) under Mason's in-chat OK. Post-apply: function hash changed, single overload, all gates present, grants clean (no anon), all 17 DB sweeps PASS, rolled-back live probe POST_PASS_ROLLBACK (rep denied editing non-assigned customer, own edit works). Updated migration-history row 744 + DECISION_LOG to applied.
 
 APPLIED save_customer ownership enforcement to live (ledger 20260717123000) under Mason's in-chat OK. Post-apply: function hash changed, single overload, all gates present, grants clean (no anon), all 17 DB sweeps PASS, rolled-back live probe POST_PASS_ROLLBACK (rep denied editing non-assigned customer, own edit works). Updated migration-history row 744 + DECISION_LOG to applied.

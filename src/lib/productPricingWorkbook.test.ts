@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest';
+import { deflateRawSync } from 'node:zlib';
 import type { Workbook } from 'exceljs';
 import type { PricingWorkbookExport } from './productPricing';
 import {
   generateProductPricingWorkbook,
+  MAX_PRICING_WORKBOOK_FILE_BYTES,
   MAX_PRICING_WORKBOOK_ROWS,
+  MAX_PRICING_WORKBOOK_UNCOMPRESSED_BYTES,
   parseProductPricingWorkbook,
   PRICING_WORKBOOK_FORMAT_VERSION,
   PRICING_WORKBOOK_HEADERS,
@@ -80,6 +83,55 @@ async function loadGeneratedWorkbook(): Promise<{ workbook: Workbook; buffer: Ar
 async function writeWorkbook(workbook: Workbook): Promise<ArrayBuffer> {
   const buffer = await workbook.xlsx.writeBuffer();
   return new Uint8Array(buffer as unknown as ArrayBuffer).buffer;
+}
+
+function withFirstZipEntryUncompressedSize(buffer: ArrayBuffer, size: number): ArrayBuffer {
+  const copy = buffer.slice(0);
+  const view = new DataView(copy);
+  for (let offset = 0; offset <= view.byteLength - 4; offset += 1) {
+    if (view.getUint32(offset, true) === 0x02014b50) {
+      view.setUint32(offset + 24, size, true);
+      return copy;
+    }
+  }
+  throw new Error('Generated workbook had no ZIP central-directory entry');
+}
+
+function createZipWithForgedSmallExpandedSize(actualSize: number): ArrayBuffer {
+  const fileName = new TextEncoder().encode('bomb.bin');
+  const compressed = deflateRawSync(new Uint8Array(actualSize));
+  const declaredUncompressedSize = 1;
+  const localHeaderSize = 30 + fileName.byteLength;
+  const directoryOffset = localHeaderSize + compressed.byteLength;
+  const directorySize = 46 + fileName.byteLength;
+  const endOffset = directoryOffset + directorySize;
+  const archive = new Uint8Array(endOffset + 22);
+  const view = new DataView(archive.buffer);
+
+  view.setUint32(0, 0x04034b50, true);
+  view.setUint16(4, 20, true);
+  view.setUint16(8, 8, true);
+  view.setUint32(18, compressed.byteLength, true);
+  view.setUint32(22, declaredUncompressedSize, true);
+  view.setUint16(26, fileName.byteLength, true);
+  archive.set(fileName, 30);
+  archive.set(compressed, localHeaderSize);
+
+  view.setUint32(directoryOffset, 0x02014b50, true);
+  view.setUint16(directoryOffset + 4, 20, true);
+  view.setUint16(directoryOffset + 6, 20, true);
+  view.setUint16(directoryOffset + 10, 8, true);
+  view.setUint32(directoryOffset + 20, compressed.byteLength, true);
+  view.setUint32(directoryOffset + 24, declaredUncompressedSize, true);
+  view.setUint16(directoryOffset + 28, fileName.byteLength, true);
+  archive.set(fileName, directoryOffset + 46);
+
+  view.setUint32(endOffset, 0x06054b50, true);
+  view.setUint16(endOffset + 8, 1, true);
+  view.setUint16(endOffset + 10, 1, true);
+  view.setUint32(endOffset + 12, directorySize, true);
+  view.setUint32(endOffset + 16, directoryOffset, true);
+  return archive.buffer;
 }
 
 describe('product pricing workbook', () => {
@@ -195,5 +247,30 @@ describe('product pricing workbook', () => {
 
     await expect(parseProductPricingWorkbook(await writeWorkbook(workbook)))
       .rejects.toThrow(`limited to ${MAX_PRICING_WORKBOOK_ROWS} rows`);
+  });
+
+  it('rejects an oversized upload before ExcelJS parses it', async () => {
+    await expect(parseProductPricingWorkbook(new ArrayBuffer(MAX_PRICING_WORKBOOK_FILE_BYTES + 1)))
+      .rejects.toThrow('10 MB or smaller');
+  });
+
+  it('rejects an archive whose declared expanded size exceeds the browser safety limit', async () => {
+    const { buffer } = await loadGeneratedWorkbook();
+    const oversizedArchive = withFirstZipEntryUncompressedSize(
+      buffer,
+      MAX_PRICING_WORKBOOK_UNCOMPRESSED_BYTES + 1,
+    );
+
+    await expect(parseProductPricingWorkbook(oversizedArchive))
+      .rejects.toThrow('expand to at most 25 MB');
+  });
+
+  it('bounds actual decompression when a hostile ZIP lies about its expanded size', async () => {
+    const forgedArchive = createZipWithForgedSmallExpandedSize(
+      MAX_PRICING_WORKBOOK_UNCOMPRESSED_BYTES + 1,
+    );
+
+    await expect(parseProductPricingWorkbook(forgedArchive))
+      .rejects.toThrow('expand to at most 25 MB');
   });
 });

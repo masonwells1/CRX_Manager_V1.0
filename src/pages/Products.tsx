@@ -34,6 +34,7 @@ import {
 } from '../lib/productPricing';
 import {
   generateProductPricingWorkbook,
+  MAX_PRICING_WORKBOOK_FILE_BYTES,
   parseProductPricingWorkbook,
 } from '../lib/productPricingWorkbook';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
@@ -541,6 +542,14 @@ export default function Products() {
 
   const handlePricingWorkbookUpload = async (file: File) => {
     if (!profile) return;
+    if (file.size > MAX_PRICING_WORKBOOK_FILE_BYTES) {
+      toast(
+        'error',
+        `Pricing workbooks must be ${MAX_PRICING_WORKBOOK_FILE_BYTES / 1024 / 1024} MB or smaller.`,
+      );
+      if (pricingWorkbookInputRef.current) pricingWorkbookInputRef.current.value = '';
+      return;
+    }
     setWorkbookBusy(true);
     try {
       const parsed = await parseProductPricingWorkbook(await file.arrayBuffer());
