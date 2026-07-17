@@ -260,6 +260,10 @@ must respect the same precedence (verified: migration `20260623120000`).
 
 ## 2026-06-17 — Split invoices modeled order-side, allocated by field/acre
 
+**⚠ SUPERSEDED by the 2026-07-17 split-billing decision (top of log).** Kept for historical rationale
+only. The operative surface is now the FIELD-APP path (per-line custom splits); the order-side
+`order_shares` engine is unproven and slated for retirement. Do NOT treat the guidance below as current.
+
 **Decision:** Multi-customer billing splits live on the order side (`order_shares` /
 `invoice_shares`), allocated by field/acre rather than by dollar percentage alone.
 **Why:** the real-world unit of split billing on a farm job is the field each customer's acres

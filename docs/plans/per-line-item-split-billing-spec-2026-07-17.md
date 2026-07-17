@@ -34,7 +34,8 @@ the split feature must respect it, not fight it.)
 ## 2. Requirements (settled with Mason 2026-07-17)
 
 - **Default** every line's split from field ownership (as today).
-- **Even splits are the norm** (50/50, 33.33/66.66, 60/40) applied to applied quantity/acres; each
+- **Even splits are the norm** (50/50, 33.33/66.67, 60/40 — display shorthand; the stored vector is
+  exact micro-percent per §4, e.g. 33,333,333 / 66,666,667) applied to applied quantity/acres; each
   person billed at **their own applicable price**.
 - **Per-line % override** — a different share on a specific product/service line. An override is a
   **complete vector** ("100% tenant" ⇒ the landlord's **0% row is still stored** — see §3).
@@ -63,8 +64,9 @@ and sturdy:
 ```sql
 create table public.invoice_line_shares (
   id uuid primary key default gen_random_uuid(),
-  billing_line_id uuid not null references public.field_app_billing_lines(id),
-  invoice_item_id uuid not null references public.invoice_items(id),  -- the child item, this customer
+  billing_line_id uuid not null references public.field_app_billing_lines(id) on delete cascade,
+                                          -- draft-only cascade (line → shares); NOT the immutability mechanism (§5)
+  invoice_item_id uuid not null references public.invoice_items(id) on delete cascade,  -- child item, this customer
   customer_id uuid not null references public.customers(id),
 
   split_mode text not null check (split_mode in ('field_default','custom')),
@@ -128,7 +130,7 @@ Rules:
 conflicts with fixing today's 2-decimal/4-decimal rounding. Instead: **keep the old engine unchanged
 while the feature flag is off**, and give the new feature an explicit **versioned rounding policy**.
 
-### Pinned rules (gpt-fable-5 money-math review, 2026-07-17) — put these verbatim in the build
+### Pinned rules (claude-fable-5 money-math review, 2026-07-17) — put these verbatim in the build
 
 1. **All arithmetic in Postgres `numeric`/bigint — never float, anywhere, including the TS preview.**
    ONE shared SQL function computes the split; the preview calls the SAME function posting uses
@@ -179,12 +181,15 @@ invariant in §5); (E) the even-3-way vector above.
   marked paid. **Gate ALL email paths** (`FieldApplicationInvoice`, `InvoiceDetail`, field-invoice list
   panels) — the server computes suppression; the browser only displays it.
 
-### Money-integrity invariants (gpt-fable-5 review, 2026-07-17)
+### Money-integrity invariants (claude-fable-5 review, 2026-07-17)
 
-- **Display authority:** the child `invoice_item.amount_cents` is authoritative; renderers (PDF,
-  statement, portal) **must print stored cents and must NEVER recompute `qty × unit_price`** (else a
-  50/50 of an odd-cent line prints a total that doesn't match). Add a test that every PDF/statement path
-  sums stored cents.
+- **Display authority + residual persistence:** the split writer sets each child
+  `invoice_items.extended_cents` to the **residual-adjusted allocation from §4** (NOT an independent
+  per-child round of `qty × unit_price`) — e.g. a 25¢/unit × −0.5 return whose canonical value is −13¢
+  is stored as −7¢ / −6¢ across the two children, never −6¢ / −6¢. That stored `extended_cents` is
+  **authoritative**; renderers (PDF, statement, portal) **must print it and NEVER recompute
+  `qty × unit_price`**. Add a test that every PDF/statement path sums stored cents and ties to the source
+  line.
 - **Post-time assertions** (in the posting RPC or a trigger — don't trust the allocation code, check its
   output): for every source line, `SUM(child amount_cents) = source cents` (same-price + flat-fee paths);
   `SUM(allocated qty) = source qty` at 4dp; `SUM(micro_pct) = 100,000,000`; and **the share-vector count
