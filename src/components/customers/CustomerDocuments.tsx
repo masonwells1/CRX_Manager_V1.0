@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react';
 import { AlertTriangle, Download, FileText, RefreshCw, Trash2, Upload } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
-import { checkMutationResult, supabase, supabaseUntyped } from '../../lib/db';
+import { checkMutationResult, supabase } from '../../lib/db';
+import { logActivity } from '../../lib/activityLogger';
 import { Sentry } from '../../lib/sentry';
 import { useToast } from '../ui/Toast';
 import Badge from '../ui/Badge';
@@ -93,6 +94,7 @@ export default function CustomerDocuments({ customerId }: CustomerDocumentsProps
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [documentToDelete, setDocumentToDelete] = useState<CustomerDocumentRow | null>(null);
   const requestSeq = useRef(0);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const loadDocuments = useCallback(async () => {
     const seq = ++requestSeq.current;
@@ -100,7 +102,7 @@ export default function CustomerDocuments({ customerId }: CustomerDocumentsProps
     setLoadError(false);
     try {
       const [documentResult, customerResult] = await Promise.all([
-        supabaseUntyped
+        supabase
           .from('customer_documents')
           .select('id, customer_id, document_type, storage_path, filename, mime_type, size_bytes, effective_date, expiration_date, notes, created_at')
           .eq('customer_id', customerId)
@@ -118,10 +120,8 @@ export default function CustomerDocuments({ customerId }: CustomerDocumentsProps
       if (documentResult.error) throw documentResult.error;
       if (customerResult.error) throw customerResult.error;
 
-      // Local cast until the mid-gauntlet customer_documents migration is included in
-      // src/types/supabase.ts; remove this cast after schema-registry regeneration.
-      setDocuments((documentResult.data ?? []) as unknown as CustomerDocumentRow[]);
-      setAssignedSalesRep((customerResult.data as { assigned_sales_rep: string | null } | null)?.assigned_sales_rep ?? null);
+      setDocuments((documentResult.data ?? []) as CustomerDocumentRow[]);
+      setAssignedSalesRep(customerResult.data?.assigned_sales_rep ?? null);
     } catch (error: unknown) {
       if (seq !== requestSeq.current) return;
       setDocuments([]);
@@ -162,6 +162,12 @@ export default function CustomerDocuments({ customerId }: CustomerDocumentsProps
       toast('error', 'Documents must be 20 MB or smaller.');
       return;
     }
+    if (file.size <= 0) {
+      setSelectedFile(null);
+      event.target.value = '';
+      toast('error', 'That file is empty — choose a file with content.');
+      return;
+    }
     setSelectedFile(file);
   };
 
@@ -178,8 +184,8 @@ export default function CustomerDocuments({ customerId }: CustomerDocumentsProps
       toast('error', 'Choose a document before uploading.');
       return;
     }
-    if (!isAllowedMimeType(selectedFile.type) || selectedFile.size > MAX_FILE_SIZE_BYTES) {
-      toast('error', 'Choose a PDF, JPEG, PNG, or WebP file up to 20 MB.');
+    if (!isAllowedMimeType(selectedFile.type) || selectedFile.size > MAX_FILE_SIZE_BYTES || selectedFile.size <= 0) {
+      toast('error', 'Choose a non-empty PDF, JPEG, PNG, or WebP file up to 20 MB.');
       return;
     }
     if (effectiveDate && expirationDate && expirationDate < effectiveDate) {
@@ -196,7 +202,7 @@ export default function CustomerDocuments({ customerId }: CustomerDocumentsProps
       if (uploadError) throw uploadError;
 
       try {
-        const insertResult = await supabaseUntyped
+        const insertResult = await supabase
           .from('customer_documents')
           .insert({
             customer_id: customerId,
@@ -214,6 +220,18 @@ export default function CustomerDocuments({ customerId }: CustomerDocumentsProps
           .select()
           .single();
         checkMutationResult(insertResult, 'Save customer document');
+        const uploaderId = insertResult.data?.uploaded_by;
+        const newDocumentId = insertResult.data?.id;
+        if (uploaderId) {
+          await logActivity({
+            event: 'document_uploaded',
+            description: `Uploaded ${documentType.replace(/_/g, ' ')} document: ${selectedFile.name}`,
+            performedBy: uploaderId,
+            entityType: 'customer_document',
+            entityId: newDocumentId,
+            customerId,
+          });
+        }
       } catch (insertError: unknown) {
         await supabase.storage.from(DOCUMENT_BUCKET).remove([storagePath]);
         throw insertError;
@@ -221,6 +239,7 @@ export default function CustomerDocuments({ customerId }: CustomerDocumentsProps
 
       toast('success', 'Document uploaded');
       setSelectedFile(null);
+      if (fileInputRef.current) fileInputRef.current.value = '';
       setDocumentType('other');
       setEffectiveDate('');
       setExpirationDate('');
@@ -241,10 +260,18 @@ export default function CustomerDocuments({ customerId }: CustomerDocumentsProps
     try {
       const { data, error } = await supabase.storage
         .from(DOCUMENT_BUCKET)
-        .createSignedUrl(document.storage_path, 60);
+        .createSignedUrl(document.storage_path, 60, { download: document.filename });
       if (error) throw error;
       if (!data?.signedUrl) throw new Error('Could not create a download link.');
-      window.open(data.signedUrl, '_blank', 'noopener,noreferrer');
+      // Anchor-click download instead of window.open: popup blockers (notably
+      // mobile Safari) silently swallow window.open after an awaited request.
+      const link = window.document.createElement('a');
+      link.href = data.signedUrl;
+      link.download = document.filename;
+      link.rel = 'noopener';
+      window.document.body.appendChild(link);
+      link.click();
+      link.remove();
     } catch (error: unknown) {
       Sentry.captureException(error instanceof Error ? error : new Error(String(error)), {
         extra: { context: 'CustomerDocuments.download', documentId: document.id },
@@ -260,7 +287,7 @@ export default function CustomerDocuments({ customerId }: CustomerDocumentsProps
     setDeletingId(documentToDelete.id);
     try {
       const deletedBy = await currentUserId();
-      const updateResult = await supabaseUntyped
+      const updateResult = await supabase
         .from('customer_documents')
         .update({ deleted_at: new Date().toISOString(), deleted_by: deletedBy })
         .eq('id', documentToDelete.id)
@@ -268,6 +295,14 @@ export default function CustomerDocuments({ customerId }: CustomerDocumentsProps
         .is('deleted_at', null)
         .select();
       checkMutationResult(updateResult, 'Remove customer document');
+      await logActivity({
+        event: 'document_removed',
+        description: `Removed ${documentToDelete.document_type.replace(/_/g, ' ')} document: ${documentToDelete.filename}`,
+        performedBy: deletedBy,
+        entityType: 'customer_document',
+        entityId: documentToDelete.id,
+        customerId,
+      });
       setDocuments((current) => current.filter((document) => document.id !== documentToDelete.id));
       toast('success', 'Document removed');
       setDocumentToDelete(null);
@@ -291,6 +326,7 @@ export default function CustomerDocuments({ customerId }: CustomerDocumentsProps
             <input
               id="customer-document-file"
               type="file"
+              ref={fileInputRef}
               accept="application/pdf,image/jpeg,image/png,image/webp"
               onChange={handleFileChange}
               className="min-h-11 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-nav-dark file:mr-3 file:rounded file:border-0 file:bg-gray-100 file:px-3 file:py-1 file:text-sm"
@@ -353,7 +389,7 @@ export default function CustomerDocuments({ customerId }: CustomerDocumentsProps
                       </div>
                     </div>
                     <div className="flex shrink-0 gap-2">
-                      <Button type="button" variant="secondary" size="sm" loading={downloadingId === document.id} icon={<Download className="h-4 w-4" />} showChevron={false} onClick={() => void handleDownload(document)} className="min-h-11">Download</Button>
+                      <Button type="button" variant="secondary" size="sm" aria-label={`Download ${document.filename}`} loading={downloadingId === document.id} icon={<Download className="h-4 w-4" />} showChevron={false} onClick={() => void handleDownload(document)} className="min-h-11">Download</Button>
                       {canDelete && <Button type="button" variant="ghost" size="sm" icon={<Trash2 className="h-4 w-4" />} showChevron={false} onClick={() => setDocumentToDelete(document)} aria-label={`Remove ${document.filename}`} className="min-h-11 text-red-600 hover:text-red-700">Remove</Button>}
                     </div>
                   </div>
