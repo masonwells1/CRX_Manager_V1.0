@@ -185,6 +185,8 @@ export interface CommissionSplit {
 export interface Customer {
   id: string;
   farm_name: string;
+  /** Controlled list, enforced by customers_crops_allowed_check (see src/lib/crops.ts). */
+  crops: string[];
   contact_name: string | null;
   phone: string | null;
   email: string | null;
