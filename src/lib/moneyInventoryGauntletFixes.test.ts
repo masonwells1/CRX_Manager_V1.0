@@ -81,7 +81,7 @@ const canonicalBulkPOIdentity = source(
   'supabase/migrations/20260717085512_canonicalize_bulk_po_identity_whitespace.sql',
 );
 const secureBulkPOFingerprintTrigger = source(
-  'supabase/migrations/20260717090000_secure_bulk_po_fingerprint_trigger.sql',
+  'supabase/migrations/20260717092749_secure_bulk_po_fingerprint_trigger.sql',
 );
 const unicodeBulkPOIdentity = source(
   'supabase/migrations/20260717101619_canonicalize_bulk_po_unicode_identity.sql',
