@@ -6,7 +6,7 @@
     "regenerate_with": "node scripts/regenerate-schema-registry.mjs --from-introspection <queries.json> (queries documented in the script header)",
     "purpose": "Single source of truth for hooks: generated columns, status enums, ALL parseable CHECK IN-lists, NOT NULL columns, full column lists, sequences, tables-with/without updated_at, applied-migration high water.",
     "note": "For a fresh refresh from the live DB, ask Claude Code: 'regenerate the schema-registry from Supabase' (/regen-schema-registry). skipped_constraints lists every CHECK the hooks can NOT validate — review it when touching those tables.",
-    "migrations_high_water": "20260717045420",
+    "migrations_high_water": "20260717112906",
     "applied_migration_names": [
       "20260207_gap_analysis_fixes.sql",
       "20260209050000_inventory_overhaul",
@@ -238,6 +238,10 @@
       "20260716213000_preserve_purchase_order_omitted_cost",
       "20260716214423_crm_call_lists",
       "20260717013415_crm_customer_documents",
+      "20260717112532_crm_customer_crops",
+      "20260717112533_crm_prep_card_volume",
+      "20260717120000_supplier_pricing_phase1a",
+      "20260717120500_supplier_pricing_zero_cost_guard",
       "a1_dispatched_list_recent_completed",
       "a1b_dispatched_to_me_completed_tail",
       "accounting_and_integrity_fixes",
@@ -318,6 +322,8 @@
       "batch_rpc_idempotency_entity_type_fix",
       "batch_year_end_and_cleanup",
       "bind_bulk_po_claim_to_vendor",
+      "bind_bulk_po_identity_ascii_fold",
+      "bind_bulk_po_replay_content",
       "blend_invoice_app_service_guard",
       "blend_invoice_column_fix",
       "blend_ticket_access_and_atomicity",
@@ -340,6 +346,8 @@
       "canonical_commission_math_callers",
       "canonical_commission_math_create_quick_delivery",
       "canonical_commission_math_helpers",
+      "canonicalize_bulk_po_identity_whitespace",
+      "canonicalize_bulk_po_unicode_identity",
       "cleanup_fake_cycle_counts_and_rebates_v2",
       "close_adversarial_money_inventory_gaps",
       "close_final_purchase_order_release_gaps",
@@ -616,6 +624,7 @@
       "lock_order_shares_when_invoice_posted",
       "lock_purchase_order_initial_status",
       "log_failed_notification_restore_defaults",
+      "make_bulk_po_identity_server_authoritative",
       "manual_inventory_no_cost_override",
       "manufactured_at_delivery_flag",
       "mark_overdue_invoices",
@@ -705,6 +714,7 @@
       "receiving_system_enhancements",
       "recompute_pending_commissions_on_order_item_edit",
       "record_vendor_payment_rpc",
+      "reject_blank_bulk_po_identity",
       "release_holds_on_quote_cancel",
       "remaining_money_inventory_hardening",
       "rename_invoice_temperature",
@@ -717,6 +727,7 @@
       "restore_quote_version_drawn_guard",
       "restore_rpcs_admin_override",
       "restore_rpcs_strict_actor",
+      "restore_server_derived_bulk_po_claim_payload",
       "return_credit_source_of_truth",
       "returns_add_credited_by_column",
       "returns_cancellation_check",
@@ -753,6 +764,7 @@
       "save_quote_rpc",
       "season_calendar_oct_sep",
       "seasonal_rollover",
+      "secure_bulk_po_fingerprint_trigger",
       "security_audit_2026_05_11",
       "security_audit_auth_uid_enforcement",
       "sentinel_exclude_credit_memos",
@@ -973,6 +985,24 @@
       "cancelled",
       "voided"
     ],
+    "pricing_change_set_preview_rows.row_status": [
+      "ready",
+      "conflict",
+      "invalid",
+      "unchanged"
+    ],
+    "pricing_change_sets.status": [
+      "previewed",
+      "invalid",
+      "no_changes",
+      "applied",
+      "expired"
+    ],
+    "pricing_workbook_exports.status": [
+      "active",
+      "consumed",
+      "expired"
+    ],
     "product_label_drafts.status": [
       "pending",
       "accepted",
@@ -1088,6 +1118,11 @@
     "order_shares",
     "payments",
     "prepay_applications",
+    "pricing_change_set_preview_rows",
+    "pricing_change_set_rows",
+    "pricing_change_sets",
+    "pricing_workbook_export_rows",
+    "pricing_workbook_exports",
     "purchase_order_import_intents",
     "purchase_order_items",
     "quote_items",
@@ -1265,6 +1300,17 @@
       ],
       "constraints": [
         "commissions_status_check"
+      ]
+    },
+    "cost_history.change_source": {
+      "values": [
+        "legacy_frontend",
+        "pricing_worksheet",
+        "product_page",
+        "products_inline"
+      ],
+      "constraints": [
+        "cost_history_change_source_check"
       ]
     },
     "customer_contacts.preferred_contact_method": {
@@ -1807,6 +1853,58 @@
         "payments_payment_method_check"
       ]
     },
+    "pricing_change_set_preview_rows.row_status": {
+      "values": [
+        "ready",
+        "conflict",
+        "invalid",
+        "unchanged"
+      ],
+      "constraints": [
+        "pricing_change_set_preview_rows_row_status_check"
+      ]
+    },
+    "pricing_change_set_rows.pricing_mode": {
+      "values": [
+        "margin_driven",
+        "price_driven"
+      ],
+      "constraints": [
+        "pricing_change_set_rows_pricing_mode_check"
+      ]
+    },
+    "pricing_change_sets.source": {
+      "values": [
+        "pricing_worksheet",
+        "product_page",
+        "products_inline"
+      ],
+      "constraints": [
+        "pricing_change_sets_source_check"
+      ]
+    },
+    "pricing_change_sets.status": {
+      "values": [
+        "previewed",
+        "invalid",
+        "no_changes",
+        "applied",
+        "expired"
+      ],
+      "constraints": [
+        "pricing_change_sets_status_check"
+      ]
+    },
+    "pricing_workbook_exports.status": {
+      "values": [
+        "active",
+        "consumed",
+        "expired"
+      ],
+      "constraints": [
+        "pricing_workbook_exports_status_check"
+      ]
+    },
     "product_label_drafts.confidence": {
       "values": [
         "high",
@@ -2322,6 +2420,12 @@
       "reason": "unparseable — hooks do NOT validate this constraint"
     },
     {
+      "table": "customers",
+      "constraint": "customers_crops_allowed_check",
+      "def": "CHECK (((crops <@ ARRAY['corn'::text, 'soybeans'::text, 'wheat'::text, 'milo'::text, 'cotton'::text, 'alfalfa'::text, 'pasture_hay'::text, 'other'::text]) AND ((crops = '{}'::text[]) OR (array_ndims(crops) = 1))))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
       "table": "delivery_items",
       "constraint": "chk_di_quantity",
       "def": "CHECK ((quantity > (0)::numeric))",
@@ -2694,6 +2798,132 @@
       "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
     },
     {
+      "table": "pricing_change_set_preview_rows",
+      "constraint": "pricing_change_set_preview_rows_check",
+      "def": "CHECK ((((row_status = ANY (ARRAY['ready'::text, 'unchanged'::text])) AND (error_code IS NULL) AND (effect IS NOT NULL)) OR ((row_status = ANY (ARRAY['conflict'::text, 'invalid'::text])) AND (error_code IS NOT NULL))))",
+      "reason": "conditional/multi-column — not a single-column IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "pricing_change_set_preview_rows",
+      "constraint": "pricing_change_set_preview_rows_sequence_check",
+      "def": "CHECK ((sequence > 0))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "pricing_change_set_rows",
+      "constraint": "pricing_change_set_rows_check",
+      "def": "CHECK ((((pricing_mode = 'margin_driven'::text) AND (input_tier1_margin IS NOT NULL) AND (input_tier2_margin IS NOT NULL) AND (input_tier3_margin IS NOT NULL) AND (input_tier1_price_cents IS NULL) AND (input_tier2_price_cents IS NULL) AND (input_tier3_price_cents IS NULL)) OR ((pricing_mode = 'price_driven'::text) AND (input_tier1_margin IS NULL) AND (input_tier2_margin IS NULL) AND (input_tier3_margin IS NULL) AND (input_tier1_price_cents IS NOT NULL) AND (input_tier2_price_cents IS NOT NULL) AND (input_tier3_price_cents IS NOT NULL))))",
+      "reason": "conditional/multi-column — not a single-column IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "pricing_change_set_rows",
+      "constraint": "pricing_change_set_rows_expected_version_check",
+      "def": "CHECK ((expected_version >= 1))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "pricing_change_set_rows",
+      "constraint": "pricing_change_set_rows_input_cost_cents_check",
+      "def": "CHECK ((input_cost_cents >= 0))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "pricing_change_set_rows",
+      "constraint": "pricing_change_set_rows_output_cost_cents_check",
+      "def": "CHECK ((output_cost_cents >= 0))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "pricing_change_set_rows",
+      "constraint": "pricing_change_set_rows_output_tier1_price_cents_check",
+      "def": "CHECK ((output_tier1_price_cents >= 0))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "pricing_change_set_rows",
+      "constraint": "pricing_change_set_rows_output_tier2_price_cents_check",
+      "def": "CHECK ((output_tier2_price_cents >= 0))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "pricing_change_set_rows",
+      "constraint": "pricing_change_set_rows_output_tier3_price_cents_check",
+      "def": "CHECK ((output_tier3_price_cents >= 0))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "pricing_change_sets",
+      "constraint": "pricing_change_sets_check",
+      "def": "CHECK ((expires_at > created_at))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "pricing_change_sets",
+      "constraint": "pricing_change_sets_check1",
+      "def": "CHECK ((((source = 'pricing_worksheet'::text) AND (export_id IS NOT NULL)) OR ((source = ANY (ARRAY['product_page'::text, 'products_inline'::text])) AND (export_id IS NULL))))",
+      "reason": "conditional/multi-column — not a single-column IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "pricing_change_sets",
+      "constraint": "pricing_change_sets_check2",
+      "def": "CHECK ((((status = 'applied'::text) AND (applied_by IS NOT NULL) AND (applied_at IS NOT NULL) AND (apply_idempotency_key IS NOT NULL) AND (apply_result IS NOT NULL)) OR (status <> 'applied'::text)))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "pricing_change_sets",
+      "constraint": "pricing_change_sets_row_count_check",
+      "def": "CHECK ((row_count >= 0))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "pricing_change_sets",
+      "constraint": "pricing_change_sets_submitted_row_count_check",
+      "def": "CHECK ((submitted_row_count > 0))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "pricing_workbook_export_rows",
+      "constraint": "pricing_workbook_export_rows_current_cost_cents_check",
+      "def": "CHECK (((current_cost_cents IS NULL) OR (current_cost_cents >= 0)))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "pricing_workbook_export_rows",
+      "constraint": "pricing_workbook_export_rows_current_tier1_price_cents_check",
+      "def": "CHECK (((current_tier1_price_cents IS NULL) OR (current_tier1_price_cents >= 0)))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "pricing_workbook_export_rows",
+      "constraint": "pricing_workbook_export_rows_current_tier2_price_cents_check",
+      "def": "CHECK (((current_tier2_price_cents IS NULL) OR (current_tier2_price_cents >= 0)))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "pricing_workbook_export_rows",
+      "constraint": "pricing_workbook_export_rows_current_tier3_price_cents_check",
+      "def": "CHECK (((current_tier3_price_cents IS NULL) OR (current_tier3_price_cents >= 0)))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "pricing_workbook_export_rows",
+      "constraint": "pricing_workbook_export_rows_row_version_check",
+      "def": "CHECK ((row_version >= 1))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "pricing_workbook_exports",
+      "constraint": "pricing_workbook_exports_check",
+      "def": "CHECK ((expires_at > created_at))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "pricing_workbook_exports",
+      "constraint": "pricing_workbook_exports_row_count_check",
+      "def": "CHECK ((row_count > 0))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
       "table": "products",
       "constraint": "chk_product_cost",
       "def": "CHECK ((current_cost >= (0)::numeric))",
@@ -2716,6 +2946,12 @@
       "constraint": "chk_product_tier3",
       "def": "CHECK ((tier3_price >= (0)::numeric))",
       "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "purchase_order_import_intents",
+      "constraint": "purchase_order_import_intents_content_fingerprint_format",
+      "def": "CHECK (((content_fingerprint IS NULL) OR (content_fingerprint ~ '^[0-9a-f]{64}$'::text)))",
+      "reason": "conditional/multi-column — not a single-column IN-list; hooks do NOT validate this constraint"
     },
     {
       "table": "purchase_order_import_intents",
@@ -3076,7 +3312,8 @@
       ],
       "with_default": [
         "id",
-        "changed_at"
+        "changed_at",
+        "change_source"
       ]
     },
     "credit_memo_applications": {
@@ -3183,7 +3420,8 @@
         "is_active",
         "created_at",
         "updated_at",
-        "prepay_balance_cents"
+        "prepay_balance_cents",
+        "crops"
       ]
     },
     "cycle_count_items": {
@@ -3955,6 +4193,76 @@
         "updated_at"
       ]
     },
+    "pricing_change_set_preview_rows": {
+      "no_default": [
+        "change_set_id",
+        "sequence",
+        "submitted_row",
+        "row_status"
+      ],
+      "with_default": []
+    },
+    "pricing_change_set_rows": {
+      "no_default": [
+        "change_set_id",
+        "product_id",
+        "identity_fingerprint",
+        "expected_version",
+        "pricing_mode",
+        "input_cost_cents",
+        "output_cost_cents",
+        "output_tier1_margin",
+        "output_tier2_margin",
+        "output_tier3_margin",
+        "output_tier1_price_cents",
+        "output_tier2_price_cents",
+        "output_tier3_price_cents",
+        "output_fingerprint"
+      ],
+      "with_default": []
+    },
+    "pricing_change_sets": {
+      "no_default": [
+        "created_by",
+        "source",
+        "request_fingerprint",
+        "preview_idempotency_key",
+        "submitted_row_count"
+      ],
+      "with_default": [
+        "id",
+        "row_count",
+        "status",
+        "created_at",
+        "expires_at"
+      ]
+    },
+    "pricing_workbook_export_rows": {
+      "no_default": [
+        "export_id",
+        "product_id",
+        "product_name_snapshot",
+        "identity_fingerprint",
+        "row_token",
+        "row_version"
+      ],
+      "with_default": []
+    },
+    "pricing_workbook_exports": {
+      "no_default": [
+        "created_by",
+        "request_fingerprint",
+        "manifest_fingerprint",
+        "idempotency_key",
+        "row_count"
+      ],
+      "with_default": [
+        "id",
+        "status",
+        "created_at",
+        "expires_at"
+      ]
+    },
     "product_label_drafts": {
       "no_default": [
         "product_id",
@@ -3978,7 +4286,8 @@
         "is_active",
         "created_at",
         "updated_at",
-        "is_rup"
+        "is_rup",
+        "pricing_version"
       ]
     },
     "profiles": {
@@ -4753,7 +5062,18 @@
       "old_tier3_price",
       "new_tier3_price",
       "change_note",
-      "changed_at"
+      "changed_at",
+      "old_tier1_margin",
+      "new_tier1_margin",
+      "old_tier2_margin",
+      "new_tier2_margin",
+      "old_tier3_margin",
+      "new_tier3_margin",
+      "change_source",
+      "change_reason",
+      "change_set_id",
+      "old_pricing_version",
+      "new_pricing_version"
     ],
     "credit_memo_applications": [
       "id",
@@ -4896,7 +5216,8 @@
       "account_number",
       "finance_charge_enabled",
       "finance_charge_grace_days",
-      "default_application_service_id"
+      "default_application_service_id",
+      "crops"
     ],
     "cycle_count_items": [
       "id",
@@ -5806,6 +6127,92 @@
       "quote_id",
       "allocation_set_id"
     ],
+    "pricing_change_set_preview_rows": [
+      "change_set_id",
+      "sequence",
+      "product_id",
+      "submitted_row",
+      "row_status",
+      "error_code",
+      "effect"
+    ],
+    "pricing_change_set_rows": [
+      "change_set_id",
+      "product_id",
+      "identity_fingerprint",
+      "expected_version",
+      "pricing_mode",
+      "change_reason",
+      "input_cost_cents",
+      "input_tier1_margin",
+      "input_tier2_margin",
+      "input_tier3_margin",
+      "input_tier1_price_cents",
+      "input_tier2_price_cents",
+      "input_tier3_price_cents",
+      "output_cost_cents",
+      "output_tier1_margin",
+      "output_tier2_margin",
+      "output_tier3_margin",
+      "output_tier1_price_cents",
+      "output_tier2_price_cents",
+      "output_tier3_price_cents",
+      "output_tier1_gross_margin",
+      "output_tier2_gross_margin",
+      "output_tier3_gross_margin",
+      "output_tier1_price_per_acre_cents",
+      "output_tier2_price_per_acre_cents",
+      "output_tier3_price_per_acre_cents",
+      "output_fingerprint"
+    ],
+    "pricing_change_sets": [
+      "id",
+      "export_id",
+      "created_by",
+      "source",
+      "request_fingerprint",
+      "preview_idempotency_key",
+      "submitted_row_count",
+      "row_count",
+      "status",
+      "created_at",
+      "expires_at",
+      "applied_by",
+      "applied_at",
+      "apply_idempotency_key",
+      "apply_result"
+    ],
+    "pricing_workbook_export_rows": [
+      "export_id",
+      "product_id",
+      "sku_snapshot",
+      "product_name_snapshot",
+      "category_snapshot",
+      "container_size_snapshot",
+      "unit_size_snapshot",
+      "inventory_unit_snapshot",
+      "identity_fingerprint",
+      "row_token",
+      "row_version",
+      "current_cost_cents",
+      "current_tier1_margin",
+      "current_tier1_price_cents",
+      "current_tier2_margin",
+      "current_tier2_price_cents",
+      "current_tier3_margin",
+      "current_tier3_price_cents"
+    ],
+    "pricing_workbook_exports": [
+      "id",
+      "created_by",
+      "request_fingerprint",
+      "manifest_fingerprint",
+      "idempotency_key",
+      "row_count",
+      "status",
+      "created_at",
+      "expires_at"
+    ],
     "product_label_drafts": [
       "id",
       "product_id",
@@ -5867,7 +6274,8 @@
       "phi_days",
       "max_label_rate",
       "max_label_rate_unit",
-      "use_timing"
+      "use_timing",
+      "pricing_version"
     ],
     "profiles": [
       "id",
@@ -5887,7 +6295,8 @@
       "actor_id",
       "intent_key",
       "purchase_order_id",
-      "created_at"
+      "created_at",
+      "content_fingerprint"
     ],
     "purchase_order_items": [
       "id",

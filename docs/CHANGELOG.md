@@ -4,6 +4,17 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-17 — CRM follow-up: customer crops + top products by volume (owner decisions)
+
+Mason answered the five parked CRM owner questions; the two that were build items shipped same-day (branch `feat/crm-crops-and-volume`, Opus/Sonnet builders per owner instruction, full migration gauntlet):
+
+- **Customer crops (decision: selected per customer, NOT derived from field history):** `customers.crops text[]` with a DB CHECK bounding the 8-crop controlled list and array shape (migration `20260717112532`). Tap-to-toggle chips on the customer info tab (save immediately, revert on failure, activity-logged) and a Crop filter on `/call-lists` sharing the tier filter's fail-safe lookup.
+- **Top products (decision: show BOTH highest revenue and highest volume):** `get_customer_prep_card` gains `top_products_by_quantity` grouped per (product, unit) so a total can never mix units — a product invoiced in two units shows as two honestly-labeled lines (migration `20260717112533`; Codex caught the `MAX(unit)` mislabeling risk plus a tie-break gap, both fixed pre-apply, APPROVE on final bytes). The prep card now shows "Top by revenue" (fail-soft from `get_customer_purchase_summary`) beside "Top by volume". Proven live with a rolled-back mixed-unit smoke (12 gal + 4 lb → two lines).
+- Other three answers recorded in `docs/manual/DECISION_LOG.md`: save_customer edits restricted to assigned rep + admins (relayed to the running remediation session), AI-disclosure default wording approved, transcript retention 15 months.
+- Types synced (`supabase.ts`, `Customer`, new `src/lib/crops.ts`), schema registry rebuilt from live introspection (crops CHECK in `skipped_constraints`; one transcription drop caught and fixed by old-vs-new set diff).
+
+---
+
 ## 2026-07-17 — CRM Relationship Intelligence: all four phases LIVE (autonomous loop)
 
 Native CRM module shipped end-to-end in one armed autonomous run (mission `docs/loops/crm-relationship-intelligence-loop-2026-07-16.md`, full audit trail in the ledger, plain-English summary in `docs/loops/crm-relationship-intelligence-morning-report.md`):
