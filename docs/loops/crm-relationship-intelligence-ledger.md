@@ -39,15 +39,15 @@ Statuses: TODO / BUILDING / GATE / DONE / PARKED(reason)
 | unit | builder | status | commit | proof |
 |---|---|---|---|---|
 | 4.1 documents migration + bucket | terra (draft) + orchestrator hardenings | DONE | (this commit) | PROOF — Ran: gauntlet (drift CLEAN; RLS CLEAN + its 4 MED hardenings folded in + 2 delta re-verifies incl. owner_id-spoof/edge-path probes; Codex r1 BLOCK [ordering BLOCKER my own hardening introduced + 3 HIGH] → r2 BLOCK [rep uploads would 403: Storage INSERT..RETURNING* needs row visibility before metadata exists — BOTH Claude reviewers had signed off wrongly] → owner_id-branch fix → r3 APPROVE); apply attempt 1 failed on storage-policy COMMENT ownership → comments stripped → LIVE apply {success:true} w/ hash-bound proofs (4de6c11a…) · Saw: rolled-back smoke 13/13 (wrong-folder/nested/born-deleted/provenance/forged-attribution/post-delete-edit ALL blocked; soft-delete works; rep sees no deleted rows, can't touch unassigned customers; bucket private; 5 storage + 6 table policies live); B7 rename 010003→013415 pre-apply |
-| 4.2 documents UI | luna | GATE | — | PROOF — Ran (luna): typecheck, lint 0 err, CustomerDetail smoke, full vitest 254/3519; build orchestrator-verified (luna's sandbox EPERM was environmental) · pending: post-regen gate + 4.G |
-| 4.G phase gate | orchestrator | TODO | — | — |
+| 4.2 documents UI | luna + orchestrator fixes | DONE | 916cc856 (main) | PROOF — Ran: full gate ×2 (lint 0 err, typecheck, 254/254 files 3519 tests, build) after types regen + Sol 4.G fixes (anchor-click downloads [popup-blocker-safe], typed queries, logActivity events, zero-byte guard, input reset, per-file a11y labels) · Saw: green |
+| 4.G phase gate | orchestrator | DONE | 916cc856 (main) | PROOF — Ran: Sol xhigh r1 BLOCK (3M/3L) → all fixed → r2 **APPROVE** (incl. confirming logActivity failures can't break the mutation UX); PR #151 checks green, squash-merged 2026-07-17T03:0x · Saw: prod serves CustomerDetail-86NZmKjp.js containing customer_documents (grep=1) — live users have the Documents tab |
 
 ## Final gauntlet
 | step | reviewer | status | verdict |
 |---|---|---|---|
-| Claude fresh-context review agents (full delta) | compliance / rls-security / types-drift | TODO | — |
-| Sol adversarial review (full delta, xhigh) | gpt-5.6-sol | TODO | — |
-| Morning report + docs + memory | orchestrator | TODO | — |
+| Claude fresh-context review agents (full delta) | compliance / rls-security / types-drift | DONE | compliance: 0 BLOCKER, 2H+5M cross-phase drift → 6 fixed (canonical parser, narrow casts, 11 error tokens, confirm-before-deactivate, unified actor sourcing, code-based error detection) + 1 tracked (idempotent RPC chip) · rls-security (system-level): **CLEAN** — anon/PUBLIC lockout live-proven on 6 tables + 12 fns + bucket; V1 closed by live proacl sweep, V2 by hash-bound-apply chain + live body spot-check; 1 MED (assignment-scoped aggregates) confirmed settled → DECISION_LOG 2026-07-17 · types-drift: **NO DRIFT** (registry vendors.deleted_at transcription gap found + repaired via script) |
+| Sol adversarial review (full delta, xhigh) | gpt-5.6-sol | DONE | r1 BLOCK (1 process-BLOCKER + 3H + 4M) → fixes: DB-side primary protection (is_primary=false mutation predicates), contacts race/scope guards + remount, prep-card refresh nonce, \$0 threshold honored, retry-unsafe inserts + 2 Phase-5 seams RECORDED → r2 BLOCK (stale-state predicate + test demand) → r3 BLOCK (test chain-scoping) → r4 **APPROVE** |
+| Morning report + docs + memory | orchestrator | DONE | morning report written (Sol verdict filled); CHANGELOG 2026-07-17 entry; CURRENT_STATE feature map; DECISION_LOG ×2 (assignment-scoped aggregates; tier/crop); memory project_crm-loop-shipped-2026-07-17 |
 
 ## Scope decisions (recorded when the mission text was narrowed)
 - **Phase 3.2 filters — RESOLVED (2026-07-16, Sol 3.G r1 H1 + r2 H1).** Mission listed rep/tier/crop/last-contact filters. SHIPPED: rep filter (admins, via the RPCs' p_rep_id), tier filter (client-side lookup of customers.assigned_tier for loaded rows — no schema change), last-contact (displayed per row; the no-contact list is itself that filter), per-row prep-card peek. CROP filter → moved to Parked questions as a genuine OWNER decision (see below): crop data lives in field crop history, not on the customer, so "filter growers by crop" first needs Mason to say which source of truth counts.
@@ -61,7 +61,12 @@ Statuses: TODO / BUILDING / GATE / DONE / PARKED(reason)
 - **Recording/AI-disclosure wording** — default: standard "this call may be recorded" + AI self-ID; Mason to approve final wording before the voice vendor goes live (Phase 5, out of this loop).
 - **Transcript/recording retention + purge procedure** — default: `retention_expires_at` column exists but NO auto-purge is built in this loop; purge design deferred.
 
+## Parked follow-ups (task chips spawned; recorded per Sol final gauntlet)
+- **Retry-unsafe direct inserts** — LogInteractionModal's interaction+follow-up insert and CustomerFacts' add-fact insert are direct table writes: a committed response lost in transit, then retried, double-logs. Fix = idempotent SECDEF RPC(s) through the full gauntlet (task chip `Add idempotent RPC for CRM call logging` covers the interaction path; extend to the fact-add path in the same session). The review/supersede fact RPCs already carry idempotency keys.
+
 ## Phase 5 design notes (carry forward)
+- **get_customer_prep_card is not service-role callable** (in-body authz requires an authenticated active profile; service-role calls have no user session). The AI receptionist needs a server-only, service-role-granted entry point sharing the same internal logic — an ADDITIVE function, no schema rework. (Sol final gauntlet.)
+- **customer_documents cannot take clean service ingestion yet**: uploaded_by is NOT NULL → human profile, and there is no provider document id / external-event link for webhook dedup. Phase 5 needs an additive amendment (nullable-for-service actor semantics + unique provider_document_id) BEFORE the AI channel writes documents. (Sol final gauntlet.)
 - Provenance guard trigger fires for service role too (auth.uid() NULL → is_admin() false). The AI-intake endpoint must INSERT provenance (provider/external_call_id) with the row and never UPDATE it afterward — or Phase 5 adds a service-role bypass to the guard. (RLS re-verify note, 2026-07-16.)
 
 ## Cycle log

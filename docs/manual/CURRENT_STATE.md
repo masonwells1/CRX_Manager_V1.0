@@ -54,6 +54,10 @@ Grouped, one-liner summary of what is LIVE in production today (see
 
 - **Core ops:** customers, products, quotes, orders, invoices, payments, and
   accounts-payable (vendor bills/payments, purchase orders/receiving).
+- **CRM relationship intelligence (2026-07-17):** contacts + call logging,
+  grower knowledge (facts w/ review queue) + call prep card, seasonal call
+  lists (`/call-lists`), per-customer documents — built AI-receptionist-ready
+  (Phase 5 seams recorded in the loop ledger).
 - **Sell-side quote lifecycle:** quote builder, versions, templates, PDF
   quotes, convert-to-order.
 - **Field invoices + as-applied billing:** field-level invoicing reconciled

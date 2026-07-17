@@ -3,7 +3,10 @@ import { PhoneCall } from 'lucide-react';
 import { checkMutationResult, supabase } from '../../lib/db';
 import { logActivity } from '../../lib/activityLogger';
 import { Sentry } from '../../lib/sentry';
-import type { CustomerContact, InteractionDirection, InteractionOutcome, InteractionType, Profile } from '../../types';
+import type { CustomerContact, InteractionDirection, InteractionOutcome, InteractionType } from '../../types';
+
+// Only these two fields are read from profile_public_view (assignee picker).
+type AssigneeOption = { id: string; full_name: string | null };
 import { useToast } from '../ui/Toast';
 import Button from '../ui/Button';
 import Input from '../ui/Input';
@@ -19,10 +22,10 @@ const toLocalInput = () => { const date = new Date(); date.setMinutes(date.getMi
 
 export default function LogInteractionModal({ open, onClose, customerId, userId, customerName, onLogged }: LogInteractionModalProps) {
   const { toast } = useToast(); const summaryRef = useRef<HTMLTextAreaElement>(null);
-  const [contacts, setContacts] = useState<CustomerContact[]>([]); const [profiles, setProfiles] = useState<Profile[]>([]);
+  const [contacts, setContacts] = useState<CustomerContact[]>([]); const [profiles, setProfiles] = useState<AssigneeOption[]>([]);
   const [contactId, setContactId] = useState(''); const [type, setType] = useState<InteractionType>('call'); const [direction, setDirection] = useState<InteractionDirection>('outbound'); const [outcome, setOutcome] = useState<InteractionOutcome | null>(null); const [occurredAt, setOccurredAt] = useState(toLocalInput()); const [minutes, setMinutes] = useState(''); const [summary, setSummary] = useState(''); const [followUp, setFollowUp] = useState(false); const [followTitle, setFollowTitle] = useState(''); const [assignedTo, setAssignedTo] = useState(''); const [dueDate, setDueDate] = useState(''); const [saving, setSaving] = useState(false);
   const selectedContact = useMemo(() => contacts.find((contact) => contact.id === contactId), [contacts, contactId]);
-  useEffect(() => { if (!open) return; void (async () => { const [{ data: contactData }, { data: profileData }] = await Promise.all([contactsTable().select('*').eq('customer_id', customerId).eq('is_active', true).order('is_primary', { ascending: false }).order('name'), supabase.from('profile_public_view').select('id, full_name, role, is_active').eq('is_active', true).neq('role', 'entity_recipient').order('full_name')]); const loadedContacts = (contactData || []) as CustomerContact[]; setContacts(loadedContacts); setProfiles((profileData || []) as unknown as Profile[]); setContactId(loadedContacts.find((contact) => contact.is_primary)?.id || ''); setType('call'); setDirection('outbound'); setOutcome(null); setOccurredAt(toLocalInput()); setMinutes(''); setSummary(''); setFollowUp(false); setFollowTitle(''); setAssignedTo(''); setDueDate(''); setTimeout(() => summaryRef.current?.focus(), 0); })(); }, [open, customerId]);
+  useEffect(() => { if (!open) return; void (async () => { const [{ data: contactData }, { data: profileData }] = await Promise.all([contactsTable().select('*').eq('customer_id', customerId).eq('is_active', true).order('is_primary', { ascending: false }).order('name'), supabase.from('profile_public_view').select('id, full_name, role, is_active').eq('is_active', true).neq('role', 'entity_recipient').order('full_name')]); const loadedContacts = (contactData || []) as CustomerContact[]; setContacts(loadedContacts); setProfiles((profileData || []).flatMap((row) => (row.id !== null ? [{ id: row.id, full_name: row.full_name }] : []))); setContactId(loadedContacts.find((contact) => contact.is_primary)?.id || ''); setType('call'); setDirection('outbound'); setOutcome(null); setOccurredAt(toLocalInput()); setMinutes(''); setSummary(''); setFollowUp(false); setFollowTitle(''); setAssignedTo(''); setDueDate(''); setTimeout(() => summaryRef.current?.focus(), 0); })(); }, [open, customerId]);
   const save = async () => {
     if (!summary.trim()) { toast('error', 'Add a short call summary'); return; }
     if (followUp && !followTitle.trim()) { toast('error', 'Add a follow-up title'); return; }

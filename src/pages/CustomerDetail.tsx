@@ -638,7 +638,8 @@ export default function CustomerDetail() {
       {(tab === 'info' || isNew) && (
         <div className="space-y-4">
           {/* key remounts on customer switch — in-flight loads/mutations from the previous customer must never write into this one's view (Sol 2.G r2) */}
-          {!isNew && id && <CustomerPrepCard key={id} customerId={id} />}
+          {/* interactionRefresh in the key: logging a call remounts the prep card so "Last conversation" is never stale (Sol final gauntlet) */}
+          {!isNew && id && <CustomerPrepCard key={`${id}:${interactionRefresh}`} customerId={id} />}
           <Card>
             <CardHeader title="Contact" accent="Information" />
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -869,7 +870,7 @@ export default function CustomerDetail() {
       )}
 
       {tab === 'contacts' && !isNew && id && profile && (
-        <CustomerContacts customerId={id} performedBy={profile.id} />
+        <CustomerContacts key={id} customerId={id} performedBy={profile.id} />
       )}
 
       {/* key remounts on customer switch — see the CustomerPrepCard note above */}
@@ -879,7 +880,7 @@ export default function CustomerDetail() {
 
       {/* key remounts on customer switch — see the CustomerPrepCard note above */}
       {tab === 'documents' && !isNew && id && profile && (
-        <CustomerDocuments key={id} customerId={id} />
+        <CustomerDocuments key={id} customerId={id} userId={profile.id} />
       )}
 
       {tab === 'timeline' && !isNew && (
