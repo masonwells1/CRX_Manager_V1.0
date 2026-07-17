@@ -74,8 +74,12 @@ export function normalizeBulkPOInvoiceDate(value: string): string | null {
  * excluded: those can change without changing the vendor document itself.
  */
 export function buildBulkPOIntentKey(document: BulkPOIntentDocument): string | null {
+  const vendorName = normalizeIdentityText(document.vendorName);
   const invoiceNumber = normalizeIdentityText(document.invoiceNumber);
-  if (!invoiceNumber) return null;
+  // The claim is global across employees and devices. Without a vendor, two
+  // unrelated vendors that reuse an invoice number and line layout could be
+  // mistaken for the same business document.
+  if (!vendorName || !invoiceNumber) return null;
 
   const items = document.items
     .filter((item) => item.productId && item.quantityOrdered > 0)
@@ -95,7 +99,7 @@ export function buildBulkPOIntentKey(document: BulkPOIntentDocument): string | n
   if (items.length === 0) return null;
 
   return JSON.stringify({
-    vendor_name: normalizeIdentityText(document.vendorName),
+    vendor_name: vendorName,
     invoice_number: invoiceNumber,
     invoice_date: normalizeBulkPOInvoiceDate(document.invoiceDate),
     items,

@@ -287,4 +287,40 @@ describe('BulkPOImport', () => {
       }),
     ));
   });
+
+  it('requires a vendor before creating a global duplicate claim', async () => {
+    mocks.processDocumentWithOCR.mockResolvedValue({
+      success: true,
+      raw_text: 'parsed without vendor',
+      document_type: 'purchase_order',
+      parsed_data: {
+        vendor_name: '',
+        invoice_number: 'INV-NO-VENDOR',
+        invoice_date: '2026-07-16',
+        items: [{
+          product_name: product.product_name,
+          quantity: 2,
+          unit_cost: 10,
+          unit_size: 'GAL',
+        }],
+      },
+      confidence: 1,
+      processing_time_ms: 1,
+    });
+
+    render(<BulkPOImport {...defaultProps} />);
+    fireEvent.change(document.querySelector('#po-pdf-upload')!, {
+      target: { files: [new File(['one'], 'INV-NO-VENDOR.pdf', { type: 'application/pdf' })] },
+    });
+    fireEvent.click(await screen.findByRole('button', { name: /process 1 file/i }));
+
+    const importButton = await screen.findByRole('button', { name: /import 0 pos/i });
+    expect(importButton).toBeDisabled();
+    expect(mocks.rpc).not.toHaveBeenCalledWith('save_purchase_order', expect.anything());
+
+    fireEvent.change(screen.getByPlaceholderText('Vendor name...'), {
+      target: { value: 'Vendor B' },
+    });
+    expect(await screen.findByRole('button', { name: /import 1 po/i })).toBeEnabled();
+  });
 });

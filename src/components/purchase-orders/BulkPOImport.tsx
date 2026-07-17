@@ -398,7 +398,8 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
 
         const intentKey = buildParsedPOIntentKey(po);
         if (!intentKey) {
-          toast('error', `${po.source_file}: enter the vendor invoice number before importing.`);
+          const missingField = !po.vendor_name.trim() ? 'vendor name' : 'vendor invoice number';
+          toast('error', `${po.source_file}: enter the ${missingField} before importing.`);
           failedCount++;
           continue;
         }
@@ -442,7 +443,8 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
             // The database allocates the number inside the same transaction
             // that inserts the PO, closing MAX+1 races between employees.
             po_number: null,
-            vendor: po.vendor_name.trim() || 'Unknown Vendor',
+            // buildParsedPOIntentKey rejects an empty vendor before this RPC.
+            vendor: po.vendor_name.trim(),
             status: 'draft',
             submitted_date: null,
             expected_delivery_date: null,

@@ -71,15 +71,18 @@ describe('bulk PO import retry state', () => {
       .toBe(buildBulkPOIntentKey({ ...document, invoiceDate: 'unrecognized OCR value' }));
   });
 
-  it('requires a vendor invoice number so two legitimate documents cannot collide', () => {
-    expect(buildBulkPOIntentKey({
+  it('requires both vendor identity and invoice number so legitimate documents cannot collide', () => {
+    const document = {
       vendorName: 'Vendor A',
-      invoiceNumber: '   ',
+      invoiceNumber: 'INV-100',
       invoiceDate: '2026-07-16',
       items: [
         { productId: 'product-a', quantityOrdered: 1, unitCostCents: 300, unitSize: 'EA', notes: '' },
       ],
-    })).toBeNull();
+    };
+
+    expect(buildBulkPOIntentKey({ ...document, vendorName: '   ' })).toBeNull();
+    expect(buildBulkPOIntentKey({ ...document, invoiceNumber: '   ' })).toBeNull();
   });
 
   it('derives the same cross-tab idempotency key for the same reviewed intent', async () => {
