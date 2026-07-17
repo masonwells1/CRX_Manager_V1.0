@@ -19,6 +19,7 @@ import {
   buildBulkPOIntentKey,
   buildBulkPODocumentClaimKey,
   buildBulkPOIdempotencyKey,
+  bulkPOImportFailureGuidance,
   ensurePendingBulkPOIntent,
   getPendingBulkPOIntent,
   loadPendingBulkPOIntents,
@@ -389,6 +390,7 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
     let newSuccessCount = 0;
     let skippedCount = 0;
     let failedCount = 0;
+    let unclassifiedFailureCount = 0;
 
     for (const po of importable) {
       try {
@@ -495,6 +497,12 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
         }
       } catch (error) {
         Sentry.captureException(error instanceof Error ? error : new Error(String(error)), { extra: { context: 'Error importing PO' } });
+        const guidance = bulkPOImportFailureGuidance(error);
+        if (guidance) {
+          toast('error', `${po.source_file}: ${guidance}`);
+        } else {
+          unclassifiedFailureCount++;
+        }
         failedCount++;
       }
     }
@@ -515,8 +523,8 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
     if (skippedCount > 0) {
       toast('info', `Skipped ${skippedCount} document${skippedCount !== 1 ? 's' : ''} already imported.`);
     }
-    if (failedCount > 0) {
-      toast('error', `${failedCount} purchase order${failedCount !== 1 ? 's' : ''} failed. Review and retry; successful imports will be skipped.`);
+    if (unclassifiedFailureCount > 0) {
+      toast('error', `${unclassifiedFailureCount} purchase order${unclassifiedFailureCount !== 1 ? 's' : ''} failed. Review and retry; successful imports will be skipped.`);
     }
   };
 

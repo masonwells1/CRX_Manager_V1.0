@@ -1,6 +1,6 @@
 -- Post-apply rollback-only proof for migrations 20260716213000,
 -- 20260716224000, 20260716233000, 20260717010000, 20260717015439,
--- 20260717032000, 20260717045420, and 20260717063500.
+-- 20260717032000, 20260717045420, 20260717063445, and 20260717070900.
 -- Exercises the exact adversarial findings without retaining business rows.
 DO $smoke$
 DECLARE
@@ -152,7 +152,15 @@ BEGIN
   v_intent := 'bulk-po-document:' || encode(
     extensions.digest(
       convert_to(
-        lower('[SMOKE] Bulk Intent Vendor') || chr(31) || lower(v_vendor_reference),
+        translate(
+          '[SMOKE] Élan Bulk Intent Vendor',
+          'ABCDEFGHIJKLMNOPQRSTUVWXYZ',
+          'abcdefghijklmnopqrstuvwxyz'
+        ) || chr(31) || translate(
+          v_vendor_reference,
+          'ABCDEFGHIJKLMNOPQRSTUVWXYZ',
+          'abcdefghijklmnopqrstuvwxyz'
+        ),
         'UTF8'
       ),
       'sha256'
@@ -195,7 +203,7 @@ BEGIN
     NULL,
     jsonb_build_object(
       'po_number', 'SMK-BULK-A-' || v_suffix,
-      'vendor', '[SMOKE] Bulk Intent Vendor',
+      'vendor', '[SMOKE] Élan Bulk Intent Vendor',
       'status', 'draft',
       'bulk_import_vendor_reference', v_vendor_reference,
       'bulk_import_invoice_date', CURRENT_DATE::text,
@@ -221,7 +229,7 @@ BEGIN
     NULL,
     jsonb_build_object(
       'po_number', 'SMK-BULK-A-' || v_suffix,
-      'vendor', '[SMOKE] Bulk Intent Vendor',
+      'vendor', '[SMOKE] Élan Bulk Intent Vendor',
       'status', 'draft',
       'bulk_import_vendor_reference', v_vendor_reference,
       'bulk_import_invoice_date', CURRENT_DATE::text,
@@ -257,7 +265,7 @@ BEGIN
     NULL,
     jsonb_build_object(
       'po_number', 'SMK-BULK-B-' || v_suffix,
-      'vendor', '[SMOKE] Bulk Intent Vendor',
+      'vendor', '[SMOKE] Élan Bulk Intent Vendor',
       'status', 'draft',
       'bulk_import_vendor_reference', v_vendor_reference,
       'bulk_import_invoice_date', CURRENT_DATE::text,
@@ -322,7 +330,7 @@ BEGIN
     PERFORM public.save_purchase_order(
       NULL,
       jsonb_build_object(
-        'vendor', '[SMOKE] Bulk Intent Vendor',
+        'vendor', '[SMOKE] Élan Bulk Intent Vendor',
         'status', 'draft',
         'bulk_import_vendor_reference', v_vendor_reference,
         'bulk_import_invoice_date', CURRENT_DATE::text,
@@ -395,7 +403,7 @@ BEGIN
   );
   PERFORM public.save_purchase_order(
     v_po,
-    jsonb_build_object('vendor', '[SMOKE] Bulk Intent Vendor', 'status', 'draft'),
+    jsonb_build_object('vendor', '[SMOKE] Élan Bulk Intent Vendor', 'status', 'draft'),
     v_edit_items,
     v_sales,
     'smk-po-omit-cost-edit-' || v_suffix
@@ -558,7 +566,7 @@ BEGIN
   v_replay := public.save_purchase_order(
     NULL,
     jsonb_build_object(
-      'vendor', '[SMOKE] Bulk Intent Vendor',
+      'vendor', '[SMOKE] Élan Bulk Intent Vendor',
       'status', 'draft',
       'bulk_import_vendor_reference', v_vendor_reference,
       'bulk_import_invoice_date', CURRENT_DATE::text,

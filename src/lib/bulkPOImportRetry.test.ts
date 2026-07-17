@@ -3,6 +3,7 @@ import {
   buildBulkPOIntentKey,
   buildBulkPODocumentClaimKey,
   buildBulkPOIdempotencyKey,
+  bulkPOImportFailureGuidance,
   ensurePendingBulkPOIntent,
   getPendingBulkPOIntent,
   isImportedBulkPOIntent,
@@ -71,6 +72,29 @@ describe('bulk PO import retry state', () => {
     };
 
     expect(buildBulkPOIntentKey(corrected)).toBe(buildBulkPOIntentKey(document));
+  });
+
+  it('uses deterministic ASCII case folding without changing non-ASCII bytes', () => {
+    const document = {
+      vendorName: ' VENDOR Élan ',
+      invoiceNumber: ' INV-Ä100 ',
+      invoiceDate: '',
+      items: [],
+    };
+
+    expect(buildBulkPOIntentKey(document)).toBe('vendor Élan\u001finv-Ä100');
+    expect(buildBulkPOIntentKey({ ...document, vendorName: 'vendor élan' }))
+      .not.toBe(buildBulkPOIntentKey(document));
+  });
+
+  it('turns durable-claim conflicts into actionable import guidance', () => {
+    expect(bulkPOImportFailureGuidance({
+      message: 'BULK_PO_DOCUMENT_CONTENT_CONFLICT',
+    })).toMatch(/already imported with different reviewed details/i);
+    expect(bulkPOImportFailureGuidance(new Error(
+      'BULK_PO_INTENT_IDENTITY_MISMATCH',
+    ))).toMatch(/vendor or invoice number changed/i);
+    expect(bulkPOImportFailureGuidance(new Error('temporary save failure'))).toBeNull();
   });
 
   it('canonicalizes equivalent invoice dates and excludes missing or invalid fallbacks', () => {

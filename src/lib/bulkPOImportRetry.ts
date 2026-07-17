@@ -35,7 +35,10 @@ export interface BulkPOIntentDocument {
 }
 
 function normalizeIdentityText(value: string): string {
-  return value.trim().toLowerCase();
+  // Postgres locale-aware lower() and JavaScript Unicode case folding can
+  // disagree. Fold ASCII explicitly on both sides of the RPC boundary and
+  // preserve every non-ASCII code point byte-for-byte.
+  return value.trim().replace(/[A-Z]/g, (character) => character.toLowerCase());
 }
 
 const DOCUMENT_IDENTITY_SEPARATOR = '\u001f';
@@ -119,6 +122,24 @@ export async function buildBulkPOIdempotencyKey(
 /** Stable across users so the server can claim one vendor document globally. */
 export async function buildBulkPODocumentClaimKey(intentKey: string): Promise<string> {
   return `bulk-po-document:${await sha256Hex(intentKey)}`;
+}
+
+export function bulkPOImportFailureGuidance(error: unknown): string | null {
+  const message = error instanceof Error
+    ? error.message
+    : typeof error === 'string'
+      ? error
+      : typeof error === 'object' && error !== null && 'message' in error
+        ? String(error.message)
+        : '';
+
+  if (message.includes('BULK_PO_DOCUMENT_CONTENT_CONFLICT')) {
+    return 'This vendor invoice was already imported with different reviewed details. Open the existing purchase order and edit it instead.';
+  }
+  if (message.includes('BULK_PO_INTENT_IDENTITY_MISMATCH')) {
+    return 'The vendor or invoice number changed during import. Review those fields and retry.';
+  }
+  return null;
 }
 
 /**

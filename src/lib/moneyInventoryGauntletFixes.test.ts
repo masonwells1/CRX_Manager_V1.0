@@ -69,7 +69,10 @@ const bulkPOVendorBinding = source(
   'supabase/migrations/20260717045420_bind_bulk_po_claim_to_vendor.sql',
 );
 const bulkPOReplayContent = source(
-  'supabase/migrations/20260717063500_bind_bulk_po_replay_content.sql',
+  'supabase/migrations/20260717063445_bind_bulk_po_replay_content.sql',
+);
+const bulkPOAsciiIdentity = source(
+  'supabase/migrations/20260717070900_bind_bulk_po_identity_ascii_fold.sql',
 );
 const completeDelivery = access.slice(0, access.indexOf('CREATE OR REPLACE FUNCTION public.void_delivery'));
 
@@ -500,6 +503,26 @@ describe('money and inventory gauntlet fixes', () => {
     expect(saveWrapper).not.toContain('lower(btrim(v_existing_vendor))');
     expect(bulkPOReplayContent).toContain('FROM PUBLIC, anon;\nGRANT EXECUTE ON FUNCTION public.save_purchase_order(');
     expect(bulkPOReplayContent).toContain('TO authenticated, service_role;');
+  });
+
+  it('folds vendor-invoice identity identically in JavaScript and PostgreSQL', () => {
+    const saveWrapper = bulkPOAsciiIdentity.slice(
+      bulkPOAsciiIdentity.indexOf('CREATE OR REPLACE FUNCTION public.save_purchase_order('),
+      bulkPOAsciiIdentity.indexOf('REVOKE ALL ON FUNCTION public.save_purchase_order('),
+    );
+    const browserRetry = source('src/lib/bulkPOImportRetry.ts');
+
+    expect(saveWrapper).toContain("'ABCDEFGHIJKLMNOPQRSTUVWXYZ'");
+    expect(saveWrapper).toContain("'abcdefghijklmnopqrstuvwxyz'");
+    expect(saveWrapper).toContain('translate(\n            v_requested_vendor,');
+    expect(saveWrapper).toContain('translate(\n            v_vendor_reference,');
+    expect(saveWrapper).not.toContain('lower(v_requested_vendor)');
+    expect(saveWrapper).not.toContain('lower(v_vendor_reference)');
+    expect(browserRetry).toContain(
+      'replace(/[A-Z]/g, (character) => character.toLowerCase())',
+    );
+    expect(browserRetry).toContain('BULK_PO_DOCUMENT_CONTENT_CONFLICT');
+    expect(browserRetry).toContain('Open the existing purchase order and edit it instead.');
   });
 
   it('authorizes invoice saves and statements against active customer assignment before replay', () => {

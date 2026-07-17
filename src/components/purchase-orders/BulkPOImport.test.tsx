@@ -250,6 +250,34 @@ describe('BulkPOImport', () => {
     expect(defaultProps.onClose).not.toHaveBeenCalled();
   });
 
+  it('explains a changed-content conflict instead of showing only a generic failure', async () => {
+    mocks.rpc.mockImplementation(async (name: string) => {
+      if (name === 'save_purchase_order') {
+        return {
+          data: null,
+          error: { message: 'BULK_PO_DOCUMENT_CONTENT_CONFLICT' },
+        };
+      }
+      return { data: null, error: new Error(`Unexpected RPC: ${name}`) };
+    });
+
+    render(<BulkPOImport {...defaultProps} />);
+    fireEvent.change(document.querySelector('#po-pdf-upload')!, {
+      target: { files: [new File(['one'], 'INV-CHANGED.pdf', { type: 'application/pdf' })] },
+    });
+    fireEvent.click(await screen.findByRole('button', { name: /process 1 file/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /import 1 po/i }));
+
+    await waitFor(() => expect(mocks.toast).toHaveBeenCalledWith(
+      'error',
+      expect.stringMatching(/INV-CHANGED\.pdf:.*already imported.*edit it instead/i),
+    ));
+    expect(mocks.toast).not.toHaveBeenCalledWith(
+      'error',
+      expect.stringMatching(/review and retry/i),
+    );
+  });
+
   it('normalizes an OCR fractional-cent unit cost before saving', async () => {
     mocks.processDocumentWithOCR.mockResolvedValue({
       success: true,
