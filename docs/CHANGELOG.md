@@ -4,6 +4,18 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-17 — Cleanup-sprint weekly check (automated routine)
+
+Routine fired at 13:00 UTC. Live SQL against production (Supabase `rhyzpcqhnizqbxphqdkr`):
+
+- **Negatives:** 18 (↑ +1 from 17 — new bad row appeared; ⚠️ needs investigation)
+- **Over-received PO items:** 15 (unchanged)
+- **Unbilled completed deliveries:** 59 (unchanged)
+
+Progress row appended to `docs/reports/cleanup-sprint-progress.md` (PR #158, docs-only draft). Phase 23 CHECK constraints remain blocked. Mason notified via push notification.
+
+---
+
 ## 2026-07-17 — CRM follow-up: customer crops + top products by volume (owner decisions)
 
 Mason answered the five parked CRM owner questions; the two that were build items shipped same-day (branch `feat/crm-crops-and-volume`, Opus/Sonnet builders per owner instruction, full migration gauntlet):
