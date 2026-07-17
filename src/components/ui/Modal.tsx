@@ -4,6 +4,7 @@ import { X } from 'lucide-react';
 interface ModalProps {
   open: boolean;
   onClose: () => void;
+  closeDisabled?: boolean;
   title: string;
   accent?: string;
   children: ReactNode;
@@ -17,6 +18,7 @@ const FOCUSABLE = 'a[href], button:not([disabled]), textarea, input, select, [ta
 export default function Modal({
   open,
   onClose,
+  closeDisabled = false,
   title,
   accent,
   children,
@@ -38,13 +40,17 @@ export default function Modal({
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        onClose();
+        if (!closeDisabled) onClose();
         return;
       }
       // Focus trap: cycle focus within modal
       if (e.key === 'Tab' && dialogRef.current) {
         const focusable = dialogRef.current.querySelectorAll<HTMLElement>(FOCUSABLE);
-        if (focusable.length === 0) return;
+        if (focusable.length === 0) {
+          e.preventDefault();
+          dialogRef.current.focus();
+          return;
+        }
         const first = focusable[0];
         const last = focusable[focusable.length - 1];
         if (e.shiftKey) {
@@ -60,7 +66,7 @@ export default function Modal({
         }
       }
     },
-    [onClose]
+    [closeDisabled, onClose]
   );
 
   // Separate effect for keyboard listener (updates when handler changes)
@@ -81,6 +87,8 @@ export default function Modal({
         const focusable = dialogRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE);
         if (focusable && focusable.length > 0) {
           focusable[0].focus();
+        } else {
+          dialogRef.current?.focus();
         }
       });
     } else {
@@ -97,12 +105,13 @@ export default function Modal({
     <div className="fixed inset-0 z-50 flex items-center justify-center" role="dialog" aria-modal="true" aria-labelledby={titleId}>
       <div
         className="fixed inset-0 bg-black/40 backdrop-blur-sm"
-        onClick={onClose}
+        onClick={closeDisabled ? undefined : onClose}
         aria-hidden="true"
       />
       <div
         ref={dialogRef}
         data-modal-panel
+        tabIndex={-1}
         className={`
           relative flex w-full flex-col bg-white shadow-xl border border-gray-100
           ${panelSizeClass}
@@ -116,8 +125,9 @@ export default function Modal({
           </h2>
           <button
             onClick={onClose}
+            disabled={closeDisabled}
             aria-label="Close"
-            className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
+            className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
           >
             <X className="w-5 h-5" />
           </button>

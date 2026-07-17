@@ -1,7 +1,10 @@
 #!/usr/bin/env node
 
 import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import { buildSync } from 'esbuild';
 import { fileURLToPath } from 'node:url';
+import os from 'node:os';
 import path from 'node:path';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -16,7 +19,7 @@ const bootstrapSql = path.join(
   repoRoot,
   'supabase',
   'migrations',
-  '20260717025710_supplier_pricing_phase1a.sql'
+  '20260717042803_supplier_pricing_phase1a.sql'
 );
 const bootstrapCompatSql = path.join(
   repoRoot,
@@ -34,13 +37,31 @@ const cutoverSql = path.join(
   repoRoot,
   'scripts',
   '.staging-migrations',
-  '20260717030000_supplier_pricing_phase1a_cutover.sql'
+  '20260717121000_supplier_pricing_phase1a_cutover.sql'
 );
 const smokeSql = path.join(
   repoRoot,
   'scripts',
   'smoke',
   'smoke-supplier-pricing-phase1a.sql'
+);
+const workbookExportSql = path.join(
+  repoRoot,
+  'scripts',
+  'smoke',
+  'export-supplier-pricing-phase1a-workbook.sql'
+);
+const workbookSmokeSql = path.join(
+  repoRoot,
+  'scripts',
+  'smoke',
+  'smoke-supplier-pricing-phase1a-xlsx.sql'
+);
+const workbookRoundtripScript = path.join(
+  repoRoot,
+  'scripts',
+  'smoke',
+  'roundtrip-supplier-pricing-phase1a-workbook.ts'
 );
 
 const container = `crx-pricing-phase1a-proof-${process.pid}-${Date.now()}`;
@@ -88,7 +109,20 @@ function psql(fileName) {
   );
 }
 
+function psqlCapture(fileName) {
+  return run(
+    'docker',
+    [
+      'exec', '-e', `PGPASSWORD=${password}`, container,
+      'psql', '-qAt', '-U', 'postgres', '-d', 'postgres', '-X',
+      '-v', 'ON_ERROR_STOP=1', '-f', `/tmp/${fileName}`,
+    ],
+    { capture: true }
+  ).stdout.trim();
+}
+
 let started = false;
+const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'crx-phase1a-xlsx-'));
 try {
   docker(
     'run',
@@ -126,10 +160,12 @@ try {
   copyToContainer(seedSql, 'seed.sql');
   copyToContainer(cutoverSql, 'cutover.sql');
   copyToContainer(smokeSql, 'smoke.sql');
+  copyToContainer(workbookExportSql, 'xlsx-export.sql');
+  copyToContainer(workbookSmokeSql, 'xlsx-smoke.sql');
 
   console.log('[phase1a-proof] compiling live-shaped base fixture');
   psql('base.sql');
-  console.log('[phase1a-proof] compiling parked additive bootstrap');
+  console.log('[phase1a-proof] compiling the live additive compatibility bootstrap');
   psql('bootstrap.sql');
   console.log('[phase1a-proof] proving compatibility with the deployed legacy frontend');
   psql('bootstrap-compat.sql');
@@ -137,11 +173,49 @@ try {
   psql('seed.sql');
   console.log('[phase1a-proof] compiling parked enforcement cutover');
   psql('cutover.sql');
+  console.log('[phase1a-proof] exercising .xlsx generator/parser against real PostgreSQL RPCs');
+  const exportOutput = psqlCapture('xlsx-export.sql');
+  const exportLine = exportOutput.split(/\r?\n/).find((line) => line.trim().startsWith('{'));
+  if (!exportLine) throw new Error(`Workbook export RPC did not return JSON: ${exportOutput}`);
+  const exportPayload = JSON.parse(exportLine);
+  if (!Array.isArray(exportPayload.rows) || exportPayload.rows.length !== 3) {
+    throw new Error('Workbook export RPC did not return the expected 3 Product rows');
+  }
+  const exportJsonPath = path.join(tempDir, 'export.json');
+  const parsedPayloadPath = path.join(tempDir, 'parsed.json');
+  const exportedWorkbookPath = path.join(tempDir, 'export.xlsx');
+  const proofOutputDir = path.join(repoRoot, 'output', 'phase1a-db');
+  fs.mkdirSync(proofOutputDir, { recursive: true });
+  // Keep the temporary ESM bundle under the repo so external packages resolve
+  // through this checkout's node_modules. It is ignored and removed on success.
+  const workbookRoundtripBundle = path.join(proofOutputDir, '.roundtrip-workbook.mjs');
+  const editedWorkbookPath = path.join(proofOutputDir, 'phase1a-xlsx-to-real-db.xlsx');
+  fs.writeFileSync(exportJsonPath, JSON.stringify(exportPayload));
+  buildSync({
+    entryPoints: [workbookRoundtripScript],
+    outfile: workbookRoundtripBundle,
+    bundle: true,
+    platform: 'node',
+    format: 'esm',
+    packages: 'external',
+  });
+  run(process.execPath, [
+    workbookRoundtripBundle,
+    exportJsonPath, parsedPayloadPath, exportedWorkbookPath, editedWorkbookPath,
+  ]);
+  fs.rmSync(workbookRoundtripBundle, { force: true });
+  copyToContainer(parsedPayloadPath, 'phase1a-workbook-payload.json');
+  psql('xlsx-smoke.sql');
   console.log('[phase1a-proof] exercising RPC, conflict, atomicity, history, and privilege flows');
   psql('smoke.sql');
   console.log('[phase1a-proof] PASS');
 } finally {
   if (started) {
     run('docker', ['rm', '--force', container], { allowFailure: true });
+  }
+  const resolvedTemp = path.resolve(tempDir);
+  const resolvedRoot = path.resolve(os.tmpdir()) + path.sep;
+  if (resolvedTemp.startsWith(resolvedRoot)) {
+    fs.rmSync(resolvedTemp, { recursive: true, force: true });
   }
 }

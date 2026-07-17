@@ -22,7 +22,10 @@ const settings = JSON.parse(read(".claude/settings.json"));
 const codexHooksText = read(".codex/hooks.json");
 const codexHooks = JSON.parse(codexHooksText);
 const gitignore = read(".gitignore");
-const migrationDriftReviewer = read(".claude/agents/migration-drift-reviewer.md");
+// Git may materialize Markdown with CRLF on Windows even when the canonical
+// repository text is LF. Compare content, not checkout-specific line endings.
+const migrationDriftReviewer = read(".claude/agents/migration-drift-reviewer.md")
+  .replace(/\r\n/g, "\n");
 const migrationStampCheck = migrationDriftReviewer.match(
   /### CHECK 6 — Migration filename version-stamp mismatch([\s\S]*?)(?=\n### CHECK 7)/
 )?.[1] || "";

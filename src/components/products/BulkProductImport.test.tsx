@@ -28,9 +28,7 @@ vi.mock('../../lib/db', () => ({
 }));
 
 vi.mock('../../lib/documentOCR', () => ({
-  processDocumentWithOCR: vi.fn(),
   isCSVFile: vi.fn(() => true),
-  isOCRSupported: vi.fn(() => false),
 }));
 
 vi.mock('../ui/Toast', () => ({
@@ -38,6 +36,11 @@ vi.mock('../ui/Toast', () => ({
 }));
 
 import BulkProductImport from './BulkProductImport';
+import {
+  buildProductInsert,
+  isRetiredPricingColumn,
+  type ParsedProduct,
+} from './bulkProductImportSafety';
 
 describe('BulkProductImport', () => {
   const defaultProps = { open: true, onClose: vi.fn(), onSuccess: vi.fn() };
@@ -56,5 +59,63 @@ describe('BulkProductImport', () => {
   it('shows file upload area', () => {
     render(<BulkProductImport {...defaultProps} />);
     expect(screen.getAllByText(/csv/i).length).toBeGreaterThan(0);
+  });
+
+  it('accepts CSV files only and makes the pricing boundary explicit', () => {
+    render(<BulkProductImport {...defaultProps} />);
+
+    expect(screen.getByLabelText('Select File')).toHaveAttribute('accept', '.csv,text/csv');
+    expect(screen.getByText(/pricing columns are rejected/i)).toBeInTheDocument();
+    expect(screen.queryByText(/vision ocr/i)).not.toBeInTheDocument();
+  });
+
+  it.each([
+    'cost',
+    'current_cost',
+    'unit-cost-cents',
+    'price',
+    'tier1_price',
+    'tier_2_margin',
+    't3_gross_margin',
+    'tier3_price_per_acre',
+    'pricing_version',
+  ])('rejects retired pricing header %s', (header) => {
+    expect(isRetiredPricingColumn(header)).toBe(true);
+  });
+
+  it('does not mistake application-rate details for pricing', () => {
+    expect(isRetiredPricingColumn('rate_per_acre')).toBe(false);
+    expect(isRetiredPricingColumn('suggested_rate')).toBe(false);
+  });
+
+  it('builds the database insert from an explicit non-pricing allowlist', () => {
+    const unsafeInput = {
+      product_name: 'Safe Product',
+      sku: 'SAFE-1',
+      category: 'Herbicide',
+      rate_per_acre: 2,
+      current_cost: 10,
+      tier1_price: 20,
+      tier1_margin: 0.5,
+      tier1_gross_margin: 1,
+      tier1_price_per_acre: 40,
+      pricing_version: 99,
+    } as unknown as ParsedProduct;
+
+    const insert = buildProductInsert(unsafeInput);
+
+    expect(insert).toMatchObject({
+      product_name: 'Safe Product',
+      sku: 'SAFE-1',
+      category: 'Herbicide',
+      rate_per_acre: 2,
+      is_active: true,
+    });
+    expect(insert).not.toHaveProperty('current_cost');
+    expect(insert).not.toHaveProperty('tier1_price');
+    expect(insert).not.toHaveProperty('tier1_margin');
+    expect(insert).not.toHaveProperty('tier1_gross_margin');
+    expect(insert).not.toHaveProperty('tier1_price_per_acre');
+    expect(insert).not.toHaveProperty('pricing_version');
   });
 });

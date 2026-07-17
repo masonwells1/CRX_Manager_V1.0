@@ -608,6 +608,153 @@ BEGIN
 END;
 $proof$;
 
+INSERT INTO phase1a_proof(key, value)
+SELECT 'row-invalid-base', jsonb_build_array(
+  r || jsonb_build_object(
+    'pricing_mode', '', 'new_cost', r->>'current_cost',
+    'tier1_margin_percent', r->>'current_tier1_margin_percent',
+    'tier1_price', r->>'current_tier1_price',
+    'tier2_margin_percent', r->>'current_tier2_margin_percent',
+    'tier2_price', r->>'current_tier2_price',
+    'tier3_margin_percent', r->>'current_tier3_margin_percent',
+    'tier3_price', r->>'current_tier3_price',
+    'change_reason', '', 'has_formula', false, 'formula_cells', '[]'::jsonb
+  )
+)
+FROM phase1a_proof e
+CROSS JOIN LATERAL jsonb_array_elements(e.value->'rows') r
+WHERE e.key = 'export-invalid';
+
+-- Duplicate Product IDs fail the whole request before any change set is stored.
+DO $proof$
+DECLARE
+  v_row jsonb := (SELECT value->0 FROM phase1a_proof WHERE key = 'row-invalid-base');
+BEGIN
+  BEGIN
+    PERFORM public.preview_product_pricing_changes(
+      'pricing_worksheet',
+      (SELECT (value->>'export_id')::uuid FROM phase1a_proof WHERE key = 'export-invalid'),
+      jsonb_build_array(v_row, v_row),
+      '11111111-1111-4111-8111-111111111111'::uuid,
+      'phase1a-preview-duplicate-id'
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: duplicate Product ID unexpectedly previewed';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF SQLERRM NOT LIKE 'PRICING_DUPLICATE_PRODUCT_ID%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: duplicate Product ID failed for wrong reason: %', SQLERRM;
+    END IF;
+  END;
+END;
+$proof$;
+
+INSERT INTO phase1a_proof(key, value)
+SELECT 'preview-identity-tamper', public.preview_product_pricing_changes(
+  'pricing_worksheet',
+  (SELECT (value->>'export_id')::uuid FROM phase1a_proof WHERE key = 'export-invalid'),
+  jsonb_build_array((value->0) || jsonb_build_object('sku', 'TAMPERED-SKU')),
+  '11111111-1111-4111-8111-111111111111'::uuid,
+  'phase1a-preview-identity-tamper'
+)
+FROM phase1a_proof WHERE key = 'row-invalid-base';
+
+INSERT INTO phase1a_proof(key, value)
+SELECT 'preview-invalid-mode', public.preview_product_pricing_changes(
+  'pricing_worksheet',
+  (SELECT (value->>'export_id')::uuid FROM phase1a_proof WHERE key = 'export-invalid'),
+  jsonb_build_array((value->0) || jsonb_build_object('pricing_mode', 'automatic')),
+  '11111111-1111-4111-8111-111111111111'::uuid,
+  'phase1a-preview-invalid-mode'
+)
+FROM phase1a_proof WHERE key = 'row-invalid-base';
+
+INSERT INTO phase1a_proof(key, value)
+SELECT 'preview-invalid-companion', public.preview_product_pricing_changes(
+  'pricing_worksheet',
+  (SELECT (value->>'export_id')::uuid FROM phase1a_proof WHERE key = 'export-invalid'),
+  jsonb_build_array((value->0) || jsonb_build_object(
+    'pricing_mode', 'margin_driven',
+    'tier1_price', '999.00'
+  )),
+  '11111111-1111-4111-8111-111111111111'::uuid,
+  'phase1a-preview-invalid-companion'
+)
+FROM phase1a_proof WHERE key = 'row-invalid-base';
+
+INSERT INTO phase1a_proof(key, value)
+SELECT 'preview-locale-money', public.preview_product_pricing_changes(
+  'pricing_worksheet',
+  (SELECT (value->>'export_id')::uuid FROM phase1a_proof WHERE key = 'export-invalid'),
+  jsonb_build_array((value->0) || jsonb_build_object(
+    'pricing_mode', 'margin_driven',
+    'new_cost', '60,00'
+  )),
+  '11111111-1111-4111-8111-111111111111'::uuid,
+  'phase1a-preview-locale-money'
+)
+FROM phase1a_proof WHERE key = 'row-invalid-base';
+
+INSERT INTO phase1a_proof(key, value)
+SELECT 'preview-blank-required', public.preview_product_pricing_changes(
+  'pricing_worksheet',
+  (SELECT (value->>'export_id')::uuid FROM phase1a_proof WHERE key = 'export-invalid'),
+  jsonb_build_array((value->0) || jsonb_build_object(
+    'pricing_mode', 'margin_driven',
+    'new_cost', ''
+  )),
+  '11111111-1111-4111-8111-111111111111'::uuid,
+  'phase1a-preview-blank-required'
+)
+FROM phase1a_proof WHERE key = 'row-invalid-base';
+
+INSERT INTO phase1a_proof(key, value)
+SELECT 'preview-zero-cost-margin', public.preview_product_pricing_changes(
+  'pricing_worksheet',
+  (SELECT (value->>'export_id')::uuid FROM phase1a_proof WHERE key = 'export-invalid'),
+  jsonb_build_array((value->0) || jsonb_build_object(
+    'pricing_mode', 'margin_driven',
+    'new_cost', '0.00'
+  )),
+  '11111111-1111-4111-8111-111111111111'::uuid,
+  'phase1a-preview-zero-cost-margin'
+)
+FROM phase1a_proof WHERE key = 'row-invalid-base';
+
+DO $proof$
+BEGIN
+  IF (SELECT value#>>'{rows,0,error_code}' FROM phase1a_proof WHERE key = 'preview-identity-tamper')
+       <> 'WORKBOOK_IDENTITY_OR_BASELINE_TAMPERED' THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: protected workbook identity edit was not rejected: %',
+      (SELECT value FROM phase1a_proof WHERE key = 'preview-identity-tamper');
+  END IF;
+  IF (SELECT value#>>'{rows,0,error_code}' FROM phase1a_proof WHERE key = 'preview-invalid-mode')
+       <> 'PRICING_MODE_INVALID' THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: invalid pricing mode was not rejected: %',
+      (SELECT value FROM phase1a_proof WHERE key = 'preview-invalid-mode');
+  END IF;
+  IF (SELECT value#>>'{rows,0,error_code}' FROM phase1a_proof WHERE key = 'preview-invalid-companion')
+       <> 'MARGIN_DRIVEN_COMPANION_FIELDS_CHANGED' THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: invalid pricing-mode companion fields were not rejected: %',
+      (SELECT value FROM phase1a_proof WHERE key = 'preview-invalid-companion');
+  END IF;
+  IF (SELECT value#>>'{rows,0,error_code}' FROM phase1a_proof WHERE key = 'preview-locale-money')
+       <> 'PRICING_DOLLARS_INVALID' THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: locale-ambiguous money was not rejected: %',
+      (SELECT value FROM phase1a_proof WHERE key = 'preview-locale-money');
+  END IF;
+  IF (SELECT value#>>'{rows,0,error_code}' FROM phase1a_proof WHERE key = 'preview-blank-required')
+       <> 'PRICING_DOLLARS_INVALID' THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: blank required cost was not rejected: %',
+      (SELECT value FROM phase1a_proof WHERE key = 'preview-blank-required');
+  END IF;
+  IF (SELECT value#>>'{rows,0,error_code}' FROM phase1a_proof WHERE key = 'preview-zero-cost-margin')
+       <> 'PRICING_COST_INVALID' THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: zero-cost margin-driven pricing was not rejected: %',
+      (SELECT value FROM phase1a_proof WHERE key = 'preview-zero-cost-margin');
+  END IF;
+END;
+$proof$;
+
 -- Blank protected/product-pricing fields survive a normal Excel-style empty
 -- string round-trip and remain an unchanged row.
 INSERT INTO phase1a_proof(key, value)

@@ -310,6 +310,15 @@ describe('EditableDataTable', () => {
       expect(selects.length).toBe(3); // one select per row
     });
 
+    it('gives built-in select editors row-specific accessible names', () => {
+      const accessibleColumns = columns.map((column) => column.key === 'category'
+        ? { ...column, editAriaLabel: (row: TestProduct) => `Category for ${row.name}` }
+        : column);
+      render(<EditableDataTable data={testData} columns={accessibleColumns} rowKey="id" canEdit />);
+      fireEvent.click(screen.getByText('Edit'));
+      expect(screen.getByRole('combobox', { name: 'Category for Product A' })).toBeInTheDocument();
+    });
+
     it('toggle (checkbox) inputs appear for editable toggle columns in edit mode', () => {
       render(<EditableDataTable data={testData} columns={columns} rowKey="id" canEdit />);
       fireEvent.click(screen.getByText('Edit'));
@@ -398,6 +407,54 @@ describe('EditableDataTable', () => {
       await waitFor(() => {
         expect(screen.getByText('Edit')).toBeInTheDocument();
       });
+    });
+
+    it('exits edit mode when onSave explicitly returns true', async () => {
+      const onSave = vi.fn().mockResolvedValue(true);
+      render(
+        <EditableDataTable
+          data={testData}
+          columns={columns}
+          rowKey="id"
+          canEdit
+          onSave={onSave}
+        />
+      );
+      fireEvent.click(screen.getByText('Edit'));
+      fireEvent.change(screen.getByDisplayValue('Product A'), {
+        target: { value: 'Changed' },
+      });
+      fireEvent.click(screen.getByText(/Save/).closest('button')!);
+
+      await waitFor(() => {
+        expect(screen.getByText('Edit')).toBeInTheDocument();
+      });
+      expect(screen.queryByDisplayValue('Changed')).not.toBeInTheDocument();
+    });
+
+    it('keeps edit mode and dirty rows when onSave returns false', async () => {
+      const onSave = vi.fn().mockResolvedValue(false);
+      render(
+        <EditableDataTable
+          data={testData}
+          columns={columns}
+          rowKey="id"
+          canEdit
+          onSave={onSave}
+        />
+      );
+      fireEvent.click(screen.getByText('Edit'));
+      fireEvent.change(screen.getByDisplayValue('Product A'), {
+        target: { value: 'Changed' },
+      });
+      fireEvent.click(screen.getByText(/Save/).closest('button')!);
+
+      await waitFor(() => {
+        expect(onSave).toHaveBeenCalledTimes(1);
+      });
+      expect(screen.getByText('Cancel')).toBeInTheDocument();
+      expect(screen.getByDisplayValue('Changed')).toBeInTheDocument();
+      expect(screen.getByText('Save (1)')).toBeInTheDocument();
     });
   });
 

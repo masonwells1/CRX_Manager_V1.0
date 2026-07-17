@@ -65,6 +65,8 @@ export interface Product {
   tier1_price_per_acre: number | null;
   tier2_price_per_acre: number | null;
   tier3_price_per_acre: number | null;
+  /** Optimistic concurrency token for governed pricing preview/apply flows. */
+  pricing_version: number;
   suggested_rate: string | null;
   rate_per_acre: number | null;
   rate_unit: string | null;
@@ -166,26 +168,26 @@ export interface CostHistory {
   id: string;
   product_id: string;
   changed_by: string;
+  change_source: 'legacy_frontend' | 'pricing_worksheet' | 'product_page' | 'products_inline';
+  change_reason: string | null;
+  change_set_id: string | null;
   old_cost: number | null;
   new_cost: number | null;
+  old_tier1_margin: number | null;
   old_tier1_price: number | null;
+  new_tier1_margin: number | null;
   new_tier1_price: number | null;
+  old_tier2_margin: number | null;
   old_tier2_price: number | null;
+  new_tier2_margin: number | null;
   new_tier2_price: number | null;
+  old_tier3_margin: number | null;
   old_tier3_price: number | null;
+  new_tier3_margin: number | null;
   new_tier3_price: number | null;
-  old_tier1_margin?: number | null;
-  new_tier1_margin?: number | null;
-  old_tier2_margin?: number | null;
-  new_tier2_margin?: number | null;
-  old_tier3_margin?: number | null;
-  new_tier3_margin?: number | null;
+  old_pricing_version: number | null;
+  new_pricing_version: number | null;
   change_note: string | null;
-  change_source?: 'legacy_frontend' | 'pricing_worksheet' | 'product_page' | 'products_inline';
-  change_reason?: string | null;
-  change_set_id?: string | null;
-  old_pricing_version?: number | null;
-  new_pricing_version?: number | null;
   changed_at: string;
 }
 

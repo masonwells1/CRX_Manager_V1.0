@@ -83,8 +83,8 @@ link-first, and lease-change-first.
 
 ## Disposable Supplier Pricing Phase 1a proof
 
-The two parked pricing stages have a separate, production-isolated proof
-because they do not exist in the live migration chain yet:
+The live additive bootstrap and parked enforcement cutover have a separate,
+production-isolated proof:
 
 ```bash
 node scripts/smoke/prove-supplier-pricing-phase1a.mjs
@@ -92,10 +92,12 @@ node scripts/smoke/prove-supplier-pricing-phase1a.mjs
 
 The runner creates a uniquely named PostgreSQL 17 container with networking
 disabled and data in tmpfs, loads a live-shaped minimal base, compiles the exact
-parked additive bootstrap, proves the currently deployed editor can still write
+live additive bootstrap, proves the currently deployed editor can still write
 one legacy Product/history pair without double logging, then compiles the exact
-parked cutover. The final-state proof exercises authorization, a three-Product
-worksheet covering both pricing modes, exact history values, formula/tamper/
+parked cutover. It generates and edits a real `.xlsx`, parses it through the
+application workbook module, and passes that payload through real PostgreSQL
+preview/apply RPCs with exact Product/history verification and rollback. The
+final-state proof also exercises authorization, both pricing modes, formula/tamper/
 version/collision-safe identity conflicts, atomic rollback, durable idempotent
 replay and cross-change-set key rejection, direct-write denial, and exactly-once
 history. It also proves an ordinary rate edit can recalculate server-derived

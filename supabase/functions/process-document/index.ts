@@ -3,6 +3,7 @@ import { createClient } from "npm:@supabase/supabase-js@2.57.4";
 import { captureEdgeException } from "../_shared/sentry.ts";
 import { requireActiveProfile } from "../_shared/auth.ts";
 import { corsHeaders, preflightResponse } from "../_shared/cors.ts";
+import { validateDocumentType, type DocumentType } from "./documentTypes.ts";
 
 function jsonResponse(body: Record<string, unknown>, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -12,14 +13,6 @@ function jsonResponse(body: Record<string, unknown>, status = 200) {
 }
 
 // ─── Types ───────────────────────────────────────────────────────────────────
-
-type DocumentType =
-  | "invoice"
-  | "purchase_order"
-  | "price_list"
-  | "product_list"
-  | "customer_list"
-  | "quote_list";
 
 interface PageInput {
   base64: string;
@@ -54,31 +47,6 @@ interface ParsedPurchaseOrder {
   }>;
 }
 
-interface ParsedPriceList {
-  vendor_name: string;
-  items: Array<{
-    sku: string;
-    product_name: string;
-    cost: number;
-    tier1_price: number;
-    tier2_price: number;
-    tier3_price: number;
-  }>;
-}
-
-interface ParsedProductList {
-  items: Array<{
-    product_name: string;
-    sku: string;
-    category: string;
-    vendor: string;
-    cost: number;
-    tier1_price: number;
-    unit_size: string;
-    epa_registration: string;
-  }>;
-}
-
 interface ParsedCustomerList {
   items: Array<{
     farm_name: string;
@@ -104,8 +72,6 @@ interface ParsedQuoteList {
 type ParsedData =
   | ParsedInvoice
   | ParsedPurchaseOrder
-  | ParsedPriceList
-  | ParsedProductList
   | ParsedCustomerList
   | ParsedQuoteList;
 
@@ -544,108 +510,6 @@ function parsePurchaseOrder(rawText: string, lines: string[]): { data: ParsedPur
   };
 }
 
-function parsePriceList(rawText: string, lines: string[]): { data: ParsedPriceList; confidence: number } {
-  // Vendor name
-  let vendorName = extractLabelledValue(lines, ["vendor", "supplier", "manufacturer", "company"]);
-  if (!vendorName) {
-    vendorName = extractCompanyName(lines, ["price", "list", "catalog", "date", "page", "effective"]);
-  }
-
-  const items: ParsedPriceList["items"] = [];
-
-  // Strategy: look for rows with product name + price columns
-  // Common patterns:
-  //   SKU    ProductName    Cost    Tier1    Tier2    Tier3
-  //   ProductName    $XX.XX    $XX.XX    $XX.XX
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.length < 5) continue;
-    if (/^\s*(sku|product|item|description|cost|price|tier|#|total)\s/i.test(trimmed)) continue;
-
-    // Extract all dollar amounts from the line
-    const priceMatches = [...trimmed.matchAll(/\$?\s*([\d,]+\.?\d{2})/g)];
-
-    if (priceMatches.length >= 1) {
-      // The text before the first price is the product name/SKU
-      const firstPriceIdx = trimmed.indexOf(priceMatches[0][0]);
-      const nameSection = trimmed.substring(0, firstPriceIdx).trim();
-
-      if (nameSection.length >= 3) {
-        // Try to split SKU from product name
-        const skuMatch = nameSection.match(/^([A-Z0-9-]{3,15})\s+(.+)/);
-        const sku = skuMatch ? skuMatch[1] : "";
-        const productName = skuMatch ? skuMatch[2].trim() : nameSection;
-
-        const prices = priceMatches.map((m) => parseNumber(m[1]));
-
-        items.push({
-          sku,
-          product_name: productName,
-          cost: prices[0] || 0,
-          tier1_price: prices[1] || 0,
-          tier2_price: prices[2] || 0,
-          tier3_price: prices[3] || 0,
-        });
-      }
-    }
-  }
-
-  let confidence = 30;
-  if (vendorName) confidence += 15;
-  if (items.length > 0) confidence += 25;
-  if (items.length > 3) confidence += 15;
-  if (items.some((i) => i.sku)) confidence += 15;
-
-  return {
-    data: { vendor_name: vendorName, items },
-    confidence: Math.min(confidence, 100),
-  };
-}
-
-function parseProductList(rawText: string, lines: string[]): { data: ParsedProductList; confidence: number } {
-  const items: ParsedProductList["items"] = [];
-
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.length < 5) continue;
-    if (/^\s*(product|sku|item|description|category|vendor|cost|price|epa|#)\s/i.test(trimmed)) continue;
-
-    // Look for lines with product-like data: name, prices, maybe SKU
-    const priceMatches = [...trimmed.matchAll(/\$?\s*([\d,]+\.?\d{2})/g)];
-    if (priceMatches.length >= 1) {
-      const firstPriceIdx = trimmed.indexOf(priceMatches[0][0]);
-      const nameSection = trimmed.substring(0, firstPriceIdx).trim();
-      if (nameSection.length >= 3) {
-        const skuMatch = nameSection.match(/^([A-Z0-9-]{3,15})\s+(.+)/);
-        const epaMatch = trimmed.match(/(\d+-\d+-\d+)/);
-        const unitMatch = trimmed.match(/\b(GL|GAL|LB|OZ|QT|PT|CASE|EA|JUG|DRUM|TOTE|BAG)\b/i);
-
-        items.push({
-          product_name: skuMatch ? skuMatch[2].trim() : nameSection,
-          sku: skuMatch ? skuMatch[1] : "",
-          category: "",
-          vendor: "",
-          cost: priceMatches[0] ? parseNumber(priceMatches[0][1]) : 0,
-          tier1_price: priceMatches[1] ? parseNumber(priceMatches[1][1]) : 0,
-          unit_size: unitMatch ? unitMatch[1].toUpperCase() : "",
-          epa_registration: epaMatch ? epaMatch[1] : "",
-        });
-      }
-    }
-  }
-
-  let confidence = 30;
-  if (items.length > 0) confidence += 30;
-  if (items.length > 5) confidence += 20;
-  if (items.some((i) => i.sku)) confidence += 10;
-  if (items.some((i) => i.epa_registration)) confidence += 10;
-
-  return {
-    data: { items },
-    confidence: Math.min(confidence, 100),
-  };
-}
-
 function parseCustomerList(rawText: string, lines: string[]): { data: ParsedCustomerList; confidence: number } {
   const items: ParsedCustomerList["items"] = [];
 
@@ -744,10 +608,6 @@ function parseDocument(
       return parseInvoice(rawText, lines);
     case "purchase_order":
       return parsePurchaseOrder(rawText, lines);
-    case "price_list":
-      return parsePriceList(rawText, lines);
-    case "product_list":
-      return parseProductList(rawText, lines);
     case "customer_list":
       return parseCustomerList(rawText, lines);
     case "quote_list":
@@ -842,7 +702,7 @@ Deno.serve(async (req: Request) => {
 
   // PARKED-011: read the body with a hard byte cap (replaces await req.json()),
   // then validate the pages array (length, per-page magic-byte + decoded-size caps).
-  let body: { document_type?: DocumentType; pages?: PageInput[]; metadata?: Record<string, string> };
+  let body: { document_type?: unknown; pages?: PageInput[]; metadata?: Record<string, string> };
   try {
     body = await readBodyWithCap(req, MAX_REQUEST_BODY_BYTES) as typeof body;
   } catch (e) {
@@ -851,11 +711,12 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
-    documentType = body.document_type as DocumentType;
+    const typeResult = validateDocumentType(body.document_type);
+    if (!typeResult.ok) throw new Error(typeResult.error);
+    documentType = typeResult.documentType;
     pages = body.pages as PageInput[];
     _metadata = body.metadata || {};
 
-    if (!documentType) throw new Error("document_type is required");
     if (!pages || !Array.isArray(pages) || pages.length === 0) {
       throw new Error("pages array is required and must not be empty");
     }
@@ -893,13 +754,6 @@ Deno.serve(async (req: Request) => {
       throw new Error(`total decoded bytes across all pages is ~${totalDecodedBytes}; max ${MAX_DECODED_BYTES_TOTAL}`);
     }
 
-    const validTypes: DocumentType[] = [
-      "invoice", "purchase_order", "price_list",
-      "product_list", "customer_list", "quote_list",
-    ];
-    if (!validTypes.includes(documentType)) {
-      throw new Error(`Invalid document_type. Must be one of: ${validTypes.join(", ")}`);
-    }
   } catch (e) {
     return jsonResponse({ error: (e as Error).message }, 400);
   }

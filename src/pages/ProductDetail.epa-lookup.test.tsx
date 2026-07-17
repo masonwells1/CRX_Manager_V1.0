@@ -56,6 +56,7 @@ function baseProduct(overrides: Partial<Product> = {}): Product {
     created_at: '2026-07-01T00:00:00Z',
     updated_at: '2026-07-01T00:00:00Z',
     ...overrides,
+    pricing_version: overrides.pricing_version ?? 1,
   };
 }
 

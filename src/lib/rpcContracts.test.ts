@@ -1349,6 +1349,7 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   // live pg_proc that each body uses check_idempotency/save scoped to its own operation. They were
   // added to src/types/supabase.ts but never classified here, which left main RED for all sessions.
   'apply_credit_memo_to_invoice',
+  'apply_product_pricing_change_set',
   'apply_remaining_prepayments',
   'apply_write_off',
   'approve_return',
@@ -1388,6 +1389,7 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   'create_invoice_from_order',
   'create_label_draft',
   'create_order_from_blend_ticket',
+  'create_pricing_workbook_export',
   'create_quick_delivery',
   'create_rebate_claim',
   'create_vendor_bill',
@@ -1409,6 +1411,7 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   'manual_inventory_add',
   'post_commission_payment',
   'post_invoice',
+  'preview_product_pricing_changes',
   'process_offline_action',
   'reassign_delivery',
   'receive_po_items',
@@ -1901,11 +1904,7 @@ function generatedMutatingRpcInventory(): Set<string> {
   }));
 }
 
-const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
-  'apply_product_pricing_change_set',
-  'create_pricing_workbook_export',
-  'preview_product_pricing_changes',
-]);
+const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>();
 
 /**
  * Discovered mutating RPCs for which replay safety does not use p_idempotency_key.
@@ -1938,7 +1937,6 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
   save_idempotency: 'idempotency infrastructure helper that stores the parent operation result',
   set_primary_customer_contact: 'convergent primary-contact promotion; replays settle to the same single-primary state; SECURITY INVOKER under customer RLS',
   settle_applied_record_acres: 'trigger-only derived-acre recomputation; direct client EXECUTE is revoked',
-  write_product_pricing_history: 'trigger-only pricing audit writer; direct client EXECUTE is revoked',
 };
 
 

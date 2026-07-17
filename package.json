@@ -26,6 +26,7 @@
     "db-sweeps": "node scripts/db-invariant-sweeps/run-sweeps.mjs",
     "db-sweeps:strict": "node scripts/db-invariant-sweeps/run-sweeps.mjs --strict",
     "smoke": "node scripts/smoke/run-smoke.mjs",
+    "proof:pricing-phase1a": "node scripts/smoke/prove-supplier-pricing-phase1a.mjs",
     "verify:deps": "node scripts/verify-deps.mjs",
     "check:docs": "node scripts/check-doc-drift.mjs",
     "check:agent-guidance": "node scripts/check-agent-guidance.mjs",
@@ -48,6 +49,7 @@
     "@turf/area": "^7.3.5",
     "@turf/bbox": "^7.3.5",
     "@turf/centroid": "^7.3.5",
+    "exceljs": "4.4.0",
     "jspdf": "^4.1.0",
     "jspdf-autotable": "^5.0.8",
     "lucide-react": "^1.24.0",
@@ -62,7 +64,8 @@
     "signature_pad": "^5.1.3"
   },
   "overrides": {
-    "minimatch": ">=10.0.1"
+    "minimatch": ">=10.0.1",
+    "uuid": "11.1.1"
   },
   "devDependencies": {
     "@eslint/js": "^9.9.1",

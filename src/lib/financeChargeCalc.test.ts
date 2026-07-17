@@ -65,6 +65,7 @@ function makeProduct(overrides: Partial<Product> = {}): Product {
     internal_notes: null,
     updated_at: '2026-01-01',
     ...overrides,
+    pricing_version: overrides.pricing_version ?? 1,
   };
 }
 

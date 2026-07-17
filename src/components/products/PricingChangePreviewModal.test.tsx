@@ -1,0 +1,176 @@
+import { fireEvent, render, screen, within } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
+import type { PricingPreviewResult } from '../../lib/productPricing';
+import PricingChangePreviewModal from './PricingChangePreviewModal';
+
+function makePreview(overrides: Partial<PricingPreviewResult> = {}): PricingPreviewResult {
+  return {
+    change_set_id: 'change-set-1',
+    request_fingerprint: 'fingerprint-1',
+    source: 'product_page',
+    status: 'previewed',
+    expires_at: '2026-07-16T22:00:00Z',
+    submitted_row_count: 2,
+    ready_count: 1,
+    unchanged_count: 0,
+    conflict_count: 1,
+    invalid_count: 0,
+    apply_allowed: true,
+    rows: [
+      {
+        sequence: 2,
+        product_id: 'product-2',
+        submitted_row: { product_name: 'Later Product', sku: 'SKU-2' },
+        row_status: 'conflict',
+        error_code: 'PRICING_ROW_CONFLICT',
+        effect: null,
+      },
+      {
+        sequence: 1,
+        product_id: 'product-1',
+        submitted_row: { product_name: 'Untrusted Client Label', sku: 'CLIENT-SKU' },
+        row_status: 'ready',
+        error_code: null,
+        effect: {
+          product_id: 'product-1',
+          product_name: 'First Product',
+          sku: 'SKU-1',
+          pricing_mode: 'price_driven',
+          before: {
+            cost: '10.00',
+            cost_cents: 1000,
+            tier1_margin_percent: '20', tier1_margin: 0.2, tier1_price: '12.50', tier1_price_cents: 1250,
+            tier2_margin_percent: '25', tier2_margin: 0.25, tier2_price: '13.33', tier2_price_cents: 1333,
+            tier3_margin_percent: '30', tier3_margin: 0.3, tier3_price: '14.29', tier3_price_cents: 1429,
+            tier1_price_per_acre_cents: 625,
+            tier2_price_per_acre_cents: null,
+            tier3_price_per_acre_cents: null,
+          },
+          cost: '12.00',
+          cost_cents: 1200,
+          tier1_margin_percent: '-4.35',
+           tier1_margin: -0.0435,
+          tier1_gross_margin: -0.0417,
+          tier1_price: '11.50',
+          tier1_price_cents: 1150,
+          tier2_margin_percent: '20',
+           tier2_margin: 0.2,
+          tier2_gross_margin: 0.25,
+          tier2_price: '15.00',
+          tier2_price_cents: 1500,
+          tier3_margin_percent: '25',
+           tier3_margin: 0.25,
+          tier3_gross_margin: 0.33333333,
+          tier3_price: '16.00',
+          tier3_price_cents: 1600,
+          tier1_price_per_acre_cents: 575,
+          tier2_price_per_acre_cents: null,
+          tier3_price_per_acre_cents: null,
+        },
+      },
+    ],
+    ...overrides,
+  };
+}
+
+describe('PricingChangePreviewModal', () => {
+  it('renders summary, ordered rows, effects, warnings, and plain-English errors', () => {
+    render(
+      <PricingChangePreviewModal
+        open
+        preview={makePreview()}
+        applying={false}
+        onClose={vi.fn()}
+        onApprove={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('Ready for approval')).toBeInTheDocument();
+    expect(screen.getByText('2 submitted rows')).toBeInTheDocument();
+
+    const rows = within(screen.getByRole('list', { name: 'Pricing preview rows' })).getAllByRole('listitem');
+    expect(within(rows[0]).getByText('First Product')).toBeInTheDocument();
+    expect(within(rows[0]).getByText('SKU SKU-1')).toBeInTheDocument();
+    expect(within(rows[0]).getByText('$10.00')).toBeInTheDocument();
+    expect(within(rows[0]).getByText('$12.00')).toBeInTheDocument();
+    expect(within(rows[0]).getByText('$12.50')).toBeInTheDocument();
+    expect(within(rows[0]).getByText('$5.75 / acre')).toBeInTheDocument();
+    expect(within(rows[0]).getByText('Gross / markup: 25%')).toBeInTheDocument();
+    expect(within(rows[0]).getByText('Warning: this price is below cost.')).toBeInTheDocument();
+
+    expect(within(rows[1]).getByText('Later Product')).toBeInTheDocument();
+    expect(
+      within(rows[1]).getByText(/changed after the pricing data was loaded/i),
+    ).toBeInTheDocument();
+  });
+
+  it('disables approval unless the preview is applyable with ready rows', () => {
+    render(
+      <PricingChangePreviewModal
+        open
+        preview={makePreview({ apply_allowed: false })}
+        applying={false}
+        onClose={vi.fn()}
+        onApprove={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'Apply approved changes' })).toBeDisabled();
+  });
+
+  it('calls onApprove for an approved preview and shows the loading state', () => {
+    const onApprove = vi.fn();
+    const onClose = vi.fn();
+    const { rerender } = render(
+      <PricingChangePreviewModal
+        open
+        preview={makePreview()}
+        applying={false}
+        onClose={onClose}
+        onApprove={onApprove}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Apply approved changes' }));
+    expect(onApprove).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <PricingChangePreviewModal
+        open
+        preview={makePreview()}
+        applying
+        onClose={onClose}
+        onApprove={onApprove}
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'Apply approved changes' })).toBeDisabled();
+    const closeButtons = screen.getAllByRole('button', { name: 'Close' });
+    closeButtons.forEach((button) => expect(button).toBeDisabled());
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.keyDown(document, { key: 'Tab' });
+    expect(document.querySelector('[data-modal-panel]')).toHaveFocus();
+  });
+
+  it.each([
+    ['invalid', 'Some rows need attention'],
+    ['no_changes', 'No pricing changes found'],
+  ] as const)('shows no approval path for %s previews', (status, statusLabel) => {
+    const onClose = vi.fn();
+    render(
+      <PricingChangePreviewModal
+        open
+        preview={makePreview({ status, apply_allowed: false, ready_count: 0 })}
+        applying={false}
+        onClose={onClose}
+        onApprove={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText(statusLabel)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Apply approved changes' })).not.toBeInTheDocument();
+    const closeButtons = screen.getAllByRole('button', { name: 'Close' });
+    fireEvent.click(closeButtons[closeButtons.length - 1]);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+});
