@@ -260,6 +260,8 @@ export default function CallLists() {
   const [search, setSearch] = useState('');
   const [tierFilter, setTierFilter] = useState('');
   const [tiersByCustomer, setTiersByCustomer] = useState<Record<string, number | null>>({});
+  const [tiersError, setTiersError] = useState(false);
+  const [tiersLoadNonce, setTiersLoadNonce] = useState(0);
   const [rows, setRows] = useState<CallListRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
@@ -381,18 +383,30 @@ export default function CallLists() {
     const ids = [...new Set(rows.map((row) => row.customer_id))];
     if (ids.length === 0) {
       setTiersByCustomer({});
+      setTiersError(false);
       return;
     }
     let cancelled = false;
     void (async () => {
       const { data, error } = await supabase.from('customers').select('id, assigned_tier').in('id', ids);
-      if (cancelled || error || !data) return;
+      if (cancelled) return;
+      if (error || !data) {
+        // Fail SAFE: clear tier data and force the filter off so a partial
+        // lookup can never silently hide rows — the select is replaced by a
+        // retry button until the lookup succeeds (Sol 3.G r3).
+        setTiersByCustomer({});
+        setTierFilter('');
+        setTiersError(true);
+        Sentry.captureException(new Error(error ? error.message : 'tier lookup returned no data'), { extra: { context: 'CallLists.tiers' } });
+        return;
+      }
+      setTiersError(false);
       setTiersByCustomer(Object.fromEntries(data.map((customer) => [customer.id, customer.assigned_tier])));
     })();
     return () => {
       cancelled = true;
     };
-  }, [rows]);
+  }, [rows, tiersLoadNonce]);
 
   const tierOptions = useMemo(
     () => [...new Set(Object.values(tiersByCustomer).filter((tier): tier is number => tier !== null))].sort((a, b) => a - b),
@@ -467,12 +481,18 @@ export default function CallLists() {
                   </label>
                 )
               )}
-              <label className="text-sm font-medium text-secondary">Tier
-                <select aria-label="Filter by customer tier" value={tierFilter} onChange={(event) => setTierFilter(event.target.value)} className="mt-1 block min-h-11 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm text-nav-dark sm:w-32">
-                  <option value="">All tiers</option>
-                  {tierOptions.map((tier) => <option key={tier} value={String(tier)}>Tier {tier}</option>)}
-                </select>
-              </label>
+              {tiersError ? (
+                <div className="flex items-end">
+                  <Button type="button" variant="secondary" className="min-h-11" icon={<RefreshCw className="h-4 w-4" />} showChevron={false} onClick={() => setTiersLoadNonce((nonce) => nonce + 1)}>Tier filter failed — retry</Button>
+                </div>
+              ) : (
+                <label className="text-sm font-medium text-secondary">Tier
+                  <select aria-label="Filter by customer tier" value={tierFilter} onChange={(event) => setTierFilter(event.target.value)} className="mt-1 block min-h-11 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm text-nav-dark sm:w-32">
+                    <option value="">All tiers</option>
+                    {tierOptions.map((tier) => <option key={tier} value={String(tier)}>Tier {tier}</option>)}
+                  </select>
+                </label>
+              )}
               <Button type="button" variant="secondary" className="min-h-11" icon={<RefreshCw className="h-4 w-4" />} showChevron={false} loading={loading} onClick={applyCriteria}>Apply and refresh</Button>
             </div>
           </div>
