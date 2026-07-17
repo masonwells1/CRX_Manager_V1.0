@@ -86,7 +86,6 @@ describe('BulkPOImport', () => {
       processing_time_ms: 1,
     }));
     mocks.rpc.mockImplementation(async (name: string) => {
-      if (name === 'next_po_number') return { data: 'PO-1001', error: null };
       if (name === 'save_purchase_order') {
         return { data: { po_id: 'po-1', status: 'saved', po_number: 'PO-1001' }, error: null };
       }
@@ -106,7 +105,6 @@ describe('BulkPOImport', () => {
 
   it('reports a server duplicate as skipped instead of newly imported', async () => {
     mocks.rpc.mockImplementation(async (name: string) => {
-      if (name === 'next_po_number') return { data: 'PO-UNUSED', error: null };
       if (name === 'save_purchase_order') {
         return {
           data: { po_id: 'po-existing', status: 'already_imported', po_number: 'PO-EXISTING' },
@@ -126,12 +124,16 @@ describe('BulkPOImport', () => {
     expect(await screen.findByText(/successfully imported: 0 purchase orders/i)).toBeInTheDocument();
     expect(screen.getByText(/already imported and skipped: 1/i)).toBeInTheDocument();
     expect(defaultProps.onSuccess).not.toHaveBeenCalled();
+    expect(mocks.rpc).not.toHaveBeenCalledWith('next_po_number');
+
+    fireEvent.click(screen.getByText('Close'));
+    expect(defaultProps.onSuccess).toHaveBeenCalledTimes(1);
+    expect(defaultProps.onClose).not.toHaveBeenCalled();
   });
 
   it('refreshes the parent when a partially successful batch is closed', async () => {
     let saveCalls = 0;
     mocks.rpc.mockImplementation(async (name: string) => {
-      if (name === 'next_po_number') return { data: `PO-${1001 + saveCalls}`, error: null };
       if (name === 'save_purchase_order') {
         saveCalls++;
         if (saveCalls === 1) {

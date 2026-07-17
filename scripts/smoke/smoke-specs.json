@@ -11,6 +11,11 @@
       "description": "Security and inventory aggregate chain: an active sales rep creates and replays a draft invoice and reads a statement for their assigned customer, but cannot edit or replay an unassigned customer's invoice, cannot hijack it by requesting reassignment to an assigned customer, and cannot read that customer's statement; inactive access is denied. A real delivery with two individually in-stock lines for one product but an aggregate shortage completes under WARN-NOT-BLOCK, returns and caches one warning, marks both append-only delivered ledger rows for review at insertion, emits one activity/notification set, and replays without duplicating warnings. Self-contained fixtures and terminal rollback.",
       "covers": ["save_invoice", "get_customer_statement", "complete_delivery", "_mark_delivery_aggregate_short_stock"]
     },
+    "adversarial_money_inventory_closeout": {
+      "chain": "smoke-adversarial-money-inventory-closeout.sql",
+      "description": "Adversarial money/inventory closeout chain: invoice save and post replays remain bound to the authorized customer; invalid PO lines are rejected; one global bulk-import intent returns the original PO across authorized employees; omitted edit costs remain penny-exact; duplicate or foreign PO line IDs are rejected; and all disposable fixtures roll back at the terminal pass signal.",
+      "covers": ["save_invoice", "post_invoice", "post_invoice_group", "save_purchase_order", "purchase_order_import_intents"]
+    },
     "enforce_delivery_accounting_period": {
       "chain": "smoke-delivery-accounting-period-guard.sql",
       "description": "Delivery closed-period, rewrite, and replay-authorization invariant: the real complete_delivery RPC rejects a closed business date during its side-effect-free outer preflight; an open-date completion succeeds; a different active but unauthorized user is denied before its committed result can replay; authenticated direct rewrites cannot move completed history or legacy scheduled-date-backed terminal history into or out of a closed period; the real admin void_delivery RPC rejects once the completion date is closed without leaking a reversal; reopening the disposable period permits the normal void path. Self-contained fixtures and terminal rollback.",

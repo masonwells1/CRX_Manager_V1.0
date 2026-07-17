@@ -57,10 +57,6 @@ export default function NewPurchaseOrder() {
   // Track dirty state for unsaved changes warning
   const [isDirty, setIsDirty] = useState(false);
   const initialLoadDone = useRef(false);
-  // Keep the allocated number tied to the idempotent save attempt. If the
-  // server commits but the response is lost, retrying must send the same PO
-  // number with the same key instead of consuming and displaying a new one.
-  const pendingPoNumbersRef = useRef<Record<string, string>>({});
   const blocker = useUnsavedChanges(isDirty);
   const saveIdem = useIdempotencyKey('save_purchase_order', profile?.id || '');
   const submitIdem = useIdempotencyKey('submit_purchase_order', profile?.id || '');
@@ -196,17 +192,10 @@ export default function NewPurchaseOrder() {
 
         if (shouldSaveDraft) {
           const idemKey = saveIdem.getKey();
-          poNumber = poNumber || pendingPoNumbersRef.current[idemKey] || null;
-          if (!poNumber) {
-            const { data: rpcNumber, error: rpcError } = await supabase.rpc('next_po_number');
-            if (rpcError || !rpcNumber) {
-              throw new Error(rpcError?.message || 'Failed to generate PO number');
-            }
-            poNumber = assertRpcResult<string>(rpcNumber, 'next_po_number');
-            pendingPoNumbersRef.current[idemKey] = poNumber;
-          }
 
           const poPayload = {
+            // New PO numbers are allocated atomically by save_purchase_order.
+            // Existing edits keep the number already returned by the server.
             po_number: poNumber,
             vendor: vendor.trim(),
             status: 'draft',
@@ -236,15 +225,16 @@ export default function NewPurchaseOrder() {
 
           if (error) throw error;
 
-          const result = assertRpcResult<{ po_id: string }>(data, 'save_purchase_order');
+          const result = assertRpcResult<{ po_id: string; po_number?: string }>(data, 'save_purchase_order');
           poId = result.po_id;
           if (!poId) throw new Error('Purchase order save did not return an ID');
-          delete pendingPoNumbersRef.current[idemKey];
+          if (!result.po_number) throw new Error('Purchase order save did not return its allocated number');
+          poNumber = result.po_number;
           saveIdem.resetKey();
 
           if (isFirstSave) {
             setSavedPoId(poId);
-            setSavedPoNumber(poNumber);
+            setSavedPoNumber(result.po_number);
           }
 
           // The form now matches the durable draft. If submit fails, the user

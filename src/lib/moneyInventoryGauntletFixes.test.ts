@@ -56,6 +56,9 @@ const adversarialCloseout = source(
 const globalBulkPOIntent = source(
   'supabase/migrations/20260716233000_globalize_bulk_po_import_intents.sql',
 );
+const finalPurchaseOrderRelease = source(
+  'supabase/migrations/20260717010000_close_final_purchase_order_release_gaps.sql',
+);
 const completeDelivery = access.slice(0, access.indexOf('CREATE OR REPLACE FUNCTION public.void_delivery'));
 
 describe('money and inventory gauntlet fixes', () => {
@@ -194,7 +197,8 @@ describe('money and inventory gauntlet fixes', () => {
     expect(bulkImport).toContain('buildParsedPOIntentKey(po)');
     expect(bulkImport).not.toContain('source_index: po.source_index');
     expect(bulkImport).toContain('ensurePendingBulkPOIntent(');
-    expect(bulkImport).toContain('pendingIntent.poNumber');
+    expect(bulkImport).toContain('po_number: null');
+    expect(bulkImport).not.toContain("supabase.rpc('next_po_number'");
     expect(bulkImport).toContain('p_idempotency_key: pendingIntent.idempotencyKey');
     expect(bulkImport).toContain('isImportedBulkPOIntent(pendingIntentsRef.current, intentKey)');
     expect(bulkImport).toContain("savedPO.status === 'already_imported'");
@@ -253,8 +257,9 @@ describe('money and inventory gauntlet fixes', () => {
     expect(saveHandler).toContain("supabase.rpc('submit_purchase_order'");
     expect(saveHandler).toContain('p_po_id: poId');
     expect(saveHandler).toContain("const shouldSaveDraft = submitStatus === 'draft' || !poId || isDirty");
-    expect(saveHandler).toContain('pendingPoNumbersRef.current[idemKey]');
-    expect(saveHandler).toContain('delete pendingPoNumbersRef.current[idemKey]');
+    expect(saveHandler).toContain('po_number: poNumber');
+    expect(saveHandler).toContain('poNumber = result.po_number');
+    expect(saveHandler).not.toContain("supabase.rpc('next_po_number'");
     expect(newPurchaseOrder).toContain("useIdempotencyKey('submit_purchase_order', profile?.id || '')");
     expect(saveHandler).toContain("assertRpcResult<{ po_id: string; status: string }>(submitData, 'submit_purchase_order')");
     expect(saveHandler.indexOf("supabase.rpc('save_purchase_order'")).toBeLessThan(
@@ -348,6 +353,32 @@ describe('money and inventory gauntlet fixes', () => {
     expect(saveWrapper).toContain('WHERE claim.intent_key = v_bulk_intent_key');
     expect(saveWrapper).not.toContain('WHERE actor_id = v_actor');
     expect(saveWrapper).toContain("'po_number', v_result_po_number");
+  });
+
+  it('allocates PO numbers atomically, cascades import claims, and reuses the rounded header for bills', () => {
+    const saveWrapper = finalPurchaseOrderRelease.slice(
+      finalPurchaseOrderRelease.indexOf('CREATE FUNCTION public.save_purchase_order('),
+      finalPurchaseOrderRelease.indexOf('-- A bulk-import claim'),
+    );
+    const billWriter = finalPurchaseOrderRelease.slice(
+      finalPurchaseOrderRelease.indexOf('CREATE OR REPLACE FUNCTION public.create_vendor_bill('),
+      finalPurchaseOrderRelease.indexOf('REVOKE ALL ON FUNCTION public.create_vendor_bill('),
+    );
+
+    expect(finalPurchaseOrderRelease).toContain(
+      'RENAME TO _save_purchase_order_atomic_number_impl',
+    );
+    expect(saveWrapper).toContain('v_po_number := public.next_po_number()');
+    expect(saveWrapper).toContain('jsonb_set(');
+    expect(saveWrapper).toContain("jsonb_build_object('po_number', v_po_number)");
+    expect(saveWrapper.indexOf('public.next_po_number()')).toBeLessThan(
+      saveWrapper.indexOf('public._save_purchase_order_atomic_number_impl('),
+    );
+    expect(finalPurchaseOrderRelease).toContain('ON DELETE CASCADE');
+    expect(finalPurchaseOrderRelease).toContain('SELECT vendor, total_cost_cents');
+    expect(billWriter).not.toContain(
+      'SUM(quantity_ordered * unit_cost * 100)',
+    );
   });
 
   it('authorizes invoice saves and statements against active customer assignment before replay', () => {

@@ -415,21 +415,6 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
         );
         savePendingBulkPOIntents(localStorage, profile.id, pendingIntentsRef.current);
 
-        // Cache the number with the intent as well as the idempotency key. A
-        // lost response must retry the same PO without burning another number.
-        if (!pendingIntent.poNumber) {
-          const { data: poNumData, error: poNumError } = await supabase.rpc('next_po_number');
-          if (poNumError || !poNumData) {
-            Sentry.captureException(new Error(`Failed to generate PO number: ${poNumError?.message || 'no data'}`));
-            failedCount++;
-            continue;
-          }
-          pendingIntent.poNumber = assertRpcResult<string>(poNumData, 'next_po_number');
-          pendingIntent.updatedAt = Date.now();
-          savePendingBulkPOIntents(localStorage, profile.id, pendingIntentsRef.current);
-        }
-        const poNumber = pendingIntent.poNumber;
-
         const noteParts = [`Imported from PDF: ${po.source_file}`];
         if (po.invoice_number) noteParts.push(`Vendor ref: ${po.invoice_number}`);
         if (po.invoice_date) noteParts.push(`Vendor date: ${po.invoice_date}`);
@@ -448,7 +433,9 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
           // SQL accepts NULL (create-new path); the regenerated types can't express a nullable required arg.
           p_po_id: null as unknown as string,
           p_po_payload: {
-            po_number: poNumber,
+            // The database allocates the number inside the same transaction
+            // that inserts the PO, closing MAX+1 races between employees.
+            po_number: null,
             vendor: po.vendor_name.trim() || 'Unknown Vendor',
             status: 'draft',
             submitted_date: null,
@@ -467,8 +454,8 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
           status?: 'saved' | 'already_imported';
           po_number?: string;
         }>(poData, 'save_purchase_order');
-        if (savedPO.status === 'already_imported' && !savedPO.po_number) {
-          throw new Error('Server deduplicated the vendor document without returning its PO number');
+        if (!savedPO.po_number) {
+          throw new Error('Purchase order save did not return its allocated PO number');
         }
         markBulkPOIntentImported(
           pendingIntentsRef.current,
@@ -479,8 +466,14 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
         );
         savePendingBulkPOIntents(localStorage, profile.id, pendingIntentsRef.current);
 
-        if (savedPO.status === 'already_imported') skippedCount++;
-        else newSuccessCount++;
+        if (savedPO.status === 'already_imported') {
+          skippedCount++;
+          // Another employee may have created the PO after the parent list's
+          // last fetch. Closing this result view must refresh that list.
+          refreshNeededRef.current = true;
+        } else {
+          newSuccessCount++;
+        }
       } catch (error) {
         Sentry.captureException(error instanceof Error ? error : new Error(String(error)), { extra: { context: 'Error importing PO' } });
         failedCount++;

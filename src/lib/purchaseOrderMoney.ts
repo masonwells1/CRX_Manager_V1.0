@@ -1,6 +1,24 @@
 export function purchaseOrderUnitCostCents(unitCostDollars: number): number {
   if (!Number.isFinite(unitCostDollars)) return 0;
-  return Math.round(unitCostDollars * 100);
+  const [mantissa, exponentText = '0'] = String(unitCostDollars).toLowerCase().split('e');
+  const negative = mantissa.startsWith('-');
+  const unsigned = negative || mantissa.startsWith('+') ? mantissa.slice(1) : mantissa;
+  const [whole, fraction = ''] = unsigned.split('.');
+  const exponent = Number(exponentText);
+  const digits = `${whole || '0'}${fraction}`.replace(/^0+(?=\d)/, '');
+  const decimalPlaces = fraction.length - exponent - 2;
+  const coefficient = BigInt(digits || '0');
+  const numerator = negative ? -coefficient : coefficient;
+
+  if (decimalPlaces <= 0) {
+    return Number(numerator * (10n ** BigInt(-decimalPlaces)));
+  }
+
+  const divisor = 10n ** BigInt(decimalPlaces);
+  const absolute = numerator < 0n ? -numerator : numerator;
+  let rounded = absolute / divisor;
+  if ((absolute % divisor) * 2n >= divisor) rounded += 1n;
+  return Number(numerator < 0n ? -rounded : rounded);
 }
 
 export function purchaseOrderLineTotalCents(

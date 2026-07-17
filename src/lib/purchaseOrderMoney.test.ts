@@ -8,6 +8,8 @@ import {
 describe('purchase-order cents math', () => {
   it('converts a unit cost to integer cents', () => {
     expect(purchaseOrderUnitCostCents(1585.6)).toBe(158560);
+    expect(purchaseOrderUnitCostCents(1.005)).toBe(101);
+    expect(purchaseOrderUnitCostCents(1.004)).toBe(100);
   });
 
   it('rounds each fractional-quantity line to one whole cent', () => {

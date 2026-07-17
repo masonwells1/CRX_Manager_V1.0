@@ -1,4 +1,5 @@
--- Post-apply rollback-only proof for migration 20260716224000.
+-- Post-apply rollback-only proof for migrations 20260716213000,
+-- 20260716224000, 20260716233000, and 20260717010000.
 -- Exercises the exact adversarial findings without retaining business rows.
 DO $smoke$
 DECLARE
@@ -12,6 +13,11 @@ DECLARE
   v_unit_size text;
   v_po uuid;
   v_po_item uuid;
+  v_vendor uuid;
+  v_rounding_po uuid;
+  v_rounding_bill uuid;
+  v_open_date date;
+  v_vendor_name text;
   v_first jsonb;
   v_replay jsonb;
   v_edit_items jsonb;
@@ -20,6 +26,7 @@ DECLARE
   v_count bigint;
   v_err text;
   v_source text;
+  v_outer_source text;
   v_suffix text := substr(md5(random()::text), 1, 8);
   v_intent text;
   v_other_invoice_key text;
@@ -191,7 +198,7 @@ BEGIN
   );
   IF (v_replay->>'po_id')::uuid IS DISTINCT FROM v_po
      OR v_replay->>'status' <> 'already_imported'
-     OR v_replay->>'po_number' IS DISTINCT FROM 'SMK-BULK-A-' || v_suffix THEN
+     OR v_replay->>'po_number' IS DISTINCT FROM v_first->>'po_number' THEN
     RAISE EXCEPTION 'SMOKE_FAIL: persistent bulk intent returned first=% replay=%',
       v_first, v_replay;
   END IF;
@@ -204,7 +211,7 @@ BEGIN
   END IF;
   SELECT count(*) INTO v_count
     FROM public.purchase_orders
-   WHERE po_number IN ('SMK-BULK-A-' || v_suffix, 'SMK-BULK-B-' || v_suffix);
+   WHERE id = v_po;
   IF v_count <> 1 THEN
     RAISE EXCEPTION 'SMOKE_FAIL: expected one PO for two import attempts, got %', v_count;
   END IF;
@@ -277,11 +284,112 @@ BEGIN
 
   SELECT prosrc INTO v_source
     FROM pg_proc
-   WHERE oid = 'public.save_purchase_order(uuid,jsonb,jsonb,uuid,text)'::regprocedure;
+   WHERE oid = 'public._save_purchase_order_atomic_number_impl(uuid,jsonb,jsonb,uuid,text)'::regprocedure;
   IF strpos(v_source, 'FOR UPDATE') = 0
      OR strpos(v_source, 'jsonb_agg') = 0
      OR strpos(v_source, 'FOR UPDATE') > strpos(v_source, 'jsonb_agg') THEN
     RAISE EXCEPTION 'SMOKE_FAIL: PO lock does not precede omitted-cost hydration';
+  END IF;
+
+  SELECT prosrc INTO v_outer_source
+    FROM pg_proc
+   WHERE oid = 'public.save_purchase_order(uuid,jsonb,jsonb,uuid,text)'::regprocedure;
+  IF strpos(v_outer_source, 'public.next_po_number()') = 0
+     OR strpos(v_outer_source, '_save_purchase_order_atomic_number_impl') = 0
+     OR strpos(v_outer_source, 'public.next_po_number()')
+        > strpos(v_outer_source, '_save_purchase_order_atomic_number_impl') THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: PO number is not allocated inside the outer save transaction';
+  END IF;
+
+  -- Two half-cent extensions round to one cent apiece. The authoritative PO
+  -- header is therefore two cents, and an exactly matching vendor bill must
+  -- not emit the old aggregate-rounding false warning.
+  PERFORM set_config(
+    'request.jwt.claims',
+    json_build_object('sub', v_admin, 'role', 'authenticated')::text,
+    true
+  );
+  v_vendor_name := '[SMOKE] Rounded Vendor ' || v_suffix;
+  INSERT INTO public.vendors (name)
+  VALUES (v_vendor_name)
+  RETURNING id INTO v_vendor;
+
+  v_replay := public.save_purchase_order(
+    NULL,
+    jsonb_build_object('vendor', v_vendor_name, 'status', 'draft'),
+    jsonb_build_array(
+      jsonb_build_object(
+        'product_id', v_product,
+        'product_name', v_product_name,
+        'quantity_ordered', 0.5,
+        'unit_cost_cents', 1,
+        'unit_size', v_unit_size
+      ),
+      jsonb_build_object(
+        'product_id', v_product,
+        'product_name', v_product_name,
+        'quantity_ordered', 0.5,
+        'unit_cost_cents', 1,
+        'unit_size', v_unit_size
+      )
+    ),
+    v_admin,
+    'smk-po-rounded-' || v_suffix
+  );
+  v_rounding_po := (v_replay->>'po_id')::uuid;
+  IF NULLIF(v_replay->>'po_number', '') IS NULL
+     OR (SELECT total_cost_cents FROM public.purchase_orders WHERE id = v_rounding_po) <> 2 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: atomic PO number or rounded two-line header missing: %', v_replay;
+  END IF;
+
+  SELECT gs::date INTO v_open_date
+    FROM generate_series(
+      (now() AT TIME ZONE 'America/Chicago')::date,
+      (now() AT TIME ZONE 'America/Chicago')::date - 365,
+      interval '-1 day'
+    ) AS gs
+   WHERE NOT EXISTS (
+     SELECT 1
+       FROM public.accounting_periods ap
+      WHERE gs::date BETWEEN ap.period_start AND ap.period_end
+        AND ap.status = 'closed'
+   )
+   ORDER BY gs DESC
+   LIMIT 1;
+  IF v_open_date IS NULL THEN
+    RAISE EXCEPTION 'SMOKE_SETUP: open vendor-bill date required';
+  END IF;
+
+  v_rounding_bill := public.create_vendor_bill(
+    p_vendor_id := v_vendor,
+    p_purchase_order_id := v_rounding_po,
+    p_bill_number := 'SMK-BILL-' || v_suffix,
+    p_bill_date := v_open_date,
+    p_subtotal_cents := 2,
+    p_idempotency_key := 'smk-bill-rounded-' || v_suffix
+  );
+  SELECT count(*) INTO v_count
+    FROM public.notifications
+   WHERE related_entity_type = 'purchase_order'
+     AND related_entity_id = v_rounding_po
+     AND notification_type = 'vendor_bill_drift';
+  IF v_rounding_bill IS NULL OR v_count <> 0 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: matching rounded vendor bill produced drift warning bill=% warnings=%',
+      v_rounding_bill, v_count;
+  END IF;
+
+  -- The import claim must not make the admin-only delete workflow fail with an
+  -- opaque FK error; deleting the PO deliberately removes its claim as well.
+  PERFORM public.delete_purchase_order(
+    v_po,
+    v_admin,
+    'smk-delete-imported-po-' || v_suffix
+  );
+  SELECT count(*) INTO v_count
+    FROM public.purchase_order_import_intents
+   WHERE intent_key = v_intent;
+  IF v_count <> 0 OR EXISTS (SELECT 1 FROM public.purchase_orders WHERE id = v_po) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: imported PO delete left PO or intent claim';
   END IF;
 
   RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK';

@@ -94,10 +94,9 @@ describe('NewPurchaseOrder save and submit workflow', () => {
     const calls: string[] = [];
     mockRpc.mockImplementation(async (name: string, args?: Record<string, unknown>) => {
       calls.push(name);
-      if (name === 'next_po_number') return { data: 'PO-TEST-1', error: null };
       if (name === 'save_purchase_order') {
         expect(args?.p_po_payload).toEqual(expect.objectContaining({ status: 'draft' }));
-        return { data: { po_id: 'po-1' }, error: null };
+        return { data: { po_id: 'po-1', po_number: 'PO-TEST-1' }, error: null };
       }
       if (name === 'submit_purchase_order') {
         submitAttempts += 1;
@@ -117,7 +116,6 @@ describe('NewPurchaseOrder save and submit workflow', () => {
 
     await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith('/purchase-orders/po-1', { replace: true }));
     expect(calls).toEqual([
-      'next_po_number',
       'save_purchase_order',
       'submit_purchase_order',
       'submit_purchase_order',
@@ -130,12 +128,11 @@ describe('NewPurchaseOrder save and submit workflow', () => {
   it('reuses the PO number and save key when the save response is lost', async () => {
     let saveAttempts = 0;
     mockRpc.mockImplementation(async (name: string) => {
-      if (name === 'next_po_number') return { data: 'PO-TEST-2', error: null };
       if (name === 'save_purchase_order') {
         saveAttempts += 1;
         return saveAttempts === 1
           ? { data: null, error: new Error('Save response lost') }
-          : { data: { po_id: 'po-2' }, error: null };
+          : { data: { po_id: 'po-2', po_number: 'PO-TEST-2' }, error: null };
       }
       if (name === 'submit_purchase_order') {
         return { data: { po_id: 'po-2', status: 'submitted' }, error: null };
@@ -151,12 +148,10 @@ describe('NewPurchaseOrder save and submit workflow', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Submit PO' }));
 
     await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith('/purchase-orders/po-2', { replace: true }));
-    const numberCalls = mockRpc.mock.calls.filter(([name]) => name === 'next_po_number');
     const saveCalls = mockRpc.mock.calls.filter(([name]) => name === 'save_purchase_order');
-    expect(numberCalls).toHaveLength(1);
     expect(saveCalls).toHaveLength(2);
-    expect(saveCalls[0][1].p_po_payload.po_number).toBe('PO-TEST-2');
-    expect(saveCalls[1][1].p_po_payload.po_number).toBe('PO-TEST-2');
+    expect(saveCalls[0][1].p_po_payload.po_number).toBeNull();
+    expect(saveCalls[1][1].p_po_payload.po_number).toBeNull();
     expect(saveCalls[0][1].p_idempotency_key).toBe(saveCalls[1][1].p_idempotency_key);
   });
 });
