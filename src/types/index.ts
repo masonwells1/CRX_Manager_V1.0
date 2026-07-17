@@ -923,6 +923,7 @@ export interface PurchaseOrder {
   submitted_date: string | null;
   expected_delivery_date: string | null;
   total_cost: number;
+  total_cost_cents: number;
   notes: string | null;
   created_by: string;
   created_at: string;
@@ -939,6 +940,7 @@ export interface PurchaseOrderItem {
   product_name?: string;
   quantity_ordered: number;
   unit_cost: number;
+  unit_cost_cents: number;
   quantity_received: number;
   unit_size: string | null;
   notes: string | null;

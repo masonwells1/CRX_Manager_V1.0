@@ -9,6 +9,11 @@ import UnsavedChangesModal from '../components/ui/UnsavedChangesModal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
+import {
+  purchaseOrderCentsToDollars,
+  purchaseOrderLineTotalCents,
+  purchaseOrderUnitCostCents,
+} from '../lib/purchaseOrderMoney';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { supabase, assertRpcResult } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
@@ -52,10 +57,6 @@ export default function NewPurchaseOrder() {
   // Track dirty state for unsaved changes warning
   const [isDirty, setIsDirty] = useState(false);
   const initialLoadDone = useRef(false);
-  // Keep the allocated number tied to the idempotent save attempt. If the
-  // server commits but the response is lost, retrying must send the same PO
-  // number with the same key instead of consuming and displaying a new one.
-  const pendingPoNumbersRef = useRef<Record<string, string>>({});
   const blocker = useUnsavedChanges(isDirty);
   const saveIdem = useIdempotencyKey('save_purchase_order', profile?.id || '');
   const submitIdem = useIdempotencyKey('submit_purchase_order', profile?.id || '');
@@ -148,10 +149,11 @@ export default function NewPurchaseOrder() {
     setProductQuery('');
   };
 
-  const totalCost = items.reduce(
-    (sum, i) => sum + i.quantity_ordered * i.unit_cost,
-    0
+  const totalCostCents = items.reduce(
+    (sum, i) => sum + purchaseOrderLineTotalCents(i.quantity_ordered, i.unit_cost),
+    0,
   );
+  const totalCost = purchaseOrderCentsToDollars(totalCostCents);
 
   const handleSave = async (submitStatus: 'draft' | 'submitted') => {
     if (!vendor.trim()) {
@@ -190,17 +192,10 @@ export default function NewPurchaseOrder() {
 
         if (shouldSaveDraft) {
           const idemKey = saveIdem.getKey();
-          poNumber = poNumber || pendingPoNumbersRef.current[idemKey] || null;
-          if (!poNumber) {
-            const { data: rpcNumber, error: rpcError } = await supabase.rpc('next_po_number');
-            if (rpcError || !rpcNumber) {
-              throw new Error(rpcError?.message || 'Failed to generate PO number');
-            }
-            poNumber = assertRpcResult<string>(rpcNumber, 'next_po_number');
-            pendingPoNumbersRef.current[idemKey] = poNumber;
-          }
 
           const poPayload = {
+            // New PO numbers are allocated atomically by save_purchase_order.
+            // Existing edits keep the number already returned by the server.
             po_number: poNumber,
             vendor: vendor.trim(),
             status: 'draft',
@@ -209,17 +204,22 @@ export default function NewPurchaseOrder() {
             notes: notes || null,
           };
 
-          const itemsPayload = validItems.map((i) => ({
-            product_id: i.product_id,
-            product_name: products.find((p) => p.id === i.product_id)?.product_name || null,
-            quantity_ordered: i.quantity_ordered,
-            unit_cost: i.unit_cost,
-            unit_size: i.unit_size || null,
-            quantity_received: 0,
-          }));
+          const itemsPayload = validItems.map((i) => {
+            const unitCostCents = purchaseOrderUnitCostCents(i.unit_cost);
+            return {
+              product_id: i.product_id,
+              product_name: products.find((p) => p.id === i.product_id)?.product_name || null,
+              quantity_ordered: i.quantity_ordered,
+              unit_cost: purchaseOrderCentsToDollars(unitCostCents),
+              unit_cost_cents: unitCostCents,
+              unit_size: i.unit_size || null,
+              quantity_received: 0,
+            };
+          });
 
           const { data, error } = await supabase.rpc('save_purchase_order', {
-            // SQL accepts NULL (create-new path); the regenerated types can't express a nullable required arg.
+            // Postgres uses NULL to select the create path; generated RPC types
+            // cannot express nullability for a uuid parameter without a default.
             p_po_id: poId as string,
             p_po_payload: poPayload,
             p_items: itemsPayload,
@@ -229,15 +229,16 @@ export default function NewPurchaseOrder() {
 
           if (error) throw error;
 
-          const result = assertRpcResult<{ po_id: string }>(data, 'save_purchase_order');
+          const result = assertRpcResult<{ po_id: string; po_number?: string }>(data, 'save_purchase_order');
           poId = result.po_id;
           if (!poId) throw new Error('Purchase order save did not return an ID');
-          delete pendingPoNumbersRef.current[idemKey];
+          if (!result.po_number) throw new Error('Purchase order save did not return its allocated number');
+          poNumber = result.po_number;
           saveIdem.resetKey();
 
           if (isFirstSave) {
             setSavedPoId(poId);
-            setSavedPoNumber(poNumber);
+            setSavedPoNumber(result.po_number);
           }
 
           // The form now matches the durable draft. If submit fails, the user
@@ -440,7 +441,9 @@ export default function NewPurchaseOrder() {
                           />
                         </td>
                         <td className="px-4 py-3 font-mono text-nav-dark">
-                          {fmt(item.quantity_ordered * item.unit_cost)}
+                          {fmt(purchaseOrderCentsToDollars(
+                            purchaseOrderLineTotalCents(item.quantity_ordered, item.unit_cost),
+                          ))}
                         </td>
                         <td className="px-4 py-3">
                           {items.length > 1 && (

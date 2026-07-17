@@ -7,11 +7,25 @@ import { useToast } from '../ui/Toast';
 import { useAuth } from '../../contexts/AuthContext';
 import { supabase, assertRpcResult } from '../../lib/db';
 import { processDocumentWithOCR, isOCRSupported } from '../../lib/documentOCR';
-import { localToday } from '../../lib/dateUtils';
-import { generateIdempotencyKey } from '../../lib/idempotency';
 import { Sentry } from '../../lib/sentry';
 import { formatUSD as fmt } from '../../lib/money';
 import type { Product } from '../../types';
+import {
+  purchaseOrderCentsToDollars,
+  purchaseOrderLineTotalCents,
+  purchaseOrderUnitCostCents,
+} from '../../lib/purchaseOrderMoney';
+import {
+  buildBulkPOIntentKey,
+  buildBulkPODocumentClaimKey,
+  buildBulkPOIdempotencyKey,
+  ensurePendingBulkPOIntent,
+  loadPendingBulkPOIntents,
+  markBulkPOIntentImported,
+  normalizeBulkPOInvoiceDate,
+  savePendingBulkPOIntents,
+  type PendingBulkPOIntents,
+} from '../../lib/bulkPOImportRetry';
 
 // ---------- interfaces ----------
 
@@ -27,6 +41,9 @@ interface ParsedPOItem {
 
 interface ParsedPO {
   source_file: string;
+  source_index: number;
+  source_size: number;
+  source_last_modified: number;
   vendor_name: string;
   invoice_number: string;
   invoice_date: string;
@@ -43,6 +60,21 @@ interface BulkPOImportProps {
 }
 
 // ---------- helpers ----------
+
+function buildParsedPOIntentKey(po: ParsedPO): string | null {
+  return buildBulkPOIntentKey({
+    vendorName: po.vendor_name,
+    invoiceNumber: po.invoice_number,
+    invoiceDate: po.invoice_date,
+    items: po.items.map((item) => ({
+      productId: item.matched_product?.id ?? null,
+      quantityOrdered: item.quantity_ordered,
+      unitCostCents: purchaseOrderUnitCostCents(item.unit_cost),
+      unitSize: item.unit_size,
+      notes: item.notes,
+    })),
+  });
+}
 
 function calculateSimilarity(str1: string, str2: string): number {
   if (str1 === str2) return 1;
@@ -81,15 +113,23 @@ function fuzzyMatchProductWithScore(
 
 // ---------- Vision OCR parsing ----------
 
-async function parseWithVisionOCR(file: File, filename: string, products: Product[]): Promise<ParsedPO> {
+async function parseWithVisionOCR(
+  file: File,
+  filename: string,
+  sourceIndex: number,
+  products: Product[],
+): Promise<ParsedPO> {
   const result = await processDocumentWithOCR(file, 'purchase_order');
 
   if (!result.success || !result.parsed_data) {
     return {
       source_file: filename,
+      source_index: sourceIndex,
+      source_size: file.size,
+      source_last_modified: file.lastModified,
       vendor_name: '',
       invoice_number: '',
-      invoice_date: localToday(),
+      invoice_date: '',
       items: [],
       raw_text: result.raw_text || '',
       parse_errors: [result.error || 'OCR processing failed'],
@@ -131,9 +171,14 @@ async function parseWithVisionOCR(file: File, filename: string, products: Produc
 
   return {
     source_file: filename,
+    source_index: sourceIndex,
+    source_size: file.size,
+    source_last_modified: file.lastModified,
     vendor_name: data.vendor_name || '',
     invoice_number: data.invoice_number || '',
-    invoice_date: data.invoice_date || localToday(),
+    // Do not invent today's date when OCR misses it. A time-dependent fallback
+    // would change the durable duplicate-protection key on a later re-import.
+    invoice_date: data.invoice_date || '',
     items,
     raw_text: result.raw_text,
     parse_errors,
@@ -151,13 +196,17 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
   const [parsing, setParsing] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [parsedPOs, setParsedPOs] = useState<ParsedPO[] | null>(null);
-  const [uploadResults, setUploadResults] = useState<{ success: number; failed: number } | null>(null);
+  const [uploadResults, setUploadResults] = useState<{
+    imported: number;
+    skipped: number;
+    failed: number;
+  } | null>(null);
   const [products, setProducts] = useState<Product[]>([]);
   const [vendors, setVendors] = useState<string[]>([]);
   const [showRawText, setShowRawText] = useState<number | null>(null);
-  const poSaveKeysRef = useRef<Record<string, string>>({});
-  const poNumbersRef = useRef<Record<string, string>>({});
-  const importedIntentsRef = useRef<Set<string>>(new Set());
+  const pendingIntentsRef = useRef<PendingBulkPOIntents>({});
+  const pendingProfileRef = useRef<string | null>(null);
+  const refreshNeededRef = useRef(false);
 
   // Product search state
   const [productSearchOpen, setProductSearchOpen] = useState<{ poIdx: number; itemIdx: number } | null>(null);
@@ -167,6 +216,12 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
     if (open) fetchProducts();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
+
+  useEffect(() => {
+    if (!profile?.id || pendingProfileRef.current === profile.id) return;
+    pendingIntentsRef.current = loadPendingBulkPOIntents(localStorage, profile.id);
+    pendingProfileRef.current = profile.id;
+  }, [profile?.id]);
 
   const fetchProducts = async () => {
     const { data, error } = await supabase
@@ -201,9 +256,6 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
       setFiles(valid);
       setParsedPOs(null);
       setUploadResults(null);
-      poSaveKeysRef.current = {};
-      poNumbersRef.current = {};
-      importedIntentsRef.current.clear();
     }
     e.target.value = '';
   };
@@ -213,17 +265,20 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
     setParsing(true);
     try {
       const results: ParsedPO[] = [];
-      for (const file of files) {
+      for (const [sourceIndex, file] of files.entries()) {
         try {
-          const parsed = await parseWithVisionOCR(file, file.name, products);
+          const parsed = await parseWithVisionOCR(file, file.name, sourceIndex, products);
           results.push(parsed);
         } catch (err) {
           Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: `Error parsing ${file.name}` } });
           results.push({
             source_file: file.name,
+            source_index: sourceIndex,
+            source_size: file.size,
+            source_last_modified: file.lastModified,
             vendor_name: '',
             invoice_number: '',
-            invoice_date: localToday(),
+            invoice_date: '',
             items: [],
             raw_text: '',
             parse_errors: [`Failed to process: ${err instanceof Error ? err.message : 'Unknown error'}`],
@@ -330,7 +385,8 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
     }
 
     setUploading(true);
-    let successCount = 0;
+    let newSuccessCount = 0;
+    let skippedCount = 0;
     let failedCount = 0;
 
     for (const po of importable) {
@@ -341,91 +397,124 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
           continue;
         }
 
-        const intentKey = JSON.stringify({
-          source_file: po.source_file,
-          vendor_name: po.vendor_name.trim(),
-          invoice_number: po.invoice_number,
-          invoice_date: po.invoice_date,
-          items: validItems.map((item) => ({
-            product_id: item.matched_product!.id,
-            quantity_ordered: item.quantity_ordered,
-            unit_cost: item.unit_cost,
-            unit_size: item.unit_size,
-            notes: item.notes,
-          })),
-        });
-        if (importedIntentsRef.current.has(intentKey)) {
-          successCount++;
+        const intentKey = buildParsedPOIntentKey(po);
+        if (!intentKey) {
+          const missingField = !po.vendor_name.trim() ? 'vendor name' : 'vendor invoice number';
+          toast('error', `${po.source_file}: enter the ${missingField} before importing.`);
+          failedCount++;
           continue;
         }
-        if (!poSaveKeysRef.current[intentKey]) {
-          poSaveKeysRef.current[intentKey] = generateIdempotencyKey(
-            'save_purchase_order',
-            `${profile.id}:bulk:${po.source_file}`,
-          );
-        }
-
-        // Cache the number with the intent as well as the idempotency key. A
-        // lost response must retry the same PO without burning another number.
-        if (!poNumbersRef.current[intentKey]) {
-          const { data: poNumData, error: poNumError } = await supabase.rpc('next_po_number');
-          if (poNumError || !poNumData) {
-            Sentry.captureException(new Error(`Failed to generate PO number: ${poNumError?.message || 'no data'}`));
-            failedCount++;
-            continue;
-          }
-          poNumbersRef.current[intentKey] = assertRpcResult<string>(poNumData, 'next_po_number');
-        }
-        const poNumber = poNumbersRef.current[intentKey];
+        const deterministicIdempotencyKey = await buildBulkPOIdempotencyKey(profile.id, intentKey);
+        const documentClaimKey = await buildBulkPODocumentClaimKey(intentKey);
+        const previouslyImportedPoId = pendingIntentsRef.current[intentKey]?.status === 'imported'
+          ? pendingIntentsRef.current[intentKey]?.poId
+          : undefined;
+        const pendingIntent = ensurePendingBulkPOIntent(
+          pendingIntentsRef.current,
+          intentKey,
+          () => deterministicIdempotencyKey,
+        );
+        savePendingBulkPOIntents(localStorage, profile.id, pendingIntentsRef.current);
 
         const noteParts = [`Imported from PDF: ${po.source_file}`];
         if (po.invoice_number) noteParts.push(`Vendor ref: ${po.invoice_number}`);
         if (po.invoice_date) noteParts.push(`Vendor date: ${po.invoice_date}`);
 
-        const itemsPayload = validItems.map((item) => ({
-          product_id: item.matched_product!.id,
-          product_name: item.matched_product!.product_name,
-          quantity_ordered: item.quantity_ordered,
-          unit_cost: item.unit_cost,
-          unit_size: item.unit_size || null,
-          quantity_received: 0,
-          notes: item.notes || null,
-        }));
+        const itemsPayload = validItems.map((item) => {
+          const unitCostCents = purchaseOrderUnitCostCents(item.unit_cost);
+          return {
+            product_id: item.matched_product!.id,
+            product_name: item.matched_product!.product_name,
+            quantity_ordered: item.quantity_ordered,
+            // OCR may return extra decimal places. Send one canonical whole-cent
+            // value in both representations so the database never sees a raw,
+            // fractional-cent dollar amount that disagrees with our cents math.
+            unit_cost: purchaseOrderCentsToDollars(unitCostCents),
+            unit_cost_cents: unitCostCents,
+            unit_size: item.unit_size || null,
+            quantity_received: 0,
+            notes: item.notes || null,
+          };
+        });
         const { data: poData, error: poError } = await supabase.rpc('save_purchase_order', {
-          // SQL accepts NULL (create-new path); the regenerated types can't express a nullable required arg.
+          // Postgres uses NULL to select the create path; generated RPC types
+          // cannot express nullability for a uuid parameter without a default.
           p_po_id: null as unknown as string,
           p_po_payload: {
-            po_number: poNumber,
-            vendor: po.vendor_name.trim() || 'Unknown Vendor',
+            // The database allocates the number inside the same transaction
+            // that inserts the PO, closing MAX+1 races between employees.
+            po_number: null,
+            // buildParsedPOIntentKey rejects an empty vendor before this RPC.
+            vendor: po.vendor_name.trim(),
             status: 'draft',
             submitted_date: null,
             expected_delivery_date: null,
             notes: noteParts.join('. '),
+            bulk_import_intent_key: documentClaimKey,
+            // The database independently recomputes the stable claim from
+            // vendor + reference and fingerprints the reviewed date/lines.
+            bulk_import_vendor_reference: po.invoice_number.trim(),
+            bulk_import_invoice_date: normalizeBulkPOInvoiceDate(po.invoice_date),
           },
           p_items: itemsPayload,
           p_performed_by: profile.id,
-          p_idempotency_key: poSaveKeysRef.current[intentKey],
+          p_idempotency_key: pendingIntent.idempotencyKey,
         });
 
         if (poError || !poData) throw poError;
-        assertRpcResult<{ po_id: string }>(poData, 'save_purchase_order');
-        importedIntentsRef.current.add(intentKey);
-        delete poSaveKeysRef.current[intentKey];
-        delete poNumbersRef.current[intentKey];
+        const savedPO = assertRpcResult<{
+          po_id: string;
+          status?: 'saved' | 'already_imported';
+          po_number?: string;
+        }>(poData, 'save_purchase_order');
+        if (!savedPO.po_number) {
+          throw new Error('Purchase order save did not return its allocated PO number');
+        }
+        markBulkPOIntentImported(
+          pendingIntentsRef.current,
+          intentKey,
+          savedPO.po_id,
+          Date.now(),
+          savedPO.po_number,
+        );
+        savePendingBulkPOIntents(localStorage, profile.id, pendingIntentsRef.current);
 
-        successCount++;
+        const samePOReplay = Boolean(
+          previouslyImportedPoId && previouslyImportedPoId === savedPO.po_id,
+        );
+        if (savedPO.status === 'already_imported' || samePOReplay) {
+          skippedCount++;
+          // The server may report an exact idempotency replay as "saved". A
+          // matching browser marker proves it is the same PO, while a different
+          // returned ID means an intentionally deleted PO was recreated.
+          refreshNeededRef.current = true;
+        } else {
+          newSuccessCount++;
+        }
       } catch (error) {
         Sentry.captureException(error instanceof Error ? error : new Error(String(error)), { extra: { context: 'Error importing PO' } });
         failedCount++;
       }
     }
 
-    setUploadResults({ success: successCount, failed: failedCount });
+    setUploadResults(failedCount === 0
+      ? { imported: newSuccessCount, skipped: skippedCount, failed: 0 }
+      : null);
     setUploading(false);
 
-    if (successCount > 0) {
-      toast('success', `Imported ${successCount} purchase order${successCount !== 1 ? 's' : ''}`);
-      onSuccess();
+    if (newSuccessCount > 0) {
+      refreshNeededRef.current = true;
+      toast('success', `Imported ${newSuccessCount} purchase order${newSuccessCount !== 1 ? 's' : ''}`);
+      if (failedCount === 0) {
+        refreshNeededRef.current = false;
+        onSuccess();
+      }
+    }
+    if (skippedCount > 0) {
+      toast('info', `Skipped ${skippedCount} document${skippedCount !== 1 ? 's' : ''} already imported.`);
+    }
+    if (failedCount > 0) {
+      toast('error', `${failedCount} purchase order${failedCount !== 1 ? 's' : ''} failed. Review and retry; successful imports will be skipped.`);
     }
   };
 
@@ -435,26 +524,31 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
     setUploadResults(null);
     setProductSearchOpen(null);
     setProductQuery('');
-    poSaveKeysRef.current = {};
-    poNumbersRef.current = {};
-    importedIntentsRef.current.clear();
-    onClose();
+    if (refreshNeededRef.current) {
+      refreshNeededRef.current = false;
+      onSuccess();
+    } else {
+      onClose();
+    }
   };
 
   const reset = () => {
     setFiles([]);
     setParsedPOs(null);
     setUploadResults(null);
-    poSaveKeysRef.current = {};
-    poNumbersRef.current = {};
-    importedIntentsRef.current.clear();
   };
 
   // ---------- derived stats ----------
 
   const totalMatched = parsedPOs?.reduce((sum, po) => sum + po.items.filter((i) => i.matched_product).length, 0) ?? 0;
   const totalUnmatched = parsedPOs?.reduce((sum, po) => sum + po.items.filter((i) => !i.matched_product).length, 0) ?? 0;
-  const importablePOs = parsedPOs?.filter((po) => po.items.some((i) => i.matched_product && i.quantity_ordered > 0)).length ?? 0;
+  const importablePOs = parsedPOs?.filter((po) => {
+    const intentKey = buildParsedPOIntentKey(po);
+    // Persisted browser state is only a hint. The server owns duplicate
+    // detection because an admin may have deleted the original PO since this
+    // marker was written, intentionally making the document importable again.
+    return intentKey !== null;
+  }).length ?? 0;
 
   const filteredProducts = products.filter((p) => {
     if (!productQuery.trim()) return true;
@@ -549,9 +643,15 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
             {/* Parsed POs accordion */}
             <div className="space-y-3 max-h-[500px] overflow-y-auto">
               {parsedPOs.map((po, poIdx) => {
-                const poTotal = po.items.reduce((s, i) => s + i.quantity_ordered * i.unit_cost, 0);
+                const poTotal = purchaseOrderCentsToDollars(po.items.reduce(
+                  (sum, item) => sum + purchaseOrderLineTotalCents(item.quantity_ordered, item.unit_cost),
+                  0,
+                ));
                 const hasErrors = po.parse_errors.length > 0;
                 const hasItems = po.items.length > 0;
+                const intentKey = buildParsedPOIntentKey(po);
+                const importedIntent = intentKey ? pendingIntentsRef.current[intentKey] : undefined;
+                const alreadyImported = importedIntent?.status === 'imported';
 
                 return (
                   <div key={poIdx} className="border border-gray-200 rounded-lg overflow-hidden">
@@ -577,13 +677,16 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
                           {fmt(poTotal)}
                         </p>
                       </div>
-                      {hasErrors && !hasItems && (
+                      {alreadyImported && (
+                        <Badge variant="info">Previously imported</Badge>
+                      )}
+                      {!alreadyImported && hasErrors && !hasItems && (
                         <Badge variant="error">Parse Failed</Badge>
                       )}
-                      {hasErrors && hasItems && (
+                      {!alreadyImported && hasErrors && hasItems && (
                         <Badge variant="warning">Partial</Badge>
                       )}
-                      {!hasErrors && hasItems && (
+                      {!alreadyImported && !hasErrors && hasItems && (
                         <Badge variant="success">Ready</Badge>
                       )}
                       <button
@@ -602,6 +705,11 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
                     {/* Expanded content */}
                     {po.expanded && (
                       <div className="p-4 space-y-3">
+                        {alreadyImported && (
+                          <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm text-blue-900">
+                            Previously imported as {importedIntent.poNumber || 'a purchase order'}. Import will verify the live PO; if an admin deleted it, the document can be imported again.
+                          </div>
+                        )}
                         {/* Parse errors */}
                         {po.parse_errors.length > 0 && (
                           <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
@@ -767,7 +875,9 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
                                       />
                                     </td>
                                     <td className="px-3 py-2 font-mono text-sm text-nav-dark">
-                                      {fmt(item.quantity_ordered * item.unit_cost)}
+                                      {fmt(purchaseOrderCentsToDollars(
+                                        purchaseOrderLineTotalCents(item.quantity_ordered, item.unit_cost),
+                                      ))}
                                     </td>
                                     <td className="px-3 py-2">
                                       <button
@@ -827,7 +937,10 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
               <CheckCircle className="w-10 h-10 text-green-600 mx-auto mb-3" />
               <p className="text-lg font-semibold text-green-800">Import Complete</p>
               <div className="text-sm text-green-700 mt-2 space-y-1">
-                <p>Successfully imported: {uploadResults.success} purchase order{uploadResults.success !== 1 ? 's' : ''}</p>
+                <p>Successfully imported: {uploadResults.imported} purchase order{uploadResults.imported !== 1 ? 's' : ''}</p>
+                {uploadResults.skipped > 0 && (
+                  <p>Already imported and skipped: {uploadResults.skipped}</p>
+                )}
                 {uploadResults.failed > 0 && (
                   <p className="text-red-600">Failed: {uploadResults.failed}</p>
                 )}

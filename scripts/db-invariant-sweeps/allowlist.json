@@ -332,6 +332,12 @@
       "dated": "2026-06-10"
     },
     {
+      "predicate": "status-literals",
+      "violation_key": "normalize_product_category()",
+      "justification": "FALSE POSITIVE (same-named column on another table): the regex sweep unions allowed literals by column name and now compares normalize_product_category() assignments for public.products.category against customer_facts_category_check on public.customer_facts.category. Live catalog verified 2026-07-16: public.products has no category CHECK, the trigger is attached to products, and its Herbicide/Foliar Fertilizer/Other outputs are existing valid product categories.",
+      "dated": "2026-07-16"
+    },
+    {
       "predicate": "ungated-secdef-mutators",
       "violation_key": "log_failed_notification(p_notification_type text, p_entity_type text, p_entity_id uuid, p_error_message text, p_payload jsonb, p_idempotency_key text)",
       "justification": "Frontend/cron-called failed-notification logging helper (callers: Dashboard.tsx, notificationTriggers.ts). Insert-only into failed_notifications; no financial mutation, no privilege escalation, no PII read. Intentionally left ungated per 2026-06-09 round-3 disposition (a hard auth.uid() gate would break its cron/service_role callers). Verified live pg_get_functiondef 2026-06-10.",

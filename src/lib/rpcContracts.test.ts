@@ -1551,6 +1551,13 @@ const IDEMPOTENCY_BODY_EXEMPT: Record<
   // directly non-executable implementation that owns the canonical replay
   // lookup/save. A dedicated test below pins that indirection and both grants.
   complete_delivery: 'delegated',
+  // The public wrapper authorizes active customer scope before delegating to
+  // the directly non-executable implementation that owns canonical replay.
+  save_invoice: 'delegated',
+  // The public wrapper hydrates an omitted cost only for a recognized existing
+  // line, then delegates to the directly non-executable integer-cents writer
+  // that owns the canonical replay lookup/save.
+  save_purchase_order: 'delegated',
   //  - 'table-unique'   : idempotency is enforced NOT via the idempotency_keys table
   //                       but by a dedicated column + PARTIAL UNIQUE index on the RPC's
   //                       own table, with a catch-unique-violation replay. Used when the
@@ -1665,6 +1672,45 @@ describe('Idempotency BODY verification (reads migration SQL)', () => {
     expect(implementationSource).toContain("v_existing := check_idempotency(p_idempotency_key, 'complete_delivery')");
     expect(implementationSource).toContain("PERFORM save_idempotency(p_idempotency_key, 'complete_delivery', v_result)");
     expect(IDEMPOTENCY_BODY_EXEMPT.complete_delivery).toBe('delegated');
+  });
+
+  it('save_invoice authorizes customer scope before delegating to its idempotent implementation', () => {
+    const files = getMigrationFiles();
+    const initialWrapper = files.find(
+      ({ name }) => name === '20260716190000_harden_sales_financial_scope.sql'
+    )?.content;
+    const wrapper = files.find(
+      ({ name }) => name === '20260716210000_harden_invoice_existing_customer_scope.sql'
+    )?.content;
+    const implementationSource = files.find(
+      ({ name }) => name === '20260716120112_gauntlet_money_workflows.sql'
+    )?.content;
+
+    expect(initialWrapper).toContain('RENAME TO _save_invoice_scoped_impl');
+    expect(initialWrapper).toMatch(/REVOKE ALL ON FUNCTION public\._save_invoice_scoped_impl[\s\S]*FROM PUBLIC, anon, authenticated, service_role/);
+    expect(wrapper).toMatch(/WHERE id = v_invoice_id[\s\S]*FOR UPDATE/);
+    expect(wrapper).toMatch(/WHERE id = v_existing_customer_id[\s\S]*AND assigned_sales_rep = v_actor/);
+    expect(wrapper).toMatch(/WHERE id = v_target_customer_id[\s\S]*AND assigned_sales_rep = v_actor[\s\S]*RETURN public\._save_invoice_scoped_impl/);
+    expect(implementationSource).toContain("v_existing := check_idempotency(p_idempotency_key, 'save_invoice')");
+    expect(implementationSource).toContain("PERFORM save_idempotency(p_idempotency_key, 'save_invoice'");
+    expect(IDEMPOTENCY_BODY_EXEMPT.save_invoice).toBe('delegated');
+  });
+
+  it('save_purchase_order hydrates omitted cost before delegating to its idempotent implementation', () => {
+    const files = getMigrationFiles();
+    const wrapper = files.find(
+      ({ name }) => name === '20260716213000_preserve_purchase_order_omitted_cost.sql'
+    )?.content;
+    const implementationSource = files.find(
+      ({ name }) => name === '20260716183501_purchase_order_integer_cents.sql'
+    )?.content;
+
+    expect(wrapper).toContain('RENAME TO _save_purchase_order_cost_input_impl');
+    expect(wrapper).toMatch(/REVOKE ALL ON FUNCTION public\._save_purchase_order_cost_input_impl[\s\S]*FROM PUBLIC, anon, authenticated, service_role/);
+    expect(wrapper).toMatch(/poi\.purchase_order_id = p_po_id[\s\S]*RETURN public\._save_purchase_order_cost_input_impl/);
+    expect(implementationSource).toContain("v_existing := check_idempotency(p_idempotency_key, 'save_purchase_order')");
+    expect(implementationSource).toContain("PERFORM save_idempotency(p_idempotency_key, 'save_purchase_order'");
+    expect(IDEMPOTENCY_BODY_EXEMPT.save_purchase_order).toBe('delegated');
   });
 
   it("every 'gap' exemption genuinely still lacks body idempotency (forces removal when fixed)", () => {

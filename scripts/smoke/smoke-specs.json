@@ -6,9 +6,19 @@
     "spec_contract": "Keys are the primary RPC under test. 'covers' lists every RPC the chain exercises - run-smoke.mjs --spec <rpc> matches keys AND covers entries, so one chain can certify several RPCs. Every migration that touches an RPC must have or extend a spec covering it."
   },
   "specs": {
+    "financial_scope_and_delivery_aggregate": {
+      "chain": "smoke-financial-scope-and-delivery-aggregate.sql",
+      "description": "Security and inventory aggregate chain: an active sales rep creates and replays a draft invoice and reads a statement for their assigned customer, but cannot edit or replay an unassigned customer's invoice, cannot hijack it by requesting reassignment to an assigned customer, and cannot read that customer's statement; inactive access is denied. A real delivery with two individually in-stock lines for one product but an aggregate shortage completes under WARN-NOT-BLOCK, returns and caches one warning, marks both append-only delivered ledger rows for review at insertion, emits one activity/notification set, and replays without duplicating warnings. Self-contained fixtures and terminal rollback.",
+      "covers": ["save_invoice", "get_customer_statement", "complete_delivery", "_mark_delivery_aggregate_short_stock"]
+    },
+    "adversarial_money_inventory_closeout": {
+      "chain": "smoke-adversarial-money-inventory-closeout.sql",
+      "description": "Adversarial money/inventory closeout chain: invoice save and post replays remain bound to the authorized customer; invalid PO lines are rejected; one global bulk-import intent returns the original PO across authorized employees; an admin delete clears its durable claim and all cached save results so the unchanged document and deterministic key create a fresh PO; omitted edit costs remain penny-exact; duplicate or foreign PO line IDs are rejected; and all disposable fixtures roll back at the terminal pass signal.",
+      "covers": ["save_invoice", "post_invoice", "post_invoice_group", "save_purchase_order", "purchase_order_import_intents"]
+    },
     "enforce_delivery_accounting_period": {
       "chain": "smoke-delivery-accounting-period-guard.sql",
-      "description": "Delivery closed-period, rewrite, and replay-authorization invariant: the real complete_delivery RPC rejects a closed business date without side effects; an open-date completion succeeds; a different active but unauthorized user is denied before its committed result can replay; authenticated direct rewrites cannot move completed history or legacy scheduled-date-backed terminal history into or out of a closed period; the real admin void_delivery RPC rejects once the completion date is closed without leaking a reversal; reopening the disposable period permits the normal void path. Self-contained fixtures and terminal rollback.",
+      "description": "Delivery closed-period, rewrite, and replay-authorization invariant: the real complete_delivery RPC rejects a closed business date during its side-effect-free outer preflight; an open-date completion succeeds; a different active but unauthorized user is denied before its committed result can replay; authenticated direct rewrites cannot move completed history or legacy scheduled-date-backed terminal history into or out of a closed period; the real admin void_delivery RPC rejects once the completion date is closed without leaking a reversal; reopening the disposable period permits the normal void path. Self-contained fixtures and terminal rollback.",
       "covers": ["enforce_delivery_accounting_period", "complete_delivery", "void_delivery"]
     },
     "create_blend_ticket": {
@@ -23,7 +33,7 @@
     },
     "save_purchase_order": {
       "chain": "smoke-save-purchase-order-status-lock.sql",
-      "description": "Purchase-order lifecycle correction: an active sales rep cannot create a submitted PO through save_purchase_order, creates and idempotently replays a draft, edits it without changing status, cannot transition status through ordinary save, submits through the dedicated idempotent submit_purchase_order RPC, cannot downgrade the submitted PO through save, and cancels it through the dedicated idempotent cancel_purchase_order RPC. An active non-office user is denied. Self-contained fixture and terminal rollback.",
+        "description": "Purchase-order lifecycle and cents correction: fractional-cent costs are rejected; an active sales rep cannot create a submitted PO through save_purchase_order, creates and idempotently replays a draft with a fractional quantity and penny-exact integer-cent header and line costs, edits it while preserving an omitted existing-line cost in both the line and header, cannot transition status through ordinary save, submits through the dedicated idempotent submit_purchase_order RPC, cannot downgrade the submitted PO through save, and cancels it through the dedicated idempotent cancel_purchase_order RPC. An active non-office user is denied. Self-contained fixture and terminal rollback.",
       "covers": ["save_purchase_order", "submit_purchase_order", "cancel_purchase_order"]
     },
     "gauntlet_money_workflows": {

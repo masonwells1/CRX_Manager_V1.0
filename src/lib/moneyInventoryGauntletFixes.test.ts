@@ -36,6 +36,38 @@ const deliveryPeriodRewriteGuard = source(
 const deliveryScheduledDateRewriteGuard = source(
   'supabase/migrations/20260716183442_guard_delivery_scheduled_date_rewrites.sql',
 );
+const purchaseOrderCents = source('supabase/migrations/20260716183501_purchase_order_integer_cents.sql');
+const purchaseOrderOmittedCost = source(
+  'supabase/migrations/20260716213000_preserve_purchase_order_omitted_cost.sql',
+);
+const financialScope = source('supabase/migrations/20260716190000_harden_sales_financial_scope.sql');
+const invoiceExistingCustomerScope = source(
+  'supabase/migrations/20260716210000_harden_invoice_existing_customer_scope.sql',
+);
+const deliveryAggregate = source(
+  'supabase/migrations/20260716191000_aggregate_delivery_stock_preflight.sql',
+);
+const deliveryPeriodPreflight = source(
+  'supabase/migrations/20260716202000_preflight_delivery_accounting_period.sql',
+);
+const adversarialCloseout = source(
+  'supabase/migrations/20260716224000_close_adversarial_money_inventory_gaps.sql',
+);
+const globalBulkPOIntent = source(
+  'supabase/migrations/20260716233000_globalize_bulk_po_import_intents.sql',
+);
+const finalPurchaseOrderRelease = source(
+  'supabase/migrations/20260717010000_close_final_purchase_order_release_gaps.sql',
+);
+const deletedBulkPORetryState = source(
+  'supabase/migrations/20260717015439_invalidate_deleted_bulk_po_retry_state.sql',
+);
+const exactBulkPOReplay = source(
+  'supabase/migrations/20260717032000_replay_bulk_po_same_request_result.sql',
+);
+const bulkPOVendorBinding = source(
+  'supabase/migrations/20260717045420_bind_bulk_po_claim_to_vendor.sql',
+);
 const completeDelivery = access.slice(0, access.indexOf('CREATE OR REPLACE FUNCTION public.void_delivery'));
 
 describe('money and inventory gauntlet fixes', () => {
@@ -171,9 +203,26 @@ describe('money and inventory gauntlet fixes', () => {
     const idempotencyHook = source('src/hooks/useIdempotencyKey.ts');
     const submitHandler = detail.slice(detail.indexOf('const handleSubmitPO'), detail.indexOf('const handleCancel'));
     expect(bulkImport).toContain("supabase.rpc('save_purchase_order'");
-    expect(bulkImport).toContain('poSaveKeysRef.current[intentKey]');
-    expect(bulkImport).toContain('poNumbersRef.current[intentKey]');
-    expect(bulkImport).toContain('delete poNumbersRef.current[intentKey]');
+    expect(bulkImport).toContain('buildParsedPOIntentKey(po)');
+    expect(bulkImport).not.toContain('source_index: po.source_index');
+    expect(bulkImport).toContain('ensurePendingBulkPOIntent(');
+    expect(bulkImport).toContain('po_number: null');
+    expect(bulkImport).not.toContain("supabase.rpc('next_po_number'");
+    expect(bulkImport).toContain('p_idempotency_key: pendingIntent.idempotencyKey');
+    expect(bulkImport).toContain("const alreadyImported = importedIntent?.status === 'imported'");
+    expect(bulkImport).toContain("savedPO.status === 'already_imported'");
+    expect(bulkImport).not.toContain(
+      'if (isImportedBulkPOIntent(pendingIntentsRef.current, intentKey))',
+    );
+    expect(bulkImport).toContain('bulk_import_intent_key: documentClaimKey');
+    expect(bulkImport).toContain('savedPO.po_number');
+    expect(bulkImport).toContain('refreshNeededRef.current = true');
+    expect(bulkImport).toContain('refreshNeededRef.current = false;\n        onSuccess()');
+    expect(bulkImport).toContain('if (refreshNeededRef.current)');
+    expect(bulkImport).toContain('imported: newSuccessCount, skipped: skippedCount');
+    expect(bulkImport).not.toContain('successCount++');
+    expect(bulkImport).toContain('savePendingBulkPOIntents(localStorage, profile.id');
+    expect(bulkImport).toContain('setUploadResults(failedCount === 0');
     expect(idempotency).toContain('const uuid = crypto.randomUUID()');
     expect(idempotencyHook).toContain('keyRef.current.scope !== scope');
     expect(bulkImport).not.toMatch(/\.from\(['"]purchase_orders['"]\)[\s\S]{0,250}\.(?:insert|update|delete|upsert)\(/);
@@ -220,12 +269,324 @@ describe('money and inventory gauntlet fixes', () => {
     expect(saveHandler).toContain("supabase.rpc('submit_purchase_order'");
     expect(saveHandler).toContain('p_po_id: poId');
     expect(saveHandler).toContain("const shouldSaveDraft = submitStatus === 'draft' || !poId || isDirty");
-    expect(saveHandler).toContain('pendingPoNumbersRef.current[idemKey]');
-    expect(saveHandler).toContain('delete pendingPoNumbersRef.current[idemKey]');
+    expect(saveHandler).toContain('po_number: poNumber');
+    expect(saveHandler).toContain('poNumber = result.po_number');
+    expect(saveHandler).not.toContain("supabase.rpc('next_po_number'");
     expect(newPurchaseOrder).toContain("useIdempotencyKey('submit_purchase_order', profile?.id || '')");
     expect(saveHandler).toContain("assertRpcResult<{ po_id: string; status: string }>(submitData, 'submit_purchase_order')");
     expect(saveHandler.indexOf("supabase.rpc('save_purchase_order'")).toBeLessThan(
       saveHandler.indexOf("supabase.rpc('submit_purchase_order'"),
+    );
+  });
+
+  it('calculates purchase-order costs in integer cents', () => {
+    const centsSaveFunction = purchaseOrderCents.slice(
+      purchaseOrderCents.indexOf('CREATE OR REPLACE FUNCTION public.save_purchase_order('),
+      purchaseOrderCents.indexOf('REVOKE EXECUTE ON FUNCTION public.save_purchase_order('),
+    );
+    expect(purchaseOrderCents).toContain('unit_cost_cents bigint');
+    expect(purchaseOrderCents).toContain('total_cost_cents bigint');
+    expect(centsSaveFunction).toContain('v_total_cost_cents bigint := 0');
+    expect(centsSaveFunction).toContain('round(\n      COALESCE((v_item->>\'quantity_ordered\')::numeric, 0)');
+    expect(purchaseOrderCents).toContain('PO_UNIT_COST_FRACTIONAL_CENT');
+    expect(centsSaveFunction).not.toContain('v_total_cost numeric');
+
+    for (const path of [
+      'src/pages/NewPurchaseOrder.tsx',
+      'src/pages/PurchaseOrderDetail.tsx',
+      'src/components/purchase-orders/BulkPOImport.tsx',
+    ]) {
+      const writer = source(path);
+      expect(writer).toContain('const unitCostCents = purchaseOrderUnitCostCents(');
+      expect(writer).toContain('unit_cost: purchaseOrderCentsToDollars(unitCostCents)');
+      expect(writer).toContain('unit_cost_cents: unitCostCents');
+    }
+  });
+
+  it('preserves an existing PO line cost when an edit omits cost fields', () => {
+    expect(purchaseOrderOmittedCost).toContain(
+      'RENAME TO _save_purchase_order_cost_input_impl',
+    );
+    expect(purchaseOrderOmittedCost).toContain("NOT (item.value ? 'unit_cost')");
+    expect(purchaseOrderOmittedCost).toContain("NOT (item.value ? 'unit_cost_cents')");
+    expect(purchaseOrderOmittedCost).toContain(
+      "jsonb_build_object('unit_cost_cents', poi.unit_cost_cents)",
+    );
+    expect(purchaseOrderOmittedCost).toContain('poi.purchase_order_id = p_po_id');
+    expect(purchaseOrderOmittedCost).toContain(
+      'REVOKE ALL ON FUNCTION public._save_purchase_order_cost_input_impl',
+    );
+  });
+
+  it('serializes PO hydration, validates line identity, and persists one bulk-import claim', () => {
+    const saveWrapper = adversarialCloseout.slice(
+      adversarialCloseout.indexOf('CREATE OR REPLACE FUNCTION public.save_purchase_order('),
+      adversarialCloseout.indexOf('CREATE OR REPLACE FUNCTION public.save_invoice('),
+    );
+    const lockPosition = saveWrapper.indexOf(
+      'FROM public.purchase_orders\n     WHERE id = p_po_id\n     FOR UPDATE',
+    );
+    const hydratePosition = saveWrapper.indexOf(
+      "jsonb_build_object(\n              'unit_cost_cents'",
+    );
+
+    expect(adversarialCloseout).toContain('CREATE TABLE public.purchase_order_import_intents');
+    expect(adversarialCloseout).toContain(
+      'ALTER TABLE public.purchase_order_import_intents ENABLE ROW LEVEL SECURITY',
+    );
+    expect(adversarialCloseout).toContain('purchase_order_import_intents_no_direct_access');
+    expect(adversarialCloseout).toContain(
+      'REVOKE ALL ON TABLE public.purchase_order_import_intents',
+    );
+    expect(saveWrapper).toContain("p_po_payload->>'bulk_import_intent_key'");
+    expect(saveWrapper).toContain(
+      "hashtextextended('bulk_po:' || v_actor::text || ':' || v_bulk_intent_key, 0)",
+    );
+    expect(saveWrapper).toContain("'status', 'already_imported'");
+    expect(saveWrapper).toContain('PO_ITEM_ID_DUPLICATE');
+    expect(saveWrapper).toContain('PO_ITEM_ID_NOT_IN_PURCHASE_ORDER');
+    expect(saveWrapper).toContain(
+      'SUM(round(poi.quantity_ordered * poi.unit_cost_cents)::bigint)',
+    );
+    expect(lockPosition).toBeGreaterThan(-1);
+    expect(hydratePosition).toBeGreaterThan(lockPosition);
+  });
+
+  it('claims a bulk-imported vendor document globally and returns the original PO number', () => {
+    const saveWrapper = globalBulkPOIntent.slice(
+      globalBulkPOIntent.indexOf('CREATE OR REPLACE FUNCTION public.save_purchase_order('),
+      globalBulkPOIntent.indexOf('REVOKE ALL ON FUNCTION public.save_purchase_order('),
+    );
+
+    expect(globalBulkPOIntent).toContain(
+      'CONSTRAINT purchase_order_import_intents_intent_key\n  UNIQUE (intent_key)',
+    );
+    expect(saveWrapper).toContain(
+      "hashtextextended('bulk_po:' || v_bulk_intent_key, 0)",
+    );
+    expect(saveWrapper).not.toContain("'bulk_po:' || v_actor::text");
+    expect(saveWrapper).toContain('WHERE claim.intent_key = v_bulk_intent_key');
+    expect(saveWrapper).not.toContain('WHERE actor_id = v_actor');
+    expect(saveWrapper).toContain("'po_number', v_result_po_number");
+  });
+
+  it('allocates PO numbers atomically, cascades import claims, and reuses the rounded header for bills', () => {
+    const saveWrapper = finalPurchaseOrderRelease.slice(
+      finalPurchaseOrderRelease.indexOf('CREATE FUNCTION public.save_purchase_order('),
+      finalPurchaseOrderRelease.indexOf('-- A bulk-import claim'),
+    );
+    const billWriter = finalPurchaseOrderRelease.slice(
+      finalPurchaseOrderRelease.indexOf('CREATE OR REPLACE FUNCTION public.create_vendor_bill('),
+      finalPurchaseOrderRelease.indexOf('REVOKE ALL ON FUNCTION public.create_vendor_bill('),
+    );
+
+    expect(finalPurchaseOrderRelease).toContain(
+      'RENAME TO _save_purchase_order_atomic_number_impl',
+    );
+    expect(saveWrapper).toContain('v_po_number := public.next_po_number()');
+    expect(saveWrapper).toContain('jsonb_set(');
+    expect(saveWrapper).toContain("jsonb_build_object('po_number', v_po_number)");
+    expect(saveWrapper.indexOf('public.next_po_number()')).toBeLessThan(
+      saveWrapper.indexOf('public._save_purchase_order_atomic_number_impl('),
+    );
+    expect(finalPurchaseOrderRelease).toContain('ON DELETE CASCADE');
+    expect(finalPurchaseOrderRelease).toContain('SELECT vendor, total_cost_cents');
+    expect(billWriter).not.toContain(
+      'SUM(quantity_ordered * unit_cost * 100)',
+    );
+  });
+
+  it('rechecks imported documents server-side and clears stale save replays after PO deletion', () => {
+    const saveWrapper = deletedBulkPORetryState.slice(
+      deletedBulkPORetryState.indexOf('CREATE OR REPLACE FUNCTION public.save_purchase_order('),
+      deletedBulkPORetryState.indexOf('REVOKE ALL ON FUNCTION public.save_purchase_order('),
+    );
+
+    expect(deletedBulkPORetryState).toContain(
+      'CREATE OR REPLACE FUNCTION public._invalidate_deleted_purchase_order_retry_state()',
+    );
+    expect(deletedBulkPORetryState).toContain(
+      "DELETE FROM public.idempotency_keys\n   WHERE operation = 'save_purchase_order'",
+    );
+    expect(deletedBulkPORetryState).toContain(
+      'AFTER DELETE ON public.purchase_orders',
+    );
+    expect(saveWrapper).toContain('WHERE claim.intent_key = v_bulk_intent_key');
+    expect(saveWrapper).toContain("'status', 'already_imported'");
+    expect(saveWrapper.indexOf('WHERE claim.intent_key = v_bulk_intent_key')).toBeLessThan(
+      saveWrapper.indexOf('public.next_po_number()'),
+    );
+  });
+
+  it('replays the exact bulk PO result before duplicate classification or number allocation', () => {
+    const saveWrapper = exactBulkPOReplay.slice(
+      exactBulkPOReplay.indexOf('CREATE OR REPLACE FUNCTION public.save_purchase_order('),
+      exactBulkPOReplay.indexOf('REVOKE ALL ON FUNCTION public.save_purchase_order('),
+    );
+    const replayPosition = saveWrapper.indexOf('public.check_idempotency(');
+    const documentClaimPosition = saveWrapper.indexOf(
+      'WHERE claim.intent_key = v_bulk_intent_key',
+    );
+    const numberAllocationPosition = saveWrapper.indexOf('public.next_po_number()');
+
+    expect(saveWrapper).toContain('IF NOT (public.is_admin() OR public.is_sales_rep()) THEN');
+    expect(saveWrapper).toContain(
+      "RETURN v_cached || jsonb_build_object('po_number', v_po_number)",
+    );
+    expect(replayPosition).toBeGreaterThan(-1);
+    expect(documentClaimPosition).toBeGreaterThan(replayPosition);
+    expect(numberAllocationPosition).toBeGreaterThan(documentClaimPosition);
+    expect(exactBulkPOReplay).toContain(
+      'FROM PUBLIC, anon;\nGRANT EXECUTE ON FUNCTION public.save_purchase_order(',
+    );
+    expect(exactBulkPOReplay).toContain('TO authenticated, service_role;');
+  });
+
+  it('requires and binds vendor identity at the database bulk-import boundary', () => {
+    const saveWrapper = bulkPOVendorBinding.slice(
+      bulkPOVendorBinding.indexOf('CREATE OR REPLACE FUNCTION public.save_purchase_order('),
+      bulkPOVendorBinding.indexOf('REVOKE ALL ON FUNCTION public.save_purchase_order('),
+    );
+
+    expect(saveWrapper).toContain('BULK_PO_VENDOR_REQUIRED');
+    expect(saveWrapper).toContain('BULK_PO_INTENT_VENDOR_CONFLICT');
+    expect(saveWrapper).toContain('SELECT claim.purchase_order_id, po.po_number, po.vendor');
+    expect(saveWrapper).toContain(
+      'lower(btrim(v_existing_vendor)) IS DISTINCT FROM lower(v_requested_vendor)',
+    );
+    expect(saveWrapper.indexOf('BULK_PO_VENDOR_REQUIRED')).toBeLessThan(
+      saveWrapper.indexOf('public.check_idempotency('),
+    );
+    expect(saveWrapper.indexOf('WHERE claim.intent_key = v_bulk_intent_key')).toBeLessThan(
+      saveWrapper.indexOf('public.next_po_number()'),
+    );
+  });
+
+  it('authorizes invoice saves and statements against active customer assignment before replay', () => {
+    const saveWrapper = invoiceExistingCustomerScope.slice(
+      invoiceExistingCustomerScope.indexOf('CREATE OR REPLACE FUNCTION public.save_invoice('),
+      invoiceExistingCustomerScope.indexOf('REVOKE ALL ON FUNCTION public.save_invoice('),
+    );
+    const statementWrapper = financialScope.slice(
+      financialScope.indexOf('CREATE FUNCTION public.get_customer_statement('),
+      financialScope.indexOf('DO $verify$'),
+    );
+
+    expect(financialScope).toContain('RENAME TO _save_invoice_scoped_impl');
+    expect(financialScope).toContain('RENAME TO _get_customer_statement_scoped_impl');
+    expect(financialScope).toContain(
+      'REVOKE ALL ON FUNCTION public._save_invoice_scoped_impl(jsonb, jsonb, text)',
+    );
+    expect(financialScope).toContain(
+      'REVOKE ALL ON FUNCTION public._get_customer_statement_scoped_impl(uuid, date, date)',
+    );
+    expect(saveWrapper).toContain('WHERE id = v_actor\n     AND is_active = true');
+    expect(saveWrapper).toContain('WHERE id = v_invoice_id\n     FOR UPDATE');
+    expect(saveWrapper).toContain('WHERE id = v_existing_customer_id');
+    expect(saveWrapper).toContain('WHERE id = v_target_customer_id');
+    expect(saveWrapper).toContain('AND assigned_sales_rep = v_actor');
+    expect(saveWrapper).toContain("RAISE EXCEPTION 'CUSTOMER_SCOPE_DENIED'");
+    expect(saveWrapper.indexOf('WHERE id = v_existing_customer_id')).toBeLessThan(
+      saveWrapper.indexOf('RETURN public._save_invoice_scoped_impl('),
+    );
+    expect(statementWrapper).toContain('AND assigned_sales_rep = v_actor');
+    expect(statementWrapper).toContain("ELSIF v_actor_role IS DISTINCT FROM 'admin' THEN");
+    expect(statementWrapper.indexOf('AND assigned_sales_rep = v_actor')).toBeLessThan(
+      statementWrapper.indexOf('RETURN QUERY'),
+    );
+  });
+
+  it('binds invoice save and post replays to the actual customer before delegation', () => {
+    const saveWrapper = adversarialCloseout.slice(
+      adversarialCloseout.indexOf('CREATE OR REPLACE FUNCTION public.save_invoice('),
+      adversarialCloseout.indexOf('ALTER FUNCTION public.post_invoice(uuid, text)'),
+    );
+    const postWrapper = adversarialCloseout.slice(
+      adversarialCloseout.indexOf('CREATE FUNCTION public.post_invoice('),
+      adversarialCloseout.indexOf('ALTER FUNCTION public.post_invoice_group('),
+    );
+    const groupWrapper = adversarialCloseout.slice(
+      adversarialCloseout.indexOf('CREATE FUNCTION public.post_invoice_group('),
+      adversarialCloseout.indexOf('DO $verify$'),
+    );
+
+    expect(saveWrapper).toContain('v_invoice_id IS DISTINCT FROM v_cached_invoice_id');
+    expect(saveWrapper).toContain(
+      'v_requested_customer_id IS DISTINCT FROM v_cached_customer_id',
+    );
+    expect(saveWrapper).toContain('AND assigned_sales_rep = v_actor');
+    expect(saveWrapper.indexOf("RAISE EXCEPTION 'CUSTOMER_SCOPE_DENIED'")).toBeLessThan(
+      saveWrapper.indexOf('RETURN v_cached_invoice_id'),
+    );
+    expect(adversarialCloseout).toContain('RENAME TO _post_invoice_customer_scope_impl');
+    expect(adversarialCloseout).toContain(
+      'RENAME TO _post_invoice_group_customer_scope_impl',
+    );
+    expect(postWrapper).toContain('v_cached_invoice_id IS DISTINCT FROM p_invoice_id');
+    expect(postWrapper).toContain('AND assigned_sales_rep = v_actor');
+    expect(postWrapper.indexOf("RAISE EXCEPTION 'CUSTOMER_SCOPE_DENIED'")).toBeLessThan(
+      postWrapper.indexOf('PERFORM public._post_invoice_customer_scope_impl('),
+    );
+    expect(groupWrapper).toContain(
+      'customer_row.assigned_sales_rep IS DISTINCT FROM v_actor',
+    );
+    expect(groupWrapper.indexOf("RAISE EXCEPTION 'CUSTOMER_SCOPE_DENIED'")).toBeLessThan(
+      groupWrapper.indexOf('RETURN public._post_invoice_group_customer_scope_impl('),
+    );
+  });
+
+  it('aggregates repeated delivery products before completion and marks immutable ledger rows at insert', () => {
+    const wrapper = deliveryAggregate.slice(
+      deliveryAggregate.indexOf('CREATE FUNCTION public.complete_delivery('),
+      deliveryAggregate.indexOf('REVOKE ALL ON FUNCTION public.complete_delivery('),
+    );
+
+    expect(deliveryAggregate).toContain('RENAME TO _complete_delivery_aggregate_impl');
+    expect(deliveryAggregate).toContain(
+      'CREATE OR REPLACE FUNCTION public._mark_delivery_aggregate_short_stock()',
+    );
+    expect(deliveryAggregate).toContain('BEFORE INSERT ON public.inventory_transactions');
+    expect(deliveryAggregate).toContain('NEW.requires_review := true');
+    expect(deliveryAggregate).not.toContain('UPDATE public.inventory_transactions');
+    expect(wrapper).toContain('COUNT(*) FILTER (WHERE el.effective_quantity > 0) > 1');
+    expect(wrapper).toContain(
+      'SUM(el.effective_quantity) > COALESCE(inv.quantity_available, 0)',
+    );
+    expect(wrapper).toContain(
+      'MAX(el.effective_quantity) <= COALESCE(inv.quantity_available, 0)',
+    );
+    expect(wrapper).toContain("'app.delivery_aggregate_short_product_ids'");
+    expect(wrapper).toContain("'delivery_short_stock'");
+    expect(wrapper).toContain("'stock_warning', true");
+    expect(wrapper).toContain('UPDATE public.idempotency_keys');
+    expect(wrapper.indexOf("RAISE EXCEPTION 'Not authorized to complete this delivery'")).toBeLessThan(
+      wrapper.indexOf('public.check_idempotency('),
+    );
+    expect(wrapper.indexOf("'app.delivery_aggregate_short_product_ids'")).toBeLessThan(
+      wrapper.indexOf('public._complete_delivery_aggregate_impl('),
+    );
+  });
+
+  it('rejects a closed delivery period before legacy completion side effects', () => {
+    const wrapper = deliveryPeriodPreflight.slice(
+      deliveryPeriodPreflight.indexOf('CREATE FUNCTION public.complete_delivery('),
+      deliveryPeriodPreflight.indexOf('REVOKE ALL ON FUNCTION public.complete_delivery('),
+    );
+
+    expect(deliveryPeriodPreflight).toContain(
+      'RENAME TO _complete_delivery_period_preflight_impl',
+    );
+    expect(deliveryPeriodPreflight).toContain(
+      'REVOKE ALL ON FUNCTION public._complete_delivery_period_preflight_impl(',
+    );
+    expect(wrapper.indexOf("RAISE EXCEPTION 'Not authorized to complete this delivery'")).toBeLessThan(
+      wrapper.indexOf('public.check_idempotency('),
+    );
+    expect(wrapper.indexOf('public.check_idempotency(')).toBeLessThan(
+      wrapper.indexOf('PERFORM public.check_period_open(v_effective_completion_date)'),
+    );
+    expect(wrapper.indexOf('PERFORM public.check_period_open(v_effective_completion_date)')).toBeLessThan(
+      wrapper.indexOf('RETURN public._complete_delivery_period_preflight_impl('),
     );
   });
 

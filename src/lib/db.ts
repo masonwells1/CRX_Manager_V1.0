@@ -99,6 +99,9 @@ export const RpcErrorCodes = {
   FORCE_REQUIRES_REASON: 'FORCE_REQUIRES_REASON',
   INSUFFICIENT_HOLD_INVENTORY: 'INSUFFICIENT_HOLD_INVENTORY',
   INVENTORY_NOT_FOUND: 'INVENTORY_NOT_FOUND',
+  // save_purchase_order — global bulk-import claim identity guards
+  BULK_PO_VENDOR_REQUIRED: 'BULK_PO_VENDOR_REQUIRED',
+  BULK_PO_INTENT_VENDOR_CONFLICT: 'BULK_PO_INTENT_VENDOR_CONFLICT',
   // draw_down_quote / convert_quote_to_order booking guards (sell-side roadmap #1)
   BOOKING_CLOSED: 'BOOKING_CLOSED',
   BOOKING_OVERDRAWN: 'BOOKING_OVERDRAWN',
