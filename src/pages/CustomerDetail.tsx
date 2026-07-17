@@ -12,7 +12,7 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
-import { supabase, assertRpcResult } from '../lib/db';
+import { supabase, assertRpcResult, checkMutationResult } from '../lib/db';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { parseLocalDate, localToday } from '../lib/dateUtils';
 import QuickTaskModal from '../components/team/QuickTaskModal';
@@ -22,6 +22,8 @@ import type { Json } from '../types/supabase';
 import { Sentry } from '../lib/sentry';
 import { parseDollarsToCents } from '../lib/parseCents';
 import { formatUSD as fmt } from '../lib/money';
+import { ALLOWED_CROPS, type CropValue } from '../lib/crops';
+import { logActivity } from '../lib/activityLogger';
 import CustomerSummaryBar from '../components/customers/CustomerSummaryBar';
 import YearEndSummaryDialog from '../components/reports/YearEndSummaryDialog';
 import CustomerContacts, { CustomerInteractionsHistory } from '../components/customers/CustomerContacts';
@@ -108,6 +110,13 @@ export default function CustomerDetail() {
   const [interactionRefresh, setInteractionRefresh] = useState(0);
   const [quotePlannedFilter, setQuotePlannedFilter] = useState(false);
 
+  // Crops chips save immediately on tap (direct update, not part of the
+  // save_customer RPC payload/handleSave flow) — cropSaving tracks which
+  // chip is in flight so it can show a busy state without blocking the rest
+  // of the form.
+  const [crops, setCrops] = useState<CropValue[]>([]);
+  const [cropSaving, setCropSaving] = useState<CropValue | null>(null);
+
   // Financials tab state
   interface AgingRow { customer_id: string; farm_name: string; current_amount: number; days_30: number; days_60: number; days_90: number; over_90: number; total_outstanding: number; open_credit_cents?: number | null }
   interface TxnRow { transaction_date: string; transaction_type: string; reference_number: string; amount_cents: number; running_balance: number }
@@ -138,6 +147,8 @@ export default function CustomerDetail() {
     }
     if (data) {
       setCustomer(data as Customer);
+      // DB type is string[]; the CHECK constraint guarantees values are CropValue.
+      setCrops((data.crops ?? []) as CropValue[]);
       // Fetch parent customer name if set
       if (data.parent_customer_id) {
         const { data: parent, error: parentError } = await supabase
@@ -524,6 +535,41 @@ export default function CustomerDetail() {
 
   const update = (field: string, value: unknown) => setCustomer((c) => ({ ...c, [field]: value }));
 
+  // Crops save immediately via a direct table update (RLS governs authorization) —
+  // deliberately bypassing save_customer, which a parallel session is modifying.
+  const toggleCrop = async (crop: CropValue) => {
+    if (!id || isNew || cropSaving) return;
+    const previousCrops = crops;
+    const nextCrops = previousCrops.includes(crop)
+      ? previousCrops.filter((c) => c !== crop)
+      : [...previousCrops, crop];
+    setCrops(nextCrops);
+    setCropSaving(crop);
+    try {
+      const result = await supabase
+        .from('customers')
+        .update({ crops: nextCrops })
+        .eq('id', id)
+        .select('id');
+      checkMutationResult(result, 'update customer crops');
+      if (profile?.id) {
+        await logActivity({
+          event: 'crops_updated',
+          description: `Updated crops: ${nextCrops.length ? nextCrops.join(', ') : 'none'}`,
+          performedBy: profile.id,
+          entityType: 'customer',
+          customerId: id,
+        });
+      }
+    } catch (error: unknown) {
+      setCrops(previousCrops);
+      Sentry.captureException(error instanceof Error ? error : new Error(String(error)), { extra: { context: 'CustomerDetail.toggleCrop' } });
+      toast('error', error instanceof Error ? error.message : 'Failed to update crops');
+    } finally {
+      setCropSaving(null);
+    }
+  };
+
   if (loading) {
     return <div className="animate-pulse"><div className="h-64 bg-gray-200 rounded" /></div>;
   }
@@ -773,6 +819,34 @@ export default function CustomerDetail() {
               <Input label="Other Acres" type="number" value={customer.other_acres ?? ''} onChange={(e) => update('other_acres', e.target.value ? parseFloat(e.target.value) : null)} />
             </div>
           </Card>
+
+          {!isNew && id && (
+            <Card>
+              <CardHeader title="Farm" accent="Crops" />
+              <p className="text-xs text-secondary mb-2">Tap to toggle — saves immediately, no need to hit Save Changes.</p>
+              <div className="flex flex-wrap gap-2">
+                {ALLOWED_CROPS.map((option) => {
+                  const selected = crops.includes(option.value);
+                  return (
+                    <button
+                      key={option.value}
+                      type="button"
+                      aria-pressed={selected}
+                      disabled={cropSaving === option.value}
+                      onClick={() => void toggleCrop(option.value)}
+                      className={`min-h-11 rounded-full border px-4 text-sm font-medium transition-colors disabled:opacity-60 ${
+                        selected
+                          ? 'border-crx-green bg-crx-green/10 text-crx-green'
+                          : 'border-gray-200 bg-white text-secondary hover:border-gray-300'
+                      }`}
+                    >
+                      {option.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </Card>
+          )}
 
           <Card>
             <CardHeader
