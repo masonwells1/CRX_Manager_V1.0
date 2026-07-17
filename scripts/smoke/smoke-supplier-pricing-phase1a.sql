@@ -123,8 +123,41 @@ END;
 $proof$;
 
 SELECT set_config('request.jwt.claim.sub', '11111111-1111-4111-8111-111111111111', false);
+
+-- Build a real oversized active catalog in the disposable database so the RPC,
+-- not a direct constraint insert, proves the export/import ceiling. These rows
+-- carry no pricing and never leave this throwaway proof database.
+RESET ROLE;
+INSERT INTO public.products(id, product_name, sku)
+SELECT
+  md5('phase1a-workbook-limit-' || series)::uuid,
+  'Phase 1a Workbook Limit ' || series,
+  'PHASE1A-LIMIT-' || lpad(series::text, 5, '0')
+FROM generate_series(1, 5001) AS series;
+SET ROLE authenticated;
+
 DO $proof$
 BEGIN
+  BEGIN
+    PERFORM public.create_pricing_workbook_export(
+      ARRAY(
+        SELECT id
+        FROM public.products
+        WHERE sku LIKE 'PHASE1A-LIMIT-%'
+        ORDER BY sku
+      ),
+      '11111111-1111-4111-8111-111111111111'::uuid,
+      'phase1a-oversized-export'
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: oversized workbook export unexpectedly succeeded';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF SQLSTATE <> '23514'
+       OR SQLERRM NOT LIKE '%pricing_workbook_exports_row_limit%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: oversized workbook export failed for wrong reason (%, %)', SQLSTATE, SQLERRM;
+    END IF;
+  END;
+
   BEGIN
     PERFORM public.create_pricing_workbook_export(
       ARRAY['aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1'::uuid], '22222222-2222-4222-8222-222222222222'::uuid, 'phase1a-forged-actor'

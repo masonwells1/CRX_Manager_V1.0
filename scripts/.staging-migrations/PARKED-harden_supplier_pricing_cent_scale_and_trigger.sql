@@ -384,3 +384,14 @@ BEGIN
   END IF;
 END;
 $per_acre_preview_fix$;
+
+-- Keep the export and import sides of the worksheet round-trip on the same
+-- 5,000-row ceiling. create_pricing_workbook_export() updates row_count in the
+-- same transaction after materializing the manifest, so this database invariant
+-- rejects and atomically rolls back any oversized RPC export. The UI rejects the
+-- request before the RPC for a plain-English owner-facing error.
+ALTER TABLE public.pricing_workbook_exports
+  DROP CONSTRAINT IF EXISTS pricing_workbook_exports_row_limit;
+ALTER TABLE public.pricing_workbook_exports
+  ADD CONSTRAINT pricing_workbook_exports_row_limit
+  CHECK (row_count <= 5000);

@@ -36,6 +36,7 @@ import {
 import {
   generateProductPricingWorkbook,
   MAX_PRICING_WORKBOOK_FILE_BYTES,
+  MAX_PRICING_WORKBOOK_ROWS,
   parseProductPricingWorkbook,
 } from '../lib/productPricingWorkbook';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
@@ -517,6 +518,13 @@ export default function Products() {
       .map((product) => product.id);
     if (productIds.length === 0) {
       toast('warning', 'Select at least one active Product to export.');
+      return;
+    }
+    if (productIds.length > MAX_PRICING_WORKBOOK_ROWS) {
+      toast(
+        'error',
+        `Pricing workbooks are limited to ${MAX_PRICING_WORKBOOK_ROWS.toLocaleString()} Products. Narrow the filters or select a smaller batch.`,
+      );
       return;
     }
     setWorkbookBusy(true);

@@ -5,16 +5,20 @@ const {
   mockApplyPricing,
   mockParsePricing,
   mockPreviewPricing,
+  mockProducts,
   mockProductUpdate,
   mockToast,
   pricingWorkbookFileLimit,
+  pricingWorkbookRowLimit,
 } = vi.hoisted(() => ({
   mockApplyPricing: vi.fn(),
   mockParsePricing: vi.fn(),
   mockPreviewPricing: vi.fn(),
+  mockProducts: [] as Array<Record<string, unknown>>,
   mockProductUpdate: vi.fn(),
   mockToast: vi.fn(),
   pricingWorkbookFileLimit: 10 * 1024 * 1024,
+  pricingWorkbookRowLimit: 1,
 }));
 
 const product = {
@@ -58,7 +62,7 @@ function chainable(resolveWith: unknown) {
 
 vi.mock('../lib/db', () => ({
   supabase: {
-    from: vi.fn(() => chainable({ data: [product], error: null })),
+    from: vi.fn(() => chainable({ data: mockProducts, error: null })),
   },
   sanitizeError: (error: unknown) => error instanceof Error ? error.message : String(error),
   checkMutationResult: vi.fn(),
@@ -77,6 +81,7 @@ vi.mock('../lib/productPricing', async (importOriginal) => {
 vi.mock('../lib/productPricingWorkbook', () => ({
   generateProductPricingWorkbook: vi.fn(),
   MAX_PRICING_WORKBOOK_FILE_BYTES: pricingWorkbookFileLimit,
+  MAX_PRICING_WORKBOOK_ROWS: pricingWorkbookRowLimit,
   parseProductPricingWorkbook: mockParsePricing,
 }));
 
@@ -124,6 +129,7 @@ import Products from './Products';
 describe('Products governed inline pricing flow', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockProducts.splice(0, mockProducts.length, product);
     mockPreviewPricing.mockResolvedValue({
       change_set_id: '22222222-2222-4222-8222-222222222222',
       request_fingerprint: 'inline-fingerprint',
@@ -226,5 +232,26 @@ describe('Products governed inline pricing flow', () => {
     expect(arrayBuffer).not.toHaveBeenCalled();
     expect(mockParsePricing).not.toHaveBeenCalled();
     expect(mockPreviewPricing).not.toHaveBeenCalled();
+  });
+
+  it('rejects an export that would exceed the workbook import row limit', async () => {
+    mockProducts.push({
+      ...product,
+      id: '33333333-3333-4333-8333-333333333333',
+      product_name: 'Second Inline Pricing Product',
+      sku: 'INLINE-002',
+    });
+    render(<Products />);
+    const exportButton = await screen.findByRole('button', { name: 'Pricing .xlsx' });
+    await waitFor(() => expect(exportButton).toBeEnabled());
+
+    // The production ceiling is 5,000. This test uses a one-row ceiling and two
+    // fixtures to prove the guard without manufacturing 5,001 rows.
+    fireEvent.click(exportButton);
+
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
+      'error',
+      'Pricing workbooks are limited to 1 Products. Narrow the filters or select a smaller batch.',
+    ));
   });
 });
