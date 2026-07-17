@@ -17,6 +17,12 @@ Native CRM module shipped end-to-end in one armed autonomous run (mission `docs/
 
 ---
 
+## 2026-07-16 — Migration drift reviewer B7 gate correction
+
+Corrected the trusted migration-drift charter's contradictory version-stamp check. The old wording required a pending disk filename to equal the version Supabase would assign in the future, which is unknowable before `apply_migration` and caused clean migrations to fail closed even after a fresh live-ledger preflight. The reviewer now enforces the real two-stage B7 contract: before apply, the disk timestamp must be strictly above the current live high-water; after apply, the disk file must be renamed to the MCP-assigned live version. `check-agent-guidance.mjs` locks the complete CHECK 6 block to one canonical fail-closed contract and retains adversarial branch/equality checks, so synonym changes cannot silently reintroduce the impossible requirement.
+
+---
+
 ## 2026-07-17 — Exact bulk purchase-order retry replay
 
 The final Sonnet 5 exact-SHA review found one non-corrupting but misleading lost-response path: a successful bulk PO import retried with the same request key was classified as a different-request document duplicate, so the browser could report it as skipped and omit its normal success refresh. Forward migration `20260717032000_replay_bulk_po_same_request_result` applied live as ledger version `20260717032437` and restores the required order after current actor authorization: exact request-key replay returns the original cached `saved` result and stored PO number; only a different request key reaches the durable global document-claim check; and both checks still occur before number allocation. The stacked pre-apply and deployed post-apply adversarial rollback smokes both reached `SMOKE_PASS_ROLLBACK` after proving same-key saved replay, cross-employee different-key duplicate detection, admin delete cleanup, and unchanged-document re-import. Permanent catalog checks found the migration once, exact replay/claim/number ordering, correct grants and fixed search path, the delete-cleanup trigger enabled, and zero claim residue, stale save results, fractional PO costs, or header mismatches. The stale RPC reference now correctly describes `delete_purchase_order` as a guarded permanent delete, and the live schema registry was rebuilt to high-water `20260717032437`.
