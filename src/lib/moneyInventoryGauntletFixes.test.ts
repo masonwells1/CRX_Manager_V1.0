@@ -80,6 +80,9 @@ const blankBulkPOIdentity = source(
 const canonicalBulkPOIdentity = source(
   'supabase/migrations/20260717085512_canonicalize_bulk_po_identity_whitespace.sql',
 );
+const secureBulkPOFingerprintTrigger = source(
+  'supabase/migrations/20260717090000_secure_bulk_po_fingerprint_trigger.sql',
+);
 const completeDelivery = access.slice(0, access.indexOf('CREATE OR REPLACE FUNCTION public.void_delivery'));
 
 describe('money and inventory gauntlet fixes', () => {
@@ -592,6 +595,29 @@ describe('money and inventory gauntlet fixes', () => {
       'FROM PUBLIC, anon;\nGRANT EXECUTE ON FUNCTION public.save_purchase_order(',
     );
     expect(canonicalBulkPOIdentity).toContain('TO authenticated, service_role;');
+  });
+
+  it('runs the deferred bulk PO fingerprint guard with its own locked-down privileges', () => {
+    expect(secureBulkPOFingerprintTrigger).toContain(
+      'CREATE OR REPLACE FUNCTION public._require_bulk_po_content_fingerprint()',
+    );
+    expect(secureBulkPOFingerprintTrigger).toContain(
+      'LANGUAGE plpgsql\nSECURITY DEFINER\nSET search_path = public, pg_temp',
+    );
+    expect(secureBulkPOFingerprintTrigger).toContain(
+      'FROM PUBLIC, anon, authenticated, service_role;',
+    );
+    expect(secureBulkPOFingerprintTrigger).toContain(
+      't.tgdeferrable AND t.tginitdeferred',
+    );
+    expect(secureBulkPOFingerprintTrigger).toContain(
+      "has_function_privilege('authenticated', 'public._require_bulk_po_content_fingerprint()', 'EXECUTE')",
+    );
+    const smoke = source('scripts/smoke/smoke-adversarial-money-inventory-closeout.sql');
+    expect(smoke).toContain('SET LOCAL ROLE authenticated;');
+    expect(smoke).toContain(
+      'SET CONSTRAINTS require_bulk_po_content_fingerprint IMMEDIATE;',
+    );
   });
 
   it('authorizes invoice saves and statements against active customer assignment before replay', () => {

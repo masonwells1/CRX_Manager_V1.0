@@ -1,7 +1,7 @@
 -- Post-apply rollback-only proof for migrations 20260716213000,
 -- 20260716224000, 20260716233000, 20260717010000, 20260717015439,
 -- 20260717032000, 20260717045420, 20260717063445, 20260717070900,
--- 20260717081856, and 20260717085512.
+-- 20260717081856, 20260717085512, and 20260717090000.
 -- Exercises the exact adversarial findings without retaining business rows.
 DO $smoke$
 DECLARE
@@ -477,6 +477,14 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_FAIL: expected one PO for two import attempts, got %', v_count;
   END IF;
 
+  -- Prove the first logical import's commit-time trigger before this combined
+  -- rollback harness deliberately deletes that PO later. Restore deferred mode
+  -- so the delete -> re-import scenario behaves like a separate real request.
+  SET LOCAL ROLE authenticated;
+  SET CONSTRAINTS require_bulk_po_content_fingerprint IMMEDIATE;
+  SET CONSTRAINTS require_bulk_po_content_fingerprint DEFERRED;
+  RESET ROLE;
+
   PERFORM set_config(
     'request.jwt.claims',
     json_build_object('sub', v_sales, 'role', 'authenticated')::text,
@@ -707,6 +715,16 @@ BEGIN
      AND content_fingerprint ~ '^[0-9a-f]{64}$';
   IF v_count <> 1 THEN
     RAISE EXCEPTION 'SMOKE_FAIL: re-imported document did not receive one fresh durable claim';
+  END IF;
+
+  -- The public writer's SECURITY DEFINER frame has ended. Force the normally
+  -- commit-time trigger while the caller role is authenticated; this proves
+  -- the trigger function has its own controlled access to the deny-all-RLS
+  -- intent table. A final exception still rolls every disposable row back.
+  SET LOCAL ROLE authenticated;
+  SET CONSTRAINTS require_bulk_po_content_fingerprint IMMEDIATE;
+  IF current_user IS DISTINCT FROM 'authenticated' THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: deferred trigger proof did not run as authenticated';
   END IF;
 
   RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK';

@@ -24,6 +24,7 @@ Project-specific quirks that aren't obvious from reading the code, but have caus
 | Supabase returns `null` for missing columns; React props expect `undefined` | Use `?? undefined` when passing through |
 | PostGIS RPCs need `SET search_path = public, extensions` | Without `extensions`, geometry functions are not found |
 | Every SECURITY DEFINER function MUST `SET search_path = public, pg_temp` | Hard rule — not optional. Empty `''` search_path is a 2026-05 finding pattern (PR-12). pg_temp prevents temp-table hijacking. |
+| A deferred trigger does not inherit the caller RPC's `SECURITY DEFINER` context | `DEFERRABLE INITIALLY DEFERRED` triggers run after the RPC returns, commonly at commit. If the trigger function must read an RPC-owned/RLS-denied table, the trigger function itself needs `SECURITY DEFINER`, a fixed `search_path`, revoked direct execution, and a proof that forces the deferred trigger to fire after the public RPC returns. A rollback-only smoke that never runs `SET CONSTRAINTS ... IMMEDIATE` cannot prove this path. |
 | `payments.amount` is `numeric` dollars, NOT `bigint` cents | RPCs convert: `(p_amount_cents / 100.0)::numeric(12,2)` |
 | `commissions.commission_amount` is `numeric` dollars (NOT `_cents`) | Same as payments — historical exception |
 | `deliveries.scheduled_date` (NOT `delivery_date`) | Always check `information_schema.columns` before assuming a column name. Re-introduced in `complete_delivery` + `void_delivery` 2026-05-09 (PR-01); column refs crashed any closed-period warn path. |
