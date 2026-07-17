@@ -521,6 +521,7 @@ describe('money and inventory gauntlet fixes', () => {
     expect(browserRetry).toContain(
       'replace(/[A-Z]/g, (character) => character.toLowerCase())',
     );
+    expect(browserRetry).toContain("replace(/^ +| +$/g, '')");
     expect(browserRetry).toContain('BULK_PO_DOCUMENT_CONTENT_CONFLICT');
     expect(browserRetry).toContain('Open the existing purchase order and edit it instead.');
   });

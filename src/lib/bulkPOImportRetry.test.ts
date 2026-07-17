@@ -74,7 +74,7 @@ describe('bulk PO import retry state', () => {
     expect(buildBulkPOIntentKey(corrected)).toBe(buildBulkPOIntentKey(document));
   });
 
-  it('uses deterministic ASCII case folding without changing non-ASCII bytes', () => {
+  it('uses a byte-identical non-ASCII identity and SHA-256 claim vector', async () => {
     const document = {
       vendorName: ' VENDOR Élan ',
       invoiceNumber: ' INV-Ä100 ',
@@ -82,9 +82,20 @@ describe('bulk PO import retry state', () => {
       items: [],
     };
 
-    expect(buildBulkPOIntentKey(document)).toBe('vendor Élan\u001finv-Ä100');
+    const intentKey = buildBulkPOIntentKey(document);
+    expect(intentKey).toBe('vendor Élan\u001finv-Ä100');
+    expect(intentKey).not.toBeNull();
+    await expect(buildBulkPODocumentClaimKey(intentKey!))
+      .resolves.toBe(
+        'bulk-po-document:b5757ccd0340e268c9347beb855a1bcf86e631ee1de49483dba02c00007923ac',
+      );
     expect(buildBulkPOIntentKey({ ...document, vendorName: 'vendor élan' }))
       .not.toBe(buildBulkPOIntentKey(document));
+
+    expect(buildBulkPOIntentKey({
+      ...document,
+      vendorName: ' \tVENDOR Élan\t ',
+    })).toBe('\tvendor Élan\t\u001finv-Ä100');
   });
 
   it('turns durable-claim conflicts into actionable import guidance', () => {
@@ -164,6 +175,26 @@ describe('bulk PO import retry state', () => {
     const migrated = loadPendingBulkPOIntents(storage, 'sales-1', 2_000);
     expect(getPendingBulkPOIntent(migrated, identity)?.idempotencyKey).toBe('idem-legacy');
     expect(Object.keys(migrated)).toEqual([hashed]);
+  });
+
+  it('recognizes and upgrades a legacy Unicode-folded non-ASCII marker', () => {
+    const freshIdentity = 'vendor Élan\u001finv-Ä100';
+    const legacyIdentity = freshIdentity.toLowerCase();
+    const storage = fakeStorage();
+    storage.setItem('crx:bulk-po-import-pending:sales-1', JSON.stringify({
+      [legacyIdentity]: {
+        idempotencyKey: 'idem-unicode-legacy',
+        status: 'imported',
+        updatedAt: 1_000,
+        poId: 'po-legacy',
+      },
+    }));
+
+    const migrated = loadPendingBulkPOIntents(storage, 'sales-1', 2_000);
+    expect(getPendingBulkPOIntent(migrated, freshIdentity)?.poId).toBe('po-legacy');
+    const entry = ensurePendingBulkPOIntent(migrated, freshIdentity, () => 'unused', 3_000);
+    expect(entry.poId).toBe('po-legacy');
+    expect(Object.keys(migrated)).toEqual([pendingBulkPOIntentStorageKey(freshIdentity)]);
   });
 
   it('reuses pending work and persists successful imports across close/reopen', () => {

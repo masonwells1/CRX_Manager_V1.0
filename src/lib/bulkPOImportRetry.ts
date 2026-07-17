@@ -37,8 +37,11 @@ export interface BulkPOIntentDocument {
 function normalizeIdentityText(value: string): string {
   // Postgres locale-aware lower() and JavaScript Unicode case folding can
   // disagree. Fold ASCII explicitly on both sides of the RPC boundary and
-  // preserve every non-ASCII code point byte-for-byte.
-  return value.trim().replace(/[A-Z]/g, (character) => character.toLowerCase());
+  // preserve every non-ASCII code point byte-for-byte. PostgreSQL btrim(text)
+  // removes ASCII spaces only, so use the same boundary trim here.
+  return value
+    .replace(/^ +| +$/g, '')
+    .replace(/[A-Z]/g, (character) => character.toLowerCase());
 }
 
 const DOCUMENT_IDENTITY_SEPARATOR = '\u001f';
@@ -160,7 +163,9 @@ export function getPendingBulkPOIntent(
   pending: PendingBulkPOIntents,
   intentKey: string,
 ): PendingBulkPOIntent | undefined {
-  return pending[pendingBulkPOIntentStorageKey(intentKey)];
+  const currentKey = pendingBulkPOIntentStorageKey(intentKey);
+  const legacyUnicodeFoldKey = pendingBulkPOIntentStorageKey(intentKey.toLowerCase());
+  return pending[currentKey] ?? pending[legacyUnicodeFoldKey];
 }
 
 function storageKey(profileId: string): string {
@@ -221,8 +226,13 @@ export function ensurePendingBulkPOIntent(
   now = Date.now(),
 ): PendingBulkPOIntent {
   const storageIntentKey = pendingBulkPOIntentStorageKey(intentKey);
-  const existing = pending[storageIntentKey];
+  const legacyUnicodeFoldKey = pendingBulkPOIntentStorageKey(intentKey.toLowerCase());
+  const existing = pending[storageIntentKey] ?? pending[legacyUnicodeFoldKey];
   if (existing) {
+    if (legacyUnicodeFoldKey !== storageIntentKey && pending[legacyUnicodeFoldKey]) {
+      pending[storageIntentKey] = existing;
+      delete pending[legacyUnicodeFoldKey];
+    }
     existing.updatedAt = now;
     return existing;
   }
