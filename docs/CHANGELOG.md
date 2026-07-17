@@ -4,6 +4,10 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-17 — Split-billing architecture dig + per-line-item custom-split design spec v2 (review-hardened via gpt-5.6-terra xhigh plan review; 4 blockers folded in). Owner workflow settled: field split=default, adjust in unposted draft, unpost reversible. Committed 4b695109; Codex builds next week. No code/DB changes.
+
+Split-billing architecture dig + per-line-item custom-split design spec v2 (review-hardened via gpt-5.6-terra xhigh plan review; 4 blockers folded in). Owner workflow settled: field split=default, adjust in unposted draft, unpost reversible. Committed 4b695109; Codex builds next week. No code/DB changes.
+
 ## 2026-07-17 — Add CodeRabbit AI PR-review config (.coderabbit.yaml) tuned to CRX hard rules; opened PR #160. GitHub setup inspection: confirmed CodeQL default-setup, secret scanning, Dependabot, protect-main ruleset all active; repo kept public per Mason.
 
 Add CodeRabbit AI PR-review config (.coderabbit.yaml) tuned to CRX hard rules; opened PR #160. GitHub setup inspection: confirmed CodeQL default-setup, secret scanning, Dependabot, protect-main ruleset all active; repo kept public per Mason.

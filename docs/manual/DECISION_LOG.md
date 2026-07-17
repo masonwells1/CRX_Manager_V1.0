@@ -9,6 +9,26 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 
 ---
 
+## 2026-07-17 — SETTLED: split-billing model = per-line custom splits on the FIELD-APP path; order-side engine retired later
+
+**Decision (Mason, 2026-07-17):** the app's real split-billing model is **per-line-item custom
+splits at the field-application-invoice stage** — default each line from field ownership
+(`field_billing_defaults`), adjust who-pays-what and one-off prices in the UNPOSTED draft, post =
+the actual invoice, and **unpost stays reversible** (edit-then-repost, with an append-only post
+snapshot). This **refines the 2026-06-17 "splits are order-side" decision below**: the FIELD-APP
+path (`field_app_locations` → `invoice_shares`, one child invoice per customer) is the surface we
+build on; the order-side engine (`order_shares` / `order_item_field_allocations` /
+`create_split_invoices_from_order`) is **unproven (0 live rows), NOT dead — retire it LATER** in a
+separate cleanup after confirming zero real executions, and `order_line_allocations` (dead twin,
+only ever DELETEd) can't be dropped standalone until `_update_order_items_impl`'s delete refs go.
+**Operative rule:** new split-billing work targets the field-app path; do not extend or newly
+depend on the order-side engine; the full build spec (3 advisor passes — gpt-5.6-terra design +
+xhigh plan-review, claude-fable-5 money-math) is `docs/plans/per-line-item-split-billing-spec-2026-07-17.md`.
+Money math is pinned there (half-away-from-zero, one shared numeric preview+post engine,
+`amount_cents` display-authoritative, post-time SUM assertions, group total is reporting-only not a
+5th balance lever). **Not built** — Mason builds it in Codex next week; §6.1 baseline real-billing
+cycle first.
+
 ## 2026-07-17 — SETTLED: CodeRabbit is the standing every-PR AI reviewer; FarmRx made public
 
 **Decision (Mason, 2026-07-17):** enable CodeRabbit (AI PR reviewer) on both public repos and
@@ -239,6 +259,10 @@ must respect the same precedence (verified: migration `20260623120000`).
 ---
 
 ## 2026-06-17 — Split invoices modeled order-side, allocated by field/acre
+
+**⚠ SUPERSEDED by the 2026-07-17 split-billing decision (top of log).** Kept for historical rationale
+only. The operative surface is now the FIELD-APP path (per-line custom splits); the order-side
+`order_shares` engine is unproven and slated for retirement. Do NOT treat the guidance below as current.
 
 **Decision:** Multi-customer billing splits live on the order side (`order_shares` /
 `invoice_shares`), allocated by field/acre rather than by dollar percentage alone.
