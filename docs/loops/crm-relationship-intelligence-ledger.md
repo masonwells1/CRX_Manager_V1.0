@@ -45,9 +45,9 @@ Statuses: TODO / BUILDING / GATE / DONE / PARKED(reason)
 ## Final gauntlet
 | step | reviewer | status | verdict |
 |---|---|---|---|
-| Claude fresh-context review agents (full delta) | compliance / rls-security / types-drift | TODO | — |
-| Sol adversarial review (full delta, xhigh) | gpt-5.6-sol | TODO | — |
-| Morning report + docs + memory | orchestrator | TODO | — |
+| Claude fresh-context review agents (full delta) | compliance / rls-security / types-drift | DONE | compliance: 0 BLOCKER, 2H+5M cross-phase drift → 6 fixed (canonical parser, narrow casts, 11 error tokens, confirm-before-deactivate, unified actor sourcing, code-based error detection) + 1 tracked (idempotent RPC chip) · rls-security (system-level): **CLEAN** — anon/PUBLIC lockout live-proven on 6 tables + 12 fns + bucket; V1 closed by live proacl sweep, V2 by hash-bound-apply chain + live body spot-check; 1 MED (assignment-scoped aggregates) confirmed settled → DECISION_LOG 2026-07-17 · types-drift: **NO DRIFT** (registry vendors.deleted_at transcription gap found + repaired via script) |
+| Sol adversarial review (full delta, xhigh) | gpt-5.6-sol | DONE | r1 BLOCK (1 process-BLOCKER + 3H + 4M) → fixes: DB-side primary protection (is_primary=false mutation predicates), contacts race/scope guards + remount, prep-card refresh nonce, \$0 threshold honored, retry-unsafe inserts + 2 Phase-5 seams RECORDED → r2 BLOCK (stale-state predicate + test demand) → r3 BLOCK (test chain-scoping) → r4 **APPROVE** |
+| Morning report + docs + memory | orchestrator | DONE | morning report written (Sol verdict filled); CHANGELOG 2026-07-17 entry; CURRENT_STATE feature map; DECISION_LOG ×2 (assignment-scoped aggregates; tier/crop); memory project_crm-loop-shipped-2026-07-17 |
 
 ## Scope decisions (recorded when the mission text was narrowed)
 - **Phase 3.2 filters — RESOLVED (2026-07-16, Sol 3.G r1 H1 + r2 H1).** Mission listed rep/tier/crop/last-contact filters. SHIPPED: rep filter (admins, via the RPCs' p_rep_id), tier filter (client-side lookup of customers.assigned_tier for loaded rows — no schema change), last-contact (displayed per row; the no-contact list is itself that filter), per-row prep-card peek. CROP filter → moved to Parked questions as a genuine OWNER decision (see below): crop data lives in field crop history, not on the customer, so "filter growers by crop" first needs Mason to say which source of truth counts.

@@ -28,7 +28,7 @@ Two call lists (prepay prospects, lapsed products) are **correctly empty right n
 - Compliance (conventions + red lines): 0 blockers; 2 HIGH + 5 MED cross-phase drift findings — 6 fixed, 1 tracked (below).
 - Types-vs-live drift: **zero drift**; one registry transcription defect found and repaired.
 - Security (system-level, live-verified): **CLEAN** — anon/PUBLIC lockout proven live on all 6 tables + 12 functions + the bucket; Phase-5 provenance seams confirmed intact.
-- Sol whole-loop review: {{SOL_FINAL_VERDICT}}
+- Sol whole-loop review: **APPROVE** (round 4 — rounds 1-3 drove 8 more fixes: stale-state-proof primary protection with regression tests, contacts race guards, prep-card refresh, $0 threshold, and two recorded Phase-5 preconditions).
 
 ## Decisions parked for you (nothing blocking)
 1. **`save_customer` permission gap (pre-existing, NOT from this loop):** any sales rep can currently edit any customer, including credit fields. A task chip is ready to spin off the fix — you decide: restrict edits to the assigned rep + admins, or keep office-manager-style open editing?
