@@ -37,6 +37,8 @@ function normalizeIdentityText(value: string): string {
   return value.trim().toLowerCase();
 }
 
+const DOCUMENT_IDENTITY_SEPARATOR = '\u001f';
+
 /**
  * Normalize the two date shapes accepted by the OCR review form without
  * relying on locale-sensitive Date parsing. Missing or unrecognized dates are
@@ -69,9 +71,10 @@ export function normalizeBulkPOInvoiceDate(value: string): string | null {
 }
 
 /**
- * Stable business-document identity used across file reselection and reorder.
- * File name, browser file position, size, and modified time are deliberately
- * excluded: those can change without changing the vendor document itself.
+ * Stable vendor-document identity used across file reselection, OCR correction,
+ * and line review. File metadata, date, product matching, quantities, costs,
+ * units, and notes are deliberately excluded: those describe the reviewed
+ * content, but must not let one vendor invoice acquire a second durable claim.
  */
 export function buildBulkPOIntentKey(document: BulkPOIntentDocument): string | null {
   const vendorName = normalizeIdentityText(document.vendorName);
@@ -79,31 +82,14 @@ export function buildBulkPOIntentKey(document: BulkPOIntentDocument): string | n
   // The claim is global across employees and devices. Without a vendor, two
   // unrelated vendors that reuse an invoice number and line layout could be
   // mistaken for the same business document.
-  if (!vendorName || !invoiceNumber) return null;
+  if (
+    !vendorName
+    || !invoiceNumber
+    || vendorName.includes(DOCUMENT_IDENTITY_SEPARATOR)
+    || invoiceNumber.includes(DOCUMENT_IDENTITY_SEPARATOR)
+  ) return null;
 
-  const items = document.items
-    .filter((item) => item.productId && item.quantityOrdered > 0)
-    .map((item) => ({
-      product_id: item.productId,
-      quantity_ordered: item.quantityOrdered,
-      unit_cost_cents: item.unitCostCents,
-      unit_size: normalizeIdentityText(item.unitSize),
-      notes: normalizeIdentityText(item.notes),
-    }))
-    .sort((left, right) => {
-      const leftKey = JSON.stringify(left);
-      const rightKey = JSON.stringify(right);
-      return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
-    });
-
-  if (items.length === 0) return null;
-
-  return JSON.stringify({
-    vendor_name: vendorName,
-    invoice_number: invoiceNumber,
-    invoice_date: normalizeBulkPOInvoiceDate(document.invoiceDate),
-    items,
-  });
+  return `${vendorName}${DOCUMENT_IDENTITY_SEPARATOR}${invoiceNumber}`;
 }
 
 /**

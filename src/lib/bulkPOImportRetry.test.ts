@@ -21,7 +21,7 @@ function fakeStorage() {
 }
 
 describe('bulk PO import retry state', () => {
-  it('uses stable document content across file reorder and line reorder', () => {
+  it('uses stable vendor-invoice identity across file reorder and line reorder', () => {
     const firstDocument = {
       vendorName: '  Vendor A ',
       invoiceNumber: 'INV-100',
@@ -48,6 +48,27 @@ describe('bulk PO import retry state', () => {
 
     expect(new Set(reorderedSelection)).toEqual(new Set(firstSelection));
     expect(firstSelection.every(Boolean)).toBe(true);
+  });
+
+  it('keeps one identity when reviewed date, matching, quantity, cost, unit, or notes change', () => {
+    const document = {
+      vendorName: ' Vendor A ',
+      invoiceNumber: ' INV-100 ',
+      invoiceDate: '',
+      items: [
+        { productId: null, quantityOrdered: 1, unitCostCents: 300, unitSize: '', notes: 'ocr' },
+      ],
+    };
+
+    const corrected = {
+      ...document,
+      invoiceDate: '2026-07-16',
+      items: [
+        { productId: 'product-a', quantityOrdered: 12, unitCostCents: 333, unitSize: 'GAL', notes: 'reviewed' },
+      ],
+    };
+
+    expect(buildBulkPOIntentKey(corrected)).toBe(buildBulkPOIntentKey(document));
   });
 
   it('canonicalizes equivalent invoice dates and excludes missing or invalid fallbacks', () => {
@@ -83,6 +104,7 @@ describe('bulk PO import retry state', () => {
 
     expect(buildBulkPOIntentKey({ ...document, vendorName: '   ' })).toBeNull();
     expect(buildBulkPOIntentKey({ ...document, invoiceNumber: '   ' })).toBeNull();
+    expect(buildBulkPOIntentKey({ ...document, invoiceNumber: `INV\u001f100` })).toBeNull();
   });
 
   it('derives the same cross-tab idempotency key for the same reviewed intent', async () => {

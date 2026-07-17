@@ -22,6 +22,7 @@ import {
   ensurePendingBulkPOIntent,
   loadPendingBulkPOIntents,
   markBulkPOIntentImported,
+  normalizeBulkPOInvoiceDate,
   savePendingBulkPOIntents,
   type PendingBulkPOIntents,
 } from '../../lib/bulkPOImportRetry';
@@ -450,6 +451,10 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
             expected_delivery_date: null,
             notes: noteParts.join('. '),
             bulk_import_intent_key: documentClaimKey,
+            // The database independently recomputes the stable claim from
+            // vendor + reference and fingerprints the reviewed date/lines.
+            bulk_import_vendor_reference: po.invoice_number.trim(),
+            bulk_import_invoice_date: normalizeBulkPOInvoiceDate(po.invoice_date),
           },
           p_items: itemsPayload,
           p_performed_by: profile.id,
