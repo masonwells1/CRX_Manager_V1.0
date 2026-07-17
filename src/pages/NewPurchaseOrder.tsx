@@ -219,7 +219,8 @@ export default function NewPurchaseOrder() {
           }));
 
           const { data, error } = await supabase.rpc('save_purchase_order', {
-            p_po_id: poId,
+            // SQL accepts NULL (create-new path); the regenerated types can't express a nullable required arg.
+            p_po_id: poId as string,
             p_po_payload: poPayload,
             p_items: itemsPayload,
             p_performed_by: profile.id,

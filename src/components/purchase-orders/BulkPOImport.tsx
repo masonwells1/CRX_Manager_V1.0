@@ -392,7 +392,8 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
           notes: item.notes || null,
         }));
         const { data: poData, error: poError } = await supabase.rpc('save_purchase_order', {
-          p_po_id: null,
+          // SQL accepts NULL (create-new path); the regenerated types can't express a nullable required arg.
+          p_po_id: null as unknown as string,
           p_po_payload: {
             po_number: poNumber,
             vendor: po.vendor_name.trim() || 'Unknown Vendor',
