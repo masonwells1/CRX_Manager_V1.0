@@ -7,7 +7,7 @@
 - `customers` - Farms (farm_name, assigned_sales_rep, assigned_tier 1-4, credit_limit, finance_charge_rate, prepay_balance)
 - `customer_addresses` - Multiple addresses per customer (label, address, delivery_notes, is_default)
 - `products` - Product master (product_name, sku, category, vendor, tier1-4 pricing, EPA reg, RUP status, signal_word, rei_hours [WPS restricted-entry interval], phi_days [pre-harvest interval], product_form, notes [grower description], internal_notes [internal only])
-- `cost_history` - Cost change audit log (product_id, old/new costs and prices, change_note)
+- `cost_history` - Cost change audit log (product_id, old/new costs and prices, change_note). The parked Supplier Pricing Phase 1a draft extends it with margins, source/reason, change-set identity, and old/new pricing versions; those additions are **not live** until a separate migration APPLY session.
 - `fields` - Farm fields (customer_id, field_name, county, acres, FSA numbers, Mapbox polygon geometry)
 - `field_obstacles` - Point hazards pinned to fields (kind, optional label, GeoJSON Point, created_by). Readable by admin/sales/applicators (matches fields); maintained by admin/sales reps.
 - `job_loader_worksheets` - Saved loader/tank scenarios per job (capacity, balancing mode, per-load acres, loads-done, one selected per job). Reads follow job visibility; office-only writes.
@@ -135,12 +135,13 @@
 ## Crop History
 - `field_crop_history` - Tracks multi-year crop rotation per field per season (id, field_id, season, crop_type, variety, planting_date, harvest_date, yield_per_acre, yield_unit, notes, created_at). Auto-populated via `snapshot_field_crop_history()` trigger on field crop_type changes. RLS enabled for authenticated users.
 
-## Document Processing
-- `document_processing_log` - OCR/document processing audit (user_id, document_type CHECK: invoice/purchase_order/price_list/product_list/customer_list/quote_list, file_name, file_size_bytes, page_count, processing_time_ms, confidence, items_extracted, success, error_message)
-
 ## System / Infrastructure
 - `idempotency_keys` - Idempotent operation cache (idempotency_key UNIQUE, operation, result jsonb, expires_at — auto-cleanup after 24h)
 - `offline_action_receipts` — **LIVE** (`20260714171331`, `20260714171800`, `20260714172135`, `20260714203709`): permanent server acknowledgement for approved offline `complete_delivery` / `complete_job` actions. Immutable client action UUID + permanent idempotency key + optional queued entity `updated_at` snapshot, statuses `received` / `succeeded` / `needs_review`, sanitized target/payload-drift failures, audited `already_completed` / `abandoned` office-resolution metadata, and target-row locking from the final snapshot check through canonical completion. Office resolution never changes the receipt to `succeeded`, never reruns the business action, and never deletes the receipt. Direct authenticated table access remains denied; clients use sanitized RPCs.
+
+### Parked Supplier Pricing Phase 1a draft — NOT LIVE
+
+`scripts/.staging-migrations/20260716210000_supplier_pricing_phase1a.sql` proposes the additive bootstrap: a dedicated `products.pricing_version`, private/RLS-enabled `pricing_workbook_exports` + export rows, `pricing_change_sets` + approved rows + preview rows, three admin-only pricing RPCs, and trigger-owned history for governed writes while the deployed legacy editor remains compatible. `scripts/.staging-migrations/20260716211000_supplier_pricing_phase1a_cutover.sql` is a separate post-frontend cutover that removes direct pricing/history grants and makes the governed path mandatory. These objects and permissions must not be treated as current production schema until each draft is separately promoted, reviewed, authorized, applied, and verified in order.
 - `rate_limit_log` - Rate limiting tracker (user_id, operation, created_at — accessed only by SECURITY DEFINER functions)
 - `rate_limits` - Per-user sliding-window counter (user_id, action_name, window_start, request_count — accessed only by SECURITY DEFINER functions)
 
@@ -222,7 +223,6 @@
 | failed_notifications | Admin | Admin | Admin | - |
 | invoice_shares | Admin / Sales Rep | Admin / Sales Rep | - | Admin |
 | order_shares | Admin / Sales Rep | Admin / Sales Rep | - | Admin |
-| document_processing_log | Own user_id | Own user_id | - | - |
 | idempotency_keys | - (SECURITY DEFINER only) | - (SECURITY DEFINER only) | - | - |
 | offline_action_receipts | Owner / Admin / Sales via sanitized RPC only | - (SECURITY DEFINER RPC only) | - (SECURITY DEFINER RPC only) | - |
 | rate_limit_log | - (SECURITY DEFINER only) | - (SECURITY DEFINER only) | - | - |

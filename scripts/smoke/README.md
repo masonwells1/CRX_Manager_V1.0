@@ -81,6 +81,28 @@ The same disposable database loads the checked-in atomic OCR commit function
 and proves three real two-session losers roll back cleanly: approval-first,
 link-first, and lease-change-first.
 
+## Disposable Supplier Pricing Phase 1a proof
+
+The two parked pricing stages have a separate, production-isolated proof
+because they do not exist in the live migration chain yet:
+
+```bash
+node scripts/smoke/prove-supplier-pricing-phase1a.mjs
+```
+
+The runner creates a uniquely named PostgreSQL 17 container with networking
+disabled and data in tmpfs, loads a live-shaped minimal base, compiles the exact
+parked additive bootstrap, proves the currently deployed editor can still write
+one legacy Product/history pair without double logging, then compiles the exact
+parked cutover. The final-state proof exercises authorization, a three-Product
+worksheet covering both pricing modes, exact history values, formula/tamper/
+version/collision-safe identity conflicts, atomic rollback, durable idempotent
+replay and cross-change-set key rejection, direct-write denial, and exactly-once
+history. It also proves an ordinary rate edit can recalculate server-derived
+per-acre prices while a caller still cannot write those derived values directly.
+The runner force-removes the exact container in `finally`; it never
+reads a Supabase URL and does not apply or alter production.
+
 Safety notes:
 
 - Chains run as table owner; direct fixture INSERTs bypass RLS but the RPCs

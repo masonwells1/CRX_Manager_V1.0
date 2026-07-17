@@ -43,6 +43,14 @@ The last adversarial review found three narrower bulk-import issues: a server-si
 
 ---
 
+## 2026-07-16 — Supplier Pricing Phase 1a database draft checkpoint (not live)
+
+Prepared and proved the database half of the owner-controlled pricing safety foundation without changing production. The SQL is split into an additive bootstrap at `scripts/.staging-migrations/20260716210000_supplier_pricing_phase1a.sql` and a later enforcement cutover at `scripts/.staging-migrations/20260716211000_supplier_pricing_phase1a_cutover.sql`. The bootstrap adds pricing versions, retained workbook manifests/change sets, atomic/idempotent admin RPCs, and trigger-owned history for governed writes while preserving the deployed legacy Product editor. The cutover closes direct pricing/history writes only after the RPC frontend is deployed.
+
+A network-disabled disposable PostgreSQL proof compiles both exact drafts, first proves the bootstrap remains compatible with the deployed editor, then proves final direct-write denial, both pricing modes across three Products, collision-safe identity conflicts, exact preview/apply and history values, atomic rollback, and durable retry/replay behavior. The already-built frontend/OCR retirement work is intentionally held out of this checkpoint because the repository forbids committing production callers before their RPCs exist live. It will be restored only after the separately reviewed bootstrap APPLY step. No live migration, deployment, merge, secret, or production data change was performed.
+
+---
+
 ## 2026-07-16 — Scaffolding review Wave 4c: stale-anchor doc corrections
 
 Fixed the stale claims the review flagged in two high-read docs (each verified against current reality this session):
