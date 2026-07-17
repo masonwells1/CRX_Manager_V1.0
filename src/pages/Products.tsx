@@ -105,6 +105,7 @@ export default function Products() {
         .from('products')
         .select('*')
         .order('product_name')
+        .order('id')
         .range(from, from + PAGE_SIZE - 1);
       if (error) {
         Sentry.captureException(error);
