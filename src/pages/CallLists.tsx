@@ -12,6 +12,7 @@ import { assertRpcResult, supabase } from '../lib/db';
 import { Sentry } from '../lib/sentry';
 import { formatCents } from '../lib/money';
 import { parseDollarsToCents } from '../lib/parseCents';
+import { ALLOWED_CROPS, type CropValue } from '../lib/crops';
 
 type CallListKey = 'prepay' | 'no-recent-contact' | 'stale-quotes' | 'lapsed-products' | 'unassigned-accounts';
 
@@ -255,6 +256,8 @@ export default function CallLists() {
   const [tiersByCustomer, setTiersByCustomer] = useState<Record<string, number | null>>({});
   const [tiersError, setTiersError] = useState(false);
   const [tiersLoadNonce, setTiersLoadNonce] = useState(0);
+  const [cropFilter, setCropFilter] = useState<CropValue | ''>('');
+  const [cropsByCustomer, setCropsByCustomer] = useState<Record<string, CropValue[]>>({});
   const [rows, setRows] = useState<CallListRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
@@ -342,6 +345,7 @@ export default function CallLists() {
     setRows([]);
     setPeekKey(null);
     setTierFilter('');
+    setCropFilter('');
     setSelectedList(key);
   };
 
@@ -372,31 +376,36 @@ export default function CallLists() {
   // alone would collide as a React key.
   const rowKey = (row: CallListRow) => ('quote_id' in row ? row.quote_id : row.customer_id);
 
-  // Tier is not part of the RPC payloads — look it up client-side for the
-  // loaded rows so the tier filter needs no schema change.
+  // Tier and crops are not part of the RPC payloads — look them up client-side
+  // for the loaded rows in one shared query so neither filter needs a schema
+  // change to the call-list RPCs themselves.
   useEffect(() => {
     const ids = [...new Set(rows.map((row) => row.customer_id))];
     if (ids.length === 0) {
       setTiersByCustomer({});
+      setCropsByCustomer({});
       setTiersError(false);
       return;
     }
     let cancelled = false;
     void (async () => {
-      const { data, error } = await supabase.from('customers').select('id, assigned_tier').in('id', ids);
+      const { data, error } = await supabase.from('customers').select('id, assigned_tier, crops').in('id', ids);
       if (cancelled) return;
       if (error || !data) {
-        // Fail SAFE: clear tier data and force the filter off so a partial
-        // lookup can never silently hide rows — the select is replaced by a
-        // retry button until the lookup succeeds (Sol 3.G r3).
+        // Fail SAFE: clear tier/crop data and force both filters off so a
+        // partial lookup can never silently hide rows — the selects are
+        // replaced by a retry button until the lookup succeeds (Sol 3.G r3).
         setTiersByCustomer({});
+        setCropsByCustomer({});
         setTierFilter('');
+        setCropFilter('');
         setTiersError(true);
         Sentry.captureException(new Error(error ? error.message : 'tier lookup returned no data'), { extra: { context: 'CallLists.tiers' } });
         return;
       }
       setTiersError(false);
       setTiersByCustomer(Object.fromEntries(data.map((customer) => [customer.id, customer.assigned_tier])));
+      setCropsByCustomer(Object.fromEntries(data.map((customer) => [customer.id, (customer.crops ?? []) as CropValue[]])));
     })();
     return () => {
       cancelled = true;
@@ -413,9 +422,10 @@ export default function CallLists() {
     return rows.filter((row) => {
       if (normalizedSearch && !(row.farm_name || '').toLowerCase().includes(normalizedSearch)) return false;
       if (tierFilter !== '' && String(tiersByCustomer[row.customer_id] ?? '') !== tierFilter) return false;
+      if (cropFilter !== '' && !(cropsByCustomer[row.customer_id] || []).includes(cropFilter)) return false;
       return true;
     });
-  }, [rows, search, tierFilter, tiersByCustomer]);
+  }, [rows, search, tierFilter, tiersByCustomer, cropFilter, cropsByCustomer]);
 
   return (
     <div className="min-h-full bg-gray-50">
@@ -478,15 +488,23 @@ export default function CallLists() {
               )}
               {tiersError ? (
                 <div className="flex items-end">
-                  <Button type="button" variant="secondary" className="min-h-11" icon={<RefreshCw className="h-4 w-4" />} showChevron={false} onClick={() => setTiersLoadNonce((nonce) => nonce + 1)}>Tier filter failed — retry</Button>
+                  <Button type="button" variant="secondary" className="min-h-11" icon={<RefreshCw className="h-4 w-4" />} showChevron={false} onClick={() => setTiersLoadNonce((nonce) => nonce + 1)}>Tier/crop filter failed — retry</Button>
                 </div>
               ) : (
-                <label className="text-sm font-medium text-secondary">Tier
-                  <select aria-label="Filter by customer tier" value={tierFilter} onChange={(event) => setTierFilter(event.target.value)} className="mt-1 block min-h-11 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm text-nav-dark sm:w-32">
-                    <option value="">All tiers</option>
-                    {tierOptions.map((tier) => <option key={tier} value={String(tier)}>Tier {tier}</option>)}
-                  </select>
-                </label>
+                <>
+                  <label className="text-sm font-medium text-secondary">Tier
+                    <select aria-label="Filter by customer tier" value={tierFilter} onChange={(event) => setTierFilter(event.target.value)} className="mt-1 block min-h-11 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm text-nav-dark sm:w-32">
+                      <option value="">All tiers</option>
+                      {tierOptions.map((tier) => <option key={tier} value={String(tier)}>Tier {tier}</option>)}
+                    </select>
+                  </label>
+                  <label className="text-sm font-medium text-secondary">Crop
+                    <select aria-label="Filter by customer crop" value={cropFilter} onChange={(event) => setCropFilter(event.target.value as CropValue | '')} className="mt-1 block min-h-11 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm text-nav-dark sm:w-36">
+                      <option value="">All crops</option>
+                      {ALLOWED_CROPS.map((crop) => <option key={crop.value} value={crop.value}>{crop.label}</option>)}
+                    </select>
+                  </label>
+                </>
               )}
               <Button type="button" variant="secondary" className="min-h-11" icon={<RefreshCw className="h-4 w-4" />} showChevron={false} loading={loading} onClick={applyCriteria}>Apply and refresh</Button>
             </div>

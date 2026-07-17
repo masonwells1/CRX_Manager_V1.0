@@ -9,6 +9,21 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 
 ---
 
+## 2026-07-17 — SETTLED (Mason, in-chat): five CRM owner decisions
+
+**Decisions (Mason, in-chat, 2026-07-17 morning):**
+1. **save_customer authorization:** restrict edits to the assigned sales rep + admins. No
+   office-manager carve-out. (Relayed to the fix session working the pre-existing gap.)
+2. **Grower crops:** crops are SELECTED and assigned per customer (a controlled list on the
+   customer record) — NOT derived from field crop-history. Supersedes the parked
+   "crop source of truth" question. Shipping as `customers.crops text[]` + UI chips + call-list filter.
+3. **Prep-card top products:** show BOTH rankings — highest revenue AND highest volume
+   (volume = per-product quantity, unit always displayed; cross-product raw-quantity caveat noted in SQL).
+4. **AI disclosure wording:** default confirmed ("this call may be recorded" + AI self-identifies).
+   Final sign-off still happens at voice-vendor go-live.
+5. **Transcript retention: 15 months.** Purge mechanism gets built in Phase 5; retention_expires_at
+   semantics = occurred_at + 15 months.
+
 ## 2026-07-17 — SETTLED: CRM read-aggregates are assignment-scoped (wider than row-level invoice RLS)
 
 **Decision (loop orchestration under Mason's pre-authorized run; pattern inherited from

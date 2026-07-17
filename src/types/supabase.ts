@@ -2266,6 +2266,7 @@ export type Database = {
           corn_acres: number | null
           created_at: string
           credit_limit_cents: number | null
+          crops: string[]
           default_application_service_id: string | null
           default_commission_split: Json | null
           email: string | null
@@ -2298,6 +2299,7 @@ export type Database = {
           corn_acres?: number | null
           created_at?: string
           credit_limit_cents?: number | null
+          crops?: string[]
           default_application_service_id?: string | null
           default_commission_split?: Json | null
           email?: string | null
@@ -2330,6 +2332,7 @@ export type Database = {
           corn_acres?: number | null
           created_at?: string
           credit_limit_cents?: number | null
+          crops?: string[]
           default_application_service_id?: string | null
           default_commission_split?: Json | null
           email?: string | null
@@ -7391,6 +7394,7 @@ export type Database = {
       purchase_order_import_intents: {
         Row: {
           actor_id: string
+          content_fingerprint: string | null
           created_at: string
           id: string
           intent_key: string
@@ -7398,6 +7402,7 @@ export type Database = {
         }
         Insert: {
           actor_id: string
+          content_fingerprint?: string | null
           created_at?: string
           id?: string
           intent_key: string
@@ -7405,6 +7410,7 @@ export type Database = {
         }
         Update: {
           actor_id?: string
+          content_fingerprint?: string | null
           created_at?: string
           id?: string
           intent_key?: string

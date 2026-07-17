@@ -1904,7 +1904,13 @@ function generatedMutatingRpcInventory(): Set<string> {
   }));
 }
 
-const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>();
+const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
+  // Direct EXECUTE is revoked from every application role. This internal
+  // delegate carries the public save_purchase_order idempotency key and cache
+  // contract inside the same transaction; it is absent from generated client
+  // types by design but still must remain fail-closed in the migration scan.
+  '_save_purchase_order_ascii_identity_impl',
+]);
 
 /**
  * Discovered mutating RPCs for which replay safety does not use p_idempotency_key.
