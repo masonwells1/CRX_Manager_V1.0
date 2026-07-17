@@ -221,6 +221,22 @@ describe('ProductDetail governed pricing flow', () => {
     expect(mockProductUpdate).not.toHaveBeenCalled();
   });
 
+  it('blocks a margin-driven zero cost before the preview RPC', async () => {
+    render(<ProductDetail />);
+    await screen.findByText('Grower Description');
+
+    fireEvent.click(screen.getByRole('button', { name: /^Update$/ }));
+    fireEvent.change(screen.getByLabelText('New Cost'), { target: { value: '0.00' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Review Cost Change' }));
+
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
+      'error',
+      'Margin-driven pricing requires a cost greater than $0. No prices were changed.',
+    ));
+    expect(mockPreviewPricing).not.toHaveBeenCalled();
+    expect(mockProductUpdate).not.toHaveBeenCalled();
+  });
+
   it('keeps unrelated unsaved Product details intact by blocking quick pricing review', async () => {
     render(<ProductDetail />);
     await screen.findByText('Grower Description');

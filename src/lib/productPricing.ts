@@ -15,6 +15,25 @@ export function formatPricingMarginPercent(value: number): string {
   return (value * 100).toFixed(8).replace(/\.?0+$/, '');
 }
 
+export function assertPricingPreviewRowsSafe(
+  rows: ReadonlyArray<{
+    pricing_mode: PricingMode | '';
+    new_cost: string;
+    product_name?: string;
+  }>,
+): void {
+  for (const row of rows) {
+    if (row.pricing_mode !== 'margin_driven') continue;
+    const cost = Number(row.new_cost.trim());
+    if (Number.isFinite(cost) && cost === 0) {
+      const productName = row.product_name?.trim() || 'this Product';
+      throw new Error(
+        `Margin-driven pricing requires a cost greater than $0 for ${productName}. No prices were changed.`,
+      );
+    }
+  }
+}
+
 export interface PricingWorkbookExportRow {
   product_id: string;
   sku: string | null;
@@ -200,6 +219,11 @@ export async function createPricingWorkbookExport(
 export async function previewProductPricingChanges(
   input: PreviewPricingChangesInput,
 ): Promise<PricingPreviewResult> {
+  // Defense in depth for the staged rollout: the live bootstrap intentionally
+  // preserves legacy compatibility, so block the one input that could compute
+  // zero sell prices before any frontend path reaches the RPC. The separately
+  // parked database guard enforces the same rule server-side before deployment.
+  assertPricingPreviewRowsSafe(input.rows);
   const { data, error } = await supabaseUntyped.rpc('preview_product_pricing_changes', {
     p_source: input.source,
     p_export_id: input.source === 'pricing_worksheet' ? input.exportId : null,

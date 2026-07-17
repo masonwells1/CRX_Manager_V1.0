@@ -433,6 +433,9 @@ export default function Products() {
           }
           const newCost = inputDecimal(fields.current_cost ?? original.current_cost);
           if (newCost === null) throw new Error(`Enter a cost for ${original.product_name}.`);
+          if (mode === 'margin_driven' && Number(newCost.trim()) === 0) {
+            throw new Error(`Margin-driven pricing requires a cost greater than $0 for ${original.product_name}. No prices were changed.`);
+          }
           if (!Number.isInteger(original.pricing_version) || (original.pricing_version ?? 0) < 1) {
             throw new Error(`${original.product_name} does not have a pricing version yet. Refresh after the Phase 1a database migration is available.`);
           }

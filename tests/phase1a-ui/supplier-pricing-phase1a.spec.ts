@@ -244,13 +244,21 @@ test('real .xlsx round-trip plus ProductDetail quick pricing review', async ({ p
   const headers = new Map<string, number>();
   worksheet!.getRow(1).eachCell((cell, column) => headers.set(String(cell.value), column));
   const set = (row: number, header: string, value: string | number) => worksheet!.getCell(row, headers.get(header)!).value = value;
-  set(2, 'pricing_mode', 'margin_driven'); set(2, 'new_cost', 90); set(2, 'tier1_margin_percent', 20); set(2, 'tier2_margin_percent', 25); set(2, 'tier3_margin_percent', 30); set(2, 'change_reason', 'Monthly margin update');
+  set(2, 'pricing_mode', 'margin_driven'); set(2, 'new_cost', 0); set(2, 'tier1_margin_percent', 20); set(2, 'tier2_margin_percent', 25); set(2, 'tier3_margin_percent', 30); set(2, 'change_reason', 'Monthly margin update');
   set(3, 'pricing_mode', 'price_driven'); set(3, 'new_cost', 60); set(3, 'tier1_price', 70); set(3, 'tier2_price', 80); set(3, 'tier3_price', 90); set(3, 'change_reason', 'Monthly price update');
   set(4, 'pricing_mode', 'margin_driven'); set(4, 'new_cost', 45); set(4, 'tier1_margin_percent', 20); set(4, 'tier2_margin_percent', 25); set(4, 'tier3_margin_percent', 30); set(4, 'change_reason', 'Third Product monthly update');
+  const zeroCostPath = resolve(OUTPUT_DIR, 'phase1a-zero-cost-blocked.xlsx');
+  await workbook.xlsx.writeFile(zeroCostPath);
+  const fileInput = page.locator('input[type="file"][accept*="xlsx"]');
+  const previewCountBeforeZeroWorkbook = previewRequests.length;
+  await fileInput.setInputFiles(zeroCostPath);
+  await expect(page.getByText(/cost greater than \$0 for Margin Product/)).toBeVisible();
+  expect(previewRequests).toHaveLength(previewCountBeforeZeroWorkbook);
+
+  set(2, 'new_cost', 90);
   const editedPath = resolve(OUTPUT_DIR, 'phase1a-edited-3-products.xlsx');
   await workbook.xlsx.writeFile(editedPath);
 
-  const fileInput = page.locator('input[type="file"][accept*="xlsx"]');
   await fileInput.setInputFiles(editedPath);
   await expect(page.getByText('Some rows need attention')).toBeVisible();
   await expect(page.getByText('Conflict', { exact: true }).last()).toBeVisible();
@@ -273,6 +281,12 @@ test('real .xlsx round-trip plus ProductDetail quick pricing review', async ({ p
   await page.goto(`/products/${products[0].id}`);
   await expect(page.getByText('Grower Description')).toBeVisible();
   await page.getByRole('button', { name: 'Update' }).click();
+  const previewCountBeforeZeroProduct = previewRequests.length;
+  await page.getByLabel('New Cost').fill('0.00');
+  await page.getByRole('button', { name: 'Review Cost Change' }).click();
+  await expect(page.getByText('Margin-driven pricing requires a cost greater than $0. No prices were changed.')).toBeVisible();
+  expect(previewRequests).toHaveLength(previewCountBeforeZeroProduct);
+
   await page.getByLabel('New Cost').fill('91.00');
   await page.getByLabel('Change Note (optional)').fill('Minor mid-month supplier increase');
   await page.getByRole('button', { name: 'Review Cost Change' }).click();

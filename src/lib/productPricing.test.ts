@@ -15,6 +15,7 @@ vi.mock('./db', () => ({
 
 import {
   applyProductPricingChangeSet,
+  assertPricingPreviewRowsSafe,
   createPricingWorkbookExport,
   formatPricingMarginPercent,
   previewProductPricingChanges,
@@ -29,6 +30,27 @@ describe('formatPricingMarginPercent', () => {
 
   it('rejects non-finite values before they reach the pricing RPC', () => {
     expect(() => formatPricingMarginPercent(Number.NaN)).toThrow('finite number');
+  });
+});
+
+describe('assertPricingPreviewRowsSafe', () => {
+  it.each(['0', '0.00', '-0', '0e0'])(
+    'rejects margin-driven zero cost before preview for %s',
+    (newCost) => {
+      expect(() => assertPricingPreviewRowsSafe([{
+        pricing_mode: 'margin_driven',
+        new_cost: newCost,
+        product_name: 'Safety Product',
+      }])).toThrow('cost greater than $0 for Safety Product');
+    },
+  );
+
+  it('preserves zero cost for price-driven review', () => {
+    expect(() => assertPricingPreviewRowsSafe([{
+      pricing_mode: 'price_driven',
+      new_cost: '0.00',
+      product_name: 'Price-driven Product',
+    }])).not.toThrow();
   });
 });
 
@@ -84,6 +106,27 @@ describe('product pricing RPC wrappers', () => {
       p_performed_by: 'actor-1',
       p_idempotency_key: 'preview-key',
     });
+  });
+
+  it('never calls the preview RPC for margin-driven zero cost', async () => {
+    await expect(previewProductPricingChanges({
+      source: 'product_page',
+      rows: [{
+        product_id: 'product-1',
+        product_name: 'Safety Product',
+        row_version: 7,
+        pricing_mode: 'margin_driven',
+        new_cost: '0.00',
+        tier1_margin_percent: '20',
+        tier2_margin_percent: '15',
+        tier3_margin_percent: '10',
+        change_reason: 'Should be blocked',
+      }],
+      performedBy: 'actor-1',
+      idempotencyKey: 'preview-zero-key',
+    })).rejects.toThrow('cost greater than $0 for Safety Product');
+
+    expect(mockRpc).not.toHaveBeenCalled();
   });
 
   it('passes a worksheet export id and all rows unchanged', async () => {

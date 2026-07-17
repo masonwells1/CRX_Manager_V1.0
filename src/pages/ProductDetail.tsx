@@ -465,6 +465,10 @@ export default function ProductDetail() {
       toast('error', 'Cost cannot be negative');
       return;
     }
+    if (pricingMode === 'margin_driven' && cost === 0) {
+      toast('error', 'Margin-driven pricing requires a cost greater than $0. No prices were changed.');
+      return;
+    }
     try {
       await requestPricingReview({
         costOverride: newCost,
