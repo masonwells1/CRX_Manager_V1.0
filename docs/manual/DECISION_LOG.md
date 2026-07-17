@@ -9,6 +9,21 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 
 ---
 
+## 2026-07-17 — SETTLED: save_customer edits are assigned-rep-or-admin only (no office-manager carve-out)
+
+**Decision (Mason, 2026-07-17, relayed from the CRM loop session):** customer master-record
+edits through the `save_customer` SECDEF RPC are RESTRICTED to admins (any customer) and the
+assigned sales rep (`customers.assigned_sales_rep = auth.uid()` only). No office-manager
+carve-out, no sensitive-field-only scoping. This closes the 2026-07-16 Codex gauntlet finding
+that the RPC's role-only gate let any active sales rep edit any customer (credit limit,
+finance-charge settings, commission split) in bypass of the assigned-rep-only `customers_update`
+RLS policy. Grounding: rep SELECT was already assignment-scoped, and the activity feed shows no
+rep has ever edited a customer — the restriction changes no real workflow.
+Operative rule: the in-body gates (`NOT_CUSTOMER_OWNER` / `REP_CANNOT_REASSIGN` /
+`REP_MUST_SELF_ASSIGN`) in migration `20260717123000_save_customer_ownership_enforcement.sql`
+mirror the customers RLS policies; keep function-body authorization and RLS in lockstep if
+either changes. (Source: branch `claude/amazing-ptolemy-9e7e0a`; migration-history row 732.)
+
 ## 2026-07-17 — SETTLED: CRM read-aggregates are assignment-scoped (wider than row-level invoice RLS)
 
 **Decision (loop orchestration under Mason's pre-authorized run; pattern inherited from
