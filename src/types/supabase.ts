@@ -11101,6 +11101,24 @@ export type Database = {
         }
         Returns: Json
       }
+      log_customer_interaction: {
+        Args: {
+          p_contact_id?: string
+          p_customer_id: string
+          p_direction: string
+          p_duration_seconds?: number
+          p_follow_up_assigned_to?: string
+          p_follow_up_content?: string
+          p_follow_up_due_date?: string
+          p_follow_up_title?: string
+          p_idempotency_key?: string
+          p_interaction_type: string
+          p_occurred_at: string
+          p_outcome?: string
+          p_summary: string
+        }
+        Returns: Json
+      }
       log_failed_notification: {
         Args: {
           p_entity_id?: string

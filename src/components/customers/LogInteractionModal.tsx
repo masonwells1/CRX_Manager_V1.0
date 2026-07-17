@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { PhoneCall } from 'lucide-react';
-import { checkMutationResult, supabase } from '../../lib/db';
+import { assertRpcResult, hasRpcCode, RpcErrorCodes, supabase } from '../../lib/db';
 import { logActivity } from '../../lib/activityLogger';
 import { Sentry } from '../../lib/sentry';
+import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
 import type { CustomerContact, InteractionDirection, InteractionOutcome, InteractionType } from '../../types';
 
 // Only these two fields are read from profile_public_view (assignee picker).
@@ -17,14 +18,23 @@ const types: InteractionType[] = ['call', 'visit', 'meeting', 'text', 'email', '
 const directions: InteractionDirection[] = ['outbound', 'inbound'];
 const outcomes: InteractionOutcome[] = ['connected', 'left_voicemail', 'no_answer', 'busy', 'follow_up_needed', 'order_placed', 'resolved', 'other'];
 const contactsTable = () => supabase.from('customer_contacts');
-const interactionsTable = () => supabase.from('customer_interactions');
 const toLocalInput = () => { const date = new Date(); date.setMinutes(date.getMinutes() - date.getTimezoneOffset()); return date.toISOString().slice(0, 16); };
+interface LogInteractionResult { success: boolean; interaction_id: string; follow_up_requested: boolean; follow_up_note_id: string | null; follow_up_error: string | null; }
 
 export default function LogInteractionModal({ open, onClose, customerId, userId, customerName, onLogged }: LogInteractionModalProps) {
   const { toast } = useToast(); const summaryRef = useRef<HTMLTextAreaElement>(null);
+  // Retry-safe logging: the key survives a failed attempt so the server can
+  // deduplicate a retry after a network timeout (the response may have been
+  // lost AFTER the interaction committed).
+  const { getKey, resetKey } = useIdempotencyKey('log_customer_interaction', userId);
   const [contacts, setContacts] = useState<CustomerContact[]>([]); const [profiles, setProfiles] = useState<AssigneeOption[]>([]);
   const [contactId, setContactId] = useState(''); const [type, setType] = useState<InteractionType>('call'); const [direction, setDirection] = useState<InteractionDirection>('outbound'); const [outcome, setOutcome] = useState<InteractionOutcome | null>(null); const [occurredAt, setOccurredAt] = useState(toLocalInput()); const [minutes, setMinutes] = useState(''); const [summary, setSummary] = useState(''); const [followUp, setFollowUp] = useState(false); const [followTitle, setFollowTitle] = useState(''); const [assignedTo, setAssignedTo] = useState(''); const [dueDate, setDueDate] = useState(''); const [saving, setSaving] = useState(false);
   const selectedContact = useMemo(() => contacts.find((contact) => contact.id === contactId), [contacts, contactId]);
+  // Each modal open is a new logging intent: reset the idempotency key so a
+  // stale key from an abandoned earlier attempt (possibly another customer)
+  // can't silently replay that old result. Within one open session the key
+  // persists across retries, which is the dedup this RPC exists for.
+  useEffect(() => { if (open) resetKey(); }, [open, resetKey]);
   useEffect(() => { if (!open) return; void (async () => { const [{ data: contactData }, { data: profileData }] = await Promise.all([contactsTable().select('*').eq('customer_id', customerId).eq('is_active', true).order('is_primary', { ascending: false }).order('name'), supabase.from('profile_public_view').select('id, full_name, role, is_active').eq('is_active', true).neq('role', 'entity_recipient').order('full_name')]); const loadedContacts = (contactData || []) as CustomerContact[]; setContacts(loadedContacts); setProfiles((profileData || []).flatMap((row) => (row.id !== null ? [{ id: row.id, full_name: row.full_name }] : []))); setContactId(loadedContacts.find((contact) => contact.is_primary)?.id || ''); setType('call'); setDirection('outbound'); setOutcome(null); setOccurredAt(toLocalInput()); setMinutes(''); setSummary(''); setFollowUp(false); setFollowTitle(''); setAssignedTo(''); setDueDate(''); setTimeout(() => summaryRef.current?.focus(), 0); })(); }, [open, customerId]);
   const save = async () => {
     if (!summary.trim()) { toast('error', 'Add a short call summary'); return; }
@@ -38,30 +48,51 @@ export default function LogInteractionModal({ open, onClose, customerId, userId,
     if (duration !== null && (!Number.isFinite(duration) || duration < 0)) { toast('error', 'Duration must be a positive number of minutes'); return; }
     setSaving(true);
     try {
-      // The interaction is the record of truth — write it FIRST. The follow-up
-      // todo is a best-effort convenience created afterward.
-      const interactionResult = await interactionsTable().insert({ customer_id: customerId, contact_id: contactId || null, interaction_type: type, direction, source: 'rep', occurred_at: occurredAtIso, duration_seconds: duration, outcome, summary: summary.trim(), owner_user_id: userId, created_by: userId }).select();
-      checkMutationResult(interactionResult, 'log interaction');
-      const interactionId = interactionResult.data?.[0]?.id;
-      await logActivity({ event: 'call_logged', description: `${type === 'call' ? 'Logged call' : `Logged ${type}`} — ${outcome ? outcome.replace(/_/g, ' ') : 'no outcome'}`, performedBy: userId, entityType: 'customer_interaction', entityId: interactionId, customerId });
-      if (followUp) {
-        // If the follow-up insert fails AFTER the interaction committed, do not
-        // throw it away — warn and still finish the log.
-        try {
-          const noteResult = await supabase.from('team_notes').insert({ title: followTitle.trim(), content: `Follow-up from ${type} with ${selectedContact?.name || customerName}: ${summary.trim()}`, note_type: 'todo', priority: 'medium', assigned_to: assignedTo || null, due_date: dueDate || null, created_by: userId, linked_entity_type: 'customer', linked_entity_id: customerId }).select();
-          checkMutationResult(noteResult, 'create interaction follow-up');
-        } catch (noteError: unknown) {
-          Sentry.captureException(noteError instanceof Error ? noteError : new Error(String(noteError)), { extra: { context: 'LogInteractionModal.followUp' } });
-          toast('warning', 'Call logged, but the follow-up could not be created — add it manually');
-          onLogged?.();
-          onClose();
-          return;
-        }
+      // One idempotent RPC writes the interaction and the optional follow-up:
+      // a retried request after a lost response replays the committed result
+      // instead of double-logging the call. The server keeps the old
+      // interaction-first behavior — a failed follow-up insert still commits
+      // the call log and reports back via follow_up_note_id/follow_up_error.
+      const { data, error } = await supabase.rpc('log_customer_interaction', {
+        p_customer_id: customerId,
+        p_interaction_type: type,
+        p_direction: direction,
+        p_occurred_at: occurredAtIso,
+        p_summary: summary.trim(),
+        p_contact_id: contactId || undefined,
+        p_duration_seconds: duration ?? undefined,
+        p_outcome: outcome ?? undefined,
+        p_follow_up_title: followUp ? followTitle.trim() : undefined,
+        p_follow_up_content: followUp ? `Follow-up from ${type} with ${selectedContact?.name || customerName}: ${summary.trim()}` : undefined,
+        p_follow_up_assigned_to: followUp && assignedTo ? assignedTo : undefined,
+        p_follow_up_due_date: followUp && dueDate ? dueDate : undefined,
+        p_idempotency_key: getKey(),
+      });
+      if (error) throw error;
+      const result = assertRpcResult<LogInteractionResult>(data, 'log_customer_interaction');
+      resetKey(); // the action committed — the next log is a new intent
+      await logActivity({ event: 'call_logged', description: `${type === 'call' ? 'Logged call' : `Logged ${type}`} — ${outcome ? outcome.replace(/_/g, ' ') : 'no outcome'}`, performedBy: userId, entityType: 'customer_interaction', entityId: result.interaction_id, customerId });
+      if (followUp && !result.follow_up_note_id) {
+        Sentry.captureException(new Error(result.follow_up_error || 'interaction follow-up insert failed'), { extra: { context: 'LogInteractionModal.followUp' } });
+        toast('warning', 'Call logged, but the follow-up could not be created — add it manually');
+        onLogged?.();
+        onClose();
+        return;
       }
       toast('success', 'Interaction logged');
       onLogged?.();
       onClose();
     } catch (error: unknown) {
+      // The earlier attempt COMMITTED (response was lost) and the form was
+      // edited before retrying — the server refuses to silently acknowledge
+      // the old values. Refresh the timeline so the rep sees what saved.
+      if (hasRpcCode(error, RpcErrorCodes.INTERACTION_REPLAY_PAYLOAD_MISMATCH)) {
+        resetKey();
+        toast('warning', 'Your earlier attempt already saved this call. Check the timeline — log any changes as a new interaction.');
+        onLogged?.();
+        onClose();
+        return;
+      }
       Sentry.captureException(error instanceof Error ? error : new Error(String(error)), { extra: { context: 'LogInteractionModal.save' } });
       toast('error', error instanceof Error ? error.message : 'Failed to log interaction');
     } finally { setSaving(false); }
