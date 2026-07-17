@@ -39,6 +39,18 @@ const cutoverSql = path.join(
   '.staging-migrations',
   '20260717121000_supplier_pricing_phase1a_cutover.sql'
 );
+const zeroCostGuardSql = path.join(
+  repoRoot,
+  'scripts',
+  '.staging-migrations',
+  '20260717120500_supplier_pricing_zero_cost_guard.sql'
+);
+const zeroCostGuardSmokeSql = path.join(
+  repoRoot,
+  'scripts',
+  'smoke',
+  'smoke-supplier-pricing-phase1a-zero-cost-guard.sql'
+);
 const smokeSql = path.join(
   repoRoot,
   'scripts',
@@ -158,6 +170,8 @@ try {
   copyToContainer(bootstrapSql, 'bootstrap.sql');
   copyToContainer(bootstrapCompatSql, 'bootstrap-compat.sql');
   copyToContainer(seedSql, 'seed.sql');
+  copyToContainer(zeroCostGuardSql, 'zero-cost-guard.sql');
+  copyToContainer(zeroCostGuardSmokeSql, 'zero-cost-guard-smoke.sql');
   copyToContainer(cutoverSql, 'cutover.sql');
   copyToContainer(smokeSql, 'smoke.sql');
   copyToContainer(workbookExportSql, 'xlsx-export.sql');
@@ -169,6 +183,10 @@ try {
   psql('bootstrap.sql');
   console.log('[phase1a-proof] proving compatibility with the deployed legacy frontend');
   psql('bootstrap-compat.sql');
+  console.log('[phase1a-proof] compiling the parked pre-deploy zero-cost guard');
+  psql('zero-cost-guard.sql');
+  console.log('[phase1a-proof] proving the guard blocks governed zero cost without breaking legacy mode');
+  psql('zero-cost-guard-smoke.sql');
   console.log('[phase1a-proof] seeding pre-cutover live-shaped Products');
   psql('seed.sql');
   console.log('[phase1a-proof] compiling parked enforcement cutover');

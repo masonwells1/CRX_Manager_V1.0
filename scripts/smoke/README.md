@@ -83,8 +83,8 @@ link-first, and lease-change-first.
 
 ## Disposable Supplier Pricing Phase 1a proof
 
-The live additive bootstrap and parked enforcement cutover have a separate,
-production-isolated proof:
+The live additive bootstrap, parked pre-deploy zero-cost guard, and parked
+enforcement cutover have a separate, production-isolated proof:
 
 ```bash
 node scripts/smoke/prove-supplier-pricing-phase1a.mjs
@@ -93,8 +93,9 @@ node scripts/smoke/prove-supplier-pricing-phase1a.mjs
 The runner creates a uniquely named PostgreSQL 17 container with networking
 disabled and data in tmpfs, loads a live-shaped minimal base, compiles the exact
 live additive bootstrap, proves the currently deployed editor can still write
-one legacy Product/history pair without double logging, then compiles the exact
-parked cutover. It generates and edits a real `.xlsx`, parses it through the
+one legacy Product/history pair without double logging, compiles and exercises
+the exact compatibility-safe zero-cost guard, then compiles the exact parked
+cutover. It generates and edits a real `.xlsx`, parses it through the
 application workbook module, and passes that payload through real PostgreSQL
 preview/apply RPCs with exact Product/history verification and rollback. The
 final-state proof also exercises authorization, both pricing modes, formula/tamper/

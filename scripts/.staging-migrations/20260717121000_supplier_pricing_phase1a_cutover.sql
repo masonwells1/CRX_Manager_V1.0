@@ -3,16 +3,17 @@
 -- PARKED: do not copy to supabase/migrations or apply until ALL of the
 -- following are true:
 --   1. 20260717042803_supplier_pricing_phase1a.sql is live and verified.
---   2. The RPC-only ProductDetail/Products/worksheet frontend is deployed.
---   3. Its rollback window is closed or a forward database rollback is ready.
---   4. This exact file has fresh migration-review and apply-guard proof.
+--   2. 20260717120500_supplier_pricing_zero_cost_guard.sql is live and verified.
+--   3. The RPC-only ProductDetail/Products/worksheet frontend is deployed.
+--   4. Its rollback window is closed or a forward database rollback is ready.
+--   5. This exact file has fresh migration-review and apply-guard proof.
 --
 -- The additive bootstrap intentionally keeps the legacy frontend operational.
 -- This second migration closes those temporary write paths after cutover.
 
--- The live compatibility bootstrap preserves the prior calculator behavior.
--- At enforcement cutover, reject a margin-driven row with zero cost instead
--- of returning nonzero margins attached to zero prices.
+-- Reassert the separately deployable compatibility guard at enforcement
+-- cutover so the final function definition converges even if environments were
+-- rebuilt from the staged sequence.
 CREATE OR REPLACE FUNCTION public._calculate_product_pricing(
   p_mode text,
   p_current_cost numeric,
