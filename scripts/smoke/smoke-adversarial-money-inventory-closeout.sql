@@ -1,6 +1,7 @@
 -- Post-apply rollback-only proof for migrations 20260716213000,
 -- 20260716224000, 20260716233000, 20260717010000, 20260717015439,
--- 20260717032000, 20260717045420, 20260717063445, and 20260717070900.
+-- 20260717032000, 20260717045420, 20260717063445, 20260717070900,
+-- and 20260717081856.
 -- Exercises the exact adversarial findings without retaining business rows.
 DO $smoke$
 DECLARE
@@ -28,6 +29,7 @@ DECLARE
   v_err text;
   v_source text;
   v_outer_source text;
+  v_identity_source text;
   v_suffix text := substr(md5(random()::text), 1, 8);
   v_intent text;
   v_vendor_reference text;
@@ -196,6 +198,70 @@ BEGIN
     IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
     IF v_err <> 'BULK_PO_VENDOR_REQUIRED' THEN
       RAISE EXCEPTION 'SMOKE_FAIL: wrong vendorless claim error: %', v_err;
+    END IF;
+  END;
+
+  -- The public RPC boundary must reject OCR/integration values that contain
+  -- only invisible whitespace, even when a caller bypasses the browser.
+  BEGIN
+    PERFORM public.save_purchase_order(
+      NULL,
+      jsonb_build_object(
+        'vendor', chr(160) || chr(9),
+        'status', 'draft',
+        'bulk_import_vendor_reference', v_vendor_reference,
+        'bulk_import_invoice_date', CURRENT_DATE::text,
+        'bulk_import_intent_key', v_intent || '-invisible-vendor'
+      ),
+      jsonb_build_array(
+        jsonb_build_object(
+          'product_id', v_product,
+          'product_name', v_product_name,
+          'quantity_ordered', 1,
+          'unit_cost_cents', 333,
+          'unit_size', v_unit_size
+        )
+      ),
+      v_sales,
+      'smk-po-bulk-invisible-vendor-' || v_suffix
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: invisible-only bulk vendor was accepted';
+  EXCEPTION WHEN OTHERS THEN
+    v_err := SQLERRM;
+    IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_err <> 'BULK_PO_VENDOR_REQUIRED' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: wrong invisible-vendor error: %', v_err;
+    END IF;
+  END;
+
+  BEGIN
+    PERFORM public.save_purchase_order(
+      NULL,
+      jsonb_build_object(
+        'vendor', '[SMOKE] Élan Bulk Intent Vendor',
+        'status', 'draft',
+        'bulk_import_vendor_reference', chr(160) || chr(9),
+        'bulk_import_invoice_date', CURRENT_DATE::text,
+        'bulk_import_intent_key', v_intent || '-invisible-reference'
+      ),
+      jsonb_build_array(
+        jsonb_build_object(
+          'product_id', v_product,
+          'product_name', v_product_name,
+          'quantity_ordered', 1,
+          'unit_cost_cents', 333,
+          'unit_size', v_unit_size
+        )
+      ),
+      v_sales,
+      'smk-po-bulk-invisible-reference-' || v_suffix
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: invisible-only bulk vendor reference was accepted';
+  EXCEPTION WHEN OTHERS THEN
+    v_err := SQLERRM;
+    IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_err <> 'BULK_PO_VENDOR_REFERENCE_REQUIRED' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: wrong invisible-reference error: %', v_err;
     END IF;
   END;
 
@@ -449,10 +515,15 @@ BEGIN
   SELECT prosrc INTO v_outer_source
     FROM pg_proc
    WHERE oid = 'public.save_purchase_order(uuid,jsonb,jsonb,uuid,text)'::regprocedure;
-  IF strpos(v_outer_source, 'public.next_po_number()') = 0
-     OR strpos(v_outer_source, '_save_purchase_order_atomic_number_impl') = 0
-     OR strpos(v_outer_source, 'public.next_po_number()')
-        > strpos(v_outer_source, '_save_purchase_order_atomic_number_impl') THEN
+  SELECT prosrc INTO v_identity_source
+    FROM pg_proc
+   WHERE oid = 'public._save_purchase_order_ascii_identity_impl(uuid,jsonb,jsonb,uuid,text)'::regprocedure;
+  IF strpos(v_outer_source, '_save_purchase_order_ascii_identity_impl') = 0
+     OR strpos(v_outer_source, 'BULK_PO_VENDOR_REQUIRED') = 0
+     OR strpos(v_identity_source, 'public.next_po_number()') = 0
+     OR strpos(v_identity_source, '_save_purchase_order_atomic_number_impl') = 0
+     OR strpos(v_identity_source, 'public.next_po_number()')
+        > strpos(v_identity_source, '_save_purchase_order_atomic_number_impl') THEN
     RAISE EXCEPTION 'SMOKE_FAIL: PO number is not allocated inside the outer save transaction';
   END IF;
 

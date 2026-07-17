@@ -74,6 +74,9 @@ const bulkPOReplayContent = source(
 const bulkPOAsciiIdentity = source(
   'supabase/migrations/20260717070900_bind_bulk_po_identity_ascii_fold.sql',
 );
+const blankBulkPOIdentity = source(
+  'supabase/migrations/20260717081856_reject_blank_bulk_po_identity.sql',
+);
 const completeDelivery = access.slice(0, access.indexOf('CREATE OR REPLACE FUNCTION public.void_delivery'));
 
 describe('money and inventory gauntlet fixes', () => {
@@ -529,6 +532,28 @@ describe('money and inventory gauntlet fixes', () => {
     expect(browserRetry).toContain(
       'In Supplier POs, search this vendor and invoice number, then edit it instead.',
     );
+  });
+
+  it('rejects invisible-only bulk PO identity at the public RPC boundary', () => {
+    expect(blankBulkPOIdentity).toContain(
+      'RENAME TO _save_purchase_order_ascii_identity_impl',
+    );
+    expect(blankBulkPOIdentity).toContain('chr(160)');
+    expect(blankBulkPOIdentity).toContain('chr(65279)');
+    expect(blankBulkPOIdentity).toContain("RAISE EXCEPTION 'BULK_PO_VENDOR_REQUIRED'");
+    expect(blankBulkPOIdentity).toContain(
+      "RAISE EXCEPTION 'BULK_PO_VENDOR_REFERENCE_REQUIRED'",
+    );
+    expect(blankBulkPOIdentity).toContain(
+      'IF NOT (public.is_admin() OR public.is_sales_rep()) THEN',
+    );
+    expect(blankBulkPOIdentity).toContain(
+      'RETURN public._save_purchase_order_ascii_identity_impl(',
+    );
+    expect(blankBulkPOIdentity).toContain(
+      'FROM PUBLIC, anon, authenticated, service_role;',
+    );
+    expect(blankBulkPOIdentity).toContain('TO authenticated, service_role;');
   });
 
   it('authorizes invoice saves and statements against active customer assignment before replay', () => {
