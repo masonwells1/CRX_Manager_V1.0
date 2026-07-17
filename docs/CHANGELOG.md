@@ -4,6 +4,42 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-17 — APPLIED save_customer ownership enforcement to live (ledger 20260717122244) under Mason's in-chat OK. Post-apply: function hash changed, single overload, all gates present, grants clean (no anon), all 17 DB sweeps PASS, rolled-back live probe POST_PASS_ROLLBACK (rep denied editing non-assigned customer, own edit works). Updated migration-history row 734 + DECISION_LOG to applied.
+
+APPLIED save_customer ownership enforcement to live (ledger 20260717122244) under Mason's in-chat OK. Post-apply: function hash changed, single overload, all gates present, grants clean (no anon), all 17 DB sweeps PASS, rolled-back live probe POST_PASS_ROLLBACK (rep denied editing non-assigned customer, own edit works). Updated migration-history row 734 + DECISION_LOG to applied.
+
+- **Commits this session** (git log --since=12.hours --author=Mason):
+  - `addda7cd Close money and inventory gauntlet gaps (#153)`
+  - `296d2de7 CRM loop closeout: final-gauntlet fixes + morning report (#152)`
+  - `916cc856 CRM Relationship Intelligence — Phase 4: Customer Documents (#151)`
+  - `5cd2af20 CRM Relationship Intelligence — Phase 3: Seasonal Call Lists (#150)`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - `supabase/migrations/20260717123000_save_customer_ownership_enforcement.sql`
+
+## 2026-07-17 — Codex r2 fix: save_customer replay binding — cached idempotency results are now validated against the requested customer (IDEMPOTENCY_PAYLOAD_CONFLICT / SAVE_CUSTOMER_RESULT_INVALID) and re-checked for ownership on the cached id before release, mirroring save_purchase_order. Delta review clean; 12-probe rolled-back live smoke SMOKE_PASS_ROLLBACK.
+
+Codex r2 fix: save_customer replay binding — cached idempotency results are now validated against the requested customer (IDEMPOTENCY_PAYLOAD_CONFLICT / SAVE_CUSTOMER_RESULT_INVALID) and re-checked for ownership on the cached id before release, mirroring save_purchase_order. Delta review clean; 12-probe rolled-back live smoke SMOKE_PASS_ROLLBACK.
+
+- **Commits this session** (git log --since=12.hours --author=Mason):
+  - `addda7cd Close money and inventory gauntlet gaps (#153)`
+  - `296d2de7 CRM loop closeout: final-gauntlet fixes + morning report (#152)`
+  - `916cc856 CRM Relationship Intelligence — Phase 4: Customer Documents (#151)`
+  - `5cd2af20 CRM Relationship Intelligence — Phase 3: Seasonal Call Lists (#150)`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - `supabase/migrations/20260717123000_save_customer_ownership_enforcement.sql`
+
+## 2026-07-17 — save_customer ownership enforcement: wrote + reviewed + smoked migration 20260717123000 closing the 2026-07-16 Codex gauntlet finding (any active sales rep could edit any customer via the SECDEF RPC). Ownership gates mirror customers RLS (admin OR assigned rep; Mason settled: no office-manager carve-out). rls-security + migration-drift reviewers clean; live rolled-back smoke SMOKE_PASS_ROLLBACK incl. vuln-proof on live body. Migration PARKED on branch claude/amazing-ptolemy-9e7e0a awaiting Mason's OK to apply; Codex verdict + DB sweeps in flight.
+
+save_customer ownership enforcement: wrote + reviewed + smoked migration 20260717123000 closing the 2026-07-16 Codex gauntlet finding (any active sales rep could edit any customer via the SECDEF RPC). Ownership gates mirror customers RLS (admin OR assigned rep; Mason settled: no office-manager carve-out). rls-security + migration-drift reviewers clean; live rolled-back smoke SMOKE_PASS_ROLLBACK incl. vuln-proof on live body. Migration PARKED on branch claude/amazing-ptolemy-9e7e0a awaiting Mason's OK to apply; Codex verdict + DB sweeps in flight.
+
+- **Commits this session** (git log --since=12.hours --author=Mason):
+  - `addda7cd Close money and inventory gauntlet gaps (#153)`
+  - `296d2de7 CRM loop closeout: final-gauntlet fixes + morning report (#152)`
+  - `916cc856 CRM Relationship Intelligence — Phase 4: Customer Documents (#151)`
+  - `5cd2af20 CRM Relationship Intelligence — Phase 3: Seasonal Call Lists (#150)`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - `supabase/migrations/20260717123000_save_customer_ownership_enforcement.sql`
+
 ## 2026-07-17 — CRM follow-up: customer crops + top products by volume (owner decisions)
 
 Mason answered the five parked CRM owner questions; the two that were build items shipped same-day (branch `feat/crm-crops-and-volume`, Opus/Sonnet builders per owner instruction, full migration gauntlet):
