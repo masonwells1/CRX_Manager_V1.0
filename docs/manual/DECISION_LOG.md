@@ -9,6 +9,28 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 
 ---
 
+## 2026-07-17 — SETTLED: CodeRabbit is the standing every-PR AI reviewer; FarmRx made public
+
+**Decision (Mason, 2026-07-17):** enable CodeRabbit (AI PR reviewer) on both public repos and
+fold it into the landing flow. `CRX_Manager_V1.0` was already public; `FarmRx` was flipped
+**private → public** this session at Mason's explicit request (full 76-commit history was
+secret-scanned clean first — no `.env` ever committed, no service-role keys / tokens / passwords;
+only publishable + VAPID public keys in code; customer data lives in FarmRx's separate Supabase
+project behind RLS, not the repo). Each repo carries a `.coderabbit.yaml` on `main` whose
+`path_instructions` mirror that repo's hard rules; the file overrides CodeRabbit's dashboard
+settings. CodeRabbit is **free for public repos**, so the account's Pro Plus trial is irrelevant
+to cost.
+
+**Enforcement choice (Mason picked "process now, hard-block soon"):** the landing flow now
+includes reading CodeRabbit's review and fixing any real issue before merge (advisory — it does
+not block; nitpicks may be dismissed with a reason). CodeRabbit is the broad every-PR pass;
+the Codex cross-model proof stays the hard gate for money/RLS/migration diffs — both run.
+Operative rule: after CI/Vercel go green, do not merge until CodeRabbit has posted its review and
+its real findings are resolved. **Follow-up (open):** add a merge-blocking required status check
+for CodeRabbit to the `protect-main` ruleset once its exact check name is confirmed on a live PR.
+(Source: AGENTS.md "Standing CodeRabbit review policy"; PR #160 landed the CRX config; FarmRx
+config commit 943e5688.)
+
 ## 2026-07-17 — SETTLED: save_customer edits are assigned-rep-or-admin only (no office-manager carve-out)
 
 **Decision (Mason, 2026-07-17, relayed from the CRM loop session):** customer master-record
