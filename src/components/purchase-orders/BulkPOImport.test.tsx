@@ -55,6 +55,12 @@ vi.mock('../ui/Toast', () => ({
 }));
 
 import BulkPOImport from './BulkPOImport';
+import {
+  buildBulkPOIntentKey,
+  ensurePendingBulkPOIntent,
+  markBulkPOIntentImported,
+  savePendingBulkPOIntents,
+} from '../../lib/bulkPOImportRetry';
 
 describe('BulkPOImport', () => {
   const defaultProps = { open: true, onClose: vi.fn(), onSuccess: vi.fn() };
@@ -129,6 +135,47 @@ describe('BulkPOImport', () => {
     fireEvent.click(screen.getByText('Close'));
     expect(defaultProps.onSuccess).toHaveBeenCalledTimes(1);
     expect(defaultProps.onClose).not.toHaveBeenCalled();
+  });
+
+  it('asks the server again when a browser marker points to a PO that may have been deleted', async () => {
+    const intentKey = buildBulkPOIntentKey({
+      vendorName: 'Vendor A',
+      invoiceNumber: 'INV-REIMPORT.pdf',
+      invoiceDate: '2026-07-16',
+      items: [{
+        productId: product.id,
+        quantityOrdered: 2,
+        unitCostCents: 1_000,
+        unitSize: 'GAL',
+        notes: '',
+      }],
+    });
+    expect(intentKey).not.toBeNull();
+    const pending = {};
+    ensurePendingBulkPOIntent(pending, intentKey!, () => 'save_purchase_order:user-1:bulk:test');
+    markBulkPOIntentImported(pending, intentKey!, 'po-deleted', Date.now(), 'PO-DELETED');
+    savePendingBulkPOIntents(localStorage, 'user-1', pending);
+
+    mocks.rpc.mockImplementation(async (name: string) => {
+      if (name === 'save_purchase_order') {
+        return { data: { po_id: 'po-reimported', status: 'saved', po_number: 'PO-NEW' }, error: null };
+      }
+      return { data: null, error: new Error(`Unexpected RPC: ${name}`) };
+    });
+
+    render(<BulkPOImport {...defaultProps} />);
+    fireEvent.change(document.querySelector('#po-pdf-upload')!, {
+      target: { files: [new File(['one'], 'INV-REIMPORT.pdf', { type: 'application/pdf' })] },
+    });
+    fireEvent.click(await screen.findByRole('button', { name: /process 1 file/i }));
+    expect(await screen.findByText('Previously imported')).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: /import 1 po/i }));
+
+    await waitFor(() => expect(mocks.rpc).toHaveBeenCalledWith(
+      'save_purchase_order',
+      expect.objectContaining({ p_po_id: null }),
+    ));
+    expect(defaultProps.onSuccess).toHaveBeenCalledTimes(1);
   });
 
   it('refreshes the parent when a partially successful batch is closed', async () => {

@@ -21,7 +21,6 @@ import {
   buildBulkPODocumentClaimKey,
   buildBulkPOIdempotencyKey,
   ensurePendingBulkPOIntent,
-  isImportedBulkPOIntent,
   loadPendingBulkPOIntents,
   markBulkPOIntentImported,
   savePendingBulkPOIntents,
@@ -402,10 +401,6 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
           failedCount++;
           continue;
         }
-        if (isImportedBulkPOIntent(pendingIntentsRef.current, intentKey)) {
-          skippedCount++;
-          continue;
-        }
         const deterministicIdempotencyKey = await buildBulkPOIdempotencyKey(profile.id, intentKey);
         const documentClaimKey = await buildBulkPODocumentClaimKey(intentKey);
         const pendingIntent = ensurePendingBulkPOIntent(
@@ -528,7 +523,10 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
   const totalUnmatched = parsedPOs?.reduce((sum, po) => sum + po.items.filter((i) => !i.matched_product).length, 0) ?? 0;
   const importablePOs = parsedPOs?.filter((po) => {
     const intentKey = buildParsedPOIntentKey(po);
-    return intentKey !== null && !isImportedBulkPOIntent(pendingIntentsRef.current, intentKey);
+    // Persisted browser state is only a hint. The server owns duplicate
+    // detection because an admin may have deleted the original PO since this
+    // marker was written, intentionally making the document importable again.
+    return intentKey !== null;
   }).length ?? 0;
 
   const filteredProducts = products.filter((p) => {
@@ -659,7 +657,7 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
                         </p>
                       </div>
                       {alreadyImported && (
-                        <Badge variant="info">Already imported</Badge>
+                        <Badge variant="info">Previously imported</Badge>
                       )}
                       {!alreadyImported && hasErrors && !hasItems && (
                         <Badge variant="error">Parse Failed</Badge>
@@ -688,7 +686,7 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
                       <div className="p-4 space-y-3">
                         {alreadyImported && (
                           <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm text-blue-900">
-                            Already imported as {importedIntent.poNumber || 'a purchase order'}. This document will be skipped unless its reviewed details are changed.
+                            Previously imported as {importedIntent.poNumber || 'a purchase order'}. Import will verify the live PO; if an admin deleted it, the document can be imported again.
                           </div>
                         )}
                         {/* Parse errors */}

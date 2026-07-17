@@ -17,6 +17,12 @@ Native CRM module shipped end-to-end in one armed autonomous run (mission `docs/
 
 ---
 
+## 2026-07-17 — Deleted bulk purchase-order re-import closure
+
+The final GPT-5.6-sol exact-SHA review caught that an admin-deleted imported PO was not reliably importable again: its durable claim cascaded, but the browser still trusted a 30-day marker and the generic 24-hour retry cache could replay the deleted PO ID. Reviewed migration `20260717015439_invalidate_deleted_bulk_po_retry_state` applied live as ledger version `20260717020549`. An internal delete trigger now removes all `save_purchase_order` retry results for the deleted PO, the browser marker is display-only, and the public writer serializes and rechecks the live global document claim before allocating a PO number. The live rollback chain proved import → cross-employee duplicate → admin delete → unchanged-document re-import with the original deterministic key and ended in `SMOKE_PASS_ROLLBACK`; permanent checks found the trigger enabled/internal-only and zero claims or stale save replays. The live RPC snapshot was regenerated exactly to 425 names (CSV MD5 `72e76d7f98227fee41ea7266e53a2ac9`) and the schema registry to migration high-water `20260717020549`.
+
+---
+
 ## 2026-07-17 — Final purchase-order release closure
 
 The final GPT-5.6-sol adversarial pass found four release gaps after the earlier bulk-import corrections: PO numbers were still reserved in a separate browser transaction, import claims blocked the admin-only PO delete path, vendor-bill drift compared aggregate-rounded quantity/cost instead of the authoritative line-rounded PO header, and a duplicate-only import did not refresh the parent list. Reviewed migration `20260717010000_close_final_purchase_order_release_gaps` applied live as ledger version `20260717011322`; new numbers are now allocated under the database advisory lock in the same transaction as insert, the internal writer is not directly executable, import claims cascade with an intentionally deleted PO, and vendor bills compare `purchase_orders.total_cost_cents`. The browser consumes the stored server-returned number, and duplicate-only close refreshes the PO list. Both trusted migration reviewers returned CLEAN; the deployed rollback smoke ended in `SMOKE_PASS_ROLLBACK`; permanent checks found zero claim rows, fractional source costs, and PO header mismatches with the expected public/private grants.

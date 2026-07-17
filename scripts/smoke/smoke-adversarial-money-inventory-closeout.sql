@@ -1,5 +1,5 @@
 -- Post-apply rollback-only proof for migrations 20260716213000,
--- 20260716224000, 20260716233000, and 20260717010000.
+-- 20260716224000, 20260716233000, 20260717010000, and 20260717015439.
 -- Exercises the exact adversarial findings without retaining business rows.
 DO $smoke$
 DECLARE
@@ -390,6 +390,54 @@ BEGIN
    WHERE intent_key = v_intent;
   IF v_count <> 0 OR EXISTS (SELECT 1 FROM public.purchase_orders WHERE id = v_po) THEN
     RAISE EXCEPTION 'SMOKE_FAIL: imported PO delete left PO or intent claim';
+  END IF;
+
+  SELECT count(*) INTO v_count
+    FROM public.idempotency_keys
+   WHERE operation = 'save_purchase_order'
+     AND NULLIF(result->>'po_id', '') = v_po::text;
+  IF v_count <> 0 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: imported PO delete left % stale save replay(s)', v_count;
+  END IF;
+
+  -- The unchanged document and the original deterministic retry key must now
+  -- create a fresh PO instead of replaying the deleted id or trusting a stale
+  -- browser marker. This is the real delete -> re-import business path.
+  PERFORM set_config(
+    'request.jwt.claims',
+    json_build_object('sub', v_sales, 'role', 'authenticated')::text,
+    true
+  );
+  v_replay := public.save_purchase_order(
+    NULL,
+    jsonb_build_object(
+      'vendor', '[SMOKE] Bulk Intent Vendor',
+      'status', 'draft',
+      'bulk_import_intent_key', v_intent
+    ),
+    jsonb_build_array(
+      jsonb_build_object(
+        'product_id', v_product,
+        'product_name', v_product_name,
+        'quantity_ordered', 10.125,
+        'unit_cost_cents', 333,
+        'unit_size', v_unit_size
+      )
+    ),
+    v_sales,
+    'smk-po-bulk-first-' || v_suffix
+  );
+  IF (v_replay->>'po_id')::uuid = v_po
+     OR v_replay->>'status' IS DISTINCT FROM 'saved'
+     OR NULLIF(v_replay->>'po_number', '') IS NULL THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: deleted document did not re-import as a fresh PO: %', v_replay;
+  END IF;
+  SELECT count(*) INTO v_count
+    FROM public.purchase_order_import_intents
+   WHERE intent_key = v_intent
+     AND purchase_order_id = (v_replay->>'po_id')::uuid;
+  IF v_count <> 1 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: re-imported document did not receive one fresh durable claim';
   END IF;
 
   RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK';

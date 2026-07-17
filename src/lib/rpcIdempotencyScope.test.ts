@@ -225,6 +225,9 @@ const ALIAS_SCOPED: Record<string, string> = {
  */
 const INTERNAL_OPERATION_REFERENCES: Record<string, string[]> = {
   _guard_idempotency_key_insert: ['allocate_payment'],
+  // Deleting a PO must invalidate its saved retry result so the same source
+  // document can create a fresh PO if an admin intentionally removes it.
+  _invalidate_deleted_purchase_order_retry_state: ['save_purchase_order'],
 };
 
 /**

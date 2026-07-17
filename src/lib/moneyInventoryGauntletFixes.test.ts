@@ -59,6 +59,9 @@ const globalBulkPOIntent = source(
 const finalPurchaseOrderRelease = source(
   'supabase/migrations/20260717010000_close_final_purchase_order_release_gaps.sql',
 );
+const deletedBulkPORetryState = source(
+  'supabase/migrations/20260717015439_invalidate_deleted_bulk_po_retry_state.sql',
+);
 const completeDelivery = access.slice(0, access.indexOf('CREATE OR REPLACE FUNCTION public.void_delivery'));
 
 describe('money and inventory gauntlet fixes', () => {
@@ -200,8 +203,11 @@ describe('money and inventory gauntlet fixes', () => {
     expect(bulkImport).toContain('po_number: null');
     expect(bulkImport).not.toContain("supabase.rpc('next_po_number'");
     expect(bulkImport).toContain('p_idempotency_key: pendingIntent.idempotencyKey');
-    expect(bulkImport).toContain('isImportedBulkPOIntent(pendingIntentsRef.current, intentKey)');
+    expect(bulkImport).toContain("const alreadyImported = importedIntent?.status === 'imported'");
     expect(bulkImport).toContain("savedPO.status === 'already_imported'");
+    expect(bulkImport).not.toContain(
+      'if (isImportedBulkPOIntent(pendingIntentsRef.current, intentKey))',
+    );
     expect(bulkImport).toContain('bulk_import_intent_key: documentClaimKey');
     expect(bulkImport).toContain('savedPO.po_number');
     expect(bulkImport).toContain('refreshNeededRef.current = true');
@@ -378,6 +384,28 @@ describe('money and inventory gauntlet fixes', () => {
     expect(finalPurchaseOrderRelease).toContain('SELECT vendor, total_cost_cents');
     expect(billWriter).not.toContain(
       'SUM(quantity_ordered * unit_cost * 100)',
+    );
+  });
+
+  it('rechecks imported documents server-side and clears stale save replays after PO deletion', () => {
+    const saveWrapper = deletedBulkPORetryState.slice(
+      deletedBulkPORetryState.indexOf('CREATE OR REPLACE FUNCTION public.save_purchase_order('),
+      deletedBulkPORetryState.indexOf('REVOKE ALL ON FUNCTION public.save_purchase_order('),
+    );
+
+    expect(deletedBulkPORetryState).toContain(
+      'CREATE OR REPLACE FUNCTION public._invalidate_deleted_purchase_order_retry_state()',
+    );
+    expect(deletedBulkPORetryState).toContain(
+      "DELETE FROM public.idempotency_keys\n   WHERE operation = 'save_purchase_order'",
+    );
+    expect(deletedBulkPORetryState).toContain(
+      'AFTER DELETE ON public.purchase_orders',
+    );
+    expect(saveWrapper).toContain('WHERE claim.intent_key = v_bulk_intent_key');
+    expect(saveWrapper).toContain("'status', 'already_imported'");
+    expect(saveWrapper.indexOf('WHERE claim.intent_key = v_bulk_intent_key')).toBeLessThan(
+      saveWrapper.indexOf('public.next_po_number()'),
     );
   });
 
