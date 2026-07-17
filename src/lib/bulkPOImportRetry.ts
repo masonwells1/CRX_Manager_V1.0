@@ -34,13 +34,16 @@ export interface BulkPOIntentDocument {
   items: BulkPOIntentItem[];
 }
 
+export function trimBulkPOIdentityBoundary(value: string): string {
+  return value.replace(/^ +| +$/g, '');
+}
+
 function normalizeIdentityText(value: string): string {
   // Postgres locale-aware lower() and JavaScript Unicode case folding can
   // disagree. Fold ASCII explicitly on both sides of the RPC boundary and
   // preserve every non-ASCII code point byte-for-byte. PostgreSQL btrim(text)
   // removes ASCII spaces only, so use the same boundary trim here.
-  return value
-    .replace(/^ +| +$/g, '')
+  return trimBulkPOIdentityBoundary(value)
     .replace(/[A-Z]/g, (character) => character.toLowerCase());
 }
 
@@ -137,7 +140,7 @@ export function bulkPOImportFailureGuidance(error: unknown): string | null {
         : '';
 
   if (message.includes('BULK_PO_DOCUMENT_CONTENT_CONFLICT')) {
-    return 'This vendor invoice was already imported with different reviewed details. Open the existing purchase order and edit it instead.';
+    return 'This vendor invoice was already imported with different reviewed details. In Supplier POs, search this vendor and invoice number, then edit it instead.';
   }
   if (message.includes('BULK_PO_INTENT_IDENTITY_MISMATCH')) {
     return 'The vendor or invoice number changed during import. Review those fields and retry.';

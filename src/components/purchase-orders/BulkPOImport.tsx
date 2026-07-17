@@ -26,6 +26,7 @@ import {
   markBulkPOIntentImported,
   normalizeBulkPOInvoiceDate,
   savePendingBulkPOIntents,
+  trimBulkPOIdentityBoundary,
   type PendingBulkPOIntents,
 } from '../../lib/bulkPOImportRetry';
 
@@ -449,7 +450,7 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
             // that inserts the PO, closing MAX+1 races between employees.
             po_number: null,
             // buildParsedPOIntentKey rejects an empty vendor before this RPC.
-            vendor: po.vendor_name.trim(),
+            vendor: trimBulkPOIdentityBoundary(po.vendor_name),
             status: 'draft',
             submitted_date: null,
             expected_delivery_date: null,
@@ -457,7 +458,7 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
             bulk_import_intent_key: documentClaimKey,
             // The database independently recomputes the stable claim from
             // vendor + reference and fingerprints the reviewed date/lines.
-            bulk_import_vendor_reference: po.invoice_number.trim(),
+            bulk_import_vendor_reference: trimBulkPOIdentityBoundary(po.invoice_number),
             bulk_import_invoice_date: normalizeBulkPOInvoiceDate(po.invoice_date),
           },
           p_items: itemsPayload,

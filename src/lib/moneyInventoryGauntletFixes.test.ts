@@ -221,7 +221,10 @@ describe('money and inventory gauntlet fixes', () => {
       'if (isImportedBulkPOIntent(pendingIntentsRef.current, intentKey))',
     );
     expect(bulkImport).toContain('bulk_import_intent_key: documentClaimKey');
-    expect(bulkImport).toContain('bulk_import_vendor_reference: po.invoice_number.trim()');
+    expect(bulkImport).toContain(
+      'bulk_import_vendor_reference: trimBulkPOIdentityBoundary(po.invoice_number)',
+    );
+    expect(bulkImport).toContain('vendor: trimBulkPOIdentityBoundary(po.vendor_name)');
     expect(bulkImport).toContain('bulk_import_invoice_date: normalizeBulkPOInvoiceDate(po.invoice_date)');
     expect(bulkImport).toContain('getPendingBulkPOIntent(pendingIntentsRef.current, intentKey)');
     expect(bulkImport).toContain('savedPO.po_number');
@@ -523,7 +526,9 @@ describe('money and inventory gauntlet fixes', () => {
     );
     expect(browserRetry).toContain("replace(/^ +| +$/g, '')");
     expect(browserRetry).toContain('BULK_PO_DOCUMENT_CONTENT_CONFLICT');
-    expect(browserRetry).toContain('Open the existing purchase order and edit it instead.');
+    expect(browserRetry).toContain(
+      'In Supplier POs, search this vendor and invoice number, then edit it instead.',
+    );
   });
 
   it('authorizes invoice saves and statements against active customer assignment before replay', () => {

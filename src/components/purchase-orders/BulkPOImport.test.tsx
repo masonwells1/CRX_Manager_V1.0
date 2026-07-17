@@ -316,6 +316,46 @@ describe('BulkPOImport', () => {
     ));
   });
 
+  it('sends the same identity text used to build the duplicate claim', async () => {
+    const vendorName = '\u00a0Vendor A\t';
+    const invoiceNumber = '\tINV-NBSP\u00a0';
+    mocks.processDocumentWithOCR.mockResolvedValue({
+      success: true,
+      raw_text: 'parsed with non-ASCII boundary whitespace',
+      document_type: 'purchase_order',
+      parsed_data: {
+        vendor_name: vendorName,
+        invoice_number: invoiceNumber,
+        invoice_date: '2026-07-16',
+        items: [{
+          product_name: product.product_name,
+          quantity: 2,
+          unit_cost: 10,
+          unit_size: 'GAL',
+        }],
+      },
+      confidence: 1,
+      processing_time_ms: 1,
+    });
+
+    render(<BulkPOImport {...defaultProps} />);
+    fireEvent.change(document.querySelector('#po-pdf-upload')!, {
+      target: { files: [new File(['one'], 'INV-NBSP.pdf', { type: 'application/pdf' })] },
+    });
+    fireEvent.click(await screen.findByRole('button', { name: /process 1 file/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /import 1 po/i }));
+
+    await waitFor(() => expect(mocks.rpc).toHaveBeenCalledWith(
+      'save_purchase_order',
+      expect.objectContaining({
+        p_po_payload: expect.objectContaining({
+          vendor: vendorName,
+          bulk_import_vendor_reference: invoiceNumber,
+        }),
+      }),
+    ));
+  });
+
   it('requires a vendor before creating a global duplicate claim', async () => {
     mocks.processDocumentWithOCR.mockResolvedValue({
       success: true,
