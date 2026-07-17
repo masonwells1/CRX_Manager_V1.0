@@ -74,7 +74,7 @@ describe('bulk PO import retry state', () => {
     expect(buildBulkPOIntentKey(corrected)).toBe(buildBulkPOIntentKey(document));
   });
 
-  it('uses a byte-identical non-ASCII identity and SHA-256 claim vector', async () => {
+  it('uses one NFKC case-folded non-ASCII identity and SHA-256 claim vector', async () => {
     const document = {
       vendorName: ' VENDOR Élan ',
       invoiceNumber: ' INV-Ä100 ',
@@ -83,21 +83,23 @@ describe('bulk PO import retry state', () => {
     };
 
     const intentKey = buildBulkPOIntentKey(document);
-    expect(intentKey).toBe('vendor Élan\u001finv-Ä100');
+    expect(intentKey).toBe('vendor élan\u001finv-ä100');
     expect(intentKey).not.toBeNull();
     await expect(buildBulkPODocumentClaimKey(intentKey!))
       .resolves.toBe(
-        'bulk-po-document:b5757ccd0340e268c9347beb855a1bcf86e631ee1de49483dba02c00007923ac',
+        'bulk-po-document:2fe4b753fbc589fbadd75339ef9af9d8f5d218449439f86254deef769546270c',
       );
     expect(buildBulkPOIntentKey({ ...document, vendorName: 'vendor élan' }))
-      .not.toBe(buildBulkPOIntentKey(document));
+      .toBe(buildBulkPOIntentKey(document));
+    expect(buildBulkPOIntentKey({ ...document, vendorName: 'vendor e\u0301lan' }))
+      .toBe(buildBulkPOIntentKey(document));
 
     const paddedIntent = buildBulkPOIntentKey({
       ...document,
       vendorName: ' \tVENDOR Élan\t ',
     });
 
-    expect(paddedIntent).toBe('vendor Élan\u001finv-Ä100');
+    expect(paddedIntent).toBe('vendor élan\u001finv-ä100');
     expect(paddedIntent).toBe(buildBulkPOIntentKey({
       ...document,
       vendorName: 'VENDOR Élan',
@@ -184,6 +186,18 @@ describe('bulk PO import retry state', () => {
     const migrated = loadPendingBulkPOIntents(storage, 'sales-1', 2_000);
     expect(getPendingBulkPOIntent(migrated, identity)?.idempotencyKey).toBe('idem-legacy');
     expect(Object.keys(migrated)).toEqual([hashed]);
+  });
+
+  it('rehashes a legacy raw identity that merely starts with the hash prefix', () => {
+    const rawIdentity = 'h1:vendor a\u001finv-100';
+    const storage = fakeStorage();
+    storage.setItem('crx:bulk-po-import-pending:sales-1', JSON.stringify({
+      [rawIdentity]: { idempotencyKey: 'idem-legacy-prefix', status: 'pending', updatedAt: 1_000 },
+    }));
+
+    const migrated = loadPendingBulkPOIntents(storage, 'sales-1', 2_000);
+    expect(Object.keys(migrated)).toEqual([pendingBulkPOIntentStorageKey(rawIdentity)]);
+    expect(Object.keys(migrated)[0]).not.toBe(rawIdentity);
   });
 
   it('recognizes and upgrades a legacy Unicode-folded non-ASCII marker', () => {

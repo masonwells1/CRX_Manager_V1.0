@@ -18,6 +18,7 @@ const STORAGE_PREFIX = 'crx:bulk-po-import-pending:';
 const MAX_PENDING_AGE_MS = 24 * 60 * 60 * 1000;
 const MAX_IMPORTED_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 const PENDING_KEY_PREFIX = 'h1:';
+const HASHED_PENDING_KEY_PATTERN = /^h1:[a-f0-9]{16}$/;
 
 export interface BulkPOIntentItem {
   productId: string | null;
@@ -45,13 +46,14 @@ export function hasBulkPOIdentityText(value: string): boolean {
 }
 
 function normalizeIdentityText(value: string): string {
-  // Postgres locale-aware lower() and JavaScript Unicode case folding can
-  // disagree. Fold ASCII explicitly on both sides of the RPC boundary and
-  // preserve every non-ASCII letter byte-for-byte. The public PostgreSQL
-  // wrapper applies the same ECMAScript boundary-whitespace set before its
-  // inner ASCII-folded identity implementation hashes or stores these fields.
+  // Normalize compatibility-equivalent Unicode before and after case folding.
+  // The PostgreSQL writer applies the same NFKC/lower/NFKC sequence and has an
+  // apply-time parity vector, so OCR capitalization or composed/decomposed
+  // accents cannot give one vendor invoice a second durable claim.
   return trimBulkPOIdentityBoundary(value)
-    .replace(/[A-Z]/g, (character) => character.toLowerCase());
+    .normalize('NFKC')
+    .toLowerCase()
+    .normalize('NFKC');
 }
 
 const DOCUMENT_IDENTITY_SEPARATOR = '\u001f';
@@ -217,7 +219,7 @@ export function loadPendingBulkPOIntents(
         if (now - entry.updatedAt > maxAge) return [];
         // Migrate pre-hardening entries on read so raw vendor/invoice identity
         // disappears from localStorage without losing retry state.
-        const storageIntentKey = rawKey.startsWith(PENDING_KEY_PREFIX)
+        const storageIntentKey = HASHED_PENDING_KEY_PATTERN.test(rawKey)
           ? rawKey
           : pendingBulkPOIntentStorageKey(rawKey);
         return [[storageIntentKey, entry]];

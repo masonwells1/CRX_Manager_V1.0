@@ -1,7 +1,7 @@
 -- Post-apply rollback-only proof for migrations 20260716213000,
 -- 20260716224000, 20260716233000, 20260717010000, 20260717015439,
 -- 20260717032000, 20260717045420, 20260717063445, 20260717070900,
--- 20260717081856, 20260717085512, and 20260717090000.
+-- 20260717081856, 20260717085512, 20260717090000, and 20260717102000.
 -- Exercises the exact adversarial findings without retaining business rows.
 DO $smoke$
 DECLARE
@@ -154,14 +154,12 @@ BEGIN
   v_intent := 'bulk-po-document:' || encode(
     extensions.digest(
       convert_to(
-        translate(
-          '[SMOKE] Élan Bulk Intent Vendor',
-          'ABCDEFGHIJKLMNOPQRSTUVWXYZ',
-          'abcdefghijklmnopqrstuvwxyz'
-        ) || chr(31) || translate(
-          v_vendor_reference,
-          'ABCDEFGHIJKLMNOPQRSTUVWXYZ',
-          'abcdefghijklmnopqrstuvwxyz'
+        normalize(
+          lower(normalize('[SMOKE] Élan Bulk Intent Vendor', NFKC)),
+          NFKC
+        ) || chr(31) || normalize(
+          lower(normalize(v_vendor_reference, NFKC)),
+          NFKC
         ),
         'UTF8'
       ),
@@ -396,6 +394,37 @@ BEGIN
       v_first, v_replay;
   END IF;
 
+  -- Unicode and ASCII capitalization changes from OCR/manual review must still
+  -- hit the same durable vendor-document claim instead of creating another PO.
+  v_replay := public.save_purchase_order(
+    NULL,
+    jsonb_build_object(
+      'po_number', 'SMK-BULK-CASE-' || v_suffix,
+      'vendor', '[smoke] éLAN bulk intent vendor',
+      'status', 'draft',
+      'bulk_import_vendor_reference', lower(v_vendor_reference),
+      'bulk_import_invoice_date', CURRENT_DATE::text,
+      'bulk_import_intent_key', v_intent
+    ),
+    jsonb_build_array(
+      jsonb_build_object(
+        'product_id', v_product,
+        'product_name', v_product_name,
+        'quantity_ordered', 10.125,
+        'unit_cost_cents', 333,
+        'unit_size', v_unit_size
+      )
+    ),
+    v_admin,
+    'smk-po-bulk-unicode-case-' || v_suffix
+  );
+  IF (v_replay->>'po_id')::uuid IS DISTINCT FROM v_po
+     OR v_replay->>'status' <> 'already_imported'
+     OR v_replay->>'po_number' IS DISTINCT FROM v_first->>'po_number' THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: Unicode case variant created a second PO first=% replay=%',
+      v_first, v_replay;
+  END IF;
+
   -- Reusing a global claim key for another vendor/reference is an identity
   -- mismatch, never evidence that the second document was already imported.
   BEGIN
@@ -568,6 +597,9 @@ BEGIN
    WHERE oid = 'public._save_purchase_order_ascii_identity_impl(uuid,jsonb,jsonb,uuid,text)'::regprocedure;
   IF strpos(v_outer_source, '_save_purchase_order_ascii_identity_impl') = 0
      OR strpos(v_outer_source, 'BULK_PO_VENDOR_REQUIRED') = 0
+     OR strpos(v_identity_source, 'normalize(v_requested_vendor, NFKC)') = 0
+     OR strpos(v_identity_source, 'normalize(v_vendor_reference, NFKC)') = 0
+     OR strpos(v_identity_source, 'translate(') > 0
      OR strpos(v_identity_source, 'public.next_po_number()') = 0
      OR strpos(v_identity_source, '_save_purchase_order_atomic_number_impl') = 0
      OR strpos(v_identity_source, 'public.next_po_number()')

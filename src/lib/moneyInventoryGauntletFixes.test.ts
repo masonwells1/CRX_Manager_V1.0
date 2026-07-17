@@ -83,6 +83,9 @@ const canonicalBulkPOIdentity = source(
 const secureBulkPOFingerprintTrigger = source(
   'supabase/migrations/20260717090000_secure_bulk_po_fingerprint_trigger.sql',
 );
+const unicodeBulkPOIdentity = source(
+  'supabase/migrations/20260717102000_canonicalize_bulk_po_unicode_identity.sql',
+);
 const completeDelivery = access.slice(0, access.indexOf('CREATE OR REPLACE FUNCTION public.void_delivery'));
 
 describe('money and inventory gauntlet fixes', () => {
@@ -517,7 +520,7 @@ describe('money and inventory gauntlet fixes', () => {
     expect(bulkPOReplayContent).toContain('TO authenticated, service_role;');
   });
 
-  it('folds vendor-invoice identity identically in JavaScript and PostgreSQL', () => {
+  it('moves vendor-invoice identity from the reviewed ASCII transition to shared Unicode canonicalization', () => {
     const saveWrapper = bulkPOAsciiIdentity.slice(
       bulkPOAsciiIdentity.indexOf('CREATE OR REPLACE FUNCTION public.save_purchase_order('),
       bulkPOAsciiIdentity.indexOf('REVOKE ALL ON FUNCTION public.save_purchase_order('),
@@ -530,9 +533,31 @@ describe('money and inventory gauntlet fixes', () => {
     expect(saveWrapper).toContain('translate(\n            v_vendor_reference,');
     expect(saveWrapper).not.toContain('lower(v_requested_vendor)');
     expect(saveWrapper).not.toContain('lower(v_vendor_reference)');
-    expect(browserRetry).toContain(
-      'replace(/[A-Z]/g, (character) => character.toLowerCase())',
+    expect(unicodeBulkPOIdentity).toContain(
+      'LOCK TABLE public.purchase_order_import_intents IN SHARE ROW EXCLUSIVE MODE;',
     );
+    expect(unicodeBulkPOIdentity).toContain(
+      'BULK_PO_UNICODE_IDENTITY_TRANSITION_BLOCKED',
+    );
+    expect(unicodeBulkPOIdentity).toContain(
+      'normalize(\n      lower(normalize(v_requested_vendor, NFKC)),\n      NFKC\n    )',
+    );
+    expect(unicodeBulkPOIdentity).toContain(
+      'normalize(\n      lower(normalize(v_vendor_reference, NFKC)),\n      NFKC\n    )',
+    );
+    expect(unicodeBulkPOIdentity).toContain(
+      "v_vector_hash <> '2fe4b753fbc589fbadd75339ef9af9d8f5d218449439f86254deef769546270c'",
+    );
+    expect(unicodeBulkPOIdentity).toContain(
+      'IF NOT (public.is_admin() OR public.is_sales_rep()) THEN',
+    );
+    expect(unicodeBulkPOIdentity).toContain(
+      'FROM PUBLIC, anon, authenticated, service_role;',
+    );
+    expect(browserRetry).toContain(
+      ".normalize('NFKC')\n    .toLowerCase()\n    .normalize('NFKC')",
+    );
+    expect(browserRetry).toContain('const HASHED_PENDING_KEY_PATTERN = /^h1:[a-f0-9]{16}$/;');
     expect(browserRetry).toContain('return value.trim();');
     expect(browserRetry).toContain('BULK_PO_DOCUMENT_CONTENT_CONFLICT');
     expect(browserRetry).toContain(
@@ -618,6 +643,7 @@ describe('money and inventory gauntlet fixes', () => {
     expect(smoke).toContain(
       'SET CONSTRAINTS require_bulk_po_content_fingerprint IMMEDIATE;',
     );
+    expect(smoke).toContain("normalize('[SMOKE] Élan Bulk Intent Vendor', NFKC)");
   });
 
   it('authorizes invoice saves and statements against active customer assignment before replay', () => {
