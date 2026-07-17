@@ -84,7 +84,13 @@ const secureBulkPOFingerprintTrigger = source(
   'supabase/migrations/20260717090000_secure_bulk_po_fingerprint_trigger.sql',
 );
 const unicodeBulkPOIdentity = source(
-  'supabase/migrations/20260717102000_canonicalize_bulk_po_unicode_identity.sql',
+  'supabase/migrations/20260717101619_canonicalize_bulk_po_unicode_identity.sql',
+);
+const serverAuthoritativeBulkPOIdentity = source(
+  'supabase/migrations/20260717110016_make_bulk_po_identity_server_authoritative.sql',
+);
+const serverDerivedBulkPOClaimPayload = source(
+  'supabase/migrations/20260717112906_restore_server_derived_bulk_po_claim_payload.sql',
 );
 const completeDelivery = access.slice(0, access.indexOf('CREATE OR REPLACE FUNCTION public.void_delivery'));
 
@@ -232,7 +238,8 @@ describe('money and inventory gauntlet fixes', () => {
     expect(bulkImport).not.toContain(
       'if (isImportedBulkPOIntent(pendingIntentsRef.current, intentKey))',
     );
-    expect(bulkImport).toContain('bulk_import_intent_key: documentClaimKey');
+    expect(bulkImport).toContain("bulk_import_intent_key: 'server-derived'");
+    expect(bulkImport).not.toContain('buildBulkPODocumentClaimKey');
     expect(bulkImport).toContain(
       'bulk_import_vendor_reference: trimBulkPOIdentityBoundary(po.invoice_number)',
     );
@@ -563,6 +570,50 @@ describe('money and inventory gauntlet fixes', () => {
     expect(browserRetry).toContain(
       'In Supplier POs, search this vendor and invoice number, then edit it instead.',
     );
+  });
+
+  it('makes PostgreSQL the sole durable bulk-PO identity authority', () => {
+    const adversarialSmoke = source(
+      'scripts/smoke/smoke-adversarial-money-inventory-closeout.sql',
+    );
+    expect(serverAuthoritativeBulkPOIdentity).toContain(
+      "v_payload->>'bulk_import_document' = 'true'",
+    );
+    expect(serverAuthoritativeBulkPOIdentity).toContain(
+      'v_bulk_intent_key := v_expected_intent_key;',
+    );
+    expect(serverAuthoritativeBulkPOIdentity).not.toContain(
+      "RAISE EXCEPTION 'BULK_PO_INTENT_IDENTITY_MISMATCH'",
+    );
+    expect(serverAuthoritativeBulkPOIdentity).toContain(
+      "v_payload - 'bulk_import_intent_key' - 'bulk_import_document'",
+    );
+    expect(serverAuthoritativeBulkPOIdentity).toContain(
+      'IF NOT (public.is_admin() OR public.is_sales_rep()) THEN',
+    );
+    expect(serverAuthoritativeBulkPOIdentity).toContain(
+      'FROM PUBLIC, anon, authenticated, service_role;',
+    );
+    expect(adversarialSmoke).not.toContain("'bulk_import_document', true");
+    expect(adversarialSmoke).toContain(
+      "'bulk_import_intent_key', 'browser-value-is-not-authoritative'",
+    );
+    expect(serverDerivedBulkPOClaimPayload).toContain(
+      "v_payload - 'bulk_import_document'",
+    );
+    expect(serverDerivedBulkPOClaimPayload).not.toContain(
+      "v_payload->>'bulk_import_document' = 'true'",
+    );
+    expect(serverDerivedBulkPOClaimPayload).toContain(
+      "'{bulk_import_intent_key}',\n          to_jsonb(v_bulk_intent_key)",
+    );
+    expect(serverDerivedBulkPOClaimPayload).not.toContain(
+      "v_payload - 'bulk_import_intent_key' - 'bulk_import_document'",
+    );
+    expect(serverDerivedBulkPOClaimPayload.indexOf("'{bulk_import_intent_key}'"))
+      .toBeLessThan(
+        serverDerivedBulkPOClaimPayload.indexOf('_save_purchase_order_atomic_number_impl'),
+      );
   });
 
   it('rejects invisible-only bulk PO identity at the public RPC boundary', () => {

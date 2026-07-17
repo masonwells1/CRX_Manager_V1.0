@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   buildBulkPOIntentKey,
-  buildBulkPODocumentClaimKey,
   buildBulkPOIdempotencyKey,
   bulkPOImportFailureGuidance,
   ensurePendingBulkPOIntent,
@@ -74,7 +73,7 @@ describe('bulk PO import retry state', () => {
     expect(buildBulkPOIntentKey(corrected)).toBe(buildBulkPOIntentKey(document));
   });
 
-  it('uses one NFKC case-folded non-ASCII identity and SHA-256 claim vector', async () => {
+  it('uses one NFKC case-folded non-ASCII browser retry identity', () => {
     const document = {
       vendorName: ' VENDOR Élan ',
       invoiceNumber: ' INV-Ä100 ',
@@ -85,10 +84,6 @@ describe('bulk PO import retry state', () => {
     const intentKey = buildBulkPOIntentKey(document);
     expect(intentKey).toBe('vendor élan\u001finv-ä100');
     expect(intentKey).not.toBeNull();
-    await expect(buildBulkPODocumentClaimKey(intentKey!))
-      .resolves.toBe(
-        'bulk-po-document:2fe4b753fbc589fbadd75339ef9af9d8f5d218449439f86254deef769546270c',
-      );
     expect(buildBulkPOIntentKey({ ...document, vendorName: 'vendor élan' }))
       .toBe(buildBulkPOIntentKey(document));
     expect(buildBulkPOIntentKey({ ...document, vendorName: 'vendor e\u0301lan' }))
@@ -111,9 +106,6 @@ describe('bulk PO import retry state', () => {
     expect(bulkPOImportFailureGuidance({
       message: 'BULK_PO_DOCUMENT_CONTENT_CONFLICT',
     })).toMatch(/already imported with different reviewed details/i);
-    expect(bulkPOImportFailureGuidance(new Error(
-      'BULK_PO_INTENT_IDENTITY_MISMATCH',
-    ))).toMatch(/vendor or invoice number changed/i);
     expect(bulkPOImportFailureGuidance(new Error('temporary save failure'))).toBeNull();
   });
 
@@ -164,14 +156,6 @@ describe('bulk PO import retry state', () => {
     expect(await buildBulkPOIdempotencyKey('sales-2', 'stable-intent')).not.toBe(first);
   });
 
-  it('derives one document claim across different importing users', async () => {
-    const first = await buildBulkPODocumentClaimKey('stable-intent');
-    const second = await buildBulkPODocumentClaimKey('stable-intent');
-
-    expect(first).toBe(second);
-    expect(first).toMatch(/^bulk-po-document:[a-f0-9]{64}$/);
-  });
-
   it('hashes browser storage keys and migrates legacy raw identity keys on read', () => {
     const identity = 'vendor a\u001finv-100';
     const hashed = pendingBulkPOIntentStorageKey(identity);
@@ -218,6 +202,24 @@ describe('bulk PO import retry state', () => {
     const entry = ensurePendingBulkPOIntent(migrated, freshIdentity, () => 'unused', 3_000);
     expect(entry.poId).toBe('po-legacy');
     expect(Object.keys(migrated)).toEqual([pendingBulkPOIntentStorageKey(freshIdentity)]);
+  });
+
+  it('canonicalizes decomposed Unicode while migrating a legacy raw marker', () => {
+    const decomposedIdentity = 'vendor e\u0301lan\u001finv-a\u0308100';
+    const canonicalIdentity = 'vendor élan\u001finv-ä100';
+    const storage = fakeStorage();
+    storage.setItem('crx:bulk-po-import-pending:sales-1', JSON.stringify({
+      [decomposedIdentity]: {
+        idempotencyKey: 'idem-decomposed-legacy',
+        status: 'imported',
+        updatedAt: 1_000,
+        poId: 'po-decomposed',
+      },
+    }));
+
+    const migrated = loadPendingBulkPOIntents(storage, 'sales-1', 2_000);
+    expect(Object.keys(migrated)).toEqual([pendingBulkPOIntentStorageKey(canonicalIdentity)]);
+    expect(getPendingBulkPOIntent(migrated, canonicalIdentity)?.poId).toBe('po-decomposed');
   });
 
   it('reuses pending work and persists successful imports across close/reopen', () => {

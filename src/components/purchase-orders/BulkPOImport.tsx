@@ -17,7 +17,6 @@ import {
 } from '../../lib/purchaseOrderMoney';
 import {
   buildBulkPOIntentKey,
-  buildBulkPODocumentClaimKey,
   buildBulkPOIdempotencyKey,
   bulkPOImportFailureGuidance,
   ensurePendingBulkPOIntent,
@@ -412,7 +411,6 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
           continue;
         }
         const deterministicIdempotencyKey = await buildBulkPOIdempotencyKey(profile.id, intentKey);
-        const documentClaimKey = await buildBulkPODocumentClaimKey(intentKey);
         const existingPendingIntent = getPendingBulkPOIntent(pendingIntentsRef.current, intentKey);
         const previouslyImportedPoId = existingPendingIntent?.status === 'imported'
           ? existingPendingIntent.poId
@@ -458,9 +456,10 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
             submitted_date: null,
             expected_delivery_date: null,
             notes: noteParts.join('. '),
-            bulk_import_intent_key: documentClaimKey,
-            // The database independently recomputes the stable claim from
-            // vendor + reference and fingerprints the reviewed date/lines.
+            // PostgreSQL alone derives the durable claim from vendor +
+            // reference. This flag opts into that path without trusting a
+            // browser-computed Unicode digest.
+            bulk_import_intent_key: 'server-derived',
             bulk_import_vendor_reference: trimBulkPOIdentityBoundary(po.invoice_number),
             bulk_import_invoice_date: normalizeBulkPOInvoiceDate(po.invoice_date),
           },

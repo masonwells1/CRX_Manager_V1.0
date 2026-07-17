@@ -46,10 +46,9 @@ export function hasBulkPOIdentityText(value: string): boolean {
 }
 
 function normalizeIdentityText(value: string): string {
-  // Normalize compatibility-equivalent Unicode before and after case folding.
-  // The PostgreSQL writer applies the same NFKC/lower/NFKC sequence and has an
-  // apply-time parity vector, so OCR capitalization or composed/decomposed
-  // accents cannot give one vendor invoice a second durable claim.
+  // Normalize compatibility-equivalent Unicode for browser retry hints. The
+  // PostgreSQL writer independently derives the authoritative durable claim,
+  // so cross-runtime Unicode differences cannot reject or duplicate an import.
   return trimBulkPOIdentityBoundary(value)
     .normalize('NFKC')
     .toLowerCase()
@@ -139,11 +138,6 @@ export async function buildBulkPOIdempotencyKey(
   return `save_purchase_order:${profileId}:bulk:${await sha256Hex(`${profileId}\u0000${intentKey}`)}`;
 }
 
-/** Stable across users so the server can claim one vendor document globally. */
-export async function buildBulkPODocumentClaimKey(intentKey: string): Promise<string> {
-  return `bulk-po-document:${await sha256Hex(intentKey)}`;
-}
-
 export function bulkPOImportFailureGuidance(error: unknown): string | null {
   const message = error instanceof Error
     ? error.message
@@ -155,9 +149,6 @@ export function bulkPOImportFailureGuidance(error: unknown): string | null {
 
   if (message.includes('BULK_PO_DOCUMENT_CONTENT_CONFLICT')) {
     return 'This vendor invoice was already imported with different reviewed details. In Supplier POs, search this vendor and invoice number, then edit it instead.';
-  }
-  if (message.includes('BULK_PO_INTENT_IDENTITY_MISMATCH')) {
-    return 'The vendor or invoice number changed during import. Review those fields and retry.';
   }
   return null;
 }
@@ -186,6 +177,14 @@ function legacyPendingBulkPOIntentStorageKey(intentKey: string): string {
   return pendingBulkPOIntentStorageKey(
     `${vendorName}${DOCUMENT_IDENTITY_SEPARATOR}${invoiceNumber}`,
   );
+}
+
+function canonicalizeLegacyPendingIntentKey(intentKey: string): string {
+  const separatorIndex = intentKey.indexOf(DOCUMENT_IDENTITY_SEPARATOR);
+  if (separatorIndex === -1) return normalizeIdentityText(intentKey);
+  return `${normalizeIdentityText(intentKey.slice(0, separatorIndex))}`
+    + DOCUMENT_IDENTITY_SEPARATOR
+    + normalizeIdentityText(intentKey.slice(separatorIndex + 1));
 }
 
 export function getPendingBulkPOIntent(
@@ -221,7 +220,7 @@ export function loadPendingBulkPOIntents(
         // disappears from localStorage without losing retry state.
         const storageIntentKey = HASHED_PENDING_KEY_PATTERN.test(rawKey)
           ? rawKey
-          : pendingBulkPOIntentStorageKey(rawKey);
+          : pendingBulkPOIntentStorageKey(canonicalizeLegacyPendingIntentKey(rawKey));
         return [[storageIntentKey, entry]];
       }),
     );
