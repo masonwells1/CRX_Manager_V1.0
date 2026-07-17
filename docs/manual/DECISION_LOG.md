@@ -1,11 +1,33 @@
 # Decision Log
 
-Last verified: 2026-07-13
+Last verified: 2026-07-17
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+---
+
+## 2026-07-17 — SETTLED: CRM read-aggregates are assignment-scoped (wider than row-level invoice RLS)
+
+**Decision (loop orchestration under Mason's pre-authorized run; pattern inherited from
+`get_customer_statement`):** the CRM purchase-intelligence and call-list SECDEF RPCs scope by
+CUSTOMER ASSIGNMENT — an assigned rep sees their customer's full financial aggregates (revenue,
+prepay, AR, top products) even where row-level `invoices_select` would only show them invoices
+they personally wrote. Rationale: "the assigned rep owns the relationship" is the CRM's core
+model, and the same widening already existed in `get_customer_statement`. Never cross-customer.
+Operative rule: new CRM read RPCs follow assignment scoping; do not re-litigate per-RPC.
+(Flagged by the final-gauntlet system RLS review 2026-07-17; source: loop ledger.)
+
+## 2026-07-17 — CRM call-list filters: tier shipped client-side; crop parked as owner decision
+
+**Decision:** the Phase-3 mission text listed rep/tier/crop/last-contact filters. Rep + tier +
+last-contact shipped; CROP is parked for Mason because "what a grower grows" has no single source
+of truth (field crop-history vs notes) — that's a business-data decision, not a build detail.
+Operative rule: don't add a crop filter until Mason picks the source; tier lookups are
+client-side against `customers.assigned_tier` (no RPC payload change needed).
+(Sol 3.G rounds 1-2; source: loop ledger "Scope decisions".)
 
 ---
 

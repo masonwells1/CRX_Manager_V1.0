@@ -99,7 +99,14 @@ export default function CustomerContacts({ customerId, performedBy }: CustomerCo
       if (editing) {
         // customer_id in the predicate: an edit can never touch a row outside
         // this customer, even with a stale editing reference (Sol final gauntlet).
-        const result = await contactsTable().update(payload).eq('id', editing.id).eq('customer_id', customerId).select();
+        // When the write would set is_primary=false, also require the row to
+        // CURRENTLY be non-primary: client state can be stale (another tab may
+        // have promoted this contact), and the DB only enforces "at most one
+        // primary", not "at least one" — a matched-0-rows loud failure beats
+        // silently leaving the customer with no primary.
+        let update = contactsTable().update(payload).eq('id', editing.id).eq('customer_id', customerId);
+        if (payload.is_primary === false) update = update.eq('is_primary', false);
+        const result = await update.select();
         checkMutationResult(result, 'update contact');
       } else {
         const result = await contactsTable().insert({ ...payload, customer_id: customerId }).select();
@@ -136,7 +143,10 @@ export default function CustomerContacts({ customerId, performedBy }: CustomerCo
     if (!contactToDeactivate) return;
     setDeactivating(true);
     try {
-      const result = await contactsTable().update({ is_active: false, is_primary: false }).eq('id', contactToDeactivate.id).eq('customer_id', customerId).select();
+      // is_primary=false predicate: if this contact became primary after the
+      // list rendered (stale client state), the deactivate matches 0 rows and
+      // fails loudly instead of leaving the customer with no primary.
+      const result = await contactsTable().update({ is_active: false, is_primary: false }).eq('id', contactToDeactivate.id).eq('customer_id', customerId).eq('is_primary', false).select();
       checkMutationResult(result, 'deactivate contact');
       toast('success', 'Contact deactivated');
       setContactToDeactivate(null);

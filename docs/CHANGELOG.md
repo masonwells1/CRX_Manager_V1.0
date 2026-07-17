@@ -4,6 +4,17 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-17 — CRM Relationship Intelligence: all four phases LIVE (autonomous loop)
+
+Native CRM module shipped end-to-end in one armed autonomous run (mission `docs/loops/crm-relationship-intelligence-loop-2026-07-16.md`, full audit trail in the ledger, plain-English summary in `docs/loops/crm-relationship-intelligence-morning-report.md`):
+
+- **Phase 1 (PR #145):** `customer_contacts` + `external_identities` + `customer_interactions`/`interaction_transcripts`; Contacts tab, 30-second log-call flow, timeline integration. E.164 phones, bidirectional legacy-field sync triggers, provenance immutability, atomic primary promotion RPC.
+- **Phase 2 (PR #149):** `customer_facts` (evidence-vs-belief knowledge, review queue, immutable-verified + supersession history, renewable expiry) + 4 purchase-intelligence RPCs incl. `get_customer_prep_card`; Knowledge tab + Call Prep card.
+- **Phase 3 (PR #150):** 5 seasonal call-list RPCs + `/call-lists` page (rep/tier filters, prep peek, log-call reuse). Bonus root-cause fix: ToastProvider context-value memoization + identity-stable test stub (killed a reproducible 4GB test-worker OOM loop).
+- **Phase 4 (PR #151):** `customer_documents` + private `customer-documents` bucket; Documents tab (upload/download/soft-delete, expiring-soon badges). Soft-delete only, provenance frozen, purge-safety, path-scoped storage policies.
+- **Gauntlet:** 10 migrations through double adversarial review (Claude reviewers + Codex) with hash-bound proofs + rolled-back live smokes; 14 Sol gate rounds; final whole-loop sweep (compliance/types-drift/system-RLS/Sol) with live-verified anon/PUBLIC lockout. 11 CRM error tokens registered in `RpcErrorCodes`; schema registry repaired (vendors.deleted_at transcription gap).
+- **Parked (owner + follow-ups):** save_customer ownership gap (pre-existing, task chip), idempotent call-log/fact-add RPCs (task chip), crop filter source-of-truth, top-products metric, Phase-5 service-role seams (recorded in ledger).
+
 ## 2026-07-16 — Scaffolding review Wave 4c: stale-anchor doc corrections
 
 Fixed the stale claims the review flagged in two high-read docs (each verified against current reality this session):
