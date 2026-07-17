@@ -237,6 +237,7 @@
       "20260716195012_crm_supersede_fact_expiry",
       "20260716213000_preserve_purchase_order_omitted_cost",
       "20260716214423_crm_call_lists",
+      "20260717013415_crm_customer_documents",
       "a1_dispatched_list_recent_completed",
       "a1b_dispatched_to_me_completed_tail",
       "accounting_and_integrity_fixes",
@@ -1275,6 +1276,30 @@
       ],
       "nullable": true
     },
+    "customer_documents.document_type": {
+      "values": [
+        "license",
+        "permit",
+        "contract",
+        "map",
+        "invoice_copy",
+        "other"
+      ],
+      "constraints": [
+        "customer_documents_document_type_check"
+      ]
+    },
+    "customer_documents.source": {
+      "values": [
+        "rep",
+        "ai_receptionist",
+        "system",
+        "web_store"
+      ],
+      "constraints": [
+        "customer_documents_source_check"
+      ]
+    },
     "customer_facts.category": {
       "values": [
         "product_preference",
@@ -2211,6 +2236,30 @@
       "reason": "conditional/multi-column — not a single-column IN-list; hooks do NOT validate this constraint"
     },
     {
+      "table": "customer_documents",
+      "constraint": "customer_documents_effective_expiration_check",
+      "def": "CHECK (((expiration_date IS NULL) OR (effective_date IS NULL) OR (expiration_date >= effective_date)))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "customer_documents",
+      "constraint": "customer_documents_path_matches_customer_check",
+      "def": "CHECK (((split_part(storage_path, '/'::text, 1) = (customer_id)::text) AND (split_part(storage_path, '/'::text, 2) <> ''::text) AND (storage_path !~~ '%/%/%'::text)))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "customer_documents",
+      "constraint": "customer_documents_size_bytes_check",
+      "def": "CHECK ((size_bytes > 0))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "customer_documents",
+      "constraint": "customer_documents_soft_delete_stamp_check",
+      "def": "CHECK ((((deleted_at IS NULL) AND (deleted_by IS NULL)) OR ((deleted_at IS NOT NULL) AND (deleted_by IS NOT NULL))))",
+      "reason": "conditional/multi-column — not a single-column IN-list; hooks do NOT validate this constraint"
+    },
+    {
       "table": "customer_facts",
       "constraint": "customer_facts_ai_source_interaction_check",
       "def": "CHECK (((source <> 'ai_receptionist'::text) OR (source_interaction_id IS NOT NULL)))",
@@ -3074,6 +3123,23 @@
         "is_decision_maker",
         "is_billing_contact",
         "is_active",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    "customer_documents": {
+      "no_default": [
+        "customer_id",
+        "document_type",
+        "storage_path",
+        "filename",
+        "mime_type",
+        "size_bytes",
+        "uploaded_by"
+      ],
+      "with_default": [
+        "id",
+        "source",
         "created_at",
         "updated_at"
       ]
@@ -4737,6 +4803,25 @@
       "is_billing_contact",
       "is_active",
       "notes",
+      "created_at",
+      "updated_at"
+    ],
+    "customer_documents": [
+      "id",
+      "customer_id",
+      "contact_id",
+      "document_type",
+      "storage_path",
+      "filename",
+      "mime_type",
+      "size_bytes",
+      "uploaded_by",
+      "source",
+      "effective_date",
+      "expiration_date",
+      "notes",
+      "deleted_at",
+      "deleted_by",
       "created_at",
       "updated_at"
     ],
