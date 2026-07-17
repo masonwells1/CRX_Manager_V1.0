@@ -4,6 +4,50 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-17 — Add CodeRabbit AI PR-review config (.coderabbit.yaml) tuned to CRX hard rules; opened PR #160. GitHub setup inspection: confirmed CodeQL default-setup, secret scanning, Dependabot, protect-main ruleset all active; repo kept public per Mason.
+
+Add CodeRabbit AI PR-review config (.coderabbit.yaml) tuned to CRX hard rules; opened PR #160. GitHub setup inspection: confirmed CodeQL default-setup, secret scanning, Dependabot, protect-main ruleset all active; repo kept public per Mason.
+
+- **Commits this session** (git log --since=12.hours --author=Mason):
+  - `774c85e4 Reconcile save_customer migration ledger version to match filename (#159)`
+  - `a84534b6 Merge pull request #156 from masonwells1/claude/amazing-ptolemy-9e7e0a`
+  - `7183851f Merge pull request #155 from masonwells1/claude/stoic-heyrovsky-ebaaf6`
+  - `b240f7a3 Close money and inventory gauntlet findings (#157)`
+  - `bca78b59 feat(crm): customer crops + prep-card top products by volume (owner decisions 2026-07-17) (#154)`
+  - `addda7cd Close money and inventory gauntlet gaps (#153)`
+  - `296d2de7 CRM loop closeout: final-gauntlet fixes + morning report (#152)`
+  - `916cc856 CRM Relationship Intelligence — Phase 4: Customer Documents (#151)`
+- **Migrations touched** (last 15 commits (fallback)):
+  - `supabase/migrations/20260717063445_bind_bulk_po_replay_content.sql`
+  - `supabase/migrations/20260717070900_bind_bulk_po_identity_ascii_fold.sql`
+  - `supabase/migrations/20260717081856_reject_blank_bulk_po_identity.sql`
+  - `supabase/migrations/20260717085512_canonicalize_bulk_po_identity_whitespace.sql`
+  - `supabase/migrations/20260717092749_secure_bulk_po_fingerprint_trigger.sql`
+  - `supabase/migrations/20260717101619_canonicalize_bulk_po_unicode_identity.sql`
+  - `supabase/migrations/20260717110016_make_bulk_po_identity_server_authoritative.sql`
+  - `supabase/migrations/20260717112906_restore_server_derived_bulk_po_claim_payload.sql`
+  - `supabase/migrations/20260717113000_log_customer_interaction_rpc.sql`
+  - `supabase/migrations/20260717112532_crm_customer_crops.sql`
+  - `supabase/migrations/20260717112533_crm_prep_card_volume.sql`
+  - `supabase/migrations/20260717123000_save_customer_ownership_enforcement.sql`
+  - `supabase/migrations/20260716183501_purchase_order_integer_cents.sql`
+  - `supabase/migrations/20260716190000_harden_sales_financial_scope.sql`
+  - `supabase/migrations/20260716191000_aggregate_delivery_stock_preflight.sql`
+  - `supabase/migrations/20260716202000_preflight_delivery_accounting_period.sql`
+  - `supabase/migrations/20260716210000_harden_invoice_existing_customer_scope.sql`
+  - `supabase/migrations/20260716213000_preserve_purchase_order_omitted_cost.sql`
+  - `supabase/migrations/20260716224000_close_adversarial_money_inventory_gaps.sql`
+  - `supabase/migrations/20260716233000_globalize_bulk_po_import_intents.sql`
+  - `supabase/migrations/20260717010000_close_final_purchase_order_release_gaps.sql`
+  - `supabase/migrations/20260717015439_invalidate_deleted_bulk_po_retry_state.sql`
+  - `supabase/migrations/20260717032000_replay_bulk_po_same_request_result.sql`
+  - `supabase/migrations/20260717045420_bind_bulk_po_claim_to_vendor.sql`
+  - `supabase/migrations/20260717013415_crm_customer_documents.sql`
+  - `supabase/migrations/20260716214423_crm_call_lists.sql`
+  - `supabase/migrations/20260716181306_crm_customer_facts.sql`
+  - `supabase/migrations/20260716182318_crm_purchase_intelligence.sql`
+  - `supabase/migrations/20260716195012_crm_supersede_fact_expiry.sql`
+
 ## 2026-07-17 — APPLIED save_customer ownership enforcement to live (ledger 20260717123000) under Mason's in-chat OK. Post-apply: function hash changed, single overload, all gates present, grants clean (no anon), all 17 DB sweeps PASS, rolled-back live probe POST_PASS_ROLLBACK (rep denied editing non-assigned customer, own edit works). Updated migration-history row 734 + DECISION_LOG to applied.
 
 APPLIED save_customer ownership enforcement to live (ledger 20260717123000) under Mason's in-chat OK. Post-apply: function hash changed, single overload, all gates present, grants clean (no anon), all 17 DB sweeps PASS, rolled-back live probe POST_PASS_ROLLBACK (rep denied editing non-assigned customer, own edit works). Updated migration-history row 734 + DECISION_LOG to applied.
