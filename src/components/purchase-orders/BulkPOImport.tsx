@@ -18,6 +18,7 @@ import {
 } from '../../lib/purchaseOrderMoney';
 import {
   buildBulkPOIntentKey,
+  buildBulkPODocumentClaimKey,
   buildBulkPOIdempotencyKey,
   ensurePendingBulkPOIntent,
   isImportedBulkPOIntent,
@@ -403,6 +404,7 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
           continue;
         }
         const deterministicIdempotencyKey = await buildBulkPOIdempotencyKey(profile.id, intentKey);
+        const documentClaimKey = await buildBulkPODocumentClaimKey(intentKey);
         const pendingIntent = ensurePendingBulkPOIntent(
           pendingIntentsRef.current,
           intentKey,
@@ -449,7 +451,7 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
             submitted_date: null,
             expected_delivery_date: null,
             notes: noteParts.join('. '),
-            bulk_import_intent_key: deterministicIdempotencyKey,
+            bulk_import_intent_key: documentClaimKey,
           },
           p_items: itemsPayload,
           p_performed_by: profile.id,
@@ -457,12 +459,26 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
         });
 
         if (poError || !poData) throw poError;
-        const savedPO = assertRpcResult<{ po_id: string }>(poData, 'save_purchase_order');
-        markBulkPOIntentImported(pendingIntentsRef.current, intentKey, savedPO.po_id);
+        const savedPO = assertRpcResult<{
+          po_id: string;
+          status?: 'saved' | 'already_imported';
+          po_number?: string;
+        }>(poData, 'save_purchase_order');
+        if (savedPO.status === 'already_imported' && !savedPO.po_number) {
+          throw new Error('Server deduplicated the vendor document without returning its PO number');
+        }
+        markBulkPOIntentImported(
+          pendingIntentsRef.current,
+          intentKey,
+          savedPO.po_id,
+          Date.now(),
+          savedPO.po_number,
+        );
         savePendingBulkPOIntents(localStorage, profile.id, pendingIntentsRef.current);
 
         successCount++;
-        newSuccessCount++;
+        if (savedPO.status === 'already_imported') skippedCount++;
+        else newSuccessCount++;
       } catch (error) {
         Sentry.captureException(error instanceof Error ? error : new Error(String(error)), { extra: { context: 'Error importing PO' } });
         failedCount++;
@@ -474,10 +490,10 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
 
     if (newSuccessCount > 0) {
       toast('success', `Imported ${newSuccessCount} purchase order${newSuccessCount !== 1 ? 's' : ''}`);
-      onSuccess();
+      if (failedCount === 0) onSuccess();
     }
     if (skippedCount > 0) {
-      toast('info', `Skipped ${skippedCount} document${skippedCount !== 1 ? 's' : ''} already imported in the last 30 days.`);
+      toast('info', `Skipped ${skippedCount} document${skippedCount !== 1 ? 's' : ''} already imported.`);
     }
     if (failedCount > 0) {
       toast('error', `${failedCount} purchase order${failedCount !== 1 ? 's' : ''} failed. Review and retry; successful imports will be skipped.`);

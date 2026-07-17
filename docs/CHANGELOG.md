@@ -15,6 +15,14 @@ Native CRM module shipped end-to-end in one armed autonomous run (mission `docs/
 - **Gauntlet:** 10 migrations through double adversarial review (Claude reviewers + Codex) with hash-bound proofs + rolled-back live smokes; 14 Sol gate rounds; final whole-loop sweep (compliance/types-drift/system-RLS/Sol) with live-verified anon/PUBLIC lockout. 11 CRM error tokens registered in `RpcErrorCodes`; schema registry repaired (vendors.deleted_at transcription gap).
 - **Parked (owner + follow-ups):** save_customer ownership gap (pre-existing, task chip), idempotent call-log/fact-add RPCs (task chip), crop filter source-of-truth, top-products metric, Phase-5 service-role seams (recorded in ledger).
 
+---
+
+## 2026-07-16 — Final bulk purchase-order replay corrections
+
+The last adversarial review found three narrower bulk-import issues: a server-side duplicate was displayed as newly imported and left the browser's unused reserved PO number behind, partial failures closed the review modal and hid the failed documents, and binary floating-point rounding disagreed with PostgreSQL on half-cent fractional-quantity totals. The browser now consumes the server's original PO number, closes only when every document succeeds or is safely skipped, and uses decimal-exact half-away-from-zero cent rounding. Reviewed forward migration `20260716233000_globalize_bulk_po_import_intents` applied live as ledger version `20260716235814`; it globalizes the persistent vendor-document claim across authorized employees while leaving generic request idempotency actor-scoped, includes a locked duplicate preflight, and returns the first PO number on replay. The production cross-employee rollback smoke ended in `SMOKE_PASS_ROLLBACK`, and permanent checks found zero claim rows, zero PO header mismatches, and zero fractional-cost rows.
+
+---
+
 ## 2026-07-16 — Scaffolding review Wave 4c: stale-anchor doc corrections
 
 Fixed the stale claims the review flagged in two high-read docs (each verified against current reality this session):

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   buildBulkPOIntentKey,
+  buildBulkPODocumentClaimKey,
   buildBulkPOIdempotencyKey,
   ensurePendingBulkPOIntent,
   isImportedBulkPOIntent,
@@ -68,6 +69,14 @@ describe('bulk PO import retry state', () => {
     expect(await buildBulkPOIdempotencyKey('sales-2', 'stable-intent')).not.toBe(first);
   });
 
+  it('derives one document claim across different importing users', async () => {
+    const first = await buildBulkPODocumentClaimKey('stable-intent');
+    const second = await buildBulkPODocumentClaimKey('stable-intent');
+
+    expect(first).toBe(second);
+    expect(first).toMatch(/^bulk-po-document:[a-f0-9]{64}$/);
+  });
+
   it('reuses pending work and persists successful imports across close/reopen', () => {
     const storage = fakeStorage();
     const createKey = vi.fn()
@@ -85,14 +94,14 @@ describe('bulk PO import retry state', () => {
     expect(retry).toMatchObject({ idempotencyKey: 'idem-first', poNumber: 'PO-1001' });
     expect(createKey).toHaveBeenCalledTimes(1);
 
-    markBulkPOIntentImported(reopened, 'intent-A', 'po-id-1001', 3_000);
+    markBulkPOIntentImported(reopened, 'intent-A', 'po-id-1001', 3_000, 'PO-EXISTING');
     savePendingBulkPOIntents(storage, 'sales-1', reopened);
 
     const afterSuccessReopen = loadPendingBulkPOIntents(storage, 'sales-1', 4_000);
     expect(isImportedBulkPOIntent(afterSuccessReopen, 'intent-A')).toBe(true);
     expect(afterSuccessReopen['intent-A']).toMatchObject({
       idempotencyKey: 'idem-first',
-      poNumber: 'PO-1001',
+      poNumber: 'PO-EXISTING',
       poId: 'po-id-1001',
       status: 'imported',
     });

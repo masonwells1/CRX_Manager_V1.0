@@ -14,4 +14,9 @@ describe('purchase-order cents math', () => {
     expect(purchaseOrderLineTotalCents(10.125, 3.33)).toBe(3372);
     expect(purchaseOrderCentsToDollars(3372)).toBe(33.72);
   });
+
+  it('matches PostgreSQL numeric half-cent rounding instead of binary floating point', () => {
+    expect(purchaseOrderLineTotalCents(1.005, 1)).toBe(101);
+    expect(purchaseOrderLineTotalCents(0.0005, 10)).toBe(1);
+  });
 });

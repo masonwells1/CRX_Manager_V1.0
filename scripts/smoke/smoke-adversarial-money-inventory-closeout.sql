@@ -139,7 +139,7 @@ BEGIN
     END IF;
   END;
 
-  v_intent := 'save_purchase_order:' || v_sales::text || ':bulk:' || repeat('a', 64);
+  v_intent := 'bulk-po-document:' || repeat('a', 64);
   v_first := public.save_purchase_order(
     NULL,
     jsonb_build_object(
@@ -162,8 +162,13 @@ BEGIN
   );
   v_po := (v_first->>'po_id')::uuid;
 
-  -- A second tab/device can carry a different generic idempotency key and PO
-  -- number; the persistent business-intent claim still returns the first PO.
+  -- Another authorized employee can carry a different generic idempotency key
+  -- and PO number; the global business-intent claim still returns the first PO.
+  PERFORM set_config(
+    'request.jwt.claims',
+    json_build_object('sub', v_admin, 'role', 'authenticated')::text,
+    true
+  );
   v_replay := public.save_purchase_order(
     NULL,
     jsonb_build_object(
@@ -181,18 +186,19 @@ BEGIN
         'unit_size', v_unit_size
       )
     ),
-    v_sales,
+    v_admin,
     'smk-po-bulk-second-' || v_suffix
   );
   IF (v_replay->>'po_id')::uuid IS DISTINCT FROM v_po
-     OR v_replay->>'status' <> 'already_imported' THEN
+     OR v_replay->>'status' <> 'already_imported'
+     OR v_replay->>'po_number' IS DISTINCT FROM 'SMK-BULK-A-' || v_suffix THEN
     RAISE EXCEPTION 'SMOKE_FAIL: persistent bulk intent returned first=% replay=%',
       v_first, v_replay;
   END IF;
 
   SELECT count(*) INTO v_count
     FROM public.purchase_order_import_intents
-   WHERE actor_id = v_sales AND intent_key = v_intent;
+   WHERE intent_key = v_intent;
   IF v_count <> 1 THEN
     RAISE EXCEPTION 'SMOKE_FAIL: expected one persistent import claim, got %', v_count;
   END IF;
@@ -202,6 +208,12 @@ BEGIN
   IF v_count <> 1 THEN
     RAISE EXCEPTION 'SMOKE_FAIL: expected one PO for two import attempts, got %', v_count;
   END IF;
+
+  PERFORM set_config(
+    'request.jwt.claims',
+    json_build_object('sub', v_sales, 'role', 'authenticated')::text,
+    true
+  );
 
   SELECT id INTO v_po_item
     FROM public.purchase_order_items

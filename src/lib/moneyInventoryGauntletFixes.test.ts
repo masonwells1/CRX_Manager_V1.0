@@ -53,6 +53,9 @@ const deliveryPeriodPreflight = source(
 const adversarialCloseout = source(
   'supabase/migrations/20260716224000_close_adversarial_money_inventory_gaps.sql',
 );
+const globalBulkPOIntent = source(
+  'supabase/migrations/20260716233000_globalize_bulk_po_import_intents.sql',
+);
 const completeDelivery = access.slice(0, access.indexOf('CREATE OR REPLACE FUNCTION public.void_delivery'));
 
 describe('money and inventory gauntlet fixes', () => {
@@ -194,7 +197,10 @@ describe('money and inventory gauntlet fixes', () => {
     expect(bulkImport).toContain('pendingIntent.poNumber');
     expect(bulkImport).toContain('p_idempotency_key: pendingIntent.idempotencyKey');
     expect(bulkImport).toContain('isImportedBulkPOIntent(pendingIntentsRef.current, intentKey)');
-    expect(bulkImport).toContain('markBulkPOIntentImported(pendingIntentsRef.current, intentKey, savedPO.po_id)');
+    expect(bulkImport).toContain("savedPO.status === 'already_imported'");
+    expect(bulkImport).toContain('bulk_import_intent_key: documentClaimKey');
+    expect(bulkImport).toContain('savedPO.po_number');
+    expect(bulkImport).toContain('if (failedCount === 0) onSuccess()');
     expect(bulkImport).toContain('savePendingBulkPOIntents(localStorage, profile.id');
     expect(bulkImport).toContain('setUploadResults(failedCount === 0');
     expect(idempotency).toContain('const uuid = crypto.randomUUID()');
@@ -320,6 +326,24 @@ describe('money and inventory gauntlet fixes', () => {
     );
     expect(lockPosition).toBeGreaterThan(-1);
     expect(hydratePosition).toBeGreaterThan(lockPosition);
+  });
+
+  it('claims a bulk-imported vendor document globally and returns the original PO number', () => {
+    const saveWrapper = globalBulkPOIntent.slice(
+      globalBulkPOIntent.indexOf('CREATE OR REPLACE FUNCTION public.save_purchase_order('),
+      globalBulkPOIntent.indexOf('REVOKE ALL ON FUNCTION public.save_purchase_order('),
+    );
+
+    expect(globalBulkPOIntent).toContain(
+      'CONSTRAINT purchase_order_import_intents_intent_key\n  UNIQUE (intent_key)',
+    );
+    expect(saveWrapper).toContain(
+      "hashtextextended('bulk_po:' || v_bulk_intent_key, 0)",
+    );
+    expect(saveWrapper).not.toContain("'bulk_po:' || v_actor::text");
+    expect(saveWrapper).toContain('WHERE claim.intent_key = v_bulk_intent_key');
+    expect(saveWrapper).not.toContain('WHERE actor_id = v_actor');
+    expect(saveWrapper).toContain("'po_number', v_result_po_number");
   });
 
   it('authorizes invoice saves and statements against active customer assignment before replay', () => {

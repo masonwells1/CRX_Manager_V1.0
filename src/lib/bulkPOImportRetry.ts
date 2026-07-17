@@ -76,16 +76,27 @@ export function buildBulkPOIntentKey(document: BulkPOIntentDocument): string | n
  * Crypto provides a collision-resistant digest without putting the full PO
  * contents into the database's unique idempotency index.
  */
+async function sha256Hex(value: string): Promise<string> {
+  const digest = await globalThis.crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(value),
+  );
+  return Array.from(
+    new Uint8Array(digest),
+    (byte) => byte.toString(16).padStart(2, '0'),
+  ).join('');
+}
+
 export async function buildBulkPOIdempotencyKey(
   profileId: string,
   intentKey: string,
 ): Promise<string> {
-  const digest = await globalThis.crypto.subtle.digest(
-    'SHA-256',
-    new TextEncoder().encode(`${profileId}\u0000${intentKey}`),
-  );
-  const hex = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
-  return `save_purchase_order:${profileId}:bulk:${hex}`;
+  return `save_purchase_order:${profileId}:bulk:${await sha256Hex(`${profileId}\u0000${intentKey}`)}`;
+}
+
+/** Stable across users so the server can claim one vendor document globally. */
+export async function buildBulkPODocumentClaimKey(intentKey: string): Promise<string> {
+  return `bulk-po-document:${await sha256Hex(intentKey)}`;
 }
 
 function storageKey(profileId: string): string {
@@ -166,10 +177,12 @@ export function markBulkPOIntentImported(
   intentKey: string,
   poId: string,
   now = Date.now(),
+  poNumber?: string,
 ): void {
   const entry = pending[intentKey];
   if (!entry) return;
   entry.status = 'imported';
   entry.poId = poId;
+  if (poNumber) entry.poNumber = poNumber;
   entry.updatedAt = now;
 }
