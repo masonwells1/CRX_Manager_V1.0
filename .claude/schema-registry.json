@@ -6,7 +6,7 @@
     "regenerate_with": "node scripts/regenerate-schema-registry.mjs --from-introspection <queries.json> (queries documented in the script header)",
     "purpose": "Single source of truth for hooks: generated columns, status enums, ALL parseable CHECK IN-lists, NOT NULL columns, full column lists, sequences, tables-with/without updated_at, applied-migration high water.",
     "note": "For a fresh refresh from the live DB, ask Claude Code: 'regenerate the schema-registry from Supabase' (/regen-schema-registry). skipped_constraints lists every CHECK the hooks can NOT validate — review it when touching those tables.",
-    "migrations_high_water": "20260717063445",
+    "migrations_high_water": "20260717112550",
     "applied_migration_names": [
       "20260207_gap_analysis_fixes.sql",
       "20260209050000_inventory_overhaul",
@@ -238,7 +238,10 @@
       "20260716213000_preserve_purchase_order_omitted_cost",
       "20260716214423_crm_call_lists",
       "20260717013415_crm_customer_documents",
+      "20260717112532_crm_customer_crops",
+      "20260717112533_crm_prep_card_volume",
       "20260717120000_supplier_pricing_phase1a",
+      "20260717120500_supplier_pricing_zero_cost_guard",
       "a1_dispatched_list_recent_completed",
       "a1b_dispatched_to_me_completed_tail",
       "accounting_and_integrity_fixes",
@@ -319,6 +322,7 @@
       "batch_rpc_idempotency_entity_type_fix",
       "batch_year_end_and_cleanup",
       "bind_bulk_po_claim_to_vendor",
+      "bind_bulk_po_identity_ascii_fold",
       "bind_bulk_po_replay_content",
       "blend_invoice_app_service_guard",
       "blend_invoice_column_fix",
@@ -342,6 +346,8 @@
       "canonical_commission_math_callers",
       "canonical_commission_math_create_quick_delivery",
       "canonical_commission_math_helpers",
+      "canonicalize_bulk_po_identity_whitespace",
+      "canonicalize_bulk_po_unicode_identity",
       "cleanup_fake_cycle_counts_and_rebates_v2",
       "close_adversarial_money_inventory_gaps",
       "close_final_purchase_order_release_gaps",
@@ -618,6 +624,7 @@
       "lock_order_shares_when_invoice_posted",
       "lock_purchase_order_initial_status",
       "log_failed_notification_restore_defaults",
+      "make_bulk_po_identity_server_authoritative",
       "manual_inventory_no_cost_override",
       "manufactured_at_delivery_flag",
       "mark_overdue_invoices",
@@ -707,6 +714,7 @@
       "receiving_system_enhancements",
       "recompute_pending_commissions_on_order_item_edit",
       "record_vendor_payment_rpc",
+      "reject_blank_bulk_po_identity",
       "release_holds_on_quote_cancel",
       "remaining_money_inventory_hardening",
       "rename_invoice_temperature",
@@ -755,6 +763,7 @@
       "save_quote_rpc",
       "season_calendar_oct_sep",
       "seasonal_rollover",
+      "secure_bulk_po_fingerprint_trigger",
       "security_audit_2026_05_11",
       "security_audit_auth_uid_enforcement",
       "sentinel_exclude_credit_memos",
@@ -2410,6 +2419,12 @@
       "reason": "unparseable — hooks do NOT validate this constraint"
     },
     {
+      "table": "customers",
+      "constraint": "customers_crops_allowed_check",
+      "def": "CHECK (((crops <@ ARRAY['corn'::text, 'soybeans'::text, 'wheat'::text, 'milo'::text, 'cotton'::text, 'alfalfa'::text, 'pasture_hay'::text, 'other'::text]) AND ((crops = '{}'::text[]) OR (array_ndims(crops) = 1))))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
       "table": "delivery_items",
       "constraint": "chk_di_quantity",
       "def": "CHECK ((quantity > (0)::numeric))",
@@ -3404,7 +3419,8 @@
         "is_active",
         "created_at",
         "updated_at",
-        "prepay_balance_cents"
+        "prepay_balance_cents",
+        "crops"
       ]
     },
     "cycle_count_items": {
@@ -5199,7 +5215,8 @@
       "account_number",
       "finance_charge_enabled",
       "finance_charge_grace_days",
-      "default_application_service_id"
+      "default_application_service_id",
+      "crops"
     ],
     "cycle_count_items": [
       "id",

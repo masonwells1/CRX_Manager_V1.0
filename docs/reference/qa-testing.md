@@ -57,13 +57,13 @@ Test every feature as each role:
 5. Verify inventory levels updated
 6. Verify Product cost/tier pricing and cost_history remain unchanged by receiving
 
-### Product Pricing Phase 1a (bootstrap live; frontend/cutover pre-release)
+### Product Pricing Phase 1a (bootstrap/zero-cost guard live; frontend/cutover pre-release)
 1. Export a pricing `.xlsx` from Products and confirm identity/token columns are protected while cost/margin/price cells are numeric and sortable.
 2. Edit 3+ Products across margin-driven and price-driven modes, upload, and confirm the preview shows named Products with old → new cost, margins, tier prices, and per-acre effects.
 3. Create a version conflict and an identity edit after preview; both must block apply with no partial pricing/history change.
 4. Apply a valid batch and a ProductDetail quick cost change; confirm stored values exactly equal preview and exactly one `cost_history` row exists per changed Product.
 5. Retry the same apply key after clearing the finite idempotency cache and require the original result; use a new key and require rejection.
-6. In the browser proof, attempt margin-driven zero cost through both a real `.xlsx` and ProductDetail quick edit; each must stop before the preview RPC. In the disposable proof, compile the exact parked pre-deploy zero-cost guard and prove it rejects the same input server-side while preserving legacy mode. Then compile the exact parked cutover, attempt direct Product pricing and direct history writes, and require database denial. Confirm Bulk Product Import rejects pricing headers and repository price-list/product-list handling fails before OCR. Until the zero-cost guard, frontend, Edge Function, and cutover are separately released in that order, do not claim those behaviors are live.
+6. In the browser proof, attempt margin-driven zero cost through both a real `.xlsx` and ProductDetail quick edit; each must stop before the preview RPC. In the disposable proof, compile the exact live pre-deploy zero-cost guard and prove it rejects the same input server-side while preserving legacy mode. Then compile the exact parked cutover, attempt direct Product pricing and direct history writes, and require database denial. Confirm Bulk Product Import rejects pricing headers and repository price-list/product-list handling fails before OCR. The guard is live; until the frontend, Edge Function, and cutover are separately released in that remaining order, do not claim those behaviors are live.
 
 ## Edge Case Testing
 - Negative inventory (receive more than expected)

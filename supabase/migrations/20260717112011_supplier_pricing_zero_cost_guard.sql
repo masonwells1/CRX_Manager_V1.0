@@ -1,10 +1,38 @@
--- DRAFT ONLY — Supplier Pricing Phase 1a pre-deploy zero-cost guard.
+-- Supplier Pricing Phase 1a pre-deploy zero-cost guard.
 --
--- PARKED: apply only in a separately approved migration session after the
--- additive bootstrap is live and before the RPC pricing frontend is deployed.
+-- Owner-approved for a separately reviewed live migration after the additive
+-- bootstrap is live and before the RPC pricing frontend is deployed.
 -- This is compatibility-safe for the deployed legacy Product editor because
 -- legacy_margin behavior is unchanged. It closes the temporary window where a
 -- governed margin-driven request could turn a zero cost into zero sell prices.
+
+DO $preflight$
+DECLARE
+  v_overload_count integer;
+  v_body_md5 text;
+BEGIN
+  SELECT
+    count(*),
+    max(
+      CASE
+        WHEN p.oid = to_regprocedure(
+          'public._calculate_product_pricing(text,numeric,numeric,numeric,numeric,numeric,numeric,numeric)'
+        ) THEN md5(p.prosrc)
+        ELSE NULL
+      END
+    )
+  INTO v_overload_count, v_body_md5
+  FROM pg_proc p
+  JOIN pg_namespace n ON n.oid = p.pronamespace
+  WHERE n.nspname = 'public'
+    AND p.proname = '_calculate_product_pricing';
+
+  IF v_overload_count <> 1
+     OR v_body_md5 IS DISTINCT FROM '58b71cb8c69963cb88fe7c97d1b9ff0e' THEN
+    RAISE EXCEPTION 'PRICING_CALCULATOR_BASELINE_MISMATCH';
+  END IF;
+END;
+$preflight$;
 
 CREATE OR REPLACE FUNCTION public._calculate_product_pricing(
   p_mode text,
@@ -55,6 +83,8 @@ BEGIN
       RAISE EXCEPTION 'PRICING_MARGIN_INVALID';
     END IF;
 
+    -- legacy_margin deliberately preserves the exact pre-Phase-1a behavior:
+    -- only positive margins on a positive cost overwrite the matching price.
     IF (p_mode = 'margin_driven' OR p_current_cost > 0)
        AND v_t1_margin IS NOT NULL AND v_t1_margin >= 0 AND v_t1_margin < 1
        AND (p_mode = 'margin_driven' OR v_t1_margin > 0) THEN
@@ -134,14 +164,38 @@ REVOKE ALL ON FUNCTION public._calculate_product_pricing(
 
 DO $assertions$
 DECLARE
-  v_definition text;
+  v_rejected boolean := false;
+  v_legacy_result jsonb;
 BEGIN
-  SELECT pg_get_functiondef(
-    'public._calculate_product_pricing(text,numeric,numeric,numeric,numeric,numeric,numeric,numeric)'::regprocedure
-  ) INTO v_definition;
+  BEGIN
+    PERFORM public._calculate_product_pricing(
+      'margin_driven', 0,
+      0.20, 0.25, 0.30,
+      10.00, 20.00, 30.00
+    );
+  EXCEPTION
+    WHEN OTHERS THEN
+      IF SQLERRM = 'PRICING_COST_INVALID' THEN
+        v_rejected := true;
+      ELSE
+        RAISE;
+      END IF;
+  END;
 
-  IF position('(p_mode = ''margin_driven'' AND p_current_cost = 0)' IN v_definition) = 0 THEN
-    RAISE EXCEPTION 'margin-driven zero-cost guard missing';
+  IF NOT v_rejected THEN
+    RAISE EXCEPTION 'margin-driven zero cost unexpectedly passed';
+  END IF;
+
+  v_legacy_result := public._calculate_product_pricing(
+    'legacy_margin', 0,
+    0.20, 0.25, 0.30,
+    10.00, 20.00, 30.00
+  );
+
+  IF (v_legacy_result->>'tier1_price')::numeric IS DISTINCT FROM 10.00
+     OR (v_legacy_result->>'tier2_price')::numeric IS DISTINCT FROM 20.00
+     OR (v_legacy_result->>'tier3_price')::numeric IS DISTINCT FROM 30.00 THEN
+    RAISE EXCEPTION 'legacy zero-cost pricing behavior changed';
   END IF;
 
   IF has_function_privilege(

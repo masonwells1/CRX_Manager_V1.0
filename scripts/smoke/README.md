@@ -83,7 +83,7 @@ link-first, and lease-change-first.
 
 ## Disposable Supplier Pricing Phase 1a proof
 
-The live additive bootstrap, parked pre-deploy zero-cost guard, and parked
+The live additive bootstrap, live pre-deploy zero-cost guard, and parked
 enforcement cutover have a separate, production-isolated proof:
 
 ```bash

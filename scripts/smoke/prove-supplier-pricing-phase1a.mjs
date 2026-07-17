@@ -41,9 +41,9 @@ const cutoverSql = path.join(
 );
 const zeroCostGuardSql = path.join(
   repoRoot,
-  'scripts',
-  '.staging-migrations',
-  '20260717120500_supplier_pricing_zero_cost_guard.sql'
+  'supabase',
+  'migrations',
+  '20260717112011_supplier_pricing_zero_cost_guard.sql'
 );
 const zeroCostGuardSmokeSql = path.join(
   repoRoot,
@@ -183,7 +183,7 @@ try {
   psql('bootstrap.sql');
   console.log('[phase1a-proof] proving compatibility with the deployed legacy frontend');
   psql('bootstrap-compat.sql');
-  console.log('[phase1a-proof] compiling the parked pre-deploy zero-cost guard');
+  console.log('[phase1a-proof] compiling the live pre-deploy zero-cost guard');
   psql('zero-cost-guard.sql');
   console.log('[phase1a-proof] proving the guard blocks governed zero cost without breaking legacy mode');
   psql('zero-cost-guard-smoke.sql');
