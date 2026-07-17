@@ -204,15 +204,18 @@ export default function NewPurchaseOrder() {
             notes: notes || null,
           };
 
-          const itemsPayload = validItems.map((i) => ({
-            product_id: i.product_id,
-            product_name: products.find((p) => p.id === i.product_id)?.product_name || null,
-            quantity_ordered: i.quantity_ordered,
-            unit_cost: i.unit_cost,
-            unit_cost_cents: purchaseOrderUnitCostCents(i.unit_cost),
-            unit_size: i.unit_size || null,
-            quantity_received: 0,
-          }));
+          const itemsPayload = validItems.map((i) => {
+            const unitCostCents = purchaseOrderUnitCostCents(i.unit_cost);
+            return {
+              product_id: i.product_id,
+              product_name: products.find((p) => p.id === i.product_id)?.product_name || null,
+              quantity_ordered: i.quantity_ordered,
+              unit_cost: purchaseOrderCentsToDollars(unitCostCents),
+              unit_cost_cents: unitCostCents,
+              unit_size: i.unit_size || null,
+              quantity_received: 0,
+            };
+          });
 
           const { data, error } = await supabase.rpc('save_purchase_order', {
             // Postgres uses NULL to select the create path; generated RPC types

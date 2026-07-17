@@ -38,6 +38,37 @@ function normalizeIdentityText(value: string): string {
 }
 
 /**
+ * Normalize the two date shapes accepted by the OCR review form without
+ * relying on locale-sensitive Date parsing. Missing or unrecognized dates are
+ * excluded from the claim so a document whose OCR omitted the date does not
+ * acquire a different identity on a later import day.
+ */
+export function normalizeBulkPOInvoiceDate(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  const iso = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(trimmed);
+  const us = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(trimmed);
+  const parts = iso
+    ? { year: Number(iso[1]), month: Number(iso[2]), day: Number(iso[3]) }
+    : us
+      ? { year: Number(us[3]), month: Number(us[1]), day: Number(us[2]) }
+      : null;
+  if (!parts) return null;
+
+  const candidate = new Date(Date.UTC(parts.year, parts.month - 1, parts.day));
+  if (
+    candidate.getUTCFullYear() !== parts.year
+    || candidate.getUTCMonth() !== parts.month - 1
+    || candidate.getUTCDate() !== parts.day
+  ) {
+    return null;
+  }
+
+  return `${String(parts.year).padStart(4, '0')}-${String(parts.month).padStart(2, '0')}-${String(parts.day).padStart(2, '0')}`;
+}
+
+/**
  * Stable business-document identity used across file reselection and reorder.
  * File name, browser file position, size, and modified time are deliberately
  * excluded: those can change without changing the vendor document itself.
@@ -66,7 +97,7 @@ export function buildBulkPOIntentKey(document: BulkPOIntentDocument): string | n
   return JSON.stringify({
     vendor_name: normalizeIdentityText(document.vendorName),
     invoice_number: invoiceNumber,
-    invoice_date: document.invoiceDate,
+    invoice_date: normalizeBulkPOInvoiceDate(document.invoiceDate),
     items,
   });
 }

@@ -178,6 +178,44 @@ describe('BulkPOImport', () => {
     expect(defaultProps.onSuccess).toHaveBeenCalledTimes(1);
   });
 
+  it('counts an exact same-PO replay as skipped even when the RPC status is saved', async () => {
+    const intentKey = buildBulkPOIntentKey({
+      vendorName: 'Vendor A',
+      invoiceNumber: 'INV-REPLAY.pdf',
+      invoiceDate: '2026-07-16',
+      items: [{
+        productId: product.id,
+        quantityOrdered: 2,
+        unitCostCents: 1_000,
+        unitSize: 'GAL',
+        notes: '',
+      }],
+    });
+    expect(intentKey).not.toBeNull();
+    const pending = {};
+    ensurePendingBulkPOIntent(pending, intentKey!, () => 'save_purchase_order:user-1:bulk:replay');
+    markBulkPOIntentImported(pending, intentKey!, 'po-existing', Date.now(), 'PO-EXISTING');
+    savePendingBulkPOIntents(localStorage, 'user-1', pending);
+
+    mocks.rpc.mockImplementation(async (name: string) => {
+      if (name === 'save_purchase_order') {
+        return { data: { po_id: 'po-existing', status: 'saved', po_number: 'PO-EXISTING' }, error: null };
+      }
+      return { data: null, error: new Error(`Unexpected RPC: ${name}`) };
+    });
+
+    render(<BulkPOImport {...defaultProps} />);
+    fireEvent.change(document.querySelector('#po-pdf-upload')!, {
+      target: { files: [new File(['one'], 'INV-REPLAY.pdf', { type: 'application/pdf' })] },
+    });
+    fireEvent.click(await screen.findByRole('button', { name: /process 1 file/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /import 1 po/i }));
+
+    expect(await screen.findByText(/successfully imported: 0 purchase orders/i)).toBeInTheDocument();
+    expect(screen.getByText(/already imported and skipped: 1/i)).toBeInTheDocument();
+    expect(defaultProps.onSuccess).not.toHaveBeenCalled();
+  });
+
   it('refreshes the parent when a partially successful batch is closed', async () => {
     let saveCalls = 0;
     mocks.rpc.mockImplementation(async (name: string) => {
@@ -210,5 +248,43 @@ describe('BulkPOImport', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
     expect(defaultProps.onSuccess).toHaveBeenCalledTimes(1);
     expect(defaultProps.onClose).not.toHaveBeenCalled();
+  });
+
+  it('normalizes an OCR fractional-cent unit cost before saving', async () => {
+    mocks.processDocumentWithOCR.mockResolvedValue({
+      success: true,
+      raw_text: 'parsed',
+      document_type: 'purchase_order',
+      parsed_data: {
+        vendor_name: 'Vendor A',
+        invoice_number: 'INV-FRACTIONAL',
+        invoice_date: '2026-07-16',
+        items: [{
+          product_name: product.product_name,
+          quantity: 2,
+          unit_cost: 3.334,
+          unit_size: 'GAL',
+        }],
+      },
+      confidence: 1,
+      processing_time_ms: 1,
+    });
+
+    render(<BulkPOImport {...defaultProps} />);
+    fireEvent.change(document.querySelector('#po-pdf-upload')!, {
+      target: { files: [new File(['one'], 'INV-FRACTIONAL.pdf', { type: 'application/pdf' })] },
+    });
+    fireEvent.click(await screen.findByRole('button', { name: /process 1 file/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /import 1 po/i }));
+
+    await waitFor(() => expect(mocks.rpc).toHaveBeenCalledWith(
+      'save_purchase_order',
+      expect.objectContaining({
+        p_items: [expect.objectContaining({
+          unit_cost: 3.33,
+          unit_cost_cents: 333,
+        })],
+      }),
+    ));
   });
 });

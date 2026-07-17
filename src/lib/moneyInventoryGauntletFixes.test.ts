@@ -62,6 +62,9 @@ const finalPurchaseOrderRelease = source(
 const deletedBulkPORetryState = source(
   'supabase/migrations/20260717015439_invalidate_deleted_bulk_po_retry_state.sql',
 );
+const exactBulkPOReplay = source(
+  'supabase/migrations/20260717032000_replay_bulk_po_same_request_result.sql',
+);
 const completeDelivery = access.slice(0, access.indexOf('CREATE OR REPLACE FUNCTION public.void_delivery'));
 
 describe('money and inventory gauntlet fixes', () => {
@@ -290,7 +293,10 @@ describe('money and inventory gauntlet fixes', () => {
       'src/pages/PurchaseOrderDetail.tsx',
       'src/components/purchase-orders/BulkPOImport.tsx',
     ]) {
-      expect(source(path)).toContain('unit_cost_cents: purchaseOrderUnitCostCents(');
+      const writer = source(path);
+      expect(writer).toContain('const unitCostCents = purchaseOrderUnitCostCents(');
+      expect(writer).toContain('unit_cost: purchaseOrderCentsToDollars(unitCostCents)');
+      expect(writer).toContain('unit_cost_cents: unitCostCents');
     }
   });
 
@@ -407,6 +413,30 @@ describe('money and inventory gauntlet fixes', () => {
     expect(saveWrapper.indexOf('WHERE claim.intent_key = v_bulk_intent_key')).toBeLessThan(
       saveWrapper.indexOf('public.next_po_number()'),
     );
+  });
+
+  it('replays the exact bulk PO result before duplicate classification or number allocation', () => {
+    const saveWrapper = exactBulkPOReplay.slice(
+      exactBulkPOReplay.indexOf('CREATE OR REPLACE FUNCTION public.save_purchase_order('),
+      exactBulkPOReplay.indexOf('REVOKE ALL ON FUNCTION public.save_purchase_order('),
+    );
+    const replayPosition = saveWrapper.indexOf('public.check_idempotency(');
+    const documentClaimPosition = saveWrapper.indexOf(
+      'WHERE claim.intent_key = v_bulk_intent_key',
+    );
+    const numberAllocationPosition = saveWrapper.indexOf('public.next_po_number()');
+
+    expect(saveWrapper).toContain('IF NOT (public.is_admin() OR public.is_sales_rep()) THEN');
+    expect(saveWrapper).toContain(
+      "RETURN v_cached || jsonb_build_object('po_number', v_po_number)",
+    );
+    expect(replayPosition).toBeGreaterThan(-1);
+    expect(documentClaimPosition).toBeGreaterThan(replayPosition);
+    expect(numberAllocationPosition).toBeGreaterThan(documentClaimPosition);
+    expect(exactBulkPOReplay).toContain(
+      'FROM PUBLIC, anon;\nGRANT EXECUTE ON FUNCTION public.save_purchase_order(',
+    );
+    expect(exactBulkPOReplay).toContain('TO authenticated, service_role;');
   });
 
   it('authorizes invoice saves and statements against active customer assignment before replay', () => {

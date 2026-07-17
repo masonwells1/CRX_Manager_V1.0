@@ -7,6 +7,7 @@ import {
   isImportedBulkPOIntent,
   loadPendingBulkPOIntents,
   markBulkPOIntentImported,
+  normalizeBulkPOInvoiceDate,
   savePendingBulkPOIntents,
 } from './bulkPOImportRetry';
 
@@ -47,6 +48,27 @@ describe('bulk PO import retry state', () => {
 
     expect(new Set(reorderedSelection)).toEqual(new Set(firstSelection));
     expect(firstSelection.every(Boolean)).toBe(true);
+  });
+
+  it('canonicalizes equivalent invoice dates and excludes missing or invalid fallbacks', () => {
+    expect(normalizeBulkPOInvoiceDate('2026-7-6')).toBe('2026-07-06');
+    expect(normalizeBulkPOInvoiceDate('07/06/2026')).toBe('2026-07-06');
+    expect(normalizeBulkPOInvoiceDate('')).toBeNull();
+    expect(normalizeBulkPOInvoiceDate('2026-02-30')).toBeNull();
+
+    const document = {
+      vendorName: 'Vendor A',
+      invoiceNumber: 'INV-100',
+      invoiceDate: '2026-07-16',
+      items: [
+        { productId: 'product-a', quantityOrdered: 1, unitCostCents: 300, unitSize: 'EA', notes: '' },
+      ],
+    };
+
+    expect(buildBulkPOIntentKey({ ...document, invoiceDate: '07/16/2026' }))
+      .toBe(buildBulkPOIntentKey(document));
+    expect(buildBulkPOIntentKey({ ...document, invoiceDate: '' }))
+      .toBe(buildBulkPOIntentKey({ ...document, invoiceDate: 'unrecognized OCR value' }));
   });
 
   it('requires a vendor invoice number so two legitimate documents cannot collide', () => {

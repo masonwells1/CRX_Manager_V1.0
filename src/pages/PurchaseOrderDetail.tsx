@@ -466,16 +466,19 @@ export default function PurchaseOrderDetail() {
     setSaving(true);
 
     try {
-      const itemsPayload = editItems.map((item) => ({
-        id: item.id,  // Send ID so backend can UPDATE in-place (critical for partially received POs)
-        product_id: item.product_id,
-        product_name: item.product_name,
-        unit_size: item.unit_size || null,
-        quantity_ordered: parseFloat(item.quantity_ordered),
-        unit_cost: parseFloat(item.unit_cost),
-        unit_cost_cents: purchaseOrderUnitCostCents(parseFloat(item.unit_cost)),
-        quantity_received: item.quantity_received || 0,
-      }));
+      const itemsPayload = editItems.map((item) => {
+        const unitCostCents = purchaseOrderUnitCostCents(parseFloat(item.unit_cost));
+        return {
+          id: item.id,  // Send ID so backend can UPDATE in-place (critical for partially received POs)
+          product_id: item.product_id,
+          product_name: item.product_name,
+          unit_size: item.unit_size || null,
+          quantity_ordered: parseFloat(item.quantity_ordered),
+          unit_cost: purchaseOrderCentsToDollars(unitCostCents),
+          unit_cost_cents: unitCostCents,
+          quantity_received: item.quantity_received || 0,
+        };
+      });
 
       const savePOKey = savePOIdem.getKey();
       const { data, error } = await supabase.rpc('save_purchase_order', {

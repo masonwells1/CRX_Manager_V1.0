@@ -7,7 +7,6 @@ import { useToast } from '../ui/Toast';
 import { useAuth } from '../../contexts/AuthContext';
 import { supabase, assertRpcResult } from '../../lib/db';
 import { processDocumentWithOCR, isOCRSupported } from '../../lib/documentOCR';
-import { localToday } from '../../lib/dateUtils';
 import { Sentry } from '../../lib/sentry';
 import { formatUSD as fmt } from '../../lib/money';
 import type { Product } from '../../types';
@@ -129,7 +128,7 @@ async function parseWithVisionOCR(
       source_last_modified: file.lastModified,
       vendor_name: '',
       invoice_number: '',
-      invoice_date: localToday(),
+      invoice_date: '',
       items: [],
       raw_text: result.raw_text || '',
       parse_errors: [result.error || 'OCR processing failed'],
@@ -176,7 +175,9 @@ async function parseWithVisionOCR(
     source_last_modified: file.lastModified,
     vendor_name: data.vendor_name || '',
     invoice_number: data.invoice_number || '',
-    invoice_date: data.invoice_date || localToday(),
+    // Do not invent today's date when OCR misses it. A time-dependent fallback
+    // would change the durable duplicate-protection key on a later re-import.
+    invoice_date: data.invoice_date || '',
     items,
     raw_text: result.raw_text,
     parse_errors,
@@ -276,7 +277,7 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
             source_last_modified: file.lastModified,
             vendor_name: '',
             invoice_number: '',
-            invoice_date: localToday(),
+            invoice_date: '',
             items: [],
             raw_text: '',
             parse_errors: [`Failed to process: ${err instanceof Error ? err.message : 'Unknown error'}`],
@@ -403,6 +404,9 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
         }
         const deterministicIdempotencyKey = await buildBulkPOIdempotencyKey(profile.id, intentKey);
         const documentClaimKey = await buildBulkPODocumentClaimKey(intentKey);
+        const previouslyImportedPoId = pendingIntentsRef.current[intentKey]?.status === 'imported'
+          ? pendingIntentsRef.current[intentKey]?.poId
+          : undefined;
         const pendingIntent = ensurePendingBulkPOIntent(
           pendingIntentsRef.current,
           intentKey,
@@ -414,16 +418,22 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
         if (po.invoice_number) noteParts.push(`Vendor ref: ${po.invoice_number}`);
         if (po.invoice_date) noteParts.push(`Vendor date: ${po.invoice_date}`);
 
-        const itemsPayload = validItems.map((item) => ({
-          product_id: item.matched_product!.id,
-          product_name: item.matched_product!.product_name,
-          quantity_ordered: item.quantity_ordered,
-          unit_cost: item.unit_cost,
-          unit_cost_cents: purchaseOrderUnitCostCents(item.unit_cost),
-          unit_size: item.unit_size || null,
-          quantity_received: 0,
-          notes: item.notes || null,
-        }));
+        const itemsPayload = validItems.map((item) => {
+          const unitCostCents = purchaseOrderUnitCostCents(item.unit_cost);
+          return {
+            product_id: item.matched_product!.id,
+            product_name: item.matched_product!.product_name,
+            quantity_ordered: item.quantity_ordered,
+            // OCR may return extra decimal places. Send one canonical whole-cent
+            // value in both representations so the database never sees a raw,
+            // fractional-cent dollar amount that disagrees with our cents math.
+            unit_cost: purchaseOrderCentsToDollars(unitCostCents),
+            unit_cost_cents: unitCostCents,
+            unit_size: item.unit_size || null,
+            quantity_received: 0,
+            notes: item.notes || null,
+          };
+        });
         const { data: poData, error: poError } = await supabase.rpc('save_purchase_order', {
           // Postgres uses NULL to select the create path; generated RPC types
           // cannot express nullability for a uuid parameter without a default.
@@ -462,10 +472,14 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
         );
         savePendingBulkPOIntents(localStorage, profile.id, pendingIntentsRef.current);
 
-        if (savedPO.status === 'already_imported') {
+        const samePOReplay = Boolean(
+          previouslyImportedPoId && previouslyImportedPoId === savedPO.po_id,
+        );
+        if (savedPO.status === 'already_imported' || samePOReplay) {
           skippedCount++;
-          // Another employee may have created the PO after the parent list's
-          // last fetch. Closing this result view must refresh that list.
+          // The server may report an exact idempotency replay as "saved". A
+          // matching browser marker proves it is the same PO, while a different
+          // returned ID means an intentionally deleted PO was recreated.
           refreshNeededRef.current = true;
         } else {
           newSuccessCount++;
