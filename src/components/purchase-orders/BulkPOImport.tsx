@@ -17,13 +17,16 @@ import {
 } from '../../lib/purchaseOrderMoney';
 import {
   buildBulkPOIntentKey,
-  buildBulkPODocumentClaimKey,
   buildBulkPOIdempotencyKey,
+  bulkPOImportFailureGuidance,
   ensurePendingBulkPOIntent,
+  getPendingBulkPOIntent,
+  hasBulkPOIdentityText,
   loadPendingBulkPOIntents,
   markBulkPOIntentImported,
   normalizeBulkPOInvoiceDate,
   savePendingBulkPOIntents,
+  trimBulkPOIdentityBoundary,
   type PendingBulkPOIntents,
 } from '../../lib/bulkPOImportRetry';
 
@@ -388,6 +391,7 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
     let newSuccessCount = 0;
     let skippedCount = 0;
     let failedCount = 0;
+    let unclassifiedFailureCount = 0;
 
     for (const po of importable) {
       try {
@@ -399,15 +403,17 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
 
         const intentKey = buildParsedPOIntentKey(po);
         if (!intentKey) {
-          const missingField = !po.vendor_name.trim() ? 'vendor name' : 'vendor invoice number';
+          const missingField = !hasBulkPOIdentityText(po.vendor_name)
+            ? 'vendor name'
+            : 'vendor invoice number';
           toast('error', `${po.source_file}: enter the ${missingField} before importing.`);
           failedCount++;
           continue;
         }
         const deterministicIdempotencyKey = await buildBulkPOIdempotencyKey(profile.id, intentKey);
-        const documentClaimKey = await buildBulkPODocumentClaimKey(intentKey);
-        const previouslyImportedPoId = pendingIntentsRef.current[intentKey]?.status === 'imported'
-          ? pendingIntentsRef.current[intentKey]?.poId
+        const existingPendingIntent = getPendingBulkPOIntent(pendingIntentsRef.current, intentKey);
+        const previouslyImportedPoId = existingPendingIntent?.status === 'imported'
+          ? existingPendingIntent.poId
           : undefined;
         const pendingIntent = ensurePendingBulkPOIntent(
           pendingIntentsRef.current,
@@ -445,15 +451,16 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
             // that inserts the PO, closing MAX+1 races between employees.
             po_number: null,
             // buildParsedPOIntentKey rejects an empty vendor before this RPC.
-            vendor: po.vendor_name.trim(),
+            vendor: trimBulkPOIdentityBoundary(po.vendor_name),
             status: 'draft',
             submitted_date: null,
             expected_delivery_date: null,
             notes: noteParts.join('. '),
-            bulk_import_intent_key: documentClaimKey,
-            // The database independently recomputes the stable claim from
-            // vendor + reference and fingerprints the reviewed date/lines.
-            bulk_import_vendor_reference: po.invoice_number.trim(),
+            // PostgreSQL alone derives the durable claim from vendor +
+            // reference. This flag opts into that path without trusting a
+            // browser-computed Unicode digest.
+            bulk_import_intent_key: 'server-derived',
+            bulk_import_vendor_reference: trimBulkPOIdentityBoundary(po.invoice_number),
             bulk_import_invoice_date: normalizeBulkPOInvoiceDate(po.invoice_date),
           },
           p_items: itemsPayload,
@@ -493,6 +500,12 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
         }
       } catch (error) {
         Sentry.captureException(error instanceof Error ? error : new Error(String(error)), { extra: { context: 'Error importing PO' } });
+        const guidance = bulkPOImportFailureGuidance(error);
+        if (guidance) {
+          toast('error', `${po.source_file}: ${guidance}`);
+        } else {
+          unclassifiedFailureCount++;
+        }
         failedCount++;
       }
     }
@@ -513,8 +526,8 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
     if (skippedCount > 0) {
       toast('info', `Skipped ${skippedCount} document${skippedCount !== 1 ? 's' : ''} already imported.`);
     }
-    if (failedCount > 0) {
-      toast('error', `${failedCount} purchase order${failedCount !== 1 ? 's' : ''} failed. Review and retry; successful imports will be skipped.`);
+    if (unclassifiedFailureCount > 0) {
+      toast('error', `${unclassifiedFailureCount} purchase order${unclassifiedFailureCount !== 1 ? 's' : ''} failed. Review and retry; successful imports will be skipped.`);
     }
   };
 
@@ -650,7 +663,9 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
                 const hasErrors = po.parse_errors.length > 0;
                 const hasItems = po.items.length > 0;
                 const intentKey = buildParsedPOIntentKey(po);
-                const importedIntent = intentKey ? pendingIntentsRef.current[intentKey] : undefined;
+                const importedIntent = intentKey
+                  ? getPendingBulkPOIntent(pendingIntentsRef.current, intentKey)
+                  : undefined;
                 const alreadyImported = importedIntent?.status === 'imported';
 
                 return (

@@ -1,6 +1,8 @@
 -- Post-apply rollback-only proof for migrations 20260716213000,
 -- 20260716224000, 20260716233000, 20260717010000, 20260717015439,
--- and 20260717032000.
+-- 20260717032000, 20260717045420, 20260717063445, 20260717070900,
+-- 20260717081856, 20260717085512, 20260717092749, 20260717101619, and
+-- 20260717110016 and 20260717112906.
 -- Exercises the exact adversarial findings without retaining business rows.
 DO $smoke$
 DECLARE
@@ -28,8 +30,10 @@ DECLARE
   v_err text;
   v_source text;
   v_outer_source text;
+  v_identity_source text;
   v_suffix text := substr(md5(random()::text), 1, 8);
   v_intent text;
+  v_vendor_reference text;
   v_other_invoice_key text;
 BEGIN
   SELECT id INTO v_admin
@@ -147,7 +151,23 @@ BEGIN
     END IF;
   END;
 
-  v_intent := 'bulk-po-document:' || repeat('a', 64);
+  v_vendor_reference := 'SMK-INV-' || v_suffix;
+  v_intent := 'bulk-po-document:' || encode(
+    extensions.digest(
+      convert_to(
+        normalize(
+          lower(normalize('[SMOKE] Élan Bulk Intent Vendor', NFKC)),
+          NFKC
+        ) || chr(31) || normalize(
+          lower(normalize(v_vendor_reference, NFKC)),
+          NFKC
+        ),
+        'UTF8'
+      ),
+      'sha256'
+    ),
+    'hex'
+  );
   -- Direct RPC callers cannot create a global claim without vendor identity.
   BEGIN
     PERFORM public.save_purchase_order(
@@ -155,6 +175,8 @@ BEGIN
       jsonb_build_object(
         'vendor', '   ',
         'status', 'draft',
+        'bulk_import_vendor_reference', v_vendor_reference,
+        'bulk_import_invoice_date', CURRENT_DATE::text,
         'bulk_import_intent_key', v_intent || '-missing-vendor'
       ),
       jsonb_build_array(
@@ -178,13 +200,79 @@ BEGIN
     END IF;
   END;
 
+  -- The public RPC boundary must reject OCR/integration values that contain
+  -- only invisible whitespace, even when a caller bypasses the browser.
+  BEGIN
+    PERFORM public.save_purchase_order(
+      NULL,
+      jsonb_build_object(
+        'vendor', chr(160) || chr(9),
+        'status', 'draft',
+        'bulk_import_vendor_reference', v_vendor_reference,
+        'bulk_import_invoice_date', CURRENT_DATE::text,
+        'bulk_import_intent_key', v_intent || '-invisible-vendor'
+      ),
+      jsonb_build_array(
+        jsonb_build_object(
+          'product_id', v_product,
+          'product_name', v_product_name,
+          'quantity_ordered', 1,
+          'unit_cost_cents', 333,
+          'unit_size', v_unit_size
+        )
+      ),
+      v_sales,
+      'smk-po-bulk-invisible-vendor-' || v_suffix
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: invisible-only bulk vendor was accepted';
+  EXCEPTION WHEN OTHERS THEN
+    v_err := SQLERRM;
+    IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_err <> 'BULK_PO_VENDOR_REQUIRED' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: wrong invisible-vendor error: %', v_err;
+    END IF;
+  END;
+
+  BEGIN
+    PERFORM public.save_purchase_order(
+      NULL,
+      jsonb_build_object(
+        'vendor', '[SMOKE] Élan Bulk Intent Vendor',
+        'status', 'draft',
+        'bulk_import_vendor_reference', chr(160) || chr(9),
+        'bulk_import_invoice_date', CURRENT_DATE::text,
+        'bulk_import_intent_key', v_intent || '-invisible-reference'
+      ),
+      jsonb_build_array(
+        jsonb_build_object(
+          'product_id', v_product,
+          'product_name', v_product_name,
+          'quantity_ordered', 1,
+          'unit_cost_cents', 333,
+          'unit_size', v_unit_size
+        )
+      ),
+      v_sales,
+      'smk-po-bulk-invisible-reference-' || v_suffix
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: invisible-only bulk vendor reference was accepted';
+  EXCEPTION WHEN OTHERS THEN
+    v_err := SQLERRM;
+    IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_err <> 'BULK_PO_VENDOR_REFERENCE_REQUIRED' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: wrong invisible-reference error: %', v_err;
+    END IF;
+  END;
+
   v_first := public.save_purchase_order(
     NULL,
     jsonb_build_object(
       'po_number', 'SMK-BULK-A-' || v_suffix,
-      'vendor', '[SMOKE] Bulk Intent Vendor',
+      'vendor', chr(160) || '[SMOKE] Élan Bulk Intent Vendor' || chr(9),
       'status', 'draft',
-      'bulk_import_intent_key', v_intent
+      'bulk_import_vendor_reference', chr(9) || v_vendor_reference || chr(160),
+      'bulk_import_invoice_date', CURRENT_DATE::text,
+      'bulk_import_intent_key', 'browser-value-is-not-authoritative'
     ),
     jsonb_build_array(
       jsonb_build_object(
@@ -200,15 +288,26 @@ BEGIN
   );
   v_po := (v_first->>'po_id')::uuid;
 
+  SELECT vendor
+    INTO v_vendor_name
+    FROM public.purchase_orders
+   WHERE id = v_po;
+  IF v_vendor_name IS DISTINCT FROM '[SMOKE] Élan Bulk Intent Vendor' THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: padded bulk identity was not stored canonically: %',
+      v_vendor_name;
+  END IF;
+
   -- The exact same request key represents a lost-response retry. It must
   -- replay the original saved result, not be reclassified as a duplicate.
   v_replay := public.save_purchase_order(
     NULL,
     jsonb_build_object(
       'po_number', 'SMK-BULK-A-' || v_suffix,
-      'vendor', '[SMOKE] Bulk Intent Vendor',
+      'vendor', '[SMOKE] Élan Bulk Intent Vendor',
       'status', 'draft',
-      'bulk_import_intent_key', v_intent
+      'bulk_import_vendor_reference', v_vendor_reference,
+      'bulk_import_invoice_date', CURRENT_DATE::text,
+      'bulk_import_intent_key', 'browser-value-is-not-authoritative'
     ),
     jsonb_build_array(
       jsonb_build_object(
@@ -229,6 +328,37 @@ BEGIN
       v_first, v_replay;
   END IF;
 
+  -- A different generic request key with the unpadded form must resolve the
+  -- same durable document claim created from the padded direct-RPC payload.
+  v_replay := public.save_purchase_order(
+    NULL,
+    jsonb_build_object(
+      'po_number', 'SMK-BULK-WS-' || v_suffix,
+      'vendor', '[SMOKE] Élan Bulk Intent Vendor',
+      'status', 'draft',
+      'bulk_import_vendor_reference', v_vendor_reference,
+      'bulk_import_invoice_date', CURRENT_DATE::text,
+      'bulk_import_intent_key', 'browser-value-is-not-authoritative'
+    ),
+    jsonb_build_array(
+      jsonb_build_object(
+        'product_id', v_product,
+        'product_name', v_product_name,
+        'quantity_ordered', 10.125,
+        'unit_cost_cents', 333,
+        'unit_size', v_unit_size
+      )
+    ),
+    v_sales,
+    'smk-po-bulk-whitespace-' || v_suffix
+  );
+  IF (v_replay->>'po_id')::uuid IS DISTINCT FROM v_po
+     OR v_replay->>'status' <> 'already_imported'
+     OR v_replay->>'po_number' IS DISTINCT FROM v_first->>'po_number' THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: padded and unpadded bulk identities diverged first=% replay=%',
+      v_first, v_replay;
+  END IF;
+
   -- Another authorized employee can carry a different generic idempotency key
   -- and PO number; the global business-intent claim still returns the first PO.
   PERFORM set_config(
@@ -240,9 +370,11 @@ BEGIN
     NULL,
     jsonb_build_object(
       'po_number', 'SMK-BULK-B-' || v_suffix,
-      'vendor', '[SMOKE] Bulk Intent Vendor',
+      'vendor', '[SMOKE] Élan Bulk Intent Vendor',
       'status', 'draft',
-      'bulk_import_intent_key', v_intent
+      'bulk_import_vendor_reference', v_vendor_reference,
+      'bulk_import_invoice_date', CURRENT_DATE::text,
+      'bulk_import_intent_key', 'browser-value-is-not-authoritative'
     ),
     jsonb_build_array(
       jsonb_build_object(
@@ -263,40 +395,110 @@ BEGIN
       v_first, v_replay;
   END IF;
 
-  -- Reusing a global claim key for another vendor is a caller conflict, never
-  -- evidence that the second vendor's document was already imported.
+  -- Unicode and ASCII capitalization changes from OCR/manual review must still
+  -- hit the same durable vendor-document claim. A deliberately bogus legacy
+  -- browser digest proves PostgreSQL, not the browser, owns the durable key.
+  v_replay := public.save_purchase_order(
+    NULL,
+    jsonb_build_object(
+      'po_number', 'SMK-BULK-CASE-' || v_suffix,
+      'vendor', '[smoke] éLAN bulk intent vendor',
+      'status', 'draft',
+      'bulk_import_vendor_reference', lower(v_vendor_reference),
+      'bulk_import_invoice_date', CURRENT_DATE::text,
+      'bulk_import_intent_key', 'browser-value-is-not-authoritative'
+    ),
+    jsonb_build_array(
+      jsonb_build_object(
+        'product_id', v_product,
+        'product_name', v_product_name,
+        'quantity_ordered', 10.125,
+        'unit_cost_cents', 333,
+        'unit_size', v_unit_size
+      )
+    ),
+    v_admin,
+    'smk-po-bulk-unicode-case-' || v_suffix
+  );
+  IF (v_replay->>'po_id')::uuid IS DISTINCT FROM v_po
+     OR v_replay->>'status' <> 'already_imported'
+     OR v_replay->>'po_number' IS DISTINCT FROM v_first->>'po_number' THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: Unicode case variant created a second PO first=% replay=%',
+      v_first, v_replay;
+  END IF;
+
+  -- A caller cannot make another vendor alias the first vendor's claim by
+  -- supplying its browser digest. The server derives a distinct claim and PO.
+  v_replay := public.save_purchase_order(
+    NULL,
+    jsonb_build_object(
+      'vendor', '[SMOKE] Different Vendor',
+      'status', 'draft',
+      'bulk_import_vendor_reference', v_vendor_reference,
+      'bulk_import_invoice_date', CURRENT_DATE::text,
+      'bulk_import_intent_key', v_intent
+    ),
+    jsonb_build_array(
+      jsonb_build_object(
+        'product_id', v_product,
+        'product_name', v_product_name,
+        'quantity_ordered', 10.125,
+        'unit_cost_cents', 333,
+        'unit_size', v_unit_size
+      )
+    ),
+    v_admin,
+    'smk-po-bulk-vendor-separation-' || v_suffix
+  );
+  IF v_replay->>'status' IS DISTINCT FROM 'saved'
+     OR (v_replay->>'po_id')::uuid = v_po
+     OR NOT EXISTS (
+       SELECT 1
+         FROM public.purchase_order_import_intents
+        WHERE purchase_order_id = (v_replay->>'po_id')::uuid
+          AND intent_key <> v_intent
+     ) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: server did not separate cross-vendor claim: %', v_replay;
+  END IF;
+
+  -- The stable document identity remains claimed when reviewed date/line
+  -- content changes. The separate fingerprint surfaces that disagreement and
+  -- cannot create a second PO.
   BEGIN
     PERFORM public.save_purchase_order(
       NULL,
       jsonb_build_object(
-        'vendor', '[SMOKE] Different Vendor',
+        'vendor', '[SMOKE] Élan Bulk Intent Vendor',
         'status', 'draft',
-        'bulk_import_intent_key', v_intent
+        'bulk_import_vendor_reference', v_vendor_reference,
+        'bulk_import_invoice_date', CURRENT_DATE::text,
+        'bulk_import_intent_key', 'browser-value-is-not-authoritative'
       ),
       jsonb_build_array(
         jsonb_build_object(
           'product_id', v_product,
           'product_name', v_product_name,
-          'quantity_ordered', 10.125,
+          'quantity_ordered', 11.125,
           'unit_cost_cents', 333,
           'unit_size', v_unit_size
         )
       ),
       v_admin,
-      'smk-po-bulk-vendor-conflict-' || v_suffix
+      'smk-po-bulk-content-conflict-' || v_suffix
     );
-    RAISE EXCEPTION 'SMOKE_FAIL: cross-vendor bulk claim was accepted';
+    RAISE EXCEPTION 'SMOKE_FAIL: changed bulk document content was accepted';
   EXCEPTION WHEN OTHERS THEN
     v_err := SQLERRM;
     IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
-    IF v_err <> 'BULK_PO_INTENT_VENDOR_CONFLICT' THEN
-      RAISE EXCEPTION 'SMOKE_FAIL: wrong cross-vendor claim error: %', v_err;
+    IF v_err <> 'BULK_PO_DOCUMENT_CONTENT_CONFLICT' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: wrong content-conflict error: %', v_err;
     END IF;
   END;
 
   SELECT count(*) INTO v_count
     FROM public.purchase_order_import_intents
-   WHERE intent_key = v_intent;
+   WHERE intent_key = v_intent
+     AND content_fingerprint ~ '^[0-9a-f]{64}$';
   IF v_count <> 1 THEN
     RAISE EXCEPTION 'SMOKE_FAIL: expected one persistent import claim, got %', v_count;
   END IF;
@@ -306,6 +508,14 @@ BEGIN
   IF v_count <> 1 THEN
     RAISE EXCEPTION 'SMOKE_FAIL: expected one PO for two import attempts, got %', v_count;
   END IF;
+
+  -- Prove the first logical import's commit-time trigger before this combined
+  -- rollback harness deliberately deletes that PO later. Restore deferred mode
+  -- so the delete -> re-import scenario behaves like a separate real request.
+  SET LOCAL ROLE authenticated;
+  SET CONSTRAINTS require_bulk_po_content_fingerprint IMMEDIATE;
+  SET CONSTRAINTS require_bulk_po_content_fingerprint DEFERRED;
+  RESET ROLE;
 
   PERFORM set_config(
     'request.jwt.claims',
@@ -339,7 +549,7 @@ BEGIN
   );
   PERFORM public.save_purchase_order(
     v_po,
-    jsonb_build_object('vendor', '[SMOKE] Bulk Intent Vendor', 'status', 'draft'),
+    jsonb_build_object('vendor', '[SMOKE] Élan Bulk Intent Vendor', 'status', 'draft'),
     v_edit_items,
     v_sales,
     'smk-po-omit-cost-edit-' || v_suffix
@@ -385,10 +595,18 @@ BEGIN
   SELECT prosrc INTO v_outer_source
     FROM pg_proc
    WHERE oid = 'public.save_purchase_order(uuid,jsonb,jsonb,uuid,text)'::regprocedure;
-  IF strpos(v_outer_source, 'public.next_po_number()') = 0
-     OR strpos(v_outer_source, '_save_purchase_order_atomic_number_impl') = 0
-     OR strpos(v_outer_source, 'public.next_po_number()')
-        > strpos(v_outer_source, '_save_purchase_order_atomic_number_impl') THEN
+  SELECT prosrc INTO v_identity_source
+    FROM pg_proc
+   WHERE oid = 'public._save_purchase_order_ascii_identity_impl(uuid,jsonb,jsonb,uuid,text)'::regprocedure;
+  IF strpos(v_outer_source, '_save_purchase_order_ascii_identity_impl') = 0
+     OR strpos(v_outer_source, 'BULK_PO_VENDOR_REQUIRED') = 0
+     OR strpos(v_identity_source, 'normalize(v_requested_vendor, NFKC)') = 0
+     OR strpos(v_identity_source, 'normalize(v_vendor_reference, NFKC)') = 0
+     OR strpos(v_identity_source, 'translate(') > 0
+     OR strpos(v_identity_source, 'public.next_po_number()') = 0
+     OR strpos(v_identity_source, '_save_purchase_order_atomic_number_impl') = 0
+     OR strpos(v_identity_source, 'public.next_po_number()')
+        > strpos(v_identity_source, '_save_purchase_order_atomic_number_impl') THEN
     RAISE EXCEPTION 'SMOKE_FAIL: PO number is not allocated inside the outer save transaction';
   END IF;
 
@@ -502,9 +720,11 @@ BEGIN
   v_replay := public.save_purchase_order(
     NULL,
     jsonb_build_object(
-      'vendor', '[SMOKE] Bulk Intent Vendor',
+      'vendor', '[SMOKE] Élan Bulk Intent Vendor',
       'status', 'draft',
-      'bulk_import_intent_key', v_intent
+      'bulk_import_vendor_reference', v_vendor_reference,
+      'bulk_import_invoice_date', CURRENT_DATE::text,
+      'bulk_import_intent_key', 'browser-value-is-not-authoritative'
     ),
     jsonb_build_array(
       jsonb_build_object(
@@ -526,9 +746,20 @@ BEGIN
   SELECT count(*) INTO v_count
     FROM public.purchase_order_import_intents
    WHERE intent_key = v_intent
-     AND purchase_order_id = (v_replay->>'po_id')::uuid;
+     AND purchase_order_id = (v_replay->>'po_id')::uuid
+     AND content_fingerprint ~ '^[0-9a-f]{64}$';
   IF v_count <> 1 THEN
     RAISE EXCEPTION 'SMOKE_FAIL: re-imported document did not receive one fresh durable claim';
+  END IF;
+
+  -- The public writer's SECURITY DEFINER frame has ended. Force the normally
+  -- commit-time trigger while the caller role is authenticated; this proves
+  -- the trigger function has its own controlled access to the deny-all-RLS
+  -- intent table. A final exception still rolls every disposable row back.
+  SET LOCAL ROLE authenticated;
+  SET CONSTRAINTS require_bulk_po_content_fingerprint IMMEDIATE;
+  IF current_user IS DISTINCT FROM 'authenticated' THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: deferred trigger proof did not run as authenticated';
   END IF;
 
   RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK';
