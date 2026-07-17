@@ -6,7 +6,7 @@
     "regenerate_with": "node scripts/regenerate-schema-registry.mjs --from-introspection <queries.json> (queries documented in the script header)",
     "purpose": "Single source of truth for hooks: generated columns, status enums, ALL parseable CHECK IN-lists, NOT NULL columns, full column lists, sequences, tables-with/without updated_at, applied-migration high water.",
     "note": "For a fresh refresh from the live DB, ask Claude Code: 'regenerate the schema-registry from Supabase' (/regen-schema-registry). skipped_constraints lists every CHECK the hooks can NOT validate — review it when touching those tables.",
-    "migrations_high_water": "20260717045420",
+    "migrations_high_water": "20260717063445",
     "applied_migration_names": [
       "20260207_gap_analysis_fixes.sql",
       "20260209050000_inventory_overhaul",
@@ -319,6 +319,7 @@
       "batch_rpc_idempotency_entity_type_fix",
       "batch_year_end_and_cleanup",
       "bind_bulk_po_claim_to_vendor",
+      "bind_bulk_po_replay_content",
       "blend_invoice_app_service_guard",
       "blend_invoice_column_fix",
       "blend_ticket_access_and_atomicity",
@@ -2929,6 +2930,12 @@
       "constraint": "chk_product_tier3",
       "def": "CHECK ((tier3_price >= (0)::numeric))",
       "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "purchase_order_import_intents",
+      "constraint": "purchase_order_import_intents_content_fingerprint_format",
+      "def": "CHECK (((content_fingerprint IS NULL) OR (content_fingerprint ~ '^[0-9a-f]{64}$'::text)))",
+      "reason": "conditional/multi-column — not a single-column IN-list; hooks do NOT validate this constraint"
     },
     {
       "table": "purchase_order_import_intents",
@@ -6270,7 +6277,8 @@
       "actor_id",
       "intent_key",
       "purchase_order_id",
-      "created_at"
+      "created_at",
+      "content_fingerprint"
     ],
     "purchase_order_items": [
       "id",
