@@ -45,6 +45,10 @@ const zeroCostGuardSql = path.join(
   'migrations',
   '20260717112011_supplier_pricing_zero_cost_guard.sql'
 );
+const pricingVersionCompatSql = path.join(
+  repoRoot, 'supabase', 'migrations',
+  '20260717171331_restore_legacy_pricing_version_compat.sql'
+);
 const zeroCostGuardSmokeSql = path.join(
   repoRoot,
   'scripts',
@@ -169,6 +173,7 @@ try {
   copyToContainer(baseSql, 'base.sql');
   copyToContainer(bootstrapSql, 'bootstrap.sql');
   copyToContainer(bootstrapCompatSql, 'bootstrap-compat.sql');
+  copyToContainer(pricingVersionCompatSql, 'pricing-version-compat.sql');
   copyToContainer(seedSql, 'seed.sql');
   copyToContainer(zeroCostGuardSql, 'zero-cost-guard.sql');
   copyToContainer(zeroCostGuardSmokeSql, 'zero-cost-guard-smoke.sql');
@@ -181,6 +186,8 @@ try {
   psql('base.sql');
   console.log('[phase1a-proof] compiling the live additive compatibility bootstrap');
   psql('bootstrap.sql');
+  console.log('[phase1a-proof] restoring repeat-save compatibility for the deployed legacy Product form');
+  psql('pricing-version-compat.sql');
   console.log('[phase1a-proof] proving compatibility with the deployed legacy frontend');
   psql('bootstrap-compat.sql');
   console.log('[phase1a-proof] compiling the live pre-deploy zero-cost guard');

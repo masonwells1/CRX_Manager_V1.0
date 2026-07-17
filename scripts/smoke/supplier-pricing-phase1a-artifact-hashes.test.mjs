@@ -16,6 +16,10 @@ const expectedArtifacts = new Map([
     'supabase/migrations/20260717112011_supplier_pricing_zero_cost_guard.sql',
     '1c55202509664cfdffb401ad66456bc768b4039a48e542fc33c8bc861efb46f5',
   ],
+  [
+    'supabase/migrations/20260717171331_restore_legacy_pricing_version_compat.sql',
+    '90cbc98a0ff4ea21c15395b378af76b66e6861e3e31fc54fd6770979fdf91799',
+  ],
 ]);
 
 function readGitIndexBytes(relativePath) {

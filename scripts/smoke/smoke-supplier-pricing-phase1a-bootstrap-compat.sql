@@ -36,14 +36,15 @@ SELECT set_config(
 SET LOCAL ROLE authenticated;
 
 -- The old UI sends pricing fields in its full-row Product update and then
--- inserts history itself. The bootstrap must preserve both operations.
+-- inserts history itself. It keeps the originally loaded version in component
+-- state, so two edits in the same open Product page must both work.
 UPDATE public.products
 SET product_name = 'Phase 1a Legacy Compatibility Product Edited',
     current_cost = 11.00,
     tier1_margin = 0.20,
     tier2_margin = 0.25,
     tier3_margin = 0.30,
-    pricing_version = pricing_version
+    pricing_version = 1
 WHERE id = '99999999-9999-4999-8999-999999999991'::uuid;
 
 INSERT INTO public.cost_history(
@@ -61,21 +62,37 @@ VALUES (
   'legacy compatibility proof'
 );
 
+UPDATE public.products
+SET product_name = 'Phase 1a Legacy Compatibility Product Edited Again',
+    current_cost = 12.00,
+    tier1_margin = 0.20,
+    tier2_margin = 0.25,
+    tier3_margin = 0.30,
+    pricing_version = 1
+WHERE id = '99999999-9999-4999-8999-999999999991'::uuid;
+
+INSERT INTO public.cost_history(product_id, changed_by, old_cost, new_cost, change_note)
+VALUES (
+  '99999999-9999-4999-8999-999999999991'::uuid,
+  '99999999-9999-4999-8999-999999999999'::uuid,
+  11.00, 12.00, 'legacy compatibility proof second save'
+);
+
 DO $proof$
 BEGIN
   IF NOT EXISTS (
     SELECT 1
     FROM public.products
     WHERE id = '99999999-9999-4999-8999-999999999991'::uuid
-      AND product_name = 'Phase 1a Legacy Compatibility Product Edited'
-      AND current_cost = 11.00
-      AND pricing_version = 2
+      AND product_name = 'Phase 1a Legacy Compatibility Product Edited Again'
+      AND current_cost = 12.00
+      AND pricing_version = 3
   ) THEN
     RAISE EXCEPTION 'BOOTSTRAP_COMPAT_FAIL: legacy Product update did not survive';
   END IF;
 
   IF (SELECT count(*) FROM public.cost_history
-      WHERE product_id = '99999999-9999-4999-8999-999999999991'::uuid) <> 1 THEN
+      WHERE product_id = '99999999-9999-4999-8999-999999999991'::uuid) <> 2 THEN
     RAISE EXCEPTION 'BOOTSTRAP_COMPAT_FAIL: legacy history was missing or doubled';
   END IF;
 
@@ -83,10 +100,10 @@ BEGIN
     SELECT 1
     FROM public.cost_history
     WHERE product_id = '99999999-9999-4999-8999-999999999991'::uuid
-      AND old_cost = 10.00
-      AND new_cost = 11.00
+      AND old_cost = 11.00
+      AND new_cost = 12.00
       AND change_source = 'legacy_frontend'
-      AND change_note = 'legacy compatibility proof'
+      AND change_note = 'legacy compatibility proof second save'
   ) THEN
     RAISE EXCEPTION 'BOOTSTRAP_COMPAT_FAIL: legacy history defaults/provenance are wrong';
   END IF;

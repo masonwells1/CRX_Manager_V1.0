@@ -1,6 +1,10 @@
-# Migration History (746 migrations)
+# Migration History (747 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
+
+| # | Migration timestamp | Purpose |
+|---:|---|---|
+| 747 | 20260717171331 | **APPLIED LIVE 2026-07-17 as ledger version/name `20260717171331` / `20260717170000_restore_legacy_pricing_version_compat` under Mason's in-chat OK. Supplier Pricing Phase 1a legacy Product repeat-save compatibility repair.** During the additive rollout only, the database ignores a stale `pricing_version` re-submitted by the already deployed full-row Product form, then performs its normal server-owned increment. Governed Phase 1a writers still receive `PRODUCT_PRICING_VERSION_MANAGED_BY_DATABASE` if they submit a version. The parked final cutover restores the unconditional rejection after the RPC-only Product editors are deployed. Both mandated content-bound reviewers were CLEAN. The disposable regression proof performs two consecutive old-form saves that both submit version 1 and asserts final database version 3 plus exactly two legacy history records; the post-apply live transaction repeated that scenario and verified the governed rejection, then rolled back completely (`PHASE1A_LIVE_REPEAT_SAVE_ROLLBACK_PASS`). |
 
 > **Live promotion for the 2026-07-15 money/inventory gauntlet:** Supabase
 > applied the reviewed migrations in the required database-first order as

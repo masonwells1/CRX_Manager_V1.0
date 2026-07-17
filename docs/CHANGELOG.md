@@ -4,6 +4,12 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-17 — Applied Supplier Pricing Phase 1a legacy Product repeat-save repair
+
+- Applied the small compatibility migration for the currently deployed Product page (live ledger `20260717171331` / source name `20260717170000_restore_legacy_pricing_version_compat`): it ignores the page's stale submitted pricing version, while the database continues to own and increment the value. Governed worksheet/product RPC calls still reject any client-supplied version, and the parked final cutover restores the unconditional strict rejection. Both required migration reviews were clean; disposable and rolled-back-live proofs each execute two consecutive old-form saves, with the live check ending `PHASE1A_LIVE_REPEAT_SAVE_ROLLBACK_PASS` and leaving no data behind.
+
+---
+
 ## 2026-07-17 — Supplier Pricing Phase 1a replay and workbook safety correction
 
 - Preserved the already-live supplier-pricing bootstrap's reviewed CRLF bytes in Git while pinning the live zero-cost guard to LF. Clean checkouts now reproduce the exact applied artifacts and the bootstrap-to-guard function-body hash contract instead of failing replay after Git line-ending normalization. A correction-guard test now hashes the exact Git-index bytes for both applied artifacts and proves CRLF-to-LF normalization is rejected before push.
