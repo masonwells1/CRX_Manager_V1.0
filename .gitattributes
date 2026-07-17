@@ -15,5 +15,5 @@
 # These migrations are already applied live and contain content-bound
 # function-body hashes. Preserve each artifact's reviewed bytes in Git so a
 # clean checkout replays the same pg_proc.prosrc bodies on every operating system.
-supabase/migrations/20260717042803_supplier_pricing_phase1a.sql -text -diff
+supabase/migrations/20260717042803_supplier_pricing_phase1a.sql -text diff whitespace=cr-at-eol
 supabase/migrations/20260717112011_supplier_pricing_zero_cost_guard.sql text eol=lf
