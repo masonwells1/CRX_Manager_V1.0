@@ -51,9 +51,12 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
-  // The context value must be referentially stable: consumers put `toast` in
-  // effect dependencies, and a fresh object here on every toast re-render turns
-  // any "load failed → toast" path into an infinite reload loop.
+  // Memoized so consumers don't re-render on every toast (the wrapping object
+  // used to be rebuilt each render even though addToast itself was stable).
+  // The destructured `toast` function consumers put in effect deps was already
+  // stable — an identity-UNSTABLE stub in tests is what produces the
+  // load-fail→toast→reload infinite loop; Toast.loopguard.test.tsx pins the
+  // real-provider behavior.
   const contextValue = useMemo(() => ({ toast: addToast }), [addToast]);
 
   return (

@@ -40,7 +40,7 @@ import { dirname, join } from 'node:path';
 import * as ts from 'typescript';
 
 // -------------------------------------------------------------------------
-// Checked-in live snapshot — fully regenerated 2026-07-16, 409 public functions
+// Checked-in live snapshot — fully regenerated 2026-07-16, 420 public functions
 // (includes trigger/helper functions; supersets the 219 user-facing RPCs).
 // Kept as the raw comma-joined DB output to make regeneration a single paste.
 // -------------------------------------------------------------------------

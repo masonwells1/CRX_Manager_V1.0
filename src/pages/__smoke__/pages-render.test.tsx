@@ -107,10 +107,13 @@ vi.mock('../../contexts/AuthContext', () => ({
   AuthProvider: ({ children }: { children: ReactNode }) => children,
 }));
 
-// The real provider memoizes its context value, so `toast` identity is stable
-// across renders. The mock must honor that contract: pages put `toast` in
-// effect deps, and an unstable stub turns any load-then-toast path into an
-// infinite render loop (worker OOM, 2026-07-16).
+// The real useToast returns a stable `toast` function (context value memoized;
+// addToast is useCallback-stable). This mock must honor that contract: pages
+// put `toast` in effect deps, and the previous `() => ({ toast: vi.fn() })`
+// stub minted a new identity per render, turning any load-then-toast path into
+// an infinite render loop (reproducible 4GB worker OOM, 2026-07-16). The loop
+// was a harness artifact, not a production behavior — Toast.loopguard.test.tsx
+// pins the real provider.
 const STABLE_TOAST_CONTEXT = { toast: vi.fn() };
 vi.mock('../../components/ui/Toast', () => ({
   useToast: () => STABLE_TOAST_CONTEXT,

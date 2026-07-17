@@ -49,6 +49,9 @@ Statuses: TODO / BUILDING / GATE / DONE / PARKED(reason)
 | Sol adversarial review (full delta, xhigh) | gpt-5.6-sol | TODO | — |
 | Morning report + docs + memory | orchestrator | TODO | — |
 
+## Scope decisions (recorded when the mission text was narrowed)
+- **Phase 3.2 tier/crop filters — NARROWED OUT (2026-07-16, Sol 3.G r1 H1).** The mission listed rep/tier/crop/last-contact filters. Shipped: rep filter (admins; the RPCs already take p_rep_id), last-contact (displayed + the no-contact list IS that filter), per-row prep-card peek. Deferred: tier + crop filters — the call-list RPC payloads carry neither field, so adding them means an RPC signature/payload change through the full gauntlet for a filter of unproven value. Revisit if Mason asks for it after using the lists.
+
 ## Parked questions (owner decisions — reversible default chosen, keep moving)
 - **Top-products ranking metric** — default chosen: invoiced revenue; Mason may prefer quantity for chemistry-volume thinking. (Sol, Phase 2 sign-off)
 - **Web-store facts: must every one cite a customer_interaction?** — deferred to Phase 5 design (may need a second immutable external-event reference).

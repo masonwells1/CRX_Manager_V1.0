@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowUpRight, CalendarClock, DollarSign, Phone, PhoneCall, RefreshCw, Search, Users } from 'lucide-react';
+import { ArrowUpRight, CalendarClock, ChevronDown, ChevronUp, DollarSign, Phone, PhoneCall, RefreshCw, Search, Users } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import CustomerPrepCard from '../components/customers/CustomerPrepCard';
 import LogInteractionModal from '../components/customers/LogInteractionModal';
 import Button from '../components/ui/Button';
 import Card from '../components/ui/Card';
@@ -115,32 +116,35 @@ function rowsOf<Row>(payload: CallListPayload<Row>, rpcName: string): Row[] {
   return payload.rows;
 }
 
-async function getCallListPrepayProspects(minPriorSpendCents: number): Promise<PrepayProspectRow[]> {
+async function getCallListPrepayProspects(minPriorSpendCents: number, repId: string | null): Promise<PrepayProspectRow[]> {
   const { data, error } = await supabase.rpc('get_call_list_prepay_prospects', {
     p_min_prior_spend_cents: minPriorSpendCents,
+    ...(repId ? { p_rep_id: repId } : {}),
   });
   if (error) throw error;
   return rowsOf(assertRpcResult<CallListPayload<PrepayProspectRow>>(data, 'get_call_list_prepay_prospects'), 'get_call_list_prepay_prospects');
 }
 
-async function getCallListNoRecentContact(days: number): Promise<NoRecentContactRow[]> {
+async function getCallListNoRecentContact(days: number, repId: string | null): Promise<NoRecentContactRow[]> {
   const { data, error } = await supabase.rpc('get_call_list_no_recent_contact', {
     p_days: days,
+    ...(repId ? { p_rep_id: repId } : {}),
   });
   if (error) throw error;
   return rowsOf(assertRpcResult<CallListPayload<NoRecentContactRow>>(data, 'get_call_list_no_recent_contact'), 'get_call_list_no_recent_contact');
 }
 
-async function getCallListStaleQuotes(days: number): Promise<StaleQuoteRow[]> {
+async function getCallListStaleQuotes(days: number, repId: string | null): Promise<StaleQuoteRow[]> {
   const { data, error } = await supabase.rpc('get_call_list_stale_quotes', {
     p_days: days,
+    ...(repId ? { p_rep_id: repId } : {}),
   });
   if (error) throw error;
   return rowsOf(assertRpcResult<CallListPayload<StaleQuoteRow>>(data, 'get_call_list_stale_quotes'), 'get_call_list_stale_quotes');
 }
 
-async function getCallListLapsedProducts(): Promise<LapsedProductRow[]> {
-  const { data, error } = await supabase.rpc('get_call_list_lapsed_products', {});
+async function getCallListLapsedProducts(repId: string | null): Promise<LapsedProductRow[]> {
+  const { data, error } = await supabase.rpc('get_call_list_lapsed_products', repId ? { p_rep_id: repId } : {});
   if (error) throw error;
   return rowsOf(assertRpcResult<CallListPayload<LapsedProductRow>>(data, 'get_call_list_lapsed_products'), 'get_call_list_lapsed_products');
 }
@@ -236,37 +240,74 @@ function LoadingRows() {
 
 export default function CallLists() {
   const navigate = useNavigate();
-  const { profile } = useAuth();
+  const { profile, role } = useAuth();
   const { toast } = useToast();
+  const isAdmin = role === 'admin';
   const [selectedList, setSelectedList] = useState<CallListKey>('prepay');
+  // Draft inputs (free typing) vs applied criteria (what the loader uses) —
+  // keystrokes must not fire RPCs; Apply commits the draft.
   const [days, setDays] = useState({ noRecent: String(DEFAULT_NO_CONTACT_DAYS), staleQuotes: String(DEFAULT_STALE_QUOTE_DAYS) });
   const [minPriorSpend, setMinPriorSpend] = useState('1000');
+  const [applied, setApplied] = useState({
+    noRecentDays: DEFAULT_NO_CONTACT_DAYS,
+    staleQuoteDays: DEFAULT_STALE_QUOTE_DAYS,
+    minPriorSpendCents: DEFAULT_MIN_PRIOR_SPEND_CENTS,
+  });
+  const [repFilter, setRepFilter] = useState('');
+  const [reps, setReps] = useState<Array<{ id: string; full_name: string }>>([]);
   const [search, setSearch] = useState('');
   const [rows, setRows] = useState<CallListRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const [logCustomer, setLogCustomer] = useState<CallListRow | null>(null);
+  const [peekKey, setPeekKey] = useState<string | null>(null);
   const requestSeq = useRef(0);
+
+  // Unassigned accounts is admin-only by construction (the RPC returns no rows
+  // to reps) — hide the picker card instead of showing a falsely "clear" list.
+  const visibleLists = useMemo(
+    () => CALL_LISTS.filter((definition) => definition.key !== 'unassigned-accounts' || isAdmin),
+    [isAdmin],
+  );
 
   const selectedDefinition = useMemo(
     () => CALL_LISTS.find((definition) => definition.key === selectedList) || CALL_LISTS[0],
     [selectedList],
   );
 
+  useEffect(() => {
+    if (!isAdmin) return;
+    let cancelled = false;
+    void (async () => {
+      const { data } = await supabase
+        .from('profile_public_view')
+        .select('id, full_name')
+        .eq('role', 'sales_rep')
+        .eq('is_active', true)
+        .order('full_name');
+      if (cancelled || !data) return;
+      setReps(data.flatMap((rep) => (rep.id ? [{ id: rep.id, full_name: rep.full_name || 'Unnamed rep' }] : [])));
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isAdmin]);
+
   const load = useCallback(async () => {
     const seq = ++requestSeq.current;
     setLoading(true);
     setLoadError(false);
     try {
+      const repId = isAdmin && repFilter ? repFilter : null;
       let nextRows: CallListRow[];
       if (selectedList === 'prepay') {
-        nextRows = await getCallListPrepayProspects(parseDollarsToCents(minPriorSpend, DEFAULT_MIN_PRIOR_SPEND_CENTS));
+        nextRows = await getCallListPrepayProspects(applied.minPriorSpendCents, repId);
       } else if (selectedList === 'no-recent-contact') {
-        nextRows = await getCallListNoRecentContact(parseDays(days.noRecent, DEFAULT_NO_CONTACT_DAYS));
+        nextRows = await getCallListNoRecentContact(applied.noRecentDays, repId);
       } else if (selectedList === 'stale-quotes') {
-        nextRows = await getCallListStaleQuotes(parseDays(days.staleQuotes, DEFAULT_STALE_QUOTE_DAYS));
+        nextRows = await getCallListStaleQuotes(applied.staleQuoteDays, repId);
       } else if (selectedList === 'lapsed-products') {
-        nextRows = await getCallListLapsedProducts();
+        nextRows = await getCallListLapsedProducts(repId);
       } else {
         nextRows = await getCallListUnassignedAccounts();
       }
@@ -281,12 +322,44 @@ export default function CallLists() {
     } finally {
       if (seq === requestSeq.current) setLoading(false);
     }
-  }, [days.noRecent, days.staleQuotes, minPriorSpend, selectedList, toast]);
+  }, [applied, isAdmin, repFilter, selectedList, toast]);
 
   useEffect(() => {
-    setRows([]);
     void load();
   }, [load]);
+
+  // Rows are cleared synchronously in these handlers (not just in the load
+  // effect) so a stale list can never render under a newly selected list or
+  // criteria; bumping the sequence also invalidates any in-flight response.
+  const selectList = (key: CallListKey) => {
+    if (key === selectedList) return;
+    requestSeq.current += 1;
+    setRows([]);
+    setPeekKey(null);
+    setSelectedList(key);
+  };
+
+  const applyCriteria = () => {
+    requestSeq.current += 1;
+    setRows([]);
+    setPeekKey(null);
+    setApplied({
+      noRecentDays: parseDays(days.noRecent, DEFAULT_NO_CONTACT_DAYS),
+      staleQuoteDays: parseDays(days.staleQuotes, DEFAULT_STALE_QUOTE_DAYS),
+      minPriorSpendCents: parseDollarsToCents(minPriorSpend, DEFAULT_MIN_PRIOR_SPEND_CENTS),
+    });
+  };
+
+  const changeRepFilter = (nextRep: string) => {
+    requestSeq.current += 1;
+    setRows([]);
+    setPeekKey(null);
+    setRepFilter(nextRep);
+  };
+
+  // Stale-quotes can return several quotes for one customer — customer_id
+  // alone would collide as a React key.
+  const rowKey = (row: CallListRow) => ('quote_id' in row ? row.quote_id : row.customer_id);
 
   const filteredRows = useMemo(() => {
     const normalizedSearch = search.trim().toLowerCase();
@@ -304,7 +377,7 @@ export default function CallLists() {
         </div>
 
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
-          {CALL_LISTS.map((definition) => {
+          {visibleLists.map((definition) => {
             const Icon = definition.icon;
             const active = definition.key === selectedList;
             return (
@@ -312,7 +385,7 @@ export default function CallLists() {
                 key={definition.key}
                 type="button"
                 aria-pressed={active}
-                onClick={() => setSelectedList(definition.key)}
+                onClick={() => selectList(definition.key)}
                 className={`min-h-[92px] rounded-xl border p-4 text-left transition-colors ${active ? 'border-crx-green bg-crx-green/5 ring-2 ring-crx-green/20' : 'border-gray-200 bg-white hover:border-gray-300'}`}
               >
                 <Icon className={`h-5 w-5 ${active ? 'text-crx-green' : 'text-secondary'}`} />
@@ -339,7 +412,15 @@ export default function CallLists() {
               {selectedList === 'stale-quotes' && (
                 <Input label="Quote untouched for (days)" type="number" min="0" step="1" inputMode="numeric" value={days.staleQuotes} onChange={(event) => setDays((current) => ({ ...current, staleQuotes: event.target.value }))} className="min-h-11 sm:w-52" />
               )}
-              <Button type="button" variant="secondary" className="min-h-11" icon={<RefreshCw className="h-4 w-4" />} showChevron={false} loading={loading} onClick={() => void load()}>Apply and refresh</Button>
+              {isAdmin && selectedList !== 'unassigned-accounts' && (
+                <label className="text-sm font-medium text-secondary">Sales rep
+                  <select aria-label="Filter by sales rep" value={repFilter} onChange={(event) => changeRepFilter(event.target.value)} className="mt-1 block min-h-11 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm text-nav-dark sm:w-48">
+                    <option value="">All reps</option>
+                    {reps.map((rep) => <option key={rep.id} value={rep.id}>{rep.full_name}</option>)}
+                  </select>
+                </label>
+              )}
+              <Button type="button" variant="secondary" className="min-h-11" icon={<RefreshCw className="h-4 w-4" />} showChevron={false} loading={loading} onClick={applyCriteria}>Apply and refresh</Button>
             </div>
           </div>
         </Card>
@@ -373,27 +454,37 @@ export default function CallLists() {
             </Card>
           ) : (
             <div className="space-y-3">
-              {filteredRows.map((row) => (
-                <Card key={row.customer_id}>
-                  <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                    <div className="min-w-0 flex-1">
-                      <h2 className="truncate text-base font-semibold text-nav-dark">{row.farm_name || 'Unnamed farm'}</h2>
-                      <div className="mt-2 flex flex-col gap-1 text-sm text-secondary sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-4">
-                        <span>{row.primary_contact_name || 'Primary contact not named'}</span>
-                        {row.phone_e164 ? <a className="inline-flex min-h-11 items-center gap-1 self-start text-crx-green hover:underline" href={`tel:${row.phone_e164}`}><Phone className="h-4 w-4" />{row.phone_display || row.phone_e164}</a> : <span>{row.phone_display || 'No phone on file'}</span>}
+              {filteredRows.map((row) => {
+                const key = rowKey(row);
+                const peeking = peekKey === key;
+                return (
+                  <Card key={key}>
+                    <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                      <div className="min-w-0 flex-1">
+                        <h2 className="truncate text-base font-semibold text-nav-dark">{row.farm_name || 'Unnamed farm'}</h2>
+                        <div className="mt-2 flex flex-col gap-1 text-sm text-secondary sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-4">
+                          <span>{row.primary_contact_name || 'Primary contact not named'}</span>
+                          {row.phone_e164 ? <a className="inline-flex min-h-11 items-center gap-1 self-start text-crx-green hover:underline" href={`tel:${row.phone_e164}`}><Phone className="h-4 w-4" />{row.phone_display || row.phone_e164}</a> : <span>{row.phone_display || 'No phone on file'}</span>}
+                        </div>
+                        <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3">
+                          <Metric label="Last contact" value={formatListDate(row.last_interaction_at)} />
+                          <ListMetrics listKey={selectedList} row={row} />
+                        </dl>
                       </div>
-                      <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3">
-                        <Metric label="Last contact" value={formatListDate(row.last_interaction_at)} />
-                        <ListMetrics listKey={selectedList} row={row} />
-                      </dl>
+                      <div className="flex flex-col gap-2 sm:flex-row lg:flex-col lg:min-w-[132px]">
+                        <Button type="button" variant="secondary" className="min-h-11 w-full" icon={peeking ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />} showChevron={false} aria-expanded={peeking} onClick={() => setPeekKey(peeking ? null : key)}>Call prep</Button>
+                        <Button type="button" variant="secondary" className="min-h-11 w-full" icon={<ArrowUpRight className="h-4 w-4" />} showChevron={false} onClick={() => navigate(`/customers/${row.customer_id}`)}>Open</Button>
+                        <Button type="button" variant="primary" className="min-h-11 w-full" icon={<PhoneCall className="h-4 w-4" />} showChevron={false} disabled={!profile?.id} onClick={() => setLogCustomer(row)}>Log call</Button>
+                      </div>
                     </div>
-                    <div className="flex flex-col gap-2 sm:flex-row lg:flex-col lg:min-w-[132px]">
-                      <Button type="button" variant="secondary" className="min-h-11 w-full" icon={<ArrowUpRight className="h-4 w-4" />} showChevron={false} onClick={() => navigate(`/customers/${row.customer_id}`)}>Open</Button>
-                      <Button type="button" variant="primary" className="min-h-11 w-full" icon={<PhoneCall className="h-4 w-4" />} showChevron={false} disabled={!profile?.id} onClick={() => setLogCustomer(row)}>Log call</Button>
-                    </div>
-                  </div>
-                </Card>
-              ))}
+                    {peeking && (
+                      <div className="mt-4 border-t border-gray-100 pt-4">
+                        <CustomerPrepCard key={row.customer_id} customerId={row.customer_id} />
+                      </div>
+                    )}
+                  </Card>
+                );
+              })}
             </div>
           )}
         </div>
