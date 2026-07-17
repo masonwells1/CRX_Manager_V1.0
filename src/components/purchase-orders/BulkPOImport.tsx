@@ -430,7 +430,8 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
           notes: item.notes || null,
         }));
         const { data: poData, error: poError } = await supabase.rpc('save_purchase_order', {
-          // SQL accepts NULL (create-new path); the regenerated types can't express a nullable required arg.
+          // Postgres uses NULL to select the create path; generated RPC types
+          // cannot express nullability for a uuid parameter without a default.
           p_po_id: null as unknown as string,
           p_po_payload: {
             // The database allocates the number inside the same transaction

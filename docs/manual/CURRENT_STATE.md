@@ -1,6 +1,6 @@
 # CRX Manager — Current State
 
-**Last verified:** 2026-07-16 (snapshot — counts are as-of this date)
+**Last verified:** 2026-07-17 (snapshot — counts are as-of this date)
 **Update triggers:** refresh when a major feature ships or quarterly, whichever first.
 
 ## 1. Reality check
@@ -11,7 +11,7 @@ lifecycle, field mapping and per-acre billing, inventory reservations, credit
 memos, commissions, and a driver-facing Field Mode are all shipped and live.
 The business is **actively using it**, but operational data is still ramping up:
 the database was near-empty on 2026-06-13, and by 2026-07-12 it held roughly
-153 customers and 604 products. As of this snapshot (2026-07-16) those two
+153 customers and 604 products. As of this snapshot (2026-07-17) those two
 numbers are unchanged, but **deliveries are now flowing through the app**
 (106 recorded) while payments remain at zero — see the table below. Treat this
 as a business in early adoption: operational usage is real, the money loop
@@ -20,7 +20,7 @@ as a business in early adoption: operational usage is real, the money loop
 ## 2. Live operational snapshot
 
 Read-only counts against the live database (project `rhyzpcqhnizqbxphqdkr`),
-captured 2026-07-16. These age immediately — re-run before relying on them.
+captured 2026-07-17. These age immediately — re-run before relying on them.
 
 | Table | Count | Notes |
 |---|---|---|

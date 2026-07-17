@@ -1,6 +1,6 @@
-# Database Schema Reference (123 Tables + 2 views)
+# Database Schema Reference (129 Tables + 2 views)
 
-> Count as of 2026-07-14, verified live against Supabase project `rhyzpcqhnizqbxphqdkr` (`SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE'` / `'VIEW'`). The per-table sections below are a curated tour, not an exhaustive enumeration of all 123 tables; **`.claude/schema-registry.json`** (refreshed from live introspection) is the machine-readable source of truth for current columns, constraints, and enum values — prefer it over this prose doc when a fact is load-bearing.
+> Count as of 2026-07-17, verified live against Supabase project `rhyzpcqhnizqbxphqdkr` (`SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE'` / `'VIEW'`). The per-table sections below are a curated tour, not an exhaustive enumeration of all 129 tables; **`.claude/schema-registry.json`** (refreshed from live introspection) is the machine-readable source of truth for current columns, constraints, and enum values — prefer it over this prose doc when a fact is load-bearing.
 
 ## Core Business
 - `profiles` - Users (id refs auth.users, email, full_name, role, phone, is_active, applicator_license_number, faa_certificate_number)
@@ -36,6 +36,7 @@
 - `inventory_holds` - Reserved inventory (quantity, hold_type: manual/crop_program, expires_at, is_active, source_id — links to quote for auto-release on accept/decline/expire)
 - `purchase_orders` - Supplier POs (po_number, vendor, status, exact dollar `total_cost`, generated bigint `total_cost_cents`)
 - `purchase_order_items` - PO line items (quantity_ordered, quantity_received, exact dollar `unit_cost`, generated bigint `unit_cost_cents`)
+- `purchase_order_import_intents` - RPC-owned global vendor-document claim for bulk PO imports (intent_key, purchase_order_id, first actor provenance). RLS is enabled with no authenticated direct table access; the claim cascades only when the admin-only PO delete workflow removes its PO.
 
 ## Deliveries
 - `deliveries` - Delivery headers (delivery_number, order_id, assigned_driver, scheduled_date, status, signature_url, priority, delivery_window_start/end, cancelled_at/by, cancel_reason, issue_type, issue_notes, is_quick_delivery)

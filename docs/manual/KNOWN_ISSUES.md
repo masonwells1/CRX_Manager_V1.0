@@ -1,6 +1,6 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-07-16** (full docs review — every open/done claim below re-verified against code + live DB by subagents; owner-facing combined list: root `TODO.md`)
+**Last verified: 2026-07-17** (targeted money/inventory release refresh against current code and live DB; older open/deferred claims retain their dated evidence below; owner-facing combined list: root `TODO.md`)
 **Update triggers:** when a finding is parked/resolved, a migration is parked/applied, or an owner decision lands. Agents must update THIS file, not create new issue lists. Do not re-discover or re-fix something listed here as already known — read the pointer first.
 
 This file consolidates (does not replace) the source documents it points to. If this file and a source disagree, trust the source and fix this file.
@@ -117,6 +117,7 @@ The 2026-07-13 audit implemented the cheap hard-guard fixes (see CHANGELOG). The
 
 ## 6. Recently resolved (last ~30 days)
 
+- **2026-07-17** — Money/inventory gauntlet sections 8-15 database remediation is live through `close_final_purchase_order_release_gaps` (ledger `20260717011322`). The final correction makes PO numbering atomic with insertion, preserves sales-rep PO create/import/edit authority, cascades a bulk-import claim only on the admin-only PO delete path, and compares vendor bills with the authoritative line-rounded PO header. Both trusted migration reviewers returned CLEAN; the deployed rollback chain reached `SMOKE_PASS_ROLLBACK`; permanent checks found zero claim rows, fractional source costs, and PO header mismatches, with public/internal grants correct.
 - **2026-07-15** — The 2026-07-14 workflow-review HIGH (deactivated admins retained commission-payout policy access) is closed: all 3 fix migrations applied live — names `20260714185129_fix_commission_admin_policies` / `20260714185130_gate_batch_prepay_admin` / `20260714185631_harden_is_admin_search_path`, re-stamped live versions `20260715134551` / `20260715134618` / `20260715134629`. Verified in live `schema_migrations` 2026-07-16 (match on name, not version — the standard drift gotcha). `migration-history.md` rows 690–692 corrected the same day.
 - **2026-07-15** — Schema registry regenerated from live introspection; high-water `20260715203911` = latest live migration (verified 2026-07-16). Roadmap tickets T1/N2 done.
 - **2026-07-06** — Business-workflow findings **#106 + #109** (application-record date/license snapshots; invoice-side season stamping) shipped live via `20260707050000_application_record_integrity` (live v20260706175157). Recorded here 2026-07-16 after this file wrongly carried them as open.
