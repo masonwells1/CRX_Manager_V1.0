@@ -879,7 +879,7 @@ export default function CustomerDetail() {
 
       {/* key remounts on customer switch — see the CustomerPrepCard note above */}
       {tab === 'documents' && !isNew && id && profile && (
-        <CustomerDocuments key={id} customerId={id} />
+        <CustomerDocuments key={id} customerId={id} userId={profile.id} />
       )}
 
       {tab === 'timeline' && !isNew && (

@@ -39,8 +39,8 @@ Statuses: TODO / BUILDING / GATE / DONE / PARKED(reason)
 | unit | builder | status | commit | proof |
 |---|---|---|---|---|
 | 4.1 documents migration + bucket | terra (draft) + orchestrator hardenings | DONE | (this commit) | PROOF — Ran: gauntlet (drift CLEAN; RLS CLEAN + its 4 MED hardenings folded in + 2 delta re-verifies incl. owner_id-spoof/edge-path probes; Codex r1 BLOCK [ordering BLOCKER my own hardening introduced + 3 HIGH] → r2 BLOCK [rep uploads would 403: Storage INSERT..RETURNING* needs row visibility before metadata exists — BOTH Claude reviewers had signed off wrongly] → owner_id-branch fix → r3 APPROVE); apply attempt 1 failed on storage-policy COMMENT ownership → comments stripped → LIVE apply {success:true} w/ hash-bound proofs (4de6c11a…) · Saw: rolled-back smoke 13/13 (wrong-folder/nested/born-deleted/provenance/forged-attribution/post-delete-edit ALL blocked; soft-delete works; rep sees no deleted rows, can't touch unassigned customers; bucket private; 5 storage + 6 table policies live); B7 rename 010003→013415 pre-apply |
-| 4.2 documents UI | luna | GATE | — | PROOF — Ran (luna): typecheck, lint 0 err, CustomerDetail smoke, full vitest 254/3519; build orchestrator-verified (luna's sandbox EPERM was environmental) · pending: post-regen gate + 4.G |
-| 4.G phase gate | orchestrator | TODO | — | — |
+| 4.2 documents UI | luna + orchestrator fixes | DONE | 916cc856 (main) | PROOF — Ran: full gate ×2 (lint 0 err, typecheck, 254/254 files 3519 tests, build) after types regen + Sol 4.G fixes (anchor-click downloads [popup-blocker-safe], typed queries, logActivity events, zero-byte guard, input reset, per-file a11y labels) · Saw: green |
+| 4.G phase gate | orchestrator | DONE | 916cc856 (main) | PROOF — Ran: Sol xhigh r1 BLOCK (3M/3L) → all fixed → r2 **APPROVE** (incl. confirming logActivity failures can't break the mutation UX); PR #151 checks green, squash-merged 2026-07-17T03:0x · Saw: prod serves CustomerDetail-86NZmKjp.js containing customer_documents (grep=1) — live users have the Documents tab |
 
 ## Final gauntlet
 | step | reviewer | status | verdict |

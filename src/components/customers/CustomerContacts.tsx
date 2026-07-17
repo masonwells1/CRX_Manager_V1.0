@@ -9,6 +9,7 @@ import Button from '../ui/Button';
 import Card, { CardHeader } from '../ui/Card';
 import Input from '../ui/Input';
 import Modal from '../ui/Modal';
+import ConfirmModal from '../ui/ConfirmModal';
 import Badge from '../ui/Badge';
 
 interface CustomerContactsProps { customerId: string; performedBy: string; }
@@ -37,6 +38,8 @@ export default function CustomerContacts({ customerId, performedBy }: CustomerCo
   const [contacts, setContacts] = useState<CustomerContact[]>([]);
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState(false);
+  const [contactToDeactivate, setContactToDeactivate] = useState<CustomerContact | null>(null);
+  const [deactivating, setDeactivating] = useState(false);
   const [editing, setEditing] = useState<CustomerContact | null>(null);
   const [draft, setDraft] = useState<ContactDraft>(emptyDraft);
   const [saving, setSaving] = useState(false);
@@ -104,17 +107,26 @@ export default function CustomerContacts({ customerId, performedBy }: CustomerCo
     } catch (error: unknown) {
       Sentry.captureException(error instanceof Error ? error : new Error(String(error)), { extra: { context: 'CustomerContacts.save' } });
       const message = error instanceof Error ? error.message : 'Failed to save contact';
-      toast('error', message.includes('customer_contacts_customer_id_is_primary') ? 'Only one active primary contact is allowed.' : message);
+      // Prefer the Postgres unique-violation code; keep the constraint-name
+      // substring as a fallback for wrappers that strip the code.
+      const isPrimaryConflict =
+        (!!error && typeof error === 'object' && 'code' in error && (error as { code?: string }).code === '23505' && message.includes('customer_contacts'))
+        || message.includes('customer_contacts_customer_id_is_primary');
+      toast('error', isPrimaryConflict ? 'Only one active primary contact is allowed.' : message);
     } finally { setSaving(false); }
   };
 
-  const deactivate = async (contact: CustomerContact) => {
+  const deactivate = async () => {
+    if (!contactToDeactivate) return;
+    setDeactivating(true);
     try {
-      const result = await contactsTable().update({ is_active: false, is_primary: false }).eq('id', contact.id).select();
+      const result = await contactsTable().update({ is_active: false, is_primary: false }).eq('id', contactToDeactivate.id).select();
       checkMutationResult(result, 'deactivate contact');
       toast('success', 'Contact deactivated');
+      setContactToDeactivate(null);
       await loadContacts();
     } catch (error: unknown) { toast('error', error instanceof Error ? error.message : 'Failed to deactivate contact'); }
+    finally { setDeactivating(false); }
   };
 
   const toggle = (key: keyof Pick<ContactDraft, 'is_primary' | 'can_place_orders' | 'is_decision_maker' | 'is_billing_contact'>) => setDraft((current) => ({ ...current, [key]: !current[key] }));
@@ -122,7 +134,17 @@ export default function CustomerContacts({ customerId, performedBy }: CustomerCo
   return <>
     <Card padding={false}>
       <div className="p-4 sm:p-5 flex items-center justify-between gap-3"><CardHeader title="Customer" accent="Contacts" /><Button size="sm" icon={<Plus className="w-4 h-4" />} showChevron={false} onClick={() => begin()}>Add Contact</Button></div>
-      {loading ? <div className="px-4 pb-4 space-y-2">{[1, 2].map((item) => <div key={item} className="h-20 rounded-lg bg-gray-100 animate-pulse" />)}</div> : contacts.length === 0 ? <p className="px-4 pb-5 text-sm text-secondary">No contacts yet.</p> : <div className="divide-y divide-gray-100">{contacts.map((contact) => <div key={contact.id} className={`p-4 ${contact.is_active ? '' : 'opacity-60'}`}><div className="flex items-start justify-between gap-3"><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><p className="font-medium text-nav-dark">{contact.name || 'Unnamed contact'}</p>{contact.is_primary && <Badge variant="success"><Star className="w-3 h-3 mr-1" />Primary</Badge>}{!contact.is_active && <Badge variant="default">Inactive</Badge>}</div><p className="text-sm text-secondary">{contact.role || 'No role listed'}</p>{contact.phone_display && <a className="mt-1 inline-flex min-h-11 items-center text-sm text-crx-green hover:underline" href={`tel:${contact.phone_e164 || contact.phone_display}`}><Phone className="mr-1 w-3.5 h-3.5" />{contact.phone_display}</a>}{contact.email && <a className="block text-sm text-crx-green hover:underline break-all" href={`mailto:${contact.email}`}>{contact.email}</a>}<div className="mt-2 flex flex-wrap gap-1">{contact.can_place_orders && <Badge variant="info">Orders</Badge>}{contact.is_decision_maker && <Badge variant="warning">Decision maker</Badge>}{contact.is_billing_contact && <Badge variant="default">Billing</Badge>}</div></div><div className="flex shrink-0 gap-1"><Button variant="ghost" size="sm" icon={<Edit3 className="w-4 h-4" />} showChevron={false} onClick={() => begin(contact)}>Edit</Button>{contact.is_active && <button type="button" className="min-h-11 px-2 text-gray-400 hover:text-red-600" aria-label={`Deactivate ${contact.name || 'contact'}`} onClick={() => void deactivate(contact)}><UserX className="w-4 h-4" /></button>}</div></div></div>)}</div>}
+      <ConfirmModal
+        open={Boolean(contactToDeactivate)}
+        onClose={() => { if (!deactivating) setContactToDeactivate(null); }}
+        onConfirm={() => void deactivate()}
+        title="Deactivate contact"
+        message={`Deactivate ${contactToDeactivate?.name || 'this contact'}? They will stop appearing in contact pickers; promoting them to primary later reactivates them.`}
+        confirmLabel="Deactivate"
+        variant="danger"
+        loading={deactivating}
+      />
+      {loading ? <div className="px-4 pb-4 space-y-2">{[1, 2].map((item) => <div key={item} className="h-20 rounded-lg bg-gray-100 animate-pulse" />)}</div> : contacts.length === 0 ? <p className="px-4 pb-5 text-sm text-secondary">No contacts yet.</p> : <div className="divide-y divide-gray-100">{contacts.map((contact) => <div key={contact.id} className={`p-4 ${contact.is_active ? '' : 'opacity-60'}`}><div className="flex items-start justify-between gap-3"><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><p className="font-medium text-nav-dark">{contact.name || 'Unnamed contact'}</p>{contact.is_primary && <Badge variant="success"><Star className="w-3 h-3 mr-1" />Primary</Badge>}{!contact.is_active && <Badge variant="default">Inactive</Badge>}</div><p className="text-sm text-secondary">{contact.role || 'No role listed'}</p>{contact.phone_display && <a className="mt-1 inline-flex min-h-11 items-center text-sm text-crx-green hover:underline" href={`tel:${contact.phone_e164 || contact.phone_display}`}><Phone className="mr-1 w-3.5 h-3.5" />{contact.phone_display}</a>}{contact.email && <a className="block text-sm text-crx-green hover:underline break-all" href={`mailto:${contact.email}`}>{contact.email}</a>}<div className="mt-2 flex flex-wrap gap-1">{contact.can_place_orders && <Badge variant="info">Orders</Badge>}{contact.is_decision_maker && <Badge variant="warning">Decision maker</Badge>}{contact.is_billing_contact && <Badge variant="default">Billing</Badge>}</div></div><div className="flex shrink-0 gap-1"><Button variant="ghost" size="sm" icon={<Edit3 className="w-4 h-4" />} showChevron={false} onClick={() => begin(contact)}>Edit</Button>{contact.is_active && <button type="button" className="min-h-11 px-2 text-gray-400 hover:text-red-600" aria-label={`Deactivate ${contact.name || 'contact'}`} onClick={() => setContactToDeactivate(contact)}><UserX className="w-4 h-4" /></button>}</div></div></div>)}</div>}
     </Card>
     <Modal open={open} onClose={() => setOpen(false)} title={editing ? 'Edit' : 'Add'} accent="Contact" size="large" footer={<div className="flex justify-end gap-2"><Button variant="secondary" onClick={() => setOpen(false)}>Cancel</Button><Button loading={saving} onClick={() => void save()}>Save Contact</Button></div>}><div className="space-y-4"><div className="grid grid-cols-1 sm:grid-cols-2 gap-4"><Input label="Name" value={draft.name || ''} onChange={(e) => setDraft({ ...draft, name: e.target.value })} /><Input label="Role" value={draft.role || ''} onChange={(e) => setDraft({ ...draft, role: e.target.value })} /><Input label="Phone" value={draft.phone_display || ''} onChange={(e) => setDraft({ ...draft, phone_display: e.target.value })} /><Input label="Email" type="email" value={draft.email || ''} onChange={(e) => setDraft({ ...draft, email: e.target.value })} /></div><div><p className="mb-2 text-sm font-medium text-secondary">Preferred contact method</p><div className="flex flex-wrap gap-2">{methods.map((method) => <button type="button" key={method} onClick={() => setDraft({ ...draft, preferred_contact_method: draft.preferred_contact_method === method ? null : method })} className={`min-h-11 rounded-lg px-3 text-sm capitalize ${draft.preferred_contact_method === method ? 'bg-crx-green text-white' : 'border border-gray-200 text-secondary'}`}>{method}</button>)}</div></div><div className="grid grid-cols-1 sm:grid-cols-2 gap-2">{([{ key: 'is_primary', label: 'Primary contact' }, { key: 'can_place_orders', label: 'Can place orders' }, { key: 'is_decision_maker', label: 'Decision maker' }, { key: 'is_billing_contact', label: 'Billing contact' }] as const).map(({ key, label }) => <label key={key} className="flex min-h-11 items-center gap-2 rounded-lg border border-gray-200 px-3 text-sm text-nav-dark"><input type="checkbox" checked={draft[key]} onChange={() => toggle(key)} className="h-4 w-4 accent-crx-green" />{label}</label>)}</div></div></Modal>
   </>;

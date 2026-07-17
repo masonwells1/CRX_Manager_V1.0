@@ -35,6 +35,7 @@ interface CustomerDocumentRow {
 
 interface CustomerDocumentsProps {
   customerId: string;
+  userId: string;
 }
 
 const errorMessage = (error: unknown, fallback: string) => (
@@ -77,7 +78,7 @@ function isAllowedMimeType(value: string): value is AllowedMimeType {
   return (ALLOWED_MIME_TYPES as readonly string[]).includes(value);
 }
 
-export default function CustomerDocuments({ customerId }: CustomerDocumentsProps) {
+export default function CustomerDocuments({ customerId, userId }: CustomerDocumentsProps) {
   const { profile } = useAuth();
   const { toast } = useToast();
   const [documents, setDocuments] = useState<CustomerDocumentRow[]>([]);
@@ -171,13 +172,6 @@ export default function CustomerDocuments({ customerId }: CustomerDocumentsProps
     setSelectedFile(file);
   };
 
-  const currentUserId = async (): Promise<string> => {
-    const { data, error } = await supabase.auth.getUser();
-    if (error) throw error;
-    if (!data.user) throw new Error('Your session has expired. Please sign in again.');
-    return data.user.id;
-  };
-
   const handleUpload = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!selectedFile) {
@@ -211,7 +205,7 @@ export default function CustomerDocuments({ customerId }: CustomerDocumentsProps
             filename: selectedFile.name,
             mime_type: selectedFile.type,
             size_bytes: selectedFile.size,
-            uploaded_by: await currentUserId(),
+            uploaded_by: userId,
             source: 'rep',
             effective_date: effectiveDate || null,
             expiration_date: expirationDate || null,
@@ -220,18 +214,14 @@ export default function CustomerDocuments({ customerId }: CustomerDocumentsProps
           .select()
           .single();
         checkMutationResult(insertResult, 'Save customer document');
-        const uploaderId = insertResult.data?.uploaded_by;
-        const newDocumentId = insertResult.data?.id;
-        if (uploaderId) {
-          await logActivity({
-            event: 'document_uploaded',
-            description: `Uploaded ${documentType.replace(/_/g, ' ')} document: ${selectedFile.name}`,
-            performedBy: uploaderId,
-            entityType: 'customer_document',
-            entityId: newDocumentId,
-            customerId,
-          });
-        }
+        await logActivity({
+          event: 'document_uploaded',
+          description: `Uploaded ${documentType.replace(/_/g, ' ')} document: ${selectedFile.name}`,
+          performedBy: userId,
+          entityType: 'customer_document',
+          entityId: insertResult.data?.id,
+          customerId,
+        });
       } catch (insertError: unknown) {
         await supabase.storage.from(DOCUMENT_BUCKET).remove([storagePath]);
         throw insertError;
@@ -286,7 +276,7 @@ export default function CustomerDocuments({ customerId }: CustomerDocumentsProps
     if (!documentToDelete) return;
     setDeletingId(documentToDelete.id);
     try {
-      const deletedBy = await currentUserId();
+      const deletedBy = userId;
       const updateResult = await supabase
         .from('customer_documents')
         .update({ deleted_at: new Date().toISOString(), deleted_by: deletedBy })

@@ -11,6 +11,7 @@ import { useToast } from '../components/ui/Toast';
 import { assertRpcResult, supabase } from '../lib/db';
 import { Sentry } from '../lib/sentry';
 import { formatCents } from '../lib/money';
+import { parseDollarsToCents } from '../lib/parseCents';
 
 type CallListKey = 'prepay' | 'no-recent-contact' | 'stale-quotes' | 'lapsed-products' | 'unassigned-accounts';
 
@@ -160,14 +161,6 @@ function parseDays(value: string, fallback: number): number {
   if (!/^\d+$/.test(value.trim())) return fallback;
   const parsed = Number(value);
   return Number.isSafeInteger(parsed) ? parsed : fallback;
-}
-
-function parseDollarsToCents(value: string, fallback: number): number {
-  const normalized = value.trim().replace(/[$,]/g, '');
-  if (!/^\d+(\.\d{0,2})?$/.test(normalized)) return fallback;
-  const [whole, fraction = ''] = normalized.split('.');
-  const cents = Number(whole) * 100 + Number(fraction.padEnd(2, '0'));
-  return Number.isSafeInteger(cents) ? cents : fallback;
 }
 
 function formatListDate(value: string | null): string {
@@ -359,7 +352,7 @@ export default function CallLists() {
     setRows([]);
     setPeekKey(null);
     setApplied((current) => {
-      if (selectedList === 'prepay') return { ...current, minPriorSpendCents: parseDollarsToCents(minPriorSpend, DEFAULT_MIN_PRIOR_SPEND_CENTS) };
+      if (selectedList === 'prepay') return { ...current, minPriorSpendCents: (parseDollarsToCents(minPriorSpend) || DEFAULT_MIN_PRIOR_SPEND_CENTS) };
       if (selectedList === 'no-recent-contact') return { ...current, noRecentDays: parseDays(days.noRecent, DEFAULT_NO_CONTACT_DAYS) };
       if (selectedList === 'stale-quotes') return { ...current, staleQuoteDays: parseDays(days.staleQuotes, DEFAULT_STALE_QUOTE_DAYS) };
       return { ...current };
