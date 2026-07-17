@@ -255,7 +255,11 @@ export default function CallLists() {
   });
   const [repFilter, setRepFilter] = useState('');
   const [reps, setReps] = useState<Array<{ id: string; full_name: string }>>([]);
+  const [repsError, setRepsError] = useState(false);
+  const [repsLoadNonce, setRepsLoadNonce] = useState(0);
   const [search, setSearch] = useState('');
+  const [tierFilter, setTierFilter] = useState('');
+  const [tiersByCustomer, setTiersByCustomer] = useState<Record<string, number | null>>({});
   const [rows, setRows] = useState<CallListRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
@@ -279,19 +283,25 @@ export default function CallLists() {
     if (!isAdmin) return;
     let cancelled = false;
     void (async () => {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from('profile_public_view')
         .select('id, full_name')
         .eq('role', 'sales_rep')
         .eq('is_active', true)
         .order('full_name');
-      if (cancelled || !data) return;
+      if (cancelled) return;
+      if (error || !data) {
+        setRepsError(true);
+        Sentry.captureException(new Error(error ? error.message : 'rep options returned no data'), { extra: { context: 'CallLists.reps' } });
+        return;
+      }
+      setRepsError(false);
       setReps(data.flatMap((rep) => (rep.id ? [{ id: rep.id, full_name: rep.full_name || 'Unnamed rep' }] : [])));
     })();
     return () => {
       cancelled = true;
     };
-  }, [isAdmin]);
+  }, [isAdmin, repsLoadNonce]);
 
   const load = useCallback(async () => {
     const seq = ++requestSeq.current;
@@ -336,17 +346,21 @@ export default function CallLists() {
     requestSeq.current += 1;
     setRows([]);
     setPeekKey(null);
+    setTierFilter('');
     setSelectedList(key);
   };
 
+  // Only the SELECTED list's criterion is committed — a draft typed on another
+  // list must not silently activate when that list is opened later (Sol 3.G r2).
   const applyCriteria = () => {
     requestSeq.current += 1;
     setRows([]);
     setPeekKey(null);
-    setApplied({
-      noRecentDays: parseDays(days.noRecent, DEFAULT_NO_CONTACT_DAYS),
-      staleQuoteDays: parseDays(days.staleQuotes, DEFAULT_STALE_QUOTE_DAYS),
-      minPriorSpendCents: parseDollarsToCents(minPriorSpend, DEFAULT_MIN_PRIOR_SPEND_CENTS),
+    setApplied((current) => {
+      if (selectedList === 'prepay') return { ...current, minPriorSpendCents: parseDollarsToCents(minPriorSpend, DEFAULT_MIN_PRIOR_SPEND_CENTS) };
+      if (selectedList === 'no-recent-contact') return { ...current, noRecentDays: parseDays(days.noRecent, DEFAULT_NO_CONTACT_DAYS) };
+      if (selectedList === 'stale-quotes') return { ...current, staleQuoteDays: parseDays(days.staleQuotes, DEFAULT_STALE_QUOTE_DAYS) };
+      return { ...current };
     });
   };
 
@@ -361,11 +375,38 @@ export default function CallLists() {
   // alone would collide as a React key.
   const rowKey = (row: CallListRow) => ('quote_id' in row ? row.quote_id : row.customer_id);
 
+  // Tier is not part of the RPC payloads — look it up client-side for the
+  // loaded rows so the tier filter needs no schema change.
+  useEffect(() => {
+    const ids = [...new Set(rows.map((row) => row.customer_id))];
+    if (ids.length === 0) {
+      setTiersByCustomer({});
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const { data, error } = await supabase.from('customers').select('id, assigned_tier').in('id', ids);
+      if (cancelled || error || !data) return;
+      setTiersByCustomer(Object.fromEntries(data.map((customer) => [customer.id, customer.assigned_tier])));
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [rows]);
+
+  const tierOptions = useMemo(
+    () => [...new Set(Object.values(tiersByCustomer).filter((tier): tier is number => tier !== null))].sort((a, b) => a - b),
+    [tiersByCustomer],
+  );
+
   const filteredRows = useMemo(() => {
     const normalizedSearch = search.trim().toLowerCase();
-    if (!normalizedSearch) return rows;
-    return rows.filter((row) => (row.farm_name || '').toLowerCase().includes(normalizedSearch));
-  }, [rows, search]);
+    return rows.filter((row) => {
+      if (normalizedSearch && !(row.farm_name || '').toLowerCase().includes(normalizedSearch)) return false;
+      if (tierFilter !== '' && String(tiersByCustomer[row.customer_id] ?? '') !== tierFilter) return false;
+      return true;
+    });
+  }, [rows, search, tierFilter, tiersByCustomer]);
 
   return (
     <div className="min-h-full bg-gray-50">
@@ -413,13 +454,25 @@ export default function CallLists() {
                 <Input label="Quote untouched for (days)" type="number" min="0" step="1" inputMode="numeric" value={days.staleQuotes} onChange={(event) => setDays((current) => ({ ...current, staleQuotes: event.target.value }))} className="min-h-11 sm:w-52" />
               )}
               {isAdmin && selectedList !== 'unassigned-accounts' && (
-                <label className="text-sm font-medium text-secondary">Sales rep
-                  <select aria-label="Filter by sales rep" value={repFilter} onChange={(event) => changeRepFilter(event.target.value)} className="mt-1 block min-h-11 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm text-nav-dark sm:w-48">
-                    <option value="">All reps</option>
-                    {reps.map((rep) => <option key={rep.id} value={rep.id}>{rep.full_name}</option>)}
-                  </select>
-                </label>
+                repsError ? (
+                  <div className="flex items-end">
+                    <Button type="button" variant="secondary" className="min-h-11" icon={<RefreshCw className="h-4 w-4" />} showChevron={false} onClick={() => setRepsLoadNonce((nonce) => nonce + 1)}>Rep filter failed — retry</Button>
+                  </div>
+                ) : (
+                  <label className="text-sm font-medium text-secondary">Sales rep
+                    <select aria-label="Filter by sales rep" value={repFilter} onChange={(event) => changeRepFilter(event.target.value)} className="mt-1 block min-h-11 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm text-nav-dark sm:w-48">
+                      <option value="">All reps</option>
+                      {reps.map((rep) => <option key={rep.id} value={rep.id}>{rep.full_name}</option>)}
+                    </select>
+                  </label>
+                )
               )}
+              <label className="text-sm font-medium text-secondary">Tier
+                <select aria-label="Filter by customer tier" value={tierFilter} onChange={(event) => setTierFilter(event.target.value)} className="mt-1 block min-h-11 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm text-nav-dark sm:w-32">
+                  <option value="">All tiers</option>
+                  {tierOptions.map((tier) => <option key={tier} value={String(tier)}>Tier {tier}</option>)}
+                </select>
+              </label>
               <Button type="button" variant="secondary" className="min-h-11" icon={<RefreshCw className="h-4 w-4" />} showChevron={false} loading={loading} onClick={applyCriteria}>Apply and refresh</Button>
             </div>
           </div>
