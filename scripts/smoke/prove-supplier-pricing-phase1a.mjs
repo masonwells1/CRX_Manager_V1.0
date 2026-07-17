@@ -14,9 +14,9 @@ const baseSql = path.join(
 );
 const bootstrapSql = path.join(
   repoRoot,
-  'scripts',
-  '.staging-migrations',
-  '20260716210000_supplier_pricing_phase1a.sql'
+  'supabase',
+  'migrations',
+  '20260717025710_supplier_pricing_phase1a.sql'
 );
 const bootstrapCompatSql = path.join(
   repoRoot,
@@ -34,7 +34,7 @@ const cutoverSql = path.join(
   repoRoot,
   'scripts',
   '.staging-migrations',
-  '20260716211000_supplier_pricing_phase1a_cutover.sql'
+  '20260717030000_supplier_pricing_phase1a_cutover.sql'
 );
 const smokeSql = path.join(
   repoRoot,

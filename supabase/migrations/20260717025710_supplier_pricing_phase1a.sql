@@ -1,8 +1,6 @@
--- DRAFT ONLY — Supplier Pricing Phase 1a additive bootstrap.
---
--- PARKED: do not copy to supabase/migrations or apply to production in this
--- session. Promotion requires the dedicated APPLY workflow, migration review,
--- exact-SQL proof, and Mason's approval under AGENTS.md.
+-- Supplier Pricing Phase 1a additive bootstrap.
+-- Promoted after Mason's explicit 2026-07-16 live-apply approval and
+-- exact-SQL disposable proof; live apply remains proof-gated.
 --
 -- This first half is deliberately backward-compatible with the currently
 -- deployed frontend. It installs the governed pricing engine, retained
@@ -209,18 +207,41 @@ ALTER TABLE public.pricing_change_sets ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.pricing_change_set_rows ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.pricing_change_set_preview_rows ENABLE ROW LEVEL SECURITY;
 
--- No browser table policies are intentional: all reads/writes travel through
--- the three authenticated SECURITY DEFINER RPCs below.
+-- These tables are RPC-only. Explicit deny-all policies make that boundary
+-- visible to static review as well as enforced by the revoked table grants.
+CREATE POLICY pricing_workbook_exports_rpc_only
+  ON public.pricing_workbook_exports
+  FOR ALL TO PUBLIC
+  USING (false)
+  WITH CHECK (false);
+CREATE POLICY pricing_workbook_export_rows_rpc_only
+  ON public.pricing_workbook_export_rows
+  FOR ALL TO PUBLIC
+  USING (false)
+  WITH CHECK (false);
+CREATE POLICY pricing_change_sets_rpc_only
+  ON public.pricing_change_sets
+  FOR ALL TO PUBLIC
+  USING (false)
+  WITH CHECK (false);
+CREATE POLICY pricing_change_set_rows_rpc_only
+  ON public.pricing_change_set_rows
+  FOR ALL TO PUBLIC
+  USING (false)
+  WITH CHECK (false);
+CREATE POLICY pricing_change_set_preview_rows_rpc_only
+  ON public.pricing_change_set_preview_rows
+  FOR ALL TO PUBLIC
+  USING (false)
+  WITH CHECK (false);
+
+-- All reads/writes travel through the three authenticated SECURITY DEFINER
+-- RPCs below. Direct table privileges remain revoked.
 REVOKE ALL ON TABLE public.pricing_workbook_exports FROM PUBLIC, anon, authenticated, service_role;
 REVOKE ALL ON TABLE public.pricing_workbook_export_rows FROM PUBLIC, anon, authenticated, service_role;
 REVOKE ALL ON TABLE public.pricing_change_sets FROM PUBLIC, anon, authenticated, service_role;
 REVOKE ALL ON TABLE public.pricing_change_set_rows FROM PUBLIC, anon, authenticated, service_role;
 REVOKE ALL ON TABLE public.pricing_change_set_preview_rows FROM PUBLIC, anon, authenticated, service_role;
-GRANT SELECT ON TABLE public.pricing_workbook_exports TO service_role;
-GRANT SELECT ON TABLE public.pricing_workbook_export_rows TO service_role;
-GRANT SELECT ON TABLE public.pricing_change_sets TO service_role;
-GRANT SELECT ON TABLE public.pricing_change_set_rows TO service_role;
-GRANT SELECT ON TABLE public.pricing_change_set_preview_rows TO service_role;
 
 ALTER TABLE public.cost_history
   DROP CONSTRAINT IF EXISTS cost_history_change_set_id_fkey;
@@ -1641,6 +1662,37 @@ BEGIN
     AND c.relkind = 'r'
     AND c.relrowsecurity;
   IF v_count <> 5 THEN RAISE EXCEPTION 'pricing private table/RLS drift detected: %', v_count; END IF;
+
+  SELECT count(*) INTO v_count
+  FROM pg_policy p
+  JOIN pg_class c ON c.oid = p.polrelid
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  WHERE n.nspname = 'public'
+    AND c.relname IN (
+      'pricing_workbook_exports', 'pricing_workbook_export_rows',
+      'pricing_change_sets', 'pricing_change_set_rows',
+      'pricing_change_set_preview_rows'
+    )
+    AND p.polname LIKE '%\_rpc\_only' ESCAPE '\'
+    AND pg_get_expr(p.polqual, p.polrelid) = 'false'
+    AND pg_get_expr(p.polwithcheck, p.polrelid) = 'false';
+  IF v_count <> 5 THEN RAISE EXCEPTION 'pricing private table/policy drift detected: %', v_count; END IF;
+
+  SELECT count(*) INTO v_count
+  FROM (VALUES
+    ('pricing_workbook_exports'),
+    ('pricing_workbook_export_rows'),
+    ('pricing_change_sets'),
+    ('pricing_change_set_rows'),
+    ('pricing_change_set_preview_rows')
+  ) AS t(relname)
+  CROSS JOIN (VALUES ('anon'), ('authenticated'), ('service_role')) AS r(role_name)
+  WHERE has_table_privilege(
+    r.role_name,
+    format('public.%I', t.relname),
+    'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER'
+  );
+  IF v_count <> 0 THEN RAISE EXCEPTION 'pricing private table privilege drift detected: %', v_count; END IF;
 
   IF NOT EXISTS (
     SELECT 1 FROM pg_trigger

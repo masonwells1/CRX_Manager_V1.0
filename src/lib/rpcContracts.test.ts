@@ -1901,7 +1901,11 @@ function generatedMutatingRpcInventory(): Set<string> {
   }));
 }
 
-const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([]);
+const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
+  'apply_product_pricing_change_set',
+  'create_pricing_workbook_export',
+  'preview_product_pricing_changes',
+]);
 
 /**
  * Discovered mutating RPCs for which replay safety does not use p_idempotency_key.
@@ -1934,6 +1938,7 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
   save_idempotency: 'idempotency infrastructure helper that stores the parent operation result',
   set_primary_customer_contact: 'convergent primary-contact promotion; replays settle to the same single-primary state; SECURITY INVOKER under customer RLS',
   settle_applied_record_acres: 'trigger-only derived-acre recomputation; direct client EXECUTE is revoked',
+  write_product_pricing_history: 'trigger-only pricing audit writer; direct client EXECUTE is revoked',
 };
 
 
@@ -1974,12 +1979,14 @@ describe('Idempotency coverage drift (generated-types driven, fail-closed)', () 
     expect(unclassified).toEqual([]);
   });
 
-  it('migration-only idempotent RPCs are explicit and really declare the key', () => {
+  it('migration-only idempotent RPCs are explicit and really enforce the key', () => {
     const generatedNames = new Set(generatedRpcShapes().map(({ name }) => name));
     const functions = latestMigrationFunctions();
     const stale = [...MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY].filter((rpc) => {
-      const definition = functions.get(rpc)?.definition || '';
-      return generatedNames.has(rpc) || !/p_idempotency_key\s+text/i.test(definition);
+      const current = functions.get(rpc);
+      return generatedNames.has(rpc)
+        || !/p_idempotency_key\s+text/i.test(current?.definition || '')
+        || !bodyUsesIdempotency(current?.body || '');
     });
     expect(stale).toEqual([]);
   });

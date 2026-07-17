@@ -2,7 +2,7 @@
 --
 -- PARKED: do not copy to supabase/migrations or apply until ALL of the
 -- following are true:
---   1. 20260716210000_supplier_pricing_phase1a.sql is live and verified.
+--   1. 20260717025710_supplier_pricing_phase1a.sql is live and verified.
 --   2. The RPC-only ProductDetail/Products/worksheet frontend is deployed.
 --   3. Its rollback window is closed or a forward database rollback is ready.
 --   4. This exact file has fresh migration-review and apply-guard proof.

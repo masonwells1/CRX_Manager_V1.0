@@ -174,7 +174,18 @@ export interface CostHistory {
   new_tier2_price: number | null;
   old_tier3_price: number | null;
   new_tier3_price: number | null;
+  old_tier1_margin?: number | null;
+  new_tier1_margin?: number | null;
+  old_tier2_margin?: number | null;
+  new_tier2_margin?: number | null;
+  old_tier3_margin?: number | null;
+  new_tier3_margin?: number | null;
   change_note: string | null;
+  change_source?: 'legacy_frontend' | 'pricing_worksheet' | 'product_page' | 'products_inline';
+  change_reason?: string | null;
+  change_set_id?: string | null;
+  old_pricing_version?: number | null;
+  new_pricing_version?: number | null;
   changed_at: string;
 }
 
