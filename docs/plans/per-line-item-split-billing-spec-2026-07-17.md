@@ -5,11 +5,11 @@ started.** Mason will start the build in **Codex next week** (once usage credits
 without a first real field-application billing cycle on the existing engine (baseline proof) first.
 
 **How this spec was produced:** live DB + code audit (session 2026-07-17) → `gpt-5.6-terra` design
-advisory → this spec → `gpt-5.6-terra` **xhigh plan review** which found 4 blockers, all folded in
-below. (`gpt-5.6-sol`, the frontier tier, was at capacity across 3 attempts — a final `sol`
-money-math confirmation pass is still worth running before the migration applies.) **Codex is the
-intended builder; a final build-time review must re-check live `pg_proc`/`pg_policies`/constraints/
-generated types against production before any migration apply.**
+advisory → this spec → `gpt-5.6-terra` **xhigh plan review** (4 blockers, folded in) → **`claude-fable-5`
+money-math review** of §4 (2 real bugs + ~8 unpinned rules, all folded into §4/§5). (`gpt-5.6-sol`, the
+Codex frontier tier, was at capacity across 3 attempts — its independent pass is optional now that Fable
+covered the money math.) **Codex is the intended builder; a final build-time review must re-check live
+`pg_proc`/`pg_policies`/constraints/generated types against production before any migration apply.**
 
 ---
 
@@ -86,7 +86,8 @@ create table public.invoice_line_shares (
   created_by uuid not null references public.profiles(id),
   created_at timestamptz not null default now(),
 
-  unique (invoice_item_id)
+  unique (invoice_item_id),
+  unique (billing_line_id, customer_id)   -- a customer appears once per line → tie-break is deterministic
 );
 ```
 
@@ -127,6 +128,35 @@ Rules:
 conflicts with fixing today's 2-decimal/4-decimal rounding. Instead: **keep the old engine unchanged
 while the feature flag is off**, and give the new feature an explicit **versioned rounding policy**.
 
+### Pinned rules (gpt-fable-5 money-math review, 2026-07-17) — put these verbatim in the build
+
+1. **All arithmetic in Postgres `numeric`/bigint — never float, anywhere, including the TS preview.**
+   ONE shared SQL function computes the split; the preview calls the SAME function posting uses
+   (single-engine rule). Otherwise the JS preview and PG post round negatives differently and ship a
+   1¢ preview/post mismatch on every return/credit that lands on a half-cent (proven example below).
+2. **Rounding mode = half-away-from-zero** (Postgres native `round(numeric)`); audit-explainable, NOT
+   banker's.
+3. **Round exactly once per money figure** — unit-converted prices/quantities stay at full numeric
+   precision through the multiply; only the final to-cents step rounds. Never round a conversion factor
+   or an intermediate.
+4. **Largest remainder, defined precisely:** compute ideal shares in numeric; `floor` each **on the
+   absolute value**; distribute the residual one cent (or one 0.0001-unit) at a time ordered by
+   `(fractional_remainder DESC, customer_id ASC)`; then reapply the sign. Abs-then-negate makes returns
+   / negative lines mirror positive ones exactly.
+5. **Same ordering in BOTH passes** (quantities AND cents): `customer_id ASC` breaks every tie — no
+   exceptions — so the "extra" quantity-tick and the "extra" cent land on the same customer. Enforce
+   `UNIQUE (billing_line_id, customer_id)` so a customer can't appear twice in one vector.
+6. **The default/even vector is built by the same largest-remainder rule** (micro-percent, same
+   tie-break): `33,333,333 ×3 = 99,999,999 ≠ 100,000,000`, so an even 3-way split needs
+   `33,333,334 / 33,333,333 / 33,333,333` or the most common preset violates the sum-to-100% invariant.
+7. Do the `price × micro_pct` intermediate in `numeric` (overflow-safe) rather than reasoning about
+   bigint limits.
+
+**Proven failing examples this pins shut:** (A) return line 25¢/unit × −0.5 → JS `Math.round(-12.5)=−12`
+but PG `round(-12.5)=−13` → 1¢ preview/post gap; (B) 1 acre @ $99.99 split 50/50 stores 5000/4999¢ but a
+renderer recomputing `qty × price` prints $50.00/$50.00 = $100.00 ≠ $99.99 (see the display-authority
+invariant in §5); (E) the even-3-way vector above.
+
 ---
 
 ## 5. Other required behaviors
@@ -149,6 +179,29 @@ while the feature flag is off**, and give the new feature an explicit **versione
   marked paid. **Gate ALL email paths** (`FieldApplicationInvoice`, `InvoiceDetail`, field-invoice list
   panels) — the server computes suppression; the browser only displays it.
 
+### Money-integrity invariants (gpt-fable-5 review, 2026-07-17)
+
+- **Display authority:** the child `invoice_item.amount_cents` is authoritative; renderers (PDF,
+  statement, portal) **must print stored cents and must NEVER recompute `qty × unit_price`** (else a
+  50/50 of an odd-cent line prints a total that doesn't match). Add a test that every PDF/statement path
+  sums stored cents.
+- **Post-time assertions** (in the posting RPC or a trigger — don't trust the allocation code, check its
+  output): for every source line, `SUM(child amount_cents) = source cents` (same-price + flat-fee paths);
+  `SUM(allocated qty) = source qty` at 4dp; `SUM(micro_pct) = 100,000,000`; and **the share-vector count
+  ≥ 1 covering exactly the group's customers** (catches a line whose whole vector silently vanished).
+- **Different-price path total is documented, not reconciled** — with per-line amount = `round(price ×
+  qty)` each line ties by construction and the group total is definitionally the sum; there is no parent
+  figure it should equal (an auditor will ask — the answer is "nothing; per-person pricing makes the sum
+  primary").
+- **Freeze-on-post + idempotency:** share edits trigger-blocked once posted; the posting RPC enforces
+  `p_idempotency_key` — a double-post is a full duplicate child-invoice set (the largest possible cent
+  error).
+- **Atomic reallocation + cascade:** editing/removing a draft line rewrites its whole vector in one
+  transaction; `ON DELETE CASCADE` line → shares so a removed line leaves no orphaned share cents.
+- **`invoices.balance_cents` is GENERATED — never written.** Children are ordinary invoices whose totals
+  flow through the normal item path; the group total is **derived reporting only, NOT a fifth balance
+  lever** (see the credit-memo four-lever history — do not desync it).
+
 ---
 
 ## 6. Build order for Codex (+ proof checklist)
@@ -169,7 +222,9 @@ while the feature flag is off**, and give the new feature an explicit **versione
 7. **Legacy order-side cleanup stays a later, separate migration sequence** (see §7).
 
 **Hard proofs on staging/test data (all required):** 50/50 product + 100/0 service with a real $0
-child line and $0 child invoice · three-way fractional quantity and a 1¢ split · different customer
+child line and $0 child invoice · three-way fractional quantity and a 1¢ split · **a return/negative
+line whose ideal lands on a half-cent — preview total MUST equal posted total** (the JS-vs-PG rounding
+bug) · a renderer/PDF that must show stored `amount_cents`, not recomputed qty×price · different customer
 prices + a per-person override · Mode A rejection before any write · job-snapshot wins after a field
 default changes, default-only draft refreshes correctly · same idempotency key retries safely, same
 key + changed payload → `IDEMPOTENCY_PAYLOAD_CONFLICT` · concurrent save/post → complete-then-post or
