@@ -65,6 +65,9 @@ const deletedBulkPORetryState = source(
 const exactBulkPOReplay = source(
   'supabase/migrations/20260717032000_replay_bulk_po_same_request_result.sql',
 );
+const bulkPOVendorBinding = source(
+  'supabase/migrations/20260717045420_bind_bulk_po_claim_to_vendor.sql',
+);
 const completeDelivery = access.slice(0, access.indexOf('CREATE OR REPLACE FUNCTION public.void_delivery'));
 
 describe('money and inventory gauntlet fixes', () => {
@@ -437,6 +440,26 @@ describe('money and inventory gauntlet fixes', () => {
       'FROM PUBLIC, anon;\nGRANT EXECUTE ON FUNCTION public.save_purchase_order(',
     );
     expect(exactBulkPOReplay).toContain('TO authenticated, service_role;');
+  });
+
+  it('requires and binds vendor identity at the database bulk-import boundary', () => {
+    const saveWrapper = bulkPOVendorBinding.slice(
+      bulkPOVendorBinding.indexOf('CREATE OR REPLACE FUNCTION public.save_purchase_order('),
+      bulkPOVendorBinding.indexOf('REVOKE ALL ON FUNCTION public.save_purchase_order('),
+    );
+
+    expect(saveWrapper).toContain('BULK_PO_VENDOR_REQUIRED');
+    expect(saveWrapper).toContain('BULK_PO_INTENT_VENDOR_CONFLICT');
+    expect(saveWrapper).toContain('SELECT claim.purchase_order_id, po.po_number, po.vendor');
+    expect(saveWrapper).toContain(
+      'lower(btrim(v_existing_vendor)) IS DISTINCT FROM lower(v_requested_vendor)',
+    );
+    expect(saveWrapper.indexOf('BULK_PO_VENDOR_REQUIRED')).toBeLessThan(
+      saveWrapper.indexOf('public.check_idempotency('),
+    );
+    expect(saveWrapper.indexOf('WHERE claim.intent_key = v_bulk_intent_key')).toBeLessThan(
+      saveWrapper.indexOf('public.next_po_number()'),
+    );
   });
 
   it('authorizes invoice saves and statements against active customer assignment before replay', () => {

@@ -148,6 +148,36 @@ BEGIN
   END;
 
   v_intent := 'bulk-po-document:' || repeat('a', 64);
+  -- Direct RPC callers cannot create a global claim without vendor identity.
+  BEGIN
+    PERFORM public.save_purchase_order(
+      NULL,
+      jsonb_build_object(
+        'vendor', '   ',
+        'status', 'draft',
+        'bulk_import_intent_key', v_intent || '-missing-vendor'
+      ),
+      jsonb_build_array(
+        jsonb_build_object(
+          'product_id', v_product,
+          'product_name', v_product_name,
+          'quantity_ordered', 1,
+          'unit_cost_cents', 333,
+          'unit_size', v_unit_size
+        )
+      ),
+      v_sales,
+      'smk-po-bulk-missing-vendor-' || v_suffix
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: vendorless bulk claim was accepted';
+  EXCEPTION WHEN OTHERS THEN
+    v_err := SQLERRM;
+    IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_err <> 'BULK_PO_VENDOR_REQUIRED' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: wrong vendorless claim error: %', v_err;
+    END IF;
+  END;
+
   v_first := public.save_purchase_order(
     NULL,
     jsonb_build_object(
@@ -232,6 +262,37 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_FAIL: persistent bulk intent returned first=% replay=%',
       v_first, v_replay;
   END IF;
+
+  -- Reusing a global claim key for another vendor is a caller conflict, never
+  -- evidence that the second vendor's document was already imported.
+  BEGIN
+    PERFORM public.save_purchase_order(
+      NULL,
+      jsonb_build_object(
+        'vendor', '[SMOKE] Different Vendor',
+        'status', 'draft',
+        'bulk_import_intent_key', v_intent
+      ),
+      jsonb_build_array(
+        jsonb_build_object(
+          'product_id', v_product,
+          'product_name', v_product_name,
+          'quantity_ordered', 10.125,
+          'unit_cost_cents', 333,
+          'unit_size', v_unit_size
+        )
+      ),
+      v_admin,
+      'smk-po-bulk-vendor-conflict-' || v_suffix
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: cross-vendor bulk claim was accepted';
+  EXCEPTION WHEN OTHERS THEN
+    v_err := SQLERRM;
+    IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_err <> 'BULK_PO_INTENT_VENDOR_CONFLICT' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: wrong cross-vendor claim error: %', v_err;
+    END IF;
+  END;
 
   SELECT count(*) INTO v_count
     FROM public.purchase_order_import_intents
