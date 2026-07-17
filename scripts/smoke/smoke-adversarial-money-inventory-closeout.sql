@@ -1,7 +1,7 @@
 -- Post-apply rollback-only proof for migrations 20260716213000,
 -- 20260716224000, 20260716233000, 20260717010000, 20260717015439,
 -- 20260717032000, 20260717045420, 20260717063445, 20260717070900,
--- and 20260717081856.
+-- 20260717081856, and 20260717085512.
 -- Exercises the exact adversarial findings without retaining business rows.
 DO $smoke$
 DECLARE
@@ -269,9 +269,9 @@ BEGIN
     NULL,
     jsonb_build_object(
       'po_number', 'SMK-BULK-A-' || v_suffix,
-      'vendor', '[SMOKE] Élan Bulk Intent Vendor',
+      'vendor', chr(160) || '[SMOKE] Élan Bulk Intent Vendor' || chr(9),
       'status', 'draft',
-      'bulk_import_vendor_reference', v_vendor_reference,
+      'bulk_import_vendor_reference', chr(9) || v_vendor_reference || chr(160),
       'bulk_import_invoice_date', CURRENT_DATE::text,
       'bulk_import_intent_key', v_intent
     ),
@@ -288,6 +288,15 @@ BEGIN
     'smk-po-bulk-first-' || v_suffix
   );
   v_po := (v_first->>'po_id')::uuid;
+
+  SELECT vendor
+    INTO v_vendor_name
+    FROM public.purchase_orders
+   WHERE id = v_po;
+  IF v_vendor_name IS DISTINCT FROM '[SMOKE] Élan Bulk Intent Vendor' THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: padded bulk identity was not stored canonically: %',
+      v_vendor_name;
+  END IF;
 
   -- The exact same request key represents a lost-response retry. It must
   -- replay the original saved result, not be reclassified as a duplicate.
@@ -317,6 +326,37 @@ BEGIN
      OR (v_replay->>'po_id')::uuid IS DISTINCT FROM v_po
      OR v_replay->>'po_number' IS DISTINCT FROM v_first->>'po_number' THEN
     RAISE EXCEPTION 'SMOKE_FAIL: same-key bulk replay changed result first=% replay=%',
+      v_first, v_replay;
+  END IF;
+
+  -- A different generic request key with the unpadded form must resolve the
+  -- same durable document claim created from the padded direct-RPC payload.
+  v_replay := public.save_purchase_order(
+    NULL,
+    jsonb_build_object(
+      'po_number', 'SMK-BULK-WS-' || v_suffix,
+      'vendor', '[SMOKE] Élan Bulk Intent Vendor',
+      'status', 'draft',
+      'bulk_import_vendor_reference', v_vendor_reference,
+      'bulk_import_invoice_date', CURRENT_DATE::text,
+      'bulk_import_intent_key', v_intent
+    ),
+    jsonb_build_array(
+      jsonb_build_object(
+        'product_id', v_product,
+        'product_name', v_product_name,
+        'quantity_ordered', 10.125,
+        'unit_cost_cents', 333,
+        'unit_size', v_unit_size
+      )
+    ),
+    v_sales,
+    'smk-po-bulk-whitespace-' || v_suffix
+  );
+  IF (v_replay->>'po_id')::uuid IS DISTINCT FROM v_po
+     OR v_replay->>'status' <> 'already_imported'
+     OR v_replay->>'po_number' IS DISTINCT FROM v_first->>'po_number' THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: padded and unpadded bulk identities diverged first=% replay=%',
       v_first, v_replay;
   END IF;
 

@@ -77,6 +77,9 @@ const bulkPOAsciiIdentity = source(
 const blankBulkPOIdentity = source(
   'supabase/migrations/20260717081856_reject_blank_bulk_po_identity.sql',
 );
+const canonicalBulkPOIdentity = source(
+  'supabase/migrations/20260717085512_canonicalize_bulk_po_identity_whitespace.sql',
+);
 const completeDelivery = access.slice(0, access.indexOf('CREATE OR REPLACE FUNCTION public.void_delivery'));
 
 describe('money and inventory gauntlet fixes', () => {
@@ -527,7 +530,7 @@ describe('money and inventory gauntlet fixes', () => {
     expect(browserRetry).toContain(
       'replace(/[A-Z]/g, (character) => character.toLowerCase())',
     );
-    expect(browserRetry).toContain("replace(/^ +| +$/g, '')");
+    expect(browserRetry).toContain('return value.trim();');
     expect(browserRetry).toContain('BULK_PO_DOCUMENT_CONTENT_CONFLICT');
     expect(browserRetry).toContain(
       'In Supplier POs, search this vendor and invoice number, then edit it instead.',
@@ -554,6 +557,41 @@ describe('money and inventory gauntlet fixes', () => {
       'FROM PUBLIC, anon, authenticated, service_role;',
     );
     expect(blankBulkPOIdentity).toContain('TO authenticated, service_role;');
+  });
+
+  it('canonicalizes the complete ECMAScript boundary-whitespace set before bulk PO identity use', () => {
+    const expectedCodepoints = [
+      9, 10, 11, 12, 13, 32, 160, 5760,
+      8192, 8193, 8194, 8195, 8196, 8197, 8198, 8199, 8200, 8201, 8202,
+      8232, 8233, 8239, 8287, 12288, 65279,
+    ];
+
+    expect(canonicalBulkPOIdentity).toContain(
+      'CREATE OR REPLACE FUNCTION public.save_purchase_order(',
+    );
+    expectedCodepoints.forEach((codepoint) => {
+      expect(canonicalBulkPOIdentity).toContain(`chr(${codepoint})`);
+    });
+    expect(canonicalBulkPOIdentity).toContain(
+      'v_vendor := btrim(v_vendor, v_identity_boundary_chars);',
+    );
+    expect(canonicalBulkPOIdentity).toContain(
+      'v_vendor_reference := btrim(v_vendor_reference, v_identity_boundary_chars);',
+    );
+    expect(canonicalBulkPOIdentity).toContain(
+      "jsonb_set(v_payload, '{vendor}', to_jsonb(v_vendor), true)",
+    );
+    expect(canonicalBulkPOIdentity).toContain("'{bulk_import_vendor_reference}'");
+    expect(canonicalBulkPOIdentity).toContain(
+      'IF NOT (public.is_admin() OR public.is_sales_rep()) THEN',
+    );
+    expect(canonicalBulkPOIdentity).toContain(
+      'RETURN public._save_purchase_order_ascii_identity_impl(',
+    );
+    expect(canonicalBulkPOIdentity).toContain(
+      'FROM PUBLIC, anon;\nGRANT EXECUTE ON FUNCTION public.save_purchase_order(',
+    );
+    expect(canonicalBulkPOIdentity).toContain('TO authenticated, service_role;');
   });
 
   it('authorizes invoice saves and statements against active customer assignment before replay', () => {

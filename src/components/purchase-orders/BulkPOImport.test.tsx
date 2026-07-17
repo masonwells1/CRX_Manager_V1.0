@@ -316,7 +316,7 @@ describe('BulkPOImport', () => {
     ));
   });
 
-  it('sends the same identity text used to build the duplicate claim', async () => {
+  it('canonicalizes identity boundary whitespace before saving', async () => {
     const vendorName = '\u00a0Vendor A\t';
     const invoiceNumber = '\tINV-NBSP\u00a0';
     mocks.processDocumentWithOCR.mockResolvedValue({
@@ -349,8 +349,8 @@ describe('BulkPOImport', () => {
       'save_purchase_order',
       expect.objectContaining({
         p_po_payload: expect.objectContaining({
-          vendor: vendorName,
-          bulk_import_vendor_reference: invoiceNumber,
+          vendor: 'Vendor A',
+          bulk_import_vendor_reference: 'INV-NBSP',
         }),
       }),
     ));

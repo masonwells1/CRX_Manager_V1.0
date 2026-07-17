@@ -92,10 +92,17 @@ describe('bulk PO import retry state', () => {
     expect(buildBulkPOIntentKey({ ...document, vendorName: 'vendor élan' }))
       .not.toBe(buildBulkPOIntentKey(document));
 
-    expect(buildBulkPOIntentKey({
+    const paddedIntent = buildBulkPOIntentKey({
       ...document,
       vendorName: ' \tVENDOR Élan\t ',
-    })).toBe('\tvendor Élan\t\u001finv-Ä100');
+    });
+
+    expect(paddedIntent).toBe('vendor Élan\u001finv-Ä100');
+    expect(paddedIntent).toBe(buildBulkPOIntentKey({
+      ...document,
+      vendorName: 'VENDOR Élan',
+      invoiceNumber: 'INV-Ä100',
+    }));
   });
 
   it('turns durable-claim conflicts into actionable import guidance', () => {
@@ -196,26 +203,6 @@ describe('bulk PO import retry state', () => {
     expect(getPendingBulkPOIntent(migrated, freshIdentity)?.poId).toBe('po-legacy');
     const entry = ensurePendingBulkPOIntent(migrated, freshIdentity, () => 'unused', 3_000);
     expect(entry.poId).toBe('po-legacy');
-    expect(Object.keys(migrated)).toEqual([pendingBulkPOIntentStorageKey(freshIdentity)]);
-  });
-
-  it('recognizes a legacy marker that trimmed Unicode boundary whitespace', () => {
-    const freshIdentity = '\tvendor Élan\t\u001f\u00a0inv-Ä100\u00a0';
-    const legacyIdentity = 'vendor élan\u001finv-ä100';
-    const storage = fakeStorage();
-    storage.setItem('crx:bulk-po-import-pending:sales-1', JSON.stringify({
-      [legacyIdentity]: {
-        idempotencyKey: 'idem-whitespace-legacy',
-        status: 'imported',
-        updatedAt: 1_000,
-        poId: 'po-whitespace-legacy',
-      },
-    }));
-
-    const migrated = loadPendingBulkPOIntents(storage, 'sales-1', 2_000);
-    expect(getPendingBulkPOIntent(migrated, freshIdentity)?.poId)
-      .toBe('po-whitespace-legacy');
-    ensurePendingBulkPOIntent(migrated, freshIdentity, () => 'unused', 3_000);
     expect(Object.keys(migrated)).toEqual([pendingBulkPOIntentStorageKey(freshIdentity)]);
   });
 

@@ -35,20 +35,21 @@ export interface BulkPOIntentDocument {
 }
 
 export function trimBulkPOIdentityBoundary(value: string): string {
-  return value.replace(/^ +| +$/g, '');
+  return value.trim();
 }
 
 export function hasBulkPOIdentityText(value: string): boolean {
   // Keep the durable identity byte-for-byte compatible with PostgreSQL while
   // rejecting OCR artifacts that contain no visible text at all.
-  return value.trim().length > 0;
+  return trimBulkPOIdentityBoundary(value).length > 0;
 }
 
 function normalizeIdentityText(value: string): string {
   // Postgres locale-aware lower() and JavaScript Unicode case folding can
   // disagree. Fold ASCII explicitly on both sides of the RPC boundary and
-  // preserve every non-ASCII code point byte-for-byte. PostgreSQL btrim(text)
-  // removes ASCII spaces only, so use the same boundary trim here.
+  // preserve every non-ASCII letter byte-for-byte. The public PostgreSQL
+  // wrapper applies the same ECMAScript boundary-whitespace set before its
+  // inner ASCII-folded identity implementation hashes or stores these fields.
   return trimBulkPOIdentityBoundary(value)
     .replace(/[A-Z]/g, (character) => character.toLowerCase());
 }
