@@ -1,13 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   buildBulkPOIntentKey,
-  buildBulkPODocumentClaimKey,
   buildBulkPOIdempotencyKey,
+  bulkPOImportFailureGuidance,
   ensurePendingBulkPOIntent,
+  getPendingBulkPOIntent,
   isImportedBulkPOIntent,
   loadPendingBulkPOIntents,
   markBulkPOIntentImported,
   normalizeBulkPOInvoiceDate,
+  pendingBulkPOIntentStorageKey,
   savePendingBulkPOIntents,
 } from './bulkPOImportRetry';
 
@@ -71,6 +73,42 @@ describe('bulk PO import retry state', () => {
     expect(buildBulkPOIntentKey(corrected)).toBe(buildBulkPOIntentKey(document));
   });
 
+  it('uses one NFKC case-folded non-ASCII browser retry identity', () => {
+    const document = {
+      vendorName: ' VENDOR Élan ',
+      invoiceNumber: ' INV-Ä100 ',
+      invoiceDate: '',
+      items: [],
+    };
+
+    const intentKey = buildBulkPOIntentKey(document);
+    expect(intentKey).toBe('vendor élan\u001finv-ä100');
+    expect(intentKey).not.toBeNull();
+    expect(buildBulkPOIntentKey({ ...document, vendorName: 'vendor élan' }))
+      .toBe(buildBulkPOIntentKey(document));
+    expect(buildBulkPOIntentKey({ ...document, vendorName: 'vendor e\u0301lan' }))
+      .toBe(buildBulkPOIntentKey(document));
+
+    const paddedIntent = buildBulkPOIntentKey({
+      ...document,
+      vendorName: ' \tVENDOR Élan\t ',
+    });
+
+    expect(paddedIntent).toBe('vendor élan\u001finv-ä100');
+    expect(paddedIntent).toBe(buildBulkPOIntentKey({
+      ...document,
+      vendorName: 'VENDOR Élan',
+      invoiceNumber: 'INV-Ä100',
+    }));
+  });
+
+  it('turns durable-claim conflicts into actionable import guidance', () => {
+    expect(bulkPOImportFailureGuidance({
+      message: 'BULK_PO_DOCUMENT_CONTENT_CONFLICT',
+    })).toMatch(/already imported with different reviewed details/i);
+    expect(bulkPOImportFailureGuidance(new Error('temporary save failure'))).toBeNull();
+  });
+
   it('canonicalizes equivalent invoice dates and excludes missing or invalid fallbacks', () => {
     expect(normalizeBulkPOInvoiceDate('2026-7-6')).toBe('2026-07-06');
     expect(normalizeBulkPOInvoiceDate('07/06/2026')).toBe('2026-07-06');
@@ -103,7 +141,9 @@ describe('bulk PO import retry state', () => {
     };
 
     expect(buildBulkPOIntentKey({ ...document, vendorName: '   ' })).toBeNull();
+    expect(buildBulkPOIntentKey({ ...document, vendorName: '\u00a0\t' })).toBeNull();
     expect(buildBulkPOIntentKey({ ...document, invoiceNumber: '   ' })).toBeNull();
+    expect(buildBulkPOIntentKey({ ...document, invoiceNumber: '\t\u00a0' })).toBeNull();
     expect(buildBulkPOIntentKey({ ...document, invoiceNumber: `INV\u001f100` })).toBeNull();
   });
 
@@ -116,12 +156,70 @@ describe('bulk PO import retry state', () => {
     expect(await buildBulkPOIdempotencyKey('sales-2', 'stable-intent')).not.toBe(first);
   });
 
-  it('derives one document claim across different importing users', async () => {
-    const first = await buildBulkPODocumentClaimKey('stable-intent');
-    const second = await buildBulkPODocumentClaimKey('stable-intent');
+  it('hashes browser storage keys and migrates legacy raw identity keys on read', () => {
+    const identity = 'vendor a\u001finv-100';
+    const hashed = pendingBulkPOIntentStorageKey(identity);
+    expect(hashed).toMatch(/^h1:[a-f0-9]{16}$/);
+    expect(hashed).not.toContain('vendor');
+    expect(hashed).not.toContain('inv-100');
 
-    expect(first).toBe(second);
-    expect(first).toMatch(/^bulk-po-document:[a-f0-9]{64}$/);
+    const storage = fakeStorage();
+    storage.setItem('crx:bulk-po-import-pending:sales-1', JSON.stringify({
+      [identity]: { idempotencyKey: 'idem-legacy', status: 'pending', updatedAt: 1_000 },
+    }));
+    const migrated = loadPendingBulkPOIntents(storage, 'sales-1', 2_000);
+    expect(getPendingBulkPOIntent(migrated, identity)?.idempotencyKey).toBe('idem-legacy');
+    expect(Object.keys(migrated)).toEqual([hashed]);
+  });
+
+  it('rehashes a legacy raw identity that merely starts with the hash prefix', () => {
+    const rawIdentity = 'h1:vendor a\u001finv-100';
+    const storage = fakeStorage();
+    storage.setItem('crx:bulk-po-import-pending:sales-1', JSON.stringify({
+      [rawIdentity]: { idempotencyKey: 'idem-legacy-prefix', status: 'pending', updatedAt: 1_000 },
+    }));
+
+    const migrated = loadPendingBulkPOIntents(storage, 'sales-1', 2_000);
+    expect(Object.keys(migrated)).toEqual([pendingBulkPOIntentStorageKey(rawIdentity)]);
+    expect(Object.keys(migrated)[0]).not.toBe(rawIdentity);
+  });
+
+  it('recognizes and upgrades a legacy Unicode-folded non-ASCII marker', () => {
+    const freshIdentity = 'vendor Élan\u001finv-Ä100';
+    const legacyIdentity = freshIdentity.toLowerCase();
+    const storage = fakeStorage();
+    storage.setItem('crx:bulk-po-import-pending:sales-1', JSON.stringify({
+      [legacyIdentity]: {
+        idempotencyKey: 'idem-unicode-legacy',
+        status: 'imported',
+        updatedAt: 1_000,
+        poId: 'po-legacy',
+      },
+    }));
+
+    const migrated = loadPendingBulkPOIntents(storage, 'sales-1', 2_000);
+    expect(getPendingBulkPOIntent(migrated, freshIdentity)?.poId).toBe('po-legacy');
+    const entry = ensurePendingBulkPOIntent(migrated, freshIdentity, () => 'unused', 3_000);
+    expect(entry.poId).toBe('po-legacy');
+    expect(Object.keys(migrated)).toEqual([pendingBulkPOIntentStorageKey(freshIdentity)]);
+  });
+
+  it('canonicalizes decomposed Unicode while migrating a legacy raw marker', () => {
+    const decomposedIdentity = 'vendor e\u0301lan\u001finv-a\u0308100';
+    const canonicalIdentity = 'vendor élan\u001finv-ä100';
+    const storage = fakeStorage();
+    storage.setItem('crx:bulk-po-import-pending:sales-1', JSON.stringify({
+      [decomposedIdentity]: {
+        idempotencyKey: 'idem-decomposed-legacy',
+        status: 'imported',
+        updatedAt: 1_000,
+        poId: 'po-decomposed',
+      },
+    }));
+
+    const migrated = loadPendingBulkPOIntents(storage, 'sales-1', 2_000);
+    expect(Object.keys(migrated)).toEqual([pendingBulkPOIntentStorageKey(canonicalIdentity)]);
+    expect(getPendingBulkPOIntent(migrated, canonicalIdentity)?.poId).toBe('po-decomposed');
   });
 
   it('reuses pending work and persists successful imports across close/reopen', () => {
@@ -146,7 +244,7 @@ describe('bulk PO import retry state', () => {
 
     const afterSuccessReopen = loadPendingBulkPOIntents(storage, 'sales-1', 4_000);
     expect(isImportedBulkPOIntent(afterSuccessReopen, 'intent-A')).toBe(true);
-    expect(afterSuccessReopen['intent-A']).toMatchObject({
+    expect(getPendingBulkPOIntent(afterSuccessReopen, 'intent-A')).toMatchObject({
       idempotencyKey: 'idem-first',
       poNumber: 'PO-EXISTING',
       poId: 'po-id-1001',
