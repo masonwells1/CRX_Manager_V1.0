@@ -20,6 +20,7 @@ import {
   buildBulkPODocumentClaimKey,
   buildBulkPOIdempotencyKey,
   ensurePendingBulkPOIntent,
+  getPendingBulkPOIntent,
   loadPendingBulkPOIntents,
   markBulkPOIntentImported,
   normalizeBulkPOInvoiceDate,
@@ -406,8 +407,9 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
         }
         const deterministicIdempotencyKey = await buildBulkPOIdempotencyKey(profile.id, intentKey);
         const documentClaimKey = await buildBulkPODocumentClaimKey(intentKey);
-        const previouslyImportedPoId = pendingIntentsRef.current[intentKey]?.status === 'imported'
-          ? pendingIntentsRef.current[intentKey]?.poId
+        const existingPendingIntent = getPendingBulkPOIntent(pendingIntentsRef.current, intentKey);
+        const previouslyImportedPoId = existingPendingIntent?.status === 'imported'
+          ? existingPendingIntent.poId
           : undefined;
         const pendingIntent = ensurePendingBulkPOIntent(
           pendingIntentsRef.current,
@@ -650,7 +652,9 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
                 const hasErrors = po.parse_errors.length > 0;
                 const hasItems = po.items.length > 0;
                 const intentKey = buildParsedPOIntentKey(po);
-                const importedIntent = intentKey ? pendingIntentsRef.current[intentKey] : undefined;
+                const importedIntent = intentKey
+                  ? getPendingBulkPOIntent(pendingIntentsRef.current, intentKey)
+                  : undefined;
                 const alreadyImported = importedIntent?.status === 'imported';
 
                 return (

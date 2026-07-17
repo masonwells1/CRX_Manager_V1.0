@@ -68,6 +68,9 @@ const exactBulkPOReplay = source(
 const bulkPOVendorBinding = source(
   'supabase/migrations/20260717045420_bind_bulk_po_claim_to_vendor.sql',
 );
+const bulkPOReplayContent = source(
+  'supabase/migrations/20260717063500_bind_bulk_po_replay_content.sql',
+);
 const completeDelivery = access.slice(0, access.indexOf('CREATE OR REPLACE FUNCTION public.void_delivery'));
 
 describe('money and inventory gauntlet fixes', () => {
@@ -215,6 +218,9 @@ describe('money and inventory gauntlet fixes', () => {
       'if (isImportedBulkPOIntent(pendingIntentsRef.current, intentKey))',
     );
     expect(bulkImport).toContain('bulk_import_intent_key: documentClaimKey');
+    expect(bulkImport).toContain('bulk_import_vendor_reference: po.invoice_number.trim()');
+    expect(bulkImport).toContain('bulk_import_invoice_date: normalizeBulkPOInvoiceDate(po.invoice_date)');
+    expect(bulkImport).toContain('getPendingBulkPOIntent(pendingIntentsRef.current, intentKey)');
     expect(bulkImport).toContain('savedPO.po_number');
     expect(bulkImport).toContain('refreshNeededRef.current = true');
     expect(bulkImport).toContain('refreshNeededRef.current = false;\n        onSuccess()');
@@ -460,6 +466,40 @@ describe('money and inventory gauntlet fixes', () => {
     expect(saveWrapper.indexOf('WHERE claim.intent_key = v_bulk_intent_key')).toBeLessThan(
       saveWrapper.indexOf('public.next_po_number()'),
     );
+  });
+
+  it('binds exact replays to one vendor document and its reviewed content', () => {
+    const saveWrapper = bulkPOReplayContent.slice(
+      bulkPOReplayContent.indexOf('CREATE OR REPLACE FUNCTION public.save_purchase_order('),
+      bulkPOReplayContent.indexOf('REVOKE ALL ON FUNCTION public.save_purchase_order('),
+    );
+    const cachedReplay = saveWrapper.slice(
+      saveWrapper.indexOf('IF p_idempotency_key IS NOT NULL THEN'),
+      saveWrapper.indexOf('IF v_bulk_intent_key IS NOT NULL THEN\n    PERFORM pg_advisory_xact_lock'),
+    );
+
+    expect(bulkPOReplayContent).toContain('ADD COLUMN content_fingerprint text');
+    expect(bulkPOReplayContent).toContain(
+      'CREATE CONSTRAINT TRIGGER require_bulk_po_content_fingerprint',
+    );
+    expect(bulkPOReplayContent).toContain('DEFERRABLE INITIALLY DEFERRED');
+    expect(saveWrapper).toContain('BULK_PO_INTENT_IDENTITY_MISMATCH');
+    expect(saveWrapper).toContain('BULK_PO_DOCUMENT_CONTENT_CONFLICT');
+    expect(saveWrapper).toContain(
+      'v_existing_intent_key IS DISTINCT FROM v_bulk_intent_key',
+    );
+    expect(cachedReplay.indexOf('v_existing_intent_key IS DISTINCT FROM v_bulk_intent_key'))
+      .toBeLessThan(cachedReplay.indexOf("RETURN v_cached || jsonb_build_object('po_number', v_po_number)"));
+    expect(cachedReplay.indexOf('v_existing_content_fingerprint IS DISTINCT FROM v_content_fingerprint'))
+      .toBeLessThan(cachedReplay.indexOf("RETURN v_cached || jsonb_build_object('po_number', v_po_number)"));
+    expect(saveWrapper.indexOf('WHERE claim.intent_key = v_bulk_intent_key')).toBeLessThan(
+      saveWrapper.indexOf('public.next_po_number()'),
+    );
+    expect(saveWrapper).toContain('SET content_fingerprint = v_content_fingerprint');
+    expect(saveWrapper).toContain('IF NOT (public.is_admin() OR public.is_sales_rep()) THEN');
+    expect(saveWrapper).not.toContain('lower(btrim(v_existing_vendor))');
+    expect(bulkPOReplayContent).toContain('FROM PUBLIC, anon;\nGRANT EXECUTE ON FUNCTION public.save_purchase_order(');
+    expect(bulkPOReplayContent).toContain('TO authenticated, service_role;');
   });
 
   it('authorizes invoice saves and statements against active customer assignment before replay', () => {

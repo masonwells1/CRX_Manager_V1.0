@@ -1,6 +1,6 @@
 -- Post-apply rollback-only proof for migrations 20260716213000,
 -- 20260716224000, 20260716233000, 20260717010000, 20260717015439,
--- and 20260717032000.
+-- 20260717032000, 20260717045420, and 20260717063500.
 -- Exercises the exact adversarial findings without retaining business rows.
 DO $smoke$
 DECLARE
@@ -30,6 +30,7 @@ DECLARE
   v_outer_source text;
   v_suffix text := substr(md5(random()::text), 1, 8);
   v_intent text;
+  v_vendor_reference text;
   v_other_invoice_key text;
 BEGIN
   SELECT id INTO v_admin
@@ -147,7 +148,17 @@ BEGIN
     END IF;
   END;
 
-  v_intent := 'bulk-po-document:' || repeat('a', 64);
+  v_vendor_reference := 'SMK-INV-' || v_suffix;
+  v_intent := 'bulk-po-document:' || encode(
+    extensions.digest(
+      convert_to(
+        lower('[SMOKE] Bulk Intent Vendor') || chr(31) || lower(v_vendor_reference),
+        'UTF8'
+      ),
+      'sha256'
+    ),
+    'hex'
+  );
   -- Direct RPC callers cannot create a global claim without vendor identity.
   BEGIN
     PERFORM public.save_purchase_order(
@@ -155,6 +166,8 @@ BEGIN
       jsonb_build_object(
         'vendor', '   ',
         'status', 'draft',
+        'bulk_import_vendor_reference', v_vendor_reference,
+        'bulk_import_invoice_date', CURRENT_DATE::text,
         'bulk_import_intent_key', v_intent || '-missing-vendor'
       ),
       jsonb_build_array(
@@ -184,6 +197,8 @@ BEGIN
       'po_number', 'SMK-BULK-A-' || v_suffix,
       'vendor', '[SMOKE] Bulk Intent Vendor',
       'status', 'draft',
+      'bulk_import_vendor_reference', v_vendor_reference,
+      'bulk_import_invoice_date', CURRENT_DATE::text,
       'bulk_import_intent_key', v_intent
     ),
     jsonb_build_array(
@@ -208,6 +223,8 @@ BEGIN
       'po_number', 'SMK-BULK-A-' || v_suffix,
       'vendor', '[SMOKE] Bulk Intent Vendor',
       'status', 'draft',
+      'bulk_import_vendor_reference', v_vendor_reference,
+      'bulk_import_invoice_date', CURRENT_DATE::text,
       'bulk_import_intent_key', v_intent
     ),
     jsonb_build_array(
@@ -242,6 +259,8 @@ BEGIN
       'po_number', 'SMK-BULK-B-' || v_suffix,
       'vendor', '[SMOKE] Bulk Intent Vendor',
       'status', 'draft',
+      'bulk_import_vendor_reference', v_vendor_reference,
+      'bulk_import_invoice_date', CURRENT_DATE::text,
       'bulk_import_intent_key', v_intent
     ),
     jsonb_build_array(
@@ -263,14 +282,16 @@ BEGIN
       v_first, v_replay;
   END IF;
 
-  -- Reusing a global claim key for another vendor is a caller conflict, never
-  -- evidence that the second vendor's document was already imported.
+  -- Reusing a global claim key for another vendor/reference is an identity
+  -- mismatch, never evidence that the second document was already imported.
   BEGIN
     PERFORM public.save_purchase_order(
       NULL,
       jsonb_build_object(
         'vendor', '[SMOKE] Different Vendor',
         'status', 'draft',
+        'bulk_import_vendor_reference', v_vendor_reference,
+        'bulk_import_invoice_date', CURRENT_DATE::text,
         'bulk_import_intent_key', v_intent
       ),
       jsonb_build_array(
@@ -289,14 +310,49 @@ BEGIN
   EXCEPTION WHEN OTHERS THEN
     v_err := SQLERRM;
     IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
-    IF v_err <> 'BULK_PO_INTENT_VENDOR_CONFLICT' THEN
+    IF v_err <> 'BULK_PO_INTENT_IDENTITY_MISMATCH' THEN
       RAISE EXCEPTION 'SMOKE_FAIL: wrong cross-vendor claim error: %', v_err;
+    END IF;
+  END;
+
+  -- The stable document identity remains claimed when reviewed date/line
+  -- content changes. The separate fingerprint surfaces that disagreement and
+  -- cannot create a second PO.
+  BEGIN
+    PERFORM public.save_purchase_order(
+      NULL,
+      jsonb_build_object(
+        'vendor', '[SMOKE] Bulk Intent Vendor',
+        'status', 'draft',
+        'bulk_import_vendor_reference', v_vendor_reference,
+        'bulk_import_invoice_date', CURRENT_DATE::text,
+        'bulk_import_intent_key', v_intent
+      ),
+      jsonb_build_array(
+        jsonb_build_object(
+          'product_id', v_product,
+          'product_name', v_product_name,
+          'quantity_ordered', 11.125,
+          'unit_cost_cents', 333,
+          'unit_size', v_unit_size
+        )
+      ),
+      v_admin,
+      'smk-po-bulk-content-conflict-' || v_suffix
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: changed bulk document content was accepted';
+  EXCEPTION WHEN OTHERS THEN
+    v_err := SQLERRM;
+    IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_err <> 'BULK_PO_DOCUMENT_CONTENT_CONFLICT' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: wrong content-conflict error: %', v_err;
     END IF;
   END;
 
   SELECT count(*) INTO v_count
     FROM public.purchase_order_import_intents
-   WHERE intent_key = v_intent;
+   WHERE intent_key = v_intent
+     AND content_fingerprint ~ '^[0-9a-f]{64}$';
   IF v_count <> 1 THEN
     RAISE EXCEPTION 'SMOKE_FAIL: expected one persistent import claim, got %', v_count;
   END IF;
@@ -504,6 +560,8 @@ BEGIN
     jsonb_build_object(
       'vendor', '[SMOKE] Bulk Intent Vendor',
       'status', 'draft',
+      'bulk_import_vendor_reference', v_vendor_reference,
+      'bulk_import_invoice_date', CURRENT_DATE::text,
       'bulk_import_intent_key', v_intent
     ),
     jsonb_build_array(
@@ -526,7 +584,8 @@ BEGIN
   SELECT count(*) INTO v_count
     FROM public.purchase_order_import_intents
    WHERE intent_key = v_intent
-     AND purchase_order_id = (v_replay->>'po_id')::uuid;
+     AND purchase_order_id = (v_replay->>'po_id')::uuid
+     AND content_fingerprint ~ '^[0-9a-f]{64}$';
   IF v_count <> 1 THEN
     RAISE EXCEPTION 'SMOKE_FAIL: re-imported document did not receive one fresh durable claim';
   END IF;

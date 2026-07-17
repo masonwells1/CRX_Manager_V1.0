@@ -15,6 +15,12 @@ Mason answered the five parked CRM owner questions; the two that were build item
 
 ---
 
+## 2026-07-17 — Bulk purchase-order retry identity/content hardening
+
+The final Sonnet 5 and GPT-5.6-sol adversarial reviews of the money/inventory gauntlet found two narrow retry gaps after the compatibility release: browser retry state still used normalized vendor/reference text as object keys, and an exact cached response was not bound to both the durable document claim and the reviewed date/line content. Browser keys are now deterministic local hashes with automatic migration of legacy entries. Forward migration `20260717063500_bind_bulk_po_replay_content` independently recomputes the stable vendor-invoice SHA-256 claim, stores a separate canonical content fingerprint, binds cached replay to the exact claim, and rejects changed reviewed content rather than creating or silently replaying a PO. The role gate remains admin-or-sales-rep; this does not narrow sales-rep PO create/import/edit authority. Both mandatory content-bound reviewers returned CLEAN; the migration applied live as ledger version `20260717063445`, the deployed adversarial smoke reached `SMOKE_PASS_ROLLBACK`, and permanent catalog/data checks were clean with zero residue or money drift.
+
+---
+
 ## 2026-07-17 — CRM Relationship Intelligence: all four phases LIVE (autonomous loop)
 
 Native CRM module shipped end-to-end in one armed autonomous run (mission `docs/loops/crm-relationship-intelligence-loop-2026-07-16.md`, full audit trail in the ledger, plain-English summary in `docs/loops/crm-relationship-intelligence-morning-report.md`):

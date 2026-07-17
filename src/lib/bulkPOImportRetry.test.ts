@@ -4,10 +4,12 @@ import {
   buildBulkPODocumentClaimKey,
   buildBulkPOIdempotencyKey,
   ensurePendingBulkPOIntent,
+  getPendingBulkPOIntent,
   isImportedBulkPOIntent,
   loadPendingBulkPOIntents,
   markBulkPOIntentImported,
   normalizeBulkPOInvoiceDate,
+  pendingBulkPOIntentStorageKey,
   savePendingBulkPOIntents,
 } from './bulkPOImportRetry';
 
@@ -124,6 +126,22 @@ describe('bulk PO import retry state', () => {
     expect(first).toMatch(/^bulk-po-document:[a-f0-9]{64}$/);
   });
 
+  it('hashes browser storage keys and migrates legacy raw identity keys on read', () => {
+    const identity = 'vendor a\u001finv-100';
+    const hashed = pendingBulkPOIntentStorageKey(identity);
+    expect(hashed).toMatch(/^h1:[a-f0-9]{16}$/);
+    expect(hashed).not.toContain('vendor');
+    expect(hashed).not.toContain('inv-100');
+
+    const storage = fakeStorage();
+    storage.setItem('crx:bulk-po-import-pending:sales-1', JSON.stringify({
+      [identity]: { idempotencyKey: 'idem-legacy', status: 'pending', updatedAt: 1_000 },
+    }));
+    const migrated = loadPendingBulkPOIntents(storage, 'sales-1', 2_000);
+    expect(getPendingBulkPOIntent(migrated, identity)?.idempotencyKey).toBe('idem-legacy');
+    expect(Object.keys(migrated)).toEqual([hashed]);
+  });
+
   it('reuses pending work and persists successful imports across close/reopen', () => {
     const storage = fakeStorage();
     const createKey = vi.fn()
@@ -146,7 +164,7 @@ describe('bulk PO import retry state', () => {
 
     const afterSuccessReopen = loadPendingBulkPOIntents(storage, 'sales-1', 4_000);
     expect(isImportedBulkPOIntent(afterSuccessReopen, 'intent-A')).toBe(true);
-    expect(afterSuccessReopen['intent-A']).toMatchObject({
+    expect(getPendingBulkPOIntent(afterSuccessReopen, 'intent-A')).toMatchObject({
       idempotencyKey: 'idem-first',
       poNumber: 'PO-EXISTING',
       poId: 'po-id-1001',
