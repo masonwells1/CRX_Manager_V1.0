@@ -379,6 +379,66 @@ BEGIN
 END;
 $proof$;
 
+-- A literal tier-2/3 zero is the existing sentinel for falling back to Tier 1.
+-- Preview, output fingerprint validation, and the stored per-acre values must
+-- all agree before the owner approves the change set.
+INSERT INTO phase1a_proof(key, value)
+SELECT 'preview-zero-tier-fallback', public.preview_product_pricing_changes(
+  'product_page', NULL,
+  jsonb_build_array(jsonb_build_object(
+    'product_id', id, 'row_version', pricing_version,
+    'pricing_mode', 'price_driven', 'new_cost', '0.00',
+    'tier1_price', '10.00', 'tier2_price', '0.00', 'tier3_price', '0.00',
+    'change_reason', 'Zero tier fallback proof'
+  )),
+  '11111111-1111-4111-8111-111111111111'::uuid,
+  'phase1a-preview-zero-tier-fallback'
+)
+FROM public.products
+WHERE id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa5'::uuid;
+
+DO $proof$
+DECLARE
+  v_effect jsonb := (
+    SELECT value#>'{rows,0,effect}'
+    FROM phase1a_proof
+    WHERE key = 'preview-zero-tier-fallback'
+  );
+BEGIN
+  IF (v_effect->>'tier1_price_per_acre_cents')::bigint IS DISTINCT FROM 133
+     OR (v_effect->>'tier2_price_per_acre_cents')::bigint IS DISTINCT FROM 133
+     OR (v_effect->>'tier3_price_per_acre_cents')::bigint IS DISTINCT FROM 133 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: zero-tier fallback preview did not mirror Tier 1: %', v_effect;
+  END IF;
+END;
+$proof$;
+
+INSERT INTO phase1a_proof(key, value)
+SELECT 'apply-zero-tier-fallback', public.apply_product_pricing_change_set(
+  (value->>'change_set_id')::uuid,
+  value->>'request_fingerprint',
+  '11111111-1111-4111-8111-111111111111'::uuid,
+  'phase1a-apply-zero-tier-fallback'
+)
+FROM phase1a_proof
+WHERE key = 'preview-zero-tier-fallback';
+
+DO $proof$
+DECLARE
+  v_product public.products%ROWTYPE;
+BEGIN
+  SELECT * INTO v_product
+  FROM public.products
+  WHERE id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa5'::uuid;
+
+  IF round(v_product.tier1_price_per_acre * 100)::bigint IS DISTINCT FROM 133
+     OR round(v_product.tier2_price_per_acre * 100)::bigint IS DISTINCT FROM 133
+     OR round(v_product.tier3_price_per_acre * 100)::bigint IS DISTINCT FROM 133 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: zero-tier fallback stored per-acre values disagree with preview';
+  END IF;
+END;
+$proof$;
+
 RESET ROLE;
 DO $proof$
 BEGIN

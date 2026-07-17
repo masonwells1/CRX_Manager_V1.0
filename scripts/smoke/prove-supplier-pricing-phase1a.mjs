@@ -39,6 +39,12 @@ const cutoverSql = path.join(
   '.staging-migrations',
   '20260717121000_supplier_pricing_phase1a_cutover.sql'
 );
+const forwardCorrectionSql = path.join(
+  repoRoot,
+  'scripts',
+  '.staging-migrations',
+  'PARKED-harden_supplier_pricing_cent_scale_and_trigger.sql'
+);
 const zeroCostGuardSql = path.join(
   repoRoot,
   'supabase',
@@ -178,6 +184,7 @@ try {
   copyToContainer(zeroCostGuardSql, 'zero-cost-guard.sql');
   copyToContainer(zeroCostGuardSmokeSql, 'zero-cost-guard-smoke.sql');
   copyToContainer(cutoverSql, 'cutover.sql');
+  copyToContainer(forwardCorrectionSql, 'forward-correction.sql');
   copyToContainer(smokeSql, 'smoke.sql');
   copyToContainer(workbookExportSql, 'xlsx-export.sql');
   copyToContainer(workbookSmokeSql, 'xlsx-smoke.sql');
@@ -196,6 +203,8 @@ try {
   psql('zero-cost-guard-smoke.sql');
   console.log('[phase1a-proof] seeding pre-cutover live-shaped Products');
   psql('seed.sql');
+  console.log('[phase1a-proof] applying parked forward corrections in disposable DB');
+  psql('forward-correction.sql');
   console.log('[phase1a-proof] compiling parked enforcement cutover');
   psql('cutover.sql');
   console.log('[phase1a-proof] exercising .xlsx generator/parser against real PostgreSQL RPCs');

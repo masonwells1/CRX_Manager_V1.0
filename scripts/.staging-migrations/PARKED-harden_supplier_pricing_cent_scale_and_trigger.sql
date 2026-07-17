@@ -22,6 +22,9 @@
 --     pricing branch can round them into different money values;
 --   * fail closed unless the pricing-version trigger is enabled for origin or
 --     always firing (pg_trigger.tgenabled IN ('O', 'A')).
+-- Sol adversarial-review finding closed by this forward-only draft:
+--   * make preview/apply per-acre effects mirror the existing tier-2/3 zero
+--     sentinel fallback enforced by recalc_product_price_per_acre().
 
 DO $preflight$
 DECLARE
@@ -318,3 +321,66 @@ BEGIN
   END IF;
 END;
 $assertions$;
+
+-- The bootstrap migration is immutable production history. Patch the two
+-- governed RPC definitions forward from their exact expected source shape so
+-- an explicit tier-2/3 zero sentinel previews the same Tier-1-derived per-acre
+-- value that the existing product trigger stores.
+DO $per_acre_preview_fix$
+DECLARE
+  v_function regprocedure;
+  v_definition text;
+  v_old_tier2 constant text :=
+    'public.product_price_per_acre((v_calc->>''tier2_price'')::numeric,';
+  v_new_tier2 constant text :=
+    'public.product_price_per_acre(COALESCE(NULLIF((v_calc->>''tier2_price'')::numeric, 0), (v_calc->>''tier1_price'')::numeric),';
+  v_old_tier3 constant text :=
+    'public.product_price_per_acre((v_calc->>''tier3_price'')::numeric,';
+  v_new_tier3 constant text :=
+    'public.product_price_per_acre(COALESCE(NULLIF((v_calc->>''tier3_price'')::numeric, 0), (v_calc->>''tier1_price'')::numeric),';
+  v_occurrences integer;
+BEGIN
+  FOREACH v_function IN ARRAY ARRAY[
+    to_regprocedure('public.preview_product_pricing_changes(text,uuid,jsonb,uuid,text)'),
+    to_regprocedure('public.apply_product_pricing_change_set(uuid,text,uuid,text)')
+  ] LOOP
+    IF v_function IS NULL THEN
+      RAISE EXCEPTION 'PHASE1A_PER_ACRE_RPC_BASELINE_MISSING';
+    END IF;
+
+    v_definition := pg_get_functiondef(v_function);
+    v_occurrences := (
+      length(v_definition) - length(replace(v_definition, v_old_tier2, ''))
+    ) / length(v_old_tier2);
+    IF v_occurrences <> 2 THEN
+      RAISE EXCEPTION 'PHASE1A_TIER2_PER_ACRE_BASELINE_MISMATCH:%', v_function;
+    END IF;
+
+    v_occurrences := (
+      length(v_definition) - length(replace(v_definition, v_old_tier3, ''))
+    ) / length(v_old_tier3);
+    IF v_occurrences <> 2 THEN
+      RAISE EXCEPTION 'PHASE1A_TIER3_PER_ACRE_BASELINE_MISMATCH:%', v_function;
+    END IF;
+
+    v_definition := replace(v_definition, v_old_tier2, v_new_tier2);
+    v_definition := replace(v_definition, v_old_tier3, v_new_tier3);
+    EXECUTE v_definition;
+  END LOOP;
+
+  IF position(v_new_tier2 IN pg_get_functiondef(
+       'public.preview_product_pricing_changes(text,uuid,jsonb,uuid,text)'::regprocedure
+     )) = 0
+     OR position(v_new_tier3 IN pg_get_functiondef(
+       'public.preview_product_pricing_changes(text,uuid,jsonb,uuid,text)'::regprocedure
+     )) = 0
+     OR position(v_new_tier2 IN pg_get_functiondef(
+       'public.apply_product_pricing_change_set(uuid,text,uuid,text)'::regprocedure
+     )) = 0
+     OR position(v_new_tier3 IN pg_get_functiondef(
+       'public.apply_product_pricing_change_set(uuid,text,uuid,text)'::regprocedure
+     )) = 0 THEN
+    RAISE EXCEPTION 'PHASE1A_PER_ACRE_FORWARD_FIX_NOT_INSTALLED';
+  END IF;
+END;
+$per_acre_preview_fix$;
