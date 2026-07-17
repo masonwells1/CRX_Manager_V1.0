@@ -36,7 +36,7 @@ Work on a feature branch created FROM `claude/supplier-pricing-strategy-9c6129` 
 ## Phase 1a — Safety foundation (acceptance criteria)
 
 Deliverables:
-1. **Retire the unsafe legacy path:** `src/components/products/BulkPricingImport.tsx` loses its PDF/OCR price-list mode outright and its direct writes to `products.current_cost`/tier prices. Any surviving manual CSV pricing path must route through the new preview/apply RPC (or be removed in favor of the worksheet).
+1. **Retire the unsafe legacy path:** `src/components/products/BulkPricingImport.tsx` loses its PDF/OCR price-list mode outright and its direct writes to `products.current_cost`/tier prices. The `.xlsx` worksheet is the only file-based batch-pricing workflow. CSV is limited to non-pricing Product details, and Bulk Product Import remains pricing-free.
 2. **Product & pricing worksheet — pricing columns** (§6b of the plan):
    - .xlsx export (protected identity columns: `product_id`, SKU, `row_version`; read-only current-pricing columns; editable pricing columns with per-row `pricing_mode`: margin-driven XOR price-driven).
    - Server-side **preview RPC**: diffs editable columns against live values using `row_version`, returns a change-set (ID + every effect INCLUDING trigger-produced tier prices), flags conflicts and `rate_unit` changes loudly.
@@ -192,7 +192,7 @@ Mason's preferred control surface is a spreadsheet, so the primary batch-edit wo
 
 ## 6c. Retiring the unsafe legacy path (Phase 1a, first)
 
-`BulkPricingImport` currently lets an OCR'd PDF directly overwrite `current_cost` + tier prices (and the margin trigger then rewrites sell prices). **Before anything else ships:** its price-list/PDF OCR mode is retired outright (per Mason's rev-5 no-machine-read decision, there is no automated replacement), and its direct product writes are removed. Any surviving manual CSV pricing path must use the same preview/apply RPC as the worksheet. This closes the "bad scan silently reprices a grower's quote" hole — the single biggest business risk both reviewers identified.
+`BulkPricingImport` currently lets an OCR'd PDF directly overwrite `current_cost` + tier prices (and the margin trigger then rewrites sell prices). **Before anything else ships:** its price-list/PDF OCR mode is retired outright (per Mason's rev-5 no-machine-read decision, there is no automated replacement), and its direct product writes are removed. The `.xlsx` worksheet is the only file-based batch-pricing workflow; CSV is limited to non-pricing Product details, and Bulk Product Import remains pricing-free. This closes the "bad scan silently reprices a grower's quote" hole — the single biggest business risk both reviewers identified.
 
 ## 7. Variants / return-policy pricing (least-disruptive path)
 

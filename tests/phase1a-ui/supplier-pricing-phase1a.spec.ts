@@ -280,6 +280,7 @@ test('real .xlsx round-trip plus ProductDetail quick pricing review', async ({ p
 
   await page.goto(`/products/${products[0].id}`);
   await expect(page.getByText('Grower Description')).toBeVisible();
+  await page.getByLabel('Pricing mode').selectOption('margin_driven');
   await page.getByRole('button', { name: 'Update' }).click();
   const previewCountBeforeZeroProduct = previewRequests.length;
   await page.getByLabel('New Cost').fill('0.00');
@@ -301,7 +302,7 @@ test('real .xlsx round-trip plus ProductDetail quick pricing review', async ({ p
   // Exercise the full Product form with a value that JavaScript Number cannot
   // represent to the cent. The captured RPC request must retain the exact text.
   await page.getByLabel('Pricing mode').selectOption('price_driven');
-  await page.getByLabel('Current Cost').fill('90071992547409.91');
+  await page.getByLabel('Current Cost').fill('90071992547409.93');
   await page.getByLabel('Tier 1 price').fill('90071992547410.01');
   await page.getByRole('button', { name: 'Save Changes' }).click();
   await expect(page.getByText('Ready for approval')).toBeVisible();
@@ -309,7 +310,7 @@ test('real .xlsx round-trip plus ProductDetail quick pricing review', async ({ p
     p_rows: Array<{ new_cost: string; tier1_price: string }>;
   };
   expect(exactProductRequest.p_rows[0]).toMatchObject({
-    new_cost: '90071992547409.91',
+    new_cost: '90071992547409.93',
     tier1_price: '90071992547410.01',
   });
   await page.getByRole('button', { name: 'Apply approved changes' }).click();

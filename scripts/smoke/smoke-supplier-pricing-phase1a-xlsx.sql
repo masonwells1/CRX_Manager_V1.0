@@ -146,18 +146,18 @@ BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM public.products
     WHERE id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1'::uuid
-      AND current_cost = 90.00 AND tier1_price = 112.50
-      AND tier2_price = 120.00 AND tier3_price = 128.57 AND pricing_version = 2
+      AND current_cost = 90.01 AND tier1_price = 112.51
+      AND tier2_price = 120.01 AND tier3_price = 128.59 AND pricing_version = 2
   ) OR NOT EXISTS (
     SELECT 1 FROM public.products
     WHERE id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2'::uuid
-      AND current_cost = 60.00 AND tier1_price = 70.00
-      AND tier2_price = 80.00 AND tier3_price = 90.00 AND pricing_version = 2
+      AND current_cost = 60.99 AND tier1_price = 70.01
+      AND tier2_price = 80.99 AND tier3_price = 90.01 AND pricing_version = 2
   ) OR NOT EXISTS (
     SELECT 1 FROM public.products
     WHERE id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3'::uuid
-      AND current_cost = 45.00 AND tier1_price = 56.25
-      AND tier2_price = 60.00 AND tier3_price = 64.29 AND pricing_version = 2
+      AND current_cost = 45.99 AND tier1_price = 57.49
+      AND tier2_price = 61.32 AND tier3_price = 65.70 AND pricing_version = 2
   ) THEN
     RAISE EXCEPTION 'XLSX_SMOKE_FAIL: real apply rows differ from the parsed workbook preview';
   END IF;

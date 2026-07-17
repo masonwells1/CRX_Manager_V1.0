@@ -56,6 +56,8 @@ const product = {
   updated_at: '2026-01-01T00:00:00Z',
 };
 
+let productLoadResults: Array<{ data: typeof product | null; error: unknown }> = [];
+
 function chainable(resolveWith: unknown) {
   const builder: Record<string, unknown> = {};
   let resolved = resolveWith;
@@ -69,7 +71,7 @@ function chainable(resolveWith: unknown) {
   }
   builder.update = mockProductUpdate.mockImplementation(self);
   builder.maybeSingle = vi.fn(() => {
-    resolved = { data: product, error: null };
+    resolved = productLoadResults.shift() ?? { data: product, error: null };
     return builder;
   });
   builder.then = vi.fn((resolve: (value: unknown) => void) => {
@@ -133,6 +135,7 @@ import ProductDetail from './ProductDetail';
 describe('ProductDetail governed pricing flow', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    productLoadResults = [];
     mockPreviewPricing.mockResolvedValue({
       change_set_id: '22222222-2222-4222-8222-222222222222',
       request_fingerprint: 'preview-fingerprint',
@@ -157,19 +160,19 @@ describe('ProductDetail governed pricing flow', () => {
           sku: product.sku,
           pricing_mode: 'margin_driven',
           before: {
-            cost: '50.00', cost_cents: 5000,
-            tier1_margin_percent: '20', tier1_margin: 0.2, tier1_price: '62.50', tier1_price_cents: 6250,
-            tier2_margin_percent: '15', tier2_margin: 0.15, tier2_price: '58.82', tier2_price_cents: 5882,
-            tier3_margin_percent: '10', tier3_margin: 0.1, tier3_price: '55.56', tier3_price_cents: 5556,
+            cost: '50.00', cost_cents: 5000n,
+            tier1_margin_percent: '20', tier1_margin: 0.2, tier1_price: '62.50', tier1_price_cents: 6250n,
+            tier2_margin_percent: '15', tier2_margin: 0.15, tier2_price: '58.82', tier2_price_cents: 5882n,
+            tier3_margin_percent: '10', tier3_margin: 0.1, tier3_price: '55.56', tier3_price_cents: 5556n,
             tier1_price_per_acre_cents: null,
             tier2_price_per_acre_cents: null,
             tier3_price_per_acre_cents: null,
           },
           cost: '55.00',
-          cost_cents: 5500,
-          tier1_margin_percent: '20', tier1_margin: 0.2, tier1_price: '68.75', tier1_price_cents: 6875,
-          tier2_margin_percent: '15', tier2_margin: 0.15, tier2_price: '64.71', tier2_price_cents: 6471,
-          tier3_margin_percent: '10', tier3_margin: 0.1, tier3_price: '61.11', tier3_price_cents: 6111,
+          cost_cents: 5500n,
+          tier1_margin_percent: '20', tier1_margin: 0.2, tier1_price: '68.75', tier1_price_cents: 6875n,
+          tier2_margin_percent: '15', tier2_margin: 0.15, tier2_price: '64.71', tier2_price_cents: 6471n,
+          tier3_margin_percent: '10', tier3_margin: 0.1, tier3_price: '61.11', tier3_price_cents: 6111n,
           tier1_price_per_acre_cents: null,
           tier2_price_per_acre_cents: null,
           tier3_price_per_acre_cents: null,
@@ -184,10 +187,27 @@ describe('ProductDetail governed pricing flow', () => {
     });
   });
 
+  it('requires an explicit mode when saved prices and margins are both populated', async () => {
+    render(<ProductDetail />);
+    await screen.findByText('Grower Description');
+
+    expect(screen.getByLabelText('Pricing mode')).toHaveValue('');
+    fireEvent.click(screen.getByRole('button', { name: /^Update$/ }));
+    fireEvent.change(screen.getByLabelText('New Cost'), { target: { value: '55.00' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Review Cost Change' }));
+
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
+      'error',
+      'Choose margin-driven or price-driven before reviewing pricing.',
+    ));
+    expect(mockPreviewPricing).not.toHaveBeenCalled();
+  });
+
   it('previews and applies a quick cost change without a direct products update', async () => {
     render(<ProductDetail />);
     await screen.findByText('Grower Description');
 
+    fireEvent.change(screen.getByLabelText('Pricing mode'), { target: { value: 'margin_driven' } });
     fireEvent.click(screen.getByRole('button', { name: /^Update$/ }));
     fireEvent.change(screen.getByLabelText('New Cost'), { target: { value: '55.00' } });
     fireEvent.change(screen.getByLabelText('Change Note (optional)'), { target: { value: 'Mid-month supplier increase' } });
@@ -228,6 +248,7 @@ describe('ProductDetail governed pricing flow', () => {
     render(<ProductDetail />);
     await screen.findByText('Grower Description');
 
+    fireEvent.change(screen.getByLabelText('Pricing mode'), { target: { value: 'margin_driven' } });
     fireEvent.click(screen.getByRole('button', { name: /^Update$/ }));
     fireEvent.change(screen.getByLabelText('New Cost'), { target: { value: '0.00' } });
     fireEvent.click(screen.getByRole('button', { name: 'Review Cost Change' }));
@@ -240,13 +261,41 @@ describe('ProductDetail governed pricing flow', () => {
     expect(mockProductUpdate).not.toHaveBeenCalled();
   });
 
+  it('locks editing until the authoritative post-apply Product reload succeeds', async () => {
+    render(<ProductDetail />);
+    await screen.findByText('Grower Description');
+
+    fireEvent.change(screen.getByLabelText('Pricing mode'), { target: { value: 'margin_driven' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Update$/ }));
+    fireEvent.change(screen.getByLabelText('New Cost'), { target: { value: '55.00' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Review Cost Change' }));
+    await screen.findByText('Ready for approval');
+
+    // Keep the quick-cost modal mounted while apply finishes so its own lock is
+    // verified in addition to the main Product fieldset.
+    fireEvent.click(screen.getByRole('button', { name: /^Update$/ }));
+    productLoadResults.push({ data: null, error: new Error('reload failed') });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply approved changes' }));
+
+    expect(await screen.findByText(/Editing is locked until the latest values load/i)).toBeInTheDocument();
+    expect(screen.getByLabelText('Current Cost')).toBeDisabled();
+    expect(screen.getByLabelText('New Cost')).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Save Changes' })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reload Product' }));
+    await waitFor(() => {
+      expect(screen.queryByText(/Editing is locked until the latest values load/i)).not.toBeInTheDocument();
+    });
+    expect(screen.getByLabelText('Current Cost')).not.toBeDisabled();
+  });
+
   it('preserves exact cents from the Product pricing form through preview', async () => {
     render(<ProductDetail />);
     await screen.findByText('Grower Description');
 
     fireEvent.change(screen.getByLabelText('Pricing mode'), { target: { value: 'price_driven' } });
     fireEvent.change(screen.getByLabelText('Current Cost'), {
-      target: { value: '90071992547409.91' },
+      target: { value: '90071992547409.93' },
     });
     fireEvent.change(screen.getByLabelText('Tier 1 price'), {
       target: { value: '90071992547410.01' },
@@ -256,7 +305,7 @@ describe('ProductDetail governed pricing flow', () => {
     await waitFor(() => expect(mockPreviewPricing).toHaveBeenCalledWith(expect.objectContaining({
       rows: [expect.objectContaining({
         pricing_mode: 'price_driven',
-        new_cost: '90071992547409.91',
+        new_cost: '90071992547409.93',
         tier1_price: '90071992547410.01',
       })],
     })));

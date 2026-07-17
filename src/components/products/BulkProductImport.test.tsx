@@ -38,6 +38,7 @@ vi.mock('../ui/Toast', () => ({
 import BulkProductImport from './BulkProductImport';
 import {
   buildProductInsert,
+  isProductImportStringField,
   isRetiredPricingColumn,
   type ParsedProduct,
 } from './bulkProductImportSafety';
@@ -87,6 +88,13 @@ describe('BulkProductImport', () => {
     expect(isRetiredPricingColumn('rate_per_acre')).toBe(false);
     expect(isRetiredPricingColumn('suggested_rate')).toBe(false);
   });
+
+  it.each(['product_form', 'inventory_unit', 'container_unit', 'container_type'])(
+    'preserves catalog metadata field %s during CSV parsing',
+    (field) => {
+      expect(isProductImportStringField(field)).toBe(true);
+    },
+  );
 
   it('builds the database insert from an explicit non-pricing allowlist', () => {
     const unsafeInput = {

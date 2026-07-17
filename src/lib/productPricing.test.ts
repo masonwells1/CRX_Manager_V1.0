@@ -24,7 +24,7 @@ import {
 
 describe('pricingDollarInputToCents', () => {
   it('preserves cents beyond JavaScript safe-integer precision', () => {
-    expect(pricingDollarInputToCents('90071992547409.91')).toBe(9_007_199_254_740_991n);
+    expect(pricingDollarInputToCents('90071992547409.93')).toBe(9_007_199_254_740_993n);
   });
 
   it.each(['-1.00', '1.001', '1e2', '92233720368547758.08'])(
@@ -80,7 +80,7 @@ describe('product pricing RPC wrappers', () => {
       productIds: ['product-1'],
       performedBy: 'actor-1',
       idempotencyKey: 'export-key',
-    })).resolves.toBe(response);
+    })).resolves.toEqual(response);
 
     expect(mockRpc).toHaveBeenCalledWith('create_pricing_workbook_export', {
       p_product_ids: ['product-1'],
@@ -109,7 +109,7 @@ describe('product pricing RPC wrappers', () => {
       rows,
       performedBy: 'actor-1',
       idempotencyKey: 'preview-key',
-    })).resolves.toBe(response);
+    })).resolves.toEqual(response);
 
     expect(mockRpc).toHaveBeenCalledWith('preview_product_pricing_changes', {
       p_source: 'product_page',
@@ -118,6 +118,90 @@ describe('product pricing RPC wrappers', () => {
       p_performed_by: 'actor-1',
       p_idempotency_key: 'preview-key',
     });
+  });
+
+  it('normalizes RPC money to exact bigint cents beyond the safe-integer boundary', async () => {
+    const exactDollars = '90071992547409.93';
+    const response = {
+      change_set_id: 'change-unsafe',
+      request_fingerprint: 'fingerprint-unsafe',
+      source: 'product_page',
+      status: 'previewed',
+      expires_at: '2026-07-17T23:00:00Z',
+      submitted_row_count: 1,
+      ready_count: 1,
+      unchanged_count: 0,
+      conflict_count: 0,
+      invalid_count: 0,
+      apply_allowed: true,
+      rows: [{
+        sequence: 1,
+        product_id: 'product-1',
+        submitted_row: {},
+        row_status: 'ready',
+        error_code: null,
+        effect: {
+          product_id: 'product-1',
+          cost: exactDollars,
+          cost_cents: Number('9007199254740993'),
+          tier1_margin_percent: '0',
+          tier1_margin: 0,
+          tier1_price: exactDollars,
+          tier1_price_cents: Number('9007199254740993'),
+          tier2_margin_percent: '0',
+          tier2_margin: 0,
+          tier2_price: exactDollars,
+          tier2_price_cents: Number('9007199254740993'),
+          tier3_margin_percent: '0',
+          tier3_margin: 0,
+          tier3_price: exactDollars,
+          tier3_price_cents: Number('9007199254740993'),
+          tier1_price_per_acre_cents: '9007199254740993',
+          tier2_price_per_acre_cents: null,
+          tier3_price_per_acre_cents: null,
+        },
+      }],
+    };
+    mockRpc.mockResolvedValue({ data: response, error: null });
+
+    const result = await previewProductPricingChanges({
+      source: 'product_page',
+      rows: [{
+        product_id: 'product-1',
+        row_version: 7,
+        pricing_mode: 'price_driven',
+        new_cost: exactDollars,
+        tier1_price: exactDollars,
+        tier2_price: exactDollars,
+        tier3_price: exactDollars,
+      }],
+      performedBy: 'actor-1',
+      idempotencyKey: 'preview-unsafe-key',
+    });
+
+    expect(result.rows[0].effect).toMatchObject({
+      cost_cents: 9_007_199_254_740_993n,
+      tier1_price_cents: 9_007_199_254_740_993n,
+      tier1_price_per_acre_cents: 9_007_199_254_740_993n,
+    });
+
+    (response.rows[0].effect as Record<string, unknown>).tier1_price_per_acre_cents =
+      Number('9007199254740993');
+    mockRpc.mockResolvedValue({ data: response, error: null });
+    await expect(previewProductPricingChanges({
+      source: 'product_page',
+      rows: [{
+        product_id: 'product-1',
+        row_version: 7,
+        pricing_mode: 'price_driven',
+        new_cost: exactDollars,
+        tier1_price: exactDollars,
+        tier2_price: exactDollars,
+        tier3_price: exactDollars,
+      }],
+      performedBy: 'actor-1',
+      idempotencyKey: 'preview-unsafe-number-key',
+    })).rejects.toThrow('unsafe tier 1 per-acre cents');
   });
 
   it('never calls the preview RPC for margin-driven zero cost', async () => {
@@ -201,7 +285,7 @@ describe('product pricing RPC wrappers', () => {
       requestFingerprint: 'request-fingerprint',
       performedBy: 'actor-1',
       idempotencyKey: 'apply-key',
-    })).resolves.toBe(response);
+    })).resolves.toEqual(response);
 
     expect(mockRpc).toHaveBeenCalledWith('apply_product_pricing_change_set', {
       p_change_set_id: 'change-1',

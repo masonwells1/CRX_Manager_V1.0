@@ -695,7 +695,7 @@ export async function parseProductPricingWorkbook(
 
   validateHeaders(worksheet);
   const manifest = readManifest(manifestWorksheet);
-  if (!/^[1-9][0-9]*$/.test(manifest.row_count)) {
+  if (!/^(?:0|[1-9][0-9]*)$/.test(manifest.row_count)) {
     throw new PricingWorkbookFormatError('The workbook manifest row count is invalid.');
   }
   const rowCount = Number(manifest.row_count);

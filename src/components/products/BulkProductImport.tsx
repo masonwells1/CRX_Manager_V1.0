@@ -8,6 +8,7 @@ import { isCSVFile } from '../../lib/documentOCR';
 import { Sentry } from '../../lib/sentry';
 import {
   buildProductInsert,
+  isProductImportStringField,
   isRetiredPricingColumn,
   normalizeProductImportHeader,
   type ParsedProduct,
@@ -187,10 +188,7 @@ export default function BulkProductImport({ open, onClose, onSuccess }: BulkProd
           if (field) {
             rowData[field] = value;
 
-            if (field === 'product_name' || field === 'sku' || field === 'category' ||
-                field === 'vendor' || field === 'manufacturer' || field === 'unit_size' ||
-                field === 'epa_registration' || field === 'suggested_rate' || field === 'rate_unit' || field === 'notes' ||
-                field === 'use_timing') {
+            if (isProductImportStringField(field)) {
               if (value) product[field] = value;
             } else if (field === 'container_size' || field === 'rate_per_acre') {
               const num = parseFloat(value);

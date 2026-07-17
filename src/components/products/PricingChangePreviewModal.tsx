@@ -36,13 +36,6 @@ const STATUS_CLASSES: Record<PricingPreviewRow['row_status'], string> = {
   unchanged: 'bg-gray-50 text-gray-600 border-gray-200',
 };
 
-const centsFormatter = new Intl.NumberFormat('en-US', {
-  style: 'currency',
-  currency: 'USD',
-  minimumFractionDigits: 2,
-  maximumFractionDigits: 2,
-});
-
 function readableError(errorCode: string | null): string | null {
   if (!errorCode) return null;
   if (ERROR_MESSAGES[errorCode]) return ERROR_MESSAGES[errorCode];
@@ -85,9 +78,13 @@ function displayMargin(value: string | null): string {
   return value === null ? '—' : `${value}%`;
 }
 
-function displayPerAcre(value: number | null | undefined): string | null {
+function displayPerAcre(value: bigint | null | undefined): string | null {
   if (value === null || value === undefined) return null;
-  return `${centsFormatter.format(value / 100)} / acre`;
+  const negative = value < 0n;
+  const absolute = negative ? -value : value;
+  const wholeDollars = (absolute / 100n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  const cents = (absolute % 100n).toString().padStart(2, '0');
+  return `${negative ? '-' : ''}$${wholeDollars}.${cents} / acre`;
 }
 
 function PricingEffectDetails({ effect }: { effect: PricingEffect }) {

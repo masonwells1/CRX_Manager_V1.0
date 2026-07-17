@@ -17,6 +17,9 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_FAIL: direct pricing update unexpectedly succeeded';
   EXCEPTION WHEN OTHERS THEN
     IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF SQLSTATE <> '42501' AND SQLERRM NOT LIKE 'PRODUCT_PRICING_GOVERNED_PATH_REQUIRED%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: direct pricing update failed for wrong reason (%, %)', SQLSTATE, SQLERRM;
+    END IF;
   END;
 
   IF (SELECT current_cost FROM public.products WHERE id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1'::uuid) IS DISTINCT FROM 80.00::numeric THEN
@@ -54,6 +57,9 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_FAIL: direct per-acre pricing update unexpectedly succeeded';
   EXCEPTION WHEN OTHERS THEN
     IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF SQLSTATE <> '42501' AND SQLERRM NOT LIKE 'PRODUCT_PRICING_GOVERNED_PATH_REQUIRED%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: direct per-acre pricing update failed for wrong reason (%, %)', SQLSTATE, SQLERRM;
+    END IF;
   END;
   IF NOT EXISTS (
     SELECT 1 FROM public.products
@@ -79,6 +85,9 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_FAIL: direct priced Product insert unexpectedly succeeded';
   EXCEPTION WHEN OTHERS THEN
     IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF SQLSTATE <> '42501' AND SQLERRM NOT LIKE 'PRODUCT_PRICING_GOVERNED_PATH_REQUIRED%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: direct priced Product insert failed for wrong reason (%, %)', SQLSTATE, SQLERRM;
+    END IF;
   END;
 
   BEGIN
@@ -87,6 +96,9 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_FAIL: frontend history insert unexpectedly succeeded';
   EXCEPTION WHEN OTHERS THEN
     IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF SQLSTATE <> '42501' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: direct cost-history insert failed for wrong reason (%, %)', SQLSTATE, SQLERRM;
+    END IF;
   END;
 END;
 $proof$;

@@ -53,11 +53,12 @@ function nonpricingProductPayload(product: Partial<Product>): Record<string, unk
 }
 
 function pricingModeFor(product: Partial<Product>): PricingMode | '' {
-  if ([product.tier1_margin, product.tier2_margin, product.tier3_margin]
-    .every((value) => value !== null && value !== undefined)) return 'margin_driven';
-  if ([product.tier1_price, product.tier2_price, product.tier3_price]
-    .every((value) => value !== null && value !== undefined)) return 'price_driven';
-  return '';
+  const hasMargins = [product.tier1_margin, product.tier2_margin, product.tier3_margin]
+    .every((value) => value !== null && value !== undefined);
+  const hasPrices = [product.tier1_price, product.tier2_price, product.tier3_price]
+    .every((value) => value !== null && value !== undefined);
+  if (hasMargins === hasPrices) return '';
+  return hasMargins ? 'margin_driven' : 'price_driven';
 }
 
 function pricingMoneyInput(
@@ -266,6 +267,8 @@ export default function ProductDetail() {
   const [pricingMoneyDrafts, setPricingMoneyDrafts] = useState<ProductPricingMoneyDrafts>({});
   const [pricingPreview, setPricingPreview] = useState<PricingPreviewResult | null>(null);
   const [applyingPricing, setApplyingPricing] = useState(false);
+  const [pricingReloadRequired, setPricingReloadRequired] = useState(false);
+  const [pricingReloading, setPricingReloading] = useState(false);
   const [persistedLabelFields, setPersistedLabelFields] = useState<{
     signalWord: Product['signal_word'];
     epaRegistration: string | null;
@@ -296,6 +299,7 @@ export default function ProductDetail() {
       setPersistedProduct(loadedProduct);
       setPricingMode(pricingModeFor(loadedProduct));
       setPricingMoneyDrafts({});
+      setPricingReloadRequired(false);
       setIsDirty(false);
       setPersistedLabelFields({
         signalWord: loadedProduct.signal_word,
@@ -367,6 +371,9 @@ export default function ProductDetail() {
     costOverride?: string;
     reason: string;
   }) => {
+    if (pricingReloadRequired) {
+      throw new Error('Reload this Product before making another change.');
+    }
     if (!profile || !persistedProduct) throw new Error('Reload this Product before changing pricing.');
     if (productDetailsChanged(product, persistedProduct)) {
       throw new Error('Save or discard the unsaved Product details before reviewing a pricing change.');
@@ -393,6 +400,10 @@ export default function ProductDetail() {
   };
 
   const handleSave = async () => {
+    if (pricingReloadRequired) {
+      toast('error', 'Reload this Product before making another change.');
+      return;
+    }
     if (!product.product_name) {
       toast('error', 'Product name is required');
       return;
@@ -479,6 +490,10 @@ export default function ProductDetail() {
   };
 
   const handleCostUpdate = async () => {
+    if (pricingReloadRequired) {
+      toast('error', 'Reload this Product before making another change.');
+      return;
+    }
     const costCents = pricingDollarInputToCents(newCost);
     if (costCents === null) {
       toast('error', 'Enter a non-negative cost with no more than two decimal places');
@@ -510,6 +525,8 @@ export default function ProductDetail() {
         idempotencyKey: applyPricingIdem.getKey(),
       });
       applyPricingIdem.resetKey();
+      setPricingReloadRequired(true);
+      setIsDirty(true);
       setPricingPreview(null);
       setNewCost('');
       setCostNote('');
@@ -517,7 +534,6 @@ export default function ProductDetail() {
         fetchProduct(false),
         fetchCostHistory(false),
       ]);
-      setIsDirty(false);
       if (productReloaded && historyReloaded) {
         toast('success', `Applied pricing to ${result.applied_count} Product.`);
       } else {
@@ -529,6 +545,25 @@ export default function ProductDetail() {
     } finally {
       setApplyingPricing(false);
     }
+  };
+
+  const handlePricingReload = async () => {
+    setPricingReloading(true);
+    const [productReloaded, historyReloaded] = await Promise.all([
+      fetchProduct(false),
+      fetchCostHistory(false),
+    ]);
+    if (productReloaded) {
+      toast(
+        historyReloaded ? 'success' : 'warning',
+        historyReloaded
+          ? 'Product pricing reloaded.'
+          : 'Product pricing reloaded, but pricing history is not available yet.',
+      );
+    } else {
+      toast('error', 'Product pricing could not be reloaded. Try again before making another change.');
+    }
+    setPricingReloading(false);
   };
 
   const handleEpaLookup = async () => {
@@ -667,6 +702,7 @@ export default function ProductDetail() {
   };
 
   const update = (field: string, value: unknown) => {
+    if (pricingReloadRequired) return;
     setProduct((p) => ({ ...p, [field]: value }));
     setIsDirty(true);
     if (field === 'epa_registration'
@@ -677,6 +713,7 @@ export default function ProductDetail() {
   };
 
   const updatePricingMoney = (field: ProductPricingMoneyField, value: string) => {
+    if (pricingReloadRequired) return;
     const persistedValue = persistedProduct?.[field] ?? product[field];
     const original = persistedValue == null ? '' : String(persistedValue);
     setPricingMoneyDrafts((drafts) => {
@@ -734,6 +771,22 @@ export default function ProductDetail() {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <div className="lg:col-span-2 space-y-4">
+          {pricingReloadRequired && (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-300 bg-amber-50 p-4" role="alert">
+              <p className="text-sm text-amber-900">
+                Pricing was applied, but the saved Product could not be reloaded. Editing is locked until the latest values load.
+              </p>
+              <Button
+                type="button"
+                variant="secondary"
+                loading={pricingReloading}
+                onClick={() => void handlePricingReload()}
+              >
+                Reload Product
+              </Button>
+            </div>
+          )}
+          <fieldset disabled={pricingReloadRequired} className="contents">
           <Card>
             <CardHeader title="Product" accent="Information" />
 
@@ -1242,6 +1295,7 @@ export default function ProductDetail() {
               </Button>
             </div>
           )}
+          </fieldset>
         </div>
 
         {!isNew && isAdmin && (
@@ -1274,13 +1328,14 @@ export default function ProductDetail() {
           <p className="text-sm text-secondary">
             Current cost: <strong>${product.current_cost?.toFixed(2) ?? 'N/A'}</strong>
           </p>
-          <Input label="New Cost" type="number" value={newCost} onChange={(e) => setNewCost(e.target.value)} placeholder="0.00" />
+          <Input label="New Cost" type="number" value={newCost} onChange={(e) => setNewCost(e.target.value)} placeholder="0.00" disabled={pricingReloadRequired} />
           <div>
             <label htmlFor="cost-update-pricing-mode" className="block text-sm font-medium text-secondary mb-1">Pricing mode</label>
             <select
               id="cost-update-pricing-mode"
               value={pricingMode}
               onChange={(event) => setPricingMode(event.target.value as PricingMode | '')}
+              disabled={pricingReloadRequired}
               className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
             >
               <option value="">Choose a mode</option>
@@ -1288,10 +1343,10 @@ export default function ProductDetail() {
               <option value="price_driven">Keep entered prices; reconcile margins</option>
             </select>
           </div>
-          <Input label="Change Note (optional)" value={costNote} onChange={(e) => setCostNote(e.target.value)} placeholder="e.g. Supplier price increase" />
+          <Input label="Change Note (optional)" value={costNote} onChange={(e) => setCostNote(e.target.value)} placeholder="e.g. Supplier price increase" disabled={pricingReloadRequired} />
           <div className="flex justify-end gap-2">
             <Button variant="secondary" showChevron={false} onClick={() => setCostModal(false)}>Cancel</Button>
-            <Button onClick={handleCostUpdate}>Review Cost Change</Button>
+            <Button onClick={handleCostUpdate} disabled={pricingReloadRequired}>Review Cost Change</Button>
           </div>
         </div>
       </Modal>

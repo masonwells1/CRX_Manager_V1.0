@@ -53,17 +53,17 @@ function editProduct(productId: string, values: Record<string, string | number>)
 }
 
 editProduct('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1', {
-  pricing_mode: 'margin_driven', new_cost: 90,
+  pricing_mode: 'margin_driven', new_cost: '90.01',
   tier1_margin_percent: 20, tier2_margin_percent: 25, tier3_margin_percent: 30,
   change_reason: 'Monthly supplier worksheet',
 });
 editProduct('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2', {
-  pricing_mode: 'price_driven', new_cost: 60,
-  tier1_price: 70, tier2_price: 80, tier3_price: 90,
+  pricing_mode: 'price_driven', new_cost: '60.99',
+  tier1_price: '70.01', tier2_price: '80.99', tier3_price: '90.01',
   change_reason: 'Monthly supplier worksheet',
 });
 editProduct('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3', {
-  pricing_mode: 'margin_driven', new_cost: 45,
+  pricing_mode: 'margin_driven', new_cost: '45.99',
   tier1_margin_percent: 20, tier2_margin_percent: 25, tier3_margin_percent: 30,
   change_reason: 'Third Product monthly update',
 });
@@ -85,6 +85,23 @@ if (JSON.stringify(modes) !== JSON.stringify(['margin_driven', 'margin_driven', 
 }
 if (parsed.rows.some((row) => row.has_formula || row.formula_cells.length > 0)) {
   throw new Error('Plain-value proof workbook unexpectedly parsed a formula');
+}
+const parsedByProduct = new Map(parsed.rows.map((row) => [row.product_id, row]));
+const exactMoneyEdits: Record<string, Record<string, string>> = {
+  'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1': { new_cost: '90.01' },
+  'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2': {
+    new_cost: '60.99', tier1_price: '70.01', tier2_price: '80.99', tier3_price: '90.01',
+  },
+  'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3': { new_cost: '45.99' },
+};
+for (const [productId, expected] of Object.entries(exactMoneyEdits)) {
+  const row = parsedByProduct.get(productId);
+  if (!row) throw new Error(`Parsed workbook omitted Product ${productId}`);
+  for (const [field, value] of Object.entries(expected)) {
+    if (row[field as keyof typeof row] !== value) {
+      throw new Error(`Cent-sensitive ${field} did not round-trip exactly for Product ${productId}`);
+    }
+  }
 }
 
 await writeFile(payloadPath, JSON.stringify(parsed));

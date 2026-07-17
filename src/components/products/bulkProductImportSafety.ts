@@ -18,6 +18,30 @@ export interface ParsedProduct {
   notes?: string;
 }
 
+export const PRODUCT_IMPORT_STRING_FIELDS = [
+  'product_name',
+  'sku',
+  'category',
+  'use_timing',
+  'vendor',
+  'manufacturer',
+  'unit_size',
+  'epa_registration',
+  'suggested_rate',
+  'rate_unit',
+  'product_form',
+  'inventory_unit',
+  'container_unit',
+  'container_type',
+  'notes',
+] as const satisfies readonly (keyof ParsedProduct)[];
+
+type ProductImportStringField = typeof PRODUCT_IMPORT_STRING_FIELDS[number];
+
+export function isProductImportStringField(field: string): field is ProductImportStringField {
+  return (PRODUCT_IMPORT_STRING_FIELDS as readonly string[]).includes(field);
+}
+
 export const normalizeProductImportHeader = (header: string) => header
   .toLowerCase()
   .trim()

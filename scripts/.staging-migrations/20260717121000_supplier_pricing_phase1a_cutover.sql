@@ -3,10 +3,15 @@
 -- PARKED: do not copy to supabase/migrations or apply until ALL of the
 -- following are true:
 --   1. 20260717042803_supplier_pricing_phase1a.sql is live and verified.
---   2. 20260717120500_supplier_pricing_zero_cost_guard.sql is live and verified.
+--   2. The repository file 20260717112011_supplier_pricing_zero_cost_guard.sql
+--      is live and verified (its live ledger identity is
+--      20260717120500_supplier_pricing_zero_cost_guard).
 --   3. The RPC-only ProductDetail/Products/worksheet frontend is deployed.
 --   4. Its rollback window is closed or a forward database rollback is ready.
 --   5. This exact file has fresh migration-review and apply-guard proof.
+--   6. Before promotion, rename this file with a fresh timestamp strictly
+--      greater than the verified live high-water `20260717171331`; never
+--      reuse this parked file's `20260717121000` prefix as a ledger identity.
 --
 -- The additive bootstrap intentionally keeps the legacy frontend operational.
 -- This second migration closes those temporary write paths after cutover.
@@ -46,6 +51,7 @@ BEGIN
   IF (p_mode <> 'legacy_margin' AND p_current_cost IS NULL)
      OR p_current_cost::text IN ('NaN', 'Infinity', '-Infinity')
      OR p_current_cost < 0
+     OR round(p_current_cost, 2) IS DISTINCT FROM p_current_cost
      OR (p_mode = 'margin_driven' AND p_current_cost = 0) THEN
     RAISE EXCEPTION 'PRICING_COST_INVALID';
   END IF;

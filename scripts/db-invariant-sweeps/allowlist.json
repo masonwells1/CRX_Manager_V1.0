@@ -334,8 +334,8 @@
     {
       "predicate": "status-literals",
       "violation_key": "normalize_product_category()",
-      "justification": "FALSE POSITIVE (same-named column on another table): the regex sweep unions allowed literals by column name and now compares normalize_product_category() assignments for public.products.category against customer_facts_category_check on public.customer_facts.category. Live catalog verified 2026-07-16: public.products has no category CHECK, the trigger is attached to products, and its Herbicide/Foliar Fertilizer/Other outputs are existing valid product categories.",
-      "dated": "2026-07-16"
+      "justification": "Verified live 2026-07-17 false positive from the predicate's documented column-name-only approximation. This trigger assigns Products.category to Foliar Fertilizer, Herbicide, or Other; products.category is unconstrained free text. The only enum-shaped category CHECK is customer_facts_category_check on a different table, so none of these Product assignments can violate that CHECK.",
+      "dated": "2026-07-17"
     },
     {
       "predicate": "ungated-secdef-mutators",
@@ -359,12 +359,6 @@
       "violation_key": "process_offline_action(p_client_action_id uuid, p_idempotency_key text)",
       "justification": "Intentionally callable by any active authenticated field actor for that actor's own permanent offline receipt. Live body verified 2026-07-14: binds v_actor from auth.uid(), requires an active profile, row-locks the receipt, rejects actor_id mismatch with ACTOR_MISMATCH, binds the exact receipt idempotency key, and delegates only to complete_delivery/complete_job, whose canonical authorization remains authoritative. It cannot process another user's receipt or bypass the underlying business-role checks.",
       "dated": "2026-07-14"
-    },
-    {
-      "predicate": "status-literals",
-      "violation_key": "normalize_product_category()",
-      "justification": "Verified live 2026-07-17 false positive from the predicate's documented column-name-only approximation. This trigger assigns Products.category to Foliar Fertilizer, Herbicide, or Other; products.category is unconstrained free text. The only enum-shaped category CHECK is customer_facts_category_check on a different table, so none of these Product assignments can violate that CHECK.",
-      "dated": "2026-07-17"
     }
   ]
 }

@@ -98,22 +98,22 @@ export interface PricingPreviewInputRow {
 
 export interface PricingSnapshot {
   cost: string | null;
-  cost_cents: number | null;
+  cost_cents: bigint | null;
   tier1_margin_percent: string | null;
   tier1_margin: number | null;
   tier1_price: string | null;
-  tier1_price_cents: number | null;
+  tier1_price_cents: bigint | null;
   tier2_margin_percent: string | null;
   tier2_margin: number | null;
   tier2_price: string | null;
-  tier2_price_cents: number | null;
+  tier2_price_cents: bigint | null;
   tier3_margin_percent: string | null;
   tier3_margin: number | null;
   tier3_price: string | null;
-  tier3_price_cents: number | null;
-  tier1_price_per_acre_cents?: number | null;
-  tier2_price_per_acre_cents?: number | null;
-  tier3_price_per_acre_cents?: number | null;
+  tier3_price_cents: bigint | null;
+  tier1_price_per_acre_cents?: bigint | null;
+  tier2_price_per_acre_cents?: bigint | null;
+  tier3_price_per_acre_cents?: bigint | null;
 }
 
 export interface PricingWorksheetPreviewRow {
@@ -223,6 +223,102 @@ export interface ApplyPricingChangeSetInput {
   idempotencyKey: string;
 }
 
+type PricingCentsField =
+  | 'cost_cents'
+  | 'tier1_price_cents'
+  | 'tier2_price_cents'
+  | 'tier3_price_cents'
+  | 'tier1_price_per_acre_cents'
+  | 'tier2_price_per_acre_cents'
+  | 'tier3_price_per_acre_cents';
+
+type PricingSnapshotWire = Omit<PricingSnapshot, PricingCentsField> & {
+  cost_cents: unknown;
+  tier1_price_cents: unknown;
+  tier2_price_cents: unknown;
+  tier3_price_cents: unknown;
+  tier1_price_per_acre_cents?: unknown;
+  tier2_price_per_acre_cents?: unknown;
+  tier3_price_per_acre_cents?: unknown;
+};
+
+type PricingEffectWire = PricingSnapshotWire
+  & Omit<PricingEffect, keyof PricingSnapshot | 'before'>
+  & { before?: PricingSnapshotWire };
+
+type PricingPreviewResultWire = Omit<PricingPreviewResult, 'rows'> & {
+  rows: Array<Omit<PricingPreviewRow, 'effect'> & { effect: PricingEffectWire | null }>;
+};
+
+type ApplyPricingResultWire = Omit<ApplyPricingResult, 'rows'> & {
+  rows: Array<PricingEffectWire & Pick<AppliedPricingRow, 'pricing_version'>>;
+};
+
+function exactDollarCents(value: string | null, field: string): bigint | null {
+  if (value === null) return null;
+  const cents = pricingDollarInputToCents(value);
+  if (cents === null) throw new Error(`Pricing RPC returned an invalid ${field} value.`);
+  return cents;
+}
+
+function exactIntegerCents(value: unknown, field: string): bigint | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'bigint') return value;
+  if (typeof value === 'string' && /^-?\d+$/.test(value)) return BigInt(value);
+  if (typeof value === 'number' && Number.isSafeInteger(value)) return BigInt(value);
+  throw new Error(`Pricing RPC returned an unsafe ${field} value.`);
+}
+
+function normalizePricingSnapshot(snapshot: PricingSnapshotWire): PricingSnapshot {
+  return {
+    ...snapshot,
+    cost_cents: exactDollarCents(snapshot.cost, 'cost'),
+    tier1_price_cents: exactDollarCents(snapshot.tier1_price, 'tier 1 price'),
+    tier2_price_cents: exactDollarCents(snapshot.tier2_price, 'tier 2 price'),
+    tier3_price_cents: exactDollarCents(snapshot.tier3_price, 'tier 3 price'),
+    tier1_price_per_acre_cents: exactIntegerCents(
+      snapshot.tier1_price_per_acre_cents,
+      'tier 1 per-acre cents',
+    ),
+    tier2_price_per_acre_cents: exactIntegerCents(
+      snapshot.tier2_price_per_acre_cents,
+      'tier 2 per-acre cents',
+    ),
+    tier3_price_per_acre_cents: exactIntegerCents(
+      snapshot.tier3_price_per_acre_cents,
+      'tier 3 per-acre cents',
+    ),
+  };
+}
+
+function normalizePricingEffect(effect: PricingEffectWire): PricingEffect {
+  return {
+    ...effect,
+    ...normalizePricingSnapshot(effect),
+    before: effect.before ? normalizePricingSnapshot(effect.before) : undefined,
+  } as PricingEffect;
+}
+
+function normalizePricingPreviewResult(result: PricingPreviewResultWire): PricingPreviewResult {
+  return {
+    ...result,
+    rows: result.rows.map((row) => ({
+      ...row,
+      effect: row.effect ? normalizePricingEffect(row.effect) : null,
+    })),
+  };
+}
+
+function normalizeApplyPricingResult(result: ApplyPricingResultWire): ApplyPricingResult {
+  return {
+    ...result,
+    rows: result.rows.map((row) => ({
+      ...normalizePricingEffect(row),
+      pricing_version: row.pricing_version,
+    })),
+  };
+}
+
 export async function createPricingWorkbookExport(
   input: CreatePricingWorkbookExportInput,
 ): Promise<PricingWorkbookExport> {
@@ -251,7 +347,8 @@ export async function previewProductPricingChanges(
     p_idempotency_key: input.idempotencyKey,
   });
   if (error) throw error;
-  return assertRpcResult<PricingPreviewResult>(data, 'preview_product_pricing_changes');
+  const result = assertRpcResult<PricingPreviewResultWire>(data, 'preview_product_pricing_changes');
+  return normalizePricingPreviewResult(result);
 }
 
 export async function applyProductPricingChangeSet(
@@ -264,5 +361,6 @@ export async function applyProductPricingChangeSet(
     p_idempotency_key: input.idempotencyKey,
   });
   if (error) throw error;
-  return assertRpcResult<ApplyPricingResult>(data, 'apply_product_pricing_change_set');
+  const result = assertRpcResult<ApplyPricingResultWire>(data, 'apply_product_pricing_change_set');
+  return normalizeApplyPricingResult(result);
 }

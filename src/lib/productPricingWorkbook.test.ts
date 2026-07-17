@@ -222,7 +222,7 @@ describe('product pricing workbook', () => {
   });
 
   it('keeps exported cents exact beyond JavaScript safe-integer precision', async () => {
-    const exactValue = '90071992547409.91';
+    const exactValue = '90071992547409.93';
     const exactExport: PricingWorkbookExport = {
       ...pricingExport,
       rows: [{
@@ -244,6 +244,14 @@ describe('product pricing workbook', () => {
     expect(parsed.rows[0].current_cost).toBe(exactValue);
     expect(parsed.rows[0].new_cost).toBe(exactValue);
     expect(parsed.rows[0].tier1_price).toBe(exactValue);
+  });
+
+  it('accepts the zero-row workbook emitted by the generator', async () => {
+    const blob = await generateProductPricingWorkbook({ ...pricingExport, rows: [] });
+    const parsed = await parseProductPricingWorkbook(await blobToArrayBuffer(blob));
+
+    expect(parsed.rowCount).toBe(0);
+    expect(parsed.rows).toEqual([]);
   });
 
   it('rejects duplicate headers before sending workbook rows to the server', async () => {

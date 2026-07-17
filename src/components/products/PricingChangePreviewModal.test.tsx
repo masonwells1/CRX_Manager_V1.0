@@ -38,32 +38,32 @@ function makePreview(overrides: Partial<PricingPreviewResult> = {}): PricingPrev
           pricing_mode: 'price_driven',
           before: {
             cost: '10.00',
-            cost_cents: 1000,
-            tier1_margin_percent: '20', tier1_margin: 0.2, tier1_price: '12.50', tier1_price_cents: 1250,
-            tier2_margin_percent: '25', tier2_margin: 0.25, tier2_price: '13.33', tier2_price_cents: 1333,
-            tier3_margin_percent: '30', tier3_margin: 0.3, tier3_price: '14.29', tier3_price_cents: 1429,
-            tier1_price_per_acre_cents: 625,
+            cost_cents: 1000n,
+            tier1_margin_percent: '20', tier1_margin: 0.2, tier1_price: '12.50', tier1_price_cents: 1250n,
+            tier2_margin_percent: '25', tier2_margin: 0.25, tier2_price: '13.33', tier2_price_cents: 1333n,
+            tier3_margin_percent: '30', tier3_margin: 0.3, tier3_price: '14.29', tier3_price_cents: 1429n,
+            tier1_price_per_acre_cents: 625n,
             tier2_price_per_acre_cents: null,
             tier3_price_per_acre_cents: null,
           },
           cost: '12.00',
-          cost_cents: 1200,
+          cost_cents: 1200n,
           tier1_margin_percent: '-4.35',
            tier1_margin: -0.0435,
           tier1_gross_margin: -0.0417,
           tier1_price: '11.50',
-          tier1_price_cents: 1150,
+          tier1_price_cents: 1150n,
           tier2_margin_percent: '20',
            tier2_margin: 0.2,
           tier2_gross_margin: 0.25,
           tier2_price: '15.00',
-          tier2_price_cents: 1500,
+          tier2_price_cents: 1500n,
           tier3_margin_percent: '25',
            tier3_margin: 0.25,
           tier3_gross_margin: 0.33333333,
           tier3_price: '16.00',
-          tier3_price_cents: 1600,
-          tier1_price_per_acre_cents: 575,
+          tier3_price_cents: 1600n,
+          tier1_price_per_acre_cents: 575n,
           tier2_price_per_acre_cents: null,
           tier3_price_per_acre_cents: null,
         },
@@ -102,6 +102,23 @@ describe('PricingChangePreviewModal', () => {
     expect(
       within(rows[1]).getByText(/changed after the pricing data was loaded/i),
     ).toBeInTheDocument();
+  });
+
+  it('formats per-acre cents exactly beyond JavaScript safe-integer precision', () => {
+    const preview = makePreview();
+    preview.rows[1].effect!.tier2_price_per_acre_cents = 9_007_199_254_740_993n;
+
+    render(
+      <PricingChangePreviewModal
+        open
+        preview={preview}
+        applying={false}
+        onClose={vi.fn()}
+        onApprove={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('$90,071,992,547,409.93 / acre')).toBeInTheDocument();
   });
 
   it('disables approval unless the preview is applyable with ready rows', () => {

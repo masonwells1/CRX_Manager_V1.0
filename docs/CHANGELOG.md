@@ -65,8 +65,6 @@ Add CodeRabbit AI PR-review config (.coderabbit.yaml) tuned to CRX hard rules; o
 
 ## 2026-07-17 — APPLIED save_customer ownership enforcement to live (ledger 20260717123000) under Mason's in-chat OK. Post-apply: function hash changed, single overload, all gates present, grants clean (no anon), all 17 DB sweeps PASS, rolled-back live probe POST_PASS_ROLLBACK (rep denied editing non-assigned customer, own edit works). Updated migration-history row 744 + DECISION_LOG to applied.
 
-APPLIED save_customer ownership enforcement to live (ledger 20260717123000) under Mason's in-chat OK. Post-apply: function hash changed, single overload, all gates present, grants clean (no anon), all 17 DB sweeps PASS, rolled-back live probe POST_PASS_ROLLBACK (rep denied editing non-assigned customer, own edit works). Updated migration-history row 744 + DECISION_LOG to applied.
-
 - **Commits this session** (git log --since=12.hours --author=Mason):
   - `addda7cd Close money and inventory gauntlet gaps (#153)`
   - `296d2de7 CRM loop closeout: final-gauntlet fixes + morning report (#152)`

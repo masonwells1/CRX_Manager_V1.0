@@ -174,11 +174,11 @@ enums, and generated columns that hooks and reviewer agents check against.
   preview/apply RPC engine. The preview shows server-authoritative Product
   identity and old → new cost, margin, tier-price, and per-acre effects. The
   bootstrap records governed history through one trigger while retaining
-  legacy write compatibility. A separate parked pre-deploy guard rejects a
-  margin-driven zero cost while preserving legacy mode and must land before
-  the frontend. The later parked enforcement cutover denies direct
-  pricing/history writes only after this frontend is deployed and its rollback
-  window closes. Bulk Product Import remains a pricing-free CSV
+  legacy write compatibility. The live zero-cost guard rejects a
+  margin-driven zero cost while preserving legacy mode. The later parked strict
+  direct-write enforcement cutover denies direct pricing/history writes only
+  after this frontend is deployed and its rollback window closes. Bulk Product
+  Import remains a pricing-free CSV
   Product-details creator. The repository rejects supplier price sheets and
   price-bearing Product lists before OCR, but that Edge Function change is not
   production behavior until a separately approved deployment.
