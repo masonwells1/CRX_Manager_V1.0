@@ -24,7 +24,7 @@ Operative rule: the in-body gates (`NOT_CUSTOMER_OWNER` / `REP_CANNOT_REASSIGN` 
 mirror the customers RLS policies; keep function-body authorization and RLS in lockstep if
 either changes. APPLIED LIVE 2026-07-17 (ledger version 20260717122244) under Mason's
 in-chat OK; post-apply live probe confirmed a rep is denied editing a non-assigned customer.
-(Source: branch `claude/amazing-ptolemy-9e7e0a`; migration-history row 733.)
+(Source: branch `claude/amazing-ptolemy-9e7e0a`; migration-history row 734.)
 
 ## 2026-07-17 — SETTLED (Mason, in-chat): five CRM owner decisions
 
