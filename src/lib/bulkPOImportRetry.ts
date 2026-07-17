@@ -38,6 +38,12 @@ export function trimBulkPOIdentityBoundary(value: string): string {
   return value.replace(/^ +| +$/g, '');
 }
 
+export function hasBulkPOIdentityText(value: string): boolean {
+  // Keep the durable identity byte-for-byte compatible with PostgreSQL while
+  // rejecting OCR artifacts that contain no visible text at all.
+  return value.trim().length > 0;
+}
+
 function normalizeIdentityText(value: string): string {
   // Postgres locale-aware lower() and JavaScript Unicode case folding can
   // disagree. Fold ASCII explicitly on both sides of the RPC boundary and
@@ -87,6 +93,11 @@ export function normalizeBulkPOInvoiceDate(value: string): string | null {
  * content, but must not let one vendor invoice acquire a second durable claim.
  */
 export function buildBulkPOIntentKey(document: BulkPOIntentDocument): string | null {
+  if (
+    !hasBulkPOIdentityText(document.vendorName)
+    || !hasBulkPOIdentityText(document.invoiceNumber)
+  ) return null;
+
   const vendorName = normalizeIdentityText(document.vendorName);
   const invoiceNumber = normalizeIdentityText(document.invoiceNumber);
   // The claim is global across employees and devices. Without a vendor, two
@@ -162,13 +173,25 @@ export function pendingBulkPOIntentStorageKey(intentKey: string): string {
   return `${PENDING_KEY_PREFIX}${hash.toString(16).padStart(16, '0')}`;
 }
 
+function legacyPendingBulkPOIntentStorageKey(intentKey: string): string {
+  const separatorIndex = intentKey.indexOf(DOCUMENT_IDENTITY_SEPARATOR);
+  if (separatorIndex === -1) {
+    return pendingBulkPOIntentStorageKey(intentKey.trim().toLowerCase());
+  }
+  const vendorName = intentKey.slice(0, separatorIndex).trim().toLowerCase();
+  const invoiceNumber = intentKey.slice(separatorIndex + 1).trim().toLowerCase();
+  return pendingBulkPOIntentStorageKey(
+    `${vendorName}${DOCUMENT_IDENTITY_SEPARATOR}${invoiceNumber}`,
+  );
+}
+
 export function getPendingBulkPOIntent(
   pending: PendingBulkPOIntents,
   intentKey: string,
 ): PendingBulkPOIntent | undefined {
   const currentKey = pendingBulkPOIntentStorageKey(intentKey);
-  const legacyUnicodeFoldKey = pendingBulkPOIntentStorageKey(intentKey.toLowerCase());
-  return pending[currentKey] ?? pending[legacyUnicodeFoldKey];
+  const legacyBrowserKey = legacyPendingBulkPOIntentStorageKey(intentKey);
+  return pending[currentKey] ?? pending[legacyBrowserKey];
 }
 
 function storageKey(profileId: string): string {
@@ -229,12 +252,12 @@ export function ensurePendingBulkPOIntent(
   now = Date.now(),
 ): PendingBulkPOIntent {
   const storageIntentKey = pendingBulkPOIntentStorageKey(intentKey);
-  const legacyUnicodeFoldKey = pendingBulkPOIntentStorageKey(intentKey.toLowerCase());
-  const existing = pending[storageIntentKey] ?? pending[legacyUnicodeFoldKey];
+  const legacyBrowserKey = legacyPendingBulkPOIntentStorageKey(intentKey);
+  const existing = pending[storageIntentKey] ?? pending[legacyBrowserKey];
   if (existing) {
-    if (legacyUnicodeFoldKey !== storageIntentKey && pending[legacyUnicodeFoldKey]) {
+    if (legacyBrowserKey !== storageIntentKey && pending[legacyBrowserKey]) {
       pending[storageIntentKey] = existing;
-      delete pending[legacyUnicodeFoldKey];
+      delete pending[legacyBrowserKey];
     }
     existing.updatedAt = now;
     return existing;

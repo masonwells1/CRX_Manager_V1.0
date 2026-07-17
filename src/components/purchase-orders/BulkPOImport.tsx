@@ -22,6 +22,7 @@ import {
   bulkPOImportFailureGuidance,
   ensurePendingBulkPOIntent,
   getPendingBulkPOIntent,
+  hasBulkPOIdentityText,
   loadPendingBulkPOIntents,
   markBulkPOIntentImported,
   normalizeBulkPOInvoiceDate,
@@ -403,7 +404,9 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
 
         const intentKey = buildParsedPOIntentKey(po);
         if (!intentKey) {
-          const missingField = !po.vendor_name.trim() ? 'vendor name' : 'vendor invoice number';
+          const missingField = !hasBulkPOIdentityText(po.vendor_name)
+            ? 'vendor name'
+            : 'vendor invoice number';
           toast('error', `${po.source_file}: enter the ${missingField} before importing.`);
           failedCount++;
           continue;

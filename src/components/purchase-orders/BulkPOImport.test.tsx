@@ -356,13 +356,13 @@ describe('BulkPOImport', () => {
     ));
   });
 
-  it('requires a vendor before creating a global duplicate claim', async () => {
+  it('rejects an invisible whitespace-only vendor before creating a duplicate claim', async () => {
     mocks.processDocumentWithOCR.mockResolvedValue({
       success: true,
       raw_text: 'parsed without vendor',
       document_type: 'purchase_order',
       parsed_data: {
-        vendor_name: '',
+        vendor_name: '\u00a0\t',
         invoice_number: 'INV-NO-VENDOR',
         invoice_date: '2026-07-16',
         items: [{
