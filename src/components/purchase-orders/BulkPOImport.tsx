@@ -195,12 +195,17 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
   const [parsing, setParsing] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [parsedPOs, setParsedPOs] = useState<ParsedPO[] | null>(null);
-  const [uploadResults, setUploadResults] = useState<{ success: number; failed: number } | null>(null);
+  const [uploadResults, setUploadResults] = useState<{
+    imported: number;
+    skipped: number;
+    failed: number;
+  } | null>(null);
   const [products, setProducts] = useState<Product[]>([]);
   const [vendors, setVendors] = useState<string[]>([]);
   const [showRawText, setShowRawText] = useState<number | null>(null);
   const pendingIntentsRef = useRef<PendingBulkPOIntents>({});
   const pendingProfileRef = useRef<string | null>(null);
+  const refreshNeededRef = useRef(false);
 
   // Product search state
   const [productSearchOpen, setProductSearchOpen] = useState<{ poIdx: number; itemIdx: number } | null>(null);
@@ -379,7 +384,6 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
     }
 
     setUploading(true);
-    let successCount = 0;
     let newSuccessCount = 0;
     let skippedCount = 0;
     let failedCount = 0;
@@ -399,7 +403,6 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
           continue;
         }
         if (isImportedBulkPOIntent(pendingIntentsRef.current, intentKey)) {
-          successCount++;
           skippedCount++;
           continue;
         }
@@ -476,7 +479,6 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
         );
         savePendingBulkPOIntents(localStorage, profile.id, pendingIntentsRef.current);
 
-        successCount++;
         if (savedPO.status === 'already_imported') skippedCount++;
         else newSuccessCount++;
       } catch (error) {
@@ -485,12 +487,18 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
       }
     }
 
-    setUploadResults(failedCount === 0 ? { success: successCount, failed: 0 } : null);
+    setUploadResults(failedCount === 0
+      ? { imported: newSuccessCount, skipped: skippedCount, failed: 0 }
+      : null);
     setUploading(false);
 
     if (newSuccessCount > 0) {
+      refreshNeededRef.current = true;
       toast('success', `Imported ${newSuccessCount} purchase order${newSuccessCount !== 1 ? 's' : ''}`);
-      if (failedCount === 0) onSuccess();
+      if (failedCount === 0) {
+        refreshNeededRef.current = false;
+        onSuccess();
+      }
     }
     if (skippedCount > 0) {
       toast('info', `Skipped ${skippedCount} document${skippedCount !== 1 ? 's' : ''} already imported.`);
@@ -506,7 +514,12 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
     setUploadResults(null);
     setProductSearchOpen(null);
     setProductQuery('');
-    onClose();
+    if (refreshNeededRef.current) {
+      refreshNeededRef.current = false;
+      onSuccess();
+    } else {
+      onClose();
+    }
   };
 
   const reset = () => {
@@ -911,7 +924,10 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
               <CheckCircle className="w-10 h-10 text-green-600 mx-auto mb-3" />
               <p className="text-lg font-semibold text-green-800">Import Complete</p>
               <div className="text-sm text-green-700 mt-2 space-y-1">
-                <p>Successfully imported: {uploadResults.success} purchase order{uploadResults.success !== 1 ? 's' : ''}</p>
+                <p>Successfully imported: {uploadResults.imported} purchase order{uploadResults.imported !== 1 ? 's' : ''}</p>
+                {uploadResults.skipped > 0 && (
+                  <p>Already imported and skipped: {uploadResults.skipped}</p>
+                )}
                 {uploadResults.failed > 0 && (
                   <p className="text-red-600">Failed: {uploadResults.failed}</p>
                 )}

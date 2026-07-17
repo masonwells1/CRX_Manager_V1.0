@@ -200,7 +200,11 @@ describe('money and inventory gauntlet fixes', () => {
     expect(bulkImport).toContain("savedPO.status === 'already_imported'");
     expect(bulkImport).toContain('bulk_import_intent_key: documentClaimKey');
     expect(bulkImport).toContain('savedPO.po_number');
-    expect(bulkImport).toContain('if (failedCount === 0) onSuccess()');
+    expect(bulkImport).toContain('refreshNeededRef.current = true');
+    expect(bulkImport).toContain('refreshNeededRef.current = false;\n        onSuccess()');
+    expect(bulkImport).toContain('if (refreshNeededRef.current)');
+    expect(bulkImport).toContain('imported: newSuccessCount, skipped: skippedCount');
+    expect(bulkImport).not.toContain('successCount++');
     expect(bulkImport).toContain('savePendingBulkPOIntents(localStorage, profile.id');
     expect(bulkImport).toContain('setUploadResults(failedCount === 0');
     expect(idempotency).toContain('const uuid = crypto.randomUUID()');

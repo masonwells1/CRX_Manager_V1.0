@@ -10402,26 +10402,6 @@ export type Database = {
           pct_of_revenue: number
         }[]
       }
-      get_call_list_lapsed_products: {
-        Args: { p_rep_id?: string }
-        Returns: Json
-      }
-      get_call_list_no_recent_contact: {
-        Args: { p_days?: number; p_rep_id?: string }
-        Returns: Json
-      }
-      get_call_list_prepay_prospects: {
-        Args: { p_min_prior_spend_cents?: number; p_rep_id?: string }
-        Returns: Json
-      }
-      get_call_list_stale_quotes: {
-        Args: { p_days?: number; p_rep_id?: string }
-        Returns: Json
-      }
-      get_call_list_unassigned_accounts: {
-        Args: { p_rep_id?: string }
-        Returns: Json
-      }
       get_chemical_history: {
         Args: { p_end_date: string; p_product_id: string; p_start_date: string }
         Returns: {
