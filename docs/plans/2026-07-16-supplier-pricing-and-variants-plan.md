@@ -165,8 +165,8 @@ Automated vendor selection; automatic sell-price changes from imports; machine-r
 ## 9. Open owner decisions
 
 1. **Approve this architecture** (observation layer + never-auto-change-sell-prices + owner-controlled worksheet; adversarially hardened rev 4, manual-ingestion rev 5). Recommended: yes.
-2. **Vendor merges** — confirm "The Anderson's"="The Andersons" and "Van Deist"="Van Diest" (already an open TODO item).
-3. **Priority** — where Phase 1a/1b slot against the current roadmap (CRM Phase 2, etc.).
+2. **Vendor merges — SETTLED 2026-07-17 by Mason:** both pairs ARE the same vendor; merge them. (His reply named "The Anderson's and Van Deist." Recommended canonical display spellings: the companies' official ones — **"The Andersons"** and **"Van Diest"** — with the other variants preserved as aliases, which the alias system keeps searchable either way. If Mason prefers his spellings as the display names, one word overrides this.)
+3. **Priority** — moot: Mason launched the Codex build 2026-07-16; Phase 1a built overnight.
 
 *(SETTLED 2026-07-16 by Mason: no AI/OCR extraction of supplier PDFs — manual staged entry only. This also removed the Anthropic-API-key and PDF-sample-corpus asks from this project; the vendor-bill pilot's key need is unrelated and stands on its own.)*
 
