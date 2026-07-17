@@ -49,7 +49,7 @@ Proof required: a real round-trip on dev — export the sheet, edit 3+ products 
 ## Phase 1b — Supplier evidence (acceptance criteria)
 
 Deliverables (per plan §4, §4a, §5, §6):
-1. Vendor canonicalization: `vendor_aliases` (raw + normalized + review flow) and `legacy_vendor_resolution`. Build the merge/alias tooling — **but do NOT execute the "The Anderson's"→"The Andersons" / "Van Deist"→"Van Diest" merges until Mason confirms them** (open decision).
+1. Vendor canonicalization: `vendor_aliases` (raw + normalized + review flow) and `legacy_vendor_resolution`. **Merges CONFIRMED by Mason 2026-07-17:** "The Anderson's"/"The Andersons" are one vendor and "Van Deist"/"Van Diest" are one vendor — execute both merges. Canonical display names: use the official spellings "The Andersons" and "Van Diest", keeping the other variants as aliases (Mason can override the display spelling in one word if he prefers his).
 2. `product_supplier_links` with human-approved **directional** `inventory_units_per_supplier_unit` (NOT a generic "conversion_factor" — direction must be unambiguous for money math); SKU-gated reuse rules. ALSO (Gate 0 for the parked inventory-costing plan, `docs/plans/2026-07-16-inventory-costing-plan.md`): add PO-line snapshot columns so future purchase_order_items capture link id, supplier unit, inventory unit, the conversion, supplier qty, supplier unit cost cents, exact receipt total cents, and normalized inventory quantity at PO-create/receive time.
 3. Staging (`supplier_price_imports`/`_rows`) + append-only `supplier_price_observations` with DB-enforced immutability.
 4. **Supplier quote sheets**: per-supplier .xlsx template (prefilled with linked products + last known price) → upload → staged → review screen ("adding N observations, changing ZERO sell prices") → approve. Plus quick single-quote entry. Same .xlsx format contract as the worksheet.
@@ -62,7 +62,7 @@ Proof required: enter two suppliers' quotes for the same product (different pack
 
 ## Open owner items (do not resolve yourself)
 
-- Vendor merges (above) — ask Mason before executing.
+- ~~Vendor merges~~ — SETTLED 2026-07-17, see Phase 1b deliverable 1: both merges approved.
 - Anything ambiguous in the plan → ask Mason in plain English rather than guessing. He cannot read code; describe behavior, not diffs.
 
 ## When blocked
