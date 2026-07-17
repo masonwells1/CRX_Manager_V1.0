@@ -54,6 +54,7 @@ DECLARE
   v_incoming_ids uuid[];
   v_result jsonb;
   v_existing jsonb;
+  v_cached_customer_id uuid;
 BEGIN
   v_actor := auth.uid();
   IF v_actor IS NULL THEN RAISE EXCEPTION 'AUTH_REQUIRED'; END IF;
@@ -104,7 +105,28 @@ BEGIN
 
   IF p_idempotency_key IS NOT NULL THEN
     v_existing := check_idempotency(p_idempotency_key, 'save_customer');
-    IF v_existing IS NOT NULL THEN RETURN v_existing; END IF;
+    IF v_existing IS NOT NULL THEN
+      -- Bind the replay to the cached target (Codex r2, 2026-07-17):
+      -- check_idempotency is scoped only by key+operation, so the cached result
+      -- must name the same customer as this request and still pass ownership
+      -- before it is released (same pattern as save_purchase_order's replay).
+      v_cached_customer_id := NULLIF(v_existing->>'customer_id', '')::uuid;
+      IF v_cached_customer_id IS NULL THEN
+        RAISE EXCEPTION 'SAVE_CUSTOMER_RESULT_INVALID';
+      END IF;
+      IF p_customer_id IS NOT NULL
+         AND p_customer_id IS DISTINCT FROM v_cached_customer_id THEN
+        RAISE EXCEPTION 'IDEMPOTENCY_PAYLOAD_CONFLICT';
+      END IF;
+      IF v_actor_role <> 'admin' AND NOT EXISTS (
+        SELECT 1 FROM customers
+        WHERE id = v_cached_customer_id
+          AND assigned_sales_rep = v_actor
+      ) THEN
+        RAISE EXCEPTION 'NOT_CUSTOMER_OWNER';
+      END IF;
+      RETURN v_existing;
+    END IF;
   END IF;
 
   IF p_customer_payload ? 'default_commission_split'
@@ -265,6 +287,12 @@ BEGIN
      OR v_src NOT LIKE '%REP_MUST_SELF_ASSIGN%'
      OR v_src NOT LIKE '%REP_CANNOT_REASSIGN%' THEN
     RAISE EXCEPTION 'VERIFY FAILED: ownership gates missing from save_customer';
+  END IF;
+
+  -- replay binding present (cached result bound to requested customer + ownership)
+  IF v_src NOT LIKE '%IDEMPOTENCY_PAYLOAD_CONFLICT%'
+     OR v_src NOT LIKE '%SAVE_CUSTOMER_RESULT_INVALID%' THEN
+    RAISE EXCEPTION 'VERIFY FAILED: idempotency replay binding missing from save_customer';
   END IF;
 
   -- prior behavior preserved (role gate + U3 column persistence)
