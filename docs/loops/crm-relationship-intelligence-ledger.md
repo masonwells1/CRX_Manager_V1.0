@@ -61,7 +61,12 @@ Statuses: TODO / BUILDING / GATE / DONE / PARKED(reason)
 - **Recording/AI-disclosure wording** — default: standard "this call may be recorded" + AI self-ID; Mason to approve final wording before the voice vendor goes live (Phase 5, out of this loop).
 - **Transcript/recording retention + purge procedure** — default: `retention_expires_at` column exists but NO auto-purge is built in this loop; purge design deferred.
 
+## Parked follow-ups (task chips spawned; recorded per Sol final gauntlet)
+- **Retry-unsafe direct inserts** — LogInteractionModal's interaction+follow-up insert and CustomerFacts' add-fact insert are direct table writes: a committed response lost in transit, then retried, double-logs. Fix = idempotent SECDEF RPC(s) through the full gauntlet (task chip `Add idempotent RPC for CRM call logging` covers the interaction path; extend to the fact-add path in the same session). The review/supersede fact RPCs already carry idempotency keys.
+
 ## Phase 5 design notes (carry forward)
+- **get_customer_prep_card is not service-role callable** (in-body authz requires an authenticated active profile; service-role calls have no user session). The AI receptionist needs a server-only, service-role-granted entry point sharing the same internal logic — an ADDITIVE function, no schema rework. (Sol final gauntlet.)
+- **customer_documents cannot take clean service ingestion yet**: uploaded_by is NOT NULL → human profile, and there is no provider document id / external-event link for webhook dedup. Phase 5 needs an additive amendment (nullable-for-service actor semantics + unique provider_document_id) BEFORE the AI channel writes documents. (Sol final gauntlet.)
 - Provenance guard trigger fires for service role too (auth.uid() NULL → is_admin() false). The AI-intake endpoint must INSERT provenance (provider/external_call_id) with the row and never UPDATE it afterward — or Phase 5 adds a service-role bypass to the guard. (RLS re-verify note, 2026-07-16.)
 
 ## Cycle log

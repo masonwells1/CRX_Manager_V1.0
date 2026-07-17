@@ -352,7 +352,9 @@ export default function CallLists() {
     setRows([]);
     setPeekKey(null);
     setApplied((current) => {
-      if (selectedList === 'prepay') return { ...current, minPriorSpendCents: (parseDollarsToCents(minPriorSpend) || DEFAULT_MIN_PRIOR_SPEND_CENTS) };
+      // Blank falls back to the default; an explicit "0" is a legitimate
+      // show-everyone threshold and must NOT be coerced to the default.
+      if (selectedList === 'prepay') return { ...current, minPriorSpendCents: minPriorSpend.trim() === '' ? DEFAULT_MIN_PRIOR_SPEND_CENTS : parseDollarsToCents(minPriorSpend) };
       if (selectedList === 'no-recent-contact') return { ...current, noRecentDays: parseDays(days.noRecent, DEFAULT_NO_CONTACT_DAYS) };
       if (selectedList === 'stale-quotes') return { ...current, staleQuoteDays: parseDays(days.staleQuotes, DEFAULT_STALE_QUOTE_DAYS) };
       return { ...current };
