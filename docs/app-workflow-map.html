@@ -84,7 +84,7 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(
 <div id="header">
   <h1>⬡ CRX Manager — Architecture Map</h1>
   <!-- __STATS_START__ -->
-  <span id="stat-line" style="color:var(--muted);font-size:.8rem">93 routes · 223 RPC calls · 5 issues · Updated Jul 16, 2026</span>
+  <span id="stat-line" style="color:var(--muted);font-size:.8rem">94 routes · 228 RPC calls · 5 issues · Updated Jul 16, 2026</span>
   <!-- __STATS_END__ -->
   <div id="tabs">
     <button class="tab active" onclick="showTab('graph')">Graph</button>
@@ -564,6 +564,14 @@ const NODES = [
       "type": "page-sales",
       "group": "Customers",
       "path": "/customers/:id",
+      "problem": false
+    },
+    {
+      "id": "call-lists",
+      "label": "CallLists",
+      "type": "page-sales",
+      "group": "Core",
+      "path": "/call-lists",
       "problem": false
     },
     {
@@ -1348,6 +1356,11 @@ const EDGES = [
     {
       "s": "blend-ticket-detail",
       "t": "order-detail",
+      "type": "nav"
+    },
+    {
+      "s": "call-lists",
+      "t": "customer-detail",
       "type": "nav"
     },
     {

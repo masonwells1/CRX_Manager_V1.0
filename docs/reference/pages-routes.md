@@ -1,4 +1,4 @@
-# Pages & Routes Reference (76 pages, 83 routes)
+# Pages & Routes Reference (77 pages, 84 routes)
 
 > Counts verified 2026-07-13 against `src/App.tsx` (`lazy(` call count = pages) and this table's own row count (routes); `npm run check:docs` (`scripts/check-doc-drift.mjs`) enforces both numbers stay in sync with the codebase on every run.
 
@@ -10,6 +10,7 @@
 | `/products/:id` | ProductDetail | Product CRUD (pricing tiers, EPA info, RUP status). Combobox dropdowns for Vendor/Manufacturer/Category. Grouped sections: Product Form → Container (size+unit+type) → Inventory Unit → Application Rates |
 | `/customers` | Customers | Customer list with search/filter, bulk import |
 | `/customers/:id` | CustomerDetail | Profile, addresses, credit limit, transaction review, finance charge settings, season summary |
+| `/call-lists` | CallLists | **CRM** seasonal call worklists — prepay prospects, no-recent-contact, stale quotes, lapsed products, unassigned accounts (admin-only list); per-row call-prep peek + log-call. Roles: admin/sales_rep. Added 2026-07-16 (CRM Phase 3) |
 | `/quotes` | Quotes | Quote list with status filters |
 | `/quotes/new` | QuoteBuilder | Multi-line quote with tiered pricing, commission splits, PDF, auto-emails PDF to customer on send |
 | `/quotes/:id` | QuoteBuilder | Edit existing quote |

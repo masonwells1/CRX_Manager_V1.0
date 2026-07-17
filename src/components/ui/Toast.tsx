@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from 'react';
 import { CheckCircle2, AlertCircle, AlertTriangle, Info, X } from 'lucide-react';
 
 type ToastType = 'success' | 'error' | 'info' | 'warning';
@@ -51,8 +51,16 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
+  // Memoized so consumers don't re-render on every toast (the wrapping object
+  // used to be rebuilt each render even though addToast itself was stable).
+  // The destructured `toast` function consumers put in effect deps was already
+  // stable — an identity-UNSTABLE stub in tests is what produces the
+  // load-fail→toast→reload infinite loop; Toast.loopguard.test.tsx pins the
+  // real-provider behavior.
+  const contextValue = useMemo(() => ({ toast: addToast }), [addToast]);
+
   return (
-    <ToastContext.Provider value={{ toast: addToast }}>
+    <ToastContext.Provider value={contextValue}>
       {children}
       <div
         data-toast-viewport
