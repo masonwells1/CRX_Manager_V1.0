@@ -4,6 +4,10 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-17 — Split-billing architecture dig + per-line-item custom-split design spec v2 (review-hardened via gpt-5.6-terra xhigh plan review; 4 blockers folded in). Owner workflow settled: field split=default, adjust in unposted draft, unpost reversible. Committed 4b695109; Codex builds next week. No code/DB changes.
+
+Split-billing architecture dig + per-line-item custom-split design spec v2 (review-hardened via gpt-5.6-terra xhigh plan review; 4 blockers folded in). Owner workflow settled: field split=default, adjust in unposted draft, unpost reversible. Committed 4b695109; Codex builds next week. No code/DB changes.
+
 ## 2026-07-17 — Applied Supplier Pricing Phase 1a legacy Product repeat-save repair
 
 - Applied the small compatibility migration for the currently deployed Product page (live ledger `20260717171331` / source name `20260717170000_restore_legacy_pricing_version_compat`): it ignores the page's stale submitted pricing version, while the database continues to own and increment the value. Governed worksheet/product RPC calls still reject any client-supplied version, and the parked final cutover restores the unconditional strict rejection. Both required migration reviews were clean; disposable and rolled-back-live proofs each execute two consecutive old-form saves, with the live check ending `PHASE1A_LIVE_REPEAT_SAVE_ROLLBACK_PASS` and leaving no data behind.
