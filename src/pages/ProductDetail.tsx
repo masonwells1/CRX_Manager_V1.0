@@ -22,6 +22,7 @@ import type { CostHistory, EpaLookupResult, Product, UnitConversion } from '../t
 import {
   applyProductPricingChangeSet,
   formatPricingMarginPercent,
+  pricingDollarInputToCents,
   previewProductPricingChanges,
   type PricingMode,
   type PricingPreviewInputRow,
@@ -41,6 +42,9 @@ const PRODUCT_PRICING_FIELDS = [
   'tier1_price', 'tier2_price', 'tier3_price',
 ] as const satisfies ReadonlyArray<keyof Product>;
 
+type ProductPricingMoneyField = 'current_cost' | 'tier1_price' | 'tier2_price' | 'tier3_price';
+type ProductPricingMoneyDrafts = Partial<Record<ProductPricingMoneyField, string>>;
+
 function nonpricingProductPayload(product: Partial<Product>): Record<string, unknown> {
   return Object.fromEntries([
     ...PRODUCT_NONPRICING_FIELDS.map((field) => [field, product[field]] as const),
@@ -56,8 +60,21 @@ function pricingModeFor(product: Partial<Product>): PricingMode | '' {
   return '';
 }
 
-function pricingChanged(product: Partial<Product>, persisted: Product | null): boolean {
+function pricingMoneyInput(
+  product: Partial<Product>,
+  drafts: ProductPricingMoneyDrafts,
+  field: ProductPricingMoneyField,
+): string {
+  return drafts[field] ?? (product[field] == null ? '' : String(product[field]));
+}
+
+function pricingChanged(
+  product: Partial<Product>,
+  persisted: Product | null,
+  moneyDrafts: ProductPricingMoneyDrafts,
+): boolean {
   if (!persisted) return false;
+  if (Object.keys(moneyDrafts).length > 0) return true;
   return PRODUCT_PRICING_FIELDS.some((field) => product[field] !== persisted[field]);
 }
 
@@ -71,12 +88,13 @@ function pricingPreviewRow(
   persisted: Product,
   mode: PricingMode,
   reason: string,
+  moneyDrafts: ProductPricingMoneyDrafts,
   costOverride?: string,
 ): PricingPreviewInputRow {
   if (!Number.isInteger(persisted.pricing_version) || (persisted.pricing_version ?? 0) < 1) {
     throw new Error('This Product does not have a pricing version yet. Refresh after the Phase 1a database migration is available.');
   }
-  const cost = costOverride ?? (product.current_cost == null ? null : String(product.current_cost));
+  const cost = costOverride ?? pricingMoneyInput(product, moneyDrafts, 'current_cost');
   if (cost === null || cost === '') throw new Error('Enter the Product cost before reviewing pricing.');
   const row: PricingPreviewInputRow = {
     product_id: persisted.id,
@@ -97,11 +115,12 @@ function pricingPreviewRow(
     }
   } else {
     for (const tier of [1, 2, 3] as const) {
-      const value = product[`tier${tier}_price` as const];
-      if (value === null || value === undefined) {
+      const field = `tier${tier}_price` as ProductPricingMoneyField;
+      const value = pricingMoneyInput(product, moneyDrafts, field);
+      if (value === '') {
         throw new Error('Price-driven pricing requires all three tier prices.');
       }
-      row[`tier${tier}_price` as const] = String(value);
+      row[`tier${tier}_price` as const] = value;
     }
   }
   return row;
@@ -244,6 +263,7 @@ export default function ProductDetail() {
   const [costNote, setCostNote] = useState('');
   const [persistedProduct, setPersistedProduct] = useState<Product | null>(null);
   const [pricingMode, setPricingMode] = useState<PricingMode | ''>('');
+  const [pricingMoneyDrafts, setPricingMoneyDrafts] = useState<ProductPricingMoneyDrafts>({});
   const [pricingPreview, setPricingPreview] = useState<PricingPreviewResult | null>(null);
   const [applyingPricing, setApplyingPricing] = useState(false);
   const [persistedLabelFields, setPersistedLabelFields] = useState<{
@@ -275,6 +295,7 @@ export default function ProductDetail() {
       setProduct(loadedProduct);
       setPersistedProduct(loadedProduct);
       setPricingMode(pricingModeFor(loadedProduct));
+      setPricingMoneyDrafts({});
       setIsDirty(false);
       setPersistedLabelFields({
         signalWord: loadedProduct.signal_word,
@@ -355,7 +376,14 @@ export default function ProductDetail() {
     }
     const preview = await previewProductPricingChanges({
       source: 'product_page',
-      rows: [pricingPreviewRow(product, persistedProduct, pricingMode, reason, costOverride)],
+      rows: [pricingPreviewRow(
+        product,
+        persistedProduct,
+        pricingMode,
+        reason,
+        pricingMoneyDrafts,
+        costOverride,
+      )],
       performedBy: profile.id,
       idempotencyKey: previewPricingIdem.getKey(),
     });
@@ -370,24 +398,17 @@ export default function ProductDetail() {
       return;
     }
 
-    // Cost must be non-negative
-    if (product.current_cost != null && product.current_cost < 0) {
-      toast('error', 'Cost cannot be negative');
-      return;
-    }
-
-    // Tier prices must be non-negative
-    if (product.tier1_price != null && product.tier1_price < 0) {
-      toast('error', 'Tier 1 price cannot be negative');
-      return;
-    }
-    if (product.tier2_price != null && product.tier2_price < 0) {
-      toast('error', 'Tier 2 price cannot be negative');
-      return;
-    }
-    if (product.tier3_price != null && product.tier3_price < 0) {
-      toast('error', 'Tier 3 price cannot be negative');
-      return;
+    for (const [field, label] of [
+      ['current_cost', 'Cost'],
+      ['tier1_price', 'Tier 1 price'],
+      ['tier2_price', 'Tier 2 price'],
+      ['tier3_price', 'Tier 3 price'],
+    ] as const) {
+      const value = pricingMoneyInput(product, pricingMoneyDrafts, field);
+      if (value !== '' && pricingDollarInputToCents(value) === null) {
+        toast('error', `${label} must be a non-negative dollar amount with no more than two decimal places`);
+        return;
+      }
     }
 
     // Container size must be positive if set
@@ -407,9 +428,11 @@ export default function ProductDetail() {
     }
 
     // Warn (but allow) if price < cost. The server preview remains authoritative.
-    const cost = product.current_cost ?? 0;
-    const prices = [product.tier1_price, product.tier2_price, product.tier3_price].filter((p): p is number => p != null && p > 0);
-    if (cost > 0 && prices.some((p) => p < cost)) {
+    const costCents = pricingDollarInputToCents(pricingMoneyInput(product, pricingMoneyDrafts, 'current_cost')) ?? 0n;
+    const priceCents = (['tier1_price', 'tier2_price', 'tier3_price'] as const)
+      .map((field) => pricingDollarInputToCents(pricingMoneyInput(product, pricingMoneyDrafts, field)))
+      .filter((value): value is bigint => value !== null && value > 0n);
+    if (costCents > 0n && priceCents.some((price) => price < costCents)) {
       toast('warning', 'Warning: One or more tier prices are below cost (negative margin)');
     }
 
@@ -429,7 +452,7 @@ export default function ProductDetail() {
         return;
       }
 
-      const hasPricingChanges = pricingChanged(product, persistedProduct);
+      const hasPricingChanges = pricingChanged(product, persistedProduct, pricingMoneyDrafts);
       const hasProductDetailChanges = productDetailsChanged(product, persistedProduct);
       if (hasPricingChanges && hasProductDetailChanges) {
         throw new Error('Save Product details and pricing in separate review steps. Revert one kind of change, save the other, then make the remaining change.');
@@ -456,16 +479,12 @@ export default function ProductDetail() {
   };
 
   const handleCostUpdate = async () => {
-    const cost = parseFloat(newCost);
-    if (isNaN(cost)) {
-      toast('error', 'Enter a valid cost');
+    const costCents = pricingDollarInputToCents(newCost);
+    if (costCents === null) {
+      toast('error', 'Enter a non-negative cost with no more than two decimal places');
       return;
     }
-    if (cost < 0) {
-      toast('error', 'Cost cannot be negative');
-      return;
-    }
-    if (pricingMode === 'margin_driven' && cost === 0) {
+    if (pricingMode === 'margin_driven' && costCents === 0n) {
       toast('error', 'Margin-driven pricing requires a cost greater than $0. No prices were changed.');
       return;
     }
@@ -655,6 +674,18 @@ export default function ProductDetail() {
       setEpaLookupResult(null);
       setEpaLookupRegNumber('');
     }
+  };
+
+  const updatePricingMoney = (field: ProductPricingMoneyField, value: string) => {
+    const persistedValue = persistedProduct?.[field] ?? product[field];
+    const original = persistedValue == null ? '' : String(persistedValue);
+    setPricingMoneyDrafts((drafts) => {
+      const next = { ...drafts };
+      if (value === original) delete next[field];
+      else next[field] = value;
+      return next;
+    });
+    setIsDirty(true);
   };
 
   if (loading) {
@@ -1129,7 +1160,7 @@ export default function ProductDetail() {
                 <div className="space-y-3">
                   <h4 className="text-sm font-medium text-secondary">Cost</h4>
                   <div className="flex items-center gap-2">
-                    <Input id="product-current-cost" label="Current Cost" type="number" value={product.current_cost ?? ''} onChange={(e) => update('current_cost', e.target.value ? parseFloat(e.target.value) : null)} disabled={isNew} />
+                    <Input id="product-current-cost" label="Current Cost" type="number" value={pricingMoneyInput(product, pricingMoneyDrafts, 'current_cost')} onChange={(e) => updatePricingMoney('current_cost', e.target.value)} disabled={isNew} />
                     {!isNew && (
                       <Button variant="secondary" size="sm" icon={<DollarSign className="w-3 h-3" />} showChevron={false} onClick={() => setCostModal(true)} className="mt-5">
                         Update
@@ -1139,7 +1170,7 @@ export default function ProductDetail() {
                 </div>
                 <div className="space-y-3">
                   <h4 className="text-sm font-medium text-secondary">Tier 1</h4>
-                  <Input id="tier1-price" aria-label="Tier 1 price" label="Price" type="number" value={product.tier1_price ?? ''} onChange={(e) => update('tier1_price', e.target.value ? parseFloat(e.target.value) : null)} disabled={isNew || pricingMode !== 'price_driven'} />
+                  <Input id="tier1-price" aria-label="Tier 1 price" label="Price" type="number" value={pricingMoneyInput(product, pricingMoneyDrafts, 'tier1_price')} onChange={(e) => updatePricingMoney('tier1_price', e.target.value)} disabled={isNew || pricingMode !== 'price_driven'} />
                   <Input id="tier1-net-margin" aria-label="Tier 1 net margin percent" label="Net Margin %" type="number" value={product.tier1_margin != null ? (product.tier1_margin * 100).toFixed(1) : ''} onChange={(e) => update('tier1_margin', e.target.value ? parseFloat(e.target.value) / 100 : null)} placeholder="e.g., 20 for 20%" disabled={isNew || pricingMode !== 'margin_driven'} />
                   {product.tier1_gross_margin != null && (
                     <div className="px-3 py-2 bg-gray-50 rounded-lg border border-gray-100">
@@ -1159,7 +1190,7 @@ export default function ProductDetail() {
                 </div>
                 <div className="space-y-3">
                   <h4 className="text-sm font-medium text-secondary">Tier 2</h4>
-                  <Input id="tier2-price" aria-label="Tier 2 price" label="Price" type="number" value={product.tier2_price ?? ''} onChange={(e) => update('tier2_price', e.target.value ? parseFloat(e.target.value) : null)} disabled={isNew || pricingMode !== 'price_driven'} />
+                  <Input id="tier2-price" aria-label="Tier 2 price" label="Price" type="number" value={pricingMoneyInput(product, pricingMoneyDrafts, 'tier2_price')} onChange={(e) => updatePricingMoney('tier2_price', e.target.value)} disabled={isNew || pricingMode !== 'price_driven'} />
                   <Input id="tier2-net-margin" aria-label="Tier 2 net margin percent" label="Net Margin %" type="number" value={product.tier2_margin != null ? (product.tier2_margin * 100).toFixed(1) : ''} onChange={(e) => update('tier2_margin', e.target.value ? parseFloat(e.target.value) / 100 : null)} placeholder="e.g., 25 for 25%" disabled={isNew || pricingMode !== 'margin_driven'} />
                   {product.tier2_gross_margin != null && (
                     <div className="px-3 py-2 bg-gray-50 rounded-lg border border-gray-100">
@@ -1182,7 +1213,7 @@ export default function ProductDetail() {
                 <div />
                 <div className="space-y-3">
                   <h4 className="text-sm font-medium text-secondary">Tier 3</h4>
-                  <Input id="tier3-price" aria-label="Tier 3 price" label="Price" type="number" value={product.tier3_price ?? ''} onChange={(e) => update('tier3_price', e.target.value ? parseFloat(e.target.value) : null)} disabled={isNew || pricingMode !== 'price_driven'} />
+                  <Input id="tier3-price" aria-label="Tier 3 price" label="Price" type="number" value={pricingMoneyInput(product, pricingMoneyDrafts, 'tier3_price')} onChange={(e) => updatePricingMoney('tier3_price', e.target.value)} disabled={isNew || pricingMode !== 'price_driven'} />
                   <Input id="tier3-net-margin" aria-label="Tier 3 net margin percent" label="Net Margin %" type="number" value={product.tier3_margin != null ? (product.tier3_margin * 100).toFixed(1) : ''} onChange={(e) => update('tier3_margin', e.target.value ? parseFloat(e.target.value) / 100 : null)} placeholder="e.g., 30 for 30%" disabled={isNew || pricingMode !== 'margin_driven'} />
                   {product.tier3_gross_margin != null && (
                     <div className="px-3 py-2 bg-gray-50 rounded-lg border border-gray-100">

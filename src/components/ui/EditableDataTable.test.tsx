@@ -261,6 +261,37 @@ describe('EditableDataTable', () => {
 
   // ── 5. Edit Mode ────────────────────────────────────────────────────
   describe('Edit Mode', () => {
+    it('preserves an exact decimal string without converting through Number', async () => {
+      const onSave = vi.fn().mockResolvedValue(undefined);
+      const decimalColumns: EditableColumn<TestProduct>[] = [{
+        key: 'price',
+        header: 'Exact price',
+        editable: true,
+        editType: 'decimal',
+        editMin: 0,
+        editStep: '0.01',
+      }];
+      render(
+        <EditableDataTable
+          data={testData.slice(0, 1)}
+          columns={decimalColumns}
+          rowKey="id"
+          canEdit
+          onSave={onSave}
+        />
+      );
+
+      fireEvent.click(screen.getByText('Edit'));
+      fireEvent.change(screen.getByLabelText('Exact price'), {
+        target: { value: '90071992547409.91' },
+      });
+      fireEvent.click(screen.getByText('Save (1)'));
+
+      await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+      const changes = onSave.mock.calls[0][0] as Map<string, Record<string, unknown>>;
+      expect(changes.get('1')?.price).toBe('90071992547409.91');
+    });
+
     it('shows Edit button when canEdit=true', () => {
       render(<EditableDataTable data={testData} columns={columns} rowKey="id" canEdit />);
       expect(screen.getByText('Edit')).toBeInTheDocument();

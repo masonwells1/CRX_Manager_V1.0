@@ -182,7 +182,8 @@ describe('product pricing workbook', () => {
     expect(worksheet.getColumn(identityColumn).hidden).toBe(true);
     expect(worksheet.getColumn(tokenColumn).hidden).toBe(true);
     expect(worksheet.getCell(2, modeColumn).value).toBe('');
-    expect(worksheet.getCell(2, currentCostColumn).value).toBe(125.4);
+    expect(worksheet.getCell(2, currentCostColumn).value).toBe('125.40');
+    expect(worksheet.getCell(2, currentCostColumn).numFmt).toBe('@');
     expect(manifest.getCell(5, 2).value).toBe('2');
     expect(worksheet.getCell(2, modeColumn).dataValidation).toMatchObject({
       type: 'list',
@@ -218,6 +219,31 @@ describe('product pricing workbook', () => {
     expect(parsed.rows[0].tier1_margin_percent).toBe('19.75');
     expect(Object.keys(parsed.rows[0]).some((key) => key.endsWith('_cents'))).toBe(false);
     expect(parsed.rows[0]).not.toHaveProperty('tier1_margin', 0.1975);
+  });
+
+  it('keeps exported cents exact beyond JavaScript safe-integer precision', async () => {
+    const exactValue = '90071992547409.91';
+    const exactExport: PricingWorkbookExport = {
+      ...pricingExport,
+      rows: [{
+        ...pricingExport.rows[0],
+        current_cost: exactValue,
+        current_tier1_price: exactValue,
+      }],
+    };
+    const ExcelJS = await import('exceljs');
+    const blob = await generateProductPricingWorkbook(exactExport);
+    const buffer = await blobToArrayBuffer(blob);
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(buffer);
+    const worksheet = workbook.getWorksheet(PRICING_WORKBOOK_SHEET)!;
+    const currentCostColumn = PRICING_WORKBOOK_HEADERS.indexOf('current_cost') + 1;
+
+    expect(worksheet.getCell(2, currentCostColumn).value).toBe(exactValue);
+    const parsed = await parseProductPricingWorkbook(buffer);
+    expect(parsed.rows[0].current_cost).toBe(exactValue);
+    expect(parsed.rows[0].new_cost).toBe(exactValue);
+    expect(parsed.rows[0].tier1_price).toBe(exactValue);
   });
 
   it('rejects duplicate headers before sending workbook rows to the server', async () => {

@@ -10,6 +10,23 @@ export type PricingChangeSetStatus =
   | 'applied'
   | 'expired';
 
+const MAX_PRICING_CENTS = 9_223_372_036_854_775_807n;
+const PRICING_DOLLAR_INPUT = /^([0-9]+)(?:\.([0-9]{1,2}))?$/;
+
+/**
+ * Convert a browser-entered dollar string to cents without passing through a
+ * JavaScript Number. Null means the value is not accepted by the database
+ * pricing boundary (including values outside PostgreSQL bigint cents).
+ */
+export function pricingDollarInputToCents(value: string): bigint | null {
+  const match = PRICING_DOLLAR_INPUT.exec(value.trim());
+  if (!match) return null;
+  const wholeDollars = match[1].replace(/^0+(?=\d)/, '');
+  if (wholeDollars.length > 17) return null;
+  const cents = (BigInt(wholeDollars) * 100n) + BigInt((match[2] ?? '').padEnd(2, '0') || '0');
+  return cents <= MAX_PRICING_CENTS ? cents : null;
+}
+
 export function formatPricingMarginPercent(value: number): string {
   if (!Number.isFinite(value)) throw new Error('Pricing margin must be a finite number.');
   return (value * 100).toFixed(8).replace(/\.?0+$/, '');
@@ -24,8 +41,10 @@ export function assertPricingPreviewRowsSafe(
 ): void {
   for (const row of rows) {
     if (row.pricing_mode !== 'margin_driven') continue;
-    const cost = Number(row.new_cost.trim());
-    if (Number.isFinite(cost) && cost === 0) {
+    const costCents = pricingDollarInputToCents(row.new_cost);
+    const submittedZero = costCents === 0n
+      || /^[+-]?0+(?:\.0+)?(?:e[+-]?\d+)?$/i.test(row.new_cost.trim());
+    if (submittedZero) {
       const productName = row.product_name?.trim() || 'this Product';
       throw new Error(
         `Margin-driven pricing requires a cost greater than $0 for ${productName}. No prices were changed.`,

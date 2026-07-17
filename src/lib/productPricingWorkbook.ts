@@ -398,12 +398,6 @@ async function loadExcelJs(): Promise<typeof import('exceljs')> {
   return (imported.default ?? imported) as typeof import('exceljs');
 }
 
-function numericWorkbookValue(value: string | null): string | number {
-  if (value === null || value === '') return '';
-  const numeric = Number(value);
-  return Number.isFinite(numeric) ? numeric : value;
-}
-
 function workbookRow(exportRow: PricingWorkbookExportRow): Record<PricingWorkbookHeader, string | number> {
   return {
     product_id: exportRow.product_id,
@@ -416,21 +410,21 @@ function workbookRow(exportRow: PricingWorkbookExportRow): Record<PricingWorkboo
     identity_fingerprint: exportRow.identity_fingerprint,
     row_token: exportRow.row_token,
     row_version: String(exportRow.row_version),
-    current_cost: numericWorkbookValue(exportRow.current_cost),
-    current_tier1_margin_percent: numericWorkbookValue(exportRow.current_tier1_margin_percent),
-    current_tier1_price: numericWorkbookValue(exportRow.current_tier1_price),
-    current_tier2_margin_percent: numericWorkbookValue(exportRow.current_tier2_margin_percent),
-    current_tier2_price: numericWorkbookValue(exportRow.current_tier2_price),
-    current_tier3_margin_percent: numericWorkbookValue(exportRow.current_tier3_margin_percent),
-    current_tier3_price: numericWorkbookValue(exportRow.current_tier3_price),
+    current_cost: exportRow.current_cost ?? '',
+    current_tier1_margin_percent: exportRow.current_tier1_margin_percent ?? '',
+    current_tier1_price: exportRow.current_tier1_price ?? '',
+    current_tier2_margin_percent: exportRow.current_tier2_margin_percent ?? '',
+    current_tier2_price: exportRow.current_tier2_price ?? '',
+    current_tier3_margin_percent: exportRow.current_tier3_margin_percent ?? '',
+    current_tier3_price: exportRow.current_tier3_price ?? '',
     pricing_mode: '',
-    new_cost: numericWorkbookValue(exportRow.current_cost),
-    tier1_margin_percent: numericWorkbookValue(exportRow.current_tier1_margin_percent),
-    tier1_price: numericWorkbookValue(exportRow.current_tier1_price),
-    tier2_margin_percent: numericWorkbookValue(exportRow.current_tier2_margin_percent),
-    tier2_price: numericWorkbookValue(exportRow.current_tier2_price),
-    tier3_margin_percent: numericWorkbookValue(exportRow.current_tier3_margin_percent),
-    tier3_price: numericWorkbookValue(exportRow.current_tier3_price),
+    new_cost: exportRow.current_cost ?? '',
+    tier1_margin_percent: exportRow.current_tier1_margin_percent ?? '',
+    tier1_price: exportRow.current_tier1_price ?? '',
+    tier2_margin_percent: exportRow.current_tier2_margin_percent ?? '',
+    tier2_price: exportRow.current_tier2_price ?? '',
+    tier3_margin_percent: exportRow.current_tier3_margin_percent ?? '',
+    tier3_price: exportRow.current_tier3_price ?? '',
     change_reason: '',
   };
 }
@@ -478,13 +472,9 @@ function stylePricingWorksheet(worksheet: Worksheet, rowCount: number): void {
       };
       cell.protection = { locked: !editable };
       if (header === 'product_id' || header === 'sku' || header === 'identity_fingerprint'
-          || header === 'row_token' || header === 'row_version') {
+          || header === 'row_token' || header === 'row_version'
+          || DOLLAR_HEADERS.has(header) || MARGIN_HEADERS.has(header)) {
         cell.numFmt = '@';
-      } else if (DOLLAR_HEADERS.has(header)) {
-        cell.numFmt = '$#,##0.00';
-      } else if (MARGIN_HEADERS.has(header)) {
-        // These cells carry whole percent values such as 20, never ratios such as 0.20.
-        cell.numFmt = '0.########';
       }
     });
   });

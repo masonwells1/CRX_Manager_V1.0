@@ -12,7 +12,7 @@ export interface EditableColumn<T> {
   /** Enable inline editing for this column */
   editable?: boolean;
   /** Input type when editing */
-  editType?: 'text' | 'number' | 'select' | 'toggle';
+  editType?: 'text' | 'number' | 'decimal' | 'select' | 'toggle';
   /** Options for select type: { value, label } */
   editOptions?: Array<{ value: string; label: string }>;
   /** Accessible name for the built-in edit control. */
@@ -222,16 +222,21 @@ export default function EditableDataTable<T extends Record<string, any>>({
       );
     }
 
-    if (col.editType === 'number') {
+    if (col.editType === 'number' || col.editType === 'decimal') {
       return (
         <input
           type="number"
+          aria-label={typeof col.editAriaLabel === 'function' ? col.editAriaLabel(row) : col.editAriaLabel ?? col.header}
           value={value != null ? String(value) : ''}
           min={col.editMin ?? 0}
           step={col.editStep ?? 'any'}
           onChange={(e) => {
             const raw = e.target.value;
-            setCellValue(row, col.key, raw === '' ? null : parseFloat(raw));
+            setCellValue(
+              row,
+              col.key,
+              raw === '' ? null : col.editType === 'decimal' ? raw : parseFloat(raw),
+            );
           }}
           className="w-full px-2 py-1 text-sm text-right font-mono border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green/30"
         />

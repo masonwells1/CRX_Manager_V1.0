@@ -64,11 +64,15 @@ vi.mock('../lib/db', () => ({
   checkMutationResult: vi.fn(),
 }));
 
-vi.mock('../lib/productPricing', () => ({
-  previewProductPricingChanges: mockPreviewPricing,
-  applyProductPricingChangeSet: mockApplyPricing,
-  createPricingWorkbookExport: vi.fn(),
-}));
+vi.mock('../lib/productPricing', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/productPricing')>();
+  return {
+    ...actual,
+    previewProductPricingChanges: mockPreviewPricing,
+    applyProductPricingChangeSet: mockApplyPricing,
+    createPricingWorkbookExport: vi.fn(),
+  };
+});
 
 vi.mock('../lib/productPricingWorkbook', () => ({
   generateProductPricingWorkbook: vi.fn(),
@@ -87,7 +91,7 @@ vi.mock('../components/ui/EditableDataTable', () => ({
         data[0].id,
         {
           pricing_mode: 'margin_driven',
-          current_cost: '55.00',
+          current_cost: '90071992547409.91',
           tier1_margin_percent: '20',
           tier2_margin_percent: '15',
           tier3_margin_percent: '10',
@@ -180,7 +184,7 @@ describe('Products governed inline pricing flow', () => {
         sku: product.sku,
         row_version: 7,
         pricing_mode: 'margin_driven',
-        new_cost: '55.00',
+        new_cost: '90071992547409.91',
         tier1_margin_percent: '20',
         tier2_margin_percent: '15',
         tier3_margin_percent: '10',

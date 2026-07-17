@@ -297,13 +297,30 @@ test('real .xlsx round-trip plus ProductDetail quick pricing review', async ({ p
   await page.screenshot({ path: resolve(OUTPUT_DIR, 'phase1a-product-page-ready.png'), fullPage: true });
   await page.getByRole('button', { name: 'Apply approved changes' }).click();
   await expect(page.getByText('Applied pricing to 1 Product.')).toBeVisible();
+
+  // Exercise the full Product form with a value that JavaScript Number cannot
+  // represent to the cent. The captured RPC request must retain the exact text.
+  await page.getByLabel('Pricing mode').selectOption('price_driven');
+  await page.getByLabel('Current Cost').fill('90071992547409.91');
+  await page.getByLabel('Tier 1 price').fill('90071992547410.01');
+  await page.getByRole('button', { name: 'Save Changes' }).click();
+  await expect(page.getByText('Ready for approval')).toBeVisible();
+  const exactProductRequest = previewRequests.at(-1) as {
+    p_rows: Array<{ new_cost: string; tier1_price: string }>;
+  };
+  expect(exactProductRequest.p_rows[0]).toMatchObject({
+    new_cost: '90071992547409.91',
+    tier1_price: '90071992547410.01',
+  });
+  await page.getByRole('button', { name: 'Apply approved changes' }).click();
+  await expect(page.getByLabel('Pricing preview rows')).toHaveCount(0);
   await page.getByRole('button', { name: 'Back to products' }).click();
   await expect(page).toHaveURL(/\/products$/);
   await expect(page.getByText(/unsaved changes/i)).toHaveCount(0);
 
   expect(worksheetPreviewCount).toBe(2);
-  expect(previewRequests).toHaveLength(3);
-  expect(applyRequests).toHaveLength(2);
+  expect(previewRequests).toHaveLength(4);
+  expect(applyRequests).toHaveLength(3);
   const workbookRows = (previewRequests[0] as { p_rows: Array<{ pricing_mode: string }> }).p_rows;
   expect(workbookRows.map((row) => row.pricing_mode)).toEqual(['margin_driven', 'price_driven', 'margin_driven']);
   expect(consoleErrors).toEqual([]);

@@ -18,8 +18,20 @@ import {
   assertPricingPreviewRowsSafe,
   createPricingWorkbookExport,
   formatPricingMarginPercent,
+  pricingDollarInputToCents,
   previewProductPricingChanges,
 } from './productPricing';
+
+describe('pricingDollarInputToCents', () => {
+  it('preserves cents beyond JavaScript safe-integer precision', () => {
+    expect(pricingDollarInputToCents('90071992547409.91')).toBe(9_007_199_254_740_991n);
+  });
+
+  it.each(['-1.00', '1.001', '1e2', '92233720368547758.08'])(
+    'rejects a value the PostgreSQL dollar parser will reject: %s',
+    (value) => expect(pricingDollarInputToCents(value)).toBeNull(),
+  );
+});
 
 describe('formatPricingMarginPercent', () => {
   it('serializes stored ratios without binary floating-point artifacts', () => {

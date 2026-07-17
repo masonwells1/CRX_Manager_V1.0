@@ -27,6 +27,7 @@ import {
   applyProductPricingChangeSet,
   createPricingWorkbookExport,
   formatPricingMarginPercent,
+  pricingDollarInputToCents,
   previewProductPricingChanges,
   type PricingMode,
   type PricingPreviewInputRow,
@@ -59,7 +60,7 @@ const INLINE_NONPRICING_FIELDS = new Set([
 
 function inputDecimal(value: unknown): string | null {
   if (value === null || value === undefined || value === '') return null;
-  return String(value);
+  return String(value).trim();
 }
 
 function storedMarginPercent(value: number | null): string | null {
@@ -434,7 +435,7 @@ export default function Products() {
           }
           const newCost = inputDecimal(fields.current_cost ?? original.current_cost);
           if (newCost === null) throw new Error(`Enter a cost for ${original.product_name}.`);
-          if (mode === 'margin_driven' && Number(newCost.trim()) === 0) {
+          if (mode === 'margin_driven' && pricingDollarInputToCents(newCost) === 0n) {
             throw new Error(`Margin-driven pricing requires a cost greater than $0 for ${original.product_name}. No prices were changed.`);
           }
           if (!Number.isInteger(original.pricing_version) || (original.pricing_version ?? 0) < 1) {
@@ -633,9 +634,10 @@ export default function Products() {
             header: 'Cost',
             sortable: true,
             editable: true,
-            editType: 'number' as const,
+            editType: 'decimal' as const,
             editMin: 0,
             editStep: '0.01',
+            editAriaLabel: (row: Product) => `Cost for ${row.product_name}`,
             render: (row: Product) => (
               <span className="font-mono text-sm">
                 {row.current_cost != null ? `$${Number(row.current_cost).toFixed(2)}` : '-'}

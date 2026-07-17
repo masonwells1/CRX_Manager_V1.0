@@ -96,11 +96,14 @@ vi.mock('../lib/db', () => {
   };
 });
 
-vi.mock('../lib/productPricing', () => ({
-  previewProductPricingChanges: mockPreviewPricing,
-  applyProductPricingChangeSet: mockApplyPricing,
-  formatPricingMarginPercent: (value: number) => (value * 100).toFixed(8).replace(/\.?0+$/, ''),
-}));
+vi.mock('../lib/productPricing', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/productPricing')>();
+  return {
+    ...actual,
+    previewProductPricingChanges: mockPreviewPricing,
+    applyProductPricingChangeSet: mockApplyPricing,
+  };
+});
 
 vi.mock('../components/ui/Toast', () => ({
   useToast: () => ({ toast: mockToast }),
@@ -234,6 +237,29 @@ describe('ProductDetail governed pricing flow', () => {
       'Margin-driven pricing requires a cost greater than $0. No prices were changed.',
     ));
     expect(mockPreviewPricing).not.toHaveBeenCalled();
+    expect(mockProductUpdate).not.toHaveBeenCalled();
+  });
+
+  it('preserves exact cents from the Product pricing form through preview', async () => {
+    render(<ProductDetail />);
+    await screen.findByText('Grower Description');
+
+    fireEvent.change(screen.getByLabelText('Pricing mode'), { target: { value: 'price_driven' } });
+    fireEvent.change(screen.getByLabelText('Current Cost'), {
+      target: { value: '90071992547409.91' },
+    });
+    fireEvent.change(screen.getByLabelText('Tier 1 price'), {
+      target: { value: '90071992547410.01' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+
+    await waitFor(() => expect(mockPreviewPricing).toHaveBeenCalledWith(expect.objectContaining({
+      rows: [expect.objectContaining({
+        pricing_mode: 'price_driven',
+        new_cost: '90071992547409.91',
+        tier1_price: '90071992547410.01',
+      })],
+    })));
     expect(mockProductUpdate).not.toHaveBeenCalled();
   });
 
