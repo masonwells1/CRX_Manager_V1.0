@@ -1406,6 +1406,9 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   'increment_customer_prepay',
   'issue_return_credit',
   'link_blend_ticket_to_order',
+  // CRM retry-safe call logging (migration 20260717060000) — declares
+  // p_idempotency_key and replays via check_idempotency/save_idempotency.
+  'log_customer_interaction',
   'manual_inventory_add',
   'post_commission_payment',
   'post_invoice',
