@@ -1,8 +1,6 @@
--- ============================================================================
--- DRAFT ONLY — CRM relationship-intelligence Phase 4.1 customer documents.
--- The orchestrator must rename/move this file to supabase/migrations with a
--- real UTC timestamp only after the migration review/apply gate is green.
--- ============================================================================
+-- CRM relationship-intelligence Phase 4.1 — customer documents (metadata table
+-- + private storage bucket). Soft-delete only; provenance immutable; rep
+-- access scoped to assigned customers.
 
 -- Private object storage for customer document bytes. 20 MiB; UI must use the
 -- same MIME allow-list before upload, but the bucket remains the hard limit.
@@ -14,74 +12,21 @@ VALUES (
   20971520,
   ARRAY['application/pdf', 'image/jpeg', 'image/png', 'image/webp']
 )
-ON CONFLICT (id) DO NOTHING;
+ON CONFLICT (id) DO UPDATE SET
+  public = EXCLUDED.public,
+  file_size_limit = EXCLUDED.file_size_limit,
+  allowed_mime_types = EXCLUDED.allowed_mime_types;
 
 -- Object paths are always '<customer_uuid>/<opaque-filename>'. Comparing the
 -- first path segment to c.id::text deliberately avoids casting an untrusted
 -- storage path to uuid while still requiring an existing customer folder.
-DROP POLICY IF EXISTS customer_documents_objects_admin_select ON storage.objects;
-CREATE POLICY customer_documents_objects_admin_select ON storage.objects
-  FOR SELECT TO authenticated
-  USING (
-    bucket_id = 'customer-documents'
-    AND public.is_admin()
-  );
-
-DROP POLICY IF EXISTS customer_documents_objects_rep_select ON storage.objects;
-CREATE POLICY customer_documents_objects_rep_select ON storage.objects
-  FOR SELECT TO authenticated
-  USING (
-    bucket_id = 'customer-documents'
-    AND public.is_sales_rep()
-    AND EXISTS (
-      SELECT 1
-      FROM public.customers c
-      WHERE c.id::text = (storage.foldername(name))[1]
-        AND c.assigned_sales_rep = (SELECT auth.uid())
-    )
-  );
-
-DROP POLICY IF EXISTS customer_documents_objects_admin_insert ON storage.objects;
-CREATE POLICY customer_documents_objects_admin_insert ON storage.objects
-  FOR INSERT TO authenticated
-  WITH CHECK (
-    bucket_id = 'customer-documents'
-    AND public.is_admin()
-    AND EXISTS (
-      SELECT 1
-      FROM public.customers c
-      WHERE c.id::text = (storage.foldername(name))[1]
-    )
-  );
-
-DROP POLICY IF EXISTS customer_documents_objects_rep_insert ON storage.objects;
-CREATE POLICY customer_documents_objects_rep_insert ON storage.objects
-  FOR INSERT TO authenticated
-  WITH CHECK (
-    bucket_id = 'customer-documents'
-    AND public.is_sales_rep()
-    AND EXISTS (
-      SELECT 1
-      FROM public.customers c
-      WHERE c.id::text = (storage.foldername(name))[1]
-        AND c.assigned_sales_rep = (SELECT auth.uid())
-    )
-  );
-
--- User-facing removal is a metadata soft-delete. Only an administrator may
--- physically purge object bytes, and no storage UPDATE policy permits upsert.
-DROP POLICY IF EXISTS customer_documents_objects_admin_delete ON storage.objects;
-CREATE POLICY customer_documents_objects_admin_delete ON storage.objects
-  FOR DELETE TO authenticated
-  USING (
-    bucket_id = 'customer-documents'
-    AND public.is_admin()
-  );
 
 CREATE TABLE public.customer_documents (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   customer_id uuid NOT NULL REFERENCES public.customers(id),
-  contact_id uuid REFERENCES public.customer_contacts(id),
+  -- Composite FK (settled CRM convention, matches customer_interactions):
+  -- a document can never cite another customer's contact.
+  contact_id uuid,
   document_type text NOT NULL,
   storage_path text NOT NULL,
   filename text NOT NULL,
@@ -97,6 +42,15 @@ CREATE TABLE public.customer_documents (
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT customer_documents_storage_path_key UNIQUE (storage_path),
+  CONSTRAINT customer_documents_customer_contact_fkey FOREIGN KEY (customer_id, contact_id)
+    REFERENCES public.customer_contacts(customer_id, id),
+  -- Path shape is exactly '<customer_uuid>/<nonempty-filename>' — no bare
+  -- folders, no nested segments.
+  CONSTRAINT customer_documents_path_matches_customer_check CHECK (
+    split_part(storage_path, '/', 1) = customer_id::text
+    AND split_part(storage_path, '/', 2) <> ''
+    AND storage_path NOT LIKE '%/%/%'
+  ),
   CONSTRAINT customer_documents_document_type_check CHECK (document_type IN (
     'license', 'permit', 'contract', 'map', 'invoice_copy', 'other'
   )),
@@ -192,6 +146,10 @@ CREATE POLICY customer_documents_admin_insert ON public.customer_documents
   WITH CHECK (
     public.is_admin()
     AND customer_documents.uploaded_by = (SELECT auth.uid())
+    -- Rows can never be born deleted — soft-deletion must go through the
+    -- guarded UPDATE path so deleted_by attribution can't be forged.
+    AND customer_documents.deleted_at IS NULL
+    AND customer_documents.deleted_by IS NULL
   );
 
 CREATE POLICY customer_documents_rep_insert ON public.customer_documents
@@ -200,6 +158,8 @@ CREATE POLICY customer_documents_rep_insert ON public.customer_documents
     public.is_sales_rep()
     AND customer_documents.uploaded_by = (SELECT auth.uid())
     AND customer_documents.source = 'rep'
+    AND customer_documents.deleted_at IS NULL
+    AND customer_documents.deleted_by IS NULL
     AND EXISTS (
       SELECT 1
       FROM public.customers c
@@ -239,6 +199,98 @@ CREATE POLICY customer_documents_rep_update ON public.customer_documents
 -- table privileges omit DELETE as a second, independent guard.
 REVOKE ALL ON TABLE public.customer_documents FROM anon, PUBLIC;
 GRANT SELECT, INSERT, UPDATE ON TABLE public.customer_documents TO authenticated;
+
+-- Storage policies are created AFTER public.customer_documents because the
+-- rep SELECT policy references it (soft-deleted bytes are unreadable to reps).
+
+DROP POLICY IF EXISTS customer_documents_objects_admin_select ON storage.objects;
+CREATE POLICY customer_documents_objects_admin_select ON storage.objects
+  FOR SELECT TO authenticated
+  USING (
+    bucket_id = 'customer-documents'
+    AND public.is_admin()
+  );
+
+DROP POLICY IF EXISTS customer_documents_objects_rep_select ON storage.objects;
+CREATE POLICY customer_documents_objects_rep_select ON storage.objects
+  FOR SELECT TO authenticated
+  USING (
+    bucket_id = 'customer-documents'
+    AND public.is_sales_rep()
+    AND EXISTS (
+      SELECT 1
+      FROM public.customers c
+      WHERE c.id::text = (storage.foldername(name))[1]
+        AND c.assigned_sales_rep = (SELECT auth.uid())
+    )
+    -- Soft-deleted means GONE for reps: bytes are only readable while live
+    -- metadata exists for this exact path — this also makes orphaned uploads
+    -- (no metadata row) unreadable. Admins keep byte access for recovery.
+    -- Exception (Codex r2): Storage uploads run INSERT ... RETURNING *, which
+    -- needs SELECT on the just-created row BEFORE the metadata insert lands —
+    -- so a rep may always read an object they uploaded themselves.
+    AND (
+      storage.objects.owner_id = (SELECT auth.uid()::text)
+      OR EXISTS (
+        SELECT 1
+        FROM public.customer_documents cd
+        WHERE cd.storage_path = storage.objects.name
+          AND cd.deleted_at IS NULL
+      )
+    )
+  );
+
+DROP POLICY IF EXISTS customer_documents_objects_admin_insert ON storage.objects;
+CREATE POLICY customer_documents_objects_admin_insert ON storage.objects
+  FOR INSERT TO authenticated
+  WITH CHECK (
+    bucket_id = 'customer-documents'
+    AND public.is_admin()
+    -- Exactly '<customer_uuid>/<nonempty-filename>' — nested or folderless
+    -- uploads would be permanent orphans (table CHECK rejects their metadata).
+    AND array_length(storage.foldername(name), 1) = 1
+    AND storage.filename(name) <> ''
+    AND EXISTS (
+      SELECT 1
+      FROM public.customers c
+      WHERE c.id::text = (storage.foldername(name))[1]
+    )
+  );
+
+DROP POLICY IF EXISTS customer_documents_objects_rep_insert ON storage.objects;
+CREATE POLICY customer_documents_objects_rep_insert ON storage.objects
+  FOR INSERT TO authenticated
+  WITH CHECK (
+    bucket_id = 'customer-documents'
+    AND public.is_sales_rep()
+    AND array_length(storage.foldername(name), 1) = 1
+    AND storage.filename(name) <> ''
+    AND EXISTS (
+      SELECT 1
+      FROM public.customers c
+      WHERE c.id::text = (storage.foldername(name))[1]
+        AND c.assigned_sales_rep = (SELECT auth.uid())
+    )
+  );
+
+-- User-facing removal is a metadata soft-delete. Only an administrator may
+-- physically purge object bytes, and no storage UPDATE policy permits upsert.
+DROP POLICY IF EXISTS customer_documents_objects_admin_delete ON storage.objects;
+CREATE POLICY customer_documents_objects_admin_delete ON storage.objects
+  FOR DELETE TO authenticated
+  USING (
+    bucket_id = 'customer-documents'
+    AND public.is_admin()
+    -- Purge-safety: bytes with LIVE metadata cannot be deleted — only
+    -- soft-deleted documents' bytes or orphaned uploads can be purged, so
+    -- active metadata can never point at a missing file.
+    AND NOT EXISTS (
+      SELECT 1
+      FROM public.customer_documents cd
+      WHERE cd.storage_path = storage.objects.name
+        AND cd.deleted_at IS NULL
+    )
+  );
 
 COMMENT ON TABLE public.customer_documents IS
   'Private customer document metadata; file bytes live in the customer-documents Storage bucket and removals are soft deletes.';
@@ -281,16 +333,8 @@ COMMENT ON TRIGGER customer_documents_update_updated_at ON public.customer_docum
   'Maintains updated_at for permitted document metadata changes.';
 COMMENT ON TRIGGER customer_documents_guard_editable_fields ON public.customer_documents IS
   'Blocks updates outside permitted metadata fields and protects document provenance.';
-COMMENT ON POLICY customer_documents_objects_admin_select ON storage.objects IS
-  'Authenticated administrators may read objects in the private customer-documents bucket.';
-COMMENT ON POLICY customer_documents_objects_rep_select ON storage.objects IS
-  'Authenticated sales representatives may read objects only in folders for customers assigned to them.';
-COMMENT ON POLICY customer_documents_objects_admin_insert ON storage.objects IS
-  'Authenticated administrators may upload only beneath an existing customer UUID folder.';
-COMMENT ON POLICY customer_documents_objects_rep_insert ON storage.objects IS
-  'Authenticated sales representatives may upload only beneath folders for customers assigned to them.';
-COMMENT ON POLICY customer_documents_objects_admin_delete ON storage.objects IS
-  'Authenticated administrators alone may physically purge customer-document bytes.';
+-- (No COMMENT ON POLICY for the storage.objects policies above: commenting a
+-- policy requires owning storage.objects, which the migration role does not.)
 COMMENT ON POLICY customer_documents_admin_select ON public.customer_documents IS
   'Authenticated administrators may read all document metadata, including soft-deleted rows.';
 COMMENT ON POLICY customer_documents_rep_select ON public.customer_documents IS

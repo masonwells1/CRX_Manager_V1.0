@@ -28,6 +28,7 @@ import CustomerContacts, { CustomerInteractionsHistory } from '../components/cus
 import LogInteractionModal from '../components/customers/LogInteractionModal';
 import CustomerFacts from '../components/customers/CustomerFacts';
 import CustomerPrepCard from '../components/customers/CustomerPrepCard';
+import CustomerDocuments from '../components/customers/CustomerDocuments';
 import { downloadYearEndSummaryPdf } from '../lib/yearEndSummaryPdf';
 import type { YearEndSummaryOptions } from '../lib/yearEndSummaryPdf';
 import type { YearEndSummaryData } from '../types';
@@ -87,7 +88,7 @@ export default function CustomerDetail() {
   const [addresses, setAddresses] = useState<Partial<CustomerAddress>[]>([]);
   const [loading, setLoading] = useState(!isNew);
   const [saving, setSaving] = useState(false);
-  const [tab, setTab] = useState<'info' | 'contacts' | 'knowledge' | 'timeline' | 'fields' | 'quotes' | 'orders' | 'deliveries' | 'financials' | 'history'>('info');
+  const [tab, setTab] = useState<'info' | 'contacts' | 'knowledge' | 'documents' | 'timeline' | 'fields' | 'quotes' | 'orders' | 'deliveries' | 'financials' | 'history'>('info');
   const [timeline, setTimeline] = useState<ActivityFeedItem[]>([]);
   const [timelineLoading, setTimelineLoading] = useState(false);
 
@@ -536,7 +537,7 @@ export default function CustomerDetail() {
     );
   }
 
-  const tabs = ['info', 'contacts', 'knowledge', 'timeline', 'fields', 'quotes', 'orders', 'deliveries', 'financials', 'history'] as const;
+  const tabs = ['info', 'contacts', 'knowledge', 'documents', 'timeline', 'fields', 'quotes', 'orders', 'deliveries', 'financials', 'history'] as const;
 
   const handleGenerateSummary = async (season: number, options: YearEndSummaryOptions) => {
     if (!id || isNew) return;
@@ -874,6 +875,11 @@ export default function CustomerDetail() {
       {/* key remounts on customer switch — see the CustomerPrepCard note above */}
       {tab === 'knowledge' && !isNew && id && profile && (
         <CustomerFacts key={id} customerId={id} userId={profile.id} />
+      )}
+
+      {/* key remounts on customer switch — see the CustomerPrepCard note above */}
+      {tab === 'documents' && !isNew && id && profile && (
+        <CustomerDocuments key={id} customerId={id} />
       )}
 
       {tab === 'timeline' && !isNew && (
