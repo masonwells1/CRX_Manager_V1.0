@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import {
   ArrowLeftRight,
@@ -47,6 +47,8 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { hasPageAccess, getPageKeyFromPath } from '../../lib/pagePermissions';
+import { supabase } from '../../lib/db';
+import { SPLIT_BILLING_SETTING_KEY, parseSplitBillingEnabled } from '../../lib/splitBillingSetting';
 import type { UserRole } from '../../types';
 import logoWhite from '../../assets/logo_3-01_(3).png';
 
@@ -219,6 +221,15 @@ function getNavigationForRole(role: UserRole | undefined): NavEntry[] {
   return officeNavigation;
 }
 
+// Flag-gated per-line split-billing link. Injected into the "Spray Fields" category ONLY
+// when per_line_split_billing_enabled is ON (the app is behaviour-neutral while OFF).
+const SPLIT_BILLING_NAV_ITEM: NavSubItem = {
+  path: '/split-billing/new',
+  label: 'Split Billing (per line)',
+  icon: <Receipt className="w-4 h-4" />,
+  roles: ['admin', 'sales_rep'],
+};
+
 // --- Helpers ---
 
 const STORAGE_KEY = 'crx-sidebar-expanded';
@@ -266,8 +277,38 @@ export default function Sidebar({ mobileOpen, onClose }: SidebarProps) {
   const { profile, deniedPages, signOut } = useAuth();
   const location = useLocation();
   const userRole = profile?.role;
-  const navigation = getNavigationForRole(userRole);
   const mobileDrawerRef = useRef<HTMLElement>(null);
+
+  // Flag-gated per-line split-billing nav link. OFF by default → link hidden, app unchanged.
+  const [splitBillingEnabled, setSplitBillingEnabled] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data } = await supabase
+          .from('app_settings')
+          .select('setting_value')
+          .eq('setting_key', SPLIT_BILLING_SETTING_KEY)
+          .maybeSingle();
+        if (!cancelled) {
+          setSplitBillingEnabled(parseSplitBillingEnabled((data as { setting_value?: string } | null)?.setting_value ?? null));
+        }
+      } catch {
+        if (!cancelled) setSplitBillingEnabled(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  const navigation = useMemo<NavEntry[]>(() => {
+    const base = getNavigationForRole(userRole);
+    if (!splitBillingEnabled) return base;
+    return base.map((entry) =>
+      entry.type === 'category' && entry.category.id === 'spray-fields'
+        ? { ...entry, category: { ...entry.category, items: [...entry.category.items, SPLIT_BILLING_NAV_ITEM] } }
+        : entry,
+    );
+  }, [userRole, splitBillingEnabled]);
 
   // Expanded category id (null = collapsed sidebar, string = that category is open)
   const [openCategory, setOpenCategory] = useState<string | null>(() => {

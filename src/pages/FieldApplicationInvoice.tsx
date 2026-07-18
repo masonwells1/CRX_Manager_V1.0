@@ -54,7 +54,7 @@ import {
   WEATHER_DISCLAIMER,
   type WeatherSetForm,
 } from '../lib/fieldAppWeather';
-import { sendEmail, pdfToBase64, buildInvoiceEmailPayload } from '../lib/emailService';
+import { sendEmail, pdfToBase64, buildInvoiceEmailPayload, isInvoiceEmailSuppressed } from '../lib/emailService';
 import {
   countSentPostNotifications,
   describePostNotificationSend,
@@ -364,6 +364,10 @@ export default function FieldApplicationInvoice() {
     prepay_applied_cents: number | null;
     write_off_cents: number | null;
     balance_cents: number;
+    /** Per-line split billing: server-computed send disposition. A
+     *  'suppressed_zero_total' $0 split child is recorded + shown in the account
+     *  summary but never emailed. Undefined until the split-billing migration lands. */
+    send_disposition?: 'normal' | 'suppressed_zero_total';
   } | null>(null);
 
   // Phase 1 (2026-04-29) state
@@ -1976,6 +1980,10 @@ export default function FieldApplicationInvoice() {
     }
     if (!profile) {
       toast('error', 'Profile not loaded — please refresh.');
+      return;
+    }
+    if (isInvoiceEmailSuppressed(pdfSnapshot)) {
+      toast('info', 'This $0 invoice is recorded and shown in the account summary, but is not emailed.');
       return;
     }
     await runCriticalAction({

@@ -1910,6 +1910,16 @@ const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
   // contract inside the same transaction; it is absent from generated client
   // types by design but still must remain fail-closed in the migration scan.
   '_save_purchase_order_ascii_identity_impl',
+  // Per-line split billing (parked migration 20260718030000_per_line_split_billing_save_rpc.sql,
+  // NOT applied live; feature flag OFF). Both declare `p_idempotency_key text` and use the
+  // canonical two-layer replay pattern: the PUBLIC wrapper save_field_app_split_invoice does
+  // check_idempotency + payload-hash conflict; the internal writer _save_field_app_split_invoice_impl
+  // records via save_idempotency (direct EXECUTE revoked). Neither is in the generated client
+  // types yet (types are regenerated only after the migration applies), so they are classified here
+  // rather than in MUTATING_RPCS_WITH_IDEMPOTENCY. Move save_field_app_split_invoice to that list
+  // once the migration is live and src/types/supabase.ts is regenerated.
+  'save_field_app_split_invoice',
+  '_save_field_app_split_invoice_impl',
 ]);
 
 /**
@@ -1943,6 +1953,10 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
   save_idempotency: 'idempotency infrastructure helper that stores the parent operation result',
   set_primary_customer_contact: 'convergent primary-contact promotion; replays settle to the same single-primary state; SECURITY INVOKER under customer RLS',
   settle_applied_record_acres: 'trigger-only derived-acre recomputation; direct client EXECUTE is revoked',
+  // Per-line split billing (parked migration 20260718030000): AFTER UPDATE OF status trigger on
+  // invoices that appends a split child invoice's line shares to invoice_line_share_snapshots when it
+  // flips to posted. Fired by the trigger, never client-callable, and carries no idempotency key.
+  snapshot_invoice_line_shares_on_post: 'trigger-only post-snapshot of split-invoice line shares; fired by AFTER UPDATE on invoices, not client-callable, no idempotency key',
 };
 
 

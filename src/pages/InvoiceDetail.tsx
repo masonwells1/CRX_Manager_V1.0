@@ -17,7 +17,7 @@ import { parseDollarsToCents } from '../lib/parseCents';
 import type { Invoice, InvoiceType, InvoiceStatus, Product, Customer, InvoiceShare, InvoicePrintOptions } from '../types';
 import { downloadInvoicePdf, generateInvoicePdf, deriveFieldAppAppliedAcres, type InvoicePdfData, type InvoicePdfItem } from '../lib/invoicePdf';
 import { formatCents as fmt } from '../lib/money';
-import { sendEmail, pdfToBase64, buildEmailHtml } from '../lib/emailService';
+import { sendEmail, pdfToBase64, buildEmailHtml, isInvoiceEmailSuppressed } from '../lib/emailService';
 import { logActivity } from '../lib/activityLogger';
 import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
@@ -49,6 +49,10 @@ interface LineItem {
   tote_number: string | null;
   price_source: 'quoted' | 'tier' | 'manual' | null;
   quoted_price_cents: number | null;
+  /** Per-line split billing: set when this line was produced by a split billing line.
+   *  Undefined until the split-billing migration lands; when set, its quantity/price
+   *  are server-allocated and must not be edited (would clobber the split amount). */
+  billing_line_id?: string | null;
   // Field-application detail — preserved through edits so the machine-fee flag,
   // applied amounts and EPA/form survive a "bill actual" edit (#3 edit-path).
   is_application_fee: boolean;
@@ -1057,6 +1061,10 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
       toast('error', 'Cannot email invoice — profile not loaded. Please refresh.');
       return;
     }
+    if (isInvoiceEmailSuppressed(invoice)) {
+      toast('info', 'This $0 invoice is recorded and shown in the account summary, but is not emailed.');
+      return;
+    }
     const cust = customers.find(c => c.id === invoice.customer_id);
     if (!cust?.email) {
       toast('error', 'Customer does not have an email address on file');
@@ -1540,7 +1548,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
                       )}
                     </td>
                     <td className="py-2 pr-4">
-                      {editable ? (
+                      {editable && !item.billing_line_id ? (
                         <input
                           type="number"
                           value={item.quantity}
@@ -1554,7 +1562,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
                       )}
                     </td>
                     <td className="py-2 pr-4">
-                      {editable ? (
+                      {editable && !item.billing_line_id ? (
                         <input
                           type="number"
                           value={(item.unit_price_cents / 100).toFixed(2)}
@@ -1579,7 +1587,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
                       <td className="py-2 pr-4 text-secondary">{item.tote_number || '-'}</td>
                     )}
                     <td className="py-2">
-                      {editable && (
+                      {editable && !item.billing_line_id && (
                         <button
                           onClick={() => removeItem(idx)}
                           className="text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
