@@ -1,6 +1,6 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-07-18** (full document re-read and targeted supplier-pricing refresh against current code and live DB through verification watermark `20260717171331`; the reviewed `20260718124517` forward correction is proven locally but not yet applied; older open/deferred claims retain their dated evidence below; owner-facing combined list: root `TODO.md`)
+**Last verified: 2026-07-18** (targeted supplier-pricing refresh against production frontend commit `1f533ff2`, live database high-water `20260718154810`, and active `process-document` v18; older open/deferred claims retain their dated evidence below; owner-facing combined list: root `TODO.md`)
 **Update triggers:** when a finding is parked/resolved, a migration is parked/applied, or an owner decision lands. Agents must update THIS file, not create new issue lists. Do not re-discover or re-fix something listed here as already known — read the pointer first.
 
 This file consolidates (does not replace) the source documents it points to. If this file and a source disagree, trust the source and fix this file.
@@ -9,11 +9,11 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ## 1. Open HIGH findings (dormant on live data)
 
-### Supplier Pricing Phase 1a rollout gap — frontend/Edge retirement not deployed
+### Supplier Pricing Phase 1a rollout gap — Edge retirement and strict cutover not deployed
 
-The additive pricing RPC/bootstrap, zero-cost guard, and legacy Product repeat-save compatibility repair are live through verification watermark `20260717171331`. The zero-cost guard's repository source is `20260717112011_supplier_pricing_zero_cost_guard.sql` and its live ledger identity is `20260717120500_supplier_pricing_zero_cost_guard`; the governed calculator now rejects margin-driven zero cost while legacy Product-page editing remains available. The frontend, strict direct-write cutover, and `process-document` retirement are not live. The active production Edge Function is still v18 and retains the old `price_list` / price-bearing `product_list` OCR paths, and the deployed frontend still contains its legacy pricing UI. The repository rejects those document types before OCR, but production will not inherit that rule until a separately approved Edge Function deployment. Do not describe supplier-price OCR as retired live before that deployment is verified.
+The additive pricing RPC/bootstrap, zero-cost guard, legacy Product repeat-save compatibility repair, and forward hardening are live. PR #163 merged as `1f533ff2` and Vercel deployed that exact commit to production, so Product-page, Products-list, and pricing-only `.xlsx` edits now use the preview/approval/apply workflow. The active production Edge Function is still v18 and retains the old `price_list` / price-bearing `product_list` OCR paths. Repository code rejects those document types before OCR, but production will not inherit that rule until a separately approved Edge Function deployment. Do not describe supplier-price OCR as retired live before that deployment is verified.
 
-The forward correction `20260718124517_harden_supplier_pricing_cent_scale_and_trigger.sql` is now an active, reviewed repository migration and passes the disposable pre-cutover and full-cutover proof. It is **not live yet**: it still requires Mason's explicit apply approval, post-apply verification, and a live schema-registry refresh before the frontend PR can merge. The strict enforcement cutover remains parked until that frontend is deployed and the rollback window closes.
+The forward correction `20260718124517_harden_supplier_pricing_cent_scale_and_trigger.sql` is live as ledger version `20260718154131`. Read-only post-apply verification found 604 Products, zero fractional-cent pricing rows, zero active workbook exports/previews, the pricing guard trigger enabled, the 5,000-row constraint validated, and correct worksheet RPC grants/search paths. The live schema registry is refreshed through `20260718154810`. The strict enforcement cutover remains parked until the frontend rollback window closes; Microsoft Excel desktop save/reopen/upload acceptance is also still unproven on this workstation.
 
 ### July 14 full-gauntlet remediation — LIVE, frontend rolled out (PR #133 merged 2026-07-15)
 

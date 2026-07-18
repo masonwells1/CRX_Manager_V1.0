@@ -1,12 +1,12 @@
 {
   "_meta": {
     "registry_version": 2,
-    "generated_at": "2026-07-17",
+    "generated_at": "2026-07-18",
     "generated_from": "Supabase project rhyzpcqhnizqbxphqdkr — public schema introspection",
     "regenerate_with": "node scripts/regenerate-schema-registry.mjs --from-introspection <queries.json> (queries documented in the script header)",
     "purpose": "Single source of truth for hooks: generated columns, status enums, ALL parseable CHECK IN-lists, NOT NULL columns, full column lists, sequences, tables-with/without updated_at, applied-migration high water.",
     "note": "For a fresh refresh from the live DB, ask Claude Code: 'regenerate the schema-registry from Supabase' (/regen-schema-registry). skipped_constraints lists every CHECK the hooks can NOT validate — review it when touching those tables.",
-    "migrations_high_water": "20260717171331",
+    "migrations_high_water": "20260718154810",
     "applied_migration_names": [
       "20260207_gap_analysis_fixes.sql",
       "20260209050000_inventory_overhaul",
@@ -245,6 +245,10 @@
       "20260717120500_supplier_pricing_zero_cost_guard",
       "20260717123000_save_customer_ownership_enforcement",
       "20260717170000_restore_legacy_pricing_version_compat",
+      "20260718124500_harden_prepay_and_payment_role_gate",
+      "20260718124517_harden_supplier_pricing_cent_scale_and_trigger",
+      "20260718131500_revert_quote_escape_hatch_for_cancelled_order",
+      "20260718133000_void_invoice_block_applied_payments",
       "a1_dispatched_list_recent_completed",
       "a1b_dispatched_to_me_completed_tail",
       "accounting_and_integrity_fixes",
@@ -2924,6 +2928,12 @@
       "table": "pricing_workbook_exports",
       "constraint": "pricing_workbook_exports_row_count_check",
       "def": "CHECK ((row_count > 0))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "pricing_workbook_exports",
+      "constraint": "pricing_workbook_exports_row_limit",
+      "def": "CHECK ((row_count <= 5000))",
       "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
     },
     {

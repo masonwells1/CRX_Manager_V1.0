@@ -4,6 +4,12 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-18 — Supplier Pricing Phase 1a production rollout and closeout
+
+PR #163 merged to protected `main` as `1f533ff2` and Vercel deployed that exact commit to production. The Product page, Products list, and pricing-only `.xlsx` workflow now route pricing changes through server preview, explicit approval, and atomic apply. Forward hardening migration `20260718124517_harden_supplier_pricing_cent_scale_and_trigger` is live as ledger version `20260718154131`; read-only verification found 604 Products, zero fractional-cent pricing rows, zero active exports/previews, an enabled pricing guard trigger, a validated 5,000-row export constraint, and authenticated-only fixed-search-path worksheet RPCs. The schema registry was regenerated from live introspection through high-water `20260718154810`. The separately deployed `process-document` function is still v18 with the old supplier-pricing OCR routes, so its repository retirement remains owner-gated; the strict direct-write/history cutover also remains parked for the post-frontend rollback-window release. Microsoft Excel desktop acceptance remains unproven on this workstation.
+
+---
+
 ## 2026-07-17 — Split-billing architecture dig + per-line-item custom-split design spec v2 (review-hardened via gpt-5.6-terra xhigh plan review; 4 blockers folded in). Owner workflow settled: field split=default, adjust in unposted draft, unpost reversible. Committed 4b695109; Codex builds next week. No code/DB changes.
 
 Split-billing architecture dig + per-line-item custom-split design spec v2 (review-hardened via gpt-5.6-terra xhigh plan review; 4 blockers folded in). Owner workflow settled: field split=default, adjust in unposted draft, unpost reversible. Committed 4b695109; Codex builds next week. No code/DB changes.
