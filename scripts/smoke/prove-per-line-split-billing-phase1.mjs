@@ -23,7 +23,7 @@ const MIGRATION = path.join(
   ROOT,
   'supabase',
   'migrations',
-  '20260718120000_per_line_split_billing_phase1_schema.sql',
+  '20260718210000_per_line_split_billing_phase1_schema.sql',
 );
 
 const ID = {
