@@ -261,6 +261,37 @@ describe('EditableDataTable', () => {
 
   // ── 5. Edit Mode ────────────────────────────────────────────────────
   describe('Edit Mode', () => {
+    it('preserves an exact decimal string without converting through Number', async () => {
+      const onSave = vi.fn().mockResolvedValue(undefined);
+      const decimalColumns: EditableColumn<TestProduct>[] = [{
+        key: 'price',
+        header: 'Exact price',
+        editable: true,
+        editType: 'decimal',
+        editMin: 0,
+        editStep: '0.01',
+      }];
+      render(
+        <EditableDataTable
+          data={testData.slice(0, 1)}
+          columns={decimalColumns}
+          rowKey="id"
+          canEdit
+          onSave={onSave}
+        />
+      );
+
+      fireEvent.click(screen.getByText('Edit'));
+      fireEvent.change(screen.getByLabelText('Exact price'), {
+        target: { value: '90071992547409.91' },
+      });
+      fireEvent.click(screen.getByText('Save (1)'));
+
+      await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+      const changes = onSave.mock.calls[0][0] as Map<string, Record<string, unknown>>;
+      expect(changes.get('1')?.price).toBe('90071992547409.91');
+    });
+
     it('shows Edit button when canEdit=true', () => {
       render(<EditableDataTable data={testData} columns={columns} rowKey="id" canEdit />);
       expect(screen.getByText('Edit')).toBeInTheDocument();
@@ -308,6 +339,15 @@ describe('EditableDataTable', () => {
       fireEvent.click(screen.getByText('Edit'));
       const selects = screen.getAllByRole('combobox');
       expect(selects.length).toBe(3); // one select per row
+    });
+
+    it('gives built-in select editors row-specific accessible names', () => {
+      const accessibleColumns = columns.map((column) => column.key === 'category'
+        ? { ...column, editAriaLabel: (row: TestProduct) => `Category for ${row.name}` }
+        : column);
+      render(<EditableDataTable data={testData} columns={accessibleColumns} rowKey="id" canEdit />);
+      fireEvent.click(screen.getByText('Edit'));
+      expect(screen.getByRole('combobox', { name: 'Category for Product A' })).toBeInTheDocument();
     });
 
     it('toggle (checkbox) inputs appear for editable toggle columns in edit mode', () => {
@@ -398,6 +438,54 @@ describe('EditableDataTable', () => {
       await waitFor(() => {
         expect(screen.getByText('Edit')).toBeInTheDocument();
       });
+    });
+
+    it('exits edit mode when onSave explicitly returns true', async () => {
+      const onSave = vi.fn().mockResolvedValue(true);
+      render(
+        <EditableDataTable
+          data={testData}
+          columns={columns}
+          rowKey="id"
+          canEdit
+          onSave={onSave}
+        />
+      );
+      fireEvent.click(screen.getByText('Edit'));
+      fireEvent.change(screen.getByDisplayValue('Product A'), {
+        target: { value: 'Changed' },
+      });
+      fireEvent.click(screen.getByText(/Save/).closest('button')!);
+
+      await waitFor(() => {
+        expect(screen.getByText('Edit')).toBeInTheDocument();
+      });
+      expect(screen.queryByDisplayValue('Changed')).not.toBeInTheDocument();
+    });
+
+    it('keeps edit mode and dirty rows when onSave returns false', async () => {
+      const onSave = vi.fn().mockResolvedValue(false);
+      render(
+        <EditableDataTable
+          data={testData}
+          columns={columns}
+          rowKey="id"
+          canEdit
+          onSave={onSave}
+        />
+      );
+      fireEvent.click(screen.getByText('Edit'));
+      fireEvent.change(screen.getByDisplayValue('Product A'), {
+        target: { value: 'Changed' },
+      });
+      fireEvent.click(screen.getByText(/Save/).closest('button')!);
+
+      await waitFor(() => {
+        expect(onSave).toHaveBeenCalledTimes(1);
+      });
+      expect(screen.getByText('Cancel')).toBeInTheDocument();
+      expect(screen.getByDisplayValue('Changed')).toBeInTheDocument();
+      expect(screen.getByText('Save (1)')).toBeInTheDocument();
     });
   });
 

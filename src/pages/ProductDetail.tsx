@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState , useCallback } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { AlertTriangle, ArrowLeft, DollarSign, ExternalLink, Search, Save } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
@@ -7,6 +7,7 @@ import Combobox from '../components/ui/Combobox';
 import Input from '../components/ui/Input';
 import Modal from '../components/ui/Modal';
 import UnsavedChangesModal from '../components/ui/UnsavedChangesModal';
+import PricingChangePreviewModal from '../components/products/PricingChangePreviewModal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
@@ -18,6 +19,113 @@ import { Sentry } from '../lib/sentry';
 import { unitOptionsForForm, isKnownUnit } from '../lib/units';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import type { CostHistory, EpaLookupResult, Product, UnitConversion } from '../types';
+import {
+  applyProductPricingChangeSet,
+  formatPricingMarginPercent,
+  pricingDollarInputToCents,
+  previewProductPricingChanges,
+  type PricingMode,
+  type PricingPreviewInputRow,
+  type PricingPreviewResult,
+} from '../lib/productPricing';
+
+const PRODUCT_NONPRICING_FIELDS = [
+  'product_name', 'sku', 'category', 'vendor', 'manufacturer',
+  'container_size', 'unit_size', 'suggested_rate', 'rate_per_acre', 'rate_unit',
+  'notes', 'is_active', 'epa_registration', 'product_form', 'inventory_unit',
+  'container_unit', 'container_type', 'is_rup', 'signal_word', 'internal_notes',
+  'rei_hours', 'phi_days', 'max_label_rate', 'max_label_rate_unit', 'use_timing',
+] as const satisfies ReadonlyArray<keyof Product>;
+
+const PRODUCT_PRICING_FIELDS = [
+  'current_cost', 'tier1_margin', 'tier2_margin', 'tier3_margin',
+  'tier1_price', 'tier2_price', 'tier3_price',
+] as const satisfies ReadonlyArray<keyof Product>;
+
+type ProductPricingMoneyField = 'current_cost' | 'tier1_price' | 'tier2_price' | 'tier3_price';
+type ProductPricingMoneyDrafts = Partial<Record<ProductPricingMoneyField, string>>;
+
+function nonpricingProductPayload(product: Partial<Product>): Record<string, unknown> {
+  return Object.fromEntries([
+    ...PRODUCT_NONPRICING_FIELDS.map((field) => [field, product[field]] as const),
+    ['updated_at', new Date().toISOString()],
+  ]);
+}
+
+function pricingModeFor(product: Partial<Product>): PricingMode | '' {
+  const hasMargins = [product.tier1_margin, product.tier2_margin, product.tier3_margin]
+    .every((value) => value !== null && value !== undefined);
+  const hasPrices = [product.tier1_price, product.tier2_price, product.tier3_price]
+    .every((value) => value !== null && value !== undefined);
+  if (hasMargins === hasPrices) return '';
+  return hasMargins ? 'margin_driven' : 'price_driven';
+}
+
+function pricingMoneyInput(
+  product: Partial<Product>,
+  drafts: ProductPricingMoneyDrafts,
+  field: ProductPricingMoneyField,
+): string {
+  return drafts[field] ?? (product[field] == null ? '' : String(product[field]));
+}
+
+function pricingChanged(
+  product: Partial<Product>,
+  persisted: Product | null,
+  moneyDrafts: ProductPricingMoneyDrafts,
+): boolean {
+  if (!persisted) return false;
+  if (Object.keys(moneyDrafts).length > 0) return true;
+  return PRODUCT_PRICING_FIELDS.some((field) => product[field] !== persisted[field]);
+}
+
+function productDetailsChanged(product: Partial<Product>, persisted: Product | null): boolean {
+  if (!persisted) return false;
+  return PRODUCT_NONPRICING_FIELDS.some((field) => product[field] !== persisted[field]);
+}
+
+function pricingPreviewRow(
+  product: Partial<Product>,
+  persisted: Product,
+  mode: PricingMode,
+  reason: string,
+  moneyDrafts: ProductPricingMoneyDrafts,
+  costOverride?: string,
+): PricingPreviewInputRow {
+  if (!Number.isInteger(persisted.pricing_version) || (persisted.pricing_version ?? 0) < 1) {
+    throw new Error('This Product does not have a pricing version yet. Refresh after the Phase 1a database migration is available.');
+  }
+  const cost = costOverride ?? pricingMoneyInput(product, moneyDrafts, 'current_cost');
+  if (cost === null || cost === '') throw new Error('Enter the Product cost before reviewing pricing.');
+  const row: PricingPreviewInputRow = {
+    product_id: persisted.id,
+    product_name: persisted.product_name,
+    sku: persisted.sku ?? '',
+    row_version: persisted.pricing_version!,
+    pricing_mode: mode,
+    new_cost: cost,
+    change_reason: reason.trim() || 'Product page pricing update',
+  };
+  if (mode === 'margin_driven') {
+    for (const tier of [1, 2, 3] as const) {
+      const value = product[`tier${tier}_margin` as const];
+      if (value === null || value === undefined) {
+        throw new Error('Margin-driven pricing requires all three net margins.');
+      }
+      row[`tier${tier}_margin_percent` as const] = formatPricingMarginPercent(value);
+    }
+  } else {
+    for (const tier of [1, 2, 3] as const) {
+      const field = `tier${tier}_price` as ProductPricingMoneyField;
+      const value = pricingMoneyInput(product, moneyDrafts, field);
+      if (value === '') {
+        throw new Error('Price-driven pricing requires all three tier prices.');
+      }
+      row[`tier${tier}_price` as const] = value;
+    }
+  }
+  return row;
+}
 
 function hasText(value: string | null | undefined): value is string {
   return typeof value === 'string' && value.trim().length > 0;
@@ -154,6 +262,13 @@ export default function ProductDetail() {
   const [costModal, setCostModal] = useState(false);
   const [newCost, setNewCost] = useState('');
   const [costNote, setCostNote] = useState('');
+  const [persistedProduct, setPersistedProduct] = useState<Product | null>(null);
+  const [pricingMode, setPricingMode] = useState<PricingMode | ''>('');
+  const [pricingMoneyDrafts, setPricingMoneyDrafts] = useState<ProductPricingMoneyDrafts>({});
+  const [pricingPreview, setPricingPreview] = useState<PricingPreviewResult | null>(null);
+  const [applyingPricing, setApplyingPricing] = useState(false);
+  const [pricingReloadRequired, setPricingReloadRequired] = useState(false);
+  const [pricingReloading, setPricingReloading] = useState(false);
   const [persistedLabelFields, setPersistedLabelFields] = useState<{
     signalWord: Product['signal_word'];
     epaRegistration: string | null;
@@ -163,52 +278,58 @@ export default function ProductDetail() {
   const [epaLookupLoading, setEpaLookupLoading] = useState(false);
   const [epaDraftCreating, setEpaDraftCreating] = useState(false);
   const epaDraftKey = useIdempotencyKey('create_label_draft', profile?.id ?? '');
+  const previewPricingIdem = useIdempotencyKey('preview_product_pricing_changes', profile?.id ?? '');
+  const applyPricingIdem = useIdempotencyKey('apply_product_pricing_change_set', profile?.id ?? '');
 
   // Track dirty state for unsaved changes warning
   const [isDirty, setIsDirty] = useState(false);
-  const initialLoadDone = useRef(false);
   const blocker = useUnsavedChanges(isDirty);
 
-  useEffect(() => {
-    if (!initialLoadDone.current) return;
-    setIsDirty(true);
-  }, [product]);
-
-  const fetchProduct = useCallback(async () => {
+  const fetchProduct = useCallback(async (reportError = true): Promise<boolean> => {
     const { data, error } = await supabase.from('products').select('*').eq('id', id!).maybeSingle();
     if (error) {
-      toast('error', 'Failed to load product');
+      Sentry.captureException(error);
+      if (reportError) toast('error', 'Failed to load product');
       setLoading(false);
-      return;
+      return false;
     }
     if (data) {
       const loadedProduct = data as Product;
       setProduct(loadedProduct);
+      setPersistedProduct(loadedProduct);
+      setPricingMode(pricingModeFor(loadedProduct));
+      setPricingMoneyDrafts({});
+      setPricingReloadRequired(false);
+      setIsDirty(false);
       setPersistedLabelFields({
         signalWord: loadedProduct.signal_word,
         epaRegistration: loadedProduct.epa_registration,
       });
     }
     setLoading(false);
-    setTimeout(() => { initialLoadDone.current = true; }, 0);
+    return data !== null;
   }, [id, toast]);
 
-  const fetchCostHistory = useCallback(async () => {
-    const { data } = await supabase
+  const fetchCostHistory = useCallback(async (reportError = true): Promise<boolean> => {
+    const { data, error } = await supabase
       .from('cost_history')
       .select('*')
       .eq('product_id', id!)
       .order('changed_at', { ascending: false })
       .limit(20);
-    setCostHistory(data || []);
-  }, [id]);
+    if (error) {
+      Sentry.captureException(error);
+      if (reportError) toast('error', 'Failed to load pricing history');
+      return false;
+    }
+    setCostHistory((data || []) as CostHistory[]);
+    return true;
+  }, [id, toast]);
 
   useEffect(() => {
     if (!isNew && id) {
-      fetchProduct();
-      fetchCostHistory();
-    } else {
-      setTimeout(() => { initialLoadDone.current = true; }, 0);
+      void fetchProduct();
+      void fetchCostHistory();
     }
   }, [id, isNew, fetchProduct, fetchCostHistory]);
 
@@ -230,30 +351,75 @@ export default function ProductDetail() {
     });
   }, []);
 
+  const saveExistingProductDetails = async () => {
+    const result = await supabaseUntyped
+      .from('products')
+      .update(nonpricingProductPayload(product))
+      .eq('id', id!)
+      .select();
+    checkMutationResult(result, 'Update product details');
+    setPersistedLabelFields({
+      signalWord: product.signal_word ?? null,
+      epaRegistration: product.epa_registration?.trim() || null,
+    });
+  };
+
+  const requestPricingReview = async ({
+    costOverride,
+    reason,
+  }: {
+    costOverride?: string;
+    reason: string;
+  }) => {
+    if (pricingReloadRequired) {
+      throw new Error('Reload this Product before making another change.');
+    }
+    if (!profile || !persistedProduct) throw new Error('Reload this Product before changing pricing.');
+    if (productDetailsChanged(product, persistedProduct)) {
+      throw new Error('Save or discard the unsaved Product details before reviewing a pricing change.');
+    }
+    if (pricingMode !== 'margin_driven' && pricingMode !== 'price_driven') {
+      throw new Error('Choose margin-driven or price-driven before reviewing pricing.');
+    }
+    const preview = await previewProductPricingChanges({
+      source: 'product_page',
+      rows: [pricingPreviewRow(
+        product,
+        persistedProduct,
+        pricingMode,
+        reason,
+        pricingMoneyDrafts,
+        costOverride,
+      )],
+      performedBy: profile.id,
+      idempotencyKey: previewPricingIdem.getKey(),
+    });
+    previewPricingIdem.resetKey();
+
+    setPricingPreview(preview);
+  };
+
   const handleSave = async () => {
+    if (pricingReloadRequired) {
+      toast('error', 'Reload this Product before making another change.');
+      return;
+    }
     if (!product.product_name) {
       toast('error', 'Product name is required');
       return;
     }
 
-    // Cost must be non-negative
-    if (product.current_cost != null && product.current_cost < 0) {
-      toast('error', 'Cost cannot be negative');
-      return;
-    }
-
-    // Tier prices must be non-negative
-    if (product.tier1_price != null && product.tier1_price < 0) {
-      toast('error', 'Tier 1 price cannot be negative');
-      return;
-    }
-    if (product.tier2_price != null && product.tier2_price < 0) {
-      toast('error', 'Tier 2 price cannot be negative');
-      return;
-    }
-    if (product.tier3_price != null && product.tier3_price < 0) {
-      toast('error', 'Tier 3 price cannot be negative');
-      return;
+    for (const [field, label] of [
+      ['current_cost', 'Cost'],
+      ['tier1_price', 'Tier 1 price'],
+      ['tier2_price', 'Tier 2 price'],
+      ['tier3_price', 'Tier 3 price'],
+    ] as const) {
+      const value = pricingMoneyInput(product, pricingMoneyDrafts, field);
+      if (value !== '' && pricingDollarInputToCents(value) === null) {
+        toast('error', `${label} must be a non-negative dollar amount with no more than two decimal places`);
+        return;
+      }
     }
 
     // Container size must be positive if set
@@ -272,123 +438,132 @@ export default function ProductDetail() {
       return;
     }
 
-    // Warn (but allow) if price < cost (negative margin)
-    const cost = product.current_cost ?? 0;
-    const prices = [product.tier1_price, product.tier2_price, product.tier3_price].filter((p): p is number => p != null && p > 0);
-    if (cost > 0 && prices.some((p) => p < cost)) {
+    // Warn (but allow) if price < cost. The server preview remains authoritative.
+    const costCents = pricingDollarInputToCents(pricingMoneyInput(product, pricingMoneyDrafts, 'current_cost')) ?? 0n;
+    const priceCents = (['tier1_price', 'tier2_price', 'tier3_price'] as const)
+      .map((field) => pricingDollarInputToCents(pricingMoneyInput(product, pricingMoneyDrafts, field)))
+      .filter((value): value is bigint => value !== null && value > 0n);
+    if (costCents > 0n && priceCents.some((price) => price < costCents)) {
       toast('warning', 'Warning: One or more tier prices are below cost (negative margin)');
     }
 
     setSaving(true);
-    if (isNew) {
-      const productInsertResult = await supabase.from('products').insert([product as Product]).select();
-      if (productInsertResult.error) {
-        toast('error', productInsertResult.error.message);
-      } else {
+    try {
+      if (isNew) {
+        const productInsertResult = await supabaseUntyped
+          .from('products')
+          .insert([nonpricingProductPayload(product)])
+          .select();
+        if (productInsertResult.error) throw productInsertResult.error;
         checkMutationResult(productInsertResult, 'Insert product');
         setIsDirty(false);
         toast('success', 'Product created');
         logActivity({ event: 'product_created', description: `Product ${product.product_name} created`, performedBy: profile!.id, entityType: 'product' });
         navigate('/products');
-      }
-    } else {
-      // === GAP FIX #16: Detect pricing changes and log to cost_history ===
-      const { data: current } = await supabase
-        .from('products')
-        .select('current_cost, tier1_price, tier2_price, tier3_price')
-        .eq('id', id!)
-        .maybeSingle();
-
-      const pricingChanged = current && (
-        Number(current.current_cost) !== Number(product.current_cost) ||
-        Number(current.tier1_price) !== Number(product.tier1_price) ||
-        Number(current.tier2_price) !== Number(product.tier2_price) ||
-        Number(current.tier3_price) !== Number(product.tier3_price)
-      );
-
-      if (pricingChanged && profile) {
-        const costHistoryResult = await supabase.from('cost_history').insert({
-          product_id: id!,
-          changed_by: profile.id,
-          old_cost: current.current_cost,
-          new_cost: product.current_cost,
-          old_tier1_price: current.tier1_price,
-          new_tier1_price: product.tier1_price,
-          old_tier2_price: current.tier2_price,
-          new_tier2_price: product.tier2_price,
-          old_tier3_price: current.tier3_price,
-          new_tier3_price: product.tier3_price,
-          change_note: 'Updated via product detail save',
-        }).select();
-        if (costHistoryResult.error) Sentry.captureException(costHistoryResult.error, { tags: { source: 'critical_action', action: 'insert_cost_history' } });
-        checkMutationResult(costHistoryResult, 'Insert cost history (pricing change)');
+        return;
       }
 
-      try {
-        const result = await supabase
-          .from('products')
-          .update({ ...product, updated_at: new Date().toISOString() })
-          .eq('id', id!)
-          .select();
-        checkMutationResult(result, 'Update product');
-        setPersistedLabelFields({
-          signalWord: product.signal_word ?? null,
-          epaRegistration: product.epa_registration?.trim() || null,
+      const hasPricingChanges = pricingChanged(product, persistedProduct, pricingMoneyDrafts);
+      const hasProductDetailChanges = productDetailsChanged(product, persistedProduct);
+      if (hasPricingChanges && hasProductDetailChanges) {
+        throw new Error('Save Product details and pricing in separate review steps. Revert one kind of change, save the other, then make the remaining change.');
+      }
+
+      if (hasPricingChanges) {
+        await requestPricingReview({
+          reason: 'Product page pricing update',
         });
-        setIsDirty(false);
-        toast('success', 'Product updated');
-        logActivity({ event: 'product_updated', description: `Product ${product.product_name} updated`, performedBy: profile!.id, entityType: 'product', entityId: id });
-        if (pricingChanged) fetchCostHistory();
-      } catch (err: unknown) {
-        Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'update_product' } });
-        toast('error', err instanceof Error ? err.message : 'Failed to update product');
+        return;
       }
+
+      await saveExistingProductDetails();
+      await fetchProduct();
+      setIsDirty(false);
+      toast('success', 'Product updated');
+      logActivity({ event: 'product_updated', description: `Product ${product.product_name} updated`, performedBy: profile!.id, entityType: 'product', entityId: id });
+    } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'save_product' } });
+      toast('error', err instanceof Error ? err.message : 'Failed to save Product');
+    } finally {
+      setSaving(false);
     }
-    setSaving(false);
   };
 
   const handleCostUpdate = async () => {
-    const cost = parseFloat(newCost);
-    if (isNaN(cost)) {
-      toast('error', 'Enter a valid cost');
+    if (pricingReloadRequired) {
+      toast('error', 'Reload this Product before making another change.');
       return;
     }
-    const manualCostResult = await supabase.from('cost_history').insert([
-      {
-        product_id: id!,
-        changed_by: profile!.id,
-        old_cost: product.current_cost,
-        new_cost: cost,
-        old_tier1_price: product.tier1_price,
-        new_tier1_price: product.tier1_price,
-        old_tier2_price: product.tier2_price,
-        new_tier2_price: product.tier2_price,
-        old_tier3_price: product.tier3_price,
-        new_tier3_price: product.tier3_price,
-        change_note: costNote || 'Manual cost update',
-      },
-    ]).select();
-    if (!manualCostResult.error) {
-      checkMutationResult(manualCostResult, 'Insert cost history (manual update)');
-      try {
-        const result = await supabase
-          .from('products')
-          .update({ current_cost: cost, cost_updated_date: new Date().toISOString(), updated_at: new Date().toISOString() })
-          .eq('id', id!)
-          .select();
-        checkMutationResult(result, 'Update product cost');
-        setProduct((p) => ({ ...p, current_cost: cost }));
-        fetchCostHistory();
-        setCostModal(false);
-        setNewCost('');
-        setCostNote('');
-        toast('success', 'Cost updated');
-        logActivity({ event: 'product_cost_updated', description: `Product cost updated to $${cost}`, performedBy: profile!.id, entityType: 'product', entityId: id });
-      } catch (err: unknown) {
-        Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'update_product_cost' } });
-        toast('error', err instanceof Error ? err.message : 'Failed to update product cost');
-      }
+    const costCents = pricingDollarInputToCents(newCost);
+    if (costCents === null) {
+      toast('error', 'Enter a non-negative cost with no more than two decimal places');
+      return;
     }
+    if (pricingMode === 'margin_driven' && costCents === 0n) {
+      toast('error', 'Margin-driven pricing requires a cost greater than $0. No prices were changed.');
+      return;
+    }
+    try {
+      await requestPricingReview({
+        costOverride: newCost,
+        reason: costNote || 'Minor mid-month supplier increase',
+      });
+      setCostModal(false);
+    } catch (err: unknown) {
+      toast('error', err instanceof Error ? err.message : 'Failed to preview cost change');
+    }
+  };
+
+  const handleApplyPricing = async () => {
+    if (!pricingPreview || !profile) return;
+    setApplyingPricing(true);
+    try {
+      const result = await applyProductPricingChangeSet({
+        changeSetId: pricingPreview.change_set_id,
+        requestFingerprint: pricingPreview.request_fingerprint,
+        performedBy: profile.id,
+        idempotencyKey: applyPricingIdem.getKey(),
+      });
+      applyPricingIdem.resetKey();
+      setPricingReloadRequired(true);
+      setIsDirty(true);
+      setPricingPreview(null);
+      setNewCost('');
+      setCostNote('');
+      const [productReloaded, historyReloaded] = await Promise.all([
+        fetchProduct(false),
+        fetchCostHistory(false),
+      ]);
+      if (productReloaded && historyReloaded) {
+        toast('success', `Applied pricing to ${result.applied_count} Product.`);
+      } else {
+        toast('warning', 'Pricing was applied, but the latest Product values could not be reloaded. Refresh this page before making another change.');
+      }
+      logActivity({ event: 'product_cost_updated', description: `Product pricing updated through approved preview`, performedBy: profile.id, entityType: 'product', entityId: id });
+    } catch (err: unknown) {
+      toast('error', err instanceof Error ? err.message : 'Failed to apply pricing');
+    } finally {
+      setApplyingPricing(false);
+    }
+  };
+
+  const handlePricingReload = async () => {
+    setPricingReloading(true);
+    const [productReloaded, historyReloaded] = await Promise.all([
+      fetchProduct(false),
+      fetchCostHistory(false),
+    ]);
+    if (productReloaded) {
+      toast(
+        historyReloaded ? 'success' : 'warning',
+        historyReloaded
+          ? 'Product pricing reloaded.'
+          : 'Product pricing reloaded, but pricing history is not available yet.',
+      );
+    } else {
+      toast('error', 'Product pricing could not be reloaded. Try again before making another change.');
+    }
+    setPricingReloading(false);
   };
 
   const handleEpaLookup = async () => {
@@ -527,12 +702,27 @@ export default function ProductDetail() {
   };
 
   const update = (field: string, value: unknown) => {
+    if (pricingReloadRequired) return;
     setProduct((p) => ({ ...p, [field]: value }));
+    setIsDirty(true);
     if (field === 'epa_registration'
         && (typeof value !== 'string' || value.trim() !== epaLookupRegNumber)) {
       setEpaLookupResult(null);
       setEpaLookupRegNumber('');
     }
+  };
+
+  const updatePricingMoney = (field: ProductPricingMoneyField, value: string) => {
+    if (pricingReloadRequired) return;
+    const persistedValue = persistedProduct?.[field] ?? product[field];
+    const original = persistedValue == null ? '' : String(persistedValue);
+    setPricingMoneyDrafts((drafts) => {
+      const next = { ...drafts };
+      if (value === original) delete next[field];
+      else next[field] = value;
+      return next;
+    });
+    setIsDirty(true);
   };
 
   if (loading) {
@@ -581,6 +771,22 @@ export default function ProductDetail() {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <div className="lg:col-span-2 space-y-4">
+          {pricingReloadRequired && (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-300 bg-amber-50 p-4" role="alert">
+              <p className="text-sm text-amber-900">
+                Pricing was applied, but the saved Product could not be reloaded. Editing is locked until the latest values load.
+              </p>
+              <Button
+                type="button"
+                variant="secondary"
+                loading={pricingReloading}
+                onClick={() => void handlePricingReload()}
+              >
+                Reload Product
+              </Button>
+            </div>
+          )}
+          <fieldset disabled={pricingReloadRequired} className="contents">
           <Card>
             <CardHeader title="Product" accent="Information" />
 
@@ -944,9 +1150,10 @@ export default function ProductDetail() {
 
             {/* Grower Description (existing notes field) */}
             <div className="border-t border-gray-100 pt-4 mt-4">
-              <label className="block text-sm font-medium text-secondary mb-1">Grower Description</label>
+              <label htmlFor="grower-description" className="block text-sm font-medium text-secondary mb-1">Grower Description</label>
               <p className="text-xs text-gray-400 mb-1">Shown to growers on quotes and PDFs. Describe what the product does, application tips, etc.</p>
               <textarea
+                id="grower-description"
                 value={product.notes || ''}
                 onChange={(e) => update('notes', e.target.value)}
                 disabled={!isAdmin}
@@ -957,9 +1164,10 @@ export default function ProductDetail() {
 
             {/* Internal Notes */}
             <div className="border-t border-gray-100 pt-4 mt-4">
-              <label className="block text-sm font-medium text-secondary mb-1">Internal Notes</label>
+              <label htmlFor="internal-notes" className="block text-sm font-medium text-secondary mb-1">Internal Notes</label>
               <p className="text-xs text-gray-400 mb-1">Internal only — never shown to growers.</p>
               <textarea
+                id="internal-notes"
                 value={product.internal_notes || ''}
                 onChange={(e) => update('internal_notes', e.target.value)}
                 disabled={!isAdmin}
@@ -972,9 +1180,29 @@ export default function ProductDetail() {
           {isAdmin && (
             <Card>
               <CardHeader title="Pricing" accent="& Margins" />
+              {isNew ? (
+                <div className="p-3 mb-4 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-900">
+                  Create the Product details first. Pricing is added afterward through a reviewed change so a new Product can never bypass approval.
+                </div>
+              ) : (
+                <div className="mb-4">
+                  <label htmlFor="product-pricing-mode" className="block text-sm font-medium text-secondary mb-1">Pricing mode</label>
+                  <select
+                    id="product-pricing-mode"
+                    value={pricingMode}
+                    onChange={(event) => setPricingMode(event.target.value as PricingMode | '')}
+                    className="w-full sm:max-w-xs px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  >
+                    <option value="">Choose a mode</option>
+                    <option value="margin_driven">Margin-driven — cost + margins set prices</option>
+                    <option value="price_driven">Price-driven — cost + prices set margins</option>
+                  </select>
+                  <p className="mt-1 text-xs text-gray-500">Only the selected input family is editable. The server shows every resulting price before Apply.</p>
+                </div>
+              )}
               <div className="p-3 mb-4 bg-blue-50 border border-blue-100 rounded-lg">
                 <p className="text-xs text-secondary mb-2">
-                  <span className="font-medium">All prices are per inventory unit</span> (e.g., per gallon, per pound). Set a <span className="font-semibold">Net Margin %</span> for any tier, and prices will automatically recalculate whenever cost changes.
+                  <span className="font-medium">All prices are per inventory unit</span> (e.g., per gallon, per pound). Margin-driven mode keeps your three net margins and recalculates prices; price-driven mode keeps your three entered prices and reconciles the margins.
                 </p>
                 <div className="text-xs text-gray-600 space-y-1">
                   <p><span className="font-medium">Net Margin</span> = Profit % of price (e.g., 20% net → $100 price on $80 cost)</p>
@@ -985,7 +1213,7 @@ export default function ProductDetail() {
                 <div className="space-y-3">
                   <h4 className="text-sm font-medium text-secondary">Cost</h4>
                   <div className="flex items-center gap-2">
-                    <Input label="Current Cost" type="number" value={product.current_cost ?? ''} onChange={(e) => update('current_cost', e.target.value ? parseFloat(e.target.value) : null)} />
+                    <Input id="product-current-cost" label="Current Cost" type="number" value={pricingMoneyInput(product, pricingMoneyDrafts, 'current_cost')} onChange={(e) => updatePricingMoney('current_cost', e.target.value)} disabled={isNew} />
                     {!isNew && (
                       <Button variant="secondary" size="sm" icon={<DollarSign className="w-3 h-3" />} showChevron={false} onClick={() => setCostModal(true)} className="mt-5">
                         Update
@@ -995,8 +1223,8 @@ export default function ProductDetail() {
                 </div>
                 <div className="space-y-3">
                   <h4 className="text-sm font-medium text-secondary">Tier 1</h4>
-                  <Input label="Price" type="number" value={product.tier1_price ?? ''} onChange={(e) => update('tier1_price', e.target.value ? parseFloat(e.target.value) : null)} placeholder={product.tier1_margin != null ? 'Auto-calculated on save' : ''} />
-                  <Input label="Net Margin %" type="number" value={product.tier1_margin != null ? (product.tier1_margin * 100).toFixed(1) : ''} onChange={(e) => update('tier1_margin', e.target.value ? parseFloat(e.target.value) / 100 : null)} placeholder="e.g., 20 for 20%" />
+                  <Input id="tier1-price" aria-label="Tier 1 price" label="Price" type="number" value={pricingMoneyInput(product, pricingMoneyDrafts, 'tier1_price')} onChange={(e) => updatePricingMoney('tier1_price', e.target.value)} disabled={isNew || pricingMode !== 'price_driven'} />
+                  <Input id="tier1-net-margin" aria-label="Tier 1 net margin percent" label="Net Margin %" type="number" value={product.tier1_margin != null ? (product.tier1_margin * 100).toFixed(1) : ''} onChange={(e) => update('tier1_margin', e.target.value ? parseFloat(e.target.value) / 100 : null)} placeholder="e.g., 20 for 20%" disabled={isNew || pricingMode !== 'margin_driven'} />
                   {product.tier1_gross_margin != null && (
                     <div className="px-3 py-2 bg-gray-50 rounded-lg border border-gray-100">
                       <span className="text-xs text-gray-500">Gross Margin: </span>
@@ -1015,8 +1243,8 @@ export default function ProductDetail() {
                 </div>
                 <div className="space-y-3">
                   <h4 className="text-sm font-medium text-secondary">Tier 2</h4>
-                  <Input label="Price" type="number" value={product.tier2_price ?? ''} onChange={(e) => update('tier2_price', e.target.value ? parseFloat(e.target.value) : null)} placeholder={product.tier2_margin != null ? 'Auto-calculated on save' : ''} />
-                  <Input label="Net Margin %" type="number" value={product.tier2_margin != null ? (product.tier2_margin * 100).toFixed(1) : ''} onChange={(e) => update('tier2_margin', e.target.value ? parseFloat(e.target.value) / 100 : null)} placeholder="e.g., 25 for 25%" />
+                  <Input id="tier2-price" aria-label="Tier 2 price" label="Price" type="number" value={pricingMoneyInput(product, pricingMoneyDrafts, 'tier2_price')} onChange={(e) => updatePricingMoney('tier2_price', e.target.value)} disabled={isNew || pricingMode !== 'price_driven'} />
+                  <Input id="tier2-net-margin" aria-label="Tier 2 net margin percent" label="Net Margin %" type="number" value={product.tier2_margin != null ? (product.tier2_margin * 100).toFixed(1) : ''} onChange={(e) => update('tier2_margin', e.target.value ? parseFloat(e.target.value) / 100 : null)} placeholder="e.g., 25 for 25%" disabled={isNew || pricingMode !== 'margin_driven'} />
                   {product.tier2_gross_margin != null && (
                     <div className="px-3 py-2 bg-gray-50 rounded-lg border border-gray-100">
                       <span className="text-xs text-gray-500">Gross Margin: </span>
@@ -1038,8 +1266,8 @@ export default function ProductDetail() {
                 <div />
                 <div className="space-y-3">
                   <h4 className="text-sm font-medium text-secondary">Tier 3</h4>
-                  <Input label="Price" type="number" value={product.tier3_price ?? ''} onChange={(e) => update('tier3_price', e.target.value ? parseFloat(e.target.value) : null)} placeholder={product.tier3_margin != null ? 'Auto-calculated on save' : ''} />
-                  <Input label="Net Margin %" type="number" value={product.tier3_margin != null ? (product.tier3_margin * 100).toFixed(1) : ''} onChange={(e) => update('tier3_margin', e.target.value ? parseFloat(e.target.value) / 100 : null)} placeholder="e.g., 30 for 30%" />
+                  <Input id="tier3-price" aria-label="Tier 3 price" label="Price" type="number" value={pricingMoneyInput(product, pricingMoneyDrafts, 'tier3_price')} onChange={(e) => updatePricingMoney('tier3_price', e.target.value)} disabled={isNew || pricingMode !== 'price_driven'} />
+                  <Input id="tier3-net-margin" aria-label="Tier 3 net margin percent" label="Net Margin %" type="number" value={product.tier3_margin != null ? (product.tier3_margin * 100).toFixed(1) : ''} onChange={(e) => update('tier3_margin', e.target.value ? parseFloat(e.target.value) / 100 : null)} placeholder="e.g., 30 for 30%" disabled={isNew || pricingMode !== 'margin_driven'} />
                   {product.tier3_gross_margin != null && (
                     <div className="px-3 py-2 bg-gray-50 rounded-lg border border-gray-100">
                       <span className="text-xs text-gray-500">Gross Margin: </span>
@@ -1067,6 +1295,7 @@ export default function ProductDetail() {
               </Button>
             </div>
           )}
+          </fieldset>
         </div>
 
         {!isNew && isAdmin && (
@@ -1099,14 +1328,40 @@ export default function ProductDetail() {
           <p className="text-sm text-secondary">
             Current cost: <strong>${product.current_cost?.toFixed(2) ?? 'N/A'}</strong>
           </p>
-          <Input label="New Cost" type="number" value={newCost} onChange={(e) => setNewCost(e.target.value)} placeholder="0.00" />
-          <Input label="Change Note (optional)" value={costNote} onChange={(e) => setCostNote(e.target.value)} placeholder="e.g. Supplier price increase" />
+          <Input label="New Cost" type="number" value={newCost} onChange={(e) => setNewCost(e.target.value)} placeholder="0.00" disabled={pricingReloadRequired} />
+          <div>
+            <label htmlFor="cost-update-pricing-mode" className="block text-sm font-medium text-secondary mb-1">Pricing mode</label>
+            <select
+              id="cost-update-pricing-mode"
+              value={pricingMode}
+              onChange={(event) => setPricingMode(event.target.value as PricingMode | '')}
+              disabled={pricingReloadRequired}
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+            >
+              <option value="">Choose a mode</option>
+              <option value="margin_driven">Keep margins; recalculate prices</option>
+              <option value="price_driven">Keep entered prices; reconcile margins</option>
+            </select>
+          </div>
+          <Input label="Change Note (optional)" value={costNote} onChange={(e) => setCostNote(e.target.value)} placeholder="e.g. Supplier price increase" disabled={pricingReloadRequired} />
           <div className="flex justify-end gap-2">
             <Button variant="secondary" showChevron={false} onClick={() => setCostModal(false)}>Cancel</Button>
-            <Button onClick={handleCostUpdate}>Update Cost</Button>
+            <Button onClick={handleCostUpdate} disabled={pricingReloadRequired}>Review Cost Change</Button>
           </div>
         </div>
       </Modal>
+
+      <PricingChangePreviewModal
+        open={pricingPreview !== null}
+        preview={pricingPreview}
+        applying={applyingPricing}
+        title="Review Product Pricing"
+        onClose={() => {
+          setPricingPreview(null);
+          applyPricingIdem.resetKey();
+        }}
+        onApprove={() => void handleApplyPricing()}
+      />
 
       <UnsavedChangesModal
         open={blocker.state === 'blocked'}

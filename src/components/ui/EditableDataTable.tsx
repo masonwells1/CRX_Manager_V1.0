@@ -12,9 +12,11 @@ export interface EditableColumn<T> {
   /** Enable inline editing for this column */
   editable?: boolean;
   /** Input type when editing */
-  editType?: 'text' | 'number' | 'select' | 'toggle';
+  editType?: 'text' | 'number' | 'decimal' | 'select' | 'toggle';
   /** Options for select type: { value, label } */
   editOptions?: Array<{ value: string; label: string }>;
+  /** Accessible name for the built-in edit control. */
+  editAriaLabel?: string | ((row: T) => string);
   /** Min value for number type */
   editMin?: number;
   /** Step for number inputs */
@@ -42,8 +44,11 @@ interface EditableDataTableProps<T> {
   emptyAction?: ReactNode;
   filters?: ReactNode;
   loading?: boolean;
-  /** Called with a map of rowId -> changed fields when user clicks Save */
-  onSave?: (changes: Map<string, Record<string, unknown>>) => Promise<void>;
+  /**
+   * Called with a map of rowId -> changed fields when user clicks Save.
+   * Return false to keep edit mode and dirty rows intact; true/undefined closes edit mode.
+   */
+  onSave?: (changes: Map<string, Record<string, unknown>>) => Promise<void | boolean>;
   /** Whether edit mode is available */
   canEdit?: boolean;
   /** Extra actions to render next to the Edit/Save buttons */
@@ -161,9 +166,11 @@ export default function EditableDataTable<T extends Record<string, any>>({
     if (!onSave || dirtyCount === 0) return;
     setSaving(true);
     try {
-      await onSave(dirtyRows);
-      setEditMode(false);
-      setDirtyRows(new Map());
+      const shouldCloseEditMode = await onSave(dirtyRows);
+      if (shouldCloseEditMode !== false) {
+        setEditMode(false);
+        setDirtyRows(new Map());
+      }
     } catch {
       // parent handles error toast
     } finally {
@@ -200,6 +207,7 @@ export default function EditableDataTable<T extends Record<string, any>>({
     if (col.editType === 'select' && col.editOptions) {
       return (
         <select
+          aria-label={typeof col.editAriaLabel === 'function' ? col.editAriaLabel(row) : col.editAriaLabel ?? col.header}
           value={String(value ?? '')}
           onChange={(e) => setCellValue(row, col.key, e.target.value)}
           className="w-full px-2 py-1 text-sm border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green/30 bg-white"
@@ -214,16 +222,21 @@ export default function EditableDataTable<T extends Record<string, any>>({
       );
     }
 
-    if (col.editType === 'number') {
+    if (col.editType === 'number' || col.editType === 'decimal') {
       return (
         <input
           type="number"
+          aria-label={typeof col.editAriaLabel === 'function' ? col.editAriaLabel(row) : col.editAriaLabel ?? col.header}
           value={value != null ? String(value) : ''}
           min={col.editMin ?? 0}
           step={col.editStep ?? 'any'}
           onChange={(e) => {
             const raw = e.target.value;
-            setCellValue(row, col.key, raw === '' ? null : parseFloat(raw));
+            setCellValue(
+              row,
+              col.key,
+              raw === '' ? null : col.editType === 'decimal' ? raw : parseFloat(raw),
+            );
           }}
           className="w-full px-2 py-1 text-sm text-right font-mono border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green/30"
         />
