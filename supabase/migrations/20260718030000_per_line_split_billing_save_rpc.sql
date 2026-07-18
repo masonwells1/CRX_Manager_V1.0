@@ -396,6 +396,22 @@ DECLARE
   v_line_hashes        jsonb := '[]'::jsonb;
   v_item_price_source  text;
   v_item_cost_cents    bigint;   -- per-item cost_cents (per-unit for chemical, EXTENDED for fee) — Codex r2 #F
+  -- #E source-job double-bill guard (Codex round-2 P1)
+  v_job                record;
+  v_other_set          uuid;
+  -- #G canonical line COGS + its largest-remainder split (Codex round-2 P1)
+  v_line_cogs          bigint;
+  v_cogs_weights       jsonb;
+  v_cogs_map           jsonb;
+  -- #M audited-base + #L reason capture (Codex round-2 P2)
+  v_caller_override    text[];   -- customers the caller priced as a genuine manual override
+  v_svc_source_map     jsonb;    -- service: customer_id -> 'service_rate' | 'service_default'
+  v_reasons_map        jsonb;    -- customer_id -> {split_reason, price_reason}
+  v_share_base_price   bigint;
+  v_share_base_source  text;
+  v_share_price_mode   text;
+  v_split_reason       text;
+  v_price_reason       text;
   -- invariant probes
   v_sum_cents          bigint;
   v_src_line_cents     bigint;
@@ -562,6 +578,51 @@ BEGIN
     RETURNING id INTO v_set_id;
   END IF;
 
+  -- ---- #E SOURCE-JOB DOUBLE-BILL GUARD (Codex round-2 P1, 2026-07-18) ---------
+  -- source_job_id was recorded as provenance only, so the SAME job could be billed
+  -- here AND again through the normal transfer_job_to_invoice flow (double-bill).
+  -- Lock the job, refuse it if it was already billed elsewhere, and (after the child
+  -- invoices exist) consume it exactly like transfer_job_to_invoice does — flipping
+  -- jobs.status to 'invoiced' so that path's own "Job already invoiced" guard fires.
+  -- All checks are re-save-safe: this set's own already-consumed job passes.
+  IF p_source_job_id IS NOT NULL THEN
+    SELECT * INTO v_job FROM jobs WHERE id = p_source_job_id FOR UPDATE;
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'SPLIT_JOB_NOT_FOUND: source job % not found', p_source_job_id
+        USING ERRCODE = 'invalid_parameter_value';
+    END IF;
+    -- This SECURITY DEFINER writer bypasses RLS and now MUTATES jobs, so a non-admin may
+    -- consume only a job whose customer is assigned to them (mirrors the member-scope check).
+    -- No IS NOT NULL short-circuit (RLS review M1): a job with a NULL customer_id must be
+    -- REFUSED for a non-admin, not skipped — NOT EXISTS is true when customer_id is null.
+    IF NOT is_admin()
+       AND NOT EXISTS (SELECT 1 FROM customers c
+                        WHERE c.id = v_job.customer_id AND c.assigned_sales_rep = v_actor) THEN
+      RAISE EXCEPTION 'SPLIT_JOB_NOT_ASSIGNED: not authorized to bill source job %', p_source_job_id
+        USING ERRCODE = 'insufficient_privilege';
+    END IF;
+    -- Already tied to a DIFFERENT split billing set?
+    SELECT id INTO v_other_set FROM field_app_billing_sets
+      WHERE source_job_id = p_source_job_id AND id IS DISTINCT FROM v_set_id
+      LIMIT 1;
+    IF v_other_set IS NOT NULL THEN
+      RAISE EXCEPTION 'SPLIT_JOB_ALREADY_BILLED: source job % is already on split billing set %',
+        p_source_job_id, v_other_set USING ERRCODE = 'invalid_parameter_value';
+    END IF;
+    -- Already invoiced by the normal flow (linked to an invoice that is NOT one of THIS set's children)?
+    IF v_job.status = 'invoiced' AND v_job.invoice_id IS NOT NULL
+       AND NOT EXISTS (SELECT 1 FROM invoices i
+                        WHERE i.id = v_job.invoice_id AND i.field_app_billing_set_id = v_set_id) THEN
+      RAISE EXCEPTION 'SPLIT_JOB_ALREADY_INVOICED: source job % was already invoiced (invoice %)',
+        p_source_job_id, v_job.invoice_id USING ERRCODE = 'invalid_parameter_value';
+    END IF;
+    -- Must be completed (or already this set's) to bill — mirrors transfer_job_to_invoice.
+    IF v_job.status NOT IN ('completed', 'invoiced') THEN
+      RAISE EXCEPTION 'SPLIT_JOB_NOT_COMPLETED: source job % must be completed to bill (status: %)',
+        p_source_job_id, v_job.status USING ERRCODE = 'invalid_parameter_value';
+    END IF;
+  END IF;
+
   -- ---- PASS 1: build billing lines + compute allocations ----------------------
   FOR v_line IN SELECT * FROM jsonb_array_elements(p_lines)
   LOOP
@@ -578,7 +639,29 @@ BEGIN
     v_eff_rate_unit  := v_line->>'rate_unit';   -- default; chemical overrides to the pricing unit below
     v_chem_price_map := NULL;                    -- chemical-only; NULL keeps non-chemical lines untouched
     v_svc_price_map  := NULL;                    -- service-only; NULL keeps non-service lines untouched
+    v_svc_source_map := NULL;                    -- service-only: customer_id -> resolved source (#M)
     v_line_unit_cost := 0;                       -- per-unit COGS for this line (Codex P1 #3)
+
+    -- #M: customers the CALLER explicitly priced as a genuine manual per-person override
+    -- (those stay audited as an 'override'; every other co-owner's resolved per-customer
+    -- price is stored as their BASE, not an override vs the largest-share owner). #L: the
+    -- operator's reason for a customized split / price, captured per co-owner.
+    IF v_line ? 'shares' AND jsonb_typeof(v_line->'shares') = 'array' THEN
+      SELECT array_agg(s->>'customer_id')
+        INTO v_caller_override
+        FROM jsonb_array_elements(v_line->'shares') AS s
+       WHERE s->>'price_mode' = 'override'
+         AND s->'override_unit_price_cents' IS NOT NULL
+         AND jsonb_typeof(s->'override_unit_price_cents') <> 'null';
+      SELECT jsonb_object_agg(s->>'customer_id', jsonb_build_object(
+               'split_reason', NULLIF(btrim(COALESCE(s->>'split_override_reason', '')), ''),
+               'price_reason', NULLIF(btrim(COALESCE(s->>'price_override_reason', '')), '')))
+        INTO v_reasons_map
+        FROM jsonb_array_elements(v_line->'shares') AS s;
+    ELSE
+      v_caller_override := NULL;
+      v_reasons_map     := '{}'::jsonb;
+    END IF;
 
     IF v_line_kind IS NULL
        OR v_line_kind NOT IN ('chemical', 'service', 'fuel_surcharge', 'flat_fee') THEN
@@ -623,6 +706,17 @@ BEGIN
                    LIMIT 1),
                  v_app_service.default_rate_per_acre_cents, 0)), '{}'::jsonb)
           INTO v_svc_price_map
+          FROM unnest(v_members) AS m(cust);
+        -- #M: the precise per-customer source (a custom customer_application_rates row =>
+        -- 'service_rate', otherwise the service default => 'service_default'), so each
+        -- co-owner's audited base_price_source is their OWN resolved source.
+        SELECT jsonb_object_agg(m.cust, CASE WHEN EXISTS (
+                 SELECT 1 FROM customer_application_rates car
+                  WHERE car.customer_id            = m.cust::uuid
+                    AND car.application_service_id = v_app_service_id
+                    AND car.season                 = current_season())
+               THEN 'service_rate' ELSE 'service_default' END)
+          INTO v_svc_source_map
           FROM unnest(v_members) AS m(cust);
         -- Representative (display + the calculator's default price): the largest-share owner's rate.
         v_src_unit_price := COALESCE((v_svc_price_map->>(
@@ -822,6 +916,23 @@ BEGIN
        SET source_line_cents = (v_calc->>'source_line_cents')::bigint
      WHERE id = v_line_id;
 
+    -- #G (Codex round-2 P1): allocate the ONE canonical line COGS across co-owners with the
+    -- SAME largest-remainder rule used for revenue, so the group total_cost ties EXACTLY to
+    -- unit_cost x source — no per-child independent-rounding drift of up to n-1 cents. The
+    -- line's micro_pct weights already sum to 100000000 (enforced by the invariant), so
+    -- _lr_allocate_int sums the shares to v_line_cogs exactly. Zero cost => all-zero shares.
+    v_line_cogs := CASE
+      WHEN v_line_kind = 'service'  THEN safe_cents_qty(v_line_unit_cost, COALESCE(v_src_acres, 0))
+      WHEN v_line_kind = 'chemical' THEN safe_cents_qty(v_line_unit_cost, COALESCE(v_src_qty, 0))
+      ELSE 0 END;
+    SELECT jsonb_agg(jsonb_build_object('customer_id', a->>'customer_id',
+                                        'weight', (a->>'micro_pct')::bigint))
+      INTO v_cogs_weights
+      FROM jsonb_array_elements(v_calc->'allocations') AS a;
+    SELECT jsonb_object_agg(x->>'customer_id', (x->>'amount')::bigint)
+      INTO v_cogs_map
+      FROM jsonb_array_elements(public._lr_allocate_int(v_line_cogs, v_cogs_weights)) AS x;
+
     v_line_plans := v_line_plans || jsonb_build_array(jsonb_build_object(
       'billing_line_id', v_line_id::text,
       'line_kind',       v_line_kind,
@@ -830,6 +941,11 @@ BEGIN
       'rate_unit',       v_eff_rate_unit,
       'sort_order',      v_idx,
       'unit_cost_cents', v_line_unit_cost,   -- per-unit COGS (Codex P1 #3)
+      'cogs_by_customer', v_cogs_map,        -- LR-allocated per-child COGS (Codex r2 #G)
+      'per_customer_priced', (COALESCE(v_chem_price_map, v_svc_price_map) IS NOT NULL), -- Option B (#M)
+      'caller_override_custs', COALESCE(to_jsonb(v_caller_override), '[]'::jsonb),       -- genuine overrides (#M)
+      'svc_source_map',  COALESCE(v_svc_source_map, '{}'::jsonb),  -- per-customer service source (#M)
+      'reasons_map',     COALESCE(v_reasons_map, '{}'::jsonb),     -- split/price reasons (#L)
       'service_name',    CASE WHEN v_line_kind = 'service' THEN v_app_service.name ELSE NULL END, -- Codex r2 #N
       'alloc',           v_calc
     ));
@@ -919,24 +1035,46 @@ BEGIN
       v_qty         := (v_alloc_row->>'allocated_quantity')::numeric;
       v_acres_alloc := (v_alloc_row->>'allocated_acres')::numeric;
 
-      -- Map the precise base_price_source onto the invoice_items.price_source
+      -- #M (Codex round-2 P2) + #L reasons: decide each co-owner's AUDITED base price / source /
+      -- mode. A co-owner's OWN resolved per-customer price (Option B) is their BASE with its real
+      -- source and price_mode='default'; only a genuine caller-supplied manual per-person override
+      -- is audited as an 'override' against the representative base. Non-Option-B lines keep the
+      -- calculator's values verbatim. Reasons are captured when the operator supplied them.
+      v_split_reason := NULLIF(v_plan->'reasons_map'->v_cust->>'split_reason', '');
+      v_price_reason := NULLIF(v_plan->'reasons_map'->v_cust->>'price_reason', '');
+      IF (v_plan->'caller_override_custs') ? v_cust THEN
+        v_share_base_price  := (v_alloc_row->>'base_unit_price_cents')::bigint;   -- representative base
+        v_share_base_source := v_alloc_row->>'base_price_source';
+        v_share_price_mode  := 'override';
+      ELSIF COALESCE((v_plan->>'per_customer_priced')::boolean, false) THEN
+        v_share_base_price  := (v_alloc_row->>'unit_price_cents')::bigint;        -- this co-owner's OWN price
+        v_share_base_source := CASE WHEN v_line_kind = 'service'
+                                    THEN COALESCE(v_plan->'svc_source_map'->>v_cust, v_alloc_row->>'base_price_source')
+                                    ELSE v_alloc_row->>'base_price_source' END;
+        v_share_price_mode  := 'default';
+      ELSE
+        v_share_base_price  := (v_alloc_row->>'base_unit_price_cents')::bigint;
+        v_share_base_source := v_alloc_row->>'base_price_source';
+        v_share_price_mode  := v_alloc_row->>'price_mode';
+      END IF;
+
+      -- Map the AUDITED per-customer source onto the invoice_items.price_source
       -- convention set ('manual'|'quoted'|'tier'); the exact source is preserved
       -- on invoice_line_shares.base_price_source.
-      v_item_price_source := CASE (v_alloc_row->>'base_price_source')
+      v_item_price_source := CASE v_share_base_source
         WHEN 'quoted' THEN 'quoted'
         WHEN 'tier'   THEN 'tier'
         WHEN 'service_rate'    THEN 'tier'
         WHEN 'service_default' THEN 'tier'
         ELSE 'manual' END;
 
-      -- Item cost convention (Codex r2 #F): existing invoice code (PDF/detail) reads a FEE
-      -- (service) item's cost_cents as ALREADY EXTENDED — the live _save_field_app_invoice_impl
-      -- stores cost_per_acre × acres on the fee item — while chemical items carry per-unit cost.
-      -- Match that so the item detail and the header total_cost reconcile.
-      v_item_cost_cents := CASE
-        WHEN v_line_kind = 'service'  THEN safe_cents_qty((v_plan->>'unit_cost_cents')::bigint, COALESCE(v_acres_alloc, 0))
-        WHEN v_line_kind = 'chemical' THEN (v_plan->>'unit_cost_cents')::bigint
-        ELSE 0 END;
+      -- #G (Codex round-2 P1): this co-owner's LR-allocated COGS share for the line, so the
+      -- GROUP total_cost ties EXACTLY to the canonical unit_cost x source (no per-child
+      -- independent-round drift of up to n-1 cents). The invoice_items.cost_cents keeps its
+      -- display convention (#F): a chemical item carries PER-UNIT cost (PDF/detail render unit
+      -- economics), a fee (service) item carries this EXTENDED share. The header total_cost
+      -- accumulates the LR share below, so the group total is exact regardless.
+      v_item_cost_cents := COALESCE((v_plan->'cogs_by_customer'->>v_cust)::bigint, 0);
 
       -- sql-safety: exempt-registry — invoice_items.billing_line_id is created by the prior
       -- parked migration 20260718010000 (not yet in the schema-registry); see file header.
@@ -956,7 +1094,8 @@ BEGIN
              ELSE 1 END,
         (v_alloc_row->>'unit_price_cents')::bigint,
         (v_alloc_row->>'amount_cents')::bigint,     -- extended = authoritative allocation
-        v_item_cost_cents,                          -- per-unit (chemical) / EXTENDED (fee) COGS
+        CASE WHEN v_line_kind = 'chemical' THEN (v_plan->>'unit_cost_cents')::bigint
+             ELSE v_item_cost_cents END,            -- chemical: PER-UNIT; fee: EXTENDED LR share (#F/#G)
         (v_plan->>'sort_order')::int,
         v_acres_alloc,
         CASE WHEN v_line_kind = 'service' THEN 'acre' ELSE v_plan->>'rate_unit' END,
@@ -970,28 +1109,27 @@ BEGIN
         split_mode, split_micro_pct, allocated_quantity, allocated_acres,
         base_unit_price_cents, base_price_source, price_mode,
         unit_price_cents, amount_cents,
+        split_override_reason, price_override_reason,
         calculation_hash, vector_hash, created_by
       ) VALUES (
         (v_plan->>'billing_line_id')::uuid, v_item_id, v_customer_id,
         v_alloc_row->>'split_mode', (v_alloc_row->>'micro_pct')::bigint,
         v_qty, v_acres_alloc,
-        (v_alloc_row->>'base_unit_price_cents')::bigint,
-        v_alloc_row->>'base_price_source',
-        v_alloc_row->>'price_mode',
+        v_share_base_price,          -- #M: co-owner's OWN resolved price is the audited base
+        v_share_base_source,         -- #M: their own resolved source (service_rate/tier/...)
+        v_share_price_mode,          -- #M: 'default' for resolved pricing, 'override' only for a real one
         (v_alloc_row->>'unit_price_cents')::bigint,
         (v_alloc_row->>'amount_cents')::bigint,
+        v_split_reason, v_price_reason,   -- #L: captured reasons when the operator supplied them
         v_alloc_row->>'calculation_hash',
         v_plan->'alloc'->>'vector_hash',
         p_performed_by
       );
 
       v_invoice_total := v_invoice_total + (v_alloc_row->>'amount_cents')::bigint;
-      -- Accumulate extended COGS: the fee item already stores its EXTENDED cost; a chemical item
-      -- stores per-unit cost, so extend it by this customer's billed quantity. Codex P1 #3 / r2 #F.
-      v_invoice_cost  := v_invoice_cost + CASE
-        WHEN v_line_kind = 'service'  THEN v_item_cost_cents
-        WHEN v_line_kind = 'chemical' THEN safe_cents_qty(v_item_cost_cents, COALESCE(v_qty, 0))
-        ELSE 0 END;
+      -- #G: accumulate this co-owner's LR-allocated COGS share directly; the GROUP total_cost
+      -- now ties EXACTLY to the canonical unit_cost x source (no per-child rounding drift).
+      v_invoice_cost  := v_invoice_cost + v_item_cost_cents;
     END LOOP;
 
     v_send_disposition := CASE WHEN v_invoice_total = 0 THEN 'suppressed_zero_total' ELSE 'normal' END;
@@ -1037,6 +1175,18 @@ BEGIN
 
     v_invoice_ids := array_append(v_invoice_ids, v_invoice_id);
   END LOOP;
+
+  -- ---- #E CONSUME THE SOURCE JOB (Codex round-2 P1) --------------------------
+  -- Now that the child invoices exist, mark the source job invoiced exactly like
+  -- transfer_job_to_invoice does, so the normal flow's "Job already invoiced" guard
+  -- fires and the same work can never be billed twice. Idempotent on re-save (a job
+  -- already 'invoiced' by THIS set is left as-is; the guard above already allowed it).
+  IF p_source_job_id IS NOT NULL THEN
+    UPDATE jobs SET status = 'invoiced', invoice_id = v_invoice_ids[1]
+     WHERE id = p_source_job_id AND status <> 'invoiced';
+    UPDATE application_records SET invoice_id = v_invoice_ids[1]
+     WHERE source_type = 'job' AND source_id = p_source_job_id AND invoice_id IS NULL;
+  END IF;
 
   -- ---- PASS 3: field snapshots for the group (Codex P1 #7) -------------------
   -- Grouped (multi-customer) field-app invoices carry their field/crop/acre snapshot at the
@@ -1263,6 +1413,11 @@ BEGIN
   RETURN NEW;
 END;
 $fn$;
+
+-- Defense-in-depth (RLS review I1): this SECURITY DEFINER trigger function keeps the default
+-- PUBLIC EXECUTE otherwise. It is a RETURNS trigger (bare NEW/OLD) so it cannot be invoked via
+-- PostgREST RPC, but REVOKE matches this file's convention and the anon-exec-SECDEF sweep.
+REVOKE ALL ON FUNCTION public.snapshot_invoice_line_shares_on_post() FROM public, anon, authenticated;
 
 DROP TRIGGER IF EXISTS trg_snapshot_line_shares_on_post ON public.invoices;
 CREATE TRIGGER trg_snapshot_line_shares_on_post

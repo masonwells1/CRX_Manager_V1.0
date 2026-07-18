@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowLeft, Plus, Trash2, Save, Send, SlidersHorizontal, Calculator, Info, Ban,
 } from 'lucide-react';
@@ -41,6 +41,7 @@ interface ShareDraft {
   pct: string; // editable percent string
   override: boolean;
   overridePriceDollars: string;
+  overrideReason: string; // #L: optional "why" for a per-share price override
 }
 
 interface LineDraft {
@@ -56,6 +57,7 @@ interface LineDraft {
   flatDollars: string; // flat_fee: dollars (stored as cents)
   rateUnit: string;
   customized: boolean; // when true, send an explicit COMPLETE shares vector
+  splitReason: string; // #L: optional "why" for a customized split
   shares: ShareDraft[];
 }
 
@@ -145,6 +147,7 @@ function defaultSharesFromMembers(members: Member[]): ShareDraft[] {
     pct: (m.micro_pct / 1_000_000).toString(),
     override: false,
     overridePriceDollars: '',
+    overrideReason: '',
   }));
 }
 
@@ -178,6 +181,12 @@ function splitBackendError(err: unknown): string {
 
 export default function FieldAppSplitInvoiceEditor() {
   const navigate = useNavigate();
+  // #H (Codex round-2): a set id in the URL reopens a previously-SAVED draft (save-now / post-later).
+  // v1 reopen is READ-ONLY — it loads the saved server-computed split for review and Post; it does
+  // NOT re-hydrate the editable money inputs (rate units / dollar round-trips), which a re-save
+  // would re-price and could subtly change. Editing a reopened draft stays a future enhancement.
+  const { id: routeSetId } = useParams<{ id: string }>();
+  const isReopen = !!routeSetId;
   const { profile } = useAuth();
   const { toast } = useToast();
 
@@ -218,6 +227,8 @@ export default function FieldAppSplitInvoiceEditor() {
   const [resultInvoices, setResultInvoices] = useState<ResultInvoice[]>([]);
   const [resultShares, setResultShares] = useState<ResultShare[]>([]);
   const [posted, setPosted] = useState(false);
+  // #H: while a reopened set loads, and to lock the read-only reopen view.
+  const [reopenLoading, setReopenLoading] = useState(false);
   // Dirty guard (Codex P1 #5): Post commits the last SAVED draft from the DB. After a Save,
   // editing any field/line/percentage/price/header must disable Post until a re-save — else the
   // operator posts stale amounts. Track the saved input signature vs the current one.
@@ -227,7 +238,8 @@ export default function FieldAppSplitInvoiceEditor() {
     [invoiceDate, headerNotes, sourceJobId, fields, lines],
   );
   // Unsaved edits exist once a draft is saved and the inputs no longer match what was saved.
-  const dirtyAfterSave = billingSetId !== null && savedSig !== currentSig;
+  // Never "dirty" in reopen mode — the editable inputs aren't rendered, so there's nothing to edit.
+  const dirtyAfterSave = !isReopen && billingSetId !== null && savedSig !== currentSig;
 
   // ── Flag read on mount (behaviour-neutral gate) ──────────────────────────
   useEffect(() => {
@@ -261,7 +273,11 @@ export default function FieldAppSplitInvoiceEditor() {
           supabase.from('application_services').select('id, name').eq('is_active', true).order('sort_order'),
           supabase
             .from('jobs')
+            // #E (Codex round-2): only COMPLETED, not-yet-invoiced jobs can be billed. An
+            // 'invoiced' job is already billed (via split or the normal flow); showing it would
+            // invite a double-bill that the save RPC now hard-refuses anyway.
             .select('id, job_number, job_date, customer:customers(farm_name)')
+            .eq('status', 'completed')
             .order('job_date', { ascending: false })
             .limit(200),
         ]);
@@ -373,6 +389,7 @@ export default function FieldAppSplitInvoiceEditor() {
         flatDollars: '',
         rateUnit: '',
         customized: false,
+        splitReason: '',
         shares: defaultSharesFromMembers(members),
       },
     ]);
@@ -482,7 +499,11 @@ export default function FieldAppSplitInvoiceEditor() {
           if (s.override) {
             const oc = dollarsToCents(s.overridePriceDollars);
             if (oc != null) share.override_unit_price_cents = oc;
+            // #L: capture the operator's reason for a price override, when given.
+            if (s.overrideReason.trim()) share.price_override_reason = s.overrideReason.trim();
           }
+          // #L: a customized split carries the line-level reason on every share of the line.
+          if (l.splitReason.trim()) share.split_override_reason = l.splitReason.trim();
           return share;
         });
       }
@@ -611,6 +632,39 @@ export default function FieldAppSplitInvoiceEditor() {
     }
   };
 
+  // ── #H reopen: hydrate a previously-saved set (read-only) for review + Post ──
+  useEffect(() => {
+    if (flagEnabled !== true || !routeSetId) return;
+    let cancelled = false;
+    (async () => {
+      setReopenLoading(true);
+      try {
+        const { data: setRow, error } = await supabaseUntyped
+          .from('field_app_billing_sets')
+          .select('id, invoice_group_id, source_job_id')
+          .eq('id', routeSetId)
+          .maybeSingle();
+        if (error) throw error;
+        if (cancelled) return;
+        if (!setRow) {
+          toast('error', 'That split billing draft was not found.');
+          navigate('/field-invoices');
+          return;
+        }
+        const row = setRow as { id: string; invoice_group_id: string | null; source_job_id: string | null };
+        setBillingSetId(row.id);
+        setInvoiceGroupId(row.invoice_group_id ?? null);
+        setSourceJobId(row.source_job_id ?? '');
+        await loadResults(row.id);
+      } catch (err) {
+        if (!cancelled) toast('error', sanitizeError(err));
+      } finally {
+        if (!cancelled) setReopenLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [flagEnabled, routeSetId, loadResults, navigate, toast]);
+
   // ── Render ─────────────────────────────────────────────────────────────────
   if (flagEnabled === null) {
     return (
@@ -658,14 +712,18 @@ export default function FieldAppSplitInvoiceEditor() {
             <ArrowLeft className="w-5 h-5" />
           </button>
           <div>
-            <h1 className="text-xl font-semibold font-heading text-nav-dark">Split Billing — New</h1>
+            <h1 className="text-xl font-semibold font-heading text-nav-dark">
+              {isReopen ? (posted ? 'Split Billing — Posted' : 'Split Billing — Saved Draft') : 'Split Billing — New'}
+            </h1>
             <p className="text-xs text-secondary">Per-line split of a field application across multiple customers.</p>
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="secondary" icon={<Save className="w-4 h-4" />} showChevron={false} loading={saving} onClick={handleSave}>
-            {billingSetId ? 'Re-save Draft' : 'Save Draft'}
-          </Button>
+          {!isReopen && (
+            <Button variant="secondary" icon={<Save className="w-4 h-4" />} showChevron={false} loading={saving} onClick={handleSave}>
+              {billingSetId ? 'Re-save Draft' : 'Save Draft'}
+            </Button>
+          )}
           <Button
             variant="primary"
             icon={<Send className="w-4 h-4" />}
@@ -686,7 +744,22 @@ export default function FieldAppSplitInvoiceEditor() {
         </div>
       )}
 
+      {isReopen && reopenLoading && (
+        <div className="flex items-center justify-center py-10">
+          <div className="w-6 h-6 border-4 border-crx-green border-t-transparent rounded-full animate-spin" />
+        </div>
+      )}
+
+      {isReopen && !reopenLoading && (
+        <div className="rounded-lg bg-blue-50 border border-blue-200 px-3 py-2 text-sm text-blue-800">
+          {posted
+            ? 'This split invoice group is posted and read-only.'
+            : 'Reopened a saved draft. Review the server-computed split below, then Post when you’re ready. To change the split, start a new one.'}
+        </div>
+      )}
+
       {/* Invoice header + source job */}
+      {!isReopen && (<>
       <Card>
         <CardHeader title="Application" />
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -967,13 +1040,31 @@ export default function FieldAppSplitInvoiceEditor() {
                                 placeholder="$ / unit"
                               />
                             )}
+                            {s.override && (
+                              <input
+                                type="text"
+                                value={s.overrideReason}
+                                onChange={(e) => patchShare(l.uid, s.customer_id, { overrideReason: e.target.value })}
+                                className="flex-1 min-w-[10rem] rounded-lg border border-gray-300 px-2 py-1 text-sm"
+                                placeholder="Reason for override (optional)"
+                              />
+                            )}
                           </div>
                         ))}
                       </div>
                       {l.customized && (
-                        <p className={`mt-2 text-xs ${sumOk ? 'text-secondary' : 'text-red-600'}`}>
-                          Percent total: {sum.toFixed(2)}% {sumOk ? '' : '— must equal 100%'}
-                        </p>
+                        <>
+                          <p className={`mt-2 text-xs ${sumOk ? 'text-secondary' : 'text-red-600'}`}>
+                            Percent total: {sum.toFixed(2)}% {sumOk ? '' : '— must equal 100%'}
+                          </p>
+                          <input
+                            type="text"
+                            value={l.splitReason}
+                            onChange={(e) => patchLine(l.uid, { splitReason: e.target.value })}
+                            className="mt-2 w-full rounded-lg border border-gray-300 px-2 py-1 text-sm"
+                            placeholder="Reason for custom split (optional)"
+                          />
+                        </>
                       )}
                     </div>
                   )}
@@ -983,6 +1074,7 @@ export default function FieldAppSplitInvoiceEditor() {
           </div>
         )}
       </Card>
+      </>)}
 
       {/* Authoritative results after save */}
       {resultInvoices.length > 0 && (

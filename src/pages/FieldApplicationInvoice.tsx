@@ -801,6 +801,16 @@ export default function FieldApplicationInvoice() {
     }
 
     const invoice = inv as Record<string, unknown>;
+    // #A (Codex round-2): a per-line SPLIT child must never be edited in this per-acre editor —
+    // its save_field_app_invoice would rewrite invoice_items and cascade away the split's
+    // invoice_line_shares. This load uses select('*') (tolerant of the column's absence before the
+    // split migration), so detecting it here is deploy-order-safe. Send it to the read-only Split
+    // Billing view keyed by the billing set (breaks any redirect loop with InvoiceDetail).
+    const splitSetId = (invoice.field_app_billing_set_id as string | null) ?? null;
+    if (splitSetId) {
+      navigate(`/split-billing/${splitSetId}`, { replace: true });
+      return;
+    }
     setInvoiceNumber((invoice.invoice_number as string) || '');
     setTransactionDate((invoice.invoice_date as string) || '');
     setNotes((invoice.header_notes as string) || '');

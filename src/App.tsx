@@ -225,6 +225,8 @@ const router = createBrowserRouter([
           { path: 'field-invoices', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><FieldInvoices /></ProtectedRoute> },
           // Per-line split-billing editor (flag-gated; page self-gates on per_line_split_billing_enabled).
           { path: 'split-billing/new', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><FieldAppSplitInvoiceEditor /></ProtectedRoute> },
+          // #H save-now/post-later: reopen a saved billing set (read-only review + Post).
+          { path: 'split-billing/:id', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><FieldAppSplitInvoiceEditor /></ProtectedRoute> },
           // Kept for bookmarks; all workflow views now live as query-addressable tabs.
           { path: 'field-invoices/unposted', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><Navigate to="/field-invoices?tab=drafts" replace /></ProtectedRoute> },
           { path: 'field-invoices/posted', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><Navigate to="/field-invoices?tab=posted" replace /></ProtectedRoute> },

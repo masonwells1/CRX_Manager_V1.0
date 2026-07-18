@@ -293,7 +293,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
     // row is fetched. Mirrors FieldApplicationInvoice's minimal preflight. (Codex R5/R11)
     const pre = await supabase
       .from('invoices')
-      .select('invoice_type, job_id, blend_ticket_id, status, field_app_billing_set_id')
+      .select('invoice_type, job_id, blend_ticket_id, status')
       .eq('id', invoiceId)
       .maybeSingle();
     if (isStale()) return;
@@ -321,12 +321,14 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
       const fieldJobId = (pre.data as { job_id?: string | null }).job_id;
       const fieldBlendId = (pre.data as { blend_ticket_id?: string | null }).blend_ticket_id;
       const fieldStatus = (pre.data as { status?: string }).status;
-      const fieldSplitSet = (pre.data as { field_app_billing_set_id?: string | null }).field_app_billing_set_id;
-      // A per-line SPLIT child (has a billing set) must NOT be routed to the per-acre editor —
-      // that editor's save_field_app_invoice would rewrite it and cascade away its
-      // invoice_line_shares. Keep it in THIS page, which renders it strictly read-only (Codex P1 #6).
+      // #A (Codex round-2): this preflight must NOT reference field_app_billing_set_id — an
+      // explicit select of a column that only exists after the split migration would 400 every
+      // invoice-detail load if the frontend deploys before the migration. A split-child DRAFT is
+      // still routed to the per-acre editor here, which (via its own select('*') load, tolerant of
+      // the column's absence) redirects it onward to the read-only Split Billing view. A POSTED
+      // split child (status not draft/unposted) stays on THIS page and renders read-only from the
+      // full select('*') load below (isSplitInvoice), which is deploy-order-safe.
       if (routeArea === 'field' && invType === 'field_application' && !fieldJobId && !fieldBlendId
-          && !fieldSplitSet
           && (fieldStatus === 'draft' || fieldStatus === 'unposted')) {
         navigate(`/invoices/field-app/${invoiceId}`, { replace: true });
         return;

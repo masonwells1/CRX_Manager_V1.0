@@ -25,10 +25,25 @@ children got no field_app_locations → blank fields/acres (#7); duplicate `invo
 re-save (#8); mis-derived compat acres (#9); `send_disposition` never hydrated so the $0-email gate never
 fired (#10). Mason chose **full v1 scope** (chemical + service + flat). All fixed in
 `20260718030000_..._save_rpc.sql` + `FieldAppSplitInvoiceEditor.tsx` / `InvoiceDetail.tsx` /
-`FieldApplicationInvoice.tsx` / `fieldInvoiceList.ts`; typecheck clean. Remaining before flag-on: a **clean
-re-run of the Codex gate** and Mason's **baseline field-app billing cycle**. Two non-blocking notes: a
+`FieldApplicationInvoice.tsx` / `fieldInvoiceList.ts`; typecheck clean. Two non-blocking notes: a
 chemical *return/credit* (negative qty) can't go through the split screen yet (fail-closed); the per-person
 price override in the draft UI still works for one-off adjustments.
+
+**Codex ROUND 2 RAN 2026-07-18 → 13 more findings (8 P1 + 5 P2), ALL 13 NOW RESOLVED + re-proven.** A deeper
+pass found: flag not enforced server-side (#B); deploy-order coupling in InvoiceDetail preflight (#A); negative
+flat credit posted as a charge (#C); malformed override → $0 (#D); source job billable via split AND normal
+flow = double-bill (#E); fee cost per-acre vs extended mismatch (#F); per-child COGS rounding overstates group
+total (#G); no route to reopen a saved draft (#H); local-date default (#J); micro-pct residual on custom
+splits (#K); service name lost on item (#N); Option-B pricing audited as an "override" not a base (#M);
+custom-split/override reasons never captured (#L). First 7 (#B/#C/#D/#F/#J/#K/#N) landed in `eb942f86`; the
+final 6 (#A/#E/#G/#H/#L/#M) this session. **#H = save-now/post-later:** a new `split-billing/:id` route reopens
+a saved set READ-ONLY for review + Post (editable reopen deferred — a re-save re-prices, so rebuilding money
+fields is a future, separately-proven enhancement). **#E** consumes the source job (status→invoiced) so it
+can't be double-billed. Re-proven in live PG: **PROOFOK 29/29** (adds cogs_group_lr_exact, audited_base_is_own,
+reasons_captured, double_bill_second_set_rejected, resave_same_job_allowed). rls-security-reviewer 0/0,
+migration-drift 0 blockers; typecheck + lint clean. Still parked: flag OFF, migrations NOT applied, PR #164
+NOT merged. **Remaining before flag-on: a CLEAN full re-run of the Codex gate, then Mason's review + baseline
+field-app billing cycle.**
 Owner-facing detail: `docs/plans/per-line-split-billing-BUILD-HANDOFF-2026-07-18.md`.
 
 ## 1. Open HIGH findings (dormant on live data)
