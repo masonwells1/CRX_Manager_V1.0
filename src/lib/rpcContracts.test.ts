@@ -1606,6 +1606,7 @@ const IDEMPOTENCY_BODY_EXEMPT: Record<
   // callers a clear error, but the body always raises before any state change,
   // so replay persistence would be misleading and unnecessary.
   record_invoice_payment: 'retired-tombstone',
+  restore_cancelled_order: 'retired-tombstone',
 };
 
 /**
@@ -1686,6 +1687,21 @@ describe('Idempotency BODY verification (reads migration SQL)', () => {
     expect(bodyUsesIdempotency(body as string)).toBe(false);
     expect(migration).toMatch(
       /REVOKE ALL ON FUNCTION public\.record_invoice_payment\(uuid, bigint, text, text, text, text\)[\s\S]*FROM PUBLIC, anon, authenticated, service_role/
+    );
+  });
+
+  it('restore_cancelled_order is an explicit non-mutating retired tombstone', () => {
+    const files = getMigrationFiles();
+    const migration = files.find(
+      ({ name }) => name === '20260718193000_correct_payment_void_and_quote_retry_contract.sql'
+    )?.content;
+    const body = latestFunctionBody('restore_cancelled_order');
+
+    expect(IDEMPOTENCY_BODY_EXEMPT.restore_cancelled_order).toBe('retired-tombstone');
+    expect(body).toContain('RESTORE_CANCELLED_ORDER_RETIRED:');
+    expect(bodyUsesIdempotency(body as string)).toBe(false);
+    expect(migration).toMatch(
+      /REVOKE ALL ON FUNCTION public\.restore_cancelled_order\(uuid, text, uuid, text\)[\s\S]*FROM PUBLIC, anon, authenticated, service_role/
     );
   });
 

@@ -13,6 +13,12 @@
 --    reversed payment cannot appear as a phantom credit after invoice void.
 -- 4. revert_quote_status now uses the shared advisory-lock idempotency helper
 --    and binds cached results to the quote, reason, and actor.
+-- 5. Reopening a cancelled whole-conversion quote now fails closed if any
+--    cancelled order has delivered inventory, a completed delivery, a posted
+--    financial document, or a paid commission. The unused legacy
+--    restore_cancelled_order path is retired and ungranted because it restored
+--    only the status while leaving released inventory, cancelled commissions,
+--    and cancelled invoices unreconstructed.
 --
 -- No business rows are modified by this migration.
 
@@ -558,10 +564,52 @@ BEGIN
   END IF;
 
   IF v_quote.status = 'accepted' THEN
-    -- B2 fix: only an ACTIVE (non-cancelled) order locks the quote. A quote
-    -- whose only order was cancelled is no longer permanently stranded.
+    -- Only an ACTIVE (non-cancelled) order locks the quote outright. A quote
+    -- whose only order was safely cancelled may be rescued below.
     IF EXISTS (SELECT 1 FROM orders WHERE quote_id = p_quote_id AND status <> 'cancelled') THEN
-      RAISE EXCEPTION 'Cannot revert accepted quote % — an active (non-cancelled) order exists from it', v_quote.quote_number;
+      RAISE EXCEPTION 'QUOTE_REOPEN_ACTIVE_ORDER: cannot revert accepted quote % while an active order exists', v_quote.quote_number;
+    END IF;
+
+    -- A cancelled order can retain delivered quantities. Re-converting the
+    -- full quote would book those units again and duplicate inventory demand.
+    IF EXISTS (
+      SELECT 1
+        FROM orders o
+        JOIN order_items oi ON oi.order_id = o.id
+       WHERE o.quote_id = p_quote_id
+         AND COALESCE(oi.quantity_delivered, 0) > 0
+    ) OR EXISTS (
+      SELECT 1
+        FROM orders o
+        JOIN deliveries d ON d.order_id = o.id
+       WHERE o.quote_id = p_quote_id
+         AND d.status = 'completed'
+    ) THEN
+      RAISE EXCEPTION 'QUOTE_REOPEN_DELIVERED_ACTIVITY: quote % has delivered inventory on a cancelled order; reconcile the original order instead of converting again', v_quote.quote_number;
+    END IF;
+
+    -- cancel_order intentionally leaves posted/paid/overdue invoices and paid
+    -- commissions for manual review. A new full order would duplicate those
+    -- financial obligations, so the escape hatch must remain closed.
+    IF EXISTS (
+      SELECT 1
+        FROM orders o
+        JOIN invoices i ON i.order_id = o.id
+       WHERE o.quote_id = p_quote_id
+         AND i.deleted_at IS NULL
+         AND i.status IN ('posted', 'paid', 'overdue')
+    ) THEN
+      RAISE EXCEPTION 'QUOTE_REOPEN_POSTED_INVOICE: quote % has a posted, paid, or overdue invoice on a cancelled order', v_quote.quote_number;
+    END IF;
+
+    IF EXISTS (
+      SELECT 1
+        FROM orders o
+        JOIN commissions c ON c.order_id = o.id
+       WHERE o.quote_id = p_quote_id
+         AND c.status = 'paid'
+    ) THEN
+      RAISE EXCEPTION 'QUOTE_REOPEN_PAID_COMMISSION: quote % has a paid commission on a cancelled order', v_quote.quote_number;
     END IF;
   END IF;
 
@@ -635,12 +683,38 @@ BEGIN
 END;
 $function$;
 
+-- Retire the unused restore path instead of preserving a status-only repair.
+-- cancel_order releases inventory, deactivates holds, cancels/zeros pending
+-- commissions, and cancels/zeros draft invoices; the legacy restore function
+-- rebuilt none of those effects. There is no repository caller. Keep the
+-- signature as a non-mutating tombstone so stale direct clients fail explicitly.
+
+CREATE OR REPLACE FUNCTION public.restore_cancelled_order(
+  p_order_id uuid,
+  p_reason text,
+  p_performed_by uuid DEFAULT NULL,
+  p_idempotency_key text DEFAULT NULL
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+BEGIN
+  RAISE EXCEPTION 'RESTORE_CANCELLED_ORDER_RETIRED: reopen the quote through the reviewed escape hatch or create a new explicit correction workflow';
+END;
+$function$;
+
+REVOKE ALL ON FUNCTION public.restore_cancelled_order(uuid, text, uuid, text)
+  FROM PUBLIC, anon, authenticated, service_role;
+
 
 DO $postflight$
 DECLARE
   v_void_source text;
   v_review_source text;
   v_quote_source text;
+  v_restore_source text;
   v_payment_source text;
 BEGIN
   SELECT prosrc INTO v_void_source
@@ -668,8 +742,25 @@ BEGIN
 
   IF v_quote_source NOT LIKE '%check_idempotency(p_idempotency_key, ''revert_quote_status'')%'
      OR v_quote_source NOT LIKE '%IDEMPOTENCY_ARGUMENT_MISMATCH%'
+     OR v_quote_source NOT LIKE '%QUOTE_REOPEN_DELIVERED_ACTIVITY%'
+     OR v_quote_source NOT LIKE '%QUOTE_REOPEN_POSTED_INVOICE%'
+     OR v_quote_source NOT LIKE '%QUOTE_REOPEN_PAID_COMMISSION%'
      OR v_quote_source NOT LIKE '%jsonb_build_object(''request'', v_request, ''response'', v_result)%' THEN
-    RAISE EXCEPTION 'REVERT_QUOTE_POSTFLIGHT_FAILED: bound shared-idempotency contract missing';
+    RAISE EXCEPTION 'REVERT_QUOTE_POSTFLIGHT_FAILED: lifecycle guard or bound shared-idempotency contract missing';
+  END IF;
+
+  SELECT prosrc INTO v_restore_source
+  FROM pg_proc
+  WHERE oid = 'public.restore_cancelled_order(uuid, text, uuid, text)'::regprocedure;
+
+  IF v_restore_source NOT LIKE '%RESTORE_CANCELLED_ORDER_RETIRED:%' THEN
+    RAISE EXCEPTION 'RESTORE_ORDER_POSTFLIGHT_FAILED: retired tombstone missing';
+  END IF;
+
+  IF has_function_privilege('anon', 'public.restore_cancelled_order(uuid, text, uuid, text)', 'EXECUTE')
+     OR has_function_privilege('authenticated', 'public.restore_cancelled_order(uuid, text, uuid, text)', 'EXECUTE')
+     OR has_function_privilege('service_role', 'public.restore_cancelled_order(uuid, text, uuid, text)', 'EXECUTE') THEN
+    RAISE EXCEPTION 'RESTORE_ORDER_POSTFLIGHT_FAILED: execute grant remains';
   END IF;
 
   SELECT prosrc INTO v_payment_source

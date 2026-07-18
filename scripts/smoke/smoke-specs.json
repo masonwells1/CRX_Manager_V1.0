@@ -23,8 +23,8 @@
     },
     "revert_quote_status": {
       "chain": "smoke-revert-quote-escape-hatch.sql",
-      "description": "B2 escape-hatch and retry regression: an accepted quote whose whole-conversion order was cancelled retains its full pre-revert draw, ignores an expired retry cache entry, reopens exactly once under same-key replay, rejects cross-quote key reuse, releases its draws, and converts again. Self-contained fixtures and terminal rollback.",
-      "covers": ["revert_quote_status", "convert_quote_to_order", "cancel_order"]
+      "description": "B2 escape-hatch, retired-restore, and retry regression: a clean cancelled whole-conversion quote can be safely reopened, while delivered inventory, completed deliveries, posted invoices, and paid commissions fail closed. The unsafe status-only restore RPC is non-mutating and ungranted before reopen, after reopen, and after replacement. Also proves expired retry eviction, exact replay, cross-target rejection, draw release, and reconversion. Self-contained fixtures and terminal rollback.",
+      "covers": ["revert_quote_status", "restore_cancelled_order", "convert_quote_to_order", "cancel_order"]
     },
     "void_invoice": {
       "chain": "smoke-void-invoice-blocks-applied-payments.sql",
