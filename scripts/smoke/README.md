@@ -90,10 +90,12 @@ node scripts/smoke/prove-per-line-split-billing-phase1.mjs
 ```
 
 It applies the checked-in migration verbatim in a uniquely named, network-isolated
-container backed by tmpfs. It proves all three invariant trigger functions use a
+container backed by tmpfs. It proves all four invariant trigger functions use a
 fixed-search-path, client-non-executable SECURITY DEFINER owned by a BYPASSRLS role;
 that moving a share cannot strand its source line at 0%; that a share cannot move
-onto a posted invoice item; that parent cascades cannot erase posted share history;
+onto a posted invoice item; that a linked invoice item cannot be reparented out of
+its allocation snapshot while a deliberate draft delete/rebuild remains valid; that
+parent cascades cannot erase posted share history;
 that authenticated has SELECT only and cannot TRUNCATE; that one non-null invoice group
 cannot acquire competing billing-set parents; that applicators cannot read unrelated
 billing sets/source prices; that split and price overrides reject blank audit reasons;
@@ -101,8 +103,8 @@ that browser roles cannot change the server-controlled send disposition;
 that only a zero-total invoice may be suppressed while the server's valid zero-total
 path still works; that a logical billing line cannot commit without a vector; and that
 two concurrent full-vector writers serialize so exactly one commits. It also races a
-share mutation with invoice posting and proves the share trigger holds the invoice row
-lock, preventing either transaction from crossing the posted-snapshot boundary. The container is
+share mutation with invoice posting and proves the share trigger holds the item/invoice
+lock boundary, preventing either transaction from crossing the posted-snapshot boundary. The container is
 removed in `finally` on PASS or FAIL.
 
 ## Disposable Supplier Pricing Phase 1a proof

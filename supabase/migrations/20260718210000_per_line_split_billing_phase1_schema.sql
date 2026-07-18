@@ -297,11 +297,21 @@ BEGIN
     v_item_ids := array_append(v_item_ids, NEW.invoice_item_id);
   END IF;
 
+  -- Lock item rows before invoice rows. This serializes share writes with an
+  -- invoice_items.invoice_id reparent and gives both triggers the same lock
+  -- order. Without this lock, a concurrent share insert could validate the old
+  -- draft parent, wait on its FK, then follow the item onto a posted invoice.
+  PERFORM 1
+  FROM public.invoice_items ii
+  WHERE ii.id = ANY(v_item_ids)
+  ORDER BY ii.id
+  FOR UPDATE;
+
   -- Serialize the share mutation with every posting surface. Posting already
   -- takes the invoice row lock; taking the same lock here means either the share
   -- edit commits while the invoice is still draft, or posting wins and the
-  -- status recheck below rejects the edit. The stable order also matches group
-  -- posting and avoids an OLD/NEW cross-invoice deadlock on reparent.
+  -- status recheck below rejects the edit. The stable order also avoids an
+  -- OLD/NEW cross-invoice deadlock on share reparent.
   PERFORM 1
   FROM public.invoices i
   WHERE i.id IN (
@@ -345,6 +355,45 @@ DROP TRIGGER IF EXISTS trg_invoice_line_shares_frozen_when_posted ON public.invo
 CREATE TRIGGER trg_invoice_line_shares_frozen_when_posted
   BEFORE INSERT OR UPDATE OR DELETE ON public.invoice_line_shares
   FOR EACH ROW EXECUTE FUNCTION public.trg_invoice_line_shares_frozen_when_posted();
+
+-- invoice_line_shares follows invoice_items.invoice_id, so moving the parent item
+-- would otherwise move an immutable posted allocation snapshot back onto a draft
+-- invoice and make it editable. A linked item is therefore parent-immutable. Draft
+-- workflows can still deliberately delete/rebuild their shares before reparenting;
+-- the share DELETE trigger prevents that escape once the invoice is posted.
+CREATE OR REPLACE FUNCTION public.trg_invoice_items_shared_parent_frozen_when_posted()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+  IF NEW.invoice_id IS NOT DISTINCT FROM OLD.invoice_id THEN
+    RETURN NEW;
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+    FROM public.invoice_line_shares s
+    WHERE s.invoice_item_id = OLD.id
+  ) THEN
+    RAISE EXCEPTION
+      'invoice_item % is frozen while linked to a split-billing snapshot; delete and rebuild draft shares before reparenting, and posted shares cannot be moved.',
+      OLD.id
+      USING ERRCODE = 'raise_exception';
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION public.trg_invoice_items_shared_parent_frozen_when_posted()
+  FROM PUBLIC, anon, authenticated;
+
+DROP TRIGGER IF EXISTS trg_invoice_items_shared_parent_frozen_when_posted ON public.invoice_items;
+CREATE TRIGGER trg_invoice_items_shared_parent_frozen_when_posted
+  BEFORE UPDATE OF invoice_id ON public.invoice_items
+  FOR EACH ROW EXECUTE FUNCTION public.trg_invoice_items_shared_parent_frozen_when_posted();
 
 -- ---------------------------------------------------------------------------
 -- 6. RLS. All three tables: scoped SELECT for staff; NO browser writes or table DDL.

@@ -37,6 +37,7 @@ const ID = {
   lineB: '00000000-0000-4000-8000-000000000032',
   draftInvoice: '00000000-0000-4000-8000-000000000041',
   postedInvoice: '00000000-0000-4000-8000-000000000042',
+  otherDraftInvoice: '00000000-0000-4000-8000-000000000043',
   itemA: '00000000-0000-4000-8000-000000000051',
   itemB: '00000000-0000-4000-8000-000000000052',
   postedItem: '00000000-0000-4000-8000-000000000053',
@@ -256,6 +257,7 @@ GRANT UPDATE ON public.invoices TO authenticated;
     'CREATE TABLE IF NOT EXISTS public.field_app_billing_lines',
     'CREATE CONSTRAINT TRIGGER trg_invoice_line_shares_sum_100',
     'CREATE TRIGGER trg_invoice_line_shares_frozen_when_posted',
+    'CREATE TRIGGER trg_invoice_items_shared_parent_frozen_when_posted',
   ]) {
     if (!migration.includes(marker)) fail(`migration lost required marker: ${marker}`);
   }
@@ -280,7 +282,8 @@ INSERT INTO public.invoices (
   id, status, posted_at, total_amount_cents, created_by, salesman_id
 ) VALUES
   ('${ID.draftInvoice}', 'draft', NULL, 0, '${ID.actor}', '${ID.actor}'),
-  ('${ID.postedInvoice}', 'posted', now(), 1000, '${ID.actor}', '${ID.actor}');
+  ('${ID.postedInvoice}', 'posted', now(), 1000, '${ID.actor}', '${ID.actor}'),
+  ('${ID.otherDraftInvoice}', 'draft', NULL, 0, '${ID.actor}', '${ID.actor}');
 INSERT INTO public.invoice_items (id, invoice_id, quantity, acres) VALUES
   ('${ID.itemA}', '${ID.draftInvoice}', 1, 1),
   ('${ID.itemB}', '${ID.draftInvoice}', 1, 1),
@@ -347,15 +350,16 @@ function proveTriggerSecurityContext() {
       AND p.proname IN (
         'trg_invoice_line_shares_sum_100',
         'trg_field_app_billing_line_has_shares',
-        'trg_invoice_line_shares_frozen_when_posted'
+        'trg_invoice_line_shares_frozen_when_posted',
+        'trg_invoice_items_shared_parent_frozen_when_posted'
       );
   `);
-  const passed = posture === '3|3|3|3';
+  const passed = posture === '4|4|4|4';
   return {
     label: 'all invariant triggers use a locked-down RLS-bypass definer context',
     passed,
     detail: passed
-      ? '3 SECURITY DEFINER + fixed search_path + no client EXECUTE + BYPASSRLS owner'
+      ? '4 SECURITY DEFINER + fixed search_path + no client EXECUTE + BYPASSRLS owner'
       : `catalog posture definer|search_path|locked_execute|bypass_owner = ${posture}`,
   };
 }
@@ -420,6 +424,56 @@ UPDATE public.invoices
      COMMIT;`,
     /foreign key|still referenced|frozen.*posted/i,
   );
+}
+
+function proveSharedPostedItemCannotMoveToDraft() {
+  resetFixture();
+  runSql(`
+BEGIN;
+${lineSql(ID.lineA, 'posted parent reparent source line')}
+${shareSql({ id: ID.shareA, line: ID.lineA, item: ID.itemA, customer: ID.customerA })}
+COMMIT;
+UPDATE public.invoices
+   SET status = 'posted', posted_at = now()
+ WHERE id = '${ID.draftInvoice}';
+`);
+  return expectRejected(
+    'a shared invoice item cannot move from a posted invoice to a draft invoice',
+    `UPDATE public.invoice_items
+        SET invoice_id = '${ID.otherDraftInvoice}'
+      WHERE id = '${ID.itemA}';`,
+    /frozen.*posted/i,
+  );
+}
+
+function proveDraftItemCanMoveWithShareRebuild() {
+  resetFixture();
+  runSql(`
+BEGIN;
+${lineSql(ID.lineA, 'draft parent rebuild source line')}
+${shareSql({ id: ID.shareA, line: ID.lineA, item: ID.itemA, customer: ID.customerA })}
+COMMIT;
+
+BEGIN;
+DELETE FROM public.invoice_line_shares WHERE id = '${ID.shareA}';
+UPDATE public.invoice_items
+   SET invoice_id = '${ID.otherDraftInvoice}'
+ WHERE id = '${ID.itemA}';
+${shareSql({ id: ID.shareA, line: ID.lineA, item: ID.itemA, customer: ID.customerA })}
+COMMIT;
+`);
+  const finalState = scalar(`
+SELECT ii.invoice_id::text || '|' || count(s.id)::text
+  FROM public.invoice_items ii
+  LEFT JOIN public.invoice_line_shares s ON s.invoice_item_id = ii.id
+ WHERE ii.id = '${ID.itemA}'
+ GROUP BY ii.invoice_id;
+`);
+  return {
+    label: 'draft workflows can deliberately rebuild shares around an item reparent',
+    passed: finalState === `${ID.otherDraftInvoice}|1`,
+    detail: `final invoice|share count = ${finalState}`,
+  };
 }
 
 function proveClientCannotTruncate() {
@@ -669,6 +723,48 @@ SELECT status || '|' || (posted_at IS NOT NULL)::text || '|' ||
   };
 }
 
+async function proveShareInsertSerializesWithItemReparent() {
+  resetFixture();
+
+  const writer = startSqlWithMarker(`
+BEGIN;
+${lineSql(ID.lineA, 'parent reparent race line')}
+${shareSql({ id: ID.shareA, line: ID.lineA, item: ID.itemA, customer: ID.customerA })}
+SELECT 'SHARE_INSERT_LOCKED_ITEM';
+SELECT pg_sleep(2);
+COMMIT;
+`, 'SHARE_INSERT_LOCKED_ITEM');
+
+  await writer.ready;
+  const mover = startSql(`
+SET lock_timeout = '500ms';
+UPDATE public.invoice_items
+   SET invoice_id = '${ID.postedInvoice}'
+ WHERE id = '${ID.itemA}';
+`);
+
+  const [writeResult, moveResult] = await Promise.all([writer.completion, mover]);
+  const finalState = scalar(`
+SELECT ii.invoice_id::text || '|' || count(s.id)::text
+  FROM public.invoice_items ii
+  LEFT JOIN public.invoice_line_shares s ON s.invoice_item_id = ii.id
+ WHERE ii.id = '${ID.itemA}'
+ GROUP BY ii.invoice_id;
+`);
+  const moveDetail = `${moveResult.stdout || ''}${moveResult.stderr || ''}`;
+  const passed = writeResult.code === 0
+    && moveResult.code !== 0
+    && /lock timeout/i.test(moveDetail)
+    && finalState === `${ID.draftInvoice}|1`;
+  return {
+    label: 'share insertion serializes with invoice-item parent reparenting',
+    passed,
+    detail: passed
+      ? 'share insert held the item row; concurrent reparent timed out and the snapshot stayed draft-linked'
+      : `writer=${writeResult.code} mover=${moveResult.code} final=${finalState}`,
+  };
+}
+
 async function main() {
   prepareContainer();
   installSchema();
@@ -678,6 +774,8 @@ async function main() {
     proveMovedSourceLine(),
     provePostedReparent(),
     provePostedParentCascade(),
+    proveSharedPostedItemCannotMoveToDraft(),
+    proveDraftItemCanMoveWithShareRebuild(),
     proveClientCannotTruncate(),
     proveOneBillingSetPerInvoiceGroup(),
     proveApplicatorCannotReadBillingSources(),
@@ -689,6 +787,7 @@ async function main() {
     proveEmptyLine(),
     await proveConcurrentVectors(),
     await proveShareWriteSerializesWithPost(),
+    await proveShareInsertSerializesWithItemReparent(),
   ];
 
   for (const result of results) {
