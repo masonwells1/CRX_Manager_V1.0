@@ -45,6 +45,18 @@ const forwardCorrectionSql = path.join(
   'migrations',
   '20260718124517_harden_supplier_pricing_cent_scale_and_trigger.sql'
 );
+const emptyReplaySetupSql = path.join(
+  repoRoot,
+  'supabase',
+  'migrations',
+  '20260718124516_supplier_pricing_empty_replay_setup.sql'
+);
+const emptyReplayCleanupSql = path.join(
+  repoRoot,
+  'supabase',
+  'migrations',
+  '20260718124518_supplier_pricing_empty_replay_cleanup.sql'
+);
 const forwardCorrectionSmokeSql = path.join(
   repoRoot,
   'scripts',
@@ -191,6 +203,8 @@ try {
   copyToContainer(zeroCostGuardSmokeSql, 'zero-cost-guard-smoke.sql');
   copyToContainer(cutoverSql, 'cutover.sql');
   copyToContainer(forwardCorrectionSql, 'forward-correction.sql');
+  copyToContainer(emptyReplaySetupSql, 'empty-replay-setup.sql');
+  copyToContainer(emptyReplayCleanupSql, 'empty-replay-cleanup.sql');
   copyToContainer(forwardCorrectionSmokeSql, 'forward-correction-smoke.sql');
   copyToContainer(smokeSql, 'smoke.sql');
   copyToContainer(workbookExportSql, 'xlsx-export.sql');
@@ -208,6 +222,45 @@ try {
   psql('zero-cost-guard.sql');
   console.log('[phase1a-proof] proving the guard blocks governed zero cost without breaking legacy mode');
   psql('zero-cost-guard-smoke.sql');
+  console.log('[phase1a-proof] proving the applied correction replays with zero Products');
+  run('docker', [
+    'exec', '-e', `PGPASSWORD=${password}`, container,
+    'createdb', '-U', 'postgres', 'phase1a_empty_replay',
+  ]);
+  for (const filename of [
+    'base.sql',
+    'bootstrap.sql',
+    'pricing-version-compat.sql',
+    'zero-cost-guard.sql',
+    'empty-replay-setup.sql',
+    'forward-correction.sql',
+    'empty-replay-cleanup.sql',
+  ]) {
+    run('docker', [
+      'exec', '-e', `PGPASSWORD=${password}`, container,
+      'psql', '-U', 'postgres', '-d', 'phase1a_empty_replay', '-X',
+      '-v', 'ON_ERROR_STOP=1', '-f', `/tmp/${filename}`,
+    ]);
+  }
+  const emptyReplayCleanupCheck = run(
+    'docker',
+    [
+      'exec', '-e', `PGPASSWORD=${password}`, container,
+      'psql', '-U', 'postgres', '-d', 'phase1a_empty_replay', '-X', '-At',
+      '-v', 'ON_ERROR_STOP=1', '-c',
+      `SELECT count(*) FROM pg_trigger
+       WHERE tgrelid = 'public.products'::regclass
+         AND tgname = 'trigger_supplier_pricing_empty_replay_guard'
+         AND NOT tgisinternal;
+       SELECT count(*) FROM pg_proc
+       WHERE oid = to_regprocedure('public._supplier_pricing_empty_replay_guard()');`,
+    ],
+    { capture: true }
+  );
+  if (emptyReplayCleanupCheck.stdout.trim() !== '0\n0') {
+    throw new Error(`Empty-catalog replay helper survived cleanup:\n${emptyReplayCleanupCheck.stdout}`);
+  }
+  console.log('[phase1a-proof] PHASE1A_EMPTY_PRODUCTS_REPLAY_PASS');
   console.log('[phase1a-proof] seeding pre-cutover live-shaped Products');
   psql('seed.sql');
   console.log('[phase1a-proof] proving the forward preflight fails closed on fractional-cent drift');
