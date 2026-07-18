@@ -336,10 +336,12 @@ export function run(argv = process.argv.slice(2)) {
   const result = spawnSync(codexBin, args, {
     cwd: root,
     encoding: "utf8",
-    // stdin IGNORED so Codex never blocks reading additional input; native
-    // binary + shell:false means no PATH/cmd.exe resolution of the diff text.
-    stdio: ["ignore", "pipe", "pipe"],
-    input: undefined,
+    // Feed an explicit empty stdin pipe. Codex CLI 0.145 on Windows can keep an
+    // ignored native handle open and wait at "Reading additional input from
+    // stdin..." until timeout; an empty pipe delivers EOF deterministically.
+    // Native binary + shell:false still prevents shell interpretation.
+    stdio: ["pipe", "pipe", "pipe"],
+    input: "",
     shell: false,
     timeout: options.timeoutSec * 1000,
     maxBuffer: 64 * 1024 * 1024,

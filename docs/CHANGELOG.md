@@ -2,9 +2,20 @@
 
 All significant development milestones, in reverse chronological order.
 
+### 2026-07-18 — Windows Codex proof stdin hang fixed
+
+The exact-SHA Codex push-proof wrapper now sends an explicit empty stdin pipe. Codex CLI
+0.145 on Windows could otherwise wait indefinitely at "Reading additional input from stdin"
+despite an ignored native stdin handle, eventually timing out without minting a proof. The
+wrapper remains read-only and fail-closed; its helper and agent-workflow suites pass.
+
 ### 2026-07-18 — Migration drift proof responsibility clarified
 
-The canonical `migration-drift-reviewer` no longer turns its own lack of Supabase MCP access into an unavoidable HIGH finding. It still checks disk ordering and emits the mandatory orchestrator `list_migrations` reminder; the live apply workflow remains responsible for that check. Migration-history matching now recognizes the repository's timestamp-keyed rows.
+The canonical `migration-drift-reviewer` keeps the strict B7 contract from `main`: disk
+timestamps must be greater than the current live high-water, missing live evidence is a HIGH
+finding for the orchestrator to resolve, and every successful apply requires the server-stamp
+rename plus migration-history closeout. Migration-history matching also recognizes the
+repository's timestamp-keyed rows.
 
 ---
 
