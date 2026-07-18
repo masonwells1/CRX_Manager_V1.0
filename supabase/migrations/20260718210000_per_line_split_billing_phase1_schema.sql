@@ -67,8 +67,12 @@ CREATE TABLE IF NOT EXISTS public.field_app_billing_sets (
   updated_at              timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS idx_field_app_billing_sets_group
-  ON public.field_app_billing_sets (invoice_group_id);
+-- A posted/draft invoice group has exactly one durable billing parent. PostgreSQL
+-- permits multiple NULLs, so ungrouped drafts remain valid while retries or races
+-- cannot create competing parents for the same real group.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_field_app_billing_sets_group
+  ON public.field_app_billing_sets (invoice_group_id)
+  WHERE invoice_group_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_field_app_billing_sets_job
   ON public.field_app_billing_sets (job_id);
 

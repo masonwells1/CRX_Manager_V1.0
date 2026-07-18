@@ -31,6 +31,8 @@ const ID = {
   customerA: '00000000-0000-4000-8000-000000000011',
   customerB: '00000000-0000-4000-8000-000000000012',
   set: '00000000-0000-4000-8000-000000000021',
+  setB: '00000000-0000-4000-8000-000000000022',
+  group: '00000000-0000-4000-8000-000000000023',
   lineA: '00000000-0000-4000-8000-000000000031',
   lineB: '00000000-0000-4000-8000-000000000032',
   draftInvoice: '00000000-0000-4000-8000-000000000041',
@@ -432,6 +434,24 @@ function proveClientCannotTruncate() {
   );
 }
 
+function proveOneBillingSetPerInvoiceGroup() {
+  resetFixture();
+  runSql(`
+UPDATE public.field_app_billing_sets
+   SET invoice_group_id = '${ID.group}'
+ WHERE id = '${ID.set}';
+`);
+  return expectRejected(
+    'one invoice group cannot be attached to competing billing sets',
+    `INSERT INTO public.field_app_billing_sets (
+       id, invoice_group_id, primary_customer_id, created_by
+     ) VALUES (
+       '${ID.setB}', '${ID.group}', '${ID.customerB}', '${ID.actor}'
+     );`,
+    /unique|duplicate key|invoice_group/i,
+  );
+}
+
 function proveApplicatorCannotReadBillingSources() {
   resetFixture();
   runSql(`
@@ -609,6 +629,7 @@ async function main() {
     provePostedReparent(),
     provePostedParentCascade(),
     proveClientCannotTruncate(),
+    proveOneBillingSetPerInvoiceGroup(),
     proveApplicatorCannotReadBillingSources(),
     proveBlankSplitOverrideReasonRejected(),
     proveBlankPriceOverrideReasonRejected(),
