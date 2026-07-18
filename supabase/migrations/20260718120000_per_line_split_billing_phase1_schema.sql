@@ -283,8 +283,6 @@ BEGIN
 END $$;
 
 COMMENT ON COLUMN public.invoices.send_disposition IS
-  'Server-controlled email gate. suppressed_zero_total = $0 not-to-send invoice: recorded and '
-  || 'visible in the account, contributes zero to AR/aging/finance charge, NOT marked paid, and '
-  || 'every email path must refuse it. Default sendable. Never written by the browser.';
+  'Server-controlled email gate. suppressed_zero_total = $0 not-to-send invoice: recorded and visible in the account, contributes zero to AR/aging/finance charge, NOT marked paid, and every email path must refuse it. Default sendable. Never written by the browser.';
 
 COMMIT;
