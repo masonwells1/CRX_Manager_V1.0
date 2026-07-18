@@ -257,9 +257,11 @@ GRANT UPDATE ON public.invoices TO authenticated;
   const migration = readFileSync(MIGRATION, 'utf8');
   for (const marker of [
     'CREATE TABLE IF NOT EXISTS public.field_app_billing_lines',
+    'CREATE TABLE IF NOT EXISTS public.invoice_line_share_post_snapshots',
     'CREATE CONSTRAINT TRIGGER trg_invoice_line_shares_sum_100',
     'CREATE TRIGGER trg_invoice_line_shares_frozen_when_posted',
     'CREATE TRIGGER trg_invoice_items_shared_parent_frozen_when_posted',
+    'CREATE TRIGGER trg_capture_invoice_line_share_post_snapshot',
   ]) {
     if (!migration.includes(marker)) fail(`migration lost required marker: ${marker}`);
   }
@@ -268,6 +270,12 @@ GRANT UPDATE ON public.invoices TO authenticated;
 
 function resetFixture() {
   runSql(`
+-- The production history table is intentionally non-truncatable. This disposable
+-- superuser fixture bypasses its trigger only to isolate each proof case.
+SET session_replication_role = replica;
+TRUNCATE TABLE public.invoice_line_share_post_snapshots;
+SET session_replication_role = origin;
+
 TRUNCATE TABLE
   public.invoice_line_shares,
   public.field_app_billing_lines,
@@ -353,15 +361,17 @@ function proveTriggerSecurityContext() {
         'trg_invoice_line_shares_sum_100',
         'trg_field_app_billing_line_has_shares',
         'trg_invoice_line_shares_frozen_when_posted',
-        'trg_invoice_items_shared_parent_frozen_when_posted'
+        'trg_invoice_items_shared_parent_frozen_when_posted',
+        'trg_invoice_line_share_post_snapshots_immutable',
+        'trg_capture_invoice_line_share_post_snapshot'
       );
   `);
-  const passed = posture === '4|4|4|4';
+  const passed = posture === '6|6|6|6';
   return {
     label: 'all invariant triggers use a locked-down RLS-bypass definer context',
     passed,
     detail: passed
-      ? '4 SECURITY DEFINER + fixed search_path + no client EXECUTE + BYPASSRLS owner'
+      ? '6 SECURITY DEFINER + fixed search_path + no client EXECUTE + BYPASSRLS owner'
       : `catalog posture definer|search_path|locked_execute|bypass_owner = ${posture}`,
   };
 }
@@ -712,6 +722,87 @@ UPDATE public.invoices
   };
 }
 
+function provePostHistorySurvivesUnpostEditRepost() {
+  resetFixture();
+  runSql(`
+BEGIN;
+${lineSql(ID.lineA, 'append-only repost history line')}
+${shareSql({ id: ID.shareA, line: ID.lineA, item: ID.itemA, customer: ID.customerA })}
+
+UPDATE public.invoices
+   SET status = 'posted', posted_at = '2026-07-18T12:00:00Z'
+ WHERE id = '${ID.draftInvoice}';
+
+UPDATE public.invoices
+   SET status = 'unposted', posted_at = NULL
+ WHERE id = '${ID.draftInvoice}';
+
+UPDATE public.invoice_items
+   SET quantity = 0.7500,
+       acres = 0.75,
+       unit_price_cents = 1200,
+       extended_cents = 900
+ WHERE id = '${ID.itemA}';
+UPDATE public.invoice_line_shares
+   SET split_mode = 'custom',
+       split_override_reason = 'repost proof adjustment',
+       allocated_quantity = 0.7500,
+       allocated_acres = 0.7500,
+       unit_price_cents = 1200,
+       amount_cents = 900,
+       calculation_hash = 'proof-calculation-repost',
+       vector_hash = 'proof-vector-repost'
+ WHERE id = '${ID.shareA}';
+
+UPDATE public.invoices
+   SET status = 'posted', posted_at = '2026-07-18T13:00:00Z'
+ WHERE id = '${ID.draftInvoice}';
+
+-- A later draft rebuild may remove every working source row. The two historical
+-- posts must remain self-contained and queryable.
+UPDATE public.invoices
+   SET status = 'unposted', posted_at = NULL
+ WHERE id = '${ID.draftInvoice}';
+DELETE FROM public.invoice_line_shares WHERE id = '${ID.shareA}';
+DELETE FROM public.field_app_billing_lines WHERE id = '${ID.lineA}';
+DELETE FROM public.invoice_items WHERE id = '${ID.itemA}';
+COMMIT;
+`);
+
+  const history = scalar(`
+    SELECT count(*)::text || '|' ||
+           string_agg(post_sequence::text || ':' || amount_cents::text || ':' ||
+             calculation_hash || ':' || to_char(posted_at AT TIME ZONE 'UTC', 'HH24:MI'),
+             ',' ORDER BY post_sequence)
+      FROM public.invoice_line_share_post_snapshots
+     WHERE invoice_id = '${ID.draftInvoice}'
+       AND source_share_id = '${ID.shareA}';
+  `);
+  const mutation = runSql(`
+    UPDATE public.invoice_line_share_post_snapshots
+       SET amount_cents = 1
+     WHERE invoice_id = '${ID.draftInvoice}';
+  `, { allowFailure: true });
+  const mutationDetail = `${mutation.stdout || ''}${mutation.stderr || ''}`;
+  const truncate = runSql(`
+    TRUNCATE TABLE public.invoice_line_share_post_snapshots;
+  `, { allowFailure: true });
+  const truncateDetail = `${truncate.stdout || ''}${truncate.stderr || ''}`;
+  const expectedHistory = '2|1:1000:proof-calculation:12:00,2:900:proof-calculation-repost:13:00';
+  const passed = history === expectedHistory
+    && mutation.status !== 0
+    && /append-only|immutable/i.test(mutationDetail)
+    && truncate.status !== 0
+    && /append-only|immutable/i.test(truncateDetail);
+  return {
+    label: 'unpost/edit/repost preserves immutable append-only allocation history',
+    passed,
+    detail: passed
+      ? `history = ${history} after working rows were deleted; direct UPDATE/TRUNCATE rejected`
+      : `history = ${history}; update = ${mutation.status}; truncate = ${truncate.status}; ${mutationDetail.trim()} ${truncateDetail.trim()}`,
+  };
+}
+
 function proveEmptyLine() {
   resetFixture();
   return expectRejected(
@@ -881,6 +972,7 @@ async function main() {
     proveClientCannotSetSendDisposition(),
     proveSuppressionRequiresZeroTotal(),
     proveServerCanSuppressZeroTotal(),
+    provePostHistorySurvivesUnpostEditRepost(),
     proveEmptyLine(),
     await proveConcurrentVectors(),
     await proveShareWriteSerializesWithPost(),
@@ -906,7 +998,13 @@ try {
 } finally {
   try {
     assertSafeContainerName();
-    dockerSync(['rm', '--force', CONTAINER], { allowFailure: true });
+    const cleanup = dockerSync(['rm', '--force', CONTAINER], { allowFailure: true });
+    if (cleanup.status !== 0) {
+      fail(
+        `docker cleanup failed with exit ${cleanup.status}`,
+        `${cleanup.stdout || ''}${cleanup.stderr || ''}`.trim(),
+      );
+    }
   } catch (cleanupError) {
     exitCode = 1;
     process.stderr.write(`cleanup failed: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}\n`);
