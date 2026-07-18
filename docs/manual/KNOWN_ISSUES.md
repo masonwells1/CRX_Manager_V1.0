@@ -15,10 +15,20 @@ field-app billing (no customer's price changes). A manual price or field quote a
 independent); only the tier fallback varies per grower. Built + proven in the live DB (rollback: 20/80
 tier1/tier3 field → A@$10/gal, B@$8/gal, each own tier; plus a penny guard so a uniform price totals
 round-once). Committed on branch `claude/per-line-split-billing-build`. Still parked: flag OFF, migration
-NOT applied, NOT merged. Remaining for this feature (unchanged): the **Codex money/RLS gate** (usage limit,
-~Jul 22, should review the Option-B version) and Mason's **baseline field-app billing cycle** before flag-on.
-Two non-blocking notes: a chemical *return/credit* (negative qty) can't go through the split screen yet
-(fail-closed); the per-person price override in the draft UI still works for one-off adjustments.
+NOT applied, NOT merged.
+
+**Codex gate RAN 2026-07-18 → 8 P1 + 2 P2 findings, ALL FIXED + re-proven (21/21 live-rollback).** The Codex
+money/RLS review blocked the first go-live attempt: service lines priced $0 / not per-customer (#1,#2);
+chemical COGS written as 0 (#3); cross-rep RLS bypass in the SECDEF writer (#4); Post commits a stale draft
+after edits (#5); a split child opened in the generic invoice page could cascade-delete its line shares (#6);
+children got no field_app_locations → blank fields/acres (#7); duplicate `invoice_created` audit rows on
+re-save (#8); mis-derived compat acres (#9); `send_disposition` never hydrated so the $0-email gate never
+fired (#10). Mason chose **full v1 scope** (chemical + service + flat). All fixed in
+`20260718030000_..._save_rpc.sql` + `FieldAppSplitInvoiceEditor.tsx` / `InvoiceDetail.tsx` /
+`FieldApplicationInvoice.tsx` / `fieldInvoiceList.ts`; typecheck clean. Remaining before flag-on: a **clean
+re-run of the Codex gate** and Mason's **baseline field-app billing cycle**. Two non-blocking notes: a
+chemical *return/credit* (negative qty) can't go through the split screen yet (fail-closed); the per-person
+price override in the draft UI still works for one-off adjustments.
 Owner-facing detail: `docs/plans/per-line-split-billing-BUILD-HANDOFF-2026-07-18.md`.
 
 ## 1. Open HIGH findings (dormant on live data)

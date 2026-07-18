@@ -182,6 +182,10 @@ export function mapFieldInvoiceRow(raw: RawFieldInvoiceRow): FieldInvoiceListRow
     total_cost_cents: Number(raw.total_cost_cents) || 0,
     balance_cents: raw.balance_cents,
     invoice_date: raw.invoice_date,
+    // Forward the server-computed send suppression flag so the "don't email a $0 split
+    // child" gate can actually fire (Codex P2 #10). Undefined before the column is live
+    // (LIST_SELECT uses `*`), which the gate reads as "not suppressed" — current behavior.
+    send_disposition: raw.send_disposition ?? null,
     search_blob,
   };
 }

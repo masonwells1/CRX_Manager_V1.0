@@ -293,7 +293,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
     // row is fetched. Mirrors FieldApplicationInvoice's minimal preflight. (Codex R5/R11)
     const pre = await supabase
       .from('invoices')
-      .select('invoice_type, job_id, blend_ticket_id, status')
+      .select('invoice_type, job_id, blend_ticket_id, status, field_app_billing_set_id')
       .eq('id', invoiceId)
       .maybeSingle();
     if (isStale()) return;
@@ -321,7 +321,12 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
       const fieldJobId = (pre.data as { job_id?: string | null }).job_id;
       const fieldBlendId = (pre.data as { blend_ticket_id?: string | null }).blend_ticket_id;
       const fieldStatus = (pre.data as { status?: string }).status;
+      const fieldSplitSet = (pre.data as { field_app_billing_set_id?: string | null }).field_app_billing_set_id;
+      // A per-line SPLIT child (has a billing set) must NOT be routed to the per-acre editor —
+      // that editor's save_field_app_invoice would rewrite it and cascade away its
+      // invoice_line_shares. Keep it in THIS page, which renders it strictly read-only (Codex P1 #6).
       if (routeArea === 'field' && invType === 'field_application' && !fieldJobId && !fieldBlendId
+          && !fieldSplitSet
           && (fieldStatus === 'draft' || fieldStatus === 'unposted')) {
         navigate(`/invoices/field-app/${invoiceId}`, { replace: true });
         return;
@@ -575,6 +580,15 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
 
   // Save invoice
   const handleSave = async () => {
+    // Per-line split billing (Codex P1 #6, 2026-07-18): a split child's line detail lives in
+    // invoice_line_shares, keyed to invoice_items by billing_line_id. The generic save_invoice
+    // deletes + recreates invoice_items, which would CASCADE those shares away and silently
+    // destroy the split. Split invoices are only editable from the dedicated Split Billing
+    // editor — hard-refuse a save here (defense-in-depth with the read-only UI below).
+    if ((invoice as { field_app_billing_set_id?: string | null }).field_app_billing_set_id) {
+      toast('error', 'This is a split-billing invoice — open it from the Split Billing editor to make changes.');
+      return;
+    }
     // Codex P2 fix (PR #59, 2026-05-16): reset saveIdem at the top of every
     // save attempt. The invoice form is always-editable in-page (no separate
     // edit toggle), so any change between failed submits constitutes a new
@@ -1120,7 +1134,11 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
   // per-unit cost -> x quantity. Using x quantity for the fee line would inflate the
   // displayed Total Cost/Margin by a factor of acres.
   const totalCostCents = items.reduce((s, i) => s + (i.is_application_fee ? i.cost_cents : i.cost_cents * i.quantity), 0);
-  const editable = isNew || ['draft', 'unposted'].includes(invoice.status || '');
+  // Split-billing invoices are managed only from the Split Billing editor; keep this
+  // generic page strictly read-only for them so a save can't cascade away their line
+  // shares (Codex P1 #6). Paired with the hard guard in handleSave.
+  const isSplitInvoice = !!(invoice as { field_app_billing_set_id?: string | null }).field_app_billing_set_id;
+  const editable = !isSplitInvoice && (isNew || ['draft', 'unposted'].includes(invoice.status || ''));
 
   // Customer filtered list
   const filteredCustomers = customerSearch.length >= 1
@@ -1185,6 +1203,11 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
             <Button icon={<Save className="w-4 h-4" />} onClick={handleSave} loading={saving}>
               Save
             </Button>
+          )}
+          {isSplitInvoice && (
+            <span className="inline-flex items-center text-xs bg-amber-50 text-amber-700 px-2.5 py-1 rounded-md">
+              Read-only — this per-line split invoice is managed from the Split Billing editor.
+            </span>
           )}
           <GuardrailBanner warning={creditWarning} onDismiss={dismissCreditWarning} />
           {!isNew && editable && isAdminOrRep && (

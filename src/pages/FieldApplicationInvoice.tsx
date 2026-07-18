@@ -857,6 +857,9 @@ export default function FieldApplicationInvoice() {
       prepay_applied_cents: (invoice.prepay_applied_cents as number | null) ?? null,
       write_off_cents: (invoice.write_off_cents as number | null) ?? null,
       balance_cents: (invoice.balance_cents as number) || 0,
+      // Carry the server-computed suppression flag so the email gate (isInvoiceEmailSuppressed)
+      // actually fires for a $0 split child opened here (Codex P2 #10).
+      send_disposition: (invoice.send_disposition as 'normal' | 'suppressed_zero_total' | undefined) ?? undefined,
     });
     // Wave B.1 / P2-1: load Applied Info from the invoice row. These are
     // free-form text columns added so the values persist round-trip.

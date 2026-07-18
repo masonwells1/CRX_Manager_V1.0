@@ -367,7 +367,12 @@ DECLARE
   v_base_source        text;
   v_eff_rate_unit      text;           -- display unit for the line (pricing unit after chemical conversion)
   v_chem_price_map     jsonb;          -- chemical Option B: customer_id -> that customer's own resolved unit price
-  v_uniform_price      bigint;         -- chemical: the single price when ALL co-owners match (routes round-once)
+  v_svc_price_map      jsonb;          -- service Option B: customer_id -> that customer's own per-acre service rate
+  v_uniform_price      bigint;         -- chemical/service: the single price when ALL co-owners match (routes round-once)
+  v_line_unit_cost     bigint;         -- per-unit COGS for the current line (Codex P1 #3)
+  v_invoice_cost       bigint;         -- per-child accumulated total_cost_cents (Codex P1 #3)
+  v_is_new_invoice     boolean;        -- true only when a child invoice row is freshly INSERTed (Codex P1 #8)
+  v_total_applied_acres numeric := 0;  -- SUM(applied_acres) across p_fields (Codex P2 #9 acre derivation)
   v_shares             jsonb;
   v_line_customers     text[];
   v_calc               jsonb;
@@ -460,6 +465,29 @@ BEGIN
     INTO v_micro_map
     FROM jsonb_array_elements(v_vector) AS value;
 
+  -- ---- CUSTOMER-SCOPE SECURITY (Codex P1 #4, 2026-07-18) ---------------------
+  -- This SECURITY DEFINER writer bypasses RLS. Mirror the customers RLS / save_customer
+  -- ownership model: a non-admin sales_rep may bill ONLY customers assigned to them.
+  -- The billing members are DERIVED from field ownership, so an actor could otherwise
+  -- name another rep's fields and create/replace their customers' invoice lines. Verify
+  -- every derived member is assigned to the actor. (Existing children on re-save are
+  -- checked in the re-save block below, before any delete.)
+  IF NOT is_admin() THEN
+    IF EXISTS (
+      SELECT 1 FROM unnest(v_members) AS m(cust)
+      LEFT JOIN customers c ON c.id = m.cust::uuid
+      WHERE c.id IS NULL OR c.assigned_sales_rep IS DISTINCT FROM v_actor
+    ) THEN
+      RAISE EXCEPTION 'SPLIT_CUSTOMER_NOT_ASSIGNED: not authorized to bill one or more of these customers'
+        USING ERRCODE = 'insufficient_privilege';
+    END IF;
+  END IF;
+
+  -- Total applied acres across the fields — the acre basis for the per-customer compat
+  -- share row (Codex P2 #9), derived ONCE here, independent of the billing lines.
+  SELECT COALESCE(SUM((f->>'applied_acres')::numeric), 0) INTO v_total_applied_acres
+    FROM jsonb_array_elements(p_fields) AS f;
+
   -- ---- LINES ------------------------------------------------------------------
   IF p_lines IS NULL OR jsonb_typeof(p_lines) <> 'array'
      OR jsonb_array_length(p_lines) = 0 THEN
@@ -492,6 +520,18 @@ BEGIN
       RAISE EXCEPTION 'Billing set not found: %', p_billing_set_id;
     END IF;
 
+    -- Ownership on re-save (Codex P1 #4): a non-admin may only modify a set whose EXISTING
+    -- children all belong to customers assigned to the actor (before any delete/insert).
+    IF NOT is_admin() AND EXISTS (
+      SELECT 1 FROM invoices i
+      JOIN customers c ON c.id = i.customer_id
+      WHERE i.field_app_billing_set_id = v_set_id AND i.deleted_at IS NULL
+        AND c.assigned_sales_rep IS DISTINCT FROM v_actor
+    ) THEN
+      RAISE EXCEPTION 'SPLIT_SET_NOT_OWNED: not authorized to modify this billing set'
+        USING ERRCODE = 'insufficient_privilege';
+    END IF;
+
     DELETE FROM invoice_items
       WHERE invoice_id IN (SELECT id FROM invoices
                             WHERE field_app_billing_set_id = v_set_id AND deleted_at IS NULL);
@@ -499,6 +539,8 @@ BEGIN
       WHERE invoice_id IN (SELECT id FROM invoices
                             WHERE field_app_billing_set_id = v_set_id AND deleted_at IS NULL);
     DELETE FROM field_app_billing_lines WHERE billing_set_id = v_set_id;
+    -- Clear the prior group's field snapshots; PASS 3 re-creates them from p_fields (Codex P1 #7).
+    DELETE FROM field_app_locations WHERE invoice_group_id = v_group_id;
 
     -- Any existing child whose customer is no longer a billing-set member is
     -- soft-cancelled + detached from the set (its snapshots stay pointing at it,
@@ -534,6 +576,8 @@ BEGIN
     v_base_source    := v_line->>'base_price_source';
     v_eff_rate_unit  := v_line->>'rate_unit';   -- default; chemical overrides to the pricing unit below
     v_chem_price_map := NULL;                    -- chemical-only; NULL keeps non-chemical lines untouched
+    v_svc_price_map  := NULL;                    -- service-only; NULL keeps non-service lines untouched
+    v_line_unit_cost := 0;                       -- per-unit COGS for this line (Codex P1 #3)
 
     IF v_line_kind IS NULL
        OR v_line_kind NOT IN ('chemical', 'service', 'fuel_surcharge', 'flat_fee') THEN
@@ -543,15 +587,47 @@ BEGIN
 
     -- Base-price resolution by kind (see SCOPE NOTE at top for the chemical caveat).
     IF v_line_kind = 'service' THEN
-      IF v_src_acres IS NULL THEN
-        v_src_acres := (SELECT SUM((f->>'applied_acres')::numeric)
-                          FROM jsonb_array_elements(p_fields) AS f);
+      -- Per-line service record (Codex P1 #1): the editor sends the service id on the LINE
+      -- (line.application_service_id); the old code only loaded v_app_service from the always-null
+      -- top-level p_application_service_id, so v_app_service was never assigned. Load it per line.
+      IF v_app_service_id IS NULL THEN
+        RAISE EXCEPTION 'SPLIT_SERVICE_NO_SERVICE: service line % requires an application service', v_idx
+          USING ERRCODE = 'invalid_parameter_value';
       END IF;
-      IF v_src_unit_price IS NULL THEN
-        v_src_unit_price := COALESCE(v_app_service.default_rate_per_acre_cents, 0);
-        v_base_source    := COALESCE(v_base_source, 'service_default');
+      SELECT * INTO v_app_service FROM application_services WHERE id = v_app_service_id;
+      IF NOT FOUND OR NOT v_app_service.is_active THEN
+        RAISE EXCEPTION 'Application service not found or inactive: %', v_app_service_id;
+      END IF;
+
+      IF v_src_acres IS NULL THEN
+        v_src_acres := v_total_applied_acres;
+      END IF;
+
+      -- Service COGS: per-acre cost from the service record (mirrors the live field-app path,
+      -- which uses application_services.cost_per_acre_cents). Codex P1 #3.
+      v_line_unit_cost := COALESCE(v_app_service.cost_per_acre_cents, 0);
+
+      IF COALESCE((v_line->>'manual_override')::boolean, false) AND v_src_unit_price IS NOT NULL THEN
+        -- Explicit single negotiated per-acre rate for the whole line (applies to everyone).
+        v_base_source := COALESCE(v_base_source, 'service_rate');
       ELSE
-        v_base_source    := COALESCE(v_base_source, 'service_rate');
+        -- Per-customer service rate (Codex P1 #2 — Option B for service): each co-owner at
+        -- their OWN customer_application_rates(service, current season) → service default,
+        -- exactly like the live per-child field-app save. Injected as per-person overrides below.
+        SELECT COALESCE(jsonb_object_agg(m.cust, COALESCE(
+                 (SELECT car.rate_per_acre_cents FROM customer_application_rates car
+                   WHERE car.customer_id            = m.cust::uuid
+                     AND car.application_service_id = v_app_service_id
+                     AND car.season                 = current_season()
+                   LIMIT 1),
+                 v_app_service.default_rate_per_acre_cents, 0)), '{}'::jsonb)
+          INTO v_svc_price_map
+          FROM unnest(v_members) AS m(cust);
+        -- Representative (display + the calculator's default price): the largest-share owner's rate.
+        v_src_unit_price := COALESCE((v_svc_price_map->>(
+            SELECT (value->>'customer_id') FROM jsonb_array_elements(v_vector) AS value
+             ORDER BY (value->>'micro_pct')::bigint DESC, value->>'customer_id' ASC LIMIT 1))::bigint, 0);
+        v_base_source := COALESCE(v_base_source, 'service_default');
       END IF;
     ELSIF v_line_kind = 'chemical' THEN
       -- R8 (Option B — Mason 2026-07-18): resolve the price SERVER-SIDE and price EACH
@@ -586,8 +662,13 @@ BEGIN
           v_chem_manual := v_src_unit_price;
         END IF;
 
-        -- Product units for the rate -> pricing-unit conversion.
-        SELECT p.inventory_unit, p.product_form INTO v_inv_unit, v_form
+        -- Product units for the rate -> pricing-unit conversion, plus the server-resolved
+        -- unit COST (Codex P1 #3). current_cost is dollars per the product's inventory (sold)
+        -- unit — the SAME unit as the priced quantity below — so per-unit cents = round(*100),
+        -- exactly like _snapshot_order_item_cost and the parked save_invoice.
+        SELECT p.inventory_unit, p.product_form,
+               COALESCE(round(p.current_cost * 100)::bigint, 0)
+          INTO v_inv_unit, v_form, v_line_unit_cost
           FROM products p WHERE p.id = v_product_id;
 
         -- Per-customer price map (Option B): each billing-set member priced at their OWN
@@ -683,7 +764,7 @@ BEGIN
     -- which wins). The override slot is how per-person prices reach the calculator. Uniform-price
     -- lines are then routed round-once via the penny guard below (source_lr); genuinely mixed
     -- per-customer prices use the calculator's per_person path (exact to its own SUM).
-    IF v_line_kind = 'chemical' AND v_chem_price_map IS NOT NULL THEN
+    IF COALESCE(v_chem_price_map, v_svc_price_map) IS NOT NULL THEN
       SELECT jsonb_agg(
                CASE
                  WHEN s->>'price_mode' = 'override'
@@ -693,7 +774,7 @@ BEGIN
                  ELSE jsonb_set(
                         jsonb_set(s, '{price_mode}', '"override"'::jsonb),
                         '{override_unit_price_cents}',
-                        to_jsonb((v_chem_price_map->>(s->>'customer_id'))::bigint))
+                        to_jsonb((COALESCE(v_chem_price_map, v_svc_price_map)->>(s->>'customer_id'))::bigint))
                END)
         INTO v_shares
         FROM jsonb_array_elements(v_shares) AS s;
@@ -747,6 +828,7 @@ BEGIN
       'description',     v_line_desc,
       'rate_unit',       v_eff_rate_unit,
       'sort_order',      v_idx,
+      'unit_cost_cents', v_line_unit_cost,   -- per-unit COGS (Codex P1 #3)
       'alloc',           v_calc
     ));
     v_line_hashes := v_line_hashes || jsonb_build_array(v_calc->>'vector_hash');
@@ -778,6 +860,7 @@ BEGIN
     END IF;
 
     IF v_invoice_id IS NULL THEN
+      v_is_new_invoice := true;
       v_invoice_number := next_invoice_number('field_application');
       INSERT INTO invoices (
         invoice_number, customer_id, invoice_type, status,
@@ -794,6 +877,9 @@ BEGIN
         v_set_id
       ) RETURNING id INTO v_invoice_id;
     ELSE
+      v_is_new_invoice := false;
+      -- Load the existing invoice_number so it is never stale/null on a re-save (Codex P1 #8).
+      SELECT invoice_number INTO v_invoice_number FROM invoices WHERE id = v_invoice_id;
       -- Keep status as-is (draft or unposted); a non-admin cannot reassign salesman.
       UPDATE invoices SET
         invoice_date           = COALESCE((p_invoice->>'invoice_date')::date, invoice_date),
@@ -809,7 +895,12 @@ BEGIN
     END IF;
 
     v_invoice_total := 0;
-    v_cust_acres    := 0;
+    v_invoice_cost  := 0;
+    -- Compat share acres derived ONCE from the ownership vector × total applied acres
+    -- (Codex P2 #9), independent of the billing lines — so it neither zeroes out on a
+    -- no-service set nor double-counts across multiple service lines.
+    v_cust_acres    := round(v_total_applied_acres
+                             * COALESCE((v_micro_map->>v_cust)::numeric, 0) / 100000000.0, 2);
 
     FOR v_plan IN SELECT * FROM jsonb_array_elements(v_line_plans)
     LOOP
@@ -851,7 +942,7 @@ BEGIN
              ELSE 1 END,
         (v_alloc_row->>'unit_price_cents')::bigint,
         (v_alloc_row->>'amount_cents')::bigint,     -- extended = authoritative allocation
-        0,
+        (v_plan->>'unit_cost_cents')::bigint,       -- cost_cents = per-unit COGS (Codex P1 #3)
         (v_plan->>'sort_order')::int,
         v_acres_alloc,
         CASE WHEN v_line_kind = 'service' THEN 'acre' ELSE v_plan->>'rate_unit' END,
@@ -881,13 +972,18 @@ BEGIN
       );
 
       v_invoice_total := v_invoice_total + (v_alloc_row->>'amount_cents')::bigint;
-      v_cust_acres    := v_cust_acres + COALESCE(v_acres_alloc, 0);
+      -- Accumulate COGS: per-unit cost × this customer's billed quantity for the line
+      -- (acres for service, priced qty for chemical); flat/fuel carry 0 cost. Codex P1 #3.
+      v_invoice_cost  := v_invoice_cost + safe_cents_qty(
+        (v_plan->>'unit_cost_cents')::bigint,
+        CASE WHEN v_line_kind = 'service' THEN COALESCE(v_acres_alloc, 0) ELSE COALESCE(v_qty, 0) END);
     END LOOP;
 
     v_send_disposition := CASE WHEN v_invoice_total = 0 THEN 'suppressed_zero_total' ELSE 'normal' END;
 
     UPDATE invoices
        SET total_amount_cents = v_invoice_total,
+           total_cost_cents   = v_invoice_cost,
            send_disposition   = v_send_disposition,
            updated_at         = now()
      WHERE id = v_invoice_id;
@@ -904,22 +1000,43 @@ BEGIN
       v_is_primary, 0, NULL, NULL
     );
 
-    INSERT INTO financial_audit_log (
-      operation_type, entity_type, entity_id, actor_role,
-      new_values, total_impact_cents, description
-    ) VALUES (
-      'invoice_created', 'invoice', v_invoice_id,
-      (SELECT role FROM profiles WHERE id = v_actor),
-      jsonb_build_object('invoice_number', v_invoice_number,
-                         'customer_id', v_customer_id,
-                         'total_cents', v_invoice_total,
-                         'send_disposition', v_send_disposition),
-      v_invoice_total,
-      'Per-line split field application invoice created'
-    );
+    -- Append-only ledger: emit the 'invoice_created' row ONLY when this child was freshly
+    -- INSERTed (Codex P1 #8). On a re-save we reuse the existing child, so a creation row
+    -- here would duplicate the invoice's financial impact and (previously) carry a stale/null
+    -- invoice_number. A re-save changes draft line detail only; no creation event is due.
+    IF v_is_new_invoice THEN
+      INSERT INTO financial_audit_log (
+        operation_type, entity_type, entity_id, actor_role,
+        new_values, total_impact_cents, description
+      ) VALUES (
+        'invoice_created', 'invoice', v_invoice_id,
+        (SELECT role FROM profiles WHERE id = v_actor),
+        jsonb_build_object('invoice_number', v_invoice_number,
+                           'customer_id', v_customer_id,
+                           'total_cents', v_invoice_total,
+                           'send_disposition', v_send_disposition),
+        v_invoice_total,
+        'Per-line split field application invoice created'
+      );
+    END IF;
 
     v_invoice_ids := array_append(v_invoice_ids, v_invoice_id);
   END LOOP;
+
+  -- ---- PASS 3: field snapshots for the group (Codex P1 #7) -------------------
+  -- Grouped (multi-customer) field-app invoices carry their field/crop/acre snapshot at the
+  -- GROUP level (invoice_id NULL, invoice_group_id set) — exactly how the live field-app save
+  -- and the invoice-list panels read them. Without these, lists and PDFs show blank fields,
+  -- crops, and zero acres. job_id carries source-job provenance AND satisfies fal_requires_parent
+  -- when no invoice_id is present. The prior group's rows were cleared in the re-save block.
+  INSERT INTO field_app_locations (
+    invoice_group_id, job_id, field_id, applied_acres, total_acres, crop_type, sort_order
+  )
+  SELECT v_group_id, p_source_job_id, (t.fld->>'field_id')::uuid,
+         (t.fld->>'applied_acres')::numeric,
+         fl.total_acres, fl.crop_type, (t.ord - 1)::int
+    FROM jsonb_array_elements(p_fields) WITH ORDINALITY AS t(fld, ord)
+    LEFT JOIN fields fl ON fl.id = (t.fld->>'field_id')::uuid;
 
   -- ---- §5 INVARIANTS — check the STORED rows, never the allocator's self-report -
   FOR v_line_id, v_src_line_cents, v_line_src_qty IN

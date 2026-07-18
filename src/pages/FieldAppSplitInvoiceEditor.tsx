@@ -208,6 +208,16 @@ export default function FieldAppSplitInvoiceEditor() {
   const [resultInvoices, setResultInvoices] = useState<ResultInvoice[]>([]);
   const [resultShares, setResultShares] = useState<ResultShare[]>([]);
   const [posted, setPosted] = useState(false);
+  // Dirty guard (Codex P1 #5): Post commits the last SAVED draft from the DB. After a Save,
+  // editing any field/line/percentage/price/header must disable Post until a re-save — else the
+  // operator posts stale amounts. Track the saved input signature vs the current one.
+  const [savedSig, setSavedSig] = useState<string | null>(null);
+  const currentSig = useMemo(
+    () => JSON.stringify({ d: invoiceDate, n: headerNotes, j: sourceJobId, f: fields, l: lines }),
+    [invoiceDate, headerNotes, sourceJobId, fields, lines],
+  );
+  // Unsaved edits exist once a draft is saved and the inputs no longer match what was saved.
+  const dirtyAfterSave = billingSetId !== null && savedSig !== currentSig;
 
   // ── Flag read on mount (behaviour-neutral gate) ──────────────────────────
   useEffect(() => {
@@ -442,7 +452,8 @@ export default function FieldAppSplitInvoiceEditor() {
         base.application_service_id = l.application_service_id;
         const acres = parseFloat(l.serviceAcres);
         if (Number.isFinite(acres) && acres > 0) base.source_acres = acres;
-        // source_unit_price_cents intentionally omitted → server uses app-service default rate.
+        // Price omitted → server resolves each co-owner's per-acre rate from
+        // customer_application_rates (season) → the app-service default (Option B for service).
       } else {
         base.source_flat_cents = dollarsToCents(l.flatDollars);
       }
@@ -555,6 +566,7 @@ export default function FieldAppSplitInvoiceEditor() {
       );
       setBillingSetId(res.billing_set_id);
       setInvoiceGroupId(res.invoice_group_id);
+      setSavedSig(currentSig); // snapshot what was just persisted → Post is enabled until the next edit (#5)
       saveIdem.resetKey(); // next save is a distinct action → fresh key
       await loadResults(res.billing_set_id);
       toast('success', 'Draft split invoice saved.');
@@ -646,14 +658,21 @@ export default function FieldAppSplitInvoiceEditor() {
             variant="primary"
             icon={<Send className="w-4 h-4" />}
             showChevron={false}
-            disabled={!invoiceGroupId || posted}
+            disabled={!invoiceGroupId || posted || dirtyAfterSave}
             loading={posting}
             onClick={() => setShowPostConfirm(true)}
+            title={dirtyAfterSave ? 'You have unsaved changes — re-save the draft before posting.' : undefined}
           >
             {posted ? 'Posted' : 'Post'}
           </Button>
         </div>
       </div>
+
+      {dirtyAfterSave && (
+        <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-sm text-amber-800">
+          You have unsaved changes. Re-save the draft before posting so the posted amounts match what&rsquo;s on screen.
+        </div>
+      )}
 
       {/* Invoice header + source job */}
       <Card>
