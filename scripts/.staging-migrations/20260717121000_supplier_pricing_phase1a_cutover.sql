@@ -16,6 +16,66 @@
 -- The additive bootstrap intentionally keeps the legacy frontend operational.
 -- This second migration closes those temporary write paths after cutover.
 
+DO $preflight$
+BEGIN
+  IF (SELECT count(*) FROM pg_proc p
+      WHERE p.pronamespace = 'public'::regnamespace
+        AND p.proname = 'preview_product_pricing_changes') <> 1
+     OR (SELECT md5(replace(p.prosrc, E'\r\n', E'\n'))
+         FROM pg_proc p
+         WHERE p.oid = to_regprocedure(
+           'public.preview_product_pricing_changes(text,uuid,jsonb,uuid,text)'
+         )) IS DISTINCT FROM 'debb6056a4f46a7d74c34ebf8142b7fc'
+     OR (SELECT count(*) FROM pg_proc p
+         WHERE p.pronamespace = 'public'::regnamespace
+           AND p.proname = 'apply_product_pricing_change_set') <> 1
+     OR (SELECT md5(replace(p.prosrc, E'\r\n', E'\n'))
+         FROM pg_proc p
+         WHERE p.oid = to_regprocedure(
+           'public.apply_product_pricing_change_set(uuid,text,uuid,text)'
+         )) IS DISTINCT FROM '82416909e64d1c0740028be3ba6717ac' THEN
+    RAISE EXCEPTION 'PHASE1A_CORRECTION_RPC_BASELINE_MISMATCH';
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint c
+    WHERE c.conrelid = 'public.pricing_workbook_exports'::regclass
+      AND c.conname = 'pricing_workbook_exports_row_limit'
+      AND c.contype = 'c'
+      AND pg_get_constraintdef(c.oid) = 'CHECK ((row_count <= 5000))'
+  ) THEN
+    RAISE EXCEPTION 'PHASE1A_CORRECTION_ROW_LIMIT_MISSING';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+    FROM public.pricing_change_sets
+    WHERE status = 'previewed' AND expires_at > now()
+  ) THEN
+    RAISE EXCEPTION 'PHASE1A_ACTIVE_PREVIEW_EXISTS';
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_trigger t
+    WHERE t.tgrelid = 'public.products'::regclass
+      AND t.tgname = 'trigger_z_guard_version_product_pricing'
+      AND NOT t.tgisinternal
+      AND t.tgenabled IN ('O', 'A')
+      AND t.tgfoid = to_regprocedure('public.guard_and_version_product_pricing()')
+  ) OR NOT EXISTS (
+    SELECT 1 FROM pg_trigger t
+    WHERE t.tgrelid = 'public.products'::regclass
+      AND t.tgname = 'trigger_recalc_product_price_per_acre'
+      AND NOT t.tgisinternal
+      AND t.tgenabled IN ('O', 'A')
+      AND t.tgfoid = to_regprocedure('public.recalc_product_price_per_acre()')
+  ) THEN
+    RAISE EXCEPTION 'PHASE1A_REQUIRED_TRIGGER_INVALID';
+  END IF;
+END;
+$preflight$;
+
 -- Reassert the separately deployable compatibility guard at enforcement
 -- cutover so the final function definition converges even if environments were
 -- rebuilt from the staged sequence.

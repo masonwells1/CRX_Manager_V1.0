@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 // Fully chainable Supabase query-builder mock
 function chainable(resolveWith: unknown = { data: [], error: null }) {
@@ -32,10 +32,13 @@ vi.mock('../../lib/documentOCR', () => ({
 }));
 
 vi.mock('../ui/Toast', () => ({
-  useToast: () => ({ toast: vi.fn() }),
+  useToast: () => ({ toast: mockToast }),
 }));
 
+const { mockToast } = vi.hoisted(() => ({ mockToast: vi.fn() }));
+
 import BulkProductImport from './BulkProductImport';
+import { supabase } from '../../lib/db';
 import {
   buildProductInsert,
   isProductImportStringField,
@@ -74,7 +77,18 @@ describe('BulkProductImport', () => {
     'cost',
     'current_cost',
     'unit-cost-cents',
+    'supplier_cost',
+    'supplier-cost-cents',
     'price',
+    'price_cents',
+    'retail_price',
+    'selling-price',
+    'list price cents',
+    'margin',
+    'margin_percent',
+    'gross_profit',
+    'markup',
+    'markup_pct',
     'tier1_price',
     'tier_2_margin',
     't3_gross_margin',
@@ -87,6 +101,28 @@ describe('BulkProductImport', () => {
   it('does not mistake application-rate details for pricing', () => {
     expect(isRetiredPricingColumn('rate_per_acre')).toBe(false);
     expect(isRetiredPricingColumn('suggested_rate')).toBe(false);
+  });
+
+  it('blocks a supplier-cost CSV before preview or database insertion', async () => {
+    render(<BulkProductImport {...defaultProps} />);
+    const file = new File(['product_name,supplier_cost\nAtrazine,12.34'], 'supplier-prices.csv', {
+      type: 'text/csv',
+    });
+    Object.defineProperty(file, 'text', {
+      value: vi.fn().mockResolvedValue('product_name,supplier_cost\nAtrazine,12.34'),
+    });
+
+    fireEvent.change(screen.getByLabelText('Select File'), { target: { files: [file] } });
+    fireEvent.click(screen.getByRole('button', { name: /parse file/i }));
+
+    await waitFor(() => {
+      expect(mockToast).toHaveBeenCalledWith(
+        'error',
+        expect.stringMatching(/pricing columns are not allowed.*supplier_cost/i),
+      );
+    });
+    expect(screen.queryByText('Valid Products')).not.toBeInTheDocument();
+    expect(supabase.from).not.toHaveBeenCalled();
   });
 
   it.each(['product_form', 'inventory_unit', 'container_unit', 'container_type'])(

@@ -4,6 +4,7 @@ import { captureEdgeException } from "../_shared/sentry.ts";
 import { requireActiveProfile } from "../_shared/auth.ts";
 import { corsHeaders, preflightResponse } from "../_shared/cors.ts";
 import { validateDocumentType, type DocumentType } from "./documentTypes.ts";
+import { ocrSupportedDocument, type PageInput } from "./ocrBoundary.ts";
 
 function jsonResponse(body: Record<string, unknown>, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -13,11 +14,6 @@ function jsonResponse(body: Record<string, unknown>, status = 200) {
 }
 
 // ─── Types ───────────────────────────────────────────────────────────────────
-
-interface PageInput {
-  base64: string;
-  page_number: number;
-}
 
 interface ParsedInvoice {
   order_number: string;
@@ -760,7 +756,13 @@ Deno.serve(async (req: Request) => {
 
   try {
     // OCR all pages via Google Vision
-    const rawText = await ocrAllPages(pages, visionApiKey);
+    const ocrResult = await ocrSupportedDocument(
+      documentType,
+      pages,
+      visionApiKey,
+      ocrAllPages,
+    );
+    const rawText = ocrResult.rawText;
 
     if (rawText.trim().length === 0) {
       return jsonResponse({

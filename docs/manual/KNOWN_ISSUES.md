@@ -1,6 +1,6 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-07-17** (full document re-read and targeted money/inventory plus supplier-pricing refresh against current code and live DB through verification watermark `20260717171331`; older open/deferred claims retain their dated evidence below; owner-facing combined list: root `TODO.md`)
+**Last verified: 2026-07-18** (full document re-read and targeted supplier-pricing refresh against current code and live DB through verification watermark `20260717171331`; the reviewed `20260718124517` forward correction is proven locally but not yet applied; older open/deferred claims retain their dated evidence below; owner-facing combined list: root `TODO.md`)
 **Update triggers:** when a finding is parked/resolved, a migration is parked/applied, or an owner decision lands. Agents must update THIS file, not create new issue lists. Do not re-discover or re-fix something listed here as already known — read the pointer first.
 
 This file consolidates (does not replace) the source documents it points to. If this file and a source disagree, trust the source and fix this file.
@@ -12,6 +12,8 @@ This file consolidates (does not replace) the source documents it points to. If 
 ### Supplier Pricing Phase 1a rollout gap — frontend/Edge retirement not deployed
 
 The additive pricing RPC/bootstrap, zero-cost guard, and legacy Product repeat-save compatibility repair are live through verification watermark `20260717171331`. The zero-cost guard's repository source is `20260717112011_supplier_pricing_zero_cost_guard.sql` and its live ledger identity is `20260717120500_supplier_pricing_zero_cost_guard`; the governed calculator now rejects margin-driven zero cost while legacy Product-page editing remains available. The frontend, strict direct-write cutover, and `process-document` retirement are not live. The active production Edge Function is still v18 and retains the old `price_list` / price-bearing `product_list` OCR paths, and the deployed frontend still contains its legacy pricing UI. The repository rejects those document types before OCR, but production will not inherit that rule until a separately approved Edge Function deployment. Do not describe supplier-price OCR as retired live before that deployment is verified.
+
+The forward correction `20260718124517_harden_supplier_pricing_cent_scale_and_trigger.sql` is now an active, reviewed repository migration and passes the disposable pre-cutover and full-cutover proof. It is **not live yet**: it still requires Mason's explicit apply approval, post-apply verification, and a live schema-registry refresh before the frontend PR can merge. The strict enforcement cutover remains parked until that frontend is deployed and the rollback window closes.
 
 ### July 14 full-gauntlet remediation — LIVE, frontend rolled out (PR #133 merged 2026-07-15)
 

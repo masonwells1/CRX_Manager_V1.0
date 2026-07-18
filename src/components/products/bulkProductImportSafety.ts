@@ -58,7 +58,11 @@ export function isRetiredPricingColumn(header: string): boolean {
   if (
     [
       'cost', 'current_cost', 'current_cost_cents', 'unit_cost', 'unit_cost_cents',
-      'base_cost', 'base_cost_cents', 'price', 'price_per_acre', 'pricing_version',
+      'base_cost', 'base_cost_cents', 'supplier_cost', 'supplier_cost_cents',
+      'price', 'price_cents', 'retail_price', 'retail_price_cents',
+      'selling_price', 'selling_price_cents', 'list_price', 'list_price_cents',
+      'price_per_acre', 'margin', 'margin_percent', 'margin_pct', 'gross_margin',
+      'gross_profit', 'markup', 'markup_percent', 'markup_pct', 'pricing_version',
     ].includes(normalized)
   ) {
     return true;
