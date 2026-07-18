@@ -17,9 +17,18 @@ finished (Codex apply-proof → live apply → PR merge) from Mason's Windows se
   `is_active` filter). Mirrors the vetted `apply_credit_memo_to_invoice`. Reviewers clean (rls +
   drift), no stale overload, fail-first smoke `smoke-prepay-payment-inactive-actor-gate.sql`
   proved the bypass live (raised `SMOKE_FAIL` on the pre-fix functions).
+- **B2 — quote stranded after whole-conversion order cancel (BUILT).**
+  `20260718131500_revert_quote_escape_hatch_for_cancelled_order.sql`. Chosen the safe, admin-driven
+  escape hatch (not auto-reopen on cancel, which would contradict the void path's deliberate
+  "converted booking stays closed" semantic): `revert_quote_status` now un-blocks reverting an
+  'accepted' quote whose only order is cancelled and releases its stale draw ledger so it is
+  re-convertible. Reviewers clean; fail-first smoke proved the strand live.
 - **B1 — Supplier Pricing Phase 1a drift:** NOT a bug fix — `feat/supplier-pricing-phase1a` is a
   whole ~40-commit feature (already live in prod, unmerged on `main`). Set aside for Mason's
   feature-merge decision, not folded into this remediation sweep.
+- **Design decision (Mason, 2026-07-18):** for the five non-mechanical findings (B2/H2/H3/H4/H5)
+  build the conservative/safe fix each: block-void-with-active-payments (H3), refuse-split-backfill
+  (H5), escape-hatch quote (B2), forbid-restore (H4), calendar-month finance-charge guard (H2).
 
 ## 2026-07-18 — Built read-only adversarial gauntlet loop over sections 2-6 (money/inventory/lifecycle/DB-drift/idempotency): opus orchestrator, sonnet finders, opus skeptics + per-section adjudicator gate. Ran overnight; confirmed HIGHs in money+lifecycle and a Section 5 live-drift BLOCKER (Supplier Pricing Phase 1a). Findings parked for Codex-gated fixes.
 
