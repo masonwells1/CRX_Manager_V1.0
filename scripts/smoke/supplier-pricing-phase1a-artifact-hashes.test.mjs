@@ -21,8 +21,27 @@ const expectedArtifacts = new Map([
     '90cbc98a0ff4ea21c15395b378af76b66e6861e3e31fc54fd6770979fdf91799',
   ],
   [
-    'supabase/migrations/20260718154131_20260718124517_harden_supplier_pricing_cent_scale_and_trigger.sql',
+    'scripts/applied-migration-artifacts/20260718154131_20260718124517_harden_supplier_pricing_cent_scale_and_trigger.live.sql',
     '988c36dff572d09eba6f7da3b6d6bc0bac51c2c61ce9bf3756b45f9444965ec3',
+  ],
+  [
+    'supabase/migrations/20260718152837_20260718131500_revert_quote_escape_hatch_for_cancelled_order.sql',
+    'c1748f6fb0b180faa5bc24d30d1005916ee99f3012ae5c7757cdeffc8aba212b',
+  ],
+  [
+    'supabase/migrations/20260718153744_20260718124500_harden_prepay_and_payment_role_gate.sql',
+    'd2b29457b2e7e3584127e317a86477e518c40f72a2c83f526d0c70b4c41ebc3e',
+  ],
+  [
+    'supabase/migrations/20260718154810_20260718133000_void_invoice_block_applied_payments.sql',
+    '7250e762ccecbb6381eb4719a881ce9e7b8805eb3838fa31d24b1ecfa0aedfb2',
+  ],
+]);
+
+const expectedReplayArtifacts = new Map([
+  [
+    'supabase/migrations/20260718154131_20260718124517_harden_supplier_pricing_cent_scale_and_trigger.sql',
+    '68ff618d0b4e5f3db35479ae85b4c68f411ed819d230b760fc7819ec69edfd07',
   ],
 ]);
 
@@ -46,6 +65,16 @@ for (const [relativePath, expectedSha256] of expectedArtifacts) {
   );
 }
 
+for (const [relativePath, expectedSha256] of expectedReplayArtifacts) {
+  const bytes = readGitIndexBytes(relativePath);
+  const actualSha256 = createHash('sha256').update(bytes).digest('hex');
+  assert.equal(
+    actualSha256,
+    expectedSha256,
+    `${relativePath} bytes changed; reviewed reconstruction migrations must remain pinned`
+  );
+}
+
 const bootstrapPath = 'supabase/migrations/20260717042803_supplier_pricing_phase1a.sql';
 const bootstrapBytes = readGitIndexBytes(bootstrapPath);
 assert.ok(bootstrapBytes.includes(Buffer.from('\r\n')), `${bootstrapPath} must retain CRLF bytes`);
@@ -58,4 +87,6 @@ assert.notEqual(
   'the regression guard must detect CRLF-to-LF normalization'
 );
 
-console.log(`supplier-pricing-phase1a-artifact-hashes: ${expectedArtifacts.size} artifacts passed`);
+console.log(
+  `supplier-pricing-phase1a-artifact-hashes: ${expectedArtifacts.size} live artifacts and ${expectedReplayArtifacts.size} replay artifacts passed`
+);

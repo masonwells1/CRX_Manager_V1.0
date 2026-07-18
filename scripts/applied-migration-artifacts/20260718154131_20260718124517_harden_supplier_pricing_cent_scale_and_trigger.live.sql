@@ -556,30 +556,25 @@ BEGIN
     RAISE EXCEPTION 'PHASE1A_PRICING_VERSION_COMPAT_TRIGGER_INVALID';
   END IF;
 
-  -- The byte-identical live artifact ran against 604 Products. For clean
-  -- reconstruction, exercise this row-trigger assertion only when a row exists;
-  -- the seeded smoke below separately proves the rejection with a real Product.
-  IF EXISTS (SELECT 1 FROM public.products) THEN
-    v_rejected := false;
-    BEGIN
-      UPDATE public.products
-      SET current_cost = 0,
-          tier1_margin = 0,
-          tier1_price = 1.001
-      WHERE id = (
-        SELECT id FROM public.products ORDER BY id LIMIT 1
-      );
-    EXCEPTION
-      WHEN OTHERS THEN
-        IF SQLERRM = 'PRODUCT_PRICING_CENT_SCALE_INVALID' THEN
-          v_rejected := true;
-        ELSE
-          RAISE;
-        END IF;
-    END;
-    IF NOT v_rejected THEN
-      RAISE EXCEPTION 'legacy Product update accepted a sub-cent tier price';
-    END IF;
+  v_rejected := false;
+  BEGIN
+    UPDATE public.products
+    SET current_cost = 0,
+        tier1_margin = 0,
+        tier1_price = 1.001
+    WHERE id = (
+      SELECT id FROM public.products ORDER BY id LIMIT 1
+    );
+  EXCEPTION
+    WHEN OTHERS THEN
+      IF SQLERRM = 'PRODUCT_PRICING_CENT_SCALE_INVALID' THEN
+        v_rejected := true;
+      ELSE
+        RAISE;
+      END IF;
+  END;
+  IF NOT v_rejected THEN
+    RAISE EXCEPTION 'legacy Product update accepted a sub-cent tier price';
   END IF;
 
   IF has_function_privilege(

@@ -16,6 +16,21 @@
       "description": "Adversarial money/inventory closeout chain: invoice save and post replays remain bound to the authorized customer; invalid PO lines are rejected; one global bulk-import intent returns the original PO across authorized employees; an admin delete clears its durable claim and all cached save results so the unchanged document and deterministic key create a fresh PO; omitted edit costs remain penny-exact; duplicate or foreign PO line IDs are rejected; and all disposable fixtures roll back at the terminal pass signal.",
       "covers": ["save_invoice", "post_invoice", "post_invoice_group", "save_purchase_order", "purchase_order_import_intents"]
     },
+    "apply_prepay_to_invoice": {
+      "chain": "smoke-prepay-payment-inactive-actor-gate.sql",
+      "description": "H1 role-gate regression: apply_prepay_to_invoice and record_invoice_payment reject a deactivated but still-authenticated actor. Self-contained fixtures and terminal rollback.",
+      "covers": ["apply_prepay_to_invoice", "record_invoice_payment"]
+    },
+    "revert_quote_status": {
+      "chain": "smoke-revert-quote-escape-hatch.sql",
+      "description": "B2 escape-hatch regression: an accepted quote whose whole-conversion order was cancelled can be reopened, its draws are released, and it can be converted again. Self-contained fixtures and terminal rollback.",
+      "covers": ["revert_quote_status", "convert_quote_to_order", "cancel_order"]
+    },
+    "void_invoice": {
+      "chain": "smoke-void-invoice-blocks-applied-payments.sql",
+      "description": "H3 cash-strand regression: void_invoice refuses a posted invoice with direct cash still applied while preserving the prepay-only void path. Self-contained fixtures and terminal rollback.",
+      "covers": ["void_invoice", "record_invoice_payment", "apply_prepay_to_invoice", "create_prepay_check_splits"]
+    },
     "enforce_delivery_accounting_period": {
       "chain": "smoke-delivery-accounting-period-guard.sql",
       "description": "Delivery closed-period, rewrite, and replay-authorization invariant: the real complete_delivery RPC rejects a closed business date during its side-effect-free outer preflight; an open-date completion succeeds; a different active but unauthorized user is denied before its committed result can replay; authenticated direct rewrites cannot move completed history or legacy scheduled-date-backed terminal history into or out of a closed period; the real admin void_delivery RPC rejects once the completion date is closed without leaking a reversal; reopening the disposable period permits the normal void path. Self-contained fixtures and terminal rollback.",
