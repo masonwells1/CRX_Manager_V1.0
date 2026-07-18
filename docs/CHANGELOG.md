@@ -4,6 +4,12 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-18 — Per-line split billing Phase 1 schema (flag OFF, not applied) + pre-push Graphify portability fix
+
+Built Phase 1 of per-line-item custom split billing on branch `claude/billing-splits-plan-8ih4jg` (commit c4a5b6a): additive migration `20260718120000` creating `field_app_billing_sets` / `field_app_billing_lines` / `invoice_line_shares` (immutable micro-percent allocation snapshot; per-line Σ=100,000,000 constraint trigger; freeze-while-posted trigger; staff-read-only RLS with no client DML), plus `invoices.send_disposition` ($0 not-to-send gate) and the `feature_per_line_split_billing=false` flag. Types added; typecheck/build/tests green; rls-security + migration-drift + types-drift reviewers CLEAN. NOT applied to live — awaiting Codex review + the §6.1 baseline billing cycle. Spec: `docs/plans/per-line-item-split-billing-spec-2026-07-17.md`.
+
+Fixed `scripts/graphify-refresh.mjs`: a missing `graphify` binary (ENOENT) now SKIPS (exit 0) instead of exiting 1, so the pre-push hook's optional map refresh no longer hard-blocks pushes in environments without Graphify installed (Claude Code on the web / CI). A present-but-failing Graphify still blocks. Matches the hook's documented "optional local navigation aid" intent.
+
 ## 2026-07-17 — Split-billing architecture dig + per-line-item custom-split design spec v2 (review-hardened via gpt-5.6-terra xhigh plan review; 4 blockers folded in). Owner workflow settled: field split=default, adjust in unposted draft, unpost reversible. Committed 4b695109; Codex builds next week. No code/DB changes.
 
 Split-billing architecture dig + per-line-item custom-split design spec v2 (review-hardened via gpt-5.6-terra xhigh plan review; 4 blockers folded in). Owner workflow settled: field split=default, adjust in unposted draft, unpost reversible. Committed 4b695109; Codex builds next week. No code/DB changes.

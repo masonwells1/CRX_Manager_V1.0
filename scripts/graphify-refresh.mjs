@@ -14,6 +14,15 @@ const RELEVANT = /^(src\/|supabase\/(?:migrations|functions)\/|scripts\/|\.graph
 function run(command, args) {
   const result = spawnSync(command, args, { cwd: ROOT, stdio: "inherit" });
   if (result.error) {
+    // A MISSING binary (ENOENT) means Graphify simply isn't installed in this
+    // environment (e.g. Claude Code on the web / CI containers). The graph is an
+    // optional, gitignored navigation aid — its absence must SKIP, not block a
+    // push, matching the pre-push hook's stated "optional local navigation aid"
+    // intent. A present-but-failing Graphify still hard-fails below.
+    if (result.error.code === "ENOENT") {
+      console.error(`Graphify not installed (${command} not found) — skipping optional map refresh.`);
+      process.exit(0);
+    }
     console.error(`Graphify refresh blocked: could not run ${command} (${result.error.message}).`);
     process.exit(1);
   }
