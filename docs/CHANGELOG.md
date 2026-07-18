@@ -2,6 +2,16 @@
 
 All significant development milestones, in reverse chronological order.
 
+### 2026-07-18 — Gauntlet intermediate live-window reconciliation
+
+Applied live as migration `20260718235153`. The forward-only, scan-only migration fails closed with exact entity identifiers
+if either temporary live definition left durable damage: accepted-quote reopens during the
+B2 escape-hatch window, allocation-deleting invoice voids during the H3 recovery window,
+or inactive payment sets whose retained line history no longer matches the original amount
+recorded by `payment_voided`. Both required reviewers were clean; live apply and post-apply
+reconciliation returned zero affected rows for all three checks. The read-only gauntlet workflow also no longer tells reviewers to fetch or
+mutate Git refs; callers must refresh `origin/main` before launching it.
+
 ### 2026-07-18 — B2 quote-reopen history guard follow-up
 
 Applied live as migration `20260718232157`. The accepted-quote rescue path now refuses to create a full replacement order when any
@@ -67,9 +77,12 @@ the server-assigned migration versions so a future rebuild cannot reapply them.
   now refuses (ORDER_NEEDS_SPLIT_BILLING) to backfill a single invoice for an order with
   needs_split_billing=true; the admin uses the split-billing flow. Reviewers clean; fail-first
   smoke proved the mono-bill live.
-- **B1 — Supplier Pricing Phase 1a drift:** NOT a bug fix — `feat/supplier-pricing-phase1a` is a
-  whole ~40-commit feature (already live in prod, unmerged on `main`). Set aside for Mason's
-  feature-merge decision, not folded into this remediation sweep.
+- **B1 — Supplier Pricing Phase 1a drift (investigated and reconciled):** this was not an
+  unexplained live mutation. The gated database-first rollout applied the reviewed Phase 1a
+  migrations before their source PRs landed, creating a temporary rebuild gap. PR #163 merged
+  the Phase 1a foundation into `main` at 2026-07-18 15:16 UTC; PR #169 merged the enforcement
+  cutover and rescan at 20:21 UTC. Production and `main` now contain the same Phase 1a source;
+  Phase 1b remains independently owned by PR #168.
 - **Design decision (Mason, 2026-07-18):** for the five non-mechanical findings (B2/H2/H3/H4/H5)
   build the conservative/safe fix each: block-void-with-active-payments (H3), refuse-split-backfill
   (H5), escape-hatch quote (B2), forbid-restore (H4), calendar-month finance-charge guard (H2).
