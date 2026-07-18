@@ -4,6 +4,12 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-17 (night) — Per-line split-billing build, Phase 3: penny-exact calculator written + proven against the live Postgres engine (11 hard cases) + Opus-hardened, PARKED (not applied).
+
+Wrote `supabase/migrations/20260718020000_per_line_split_billing_calculator.sql` — 3 pure `IMMUTABLE SECURITY INVOKER` functions (`_lr_allocate_int`, `compute_even_split_vector`, `compute_line_split_allocation`), the single shared engine both preview and post will call (spec §4 rule 1). Largest-remainder allocation, half-away-from-zero, abs-floor-then-negate for returns, `customer_id ASC` tie-break in the quantity AND cents passes. Same-price line = allocate the once-rounded source-line cents by micro_pct; per-person price = round(price×qty) each (group total = sum, documented); flat fee = LR of flat cents.
+
+**Proven by running it in the real DB engine** (created in a `BEGIN…ROLLBACK`, all assertions executed, rolled back — not a self-written unit test in isolation): T1 1¢ 50/50 → **1¢** (not 2¢); T2 even 3-way → **1.0000** (not .9999) + vector 33333334/33333333/33333333; T3 return −13¢ → **−7/−6** (the JS-vs-PG half-cent bug); T4 per-person 1000/900; T5 100/0 with the **$0 row stored**; T6 flat 1001 → 334/334/333; T7/T8 malformed vectors raise. Opus adversarial review: core math clean, no numeric bug on any valid input; added 3 input guards (SPLIT_WEIGHT_NULL / SPLIT_PRICE_REQUIRED / SPLIT_WEIGHT_OUT_OF_RANGE) → T9/T10/T11 also pass. Nothing applied live.
+
 ## 2026-07-17 (night) — Per-line split-billing build, Phase 2: additive schema migration written + review-hardened + rollback-smoke-proven, PARKED (not applied). Autonomous Opus-4.8-orchestrated run.
 
 Wrote `supabase/migrations/20260718010000_per_line_split_billing_schema.sql` — purely additive, behavior-neutral: 4 new tables (field_app_billing_sets, field_app_billing_lines, invoice_line_shares, invoice_line_share_snapshots), 3 additive columns (invoice_items.billing_line_id, invoices.send_disposition default 'normal', invoices.field_app_billing_set_id), and a SECURITY DEFINER freeze trigger copied from prevent_order_shares_edit_after_post. Nothing reads/writes these until the calculator + posting RPC land behind a flag.
