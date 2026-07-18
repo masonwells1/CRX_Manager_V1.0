@@ -247,7 +247,9 @@ CREATE TABLE public.invoice_items (
   id uuid PRIMARY KEY,
   invoice_id uuid NOT NULL REFERENCES public.invoices(id),
   quantity numeric(12,4),
-  acres numeric(12,2)
+  acres numeric(12,2),
+  unit_price_cents bigint NOT NULL DEFAULT 0,
+  extended_cents bigint NOT NULL DEFAULT 0
 );
 GRANT UPDATE ON public.invoices TO authenticated;
 `);
@@ -364,6 +366,25 @@ function proveTriggerSecurityContext() {
   };
 }
 
+function proveNewForeignKeysAreIndexed() {
+  const indexed = scalar(`
+    SELECT count(*)::text
+      FROM unnest(ARRAY[
+        'public.idx_field_app_billing_sets_primary_customer',
+        'public.idx_field_app_billing_sets_created_by',
+        'public.idx_field_app_billing_lines_product',
+        'public.idx_field_app_billing_lines_application_service',
+        'public.idx_invoice_line_shares_created_by'
+      ]) AS expected(index_name)
+     WHERE to_regclass(expected.index_name) IS NOT NULL;
+  `);
+  return {
+    label: 'every newly added foreign-key column has a supporting index',
+    passed: indexed === '5',
+    detail: `${indexed}/5 previously uncovered foreign-key indexes exist`,
+  };
+}
+
 function proveMovedSourceLine() {
   resetFixture();
   runSql(`
@@ -444,6 +465,79 @@ UPDATE public.invoices
       WHERE id = '${ID.itemA}';`,
     /frozen.*posted/i,
   );
+}
+
+function proveSharedPostedItemMaterialFieldsAreFrozen() {
+  resetFixture();
+  runSql(`
+BEGIN;
+${lineSql(ID.lineA, 'posted material-field source line')}
+${shareSql({ id: ID.shareA, line: ID.lineA, item: ID.itemA, customer: ID.customerA })}
+COMMIT;
+UPDATE public.invoices
+   SET status = 'posted', posted_at = now()
+ WHERE id = '${ID.draftInvoice}';
+`);
+
+  const attempts = [
+    ['quantity', '2'],
+    ['acres', '2'],
+    ['unit_price_cents', '2000'],
+    ['extended_cents', '2000'],
+  ];
+  const failures = [];
+  for (const [column, value] of attempts) {
+    const result = runSql(
+      `UPDATE public.invoice_items SET ${column} = ${value} WHERE id = '${ID.itemA}';`,
+      { allowFailure: true },
+    );
+    const detail = `${result.stdout || ''}${result.stderr || ''}`;
+    if (result.status === 0 || !/frozen.*posted/i.test(detail)) {
+      failures.push(`${column}: status=${result.status}; ${detail.trim() || 'unsafe update committed'}`);
+    }
+  }
+
+  const finalState = scalar(`
+SELECT quantity::text || '|' || acres::text || '|' ||
+       unit_price_cents::text || '|' || extended_cents::text
+  FROM public.invoice_items
+ WHERE id = '${ID.itemA}';
+`);
+  const passed = failures.length === 0 && finalState === '1.0000|1.00|0|0';
+  return {
+    label: 'posted split invoice-item allocation fields are frozen with their share snapshot',
+    passed,
+    detail: passed
+      ? 'quantity, acres, unit price, and extended cents were all rejected; stored values stayed unchanged'
+      : `${failures.join('\n')}${failures.length ? '\n' : ''}stored quantity|acres|unit|extended = ${finalState}`,
+  };
+}
+
+function proveSharedDraftItemMaterialFieldsRemainEditable() {
+  resetFixture();
+  runSql(`
+BEGIN;
+${lineSql(ID.lineA, 'draft material-field source line')}
+${shareSql({ id: ID.shareA, line: ID.lineA, item: ID.itemA, customer: ID.customerA })}
+COMMIT;
+UPDATE public.invoice_items
+   SET quantity = 2,
+       acres = 2,
+       unit_price_cents = 2000,
+       extended_cents = 4000
+ WHERE id = '${ID.itemA}';
+`);
+  const finalState = scalar(`
+SELECT quantity::text || '|' || acres::text || '|' ||
+       unit_price_cents::text || '|' || extended_cents::text
+  FROM public.invoice_items
+ WHERE id = '${ID.itemA}';
+`);
+  return {
+    label: 'draft split invoice-item allocation fields remain editable',
+    passed: finalState === '2.0000|2.00|2000|4000',
+    detail: `stored quantity|acres|unit|extended = ${finalState}`,
+  };
 }
 
 function proveDraftItemCanMoveWithShareRebuild() {
@@ -771,10 +865,13 @@ async function main() {
 
   const results = [
     proveTriggerSecurityContext(),
+    proveNewForeignKeysAreIndexed(),
     proveMovedSourceLine(),
     provePostedReparent(),
     provePostedParentCascade(),
     proveSharedPostedItemCannotMoveToDraft(),
+    proveSharedPostedItemMaterialFieldsAreFrozen(),
+    proveSharedDraftItemMaterialFieldsRemainEditable(),
     proveDraftItemCanMoveWithShareRebuild(),
     proveClientCannotTruncate(),
     proveOneBillingSetPerInvoiceGroup(),

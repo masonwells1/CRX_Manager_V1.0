@@ -75,6 +75,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_field_app_billing_sets_group
   WHERE invoice_group_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_field_app_billing_sets_job
   ON public.field_app_billing_sets (job_id);
+CREATE INDEX IF NOT EXISTS idx_field_app_billing_sets_primary_customer
+  ON public.field_app_billing_sets (primary_customer_id);
+CREATE INDEX IF NOT EXISTS idx_field_app_billing_sets_created_by
+  ON public.field_app_billing_sets (created_by);
 
 DROP TRIGGER IF EXISTS trg_field_app_billing_sets_updated_at ON public.field_app_billing_sets;
 CREATE TRIGGER trg_field_app_billing_sets_updated_at
@@ -111,6 +115,10 @@ CREATE TABLE IF NOT EXISTS public.field_app_billing_lines (
 
 CREATE INDEX IF NOT EXISTS idx_field_app_billing_lines_set
   ON public.field_app_billing_lines (billing_set_id);
+CREATE INDEX IF NOT EXISTS idx_field_app_billing_lines_product
+  ON public.field_app_billing_lines (product_id);
+CREATE INDEX IF NOT EXISTS idx_field_app_billing_lines_application_service
+  ON public.field_app_billing_lines (application_service_id);
 
 DROP TRIGGER IF EXISTS trg_field_app_billing_lines_updated_at ON public.field_app_billing_lines;
 CREATE TRIGGER trg_field_app_billing_lines_updated_at
@@ -169,6 +177,8 @@ CREATE INDEX IF NOT EXISTS idx_invoice_line_shares_line
   ON public.invoice_line_shares (billing_line_id);
 CREATE INDEX IF NOT EXISTS idx_invoice_line_shares_customer
   ON public.invoice_line_shares (customer_id);
+CREATE INDEX IF NOT EXISTS idx_invoice_line_shares_created_by
+  ON public.invoice_line_shares (created_by);
 
 -- ---------------------------------------------------------------------------
 -- 4. Per-line vector must sum to exactly 100% (spec §3/§5). Deferrable so the
@@ -356,29 +366,65 @@ CREATE TRIGGER trg_invoice_line_shares_frozen_when_posted
   BEFORE INSERT OR UPDATE OR DELETE ON public.invoice_line_shares
   FOR EACH ROW EXECUTE FUNCTION public.trg_invoice_line_shares_frozen_when_posted();
 
--- invoice_line_shares follows invoice_items.invoice_id, so moving the parent item
--- would otherwise move an immutable posted allocation snapshot back onto a draft
--- invoice and make it editable. A linked item is therefore parent-immutable. Draft
--- workflows can still deliberately delete/rebuild their shares before reparenting;
--- the share DELETE trigger prevents that escape once the invoice is posted.
+-- invoice_line_shares follows invoice_items.invoice_id and snapshots the child item's
+-- allocated quantity, acres, unit price, and amount. A linked item is therefore
+-- parent-immutable until its draft share is deliberately deleted/rebuilt. Once the
+-- invoice posts, the four snapshotted material fields are immutable too; otherwise a
+-- privileged writer could change the invoice item while its share stayed frozen.
+-- Operational metadata such as tote_number remains outside this trigger.
 CREATE OR REPLACE FUNCTION public.trg_invoice_items_shared_parent_frozen_when_posted()
 RETURNS trigger
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
+DECLARE
+  v_allocation_fields_changed boolean;
+  v_posted boolean;
 BEGIN
-  IF NEW.invoice_id IS NOT DISTINCT FROM OLD.invoice_id THEN
+  v_allocation_fields_changed :=
+    NEW.quantity IS DISTINCT FROM OLD.quantity
+    OR NEW.acres IS DISTINCT FROM OLD.acres
+    OR NEW.unit_price_cents IS DISTINCT FROM OLD.unit_price_cents
+    OR NEW.extended_cents IS DISTINCT FROM OLD.extended_cents;
+
+  IF NEW.invoice_id IS NOT DISTINCT FROM OLD.invoice_id
+     AND NOT v_allocation_fields_changed THEN
     RETURN NEW;
   END IF;
 
-  IF EXISTS (
+  IF NOT EXISTS (
     SELECT 1
     FROM public.invoice_line_shares s
     WHERE s.invoice_item_id = OLD.id
   ) THEN
+    RETURN NEW;
+  END IF;
+
+  IF NEW.invoice_id IS DISTINCT FROM OLD.invoice_id THEN
     RAISE EXCEPTION
       'invoice_item % is frozen while linked to a split-billing snapshot; delete and rebuild draft shares before reparenting, and posted shares cannot be moved.',
+      OLD.id
+      USING ERRCODE = 'raise_exception';
+  END IF;
+
+  -- Lock the same invoice row used by every posting surface. The material update
+  -- either commits while the invoice is still draft, or waits for posting and then
+  -- fails against the committed status. invoice_items itself is already row-locked
+  -- by this BEFORE UPDATE trigger, matching the item -> invoice lock order used by
+  -- share writes.
+  SELECT (
+      i.status IN ('posted', 'paid', 'overdue')
+      OR i.posted_at IS NOT NULL
+    )
+    INTO v_posted
+    FROM public.invoices i
+   WHERE i.id = OLD.invoice_id
+   FOR UPDATE;
+
+  IF COALESCE(v_posted, false) THEN
+    RAISE EXCEPTION
+      'invoice_item % allocation fields are frozen while its split invoice is posted.',
       OLD.id
       USING ERRCODE = 'raise_exception';
   END IF;
@@ -392,7 +438,8 @@ REVOKE EXECUTE ON FUNCTION public.trg_invoice_items_shared_parent_frozen_when_po
 
 DROP TRIGGER IF EXISTS trg_invoice_items_shared_parent_frozen_when_posted ON public.invoice_items;
 CREATE TRIGGER trg_invoice_items_shared_parent_frozen_when_posted
-  BEFORE UPDATE OF invoice_id ON public.invoice_items
+  BEFORE UPDATE OF invoice_id, quantity, acres, unit_price_cents, extended_cents
+  ON public.invoice_items
   FOR EACH ROW EXECUTE FUNCTION public.trg_invoice_items_shared_parent_frozen_when_posted();
 
 -- ---------------------------------------------------------------------------

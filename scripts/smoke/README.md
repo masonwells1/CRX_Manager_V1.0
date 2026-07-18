@@ -92,9 +92,12 @@ node scripts/smoke/prove-per-line-split-billing-phase1.mjs
 It applies the checked-in migration verbatim in a uniquely named, network-isolated
 container backed by tmpfs. It proves all four invariant trigger functions use a
 fixed-search-path, client-non-executable SECURITY DEFINER owned by a BYPASSRLS role;
+that every new foreign-key column has a supporting index;
 that moving a share cannot strand its source line at 0%; that a share cannot move
 onto a posted invoice item; that a linked invoice item cannot be reparented out of
-its allocation snapshot while a deliberate draft delete/rebuild remains valid; that
+its allocation snapshot; that its snapshotted quantity, acres, unit price, and amount
+cannot change after posting while normal draft edits and a deliberate draft
+delete/rebuild remain valid; that
 parent cascades cannot erase posted share history;
 that authenticated has SELECT only and cannot TRUNCATE; that one non-null invoice group
 cannot acquire competing billing-set parents; that applicators cannot read unrelated
