@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 // Fully chainable Supabase query-builder mock
 function chainable(resolveWith: unknown = { data: [], error: null }) {
@@ -28,16 +28,23 @@ vi.mock('../../lib/db', () => ({
 }));
 
 vi.mock('../../lib/documentOCR', () => ({
-  processDocumentWithOCR: vi.fn(),
   isCSVFile: vi.fn(() => true),
-  isOCRSupported: vi.fn(() => false),
 }));
 
 vi.mock('../ui/Toast', () => ({
-  useToast: () => ({ toast: vi.fn() }),
+  useToast: () => ({ toast: mockToast }),
 }));
 
+const { mockToast } = vi.hoisted(() => ({ mockToast: vi.fn() }));
+
 import BulkProductImport from './BulkProductImport';
+import { supabase } from '../../lib/db';
+import {
+  buildProductInsert,
+  isProductImportStringField,
+  isRetiredPricingColumn,
+  type ParsedProduct,
+} from './bulkProductImportSafety';
 
 describe('BulkProductImport', () => {
   const defaultProps = { open: true, onClose: vi.fn(), onSuccess: vi.fn() };
@@ -56,5 +63,103 @@ describe('BulkProductImport', () => {
   it('shows file upload area', () => {
     render(<BulkProductImport {...defaultProps} />);
     expect(screen.getAllByText(/csv/i).length).toBeGreaterThan(0);
+  });
+
+  it('accepts CSV files only and makes the pricing boundary explicit', () => {
+    render(<BulkProductImport {...defaultProps} />);
+
+    expect(screen.getByLabelText('Select File')).toHaveAttribute('accept', '.csv,text/csv');
+    expect(screen.getByText(/pricing columns are rejected/i)).toBeInTheDocument();
+    expect(screen.queryByText(/vision ocr/i)).not.toBeInTheDocument();
+  });
+
+  it.each([
+    'cost',
+    'current_cost',
+    'unit-cost-cents',
+    'supplier_cost',
+    'supplier-cost-cents',
+    'price',
+    'price_cents',
+    'retail_price',
+    'selling-price',
+    'list price cents',
+    'margin',
+    'margin_percent',
+    'gross_profit',
+    'markup',
+    'markup_pct',
+    'tier1_price',
+    'tier_2_margin',
+    't3_gross_margin',
+    'tier3_price_per_acre',
+    'pricing_version',
+  ])('rejects retired pricing header %s', (header) => {
+    expect(isRetiredPricingColumn(header)).toBe(true);
+  });
+
+  it('does not mistake application-rate details for pricing', () => {
+    expect(isRetiredPricingColumn('rate_per_acre')).toBe(false);
+    expect(isRetiredPricingColumn('suggested_rate')).toBe(false);
+  });
+
+  it('blocks a supplier-cost CSV before preview or database insertion', async () => {
+    render(<BulkProductImport {...defaultProps} />);
+    const file = new File(['product_name,supplier_cost\nAtrazine,12.34'], 'supplier-prices.csv', {
+      type: 'text/csv',
+    });
+    Object.defineProperty(file, 'text', {
+      value: vi.fn().mockResolvedValue('product_name,supplier_cost\nAtrazine,12.34'),
+    });
+
+    fireEvent.change(screen.getByLabelText('Select File'), { target: { files: [file] } });
+    fireEvent.click(screen.getByRole('button', { name: /parse file/i }));
+
+    await waitFor(() => {
+      expect(mockToast).toHaveBeenCalledWith(
+        'error',
+        expect.stringMatching(/pricing columns are not allowed.*supplier_cost/i),
+      );
+    });
+    expect(screen.queryByText('Valid Products')).not.toBeInTheDocument();
+    expect(supabase.from).not.toHaveBeenCalled();
+  });
+
+  it.each(['product_form', 'inventory_unit', 'container_unit', 'container_type'])(
+    'preserves catalog metadata field %s during CSV parsing',
+    (field) => {
+      expect(isProductImportStringField(field)).toBe(true);
+    },
+  );
+
+  it('builds the database insert from an explicit non-pricing allowlist', () => {
+    const unsafeInput = {
+      product_name: 'Safe Product',
+      sku: 'SAFE-1',
+      category: 'Herbicide',
+      rate_per_acre: 2,
+      current_cost: 10,
+      tier1_price: 20,
+      tier1_margin: 0.5,
+      tier1_gross_margin: 1,
+      tier1_price_per_acre: 40,
+      pricing_version: 99,
+    } as unknown as ParsedProduct;
+
+    const insert = buildProductInsert(unsafeInput);
+
+    expect(insert).toMatchObject({
+      product_name: 'Safe Product',
+      sku: 'SAFE-1',
+      category: 'Herbicide',
+      rate_per_acre: 2,
+      is_active: true,
+    });
+    expect(insert).not.toHaveProperty('current_cost');
+    expect(insert).not.toHaveProperty('tier1_price');
+    expect(insert).not.toHaveProperty('tier1_margin');
+    expect(insert).not.toHaveProperty('tier1_gross_margin');
+    expect(insert).not.toHaveProperty('tier1_price_per_acre');
+    expect(insert).not.toHaveProperty('pricing_version');
   });
 });

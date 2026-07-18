@@ -52,8 +52,9 @@ For each column referenced in `INSERT INTO <table> (<col1>, <col2>, ...)`:
 ### CHECK 6 — Migration filename version-stamp mismatch
 This is the B7 pattern from 2026-05-26.
 1. Extract the timestamp prefix from each filename: `<YYYYMMDDHHMMSS>_<description>.sql`.
-2. You CANNOT call Supabase MCP (your tools are Read/Grep/Glob/Bash). Do NOT attempt the Supabase MCP `list_migrations` tool. Instead, compare the on-disk filename timestamps against each other for ordering sanity, and emit a HIGH finding telling the orchestrator: 'Before applying, confirm via the Supabase MCP `list_migrations` tool that the disk filename version matches the version Supabase will stamp (B7 pattern).' Leave the live check to the orchestrator.
-3. Severity: **HIGH** if filenames look out-of-order with recently-applied migrations.
+2. You CANNOT call Supabase MCP (your tools are Read/Grep/Glob/Bash). Do NOT attempt the Supabase MCP `list_migrations` tool. Compare the on-disk filename timestamps against each other for ordering sanity, then look for a current orchestrator-recorded `list_migrations` preflight in `docs/reference/migration-history.md` or the task evidence. Before apply, the disk timestamp must be **strictly greater than the current live high-water**. Supabase MCP assigns a fresh live version at apply time, so the pre-apply filename is NOT expected to equal that future value.
+3. If no current live high-water evidence is available, emit a **HIGH** finding telling the orchestrator to run Supabase MCP `list_migrations` and confirm the disk timestamp is greater than the current live high-water. If evidence shows the filename is not greater, emit **HIGH** and require a fresh filename. If current evidence proves it is greater, this check is clean.
+4. Always note the post-apply B7 requirement: after a successful MCP apply, rename the disk file to the MCP-assigned live version and update migration history before commit. This future rename is a post-apply obligation, not a pre-apply finding.
 
 ### CHECK 7 — Missing migration-history.md entry
 After all checks: verify `docs/reference/migration-history.md` contains a row for each new migration file. If missing, severity = **MED** (doc drift, not safety).

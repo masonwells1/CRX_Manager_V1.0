@@ -1,14 +1,14 @@
-import { useEffect, useState, useMemo , useCallback } from 'react';
+import { useEffect, useRef, useState, useMemo , useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Upload, FileUp, Download, FileText, Trash2, Eye, EyeOff, ChevronDown } from 'lucide-react';
+import { Plus, FileUp, Download, FileText, Trash2, Eye, EyeOff, ChevronDown, FileSpreadsheet, Upload } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import EditableDataTable, { type EditableColumn } from '../components/ui/EditableDataTable';
 import Badge from '../components/ui/Badge';
 import BulkActionBar from '../components/ui/BulkActionBar';
 import BulkDeleteConfirmModal from '../components/ui/BulkDeleteConfirmModal';
-import BulkPricingImport from '../components/products/BulkPricingImport';
 import BulkProductImport from '../components/products/BulkProductImport';
+import PricingChangePreviewModal from '../components/products/PricingChangePreviewModal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, sanitizeError, checkMutationResult } from '../lib/db';
@@ -23,6 +23,50 @@ import { SkeletonTable } from '../components/ui/Skeleton';
 import HelpTip from '../components/ui/HelpTip';
 import PageHeader from '../components/ui/PageHeader';
 import type { Product } from '../types';
+import {
+  applyProductPricingChangeSet,
+  createPricingWorkbookExport,
+  formatPricingMarginPercent,
+  pricingDollarInputToCents,
+  previewProductPricingChanges,
+  type PricingMode,
+  type PricingPreviewInputRow,
+  type PricingPreviewResult,
+} from '../lib/productPricing';
+import {
+  generateProductPricingWorkbook,
+  MAX_PRICING_WORKBOOK_FILE_BYTES,
+  MAX_PRICING_WORKBOOK_ROWS,
+  parseProductPricingWorkbook,
+} from '../lib/productPricingWorkbook';
+import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
+
+const INLINE_PRICING_FIELDS = new Set([
+  'pricing_mode',
+  'current_cost',
+  'tier1_margin_percent',
+  'tier2_margin_percent',
+  'tier3_margin_percent',
+  'tier1_price',
+  'tier2_price',
+  'tier3_price',
+]);
+
+const INLINE_NONPRICING_FIELDS = new Set([
+  'product_name',
+  'category',
+  'vendor',
+  'is_active',
+]);
+
+function inputDecimal(value: unknown): string | null {
+  if (value === null || value === undefined || value === '') return null;
+  return String(value).trim();
+}
+
+function storedMarginPercent(value: number | null): string | null {
+  return value === null ? null : formatPricingMarginPercent(value);
+}
 
 export default function Products() {
   const { role, profile } = useAuth();
@@ -34,17 +78,25 @@ export default function Products() {
   const [vendorFilter, setVendorFilter] = useState('');
   const [categories, setCategories] = useState<string[]>([]);
   const [vendors, setVendors] = useState<string[]>([]);
-  const [bulkImportOpen, setBulkImportOpen] = useState(false);
   const [bulkProductImportOpen, setBulkProductImportOpen] = useState(false);
   const [deactivateModalOpen, setDeactivateModalOpen] = useState(false);
   const [deactivating, setDeactivating] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [showSensitive, setShowSensitive] = useState(false);
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const [pricingPreview, setPricingPreview] = useState<PricingPreviewResult | null>(null);
+  const [applyingPricing, setApplyingPricing] = useState(false);
+  const [workbookBusy, setWorkbookBusy] = useState(false);
+  const [tableRevision, setTableRevision] = useState(0);
+  const pricingWorkbookInputRef = useRef<HTMLInputElement>(null);
+
+  const previewPricingIdem = useIdempotencyKey('preview_product_pricing_changes', profile?.id || '');
+  const applyPricingIdem = useIdempotencyKey('apply_product_pricing_change_set', profile?.id || '');
+  const exportPricingIdem = useIdempotencyKey('create_pricing_workbook_export', profile?.id || '');
 
   const canBulkAction = role === 'admin' || role === 'sales_rep';
 
-  const fetchProducts = useCallback(async () => {
+  const fetchProducts = useCallback(async (reportError = true): Promise<boolean> => {
     // Paginate so the master catalog never silently truncates as the catalog grows.
     // PostgREST caps a single response (default 1000), so we page through with .range().
     const PAGE_SIZE = 1000;
@@ -54,12 +106,13 @@ export default function Products() {
         .from('products')
         .select('*')
         .order('product_name')
+        .order('id')
         .range(from, from + PAGE_SIZE - 1);
       if (error) {
         Sentry.captureException(error);
-        toast('error', 'Failed to load products. Please try again.');
+        if (reportError) toast('error', 'Failed to load products. Please try again.');
         setLoading(false);
-        return;
+        return false;
       }
       const batch = (data || []) as Product[];
       all.push(...batch);
@@ -73,10 +126,11 @@ export default function Products() {
     setCategories(cats.sort());
     setVendors(vends.sort());
     setLoading(false);
+    return true;
   }, [toast]);
 
   useEffect(() => {
-    fetchProducts();
+    void fetchProducts();
   }, [fetchProducts]);
 
   const filtered = products.filter((p) => {
@@ -303,9 +357,10 @@ export default function Products() {
   const categoryOptions = categories.map((c) => ({ value: c, label: c }));
   const vendorOptions = vendors.map((v) => ({ value: v, label: v }));
 
-  /** Build an editRender for a tier column that shows margin input + computed price preview */
+  /** Render the one input family selected for this row. The server computes every effect. */
   const createTierEditRender = (tierNum: 1 | 2 | 3) => {
     const marginKey = `tier${tierNum}_margin` as keyof Product & string;
+    const marginPercentKey = `tier${tierNum}_margin_percent`;
     const priceKey = `tier${tierNum}_price` as keyof Product & string;
 
     return (
@@ -313,121 +368,132 @@ export default function Products() {
       getCellValue: (colKey: string) => unknown,
       setCellValue: (colKey: string, value: unknown) => void
     ) => {
-      const cost = Number(getCellValue('current_cost')) || 0;
-      const marginRaw = getCellValue(marginKey);
-      const margin = marginRaw != null ? Number(marginRaw) : null;
-
-      if (!showSensitive || cost <= 0) {
-        // No margin editing when sensitive is hidden or no cost — fall back to direct price input
+      const mode = getCellValue('pricing_mode') as PricingMode | undefined;
+      if (mode === 'price_driven') {
         const price = getCellValue(priceKey);
         return (
           <input
             type="number"
+            aria-label={`Tier ${tierNum} price for ${row.product_name}`}
             value={price != null ? String(price) : ''}
             min={0}
             step="0.01"
             onChange={(e) => {
               const raw = e.target.value;
-              setCellValue(priceKey, raw === '' ? null : parseFloat(raw));
+              setCellValue(priceKey, raw);
             }}
             className="w-full px-2 py-1 text-sm text-right font-mono border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green/30"
           />
         );
       }
 
-      // Compute price from margin for live preview
-      const computedPrice =
-        margin != null && margin > 0 && margin < 1
-          ? Math.round((cost / (1 - margin)) * 100) / 100
-          : null;
-
-      return (
-        <div className="space-y-1">
+      if (mode === 'margin_driven') {
+        const dirtyValue = getCellValue(marginPercentKey);
+        const value = dirtyValue ?? storedMarginPercent(row[marginKey] as number | null) ?? '';
+        return (
           <div className="flex items-center gap-1">
             <input
               type="number"
-              value={margin != null ? String(Math.round(margin * 10000) / 100) : ''}
+              aria-label={`Tier ${tierNum} net margin percent for ${row.product_name}`}
+              value={String(value)}
               min={0}
-              max={99.9}
+              max={99.999999}
               step="0.1"
-              placeholder="—"
-              onChange={(e) => {
-                const raw = e.target.value;
-                if (raw === '') {
-                  setCellValue(marginKey, null);
-                } else {
-                  const pct = parseFloat(raw);
-                  const decimal = pct / 100;
-                  setCellValue(marginKey, decimal);
-                  // Compute and set price for live preview + save
-                  if (decimal > 0 && decimal < 1 && cost > 0) {
-                    setCellValue(priceKey, Math.round((cost / (1 - decimal)) * 100) / 100);
-                  }
-                }
-              }}
-              className="w-16 px-1 py-1 text-sm text-right font-mono border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green/30"
+              onChange={(e) => setCellValue(marginPercentKey, e.target.value)}
+              className="w-20 px-1 py-1 text-sm text-right font-mono border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green/30"
             />
             <span className="text-xs text-gray-400">%</span>
           </div>
-          {computedPrice != null ? (
-            <div className="text-xs font-mono text-gray-500">{fmt(computedPrice)}</div>
-          ) : (
-            // No valid margin — allow direct price edit
-            <input
-              type="number"
-              value={getCellValue(priceKey) != null ? String(getCellValue(priceKey)) : ''}
-              min={0}
-              step="0.01"
-              onChange={(e) => {
-                const raw = e.target.value;
-                setCellValue(priceKey, raw === '' ? null : parseFloat(raw));
-              }}
-              className="w-full px-1 py-1 text-xs font-mono border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green/30"
-            />
-          )}
-          {computedPrice != null && (
-            <div className="text-[10px] text-crx-green">auto from margin</div>
-          )}
-        </div>
-      );
+        );
+      }
+
+      return <span className="text-xs text-amber-700">Select a pricing mode</span>;
     };
   };
 
-  const handleBulkSave = async (changes: Map<string, Record<string, unknown>>) => {
+  const handleBulkSave = async (changes: Map<string, Record<string, unknown>>): Promise<void | boolean> => {
     try {
-      // Log cost history for pricing changes
-      for (const [productId, fields] of changes) {
-        const original = products.find((p) => p.id === productId);
-        if (!original || !profile) continue;
+      let hasPricing = false;
+      let hasNonpricing = false;
+      for (const fields of changes.values()) {
+        hasPricing ||= Object.keys(fields).some((key) => INLINE_PRICING_FIELDS.has(key));
+        hasNonpricing ||= Object.keys(fields).some((key) => INLINE_NONPRICING_FIELDS.has(key));
+      }
 
-        const pricingChanged =
-          ('current_cost' in fields && Number(fields.current_cost) !== Number(original.current_cost)) ||
-          ('tier1_price' in fields && Number(fields.tier1_price) !== Number(original.tier1_price)) ||
-          ('tier2_price' in fields && Number(fields.tier2_price) !== Number(original.tier2_price)) ||
-          ('tier3_price' in fields && Number(fields.tier3_price) !== Number(original.tier3_price));
+      if (hasPricing && hasNonpricing) {
+        throw new Error('Save product details and pricing in separate review steps. Cancel, make one kind of change, then save again.');
+      }
 
-        if (pricingChanged) {
-          const costResult = await supabase.from('cost_history').insert({
-            product_id: productId,
-            changed_by: profile.id,
-            old_cost: original.current_cost,
-            new_cost: 'current_cost' in fields ? (fields.current_cost as number | null) : original.current_cost,
-            old_tier1_price: original.tier1_price,
-            new_tier1_price: 'tier1_price' in fields ? (fields.tier1_price as number | null) : original.tier1_price,
-            old_tier2_price: original.tier2_price,
-            new_tier2_price: 'tier2_price' in fields ? (fields.tier2_price as number | null) : original.tier2_price,
-            old_tier3_price: original.tier3_price,
-            new_tier3_price: 'tier3_price' in fields ? (fields.tier3_price as number | null) : original.tier3_price,
-            change_note: 'Updated via inline bulk edit',
-          }).select();
-          if (costResult.error) Sentry.captureException(costResult.error);
-          checkMutationResult(costResult, 'Insert cost history for inline bulk edit');
+      if (hasPricing) {
+        if (!profile) throw new Error('Your user profile is not available. Refresh and try again.');
+        const pricingRows: PricingPreviewInputRow[] = [];
+        for (const [productId, fields] of changes) {
+          if (!Object.keys(fields).some((key) => INLINE_PRICING_FIELDS.has(key))) continue;
+          const original = products.find((product) => product.id === productId);
+          if (!original) throw new Error('A Product changed while you were editing. Refresh and try again.');
+          const mode = fields.pricing_mode as PricingMode | undefined;
+          if (mode !== 'margin_driven' && mode !== 'price_driven') {
+            throw new Error(`Choose margin-driven or price-driven for ${original.product_name}.`);
+          }
+          const newCost = inputDecimal(fields.current_cost ?? original.current_cost);
+          if (newCost === null) throw new Error(`Enter a cost for ${original.product_name}.`);
+          if (mode === 'margin_driven' && pricingDollarInputToCents(newCost) === 0n) {
+            throw new Error(`Margin-driven pricing requires a cost greater than $0 for ${original.product_name}. No prices were changed.`);
+          }
+          if (!Number.isInteger(original.pricing_version) || (original.pricing_version ?? 0) < 1) {
+            throw new Error(`${original.product_name} does not have a pricing version yet. Refresh after the Phase 1a database migration is available.`);
+          }
+
+          const row: PricingPreviewInputRow = {
+            product_id: original.id,
+            product_name: original.product_name,
+            sku: original.sku ?? '',
+            row_version: original.pricing_version!,
+            pricing_mode: mode,
+            new_cost: newCost,
+            change_reason: 'Products inline pricing edit',
+          };
+          if (mode === 'margin_driven') {
+            for (const tier of [1, 2, 3] as const) {
+              const field = `tier${tier}_margin_percent` as const;
+              const stored = original[`tier${tier}_margin` as const];
+              const value = inputDecimal(fields[field] ?? storedMarginPercent(stored));
+              if (value === null) {
+                throw new Error(`Enter all three margins for ${original.product_name}.`);
+              }
+              row[field] = value;
+            }
+          } else {
+            for (const tier of [1, 2, 3] as const) {
+              const field = `tier${tier}_price` as const;
+              const value = inputDecimal(fields[field] ?? original[field]);
+              if (value === null) {
+                throw new Error(`Enter all three tier prices for ${original.product_name}.`);
+              }
+              row[field] = value;
+            }
+          }
+          pricingRows.push(row);
         }
 
-        // Update product
+        const preview = await previewProductPricingChanges({
+          source: 'products_inline',
+          rows: pricingRows,
+          performedBy: profile.id,
+          idempotencyKey: previewPricingIdem.getKey(),
+        });
+        previewPricingIdem.resetKey();
+        setPricingPreview(preview);
+        return false;
+      }
+
+      for (const [productId, fields] of changes) {
+        const nonpricingFields = Object.fromEntries(
+          Object.entries(fields).filter(([key]) => INLINE_NONPRICING_FIELDS.has(key)),
+        );
         const updateResult = await supabase
           .from('products')
-          .update({ ...fields, updated_at: new Date().toISOString() })
+          .update({ ...nonpricingFields, updated_at: new Date().toISOString() })
           .eq('id', productId)
           .select();
         checkMutationResult(updateResult, 'Update product');
@@ -438,9 +504,105 @@ export default function Products() {
         logActivity({ event: 'products_bulk_updated', description: `${changes.size} product(s) updated via inline edit`, performedBy: profile.id, entityType: 'product' });
       }
       fetchProducts();
+      return true;
     } catch (err: unknown) {
       toast('error', sanitizeError(err));
       throw err; // re-throw so EditableDataTable stays in edit mode
+    }
+  };
+
+  const handleExportPricingWorkbook = async () => {
+    if (!profile) return;
+    const productIds = (selectedRows.length > 0 ? selectedRows : filtered)
+      .filter((product) => product.is_active)
+      .map((product) => product.id);
+    if (productIds.length === 0) {
+      toast('warning', 'Select at least one active Product to export.');
+      return;
+    }
+    if (productIds.length > MAX_PRICING_WORKBOOK_ROWS) {
+      toast(
+        'error',
+        `Pricing workbooks are limited to ${MAX_PRICING_WORKBOOK_ROWS.toLocaleString()} Products. Narrow the filters or select a smaller batch.`,
+      );
+      return;
+    }
+    setWorkbookBusy(true);
+    try {
+      const pricingExport = await createPricingWorkbookExport({
+        productIds,
+        performedBy: profile.id,
+        idempotencyKey: exportPricingIdem.getKey(),
+      });
+      const blob = await generateProductPricingWorkbook(pricingExport);
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `crx-product-pricing-${new Date().toISOString().slice(0, 10)}.xlsx`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+      exportPricingIdem.resetKey();
+      toast('success', `Exported ${productIds.length} Product pricing row(s).`);
+    } catch (error) {
+      toast('error', sanitizeError(error));
+    } finally {
+      setWorkbookBusy(false);
+    }
+  };
+
+  const handlePricingWorkbookUpload = async (file: File) => {
+    if (!profile) return;
+    if (file.size > MAX_PRICING_WORKBOOK_FILE_BYTES) {
+      toast(
+        'error',
+        `Pricing workbooks must be ${MAX_PRICING_WORKBOOK_FILE_BYTES / 1024 / 1024} MB or smaller.`,
+      );
+      if (pricingWorkbookInputRef.current) pricingWorkbookInputRef.current.value = '';
+      return;
+    }
+    setWorkbookBusy(true);
+    try {
+      const parsed = await parseProductPricingWorkbook(await file.arrayBuffer());
+      const preview = await previewProductPricingChanges({
+        source: 'pricing_worksheet',
+        exportId: parsed.exportId,
+        rows: parsed.rows,
+        performedBy: profile.id,
+        idempotencyKey: previewPricingIdem.getKey(),
+      });
+      previewPricingIdem.resetKey();
+      setPricingPreview(preview);
+    } catch (error) {
+      toast('error', sanitizeError(error));
+    } finally {
+      setWorkbookBusy(false);
+      if (pricingWorkbookInputRef.current) pricingWorkbookInputRef.current.value = '';
+    }
+  };
+
+  const handleApplyPricing = async () => {
+    if (!pricingPreview || !profile) return;
+    setApplyingPricing(true);
+    try {
+      const result = await applyProductPricingChangeSet({
+        changeSetId: pricingPreview.change_set_id,
+        requestFingerprint: pricingPreview.request_fingerprint,
+        performedBy: profile.id,
+        idempotencyKey: applyPricingIdem.getKey(),
+      });
+      applyPricingIdem.resetKey();
+      setPricingPreview(null);
+      setTableRevision((revision) => revision + 1);
+      const reloaded = await fetchProducts(false);
+      if (reloaded) {
+        toast('success', `Applied pricing to ${result.applied_count} Product(s).`);
+      } else {
+        toast('warning', 'Pricing was applied, but the latest Product values could not be reloaded. Refresh this page before making another change.');
+      }
+    } catch (error) {
+      toast('error', sanitizeError(error));
+    } finally {
+      setApplyingPricing(false);
     }
   };
 
@@ -481,9 +643,10 @@ export default function Products() {
             header: 'Cost',
             sortable: true,
             editable: true,
-            editType: 'number' as const,
+            editType: 'decimal' as const,
             editMin: 0,
             editStep: '0.01',
+            editAriaLabel: (row: Product) => `Cost for ${row.product_name}`,
             render: (row: Product) => (
               <span className="font-mono text-sm">
                 {row.current_cost != null ? `$${Number(row.current_cost).toFixed(2)}` : '-'}
@@ -491,6 +654,20 @@ export default function Products() {
             ),
           } satisfies EditableColumn<Product>,
         ]
+      : []),
+    ...(isAdmin
+      ? [{
+          key: 'pricing_mode',
+          header: 'Pricing Mode',
+          editable: true,
+          editType: 'select' as const,
+          editOptions: [
+            { value: 'margin_driven', label: 'Margin-driven' },
+            { value: 'price_driven', label: 'Price-driven' },
+          ],
+          editAriaLabel: (row) => `Pricing mode for ${row.product_name}`,
+          render: () => <span className="text-xs text-gray-400">Choose while editing</span>,
+        } satisfies EditableColumn<Product>]
       : []),
     {
       key: 'tier1_price',
@@ -624,17 +801,37 @@ export default function Products() {
             <>
               <Button
                 variant="secondary"
-                icon={<FileUp className="w-4 h-4" />}
-                onClick={() => setBulkProductImportOpen(true)}
+                icon={<FileSpreadsheet className="w-4 h-4" />}
+                onClick={handleExportPricingWorkbook}
+                loading={workbookBusy}
+                disabled={filtered.length === 0}
               >
-                Import Products
+                Pricing .xlsx
               </Button>
               <Button
                 variant="secondary"
                 icon={<Upload className="w-4 h-4" />}
-                onClick={() => setBulkImportOpen(true)}
+                onClick={() => pricingWorkbookInputRef.current?.click()}
+                disabled={workbookBusy}
               >
-                Update Pricing
+                Review Pricing File
+              </Button>
+              <input
+                ref={pricingWorkbookInputRef}
+                type="file"
+                accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                className="hidden"
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  if (file) void handlePricingWorkbookUpload(file);
+                }}
+              />
+              <Button
+                variant="secondary"
+                icon={<FileUp className="w-4 h-4" />}
+                onClick={() => setBulkProductImportOpen(true)}
+              >
+                Import Products
               </Button>
               <Button icon={<Plus className="w-4 h-4" />} onClick={() => navigate('/products/new')}>
                 Add Product
@@ -649,6 +846,7 @@ export default function Products() {
       <Card padding={false}>
         <div className="p-5">
           <EditableDataTable<Product>
+            key={tableRevision}
             data={filtered}
             columns={columns}
             rowKey="id"
@@ -716,15 +914,6 @@ export default function Products() {
         </div>
       </Card>
 
-      <BulkPricingImport
-        open={bulkImportOpen}
-        onClose={() => setBulkImportOpen(false)}
-        onSuccess={() => {
-          fetchProducts();
-          setBulkImportOpen(false);
-        }}
-      />
-
       <BulkProductImport
         open={bulkProductImportOpen}
         onClose={() => setBulkProductImportOpen(false)}
@@ -732,6 +921,18 @@ export default function Products() {
           fetchProducts();
           setBulkProductImportOpen(false);
         }}
+      />
+
+      <PricingChangePreviewModal
+        open={pricingPreview !== null}
+        preview={pricingPreview}
+        applying={applyingPricing}
+        title="Review Product Pricing"
+        onClose={() => {
+          setPricingPreview(null);
+          applyPricingIdem.resetKey();
+        }}
+        onApprove={() => void handleApplyPricing()}
       />
 
       <BulkDeleteConfirmModal

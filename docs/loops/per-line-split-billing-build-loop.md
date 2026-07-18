@@ -8,7 +8,7 @@ Mason's explicit go + the §6.1 baseline billing cycle.
 Launch with `/run-loop docs/loops/per-line-split-billing-build-loop.md`.
 
 **Design spec (the contract):** `docs/plans/per-line-item-split-billing-spec-2026-07-17.md`.
-Phase 1 (schema) already shipped: migration `20260718120000`, draft PR **#166**, reviewers clean,
+Phase 1 (schema) already shipped: migration `20260718210000`, draft PR **#166**, reviewers clean,
 **not applied live**. This loop starts at Phase 2.
 
 > **Runs where Codex lives.** This loop requires the headless `codex` CLI (`scripts/codex-hunt.mjs`
@@ -124,8 +124,8 @@ Codex reviews before any merge. All work lands on the per-phase branch → draft
 
 | Phase | Status | Branch / PR | PROOF (Ran / Saw) | Gauntlet | Notes |
 |---|---|---|---|---|---|
-| 1 — schema | **PARKED** | `claude/billing-splits-plan-8ih4jg` / PR #166 | prior typecheck+build+tests green; live DB confirms objects absent | prior rls/drift/types reviewers CLEAN | flag OFF; not applied live; **migration currently fails PostgreSQL parsing at concatenated `COMMENT ON COLUMN invoices.send_disposition` and must be fixed by the Phase 1 owner** |
-| 2 — calculator | **PARKED** | `claude/split-billing-phase2-calculator` / PR #167 | DIAGNOSTIC — Ran: network-isolated PG17, checked-in Phase 1+2 with the declared Phase 1 comment normalized only under an explicit diagnostic flag, rollback-only suite · Saw: OFF delegation; 50/50; exact 3-way; 1¢; full-precision final money round; −13¢→−7/−6; price/snapshot precedence; 100/0; hashes; denial guards. Default command fails hard on Phase 1. | Codex full review: no Phase 2 defect, overall BLOCK on Phase 1; final money delta: APPROVE. Claude Opus: NEEDS-WORK on Phase 1 + proof-integrity HIGH; HIGH fixed post-review, Phase 1 remains. | Phase 2 bytes pass their isolated diagnostic but the pair cannot ship on an invalid Phase 1 base; live PG 17.0.6 confirmed; flag remains OFF; no live apply; unrelated live quote Q-2026-2059 has a blank commission recipient |
+| 1 — schema | **DONE** | `claude/billing-splits-plan-8ih4jg` / PR #166 | PROOF — Ran: the exact `20260718210000` migration in a network-isolated PostgreSQL 17 container plus two real concurrent sessions · Saw: trigger ownership posture `3/3/3/3`; source-line move, posted-item reparent, empty-line, and 200% write-skew attempts rejected; one concurrent writer committed and final vector remained exactly 100,000,000; 3,657 tests, typecheck, build, SQL/guard checks green; live Phase 1 objects/flag absent; live migration role `postgres` has BYPASSRLS | final exact-hash Codex + Claude verdicts pending after safe re-stamp; earlier Claude review had 0 blocker/high and all confirmed findings are repaired | flag OFF/absent; not applied live; re-stamped above verified live high-water `20260718193000`; §6.1 baseline is still unmet (live field-app locations/shares/groups/job-linked invoices all zero) |
+| 2 — calculator | **IN PROGRESS** | `claude/split-billing-phase2-calculator` / PR #167 | Combined Phase 1 + Phase 2 verbatim PostgreSQL 17 proof pending after merge/re-stamp | final exact-hash Codex + Claude reviews pending | repaired Phase 1 foundation merged; flag remains OFF; no live apply; unrelated live quote Q-2026-2059 has a blank commission recipient |
 | 3 — save/post RPC | TODO | — | — | — | depends on Phase 2 |
 | 4 — UI + mail gates | TODO | — | — | — | depends on Phase 3; edge-fn deploy = Mason gate |
 

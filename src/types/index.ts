@@ -65,6 +65,8 @@ export interface Product {
   tier1_price_per_acre: number | null;
   tier2_price_per_acre: number | null;
   tier3_price_per_acre: number | null;
+  /** Optimistic concurrency token for governed pricing preview/apply flows. */
+  pricing_version: number;
   suggested_rate: string | null;
   rate_per_acre: number | null;
   rate_unit: string | null;
@@ -166,14 +168,25 @@ export interface CostHistory {
   id: string;
   product_id: string;
   changed_by: string;
+  change_source: 'legacy_frontend' | 'pricing_worksheet' | 'product_page' | 'products_inline';
+  change_reason: string | null;
+  change_set_id: string | null;
   old_cost: number | null;
   new_cost: number | null;
+  old_tier1_margin: number | null;
   old_tier1_price: number | null;
+  new_tier1_margin: number | null;
   new_tier1_price: number | null;
+  old_tier2_margin: number | null;
   old_tier2_price: number | null;
+  new_tier2_margin: number | null;
   new_tier2_price: number | null;
+  old_tier3_margin: number | null;
   old_tier3_price: number | null;
+  new_tier3_margin: number | null;
   new_tier3_price: number | null;
+  old_pricing_version: number | null;
+  new_pricing_version: number | null;
   change_note: string | null;
   changed_at: string;
 }
@@ -1457,7 +1470,7 @@ export interface Invoice {
   application_service_id: string | null;
   delivery_id: string | null;
 
-  // Per-line split billing Phase 1 (mig 20260718120000): server-controlled email gate.
+  // Per-line split billing Phase 1 (mig 20260718210000): server-controlled email gate.
   // 'sendable' (default, existing behavior) | 'suppressed_zero_total' = a $0 not-to-send
   // invoice — recorded and visible in the account, contributes zero to AR/aging/finance
   // charge, NOT marked paid, and every email path must refuse it. Never written by the browser.
@@ -3372,7 +3385,7 @@ export interface FieldAppLocationShare {
   customer?: Customer;
 }
 
-// ── Per-line-item split billing (mig 20260718120000, Phase 1 schema; flag
+// ── Per-line-item split billing (mig 20260718210000, Phase 1 schema; flag
 //    feature_per_line_split_billing, OFF). Spec: docs/plans/per-line-item-split-billing-spec-2026-07-17.md.
 //    These rows are SERVER-created only (locked SECURITY DEFINER save path); the browser reads
 //    them but has no INSERT/UPDATE/DELETE. Shares are immutable while their invoice is posted. ──

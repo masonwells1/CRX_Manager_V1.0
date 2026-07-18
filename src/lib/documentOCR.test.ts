@@ -206,8 +206,6 @@ describe('processDocumentWithOCR — document types', () => {
   const allTypes: DocumentType[] = [
     'invoice',
     'purchase_order',
-    'price_list',
-    'product_list',
     'customer_list',
     'quote_list',
   ];
@@ -317,7 +315,7 @@ describe('processDocumentWithOCR — image processing', () => {
       error: null,
     });
 
-    const result = await processDocumentWithOCR(file, 'product_list');
+    const result = await processDocumentWithOCR(file, 'invoice');
 
     expect(result.success).toBe(true);
     expect(mockCompressImage).toHaveBeenCalled();
@@ -438,7 +436,7 @@ describe('processDocumentWithOCR — edge function integration', () => {
       error: null,
     });
 
-    const result = await processDocumentWithOCR(file, 'price_list');
+    const result = await processDocumentWithOCR(file, 'invoice');
 
     // Should use fallback values
     expect(result.success).toBe(false); // data.success is undefined -> ?? false

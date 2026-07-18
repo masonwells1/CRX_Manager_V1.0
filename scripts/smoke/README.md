@@ -86,7 +86,7 @@ link-first, and lease-change-first.
 The Phase 2 calculator has its own disposable PostgreSQL 17 proof:
 
 ```bash
-node scripts/smoke/prove-per-line-split-billing-phase2.mjs --diagnose-blocked-phase1
+node scripts/smoke/prove-per-line-split-billing-phase2.mjs
 ```
 
 It creates a uniquely named `crx-per-line-p2-proof-*` container with no network,
@@ -102,13 +102,49 @@ price precedence; per-person price overrides; 100/0 service and flat-fee rows;
 job/default/fallback ownership; hashes; Mode A and malformed-vector rejection;
 role denial; overload count; and private-calculator privileges.
 
-Current prerequisite blocker: Phase 1 migration `20260718120000` contains an
-invalid concatenated `COMMENT ON COLUMN` statement. The default command (without
-`--diagnose-blocked-phase1`) fails hard and refuses to print a green proof while
-that checked-in migration is invalid. The explicit diagnostic mode recognizes and
-normalizes only that exact comment in memory, labels its evidence `DIAGNOSTIC`
-rather than `PROOF`, and leaves the checked-in migration untouched. A passing
-diagnostic does not make Phase 1 applyable or authorize any live apply.
+The command loads both checked-in migrations verbatim. It does not normalize or
+rewrite either file, and it cannot apply or alter production.
+
+## Disposable per-line split-billing Phase 1 proof
+
+The unapplied Phase 1 schema migration has a standalone PostgreSQL 17 proof:
+
+```bash
+node scripts/smoke/prove-per-line-split-billing-phase1.mjs
+```
+
+It applies the checked-in migration verbatim in a uniquely named, network-isolated
+container backed by tmpfs. It proves all three invariant trigger functions use a
+fixed-search-path, client-non-executable SECURITY DEFINER owned by a BYPASSRLS role;
+that moving a share cannot strand its source line at 0%; that a share cannot move
+onto a posted invoice item; that a logical billing line cannot commit without a
+vector; and that two concurrent full-vector writers serialize so exactly one
+commits. The container is removed in `finally` on PASS or FAIL.
+
+## Disposable Supplier Pricing Phase 1a proof
+
+The live additive bootstrap, live pre-deploy zero-cost guard, and parked
+enforcement cutover have a separate, production-isolated proof:
+
+```bash
+node scripts/smoke/prove-supplier-pricing-phase1a.mjs
+```
+
+The runner creates a uniquely named PostgreSQL 17 container with networking
+disabled and data in tmpfs, loads a live-shaped minimal base, compiles the exact
+live additive bootstrap, proves the currently deployed editor can still write
+one legacy Product/history pair without double logging, compiles and exercises
+the exact compatibility-safe zero-cost guard, then compiles the exact parked
+cutover. It generates and edits a real `.xlsx`, parses it through the
+application workbook module, and passes that payload through real PostgreSQL
+preview/apply RPCs with exact Product/history verification and rollback. The
+final-state proof also exercises authorization, both pricing modes, formula/tamper/
+version/collision-safe identity conflicts, atomic rollback, durable idempotent
+replay and cross-change-set key rejection, direct-write denial, and exactly-once
+history. It also proves an ordinary rate edit can recalculate server-derived
+per-acre prices while a caller still cannot write those derived values directly.
+The runner force-removes the exact container in `finally`; it never
+reads a Supabase URL and does not apply or alter production.
 
 Safety notes:
 
