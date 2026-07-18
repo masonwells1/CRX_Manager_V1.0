@@ -349,6 +349,22 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
       return;
     }
 
+    // Codex r4 P1: route a DRAFT/UNPOSTED split child to the Split Billing reopen editor so it
+    // can be reviewed + Posted, REGARDLESS of job_id. Round-3 P2-1 stamped job_id onto every
+    // child, which defeated the no-job preflight redirect above and stranded job-backed split
+    // drafts on this generic page with no Post path (save-now/post-later broken). Detected here
+    // from the tolerant select('*') load — NOT the preflight, which must stay off the parked
+    // field_app_billing_set_id column for deploy-order safety. A POSTED split child still renders
+    // read-only on this page (isSplitInvoice), unchanged.
+    {
+      const splitSetId = (data as { field_app_billing_set_id?: string | null }).field_app_billing_set_id;
+      const splitStatus = (data as { status?: string }).status;
+      if (splitSetId && (splitStatus === 'draft' || splitStatus === 'unposted')) {
+        navigate(`/split-billing/${splitSetId}`, { replace: true });
+        return;
+      }
+    }
+
     let salesman: { full_name: string } | null = null;
     const salesmanId = (data as { salesman_id?: string | null }).salesman_id;
     if (salesmanId) {

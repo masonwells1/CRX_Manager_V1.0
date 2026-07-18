@@ -220,6 +220,39 @@ Deno.serve(async (req: Request) => {
       }
     }
 
+    // 6b. Zero-invoice suppression (Codex r4 P1). A $0 per-line split child invoice is marked
+    // send_disposition='suppressed_zero_total' by the split writer and must NEVER be emailed. The
+    // client helper isInvoiceEmailSuppressed() gates the UI, but a direct call to this function
+    // could bypass it — enforce server-side too. Keyed off the invoice resource_id. Fail-OPEN only
+    // when the column doesn't exist yet (pre-migration): there are no suppressed invoices then.
+    if (email_type === "invoice" && resource_type === "invoice" && resource_id) {
+      const { data: invRow, error: invErr } = await adminClient
+        .from("invoices")
+        .select("id, send_disposition, customer_id")
+        .eq("id", resource_id)
+        .maybeSingle();
+      if (invErr) {
+        console.warn("send-email: invoice suppression check skipped", {
+          resource_id,
+          code: invErr.code,
+          message: invErr.message,
+        });
+      } else if (invRow) {
+        if (invRow.customer_id && invRow.customer_id !== customer_id) {
+          return jsonResponse({ error: "Invoice does not belong to customer_id" }, 400);
+        }
+        if (invRow.send_disposition === "suppressed_zero_total") {
+          return jsonResponse(
+            {
+              error:
+                "This $0 split invoice is recorded but not emailable (send_disposition=suppressed_zero_total)",
+            },
+            409,
+          );
+        }
+      }
+    }
+
     // 7. Attachment limits
     if (attachments && Array.isArray(attachments)) {
       if (attachments.length > MAX_ATTACHMENTS) {

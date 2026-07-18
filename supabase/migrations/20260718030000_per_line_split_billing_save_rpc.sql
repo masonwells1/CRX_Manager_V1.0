@@ -86,17 +86,6 @@
 
 
 -- ============================================================================
--- 0. PRECISION FIX — snapshot allocated_acres 12,2 → 12,4
---    The schema migration created invoice_line_share_snapshots.allocated_acres as
---    numeric(12,2); the live allocation store (invoice_line_shares.allocated_acres)
---    is numeric(12,4). Copying source → snapshot would silently truncate. Align it
---    (empty table, additive, no data to migrate).
--- ============================================================================
-ALTER TABLE public.invoice_line_share_snapshots
-  ALTER COLUMN allocated_acres TYPE numeric(12,4);
-
-
--- ============================================================================
 -- 1. RESOLVER — default split vector for a field set
 --    Precedence per field (spec §5, readiness #7):
 --      job snapshot job_field_shares(job, field)  →  field_billing_defaults(field)
@@ -402,6 +391,11 @@ DECLARE
   v_set_source_job     uuid;     -- the set's frozen source_job_id on re-save (round-3 P1)
   v_season             integer;  -- job/invoice season for pricing + stamping (round-3 P1)
   v_job_app_date       date;     -- source job's application/scheduled date for child invoices (round-3 P2)
+  -- Commissions on the split (Codex round-4 P1): mirror transfer_job_to_invoice per child
+  v_commission_split   jsonb;
+  v_child_id           uuid;
+  v_child_customer     uuid;
+  v_child_profit       numeric;
   -- #G canonical line COGS + its largest-remainder split (Codex round-2 P1)
   v_line_cogs          bigint;
   v_cogs_weights       jsonb;
@@ -434,6 +428,13 @@ BEGIN
     RAISE EXCEPTION 'Not authorized: active admin or sales role required';
   END IF;
 
+  -- Codex round-4 P1 (posting-boundary integrity): mark THIS transaction as the legitimate
+  -- split writer. The trg_guard_split_invoice_items trigger (below) blocks any other path —
+  -- notably the generic save_invoice, whose FIELD_INVOICE_SPLIT_LOCKED guard does NOT fire for
+  -- our single-compat-share children — from deleting a split child's invoice_items and
+  -- cascading away its invoice_line_shares. is_local = true: auto-resets at txn end.
+  PERFORM set_config('crx.split_writer', 'on', true);
+
   -- Salesman attribution: admin may name anyone; a sales_rep is forced to self.
   v_req_salesman := (p_invoice->>'salesman_id')::uuid;
   IF is_admin() THEN
@@ -463,6 +464,16 @@ BEGIN
     v_applied_acres_map := v_applied_acres_map
       || jsonb_build_object(v_fld->>'field_id', v_this_acres);
   END LOOP;
+
+  -- Codex round-4 P1: reject a field id appearing more than once. A duplicate would
+  -- double-count its acres into the ownership vector / compat share AND write a duplicate
+  -- field_app_locations snapshot for the group. (v_applied_acres_map would silently collapse
+  -- dupes to one key, so the acres map and the raw field array could disagree.)
+  IF (SELECT count(*) FROM unnest(v_field_ids)) <>
+     (SELECT count(DISTINCT x) FROM unnest(v_field_ids) AS x) THEN
+    RAISE EXCEPTION 'SPLIT_DUPLICATE_FIELD: a field id appears more than once in p_fields'
+      USING ERRCODE = 'invalid_parameter_value';
+  END IF;
 
   -- Mode-A: reject the ENTIRE feature for any grower-share field (spec §5).
   IF EXISTS (
@@ -633,6 +644,18 @@ BEGIN
       RAISE EXCEPTION 'SPLIT_JOB_NOT_COMPLETED: source job % must be completed to bill (status: %)',
         p_source_job_id, v_job.status USING ERRCODE = 'invalid_parameter_value';
     END IF;
+    -- Codex round-4 P1: every billed field must belong to the source job. Otherwise the
+    -- operator could pick a job + unrelated (or subset) fields and consume the WHOLE job as
+    -- invoiced while actually billing different acres — the job's other work then silently
+    -- can never be billed. Validate p_fields ⊆ the job's job_fields before consuming it.
+    IF EXISTS (
+      SELECT 1 FROM unnest(v_field_ids) AS fid
+       WHERE NOT EXISTS (SELECT 1 FROM job_fields jf
+                          WHERE jf.job_id = p_source_job_id AND jf.field_id = fid)
+    ) THEN
+      RAISE EXCEPTION 'SPLIT_FIELD_NOT_ON_JOB: one or more billed fields do not belong to source job %', p_source_job_id
+        USING ERRCODE = 'invalid_parameter_value';
+    END IF;
     v_job_app_date := v_job.job_date;          -- carried onto each child (round-3 P2); the LIVE
                                                -- jobs table has job_date (no scheduled_date), and
                                                -- live transfer_job_to_invoice uses job_date too.
@@ -673,6 +696,21 @@ BEGIN
     -- price is stored as their BASE, not an override vs the largest-share owner). #L: the
     -- operator's reason for a customized split / price, captured per co-owner.
     IF v_line ? 'shares' AND jsonb_typeof(v_line->'shares') = 'array' THEN
+      -- Codex round-4 P1 (server defense-in-depth for the editor's per-share guard): a
+      -- per-PERSON price override must be a POSITIVE amount. Below, a share flagged
+      -- price_mode='override' with a non-null override_unit_price_cents is treated as a genuine
+      -- caller override and billed at that price — so a 0 / negative value (e.g. the editor's
+      -- "1e5" → 0 path, or a direct RPC call) would bill $0 and give product away. Reject it.
+      IF EXISTS (
+        SELECT 1 FROM jsonb_array_elements(v_line->'shares') AS s
+         WHERE s->>'price_mode' = 'override'
+           AND s->'override_unit_price_cents' IS NOT NULL
+           AND jsonb_typeof(s->'override_unit_price_cents') <> 'null'
+           AND (s->>'override_unit_price_cents')::bigint <= 0
+      ) THEN
+        RAISE EXCEPTION 'SPLIT_SHARE_OVERRIDE_INVALID: a per-person price override on line % must be a positive amount', v_idx
+          USING ERRCODE = 'invalid_parameter_value';
+      END IF;
       SELECT array_agg(s->>'customer_id')
         INTO v_caller_override
         FROM jsonb_array_elements(v_line->'shares') AS s
@@ -847,10 +885,13 @@ BEGIN
 
     INSERT INTO field_app_billing_lines (
       billing_set_id, line_kind, product_id, application_service_id, description,
-      source_quantity, source_unit_price_cents, sort_order
+      source_quantity, source_acres, source_unit_price_cents, sort_order
     ) VALUES (
       v_set_id, v_line_kind, v_product_id, v_app_service_id, v_line_desc,
-      v_src_qty, v_src_unit_price, v_idx
+      -- Codex round-4 P2 #10: persist the source applied-acre basis alongside the quantity.
+      -- Service lines bill on acres (source_quantity is NULL for them), so without this a
+      -- post-time verifier had no acre basis for a service line. Now every line records both.
+      v_src_qty, v_src_acres, v_src_unit_price, v_idx
     ) RETURNING id INTO v_line_id;
 
     -- Build the calculator share vector. If the caller omitted 'shares' the line
@@ -1217,10 +1258,79 @@ BEGIN
   -- fires and the same work can never be billed twice. Idempotent on re-save (a job
   -- already 'invoiced' by THIS set is left as-is; the guard above already allowed it).
   IF p_source_job_id IS NOT NULL THEN
-    UPDATE jobs SET status = 'invoiced', invoice_id = v_invoice_ids[1]
+    -- Resolve the commission split exactly like transfer_job_to_invoice: the job's own
+    -- creation-time snapshot, else the parent quote's split, else the customer default (only
+    -- pre-U8 jobs reach the fallback). v_job was loaded FOR UPDATE in the #E guard above.
+    v_commission_split := v_job.commission_split;
+    IF v_commission_split IS NULL THEN
+      IF v_job.quote_id IS NOT NULL THEN
+        SELECT q.commission_split INTO v_commission_split FROM quotes q WHERE q.id = v_job.quote_id;
+      ELSE
+        SELECT c.default_commission_split INTO v_commission_split FROM customers c WHERE c.id = v_job.customer_id;
+      END IF;
+    END IF;
+
+    -- Consume the job (idempotent on re-save) AND persist the resolved split onto it in the
+    -- SAME status flip, so attribution locks at first use and re-saves never re-read live sources
+    -- (mirrors transfer_job_to_invoice's Codex-R2/R4 persistence).
+    UPDATE jobs SET status = 'invoiced', invoice_id = v_invoice_ids[1],
+        commission_split = COALESCE(commission_split, v_commission_split, '{"splits":[]}'::jsonb)
      WHERE id = p_source_job_id AND status <> 'invoiced';
     UPDATE application_records SET invoice_id = v_invoice_ids[1]
      WHERE source_type = 'job' AND source_id = p_source_job_id AND invoice_id IS NULL;
+
+    -- ---- Per-child commissions (Codex round-4 P1) ----------------------------
+    -- Mirror transfer_job_to_invoice's PER-OWNER GROUP path: each child invoice mints
+    -- commissions on ITS OWN chemical-line profit, so the sum across children equals the
+    -- whole job's chemical profit and each recipient is paid per invoice they touch. A
+    -- split job billed here previously created NO commissions AND the status flip blocked
+    -- the normal path from ever creating them.
+    --
+    -- Profit basis matches the FIELD convention (not transfer's extended-cost one): our
+    -- chemical invoice_items carry PER-UNIT cost_cents (#F), so profit = extended -
+    -- ROUND(cost × qty) over product-backed, non-application-fee lines — identical to
+    -- _save_invoice_scoped_impl's U8 recompute. Service / flat / fee lines contribute 0.
+    --
+    -- Re-save safe: a redraw rewrites every child's items (changing profit) and may DROP a member
+    -- (whose child was orphan-cancelled above). The #E guard makes this job EXCLUSIVE to this set
+    -- (it cannot be on another set or normally invoiced), so EVERY commission carrying this job_id
+    -- belongs to this set — clear them ALL (including a dropped member's, which would otherwise leak
+    -- a phantom pending commission on a cancelled invoice), then re-mint only for the current
+    -- members. First REFUSE if any are already in an active payout batch or already paid (mirrors
+    -- the U8 edit guards): the operator must void that commission payment before re-saving. On a
+    -- first save there are none, so the guards pass and the DELETE is a no-op.
+    IF EXISTS (
+      SELECT 1 FROM commissions c
+      JOIN commission_payment_items cpi ON cpi.commission_id = c.id
+      JOIN commission_payments cp ON cp.id = cpi.commission_payment_id
+      WHERE c.job_id = p_source_job_id AND c.status = 'pending' AND cp.status <> 'voided'
+    ) THEN
+      RAISE EXCEPTION 'JOB_HAS_BATCHED_COMMISSIONS: this split''s pending commissions are in an active payout batch — void that commission payment before re-saving';
+    END IF;
+    IF EXISTS (
+      SELECT 1 FROM commissions c WHERE c.job_id = p_source_job_id AND c.status = 'paid'
+    ) THEN
+      RAISE EXCEPTION 'JOB_COMMISSIONS_PAID: this split''s commissions were already paid out — void that commission payment before re-saving';
+    END IF;
+
+    DELETE FROM commissions WHERE job_id = p_source_job_id;
+
+    FOREACH v_child_id IN ARRAY v_invoice_ids
+    LOOP
+      SELECT COALESCE(SUM(COALESCE(ii.extended_cents, 0)
+                          - ROUND(COALESCE(ii.cost_cents, 0) * COALESCE(ii.quantity, 1))::bigint), 0)::numeric / 100.0
+        INTO v_child_profit
+        FROM invoice_items ii
+       WHERE ii.invoice_id = v_child_id
+         AND COALESCE(ii.is_application_fee, false) = false
+         AND ii.product_id IS NOT NULL;
+
+      SELECT customer_id INTO v_child_customer FROM invoices WHERE id = v_child_id;
+
+      PERFORM _insert_commissions_for_job(
+        p_source_job_id, v_child_id, v_child_customer,
+        COALESCE(v_child_profit, 0), v_commission_split, CURRENT_DATE);
+    END LOOP;
   END IF;
 
   -- ---- PASS 3: field snapshots for the group (Codex P1 #7) -------------------
@@ -1418,11 +1528,53 @@ COMMENT ON FUNCTION public.save_field_app_split_invoice(uuid, uuid, jsonb, jsonb
 
 
 -- ============================================================================
--- 4. R1 POST SNAPSHOT — copy invoice_line_shares → snapshots on post
+-- 4. GUARD — generic save_invoice must not tamper with a split child's line items
+--    (Codex round-4 P1). _save_invoice_scoped_impl DELETEs ALL invoice_items of the
+--    target invoice (then re-inserts from its payload); that delete CASCADEs the
+--    invoice_line_shares away, and its existing FIELD_INVOICE_SPLIT_LOCKED guard only
+--    trips on >1 invoice_shares — our single-compat-share children slip through and would
+--    post a malformed group. Block any DELETE of a split-produced invoice_item
+--    (billing_line_id set) unless the split writer marked this txn (crx.split_writer='on').
+--    The split writer's own re-save delete runs under that flag; every other path is refused.
+-- ============================================================================
+CREATE OR REPLACE FUNCTION public.guard_split_invoice_items()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $fn$
+BEGIN
+  IF OLD.billing_line_id IS NOT NULL
+     AND COALESCE(current_setting('crx.split_writer', true), 'off') <> 'on' THEN
+    RAISE EXCEPTION 'SPLIT_ITEM_LOCKED: invoice line % belongs to a per-line split billing set — edit it through the Split Billing editor (save_field_app_split_invoice), not save_invoice', OLD.id
+      USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  RETURN OLD;
+END;
+$fn$;
+
+-- Defense-in-depth: SECURITY DEFINER trigger fn, RETURNS trigger (bare OLD/NEW), cannot be
+-- invoked via PostgREST — REVOKE matches the file convention and the anon-exec-SECDEF sweep.
+REVOKE ALL ON FUNCTION public.guard_split_invoice_items() FROM public, anon, authenticated;
+
+DROP TRIGGER IF EXISTS trg_guard_split_invoice_items ON public.invoice_items;
+CREATE TRIGGER trg_guard_split_invoice_items
+  BEFORE DELETE ON public.invoice_items
+  FOR EACH ROW
+  EXECUTE FUNCTION public.guard_split_invoice_items();
+
+COMMENT ON FUNCTION public.guard_split_invoice_items() IS
+  'Per-line split billing R4: blocks DELETE of a split-produced invoice_item (billing_line_id set) outside the split writer (crx.split_writer=on), so generic save_invoice cannot cascade away a split child''s invoice_line_shares and post a malformed group. The split RPC sets the flag for its own re-save delete.';
+
+-- ============================================================================
+-- 5. R1 POST SNAPSHOT + POSTING-BOUNDARY VALIDATION
 --    AFTER UPDATE OF status on invoices: when a split child flips to 'posted',
---    append its current line shares to the append-only history table. Keeps
---    post_invoice_group unchanged (smallest blast radius). No-op for every
---    non-split invoice (guarded on field_app_billing_set_id).
+--    FIRST validate the split is well-formed (every item carries a line share and the
+--    shares tie to the header — Codex round-4 P1), THEN append its current line shares to
+--    the append-only history table WITH self-contained line identity (product / service /
+--    description / kind — Codex round-4 P1 #8, so post history survives the source rows being
+--    deleted on a later unpost+re-save). Keeps post_invoice_group unchanged (smallest blast
+--    radius). No-op for every non-split invoice (guarded on field_app_billing_set_id).
 -- ============================================================================
 CREATE OR REPLACE FUNCTION public.snapshot_invoice_line_shares_on_post()
 RETURNS trigger
@@ -1430,19 +1582,46 @@ LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $fn$
+DECLARE
+  v_item_cnt   int;
+  v_share_cnt  int;
+  v_share_sum  bigint;
 BEGIN
   IF NEW.status = 'posted'
      AND OLD.status IS DISTINCT FROM 'posted'
      AND NEW.field_app_billing_set_id IS NOT NULL THEN
+
+    -- Posting-boundary invariants (Codex round-4 P1): a split child must be intact to post.
+    -- If generic save_invoice (or anything) cascaded away the shares, or item/share/header
+    -- diverged, refuse the post — a malformed split must never become a real, posted invoice.
+    SELECT count(*) INTO v_item_cnt FROM invoice_items WHERE invoice_id = NEW.id;
+    SELECT count(ils.id), COALESCE(SUM(ils.amount_cents), 0)
+      INTO v_share_cnt, v_share_sum
+      FROM invoice_items ii
+      JOIN invoice_line_shares ils ON ils.invoice_item_id = ii.id
+     WHERE ii.invoice_id = NEW.id;
+
+    IF v_share_cnt <> v_item_cnt THEN
+      RAISE EXCEPTION 'SPLIT_POST_MALFORMED: invoice % has % line item(s) but % line share(s) — the per-line split was corrupted; edit it via the Split Billing editor and re-save before posting',
+        NEW.id, v_item_cnt, v_share_cnt USING ERRCODE = 'internal_error';
+    END IF;
+    IF v_share_sum IS DISTINCT FROM COALESCE(NEW.total_amount_cents, 0) THEN
+      RAISE EXCEPTION 'SPLIT_POST_TOTAL_MISMATCH: invoice % line shares sum to % but the header total is % — refusing to post a malformed split',
+        NEW.id, v_share_sum, NEW.total_amount_cents USING ERRCODE = 'internal_error';
+    END IF;
+
     INSERT INTO invoice_line_share_snapshots (
       invoice_id, billing_line_id, customer_id, split_micro_pct,
-      allocated_quantity, allocated_acres, unit_price_cents, amount_cents, snapshot_reason
+      allocated_quantity, allocated_acres, unit_price_cents, amount_cents,
+      line_kind, product_id, application_service_id, line_description, snapshot_reason
     )
     SELECT NEW.id, ils.billing_line_id, ils.customer_id, ils.split_micro_pct,
-           ils.allocated_quantity, ils.allocated_acres, ils.unit_price_cents,
-           ils.amount_cents, 'post'
+           ils.allocated_quantity, ils.allocated_acres, ils.unit_price_cents, ils.amount_cents,
+           bl.line_kind, ii.product_id, bl.application_service_id,
+           COALESCE(NULLIF(ii.description, ''), bl.description), 'post'
       FROM invoice_line_shares ils
       JOIN invoice_items ii ON ii.id = ils.invoice_item_id
+      LEFT JOIN field_app_billing_lines bl ON bl.id = ils.billing_line_id
      WHERE ii.invoice_id = NEW.id;
   END IF;
   RETURN NEW;
@@ -1461,7 +1640,7 @@ CREATE TRIGGER trg_snapshot_line_shares_on_post
   EXECUTE FUNCTION public.snapshot_invoice_line_shares_on_post();
 
 COMMENT ON FUNCTION public.snapshot_invoice_line_shares_on_post() IS
-  'Per-line split billing R1: on a split child invoice flipping to posted, appends its invoice_line_shares to invoice_line_share_snapshots (append-only post history across unpost/edit/re-post). No-op for non-split invoices. Keeps post_invoice_group unchanged.';
+  'Per-line split billing R1/R4: on a split child flipping to posted, validates the split is well-formed (item↔share count + shares tie to header; refuses SPLIT_POST_MALFORMED / SPLIT_POST_TOTAL_MISMATCH otherwise), then appends its invoice_line_shares to invoice_line_share_snapshots with self-contained line identity (kind/product/service/description). No-op for non-split invoices. Keeps post_invoice_group unchanged.';
 
 -- ============================================================================
 -- DONE — additive, flag-gated. Posting reuses post_invoice_group unchanged.

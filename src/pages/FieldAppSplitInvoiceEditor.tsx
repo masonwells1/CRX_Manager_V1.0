@@ -465,6 +465,16 @@ export default function FieldAppSplitInvoiceEditor() {
       if (l.customized) {
         const sum = shareSumPct(l);
         if (Math.abs(sum - 100) > 0.01) return `A customized line's percentages sum to ${sum.toFixed(2)}% — they must total 100%.`;
+        // Codex r4 P1: a per-PERSON price override must be a valid positive amount. dollarsToCents
+        // returns 0 for sci-notation ("1e5") and null for blank — both would otherwise post a $0
+        // override and give product away. The round-2 #D fix only covered the LINE-level override;
+        // this covers the per-share path.
+        for (const s of l.shares) {
+          if (s.override) {
+            const oc = dollarsToCents(s.overridePriceDollars);
+            if (oc == null || oc <= 0) return 'A per-person price override is on but has no valid positive amount.';
+          }
+        }
       }
     }
     return null;

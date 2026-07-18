@@ -67,6 +67,7 @@ CREATE TABLE IF NOT EXISTS field_app_billing_lines (
   application_service_id  uuid REFERENCES application_services(id),
   description             text,
   source_quantity         numeric(12,4),
+  source_acres            numeric(12,4),   -- Codex r4 P2 #10: the line's source applied-acre basis (service lines carry acres, not a product quantity) so post-time verification has an acre basis; NULL for pure chemical/flat lines
   source_unit_price_cents bigint,
   source_line_cents       bigint,
   sort_order              integer NOT NULL DEFAULT 0,
@@ -121,9 +122,17 @@ CREATE TABLE IF NOT EXISTS invoice_line_share_snapshots (
   posted_at           timestamptz NOT NULL DEFAULT now(),
   split_micro_pct     integer NOT NULL,
   allocated_quantity  numeric(12,4),
-  allocated_acres     numeric(12,2),
+  allocated_acres     numeric(12,4),   -- Codex r4 P2: match invoice_line_shares.allocated_acres (12,4); a (,2) column silently rounded 0.3334 -> 0.33 in the post history
   unit_price_cents    bigint NOT NULL,
   amount_cents        bigint NOT NULL,
+  -- Codex r4 P1 #8: self-contained line identity. post/unpost/re-save DELETEs the
+  -- billing lines + invoice_items, leaving billing_line_id dangling; capture what the
+  -- snapshot line WAS (product / service / description / kind) so the post history is
+  -- readable without the now-deleted source rows. Nullable: pre-fix rows have none.
+  line_kind              text,
+  product_id             uuid,
+  application_service_id uuid,
+  line_description       text,
   snapshot_reason     text NOT NULL DEFAULT 'post',
   created_at          timestamptz NOT NULL DEFAULT now()
 );
