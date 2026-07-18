@@ -4,6 +4,14 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-17 (night) — Per-line split-billing build, Phase 2: additive schema migration written + review-hardened + rollback-smoke-proven, PARKED (not applied). Autonomous Opus-4.8-orchestrated run.
+
+Wrote `supabase/migrations/20260718010000_per_line_split_billing_schema.sql` — purely additive, behavior-neutral: 4 new tables (field_app_billing_sets, field_app_billing_lines, invoice_line_shares, invoice_line_share_snapshots), 3 additive columns (invoice_items.billing_line_id, invoices.send_disposition default 'normal', invoices.field_app_billing_set_id), and a SECURITY DEFINER freeze trigger copied from prevent_order_shares_edit_after_post. Nothing reads/writes these until the calculator + posting RPC land behind a flag.
+
+**NOT applied live** — validated only via `BEGIN…ROLLBACK` smoke against live schema (all objects create, all FKs resolve, assertions pass, nothing persists). Live apply stays gated to Mason (needs a baseline real-billing cycle first per spec §8).
+
+Review layer: 3 parallel reviewers (rls-security-reviewer, migration-drift-reviewer, Opus adversarial). Fixes folded in: allocated_acres → numeric(12,4) [authoritative largest-remainder store, spec §4]; snapshot invoice_id → ON DELETE RESTRICT [protect append-only history]; RLS policies wrap auth.uid() as (select auth.uid()) [avoids auth_rls_initplan warns, matches invoice_shares_select]; REVOKE SELECT FROM anon; freeze trigger checks both old+new invoice_item on UPDATE. Companion: `docs/plans/per-line-split-billing-READINESS-2026-07-17.md`.
+
 ## 2026-07-17 — Split-billing architecture dig + per-line-item custom-split design spec v2 (review-hardened via gpt-5.6-terra xhigh plan review; 4 blockers folded in). Owner workflow settled: field split=default, adjust in unposted draft, unpost reversible. Committed 4b695109; Codex builds next week. No code/DB changes.
 
 Split-billing architecture dig + per-line-item custom-split design spec v2 (review-hardened via gpt-5.6-terra xhigh plan review; 4 blockers folded in). Owner workflow settled: field split=default, adjust in unposted draft, unpost reversible. Committed 4b695109; Codex builds next week. No code/DB changes.
