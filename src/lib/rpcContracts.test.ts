@@ -1919,6 +1919,7 @@ const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
  * in MUTATING_RPCS_MISSING_IDEMPOTENCY and must eventually be fixed.
  */
 const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
+  _calculate_per_line_split_billing_plan: 'read-only calculator; DML is limited to transaction-local pg_temp working tables and direct browser EXECUTE is revoked',
   _insert_commissions_for_job: 'internal helper; caller owns idempotency and direct EXECUTE is revoked',
   _insert_commissions_for_order: 'internal helper; caller owns idempotency and direct EXECUTE is revoked',
   _reverse_credit_memo_application: 'internal helper called only by idempotent credit-memo reversal RPCs',
@@ -1931,6 +1932,7 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
   check_remainder_reminders: 'maintenance reminder sweep uses persisted sent markers to deduplicate',
   check_unpriced_orders: 'cron reminder sweep uses persisted reminder and escalation sent markers',
   mark_overdue_invoices: 'service-role maintenance updates only invoices currently eligible as overdue',
+  preview_field_app_invoice_split: 'read-only preview wrapper; feature-on calls the pg_temp-only calculator and feature-off delegates to the legacy read-only preview',
   recompute_job_applied_acres: 'trigger-only derived-total recomputation; direct client EXECUTE is revoked',
   reconcile_prepay_balances: 'convergent repair sets balances to recomputed ledger truth',
   refresh_watchdog_flags: 'convergent watchdog rebuild deduplicates flags by persisted natural key',

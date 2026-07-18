@@ -124,8 +124,8 @@ Codex reviews before any merge. All work lands on the per-phase branch → draft
 
 | Phase | Status | Branch / PR | PROOF (Ran / Saw) | Gauntlet | Notes |
 |---|---|---|---|---|---|
-| 1 — schema | **DONE** | `claude/billing-splits-plan-8ih4jg` / PR #166 | typecheck+build+tests green; live DB re-checked vs spec | rls/drift/types reviewers CLEAN | flag OFF; not applied live |
-| 2 — calculator | TODO | — | — | — | start here |
+| 1 — schema | **PARKED** | `claude/billing-splits-plan-8ih4jg` / PR #166 | prior typecheck+build+tests green; live DB confirms objects absent | prior rls/drift/types reviewers CLEAN | flag OFF; not applied live; **migration currently fails PostgreSQL parsing at concatenated `COMMENT ON COLUMN invoices.send_disposition` and must be fixed by the Phase 1 owner** |
+| 2 — calculator | **PARKED** | `claude/split-billing-phase2-calculator` / no PR | PROOF — Ran: network-isolated PG17, checked-in Phase 1+2, rollback-only suite · Saw: OFF delegation; 50/50; exact 3-way; 1¢; full-precision final money round; −13¢→−7/−6; price/snapshot precedence; 100/0; hashes; denial guards | Codex full review: no Phase 2 defect, overall BLOCK on Phase 1; final money delta: APPROVE. Claude wrapper: BLOCKED ×2 (empty verdicts) | Phase 2 bytes green but cannot ship on an invalid Phase 1 base; flag remains OFF; no live apply; unrelated live quote Q-2026-2059 has a blank commission recipient |
 | 3 — save/post RPC | TODO | — | — | — | depends on Phase 2 |
 | 4 — UI + mail gates | TODO | — | — | — | depends on Phase 3; edge-fn deploy = Mason gate |
 

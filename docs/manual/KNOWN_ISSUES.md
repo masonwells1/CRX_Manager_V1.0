@@ -1,6 +1,6 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-07-17** (targeted money/inventory release refresh against current code and live DB; older open/deferred claims retain their dated evidence below; owner-facing combined list: root `TODO.md`)
+**Last verified: 2026-07-18** (targeted per-line split-billing refresh against current code and live DB; older open/deferred claims retain their dated evidence below; owner-facing combined list: root `TODO.md`)
 **Update triggers:** when a finding is parked/resolved, a migration is parked/applied, or an owner decision lands. Agents must update THIS file, not create new issue lists. Do not re-discover or re-fix something listed here as already known — read the pointer first.
 
 This file consolidates (does not replace) the source documents it points to. If this file and a source disagree, trust the source and fix this file.
@@ -47,6 +47,8 @@ Two items the ledger flagged as **"top build priority" and Codex-rated HIGH-on-s
 | `scripts/.staging-migrations/workflow-fix-parked/u12/*`, `.../u13/*` | Draft patches for Applicator "My Day" (U12) and dispatch-assignment unification (U13) | **Verified superseded and removed locally in this ticket.** `docs/loops/business-workflow-fix-ledger.md` confirms both U12 and U13 **SHIPPED LIVE 2026-07-06/07** under different migration names (`20260707010000`/`20260707011000` for U12, `20260707020000` for U13) — not the deleted draft filenames (`20260706060000`, `20260706100000`). | Do not re-apply the removed drafts. |
 | `scripts/.staging-migrations/workflow-waves-parked/PARKED-dispatch-backfill.sql` | One-time backfill of `job_location_dispatches` for legacy-assigned open jobs | Business-data write, needs Mason's OK; also a **no-op today** (0 jobs match, verified live 2026-07-10) | Mason's explicit go-ahead; re-run the embedded count query first since it's a live-data-dependent no-op |
 | `docs/roadmap/shelved-earmark-engine/*.sql` (3 files: `20260613240000`, `20260613250000`, `20260613280000`) | Booking-prepay "earmark" engine (reserve prepay credits for a specific future booking) | **SHELVED for a full redesign** (Mason's call, 2026-06-14) — the earmark engine assumes a single ledger-based spend path, but the legacy aggregate-spend path (`apply_remaining_prepayments`) bypasses it, causing double-spend + fund-diversion defects (Codex rounds 5-6). See README.md in that folder for the reserved-pool redesign sketch. | **DO NOT APPLY without a fresh architectural pass** — reserved-vs-spendable balance model, not a patch. |
+| `supabase/migrations/20260718120000_per_line_split_billing_phase1_schema.sql` | Phase 1 schema and feature-flag foundation for per-line split billing | Final `COMMENT ON COLUMN` concatenates string literals with `||`, which PostgreSQL's `COMMENT` grammar rejects; production has none of the Phase 1 objects | Phase 1 owner fixes that migration on its own branch, reruns its database proof/reviews, and completes the required baseline real-billing cycle |
+| `supabase/migrations/20260718153736_per_line_split_billing_phase2_calculator.sql` | Phase 2 deterministic preview calculator and compatibility wrapper | Disposable PostgreSQL proof is green, but it depends on the invalid/unapplied Phase 1 migration; independent Codex found no Phase 2 defect, while both Claude wrapper attempts returned no verdict | Fix and prove Phase 1 first, then rerun Phase 2's guarded reviews; do not apply or enable the feature flag yet |
 | Per `.claude/commands/parked.md`: also check `node scripts/fleet-status.mjs` output and any `*draft*.sql` under `docs/audits/` for parked drafts in other worktrees | — | — | Not re-run in this pass (read-only doc consolidation, single worktree) — a future agent asked "what's parked" should run it fresh |
 
 ---
@@ -75,10 +77,14 @@ Also open: **Sprint D leftovers** (`docs/loops/workflow-waves-ledger.md`) — D1
 
 ## 4. Deferred/parked feature work
 
-- **Per-line-item custom split billing (field-app)** — DESIGN SPEC complete + review-hardened, **not
-  built**; Mason builds it in Codex next week (baseline real-billing cycle first). Default splits from
-  field ownership, override %/price per line, one invoice per customer, unpost stays reversible. Three
-  advisor passes folded in (gpt-5.6-terra design + xhigh plan-review, claude-fable-5 money-math). Spec:
+- **Per-line-item custom split billing (field-app)** — DESIGN SPEC complete + review-hardened; Phase 1
+  schema and Phase 2 calculator are built but **not live**, and Phases 3-4 remain unbuilt. Phase 1 is
+  parked because its final `COMMENT ON COLUMN` statement is invalid PostgreSQL; Phase 2's disposable
+  database proof is green but cannot become applyable ahead of that dependency. The production flag
+  and Phase 1 objects are absent, and the baseline real-billing cycle is still required. Default splits
+  come from field ownership, with override %/price per line, one invoice per customer, and reversible
+  unposting. Three advisor passes informed the design (gpt-5.6-terra design + xhigh plan-review,
+  claude-fable-5 money-math). Spec:
   `docs/plans/per-line-item-split-billing-spec-2026-07-17.md`; direction settled in `DECISION_LOG.md`
   (2026-07-17). Supersedes the "four parallel split mechanisms need a decision" flag — decided: field-app
   path is the surface, order-side engine retired later.

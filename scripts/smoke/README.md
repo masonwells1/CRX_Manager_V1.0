@@ -81,6 +81,33 @@ The same disposable database loads the checked-in atomic OCR commit function
 and proves three real two-session losers roll back cleanly: approval-first,
 link-first, and lease-change-first.
 
+## Phase 2 per-line split calculator proof
+
+The Phase 2 calculator has its own disposable PostgreSQL 17 proof:
+
+```bash
+node scripts/smoke/prove-per-line-split-billing-phase2.mjs
+```
+
+It creates a uniquely named `crx-per-line-p2-proof-*` container with no network,
+stores PostgreSQL data in tmpfs, loads the minimal schema plus the checked-in
+Phase 1 and Phase 2 migrations, runs `smoke-per-line-split-billing-phase2.sql`,
+requires the terminal `SMOKE_PASS_ROLLBACK` marker, and force-removes the exact
+container in `finally`.
+
+The proof covers feature-OFF legacy delegation; exact 50/50 and three-way
+micro-percent vectors; 1¢ and signed half-cent allocation; full-precision unit
+conversion with only the final money figure rounded; manual/quote/tier/service
+price precedence; per-person price overrides; 100/0 service and flat-fee rows;
+job/default/fallback ownership; hashes; Mode A and malformed-vector rejection;
+role denial; overload count; and private-calculator privileges.
+
+Current prerequisite blocker: Phase 1 migration `20260718120000` contains an
+invalid concatenated `COMMENT ON COLUMN` statement. For Phase 2 diagnostics only,
+the Node harness recognizes and normalizes that exact comment in memory, prints a
+`BLOCKER` line, and leaves the checked-in migration untouched. A green Phase 2
+diagnostic therefore does not make Phase 1 applyable or authorize any live apply.
+
 Safety notes:
 
 - Chains run as table owner; direct fixture INSERTs bypass RLS but the RPCs
