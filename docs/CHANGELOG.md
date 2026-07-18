@@ -23,6 +23,10 @@ finished (Codex apply-proof → live apply → PR merge) from Mason's Windows se
   "converted booking stays closed" semantic): `revert_quote_status` now un-blocks reverting an
   'accepted' quote whose only order is cancelled and releases its stale draw ledger so it is
   re-convertible. Reviewers clean; fail-first smoke proved the strand live.
+- **H2 — finance-charge double-charge (BUILT).**
+  `20260718132000_finance_charge_month_dedup.sql`. Dedup now on the calendar month (+ month-keyed
+  advisory lock) so two runs in the same month on different as-of dates can't both charge. Reviewers
+  clean; fail-first smoke proved the double-charge live (2 charges from 2 same-month runs).
 - **B1 — Supplier Pricing Phase 1a drift:** NOT a bug fix — `feat/supplier-pricing-phase1a` is a
   whole ~40-commit feature (already live in prod, unmerged on `main`). Set aside for Mason's
   feature-merge decision, not folded into this remediation sweep.

@@ -1,0 +1,92 @@
+-- Post-apply rollback-only regression proof for H2 (Live Foundation Gauntlet
+-- 2026-07-18): generate_finance_charges must charge an overdue balance at most
+-- once per customer per calendar month, even across two runs on different
+-- as-of dates in that month.
+--
+-- FAIL-FIRST CONTRACT: against the PRE-FIX function the second same-month run
+-- (different as-of date, so a different period_end) charges the balance again,
+-- leaving TWO finance_charges rows -> this chain raises SMOKE_FAIL. Against the
+-- FIXED function the second run skips (month-level dedup + month-keyed advisory
+-- lock), leaving one row, and the chain reaches SMOKE_PASS_ROLLBACK.
+--
+-- One DO block, terminal exception -> nothing commits.
+DO $smoke$
+DECLARE
+  v_admin    uuid;
+  v_suffix   text := substr(md5(random()::text), 1, 8);
+  v_customer uuid;
+  v_invoice  uuid;
+  v_late     date;
+  v_early    date;
+  v_res      jsonb;
+  v_n        integer;
+BEGIN
+  SELECT id INTO v_admin FROM public.profiles
+  WHERE role = 'admin' AND is_active = true ORDER BY created_at LIMIT 1;
+  IF v_admin IS NULL THEN RAISE EXCEPTION 'SMOKE_SETUP: active admin required'; END IF;
+  PERFORM set_config('request.jwt.claims',
+    json_build_object('sub', v_admin, 'role', 'authenticated')::text, true);
+
+  -- Latest open, non-future business date (mirrors smoke-gauntlet-money-workflows).
+  SELECT gs::date INTO v_late
+  FROM generate_series(
+    (now() AT TIME ZONE 'America/Chicago')::date,
+    (now() AT TIME ZONE 'America/Chicago')::date - 365,
+    interval '-1 day') AS gs
+  WHERE NOT EXISTS (
+    SELECT 1 FROM public.accounting_periods ap
+    WHERE gs::date BETWEEN ap.period_start AND ap.period_end AND ap.status = 'closed')
+  ORDER BY gs DESC LIMIT 1;
+  IF v_late IS NULL THEN RAISE EXCEPTION 'SMOKE_SETUP: no open finance-charge date available'; END IF;
+
+  -- An earlier open date in the SAME calendar month.
+  v_early := date_trunc('month', v_late)::date + 4;   -- the 5th
+  IF v_early >= v_late THEN v_early := date_trunc('month', v_late)::date; END IF;   -- the 1st
+  IF v_early >= v_late THEN
+    RAISE EXCEPTION 'SMOKE_SETUP: no two distinct same-month open dates (v_late=%)', v_late;
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM public.accounting_periods ap
+    WHERE v_early BETWEEN ap.period_start AND ap.period_end AND ap.status = 'closed') THEN
+    RAISE EXCEPTION 'SMOKE_SETUP: early date % is in a closed period', v_early;
+  END IF;
+
+  -- [E2E] marker satisfies the live-testdata guard; terminal rollback removes it.
+  INSERT INTO public.customers (
+    farm_name, finance_charge_rate, finance_charge_enabled,
+    finance_charge_grace_days, prepay_balance_cents
+  ) VALUES (
+    '[E2E] H2 Farm ' || v_suffix, 12, true, 0, 0
+  ) RETURNING id INTO v_customer;
+
+  -- Overdue posted invoice (due well before either as-of date).
+  INSERT INTO public.invoices (
+    invoice_number, customer_id, invoice_type, status,
+    invoice_date, due_date, total_amount_cents, created_by
+  ) VALUES (
+    'E2E-H2-INV-' || v_suffix, v_customer, 'chemical_sale', 'draft',
+    v_early - 60, v_early - 40, 100000, v_admin
+  ) RETURNING id INTO v_invoice;
+  UPDATE public.invoices SET status = 'posted', posted_by = v_admin, posted_at = now()
+  WHERE id = v_invoice;
+
+  -- Run 1 (earlier date): must create exactly one charge.
+  v_res := public.generate_finance_charges(v_early, v_admin, ARRAY[v_customer], 'e2e-h2-1-' || v_suffix);
+  IF (v_res->>'charges_generated')::int <> 1 THEN
+    RAISE EXCEPTION 'SMOKE_SETUP: first run did not charge as expected: %', v_res;
+  END IF;
+
+  -- Run 2 (later date, SAME month, different key): must NOT charge again.
+  v_res := public.generate_finance_charges(v_late, v_admin, ARRAY[v_customer], 'e2e-h2-2-' || v_suffix);
+
+  SELECT count(*) INTO v_n FROM public.finance_charges WHERE customer_id = v_customer;
+  IF v_n <> 1 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: % finance charges after two same-month runs, expected 1 (double-charge live)', v_n;
+  END IF;
+  IF (v_res->>'charges_generated')::int <> 0
+     OR (v_res->>'skipped_already_charged')::int <> 1 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: second same-month run should skip, got %', v_res;
+  END IF;
+
+  RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK';
+END $smoke$;

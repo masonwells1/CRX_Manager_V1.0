@@ -51,6 +51,11 @@
       "description": "B2 escape-hatch regression: a quote stranded at 'accepted' after its whole-conversion order was cancelled must be rescuable. Converts a whole quote, cancels the order (quote stays 'accepted', draws still fully drawn), then asserts revert_quote_status reopens it to 'sent', releases the draw ledger, and a re-convert creates a NEW order. FAIL-FIRST against the pre-fix function (revert refused because an order existed). Self-contained fixtures and terminal rollback.",
       "covers": ["revert_quote_status", "convert_quote_to_order", "cancel_order"]
     },
+    "generate_finance_charges": {
+      "chain": "smoke-finance-charge-month-dedup.sql",
+      "description": "H2 double-charge regression: generate_finance_charges must charge an overdue balance at most once per customer per calendar month. Sets up an overdue posted invoice, runs the generator on two different as-of dates in the same month, and asserts exactly one finance_charge exists (second run skips). FAIL-FIRST against the pre-fix function (exact-date dedup let the second run charge again). Self-contained fixtures and terminal rollback.",
+      "covers": ["generate_finance_charges"]
+    },
     "stage_offline_action": {
       "chain": "smoke-offline-action-receipts.sql",
       "description": "Permanent offline receipt chain: complete_delivery and complete_job stage -> immutable canonical replay -> canonical process -> durable sanitized status -> replay without duplicate inventory/application work; actor-bound processing; owner and office status visibility; missing-target and unauthorized-action retention; deterministic state-conflict review; sanitized office queue; audited, idempotent manual resolution; RPC-only writes; grants. Self-contained fixtures and terminal rollback.",
