@@ -4,6 +4,57 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-18 — Built read-only adversarial gauntlet loop over sections 2-6 (money/inventory/lifecycle/DB-drift/idempotency): opus orchestrator, sonnet finders, opus skeptics + per-section adjudicator gate. Ran overnight; confirmed HIGHs in money+lifecycle and a Section 5 live-drift BLOCKER (Supplier Pricing Phase 1a). Findings parked for Codex-gated fixes.
+
+Built read-only adversarial gauntlet loop over sections 2-6 (money/inventory/lifecycle/DB-drift/idempotency): opus orchestrator, sonnet finders, opus skeptics + per-section adjudicator gate. Ran overnight; confirmed HIGHs in money+lifecycle and a Section 5 live-drift BLOCKER (Supplier Pricing Phase 1a). Findings parked for Codex-gated fixes.
+
+- **Commits this session** (git log -15 (fallback — no author-matched commits in the last 12h)):
+  - `4739104 Add gauntlet sections 2-6 adversarial audit loop`
+  - `c6c1265 docs: per-line-item split-billing design spec + roadmap/decision-log updates (#162)`
+  - `3aa758d Fold CodeRabbit into the landing flow; log FarmRx-public decision (#161)`
+  - `3c4c2e6 Add CodeRabbit config for automatic PR reviews (#160)`
+  - `774c85e Reconcile save_customer migration ledger version to match filename (#159)`
+  - `a84534b Merge pull request #156 from masonwells1/claude/amazing-ptolemy-9e7e0a`
+  - `70749c1 Merge remote-tracking branch 'origin/main' into claude/amazing-ptolemy-9e7e0a`
+  - `7183851 Merge pull request #155 from masonwells1/claude/stoic-heyrovsky-ebaaf6`
+  - `d456bab Merge remote-tracking branch 'origin/main' into claude/amazing-ptolemy-9e7e0a`
+  - `e87971b Merge remote-tracking branch 'origin/main' into claude/stoic-heyrovsky-ebaaf6`
+  - `b240f7a Close money and inventory gauntlet findings (#157)`
+  - `9448e52 Correct migration-history row number + document name-based reconciliation`
+  - `30ced29 Merge remote-tracking branch 'origin/main' into claude/amazing-ptolemy-9e7e0a`
+  - `f6fe6ad Merge remote-tracking branch 'origin/main' into claude/stoic-heyrovsky-ebaaf6`
+  - `0f6db26 Mark save_customer ownership migration APPLIED LIVE (ledger 20260717122244)`
+- **Migrations touched** (last 15 commits (fallback)):
+  - `supabase/migrations/20260717063445_bind_bulk_po_replay_content.sql`
+  - `supabase/migrations/20260717070900_bind_bulk_po_identity_ascii_fold.sql`
+  - `supabase/migrations/20260717081856_reject_blank_bulk_po_identity.sql`
+  - `supabase/migrations/20260717085512_canonicalize_bulk_po_identity_whitespace.sql`
+  - `supabase/migrations/20260717092749_secure_bulk_po_fingerprint_trigger.sql`
+  - `supabase/migrations/20260717101619_canonicalize_bulk_po_unicode_identity.sql`
+  - `supabase/migrations/20260717110016_make_bulk_po_identity_server_authoritative.sql`
+  - `supabase/migrations/20260717112906_restore_server_derived_bulk_po_claim_payload.sql`
+  - `supabase/migrations/20260717113000_log_customer_interaction_rpc.sql`
+  - `supabase/migrations/20260717112532_crm_customer_crops.sql`
+  - `supabase/migrations/20260717112533_crm_prep_card_volume.sql`
+  - `supabase/migrations/20260717123000_save_customer_ownership_enforcement.sql`
+  - `supabase/migrations/20260716183501_purchase_order_integer_cents.sql`
+  - `supabase/migrations/20260716190000_harden_sales_financial_scope.sql`
+  - `supabase/migrations/20260716191000_aggregate_delivery_stock_preflight.sql`
+  - `supabase/migrations/20260716202000_preflight_delivery_accounting_period.sql`
+  - `supabase/migrations/20260716210000_harden_invoice_existing_customer_scope.sql`
+  - `supabase/migrations/20260716213000_preserve_purchase_order_omitted_cost.sql`
+  - `supabase/migrations/20260716224000_close_adversarial_money_inventory_gaps.sql`
+  - `supabase/migrations/20260716233000_globalize_bulk_po_import_intents.sql`
+  - `supabase/migrations/20260717010000_close_final_purchase_order_release_gaps.sql`
+  - `supabase/migrations/20260717015439_invalidate_deleted_bulk_po_retry_state.sql`
+  - `supabase/migrations/20260717032000_replay_bulk_po_same_request_result.sql`
+  - `supabase/migrations/20260717045420_bind_bulk_po_claim_to_vendor.sql`
+  - `supabase/migrations/20260717013415_crm_customer_documents.sql`
+  - `supabase/migrations/20260716214423_crm_call_lists.sql`
+  - `supabase/migrations/20260716181306_crm_customer_facts.sql`
+  - `supabase/migrations/20260716182318_crm_purchase_intelligence.sql`
+  - `supabase/migrations/20260716195012_crm_supersede_fact_expiry.sql`
+
 ## 2026-07-17 — Split-billing architecture dig + per-line-item custom-split design spec v2 (review-hardened via gpt-5.6-terra xhigh plan review; 4 blockers folded in). Owner workflow settled: field split=default, adjust in unposted draft, unpost reversible. Committed 4b695109; Codex builds next week. No code/DB changes.
 
 Split-billing architecture dig + per-line-item custom-split design spec v2 (review-hardened via gpt-5.6-terra xhigh plan review; 4 blockers folded in). Owner workflow settled: field split=default, adjust in unposted draft, unpost reversible. Committed 4b695109; Codex builds next week. No code/DB changes.
