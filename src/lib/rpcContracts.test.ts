@@ -1606,7 +1606,7 @@ const IDEMPOTENCY_BODY_EXEMPT: Record<
   get_ap_aging: 'non-mutating', // pure read (does not even declare the param live)
   get_ap_dashboard_summary: 'non-mutating', // pure read
   generate_batch_statements: 'non-mutating', // mutates=false live
-  // Retired forward-only in 20260718193000. The preserved signature gives old
+  // Retired forward-only in 20260718220000. The preserved signature gives old
   // callers a clear error, but the body always raises before any state change,
   // so replay persistence would be misleading and unnecessary.
   record_invoice_payment: 'retired-tombstone',
@@ -1682,7 +1682,7 @@ describe('Idempotency BODY verification (reads migration SQL)', () => {
   it('record_invoice_payment is an explicit non-mutating retired tombstone', () => {
     const files = getMigrationFiles();
     const migration = files.find(
-      ({ name }) => name === '20260718193000_correct_payment_void_and_quote_retry_contract.sql'
+      ({ name }) => name === '20260718220000_correct_payment_void_and_quote_retry_contract.sql'
     )?.content;
     const body = latestFunctionBody('record_invoice_payment');
 
@@ -1697,7 +1697,7 @@ describe('Idempotency BODY verification (reads migration SQL)', () => {
   it('restore_cancelled_order is an explicit non-mutating retired tombstone', () => {
     const files = getMigrationFiles();
     const migration = files.find(
-      ({ name }) => name === '20260718193000_correct_payment_void_and_quote_retry_contract.sql'
+      ({ name }) => name === '20260718220000_correct_payment_void_and_quote_retry_contract.sql'
     )?.content;
     const body = latestFunctionBody('restore_cancelled_order');
 
@@ -1751,7 +1751,7 @@ describe('Idempotency BODY verification (reads migration SQL)', () => {
   it('create_invoice_for_unbilled_delivery delegates privately to its idempotent implementation', () => {
     const files = getMigrationFiles();
     const wrapper = files.find(
-      ({ name }) => name === '20260718193000_correct_payment_void_and_quote_retry_contract.sql'
+      ({ name }) => name === '20260718220000_correct_payment_void_and_quote_retry_contract.sql'
     )?.content;
     const implementationSource = files.find(
       ({ name }) => name === '20260712170000_unbilled_delivery_guard_ignores_soft_deleted.sql'

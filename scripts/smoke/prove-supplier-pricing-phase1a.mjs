@@ -35,9 +35,9 @@ const seedSql = path.join(
 );
 const cutoverSql = path.join(
   repoRoot,
-  'scripts',
-  '.staging-migrations',
-  '20260717121000_supplier_pricing_phase1a_cutover.sql'
+  'supabase',
+  'migrations',
+  '20260718190000_supplier_pricing_phase1a_cutover.sql'
 );
 const forwardCorrectionSql = path.join(
   repoRoot,
