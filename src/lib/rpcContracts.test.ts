@@ -1551,7 +1551,14 @@ const MIGRATIONS_DIR = join(
  */
 const IDEMPOTENCY_BODY_EXEMPT: Record<
   string,
-  'verified-live' | 'natural' | 'gap' | 'non-mutating' | 'table-unique' | 'receipt-unique' | 'delegated'
+  | 'verified-live'
+  | 'natural'
+  | 'gap'
+  | 'non-mutating'
+  | 'retired-tombstone'
+  | 'table-unique'
+  | 'receipt-unique'
+  | 'delegated'
 > = {
   // The live public wrapper authorizes before delegating to the unchanged,
   // directly non-executable implementation that owns the canonical replay
@@ -1595,6 +1602,10 @@ const IDEMPOTENCY_BODY_EXEMPT: Record<
   get_ap_aging: 'non-mutating', // pure read (does not even declare the param live)
   get_ap_dashboard_summary: 'non-mutating', // pure read
   generate_batch_statements: 'non-mutating', // mutates=false live
+  // Retired forward-only in 20260718193000. The preserved signature gives old
+  // callers a clear error, but the body always raises before any state change,
+  // so replay persistence would be misleading and unnecessary.
+  record_invoice_payment: 'retired-tombstone',
 };
 
 /**
@@ -1661,6 +1672,21 @@ describe('Idempotency BODY verification (reads migration SQL)', () => {
     const body = latestFunctionBody('save_job');
     expect(body).not.toBeNull();
     expect(bodyUsesIdempotency(body as string)).toBe(true);
+  });
+
+  it('record_invoice_payment is an explicit non-mutating retired tombstone', () => {
+    const files = getMigrationFiles();
+    const migration = files.find(
+      ({ name }) => name === '20260718193000_correct_payment_void_and_quote_retry_contract.sql'
+    )?.content;
+    const body = latestFunctionBody('record_invoice_payment');
+
+    expect(IDEMPOTENCY_BODY_EXEMPT.record_invoice_payment).toBe('retired-tombstone');
+    expect(body).toContain('RECORD_INVOICE_PAYMENT_RETIRED: use allocate_payment');
+    expect(bodyUsesIdempotency(body as string)).toBe(false);
+    expect(migration).toMatch(
+      /REVOKE ALL ON FUNCTION public\.record_invoice_payment\(uuid, bigint, text, text, text, text\)[\s\S]*FROM PUBLIC, anon, authenticated, service_role/
+    );
   });
 
   it('complete_delivery authorizes before delegating to its idempotent internal implementation', () => {

@@ -209,7 +209,6 @@ export default function QuoteBuilder() {
   const restoreVersionIdem = useIdempotencyKey('restore_quote_version', profile?.id || '');
   const scheduleJobIdem = useIdempotencyKey('create_job_from_quote_section', profile?.id || '');
   const drawDownIdem = useIdempotencyKey('draw_down_quote', profile?.id || '');
-  const revertStatusIdem = useIdempotencyKey('revert_quote_status', profile?.id || '');
   const emailQuoteIdem = useIdempotencyKey('send_email_quote', profile?.id || '');
   const closeAppliedIdem = useIdempotencyKey('close_quote_as_applied', profile?.id || '');
   const closeShortIdem = useIdempotencyKey('close_quote_as_short', profile?.id || '');
@@ -294,6 +293,13 @@ export default function QuoteBuilder() {
   const [confirmDraftScheduleKey, setConfirmDraftScheduleKey] = useState<string | null>(null);
   const [showRevertModal, setShowRevertModal] = useState(false);
   const [revertReason, setRevertReason] = useState('');
+  // Bind the retry key to the exact action intent. A network-uncertain retry
+  // reuses its key, while navigating to another quote or editing the reason
+  // produces a new key that cannot replay the prior quote's result.
+  const revertStatusIdem = useIdempotencyKey(
+    'revert_quote_status',
+    `${profile?.id || ''}:${id || ''}:${revertReason.trim()}`,
+  );
   const [reverting, setReverting] = useState(false);
   // #3 Stage A: email the quote PDF to the grower via the send-email Edge Function.
   const [emailingGrower, setEmailingGrower] = useState(false);

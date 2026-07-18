@@ -18,18 +18,18 @@
     },
     "apply_prepay_to_invoice": {
       "chain": "smoke-prepay-payment-inactive-actor-gate.sql",
-      "description": "H1 role-gate regression: apply_prepay_to_invoice and record_invoice_payment reject a deactivated but still-authenticated actor. Self-contained fixtures and terminal rollback.",
-      "covers": ["apply_prepay_to_invoice", "record_invoice_payment"]
+      "description": "H1 role-gate regression: apply_prepay_to_invoice rejects a deactivated but still-authenticated actor. Self-contained fixtures and terminal rollback.",
+      "covers": ["apply_prepay_to_invoice"]
     },
     "revert_quote_status": {
       "chain": "smoke-revert-quote-escape-hatch.sql",
-      "description": "B2 escape-hatch regression: an accepted quote whose whole-conversion order was cancelled can be reopened, its draws are released, and it can be converted again. Self-contained fixtures and terminal rollback.",
+      "description": "B2 escape-hatch and retry regression: an accepted quote whose whole-conversion order was cancelled retains its full pre-revert draw, ignores an expired retry cache entry, reopens exactly once under same-key replay, rejects cross-quote key reuse, releases its draws, and converts again. Self-contained fixtures and terminal rollback.",
       "covers": ["revert_quote_status", "convert_quote_to_order", "cancel_order"]
     },
     "void_invoice": {
       "chain": "smoke-void-invoice-blocks-applied-payments.sql",
-      "description": "H3 cash-strand regression: void_invoice refuses a posted invoice with direct cash still applied while preserving the prepay-only void path. Self-contained fixtures and terminal rollback.",
-      "covers": ["void_invoice", "record_invoice_payment", "apply_prepay_to_invoice", "create_prepay_check_splits"]
+      "description": "Payment/void lifecycle regression: an active allocation-only payment blocks invoice voiding and appears in transaction review; void_payment deactivates it; the invoice then voids without deleting history or leaving a phantom report credit; the retired direct-payment RPC is non-mutating and ungranted; and prepay-only void restores exact balances and removes its application. Self-contained fixtures and terminal rollback.",
+      "covers": ["void_invoice", "void_payment", "record_invoice_payment", "get_customer_transaction_review", "apply_prepay_to_invoice", "create_prepay_check_splits"]
     },
     "enforce_delivery_accounting_period": {
       "chain": "smoke-delivery-accounting-period-guard.sql",
@@ -123,8 +123,8 @@
     },
     "get_customer_statement": {
       "chain": "smoke-customer_statement_blind_spots.sql",
-      "description": "Statement blind-spot fix (CHIP task_25d25699, migrations 20260611131549 + 20260716160000): legacy, NULL-order, and allocation-set payments each appear exactly once; paid/overdue invoices keep their charge lines; soft-deleted payments excluded; credit memo single-count; unapplied overpayment prepay NOT pre-counted (DEDUP RULE); the exact same allocate_payment key is replayed after the committed result and must return the cached result without a second allocation set or statement change (regression proof for the atomic idempotency-claim guard); running balance never negative; unknown-actor auth probe rejected by the in-body gate.",
-      "covers": ["get_customer_statement", "allocate_payment", "record_invoice_payment", "_guard_idempotency_key_insert"]
+      "description": "Statement blind-spot fix (CHIP task_25d25699, migrations 20260611131549 + 20260716160000): seeded historical legacy and NULL-order payments plus a live allocation-set payment each appear exactly once; paid/overdue invoices keep their charge lines; soft-deleted payments are excluded; credit memo single-count; unapplied overpayment prepay is not pre-counted; exact allocate_payment replay creates no second effect; running balance never negative; unknown-actor auth probe rejected.",
+      "covers": ["get_customer_statement", "allocate_payment", "_guard_idempotency_key_insert"]
     },
     "create_planned_holds": {
       "chain": "smoke-planned-holds-drawn-sync.sql",

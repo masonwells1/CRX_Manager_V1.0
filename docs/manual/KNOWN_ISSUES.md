@@ -9,6 +9,12 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ## 1. Open HIGH findings (dormant on live data)
 
+### Payment reversal history can block a later invoice void — correction prepared
+
+PR #168 review confirmed a dormant live defect: `void_payment` intentionally leaves invoice allocation rows behind as history and marks their parent payment set inactive, but the current live `void_invoice` function treats any such row as active money. It therefore blocks the invoice from being voided after a valid payment reversal, and its later generic cleanup would delete that payment history if the guard were loosened alone. Live inspection found zero inactive payment sets with retained allocation rows and zero legacy `payments` rows, so no current business record needs repair.
+
+Forward migration `20260718193000_correct_payment_void_and_quote_retry_contract.sql` is prepared and **not yet applied**. It filters both invoice voiding and transaction review to active payment sets, preserves all payment allocation history, replaces the unused and unreversible `record_invoice_payment` service-role path with an ungranted tombstone, and gives `revert_quote_status` a target-bound shared advisory-lock retry contract. Applying it requires Mason's explicit production-migration approval; the migration locks the legacy payment table and aborts if a row exists.
+
 ### Supplier Pricing Phase 1a rollout gap — Edge retirement and strict cutover not deployed
 
 The additive pricing RPC/bootstrap, zero-cost guard, legacy Product repeat-save compatibility repair, and forward hardening are live. PR #163 merged as `1f533ff2` and Vercel deployed that exact commit to production, so Product-page, Products-list, and pricing-only `.xlsx` edits now use the preview/approval/apply workflow. The active production Edge Function is still v18 and retains the old `price_list` / price-bearing `product_list` OCR paths. Repository code rejects those document types before OCR, but production will not inherit that rule until a separately approved Edge Function deployment. Do not describe supplier-price OCR as retired live before that deployment is verified.
