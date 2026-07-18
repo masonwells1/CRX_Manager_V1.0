@@ -28,6 +28,10 @@ const expectedArtifacts = new Map([
     'supabase/migrations/20260718190000_supplier_pricing_phase1a_cutover.sql',
     '7a1a018712ef632ae8f2bc9a2d24e80e261e265f7c596c8d2028f49adf5ecaca',
   ],
+  [
+    'supabase/migrations/20260718193000_supplier_pricing_phase1a_data_integrity_rescan.sql',
+    '27f96801f55f3b850a8925c941959d68d4f0779b44a6bd3b575e57d8229a168b',
+  ],
 ]);
 
 function readGitIndexBytes(relativePath) {
