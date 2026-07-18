@@ -43,8 +43,8 @@
     },
     "apply_prepay_to_invoice": {
       "chain": "smoke-prepay-payment-inactive-actor-gate.sql",
-      "description": "H1 role-gate regression: apply_prepay_to_invoice and record_invoice_payment must reject a deactivated (is_active=false) but still-authenticated actor. Sets up a customer, a posted invoice, and a real prepay credit as an active admin, then deactivates the actor and asserts both money RPCs raise their authorization error instead of applying. FAIL-FIRST against the pre-fix functions (NULL role slipped past NULL NOT IN; record_invoice_payment lacked an is_active filter). Self-contained fixtures and terminal rollback.",
-      "covers": ["apply_prepay_to_invoice", "record_invoice_payment"]
+      "description": "H1 role-gate regression: apply_prepay_to_invoice rejects a deactivated but still-authenticated actor. Self-contained fixtures and terminal rollback.",
+      "covers": ["apply_prepay_to_invoice"]
     },
     "revert_quote_status": {
       "chain": "smoke-revert-quote-escape-hatch.sql",
@@ -58,8 +58,8 @@
     },
     "void_invoice": {
       "chain": "smoke-void-invoice-blocks-applied-payments.sql",
-      "description": "H3 cash-strand regression: void_invoice must refuse to void a posted invoice that still has direct cash applied (paid_amount_cents>0 or invoice_line_allocations) because it does not re-bank that cash, but must still void a prepay-only invoice (which it re-banks). Records a partial payment then asserts void raises INVOICE_HAS_APPLIED_PAYMENTS; separately applies prepay then asserts void succeeds. FAIL-FIRST against the pre-fix function (the paid-invoice void succeeded, stranding cash). Self-contained fixtures and terminal rollback.",
-      "covers": ["void_invoice", "record_invoice_payment", "apply_prepay_to_invoice", "create_prepay_check_splits"]
+      "description": "H3 cash-strand regression: void_invoice refuses an invoice with a supported allocation, void_payment reverses it, and only then can the invoice void; a prepay-only invoice still voids and re-banks correctly. Self-contained fixtures and terminal rollback.",
+      "covers": ["void_invoice", "allocate_payment", "void_payment", "apply_prepay_to_invoice", "create_prepay_check_splits"]
     },
     "restore_cancelled_order": {
       "chain": "smoke-forbid-restore-cancelled-order.sql",
@@ -68,8 +68,13 @@
     },
     "create_invoice_for_unbilled_delivery": {
       "chain": "smoke-backfill-refuse-split-billing.sql",
-      "description": "H5 regression: create_invoice_for_unbilled_delivery must refuse to backfill a single invoice for an order that still needs split billing (needs_split_billing=true), because a mono invoice mis-attributes all AR to one payer. Builds a completed delivery on a split-billing order and asserts the backfill raises ORDER_NEEDS_SPLIT_BILLING with no invoice created. FAIL-FIRST against the pre-fix function (it created one mono invoice). Self-contained fixtures and terminal rollback.",
+      "description": "H5 regression: create_invoice_for_unbilled_delivery must refuse mono backfill whenever durable field allocations prove split billing, even after the transient needs_split_billing queue flag clears. Self-contained fixtures and terminal rollback.",
       "covers": ["create_invoice_for_unbilled_delivery", "convert_quote_to_order"]
+    },
+    "record_invoice_payment": {
+      "chain": "smoke-retire-legacy-record-invoice-payment.sql",
+      "description": "Legacy-payment retirement regression: record_invoice_payment must reject new writes with LEGACY_PAYMENT_PATH_DISABLED and leave both the obsolete payments ledger and invoice paid amount unchanged. New cash uses allocate_payment so it has a supported void path. Self-contained fixtures and terminal rollback.",
+      "covers": ["record_invoice_payment"]
     },
     "stage_offline_action": {
       "chain": "smoke-offline-action-receipts.sql",
@@ -139,7 +144,7 @@
     "get_customer_statement": {
       "chain": "smoke-customer_statement_blind_spots.sql",
       "description": "Statement blind-spot fix (CHIP task_25d25699, migrations 20260611131549 + 20260716160000): legacy, NULL-order, and allocation-set payments each appear exactly once; paid/overdue invoices keep their charge lines; soft-deleted payments excluded; credit memo single-count; unapplied overpayment prepay NOT pre-counted (DEDUP RULE); the exact same allocate_payment key is replayed after the committed result and must return the cached result without a second allocation set or statement change (regression proof for the atomic idempotency-claim guard); running balance never negative; unknown-actor auth probe rejected by the in-body gate.",
-      "covers": ["get_customer_statement", "allocate_payment", "record_invoice_payment", "_guard_idempotency_key_insert"]
+      "covers": ["get_customer_statement", "allocate_payment", "_guard_idempotency_key_insert"]
     },
     "create_planned_holds": {
       "chain": "smoke-planned-holds-drawn-sync.sql",

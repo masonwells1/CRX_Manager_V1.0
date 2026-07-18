@@ -1,12 +1,11 @@
 -- Post-apply rollback-only regression proof for H1 (Live Foundation Gauntlet
--- 2026-07-18): apply_prepay_to_invoice and record_invoice_payment must REJECT a
+-- 2026-07-18): apply_prepay_to_invoice must REJECT a
 -- deactivated / profile-less authenticated actor.
 --
 -- FAIL-FIRST CONTRACT: run against the PRE-FIX functions and this chain raises
 -- SMOKE_FAIL (the deactivated admin successfully applies a prepay / records a
--- payment, because `NULL NOT IN (...)` is not TRUE and record_invoice_payment
--- never filtered is_active). Run against the FIXED functions and both calls
--- raise the authorization error, so the chain reaches SMOKE_PASS_ROLLBACK.
+-- payment, because `NULL NOT IN (...)` is not TRUE). Run against the FIXED
+-- function and the call raises the authorization error.
 --
 -- Everything happens inside one DO block that ends in a terminal exception, so
 -- no row or sequence side effect ever commits.
@@ -86,21 +85,6 @@ BEGIN
     IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
     IF v_err NOT LIKE 'INSUFFICIENT_ROLE:%' THEN
       RAISE EXCEPTION 'SMOKE_FAIL: apply_prepay wrong rejection for inactive actor: %', v_err;
-    END IF;
-  END;
-
-  -- ===== NEGATIVE 2: record_invoice_payment must reject the inactive actor =====
-  BEGIN
-    PERFORM public.record_invoice_payment(
-      v_invoice, 100, 'check', v_reference, 'rollback-only smoke',
-      'smk-h1-pay-' || v_suffix
-    );
-    RAISE EXCEPTION 'SMOKE_FAIL: deactivated actor recorded a payment (H1 auth bypass live)';
-  EXCEPTION WHEN OTHERS THEN
-    v_err := SQLERRM;
-    IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
-    IF v_err NOT LIKE 'Not authorized to record invoice payments%' THEN
-      RAISE EXCEPTION 'SMOKE_FAIL: record_payment wrong rejection for inactive actor: %', v_err;
     END IF;
   END;
 

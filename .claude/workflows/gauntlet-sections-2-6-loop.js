@@ -167,7 +167,18 @@ async function runSection(num) {
       `Section ${num} (${sec.name}) completeness critic. ${GROUND_RULE}\n\nThe finders already ran. Your job: find what they MISSED — an unqueried live constraint, an untraced RPC branch, a money/idempotency edge case, a reversal path not checked. Return ONLY additional, independently-evidenced findings (no restating theirs). Empty findings + VERIFIED is a valid "nothing missed" answer.`,
       { agentType: 'general-purpose', model: 'opus', schema: FINDINGS, phase: ph, label: `S${num}:critic:r${round}` }
     )
-    if (layerOk(critic)) (critic.verifiedSafe || []).forEach((s) => verifiedSafe.push({ section: num, note: s }))
+    if (layerOk(critic)) {
+      ;(critic.verifiedSafe || []).forEach((s) => verifiedSafe.push({ section: num, note: s }))
+    } else {
+      blocked.push({
+        section: num,
+        critic: true,
+        round,
+        reason: critic?.executionStatus === 'BLOCKED'
+          ? (critic.evidenceSummary || critic.summary || 'completeness critic blocked')
+          : 'completeness critic returned no VERIFIED evidence',
+      })
+    }
 
     const raw = [...reviews, critic].filter(layerOk).flatMap((r) => r.findings)
     const fresh = raw.filter(findingOk).filter((f) => !seen.has(keyOf(f)))
@@ -248,7 +259,8 @@ for (const num of order) {
   const res = await runSection(num)
   results.push(res)
   if (!res.adjudication?.settled) {
-    log(`[S${num}] adjudicator did NOT agree settled — recording gaps and continuing (orchestrator will surface for Mason).`)
+    log(`[S${num}] adjudicator did NOT agree settled — recording gaps and halting before the next section.`)
+    break
   }
 }
 

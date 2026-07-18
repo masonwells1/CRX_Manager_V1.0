@@ -203,11 +203,15 @@ BEGIN
   UPDATE invoices SET status = 'posted' WHERE id = v_inv_c;
 
   -- --------------------------------------------------------------------
-  -- 2. (a) LEGACY path: record_invoice_payment fully pays invoice B
+  -- 2. (a) Historical legacy-ledger fixture: statement compatibility remains
+  -- tested without invoking the now-retired writer.
   -- --------------------------------------------------------------------
-  v_pay_legacy := record_invoice_payment(v_inv_b, 30000, 'check',
-                    'SMK-CSB-LEGACY-' || v_suffix, '[SMOKE] legacy path',
-                    'smk-csb-' || v_suffix || '-legacy');
+  INSERT INTO payments (order_id, customer_id, amount, payment_method,
+    reference_number, notes, recorded_by)
+  VALUES (v_order_id, v_customer_id, 300.00, 'check',
+    'SMK-CSB-LEGACY-' || v_suffix, '[SMOKE] historical legacy row', v_admin)
+  RETURNING id INTO v_pay_legacy;
+  UPDATE invoices SET paid_amount_cents = 30000, status = 'paid' WHERE id = v_inv_b;
 
   SELECT status, paid_amount_cents INTO v_status, v_cents FROM invoices WHERE id = v_inv_b;
   IF v_status <> 'paid' OR v_cents <> 30000 THEN
@@ -224,9 +228,12 @@ BEGIN
   -- 3. (a2) NULL-order path: record_invoice_payment fully pays invoice C —
   --     payments.order_id IS NULL (blind spot 4)
   -- --------------------------------------------------------------------
-  v_pay_noord := record_invoice_payment(v_inv_c, 5000, 'ach',
-                   'SMK-CSB-NOORD-' || v_suffix, '[SMOKE] null-order path',
-                   'smk-csb-' || v_suffix || '-noord');
+  INSERT INTO payments (order_id, customer_id, amount, payment_method,
+    reference_number, notes, recorded_by)
+  VALUES (NULL, v_customer_id, 50.00, 'ach',
+    'SMK-CSB-NOORD-' || v_suffix, '[SMOKE] historical null-order row', v_admin)
+  RETURNING id INTO v_pay_noord;
+  UPDATE invoices SET paid_amount_cents = 5000, status = 'paid' WHERE id = v_inv_c;
 
   SELECT order_id INTO v_uuid FROM payments WHERE id = v_pay_noord;
   IF v_uuid IS NOT NULL THEN

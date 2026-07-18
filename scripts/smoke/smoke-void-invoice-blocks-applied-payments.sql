@@ -20,6 +20,10 @@ DECLARE
   v_prepay_id uuid;
   v_status    text;
   v_err       text;
+  v_pay_result jsonb;
+  v_set_id     uuid;
+  v_history_count integer;
+  v_history_total bigint;
 BEGIN
   SELECT id INTO v_admin FROM public.profiles
   WHERE role = 'admin' AND is_active = true ORDER BY created_at LIMIT 1;
@@ -42,7 +46,12 @@ BEGIN
   UPDATE public.invoices SET status = 'posted', posted_by = v_admin, posted_at = now()
   WHERE id = v_inv_paid;
 
-  PERFORM public.record_invoice_payment(v_inv_paid, 50000, 'check', 'E2E-H3-' || v_suffix, NULL, 'e2e-h3-pay-' || v_suffix);
+  v_pay_result := public.allocate_payment(
+    v_customer, 50000, 'check', 'E2E-H3-' || v_suffix, NULL, CURRENT_DATE,
+    'H3 reversible allocation smoke',
+    jsonb_build_array(jsonb_build_object('invoice_id', v_inv_paid, 'amount_cents', 50000)),
+    v_admin, 'e2e-h3-pay-' || v_suffix);
+  v_set_id := (v_pay_result->>'allocation_set_id')::uuid;
 
   BEGIN
     PERFORM public.void_invoice(v_inv_paid, 'H3 smoke: should be blocked', 'e2e-h3-void-' || v_suffix);
@@ -55,6 +64,24 @@ BEGIN
       RAISE EXCEPTION 'SMOKE_FAIL: void_invoice wrong rejection with an applied payment: %', v_err;
     END IF;
   END;
+
+  -- The supported payment ledger has a real reversal. Once unapplied, the
+  -- invoice is no longer stranded and can be voided normally.
+  PERFORM public.void_payment(v_set_id, 'H3 smoke: unapply before invoice void', v_admin, 'e2e-h3-unpay-' || v_suffix);
+  PERFORM public.void_invoice(v_inv_paid, 'H3 smoke: safe after payment reversal', 'e2e-h3-void-after-unpay-' || v_suffix);
+  SELECT status INTO v_status FROM public.invoices WHERE id = v_inv_paid;
+  IF v_status <> 'voided' THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: invoice did not void after supported payment reversal (status=%)', v_status;
+  END IF;
+  SELECT count(*) INTO v_history_count
+  FROM public.invoice_line_allocations
+  WHERE allocation_set_id = v_set_id AND invoice_id = v_inv_paid;
+  SELECT total_allocated_cents INTO v_history_total
+  FROM public.allocation_sets WHERE id = v_set_id AND is_active = false;
+  IF v_history_count <> 1 OR v_history_total <> 50000 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: payment reversal history was erased by invoice void (rows=%, cached_total=%)',
+      v_history_count, v_history_total;
+  END IF;
 
   -- ===== Scenario 2: a PREPAY-ONLY posted invoice must STILL void =====
   -- (guard must not over-block; void re-banks prepay correctly).

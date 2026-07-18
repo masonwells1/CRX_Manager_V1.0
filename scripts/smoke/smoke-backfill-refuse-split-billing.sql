@@ -4,7 +4,8 @@
 -- would mis-attribute all the AR to one payer).
 --
 -- FAIL-FIRST CONTRACT: against the PRE-FIX function the backfill of a completed
--- delivery on a needs_split_billing order SUCCEEDS (one mono invoice) -> this
+-- delivery on a field-allocated order whose transient queue flag has already
+-- cleared SUCCEEDS (one mono invoice) -> this
 -- chain raises SMOKE_FAIL. Against the FIXED function it raises
 -- ORDER_NEEDS_SPLIT_BILLING, so the chain reaches SMOKE_PASS_ROLLBACK.
 --
@@ -21,6 +22,7 @@ DECLARE
   v_order    uuid;
   v_oitem    uuid;
   v_delivery uuid;
+  v_field    uuid;
   v_err      text;
 BEGIN
   SELECT id INTO v_admin FROM public.profiles
@@ -49,8 +51,14 @@ BEGIN
   v_order := (v_res->>'order_id')::uuid;
   SELECT id INTO v_oitem FROM public.order_items WHERE order_id = v_order LIMIT 1;
 
-  -- Flag the order as split-billing (unresolved).
-  UPDATE public.orders SET needs_split_billing = true, updated_at = now() WHERE id = v_order;
+  -- Durable split-billing evidence. The queue flag intentionally remains false,
+  -- reproducing the state after split invoices were generated and later voided.
+  INSERT INTO public.fields (customer_id, field_name, crop_type, total_acres)
+  VALUES (v_customer, '[E2E] H5 Field ' || v_suffix, 'corn', 100)
+  RETURNING id INTO v_field;
+  INSERT INTO public.order_item_field_allocations (order_item_id, field_id, acres)
+  VALUES (v_oitem, v_field, 100);
+  UPDATE public.orders SET needs_split_billing = false, updated_at = now() WHERE id = v_order;
 
   -- Build the delivery while 'scheduled' (delivery_items are locked once the
   -- delivery leaves 'scheduled'), then transition it to 'completed'. signed_by

@@ -1590,6 +1590,10 @@ const IDEMPOTENCY_BODY_EXEMPT: Record<
   // there is nothing to make idempotent; the p_idempotency_key param is retained
   // only to keep the signature identical for in-place CREATE OR REPLACE.
   restore_cancelled_order: 'non-mutating',
+  // H3 follow-up (2026-07-18): obsolete writer is now an unconditional RAISE
+  // compatibility stub. The legacy signature remains so callers fail with an
+  // actionable error, but it cannot mutate or require replay protection.
+  record_invoice_payment: 'non-mutating',
   // naturally idempotent
   save_blend_ticket: 'natural', // UPDATE-only path; replay overwrites identically
   generate_rup_sales_records: 'natural', // per-row NOT EXISTS guard
