@@ -34,6 +34,7 @@ const baseRaw = (over: Partial<RawFieldInvoiceRow>): RawFieldInvoiceRow => ({
   prepay_applied_cents: 0,
   credit_applied_cents: 0,
   balance_cents: 12345,
+  send_disposition: 'sendable',
   posted_by: null,
   posted_at: null,
   voided_by: null,

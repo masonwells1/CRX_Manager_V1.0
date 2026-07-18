@@ -1457,6 +1457,12 @@ export interface Invoice {
   application_service_id: string | null;
   delivery_id: string | null;
 
+  // Per-line split billing Phase 1 (mig 20260718120000): server-controlled email gate.
+  // 'sendable' (default, existing behavior) | 'suppressed_zero_total' = a $0 not-to-send
+  // invoice — recorded and visible in the account, contributes zero to AR/aging/finance
+  // charge, NOT marked paid, and every email path must refuse it. Never written by the browser.
+  send_disposition: 'sendable' | 'suppressed_zero_total';
+
   deleted_at: string | null;
   created_at: string;
   updated_at: string;
@@ -3361,6 +3367,69 @@ export interface FieldAppLocationShare {
   split_pct: number;
   acres: number | null;
   amount_cents: number;
+  created_at: string;
+  // Joined
+  customer?: Customer;
+}
+
+// ── Per-line-item split billing (mig 20260718120000, Phase 1 schema; flag
+//    feature_per_line_split_billing, OFF). Spec: docs/plans/per-line-item-split-billing-spec-2026-07-17.md.
+//    These rows are SERVER-created only (locked SECURITY DEFINER save path); the browser reads
+//    them but has no INSERT/UPDATE/DELETE. Shares are immutable while their invoice is posted. ──
+
+/** One durable parent per billing event; replaces relying on the nullable invoice_group_id. */
+export interface FieldAppBillingSet {
+  id: string;
+  invoice_group_id: string | null;
+  job_id: string | null;
+  primary_customer_id: string | null;
+  status: 'draft' | 'posted' | 'voided';
+  rounding_policy_version: number;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** One server-created logical source line per chemical / service / flat fee. */
+export interface FieldAppBillingLine {
+  id: string;
+  billing_set_id: string;
+  line_kind: 'chemical' | 'service' | 'flat_fee';
+  /** Which §4 allocation path applies to this line. */
+  price_basis: 'same_price' | 'per_person_price' | 'flat_fee';
+  product_id: string | null;
+  application_service_id: string | null;
+  description: string;
+  source_quantity: number | null;
+  source_acres: number | null;
+  source_unit_price_cents: number | null; // null on per_person_price (no single price)
+  source_amount_cents: number | null;     // canonical unsplit total; null on per_person_price
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Immutable per-line allocation snapshot: one row per billing-set member per line
+ *  (including 0% / $0 rows). split_micro_pct is 0..100,000,000 (100% = 100,000,000). */
+export interface InvoiceLineShare {
+  id: string;
+  billing_line_id: string;
+  invoice_item_id: string;
+  customer_id: string;
+  split_mode: 'field_default' | 'custom';
+  split_micro_pct: number;
+  allocated_quantity: number | null;
+  allocated_acres: number | null;
+  base_unit_price_cents: number;
+  base_price_source: string;
+  price_mode: 'default' | 'override';
+  unit_price_cents: number;
+  amount_cents: number;
+  split_override_reason: string | null; // required when split_mode = 'custom'
+  price_override_reason: string | null; // required when price_mode = 'override'
+  calculation_hash: string;             // server-computed
+  vector_hash: string;                  // server-computed
+  created_by: string;
   created_at: string;
   // Joined
   customer?: Customer;
