@@ -41,6 +41,11 @@
       "description": "Money-workflow correction chain: get_ap_dashboard_summary excludes a voided vendor payment while counting an active one; preview_finance_charges and generate_finance_charges share the same overdue balance and penny-exact charge, reject future dates without side effects, and generate/replay one unposted charge invoice; create_prepay_check_splits rejects a mismatched independent check total without side effects, then creates and idempotently replays two exact prepay buckets. Self-contained fixtures and terminal rollback.",
       "covers": ["get_ap_dashboard_summary", "preview_finance_charges", "generate_finance_charges", "create_prepay_check_splits"]
     },
+    "apply_prepay_to_invoice": {
+      "chain": "smoke-prepay-payment-inactive-actor-gate.sql",
+      "description": "H1 role-gate regression: apply_prepay_to_invoice and record_invoice_payment must reject a deactivated (is_active=false) but still-authenticated actor. Sets up a customer, a posted invoice, and a real prepay credit as an active admin, then deactivates the actor and asserts both money RPCs raise their authorization error instead of applying. FAIL-FIRST against the pre-fix functions (NULL role slipped past NULL NOT IN; record_invoice_payment lacked an is_active filter). Self-contained fixtures and terminal rollback.",
+      "covers": ["apply_prepay_to_invoice", "record_invoice_payment"]
+    },
     "stage_offline_action": {
       "chain": "smoke-offline-action-receipts.sql",
       "description": "Permanent offline receipt chain: complete_delivery and complete_job stage -> immutable canonical replay -> canonical process -> durable sanitized status -> replay without duplicate inventory/application work; actor-bound processing; owner and office status visibility; missing-target and unauthorized-action retention; deterministic state-conflict review; sanitized office queue; audited, idempotent manual resolution; RPC-only writes; grants. Self-contained fixtures and terminal rollback.",

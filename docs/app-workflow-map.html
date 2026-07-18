@@ -84,7 +84,7 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(
 <div id="header">
   <h1>⬡ CRX Manager — Architecture Map</h1>
   <!-- __STATS_START__ -->
-  <span id="stat-line" style="color:var(--muted);font-size:.8rem">94 routes · 230 RPC calls · 5 issues · Updated Jul 17, 2026</span>
+  <span id="stat-line" style="color:var(--muted);font-size:.8rem">94 routes · 230 RPC calls · 5 issues · Updated Jul 18, 2026</span>
   <!-- __STATS_END__ -->
   <div id="tabs">
     <button class="tab active" onclick="showTab('graph')">Graph</button>
@@ -1514,21 +1514,6 @@ const EDGES = [
       "type": "nav"
     },
     {
-      "s": "fields",
-      "t": "customer-detail",
-      "type": "nav"
-    },
-    {
-      "s": "fields",
-      "t": "field-setup",
-      "type": "nav"
-    },
-    {
-      "s": "fields",
-      "t": "field-dashboard",
-      "type": "nav"
-    },
-    {
       "s": "field-setup",
       "t": "fields",
       "type": "nav"
@@ -1546,6 +1531,21 @@ const EDGES = [
     {
       "s": "field-stop",
       "t": "delivery-detail",
+      "type": "nav"
+    },
+    {
+      "s": "fields",
+      "t": "customer-detail",
+      "type": "nav"
+    },
+    {
+      "s": "fields",
+      "t": "field-setup",
+      "type": "nav"
+    },
+    {
+      "s": "fields",
+      "t": "field-dashboard",
       "type": "nav"
     },
     {
@@ -1929,12 +1929,12 @@ const EDGES = [
       "type": "nav"
     },
     {
-      "s": "accounts-receivable",
+      "s": "a-raging",
       "t": "r-report",
       "type": "rpc"
     },
     {
-      "s": "a-raging",
+      "s": "accounts-receivable",
       "t": "r-report",
       "type": "rpc"
     },

@@ -4,6 +4,23 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-18 — Remediating gauntlet sections 2-6 findings (built in cloud; live apply + merge pending Mason's machine)
+
+Started fixing the confirmed findings from the sections 2-6 adversarial audit. The cloud
+session has **no Codex CLI**, so it cannot mint the `migration-apply-guard` proof and cannot
+apply migrations to live or merge to `main`; each fix is built + reviewed + tested here and
+finished (Codex apply-proof → live apply → PR merge) from Mason's Windows session.
+
+- **H1 — money-RPC auth bypass (BUILT).** `20260718124500_harden_prepay_and_payment_role_gate.sql`
+  hardens `apply_prepay_to_invoice` + `record_invoice_payment` so a deactivated / profile-less
+  authenticated user can no longer pass the role gate (`NULL NOT IN (...)` fall-through; missing
+  `is_active` filter). Mirrors the vetted `apply_credit_memo_to_invoice`. Reviewers clean (rls +
+  drift), no stale overload, fail-first smoke `smoke-prepay-payment-inactive-actor-gate.sql`
+  proved the bypass live (raised `SMOKE_FAIL` on the pre-fix functions).
+- **B1 — Supplier Pricing Phase 1a drift:** NOT a bug fix — `feat/supplier-pricing-phase1a` is a
+  whole ~40-commit feature (already live in prod, unmerged on `main`). Set aside for Mason's
+  feature-merge decision, not folded into this remediation sweep.
+
 ## 2026-07-18 — Built read-only adversarial gauntlet loop over sections 2-6 (money/inventory/lifecycle/DB-drift/idempotency): opus orchestrator, sonnet finders, opus skeptics + per-section adjudicator gate. Ran overnight; confirmed HIGHs in money+lifecycle and a Section 5 live-drift BLOCKER (Supplier Pricing Phase 1a). Findings parked for Codex-gated fixes.
 
 Built read-only adversarial gauntlet loop over sections 2-6 (money/inventory/lifecycle/DB-drift/idempotency): opus orchestrator, sonnet finders, opus skeptics + per-section adjudicator gate. Ran overnight; confirmed HIGHs in money+lifecycle and a Section 5 live-drift BLOCKER (Supplier Pricing Phase 1a). Findings parked for Codex-gated fixes.
