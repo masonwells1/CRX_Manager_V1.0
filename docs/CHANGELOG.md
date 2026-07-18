@@ -4,6 +4,18 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-18 — Per-line split-billing: Codex ROUND 2 → 8 P1 + 5 P2; 7 fixed + re-proven this batch, 6 larger items queued (branch, still PARKED). Autonomous Opus-4.8 run.
+
+The re-run of the Codex gate (`codex review --base main`) went deeper and returned 8 P1 + 5 P2 NEW findings (the round-1 fixes all held). Mason chose to **keep iterating** and confirmed he needs **save-now/post-later**. Fixed + re-proven THIS batch (still in the parked `20260718030000` + the split editor):
+
+- **#B flag enforcement** — the save wrapper is granted to `authenticated` and only checked role, so applying the migration during the flag-OFF window left the money RPC callable via direct PostgREST. Now it hard-refuses unless `per_line_split_billing_enabled='true'` in `app_settings`.
+- **#F fee COGS convention** — a service (fee) item now stores its EXTENDED cost (`cost_per_acre × acres`), matching the live `_save_field_app_invoice_impl` fee convention (the rest of the app reads a fee item's `cost_cents` as already-extended), so item detail and header total reconcile. **#N** — a service line with no description now shows the real `application_services.name`, not the literal "Service".
+- **#C negative flat** — `dollarsToCents` preserves a leading minus so a "-$50" credit is REJECTED by the `<=0` guard instead of silently becoming a +$50 charge. **#D malformed override** — an override that parses to 0 (e.g. `1e5`) is now rejected (`<=0`) instead of storing a $0 price. **#J** — invoice date defaults to LOCAL today (`localToday()`), not `toISOString()` (which rolls to tomorrow after ~6 PM Central). **#K** — `pctsToMicro` now distributes the full residual (cycling), so `33.3333×3` reaches exactly 100000000 micro-pct instead of leaving a 97-unit gap the server rejected.
+
+**PROVEN in the live DB** (rollback): `PROOFOK` **24/24** — the 14 originals + `svc_per_customer_rate_ok`, `fee_cost_extended_ok(15000)`, `service_name_on_item_ok`, `chem_cogs_ok`, `field_locations_created_ok`, `compat_acres_from_vector_ok(50)`, `audit_no_dup_on_resave_ok`, `sec_reject_unassigned_ok`, `sec_allow_assigned_ok`, `flag_off_rejected_ok`. Typecheck clean.
+
+**Queued for the next session (larger / needs care):** #H **save-now/post-later** reopen route + loader (Mason wants it); #E **source-job double-billing guard** (source_job_id is provenance-only — a job could be billed via split AND the normal flow); #G COGS penny-residual LR-allocation; #A frontend/DB deploy-order coupling (InvoiceDetail preflight selects the new column — safe only if migrations apply before the frontend merges; harden to migration-first); #M keep each co-owner's resolved price as their audited BASE (Option-B injection currently audits normal pricing as an "override"); #L capture reasons for custom split / override. The full Codex gate re-runs once all 13 are closed. Still **flag OFF, not applied, not merged.**
+
 ## 2026-07-18 — Per-line split-billing: Codex money/RLS gate RAN → 8 P1 + 2 P2 findings, ALL FIXED + re-proven (branch, still PARKED). Autonomous Opus-4.8 run.
 
 The Codex CLI money/RLS review (`codex review --base main`, gpt-5.5) finally ran and **blocked go-live** with 8 P1 (blocker) + 2 P2 findings — all verified real against source. Every one is now fixed in the still-parked `20260718030000_..._save_rpc.sql` + three frontend files, and re-proven end-to-end in the live DB (rollback):

@@ -12,6 +12,7 @@ import { supabase, supabaseUntyped, assertRpcResult, sanitizeError } from '../li
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { formatCents } from '../lib/money';
 import { parseDollarsToCents } from '../lib/parseCents';
+import { localToday } from '../lib/dateUtils';
 import { SPLIT_BILLING_SETTING_KEY, parseSplitBillingEnabled } from '../lib/splitBillingSetting';
 
 /**
@@ -119,8 +120,11 @@ function pctsToMicro(pcts: number[]): number[] {
   const order = ideals
     .map((v, i) => ({ i, frac: v - Math.floor(v) }))
     .sort((a, b) => b.frac - a.frac || a.i - b.i);
-  // Distribute a positive residual to the largest fractions.
-  for (let k = 0; k < order.length && residual > 0; k += 1) {
+  // Distribute the ENTIRE positive residual, CYCLING largest-fraction-first. A user percent set
+  // that sums just under 100 (e.g. 33.3333×3 → 99999900 micro, residual 100 across 3 members)
+  // must still reach exactly 100000000; a single pass (≤1 per member) left a 97-unit gap that the
+  // server's exact-100% check then rejected (Codex r2 #K).
+  for (let k = 0; residual > 0 && order.length > 0; k = (k + 1) % order.length) {
     result[order[k].i] += 1;
     residual -= 1;
   }
@@ -150,7 +154,12 @@ function dollarsToCents(raw: string): number | null {
   // ("1e5" -> $100k), multi-dot, and negatives can't leak a wrong authoritative money
   // value into the save RPC. parseDollarsToCents is positive-only and returns cents.
   if (raw == null || raw.trim() === '') return null;
-  return parseDollarsToCents(raw);
+  const cents = parseDollarsToCents(raw);
+  // parseDollarsToCents is positive-only (it strips the sign). Preserve a leading minus so
+  // downstream validation (`<= 0` / `< 0`) REJECTS a credit/negative instead of silently
+  // flipping e.g. "-50.00" into a +$50 CHARGE (Codex r2 #C). Flat-fee credits aren't a
+  // supported split-editor flow yet.
+  return /^\s*-/.test(raw) ? -cents : cents;
 }
 
 /** A missing-function / schema-cache error means the split-billing migrations are not
@@ -185,7 +194,8 @@ export default function FieldAppSplitInvoiceEditor() {
   const [jobOptions, setJobOptions] = useState<JobOption[]>([]);
 
   // Header + selection
-  const [invoiceDate, setInvoiceDate] = useState(() => new Date().toISOString().slice(0, 10));
+  // Local date (not toISOString, which rolls to tomorrow after ~6–7 PM Central) — Codex r2 #J.
+  const [invoiceDate, setInvoiceDate] = useState(() => localToday());
   const [headerNotes, setHeaderNotes] = useState('');
   const [sourceJobId, setSourceJobId] = useState('');
   const [fields, setFields] = useState<FieldPick[]>([]);
@@ -416,13 +426,15 @@ export default function FieldAppSplitInvoiceEditor() {
         if (!l.rateUnit.trim()) return 'A chemical line needs a rate unit (e.g. oz, gal) so the price can be resolved.';
         if (l.overridePrice) {
           const c = dollarsToCents(l.unitPriceDollars);
-          if (c == null || c < 0) return 'A chemical line has Override price on but no valid unit price.';
+          // Reject <= 0 (not just < 0): a malformed entry like "1e5" parses to 0 and must NOT
+          // be accepted as a $0 override (would give product away) — Codex r2 #D.
+          if (c == null || c <= 0) return 'A chemical line has Override price on but no valid positive unit price.';
         }
       } else if (l.line_kind === 'service') {
         if (!l.application_service_id) return 'A service line has no application service selected.';
       } else if (l.line_kind === 'flat_fee') {
         const c = dollarsToCents(l.flatDollars);
-        if (c == null || c <= 0) return 'A flat-fee line has no amount.';
+        if (c == null || c <= 0) return 'A flat-fee line needs a positive amount (credits aren’t supported here yet).';
         if (!l.description.trim()) return 'A flat-fee line needs a description.';
       }
       if (l.customized) {

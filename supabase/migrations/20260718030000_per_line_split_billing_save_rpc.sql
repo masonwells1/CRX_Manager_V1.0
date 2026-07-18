@@ -395,6 +395,7 @@ DECLARE
   v_send_disposition   text;
   v_line_hashes        jsonb := '[]'::jsonb;
   v_item_price_source  text;
+  v_item_cost_cents    bigint;   -- per-item cost_cents (per-unit for chemical, EXTENDED for fee) — Codex r2 #F
   -- invariant probes
   v_sum_cents          bigint;
   v_src_line_cents     bigint;
@@ -829,6 +830,7 @@ BEGIN
       'rate_unit',       v_eff_rate_unit,
       'sort_order',      v_idx,
       'unit_cost_cents', v_line_unit_cost,   -- per-unit COGS (Codex P1 #3)
+      'service_name',    CASE WHEN v_line_kind = 'service' THEN v_app_service.name ELSE NULL END, -- Codex r2 #N
       'alloc',           v_calc
     ));
     v_line_hashes := v_line_hashes || jsonb_build_array(v_calc->>'vector_hash');
@@ -927,6 +929,17 @@ BEGIN
         WHEN 'service_default' THEN 'tier'
         ELSE 'manual' END;
 
+      -- Item cost convention (Codex r2 #F): existing invoice code (PDF/detail) reads a FEE
+      -- (service) item's cost_cents as ALREADY EXTENDED — the live _save_field_app_invoice_impl
+      -- stores cost_per_acre × acres on the fee item — while chemical items carry per-unit cost.
+      -- Match that so the item detail and the header total_cost reconcile.
+      v_item_cost_cents := CASE
+        WHEN v_line_kind = 'service'  THEN safe_cents_qty((v_plan->>'unit_cost_cents')::bigint, COALESCE(v_acres_alloc, 0))
+        WHEN v_line_kind = 'chemical' THEN (v_plan->>'unit_cost_cents')::bigint
+        ELSE 0 END;
+
+      -- sql-safety: exempt-registry — invoice_items.billing_line_id is created by the prior
+      -- parked migration 20260718010000 (not yet in the schema-registry); see file header.
       INSERT INTO invoice_items (
         invoice_id, product_id, description,
         quantity, unit_price_cents, extended_cents, cost_cents,
@@ -936,13 +949,14 @@ BEGIN
         v_invoice_id, (v_plan->>'product_id')::uuid,
         COALESCE(NULLIF(v_plan->>'description', ''),
                  (SELECT product_name FROM products WHERE id = (v_plan->>'product_id')::uuid),
+                 NULLIF(v_plan->>'service_name', ''),      -- Codex r2 #N: real service name, not literal 'Service'
                  initcap(v_line_kind)),
         CASE WHEN v_line_kind = 'service' THEN COALESCE(v_acres_alloc, 0)
              WHEN v_line_kind = 'chemical' THEN COALESCE(v_qty, 0)
              ELSE 1 END,
         (v_alloc_row->>'unit_price_cents')::bigint,
         (v_alloc_row->>'amount_cents')::bigint,     -- extended = authoritative allocation
-        (v_plan->>'unit_cost_cents')::bigint,       -- cost_cents = per-unit COGS (Codex P1 #3)
+        v_item_cost_cents,                          -- per-unit (chemical) / EXTENDED (fee) COGS
         (v_plan->>'sort_order')::int,
         v_acres_alloc,
         CASE WHEN v_line_kind = 'service' THEN 'acre' ELSE v_plan->>'rate_unit' END,
@@ -972,11 +986,12 @@ BEGIN
       );
 
       v_invoice_total := v_invoice_total + (v_alloc_row->>'amount_cents')::bigint;
-      -- Accumulate COGS: per-unit cost × this customer's billed quantity for the line
-      -- (acres for service, priced qty for chemical); flat/fuel carry 0 cost. Codex P1 #3.
-      v_invoice_cost  := v_invoice_cost + safe_cents_qty(
-        (v_plan->>'unit_cost_cents')::bigint,
-        CASE WHEN v_line_kind = 'service' THEN COALESCE(v_acres_alloc, 0) ELSE COALESCE(v_qty, 0) END);
+      -- Accumulate extended COGS: the fee item already stores its EXTENDED cost; a chemical item
+      -- stores per-unit cost, so extend it by this customer's billed quantity. Codex P1 #3 / r2 #F.
+      v_invoice_cost  := v_invoice_cost + CASE
+        WHEN v_line_kind = 'service'  THEN v_item_cost_cents
+        WHEN v_line_kind = 'chemical' THEN safe_cents_qty(v_item_cost_cents, COALESCE(v_qty, 0))
+        ELSE 0 END;
     END LOOP;
 
     v_send_disposition := CASE WHEN v_invoice_total = 0 THEN 'suppressed_zero_total' ELSE 'normal' END;
@@ -1139,6 +1154,16 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM profiles WHERE id = v_actor AND is_active = true
                    AND role IN ('admin', 'sales_rep')) THEN
     RAISE EXCEPTION 'Not authorized: active admin or sales role required to save field application invoices';
+  END IF;
+
+  -- Feature-flag gate (Codex round-2 P1, 2026-07-18): this money RPC is granted to
+  -- `authenticated`, so while the migrations are applied but the flag is OFF a direct
+  -- PostgREST call could still create split invoices even though the page/nav are hidden.
+  -- Refuse unless per_line_split_billing_enabled is explicitly 'true' in app_settings.
+  IF COALESCE((SELECT setting_value FROM app_settings
+                WHERE setting_key = 'per_line_split_billing_enabled'), 'false') <> 'true' THEN
+    RAISE EXCEPTION 'SPLIT_BILLING_DISABLED: per-line split billing is not enabled'
+      USING ERRCODE = 'insufficient_privilege';
   END IF;
 
   -- Deterministic fingerprint of the request payload — a same-key retry with a
