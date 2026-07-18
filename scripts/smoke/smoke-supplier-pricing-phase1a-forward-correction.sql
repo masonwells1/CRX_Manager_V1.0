@@ -32,6 +32,29 @@ $proof$;
 SELECT set_config('request.jwt.claim.sub', '11111111-1111-4111-8111-111111111111', false);
 SET ROLE authenticated;
 
+DO $proof$
+DECLARE
+  v_rejected boolean := false;
+BEGIN
+  BEGIN
+    UPDATE public.products
+    SET current_cost = 0,
+        tier1_margin = 0,
+        tier1_price = 1.001
+    WHERE id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa5'::uuid;
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM = 'PRODUCT_PRICING_CENT_SCALE_INVALID' THEN
+      v_rejected := true;
+    ELSE
+      RAISE;
+    END IF;
+  END;
+  IF NOT v_rejected THEN
+    RAISE EXCEPTION 'FORWARD_CORRECTION_FAIL: legacy sub-cent tier price was accepted';
+  END IF;
+END;
+$proof$;
+
 CREATE TEMP TABLE phase1a_forward_proof (
   key text PRIMARY KEY,
   value jsonb NOT NULL
