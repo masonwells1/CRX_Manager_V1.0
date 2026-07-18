@@ -86,7 +86,7 @@ link-first, and lease-change-first.
 The Phase 2 calculator has its own disposable PostgreSQL 17 proof:
 
 ```bash
-node scripts/smoke/prove-per-line-split-billing-phase2.mjs
+node scripts/smoke/prove-per-line-split-billing-phase2.mjs --diagnose-blocked-phase1
 ```
 
 It creates a uniquely named `crx-per-line-p2-proof-*` container with no network,
@@ -103,10 +103,12 @@ job/default/fallback ownership; hashes; Mode A and malformed-vector rejection;
 role denial; overload count; and private-calculator privileges.
 
 Current prerequisite blocker: Phase 1 migration `20260718120000` contains an
-invalid concatenated `COMMENT ON COLUMN` statement. For Phase 2 diagnostics only,
-the Node harness recognizes and normalizes that exact comment in memory, prints a
-`BLOCKER` line, and leaves the checked-in migration untouched. A green Phase 2
-diagnostic therefore does not make Phase 1 applyable or authorize any live apply.
+invalid concatenated `COMMENT ON COLUMN` statement. The default command (without
+`--diagnose-blocked-phase1`) fails hard and refuses to print a green proof while
+that checked-in migration is invalid. The explicit diagnostic mode recognizes and
+normalizes only that exact comment in memory, labels its evidence `DIAGNOSTIC`
+rather than `PROOF`, and leaves the checked-in migration untouched. A passing
+diagnostic does not make Phase 1 applyable or authorize any live apply.
 
 Safety notes:
 

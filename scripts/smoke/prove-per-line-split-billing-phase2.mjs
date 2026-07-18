@@ -23,6 +23,12 @@ const CONTAINER = `${PREFIX}${process.pid}-${Date.now().toString(36)}`.toLowerCa
 const IMAGE = 'postgres:17-alpine';
 const DATABASE = 'crx_per_line_p2_disposable';
 const PASSWORD = 'per-line-p2-disposable-only';
+const DIAGNOSE_BLOCKED_PHASE1 = process.argv.includes('--diagnose-blocked-phase1');
+
+const unknownArgs = process.argv.slice(2).filter((arg) => arg !== '--diagnose-blocked-phase1');
+if (unknownArgs.length > 0) {
+  fail(`unknown argument(s): ${unknownArgs.join(', ')}`);
+}
 
 const files = {
   setup: path.join(ROOT, 'scripts', 'smoke', 'setup-per-line-split-billing-phase2.sql'),
@@ -79,7 +85,14 @@ function phase1ForDisposableDiagnostic() {
   const commentBlock = sql.slice(start, end + 1);
   if (!commentBlock.includes('||')) return sql;
 
-  console.warn('[phase2-proof] BLOCKER: PR #166 Phase 1 has invalid COMMENT concatenation; normalizing that comment in memory for Phase 2 diagnostics only.');
+  if (!DIAGNOSE_BLOCKED_PHASE1) {
+    fail(
+      'Phase 1 migration is invalid PostgreSQL at the send_disposition COMMENT; refusing to print a green migration-pair proof. ' +
+      'Fix Phase 1 first, or use --diagnose-blocked-phase1 to run an explicitly non-shipping Phase 2 diagnostic.',
+    );
+  }
+
+  console.warn('[phase2-proof] BLOCKER / DIAGNOSTIC ONLY: PR #166 Phase 1 has invalid COMMENT concatenation; normalizing that comment in memory to isolate Phase 2. This run cannot certify the checked-in migration pair.');
   return sql.replace(
     commentBlock,
     `COMMENT ON COLUMN public.invoices.send_disposition IS
@@ -150,8 +163,12 @@ function run() {
     fail('Phase 2 rollback proof did not reach its PASS marker', output.trim());
   }
 
-  console.log('PROOF — Ran: network-isolated PostgreSQL 17 container; loaded checked-in Phase 1 + Phase 2 migrations; executed rollback-only Phase 2 SQL proof.');
-  console.log('PROOF — Saw: feature OFF delegated unchanged; 50/50; exact 3-way; 1-cent; one final money rounding after full-precision conversion; signed half-cent -13 => -7/-6; quote/tier/manual/service price precedence; per-person override; 100/0 zero row; flat fee; job snapshot/default/fallback; hashes; Mode A/vector/role rejection; one public preview overload; private calculator not browser-executable.');
+  const evidenceLabel = DIAGNOSE_BLOCKED_PHASE1 ? 'DIAGNOSTIC' : 'PROOF';
+  console.log(`${evidenceLabel} — Ran: network-isolated PostgreSQL 17 container; loaded checked-in Phase 1 + Phase 2 migrations; executed rollback-only Phase 2 SQL proof.`);
+  console.log(`${evidenceLabel} — Saw: feature OFF delegated unchanged; 50/50; exact 3-way; 1-cent; one final money rounding after full-precision conversion; signed half-cent -13 => -7/-6; quote/tier/manual/service price precedence; per-person override; 100/0 zero row; flat fee; job snapshot/default/fallback; hashes; Mode A/vector/role rejection; one public preview overload; private calculator not browser-executable.`);
+  if (DIAGNOSE_BLOCKED_PHASE1) {
+    console.warn('[phase2-proof] DIAGNOSTIC RESULT ONLY: Phase 2 behavior passed after the declared in-memory prerequisite normalization; the checked-in migration pair remains unapplyable.');
+  }
 }
 
 try {
