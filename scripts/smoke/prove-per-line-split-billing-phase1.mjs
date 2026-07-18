@@ -619,6 +619,56 @@ COMMIT;
   };
 }
 
+async function proveShareWriteSerializesWithPost() {
+  resetFixture();
+  runSql(`
+BEGIN;
+${lineSql(ID.lineA, 'freeze race line')}
+${shareSql({ id: ID.shareA, line: ID.lineA, item: ID.itemA, customer: ID.customerA })}
+COMMIT;
+`);
+
+  const writer = startSqlWithMarker(`
+BEGIN;
+UPDATE public.invoice_line_shares
+   SET amount_cents = 999
+ WHERE id = '${ID.shareA}';
+SELECT 'SHARE_WRITE_CHECKED_DRAFT';
+SELECT pg_sleep(2);
+COMMIT;
+`, 'SHARE_WRITE_CHECKED_DRAFT');
+
+  await writer.ready;
+  const poster = startSql(`
+SET lock_timeout = '500ms';
+UPDATE public.invoices
+   SET status = 'posted', posted_at = now()
+ WHERE id = '${ID.draftInvoice}';
+`);
+
+  const [writeResult, postResult] = await Promise.all([writer.completion, poster]);
+  const finalState = scalar(`
+SELECT status || '|' || (posted_at IS NOT NULL)::text || '|' ||
+       (SELECT amount_cents::text
+          FROM public.invoice_line_shares
+         WHERE id = '${ID.shareA}')
+  FROM public.invoices
+ WHERE id = '${ID.draftInvoice}';
+`);
+  const postDetail = `${postResult.stdout || ''}${postResult.stderr || ''}`;
+  const passed = writeResult.code === 0
+    && postResult.code !== 0
+    && /lock timeout/i.test(postDetail)
+    && finalState === 'draft|false|999';
+  return {
+    label: 'share writes serialize with invoice posting at the freeze boundary',
+    passed,
+    detail: passed
+      ? 'share writer held the invoice row; concurrent post timed out and no post crossed the write'
+      : `writer=${writeResult.code} poster=${postResult.code} final=${finalState}`,
+  };
+}
+
 async function main() {
   prepareContainer();
   installSchema();
@@ -638,6 +688,7 @@ async function main() {
     proveServerCanSuppressZeroTotal(),
     proveEmptyLine(),
     await proveConcurrentVectors(),
+    await proveShareWriteSerializesWithPost(),
   ];
 
   for (const result of results) {

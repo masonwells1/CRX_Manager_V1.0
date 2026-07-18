@@ -297,6 +297,21 @@ BEGIN
     v_item_ids := array_append(v_item_ids, NEW.invoice_item_id);
   END IF;
 
+  -- Serialize the share mutation with every posting surface. Posting already
+  -- takes the invoice row lock; taking the same lock here means either the share
+  -- edit commits while the invoice is still draft, or posting wins and the
+  -- status recheck below rejects the edit. The stable order also matches group
+  -- posting and avoids an OLD/NEW cross-invoice deadlock on reparent.
+  PERFORM 1
+  FROM public.invoices i
+  WHERE i.id IN (
+    SELECT ii.invoice_id
+    FROM public.invoice_items ii
+    WHERE ii.id = ANY(v_item_ids)
+  )
+  ORDER BY i.id
+  FOR UPDATE;
+
   SELECT EXISTS (
     SELECT 1
     FROM public.invoice_items ii

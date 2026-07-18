@@ -100,7 +100,9 @@ billing sets/source prices; that split and price overrides reject blank audit re
 that browser roles cannot change the server-controlled send disposition;
 that only a zero-total invoice may be suppressed while the server's valid zero-total
 path still works; that a logical billing line cannot commit without a vector; and that
-two concurrent full-vector writers serialize so exactly one commits. The container is
+two concurrent full-vector writers serialize so exactly one commits. It also races a
+share mutation with invoice posting and proves the share trigger holds the invoice row
+lock, preventing either transaction from crossing the posted-snapshot boundary. The container is
 removed in `finally` on PASS or FAIL.
 
 ## Disposable Supplier Pricing Phase 1a proof
