@@ -44,10 +44,11 @@ it on, you do a short sequence (below) — and that's deliberately your call, no
 1. **Run one normal field-application billing cycle first** (the spec requires this baseline before the
    split feature is trusted — prove the existing engine end-to-end on a real bill).
 2. **Get the Codex money/RLS review** on the save-RPC migration (credits reset ~Jul 22). Fix anything it
-   flags. *This is the one required gate that could not run overnight.*
-3. **Do the R8 wiring** (see "Known scope gaps" below) — connect the server-side chemical price lookup so
-   the split engine resolves chemical prices itself instead of trusting the screen. Small but important
-   before real money flows.
+   flags. *This is the one required gate that could not run overnight.* (R8 changed this migration again on
+   2026-07-18, so Codex should review the current version.)
+3. **~~Do the R8 wiring~~ — DONE 2026-07-18.** The server now resolves chemical prices itself
+   (manual → quote → tier) and converts the applied amount from the rate unit to the product's sold unit.
+   BUT it needs **one billing-rule decision from you first** — see "⚠️ DECIDE FIRST" just below.
 4. **Apply the 3 migrations to the live database, in order:**
    `20260718010000` (tables) → `20260718020000` (calculator) → `20260718030000` (save/post RPC).
    (These need your explicit go-ahead — live DB changes are always your call.)
@@ -56,6 +57,41 @@ it on, you do a short sequence (below) — and that's deliberately your call, no
 6. **Flip the flag ON** (`per_line_split_billing_enabled` = `'true'` in `app_settings`).
 7. Try it on a real multi-grower field application and confirm the split invoices look right before
    sending anything.
+
+---
+
+## ⚠️ DECIDE FIRST — how should a split line be priced when co-owners are on different price tiers?
+
+This is the one **money decision** the R8 wiring surfaced. It only matters when the growers who share a
+field are on **different price tiers** (tier 1 vs tier 3, etc.). It does **not** affect the penny-exact
+math — both options are exact — only **which price** a co-owner is charged. Nothing is live; pick before
+you flip the flag on.
+
+**What I built (Option A — "one list price per line"):** the whole chemical line gets ONE price — the tier
+price of the field's **majority owner** — and that line is split by ownership %. Anyone who should pay a
+different price is adjusted per-person by hand in the draft.
+
+**The alternative (Option B — "each grower keeps their own tier"):** each co-owner's share is priced at
+**their own** tier automatically — which is exactly what your **current** (non-split) field-app billing
+does today.
+
+**Concrete example** — field 55% owned by grower A (tier 1, product $100/gal) and 45% by grower B (tier 3,
+product $130/gal), 2 gallons applied:
+- **Today / Option B:** A pays 1.1 gal × $100 = **$110**, B pays 0.9 gal × $130 = **$117** → group **$227**.
+- **Option A (what's built):** whole line at A's $100/gal → A **$110**, B **$90** → group **$200**. B is
+  charged **$27 less** because their tier-3 price is not used.
+
+**My recommendation: Option B** (each grower keeps their own tier). It matches what your app already does,
+so no customer's price silently changes, and the original spec said "don't flatten the existing per-customer
+tier pricing." Option A is simpler and fine **if** you actually want one negotiated price per line with
+manual per-person tweaks. If you choose B, it's a small, contained follow-up to the chemical code before
+go-live (the penny math, conversion, quote/manual paths, and the whole rest of the feature stay exactly as
+built and proven). **Tell me A or B and I'll finish it accordingly.**
+
+(Two smaller notes from the same review, both non-blocking: the tier anchor reads the field's *default*
+ownership even if this particular line is hand-split differently — a per-person override covers it; and a
+chemical *return/credit* (negative quantity) can't go through the split screen yet — flat credits can. Both
+are documented and safe to leave for now.)
 
 ---
 
@@ -92,13 +128,24 @@ it on, you do a short sequence (below) — and that's deliberately your call, no
   uses `parseDollarsToCents`).
 - **Codex money/RLS review:** **could not run** (account usage limit; resets ~Jul 22). Required before go-live.
 
+**R8 addendum (2026-07-18 build run):** the server-side chemical-pricing change got its own pass —
+rls-security review **clean** (confirmed the new internal-only helper has no RLS-bypass surface),
+compliance review **clean** (money-as-cents, no float, no generated-column write), migration-drift review,
+and an Opus **adversarial** review → **SHIP-TO-PARK** (no math/rounding/unit bug; its one flagged item is the
+Option-A-vs-B pricing-rule decision above). Re-proven in the live DB by rollback, **13/13** cases.
+Codex still pending (~Jul 22) and should see this newer version.
+
 ## Known scope gaps to close before go-live (tracked)
 
-- **R8 (from the build):** for chemical lines the base unit price is taken from the screen (and validated),
-  not re-looked-up on the server. The full chemical price lookup already exists in the current field-app
-  save function; extract it into a shared function and call it from the split RPC before real billing.
-  (Service-fee rates ARE looked up server-side already.) The penny-exact math is correct regardless of
-  where the price comes from — this is about *which* price, not the arithmetic.
+- **R8 — DONE 2026-07-18.** Chemical base price is now resolved **server-side** (manual override → customer
+  quote for the field → product tier price) by a new `resolve_field_app_chemical_price()` helper, and the
+  applied amount is converted from the rate unit to the product's sold unit via the existing
+  `field_app_priced_quantity()` (the same 128× guard your live billing uses). The screen now defaults to
+  "price resolved at save" with an optional **Override price** checkbox. Proven end-to-end in the live DB
+  (rollback, 13/13 cases incl. tier, quote-beats-tier, oz→gal conversion, unconvertible-unit rejection).
+  **Open item = the pricing-rule decision above (Option A vs B).** Also: `resolve_field_app_chemical_price`
+  is a deliberate *parallel copy* of the live field-app price precedence (documented in the migration header)
+  — if the live precedence ever changes, update both.
 - **F2 (adversarial, MED):** the "don't email $0" rule can only fire if the invoice-list/detail queries
   actually SELECT the `send_disposition` column. They don't yet (the column isn't live). Add it to those
   queries at go-live (step 5) or the gate silently does nothing.

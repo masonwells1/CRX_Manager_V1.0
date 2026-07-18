@@ -53,17 +53,30 @@
 --   extended_cents is the residual-adjusted allocation from the calculator and is
 --   display-authoritative; nothing recomputes qty x price.
 --
--- SCOPE NOTE (owner-facing, see handoff R8):
---   For CHEMICAL lines this writer snapshots a server-VALIDATED base unit price that
---   the caller supplies (source_unit_price_cents + base_price_source). It does NOT
---   re-implement the full chemical price resolver (manual → quoted → tier → unit
---   conversion) that lives in _save_field_app_invoice_impl_20260714 — that logic is
---   large and coupled to the not-yet-built product/quote picker UI. Before go-live,
---   extract that resolver into a shared function and call it here so the base price
---   is server-resolved, not caller-supplied. SERVICE-fee base rate IS resolved
---   server-side below (application_services default rate). The penny-exact
---   allocation, invariants, freeze, idempotency and $0 suppression are all complete
---   and proven regardless of where the base price originates.
+-- SCOPE NOTE (owner-facing — R8 DONE 2026-07-18):
+--   For CHEMICAL lines the base unit price is now RESOLVED SERVER-SIDE by
+--   resolve_field_app_chemical_price() below (manual override → customer quote for the
+--   field → product tier list price), mirroring the LIVE _save_field_app_invoice_impl_20260714
+--   precedence, and the applied quantity is converted from the rate unit into the
+--   product's sold (inventory) unit via the live field_app_priced_quantity() before the
+--   calculator multiplies price x quantity (so a $/gal price never multiplies a rate in
+--   oz — the 128x guard the live path enforces). A caller-supplied price is honored ONLY
+--   as an EXPLICIT manual override (line.manual_override = true). base_price_source is
+--   server-determined, never trusted from the caller.
+--   TIER ANCHOR DECISION (owner: confirm before go-live): a split line has ONE list
+--   price that is then split, so the tier is taken from the billing-set member with the
+--   LARGEST ownership share (the majority payer; tie-break customer_id ASC). Any other
+--   grower who should pay a different price uses the existing per-person price override
+--   (calculator per_person path). This follows the spec's "resolve one base price + its
+--   source, then layer person-specific overrides on top" model. is_primary stays
+--   display-only. SERVICE-fee base rate is resolved server-side (application_services
+--   default rate) as before.
+--   MAINTENANCE: resolve_field_app_chemical_price() is a PARALLEL copy of the live
+--   writer's precedence, kept separate to avoid refactoring the live money function
+--   overnight. If the live chemical precedence changes, update BOTH (documented
+--   future-unify: extract one shared resolver the live writer also calls). The
+--   penny-exact allocation, invariants, freeze, idempotency and $0 suppression are
+--   complete and proven regardless of where the base price originates.
 -- ============================================================================
 
 
@@ -222,6 +235,85 @@ COMMENT ON FUNCTION public.resolve_line_split_vector(uuid[], uuid, jsonb) IS
 
 
 -- ============================================================================
+-- 1b. CHEMICAL BASE-PRICE RESOLVER (R8) — server-side, INTERNAL-ONLY
+--    Resolves ONE chemical line's base unit price (per the product's SOLD/inventory
+--    unit) in the SAME precedence the live save uses:
+--      1) manual override (p_manual_price_cents given)  ->  'manual'
+--      2) customer quote for one of the fields
+--           quote_items JOIN quote_sections ON section_id, product match,
+--           qs.field_id = ANY(p_field_ids), lowest qi.id  ->  'quoted'
+--      3) product tier list price for p_tier (fallback tier1)  ->  'tier'
+--      4) nothing resolves  ->  0 / 'tier'
+--    Prices are stored numeric DOLLARS in products/quote_items; convert to cents with
+--    round(x*100) exactly like the live writer. This is a PARALLEL copy of the live
+--    _save_field_app_invoice_impl_20260714 chemical precedence (see the MAINTENANCE
+--    note in the file header) — keep the two in sync.
+--    SECURITY DEFINER so it can read the RLS-protected quote/product tables; EXECUTE is
+--    REVOKED from public/anon/authenticated so ONLY the (already fully guarded, same-
+--    owner) split writer can call it — no external RLS-bypass surface. Read-only.
+-- ============================================================================
+CREATE OR REPLACE FUNCTION public.resolve_field_app_chemical_price(
+  p_product_id         uuid,
+  p_field_ids          uuid[],
+  p_tier               integer,
+  p_manual_price_cents bigint DEFAULT NULL
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $fn$
+DECLARE
+  v_unit_price bigint;
+  v_qi_price   numeric;
+BEGIN
+  -- 1) Manual override wins (caller must have explicitly flagged it upstream).
+  IF p_manual_price_cents IS NOT NULL THEN
+    RETURN jsonb_build_object('unit_price_cents', p_manual_price_cents, 'price_source', 'manual');
+  END IF;
+
+  -- A manual line with no product can only be manually priced; 0 otherwise.
+  IF p_product_id IS NULL THEN
+    RETURN jsonb_build_object('unit_price_cents', 0, 'price_source', 'manual');
+  END IF;
+
+  -- 2) Customer quote for one of these fields (dollars -> cents).
+  SELECT qi.price_per_unit
+    INTO v_qi_price
+    FROM quote_items qi
+    JOIN quote_sections qs ON qs.id = qi.section_id
+   WHERE qi.product_id = p_product_id
+     AND qs.field_id = ANY(p_field_ids)
+   ORDER BY qi.id
+   LIMIT 1;
+  IF v_qi_price IS NOT NULL THEN
+    RETURN jsonb_build_object('unit_price_cents', round(v_qi_price * 100)::bigint,
+                              'price_source', 'quoted');
+  END IF;
+
+  -- 3) Product tier list price (fallback to tier1 when the tier price is null).
+  SELECT CASE COALESCE(p_tier, 1)
+           WHEN 2 THEN COALESCE(round(p.tier2_price * 100), round(p.tier1_price * 100), 0)
+           WHEN 3 THEN COALESCE(round(p.tier3_price * 100), round(p.tier1_price * 100), 0)
+           ELSE      COALESCE(round(p.tier1_price * 100), 0)
+         END
+    INTO v_unit_price
+    FROM products p
+   WHERE p.id = p_product_id;
+
+  RETURN jsonb_build_object('unit_price_cents', COALESCE(v_unit_price, 0), 'price_source', 'tier');
+END;
+$fn$;
+
+REVOKE ALL ON FUNCTION public.resolve_field_app_chemical_price(uuid, uuid[], integer, bigint)
+  FROM public, anon, authenticated;
+
+COMMENT ON FUNCTION public.resolve_field_app_chemical_price(uuid, uuid[], integer, bigint) IS
+  'Per-line split billing R8: resolves a chemical line base unit price (per the product sold unit) via manual->quoted(quote_items/quote_sections by field)->tier(products.tierN_price, fallback tier1). Parallel copy of the live _save_field_app_invoice_impl_20260714 precedence; keep in sync. Internal-only (EXECUTE revoked from authenticated); called only by the guarded split writer. Read-only.';
+
+
+-- ============================================================================
 -- 2. THE WRITER — _save_field_app_split_invoice_impl
 --    Runs inside the wrapper's locks/guards. Builds the billing set + lines, calls
 --    the shared calculator, writes one child invoice per customer, and asserts the
@@ -268,6 +360,7 @@ DECLARE
   v_src_unit_price     bigint;
   v_src_flat           bigint;
   v_base_source        text;
+  v_eff_rate_unit      text;           -- display unit for the line (pricing unit after chemical conversion)
   v_shares             jsonb;
   v_line_customers     text[];
   v_calc               jsonb;
@@ -432,6 +525,7 @@ BEGIN
     v_src_flat       := (v_line->>'source_flat_cents')::bigint;
     v_src_unit_price := (v_line->>'source_unit_price_cents')::bigint;
     v_base_source    := v_line->>'base_price_source';
+    v_eff_rate_unit  := v_line->>'rate_unit';   -- default; chemical overrides to the pricing unit below
 
     IF v_line_kind IS NULL
        OR v_line_kind NOT IN ('chemical', 'service', 'fuel_surcharge', 'flat_fee') THEN
@@ -452,11 +546,69 @@ BEGIN
         v_base_source    := COALESCE(v_base_source, 'service_rate');
       END IF;
     ELSIF v_line_kind = 'chemical' THEN
-      IF v_src_unit_price IS NULL THEN
-        RAISE EXCEPTION 'SPLIT_CHEMICAL_PRICE_REQUIRED: source_unit_price_cents required for chemical line %', v_idx
-          USING ERRCODE = 'invalid_parameter_value';
-      END IF;
-      v_base_source := COALESCE(v_base_source, 'manual');
+      -- R8: resolve the base unit price SERVER-SIDE (manual override -> quote -> tier) and
+      -- convert the applied quantity from the rate unit into the product's sold unit, exactly
+      -- like the live field-app save. NEVER trust a caller price except an explicit override.
+      DECLARE
+        v_chem_manual bigint  := NULL;
+        v_chem_tier   integer;
+        v_inv_unit    text;
+        v_form        text;
+        v_priced_qty  numeric;
+        v_price_res   jsonb;
+        v_rate_unit   text := NULLIF(btrim(coalesce(v_line->>'rate_unit', '')), '');
+      BEGIN
+        IF v_product_id IS NULL THEN
+          RAISE EXCEPTION 'SPLIT_CHEMICAL_NO_PRODUCT: chemical line % requires product_id', v_idx
+            USING ERRCODE = 'invalid_parameter_value';
+        END IF;
+        IF v_src_qty IS NULL OR v_src_qty <= 0 THEN
+          RAISE EXCEPTION 'SPLIT_CHEMICAL_NO_QUANTITY: chemical line % requires source_quantity > 0', v_idx
+            USING ERRCODE = 'invalid_parameter_value';
+        END IF;
+
+        -- Honor a caller price ONLY as an explicit manual override.
+        IF COALESCE((v_line->>'manual_override')::boolean, false) THEN
+          IF v_src_unit_price IS NULL THEN
+            RAISE EXCEPTION 'SPLIT_CHEMICAL_OVERRIDE_PRICE_REQUIRED: manual_override set but no source_unit_price_cents on chemical line %', v_idx
+              USING ERRCODE = 'invalid_parameter_value';
+          END IF;
+          v_chem_manual := v_src_unit_price;
+        END IF;
+
+        -- Product units for the rate -> pricing-unit conversion.
+        SELECT p.inventory_unit, p.product_form INTO v_inv_unit, v_form
+          FROM products p WHERE p.id = v_product_id;
+
+        -- Tier anchor = the billing-set member with the LARGEST ownership share (majority
+        -- payer; tie-break customer_id ASC). See the TIER ANCHOR DECISION in the file header.
+        SELECT c.assigned_tier INTO v_chem_tier
+          FROM customers c
+         WHERE c.id = (
+           SELECT (value->>'customer_id')::uuid
+             FROM jsonb_array_elements(v_vector) AS value
+            ORDER BY (value->>'micro_pct')::bigint DESC, value->>'customer_id' ASC
+            LIMIT 1);
+
+        v_price_res      := resolve_field_app_chemical_price(
+                              v_product_id, v_field_ids, COALESCE(v_chem_tier, 1), v_chem_manual);
+        v_src_unit_price := (v_price_res->>'unit_price_cents')::bigint;
+        v_base_source    := v_price_res->>'price_source';
+
+        -- Convert applied qty (rate unit) -> product sold unit so price x qty is per the
+        -- SAME unit (the live 128x guard). No inventory_unit -> identity (price as entered).
+        v_priced_qty := field_app_priced_quantity(
+                          v_src_qty, v_rate_unit, COALESCE(v_inv_unit, v_rate_unit), v_form);
+        IF v_priced_qty IS NULL THEN
+          RAISE EXCEPTION 'FIELD_APP_UNIT_UNCONVERTIBLE: chemical line % — rate unit "%" does not convert to the product''s sold unit "%". Fix this product''s units before invoicing.',
+            v_idx, coalesce(v_rate_unit, '<none>'), COALESCE(v_inv_unit, v_rate_unit, '<none>')
+            USING ERRCODE = 'invalid_parameter_value';
+        END IF;
+        v_src_qty := round(v_priced_qty, 4);
+        -- Quantity is now in the pricing (sold) unit; show that unit on the invoice line
+        -- so the displayed quantity and its unit label agree.
+        v_eff_rate_unit := COALESCE(v_inv_unit, v_rate_unit);
+      END;
     ELSE
       -- flat_fee / fuel_surcharge: bill from source_flat_cents; unit price is 0.
       IF v_src_flat IS NULL THEN
@@ -534,7 +686,7 @@ BEGIN
       'line_kind',       v_line_kind,
       'product_id',      v_product_id,
       'description',     v_line_desc,
-      'rate_unit',       v_line->>'rate_unit',
+      'rate_unit',       v_eff_rate_unit,
       'sort_order',      v_idx,
       'alloc',           v_calc
     ));

@@ -50,7 +50,8 @@ interface LineDraft {
   description: string;
   quantity: string; // chemical: total applied quantity
   serviceAcres: string; // service: total applied acres (optional; server defaults to sum of fields)
-  unitPriceDollars: string; // chemical: dollars/unit (stored as cents)
+  unitPriceDollars: string; // chemical: dollars/unit (only sent when overridePrice)
+  overridePrice: boolean; // chemical: when false, the server resolves the price (quote → tier)
   flatDollars: string; // flat_fee: dollars (stored as cents)
   rateUnit: string;
   customized: boolean; // when true, send an explicit COMPLETE shares vector
@@ -348,6 +349,7 @@ export default function FieldAppSplitInvoiceEditor() {
         quantity: '',
         serviceAcres: '',
         unitPriceDollars: '',
+        overridePrice: false,
         flatDollars: '',
         rateUnit: '',
         customized: false,
@@ -377,16 +379,13 @@ export default function FieldAppSplitInvoiceEditor() {
   const resetLineToDefault = (uid: string) =>
     patchLine(uid, { customized: false, shares: defaultSharesFromMembers(members) });
 
-  // Pre-save SOURCE estimate for a line (qty*price or flat). NOT authoritative.
+  // Pre-save SOURCE estimate for a line (flat only). NOT authoritative.
+  // Chemical prices are resolved server-side (quote → tier) with a rate→sold-unit
+  // conversion, so there is no reliable client estimate; service rate also defaults
+  // server-side. Both show their real per-grower amounts after Save Draft.
   const lineEstimateCents = (l: LineDraft): number | null => {
     if (l.line_kind === 'flat_fee') return dollarsToCents(l.flatDollars);
-    if (l.line_kind === 'chemical') {
-      const qty = parseFloat(l.quantity);
-      const price = dollarsToCents(l.unitPriceDollars);
-      if (!Number.isFinite(qty) || price == null) return null;
-      return Math.round(qty * price);
-    }
-    return null; // service rate defaults server-side; no client estimate
+    return null;
   };
 
   const shareSumPct = (l: LineDraft): number =>
@@ -404,7 +403,11 @@ export default function FieldAppSplitInvoiceEditor() {
       if (l.line_kind === 'chemical') {
         if (!l.product_id) return 'A chemical line has no product selected.';
         if (!(parseFloat(l.quantity) > 0)) return 'A chemical line has no quantity.';
-        if (dollarsToCents(l.unitPriceDollars) == null || dollarsToCents(l.unitPriceDollars)! < 0) return 'A chemical line has no unit price.';
+        if (!l.rateUnit.trim()) return 'A chemical line needs a rate unit (e.g. oz, gal) so the price can be resolved.';
+        if (l.overridePrice) {
+          const c = dollarsToCents(l.unitPriceDollars);
+          if (c == null || c < 0) return 'A chemical line has Override price on but no valid unit price.';
+        }
       } else if (l.line_kind === 'service') {
         if (!l.application_service_id) return 'A service line has no application service selected.';
       } else if (l.line_kind === 'flat_fee') {
@@ -429,8 +432,12 @@ export default function FieldAppSplitInvoiceEditor() {
       if (l.line_kind === 'chemical') {
         base.product_id = l.product_id;
         base.source_quantity = parseFloat(l.quantity);
-        base.source_unit_price_cents = dollarsToCents(l.unitPriceDollars);
-        base.base_price_source = 'manual';
+        // Price is resolved server-side (quote → tier). Only send a price as an
+        // explicit manual override; base_price_source is server-determined.
+        if (l.overridePrice) {
+          base.manual_override = true;
+          base.source_unit_price_cents = dollarsToCents(l.unitPriceDollars);
+        }
       } else if (l.line_kind === 'service') {
         base.application_service_id = l.application_service_id;
         const acres = parseFloat(l.serviceAcres);
@@ -808,13 +815,28 @@ export default function FieldAppSplitInvoiceEditor() {
                           <input type="number" min="0" step="0.0001" value={l.quantity} onChange={(e) => patchLine(l.uid, { quantity: e.target.value })} className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" />
                         </label>
                         <label className="block">
-                          <span className="text-xs font-medium text-secondary">Unit price ($ / unit)</span>
-                          <input type="number" min="0" step="0.01" value={l.unitPriceDollars} onChange={(e) => patchLine(l.uid, { unitPriceDollars: e.target.value })} className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" />
-                        </label>
-                        <label className="block">
-                          <span className="text-xs font-medium text-secondary">Rate unit (optional)</span>
+                          <span className="text-xs font-medium text-secondary">Rate unit</span>
                           <input type="text" value={l.rateUnit} onChange={(e) => patchLine(l.uid, { rateUnit: e.target.value })} className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" placeholder="oz, gal…" />
                         </label>
+                        <div className="block sm:col-span-2">
+                          <label className="inline-flex items-center gap-2 text-xs font-medium text-secondary">
+                            <input
+                              type="checkbox"
+                              checked={l.overridePrice}
+                              onChange={(e) => patchLine(l.uid, { overridePrice: e.target.checked })}
+                              className="rounded border-gray-300"
+                            />
+                            Override price
+                          </label>
+                          {l.overridePrice ? (
+                            <label className="block mt-2">
+                              <span className="text-xs font-medium text-secondary">Unit price ($ / sold unit)</span>
+                              <input type="number" min="0" step="0.01" value={l.unitPriceDollars} onChange={(e) => patchLine(l.uid, { unitPriceDollars: e.target.value })} className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" />
+                            </label>
+                          ) : (
+                            <p className="mt-1 text-xs text-secondary">Price is resolved on save from the customer's quote, then the product's tier price.</p>
+                          )}
+                        </div>
                       </>
                     )}
                     {l.line_kind === 'service' && (
