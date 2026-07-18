@@ -7,8 +7,10 @@
 -- seeded expired result and raises SMOKE_FAIL. Against the FIXED function the
 -- expired result is removed, the revert succeeds, a sequential replay is exact
 -- and side-effect-free, cross-quote key reuse is rejected, unsafe cancelled
--- orders cannot be reopened, the draw ledger is released, a re-convert produces
--- a NEW order, and the historical cancelled order cannot then be restored.
+-- orders cannot be reopened (including with a surviving legacy draft), every
+-- invoice writer rejects the cancelled historical order, the draw ledger is
+-- released, a re-convert produces a NEW order, and the historical cancelled
+-- order cannot then be restored.
 --
 -- One DO block, terminal exception → nothing commits.
 DO $smoke$
@@ -17,11 +19,14 @@ DECLARE
   v_suffix   text := substr(md5(random()::text), 1, 8);
   v_customer uuid;
   v_product  uuid;
+  v_field    uuid;
   v_quote    uuid;
   v_quote2   uuid;
   v_quote_delivered uuid;
   v_quote_completed uuid;
   v_quote_invoice uuid;
+  v_quote_void uuid;
+  v_quote_draft uuid;
   v_quote_commission uuid;
   v_sec      uuid;
   v_risk_sec uuid;
@@ -31,8 +36,16 @@ DECLARE
   v_order_delivered uuid;
   v_order_completed uuid;
   v_order_invoice uuid;
+  v_order_void uuid;
+  v_order_draft uuid;
   v_order_commission uuid;
+  v_order_item_completed uuid;
+  v_order_item_draft uuid;
+  v_delivery_completed uuid;
   v_invoice  uuid;
+  v_invoice_draft uuid;
+  v_invoice_cancelled uuid;
+  v_invoice_void uuid;
   v_status   text;
   v_drawn    numeric;
   v_replay   jsonb;
@@ -173,11 +186,18 @@ BEGIN
   IF v_res->>'status' IS DISTINCT FROM 'created' OR v_order_completed IS NULL THEN
     RAISE EXCEPTION 'SMOKE_SETUP: completed-delivery conversion failed: %', v_res;
   END IF;
+  SELECT id INTO v_order_item_completed
+  FROM public.order_items WHERE order_id = v_order_completed ORDER BY id LIMIT 1;
   INSERT INTO public.deliveries (
     delivery_number, order_id, customer_id, status, completed_at, signed_by, created_by
   ) VALUES (
     'E2E-B2-DEL-' || v_suffix, v_order_completed, v_customer,
     'completed', now(), '[E2E] B2 completed-delivery proof', v_admin
+  ) RETURNING id INTO v_delivery_completed;
+  INSERT INTO public.delivery_items (
+    delivery_id, order_item_id, product_id, quantity, quantity_delivered, unit_size
+  ) VALUES (
+    v_delivery_completed, v_order_item_completed, v_product, 1, 1, 'gal'
   );
   SELECT public.cancel_order(v_order_completed, v_admin) INTO v_res;
   PERFORM set_config('app.admin_override', 'false', true);
@@ -195,6 +215,176 @@ BEGIN
       RAISE EXCEPTION 'SMOKE_FAIL: completed-delivery guard returned wrong error: %', v_err;
     END IF;
   END;
+
+  -- A real completed delivery ID is not sufficient provenance for direct table
+  -- insertion; only the audited recovery RPC can mint this exception.
+  BEGIN
+    INSERT INTO public.invoices (
+      invoice_number, customer_id, order_id, delivery_id, invoice_type, status,
+      total_amount_cents, invoice_date, due_date, created_by
+    ) VALUES (
+      'E2E-B2-ORPHAN-' || v_suffix, v_customer, NULL,
+      v_delivery_completed, 'chemical_sale', 'draft', 999999,
+      current_date, current_date + 30, v_admin
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: delivery-linked invoice bypassed with NULL order_id';
+  EXCEPTION WHEN OTHERS THEN
+    v_err := SQLERRM;
+    IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_err NOT LIKE 'INVOICE_DELIVERY_ORDER_REQUIRED:%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: delivery/order lineage guard returned wrong error: %', v_err;
+    END IF;
+  END;
+
+  BEGIN
+    INSERT INTO public.invoices (
+      invoice_number, customer_id, order_id, delivery_id, invoice_type, status,
+      total_amount_cents, invoice_date, due_date, created_by
+    ) VALUES (
+      'E2E-B2-SPOOF-' || v_suffix, v_customer, v_order_completed,
+      v_delivery_completed, 'chemical_sale', 'draft', 999999,
+      current_date, current_date + 30, v_admin
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: direct header insert spoofed completed-delivery provenance';
+  EXCEPTION WHEN OTHERS THEN
+    v_err := SQLERRM;
+    IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_err NOT LIKE 'CANCELLED_DELIVERY_INVOICE_WRITER_REQUIRED:%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: completed-delivery provenance guard returned wrong error: %', v_err;
+    END IF;
+  END;
+
+  PERFORM set_config('request.jwt.claims', '{}'::text, true);
+  BEGIN
+    INSERT INTO public.invoices (
+      invoice_number, customer_id, order_id, delivery_id, invoice_type, status,
+      total_amount_cents, invoice_date, due_date, created_by
+    ) VALUES (
+      'E2E-B2-NOSUB-' || v_suffix, v_customer, v_order_completed,
+      v_delivery_completed, 'chemical_sale', 'draft', 999999,
+      current_date, current_date + 30, v_admin
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: no-sub caller passed the recovery capability check';
+  EXCEPTION WHEN OTHERS THEN
+    v_err := SQLERRM;
+    IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_err NOT LIKE 'CANCELLED_DELIVERY_INVOICE_WRITER_REQUIRED:%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: no-sub capability guard returned wrong error: %', v_err;
+    END IF;
+  END;
+  PERFORM set_config('request.jwt.claims',
+    json_build_object('sub', v_admin, 'role', 'authenticated')::text, true);
+
+  -- Billing already-delivered product remains legitimate even after the
+  -- undelivered remainder was cancelled. The central trigger's sole cancelled-
+  -- order exception must preserve this audited recovery RPC.
+  SELECT public.create_invoice_for_unbilled_delivery(
+    v_delivery_completed, v_admin, 'e2e-b2-delivery-backfill-' || v_suffix
+  ) INTO v_res;
+  IF v_res->>'success' IS DISTINCT FROM 'true'
+     OR (v_res->>'total_cents')::bigint IS DISTINCT FROM 1000
+     OR NOT EXISTS (
+       SELECT 1 FROM public.invoices i
+       JOIN public.invoice_items ii ON ii.invoice_id = i.id
+       WHERE i.id = (v_res->>'invoice_id')::uuid
+         AND i.delivery_id = v_delivery_completed
+         AND i.order_id = v_order_completed
+         AND i.customer_id = v_customer
+         AND i.status = 'draft'
+         AND ii.quantity = 1
+         AND ii.extended_cents = 1000
+     ) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: completed-delivery billing exception was blocked or mis-billed: %', v_res;
+  END IF;
+
+  BEGIN
+    UPDATE public.invoices SET total_amount_cents = 999999
+    WHERE id = (v_res->>'invoice_id')::uuid;
+    RAISE EXCEPTION 'SMOKE_FAIL: recovery invoice header money remained directly editable';
+  EXCEPTION WHEN OTHERS THEN
+    v_err := SQLERRM;
+    IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_err NOT LIKE 'TERMINAL_ORDER_INVOICE_PRINCIPAL_IMMUTABLE:%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: recovery-header money guard returned wrong error: %', v_err;
+    END IF;
+  END;
+
+  BEGIN
+    UPDATE public.invoices SET status = 'posted'
+    WHERE id = (v_res->>'invoice_id')::uuid;
+    RAISE EXCEPTION 'SMOKE_FAIL: recovery invoice bypassed the public posting engine';
+  EXCEPTION WHEN OTHERS THEN
+    v_err := SQLERRM;
+    IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_err NOT LIKE 'CANCELLED_DELIVERY_INVOICE_HEADER_IMMUTABLE:%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: direct-post guard returned wrong error: %', v_err;
+    END IF;
+  END;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM public.invoices
+    WHERE id = (v_res->>'invoice_id')::uuid
+      AND status = 'draft'
+      AND total_amount_cents = 1000
+      AND total_cost_cents = 600
+  ) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: rejected recovery-header mutation changed invoice state';
+  END IF;
+
+  BEGIN
+    UPDATE public.invoice_items SET quantity = 2
+    WHERE invoice_id = (v_res->>'invoice_id')::uuid;
+    RAISE EXCEPTION 'SMOKE_FAIL: completed-delivery recovery item remained directly editable';
+  EXCEPTION WHEN OTHERS THEN
+    v_err := SQLERRM;
+    IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_err NOT LIKE 'CANCELLED_DELIVERY_INVOICE_ITEMS_IMMUTABLE:%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: recovery-item guard returned wrong error: %', v_err;
+    END IF;
+  END;
+
+  PERFORM public.post_invoice(
+    (v_res->>'invoice_id')::uuid, 'e2e-b2-delivery-post-' || v_suffix
+  );
+  PERFORM set_config('app.admin_override', 'false', true);
+  IF NOT EXISTS (
+    SELECT 1 FROM public.invoices i
+    JOIN public.invoice_items ii ON ii.invoice_id = i.id
+    WHERE i.id = (v_res->>'invoice_id')::uuid
+      AND i.status = 'posted'
+      AND i.total_amount_cents = 1000
+      AND i.total_cost_cents = 600
+      AND ii.quantity = 1
+      AND ii.extended_cents = 1000
+  ) OR (
+    SELECT count(*) FROM public.financial_audit_log
+    WHERE operation_type = 'invoice_posted'
+      AND entity_id = (v_res->>'invoice_id')::uuid
+  ) <> 1 OR NOT EXISTS (
+    SELECT 1 FROM public.idempotency_keys
+    WHERE idempotency_key = 'e2e-b2-delivery-post-' || v_suffix
+      AND operation = 'post_invoice'
+      AND (result->>'invoice_id')::uuid = (v_res->>'invoice_id')::uuid
+  ) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: completed-delivery recovery invoice did not post exactly';
+  END IF;
+
+  -- Manual review must still be able to void a posted recovery invoice after
+  -- its source order was cancelled.
+  PERFORM public.void_invoice(
+    (v_res->>'invoice_id')::uuid,
+    '[E2E] cancelled-order recovery void proof',
+    'e2e-b2-delivery-void-' || v_suffix
+  );
+  IF NOT EXISTS (
+    SELECT 1 FROM public.invoices
+     WHERE id = (v_res->>'invoice_id')::uuid
+       AND status = 'voided'
+       AND total_amount_cents = 0
+       AND paid_amount_cents = 0
+  ) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: public void_invoice could not close the posted cancelled-order recovery invoice';
+  END IF;
 
   -- ===== FAIL-CLOSED 2: a posted invoice survives cancellation =====
   INSERT INTO public.quotes (quote_number, customer_id, created_by, status, commission_split)
@@ -217,9 +407,30 @@ BEGIN
     'E2E-B2-INV-' || v_suffix, v_customer, v_order_invoice,
     'chemical_sale', 'draft', 1000, current_date, current_date + 30, v_admin
   ) RETURNING id INTO v_invoice;
+  BEGIN
+    UPDATE public.invoices SET order_id = NULL WHERE id = v_invoice;
+    RAISE EXCEPTION 'SMOKE_FAIL: order-linked invoice was detached from its source';
+  EXCEPTION WHEN OTHERS THEN
+    v_err := SQLERRM;
+    IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_err NOT LIKE 'INVOICE_SOURCE_LINEAGE_IMMUTABLE:%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: invoice-lineage guard returned wrong error: %', v_err;
+    END IF;
+  END;
+  IF (SELECT order_id FROM public.invoices WHERE id = v_invoice) IS DISTINCT FROM v_order_invoice THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: rejected invoice detachment changed source lineage';
+  END IF;
   UPDATE public.invoices SET status = 'posted' WHERE id = v_invoice;
   SELECT public.cancel_order(v_order_invoice, v_admin) INTO v_res;
   PERFORM set_config('app.admin_override', 'false', true);
+
+  UPDATE public.invoices SET due_date = due_date + 1 WHERE id = v_invoice;
+  IF NOT EXISTS (
+    SELECT 1 FROM public.invoices
+     WHERE id = v_invoice AND status = 'posted' AND due_date = current_date + 31
+  ) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: safe accounting update on a posted cancelled-order invoice was blocked';
+  END IF;
 
   BEGIN
     PERFORM public.revert_quote_status(
@@ -230,10 +441,196 @@ BEGIN
   EXCEPTION WHEN OTHERS THEN
     v_err := SQLERRM;
     IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
-    IF v_err NOT LIKE 'QUOTE_REOPEN_POSTED_INVOICE:%' THEN
+    IF v_err NOT LIKE 'QUOTE_REOPEN_ACTIVE_INVOICE:%' THEN
       RAISE EXCEPTION 'SMOKE_FAIL: posted-invoice guard returned wrong error: %', v_err;
     END IF;
   END;
+
+  -- ===== LIFECYCLE REGRESSION: void_order still cancels its linked draft =====
+  INSERT INTO public.quotes (quote_number, customer_id, created_by, status, commission_split)
+  VALUES ('E2E-B2-QV-' || v_suffix, v_customer, v_admin, 'sent', '{"splits": []}'::jsonb)
+  RETURNING id INTO v_quote_void;
+  INSERT INTO public.quote_sections (quote_id, section_name)
+  VALUES (v_quote_void, 'Void lifecycle') RETURNING id INTO v_risk_sec;
+  INSERT INTO public.quote_items (quote_id, section_id, product_id,
+    price_per_unit, current_cost, total_units_needed, unit_size)
+  VALUES (v_quote_void, v_risk_sec, v_product, 10, 6, 2, 'gal');
+  SELECT public.convert_quote_to_order(v_quote_void) INTO v_res;
+  v_order_void := (v_res->>'order_id')::uuid;
+  SELECT public.create_invoice_from_order(
+    v_order_void, v_admin, 'chemical_sale', 'e2e-b2-pre-void-draft-' || v_suffix
+  ) INTO v_invoice_void;
+  PERFORM set_config('app.admin_override', 'true', true);
+  UPDATE public.orders SET status = 'fulfilled' WHERE id = v_order_void;
+  PERFORM set_config('app.admin_override', 'false', true);
+  SELECT public.void_order(
+    v_order_void, v_admin, '[E2E] draft cleanup lifecycle proof',
+    'e2e-b2-void-order-' || v_suffix
+  ) INTO v_res;
+  PERFORM set_config('app.admin_override', 'false', true);
+  IF NOT EXISTS (
+    SELECT 1 FROM public.orders o
+    JOIN public.invoices i ON i.order_id = o.id
+    WHERE o.id = v_order_void
+      AND o.status = 'voided'
+      AND i.id = v_invoice_void
+      AND i.status = 'cancelled'
+  ) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: void_order could not cancel its linked draft invoice';
+  END IF;
+
+  -- ===== FAIL-CLOSED 2b: all writers reject late drafts; legacy draft blocks reopen =====
+  INSERT INTO public.quotes (quote_number, customer_id, created_by, status, commission_split)
+  VALUES ('E2E-B2-QL-' || v_suffix, v_customer, v_admin, 'sent', '{"splits": []}'::jsonb)
+  RETURNING id INTO v_quote_draft;
+  INSERT INTO public.quote_sections (quote_id, section_name)
+  VALUES (v_quote_draft, 'Late draft risk') RETURNING id INTO v_risk_sec;
+  INSERT INTO public.quote_items (quote_id, section_id, product_id,
+    price_per_unit, current_cost, total_units_needed, unit_size)
+  VALUES (v_quote_draft, v_risk_sec, v_product, 10, 6, 10, 'gal');
+  SELECT public.convert_quote_to_order(v_quote_draft) INTO v_res;
+  v_order_draft := (v_res->>'order_id')::uuid;
+  IF v_res->>'status' IS DISTINCT FROM 'created' OR v_order_draft IS NULL THEN
+    RAISE EXCEPTION 'SMOKE_SETUP: late-draft conversion failed: %', v_res;
+  END IF;
+  SELECT id INTO v_order_item_draft
+  FROM public.order_items WHERE order_id = v_order_draft ORDER BY id LIMIT 1;
+  -- Keep this writer-backdoor fixture independent of quote-total trigger drift:
+  -- the allocated split engine only reaches its direct INSERT for a positive,
+  -- fully priced customer subtotal.
+  UPDATE public.order_items
+     SET price_per_unit = 10,
+         cost_per_unit = 6,
+         total_price = 100,
+         pricing_pending = false
+   WHERE id = v_order_item_draft;
+  INSERT INTO public.fields (customer_id, field_name, total_acres)
+  VALUES (v_customer, '[E2E] B2 split field ' || v_suffix, 10)
+  RETURNING id INTO v_field;
+  INSERT INTO public.order_item_field_allocations (order_item_id, field_id, acres)
+  VALUES (v_order_item_draft, v_field, 10);
+  INSERT INTO public.invoices (
+    invoice_number, customer_id, order_id, invoice_type, status,
+    total_amount_cents, total_cost_cents, invoice_date, due_date, created_by
+  ) VALUES (
+    'E2E-B2-CANCEL-' || v_suffix, v_customer, v_order_draft,
+    'chemical_sale', 'draft', 1000, 600, current_date, current_date + 30, v_admin
+  ) RETURNING id INTO v_invoice_cancelled;
+  IF NOT EXISTS (
+    SELECT 1 FROM public.invoices
+     WHERE id = v_invoice_cancelled
+       AND status IN ('draft', 'unposted')
+       AND total_amount_cents > 0
+  ) THEN
+    RAISE EXCEPTION 'SMOKE_SETUP: nonzero draft invoice required before cancel_order proof';
+  END IF;
+  SELECT public.cancel_order(v_order_draft, v_admin) INTO v_res;
+  PERFORM set_config('app.admin_override', 'false', true);
+  IF NOT EXISTS (
+    SELECT 1 FROM public.invoices
+     WHERE id = v_invoice_cancelled
+       AND status = 'cancelled'
+       AND total_amount_cents = 0
+       AND paid_amount_cents = 0
+       AND prepay_applied_cents = 0
+       AND write_off_cents = 0
+  ) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: cancel_order did not close and zero its nonzero draft invoice';
+  END IF;
+
+  BEGIN
+    PERFORM public.create_invoice_from_order(
+      v_order_draft, v_admin, 'chemical_sale', 'e2e-b2-late-draft-' || v_suffix
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: mono invoice creator accepted a cancelled order';
+  EXCEPTION WHEN OTHERS THEN
+    v_err := SQLERRM;
+    IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_err NOT LIKE 'ORDER_INVOICE_TERMINAL:%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: mono late-draft guard returned wrong error: %', v_err;
+    END IF;
+  END;
+
+  BEGIN
+    PERFORM public.create_split_invoices_from_order(
+      v_order_draft, v_admin, 'chemical_sale', 'e2e-b2-late-split-' || v_suffix
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: split invoice creator accepted a cancelled order';
+  EXCEPTION WHEN OTHERS THEN
+    v_err := SQLERRM;
+    IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_err NOT LIKE 'CANCELLED_DELIVERY_INVOICE_WRITER_REQUIRED:%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: split late-draft guard returned wrong error: %', v_err;
+    END IF;
+  END;
+
+  BEGIN
+    PERFORM public.save_invoice(
+      jsonb_build_object(
+        'order_id', v_order_draft,
+        'customer_id', v_customer,
+        'invoice_type', 'chemical_sale',
+        'status', 'draft',
+        'invoice_date', current_date
+      ),
+      '[]'::jsonb,
+      'e2e-b2-late-save-' || v_suffix
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: save_invoice accepted a cancelled order';
+  EXCEPTION WHEN OTHERS THEN
+    v_err := SQLERRM;
+    IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_err NOT LIKE 'CANCELLED_DELIVERY_INVOICE_WRITER_REQUIRED:%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: save_invoice late-draft guard returned wrong error: %', v_err;
+    END IF;
+  END;
+
+  IF EXISTS (
+    SELECT 1 FROM public.invoices
+    WHERE order_id = v_order_draft AND status NOT IN ('voided', 'cancelled')
+  ) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: rejected late writer left an active invoice';
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM public.idempotency_keys
+    WHERE idempotency_key IN (
+      'e2e-b2-late-draft-' || v_suffix,
+      'e2e-b2-late-split-' || v_suffix,
+      'e2e-b2-late-save-' || v_suffix
+    )
+  ) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: rejected late writer left idempotency residue';
+  END IF;
+
+  -- Simulate a draft created by the pre-fix writer. The trigger is temporarily
+  -- disabled only inside this rollback-only transaction to seed legacy state;
+  -- the reopen RPC must still fail closed against that visible row.
+  ALTER TABLE public.invoices DISABLE TRIGGER trg_guard_invoice_terminal_order;
+  INSERT INTO public.invoices (
+    invoice_number, customer_id, order_id, invoice_type, status,
+    total_amount_cents, invoice_date, due_date, created_by
+  ) VALUES (
+    'E2E-B2-LATE-' || v_suffix, v_customer, v_order_draft,
+    'chemical_sale', 'draft', 1000, current_date, current_date + 30, v_admin
+  ) RETURNING id INTO v_invoice_draft;
+  ALTER TABLE public.invoices ENABLE TRIGGER trg_guard_invoice_terminal_order;
+
+  BEGIN
+    PERFORM public.revert_quote_status(
+      v_quote_draft, 'must reject late draft invoice', v_admin,
+      'e2e-b2-draft-' || v_suffix
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: reopened a cancelled order with a late draft invoice';
+  EXCEPTION WHEN OTHERS THEN
+    v_err := SQLERRM;
+    IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_err NOT LIKE 'QUOTE_REOPEN_ACTIVE_INVOICE:%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: late-draft guard returned wrong error: %', v_err;
+    END IF;
+  END;
+  IF (SELECT status FROM public.invoices WHERE id = v_invoice_draft) IS DISTINCT FROM 'draft' THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: rejected reopen changed the late draft invoice';
+  END IF;
 
   -- ===== FAIL-CLOSED 3: a paid commission survives cancellation =====
   INSERT INTO public.quotes (quote_number, customer_id, created_by, status, commission_split)
@@ -275,6 +672,7 @@ BEGIN
 
   IF (SELECT status FROM public.quotes WHERE id = v_quote_completed) IS DISTINCT FROM 'accepted'
      OR (SELECT status FROM public.quotes WHERE id = v_quote_invoice) IS DISTINCT FROM 'accepted'
+     OR (SELECT status FROM public.quotes WHERE id = v_quote_draft) IS DISTINCT FROM 'accepted'
      OR (SELECT status FROM public.quotes WHERE id = v_quote_commission) IS DISTINCT FROM 'accepted' THEN
     RAISE EXCEPTION 'SMOKE_FAIL: rejected financial reopen changed a quote status';
   END IF;
@@ -303,6 +701,21 @@ BEGIN
   IF v_res->>'new_status' IS DISTINCT FROM 'sent' THEN
     RAISE EXCEPTION 'SMOKE_FAIL: revert returned %, expected new_status=sent', v_res;
   END IF;
+
+  -- Reopening the quote must not reopen its historical order as an invoice
+  -- source. Prove the writer is still blocked after the successful rescue.
+  BEGIN
+    PERFORM public.create_invoice_from_order(
+      v_order1, v_admin, 'chemical_sale', 'e2e-b2-post-reopen-invoice-' || v_suffix
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: invoice creator accepted the old order after quote reopen';
+  EXCEPTION WHEN OTHERS THEN
+    v_err := SQLERRM;
+    IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_err NOT LIKE 'ORDER_INVOICE_TERMINAL:%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: post-reopen invoice guard returned wrong error: %', v_err;
+    END IF;
+  END;
 
   SELECT count(*) INTO v_audit_before
   FROM public.financial_audit_log

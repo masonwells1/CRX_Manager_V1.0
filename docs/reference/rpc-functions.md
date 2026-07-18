@@ -80,7 +80,7 @@ Migrations `20260714220000` through `20260714224000` preserve existing public si
 - `admin_update_profile()` — admin-only profile updates (name, role, email, active flag)
 - `save_quote_template()` — Saves quote template with sections and items
 - `create_quote_from_template()` — Creates a new quote from a saved template
-- `revert_quote_status(p_quote_id, p_reason, p_performed_by, p_idempotency_key)` → jsonb — admin/sales_rep, strict-actor. Status revert (e.g. accepted → sent) under an `app.admin_override` bracket; powers QuoteBuilder "unstick" actions.
+- `revert_quote_status(p_quote_id, p_reason, p_performed_by, p_idempotency_key)` → jsonb — admin/sales_rep, strict-actor. Status revert (e.g. accepted → sent) under an `app.admin_override` bracket; powers QuoteBuilder "unstick" actions. **Prepared migration `20260718193000` (not yet applied)** restricts this to clean cancelled whole-conversion quotes: delivered activity, any nonterminal invoice, or a paid commission fails closed, and idempotent retries are bound to the exact quote/reason/actor request. The same migration adds the central serialized invoice guard that blocks whole-order drafts on cancelled orders but preserves the audited completed-delivery recovery and posting path through an owner-only transaction capability plus exact content revalidation.
 
 ## Order & Delivery
 - `convert_quote_to_order()` — whole-quote conversion; also releases inventory holds linked to the quote. Copies `qi.notes` to `order_items.notes` and aggregates section_header_notes into `orders.program_notes`. Since `20260610145253`: rejects draft/declined/expired/cancelled quotes (`BOOKING_CLOSED`), rejects partially-drawn quotes (`BOOKING_PARTIALLY_DRAWN`), and marks all products fully drawn in `quote_product_draws`

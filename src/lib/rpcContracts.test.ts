@@ -1386,6 +1386,7 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   'create_delivery_with_items',
   'create_direct_order',
   'create_followup_delivery',
+  'create_invoice_for_unbilled_delivery',
   'create_invoice_from_order',
   'create_label_draft',
   'create_order_from_blend_ticket',
@@ -1567,6 +1568,9 @@ const IDEMPOTENCY_BODY_EXEMPT: Record<
   // The public wrapper authorizes active customer scope before delegating to
   // the directly non-executable implementation that owns canonical replay.
   save_invoice: 'delegated',
+  // The public wrapper mints a private transaction capability before calling
+  // the owner-only mature implementation that owns canonical replay.
+  create_invoice_for_unbilled_delivery: 'delegated',
   // The public wrapper hydrates an omitted cost only for a recognized existing
   // line, then delegates to the directly non-executable integer-cents writer
   // that owns the canonical replay lookup/save.
@@ -1742,6 +1746,23 @@ describe('Idempotency BODY verification (reads migration SQL)', () => {
     expect(implementationSource).toContain("v_existing := check_idempotency(p_idempotency_key, 'save_invoice')");
     expect(implementationSource).toContain("PERFORM save_idempotency(p_idempotency_key, 'save_invoice'");
     expect(IDEMPOTENCY_BODY_EXEMPT.save_invoice).toBe('delegated');
+  });
+
+  it('create_invoice_for_unbilled_delivery delegates privately to its idempotent implementation', () => {
+    const files = getMigrationFiles();
+    const wrapper = files.find(
+      ({ name }) => name === '20260718193000_correct_payment_void_and_quote_retry_contract.sql'
+    )?.content;
+    const implementationSource = files.find(
+      ({ name }) => name === '20260712170000_unbilled_delivery_guard_ignores_soft_deleted.sql'
+    )?.content;
+
+    expect(wrapper).toContain('RENAME TO _create_invoice_for_unbilled_delivery_impl_20260718');
+    expect(wrapper).toMatch(/REVOKE ALL ON FUNCTION public\._create_invoice_for_unbilled_delivery_impl_20260718[\s\S]*FROM PUBLIC, anon, authenticated, service_role/);
+    expect(wrapper).toMatch(/INSERT INTO public\.invoice_delivery_recovery_capabilities[\s\S]*public\._create_invoice_for_unbilled_delivery_impl_20260718/);
+    expect(implementationSource).toContain("v_existing := check_idempotency(p_idempotency_key, 'create_invoice_for_unbilled_delivery')");
+    expect(implementationSource).toContain("PERFORM save_idempotency(p_idempotency_key, 'create_invoice_for_unbilled_delivery', v_result)");
+    expect(IDEMPOTENCY_BODY_EXEMPT.create_invoice_for_unbilled_delivery).toBe('delegated');
   });
 
   it('save_purchase_order hydrates omitted cost before delegating to its idempotent implementation', () => {
@@ -1975,6 +1996,7 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
   check_rate_limit: 'rate-limit counter intentionally records every invocation, including retries',
   check_remainder_reminders: 'maintenance reminder sweep uses persisted sent markers to deduplicate',
   check_unpriced_orders: 'cron reminder sweep uses persisted reminder and escalation sent markers',
+  guard_invoice_terminal_order: 'trigger-only central invoice lifecycle guard; direct client EXECUTE is revoked',
   mark_overdue_invoices: 'service-role maintenance updates only invoices currently eligible as overdue',
   recompute_job_applied_acres: 'trigger-only derived-total recomputation; direct client EXECUTE is revoked',
   reconcile_prepay_balances: 'convergent repair sets balances to recomputed ledger truth',
