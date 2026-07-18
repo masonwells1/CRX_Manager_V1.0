@@ -60,6 +60,7 @@ function makeProduct(overrides?: Partial<Product>): Product {
     internal_notes: null,
     updated_at: '',
     ...overrides,
+    pricing_version: overrides?.pricing_version ?? 1,
   };
 }
 

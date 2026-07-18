@@ -4,40 +4,20 @@ import Modal from '../ui/Modal';
 import Button from '../ui/Button';
 import { useToast } from '../ui/Toast';
 import { supabase, checkMutationResult } from '../../lib/db';
-import { processDocumentWithOCR, isCSVFile, isOCRSupported } from '../../lib/documentOCR';
+import { isCSVFile } from '../../lib/documentOCR';
 import { Sentry } from '../../lib/sentry';
+import {
+  buildProductInsert,
+  isProductImportStringField,
+  isRetiredPricingColumn,
+  normalizeProductImportHeader,
+  type ParsedProduct,
+} from './bulkProductImportSafety';
 
 interface BulkProductImportProps {
   open: boolean;
   onClose: () => void;
   onSuccess: () => void;
-}
-
-interface ParsedProduct {
-  product_name: string;
-  sku?: string;
-  category?: string;
-  use_timing?: string;
-  vendor?: string;
-  manufacturer?: string;
-  container_size?: number;
-  unit_size?: string;
-  epa_registration?: string;
-  current_cost?: number;
-  tier1_price?: number;
-  tier1_margin?: number;
-  tier2_price?: number;
-  tier2_margin?: number;
-  tier3_price?: number;
-  tier3_margin?: number;
-  suggested_rate?: string;
-  rate_per_acre?: number;
-  rate_unit?: string;
-  product_form?: string;
-  inventory_unit?: string;
-  container_unit?: string;
-  container_type?: string;
-  notes?: string;
 }
 
 interface ValidationResult {
@@ -55,13 +35,6 @@ const FIELD_MAPPINGS: Record<string, string[]> = {
   container_size: ['container_size', 'size', 'container', 'package_size'],
   unit_size: ['unit_size', 'unit', 'uom', 'units'],
   epa_registration: ['epa_registration', 'epa_reg', 'epa_number', 'epa', 'registration_number', 'reg_number'],
-  current_cost: ['current_cost', 'cost', 'price', 'unit_cost', 'base_cost'],
-  tier1_price: ['tier1_price', 'tier_1_price', 't1_price', 'price_tier1'],
-  tier1_margin: ['tier1_margin', 'tier_1_margin', 't1_margin', 'margin_tier1', 'tier1_margin_%'],
-  tier2_price: ['tier2_price', 'tier_2_price', 't2_price', 'price_tier2'],
-  tier2_margin: ['tier2_margin', 'tier_2_margin', 't2_margin', 'margin_tier2', 'tier2_margin_%'],
-  tier3_price: ['tier3_price', 'tier_3_price', 't3_price', 'price_tier3'],
-  tier3_margin: ['tier3_margin', 'tier_3_margin', 't3_margin', 'margin_tier3', 'tier3_margin_%'],
   suggested_rate: ['suggested_rate', 'rate', 'application_rate', 'use_rate'],
   rate_per_acre: ['rate_per_acre', 'acre_rate', 'per_acre', 'application_per_acre'],
   rate_unit: ['rate_unit', 'unit', 'rate_uom'],
@@ -79,7 +52,6 @@ export default function BulkProductImport({ open, onClose, onSuccess }: BulkProd
   const [uploading, setUploading] = useState(false);
   const [validation, setValidation] = useState<ValidationResult | null>(null);
   const [uploadResults, setUploadResults] = useState<{ success: number; failed: number } | null>(null);
-  const [importWarnings, setImportWarnings] = useState<string[]>([]);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
@@ -89,22 +61,19 @@ export default function BulkProductImport({ open, onClose, onSuccess }: BulkProd
         e.target.value = '';
         return;
       }
-      const isCSV = isCSVFile(selectedFile);
-      const isOCR = isOCRSupported(selectedFile);
-      if (!isCSV && !isOCR) {
-        toast('error', 'Invalid file type. Please upload a CSV, PDF, or image file.');
+      if (!isCSVFile(selectedFile)) {
+        toast('error', 'Invalid file type. Bulk Product Import accepts CSV files only.');
         e.target.value = '';
         return;
       }
       setFile(selectedFile);
       setValidation(null);
       setUploadResults(null);
-      setImportWarnings([]);
     }
   };
 
   const detectFieldMapping = (header: string): string | null => {
-    const normalized = header.toLowerCase().trim().replace(/\s+/g, '_');
+    const normalized = normalizeProductImportHeader(header);
     for (const [field, aliases] of Object.entries(FIELD_MAPPINGS)) {
       if (aliases.includes(normalized)) {
         return field;
@@ -163,70 +132,23 @@ export default function BulkProductImport({ open, onClose, onSuccess }: BulkProd
     return { headers, rows };
   };
 
-  const parseWithVisionOCR = async (file: File): Promise<{ valid: ParsedProduct[]; invalid: Array<{ row: number; error: string; data: Record<string, string> }> }> => {
-    const result = await processDocumentWithOCR(file, 'product_list');
-
-    if (!result.success || !result.parsed_data) {
-      toast('error', result.error || 'OCR processing failed. Try a clearer image or CSV instead.');
-      return { valid: [], invalid: [] };
-    }
-
-    const data = result.parsed_data as {
-      items?: Array<{
-        product_name: string;
-        sku?: string;
-        category?: string;
-        vendor?: string;
-        cost?: number;
-        tier1_price?: number;
-        unit_size?: string;
-        epa_reg?: string;
-      }>;
-    };
-
-    if (!data.items || data.items.length === 0) {
-      toast('error', 'No products found in document.');
-      return { valid: [], invalid: [] };
-    }
-
-    const valid: ParsedProduct[] = [];
-    const invalid: Array<{ row: number; error: string; data: Record<string, string> }> = [];
-
-    data.items.forEach((item, idx) => {
-      if (!item.product_name) {
-        invalid.push({ row: idx + 1, error: 'Missing product name', data: { ...item } as unknown as Record<string, string> });
-        return;
-      }
-      valid.push({
-        product_name: item.product_name,
-        sku: item.sku,
-        category: item.category,
-        vendor: item.vendor,
-        current_cost: item.cost,
-        tier1_price: item.tier1_price,
-        unit_size: item.unit_size,
-        epa_registration: item.epa_reg,
-      });
-    });
-
-    return { valid, invalid };
-  };
-
   const handleParse = async () => {
     if (!file) return;
     setParsing(true);
 
     try {
-      // Route: CSV → client-side parser, PDF/Image → Vision OCR
-      if (!isCSVFile(file)) {
-        const ocrResult = await parseWithVisionOCR(file);
-        setValidation(ocrResult);
+      const text = await file.text();
+      const { headers, rows } = parseCSV(text);
+
+      const pricingHeaders = headers.filter(isRetiredPricingColumn);
+      if (pricingHeaders.length > 0) {
+        toast(
+          'error',
+          `Pricing columns are not allowed in Bulk Product Import: ${pricingHeaders.join(', ')}. Use the governed pricing worksheet or Product page instead.`,
+        );
         setParsing(false);
         return;
       }
-
-      const text = await file.text();
-      const { headers, rows } = parseCSV(text);
 
       if (rows.length === 0) {
         toast('error', 'No valid data found in file');
@@ -266,19 +188,9 @@ export default function BulkProductImport({ open, onClose, onSuccess }: BulkProd
           if (field) {
             rowData[field] = value;
 
-            if (field === 'product_name' || field === 'sku' || field === 'category' ||
-                field === 'vendor' || field === 'manufacturer' || field === 'unit_size' ||
-                field === 'epa_registration' || field === 'suggested_rate' || field === 'rate_unit' || field === 'notes' ||
-                field === 'use_timing') {
+            if (isProductImportStringField(field)) {
               if (value) product[field] = value;
-            } else if (field === 'container_size' || field === 'current_cost' ||
-                       field === 'tier1_price' || field === 'tier2_price' ||
-                       field === 'tier3_price' || field === 'rate_per_acre') {
-              const num = parseFloat(value);
-              if (!isNaN(num) && num >= 0) {
-                product[field] = num;
-              }
-            } else if (field === 'tier1_margin' || field === 'tier2_margin' || field === 'tier3_margin') {
+            } else if (field === 'container_size' || field === 'rate_per_acre') {
               const num = parseFloat(value);
               if (!isNaN(num) && num >= 0) {
                 product[field] = num;
@@ -299,30 +211,6 @@ export default function BulkProductImport({ open, onClose, onSuccess }: BulkProd
         valid.push(product as ParsedProduct);
       });
 
-      // Validation warnings (non-blocking)
-      const warnings: string[] = [];
-      valid.forEach((p, idx) => {
-        const row = idx + 2;
-        // Margin > 1 warning
-        for (const mf of ['tier1_margin', 'tier2_margin', 'tier3_margin'] as const) {
-          if (p[mf] != null && p[mf]! > 1) {
-            warnings.push(`Row ${row}: ${mf} is ${p[mf]} — margins should be 0–1 (e.g., 0.25 = 25%). Verify your data.`);
-          }
-        }
-        // Tier price hierarchy warnings
-        if (p.tier1_price != null && p.tier2_price != null && p.tier1_price > p.tier2_price) {
-          warnings.push(`Row ${row}: tier1_price ($${p.tier1_price}) > tier2_price ($${p.tier2_price}) — tier 1 is usually the lowest price.`);
-        }
-        if (p.tier2_price != null && p.tier3_price != null && p.tier2_price > p.tier3_price) {
-          warnings.push(`Row ${row}: tier2_price ($${p.tier2_price}) > tier3_price ($${p.tier3_price}) — verify pricing tiers.`);
-        }
-        // Cost vs price warning
-        if (p.current_cost != null && p.tier1_price != null && p.current_cost > p.tier1_price) {
-          warnings.push(`Row ${row}: cost ($${p.current_cost}) > tier1_price ($${p.tier1_price}) — selling below cost.`);
-        }
-      });
-      setImportWarnings(warnings);
-
       setValidation({ valid, invalid });
     } catch {
       toast('error', 'Failed to parse file.');
@@ -338,10 +226,7 @@ export default function BulkProductImport({ open, onClose, onSuccess }: BulkProd
     let failed = 0;
 
     for (const product of validation.valid) {
-      const productResult = await supabase.from('products').insert({
-        ...product,
-        is_active: true,
-      }).select();
+      const productResult = await supabase.from('products').insert(buildProductInsert(product)).select();
 
       if (productResult.error) {
         Sentry.captureException(productResult.error instanceof Error ? productResult.error : new Error(String(productResult.error)), { extra: { context: 'Failed to insert product' } });
@@ -380,20 +265,19 @@ export default function BulkProductImport({ open, onClose, onSuccess }: BulkProd
             How to Import
           </h4>
           <ol className="text-xs text-secondary space-y-1 list-decimal list-inside">
-            <li>Upload a CSV, PDF product list, or photo of a product sheet</li>
-            <li>Ensure your file has product names (CSV needs a product_name column)</li>
-            <li>PDF/image files are processed with Google Vision OCR</li>
+            <li>Upload a CSV containing product identity and catalog details</li>
+            <li>Include a product_name column</li>
             <li>Review detected products and import</li>
           </ol>
           <div className="mt-3 p-2 bg-white rounded border border-gray-200">
             <p className="text-xs font-medium text-secondary mb-1">Supported Columns:</p>
             <p className="text-xs text-gray-500 font-mono">
               product_name, sku, category, vendor, manufacturer, container_size, unit_size,
-              epa_registration, current_cost, tier1_price, tier1_margin, tier2_price, tier2_margin,
-              tier3_price, tier3_margin, suggested_rate, rate_per_acre, rate_unit, notes
+              epa_registration, suggested_rate, rate_per_acre, rate_unit, product_form,
+              inventory_unit, container_unit, container_type, use_timing, notes
             </p>
-            <p className="text-xs text-green-600 mt-2">
-              💡 <span className="font-medium">Tip:</span> Margin columns are Net Margins (profit % of price). Gross margins (markup %) are calculated automatically. Prices will auto-recalculate when costs change!
+            <p className="text-xs text-amber-700 mt-2">
+              Pricing columns are rejected. Update cost, margins, and tier prices from the Product page or governed pricing worksheet.
             </p>
           </div>
         </div>
@@ -403,7 +287,8 @@ export default function BulkProductImport({ open, onClose, onSuccess }: BulkProd
             <label className="block text-sm font-medium text-secondary mb-2">Select File</label>
             <input
               type="file"
-              accept=".csv,.pdf,.jpg,.jpeg,.png,.webp,image/*"
+              aria-label="Select File"
+              accept=".csv,text/csv"
               onChange={handleFileChange}
               className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-crx-green-light file:text-crx-green hover:file:bg-crx-green hover:file:text-white transition-colors cursor-pointer"
             />
@@ -411,7 +296,6 @@ export default function BulkProductImport({ open, onClose, onSuccess }: BulkProd
               <div className="mt-2 flex items-center gap-2 text-xs text-secondary">
                 <FileText className="w-4 h-4" />
                 <span>{file.name} ({(file.size / 1024).toFixed(1)} KB)</span>
-                {!isCSVFile(file) && <span className="text-blue-600">(Vision OCR)</span>}
               </div>
             )}
           </div>
@@ -472,19 +356,6 @@ export default function BulkProductImport({ open, onClose, onSuccess }: BulkProd
               </div>
             )}
 
-            {importWarnings.length > 0 && (
-              <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg max-h-32 overflow-y-auto">
-                <div className="flex items-center gap-2 mb-1">
-                  <AlertCircle className="w-4 h-4 text-amber-600 flex-shrink-0" />
-                  <p className="text-xs font-medium text-amber-800">Data Warnings ({importWarnings.length})</p>
-                </div>
-                <div className="space-y-1">
-                  {importWarnings.map((w, idx) => (
-                    <p key={idx} className="text-xs text-amber-700">{w}</p>
-                  ))}
-                </div>
-              </div>
-            )}
           </div>
         )}
 
@@ -510,7 +381,7 @@ export default function BulkProductImport({ open, onClose, onSuccess }: BulkProd
               disabled={!file || parsing}
               loading={parsing}
             >
-              {file && !isCSVFile(file) ? (parsing ? 'Processing with Vision OCR...' : 'Process with Vision OCR') : 'Parse File'}
+              {parsing ? 'Parsing...' : 'Parse File'}
             </Button>
           )}
           {validation && !uploadResults && (
