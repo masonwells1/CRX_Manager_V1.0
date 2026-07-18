@@ -120,10 +120,10 @@ CREATE TRIGGER trg_field_app_billing_lines_updated_at
 CREATE TABLE IF NOT EXISTS public.invoice_line_shares (
   id                    uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   billing_line_id       uuid NOT NULL
-                          REFERENCES public.field_app_billing_lines(id) ON DELETE CASCADE,
-                          -- draft-only cascade (line -> shares); NOT the immutability mechanism (§5)
+                          REFERENCES public.field_app_billing_lines(id) ON DELETE RESTRICT,
+                          -- explicit share cleanup is required before a draft line can be removed
   invoice_item_id       uuid NOT NULL
-                          REFERENCES public.invoice_items(id) ON DELETE CASCADE,  -- child item, this customer
+                          REFERENCES public.invoice_items(id) ON DELETE RESTRICT, -- prevents parent-cascade snapshot erasure
   customer_id           uuid NOT NULL REFERENCES public.customers(id),
 
   split_mode            text NOT NULL CHECK (split_mode IN ('field_default','custom')),
@@ -163,7 +163,7 @@ CREATE INDEX IF NOT EXISTS idx_invoice_line_shares_customer
 -- ---------------------------------------------------------------------------
 -- 4. Per-line vector must sum to exactly 100% (spec §3/§5). Deferrable so the
 --    save path can build a whole vector inside one transaction before the check runs.
---    Skips a line that was deleted (line -> shares cascade legitimately zeroes it).
+--    Skips a line explicitly deleted after its draft shares were explicitly removed.
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.trg_invoice_line_shares_sum_100()
 RETURNS trigger
@@ -322,10 +322,12 @@ CREATE TRIGGER trg_invoice_line_shares_frozen_when_posted
   FOR EACH ROW EXECUTE FUNCTION public.trg_invoice_line_shares_frozen_when_posted();
 
 -- ---------------------------------------------------------------------------
--- 6. RLS. All three tables: scoped SELECT for staff; NO browser INSERT/UPDATE/DELETE.
+-- 6. RLS. All three tables: scoped SELECT for staff; NO browser writes or table DDL.
 --    Every write happens inside the locked SECURITY DEFINER save path (Phase 3). The
 --    invariant triggers run as the migration owner, whose BYPASSRLS posture is required
---    by the preflight above. We additionally REVOKE direct DML from client roles.
+--    by the preflight above. We revoke every inherited table privilege from browser
+--    roles, then grant authenticated SELECT only; this also removes TRUNCATE, which
+--    bypasses RLS and row triggers.
 -- ---------------------------------------------------------------------------
 ALTER TABLE public.field_app_billing_sets  ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.field_app_billing_lines ENABLE ROW LEVEL SECURITY;
@@ -361,10 +363,18 @@ CREATE POLICY invoice_line_shares_select ON public.invoice_line_shares
     )
   );
 
--- No INSERT/UPDATE/DELETE policies exist -> RLS default-denies client DML. Belt-and-suspenders:
-REVOKE INSERT, UPDATE, DELETE ON public.field_app_billing_sets  FROM anon, authenticated;
-REVOKE INSERT, UPDATE, DELETE ON public.field_app_billing_lines FROM anon, authenticated;
-REVOKE INSERT, UPDATE, DELETE ON public.invoice_line_shares     FROM anon, authenticated;
+-- No write policies exist -> RLS default-denies row DML. Remove all inherited table
+-- privileges (including TRUNCATE/REFERENCES/TRIGGER/MAINTAIN), then restore SELECT only.
+REVOKE ALL PRIVILEGES ON TABLE public.field_app_billing_sets
+  FROM PUBLIC, anon, authenticated;
+REVOKE ALL PRIVILEGES ON TABLE public.field_app_billing_lines
+  FROM PUBLIC, anon, authenticated;
+REVOKE ALL PRIVILEGES ON TABLE public.invoice_line_shares
+  FROM PUBLIC, anon, authenticated;
+GRANT SELECT ON TABLE public.field_app_billing_sets,
+                      public.field_app_billing_lines,
+                      public.invoice_line_shares
+  TO authenticated;
 
 -- ---------------------------------------------------------------------------
 -- 7. Server-controlled email suppression for $0 / not-to-send invoices (spec §5).
@@ -381,9 +391,62 @@ BEGIN
   ) THEN
     ALTER TABLE public.invoices
       ADD CONSTRAINT invoices_send_disposition_ck
-      CHECK (send_disposition IN ('sendable','suppressed_zero_total'));
+      CHECK (
+        send_disposition IN ('sendable','suppressed_zero_total')
+        AND (send_disposition <> 'suppressed_zero_total' OR total_amount_cents = 0)
+      );
   END IF;
 END $$;
+
+-- The browser may update other invoice fields through existing policies, so the
+-- column needs its own database authority boundary. A SECURITY DEFINER save/post
+-- RPC runs as its BYPASSRLS owner; direct authenticated/anon writes do not.
+CREATE OR REPLACE FUNCTION public.trg_invoices_send_disposition_server_only()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY INVOKER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_server_authority boolean := false;
+BEGIN
+  SELECT COALESCE(r.rolbypassrls, false)
+    INTO v_server_authority
+    FROM pg_catalog.pg_roles r
+   WHERE r.rolname = current_user;
+
+  IF TG_OP = 'INSERT' THEN
+    IF NEW.send_disposition <> 'sendable'
+       AND NOT COALESCE(v_server_authority, false) THEN
+      RAISE EXCEPTION
+        'send_disposition is server-controlled'
+        USING ERRCODE = 'insufficient_privilege';
+    END IF;
+  ELSIF NEW.send_disposition IS DISTINCT FROM OLD.send_disposition
+        AND NOT COALESCE(v_server_authority, false) THEN
+    RAISE EXCEPTION
+      'send_disposition is server-controlled'
+      USING ERRCODE = 'insufficient_privilege';
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION public.trg_invoices_send_disposition_server_only()
+  FROM PUBLIC, anon, authenticated;
+
+DROP TRIGGER IF EXISTS trg_invoices_send_disposition_insert_server_only
+  ON public.invoices;
+CREATE TRIGGER trg_invoices_send_disposition_insert_server_only
+  BEFORE INSERT ON public.invoices
+  FOR EACH ROW EXECUTE FUNCTION public.trg_invoices_send_disposition_server_only();
+
+DROP TRIGGER IF EXISTS trg_invoices_send_disposition_update_server_only
+  ON public.invoices;
+CREATE TRIGGER trg_invoices_send_disposition_update_server_only
+  BEFORE UPDATE OF send_disposition ON public.invoices
+  FOR EACH ROW EXECUTE FUNCTION public.trg_invoices_send_disposition_server_only();
 
 COMMENT ON COLUMN public.invoices.send_disposition IS
   'Server-controlled email gate. suppressed_zero_total = $0 not-to-send invoice: recorded and visible in the account, contributes zero to AR/aging/finance charge, NOT marked paid, and every email path must refuse it. Default sendable. Never written by the browser.';

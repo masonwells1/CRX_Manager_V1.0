@@ -200,6 +200,12 @@ CREATE ROLE authenticated NOLOGIN;
 CREATE ROLE service_role NOLOGIN;
 CREATE SCHEMA auth;
 
+-- Mirror the live Supabase default privilege posture that originally granted
+-- authenticated more than row DML on newly created public tables. The migration
+-- must reduce its three new tables to explicit SELECT-only client access.
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
+  GRANT ALL ON TABLES TO authenticated;
+
 CREATE OR REPLACE FUNCTION auth.uid()
 RETURNS uuid LANGUAGE sql STABLE AS $$
   SELECT NULLIF(current_setting('request.jwt.claim.sub', true), '')::uuid
@@ -230,6 +236,7 @@ CREATE TABLE public.invoices (
   status text NOT NULL,
   posted_at timestamptz,
   invoice_group_id uuid,
+  total_amount_cents bigint NOT NULL DEFAULT 0,
   created_by uuid REFERENCES public.profiles(id),
   salesman_id uuid REFERENCES public.profiles(id)
 );
@@ -239,6 +246,7 @@ CREATE TABLE public.invoice_items (
   quantity numeric(12,4),
   acres numeric(12,2)
 );
+GRANT UPDATE ON public.invoices TO authenticated;
 `);
 
   const migration = readFileSync(MIGRATION, 'utf8');
@@ -266,9 +274,11 @@ CASCADE;
 
 INSERT INTO public.profiles (id) VALUES ('${ID.actor}');
 INSERT INTO public.customers (id) VALUES ('${ID.customerA}'), ('${ID.customerB}');
-INSERT INTO public.invoices (id, status, posted_at, created_by, salesman_id) VALUES
-  ('${ID.draftInvoice}', 'draft', NULL, '${ID.actor}', '${ID.actor}'),
-  ('${ID.postedInvoice}', 'posted', now(), '${ID.actor}', '${ID.actor}');
+INSERT INTO public.invoices (
+  id, status, posted_at, total_amount_cents, created_by, salesman_id
+) VALUES
+  ('${ID.draftInvoice}', 'draft', NULL, 0, '${ID.actor}', '${ID.actor}'),
+  ('${ID.postedInvoice}', 'posted', now(), 1000, '${ID.actor}', '${ID.actor}');
 INSERT INTO public.invoice_items (id, invoice_id, quantity, acres) VALUES
   ('${ID.itemA}', '${ID.draftInvoice}', 1, 1),
   ('${ID.itemB}', '${ID.draftInvoice}', 1, 1),
@@ -389,6 +399,83 @@ COMMIT;
   );
 }
 
+function provePostedParentCascade() {
+  resetFixture();
+  runSql(`
+BEGIN;
+${lineSql(ID.lineA, 'posted cascade source line')}
+${shareSql({ id: ID.shareA, line: ID.lineA, item: ID.itemA, customer: ID.customerA })}
+COMMIT;
+UPDATE public.invoices
+   SET status = 'posted', posted_at = now()
+ WHERE id = '${ID.draftInvoice}';
+`);
+  return expectRejected(
+    'posted allocation snapshots cannot be erased through parent cascades',
+    `BEGIN;
+     DELETE FROM public.invoice_items WHERE id = '${ID.itemA}';
+     DELETE FROM public.field_app_billing_lines WHERE id = '${ID.lineA}';
+     COMMIT;`,
+    /foreign key|still referenced|frozen.*posted/i,
+  );
+}
+
+function proveClientCannotTruncate() {
+  resetFixture();
+  return expectRejected(
+    'authenticated is SELECT-only and cannot TRUNCATE allocation tables',
+    `BEGIN;
+     SET LOCAL ROLE authenticated;
+     TRUNCATE TABLE public.field_app_billing_sets CASCADE;
+     COMMIT;`,
+    /permission denied/i,
+  );
+}
+
+function proveClientCannotSetSendDisposition() {
+  resetFixture();
+  return expectRejected(
+    'browser roles cannot change the server-controlled send disposition',
+    `BEGIN;
+     SET LOCAL ROLE authenticated;
+     UPDATE public.invoices
+        SET send_disposition = 'suppressed_zero_total'
+      WHERE id = '${ID.draftInvoice}';
+     COMMIT;`,
+    /server-controlled|permission denied/i,
+  );
+}
+
+function proveSuppressionRequiresZeroTotal() {
+  resetFixture();
+  return expectRejected(
+    'suppressed_zero_total cannot be assigned to a nonzero invoice',
+    `UPDATE public.invoices
+        SET send_disposition = 'suppressed_zero_total'
+      WHERE id = '${ID.postedInvoice}';`,
+    /send_disposition|check constraint|zero total/i,
+  );
+}
+
+function proveServerCanSuppressZeroTotal() {
+  resetFixture();
+  runSql(`
+UPDATE public.invoices
+   SET send_disposition = 'suppressed_zero_total'
+ WHERE id = '${ID.draftInvoice}';
+`);
+  const disposition = scalar(`
+    SELECT send_disposition
+      FROM public.invoices
+     WHERE id = '${ID.draftInvoice}';
+  `);
+  return {
+    label: 'server authority can suppress a zero-total invoice',
+    passed: disposition === 'suppressed_zero_total',
+    detail: `stored disposition = ${disposition}`,
+  };
+}
+
 function proveEmptyLine() {
   resetFixture();
   return expectRejected(
@@ -452,6 +539,11 @@ async function main() {
     proveTriggerSecurityContext(),
     proveMovedSourceLine(),
     provePostedReparent(),
+    provePostedParentCascade(),
+    proveClientCannotTruncate(),
+    proveClientCannotSetSendDisposition(),
+    proveSuppressionRequiresZeroTotal(),
+    proveServerCanSuppressZeroTotal(),
     proveEmptyLine(),
     await proveConcurrentVectors(),
   ];
