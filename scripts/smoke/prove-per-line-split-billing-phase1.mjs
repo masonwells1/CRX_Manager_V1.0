@@ -432,6 +432,74 @@ function proveClientCannotTruncate() {
   );
 }
 
+function proveApplicatorCannotReadBillingSources() {
+  resetFixture();
+  runSql(`
+CREATE OR REPLACE FUNCTION public.is_applicator() RETURNS boolean
+LANGUAGE sql STABLE AS $$ SELECT true $$;
+`);
+  const visibleRows = scalar(`
+SET ROLE authenticated;
+SELECT
+  (SELECT count(*) FROM public.field_app_billing_sets)::text || '|' ||
+  (SELECT count(*) FROM public.field_app_billing_lines)::text;
+RESET ROLE;
+`);
+  runSql(`
+CREATE OR REPLACE FUNCTION public.is_applicator() RETURNS boolean
+LANGUAGE sql STABLE AS $$ SELECT false $$;
+`);
+  return {
+    label: 'applicators cannot read unrelated split-billing source data',
+    passed: visibleRows === '0|0',
+    detail: `visible billing sets|lines = ${visibleRows}`,
+  };
+}
+
+function proveBlankSplitOverrideReasonRejected() {
+  resetFixture();
+  return expectRejected(
+    'custom split overrides require a nonblank audit reason',
+    `BEGIN;
+     ${lineSql(ID.lineA, 'blank split reason line')}
+     INSERT INTO public.invoice_line_shares (
+       id, billing_line_id, invoice_item_id, customer_id,
+       split_mode, split_micro_pct, allocated_quantity, allocated_acres,
+       base_unit_price_cents, base_price_source, price_mode, unit_price_cents,
+       amount_cents, split_override_reason, calculation_hash, vector_hash, created_by
+     ) VALUES (
+       '${ID.shareA}', '${ID.lineA}', '${ID.itemA}', '${ID.customerA}',
+       'custom', 100000000, 1, 1,
+       1000, 'proof', 'default', 1000,
+       1000, '   ', 'proof-calculation', 'proof-vector', '${ID.actor}'
+     );
+     COMMIT;`,
+    /split_reason|check constraint|audit reason/i,
+  );
+}
+
+function proveBlankPriceOverrideReasonRejected() {
+  resetFixture();
+  return expectRejected(
+    'price overrides require a nonblank audit reason',
+    `BEGIN;
+     ${lineSql(ID.lineA, 'blank price reason line')}
+     INSERT INTO public.invoice_line_shares (
+       id, billing_line_id, invoice_item_id, customer_id,
+       split_mode, split_micro_pct, allocated_quantity, allocated_acres,
+       base_unit_price_cents, base_price_source, price_mode, unit_price_cents,
+       amount_cents, price_override_reason, calculation_hash, vector_hash, created_by
+     ) VALUES (
+       '${ID.shareA}', '${ID.lineA}', '${ID.itemA}', '${ID.customerA}',
+       'field_default', 100000000, 1, 1,
+       1000, 'proof', 'override', 1100,
+       1100, E'\t', 'proof-calculation', 'proof-vector', '${ID.actor}'
+     );
+     COMMIT;`,
+    /price_reason|check constraint|audit reason/i,
+  );
+}
+
 function proveClientCannotSetSendDisposition() {
   resetFixture();
   return expectRejected(
@@ -541,6 +609,9 @@ async function main() {
     provePostedReparent(),
     provePostedParentCascade(),
     proveClientCannotTruncate(),
+    proveApplicatorCannotReadBillingSources(),
+    proveBlankSplitOverrideReasonRejected(),
+    proveBlankPriceOverrideReasonRejected(),
     proveClientCannotSetSendDisposition(),
     proveSuppressionRequiresZeroTotal(),
     proveServerCanSuppressZeroTotal(),

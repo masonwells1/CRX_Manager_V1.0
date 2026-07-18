@@ -8,8 +8,8 @@ Mason's explicit go + the §6.1 baseline billing cycle.
 Launch with `/run-loop docs/loops/per-line-split-billing-build-loop.md`.
 
 **Design spec (the contract):** `docs/plans/per-line-item-split-billing-spec-2026-07-17.md`.
-Phase 1 (schema) already shipped: migration `20260718210000`, draft PR **#166**, reviewers clean,
-**not applied live**. This loop starts at Phase 2.
+Phase 1 (schema) is isolated in migration `20260718210000` and draft PR **#166**,
+under final exact-hash review and **not applied live**. Phase 2 starts only after that gate closes.
 
 > **Runs where Codex lives.** This loop requires the headless `codex` CLI (`scripts/codex-hunt.mjs`
 > / `codex-gauntlet`). That CLI is on Mason's **local** machine — it is NOT available in Claude
@@ -124,7 +124,7 @@ Codex reviews before any merge. All work lands on the per-phase branch → draft
 
 | Phase | Status | Branch / PR | PROOF (Ran / Saw) | Gauntlet | Notes |
 |---|---|---|---|---|---|
-| 1 — schema | **IN PROGRESS** | `claude/billing-splits-plan-8ih4jg` / PR #166 | PROOF — Ran: the exact `20260718210000` migration in a network-isolated PostgreSQL 17 container plus two real concurrent sessions · Saw: trigger ownership posture `3/3/3/3`; source-line move, posted-item reparent, posted parent-cascade deletion, empty-line, authenticated TRUNCATE, browser disposition change, nonzero suppression, and 200% write-skew attempts rejected; valid server zero-total suppression accepted; one concurrent writer committed and final vector remained exactly 100,000,000; live Phase 1 objects/flag absent; live migration role `postgres` has BYPASSRLS | final exact-hash Codex + Claude verdicts pending after the latest confirmed findings were repaired | flag OFF/absent; not applied live; migration `210000` is above verified live high-water `20260718203206`; §6.1 baseline is still unmet (live field-app locations/shares/groups/job-linked invoices all zero) |
+| 1 — schema | **IN PROGRESS** | `claude/billing-splits-plan-8ih4jg` / PR #166 | PROOF — Ran: the exact `20260718210000` migration in a network-isolated PostgreSQL 17 container plus two real concurrent sessions · Saw: trigger ownership posture `3/3/3/3`; source-line move, posted-item reparent, posted parent-cascade deletion, empty-line, authenticated TRUNCATE, unrelated applicator read, blank split/price reasons, browser disposition change, nonzero suppression, and 200% write-skew attempts rejected; valid server zero-total suppression accepted; one concurrent writer committed and final vector remained exactly 100,000,000; live Phase 1 objects/flag absent; live migration role `postgres` has BYPASSRLS | final exact-hash Codex + Claude verdicts pending after the latest confirmed findings were repaired | flag OFF/absent; not applied live; migration `210000` is above verified live high-water `20260718203206`; §6.1 baseline is still unmet (live field-app locations/shares/groups/job-linked invoices all zero) |
 | 2 — calculator | TODO | — | — | — | start here |
 | 3 — save/post RPC | TODO | — | — | — | depends on Phase 2 |
 | 4 — UI + mail gates | TODO | — | — | — | depends on Phase 3; edge-fn deploy = Mason gate |

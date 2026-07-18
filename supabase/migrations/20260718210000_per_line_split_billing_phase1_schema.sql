@@ -148,11 +148,17 @@ CREATE TABLE IF NOT EXISTS public.invoice_line_shares (
 
   CONSTRAINT invoice_line_shares_item_unique UNIQUE (invoice_item_id),
   CONSTRAINT invoice_line_shares_line_customer_unique UNIQUE (billing_line_id, customer_id),
-  -- reason required in the modes that demand an audit trail
+  -- A reason in an override mode must contain visible text; blanks are not an audit trail.
   CONSTRAINT invoice_line_shares_split_reason_ck
-    CHECK (split_mode <> 'custom' OR split_override_reason IS NOT NULL),
+    CHECK (
+      split_mode <> 'custom'
+      OR (split_override_reason IS NOT NULL AND split_override_reason ~ '[^[:space:]]')
+    ),
   CONSTRAINT invoice_line_shares_price_reason_ck
-    CHECK (price_mode <> 'override' OR price_override_reason IS NOT NULL)
+    CHECK (
+      price_mode <> 'override'
+      OR (price_override_reason IS NOT NULL AND price_override_reason ~ '[^[:space:]]')
+    )
 );
 
 CREATE INDEX IF NOT EXISTS idx_invoice_line_shares_line
@@ -339,15 +345,17 @@ ALTER TABLE public.field_app_billing_sets  FORCE ROW LEVEL SECURITY;
 ALTER TABLE public.field_app_billing_lines FORCE ROW LEVEL SECURITY;
 ALTER TABLE public.invoice_line_shares     FORCE ROW LEVEL SECURITY;
 
--- billing_sets: staff read
+-- billing_sets: billing staff read. Applicators are deliberately excluded because
+-- these rows expose unrelated customer/job identifiers to any globally-authenticated
+-- applicator unless an assignment boundary is enforced through billing_set.job_id.
 DROP POLICY IF EXISTS field_app_billing_sets_select ON public.field_app_billing_sets;
 CREATE POLICY field_app_billing_sets_select ON public.field_app_billing_sets
-  FOR SELECT USING (is_admin() OR is_sales_rep() OR is_applicator());
+  FOR SELECT USING (is_admin() OR is_sales_rep());
 
--- billing_lines: staff read
+-- billing_lines: billing staff read; includes source quantities and prices.
 DROP POLICY IF EXISTS field_app_billing_lines_select ON public.field_app_billing_lines;
 CREATE POLICY field_app_billing_lines_select ON public.field_app_billing_lines
-  FOR SELECT USING (is_admin() OR is_sales_rep() OR is_applicator());
+  FOR SELECT USING (is_admin() OR is_sales_rep());
 
 -- invoice_line_shares: SELECT scoped through invoice_items -> invoices (mirror invoice_items_select)
 DROP POLICY IF EXISTS invoice_line_shares_select ON public.invoice_line_shares;
