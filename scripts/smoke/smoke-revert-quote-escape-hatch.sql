@@ -21,6 +21,10 @@ DECLARE
   v_res      jsonb;
   v_order1   uuid;
   v_order2   uuid;
+  v_delivery uuid;
+  v_invoice  uuid;
+  v_commission uuid;
+  v_commission_payment uuid;
   v_status   text;
   v_drawn    numeric;
   v_err      text;
@@ -68,6 +72,125 @@ BEGIN
   IF v_status <> 'accepted' THEN
     RAISE EXCEPTION 'SMOKE_SETUP: quote after cancel = %, expected accepted (whole-conversion stays closed)', v_status;
   END IF;
+
+  -- ===== NEGATIVE REGRESSIONS: durable order history must block reopen =====
+  UPDATE public.order_items
+     SET quantity_delivered = 1
+   WHERE order_id = v_order1;
+  BEGIN
+    PERFORM public.revert_quote_status(v_quote, 'must reject delivered quantity', v_admin,
+      'e2e-b2-delivered-' || v_suffix);
+    RAISE EXCEPTION 'SMOKE_FAIL: quote reopened despite delivered order quantity';
+  EXCEPTION WHEN OTHERS THEN
+    v_err := SQLERRM;
+    IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_err NOT LIKE 'QUOTE_REOPEN_HAS_ORDER_HISTORY:%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: delivered-quantity guard raised unexpected error: %', v_err;
+    END IF;
+  END;
+  UPDATE public.order_items
+     SET quantity_delivered = 0
+   WHERE order_id = v_order1;
+
+  BEGIN
+    INSERT INTO public.deliveries (
+      delivery_number, order_id, customer_id, scheduled_date, status, created_by
+    ) VALUES (
+      'E2E-B2-D-' || v_suffix, v_order1, v_customer, CURRENT_DATE,
+      'scheduled', v_admin
+    ) RETURNING id INTO v_delivery;
+    UPDATE public.deliveries
+       SET status = 'in_progress'
+     WHERE id = v_delivery;
+    UPDATE public.deliveries
+       SET status = 'completed', completed_at = now(), signed_by = 'B2 smoke signer'
+     WHERE id = v_delivery;
+    BEGIN
+      PERFORM public.revert_quote_status(v_quote, 'must reject completed delivery', v_admin,
+        'e2e-b2-completed-' || v_suffix);
+      RAISE EXCEPTION 'SMOKE_FAIL: quote reopened despite completed delivery history';
+    EXCEPTION WHEN OTHERS THEN
+      v_err := SQLERRM;
+      IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+      IF v_err NOT LIKE 'QUOTE_REOPEN_HAS_ORDER_HISTORY:%' THEN
+        RAISE EXCEPTION 'SMOKE_FAIL: completed-delivery guard raised unexpected error: %', v_err;
+      END IF;
+    END;
+    -- Roll back this completed-delivery fixture without deleting immutable history.
+    RAISE EXCEPTION 'B2_COMPLETED_FIXTURE_ROLLBACK';
+  EXCEPTION WHEN OTHERS THEN
+    v_err := SQLERRM;
+    IF v_err IS DISTINCT FROM 'B2_COMPLETED_FIXTURE_ROLLBACK' THEN RAISE; END IF;
+  END;
+
+  INSERT INTO public.invoices (
+    invoice_number, order_id, customer_id, invoice_type, status, created_by
+  ) VALUES (
+    'E2E-B2-I-' || v_suffix, v_order1, v_customer, 'chemical_sale', 'draft', v_admin
+  ) RETURNING id INTO v_invoice;
+  BEGIN
+    PERFORM public.revert_quote_status(v_quote, 'must reject active invoice', v_admin,
+      'e2e-b2-invoice-' || v_suffix);
+    RAISE EXCEPTION 'SMOKE_FAIL: quote reopened despite active invoice history';
+  EXCEPTION WHEN OTHERS THEN
+    v_err := SQLERRM;
+    IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_err NOT LIKE 'QUOTE_REOPEN_HAS_ORDER_HISTORY:%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: active-invoice guard raised unexpected error: %', v_err;
+    END IF;
+  END;
+  DELETE FROM public.invoices WHERE id = v_invoice;
+
+  INSERT INTO public.commissions (
+    order_id, customer_id, recipient, split_percentage,
+    commission_amount, order_profit, order_date, status, paid_date
+  ) VALUES (
+    v_order1, v_customer, 'B2 paid history', 100,
+    1, 1, CURRENT_DATE, 'paid', CURRENT_DATE
+  ) RETURNING id INTO v_commission;
+  BEGIN
+    PERFORM public.revert_quote_status(v_quote, 'must reject paid commission', v_admin,
+      'e2e-b2-paid-commission-' || v_suffix);
+    RAISE EXCEPTION 'SMOKE_FAIL: quote reopened despite paid commission history';
+  EXCEPTION WHEN OTHERS THEN
+    v_err := SQLERRM;
+    IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_err NOT LIKE 'QUOTE_REOPEN_HAS_ORDER_HISTORY:%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: paid-commission guard raised unexpected error: %', v_err;
+    END IF;
+  END;
+  DELETE FROM public.commissions WHERE id = v_commission;
+
+  INSERT INTO public.commissions (
+    order_id, customer_id, recipient, split_percentage,
+    commission_amount, order_profit, order_date, status
+  ) VALUES (
+    v_order1, v_customer, 'B2 batched history', 100,
+    1, 1, CURRENT_DATE, 'pending'
+  ) RETURNING id INTO v_commission;
+  INSERT INTO public.commission_payments (
+    payment_number, recipient_id, total_amount, status, created_by
+  ) VALUES (
+    'E2E-B2-CP-' || v_suffix, v_admin, 1, 'unposted', v_admin
+  ) RETURNING id INTO v_commission_payment;
+  INSERT INTO public.commission_payment_items (
+    commission_payment_id, commission_id, amount
+  ) VALUES (v_commission_payment, v_commission, 1);
+  BEGIN
+    PERFORM public.revert_quote_status(v_quote, 'must reject batched commission', v_admin,
+      'e2e-b2-batched-commission-' || v_suffix);
+    RAISE EXCEPTION 'SMOKE_FAIL: quote reopened despite active commission batch';
+  EXCEPTION WHEN OTHERS THEN
+    v_err := SQLERRM;
+    IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_err NOT LIKE 'QUOTE_REOPEN_HAS_ORDER_HISTORY:%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: batched-commission guard raised unexpected error: %', v_err;
+    END IF;
+  END;
+  DELETE FROM public.commission_payment_items
+   WHERE commission_payment_id = v_commission_payment;
+  DELETE FROM public.commission_payments WHERE id = v_commission_payment;
+  DELETE FROM public.commissions WHERE id = v_commission;
 
   -- ===== FAIL-FIRST: revert must rescue the stranded quote =====
   BEGIN

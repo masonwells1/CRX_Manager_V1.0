@@ -1,9 +1,10 @@
-# Migration History (760 migrations)
+# Migration History (761 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
 | # | Migration timestamp | Purpose |
 |---:|---|---|
+| 761 | 20260718232157 | **APPLIED LIVE 2026-07-18 as ledger version `20260718232157`. B2 quote-reopen history guard.** Preserves the exact prior live `revert_quote_status` body, including planned-hold recovery, while refusing accepted-quote reopen when any cancelled source order has delivered quantity, a completed delivery, an active invoice, a paid commission, or a commission in a non-voided payout batch. Both required reviewers returned CLEAN; the expanded rollback smoke failed first on the prior live function, then returned `SMOKE_PASS_ROLLBACK` after apply while retaining the untouched cancelled-order rescue. |
 | 760 | 20260718221505 | **APPLIED LIVE 2026-07-18 as ledger version `20260718221505`. Preserve reversed payment allocation history.** `void_invoice` blocks only active payment allocation sets and skips inactive payment-history rows when cleaning other invoice allocations, preserving Payment History provenance and the allocation set's cached total after `void_payment → void_invoice`. Both reviewers CLEAN; exact live chain returned `SMOKE_PASS_ROLLBACK` with the history row and cached total intact. |
 | 759 | 20260718213305 | **APPLIED LIVE 2026-07-18 as ledger version `20260718213305`. H3 payment-reversal recovery correction.** `void_invoice` counts only invoice allocations whose allocation set remains active, so `void_payment` preserves inactive history and the approved unapply-then-void recovery path completes. Both machine reviewers were CLEAN; exact live chain proved active allocation blocked, payment reversal succeeded, invoice then voided, and prepay-only void remained valid (`SMOKE_PASS_ROLLBACK`). |
 | 758 | 20260718203206 | **APPLIED LIVE 2026-07-18 as ledger version `20260718203206`. Retired obsolete `record_invoice_payment` writer.** Live preflight found zero active or positive legacy `payments` rows; the service-role-only compatibility stub raises `LEGACY_PAYMENT_PATH_DISABLED`, directing all new cash through reversible `allocate_payment` / `void_payment`. Both machine reviewers were CLEAN and the corrected exact rollback smoke returned `SMOKE_PASS_ROLLBACK`. |

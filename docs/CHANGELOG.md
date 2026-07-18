@@ -2,6 +2,15 @@
 
 All significant development milestones, in reverse chronological order.
 
+### 2026-07-18 — B2 quote-reopen history guard follow-up
+
+Applied live as migration `20260718232157`. The accepted-quote rescue path now refuses to create a full replacement order when any
+cancelled source order has delivered quantity, a completed delivery, an active invoice, a
+paid commission, or an active commission payout batch. The forward-only migration preserves
+the newer live planned-hold rebuild. Its rollback smoke adds negative cases for every durable
+history class, and the retired `record_invoice_payment` E2E callers now use the governed
+`allocate_payment` ledger.
+
 ### 2026-07-18 — Windows Codex proof stdin hang fixed
 
 The exact-SHA Codex push-proof wrapper now invokes `codex exec -` and supplies its fixed
