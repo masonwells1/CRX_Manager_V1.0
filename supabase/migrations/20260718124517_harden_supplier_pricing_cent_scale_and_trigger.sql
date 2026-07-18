@@ -4,7 +4,8 @@
 -- 20260717171331_restore_legacy_pricing_version_compat. Live preflight on
 -- 2026-07-18 confirmed the exact calculator/RPC baselines, enabled pricing
 -- triggers, zero active previews/exports, 604 Products, and zero fractional-
--- cent costs. The migration fails closed if those conditions drift.
+-- cent costs or tier prices. The executable preflight locks Products against
+-- concurrent writes and fails closed with the offending ids if that data drifts.
 --
 -- This additive correction is safe before frontend deployment. The separate
 -- strict enforcement cutover remains parked until the frontend is deployed
@@ -15,18 +16,23 @@
 --     pricing branch can round them into different money values;
 --   * fail closed unless the pricing-version trigger is enabled for origin or
 --     always firing (pg_trigger.tgenabled IN ('O', 'A')).
--- Sol adversarial-review finding closed by this forward-only migration:
+-- Adversarial-review findings closed by this forward-only migration:
 --   * make preview/apply per-acre effects mirror the existing tier-2/3 zero
 --     sentinel fallback enforced by recalc_product_price_per_acre().
+--   * retain actor-and-payload-bound export/preview replay in their durable
+--     receipts after the shared 24-hour idempotency cache expires.
 
 DO $preflight$
 DECLARE
   v_overload_count integer;
   v_body_md5 text;
+  v_export_overload_count integer;
   v_preview_overload_count integer;
   v_apply_overload_count integer;
+  v_export_body_md5 text;
   v_preview_body_md5 text;
   v_apply_body_md5 text;
+  v_fractional_cent_product_ids uuid[];
 BEGIN
   SELECT
     count(*),
@@ -56,6 +62,18 @@ BEGIN
   END IF;
 
   SELECT count(*), max(CASE WHEN p.oid = to_regprocedure(
+    'public.create_pricing_workbook_export(uuid[],uuid,text)'
+  ) THEN md5(replace(p.prosrc, E'\r\n', E'\n')) END)
+  INTO v_export_overload_count, v_export_body_md5
+  FROM pg_proc p
+  JOIN pg_namespace n ON n.oid = p.pronamespace
+  WHERE n.nspname = 'public' AND p.proname = 'create_pricing_workbook_export';
+  IF v_export_overload_count <> 1
+     OR v_export_body_md5 IS DISTINCT FROM '4a8598dc470df9af46e3d2c47e976a6e' THEN
+    RAISE EXCEPTION 'PHASE1A_EXPORT_RPC_BASELINE_MISMATCH';
+  END IF;
+
+  SELECT count(*), max(CASE WHEN p.oid = to_regprocedure(
     'public.preview_product_pricing_changes(text,uuid,jsonb,uuid,text)'
   ) THEN md5(replace(p.prosrc, E'\r\n', E'\n')) END)
   INTO v_preview_overload_count, v_preview_body_md5
@@ -80,6 +98,16 @@ BEGIN
   END IF;
 
   IF NOT EXISTS (
+    SELECT 1 FROM pg_proc p
+    WHERE p.oid = to_regprocedure(
+      'public.create_pricing_workbook_export(uuid[],uuid,text)'
+    )
+      AND p.prosecdef
+      AND p.prorettype = 'jsonb'::regtype
+      AND p.pronargs = 3
+      AND p.pronargdefaults = 3
+      AND p.proconfig @> ARRAY['search_path=public, pg_temp']
+  ) OR NOT EXISTS (
     SELECT 1 FROM pg_proc p
     WHERE p.oid = to_regprocedure(
       'public.preview_product_pricing_changes(text,uuid,jsonb,uuid,text)'
@@ -138,6 +166,25 @@ BEGIN
       AND format_type(a.atttypid, a.atttypmod) = 'numeric'
   ) THEN
     RAISE EXCEPTION 'PHASE1A_PRODUCT_DOLLAR_COLUMN_TYPES_INVALID';
+  END IF;
+
+  -- Hold this lock through the surrounding migration transaction so no Product
+  -- write can introduce sub-cent pricing between this scan and calculator/
+  -- trigger replacement below.
+  LOCK TABLE public.products IN SHARE MODE;
+
+  SELECT array_agg(p.id ORDER BY p.id)
+  INTO v_fractional_cent_product_ids
+  FROM public.products p
+  WHERE round(p.current_cost::numeric, 2) IS DISTINCT FROM p.current_cost
+     OR round(p.tier1_price::numeric, 2) IS DISTINCT FROM p.tier1_price
+     OR round(p.tier2_price::numeric, 2) IS DISTINCT FROM p.tier2_price
+     OR round(p.tier3_price::numeric, 2) IS DISTINCT FROM p.tier3_price;
+
+  IF v_fractional_cent_product_ids IS NOT NULL THEN
+    RAISE EXCEPTION
+      'PHASE1A_FRACTIONAL_CENT_PRODUCT_VALUES: product_ids=%',
+      v_fractional_cent_product_ids;
   END IF;
 
   IF 11 <> (
@@ -437,11 +484,236 @@ BEGIN
 END;
 $assertions$;
 
--- The bootstrap migration is immutable production history. Re-emit the two
+-- The bootstrap migration is immutable production history. Re-emit the three
 -- governed RPCs explicitly so the forward correction remains reviewable and
 -- reproducible without runtime source inspection or dynamic SQL. Tier-2/3 zero
 -- sentinels preview the same Tier-1-derived per-acre value that the product
--- trigger stores.
+-- trigger stores. Export and preview also replay their exact original durable
+-- receipts after the shared idempotency cache expires.
+CREATE OR REPLACE FUNCTION public.create_pricing_workbook_export(
+  p_product_ids uuid[] DEFAULT NULL,
+  p_performed_by uuid DEFAULT NULL,
+  p_idempotency_key text DEFAULT NULL
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+DECLARE
+  v_actor uuid := auth.uid();
+  v_existing jsonb;
+  v_request_fp text;
+  v_export public.pricing_workbook_exports%ROWTYPE;
+  v_export_id uuid;
+  v_manifest_fp text;
+  v_row_count integer;
+  v_result jsonb;
+BEGIN
+  IF v_actor IS NULL THEN RAISE EXCEPTION 'AUTH_REQUIRED'; END IF;
+  IF p_performed_by IS DISTINCT FROM v_actor THEN RAISE EXCEPTION 'ACTOR_MISMATCH'; END IF;
+  IF NOT public.is_admin() THEN RAISE EXCEPTION 'ADMIN_REQUIRED'; END IF;
+  IF p_idempotency_key IS NULL OR btrim(p_idempotency_key) = '' THEN
+    RAISE EXCEPTION 'IDEMPOTENCY_KEY_REQUIRED';
+  END IF;
+
+  v_request_fp := md5(jsonb_build_object(
+    'actor_id', v_actor,
+    'product_ids', COALESCE(to_jsonb(p_product_ids), 'null'::jsonb)
+  )::text);
+  v_existing := public.check_idempotency(p_idempotency_key, 'create_pricing_workbook_export');
+  IF v_existing IS NOT NULL THEN
+    IF v_existing->>'actor_id' IS DISTINCT FROM v_actor::text
+       OR v_existing->>'request_fingerprint' IS DISTINCT FROM v_request_fp THEN
+      RAISE EXCEPTION 'IDEMPOTENCY_PAYLOAD_MISMATCH';
+    END IF;
+    RETURN v_existing->'response';
+  END IF;
+
+  -- The shared cache expires after 24 hours. The export row and retained
+  -- manifest are the durable receipt, so only the exact original actor,
+  -- payload fingerprint, and idempotency key may replay it.
+  SELECT * INTO v_export
+  FROM public.pricing_workbook_exports e
+  WHERE e.idempotency_key = p_idempotency_key
+  FOR UPDATE;
+  IF FOUND THEN
+    IF v_export.created_by IS DISTINCT FROM v_actor
+       OR v_export.request_fingerprint IS DISTINCT FROM v_request_fp THEN
+      RAISE EXCEPTION 'IDEMPOTENCY_PAYLOAD_MISMATCH';
+    END IF;
+
+    SELECT jsonb_build_object(
+      'export_id', e.id,
+      'manifest_fingerprint', e.manifest_fingerprint,
+      'expires_at', e.expires_at,
+      'rows', (
+        SELECT jsonb_agg(jsonb_build_object(
+          'product_id', r.product_id,
+          'sku', COALESCE(r.sku_snapshot, ''),
+          'product_name', r.product_name_snapshot,
+          'category', COALESCE(r.category_snapshot, ''),
+          'container_size', COALESCE(r.container_size_snapshot, ''),
+          'unit_size', COALESCE(r.unit_size_snapshot, ''),
+          'inventory_unit', COALESCE(r.inventory_unit_snapshot, ''),
+          'identity_fingerprint', r.identity_fingerprint,
+          'row_token', r.row_token,
+          'row_version', r.row_version,
+          'current_cost', COALESCE(public._format_pricing_dollars(r.current_cost_cents), ''),
+          'current_tier1_margin_percent', COALESCE(public._format_pricing_margin_percent(r.current_tier1_margin), ''),
+          'current_tier1_price', COALESCE(public._format_pricing_dollars(r.current_tier1_price_cents), ''),
+          'current_tier2_margin_percent', COALESCE(public._format_pricing_margin_percent(r.current_tier2_margin), ''),
+          'current_tier2_price', COALESCE(public._format_pricing_dollars(r.current_tier2_price_cents), ''),
+          'current_tier3_margin_percent', COALESCE(public._format_pricing_margin_percent(r.current_tier3_margin), ''),
+          'current_tier3_price', COALESCE(public._format_pricing_dollars(r.current_tier3_price_cents), '')
+        ) ORDER BY r.product_id)
+        FROM public.pricing_workbook_export_rows r
+        WHERE r.export_id = e.id
+      )
+    ) INTO v_result
+    FROM public.pricing_workbook_exports e
+    WHERE e.id = v_export.id;
+
+    RETURN v_result;
+  END IF;
+
+  IF p_product_ids IS NOT NULL AND (
+    cardinality(p_product_ids) = 0
+    OR cardinality(p_product_ids) <> (SELECT count(DISTINCT x) FROM unnest(p_product_ids) x)
+  ) THEN
+    RAISE EXCEPTION 'EXPORT_PRODUCT_IDS_INVALID';
+  END IF;
+
+  INSERT INTO public.pricing_workbook_exports(
+    created_by, request_fingerprint, manifest_fingerprint,
+    idempotency_key, row_count
+  ) VALUES (
+    v_actor, v_request_fp, 'pending', p_idempotency_key, 1
+  ) RETURNING id INTO v_export_id;
+
+  INSERT INTO public.pricing_workbook_export_rows(
+    export_id, product_id, sku_snapshot, product_name_snapshot,
+    category_snapshot, container_size_snapshot, unit_size_snapshot,
+    inventory_unit_snapshot, identity_fingerprint, row_token, row_version,
+    current_cost_cents,
+    current_tier1_margin, current_tier1_price_cents,
+    current_tier2_margin, current_tier2_price_cents,
+    current_tier3_margin, current_tier3_price_cents
+  )
+  WITH export_products AS (
+    SELECT
+      p.id, p.sku, p.product_name, p.category,
+      p.container_size::text AS container_size_text,
+      p.unit_size, p.inventory_unit, p.pricing_version,
+      md5(jsonb_build_object(
+        'product_id', p.id,
+        'sku', COALESCE(p.sku, ''),
+        'product_name', p.product_name,
+        'category', COALESCE(p.category, ''),
+        'container_size', COALESCE(p.container_size::text, ''),
+        'unit_size', COALESCE(p.unit_size, ''),
+        'inventory_unit', COALESCE(p.inventory_unit, '')
+      )::text) AS identity_fp,
+      CASE WHEN p.current_cost IS NULL THEN NULL ELSE round(p.current_cost * 100)::bigint END AS cost_cents,
+      p.tier1_margin,
+      CASE WHEN p.tier1_price IS NULL THEN NULL ELSE round(p.tier1_price * 100)::bigint END AS tier1_price_cents,
+      p.tier2_margin,
+      CASE WHEN p.tier2_price IS NULL THEN NULL ELSE round(p.tier2_price * 100)::bigint END AS tier2_price_cents,
+      p.tier3_margin,
+      CASE WHEN p.tier3_price IS NULL THEN NULL ELSE round(p.tier3_price * 100)::bigint END AS tier3_price_cents
+    FROM public.products p
+    WHERE p.is_active = true
+      AND (p_product_ids IS NULL OR p.id = ANY(p_product_ids))
+  )
+  SELECT
+    v_export_id, ep.id, ep.sku, ep.product_name,
+    ep.category, ep.container_size_text, ep.unit_size, ep.inventory_unit,
+    ep.identity_fp,
+    md5(jsonb_build_object(
+      'export_id', v_export_id,
+      'product_id', ep.id,
+      'identity_fingerprint', ep.identity_fp,
+      'row_version', ep.pricing_version,
+      'current_cost_cents', ep.cost_cents,
+      'current_tier1_margin', ep.tier1_margin,
+      'current_tier1_price_cents', ep.tier1_price_cents,
+      'current_tier2_margin', ep.tier2_margin,
+      'current_tier2_price_cents', ep.tier2_price_cents,
+      'current_tier3_margin', ep.tier3_margin,
+      'current_tier3_price_cents', ep.tier3_price_cents
+    )::text),
+    ep.pricing_version, ep.cost_cents,
+    ep.tier1_margin, ep.tier1_price_cents,
+    ep.tier2_margin, ep.tier2_price_cents,
+    ep.tier3_margin, ep.tier3_price_cents
+  FROM export_products ep
+  ORDER BY ep.id;
+
+  GET DIAGNOSTICS v_row_count = ROW_COUNT;
+  IF v_row_count = 0 THEN RAISE EXCEPTION 'EXPORT_HAS_NO_PRODUCTS'; END IF;
+  IF p_product_ids IS NOT NULL AND v_row_count <> cardinality(p_product_ids) THEN
+    RAISE EXCEPTION 'EXPORT_PRODUCT_NOT_FOUND_OR_INACTIVE';
+  END IF;
+
+  SELECT md5(string_agg(
+    product_id::text || ':' || identity_fingerprint || ':' || row_version::text,
+    '|' ORDER BY product_id
+  )) INTO v_manifest_fp
+  FROM public.pricing_workbook_export_rows
+  WHERE export_id = v_export_id;
+
+  UPDATE public.pricing_workbook_exports
+  SET row_count = v_row_count, manifest_fingerprint = v_manifest_fp
+  WHERE id = v_export_id;
+
+  SELECT jsonb_build_object(
+    'export_id', e.id,
+    'manifest_fingerprint', e.manifest_fingerprint,
+    'expires_at', e.expires_at,
+    'rows', (
+      SELECT jsonb_agg(jsonb_build_object(
+        'product_id', r.product_id,
+        'sku', COALESCE(r.sku_snapshot, ''),
+        'product_name', r.product_name_snapshot,
+        'category', COALESCE(r.category_snapshot, ''),
+        'container_size', COALESCE(r.container_size_snapshot, ''),
+        'unit_size', COALESCE(r.unit_size_snapshot, ''),
+        'inventory_unit', COALESCE(r.inventory_unit_snapshot, ''),
+        'identity_fingerprint', r.identity_fingerprint,
+        'row_token', r.row_token,
+        'row_version', r.row_version,
+        'current_cost', COALESCE(public._format_pricing_dollars(r.current_cost_cents), ''),
+        'current_tier1_margin_percent', COALESCE(public._format_pricing_margin_percent(r.current_tier1_margin), ''),
+        'current_tier1_price', COALESCE(public._format_pricing_dollars(r.current_tier1_price_cents), ''),
+        'current_tier2_margin_percent', COALESCE(public._format_pricing_margin_percent(r.current_tier2_margin), ''),
+        'current_tier2_price', COALESCE(public._format_pricing_dollars(r.current_tier2_price_cents), ''),
+        'current_tier3_margin_percent', COALESCE(public._format_pricing_margin_percent(r.current_tier3_margin), ''),
+        'current_tier3_price', COALESCE(public._format_pricing_dollars(r.current_tier3_price_cents), '')
+      ) ORDER BY r.product_id)
+      FROM public.pricing_workbook_export_rows r
+      WHERE r.export_id = e.id
+    )
+  ) INTO v_result
+  FROM public.pricing_workbook_exports e
+  WHERE e.id = v_export_id;
+
+  PERFORM public.save_idempotency(
+    p_idempotency_key,
+    'create_pricing_workbook_export',
+    jsonb_build_object('actor_id', v_actor, 'request_fingerprint', v_request_fp, 'response', v_result)
+  );
+  RETURN v_result;
+END;
+$function$;
+
+REVOKE ALL ON FUNCTION public.create_pricing_workbook_export(
+  uuid[], uuid, text
+) FROM PUBLIC, anon, service_role;
+GRANT EXECUTE ON FUNCTION public.create_pricing_workbook_export(
+  uuid[], uuid, text
+) TO authenticated;
+
+-- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.preview_product_pricing_changes(
   p_source text,
   p_export_id uuid DEFAULT NULL,
@@ -458,6 +730,7 @@ DECLARE
   v_actor uuid := auth.uid();
   v_existing jsonb;
   v_request_fp text;
+  v_change_set public.pricing_change_sets%ROWTYPE;
   v_change_set_id uuid;
   v_export public.pricing_workbook_exports%ROWTYPE;
   v_row jsonb;
@@ -521,6 +794,56 @@ BEGIN
       RAISE EXCEPTION 'IDEMPOTENCY_PAYLOAD_MISMATCH';
     END IF;
     RETURN v_existing->'response';
+  END IF;
+
+  -- The shared cache expires after 24 hours. The change set and retained
+  -- preview rows are the durable receipt, so only the exact original actor,
+  -- payload fingerprint, and idempotency key may replay it.
+  SELECT * INTO v_change_set
+  FROM public.pricing_change_sets c
+  WHERE c.preview_idempotency_key = p_idempotency_key
+  FOR UPDATE;
+  IF FOUND THEN
+    IF v_change_set.created_by IS DISTINCT FROM v_actor
+       OR v_change_set.request_fingerprint IS DISTINCT FROM v_request_fp THEN
+      RAISE EXCEPTION 'IDEMPOTENCY_PAYLOAD_MISMATCH';
+    END IF;
+
+    SELECT
+      count(*) FILTER (WHERE r.row_status = 'unchanged'),
+      count(*) FILTER (WHERE r.row_status = 'conflict'),
+      count(*) FILTER (WHERE r.row_status = 'invalid')
+    INTO v_unchanged_count, v_conflict_count, v_invalid_count
+    FROM public.pricing_change_set_preview_rows r
+    WHERE r.change_set_id = v_change_set.id;
+
+    v_final_status := CASE
+      WHEN v_conflict_count > 0 OR v_invalid_count > 0 THEN 'invalid'
+      WHEN v_change_set.row_count = 0 THEN 'no_changes'
+      ELSE 'previewed'
+    END;
+
+    SELECT jsonb_build_object(
+      'change_set_id', c.id,
+      'request_fingerprint', c.request_fingerprint,
+      'source', c.source,
+      'status', v_final_status,
+      'expires_at', c.expires_at,
+      'submitted_row_count', c.submitted_row_count,
+      'ready_count', c.row_count,
+      'unchanged_count', v_unchanged_count,
+      'conflict_count', v_conflict_count,
+      'invalid_count', v_invalid_count,
+      'apply_allowed', (v_final_status = 'previewed' AND c.row_count > 0),
+      'rows', (
+        SELECT jsonb_agg(to_jsonb(r) - 'change_set_id' ORDER BY r.sequence)
+        FROM public.pricing_change_set_preview_rows r WHERE r.change_set_id = c.id
+      )
+    ) INTO v_result
+    FROM public.pricing_change_sets c
+    WHERE c.id = v_change_set.id;
+
+    RETURN v_result;
   END IF;
 
   IF p_source = 'pricing_worksheet' THEN
@@ -1218,13 +1541,18 @@ ALTER TABLE public.pricing_workbook_exports
   DROP CONSTRAINT IF EXISTS pricing_workbook_exports_row_limit;
 ALTER TABLE public.pricing_workbook_exports
   ADD CONSTRAINT pricing_workbook_exports_row_limit
-  CHECK (row_count <= 5000);
+  CHECK (row_count <= 5000) NOT VALID;
+ALTER TABLE public.pricing_workbook_exports
+  VALIDATE CONSTRAINT pricing_workbook_exports_row_limit;
 
 DO $postflight$
 BEGIN
   IF (SELECT md5(replace(p.prosrc, E'\r\n', E'\n')) FROM pg_proc p WHERE p.oid = to_regprocedure(
+        'public.create_pricing_workbook_export(uuid[],uuid,text)'
+      )) IS DISTINCT FROM 'cd26cf7deaf683fbf546cbe89c128755'
+     OR (SELECT md5(replace(p.prosrc, E'\r\n', E'\n')) FROM pg_proc p WHERE p.oid = to_regprocedure(
         'public.preview_product_pricing_changes(text,uuid,jsonb,uuid,text)'
-      )) IS DISTINCT FROM 'debb6056a4f46a7d74c34ebf8142b7fc'
+      )) IS DISTINCT FROM 'cf93e5b93499e066dc74c3464ae7a6f4'
      OR (SELECT md5(replace(p.prosrc, E'\r\n', E'\n')) FROM pg_proc p WHERE p.oid = to_regprocedure(
         'public.apply_product_pricing_change_set(uuid,text,uuid,text)'
       )) IS DISTINCT FROM '82416909e64d1c0740028be3ba6717ac' THEN
@@ -1232,6 +1560,15 @@ BEGIN
   END IF;
 
   IF has_function_privilege(
+       'anon', 'public.create_pricing_workbook_export(uuid[],uuid,text)', 'EXECUTE'
+     )
+     OR has_function_privilege(
+       'service_role', 'public.create_pricing_workbook_export(uuid[],uuid,text)', 'EXECUTE'
+     )
+     OR NOT has_function_privilege(
+       'authenticated', 'public.create_pricing_workbook_export(uuid[],uuid,text)', 'EXECUTE'
+     )
+     OR has_function_privilege(
        'anon', 'public.preview_product_pricing_changes(text,uuid,jsonb,uuid,text)', 'EXECUTE'
      )
      OR has_function_privilege(

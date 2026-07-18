@@ -20,12 +20,20 @@ DO $preflight$
 BEGIN
   IF (SELECT count(*) FROM pg_proc p
       WHERE p.pronamespace = 'public'::regnamespace
+        AND p.proname = 'create_pricing_workbook_export') <> 1
+     OR (SELECT md5(replace(p.prosrc, E'\r\n', E'\n'))
+         FROM pg_proc p
+         WHERE p.oid = to_regprocedure(
+           'public.create_pricing_workbook_export(uuid[],uuid,text)'
+         )) IS DISTINCT FROM 'cd26cf7deaf683fbf546cbe89c128755'
+     OR (SELECT count(*) FROM pg_proc p
+      WHERE p.pronamespace = 'public'::regnamespace
         AND p.proname = 'preview_product_pricing_changes') <> 1
      OR (SELECT md5(replace(p.prosrc, E'\r\n', E'\n'))
          FROM pg_proc p
          WHERE p.oid = to_regprocedure(
            'public.preview_product_pricing_changes(text,uuid,jsonb,uuid,text)'
-         )) IS DISTINCT FROM 'debb6056a4f46a7d74c34ebf8142b7fc'
+         )) IS DISTINCT FROM 'cf93e5b93499e066dc74c3464ae7a6f4'
      OR (SELECT count(*) FROM pg_proc p
          WHERE p.pronamespace = 'public'::regnamespace
            AND p.proname = 'apply_product_pricing_change_set') <> 1

@@ -210,6 +210,32 @@ try {
   psql('zero-cost-guard-smoke.sql');
   console.log('[phase1a-proof] seeding pre-cutover live-shaped Products');
   psql('seed.sql');
+  console.log('[phase1a-proof] proving the forward preflight fails closed on fractional-cent drift');
+  run('docker', [
+    'exec', '-e', `PGPASSWORD=${password}`, container,
+    'psql', '-U', 'postgres', '-d', 'postgres', '-X', '-v', 'ON_ERROR_STOP=1',
+    '-c', "SET session_replication_role = replica; UPDATE public.products SET current_cost = 20.001 WHERE id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa5'::uuid;",
+  ]);
+  const driftResult = run(
+    'docker',
+    [
+      'exec', '-e', `PGPASSWORD=${password}`, container,
+      'psql', '-U', 'postgres', '-d', 'postgres', '-X', '-v', 'ON_ERROR_STOP=1',
+      '-f', '/tmp/forward-correction.sql',
+    ],
+    { capture: true, allowFailure: true }
+  );
+  const driftOutput = `${driftResult.stdout || ''}\n${driftResult.stderr || ''}`;
+  if (driftResult.status === 0
+      || !driftOutput.includes('PHASE1A_FRACTIONAL_CENT_PRODUCT_VALUES')
+      || !driftOutput.includes('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa5')) {
+    throw new Error(`Forward preflight did not fail closed with the offending Product id:\n${driftOutput}`);
+  }
+  run('docker', [
+    'exec', '-e', `PGPASSWORD=${password}`, container,
+    'psql', '-U', 'postgres', '-d', 'postgres', '-X', '-v', 'ON_ERROR_STOP=1',
+    '-c', "SET session_replication_role = replica; UPDATE public.products SET current_cost = 20.00 WHERE id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa5'::uuid;",
+  ]);
   console.log('[phase1a-proof] applying parked forward corrections in disposable DB');
   psql('forward-correction.sql');
   console.log('[phase1a-proof] re-proving legacy Product compatibility after the forward correction');

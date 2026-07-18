@@ -22,7 +22,7 @@ const expectedArtifacts = new Map([
   ],
   [
     'supabase/migrations/20260718124517_harden_supplier_pricing_cent_scale_and_trigger.sql',
-    'fa1493ac1183948888890dd5c94dff225c4a5a058a58b227686fcac705645e55',
+    '7253a9a5d0bba12dfb7e958f46c8664eabe4856f6a3e5e1296b9f4852dbb3426',
   ],
 ]);
 

@@ -98,6 +98,101 @@ BEGIN
 END;
 $proof$;
 
+-- Expire the shared-cache stand-in and prove the durable preview receipt still
+-- returns the byte-for-byte original preview, even after the change set applied.
+RESET ROLE;
+DELETE FROM public.idempotency_keys
+WHERE idempotency_key = 'phase1a-forward-preview-zero-tier'
+  AND operation = 'preview_product_pricing_changes';
+SET ROLE authenticated;
+
+INSERT INTO phase1a_forward_proof(key, value)
+SELECT 'preview-zero-tier-durable-replay', public.preview_product_pricing_changes(
+  'product_page', NULL,
+  jsonb_build_array(value#>'{rows,0,submitted_row}'),
+  '11111111-1111-4111-8111-111111111111'::uuid,
+  'phase1a-forward-preview-zero-tier'
+)
+FROM phase1a_forward_proof
+WHERE key = 'preview-zero-tier-fallback';
+
+DO $proof$
+BEGIN
+  IF (SELECT value FROM phase1a_forward_proof WHERE key = 'preview-zero-tier-durable-replay')
+     IS DISTINCT FROM
+     (SELECT value FROM phase1a_forward_proof WHERE key = 'preview-zero-tier-fallback') THEN
+    RAISE EXCEPTION 'FORWARD_CORRECTION_FAIL: durable preview replay changed the original result';
+  END IF;
+
+  BEGIN
+    PERFORM public.preview_product_pricing_changes(
+      'product_page', NULL,
+      jsonb_build_array(jsonb_set(
+        (SELECT value#>'{rows,0,submitted_row}' FROM phase1a_forward_proof
+         WHERE key = 'preview-zero-tier-fallback'),
+        '{change_reason}', to_jsonb('mismatched durable retry'::text)
+      )),
+      '11111111-1111-4111-8111-111111111111'::uuid,
+      'phase1a-forward-preview-zero-tier'
+    );
+    RAISE EXCEPTION 'FORWARD_CORRECTION_FAIL: mismatched durable preview retry succeeded';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM LIKE 'FORWARD_CORRECTION_FAIL:%' THEN RAISE; END IF;
+    IF SQLERRM <> 'IDEMPOTENCY_PAYLOAD_MISMATCH' THEN
+      RAISE EXCEPTION 'FORWARD_CORRECTION_FAIL: wrong durable-preview mismatch error: %', SQLERRM;
+    END IF;
+  END;
+END;
+$proof$;
+
+INSERT INTO phase1a_forward_proof(key, value)
+SELECT 'export-durable-original', public.create_pricing_workbook_export(
+  ARRAY[id],
+  '11111111-1111-4111-8111-111111111111'::uuid,
+  'phase1a-forward-export-durable'
+)
+FROM public.products
+WHERE id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa5'::uuid;
+
+RESET ROLE;
+DELETE FROM public.idempotency_keys
+WHERE idempotency_key = 'phase1a-forward-export-durable'
+  AND operation = 'create_pricing_workbook_export';
+SET ROLE authenticated;
+
+INSERT INTO phase1a_forward_proof(key, value)
+SELECT 'export-durable-replay', public.create_pricing_workbook_export(
+  ARRAY[id],
+  '11111111-1111-4111-8111-111111111111'::uuid,
+  'phase1a-forward-export-durable'
+)
+FROM public.products
+WHERE id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa5'::uuid;
+
+DO $proof$
+BEGIN
+  IF (SELECT value FROM phase1a_forward_proof WHERE key = 'export-durable-replay')
+     IS DISTINCT FROM
+     (SELECT value FROM phase1a_forward_proof WHERE key = 'export-durable-original') THEN
+    RAISE EXCEPTION 'FORWARD_CORRECTION_FAIL: durable export replay changed the original result';
+  END IF;
+
+  BEGIN
+    PERFORM public.create_pricing_workbook_export(
+      NULL,
+      '11111111-1111-4111-8111-111111111111'::uuid,
+      'phase1a-forward-export-durable'
+    );
+    RAISE EXCEPTION 'FORWARD_CORRECTION_FAIL: mismatched durable export retry succeeded';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM LIKE 'FORWARD_CORRECTION_FAIL:%' THEN RAISE; END IF;
+    IF SQLERRM <> 'IDEMPOTENCY_PAYLOAD_MISMATCH' THEN
+      RAISE EXCEPTION 'FORWARD_CORRECTION_FAIL: wrong durable-export mismatch error: %', SQLERRM;
+    END IF;
+  END;
+END;
+$proof$;
+
 SELECT set_config('crx.pricing_mode', '', true);
 SELECT set_config('crx.pricing_authorized', '', true);
 SELECT set_config('crx.pricing_actor', '', true);
