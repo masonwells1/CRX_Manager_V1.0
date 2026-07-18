@@ -46,9 +46,9 @@ it on, you do a short sequence (below) — and that's deliberately your call, no
 2. **Get the Codex money/RLS review** on the save-RPC migration (credits reset ~Jul 22). Fix anything it
    flags. *This is the one required gate that could not run overnight.* (R8 changed this migration again on
    2026-07-18, so Codex should review the current version.)
-3. **~~Do the R8 wiring~~ — DONE 2026-07-18.** The server now resolves chemical prices itself
-   (manual → quote → tier) and converts the applied amount from the rate unit to the product's sold unit.
-   BUT it needs **one billing-rule decision from you first** — see "⚠️ DECIDE FIRST" just below.
+3. **~~Do the R8 wiring~~ — DONE 2026-07-18, pricing rule DECIDED (Option B).** The server resolves chemical
+   prices itself (manual → quote → each grower's own tier) and converts the applied amount from the rate
+   unit to the product's sold unit. See "✅ DECIDED" just below. No open decision remains here.
 4. **Apply the 3 migrations to the live database, in order:**
    `20260718010000` (tables) → `20260718020000` (calculator) → `20260718030000` (save/post RPC).
    (These need your explicit go-ahead — live DB changes are always your call.)
@@ -60,38 +60,21 @@ it on, you do a short sequence (below) — and that's deliberately your call, no
 
 ---
 
-## ⚠️ DECIDE FIRST — how should a split line be priced when co-owners are on different price tiers?
+## ✅ DECIDED — pricing rule = Option B (each grower keeps their own tier). Built + proven 2026-07-18.
 
-This is the one **money decision** the R8 wiring surfaced. It only matters when the growers who share a
-field are on **different price tiers** (tier 1 vs tier 3, etc.). It does **not** affect the penny-exact
-math — both options are exact — only **which price** a co-owner is charged. Nothing is live; pick before
-you flip the flag on.
+You chose **Option B**: when co-owners of a field are on **different price tiers**, each co-owner's share
+of a chemical line is priced at **their own** tier — exactly what your current (non-split) field-app billing
+does today, so no customer's price changes. A typed **manual price** or a **field quote** is the same for
+everyone (they don't depend on tier); only the tier fallback varies per grower.
 
-**What I built (Option A — "one list price per line"):** the whole chemical line gets ONE price — the tier
-price of the field's **majority owner** — and that line is split by ownership %. Anyone who should pay a
-different price is adjusted per-person by hand in the draft.
+**Proven** in the live DB (rollback): on a field split 20% grower A (tier 1, $10/gal) / 80% grower B
+(tier 3, $8/gal), 1 gallon applied → A billed **$2.00 @ $10/gal**, B billed **$6.40 @ $8/gal** (each their
+own tier). A shared quote or manual price bills everyone the same. Penny-exact throughout, including a guard
+so a uniform price always totals round-once.
 
-**The alternative (Option B — "each grower keeps their own tier"):** each co-owner's share is priced at
-**their own** tier automatically — which is exactly what your **current** (non-split) field-app billing
-does today.
-
-**Concrete example** — field 55% owned by grower A (tier 1, product $100/gal) and 45% by grower B (tier 3,
-product $130/gal), 2 gallons applied:
-- **Today / Option B:** A pays 1.1 gal × $100 = **$110**, B pays 0.9 gal × $130 = **$117** → group **$227**.
-- **Option A (what's built):** whole line at A's $100/gal → A **$110**, B **$90** → group **$200**. B is
-  charged **$27 less** because their tier-3 price is not used.
-
-**My recommendation: Option B** (each grower keeps their own tier). It matches what your app already does,
-so no customer's price silently changes, and the original spec said "don't flatten the existing per-customer
-tier pricing." Option A is simpler and fine **if** you actually want one negotiated price per line with
-manual per-person tweaks. If you choose B, it's a small, contained follow-up to the chemical code before
-go-live (the penny math, conversion, quote/manual paths, and the whole rest of the feature stay exactly as
-built and proven). **Tell me A or B and I'll finish it accordingly.**
-
-(Two smaller notes from the same review, both non-blocking: the tier anchor reads the field's *default*
-ownership even if this particular line is hand-split differently — a per-person override covers it; and a
-chemical *return/credit* (negative quantity) can't go through the split screen yet — flat credits can. Both
-are documented and safe to leave for now.)
+(Two smaller notes, both non-blocking and unchanged by this: a chemical *return/credit* (negative quantity)
+can't go through the split screen yet — flat credits can; and the per-person price override in the draft UI
+still works for one-off adjustments on top of the tier price.)
 
 ---
 

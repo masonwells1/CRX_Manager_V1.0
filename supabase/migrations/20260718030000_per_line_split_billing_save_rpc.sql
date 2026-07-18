@@ -63,13 +63,18 @@
 --   oz — the 128x guard the live path enforces). A caller-supplied price is honored ONLY
 --   as an EXPLICIT manual override (line.manual_override = true). base_price_source is
 --   server-determined, never trusted from the caller.
---   TIER ANCHOR DECISION (owner: confirm before go-live): a split line has ONE list
---   price that is then split, so the tier is taken from the billing-set member with the
---   LARGEST ownership share (the majority payer; tie-break customer_id ASC). Any other
---   grower who should pay a different price uses the existing per-person price override
---   (calculator per_person path). This follows the spec's "resolve one base price + its
---   source, then layer person-specific overrides on top" model. is_primary stays
---   display-only. SERVICE-fee base rate is resolved server-side (application_services
+--   PRICING RULE (Option B — settled by Mason 2026-07-18): each co-owner's share is
+--   priced at THAT customer's OWN assigned_tier, mirroring the live per-child field-app
+--   save (no customer's price changes vs today; honors the spec's "don't flatten the
+--   existing per-customer tier pricing"). A manual override or a field quote is tier-
+--   independent, so it applies to EVERY co-owner (one shared price); only the tier
+--   fallback varies per customer. Implemented by building a per-customer price map and
+--   writing each member's own price into the calculator's per-person price slot (the
+--   calculator collapses to source_lr when all prices are equal, else per_person — both
+--   penny-exact). The representative line base (field_app_billing_lines.source_unit_price_cents
+--   + invoice_line_shares.base_unit_price_cents) is the largest-share owner's price for
+--   DISPLAY only; the money is the per-customer unit_price_cents/amount_cents. is_primary
+--   stays display-only. SERVICE-fee base rate is resolved server-side (application_services
 --   default rate) as before.
 --   MAINTENANCE: resolve_field_app_chemical_price() is a PARALLEL copy of the live
 --   writer's precedence, kept separate to avoid refactoring the live money function
@@ -361,6 +366,8 @@ DECLARE
   v_src_flat           bigint;
   v_base_source        text;
   v_eff_rate_unit      text;           -- display unit for the line (pricing unit after chemical conversion)
+  v_chem_price_map     jsonb;          -- chemical Option B: customer_id -> that customer's own resolved unit price
+  v_uniform_price      bigint;         -- chemical: the single price when ALL co-owners match (routes round-once)
   v_shares             jsonb;
   v_line_customers     text[];
   v_calc               jsonb;
@@ -526,6 +533,7 @@ BEGIN
     v_src_unit_price := (v_line->>'source_unit_price_cents')::bigint;
     v_base_source    := v_line->>'base_price_source';
     v_eff_rate_unit  := v_line->>'rate_unit';   -- default; chemical overrides to the pricing unit below
+    v_chem_price_map := NULL;                    -- chemical-only; NULL keeps non-chemical lines untouched
 
     IF v_line_kind IS NULL
        OR v_line_kind NOT IN ('chemical', 'service', 'fuel_surcharge', 'flat_fee') THEN
@@ -546,12 +554,13 @@ BEGIN
         v_base_source    := COALESCE(v_base_source, 'service_rate');
       END IF;
     ELSIF v_line_kind = 'chemical' THEN
-      -- R8: resolve the base unit price SERVER-SIDE (manual override -> quote -> tier) and
-      -- convert the applied quantity from the rate unit into the product's sold unit, exactly
-      -- like the live field-app save. NEVER trust a caller price except an explicit override.
+      -- R8 (Option B — Mason 2026-07-18): resolve the price SERVER-SIDE and price EACH
+      -- co-owner's share at THAT customer's OWN tier (manual override → field quote apply to
+      -- everyone; only the tier fallback differs per customer — exactly like the live per-child
+      -- field-app save). Also convert the applied quantity rate-unit → product sold unit.
       DECLARE
         v_chem_manual bigint  := NULL;
-        v_chem_tier   integer;
+        v_rep_tier    integer;
         v_inv_unit    text;
         v_form        text;
         v_priced_qty  numeric;
@@ -567,7 +576,8 @@ BEGIN
             USING ERRCODE = 'invalid_parameter_value';
         END IF;
 
-        -- Honor a caller price ONLY as an explicit manual override.
+        -- Honor a caller price ONLY as an explicit manual override (a single negotiated price
+        -- for the whole line — applies to every co-owner).
         IF COALESCE((v_line->>'manual_override')::boolean, false) THEN
           IF v_src_unit_price IS NULL THEN
             RAISE EXCEPTION 'SPLIT_CHEMICAL_OVERRIDE_PRICE_REQUIRED: manual_override set but no source_unit_price_cents on chemical line %', v_idx
@@ -580,18 +590,31 @@ BEGIN
         SELECT p.inventory_unit, p.product_form INTO v_inv_unit, v_form
           FROM products p WHERE p.id = v_product_id;
 
-        -- Tier anchor = the billing-set member with the LARGEST ownership share (majority
-        -- payer; tie-break customer_id ASC). See the TIER ANCHOR DECISION in the file header.
-        SELECT c.assigned_tier INTO v_chem_tier
+        -- Per-customer price map (Option B): each billing-set member priced at their OWN
+        -- assigned_tier. resolve_field_app_chemical_price() naturally makes manual/quote shared
+        -- (tier-independent) and only the tier fallback per-customer, so a manual/quote line
+        -- yields identical prices for everyone (calculator collapses to source_lr) while a
+        -- pure-tier line prices each co-owner at their own tier (calculator per_person).
+        SELECT COALESCE(jsonb_object_agg(
+                 m.cust,
+                 (resolve_field_app_chemical_price(
+                    v_product_id, v_field_ids,
+                    COALESCE((SELECT c.assigned_tier FROM customers c WHERE c.id = m.cust::uuid), 1),
+                    v_chem_manual)->>'unit_price_cents')::bigint), '{}'::jsonb)
+          INTO v_chem_price_map
+          FROM unnest(v_members) AS m(cust);
+
+        -- Representative line base (display + the calculator's default price): the largest-share
+        -- owner's price. The MONEY comes from the per-customer overrides injected below, not this.
+        SELECT c.assigned_tier INTO v_rep_tier
           FROM customers c
          WHERE c.id = (
            SELECT (value->>'customer_id')::uuid
              FROM jsonb_array_elements(v_vector) AS value
             ORDER BY (value->>'micro_pct')::bigint DESC, value->>'customer_id' ASC
             LIMIT 1);
-
         v_price_res      := resolve_field_app_chemical_price(
-                              v_product_id, v_field_ids, COALESCE(v_chem_tier, 1), v_chem_manual);
+                              v_product_id, v_field_ids, COALESCE(v_rep_tier, 1), v_chem_manual);
         v_src_unit_price := (v_price_res->>'unit_price_cents')::bigint;
         v_base_source    := v_price_res->>'price_source';
 
@@ -653,6 +676,42 @@ BEGIN
              ))
         INTO v_shares
         FROM jsonb_array_elements(v_vector) AS v;
+    END IF;
+
+    -- Option B (chemical): price each share at that customer's OWN resolved price from the map,
+    -- UNLESS the caller already set an explicit per-person override (a manual draft adjustment,
+    -- which wins). The override slot is how per-person prices reach the calculator. Uniform-price
+    -- lines are then routed round-once via the penny guard below (source_lr); genuinely mixed
+    -- per-customer prices use the calculator's per_person path (exact to its own SUM).
+    IF v_line_kind = 'chemical' AND v_chem_price_map IS NOT NULL THEN
+      SELECT jsonb_agg(
+               CASE
+                 WHEN s->>'price_mode' = 'override'
+                      AND s->'override_unit_price_cents' IS NOT NULL
+                      AND jsonb_typeof(s->'override_unit_price_cents') <> 'null'
+                 THEN s
+                 ELSE jsonb_set(
+                        jsonb_set(s, '{price_mode}', '"override"'::jsonb),
+                        '{override_unit_price_cents}',
+                        to_jsonb((v_chem_price_map->>(s->>'customer_id'))::bigint))
+               END)
+        INTO v_shares
+        FROM jsonb_array_elements(v_shares) AS s;
+
+      -- Penny guard: when EVERY co-owner ends up at the SAME effective price (a manual/quote
+      -- line, all-same-tier, OR a uniform manual per-person adjustment that differs from the
+      -- representative), align the calculator's source price to that shared value so it routes
+      -- through the round-once source_lr path (penny-exact to a single parent total) instead of
+      -- per_person (which can differ by up to n-1 cents on the group total). Mixed prices keep
+      -- per_person. Adversarial LOW, 2026-07-18.
+      SELECT CASE WHEN count(DISTINCT (s->>'override_unit_price_cents')::bigint) = 1
+                  THEN max((s->>'override_unit_price_cents')::bigint) END
+        INTO v_uniform_price
+        FROM jsonb_array_elements(v_shares) AS s
+       WHERE s->>'override_unit_price_cents' IS NOT NULL;
+      IF v_uniform_price IS NOT NULL THEN
+        v_src_unit_price := v_uniform_price;
+      END IF;
     END IF;
 
     -- Every line's customer set must EXACTLY equal the billing-set members (spec §3).

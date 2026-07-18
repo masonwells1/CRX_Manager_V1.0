@@ -7,20 +7,19 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
-## 0. Open owner decision — per-line split-billing tier-anchor pricing rule (2026-07-18)
+## 0. Per-line split-billing — pricing rule SETTLED = Option B (Mason, 2026-07-18)
 
-Parked, flag OFF, not applied, not merged — but a **money-rule decision** is owed before the
-`per_line_split_billing_enabled` flag is ever turned on. R8 (server-side chemical pricing, committed on
-branch `claude/per-line-split-billing-build`) prices a chemical split line at ONE list price — the tier of
-the field's **majority owner** — then splits it (Option A). This differs from the current non-split field-app
-billing, which prices each grower at **their own** tier (Option B). For a mixed-tier field the two produce
-different per-grower dollars (example: a tier-3 co-owner under-billed ~$27 on a $227 line). Both are
-penny-exact; the difference is *which* price, not the math. Recommendation logged: **Option B** (each grower
-keeps their own tier — matches today's behavior + the spec's "don't flatten per-customer tier pricing").
-Choosing B is a small, contained follow-up to the chemical branch before flag-on. Two sub-notes (both
-non-blocking): the tier anchor reads the field's *default* ownership even when a line is hand-split (per-person
-override covers it); and a chemical *return/credit* (negative qty) can't go through the split screen yet
-(fail-closed). Full owner-facing writeup + Option-A-vs-B example: `docs/plans/per-line-split-billing-BUILD-HANDOFF-2026-07-18.md`. Also still pending for this feature: the Codex money/RLS gate (usage limit, ~Jul 22) and Mason's baseline field-app billing cycle.
+Resolved. The prior open question (how to price a chemical split line when co-owners are on different tiers)
+is decided: **Option B — each co-owner is billed at their OWN assigned_tier**, mirroring today's non-split
+field-app billing (no customer's price changes). A manual price or field quote applies to everyone (tier-
+independent); only the tier fallback varies per grower. Built + proven in the live DB (rollback: 20/80
+tier1/tier3 field → A@$10/gal, B@$8/gal, each own tier; plus a penny guard so a uniform price totals
+round-once). Committed on branch `claude/per-line-split-billing-build`. Still parked: flag OFF, migration
+NOT applied, NOT merged. Remaining for this feature (unchanged): the **Codex money/RLS gate** (usage limit,
+~Jul 22, should review the Option-B version) and Mason's **baseline field-app billing cycle** before flag-on.
+Two non-blocking notes: a chemical *return/credit* (negative qty) can't go through the split screen yet
+(fail-closed); the per-person price override in the draft UI still works for one-off adjustments.
+Owner-facing detail: `docs/plans/per-line-split-billing-BUILD-HANDOFF-2026-07-18.md`.
 
 ## 1. Open HIGH findings (dormant on live data)
 
