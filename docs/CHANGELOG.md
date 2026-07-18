@@ -2,43 +2,47 @@
 
 All significant development milestones, in reverse chronological order.
 
+### 2026-07-18 — Migration drift proof responsibility clarified
+
+The canonical `migration-drift-reviewer` no longer turns its own lack of Supabase MCP access into an unavoidable HIGH finding. It still checks disk ordering and emits the mandatory orchestrator `list_migrations` reminder; the live apply workflow remains responsible for that check. Migration-history matching now recognizes the repository's timestamp-keyed rows.
+
 ---
 
-## 2026-07-18 — Remediating gauntlet sections 2-6 findings (built in cloud; live apply + merge pending Mason's machine)
+## 2026-07-18 — Gauntlet sections 2-6 remediation applied live
 
-Started fixing the confirmed findings from the sections 2-6 adversarial audit. The cloud
-session has **no Codex CLI**, so it cannot mint the `migration-apply-guard` proof and cannot
-apply migrations to live or merge to `main`; each fix is built + reviewed + tested here and
-finished (Codex apply-proof → live apply → PR merge) from Mason's Windows session.
+The six confirmed fixes passed the local Codex security and migration-drift proof gates,
+were applied to live Supabase in the approved order, and each reached
+`SMOKE_PASS_ROLLBACK` through its registered business-chain smoke. The filenames below use
+the server-assigned migration versions so a future rebuild cannot reapply them.
 
-- **H1 — money-RPC auth bypass (BUILT).** `20260718124500_harden_prepay_and_payment_role_gate.sql`
+- **H1 — money-RPC auth bypass (LIVE).** `20260718153744_harden_prepay_and_payment_role_gate.sql`
   hardens `apply_prepay_to_invoice` + `record_invoice_payment` so a deactivated / profile-less
   authenticated user can no longer pass the role gate (`NULL NOT IN (...)` fall-through; missing
   `is_active` filter). Mirrors the vetted `apply_credit_memo_to_invoice`. Reviewers clean (rls +
   drift), no stale overload, fail-first smoke `smoke-prepay-payment-inactive-actor-gate.sql`
   proved the bypass live (raised `SMOKE_FAIL` on the pre-fix functions).
-- **B2 — quote stranded after whole-conversion order cancel (BUILT).**
-  `20260718131500_revert_quote_escape_hatch_for_cancelled_order.sql`. Chosen the safe, admin-driven
+- **B2 — quote stranded after whole-conversion order cancel (LIVE).**
+  `20260718152837_revert_quote_escape_hatch_for_cancelled_order.sql`. Chosen the safe, admin-driven
   escape hatch (not auto-reopen on cancel, which would contradict the void path's deliberate
   "converted booking stays closed" semantic): `revert_quote_status` now un-blocks reverting an
   'accepted' quote whose only order is cancelled and releases its stale draw ledger so it is
   re-convertible. Reviewers clean; fail-first smoke proved the strand live.
-- **H2 — finance-charge double-charge (BUILT).**
-  `20260718132000_finance_charge_month_dedup.sql`. Dedup now on the calendar month (+ month-keyed
+- **H2 — finance-charge double-charge (LIVE).**
+  `20260718174018_finance_charge_month_dedup.sql`. Dedup now on the calendar month (+ month-keyed
   advisory lock) so two runs in the same month on different as-of dates can't both charge. Reviewers
   clean; fail-first smoke proved the double-charge live (2 charges from 2 same-month runs).
-- **H3 — void_invoice stranded customer cash (BUILT).**
-  `20260718133000_void_invoice_block_applied_payments.sql`. Refuses to void a posted invoice that
+- **H3 — void_invoice stranded customer cash (LIVE).**
+  `20260718154810_void_invoice_block_applied_payments.sql`. Refuses to void a posted invoice that
   still has direct cash applied (`paid_amount_cents>0` or `invoice_line_allocations`) — admin must
   void/unapply the payment first (re-banks it as prepay). Prepay-only voids unaffected. Reviewers
   clean; fail-first smoke proved the strand live.
-- **H4 — restore_cancelled_order left a corrupt order (BUILT).**
-  `20260718134000_forbid_restore_cancelled_order.sql`. Forbids restore (raises
+- **H4 — restore_cancelled_order left a corrupt order (LIVE).**
+  `20260718174859_forbid_restore_cancelled_order.sql`. Forbids restore (raises
   ORDER_RESTORE_NOT_SUPPORTED) rather than attempting a fragile exact-inverse of the cancel;
   recovery is a new order or the B2 quote escape hatch. Reviewers clean; fail-first smoke proved
   the pre-fix restore succeeded live.
-- **H5 — backfill invoice mono-billed split-billing orders (BUILT).**
-  `20260718134500_backfill_invoice_refuse_split_billing.sql`. create_invoice_for_unbilled_delivery
+- **H5 — backfill invoice mono-billed split-billing orders (LIVE).**
+  `20260718175641_backfill_invoice_refuse_split_billing.sql`. create_invoice_for_unbilled_delivery
   now refuses (ORDER_NEEDS_SPLIT_BILLING) to backfill a single invoice for an order with
   needs_split_billing=true; the admin uses the split-billing flow. Reviewers clean; fail-first
   smoke proved the mono-bill live.

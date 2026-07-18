@@ -19,6 +19,12 @@
 -- practical prevention. Body otherwise reproduced verbatim from the live
 -- catalog; only the dedup predicate changed.
 
+-- Historical migrations created shorter overloads before the canonical
+-- four-argument signature replaced them. They are absent from live production,
+-- but dropping them defensively keeps replays from retaining stale behavior.
+DROP FUNCTION IF EXISTS public.generate_finance_charges(date, uuid);
+DROP FUNCTION IF EXISTS public.generate_finance_charges(date, uuid, uuid[]);
+
 CREATE OR REPLACE FUNCTION public.generate_finance_charges(p_as_of_date date, p_performed_by uuid, p_customer_ids uuid[] DEFAULT NULL::uuid[], p_idempotency_key text DEFAULT NULL::text)
  RETURNS jsonb
  LANGUAGE plpgsql
@@ -197,3 +203,6 @@ BEGIN
   RETURN v_result;
 END;
 $function$;
+
+REVOKE EXECUTE ON FUNCTION public.generate_finance_charges(date, uuid, uuid[], text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.generate_finance_charges(date, uuid, uuid[], text) TO authenticated, service_role;

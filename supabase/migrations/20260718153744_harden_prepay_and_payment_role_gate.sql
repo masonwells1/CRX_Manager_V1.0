@@ -126,6 +126,9 @@ BEGIN
 END;
 $function$;
 
+REVOKE EXECUTE ON FUNCTION public.apply_prepay_to_invoice(uuid, uuid, bigint, uuid, text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.apply_prepay_to_invoice(uuid, uuid, bigint, uuid, text) TO authenticated, service_role;
+
 CREATE OR REPLACE FUNCTION public.record_invoice_payment(p_invoice_id uuid, p_amount_cents bigint, p_payment_method text, p_reference_number text DEFAULT NULL::text, p_notes text DEFAULT NULL::text, p_idempotency_key text DEFAULT NULL::text)
  RETURNS uuid
  LANGUAGE plpgsql
@@ -195,3 +198,6 @@ BEGIN
   RETURN v_pay_id;
 END;
 $function$;
+
+REVOKE EXECUTE ON FUNCTION public.record_invoice_payment(uuid, bigint, text, text, text, text) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.record_invoice_payment(uuid, bigint, text, text, text, text) TO service_role;

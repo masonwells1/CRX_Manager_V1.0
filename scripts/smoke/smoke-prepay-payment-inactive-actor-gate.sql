@@ -104,8 +104,5 @@ BEGIN
     END IF;
   END;
 
-  -- Restore (belt-and-suspenders; the terminal rollback undoes it anyway).
-  UPDATE public.profiles SET is_active = true WHERE id = v_admin;
-
   RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK';
 END $smoke$;

@@ -175,3 +175,6 @@ BEGIN
   RETURN v_result;
 END;
 $function$;
+
+REVOKE EXECUTE ON FUNCTION public.create_invoice_for_unbilled_delivery(uuid, uuid, text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.create_invoice_for_unbilled_delivery(uuid, uuid, text) TO authenticated, service_role;

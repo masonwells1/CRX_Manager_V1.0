@@ -326,3 +326,6 @@ BEGIN
   END IF;
 END;
 $function$;
+
+REVOKE EXECUTE ON FUNCTION public.void_invoice(uuid, text, text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.void_invoice(uuid, text, text) TO authenticated, service_role;

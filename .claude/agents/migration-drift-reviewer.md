@@ -52,11 +52,11 @@ For each column referenced in `INSERT INTO <table> (<col1>, <col2>, ...)`:
 ### CHECK 6 — Migration filename version-stamp mismatch
 This is the B7 pattern from 2026-05-26.
 1. Extract the timestamp prefix from each filename: `<YYYYMMDDHHMMSS>_<description>.sql`.
-2. You CANNOT call Supabase MCP (your tools are Read/Grep/Glob/Bash). Do NOT attempt the Supabase MCP `list_migrations` tool. Instead, compare the on-disk filename timestamps against each other for ordering sanity, and emit a HIGH finding telling the orchestrator: 'Before applying, confirm via the Supabase MCP `list_migrations` tool that the disk filename version matches the version Supabase will stamp (B7 pattern).' Leave the live check to the orchestrator.
+2. You CANNOT call Supabase MCP (your tools are Read/Grep/Glob/Bash). Do NOT attempt the Supabase MCP `list_migrations` tool. Instead, compare the on-disk filename timestamps against each other for ordering sanity and include a non-finding reminder: 'Orchestrator must confirm via Supabase MCP `list_migrations` before apply (B7 pattern).' The apply workflow owns that mandatory live check; inability to perform it inside this read-only reviewer is not itself a defect in the migration and must not produce HIGH/BLOCKER.
 3. Severity: **HIGH** if filenames look out-of-order with recently-applied migrations.
 
 ### CHECK 7 — Missing migration-history.md entry
-After all checks: verify `docs/reference/migration-history.md` contains a row for each new migration file. If missing, severity = **MED** (doc drift, not safety).
+After all checks: verify `docs/reference/migration-history.md` contains either the full filename or its unique timestamp prefix for each new migration file. If missing, severity = **MED** (doc drift, not safety).
 
 ## Output Format
 

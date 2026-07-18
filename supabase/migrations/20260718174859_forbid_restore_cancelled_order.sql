@@ -49,3 +49,6 @@ BEGIN
   RAISE EXCEPTION 'ORDER_RESTORE_NOT_SUPPORTED: a cancelled order cannot be safely restored — its released inventory reservations, commissions, and booking draws are not re-applied, which would leave a corrupt confirmed order. Create a new order, or re-convert/revert the source quote instead.';
 END;
 $function$;
+
+REVOKE EXECUTE ON FUNCTION public.restore_cancelled_order(uuid, text, uuid, text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.restore_cancelled_order(uuid, text, uuid, text) TO authenticated, service_role;

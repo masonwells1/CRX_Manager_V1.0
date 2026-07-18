@@ -143,3 +143,6 @@ BEGIN
   RETURN v_result;
 END;
 $function$;
+
+REVOKE EXECUTE ON FUNCTION public.revert_quote_status(uuid, text, uuid, text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.revert_quote_status(uuid, text, uuid, text) TO authenticated, service_role;
