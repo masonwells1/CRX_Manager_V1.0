@@ -49,13 +49,13 @@ assert.ok(
 const args = buildCodexExecArgs({ root: "/repo/root", prompt });
 assert.deepEqual(
   args,
-  ["exec", "--sandbox", "read-only", "-C", "/repo/root", "-c", "approval_policy=never", prompt],
+  ["exec", "--sandbox", "read-only", "-C", "/repo/root", "-c", "approval_policy=never", "-"],
 );
-// SECURITY: read-only sandbox; the prompt is a SINGLE argv element (shell:false),
-// so its text can never be split into shell tokens.
+// SECURITY: read-only sandbox; `-` requires the wrapper to feed its fixed prompt
+// directly through stdin with shell:false, so metacharacters can never execute.
 assert.equal(args[1], "--sandbox");
 assert.equal(args[2], "read-only");
-assert.equal(args[args.length - 1], prompt, "the prompt is the final single argv element");
+assert.equal(args[args.length - 1], "-", "Codex reads the fixed prompt from wrapper-owned stdin");
 
 // ── verdict parsing: DETERMINISTIC machine token, no prose heuristics ─────────
 // Codex must end its reply with exactly one `CODEX_PROOF_VERDICT: CLEAN|BLOCKERS`

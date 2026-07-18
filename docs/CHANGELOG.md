@@ -4,10 +4,11 @@ All significant development milestones, in reverse chronological order.
 
 ### 2026-07-18 — Windows Codex proof stdin hang fixed
 
-The exact-SHA Codex push-proof wrapper now sends an explicit empty stdin pipe. Codex CLI
-0.145 on Windows could otherwise wait indefinitely at "Reading additional input from stdin"
-despite an ignored native stdin handle, eventually timing out without minting a proof. The
-wrapper remains read-only and fail-closed; its helper and agent-workflow suites pass.
+The exact-SHA Codex push-proof wrapper now invokes `codex exec -` and supplies its fixed
+review prompt as the complete stdin payload. Codex CLI 0.145 on Windows otherwise waited
+indefinitely at "Reading additional input from stdin" when the prompt was passed as argv,
+eventually timing out without minting a proof. The wrapper remains read-only, shell-free,
+and fail-closed; its helper and agent-workflow suites pass.
 
 ### 2026-07-18 — Migration drift proof responsibility clarified
 
