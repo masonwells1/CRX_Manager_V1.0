@@ -124,7 +124,7 @@ Codex reviews before any merge. All work lands on the per-phase branch → draft
 
 | Phase | Status | Branch / PR | PROOF (Ran / Saw) | Gauntlet | Notes |
 |---|---|---|---|---|---|
-| 1 — schema | **DONE** | `claude/billing-splits-plan-8ih4jg` / PR #166 | typecheck+build+tests green; live DB re-checked vs spec | rls/drift/types reviewers CLEAN | flag OFF; not applied live |
+| 1 — schema | **DONE** | `claude/billing-splits-plan-8ih4jg` / PR #166 | PROOF — Ran: exact `send_disposition` comment against network-isolated PostgreSQL 17 before/after repair plus merged-main pipeline · Saw: original `syntax error at or near "||"`; corrected statement accepted with exact text; 3,657 tests, typecheck, build, SQL/guard checks green; live Phase 1 objects/flag absent | current hash-bound RLS + drift reviewers CLEAN (0 blocker/high/med); prior types reviewer CLEAN | flag OFF/absent; not applied live; §6.1 baseline is still unmet (live field-app locations/shares/groups/job-linked invoices all zero) |
 | 2 — calculator | TODO | — | — | — | start here |
 | 3 — save/post RPC | TODO | — | — | — | depends on Phase 2 |
 | 4 — UI + mail gates | TODO | — | — | — | depends on Phase 3; edge-fn deploy = Mason gate |
