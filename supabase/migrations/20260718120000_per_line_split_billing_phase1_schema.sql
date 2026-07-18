@@ -149,38 +149,100 @@ CREATE INDEX IF NOT EXISTS idx_invoice_line_shares_customer
 CREATE OR REPLACE FUNCTION public.trg_invoice_line_shares_sum_100()
 RETURNS trigger
 LANGUAGE plpgsql
-SECURITY INVOKER            -- fires only inside the SECDEF save path; runs as its owner
+SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
 DECLARE
-  v_line_id uuid := COALESCE(NEW.billing_line_id, OLD.billing_line_id);
+  v_line_id uuid;
+  v_line_ids uuid[] := ARRAY[]::uuid[];
+  v_checked_line_ids uuid[] := ARRAY[]::uuid[];
   v_sum bigint;
 BEGIN
-  -- If the parent logical line is gone (draft line removed), there is nothing to enforce.
-  IF NOT EXISTS (SELECT 1 FROM public.field_app_billing_lines WHERE id = v_line_id) THEN
-    RETURN NULL;
+  -- Serialize all vector validations. A single global lock is deliberate: acquiring
+  -- multiple per-line locks in different orders can deadlock multi-line saves.
+  PERFORM pg_advisory_xact_lock(
+    hashtextextended('crx:invoice-line-shares:sum-100', 0)
+  );
+
+  -- UPDATE must validate both the source and destination line. INSERT/DELETE only
+  -- have one relevant side. A deferred trigger can safely inspect the final vector.
+  IF TG_OP IN ('UPDATE', 'DELETE') THEN
+    v_line_ids := array_append(v_line_ids, OLD.billing_line_id);
+  END IF;
+  IF TG_OP IN ('INSERT', 'UPDATE') THEN
+    v_line_ids := array_append(v_line_ids, NEW.billing_line_id);
   END IF;
 
-  SELECT COALESCE(SUM(split_micro_pct), 0)
-    INTO v_sum
-    FROM public.invoice_line_shares
-   WHERE billing_line_id = v_line_id;
+  FOREACH v_line_id IN ARRAY v_line_ids LOOP
+    IF v_line_id IS NULL OR v_line_id = ANY(v_checked_line_ids) THEN
+      CONTINUE;
+    END IF;
+    v_checked_line_ids := array_append(v_checked_line_ids, v_line_id);
 
-  IF v_sum <> 100000000 THEN
-    RAISE EXCEPTION
-      'invoice_line_shares vector for billing_line % sums to % micro-pct, must equal 100000000',
-      v_line_id, v_sum
-      USING ERRCODE = 'check_violation';
-  END IF;
+    -- If the parent logical line is gone (draft line removed), there is nothing to enforce.
+    IF NOT EXISTS (SELECT 1 FROM public.field_app_billing_lines WHERE id = v_line_id) THEN
+      CONTINUE;
+    END IF;
+
+    SELECT COALESCE(SUM(split_micro_pct), 0)
+      INTO v_sum
+      FROM public.invoice_line_shares
+     WHERE billing_line_id = v_line_id;
+
+    IF v_sum <> 100000000 THEN
+      RAISE EXCEPTION
+        'invoice_line_shares vector for billing_line % sums to % micro-pct, must equal 100000000',
+        v_line_id, v_sum
+        USING ERRCODE = 'check_violation';
+    END IF;
+  END LOOP;
   RETURN NULL;
 END;
 $$;
+
+REVOKE EXECUTE ON FUNCTION public.trg_invoice_line_shares_sum_100()
+  FROM PUBLIC, anon, authenticated;
 
 DROP TRIGGER IF EXISTS trg_invoice_line_shares_sum_100 ON public.invoice_line_shares;
 CREATE CONSTRAINT TRIGGER trg_invoice_line_shares_sum_100
   AFTER INSERT OR UPDATE OR DELETE ON public.invoice_line_shares
   DEFERRABLE INITIALLY DEFERRED
   FOR EACH ROW EXECUTE FUNCTION public.trg_invoice_line_shares_sum_100();
+
+-- A share-row trigger cannot observe a brand-new logical line that never receives
+-- a share. This companion deferred check closes that zero-row hole while still
+-- allowing Phase 3 to insert a line and its complete vector in one transaction.
+CREATE OR REPLACE FUNCTION public.trg_field_app_billing_line_has_shares()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM public.field_app_billing_lines WHERE id = NEW.id)
+     AND NOT EXISTS (
+       SELECT 1
+         FROM public.invoice_line_shares
+        WHERE billing_line_id = NEW.id
+     ) THEN
+    RAISE EXCEPTION
+      'field_app_billing_line % has no invoice_line_shares vector',
+      NEW.id
+      USING ERRCODE = 'check_violation';
+  END IF;
+  RETURN NULL;
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION public.trg_field_app_billing_line_has_shares()
+  FROM PUBLIC, anon, authenticated;
+
+DROP TRIGGER IF EXISTS trg_field_app_billing_line_has_shares
+  ON public.field_app_billing_lines;
+CREATE CONSTRAINT TRIGGER trg_field_app_billing_line_has_shares
+  AFTER INSERT ON public.field_app_billing_lines
+  DEFERRABLE INITIALLY DEFERRED
+  FOR EACH ROW EXECUTE FUNCTION public.trg_field_app_billing_line_has_shares();
 
 -- ---------------------------------------------------------------------------
 -- 5. Immutability WHILE POSTED (spec §1/§5). Shares are freely editable on a draft
@@ -195,12 +257,26 @@ SET search_path = public, pg_temp
 AS $$
 DECLARE
   v_posted boolean;
+  v_item_ids uuid[] := ARRAY[]::uuid[];
 BEGIN
-  SELECT (i.status = 'posted' OR i.posted_at IS NOT NULL)
-    INTO v_posted
+  -- UPDATE must protect both sides: otherwise a row can move from a draft item
+  -- to an already-posted item while the trigger inspects only OLD.
+  IF TG_OP IN ('UPDATE', 'DELETE') THEN
+    v_item_ids := array_append(v_item_ids, OLD.invoice_item_id);
+  END IF;
+  IF TG_OP IN ('INSERT', 'UPDATE') THEN
+    v_item_ids := array_append(v_item_ids, NEW.invoice_item_id);
+  END IF;
+
+  SELECT EXISTS (
+    SELECT 1
     FROM public.invoice_items ii
     JOIN public.invoices i ON i.id = ii.invoice_id
-   WHERE ii.id = COALESCE(OLD.invoice_item_id, NEW.invoice_item_id);
+    WHERE ii.id = ANY(v_item_ids)
+      AND (i.status = 'posted' OR i.posted_at IS NOT NULL)
+  )
+    INTO v_posted
+  ;
 
   IF COALESCE(v_posted, false) THEN
     RAISE EXCEPTION
@@ -208,7 +284,10 @@ BEGIN
       COALESCE(OLD.id, NEW.id)
       USING ERRCODE = 'raise_exception';
   END IF;
-  RETURN COALESCE(NEW, OLD);
+  IF TG_OP = 'DELETE' THEN
+    RETURN OLD;
+  END IF;
+  RETURN NEW;
 END;
 $$;
 

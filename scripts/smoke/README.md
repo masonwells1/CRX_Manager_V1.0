@@ -81,6 +81,20 @@ The same disposable database loads the checked-in atomic OCR commit function
 and proves three real two-session losers roll back cleanly: approval-first,
 link-first, and lease-change-first.
 
+## Disposable per-line split-billing Phase 1 proof
+
+The unapplied Phase 1 schema migration has a standalone PostgreSQL 17 proof:
+
+```bash
+node scripts/smoke/prove-per-line-split-billing-phase1.mjs
+```
+
+It applies the checked-in migration verbatim in a uniquely named, network-isolated
+container backed by tmpfs. It proves that moving a share cannot strand its source
+line at 0%, a share cannot move onto a posted invoice item, a logical billing line
+cannot commit without a vector, and two concurrent full-vector writers serialize
+so exactly one commits. The container is removed in `finally` on PASS or FAIL.
+
 ## Disposable Supplier Pricing Phase 1a proof
 
 The live additive bootstrap, live pre-deploy zero-cost guard, and parked
