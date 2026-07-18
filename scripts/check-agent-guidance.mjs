@@ -34,7 +34,7 @@ This is the B7 pattern from 2026-05-26.
 1. Extract the timestamp prefix from each filename: \`<YYYYMMDDHHMMSS>_<description>.sql\`.
 2. You CANNOT call Supabase MCP (your tools are Read/Grep/Glob/Bash). Do NOT attempt the Supabase MCP \`list_migrations\` tool. Compare the on-disk filename timestamps against each other for ordering sanity, then look for a current orchestrator-recorded \`list_migrations\` preflight in \`docs/reference/migration-history.md\` or the task evidence. Before apply, the disk timestamp must be **strictly greater than the current live high-water**. Supabase MCP assigns a fresh live version at apply time, so the pre-apply filename is NOT expected to equal that future value.
 3. If no current live high-water evidence is available, emit a **HIGH** finding telling the orchestrator to run Supabase MCP \`list_migrations\` and confirm the disk timestamp is greater than the current live high-water. If evidence shows the filename is not greater, emit **HIGH** and require a fresh filename. If current evidence proves it is greater, this check is clean.
-4. Always note the post-apply B7 requirement: after a successful MCP apply, rename the disk file to the MCP-assigned live version and update migration history before commit. This future rename is a post-apply obligation, not a pre-apply finding.
+4. Always note the post-apply B7 closeout: after a successful MCP apply, reconcile the ledger row via UPDATE so the ledger name matches the on-disk filename, and update docs/reference/migration-history.md with the version/name pair before commit. NEVER rename the disk file — renaming breaks ledger name-matching (settled policy, 2026-07-17 save_customer incident). This closeout is a post-apply obligation, not a pre-apply finding.
 `;
 function hasImpossiblePreApplyEquality(text) {
   return text.split(/(?<=[.!?])\s+/).some((sentence) => {
@@ -69,7 +69,7 @@ record(/NOT expected to equal that future value/i.test(migrationStampCheck), "mi
 record(!impossiblePreApplyEquality, "migration drift reviewer contains no affirmative pre-apply future-version equality rule");
 record(adversarialEqualityRules.every(hasImpossiblePreApplyEquality), "migration drift reviewer equality detector rejects adversarial affirmative rules");
 record(!hasImpossiblePreApplyEquality(validNegativeEqualityRule), "migration drift reviewer equality detector permits direct negation");
-record(/after a successful MCP apply, rename the disk file to the MCP-assigned live version and update migration history before commit/i.test(migrationStampCheck), "migration drift reviewer requires the complete post-apply B7 closeout");
+record(/after a successful MCP apply, reconcile the ledger row via UPDATE so the ledger name matches the on-disk filename/i.test(migrationStampCheck) && /NEVER rename the disk file/i.test(migrationStampCheck), "migration drift reviewer requires the complete post-apply B7 closeout");
 
 const allow = new Set(settings.permissions?.allow || []);
 const ask = new Set(settings.permissions?.ask || []);

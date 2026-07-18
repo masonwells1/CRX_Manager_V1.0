@@ -4,6 +4,10 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-18 — Phase 1a review gate: revert drift-reviewer spec edit (M1)
+
+Claude's three-reviewer gate on PR #163 passed with zero blockers but required one fix: the branch had edited `.claude/agents/migration-drift-reviewer.md` inside the feature PR, and the new wording instructed a post-apply disk-file rename — contradicting the settled disk-vs-live policy (never rename migration files; reconcile via ledger UPDATE). Guard/reviewer-spec changes require their own approval and must not ride along in feature merges. Resolution (orchestrator, Mason-authorized full-authority run): the CHECK 6 refinement itself is correct and KEPT (pre-apply filename is never expected to equal the future stamped version; disk timestamp must exceed live high-water), but the contradicting rename instruction is replaced with the settled closeout — reconcile the ledger row via UPDATE, never rename the disk file — in both the agent spec and the enforcing check in scripts/check-agent-guidance.mjs, keeping spec and checker in lockstep.
+
 ## 2026-07-17 — Split-billing architecture dig + per-line-item custom-split design spec v2 (review-hardened via gpt-5.6-terra xhigh plan review; 4 blockers folded in). Owner workflow settled: field split=default, adjust in unposted draft, unpost reversible. Committed 4b695109; Codex builds next week. No code/DB changes.
 
 Split-billing architecture dig + per-line-item custom-split design spec v2 (review-hardened via gpt-5.6-terra xhigh plan review; 4 blockers folded in). Owner workflow settled: field split=default, adjust in unposted draft, unpost reversible. Committed 4b695109; Codex builds next week. No code/DB changes.
