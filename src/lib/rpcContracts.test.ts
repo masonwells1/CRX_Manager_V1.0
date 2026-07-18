@@ -1349,6 +1349,7 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   // live pg_proc that each body uses check_idempotency/save scoped to its own operation. They were
   // added to src/types/supabase.ts but never classified here, which left main RED for all sessions.
   'apply_credit_memo_to_invoice',
+  'apply_product_pricing_change_set',
   'apply_remaining_prepayments',
   'apply_write_off',
   'approve_return',
@@ -1388,6 +1389,7 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   'create_invoice_from_order',
   'create_label_draft',
   'create_order_from_blend_ticket',
+  'create_pricing_workbook_export',
   'create_quick_delivery',
   'create_rebate_claim',
   'create_vendor_bill',
@@ -1412,6 +1414,7 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   'manual_inventory_add',
   'post_commission_payment',
   'post_invoice',
+  'preview_product_pricing_changes',
   'process_offline_action',
   'reassign_delivery',
   'receive_po_items',
@@ -1989,12 +1992,14 @@ describe('Idempotency coverage drift (generated-types driven, fail-closed)', () 
     expect(unclassified).toEqual([]);
   });
 
-  it('migration-only idempotent RPCs are explicit and really declare the key', () => {
+  it('migration-only idempotent RPCs are explicit and really enforce the key', () => {
     const generatedNames = new Set(generatedRpcShapes().map(({ name }) => name));
     const functions = latestMigrationFunctions();
     const stale = [...MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY].filter((rpc) => {
-      const definition = functions.get(rpc)?.definition || '';
-      return generatedNames.has(rpc) || !/p_idempotency_key\s+text/i.test(definition);
+      const current = functions.get(rpc);
+      return generatedNames.has(rpc)
+        || !/p_idempotency_key\s+text/i.test(current?.definition || '')
+        || !bodyUsesIdempotency(current?.body || '');
     });
     expect(stale).toEqual([]);
   });

@@ -108,6 +108,17 @@ Built read-only adversarial gauntlet loop over sections 2-6 (money/inventory/lif
 
 Split-billing architecture dig + per-line-item custom-split design spec v2 (review-hardened via gpt-5.6-terra xhigh plan review; 4 blockers folded in). Owner workflow settled: field split=default, adjust in unposted draft, unpost reversible. Committed 4b695109; Codex builds next week. No code/DB changes.
 
+## 2026-07-17 — Applied Supplier Pricing Phase 1a legacy Product repeat-save repair
+
+- Applied the small compatibility migration for the currently deployed Product page (live ledger `20260717171331` / source name `20260717170000_restore_legacy_pricing_version_compat`): it ignores the page's stale submitted pricing version, while the database continues to own and increment the value. Governed worksheet/product RPC calls still reject any client-supplied version, and the parked final cutover restores the unconditional strict rejection. Both required migration reviews were clean; disposable and rolled-back-live proofs each execute two consecutive old-form saves, with the live check ending `PHASE1A_LIVE_REPEAT_SAVE_ROLLBACK_PASS` and leaving no data behind.
+
+---
+
+## 2026-07-17 — Supplier Pricing Phase 1a replay and workbook safety correction
+
+- Preserved the already-live supplier-pricing bootstrap's reviewed CRLF bytes in Git while pinning the live zero-cost guard to LF. Clean checkouts now reproduce the exact applied artifacts and the bootstrap-to-guard function-body hash contract instead of failing replay after Git line-ending normalization. A correction-guard test now hashes the exact Git-index bytes for both applied artifacts and proves CRLF-to-LF normalization is rejected before push.
+- Added pre-ExcelJS pricing-workbook limits: 10 MB compressed input, 2,000 ZIP entries, and 25 MB of actual streamed decompression. Oversized files are rejected before `File.arrayBuffer()`, and hostile archives are stopped even if their ZIP directory lies about expanded size.
+
 ## 2026-07-17 — Add CodeRabbit AI PR-review config (.coderabbit.yaml) tuned to CRX hard rules; opened PR #160. GitHub setup inspection: confirmed CodeQL default-setup, secret scanning, Dependabot, protect-main ruleset all active; repo kept public per Mason.
 
 Add CodeRabbit AI PR-review config (.coderabbit.yaml) tuned to CRX hard rules; opened PR #160. GitHub setup inspection: confirmed CodeQL default-setup, secret scanning, Dependabot, protect-main ruleset all active; repo kept public per Mason.
@@ -152,9 +163,7 @@ Add CodeRabbit AI PR-review config (.coderabbit.yaml) tuned to CRX hard rules; o
   - `supabase/migrations/20260716182318_crm_purchase_intelligence.sql`
   - `supabase/migrations/20260716195012_crm_supersede_fact_expiry.sql`
 
-## 2026-07-17 — APPLIED save_customer ownership enforcement to live (ledger 20260717123000) under Mason's in-chat OK. Post-apply: function hash changed, single overload, all gates present, grants clean (no anon), all 17 DB sweeps PASS, rolled-back live probe POST_PASS_ROLLBACK (rep denied editing non-assigned customer, own edit works). Updated migration-history row 734 + DECISION_LOG to applied.
-
-APPLIED save_customer ownership enforcement to live (ledger 20260717123000) under Mason's in-chat OK. Post-apply: function hash changed, single overload, all gates present, grants clean (no anon), all 17 DB sweeps PASS, rolled-back live probe POST_PASS_ROLLBACK (rep denied editing non-assigned customer, own edit works). Updated migration-history row 734 + DECISION_LOG to applied.
+## 2026-07-17 — APPLIED save_customer ownership enforcement to live (ledger 20260717123000) under Mason's in-chat OK. Post-apply: function hash changed, single overload, all gates present, grants clean (no anon), all 17 DB sweeps PASS, rolled-back live probe POST_PASS_ROLLBACK (rep denied editing non-assigned customer, own edit works). Updated migration-history row 744 + DECISION_LOG to applied.
 
 - **Commits this session** (git log --since=12.hours --author=Mason):
   - `addda7cd Close money and inventory gauntlet gaps (#153)`
@@ -220,6 +229,12 @@ Native CRM module shipped end-to-end in one armed autonomous run (mission `docs/
 
 ---
 
+## 2026-07-16 — Migration drift reviewer B7 gate correction
+
+Corrected the trusted migration-drift charter's contradictory version-stamp check. The old wording required a pending disk filename to equal the version Supabase would assign in the future, which is unknowable before `apply_migration` and caused clean migrations to fail closed even after a fresh live-ledger preflight. The reviewer now enforces the real two-stage B7 contract: before apply, the disk timestamp must be strictly above the current live high-water; after apply, the disk file must be renamed to the MCP-assigned live version. `check-agent-guidance.mjs` locks the complete CHECK 6 block to one canonical fail-closed contract and retains adversarial branch/equality checks, so synonym changes cannot silently reintroduce the impossible requirement.
+
+---
+
 ## 2026-07-17 — Exact bulk purchase-order retry replay
 
 The final Sonnet 5 exact-SHA review found one non-corrupting but misleading lost-response path: a successful bulk PO import retried with the same request key was classified as a different-request document duplicate, so the browser could report it as skipped and omit its normal success refresh. Forward migration `20260717032000_replay_bulk_po_same_request_result` applied live as ledger version `20260717032437` and restores the required order after current actor authorization: exact request-key replay returns the original cached `saved` result and stored PO number; only a different request key reaches the durable global document-claim check; and both checks still occur before number allocation. The stacked pre-apply and deployed post-apply adversarial rollback smokes both reached `SMOKE_PASS_ROLLBACK` after proving same-key saved replay, cross-employee different-key duplicate detection, admin delete cleanup, and unchanged-document re-import. Permanent catalog checks found the migration once, exact replay/claim/number ordering, correct grants and fixed search path, the delete-cleanup trigger enabled, and zero claim residue, stale save results, fractional PO costs, or header mismatches. The stale RPC reference now correctly describes `delete_purchase_order` as a guarded permanent delete, and the live schema registry was rebuilt to high-water `20260717032437`.
@@ -243,6 +258,16 @@ The final GPT-5.6-sol adversarial pass found four release gaps after the earlier
 ## 2026-07-16 — Final bulk purchase-order replay corrections
 
 The last adversarial review found three narrower bulk-import issues: a server-side duplicate was displayed as newly imported and left the browser's unused reserved PO number behind, partial failures closed the review modal and hid the failed documents, and binary floating-point rounding disagreed with PostgreSQL on half-cent fractional-quantity totals. The browser now consumes the server's original PO number, reports new imports separately from already-imported skips, keeps partial failures open while guaranteeing the parent PO list refreshes on close, and uses decimal-exact half-away-from-zero cent rounding. Reviewed forward migration `20260716233000_globalize_bulk_po_import_intents` applied live as ledger version `20260716235814`; it globalizes the persistent vendor-document claim across authorized employees while leaving generic request idempotency actor-scoped, includes a locked duplicate preflight, and returns the first PO number on replay. The production cross-employee rollback smoke ended in `SMOKE_PASS_ROLLBACK`, and permanent checks found zero claim rows, zero PO header mismatches, and zero fractional-cost rows. The final Sonnet gate also registered the adversarial chain in `smoke-specs.json`, restored the previously omitted `smoke-gauntlet-money-workflows.sql` artifact, corrected that smoke's UTC-midnight/Chicago-business-date mismatch, and closed unit-cost conversion's remaining binary-float edge; the restored live AP/finance-charge/prepay chain then reached `SMOKE_PASS_ROLLBACK`.
+
+---
+
+## 2026-07-16 — Supplier Pricing Phase 1a staged rollout checkpoint
+
+Prepared and proved the database half of the owner-controlled pricing safety foundation. The reviewed additive bootstrap is live at `supabase/migrations/20260717042803_supplier_pricing_phase1a.sql`; the compatibility-safe pre-deploy guard is live at `supabase/migrations/20260717112011_supplier_pricing_zero_cost_guard.sql` (ledger name `20260717120500_supplier_pricing_zero_cost_guard`), and the later enforcement cutover remains parked at `scripts/.staging-migrations/20260717121000_supplier_pricing_phase1a_cutover.sql`. The bootstrap adds pricing versions, retained workbook manifests/change sets, atomic/idempotent admin RPCs, and trigger-owned history for governed writes while preserving the deployed legacy Product editor. The pre-deploy guard rejects margin-driven zero cost before the RPC frontend can ship without changing legacy-mode behavior; a live authenticated Product edit plus both calculator modes reached `PHASE1A_LIVE_GUARD_ROLLBACK_PASS`. The cutover closes direct pricing/history writes only after the RPC frontend is deployed.
+
+A network-disabled disposable PostgreSQL proof compiles the exact live bootstrap, live pre-deploy zero-cost guard, and parked cutover. It first proves compatibility with the deployed editor, then proves the zero-cost guard rejects the dangerous governed input without changing legacy mode, followed by final direct-write denial, both pricing modes across three Products, collision-safe identity conflicts, exact preview/apply and history values, atomic rollback, and durable retry/replay behavior. The proof also generates and edits an actual `.xlsx`, parses it with the application workbook code, sends that parsed payload through the real preview/apply RPCs in disposable PostgreSQL, and verifies exact Product/history provenance before rollback.
+
+The frontend/OCR-retirement code is now restored for Draft-PR review because its RPC dependency and the pre-deploy zero-cost guard are live. Every frontend preview entry point also refuses a margin-driven zero cost before calling the RPC, providing a second client-side safety layer during the staged rollout. The frontend and OCR retirement are **not production behavior yet**: no frontend merge/deploy or Edge Function deploy has occurred, the active `process-document` v18 still contains the prior pricing-document OCR routes, and the strict enforcement cutover remains parked. A Windows CRLF normalization in `check-agent-guidance.mjs` also keeps the migration-drift charter's exact-text guard deterministic across checkouts.
 
 ---
 

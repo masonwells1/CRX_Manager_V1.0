@@ -28,6 +28,7 @@ nul
 ENV_SETUP.md
 playwright-report/
 test-results/
+output/
 test-import.csv
 
 # Coverage reports
