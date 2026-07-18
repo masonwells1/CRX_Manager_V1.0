@@ -12,6 +12,25 @@
 
 BEGIN;
 
+-- Deferred invariant triggers run after the Phase 3 SECURITY DEFINER writer has
+-- returned to the caller's role. Because the protected tables use FORCE RLS,
+-- their owning definer must have BYPASSRLS; ordinary table ownership is not enough.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+      FROM pg_roles
+     WHERE rolname = current_user
+       AND rolbypassrls
+  ) THEN
+    RAISE EXCEPTION
+      'PER_LINE_SPLIT_BILLING_OWNER_REQUIRES_BYPASSRLS: migration role %',
+      current_user
+      USING ERRCODE = 'insufficient_privilege';
+  END IF;
+END;
+$$;
+
 -- ---------------------------------------------------------------------------
 -- 0. Feature flag (OFF). Mirrors the app_settings boolean-flag convention
 --    (src/lib/autoDraftSetting.ts): only the literal string 'true' is ON.
@@ -252,7 +271,7 @@ CREATE CONSTRAINT TRIGGER trg_field_app_billing_line_has_shares
 CREATE OR REPLACE FUNCTION public.trg_invoice_line_shares_frozen_when_posted()
 RETURNS trigger
 LANGUAGE plpgsql
-SECURITY INVOKER            -- fires only inside the SECDEF save/unpost path; runs as its owner
+SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
 DECLARE
@@ -291,6 +310,9 @@ BEGIN
 END;
 $$;
 
+REVOKE EXECUTE ON FUNCTION public.trg_invoice_line_shares_frozen_when_posted()
+  FROM PUBLIC, anon, authenticated;
+
 -- Fires on INSERT too (defense-in-depth): a share may never be attached to an already-posted
 -- invoice, even by the server save path. On a normal draft save the invoice is not yet posted,
 -- so inserts proceed; posting happens afterward. (rls-security-reviewer M1, 2026-07-18.)
@@ -301,14 +323,16 @@ CREATE TRIGGER trg_invoice_line_shares_frozen_when_posted
 
 -- ---------------------------------------------------------------------------
 -- 6. RLS. All three tables: scoped SELECT for staff; NO browser INSERT/UPDATE/DELETE.
---    Every write happens inside the locked SECURITY DEFINER save path (Phase 3), which
---    runs as owner and bypasses RLS. We additionally REVOKE direct DML from client roles.
+--    Every write happens inside the locked SECURITY DEFINER save path (Phase 3). The
+--    invariant triggers run as the migration owner, whose BYPASSRLS posture is required
+--    by the preflight above. We additionally REVOKE direct DML from client roles.
 -- ---------------------------------------------------------------------------
 ALTER TABLE public.field_app_billing_sets  ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.field_app_billing_lines ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.invoice_line_shares     ENABLE ROW LEVEL SECURITY;
 
--- Force RLS so even table owners (defensive) obey; SECURITY DEFINER funcs still bypass via ownership.
+-- Force RLS so ordinary table owners obey; the invariant trigger definer is separately
+-- required to hold BYPASSRLS by the fail-closed preflight at the top of this migration.
 ALTER TABLE public.field_app_billing_sets  FORCE ROW LEVEL SECURITY;
 ALTER TABLE public.field_app_billing_lines FORCE ROW LEVEL SECURITY;
 ALTER TABLE public.invoice_line_shares     FORCE ROW LEVEL SECURITY;

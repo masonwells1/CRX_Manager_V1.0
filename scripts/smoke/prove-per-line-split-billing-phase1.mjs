@@ -316,6 +316,38 @@ function expectRejected(label, sql, expectedPattern) {
   return { label, passed: true, detail: detail.trim().split(/\r?\n/).at(-1) };
 }
 
+function proveTriggerSecurityContext() {
+  const posture = scalar(`
+    SELECT
+      count(*) FILTER (WHERE p.prosecdef)::text || '|' ||
+      count(*) FILTER (
+        WHERE p.proconfig @> ARRAY['search_path=public, pg_temp']::text[]
+      )::text || '|' ||
+      count(*) FILTER (
+        WHERE NOT has_function_privilege('anon', p.oid, 'EXECUTE')
+          AND NOT has_function_privilege('authenticated', p.oid, 'EXECUTE')
+      )::text || '|' ||
+      count(*) FILTER (WHERE r.rolbypassrls)::text
+    FROM pg_proc p
+    JOIN pg_roles r ON r.oid = p.proowner
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'public'
+      AND p.proname IN (
+        'trg_invoice_line_shares_sum_100',
+        'trg_field_app_billing_line_has_shares',
+        'trg_invoice_line_shares_frozen_when_posted'
+      );
+  `);
+  const passed = posture === '3|3|3|3';
+  return {
+    label: 'all invariant triggers use a locked-down RLS-bypass definer context',
+    passed,
+    detail: passed
+      ? '3 SECURITY DEFINER + fixed search_path + no client EXECUTE + BYPASSRLS owner'
+      : `catalog posture definer|search_path|locked_execute|bypass_owner = ${posture}`,
+  };
+}
+
 function proveMovedSourceLine() {
   resetFixture();
   runSql(`
@@ -417,6 +449,7 @@ async function main() {
   installSchema();
 
   const results = [
+    proveTriggerSecurityContext(),
     proveMovedSourceLine(),
     provePostedReparent(),
     proveEmptyLine(),

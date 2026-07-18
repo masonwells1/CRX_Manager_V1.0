@@ -90,10 +90,12 @@ node scripts/smoke/prove-per-line-split-billing-phase1.mjs
 ```
 
 It applies the checked-in migration verbatim in a uniquely named, network-isolated
-container backed by tmpfs. It proves that moving a share cannot strand its source
-line at 0%, a share cannot move onto a posted invoice item, a logical billing line
-cannot commit without a vector, and two concurrent full-vector writers serialize
-so exactly one commits. The container is removed in `finally` on PASS or FAIL.
+container backed by tmpfs. It proves all three invariant trigger functions use a
+fixed-search-path, client-non-executable SECURITY DEFINER owned by a BYPASSRLS role;
+that moving a share cannot strand its source line at 0%; that a share cannot move
+onto a posted invoice item; that a logical billing line cannot commit without a
+vector; and that two concurrent full-vector writers serialize so exactly one
+commits. The container is removed in `finally` on PASS or FAIL.
 
 ## Disposable Supplier Pricing Phase 1a proof
 
