@@ -10,6 +10,8 @@ Built Phase 1 of per-line-item custom split billing on branch `claude/billing-sp
 
 Fixed `scripts/graphify-refresh.mjs`: a missing `graphify` binary (ENOENT) now SKIPS (exit 0) instead of exiting 1, so the pre-push hook's optional map refresh no longer hard-blocks pushes in environments without Graphify installed (Claude Code on the web / CI). A present-but-failing Graphify still blocks. Matches the hook's documented "optional local navigation aid" intent.
 
+Authored `docs/loops/per-line-split-billing-build-loop.md` — a Codex-driven full-build loop for the remaining phases (2: SQL calculator, 3: save/post RPC, 4: UI + mail gates). Codex drives the build, Claude is the hands + live-DB verifier, Codex reviews each phase via the Gauntlet; one cycle = one phase = one draft PR; flag stays OFF; live apply / flag flip / merge to main / edge-fn deploy all remain Mason gates. Passes `validate-mission-doc` (5 harness slots). Requires the local `codex` CLI — launch from the local environment, not a cloud session. All Phase 1 + loop work landed on branch `claude/billing-splits-plan-8ih4jg` (PR #166).
+
 ## 2026-07-17 — Split-billing architecture dig + per-line-item custom-split design spec v2 (review-hardened via gpt-5.6-terra xhigh plan review; 4 blockers folded in). Owner workflow settled: field split=default, adjust in unposted draft, unpost reversible. Committed 4b695109; Codex builds next week. No code/DB changes.
 
 Split-billing architecture dig + per-line-item custom-split design spec v2 (review-hardened via gpt-5.6-terra xhigh plan review; 4 blockers folded in). Owner workflow settled: field split=default, adjust in unposted draft, unpost reversible. Committed 4b695109; Codex builds next week. No code/DB changes.
