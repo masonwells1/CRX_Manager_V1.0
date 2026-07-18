@@ -42,8 +42,19 @@ fields is a future, separately-proven enhancement). **#E** consumes the source j
 can't be double-billed. Re-proven in live PG: **PROOFOK 29/29** (adds cogs_group_lr_exact, audited_base_is_own,
 reasons_captured, double_bill_second_set_rejected, resave_same_job_allowed). rls-security-reviewer 0/0,
 migration-drift 0 blockers; typecheck + lint clean. Still parked: flag OFF, migrations NOT applied, PR #164
-NOT merged. **Remaining before flag-on: a CLEAN full re-run of the Codex gate, then Mason's review + baseline
-field-app billing cycle.**
+NOT merged.
+
+**Codex ROUND 3 RAN 2026-07-18 → 2 P1 + 4 P2, ALL fixed + PROOFOK 32/32.** A third pass (on the job-consumption
++ reopen work round-2 added) found: source job changeable on re-save → two jobs consumed (P1, now frozen);
+service priced/stamped with `current_season()` instead of the job/invoice season (P1, now season-correct);
+child invoices lacked `job_id`/`application_date` (P2); unposted group mislabeled "Posted" (P2); negative
+micro-pct residual on `33.334×3` (P2); the live-RPC snapshot test inflated to hide the 2 parked RPCs (P2, now
+uses the verified queued-bridge at true 438). The live proof ALSO caught 2 runtime bugs the reviews missed:
+`v_job.season` on an unassigned record (55000) and a stale `scheduled_date` (live `jobs` uses `job_date`) —
+both fixed. New harness note: seeding synthetic products now needs `ALTER TABLE products DISABLE TRIGGER USER`
+inside the rolled-back txn (a parallel supplier-pricing project applied live pricing-governance triggers).
+**Remaining before flag-on: a CLEAN full re-run of the Codex gate, then Mason's review + baseline field-app
+billing cycle.**
 Owner-facing detail: `docs/plans/per-line-split-billing-BUILD-HANDOFF-2026-07-18.md`.
 
 ## 1. Open HIGH findings (dormant on live data)

@@ -396,9 +396,12 @@ DECLARE
   v_line_hashes        jsonb := '[]'::jsonb;
   v_item_price_source  text;
   v_item_cost_cents    bigint;   -- per-item cost_cents (per-unit for chemical, EXTENDED for fee) — Codex r2 #F
-  -- #E source-job double-bill guard (Codex round-2 P1)
+  -- #E source-job double-bill guard (Codex round-2 P1) + round-3 season/freeze
   v_job                record;
   v_other_set          uuid;
+  v_set_source_job     uuid;     -- the set's frozen source_job_id on re-save (round-3 P1)
+  v_season             integer;  -- job/invoice season for pricing + stamping (round-3 P1)
+  v_job_app_date       date;     -- source job's application/scheduled date for child invoices (round-3 P2)
   -- #G canonical line COGS + its largest-remainder split (Codex round-2 P1)
   v_line_cogs          bigint;
   v_cogs_weights       jsonb;
@@ -531,10 +534,19 @@ BEGIN
   -- newly-added customer. The freeze trigger permits the share rewrite because every
   -- member is draft/unposted (not posted).
   IF p_billing_set_id IS NOT NULL THEN
-    SELECT id, invoice_group_id INTO v_set_id, v_group_id
+    SELECT id, invoice_group_id, source_job_id INTO v_set_id, v_group_id, v_set_source_job
       FROM field_app_billing_sets WHERE id = p_billing_set_id;
     IF NOT FOUND THEN
       RAISE EXCEPTION 'Billing set not found: %', p_billing_set_id;
+    END IF;
+
+    -- Freeze the source job on re-save (Codex round-3 P1): the set's source_job_id is set
+    -- once at first Save and drives the #E consume/guard below. Allowing it to change would
+    -- let one billing set consume TWO jobs (the new one gets marked invoiced while the old
+    -- stays invoiced and linked). Reject any change; the operator must start a new set.
+    IF p_source_job_id IS DISTINCT FROM v_set_source_job THEN
+      RAISE EXCEPTION 'SPLIT_JOB_IMMUTABLE: the source job cannot be changed on a saved split set (was %, got %)',
+        v_set_source_job, p_source_job_id USING ERRCODE = 'invalid_parameter_value';
     END IF;
 
     -- Ownership on re-save (Codex P1 #4): a non-admin may only modify a set whose EXISTING
@@ -621,7 +633,21 @@ BEGIN
       RAISE EXCEPTION 'SPLIT_JOB_NOT_COMPLETED: source job % must be completed to bill (status: %)',
         p_source_job_id, v_job.status USING ERRCODE = 'invalid_parameter_value';
     END IF;
+    v_job_app_date := v_job.job_date;          -- carried onto each child (round-3 P2); the LIVE
+                                               -- jobs table has job_date (no scheduled_date), and
+                                               -- live transfer_job_to_invoice uses job_date too.
+    v_season       := v_job.season;            -- capture here (v_job is a bare record, only assigned
+                                               -- inside this guard; referencing v_job.season outside
+                                               -- it — even in a not-taken CASE branch — raises 55000).
   END IF;
+
+  -- Season for per-customer service-rate lookups AND the child invoice stamp (Codex round-3 P1):
+  -- the SOURCE JOB's season if billing a job (captured above), else the invoice DATE's season, else
+  -- current. current_season() alone mis-priced a backdated/prior-season job and filed the wrong year.
+  v_season := COALESCE(
+    v_season,
+    compute_season(COALESCE((p_invoice->>'invoice_date')::date, CURRENT_DATE)),
+    current_season());
 
   -- ---- PASS 1: build billing lines + compute allocations ----------------------
   FOR v_line IN SELECT * FROM jsonb_array_elements(p_lines)
@@ -696,25 +722,26 @@ BEGIN
         v_base_source := COALESCE(v_base_source, 'service_rate');
       ELSE
         -- Per-customer service rate (Codex P1 #2 — Option B for service): each co-owner at
-        -- their OWN customer_application_rates(service, current season) → service default,
-        -- exactly like the live per-child field-app save. Injected as per-person overrides below.
+        -- their OWN customer_application_rates(service, INVOICE/JOB season) → service default,
+        -- exactly like the live per-child field-app save. v_season (round-3 P1) ensures a
+        -- backdated/prior-season job uses that season's historical rate, not current_season().
         SELECT COALESCE(jsonb_object_agg(m.cust, COALESCE(
                  (SELECT car.rate_per_acre_cents FROM customer_application_rates car
                    WHERE car.customer_id            = m.cust::uuid
                      AND car.application_service_id = v_app_service_id
-                     AND car.season                 = current_season()
+                     AND car.season                 = v_season
                    LIMIT 1),
                  v_app_service.default_rate_per_acre_cents, 0)), '{}'::jsonb)
           INTO v_svc_price_map
           FROM unnest(v_members) AS m(cust);
         -- #M: the precise per-customer source (a custom customer_application_rates row =>
         -- 'service_rate', otherwise the service default => 'service_default'), so each
-        -- co-owner's audited base_price_source is their OWN resolved source.
+        -- co-owner's audited base_price_source is their OWN resolved source. Same season (round-3).
         SELECT jsonb_object_agg(m.cust, CASE WHEN EXISTS (
                  SELECT 1 FROM customer_application_rates car
                   WHERE car.customer_id            = m.cust::uuid
                     AND car.application_service_id = v_app_service_id
-                    AND car.season                 = current_season())
+                    AND car.season                 = v_season)
                THEN 'service_rate' ELSE 'service_default' END)
           INTO v_svc_source_map
           FROM unnest(v_members) AS m(cust);
@@ -980,19 +1007,24 @@ BEGIN
     IF v_invoice_id IS NULL THEN
       v_is_new_invoice := true;
       v_invoice_number := next_invoice_number('field_application');
+      -- sql-safety: exempt-registry — invoices.field_app_billing_set_id is created by the prior
+      -- parked migration 20260718010000 (not yet in the schema-registry); job_id / application_date
+      -- / season are long-standing invoices columns (mirrors transfer_job_to_invoice).
       INSERT INTO invoices (
         invoice_number, customer_id, invoice_type, status,
         invoice_date, salesman_id, header_notes, created_by,
         total_amount_cents, total_cost_cents,
         invoice_group_id, application_service_id, season,
-        field_app_billing_set_id
+        field_app_billing_set_id, job_id, application_date
       ) VALUES (
         v_invoice_number, v_customer_id, 'field_application', 'draft',
         COALESCE((p_invoice->>'invoice_date')::date, CURRENT_DATE),
         v_salesman_id, p_invoice->>'header_notes', p_performed_by,
         0, 0,
-        v_group_id, p_application_service_id, current_season(),
-        v_set_id
+        v_group_id, p_application_service_id, v_season,   -- season = job/invoice season (round-3 P1)
+        -- job_id + application_date on EVERY child so field-invoice lists resolve Job # and the
+        -- application date, not just the first child via jobs.invoice_id (round-3 P2).
+        v_set_id, p_source_job_id, v_job_app_date
       ) RETURNING id INTO v_invoice_id;
     ELSE
       v_is_new_invoice := false;
@@ -1005,6 +1037,9 @@ BEGIN
         header_notes           = p_invoice->>'header_notes',
         application_service_id  = p_application_service_id,
         invoice_group_id       = v_group_id,
+        season                 = v_season,               -- keep season in sync on re-save (round-3 P1)
+        job_id                 = p_source_job_id,         -- round-3 P2 (frozen source job)
+        application_date       = v_job_app_date,
         total_amount_cents     = 0,
         total_cost_cents       = 0,
         send_disposition       = 'normal',

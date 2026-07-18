@@ -130,12 +130,20 @@ function pctsToMicro(pcts: number[]): number[] {
     result[order[k].i] += 1;
     residual -= 1;
   }
-  // Clamp a (validation-should-prevent) negative residual by trimming the smallest fractions.
+  // Remove the ENTIRE negative residual, CYCLING smallest-fraction-first — mirroring the positive
+  // branch. Percentages that sum just OVER 100 within the 0.01 UI tolerance (e.g. 33.334×3 →
+  // 100002000 micro, residual -2000) must still land on exactly 100000000; a single pass (≤1 per
+  // member) left the vector above 100000000 so the server rejected a payload the UI approved (Codex
+  // round-3 P2). `guard` breaks only if a full lap finds no member >0 (cannot happen while
+  // residual<0, since the over-100 sum guarantees some member carries a subtractable unit).
   const revOrder = [...order].reverse();
-  for (let k = 0; k < revOrder.length && residual < 0; k += 1) {
+  for (let k = 0, guard = 0; residual < 0 && guard < revOrder.length; k = (k + 1) % revOrder.length) {
     if (result[revOrder[k].i] > 0) {
       result[revOrder[k].i] -= 1;
       residual += 1;
+      guard = 0;
+    } else {
+      guard += 1;
     }
   }
   return result;
@@ -528,7 +536,11 @@ export default function FieldAppSplitInvoiceEditor() {
       status: (r.status as string) || 'draft',
     }));
     setResultInvoices(invoices);
-    setPosted(invoices.length > 0 && invoices.every((i) => i.status !== 'draft'));
+    // "Posted" means every child is in a COMMITTED status — NOT merely "not draft" (Codex round-3
+    // P2). An unposted group has children in status 'unposted'; treating that as posted would label
+    // a reopened, re-postable group "Posted" and disable Post, breaking the unpost/repost lifecycle.
+    setPosted(invoices.length > 0
+      && invoices.every((i) => i.status !== 'draft' && i.status !== 'unposted'));
 
     // Names for any customers we do not yet have.
     const missing = invoices.map((i) => i.customer_id).filter((id) => !customerNames[id]);

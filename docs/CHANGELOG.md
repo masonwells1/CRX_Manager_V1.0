@@ -4,6 +4,21 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-18 — Per-line split-billing: Codex ROUND 3 → 2 P1 + 4 P2, all fixed + PROOFOK 32/32 (branch, still PARKED). Autonomous Opus-4.8 run.
+
+A third `codex review --base main` on `795604f3` went deeper into the job-consumption and reopen work my round-2 fixes introduced, and returned 2 P1 + 4 P2 — all fixed. Feature stays **flag OFF, migrations NOT applied, PR #164 NOT merged**; go-live still gated on a CLEAN Codex verdict.
+
+- **P1 freeze source job on re-save** — the re-save branch never compared/updated the set's stored `source_job_id`, so changing the Source job after the first Save let one billing set consume TWO jobs (both flipped to `invoiced`). Now a change is refused (`SPLIT_JOB_IMMUTABLE`); start a new set instead.
+- **P1 season-correct pricing** — the per-customer service-rate lookup AND the child `season` stamp used `current_season()`, mis-pricing a backdated / prior-season job and filing it in the wrong reporting year. Now `v_season = source job's season → invoice-date season → current`, used for the `customer_application_rates` lookup and `invoices.season` (mirrors `transfer_job_to_invoice`). Proven: a 2025-dated service invoice bills the 2025 rate ($35000) and stamps season 2025.
+- **P2 source-job metadata on every child** — child invoices now carry `job_id` + `application_date`, so field-invoice lists resolve Job # for all children (not just the first via `jobs.invoice_id`).
+- **P2 repost lifecycle** — "posted" now means every child is in a COMMITTED status (not merely "not draft"); an unposted group is no longer mislabeled Posted with Post disabled.
+- **P2 percentage residual** — `pctsToMicro` now removes the ENTIRE negative residual by cycling, so `33.334×3` (sum just over 100 within the 0.01 UI tolerance) lands on exactly 100000000 instead of a server-rejected vector.
+- **P2 live-RPC snapshot honesty** — restored the raw live `pg_proc` snapshot to the true 438 (was inflated to 440 to hide the two parked split RPCs) and moved them into the verified `QUEUED_MIGRATION_FUNCTIONS` bridge (absent-live + migration-sourced), with the "no committed queued exceptions" guard narrowed to an explicit flag-gated allowlist.
+
+**Two runtime bugs the live proof caught (the reviews passed the file — only execution found them):** (a) `v_job.season` referenced in the season COALESCE when `p_source_job_id IS NULL`, where `v_job` (a bare record) is unassigned → PL/pgSQL 55000 — now captured into a plain variable inside the guard; (b) `application_date` used `v_job.scheduled_date` from a stale on-disk migration — the live `jobs` has no such column, switched to `v_job.job_date` (what live `transfer_job_to_invoice` uses).
+
+**PROVEN in the live DB** (rollback): `PROOFOK` **32/32** — the 29 prior scenarios + `children_carry_job_id_ok`, `source_job_frozen_ok`, `season_aware_pricing_ok(2025 rate 35000, child season 2025)`. `rls-security-reviewer` 0/0/0, `migration-drift-reviewer` 0 blockers on the delta. Typecheck + lint + the 3 RPC-contract test files (96 tests) pass. Note: the proof harness now disables `products`' USER triggers for its rolled-back txn because a parallel supplier-pricing project applied live pricing-governance triggers (`require_governed_product_pricing` + `guard_and_version_product_pricing`) that block direct product seeding — the split RPC only READS `products`. Still **flag OFF, not applied, not merged.**
+
 ## 2026-07-18 — Per-line split-billing: Codex ROUND 2 fully closed — final 6 findings (#A/#E/#G/#H/#L/#M) fixed + PROOFOK 29/29 (branch, still PARKED). Autonomous Opus-4.8 run.
 
 The remaining 6 of the 13 round-2 findings are now fixed (the first 7 landed in `eb942f86`). Feature stays **flag OFF, migrations NOT applied, PR #164 NOT merged** — go-live remains gated on a CLEAN full Codex re-run + Mason's review.
