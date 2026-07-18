@@ -21,7 +21,7 @@ const expectedArtifacts = new Map([
     '90cbc98a0ff4ea21c15395b378af76b66e6861e3e31fc54fd6770979fdf91799',
   ],
   [
-    'supabase/migrations/20260718124517_harden_supplier_pricing_cent_scale_and_trigger.sql',
+    'supabase/migrations/20260718154131_20260718124517_harden_supplier_pricing_cent_scale_and_trigger.sql',
     '988c36dff572d09eba6f7da3b6d6bc0bac51c2c61ce9bf3756b45f9444965ec3',
   ],
 ]);

@@ -1,12 +1,12 @@
--- Historical replay companion for the already-applied Supplier Pricing Phase 1a
--- correction at 20260718124517. That migration contains a row-trigger assertion
+-- Disposable replay adapter for the byte-immutable, already-applied Supplier
+-- Pricing Phase 1a correction. That migration contains a row-trigger assertion
 -- which is valid for production but otherwise has no row to exercise when a
 -- disposable catalog contains zero Products.
 --
 -- This statement trigger is deliberately inert whenever any Product exists. On
 -- an empty catalog it makes the assertion's zero-row UPDATE raise the exact error
--- the assertion expects. The immediately following 20260718124518 companion
--- removes this helper. No Product row is inserted, updated, or deleted here.
+-- the assertion expects. The disposable proof immediately removes this helper.
+-- This fixture is not a production migration and writes no Product data.
 
 CREATE OR REPLACE FUNCTION public._supplier_pricing_empty_replay_guard()
 RETURNS trigger

@@ -43,19 +43,21 @@ const forwardCorrectionSql = path.join(
   repoRoot,
   'supabase',
   'migrations',
-  '20260718124517_harden_supplier_pricing_cent_scale_and_trigger.sql'
+  '20260718154131_20260718124517_harden_supplier_pricing_cent_scale_and_trigger.sql'
 );
 const emptyReplaySetupSql = path.join(
   repoRoot,
-  'supabase',
-  'migrations',
-  '20260718124516_supplier_pricing_empty_replay_setup.sql'
+  'scripts',
+  'smoke',
+  'fixtures',
+  'supplier-pricing-empty-replay-setup.sql'
 );
 const emptyReplayCleanupSql = path.join(
   repoRoot,
-  'supabase',
-  'migrations',
-  '20260718124518_supplier_pricing_empty_replay_cleanup.sql'
+  'scripts',
+  'smoke',
+  'fixtures',
+  'supplier-pricing-empty-replay-cleanup.sql'
 );
 const forwardCorrectionSmokeSql = path.join(
   repoRoot,
