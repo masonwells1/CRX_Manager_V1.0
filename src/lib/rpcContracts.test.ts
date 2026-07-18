@@ -1581,6 +1581,12 @@ const IDEMPOTENCY_BODY_EXEMPT: Record<
   save_blend_recipe: 'verified-live',
   transition_rebate_claim: 'verified-live',
   unapply_credit_memo: 'verified-live',
+  // H4 (2026-07-18): restore_cancelled_order was reduced to an auth gate + an
+  // unconditional RAISE (restore is forbidden — it could not safely reverse the
+  // cancel's inventory/commission/draw side-effects). It no longer mutates, so
+  // there is nothing to make idempotent; the p_idempotency_key param is retained
+  // only to keep the signature identical for in-place CREATE OR REPLACE.
+  restore_cancelled_order: 'non-mutating',
   // naturally idempotent
   save_blend_ticket: 'natural', // UPDATE-only path; replay overwrites identically
   generate_rup_sales_records: 'natural', // per-row NOT EXISTS guard

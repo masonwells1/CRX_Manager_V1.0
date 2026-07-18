@@ -56,6 +56,21 @@
       "description": "H2 double-charge regression: generate_finance_charges must charge an overdue balance at most once per customer per calendar month. Sets up an overdue posted invoice, runs the generator on two different as-of dates in the same month, and asserts exactly one finance_charge exists (second run skips). FAIL-FIRST against the pre-fix function (exact-date dedup let the second run charge again). Self-contained fixtures and terminal rollback.",
       "covers": ["generate_finance_charges"]
     },
+    "void_invoice": {
+      "chain": "smoke-void-invoice-blocks-applied-payments.sql",
+      "description": "H3 cash-strand regression: void_invoice must refuse to void a posted invoice that still has direct cash applied (paid_amount_cents>0 or invoice_line_allocations) because it does not re-bank that cash, but must still void a prepay-only invoice (which it re-banks). Records a partial payment then asserts void raises INVOICE_HAS_APPLIED_PAYMENTS; separately applies prepay then asserts void succeeds. FAIL-FIRST against the pre-fix function (the paid-invoice void succeeded, stranding cash). Self-contained fixtures and terminal rollback.",
+      "covers": ["void_invoice", "record_invoice_payment", "apply_prepay_to_invoice", "create_prepay_check_splits"]
+    },
+    "restore_cancelled_order": {
+      "chain": "smoke-forbid-restore-cancelled-order.sql",
+      "description": "H4 regression: restore_cancelled_order must refuse to reactivate a cancelled order (it cannot re-apply the released inventory / zeroed commissions / reversed draws, so a restored order would be corrupt). Converts a quote, cancels the order, then asserts restore raises ORDER_RESTORE_NOT_SUPPORTED and the order stays cancelled. FAIL-FIRST against the pre-fix function (restore succeeded, restoring a corrupt order). Self-contained fixtures and terminal rollback.",
+      "covers": ["restore_cancelled_order", "convert_quote_to_order", "cancel_order"]
+    },
+    "create_invoice_for_unbilled_delivery": {
+      "chain": "smoke-backfill-refuse-split-billing.sql",
+      "description": "H5 regression: create_invoice_for_unbilled_delivery must refuse to backfill a single invoice for an order that still needs split billing (needs_split_billing=true), because a mono invoice mis-attributes all AR to one payer. Builds a completed delivery on a split-billing order and asserts the backfill raises ORDER_NEEDS_SPLIT_BILLING with no invoice created. FAIL-FIRST against the pre-fix function (it created one mono invoice). Self-contained fixtures and terminal rollback.",
+      "covers": ["create_invoice_for_unbilled_delivery", "convert_quote_to_order"]
+    },
     "stage_offline_action": {
       "chain": "smoke-offline-action-receipts.sql",
       "description": "Permanent offline receipt chain: complete_delivery and complete_job stage -> immutable canonical replay -> canonical process -> durable sanitized status -> replay without duplicate inventory/application work; actor-bound processing; owner and office status visibility; missing-target and unauthorized-action retention; deterministic state-conflict review; sanitized office queue; audited, idempotent manual resolution; RPC-only writes; grants. Self-contained fixtures and terminal rollback.",

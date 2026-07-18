@@ -27,6 +27,21 @@ finished (Codex apply-proof → live apply → PR merge) from Mason's Windows se
   `20260718132000_finance_charge_month_dedup.sql`. Dedup now on the calendar month (+ month-keyed
   advisory lock) so two runs in the same month on different as-of dates can't both charge. Reviewers
   clean; fail-first smoke proved the double-charge live (2 charges from 2 same-month runs).
+- **H3 — void_invoice stranded customer cash (BUILT).**
+  `20260718133000_void_invoice_block_applied_payments.sql`. Refuses to void a posted invoice that
+  still has direct cash applied (`paid_amount_cents>0` or `invoice_line_allocations`) — admin must
+  void/unapply the payment first (re-banks it as prepay). Prepay-only voids unaffected. Reviewers
+  clean; fail-first smoke proved the strand live.
+- **H4 — restore_cancelled_order left a corrupt order (BUILT).**
+  `20260718134000_forbid_restore_cancelled_order.sql`. Forbids restore (raises
+  ORDER_RESTORE_NOT_SUPPORTED) rather than attempting a fragile exact-inverse of the cancel;
+  recovery is a new order or the B2 quote escape hatch. Reviewers clean; fail-first smoke proved
+  the pre-fix restore succeeded live.
+- **H5 — backfill invoice mono-billed split-billing orders (BUILT).**
+  `20260718134500_backfill_invoice_refuse_split_billing.sql`. create_invoice_for_unbilled_delivery
+  now refuses (ORDER_NEEDS_SPLIT_BILLING) to backfill a single invoice for an order with
+  needs_split_billing=true; the admin uses the split-billing flow. Reviewers clean; fail-first
+  smoke proved the mono-bill live.
 - **B1 — Supplier Pricing Phase 1a drift:** NOT a bug fix — `feat/supplier-pricing-phase1a` is a
   whole ~40-commit feature (already live in prod, unmerged on `main`). Set aside for Mason's
   feature-merge decision, not folded into this remediation sweep.
