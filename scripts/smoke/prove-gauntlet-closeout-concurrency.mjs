@@ -27,13 +27,13 @@ const SPLIT_MIGRATION = path.join(
   ROOT,
   'supabase',
   'migrations',
-  '20260719100000_trust_only_post_revoke_split_provenance.sql',
+  '20260719044912_trust_only_post_revoke_split_provenance.sql',
 );
 const REVERT_MIGRATION = path.join(
   ROOT,
   'supabase',
   'migrations',
-  '20260719100500_revert_quote_status_deadlock_retry.sql',
+  '20260719044958_revert_quote_status_deadlock_retry.sql',
 );
 
 function fail(message, detail = '') {

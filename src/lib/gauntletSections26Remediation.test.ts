@@ -84,7 +84,7 @@ describe('gauntlet sections 2-6 CodeRabbit closeout', () => {
   });
 
   it('binds canonical split invoices to private exact provenance under shared locks', () => {
-    const sql = migration('20260719100000_trust_only_post_revoke_split_provenance.sql');
+    const sql = migration('20260719044912_trust_only_post_revoke_split_provenance.sql');
     const barrier = sql.indexOf(
       'LOCK TABLE\n  public.orders,\n  public.order_items,\n  public.order_item_field_allocations,\n  public.invoices,\n  public.invoice_items,\n  public.financial_audit_log\nIN SHARE ROW EXCLUSIVE MODE',
     );
@@ -117,7 +117,7 @@ describe('gauntlet sections 2-6 CodeRabbit closeout', () => {
   });
 
   it('makes quote/order lock contention retryable instead of deadlocking', () => {
-    const sql = migration('20260719100500_revert_quote_status_deadlock_retry.sql');
+    const sql = migration('20260719044958_revert_quote_status_deadlock_retry.sql');
     expect(sql).toContain('FOR UPDATE NOWAIT');
     expect(sql).toContain('EXCEPTION WHEN lock_not_available');
     expect(sql).toContain('QUOTE_REOPEN_CONCURRENT_ORDER_CHANGE_RETRY');
@@ -128,7 +128,7 @@ describe('gauntlet sections 2-6 CodeRabbit closeout', () => {
   });
 
   it('keeps finance-charge preview aligned with calendar-month generation dedup', () => {
-    const sql = migration('20260719101000_align_finance_charge_preview_month_dedup.sql');
+    const sql = migration('20260719045029_align_finance_charge_preview_month_dedup.sql');
     expect(sql).toContain('CREATE OR REPLACE FUNCTION public.preview_finance_charges');
     expect(sql).toContain('FROM public.finance_charges fc');
     expect(sql).toContain('fc.customer_id = c.id');
@@ -140,5 +140,29 @@ describe('gauntlet sections 2-6 CodeRabbit closeout', () => {
     expect(sql).toContain(
       'REVOKE EXECUTE ON FUNCTION public.preview_finance_charges(date) FROM PUBLIC, anon',
     );
+  });
+
+  it('keeps governed split lifecycle RPCs usable and binds every affected replay request', () => {
+    const sql = migration('20260719060256_allow_governed_split_terminal_lifecycle.sql');
+    const barrier = sql.indexOf('LOCK TABLE');
+    expect(barrier).toBeGreaterThan(-1);
+    expect(sql.indexOf('public.idempotency_keys')).toBeGreaterThan(barrier);
+    expect(sql.indexOf('DO $preflight$')).toBeGreaterThan(sql.indexOf('public.idempotency_keys'));
+    expect(sql).toContain('IDEMPOTENCY_RECONCILIATION_REQUIRED');
+    expect(sql).toContain('CREATE FUNCTION public._claim_bound_lifecycle_idempotency');
+    expect(sql).toContain('IDEMPOTENCY_REQUEST_MISMATCH');
+    expect(sql).toContain("'create_split_invoices_from_order_v1'");
+    expect(sql).toContain("'delete_invoices_v1'");
+    expect(sql).toContain("'void_invoice_v1'");
+    expect(sql).toContain("'cancel_order_v1'");
+    expect(sql).toContain('SPLIT_INVOICE_IDEMPOTENCY_RESPONSE_MISMATCH');
+    expect(sql).toContain("claim.operation = 'void_invoice'");
+    expect(sql).toContain("claim.operation = 'cancel_order'");
+    expect(sql).toContain("OLD.status IN ('posted', 'paid', 'overdue')");
+    expect(sql).toContain("OLD.status IN ('draft', 'unposted')");
+    expect(sql).toContain('SPLIT_INVOICE_TERMINAL_PROVENANCE_REFRESH_FAILED');
+    expect(sql).toContain('RENAME TO _void_invoice_split_provenance_impl_20260719');
+    expect(sql).toContain('RENAME TO _cancel_order_split_provenance_impl_20260719');
+    expect(sql).toContain('FROM PUBLIC, anon, authenticated, service_role');
   });
 });

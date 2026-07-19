@@ -1558,17 +1558,22 @@ const IDEMPOTENCY_BODY_EXEMPT: Record<
   // directly non-executable implementation that owns the canonical replay
   // lookup/save. A dedicated test below pins that indirection and both grants.
   complete_delivery: 'delegated',
-  // The private-provenance cutover wrapper adds order/item serialization and
-  // an owner-only creation claim, then forwards the same key to the renamed
-  // implementation that owns the canonical replay lookup/save.
+  // The private-provenance wrapper owns a bound replay claim, adds stable
+  // order-item serialization and an owner-only creation claim, then invokes
+  // the canonical private implementation without a second legacy key.
   create_split_invoices_from_order: 'delegated',
-  // The private-provenance cutover wrapper adds an owner-only mutation claim
-  // around governed soft deletes, then forwards the same key to the renamed
-  // implementation that owns the canonical replay lookup/save.
+  // The private-provenance wrapper owns the actor + normalized-ID replay claim,
+  // adds an owner-only mutation claim, then invokes the private implementation.
   delete_invoices: 'delegated',
+  // The terminal-provenance wrapper binds actor + order before issuing exact
+  // governed cancellation claims and invoking the private implementation.
+  cancel_order: 'delegated',
   // The public wrapper authorizes active customer scope before delegating to
   // the directly non-executable implementation that owns canonical replay.
   save_invoice: 'delegated',
+  // The terminal-provenance wrapper binds the actor and invoice before issuing
+  // its exact lifecycle claim and invoking the private implementation.
+  void_invoice: 'delegated',
   // The public wrapper hydrates an omitted cost only for a recognized existing
   // line, then delegates to the directly non-executable integer-cents writer
   // that owns the canonical replay lookup/save.
@@ -1724,7 +1729,7 @@ describe('Idempotency BODY verification (reads migration SQL)', () => {
   it('split provenance wrappers preserve the idempotent implementations and forward the exact key', () => {
     const files = getMigrationFiles();
     const wrapper = files.find(
-      ({ name }) => name === '20260719100000_trust_only_post_revoke_split_provenance.sql'
+      ({ name }) => name === '20260719044912_trust_only_post_revoke_split_provenance.sql'
     )?.content;
     const splitImplementation = files.find(
       ({ name }) => name === '20260707090000_u7_split_gate_allow_predelivery.sql'
@@ -1762,6 +1767,63 @@ describe('Idempotency BODY verification (reads migration SQL)', () => {
     );
     expect(IDEMPOTENCY_BODY_EXEMPT.create_split_invoices_from_order).toBe('delegated');
     expect(IDEMPOTENCY_BODY_EXEMPT.delete_invoices).toBe('delegated');
+  });
+
+  it('binds split creation, deletion, void, and cancellation replays to exact requests', () => {
+    const files = getMigrationFiles();
+    const wrapper = files.find(
+      ({ name }) => name === '20260719060256_allow_governed_split_terminal_lifecycle.sql'
+    )?.content;
+    const splitImplementation = files.find(
+      ({ name }) => name === '20260707090000_u7_split_gate_allow_predelivery.sql'
+    )?.content;
+    const deleteImplementation = files.find(
+      ({ name }) => name === '20260711050000_credit_apply_reversal_and_lifecycle.sql'
+    )?.content;
+    const voidImplementation = files.find(
+      ({ name }) => name === '20260718221505_preserve_voided_payment_allocation_history.sql'
+    )?.content;
+    const cancelImplementation = files.find(
+      ({ name }) => name === '20260714222000_return_credit_source_of_truth.sql'
+    )?.content;
+
+    expect(wrapper).toContain('CREATE FUNCTION public._claim_bound_lifecycle_idempotency');
+    expect(wrapper).toContain('IDEMPOTENCY_REQUEST_MISMATCH');
+    expect(wrapper).toContain("v_contract CONSTANT text := 'create_split_invoices_from_order_v1'");
+    expect(wrapper).toContain("v_contract CONSTANT text := 'delete_invoices_v1'");
+    expect(wrapper).toContain("v_contract CONSTANT text := 'void_invoice_v1'");
+    expect(wrapper).toContain("v_contract CONSTANT text := 'cancel_order_v1'");
+    expect(wrapper).toContain('SPLIT_INVOICE_IDEMPOTENCY_RESPONSE_MISMATCH');
+    expect(wrapper).toContain('RENAME TO _void_invoice_split_provenance_impl_20260719');
+    expect(wrapper).toContain('RENAME TO _cancel_order_split_provenance_impl_20260719');
+    expect(wrapper).toMatch(
+      /_create_split_invoices_from_order_provenance_impl_20260719\([\s\S]*NULL::text/
+    );
+    expect(wrapper).toMatch(
+      /_delete_invoices_split_provenance_impl_20260719\([\s\S]*NULL::text/
+    );
+    expect(wrapper).toMatch(
+      /_void_invoice_split_provenance_impl_20260719\([\s\S]*NULL::text/
+    );
+    expect(wrapper).toMatch(
+      /_cancel_order_split_provenance_impl_20260719\([\s\S]*NULL::text/
+    );
+    expect(splitImplementation).toContain(
+      "VALUES (p_idempotency_key, 'create_split_invoices_from_order'"
+    );
+    expect(deleteImplementation).toContain(
+      "v_existing := check_idempotency(p_idempotency_key, 'delete_invoices')"
+    );
+    expect(voidImplementation).toContain(
+      "v_existing := check_idempotency(p_idempotency_key, 'void_invoice')"
+    );
+    expect(cancelImplementation).toContain(
+      "v_existing := public.check_idempotency(p_idempotency_key, 'cancel_order')"
+    );
+    expect(IDEMPOTENCY_BODY_EXEMPT.create_split_invoices_from_order).toBe('delegated');
+    expect(IDEMPOTENCY_BODY_EXEMPT.delete_invoices).toBe('delegated');
+    expect(IDEMPOTENCY_BODY_EXEMPT.void_invoice).toBe('delegated');
+    expect(IDEMPOTENCY_BODY_EXEMPT.cancel_order).toBe('delegated');
   });
 
   it('save_purchase_order hydrates omitted cost before delegating to its idempotent implementation', () => {

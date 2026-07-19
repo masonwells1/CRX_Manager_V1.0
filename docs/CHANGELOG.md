@@ -25,6 +25,14 @@ tables remain empty after rollback, their deny-all RLS policies and guards are e
 direct invoice identity DML is revoked from Data API roles, and the public RPCs retain their
 intended SECURITY DEFINER grants and fixed search paths.
 
+A final forward correction applied as ledger version `20260719060256` keeps governed split
+invoices usable through the canonical `void_invoice` and `cancel_order` lifecycle paths while
+preserving fail-closed raw-edit guards. It also binds `create_split_invoices_from_order`,
+`delete_invoices`, `void_invoice`, and `cancel_order` replay keys to the authenticated actor and
+complete normalized request, so a key cannot be reused for another order or invoice set. The
+full H5 rollback chain passed after apply, all transient claim/provenance rows remained clean,
+and the live schema registry was regenerated at the final migration high-water.
+
 ### 2026-07-19 — Gauntlet CodeRabbit closeout hardening
 
 CodeRabbit's ready-for-review pass found and prompted fixes for false-green smoke/E2E

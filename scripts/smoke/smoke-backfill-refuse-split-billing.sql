@@ -22,18 +22,26 @@ DECLARE
   v_customer uuid;
   v_product  uuid;
   v_quote    uuid;
+  v_quote_b  uuid;
   v_sec      uuid;
+  v_sec_b    uuid;
   v_res      jsonb;
   v_order    uuid;
+  v_order_b  uuid;
   v_oitem    uuid;
+  v_oitem_b  uuid;
   v_delivery uuid;
   v_field    uuid;
   v_invoice  uuid;
   v_fake_group uuid := gen_random_uuid();
   v_split_ids uuid[];
+  v_cancel_ids uuid[];
   v_split_group uuid;
   v_saved_id uuid;
   v_saved_items jsonb;
+  v_delete_a uuid;
+  v_delete_b uuid;
+  v_deleted_count integer;
   v_err      text;
 BEGIN
   SELECT id INTO v_admin FROM public.profiles
@@ -94,6 +102,24 @@ BEGIN
   INSERT INTO public.fields (customer_id, field_name, crop_type, total_acres)
   VALUES (v_customer, '[E2E] H5 Field ' || v_suffix, 'corn', 100)
   RETURNING id INTO v_field;
+
+  -- A second fully valid split-order fixture is used only to prove that an
+  -- idempotency key bound to the first order cannot replay its invoice IDs for
+  -- a different request while leaving this order untouched.
+  INSERT INTO public.quotes (quote_number, customer_id, created_by, status, commission_split)
+  VALUES ('E2E-H5-QB-' || v_suffix, v_customer, v_admin, 'sent', '{"splits": []}'::jsonb)
+  RETURNING id INTO v_quote_b;
+  INSERT INTO public.quote_sections (quote_id, section_name)
+  VALUES (v_quote_b, 'Main') RETURNING id INTO v_sec_b;
+  INSERT INTO public.quote_items (quote_id, section_id, product_id,
+    price_per_unit, current_cost, total_units_needed, unit_size)
+  VALUES (v_quote_b, v_sec_b, v_product, 10, 6, 100, 'gal');
+  SELECT public.convert_quote_to_order(v_quote_b) INTO v_res;
+  PERFORM set_config('app.admin_override', 'false', true);
+  v_order_b := (v_res->>'order_id')::uuid;
+  SELECT id INTO v_oitem_b FROM public.order_items WHERE order_id = v_order_b LIMIT 1;
+  INSERT INTO public.order_item_field_allocations (order_item_id, field_id, acres)
+  VALUES (v_oitem_b, v_field, 100);
 
   -- Build the delivery while 'scheduled' (delivery_items are locked once the
   -- delivery leaves 'scheduled'), then transition it to 'completed'. signed_by
@@ -308,6 +334,32 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_FAIL: canonical field-acre split lacks group provenance';
   END IF;
 
+  SELECT public.create_split_invoices_from_order(
+    v_order, v_admin, 'chemical_sale', 'e2e-h5-governed-split-' || v_suffix
+  ) INTO v_cancel_ids;
+  IF v_cancel_ids IS DISTINCT FROM v_split_ids THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: exact split-invoice idempotency replay changed its response';
+  END IF;
+
+  BEGIN
+    PERFORM public.create_split_invoices_from_order(
+      v_order_b, v_admin, 'chemical_sale', 'e2e-h5-governed-split-' || v_suffix
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: split-invoice key replayed across different orders';
+  EXCEPTION WHEN OTHERS THEN
+    v_err := SQLERRM;
+    IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_err NOT LIKE 'IDEMPOTENCY_REQUEST_MISMATCH:%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: split-invoice mismatch raised unexpected error: %', v_err;
+    END IF;
+  END;
+  IF EXISTS (
+    SELECT 1 FROM public.invoices
+     WHERE order_id = v_order_b AND deleted_at IS NULL
+  ) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: mismatched split key mutated the second order';
+  END IF;
+
   IF to_regclass('public.split_invoice_provenance') IS NOT NULL THEN
     IF (SELECT count(*) FROM public.split_invoice_provenance p
          WHERE p.invoice_id = ANY(v_split_ids))
@@ -416,6 +468,111 @@ BEGIN
      WHERE id = ANY(v_split_ids) AND status <> 'posted'
   ) THEN
     RAISE EXCEPTION 'SMOKE_FAIL: governed split group did not post completely';
+  END IF;
+
+  -- Terminal lifecycle writers must remain usable without weakening raw
+  -- provenance immutability. The pre-follow-up guard has no owner claim for
+  -- void_invoice, so its total=0 update is refused here.
+  FOREACH v_invoice IN ARRAY v_split_ids LOOP
+    BEGIN
+      PERFORM public.void_invoice(
+        v_invoice,
+        '[E2E] governed split terminal void',
+        'e2e-h5-governed-void-' || v_invoice::text
+      );
+    EXCEPTION WHEN OTHERS THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: governed split void_invoice failed: %', SQLERRM;
+    END;
+  END LOOP;
+  IF EXISTS (
+    SELECT 1
+      FROM public.invoices i
+      JOIN public.split_invoice_provenance p ON p.invoice_id = i.id
+     WHERE i.id = ANY(v_split_ids)
+       AND (
+         i.status <> 'voided'
+         OR i.total_amount_cents <> 0
+         OR p.total_amount_cents IS DISTINCT FROM i.total_amount_cents
+         OR p.content_claim IS DISTINCT FROM public._split_invoice_content_claim(i.id)
+       )
+  ) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: governed void did not refresh exact terminal provenance';
+  END IF;
+
+  -- delete_invoices must bind the same key to the normalized invoice-id set.
+  -- The legacy replay returned the first count for a different second set.
+  INSERT INTO public.invoices (
+    invoice_number, customer_id, invoice_type, status, total_amount_cents, created_by
+  ) VALUES (
+    'E2E-H5-DEL-A-' || v_suffix, v_customer, 'chemical_sale', 'draft', 100, v_admin
+  ) RETURNING id INTO v_delete_a;
+  INSERT INTO public.invoices (
+    invoice_number, customer_id, invoice_type, status, total_amount_cents, created_by
+  ) VALUES (
+    'E2E-H5-DEL-B-' || v_suffix, v_customer, 'chemical_sale', 'draft', 100, v_admin
+  ) RETURNING id INTO v_delete_b;
+
+  SELECT public.delete_invoices(
+    ARRAY[v_delete_a], v_admin, 'e2e-h5-delete-bound-' || v_suffix
+  ) INTO v_deleted_count;
+  IF v_deleted_count <> 1 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: first bound delete did not delete exactly one draft';
+  END IF;
+  SELECT public.delete_invoices(
+    ARRAY[v_delete_a], v_admin, 'e2e-h5-delete-bound-' || v_suffix
+  ) INTO v_deleted_count;
+  IF v_deleted_count <> 1 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: exact delete replay changed its response';
+  END IF;
+  BEGIN
+    PERFORM public.delete_invoices(
+      ARRAY[v_delete_b], v_admin, 'e2e-h5-delete-bound-' || v_suffix
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: delete key replayed across different invoice sets';
+  EXCEPTION WHEN OTHERS THEN
+    v_err := SQLERRM;
+    IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_err NOT LIKE 'IDEMPOTENCY_REQUEST_MISMATCH:%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: delete mismatch raised unexpected error: %', v_err;
+    END IF;
+  END;
+  IF (SELECT deleted_at FROM public.invoices WHERE id = v_delete_b) IS NOT NULL THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: mismatched delete key touched the second invoice set';
+  END IF;
+
+  -- Recreate a governed draft, then prove cancel_order owns the parallel exact
+  -- claim for its draft/unposted total-zeroing path.
+  SELECT public.create_split_invoices_from_order(
+    v_order, v_admin, 'chemical_sale', 'e2e-h5-governed-cancel-split-' || v_suffix
+  ) INTO v_cancel_ids;
+  IF COALESCE(array_length(v_cancel_ids, 1), 0) = 0 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: cancel-order fixture created no governed split drafts';
+  END IF;
+
+  BEGIN
+    SELECT public.cancel_order(
+      v_order, v_admin, 'e2e-h5-governed-cancel-' || v_suffix
+    ) INTO v_res;
+  EXCEPTION WHEN OTHERS THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: cancel_order failed on governed split drafts: %', SQLERRM;
+  END;
+  SELECT public.cancel_order(
+    v_order, v_admin, 'e2e-h5-governed-cancel-' || v_suffix
+  ) INTO v_res;
+  IF (SELECT status FROM public.orders WHERE id = v_order) <> 'cancelled'
+     OR EXISTS (
+       SELECT 1
+         FROM public.invoices i
+         JOIN public.split_invoice_provenance p ON p.invoice_id = i.id
+        WHERE i.id = ANY(v_cancel_ids)
+          AND (
+            i.status <> 'cancelled'
+            OR i.total_amount_cents <> 0
+            OR p.total_amount_cents IS DISTINCT FROM i.total_amount_cents
+            OR p.content_claim IS DISTINCT FROM public._split_invoice_content_claim(i.id)
+          )
+     ) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: governed cancel did not retire drafts with exact provenance';
   END IF;
 
   RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK';
