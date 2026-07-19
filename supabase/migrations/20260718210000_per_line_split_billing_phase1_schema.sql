@@ -743,7 +743,8 @@ AS $$
 DECLARE
   v_post_instance_id uuid := gen_random_uuid();
   v_post_sequence integer;
-  v_is_posted_state boolean;
+  v_requires_post_timestamp boolean;
+  v_creates_post_snapshot boolean;
 BEGIN
   -- Ordinary invoices have no split-share rows and remain untouched.
   IF NOT EXISTS (
@@ -759,10 +760,13 @@ BEGIN
   -- required by its immutable history row. Also reject the inverse mismatch:
   -- posted_at on a draft/unposted split invoice would freeze its working rows
   -- without representing a real post transition.
-  v_is_posted_state := NEW.status IN ('posted','paid','overdue');
-  IF v_is_posted_state IS DISTINCT FROM (NEW.posted_at IS NOT NULL) THEN
+  -- Voiding preserves posted_at by design: it is a post-derived terminal state,
+  -- but it must not create a second post snapshot.
+  v_requires_post_timestamp := NEW.status IN ('posted','paid','overdue','voided');
+  v_creates_post_snapshot := NEW.status IN ('posted','paid','overdue');
+  IF v_requires_post_timestamp IS DISTINCT FROM (NEW.posted_at IS NOT NULL) THEN
     RAISE EXCEPTION
-      'split invoice % requires posted status and posted_at to change together',
+      'split invoice % requires posted/voided status and posted_at to agree',
       NEW.id
       USING ERRCODE = 'check_violation';
   END IF;
@@ -770,7 +774,7 @@ BEGIN
   -- Updates within the posted lifecycle (posted -> paid/overdue) and sanctioned
   -- unposts do not create another post instance. A later unposted -> posted
   -- transition does, because OLD is no longer a complete posted state.
-  IF NOT v_is_posted_state
+  IF NOT v_creates_post_snapshot
      OR (OLD.status IN ('posted','paid','overdue') AND OLD.posted_at IS NOT NULL) THEN
     RETURN NULL;
   END IF;

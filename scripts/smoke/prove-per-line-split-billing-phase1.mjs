@@ -865,6 +865,38 @@ COMMIT;
   );
 }
 
+function provePostedSplitInvoiceCanBeVoidedWithoutLosingHistory() {
+  resetFixture();
+  const result = runSql(`
+BEGIN;
+${lineSql(ID.lineA, 'posted to voided lifecycle line')}
+${shareSql({ id: ID.shareA, line: ID.lineA, item: ID.itemA, customer: ID.customerA })}
+UPDATE public.invoices
+   SET status = 'posted', posted_at = '2026-07-18T14:00:00Z'
+ WHERE id = '${ID.draftInvoice}';
+UPDATE public.invoices
+   SET status = 'voided'
+ WHERE id = '${ID.draftInvoice}';
+COMMIT;
+`, { allowFailure: true });
+  const detail = `${result.stdout || ''}${result.stderr || ''}`;
+  const finalState = result.status === 0
+    ? scalar(`
+        SELECT status || '|' || (posted_at IS NOT NULL)::text || '|' ||
+               (SELECT count(*)::text
+                  FROM public.invoice_line_share_post_snapshots
+                 WHERE invoice_id = '${ID.draftInvoice}')
+          FROM public.invoices
+         WHERE id = '${ID.draftInvoice}';
+      `)
+    : 'transaction rejected';
+  return {
+    label: 'a posted split invoice can be voided while retaining its one immutable post history',
+    passed: result.status === 0 && finalState === 'voided|true|1',
+    detail: result.status === 0 ? `status|timestamp|history = ${finalState}` : detail.trim(),
+  };
+}
+
 function proveEmptyLine() {
   resetFixture();
   return expectRejected(
@@ -1042,6 +1074,7 @@ async function main() {
     proveSuppressionRequiresZeroTotal(),
     proveServerCanSuppressZeroTotal(),
     proveSplitInvoiceCannotPostWithoutTimestampAndHistory(),
+    provePostedSplitInvoiceCanBeVoidedWithoutLosingHistory(),
     provePostHistorySurvivesUnpostEditRepost(),
     proveEmptyLine(),
     await proveConcurrentVectors(),
