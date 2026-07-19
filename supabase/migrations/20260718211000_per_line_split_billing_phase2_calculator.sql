@@ -769,11 +769,11 @@ BEGIN
     v_source_amount := (v_flat->>'source_amount_cents')::bigint;
     INSERT INTO pg_temp._plsb_lines (
       line_key, line_kind, price_basis, description, source_amount_cents,
-      source_unit_size, source_cost_cents, sort_order, source_input
+      source_quantity, source_unit_size, source_cost_cents, sort_order, source_input
     ) VALUES (
       v_line_key, 'flat_fee', 'flat_fee',
       COALESCE(NULLIF(v_flat->>'description', ''), 'Flat fee'),
-      v_source_amount, 'fee', 0, v_sort_order,
+      v_source_amount, 1, 'fee', 0, v_sort_order,
       v_flat || jsonb_build_object('unit_size', 'fee', 'cost_cents', 0)
     );
   END LOOP;
@@ -1141,6 +1141,7 @@ BEGIN
     FROM pg_temp._plsb_shares s
     JOIN pg_temp._plsb_lines l ON l.line_key = s.line_key
     WHERE l.source_quantity IS NOT NULL
+      AND l.line_kind <> 'flat_fee'
   ), bases AS (
     SELECT line_key, customer_id, total_ticks, sign_value,
            floor(ideal)::bigint AS base, ideal - floor(ideal) AS frac
@@ -1157,6 +1158,15 @@ BEGIN
      )::numeric / 10000::numeric
     FROM ranked r
    WHERE r.line_key = s.line_key AND r.customer_id = s.customer_id;
+
+  -- A flat fee is one invoice-facing charge on every child invoice. Its cents
+  -- split by percentage, but its item quantity does not: production
+  -- invoice_items.quantity is NOT NULL, and each child's fee item is quantity 1.
+  UPDATE pg_temp._plsb_shares s
+     SET allocated_quantity = 1
+    FROM pg_temp._plsb_lines l
+   WHERE l.line_key = s.line_key
+     AND l.line_kind = 'flat_fee';
 
   -- Acre pass at 0.0001 acres, using the identical ordering.
   WITH ideals AS (
@@ -1427,6 +1437,7 @@ BEGIN
     SELECT l.line_key
     FROM pg_temp._plsb_lines l
     JOIN pg_temp._plsb_shares s ON s.line_key = l.line_key
+    WHERE l.line_kind <> 'flat_fee'
     GROUP BY l.line_key, l.source_quantity
     HAVING l.source_quantity IS NOT NULL AND sum(s.allocated_quantity) <> l.source_quantity
   ) THEN

@@ -211,10 +211,10 @@ CREATE TABLE public.invoice_items (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   invoice_id uuid NOT NULL REFERENCES public.invoices(id) ON DELETE CASCADE,
   product_id uuid REFERENCES public.products(id),
-  quantity numeric(12,4),
+  quantity numeric(12,4) NOT NULL DEFAULT 0,
   acres numeric(12,2),
-  unit_price_cents bigint,
-  extended_cents bigint,
+  unit_price_cents bigint NOT NULL DEFAULT 0,
+  extended_cents bigint NOT NULL DEFAULT 0,
   cost_cents bigint NOT NULL DEFAULT 0,
   unit_size text
 );

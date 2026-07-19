@@ -606,13 +606,122 @@ BEGIN
       'source_amount_cents', 1, 'sort_order', 1
     )))
   );
-  IF v_plan#>>'{billing_lines,0,shares,0,amount_cents}' <> '1'
-     OR v_plan#>>'{billing_lines,0,shares,1,amount_cents}' <> '0'
+  v_lines := v_plan->'billing_lines';
+  v_shares := v_lines#>'{0,shares}';
+  IF v_shares#>>'{0,amount_cents}' <> '1'
+     OR v_shares#>>'{1,amount_cents}' <> '0'
+     OR v_lines#>>'{0,source_quantity}' <> '1.0000'
+     OR v_shares#>>'{0,allocated_quantity}' <> '1.0000'
+     OR v_shares#>>'{1,allocated_quantity}' <> '1.0000'
      OR v_plan#>>'{billing_lines,0,source_unit_size}' <> 'fee'
      OR v_plan#>>'{billing_lines,0,source_cost_cents}' <> '0'
      OR v_plan->>'grand_total_cents' <> '1' THEN
     RAISE EXCEPTION 'P2_FAIL(flat_fee_one_cent): %', v_plan;
   END IF;
+
+  -- Persist the exact calculator output into a production-shaped graph. In
+  -- production invoice_items.quantity is NOT NULL, so a nullable disposable
+  -- fixture would hide an interface that Phase 3 cannot write.
+  INSERT INTO public.field_app_billing_sets (
+    id, invoice_group_id, primary_customer_id, created_by
+  ) VALUES (
+    '80000000-0000-0000-0000-000000000050',
+    '81000000-0000-0000-0000-000000000050', v_a, v_admin
+  );
+  INSERT INTO public.field_app_billing_lines (
+    id, billing_set_id, line_kind, price_basis, description,
+    source_quantity, source_acres, source_unit_price_cents,
+    source_amount_cents, source_unit_size, source_cost_cents, sort_order
+  ) VALUES (
+    '82000000-0000-0000-0000-000000000050',
+    '80000000-0000-0000-0000-000000000050',
+    v_lines#>>'{0,line_kind}', v_lines#>>'{0,price_basis}',
+    v_lines#>>'{0,description}', (v_lines#>>'{0,source_quantity}')::numeric,
+    NULLIF(v_lines#>>'{0,source_acres}', '')::numeric,
+    NULLIF(v_lines#>>'{0,source_unit_price_cents}', '')::bigint,
+    (v_lines#>>'{0,source_amount_cents}')::bigint,
+    v_lines#>>'{0,source_unit_size}', (v_lines#>>'{0,source_cost_cents}')::bigint,
+    (v_lines#>>'{0,sort_order}')::integer
+  );
+  INSERT INTO public.invoices (
+    id, customer_id, invoice_group_id, total_amount_cents, total_cost_cents,
+    send_disposition, created_by
+  ) VALUES
+    ('83000000-0000-0000-0000-000000000050', v_a,
+     '81000000-0000-0000-0000-000000000050',
+     (v_shares#>>'{0,amount_cents}')::bigint, 0, 'sendable', v_admin),
+    ('83000000-0000-0000-0000-000000000051', v_b,
+     '81000000-0000-0000-0000-000000000050',
+     (v_shares#>>'{1,amount_cents}')::bigint, 0, 'suppressed_zero_total', v_admin);
+  INSERT INTO public.invoice_items (
+    id, invoice_id, quantity, acres, unit_price_cents, extended_cents,
+    unit_size, cost_cents
+  ) VALUES
+    ('84000000-0000-0000-0000-000000000050',
+     '83000000-0000-0000-0000-000000000050',
+     (v_shares#>>'{0,allocated_quantity}')::numeric,
+     NULLIF(v_shares#>>'{0,allocated_acres}', '')::numeric,
+     (v_shares#>>'{0,unit_price_cents}')::bigint,
+     (v_shares#>>'{0,amount_cents}')::bigint,
+     v_lines#>>'{0,source_unit_size}', (v_lines#>>'{0,source_cost_cents}')::bigint),
+    ('84000000-0000-0000-0000-000000000051',
+     '83000000-0000-0000-0000-000000000051',
+     (v_shares#>>'{1,allocated_quantity}')::numeric,
+     NULLIF(v_shares#>>'{1,allocated_acres}', '')::numeric,
+     (v_shares#>>'{1,unit_price_cents}')::bigint,
+     (v_shares#>>'{1,amount_cents}')::bigint,
+     v_lines#>>'{0,source_unit_size}', (v_lines#>>'{0,source_cost_cents}')::bigint);
+  INSERT INTO public.invoice_line_shares (
+    id, billing_line_id, invoice_item_id, customer_id, split_mode,
+    split_micro_pct, allocated_quantity, allocated_acres,
+    base_unit_price_cents, base_price_source, price_mode, unit_price_cents,
+    amount_cents, split_override_reason, price_override_reason,
+    calculation_hash, vector_hash, created_by
+  ) VALUES
+    ('85000000-0000-0000-0000-000000000050',
+     '82000000-0000-0000-0000-000000000050',
+     '84000000-0000-0000-0000-000000000050',
+     (v_shares#>>'{0,customer_id}')::uuid, v_shares#>>'{0,split_mode}',
+     (v_shares#>>'{0,split_micro_pct}')::integer,
+     (v_shares#>>'{0,allocated_quantity}')::numeric,
+     NULLIF(v_shares#>>'{0,allocated_acres}', '')::numeric,
+     (v_shares#>>'{0,base_unit_price_cents}')::bigint,
+     v_shares#>>'{0,base_price_source}', v_shares#>>'{0,price_mode}',
+     (v_shares#>>'{0,unit_price_cents}')::bigint,
+     (v_shares#>>'{0,amount_cents}')::bigint,
+     NULLIF(v_shares#>>'{0,split_override_reason}', ''),
+     NULLIF(v_shares#>>'{0,price_override_reason}', ''),
+     v_shares#>>'{0,calculation_hash}', v_shares#>>'{0,vector_hash}', v_admin),
+    ('85000000-0000-0000-0000-000000000051',
+     '82000000-0000-0000-0000-000000000050',
+     '84000000-0000-0000-0000-000000000051',
+     (v_shares#>>'{1,customer_id}')::uuid, v_shares#>>'{1,split_mode}',
+     (v_shares#>>'{1,split_micro_pct}')::integer,
+     (v_shares#>>'{1,allocated_quantity}')::numeric,
+     NULLIF(v_shares#>>'{1,allocated_acres}', '')::numeric,
+     (v_shares#>>'{1,base_unit_price_cents}')::bigint,
+     v_shares#>>'{1,base_price_source}', v_shares#>>'{1,price_mode}',
+     (v_shares#>>'{1,unit_price_cents}')::bigint,
+     (v_shares#>>'{1,amount_cents}')::bigint,
+     NULLIF(v_shares#>>'{1,split_override_reason}', ''),
+     NULLIF(v_shares#>>'{1,price_override_reason}', ''),
+     v_shares#>>'{1,calculation_hash}', v_shares#>>'{1,vector_hash}', v_admin);
+  SET CONSTRAINTS ALL IMMEDIATE;
+
+  BEGIN
+    SET CONSTRAINTS ALL DEFERRED;
+    UPDATE public.invoice_line_shares
+       SET allocated_quantity = 0
+     WHERE id = '85000000-0000-0000-0000-000000000050';
+    UPDATE public.invoice_items
+       SET quantity = 0
+     WHERE id = '84000000-0000-0000-0000-000000000050';
+    SET CONSTRAINTS ALL IMMEDIATE;
+    RAISE EXCEPTION 'P2_FAIL(flat_fee_quantity_freeze): <no error>';
+  EXCEPTION WHEN check_violation THEN
+    GET STACKED DIAGNOSTICS v_err = MESSAGE_TEXT;
+    IF v_err NOT LIKE '%PER_LINE_FLAT_FEE_QUANTITY_MISMATCH%' THEN RAISE; END IF;
+  END;
 
   -- Job snapshot wins over the field's 50/50 default.
   v_plan := public.preview_field_app_invoice_split(
@@ -933,10 +1042,46 @@ BEGIN
     RAISE EXCEPTION 'P2_FAIL(durable_source_cost_identity_columns): required audit columns are missing';
   END IF;
 
+  -- The durable validator must prove the inverse relationship too: every job
+  -- chemical and the job's required application service must have a source line.
+  -- Otherwise a writer could omit a whole charge and still reconcile the rows
+  -- that remain.
+  BEGIN
+    SET CONSTRAINTS ALL DEFERRED;
+    INSERT INTO public.field_app_billing_sets (
+      id, job_id, primary_customer_id, created_by
+    ) VALUES (
+      '80000000-0000-0000-0000-000000000040', v_job, v_a, v_admin
+    );
+    PERFORM public._assert_per_line_split_billing_integrity(
+      '80000000-0000-0000-0000-000000000040'
+    );
+    RAISE EXCEPTION 'P2_FAIL(job_chemical_completeness): <no error>';
+  EXCEPTION WHEN check_violation THEN
+    GET STACKED DIAGNOSTICS v_err = MESSAGE_TEXT;
+    IF v_err NOT LIKE '%PER_LINE_JOB_CHEMICAL_SET_INCOMPLETE%' THEN RAISE; END IF;
+  END;
+
+  BEGIN
+    INSERT INTO public.field_app_billing_sets (
+      id, job_id, primary_customer_id, created_by
+    ) VALUES (
+      '80000000-0000-0000-0000-000000000041', v_job_service, v_a, v_admin
+    );
+    PERFORM public._assert_per_line_split_billing_integrity(
+      '80000000-0000-0000-0000-000000000041'
+    );
+    RAISE EXCEPTION 'P2_FAIL(job_service_completeness): <no error>';
+  EXCEPTION WHEN check_violation THEN
+    GET STACKED DIAGNOSTICS v_err = MESSAGE_TEXT;
+    IF v_err NOT LIKE '%PER_LINE_JOB_APPLICATION_SERVICE_MISSING%' THEN RAISE; END IF;
+  END;
+
   -- A share cannot claim customer A while pointing at customer B's invoice item.
   -- This vector is arithmetically 100%, so Phase 1 alone accepted it; the
   -- relational follow-up migration must fail it closed.
   BEGIN
+    SET CONSTRAINTS ALL DEFERRED;
     INSERT INTO public.field_app_billing_sets (
       id, invoice_group_id, job_id, primary_customer_id, created_by
     ) VALUES (
@@ -988,6 +1133,7 @@ BEGIN
 
   -- Build one valid two-customer graph, force every deferred constraint, then
   -- prove each durable money/quantity/header relationship rejects corruption.
+  SET CONSTRAINTS ALL DEFERRED;
   INSERT INTO public.field_app_billing_sets (
     id, invoice_group_id, job_id, primary_customer_id, created_by
   ) VALUES (
@@ -1166,6 +1312,9 @@ BEGIN
   -- invoice; a different active service is still the wrong service.
   BEGIN
     SET CONSTRAINTS ALL DEFERRED;
+    UPDATE public.field_app_billing_sets
+       SET job_id = v_job_service
+     WHERE id = '80000000-0000-0000-0000-000000000010';
     UPDATE public.field_app_billing_lines
        SET line_kind = 'service',
            product_id = NULL,
@@ -1183,7 +1332,8 @@ BEGIN
        '84000000-0000-0000-0000-000000000011'
      );
     UPDATE public.invoices
-       SET application_service_id = v_service,
+       SET job_id = v_job_service,
+           application_service_id = v_service,
            total_cost_cents = 2
      WHERE id IN (
        '83000000-0000-0000-0000-000000000010',
@@ -1358,7 +1508,7 @@ BEGIN
     RAISE EXCEPTION 'P2_FAIL(source_job_chemical_identity): <no error>';
   EXCEPTION WHEN check_violation THEN
     GET STACKED DIAGNOSTICS v_err = MESSAGE_TEXT;
-    IF v_err NOT LIKE '%PER_LINE_SOURCE_JOB_CHEMICAL_MISMATCH%' THEN RAISE; END IF;
+    IF v_err NOT LIKE '%PER_LINE_JOB_CHEMICAL_SET_INCOMPLETE%' THEN RAISE; END IF;
   END;
 
   -- A valid post captures source identity/unit/COGS and item unit/COGS. Those
@@ -1423,11 +1573,11 @@ BEGIN
     );
     INSERT INTO public.field_app_billing_lines (
       id, billing_set_id, line_kind, price_basis, description,
-      source_amount_cents, source_unit_size, source_cost_cents
+      source_quantity, source_amount_cents, source_unit_size, source_cost_cents
     ) VALUES (
       '82000000-0000-0000-0000-000000000030',
       '80000000-0000-0000-0000-000000000030',
-      'flat_fee', 'flat_fee', 'Zero fee', 0, 'fee', 0
+      'flat_fee', 'flat_fee', 'Zero fee', 1, 0, 'fee', 0
     );
     INSERT INTO public.invoices (
       id, customer_id, total_amount_cents, total_cost_cents, created_by
@@ -1472,11 +1622,11 @@ BEGIN
   );
   INSERT INTO public.field_app_billing_lines (
     id, billing_set_id, line_kind, price_basis, description,
-    source_amount_cents, source_unit_size, source_cost_cents
+    source_quantity, source_amount_cents, source_unit_size, source_cost_cents
   ) VALUES (
     '82000000-0000-0000-0000-000000000031',
     '80000000-0000-0000-0000-000000000031',
-    'flat_fee', 'flat_fee', 'Suppressed zero fee', 0, 'fee', 0
+    'flat_fee', 'flat_fee', 'Suppressed zero fee', 1, 0, 'fee', 0
   );
   INSERT INTO public.invoices (
     id, customer_id, total_amount_cents, total_cost_cents,

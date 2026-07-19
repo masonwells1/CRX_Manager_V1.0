@@ -102,7 +102,9 @@ quantity, and frozen prices even when the same product appears twice; customer-
 supplied zero billing; owner/outsider sales-rep scope plus exact invoice/job/field
 context binding; non-job manual/quoted/tier pricing with conflicting quotes
 rejected; source-season service pricing; per-person price overrides; 100/0 service
-and flat-fee rows; job/default/fallback ownership; field/job and chemical/job
+and flat-fee rows; exact flat-fee output persisted into production-shaped non-null
+invoice quantities with quantity 1 on every child; inverse job-chemical and required-
+service completeness; job/default/fallback ownership; field/job and chemical/job
 membership rejection; full identity/provenance/reason hashes; Mode A and malformed-
 vector rejection; role denial; overload count; and private-calculator privileges.
 

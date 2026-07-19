@@ -50,13 +50,18 @@ ALTER TABLE public.field_app_billing_lines
   ADD CONSTRAINT field_app_billing_lines_source_cost_ck
     CHECK (source_cost_cents >= 0),
   ADD CONSTRAINT field_app_billing_lines_source_job_chemical_kind_ck
-    CHECK (source_job_chemical_id IS NULL OR line_kind = 'chemical');
+    CHECK (source_job_chemical_id IS NULL OR line_kind = 'chemical'),
+  ADD CONSTRAINT field_app_billing_lines_application_service_kind_ck
+    CHECK (application_service_id IS NULL OR line_kind = 'service');
 
 CREATE INDEX idx_field_app_billing_lines_source_job_chemical
   ON public.field_app_billing_lines (source_job_chemical_id);
 CREATE UNIQUE INDEX uq_field_app_billing_lines_set_source_job_chemical
   ON public.field_app_billing_lines (billing_set_id, source_job_chemical_id)
   WHERE source_job_chemical_id IS NOT NULL;
+CREATE UNIQUE INDEX uq_field_app_billing_lines_set_application_service
+  ON public.field_app_billing_lines (billing_set_id, application_service_id)
+  WHERE application_service_id IS NOT NULL;
 
 ALTER TABLE public.invoice_line_share_post_snapshots
   ADD COLUMN invoice_total_cost_cents bigint NOT NULL,
@@ -100,10 +105,50 @@ BEGIN
     RETURN;
   END IF;
 
-  -- Job-backed chemical lines must retain the exact frozen job-chemical row,
-  -- product, pricing unit, and per-unit cost selected by the calculator. A
-  -- duplicate same-product row is a different audit source and cannot be
-  -- substituted after the plan is persisted.
+  -- Prove the inverse job relationship before checking the rows that do exist.
+  -- Without this direction, a writer could omit an entire chemical or required
+  -- application-service charge and still reconcile every remaining cent.
+  IF v_set.job_id IS NOT NULL AND EXISTS (
+    SELECT 1
+      FROM public.job_chemicals jc
+     WHERE jc.job_id = v_set.job_id
+       AND NOT EXISTS (
+         SELECT 1
+           FROM public.field_app_billing_lines bl
+          WHERE bl.billing_set_id = p_billing_set_id
+            AND bl.line_kind = 'chemical'
+            AND bl.source_job_chemical_id = jc.id
+       )
+  ) THEN
+    RAISE EXCEPTION
+      'PER_LINE_JOB_CHEMICAL_SET_INCOMPLETE: billing set % omitted a job chemical',
+      p_billing_set_id
+      USING ERRCODE = 'check_violation';
+  END IF;
+
+  IF v_set.job_id IS NOT NULL AND EXISTS (
+    SELECT 1
+      FROM public.jobs j
+     WHERE j.id = v_set.job_id
+       AND j.application_service_id IS NOT NULL
+       AND NOT EXISTS (
+         SELECT 1
+           FROM public.field_app_billing_lines bl
+          WHERE bl.billing_set_id = p_billing_set_id
+            AND bl.line_kind = 'service'
+            AND bl.application_service_id = j.application_service_id
+       )
+  ) THEN
+    RAISE EXCEPTION
+      'PER_LINE_JOB_APPLICATION_SERVICE_MISSING: billing set % omitted its job application service',
+      p_billing_set_id
+      USING ERRCODE = 'check_violation';
+  END IF;
+
+  -- Job-backed chemical and service lines must retain the exact frozen job rows,
+  -- product/service identity, pricing unit, and per-unit cost selected by the
+  -- calculator. A duplicate same-product row is a different audit source and
+  -- cannot be substituted after the plan is persisted.
   SELECT bl.id
     INTO v_bad_id
     FROM public.field_app_billing_lines bl
@@ -137,6 +182,28 @@ BEGIN
   IF FOUND THEN
     RAISE EXCEPTION
       'PER_LINE_SOURCE_JOB_CHEMICAL_MISMATCH: billing line % lost or changed its frozen job source',
+      v_bad_id
+      USING ERRCODE = 'check_violation';
+  END IF;
+
+  SELECT bl.id
+    INTO v_bad_id
+    FROM public.field_app_billing_lines bl
+   WHERE bl.billing_set_id = p_billing_set_id
+     AND bl.line_kind = 'service'
+     AND v_set.job_id IS NOT NULL
+     AND NOT EXISTS (
+       SELECT 1
+         FROM public.jobs j
+        WHERE j.id = v_set.job_id
+          AND j.application_service_id IS NOT NULL
+          AND j.application_service_id = bl.application_service_id
+     )
+   ORDER BY bl.id
+   LIMIT 1;
+  IF FOUND THEN
+    RAISE EXCEPTION
+      'PER_LINE_JOB_APPLICATION_SERVICE_MISMATCH: billing line % differs from its job application service',
       v_bad_id
       USING ERRCODE = 'check_violation';
   END IF;
@@ -415,6 +482,7 @@ BEGIN
     LEFT JOIN public.invoice_line_shares s ON s.billing_line_id = bl.id
    WHERE bl.billing_set_id = p_billing_set_id
      AND bl.source_quantity IS NOT NULL
+     AND bl.line_kind <> 'flat_fee'
    GROUP BY bl.id, bl.source_quantity
   HAVING count(*) FILTER (WHERE s.allocated_quantity IS NULL) > 0
       OR sum(s.allocated_quantity) IS DISTINCT FROM bl.source_quantity
@@ -423,6 +491,24 @@ BEGIN
   IF FOUND THEN
     RAISE EXCEPTION
       'PER_LINE_SOURCE_QUANTITY_MISMATCH: billing line % shares do not equal source quantity',
+      v_bad_id
+      USING ERRCODE = 'check_violation';
+  END IF;
+
+  SELECT bl.id
+    INTO v_bad_id
+    FROM public.field_app_billing_lines bl
+    LEFT JOIN public.invoice_line_shares s ON s.billing_line_id = bl.id
+   WHERE bl.billing_set_id = p_billing_set_id
+     AND bl.line_kind = 'flat_fee'
+   GROUP BY bl.id, bl.source_quantity
+  HAVING bl.source_quantity IS DISTINCT FROM 1::numeric
+      OR count(*) FILTER (WHERE s.allocated_quantity IS DISTINCT FROM 1::numeric) > 0
+   ORDER BY bl.id
+   LIMIT 1;
+  IF FOUND THEN
+    RAISE EXCEPTION
+      'PER_LINE_FLAT_FEE_QUANTITY_MISMATCH: billing line % and every child item must use quantity 1',
       v_bad_id
       USING ERRCODE = 'check_violation';
   END IF;
