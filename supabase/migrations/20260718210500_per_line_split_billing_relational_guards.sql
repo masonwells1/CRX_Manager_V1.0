@@ -10,7 +10,8 @@
 --   * every logical line must cover the billing set's exact customer set;
 --   * line quantities/acres and same-price/flat-fee cents must reconcile;
 --   * every split invoice item must be represented by exactly one share; and
---   * each child invoice header must equal its sales/COGS item totals; and
+--   * each child invoice header must equal its sales-item total and allocated
+--     COGS ledger (never independently rounded child quantity x unit cost); and
 --   * zero-dollar children must be suppressed while nonzero children are sendable.
 -- The checks are deferred so the Phase 3 writer can build an entire graph in one
 -- transaction, then are repeated synchronously before a split invoice posts.
@@ -38,17 +39,21 @@ END;
 $$;
 
 -- Phase 1 remains byte-stable. Add the calculator's material source identity,
--- pricing unit, and per-unit COGS to the durable line and immutable post record
+-- pricing unit, per-unit COGS, and penny-exact allocated COGS to the durable
+-- line/share graph and immutable post record
 -- here, before any writer can persist a plan that would otherwise lose them.
 ALTER TABLE public.field_app_billing_lines
   ADD COLUMN source_job_chemical_id uuid
     REFERENCES public.job_chemicals(id) ON DELETE RESTRICT,
   ADD COLUMN source_unit_size text NOT NULL,
   ADD COLUMN source_cost_cents bigint NOT NULL,
+  ADD COLUMN source_total_cost_cents bigint NOT NULL,
   ADD CONSTRAINT field_app_billing_lines_source_unit_ck
     CHECK (source_unit_size ~ '[^[:space:]]'),
   ADD CONSTRAINT field_app_billing_lines_source_cost_ck
     CHECK (source_cost_cents >= 0),
+  ADD CONSTRAINT field_app_billing_lines_source_total_cost_ck
+    CHECK (source_total_cost_cents >= 0),
   ADD CONSTRAINT field_app_billing_lines_source_job_chemical_kind_ck
     CHECK (source_job_chemical_id IS NULL OR line_kind = 'chemical'),
   ADD CONSTRAINT field_app_billing_lines_application_service_kind_ck
@@ -63,11 +68,18 @@ CREATE UNIQUE INDEX uq_field_app_billing_lines_set_application_service
   ON public.field_app_billing_lines (billing_set_id, application_service_id)
   WHERE application_service_id IS NOT NULL;
 
+ALTER TABLE public.invoice_line_shares
+  ADD COLUMN allocated_cost_cents bigint NOT NULL,
+  ADD CONSTRAINT invoice_line_shares_allocated_cost_ck
+    CHECK (allocated_cost_cents >= 0);
+
 ALTER TABLE public.invoice_line_share_post_snapshots
   ADD COLUMN invoice_total_cost_cents bigint NOT NULL,
   ADD COLUMN source_job_chemical_id uuid,
   ADD COLUMN source_unit_size text NOT NULL,
   ADD COLUMN source_cost_cents bigint NOT NULL,
+  ADD COLUMN source_total_cost_cents bigint NOT NULL,
+  ADD COLUMN allocated_cost_cents bigint NOT NULL,
   ADD COLUMN item_unit_size text NOT NULL,
   ADD COLUMN item_cost_cents bigint NOT NULL;
 
@@ -186,6 +198,29 @@ BEGIN
       USING ERRCODE = 'check_violation';
   END IF;
 
+  -- Canonical source COGS is rounded once from the frozen per-unit cost and
+  -- final stored source quantity. Child COGS is a separate residual cents
+  -- allocation because independently rounding cost * child quantity can create
+  -- or destroy pennies (for example, 1 unit at 1c split 50/50).
+  SELECT bl.id
+    INTO v_bad_id
+    FROM public.field_app_billing_lines bl
+   WHERE bl.billing_set_id = p_billing_set_id
+     AND bl.source_total_cost_cents IS DISTINCT FROM (
+       CASE
+         WHEN bl.line_kind = 'flat_fee' THEN 0
+         ELSE round(bl.source_cost_cents::numeric * bl.source_quantity)::bigint
+       END
+     )
+   ORDER BY bl.id
+   LIMIT 1;
+  IF FOUND THEN
+    RAISE EXCEPTION
+      'PER_LINE_SOURCE_COST_BASIS_MISMATCH: billing line % canonical COGS differs from frozen unit cost and quantity',
+      v_bad_id
+      USING ERRCODE = 'check_violation';
+  END IF;
+
   SELECT bl.id
     INTO v_bad_id
     FROM public.field_app_billing_lines bl
@@ -204,6 +239,23 @@ BEGIN
   IF FOUND THEN
     RAISE EXCEPTION
       'PER_LINE_JOB_APPLICATION_SERVICE_MISMATCH: billing line % differs from its job application service',
+      v_bad_id
+      USING ERRCODE = 'check_violation';
+  END IF;
+
+  SELECT bl.id
+    INTO v_bad_id
+    FROM public.field_app_billing_lines bl
+    LEFT JOIN public.invoice_line_shares s ON s.billing_line_id = bl.id
+   WHERE bl.billing_set_id = p_billing_set_id
+   GROUP BY bl.id, bl.source_total_cost_cents
+  HAVING count(*) FILTER (WHERE s.allocated_cost_cents IS NULL) > 0
+      OR sum(s.allocated_cost_cents) IS DISTINCT FROM bl.source_total_cost_cents
+   ORDER BY bl.id
+   LIMIT 1;
+  IF FOUND THEN
+    RAISE EXCEPTION
+      'PER_LINE_SOURCE_COST_MISMATCH: billing line % child COGS does not equal canonical source COGS',
       v_bad_id
       USING ERRCODE = 'check_violation';
   END IF;
@@ -610,9 +662,10 @@ BEGIN
       USING ERRCODE = 'check_violation';
   END IF;
 
-  -- Split child COGS is derived from the same frozen per-unit cost and allocated
-  -- quantity as its items. Header profit/commission inputs must tie to those
-  -- rows before posting just as the sales total does.
+  -- Header profit/commission inputs use the penny-exact share COGS ledger.
+  -- Re-deriving each child from per-unit cost * fractional quantity would make
+  -- the group gain or lose pennies even though every item retained its source
+  -- unit cost for display/audit.
   SELECT inv.id
     INTO v_bad_id
     FROM public.invoices inv
@@ -633,15 +686,10 @@ BEGIN
        )
      )
      AND inv.total_cost_cents IS DISTINCT FROM (
-       SELECT COALESCE(sum(
-         CASE
-           WHEN bl.line_kind = 'flat_fee' THEN ii.cost_cents
-           ELSE round(ii.cost_cents::numeric * ii.quantity)::bigint
-         END
-       ), 0)::bigint
-         FROM public.invoice_items ii
-         JOIN public.invoice_line_shares s ON s.invoice_item_id = ii.id
-         JOIN public.field_app_billing_lines bl ON bl.id = s.billing_line_id
+        SELECT COALESCE(sum(s.allocated_cost_cents), 0)::bigint
+          FROM public.invoice_line_shares s
+          JOIN public.invoice_items ii ON ii.id = s.invoice_item_id
+          JOIN public.field_app_billing_lines bl ON bl.id = s.billing_line_id
         WHERE ii.invoice_id = inv.id
           AND bl.billing_set_id = p_billing_set_id
      )
@@ -649,7 +697,7 @@ BEGIN
    LIMIT 1;
   IF FOUND THEN
     RAISE EXCEPTION
-      'PER_LINE_INVOICE_HEADER_COST_MISMATCH: invoice % header differs from frozen item COGS',
+      'PER_LINE_INVOICE_HEADER_COST_MISMATCH: invoice % header differs from allocated share COGS',
       v_bad_id
       USING ERRCODE = 'check_violation';
   END IF;
@@ -1142,8 +1190,9 @@ BEGIN
     line_kind, price_basis, product_id, application_service_id,
     source_job_chemical_id, description,
     source_quantity, source_acres, source_unit_price_cents, source_amount_cents,
-    source_unit_size, source_cost_cents, sort_order,
+    source_unit_size, source_cost_cents, source_total_cost_cents, sort_order,
     split_mode, split_micro_pct, allocated_quantity, allocated_acres,
+    allocated_cost_cents,
     base_unit_price_cents, base_price_source, price_mode, unit_price_cents, amount_cents,
     split_override_reason, price_override_reason, calculation_hash, vector_hash,
     item_quantity, item_acres, item_unit_price_cents, item_extended_cents,
@@ -1159,8 +1208,9 @@ BEGIN
     bl.line_kind, bl.price_basis, bl.product_id, bl.application_service_id,
     bl.source_job_chemical_id, bl.description,
     bl.source_quantity, bl.source_acres, bl.source_unit_price_cents, bl.source_amount_cents,
-    bl.source_unit_size, bl.source_cost_cents, bl.sort_order,
+    bl.source_unit_size, bl.source_cost_cents, bl.source_total_cost_cents, bl.sort_order,
     s.split_mode, s.split_micro_pct, s.allocated_quantity, s.allocated_acres,
+    s.allocated_cost_cents,
     s.base_unit_price_cents, s.base_price_source, s.price_mode, s.unit_price_cents, s.amount_cents,
     s.split_override_reason, s.price_override_reason, s.calculation_hash, s.vector_hash,
     ii.quantity, ii.acres, ii.unit_price_cents, ii.extended_cents,

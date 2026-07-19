@@ -36,6 +36,10 @@ DECLARE
   v_product_quote constant uuid := '50000000-0000-0000-0000-000000000001';
   v_product_tier constant uuid := '50000000-0000-0000-0000-000000000002';
   v_product_gallon constant uuid := '50000000-0000-0000-0000-000000000003';
+  v_product_penny_cost constant uuid := '50000000-0000-0000-0000-000000000004';
+  v_quote_a constant uuid := '72000000-0000-0000-0000-000000000001';
+  v_quote_a_conflict constant uuid := '72000000-0000-0000-0000-000000000002';
+  v_quote_b constant uuid := '72000000-0000-0000-0000-000000000003';
   v_service constant uuid := '60000000-0000-0000-0000-000000000001';
   v_service_other constant uuid := '60000000-0000-0000-0000-000000000002';
   v_direct_invoice constant uuid := '83000000-0000-0000-0000-000000000098';
@@ -114,7 +118,8 @@ BEGIN
   VALUES
     (v_product_quote, 'Quote Product', 'unit', 'liquid', 0.50, 1.00, 2.00, 3.00),
     (v_product_tier, 'Tier Product', 'unit', 'liquid', 0.50, 1.00, 2.00, 3.00),
-    (v_product_gallon, 'Gallon Product', 'gl', 'liquid', 0.10, 32.10, 32.10, 32.10);
+    (v_product_gallon, 'Gallon Product', 'gl', 'liquid', 0.10, 32.10, 32.10, 32.10),
+    (v_product_penny_cost, 'Penny Cost Product', 'unit', 'liquid', 0.01, 1.00, 1.00, 1.00);
   INSERT INTO public.job_chemicals (
     id, job_id, product_id, quantity, unit, rate_per_acre, rate_unit,
     cost_per_unit_cents, price_per_unit_cents, sort_order, customer_supplied
@@ -125,26 +130,51 @@ BEGIN
     (v_job_chem_customer_supplied, v_job_customer_supplied, v_product_tier, 4, 'unit', 4, 'unit', 999, 999, 0, true),
     (v_job_chem_convert, v_job_convert, v_product_gallon, 1600, 'oz', 16, 'oz', 10, 25, 0, false),
     (v_job_chem_subset, v_job_subset, v_product_tier, 2, 'unit', 1, 'unit', 50, 100, 0, false);
-  INSERT INTO public.quote_sections (id, field_id) VALUES
-    ('70000000-0000-0000-0000-000000000001', v_field_50),
-    ('70000000-0000-0000-0000-000000000002', v_field_50);
+  INSERT INTO public.quotes (id, customer_id, season, status, expires_at, deleted_at) VALUES
+    (v_quote_a, v_a, 2026, 'sent', '2099-12-31', NULL),
+    (v_quote_a_conflict, v_a, 2026, 'revised', '2099-12-31', NULL),
+    (v_quote_b, v_b, 2026, 'accepted', '2000-01-01', NULL),
+    ('72000000-0000-0000-0000-000000000004', v_a, 2026, 'declined', '2099-12-31', NULL),
+    ('72000000-0000-0000-0000-000000000005', v_a, 2025, 'sent', '2099-12-31', NULL),
+    ('72000000-0000-0000-0000-000000000006', v_a, 2026, 'sent', '2099-12-31', now()),
+    ('72000000-0000-0000-0000-000000000007', v_a, 2026, 'sent', '2000-01-01', NULL);
+  INSERT INTO public.quote_sections (id, quote_id, field_id) VALUES
+    ('70000000-0000-0000-0000-000000000001', v_quote_a, v_field_50),
+    ('70000000-0000-0000-0000-000000000002', v_quote_a_conflict, v_field_50),
+    ('70000000-0000-0000-0000-000000000003', v_quote_b, v_field_50),
+    ('70000000-0000-0000-0000-000000000004', '72000000-0000-0000-0000-000000000004', v_field_50),
+    ('70000000-0000-0000-0000-000000000005', '72000000-0000-0000-0000-000000000005', v_field_50),
+    ('70000000-0000-0000-0000-000000000006', '72000000-0000-0000-0000-000000000006', v_field_50),
+    ('70000000-0000-0000-0000-000000000007', '72000000-0000-0000-0000-000000000007', v_field_50);
   UPDATE public.jobs
      SET quote_section_id = '70000000-0000-0000-0000-000000000001'
    WHERE id = v_job_quote;
-  INSERT INTO public.quote_items (id, section_id, product_id, price_per_unit)
+  INSERT INTO public.quote_items (id, quote_id, section_id, product_id, price_per_unit)
   VALUES
     (
       '71000000-0000-0000-0000-000000000001',
+      v_quote_a,
       '70000000-0000-0000-0000-000000000001',
       v_product_quote,
       1.50
     ),
     (
       '70000000-0000-0000-0000-000000000001',
+      v_quote_a_conflict,
       '70000000-0000-0000-0000-000000000002',
       v_product_quote,
       9.99
-    );
+    ),
+    ('71000000-0000-0000-0000-000000000003', v_quote_b,
+     '70000000-0000-0000-0000-000000000003', v_product_quote, 1.50),
+    ('71000000-0000-0000-0000-000000000004', '72000000-0000-0000-0000-000000000004',
+     '70000000-0000-0000-0000-000000000004', v_product_quote, 7.77),
+    ('71000000-0000-0000-0000-000000000005', '72000000-0000-0000-0000-000000000005',
+     '70000000-0000-0000-0000-000000000005', v_product_quote, 8.88),
+    ('71000000-0000-0000-0000-000000000006', '72000000-0000-0000-0000-000000000006',
+     '70000000-0000-0000-0000-000000000006', v_product_quote, 9.99),
+    ('71000000-0000-0000-0000-000000000007', '72000000-0000-0000-0000-000000000007',
+     '70000000-0000-0000-0000-000000000007', v_product_quote, 1.11);
   INSERT INTO public.application_services
     (id, name, default_rate_per_acre_cents, cost_per_acre_cents, is_active)
   VALUES
@@ -159,16 +189,25 @@ BEGIN
     (v_b, v_service, 20, 2026),
     (v_b, v_service, 35, 2025);
 
-  -- Feature OFF delegates byte-for-byte to the renamed legacy implementation.
+  -- Feature OFF delegates byte-for-byte to the exact md5-pinned legacy
+  -- implementation loaded by the harness from its canonical migration.
   v_plan := public.preview_field_app_invoice_split(
-    '[{"field_id":"sentinel","applied_acres":1}]'::jsonb,
-    '[{"line_key":"sentinel"}]'::jsonb,
-    NULL,
-    NULL
+    jsonb_build_array(jsonb_build_object('field_id', v_field_50, 'applied_acres', 1)),
+    jsonb_build_array(jsonb_build_object(
+      'line_key', 'legacy-parity', 'product_id', v_product_tier,
+      'description', 'Legacy parity', 'rate_per_acre', 1, 'rate_unit', 'unit',
+      'manual_override', true, 'unit_price_cents', 100
+    )), NULL, NULL
   );
-  IF v_plan->>'legacy_sentinel' <> 'unchanged'
-     OR v_plan->'locations' <> '[{"field_id":"sentinel","applied_acres":1}]'::jsonb
-     OR v_plan->'chemicals' <> '[{"line_key":"sentinel"}]'::jsonb THEN
+  v_plan_again := public._preview_field_app_invoice_split_legacy_20260718(
+    jsonb_build_array(jsonb_build_object('field_id', v_field_50, 'applied_acres', 1)),
+    jsonb_build_array(jsonb_build_object(
+      'line_key', 'legacy-parity', 'product_id', v_product_tier,
+      'description', 'Legacy parity', 'rate_per_acre', 1, 'rate_unit', 'unit',
+      'manual_override', true, 'unit_price_cents', 100
+    )), NULL, NULL
+  );
+  IF v_plan IS DISTINCT FROM v_plan_again THEN
     RAISE EXCEPTION 'P2_FAIL(feature_off): legacy preview was not returned unchanged: %', v_plan;
   END IF;
 
@@ -399,6 +438,24 @@ BEGIN
     RAISE EXCEPTION 'P2_FAIL(single_final_money_round): %', v_plan;
   END IF;
 
+  -- COGS is a canonical cents total with its own largest-remainder pass. One
+  -- 1c-cost unit split 50/50 must remain 1c (1/0), never round to 1c + 1c.
+  v_plan := public.preview_field_app_invoice_split(
+    jsonb_build_array(jsonb_build_object('field_id', v_field_50, 'applied_acres', 1)),
+    jsonb_build_array(jsonb_build_object(
+      'line_key', 'chemical:penny-cogs', 'sort_order', 0,
+      'product_id', v_product_penny_cost, 'description', 'Penny COGS',
+      'rate_per_acre', 1, 'rate_unit', 'unit',
+      'manual_override', true, 'unit_price_cents', 100
+    )), NULL, NULL, NULL, '{}'::jsonb
+  );
+  IF v_plan#>>'{billing_lines,0,source_cost_cents}' <> '1'
+     OR v_plan#>>'{billing_lines,0,source_total_cost_cents}' <> '1'
+     OR v_plan#>>'{billing_lines,0,shares,0,allocated_cost_cents}' <> '1'
+     OR v_plan#>>'{billing_lines,0,shares,1,allocated_cost_cents}' <> '0' THEN
+    RAISE EXCEPTION 'P2_FAIL(penny_exact_cogs): %', v_plan;
+  END IF;
+
   -- Job-backed chemicals are exact frozen rows, not product/quote guesses. Two
   -- rows intentionally use the same product at different snapshotted prices.
   -- Caller-provided rate/quantity/price drift must not replace either snapshot.
@@ -456,6 +513,25 @@ BEGIN
     RAISE EXCEPTION 'P2_FAIL(ambiguous_quote_rejected): %', COALESCE(v_err, '<no error>');
   END IF;
 
+  -- Even identical prices from two eligible quote headers are ambiguous audit
+  -- provenance. The caller must resolve the quote or use an explicit manual price.
+  UPDATE public.quote_items SET price_per_unit = 1.50
+   WHERE id = '70000000-0000-0000-0000-000000000001';
+  v_err := NULL;
+  BEGIN
+    PERFORM public.preview_field_app_invoice_split(
+      jsonb_build_array(jsonb_build_object('field_id', v_field_50, 'applied_acres', 1)),
+      jsonb_build_array(jsonb_build_object(
+        'line_key', 'chemical:ambiguous-quote-source', 'sort_order', 0,
+        'product_id', v_product_quote, 'description', 'Ambiguous quote source',
+        'rate_per_acre', 1, 'rate_unit', 'unit'
+      )), NULL, NULL, NULL, '{}'::jsonb
+    );
+  EXCEPTION WHEN OTHERS THEN v_err := SQLERRM; END;
+  IF COALESCE(v_err, '') NOT LIKE '%PER_LINE_QUOTE_SOURCE_AMBIGUOUS%' THEN
+    RAISE EXCEPTION 'P2_FAIL(ambiguous_quote_source_rejected): %', COALESCE(v_err, '<no error>');
+  END IF;
+
   DELETE FROM public.quote_items
    WHERE id = '70000000-0000-0000-0000-000000000001';
   v_plan := public.preview_field_app_invoice_split(
@@ -471,9 +547,11 @@ BEGIN
      OR v_plan#>>'{billing_lines,0,source_cost_cents}' <> '50'
      OR v_plan#>>'{billing_lines,0,source_input,unit_size}' <> 'unit'
      OR v_plan#>>'{billing_lines,0,source_input,cost_cents}' <> '50'
-     OR v_plan#>>'{billing_lines,0,shares,0,base_price_source}' <> 'quoted'
+     OR v_plan#>>'{billing_lines,0,shares,0,base_price_source}'
+          <> 'quoted:' || v_quote_a::text
      OR v_plan#>>'{billing_lines,0,shares,1,base_unit_price_cents}' <> '150'
-     OR v_plan#>>'{billing_lines,0,shares,1,base_price_source}' <> 'quoted'
+     OR v_plan#>>'{billing_lines,0,shares,1,base_price_source}'
+          <> 'quoted:' || v_quote_b::text
      OR v_plan->>'grand_total_cents' <> '150' THEN
     RAISE EXCEPTION 'P2_FAIL(unambiguous_quote_precedence): %', v_plan;
   END IF;
@@ -631,7 +709,8 @@ BEGIN
   INSERT INTO public.field_app_billing_lines (
     id, billing_set_id, line_kind, price_basis, description,
     source_quantity, source_acres, source_unit_price_cents,
-    source_amount_cents, source_unit_size, source_cost_cents, sort_order
+    source_amount_cents, source_unit_size, source_cost_cents,
+    source_total_cost_cents, sort_order
   ) VALUES (
     '82000000-0000-0000-0000-000000000050',
     '80000000-0000-0000-0000-000000000050',
@@ -641,6 +720,7 @@ BEGIN
     NULLIF(v_lines#>>'{0,source_unit_price_cents}', '')::bigint,
     (v_lines#>>'{0,source_amount_cents}')::bigint,
     v_lines#>>'{0,source_unit_size}', (v_lines#>>'{0,source_cost_cents}')::bigint,
+    (v_lines#>>'{0,source_total_cost_cents}')::bigint,
     (v_lines#>>'{0,sort_order}')::integer
   );
   INSERT INTO public.invoices (
@@ -649,10 +729,12 @@ BEGIN
   ) VALUES
     ('83000000-0000-0000-0000-000000000050', v_a,
      '81000000-0000-0000-0000-000000000050',
-     (v_shares#>>'{0,amount_cents}')::bigint, 0, 'sendable', v_admin),
+     (v_shares#>>'{0,amount_cents}')::bigint,
+     (v_shares#>>'{0,allocated_cost_cents}')::bigint, 'sendable', v_admin),
     ('83000000-0000-0000-0000-000000000051', v_b,
      '81000000-0000-0000-0000-000000000050',
-     (v_shares#>>'{1,amount_cents}')::bigint, 0, 'suppressed_zero_total', v_admin);
+     (v_shares#>>'{1,amount_cents}')::bigint,
+     (v_shares#>>'{1,allocated_cost_cents}')::bigint, 'suppressed_zero_total', v_admin);
   INSERT INTO public.invoice_items (
     id, invoice_id, quantity, acres, unit_price_cents, extended_cents,
     unit_size, cost_cents
@@ -674,6 +756,7 @@ BEGIN
   INSERT INTO public.invoice_line_shares (
     id, billing_line_id, invoice_item_id, customer_id, split_mode,
     split_micro_pct, allocated_quantity, allocated_acres,
+    allocated_cost_cents,
     base_unit_price_cents, base_price_source, price_mode, unit_price_cents,
     amount_cents, split_override_reason, price_override_reason,
     calculation_hash, vector_hash, created_by
@@ -683,9 +766,10 @@ BEGIN
      '84000000-0000-0000-0000-000000000050',
      (v_shares#>>'{0,customer_id}')::uuid, v_shares#>>'{0,split_mode}',
      (v_shares#>>'{0,split_micro_pct}')::integer,
-     (v_shares#>>'{0,allocated_quantity}')::numeric,
-     NULLIF(v_shares#>>'{0,allocated_acres}', '')::numeric,
-     (v_shares#>>'{0,base_unit_price_cents}')::bigint,
+      (v_shares#>>'{0,allocated_quantity}')::numeric,
+      NULLIF(v_shares#>>'{0,allocated_acres}', '')::numeric,
+      (v_shares#>>'{0,allocated_cost_cents}')::bigint,
+      (v_shares#>>'{0,base_unit_price_cents}')::bigint,
      v_shares#>>'{0,base_price_source}', v_shares#>>'{0,price_mode}',
      (v_shares#>>'{0,unit_price_cents}')::bigint,
      (v_shares#>>'{0,amount_cents}')::bigint,
@@ -697,9 +781,10 @@ BEGIN
      '84000000-0000-0000-0000-000000000051',
      (v_shares#>>'{1,customer_id}')::uuid, v_shares#>>'{1,split_mode}',
      (v_shares#>>'{1,split_micro_pct}')::integer,
-     (v_shares#>>'{1,allocated_quantity}')::numeric,
-     NULLIF(v_shares#>>'{1,allocated_acres}', '')::numeric,
-     (v_shares#>>'{1,base_unit_price_cents}')::bigint,
+      (v_shares#>>'{1,allocated_quantity}')::numeric,
+      NULLIF(v_shares#>>'{1,allocated_acres}', '')::numeric,
+      (v_shares#>>'{1,allocated_cost_cents}')::bigint,
+      (v_shares#>>'{1,base_unit_price_cents}')::bigint,
      v_shares#>>'{1,base_price_source}', v_shares#>>'{1,price_mode}',
      (v_shares#>>'{1,unit_price_cents}')::bigint,
      (v_shares#>>'{1,amount_cents}')::bigint,
@@ -1028,17 +1113,24 @@ BEGIN
       FROM information_schema.columns
      WHERE table_schema = 'public'
        AND (
-         (table_name = 'field_app_billing_lines'
-          AND column_name IN ('source_job_chemical_id', 'source_unit_size', 'source_cost_cents'))
+          (table_name = 'field_app_billing_lines'
+           AND column_name IN (
+             'source_job_chemical_id', 'source_unit_size', 'source_cost_cents',
+             'source_total_cost_cents'
+           ))
+         OR
+         (table_name = 'invoice_line_shares'
+          AND column_name = 'allocated_cost_cents')
          OR
          (table_name = 'invoice_line_share_post_snapshots'
           AND column_name IN (
             'invoice_total_cost_cents',
             'source_job_chemical_id', 'source_unit_size', 'source_cost_cents',
+            'source_total_cost_cents', 'allocated_cost_cents',
             'item_unit_size', 'item_cost_cents'
           ))
        )
-  ) <> 9 THEN
+  ) <> 13 THEN
     RAISE EXCEPTION 'P2_FAIL(durable_source_cost_identity_columns): required audit columns are missing';
   END IF;
 
@@ -1091,12 +1183,12 @@ BEGIN
     INSERT INTO public.field_app_billing_lines (
       id, billing_set_id, line_kind, price_basis, description,
       product_id, source_job_chemical_id, source_quantity, source_amount_cents,
-      source_unit_size, source_cost_cents
+      source_unit_size, source_cost_cents, source_total_cost_cents
     ) VALUES (
       '82000000-0000-0000-0000-000000000001',
       '80000000-0000-0000-0000-000000000001',
       'chemical', 'same_price', 'Invalid customer relationship',
-      v_product_tier, v_job_chem, 1, 100, 'unit', 50
+      v_product_tier, v_job_chem, 1, 100, 'unit', 50, 50
     );
     INSERT INTO public.invoices (
       id, customer_id, invoice_group_id, job_id, total_amount_cents, created_by
@@ -1113,12 +1205,12 @@ BEGIN
     INSERT INTO public.invoice_line_shares (
       billing_line_id, invoice_item_id, customer_id, split_mode,
       split_micro_pct, allocated_quantity, base_unit_price_cents,
-      base_price_source, price_mode, unit_price_cents, amount_cents,
+      allocated_cost_cents, base_price_source, price_mode, unit_price_cents, amount_cents,
       calculation_hash, vector_hash, created_by
     ) VALUES (
       '82000000-0000-0000-0000-000000000001',
       '84000000-0000-0000-0000-000000000001', v_a, 'field_default',
-      100000000, 1, 100, 'job_snapshot', 'default', 100, 100,
+      100000000, 1, 100, 50, 'job_snapshot', 'default', 100, 100,
       repeat('a', 64), repeat('b', 64), v_admin
     );
     SET CONSTRAINTS ALL IMMEDIATE;
@@ -1143,12 +1235,12 @@ BEGIN
   INSERT INTO public.field_app_billing_lines (
     id, billing_set_id, line_kind, price_basis, description,
     product_id, source_job_chemical_id, source_quantity, source_acres,
-    source_amount_cents, source_unit_size, source_cost_cents
+    source_amount_cents, source_unit_size, source_cost_cents, source_total_cost_cents
   ) VALUES (
     '82000000-0000-0000-0000-000000000010',
     '80000000-0000-0000-0000-000000000010',
     'chemical', 'same_price', 'Valid relational graph', v_product_tier,
-    v_job_chem, 1, 1, 100, 'unit', 50
+    v_job_chem, 1, 1, 100, 'unit', 50, 50
   );
   INSERT INTO public.invoices (
     id, customer_id, invoice_group_id, job_id, total_amount_cents,
@@ -1171,18 +1263,19 @@ BEGIN
   INSERT INTO public.invoice_line_shares (
     id, billing_line_id, invoice_item_id, customer_id, split_mode,
     split_micro_pct, allocated_quantity, allocated_acres,
+    allocated_cost_cents,
     base_unit_price_cents, base_price_source, price_mode,
     unit_price_cents, amount_cents, calculation_hash, vector_hash, created_by
   ) VALUES
     ('85000000-0000-0000-0000-000000000010',
      '82000000-0000-0000-0000-000000000010',
      '84000000-0000-0000-0000-000000000010', v_a, 'field_default',
-     50000000, 0.5, 0.5, 100, 'job_snapshot', 'default', 100, 50,
+     50000000, 0.5, 0.5, 25, 100, 'job_snapshot', 'default', 100, 50,
      repeat('c', 64), repeat('d', 64), v_admin),
     ('85000000-0000-0000-0000-000000000011',
      '82000000-0000-0000-0000-000000000010',
      '84000000-0000-0000-0000-000000000011', v_b, 'field_default',
-     50000000, 0.5, 0.5, 100, 'job_snapshot', 'default', 100, 50,
+     50000000, 0.5, 0.5, 25, 100, 'job_snapshot', 'default', 100, 50,
      repeat('c', 64), repeat('d', 64), v_admin);
   SET CONSTRAINTS ALL IMMEDIATE;
 
@@ -1233,16 +1326,16 @@ BEGIN
     INSERT INTO public.field_app_billing_lines (
       id, billing_set_id, line_kind, price_basis, product_id, description,
       source_quantity, source_acres, source_amount_cents,
-      source_unit_size, source_cost_cents
+      source_unit_size, source_cost_cents, source_total_cost_cents
     ) VALUES
       ('82000000-0000-0000-0000-000000000020',
        '80000000-0000-0000-0000-000000000020',
        'chemical', 'same_price', v_product_tier, 'Ungrouped line A',
-       1, 1, 100, 'unit', 50),
+       1, 1, 100, 'unit', 50, 50),
       ('82000000-0000-0000-0000-000000000021',
        '80000000-0000-0000-0000-000000000020',
        'chemical', 'same_price', v_product_tier, 'Ungrouped line B',
-       1, 1, 100, 'unit', 50);
+       1, 1, 100, 'unit', 50, 50);
     INSERT INTO public.invoices (
       id, customer_id, job_id, total_amount_cents, total_cost_cents, created_by
     ) VALUES
@@ -1261,18 +1354,19 @@ BEGIN
     INSERT INTO public.invoice_line_shares (
       id, billing_line_id, invoice_item_id, customer_id, split_mode,
       split_micro_pct, allocated_quantity, allocated_acres,
+      allocated_cost_cents,
       base_unit_price_cents, base_price_source, price_mode,
       unit_price_cents, amount_cents, calculation_hash, vector_hash, created_by
     ) VALUES
       ('85000000-0000-0000-0000-000000000020',
        '82000000-0000-0000-0000-000000000020',
        '84000000-0000-0000-0000-000000000020', v_a, 'field_default',
-       100000000, 1, 1, 100, 'job_snapshot', 'default', 100, 100,
+       100000000, 1, 1, 50, 100, 'job_snapshot', 'default', 100, 100,
        repeat('e', 64), repeat('f', 64), v_admin),
       ('85000000-0000-0000-0000-000000000021',
        '82000000-0000-0000-0000-000000000021',
        '84000000-0000-0000-0000-000000000021', v_a, 'field_default',
-       100000000, 1, 1, 100, 'job_snapshot', 'default', 100, 100,
+       100000000, 1, 1, 50, 100, 'job_snapshot', 'default', 100, 100,
        repeat('e', 64), repeat('f', 64), v_admin);
     SET CONSTRAINTS ALL IMMEDIATE;
     RAISE EXCEPTION 'P2_FAIL(ungrouped_multiple_invoices): <no error>';
@@ -1321,8 +1415,12 @@ BEGIN
            application_service_id = v_service,
            source_job_chemical_id = NULL,
            source_unit_size = 'acre',
-           source_cost_cents = 4
+           source_cost_cents = 4,
+           source_total_cost_cents = 4
      WHERE id = '82000000-0000-0000-0000-000000000010';
+    UPDATE public.invoice_line_shares
+       SET allocated_cost_cents = 2
+     WHERE billing_line_id = '82000000-0000-0000-0000-000000000010';
     UPDATE public.invoice_items
        SET product_id = NULL,
            unit_size = 'acre',
@@ -1363,6 +1461,7 @@ BEGIN
        SET split_micro_pct = 100000000,
            allocated_quantity = 1,
            allocated_acres = 1,
+           allocated_cost_cents = 50,
            amount_cents = 100
      WHERE id = '85000000-0000-0000-0000-000000000010';
     UPDATE public.invoice_items
@@ -1370,7 +1469,7 @@ BEGIN
      WHERE id = '84000000-0000-0000-0000-000000000010';
     UPDATE public.invoices SET total_amount_cents = 100
      WHERE id = '83000000-0000-0000-0000-000000000010';
-    UPDATE public.invoices SET total_cost_cents = 4
+    UPDATE public.invoices SET total_cost_cents = 50
      WHERE id = '83000000-0000-0000-0000-000000000010';
     SET CONSTRAINTS ALL IMMEDIATE;
     RAISE EXCEPTION 'P2_FAIL(group_customer_set_mismatch): <no error>';
@@ -1501,6 +1600,26 @@ BEGIN
   END;
 
   BEGIN
+    UPDATE public.invoice_line_shares SET allocated_cost_cents = 24
+     WHERE id = '85000000-0000-0000-0000-000000000010';
+    SET CONSTRAINTS ALL IMMEDIATE;
+    RAISE EXCEPTION 'P2_FAIL(allocated_cost_identity): <no error>';
+  EXCEPTION WHEN check_violation THEN
+    GET STACKED DIAGNOSTICS v_err = MESSAGE_TEXT;
+    IF v_err NOT LIKE '%PER_LINE_SOURCE_COST_MISMATCH%' THEN RAISE; END IF;
+  END;
+
+  BEGIN
+    UPDATE public.field_app_billing_lines SET source_total_cost_cents = 49
+     WHERE id = '82000000-0000-0000-0000-000000000010';
+    SET CONSTRAINTS ALL IMMEDIATE;
+    RAISE EXCEPTION 'P2_FAIL(source_total_cost_basis): <no error>';
+  EXCEPTION WHEN check_violation THEN
+    GET STACKED DIAGNOSTICS v_err = MESSAGE_TEXT;
+    IF v_err NOT LIKE '%PER_LINE_SOURCE_COST_BASIS_MISMATCH%' THEN RAISE; END IF;
+  END;
+
+  BEGIN
     UPDATE public.field_app_billing_lines
        SET source_job_chemical_id = v_job_chem_subset
      WHERE id = '82000000-0000-0000-0000-000000000010';
@@ -1524,6 +1643,8 @@ BEGIN
        AND h.source_job_chemical_id = v_job_chem
        AND h.source_unit_size = 'unit'
        AND h.source_cost_cents = 50
+       AND h.source_total_cost_cents = 50
+       AND h.allocated_cost_cents = 25
        AND h.item_unit_size = 'unit'
        AND h.item_cost_cents = 50
        AND h.invoice_total_cost_cents = 25
@@ -1573,11 +1694,12 @@ BEGIN
     );
     INSERT INTO public.field_app_billing_lines (
       id, billing_set_id, line_kind, price_basis, description,
-      source_quantity, source_amount_cents, source_unit_size, source_cost_cents
+      source_quantity, source_amount_cents, source_unit_size, source_cost_cents,
+      source_total_cost_cents
     ) VALUES (
       '82000000-0000-0000-0000-000000000030',
       '80000000-0000-0000-0000-000000000030',
-      'flat_fee', 'flat_fee', 'Zero fee', 1, 0, 'fee', 0
+      'flat_fee', 'flat_fee', 'Zero fee', 1, 0, 'fee', 0, 0
     );
     INSERT INTO public.invoices (
       id, customer_id, total_amount_cents, total_cost_cents, created_by
@@ -1594,13 +1716,13 @@ BEGIN
     INSERT INTO public.invoice_line_shares (
       id, billing_line_id, invoice_item_id, customer_id, split_mode,
       split_micro_pct, allocated_quantity, base_unit_price_cents,
-      base_price_source, price_mode, unit_price_cents, amount_cents,
+      allocated_cost_cents, base_price_source, price_mode, unit_price_cents, amount_cents,
       calculation_hash, vector_hash, created_by
     ) VALUES (
       '85000000-0000-0000-0000-000000000030',
       '82000000-0000-0000-0000-000000000030',
       '84000000-0000-0000-0000-000000000030', v_a, 'field_default',
-      100000000, 1, 0, 'flat_fee', 'default', 0, 0,
+      100000000, 1, 0, 0, 'flat_fee', 'default', 0, 0,
       repeat('1', 64), repeat('2', 64), v_admin
     );
     UPDATE public.invoices
@@ -1622,11 +1744,12 @@ BEGIN
   );
   INSERT INTO public.field_app_billing_lines (
     id, billing_set_id, line_kind, price_basis, description,
-    source_quantity, source_amount_cents, source_unit_size, source_cost_cents
+    source_quantity, source_amount_cents, source_unit_size, source_cost_cents,
+    source_total_cost_cents
   ) VALUES (
     '82000000-0000-0000-0000-000000000031',
     '80000000-0000-0000-0000-000000000031',
-    'flat_fee', 'flat_fee', 'Suppressed zero fee', 1, 0, 'fee', 0
+    'flat_fee', 'flat_fee', 'Suppressed zero fee', 1, 0, 'fee', 0, 0
   );
   INSERT INTO public.invoices (
     id, customer_id, total_amount_cents, total_cost_cents,
@@ -1645,13 +1768,13 @@ BEGIN
   INSERT INTO public.invoice_line_shares (
     id, billing_line_id, invoice_item_id, customer_id, split_mode,
     split_micro_pct, allocated_quantity, base_unit_price_cents,
-    base_price_source, price_mode, unit_price_cents, amount_cents,
+    allocated_cost_cents, base_price_source, price_mode, unit_price_cents, amount_cents,
     calculation_hash, vector_hash, created_by
   ) VALUES (
     '85000000-0000-0000-0000-000000000031',
     '82000000-0000-0000-0000-000000000031',
     '84000000-0000-0000-0000-000000000031', v_a, 'field_default',
-    100000000, 1, 0, 'flat_fee', 'default', 0, 0,
+    100000000, 1, 0, 0, 'flat_fee', 'default', 0, 0,
     repeat('3', 64), repeat('4', 64), v_admin
   );
   SET CONSTRAINTS ALL IMMEDIATE;

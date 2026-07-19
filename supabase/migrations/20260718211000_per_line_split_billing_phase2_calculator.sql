@@ -18,6 +18,8 @@
 --   5. Quantity, acre, micro-percent, and cent passes use the same customer tie-break.
 --   6. Even vectors use largest remainder (three-way = 33333334/33333333/33333333).
 --   7. price x micro-percent intermediates stay numeric.
+--   8. Source COGS rounds once from frozen unit cost x source quantity; child
+--      COGS cents use their own largest-remainder pass and sum exactly to source.
 
 BEGIN;
 
@@ -184,6 +186,7 @@ BEGIN
     source_acres numeric(12,4),
     source_unit_size text NOT NULL,
     source_cost_cents bigint NOT NULL,
+    source_total_cost_cents bigint,
     source_unit_price_cents bigint,
     source_amount_cents bigint,
     sort_order integer NOT NULL,
@@ -198,6 +201,7 @@ BEGIN
     split_micro_pct integer,
     allocated_quantity numeric(12,4),
     allocated_acres numeric(12,4),
+    allocated_cost_cents bigint,
     base_unit_price_cents bigint,
     base_price_source text,
     price_mode text NOT NULL DEFAULT 'default',
@@ -955,24 +959,58 @@ BEGIN
   -- Resolve base prices. A job chemical's frozen price/quantity is authoritative;
   -- explicit global manual remains available only for non-job work. For a non-job
   -- product, preserve the established manual -> quoted -> tier precedence. Quote
-  -- matching is limited to the selected fields; conflicting prices are ambiguous
-  -- provenance and must be refused instead of silently changing invoice money.
+  -- matching is limited to one eligible quote for the share customer, selected
+  -- fields, source season, and active quote lifecycle. Conflicting prices or
+  -- multiple eligible quote identities are ambiguous provenance and are refused.
   SELECT l.line_key
     INTO v_line_key
     FROM pg_temp._plsb_lines l
+    JOIN pg_temp._plsb_shares s ON s.line_key = l.line_key
     JOIN public.quote_items qi ON qi.product_id = l.product_id
     JOIN public.quote_sections qs ON qs.id = qi.section_id
+    JOIN public.quotes q ON q.id = qs.quote_id AND q.id = qi.quote_id
     JOIN pg_temp._plsb_fields selected_field ON selected_field.field_id = qs.field_id
    WHERE l.line_kind = 'chemical'
-     AND l.source_job_chemical_id IS NULL
-     AND NOT COALESCE((l.source_input->>'manual_override')::boolean, false)
-     AND qi.price_per_unit IS NOT NULL
-   GROUP BY l.line_key
+      AND l.source_job_chemical_id IS NULL
+      AND NOT COALESCE((l.source_input->>'manual_override')::boolean, false)
+      AND qi.price_per_unit IS NOT NULL
+      AND q.customer_id = s.customer_id
+      AND q.season = v_effective_season
+      AND q.deleted_at IS NULL
+      AND q.status IN ('sent', 'revised', 'accepted')
+      AND (q.status = 'accepted' OR q.expires_at IS NULL OR q.expires_at >= CURRENT_DATE)
+   GROUP BY l.line_key, s.customer_id
   HAVING count(DISTINCT round(qi.price_per_unit * 100)::bigint) > 1
    ORDER BY l.line_key
    LIMIT 1;
   IF FOUND THEN
     RAISE EXCEPTION 'PER_LINE_QUOTE_PRICE_AMBIGUOUS: %', v_line_key
+      USING ERRCODE = 'check_violation';
+  END IF;
+
+  SELECT l.line_key
+    INTO v_line_key
+    FROM pg_temp._plsb_lines l
+    JOIN pg_temp._plsb_shares s ON s.line_key = l.line_key
+    JOIN public.quote_items qi ON qi.product_id = l.product_id
+    JOIN public.quote_sections qs ON qs.id = qi.section_id
+    JOIN public.quotes q ON q.id = qs.quote_id AND q.id = qi.quote_id
+    JOIN pg_temp._plsb_fields selected_field ON selected_field.field_id = qs.field_id
+   WHERE l.line_kind = 'chemical'
+     AND l.source_job_chemical_id IS NULL
+     AND NOT COALESCE((l.source_input->>'manual_override')::boolean, false)
+     AND qi.price_per_unit IS NOT NULL
+     AND q.customer_id = s.customer_id
+     AND q.season = v_effective_season
+     AND q.deleted_at IS NULL
+     AND q.status IN ('sent', 'revised', 'accepted')
+     AND (q.status = 'accepted' OR q.expires_at IS NULL OR q.expires_at >= CURRENT_DATE)
+   GROUP BY l.line_key, s.customer_id
+  HAVING count(DISTINCT q.id) > 1
+   ORDER BY l.line_key
+   LIMIT 1;
+  IF FOUND THEN
+    RAISE EXCEPTION 'PER_LINE_QUOTE_SOURCE_AMBIGUOUS: %', v_line_key
       USING ERRCODE = 'check_violation';
   END IF;
 
@@ -986,8 +1024,8 @@ BEGIN
              THEN (l.source_input->>'unit_price_cents')::bigint
            WHEN l.source_job_chemical_id IS NOT NULL
              THEN (l.source_input->>'snapshot_unit_price_cents')::bigint
-           WHEN quote_price.price_cents IS NOT NULL
-             THEN quote_price.price_cents
+            WHEN quote_price.price_cents IS NOT NULL
+              THEN quote_price.price_cents
            ELSE tier_price.price_cents
          END,
          base_price_source = CASE
@@ -995,18 +1033,26 @@ BEGIN
            WHEN COALESCE((l.source_input->>'manual_override')::boolean, false)
                 AND l.source_input->>'unit_price_cents' IS NOT NULL THEN 'global_manual'
            WHEN l.source_job_chemical_id IS NOT NULL THEN 'job_snapshot'
-           WHEN quote_price.price_cents IS NOT NULL THEN 'quoted'
+            WHEN quote_price.price_cents IS NOT NULL
+              THEN 'quoted:' || quote_price.quote_id::text
            ELSE 'tier'
          END
     FROM pg_temp._plsb_lines l
     JOIN pg_temp._plsb_customers c ON true
     LEFT JOIN LATERAL (
-      SELECT min(round(qi.price_per_unit * 100)::bigint) AS price_cents
+      SELECT min(round(qi.price_per_unit * 100)::bigint) AS price_cents,
+             min(q.id::text)::uuid AS quote_id
         FROM public.quote_items qi
         JOIN public.quote_sections qs ON qs.id = qi.section_id
+        JOIN public.quotes q ON q.id = qs.quote_id AND q.id = qi.quote_id
         JOIN pg_temp._plsb_fields selected_field ON selected_field.field_id = qs.field_id
        WHERE qi.product_id = l.product_id
-         AND qi.price_per_unit IS NOT NULL
+          AND qi.price_per_unit IS NOT NULL
+          AND q.customer_id = c.customer_id
+          AND q.season = v_effective_season
+          AND q.deleted_at IS NULL
+          AND q.status IN ('sent', 'revised', 'accepted')
+          AND (q.status = 'accepted' OR q.expires_at IS NULL OR q.expires_at >= CURRENT_DATE)
     ) quote_price ON true
     LEFT JOIN LATERAL (
       SELECT CASE c.tier
@@ -1116,6 +1162,15 @@ BEGIN
              FROM pg_temp._plsb_shares s WHERE s.line_key = l.line_key) = 1
          THEN 'same_price'
        ELSE 'per_person_price'
+          END;
+
+  -- Canonical COGS rounds once from the frozen per-unit cost and final stored
+  -- source quantity. It is then allocated independently in whole cents; using
+  -- cost * each fractional child quantity would create/destroy rounding pennies.
+  UPDATE pg_temp._plsb_lines l
+     SET source_total_cost_cents = CASE
+       WHEN l.line_kind = 'flat_fee' THEN 0
+       ELSE round(l.source_cost_cents::numeric * l.source_quantity)::bigint
      END;
 
   UPDATE pg_temp._plsb_lines l
@@ -1156,6 +1211,29 @@ BEGIN
      SET allocated_quantity = (
        r.sign_value * (r.base + CASE WHEN r.rn <= r.residual THEN 1 ELSE 0 END)
      )::numeric / 10000::numeric
+    FROM ranked r
+   WHERE r.line_key = s.line_key AND r.customer_id = s.customer_id;
+
+  -- COGS cents pass: preserve each logical line's canonical total exactly.
+  WITH ideals AS (
+    SELECT s.line_key, s.customer_id,
+           l.source_total_cost_cents AS total_cents,
+           (l.source_total_cost_cents::numeric * s.split_micro_pct::numeric)
+             / 100000000::numeric AS ideal
+    FROM pg_temp._plsb_shares s
+    JOIN pg_temp._plsb_lines l ON l.line_key = s.line_key
+  ), bases AS (
+    SELECT line_key, customer_id, total_cents,
+           floor(ideal)::bigint AS base, ideal - floor(ideal) AS frac
+    FROM ideals
+  ), ranked AS (
+    SELECT line_key, customer_id, base,
+           row_number() OVER (PARTITION BY line_key ORDER BY frac DESC, customer_id ASC) AS rn,
+           total_cents - sum(base) OVER (PARTITION BY line_key) AS residual
+    FROM bases
+  )
+  UPDATE pg_temp._plsb_shares s
+     SET allocated_cost_cents = r.base + CASE WHEN r.rn <= r.residual THEN 1 ELSE 0 END
     FROM ranked r
    WHERE r.line_key = s.line_key AND r.customer_id = s.customer_id;
 
@@ -1255,6 +1333,7 @@ BEGIN
           'source_acres', l.source_acres,
           'source_unit_size', l.source_unit_size,
           'source_cost_cents', l.source_cost_cents,
+          'source_total_cost_cents', l.source_total_cost_cents,
           'source_unit_price_cents', l.source_unit_price_cents,
           'source_amount_cents', l.source_amount_cents,
           'sort_order', l.sort_order,
@@ -1264,6 +1343,7 @@ BEGIN
             'split_micro_pct', s.split_micro_pct,
             'allocated_quantity', s.allocated_quantity,
             'allocated_acres', s.allocated_acres,
+            'allocated_cost_cents', s.allocated_cost_cents,
             'base_unit_price_cents', s.base_unit_price_cents,
             'base_price_source', s.base_price_source,
             'price_mode', s.price_mode,
@@ -1290,6 +1370,7 @@ BEGIN
       l.source_acres,
       l.source_unit_size,
       l.source_cost_cents,
+      l.source_total_cost_cents,
       l.source_unit_price_cents,
       l.source_amount_cents,
       l.sort_order
@@ -1317,6 +1398,7 @@ BEGIN
         'source_acres', l.source_acres,
         'source_unit_size', l.source_unit_size,
         'source_cost_cents', l.source_cost_cents,
+        'source_total_cost_cents', l.source_total_cost_cents,
         'source_unit_price_cents', l.source_unit_price_cents,
         'source_amount_cents', l.source_amount_cents,
         'sort_order', l.sort_order,
@@ -1330,6 +1412,7 @@ BEGIN
             'split_micro_pct', s.split_micro_pct,
             'allocated_quantity', s.allocated_quantity,
             'allocated_acres', s.allocated_acres,
+            'allocated_cost_cents', s.allocated_cost_cents,
             'base_unit_price_cents', s.base_unit_price_cents,
             'base_price_source', s.base_price_source,
             'price_mode', s.price_mode,
@@ -1464,18 +1547,63 @@ GRANT EXECUTE ON FUNCTION public._calculate_per_line_split_billing_plan(uuid, js
   TO service_role;
 
 COMMENT ON FUNCTION public._calculate_per_line_split_billing_plan(uuid, jsonb, jsonb, uuid, uuid, jsonb) IS
-  'Private rounding-policy-v1 resolver/calculator for per-line field-app billing. Resolves job snapshot -> field default -> field owner, prices manual -> quote -> tier/service rate, expands complete vectors, and allocates signed 4dp quantities/acres and bigint cents by deterministic largest remainder. Phase 3 consumes this exact plan.';
+  'Private rounding-policy-v1 resolver/calculator for per-line field-app billing. Resolves job snapshot -> field default -> field owner, prices manual -> customer/season/lifecycle-bound quote -> tier/service rate, expands complete vectors, and allocates signed 4dp quantities/acres plus sales and canonical source COGS bigint cents by deterministic largest remainder. Phase 3 consumes this exact plan.';
 
 -- Preserve the current preview implementation byte-for-byte behind a private name.
 -- The feature-OFF branch calls it directly, so the baseline engine cannot drift here.
 DO $rename_legacy$
+DECLARE
+  v_oid oid;
+  v_body_md5 text;
+  v_owner text;
+  v_security_definer boolean;
+  v_volatility "char";
+  v_language text;
+  v_config text[];
 BEGIN
-  IF to_regprocedure('public._preview_field_app_invoice_split_legacy_20260718(jsonb,jsonb,uuid,uuid)') IS NULL THEN
-    IF to_regprocedure('public.preview_field_app_invoice_split(jsonb,jsonb,uuid,uuid)') IS NULL THEN
-      RAISE EXCEPTION 'Expected one four-argument preview_field_app_invoice_split before Phase 2';
-    END IF;
-    ALTER FUNCTION public.preview_field_app_invoice_split(jsonb, jsonb, uuid, uuid)
-      RENAME TO _preview_field_app_invoice_split_legacy_20260718;
+  -- Never trust a pre-existing private target. A prior/manual object with this
+  -- name could otherwise be executed by the new SECURITY DEFINER wrapper.
+  IF to_regprocedure('public._preview_field_app_invoice_split_legacy_20260718(jsonb,jsonb,uuid,uuid)') IS NOT NULL THEN
+    RAISE EXCEPTION 'PER_LINE_LEGACY_HELPER_DRIFT: private legacy target already exists'
+      USING ERRCODE = 'object_not_in_prerequisite_state';
+  END IF;
+
+  SELECT p.oid, md5(p.prosrc), pg_get_userbyid(p.proowner), p.prosecdef,
+         p.provolatile, l.lanname, p.proconfig
+    INTO v_oid, v_body_md5, v_owner, v_security_definer,
+         v_volatility, v_language, v_config
+    FROM pg_proc p
+    JOIN pg_language l ON l.oid = p.prolang
+   WHERE p.oid = to_regprocedure(
+     'public.preview_field_app_invoice_split(jsonb,jsonb,uuid,uuid)'
+   )::oid;
+
+  IF NOT FOUND
+     OR v_body_md5 IS DISTINCT FROM 'ca33fb973d86dbf3a2788dc11fbc49a5'
+     OR v_owner IS DISTINCT FROM 'postgres'
+     OR v_security_definer IS DISTINCT FROM true
+     OR v_volatility IS DISTINCT FROM 's'::"char"
+     OR v_language IS DISTINCT FROM 'plpgsql'
+     OR NOT COALESCE(v_config @> ARRAY['search_path=public, pg_temp']::text[], false)
+     OR has_function_privilege('anon', v_oid, 'EXECUTE')
+     OR NOT has_function_privilege('authenticated', v_oid, 'EXECUTE')
+     OR NOT has_function_privilege('service_role', v_oid, 'EXECUTE') THEN
+    RAISE EXCEPTION
+      'PER_LINE_LEGACY_PREVIEW_DRIFT: expected canonical md5/security/ACL, found md5 %, owner %, secdef %, volatility %, language %, config %',
+      COALESCE(v_body_md5, '<missing>'), COALESCE(v_owner, '<missing>'),
+      COALESCE(v_security_definer::text, '<missing>'),
+      COALESCE(v_volatility::text, '<missing>'), COALESCE(v_language, '<missing>'),
+      COALESCE(v_config::text, '<missing>')
+      USING ERRCODE = 'object_not_in_prerequisite_state';
+  END IF;
+
+  ALTER FUNCTION public.preview_field_app_invoice_split(jsonb, jsonb, uuid, uuid)
+    RENAME TO _preview_field_app_invoice_split_legacy_20260718;
+
+  IF (SELECT md5(p.prosrc) FROM pg_proc p WHERE p.oid = v_oid)
+       IS DISTINCT FROM 'ca33fb973d86dbf3a2788dc11fbc49a5' THEN
+    RAISE EXCEPTION 'PER_LINE_LEGACY_PREVIEW_DRIFT: rename changed canonical body'
+      USING ERRCODE = 'object_not_in_prerequisite_state';
   END IF;
 END;
 $rename_legacy$;
@@ -1538,6 +1666,7 @@ DO $overload_guard$
 DECLARE
   v_preview_count integer;
   v_calculator_count integer;
+  v_legacy_count integer;
 BEGIN
   SELECT count(*) INTO v_preview_count
   FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
@@ -1545,10 +1674,14 @@ BEGIN
   SELECT count(*) INTO v_calculator_count
   FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
   WHERE n.nspname = 'public' AND p.proname = '_calculate_per_line_split_billing_plan';
+  SELECT count(*) INTO v_legacy_count
+  FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+  WHERE n.nspname = 'public'
+    AND p.proname = '_preview_field_app_invoice_split_legacy_20260718';
 
-  IF v_preview_count <> 1 OR v_calculator_count <> 1 THEN
-    RAISE EXCEPTION 'Phase 2 overload guard failed: preview %, calculator %',
-      v_preview_count, v_calculator_count;
+  IF v_preview_count <> 1 OR v_calculator_count <> 1 OR v_legacy_count <> 1 THEN
+    RAISE EXCEPTION 'Phase 2 overload guard failed: preview %, calculator %, legacy %',
+      v_preview_count, v_calculator_count, v_legacy_count;
   END IF;
 END;
 $overload_guard$;

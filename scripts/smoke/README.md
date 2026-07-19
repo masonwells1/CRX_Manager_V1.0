@@ -91,25 +91,31 @@ node scripts/smoke/prove-per-line-split-billing-phase2.mjs
 
 It creates a uniquely named `crx-per-line-p2-proof-*` container with no network,
 stores PostgreSQL data in tmpfs, loads the minimal schema plus the checked-in
-Phase 1 and Phase 2 migrations, runs `smoke-per-line-split-billing-phase2.sql`,
-requires the terminal `SMOKE_PASS_ROLLBACK` marker, and force-removes the exact
-container in `finally`.
+Phase 1 preflight, Phase 1 schema, relational-guard, and Phase 2 migrations,
+recreates the exact approved legacy preview from its checked-in migration, runs
+`smoke-per-line-split-billing-phase2.sql`, requires the terminal
+`SMOKE_PASS_ROLLBACK` marker, and force-removes the exact container in `finally`.
 
 The proof covers feature-OFF legacy delegation; exact 50/50 and three-way
 micro-percent vectors; 1¢ and signed half-cent allocation; full-precision unit
-conversion with only the final money figure rounded; exact job-chemical identity,
+conversion with only the final money figure rounded; source COGS rounded once and
+allocated as exact largest-remainder cents (including a 1¢ → 1¢/0¢ split); exact job-chemical identity,
 quantity, and frozen prices even when the same product appears twice; customer-
 supplied zero billing; owner/outsider sales-rep scope plus exact invoice/job/field
-context binding; non-job manual/quoted/tier pricing with conflicting quotes
-rejected; source-season service pricing; per-person price overrides; 100/0 service
+context binding; non-job manual/quoted/tier pricing with customer/season/lifecycle-
+bound quote headers, stale/unrelated quotes ignored, and conflicting price or quote
+source rejected; source-season service pricing; per-person price overrides; 100/0 service
 and flat-fee rows; exact flat-fee output persisted into production-shaped non-null
 invoice quantities with quantity 1 on every child; inverse job-chemical and required-
 service completeness; job/default/fallback ownership; field/job and chemical/job
 membership rejection; full identity/provenance/reason hashes; Mode A and malformed-
-vector rejection; role denial; overload count; and private-calculator privileges.
+vector rejection; role denial; overload count; private-calculator privileges; stale
+enabled-flag refusal; and fail-closed rejection of a pre-existing private legacy
+helper or a public legacy body/security/ACL drift.
 
-The command loads both checked-in migrations verbatim. It does not normalize or
-rewrite either file, and it cannot apply or alter production.
+The command loads all four feature migrations verbatim. The legacy preview fixture
+is extracted from its checked-in migration and newline-normalized to reproduce the
+exact live `pg_proc.prosrc` fingerprint. The proof cannot apply or alter production.
 
 ## Disposable per-line split-billing Phase 1 proof
 

@@ -3418,6 +3418,8 @@ export interface FieldAppBillingLine {
   source_acres: number | null;
   source_unit_size: string;
   source_cost_cents: number;
+  /** Canonical whole-cent COGS, rounded once before child allocation. */
+  source_total_cost_cents: number;
   source_unit_price_cents: number | null; // null on per_person_price (no single price)
   source_amount_cents: number | null;     // canonical unsplit total; null on per_person_price
   sort_order: number;
@@ -3437,6 +3439,8 @@ export interface InvoiceLineShare {
   split_micro_pct: number;
   allocated_quantity: number | null;
   allocated_acres: number | null;
+  /** Penny-exact share of the logical line's canonical COGS. */
+  allocated_cost_cents: number;
   base_unit_price_cents: number;
   base_price_source: string;
   price_mode: 'default' | 'override';
@@ -3481,6 +3485,7 @@ export interface InvoiceLineSharePostSnapshot {
   source_acres: number | null;
   source_unit_size: string;
   source_cost_cents: number;
+  source_total_cost_cents: number;
   source_unit_price_cents: number | null;
   source_amount_cents: number | null;
   sort_order: number;
@@ -3488,6 +3493,7 @@ export interface InvoiceLineSharePostSnapshot {
   split_micro_pct: number;
   allocated_quantity: number | null;
   allocated_acres: number | null;
+  allocated_cost_cents: number;
   base_unit_price_cents: number;
   base_price_source: string;
   price_mode: 'default' | 'override';

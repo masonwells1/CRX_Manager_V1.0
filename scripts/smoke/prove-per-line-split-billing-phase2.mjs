@@ -27,6 +27,7 @@ if (process.argv.length > 2) {
 
 const files = {
   setup: path.join(ROOT, 'scripts', 'smoke', 'setup-per-line-split-billing-phase2.sql'),
+  legacyPreview: path.join(ROOT, 'supabase', 'migrations', '20260630180000_field_app_pricing_unit_fix.sql'),
   preflight: path.join(ROOT, 'supabase', 'migrations', '20260718205500_per_line_split_billing_phase1_preflight.sql'),
   phase1: path.join(ROOT, 'supabase', 'migrations', '20260718210000_per_line_split_billing_phase1_schema.sql'),
   guards: path.join(ROOT, 'supabase', 'migrations', '20260718210500_per_line_split_billing_relational_guards.sql'),
@@ -73,6 +74,26 @@ function read(name) {
   return readFileSync(files[name], 'utf8');
 }
 
+function readCanonicalLegacyPreview() {
+  // Supabase's migration runner stores the checked-in body with LF newlines.
+  // Normalize the Windows checkout before piping it into Linux PostgreSQL so
+  // md5(pg_proc.prosrc) matches the live canonical fingerprint exactly.
+  const source = read('legacyPreview').replace(/\r\n/g, '\n');
+  const startMarker = 'CREATE OR REPLACE FUNCTION public.preview_field_app_invoice_split';
+  const endMarker = '$function$;';
+  const start = source.indexOf(startMarker);
+  const end = source.indexOf(endMarker, start);
+  if (start < 0 || end < 0) {
+    fail('could not extract canonical legacy preview definition');
+  }
+  return `${source.slice(start, end + endMarker.length)}
+REVOKE ALL ON FUNCTION public.preview_field_app_invoice_split(jsonb, jsonb, uuid, uuid)
+  FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.preview_field_app_invoice_split(jsonb, jsonb, uuid, uuid)
+  TO authenticated, service_role;
+`;
+}
+
 function sleep(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
@@ -115,6 +136,7 @@ function run() {
   console.log(`[phase2-proof] container=${CONTAINER} network=none database=${DATABASE}`);
   console.log('[phase2-proof] loading minimal schema + proving Phase 1 stale-object refusal');
   psql(read('setup'));
+  psql(readCanonicalLegacyPreview());
   psql(`
     CREATE TABLE public.field_app_billing_sets (id uuid PRIMARY KEY);
     CREATE UNIQUE INDEX uq_field_app_billing_sets_group
@@ -178,6 +200,39 @@ function run() {
      WHERE setting_key = 'feature_per_line_split_billing';
   `);
 
+  console.log('[phase2-proof] proving Phase 2 rejects a pre-existing private legacy helper');
+  psql(`
+    CREATE FUNCTION public._preview_field_app_invoice_split_legacy_20260718(
+      jsonb, jsonb, uuid, uuid
+    ) RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER
+    SET search_path = public, pg_temp
+    AS $$ SELECT '{}'::jsonb $$;
+  `);
+  const privateDriftAttempt = psql(read('phase2'), { allowFailure: true });
+  const privateDriftOutput = `${privateDriftAttempt.stdout || ''}${privateDriftAttempt.stderr || ''}`;
+  if (privateDriftAttempt.status === 0 || !privateDriftOutput.includes('PER_LINE_LEGACY_HELPER_DRIFT')) {
+    fail('Phase 2 trusted a pre-existing private legacy helper', privateDriftOutput.trim());
+  }
+  psql('DROP FUNCTION public._preview_field_app_invoice_split_legacy_20260718(jsonb,jsonb,uuid,uuid);');
+
+  console.log('[phase2-proof] proving Phase 2 rejects a drifted public legacy body');
+  psql(`
+    CREATE OR REPLACE FUNCTION public.preview_field_app_invoice_split(
+      p_locations jsonb,
+      p_chemicals jsonb,
+      p_application_service_id uuid DEFAULT NULL::uuid,
+      p_invoice_id uuid DEFAULT NULL::uuid
+    ) RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER
+    SET search_path = public, pg_temp
+    AS $$ SELECT '{"drifted":true}'::jsonb $$;
+  `);
+  const bodyDriftAttempt = psql(read('phase2'), { allowFailure: true });
+  const bodyDriftOutput = `${bodyDriftAttempt.stdout || ''}${bodyDriftAttempt.stderr || ''}`;
+  if (bodyDriftAttempt.status === 0 || !bodyDriftOutput.includes('PER_LINE_LEGACY_PREVIEW_DRIFT')) {
+    fail('Phase 2 trusted a drifted public legacy preview body', bodyDriftOutput.trim());
+  }
+  psql(readCanonicalLegacyPreview());
+
   console.log('[phase2-proof] loading Phase 2 migration verbatim with flag OFF');
   psql(read('phase2'));
 
@@ -198,7 +253,7 @@ function run() {
   }
 
   console.log('PROOF — Ran: network-isolated PostgreSQL 17 container; loaded checked-in Phase 1 preflight + Phase 1 + relational guards + Phase 2 migrations verbatim; executed rollback-only Phase 2 SQL proof.');
-  console.log('PROOF — Saw: stale Phase 1 objects rejected before install; stale enabled flag rejected before Phase 2 install; feature OFF delegated unchanged; owning-vs-other sales-rep job/invoice/field scope; exact null-safe invoice/job binding and direct-invoice field binding; 50/50; exact 3-way; 1-cent; one final money rounding after full-precision conversion; signed half-cent -13 => -7/-6; exact job-chemical identity/quantity/unit/price/COGS snapshots, including duplicate products, ignored browser price tampering, rejected nullable/negative frozen prices, and a reconciled ounce-unit price pair; complete job-field-set enforcement; exact durable job-chemical/service completeness; frozen job/invoice application-service identity; customer-supplied $0/COGS; non-job manual -> unambiguous quote -> tier with conflicting quote prices rejected; source-season service pricing; per-person override; 100/0 zero row; exact flat-fee output persisted with production-shaped non-null child quantity 1 and tamper rejection; job/default/fallback ownership; job field/chemical identity rejection; exact grouped and ungrouped child-invoice membership; share/item quantity, rounded acres, effective price, chemical product, service identity, pricing unit, COGS, amount, and header-cost parity; immutable posted source/item identity/unit/COGS; zero-sendable rejection plus valid suppressed-zero snapshot; exact group-customer set; unshared item; source cents/quantity/acres; invoice header and pre-post integrity rejection; hashes bind product/service identity, price provenance, override modes, and reasons; Mode A/vector/role rejection; one public preview overload; private calculator not browser-executable; cleanup failure is fatal.');
+  console.log('PROOF — Saw: stale Phase 1 objects rejected before install; stale enabled flag rejected before Phase 2 install; pre-existing private helper and drifted public legacy body rejected; feature OFF delegated unchanged; owning-vs-other sales-rep job/invoice/field scope; exact null-safe invoice/job binding and direct-invoice field binding; 50/50; exact 3-way; 1-cent; one final money rounding after full-precision conversion; signed half-cent -13 => -7/-6; penny-exact residual COGS preserving a 1c source across 50/50 children; exact job-chemical identity/quantity/unit/price/COGS snapshots, including duplicate products, ignored browser price tampering, rejected nullable/negative frozen prices, and a reconciled ounce-unit price pair; complete job-field-set enforcement; exact durable job-chemical/service completeness; frozen job/invoice application-service identity; customer-supplied $0/COGS; non-job manual -> customer/season/lifecycle-bound quote -> tier with ambiguous quote price/source rejected and stale/unrelated quotes ignored; source-season service pricing; per-person override; 100/0 zero row; exact flat-fee output persisted with production-shaped non-null child quantity 1 and tamper rejection; job/default/fallback ownership; job field/chemical identity rejection; exact grouped and ungrouped child-invoice membership; share/item quantity, rounded acres, effective price, chemical product, service identity, pricing unit, per-unit COGS, allocated COGS, amount, and header-cost parity; immutable posted source/item identity/unit/COGS; zero-sendable rejection plus valid suppressed-zero snapshot; exact group-customer set; unshared item; source cents/quantity/acres/COGS; invoice header and pre-post integrity rejection; hashes bind product/service identity, price provenance, allocated COGS, override modes, and reasons; Mode A/vector/role rejection; one public preview overload; private calculator not browser-executable; cleanup failure is fatal.');
 }
 
 try {

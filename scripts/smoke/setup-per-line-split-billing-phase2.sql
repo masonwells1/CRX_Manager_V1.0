@@ -47,6 +47,62 @@ CREATE OR REPLACE FUNCTION public.current_season()
 RETURNS integer LANGUAGE sql IMMUTABLE
 AS $$ SELECT 2026 $$;
 
+-- Minimal legacy-preview dependencies. The proof harness loads the exact
+-- checked-in production preview definition from its canonical 20260630180000
+-- migration so Phase 2's md5 precondition is exercised, not bypassed.
+CREATE OR REPLACE FUNCTION public.compute_fuel_surcharge_cents(
+  p_acres numeric,
+  p_subtotal_cents bigint
+)
+RETURNS bigint LANGUAGE sql IMMUTABLE
+AS $$ SELECT 0::bigint $$;
+
+CREATE OR REPLACE FUNCTION public.derive_customer_shares_from_fields(
+  p_field_ids uuid[],
+  p_applied_acres_map jsonb DEFAULT '{}'::jsonb
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+STABLE
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_result jsonb;
+BEGIN
+  SELECT jsonb_build_object(
+    'customers', COALESCE((
+      SELECT jsonb_agg(jsonb_build_object(
+        'customer_id', x.customer_id,
+        'customer_name', x.farm_name,
+        'tier', x.assigned_tier,
+        'is_primary', x.is_primary
+      ) ORDER BY x.customer_id)
+      FROM (
+        SELECT d.customer_id, c.farm_name, c.assigned_tier, bool_or(d.is_primary) AS is_primary
+        FROM public.field_billing_defaults d
+        JOIN public.customers c ON c.id = d.customer_id
+        WHERE d.field_id = ANY(p_field_ids)
+        GROUP BY d.customer_id, c.farm_name, c.assigned_tier
+      ) x
+    ), '[]'::jsonb),
+    'rows', COALESCE((
+      SELECT jsonb_agg(jsonb_build_object(
+        'field_id', d.field_id,
+        'field_name', f.field_name,
+        'customer_id', d.customer_id,
+        'share_acres', COALESCE((p_applied_acres_map->>d.field_id::text)::numeric, 0)
+          * d.split_pct / 100,
+        'price_override_cents', d.price_override_cents
+      ) ORDER BY d.field_id, d.customer_id)
+      FROM public.field_billing_defaults d
+      JOIN public.fields f ON f.id = d.field_id
+      WHERE d.field_id = ANY(p_field_ids)
+    ), '[]'::jsonb)
+  ) INTO v_result;
+  RETURN v_result;
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION public.field_app_priced_quantity(
   p_applied_qty numeric,
   p_rate_unit text,
@@ -175,12 +231,22 @@ CREATE TABLE public.customer_application_rates (
   season integer NOT NULL,
   UNIQUE (customer_id, application_service_id, season)
 );
+CREATE TABLE public.quotes (
+  id uuid PRIMARY KEY,
+  customer_id uuid NOT NULL REFERENCES public.customers(id),
+  season integer,
+  status text NOT NULL,
+  expires_at date,
+  deleted_at timestamptz
+);
 CREATE TABLE public.quote_sections (
   id uuid PRIMARY KEY,
+  quote_id uuid NOT NULL REFERENCES public.quotes(id),
   field_id uuid REFERENCES public.fields(id)
 );
 CREATE TABLE public.quote_items (
   id uuid PRIMARY KEY,
+  quote_id uuid NOT NULL REFERENCES public.quotes(id),
   section_id uuid NOT NULL REFERENCES public.quote_sections(id),
   product_id uuid NOT NULL REFERENCES public.products(id),
   price_per_unit numeric
@@ -218,29 +284,3 @@ CREATE TABLE public.invoice_items (
   cost_cents bigint NOT NULL DEFAULT 0,
   unit_size text
 );
-
--- Exact signature/body sentinel for proving the feature-OFF wrapper delegates
--- to the renamed legacy function without recomputing or reshaping its output.
-CREATE OR REPLACE FUNCTION public.preview_field_app_invoice_split(
-  p_locations jsonb,
-  p_chemicals jsonb,
-  p_application_service_id uuid DEFAULT NULL::uuid,
-  p_invoice_id uuid DEFAULT NULL::uuid
-)
-RETURNS jsonb
-LANGUAGE sql
-STABLE
-SECURITY DEFINER
-SET search_path = public, pg_temp
-AS $$
-  SELECT jsonb_build_object(
-    'legacy_sentinel', 'unchanged',
-    'locations', p_locations,
-    'chemicals', p_chemicals,
-    'application_service_id', p_application_service_id,
-    'invoice_id', p_invoice_id
-  )
-$$;
-
-GRANT EXECUTE ON FUNCTION public.preview_field_app_invoice_split(jsonb, jsonb, uuid, uuid)
-  TO authenticated, service_role;
