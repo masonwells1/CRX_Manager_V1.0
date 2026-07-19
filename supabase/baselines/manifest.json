@@ -1,0 +1,80 @@
+{
+  "format_version": 1,
+  "project_id": "rhyzpcqhnizqbxphqdkr",
+  "generated_at": "2026-07-19T08:08:07.223Z",
+  "migrations_high_water": "20260719065443",
+  "migration_ledger_rows": 859,
+  "restore_order": [
+    "20260719065443_extensions.sql",
+    "20260719065443_public_schema.sql",
+    "20260719065443_platform_overlay.sql",
+    "20260719065443_cron_jobs.sql",
+    "20260719065443_migration_history.sql"
+  ],
+  "artifacts": {
+    "20260719065443_cron_jobs.sql": {
+      "bytes": 4008,
+      "sha256": "DC22CBB54063FD47028CEAFC1405EDD4E13C8403E6D8A296FE108E1344C1D7D0"
+    },
+    "20260719065443_extensions.sql": {
+      "bytes": 522,
+      "sha256": "04878FCE146FA84AA500D2B3093B1C30F7767C48F6EB74BF2EAC2E6361453C2A"
+    },
+    "20260719065443_migration_history.sql": {
+      "bytes": 44771,
+      "sha256": "CB7B685D4C1B72DC29FFFDC8F15E35E1E887054F234A33E18D809329A0AB1EA8"
+    },
+    "20260719065443_platform_overlay.sql": {
+      "bytes": 13069,
+      "sha256": "473AC40BCAB752FA7EA97378572CA98F46D37079446E34416EFE5E3CB012599E"
+    },
+    "20260719065443_public_schema.sql": {
+      "bytes": 2381293,
+      "sha256": "E4EF4197BE992653013CC17864C3B60F39198F4DB06A5BAE62E468454E51F9ED"
+    },
+    "20260719065443_storage_buckets.json": {
+      "bytes": 2110,
+      "sha256": "672E63DAF203E401DB45C5F3E2E1A66C3D828484DC5664CCCBB3A5B49F906904"
+    }
+  },
+  "catalog_counts": {
+    "public_tables": 144,
+    "public_app_functions": 451,
+    "public_extension_functions": 24,
+    "public_policies": 414,
+    "storage_object_policies": 28,
+    "storage_buckets": 9,
+    "auth_user_crx_triggers": 1,
+    "operational_cron_jobs": 8
+  },
+  "catalog_fingerprints": {
+    "columns": "558783ddfb012c51d7d27ee2fe8b4abb",
+    "constraints": "bbed526c2da8389e225205c628bb71e9",
+    "enums": "9df1d2720ee68c51f557f3b2c42960db",
+    "indexes": "c124d47e18e0d4000b4d857b1894ee1f",
+    "relations_and_acl": "dcd44de5a7e5f29259fd1249bfd0edf8",
+    "triggers": "9cb8c1f2f4a8f247b0fe4970df8d1068",
+    "function_security": "28198a28c7b141653266fded60a32309",
+    "function_canonical_source": "68cfa89ad01d5c95b81bbc69b05cb5ac",
+    "policy_contracts": "3387f2b002fcc78cdcffcce93021d511",
+    "cron_contracts": "f1c1cd047edac97fd406291089df43fb"
+  },
+  "key_function_prosrc_md5": {
+    "public.cancel_order(uuid,uuid,text)": "26c8b52a1f1e1a5bdf460bd89b730111",
+    "public.create_invoice_for_unbilled_delivery(uuid,uuid,text)": "2fc0102fe8702f6c2d63c326a99c15dd",
+    "public.create_split_invoices_from_order(uuid,uuid,text,text)": "398030fbb64006b4750e7e89a61b6cb9",
+    "public.delete_invoices(uuid[],uuid,text)": "24c271164caa2369c57c3bdc5d88c50a",
+    "public.guard_quote_commission_split_valid()": "84c1eeb07885372674092202988fb761",
+    "public.revert_quote_status(uuid,text,uuid,text)": "fb0cc5def3766270b13c401810b61f3e",
+    "public.void_invoice(uuid,text,text)": "9f1656542c5c6a667b1c8a67034c5c3f"
+  },
+  "disposable_restore_proof": {
+    "postgres_major": 17,
+    "catalog_count_match": true,
+    "catalog_fingerprint_match": true,
+    "policy_contract_match": true,
+    "migration_history_fail_closed": true,
+    "cron_contract_live_match": true,
+    "cron_collision_fail_closed": true
+  }
+}

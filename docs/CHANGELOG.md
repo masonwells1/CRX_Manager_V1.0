@@ -2,6 +2,10 @@
 
 All significant development milestones, in reverse chronological order.
 
+### 2026-07-19 — Production schema clean-rebuild baseline at gauntlet high-water
+
+The gauntlet closeout's exact Codex push review found that the immutable historical migration stream cannot safely initialize a brand-new database: one applied function-body guard depends on legacy mixed line endings, and the quote-commission repair correctly requires the one exact production row it reconciled. The fix does not edit either applied migration. `supabase/baselines/` now contains a hash-bound, data-free production schema snapshot at live high-water `20260719065443`, its required extensions, the CRX-owned Auth trigger/Storage policy and bucket overlay, all eight live pg_cron schedules, and a compact 859-row version/name ledger with empty-ledger/job-name hard stops. A disposable PostgreSQL 17 restore matched production catalog counts and structural/security fingerprints, all 442 public-plus-Storage policy contracts, the gauntlet key function hashes, and all non-comment application function bodies; replaying the ledger restore failed closed as designed. `scripts/verify-schema-baseline.mjs` is exposed as `npm run test:schema-baseline` and wired into correction guards/CI. Fresh projects must restore the manifest order and then apply only migrations newer than the baseline; the old migration files remain the immutable audit trail.
+
 ### 2026-07-19 — Quote commission routing made fail-closed
 
 The post-gauntlet financial sweeps found one accepted but unconverted quote with a 100%
