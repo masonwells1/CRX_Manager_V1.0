@@ -13,7 +13,9 @@ are delimited as untrusted data before reuse. Section settlement and BLOCKER/HIG
 are derived deterministically from blocked evidence and terminal verdicts; an adjudicator's
 advisory output cannot falsely release a blocked section or call a confirmed HIGH clean. The
 autopilot off-by-default regression now runs against an isolated temporary project directory,
-so an intentionally armed hands-free session cannot poison its own pre-commit guard test.
+so an intentionally armed hands-free session cannot poison its own pre-commit guard test. The
+workflow's six-hour freshness gate uses a caller-supplied `nowMs` reference instead of the
+runtime clock, preserving deterministic resume semantics required by the workflow engine.
 
 ### 2026-07-18 — Gauntlet intermediate live-window reconciliation
 

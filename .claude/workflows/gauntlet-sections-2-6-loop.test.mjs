@@ -2,9 +2,16 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor
+const workflowSource = await readFile(new URL('./gauntlet-sections-2-6-loop.js', import.meta.url), 'utf8')
+
+assert.doesNotMatch(
+  workflowSource,
+  /Date\.now\(|new Date\(\s*\)/,
+  'resumable workflow source must not read the runtime clock'
+)
 
 async function executeWorkflow(agent, args = {}) {
-  const source = (await readFile(new URL('./gauntlet-sections-2-6-loop.js', import.meta.url), 'utf8')).replace(
+  const source = workflowSource.replace(
     'export const meta',
     'const meta'
   )
@@ -36,21 +43,26 @@ function finding(severity = 'HIGH') {
   }
 }
 
-function evidencePacket(sectionNumbers = [2]) {
-  const capturedAt = new Date().toISOString()
+function liveArgs(sectionNumbers = [2]) {
+  const nowMs = Date.now()
+  const capturedAt = new Date(nowMs).toISOString()
   return {
-    projectId: 'rhyzpcqhnizqbxphqdkr',
-    capturedAt,
-    originMain: { sha: '0123456789abcdef', fetchedAt: capturedAt },
-    sections: Object.fromEntries(
-      sectionNumbers.map((num) => [
-        String(num),
-        {
-          evidenceSummary: `Fresh read-only evidence for section ${num}.`,
-          observations: [{ source: 'Supabase catalog read', result: 'No anomaly in fixture.' }],
-        },
-      ])
-    ),
+    sections: sectionNumbers,
+    nowMs,
+    evidencePacket: {
+      projectId: 'rhyzpcqhnizqbxphqdkr',
+      capturedAt,
+      originMain: { sha: '0123456789abcdef', fetchedAt: capturedAt },
+      sections: Object.fromEntries(
+        sectionNumbers.map((num) => [
+          String(num),
+          {
+            evidenceSummary: `Fresh read-only evidence for section ${num}.`,
+            observations: [{ source: 'Supabase catalog read', result: 'No anomaly in fixture.' }],
+          },
+        ])
+      ),
+    },
   }
 }
 
@@ -69,7 +81,7 @@ const advice = {
       if (options.label.endsWith(':adjudicate')) return advice
       return completeLayer()
     },
-    { sections: [2, 3] }
+    { sections: [2, 3], nowMs: Date.now() }
   )
 
   assert.equal(result.results.length, 1, 'missing live evidence must stop before the next section')
@@ -86,7 +98,7 @@ const advice = {
       }
       return completeLayer()
     },
-    { sections: [2], evidencePacket: evidencePacket([2]) }
+    liveArgs([2])
   )
 
   assert.equal(result.results[0].adjudication.settled, true, 'agent advice cannot override a deterministic terminal state')
@@ -106,7 +118,7 @@ const advice = {
       if (options.label.endsWith(':adjudicate')) return advice
       return completeLayer()
     },
-    { sections: [2], evidencePacket: evidencePacket([2]) }
+    liveArgs([2])
   )
 
   const section = result.results[0]
@@ -128,7 +140,7 @@ const advice = {
       if (options.label.endsWith(':adjudicate')) return advice
       return completeLayer()
     },
-    { sections: [2], evidencePacket: evidencePacket([2]) }
+    liveArgs([2])
   )
 
   const section = result.results[0]

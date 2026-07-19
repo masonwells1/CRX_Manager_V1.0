@@ -85,20 +85,28 @@ const PROJECT_ID = 'rhyzpcqhnizqbxphqdkr'
 const MAX_EVIDENCE_AGE_MS = 6 * 60 * 60 * 1000
 const FUTURE_SKEW_MS = 5 * 60 * 1000
 
-// args.evidencePacket contract:
+// args contract:
 // {
-//   projectId, capturedAt,
-//   originMain: { sha, fetchedAt }, // required by Section 5
-//   sections: { "2": { evidenceSummary, observations: [...] }, ... }
+//   nowMs, // supplied by the caller because resumable workflows cannot read clocks
+//   evidencePacket: {
+//     projectId, capturedAt,
+//     originMain: { sha, fetchedAt }, // required by Section 5
+//     sections: { "2": { evidenceSummary, observations: [...] }, ... }
+//   }
 // }
 function evidenceForSection(num) {
+  const nowMs = Number(args?.nowMs)
+  if (!Number.isFinite(nowMs) || nowMs <= 0) {
+    return { ok: false, reason: 'args.nowMs must be a positive caller-supplied reference timestamp' }
+  }
+
   const packet = args?.evidencePacket
   if (!packet || packet.projectId !== PROJECT_ID) {
     return { ok: false, reason: `missing evidencePacket for live project ${PROJECT_ID}` }
   }
 
   const capturedAtMs = Date.parse(packet.capturedAt)
-  const ageMs = Date.now() - capturedAtMs
+  const ageMs = nowMs - capturedAtMs
   if (!Number.isFinite(capturedAtMs) || ageMs > MAX_EVIDENCE_AGE_MS || ageMs < -FUTURE_SKEW_MS) {
     return { ok: false, reason: 'evidencePacket.capturedAt is invalid, in the future, or older than six hours' }
   }
@@ -117,7 +125,7 @@ function evidenceForSection(num) {
 
   if (num === 5) {
     const fetchedAtMs = Date.parse(packet.originMain?.fetchedAt)
-    const refAgeMs = Date.now() - fetchedAtMs
+    const refAgeMs = nowMs - fetchedAtMs
     if (!isStr(packet.originMain?.sha) || !Number.isFinite(fetchedAtMs) || refAgeMs > MAX_EVIDENCE_AGE_MS || refAgeMs < -FUTURE_SKEW_MS) {
       return { ok: false, reason: 'Section 5 requires a refreshed originMain.sha and originMain.fetchedAt no older than six hours' }
     }
