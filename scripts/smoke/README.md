@@ -105,9 +105,10 @@ billing sets/source prices; that split and price overrides reject blank audit re
 that browser roles cannot change the server-controlled send disposition;
 that only a zero-total invoice may be suppressed while the server's valid zero-total
 path still works; that unpost/edit/repost records distinct, immutable post sequences
+with the exact rounding-policy version used for each post
 which survive deletion of every editable working row; that privileged UPDATE and
 TRUNCATE cannot alter that history; that a logical billing line cannot commit without a vector; and that
-two concurrent full-vector writers serialize so exactly one commits. It also races a
+two concurrent full-vector writers on distinct child invoices serialize so exactly one commits. It also races a
 share mutation with invoice posting and proves the share trigger holds the item/invoice
 lock boundary, preventing either transaction from crossing the posted-snapshot boundary. The container is
 removed in `finally` on PASS or FAIL, and a nonzero cleanup result fails the proof.

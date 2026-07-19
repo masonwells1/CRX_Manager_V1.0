@@ -296,7 +296,7 @@ INSERT INTO public.invoices (
   ('${ID.otherDraftInvoice}', 'draft', NULL, 0, '${ID.actor}', '${ID.actor}');
 INSERT INTO public.invoice_items (id, invoice_id, quantity, acres) VALUES
   ('${ID.itemA}', '${ID.draftInvoice}', 1, 1),
-  ('${ID.itemB}', '${ID.draftInvoice}', 1, 1),
+  ('${ID.itemB}', '${ID.otherDraftInvoice}', 1, 1),
   ('${ID.postedItem}', '${ID.postedInvoice}', 1, 1);
 INSERT INTO public.field_app_billing_sets (id, primary_customer_id, created_by)
 VALUES ('${ID.set}', '${ID.customerA}', '${ID.actor}');
@@ -737,6 +737,10 @@ UPDATE public.invoices
    SET status = 'unposted', posted_at = NULL
  WHERE id = '${ID.draftInvoice}';
 
+UPDATE public.field_app_billing_sets
+   SET rounding_policy_version = 2
+ WHERE id = '${ID.set}';
+
 UPDATE public.invoice_items
    SET quantity = 0.7500,
        acres = 0.75,
@@ -772,7 +776,8 @@ COMMIT;
   const history = scalar(`
     SELECT count(*)::text || '|' ||
            string_agg(post_sequence::text || ':' || amount_cents::text || ':' ||
-             calculation_hash || ':' || to_char(posted_at AT TIME ZONE 'UTC', 'HH24:MI'),
+             calculation_hash || ':v' || rounding_policy_version::text || ':' ||
+             to_char(posted_at AT TIME ZONE 'UTC', 'HH24:MI'),
              ',' ORDER BY post_sequence)
       FROM public.invoice_line_share_post_snapshots
      WHERE invoice_id = '${ID.draftInvoice}'
@@ -788,7 +793,7 @@ COMMIT;
     TRUNCATE TABLE public.invoice_line_share_post_snapshots;
   `, { allowFailure: true });
   const truncateDetail = `${truncate.stdout || ''}${truncate.stderr || ''}`;
-  const expectedHistory = '2|1:1000:proof-calculation:12:00,2:900:proof-calculation-repost:13:00';
+  const expectedHistory = '2|1:1000:proof-calculation:v1:12:00,2:900:proof-calculation-repost:v2:13:00';
   const passed = history === expectedHistory
     && mutation.status !== 0
     && /append-only|immutable/i.test(mutationDetail)
@@ -824,6 +829,12 @@ ${lineSql(ID.lineA, 'concurrency proof line')}
 SET session_replication_role = origin;
 `);
 
+  const topology = scalar(`
+    SELECT count(DISTINCT invoice_id)::text
+      FROM public.invoice_items
+     WHERE id IN ('${ID.itemA}', '${ID.itemB}');
+  `);
+
   const sessionA = startSqlWithMarker(`
 BEGIN;
 ${shareSql({ id: ID.shareA, line: ID.lineA, item: ID.itemA, customer: ID.customerA })}
@@ -848,13 +859,13 @@ COMMIT;
     FROM public.invoice_line_shares
     WHERE billing_line_id = '${ID.lineA}';
   `);
-  const passed = successCount === 1 && sum === '100000000';
+  const passed = topology === '2' && successCount === 1 && sum === '100000000';
   return {
     label: 'concurrent writers cannot commit two full vectors for one line',
     passed,
     detail: passed
-      ? 'one writer committed; the other was rejected; final sum = 100000000'
-      : `successful writers = ${successCount}; final sum = ${sum}`,
+      ? 'two child invoices raced; one writer committed; the other was rejected; final sum = 100000000'
+      : `child invoices = ${topology}; successful writers = ${successCount}; final sum = ${sum}`,
   };
 }
 

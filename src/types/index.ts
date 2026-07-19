@@ -3463,6 +3463,7 @@ export interface InvoiceLineSharePostSnapshot {
   send_disposition: 'sendable' | 'suppressed_zero_total';
   source_share_id: string;
   billing_set_id: string;
+  rounding_policy_version: number;
   billing_line_id: string;
   invoice_item_id: string;
   customer_id: string;

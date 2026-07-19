@@ -198,6 +198,7 @@ CREATE TABLE IF NOT EXISTS public.invoice_line_share_post_snapshots (
 
   source_share_id            uuid NOT NULL,
   billing_set_id             uuid NOT NULL,
+  rounding_policy_version    integer NOT NULL CHECK (rounding_policy_version > 0),
   billing_line_id            uuid NOT NULL,
   invoice_item_id            uuid NOT NULL,
   customer_id                uuid NOT NULL,
@@ -732,7 +733,8 @@ BEGIN
   INSERT INTO public.invoice_line_share_post_snapshots (
     post_instance_id, invoice_id, invoice_group_id, post_sequence,
     posted_at, post_status, invoice_total_amount_cents, send_disposition,
-    source_share_id, billing_set_id, billing_line_id, invoice_item_id, customer_id,
+    source_share_id, billing_set_id, rounding_policy_version,
+    billing_line_id, invoice_item_id, customer_id,
     line_kind, price_basis, product_id, application_service_id, description,
     source_quantity, source_acres, source_unit_price_cents, source_amount_cents, sort_order,
     split_mode, split_micro_pct, allocated_quantity, allocated_acres,
@@ -744,7 +746,8 @@ BEGIN
   SELECT
     v_post_instance_id, NEW.id, NEW.invoice_group_id, v_post_sequence,
     NEW.posted_at, NEW.status, NEW.total_amount_cents, NEW.send_disposition,
-    s.id, bl.billing_set_id, s.billing_line_id, s.invoice_item_id, s.customer_id,
+    s.id, bl.billing_set_id, bs.rounding_policy_version,
+    s.billing_line_id, s.invoice_item_id, s.customer_id,
     bl.line_kind, bl.price_basis, bl.product_id, bl.application_service_id, bl.description,
     bl.source_quantity, bl.source_acres, bl.source_unit_price_cents, bl.source_amount_cents, bl.sort_order,
     s.split_mode, s.split_micro_pct, s.allocated_quantity, s.allocated_acres,
@@ -755,6 +758,7 @@ BEGIN
   FROM public.invoice_line_shares s
   JOIN public.invoice_items ii ON ii.id = s.invoice_item_id
   JOIN public.field_app_billing_lines bl ON bl.id = s.billing_line_id
+  JOIN public.field_app_billing_sets bs ON bs.id = bl.billing_set_id
   WHERE ii.invoice_id = NEW.id
   ORDER BY s.billing_line_id, s.customer_id;
 
