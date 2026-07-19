@@ -230,6 +230,12 @@ CREATE TABLE public.customers (id uuid PRIMARY KEY);
 CREATE TABLE public.jobs (id uuid PRIMARY KEY);
 CREATE TABLE public.products (id uuid PRIMARY KEY);
 CREATE TABLE public.application_services (id uuid PRIMARY KEY);
+-- A constraint name is only unique per table in PostgreSQL. This decoy proves
+-- the migration scopes its idempotency check to public.invoices instead of
+-- trusting a same-named constraint on an unrelated table.
+CREATE TABLE public.constraint_name_decoy (
+  value integer CONSTRAINT invoices_send_disposition_ck CHECK (value > 0)
+);
 CREATE TABLE public.app_settings (
   setting_key text PRIMARY KEY,
   setting_value text NOT NULL,
@@ -674,6 +680,48 @@ LANGUAGE sql STABLE AS $$ SELECT false $$;
   };
 }
 
+function proveSalesRepShareAndHistoryReadsRequireActiveRole() {
+  resetFixture();
+  runSql(`
+BEGIN;
+${lineSql(ID.lineA, 'active-role share/history scope line')}
+${shareSql({ id: ID.shareA, line: ID.lineA, item: ID.itemA, customer: ID.customerA })}
+COMMIT;
+UPDATE public.invoices
+   SET status = 'posted', posted_at = '2026-07-18T15:00:00Z'
+ WHERE id = '${ID.draftInvoice}';
+CREATE OR REPLACE FUNCTION public.is_sales_rep() RETURNS boolean
+LANGUAGE sql STABLE AS $$ SELECT true $$;
+`);
+
+  const activeRows = scalar(`
+SET ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '${ID.actor}', false);
+SELECT
+  (SELECT count(*) FROM public.invoice_line_shares)::text || '|' ||
+  (SELECT count(*) FROM public.invoice_line_share_post_snapshots)::text;
+RESET ROLE;
+`);
+  runSql(`
+CREATE OR REPLACE FUNCTION public.is_sales_rep() RETURNS boolean
+LANGUAGE sql STABLE AS $$ SELECT false $$;
+`);
+  const downgradedRows = scalar(`
+SET ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '${ID.actor}', false);
+SELECT
+  (SELECT count(*) FROM public.invoice_line_shares)::text || '|' ||
+  (SELECT count(*) FROM public.invoice_line_share_post_snapshots)::text;
+RESET ROLE;
+`);
+
+  return {
+    label: 'share and posting-history reads require a currently active sales role',
+    passed: activeRows === '1|1' && downgradedRows === '0|0',
+    detail: `active shares|history = ${activeRows}; downgraded shares|history = ${downgradedRows}`,
+  };
+}
+
 function proveBlankSplitOverrideReasonRejected() {
   resetFixture();
   return expectRejected(
@@ -729,6 +777,64 @@ function proveClientCannotSetSendDisposition() {
       WHERE id = '${ID.draftInvoice}';
      COMMIT;`,
     /server-controlled|permission denied/i,
+  );
+}
+
+function proveSendDispositionConstraintIsScopedToInvoices() {
+  const constraintCounts = scalar(`
+SELECT
+  count(*) FILTER (
+    WHERE conrelid = 'public.invoices'::regclass
+      AND conname = 'invoices_send_disposition_ck'
+  )::text || '|' ||
+  count(*) FILTER (
+    WHERE conrelid = 'public.constraint_name_decoy'::regclass
+      AND conname = 'invoices_send_disposition_ck'
+  )::text
+FROM pg_constraint
+WHERE conname = 'invoices_send_disposition_ck';
+`);
+  return {
+    label: 'send-disposition CHECK is installed on invoices despite a same-named decoy',
+    passed: constraintCounts === '1|1',
+    detail: `invoice constraint|decoy constraint = ${constraintCounts}`,
+  };
+}
+
+function proveTerminalInvoiceRejectsNewShare() {
+  resetFixture();
+  runSql(`
+UPDATE public.invoices
+   SET status = 'cancelled'
+ WHERE id = '${ID.draftInvoice}';
+`);
+  return expectRejected(
+    'a terminal invoice cannot receive a new split-billing share',
+    `BEGIN;
+     ${lineSql(ID.lineA, 'cancelled invoice share line')}
+     ${shareSql({ id: ID.shareA, line: ID.lineA, item: ID.itemA, customer: ID.customerA })}
+     COMMIT;`,
+    /frozen|draft|unposted|terminal/i,
+  );
+}
+
+function proveTerminalSharedInvoiceItemIsFrozen() {
+  resetFixture();
+  runSql(`
+BEGIN;
+${lineSql(ID.lineA, 'cancelled invoice material line')}
+${shareSql({ id: ID.shareA, line: ID.lineA, item: ID.itemA, customer: ID.customerA })}
+COMMIT;
+UPDATE public.invoices
+   SET status = 'cancelled'
+ WHERE id = '${ID.draftInvoice}';
+`);
+  return expectRejected(
+    'split invoice-item allocation fields freeze when the invoice becomes terminal',
+    `UPDATE public.invoice_items
+        SET quantity = 2
+      WHERE id = '${ID.itemA}';`,
+    /frozen|draft|unposted|terminal/i,
   );
 }
 
@@ -1068,11 +1174,15 @@ async function main() {
     proveOneBillingSetPerInvoiceGroup(),
     proveApplicatorCannotReadBillingSources(),
     proveSalesRepBillingSourceReadsAreOwnerScoped(),
+    proveSalesRepShareAndHistoryReadsRequireActiveRole(),
     proveBlankSplitOverrideReasonRejected(),
     proveBlankPriceOverrideReasonRejected(),
     proveClientCannotSetSendDisposition(),
+    proveSendDispositionConstraintIsScopedToInvoices(),
     proveSuppressionRequiresZeroTotal(),
     proveServerCanSuppressZeroTotal(),
+    proveTerminalInvoiceRejectsNewShare(),
+    proveTerminalSharedInvoiceItemIsFrozen(),
     proveSplitInvoiceCannotPostWithoutTimestampAndHistory(),
     provePostedSplitInvoiceCanBeVoidedWithoutLosingHistory(),
     provePostHistorySurvivesUnpostEditRepost(),
