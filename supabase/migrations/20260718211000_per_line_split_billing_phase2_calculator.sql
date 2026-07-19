@@ -58,13 +58,20 @@ SET search_path = public, pg_temp
 AS $calculator$
 DECLARE
   v_actor uuid := auth.uid();
+  v_is_admin boolean := public.is_admin();
+  v_is_sales_rep boolean := public.is_sales_rep();
   v_effective_job_id uuid := p_job_id;
   v_effective_application_service_id uuid := p_application_service_id;
   v_invoice_job_id uuid;
+  v_invoice_customer_id uuid;
+  v_invoice_created_by uuid;
+  v_invoice_salesman_id uuid;
   v_invoice_group_id uuid;
   v_invoice_season integer;
   v_invoice_application_service_id uuid;
   v_job_application_service_id uuid;
+  v_job_customer_id uuid;
+  v_job_created_by uuid;
   v_effective_season integer := public.current_season();
   v_feature_enabled boolean;
   v_loc jsonb;
@@ -104,7 +111,7 @@ BEGIN
   IF v_actor IS NULL THEN
     RAISE EXCEPTION 'AUTH_REQUIRED' USING ERRCODE = 'insufficient_privilege';
   END IF;
-  IF NOT (public.is_admin() OR public.is_sales_rep()) THEN
+  IF NOT (v_is_admin OR v_is_sales_rep) THEN
     RAISE EXCEPTION 'INSUFFICIENT_ROLE: only admins or sales reps can calculate per-line billing'
       USING ERRCODE = 'insufficient_privilege';
   END IF;
@@ -208,8 +215,10 @@ BEGIN
   TRUNCATE pg_temp._plsb_shares;
 
   IF p_invoice_id IS NOT NULL THEN
-    SELECT i.job_id, i.invoice_group_id, i.season, i.application_service_id
-      INTO v_invoice_job_id, v_invoice_group_id, v_invoice_season,
+    SELECT i.job_id, i.customer_id, i.created_by, i.salesman_id,
+           i.invoice_group_id, i.season, i.application_service_id
+      INTO v_invoice_job_id, v_invoice_customer_id, v_invoice_created_by,
+           v_invoice_salesman_id, v_invoice_group_id, v_invoice_season,
            v_invoice_application_service_id
       FROM public.invoices i
      WHERE i.id = p_invoice_id
@@ -217,8 +226,19 @@ BEGIN
     IF NOT FOUND THEN
       RAISE EXCEPTION 'INVOICE_NOT_FOUND: %', p_invoice_id USING ERRCODE = 'no_data_found';
     END IF;
-    IF p_job_id IS NOT NULL AND v_invoice_job_id IS NOT NULL
-       AND p_job_id IS DISTINCT FROM v_invoice_job_id THEN
+    IF v_is_sales_rep
+       AND v_invoice_created_by IS DISTINCT FROM v_actor
+       AND v_invoice_salesman_id IS DISTINCT FROM v_actor
+       AND NOT EXISTS (
+         SELECT 1
+           FROM public.customers c
+          WHERE c.id = v_invoice_customer_id
+            AND c.assigned_sales_rep = v_actor
+       ) THEN
+      RAISE EXCEPTION 'PER_LINE_BILLING_SCOPE_DENIED: invoice %', p_invoice_id
+        USING ERRCODE = 'insufficient_privilege';
+    END IF;
+    IF p_job_id IS DISTINCT FROM v_invoice_job_id THEN
       RAISE EXCEPTION 'PER_LINE_JOB_CONTEXT_MISMATCH' USING ERRCODE = 'invalid_parameter_value';
     END IF;
     IF p_application_service_id IS NOT NULL
@@ -232,12 +252,26 @@ BEGIN
   END IF;
 
   IF v_effective_job_id IS NOT NULL THEN
-    SELECT COALESCE(j.season, v_effective_season), j.application_service_id
-      INTO v_effective_season, v_job_application_service_id
+    SELECT COALESCE(j.season, v_effective_season), j.application_service_id,
+           j.customer_id, j.created_by
+      INTO v_effective_season, v_job_application_service_id,
+           v_job_customer_id, v_job_created_by
       FROM public.jobs j
      WHERE j.id = v_effective_job_id;
     IF NOT FOUND THEN
       RAISE EXCEPTION 'JOB_NOT_FOUND: %', v_effective_job_id USING ERRCODE = 'no_data_found';
+    END IF;
+    IF p_invoice_id IS NULL
+       AND v_is_sales_rep
+       AND v_job_created_by IS DISTINCT FROM v_actor
+       AND NOT EXISTS (
+         SELECT 1
+           FROM public.customers c
+          WHERE c.id = v_job_customer_id
+            AND c.assigned_sales_rep = v_actor
+       ) THEN
+      RAISE EXCEPTION 'PER_LINE_BILLING_SCOPE_DENIED: job %', v_effective_job_id
+        USING ERRCODE = 'insufficient_privilege';
     END IF;
     IF p_invoice_id IS NOT NULL
        AND v_invoice_application_service_id IS DISTINCT FROM v_job_application_service_id THEN
@@ -275,6 +309,30 @@ BEGIN
   SELECT count(*) INTO v_field_count FROM pg_temp._plsb_fields;
   IF v_field_count <> jsonb_array_length(p_locations) THEN
     RAISE EXCEPTION 'PER_LINE_DUPLICATE_FIELD' USING ERRCODE = 'unique_violation';
+  END IF;
+  IF p_invoice_id IS NOT NULL
+     AND v_invoice_job_id IS NULL
+     AND EXISTS (
+       SELECT 1
+         FROM pg_temp._plsb_fields selected_field
+         JOIN public.fields source_field ON source_field.id = selected_field.field_id
+        WHERE source_field.customer_id IS DISTINCT FROM v_invoice_customer_id
+     ) THEN
+    RAISE EXCEPTION 'PER_LINE_INVOICE_FIELD_CONTEXT_MISMATCH'
+      USING ERRCODE = 'invalid_parameter_value';
+  END IF;
+  IF p_invoice_id IS NULL
+     AND v_effective_job_id IS NULL
+     AND v_is_sales_rep
+     AND EXISTS (
+       SELECT 1
+         FROM pg_temp._plsb_fields selected_field
+         JOIN public.fields source_field ON source_field.id = selected_field.field_id
+         JOIN public.customers source_customer ON source_customer.id = source_field.customer_id
+        WHERE source_customer.assigned_sales_rep IS DISTINCT FROM v_actor
+     ) THEN
+    RAISE EXCEPTION 'PER_LINE_BILLING_SCOPE_DENIED: selected field customer scope'
+      USING ERRCODE = 'insufficient_privilege';
   END IF;
   IF v_effective_job_id IS NOT NULL AND EXISTS (
     SELECT 1
@@ -895,9 +953,31 @@ BEGIN
   END LOOP;
 
   -- Resolve base prices. A job chemical's frozen price/quantity is authoritative;
-  -- explicit global manual remains available only for non-job work.
-  -- Non-job drafts use global manual -> customer tier. Application service uses
-  -- customer_application_rates for the source job/invoice season -> service default.
+  -- explicit global manual remains available only for non-job work. For a non-job
+  -- product, preserve the established manual -> quoted -> tier precedence. Quote
+  -- matching is limited to the selected fields; conflicting prices are ambiguous
+  -- provenance and must be refused instead of silently changing invoice money.
+  SELECT l.line_key
+    INTO v_line_key
+    FROM pg_temp._plsb_lines l
+    JOIN public.quote_items qi ON qi.product_id = l.product_id
+    JOIN public.quote_sections qs ON qs.id = qi.section_id
+    JOIN pg_temp._plsb_fields selected_field ON selected_field.field_id = qs.field_id
+   WHERE l.line_kind = 'chemical'
+     AND l.source_job_chemical_id IS NULL
+     AND NOT COALESCE((l.source_input->>'manual_override')::boolean, false)
+     AND qi.price_per_unit IS NOT NULL
+   GROUP BY l.line_key
+  HAVING count(DISTINCT round(qi.price_per_unit * 100)::bigint) > 1
+   ORDER BY l.line_key
+   LIMIT 1;
+  IF FOUND THEN
+    RAISE EXCEPTION 'PER_LINE_QUOTE_PRICE_AMBIGUOUS: %', v_line_key
+      USING ERRCODE = 'check_violation';
+  END IF;
+
+  -- Application service uses customer_application_rates for the source
+  -- job/invoice season -> service default.
   UPDATE pg_temp._plsb_shares s
      SET base_unit_price_cents = CASE
            WHEN l.customer_supplied THEN 0
@@ -906,6 +986,8 @@ BEGIN
              THEN (l.source_input->>'unit_price_cents')::bigint
            WHEN l.source_job_chemical_id IS NOT NULL
              THEN (l.source_input->>'snapshot_unit_price_cents')::bigint
+           WHEN quote_price.price_cents IS NOT NULL
+             THEN quote_price.price_cents
            ELSE tier_price.price_cents
          END,
          base_price_source = CASE
@@ -913,10 +995,19 @@ BEGIN
            WHEN COALESCE((l.source_input->>'manual_override')::boolean, false)
                 AND l.source_input->>'unit_price_cents' IS NOT NULL THEN 'global_manual'
            WHEN l.source_job_chemical_id IS NOT NULL THEN 'job_snapshot'
+           WHEN quote_price.price_cents IS NOT NULL THEN 'quoted'
            ELSE 'tier'
          END
     FROM pg_temp._plsb_lines l
     JOIN pg_temp._plsb_customers c ON true
+    LEFT JOIN LATERAL (
+      SELECT min(round(qi.price_per_unit * 100)::bigint) AS price_cents
+        FROM public.quote_items qi
+        JOIN public.quote_sections qs ON qs.id = qi.section_id
+        JOIN pg_temp._plsb_fields selected_field ON selected_field.field_id = qs.field_id
+       WHERE qi.product_id = l.product_id
+         AND qi.price_per_unit IS NOT NULL
+    ) quote_price ON true
     LEFT JOIN LATERAL (
       SELECT CASE c.tier
         WHEN 1 THEN round(p.tier1_price * 100)::bigint
@@ -1141,22 +1232,38 @@ BEGIN
                    '|' ORDER BY s.customer_id), 'sha256'
       ), 'hex') AS vector_hash,
       encode(extensions.digest(
-        l.line_key || '|' || l.line_kind || '|' || l.price_basis || '|'
-        || COALESCE(l.source_job_chemical_id::text, '') || '|'
-        || COALESCE(l.source_pricing_quantity::text, '') || '|'
-        || COALESCE(l.source_quantity::text, '') || '|'
-        || COALESCE(l.source_acres::text, '') || '|'
-        || l.source_unit_size || '|'
-        || l.source_cost_cents::text || '|'
-        || COALESCE(l.source_unit_price_cents::text, '') || '|'
-        || COALESCE(l.source_amount_cents::text, '') || '|'
-        || string_agg(
-             s.customer_id::text || ':' || s.split_micro_pct::text || ':'
-             || COALESCE(s.allocated_quantity::text, '') || ':'
-             || COALESCE(s.allocated_acres::text, '') || ':'
-             || s.unit_price_cents::text || ':' || s.amount_cents::text,
-             '|' ORDER BY s.customer_id
-           ), 'sha256'
+        jsonb_build_object(
+          'line_key', l.line_key,
+          'line_kind', l.line_kind,
+          'price_basis', l.price_basis,
+          'source_job_chemical_id', l.source_job_chemical_id,
+          'product_id', l.product_id,
+          'application_service_id', l.application_service_id,
+          'description', l.description,
+          'source_pricing_quantity', l.source_pricing_quantity,
+          'source_quantity', l.source_quantity,
+          'source_acres', l.source_acres,
+          'source_unit_size', l.source_unit_size,
+          'source_cost_cents', l.source_cost_cents,
+          'source_unit_price_cents', l.source_unit_price_cents,
+          'source_amount_cents', l.source_amount_cents,
+          'sort_order', l.sort_order,
+          'shares', jsonb_agg(jsonb_build_object(
+            'customer_id', s.customer_id,
+            'split_mode', s.split_mode,
+            'split_micro_pct', s.split_micro_pct,
+            'allocated_quantity', s.allocated_quantity,
+            'allocated_acres', s.allocated_acres,
+            'base_unit_price_cents', s.base_unit_price_cents,
+            'base_price_source', s.base_price_source,
+            'price_mode', s.price_mode,
+            'unit_price_cents', s.unit_price_cents,
+            'amount_cents', s.amount_cents,
+            'split_override_reason', s.split_override_reason,
+            'price_override_reason', s.price_override_reason
+          ) ORDER BY s.customer_id)
+        )::text,
+        'sha256'
       ), 'hex') AS calculation_hash
     FROM pg_temp._plsb_lines l
     JOIN pg_temp._plsb_shares s ON s.line_key = l.line_key
@@ -1165,13 +1272,17 @@ BEGIN
       l.line_kind,
       l.price_basis,
       l.source_job_chemical_id,
+      l.product_id,
+      l.application_service_id,
+      l.description,
       l.source_pricing_quantity,
       l.source_quantity,
       l.source_acres,
       l.source_unit_size,
       l.source_cost_cents,
       l.source_unit_price_cents,
-      l.source_amount_cents
+      l.source_amount_cents,
+      l.sort_order
   )
   UPDATE pg_temp._plsb_lines l
      SET vector_hash = hashes.vector_hash,

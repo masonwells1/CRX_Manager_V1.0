@@ -92,13 +92,16 @@ $$;
 CREATE TABLE public.customers (
   id uuid PRIMARY KEY,
   farm_name text NOT NULL,
-  assigned_tier integer NOT NULL DEFAULT 1
+  assigned_tier integer NOT NULL DEFAULT 1,
+  assigned_sales_rep uuid REFERENCES public.profiles(id)
 );
 CREATE TABLE public.jobs (
   id uuid PRIMARY KEY,
+  customer_id uuid NOT NULL REFERENCES public.customers(id),
   quote_section_id uuid,
   season integer,
-  application_service_id uuid
+  application_service_id uuid,
+  created_by uuid REFERENCES public.profiles(id)
 );
 CREATE TABLE public.fields (
   id uuid PRIMARY KEY,

@@ -99,11 +99,12 @@ The proof covers feature-OFF legacy delegation; exact 50/50 and three-way
 micro-percent vectors; 1¢ and signed half-cent allocation; full-precision unit
 conversion with only the final money figure rounded; exact job-chemical identity,
 quantity, and frozen prices even when the same product appears twice; customer-
-supplied zero billing; non-job manual/tier and source-season service pricing;
-per-person price overrides; 100/0 service and flat-fee rows; job/default/fallback
-ownership; field/job and chemical/job membership rejection; hashes; Mode A and
-malformed-vector rejection; role denial; overload count; and private-calculator
-privileges.
+supplied zero billing; owner/outsider sales-rep scope plus exact invoice/job/field
+context binding; non-job manual/quoted/tier pricing with conflicting quotes
+rejected; source-season service pricing; per-person price overrides; 100/0 service
+and flat-fee rows; job/default/fallback ownership; field/job and chemical/job
+membership rejection; full identity/provenance/reason hashes; Mode A and malformed-
+vector rejection; role denial; overload count; and private-calculator privileges.
 
 The command loads both checked-in migrations verbatim. It does not normalize or
 rewrite either file, and it cannot apply or alter production.

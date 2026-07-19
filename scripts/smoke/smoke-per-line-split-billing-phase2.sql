@@ -9,6 +9,8 @@ DO $proof$
 DECLARE
   v_admin constant uuid := '10000000-0000-0000-0000-000000000001';
   v_applicator constant uuid := '10000000-0000-0000-0000-000000000002';
+  v_rep_owner constant uuid := '10000000-0000-0000-0000-000000000003';
+  v_rep_other constant uuid := '10000000-0000-0000-0000-000000000004';
   v_a constant uuid := '20000000-0000-0000-0000-000000000001';
   v_b constant uuid := '20000000-0000-0000-0000-000000000002';
   v_c constant uuid := '20000000-0000-0000-0000-000000000003';
@@ -36,6 +38,7 @@ DECLARE
   v_product_gallon constant uuid := '50000000-0000-0000-0000-000000000003';
   v_service constant uuid := '60000000-0000-0000-0000-000000000001';
   v_service_other constant uuid := '60000000-0000-0000-0000-000000000002';
+  v_direct_invoice constant uuid := '83000000-0000-0000-0000-000000000098';
   v_plan jsonb;
   v_plan_again jsonb;
   v_lines jsonb;
@@ -49,18 +52,28 @@ BEGIN
   END IF;
 
   INSERT INTO public.profiles (id, role) VALUES
-    (v_admin, 'admin'), (v_applicator, 'applicator');
+    (v_admin, 'admin'),
+    (v_applicator, 'applicator'),
+    (v_rep_owner, 'sales_rep'),
+    (v_rep_other, 'sales_rep');
   PERFORM set_config('request.jwt.claim.sub', v_admin::text, true);
 
-  INSERT INTO public.customers (id, farm_name, assigned_tier) VALUES
-    (v_a, 'A Farm', 1), (v_b, 'B Farm', 2), (v_c, 'C Farm', 3);
-  INSERT INTO public.jobs (id, season) VALUES
-    (v_job, 2026),
-    (v_job_quote, 2026),
-    (v_job_customer_supplied, 2026),
-    (v_job_service, 2025),
-    (v_job_convert, 2026),
-    (v_job_subset, 2026);
+  INSERT INTO public.customers (id, farm_name, assigned_tier, assigned_sales_rep) VALUES
+    (v_a, 'A Farm', 1, v_rep_owner),
+    (v_b, 'B Farm', 2, v_rep_owner),
+    (v_c, 'C Farm', 3, v_rep_other);
+  INSERT INTO public.jobs (id, customer_id, created_by, season) VALUES
+    (v_job, v_a, v_rep_owner, 2026),
+    (v_job_quote, v_a, v_rep_owner, 2026),
+    (v_job_customer_supplied, v_a, v_rep_owner, 2026),
+    (v_job_service, v_a, v_rep_owner, 2025),
+    (v_job_convert, v_a, v_rep_owner, 2026),
+    (v_job_subset, v_a, v_rep_owner, 2026);
+  INSERT INTO public.invoices (
+    id, customer_id, job_id, season, created_by, salesman_id
+  ) VALUES (
+    v_direct_invoice, v_a, NULL, 2026, v_rep_owner, v_rep_owner
+  );
   INSERT INTO public.fields (id, field_name, customer_id, total_acres) VALUES
     (v_field_50, 'Half Field', v_a, 1),
     (v_field_3, 'Thirds Field', v_a, 1),
@@ -163,6 +176,98 @@ BEGIN
      SET setting_value = 'true'
    WHERE setting_key = 'feature_per_line_split_billing';
 
+  -- SECURITY DEFINER must preserve the same customer/invoice ownership boundary
+  -- as the browser tables. A sales rep cannot use guessed job, invoice, or field
+  -- UUIDs to read another rep's split customers, prices, or COGS.
+  PERFORM set_config('request.jwt.claim.sub', v_rep_other::text, true);
+  v_err := NULL;
+  BEGIN
+    PERFORM public.preview_field_app_invoice_split(
+      jsonb_build_array(jsonb_build_object('field_id', v_field_job, 'applied_acres', 1)),
+      jsonb_build_array(jsonb_build_object('job_chemical_id', v_job_chem)),
+      NULL, NULL, v_job, '{}'::jsonb
+    );
+  EXCEPTION WHEN OTHERS THEN v_err := SQLERRM; END;
+  IF COALESCE(v_err, '') NOT LIKE '%PER_LINE_BILLING_SCOPE_DENIED%' THEN
+    RAISE EXCEPTION 'P2_FAIL(cross_rep_job_scope): %', COALESCE(v_err, '<no error>');
+  END IF;
+
+  v_err := NULL;
+  BEGIN
+    PERFORM public.preview_field_app_invoice_split(
+      jsonb_build_array(jsonb_build_object('field_id', v_field_50, 'applied_acres', 1)),
+      jsonb_build_array(jsonb_build_object(
+        'line_key', 'chemical:cross-rep-field', 'product_id', v_product_tier,
+        'description', 'Denied field', 'rate_per_acre', 1, 'rate_unit', 'unit',
+        'manual_override', true, 'unit_price_cents', 100
+      )), NULL, NULL, NULL, '{}'::jsonb
+    );
+  EXCEPTION WHEN OTHERS THEN v_err := SQLERRM; END;
+  IF COALESCE(v_err, '') NOT LIKE '%PER_LINE_BILLING_SCOPE_DENIED%' THEN
+    RAISE EXCEPTION 'P2_FAIL(cross_rep_field_scope): %', COALESCE(v_err, '<no error>');
+  END IF;
+
+  v_err := NULL;
+  BEGIN
+    PERFORM public.preview_field_app_invoice_split(
+      jsonb_build_array(jsonb_build_object('field_id', v_field_50, 'applied_acres', 1)),
+      jsonb_build_array(jsonb_build_object(
+        'line_key', 'chemical:cross-rep-invoice', 'product_id', v_product_tier,
+        'description', 'Denied invoice', 'rate_per_acre', 1, 'rate_unit', 'unit',
+        'manual_override', true, 'unit_price_cents', 100
+      )), NULL, v_direct_invoice, NULL, '{}'::jsonb
+    );
+  EXCEPTION WHEN OTHERS THEN v_err := SQLERRM; END;
+  IF COALESCE(v_err, '') NOT LIKE '%PER_LINE_BILLING_SCOPE_DENIED%' THEN
+    RAISE EXCEPTION 'P2_FAIL(cross_rep_invoice_scope): %', COALESCE(v_err, '<no error>');
+  END IF;
+
+  -- The assigned rep can preview the same direct-invoice context.
+  PERFORM set_config('request.jwt.claim.sub', v_rep_owner::text, true);
+  v_plan := public.preview_field_app_invoice_split(
+    jsonb_build_array(jsonb_build_object('field_id', v_field_50, 'applied_acres', 1)),
+    jsonb_build_array(jsonb_build_object(
+      'line_key', 'chemical:owner-invoice', 'product_id', v_product_tier,
+      'description', 'Allowed invoice', 'rate_per_acre', 1, 'rate_unit', 'unit',
+      'manual_override', true, 'unit_price_cents', 100
+    )), NULL, v_direct_invoice, NULL, '{}'::jsonb
+  );
+  IF v_plan->>'grand_total_cents' <> '100' THEN
+    RAISE EXCEPTION 'P2_FAIL(owner_invoice_scope): %', v_plan;
+  END IF;
+
+  -- An invoice with no job cannot be rebound to an arbitrary supplied job.
+  PERFORM set_config('request.jwt.claim.sub', v_admin::text, true);
+  v_err := NULL;
+  BEGIN
+    PERFORM public.preview_field_app_invoice_split(
+      jsonb_build_array(jsonb_build_object('field_id', v_field_job, 'applied_acres', 1)),
+      jsonb_build_array(jsonb_build_object('job_chemical_id', v_job_chem)),
+      NULL, v_direct_invoice, v_job, '{}'::jsonb
+    );
+  EXCEPTION WHEN OTHERS THEN v_err := SQLERRM; END;
+  IF COALESCE(v_err, '') NOT LIKE '%PER_LINE_JOB_CONTEXT_MISMATCH%' THEN
+    RAISE EXCEPTION 'P2_FAIL(null_invoice_job_rebind): %', COALESCE(v_err, '<no error>');
+  END IF;
+
+  -- A direct invoice is not a general-purpose authorization token for unrelated
+  -- fields. With no job context, every selected field must belong to the
+  -- invoice's primary customer.
+  v_err := NULL;
+  BEGIN
+    PERFORM public.preview_field_app_invoice_split(
+      jsonb_build_array(jsonb_build_object('field_id', v_field_fallback, 'applied_acres', 1)),
+      jsonb_build_array(jsonb_build_object(
+        'line_key', 'chemical:unrelated-invoice-field', 'product_id', v_product_tier,
+        'description', 'Unrelated field', 'rate_per_acre', 1, 'rate_unit', 'unit',
+        'manual_override', true, 'unit_price_cents', 100
+      )), NULL, v_direct_invoice, NULL, '{}'::jsonb
+    );
+  EXCEPTION WHEN OTHERS THEN v_err := SQLERRM; END;
+  IF COALESCE(v_err, '') NOT LIKE '%PER_LINE_INVOICE_FIELD_CONTEXT_MISMATCH%' THEN
+    RAISE EXCEPTION 'P2_FAIL(direct_invoice_field_context): %', COALESCE(v_err, '<no error>');
+  END IF;
+
   -- 50/50 same-price line. Global manual must beat the available $1.50 quote.
   v_plan := public.preview_field_app_invoice_split(
     jsonb_build_array(jsonb_build_object('field_id', v_field_50, 'applied_acres', 1)),
@@ -198,6 +303,81 @@ BEGIN
   );
   IF v_plan->>'calculation_hash' IS DISTINCT FROM v_plan_again->>'calculation_hash' THEN
     RAISE EXCEPTION 'P2_FAIL(hash_stability): % vs %', v_plan, v_plan_again;
+  END IF;
+
+  -- Audit identity is not only arithmetic. The same caller line key and money
+  -- must still hash differently when product identity, price provenance, or an
+  -- override reason differs.
+  v_plan := public.preview_field_app_invoice_split(
+    jsonb_build_array(jsonb_build_object('field_id', v_field_fallback, 'applied_acres', 1)),
+    jsonb_build_array(jsonb_build_object(
+      'line_key', 'chemical:hash-product', 'product_id', v_product_quote,
+      'description', 'Hash identity', 'rate_per_acre', 1, 'rate_unit', 'unit',
+      'manual_override', true, 'unit_price_cents', 100
+    )), NULL, NULL, NULL, '{}'::jsonb
+  );
+  v_plan_again := public.preview_field_app_invoice_split(
+    jsonb_build_array(jsonb_build_object('field_id', v_field_fallback, 'applied_acres', 1)),
+    jsonb_build_array(jsonb_build_object(
+      'line_key', 'chemical:hash-product', 'product_id', v_product_tier,
+      'description', 'Hash identity', 'rate_per_acre', 1, 'rate_unit', 'unit',
+      'manual_override', true, 'unit_price_cents', 100
+    )), NULL, NULL, NULL, '{}'::jsonb
+  );
+  IF v_plan#>>'{billing_lines,0,calculation_hash}' =
+     v_plan_again#>>'{billing_lines,0,calculation_hash}' THEN
+    RAISE EXCEPTION 'P2_FAIL(hash_product_identity): % vs %', v_plan, v_plan_again;
+  END IF;
+
+  v_plan := public.preview_field_app_invoice_split(
+    jsonb_build_array(jsonb_build_object('field_id', v_field_fallback, 'applied_acres', 1)),
+    jsonb_build_array(jsonb_build_object(
+      'line_key', 'chemical:hash-provenance', 'product_id', v_product_tier,
+      'description', 'Hash provenance', 'rate_per_acre', 1, 'rate_unit', 'unit',
+      'manual_override', true, 'unit_price_cents', 200
+    )), NULL, NULL, NULL, '{}'::jsonb
+  );
+  v_plan_again := public.preview_field_app_invoice_split(
+    jsonb_build_array(jsonb_build_object('field_id', v_field_fallback, 'applied_acres', 1)),
+    jsonb_build_array(jsonb_build_object(
+      'line_key', 'chemical:hash-provenance', 'product_id', v_product_tier,
+      'description', 'Hash provenance', 'rate_per_acre', 1, 'rate_unit', 'unit'
+    )), NULL, NULL, NULL, '{}'::jsonb
+  );
+  IF v_plan#>>'{billing_lines,0,calculation_hash}' =
+     v_plan_again#>>'{billing_lines,0,calculation_hash}' THEN
+    RAISE EXCEPTION 'P2_FAIL(hash_price_provenance): % vs %', v_plan, v_plan_again;
+  END IF;
+
+  v_plan := public.preview_field_app_invoice_split(
+    jsonb_build_array(jsonb_build_object('field_id', v_field_fallback, 'applied_acres', 1)),
+    jsonb_build_array(jsonb_build_object(
+      'line_key', 'chemical:hash-reason', 'product_id', v_product_tier,
+      'description', 'Hash reason', 'rate_per_acre', 1, 'rate_unit', 'unit'
+    )), NULL, NULL, NULL,
+    jsonb_build_object('lines', jsonb_build_array(jsonb_build_object(
+      'line_key', 'chemical:hash-reason',
+      'price_overrides', jsonb_build_array(jsonb_build_object(
+        'customer_id', v_b, 'unit_price_cents', 200, 'reason', 'Contract A'
+      ))
+    )))
+  );
+  v_plan_again := public.preview_field_app_invoice_split(
+    jsonb_build_array(jsonb_build_object('field_id', v_field_fallback, 'applied_acres', 1)),
+    jsonb_build_array(jsonb_build_object(
+      'line_key', 'chemical:hash-reason', 'product_id', v_product_tier,
+      'description', 'Hash reason', 'rate_per_acre', 1, 'rate_unit', 'unit'
+    )), NULL, NULL, NULL,
+    jsonb_build_object('lines', jsonb_build_array(jsonb_build_object(
+      'line_key', 'chemical:hash-reason',
+      'price_overrides', jsonb_build_array(jsonb_build_object(
+        'customer_id', v_b, 'unit_price_cents', 200, 'reason', 'Contract B'
+      ))
+    )))
+  );
+  IF v_plan#>>'{billing_lines,0,calculation_hash}' =
+     v_plan_again#>>'{billing_lines,0,calculation_hash}' THEN
+    RAISE EXCEPTION 'P2_FAIL(hash_override_reason): % vs %', v_plan, v_plan_again;
   END IF;
 
   -- Money rounds only after the full-precision converted quantity multiply.
@@ -259,26 +439,59 @@ BEGIN
     RAISE EXCEPTION 'P2_FAIL(exact_job_chemical_snapshots): %', v_plan;
   END IF;
 
-  -- Without a source job there is no authoritative quote section. Do not guess
-  -- from either quote attached to the field; fall back to each customer's tier.
+  -- Preserve the established manual -> quoted -> tier precedence. Multiple
+  -- conflicting quote prices on the selected fields are not a provenance choice:
+  -- reject instead of silently switching money to a customer tier.
+  v_err := NULL;
+  BEGIN
+    PERFORM public.preview_field_app_invoice_split(
+      jsonb_build_array(jsonb_build_object('field_id', v_field_50, 'applied_acres', 1)),
+      jsonb_build_array(jsonb_build_object(
+        'line_key', 'chemical:ambiguous-quote', 'sort_order', 0, 'product_id', v_product_quote,
+        'description', 'Ambiguous quote', 'rate_per_acre', 1, 'rate_unit', 'unit'
+      )), NULL, NULL, NULL, '{}'::jsonb
+    );
+  EXCEPTION WHEN OTHERS THEN v_err := SQLERRM; END;
+  IF COALESCE(v_err, '') NOT LIKE '%PER_LINE_QUOTE_PRICE_AMBIGUOUS%' THEN
+    RAISE EXCEPTION 'P2_FAIL(ambiguous_quote_rejected): %', COALESCE(v_err, '<no error>');
+  END IF;
+
+  DELETE FROM public.quote_items
+   WHERE id = '70000000-0000-0000-0000-000000000001';
   v_plan := public.preview_field_app_invoice_split(
     jsonb_build_array(jsonb_build_object('field_id', v_field_50, 'applied_acres', 1)),
     jsonb_build_array(jsonb_build_object(
-      'line_key', 'chemical:no-job-quote', 'sort_order', 0, 'product_id', v_product_quote,
-      'description', 'No job quote', 'rate_per_acre', 1, 'rate_unit', 'unit',
+      'line_key', 'chemical:quoted', 'sort_order', 0, 'product_id', v_product_quote,
+      'description', 'Quoted', 'rate_per_acre', 1, 'rate_unit', 'unit',
       'unit_size', 'tampered-browser-unit', 'cost_cents', 99999
     )), NULL, NULL, NULL, '{}'::jsonb
   );
-  IF v_plan#>>'{billing_lines,0,shares,0,base_unit_price_cents}' <> '100'
+  IF v_plan#>>'{billing_lines,0,shares,0,base_unit_price_cents}' <> '150'
      OR v_plan#>>'{billing_lines,0,source_unit_size}' <> 'unit'
      OR v_plan#>>'{billing_lines,0,source_cost_cents}' <> '50'
      OR v_plan#>>'{billing_lines,0,source_input,unit_size}' <> 'unit'
      OR v_plan#>>'{billing_lines,0,source_input,cost_cents}' <> '50'
+     OR v_plan#>>'{billing_lines,0,shares,0,base_price_source}' <> 'quoted'
+     OR v_plan#>>'{billing_lines,0,shares,1,base_unit_price_cents}' <> '150'
+     OR v_plan#>>'{billing_lines,0,shares,1,base_price_source}' <> 'quoted'
+     OR v_plan->>'grand_total_cents' <> '150' THEN
+    RAISE EXCEPTION 'P2_FAIL(unambiguous_quote_precedence): %', v_plan;
+  END IF;
+
+  -- No matching quote falls through to each customer's tier.
+  v_plan := public.preview_field_app_invoice_split(
+    jsonb_build_array(jsonb_build_object('field_id', v_field_50, 'applied_acres', 1)),
+    jsonb_build_array(jsonb_build_object(
+      'line_key', 'chemical:tier-fallback', 'sort_order', 0, 'product_id', v_product_tier,
+      'description', 'Tier fallback', 'rate_per_acre', 1, 'rate_unit', 'unit'
+    )), NULL, NULL, NULL, '{}'::jsonb
+  );
+  IF v_plan#>>'{billing_lines,0,shares,0,base_unit_price_cents}' <> '100'
      OR v_plan#>>'{billing_lines,0,shares,0,base_price_source}' <> 'tier'
      OR v_plan#>>'{billing_lines,0,shares,1,base_unit_price_cents}' <> '200'
      OR v_plan#>>'{billing_lines,0,shares,1,base_price_source}' <> 'tier'
      OR v_plan->>'grand_total_cents' <> '150' THEN
-    RAISE EXCEPTION 'P2_FAIL(no_job_quote_fallback): %', v_plan;
+    RAISE EXCEPTION 'P2_FAIL(tier_fallback): %', v_plan;
   END IF;
 
   -- Exact three-way even vector + one cent + 4dp quantity residual. The lowest
@@ -479,8 +692,20 @@ BEGIN
   BEGIN
     PERFORM public.preview_field_app_invoice_split(
       jsonb_build_array(jsonb_build_object('field_id', v_field_50, 'applied_acres', 1)),
-      '[]'::jsonb, v_service_other,
+      '[]'::jsonb, v_service,
       '83000000-0000-0000-0000-000000000099', NULL, '{}'::jsonb
+    );
+  EXCEPTION WHEN OTHERS THEN v_err := SQLERRM; END;
+  IF COALESCE(v_err, '') NOT LIKE '%PER_LINE_JOB_CONTEXT_MISMATCH%' THEN
+    RAISE EXCEPTION 'P2_FAIL(nonnull_invoice_job_requires_exact_context): %', COALESCE(v_err, '<no error>');
+  END IF;
+
+  v_err := NULL;
+  BEGIN
+    PERFORM public.preview_field_app_invoice_split(
+      jsonb_build_array(jsonb_build_object('field_id', v_field_50, 'applied_acres', 1)),
+      '[]'::jsonb, v_service_other,
+      '83000000-0000-0000-0000-000000000099', v_job_service, '{}'::jsonb
     );
   EXCEPTION WHEN OTHERS THEN v_err := SQLERRM; END;
   IF v_err NOT LIKE '%PER_LINE_APPLICATION_SERVICE_CONTEXT_MISMATCH%' THEN
