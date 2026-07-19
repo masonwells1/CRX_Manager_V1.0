@@ -1415,6 +1415,34 @@ BEGIN
     RAISE EXCEPTION 'P2_FAIL(durable_source_cost_identity_columns): required audit columns are missing';
   END IF;
 
+  -- Kind and pricing basis are one contract. A flat fee paired with the
+  -- per-person path would otherwise evade canonical source-cent reconciliation.
+  v_err := NULL;
+  BEGIN
+    SET CONSTRAINTS ALL DEFERRED;
+    INSERT INTO public.field_app_billing_sets (
+      id, primary_customer_id, created_by
+    ) VALUES (
+      '80000000-0000-0000-0000-000000000042', v_a, v_admin
+    );
+    INSERT INTO public.field_app_billing_lines (
+      id, billing_set_id, line_kind, price_basis, description,
+      source_quantity, source_amount_cents, source_unit_size,
+      source_cost_cents, source_total_cost_cents
+    ) VALUES (
+      '82000000-0000-0000-0000-000000000042',
+      '80000000-0000-0000-0000-000000000042',
+      'flat_fee', 'per_person_price', 'Invalid flat fee basis',
+      1, NULL, 'fee', 0, 0
+    );
+    RAISE EXCEPTION 'P2_ACCEPTED(flat_fee_basis_mismatch)';
+  EXCEPTION WHEN OTHERS THEN
+    GET STACKED DIAGNOSTICS v_err = MESSAGE_TEXT;
+  END;
+  IF v_err NOT LIKE '%field_app_billing_lines_kind_price_basis_ck%' THEN
+    RAISE EXCEPTION 'P2_FAIL(flat_fee_basis_mismatch): %', COALESCE(v_err, '<no error>');
+  END IF;
+
   -- The durable validator must prove the inverse relationship too: every job
   -- chemical and the job's required application service must have a source line.
   -- Otherwise a writer could omit a whole charge and still reconcile the rows
@@ -1559,6 +1587,97 @@ BEGIN
      50000000, 0.5, 0.5, 25, 100, 'job_snapshot', 'default', 100, 50,
      repeat('c', 64), repeat('d', 64), v_admin);
   SET CONSTRAINTS ALL IMMEDIATE;
+
+  -- Default mode is not an implicit override channel: its effective unit price
+  -- must remain the server-resolved base price.
+  v_err := NULL;
+  BEGIN
+    UPDATE public.invoice_line_shares
+       SET unit_price_cents = 101
+     WHERE id = '85000000-0000-0000-0000-000000000010';
+  EXCEPTION WHEN OTHERS THEN
+    GET STACKED DIAGNOSTICS v_err = MESSAGE_TEXT;
+  END;
+  IF v_err NOT LIKE '%invoice_line_shares_default_price_matches_base_ck%' THEN
+    RAISE EXCEPTION 'P2_FAIL(default_price_must_match_base): %', COALESCE(v_err, '<no error>');
+  END IF;
+
+  -- An internally balanced rewrite must not change the frozen job quantity.
+  -- All child quantities, cents, COGS, and headers are changed together here,
+  -- so only an explicit job-source binding can reject the overbilling graph.
+  v_err := NULL;
+  BEGIN
+    SET CONSTRAINTS ALL DEFERRED;
+    UPDATE public.field_app_billing_lines
+       SET source_quantity = 2,
+           source_amount_cents = 200,
+           source_total_cost_cents = 100
+     WHERE id = '82000000-0000-0000-0000-000000000010';
+    UPDATE public.invoice_line_shares
+       SET allocated_quantity = 1,
+           allocated_cost_cents = 50,
+           amount_cents = 100
+     WHERE billing_line_id = '82000000-0000-0000-0000-000000000010';
+    UPDATE public.invoice_items
+       SET quantity = 1,
+           extended_cents = 100
+     WHERE id IN (
+       '84000000-0000-0000-0000-000000000010',
+       '84000000-0000-0000-0000-000000000011'
+     );
+    UPDATE public.invoices
+       SET total_amount_cents = 100,
+           total_cost_cents = 50
+     WHERE id IN (
+       '83000000-0000-0000-0000-000000000010',
+       '83000000-0000-0000-0000-000000000011'
+     );
+    SET CONSTRAINTS ALL IMMEDIATE;
+    RAISE EXCEPTION 'P2_ACCEPTED(job_quantity_rewrite)';
+  EXCEPTION WHEN OTHERS THEN
+    GET STACKED DIAGNOSTICS v_err = MESSAGE_TEXT;
+  END;
+  IF v_err NOT LIKE '%PER_LINE_SOURCE_JOB_CHEMICAL_MISMATCH%' THEN
+    RAISE EXCEPTION 'P2_FAIL(job_quantity_rewrite): %', COALESCE(v_err, '<no error>');
+  END IF;
+
+  -- The base price and its provenance must stay tied to the frozen job row.
+  -- Effective prices can differ only through the existing explicit override
+  -- mode/reason contract; relabeling a default price as tier data is forbidden.
+  v_err := NULL;
+  BEGIN
+    SET CONSTRAINTS ALL DEFERRED;
+    UPDATE public.field_app_billing_lines
+       SET source_unit_price_cents = 200,
+           source_amount_cents = 200
+     WHERE id = '82000000-0000-0000-0000-000000000010';
+    UPDATE public.invoice_line_shares
+       SET base_unit_price_cents = 200,
+           base_price_source = 'tier',
+           unit_price_cents = 200,
+           amount_cents = 100
+     WHERE billing_line_id = '82000000-0000-0000-0000-000000000010';
+    UPDATE public.invoice_items
+       SET unit_price_cents = 200,
+           extended_cents = 100
+     WHERE id IN (
+       '84000000-0000-0000-0000-000000000010',
+       '84000000-0000-0000-0000-000000000011'
+     );
+    UPDATE public.invoices
+       SET total_amount_cents = 100
+     WHERE id IN (
+       '83000000-0000-0000-0000-000000000010',
+       '83000000-0000-0000-0000-000000000011'
+     );
+    SET CONSTRAINTS ALL IMMEDIATE;
+    RAISE EXCEPTION 'P2_ACCEPTED(job_base_price_rewrite)';
+  EXCEPTION WHEN OTHERS THEN
+    GET STACKED DIAGNOSTICS v_err = MESSAGE_TEXT;
+  END;
+  IF v_err NOT LIKE '%PER_LINE_SOURCE_JOB_CHEMICAL_MISMATCH%' THEN
+    RAISE EXCEPTION 'P2_FAIL(job_base_price_rewrite): %', COALESCE(v_err, '<no error>');
+  END IF;
 
   -- A share cannot escape to a same-customer invoice outside its billing set's
   -- group. Customer and cents still match, so only relational membership catches it.

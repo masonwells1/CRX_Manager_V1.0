@@ -1812,6 +1812,9 @@ DECLARE
   v_preview_count integer;
   v_calculator_count integer;
   v_legacy_count integer;
+  v_preview_oid oid;
+  v_calculator_oid oid;
+  v_legacy_oid oid;
 BEGIN
   SELECT count(*) INTO v_preview_count
   FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
@@ -1824,9 +1827,58 @@ BEGIN
   WHERE n.nspname = 'public'
     AND p.proname = '_preview_field_app_invoice_split_legacy_20260718';
 
+  v_preview_oid := to_regprocedure(
+    'public.preview_field_app_invoice_split(jsonb,jsonb,uuid,uuid,uuid,jsonb)'
+  );
+  v_calculator_oid := to_regprocedure(
+    'public._calculate_per_line_split_billing_plan(uuid,jsonb,jsonb,uuid,uuid,jsonb)'
+  );
+  v_legacy_oid := to_regprocedure(
+    'public._preview_field_app_invoice_split_legacy_20260718(jsonb,jsonb,uuid,uuid)'
+  );
+
   IF v_preview_count <> 1 OR v_calculator_count <> 1 OR v_legacy_count <> 1 THEN
     RAISE EXCEPTION 'Phase 2 overload guard failed: preview %, calculator %, legacy %',
       v_preview_count, v_calculator_count, v_legacy_count;
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+      FROM pg_catalog.pg_proc p
+      JOIN pg_catalog.pg_language l ON l.oid = p.prolang
+     WHERE p.oid IN (v_preview_oid, v_calculator_oid)
+       AND (
+         p.proowner <> current_user::regrole
+         OR p.prosecdef IS DISTINCT FROM true
+         OR p.provolatile IS DISTINCT FROM 'v'::"char"
+         OR l.lanname IS DISTINCT FROM 'plpgsql'
+         OR p.proconfig IS DISTINCT FROM ARRAY['search_path=public, pg_temp']::text[]
+       )
+  ) OR EXISTS (
+    SELECT 1
+      FROM pg_catalog.pg_proc p
+      JOIN pg_catalog.pg_language l ON l.oid = p.prolang
+     WHERE p.oid = v_legacy_oid
+       AND (
+         p.proowner <> current_user::regrole
+         OR p.prosecdef IS DISTINCT FROM true
+         OR p.provolatile IS DISTINCT FROM 's'::"char"
+         OR l.lanname IS DISTINCT FROM 'plpgsql'
+         OR p.proconfig IS DISTINCT FROM ARRAY['search_path=public, pg_temp']::text[]
+       )
+  )
+  OR has_function_privilege('anon', v_preview_oid, 'EXECUTE')
+  OR NOT has_function_privilege('authenticated', v_preview_oid, 'EXECUTE')
+  OR NOT has_function_privilege('service_role', v_preview_oid, 'EXECUTE')
+  OR has_function_privilege('anon', v_calculator_oid, 'EXECUTE')
+  OR has_function_privilege('authenticated', v_calculator_oid, 'EXECUTE')
+  OR NOT has_function_privilege('service_role', v_calculator_oid, 'EXECUTE')
+  OR has_function_privilege('anon', v_legacy_oid, 'EXECUTE')
+  OR has_function_privilege('authenticated', v_legacy_oid, 'EXECUTE')
+  OR NOT has_function_privilege('service_role', v_legacy_oid, 'EXECUTE') THEN
+    RAISE EXCEPTION
+      'PER_LINE_PHASE2_FUNCTION_SECURITY_DRIFT: owner, definer, search_path, volatility, language, or ACL mismatch'
+      USING ERRCODE = 'object_not_in_prerequisite_state';
   END IF;
 END;
 $overload_guard$;

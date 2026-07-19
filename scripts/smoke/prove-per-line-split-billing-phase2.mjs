@@ -137,6 +137,27 @@ function run() {
   console.log('[phase2-proof] loading minimal schema + proving Phase 1 stale-object refusal');
   psql(read('setup'));
   psql(readCanonicalLegacyPreview());
+
+  console.log('[phase2-proof] proving Phase 1 preflight rejects an unsafe function ownership collision');
+  psql(`
+    CREATE FUNCTION public.trg_invoice_line_share_post_snapshots_immutable()
+    RETURNS trigger
+    LANGUAGE plpgsql
+    SECURITY INVOKER
+    AS $$ BEGIN RETURN NEW; END $$;
+    ALTER FUNCTION public.trg_invoice_line_share_post_snapshots_immutable()
+      OWNER TO authenticated;
+  `);
+  const staleFunctionAttempt = psql(read('preflight'), { allowFailure: true });
+  const staleFunctionOutput = `${staleFunctionAttempt.stdout || ''}${staleFunctionAttempt.stderr || ''}`;
+  psql('DROP FUNCTION public.trg_invoice_line_share_post_snapshots_immutable();');
+  if (
+    staleFunctionAttempt.status === 0
+    || !staleFunctionOutput.includes('PER_LINE_PHASE1_FUNCTION_DRIFT')
+  ) {
+    fail('Phase 1 preflight did not reject an unsafe function ownership collision', staleFunctionOutput.trim());
+  }
+
   psql(`
     CREATE TABLE public.field_app_billing_sets (id uuid PRIMARY KEY);
     CREATE UNIQUE INDEX uq_field_app_billing_sets_group
@@ -253,7 +274,7 @@ function run() {
   }
 
   console.log('PROOF — Ran: network-isolated PostgreSQL 17 container; loaded checked-in Phase 1 preflight + Phase 1 + relational guards + Phase 2 migrations verbatim; executed rollback-only Phase 2 SQL proof.');
-  console.log('PROOF — Saw: stale Phase 1 objects rejected before install; stale enabled flag rejected before Phase 2 install; pre-existing private helper, drifted public legacy body, and authenticated caller-owned predictable temp helper rejected; feature OFF delegated unchanged; owning-vs-other sales-rep job/invoice/field scope; exact null-safe invoice/job binding and direct-invoice field binding; 50/50; exact 3-way; 1-cent; one final money rounding after full-precision conversion; signed half-cent sales -13 => -7/-6 plus signed COGS -25 => -13/-12 persisted through the durable graph; penny-exact residual COGS preserving a 1c source across 50/50 children; exact job-chemical identity/quantity/unit/price/COGS snapshots, including duplicate products, ignored browser price tampering, rejected nullable/negative frozen prices, and a reconciled ounce-unit price pair; complete job-field-set enforcement; exact durable job-chemical/service completeness; frozen job/invoice application-service identity; customer-supplied $0/COGS; non-job manual -> customer/season/lifecycle-bound quote -> tier with quote prices normalized from their paired unit, unconvertible quote units rejected, complete contributing-field coverage required, zero-share-field quotes ignored, missing product cost rejected while explicit zero cost remains valid, ambiguous quote price/source rejected, and stale/unrelated quotes ignored; source-season service pricing; per-person override; 100/0 zero row; exact flat-fee output persisted with production-shaped non-null child quantity 1 and tamper rejection; job/default/fallback ownership; job field/chemical identity rejection; exact grouped and ungrouped child-invoice membership; share/item quantity, rounded acres, effective price, chemical product, service identity, pricing unit, per-unit COGS, allocated COGS, amount, and header-cost parity; immutable posted source/item identity/unit/COGS; zero-sendable rejection plus valid suppressed-zero snapshot; exact group-customer set; unshared item; source cents/quantity/acres/COGS; invoice header and pre-post integrity rejection; hashes bind product/service identity, price provenance, allocated COGS, override modes, and reasons; Mode A/vector/role rejection; one public preview overload; private calculator not browser-executable; cleanup failure is fatal.');
+  console.log('PROOF — Saw: stale Phase 1 objects and unsafe same-signature function ownership rejected before install; installed function owner/definer/search-path/volatility/language/ACL posture asserted; stale enabled flag rejected before Phase 2 install; pre-existing private helper, drifted public legacy body, and authenticated caller-owned predictable temp helper rejected; feature OFF delegated unchanged; owning-vs-other sales-rep job/invoice/field scope; exact null-safe invoice/job binding and direct-invoice field binding; 50/50; exact 3-way; 1-cent; one final money rounding after full-precision conversion; signed half-cent sales -13 => -7/-6 plus signed COGS -25 => -13/-12 persisted through the durable graph; penny-exact residual COGS preserving a 1c source across 50/50 children; exact job-chemical identity/quantity/unit/price/COGS snapshots, including coherent quantity/price/provenance rewrite rejection, duplicate products, ignored browser price tampering, rejected nullable/negative frozen prices, and a reconciled ounce-unit price pair; complete job-field-set enforcement; exact durable job-chemical/service completeness; frozen job/invoice application-service identity; customer-supplied $0/COGS; non-job manual -> customer/season/lifecycle-bound quote -> tier with quote prices normalized from their paired unit, unconvertible quote units rejected, complete contributing-field coverage required, zero-share-field quotes ignored, missing product cost rejected while explicit zero cost remains valid, ambiguous quote price/source rejected, and stale/unrelated quotes ignored; source-season service pricing; per-person override; default effective prices remain bound to their base; 100/0 zero row; exact flat-fee output persisted with production-shaped non-null child quantity 1, kind/basis coupling, and tamper rejection; job/default/fallback ownership; job field/chemical identity rejection; exact grouped and ungrouped child-invoice membership; share/item quantity, rounded acres, effective price, chemical product, service identity, pricing unit, per-unit COGS, allocated COGS, amount, and header-cost parity; immutable posted source/item identity/unit/COGS; zero-sendable rejection plus valid suppressed-zero snapshot; exact group-customer set; unshared item; source cents/quantity/acres/COGS; invoice header and pre-post integrity rejection; hashes bind product/service identity, price provenance, allocated COGS, override modes, and reasons; Mode A/vector/role rejection; one public preview overload; private calculator not browser-executable; cleanup failure is fatal.');
 }
 
 try {

@@ -101,9 +101,12 @@ micro-percent vectors; 1¢ and signed half-cent allocation; full-precision unit
 conversion with only the final money figure rounded; source COGS rounded once and
 allocated as exact signed largest-remainder cents (including 1¢ → 1¢/0¢ and a
 persisted −25¢ return → −13¢/−12¢); exact job-chemical identity,
-quantity, and frozen prices even when the same product appears twice; customer-
+quantity, frozen base price, and provenance even when every child and header is
+coherently rewritten or the same product appears twice; customer-
 supplied zero billing; owner/outsider sales-rep scope plus exact invoice/job/field
-context binding; authenticated caller-owned predictable temp helpers rejected; non-job
+context binding; authenticated caller-owned predictable temp helpers rejected; stale
+same-signature function ownership rejected before install and installed owner/definer/
+search-path/ACL posture asserted; non-job
 manual/quoted/tier pricing with customer/season/lifecycle-bound quote headers,
 stale/unrelated and zero-share-field quotes ignored, complete contributing-field quote
 coverage required, quote prices normalized from their paired price unit into the durable
@@ -111,7 +114,9 @@ product unit, unconvertible quote units rejected, missing product cost rejected 
 explicit zero cost remains valid, and conflicting price or quote source rejected;
 source-season service pricing; per-person price overrides; 100/0 service
 and flat-fee rows; exact flat-fee output persisted into production-shaped non-null
-invoice quantities with quantity 1 on every child; inverse job-chemical and required-
+invoice quantities with quantity 1 on every child, and flat-fee kind/basis coupling;
+default effective prices cannot diverge from base without explicit override mode;
+inverse job-chemical and required-
 service completeness; job/default/fallback ownership; field/job and chemical/job
 membership rejection; full identity/provenance/reason hashes; Mode A and malformed-
 vector rejection; role denial; overload count; private-calculator privileges; stale

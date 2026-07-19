@@ -57,7 +57,12 @@ ALTER TABLE public.field_app_billing_lines
   ADD CONSTRAINT field_app_billing_lines_source_job_chemical_kind_ck
     CHECK (source_job_chemical_id IS NULL OR line_kind = 'chemical'),
   ADD CONSTRAINT field_app_billing_lines_application_service_kind_ck
-    CHECK (application_service_id IS NULL OR line_kind = 'service');
+    CHECK (application_service_id IS NULL OR line_kind = 'service'),
+  ADD CONSTRAINT field_app_billing_lines_kind_price_basis_ck
+    CHECK (
+      (line_kind = 'flat_fee' AND price_basis = 'flat_fee')
+      OR (line_kind <> 'flat_fee' AND price_basis <> 'flat_fee')
+    );
 
 CREATE INDEX idx_field_app_billing_lines_source_job_chemical
   ON public.field_app_billing_lines (source_job_chemical_id);
@@ -69,7 +74,9 @@ CREATE UNIQUE INDEX uq_field_app_billing_lines_set_application_service
   WHERE application_service_id IS NOT NULL;
 
 ALTER TABLE public.invoice_line_shares
-  ADD COLUMN allocated_cost_cents bigint NOT NULL;
+  ADD COLUMN allocated_cost_cents bigint NOT NULL,
+  ADD CONSTRAINT invoice_line_shares_default_price_matches_base_ck
+    CHECK (price_mode = 'override' OR unit_price_cents = base_unit_price_cents);
 
 ALTER TABLE public.invoice_line_share_post_snapshots
   ADD COLUMN invoice_total_cost_cents bigint NOT NULL,
@@ -79,7 +86,14 @@ ALTER TABLE public.invoice_line_share_post_snapshots
   ADD COLUMN source_total_cost_cents bigint NOT NULL,
   ADD COLUMN allocated_cost_cents bigint NOT NULL,
   ADD COLUMN item_unit_size text NOT NULL,
-  ADD COLUMN item_cost_cents bigint NOT NULL;
+  ADD COLUMN item_cost_cents bigint NOT NULL,
+  ADD CONSTRAINT invoice_line_share_post_snapshots_kind_price_basis_ck
+    CHECK (
+      (line_kind = 'flat_fee' AND price_basis = 'flat_fee')
+      OR (line_kind <> 'flat_fee' AND price_basis <> 'flat_fee')
+    ),
+  ADD CONSTRAINT invoice_line_share_post_snapshots_default_price_matches_base_ck
+    CHECK (price_mode = 'override' OR unit_price_cents = base_unit_price_cents);
 
 CREATE OR REPLACE FUNCTION public._assert_per_line_split_billing_integrity(
   p_billing_set_id uuid
@@ -177,6 +191,7 @@ BEGIN
             WHERE jc.id = bl.source_job_chemical_id
               AND jc.job_id = v_set.job_id
               AND jc.product_id = bl.product_id
+              AND round(jc.quantity, 4) IS NOT DISTINCT FROM bl.source_quantity
               AND jc.unit IS NOT DISTINCT FROM bl.source_unit_size
               AND (
                 CASE WHEN jc.customer_supplied
@@ -192,6 +207,36 @@ BEGIN
   IF FOUND THEN
     RAISE EXCEPTION
       'PER_LINE_SOURCE_JOB_CHEMICAL_MISMATCH: billing line % lost or changed its frozen job source',
+      v_bad_id
+      USING ERRCODE = 'check_violation';
+  END IF;
+
+  -- The durable share keeps both the server-resolved base price and the
+  -- provenance that produced it. Job-backed rows always derive both from the
+  -- frozen job chemical; an explicit later price override changes only the
+  -- effective unit price and carries its separate override reason.
+  SELECT s.id
+    INTO v_bad_id
+    FROM public.invoice_line_shares s
+    JOIN public.field_app_billing_lines bl ON bl.id = s.billing_line_id
+    JOIN public.job_chemicals jc ON jc.id = bl.source_job_chemical_id
+   WHERE bl.billing_set_id = p_billing_set_id
+     AND (
+       s.base_unit_price_cents IS DISTINCT FROM (
+         CASE WHEN jc.customer_supplied THEN 0 ELSE jc.price_per_unit_cents END
+       )
+       OR s.base_price_source IS DISTINCT FROM (
+         CASE WHEN jc.customer_supplied
+           THEN 'job_customer_supplied'
+           ELSE 'job_snapshot'
+         END
+       )
+     )
+   ORDER BY s.id
+   LIMIT 1;
+  IF FOUND THEN
+    RAISE EXCEPTION
+      'PER_LINE_SOURCE_JOB_CHEMICAL_MISMATCH: share % base price or provenance differs from its frozen job source',
       v_bad_id
       USING ERRCODE = 'check_violation';
   END IF;
@@ -1228,5 +1273,54 @@ $$;
 
 REVOKE EXECUTE ON FUNCTION public.trg_capture_invoice_line_share_post_snapshot()
   FROM PUBLIC, anon, authenticated, service_role;
+
+-- Preflight proves these signatures were absent before installation. Recheck
+-- the installed functions as a set so a default-privilege drift or unexpected
+-- owner/security setting cannot silently weaken the privileged trigger chain.
+DO $function_security_guard$
+DECLARE
+  v_bad_functions text;
+BEGIN
+  WITH expected(signature, security_definer) AS (
+    VALUES
+      ('public.trg_invoice_line_share_post_snapshots_immutable()', true),
+      ('public.trg_invoice_line_shares_sum_100()', true),
+      ('public.trg_field_app_billing_line_has_shares()', true),
+      ('public.trg_invoice_line_shares_frozen_when_posted()', true),
+      ('public.trg_invoice_items_shared_parent_frozen_when_posted()', true),
+      ('public.trg_invoices_send_disposition_server_only()', false),
+      ('public.trg_capture_invoice_line_share_post_snapshot()', true),
+      ('public._assert_per_line_split_billing_integrity(uuid)', true),
+      ('public.trg_field_app_billing_lines_frozen_when_posted()', true),
+      ('public.trg_assert_per_line_share_integrity()', true),
+      ('public.trg_assert_per_line_billing_line_integrity()', true),
+      ('public.trg_assert_per_line_item_integrity()', true),
+      ('public.trg_assert_per_line_invoice_integrity()', true),
+      ('public.trg_assert_per_line_billing_set_integrity()', true),
+      ('public.trg_assert_per_line_integrity_before_post()', true)
+  )
+  SELECT string_agg(e.signature, ', ' ORDER BY e.signature)
+    INTO v_bad_functions
+    FROM expected e
+    LEFT JOIN pg_catalog.pg_proc p ON p.oid = to_regprocedure(e.signature)
+    LEFT JOIN pg_catalog.pg_language l ON l.oid = p.prolang
+   WHERE p.oid IS NULL
+      OR p.proowner <> current_user::regrole
+      OR p.prosecdef IS DISTINCT FROM e.security_definer
+      OR p.provolatile IS DISTINCT FROM 'v'::"char"
+      OR l.lanname IS DISTINCT FROM 'plpgsql'
+      OR p.proconfig IS DISTINCT FROM ARRAY['search_path=public, pg_temp']::text[]
+      OR has_function_privilege('anon', p.oid, 'EXECUTE')
+      OR has_function_privilege('authenticated', p.oid, 'EXECUTE')
+      OR has_function_privilege('service_role', p.oid, 'EXECUTE');
+
+  IF v_bad_functions IS NOT NULL THEN
+    RAISE EXCEPTION
+      'PER_LINE_RELATIONAL_FUNCTION_SECURITY_DRIFT: unsafe function configuration for %',
+      v_bad_functions
+      USING ERRCODE = 'object_not_in_prerequisite_state';
+  END IF;
+END;
+$function_security_guard$;
 
 COMMIT;
