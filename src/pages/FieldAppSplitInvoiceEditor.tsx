@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowLeft, Plus, Trash2, Save, Send, SlidersHorizontal, Calculator, Info, Ban,
@@ -229,6 +229,11 @@ export default function FieldAppSplitInvoiceEditor() {
   // Save / post state + results
   const [billingSetId, setBillingSetId] = useState<string | null>(null);
   const [invoiceGroupId, setInvoiceGroupId] = useState<string | null>(null);
+  // Fable-adversarial HIGH: "latest load wins". loadResults awaits several queries; without this a
+  // slow load for set A could resolve AFTER a newer load for set B and overwrite B's result card with
+  // A's amounts while the URL/billingSetId are B's — the operator would then review A but Post B. Each
+  // loadResults stamps this ref; a stale in-flight load sees the ref changed and bails before setState.
+  const activeLoadSetIdRef = useRef<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [posting, setPosting] = useState(false);
   const [showPostConfirm, setShowPostConfirm] = useState(false);
@@ -529,7 +534,14 @@ export default function FieldAppSplitInvoiceEditor() {
     });
   }
 
-  const loadResults = useCallback(async (setId: string) => {
+  // Returns true ONLY when the full readback completed for the requested set; false when the load
+  // was abandoned as stale. Callers that enable Post must require `true` — a stale bail must never
+  // look like a verified readback (Codex r5 P1 contract).
+  const loadResults = useCallback(async (setId: string): Promise<boolean> => {
+    // Fable-adversarial HIGH: mark this as the latest load; a slower earlier load bails at each
+    // `stale()` checkpoint below instead of overwriting a newer set's result card.
+    activeLoadSetIdRef.current = setId;
+    const stale = () => activeLoadSetIdRef.current !== setId;
     // 1) Child invoices for this billing set (authoritative totals + send disposition).
     const { data: invRows, error: invErr } = await supabaseUntyped
       .from('invoices')
@@ -537,6 +549,7 @@ export default function FieldAppSplitInvoiceEditor() {
       .eq('field_app_billing_set_id', setId)
       .order('invoice_number');
     if (invErr) throw invErr;
+    if (stale()) return false;
     const invoices = ((invRows as Array<Record<string, unknown>> | null) ?? []).map((r) => ({
       id: r.id as string,
       invoice_number: (r.invoice_number as string | null) ?? null,
@@ -562,7 +575,7 @@ export default function FieldAppSplitInvoiceEditor() {
     }
 
     const invoiceIds = invoices.map((i) => i.id);
-    if (invoiceIds.length === 0) { setResultShares([]); return; }
+    if (invoiceIds.length === 0) { if (stale()) return false; setResultShares([]); return true; }
 
     // 2) Invoice items (invoice_id + description) for those invoices.
     const { data: itemRows, error: itemErr } = await supabaseUntyped
@@ -575,9 +588,10 @@ export default function FieldAppSplitInvoiceEditor() {
       itemMap.set(it.id as string, { invoice_id: it.invoice_id as string, description: (it.description as string) || '' });
     });
 
+    if (stale()) return false;
     // 3) Per-line shares, joined to their item for invoice_id + description.
     const itemIds = Array.from(itemMap.keys());
-    if (itemIds.length === 0) { setResultShares([]); return; }
+    if (itemIds.length === 0) { setResultShares([]); return true; }
     const { data: shareRows, error: shareErr } = await supabaseUntyped
       .from('invoice_line_shares')
       .select('invoice_item_id, customer_id, unit_price_cents, amount_cents')
@@ -593,7 +607,9 @@ export default function FieldAppSplitInvoiceEditor() {
         amount_cents: Number(s.amount_cents ?? 0),
       };
     });
+    if (stale()) return false;
     setResultShares(shares);
+    return true;
   }, [customerNames]);
 
   const handleSave = async () => {
@@ -625,9 +641,11 @@ export default function FieldAppSplitInvoiceEditor() {
       // Codex r5 P1: if the authoritative readback fails, invoiceGroupId/savedSig must stay unset so
       // Post can't act on stale/unseen amounts. loadResults throws on any read error (surfaced below).
       setBillingSetId(res.billing_set_id);
-      await loadResults(res.billing_set_id);
-      setInvoiceGroupId(res.invoice_group_id);
-      setSavedSig(currentSig); // snapshot what was just persisted → Post is enabled until the next edit (#5)
+      const readbackComplete = await loadResults(res.billing_set_id);
+      if (readbackComplete) {
+        setInvoiceGroupId(res.invoice_group_id);
+        setSavedSig(currentSig); // snapshot what was just persisted → Post is enabled until the next edit (#5)
+      }
       saveIdem.resetKey(); // next save is a distinct action → fresh key
       toast('success', 'Draft split invoice saved.');
     } catch (err) {

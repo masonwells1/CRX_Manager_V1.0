@@ -4,6 +4,23 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-19 — Per-line split-billing: FABLE adversarial round → 6 RPC fixes + editor race guard + 2 reviewer MEDs, all fixed + PROOFOK 55/55 (branch, still PARKED). Autonomous Fable-5 run.
+
+With Codex round 6 blocked on a usage limit (~Jul 24), a Fable adversarial review (4 lenses) found real bugs the 5 Codex rounds missed; this session proved and landed the fixes. Feature stays **flag OFF, migrations NOT applied, PR #164 NOT merged**.
+
+- **[BLOCKER money] negative service acres** — a direct RPC call with `source_acres <= 0` could mint NEGATIVE (credit) invoices that passed every invariant and could post to reduce AR. Rejected server-side (`SPLIT_SERVICE_ACRES_NONPOSITIVE`). Proven: `neg_service_acres_rejected_ok`.
+- **[BLOCKER lifecycle] soft-deleted child bricked the set** — after the live `delete_invoices` soft-deleted a child, its `invoice_items` still pointed at the set's billing lines (NO-ACTION FK), so every future re-save FK-aborted and the dropped co-owner became unbillable. The RPC now NULLs those `billing_line_id` refs before rebuilding the lines. Proven: `softdelete_child_resave_ok`.
+- **[BLOCKER lifecycle] voided/cancelled child bricked re-save** — a terminal child kept blocking the wrapper's already-posted check forever. The wrapper, PASS-2 reuse, and orphan-cancel now exclude cancelled/voided children (no resurrection possible — reuse is draft/unposted only). Proven: `voidchild_resave_ok`.
+- **[HIGH money] commission re-save FK abort** — the job-wide commission re-mint hard-DELETEd old rows, which 23503-aborted if a commission had ever been in a (later voided) payout batch. Now SOFT-cancels (`status='cancelled'`, amount 0, `deleted_at`) matching the live never-delete-commissions convention; drift review verified every live consumer (batch creation, void, payable list) excludes soft-cancelled rows.
+- **[HIGH frontend] stale readback race** — opening split set A then B quickly let A's slower queries overwrite B's result card (operator reviews A's amounts, Posts group B). `loadResults` now has a latest-load-wins staleness guard, returns a boolean, and `handleSave` enables Post only on a completed non-stale readback.
+- **[MED] posting tamper tie** — the posting trigger now also requires each item's `extended_cents` to equal its shares' sum (`SPLIT_POST_ITEM_SHARE_MISMATCH`), closing the admin-PATCH tamper window. Proven: `post_item_tamper_rejected_ok`.
+- **[MED] audit-row price accuracy** — `source_unit_price_cents` now reflects a uniform per-share override instead of the stale resolved base. Proven: `source_unit_price_reflects_uniform_override_ok`.
+- **[reviewer MED M1] terminal children keep their printed record** — the re-save clear now only wipes draft/unposted children, so a voided/cancelled child keeps its `invoice_items`/`invoice_shares` as the audit record. Proven: `voidchild_items_preserved_ok`.
+
+**PROVEN in the live DB** (rollback): `PROOFOK` **55/55** — all 49 prior + the 6 new scenarios above. `rls-security-reviewer` 0/0/0 (soft-cancel scoping strictly narrower; no resurrection/double-bill; preserved items can't leak into posting/invariants/commissions), `migration-drift-reviewer` 0 blockers ('cancelled' valid in the live enum; `deleted_at` exists; all live consumers exclude soft-cancelled rows), `compliance-reviewer` clean. Typecheck + lint + focused tests pass. **Tooling learning:** the ~124KB proof bundle now runs reliably by POSTing the file bytes directly to the Supabase management API (no more LLM re-emission stalls). Still **flag OFF, not applied, not merged**; Codex round 6 + two owner decisions (Option-B commission clamp; job-less double-submit) remain open.
+
+---
+
 ## 2026-07-19 — Per-line split-billing: Codex ROUND 5 → 6 P1 + 2 P2 + a reviewer BLOCKER, all fixed + PROOFOK 50/50 (branch, still PARKED). Autonomous Opus-4.8 run.
 
 A fifth `codex review --base main` on `5983b3eb` returned 6 P1 + 2 P2 — all fixed. Then the migration-drift reviewer caught a BLOCKER (B1) the admin-only proof had missed, and the live proof caught a second bug in the newly-tested member-drop re-save path. All fixed; feature stays **flag OFF, migrations NOT applied, PR #164 NOT merged**.

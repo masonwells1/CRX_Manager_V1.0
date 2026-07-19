@@ -577,12 +577,26 @@ BEGIN
         USING ERRCODE = 'insufficient_privilege';
     END IF;
 
+    -- Only EDITABLE children are cleared for the rebuild. A voided/cancelled child keeps its
+    -- invoice_items/invoice_shares as the printed audit record of what was billed then reversed
+    -- (RLS review M1) — its billing-line links are NULLed below so the line DELETE stays FK-safe.
+    -- Posted/paid children can't reach here (the wrapper's already-posted block rejects the set).
     DELETE FROM invoice_items
       WHERE invoice_id IN (SELECT id FROM invoices
-                            WHERE field_app_billing_set_id = v_set_id AND deleted_at IS NULL);
+                            WHERE field_app_billing_set_id = v_set_id AND deleted_at IS NULL
+                              AND status IN ('draft', 'unposted'));
     DELETE FROM invoice_shares
       WHERE invoice_id IN (SELECT id FROM invoices
-                            WHERE field_app_billing_set_id = v_set_id AND deleted_at IS NULL);
+                            WHERE field_app_billing_set_id = v_set_id AND deleted_at IS NULL
+                              AND status IN ('draft', 'unposted'));
+    -- Fable-adversarial BLOCKER: a SOFT-deleted child (via the live delete_invoices) is NOT in the
+    -- delete above (deleted_at IS NOT NULL), but its invoice_items still reference this set's
+    -- field_app_billing_lines (invoice_items.billing_line_id FK, NO ACTION) — so the DELETE below
+    -- would 23503-abort and BRICK every future re-save. NULL those dangling refs first (the soft-
+    -- deleted invoice keeps its items as history; only the now-meaningless billing-line link is
+    -- cleared). PASS 2 then re-creates a child for that customer if they are still a member.
+    UPDATE invoice_items SET billing_line_id = NULL
+      WHERE billing_line_id IN (SELECT id FROM field_app_billing_lines WHERE billing_set_id = v_set_id);
     DELETE FROM field_app_billing_lines WHERE billing_set_id = v_set_id;
     -- Clear the prior group's field snapshots; PASS 3 re-creates them from p_fields (Codex P1 #7).
     DELETE FROM field_app_locations WHERE invoice_group_id = v_group_id;
@@ -595,15 +609,19 @@ BEGIN
     SELECT array_agg(id) INTO v_set_child_ids
       FROM invoices WHERE field_app_billing_set_id = v_set_id AND deleted_at IS NULL;
 
-    -- Any existing child whose customer is no longer a billing-set member is
+    -- Any existing EDITABLE child whose customer is no longer a billing-set member is
     -- soft-cancelled + detached from the set (its snapshots stay pointing at it,
     -- audit intact) — never hard-deleted. Mirrors the live orphan-cancel path.
+    -- Fable-adversarial: only draft/unposted children — a child already voided/cancelled via the
+    -- live void_invoice must be skipped, since draft->cancelled is fine but voided->cancelled is a
+    -- forbidden status transition that would abort the whole re-save.
     UPDATE invoices
        SET status = 'cancelled', invoice_group_id = NULL, field_app_billing_set_id = NULL,
            total_amount_cents = 0, total_cost_cents = 0, send_disposition = 'normal',
            updated_at = now()
      WHERE field_app_billing_set_id = v_set_id
        AND deleted_at IS NULL
+       AND status IN ('draft', 'unposted')
        AND customer_id::text <> ALL (v_members);
   ELSE
     -- New set. R7: ALWAYS assign an invoice_group_id (even single recipient) so
@@ -777,6 +795,15 @@ BEGIN
 
       IF v_src_acres IS NULL THEN
         v_src_acres := v_total_applied_acres;
+      END IF;
+      -- Fable-adversarial HIGH: service source_acres is the billable basis and was the one billable
+      -- input with no positivity guard (round-5 covered chemical qty, service RATE, flat cents, per-
+      -- share override). A direct/modified RPC call with a negative or zero value would mint a NEGATIVE
+      -- (credit) invoice that reduces AR and passes every §5 invariant (signed LR; total<>0 so not $0-
+      -- suppressed). The editor only sends positive acres; enforce it server-side.
+      IF v_src_acres <= 0 THEN
+        RAISE EXCEPTION 'SPLIT_SERVICE_ACRES_NONPOSITIVE: service line % requires source_acres > 0', v_idx
+          USING ERRCODE = 'invalid_parameter_value';
       END IF;
 
       -- Service COGS: per-acre cost from the service record (mirrors the live field-app path,
@@ -1019,9 +1046,14 @@ BEGIN
       'shares',                  v_shares
     ));
 
-    -- Persist the canonical source-line total for the invariant check.
+    -- Persist the canonical source-line total for the invariant check. Fable-adversarial MED: also
+    -- re-persist source_unit_price_cents to the price the money ACTUALLY used — the billing line was
+    -- INSERTed with the representative resolved price, but the uniform-override penny guard above may
+    -- have re-pointed v_src_unit_price (e.g. a uniform per-person override that differs from the base),
+    -- leaving the audit row's price × source inconsistent with its own source_line_cents.
     UPDATE field_app_billing_lines
-       SET source_line_cents = (v_calc->>'source_line_cents')::bigint
+       SET source_line_cents = (v_calc->>'source_line_cents')::bigint,
+           source_unit_price_cents = v_src_unit_price
      WHERE id = v_line_id;
 
     -- #G (Codex round-2 P1): allocate the ONE canonical line COGS across co-owners with the
@@ -1078,10 +1110,15 @@ BEGIN
     -- + append-only snapshot history — adversarial F1 fix); INSERT only for a new customer.
     v_invoice_id := NULL;
     IF p_billing_set_id IS NOT NULL THEN
+      -- Reuse only an EDITABLE (draft/unposted) child. Fable-adversarial BLOCKER: a child voided/
+      -- cancelled via the live void_invoice stays attached to the set; reusing (reviving) it would be a
+      -- forbidden voided->draft transition AND resurrect a dead invoice. Skip it — a fresh child is
+      -- INSERTed below for this still-member customer; the terminal one stays as voided/cancelled history.
       SELECT id INTO v_invoice_id FROM invoices
        WHERE field_app_billing_set_id = v_set_id
          AND customer_id = v_customer_id
          AND deleted_at IS NULL
+         AND status IN ('draft', 'unposted')
        LIMIT 1;
     END IF;
 
@@ -1375,7 +1412,7 @@ BEGIN
     -- a phantom pending commission on a cancelled invoice), then re-mint only for the current
     -- members. First REFUSE if any are already in an active payout batch or already paid (mirrors
     -- the U8 edit guards): the operator must void that commission payment before re-saving. On a
-    -- first save there are none, so the guards pass and the DELETE is a no-op.
+    -- first save there are none, so the guards pass and the clear is a no-op.
     IF EXISTS (
       SELECT 1 FROM commissions c
       JOIN commission_payment_items cpi ON cpi.commission_id = c.id
@@ -1390,7 +1427,15 @@ BEGIN
       RAISE EXCEPTION 'JOB_COMMISSIONS_PAID: this split''s commissions were already paid out — void that commission payment before re-saving';
     END IF;
 
-    DELETE FROM commissions WHERE job_id = p_source_job_id;
+    -- Fable-adversarial HIGH: SOFT-cancel (never hard-DELETE) the prior commissions, then re-mint.
+    -- A hard DELETE FK-violates once any of the job's commissions were EVER in a payout batch — even a
+    -- VOIDED one, which is exactly what JOB_HAS_BATCHED_COMMISSIONS tells the operator to do first
+    -- (commission_payment_items.commission_id is NO ACTION and void_commission_payment leaves its cpi
+    -- rows in place). Soft-cancel mirrors the live convention (delete_invoices / void_invoice cancel+zero
+    -- commissions, never delete them) and preserves the audit trail. Re-mint below writes fresh rows.
+    UPDATE commissions
+       SET status = 'cancelled', commission_amount = 0, deleted_at = now()
+     WHERE job_id = p_source_job_id AND deleted_at IS NULL;
 
     FOREACH v_child_id IN ARRAY v_invoice_ids
     LOOP
@@ -1577,11 +1622,16 @@ BEGIN
       WHERE field_app_billing_set_id = p_billing_set_id AND deleted_at IS NULL
       ORDER BY id FOR UPDATE;
 
+    -- Only a genuinely COMMITTED member (posted/paid/overdue) blocks a re-save. Fable-adversarial
+    -- BLOCKER: 'cancelled'/'voided' are TERMINAL, not editable money — a child voided/cancelled via the
+    -- live void_invoice stays attached (that path never detaches it), so blocking on them left the whole
+    -- set uneditable forever and its co-owner's share unbillable. Exclude them here; the impl's PASS-2
+    -- reuse (below) skips a non-editable child and mints a fresh one for a still-member customer.
     IF EXISTS (SELECT 1 FROM invoices
                 WHERE field_app_billing_set_id = p_billing_set_id
                   AND deleted_at IS NULL
-                  AND status NOT IN ('draft', 'unposted')) THEN
-      RAISE EXCEPTION 'Cannot edit split billing set — a member invoice is already posted or voided';
+                  AND status NOT IN ('draft', 'unposted', 'cancelled', 'voided')) THEN
+      RAISE EXCEPTION 'Cannot edit split billing set — a member invoice is already posted';
     END IF;
   END IF;
 
@@ -1680,6 +1730,19 @@ BEGIN
     IF v_share_sum IS DISTINCT FROM COALESCE(NEW.total_amount_cents, 0) THEN
       RAISE EXCEPTION 'SPLIT_POST_TOTAL_MISMATCH: invoice % line shares sum to % but the header total is % — refusing to post a malformed split',
         NEW.id, v_share_sum, NEW.total_amount_cents USING ERRCODE = 'internal_error';
+    END IF;
+    -- Fable-adversarial MED: each printed line item's extended_cents must equal its frozen share's
+    -- amount_cents. invoice_items UPDATE is is_admin(), and the guard trigger blocks only DELETE — so an
+    -- admin PATCH of a split child's extended_cents would desync the printed line from the share while the
+    -- share-sum=header check above still passes (shares untouched). Refuse posting such a split.
+    IF EXISTS (
+      SELECT 1 FROM invoice_items ii
+      JOIN invoice_line_shares ils ON ils.invoice_item_id = ii.id
+      WHERE ii.invoice_id = NEW.id
+        AND COALESCE(ii.extended_cents, 0) IS DISTINCT FROM COALESCE(ils.amount_cents, 0)
+    ) THEN
+      RAISE EXCEPTION 'SPLIT_POST_ITEM_SHARE_MISMATCH: invoice % has a line item whose amount no longer matches its per-line split share — refusing to post a tampered split',
+        NEW.id USING ERRCODE = 'internal_error';
     END IF;
 
     INSERT INTO invoice_line_share_snapshots (
