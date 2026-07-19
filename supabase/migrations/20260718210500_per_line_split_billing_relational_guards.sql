@@ -3,8 +3,10 @@
 -- Phase 1 established the durable tables, exact 100% vectors, RLS, freeze
 -- boundary, and append-only post snapshots. This additive migration closes the
 -- relationships that cannot be expressed as simple CHECK constraints:
+--   * every share must stay inside the billing set's exact child invoice(s);
 --   * a share customer must own its child invoice;
---   * a share amount must equal its child invoice item;
+--   * each child item must match its share's identity, quantity, acres, price,
+--     and extended amount;
 --   * every logical line must cover the billing set's exact customer set;
 --   * line quantities/acres and same-price/flat-fee cents must reconcile;
 --   * every split invoice item must be represented by exactly one share; and
@@ -101,6 +103,76 @@ BEGIN
   IF FOUND THEN
     RAISE EXCEPTION
       'PER_LINE_SHARE_ITEM_AMOUNT_MISMATCH: share % amount differs from its invoice item',
+      v_bad_id
+      USING ERRCODE = 'check_violation';
+  END IF;
+
+  -- Customer equality alone is insufficient: a share must point inside this
+  -- billing set's exact invoice group (or to an ungrouped live invoice for an
+  -- ungrouped set). Otherwise same-customer invoices can be cross-wired.
+  SELECT s.id
+    INTO v_bad_id
+    FROM public.invoice_line_shares s
+    JOIN public.field_app_billing_lines bl ON bl.id = s.billing_line_id
+    JOIN public.invoice_items ii ON ii.id = s.invoice_item_id
+    JOIN public.invoices inv ON inv.id = ii.invoice_id
+   WHERE bl.billing_set_id = p_billing_set_id
+     AND (
+       inv.deleted_at IS NOT NULL
+       OR (
+         v_set.invoice_group_id IS NOT NULL
+         AND inv.invoice_group_id IS DISTINCT FROM v_set.invoice_group_id
+       )
+       OR (
+         v_set.invoice_group_id IS NULL
+         AND inv.invoice_group_id IS NOT NULL
+       )
+     )
+   ORDER BY s.id
+   LIMIT 1;
+  IF FOUND THEN
+    RAISE EXCEPTION
+      'PER_LINE_SHARE_INVOICE_SET_MISMATCH: share % points outside its billing set invoices',
+      v_bad_id
+      USING ERRCODE = 'check_violation';
+  END IF;
+
+  -- The child item is the invoice-facing projection of its share. Preserve exact
+  -- quantity and price, round only the 4dp audit acres to invoice_items.acres(12,2),
+  -- and bind chemical/service identity to the logical line.
+  SELECT s.id
+    INTO v_bad_id
+    FROM public.invoice_line_shares s
+    JOIN public.field_app_billing_lines bl ON bl.id = s.billing_line_id
+    JOIN public.invoice_items ii ON ii.id = s.invoice_item_id
+    JOIN public.invoices inv ON inv.id = ii.invoice_id
+   WHERE bl.billing_set_id = p_billing_set_id
+     AND (
+       ii.quantity IS DISTINCT FROM s.allocated_quantity
+       OR ii.acres IS DISTINCT FROM round(s.allocated_acres, 2)
+       OR ii.unit_price_cents IS DISTINCT FROM s.unit_price_cents
+       OR (
+         bl.line_kind = 'chemical'
+         AND ii.product_id IS DISTINCT FROM bl.product_id
+       )
+       OR (
+         bl.line_kind = 'service'
+         AND (
+           bl.application_service_id IS NULL
+           OR inv.application_service_id IS DISTINCT FROM bl.application_service_id
+           OR ii.product_id IS NOT NULL
+         )
+       )
+       OR (
+         bl.line_kind = 'flat_fee'
+         AND ii.product_id IS NOT NULL
+       )
+     )
+   ORDER BY s.id
+   LIMIT 1;
+  IF FOUND THEN
+    RAISE EXCEPTION
+      'PER_LINE_SHARE_ITEM_IDENTITY_MISMATCH: share % differs from its invoice item identity or pricing',
       v_bad_id
       USING ERRCODE = 'check_violation';
   END IF;
@@ -207,6 +279,19 @@ BEGIN
     ) THEN
       RAISE EXCEPTION
         'PER_LINE_SHARE_CUSTOMER_SET_MISMATCH: ungrouped billing set % must contain only its primary customer',
+        p_billing_set_id
+        USING ERRCODE = 'check_violation';
+    END IF;
+
+    IF (
+      SELECT count(DISTINCT ii.invoice_id)
+        FROM public.invoice_line_shares s
+        JOIN public.field_app_billing_lines bl ON bl.id = s.billing_line_id
+        JOIN public.invoice_items ii ON ii.id = s.invoice_item_id
+       WHERE bl.billing_set_id = p_billing_set_id
+    ) > 1 THEN
+      RAISE EXCEPTION
+        'PER_LINE_SHARE_INVOICE_SET_MISMATCH: ungrouped billing set % must use one child invoice',
         p_billing_set_id
         USING ERRCODE = 'check_violation';
     END IF;

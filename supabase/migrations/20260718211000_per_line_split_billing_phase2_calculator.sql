@@ -38,9 +38,12 @@ AS $calculator$
 DECLARE
   v_actor uuid := auth.uid();
   v_effective_job_id uuid := p_job_id;
+  v_effective_application_service_id uuid := p_application_service_id;
   v_invoice_job_id uuid;
   v_invoice_group_id uuid;
   v_invoice_season integer;
+  v_invoice_application_service_id uuid;
+  v_job_application_service_id uuid;
   v_effective_season integer := public.current_season();
   v_feature_enabled boolean;
   v_loc jsonb;
@@ -180,8 +183,9 @@ BEGIN
   TRUNCATE pg_temp._plsb_shares;
 
   IF p_invoice_id IS NOT NULL THEN
-    SELECT i.job_id, i.invoice_group_id, i.season
-      INTO v_invoice_job_id, v_invoice_group_id, v_invoice_season
+    SELECT i.job_id, i.invoice_group_id, i.season, i.application_service_id
+      INTO v_invoice_job_id, v_invoice_group_id, v_invoice_season,
+           v_invoice_application_service_id
       FROM public.invoices i
      WHERE i.id = p_invoice_id
        AND i.deleted_at IS NULL;
@@ -192,18 +196,35 @@ BEGIN
        AND p_job_id IS DISTINCT FROM v_invoice_job_id THEN
       RAISE EXCEPTION 'PER_LINE_JOB_CONTEXT_MISMATCH' USING ERRCODE = 'invalid_parameter_value';
     END IF;
+    IF p_application_service_id IS NOT NULL
+       AND p_application_service_id IS DISTINCT FROM v_invoice_application_service_id THEN
+      RAISE EXCEPTION 'PER_LINE_APPLICATION_SERVICE_CONTEXT_MISMATCH'
+        USING ERRCODE = 'invalid_parameter_value';
+    END IF;
     v_effective_job_id := COALESCE(p_job_id, v_invoice_job_id);
+    v_effective_application_service_id := v_invoice_application_service_id;
     v_effective_season := COALESCE(v_invoice_season, v_effective_season);
   END IF;
 
   IF v_effective_job_id IS NOT NULL THEN
-    SELECT COALESCE(j.season, v_effective_season)
-      INTO v_effective_season
+    SELECT COALESCE(j.season, v_effective_season), j.application_service_id
+      INTO v_effective_season, v_job_application_service_id
       FROM public.jobs j
      WHERE j.id = v_effective_job_id;
     IF NOT FOUND THEN
       RAISE EXCEPTION 'JOB_NOT_FOUND: %', v_effective_job_id USING ERRCODE = 'no_data_found';
     END IF;
+    IF p_invoice_id IS NOT NULL
+       AND v_invoice_application_service_id IS DISTINCT FROM v_job_application_service_id THEN
+      RAISE EXCEPTION 'PER_LINE_APPLICATION_SERVICE_CONTEXT_MISMATCH'
+        USING ERRCODE = 'invalid_parameter_value';
+    END IF;
+    IF p_application_service_id IS NOT NULL
+       AND p_application_service_id IS DISTINCT FROM v_job_application_service_id THEN
+      RAISE EXCEPTION 'PER_LINE_APPLICATION_SERVICE_CONTEXT_MISMATCH'
+        USING ERRCODE = 'invalid_parameter_value';
+    END IF;
+    v_effective_application_service_id := v_job_application_service_id;
   END IF;
 
   -- One source location per field; applied acres must be positive and finite numeric.
@@ -403,12 +424,12 @@ BEGIN
       USING ERRCODE = 'object_not_in_prerequisite_state';
   END IF;
 
-  IF p_application_service_id IS NOT NULL THEN
+  IF v_effective_application_service_id IS NOT NULL THEN
     SELECT * INTO v_app_service
     FROM public.application_services
-    WHERE id = p_application_service_id AND is_active = true;
+    WHERE id = v_effective_application_service_id AND is_active = true;
     IF NOT FOUND THEN
-      RAISE EXCEPTION 'APPLICATION_SERVICE_NOT_FOUND_OR_INACTIVE: %', p_application_service_id
+      RAISE EXCEPTION 'APPLICATION_SERVICE_NOT_FOUND_OR_INACTIVE: %', v_effective_application_service_id
         USING ERRCODE = 'no_data_found';
     END IF;
   END IF;
@@ -537,11 +558,11 @@ BEGIN
           CASE WHEN v_job_chem.customer_supplied THEN 0 ELSE v_job_chem.cost_per_unit_cents END,
         'snapshot_unit_price_cents',
           CASE WHEN v_job_chem.customer_supplied THEN 0 ELSE v_job_chem.price_per_unit_cents END,
-        'manual_override',
-          CASE WHEN v_job_chem.customer_supplied THEN false
-               ELSE COALESCE((v_chem->>'manual_override')::boolean, false) END,
-        'unit_price_cents',
-          CASE WHEN v_job_chem.customer_supplied THEN 0 ELSE (v_chem->>'unit_price_cents')::bigint END
+        -- Browser prices never override frozen job money. The snapshot already
+        -- records whether its resolved source was manual, quote, or tier; Phase 3
+        -- will persist that provenance separately from this untrusted payload.
+        'manual_override', false,
+        'unit_price_cents', NULL
       );
     ELSE
       v_sort_order := COALESCE((v_chem->>'sort_order')::integer, 0);
@@ -600,18 +621,18 @@ BEGIN
     );
   END LOOP;
 
-  IF p_application_service_id IS NOT NULL THEN
+  IF v_effective_application_service_id IS NOT NULL THEN
     SELECT sum(applied_acres) INTO v_source_acres_raw FROM pg_temp._plsb_fields;
     v_source_acres := round(v_source_acres_raw, 4);
     INSERT INTO pg_temp._plsb_lines (
       line_key, line_kind, application_service_id, description,
       source_pricing_quantity, source_quantity, source_acres, sort_order, source_input
     ) VALUES (
-      'service:' || p_application_service_id::text,
-      'service', p_application_service_id, v_app_service.name,
+      'service:' || v_effective_application_service_id::text,
+      'service', v_effective_application_service_id, v_app_service.name,
       v_source_acres_raw, v_source_acres, v_source_acres, 1000000,
       jsonb_build_object(
-        'application_service_id', p_application_service_id,
+        'application_service_id', v_effective_application_service_id,
         'cost_per_acre_cents', v_app_service.cost_per_acre_cents,
         'season', v_effective_season
       )
@@ -815,7 +836,7 @@ BEGIN
   END LOOP;
 
   -- Resolve base prices. A job chemical's frozen price/quantity is authoritative;
-  -- explicit global manual remains available for non-customer-supplied work.
+  -- explicit global manual remains available only for non-job work.
   -- Non-job drafts use global manual -> customer tier. Application service uses
   -- customer_application_rates for the source job/invoice season -> service default.
   UPDATE pg_temp._plsb_shares s

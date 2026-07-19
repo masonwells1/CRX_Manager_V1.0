@@ -139,7 +139,7 @@ function run() {
   }
 
   console.log('PROOF — Ran: network-isolated PostgreSQL 17 container; loaded checked-in Phase 1 + relational guards + Phase 2 migrations verbatim; executed rollback-only Phase 2 SQL proof.');
-  console.log('PROOF — Saw: feature OFF delegated unchanged; 50/50; exact 3-way; 1-cent; one final money rounding after full-precision conversion; signed half-cent -13 => -7/-6; exact job-chemical quantity/unit/price snapshots, including duplicate products and a reconciled ounce-unit price pair; complete job-field-set enforcement; customer-supplied zero billing; non-job manual/tier and source-season service pricing; per-person override; 100/0 zero row; flat fee; job/default/fallback ownership; job field/chemical identity rejection; share-customer/invoice, exact group-customer set, unshared item, share/item amount, source cents/quantity/acres, invoice header, and pre-post integrity rejection; hashes; Mode A/vector/role rejection; one public preview overload; private calculator not browser-executable.');
+  console.log('PROOF — Saw: feature OFF delegated unchanged; 50/50; exact 3-way; 1-cent; one final money rounding after full-precision conversion; signed half-cent -13 => -7/-6; exact job-chemical quantity/unit/price snapshots, including duplicate products, ignored browser price tampering, and a reconciled ounce-unit price pair; complete job-field-set enforcement; frozen job/invoice application-service identity; customer-supplied zero billing; non-job manual/tier and source-season service pricing; per-person override; 100/0 zero row; flat fee; job/default/fallback ownership; job field/chemical identity rejection; exact grouped and ungrouped child-invoice membership; share/item quantity, rounded acres, effective price, chemical product, service identity, and amount parity; exact group-customer set; unshared item; source cents/quantity/acres; invoice header and pre-post integrity rejection; hashes; Mode A/vector/role rejection; one public preview overload; private calculator not browser-executable; cleanup failure is fatal.');
 }
 
 try {
@@ -150,6 +150,6 @@ try {
   if (removed.status === 0) {
     console.log(`[phase2-proof] removed disposable container ${CONTAINER}`);
   } else {
-    console.error(`[phase2-proof] WARNING: could not remove ${CONTAINER}: ${removed.stderr || removed.stdout}`);
+    fail(`Could not remove disposable container ${CONTAINER}`, removed.stderr || removed.stdout);
   }
 }

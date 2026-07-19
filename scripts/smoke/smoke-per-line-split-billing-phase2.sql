@@ -35,6 +35,7 @@ DECLARE
   v_product_tier constant uuid := '50000000-0000-0000-0000-000000000002';
   v_product_gallon constant uuid := '50000000-0000-0000-0000-000000000003';
   v_service constant uuid := '60000000-0000-0000-0000-000000000001';
+  v_service_other constant uuid := '60000000-0000-0000-0000-000000000002';
   v_plan jsonb;
   v_plan_again jsonb;
   v_lines jsonb;
@@ -133,7 +134,12 @@ BEGIN
     );
   INSERT INTO public.application_services
     (id, name, default_rate_per_acre_cents, cost_per_acre_cents, is_active)
-  VALUES (v_service, 'Application', 10, 4, true);
+  VALUES
+    (v_service, 'Application', 10, 4, true),
+    (v_service_other, 'Wrong Application', 99, 9, true);
+  UPDATE public.jobs
+     SET application_service_id = v_service
+   WHERE id = v_job_service;
   INSERT INTO public.customer_application_rates
     (customer_id, application_service_id, rate_per_acre_cents, season)
   VALUES
@@ -345,7 +351,7 @@ BEGIN
   -- resolves customer rate before the default service price.
   v_plan := public.preview_field_app_invoice_split(
     jsonb_build_array(jsonb_build_object('field_id', v_field_50, 'applied_acres', 1)),
-    '[]'::jsonb, v_service, NULL, v_job_service,
+    '[]'::jsonb, NULL, NULL, v_job_service,
     jsonb_build_object('lines', jsonb_build_array(jsonb_build_object(
       'line_key', 'service:' || v_service::text,
       'split_mode', 'custom', 'split_override_reason', 'Tenant pays service',
@@ -389,7 +395,8 @@ BEGIN
       'job_chemical_id', v_job_chem,
       'line_key', 'chemical:' || v_job_chem::text,
       'sort_order', 999, 'product_id', v_product_quote,
-      'description', 'Tampered Job', 'rate_per_acre', 999, 'rate_unit', 'unit'
+      'description', 'Tampered Job', 'rate_per_acre', 999, 'rate_unit', 'unit',
+      'manual_override', true, 'unit_price_cents', 777
     )), NULL, NULL, v_job, '{}'::jsonb
   );
   IF v_plan->>'customer_count' <> '1'
@@ -397,8 +404,42 @@ BEGIN
      OR v_plan#>>'{billing_lines,0,source_job_chemical_id}' <> v_job_chem::text
      OR v_plan#>>'{billing_lines,0,product_id}' <> v_product_tier::text
      OR v_plan#>>'{billing_lines,0,source_amount_cents}' <> '100'
+     OR v_plan#>>'{billing_lines,0,shares,0,base_unit_price_cents}' <> '100'
+     OR v_plan#>>'{billing_lines,0,shares,0,base_price_source}' <> 'job_snapshot'
      OR v_plan#>>'{shares_detail,rows,0,vector_source}' <> 'job_snapshot' THEN
     RAISE EXCEPTION 'P2_FAIL(job_snapshot_precedence): %', v_plan;
+  END IF;
+
+  -- A job's frozen service identity is authoritative. An active but unrelated
+  -- browser-selected service must not change job-backed billing.
+  v_err := NULL;
+  BEGIN
+    PERFORM public.preview_field_app_invoice_split(
+      jsonb_build_array(jsonb_build_object('field_id', v_field_50, 'applied_acres', 1)),
+      '[]'::jsonb, v_service_other, NULL, v_job_service, '{}'::jsonb
+    );
+  EXCEPTION WHEN OTHERS THEN v_err := SQLERRM; END;
+  IF v_err NOT LIKE '%PER_LINE_APPLICATION_SERVICE_CONTEXT_MISMATCH%' THEN
+    RAISE EXCEPTION 'P2_FAIL(job_application_service_identity): %', COALESCE(v_err, '<no error>');
+  END IF;
+
+  INSERT INTO public.invoices (
+    id, customer_id, job_id, application_service_id, season,
+    total_amount_cents, created_by
+  ) VALUES (
+    '83000000-0000-0000-0000-000000000099', v_a, v_job_service,
+    v_service, 2025, 0, v_admin
+  );
+  v_err := NULL;
+  BEGIN
+    PERFORM public.preview_field_app_invoice_split(
+      jsonb_build_array(jsonb_build_object('field_id', v_field_50, 'applied_acres', 1)),
+      '[]'::jsonb, v_service_other,
+      '83000000-0000-0000-0000-000000000099', NULL, '{}'::jsonb
+    );
+  EXCEPTION WHEN OTHERS THEN v_err := SQLERRM; END;
+  IF v_err NOT LIKE '%PER_LINE_APPLICATION_SERVICE_CONTEXT_MISMATCH%' THEN
+    RAISE EXCEPTION 'P2_FAIL(invoice_application_service_identity): %', COALESCE(v_err, '<no error>');
   END IF;
 
   -- A customer-supplied job chemical is always zero dollars, even when the
@@ -660,11 +701,11 @@ BEGIN
   );
   INSERT INTO public.field_app_billing_lines (
     id, billing_set_id, line_kind, price_basis, description,
-    source_quantity, source_acres, source_amount_cents
+    product_id, source_quantity, source_acres, source_amount_cents
   ) VALUES (
     '82000000-0000-0000-0000-000000000010',
     '80000000-0000-0000-0000-000000000010',
-    'chemical', 'same_price', 'Valid relational graph', 1, 1, 100
+    'chemical', 'same_price', 'Valid relational graph', v_product_tier, 1, 1, 100
   );
   INSERT INTO public.invoices (
     id, customer_id, invoice_group_id, job_id, total_amount_cents, created_by
@@ -674,12 +715,12 @@ BEGIN
     ('83000000-0000-0000-0000-000000000011', v_b,
      '81000000-0000-0000-0000-000000000010', v_job, 50, v_admin);
   INSERT INTO public.invoice_items (
-    id, invoice_id, quantity, acres, unit_price_cents, extended_cents
+    id, invoice_id, product_id, quantity, acres, unit_price_cents, extended_cents
   ) VALUES
     ('84000000-0000-0000-0000-000000000010',
-     '83000000-0000-0000-0000-000000000010', 0.5, 0.50, 100, 50),
+     '83000000-0000-0000-0000-000000000010', v_product_tier, 0.5, 0.50, 100, 50),
     ('84000000-0000-0000-0000-000000000011',
-     '83000000-0000-0000-0000-000000000011', 0.5, 0.50, 100, 50);
+     '83000000-0000-0000-0000-000000000011', v_product_tier, 0.5, 0.50, 100, 50);
   INSERT INTO public.invoice_line_shares (
     id, billing_line_id, invoice_item_id, customer_id, split_mode,
     split_micro_pct, allocated_quantity, allocated_acres,
@@ -697,6 +738,151 @@ BEGIN
      50000000, 0.5, 0.5, 100, 'job_snapshot', 'default', 100, 50,
      repeat('c', 64), repeat('d', 64), v_admin);
   SET CONSTRAINTS ALL IMMEDIATE;
+
+  -- A share cannot escape to a same-customer invoice outside its billing set's
+  -- group. Customer and cents still match, so only relational membership catches it.
+  INSERT INTO public.invoices (
+    id, customer_id, invoice_group_id, job_id, total_amount_cents, created_by
+  ) VALUES (
+    '83000000-0000-0000-0000-000000000012', v_a,
+    '81000000-0000-0000-0000-000000000012', v_job, 50, v_admin
+  );
+  INSERT INTO public.invoice_items (
+    id, invoice_id, product_id, quantity, acres, unit_price_cents, extended_cents
+  ) VALUES (
+    '84000000-0000-0000-0000-000000000013',
+    '83000000-0000-0000-0000-000000000012', v_product_tier, 0.5, 0.50, 100, 50
+  );
+  BEGIN
+    UPDATE public.invoice_line_shares
+       SET invoice_item_id = '84000000-0000-0000-0000-000000000013'
+     WHERE id = '85000000-0000-0000-0000-000000000010';
+    RAISE EXCEPTION 'P2_FAIL(share_invoice_set_mismatch): <no error>';
+  EXCEPTION WHEN check_violation THEN
+    GET STACKED DIAGNOSTICS v_err = MESSAGE_TEXT;
+    IF v_err NOT LIKE '%PER_LINE_SHARE_INVOICE_SET_MISMATCH%' THEN RAISE; END IF;
+  END;
+
+  -- The audit share and the persisted item are one identity. Quantity, rounded
+  -- invoice acres, effective price, and chemical product may not drift apart.
+  BEGIN
+    UPDATE public.invoice_items SET quantity = 0.4
+     WHERE id = '84000000-0000-0000-0000-000000000010';
+    RAISE EXCEPTION 'P2_FAIL(share_item_quantity_identity): <no error>';
+  EXCEPTION WHEN check_violation THEN
+    GET STACKED DIAGNOSTICS v_err = MESSAGE_TEXT;
+    IF v_err NOT LIKE '%PER_LINE_SHARE_ITEM_IDENTITY_MISMATCH%' THEN RAISE; END IF;
+  END;
+
+  -- An ungrouped billing set is still one billing event for one recipient, so
+  -- every line must persist on the same single child invoice.
+  BEGIN
+    SET CONSTRAINTS ALL DEFERRED;
+    INSERT INTO public.field_app_billing_sets (
+      id, job_id, primary_customer_id, created_by
+    ) VALUES (
+      '80000000-0000-0000-0000-000000000020', v_job, v_a, v_admin
+    );
+    INSERT INTO public.field_app_billing_lines (
+      id, billing_set_id, line_kind, price_basis, product_id, description,
+      source_quantity, source_acres, source_amount_cents
+    ) VALUES
+      ('82000000-0000-0000-0000-000000000020',
+       '80000000-0000-0000-0000-000000000020',
+       'chemical', 'same_price', v_product_tier, 'Ungrouped line A', 1, 1, 100),
+      ('82000000-0000-0000-0000-000000000021',
+       '80000000-0000-0000-0000-000000000020',
+       'chemical', 'same_price', v_product_tier, 'Ungrouped line B', 1, 1, 100);
+    INSERT INTO public.invoices (
+      id, customer_id, job_id, total_amount_cents, created_by
+    ) VALUES
+      ('83000000-0000-0000-0000-000000000020', v_a, v_job, 100, v_admin),
+      ('83000000-0000-0000-0000-000000000021', v_a, v_job, 100, v_admin);
+    INSERT INTO public.invoice_items (
+      id, invoice_id, product_id, quantity, acres, unit_price_cents, extended_cents
+    ) VALUES
+      ('84000000-0000-0000-0000-000000000020',
+       '83000000-0000-0000-0000-000000000020', v_product_tier, 1, 1, 100, 100),
+      ('84000000-0000-0000-0000-000000000021',
+       '83000000-0000-0000-0000-000000000021', v_product_tier, 1, 1, 100, 100);
+    INSERT INTO public.invoice_line_shares (
+      id, billing_line_id, invoice_item_id, customer_id, split_mode,
+      split_micro_pct, allocated_quantity, allocated_acres,
+      base_unit_price_cents, base_price_source, price_mode,
+      unit_price_cents, amount_cents, calculation_hash, vector_hash, created_by
+    ) VALUES
+      ('85000000-0000-0000-0000-000000000020',
+       '82000000-0000-0000-0000-000000000020',
+       '84000000-0000-0000-0000-000000000020', v_a, 'field_default',
+       100000000, 1, 1, 100, 'job_snapshot', 'default', 100, 100,
+       repeat('e', 64), repeat('f', 64), v_admin),
+      ('85000000-0000-0000-0000-000000000021',
+       '82000000-0000-0000-0000-000000000021',
+       '84000000-0000-0000-0000-000000000021', v_a, 'field_default',
+       100000000, 1, 1, 100, 'job_snapshot', 'default', 100, 100,
+       repeat('e', 64), repeat('f', 64), v_admin);
+    SET CONSTRAINTS ALL IMMEDIATE;
+    RAISE EXCEPTION 'P2_FAIL(ungrouped_multiple_invoices): <no error>';
+  EXCEPTION WHEN check_violation THEN
+    GET STACKED DIAGNOSTICS v_err = MESSAGE_TEXT;
+    IF v_err NOT LIKE '%PER_LINE_SHARE_INVOICE_SET_MISMATCH%' THEN RAISE; END IF;
+  END;
+
+  BEGIN
+    UPDATE public.invoice_items SET acres = 0.40
+     WHERE id = '84000000-0000-0000-0000-000000000010';
+    RAISE EXCEPTION 'P2_FAIL(share_item_acres_identity): <no error>';
+  EXCEPTION WHEN check_violation THEN
+    GET STACKED DIAGNOSTICS v_err = MESSAGE_TEXT;
+    IF v_err NOT LIKE '%PER_LINE_SHARE_ITEM_IDENTITY_MISMATCH%' THEN RAISE; END IF;
+  END;
+
+  BEGIN
+    UPDATE public.invoice_items SET unit_price_cents = 99
+     WHERE id = '84000000-0000-0000-0000-000000000010';
+    RAISE EXCEPTION 'P2_FAIL(share_item_price_identity): <no error>';
+  EXCEPTION WHEN check_violation THEN
+    GET STACKED DIAGNOSTICS v_err = MESSAGE_TEXT;
+    IF v_err NOT LIKE '%PER_LINE_SHARE_ITEM_IDENTITY_MISMATCH%' THEN RAISE; END IF;
+  END;
+
+  BEGIN
+    UPDATE public.invoice_items SET product_id = v_product_quote
+     WHERE id = '84000000-0000-0000-0000-000000000010';
+    RAISE EXCEPTION 'P2_FAIL(share_item_product_identity): <no error>';
+  EXCEPTION WHEN check_violation THEN
+    GET STACKED DIAGNOSTICS v_err = MESSAGE_TEXT;
+    IF v_err NOT LIKE '%PER_LINE_SHARE_ITEM_IDENTITY_MISMATCH%' THEN RAISE; END IF;
+  END;
+
+  -- Service logical lines bind to the frozen application service on every child
+  -- invoice; a different active service is still the wrong service.
+  BEGIN
+    SET CONSTRAINTS ALL DEFERRED;
+    UPDATE public.field_app_billing_lines
+       SET line_kind = 'service', product_id = NULL, application_service_id = v_service
+     WHERE id = '82000000-0000-0000-0000-000000000010';
+    UPDATE public.invoice_items
+       SET product_id = NULL
+     WHERE id IN (
+       '84000000-0000-0000-0000-000000000010',
+       '84000000-0000-0000-0000-000000000011'
+     );
+    UPDATE public.invoices
+       SET application_service_id = v_service
+     WHERE id IN (
+       '83000000-0000-0000-0000-000000000010',
+       '83000000-0000-0000-0000-000000000011'
+     );
+    SET CONSTRAINTS ALL IMMEDIATE;
+    UPDATE public.invoices
+       SET application_service_id = v_service_other
+     WHERE id = '83000000-0000-0000-0000-000000000010';
+    RAISE EXCEPTION 'P2_FAIL(share_item_service_identity): <no error>';
+  EXCEPTION WHEN check_violation THEN
+    GET STACKED DIAGNOSTICS v_err = MESSAGE_TEXT;
+    IF v_err NOT LIKE '%PER_LINE_SHARE_ITEM_IDENTITY_MISMATCH%' THEN RAISE; END IF;
+  END;
 
   BEGIN
     SET CONSTRAINTS ALL DEFERRED;
@@ -758,9 +944,14 @@ BEGIN
   END;
 
   BEGIN
+    SET CONSTRAINTS ALL DEFERRED;
     UPDATE public.invoice_line_shares
        SET allocated_quantity = 0.4
      WHERE id = '85000000-0000-0000-0000-000000000010';
+    UPDATE public.invoice_items
+       SET quantity = 0.4
+     WHERE id = '84000000-0000-0000-0000-000000000010';
+    SET CONSTRAINTS ALL IMMEDIATE;
     RAISE EXCEPTION 'P2_FAIL(source_quantity_mismatch): <no error>';
   EXCEPTION WHEN check_violation THEN
     GET STACKED DIAGNOSTICS v_err = MESSAGE_TEXT;
@@ -768,9 +959,14 @@ BEGIN
   END;
 
   BEGIN
+    SET CONSTRAINTS ALL DEFERRED;
     UPDATE public.invoice_line_shares
        SET allocated_acres = 0.4
      WHERE id = '85000000-0000-0000-0000-000000000010';
+    UPDATE public.invoice_items
+       SET acres = 0.40
+     WHERE id = '84000000-0000-0000-0000-000000000010';
+    SET CONSTRAINTS ALL IMMEDIATE;
     RAISE EXCEPTION 'P2_FAIL(source_acres_mismatch): <no error>';
   EXCEPTION WHEN check_violation THEN
     GET STACKED DIAGNOSTICS v_err = MESSAGE_TEXT;

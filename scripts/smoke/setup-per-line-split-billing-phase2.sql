@@ -97,7 +97,8 @@ CREATE TABLE public.customers (
 CREATE TABLE public.jobs (
   id uuid PRIMARY KEY,
   quote_section_id uuid,
-  season integer
+  season integer,
+  application_service_id uuid
 );
 CREATE TABLE public.fields (
   id uuid PRIMARY KEY,
@@ -192,6 +193,7 @@ CREATE TABLE public.invoices (
   customer_id uuid REFERENCES public.customers(id),
   invoice_group_id uuid,
   job_id uuid REFERENCES public.jobs(id),
+  application_service_id uuid REFERENCES public.application_services(id),
   season integer,
   status text NOT NULL DEFAULT 'draft',
   posted_at timestamptz,
@@ -203,6 +205,7 @@ CREATE TABLE public.invoices (
 CREATE TABLE public.invoice_items (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   invoice_id uuid NOT NULL REFERENCES public.invoices(id) ON DELETE CASCADE,
+  product_id uuid REFERENCES public.products(id),
   quantity numeric(12,4),
   acres numeric(12,2),
   unit_price_cents bigint,
