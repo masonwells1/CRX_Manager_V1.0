@@ -1847,7 +1847,7 @@ function stripSqlComments(body: string): string {
 /** Direct data-changing statements. Transaction/control keywords are excluded. */
 function functionBodyMutates(body: string): boolean {
   const sql = stripSqlComments(body);
-  return /\b(?:INSERT\s+INTO|UPDATE\s+(?:ONLY\s+)?(?:public\.)?[a-z_"]|DELETE\s+FROM|MERGE\s+INTO|TRUNCATE\s+(?:TABLE\s+)?)/i.test(sql);
+  return /\b(?:INSERT\s+INTO|UPDATE\s+(?!OF\b)(?:ONLY\s+)?(?:public\.)?[a-z_"]|DELETE\s+FROM|MERGE\s+INTO|TRUNCATE\s+(?:TABLE\s+)?)/i.test(sql);
 }
 
 function escapeRegExp(value: string): string {
@@ -1963,6 +1963,18 @@ describe('Idempotency coverage drift (generated-types driven, fail-closed)', () 
       'client_wrapper',
       'internal_writer',
     ]);
+  });
+
+  it('does not classify FOR UPDATE OF row locks as data mutations', () => {
+    expect(functionBodyMutates(`
+      BEGIN
+        PERFORM 1
+          FROM public.invoice_items ii
+         ORDER BY ii.id
+         FOR UPDATE OF ii;
+        RETURN NEW;
+      END
+    `)).toBe(false);
   });
 
   it('every generated direct or indirect mutating RPC is classified even when it omits p_idempotency_key', () => {

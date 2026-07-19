@@ -86,6 +86,8 @@ DECLARE
   v_inventory_unit text;
   v_product_form text;
   v_rate_unit text;
+  v_source_unit_size text;
+  v_source_cost_cents bigint;
   v_source_amount bigint;
   v_sort_order integer;
   v_customer_count integer;
@@ -173,6 +175,8 @@ BEGIN
     source_pricing_quantity numeric,
     source_quantity numeric(12,4),
     source_acres numeric(12,4),
+    source_unit_size text NOT NULL,
+    source_cost_cents bigint NOT NULL,
     source_unit_price_cents bigint,
     source_amount_cents bigint,
     sort_order integer NOT NULL,
@@ -523,6 +527,8 @@ BEGIN
   LOOP
     v_source_job_chemical_id := NULL;
     v_customer_supplied := false;
+    v_source_unit_size := NULL;
+    v_source_cost_cents := NULL;
     IF v_effective_job_id IS NOT NULL THEN
       SELECT
         jc.id,
@@ -552,6 +558,11 @@ BEGIN
       v_rate_unit := COALESCE(NULLIF(v_job_chem.rate_unit, ''), NULLIF(v_job_chem.unit, ''));
       v_inventory_unit := v_job_chem.inventory_unit;
       v_product_form := v_job_chem.product_form;
+      v_source_unit_size := NULLIF(v_job_chem.unit, '');
+      v_source_cost_cents := CASE
+        WHEN v_job_chem.customer_supplied THEN 0
+        ELSE v_job_chem.cost_per_unit_cents
+      END;
       -- The frozen job contract stores quantity AND cost/price in the same
       -- job_chemicals.unit. JobDetail's reconcileChemAutofillUnits converts all
       -- three together, and quote-to-job copies quote_items.price_unit into this
@@ -592,8 +603,9 @@ BEGIN
       v_rate_unit := COALESCE(NULLIF(v_chem->>'rate_unit', ''), NULLIF(v_chem->>'unit_size', ''));
 
       IF (v_chem->>'product_id') IS NOT NULL THEN
-        SELECT p.inventory_unit, p.product_form::text
-          INTO v_inventory_unit, v_product_form
+        SELECT p.inventory_unit, p.product_form::text,
+               COALESCE(round(p.current_cost * 100), 0)::bigint
+          INTO v_inventory_unit, v_product_form, v_source_cost_cents
           FROM public.products p
          WHERE p.id = (v_chem->>'product_id')::uuid;
         IF NOT FOUND THEN
@@ -602,7 +614,13 @@ BEGIN
       ELSE
         v_inventory_unit := v_rate_unit;
         v_product_form := NULL;
+        v_source_cost_cents := 0;
       END IF;
+
+      v_source_unit_size := COALESCE(
+        NULLIF(v_inventory_unit, ''),
+        NULLIF(v_rate_unit, '')
+      );
 
       IF v_rate IS NOT NULL THEN
         SELECT v_rate * sum(applied_acres) INTO v_source_qty_raw FROM pg_temp._plsb_fields;
@@ -626,19 +644,36 @@ BEGIN
       RAISE EXCEPTION 'FIELD_APP_UNIT_UNCONVERTIBLE: %', v_line_key
         USING ERRCODE = 'invalid_parameter_value';
     END IF;
+    IF v_source_unit_size IS NULL THEN
+      RAISE EXCEPTION 'PER_LINE_CHEMICAL_UNIT_REQUIRED: %', v_line_key
+        USING ERRCODE = 'invalid_parameter_value';
+    END IF;
+    IF v_source_cost_cents IS NULL OR v_source_cost_cents < 0 THEN
+      RAISE EXCEPTION 'PER_LINE_CHEMICAL_COST_REQUIRED: %', v_line_key
+        USING ERRCODE = 'check_violation';
+    END IF;
+    -- Keep the diagnostic source_input consistent with the explicit authoritative
+    -- writer fields; a browser-supplied cost/unit must never survive alongside a
+    -- different server-resolved COGS basis.
+    v_chem := v_chem || jsonb_build_object(
+      'unit_size', v_source_unit_size,
+      'cost_cents', v_source_cost_cents
+    );
     v_source_qty := round(v_source_qty_raw, 4);
     SELECT round(sum(applied_acres), 4) INTO v_source_acres FROM pg_temp._plsb_fields;
 
     INSERT INTO pg_temp._plsb_lines (
       line_key, line_kind, source_job_chemical_id, customer_supplied,
       product_id, description, source_pricing_quantity,
-      source_quantity, source_acres, sort_order, source_input
+      source_quantity, source_acres, source_unit_size, source_cost_cents,
+      sort_order, source_input
     ) VALUES (
       v_line_key, 'chemical',
       v_source_job_chemical_id, v_customer_supplied,
       (v_chem->>'product_id')::uuid,
       COALESCE(NULLIF(v_chem->>'description', ''), 'Chemical'),
-      v_source_qty_raw, v_source_qty, v_source_acres, v_sort_order, v_chem
+      v_source_qty_raw, v_source_qty, v_source_acres,
+      v_source_unit_size, v_source_cost_cents, v_sort_order, v_chem
     );
   END LOOP;
 
@@ -647,11 +682,13 @@ BEGIN
     v_source_acres := round(v_source_acres_raw, 4);
     INSERT INTO pg_temp._plsb_lines (
       line_key, line_kind, application_service_id, description,
-      source_pricing_quantity, source_quantity, source_acres, sort_order, source_input
+      source_pricing_quantity, source_quantity, source_acres,
+      source_unit_size, source_cost_cents, sort_order, source_input
     ) VALUES (
       'service:' || v_effective_application_service_id::text,
       'service', v_effective_application_service_id, v_app_service.name,
-      v_source_acres_raw, v_source_acres, v_source_acres, 1000000,
+      v_source_acres_raw, v_source_acres, v_source_acres,
+      'acre', v_app_service.cost_per_acre_cents, 1000000,
       jsonb_build_object(
         'application_service_id', v_effective_application_service_id,
         'cost_per_acre_cents', v_app_service.cost_per_acre_cents,
@@ -674,11 +711,12 @@ BEGIN
     v_source_amount := (v_flat->>'source_amount_cents')::bigint;
     INSERT INTO pg_temp._plsb_lines (
       line_key, line_kind, price_basis, description, source_amount_cents,
-      sort_order, source_input
+      source_unit_size, source_cost_cents, sort_order, source_input
     ) VALUES (
       v_line_key, 'flat_fee', 'flat_fee',
       COALESCE(NULLIF(v_flat->>'description', ''), 'Flat fee'),
-      v_source_amount, v_sort_order, v_flat
+      v_source_amount, 'fee', 0, v_sort_order,
+      v_flat || jsonb_build_object('unit_size', 'fee', 'cost_cents', 0)
     );
   END LOOP;
 
@@ -1108,6 +1146,8 @@ BEGIN
         || COALESCE(l.source_pricing_quantity::text, '') || '|'
         || COALESCE(l.source_quantity::text, '') || '|'
         || COALESCE(l.source_acres::text, '') || '|'
+        || l.source_unit_size || '|'
+        || l.source_cost_cents::text || '|'
         || COALESCE(l.source_unit_price_cents::text, '') || '|'
         || COALESCE(l.source_amount_cents::text, '') || '|'
         || string_agg(
@@ -1128,6 +1168,8 @@ BEGIN
       l.source_pricing_quantity,
       l.source_quantity,
       l.source_acres,
+      l.source_unit_size,
+      l.source_cost_cents,
       l.source_unit_price_cents,
       l.source_amount_cents
   )
@@ -1152,6 +1194,8 @@ BEGIN
         'description', l.description,
         'source_quantity', l.source_quantity,
         'source_acres', l.source_acres,
+        'source_unit_size', l.source_unit_size,
+        'source_cost_cents', l.source_cost_cents,
         'source_unit_price_cents', l.source_unit_price_cents,
         'source_amount_cents', l.source_amount_cents,
         'sort_order', l.sort_order,

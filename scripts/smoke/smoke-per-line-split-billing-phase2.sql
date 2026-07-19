@@ -97,11 +97,11 @@ BEGIN
   VALUES (v_job, v_field_job, v_c, 100, true);
 
   INSERT INTO public.products
-    (id, product_name, inventory_unit, product_form, tier1_price, tier2_price, tier3_price)
+    (id, product_name, inventory_unit, product_form, current_cost, tier1_price, tier2_price, tier3_price)
   VALUES
-    (v_product_quote, 'Quote Product', 'unit', 'liquid', 1.00, 2.00, 3.00),
-    (v_product_tier, 'Tier Product', 'unit', 'liquid', 1.00, 2.00, 3.00),
-    (v_product_gallon, 'Gallon Product', 'gl', 'liquid', 32.10, 32.10, 32.10);
+    (v_product_quote, 'Quote Product', 'unit', 'liquid', 0.50, 1.00, 2.00, 3.00),
+    (v_product_tier, 'Tier Product', 'unit', 'liquid', 0.50, 1.00, 2.00, 3.00),
+    (v_product_gallon, 'Gallon Product', 'gl', 'liquid', 0.10, 32.10, 32.10, 32.10);
   INSERT INTO public.job_chemicals (
     id, job_id, product_id, quantity, unit, rate_per_acre, rate_unit,
     cost_per_unit_cents, price_per_unit_cents, sort_order, customer_supplied
@@ -242,12 +242,16 @@ BEGIN
      OR v_plan#>>'{billing_lines,0,source_job_chemical_id}' <> v_job_chem_quote_a::text
      OR v_plan#>>'{billing_lines,0,product_id}' <> v_product_quote::text
      OR v_plan#>>'{billing_lines,0,source_quantity}' <> '2.0000'
+     OR v_plan#>>'{billing_lines,0,source_unit_size}' <> 'unit'
+     OR v_plan#>>'{billing_lines,0,source_cost_cents}' <> '50'
      OR v_plan#>>'{billing_lines,0,source_unit_price_cents}' <> '150'
      OR v_plan#>>'{billing_lines,0,source_amount_cents}' <> '300'
      OR v_plan#>>'{billing_lines,0,source_input,cost_cents}' <> '50'
      OR v_plan#>>'{billing_lines,0,shares,0,base_price_source}' <> 'job_snapshot'
      OR v_plan#>>'{billing_lines,1,source_job_chemical_id}' <> v_job_chem_quote_b::text
      OR v_plan#>>'{billing_lines,1,source_quantity}' <> '3.0000'
+     OR v_plan#>>'{billing_lines,1,source_unit_size}' <> 'unit'
+     OR v_plan#>>'{billing_lines,1,source_cost_cents}' <> '60'
      OR v_plan#>>'{billing_lines,1,source_unit_price_cents}' <> '275'
      OR v_plan#>>'{billing_lines,1,source_amount_cents}' <> '825'
      OR v_plan#>>'{billing_lines,1,source_input,cost_cents}' <> '60'
@@ -261,10 +265,15 @@ BEGIN
     jsonb_build_array(jsonb_build_object('field_id', v_field_50, 'applied_acres', 1)),
     jsonb_build_array(jsonb_build_object(
       'line_key', 'chemical:no-job-quote', 'sort_order', 0, 'product_id', v_product_quote,
-      'description', 'No job quote', 'rate_per_acre', 1, 'rate_unit', 'unit'
+      'description', 'No job quote', 'rate_per_acre', 1, 'rate_unit', 'unit',
+      'unit_size', 'tampered-browser-unit', 'cost_cents', 99999
     )), NULL, NULL, NULL, '{}'::jsonb
   );
   IF v_plan#>>'{billing_lines,0,shares,0,base_unit_price_cents}' <> '100'
+     OR v_plan#>>'{billing_lines,0,source_unit_size}' <> 'unit'
+     OR v_plan#>>'{billing_lines,0,source_cost_cents}' <> '50'
+     OR v_plan#>>'{billing_lines,0,source_input,unit_size}' <> 'unit'
+     OR v_plan#>>'{billing_lines,0,source_input,cost_cents}' <> '50'
      OR v_plan#>>'{billing_lines,0,shares,0,base_price_source}' <> 'tier'
      OR v_plan#>>'{billing_lines,0,shares,1,base_unit_price_cents}' <> '200'
      OR v_plan#>>'{billing_lines,0,shares,1,base_price_source}' <> 'tier'
@@ -368,6 +377,8 @@ BEGIN
      OR v_shares#>>'{1,allocated_acres}' <> '0.0000'
      OR v_shares#>>'{1,base_unit_price_cents}' <> '35'
      OR v_shares#>>'{1,base_price_source}' <> 'customer_application_rates'
+     OR v_plan#>>'{billing_lines,0,source_unit_size}' <> 'acre'
+     OR v_plan#>>'{billing_lines,0,source_cost_cents}' <> '4'
      OR v_plan#>>'{billing_lines,0,source_input,cost_per_acre_cents}' <> '4'
      OR v_plan#>>'{billing_lines,0,source_input,season}' <> '2025' THEN
     RAISE EXCEPTION 'P2_FAIL(service_100_0_job_season): %', v_plan;
@@ -384,6 +395,8 @@ BEGIN
   );
   IF v_plan#>>'{billing_lines,0,shares,0,amount_cents}' <> '1'
      OR v_plan#>>'{billing_lines,0,shares,1,amount_cents}' <> '0'
+     OR v_plan#>>'{billing_lines,0,source_unit_size}' <> 'fee'
+     OR v_plan#>>'{billing_lines,0,source_cost_cents}' <> '0'
      OR v_plan->>'grand_total_cents' <> '1' THEN
     RAISE EXCEPTION 'P2_FAIL(flat_fee_one_cent): %', v_plan;
   END IF;
@@ -486,6 +499,8 @@ BEGIN
     )), NULL, NULL, v_job_customer_supplied, '{}'::jsonb
   );
   IF v_plan#>>'{billing_lines,0,source_quantity}' <> '4.0000'
+     OR v_plan#>>'{billing_lines,0,source_unit_size}' <> 'unit'
+     OR v_plan#>>'{billing_lines,0,source_cost_cents}' <> '0'
      OR v_plan#>>'{billing_lines,0,source_unit_price_cents}' <> '0'
      OR v_plan#>>'{billing_lines,0,source_amount_cents}' <> '0'
      OR v_plan#>>'{billing_lines,0,source_input,cost_cents}' <> '0'
@@ -672,6 +687,27 @@ BEGIN
       );
   END IF;
 
+  -- The durable source line and immutable post history must carry every
+  -- job-chemical/COGS field that the calculator freezes for the Phase 3 writer.
+  IF (
+    SELECT count(*)
+      FROM information_schema.columns
+     WHERE table_schema = 'public'
+       AND (
+         (table_name = 'field_app_billing_lines'
+          AND column_name IN ('source_job_chemical_id', 'source_unit_size', 'source_cost_cents'))
+         OR
+         (table_name = 'invoice_line_share_post_snapshots'
+          AND column_name IN (
+            'invoice_total_cost_cents',
+            'source_job_chemical_id', 'source_unit_size', 'source_cost_cents',
+            'item_unit_size', 'item_cost_cents'
+          ))
+       )
+  ) <> 9 THEN
+    RAISE EXCEPTION 'P2_FAIL(durable_source_cost_identity_columns): required audit columns are missing';
+  END IF;
+
   -- A share cannot claim customer A while pointing at customer B's invoice item.
   -- This vector is arithmetically 100%, so Phase 1 alone accepted it; the
   -- relational follow-up migration must fail it closed.
@@ -684,11 +720,13 @@ BEGIN
     );
     INSERT INTO public.field_app_billing_lines (
       id, billing_set_id, line_kind, price_basis, description,
-      source_quantity, source_amount_cents
+      product_id, source_job_chemical_id, source_quantity, source_amount_cents,
+      source_unit_size, source_cost_cents
     ) VALUES (
       '82000000-0000-0000-0000-000000000001',
       '80000000-0000-0000-0000-000000000001',
-      'chemical', 'same_price', 'Invalid customer relationship', 1, 100
+      'chemical', 'same_price', 'Invalid customer relationship',
+      v_product_tier, v_job_chem, 1, 100, 'unit', 50
     );
     INSERT INTO public.invoices (
       id, customer_id, invoice_group_id, job_id, total_amount_cents, created_by
@@ -733,26 +771,32 @@ BEGIN
   );
   INSERT INTO public.field_app_billing_lines (
     id, billing_set_id, line_kind, price_basis, description,
-    product_id, source_quantity, source_acres, source_amount_cents
+    product_id, source_job_chemical_id, source_quantity, source_acres,
+    source_amount_cents, source_unit_size, source_cost_cents
   ) VALUES (
     '82000000-0000-0000-0000-000000000010',
     '80000000-0000-0000-0000-000000000010',
-    'chemical', 'same_price', 'Valid relational graph', v_product_tier, 1, 1, 100
+    'chemical', 'same_price', 'Valid relational graph', v_product_tier,
+    v_job_chem, 1, 1, 100, 'unit', 50
   );
   INSERT INTO public.invoices (
-    id, customer_id, invoice_group_id, job_id, total_amount_cents, created_by
+    id, customer_id, invoice_group_id, job_id, total_amount_cents,
+    total_cost_cents, created_by
   ) VALUES
     ('83000000-0000-0000-0000-000000000010', v_a,
-     '81000000-0000-0000-0000-000000000010', v_job, 50, v_admin),
+     '81000000-0000-0000-0000-000000000010', v_job, 50, 25, v_admin),
     ('83000000-0000-0000-0000-000000000011', v_b,
-     '81000000-0000-0000-0000-000000000010', v_job, 50, v_admin);
+     '81000000-0000-0000-0000-000000000010', v_job, 50, 25, v_admin);
   INSERT INTO public.invoice_items (
-    id, invoice_id, product_id, quantity, acres, unit_price_cents, extended_cents
+    id, invoice_id, product_id, quantity, acres, unit_price_cents,
+    extended_cents, unit_size, cost_cents
   ) VALUES
     ('84000000-0000-0000-0000-000000000010',
-     '83000000-0000-0000-0000-000000000010', v_product_tier, 0.5, 0.50, 100, 50),
+     '83000000-0000-0000-0000-000000000010', v_product_tier,
+     0.5, 0.50, 100, 50, 'unit', 50),
     ('84000000-0000-0000-0000-000000000011',
-     '83000000-0000-0000-0000-000000000011', v_product_tier, 0.5, 0.50, 100, 50);
+     '83000000-0000-0000-0000-000000000011', v_product_tier,
+     0.5, 0.50, 100, 50, 'unit', 50);
   INSERT INTO public.invoice_line_shares (
     id, billing_line_id, invoice_item_id, customer_id, split_mode,
     split_micro_pct, allocated_quantity, allocated_acres,
@@ -811,32 +855,38 @@ BEGIN
   BEGIN
     SET CONSTRAINTS ALL DEFERRED;
     INSERT INTO public.field_app_billing_sets (
-      id, job_id, primary_customer_id, created_by
+      id, primary_customer_id, created_by
     ) VALUES (
-      '80000000-0000-0000-0000-000000000020', v_job, v_a, v_admin
+      '80000000-0000-0000-0000-000000000020', v_a, v_admin
     );
     INSERT INTO public.field_app_billing_lines (
       id, billing_set_id, line_kind, price_basis, product_id, description,
-      source_quantity, source_acres, source_amount_cents
+      source_quantity, source_acres, source_amount_cents,
+      source_unit_size, source_cost_cents
     ) VALUES
       ('82000000-0000-0000-0000-000000000020',
        '80000000-0000-0000-0000-000000000020',
-       'chemical', 'same_price', v_product_tier, 'Ungrouped line A', 1, 1, 100),
+       'chemical', 'same_price', v_product_tier, 'Ungrouped line A',
+       1, 1, 100, 'unit', 50),
       ('82000000-0000-0000-0000-000000000021',
        '80000000-0000-0000-0000-000000000020',
-       'chemical', 'same_price', v_product_tier, 'Ungrouped line B', 1, 1, 100);
+       'chemical', 'same_price', v_product_tier, 'Ungrouped line B',
+       1, 1, 100, 'unit', 50);
     INSERT INTO public.invoices (
-      id, customer_id, job_id, total_amount_cents, created_by
+      id, customer_id, job_id, total_amount_cents, total_cost_cents, created_by
     ) VALUES
-      ('83000000-0000-0000-0000-000000000020', v_a, v_job, 100, v_admin),
-      ('83000000-0000-0000-0000-000000000021', v_a, v_job, 100, v_admin);
+      ('83000000-0000-0000-0000-000000000020', v_a, v_job, 100, 50, v_admin),
+      ('83000000-0000-0000-0000-000000000021', v_a, v_job, 100, 50, v_admin);
     INSERT INTO public.invoice_items (
-      id, invoice_id, product_id, quantity, acres, unit_price_cents, extended_cents
+      id, invoice_id, product_id, quantity, acres, unit_price_cents,
+      extended_cents, unit_size, cost_cents
     ) VALUES
       ('84000000-0000-0000-0000-000000000020',
-       '83000000-0000-0000-0000-000000000020', v_product_tier, 1, 1, 100, 100),
+       '83000000-0000-0000-0000-000000000020', v_product_tier,
+       1, 1, 100, 100, 'unit', 50),
       ('84000000-0000-0000-0000-000000000021',
-       '83000000-0000-0000-0000-000000000021', v_product_tier, 1, 1, 100, 100);
+       '83000000-0000-0000-0000-000000000021', v_product_tier,
+       1, 1, 100, 100, 'unit', 50);
     INSERT INTO public.invoice_line_shares (
       id, billing_line_id, invoice_item_id, customer_id, split_mode,
       split_micro_pct, allocated_quantity, allocated_acres,
@@ -892,16 +942,24 @@ BEGIN
   BEGIN
     SET CONSTRAINTS ALL DEFERRED;
     UPDATE public.field_app_billing_lines
-       SET line_kind = 'service', product_id = NULL, application_service_id = v_service
+       SET line_kind = 'service',
+           product_id = NULL,
+           application_service_id = v_service,
+           source_job_chemical_id = NULL,
+           source_unit_size = 'acre',
+           source_cost_cents = 4
      WHERE id = '82000000-0000-0000-0000-000000000010';
     UPDATE public.invoice_items
-       SET product_id = NULL
+       SET product_id = NULL,
+           unit_size = 'acre',
+           cost_cents = 4
      WHERE id IN (
        '84000000-0000-0000-0000-000000000010',
        '84000000-0000-0000-0000-000000000011'
      );
     UPDATE public.invoices
-       SET application_service_id = v_service
+       SET application_service_id = v_service,
+           total_cost_cents = 2
      WHERE id IN (
        '83000000-0000-0000-0000-000000000010',
        '83000000-0000-0000-0000-000000000011'
@@ -924,6 +982,8 @@ BEGIN
      WHERE id = '84000000-0000-0000-0000-000000000011';
     UPDATE public.invoices SET total_amount_cents = 0
      WHERE id = '83000000-0000-0000-0000-000000000011';
+    UPDATE public.invoices SET total_cost_cents = 0
+     WHERE id = '83000000-0000-0000-0000-000000000011';
     UPDATE public.invoice_line_shares
        SET split_micro_pct = 100000000,
            allocated_quantity = 1,
@@ -934,6 +994,8 @@ BEGIN
        SET quantity = 1, acres = 1, extended_cents = 100
      WHERE id = '84000000-0000-0000-0000-000000000010';
     UPDATE public.invoices SET total_amount_cents = 100
+     WHERE id = '83000000-0000-0000-0000-000000000010';
+    UPDATE public.invoices SET total_cost_cents = 4
      WHERE id = '83000000-0000-0000-0000-000000000010';
     SET CONSTRAINTS ALL IMMEDIATE;
     RAISE EXCEPTION 'P2_FAIL(group_customer_set_mismatch): <no error>';
@@ -1030,6 +1092,207 @@ BEGIN
     GET STACKED DIAGNOSTICS v_err = MESSAGE_TEXT;
     IF v_err NOT LIKE '%PER_LINE_INVOICE_HEADER_TOTAL_MISMATCH%' THEN RAISE; END IF;
   END;
+
+  -- Draft rewrites may be atomic, but every material item field must reconcile
+  -- to the durable source before the transaction can commit.
+  BEGIN
+    UPDATE public.invoice_items SET unit_size = 'wrong-unit'
+     WHERE id = '84000000-0000-0000-0000-000000000010';
+    SET CONSTRAINTS ALL IMMEDIATE;
+    RAISE EXCEPTION 'P2_FAIL(share_item_unit_identity): <no error>';
+  EXCEPTION WHEN check_violation THEN
+    GET STACKED DIAGNOSTICS v_err = MESSAGE_TEXT;
+    IF v_err NOT LIKE '%PER_LINE_SHARE_ITEM_IDENTITY_MISMATCH%' THEN RAISE; END IF;
+  END;
+
+  BEGIN
+    UPDATE public.invoice_items SET cost_cents = 49
+     WHERE id = '84000000-0000-0000-0000-000000000010';
+    SET CONSTRAINTS ALL IMMEDIATE;
+    RAISE EXCEPTION 'P2_FAIL(share_item_cost_identity): <no error>';
+  EXCEPTION WHEN check_violation THEN
+    GET STACKED DIAGNOSTICS v_err = MESSAGE_TEXT;
+    IF v_err NOT LIKE '%PER_LINE_SHARE_ITEM_IDENTITY_MISMATCH%' THEN RAISE; END IF;
+  END;
+
+  BEGIN
+    UPDATE public.invoices SET total_cost_cents = 24
+     WHERE id = '83000000-0000-0000-0000-000000000010';
+    SET CONSTRAINTS ALL IMMEDIATE;
+    RAISE EXCEPTION 'P2_FAIL(invoice_header_cost_identity): <no error>';
+  EXCEPTION WHEN check_violation THEN
+    GET STACKED DIAGNOSTICS v_err = MESSAGE_TEXT;
+    IF v_err NOT LIKE '%PER_LINE_INVOICE_HEADER_COST_MISMATCH%' THEN RAISE; END IF;
+  END;
+
+  BEGIN
+    UPDATE public.field_app_billing_lines
+       SET source_job_chemical_id = v_job_chem_subset
+     WHERE id = '82000000-0000-0000-0000-000000000010';
+    SET CONSTRAINTS ALL IMMEDIATE;
+    RAISE EXCEPTION 'P2_FAIL(source_job_chemical_identity): <no error>';
+  EXCEPTION WHEN check_violation THEN
+    GET STACKED DIAGNOSTICS v_err = MESSAGE_TEXT;
+    IF v_err NOT LIKE '%PER_LINE_SOURCE_JOB_CHEMICAL_MISMATCH%' THEN RAISE; END IF;
+  END;
+
+  -- A valid post captures source identity/unit/COGS and item unit/COGS. Those
+  -- fields and the logical source row then freeze until a sanctioned unpost.
+  UPDATE public.invoices
+     SET status = 'posted', posted_at = clock_timestamp()
+   WHERE id = '83000000-0000-0000-0000-000000000010';
+
+  IF NOT EXISTS (
+    SELECT 1
+      FROM public.invoice_line_share_post_snapshots h
+     WHERE h.invoice_id = '83000000-0000-0000-0000-000000000010'
+       AND h.source_job_chemical_id = v_job_chem
+       AND h.source_unit_size = 'unit'
+       AND h.source_cost_cents = 50
+       AND h.item_unit_size = 'unit'
+       AND h.item_cost_cents = 50
+       AND h.invoice_total_cost_cents = 25
+  ) THEN
+    RAISE EXCEPTION 'P2_FAIL(post_snapshot_source_cost_identity): audit values missing';
+  END IF;
+
+  BEGIN
+    UPDATE public.invoice_items SET cost_cents = 49
+     WHERE id = '84000000-0000-0000-0000-000000000010';
+    RAISE EXCEPTION 'P2_FAIL(posted_item_cost_freeze): <no error>';
+  EXCEPTION WHEN raise_exception THEN
+    GET STACKED DIAGNOSTICS v_err = MESSAGE_TEXT;
+    IF v_err NOT LIKE '%material split fields are frozen%' THEN RAISE; END IF;
+  END;
+
+  BEGIN
+    UPDATE public.invoice_items SET unit_size = 'wrong-unit'
+     WHERE id = '84000000-0000-0000-0000-000000000010';
+    RAISE EXCEPTION 'P2_FAIL(posted_item_unit_freeze): <no error>';
+  EXCEPTION WHEN raise_exception THEN
+    GET STACKED DIAGNOSTICS v_err = MESSAGE_TEXT;
+    IF v_err NOT LIKE '%material split fields are frozen%' THEN RAISE; END IF;
+  END;
+
+  BEGIN
+    UPDATE public.field_app_billing_lines SET description = 'Relabeled after post'
+     WHERE id = '82000000-0000-0000-0000-000000000010';
+    RAISE EXCEPTION 'P2_FAIL(posted_source_line_freeze): <no error>';
+  EXCEPTION WHEN raise_exception THEN
+    GET STACKED DIAGNOSTICS v_err = MESSAGE_TEXT;
+    IF v_err NOT LIKE '%field_app_billing_line%frozen%' THEN RAISE; END IF;
+  END;
+
+  UPDATE public.invoices
+     SET status = 'unposted', posted_at = NULL
+   WHERE id = '83000000-0000-0000-0000-000000000010';
+
+  -- A $0 split child with the default sendable disposition must be rejected at
+  -- the synchronous post boundary, even while deferred checks are postponed.
+  BEGIN
+    SET CONSTRAINTS ALL DEFERRED;
+    INSERT INTO public.field_app_billing_sets (
+      id, primary_customer_id, created_by
+    ) VALUES (
+      '80000000-0000-0000-0000-000000000030', v_a, v_admin
+    );
+    INSERT INTO public.field_app_billing_lines (
+      id, billing_set_id, line_kind, price_basis, description,
+      source_amount_cents, source_unit_size, source_cost_cents
+    ) VALUES (
+      '82000000-0000-0000-0000-000000000030',
+      '80000000-0000-0000-0000-000000000030',
+      'flat_fee', 'flat_fee', 'Zero fee', 0, 'fee', 0
+    );
+    INSERT INTO public.invoices (
+      id, customer_id, total_amount_cents, total_cost_cents, created_by
+    ) VALUES (
+      '83000000-0000-0000-0000-000000000030', v_a, 0, 0, v_admin
+    );
+    INSERT INTO public.invoice_items (
+      id, invoice_id, quantity, unit_price_cents, extended_cents,
+      unit_size, cost_cents
+    ) VALUES (
+      '84000000-0000-0000-0000-000000000030',
+      '83000000-0000-0000-0000-000000000030', 1, 0, 0, 'fee', 0
+    );
+    INSERT INTO public.invoice_line_shares (
+      id, billing_line_id, invoice_item_id, customer_id, split_mode,
+      split_micro_pct, allocated_quantity, base_unit_price_cents,
+      base_price_source, price_mode, unit_price_cents, amount_cents,
+      calculation_hash, vector_hash, created_by
+    ) VALUES (
+      '85000000-0000-0000-0000-000000000030',
+      '82000000-0000-0000-0000-000000000030',
+      '84000000-0000-0000-0000-000000000030', v_a, 'field_default',
+      100000000, 1, 0, 'flat_fee', 'default', 0, 0,
+      repeat('1', 64), repeat('2', 64), v_admin
+    );
+    UPDATE public.invoices
+       SET status = 'posted', posted_at = clock_timestamp()
+     WHERE id = '83000000-0000-0000-0000-000000000030';
+    RAISE EXCEPTION 'P2_FAIL(zero_sendable_pre_post): <no error>';
+  EXCEPTION WHEN check_violation THEN
+    GET STACKED DIAGNOSTICS v_err = MESSAGE_TEXT;
+    IF v_err NOT LIKE '%PER_LINE_INVOICE_SEND_DISPOSITION_MISMATCH%' THEN RAISE; END IF;
+  END;
+
+  -- The server-authorized suppressed form remains a normal posted $0 invoice
+  -- and records that disposition in immutable history.
+  SET CONSTRAINTS ALL DEFERRED;
+  INSERT INTO public.field_app_billing_sets (
+    id, primary_customer_id, created_by
+  ) VALUES (
+    '80000000-0000-0000-0000-000000000031', v_a, v_admin
+  );
+  INSERT INTO public.field_app_billing_lines (
+    id, billing_set_id, line_kind, price_basis, description,
+    source_amount_cents, source_unit_size, source_cost_cents
+  ) VALUES (
+    '82000000-0000-0000-0000-000000000031',
+    '80000000-0000-0000-0000-000000000031',
+    'flat_fee', 'flat_fee', 'Suppressed zero fee', 0, 'fee', 0
+  );
+  INSERT INTO public.invoices (
+    id, customer_id, total_amount_cents, total_cost_cents,
+    send_disposition, created_by
+  ) VALUES (
+    '83000000-0000-0000-0000-000000000031', v_a, 0, 0,
+    'suppressed_zero_total', v_admin
+  );
+  INSERT INTO public.invoice_items (
+    id, invoice_id, quantity, unit_price_cents, extended_cents,
+    unit_size, cost_cents
+  ) VALUES (
+    '84000000-0000-0000-0000-000000000031',
+    '83000000-0000-0000-0000-000000000031', 1, 0, 0, 'fee', 0
+  );
+  INSERT INTO public.invoice_line_shares (
+    id, billing_line_id, invoice_item_id, customer_id, split_mode,
+    split_micro_pct, allocated_quantity, base_unit_price_cents,
+    base_price_source, price_mode, unit_price_cents, amount_cents,
+    calculation_hash, vector_hash, created_by
+  ) VALUES (
+    '85000000-0000-0000-0000-000000000031',
+    '82000000-0000-0000-0000-000000000031',
+    '84000000-0000-0000-0000-000000000031', v_a, 'field_default',
+    100000000, 1, 0, 'flat_fee', 'default', 0, 0,
+    repeat('3', 64), repeat('4', 64), v_admin
+  );
+  SET CONSTRAINTS ALL IMMEDIATE;
+  UPDATE public.invoices
+     SET status = 'posted', posted_at = clock_timestamp()
+   WHERE id = '83000000-0000-0000-0000-000000000031';
+  IF NOT EXISTS (
+    SELECT 1
+      FROM public.invoice_line_share_post_snapshots h
+     WHERE h.invoice_id = '83000000-0000-0000-0000-000000000031'
+       AND h.send_disposition = 'suppressed_zero_total'
+       AND h.invoice_total_amount_cents = 0
+       AND h.invoice_total_cost_cents = 0
+  ) THEN
+    RAISE EXCEPTION 'P2_FAIL(zero_suppressed_snapshot): immutable record missing';
+  END IF;
 
   -- Applicators cannot read private prices through the public SECURITY DEFINER preview.
   PERFORM set_config('request.jwt.claim.sub', v_applicator::text, true);

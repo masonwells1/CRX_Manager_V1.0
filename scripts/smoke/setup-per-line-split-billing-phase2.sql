@@ -139,6 +139,7 @@ CREATE TABLE public.products (
   product_name text NOT NULL,
   inventory_unit text,
   product_form text,
+  current_cost numeric,
   tier1_price numeric,
   tier2_price numeric,
   tier3_price numeric
@@ -198,6 +199,7 @@ CREATE TABLE public.invoices (
   status text NOT NULL DEFAULT 'draft',
   posted_at timestamptz,
   total_amount_cents bigint NOT NULL DEFAULT 0,
+  total_cost_cents bigint DEFAULT 0,
   deleted_at timestamptz,
   created_by uuid REFERENCES public.profiles(id),
   salesman_id uuid REFERENCES public.profiles(id)
@@ -209,7 +211,9 @@ CREATE TABLE public.invoice_items (
   quantity numeric(12,4),
   acres numeric(12,2),
   unit_price_cents bigint,
-  extended_cents bigint
+  extended_cents bigint,
+  cost_cents bigint NOT NULL DEFAULT 0,
+  unit_size text
 );
 
 -- Exact signature/body sentinel for proving the feature-OFF wrapper delegates

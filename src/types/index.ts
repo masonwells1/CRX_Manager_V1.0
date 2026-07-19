@@ -3412,9 +3412,12 @@ export interface FieldAppBillingLine {
   price_basis: 'same_price' | 'per_person_price' | 'flat_fee';
   product_id: string | null;
   application_service_id: string | null;
+  source_job_chemical_id: string | null;
   description: string;
   source_quantity: number | null;
   source_acres: number | null;
+  source_unit_size: string;
+  source_cost_cents: number;
   source_unit_price_cents: number | null; // null on per_person_price (no single price)
   source_amount_cents: number | null;     // canonical unsplit total; null on per_person_price
   sort_order: number;
@@ -3460,6 +3463,7 @@ export interface InvoiceLineSharePostSnapshot {
   posted_at: string;
   post_status: 'posted' | 'paid' | 'overdue';
   invoice_total_amount_cents: number;
+  invoice_total_cost_cents: number;
   send_disposition: 'sendable' | 'suppressed_zero_total';
   source_share_id: string;
   billing_set_id: string;
@@ -3471,9 +3475,12 @@ export interface InvoiceLineSharePostSnapshot {
   price_basis: 'same_price' | 'per_person_price' | 'flat_fee';
   product_id: string | null;
   application_service_id: string | null;
+  source_job_chemical_id: string | null;
   description: string;
   source_quantity: number | null;
   source_acres: number | null;
+  source_unit_size: string;
+  source_cost_cents: number;
   source_unit_price_cents: number | null;
   source_amount_cents: number | null;
   sort_order: number;
@@ -3494,6 +3501,8 @@ export interface InvoiceLineSharePostSnapshot {
   item_acres: number | null;
   item_unit_price_cents: number;
   item_extended_cents: number;
+  item_unit_size: string;
+  item_cost_cents: number;
   source_share_created_by: string;
   source_share_created_at: string;
   captured_by: string | null;
