@@ -126,14 +126,18 @@ parent cascades cannot erase posted share history;
 that authenticated has SELECT only and cannot TRUNCATE; that one non-null invoice group
 cannot acquire competing billing-set parents; that applicators cannot read unrelated
 billing sets/source prices; that a sales rep sees only sets/lines they own or are assigned
-through a child invoice; that split and price overrides reject blank audit reasons;
+through a child invoice; that a rep loses working-share and posting-history visibility
+immediately when the active sales role is removed; that split and price overrides reject blank audit reasons;
 that browser roles cannot change the server-controlled send disposition;
 that only a zero-total invoice may be suppressed while the server's valid zero-total
-path still works; that unpost/edit/repost records distinct, immutable post sequences
+path still works; that the invoice CHECK is installed even when an unrelated table owns
+a same-named constraint; that cancelled/terminal invoices reject new shares and linked-item
+allocation changes while clean draft/unposted editing remains available; that unpost/edit/repost records distinct, immutable post sequences
 with the exact rounding-policy version used for each post
 which survive deletion of every editable working row; that privileged UPDATE and
 TRUNCATE cannot alter that history; that a split invoice cannot become posted/frozen
-with a missing post timestamp and no history; that a logical billing line cannot commit without a vector; and that
+with a missing post timestamp and no history; that a valid posted-to-voided transition
+retains its timestamp and exactly one post-history instance; that a logical billing line cannot commit without a vector; and that
 two concurrent full-vector writers on distinct child invoices serialize so exactly one commits. It also races a
 share mutation with invoice posting and proves the share trigger holds the item/invoice
 lock boundary, preventing either transaction from crossing the posted-snapshot boundary. The container is

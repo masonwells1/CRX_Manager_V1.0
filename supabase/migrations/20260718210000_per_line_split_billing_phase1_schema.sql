@@ -397,7 +397,7 @@ SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
 DECLARE
-  v_posted boolean;
+  v_not_editable boolean;
   v_item_ids uuid[] := ARRAY[]::uuid[];
 BEGIN
   -- UPDATE must protect both sides: otherwise a row can move from a draft item
@@ -439,14 +439,14 @@ BEGIN
     FROM public.invoice_items ii
     JOIN public.invoices i ON i.id = ii.invoice_id
     WHERE ii.id = ANY(v_item_ids)
-      AND (i.status = 'posted' OR i.posted_at IS NOT NULL)
+      AND (i.status NOT IN ('draft', 'unposted') OR i.posted_at IS NOT NULL)
   )
-    INTO v_posted
+    INTO v_not_editable
   ;
 
-  IF COALESCE(v_posted, false) THEN
+  IF COALESCE(v_not_editable, false) THEN
     RAISE EXCEPTION
-      'invoice_line_shares row % is frozen: its invoice is posted. Unpost the invoice first.',
+      'invoice_line_shares row % is frozen: shares are editable only while the invoice is draft or unposted with no posted timestamp.',
       COALESCE(OLD.id, NEW.id)
       USING ERRCODE = 'raise_exception';
   END IF;
@@ -482,7 +482,7 @@ SET search_path = public, pg_temp
 AS $$
 DECLARE
   v_allocation_fields_changed boolean;
-  v_posted boolean;
+  v_not_editable boolean;
 BEGIN
   v_allocation_fields_changed :=
     NEW.quantity IS DISTINCT FROM OLD.quantity
@@ -516,17 +516,17 @@ BEGIN
   -- by this BEFORE UPDATE trigger, matching the item -> invoice lock order used by
   -- share writes.
   SELECT (
-      i.status IN ('posted', 'paid', 'overdue')
+      i.status NOT IN ('draft', 'unposted')
       OR i.posted_at IS NOT NULL
     )
-    INTO v_posted
+    INTO v_not_editable
     FROM public.invoices i
    WHERE i.id = OLD.invoice_id
    FOR UPDATE;
 
-  IF COALESCE(v_posted, false) THEN
+  IF COALESCE(v_not_editable, false) THEN
     RAISE EXCEPTION
-      'invoice_item % allocation fields are frozen while its split invoice is posted.',
+      'invoice_item % allocation fields are frozen unless its split invoice is draft or unposted with no posted timestamp.',
       OLD.id
       USING ERRCODE = 'raise_exception';
   END IF;
@@ -611,13 +611,15 @@ CREATE POLICY field_app_billing_lines_select ON public.field_app_billing_lines
 DROP POLICY IF EXISTS invoice_line_shares_select ON public.invoice_line_shares;
 CREATE POLICY invoice_line_shares_select ON public.invoice_line_shares
   FOR SELECT USING (
-    is_admin() OR EXISTS (
-      SELECT 1
-        FROM public.invoice_items ii
-        JOIN public.invoices i ON i.id = ii.invoice_id
-       WHERE ii.id = invoice_line_shares.invoice_item_id
-         AND ( i.created_by = (SELECT auth.uid())
-            OR i.salesman_id = (SELECT auth.uid()) )
+    is_admin() OR (
+      is_sales_rep() AND EXISTS (
+        SELECT 1
+          FROM public.invoice_items ii
+          JOIN public.invoices i ON i.id = ii.invoice_id
+         WHERE ii.id = invoice_line_shares.invoice_item_id
+           AND ( i.created_by = (SELECT auth.uid())
+              OR i.salesman_id = (SELECT auth.uid()) )
+      )
     )
   );
 
@@ -628,12 +630,14 @@ DROP POLICY IF EXISTS invoice_line_share_post_snapshots_select
 CREATE POLICY invoice_line_share_post_snapshots_select
   ON public.invoice_line_share_post_snapshots
   FOR SELECT USING (
-    is_admin() OR EXISTS (
-      SELECT 1
-        FROM public.invoices i
-       WHERE i.id = invoice_line_share_post_snapshots.invoice_id
-         AND ( i.created_by = (SELECT auth.uid())
-            OR i.salesman_id = (SELECT auth.uid()) )
+    is_admin() OR (
+      is_sales_rep() AND EXISTS (
+        SELECT 1
+          FROM public.invoices i
+         WHERE i.id = invoice_line_share_post_snapshots.invoice_id
+           AND ( i.created_by = (SELECT auth.uid())
+              OR i.salesman_id = (SELECT auth.uid()) )
+      )
     )
   );
 
@@ -661,19 +665,17 @@ GRANT SELECT ON TABLE public.field_app_billing_sets,
 ALTER TABLE public.invoices
   ADD COLUMN IF NOT EXISTS send_disposition text NOT NULL DEFAULT 'sendable';
 
-DO $$
-BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint WHERE conname = 'invoices_send_disposition_ck'
-  ) THEN
-    ALTER TABLE public.invoices
-      ADD CONSTRAINT invoices_send_disposition_ck
-      CHECK (
-        send_disposition IN ('sendable','suppressed_zero_total')
-        AND (send_disposition <> 'suppressed_zero_total' OR total_amount_cents = 0)
-      );
-  END IF;
-END $$;
+-- Constraint names are unique only within a table. Recreate the table-local
+-- constraint deliberately so a same-named constraint elsewhere—or a weaker
+-- partially applied local definition—cannot silently bypass this money guard.
+ALTER TABLE public.invoices
+  DROP CONSTRAINT IF EXISTS invoices_send_disposition_ck;
+ALTER TABLE public.invoices
+  ADD CONSTRAINT invoices_send_disposition_ck
+  CHECK (
+    send_disposition IN ('sendable','suppressed_zero_total')
+    AND (send_disposition <> 'suppressed_zero_total' OR total_amount_cents = 0)
+  );
 
 -- The browser may update other invoice fields through existing policies, so the
 -- column needs its own database authority boundary. A SECURITY DEFINER save/post
@@ -743,7 +745,8 @@ AS $$
 DECLARE
   v_post_instance_id uuid := gen_random_uuid();
   v_post_sequence integer;
-  v_is_posted_state boolean;
+  v_requires_post_timestamp boolean;
+  v_creates_post_snapshot boolean;
 BEGIN
   -- Ordinary invoices have no split-share rows and remain untouched.
   IF NOT EXISTS (
@@ -759,10 +762,13 @@ BEGIN
   -- required by its immutable history row. Also reject the inverse mismatch:
   -- posted_at on a draft/unposted split invoice would freeze its working rows
   -- without representing a real post transition.
-  v_is_posted_state := NEW.status IN ('posted','paid','overdue');
-  IF v_is_posted_state IS DISTINCT FROM (NEW.posted_at IS NOT NULL) THEN
+  -- Voiding preserves posted_at by design: it is a post-derived terminal state,
+  -- but it must not create a second post snapshot.
+  v_requires_post_timestamp := NEW.status IN ('posted','paid','overdue','voided');
+  v_creates_post_snapshot := NEW.status IN ('posted','paid','overdue');
+  IF v_requires_post_timestamp IS DISTINCT FROM (NEW.posted_at IS NOT NULL) THEN
     RAISE EXCEPTION
-      'split invoice % requires posted status and posted_at to change together',
+      'split invoice % requires posted/voided status and posted_at to agree',
       NEW.id
       USING ERRCODE = 'check_violation';
   END IF;
@@ -770,7 +776,7 @@ BEGIN
   -- Updates within the posted lifecycle (posted -> paid/overdue) and sanctioned
   -- unposts do not create another post instance. A later unposted -> posted
   -- transition does, because OLD is no longer a complete posted state.
-  IF NOT v_is_posted_state
+  IF NOT v_creates_post_snapshot
      OR (OLD.status IN ('posted','paid','overdue') AND OLD.posted_at IS NOT NULL) THEN
     RETURN NULL;
   END IF;
