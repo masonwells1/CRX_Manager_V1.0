@@ -219,6 +219,18 @@ describe('validateCommissionSplits', () => {
   it('returns null for empty splits (no commission)', () => {
     expect(validateCommissionSplits([])).toBeNull();
   });
+
+  it('rejects blank and duplicate recipients', () => {
+    expect(validateCommissionSplits([{ recipient: '  ', percentage: 100 }])).toContain(
+      'needs a recipient',
+    );
+    expect(
+      validateCommissionSplits([
+        { recipient: 'Alice', percentage: 50 },
+        { recipient: ' alice ', percentage: 50 },
+      ]),
+    ).toContain('listed more than once');
+  });
 });
 
 // ── 4. Integration scenario: parse → validate → calculate ─────────────────

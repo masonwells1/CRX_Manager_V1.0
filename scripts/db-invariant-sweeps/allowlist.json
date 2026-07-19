@@ -344,6 +344,12 @@
       "dated": "2026-06-10"
     },
     {
+      "predicate": "ungated-secdef-mutators",
+      "violation_key": "save_invoice(p_invoice jsonb, p_items jsonb, p_idempotency_key text)",
+      "justification": "Verified live 2026-07-19 transitive-gate false positive. The public provenance wrapper's only pre-delegation DML is a transaction-local mutation claim for an existing governed invoice. It immediately calls the owner-only _save_invoice_split_provenance_impl_20260719, whose first executable gates require auth.uid(), an active admin/sales_rep profile, and customer/salesman scope before reaching the canonical writer. Any rejection aborts the same transaction and rolls the claim back; the private implementation has no Data API grants.",
+      "dated": "2026-07-19"
+    },
+    {
       "predicate": "actor-forgery",
       "violation_key": "cancel_delivery(p_delivery_id uuid, p_cancel_reason text, p_performed_by uuid, p_idempotency_key text)",
       "justification": "FALSE POSITIVE (non-canonical token): body DOES strict-actor-check (IF p_performed_by IS NOT NULL AND auth.uid() IS DISTINCT FROM p_performed_by THEN RAISE 'actor mismatch') and gates role on the auth.uid()-derived actor (admin/sales_rep, is_active). Flagged only because it raises 'actor mismatch' (with a space) instead of the canonical ACTOR_MISMATCH token. Verified live 2026-06-10. HARDENING: canonicalize the raised token to ACTOR_MISMATCH.",

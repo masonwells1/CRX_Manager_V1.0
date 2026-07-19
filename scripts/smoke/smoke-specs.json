@@ -96,6 +96,11 @@
       "description": "Drawn-product edit guard (A4): reducing a booking below its drawn quantity and removing a drawn product both raise BOOKING_OVERDRAWN; a legal reduce keeps booked/drawn/status consistent and the booking still closes at the new total; a no-draws control quote edits freely.",
       "covers": ["save_quote", "draw_down_quote"]
     },
+    "quote_commission_split_validation": {
+      "chain": "smoke-quote-commission-split-validation.sql",
+      "description": "Quote commission money-routing guard: blank or duplicate recipients fail closed on direct INSERT/UPDATE, while an explicit empty no-commission split and a complete named 100% split remain valid. Self-contained fixture and terminal rollback.",
+      "covers": ["guard_quote_commission_split_valid", "validate_commission_split_json", "quotes"]
+    },
     "rollover_quote_to_season": {
       "chain": "smoke-rollover-remainder.sql",
       "description": "Remainder-only season rollover (A5): 500-booked/200-drawn rolls over exactly 300 with FIFO consumption across split items and acre proration; fully-drawn raises BOOKING_FULLY_DRAWN; no-draws rollover preserves live copy behavior (total_units_needed stays NULL).",

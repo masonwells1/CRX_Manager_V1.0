@@ -2,6 +2,16 @@
 
 All significant development milestones, in reverse chronological order.
 
+### 2026-07-19 — Quote commission routing made fail-closed
+
+The post-gauntlet financial sweeps found one accepted but unconverted quote with a 100%
+commission split and a blank recipient. It had no order, commission, salesperson, assigned
+rep, or customer default, so the exact row is reconciled to an explicit no-commission split
+instead of inventing a payee. A database trigger now applies the shared commission validator
+to every quote insert or split update, and Quote Builder mirrors the same blank, duplicate,
+percentage-range, and 100%-total checks before save. The pre-apply rollback smoke reproduced
+the original blank-recipient acceptance; after the live cutover the same smoke passed and rolled back.
+
 ### 2026-07-19 — Exact-HEAD Codex blocker remediation applied live
 
 The independent pre-push review found five remaining release issues after the original

@@ -165,4 +165,21 @@ describe('gauntlet sections 2-6 CodeRabbit closeout', () => {
     expect(sql).toContain('RENAME TO _cancel_order_split_provenance_impl_20260719');
     expect(sql).toContain('FROM PUBLIC, anon, authenticated, service_role');
   });
+
+  it('cuts quote commission validation over atomically and reconciles only the proven row', () => {
+    const sql = migration('20260719065443_validate_quote_commission_splits.sql');
+    const barrier = sql.indexOf('LOCK TABLE public.quotes IN SHARE ROW EXCLUSIVE MODE');
+    const preflight = sql.indexOf('DO $preflight$');
+    const repair = sql.indexOf('WITH repaired AS');
+    const trigger = sql.indexOf('CREATE TRIGGER trg_validate_quote_commission_split');
+    expect(barrier).toBeGreaterThan(-1);
+    expect(preflight).toBeGreaterThan(barrier);
+    expect(repair).toBeGreaterThan(preflight);
+    expect(trigger).toBeGreaterThan(repair);
+    expect(sql).toContain("'bcdca194-568a-454b-80da-de726820b27b'::uuid");
+    expect(sql).toContain("'{\"splits\":[]}'::jsonb");
+    expect(sql).toContain('QUOTE_COMMISSION_RECONCILIATION_REQUIRED');
+    expect(sql).toContain('PERFORM public.validate_commission_split_json(NEW.commission_split)');
+    expect(sql).toContain('FROM PUBLIC, anon, authenticated, service_role');
+  });
 });
