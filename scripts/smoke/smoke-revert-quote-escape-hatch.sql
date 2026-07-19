@@ -28,6 +28,7 @@ DECLARE
   v_status   text;
   v_drawn    numeric;
   v_err      text;
+  v_replay   jsonb;
 BEGIN
   SELECT id INTO v_admin FROM public.profiles
   WHERE role = 'admin' AND is_active = true ORDER BY created_at LIMIT 1;
@@ -206,6 +207,36 @@ BEGIN
   IF v_res->>'new_status' IS DISTINCT FROM 'sent' THEN
     RAISE EXCEPTION 'SMOKE_FAIL: revert returned %, expected new_status=sent', v_res;
   END IF;
+
+  -- Exact same-request replay must return the saved public response, while the
+  -- same key with a different normalized/full reason must fail closed before
+  -- looking at the quote's now-sent status.
+  SELECT public.revert_quote_status(
+    v_quote,
+    'B2 smoke: un-strand',
+    v_admin,
+    'e2e-b2-revert-' || v_suffix
+  ) INTO v_replay;
+  IF v_replay IS DISTINCT FROM v_res THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: exact idempotent replay changed response: first=%, replay=%',
+      v_res, v_replay;
+  END IF;
+
+  BEGIN
+    PERFORM public.revert_quote_status(
+      v_quote,
+      'B2 smoke: DIFFERENT reason',
+      v_admin,
+      'e2e-b2-revert-' || v_suffix
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: reused revert key replayed despite different request arguments';
+  EXCEPTION WHEN OTHERS THEN
+    v_err := SQLERRM;
+    IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_err NOT LIKE 'IDEMPOTENCY_REQUEST_MISMATCH:%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: mismatched revert replay raised unexpected error: %', v_err;
+    END IF;
+  END;
 
   SELECT status INTO v_status FROM public.quotes WHERE id = v_quote;
   IF v_status <> 'sent' THEN

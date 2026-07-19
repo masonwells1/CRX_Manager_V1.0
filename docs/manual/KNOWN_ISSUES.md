@@ -1,19 +1,28 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-07-18** (full document re-read plus supplier-pricing and gauntlet sections 2–6 live ledger/function refresh; older open/deferred claims retain their dated evidence below; owner-facing combined list: root `TODO.md`)
+**Last verified: 2026-07-19** (full document re-read plus supplier-pricing and gauntlet sections 2–6 live ledger/function refresh; older open/deferred claims retain their dated evidence below; owner-facing combined list: root `TODO.md`)
 **Update triggers:** when a finding is parked/resolved, a migration is parked/applied, or an owner decision lands. Agents must update THIS file, not create new issue lists. Do not re-discover or re-fix something listed here as already known — read the pointer first.
 
 This file consolidates (does not replace) the source documents it points to. If this file and a source disagree, trust the source and fix this file.
 
 ---
 
-## 1. Open HIGH findings (dormant on live data)
+## 1. Recently closed HIGH releases and remaining owner follow-ups
 
-### Supplier Pricing Phase 1a rollout gap — frontend/Edge retirement not deployed
+### Supplier Pricing Phase 1a — repository/frontend/database rollout closed; legacy Edge cleanup remains
 
-The additive pricing RPC/bootstrap, zero-cost guard, and legacy Product repeat-save compatibility repair are live through verification watermark `20260717171331`. The zero-cost guard's repository source is `20260717112011_supplier_pricing_zero_cost_guard.sql` and its live ledger identity is `20260717120500_supplier_pricing_zero_cost_guard`; the governed calculator now rejects margin-driven zero cost while legacy Product-page editing remains available. The frontend, strict direct-write cutover, and `process-document` retirement are not live. The active production Edge Function is still v18 and retains the old `price_list` / price-bearing `product_list` OCR paths, and the deployed frontend still contains its legacy pricing UI. The repository rejects those document types before OCR, but production will not inherit that rule until a separately approved Edge Function deployment. Do not describe supplier-price OCR as retired live before that deployment is verified.
+The additive pricing RPC/bootstrap, zero-cost guard, Product-page governed editor,
+strict direct-write enforcement cutover, and post-cutover data-integrity rescan are
+now reconciled in the repository and live. The final Phase 1a database ledger is
+`20260718193000` (after enforcement `20260718190000`), and PR #169 merged the
+frontend/cutover source to `main`. This is no longer an open release blocker.
 
-The forward correction `20260718124517_harden_supplier_pricing_cent_scale_and_trigger.sql` is now an active, reviewed repository migration and passes the disposable pre-cutover and full-cutover proof. It was applied live on 2026-07-18 as ledger version `20260718154131`; the live schema-registry refresh remains part of release closeout. The strict enforcement cutover remains parked until that frontend is deployed and the rollback window closes.
+The active production `process-document` Edge Function remains v18 and still
+contains legacy `price_list` / price-bearing `product_list` code, but the deployed
+frontend no longer routes supplier pricing through that path and the database
+rejects ungoverned pricing writes. Edge retirement is a cleanup follow-up, not a
+reason to repeat or park the completed Phase 1a cutover. Do not describe the Edge
+code itself as retired until a separately reviewed Edge deployment verifies it.
 
 ### July 14 full-gauntlet remediation — LIVE, frontend rolled out (PR #133 merged 2026-07-15)
 

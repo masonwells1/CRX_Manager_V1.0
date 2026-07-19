@@ -72,7 +72,7 @@ BEGIN
 
   -- Run 1 (earlier date): must create exactly one charge.
   v_res := public.generate_finance_charges(v_early, v_admin, ARRAY[v_customer], 'e2e-h2-1-' || v_suffix);
-  IF (v_res->>'charges_generated')::int <> 1 THEN
+  IF (v_res->>'charges_generated')::int IS DISTINCT FROM 1 THEN
     RAISE EXCEPTION 'SMOKE_SETUP: first run did not charge as expected: %', v_res;
   END IF;
 
@@ -83,8 +83,8 @@ BEGIN
   IF v_n <> 1 THEN
     RAISE EXCEPTION 'SMOKE_FAIL: % finance charges after two same-month runs, expected 1 (double-charge live)', v_n;
   END IF;
-  IF (v_res->>'charges_generated')::int <> 0
-     OR (v_res->>'skipped_already_charged')::int <> 1 THEN
+  IF (v_res->>'charges_generated')::int IS DISTINCT FROM 0
+     OR (v_res->>'skipped_already_charged')::int IS DISTINCT FROM 1 THEN
     RAISE EXCEPTION 'SMOKE_FAIL: second same-month run should skip, got %', v_res;
   END IF;
 

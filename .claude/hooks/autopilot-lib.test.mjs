@@ -86,6 +86,11 @@ ok(flagActive("").active === false, "empty flag inactive");
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const hookPath = path.join(__dirname, "unattended-autopilot.mjs");
 const isolatedProjectDir = mkdtempSync(path.join(tmpdir(), "crx-autopilot-off-test-"));
+const resolvedTempRoot = `${path.resolve(tmpdir())}${path.sep}`;
+const resolvedTestDir = path.resolve(isolatedProjectDir);
+if (!resolvedTestDir.startsWith(resolvedTempRoot)) {
+  throw new Error(`Refusing to use non-temp test directory: ${resolvedTestDir}`);
+}
 let r;
 try {
   r = spawnSync(process.execPath, [hookPath], {
@@ -94,11 +99,6 @@ try {
     env: { ...process.env, CLAUDE_PROJECT_DIR: isolatedProjectDir },
   });
 } finally {
-  const resolvedTempRoot = `${path.resolve(tmpdir())}${path.sep}`;
-  const resolvedTestDir = path.resolve(isolatedProjectDir);
-  if (!resolvedTestDir.startsWith(resolvedTempRoot)) {
-    throw new Error(`Refusing to remove non-temp test directory: ${resolvedTestDir}`);
-  }
   rmSync(resolvedTestDir, { recursive: true, force: true });
 }
 eq(r.status, 0, "hook exits 0");

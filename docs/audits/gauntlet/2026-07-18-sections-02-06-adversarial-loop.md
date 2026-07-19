@@ -76,12 +76,16 @@ Adjudicator: `cleanOfBlockerHigh=true`, `settled=false` (MED/LOW carry no termin
 
 ---
 
-## ✅ Section 6 (Idempotency) — CLEAN
+## ⚪ Section 6 (Idempotency) — UNVERIFIED / NOT SETTLED
 
-Both finders VERIFIED against live project `rhyzpcqhnizqbxphqdkr`:
+The completed finders reported no BLOCKER/HIGH against live project
+`rhyzpcqhnizqbxphqdkr`:
 - **6a (server):** every current mutating RPC that declares `p_idempotency_key` genuinely enforces it (reads/writes `idempotency_keys`). The known 2026-07-08 lead `save_job_applied_record` is **confirmed fixed** on `main` (true insert-once via per-table idempotency key + request fingerprint).
 - **6b (frontend):** money/inventory/lifecycle mutation callers pass stable keys and guard double-submit.
-- **Caveat:** the Section 6 completeness-critic pass failed to return structured output (retry cap) — a small coverage gap, not a finding. Re-run the critic if you want belt-and-suspenders.
+- **Blocked evidence:** both Section 6 completeness critics failed to return
+  structured output before the retry cap. Under the workflow contract, that is
+  not a clean/settled section. Re-run the critics before making a Section 6
+  completeness claim.
 
 ---
 

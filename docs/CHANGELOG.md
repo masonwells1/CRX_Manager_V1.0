@@ -2,6 +2,24 @@
 
 All significant development milestones, in reverse chronological order.
 
+### 2026-07-19 — Gauntlet CodeRabbit closeout hardening
+
+CodeRabbit's ready-for-review pass found and prompted fixes for false-green smoke/E2E
+assertions, duplicate same-round workflow findings, stale release documentation, and two
+live concurrency gaps. New forward-only migrations bind `revert_quote_status` idempotency
+to the exact authenticated request before mutation. The backfill fix uses stable parent-item
+row locks on both the invoice creator and allocation writer, rejects allocation changes when
+any active invoice exists, and blocks mono-invoice posting when durable or transient split
+evidence exists. Posting cannot bypass the guard by clearing `order_id` or assigning an
+arbitrary group UUID; only members with the canonical field-acre creation audit can use the
+grouped path. Existing order-backed invoices cannot be re-parented even while draft, and
+direct audit-log mutation privileges are removed before the trigger trusts that provenance.
+An apply-time write barrier holds the evidence tables stable across preflight, revoke, and
+trigger attachment, so concurrent DML cannot enter between those cutover steps.
+Neither side of the child-FK timing race can commit stale evidence. Applied migration files remain immutable;
+the coupled rollback smokes now prove exact replay versus mismatched-key reuse and exercise
+both backfill predicates and both serialized writer outcomes.
+
 ### 2026-07-18 — Gauntlet workflow read-only boundary hardened
 
 The sections 2–6 gauntlet can no longer give general-purpose child agents write-capable

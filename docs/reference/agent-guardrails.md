@@ -140,5 +140,5 @@ These two are not always "on" for a given session — one is only *registered* i
 
 **Refresh architecture map:** `npm run generate-map` (or `node scripts/generate-workflow-map.mjs`). Auto-runs in pre-commit hook and stages `docs/app-workflow-map.html` automatically.
 
-**Migration version responsibility (2026-07-18):** `migration-drift-reviewer` checks disk timestamp ordering and reminds the orchestrator to run the mandatory live `list_migrations` check. Because that isolated reviewer cannot call Supabase MCP, the missing live check is not labeled a migration HIGH/BLOCKER inside its machine verdict; the orchestrator must still complete it before `apply_migration`. Migration-history coverage accepts either the full filename or its unique timestamp prefix.
+**Migration version responsibility (2026-07-18):** `migration-drift-reviewer` checks disk timestamp ordering and reminds the orchestrator to run the mandatory live `list_migrations` check. Because that isolated reviewer cannot call Supabase MCP itself, unavailable or missing live high-water evidence is emitted as a **HIGH** finding; the orchestrator must supply/complete the live `list_migrations` check and clear that finding before `apply_migration`. Migration-history coverage accepts either the full filename or its unique timestamp prefix.
 

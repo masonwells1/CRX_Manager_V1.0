@@ -78,7 +78,7 @@ BEGIN
   WHERE allocation_set_id = v_set_id AND invoice_id = v_inv_paid;
   SELECT total_allocated_cents INTO v_history_total
   FROM public.allocation_sets WHERE id = v_set_id AND is_active = false;
-  IF v_history_count <> 1 OR v_history_total <> 50000 THEN
+  IF v_history_count IS DISTINCT FROM 1 OR v_history_total IS DISTINCT FROM 50000 THEN
     RAISE EXCEPTION 'SMOKE_FAIL: payment reversal history was erased by invoice void (rows=%, cached_total=%)',
       v_history_count, v_history_total;
   END IF;

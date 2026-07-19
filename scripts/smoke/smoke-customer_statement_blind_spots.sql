@@ -5,11 +5,11 @@
 -- THE CHAIN (real producers, not isolated probes — the smoke-specs HARD RULE):
 --   fixture customer + order
 --     -> invoice A (posted, $500.00, no payment yet)
---     -> invoice B (order-linked) PAID via record_invoice_payment $300.00
---                    (the LEGACY payments-table path; payment backdated d-3)
---     -> invoice C (NO order — the transfer_job_to_invoice shape) PAID via
---                    record_invoice_payment $50.00 -> a NULL-order_id
---                    payments row (blind spot 4; backdated d-1)
+--     -> invoice B (order-linked) marked PAID + a directly inserted historical
+--                    payments-table fixture for $300.00 (backdated d-3)
+--     -> invoice C (NO order — the transfer_job_to_invoice shape) marked PAID
+--                    + a directly inserted historical NULL-order_id payment
+--                    fixture for $50.00 (blind spot 4; backdated d-1)
 --     -> allocate_payment $250.00: $200.00 allocated to invoice A +
 --                    $50.00 overpayment -> prepay credit (the ALLOCATION
 --                    path, allocation_sets only — blind spot 1; dated d-2)
@@ -47,14 +47,12 @@
 -- Live-state preconditions (checked up front, raise SMOKE_SETUP if unmet):
 --   * at least one active admin profile;
 --   * no CLOSED accounting period overlapping [CURRENT_DATE-7, CURRENT_DATE]
---     (record_invoice_payment gates on now()::date, allocate_payment on its
---     p_payment_date = d-2).
+--     (allocate_payment gates on its p_payment_date = d-2).
 --
 -- DRY-VALIDATION (the 42703 discipline): every reference below was validated
 -- against the LIVE catalog 2026-06-10 (pg_get_functiondef + information_schema
 -- + pg_constraint + pg_trigger). 126 refs total:
---  * 13 functions: get_customer_statement(uuid,date,date),
---    record_invoice_payment(uuid,bigint,text,text,text,text),
+--  * 12 functions: get_customer_statement(uuid,date,date),
 --    allocate_payment(uuid,bigint,text,text,text,date,text,jsonb,uuid,text),
 --    void_payment, update_allocation_set, transfer_job_to_invoice (path
 --    evidence), enforce_invoice_draft_on_insert (draft-only INSERT gate;
@@ -182,7 +180,7 @@ BEGIN
           50000, v_d6, v_admin)
   RETURNING id INTO v_inv_a;
 
-  -- Invoice B: order-linked; will be PAID via the LEGACY path
+  -- Invoice B: order-linked; marked PAID beside a historical legacy-row fixture
   INSERT INTO invoices (invoice_number, customer_id, order_id, invoice_type,
                         total_amount_cents, invoice_date, created_by)
   VALUES ('SMK-CSB-B-' || v_suffix, v_customer_id, v_order_id, 'chemical_sale',
@@ -225,7 +223,7 @@ BEGIN
   UPDATE payments SET payment_date = v_d3 WHERE id = v_pay_legacy;
 
   -- --------------------------------------------------------------------
-  -- 3. (a2) NULL-order path: record_invoice_payment fully pays invoice C —
+  -- 3. (a2) Historical NULL-order fixture: invoice C is marked paid and
   --     payments.order_id IS NULL (blind spot 4)
   -- --------------------------------------------------------------------
   INSERT INTO payments (order_id, customer_id, amount, payment_method,

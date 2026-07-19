@@ -263,8 +263,14 @@ async function runSection(num) {
     }
 
     const raw = [...reviews, critic].filter(layerOk).flatMap((r) => r.findings)
-    const fresh = raw.filter(findingOk).filter((f) => !seen.has(keyOf(f)))
-    fresh.forEach((f) => seen.add(keyOf(f)))
+    const fresh = []
+    for (const finding of raw) {
+      if (!findingOk(finding)) continue
+      const key = keyOf(finding)
+      if (seen.has(key)) continue
+      seen.add(key)
+      fresh.push(finding)
+    }
     log(`[S${num}] round ${round}: ${fresh.length} fresh candidate finding(s).`)
 
     // Malformed finder findings never silently vanish.

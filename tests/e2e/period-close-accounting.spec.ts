@@ -695,14 +695,13 @@ test.describe('Period Close & Accounting', () => {
       p_payment_method: 'check',
       p_allocations: [{ invoice_id: invoiceId, amount_cents: 5000 }],
       p_idempotency_key: `VOID-PAY-${RUN}`,
-    }).catch(e => {
-      console.log(`✓ Payment on voided invoice rejected: ${e}`);
-      return { error: String(e) };
     });
 
-    if (payResult && typeof payResult === 'object' && 'error' in payResult) {
-      expect(String(payResult.error).toLowerCase()).toContain('eligible');
-      console.log('✓ Voided invoice correctly blocks payments');
+    const payRecord = payResult as Record<string, unknown> | null;
+    if (!payRecord || typeof payRecord.message !== 'string') {
+      throw new Error(`Expected voided-invoice payment rejection, got success: ${JSON.stringify(payResult)}`);
     }
+    expect(payRecord.message.toLowerCase()).toContain('eligible');
+    console.log('✓ Voided invoice correctly blocks payments');
   });
 });

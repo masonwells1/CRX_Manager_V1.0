@@ -385,14 +385,13 @@ test.describe('Concurrent Operations & Race Conditions', () => {
       p_payment_method: 'check',
       p_allocations: [{ invoice_id: invoiceId, amount_cents: 5000 }],
       p_idempotency_key: `DRAFT-PAY-${RUN}`,
-    }).catch(e => {
-      console.log(`✓ Payment on draft invoice correctly rejected: ${e}`);
-      return { error: String(e) };
     });
 
-    if (payResult && typeof payResult === 'object' && 'error' in payResult) {
-      expect(String(payResult.error).toLowerCase()).toContain('eligible');
+    const payRecord = payResult as Record<string, unknown> | null;
+    if (!payRecord || typeof payRecord.message !== 'string') {
+      throw new Error(`Expected draft-invoice payment rejection, got success: ${JSON.stringify(payResult)}`);
     }
+    expect(payRecord.message.toLowerCase()).toContain('eligible');
   });
 
   // ─── Test 6: Zero-quantity order is handled ────────────────────────────

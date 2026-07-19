@@ -7,7 +7,8 @@
 > **Superseded 2026-07-18:** do not execute the apply instructions or use the old
 > pre-apply filenames below. All six migrations were applied live, renamed to their
 > Supabase-assigned versions, and reached `SMOKE_PASS_ROLLBACK`. Canonical release state
-> is recorded in `docs/reference/migration-history.md` rows 749–754. Supplier Pricing
+> is recorded in `docs/reference/migration-history.md` rows 749–754 and 759–762,
+> including the final B2/H3 closure and intermediate-window reconciliation. Supplier Pricing
 > Phase 1a was separately reconciled to `main` by PR #163; its forward correction applied
 > live as ledger version `20260718154131`.
 
