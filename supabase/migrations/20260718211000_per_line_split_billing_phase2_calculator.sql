@@ -667,7 +667,7 @@ BEGIN
 
       IF (v_chem->>'product_id') IS NOT NULL THEN
         SELECT p.inventory_unit, p.product_form::text,
-               COALESCE(round(p.current_cost * 100), 0)::bigint
+               round(p.current_cost * 100)::bigint
           INTO v_inventory_unit, v_product_form, v_source_cost_cents
           FROM public.products p
          WHERE p.id = (v_chem->>'product_id')::uuid;
@@ -961,8 +961,10 @@ BEGIN
   -- explicit global manual remains available only for non-job work. For a non-job
   -- product, preserve the established manual -> quoted -> tier precedence. Quote
   -- matching is limited to one eligible quote for the share customer, selected
-  -- fields, source season, and active quote lifecycle. Conflicting prices or
-  -- multiple eligible quote identities are ambiguous provenance and are refused.
+  -- fields, source season, and active quote lifecycle. A quote price is paired
+  -- with quote_items.price_unit; normalize it into the durable source item unit
+  -- before comparing or multiplying. Conflicting normalized prices, unconvertible
+  -- units, or multiple eligible quote identities are refused.
   SELECT l.line_key
     INTO v_line_key
     FROM pg_temp._plsb_lines l
@@ -970,6 +972,38 @@ BEGIN
     JOIN public.quote_items qi ON qi.product_id = l.product_id
     JOIN public.quote_sections qs ON qs.id = qi.section_id
     JOIN public.quotes q ON q.id = qs.quote_id AND q.id = qi.quote_id
+    JOIN public.products p ON p.id = l.product_id
+    JOIN pg_temp._plsb_fields selected_field ON selected_field.field_id = qs.field_id
+   WHERE l.line_kind = 'chemical'
+     AND l.source_job_chemical_id IS NULL
+     AND NOT COALESCE((l.source_input->>'manual_override')::boolean, false)
+     AND qi.price_per_unit IS NOT NULL
+     AND q.customer_id = s.customer_id
+     AND q.season = v_effective_season
+     AND q.deleted_at IS NULL
+     AND q.status IN ('sent', 'revised', 'accepted')
+     AND (q.status = 'accepted' OR q.expires_at IS NULL OR q.expires_at >= CURRENT_DATE)
+     AND public.field_app_priced_quantity(
+       1,
+       l.source_unit_size,
+       COALESCE(NULLIF(btrim(qi.price_unit), ''), l.source_unit_size),
+       p.product_form::text
+     ) IS NULL
+   ORDER BY l.line_key
+   LIMIT 1;
+  IF FOUND THEN
+    RAISE EXCEPTION 'PER_LINE_QUOTE_UNIT_UNCONVERTIBLE: %', v_line_key
+      USING ERRCODE = 'check_violation';
+  END IF;
+
+  SELECT l.line_key
+    INTO v_line_key
+    FROM pg_temp._plsb_lines l
+    JOIN pg_temp._plsb_shares s ON s.line_key = l.line_key
+    JOIN public.quote_items qi ON qi.product_id = l.product_id
+    JOIN public.quote_sections qs ON qs.id = qi.section_id
+    JOIN public.quotes q ON q.id = qs.quote_id AND q.id = qi.quote_id
+    JOIN public.products p ON p.id = l.product_id
     JOIN pg_temp._plsb_fields selected_field ON selected_field.field_id = qs.field_id
    WHERE l.line_kind = 'chemical'
       AND l.source_job_chemical_id IS NULL
@@ -981,7 +1015,15 @@ BEGIN
       AND q.status IN ('sent', 'revised', 'accepted')
       AND (q.status = 'accepted' OR q.expires_at IS NULL OR q.expires_at >= CURRENT_DATE)
    GROUP BY l.line_key, s.customer_id
-  HAVING count(DISTINCT round(qi.price_per_unit * 100)::bigint) > 1
+  HAVING count(DISTINCT round(
+    qi.price_per_unit * 100
+    * public.field_app_priced_quantity(
+        1,
+        l.source_unit_size,
+        COALESCE(NULLIF(btrim(qi.price_unit), ''), l.source_unit_size),
+        p.product_form::text
+      )
+  )::bigint) > 1
    ORDER BY l.line_key
    LIMIT 1;
   IF FOUND THEN
@@ -1041,11 +1083,20 @@ BEGIN
     FROM pg_temp._plsb_lines l
     JOIN pg_temp._plsb_customers c ON true
     LEFT JOIN LATERAL (
-      SELECT min(round(qi.price_per_unit * 100)::bigint) AS price_cents,
+      SELECT min(round(
+               qi.price_per_unit * 100
+               * public.field_app_priced_quantity(
+                   1,
+                   l.source_unit_size,
+                   COALESCE(NULLIF(btrim(qi.price_unit), ''), l.source_unit_size),
+                   p.product_form::text
+                 )
+             )::bigint) AS price_cents,
              min(q.id::text)::uuid AS quote_id
         FROM public.quote_items qi
         JOIN public.quote_sections qs ON qs.id = qi.section_id
         JOIN public.quotes q ON q.id = qs.quote_id AND q.id = qi.quote_id
+        JOIN public.products p ON p.id = qi.product_id
         JOIN pg_temp._plsb_fields selected_field ON selected_field.field_id = qs.field_id
        WHERE qi.product_id = l.product_id
           AND qi.price_per_unit IS NOT NULL

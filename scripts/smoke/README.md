@@ -104,8 +104,11 @@ persisted −25¢ return → −13¢/−12¢); exact job-chemical identity,
 quantity, and frozen prices even when the same product appears twice; customer-
 supplied zero billing; owner/outsider sales-rep scope plus exact invoice/job/field
 context binding; non-job manual/quoted/tier pricing with customer/season/lifecycle-
-bound quote headers, stale/unrelated quotes ignored, and conflicting price or quote
-source rejected; source-season service pricing; per-person price overrides; 100/0 service
+bound quote headers, stale/unrelated quotes ignored, quote prices normalized from their
+paired price unit into the durable product unit, unconvertible quote units rejected,
+missing product cost rejected while explicit zero cost remains valid, and conflicting
+price or quote source rejected;
+source-season service pricing; per-person price overrides; 100/0 service
 and flat-fee rows; exact flat-fee output persisted into production-shaped non-null
 invoice quantities with quantity 1 on every child; inverse job-chemical and required-
 service completeness; job/default/fallback ownership; field/job and chemical/job

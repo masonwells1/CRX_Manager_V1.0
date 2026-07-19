@@ -37,6 +37,8 @@ DECLARE
   v_product_tier constant uuid := '50000000-0000-0000-0000-000000000002';
   v_product_gallon constant uuid := '50000000-0000-0000-0000-000000000003';
   v_product_penny_cost constant uuid := '50000000-0000-0000-0000-000000000004';
+  v_product_missing_cost constant uuid := '50000000-0000-0000-0000-000000000005';
+  v_product_zero_cost constant uuid := '50000000-0000-0000-0000-000000000006';
   v_quote_a constant uuid := '72000000-0000-0000-0000-000000000001';
   v_quote_a_conflict constant uuid := '72000000-0000-0000-0000-000000000002';
   v_quote_b constant uuid := '72000000-0000-0000-0000-000000000003';
@@ -119,7 +121,9 @@ BEGIN
     (v_product_quote, 'Quote Product', 'unit', 'liquid', 0.50, 1.00, 2.00, 3.00),
     (v_product_tier, 'Tier Product', 'unit', 'liquid', 0.50, 1.00, 2.00, 3.00),
     (v_product_gallon, 'Gallon Product', 'gl', 'liquid', 0.10, 32.10, 32.10, 32.10),
-    (v_product_penny_cost, 'Penny Cost Product', 'unit', 'liquid', 0.01, 1.00, 1.00, 1.00);
+    (v_product_penny_cost, 'Penny Cost Product', 'unit', 'liquid', 0.01, 1.00, 1.00, 1.00),
+    (v_product_missing_cost, 'Missing Cost Product', 'unit', 'liquid', NULL, 1.00, 2.00, 3.00),
+    (v_product_zero_cost, 'Zero Cost Product', 'unit', 'liquid', 0, 1.00, 2.00, 3.00);
   INSERT INTO public.job_chemicals (
     id, job_id, product_id, quantity, unit, rate_per_acre, rate_unit,
     cost_per_unit_cents, price_per_unit_cents, sort_order, customer_supplied
@@ -149,32 +153,40 @@ BEGIN
   UPDATE public.jobs
      SET quote_section_id = '70000000-0000-0000-0000-000000000001'
    WHERE id = v_job_quote;
-  INSERT INTO public.quote_items (id, quote_id, section_id, product_id, price_per_unit)
+  INSERT INTO public.quote_items (
+    id, quote_id, section_id, product_id, price_per_unit, price_unit
+  )
   VALUES
     (
       '71000000-0000-0000-0000-000000000001',
       v_quote_a,
       '70000000-0000-0000-0000-000000000001',
       v_product_quote,
-      1.50
+      1.50,
+      NULL
     ),
     (
       '70000000-0000-0000-0000-000000000001',
       v_quote_a_conflict,
       '70000000-0000-0000-0000-000000000002',
       v_product_quote,
-      9.99
+      9.99,
+      NULL
     ),
     ('71000000-0000-0000-0000-000000000003', v_quote_b,
-     '70000000-0000-0000-0000-000000000003', v_product_quote, 1.50),
+     '70000000-0000-0000-0000-000000000003', v_product_quote, 1.50, NULL),
     ('71000000-0000-0000-0000-000000000004', '72000000-0000-0000-0000-000000000004',
-     '70000000-0000-0000-0000-000000000004', v_product_quote, 7.77),
+     '70000000-0000-0000-0000-000000000004', v_product_quote, 7.77, NULL),
     ('71000000-0000-0000-0000-000000000005', '72000000-0000-0000-0000-000000000005',
-     '70000000-0000-0000-0000-000000000005', v_product_quote, 8.88),
+     '70000000-0000-0000-0000-000000000005', v_product_quote, 8.88, NULL),
     ('71000000-0000-0000-0000-000000000006', '72000000-0000-0000-0000-000000000006',
-     '70000000-0000-0000-0000-000000000006', v_product_quote, 9.99),
+     '70000000-0000-0000-0000-000000000006', v_product_quote, 9.99, NULL),
     ('71000000-0000-0000-0000-000000000007', '72000000-0000-0000-0000-000000000007',
-     '70000000-0000-0000-0000-000000000007', v_product_quote, 1.11);
+     '70000000-0000-0000-0000-000000000007', v_product_quote, 1.11, NULL),
+    ('71000000-0000-0000-0000-000000000008', v_quote_a,
+     '70000000-0000-0000-0000-000000000001', v_product_gallon, 10.00, 'qt'),
+    ('71000000-0000-0000-0000-000000000009', v_quote_b,
+     '70000000-0000-0000-0000-000000000003', v_product_gallon, 10.00, 'qt');
   INSERT INTO public.application_services
     (id, name, default_rate_per_acre_cents, cost_per_acre_cents, is_active)
   VALUES
@@ -556,6 +568,56 @@ BEGIN
     RAISE EXCEPTION 'P2_FAIL(unambiguous_quote_precedence): %', v_plan;
   END IF;
 
+  -- A quote price unit that cannot convert to the durable product unit must
+  -- fail closed instead of silently applying the numeric price to the wrong unit.
+  UPDATE public.quote_items
+     SET price_unit = 'bag'
+   WHERE id IN (
+     '71000000-0000-0000-0000-000000000008',
+     '71000000-0000-0000-0000-000000000009'
+   );
+  v_err := NULL;
+  BEGIN
+    PERFORM public.preview_field_app_invoice_split(
+      jsonb_build_array(jsonb_build_object('field_id', v_field_50, 'applied_acres', 1)),
+      jsonb_build_array(jsonb_build_object(
+        'line_key', 'chemical:quote-unit-invalid', 'sort_order', 0,
+        'product_id', v_product_gallon, 'description', 'Quoted per bag',
+        'rate_per_acre', 1, 'rate_unit', 'gl'
+      )), NULL, NULL, NULL, '{}'::jsonb
+    );
+  EXCEPTION WHEN OTHERS THEN v_err := SQLERRM; END;
+  IF COALESCE(v_err, '') NOT LIKE '%PER_LINE_QUOTE_UNIT_UNCONVERTIBLE%' THEN
+    RAISE EXCEPTION 'P2_FAIL(unconvertible_quote_unit_rejected): %', COALESCE(v_err, '<no error>');
+  END IF;
+  UPDATE public.quote_items
+     SET price_unit = 'qt'
+   WHERE id IN (
+     '71000000-0000-0000-0000-000000000008',
+     '71000000-0000-0000-0000-000000000009'
+   );
+
+  -- Quote price and price unit are one frozen pair. Normalize a $10/quart quote
+  -- into the durable gallon item unit before multiplying: 1 gal = 4 qt, so the
+  -- line must carry 4,000c/gal and total 4,000c, never 1,000c.
+  v_plan := public.preview_field_app_invoice_split(
+    jsonb_build_array(jsonb_build_object('field_id', v_field_50, 'applied_acres', 1)),
+    jsonb_build_array(jsonb_build_object(
+      'line_key', 'chemical:quote-unit', 'sort_order', 0,
+      'product_id', v_product_gallon, 'description', 'Quoted per quart',
+      'rate_per_acre', 1, 'rate_unit', 'gl'
+    )), NULL, NULL, NULL, '{}'::jsonb
+  );
+  IF v_plan#>>'{billing_lines,0,source_quantity}' <> '1.0000'
+     OR v_plan#>>'{billing_lines,0,source_unit_size}' <> 'gl'
+     OR v_plan#>>'{billing_lines,0,source_unit_price_cents}' <> '4000'
+     OR v_plan#>>'{billing_lines,0,source_amount_cents}' <> '4000'
+     OR v_plan#>>'{billing_lines,0,shares,0,base_unit_price_cents}' <> '4000'
+     OR v_plan#>>'{billing_lines,0,shares,1,base_unit_price_cents}' <> '4000'
+     OR v_plan->>'grand_total_cents' <> '4000' THEN
+    RAISE EXCEPTION 'P2_FAIL(quote_price_unit_normalization): %', v_plan;
+  END IF;
+
   -- No matching quote falls through to each customer's tier.
   v_plan := public.preview_field_app_invoice_split(
     jsonb_build_array(jsonb_build_object('field_id', v_field_50, 'applied_acres', 1)),
@@ -570,6 +632,42 @@ BEGIN
      OR v_plan#>>'{billing_lines,0,shares,1,base_price_source}' <> 'tier'
      OR v_plan->>'grand_total_cents' <> '150' THEN
     RAISE EXCEPTION 'P2_FAIL(tier_fallback): %', v_plan;
+  END IF;
+
+  -- NULL means cost has not been established. It must not be converted into a
+  -- legitimate zero-cost product, even when the sales price is supplied manually.
+  v_err := NULL;
+  BEGIN
+    PERFORM public.preview_field_app_invoice_split(
+      jsonb_build_array(jsonb_build_object('field_id', v_field_50, 'applied_acres', 1)),
+      jsonb_build_array(jsonb_build_object(
+        'line_key', 'chemical:missing-cost', 'sort_order', 0,
+        'product_id', v_product_missing_cost, 'description', 'Missing cost',
+        'rate_per_acre', 1, 'rate_unit', 'unit',
+        'manual_override', true, 'unit_price_cents', 100
+      )), NULL, NULL, NULL, '{}'::jsonb
+    );
+  EXCEPTION WHEN OTHERS THEN v_err := SQLERRM; END;
+  IF COALESCE(v_err, '') NOT LIKE '%PER_LINE_CHEMICAL_COST_REQUIRED%' THEN
+    RAISE EXCEPTION 'P2_FAIL(missing_product_cost_rejected): %', COALESCE(v_err, '<no error>');
+  END IF;
+
+  -- An explicit stored zero is different from an unknown cost and remains valid.
+  v_plan := public.preview_field_app_invoice_split(
+    jsonb_build_array(jsonb_build_object('field_id', v_field_50, 'applied_acres', 1)),
+    jsonb_build_array(jsonb_build_object(
+      'line_key', 'chemical:zero-cost', 'sort_order', 0,
+      'product_id', v_product_zero_cost, 'description', 'Zero cost',
+      'rate_per_acre', 1, 'rate_unit', 'unit',
+      'manual_override', true, 'unit_price_cents', 100
+    )), NULL, NULL, NULL, '{}'::jsonb
+  );
+  IF v_plan#>>'{billing_lines,0,source_cost_cents}' <> '0'
+     OR v_plan#>>'{billing_lines,0,source_total_cost_cents}' <> '0'
+     OR v_plan#>>'{billing_lines,0,shares,0,allocated_cost_cents}' <> '0'
+     OR v_plan#>>'{billing_lines,0,shares,1,allocated_cost_cents}' <> '0'
+     OR v_plan->>'grand_total_cents' <> '100' THEN
+    RAISE EXCEPTION 'P2_FAIL(explicit_zero_product_cost_allowed): %', v_plan;
   END IF;
 
   -- Exact three-way even vector + one cent + 4dp quantity residual. The lowest

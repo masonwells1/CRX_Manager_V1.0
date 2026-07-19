@@ -249,7 +249,8 @@ CREATE TABLE public.quote_items (
   quote_id uuid NOT NULL REFERENCES public.quotes(id),
   section_id uuid NOT NULL REFERENCES public.quote_sections(id),
   product_id uuid NOT NULL REFERENCES public.products(id),
-  price_per_unit numeric
+  price_per_unit numeric,
+  price_unit text
 );
 CREATE TABLE public.app_settings (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
