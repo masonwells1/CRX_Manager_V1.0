@@ -243,6 +243,20 @@ BEGIN
     RAISE EXCEPTION 'PER_LINE_FIELD_NOT_IN_JOB: every selected field must belong to job %',
       v_effective_job_id USING ERRCODE = 'check_violation';
   END IF;
+  IF v_effective_job_id IS NOT NULL AND EXISTS (
+    SELECT 1
+    FROM public.job_fields jf
+    WHERE jf.job_id = v_effective_job_id
+      AND NOT EXISTS (
+        SELECT 1
+        FROM pg_temp._plsb_fields selected_field
+        WHERE selected_field.field_id = jf.field_id
+      )
+  ) THEN
+    RAISE EXCEPTION
+      'PER_LINE_JOB_FIELD_SET_INCOMPLETE: every field on job % is required because chemical quantities are job-wide',
+      v_effective_job_id USING ERRCODE = 'check_violation';
+  END IF;
   IF EXISTS (SELECT 1 FROM pg_temp._plsb_fields WHERE applied_acres <= 0) THEN
     RAISE EXCEPTION 'ZERO_APPLIED_ACRES: every selected field needs applied acres greater than zero'
       USING ERRCODE = 'check_violation';
@@ -496,6 +510,12 @@ BEGIN
       v_rate_unit := COALESCE(NULLIF(v_job_chem.rate_unit, ''), NULLIF(v_job_chem.unit, ''));
       v_inventory_unit := v_job_chem.inventory_unit;
       v_product_form := v_job_chem.product_form;
+      -- The frozen job contract stores quantity AND cost/price in the same
+      -- job_chemicals.unit. JobDetail's reconcileChemAutofillUnits converts all
+      -- three together, and quote-to-job copies quote_items.price_unit into this
+      -- unit. Converting only quantity here would underbill a valid reconciled
+      -- row. Non-job inputs still need the field_app_priced_quantity conversion
+      -- below because their caller supplies a rate unit plus a product unit.
       v_source_qty_raw := v_job_chem.quantity;
       v_chem := v_chem || jsonb_build_object(
         'job_chemical_id', v_job_chem.id,
@@ -505,6 +525,10 @@ BEGIN
           || CASE WHEN v_job_chem.customer_supplied THEN ' (customer supplied)' ELSE '' END,
         'quantity', v_job_chem.quantity,
         'unit_size', v_job_chem.unit,
+        'snapshot_quantity', v_job_chem.quantity,
+        'snapshot_unit', v_job_chem.unit,
+        'pricing_quantity', v_job_chem.quantity,
+        'pricing_unit', v_job_chem.unit,
         'rate_per_acre', v_job_chem.rate_per_acre,
         'rate_unit', v_job_chem.rate_unit,
         'sort_order', v_sort_order,

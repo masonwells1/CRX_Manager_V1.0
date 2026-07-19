@@ -1,0 +1,635 @@
+-- Per-line-item split billing relational integrity follow-up.
+--
+-- Phase 1 established the durable tables, exact 100% vectors, RLS, freeze
+-- boundary, and append-only post snapshots. This additive migration closes the
+-- relationships that cannot be expressed as simple CHECK constraints:
+--   * a share customer must own its child invoice;
+--   * a share amount must equal its child invoice item;
+--   * every logical line must cover the billing set's exact customer set;
+--   * line quantities/acres and same-price/flat-fee cents must reconcile;
+--   * every split invoice item must be represented by exactly one share; and
+--   * each child invoice header must equal its item total.
+-- The checks are deferred so the Phase 3 writer can build an entire graph in one
+-- transaction, then are repeated synchronously before a split invoice posts.
+--
+-- idempotency-body-check: exempt (DDL only; no mutating RPC defined here)
+
+BEGIN;
+
+-- These deferred checks execute after a SECURITY DEFINER writer returns to the
+-- caller. FORCE RLS therefore requires the trigger-function owner to BYPASSRLS.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+      FROM pg_roles
+     WHERE rolname = current_user
+       AND rolbypassrls
+  ) THEN
+    RAISE EXCEPTION
+      'PER_LINE_SPLIT_BILLING_OWNER_REQUIRES_BYPASSRLS: migration role %',
+      current_user
+      USING ERRCODE = 'insufficient_privilege';
+  END IF;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public._assert_per_line_split_billing_integrity(
+  p_billing_set_id uuid
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_set public.field_app_billing_sets%ROWTYPE;
+  v_bad_id uuid;
+BEGIN
+  IF p_billing_set_id IS NULL THEN
+    RETURN;
+  END IF;
+
+  -- Every validating writer takes locks in the same order: one global advisory
+  -- lock, then the durable billing-set row. This prevents two concurrent graph
+  -- edits from each validating a partial view or deadlocking across many lines.
+  PERFORM pg_advisory_xact_lock(
+    hashtextextended('crx:per-line-split-billing:relational-integrity', 0)
+  );
+
+  SELECT *
+    INTO v_set
+    FROM public.field_app_billing_sets
+   WHERE id = p_billing_set_id
+   FOR UPDATE;
+
+  -- A deleted draft set has no remaining invariant to validate.
+  IF NOT FOUND THEN
+    RETURN;
+  END IF;
+
+  -- A share's declared customer is audit data and must agree with the customer
+  -- on the invoice that owns its one-to-one child item.
+  SELECT s.id
+    INTO v_bad_id
+    FROM public.invoice_line_shares s
+    JOIN public.field_app_billing_lines bl ON bl.id = s.billing_line_id
+    JOIN public.invoice_items ii ON ii.id = s.invoice_item_id
+    JOIN public.invoices inv ON inv.id = ii.invoice_id
+   WHERE bl.billing_set_id = p_billing_set_id
+     AND s.customer_id IS DISTINCT FROM inv.customer_id
+   ORDER BY s.id
+   LIMIT 1;
+  IF FOUND THEN
+    RAISE EXCEPTION
+      'PER_LINE_SHARE_CUSTOMER_INVOICE_MISMATCH: share % customer differs from its invoice customer',
+      v_bad_id
+      USING ERRCODE = 'check_violation';
+  END IF;
+
+  -- The stored item extension is authoritative on the invoice. The audit share
+  -- must preserve the exact same bigint cents, including zero and negative rows.
+  SELECT s.id
+    INTO v_bad_id
+    FROM public.invoice_line_shares s
+    JOIN public.field_app_billing_lines bl ON bl.id = s.billing_line_id
+    JOIN public.invoice_items ii ON ii.id = s.invoice_item_id
+   WHERE bl.billing_set_id = p_billing_set_id
+     AND s.amount_cents IS DISTINCT FROM ii.extended_cents
+   ORDER BY s.id
+   LIMIT 1;
+  IF FOUND THEN
+    RAISE EXCEPTION
+      'PER_LINE_SHARE_ITEM_AMOUNT_MISMATCH: share % amount differs from its invoice item',
+      v_bad_id
+      USING ERRCODE = 'check_violation';
+  END IF;
+
+  IF v_set.invoice_group_id IS NOT NULL THEN
+    -- A group is one invoice per customer. Duplicates make the exact line member
+    -- vector ambiguous and are rejected before any cents can be posted.
+    IF EXISTS (
+      SELECT inv.customer_id
+        FROM public.invoices inv
+       WHERE inv.invoice_group_id = v_set.invoice_group_id
+         AND inv.deleted_at IS NULL
+       GROUP BY inv.customer_id
+      HAVING inv.customer_id IS NULL OR count(*) <> 1
+    ) THEN
+      RAISE EXCEPTION
+        'PER_LINE_BILLING_GROUP_CUSTOMERS_INVALID: group % must have one live invoice per customer',
+        v_set.invoice_group_id
+        USING ERRCODE = 'check_violation';
+    END IF;
+
+    IF v_set.primary_customer_id IS NULL OR NOT EXISTS (
+      SELECT 1
+        FROM public.invoices inv
+       WHERE inv.invoice_group_id = v_set.invoice_group_id
+         AND inv.deleted_at IS NULL
+         AND inv.customer_id = v_set.primary_customer_id
+    ) THEN
+      RAISE EXCEPTION
+        'PER_LINE_PRIMARY_CUSTOMER_NOT_IN_GROUP: billing set %',
+        p_billing_set_id
+        USING ERRCODE = 'check_violation';
+    END IF;
+
+    -- Each logical line must have exactly the same customer set as the billing
+    -- group. The UNIQUE(line, customer) constraint supplies the "exactly one".
+    IF EXISTS (
+      SELECT 1
+        FROM public.field_app_billing_lines bl
+        CROSS JOIN public.invoices inv
+       WHERE bl.billing_set_id = p_billing_set_id
+         AND inv.invoice_group_id = v_set.invoice_group_id
+         AND inv.deleted_at IS NULL
+         AND NOT EXISTS (
+           SELECT 1
+             FROM public.invoice_line_shares s
+            WHERE s.billing_line_id = bl.id
+              AND s.customer_id = inv.customer_id
+         )
+    ) OR EXISTS (
+      SELECT 1
+        FROM public.invoice_line_shares s
+        JOIN public.field_app_billing_lines bl ON bl.id = s.billing_line_id
+       WHERE bl.billing_set_id = p_billing_set_id
+         AND NOT EXISTS (
+           SELECT 1
+             FROM public.invoices inv
+            WHERE inv.invoice_group_id = v_set.invoice_group_id
+              AND inv.deleted_at IS NULL
+              AND inv.customer_id = s.customer_id
+         )
+    ) THEN
+      RAISE EXCEPTION
+        'PER_LINE_SHARE_CUSTOMER_SET_MISMATCH: billing set % lines must match group customers',
+        p_billing_set_id
+        USING ERRCODE = 'check_violation';
+    END IF;
+  ELSE
+    -- An ungrouped durable set represents one recipient. Draft sets may be empty,
+    -- but once lines exist the primary customer and its one ungrouped invoice are
+    -- the complete member set.
+    IF EXISTS (
+      SELECT 1 FROM public.field_app_billing_lines
+       WHERE billing_set_id = p_billing_set_id
+    ) AND v_set.primary_customer_id IS NULL THEN
+      RAISE EXCEPTION
+        'PER_LINE_PRIMARY_CUSTOMER_REQUIRED: ungrouped billing set %',
+        p_billing_set_id
+        USING ERRCODE = 'check_violation';
+    END IF;
+
+    IF EXISTS (
+      SELECT 1
+        FROM public.invoice_line_shares s
+        JOIN public.field_app_billing_lines bl ON bl.id = s.billing_line_id
+        JOIN public.invoice_items ii ON ii.id = s.invoice_item_id
+        JOIN public.invoices inv ON inv.id = ii.invoice_id
+       WHERE bl.billing_set_id = p_billing_set_id
+         AND (
+           s.customer_id IS DISTINCT FROM v_set.primary_customer_id
+           OR inv.customer_id IS DISTINCT FROM v_set.primary_customer_id
+           OR inv.invoice_group_id IS NOT NULL
+         )
+    ) OR EXISTS (
+      SELECT 1
+        FROM public.field_app_billing_lines bl
+       WHERE bl.billing_set_id = p_billing_set_id
+         AND NOT EXISTS (
+           SELECT 1
+             FROM public.invoice_line_shares s
+            WHERE s.billing_line_id = bl.id
+              AND s.customer_id = v_set.primary_customer_id
+         )
+    ) THEN
+      RAISE EXCEPTION
+        'PER_LINE_SHARE_CUSTOMER_SET_MISMATCH: ungrouped billing set % must contain only its primary customer',
+        p_billing_set_id
+        USING ERRCODE = 'check_violation';
+    END IF;
+  END IF;
+
+  -- The set's job identity must flow to every child invoice that participates in
+  -- one of its shares. NULL is deliberate for non-job billing sets.
+  SELECT inv.id
+    INTO v_bad_id
+    FROM public.invoice_line_shares s
+    JOIN public.field_app_billing_lines bl ON bl.id = s.billing_line_id
+    JOIN public.invoice_items ii ON ii.id = s.invoice_item_id
+    JOIN public.invoices inv ON inv.id = ii.invoice_id
+   WHERE bl.billing_set_id = p_billing_set_id
+     AND inv.job_id IS DISTINCT FROM v_set.job_id
+   ORDER BY inv.id
+   LIMIT 1;
+  IF FOUND THEN
+    RAISE EXCEPTION
+      'PER_LINE_INVOICE_JOB_MISMATCH: invoice % job differs from billing set',
+      v_bad_id
+      USING ERRCODE = 'check_violation';
+  END IF;
+
+  -- Same-price and flat-fee lines preserve a canonical source total. Per-person
+  -- pricing deliberately has no parent total and is therefore excluded.
+  SELECT bl.id
+    INTO v_bad_id
+    FROM public.field_app_billing_lines bl
+    LEFT JOIN public.invoice_line_shares s ON s.billing_line_id = bl.id
+   WHERE bl.billing_set_id = p_billing_set_id
+     AND bl.price_basis IN ('same_price', 'flat_fee')
+   GROUP BY bl.id, bl.source_amount_cents
+  HAVING bl.source_amount_cents IS NULL
+      OR sum(s.amount_cents) IS DISTINCT FROM bl.source_amount_cents
+   ORDER BY bl.id
+   LIMIT 1;
+  IF FOUND THEN
+    RAISE EXCEPTION
+      'PER_LINE_SOURCE_AMOUNT_MISMATCH: billing line % shares do not equal source cents',
+      v_bad_id
+      USING ERRCODE = 'check_violation';
+  END IF;
+
+  SELECT bl.id
+    INTO v_bad_id
+    FROM public.field_app_billing_lines bl
+    LEFT JOIN public.invoice_line_shares s ON s.billing_line_id = bl.id
+   WHERE bl.billing_set_id = p_billing_set_id
+     AND bl.source_quantity IS NOT NULL
+   GROUP BY bl.id, bl.source_quantity
+  HAVING count(*) FILTER (WHERE s.allocated_quantity IS NULL) > 0
+      OR sum(s.allocated_quantity) IS DISTINCT FROM bl.source_quantity
+   ORDER BY bl.id
+   LIMIT 1;
+  IF FOUND THEN
+    RAISE EXCEPTION
+      'PER_LINE_SOURCE_QUANTITY_MISMATCH: billing line % shares do not equal source quantity',
+      v_bad_id
+      USING ERRCODE = 'check_violation';
+  END IF;
+
+  SELECT bl.id
+    INTO v_bad_id
+    FROM public.field_app_billing_lines bl
+    LEFT JOIN public.invoice_line_shares s ON s.billing_line_id = bl.id
+   WHERE bl.billing_set_id = p_billing_set_id
+     AND bl.source_acres IS NOT NULL
+   GROUP BY bl.id, bl.source_acres
+  HAVING count(*) FILTER (WHERE s.allocated_acres IS NULL) > 0
+      OR sum(s.allocated_acres) IS DISTINCT FROM bl.source_acres
+   ORDER BY bl.id
+   LIMIT 1;
+  IF FOUND THEN
+    RAISE EXCEPTION
+      'PER_LINE_SOURCE_ACRES_MISMATCH: billing line % shares do not equal source acres',
+      v_bad_id
+      USING ERRCODE = 'check_violation';
+  END IF;
+
+  -- A split child invoice is an exact projection of its share rows: no unrelated
+  -- item can hide in the header total, and no share can disagree with that total.
+  SELECT ii.id
+    INTO v_bad_id
+    FROM public.invoice_items ii
+    JOIN public.invoices inv ON inv.id = ii.invoice_id
+   WHERE (
+       (v_set.invoice_group_id IS NOT NULL
+        AND inv.invoice_group_id = v_set.invoice_group_id
+        AND inv.deleted_at IS NULL)
+       OR (
+         v_set.invoice_group_id IS NULL
+         AND EXISTS (
+           SELECT 1
+             FROM public.invoice_line_shares owning_share
+             JOIN public.invoice_items owning_item
+               ON owning_item.id = owning_share.invoice_item_id
+             JOIN public.field_app_billing_lines owning_line
+               ON owning_line.id = owning_share.billing_line_id
+            WHERE owning_line.billing_set_id = p_billing_set_id
+              AND owning_item.invoice_id = inv.id
+         )
+       )
+     )
+     AND NOT EXISTS (
+       SELECT 1
+         FROM public.invoice_line_shares s
+         JOIN public.field_app_billing_lines bl ON bl.id = s.billing_line_id
+        WHERE s.invoice_item_id = ii.id
+          AND bl.billing_set_id = p_billing_set_id
+     )
+   ORDER BY ii.id
+   LIMIT 1;
+  IF FOUND THEN
+    RAISE EXCEPTION
+      'PER_LINE_UNSHARED_INVOICE_ITEM: invoice item % is outside its billing set graph',
+      v_bad_id
+      USING ERRCODE = 'check_violation';
+  END IF;
+
+  SELECT inv.id
+    INTO v_bad_id
+    FROM public.invoices inv
+   WHERE (
+       (v_set.invoice_group_id IS NOT NULL
+        AND inv.invoice_group_id = v_set.invoice_group_id
+        AND inv.deleted_at IS NULL)
+       OR (
+         v_set.invoice_group_id IS NULL
+         AND EXISTS (
+           SELECT 1
+             FROM public.invoice_line_shares s
+             JOIN public.invoice_items ii ON ii.id = s.invoice_item_id
+             JOIN public.field_app_billing_lines bl ON bl.id = s.billing_line_id
+            WHERE bl.billing_set_id = p_billing_set_id
+              AND ii.invoice_id = inv.id
+         )
+       )
+     )
+     AND (
+       EXISTS (
+         SELECT 1 FROM public.invoice_items ii
+          WHERE ii.invoice_id = inv.id AND ii.extended_cents IS NULL
+       )
+       OR inv.total_amount_cents IS DISTINCT FROM (
+         SELECT COALESCE(sum(ii.extended_cents), 0)::bigint
+           FROM public.invoice_items ii
+          WHERE ii.invoice_id = inv.id
+       )
+     )
+   ORDER BY inv.id
+   LIMIT 1;
+  IF FOUND THEN
+    RAISE EXCEPTION
+      'PER_LINE_INVOICE_HEADER_TOTAL_MISMATCH: invoice % header differs from item cents',
+      v_bad_id
+      USING ERRCODE = 'check_violation';
+  END IF;
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION public._assert_per_line_split_billing_integrity(uuid)
+  FROM PUBLIC, anon, authenticated, service_role;
+
+-- Resolve the affected set from a share row. UPDATE validates both old and new
+-- parents so moving a row cannot leave the source graph invalid.
+CREATE OR REPLACE FUNCTION public.trg_assert_per_line_share_integrity()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_old_set_id uuid;
+  v_new_set_id uuid;
+BEGIN
+  IF TG_OP IN ('UPDATE', 'DELETE') THEN
+    SELECT billing_set_id INTO v_old_set_id
+      FROM public.field_app_billing_lines
+     WHERE id = OLD.billing_line_id;
+  END IF;
+  IF TG_OP IN ('INSERT', 'UPDATE') THEN
+    SELECT billing_set_id INTO v_new_set_id
+      FROM public.field_app_billing_lines
+     WHERE id = NEW.billing_line_id;
+  END IF;
+  PERFORM public._assert_per_line_split_billing_integrity(v_old_set_id);
+  IF v_new_set_id IS DISTINCT FROM v_old_set_id THEN
+    PERFORM public._assert_per_line_split_billing_integrity(v_new_set_id);
+  END IF;
+  RETURN NULL;
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION public.trg_assert_per_line_share_integrity()
+  FROM PUBLIC, anon, authenticated, service_role;
+
+DROP TRIGGER IF EXISTS trg_invoice_line_shares_relational_integrity
+  ON public.invoice_line_shares;
+CREATE CONSTRAINT TRIGGER trg_invoice_line_shares_relational_integrity
+  AFTER INSERT OR UPDATE OR DELETE ON public.invoice_line_shares
+  DEFERRABLE INITIALLY DEFERRED
+  FOR EACH ROW EXECUTE FUNCTION public.trg_assert_per_line_share_integrity();
+
+CREATE OR REPLACE FUNCTION public.trg_assert_per_line_billing_line_integrity()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+  IF TG_OP IN ('UPDATE', 'DELETE') THEN
+    PERFORM public._assert_per_line_split_billing_integrity(OLD.billing_set_id);
+  END IF;
+  IF TG_OP IN ('INSERT', 'UPDATE')
+     AND (TG_OP = 'INSERT' OR NEW.billing_set_id IS DISTINCT FROM OLD.billing_set_id) THEN
+    PERFORM public._assert_per_line_split_billing_integrity(NEW.billing_set_id);
+  END IF;
+  RETURN NULL;
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION public.trg_assert_per_line_billing_line_integrity()
+  FROM PUBLIC, anon, authenticated, service_role;
+
+DROP TRIGGER IF EXISTS trg_field_app_billing_lines_relational_integrity
+  ON public.field_app_billing_lines;
+CREATE CONSTRAINT TRIGGER trg_field_app_billing_lines_relational_integrity
+  AFTER INSERT OR UPDATE OR DELETE ON public.field_app_billing_lines
+  DEFERRABLE INITIALLY DEFERRED
+  FOR EACH ROW EXECUTE FUNCTION public.trg_assert_per_line_billing_line_integrity();
+
+CREATE OR REPLACE FUNCTION public.trg_assert_per_line_item_integrity()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_item_id uuid;
+  v_set_id uuid;
+BEGIN
+  FOREACH v_item_id IN ARRAY ARRAY[
+    CASE WHEN TG_OP IN ('UPDATE', 'DELETE') THEN OLD.id END,
+    CASE WHEN TG_OP IN ('INSERT', 'UPDATE') THEN NEW.id END
+  ]::uuid[] LOOP
+    IF v_item_id IS NULL THEN CONTINUE; END IF;
+    FOR v_set_id IN
+      SELECT DISTINCT candidate.billing_set_id
+        FROM (
+          SELECT bl.billing_set_id
+            FROM public.invoice_line_shares s
+            JOIN public.field_app_billing_lines bl ON bl.id = s.billing_line_id
+           WHERE s.invoice_item_id = v_item_id
+          UNION
+          SELECT bs.id
+            FROM public.invoice_items ii
+            JOIN public.invoices inv ON inv.id = ii.invoice_id
+            JOIN public.field_app_billing_sets bs
+              ON bs.invoice_group_id = inv.invoice_group_id
+           WHERE ii.id = v_item_id
+             AND inv.invoice_group_id IS NOT NULL
+          UNION
+          SELECT sibling_line.billing_set_id
+            FROM public.invoice_items ii
+            JOIN public.invoice_items sibling_item
+              ON sibling_item.invoice_id = ii.invoice_id
+            JOIN public.invoice_line_shares sibling_share
+              ON sibling_share.invoice_item_id = sibling_item.id
+            JOIN public.field_app_billing_lines sibling_line
+              ON sibling_line.id = sibling_share.billing_line_id
+           WHERE ii.id = v_item_id
+        ) candidate
+    LOOP
+      PERFORM public._assert_per_line_split_billing_integrity(v_set_id);
+    END LOOP;
+  END LOOP;
+  RETURN NULL;
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION public.trg_assert_per_line_item_integrity()
+  FROM PUBLIC, anon, authenticated, service_role;
+
+DROP TRIGGER IF EXISTS trg_invoice_items_per_line_relational_integrity
+  ON public.invoice_items;
+CREATE CONSTRAINT TRIGGER trg_invoice_items_per_line_relational_integrity
+  AFTER INSERT OR UPDATE OR DELETE ON public.invoice_items
+  DEFERRABLE INITIALLY DEFERRED
+  FOR EACH ROW EXECUTE FUNCTION public.trg_assert_per_line_item_integrity();
+
+CREATE OR REPLACE FUNCTION public.trg_assert_per_line_invoice_integrity()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_invoice_id uuid;
+  v_group_id uuid;
+  v_set_id uuid;
+BEGIN
+  FOREACH v_invoice_id IN ARRAY ARRAY[
+    CASE WHEN TG_OP IN ('UPDATE', 'DELETE') THEN OLD.id END,
+    CASE WHEN TG_OP IN ('INSERT', 'UPDATE') THEN NEW.id END
+  ]::uuid[] LOOP
+    IF v_invoice_id IS NULL THEN CONTINUE; END IF;
+    FOR v_set_id IN
+      SELECT DISTINCT candidate.billing_set_id
+        FROM (
+          SELECT bl.billing_set_id
+            FROM public.invoice_items ii
+            JOIN public.invoice_line_shares s ON s.invoice_item_id = ii.id
+            JOIN public.field_app_billing_lines bl ON bl.id = s.billing_line_id
+           WHERE ii.invoice_id = v_invoice_id
+          UNION
+          SELECT bs.id
+            FROM public.field_app_billing_sets bs
+            JOIN public.invoices inv ON inv.invoice_group_id = bs.invoice_group_id
+           WHERE inv.id = v_invoice_id
+             AND bs.invoice_group_id IS NOT NULL
+        ) candidate
+    LOOP
+      PERFORM public._assert_per_line_split_billing_integrity(v_set_id);
+    END LOOP;
+  END LOOP;
+
+  -- On UPDATE, also validate a set attached to the old group after the invoice
+  -- leaves it; the current-row lookup above can no longer discover that group.
+  IF TG_OP = 'UPDATE' AND OLD.invoice_group_id IS DISTINCT FROM NEW.invoice_group_id THEN
+    FOREACH v_group_id IN ARRAY ARRAY[OLD.invoice_group_id, NEW.invoice_group_id]::uuid[] LOOP
+      IF v_group_id IS NULL THEN CONTINUE; END IF;
+      FOR v_set_id IN
+        SELECT id FROM public.field_app_billing_sets WHERE invoice_group_id = v_group_id
+      LOOP
+        PERFORM public._assert_per_line_split_billing_integrity(v_set_id);
+      END LOOP;
+    END LOOP;
+  END IF;
+  RETURN NULL;
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION public.trg_assert_per_line_invoice_integrity()
+  FROM PUBLIC, anon, authenticated, service_role;
+
+DROP TRIGGER IF EXISTS trg_invoices_per_line_relational_integrity ON public.invoices;
+CREATE CONSTRAINT TRIGGER trg_invoices_per_line_relational_integrity
+  AFTER INSERT OR UPDATE OR DELETE ON public.invoices
+  DEFERRABLE INITIALLY DEFERRED
+  FOR EACH ROW EXECUTE FUNCTION public.trg_assert_per_line_invoice_integrity();
+
+CREATE OR REPLACE FUNCTION public.trg_assert_per_line_billing_set_integrity()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+  IF TG_OP IN ('UPDATE', 'DELETE') THEN
+    PERFORM public._assert_per_line_split_billing_integrity(OLD.id);
+  END IF;
+  IF TG_OP = 'INSERT' THEN
+    PERFORM public._assert_per_line_split_billing_integrity(NEW.id);
+  END IF;
+  RETURN NULL;
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION public.trg_assert_per_line_billing_set_integrity()
+  FROM PUBLIC, anon, authenticated, service_role;
+
+DROP TRIGGER IF EXISTS trg_field_app_billing_sets_relational_integrity
+  ON public.field_app_billing_sets;
+CREATE CONSTRAINT TRIGGER trg_field_app_billing_sets_relational_integrity
+  AFTER INSERT OR UPDATE OR DELETE ON public.field_app_billing_sets
+  DEFERRABLE INITIALLY DEFERRED
+  FOR EACH ROW EXECUTE FUNCTION public.trg_assert_per_line_billing_set_integrity();
+
+-- Repeat the complete graph validation synchronously before the Phase 1 AFTER
+-- trigger captures an immutable post snapshot. Ordinary invoices have no set and
+-- return immediately without changing their legacy posting behavior.
+CREATE OR REPLACE FUNCTION public.trg_assert_per_line_integrity_before_post()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_set_id uuid;
+BEGIN
+  IF NEW.status NOT IN ('posted', 'paid', 'overdue', 'voided')
+     OR NEW.posted_at IS NULL THEN
+    RETURN NEW;
+  END IF;
+
+  FOR v_set_id IN
+    SELECT DISTINCT candidate.billing_set_id
+      FROM (
+        SELECT bl.billing_set_id
+          FROM public.invoice_items ii
+          JOIN public.invoice_line_shares s ON s.invoice_item_id = ii.id
+          JOIN public.field_app_billing_lines bl ON bl.id = s.billing_line_id
+         WHERE ii.invoice_id = NEW.id
+        UNION
+        SELECT bs.id
+          FROM public.field_app_billing_sets bs
+         WHERE bs.invoice_group_id = NEW.invoice_group_id
+           AND NEW.invoice_group_id IS NOT NULL
+      ) candidate
+  LOOP
+    PERFORM public._assert_per_line_split_billing_integrity(v_set_id);
+  END LOOP;
+  RETURN NEW;
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION public.trg_assert_per_line_integrity_before_post()
+  FROM PUBLIC, anon, authenticated, service_role;
+
+DROP TRIGGER IF EXISTS trg_00_assert_per_line_integrity_before_post ON public.invoices;
+CREATE TRIGGER trg_00_assert_per_line_integrity_before_post
+  BEFORE UPDATE OF status, posted_at ON public.invoices
+  FOR EACH ROW EXECUTE FUNCTION public.trg_assert_per_line_integrity_before_post();
+
+COMMIT;

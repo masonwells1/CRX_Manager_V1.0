@@ -18,16 +18,22 @@ DECLARE
   v_field_mode_a constant uuid := '30000000-0000-0000-0000-000000000004';
   v_field_job constant uuid := '30000000-0000-0000-0000-000000000005';
   v_field_outside constant uuid := '30000000-0000-0000-0000-000000000006';
+  v_field_convert constant uuid := '30000000-0000-0000-0000-000000000007';
   v_job constant uuid := '40000000-0000-0000-0000-000000000001';
   v_job_quote constant uuid := '40000000-0000-0000-0000-000000000002';
   v_job_customer_supplied constant uuid := '40000000-0000-0000-0000-000000000003';
   v_job_service constant uuid := '40000000-0000-0000-0000-000000000004';
+  v_job_convert constant uuid := '40000000-0000-0000-0000-000000000005';
+  v_job_subset constant uuid := '40000000-0000-0000-0000-000000000006';
   v_job_chem constant uuid := '41000000-0000-0000-0000-000000000001';
   v_job_chem_quote_a constant uuid := '41000000-0000-0000-0000-000000000002';
   v_job_chem_quote_b constant uuid := '41000000-0000-0000-0000-000000000003';
   v_job_chem_customer_supplied constant uuid := '41000000-0000-0000-0000-000000000004';
+  v_job_chem_convert constant uuid := '41000000-0000-0000-0000-000000000005';
+  v_job_chem_subset constant uuid := '41000000-0000-0000-0000-000000000006';
   v_product_quote constant uuid := '50000000-0000-0000-0000-000000000001';
   v_product_tier constant uuid := '50000000-0000-0000-0000-000000000002';
+  v_product_gallon constant uuid := '50000000-0000-0000-0000-000000000003';
   v_service constant uuid := '60000000-0000-0000-0000-000000000001';
   v_plan jsonb;
   v_plan_again jsonb;
@@ -51,19 +57,25 @@ BEGIN
     (v_job, 2026),
     (v_job_quote, 2026),
     (v_job_customer_supplied, 2026),
-    (v_job_service, 2025);
+    (v_job_service, 2025),
+    (v_job_convert, 2026),
+    (v_job_subset, 2026);
   INSERT INTO public.fields (id, field_name, customer_id, total_acres) VALUES
     (v_field_50, 'Half Field', v_a, 1),
     (v_field_3, 'Thirds Field', v_a, 1),
     (v_field_fallback, 'Fallback Field', v_b, 1),
     (v_field_mode_a, 'Mode A Field', v_a, 1),
     (v_field_job, 'Snapshot Field', v_a, 1),
-    (v_field_outside, 'Outside Job Field', v_a, 1);
+    (v_field_outside, 'Outside Job Field', v_a, 1),
+    (v_field_convert, 'Unit Conversion Field', v_a, 100);
   INSERT INTO public.job_fields (job_id, field_id, acres_to_treat, sort_order) VALUES
     (v_job, v_field_job, 1, 1),
     (v_job_quote, v_field_50, 1, 1),
     (v_job_customer_supplied, v_field_50, 1, 1),
-    (v_job_service, v_field_50, 1, 1);
+    (v_job_service, v_field_50, 1, 1),
+    (v_job_convert, v_field_convert, 100, 1),
+    (v_job_subset, v_field_job, 1, 1),
+    (v_job_subset, v_field_outside, 1, 2);
 
   INSERT INTO public.field_billing_defaults
     (field_id, customer_id, split_pct, is_primary, price_override_cents)
@@ -76,7 +88,9 @@ BEGIN
     (v_field_mode_a, v_a, 50, true, 1200),
     (v_field_mode_a, v_b, 50, false, NULL),
     (v_field_job, v_a, 50, true, NULL),
-    (v_field_job, v_b, 50, false, NULL);
+    (v_field_job, v_b, 50, false, NULL),
+    (v_field_convert, v_a, 50, true, NULL),
+    (v_field_convert, v_b, 50, false, NULL);
   INSERT INTO public.job_field_shares
     (job_id, field_id, customer_id, split_pct, is_primary)
   VALUES (v_job, v_field_job, v_c, 100, true);
@@ -85,7 +99,8 @@ BEGIN
     (id, product_name, inventory_unit, product_form, tier1_price, tier2_price, tier3_price)
   VALUES
     (v_product_quote, 'Quote Product', 'unit', 'liquid', 1.00, 2.00, 3.00),
-    (v_product_tier, 'Tier Product', 'unit', 'liquid', 1.00, 2.00, 3.00);
+    (v_product_tier, 'Tier Product', 'unit', 'liquid', 1.00, 2.00, 3.00),
+    (v_product_gallon, 'Gallon Product', 'gl', 'liquid', 32.10, 32.10, 32.10);
   INSERT INTO public.job_chemicals (
     id, job_id, product_id, quantity, unit, rate_per_acre, rate_unit,
     cost_per_unit_cents, price_per_unit_cents, sort_order, customer_supplied
@@ -93,7 +108,9 @@ BEGIN
     (v_job_chem, v_job, v_product_tier, 1, 'unit', 1, 'unit', 50, 100, 0, false),
     (v_job_chem_quote_a, v_job_quote, v_product_quote, 2, 'unit', 2, 'unit', 50, 150, 0, false),
     (v_job_chem_quote_b, v_job_quote, v_product_quote, 3, 'unit', 3, 'unit', 60, 275, 1, false),
-    (v_job_chem_customer_supplied, v_job_customer_supplied, v_product_tier, 4, 'unit', 4, 'unit', 999, 999, 0, true);
+    (v_job_chem_customer_supplied, v_job_customer_supplied, v_product_tier, 4, 'unit', 4, 'unit', 999, 999, 0, true),
+    (v_job_chem_convert, v_job_convert, v_product_gallon, 1600, 'oz', 16, 'oz', 10, 25, 0, false),
+    (v_job_chem_subset, v_job_subset, v_product_tier, 2, 'unit', 1, 'unit', 50, 100, 0, false);
   INSERT INTO public.quote_sections (id, field_id) VALUES
     ('70000000-0000-0000-0000-000000000001', v_field_50),
     ('70000000-0000-0000-0000-000000000002', v_field_50);
@@ -454,6 +471,39 @@ BEGIN
     RAISE EXCEPTION 'P2_FAIL(job_chemical_identity_required): %', COALESCE(v_err, '<no error>');
   END IF;
 
+  -- A job snapshot stores quantity and price in the same selected row unit.
+  -- JobDetail reconciles both together (for example, per-gallon price becomes
+  -- per-ounce price when it stores an ounce quantity). Billing must preserve that
+  -- frozen pair instead of converting only quantity back to product inventory unit.
+  v_plan := public.preview_field_app_invoice_split(
+    jsonb_build_array(jsonb_build_object('field_id', v_field_convert, 'applied_acres', 100)),
+    jsonb_build_array(jsonb_build_object('job_chemical_id', v_job_chem_convert)),
+    NULL, NULL, v_job_convert, '{}'::jsonb
+  );
+  IF v_plan#>>'{billing_lines,0,source_quantity}' <> '1600.0000'
+     OR v_plan#>>'{billing_lines,0,source_unit_price_cents}' <> '25'
+     OR v_plan#>>'{billing_lines,0,source_amount_cents}' <> '40000'
+     OR v_plan#>>'{billing_lines,0,source_input,snapshot_quantity}' <> '1600'
+     OR v_plan#>>'{billing_lines,0,source_input,snapshot_unit}' <> 'oz'
+     OR v_plan#>>'{billing_lines,0,source_input,pricing_unit}' <> 'oz' THEN
+    RAISE EXCEPTION 'P2_FAIL(job_snapshot_unit_price_pair): %', v_plan;
+  END IF;
+
+  -- Full-job chemistry may not be reallocated over only a caller-selected subset
+  -- of the job's fields. Without authoritative per-field chemical quantities the
+  -- calculator must require the exact complete field set.
+  v_err := NULL;
+  BEGIN
+    PERFORM public.preview_field_app_invoice_split(
+      jsonb_build_array(jsonb_build_object('field_id', v_field_job, 'applied_acres', 1)),
+      jsonb_build_array(jsonb_build_object('job_chemical_id', v_job_chem_subset)),
+      NULL, NULL, v_job_subset, '{}'::jsonb
+    );
+  EXCEPTION WHEN OTHERS THEN v_err := SQLERRM; END;
+  IF v_err NOT LIKE '%PER_LINE_JOB_FIELD_SET_INCOMPLETE%' THEN
+    RAISE EXCEPTION 'P2_FAIL(job_field_set_incomplete): %', COALESCE(v_err, '<no error>');
+  END IF;
+
   -- Field owner fallback when neither snapshot nor field defaults exist.
   v_plan := public.preview_field_app_invoice_split(
     jsonb_build_array(jsonb_build_object('field_id', v_field_fallback, 'applied_acres', 1)),
@@ -548,6 +598,210 @@ BEGIN
         'EXECUTE'
       );
   END IF;
+
+  -- A share cannot claim customer A while pointing at customer B's invoice item.
+  -- This vector is arithmetically 100%, so Phase 1 alone accepted it; the
+  -- relational follow-up migration must fail it closed.
+  BEGIN
+    INSERT INTO public.field_app_billing_sets (
+      id, invoice_group_id, job_id, primary_customer_id, created_by
+    ) VALUES (
+      '80000000-0000-0000-0000-000000000001',
+      '81000000-0000-0000-0000-000000000001', v_job, v_a, v_admin
+    );
+    INSERT INTO public.field_app_billing_lines (
+      id, billing_set_id, line_kind, price_basis, description,
+      source_quantity, source_amount_cents
+    ) VALUES (
+      '82000000-0000-0000-0000-000000000001',
+      '80000000-0000-0000-0000-000000000001',
+      'chemical', 'same_price', 'Invalid customer relationship', 1, 100
+    );
+    INSERT INTO public.invoices (
+      id, customer_id, invoice_group_id, job_id, total_amount_cents, created_by
+    ) VALUES (
+      '83000000-0000-0000-0000-000000000001', v_b,
+      '81000000-0000-0000-0000-000000000001', v_job, 100, v_admin
+    );
+    INSERT INTO public.invoice_items (
+      id, invoice_id, quantity, unit_price_cents, extended_cents
+    ) VALUES (
+      '84000000-0000-0000-0000-000000000001',
+      '83000000-0000-0000-0000-000000000001', 1, 100, 100
+    );
+    INSERT INTO public.invoice_line_shares (
+      billing_line_id, invoice_item_id, customer_id, split_mode,
+      split_micro_pct, allocated_quantity, base_unit_price_cents,
+      base_price_source, price_mode, unit_price_cents, amount_cents,
+      calculation_hash, vector_hash, created_by
+    ) VALUES (
+      '82000000-0000-0000-0000-000000000001',
+      '84000000-0000-0000-0000-000000000001', v_a, 'field_default',
+      100000000, 1, 100, 'job_snapshot', 'default', 100, 100,
+      repeat('a', 64), repeat('b', 64), v_admin
+    );
+    SET CONSTRAINTS ALL IMMEDIATE;
+    RAISE EXCEPTION 'P2_FAIL(share_customer_invoice_mismatch): <no error>';
+  EXCEPTION
+    WHEN check_violation THEN
+      GET STACKED DIAGNOSTICS v_err = MESSAGE_TEXT;
+      IF v_err NOT LIKE '%PER_LINE_SHARE_CUSTOMER_INVOICE_MISMATCH%' THEN
+        RAISE;
+      END IF;
+  END;
+
+  -- Build one valid two-customer graph, force every deferred constraint, then
+  -- prove each durable money/quantity/header relationship rejects corruption.
+  INSERT INTO public.field_app_billing_sets (
+    id, invoice_group_id, job_id, primary_customer_id, created_by
+  ) VALUES (
+    '80000000-0000-0000-0000-000000000010',
+    '81000000-0000-0000-0000-000000000010', v_job, v_a, v_admin
+  );
+  INSERT INTO public.field_app_billing_lines (
+    id, billing_set_id, line_kind, price_basis, description,
+    source_quantity, source_acres, source_amount_cents
+  ) VALUES (
+    '82000000-0000-0000-0000-000000000010',
+    '80000000-0000-0000-0000-000000000010',
+    'chemical', 'same_price', 'Valid relational graph', 1, 1, 100
+  );
+  INSERT INTO public.invoices (
+    id, customer_id, invoice_group_id, job_id, total_amount_cents, created_by
+  ) VALUES
+    ('83000000-0000-0000-0000-000000000010', v_a,
+     '81000000-0000-0000-0000-000000000010', v_job, 50, v_admin),
+    ('83000000-0000-0000-0000-000000000011', v_b,
+     '81000000-0000-0000-0000-000000000010', v_job, 50, v_admin);
+  INSERT INTO public.invoice_items (
+    id, invoice_id, quantity, acres, unit_price_cents, extended_cents
+  ) VALUES
+    ('84000000-0000-0000-0000-000000000010',
+     '83000000-0000-0000-0000-000000000010', 0.5, 0.50, 100, 50),
+    ('84000000-0000-0000-0000-000000000011',
+     '83000000-0000-0000-0000-000000000011', 0.5, 0.50, 100, 50);
+  INSERT INTO public.invoice_line_shares (
+    id, billing_line_id, invoice_item_id, customer_id, split_mode,
+    split_micro_pct, allocated_quantity, allocated_acres,
+    base_unit_price_cents, base_price_source, price_mode,
+    unit_price_cents, amount_cents, calculation_hash, vector_hash, created_by
+  ) VALUES
+    ('85000000-0000-0000-0000-000000000010',
+     '82000000-0000-0000-0000-000000000010',
+     '84000000-0000-0000-0000-000000000010', v_a, 'field_default',
+     50000000, 0.5, 0.5, 100, 'job_snapshot', 'default', 100, 50,
+     repeat('c', 64), repeat('d', 64), v_admin),
+    ('85000000-0000-0000-0000-000000000011',
+     '82000000-0000-0000-0000-000000000010',
+     '84000000-0000-0000-0000-000000000011', v_b, 'field_default',
+     50000000, 0.5, 0.5, 100, 'job_snapshot', 'default', 100, 50,
+     repeat('c', 64), repeat('d', 64), v_admin);
+  SET CONSTRAINTS ALL IMMEDIATE;
+
+  BEGIN
+    SET CONSTRAINTS ALL DEFERRED;
+    DELETE FROM public.invoice_line_shares
+     WHERE id = '85000000-0000-0000-0000-000000000011';
+    DELETE FROM public.invoice_items
+     WHERE id = '84000000-0000-0000-0000-000000000011';
+    UPDATE public.invoices SET total_amount_cents = 0
+     WHERE id = '83000000-0000-0000-0000-000000000011';
+    UPDATE public.invoice_line_shares
+       SET split_micro_pct = 100000000,
+           allocated_quantity = 1,
+           allocated_acres = 1,
+           amount_cents = 100
+     WHERE id = '85000000-0000-0000-0000-000000000010';
+    UPDATE public.invoice_items
+       SET quantity = 1, acres = 1, extended_cents = 100
+     WHERE id = '84000000-0000-0000-0000-000000000010';
+    UPDATE public.invoices SET total_amount_cents = 100
+     WHERE id = '83000000-0000-0000-0000-000000000010';
+    SET CONSTRAINTS ALL IMMEDIATE;
+    RAISE EXCEPTION 'P2_FAIL(group_customer_set_mismatch): <no error>';
+  EXCEPTION WHEN check_violation THEN
+    GET STACKED DIAGNOSTICS v_err = MESSAGE_TEXT;
+    IF v_err NOT LIKE '%PER_LINE_SHARE_CUSTOMER_SET_MISMATCH%' THEN RAISE; END IF;
+  END;
+
+  BEGIN
+    INSERT INTO public.invoice_items (
+      id, invoice_id, quantity, acres, unit_price_cents, extended_cents
+    ) VALUES (
+      '84000000-0000-0000-0000-000000000012',
+      '83000000-0000-0000-0000-000000000010', 0, 0, 0, 0
+    );
+    RAISE EXCEPTION 'P2_FAIL(unshared_invoice_item): <no error>';
+  EXCEPTION WHEN check_violation THEN
+    GET STACKED DIAGNOSTICS v_err = MESSAGE_TEXT;
+    IF v_err NOT LIKE '%PER_LINE_UNSHARED_INVOICE_ITEM%' THEN RAISE; END IF;
+  END;
+
+  BEGIN
+    UPDATE public.invoice_line_shares
+       SET amount_cents = 49
+     WHERE id = '85000000-0000-0000-0000-000000000010';
+    RAISE EXCEPTION 'P2_FAIL(share_item_amount_mismatch): <no error>';
+  EXCEPTION WHEN check_violation THEN
+    GET STACKED DIAGNOSTICS v_err = MESSAGE_TEXT;
+    IF v_err NOT LIKE '%PER_LINE_SHARE_ITEM_AMOUNT_MISMATCH%' THEN RAISE; END IF;
+  END;
+
+  BEGIN
+    UPDATE public.field_app_billing_lines
+       SET source_amount_cents = 99
+     WHERE id = '82000000-0000-0000-0000-000000000010';
+    RAISE EXCEPTION 'P2_FAIL(source_amount_mismatch): <no error>';
+  EXCEPTION WHEN check_violation THEN
+    GET STACKED DIAGNOSTICS v_err = MESSAGE_TEXT;
+    IF v_err NOT LIKE '%PER_LINE_SOURCE_AMOUNT_MISMATCH%' THEN RAISE; END IF;
+  END;
+
+  BEGIN
+    UPDATE public.invoice_line_shares
+       SET allocated_quantity = 0.4
+     WHERE id = '85000000-0000-0000-0000-000000000010';
+    RAISE EXCEPTION 'P2_FAIL(source_quantity_mismatch): <no error>';
+  EXCEPTION WHEN check_violation THEN
+    GET STACKED DIAGNOSTICS v_err = MESSAGE_TEXT;
+    IF v_err NOT LIKE '%PER_LINE_SOURCE_QUANTITY_MISMATCH%' THEN RAISE; END IF;
+  END;
+
+  BEGIN
+    UPDATE public.invoice_line_shares
+       SET allocated_acres = 0.4
+     WHERE id = '85000000-0000-0000-0000-000000000010';
+    RAISE EXCEPTION 'P2_FAIL(source_acres_mismatch): <no error>';
+  EXCEPTION WHEN check_violation THEN
+    GET STACKED DIAGNOSTICS v_err = MESSAGE_TEXT;
+    IF v_err NOT LIKE '%PER_LINE_SOURCE_ACRES_MISMATCH%' THEN RAISE; END IF;
+  END;
+
+  BEGIN
+    UPDATE public.invoices
+       SET total_amount_cents = 49
+     WHERE id = '83000000-0000-0000-0000-000000000010';
+    RAISE EXCEPTION 'P2_FAIL(invoice_header_mismatch): <no error>';
+  EXCEPTION WHEN check_violation THEN
+    GET STACKED DIAGNOSTICS v_err = MESSAGE_TEXT;
+    IF v_err NOT LIKE '%PER_LINE_INVOICE_HEADER_TOTAL_MISMATCH%' THEN RAISE; END IF;
+  END;
+
+  -- Deferred checks permit an atomic rewrite, but the synchronous pre-post guard
+  -- must still reject an invalid header before Phase 1 captures its snapshot.
+  BEGIN
+    SET CONSTRAINTS ALL DEFERRED;
+    UPDATE public.invoices
+       SET total_amount_cents = 49
+     WHERE id = '83000000-0000-0000-0000-000000000010';
+    UPDATE public.invoices
+       SET status = 'posted', posted_at = now()
+     WHERE id = '83000000-0000-0000-0000-000000000010';
+    RAISE EXCEPTION 'P2_FAIL(pre_post_integrity_boundary): <no error>';
+  EXCEPTION WHEN check_violation THEN
+    GET STACKED DIAGNOSTICS v_err = MESSAGE_TEXT;
+    IF v_err NOT LIKE '%PER_LINE_INVOICE_HEADER_TOTAL_MISMATCH%' THEN RAISE; END IF;
+  END;
 
   -- Applicators cannot read private prices through the public SECURITY DEFINER preview.
   PERFORM set_config('request.jwt.claim.sub', v_applicator::text, true);
