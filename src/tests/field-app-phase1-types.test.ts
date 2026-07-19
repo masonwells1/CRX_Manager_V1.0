@@ -130,9 +130,15 @@ describe('Field App Phase 1 — type contract', () => {
     expect(sample.total_posted_cents).toBe(250000);
   });
 
-  it('PreviewFieldAppSplitLine.kind is the closed union grower_share | chemical | service_fee', () => {
-    const kinds: PreviewFieldAppSplitLine['kind'][] = ['grower_share', 'chemical', 'service_fee'];
-    expect(kinds).toHaveLength(3);
+  it('PreviewFieldAppSplitLine.kind includes every server-emitted billing line kind', () => {
+    const kinds: PreviewFieldAppSplitLine['kind'][] = [
+      'grower_share',
+      'chemical',
+      'service_fee',
+      'fuel_surcharge',
+      'flat_fee',
+    ];
+    expect(kinds).toHaveLength(5);
   });
 
   it('PreviewFieldAppSplitCustomer aggregates lines + total_cents per customer', () => {

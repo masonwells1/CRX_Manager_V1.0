@@ -3580,7 +3580,8 @@ export interface PostInvoiceGroupResult {
 export interface PreviewFieldAppSplitLine {
   // #32: 'fuel_surcharge' = the owner-configured fuel surcharge line (only present
   // when the admin enabled it AND set a rate; absent at the OFF/blank default).
-  kind: 'grower_share' | 'chemical' | 'service_fee' | 'fuel_surcharge';
+  // Phase 2 also emits server-supplied generic 'flat_fee' lines.
+  kind: 'grower_share' | 'chemical' | 'service_fee' | 'fuel_surcharge' | 'flat_fee';
   description: string;
   quantity: number;
   unit_price_cents: number;

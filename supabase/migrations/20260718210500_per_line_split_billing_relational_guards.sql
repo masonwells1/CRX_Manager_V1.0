@@ -42,6 +42,8 @@ $$;
 -- pricing unit, per-unit COGS, and penny-exact allocated COGS to the durable
 -- line/share graph and immutable post record
 -- here, before any writer can persist a plan that would otherwise lose them.
+-- Source/allocated COGS totals are signed: a return reverses both revenue and
+-- cost while source_cost_cents remains the non-negative frozen per-unit basis.
 ALTER TABLE public.field_app_billing_lines
   ADD COLUMN source_job_chemical_id uuid
     REFERENCES public.job_chemicals(id) ON DELETE RESTRICT,
@@ -52,8 +54,6 @@ ALTER TABLE public.field_app_billing_lines
     CHECK (source_unit_size ~ '[^[:space:]]'),
   ADD CONSTRAINT field_app_billing_lines_source_cost_ck
     CHECK (source_cost_cents >= 0),
-  ADD CONSTRAINT field_app_billing_lines_source_total_cost_ck
-    CHECK (source_total_cost_cents >= 0),
   ADD CONSTRAINT field_app_billing_lines_source_job_chemical_kind_ck
     CHECK (source_job_chemical_id IS NULL OR line_kind = 'chemical'),
   ADD CONSTRAINT field_app_billing_lines_application_service_kind_ck
@@ -69,9 +69,7 @@ CREATE UNIQUE INDEX uq_field_app_billing_lines_set_application_service
   WHERE application_service_id IS NOT NULL;
 
 ALTER TABLE public.invoice_line_shares
-  ADD COLUMN allocated_cost_cents bigint NOT NULL,
-  ADD CONSTRAINT invoice_line_shares_allocated_cost_ck
-    CHECK (allocated_cost_cents >= 0);
+  ADD COLUMN allocated_cost_cents bigint NOT NULL;
 
 ALTER TABLE public.invoice_line_share_post_snapshots
   ADD COLUMN invoice_total_cost_cents bigint NOT NULL,
@@ -201,7 +199,8 @@ BEGIN
   -- Canonical source COGS is rounded once from the frozen per-unit cost and
   -- final stored source quantity. Child COGS is a separate residual cents
   -- allocation because independently rounding cost * child quantity can create
-  -- or destroy pennies (for example, 1 unit at 1c split 50/50).
+  -- or destroy pennies (for example, 1 unit at 1c split 50/50). Signed returns
+  -- use the same equality; only the frozen per-unit cost basis stays non-negative.
   SELECT bl.id
     INTO v_bad_id
     FROM public.field_app_billing_lines bl

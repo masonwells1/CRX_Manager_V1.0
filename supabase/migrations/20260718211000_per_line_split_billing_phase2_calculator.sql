@@ -18,8 +18,9 @@
 --   5. Quantity, acre, micro-percent, and cent passes use the same customer tie-break.
 --   6. Even vectors use largest remainder (three-way = 33333334/33333333/33333333).
 --   7. price x micro-percent intermediates stay numeric.
---   8. Source COGS rounds once from frozen unit cost x source quantity; child
---      COGS cents use their own largest-remainder pass and sum exactly to source.
+--   8. Source COGS rounds once from frozen unit cost x source quantity; signed
+--      child COGS cents use their own ABS/sign largest-remainder pass and sum
+--      exactly to source.
 
 BEGIN;
 
@@ -1217,23 +1218,26 @@ BEGIN
   -- COGS cents pass: preserve each logical line's canonical total exactly.
   WITH ideals AS (
     SELECT s.line_key, s.customer_id,
-           l.source_total_cost_cents AS total_cents,
-           (l.source_total_cost_cents::numeric * s.split_micro_pct::numeric)
+           abs(l.source_total_cost_cents) AS total_cents,
+           CASE WHEN l.source_total_cost_cents < 0 THEN -1 ELSE 1 END AS sign_value,
+           (abs(l.source_total_cost_cents)::numeric * s.split_micro_pct::numeric)
              / 100000000::numeric AS ideal
     FROM pg_temp._plsb_shares s
     JOIN pg_temp._plsb_lines l ON l.line_key = s.line_key
   ), bases AS (
-    SELECT line_key, customer_id, total_cents,
+    SELECT line_key, customer_id, total_cents, sign_value,
            floor(ideal)::bigint AS base, ideal - floor(ideal) AS frac
     FROM ideals
   ), ranked AS (
-    SELECT line_key, customer_id, base,
+    SELECT line_key, customer_id, sign_value, base,
            row_number() OVER (PARTITION BY line_key ORDER BY frac DESC, customer_id ASC) AS rn,
            total_cents - sum(base) OVER (PARTITION BY line_key) AS residual
     FROM bases
   )
   UPDATE pg_temp._plsb_shares s
-     SET allocated_cost_cents = r.base + CASE WHEN r.rn <= r.residual THEN 1 ELSE 0 END
+     SET allocated_cost_cents = r.sign_value * (
+       r.base + CASE WHEN r.rn <= r.residual THEN 1 ELSE 0 END
+     )
     FROM ranked r
    WHERE r.line_key = s.line_key AND r.customer_id = s.customer_id;
 

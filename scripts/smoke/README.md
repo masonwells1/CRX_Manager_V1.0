@@ -99,7 +99,8 @@ recreates the exact approved legacy preview from its checked-in migration, runs
 The proof covers feature-OFF legacy delegation; exact 50/50 and three-way
 micro-percent vectors; 1¢ and signed half-cent allocation; full-precision unit
 conversion with only the final money figure rounded; source COGS rounded once and
-allocated as exact largest-remainder cents (including a 1¢ → 1¢/0¢ split); exact job-chemical identity,
+allocated as exact signed largest-remainder cents (including 1¢ → 1¢/0¢ and a
+persisted −25¢ return → −13¢/−12¢); exact job-chemical identity,
 quantity, and frozen prices even when the same product appears twice; customer-
 supplied zero billing; owner/outsider sales-rep scope plus exact invoice/job/field
 context binding; non-job manual/quoted/tier pricing with customer/season/lifecycle-

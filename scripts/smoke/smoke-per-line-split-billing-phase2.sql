@@ -616,9 +616,115 @@ BEGIN
      OR v_plan#>>'{billing_lines,0,source_amount_cents}' <> '-13'
      OR v_shares#>>'{0,amount_cents}' <> '-7'
      OR v_shares#>>'{1,amount_cents}' <> '-6'
+     OR v_plan#>>'{billing_lines,0,source_total_cost_cents}' <> '-25'
+     OR v_shares#>>'{0,allocated_cost_cents}' <> '-13'
+     OR v_shares#>>'{1,allocated_cost_cents}' <> '-12'
      OR v_sum <> -13 THEN
     RAISE EXCEPTION 'P2_FAIL(negative_half_cent): %', v_plan;
   END IF;
+
+  -- Preview/save parity includes signed COGS, not only signed sales. Persist the
+  -- exact return plan into the durable graph and force every deferred guard.
+  v_lines := v_plan->'billing_lines';
+  INSERT INTO public.field_app_billing_sets (
+    id, invoice_group_id, primary_customer_id, created_by
+  ) VALUES (
+    '80000000-0000-0000-0000-000000000060',
+    '81000000-0000-0000-0000-000000000060', v_a, v_admin
+  );
+  INSERT INTO public.field_app_billing_lines (
+    id, billing_set_id, line_kind, price_basis, description, product_id,
+    source_quantity, source_acres, source_unit_price_cents,
+    source_amount_cents, source_unit_size, source_cost_cents,
+    source_total_cost_cents, sort_order
+  ) VALUES (
+    '82000000-0000-0000-0000-000000000060',
+    '80000000-0000-0000-0000-000000000060',
+    v_lines#>>'{0,line_kind}', v_lines#>>'{0,price_basis}',
+    v_lines#>>'{0,description}', (v_lines#>>'{0,product_id}')::uuid,
+    (v_lines#>>'{0,source_quantity}')::numeric,
+    (v_lines#>>'{0,source_acres}')::numeric,
+    (v_lines#>>'{0,source_unit_price_cents}')::bigint,
+    (v_lines#>>'{0,source_amount_cents}')::bigint,
+    v_lines#>>'{0,source_unit_size}', (v_lines#>>'{0,source_cost_cents}')::bigint,
+    (v_lines#>>'{0,source_total_cost_cents}')::bigint,
+    (v_lines#>>'{0,sort_order}')::integer
+  );
+  INSERT INTO public.invoices (
+    id, customer_id, invoice_group_id, total_amount_cents, total_cost_cents,
+    send_disposition, created_by
+  ) VALUES
+    ('83000000-0000-0000-0000-000000000060', v_a,
+     '81000000-0000-0000-0000-000000000060',
+     (v_shares#>>'{0,amount_cents}')::bigint,
+     (v_shares#>>'{0,allocated_cost_cents}')::bigint, 'sendable', v_admin),
+    ('83000000-0000-0000-0000-000000000061', v_b,
+     '81000000-0000-0000-0000-000000000060',
+     (v_shares#>>'{1,amount_cents}')::bigint,
+     (v_shares#>>'{1,allocated_cost_cents}')::bigint, 'sendable', v_admin);
+  INSERT INTO public.invoice_items (
+    id, invoice_id, product_id, quantity, acres, unit_price_cents,
+    extended_cents, unit_size, cost_cents
+  ) VALUES
+    ('84000000-0000-0000-0000-000000000060',
+     '83000000-0000-0000-0000-000000000060', (v_lines#>>'{0,product_id}')::uuid,
+     (v_shares#>>'{0,allocated_quantity}')::numeric,
+     (v_shares#>>'{0,allocated_acres}')::numeric,
+     (v_shares#>>'{0,unit_price_cents}')::bigint,
+     (v_shares#>>'{0,amount_cents}')::bigint,
+     v_lines#>>'{0,source_unit_size}', (v_lines#>>'{0,source_cost_cents}')::bigint),
+    ('84000000-0000-0000-0000-000000000061',
+     '83000000-0000-0000-0000-000000000061', (v_lines#>>'{0,product_id}')::uuid,
+     (v_shares#>>'{1,allocated_quantity}')::numeric,
+     (v_shares#>>'{1,allocated_acres}')::numeric,
+     (v_shares#>>'{1,unit_price_cents}')::bigint,
+     (v_shares#>>'{1,amount_cents}')::bigint,
+     v_lines#>>'{0,source_unit_size}', (v_lines#>>'{0,source_cost_cents}')::bigint);
+  INSERT INTO public.invoice_line_shares (
+    id, billing_line_id, invoice_item_id, customer_id, split_mode,
+    split_micro_pct, allocated_quantity, allocated_acres, allocated_cost_cents,
+    base_unit_price_cents, base_price_source, price_mode, unit_price_cents,
+    amount_cents, split_override_reason, price_override_reason,
+    calculation_hash, vector_hash, created_by
+  ) VALUES
+    ('85000000-0000-0000-0000-000000000060',
+     '82000000-0000-0000-0000-000000000060',
+     '84000000-0000-0000-0000-000000000060',
+     (v_shares#>>'{0,customer_id}')::uuid, v_shares#>>'{0,split_mode}',
+     (v_shares#>>'{0,split_micro_pct}')::integer,
+     (v_shares#>>'{0,allocated_quantity}')::numeric,
+     (v_shares#>>'{0,allocated_acres}')::numeric,
+     (v_shares#>>'{0,allocated_cost_cents}')::bigint,
+     (v_shares#>>'{0,base_unit_price_cents}')::bigint,
+     v_shares#>>'{0,base_price_source}', v_shares#>>'{0,price_mode}',
+     (v_shares#>>'{0,unit_price_cents}')::bigint,
+     (v_shares#>>'{0,amount_cents}')::bigint,
+     NULLIF(v_shares#>>'{0,split_override_reason}', ''),
+     NULLIF(v_shares#>>'{0,price_override_reason}', ''),
+     v_shares#>>'{0,calculation_hash}', v_shares#>>'{0,vector_hash}', v_admin),
+    ('85000000-0000-0000-0000-000000000061',
+     '82000000-0000-0000-0000-000000000060',
+     '84000000-0000-0000-0000-000000000061',
+     (v_shares#>>'{1,customer_id}')::uuid, v_shares#>>'{1,split_mode}',
+     (v_shares#>>'{1,split_micro_pct}')::integer,
+     (v_shares#>>'{1,allocated_quantity}')::numeric,
+     (v_shares#>>'{1,allocated_acres}')::numeric,
+     (v_shares#>>'{1,allocated_cost_cents}')::bigint,
+     (v_shares#>>'{1,base_unit_price_cents}')::bigint,
+     v_shares#>>'{1,base_price_source}', v_shares#>>'{1,price_mode}',
+     (v_shares#>>'{1,unit_price_cents}')::bigint,
+     (v_shares#>>'{1,amount_cents}')::bigint,
+     NULLIF(v_shares#>>'{1,split_override_reason}', ''),
+     NULLIF(v_shares#>>'{1,price_override_reason}', ''),
+     v_shares#>>'{1,calculation_hash}', v_shares#>>'{1,vector_hash}', v_admin);
+  SET CONSTRAINTS ALL IMMEDIATE;
+  IF (SELECT sum(total_amount_cents) FROM public.invoices
+       WHERE invoice_group_id = '81000000-0000-0000-0000-000000000060') <> -13
+     OR (SELECT sum(total_cost_cents) FROM public.invoices
+          WHERE invoice_group_id = '81000000-0000-0000-0000-000000000060') <> -25 THEN
+    RAISE EXCEPTION 'P2_FAIL(negative_plan_persistence): signed sales/COGS headers drifted';
+  END IF;
+  SET CONSTRAINTS ALL DEFERRED;
 
   -- Different tier prices, then a one-person override layered on top.
   v_plan := public.preview_field_app_invoice_split(
