@@ -565,10 +565,11 @@ export default function FieldAppSplitInvoiceEditor() {
     if (invoiceIds.length === 0) { setResultShares([]); return; }
 
     // 2) Invoice items (invoice_id + description) for those invoices.
-    const { data: itemRows } = await supabaseUntyped
+    const { data: itemRows, error: itemErr } = await supabaseUntyped
       .from('invoice_items')
       .select('id, invoice_id, description')
       .in('invoice_id', invoiceIds);
+    if (itemErr) throw itemErr; // Codex r5 P1: a swallowed read error must not leave Post enabled on unseen data
     const itemMap = new Map<string, { invoice_id: string; description: string }>();
     ((itemRows as Array<Record<string, unknown>> | null) ?? []).forEach((it) => {
       itemMap.set(it.id as string, { invoice_id: it.invoice_id as string, description: (it.description as string) || '' });
@@ -577,10 +578,11 @@ export default function FieldAppSplitInvoiceEditor() {
     // 3) Per-line shares, joined to their item for invoice_id + description.
     const itemIds = Array.from(itemMap.keys());
     if (itemIds.length === 0) { setResultShares([]); return; }
-    const { data: shareRows } = await supabaseUntyped
+    const { data: shareRows, error: shareErr } = await supabaseUntyped
       .from('invoice_line_shares')
       .select('invoice_item_id, customer_id, unit_price_cents, amount_cents')
       .in('invoice_item_id', itemIds);
+    if (shareErr) throw shareErr; // Codex r5 P1: surface, don't silently render an incomplete split
     const shares: ResultShare[] = ((shareRows as Array<Record<string, unknown>> | null) ?? []).map((s) => {
       const item = itemMap.get(s.invoice_item_id as string);
       return {
@@ -619,11 +621,14 @@ export default function FieldAppSplitInvoiceEditor() {
       const res = assertRpcResult<{ billing_set_id: string; invoice_group_id: string; invoice_ids: string[]; line_vector_hashes: string[] }>(
         data, 'save_field_app_split_invoice',
       );
+      // billingSetId is safe to set now (enables re-save / retry). But do NOT enable Post yet —
+      // Codex r5 P1: if the authoritative readback fails, invoiceGroupId/savedSig must stay unset so
+      // Post can't act on stale/unseen amounts. loadResults throws on any read error (surfaced below).
       setBillingSetId(res.billing_set_id);
+      await loadResults(res.billing_set_id);
       setInvoiceGroupId(res.invoice_group_id);
       setSavedSig(currentSig); // snapshot what was just persisted → Post is enabled until the next edit (#5)
       saveIdem.resetKey(); // next save is a distinct action → fresh key
-      await loadResults(res.billing_set_id);
       toast('success', 'Draft split invoice saved.');
     } catch (err) {
       toast('error', splitBackendError(err));

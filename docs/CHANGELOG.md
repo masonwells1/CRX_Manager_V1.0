@@ -4,6 +4,25 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-19 — Per-line split-billing: Codex ROUND 5 → 6 P1 + 2 P2 + a reviewer BLOCKER, all fixed + PROOFOK 50/50 (branch, still PARKED). Autonomous Opus-4.8 run.
+
+A fifth `codex review --base main` on `5983b3eb` returned 6 P1 + 2 P2 — all fixed. Then the migration-drift reviewer caught a BLOCKER (B1) the admin-only proof had missed, and the live proof caught a second bug in the newly-tested member-drop re-save path. All fixed; feature stays **flag OFF, migrations NOT applied, PR #164 NOT merged**.
+
+- **P1 field-set equality** — billing a source job now requires the billed fields to EQUAL the job's `job_fields` (not just be a subset), so consuming the job can't silently orphan an unbilled field.
+- **P1 positive line amounts server-side** — chemical-manual / service-manual / flat-fee lines reject `<= 0` in the RPC (defense-in-depth behind the editor), so a direct call can't create a free or negative invoice.
+- **P1 commission COGS** — commission profit now uses the largest-remainder-allocated COGS already in the header (accumulated per child in PASS 2), not a re-rounded `cost×qty`; proven `commission_uses_lr_cogs_ok(99.99)` (the drift gave `99.98`).
+- **P1 Post gating** — the editor enables Post only after a SUCCESSFUL authoritative readback, and `loadResults` now surfaces its item/share query errors instead of swallowing them.
+- **P1 email gate hardened** — invoice emails now REQUIRE a valid invoice resource row and FAIL CLOSED (503) on any suppression-lookup error except the pre-migration missing-column case.
+- **P1 duplicate field IDs** — already covered round-4; round-5 tightened the job-field equality above.
+- **P2 re-save anchor repoint** — `jobs.invoice_id` / `application_records` repoint to a surviving child when a re-save drops the prior anchor member.
+- **P2 InvoiceDetail split COGS** — the Total Cost/Margin uses the header's authoritative allocated COGS for split invoices instead of recomputing `cost×quantity`.
+- **BLOCKER B1 (drift reviewer; the proof missed it because it ran only as admin)** — the anchor repoint had split the `jobs` UPDATE into two statements; the second (`SET invoice_id`) ran while `status='invoiced'`, which the live `enforce_billed_job_immutability` trigger BLOCKS for non-admin sales_reps (`is_admin()` early-returns for admins). Fixed by folding `invoice_id` into the `completed→invoiced` statement (guard early-returns on a not-yet-billed job — the sanctioned `transfer_job_to_invoice` shape) and moving the re-save repoint under the `app.admin_override` hatch, scoped to just that one UPDATE.
+- **Second bug (caught by the live proof's new non-admin scenario)** — the orphan-cancel of a dropped member detached its child before the `#E` guard ran, tripping a false `SPLIT_JOB_ALREADY_INVOICED` that blocked every member-drop re-save. Fixed by snapshotting the set's child IDs before the orphan-cancel.
+
+**PROVEN in the live DB** (rollback): `PROOFOK` **50/50** — the 43 prior + 6 round-5 + the decisive `salesrep_job_split_and_anchor_repoint_ok` (a NON-ADMIN sales_rep bills a job-split AND re-saves dropping the anchor member). `rls-security-reviewer` clean (the `app.admin_override` hatch is transaction-local, reset immediately, and can't repoint to a foreign invoice), `migration-drift-reviewer` **B1 resolved / 0 blockers**, `compliance-reviewer` clean. Typecheck + lint pass. **Learning captured:** an admin-only proof silently skips `is_admin()`-early-return immutability guards — always add a sales_rep scenario for money RPCs that write billed job fields. Still **flag OFF, not applied, not merged.**
+
+---
+
 ## 2026-07-18 — Per-line split-billing: Codex ROUND 4 → 8 P1 + 2 P2, all fixed + PROOFOK 43/43 (branch, still PARKED). Autonomous Opus-4.8 run.
 
 A fourth `codex review --base main` on `0a2754fd` returned 8 P1 + 2 P2 — all fixed this session. Feature stays **flag OFF, migrations NOT applied, PR #164 NOT merged**; go-live still gated on a CLEAN Codex verdict (round 5 pending).

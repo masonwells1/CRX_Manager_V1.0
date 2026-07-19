@@ -220,24 +220,48 @@ Deno.serve(async (req: Request) => {
       }
     }
 
-    // 6b. Zero-invoice suppression (Codex r4 P1). A $0 per-line split child invoice is marked
-    // send_disposition='suppressed_zero_total' by the split writer and must NEVER be emailed. The
-    // client helper isInvoiceEmailSuppressed() gates the UI, but a direct call to this function
-    // could bypass it — enforce server-side too. Keyed off the invoice resource_id. Fail-OPEN only
-    // when the column doesn't exist yet (pre-migration): there are no suppressed invoices then.
-    if (email_type === "invoice" && resource_type === "invoice" && resource_id) {
+    // 6b. Zero-invoice suppression (Codex r4 P1 / r5 P1+P1). A $0 per-line split child invoice is
+    // marked send_disposition='suppressed_zero_total' by the split writer and must NEVER be emailed.
+    // The client helper isInvoiceEmailSuppressed() gates the UI, but a direct call could bypass it —
+    // enforce server-side. (r5) An invoice email MUST carry a real invoice resource so the check
+    // can't be skipped by omitting/falsifying resource_*; and the lookup FAILS CLOSED on any error
+    // except the pre-migration missing-column case (no suppressed invoices exist then).
+    if (email_type === "invoice") {
+      if (resource_type !== "invoice" || !resource_id) {
+        return jsonResponse(
+          { error: "Invoice emails require resource_type='invoice' and a resource_id" },
+          400,
+        );
+      }
       const { data: invRow, error: invErr } = await adminClient
         .from("invoices")
         .select("id, send_disposition, customer_id")
         .eq("id", resource_id)
         .maybeSingle();
-      if (invErr) {
-        console.warn("send-email: invoice suppression check skipped", {
+      // Pre-migration only: the send_disposition column doesn't exist yet — Postgres 42703
+      // (undefined_column) or PostgREST PGRST204 (schema-cache miss). No suppressed invoices
+      // exist then, so it's safe to fall through. EVERY other error fails closed.
+      const preMigrationMissingColumn =
+        !!invErr && (invErr.code === "42703" || invErr.code === "PGRST204");
+      if (invErr && !preMigrationMissingColumn) {
+        console.error("send-email: invoice suppression lookup failed — refusing send", {
           resource_id,
           code: invErr.code,
           message: invErr.message,
         });
-      } else if (invRow) {
+        return jsonResponse(
+          { error: "Could not verify invoice email eligibility; send refused" },
+          503,
+        );
+      }
+      if (invErr) {
+        console.warn(
+          "send-email: send_disposition column absent (pre-migration) — suppression check skipped",
+          { resource_id, code: invErr.code },
+        );
+      } else if (!invRow) {
+        return jsonResponse({ error: "Invoice resource_id not found" }, 404);
+      } else {
         if (invRow.customer_id && invRow.customer_id !== customer_id) {
           return jsonResponse({ error: "Invoice does not belong to customer_id" }, 400);
         }

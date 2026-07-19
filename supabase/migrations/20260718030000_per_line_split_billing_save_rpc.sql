@@ -388,6 +388,7 @@ DECLARE
   -- #E source-job double-bill guard (Codex round-2 P1) + round-3 season/freeze
   v_job                record;
   v_other_set          uuid;
+  v_set_child_ids      uuid[];    -- this set's child invoice ids captured BEFORE orphan-cancel (round-5 B1)
   v_set_source_job     uuid;     -- the set's frozen source_job_id on re-save (round-3 P1)
   v_season             integer;  -- job/invoice season for pricing + stamping (round-3 P1)
   v_job_app_date       date;     -- source job's application/scheduled date for child invoices (round-3 P2)
@@ -396,6 +397,10 @@ DECLARE
   v_child_id           uuid;
   v_child_customer     uuid;
   v_child_profit       numeric;
+  -- Codex round-5 P1: per-child CHEMICAL profit using the LR-allocated COGS (not a re-rounded
+  -- cost*qty), so commissions tie to the penny-exact allocation already in the header.
+  v_invoice_chem_profit  bigint;
+  v_chem_profit_by_child jsonb := '{}'::jsonb;   -- child invoice_id::text -> chemical profit cents
   -- #G canonical line COGS + its largest-remainder split (Codex round-2 P1)
   v_line_cogs          bigint;
   v_cogs_weights       jsonb;
@@ -582,6 +587,14 @@ BEGIN
     -- Clear the prior group's field snapshots; PASS 3 re-creates them from p_fields (Codex P1 #7).
     DELETE FROM field_app_locations WHERE invoice_group_id = v_group_id;
 
+    -- Round-5 B1: snapshot this set's current child ids BEFORE the orphan-cancel below detaches any
+    -- dropped member (it nulls field_app_billing_set_id). The #E already-invoiced guard uses this so a
+    -- re-save that drops the member currently stored in jobs.invoice_id still recognizes that anchor as
+    -- OURS — otherwise the just-detached anchor looks like a foreign invoice and trips a false
+    -- SPLIT_JOB_ALREADY_INVOICED, blocking the drop-member re-save entirely.
+    SELECT array_agg(id) INTO v_set_child_ids
+      FROM invoices WHERE field_app_billing_set_id = v_set_id AND deleted_at IS NULL;
+
     -- Any existing child whose customer is no longer a billing-set member is
     -- soft-cancelled + detached from the set (its snapshots stay pointing at it,
     -- audit intact) — never hard-deleted. Mirrors the live orphan-cancel path.
@@ -633,7 +646,11 @@ BEGIN
         p_source_job_id, v_other_set USING ERRCODE = 'invalid_parameter_value';
     END IF;
     -- Already invoiced by the normal flow (linked to an invoice that is NOT one of THIS set's children)?
+    -- Round-5 B1: accept the anchor if it is STILL attached to this set OR was one of this set's
+    -- children before the orphan-cancel above detached it (a drop-anchor re-save) — v_set_child_ids is
+    -- the pre-cancel snapshot; NULL on a first save (COALESCE to empty, so the EXISTS still governs).
     IF v_job.status = 'invoiced' AND v_job.invoice_id IS NOT NULL
+       AND NOT (v_job.invoice_id = ANY (COALESCE(v_set_child_ids, ARRAY[]::uuid[])))
        AND NOT EXISTS (SELECT 1 FROM invoices i
                         WHERE i.id = v_job.invoice_id AND i.field_app_billing_set_id = v_set_id) THEN
       RAISE EXCEPTION 'SPLIT_JOB_ALREADY_INVOICED: source job % was already invoiced (invoice %)',
@@ -644,16 +661,27 @@ BEGIN
       RAISE EXCEPTION 'SPLIT_JOB_NOT_COMPLETED: source job % must be completed to bill (status: %)',
         p_source_job_id, v_job.status USING ERRCODE = 'invalid_parameter_value';
     END IF;
-    -- Codex round-4 P1: every billed field must belong to the source job. Otherwise the
-    -- operator could pick a job + unrelated (or subset) fields and consume the WHOLE job as
-    -- invoiced while actually billing different acres — the job's other work then silently
-    -- can never be billed. Validate p_fields ⊆ the job's job_fields before consuming it.
+    -- Codex round-4 P1 + round-5 P1: the billed fields must EXACTLY EQUAL the job's job_fields.
+    -- Consuming the job marks the WHOLE job 'invoiced', so billing only a subset (or unrelated
+    -- fields) would silently orphan the job's other fields — normal transfer then refuses the
+    -- now-invoiced job, so that work can never be billed. Enforce set equality (⊆ AND ⊇), exactly
+    -- like transfer_job_to_invoice which always bills every job_field. (a) no billed field outside
+    -- the job:
     IF EXISTS (
       SELECT 1 FROM unnest(v_field_ids) AS fid
        WHERE NOT EXISTS (SELECT 1 FROM job_fields jf
                           WHERE jf.job_id = p_source_job_id AND jf.field_id = fid)
     ) THEN
       RAISE EXCEPTION 'SPLIT_FIELD_NOT_ON_JOB: one or more billed fields do not belong to source job %', p_source_job_id
+        USING ERRCODE = 'invalid_parameter_value';
+    END IF;
+    -- (b) no job field left unbilled:
+    IF EXISTS (
+      SELECT 1 FROM job_fields jf
+       WHERE jf.job_id = p_source_job_id
+         AND NOT (jf.field_id = ANY (v_field_ids))
+    ) THEN
+      RAISE EXCEPTION 'SPLIT_JOB_FIELDS_INCOMPLETE: billing a source job must include ALL of its fields (the whole job is consumed as invoiced); job % has fields not in this split', p_source_job_id
         USING ERRCODE = 'invalid_parameter_value';
     END IF;
     v_job_app_date := v_job.job_date;          -- carried onto each child (round-3 P2); the LIVE
@@ -755,8 +783,14 @@ BEGIN
       -- which uses application_services.cost_per_acre_cents). Codex P1 #3.
       v_line_unit_cost := COALESCE(v_app_service.cost_per_acre_cents, 0);
 
-      IF COALESCE((v_line->>'manual_override')::boolean, false) AND v_src_unit_price IS NOT NULL THEN
+      IF COALESCE((v_line->>'manual_override')::boolean, false) THEN
         -- Explicit single negotiated per-acre rate for the whole line (applies to everyone).
+        -- Codex round-5 P1: enforce a POSITIVE amount server-side (the editor rejects <=0, but a
+        -- direct/modified RPC call could otherwise create a free or negative service line).
+        IF v_src_unit_price IS NULL OR v_src_unit_price <= 0 THEN
+          RAISE EXCEPTION 'SPLIT_SERVICE_RATE_NONPOSITIVE: a manual service rate must be a positive amount on line %', v_idx
+            USING ERRCODE = 'invalid_parameter_value';
+        END IF;
         v_base_source := COALESCE(v_base_source, 'service_rate');
       ELSE
         -- Per-customer service rate (Codex P1 #2 — Option B for service): each co-owner at
@@ -815,8 +849,11 @@ BEGIN
         -- Honor a caller price ONLY as an explicit manual override (a single negotiated price
         -- for the whole line — applies to every co-owner).
         IF COALESCE((v_line->>'manual_override')::boolean, false) THEN
-          IF v_src_unit_price IS NULL THEN
-            RAISE EXCEPTION 'SPLIT_CHEMICAL_OVERRIDE_PRICE_REQUIRED: manual_override set but no source_unit_price_cents on chemical line %', v_idx
+          -- Codex round-5 P1: require a POSITIVE manual price server-side (the editor rejects
+          -- <=0 / sci-notation, but a direct or modified-client RPC call could otherwise create a
+          -- free or negative chemical line despite the UI invariant).
+          IF v_src_unit_price IS NULL OR v_src_unit_price <= 0 THEN
+            RAISE EXCEPTION 'SPLIT_CHEMICAL_OVERRIDE_PRICE_REQUIRED: manual_override set but source_unit_price_cents is missing or not positive on chemical line %', v_idx
               USING ERRCODE = 'invalid_parameter_value';
           END IF;
           v_chem_manual := v_src_unit_price;
@@ -875,8 +912,11 @@ BEGIN
       END;
     ELSE
       -- flat_fee / fuel_surcharge: bill from source_flat_cents; unit price is 0.
-      IF v_src_flat IS NULL THEN
-        RAISE EXCEPTION 'SPLIT_FLAT_CENTS_REQUIRED: source_flat_cents required for % line %', v_line_kind, v_idx
+      -- Codex round-5 P1: require a POSITIVE amount server-side. The editor rejects <=0
+      -- ("credits aren't supported here yet"), but a direct RPC call must not create a free or
+      -- negative flat charge (a negative flat_cents would post a CHARGE the operator never saw).
+      IF v_src_flat IS NULL OR v_src_flat <= 0 THEN
+        RAISE EXCEPTION 'SPLIT_FLAT_CENTS_REQUIRED: source_flat_cents must be a positive amount for % line %', v_line_kind, v_idx
           USING ERRCODE = 'invalid_parameter_value';
       END IF;
       v_src_unit_price := COALESCE(v_src_unit_price, 0);
@@ -1090,6 +1130,7 @@ BEGIN
 
     v_invoice_total := 0;
     v_invoice_cost  := 0;
+    v_invoice_chem_profit := 0;   -- round-5 P1: this child's chemical profit (LR COGS), for commissions
     -- Compat share acres derived ONCE from the ownership vector × total applied acres
     -- (Codex P2 #9), independent of the billing lines — so it neither zeroes out on a
     -- no-service set nor double-counts across multiple service lines.
@@ -1206,7 +1247,19 @@ BEGIN
       -- #G: accumulate this co-owner's LR-allocated COGS share directly; the GROUP total_cost
       -- now ties EXACTLY to the canonical unit_cost x source (no per-child rounding drift).
       v_invoice_cost  := v_invoice_cost + v_item_cost_cents;
+      -- Codex round-5 P1: chemical-line profit for commissions uses the SAME LR-allocated COGS
+      -- (v_item_cost_cents), NOT a re-rounded cost*qty on the per-unit item cost. Only product-
+      -- backed chemical lines count toward commission (fees/service/flat are excluded), mirroring
+      -- transfer_job_to_invoice's chemical-only profit basis.
+      IF v_line_kind = 'chemical' THEN
+        v_invoice_chem_profit := v_invoice_chem_profit
+          + ((v_alloc_row->>'amount_cents')::bigint - v_item_cost_cents);
+      END IF;
     END LOOP;
+
+    -- Stash this child's chemical profit (cents) for the commission mint below (round-5 P1).
+    v_chem_profit_by_child := v_chem_profit_by_child
+      || jsonb_build_object(v_invoice_id::text, v_invoice_chem_profit);
 
     v_send_disposition := CASE WHEN v_invoice_total = 0 THEN 'suppressed_zero_total' ELSE 'normal' END;
 
@@ -1270,14 +1323,37 @@ BEGIN
       END IF;
     END IF;
 
-    -- Consume the job (idempotent on re-save) AND persist the resolved split onto it in the
-    -- SAME status flip, so attribution locks at first use and re-saves never re-read live sources
-    -- (mirrors transfer_job_to_invoice's Codex-R2/R4 persistence).
+    -- Consume the job: flip completed->invoiced, set the anchor invoice_id, AND persist the resolved
+    -- split — ALL IN ONE statement while OLD.status='completed'. The live enforce_billed_job_immutability
+    -- trigger early-returns for a not-yet-billed job, so this is the ONLY point a non-admin may set
+    -- invoice_id (drift B1); it is exactly the single-statement shape of transfer_job_to_invoice.
+    -- Idempotent: no-ops on re-save (status already 'invoiced').
     UPDATE jobs SET status = 'invoiced', invoice_id = v_invoice_ids[1],
         commission_split = COALESCE(commission_split, v_commission_split, '{"splits":[]}'::jsonb)
      WHERE id = p_source_job_id AND status <> 'invoiced';
+
+    -- Codex round-5 P2 / drift B1: on a RE-SAVE that dropped the member previously stored in
+    -- jobs.invoice_id, the anchor now points at a cancelled, detached child — repoint it to a surviving
+    -- current child (v_invoice_ids only ever holds current members). The job is already 'invoiced', so
+    -- the immutability trigger would block a non-admin from changing invoice_id — use the SAME
+    -- app.admin_override hatch that trigger sanctions for definer-flow writers (as transfer_invoice_to_job
+    -- does), scoped tightly around JUST this repoint, and ONLY when the stored anchor is no longer a live
+    -- member child (a no-op when it is unchanged — the common re-save case, no override needed).
+    IF NOT EXISTS (
+      SELECT 1 FROM invoices i
+       WHERE i.id = (SELECT j.invoice_id FROM jobs j WHERE j.id = p_source_job_id)
+         AND i.field_app_billing_set_id = v_set_id
+         AND i.deleted_at IS NULL AND i.status <> 'cancelled'
+    ) THEN
+      PERFORM set_config('app.admin_override', 'true', true);
+      UPDATE jobs SET invoice_id = v_invoice_ids[1] WHERE id = p_source_job_id;
+      PERFORM set_config('app.admin_override', 'false', true);
+    END IF;
+
+    -- application_records has no billed-immutability guard (triggers live only on jobs / job_applied_
+    -- records) — repoint it unconditionally to the surviving anchor, matching live transfer_job_to_invoice.
     UPDATE application_records SET invoice_id = v_invoice_ids[1]
-     WHERE source_type = 'job' AND source_id = p_source_job_id AND invoice_id IS NULL;
+     WHERE source_type = 'job' AND source_id = p_source_job_id;
 
     -- ---- Per-child commissions (Codex round-4 P1) ----------------------------
     -- Mirror transfer_job_to_invoice's PER-OWNER GROUP path: each child invoice mints
@@ -1286,10 +1362,11 @@ BEGIN
     -- split job billed here previously created NO commissions AND the status flip blocked
     -- the normal path from ever creating them.
     --
-    -- Profit basis matches the FIELD convention (not transfer's extended-cost one): our
-    -- chemical invoice_items carry PER-UNIT cost_cents (#F), so profit = extended -
-    -- ROUND(cost × qty) over product-backed, non-application-fee lines — identical to
-    -- _save_invoice_scoped_impl's U8 recompute. Service / flat / fee lines contribute 0.
+    -- Profit basis (Codex round-5 P1): each child's CHEMICAL profit accumulated in PASS 2 using the
+    -- SAME largest-remainder-allocated COGS (v_item_cost_cents) that the header total_cost carries —
+    -- NOT a re-rounded ROUND(cost × qty) on the per-unit item cost, which would drift on fractional
+    -- child quantities (1¢/1u/50-50 rounds both 0.5¢ shares up to 1¢, understating profit). Service /
+    -- flat / fee lines contribute 0. Sum across children == the whole job's chemical profit.
     --
     -- Re-save safe: a redraw rewrites every child's items (changing profit) and may DROP a member
     -- (whose child was orphan-cancelled above). The #E guard makes this job EXCLUSIVE to this set
@@ -1317,13 +1394,8 @@ BEGIN
 
     FOREACH v_child_id IN ARRAY v_invoice_ids
     LOOP
-      SELECT COALESCE(SUM(COALESCE(ii.extended_cents, 0)
-                          - ROUND(COALESCE(ii.cost_cents, 0) * COALESCE(ii.quantity, 1))::bigint), 0)::numeric / 100.0
-        INTO v_child_profit
-        FROM invoice_items ii
-       WHERE ii.invoice_id = v_child_id
-         AND COALESCE(ii.is_application_fee, false) = false
-         AND ii.product_id IS NOT NULL;
+      -- Chemical profit for this child from the LR-allocated accumulator (cents -> dollars).
+      v_child_profit := COALESCE((v_chem_profit_by_child->>v_child_id::text)::bigint, 0)::numeric / 100.0;
 
       SELECT customer_id INTO v_child_customer FROM invoices WHERE id = v_child_id;
 

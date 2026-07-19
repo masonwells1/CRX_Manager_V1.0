@@ -1147,15 +1147,21 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
   };
 
   const totalCents = items.reduce((s, i) => s + i.extended_cents, 0);
-  // Mirror save_invoice DELTA-E: a machine-fee line stores its EXACT extended cost
-  // (its quantity is acres, not a multiplier), so add it as-is; product lines store a
-  // per-unit cost -> x quantity. Using x quantity for the fee line would inflate the
-  // displayed Total Cost/Margin by a factor of acres.
-  const totalCostCents = items.reduce((s, i) => s + (i.is_application_fee ? i.cost_cents : i.cost_cents * i.quantity), 0);
   // Split-billing invoices are managed only from the Split Billing editor; keep this
   // generic page strictly read-only for them so a save can't cascade away their line
   // shares (Codex P1 #6). Paired with the hard guard in handleSave.
   const isSplitInvoice = !!(invoice as { field_app_billing_set_id?: string | null }).field_app_billing_set_id;
+  // Total Cost / Margin:
+  // - Split invoice (Codex r5 P2): chemical items store PER-UNIT cost, but the header
+  //   total_cost_cents holds the penny-exact largest-remainder-allocated COGS — recomputing
+  //   cost_cents*quantity here would mis-display it (1¢ cost split 50/50 shows 1¢+1¢ vs the
+  //   authoritative 1¢+0¢). Use the header total.
+  // - Otherwise mirror save_invoice DELTA-E: a machine-fee line stores its EXACT extended cost
+  //   (its quantity is acres, not a multiplier), so add it as-is; product lines store a per-unit
+  //   cost -> x quantity. Using x quantity for the fee line would inflate Total Cost by acres.
+  const totalCostCents = isSplitInvoice
+    ? Number((invoice as { total_cost_cents?: number | null }).total_cost_cents ?? 0)
+    : items.reduce((s, i) => s + (i.is_application_fee ? i.cost_cents : i.cost_cents * i.quantity), 0);
   const editable = !isSplitInvoice && (isNew || ['draft', 'unposted'].includes(invoice.status || ''));
 
   // Customer filtered list
