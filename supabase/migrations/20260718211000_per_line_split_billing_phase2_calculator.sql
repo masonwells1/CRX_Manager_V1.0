@@ -40,7 +40,8 @@ DECLARE
   v_effective_job_id uuid := p_job_id;
   v_invoice_job_id uuid;
   v_invoice_group_id uuid;
-  v_quote_section_id uuid;
+  v_invoice_season integer;
+  v_effective_season integer := public.current_season();
   v_feature_enabled boolean;
   v_loc jsonb;
   v_chem jsonb;
@@ -49,6 +50,8 @@ DECLARE
   v_price_override jsonb;
   v_line_key text;
   v_line_kind text;
+  v_source_job_chemical_id uuid;
+  v_customer_supplied boolean;
   v_split_reason text;
   v_vector_mode text;
   v_rate numeric;
@@ -68,6 +71,7 @@ DECLARE
   v_vector_sum bigint;
   v_bad_count integer;
   v_app_service record;
+  v_job_chem record;
   v_result jsonb;
 BEGIN
   -- The private function is owner-only, but still binds its reads to the real caller.
@@ -137,6 +141,8 @@ BEGIN
     line_key text PRIMARY KEY,
     line_kind text NOT NULL,
     price_basis text,
+    source_job_chemical_id uuid,
+    customer_supplied boolean NOT NULL DEFAULT false,
     product_id uuid,
     application_service_id uuid,
     description text NOT NULL,
@@ -174,8 +180,8 @@ BEGIN
   TRUNCATE pg_temp._plsb_shares;
 
   IF p_invoice_id IS NOT NULL THEN
-    SELECT i.job_id, i.invoice_group_id
-      INTO v_invoice_job_id, v_invoice_group_id
+    SELECT i.job_id, i.invoice_group_id, i.season
+      INTO v_invoice_job_id, v_invoice_group_id, v_invoice_season
       FROM public.invoices i
      WHERE i.id = p_invoice_id
        AND i.deleted_at IS NULL;
@@ -187,11 +193,12 @@ BEGIN
       RAISE EXCEPTION 'PER_LINE_JOB_CONTEXT_MISMATCH' USING ERRCODE = 'invalid_parameter_value';
     END IF;
     v_effective_job_id := COALESCE(p_job_id, v_invoice_job_id);
+    v_effective_season := COALESCE(v_invoice_season, v_effective_season);
   END IF;
 
   IF v_effective_job_id IS NOT NULL THEN
-    SELECT j.quote_section_id
-      INTO v_quote_section_id
+    SELECT COALESCE(j.season, v_effective_season)
+      INTO v_effective_season
       FROM public.jobs j
      WHERE j.id = v_effective_job_id;
     IF NOT FOUND THEN
@@ -222,6 +229,19 @@ BEGIN
   SELECT count(*) INTO v_field_count FROM pg_temp._plsb_fields;
   IF v_field_count <> jsonb_array_length(p_locations) THEN
     RAISE EXCEPTION 'PER_LINE_DUPLICATE_FIELD' USING ERRCODE = 'unique_violation';
+  END IF;
+  IF v_effective_job_id IS NOT NULL AND EXISTS (
+    SELECT 1
+    FROM pg_temp._plsb_fields selected_field
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM public.job_fields jf
+      WHERE jf.job_id = v_effective_job_id
+        AND jf.field_id = selected_field.field_id
+    )
+  ) THEN
+    RAISE EXCEPTION 'PER_LINE_FIELD_NOT_IN_JOB: every selected field must belong to job %',
+      v_effective_job_id USING ERRCODE = 'check_violation';
   END IF;
   IF EXISTS (SELECT 1 FROM pg_temp._plsb_fields WHERE applied_acres <= 0) THEN
     RAISE EXCEPTION 'ZERO_APPLIED_ACRES: every selected field needs applied acres greater than zero'
@@ -379,45 +399,163 @@ BEGIN
     END IF;
   END IF;
 
+  -- A job-backed plan is bound to the complete frozen job-chemical set. Product
+  -- identity is not sufficient because one job can contain the same product more
+  -- than once at different agreed prices. The caller names exact rows; the server
+  -- derives every money/quantity field from those rows and rejects omissions,
+  -- duplicates, foreign rows, and unstable line keys.
+  IF v_effective_job_id IS NOT NULL THEN
+    IF EXISTS (
+      SELECT 1
+      FROM jsonb_array_elements(p_chemicals) input_chem
+      WHERE input_chem->>'job_chemical_id' IS NULL
+         OR NOT pg_input_is_valid(input_chem->>'job_chemical_id', 'uuid')
+    ) THEN
+      RAISE EXCEPTION 'PER_LINE_JOB_CHEMICAL_ID_REQUIRED'
+        USING ERRCODE = 'invalid_parameter_value';
+    END IF;
+    IF EXISTS (
+      SELECT input_chem->>'job_chemical_id'
+      FROM jsonb_array_elements(p_chemicals) input_chem
+      GROUP BY input_chem->>'job_chemical_id'
+      HAVING count(*) <> 1
+    ) THEN
+      RAISE EXCEPTION 'PER_LINE_DUPLICATE_JOB_CHEMICAL_ID'
+        USING ERRCODE = 'unique_violation';
+    END IF;
+    IF EXISTS (
+      SELECT 1
+      FROM jsonb_array_elements(p_chemicals) input_chem
+      LEFT JOIN public.job_chemicals jc
+        ON jc.id = (input_chem->>'job_chemical_id')::uuid
+       AND jc.job_id = v_effective_job_id
+      WHERE jc.id IS NULL
+    ) THEN
+      RAISE EXCEPTION 'PER_LINE_JOB_CHEMICAL_NOT_IN_JOB: %', v_effective_job_id
+        USING ERRCODE = 'check_violation';
+    END IF;
+    IF EXISTS (
+      SELECT 1
+      FROM public.job_chemicals jc
+      WHERE jc.job_id = v_effective_job_id
+        AND NOT EXISTS (
+          SELECT 1
+          FROM jsonb_array_elements(p_chemicals) input_chem
+          WHERE (input_chem->>'job_chemical_id')::uuid = jc.id
+        )
+    ) THEN
+      RAISE EXCEPTION 'PER_LINE_JOB_CHEMICAL_SET_INCOMPLETE: %', v_effective_job_id
+        USING ERRCODE = 'check_violation';
+    END IF;
+    IF EXISTS (
+      SELECT 1
+      FROM jsonb_array_elements(p_chemicals) input_chem
+      WHERE NULLIF(input_chem->>'line_key', '') IS NOT NULL
+        AND input_chem->>'line_key'
+          <> 'chemical:' || (input_chem->>'job_chemical_id')::uuid::text
+    ) THEN
+      RAISE EXCEPTION 'PER_LINE_JOB_CHEMICAL_LINE_KEY_MISMATCH'
+        USING ERRCODE = 'check_violation';
+    END IF;
+  END IF;
+
   -- Build logical chemical lines. Keep the converted quantity at full numeric precision for
   -- the one final money multiply; separately round it to the final 4dp storage precision for
   -- deterministic quantity allocation. Rounding the quantity before money can change a bill by 1c.
   FOR v_chem IN
     SELECT value FROM jsonb_array_elements(p_chemicals)
   LOOP
-    v_sort_order := COALESCE((v_chem->>'sort_order')::integer, 0);
-    v_line_key := COALESCE(NULLIF(v_chem->>'line_key', ''), 'chemical:' || v_sort_order::text);
-    v_rate := NULLIF(v_chem->>'rate_per_acre', '')::numeric;
-    v_rate_unit := COALESCE(NULLIF(v_chem->>'rate_unit', ''), NULLIF(v_chem->>'unit_size', ''));
+    v_source_job_chemical_id := NULL;
+    v_customer_supplied := false;
+    IF v_effective_job_id IS NOT NULL THEN
+      SELECT
+        jc.id,
+        jc.product_id,
+        jc.quantity,
+        jc.unit,
+        jc.rate_per_acre,
+        jc.rate_unit,
+        jc.cost_per_unit_cents,
+        jc.price_per_unit_cents,
+        jc.sort_order,
+        jc.customer_supplied,
+        p.product_name,
+        p.inventory_unit,
+        p.product_form::text AS product_form
+      INTO STRICT v_job_chem
+      FROM public.job_chemicals jc
+      JOIN public.products p ON p.id = jc.product_id
+      WHERE jc.id = (v_chem->>'job_chemical_id')::uuid
+        AND jc.job_id = v_effective_job_id;
 
-    IF (v_chem->>'product_id') IS NOT NULL THEN
-      SELECT p.inventory_unit, p.product_form::text
-        INTO v_inventory_unit, v_product_form
-        FROM public.products p
-       WHERE p.id = (v_chem->>'product_id')::uuid;
-      IF NOT FOUND THEN
-        RAISE EXCEPTION 'PRODUCT_NOT_FOUND: %', v_chem->>'product_id' USING ERRCODE = 'no_data_found';
+      v_line_key := 'chemical:' || v_job_chem.id::text;
+      v_source_job_chemical_id := v_job_chem.id;
+      v_customer_supplied := v_job_chem.customer_supplied;
+      v_sort_order := COALESCE(v_job_chem.sort_order, 0);
+      v_rate := v_job_chem.rate_per_acre;
+      v_rate_unit := COALESCE(NULLIF(v_job_chem.rate_unit, ''), NULLIF(v_job_chem.unit, ''));
+      v_inventory_unit := v_job_chem.inventory_unit;
+      v_product_form := v_job_chem.product_form;
+      v_source_qty_raw := v_job_chem.quantity;
+      v_chem := v_chem || jsonb_build_object(
+        'job_chemical_id', v_job_chem.id,
+        'line_key', v_line_key,
+        'product_id', v_job_chem.product_id,
+        'description', v_job_chem.product_name
+          || CASE WHEN v_job_chem.customer_supplied THEN ' (customer supplied)' ELSE '' END,
+        'quantity', v_job_chem.quantity,
+        'unit_size', v_job_chem.unit,
+        'rate_per_acre', v_job_chem.rate_per_acre,
+        'rate_unit', v_job_chem.rate_unit,
+        'sort_order', v_sort_order,
+        'customer_supplied', v_job_chem.customer_supplied,
+        'cost_cents',
+          CASE WHEN v_job_chem.customer_supplied THEN 0 ELSE v_job_chem.cost_per_unit_cents END,
+        'snapshot_unit_price_cents',
+          CASE WHEN v_job_chem.customer_supplied THEN 0 ELSE v_job_chem.price_per_unit_cents END,
+        'manual_override',
+          CASE WHEN v_job_chem.customer_supplied THEN false
+               ELSE COALESCE((v_chem->>'manual_override')::boolean, false) END,
+        'unit_price_cents',
+          CASE WHEN v_job_chem.customer_supplied THEN 0 ELSE (v_chem->>'unit_price_cents')::bigint END
+      );
+    ELSE
+      v_sort_order := COALESCE((v_chem->>'sort_order')::integer, 0);
+      v_line_key := COALESCE(NULLIF(v_chem->>'line_key', ''), 'chemical:' || v_sort_order::text);
+      v_rate := NULLIF(v_chem->>'rate_per_acre', '')::numeric;
+      v_rate_unit := COALESCE(NULLIF(v_chem->>'rate_unit', ''), NULLIF(v_chem->>'unit_size', ''));
+
+      IF (v_chem->>'product_id') IS NOT NULL THEN
+        SELECT p.inventory_unit, p.product_form::text
+          INTO v_inventory_unit, v_product_form
+          FROM public.products p
+         WHERE p.id = (v_chem->>'product_id')::uuid;
+        IF NOT FOUND THEN
+          RAISE EXCEPTION 'PRODUCT_NOT_FOUND: %', v_chem->>'product_id' USING ERRCODE = 'no_data_found';
+        END IF;
+      ELSE
+        v_inventory_unit := v_rate_unit;
+        v_product_form := NULL;
       END IF;
-    ELSE
-      v_inventory_unit := v_rate_unit;
-      v_product_form := NULL;
-    END IF;
 
-    IF v_rate IS NOT NULL THEN
-      SELECT v_rate * sum(applied_acres) INTO v_source_qty_raw FROM pg_temp._plsb_fields;
-    ELSE
-      v_source_qty_raw := NULLIF(v_chem->>'quantity', '')::numeric;
+      IF v_rate IS NOT NULL THEN
+        SELECT v_rate * sum(applied_acres) INTO v_source_qty_raw FROM pg_temp._plsb_fields;
+      ELSE
+        v_source_qty_raw := NULLIF(v_chem->>'quantity', '')::numeric;
+      END IF;
     END IF;
     IF v_source_qty_raw IS NULL THEN
       RAISE EXCEPTION 'PER_LINE_CHEMICAL_QUANTITY_REQUIRED: %', v_line_key
         USING ERRCODE = 'invalid_parameter_value';
     END IF;
-    v_source_qty_raw := public.field_app_priced_quantity(
-      v_source_qty_raw,
-      v_rate_unit,
-      COALESCE(v_inventory_unit, v_rate_unit),
-      v_product_form
-    );
+    IF v_effective_job_id IS NULL THEN
+      v_source_qty_raw := public.field_app_priced_quantity(
+        v_source_qty_raw,
+        v_rate_unit,
+        COALESCE(v_inventory_unit, v_rate_unit),
+        v_product_form
+      );
+    END IF;
     IF v_source_qty_raw IS NULL THEN
       RAISE EXCEPTION 'FIELD_APP_UNIT_UNCONVERTIBLE: %', v_line_key
         USING ERRCODE = 'invalid_parameter_value';
@@ -426,10 +564,13 @@ BEGIN
     SELECT round(sum(applied_acres), 4) INTO v_source_acres FROM pg_temp._plsb_fields;
 
     INSERT INTO pg_temp._plsb_lines (
-      line_key, line_kind, product_id, description, source_pricing_quantity,
+      line_key, line_kind, source_job_chemical_id, customer_supplied,
+      product_id, description, source_pricing_quantity,
       source_quantity, source_acres, sort_order, source_input
     ) VALUES (
-      v_line_key, 'chemical', (v_chem->>'product_id')::uuid,
+      v_line_key, 'chemical',
+      v_source_job_chemical_id, v_customer_supplied,
+      (v_chem->>'product_id')::uuid,
       COALESCE(NULLIF(v_chem->>'description', ''), 'Chemical'),
       v_source_qty_raw, v_source_qty, v_source_acres, v_sort_order, v_chem
     );
@@ -445,7 +586,11 @@ BEGIN
       'service:' || p_application_service_id::text,
       'service', p_application_service_id, v_app_service.name,
       v_source_acres_raw, v_source_acres, v_source_acres, 1000000,
-      jsonb_build_object('application_service_id', p_application_service_id)
+      jsonb_build_object(
+        'application_service_id', p_application_service_id,
+        'cost_per_acre_cents', v_app_service.cost_per_acre_cents,
+        'season', v_effective_season
+      )
     );
   END IF;
 
@@ -624,6 +769,15 @@ BEGIN
         RAISE EXCEPTION 'PER_LINE_FLAT_FEE_PRICE_OVERRIDE_UNSUPPORTED: %', v_line_key
           USING ERRCODE = 'feature_not_supported';
       END IF;
+      IF COALESCE((
+           SELECT customer_supplied
+           FROM pg_temp._plsb_lines
+           WHERE line_key = v_line_key
+         ), false)
+         AND jsonb_array_length(v_override->'price_overrides') > 0 THEN
+        RAISE EXCEPTION 'PER_LINE_CUSTOMER_SUPPLIED_PRICE_OVERRIDE_UNSUPPORTED: %', v_line_key
+          USING ERRCODE = 'feature_not_supported';
+      END IF;
       IF EXISTS (
         SELECT entry->>'customer_id'
         FROM jsonb_array_elements(v_override->'price_overrides') entry
@@ -636,32 +790,29 @@ BEGIN
     END IF;
   END LOOP;
 
-  -- Resolve base prices. Precedence remains global manual -> quote -> customer tier;
-  -- application service uses customer_application_rates -> service default.
+  -- Resolve base prices. A job chemical's frozen price/quantity is authoritative;
+  -- explicit global manual remains available for non-customer-supplied work.
+  -- Non-job drafts use global manual -> customer tier. Application service uses
+  -- customer_application_rates for the source job/invoice season -> service default.
   UPDATE pg_temp._plsb_shares s
      SET base_unit_price_cents = CASE
+           WHEN l.customer_supplied THEN 0
            WHEN COALESCE((l.source_input->>'manual_override')::boolean, false)
                 AND l.source_input->>'unit_price_cents' IS NOT NULL
              THEN (l.source_input->>'unit_price_cents')::bigint
-           WHEN quote_price.price_cents IS NOT NULL THEN quote_price.price_cents
+           WHEN l.source_job_chemical_id IS NOT NULL
+             THEN (l.source_input->>'snapshot_unit_price_cents')::bigint
            ELSE tier_price.price_cents
          END,
          base_price_source = CASE
+           WHEN l.customer_supplied THEN 'job_customer_supplied'
            WHEN COALESCE((l.source_input->>'manual_override')::boolean, false)
                 AND l.source_input->>'unit_price_cents' IS NOT NULL THEN 'global_manual'
-           WHEN quote_price.price_cents IS NOT NULL THEN 'quote'
+           WHEN l.source_job_chemical_id IS NOT NULL THEN 'job_snapshot'
            ELSE 'tier'
          END
     FROM pg_temp._plsb_lines l
     JOIN pg_temp._plsb_customers c ON true
-    LEFT JOIN LATERAL (
-      SELECT round(qi.price_per_unit * 100)::bigint AS price_cents
-      FROM public.quote_items qi
-      WHERE qi.product_id = l.product_id
-        AND qi.section_id = v_quote_section_id
-      ORDER BY qi.id
-      LIMIT 1
-    ) quote_price ON true
     LEFT JOIN LATERAL (
       SELECT CASE c.tier
         WHEN 1 THEN COALESCE(round(p.tier1_price * 100), 0)::bigint
@@ -681,7 +832,7 @@ BEGIN
            FROM public.customer_application_rates car
            WHERE car.customer_id = s.customer_id
              AND car.application_service_id = l.application_service_id
-             AND car.season = public.current_season()
+             AND car.season = v_effective_season
            LIMIT 1
          ), svc.default_rate_per_acre_cents),
          base_price_source = CASE WHEN EXISTS (
@@ -689,7 +840,7 @@ BEGIN
            FROM public.customer_application_rates car
            WHERE car.customer_id = s.customer_id
              AND car.application_service_id = l.application_service_id
-             AND car.season = public.current_season()
+             AND car.season = v_effective_season
          ) THEN 'customer_application_rates' ELSE 'application_service_default' END
     FROM pg_temp._plsb_lines l
     JOIN public.application_services svc ON svc.id = l.application_service_id
@@ -861,6 +1012,7 @@ BEGIN
       ), 'hex') AS vector_hash,
       encode(extensions.digest(
         l.line_key || '|' || l.line_kind || '|' || l.price_basis || '|'
+        || COALESCE(l.source_job_chemical_id::text, '') || '|'
         || COALESCE(l.source_pricing_quantity::text, '') || '|'
         || COALESCE(l.source_quantity::text, '') || '|'
         || COALESCE(l.source_acres::text, '') || '|'
@@ -880,6 +1032,7 @@ BEGIN
       l.line_key,
       l.line_kind,
       l.price_basis,
+      l.source_job_chemical_id,
       l.source_pricing_quantity,
       l.source_quantity,
       l.source_acres,
@@ -901,6 +1054,7 @@ BEGIN
         'line_key', l.line_key,
         'line_kind', l.line_kind,
         'price_basis', l.price_basis,
+        'source_job_chemical_id', l.source_job_chemical_id,
         'product_id', l.product_id,
         'application_service_id', l.application_service_id,
         'description', l.description,

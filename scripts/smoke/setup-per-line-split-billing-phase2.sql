@@ -96,7 +96,8 @@ CREATE TABLE public.customers (
 );
 CREATE TABLE public.jobs (
   id uuid PRIMARY KEY,
-  quote_section_id uuid
+  quote_section_id uuid,
+  season integer
 );
 CREATE TABLE public.fields (
   id uuid PRIMARY KEY,
@@ -104,6 +105,14 @@ CREATE TABLE public.fields (
   customer_id uuid NOT NULL REFERENCES public.customers(id),
   total_acres numeric,
   crop_type text
+);
+CREATE TABLE public.job_fields (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  job_id uuid NOT NULL REFERENCES public.jobs(id),
+  field_id uuid NOT NULL REFERENCES public.fields(id),
+  acres_to_treat numeric,
+  sort_order integer NOT NULL DEFAULT 0,
+  UNIQUE (job_id, field_id)
 );
 CREATE TABLE public.field_billing_defaults (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -126,16 +135,31 @@ CREATE TABLE public.job_field_shares (
 );
 CREATE TABLE public.products (
   id uuid PRIMARY KEY,
+  product_name text NOT NULL,
   inventory_unit text,
   product_form text,
   tier1_price numeric,
   tier2_price numeric,
   tier3_price numeric
 );
+CREATE TABLE public.job_chemicals (
+  id uuid PRIMARY KEY,
+  job_id uuid NOT NULL REFERENCES public.jobs(id),
+  product_id uuid NOT NULL REFERENCES public.products(id),
+  quantity numeric NOT NULL DEFAULT 0,
+  unit text,
+  rate_per_acre numeric,
+  rate_unit text,
+  cost_per_unit_cents bigint NOT NULL DEFAULT 0,
+  price_per_unit_cents bigint NOT NULL DEFAULT 0,
+  sort_order integer NOT NULL DEFAULT 0,
+  customer_supplied boolean NOT NULL DEFAULT false
+);
 CREATE TABLE public.application_services (
   id uuid PRIMARY KEY,
   name text NOT NULL,
   default_rate_per_acre_cents bigint NOT NULL DEFAULT 0,
+  cost_per_acre_cents bigint NOT NULL DEFAULT 0,
   is_active boolean NOT NULL DEFAULT true
 );
 CREATE TABLE public.customer_application_rates (
@@ -168,6 +192,7 @@ CREATE TABLE public.invoices (
   customer_id uuid REFERENCES public.customers(id),
   invoice_group_id uuid,
   job_id uuid REFERENCES public.jobs(id),
+  season integer,
   status text NOT NULL DEFAULT 'draft',
   posted_at timestamptz,
   total_amount_cents bigint NOT NULL DEFAULT 0,

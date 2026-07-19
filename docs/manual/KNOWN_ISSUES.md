@@ -86,9 +86,9 @@ Also open: **Sprint D leftovers** (`docs/loops/workflow-waves-ledger.md`) — D1
 
 - **Per-line-item custom split billing (field-app)** — DESIGN SPEC complete + review-hardened; Phase 1
   schema and Phase 2 calculator are built but **not live**, and Phases 3-4 remain unbuilt. Phase 1 is
-  parked because its final `COMMENT ON COLUMN` statement is invalid PostgreSQL; Phase 2's disposable
-  database proof is green but cannot become applyable ahead of that dependency. The production flag
-  and Phase 1 objects are absent, and the baseline real-billing cycle is still required. Default splits
+  repaired and its disposable PostgreSQL proof is green; Phase 2's calculator proof is also green, but
+  both remain parked pending their exact review/publish gates. The production flag and Phase 1 objects
+  are absent, and the baseline real-billing cycle is still required. Default splits
   come from field ownership, with override %/price per line, one invoice per customer, and reversible
   unposting. Three advisor passes informed the design (gpt-5.6-terra design + xhigh plan-review,
   claude-fable-5 money-math). Spec:

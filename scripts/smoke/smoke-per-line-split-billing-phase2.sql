@@ -17,7 +17,15 @@ DECLARE
   v_field_fallback constant uuid := '30000000-0000-0000-0000-000000000003';
   v_field_mode_a constant uuid := '30000000-0000-0000-0000-000000000004';
   v_field_job constant uuid := '30000000-0000-0000-0000-000000000005';
+  v_field_outside constant uuid := '30000000-0000-0000-0000-000000000006';
   v_job constant uuid := '40000000-0000-0000-0000-000000000001';
+  v_job_quote constant uuid := '40000000-0000-0000-0000-000000000002';
+  v_job_customer_supplied constant uuid := '40000000-0000-0000-0000-000000000003';
+  v_job_service constant uuid := '40000000-0000-0000-0000-000000000004';
+  v_job_chem constant uuid := '41000000-0000-0000-0000-000000000001';
+  v_job_chem_quote_a constant uuid := '41000000-0000-0000-0000-000000000002';
+  v_job_chem_quote_b constant uuid := '41000000-0000-0000-0000-000000000003';
+  v_job_chem_customer_supplied constant uuid := '41000000-0000-0000-0000-000000000004';
   v_product_quote constant uuid := '50000000-0000-0000-0000-000000000001';
   v_product_tier constant uuid := '50000000-0000-0000-0000-000000000002';
   v_service constant uuid := '60000000-0000-0000-0000-000000000001';
@@ -39,13 +47,23 @@ BEGIN
 
   INSERT INTO public.customers (id, farm_name, assigned_tier) VALUES
     (v_a, 'A Farm', 1), (v_b, 'B Farm', 2), (v_c, 'C Farm', 3);
-  INSERT INTO public.jobs (id) VALUES (v_job);
+  INSERT INTO public.jobs (id, season) VALUES
+    (v_job, 2026),
+    (v_job_quote, 2026),
+    (v_job_customer_supplied, 2026),
+    (v_job_service, 2025);
   INSERT INTO public.fields (id, field_name, customer_id, total_acres) VALUES
     (v_field_50, 'Half Field', v_a, 1),
     (v_field_3, 'Thirds Field', v_a, 1),
     (v_field_fallback, 'Fallback Field', v_b, 1),
     (v_field_mode_a, 'Mode A Field', v_a, 1),
-    (v_field_job, 'Snapshot Field', v_a, 1);
+    (v_field_job, 'Snapshot Field', v_a, 1),
+    (v_field_outside, 'Outside Job Field', v_a, 1);
+  INSERT INTO public.job_fields (job_id, field_id, acres_to_treat, sort_order) VALUES
+    (v_job, v_field_job, 1, 1),
+    (v_job_quote, v_field_50, 1, 1),
+    (v_job_customer_supplied, v_field_50, 1, 1),
+    (v_job_service, v_field_50, 1, 1);
 
   INSERT INTO public.field_billing_defaults
     (field_id, customer_id, split_pct, is_primary, price_override_cents)
@@ -64,16 +82,24 @@ BEGIN
   VALUES (v_job, v_field_job, v_c, 100, true);
 
   INSERT INTO public.products
-    (id, inventory_unit, product_form, tier1_price, tier2_price, tier3_price)
+    (id, product_name, inventory_unit, product_form, tier1_price, tier2_price, tier3_price)
   VALUES
-    (v_product_quote, 'unit', 'liquid', 1.00, 2.00, 3.00),
-    (v_product_tier, 'unit', 'liquid', 1.00, 2.00, 3.00);
+    (v_product_quote, 'Quote Product', 'unit', 'liquid', 1.00, 2.00, 3.00),
+    (v_product_tier, 'Tier Product', 'unit', 'liquid', 1.00, 2.00, 3.00);
+  INSERT INTO public.job_chemicals (
+    id, job_id, product_id, quantity, unit, rate_per_acre, rate_unit,
+    cost_per_unit_cents, price_per_unit_cents, sort_order, customer_supplied
+  ) VALUES
+    (v_job_chem, v_job, v_product_tier, 1, 'unit', 1, 'unit', 50, 100, 0, false),
+    (v_job_chem_quote_a, v_job_quote, v_product_quote, 2, 'unit', 2, 'unit', 50, 150, 0, false),
+    (v_job_chem_quote_b, v_job_quote, v_product_quote, 3, 'unit', 3, 'unit', 60, 275, 1, false),
+    (v_job_chem_customer_supplied, v_job_customer_supplied, v_product_tier, 4, 'unit', 4, 'unit', 999, 999, 0, true);
   INSERT INTO public.quote_sections (id, field_id) VALUES
     ('70000000-0000-0000-0000-000000000001', v_field_50),
     ('70000000-0000-0000-0000-000000000002', v_field_50);
   UPDATE public.jobs
      SET quote_section_id = '70000000-0000-0000-0000-000000000001'
-   WHERE id = v_job;
+   WHERE id = v_job_quote;
   INSERT INTO public.quote_items (id, section_id, product_id, price_per_unit)
   VALUES
     (
@@ -89,11 +115,13 @@ BEGIN
       9.99
     );
   INSERT INTO public.application_services
-    (id, name, default_rate_per_acre_cents, is_active)
-  VALUES (v_service, 'Application', 10, true);
+    (id, name, default_rate_per_acre_cents, cost_per_acre_cents, is_active)
+  VALUES (v_service, 'Application', 10, 4, true);
   INSERT INTO public.customer_application_rates
     (customer_id, application_service_id, rate_per_acre_cents, season)
-  VALUES (v_b, v_service, 20, 2026);
+  VALUES
+    (v_b, v_service, 20, 2026),
+    (v_b, v_service, 35, 2025);
 
   -- Feature OFF delegates byte-for-byte to the renamed legacy implementation.
   v_plan := public.preview_field_app_invoice_split(
@@ -168,19 +196,40 @@ BEGIN
     RAISE EXCEPTION 'P2_FAIL(single_final_money_round): %', v_plan;
   END IF;
 
-  -- The source job's exact quote section must beat tier when no global manual
-  -- price is present. The same field/product has an unrelated $9.99 quote with
-  -- a lower item UUID, so a field-wide ORDER BY/LIMIT lookup would misprice it.
+  -- Job-backed chemicals are exact frozen rows, not product/quote guesses. Two
+  -- rows intentionally use the same product at different snapshotted prices.
+  -- Caller-provided rate/quantity/price drift must not replace either snapshot.
   v_plan := public.preview_field_app_invoice_split(
     jsonb_build_array(jsonb_build_object('field_id', v_field_50, 'applied_acres', 1)),
-    jsonb_build_array(jsonb_build_object(
-      'line_key', 'chemical:quote', 'sort_order', 0, 'product_id', v_product_quote,
-      'description', 'Quote', 'rate_per_acre', 1, 'rate_unit', 'unit'
-    )), NULL, NULL, v_job, '{}'::jsonb
+    jsonb_build_array(
+      jsonb_build_object(
+        'job_chemical_id', v_job_chem_quote_a, 'line_key', 'chemical:' || v_job_chem_quote_a::text,
+        'sort_order', 99, 'product_id', v_product_tier, 'description', 'Tampered A',
+        'quantity', 99, 'rate_per_acre', 99, 'rate_unit', 'unit',
+        'manual_override', false, 'unit_price_cents', 99999
+      ),
+      jsonb_build_object(
+        'job_chemical_id', v_job_chem_quote_b, 'line_key', 'chemical:' || v_job_chem_quote_b::text,
+        'sort_order', 98, 'product_id', v_product_tier, 'description', 'Tampered B',
+        'quantity', 98, 'rate_per_acre', 98, 'rate_unit', 'unit'
+      )
+    ), NULL, NULL, v_job_quote, '{}'::jsonb
   );
-  IF v_plan#>>'{billing_lines,0,shares,0,base_unit_price_cents}' <> '150'
-     OR v_plan#>>'{billing_lines,0,shares,0,base_price_source}' <> 'quote' THEN
-    RAISE EXCEPTION 'P2_FAIL(quote_precedence): %', v_plan;
+  IF jsonb_array_length(v_plan->'billing_lines') <> 2
+     OR v_plan#>>'{billing_lines,0,source_job_chemical_id}' <> v_job_chem_quote_a::text
+     OR v_plan#>>'{billing_lines,0,product_id}' <> v_product_quote::text
+     OR v_plan#>>'{billing_lines,0,source_quantity}' <> '2.0000'
+     OR v_plan#>>'{billing_lines,0,source_unit_price_cents}' <> '150'
+     OR v_plan#>>'{billing_lines,0,source_amount_cents}' <> '300'
+     OR v_plan#>>'{billing_lines,0,source_input,cost_cents}' <> '50'
+     OR v_plan#>>'{billing_lines,0,shares,0,base_price_source}' <> 'job_snapshot'
+     OR v_plan#>>'{billing_lines,1,source_job_chemical_id}' <> v_job_chem_quote_b::text
+     OR v_plan#>>'{billing_lines,1,source_quantity}' <> '3.0000'
+     OR v_plan#>>'{billing_lines,1,source_unit_price_cents}' <> '275'
+     OR v_plan#>>'{billing_lines,1,source_amount_cents}' <> '825'
+     OR v_plan#>>'{billing_lines,1,source_input,cost_cents}' <> '60'
+     OR v_plan->>'grand_total_cents' <> '1125' THEN
+    RAISE EXCEPTION 'P2_FAIL(exact_job_chemical_snapshots): %', v_plan;
   END IF;
 
   -- Without a source job there is no authoritative quote section. Do not guess
@@ -279,7 +328,7 @@ BEGIN
   -- resolves customer rate before the default service price.
   v_plan := public.preview_field_app_invoice_split(
     jsonb_build_array(jsonb_build_object('field_id', v_field_50, 'applied_acres', 1)),
-    '[]'::jsonb, v_service, NULL, NULL,
+    '[]'::jsonb, v_service, NULL, v_job_service,
     jsonb_build_object('lines', jsonb_build_array(jsonb_build_object(
       'line_key', 'service:' || v_service::text,
       'split_mode', 'custom', 'split_override_reason', 'Tenant pays service',
@@ -294,9 +343,11 @@ BEGIN
      OR v_shares#>>'{0,amount_cents}' <> '10'
      OR v_shares#>>'{1,amount_cents}' <> '0'
      OR v_shares#>>'{1,allocated_acres}' <> '0.0000'
-     OR v_shares#>>'{1,base_unit_price_cents}' <> '20'
-     OR v_shares#>>'{1,base_price_source}' <> 'customer_application_rates' THEN
-    RAISE EXCEPTION 'P2_FAIL(service_100_0_zero_row): %', v_plan;
+     OR v_shares#>>'{1,base_unit_price_cents}' <> '35'
+     OR v_shares#>>'{1,base_price_source}' <> 'customer_application_rates'
+     OR v_plan#>>'{billing_lines,0,source_input,cost_per_acre_cents}' <> '4'
+     OR v_plan#>>'{billing_lines,0,source_input,season}' <> '2025' THEN
+    RAISE EXCEPTION 'P2_FAIL(service_100_0_job_season): %', v_plan;
   END IF;
 
   -- One-cent flat fee follows the same deterministic largest-remainder rule.
@@ -318,15 +369,89 @@ BEGIN
   v_plan := public.preview_field_app_invoice_split(
     jsonb_build_array(jsonb_build_object('field_id', v_field_job, 'applied_acres', 1)),
     jsonb_build_array(jsonb_build_object(
-      'line_key', 'chemical:job', 'sort_order', 0, 'product_id', v_product_tier,
-      'description', 'Job', 'rate_per_acre', 1, 'rate_unit', 'unit',
-      'manual_override', true, 'unit_price_cents', 100
+      'job_chemical_id', v_job_chem,
+      'line_key', 'chemical:' || v_job_chem::text,
+      'sort_order', 999, 'product_id', v_product_quote,
+      'description', 'Tampered Job', 'rate_per_acre', 999, 'rate_unit', 'unit'
     )), NULL, NULL, v_job, '{}'::jsonb
   );
   IF v_plan->>'customer_count' <> '1'
      OR v_plan#>>'{billing_lines,0,shares,0,customer_id}' <> v_c::text
+     OR v_plan#>>'{billing_lines,0,source_job_chemical_id}' <> v_job_chem::text
+     OR v_plan#>>'{billing_lines,0,product_id}' <> v_product_tier::text
+     OR v_plan#>>'{billing_lines,0,source_amount_cents}' <> '100'
      OR v_plan#>>'{shares_detail,rows,0,vector_source}' <> 'job_snapshot' THEN
     RAISE EXCEPTION 'P2_FAIL(job_snapshot_precedence): %', v_plan;
+  END IF;
+
+  -- A customer-supplied job chemical is always zero dollars, even when the
+  -- browser tries to smuggle a manual price into its payload.
+  v_plan := public.preview_field_app_invoice_split(
+    jsonb_build_array(jsonb_build_object('field_id', v_field_50, 'applied_acres', 1)),
+    jsonb_build_array(jsonb_build_object(
+      'job_chemical_id', v_job_chem_customer_supplied,
+      'line_key', 'chemical:' || v_job_chem_customer_supplied::text,
+      'product_id', v_product_tier, 'quantity', 999,
+      'manual_override', true, 'unit_price_cents', 777
+    )), NULL, NULL, v_job_customer_supplied, '{}'::jsonb
+  );
+  IF v_plan#>>'{billing_lines,0,source_quantity}' <> '4.0000'
+     OR v_plan#>>'{billing_lines,0,source_unit_price_cents}' <> '0'
+     OR v_plan#>>'{billing_lines,0,source_amount_cents}' <> '0'
+     OR v_plan#>>'{billing_lines,0,source_input,cost_cents}' <> '0'
+     OR v_plan#>>'{billing_lines,0,shares,0,base_unit_price_cents}' <> '0'
+     OR v_plan#>>'{billing_lines,0,shares,0,base_price_source}' <> 'job_customer_supplied'
+     OR v_plan->>'grand_total_cents' <> '0' THEN
+    RAISE EXCEPTION 'P2_FAIL(customer_supplied_zero): %', v_plan;
+  END IF;
+
+  v_err := NULL;
+  BEGIN
+    PERFORM public.preview_field_app_invoice_split(
+      jsonb_build_array(jsonb_build_object('field_id', v_field_50, 'applied_acres', 1)),
+      jsonb_build_array(jsonb_build_object(
+        'job_chemical_id', v_job_chem_customer_supplied,
+        'line_key', 'chemical:' || v_job_chem_customer_supplied::text
+      )), NULL, NULL, v_job_customer_supplied,
+      jsonb_build_object('lines', jsonb_build_array(jsonb_build_object(
+        'line_key', 'chemical:' || v_job_chem_customer_supplied::text,
+        'price_overrides', jsonb_build_array(jsonb_build_object(
+          'customer_id', v_a, 'unit_price_cents', 777, 'reason', 'Must be rejected'
+        ))
+      )))
+    );
+  EXCEPTION WHEN OTHERS THEN v_err := SQLERRM; END;
+  IF v_err NOT LIKE '%PER_LINE_CUSTOMER_SUPPLIED_PRICE_OVERRIDE_UNSUPPORTED%' THEN
+    RAISE EXCEPTION 'P2_FAIL(customer_supplied_price_override): %', COALESCE(v_err, '<no error>');
+  END IF;
+
+  -- Job context is fail-closed: every selected field must belong to the job,
+  -- and every chemical must carry an exact job_chemical_id from that job.
+  v_err := NULL;
+  BEGIN
+    PERFORM public.preview_field_app_invoice_split(
+      jsonb_build_array(jsonb_build_object('field_id', v_field_outside, 'applied_acres', 1)),
+      jsonb_build_array(
+        jsonb_build_object('job_chemical_id', v_job_chem_quote_a),
+        jsonb_build_object('job_chemical_id', v_job_chem_quote_b)
+      ), NULL, NULL, v_job_quote, '{}'::jsonb
+    );
+  EXCEPTION WHEN OTHERS THEN v_err := SQLERRM; END;
+  IF v_err NOT LIKE '%PER_LINE_FIELD_NOT_IN_JOB%' THEN
+    RAISE EXCEPTION 'P2_FAIL(job_field_membership): %', COALESCE(v_err, '<no error>');
+  END IF;
+
+  v_err := NULL;
+  BEGIN
+    PERFORM public.preview_field_app_invoice_split(
+      jsonb_build_array(jsonb_build_object('field_id', v_field_job, 'applied_acres', 1)),
+      jsonb_build_array(jsonb_build_object(
+        'product_id', v_product_tier, 'quantity', 1, 'rate_unit', 'unit'
+      )), NULL, NULL, v_job, '{}'::jsonb
+    );
+  EXCEPTION WHEN OTHERS THEN v_err := SQLERRM; END;
+  IF v_err NOT LIKE '%PER_LINE_JOB_CHEMICAL_ID_REQUIRED%' THEN
+    RAISE EXCEPTION 'P2_FAIL(job_chemical_identity_required): %', COALESCE(v_err, '<no error>');
   END IF;
 
   -- Field owner fallback when neither snapshot nor field defaults exist.

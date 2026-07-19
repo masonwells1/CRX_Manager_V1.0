@@ -95,10 +95,9 @@ Grouped, one-liner summary of what is LIVE in production today (see
 See `docs/manual/KNOWN_ISSUES.md` for the full parked/deferred/shelved list.
 The four headline items:
 
-- **Per-line-item custom split billing** — not live. Phase 1's schema migration is parked on invalid
-  PostgreSQL `COMMENT ON` syntax, so Phase 2's locally proven calculator remains parked behind it;
-  the feature flag and Phase 1 objects are absent from production. Existing aggregate field splits
-  remain unchanged.
+- **Per-line-item custom split billing** — not live. The repaired Phase 1 schema migration and locally
+  proven Phase 2 calculator remain parked while exact reviews and Phases 3-4 are completed; the feature
+  flag and Phase 1 objects are absent from production. Existing aggregate field splits remain unchanged.
 - **Grower portal** — deferred (no customer-facing self-service portal yet).
 - **Earmark engine** (prepay reserved-pool billing) — shelved, needs a
   reserved-pool redesign before it can be revisited.

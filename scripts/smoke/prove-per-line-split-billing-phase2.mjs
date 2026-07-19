@@ -135,7 +135,7 @@ function run() {
   }
 
   console.log('PROOF — Ran: network-isolated PostgreSQL 17 container; loaded checked-in Phase 1 + Phase 2 migrations verbatim; executed rollback-only Phase 2 SQL proof.');
-  console.log('PROOF — Saw: feature OFF delegated unchanged; 50/50; exact 3-way; 1-cent; one final money rounding after full-precision conversion; signed half-cent -13 => -7/-6; quote/tier/manual/service price precedence; per-person override; 100/0 zero row; flat fee; job snapshot/default/fallback; hashes; Mode A/vector/role rejection; one public preview overload; private calculator not browser-executable.');
+  console.log('PROOF — Saw: feature OFF delegated unchanged; 50/50; exact 3-way; 1-cent; one final money rounding after full-precision conversion; signed half-cent -13 => -7/-6; exact job-chemical quantity/price snapshots, including duplicate products; customer-supplied zero billing; non-job manual/tier and source-season service pricing; per-person override; 100/0 zero row; flat fee; job/default/fallback ownership; job field/chemical identity rejection; hashes; Mode A/vector/role rejection; one public preview overload; private calculator not browser-executable.');
 }
 
 try {
