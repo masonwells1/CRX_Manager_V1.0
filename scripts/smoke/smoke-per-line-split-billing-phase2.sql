@@ -149,7 +149,8 @@ BEGIN
     ('70000000-0000-0000-0000-000000000004', '72000000-0000-0000-0000-000000000004', v_field_50),
     ('70000000-0000-0000-0000-000000000005', '72000000-0000-0000-0000-000000000005', v_field_50),
     ('70000000-0000-0000-0000-000000000006', '72000000-0000-0000-0000-000000000006', v_field_50),
-    ('70000000-0000-0000-0000-000000000007', '72000000-0000-0000-0000-000000000007', v_field_50);
+    ('70000000-0000-0000-0000-000000000007', '72000000-0000-0000-0000-000000000007', v_field_50),
+    ('70000000-0000-0000-0000-000000000008', v_quote_a, v_field_fallback);
   UPDATE public.jobs
      SET quote_section_id = '70000000-0000-0000-0000-000000000001'
    WHERE id = v_job_quote;
@@ -186,7 +187,9 @@ BEGIN
     ('71000000-0000-0000-0000-000000000008', v_quote_a,
      '70000000-0000-0000-0000-000000000001', v_product_gallon, 10.00, 'qt'),
     ('71000000-0000-0000-0000-000000000009', v_quote_b,
-     '70000000-0000-0000-0000-000000000003', v_product_gallon, 10.00, 'qt');
+     '70000000-0000-0000-0000-000000000003', v_product_gallon, 10.00, 'qt'),
+    ('71000000-0000-0000-0000-000000000010', v_quote_a,
+     '70000000-0000-0000-0000-000000000008', v_product_tier, 9.00, NULL);
   INSERT INTO public.application_services
     (id, name, default_rate_per_acre_cents, cost_per_acre_cents, is_active)
   VALUES
@@ -226,6 +229,35 @@ BEGIN
   UPDATE public.app_settings
      SET setting_value = 'true'
    WHERE setting_key = 'feature_per_line_split_billing';
+
+  -- An authenticated caller must not be able to pre-create one of the
+  -- predictable helper relations that the privileged calculator will reuse.
+  EXECUTE 'SET LOCAL ROLE authenticated';
+  EXECUTE $ddl$
+    CREATE TEMP TABLE pg_temp._plsb_fields (
+      field_id uuid PRIMARY KEY,
+      field_name text NOT NULL,
+      applied_acres numeric NOT NULL,
+      total_acres numeric
+    ) ON COMMIT DROP
+  $ddl$;
+  v_err := NULL;
+  BEGIN
+    PERFORM public.preview_field_app_invoice_split(
+      jsonb_build_array(jsonb_build_object('field_id', v_field_fallback, 'applied_acres', 1)),
+      jsonb_build_array(jsonb_build_object(
+        'line_key', 'chemical:temp-collision', 'sort_order', 0,
+        'product_id', v_product_tier, 'description', 'Temp collision',
+        'rate_per_acre', 1, 'rate_unit', 'unit',
+        'manual_override', true, 'unit_price_cents', 100
+      )), NULL, NULL, NULL, '{}'::jsonb
+    );
+  EXCEPTION WHEN OTHERS THEN v_err := SQLERRM; END;
+  EXECUTE 'RESET ROLE';
+  IF COALESCE(v_err, '') NOT LIKE '%PER_LINE_TEMP_OBJECT_COLLISION%' THEN
+    RAISE EXCEPTION 'P2_FAIL(caller_owned_temp_relation_rejected): %', COALESCE(v_err, '<no error>');
+  END IF;
+  DROP TABLE IF EXISTS pg_temp._plsb_fields;
 
   -- SECURITY DEFINER must preserve the same customer/invoice ownership boundary
   -- as the browser tables. A sales rep cannot use guessed job, invoice, or field
@@ -616,6 +648,51 @@ BEGIN
      OR v_plan#>>'{billing_lines,0,shares,1,base_unit_price_cents}' <> '4000'
      OR v_plan->>'grand_total_cents' <> '4000' THEN
     RAISE EXCEPTION 'P2_FAIL(quote_price_unit_normalization): %', v_plan;
+  END IF;
+
+  -- A quote attached to a field where the quote customer has no billing share
+  -- cannot price that customer's quantity contributed by a different field.
+  v_plan := public.preview_field_app_invoice_split(
+    jsonb_build_array(
+      jsonb_build_object('field_id', v_field_50, 'applied_acres', 1),
+      jsonb_build_object('field_id', v_field_fallback, 'applied_acres', 1)
+    ),
+    jsonb_build_array(jsonb_build_object(
+      'line_key', 'chemical:zero-share-quote', 'sort_order', 0,
+      'product_id', v_product_tier, 'description', 'Zero-share quote',
+      'rate_per_acre', 1, 'rate_unit', 'unit'
+    )), NULL, NULL, NULL, '{}'::jsonb
+  );
+  IF v_plan#>>'{billing_lines,0,shares,0,base_unit_price_cents}' <> '100'
+     OR v_plan#>>'{billing_lines,0,shares,0,base_price_source}' <> 'tier'
+     OR v_plan#>>'{billing_lines,0,shares,0,allocated_quantity}' <> '0.5000'
+     OR v_plan#>>'{billing_lines,0,shares,0,amount_cents}' <> '50'
+     OR v_plan#>>'{billing_lines,0,shares,1,base_unit_price_cents}' <> '200'
+     OR v_plan#>>'{billing_lines,0,shares,1,base_price_source}' <> 'tier'
+     OR v_plan#>>'{billing_lines,0,shares,1,allocated_quantity}' <> '1.5000'
+     OR v_plan#>>'{billing_lines,0,shares,1,amount_cents}' <> '300'
+     OR v_plan->>'grand_total_cents' <> '350' THEN
+    RAISE EXCEPTION 'P2_FAIL(zero_share_quote_provenance_ignored): %', v_plan;
+  END IF;
+
+  -- If a customer contributes quantity from multiple fields, a quote on only
+  -- one of those fields cannot price the aggregate line across the uncovered field.
+  v_err := NULL;
+  BEGIN
+    PERFORM public.preview_field_app_invoice_split(
+      jsonb_build_array(
+        jsonb_build_object('field_id', v_field_50, 'applied_acres', 1),
+        jsonb_build_object('field_id', v_field_fallback, 'applied_acres', 1)
+      ),
+      jsonb_build_array(jsonb_build_object(
+        'line_key', 'chemical:partial-quote-coverage', 'sort_order', 0,
+        'product_id', v_product_quote, 'description', 'Partial quote coverage',
+        'rate_per_acre', 1, 'rate_unit', 'unit'
+      )), NULL, NULL, NULL, '{}'::jsonb
+    );
+  EXCEPTION WHEN OTHERS THEN v_err := SQLERRM; END;
+  IF COALESCE(v_err, '') NOT LIKE '%PER_LINE_QUOTE_FIELD_COVERAGE_INCOMPLETE%' THEN
+    RAISE EXCEPTION 'P2_FAIL(partial_quote_field_coverage_rejected): %', COALESCE(v_err, '<no error>');
   END IF;
 
   -- No matching quote falls through to each customer's tier.

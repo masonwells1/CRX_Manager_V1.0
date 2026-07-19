@@ -147,15 +147,42 @@ BEGIN
     RAISE EXCEPTION 'PER_LINE_FLAT_FEES_MUST_BE_ARRAY' USING ERRCODE = 'invalid_parameter_value';
   END IF;
 
-  -- Temp relations keep one function readable without creating reusable math helpers.
-  -- They are connection-local, transaction-scoped, and never touch production rows.
-  CREATE TEMP TABLE IF NOT EXISTS _plsb_fields (
+  -- Temp relations keep one function readable without creating reusable math
+  -- helpers. Never reuse a caller-owned predictable temp object inside this
+  -- SECURITY DEFINER frame: reject it, then rebuild only owner-created tables so
+  -- repeated previews in one transaction still start from a known definition.
+  IF EXISTS (
+    SELECT 1
+      FROM pg_catalog.pg_class c
+     WHERE c.relnamespace = pg_my_temp_schema()
+       AND c.relname IN (
+         '_plsb_fields',
+         '_plsb_field_vectors',
+         '_plsb_customers',
+         '_plsb_lines',
+         '_plsb_shares',
+         '_plsb_quote_fields'
+       )
+       AND c.relowner <> current_user::regrole
+  ) THEN
+    RAISE EXCEPTION 'PER_LINE_TEMP_OBJECT_COLLISION'
+      USING ERRCODE = 'insufficient_privilege';
+  END IF;
+
+  DROP TABLE IF EXISTS pg_temp._plsb_quote_fields;
+  DROP TABLE IF EXISTS pg_temp._plsb_shares;
+  DROP TABLE IF EXISTS pg_temp._plsb_lines;
+  DROP TABLE IF EXISTS pg_temp._plsb_customers;
+  DROP TABLE IF EXISTS pg_temp._plsb_field_vectors;
+  DROP TABLE IF EXISTS pg_temp._plsb_fields;
+
+  CREATE TEMP TABLE _plsb_fields (
     field_id uuid PRIMARY KEY,
     field_name text NOT NULL,
     applied_acres numeric NOT NULL,
     total_acres numeric
   ) ON COMMIT DROP;
-  CREATE TEMP TABLE IF NOT EXISTS _plsb_field_vectors (
+  CREATE TEMP TABLE _plsb_field_vectors (
     field_id uuid NOT NULL,
     customer_id uuid NOT NULL,
     customer_name text NOT NULL,
@@ -167,13 +194,13 @@ BEGIN
     allocated_acres numeric(12,4),
     PRIMARY KEY (field_id, customer_id)
   ) ON COMMIT DROP;
-  CREATE TEMP TABLE IF NOT EXISTS _plsb_customers (
+  CREATE TEMP TABLE _plsb_customers (
     customer_id uuid PRIMARY KEY,
     customer_name text NOT NULL,
     tier integer NOT NULL,
     is_primary boolean NOT NULL
   ) ON COMMIT DROP;
-  CREATE TEMP TABLE IF NOT EXISTS _plsb_lines (
+  CREATE TEMP TABLE _plsb_lines (
     line_key text PRIMARY KEY,
     line_kind text NOT NULL,
     price_basis text,
@@ -195,7 +222,7 @@ BEGIN
     vector_hash text,
     calculation_hash text
   ) ON COMMIT DROP;
-  CREATE TEMP TABLE IF NOT EXISTS _plsb_shares (
+  CREATE TEMP TABLE _plsb_shares (
     line_key text NOT NULL,
     customer_id uuid NOT NULL,
     split_mode text NOT NULL DEFAULT 'field_default',
@@ -212,12 +239,12 @@ BEGIN
     price_override_reason text,
     PRIMARY KEY (line_key, customer_id)
   ) ON COMMIT DROP;
-
-  TRUNCATE pg_temp._plsb_fields;
-  TRUNCATE pg_temp._plsb_field_vectors;
-  TRUNCATE pg_temp._plsb_customers;
-  TRUNCATE pg_temp._plsb_lines;
-  TRUNCATE pg_temp._plsb_shares;
+  CREATE TEMP TABLE _plsb_quote_fields (
+    line_key text NOT NULL,
+    customer_id uuid NOT NULL,
+    field_id uuid NOT NULL,
+    PRIMARY KEY (line_key, customer_id, field_id)
+  ) ON COMMIT DROP;
 
   IF p_invoice_id IS NOT NULL THEN
     SELECT i.job_id, i.customer_id, i.created_by, i.salesman_id,
@@ -957,6 +984,23 @@ BEGIN
     END IF;
   END LOOP;
 
+  -- Bind quote eligibility to the fields that actually contribute each final
+  -- line/customer share. Field-default lines retain their per-field ownership
+  -- provenance. A custom/even line vector has no per-field attribution, so every
+  -- selected field must be quoted for each nonzero customer or the quote is partial.
+  INSERT INTO pg_temp._plsb_quote_fields (line_key, customer_id, field_id)
+  SELECT s.line_key, s.customer_id, v.field_id
+    FROM pg_temp._plsb_shares s
+    JOIN pg_temp._plsb_field_vectors v ON v.customer_id = s.customer_id
+   WHERE s.split_mode = 'field_default'
+     AND s.split_micro_pct > 0
+  UNION ALL
+  SELECT s.line_key, s.customer_id, f.field_id
+    FROM pg_temp._plsb_shares s
+    CROSS JOIN pg_temp._plsb_fields f
+   WHERE s.split_mode <> 'field_default'
+     AND s.split_micro_pct > 0;
+
   -- Resolve base prices. A job chemical's frozen price/quantity is authoritative;
   -- explicit global manual remains available only for non-job work. For a non-job
   -- product, preserve the established manual -> quoted -> tier precedence. Quote
@@ -973,7 +1017,10 @@ BEGIN
     JOIN public.quote_sections qs ON qs.id = qi.section_id
     JOIN public.quotes q ON q.id = qs.quote_id AND q.id = qi.quote_id
     JOIN public.products p ON p.id = l.product_id
-    JOIN pg_temp._plsb_fields selected_field ON selected_field.field_id = qs.field_id
+    JOIN pg_temp._plsb_quote_fields quote_field
+      ON quote_field.line_key = l.line_key
+     AND quote_field.customer_id = s.customer_id
+     AND quote_field.field_id = qs.field_id
    WHERE l.line_kind = 'chemical'
      AND l.source_job_chemical_id IS NULL
      AND NOT COALESCE((l.source_input->>'manual_override')::boolean, false)
@@ -1003,8 +1050,45 @@ BEGIN
     JOIN public.quote_items qi ON qi.product_id = l.product_id
     JOIN public.quote_sections qs ON qs.id = qi.section_id
     JOIN public.quotes q ON q.id = qs.quote_id AND q.id = qi.quote_id
+    JOIN pg_temp._plsb_quote_fields quote_field
+      ON quote_field.line_key = l.line_key
+     AND quote_field.customer_id = s.customer_id
+     AND quote_field.field_id = qs.field_id
+   WHERE l.line_kind = 'chemical'
+     AND l.source_job_chemical_id IS NULL
+     AND NOT COALESCE((l.source_input->>'manual_override')::boolean, false)
+     AND qi.price_per_unit IS NOT NULL
+     AND q.customer_id = s.customer_id
+     AND q.season = v_effective_season
+     AND q.deleted_at IS NULL
+     AND q.status IN ('sent', 'revised', 'accepted')
+     AND (q.status = 'accepted' OR q.expires_at IS NULL OR q.expires_at >= CURRENT_DATE)
+   GROUP BY l.line_key, s.customer_id
+  HAVING count(DISTINCT quote_field.field_id) < (
+    SELECT count(*)
+      FROM pg_temp._plsb_quote_fields required_field
+     WHERE required_field.line_key = l.line_key
+       AND required_field.customer_id = s.customer_id
+  )
+   ORDER BY l.line_key
+   LIMIT 1;
+  IF FOUND THEN
+    RAISE EXCEPTION 'PER_LINE_QUOTE_FIELD_COVERAGE_INCOMPLETE: %', v_line_key
+      USING ERRCODE = 'check_violation';
+  END IF;
+
+  SELECT l.line_key
+    INTO v_line_key
+    FROM pg_temp._plsb_lines l
+    JOIN pg_temp._plsb_shares s ON s.line_key = l.line_key
+    JOIN public.quote_items qi ON qi.product_id = l.product_id
+    JOIN public.quote_sections qs ON qs.id = qi.section_id
+    JOIN public.quotes q ON q.id = qs.quote_id AND q.id = qi.quote_id
     JOIN public.products p ON p.id = l.product_id
-    JOIN pg_temp._plsb_fields selected_field ON selected_field.field_id = qs.field_id
+    JOIN pg_temp._plsb_quote_fields quote_field
+      ON quote_field.line_key = l.line_key
+     AND quote_field.customer_id = s.customer_id
+     AND quote_field.field_id = qs.field_id
    WHERE l.line_kind = 'chemical'
       AND l.source_job_chemical_id IS NULL
       AND NOT COALESCE((l.source_input->>'manual_override')::boolean, false)
@@ -1038,7 +1122,10 @@ BEGIN
     JOIN public.quote_items qi ON qi.product_id = l.product_id
     JOIN public.quote_sections qs ON qs.id = qi.section_id
     JOIN public.quotes q ON q.id = qs.quote_id AND q.id = qi.quote_id
-    JOIN pg_temp._plsb_fields selected_field ON selected_field.field_id = qs.field_id
+    JOIN pg_temp._plsb_quote_fields quote_field
+      ON quote_field.line_key = l.line_key
+     AND quote_field.customer_id = s.customer_id
+     AND quote_field.field_id = qs.field_id
    WHERE l.line_kind = 'chemical'
      AND l.source_job_chemical_id IS NULL
      AND NOT COALESCE((l.source_input->>'manual_override')::boolean, false)
@@ -1097,7 +1184,10 @@ BEGIN
         JOIN public.quote_sections qs ON qs.id = qi.section_id
         JOIN public.quotes q ON q.id = qs.quote_id AND q.id = qi.quote_id
         JOIN public.products p ON p.id = qi.product_id
-        JOIN pg_temp._plsb_fields selected_field ON selected_field.field_id = qs.field_id
+        JOIN pg_temp._plsb_quote_fields quote_field
+          ON quote_field.line_key = l.line_key
+         AND quote_field.customer_id = c.customer_id
+         AND quote_field.field_id = qs.field_id
        WHERE qi.product_id = l.product_id
           AND qi.price_per_unit IS NOT NULL
           AND q.customer_id = c.customer_id
