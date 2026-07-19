@@ -169,6 +169,7 @@ CREATE TABLE public.invoices (
   job_id uuid REFERENCES public.jobs(id),
   status text NOT NULL DEFAULT 'draft',
   posted_at timestamptz,
+  total_amount_cents bigint NOT NULL DEFAULT 0,
   deleted_at timestamptz,
   created_by uuid REFERENCES public.profiles(id),
   salesman_id uuid REFERENCES public.profiles(id)

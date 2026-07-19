@@ -1948,6 +1948,7 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
   save_idempotency: 'idempotency infrastructure helper that stores the parent operation result',
   set_primary_customer_contact: 'convergent primary-contact promotion; replays settle to the same single-primary state; SECURITY INVOKER under customer RLS',
   settle_applied_record_acres: 'trigger-only derived-acre recomputation; direct client EXECUTE is revoked',
+  trg_capture_invoice_line_share_post_snapshot: 'trigger-only append-only capture inside the parent post transaction; parent posting owns idempotency and direct client EXECUTE is revoked',
 };
 
 

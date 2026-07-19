@@ -3422,8 +3422,9 @@ export interface FieldAppBillingLine {
   updated_at: string;
 }
 
-/** Immutable per-line allocation snapshot: one row per billing-set member per line
- *  (including 0% / $0 rows). split_micro_pct is 0..100,000,000 (100% = 100,000,000). */
+/** Working per-line allocation: editable in draft/unposted, frozen while posted.
+ *  One row per billing-set member per line (including 0% / $0 rows).
+ *  split_micro_pct is 0..100,000,000 (100% = 100,000,000). */
 export interface InvoiceLineShare {
   id: string;
   billing_line_id: string;
@@ -3446,6 +3447,57 @@ export interface InvoiceLineShare {
   created_at: string;
   // Joined
   customer?: Customer;
+}
+
+/** Immutable, self-contained copy of one line share from a specific post cycle.
+ *  Unlike the editable working share, this row survives unpost/edit/repost. */
+export interface InvoiceLineSharePostSnapshot {
+  id: string;
+  post_instance_id: string;
+  invoice_id: string;
+  invoice_group_id: string | null;
+  post_sequence: number;
+  posted_at: string;
+  post_status: 'posted' | 'paid' | 'overdue';
+  invoice_total_amount_cents: number;
+  send_disposition: 'sendable' | 'suppressed_zero_total';
+  source_share_id: string;
+  billing_set_id: string;
+  rounding_policy_version: number;
+  billing_line_id: string;
+  invoice_item_id: string;
+  customer_id: string;
+  line_kind: 'chemical' | 'service' | 'flat_fee';
+  price_basis: 'same_price' | 'per_person_price' | 'flat_fee';
+  product_id: string | null;
+  application_service_id: string | null;
+  description: string;
+  source_quantity: number | null;
+  source_acres: number | null;
+  source_unit_price_cents: number | null;
+  source_amount_cents: number | null;
+  sort_order: number;
+  split_mode: 'field_default' | 'custom';
+  split_micro_pct: number;
+  allocated_quantity: number | null;
+  allocated_acres: number | null;
+  base_unit_price_cents: number;
+  base_price_source: string;
+  price_mode: 'default' | 'override';
+  unit_price_cents: number;
+  amount_cents: number;
+  split_override_reason: string | null;
+  price_override_reason: string | null;
+  calculation_hash: string;
+  vector_hash: string;
+  item_quantity: number | null;
+  item_acres: number | null;
+  item_unit_price_cents: number;
+  item_extended_cents: number;
+  source_share_created_by: string;
+  source_share_created_at: string;
+  captured_by: string | null;
+  captured_at: string;
 }
 
 export interface CustomerShareResult {
