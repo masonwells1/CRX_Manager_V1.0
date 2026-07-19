@@ -1,4 +1,4 @@
--- CRX extension prerequisites at live high-water 20260719065443.
+-- CRX extension prerequisites at live high-water 20260719092832.
 -- Apply first on a NEW Supabase project, before the public schema baseline.
 BEGIN;
 

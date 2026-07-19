@@ -2,9 +2,22 @@
 
 All significant development milestones, in reverse chronological order.
 
+### 2026-07-19 — Exact push-gate invoice and commission closures
+
+The final exact Codex review found two live authorization/validation gaps after the
+clean-rebuild baseline was added. Data API roles still had direct invoice UPDATE,
+so an admin could bypass the governed invoice RPCs for header fields that were not
+part of the split provenance denylist. The repository has no direct invoice writer;
+the forward correction therefore removes direct UPDATE from anon/authenticated/
+service-role and keeps the existing owner-context save/post/payment/void/cancel RPCs
+as the only write path. The shared commission validator also now rejects a missing
+or JSON-null percentage explicitly instead of allowing SQL NULL comparisons to fall
+through. Both updated rollback chains reproduced the current live defects before
+apply; reviewer/apply/post-smoke evidence is recorded in migration history.
+
 ### 2026-07-19 — Production schema clean-rebuild baseline at gauntlet high-water
 
-The gauntlet closeout's exact Codex push review found that the immutable historical migration stream cannot safely initialize a brand-new database: one applied function-body guard depends on legacy mixed line endings, and the quote-commission repair correctly requires the one exact production row it reconciled. The fix does not edit either applied migration. `supabase/baselines/` now contains a hash-bound, data-free production schema snapshot at live high-water `20260719065443`, its required extensions, the CRX-owned Auth trigger/Storage policy and bucket overlay, all eight live pg_cron schedules, and a compact 859-row version/name ledger with empty-ledger/job-name hard stops. A disposable PostgreSQL 17 restore matched production catalog counts and structural/security fingerprints, all 442 public-plus-Storage policy contracts, the gauntlet key function hashes, and all non-comment application function bodies; replaying the ledger restore failed closed as designed. `scripts/verify-schema-baseline.mjs` is exposed as `npm run test:schema-baseline` and wired into correction guards/CI. Fresh projects must restore the manifest order and then apply only migrations newer than the baseline; the old migration files remain the immutable audit trail.
+The gauntlet closeout's exact Codex push review found that the immutable historical migration stream cannot safely initialize a brand-new database: one applied function-body guard depends on legacy mixed line endings, and the quote-commission repair correctly requires the one exact production row it reconciled. The fix does not edit either applied migration. `supabase/baselines/` now contains a hash-bound, data-free production schema snapshot at final live high-water `20260719092832`, its required extensions, the CRX-owned Auth trigger/Storage policy and bucket overlay, all eight live pg_cron schedules, and a compact 861-row version/name ledger with empty-ledger/job-name hard stops. A disposable PostgreSQL 17 restore matched production catalog counts and exact logical structural/security/function/policy fingerprints, including the final invoice UPDATE revokes and commission-validator body; replaying the ledger restore failed closed as designed. `scripts/verify-schema-baseline.mjs` is exposed as `npm run test:schema-baseline` and wired into correction guards/CI. Fresh projects must restore the manifest order and then apply only migrations newer than the baseline; the old migration files remain the immutable audit trail.
 
 ### 2026-07-19 — Quote commission routing made fail-closed
 

@@ -69,12 +69,15 @@ BEGIN
     IF has_table_privilege('anon', 'public.invoices', 'INSERT')
        OR has_table_privilege('authenticated', 'public.invoices', 'INSERT')
        OR has_table_privilege('service_role', 'public.invoices', 'INSERT')
+       OR has_table_privilege('anon', 'public.invoices', 'UPDATE')
+       OR has_table_privilege('authenticated', 'public.invoices', 'UPDATE')
+       OR has_table_privilege('service_role', 'public.invoices', 'UPDATE')
        OR has_table_privilege('anon', 'public.invoices', 'DELETE')
        OR has_table_privilege('authenticated', 'public.invoices', 'DELETE')
        OR has_table_privilege('service_role', 'public.invoices', 'DELETE')
        OR has_table_privilege('authenticated', 'public.invoices', 'TRUNCATE')
        OR has_table_privilege('service_role', 'public.invoices', 'TRUNCATE') THEN
-      RAISE EXCEPTION 'SMOKE_FAIL: direct invoice identity creation/deletion remains granted';
+      RAISE EXCEPTION 'SMOKE_FAIL: direct invoice DML remains granted outside governed RPCs';
     END IF;
   END IF;
 

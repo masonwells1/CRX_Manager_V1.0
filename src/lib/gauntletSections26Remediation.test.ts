@@ -182,4 +182,33 @@ describe('gauntlet sections 2-6 CodeRabbit closeout', () => {
     expect(sql).toContain('PERFORM public.validate_commission_split_json(NEW.commission_split)');
     expect(sql).toContain('FROM PUBLIC, anon, authenticated, service_role');
   });
+
+  it('routes all invoice updates through governed owner-context RPCs', () => {
+    const sql = migration('20260719092746_route_invoice_updates_through_governed_rpcs.sql');
+    const barrier = sql.indexOf('LOCK TABLE public.invoices IN SHARE ROW EXCLUSIVE MODE');
+    const revoke = sql.indexOf('REVOKE UPDATE ON TABLE public.invoices');
+    expect(barrier).toBeGreaterThan(-1);
+    expect(revoke).toBeGreaterThan(barrier);
+    expect(sql).toContain('FROM PUBLIC, anon, authenticated, service_role');
+    expect(sql).toContain("has_table_privilege(role_name, 'public.invoices', 'UPDATE')");
+    expect(sql).toContain("'public.save_invoice(jsonb,jsonb,text)'");
+    expect(sql).toContain("ARRAY['search_path=public, pg_temp']");
+  });
+
+  it('rejects missing and null commission percentages explicitly', () => {
+    const sql = migration('20260719092832_reject_null_commission_percentages.sql');
+    const barrier = sql.indexOf('LOCK TABLE public.quotes IN SHARE ROW EXCLUSIVE MODE');
+    const preflight = sql.indexOf('DO $preflight$');
+    const replacement = sql.indexOf(
+      'CREATE OR REPLACE FUNCTION public.validate_commission_split_json',
+    );
+    expect(barrier).toBeGreaterThan(-1);
+    expect(preflight).toBeGreaterThan(barrier);
+    expect(replacement).toBeGreaterThan(preflight);
+    expect(sql).toContain('COMMISSION_PERCENTAGE_RECONCILIATION_REQUIRED');
+    expect(sql).toContain(
+      'IF v_percentage IS NULL OR v_percentage <= 0 OR v_percentage > 100 THEN',
+    );
+    expect(sql).toContain('COMMISSION_NULL_PERCENTAGE_POSTFLIGHT_FAILED');
+  });
 });

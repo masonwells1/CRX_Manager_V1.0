@@ -50,6 +50,44 @@ BEGIN
     END IF;
   END;
 
+  BEGIN
+    INSERT INTO public.quotes (
+      quote_number, customer_id, created_by, status, commission_split
+    ) VALUES (
+      'E2E-QCS-MISSING-' || v_suffix,
+      v_customer,
+      v_admin,
+      'draft',
+      '{"splits":[{"recipient":"Missing Percent"}]}'::jsonb
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: missing quote commission percentage was accepted';
+  EXCEPTION WHEN OTHERS THEN
+    v_error := SQLERRM;
+    IF v_error LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_error NOT LIKE 'COMMISSION_SPLIT_INVALID: percentage out of range for Missing Percent%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: missing percentage raised unexpected error: %', v_error;
+    END IF;
+  END;
+
+  BEGIN
+    INSERT INTO public.quotes (
+      quote_number, customer_id, created_by, status, commission_split
+    ) VALUES (
+      'E2E-QCS-NULL-' || v_suffix,
+      v_customer,
+      v_admin,
+      'draft',
+      '{"splits":[{"recipient":"Null Percent","percentage":null}]}'::jsonb
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: null quote commission percentage was accepted';
+  EXCEPTION WHEN OTHERS THEN
+    v_error := SQLERRM;
+    IF v_error LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_error NOT LIKE 'COMMISSION_SPLIT_INVALID: percentage out of range for Null Percent%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: null percentage raised unexpected error: %', v_error;
+    END IF;
+  END;
+
   INSERT INTO public.quotes (
     quote_number, customer_id, created_by, status, commission_split
   ) VALUES (

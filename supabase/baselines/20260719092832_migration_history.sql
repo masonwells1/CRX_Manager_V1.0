@@ -1,4 +1,4 @@
--- CRX production migration-ledger baseline at live high-water 20260719065443.
+-- CRX production migration-ledger baseline at live high-water 20260719092832.
 -- Restore only into a NEW Supabase project after applying the matching public schema baseline.
 -- The fail-closed check prevents overwriting an existing migration ledger.
 BEGIN;
@@ -869,5 +869,7 @@ COPY "supabase_migrations"."schema_migrations" ("version", "name") FROM stdin;
 20260719045029	20260719101000_align_finance_charge_preview_month_dedup
 20260719060256	20260719102000_allow_governed_split_terminal_lifecycle
 20260719065443	20260719064000_validate_quote_commission_splits
+20260719092746	20260719093000_route_invoice_updates_through_governed_rpcs
+20260719092832	20260719093500_reject_null_commission_percentages
 \.
 COMMIT;

@@ -98,7 +98,7 @@
     },
     "quote_commission_split_validation": {
       "chain": "smoke-quote-commission-split-validation.sql",
-      "description": "Quote commission money-routing guard: blank or duplicate recipients fail closed on direct INSERT/UPDATE, while an explicit empty no-commission split and a complete named 100% split remain valid. Self-contained fixture and terminal rollback.",
+      "description": "Quote commission money-routing guard: blank or duplicate recipients and missing/JSON-null percentages fail closed on direct INSERT/UPDATE, while an explicit empty no-commission split and a complete named 100% split remain valid. Self-contained fixture and terminal rollback.",
       "covers": ["guard_quote_commission_split_valid", "validate_commission_split_json", "quotes"]
     },
     "rollover_quote_to_season": {

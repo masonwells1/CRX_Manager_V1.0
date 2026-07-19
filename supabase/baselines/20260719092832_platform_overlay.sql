@@ -1,4 +1,4 @@
--- CRX Supabase platform overlay at live high-water 20260719065443.
+-- CRX Supabase platform overlay at live high-water 20260719092832.
 -- Apply after the matching public schema baseline on a NEW Supabase project.
 -- This restores only CRX-owned auth/storage objects; Supabase owns the platform schemas.
 BEGIN;
