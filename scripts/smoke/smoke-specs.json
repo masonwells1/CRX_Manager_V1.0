@@ -53,8 +53,8 @@
     },
     "generate_finance_charges": {
       "chain": "smoke-finance-charge-month-dedup.sql",
-      "description": "H2 double-charge regression: generate_finance_charges must charge an overdue balance at most once per customer per calendar month. Sets up an overdue posted invoice, runs the generator on two different as-of dates in the same month, and asserts exactly one finance_charge exists (second run skips). FAIL-FIRST against the pre-fix function (exact-date dedup let the second run charge again). Self-contained fixtures and terminal rollback.",
-      "covers": ["generate_finance_charges"]
+      "description": "H2 double-charge and preview-parity regression: preview and generation both reject a closed accounting period, generation charges an overdue balance at most once per customer per calendar month, and preview omits a customer generation will skip. Sets up an overdue posted invoice, proves the closed-period gate, generates once, asserts the later same-month preview is empty, generates again, and asserts exactly one finance_charge exists. FAIL-FIRST against either the exact-date generator or either stale preview predicate. Self-contained fixtures and terminal rollback.",
+      "covers": ["generate_finance_charges", "preview_finance_charges"]
     },
     "void_invoice": {
       "chain": "smoke-void-invoice-blocks-applied-payments.sql",
@@ -68,8 +68,8 @@
     },
     "create_invoice_for_unbilled_delivery": {
       "chain": "smoke-backfill-refuse-split-billing.sql",
-      "description": "H5 regression: create_invoice_for_unbilled_delivery must refuse mono backfill whenever durable field allocations prove split billing, even after the transient needs_split_billing queue flag clears. Self-contained fixtures and terminal rollback.",
-      "covers": ["create_invoice_for_unbilled_delivery", "convert_quote_to_order"]
+      "description": "H5 regression: mono backfill and posting refuse split-billing conflicts under both serialized writer orderings; a forged field-acre audit row cannot substitute for private exact provenance; raw split header/item edits and identity deletion are blocked; governed save_invoice refreshes the exact claim; and the canonical split group remains postable. The companion disposable proof runs real two-session OIFA-vs-create and cancel-vs-revert interleavings. Self-contained fixtures and terminal rollback.",
+      "covers": ["create_invoice_for_unbilled_delivery", "guard_mono_invoice_split_billing_post", "create_split_invoices_from_order", "save_invoice", "delete_invoices", "convert_quote_to_order"]
     },
     "record_invoice_payment": {
       "chain": "smoke-retire-legacy-record-invoice-payment.sql",

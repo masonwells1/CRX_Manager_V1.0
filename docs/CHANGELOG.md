@@ -2,6 +2,29 @@
 
 All significant development milestones, in reverse chronological order.
 
+### 2026-07-19 — Exact-HEAD Codex blocker remediation applied live
+
+The independent pre-push review found five remaining release issues after the original
+CodeRabbit closeout. Split-invoice posting still trusted historically forgeable audit rows;
+the canonical split creator did not share the OIFA writer's item locks; invoice UUID/group
+identity could be recycled; timestamp cutover semantics could strand a legitimate old
+transaction; and quote revert could deadlock with order cancellation. The forward repair now
+uses private owner-only relational provenance and an exact line-content claim, stable
+order-item locks, a cutover transaction claim that rejects stale old-function callers, and
+governed `save_invoice`/`delete_invoices` wrappers for legitimate draft workflows. Direct
+invoice identity creation/deletion and raw governed-content edits fail closed. Quote revert
+keeps quote-first serialization but uses a retryable NOWAIT order lock. A real two-session
+PostgreSQL 17 proof passed both OIFA/create orderings and both cancel/revert orderings.
+`preview_finance_charges` now also mirrors generation's closed-period gate as well as its
+calendar-month exclusion. Updated live rollback smokes failed first on the forged audit and
+closed-period preview paths and confirmed every E2E fixture rolled back. All three forward
+migrations passed both machine reviewer charters, applied live as ledger versions
+`20260719044912`, `20260719044958`, and `20260719045029`, and their exact rollback smokes
+returned `SMOKE_PASS_ROLLBACK`. Post-apply catalog proof confirmed the private provenance
+tables remain empty after rollback, their deny-all RLS policies and guards are enabled,
+direct invoice identity DML is revoked from Data API roles, and the public RPCs retain their
+intended SECURITY DEFINER grants and fixed search paths.
+
 ### 2026-07-19 — Gauntlet CodeRabbit closeout hardening
 
 CodeRabbit's ready-for-review pass found and prompted fixes for false-green smoke/E2E

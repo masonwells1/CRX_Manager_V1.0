@@ -7,7 +7,8 @@
 -- (different as-of date, so a different period_end) charges the balance again,
 -- leaving TWO finance_charges rows -> this chain raises SMOKE_FAIL. Against the
 -- FIXED function the second run skips (month-level dedup + month-keyed advisory
--- lock), leaving one row, and the chain reaches SMOKE_PASS_ROLLBACK.
+-- lock), preview omits the already-charged customer, one row remains, and the
+-- chain reaches SMOKE_PASS_ROLLBACK.
 --
 -- One DO block, terminal exception -> nothing commits.
 DO $smoke$
@@ -20,6 +21,9 @@ DECLARE
   v_early    date;
   v_res      jsonb;
   v_n        integer;
+  v_preview_n integer;
+  v_closed   date;
+  v_err      text;
 BEGIN
   SELECT id INTO v_admin FROM public.profiles
   WHERE role = 'admin' AND is_active = true ORDER BY created_at LIMIT 1;
@@ -59,6 +63,50 @@ BEGIN
     '[E2E] H2 Farm ' || v_suffix, 12, true, 0, 0
   ) RETURNING id INTO v_customer;
 
+  -- Preview and generation must reject the exact same closed business date.
+  -- Prefer a real closed period; create a rollback-only historical fixture if
+  -- this database has never closed one.
+  SELECT ap.period_start
+    INTO v_closed
+    FROM public.accounting_periods ap
+   WHERE ap.status = 'closed'
+     AND ap.period_start <= (now() AT TIME ZONE 'America/Chicago')::date
+   ORDER BY ap.period_start
+   LIMIT 1;
+  IF v_closed IS NULL THEN
+    v_closed := DATE '1900-01-01';
+    INSERT INTO public.accounting_periods (
+      period_start, period_end, status, closed_by, closed_at, notes
+    ) VALUES (
+      v_closed, v_closed, 'closed', v_admin, now(),
+      '[E2E] rollback-only finance preview parity fixture'
+    );
+  END IF;
+
+  BEGIN
+    PERFORM count(*) FROM public.preview_finance_charges(v_closed);
+    RAISE EXCEPTION 'SMOKE_FAIL: preview accepted a closed accounting period';
+  EXCEPTION WHEN OTHERS THEN
+    v_err := SQLERRM;
+    IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_err NOT LIKE 'Date % falls in closed accounting period (% to %)' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: preview closed-period gate raised unexpected error: %', v_err;
+    END IF;
+  END;
+
+  BEGIN
+    v_res := public.generate_finance_charges(
+      v_closed, v_admin, ARRAY[v_customer], 'e2e-h2-closed-' || v_suffix
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: generation accepted a closed accounting period';
+  EXCEPTION WHEN OTHERS THEN
+    v_err := SQLERRM;
+    IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_err NOT LIKE 'Date % falls in closed accounting period (% to %)' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: generation closed-period gate raised unexpected error: %', v_err;
+    END IF;
+  END;
+
   -- Overdue posted invoice (due well before either as-of date).
   INSERT INTO public.invoices (
     invoice_number, customer_id, invoice_type, status,
@@ -74,6 +122,18 @@ BEGIN
   v_res := public.generate_finance_charges(v_early, v_admin, ARRAY[v_customer], 'e2e-h2-1-' || v_suffix);
   IF (v_res->>'charges_generated')::int IS DISTINCT FROM 1 THEN
     RAISE EXCEPTION 'SMOKE_SETUP: first run did not charge as expected: %', v_res;
+  END IF;
+
+  -- Preview must mirror generation's calendar-month exclusion. Against the
+  -- pre-fix preview this customer remains selectable even though generation's
+  -- next same-month run will skip it.
+  SELECT count(*)
+    INTO v_preview_n
+    FROM public.preview_finance_charges(v_late) p
+   WHERE p.customer_id = v_customer;
+  IF v_preview_n IS DISTINCT FROM 0 THEN
+    RAISE EXCEPTION
+      'SMOKE_FAIL: preview still offered a customer already charged in this calendar month';
   END IF;
 
   -- Run 2 (later date, SAME month, different key): must NOT charge again.
