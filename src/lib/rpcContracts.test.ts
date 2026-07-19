@@ -1826,6 +1826,29 @@ describe('Idempotency BODY verification (reads migration SQL)', () => {
     expect(IDEMPOTENCY_BODY_EXEMPT.cancel_order).toBe('delegated');
   });
 
+  it('keeps the upstream provenance-aware cancel wrapper inside the short-close router', () => {
+    const files = getMigrationFiles();
+    const wrapper = files.find(
+      ({ name }) => name === '20260719120000_govern_invoice_order_money_lifecycle.sql'
+    )?.content;
+
+    expect(wrapper).toContain(
+      'RENAME TO _cancel_order_provenance_wrapper_20260719'
+    );
+    expect(wrapper).toMatch(
+      /REVOKE ALL ON FUNCTION public\._cancel_order_provenance_wrapper_20260719[\s\S]*FROM PUBLIC, anon, authenticated, service_role/
+    );
+    expect(wrapper).toContain("v_contract CONSTANT text := 'cancel_order_v1'");
+    expect(wrapper).toContain('public._claim_bound_lifecycle_idempotency(');
+    expect(wrapper).toContain('public._bind_completed_lifecycle_idempotency(');
+    expect(wrapper).toMatch(
+      /public\._cancel_order_provenance_wrapper_20260719\([\s\S]*p_order_id, v_actor, NULL[\s\S]*jsonb_build_object\('mode', 'full_cancel', 'status', 'cancelled'\)/
+    );
+    expect(wrapper).not.toMatch(
+      /v_result := public\._cancel_order_impl_20260714/
+    );
+  });
+
   it('save_purchase_order hydrates omitted cost before delegating to its idempotent implementation', () => {
     const files = getMigrationFiles();
     const wrapper = files.find(
@@ -2046,8 +2069,11 @@ const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
  * in MUTATING_RPCS_MISSING_IDEMPOTENCY and must eventually be fixed.
  */
 const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
+  _close_undelivered_order_remainder_20260718: 'private short-close implementation; public cancel_order owns the bound request and direct EXECUTE is revoked',
+  _enforce_delivery_items_parent_lock: 'trigger-only parent-lock enforcement; direct client EXECUTE is revoked',
   _insert_commissions_for_job: 'internal helper; caller owns idempotency and direct EXECUTE is revoked',
   _insert_commissions_for_order: 'internal helper; caller owns idempotency and direct EXECUTE is revoked',
+  _post_deleted_delivery_recovery_invoice_20260719: 'private completed-delivery recovery helper; public recovery RPC owns idempotency and direct EXECUTE is revoked',
   _reverse_credit_memo_application: 'internal helper called only by idempotent credit-memo reversal RPCs',
   _sync_job_holds: 'internal convergent hold-sync helper; direct client EXECUTE is revoked',
   _sync_planned_holds: 'internal convergent hold-sync helper called within parent transactions',
@@ -2057,6 +2083,8 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
   check_rate_limit: 'rate-limit counter intentionally records every invocation, including retries',
   check_remainder_reminders: 'maintenance reminder sweep uses persisted sent markers to deduplicate',
   check_unpriced_orders: 'cron reminder sweep uses persisted reminder and escalation sent markers',
+  guard_invoice_terminal_order: 'trigger-only invoice lifecycle guard; direct client EXECUTE is revoked',
+  guard_terminal_order_invoice_items: 'trigger-only invoice-item lifecycle guard; direct client EXECUTE is revoked',
   mark_overdue_invoices: 'service-role maintenance updates only invoices currently eligible as overdue',
   recompute_job_applied_acres: 'trigger-only derived-total recomputation; direct client EXECUTE is revoked',
   reconcile_prepay_balances: 'convergent repair sets balances to recomputed ledger truth',
