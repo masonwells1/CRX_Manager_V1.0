@@ -564,17 +564,48 @@ ALTER TABLE public.field_app_billing_lines FORCE ROW LEVEL SECURITY;
 ALTER TABLE public.invoice_line_shares     FORCE ROW LEVEL SECURITY;
 ALTER TABLE public.invoice_line_share_post_snapshots FORCE ROW LEVEL SECURITY;
 
--- billing_sets: billing staff read. Applicators are deliberately excluded because
--- these rows expose unrelated customer/job identifiers to any globally-authenticated
--- applicator unless an assignment boundary is enforced through billing_set.job_id.
+-- billing_sets: admins read all; sales reps read only sets they created or a set
+-- whose child invoice is assigned to them. A global is_sales_rep() policy would
+-- expose every customer's source quantities and prices to every rep.
 DROP POLICY IF EXISTS field_app_billing_sets_select ON public.field_app_billing_sets;
 CREATE POLICY field_app_billing_sets_select ON public.field_app_billing_sets
-  FOR SELECT USING (is_admin() OR is_sales_rep());
+  FOR SELECT USING (
+    is_admin() OR (
+      is_sales_rep() AND (
+        created_by = (SELECT auth.uid())
+        OR EXISTS (
+          SELECT 1
+            FROM public.invoices i
+           WHERE i.invoice_group_id = field_app_billing_sets.invoice_group_id
+             AND ( i.created_by = (SELECT auth.uid())
+                OR i.salesman_id = (SELECT auth.uid()) )
+        )
+      )
+    )
+  );
 
--- billing_lines: billing staff read; includes source quantities and prices.
+-- billing_lines inherit the same owner/assigned-invoice scope through their set.
 DROP POLICY IF EXISTS field_app_billing_lines_select ON public.field_app_billing_lines;
 CREATE POLICY field_app_billing_lines_select ON public.field_app_billing_lines
-  FOR SELECT USING (is_admin() OR is_sales_rep());
+  FOR SELECT USING (
+    is_admin() OR (
+      is_sales_rep() AND EXISTS (
+        SELECT 1
+          FROM public.field_app_billing_sets bs
+         WHERE bs.id = field_app_billing_lines.billing_set_id
+           AND (
+             bs.created_by = (SELECT auth.uid())
+             OR EXISTS (
+               SELECT 1
+                 FROM public.invoices i
+                WHERE i.invoice_group_id = bs.invoice_group_id
+                  AND ( i.created_by = (SELECT auth.uid())
+                     OR i.salesman_id = (SELECT auth.uid()) )
+             )
+           )
+      )
+    )
+  );
 
 -- invoice_line_shares: SELECT scoped through invoice_items -> invoices (mirror invoice_items_select)
 DROP POLICY IF EXISTS invoice_line_shares_select ON public.invoice_line_shares;
@@ -712,6 +743,7 @@ AS $$
 DECLARE
   v_post_instance_id uuid := gen_random_uuid();
   v_post_sequence integer;
+  v_is_posted_state boolean;
 BEGIN
   -- Ordinary invoices have no split-share rows and remain untouched.
   IF NOT EXISTS (
@@ -720,6 +752,26 @@ BEGIN
       JOIN public.invoice_items ii ON ii.id = s.invoice_item_id
      WHERE ii.invoice_id = NEW.id
   ) THEN
+    RETURN NULL;
+  END IF;
+
+  -- A split invoice must never reach the freeze boundary without the timestamp
+  -- required by its immutable history row. Also reject the inverse mismatch:
+  -- posted_at on a draft/unposted split invoice would freeze its working rows
+  -- without representing a real post transition.
+  v_is_posted_state := NEW.status IN ('posted','paid','overdue');
+  IF v_is_posted_state IS DISTINCT FROM (NEW.posted_at IS NOT NULL) THEN
+    RAISE EXCEPTION
+      'split invoice % requires posted status and posted_at to change together',
+      NEW.id
+      USING ERRCODE = 'check_violation';
+  END IF;
+
+  -- Updates within the posted lifecycle (posted -> paid/overdue) and sanctioned
+  -- unposts do not create another post instance. A later unposted -> posted
+  -- transition does, because OLD is no longer a complete posted state.
+  IF NOT v_is_posted_state
+     OR (OLD.status IN ('posted','paid','overdue') AND OLD.posted_at IS NOT NULL) THEN
     RETURN NULL;
   END IF;
 
@@ -773,11 +825,6 @@ DROP TRIGGER IF EXISTS trg_capture_invoice_line_share_post_snapshot ON public.in
 CREATE TRIGGER trg_capture_invoice_line_share_post_snapshot
   AFTER UPDATE OF status, posted_at ON public.invoices
   FOR EACH ROW
-  WHEN (
-    NEW.status IN ('posted','paid','overdue')
-    AND NEW.posted_at IS NOT NULL
-    AND (OLD.status NOT IN ('posted','paid','overdue') OR OLD.posted_at IS NULL)
-  )
   EXECUTE FUNCTION public.trg_capture_invoice_line_share_post_snapshot();
 
 COMMIT;

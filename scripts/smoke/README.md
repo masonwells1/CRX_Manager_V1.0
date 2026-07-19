@@ -101,13 +101,15 @@ delete/rebuild remain valid; that
 parent cascades cannot erase posted share history;
 that authenticated has SELECT only and cannot TRUNCATE; that one non-null invoice group
 cannot acquire competing billing-set parents; that applicators cannot read unrelated
-billing sets/source prices; that split and price overrides reject blank audit reasons;
+billing sets/source prices; that a sales rep sees only sets/lines they own or are assigned
+through a child invoice; that split and price overrides reject blank audit reasons;
 that browser roles cannot change the server-controlled send disposition;
 that only a zero-total invoice may be suppressed while the server's valid zero-total
 path still works; that unpost/edit/repost records distinct, immutable post sequences
 with the exact rounding-policy version used for each post
 which survive deletion of every editable working row; that privileged UPDATE and
-TRUNCATE cannot alter that history; that a logical billing line cannot commit without a vector; and that
+TRUNCATE cannot alter that history; that a split invoice cannot become posted/frozen
+with a missing post timestamp and no history; that a logical billing line cannot commit without a vector; and that
 two concurrent full-vector writers on distinct child invoices serialize so exactly one commits. It also races a
 share mutation with invoice posting and proves the share trigger holds the item/invoice
 lock boundary, preventing either transaction from crossing the posted-snapshot boundary. The container is

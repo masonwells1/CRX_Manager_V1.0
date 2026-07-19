@@ -28,6 +28,7 @@ const MIGRATION = path.join(
 
 const ID = {
   actor: '00000000-0000-4000-8000-000000000001',
+  actorB: '00000000-0000-4000-8000-000000000002',
   customerA: '00000000-0000-4000-8000-000000000011',
   customerB: '00000000-0000-4000-8000-000000000012',
   set: '00000000-0000-4000-8000-000000000021',
@@ -286,7 +287,7 @@ TRUNCATE TABLE
   public.profiles
 CASCADE;
 
-INSERT INTO public.profiles (id) VALUES ('${ID.actor}');
+INSERT INTO public.profiles (id) VALUES ('${ID.actor}'), ('${ID.actorB}');
 INSERT INTO public.customers (id) VALUES ('${ID.customerA}'), ('${ID.customerB}');
 INSERT INTO public.invoices (
   id, status, posted_at, total_amount_cents, created_by, salesman_id
@@ -634,6 +635,45 @@ LANGUAGE sql STABLE AS $$ SELECT false $$;
   };
 }
 
+function proveSalesRepBillingSourceReadsAreOwnerScoped() {
+  resetFixture();
+  runSql(`
+BEGIN;
+${lineSql(ID.lineA, 'sales-rep source scope line')}
+${shareSql({ id: ID.shareA, line: ID.lineA, item: ID.itemA, customer: ID.customerA })}
+COMMIT;
+CREATE OR REPLACE FUNCTION public.is_sales_rep() RETURNS boolean
+LANGUAGE sql STABLE AS $$ SELECT true $$;
+`);
+
+  const outsiderRows = scalar(`
+SET ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '${ID.actorB}', false);
+SELECT
+  (SELECT count(*) FROM public.field_app_billing_sets)::text || '|' ||
+  (SELECT count(*) FROM public.field_app_billing_lines)::text;
+RESET ROLE;
+`);
+  const ownerRows = scalar(`
+SET ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '${ID.actor}', false);
+SELECT
+  (SELECT count(*) FROM public.field_app_billing_sets)::text || '|' ||
+  (SELECT count(*) FROM public.field_app_billing_lines)::text;
+RESET ROLE;
+`);
+  runSql(`
+CREATE OR REPLACE FUNCTION public.is_sales_rep() RETURNS boolean
+LANGUAGE sql STABLE AS $$ SELECT false $$;
+`);
+
+  return {
+    label: 'sales reps can read their own billing sources but not another rep\'s',
+    passed: outsiderRows === '0|0' && ownerRows === '1|1',
+    detail: `outsider sets|lines = ${outsiderRows}; owner sets|lines = ${ownerRows}`,
+  };
+}
+
 function proveBlankSplitOverrideReasonRejected() {
   resetFixture();
   return expectRejected(
@@ -808,6 +848,23 @@ COMMIT;
   };
 }
 
+function proveSplitInvoiceCannotPostWithoutTimestampAndHistory() {
+  resetFixture();
+  runSql(`
+BEGIN;
+${lineSql(ID.lineA, 'missing post timestamp line')}
+${shareSql({ id: ID.shareA, line: ID.lineA, item: ID.itemA, customer: ID.customerA })}
+COMMIT;
+`);
+  return expectRejected(
+    'a split invoice cannot become posted and frozen without a post timestamp/history snapshot',
+    `UPDATE public.invoices
+        SET status = 'posted', posted_at = NULL
+      WHERE id = '${ID.draftInvoice}';`,
+    /posted_at|required|snapshot|not null/i,
+  );
+}
+
 function proveEmptyLine() {
   resetFixture();
   return expectRejected(
@@ -978,11 +1035,13 @@ async function main() {
     proveClientCannotTruncate(),
     proveOneBillingSetPerInvoiceGroup(),
     proveApplicatorCannotReadBillingSources(),
+    proveSalesRepBillingSourceReadsAreOwnerScoped(),
     proveBlankSplitOverrideReasonRejected(),
     proveBlankPriceOverrideReasonRejected(),
     proveClientCannotSetSendDisposition(),
     proveSuppressionRequiresZeroTotal(),
     proveServerCanSuppressZeroTotal(),
+    proveSplitInvoiceCannotPostWithoutTimestampAndHistory(),
     provePostHistorySurvivesUnpostEditRepost(),
     proveEmptyLine(),
     await proveConcurrentVectors(),
