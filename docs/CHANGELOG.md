@@ -2,6 +2,19 @@
 
 All significant development milestones, in reverse chronological order.
 
+### 2026-07-18 — Gauntlet workflow read-only boundary hardened
+
+The sections 2–6 gauntlet can no longer give general-purpose child agents write-capable
+filesystem or Supabase tools. Every finder, skeptic, critic, and adjudicator now runs as the
+capability-constrained read-only `Explore` agent and receives live catalog facts only through
+a caller-supplied evidence packet that must match the production project, be less than six
+hours old, and include a fresh `origin/main` baseline for Section 5. Agent-produced findings
+are delimited as untrusted data before reuse. Section settlement and BLOCKER/HIGH cleanliness
+are derived deterministically from blocked evidence and terminal verdicts; an adjudicator's
+advisory output cannot falsely release a blocked section or call a confirmed HIGH clean. The
+autopilot off-by-default regression now runs against an isolated temporary project directory,
+so an intentionally armed hands-free session cannot poison its own pre-commit guard test.
+
 ### 2026-07-18 — Gauntlet intermediate live-window reconciliation
 
 Applied live as migration `20260718235153`. The forward-only, scan-only migration fails closed with exact entity identifiers
