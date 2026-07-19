@@ -21,6 +21,27 @@
 
 BEGIN;
 
+-- Installing the preview engine is not the owner-controlled turn-on. A stale
+-- or drifted settings row must not route traffic into new money logic merely
+-- because Phase 1's inert seed used ON CONFLICT DO NOTHING.
+DO $$
+DECLARE
+  v_flag_value text;
+BEGIN
+  SELECT setting_value
+    INTO v_flag_value
+    FROM public.app_settings
+   WHERE setting_key = 'feature_per_line_split_billing';
+
+  IF NOT FOUND OR v_flag_value IS DISTINCT FROM 'false' THEN
+    RAISE EXCEPTION
+      'PER_LINE_PHASE2_REQUIRES_DISABLED_FLAG: expected false, found %',
+      COALESCE(v_flag_value, '<missing>')
+      USING ERRCODE = 'object_not_in_prerequisite_state';
+  END IF;
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION public._calculate_per_line_split_billing_plan(
   p_job_id uuid,
   p_locations jsonb,
@@ -860,10 +881,10 @@ BEGIN
     JOIN pg_temp._plsb_customers c ON true
     LEFT JOIN LATERAL (
       SELECT CASE c.tier
-        WHEN 1 THEN COALESCE(round(p.tier1_price * 100), 0)::bigint
-        WHEN 2 THEN COALESCE(round(p.tier2_price * 100), round(p.tier1_price * 100), 0)::bigint
-        WHEN 3 THEN COALESCE(round(p.tier3_price * 100), round(p.tier1_price * 100), 0)::bigint
-        ELSE COALESCE(round(p.tier1_price * 100), 0)::bigint
+        WHEN 1 THEN round(p.tier1_price * 100)::bigint
+        WHEN 2 THEN COALESCE(round(p.tier2_price * 100), round(p.tier1_price * 100))::bigint
+        WHEN 3 THEN COALESCE(round(p.tier3_price * 100), round(p.tier1_price * 100))::bigint
+        ELSE round(p.tier1_price * 100)::bigint
       END AS price_cents
       FROM public.products p WHERE p.id = l.product_id
     ) tier_price ON true
@@ -897,10 +918,36 @@ BEGIN
     FROM pg_temp._plsb_lines l
    WHERE s.line_key = l.line_key AND l.line_kind = 'flat_fee';
 
+  -- Missing prices are not free products. Production allows nullable frozen job
+  -- prices and nullable product tiers, so fail closed before any unresolved value
+  -- can be normalized into a legitimate-looking zero-dollar invoice line.
+  SELECT l.line_key, l.line_kind
+    INTO v_line_key, v_line_kind
+    FROM pg_temp._plsb_lines l
+    JOIN pg_temp._plsb_shares s ON s.line_key = l.line_key
+   WHERE s.base_unit_price_cents IS NULL
+      OR s.base_price_source IS NULL
+      OR (
+        l.line_kind IN ('chemical', 'service')
+        AND s.base_unit_price_cents < 0
+      )
+   ORDER BY l.sort_order, l.line_key, s.customer_id
+   LIMIT 1;
+  IF FOUND THEN
+    IF v_line_kind = 'chemical' THEN
+      RAISE EXCEPTION 'PER_LINE_CHEMICAL_PRICE_REQUIRED: %', v_line_key
+        USING ERRCODE = 'check_violation';
+    ELSIF v_line_kind = 'service' THEN
+      RAISE EXCEPTION 'PER_LINE_SERVICE_PRICE_REQUIRED: %', v_line_key
+        USING ERRCODE = 'check_violation';
+    ELSE
+      RAISE EXCEPTION 'PER_LINE_FLAT_FEE_PRICE_REQUIRED: %', v_line_key
+        USING ERRCODE = 'check_violation';
+    END IF;
+  END IF;
+
   UPDATE pg_temp._plsb_shares
-     SET base_unit_price_cents = COALESCE(base_unit_price_cents, 0),
-         base_price_source = COALESCE(base_price_source, 'unpriced'),
-         unit_price_cents = COALESCE(base_unit_price_cents, 0);
+     SET unit_price_cents = base_unit_price_cents;
 
   FOR v_override IN
     SELECT value FROM jsonb_array_elements(COALESCE(p_line_overrides->'lines', '[]'::jsonb))

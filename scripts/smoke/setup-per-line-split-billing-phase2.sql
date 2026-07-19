@@ -152,7 +152,7 @@ CREATE TABLE public.job_chemicals (
   rate_per_acre numeric,
   rate_unit text,
   cost_per_unit_cents bigint NOT NULL DEFAULT 0,
-  price_per_unit_cents bigint NOT NULL DEFAULT 0,
+  price_per_unit_cents bigint,
   sort_order integer NOT NULL DEFAULT 0,
   customer_supplied boolean NOT NULL DEFAULT false
 );

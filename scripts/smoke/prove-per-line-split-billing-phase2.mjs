@@ -27,6 +27,7 @@ if (process.argv.length > 2) {
 
 const files = {
   setup: path.join(ROOT, 'scripts', 'smoke', 'setup-per-line-split-billing-phase2.sql'),
+  preflight: path.join(ROOT, 'supabase', 'migrations', '20260718205500_per_line_split_billing_phase1_preflight.sql'),
   phase1: path.join(ROOT, 'supabase', 'migrations', '20260718210000_per_line_split_billing_phase1_schema.sql'),
   guards: path.join(ROOT, 'supabase', 'migrations', '20260718210500_per_line_split_billing_relational_guards.sql'),
   phase2: path.join(ROOT, 'supabase', 'migrations', '20260718211000_per_line_split_billing_phase2_calculator.sql'),
@@ -112,14 +113,72 @@ function startContainer() {
 function run() {
   startContainer();
   console.log(`[phase2-proof] container=${CONTAINER} network=none database=${DATABASE}`);
-  console.log('[phase2-proof] loading minimal schema + Phase 1 migration');
+  console.log('[phase2-proof] loading minimal schema + proving Phase 1 stale-object refusal');
   psql(read('setup'));
+  psql(`
+    CREATE TABLE public.field_app_billing_sets (id uuid PRIMARY KEY);
+    CREATE UNIQUE INDEX uq_field_app_billing_sets_group
+      ON public.field_app_billing_sets (id);
+  `);
+  const staleObjectAttempt = psql(read('preflight'), { allowFailure: true });
+  const staleObjectOutput = `${staleObjectAttempt.stdout || ''}${staleObjectAttempt.stderr || ''}`;
+  if (
+    staleObjectAttempt.status === 0
+    || !staleObjectOutput.includes('PER_LINE_PHASE1_SCHEMA_DRIFT')
+  ) {
+    fail('Phase 1 preflight did not reject stale weaker objects', staleObjectOutput.trim());
+  }
+  psql('DROP TABLE public.field_app_billing_sets CASCADE;');
+
+  psql(`
+    CREATE UNIQUE INDEX uq_field_app_billing_sets_group
+      ON public.invoices (id);
+  `);
+  const staleIndexAttempt = psql(read('preflight'), { allowFailure: true });
+  const staleIndexOutput = `${staleIndexAttempt.stdout || ''}${staleIndexAttempt.stderr || ''}`;
+  if (
+    staleIndexAttempt.status === 0
+    || !staleIndexOutput.includes('PER_LINE_PHASE1_SCHEMA_DRIFT')
+  ) {
+    fail('Phase 1 preflight did not reject a stale weaker index', staleIndexOutput.trim());
+  }
+  psql('DROP INDEX public.uq_field_app_billing_sets_group;');
+
+  psql('ALTER TABLE public.invoices ADD COLUMN send_disposition text;');
+  const staleColumnAttempt = psql(read('preflight'), { allowFailure: true });
+  const staleColumnOutput = `${staleColumnAttempt.stdout || ''}${staleColumnAttempt.stderr || ''}`;
+  if (
+    staleColumnAttempt.status === 0
+    || !staleColumnOutput.includes('PER_LINE_PHASE1_SCHEMA_DRIFT')
+  ) {
+    fail('Phase 1 preflight did not reject a stale invoice column', staleColumnOutput.trim());
+  }
+  psql('ALTER TABLE public.invoices DROP COLUMN send_disposition;');
+
+  console.log('[phase2-proof] loading preflight + Phase 1 migrations verbatim');
+  psql(read('preflight'));
+  psql(`
+    INSERT INTO public.app_settings (setting_key, setting_value, description)
+    VALUES ('feature_per_line_split_billing', 'true', 'stale enabled proof fixture');
+  `);
   psql(read('phase1'));
 
   console.log('[phase2-proof] loading relational guard migration verbatim');
   psql(read('guards'));
 
-  console.log('[phase2-proof] loading Phase 2 migration verbatim');
+  console.log('[phase2-proof] proving Phase 2 rejects a stale enabled flag');
+  const enabledAttempt = psql(read('phase2'), { allowFailure: true });
+  const enabledOutput = `${enabledAttempt.stdout || ''}${enabledAttempt.stderr || ''}`;
+  if (enabledAttempt.status === 0 || !enabledOutput.includes('PER_LINE_PHASE2_REQUIRES_DISABLED_FLAG')) {
+    fail('Phase 2 did not fail closed on a stale enabled feature flag', enabledOutput.trim());
+  }
+  psql(`
+    UPDATE public.app_settings
+       SET setting_value = 'false'
+     WHERE setting_key = 'feature_per_line_split_billing';
+  `);
+
+  console.log('[phase2-proof] loading Phase 2 migration verbatim with flag OFF');
   psql(read('phase2'));
 
   const featureState = psql(`
@@ -138,8 +197,8 @@ function run() {
     fail('Phase 2 rollback proof did not reach its PASS marker', output.trim());
   }
 
-  console.log('PROOF — Ran: network-isolated PostgreSQL 17 container; loaded checked-in Phase 1 + relational guards + Phase 2 migrations verbatim; executed rollback-only Phase 2 SQL proof.');
-  console.log('PROOF — Saw: feature OFF delegated unchanged; 50/50; exact 3-way; 1-cent; one final money rounding after full-precision conversion; signed half-cent -13 => -7/-6; exact job-chemical quantity/unit/price snapshots, including duplicate products, ignored browser price tampering, and a reconciled ounce-unit price pair; complete job-field-set enforcement; frozen job/invoice application-service identity; customer-supplied zero billing; non-job manual/tier and source-season service pricing; per-person override; 100/0 zero row; flat fee; job/default/fallback ownership; job field/chemical identity rejection; exact grouped and ungrouped child-invoice membership; share/item quantity, rounded acres, effective price, chemical product, service identity, and amount parity; exact group-customer set; unshared item; source cents/quantity/acres; invoice header and pre-post integrity rejection; hashes; Mode A/vector/role rejection; one public preview overload; private calculator not browser-executable; cleanup failure is fatal.');
+  console.log('PROOF — Ran: network-isolated PostgreSQL 17 container; loaded checked-in Phase 1 preflight + Phase 1 + relational guards + Phase 2 migrations verbatim; executed rollback-only Phase 2 SQL proof.');
+  console.log('PROOF — Saw: stale Phase 1 objects rejected before install; stale enabled flag rejected before Phase 2 install; feature OFF delegated unchanged; 50/50; exact 3-way; 1-cent; one final money rounding after full-precision conversion; signed half-cent -13 => -7/-6; exact job-chemical quantity/unit/price snapshots, including duplicate products, ignored browser price tampering, rejected nullable/negative frozen prices, and a reconciled ounce-unit price pair; complete job-field-set enforcement; frozen job/invoice application-service identity; customer-supplied zero billing; non-job manual/tier and source-season service pricing; per-person override; 100/0 zero row; flat fee; job/default/fallback ownership; job field/chemical identity rejection; exact grouped and ungrouped child-invoice membership; share/item quantity, rounded acres, effective price, chemical product, service identity, and amount parity; exact group-customer set; unshared item; source cents/quantity/acres; invoice header and pre-post integrity rejection; hashes; Mode A/vector/role rejection; one public preview overload; private calculator not browser-executable; cleanup failure is fatal.');
 }
 
 try {

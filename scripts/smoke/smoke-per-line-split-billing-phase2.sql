@@ -410,6 +410,38 @@ BEGIN
     RAISE EXCEPTION 'P2_FAIL(job_snapshot_precedence): %', v_plan;
   END IF;
 
+  -- Production permits a nullable frozen job price. Missing or negative prices
+  -- must fail closed instead of becoming legitimate-looking zero-dollar lines.
+  BEGIN
+    UPDATE public.job_chemicals
+       SET price_per_unit_cents = NULL
+     WHERE id = v_job_chem;
+    PERFORM public.preview_field_app_invoice_split(
+      jsonb_build_array(jsonb_build_object('field_id', v_field_job, 'applied_acres', 1)),
+      jsonb_build_array(jsonb_build_object('job_chemical_id', v_job_chem)),
+      NULL, NULL, v_job, '{}'::jsonb
+    );
+    RAISE EXCEPTION 'P2_FAIL(missing_job_price): <no error>';
+  EXCEPTION WHEN check_violation THEN
+    GET STACKED DIAGNOSTICS v_err = MESSAGE_TEXT;
+    IF v_err NOT LIKE '%PER_LINE_CHEMICAL_PRICE_REQUIRED%' THEN RAISE; END IF;
+  END;
+
+  BEGIN
+    UPDATE public.job_chemicals
+       SET price_per_unit_cents = -1
+     WHERE id = v_job_chem;
+    PERFORM public.preview_field_app_invoice_split(
+      jsonb_build_array(jsonb_build_object('field_id', v_field_job, 'applied_acres', 1)),
+      jsonb_build_array(jsonb_build_object('job_chemical_id', v_job_chem)),
+      NULL, NULL, v_job, '{}'::jsonb
+    );
+    RAISE EXCEPTION 'P2_FAIL(negative_job_price): <no error>';
+  EXCEPTION WHEN check_violation THEN
+    GET STACKED DIAGNOSTICS v_err = MESSAGE_TEXT;
+    IF v_err NOT LIKE '%PER_LINE_CHEMICAL_PRICE_REQUIRED%' THEN RAISE; END IF;
+  END;
+
   -- A job's frozen service identity is authoritative. An active but unrelated
   -- browser-selected service must not change job-backed billing.
   v_err := NULL;
