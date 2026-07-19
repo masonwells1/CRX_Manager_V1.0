@@ -40,6 +40,7 @@ DECLARE
   v_effective_job_id uuid := p_job_id;
   v_invoice_job_id uuid;
   v_invoice_group_id uuid;
+  v_quote_section_id uuid;
   v_feature_enabled boolean;
   v_loc jsonb;
   v_chem jsonb;
@@ -188,9 +189,14 @@ BEGIN
     v_effective_job_id := COALESCE(p_job_id, v_invoice_job_id);
   END IF;
 
-  IF v_effective_job_id IS NOT NULL
-     AND NOT EXISTS (SELECT 1 FROM public.jobs WHERE id = v_effective_job_id) THEN
-    RAISE EXCEPTION 'JOB_NOT_FOUND: %', v_effective_job_id USING ERRCODE = 'no_data_found';
+  IF v_effective_job_id IS NOT NULL THEN
+    SELECT j.quote_section_id
+      INTO v_quote_section_id
+      FROM public.jobs j
+     WHERE j.id = v_effective_job_id;
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'JOB_NOT_FOUND: %', v_effective_job_id USING ERRCODE = 'no_data_found';
+    END IF;
   END IF;
 
   -- One source location per field; applied acres must be positive and finite numeric.
@@ -651,9 +657,8 @@ BEGIN
     LEFT JOIN LATERAL (
       SELECT round(qi.price_per_unit * 100)::bigint AS price_cents
       FROM public.quote_items qi
-      JOIN public.quote_sections qs ON qs.id = qi.section_id
       WHERE qi.product_id = l.product_id
-        AND qs.field_id IN (SELECT field_id FROM pg_temp._plsb_fields)
+        AND qi.section_id = v_quote_section_id
       ORDER BY qi.id
       LIMIT 1
     ) quote_price ON true

@@ -98,7 +98,8 @@ container in `finally`.
 The proof covers feature-OFF legacy delegation; exact 50/50 and three-way
 micro-percent vectors; 1¢ and signed half-cent allocation; full-precision unit
 conversion with only the final money figure rounded; manual/quote/tier/service
-price precedence; per-person price overrides; 100/0 service and flat-fee rows;
+price precedence, including an exact source-job quote-section check against a
+lower-ID unrelated quote for the same field/product; per-person price overrides; 100/0 service and flat-fee rows;
 job/default/fallback ownership; hashes; Mode A and malformed-vector rejection;
 role denial; overload count; and private-calculator privileges.
 

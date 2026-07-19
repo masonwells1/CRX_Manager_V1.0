@@ -68,15 +68,26 @@ BEGIN
   VALUES
     (v_product_quote, 'unit', 'liquid', 1.00, 2.00, 3.00),
     (v_product_tier, 'unit', 'liquid', 1.00, 2.00, 3.00);
-  INSERT INTO public.quote_sections (id, field_id)
-  VALUES ('70000000-0000-0000-0000-000000000001', v_field_50);
+  INSERT INTO public.quote_sections (id, field_id) VALUES
+    ('70000000-0000-0000-0000-000000000001', v_field_50),
+    ('70000000-0000-0000-0000-000000000002', v_field_50);
+  UPDATE public.jobs
+     SET quote_section_id = '70000000-0000-0000-0000-000000000001'
+   WHERE id = v_job;
   INSERT INTO public.quote_items (id, section_id, product_id, price_per_unit)
-  VALUES (
-    '71000000-0000-0000-0000-000000000001',
-    '70000000-0000-0000-0000-000000000001',
-    v_product_quote,
-    1.50
-  );
+  VALUES
+    (
+      '71000000-0000-0000-0000-000000000001',
+      '70000000-0000-0000-0000-000000000001',
+      v_product_quote,
+      1.50
+    ),
+    (
+      '70000000-0000-0000-0000-000000000001',
+      '70000000-0000-0000-0000-000000000002',
+      v_product_quote,
+      9.99
+    );
   INSERT INTO public.application_services
     (id, name, default_rate_per_acre_cents, is_active)
   VALUES (v_service, 'Application', 10, true);
@@ -157,17 +168,36 @@ BEGIN
     RAISE EXCEPTION 'P2_FAIL(single_final_money_round): %', v_plan;
   END IF;
 
-  -- Quote must beat tier when no global manual price is present.
+  -- The source job's exact quote section must beat tier when no global manual
+  -- price is present. The same field/product has an unrelated $9.99 quote with
+  -- a lower item UUID, so a field-wide ORDER BY/LIMIT lookup would misprice it.
   v_plan := public.preview_field_app_invoice_split(
     jsonb_build_array(jsonb_build_object('field_id', v_field_50, 'applied_acres', 1)),
     jsonb_build_array(jsonb_build_object(
       'line_key', 'chemical:quote', 'sort_order', 0, 'product_id', v_product_quote,
       'description', 'Quote', 'rate_per_acre', 1, 'rate_unit', 'unit'
-    )), NULL, NULL, NULL, '{}'::jsonb
+    )), NULL, NULL, v_job, '{}'::jsonb
   );
   IF v_plan#>>'{billing_lines,0,shares,0,base_unit_price_cents}' <> '150'
      OR v_plan#>>'{billing_lines,0,shares,0,base_price_source}' <> 'quote' THEN
     RAISE EXCEPTION 'P2_FAIL(quote_precedence): %', v_plan;
+  END IF;
+
+  -- Without a source job there is no authoritative quote section. Do not guess
+  -- from either quote attached to the field; fall back to each customer's tier.
+  v_plan := public.preview_field_app_invoice_split(
+    jsonb_build_array(jsonb_build_object('field_id', v_field_50, 'applied_acres', 1)),
+    jsonb_build_array(jsonb_build_object(
+      'line_key', 'chemical:no-job-quote', 'sort_order', 0, 'product_id', v_product_quote,
+      'description', 'No job quote', 'rate_per_acre', 1, 'rate_unit', 'unit'
+    )), NULL, NULL, NULL, '{}'::jsonb
+  );
+  IF v_plan#>>'{billing_lines,0,shares,0,base_unit_price_cents}' <> '100'
+     OR v_plan#>>'{billing_lines,0,shares,0,base_price_source}' <> 'tier'
+     OR v_plan#>>'{billing_lines,0,shares,1,base_unit_price_cents}' <> '200'
+     OR v_plan#>>'{billing_lines,0,shares,1,base_price_source}' <> 'tier'
+     OR v_plan->>'grand_total_cents' <> '150' THEN
+    RAISE EXCEPTION 'P2_FAIL(no_job_quote_fallback): %', v_plan;
   END IF;
 
   -- Exact three-way even vector + one cent + 4dp quantity residual. The lowest

@@ -95,7 +95,8 @@ CREATE TABLE public.customers (
   assigned_tier integer NOT NULL DEFAULT 1
 );
 CREATE TABLE public.jobs (
-  id uuid PRIMARY KEY
+  id uuid PRIMARY KEY,
+  quote_section_id uuid
 );
 CREATE TABLE public.fields (
   id uuid PRIMARY KEY,
