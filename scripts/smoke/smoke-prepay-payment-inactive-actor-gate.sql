@@ -1,13 +1,11 @@
 -- Post-apply rollback-only regression proof for H1 (Live Foundation Gauntlet
--- 2026-07-18): apply_prepay_to_invoice must REJECT a deactivated /
--- profile-less authenticated actor.
+-- 2026-07-18): apply_prepay_to_invoice must REJECT a
+-- deactivated / profile-less authenticated actor.
 --
 -- FAIL-FIRST CONTRACT: run against the PRE-FIX functions and this chain raises
--- SMOKE_FAIL (the deactivated admin successfully applies a prepay because
--- `NULL NOT IN (...)` is not TRUE). Run against the FIXED function and the
--- call raises the authorization error, so the chain reaches
--- SMOKE_PASS_ROLLBACK. record_invoice_payment is covered by the newer
--- payment/void lifecycle smoke because that legacy RPC is now retired.
+-- SMOKE_FAIL (the deactivated admin successfully applies a prepay / records a
+-- payment, because `NULL NOT IN (...)` is not TRUE). Run against the FIXED
+-- function and the call raises the authorization error.
 --
 -- Everything happens inside one DO block that ends in a terminal exception, so
 -- no row or sequence side effect ever commits.
@@ -89,9 +87,6 @@ BEGIN
       RAISE EXCEPTION 'SMOKE_FAIL: apply_prepay wrong rejection for inactive actor: %', v_err;
     END IF;
   END;
-
-  -- Restore (belt-and-suspenders; the terminal rollback undoes it anyway).
-  UPDATE public.profiles SET is_active = true WHERE id = v_admin;
 
   RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK';
 END $smoke$;

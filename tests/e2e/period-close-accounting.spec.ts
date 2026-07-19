@@ -471,11 +471,13 @@ test.describe('Period Close & Accounting', () => {
     let totalPaid = 0;
 
     for (let i = 0; i < payments.length; i++) {
-      const payResult = await supabaseRpc(page, 'record_invoice_payment', {
-        p_invoice_id: invoiceId,
-        p_amount_cents: payments[i],
+      const payResult = await supabaseRpc(page, 'allocate_payment', {
+        p_customer_id: custId,
+        p_total_cents: payments[i],
         p_payment_method: 'check',
         p_reference_number: `PP${i + 1}-${RUN}`,
+        p_allocations: [{ invoice_id: invoiceId, amount_cents: payments[i] }],
+        p_idempotency_key: `PP${i + 1}-${RUN}`,
       }).catch(e => {
         console.error(`Payment ${i + 1} error: ${e}`);
         return null;
@@ -687,19 +689,19 @@ test.describe('Period Close & Accounting', () => {
     }).catch(() => {});
 
     // Try payment on voided invoice
-    const payResult = await supabaseRpc(page, 'record_invoice_payment', {
-      p_invoice_id: invoiceId,
-      p_amount_cents: 5000,
+    const payResult = await supabaseRpc(page, 'allocate_payment', {
+      p_customer_id: custId,
+      p_total_cents: 5000,
       p_payment_method: 'check',
-    }).catch(e => {
-      console.log(`✓ Payment on voided invoice rejected: ${e}`);
-      return { error: String(e) };
+      p_allocations: [{ invoice_id: invoiceId, amount_cents: 5000 }],
+      p_idempotency_key: `VOID-PAY-${RUN}`,
     });
 
-    if (payResult && typeof payResult === 'object' && 'error' in payResult) {
-      // The RPC checks status != 'posted' and raises "Can only record payments on posted invoices"
-      expect(String(payResult.error).toLowerCase()).toContain('posted');
-      console.log('✓ Voided invoice correctly blocks payments');
+    const payRecord = payResult as Record<string, unknown> | null;
+    if (!payRecord || typeof payRecord.message !== 'string') {
+      throw new Error(`Expected voided-invoice payment rejection, got success: ${JSON.stringify(payResult)}`);
     }
+    expect(payRecord.message.toLowerCase()).toContain('eligible');
+    console.log('✓ Voided invoice correctly blocks payments');
   });
 });

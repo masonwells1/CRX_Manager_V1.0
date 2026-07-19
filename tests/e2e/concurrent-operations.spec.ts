@@ -307,20 +307,24 @@ test.describe('Concurrent Operations & Race Conditions', () => {
 
     // First payment: 70% of balance
     const payment1Amount = Math.floor(balanceCents * 0.7);
-    const pay1 = await supabaseRpc(page, 'record_invoice_payment', {
-      p_invoice_id: invoiceId,
-      p_amount_cents: payment1Amount,
+    const pay1 = await supabaseRpc(page, 'allocate_payment', {
+      p_customer_id: custId,
+      p_total_cents: payment1Amount,
       p_payment_method: 'check',
       p_reference_number: `PAY1-${RUN}`,
+      p_allocations: [{ invoice_id: invoiceId, amount_cents: payment1Amount }],
+      p_idempotency_key: `PAY1-${RUN}`,
     }).catch(e => { console.error('payment 1 error:', e); return null; });
     console.log(`Payment 1: $${payment1Amount / 100} — result: ${JSON.stringify(pay1)}`);
 
     // Second payment: try to pay the full original balance (should exceed remaining balance)
-    const pay2 = await supabaseRpc(page, 'record_invoice_payment', {
-      p_invoice_id: invoiceId,
-      p_amount_cents: balanceCents,  // full original balance — but 70% already paid
+    const pay2 = await supabaseRpc(page, 'allocate_payment', {
+      p_customer_id: custId,
+      p_total_cents: balanceCents,  // full original balance — but 70% already paid
       p_payment_method: 'check',
       p_reference_number: `PAY2-${RUN}`,
+      p_allocations: [{ invoice_id: invoiceId, amount_cents: balanceCents }],
+      p_idempotency_key: `PAY2-${RUN}`,
     }).catch(e => {
       console.log(`✓ Overpayment correctly rejected: ${e}`);
       return { error: String(e) };
@@ -375,18 +379,19 @@ test.describe('Concurrent Operations & Race Conditions', () => {
     }
 
     // Try to record payment on draft invoice — should fail
-    const payResult = await supabaseRpc(page, 'record_invoice_payment', {
-      p_invoice_id: invoiceId,
-      p_amount_cents: 5000,
+    const payResult = await supabaseRpc(page, 'allocate_payment', {
+      p_customer_id: custId,
+      p_total_cents: 5000,
       p_payment_method: 'check',
-    }).catch(e => {
-      console.log(`✓ Payment on draft invoice correctly rejected: ${e}`);
-      return { error: String(e) };
+      p_allocations: [{ invoice_id: invoiceId, amount_cents: 5000 }],
+      p_idempotency_key: `DRAFT-PAY-${RUN}`,
     });
 
-    if (payResult && typeof payResult === 'object' && 'error' in payResult) {
-      expect(String(payResult.error).toLowerCase()).toContain('posted');
+    const payRecord = payResult as Record<string, unknown> | null;
+    if (!payRecord || typeof payRecord.message !== 'string') {
+      throw new Error(`Expected draft-invoice payment rejection, got success: ${JSON.stringify(payResult)}`);
     }
+    expect(payRecord.message.toLowerCase()).toContain('eligible');
   });
 
   // ─── Test 6: Zero-quantity order is handled ────────────────────────────
@@ -446,10 +451,12 @@ test.describe('Concurrent Operations & Race Conditions', () => {
     await supabaseRpc(page, 'post_invoice', { p_invoice_id: invoiceId }).catch(() => {});
 
     // Try negative payment
-    const result = await supabaseRpc(page, 'record_invoice_payment', {
-      p_invoice_id: invoiceId,
-      p_amount_cents: -5000,  // negative!
+    const result = await supabaseRpc(page, 'allocate_payment', {
+      p_customer_id: custId,
+      p_total_cents: -5000,  // negative!
       p_payment_method: 'check',
+      p_allocations: [{ invoice_id: invoiceId, amount_cents: -5000 }],
+      p_idempotency_key: `NEG-PAY-${RUN}`,
     }).catch(e => {
       console.log(`✓ Negative payment correctly rejected: ${e}`);
       return { error: String(e) };

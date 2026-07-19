@@ -1512,14 +1512,16 @@ test.describe.serial('Comprehensive UI Workflow (12 Acts)', () => {
     } else {
       // Fallback: record via RPC
       const userId = await getUserId(page);
-      await supabaseRpc(page, 'record_invoice_payment', {
-        p_invoice_id: S.invoiceId,
-        p_amount_cents: payAmount,
-        p_method: 'check',
-        p_reference: `E2E-PAY-${RUN}`,
+      await supabaseRpc(page, 'allocate_payment', {
+        p_customer_id: S.customerId,
+        p_total_cents: payAmount,
+        p_payment_method: 'check',
+        p_reference_number: `E2E-PAY-${RUN}`,
+        p_allocations: [{ invoice_id: S.invoiceId, amount_cents: payAmount }],
         p_performed_by: userId,
+        p_idempotency_key: `E2E-PAY-${RUN}`,
       }).catch(() => {
-        // If RPC doesn't exist or fails, try direct insert
+        // The next financial assertion reports whether the fallback succeeded.
       });
     }
   });

@@ -1,25 +1,28 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-07-18** (targeted supplier-pricing refresh against production frontend commit `1f533ff2`, live database high-water `20260718154810`, and active `process-document` v18; older open/deferred claims retain their dated evidence below; owner-facing combined list: root `TODO.md`)
+**Last verified: 2026-07-19** (full document re-read plus supplier-pricing and gauntlet sections 2–6 live ledger/function refresh; older open/deferred claims retain their dated evidence below; owner-facing combined list: root `TODO.md`)
 **Update triggers:** when a finding is parked/resolved, a migration is parked/applied, or an owner decision lands. Agents must update THIS file, not create new issue lists. Do not re-discover or re-fix something listed here as already known — read the pointer first.
 
 This file consolidates (does not replace) the source documents it points to. If this file and a source disagree, trust the source and fix this file.
 
 ---
 
-## 1. Open HIGH findings (dormant on live data)
+## 1. Recently closed HIGH releases and remaining owner follow-ups
 
-### Payment reversal history can block a later invoice void — correction prepared
+### Supplier Pricing Phase 1a — repository/frontend/database rollout closed; legacy Edge cleanup remains
 
-PR #168 review confirmed a dormant live defect: `void_payment` intentionally leaves invoice allocation rows behind as history and marks their parent payment set inactive, but the current live `void_invoice` function treats any such row as active money. It therefore blocks the invoice from being voided after a valid payment reversal, and its later generic cleanup would delete that payment history if the guard were loosened alone. Live inspection found zero inactive payment sets with retained allocation rows and zero legacy `payments` rows, so no current business record needs repair.
+The additive pricing RPC/bootstrap, zero-cost guard, Product-page governed editor,
+strict direct-write enforcement cutover, and post-cutover data-integrity rescan are
+now reconciled in the repository and live. The final Phase 1a database ledger is
+`20260718193000` (after enforcement `20260718190000`), and PR #169 merged the
+frontend/cutover source to `main`. This is no longer an open release blocker.
 
-Forward migration `20260718220000_correct_payment_void_and_quote_retry_contract.sql` is prepared and **not yet applied**. It filters both invoice voiding and transaction review to active payment sets, preserves all payment allocation history, replaces the unused and unreversible `record_invoice_payment` service-role path with an ungranted tombstone, and gives quote reopen operations a target-bound shared-lock retry contract. It refuses to reopen a cancelled whole-conversion quote if delivered inventory, a completed delivery, any nonterminal invoice, or a paid commission survives. A central serialized invoice trigger also closes mono, split, `save_invoice`, and future insert backdoors: deleted/voided orders cannot receive invoices, and cancelled orders accept only the audited matching completed-delivery recovery RPC, backed by a short-lived owner-only transaction capability that authenticated/anonymous/service roles cannot forge. Invoice source lineage and recovered items are immutable; the post engine revalidates completed-delivery lineage plus exact quantities/header/line cents before revenue posts. Exact cancel/void cleanup and accounting updates on already-posted invoices remain available. It also retires and ungrants the unused `restore_cancelled_order` status-only RPC because that path rebuilt none of cancellation's inventory, hold, commission, or invoice effects. Applying it requires Mason's explicit production-migration approval; the migration locks the legacy payment table and aborts if a row exists.
-
-### Supplier Pricing Phase 1a rollout gap — Edge retirement and strict cutover not deployed
-
-The additive pricing RPC/bootstrap, zero-cost guard, legacy Product repeat-save compatibility repair, and forward hardening are live. PR #163 merged as `1f533ff2` and Vercel deployed that exact commit to production, so Product-page, Products-list, and pricing-only `.xlsx` edits now use the preview/approval/apply workflow. The active production Edge Function is still v18 and retains the old `price_list` / price-bearing `product_list` OCR paths. Repository code rejects those document types before OCR, but production will not inherit that rule until a separately approved Edge Function deployment. Do not describe supplier-price OCR as retired live before that deployment is verified.
-
-The forward correction `20260718154131_20260718124517_harden_supplier_pricing_cent_scale_and_trigger.sql` is live as ledger version `20260718154131` under its preserved live name. Its byte-identical live artifact is pinned separately; the active replay copy changes only the empty-catalog assertion behavior and has the same schema result. Read-only post-apply verification found 604 Products, zero fractional-cent pricing rows, zero active workbook exports/previews, the pricing guard trigger enabled, the 5,000-row constraint validated, and correct worksheet RPC grants/search paths. The live schema registry is refreshed through `20260718154810`, and all four 2026-07-18 live migration sources are now present. The strict enforcement cutover remains parked until the frontend rollback window closes; Microsoft Excel desktop save/reopen/upload acceptance is also still unproven on this workstation.
+The active production `process-document` Edge Function remains v18 and still
+contains legacy `price_list` / price-bearing `product_list` code, but the deployed
+frontend no longer routes supplier pricing through that path and the database
+rejects ungoverned pricing writes. Edge retirement is a cleanup follow-up, not a
+reason to repeat or park the completed Phase 1a cutover. Do not describe the Edge
+code itself as retired until a separately reviewed Edge deployment verifies it.
 
 ### July 14 full-gauntlet remediation — LIVE, frontend rolled out (PR #133 merged 2026-07-15)
 
@@ -137,6 +140,7 @@ The 2026-07-13 audit implemented the cheap hard-guard fixes (see CHANGELOG). The
 
 ## 6. Recently resolved (last ~30 days)
 
+- **2026-07-18** — Gauntlet sections 2–6 remediation is live: inactive/profile-less actors are rejected by the prepay/payment RPCs; cancelled-conversion quotes have an admin escape hatch; finance charges deduplicate per calendar month; invoice void refuses applied direct cash; cancelled-order restore is intentionally forbidden; and delivery invoice backfill refuses unresolved split billing. Server-assigned ledger versions are `20260718152837`, `20260718153744`, `20260718154810`, `20260718174018`, `20260718174859`, and `20260718175641`; every registered chain reached `SMOKE_PASS_ROLLBACK`.
 - **2026-07-17** — Money/inventory gauntlet sections 8-15 database remediation is live through `replay_bulk_po_same_request_result` (ledger `20260717032437`). PO numbering is atomic with insertion; active sales reps retain PO create/import/edit authority; vendor bills compare the authoritative line-rounded PO header; an admin-deleted imported PO clears its claim plus cached save results so the unchanged document can be imported again; and a same-key lost-response retry now replays the original `saved` result before different-request document deduplication. Both trusted migration reviewers returned CLEAN; stacked pre/post-apply rollback chains reached `SMOKE_PASS_ROLLBACK`; permanent checks found zero claims, stale save replays, fractional source costs, and PO header mismatches, with public/internal grants correct.
 - **2026-07-15** — The 2026-07-14 workflow-review HIGH (deactivated admins retained commission-payout policy access) is closed: all 3 fix migrations applied live — names `20260714185129_fix_commission_admin_policies` / `20260714185130_gate_batch_prepay_admin` / `20260714185631_harden_is_admin_search_path`, re-stamped live versions `20260715134551` / `20260715134618` / `20260715134629`. Verified in live `schema_migrations` 2026-07-16 (match on name, not version — the standard drift gotcha). `migration-history.md` rows 690–692 corrected the same day.
 - **2026-07-15/17** — Schema registry and generated TypeScript database types were regenerated from live introspection through high-water `20260717045420` (`bind_bulk_po_claim_to_vendor`). Roadmap tickets T1/N2 remain done.

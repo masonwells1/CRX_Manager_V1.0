@@ -14,6 +14,14 @@ const RELEVANT = /^(src\/|supabase\/(?:migrations|functions)\/|scripts\/|\.graph
 function run(command, args) {
   const result = spawnSync(command, args, { cwd: ROOT, stdio: "inherit" });
   if (result.error) {
+    // A MISSING optional tool (graphify not installed — e.g. a cloud/CI
+    // container) is a graceful SKIP, not a failure: the pre-push hook documents
+    // graphify as "an optional local navigation aid" and continues past it. Only
+    // the tool's genuine absence exits 0 here; any other spawn error still fails.
+    if (result.error.code === "ENOENT") {
+      console.log(`Graphify not installed — skipping local architecture-map refresh (optional aid).`);
+      process.exit(0);
+    }
     console.error(`Graphify refresh blocked: could not run ${command} (${result.error.message}).`);
     process.exit(1);
   }

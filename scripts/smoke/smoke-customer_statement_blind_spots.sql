@@ -5,11 +5,11 @@
 -- THE CHAIN (real producers, not isolated probes — the smoke-specs HARD RULE):
 --   fixture customer + order
 --     -> invoice A (posted, $500.00, no payment yet)
---     -> invoice B (order-linked) with a seeded historical $300.00 legacy
---                    payment row (backdated d-3)
---     -> invoice C (NO order — the transfer_job_to_invoice shape) with a
---                    seeded historical $50.00 NULL-order payment row
---                    payments row (blind spot 4; backdated d-1)
+--     -> invoice B (order-linked) marked PAID + a directly inserted historical
+--                    payments-table fixture for $300.00 (backdated d-3)
+--     -> invoice C (NO order — the transfer_job_to_invoice shape) marked PAID
+--                    + a directly inserted historical NULL-order_id payment
+--                    fixture for $50.00 (blind spot 4; backdated d-1)
 --     -> allocate_payment $250.00: $200.00 allocated to invoice A +
 --                    $50.00 overpayment -> prepay credit (the ALLOCATION
 --                    path, allocation_sets only — blind spot 1; dated d-2)
@@ -52,7 +52,7 @@
 -- DRY-VALIDATION (the 42703 discipline): every reference below was validated
 -- against the LIVE catalog 2026-06-10 (pg_get_functiondef + information_schema
 -- + pg_constraint + pg_trigger). 126 refs total:
---  * functions include get_customer_statement(uuid,date,date),
+--  * 12 functions: get_customer_statement(uuid,date,date),
 --    allocate_payment(uuid,bigint,text,text,text,date,text,jsonb,uuid,text),
 --    void_payment, update_allocation_set, transfer_job_to_invoice (path
 --    evidence), enforce_invoice_draft_on_insert (draft-only INSERT gate;
@@ -180,7 +180,7 @@ BEGIN
           50000, v_d6, v_admin)
   RETURNING id INTO v_inv_a;
 
-  -- Invoice B: order-linked; will be PAID via the LEGACY path
+  -- Invoice B: order-linked; marked PAID beside a historical legacy-row fixture
   INSERT INTO invoices (invoice_number, customer_id, order_id, invoice_type,
                         total_amount_cents, invoice_date, created_by)
   VALUES ('SMK-CSB-B-' || v_suffix, v_customer_id, v_order_id, 'chemical_sale',
@@ -201,36 +201,15 @@ BEGIN
   UPDATE invoices SET status = 'posted' WHERE id = v_inv_c;
 
   -- --------------------------------------------------------------------
-  -- 2. (a) Historical LEGACY path: seed the old payment/audit shape for
-  -- statement compatibility without calling the now-retired writer.
+  -- 2. (a) Historical legacy-ledger fixture: statement compatibility remains
+  -- tested without invoking the now-retired writer.
   -- --------------------------------------------------------------------
-  INSERT INTO payments (
-    order_id, customer_id, payment_date, amount, payment_method,
-    reference_number, notes, recorded_by
-  ) VALUES (
-    v_order_id, v_customer_id, v_d3, 300.00, 'check',
-    'SMK-CSB-LEGACY-' || v_suffix, '[SMOKE] seeded historical legacy path', v_admin
-  ) RETURNING id INTO v_pay_legacy;
-
-  UPDATE invoices
-  SET paid_amount_cents = 30000, status = 'paid'
-  WHERE id = v_inv_b;
-
-  INSERT INTO financial_audit_log (
-    operation_type, entity_type, entity_id, actor_role,
-    new_values, total_impact_cents, description
-  ) VALUES (
-    'payment_recorded', 'payment', v_pay_legacy, 'admin',
-    jsonb_build_object(
-      'invoice_id', v_inv_b,
-      'invoice_number', 'SMK-CSB-B-' || v_suffix,
-      'amount_cents', 30000,
-      'method', 'check',
-      'reference', 'SMK-CSB-LEGACY-' || v_suffix
-    ),
-    30000,
-    '[SMOKE] seeded historical legacy payment'
-  );
+  INSERT INTO payments (order_id, customer_id, amount, payment_method,
+    reference_number, notes, recorded_by)
+  VALUES (v_order_id, v_customer_id, 300.00, 'check',
+    'SMK-CSB-LEGACY-' || v_suffix, '[SMOKE] historical legacy row', v_admin)
+  RETURNING id INTO v_pay_legacy;
+  UPDATE invoices SET paid_amount_cents = 30000, status = 'paid' WHERE id = v_inv_b;
 
   SELECT status, paid_amount_cents INTO v_status, v_cents FROM invoices WHERE id = v_inv_b;
   IF v_status <> 'paid' OR v_cents <> 30000 THEN
@@ -240,36 +219,19 @@ BEGIN
   IF v_uuid IS DISTINCT FROM v_order_id THEN
     RAISE EXCEPTION 'SMOKE_FAIL: legacy payment order_id=% (expected the fixture order)', v_uuid;
   END IF;
-  -- --------------------------------------------------------------------
-  -- 3. (a2) Historical NULL-order path (blind spot 4).
-  -- --------------------------------------------------------------------
-  INSERT INTO payments (
-    order_id, customer_id, payment_date, amount, payment_method,
-    reference_number, notes, recorded_by
-  ) VALUES (
-    NULL, v_customer_id, v_d1, 50.00, 'ach',
-    'SMK-CSB-NOORD-' || v_suffix, '[SMOKE] seeded historical null-order path', v_admin
-  ) RETURNING id INTO v_pay_noord;
+  -- backdate for deterministic statement ordering (payments has NO updated_at)
+  UPDATE payments SET payment_date = v_d3 WHERE id = v_pay_legacy;
 
-  UPDATE invoices
-  SET paid_amount_cents = 5000, status = 'paid'
-  WHERE id = v_inv_c;
-
-  INSERT INTO financial_audit_log (
-    operation_type, entity_type, entity_id, actor_role,
-    new_values, total_impact_cents, description
-  ) VALUES (
-    'payment_recorded', 'payment', v_pay_noord, 'admin',
-    jsonb_build_object(
-      'invoice_id', v_inv_c,
-      'invoice_number', 'SMK-CSB-C-' || v_suffix,
-      'amount_cents', 5000,
-      'method', 'ach',
-      'reference', 'SMK-CSB-NOORD-' || v_suffix
-    ),
-    5000,
-    '[SMOKE] seeded historical null-order payment'
-  );
+  -- --------------------------------------------------------------------
+  -- 3. (a2) Historical NULL-order fixture: invoice C is marked paid and
+  --     payments.order_id IS NULL (blind spot 4)
+  -- --------------------------------------------------------------------
+  INSERT INTO payments (order_id, customer_id, amount, payment_method,
+    reference_number, notes, recorded_by)
+  VALUES (NULL, v_customer_id, 50.00, 'ach',
+    'SMK-CSB-NOORD-' || v_suffix, '[SMOKE] historical null-order row', v_admin)
+  RETURNING id INTO v_pay_noord;
+  UPDATE invoices SET paid_amount_cents = 5000, status = 'paid' WHERE id = v_inv_c;
 
   SELECT order_id INTO v_uuid FROM payments WHERE id = v_pay_noord;
   IF v_uuid IS NOT NULL THEN
@@ -279,6 +241,8 @@ BEGIN
   IF v_status <> 'paid' THEN
     RAISE EXCEPTION 'SMOKE_FAIL: invoice C after payment: status=% (expected paid)', v_status;
   END IF;
+  UPDATE payments SET payment_date = v_d1 WHERE id = v_pay_noord;
+
   -- --------------------------------------------------------------------
   -- 4. (b) ALLOCATION path: allocate_payment $250.00 -> $200.00 to invoice A
   --     + $50.00 overpayment prepay credit. NO payments row is created.

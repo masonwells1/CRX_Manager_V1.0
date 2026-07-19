@@ -2,11 +2,211 @@
 
 All significant development milestones, in reverse chronological order.
 
+### 2026-07-19 — Exact-HEAD Codex blocker remediation applied live
+
+The independent pre-push review found five remaining release issues after the original
+CodeRabbit closeout. Split-invoice posting still trusted historically forgeable audit rows;
+the canonical split creator did not share the OIFA writer's item locks; invoice UUID/group
+identity could be recycled; timestamp cutover semantics could strand a legitimate old
+transaction; and quote revert could deadlock with order cancellation. The forward repair now
+uses private owner-only relational provenance and an exact line-content claim, stable
+order-item locks, a cutover transaction claim that rejects stale old-function callers, and
+governed `save_invoice`/`delete_invoices` wrappers for legitimate draft workflows. Direct
+invoice identity creation/deletion and raw governed-content edits fail closed. Quote revert
+keeps quote-first serialization but uses a retryable NOWAIT order lock. A real two-session
+PostgreSQL 17 proof passed both OIFA/create orderings and both cancel/revert orderings.
+`preview_finance_charges` now also mirrors generation's closed-period gate as well as its
+calendar-month exclusion. Updated live rollback smokes failed first on the forged audit and
+closed-period preview paths and confirmed every E2E fixture rolled back. All three forward
+migrations passed both machine reviewer charters, applied live as ledger versions
+`20260719044912`, `20260719044958`, and `20260719045029`, and their exact rollback smokes
+returned `SMOKE_PASS_ROLLBACK`. Post-apply catalog proof confirmed the private provenance
+tables remain empty after rollback, their deny-all RLS policies and guards are enabled,
+direct invoice identity DML is revoked from Data API roles, and the public RPCs retain their
+intended SECURITY DEFINER grants and fixed search paths.
+
+A final forward correction applied as ledger version `20260719060256` keeps governed split
+invoices usable through the canonical `void_invoice` and `cancel_order` lifecycle paths while
+preserving fail-closed raw-edit guards. It also binds `create_split_invoices_from_order`,
+`delete_invoices`, `void_invoice`, and `cancel_order` replay keys to the authenticated actor and
+complete normalized request, so a key cannot be reused for another order or invoice set. The
+full H5 rollback chain passed after apply, all transient claim/provenance rows remained clean,
+and the live schema registry was regenerated at the final migration high-water.
+
+### 2026-07-19 — Gauntlet CodeRabbit closeout hardening
+
+CodeRabbit's ready-for-review pass found and prompted fixes for false-green smoke/E2E
+assertions, duplicate same-round workflow findings, stale release documentation, and two
+live concurrency gaps. New forward-only migrations bind `revert_quote_status` idempotency
+to the exact authenticated request before mutation. The backfill fix uses stable parent-item
+row locks on both the invoice creator and allocation writer, rejects allocation changes when
+any active invoice exists, and blocks mono-invoice posting when durable or transient split
+evidence exists. Posting cannot bypass the guard by clearing `order_id` or assigning an
+arbitrary group UUID; only members with the canonical field-acre creation audit can use the
+grouped path. Existing order-backed invoices cannot be re-parented even while draft, and
+direct audit-log mutation privileges are removed before the trigger trusts that provenance.
+An apply-time write barrier holds the evidence tables stable across preflight, revoke, and
+trigger attachment, so concurrent DML cannot enter between those cutover steps.
+Neither side of the child-FK timing race can commit stale evidence. Applied migration files remain immutable;
+the coupled rollback smokes now prove exact replay versus mismatched-key reuse and exercise
+both backfill predicates and both serialized writer outcomes.
+
+### 2026-07-18 — Gauntlet workflow read-only boundary hardened
+
+The sections 2–6 gauntlet can no longer give general-purpose child agents write-capable
+filesystem or Supabase tools. Every finder, skeptic, critic, and adjudicator now runs as the
+capability-constrained read-only `Explore` agent and receives live catalog facts only through
+a caller-supplied evidence packet that must match the production project, be less than six
+hours old, and include a fresh `origin/main` baseline for Section 5. Agent-produced findings
+are delimited as untrusted data before reuse. Section settlement and BLOCKER/HIGH cleanliness
+are derived deterministically from blocked evidence and terminal verdicts; an adjudicator's
+advisory output cannot falsely release a blocked section or call a confirmed HIGH clean. The
+autopilot off-by-default regression now runs against an isolated temporary project directory,
+so an intentionally armed hands-free session cannot poison its own pre-commit guard test. The
+workflow's six-hour freshness gate uses a caller-supplied `nowMs` reference instead of the
+runtime clock, preserving deterministic resume semantics required by the workflow engine.
+
+### 2026-07-18 — Gauntlet intermediate live-window reconciliation
+
+Applied live as migration `20260718235153`. The forward-only, scan-only migration fails closed with exact entity identifiers
+if either temporary live definition left durable damage: accepted-quote reopens during the
+B2 escape-hatch window, allocation-deleting invoice voids during the H3 recovery window,
+or inactive payment sets whose retained line history no longer matches the original amount
+recorded by `payment_voided`. Both required reviewers were clean; live apply and post-apply
+reconciliation returned zero affected rows for all three checks. The read-only gauntlet workflow also no longer tells reviewers to fetch or
+mutate Git refs; callers must refresh `origin/main` before launching it.
+
+### 2026-07-18 — B2 quote-reopen history guard follow-up
+
+Applied live as migration `20260718232157`. The accepted-quote rescue path now refuses to create a full replacement order when any
+cancelled source order has delivered quantity, a completed delivery, an active invoice, a
+paid commission, or an active commission payout batch. The forward-only migration preserves
+the newer live planned-hold rebuild. Its rollback smoke adds negative cases for every durable
+history class, and the retired `record_invoice_payment` E2E callers now use the governed
+`allocate_payment` ledger.
+
+### 2026-07-18 — Windows Codex proof stdin hang fixed
+
+The exact-SHA Codex push-proof wrapper now invokes `codex exec -` and supplies its fixed
+review prompt as the complete stdin payload. Codex CLI 0.145 on Windows otherwise waited
+indefinitely at "Reading additional input from stdin" when the prompt was passed as argv,
+eventually timing out without minting a proof. The wrapper remains read-only, shell-free,
+and fail-closed; its helper and agent-workflow suites pass.
+
+### 2026-07-18 — Migration drift proof responsibility clarified
+
+The canonical `migration-drift-reviewer` keeps the strict B7 contract from `main`: disk
+timestamps must be greater than the current live high-water, missing live evidence is a HIGH
+finding for the orchestrator to resolve, and every successful apply requires the server-stamp
+rename plus migration-history closeout. Migration-history matching also recognizes the
+repository's timestamp-keyed rows.
+
+---
+
+## 2026-07-18 — Gauntlet sections 2-6 remediation applied live
+
+The six confirmed fixes passed the local Codex security and migration-drift proof gates,
+were applied to live Supabase in the approved order, and each reached
+`SMOKE_PASS_ROLLBACK` through its registered business-chain smoke. The filenames below use
+the server-assigned migration versions so a future rebuild cannot reapply them.
+
+- **H1 — money-RPC auth bypass (LIVE).** `20260718153744_harden_prepay_and_payment_role_gate.sql`
+  hardens `apply_prepay_to_invoice` + `record_invoice_payment` so a deactivated / profile-less
+  authenticated user can no longer pass the role gate (`NULL NOT IN (...)` fall-through; missing
+  `is_active` filter). Mirrors the vetted `apply_credit_memo_to_invoice`. Reviewers clean (rls +
+  drift), no stale overload, fail-first smoke `smoke-prepay-payment-inactive-actor-gate.sql`
+  proved the bypass live (raised `SMOKE_FAIL` on the pre-fix functions).
+- **B2 — quote stranded after whole-conversion order cancel (LIVE).**
+  `20260718152837_revert_quote_escape_hatch_for_cancelled_order.sql`. Chosen the safe, admin-driven
+  escape hatch (not auto-reopen on cancel, which would contradict the void path's deliberate
+  "converted booking stays closed" semantic): `revert_quote_status` now un-blocks reverting an
+  'accepted' quote whose only order is cancelled and releases its stale draw ledger so it is
+  re-convertible. Reviewers clean; fail-first smoke proved the strand live.
+- **H2 — finance-charge double-charge (LIVE).**
+  `20260718174018_finance_charge_month_dedup.sql`. Dedup now on the calendar month (+ month-keyed
+  advisory lock) so two runs in the same month on different as-of dates can't both charge. Reviewers
+  clean; fail-first smoke proved the double-charge live (2 charges from 2 same-month runs).
+- **H3 — void_invoice stranded customer cash (LIVE).**
+  `20260718154810_void_invoice_block_applied_payments.sql`. Refuses to void a posted invoice that
+  still has direct cash applied (`paid_amount_cents>0` or `invoice_line_allocations`) — admin must
+  void/unapply the payment first (re-banks it as prepay). Prepay-only voids unaffected. Reviewers
+  clean; fail-first smoke proved the strand live.
+- **H4 — restore_cancelled_order left a corrupt order (LIVE).**
+  `20260718174859_forbid_restore_cancelled_order.sql`. Forbids restore (raises
+  ORDER_RESTORE_NOT_SUPPORTED) rather than attempting a fragile exact-inverse of the cancel;
+  recovery is a new order or the B2 quote escape hatch. Reviewers clean; fail-first smoke proved
+  the pre-fix restore succeeded live.
+- **H5 — backfill invoice mono-billed split-billing orders (LIVE).**
+  `20260718175641_backfill_invoice_refuse_split_billing.sql`. create_invoice_for_unbilled_delivery
+  now refuses (ORDER_NEEDS_SPLIT_BILLING) to backfill a single invoice for an order with
+  needs_split_billing=true; the admin uses the split-billing flow. Reviewers clean; fail-first
+  smoke proved the mono-bill live.
+- **B1 — Supplier Pricing Phase 1a drift (investigated and reconciled):** this was not an
+  unexplained live mutation. The gated database-first rollout applied the reviewed Phase 1a
+  migrations before their source PRs landed, creating a temporary rebuild gap. PR #163 merged
+  the Phase 1a foundation into `main` at 2026-07-18 15:16 UTC; PR #169 merged the enforcement
+  cutover and rescan at 20:21 UTC. Production and `main` now contain the same Phase 1a source;
+  Phase 1b remains independently owned by PR #168.
+- **Design decision (Mason, 2026-07-18):** for the five non-mechanical findings (B2/H2/H3/H4/H5)
+  build the conservative/safe fix each: block-void-with-active-payments (H3), refuse-split-backfill
+  (H5), escape-hatch quote (B2), forbid-restore (H4), calendar-month finance-charge guard (H2).
+
+## 2026-07-18 — Built read-only adversarial gauntlet loop over sections 2-6 (money/inventory/lifecycle/DB-drift/idempotency): opus orchestrator, sonnet finders, opus skeptics + per-section adjudicator gate. Ran overnight; confirmed HIGHs in money+lifecycle and a Section 5 live-drift BLOCKER (Supplier Pricing Phase 1a). Findings parked for Codex-gated fixes.
+
+Built read-only adversarial gauntlet loop over sections 2-6 (money/inventory/lifecycle/DB-drift/idempotency): opus orchestrator, sonnet finders, opus skeptics + per-section adjudicator gate. Ran overnight; confirmed HIGHs in money+lifecycle and a Section 5 live-drift BLOCKER (Supplier Pricing Phase 1a). Findings parked for Codex-gated fixes.
+
+- **Commits this session** (git log -15 (fallback — no author-matched commits in the last 12h)):
+  - `4739104 Add gauntlet sections 2-6 adversarial audit loop`
+  - `c6c1265 docs: per-line-item split-billing design spec + roadmap/decision-log updates (#162)`
+  - `3aa758d Fold CodeRabbit into the landing flow; log FarmRx-public decision (#161)`
+  - `3c4c2e6 Add CodeRabbit config for automatic PR reviews (#160)`
+  - `774c85e Reconcile save_customer migration ledger version to match filename (#159)`
+  - `a84534b Merge pull request #156 from masonwells1/claude/amazing-ptolemy-9e7e0a`
+  - `70749c1 Merge remote-tracking branch 'origin/main' into claude/amazing-ptolemy-9e7e0a`
+  - `7183851 Merge pull request #155 from masonwells1/claude/stoic-heyrovsky-ebaaf6`
+  - `d456bab Merge remote-tracking branch 'origin/main' into claude/amazing-ptolemy-9e7e0a`
+  - `e87971b Merge remote-tracking branch 'origin/main' into claude/stoic-heyrovsky-ebaaf6`
+  - `b240f7a Close money and inventory gauntlet findings (#157)`
+  - `9448e52 Correct migration-history row number + document name-based reconciliation`
+  - `30ced29 Merge remote-tracking branch 'origin/main' into claude/amazing-ptolemy-9e7e0a`
+  - `f6fe6ad Merge remote-tracking branch 'origin/main' into claude/stoic-heyrovsky-ebaaf6`
+  - `0f6db26 Mark save_customer ownership migration APPLIED LIVE (ledger 20260717122244)`
+- **Migrations touched** (last 15 commits (fallback)):
+  - `supabase/migrations/20260717063445_bind_bulk_po_replay_content.sql`
+  - `supabase/migrations/20260717070900_bind_bulk_po_identity_ascii_fold.sql`
+  - `supabase/migrations/20260717081856_reject_blank_bulk_po_identity.sql`
+  - `supabase/migrations/20260717085512_canonicalize_bulk_po_identity_whitespace.sql`
+  - `supabase/migrations/20260717092749_secure_bulk_po_fingerprint_trigger.sql`
+  - `supabase/migrations/20260717101619_canonicalize_bulk_po_unicode_identity.sql`
+  - `supabase/migrations/20260717110016_make_bulk_po_identity_server_authoritative.sql`
+  - `supabase/migrations/20260717112906_restore_server_derived_bulk_po_claim_payload.sql`
+  - `supabase/migrations/20260717113000_log_customer_interaction_rpc.sql`
+  - `supabase/migrations/20260717112532_crm_customer_crops.sql`
+  - `supabase/migrations/20260717112533_crm_prep_card_volume.sql`
+  - `supabase/migrations/20260717123000_save_customer_ownership_enforcement.sql`
+  - `supabase/migrations/20260716183501_purchase_order_integer_cents.sql`
+  - `supabase/migrations/20260716190000_harden_sales_financial_scope.sql`
+  - `supabase/migrations/20260716191000_aggregate_delivery_stock_preflight.sql`
+  - `supabase/migrations/20260716202000_preflight_delivery_accounting_period.sql`
+  - `supabase/migrations/20260716210000_harden_invoice_existing_customer_scope.sql`
+  - `supabase/migrations/20260716213000_preserve_purchase_order_omitted_cost.sql`
+  - `supabase/migrations/20260716224000_close_adversarial_money_inventory_gaps.sql`
+  - `supabase/migrations/20260716233000_globalize_bulk_po_import_intents.sql`
+  - `supabase/migrations/20260717010000_close_final_purchase_order_release_gaps.sql`
+  - `supabase/migrations/20260717015439_invalidate_deleted_bulk_po_retry_state.sql`
+  - `supabase/migrations/20260717032000_replay_bulk_po_same_request_result.sql`
+  - `supabase/migrations/20260717045420_bind_bulk_po_claim_to_vendor.sql`
+  - `supabase/migrations/20260717013415_crm_customer_documents.sql`
+  - `supabase/migrations/20260716214423_crm_call_lists.sql`
+  - `supabase/migrations/20260716181306_crm_customer_facts.sql`
+  - `supabase/migrations/20260716182318_crm_purchase_intelligence.sql`
+  - `supabase/migrations/20260716195012_crm_supersede_fact_expiry.sql`
+
 ---
 
 ## 2026-07-18 — Supplier Pricing Phase 1a COMPLETE + LIVE (merge, harden, promote, cutover)
 
-Landed the full Phase 1a supplier-pricing safety foundation to production. PR #163 merged; harden migration `20260718124517` applied live (ledger `20260718154131`); the RPC-only frontend was promoted to production (`croprxsolutions.app`) and **proven end-to-end on live** (a governed `product_page` price edit wrote `cost_history` with `change_source='product_page'` + a real `change_set_id`, status `applied`); then the enforcement **cutover `20260718190000`** was applied through the migration-review + apply-guard proof gate (MCP stamped ledger version `20260718185621`, then reconciled via ledger UPDATE to `20260718190000` to match the on-disk filename per settled B7 policy — the disk file is never renamed). After cutover, all direct writes to Products pricing columns and to `cost_history` are REVOKEd from every app role and blocked by the `require_governed_product_pricing` trigger — pricing is editable ONLY through the governed preview/apply RPC (verified live: a direct `UPDATE products SET current_cost` now raises `PRODUCT_PRICING_GOVERNED_PATH_REQUIRED`). A follow-up scan-only migration `20260718193000` (post-cutover data-integrity rescan, applied live) SHARE-locks `products` and fails closed on any non-finite/negative/non-cent-scale existing pricing — found 0 live — closing the adversarial-review gap that the cutover locked future writes but never re-validated existing rows. Phase 1b (supplier evidence) is built + reviewed on `feat/supplier-pricing-phase1b`, pending its own gated apply session.
+Landed the full Phase 1a supplier-pricing safety foundation to production. PR #163 merged; harden migration `20260718124517` applied live (ledger `20260718154131`); the RPC-only frontend was promoted to production (`croprxsolutions.app`) and **proven end-to-end on live** (a governed `product_page` edit wrote `cost_history` with `change_source='product_page'` + a real `change_set_id`, status `applied`); then the enforcement **cutover `20260718190000`** was applied through the migration-review + apply-guard proof gate (MCP stamped ledger version `20260718185621`, then reconciled via ledger UPDATE to `20260718190000` to match the on-disk filename per settled B7 policy — the disk file is never renamed). After cutover, all direct writes to Products pricing columns and to `cost_history` are REVOKEd from every app role and blocked by the `require_governed_product_pricing` trigger — pricing is editable ONLY through the governed preview/apply RPC (verified live: a direct `UPDATE products SET current_cost` now raises `PRODUCT_PRICING_GOVERNED_PATH_REQUIRED`). A follow-up scan-only migration `20260718193000` (post-cutover data-integrity rescan, applied live) SHARE-locks `products` and fails closed on any non-finite/negative/non-cent-scale existing pricing — found 0 live — closing the adversarial-review gap that the cutover locked future writes but never re-validated existing rows. Phase 1b (supplier evidence) is built + reviewed on `feat/supplier-pricing-phase1b`, pending its own gated apply session.
 
 PR #168 review then exposed latent payment-void and cancelled-order lifecycle defects. `void_payment` correctly retains allocation rows as history, but `void_invoice` treated those inactive rows as still-applied cash and would later delete them; transaction review also counted inactive history as a live credit. A cancelled whole-conversion quote could also be reopened after partial delivery or surviving financial activity, and three invoice entry points could create a new whole-order draft after cancellation; meanwhile the unused `restore_cancelled_order` RPC changed only the order status and rebuilt none of cancellation's inventory, hold, commission, or invoice effects. Forward migration `20260718220000_correct_payment_void_and_quote_retry_contract` is prepared but not yet live; it makes only active payment sets block voiding and reports, preserves payment-allocation history, retires the unused direct-payment and status-only order-restore RPCs, binds quote retries to exact intent, and blocks unsafe quote reopening. A serialized invoice trigger rejects deleted/voided orders and all cancelled-order billing except the audited completed-delivery recovery RPC, whose short-lived capability is stored in an owner-only, RLS-protected table; source lineage and those recovered items become immutable, and posting revalidates exact delivered quantities/cents. Exact cancel/void cleanup and accounting updates on already-posted invoices remain available. No production database change occurs until Mason approves that exact migration.
 
