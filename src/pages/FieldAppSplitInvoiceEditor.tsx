@@ -65,12 +65,6 @@ interface FieldPick {
   total_acres: number;
 }
 
-interface FieldOption {
-  id: string;
-  field_name: string;
-  total_acres: number;
-}
-
 interface ProductOption {
   id: string;
   product_name: string;
@@ -155,7 +149,6 @@ export default function FieldAppSplitInvoiceEditor() {
   const [flagEnabled, setFlagEnabled] = useState<boolean | null>(null);
 
   // Picker data
-  const [fieldOptions, setFieldOptions] = useState<FieldOption[]>([]);
   const [productOptions, setProductOptions] = useState<ProductOption[]>([]);
   const [serviceOptions, setServiceOptions] = useState<ServiceOption[]>([]);
   const [jobOptions, setJobOptions] = useState<JobOption[]>([]);
@@ -165,7 +158,6 @@ export default function FieldAppSplitInvoiceEditor() {
   const [headerNotes, setHeaderNotes] = useState('');
   const [sourceJobId, setSourceJobId] = useState('');
   const [fields, setFields] = useState<FieldPick[]>([]);
-  const [addFieldId, setAddFieldId] = useState('');
 
   // Resolved default split + customer names
   const [members, setMembers] = useState<Member[]>([]);
@@ -217,8 +209,7 @@ export default function FieldAppSplitInvoiceEditor() {
     let cancelled = false;
     (async () => {
       try {
-        const [flds, prods, svcs, jbs] = await Promise.all([
-          supabase.from('fields').select('id, field_name, total_acres').eq('is_active', true).order('field_name').limit(1000),
+        const [prods, svcs, jbs] = await Promise.all([
           supabase.from('products').select('id, product_name').eq('is_active', true).order('product_name').limit(1000),
           supabase.from('application_services').select('id, name, default_rate_per_acre_cents').eq('is_active', true).order('sort_order'),
           supabase
@@ -228,9 +219,6 @@ export default function FieldAppSplitInvoiceEditor() {
             .limit(200),
         ]);
         if (cancelled) return;
-        setFieldOptions(((flds.data as Array<{ id: string; field_name: string | null; total_acres: number | null }> | null) ?? []).map((f) => ({
-          id: f.id, field_name: f.field_name || 'Unnamed field', total_acres: Number(f.total_acres ?? 0),
-        })));
         setProductOptions(((prods.data as Array<{ id: string; product_name: string | null }> | null) ?? []).map((p) => ({ id: p.id, product_name: p.product_name || 'Unnamed product' })));
         setServiceOptions(((svcs.data as Array<{ id: string; name: string | null; default_rate_per_acre_cents: number }> | null) ?? []).map((s) => ({
           id: s.id,
@@ -326,22 +314,8 @@ export default function FieldAppSplitInvoiceEditor() {
     setLines((prev) => prev.map((l) => (l.customized ? l : { ...l, shares: defaultSharesFromMembers(members) })));
   }, [members]);
 
-  // ── Field selection ──────────────────────────────────────────────────────
-  const addField = () => {
-    if (!addFieldId) return;
-    if (fields.some((f) => f.field_id === addFieldId)) {
-      toast('info', 'That field is already added.');
-      return;
-    }
-    const opt = fieldOptions.find((f) => f.id === addFieldId);
-    if (!opt) return;
-    setFields((prev) => [...prev, {
-      field_id: opt.id, field_name: opt.field_name, applied_acres: '', total_acres: opt.total_acres,
-    }]);
-    setAddFieldId('');
-  };
-
-  const removeField = (fieldId: string) => setFields((prev) => prev.filter((f) => f.field_id !== fieldId));
+  // The selected job owns the exact field set. Applied acres may be adjusted, but
+  // adding/removing fields would violate the calculator's complete-job-field contract.
   const setFieldAcres = (fieldId: string, acres: string) =>
     setFields((prev) => prev.map((f) => (f.field_id === fieldId ? { ...f, applied_acres: acres } : f)));
 
@@ -803,22 +777,9 @@ export default function FieldAppSplitInvoiceEditor() {
       {/* Fields + applied acres */}
       <Card>
         <CardHeader title="Fields & Applied Acres" />
-        <div className="flex items-end gap-2 mb-4">
-          <label className="flex-1">
-            <span className="text-xs font-medium text-secondary">Add a field</span>
-            <select
-              value={addFieldId}
-              onChange={(e) => setAddFieldId(e.target.value)}
-              className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm bg-white"
-            >
-              <option value="">Select a field…</option>
-              {fieldOptions.filter((o) => !fields.some((f) => f.field_id === o.id)).map((o) => (
-                <option key={o.id} value={o.id}>{o.field_name}</option>
-              ))}
-            </select>
-          </label>
-          <Button variant="secondary" icon={<Plus className="w-4 h-4" />} showChevron={false} onClick={addField}>Add</Button>
-        </div>
+        <p className="text-xs text-secondary mb-4">
+          The selected job supplies the complete field list. Adjust applied acres here; change field membership on the job.
+        </p>
 
         {fields.length === 0 ? (
           <p className="text-sm text-secondary">No fields added yet.</p>
@@ -838,9 +799,6 @@ export default function FieldAppSplitInvoiceEditor() {
                     className="w-28 rounded-lg border border-gray-300 px-2 py-1.5 text-sm"
                   />
                 </label>
-                <button onClick={() => removeField(f.field_id)} aria-label="Remove field" className="text-red-600 hover:text-red-700">
-                  <Trash2 className="w-4 h-4" />
-                </button>
               </div>
             ))}
             <div className="pt-2 text-xs text-secondary">Total applied acres: {totalAppliedAcres.toFixed(2)}</div>

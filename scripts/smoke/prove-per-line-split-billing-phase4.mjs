@@ -5,6 +5,9 @@ const read = (path) => readFileSync(resolve(process.cwd(), path), 'utf8');
 const requireText = (source, needle, proof) => {
   if (!source.includes(needle)) throw new Error(`PHASE4_PROOF_FAIL(${proof}): missing ${needle}`);
 };
+const requireAbsent = (source, needle, proof) => {
+  if (source.includes(needle)) throw new Error(`PHASE4_PROOF_FAIL(${proof}): forbidden ${needle}`);
+};
 const requireBefore = (source, first, second, proof) => {
   const firstIndex = source.indexOf(first);
   const secondIndex = source.indexOf(second, firstIndex + first.length);
@@ -30,6 +33,9 @@ requireText(editor, 'hasUnsavedBillingChanges) return', 'stale_draft_post_handle
 requireText(editor, "rpc('post_invoice_group'", 'group_post_path');
 requireText(editor, "rpc('post_invoice'", 'single_invoice_post_fallback');
 requireText(editor, 'Every selected price override needs a valid dollar amount.', 'price_override_required');
+requireText(editor, 'The selected job supplies the complete field list.', 'job_owns_field_set');
+requireAbsent(editor, "from('fields')", 'no_out_of_job_field_picker');
+requireAbsent(editor, 'removeField(', 'no_required_field_removal');
 requireText(percentParser, '!== 100_000_000', 'exact_custom_percent_total');
 requireText(editor, "showAdvanced ? 'Hide advanced' : 'Advanced splits'", 'advanced_override_gate');
 requireText(editor, '{showAdvanced && members.length > 0 && (', 'advanced_override_content_gate');

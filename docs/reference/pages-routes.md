@@ -1,6 +1,6 @@
-# Pages & Routes Reference (77 pages, 84 routes)
+# Pages & Routes Reference (78 pages, 84 routes)
 
-> Counts verified 2026-07-13 against `src/App.tsx` (`lazy(` call count = pages) and this table's own row count (routes); `npm run check:docs` (`scripts/check-doc-drift.mjs`) enforces both numbers stay in sync with the codebase on every run.
+> Counts verified 2026-07-20 against `src/App.tsx` (`lazy(` call count = pages) and this table's own row count (routes); `npm run check:docs` (`scripts/check-doc-drift.mjs`) enforces both numbers stay in sync with the codebase on every run.
 
 | Route | Page | Description |
 |-------|------|-------------|
