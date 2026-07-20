@@ -11,6 +11,11 @@
       "covers": ["delivery_signature_storage_access"],
       "description": "Delivery-signature Storage access is private and scoped to the delivery path and authorized actor."
     },
+    "supplier_pricing_phase1b": {
+      "chain": "smoke-supplier-pricing-phase1b.sql",
+      "description": "Supplier Pricing Phase 1b full chain: every mutator passes no-auth, anon, wrong-role, forged-actor, positive-control, and idempotent-replay probes; a reviewed vendor alias feeds a reusable comparable supplier link, a one-row quick quote stages and approves into append-only evidence, all five read RPCs return the linked/imported evidence, pack conversion identifies the correct cheapest normalized cost, and a correction supersedes rather than rewrites the original observation. Payload mismatch, link/history immutability, observation immutability, and zero Product cost/sell-price changes are asserted. Self-contained synthetic evidence with terminal rollback.",
+      "covers": ["stage_vendor_alias", "review_vendor_alias", "upsert_product_supplier_link", "stage_supplier_price_import", "get_supplier_price_import", "approve_supplier_price_import", "get_supplier_pricing_workspace", "get_supplier_market_evidence", "get_supplier_quote_sheet", "get_product_price_history", "correct_supplier_price_observation"]
+    },
     "financial_scope_and_delivery_aggregate": {
       "chain": "smoke-financial-scope-and-delivery-aggregate.sql",
       "description": "Security and inventory aggregate chain: an active sales rep creates and replays a draft invoice and reads a statement for their assigned customer, but cannot edit or replay an unassigned customer's invoice, cannot hijack it by requesting reassignment to an assigned customer, and cannot read that customer's statement; inactive access is denied. A real delivery with two individually in-stock lines for one product but an aggregate shortage completes under WARN-NOT-BLOCK, returns and caches one warning, marks both append-only delivered ledger rows for review at insertion, emits one activity/notification set, and replays without duplicating warnings. Self-contained fixtures and terminal rollback.",
