@@ -1,6 +1,6 @@
 # CRX Manager — Current State
 
-**Last verified:** 2026-07-19 (snapshot — counts are as-of this date)
+**Last verified:** 2026-07-20 (feature/live-ledger state; operational counts remain the dated snapshot below)
 **Update triggers:** refresh when a major feature ships or quarterly, whichever first.
 
 ## 1. Reality check
@@ -60,6 +60,11 @@ Grouped, one-liner summary of what is LIVE in production today (see
   voids with applied cash, forbid unsafe cancelled-order restore, and refuse
   mono-invoice backfill while split billing remains outstanding. Each passed
   its content-bound Codex proof and rollback-only production smoke.
+- **Governed split-invoice integrity (2026-07-20):** generic invoice editing is
+  blocked for private-provenance split members so source order-item lineage
+  cannot be replaced; grouped voids route through one atomic all-member RPC.
+  Live ledger high-water is `20260720181939` and the full H5 chain returned
+  `SMOKE_PASS_ROLLBACK` after the cutover.
 - **CRM relationship intelligence (2026-07-17):** contacts + call logging,
   grower knowledge (facts w/ review queue) + call prep card, seasonal call
   lists (`/call-lists`), per-customer documents — built AI-receptionist-ready
@@ -67,7 +72,8 @@ Grouped, one-liner summary of what is LIVE in production today (see
 - **Sell-side quote lifecycle:** quote builder, versions, templates, PDF
   quotes, convert-to-order.
 - **Field invoices + as-applied billing:** field-level invoicing reconciled
-  against unbilled deliveries, editable invoice editor.
+  against unbilled deliveries; ordinary drafts use the invoice editor, while
+  governed split drafts must be voided as a group and reissued to change them.
 - **Field mapping:** draw-your-own boundaries, shapefile import, USDA CSB
   (Crop Sequence Boundaries) click-to-adopt from the satellite map, two-acre
   model (full vs. edited acreage).
