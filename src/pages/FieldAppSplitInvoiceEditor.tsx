@@ -448,8 +448,15 @@ export default function FieldAppSplitInvoiceEditor() {
   function validateForSave(): string | null {
     if (!profile?.id) return 'Your sign-in could not be verified. Refresh and try again.';
     if (!invoiceDate) return 'Choose an invoice date.';
-    const validFields = fields.filter((f) => (parseFloat(f.applied_acres) || 0) > 0);
-    if (validFields.length === 0) return 'Add at least one field with applied acres greater than zero.';
+    if (fields.length === 0) return 'Add at least one field with applied acres greater than zero.';
+    // Codex round-6 P1: every SELECTED field must carry positive acres. The save path bills only
+    // fields with acres > 0, so a selected field left blank/zero would be silently dropped from
+    // allocation + application records (underbilling). Require acres on each, or Remove the field.
+    for (const f of fields) {
+      if (!(parseFloat(f.applied_acres) > 0)) {
+        return `Field "${f.field_name}" has no applied acres. Enter acres greater than zero, or remove the field.`;
+      }
+    }
     if (members.length === 0) return 'Resolve the default split before saving.';
     if (lines.length === 0) return 'Add at least one billing line.';
     for (const l of lines) {
@@ -465,6 +472,13 @@ export default function FieldAppSplitInvoiceEditor() {
         }
       } else if (l.line_kind === 'service') {
         if (!l.application_service_id) return 'A service line has no application service selected.';
+        // Codex round-6 P1: service acres are the billable basis. If the user TYPED a value it must
+        // be a positive number — otherwise buildLinesPayload silently omits source_acres and the RPC
+        // bills the FULL field acreage (overbilling on a mistaken 0 / negative / "abc"). A blank is
+        // still allowed and explicitly means "bill the full selected field acreage".
+        if (l.serviceAcres.trim() !== '' && !(parseFloat(l.serviceAcres) > 0)) {
+          return 'A service line has an invalid acres value. Enter a positive number, or clear it to bill the full field acreage.';
+        }
       } else if (l.line_kind === 'flat_fee') {
         const c = dollarsToCents(l.flatDollars);
         if (c == null || c <= 0) return 'A flat-fee line needs a positive amount (credits aren’t supported here yet).';
@@ -477,10 +491,15 @@ export default function FieldAppSplitInvoiceEditor() {
         // returns 0 for sci-notation ("1e5") and null for blank — both would otherwise post a $0
         // override and give product away. The round-2 #D fix only covered the LINE-level override;
         // this covers the per-share path.
-        for (const s of l.shares) {
-          if (s.override) {
-            const oc = dollarsToCents(s.overridePriceDollars);
-            if (oc == null || oc <= 0) return 'A per-person price override is on but has no valid positive amount.';
+        // Codex round-6 P2: a per-share price override only affects per-unit lines (chemical/service);
+        // the calculator ignores override_unit_price_cents for flat-fee lines (allocated from
+        // source_flat_cents), so don't validate/require it there — the UI also hides the control.
+        if (l.line_kind !== 'flat_fee') {
+          for (const s of l.shares) {
+            if (s.override) {
+              const oc = dollarsToCents(s.overridePriceDollars);
+              if (oc == null || oc <= 0) return 'A per-person price override is on but has no valid positive amount.';
+            }
           }
         }
       }
@@ -516,13 +535,17 @@ export default function FieldAppSplitInvoiceEditor() {
       if (l.customized) {
         const micro = pctsToMicro(l.shares.map((s) => parseFloat(s.pct) || 0));
         base.shares = l.shares.map((s, i) => {
+          // Codex round-6 P2: a per-share price override is meaningless for flat-fee lines (the
+          // calculator allocates them from source_flat_cents and ignores override_unit_price_cents),
+          // so never send it there — treat the share as a plain default split.
+          const allowOverride = l.line_kind !== 'flat_fee' && s.override;
           const share: Record<string, unknown> = {
             customer_id: s.customer_id,
             micro_pct: micro[i],
             split_mode: 'custom',
-            price_mode: s.override ? 'override' : 'default',
+            price_mode: allowOverride ? 'override' : 'default',
           };
-          if (s.override) {
+          if (allowOverride) {
             const oc = dollarsToCents(s.overridePriceDollars);
             if (oc != null) share.override_unit_price_cents = oc;
             // #L: capture the operator's reason for a price override, when given.
@@ -550,6 +573,10 @@ export default function FieldAppSplitInvoiceEditor() {
       .from('invoices')
       .select('id, invoice_number, customer_id, total_amount_cents, send_disposition, status')
       .eq('field_app_billing_set_id', setId)
+      // Codex round-6 P2: exclude soft-deleted children so the review card + totals match exactly what
+      // post_invoice_group will act on (posting ignores soft-deleted/detached rows). Otherwise a
+      // soft-deleted child and its active replacement both show, misrepresenting the group.
+      .is('deleted_at', null)
       .order('invoice_number');
     if (invErr) throw invErr;
     if (stale()) return false;
@@ -644,12 +671,22 @@ export default function FieldAppSplitInvoiceEditor() {
       // Codex r5 P1: if the authoritative readback fails, invoiceGroupId/savedSig must stay unset so
       // Post can't act on stale/unseen amounts. loadResults throws on any read error (surfaced below).
       setBillingSetId(res.billing_set_id);
-      const readbackComplete = await loadResults(res.billing_set_id);
+      // Codex round-6 P2: the mutation COMMITTED — rotate the idempotency key NOW, before the
+      // readback. A readback failure must not strand the committed key (a Save retry would then resend
+      // it with a new payload hash → IDEMPOTENCY_PAYLOAD_CONFLICT, unrecoverable without a reload).
+      saveIdem.resetKey();
+      let readbackComplete = false;
+      try {
+        readbackComplete = await loadResults(res.billing_set_id);
+      } catch {
+        // Save succeeded but the authoritative readback failed: keep Post DISABLED (invoiceGroupId
+        // stays unset per r5) and tell the operator to reload before posting.
+        toast('info', 'Saved. Reload to refresh the summary before posting.');
+      }
       if (readbackComplete) {
         setInvoiceGroupId(res.invoice_group_id);
         setSavedSig(currentSig); // snapshot what was just persisted → Post is enabled until the next edit (#5)
       }
-      saveIdem.resetKey(); // next save is a distinct action → fresh key
       toast('success', 'Draft split invoice saved.');
     } catch (err) {
       toast('error', splitBackendError(err));
@@ -671,8 +708,18 @@ export default function FieldAppSplitInvoiceEditor() {
       if (error) throw error;
       assertRpcResult(data, 'post_invoice_group');
       postIdem.resetKey();
-      if (billingSetId) await loadResults(billingSetId);
+      // Codex round-6 P2: the group IS posted now. Reflect it immediately and treat the readback as a
+      // best-effort refresh — a failing readback must NOT leave the UI showing "unposted" (a retry
+      // would then hit already-posted invoices with a fresh key and fail).
+      setPosted(true);
       toast('success', 'Invoice group posted.');
+      if (billingSetId) {
+        try {
+          await loadResults(billingSetId);
+        } catch {
+          toast('info', 'Posted. Reload to refresh the on-screen summary.');
+        }
+      }
     } catch (err) {
       toast('error', splitBackendError(err));
     } finally {
@@ -701,9 +748,12 @@ export default function FieldAppSplitInvoiceEditor() {
         }
         const row = setRow as { id: string; invoice_group_id: string | null; source_job_id: string | null };
         setBillingSetId(row.id);
-        setInvoiceGroupId(row.invoice_group_id ?? null);
         setSourceJobId(row.source_job_id ?? '');
-        await loadResults(row.id);
+        // Codex round-6 P1: expose the group id to the posting state ONLY after a COMPLETE readback.
+        // If the set row loads but any invoice/item/share query fails, leaving invoiceGroupId set would
+        // enable Post on empty/partial results (posted stays false, dirtyAfterSave false).
+        const readbackComplete = await loadResults(row.id);
+        if (readbackComplete) setInvoiceGroupId(row.invoice_group_id ?? null);
       } catch (err) {
         if (!cancelled) toast('error', sanitizeError(err));
       } finally {
@@ -1069,15 +1119,20 @@ export default function FieldAppSplitInvoiceEditor() {
                               />
                               <span className="text-xs text-secondary">%</span>
                             </label>
-                            <label className="flex items-center gap-1 text-xs text-secondary">
-                              <input
-                                type="checkbox"
-                                checked={s.override}
-                                onChange={(e) => patchShare(l.uid, s.customer_id, { override: e.target.checked })}
-                              />
-                              price override
-                            </label>
-                            {s.override && (
+                            {/* Codex round-6 P2: a per-share price override is meaningless for flat-fee
+                                lines (allocated from source_flat_cents; override ignored) — hide the
+                                control there so the review UI can't collect an amount that has no effect. */}
+                            {l.line_kind !== 'flat_fee' && (
+                              <label className="flex items-center gap-1 text-xs text-secondary">
+                                <input
+                                  type="checkbox"
+                                  checked={s.override}
+                                  onChange={(e) => patchShare(l.uid, s.customer_id, { override: e.target.checked })}
+                                />
+                                price override
+                              </label>
+                            )}
+                            {l.line_kind !== 'flat_fee' && s.override && (
                               <input
                                 type="number"
                                 min="0"
@@ -1088,7 +1143,7 @@ export default function FieldAppSplitInvoiceEditor() {
                                 placeholder="$ / unit"
                               />
                             )}
-                            {s.override && (
+                            {l.line_kind !== 'flat_fee' && s.override && (
                               <input
                                 type="text"
                                 value={s.overrideReason}

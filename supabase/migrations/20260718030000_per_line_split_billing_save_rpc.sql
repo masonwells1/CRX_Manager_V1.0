@@ -623,6 +623,19 @@ BEGIN
        AND deleted_at IS NULL
        AND status IN ('draft', 'unposted')
        AND customer_id::text <> ALL (v_members);
+
+    -- Codex round-6 P1: a child VOIDED/CANCELLED (or soft-deleted) via the live void/cancel/delete
+    -- path stays attached to this set's invoice_group_id. PASS 2 skips it (reuse is draft/unposted +
+    -- not-deleted only) and mints a fresh replacement, BUT post_invoice_group loops EVERY non-filtered
+    -- member of the group and RAISES on any status not in (draft,unposted) — so leaving the terminal/
+    -- deleted child in the group makes the rebuilt group permanently UNPOSTABLE. Detach such children
+    -- from the group (invoice_group_id = NULL) so only active draft/unposted children remain postable;
+    -- they keep field_app_billing_set_id as set/audit history and the replacement carries the group.
+    UPDATE invoices
+       SET invoice_group_id = NULL, updated_at = now()
+     WHERE field_app_billing_set_id = v_set_id
+       AND invoice_group_id IS NOT NULL
+       AND (deleted_at IS NOT NULL OR status IN ('voided', 'cancelled'));
   ELSE
     -- New set. R7: ALWAYS assign an invoice_group_id (even single recipient) so
     -- posting is uniformly post_invoice_group and the set is the durable anchor.
