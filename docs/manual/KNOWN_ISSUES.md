@@ -1,29 +1,19 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-07-20** (full document re-read plus live ledger/function refresh through `20260720181939`; older open/deferred claims retain their dated evidence below; owner-facing combined list: root `TODO.md`)
+**Last verified: 2026-07-20** (full document re-read; live high-water `20260720200329`; the 24 previously missing live migration sources landed through PR #180, and broad delivery-signature Storage policies were replaced with delivery-bound access while preserving one inaccessible historical orphan; older open/deferred claims retain their dated evidence below; owner-facing combined list: root `TODO.md`)
 **Update triggers:** when a finding is parked/resolved, a migration is parked/applied, or an owner decision lands. Agents must update THIS file, not create new issue lists. Do not re-discover or re-fix something listed here as already known — read the pointer first.
 
 This file consolidates (does not replace) the source documents it points to. If this file and a source disagree, trust the source and fix this file.
 
 ---
 
-## 1. Recently closed HIGH releases and remaining owner follow-ups
+## 1. Open HIGH findings (dormant on live data)
 
-### Supplier Pricing Phase 1a — repository/frontend/database rollout closed; legacy Edge cleanup remains
+### Supplier Pricing Phase 1a rollout gap — frontend/Edge retirement not deployed
 
-The additive pricing RPC/bootstrap, zero-cost guard, legacy Product repeat-save
-compatibility repair, cent-scale correction, Product-page governed editor, strict
-direct-write enforcement cutover, post-cutover integrity rescan, and supplier-price
-evidence foundation are reconciled in the repository and live through
-`20260718230000_supplier_price_evidence_phase1b`. PR #169 merged the frontend and
-cutover source to `main`; this is no longer an open release blocker.
+The additive pricing RPC/bootstrap, zero-cost guard, legacy Product repeat-save compatibility repair, cent-scale correction, strict direct-write cutover, integrity rescan, and supplier-price evidence foundation are live through `20260718230000_supplier_price_evidence_phase1b`. The zero-cost guard's repository source is `20260717112011_supplier_pricing_zero_cost_guard.sql` and its live ledger identity is `20260717120500_supplier_pricing_zero_cost_guard`; the governed calculator rejects margin-driven zero cost. The earlier statement that `20260718124517_harden_supplier_pricing_cent_scale_and_trigger.sql` and the cutover were pending is resolved by the 2026-07-20 live migration-catalog check.
 
-The active production `process-document` Edge Function remains v18 and still
-contains legacy `price_list` / price-bearing `product_list` code, but the deployed
-frontend no longer routes supplier pricing through that path and the database
-rejects ungoverned pricing writes. Edge retirement is a cleanup follow-up, not a
-reason to repeat or park the completed Phase 1a cutover. Do not describe the Edge
-code itself as retired until a separately reviewed Edge deployment verifies it.
+The remaining rollout gap is the production Edge Function: its deployment state was not inspected in this repository/database-only pass. Do not describe supplier-price OCR as retired live until that separately gated deployment is verified.
 
 ### July 14 full-gauntlet remediation — LIVE, frontend rolled out (PR #133 merged 2026-07-15)
 
@@ -141,14 +131,6 @@ The 2026-07-13 audit implemented the cheap hard-guard fixes (see CHANGELOG). The
 
 ## 6. Recently resolved (last ~30 days)
 
-- **2026-07-20** — Governed split invoices can no longer pass through generic
-  `save_invoice`, whose line replacement does not preserve source
-  `order_item_id`; they must be voided/reissued. Singular grouped voids are
-  refused and `void_invoice_group` retires every active private-provenance
-  member atomically with actor/group/reason-bound replay. Applied live as
-  ledger `20260720181939`; exact reviewers were CLEAN and the full H5 chain
-  returned `SMOKE_PASS_ROLLBACK`.
-- **2026-07-18** — Gauntlet sections 2–6 remediation is live: inactive/profile-less actors are rejected by the prepay/payment RPCs; cancelled-conversion quotes have an admin escape hatch; finance charges deduplicate per calendar month; invoice void refuses applied direct cash; cancelled-order restore is intentionally forbidden; and delivery invoice backfill refuses unresolved split billing. Server-assigned ledger versions are `20260718152837`, `20260718153744`, `20260718154810`, `20260718174018`, `20260718174859`, and `20260718175641`; every registered chain reached `SMOKE_PASS_ROLLBACK`.
 - **2026-07-17** — Money/inventory gauntlet sections 8-15 database remediation is live through `replay_bulk_po_same_request_result` (ledger `20260717032437`). PO numbering is atomic with insertion; active sales reps retain PO create/import/edit authority; vendor bills compare the authoritative line-rounded PO header; an admin-deleted imported PO clears its claim plus cached save results so the unchanged document can be imported again; and a same-key lost-response retry now replays the original `saved` result before different-request document deduplication. Both trusted migration reviewers returned CLEAN; stacked pre/post-apply rollback chains reached `SMOKE_PASS_ROLLBACK`; permanent checks found zero claims, stale save replays, fractional source costs, and PO header mismatches, with public/internal grants correct.
 - **2026-07-15** — The 2026-07-14 workflow-review HIGH (deactivated admins retained commission-payout policy access) is closed: all 3 fix migrations applied live — names `20260714185129_fix_commission_admin_policies` / `20260714185130_gate_batch_prepay_admin` / `20260714185631_harden_is_admin_search_path`, re-stamped live versions `20260715134551` / `20260715134618` / `20260715134629`. Verified in live `schema_migrations` 2026-07-16 (match on name, not version — the standard drift gotcha). `migration-history.md` rows 690–692 corrected the same day.
 - **2026-07-15/17** — Schema registry and generated TypeScript database types were regenerated from live introspection through high-water `20260717045420` (`bind_bulk_po_claim_to_vendor`). Roadmap tickets T1/N2 remain done.
