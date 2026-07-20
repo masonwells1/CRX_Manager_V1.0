@@ -155,6 +155,12 @@ vi.mock('../lib/activityLogger', () => ({
   logActivity: H.logActivity,
 }));
 
+// Supplier evidence has its own focused tests. Keep this suite scoped to the
+// EPA draft mutation so its assertions are not polluted by the history read.
+vi.mock('../components/products/ProductPriceHistory', () => ({
+  default: () => null,
+}));
+
 import ProductDetail from './ProductDetail';
 
 async function runLookup(result: EpaLookupResult) {

@@ -8,6 +8,7 @@ import Input from '../components/ui/Input';
 import Modal from '../components/ui/Modal';
 import UnsavedChangesModal from '../components/ui/UnsavedChangesModal';
 import PricingChangePreviewModal from '../components/products/PricingChangePreviewModal';
+import ProductPriceHistory from '../components/products/ProductPriceHistory';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
@@ -1298,27 +1299,30 @@ export default function ProductDetail() {
           </fieldset>
         </div>
 
-        {!isNew && isAdmin && (
+        {!isNew && id && (
           <div className="space-y-4">
-            <Card>
-              <CardHeader title="Cost" accent="History" />
-              {costHistory.length === 0 ? (
-                <p className="text-sm text-secondary">No cost changes recorded</p>
-              ) : (
-                <div className="space-y-3">
-                  {costHistory.map((ch) => (
-                    <div key={ch.id} className="border-b border-gray-50 pb-3 last:border-0">
-                      <div className="flex justify-between text-sm">
-                        <span className="text-red-500 line-through">${ch.old_cost?.toFixed(2)}</span>
-                        <span className="text-crx-green font-medium">${ch.new_cost?.toFixed(2)}</span>
+            <ProductPriceHistory productId={id} />
+            {isAdmin && (
+              <Card>
+                <CardHeader title="Cost" accent="History" />
+                {costHistory.length === 0 ? (
+                  <p className="text-sm text-secondary">No cost changes recorded</p>
+                ) : (
+                  <div className="space-y-3">
+                    {costHistory.map((ch) => (
+                      <div key={ch.id} className="border-b border-gray-50 pb-3 last:border-0">
+                        <div className="flex justify-between text-sm">
+                          <span className="text-red-500 line-through">${ch.old_cost?.toFixed(2)}</span>
+                          <span className="text-crx-green font-medium">${ch.new_cost?.toFixed(2)}</span>
+                        </div>
+                        {ch.change_note && <p className="text-xs text-secondary mt-1">{ch.change_note}</p>}
+                        <p className="text-xs text-gray-400 mt-1">{new Date(ch.changed_at).toLocaleDateString()}</p>
                       </div>
-                      {ch.change_note && <p className="text-xs text-secondary mt-1">{ch.change_note}</p>}
-                      <p className="text-xs text-gray-400 mt-1">{new Date(ch.changed_at).toLocaleDateString()}</p>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </Card>
+                    ))}
+                  </div>
+                )}
+              </Card>
+            )}
           </div>
         )}
       </div>

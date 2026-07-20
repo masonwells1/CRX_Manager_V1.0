@@ -415,6 +415,20 @@ These are NOT called directly from the frontend. They power triggers, guards, an
 ### Global Search
 - `global_search(p_query text, p_limit int DEFAULT 5)` → TABLE(entity_type text, id uuid, primary_text text, secondary_text text) — Searches customers, orders, invoices, deliveries, products with ILIKE. Used by Command Palette (Ctrl+K).
 
+### Supplier Pricing Phase 1b (PARKED)
+
+- `get_supplier_quote_sheet(vendor_id)` — returns the confirmed reusable supplier links and last approved price used to build the protected manual-entry `.xlsx` quote sheet.
+- `get_supplier_market_evidence(product_ids)` — latest per-link supplier observations, package quote plus normalized inventory-unit cost, and a best supplier only among comparable evidence.
+- `get_supplier_pricing_workspace(product_id, vendor_id)` — admin/sales workspace read model for vendors, products, links, staged imports, aliases, and comparison evidence.
+- `get_supplier_price_import(import_id)` — staged import plus row-level validation/review state.
+- `get_product_price_history(product_id)` — supplier observations, selected-cost history, and actual PO facts; legacy PO vendor names resolve only through approved `legacy_vendor_resolution` rows.
+- `upsert_product_supplier_link(...)` — admin-only, actor-bound/idempotent link confirmation with directional conversion; once approved observations reference a link, its product/package/conversion identity is immutable.
+- `stage_supplier_price_import(...)` — admin-only, actor-bound/idempotent manual quote staging. Parses exact dollar strings to bigint cents inside the RPC; formulas and mismatched/unconfirmed links are ineligible.
+- `approve_supplier_price_import(...)` — admin-only, actor-bound/idempotent review gate that appends selected observations and changes zero sell prices.
+- `stage_vendor_alias(...)` / `review_vendor_alias(...)` — admin-only, actor-bound/idempotent vendor alias review flow.
+
+All eleven functions are live from `20260718225511_supplier_price_evidence_phase1b.sql`. Post-apply catalog verification confirmed one expected overload each, fixed `search_path = public, pg_temp`, anonymous execution denied, and authenticated execution granted.
+
 ### Custom Application Workflow
 - `create_job_from_quote_section(p_quote_id, p_section_id, p_performed_by, p_idempotency_key)` -> jsonb {job_id} -- Creates scheduled job from planned quote section with pre-filled chemicals and fields
 - `get_program_completion(p_season)` -> jsonb array -- Returns planned vs actual acres per program section for the Program Tracker dashboard

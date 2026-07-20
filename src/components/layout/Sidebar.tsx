@@ -132,6 +132,7 @@ const officeNavigation: NavEntry[] = [
       items: [
         { path: '/inventory', label: 'Inventory', icon: <Warehouse className="w-4 h-4" /> },
         { path: '/products', label: 'Products', icon: <Package className="w-4 h-4" /> },
+        { path: '/supplier-pricing', label: 'Supplier Pricing', icon: <BadgeDollarSign className="w-4 h-4" /> },
         { path: '/brand-vs-generic', label: 'Brand vs Generic', icon: <Scale className="w-4 h-4" /> },
         { path: '/purchase-orders', label: 'Purchase Orders', icon: <ShoppingCart className="w-4 h-4" /> },
         { path: '/receiving', label: 'Receiving', icon: <PackageCheck className="w-4 h-4" /> },
