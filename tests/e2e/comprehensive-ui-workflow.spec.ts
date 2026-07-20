@@ -219,7 +219,7 @@ async function cleanupTestData(page: Page) {
     await supabaseRpc(page, 'delete_invoices', {
       p_invoice_ids: [invoiceId],
       p_idempotency_key: `e2e-cleanup-invoice-${invoiceId}`,
-    }).catch(() => {});
+    });
   }
 
   // Delivery items + deliveries

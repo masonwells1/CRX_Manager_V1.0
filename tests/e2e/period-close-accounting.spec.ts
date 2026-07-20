@@ -171,7 +171,7 @@ test.describe('Period Close & Accounting', () => {
         // Try posting first, void if that fails
         await supabaseRpc(page, 'post_invoice', { p_invoice_id: invId })
           .catch(async () => {
-            await deleteDraftInvoice(page, invId).catch(() => {});
+            await deleteDraftInvoice(page, invId);
           });
       }
     }
@@ -293,7 +293,7 @@ test.describe('Period Close & Accounting', () => {
       const invId = (inv as Record<string, unknown>).id as string;
       await supabaseRpc(page, 'post_invoice', { p_invoice_id: invId })
         .catch(async () => {
-          await deleteDraftInvoice(page, invId).catch(() => {});
+          await deleteDraftInvoice(page, invId);
         });
     }
 
@@ -344,7 +344,7 @@ test.describe('Period Close & Accounting', () => {
       const invId = (inv as Record<string, unknown>).id as string;
       await supabaseRpc(page, 'post_invoice', { p_invoice_id: invId })
         .catch(async () => {
-          await deleteDraftInvoice(page, invId).catch(() => {});
+          await deleteDraftInvoice(page, invId);
         });
     }
 

@@ -128,7 +128,7 @@ test.describe('Field App Phase 1 — multi-customer split via RPC', () => {
       await supabaseRpc(page, 'delete_invoices', {
         p_invoice_ids: createdInvoiceIds,
         p_idempotency_key: `e2e-cleanup-split-${createdGroupId || createdInvoiceIds[0]}`,
-      }).catch(() => {});
+      });
     }
 
     if (splitFieldId) {

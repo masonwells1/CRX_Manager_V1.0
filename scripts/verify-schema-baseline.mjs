@@ -91,9 +91,16 @@ const buckets = JSON.parse(
 );
 
 const expectedCounts = manifest.catalog_counts;
+const extensionFunctionSignatures = manifest.public_extension_function_signatures;
+if (!Array.isArray(extensionFunctionSignatures) ||
+    extensionFunctionSignatures.length !== expectedCounts.public_extension_functions ||
+    new Set(extensionFunctionSignatures).size !== extensionFunctionSignatures.length) {
+  fail('public extension function signature inventory is missing, duplicated, or count-drifted');
+}
 const staticCounts = {
   public_tables: countMatches(publicSchema, /^CREATE TABLE /gm),
   public_app_functions: countMatches(publicSchema, /^CREATE OR REPLACE FUNCTION /gm),
+  public_extension_functions: extensionFunctionSignatures.length,
   public_policies: countMatches(publicSchema, /^CREATE POLICY /gm),
   storage_object_policies: countMatches(platformOverlay, /^CREATE POLICY /gm),
   storage_buckets: buckets.length,

@@ -2,7 +2,15 @@
 
 All significant development milestones, in reverse chronological order.
 
-### 2026-07-20 — Governed split editing and group void made fail-closed
+## 2026-07-20 — Delivery signatures restricted to authorized deliveries
+
+Removed four duplicate bucket-only Storage policies that let any authenticated user
+read or overwrite any delivery signature. The private bucket now accepts only the
+canonical `signatures/<delivery-id>.png` path and permits access to admins, sales reps,
+or the delivery's assigned driver; uploads and recaptures additionally require a
+completed delivery. A rollback-only catalog smoke proves the broad policies are gone.
+
+## 2026-07-20 — Governed split editing and group void made fail-closed
 
 The exact pre-push Codex review found that the generic invoice editor could replace
 governed split lines without preserving their source order-item identity, and that a
@@ -204,8 +212,6 @@ the server-assigned migration versions so a future rebuild cannot reapply them.
   (H5), escape-hatch quote (B2), forbid-restore (H4), calendar-month finance-charge guard (H2).
 
 ## 2026-07-18 — Built read-only adversarial gauntlet loop over sections 2-6 (money/inventory/lifecycle/DB-drift/idempotency): opus orchestrator, sonnet finders, opus skeptics + per-section adjudicator gate. Ran overnight; confirmed HIGHs in money+lifecycle and a Section 5 live-drift BLOCKER (Supplier Pricing Phase 1a). Findings parked for Codex-gated fixes.
-
-Built read-only adversarial gauntlet loop over sections 2-6 (money/inventory/lifecycle/DB-drift/idempotency): opus orchestrator, sonnet finders, opus skeptics + per-section adjudicator gate. Ran overnight; confirmed HIGHs in money+lifecycle and a Section 5 live-drift BLOCKER (Supplier Pricing Phase 1a). Findings parked for Codex-gated fixes.
 
 - **Commits this session** (git log -15 (fallback — no author-matched commits in the last 12h)):
   - `4739104 Add gauntlet sections 2-6 adversarial audit loop`
