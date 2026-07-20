@@ -358,6 +358,9 @@ DECLARE
   v_chem_price_map     jsonb;          -- chemical Option B: customer_id -> that customer's own resolved unit price
   v_svc_price_map      jsonb;          -- service Option B: customer_id -> that customer's own per-acre service rate
   v_uniform_price      bigint;         -- chemical/service: the single price when ALL co-owners match (routes round-once)
+  v_repr_base_price    bigint;         -- resolved representative base BEFORE the uniform-override penny guard (Codex r7 P2 audit base)
+  v_inv_field_names    text[];         -- denormalized field names for the child invoice row (Codex r7 P2)
+  v_inv_crop_type      text;           -- denormalized representative crop for the child invoice row (Codex r7 P2)
   v_line_unit_cost     bigint;         -- per-unit COGS for the current line (Codex P1 #3)
   v_invoice_cost       bigint;         -- per-child accumulated total_cost_cents (Codex P1 #3)
   v_is_new_invoice     boolean;        -- true only when a child invoice row is freshly INSERTed (Codex P1 #8)
@@ -523,6 +526,16 @@ BEGIN
   -- share row (Codex P2 #9), derived ONCE here, independent of the billing lines.
   SELECT COALESCE(SUM((f->>'applied_acres')::numeric), 0) INTO v_total_applied_acres
     FROM jsonb_array_elements(p_fields) AS f;
+
+  -- Codex round-7 P2: denormalized field context for the child invoice ROW. FieldInvoicesListPanel +
+  -- buildInvoicePdfDataFromRow read invoices.field_names/crop_type/total_acres directly (the dedicated
+  -- Drafts/Posted panels hydrate field_app_locations, but the COMBINED list + its PDFs use the row) —
+  -- without these each split child shows blank acreage/fields/crop in the combined list and exports.
+  SELECT array_agg(fl.field_name ORDER BY t.ord),
+         (array_agg(fl.crop_type ORDER BY t.ord) FILTER (WHERE fl.crop_type IS NOT NULL))[1]
+    INTO v_inv_field_names, v_inv_crop_type
+    FROM jsonb_array_elements(p_fields) WITH ORDINALITY AS t(fld, ord)
+    LEFT JOIN fields fl ON fl.id = (t.fld->>'field_id')::uuid;
 
   -- ---- LINES ------------------------------------------------------------------
   IF p_lines IS NULL OR jsonb_typeof(p_lines) <> 'array'
@@ -1049,9 +1062,16 @@ BEGIN
         INTO v_uniform_price
         FROM jsonb_array_elements(v_shares) AS s
        WHERE s->>'override_unit_price_cents' IS NOT NULL;
+      -- Codex round-7 P2: preserve the RESOLVED representative base BEFORE the uniform penny guard may
+      -- overwrite v_src_unit_price with a (uniform) caller override. An 'override' share's AUDITED base
+      -- must stay the true tier/quote/service base, not the override value — otherwise the audit reads
+      -- as if the override equalled the base and the real tier/quote/service price is lost.
+      v_repr_base_price := v_src_unit_price;
       IF v_uniform_price IS NOT NULL THEN
         v_src_unit_price := v_uniform_price;
       END IF;
+    ELSE
+      v_repr_base_price := v_src_unit_price;
     END IF;
 
     -- Every line's customer set must EXACTLY equal the billing-set members (spec §3).
@@ -1113,6 +1133,7 @@ BEGIN
       'cogs_by_customer', v_cogs_map,        -- LR-allocated per-child COGS (Codex r2 #G)
       'per_customer_priced', (COALESCE(v_chem_price_map, v_svc_price_map) IS NOT NULL), -- Option B (#M)
       'caller_override_custs', COALESCE(to_jsonb(v_caller_override), '[]'::jsonb),       -- genuine overrides (#M)
+      'repr_base_unit_price_cents', v_repr_base_price,   -- resolved representative base for the override audit (Codex r7 P2)
       'svc_source_map',  COALESCE(v_svc_source_map, '{}'::jsonb),  -- per-customer service source (#M)
       'reasons_map',     COALESCE(v_reasons_map, '{}'::jsonb),     -- split/price reasons (#L)
       'service_name',    CASE WHEN v_line_kind = 'service' THEN v_app_service.name ELSE NULL END, -- Codex r2 #N
@@ -1157,12 +1178,16 @@ BEGIN
       -- sql-safety: exempt-registry — invoices.field_app_billing_set_id is created by the prior
       -- parked migration 20260718010000 (not yet in the schema-registry); job_id / application_date
       -- / season are long-standing invoices columns (mirrors transfer_job_to_invoice).
+      -- sql-safety: exempt-registry — field_app_billing_set_id is created by the parked migration
+      -- 20260718010000 (not yet in the registry); field_names/crop_type/total_acres are long-standing
+      -- invoices columns (20260219200000_invoice_statement_enrichment).
       INSERT INTO invoices (
         invoice_number, customer_id, invoice_type, status,
         invoice_date, salesman_id, header_notes, created_by,
         total_amount_cents, total_cost_cents,
         invoice_group_id, application_service_id, season,
-        field_app_billing_set_id, job_id, application_date
+        field_app_billing_set_id, job_id, application_date,
+        field_names, crop_type, total_acres   -- Codex r7 P2: denormalized field context for the combined list/PDFs
       ) VALUES (
         v_invoice_number, v_customer_id, 'field_application', 'draft',
         COALESCE((p_invoice->>'invoice_date')::date, CURRENT_DATE),
@@ -1171,7 +1196,8 @@ BEGIN
         v_group_id, p_application_service_id, v_season,   -- season = job/invoice season (round-3 P1)
         -- job_id + application_date on EVERY child so field-invoice lists resolve Job # and the
         -- application date, not just the first child via jobs.invoice_id (round-3 P2).
-        v_set_id, p_source_job_id, v_job_app_date
+        v_set_id, p_source_job_id, v_job_app_date,
+        v_inv_field_names, v_inv_crop_type, v_total_applied_acres
       ) RETURNING id INTO v_invoice_id;
     ELSE
       v_is_new_invoice := false;
@@ -1187,6 +1213,9 @@ BEGIN
         season                 = v_season,               -- keep season in sync on re-save (round-3 P1)
         job_id                 = p_source_job_id,         -- round-3 P2 (frozen source job)
         application_date       = v_job_app_date,
+        field_names            = v_inv_field_names,        -- Codex r7 P2: keep denormalized field context in sync on re-save
+        crop_type              = v_inv_crop_type,
+        total_acres            = v_total_applied_acres,
         total_amount_cents     = 0,
         total_cost_cents       = 0,
         send_disposition       = 'normal',
@@ -1226,7 +1255,10 @@ BEGIN
       v_split_reason := NULLIF(v_plan->'reasons_map'->v_cust->>'split_reason', '');
       v_price_reason := NULLIF(v_plan->'reasons_map'->v_cust->>'price_reason', '');
       IF (v_plan->'caller_override_custs') ? v_cust THEN
-        v_share_base_price  := (v_alloc_row->>'base_unit_price_cents')::bigint;   -- representative base
+        -- Codex round-7 P2: audit the RESOLVED representative base (tier/quote/service), NOT the calculator's
+        -- base — which equals the override value when the uniform penny guard overwrote the source price.
+        v_share_base_price  := COALESCE((v_plan->>'repr_base_unit_price_cents')::bigint,
+                                        (v_alloc_row->>'base_unit_price_cents')::bigint);
         v_share_base_source := v_alloc_row->>'base_price_source';
         v_share_price_mode  := 'override';
       ELSIF COALESCE((v_plan->>'per_customer_priced')::boolean, false) THEN
@@ -1695,12 +1727,33 @@ SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $fn$
 BEGIN
+  -- DELETE: block cascading a split-produced item away outside the split writer (R4) — else generic
+  -- save_invoice deletes the shares and a malformed group posts.
+  IF TG_OP = 'DELETE' THEN
+    IF OLD.billing_line_id IS NOT NULL
+       AND COALESCE(current_setting('crx.split_writer', true), 'off') <> 'on' THEN
+      RAISE EXCEPTION 'SPLIT_ITEM_LOCKED: invoice line % belongs to a per-line split billing set — edit it through the Split Billing editor (save_field_app_split_invoice), not save_invoice', OLD.id
+        USING ERRCODE = 'insufficient_privilege';
+    END IF;
+    RETURN OLD;
+  END IF;
+  -- UPDATE (Codex round-7 P2): block a direct edit of a split-produced item's MATERIAL fields outside
+  -- the split writer. The post-time SPLIT_POST_ITEM_SHARE_MISMATCH check only compares extended_cents;
+  -- a PATCH of product_id / quantity / unit_price_cents / cost_cents / billing_line_id that leaves
+  -- extended_cents unchanged would otherwise print + RUP-report item details that disagree with the
+  -- server allocation. Cosmetic fields (description, sort_order, acres) are left editable.
   IF OLD.billing_line_id IS NOT NULL
-     AND COALESCE(current_setting('crx.split_writer', true), 'off') <> 'on' THEN
-    RAISE EXCEPTION 'SPLIT_ITEM_LOCKED: invoice line % belongs to a per-line split billing set — edit it through the Split Billing editor (save_field_app_split_invoice), not save_invoice', OLD.id
+     AND COALESCE(current_setting('crx.split_writer', true), 'off') <> 'on'
+     AND (NEW.product_id      IS DISTINCT FROM OLD.product_id
+          OR NEW.quantity         IS DISTINCT FROM OLD.quantity
+          OR NEW.unit_price_cents IS DISTINCT FROM OLD.unit_price_cents
+          OR NEW.extended_cents   IS DISTINCT FROM OLD.extended_cents
+          OR NEW.cost_cents       IS DISTINCT FROM OLD.cost_cents
+          OR NEW.billing_line_id  IS DISTINCT FROM OLD.billing_line_id) THEN
+    RAISE EXCEPTION 'SPLIT_ITEM_LOCKED: invoice line % belongs to a per-line split billing set — its product/amounts cannot be edited directly; use the Split Billing editor (save_field_app_split_invoice)', OLD.id
       USING ERRCODE = 'insufficient_privilege';
   END IF;
-  RETURN OLD;
+  RETURN NEW;
 END;
 $fn$;
 
@@ -1710,12 +1763,12 @@ REVOKE ALL ON FUNCTION public.guard_split_invoice_items() FROM public, anon, aut
 
 DROP TRIGGER IF EXISTS trg_guard_split_invoice_items ON public.invoice_items;
 CREATE TRIGGER trg_guard_split_invoice_items
-  BEFORE DELETE ON public.invoice_items
+  BEFORE DELETE OR UPDATE ON public.invoice_items
   FOR EACH ROW
   EXECUTE FUNCTION public.guard_split_invoice_items();
 
 COMMENT ON FUNCTION public.guard_split_invoice_items() IS
-  'Per-line split billing R4: blocks DELETE of a split-produced invoice_item (billing_line_id set) outside the split writer (crx.split_writer=on), so generic save_invoice cannot cascade away a split child''s invoice_line_shares and post a malformed group. The split RPC sets the flag for its own re-save delete.';
+  'Per-line split billing R4/round-7: blocks DELETE of, and direct MATERIAL-field UPDATE (product/quantity/unit_price/cost/extended/billing_line) to, a split-produced invoice_item (billing_line_id set) outside the split writer (crx.split_writer=on). Stops generic save_invoice cascading away a split child''s shares AND stops a direct admin PATCH desyncing printed/RUP-reported item details from the server allocation. The split RPC sets the flag for its own re-save delete/insert.';
 
 -- ============================================================================
 -- 5. R1 POST SNAPSHOT + POSTING-BOUNDARY VALIDATION
@@ -1777,12 +1830,20 @@ BEGIN
     INSERT INTO invoice_line_share_snapshots (
       invoice_id, billing_line_id, customer_id, split_micro_pct,
       allocated_quantity, allocated_acres, unit_price_cents, amount_cents,
-      line_kind, product_id, application_service_id, line_description, snapshot_reason
+      line_kind, product_id, application_service_id, line_description,
+      -- Codex round-7 P2: capture the full override/pricing provenance so post history is auditable
+      -- even after a later unpost+re-save deletes the source invoice_line_shares + billing lines.
+      base_unit_price_cents, base_price_source, split_mode, price_mode,
+      split_override_reason, price_override_reason, calculation_hash, vector_hash,
+      snapshot_reason
     )
     SELECT NEW.id, ils.billing_line_id, ils.customer_id, ils.split_micro_pct,
            ils.allocated_quantity, ils.allocated_acres, ils.unit_price_cents, ils.amount_cents,
            bl.line_kind, ii.product_id, bl.application_service_id,
-           COALESCE(NULLIF(ii.description, ''), bl.description), 'post'
+           COALESCE(NULLIF(ii.description, ''), bl.description),
+           ils.base_unit_price_cents, ils.base_price_source, ils.split_mode, ils.price_mode,
+           ils.split_override_reason, ils.price_override_reason, ils.calculation_hash, ils.vector_hash,
+           'post'
       FROM invoice_line_shares ils
       JOIN invoice_items ii ON ii.id = ils.invoice_item_id
       LEFT JOIN field_app_billing_lines bl ON bl.id = ils.billing_line_id

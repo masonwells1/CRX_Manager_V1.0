@@ -1621,6 +1621,20 @@ export interface InvoiceLineShareSnapshot {
   allocated_acres: number | null;
   unit_price_cents: number;
   amount_cents: number;
+  // Self-contained line identity (Codex round-4) — survives the source rows being deleted on re-save.
+  line_kind?: string | null;
+  product_id?: string | null;
+  application_service_id?: string | null;
+  line_description?: string | null;
+  // Override/pricing provenance (Codex round-7 P2) — nullable; pre-fix snapshot rows have none.
+  base_unit_price_cents?: number | null;
+  base_price_source?: string | null;
+  split_mode?: string | null;
+  price_mode?: string | null;
+  split_override_reason?: string | null;
+  price_override_reason?: string | null;
+  calculation_hash?: string | null;
+  vector_hash?: string | null;
   snapshot_reason: string;
   created_at: string;
 }

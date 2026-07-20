@@ -133,6 +133,17 @@ CREATE TABLE IF NOT EXISTS invoice_line_share_snapshots (
   product_id             uuid,
   application_service_id uuid,
   line_description       text,
+  -- Codex round-7 P2: full override/pricing provenance so the posted allocation stays auditable AFTER
+  -- a post->unpost->re-save deletes the live invoice_line_shares + billing lines (the snapshot is then
+  -- the only durable history). Nullable: pre-fix snapshot rows have none.
+  base_unit_price_cents  bigint,
+  base_price_source      text,
+  split_mode             text,
+  price_mode             text,
+  split_override_reason  text,
+  price_override_reason  text,
+  calculation_hash       text,
+  vector_hash            text,
   snapshot_reason     text NOT NULL DEFAULT 'post',
   created_at          timestamptz NOT NULL DEFAULT now()
 );

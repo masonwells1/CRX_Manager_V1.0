@@ -4,6 +4,31 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-20 — Codex round-7 4 P2s FIXED on per-line split-billing: (1) guard_split_invoice_items now BEFORE DELETE OR UPDATE — blocks direct material-field tamper of a split item outside the writer; (2) uniform-override audit base = resolved representative (tier/quote), not the override; (3) invoice_line_share_snapshots gains 8 provenance cols (base/mode/reason/hash) populated at post; (4) split children carry field_names/crop_type/total_acres for the combined list+PDFs. Reviewer-clean (rls 0/0/0, drift apply-clean), PROOFOK 60/60 live PG. Codex round 8 next. Still PARKED.
+
+Codex round-7 4 P2s FIXED on per-line split-billing: (1) guard_split_invoice_items now BEFORE DELETE OR UPDATE — blocks direct material-field tamper of a split item outside the writer; (2) uniform-override audit base = resolved representative (tier/quote), not the override; (3) invoice_line_share_snapshots gains 8 provenance cols (base/mode/reason/hash) populated at post; (4) split children carry field_names/crop_type/total_acres for the combined list+PDFs. Reviewer-clean (rls 0/0/0, drift apply-clean), PROOFOK 60/60 live PG. Codex round 8 next. Still PARKED.
+
+- **Commits this session** (git log -15 (fallback — no author-matched commits in the last 12h)):
+  - `b683fa44 fix(split-billing): Codex round-7 P1s — active-group readback + RUP duplicate-product guard`
+  - `924b7728 fix(split-billing): Codex round-6 — 4 P1 + 4 P2 (postable group + validation/readback/recovery)`
+  - `18780146 docs(split-billing): front-to-back Codex round-6 review runbook`
+  - `c4a79c66 docs(changelog): log 2026-07-20 session — split-billing owner-decisions + CodeQL fix`
+  - `21943958 fix(split-billing): use crypto.randomUUID() for line-row keys — clears CodeQL js/insecure-randomness`
+  - `8b03cb88 docs(decision-log): split-billing v1 edge-case policy settled — per-child commissions, no job-less exclusivity guard`
+  - `5ad316de fix(split-billing): Fable adversarial round — 6 RPC fixes + editor race guard + reviewer MEDs [PARKED, flag OFF]`
+  - `bc91afc9 fix(split-billing): Codex round-5 (8) + drift BLOCKER B1 + member-drop bug [PARKED, flag OFF]`
+  - `5983b3eb fix(split-billing): Codex round-4 — commissions + posting-boundary + field/override guards [PARKED, flag OFF]`
+  - `0a2754fd fix(split-billing): Codex round-3 — season/freeze/job-link + repost + snapshot honesty [PARKED, flag OFF]`
+  - `795604f3 fix(split-billing): Codex round-2 remaining 6 — #A/#E/#G/#H/#L/#M [PARKED, flag OFF]`
+  - `eb942f86 fix(split-billing): Codex round-2 batch — flag enforcement, fee-COGS, input guards (7/13) [PARKED, flag OFF]`
+  - `3648e52a fix(split-billing): resolve all 8 P1 + 2 P2 Codex money/RLS findings [PARKED, flag OFF]`
+  - `70912a7c feat(split-billing): Option B — price each co-owner at their OWN tier (per-customer) + round-once penny guard [PARKED, flag OFF]`
+  - `5f2b5f74 feat(split-billing): R8 — resolve chemical price server-side (manual→quoted→tier) + unit conversion [PARKED, flag OFF]`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - `supabase/migrations/20260718010000_per_line_split_billing_schema.sql`
+  - `supabase/migrations/20260718020000_per_line_split_billing_calculator.sql`
+  - `supabase/migrations/20260718030000_per_line_split_billing_save_rpc.sql`
+
 ## 2026-07-20 — Codex round 7 (2 P1 + 4 P2) on per-line split-billing: fixed the 2 P1s — review-card readback now filters to active invoice-group members (excludes round-6-detached terminal children), and the RPC rejects the same chemical product on >1 line (SPLIT_DUPLICATE_PRODUCT; was under-reporting RUP quantity). Reviewer-clean (rls/drift/compliance 0/0/0), PROOFOK 57/57 live PG. 4 P2s (uniform-override audit base, posting-boundary item-tamper, snapshot provenance schema, combined-list field context) DEFERRED to a fresh session per Mason. Still PARKED.
 
 Codex round 7 (2 P1 + 4 P2) on per-line split-billing: fixed the 2 P1s — review-card readback now filters to active invoice-group members (excludes round-6-detached terminal children), and the RPC rejects the same chemical product on >1 line (SPLIT_DUPLICATE_PRODUCT; was under-reporting RUP quantity). Reviewer-clean (rls/drift/compliance 0/0/0), PROOFOK 57/57 live PG. 4 P2s (uniform-override audit base, posting-boundary item-tamper, snapshot provenance schema, combined-list field context) DEFERRED to a fresh session per Mason. Still PARKED.
