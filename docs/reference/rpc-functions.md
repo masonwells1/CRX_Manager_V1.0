@@ -43,7 +43,7 @@ browser must not duplicate those audit events.
 - `complete_delivery(...)` requires an active profile, authorizes and checks committed replay, then preflights the effective Chicago completion date before any new side effects. It aggregates repeated product lines before mutation; a collective shortage remains WARN-NOT-BLOCK but every affected delivered ledger row is born review-marked and the warning is cached for exact replay. `void_delivery(...)` relies on the active-aware admin helper.
 - `save_purchase_order(...)` is the browser-facing PO create/edit path, while `submit_purchase_order(...)` performs a status-only draft submission without resaving a possibly stale vendor, note, quantity, or cost snapshot. For bulk imports, the browser sends only an opt-in marker; PostgreSQL alone canonicalizes vendor + vendor reference and derives the durable SHA-256 document claim, so browser/PostgreSQL Unicode folding can never reject or alias a legitimate import. New PO numbers are allocated under the database advisory lock inside the same transaction that inserts the PO; the browser sends no pre-reserved number and consumes the stored number returned by first success or replay. An existing-line edit that omits unchanged cost fields preserves the stored generated integer-cent cost in both line and header calculations. Any received line's product, ordered quantity, unit, and cost are immutable until receiving is reversed. Direct authenticated PO, PO-line, receiving-record, vendor-bill/payment, and prepay table writes are revoked.
 - `save_invoice(...)` permits an orderless invoice only when it is an explicit `misc_charge` starting in draft; chemical sales still require an order or blend ticket. Its public wrapper authorizes an active admin or the active sales rep assigned to the target customer before replay lookup.
-- `get_customer_statement(...)` authorizes an active admin or the active sales rep assigned to the requested customer, then includes non-reversed write-offs on their Chicago business date; `get_ap_dashboard_summary(...)` excludes voided vendor payments; finance-charge preview/generation reject future business dates.
+- `get_customer_statement(...)` authorizes an active admin or the active sales rep assigned to the requested customer, includes non-reversed write-offs on their Chicago business date, carries pre-period activity as an opening balance, and uses a stable per-transaction running order; `get_ap_dashboard_summary(...)` excludes voided vendor payments; finance-charge preview/generation reject future business dates.
 - `create_prepay_check_splits(p_customer_id, p_reference_number, p_splits, p_performed_by, p_idempotency_key, p_expected_total_cents DEFAULT NULL)` replaces the old five-argument identity with a single backward-compatible identity. Stale clients may omit the trailing total; current clients send it and the RPC rejects any penny mismatch. The vetted active-admin `batch_apply_prepayments(...)` manual-allocation workspace is unchanged; only the separate automatic apply-remaining/apply-all paths stay disabled.
 - `get_inventory_position()` clamps each PO line's remaining amount at zero and nets delivery-specific reversals on the original delivery date; order-level void reversals are paired back to the original order/product instead of their later ledger timestamp.
 
@@ -203,7 +203,7 @@ Migrations `20260714220000` through `20260714224000` preserve existing public si
 
 ## AR & Statements
 - `get_ar_aging()` — AR aging report with current/30/60/90+ day buckets
-- `get_customer_statement()` — customer statement with invoice/payment history; the live `20260716200659` wrapper requires an active admin or the active sales rep assigned to that customer before delegating to the directly non-executable statement implementation.
+- `get_customer_statement()` — customer statement with invoice/payment/write-off history; the live `20260716200659` wrapper requires an active admin or the active sales rep assigned to that customer before delegating to the directly non-executable implementation. Migration `20260720173059_fix_statement_opening_balance` (applied live under server-assigned ledger version `20260720185135`) adds opening-balance carry-forward and deterministic same-day running order without changing the public signature.
 - `get_detailed_statement_data()` — detailed statement data for PDF generation. Includes both 'posted' and 'overdue' invoices. Aging buckets: current(0-30), 31-60, 61-90, 91-120, over-120 (non-overlapping).
 - `generate_batch_statements()` — generate batch PDF statements for multiple customers
 - `get_season_comparison()` — compare two seasons side-by-side
@@ -414,6 +414,21 @@ These are NOT called directly from the frontend. They power triggers, guards, an
 
 ### Global Search
 - `global_search(p_query text, p_limit int DEFAULT 5)` → TABLE(entity_type text, id uuid, primary_text text, secondary_text text) — Searches customers, orders, invoices, deliveries, products with ILIKE. Used by Command Palette (Ctrl+K).
+
+### Supplier Pricing Phase 1b (database LIVE; frontend shipped with PR #179)
+
+- `get_supplier_quote_sheet(vendor_id)` — returns the confirmed reusable supplier links and last approved price used to build the protected manual-entry `.xlsx` quote sheet.
+- `get_supplier_market_evidence(product_ids)` — latest per-link supplier observations, package quote plus normalized inventory-unit cost, and a best supplier only among comparable evidence.
+- `get_supplier_pricing_workspace(product_id, vendor_id)` — admin-only workspace read model for vendors, products, links, staged imports, aliases, and comparison evidence.
+- `get_supplier_price_import(import_id)` — staged import plus row-level validation/review state.
+- `get_product_price_history(product_id)` — supplier observations, selected-cost history, and actual PO facts; legacy PO vendor names resolve only through approved `legacy_vendor_resolution` rows.
+- `upsert_product_supplier_link(...)` — admin-only, actor-bound/idempotent link confirmation with directional conversion; once approved observations reference a link, its product/package/conversion identity is immutable.
+- `stage_supplier_price_import(...)` — admin-only, actor-bound/idempotent manual quote staging. Parses exact dollar strings to bigint cents inside the RPC; formulas and mismatched/unconfirmed links are ineligible.
+- `approve_supplier_price_import(...)` — admin-only, actor-bound/idempotent review gate that appends selected observations and changes zero sell prices.
+- `stage_vendor_alias(...)` / `review_vendor_alias(...)` — admin-only, actor-bound/idempotent vendor alias review flow.
+- `correct_supplier_price_observation(...)` — admin-only, actor-bound/idempotent append-only correction: supersedes a prior observation with a replacement rather than mutating it.
+
+All eleven functions are live from `20260718225511_supplier_price_evidence_phase1b.sql` (ledger version `20260718225511`, submitted name `20260718230000_supplier_price_evidence_phase1b`). Post-apply catalog verification confirmed one expected overload each, fixed `search_path = public, pg_temp`, anonymous execution denied, and authenticated execution granted. Migration `20260720203000_restrict_supplier_pricing_to_admin.sql` tightens all five reader RPCs and the evidence-table/storage SELECT policies from admin-or-sales to **admin-only** (`ADMIN_REQUIRED`), per Mason's 2026-07-20 decision that supplier cost data follows the standing admin-only cost contract.
 
 ### Custom Application Workflow
 - `create_job_from_quote_section(p_quote_id, p_section_id, p_performed_by, p_idempotency_key)` -> jsonb {job_id} -- Creates scheduled job from planned quote section with pre-filled chemicals and fields

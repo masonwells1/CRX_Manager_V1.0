@@ -272,6 +272,7 @@ const UNCOVERED_WITH_REASON: Record<string, string> = {
   Returns: 'requires populated order and inventory fixtures',
   SalesReports: 'not yet verified with the universal empty-data fixture',
   SettingsPage: 'not yet verified with the universal empty-data fixture',
+  SupplierPricing: 'covered by dedicated supplier-pricing fixtures while its database migration remains parked',
   TeamBoard: 'not yet verified with the universal empty-data fixture',
   ToShip: 'not yet verified with the universal empty-data fixture',
   VehicleDetail: 'requires a populated vehicle fixture',
@@ -305,7 +306,7 @@ describe('pages render-smoke (P4 — every page must mount without crashing)', (
     expect(dispositioned, 'new/deleted pages must update the smoke inventory').toEqual(discovered);
     expect(Object.values(UNCOVERED_WITH_REASON).every((reason) => reason.trim().length >= 20)).toBe(true);
     // Ratchet: adding another skip is a deliberate red change, not a silent expansion.
-    expect(Object.keys(UNCOVERED_WITH_REASON)).toHaveLength(44);
+    expect(Object.keys(UNCOVERED_WITH_REASON)).toHaveLength(45);
   });
 
   for (const [name, loader] of pageEntries) {

@@ -5,11 +5,10 @@
 -- THE CHAIN (real producers, not isolated probes — the smoke-specs HARD RULE):
 --   fixture customer + order
 --     -> invoice A (posted, $500.00, no payment yet)
---     -> invoice B (order-linked) PAID via record_invoice_payment $300.00
---                    (the LEGACY payments-table path; payment backdated d-3)
---     -> invoice C (NO order — the transfer_job_to_invoice shape) PAID via
---                    record_invoice_payment $50.00 -> a NULL-order_id
---                    payments row (blind spot 4; backdated d-1)
+--     -> invoice B + historical order-linked payments-table row $300.00
+--     -> invoice C + historical NULL-order payments-table row $50.00
+--        (record_invoice_payment is retired; these direct fixtures preserve
+--         regression coverage for existing legacy ledger rows)
 --     -> allocate_payment $250.00: $200.00 allocated to invoice A +
 --                    $50.00 overpayment -> prepay credit (the ALLOCATION
 --                    path, allocation_sets only — blind spot 1; dated d-2)
@@ -53,8 +52,7 @@
 -- DRY-VALIDATION (the 42703 discipline): every reference below was validated
 -- against the LIVE catalog 2026-06-10 (pg_get_functiondef + information_schema
 -- + pg_constraint + pg_trigger). 126 refs total:
---  * 13 functions: get_customer_statement(uuid,date,date),
---    record_invoice_payment(uuid,bigint,text,text,text,text),
+--  * functions: get_customer_statement(uuid,date,date),
 --    allocate_payment(uuid,bigint,text,text,text,date,text,jsonb,uuid,text),
 --    void_payment, update_allocation_set, transfer_job_to_invoice (path
 --    evidence), enforce_invoice_draft_on_insert (draft-only INSERT gate;
@@ -203,11 +201,20 @@ BEGIN
   UPDATE invoices SET status = 'posted' WHERE id = v_inv_c;
 
   -- --------------------------------------------------------------------
-  -- 2. (a) LEGACY path: record_invoice_payment fully pays invoice B
+  -- 2. (a) Historical LEGACY path. The old producer is intentionally retired;
+  --     create its persisted row shape directly and mirror the settled invoice.
   -- --------------------------------------------------------------------
-  v_pay_legacy := record_invoice_payment(v_inv_b, 30000, 'check',
-                    'SMK-CSB-LEGACY-' || v_suffix, '[SMOKE] legacy path',
-                    'smk-csb-' || v_suffix || '-legacy');
+  INSERT INTO payments (
+    order_id, customer_id, payment_date, amount, payment_method,
+    reference_number, notes, recorded_by
+  ) VALUES (
+    v_order_id, v_customer_id, v_d3, 300.00, 'check',
+    'SMK-CSB-LEGACY-' || v_suffix, '[SMOKE] historical legacy path', v_admin
+  ) RETURNING id INTO v_pay_legacy;
+  UPDATE invoices
+     SET paid_amount_cents = 30000,
+         status = 'paid'
+   WHERE id = v_inv_b;
 
   SELECT status, paid_amount_cents INTO v_status, v_cents FROM invoices WHERE id = v_inv_b;
   IF v_status <> 'paid' OR v_cents <> 30000 THEN
@@ -221,12 +228,19 @@ BEGIN
   UPDATE payments SET payment_date = v_d3 WHERE id = v_pay_legacy;
 
   -- --------------------------------------------------------------------
-  -- 3. (a2) NULL-order path: record_invoice_payment fully pays invoice C —
-  --     payments.order_id IS NULL (blind spot 4)
+  -- 3. (a2) Historical NULL-order payment row (blind spot 4).
   -- --------------------------------------------------------------------
-  v_pay_noord := record_invoice_payment(v_inv_c, 5000, 'ach',
-                   'SMK-CSB-NOORD-' || v_suffix, '[SMOKE] null-order path',
-                   'smk-csb-' || v_suffix || '-noord');
+  INSERT INTO payments (
+    order_id, customer_id, payment_date, amount, payment_method,
+    reference_number, notes, recorded_by
+  ) VALUES (
+    NULL, v_customer_id, v_d1, 50.00, 'ach',
+    'SMK-CSB-NOORD-' || v_suffix, '[SMOKE] historical null-order path', v_admin
+  ) RETURNING id INTO v_pay_noord;
+  UPDATE invoices
+     SET paid_amount_cents = 5000,
+         status = 'paid'
+   WHERE id = v_inv_c;
 
   SELECT order_id INTO v_uuid FROM payments WHERE id = v_pay_noord;
   IF v_uuid IS NOT NULL THEN
@@ -418,7 +432,7 @@ BEGIN
   END IF;
 
   -- --------------------------------------------------------------------
-  -- 10. Auth probe: unknown sub must be rejected by the in-body gate
+  -- 10. Auth probe: unknown sub must be rejected by the public scope wrapper
   -- --------------------------------------------------------------------
   PERFORM set_config('request.jwt.claims',
     json_build_object('sub', gen_random_uuid(), 'role', 'authenticated')::text, true);
@@ -428,8 +442,8 @@ BEGIN
   EXCEPTION
     WHEN OTHERS THEN
       v_bool := true;
-      IF SQLERRM NOT LIKE 'Access denied%' THEN
-        RAISE EXCEPTION 'SMOKE_FAIL: expected Access denied for unknown actor, got: %', SQLERRM;
+      IF SQLERRM NOT LIKE '%INSUFFICIENT_ROLE%' THEN
+        RAISE EXCEPTION 'SMOKE_FAIL: expected INSUFFICIENT_ROLE for unknown actor, got: %', SQLERRM;
       END IF;
   END;
   IF NOT v_bool THEN

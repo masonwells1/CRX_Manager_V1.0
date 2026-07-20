@@ -48,6 +48,7 @@ export const PAGE_PERMISSIONS: PagePermission[] = [
   // Inventory & Buying
   { key: 'inventory', path: '/inventory', label: 'Inventory', category: 'Inventory & Buying', roles: ['admin', 'sales_rep'] },
   { key: 'products', path: '/products', label: 'Products', category: 'Inventory & Buying', roles: ['admin', 'sales_rep'] },
+  { key: 'supplier-pricing', path: '/supplier-pricing', label: 'Supplier Pricing', category: 'Inventory & Buying', roles: ['admin'] },
   { key: 'brand-vs-generic', path: '/brand-vs-generic', label: 'Brand vs Generic', category: 'Inventory & Buying', roles: ['admin', 'sales_rep'] },
   { key: 'purchase-orders', path: '/purchase-orders', label: 'Purchase Orders', category: 'Inventory & Buying', roles: ['admin', 'sales_rep'] },
   { key: 'receiving', path: '/receiving', label: 'Receiving', category: 'Inventory & Buying', roles: ['admin', 'sales_rep'] },

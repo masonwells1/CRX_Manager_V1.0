@@ -334,14 +334,20 @@
     {
       "predicate": "status-literals",
       "violation_key": "normalize_product_category()",
-      "justification": "FALSE POSITIVE (same-named column on another table): the regex sweep unions allowed literals by column name and now compares normalize_product_category() assignments for public.products.category against customer_facts_category_check on public.customer_facts.category. Live catalog verified 2026-07-16: public.products has no category CHECK, the trigger is attached to products, and its Herbicide/Foliar Fertilizer/Other outputs are existing valid product categories.",
-      "dated": "2026-07-16"
+      "justification": "Verified live 2026-07-17 false positive from the predicate's documented column-name-only approximation. This trigger assigns Products.category to Foliar Fertilizer, Herbicide, or Other; products.category is unconstrained free text. The only enum-shaped category CHECK is customer_facts_category_check on a different table, so none of these Product assignments can violate that CHECK.",
+      "dated": "2026-07-17"
     },
     {
       "predicate": "ungated-secdef-mutators",
       "violation_key": "log_failed_notification(p_notification_type text, p_entity_type text, p_entity_id uuid, p_error_message text, p_payload jsonb, p_idempotency_key text)",
       "justification": "Frontend/cron-called failed-notification logging helper (callers: Dashboard.tsx, notificationTriggers.ts). Insert-only into failed_notifications; no financial mutation, no privilege escalation, no PII read. Intentionally left ungated per 2026-06-09 round-3 disposition (a hard auth.uid() gate would break its cron/service_role callers). Verified live pg_get_functiondef 2026-06-10.",
       "dated": "2026-06-10"
+    },
+    {
+      "predicate": "ungated-secdef-mutators",
+      "violation_key": "save_invoice(p_invoice jsonb, p_items jsonb, p_idempotency_key text)",
+      "justification": "Verified live 2026-07-20 as a transitive-gate false positive. The authenticated SECURITY DEFINER wrapper delegates in-transaction to _save_invoice_split_provenance_impl_20260719, which binds auth.uid(), requires an active admin or sales_rep profile, enforces customer and salesman scope for sales reps, and only then calls the private scoped implementation. The delegated helper is not executable by authenticated, so callers cannot bypass these checks.",
+      "dated": "2026-07-20"
     },
     {
       "predicate": "actor-forgery",

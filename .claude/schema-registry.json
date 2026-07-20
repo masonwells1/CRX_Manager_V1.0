@@ -1,12 +1,12 @@
 {
   "_meta": {
     "registry_version": 2,
-    "generated_at": "2026-07-17",
+    "generated_at": "2026-07-20",
     "generated_from": "Supabase project rhyzpcqhnizqbxphqdkr — public schema introspection",
     "regenerate_with": "node scripts/regenerate-schema-registry.mjs --from-introspection <queries.json> (queries documented in the script header)",
     "purpose": "Single source of truth for hooks: generated columns, status enums, ALL parseable CHECK IN-lists, NOT NULL columns, full column lists, sequences, tables-with/without updated_at, applied-migration high water.",
     "note": "For a fresh refresh from the live DB, ask Claude Code: 'regenerate the schema-registry from Supabase' (/regen-schema-registry). skipped_constraints lists every CHECK the hooks can NOT validate — review it when touching those tables.",
-    "migrations_high_water": "20260717112906",
+    "migrations_high_water": "20260720185135",
     "applied_migration_names": [
       "20260207_gap_analysis_fixes.sql",
       "20260209050000_inventory_overhaul",
@@ -240,8 +240,39 @@
       "20260717013415_crm_customer_documents",
       "20260717112532_crm_customer_crops",
       "20260717112533_crm_prep_card_volume",
+      "20260717113000_log_customer_interaction_rpc",
       "20260717120000_supplier_pricing_phase1a",
       "20260717120500_supplier_pricing_zero_cost_guard",
+      "20260717123000_save_customer_ownership_enforcement",
+      "20260717170000_restore_legacy_pricing_version_compat",
+      "20260718124500_harden_prepay_and_payment_role_gate",
+      "20260718124517_harden_supplier_pricing_cent_scale_and_trigger",
+      "20260718131500_revert_quote_escape_hatch_for_cancelled_order",
+      "20260718132000_finance_charge_month_dedup",
+      "20260718133000_void_invoice_block_applied_payments",
+      "20260718134000_forbid_restore_cancelled_order",
+      "20260718134500_backfill_invoice_refuse_split_billing",
+      "20260718190000_supplier_pricing_phase1a_cutover",
+      "20260718193000_supplier_pricing_phase1a_data_integrity_rescan",
+      "20260718194000_backfill_invoice_guard_durable_split_allocations",
+      "20260718203000_retire_legacy_record_invoice_payment",
+      "20260718204000_void_invoice_ignore_reversed_allocations",
+      "20260718214000_preserve_voided_payment_allocation_history",
+      "20260718230000_supplier_price_evidence_phase1b",
+      "20260718230848_harden_quote_reopen_history_guards",
+      "20260718234500_reconcile_gauntlet_intermediate_live_windows",
+      "20260718235900_stage_supplier_vendor_aliases_phase1b",
+      "20260719013000_bind_revert_quote_status_idempotency",
+      "20260719040000_lock_backfill_split_allocation_rows",
+      "20260719064000_validate_quote_commission_splits",
+      "20260719093000_route_invoice_updates_through_governed_rpcs",
+      "20260719093500_reject_null_commission_percentages",
+      "20260719100000_trust_only_post_revoke_split_provenance",
+      "20260719100500_revert_quote_status_deadlock_retry",
+      "20260719101000_align_finance_charge_preview_month_dedup",
+      "20260719102000_allow_governed_split_terminal_lifecycle",
+      "20260720173059_fix_statement_opening_balance",
+      "20260720175946_protect_governed_split_edit_and_void_group",
       "a1_dispatched_list_recent_completed",
       "a1b_dispatched_to_me_completed_tail",
       "accounting_and_integrity_fixes",
@@ -857,6 +888,21 @@
       "expression": "GREATEST((COALESCE(total_acres, (0)::numeric) - COALESCE(applied_acres, (0)::numeric)), (0)::numeric)"
     },
     {
+      "table": "legacy_vendor_resolution",
+      "column": "normalized_text",
+      "expression": "normalize_vendor_alias(original_text)"
+    },
+    {
+      "table": "product_supplier_links",
+      "column": "conversion_factor",
+      "expression": "inventory_units_per_supplier_unit"
+    },
+    {
+      "table": "product_supplier_links",
+      "column": "is_reusable",
+      "expression": "((link_status = 'confirmed'::text) AND (NULLIF(btrim(supplier_sku), ''::text) IS NOT NULL) AND (NULLIF(btrim(supplier_uom), ''::text) IS NOT NULL) AND (NULLIF(btrim(supplier_pack_description), ''::text) IS NOT NULL))"
+    },
+    {
       "table": "purchase_order_items",
       "column": "unit_cost_cents",
       "expression": "(round((unit_cost * (100)::numeric)))::bigint"
@@ -865,6 +911,11 @@
       "table": "purchase_orders",
       "column": "total_cost_cents",
       "expression": "(round((total_cost * (100)::numeric)))::bigint"
+    },
+    {
+      "table": "vendor_aliases",
+      "column": "alias_normalized",
+      "expression": "normalize_vendor_alias(alias_raw)"
     },
     {
       "table": "vendor_bills",
@@ -963,6 +1014,11 @@
       "cancelled",
       "invoiced"
     ],
+    "legacy_vendor_resolution.review_status": [
+      "pending",
+      "approved",
+      "rejected"
+    ],
     "ocr_processing_queue.status": [
       "pending",
       "processing",
@@ -1010,6 +1066,16 @@
       "rejected",
       "needs_manual"
     ],
+    "product_supplier_links.comparison_status": [
+      "pending",
+      "comparable",
+      "not_comparable"
+    ],
+    "product_supplier_links.link_status": [
+      "pending",
+      "confirmed",
+      "rejected"
+    ],
     "purchase_orders.status": [
       "draft",
       "submitted",
@@ -1053,10 +1119,32 @@
       "warning",
       "non_compliant"
     ],
+    "supplier_price_import_rows.row_status": [
+      "new",
+      "changed",
+      "cannot_compare",
+      "invalid",
+      "unchanged",
+      "duplicate",
+      "approved",
+      "rejected"
+    ],
+    "supplier_price_imports.status": [
+      "draft",
+      "needs_review",
+      "approved",
+      "rejected",
+      "partially_approved"
+    ],
     "vehicles.status": [
       "active",
       "inactive",
       "maintenance"
+    ],
+    "vendor_aliases.review_status": [
+      "pending",
+      "approved",
+      "rejected"
     ],
     "vendor_bills.status": [
       "unpaid",
@@ -1135,6 +1223,10 @@
     "receiving_records",
     "return_items",
     "rup_sales_records",
+    "split_invoice_creation_claims",
+    "split_invoice_mutation_claims",
+    "split_invoice_provenance",
+    "supplier_price_observations",
     "team_note_attachments",
     "team_note_tags",
     "unit_conversions",
@@ -1758,6 +1850,25 @@
         "jobs_status_check"
       ]
     },
+    "legacy_vendor_resolution.review_status": {
+      "values": [
+        "pending",
+        "approved",
+        "rejected"
+      ],
+      "constraints": [
+        "legacy_vendor_resolution_review_status_check"
+      ]
+    },
+    "legacy_vendor_resolution.source_table": {
+      "values": [
+        "products",
+        "purchase_orders"
+      ],
+      "constraints": [
+        "legacy_vendor_resolution_source_table_check"
+      ]
+    },
     "ocr_processing_queue.status": {
       "values": [
         "pending",
@@ -1927,6 +2038,26 @@
         "product_label_drafts_status_check"
       ]
     },
+    "product_supplier_links.comparison_status": {
+      "values": [
+        "pending",
+        "comparable",
+        "not_comparable"
+      ],
+      "constraints": [
+        "product_supplier_links_comparison_status_check"
+      ]
+    },
+    "product_supplier_links.link_status": {
+      "values": [
+        "pending",
+        "confirmed",
+        "rejected"
+      ],
+      "constraints": [
+        "product_supplier_links_link_status_check"
+      ]
+    },
     "products.container_type": {
       "values": [
         "Jug",
@@ -1974,6 +2105,17 @@
       "constraints": [
         "profiles_role_check"
       ]
+    },
+    "purchase_order_items.cost_provenance": {
+      "values": [
+        "manual",
+        "supplier_observation",
+        "legacy"
+      ],
+      "constraints": [
+        "purchase_order_items_cost_provenance_check"
+      ],
+      "nullable": true
     },
     "purchase_orders.status": {
       "values": [
@@ -2105,6 +2247,78 @@
         "rup_sales_records_compliance_status_check"
       ]
     },
+    "split_invoice_mutation_claims.operation": {
+      "values": [
+        "save_invoice",
+        "delete_invoices",
+        "void_invoice",
+        "cancel_order"
+      ],
+      "constraints": [
+        "split_invoice_mutation_claims_operation_check"
+      ]
+    },
+    "supplier_price_import_rows.price_kind": {
+      "values": [
+        "list",
+        "quote",
+        "contract",
+        "promo",
+        "manual"
+      ],
+      "constraints": [
+        "supplier_price_import_rows_price_kind_check"
+      ],
+      "nullable": true
+    },
+    "supplier_price_import_rows.row_status": {
+      "values": [
+        "new",
+        "changed",
+        "cannot_compare",
+        "invalid",
+        "unchanged",
+        "duplicate",
+        "approved",
+        "rejected"
+      ],
+      "constraints": [
+        "supplier_price_import_rows_row_status_check"
+      ]
+    },
+    "supplier_price_imports.ingestion_method": {
+      "values": [
+        "quote_sheet",
+        "quick_quote"
+      ],
+      "constraints": [
+        "supplier_price_imports_ingestion_method_check"
+      ]
+    },
+    "supplier_price_imports.status": {
+      "values": [
+        "draft",
+        "needs_review",
+        "approved",
+        "rejected",
+        "partially_approved"
+      ],
+      "constraints": [
+        "supplier_price_imports_status_check"
+      ]
+    },
+    "supplier_price_observations.price_kind": {
+      "values": [
+        "list",
+        "quote",
+        "contract",
+        "promo",
+        "manual"
+      ],
+      "constraints": [
+        "supplier_price_observations_price_kind_check"
+      ]
+    },
     "team_notes.note_type": {
       "values": [
         "note",
@@ -2153,6 +2367,27 @@
       ],
       "constraints": [
         "vehicles_vehicle_type_check"
+      ]
+    },
+    "vendor_aliases.review_status": {
+      "values": [
+        "pending",
+        "approved",
+        "rejected"
+      ],
+      "constraints": [
+        "vendor_aliases_review_status_check"
+      ]
+    },
+    "vendor_aliases.source": {
+      "values": [
+        "legacy_product",
+        "legacy_po",
+        "import",
+        "manual"
+      ],
+      "constraints": [
+        "vendor_aliases_source_check"
       ]
     },
     "vendor_bills.status": {
@@ -2702,6 +2937,24 @@
       "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
     },
     {
+      "table": "legacy_vendor_resolution",
+      "constraint": "legacy_vendor_resolution_confidence_check",
+      "def": "CHECK (((confidence >= (0)::numeric) AND (confidence <= (1)::numeric)))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "legacy_vendor_resolution",
+      "constraint": "legacy_vendor_resolution_original_text_check",
+      "def": "CHECK ((btrim(original_text) <> ''::text))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "legacy_vendor_resolution",
+      "constraint": "legacy_vendor_resolution_review_shape",
+      "def": "CHECK ((((review_status = 'pending'::text) AND (vendor_id IS NULL) AND (reviewed_at IS NULL)) OR ((review_status = 'approved'::text) AND (vendor_id IS NOT NULL) AND (reviewed_at IS NOT NULL)) OR ((review_status = 'rejected'::text) AND (vendor_id IS NULL) AND (reviewed_at IS NOT NULL))))",
+      "reason": "conditional/multi-column — not a single-column IN-list; hooks do NOT validate this constraint"
+    },
+    {
       "table": "offline_action_receipts",
       "constraint": "offline_action_receipts_attempt_count_check",
       "def": "CHECK (((attempt_count >= 0) AND (attempt_count <= 50)))",
@@ -2924,6 +3177,48 @@
       "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
     },
     {
+      "table": "pricing_workbook_exports",
+      "constraint": "pricing_workbook_exports_row_limit",
+      "def": "CHECK ((row_count <= 5000))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "product_supplier_links",
+      "constraint": "product_supplier_links_comparable_shape",
+      "def": "CHECK (((comparison_status <> 'comparable'::text) OR ((link_status = 'confirmed'::text) AND (inventory_units_per_supplier_unit IS NOT NULL) AND (NULLIF(btrim(conversion_unit), ''::text) IS NOT NULL))))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "product_supplier_links",
+      "constraint": "product_supplier_links_confirmation_shape",
+      "def": "CHECK ((((link_status = 'confirmed'::text) AND (confirmed_by IS NOT NULL) AND (confirmed_at IS NOT NULL)) OR (link_status <> 'confirmed'::text)))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "product_supplier_links",
+      "constraint": "product_supplier_links_conversion_positive",
+      "def": "CHECK (((inventory_units_per_supplier_unit IS NULL) OR (inventory_units_per_supplier_unit > (0)::numeric)))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "product_supplier_links",
+      "constraint": "product_supplier_links_match_confidence_check",
+      "def": "CHECK (((match_confidence IS NULL) OR ((match_confidence >= (0)::numeric) AND (match_confidence <= (1)::numeric))))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "product_supplier_links",
+      "constraint": "product_supplier_links_supplier_product_name_check",
+      "def": "CHECK ((btrim(supplier_product_name) <> ''::text))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "product_supplier_links",
+      "constraint": "product_supplier_links_supplier_sku_nonblank",
+      "def": "CHECK (((supplier_sku IS NULL) OR (btrim(supplier_sku) <> ''::text)))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
       "table": "products",
       "constraint": "chk_product_cost",
       "def": "CHECK ((current_cost >= (0)::numeric))",
@@ -2973,6 +3268,12 @@
     },
     {
       "table": "purchase_order_items",
+      "constraint": "purchase_order_items_supplier_unit_snapshot_positive",
+      "def": "CHECK (((inventory_units_per_supplier_unit_snapshot IS NULL) OR (inventory_units_per_supplier_unit_snapshot > (0)::numeric)))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "purchase_order_items",
       "constraint": "purchase_order_items_unit_cost_whole_cents",
       "def": "CHECK (((unit_cost >= (0)::numeric) AND (unit_cost = ((unit_cost_cents)::numeric / 100.0))))",
       "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
@@ -3008,10 +3309,142 @@
       "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
     },
     {
+      "table": "split_invoice_provenance",
+      "constraint": "split_invoice_provenance_content_claim_check",
+      "def": "CHECK ((jsonb_typeof(content_claim) = 'object'::text))",
+      "reason": "unparseable — hooks do NOT validate this constraint"
+    },
+    {
+      "table": "split_invoice_provenance",
+      "constraint": "split_invoice_provenance_contract_version_check",
+      "def": "CHECK ((contract_version = 'split_invoice_provenance_v1'::text))",
+      "reason": "unparseable — hooks do NOT validate this constraint"
+    },
+    {
+      "table": "split_invoice_provenance",
+      "constraint": "split_invoice_provenance_total_amount_cents_check",
+      "def": "CHECK ((total_amount_cents >= 0))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "supplier_price_import_rows",
+      "constraint": "supplier_price_import_rows_approved_shape",
+      "def": "CHECK (((row_status <> 'approved'::text) OR ((observation_id IS NOT NULL) AND (reviewed_by IS NOT NULL) AND (reviewed_at IS NOT NULL))))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "supplier_price_import_rows",
+      "constraint": "supplier_price_import_rows_cost_cents_check",
+      "def": "CHECK (((cost_cents IS NULL) OR (cost_cents > 0)))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "supplier_price_import_rows",
+      "constraint": "supplier_price_import_rows_effective_range",
+      "def": "CHECK (((effective_to IS NULL) OR (effective_from IS NULL) OR (effective_to >= effective_from)))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "supplier_price_import_rows",
+      "constraint": "supplier_price_import_rows_package_quantity_check",
+      "def": "CHECK (((package_quantity IS NULL) OR (package_quantity > (0)::numeric)))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "supplier_price_import_rows",
+      "constraint": "supplier_price_import_rows_row_number_check",
+      "def": "CHECK ((row_number > 0))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "supplier_price_imports",
+      "constraint": "supplier_price_imports_approved_observation_count_check",
+      "def": "CHECK ((approved_observation_count >= 0))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "supplier_price_imports",
+      "constraint": "supplier_price_imports_eligible_row_count_check",
+      "def": "CHECK ((eligible_row_count >= 0))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "supplier_price_imports",
+      "constraint": "supplier_price_imports_format_version_check",
+      "def": "CHECK ((btrim(format_version) <> ''::text))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "supplier_price_imports",
+      "constraint": "supplier_price_imports_review_shape",
+      "def": "CHECK ((((status = ANY (ARRAY['draft'::text, 'needs_review'::text])) AND (approved_at IS NULL) AND (rejected_at IS NULL)) OR ((status = ANY (ARRAY['approved'::text, 'partially_approved'::text])) AND (approved_by IS NOT NULL) AND (approved_at IS NOT NULL)) OR ((status = 'rejected'::text) AND (rejected_by IS NOT NULL) AND (rejected_at IS NOT NULL))))",
+      "reason": "conditional/multi-column — not a single-column IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "supplier_price_imports",
+      "constraint": "supplier_price_imports_row_count_check",
+      "def": "CHECK ((row_count >= 0))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "supplier_price_imports",
+      "constraint": "supplier_price_imports_source_document_shape",
+      "def": "CHECK (((source_document_path IS NULL) OR ((NULLIF(btrim(source_document_name), ''::text) IS NOT NULL) AND (source_document_mime = 'application/pdf'::text))))",
+      "reason": "conditional/multi-column — not a single-column IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "supplier_price_observations",
+      "constraint": "supplier_price_observations_cost_cents_check",
+      "def": "CHECK ((cost_cents > 0))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "supplier_price_observations",
+      "constraint": "supplier_price_observations_effective_range",
+      "def": "CHECK (((effective_to IS NULL) OR (effective_to >= effective_from)))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "supplier_price_observations",
+      "constraint": "supplier_price_observations_not_self_superseding",
+      "def": "CHECK (((supersedes_observation_id IS NULL) OR (supersedes_observation_id <> id)))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "supplier_price_observations",
+      "constraint": "supplier_price_observations_package_quantity_check",
+      "def": "CHECK ((package_quantity > (0)::numeric))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "supplier_price_observations",
+      "constraint": "supplier_price_observations_price_unit_check",
+      "def": "CHECK ((btrim(price_unit) <> ''::text))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
       "table": "user_list_settings",
       "constraint": "user_list_settings_list_key_check",
       "def": "CHECK (((length(list_key) >= 1) AND (length(list_key) <= 64)))",
       "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "vendor_aliases",
+      "constraint": "vendor_aliases_alias_display_check",
+      "def": "CHECK ((btrim(alias_display) <> ''::text))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "vendor_aliases",
+      "constraint": "vendor_aliases_alias_raw_check",
+      "def": "CHECK ((btrim(alias_raw) <> ''::text))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "vendor_aliases",
+      "constraint": "vendor_aliases_review_shape",
+      "def": "CHECK ((((review_status = 'pending'::text) AND (vendor_id IS NULL) AND (reviewed_at IS NULL)) OR ((review_status = 'approved'::text) AND (vendor_id IS NOT NULL) AND (reviewed_at IS NOT NULL)) OR ((review_status = 'rejected'::text) AND (vendor_id IS NULL) AND (reviewed_at IS NOT NULL))))",
+      "reason": "conditional/multi-column — not a single-column IN-list; hooks do NOT validate this constraint"
     },
     {
       "table": "vendor_bills",
@@ -3308,12 +3741,12 @@
     "cost_history": {
       "no_default": [
         "product_id",
-        "changed_by"
+        "changed_by",
+        "change_source"
       ],
       "with_default": [
         "id",
-        "changed_at",
-        "change_source"
+        "changed_at"
       ]
     },
     "credit_memo_applications": {
@@ -4015,6 +4448,19 @@
         "applied_acres"
       ]
     },
+    "legacy_vendor_resolution": {
+      "no_default": [
+        "original_text",
+        "source_table"
+      ],
+      "with_default": [
+        "id",
+        "confidence",
+        "review_status",
+        "created_at",
+        "updated_at"
+      ]
+    },
     "note_activity_log": {
       "no_default": [
         "user_id",
@@ -4273,6 +4719,23 @@
         "source_note",
         "confidence",
         "status",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    "product_supplier_links": {
+      "no_default": [
+        "product_id",
+        "vendor_id",
+        "supplier_product_name",
+        "created_by"
+      ],
+      "with_default": [
+        "id",
+        "comparison_status",
+        "link_status",
+        "is_active",
+        "is_preferred",
         "created_at",
         "updated_at"
       ]
@@ -4574,6 +5037,98 @@
         "id"
       ]
     },
+    "split_invoice_creation_claims": {
+      "no_default": [
+        "transaction_id",
+        "order_id"
+      ],
+      "with_default": [
+        "claim_nonce",
+        "created_at"
+      ]
+    },
+    "split_invoice_mutation_claims": {
+      "no_default": [
+        "transaction_id",
+        "invoice_id",
+        "operation"
+      ],
+      "with_default": [
+        "created_at"
+      ]
+    },
+    "split_invoice_provenance": {
+      "no_default": [
+        "invoice_id",
+        "order_id",
+        "invoice_group_id",
+        "customer_id",
+        "invoice_type",
+        "season",
+        "total_amount_cents",
+        "content_claim",
+        "created_by"
+      ],
+      "with_default": [
+        "provenance_nonce",
+        "created_at",
+        "contract_version"
+      ]
+    },
+    "supplier_price_import_rows": {
+      "no_default": [
+        "import_id",
+        "row_number",
+        "submitted_row",
+        "row_status"
+      ],
+      "with_default": [
+        "id",
+        "validation_errors",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    "supplier_price_imports": {
+      "no_default": [
+        "vendor_id",
+        "document_date",
+        "ingestion_method",
+        "format_version",
+        "request_fingerprint",
+        "idempotency_key",
+        "created_by"
+      ],
+      "with_default": [
+        "id",
+        "status",
+        "row_count",
+        "eligible_row_count",
+        "approved_observation_count",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    "supplier_price_observations": {
+      "no_default": [
+        "product_id",
+        "vendor_id",
+        "product_supplier_link_id",
+        "import_id",
+        "import_row_id",
+        "price_kind",
+        "cost_cents",
+        "price_unit",
+        "effective_from",
+        "created_by"
+      ],
+      "with_default": [
+        "id",
+        "package_quantity",
+        "observed_at",
+        "created_at"
+      ]
+    },
     "team_note_attachments": {
       "no_default": [
         "note_id",
@@ -4651,6 +5206,19 @@
       "with_default": [
         "id",
         "status",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    "vendor_aliases": {
+      "no_default": [
+        "alias_raw",
+        "alias_display",
+        "source"
+      ],
+      "with_default": [
+        "id",
+        "review_status",
         "created_at",
         "updated_at"
       ]
@@ -5940,6 +6508,21 @@
       "loader_tank_capacity",
       "commission_split"
     ],
+    "legacy_vendor_resolution": [
+      "id",
+      "original_text",
+      "normalized_text",
+      "vendor_id",
+      "confidence",
+      "review_status",
+      "source_table",
+      "review_note",
+      "created_by",
+      "reviewed_by",
+      "reviewed_at",
+      "created_at",
+      "updated_at"
+    ],
     "note_activity_log": [
       "id",
       "note_id",
@@ -6232,6 +6815,30 @@
       "created_at",
       "updated_at"
     ],
+    "product_supplier_links": [
+      "id",
+      "product_id",
+      "vendor_id",
+      "supplier_sku",
+      "supplier_product_name",
+      "supplier_uom",
+      "supplier_pack_description",
+      "inventory_units_per_supplier_unit",
+      "conversion_factor",
+      "conversion_unit",
+      "comparison_status",
+      "comparison_note",
+      "link_status",
+      "is_reusable",
+      "is_active",
+      "is_preferred",
+      "match_confidence",
+      "confirmed_by",
+      "confirmed_at",
+      "created_by",
+      "created_at",
+      "updated_at"
+    ],
     "products": [
       "id",
       "product_name",
@@ -6308,7 +6915,12 @@
       "unit_size",
       "notes",
       "product_name",
-      "unit_cost_cents"
+      "unit_cost_cents",
+      "product_supplier_link_id",
+      "supplier_price_observation_id",
+      "inventory_units_per_supplier_unit_snapshot",
+      "cost_provenance",
+      "cost_snapshot_at"
     ],
     "purchase_orders": [
       "id",
@@ -6579,6 +7191,99 @@
       "voided_by",
       "void_reason"
     ],
+    "split_invoice_creation_claims": [
+      "transaction_id",
+      "order_id",
+      "claim_nonce",
+      "created_at"
+    ],
+    "split_invoice_mutation_claims": [
+      "transaction_id",
+      "invoice_id",
+      "operation",
+      "created_at"
+    ],
+    "split_invoice_provenance": [
+      "invoice_id",
+      "order_id",
+      "invoice_group_id",
+      "customer_id",
+      "invoice_type",
+      "season",
+      "total_amount_cents",
+      "content_claim",
+      "provenance_nonce",
+      "created_by",
+      "created_at",
+      "contract_version"
+    ],
+    "supplier_price_import_rows": [
+      "id",
+      "import_id",
+      "row_number",
+      "submitted_row",
+      "product_id",
+      "vendor_id",
+      "product_supplier_link_id",
+      "supplier_sku",
+      "supplier_product_name",
+      "cost_cents",
+      "price_unit",
+      "package_quantity",
+      "effective_from",
+      "effective_to",
+      "price_kind",
+      "row_status",
+      "validation_errors",
+      "reviewer_note",
+      "reviewed_by",
+      "reviewed_at",
+      "observation_id",
+      "created_at",
+      "updated_at"
+    ],
+    "supplier_price_imports": [
+      "id",
+      "vendor_id",
+      "document_date",
+      "ingestion_method",
+      "format_version",
+      "status",
+      "source_document_path",
+      "source_document_name",
+      "source_document_mime",
+      "request_fingerprint",
+      "idempotency_key",
+      "row_count",
+      "eligible_row_count",
+      "approved_observation_count",
+      "created_by",
+      "approved_by",
+      "approved_at",
+      "rejected_by",
+      "rejected_at",
+      "rejection_reason",
+      "created_at",
+      "updated_at"
+    ],
+    "supplier_price_observations": [
+      "id",
+      "product_id",
+      "vendor_id",
+      "product_supplier_link_id",
+      "import_id",
+      "import_row_id",
+      "price_kind",
+      "cost_cents",
+      "price_unit",
+      "package_quantity",
+      "effective_from",
+      "effective_to",
+      "observed_at",
+      "supersedes_observation_id",
+      "created_by",
+      "created_at"
+    ],
     "team_note_attachments": [
       "id",
       "note_id",
@@ -6652,6 +7357,22 @@
       "status",
       "notes",
       "created_by",
+      "created_at",
+      "updated_at"
+    ],
+    "vendor_aliases": [
+      "id",
+      "vendor_id",
+      "proposed_vendor_id",
+      "alias_raw",
+      "alias_normalized",
+      "alias_display",
+      "source",
+      "review_status",
+      "review_note",
+      "created_by",
+      "reviewed_by",
+      "reviewed_at",
       "created_at",
       "updated_at"
     ],
