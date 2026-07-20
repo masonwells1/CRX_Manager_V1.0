@@ -108,8 +108,13 @@
     },
     "get_customer_statement": {
       "chain": "smoke-customer_statement_blind_spots.sql",
-      "description": "Statement blind-spot fix (CHIP task_25d25699, migrations 20260611131549 + 20260716160000): legacy, NULL-order, and allocation-set payments each appear exactly once; paid/overdue invoices keep their charge lines; soft-deleted payments excluded; credit memo single-count; unapplied overpayment prepay NOT pre-counted (DEDUP RULE); the exact same allocate_payment key is replayed after the committed result and must return the cached result without a second allocation set or statement change (regression proof for the atomic idempotency-claim guard); running balance never negative; unknown-actor auth probe rejected by the in-body gate.",
-      "covers": ["get_customer_statement", "allocate_payment", "record_invoice_payment", "_guard_idempotency_key_insert"]
+      "description": "Statement blind-spot fix (CHIP task_25d25699, migrations 20260611131549 + 20260716160000): historical legacy/NULL-order rows and current allocation-set payments each appear exactly once; paid/overdue invoices keep their charge lines; soft-deleted payments excluded; credit memo single-count; unapplied overpayment prepay NOT pre-counted (DEDUP RULE); the exact same allocate_payment key is replayed after the committed result and must return the cached result without a second allocation set or statement change; running balance never negative; unknown-actor auth probe rejected.",
+      "covers": ["get_customer_statement", "allocate_payment", "_guard_idempotency_key_insert"]
+    },
+    "statement_opening_balance": {
+      "chain": "smoke-statement-opening-balance.sql",
+      "description": "Bounded customer statement regression: pre-period AR is carried as an opening-balance row, same-day invoices have stable UUID ordering with a ROWS running frame, the ending balance equals full as-of AR, and reversed date ranges fail closed.",
+      "covers": ["get_customer_statement", "_get_customer_statement_scoped_impl"]
     },
     "create_planned_holds": {
       "chain": "smoke-planned-holds-drawn-sync.sql",
