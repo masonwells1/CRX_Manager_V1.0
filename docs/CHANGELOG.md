@@ -2,6 +2,10 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-20 — Sales-rep authorization helper explicitly qualified
+
+- Re-emitted `is_sales_rep()` with the canonical `public, pg_temp` search path, an explicit `public.profiles` reference, and least-privilege EXECUTE grants for authenticated/service roles only. The delivery-signature rollback smoke now proves a forged temporary `profiles` table cannot grant sales-rep access.
+
 ## 2026-07-20 — Baseline post-migration selector regression proof
 
 - Replaced the source-text-only guard with a behavioral collision fixture proving that a captured migration name cannot hide a later timestamped migration that reuses the same suffix.

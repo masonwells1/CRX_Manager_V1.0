@@ -11,10 +11,43 @@ DECLARE
   v_deny_delivery_id uuid;
   v_stranger_id uuid;
   v_admin_id uuid;
+  v_forged_id uuid := gen_random_uuid();
   v_rows integer;
   v_inserted_id uuid;
   v_denied boolean := false;
+  v_sales_rep_source text;
 BEGIN
+  SELECT p.prosrc
+  INTO v_sales_rep_source
+  FROM pg_proc p
+  WHERE p.oid = 'public.is_sales_rep()'::regprocedure;
+
+  IF position('FROM public.profiles' IN v_sales_rep_source) = 0 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: is_sales_rep does not qualify public.profiles';
+  END IF;
+
+  IF has_function_privilege('anon', 'public.is_sales_rep()', 'EXECUTE')
+     OR NOT has_function_privilege('authenticated', 'public.is_sales_rep()', 'EXECUTE') THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: is_sales_rep EXECUTE grants are not least-privilege';
+  END IF;
+
+  -- A temp relation must never shadow the authorization helper's real profile
+  -- source. The vulnerable historical search_path made this forged row win.
+  CREATE TEMP TABLE profiles (
+    id uuid PRIMARY KEY,
+    role text,
+    is_active boolean
+  ) ON COMMIT DROP;
+  INSERT INTO profiles (id, role, is_active)
+  VALUES (v_forged_id, 'sales_rep', true);
+
+  PERFORM set_config('request.jwt.claim.sub', v_forged_id::text, true);
+  EXECUTE 'SET LOCAL ROLE authenticated';
+  IF public.is_sales_rep() THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: temp profiles table forged sales-rep authorization';
+  END IF;
+  EXECUTE 'RESET ROLE';
+
   SELECT count(*)
   INTO v_policy_count
   FROM pg_policies p
@@ -27,7 +60,7 @@ BEGIN
     )
     AND COALESCE(p.qual, p.with_check, '') LIKE '%signatures/%'
     AND COALESCE(p.qual, p.with_check, '') LIKE '%assigned_driver%'
-    AND COALESCE(p.qual, p.with_check, '') LIKE '%FROM profiles%'
+    AND COALESCE(p.qual, p.with_check, '') LIKE '%profiles%'
     AND COALESCE(p.qual, p.with_check, '') LIKE '%role%driver%'
     AND COALESCE(p.qual, p.with_check, '') LIKE '%is_active%true%'
     AND COALESCE(p.qual, p.with_check, '') LIKE '%auth.uid%';

@@ -9,7 +9,7 @@
     "delivery_signature_storage_access": {
       "chain": "smoke-delivery_signature_storage_access.sql",
       "covers": ["delivery_signature_storage_access"],
-      "description": "Delivery-signature Storage access is private and scoped to the delivery path and authorized actor."
+      "description": "Delivery-signature Storage access is private and scoped to the delivery path and authorized actor; the shared sales-rep helper is proven immune to a forged pg_temp profiles table."
     },
     "supplier_pricing_phase1b": {
       "chain": "smoke-supplier-pricing-phase1b.sql",
