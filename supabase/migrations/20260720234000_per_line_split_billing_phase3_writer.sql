@@ -66,6 +66,7 @@ DECLARE
   v_locked_status text;
   v_customer_count integer;
   v_billing_set_id uuid;
+  v_existing_billing_set_id uuid;
   v_billing_line_id uuid;
   v_invoice_item_id uuid;
   v_location_id uuid;
@@ -205,22 +206,23 @@ BEGIN
       SELECT id FROM public.invoices WHERE invoice_group_id = v_existing_group_id AND deleted_at IS NULL
     );
   ELSIF p_invoice_id IS NOT NULL THEN
+    SELECT billing_set.id INTO v_existing_billing_set_id
+      FROM public.field_app_billing_sets billing_set
+      JOIN public.field_app_billing_lines billing_line
+        ON billing_line.billing_set_id = billing_set.id
+      JOIN public.invoice_line_shares line_share
+        ON line_share.billing_line_id = billing_line.id
+      JOIN public.invoice_items item
+        ON item.id = line_share.invoice_item_id
+     WHERE billing_set.invoice_group_id IS NULL
+       AND item.invoice_id = p_invoice_id
+     LIMIT 1;
     DELETE FROM public.invoice_line_shares line_share
      USING public.invoice_items item
      WHERE line_share.invoice_item_id = item.id
        AND item.invoice_id = p_invoice_id;
-    DELETE FROM public.field_app_billing_sets billing_set
-     WHERE billing_set.invoice_group_id IS NULL
-       AND EXISTS (
-         SELECT 1
-           FROM public.field_app_billing_lines billing_line
-           JOIN public.invoice_line_shares line_share
-             ON line_share.billing_line_id = billing_line.id
-           JOIN public.invoice_items item
-             ON item.id = line_share.invoice_item_id
-          WHERE billing_line.billing_set_id = billing_set.id
-            AND item.invoice_id = p_invoice_id
-       );
+    DELETE FROM public.field_app_billing_sets
+     WHERE id = v_existing_billing_set_id;
     DELETE FROM public.field_app_location_shares WHERE location_id IN (
       SELECT id FROM public.field_app_locations WHERE invoice_id = p_invoice_id
     );

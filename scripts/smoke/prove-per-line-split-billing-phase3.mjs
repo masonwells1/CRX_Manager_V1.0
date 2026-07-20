@@ -395,7 +395,7 @@ function run() {
   }
 
   console.log('PROOF — Ran: network-isolated PostgreSQL 17 container; loaded checked-in preflight + Phase 1 + relational guards + Phase 2 calculator + Phase 3 writer verbatim; executed rollback-only Phase 3 SQL proof.');
-  console.log('PROOF — Saw: all Phase 2 calculator and relational-integrity cases remained green; the Phase 3 writer persisted the calculator-only 100/0 service plan as two real invoices/items/shares, rebuilt that existing grouped invoice without restricted-FK failure or duplicate shares, preserved a zero-dollar suppressed child, posted both group members together with an immutable zero snapshot, replayed an identical key without duplicate rows, rejected the same key with changed payload, rejected a header mismatch, blocked transfer_job_to_invoice while the feature was ON, and retained owner/definer/search-path/ACL plus cleanup-failure guards.');
+  console.log('PROOF — Saw: all Phase 2 calculator and relational-integrity cases remained green; the Phase 3 writer persisted the calculator-only 100/0 service plan as two real invoices/items/shares, rebuilt existing grouped and single-recipient invoices without restricted-FK failure, orphaned lines, or duplicate shares, preserved a zero-dollar suppressed child, posted both group members together with an immutable zero snapshot, replayed an identical key without duplicate rows, rejected the same key with changed payload, rejected a header mismatch, blocked transfer_job_to_invoice while the feature was ON, and retained owner/definer/search-path/ACL plus cleanup-failure guards.');
 }
 
 try {

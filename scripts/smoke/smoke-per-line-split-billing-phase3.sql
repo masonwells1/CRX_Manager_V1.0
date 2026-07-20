@@ -27,6 +27,7 @@ DECLARE
   v_job_service constant uuid := '40000000-0000-0000-0000-000000000004';
   v_job_convert constant uuid := '40000000-0000-0000-0000-000000000005';
   v_job_subset constant uuid := '40000000-0000-0000-0000-000000000006';
+  v_job_single constant uuid := '40000000-0000-0000-0000-000000000007';
   v_job_chem constant uuid := '41000000-0000-0000-0000-000000000001';
   v_job_chem_quote_a constant uuid := '41000000-0000-0000-0000-000000000002';
   v_job_chem_quote_b constant uuid := '41000000-0000-0000-0000-000000000003';
@@ -75,7 +76,8 @@ BEGIN
     (v_job_customer_supplied, v_a, v_rep_owner, 2026),
     (v_job_service, v_a, v_rep_owner, 2025),
     (v_job_convert, v_a, v_rep_owner, 2026),
-    (v_job_subset, v_a, v_rep_owner, 2026);
+    (v_job_subset, v_a, v_rep_owner, 2026),
+    (v_job_single, v_b, v_rep_owner, 2026);
   INSERT INTO public.invoices (
     id, customer_id, job_id, season, created_by, salesman_id
   ) VALUES (
@@ -96,7 +98,8 @@ BEGIN
     (v_job_service, v_field_50, 1, 1),
     (v_job_convert, v_field_convert, 100, 1),
     (v_job_subset, v_field_job, 1, 1),
-    (v_job_subset, v_field_outside, 1, 2);
+    (v_job_subset, v_field_outside, 1, 2),
+    (v_job_single, v_field_fallback, 1, 1);
 
   INSERT INTO public.field_billing_defaults
     (field_id, customer_id, split_pct, is_primary, price_override_cents)
@@ -198,7 +201,7 @@ BEGIN
     (v_service_other, 'Wrong Application', 99, 9, true);
   UPDATE public.jobs
      SET application_service_id = v_service
-   WHERE id = v_job_service;
+   WHERE id IN (v_job_service, v_job_single);
   INSERT INTO public.customer_application_rates
     (customer_id, application_service_id, rate_per_acre_cents, season)
   VALUES
@@ -2314,6 +2317,37 @@ BEGIN
     RAISE EXCEPTION 'P3_FAIL(writer_existing_group_rebuild): %', v_plan_again;
   END IF;
   v_result := v_plan_again;
+
+  -- A one-recipient billing set has no invoice_group_id, so its set identity
+  -- must be captured before the restrictive shares used to find it are removed.
+  v_plan := public.save_field_app_invoice_per_line(
+    NULL, jsonb_build_object('invoice_date', '2026-07-20'),
+    jsonb_build_array(jsonb_build_object(
+      'field_id', v_field_fallback, 'applied_acres', 1, 'total_acres', 1,
+      'map_number', 8, 'sort_order', 0
+    )), '[]'::jsonb, v_admin, v_service, v_job_single, '{}'::jsonb,
+    'phase3-writer-single-create'
+  );
+  v_plan_again := public.save_field_app_invoice_per_line(
+    (v_plan#>>'{invoice_ids,0}')::uuid,
+    jsonb_build_object('invoice_date', '2026-07-20'),
+    jsonb_build_array(jsonb_build_object(
+      'field_id', v_field_fallback, 'applied_acres', 1, 'total_acres', 1,
+      'map_number', 8, 'sort_order', 0
+    )), '[]'::jsonb, v_admin, v_service, v_job_single, '{}'::jsonb,
+    'phase3-writer-single-update'
+  );
+  IF jsonb_array_length(v_plan_again->'invoice_ids') <> 1
+     OR v_plan_again->>'invoice_group_id' IS NOT NULL
+     OR v_plan_again#>>'{invoice_ids,0}' IS DISTINCT FROM v_plan#>>'{invoice_ids,0}'
+     OR (SELECT count(*) FROM public.field_app_billing_sets billing_set
+          JOIN public.field_app_billing_lines line ON line.billing_set_id = billing_set.id
+          JOIN public.invoice_line_shares share ON share.billing_line_id = line.id
+          JOIN public.invoice_items item ON item.id = share.invoice_item_id
+         WHERE billing_set.invoice_group_id IS NULL
+           AND item.invoice_id = (v_plan_again#>>'{invoice_ids,0}')::uuid) <> 1 THEN
+    RAISE EXCEPTION 'P3_FAIL(writer_existing_single_rebuild): %', v_plan_again;
+  END IF;
 
   -- Stored graph validation must reject a header that no longer equals the
   -- residual-adjusted child lines. The exception subtransaction rolls it back.
