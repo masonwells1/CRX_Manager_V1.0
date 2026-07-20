@@ -60,6 +60,7 @@ DECLARE
   v_invoice_ids uuid[] := '{}';
   v_invoice_map jsonb := '{}'::jsonb;
   v_existing_group_id uuid;
+  v_existing_billing_set_id uuid;
   v_existing_billing_set_ids uuid[];
   v_group_id uuid;
   v_locked_group_id uuid;
@@ -168,6 +169,31 @@ BEGIN
     ) THEN
       RAISE EXCEPTION 'PER_LINE_INVOICE_NOT_EDITABLE';
     END IF;
+
+    IF v_existing_group_id IS NOT NULL THEN
+      SELECT id INTO v_existing_billing_set_id
+        FROM public.field_app_billing_sets
+       WHERE invoice_group_id = v_existing_group_id;
+    ELSE
+      SELECT DISTINCT billing_set.id INTO v_existing_billing_set_id
+        FROM public.field_app_billing_sets billing_set
+        JOIN public.field_app_billing_lines billing_line
+          ON billing_line.billing_set_id = billing_set.id
+        JOIN public.invoice_line_shares line_share
+          ON line_share.billing_line_id = billing_line.id
+        JOIN public.invoice_items item
+          ON item.id = line_share.invoice_item_id
+       WHERE billing_set.invoice_group_id IS NULL
+         AND item.invoice_id = p_invoice_id;
+    END IF;
+    IF v_existing_billing_set_id IS NULL THEN
+      RAISE EXCEPTION 'PER_LINE_EDIT_TARGET_NOT_OWNED';
+    END IF;
+    -- The relational guard proves inverse completeness, including that every
+    -- invoice item in the target invoice/group belongs to this billing graph.
+    -- Run it before deleting anything so an ordinary draft cannot be adopted
+    -- by erasing unrelated lines.
+    PERFORM public._assert_per_line_split_billing_integrity(v_existing_billing_set_id);
   END IF;
 
   v_plan := public._calculate_per_line_split_billing_plan(

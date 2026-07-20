@@ -2196,6 +2196,30 @@ BEGIN
   -- Phase 3 writer consumes the calculator plan and persists the real 100/0
   -- service vector, including a zero-dollar child invoice and item.
   PERFORM set_config('request.jwt.claim.sub', v_admin::text, true);
+  INSERT INTO public.invoice_items (
+    invoice_id, product_id, description, quantity, unit_price_cents,
+    extended_cents, cost_cents, unit_size
+  ) VALUES (
+    v_direct_invoice, v_product_tier, 'Unrelated ordinary draft line',
+    1, 100, 100, 50, 'unit'
+  );
+  v_err := NULL;
+  BEGIN
+    PERFORM public.save_field_app_invoice_per_line(
+      v_direct_invoice, jsonb_build_object('invoice_date', '2026-07-20'),
+      jsonb_build_array(jsonb_build_object(
+        'field_id', v_field_50, 'applied_acres', 1, 'total_acres', 1
+      )), '[]'::jsonb, v_admin, v_service, v_job_service, '{}'::jsonb,
+      'phase3-ordinary-draft-refused'
+    );
+  EXCEPTION WHEN OTHERS THEN v_err := SQLERRM; END;
+  IF COALESCE(v_err, '') NOT LIKE '%PER_LINE_EDIT_TARGET_NOT_OWNED%'
+     OR (SELECT count(*) FROM public.invoice_items
+          WHERE invoice_id = v_direct_invoice
+            AND description = 'Unrelated ordinary draft line') <> 1 THEN
+    RAISE EXCEPTION 'P3_FAIL(writer_ordinary_draft_unchanged): %', COALESCE(v_err, '<no error>');
+  END IF;
+
   v_result := public.save_field_app_invoice_per_line(
     NULL,
     jsonb_build_object('invoice_date', '2026-07-20'),
