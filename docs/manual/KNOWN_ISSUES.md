@@ -11,11 +11,12 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ### Supplier Pricing Phase 1a — repository/frontend/database rollout closed; legacy Edge cleanup remains
 
-The additive pricing RPC/bootstrap, zero-cost guard, Product-page governed editor,
-strict direct-write enforcement cutover, and post-cutover data-integrity rescan are
-now reconciled in the repository and live. The final Phase 1a database ledger is
-`20260718193000` (after enforcement `20260718190000`), and PR #169 merged the
-frontend/cutover source to `main`. This is no longer an open release blocker.
+The additive pricing RPC/bootstrap, zero-cost guard, legacy Product repeat-save
+compatibility repair, cent-scale correction, Product-page governed editor, strict
+direct-write enforcement cutover, post-cutover integrity rescan, and supplier-price
+evidence foundation are reconciled in the repository and live through
+`20260718230000_supplier_price_evidence_phase1b`. PR #169 merged the frontend and
+cutover source to `main`; this is no longer an open release blocker.
 
 The active production `process-document` Edge Function remains v18 and still
 contains legacy `price_list` / price-bearing `product_list` code, but the deployed
