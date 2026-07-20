@@ -4,6 +4,31 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-20 — Split-billing (parked): closed both open owner-decisions (per-child commissions, no job-less guard; logged in DECISION_LOG 8b03cb88); re-proved the Fable adversarial fixes PROOFOK 55/55 in live PG + reviewer-clean; declined Fable-as-Codex-gate substitution (kept parked for real Codex round 6 ~Jul 24); fixed CodeQL js/insecure-randomness high alert on PR #164 by switching nextUid() to crypto.randomUUID() (21943958). Feature still flag OFF / not applied / PR not merged.
+
+Split-billing (parked): closed both open owner-decisions (per-child commissions, no job-less guard; logged in DECISION_LOG 8b03cb88); re-proved the Fable adversarial fixes PROOFOK 55/55 in live PG + reviewer-clean; declined Fable-as-Codex-gate substitution (kept parked for real Codex round 6 ~Jul 24); fixed CodeQL js/insecure-randomness high alert on PR #164 by switching nextUid() to crypto.randomUUID() (21943958). Feature still flag OFF / not applied / PR not merged.
+
+- **Commits this session** (git log -15 (fallback — no author-matched commits in the last 12h)):
+  - `21943958 fix(split-billing): use crypto.randomUUID() for line-row keys — clears CodeQL js/insecure-randomness`
+  - `8b03cb88 docs(decision-log): split-billing v1 edge-case policy settled — per-child commissions, no job-less exclusivity guard`
+  - `5ad316de fix(split-billing): Fable adversarial round — 6 RPC fixes + editor race guard + reviewer MEDs [PARKED, flag OFF]`
+  - `bc91afc9 fix(split-billing): Codex round-5 (8) + drift BLOCKER B1 + member-drop bug [PARKED, flag OFF]`
+  - `5983b3eb fix(split-billing): Codex round-4 — commissions + posting-boundary + field/override guards [PARKED, flag OFF]`
+  - `0a2754fd fix(split-billing): Codex round-3 — season/freeze/job-link + repost + snapshot honesty [PARKED, flag OFF]`
+  - `795604f3 fix(split-billing): Codex round-2 remaining 6 — #A/#E/#G/#H/#L/#M [PARKED, flag OFF]`
+  - `eb942f86 fix(split-billing): Codex round-2 batch — flag enforcement, fee-COGS, input guards (7/13) [PARKED, flag OFF]`
+  - `3648e52a fix(split-billing): resolve all 8 P1 + 2 P2 Codex money/RLS findings [PARKED, flag OFF]`
+  - `70912a7c feat(split-billing): Option B — price each co-owner at their OWN tier (per-customer) + round-once penny guard [PARKED, flag OFF]`
+  - `5f2b5f74 feat(split-billing): R8 — resolve chemical price server-side (manual→quoted→tier) + unit conversion [PARKED, flag OFF]`
+  - `3c79ea3e feat(split-billing): Phase 4 save/post RPC + Phase 5 UI (editor, email-gate, lock) — proven, reviewed, PARKED (flag OFF, not applied)`
+  - `02aacafd docs(split-billing): grounded save/post RPC design + Phase-4 build handoff`
+  - `a24e8f8a feat(split-billing): penny-exact split calculator (pure fns, flag-off, parked)`
+  - `4346fb11 feat(split-billing): additive per-line split-billing schema (flag-off, parked)`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - `supabase/migrations/20260718010000_per_line_split_billing_schema.sql`
+  - `supabase/migrations/20260718020000_per_line_split_billing_calculator.sql`
+  - `supabase/migrations/20260718030000_per_line_split_billing_save_rpc.sql`
+
 ## 2026-07-19 — Per-line split-billing: FABLE adversarial round → 6 RPC fixes + editor race guard + 2 reviewer MEDs, all fixed + PROOFOK 55/55 (branch, still PARKED). Autonomous Fable-5 run.
 
 With Codex round 6 blocked on a usage limit (~Jul 24), a Fable adversarial review (4 lenses) found real bugs the 5 Codex rounds missed; this session proved and landed the fixes. Feature stays **flag OFF, migrations NOT applied, PR #164 NOT merged**.
