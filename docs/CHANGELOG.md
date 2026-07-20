@@ -4,6 +4,10 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-20 — Per-line split billing Phases 1–2 re-stamped and security chain reconciled (flag OFF, not applied)
+
+Production's read-only migration ledger advanced to `20260719092832`, so the four never-applied split-billing migrations were re-stamped in dependency order as preflight `20260720230000`, Phase 1 `20260720231000`, relational guards `20260720232000`, and Phase 2 calculator `20260720233000`. Phase 1 exact-HEAD review found that a sales rep could otherwise forge group-based read authority and that a pre-existing enabled feature flag could survive installation. Phase 1 now grants delegated reads only through server-created line-share membership on a non-deleted child invoice and aborts if the flag already exists with any value other than `false`; both defects have red→green disposable PostgreSQL proofs. Phase 2's preflight now reserves that new helper signature, and the combined four-migration proof verifies the enabled-flag rollback before installing cleanly. All migrations remain unapplied and the feature flag remains OFF/absent in production.
+
 ## 2026-07-18 — Per-line split billing Phase 2 calculator reconciled on repaired Phase 1 (flag OFF, not applied)
 
 Built the Phase 2 server-side calculator on branch `claude/split-billing-phase2-calculator`: one private `SECURITY DEFINER` resolver now owns job-snapshot → field-default → field-owner precedence, exact micro-percent vectors, per-person price overrides, signed 4dp quantity/acre allocation, and bigint-cent largest-remainder allocation. The public `preview_field_app_invoice_split` keeps the current four-argument implementation behind a private legacy name and delegates to it unchanged while `feature_per_line_split_billing=false`; the new six-argument preview reaches the calculator only when the server flag is ON. The locked save/post writer remains untouched for Phase 3.

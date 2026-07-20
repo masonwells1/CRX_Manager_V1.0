@@ -1,7 +1,7 @@
 -- Per-Line-Item Split Billing — Phase 2: one server-side calculator/resolver.
 --
 -- Spec: docs/plans/per-line-item-split-billing-spec-2026-07-17.md §4, §5, §6.3-6.4.
--- Depends on: 20260718210000_per_line_split_billing_phase1_schema.sql.
+-- Depends on: 20260720231000_per_line_split_billing_phase1_schema.sql.
 --
 -- This migration is intentionally preview-only. It creates the single private plan
 -- calculator that Phase 3's locked save writer will consume, and routes the existing

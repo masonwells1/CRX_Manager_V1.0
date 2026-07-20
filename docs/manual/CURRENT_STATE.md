@@ -1,6 +1,6 @@
 # CRX Manager — Current State
 
-**Last verified:** 2026-07-18 (supplier-pricing and targeted split-billing/live-schema refresh; operational counts remain as dated below)
+**Last verified:** 2026-07-20 (full document re-read against live migration high-water `20260719092832`; operational counts remain the 2026-07-18 snapshot below)
 **Update triggers:** refresh when a major feature ships or quarterly, whichever first.
 
 ## 1. Reality check
@@ -93,11 +93,8 @@ Grouped, one-liner summary of what is LIVE in production today (see
 ## 4. What is NOT live
 
 See `docs/manual/KNOWN_ISSUES.md` for the full parked/deferred/shelved list.
-The four headline items:
+The three headline items:
 
-- **Per-line-item custom split billing** — not live. The repaired Phase 1 schema migration and locally
-  proven Phase 2 calculator remain parked while exact reviews and Phases 3-4 are completed; the feature
-  flag and Phase 1 objects are absent from production. Existing aggregate field splits remain unchanged.
 - **Grower portal** — deferred (no customer-facing self-service portal yet).
 - **Earmark engine** (prepay reserved-pool billing) — shelved, needs a
   reserved-pool redesign before it can be revisited.

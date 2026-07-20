@@ -35,15 +35,34 @@ $$;
 -- 0. Feature flag (OFF). Mirrors the app_settings boolean-flag convention
 --    (src/lib/autoDraftSetting.ts): only the literal string 'true' is ON.
 -- ---------------------------------------------------------------------------
-INSERT INTO public.app_settings (setting_key, setting_value, description)
-VALUES (
-  'feature_per_line_split_billing',
-  'false',
-  'Per-line-item custom split billing on the field-application invoice path. OFF until the '
-  || 'Phase 2/3 calculator + save-post RPC ship and the baseline billing cycle is proven. '
-  || 'Server is authoritative; the flag only reveals the UI.'
-)
-ON CONFLICT (setting_key) DO NOTHING;
+DO $$
+DECLARE
+  v_effective_value text;
+BEGIN
+  -- The no-op UPDATE locks a concurrently inserted/existing row and returns the
+  -- value that will survive this statement. Never silently preserve an enabled
+  -- flag: this migration is only valid while the feature is OFF.
+  INSERT INTO public.app_settings AS existing (
+    setting_key, setting_value, description
+  ) VALUES (
+    'feature_per_line_split_billing',
+    'false',
+    'Per-line-item custom split billing on the field-application invoice path. OFF until the '
+    || 'Phase 2/3 calculator + save-post RPC ship and the baseline billing cycle is proven. '
+    || 'Server is authoritative; the flag only reveals the UI.'
+  )
+  ON CONFLICT (setting_key) DO UPDATE
+    SET setting_value = existing.setting_value
+  RETURNING setting_value INTO v_effective_value;
+
+  IF v_effective_value IS DISTINCT FROM 'false' THEN
+    RAISE EXCEPTION
+      'PER_LINE_SPLIT_BILLING_FLAG_MUST_BE_OFF: existing value is %',
+      v_effective_value
+      USING ERRCODE = 'object_not_in_prerequisite_state';
+  END IF;
+END;
+$$;
 
 -- ---------------------------------------------------------------------------
 -- 1. field_app_billing_sets — one durable parent per billing event.
@@ -564,47 +583,68 @@ ALTER TABLE public.field_app_billing_lines FORCE ROW LEVEL SECURITY;
 ALTER TABLE public.invoice_line_shares     FORCE ROW LEVEL SECURITY;
 ALTER TABLE public.invoice_line_share_post_snapshots FORCE ROW LEVEL SECURITY;
 
--- billing_sets: admins read all; sales reps read only sets they created or a set
--- whose child invoice is assigned to them. A global is_sales_rep() policy would
--- expose every customer's source quantities and prices to every rep.
+-- A billing set's invoice_group_id is presentation metadata, not an authority
+-- relation: existing invoice INSERT policy lets a sales rep choose that UUID.
+-- Resolve delegated read access only through server-created line-share membership
+-- and a live child invoice. The definer is required because the helper must inspect
+-- FORCE-RLS tables without creating recursive policy evaluation.
+DO $$
+BEGIN
+  IF to_regprocedure('public.can_read_field_app_billing_set(uuid)') IS NOT NULL THEN
+    RAISE EXCEPTION
+      'PER_LINE_SPLIT_BILLING_FUNCTION_DRIFT: can_read_field_app_billing_set(uuid) already exists'
+      USING ERRCODE = 'object_not_in_prerequisite_state';
+  END IF;
+END;
+$$;
+
+CREATE FUNCTION public.can_read_field_app_billing_set(p_billing_set_id uuid)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+  SELECT
+    auth.uid() IS NOT NULL
+    AND public.is_sales_rep()
+    AND EXISTS (
+      SELECT 1
+        FROM public.field_app_billing_sets bs
+       WHERE bs.id = p_billing_set_id
+         AND (
+           bs.created_by = auth.uid()
+           OR EXISTS (
+             SELECT 1
+               FROM public.field_app_billing_lines bl
+               JOIN public.invoice_line_shares s ON s.billing_line_id = bl.id
+               JOIN public.invoice_items ii ON ii.id = s.invoice_item_id
+               JOIN public.invoices i ON i.id = ii.invoice_id
+              WHERE bl.billing_set_id = bs.id
+                AND i.deleted_at IS NULL
+                AND (i.created_by = auth.uid() OR i.salesman_id = auth.uid())
+           )
+         )
+    );
+$$;
+
+REVOKE EXECUTE ON FUNCTION public.can_read_field_app_billing_set(uuid)
+  FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.can_read_field_app_billing_set(uuid)
+  TO authenticated, service_role;
+
+-- billing_sets: admins read all; sales reps read only server-bound membership.
 DROP POLICY IF EXISTS field_app_billing_sets_select ON public.field_app_billing_sets;
 CREATE POLICY field_app_billing_sets_select ON public.field_app_billing_sets
   FOR SELECT USING (
-    is_admin() OR (
-      is_sales_rep() AND (
-        created_by = (SELECT auth.uid())
-        OR EXISTS (
-          SELECT 1
-            FROM public.invoices i
-           WHERE i.invoice_group_id = field_app_billing_sets.invoice_group_id
-             AND ( i.created_by = (SELECT auth.uid())
-                OR i.salesman_id = (SELECT auth.uid()) )
-        )
-      )
-    )
+    is_admin() OR public.can_read_field_app_billing_set(id)
   );
 
--- billing_lines inherit the same owner/assigned-invoice scope through their set.
+-- billing_lines inherit the same non-forgeable membership scope through their set.
 DROP POLICY IF EXISTS field_app_billing_lines_select ON public.field_app_billing_lines;
 CREATE POLICY field_app_billing_lines_select ON public.field_app_billing_lines
   FOR SELECT USING (
-    is_admin() OR (
-      is_sales_rep() AND EXISTS (
-        SELECT 1
-          FROM public.field_app_billing_sets bs
-         WHERE bs.id = field_app_billing_lines.billing_set_id
-           AND (
-             bs.created_by = (SELECT auth.uid())
-             OR EXISTS (
-               SELECT 1
-                 FROM public.invoices i
-                WHERE i.invoice_group_id = bs.invoice_group_id
-                  AND ( i.created_by = (SELECT auth.uid())
-                     OR i.salesman_id = (SELECT auth.uid()) )
-             )
-           )
-      )
-    )
+    is_admin() OR public.can_read_field_app_billing_set(billing_set_id)
   );
 
 -- invoice_line_shares: SELECT scoped through invoice_items -> invoices (mirror invoice_items_select)
@@ -617,6 +657,7 @@ CREATE POLICY invoice_line_shares_select ON public.invoice_line_shares
           FROM public.invoice_items ii
           JOIN public.invoices i ON i.id = ii.invoice_id
          WHERE ii.id = invoice_line_shares.invoice_item_id
+           AND i.deleted_at IS NULL
            AND ( i.created_by = (SELECT auth.uid())
               OR i.salesman_id = (SELECT auth.uid()) )
       )
@@ -635,6 +676,7 @@ CREATE POLICY invoice_line_share_post_snapshots_select
         SELECT 1
           FROM public.invoices i
          WHERE i.id = invoice_line_share_post_snapshots.invoice_id
+           AND i.deleted_at IS NULL
            AND ( i.created_by = (SELECT auth.uid())
               OR i.salesman_id = (SELECT auth.uid()) )
       )

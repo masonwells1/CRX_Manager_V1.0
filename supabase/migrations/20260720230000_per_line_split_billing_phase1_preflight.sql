@@ -59,6 +59,7 @@ BEGIN
       ('public.trg_invoice_line_shares_frozen_when_posted()'),
       ('public.trg_invoice_items_shared_parent_frozen_when_posted()'),
       ('public.trg_invoices_send_disposition_server_only()'),
+      ('public.can_read_field_app_billing_set(uuid)'),
       ('public.trg_capture_invoice_line_share_post_snapshot()'),
       ('public._assert_per_line_split_billing_integrity(uuid)'),
       ('public.trg_field_app_billing_lines_frozen_when_posted()'),

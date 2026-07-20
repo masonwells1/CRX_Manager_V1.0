@@ -28,10 +28,10 @@ if (process.argv.length > 2) {
 const files = {
   setup: path.join(ROOT, 'scripts', 'smoke', 'setup-per-line-split-billing-phase2.sql'),
   legacyPreview: path.join(ROOT, 'supabase', 'migrations', '20260630180000_field_app_pricing_unit_fix.sql'),
-  preflight: path.join(ROOT, 'supabase', 'migrations', '20260718205500_per_line_split_billing_phase1_preflight.sql'),
-  phase1: path.join(ROOT, 'supabase', 'migrations', '20260718210000_per_line_split_billing_phase1_schema.sql'),
-  guards: path.join(ROOT, 'supabase', 'migrations', '20260718210500_per_line_split_billing_relational_guards.sql'),
-  phase2: path.join(ROOT, 'supabase', 'migrations', '20260718211000_per_line_split_billing_phase2_calculator.sql'),
+  preflight: path.join(ROOT, 'supabase', 'migrations', '20260720230000_per_line_split_billing_phase1_preflight.sql'),
+  phase1: path.join(ROOT, 'supabase', 'migrations', '20260720231000_per_line_split_billing_phase1_schema.sql'),
+  guards: path.join(ROOT, 'supabase', 'migrations', '20260720232000_per_line_split_billing_relational_guards.sql'),
+  phase2: path.join(ROOT, 'supabase', 'migrations', '20260720233000_per_line_split_billing_phase2_calculator.sql'),
   smoke: path.join(ROOT, 'scripts', 'smoke', 'smoke-per-line-split-billing-phase2.sql'),
 };
 
@@ -140,17 +140,17 @@ function run() {
 
   console.log('[phase2-proof] proving Phase 1 preflight rejects an unsafe function ownership collision');
   psql(`
-    CREATE FUNCTION public.trg_invoice_line_share_post_snapshots_immutable()
-    RETURNS trigger
-    LANGUAGE plpgsql
+    CREATE FUNCTION public.can_read_field_app_billing_set(uuid)
+    RETURNS boolean
+    LANGUAGE sql
     SECURITY INVOKER
-    AS $$ BEGIN RETURN NEW; END $$;
-    ALTER FUNCTION public.trg_invoice_line_share_post_snapshots_immutable()
+    AS $$ SELECT false $$;
+    ALTER FUNCTION public.can_read_field_app_billing_set(uuid)
       OWNER TO authenticated;
   `);
   const staleFunctionAttempt = psql(read('preflight'), { allowFailure: true });
   const staleFunctionOutput = `${staleFunctionAttempt.stdout || ''}${staleFunctionAttempt.stderr || ''}`;
-  psql('DROP FUNCTION public.trg_invoice_line_share_post_snapshots_immutable();');
+  psql('DROP FUNCTION public.can_read_field_app_billing_set(uuid);');
   if (
     staleFunctionAttempt.status === 0
     || !staleFunctionOutput.includes('PER_LINE_PHASE1_FUNCTION_DRIFT')
@@ -198,18 +198,42 @@ function run() {
   }
   psql('ALTER TABLE public.invoices DROP COLUMN send_disposition;');
 
-  console.log('[phase2-proof] loading preflight + Phase 1 migrations verbatim');
+  console.log('[phase2-proof] proving Phase 1 rejects a stale enabled flag');
   psql(read('preflight'));
   psql(`
     INSERT INTO public.app_settings (setting_key, setting_value, description)
     VALUES ('feature_per_line_split_billing', 'true', 'stale enabled proof fixture');
   `);
+  const phase1EnabledAttempt = psql(read('phase1'), { allowFailure: true });
+  const phase1EnabledOutput = `${phase1EnabledAttempt.stdout || ''}${phase1EnabledAttempt.stderr || ''}`;
+  if (
+    phase1EnabledAttempt.status === 0
+    || !phase1EnabledOutput.includes('PER_LINE_SPLIT_BILLING_FLAG_MUST_BE_OFF')
+  ) {
+    fail('Phase 1 did not fail closed on a stale enabled feature flag', phase1EnabledOutput.trim());
+  }
+  const preservedEnabledFlag = psql(`
+    SELECT setting_value
+      FROM public.app_settings
+     WHERE setting_key = 'feature_per_line_split_billing';
+  `).stdout.trim();
+  if (preservedEnabledFlag !== 'true') {
+    fail('Phase 1 enabled-flag rejection did not preserve the pre-existing setting', preservedEnabledFlag);
+  }
+  psql("DELETE FROM public.app_settings WHERE setting_key = 'feature_per_line_split_billing';");
+
+  console.log('[phase2-proof] loading Phase 1 migration verbatim with the flag absent');
   psql(read('phase1'));
 
   console.log('[phase2-proof] loading relational guard migration verbatim');
   psql(read('guards'));
 
   console.log('[phase2-proof] proving Phase 2 rejects a stale enabled flag');
+  psql(`
+    UPDATE public.app_settings
+       SET setting_value = 'true'
+     WHERE setting_key = 'feature_per_line_split_billing';
+  `);
   const enabledAttempt = psql(read('phase2'), { allowFailure: true });
   const enabledOutput = `${enabledAttempt.stdout || ''}${enabledAttempt.stderr || ''}`;
   if (enabledAttempt.status === 0 || !enabledOutput.includes('PER_LINE_PHASE2_REQUIRES_DISABLED_FLAG')) {
