@@ -3602,6 +3602,38 @@ export interface PreviewFieldAppSplitResult {
   grand_total_cents: number;
   customer_count: number;
   shares_detail: DeriveCustomerSharesResult;
+  billing_lines?: PerLineBillingPlanLine[];
+}
+
+export interface PerLineBillingPlanShare {
+  customer_id: string;
+  split_mode: 'field_default' | 'custom';
+  split_micro_pct: number;
+  base_unit_price_cents: number;
+  base_price_source: string;
+  price_mode: 'default' | 'override';
+  unit_price_cents: number;
+  amount_cents: number;
+}
+
+export interface PerLineBillingPlanLine {
+  line_key: string;
+  line_kind: 'chemical' | 'service' | 'flat_fee';
+  description: string;
+  shares: PerLineBillingPlanShare[];
+}
+
+export interface PerLineBillingOverride {
+  line_key: string;
+  split_mode?: 'custom';
+  split_override_reason?: string;
+  vector?: Array<{ customer_id: string; split_micro_pct: number }>;
+  price_overrides?: Array<{ customer_id: string; unit_price_cents: number; reason: string }>;
+}
+
+export interface PerLineBillingOptions {
+  lines: PerLineBillingOverride[];
+  flat_fees?: Array<{ line_key: string; description: string; source_amount_cents: number; sort_order: number }>;
 }
 
 export type SearchEntityType = 'customer' | 'order' | 'invoice' | 'delivery' | 'product';

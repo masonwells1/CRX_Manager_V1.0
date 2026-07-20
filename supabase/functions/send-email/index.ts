@@ -189,6 +189,40 @@ Deno.serve(async (req: Request) => {
       );
     }
 
+    // Invoice sends are gated again inside the server boundary. The browser also
+    // checks immediately before calling us for fast feedback, but that check can
+    // be bypassed or race with a status change. Never trust it as the authority.
+    if (email_type === "invoice" && (resource_type !== "invoice" || !resource_id)) {
+      return jsonResponse(
+        { error: "Invoice emails require resource_type='invoice' and resource_id" },
+        400,
+      );
+    }
+    if (resource_type === "invoice") {
+      const { data: invoiceRow, error: invoiceErr } = await adminClient
+        .from("invoices")
+        .select("id, customer_id, send_disposition")
+        .eq("id", resource_id)
+        .maybeSingle();
+      if (invoiceErr) {
+        return jsonResponse({ error: `Invoice send-status lookup failed: ${invoiceErr.message}` }, 500);
+      }
+      if (!invoiceRow) {
+        return jsonResponse({ error: "Invoice not found" }, 404);
+      }
+      if (invoiceRow.customer_id !== customer_id) {
+        return jsonResponse({ error: "Invoice customer does not match customer_id" }, 400);
+      }
+      if (invoiceRow.send_disposition !== "sendable") {
+        return jsonResponse(
+          { error: invoiceRow.send_disposition === "suppressed_zero_total"
+              ? "This $0 split invoice is suppressed and must not be emailed"
+              : "Invoice send status is unavailable" },
+          409,
+        );
+      }
+    }
+
     // 6. Driver per-resource auth (only relevant when role='driver')
     if (role === "driver") {
       if (resource_type !== "delivery" || !resource_id) {

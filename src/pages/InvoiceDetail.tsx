@@ -11,6 +11,7 @@ import Modal from '../components/ui/Modal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, sanitizeError, assertRpcResult } from '../lib/db';
+import { assertInvoiceSendable } from '../lib/invoiceSendDisposition';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import { parseDollarsToCents } from '../lib/parseCents';
@@ -1078,6 +1079,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
           <p style="margin:8px 0 0;color:#6b7280;font-size:13px;">If you have questions about this invoice, please contact us.</p>
         `);
 
+        await assertInvoiceSendable(id!);
         const result = await sendEmail({
           to: cust.email!,
           subject: `Invoice ${invoice.invoice_number || ''} from Crop RX Solutions`,

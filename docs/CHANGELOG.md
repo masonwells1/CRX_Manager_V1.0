@@ -4,6 +4,12 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-20 — Per-line split billing Phase 4 UI and server mail gates built (flag OFF, not deployed)
+
+Added the server-owned feature-flag read and a collapsed advanced editor that shows every recipient's effective price and accepts complete per-line micro-percent vectors plus audited per-person price overrides. The enabled path supplies job context and options to the six-argument preview and Phase 3 writer; the disabled path retains the legacy RPC calls unchanged. Grower-share Mode A, an unreadable Mode A lookup, an unknown feature flag, and an unreadable persisted override set all fail closed before preview or save. Reopened drafts restore their stored custom vectors, reasons, prices, and flat-fee inputs so a re-save cannot silently revert audited choices.
+
+All six invoice-adjacent send points now re-read `invoices.send_disposition` immediately before sending, and the prepared `send-email` edge function independently requires an invoice resource, validates its customer, and refuses anything except `sendable` inside the server boundary. The edge change is committed only for later owner-controlled deployment. Contract tests pin stored-cent PDF/statement/customer-summary rendering and prohibit quantity-times-price recomputation. Production remains unchanged: no migration was applied, the feature flag remains OFF/absent, and the edge function was not deployed.
+
 ## 2026-07-20 — Per-line split billing Phase 3 atomic writer built (flag OFF, not applied)
 
 Built the explicit `save_field_app_invoice_per_line` path on top of the reviewed Phase 2 calculator. The SECURITY DEFINER writer requires payload-bound idempotency, consumes only the server calculator plan, locks and replaces editable invoice groups atomically, persists residual-adjusted child cents and allocated COGS, creates complete zero-inclusive line-share vectors, records invoice creation in the financial audit ledger, and runs the full relational assertion before commit. A guarded `transfer_job_to_invoice` wrapper delegates to the exact verified legacy body while the flag is OFF and refuses the divergent transfer path when the per-line engine is enabled.

@@ -2,6 +2,8 @@
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
+> **Per-line split billing Phase 4 (2026-07-20, branch only):** no new database migration is introduced. The UI remains behind the server-owned `feature_per_line_split_billing=false` row created by the unapplied Phase 1 chain, and the prepared `send-email` server guard is not deployed. Live migration state and data are unchanged; Phase 1–3 migrations remain draft-only pending Mason's ordered promotion decision.
+
 | # | Migration timestamp | Purpose |
 |---:|---|---|
 | 750 | 20260718193000 | **Supplier Pricing Phase 1a post-cutover data-integrity rescan (applied 2026-07-18).** Scan-only forward migration: SHARE-locks `public.products` and fails closed (naming offending product ids) if any `current_cost`/`tier1/2/3_price` is NaN/Infinity, negative, or not cent-scale. Closes the adversarial-review gap that the enforcement cutover locked future writes but never re-validated existing rows. **Live `list_migrations` preflight 2026-07-18: current high-water is `20260718190000` (the applied cutover), so this `20260718193000` filename is strictly greater.** Live read-only scan found ZERO invalid rows; no schema/grant/policy/data change. Applied through the migration-review + apply-guard proof gate. |
