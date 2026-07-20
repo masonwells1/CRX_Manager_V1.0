@@ -60,6 +60,7 @@ DECLARE
   v_invoice_ids uuid[] := '{}';
   v_invoice_map jsonb := '{}'::jsonb;
   v_existing_group_id uuid;
+  v_existing_billing_set_ids uuid[];
   v_group_id uuid;
   v_locked_group_id uuid;
   v_locked_status text;
@@ -183,6 +184,14 @@ BEGIN
     THEN COALESCE(v_existing_group_id, gen_random_uuid()) ELSE NULL END;
 
   IF v_existing_group_id IS NOT NULL THEN
+    DELETE FROM public.invoice_line_shares line_share
+     WHERE line_share.billing_line_id IN (
+       SELECT billing_line.id
+         FROM public.field_app_billing_lines billing_line
+         JOIN public.field_app_billing_sets billing_set
+           ON billing_set.id = billing_line.billing_set_id
+        WHERE billing_set.invoice_group_id = v_existing_group_id
+     );
     DELETE FROM public.field_app_billing_sets WHERE invoice_group_id = v_existing_group_id;
     DELETE FROM public.field_app_location_shares WHERE location_id IN (
       SELECT id FROM public.field_app_locations WHERE invoice_group_id = v_existing_group_id
@@ -195,18 +204,29 @@ BEGIN
       SELECT id FROM public.invoices WHERE invoice_group_id = v_existing_group_id AND deleted_at IS NULL
     );
   ELSIF p_invoice_id IS NOT NULL THEN
-    DELETE FROM public.field_app_billing_sets billing_set
+    SELECT array_agg(DISTINCT billing_set.id ORDER BY billing_set.id)
+      INTO v_existing_billing_set_ids
+      FROM public.field_app_billing_sets billing_set
+      JOIN public.field_app_billing_lines billing_line
+        ON billing_line.billing_set_id = billing_set.id
+      JOIN public.invoice_line_shares line_share
+        ON line_share.billing_line_id = billing_line.id
+      JOIN public.invoice_items item
+        ON item.id = line_share.invoice_item_id
      WHERE billing_set.invoice_group_id IS NULL
-       AND EXISTS (
-         SELECT 1
-           FROM public.field_app_billing_lines billing_line
-           JOIN public.invoice_line_shares line_share
-             ON line_share.billing_line_id = billing_line.id
-           JOIN public.invoice_items item
-             ON item.id = line_share.invoice_item_id
-          WHERE billing_line.billing_set_id = billing_set.id
-            AND item.invoice_id = p_invoice_id
-       );
+       AND item.invoice_id = p_invoice_id;
+    DELETE FROM public.invoice_line_shares line_share
+     WHERE line_share.billing_line_id IN (
+       SELECT billing_line.id
+         FROM public.field_app_billing_lines billing_line
+        WHERE billing_line.billing_set_id = ANY(
+          COALESCE(v_existing_billing_set_ids, ARRAY[]::uuid[])
+        )
+     );
+    DELETE FROM public.field_app_billing_sets billing_set
+     WHERE billing_set.id = ANY(
+       COALESCE(v_existing_billing_set_ids, ARRAY[]::uuid[])
+     );
     DELETE FROM public.field_app_location_shares WHERE location_id IN (
       SELECT id FROM public.field_app_locations WHERE invoice_id = p_invoice_id
     );
