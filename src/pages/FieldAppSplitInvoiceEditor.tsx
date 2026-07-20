@@ -206,6 +206,7 @@ export default function FieldAppSplitInvoiceEditor() {
 
   const saveIdem = useIdempotencyKey('save_field_app_split_invoice', profile?.id || '');
   const postIdem = useIdempotencyKey('post_invoice_group', profile?.id || '');
+  const resetPostIdemKey = postIdem.resetKey; // stable useCallback identity — safe as an effect dep
 
   // Flag gate: null = still reading, false = OFF (render notice), true = ON (render editor).
   const [flagEnabled, setFlagEnabled] = useState<boolean | null>(null);
@@ -788,6 +789,12 @@ export default function FieldAppSplitInvoiceEditor() {
       setPosting(false);
     }
   };
+
+  // Codex round-10 P1: this editor stays MOUNTED when navigating between saved split drafts
+  // (/split-billing/:id → :id), so a stale post-idempotency key would make post_invoice_group return a
+  // PRIOR group's cached success (it keys on operation+key, not p_invoice_group_id) while the current
+  // group stays unposted. Scope the key to the group — reset it whenever invoiceGroupId changes.
+  useEffect(() => { resetPostIdemKey(); }, [invoiceGroupId, resetPostIdemKey]);
 
   // ── #H reopen: hydrate a previously-saved set (read-only) for review + Post ──
   useEffect(() => {
