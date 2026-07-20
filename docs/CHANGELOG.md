@@ -9,6 +9,9 @@ read or overwrite any delivery signature. The private bucket now accepts only th
 canonical `signatures/<delivery-id>.png` path and permits access to admins, sales reps,
 or the delivery's assigned driver; uploads and recaptures additionally require a
 completed delivery. A rollback-only catalog smoke proves the broad policies are gone.
+The final exact Codex push gate found that assignment alone did not exclude an inactive
+former driver. A forward-only correction now requires the canonical active-driver role
+helper on every assigned-driver signature path, with positive and deactivation rollback proof.
 The final forward correction also replaces the remaining bucket-wide DELETE policy
 with admin/sales-only canonical-path deletion. Live versions are intentionally preserved
 on disk in apply order (`20260720200329`, `20260720203000`, `20260720211454`) while the
@@ -39,6 +42,10 @@ restore proof remains the authoritative behavioral check. The verifier also
 reconstructs and compares every Storage bucket row (identity, privacy, size
 limit, and MIME types) against the captured bucket snapshot so those two rebuild
 artifacts cannot drift independently.
+The restore bootstrap now creates the production-specific `metabase_ro` NOLOGIN
+grant target before decoding the public schema. Post-baseline migration selection
+uses both filename version and captured submitted name, preventing four migrations
+already stored under server-assigned ledger versions from replaying on a clean restore.
 
 ### 2026-07-19 — Exact push-gate invoice and commission closures
 

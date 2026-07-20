@@ -37,6 +37,11 @@ node scripts/decompress-schema-baseline.mjs | psql "$DATABASE_URL" -v ON_ERROR_S
 The decoder refuses to emit SQL unless both the compressed and decompressed
 manifest hashes match.
 
+The first artifact creates the production-specific `metabase_ro` NOLOGIN role
+when it is absent, before the decoded schema restores grants to that role. Run
+the restore as the project owner so role creation is permitted. Every artifact
+must use `ON_ERROR_STOP=1`; do not continue from a partially restored project.
+
 The platform overlay restores the CRX-owned `auth.users` profile trigger, all
 CRX Storage policies, and bucket configuration after the public functions and
 tables they reference exist. The history restore refuses a non-empty
@@ -45,9 +50,20 @@ to make it run.
 The cron restore similarly refuses any existing job with one of the eight CRX
 job names, then verifies each schedule and command exactly.
 
-After the restore, apply only migration files whose version is strictly greater
-than the baseline high-water. Then regenerate `.claude/schema-registry.json`
-from that database and run the normal schema/live tests and DB invariant sweeps.
+After the restore, do **not** select pending migrations by filename timestamp
+alone. Supabase retained submitted names for several migrations while assigning
+lower live ledger versions, so four files whose filenames sort above the
+high-water are already captured in the restored ledger. Generate the exact
+post-baseline list from both version and captured name:
+
+```bash
+node scripts/list-post-baseline-migrations.mjs
+```
+
+Apply exactly the emitted files, in order, with a fail-fast SQL client. Do not
+run an unfiltered `supabase db push` against this baseline. Then regenerate
+`.claude/schema-registry.json` from that database and run the normal schema/live
+tests and DB invariant sweeps.
 
 ## Data recovery
 

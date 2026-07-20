@@ -75,6 +75,10 @@ const extensions = readFileSync(
   path.join(baselineDir, `${manifest.migrations_high_water}_extensions.sql`),
   'utf8',
 );
+if (!extensions.includes("rolname = 'metabase_ro'") ||
+    !extensions.includes('CREATE ROLE metabase_ro NOLOGIN')) {
+  fail('extension bootstrap does not provision the metabase_ro grant target');
+}
 const cronJobs = readFileSync(
   path.join(baselineDir, `${manifest.migrations_high_water}_cron_jobs.sql`),
   'utf8',

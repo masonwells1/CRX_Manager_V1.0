@@ -27,6 +27,9 @@ BEGIN
     )
     AND COALESCE(p.qual, p.with_check, '') LIKE '%signatures/%'
     AND COALESCE(p.qual, p.with_check, '') LIKE '%assigned_driver%'
+    AND COALESCE(p.qual, p.with_check, '') LIKE '%FROM profiles%'
+    AND COALESCE(p.qual, p.with_check, '') LIKE '%role%driver%'
+    AND COALESCE(p.qual, p.with_check, '') LIKE '%is_active%true%'
     AND COALESCE(p.qual, p.with_check, '') LIKE '%auth.uid%';
 
   SELECT count(*)
@@ -161,6 +164,46 @@ BEGIN
 
   EXECUTE 'RESET ROLE';
 
+  -- The same assigned user must immediately lose access when their driver
+  -- profile is deactivated. The transaction rolls this fixture change back.
+  UPDATE public.profiles
+  SET is_active = false
+  WHERE id = v_driver_id;
+
+  PERFORM set_config('request.jwt.claim.sub', v_driver_id::text, true);
+  EXECUTE 'SET LOCAL ROLE authenticated';
+
+  SELECT count(*) INTO v_rows
+  FROM storage.objects WHERE id = v_object_id;
+  IF v_rows <> 0 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: inactive assigned driver can read delivery signature';
+  END IF;
+
+  UPDATE storage.objects SET metadata = metadata WHERE id = v_object_id;
+  GET DIAGNOSTICS v_rows = ROW_COUNT;
+  IF v_rows <> 0 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: inactive assigned driver can overwrite delivery signature';
+  END IF;
+
+  v_denied := false;
+  BEGIN
+    INSERT INTO storage.objects (bucket_id, name, owner_id, metadata)
+    VALUES (
+      'delivery-signatures',
+      'signatures/' || v_deny_delivery_id::text || '.png',
+      auth.uid()::text,
+      '{"mimetype":"image/png","size":1}'::jsonb
+    );
+  EXCEPTION
+    WHEN insufficient_privilege THEN
+      v_denied := true;
+  END;
+
+  EXECUTE 'RESET ROLE';
+  IF NOT v_denied THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: inactive assigned driver can upload delivery signature';
+  END IF;
+
   PERFORM set_config('request.jwt.claim.sub', v_stranger_id::text, true);
   EXECUTE 'SET LOCAL ROLE authenticated';
 
@@ -176,6 +219,7 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_FAIL: unrelated actor can overwrite another delivery signature';
   END IF;
 
+  v_denied := false;
   BEGIN
     INSERT INTO storage.objects (bucket_id, name, owner_id, metadata)
     VALUES (
