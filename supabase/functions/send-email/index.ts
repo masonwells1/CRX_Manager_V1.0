@@ -198,11 +198,53 @@ Deno.serve(async (req: Request) => {
         400,
       );
     }
-    if (resource_type === "invoice") {
+    let invoiceGateId = resource_type === "invoice" ? resource_id : null;
+
+    // Proof notices can originate on JobDetail before billing or from an invoice
+    // after billing. Do not trust the caller to say which. The notification RPC's
+    // server-created idempotency key binds the send to its job/customer; if that
+    // job has invoices, derive the correct child (or sole legacy un-split invoice)
+    // and enforce its disposition. If billing has not happened, no invoice gate
+    // exists yet and the ordinary post-application notice remains sendable.
+    if (email_type === "post_application_notice") {
+      if (!idempotency_key) {
+        return jsonResponse({ error: "Post-application notices require an idempotency key" }, 400);
+      }
+      const { data: notificationRow, error: notificationErr } = await adminClient
+        .from("job_notifications")
+        .select("job_id, customer_id")
+        .eq("idempotency_key", idempotency_key)
+        .maybeSingle();
+      if (notificationErr) {
+        return jsonResponse({ error: `Notification lookup failed: ${notificationErr.message}` }, 500);
+      }
+      if (!notificationRow || notificationRow.customer_id !== customer_id) {
+        return jsonResponse({ error: "Notification key does not match this customer" }, 403);
+      }
+      const { data: jobInvoices, error: jobInvoicesErr } = await adminClient
+        .from("invoices")
+        .select("id, customer_id")
+        .eq("job_id", notificationRow.job_id)
+        .is("deleted_at", null);
+      if (jobInvoicesErr) {
+        return jsonResponse({ error: `Invoice gate lookup failed: ${jobInvoicesErr.message}` }, 500);
+      }
+      const recipientInvoice = (jobInvoices ?? []).find((invoice) => invoice.customer_id === customer_id);
+      const derivedInvoice = recipientInvoice ?? (jobInvoices?.length === 1 ? jobInvoices[0] : null);
+      if ((jobInvoices?.length ?? 0) > 0 && !derivedInvoice) {
+        return jsonResponse({ error: "Could not resolve the recipient invoice send gate" }, 409);
+      }
+      if (derivedInvoice && invoiceGateId && invoiceGateId !== derivedInvoice.id) {
+        return jsonResponse({ error: "Invoice resource does not match the server-derived notification invoice" }, 400);
+      }
+      invoiceGateId = derivedInvoice?.id ?? null;
+    }
+
+    if (invoiceGateId) {
       const { data: invoiceRow, error: invoiceErr } = await adminClient
         .from("invoices")
         .select("id, customer_id, send_disposition")
-        .eq("id", resource_id)
+        .eq("id", invoiceGateId)
         .maybeSingle();
       if (invoiceErr) {
         return jsonResponse({ error: `Invoice send-status lookup failed: ${invoiceErr.message}` }, 500);
@@ -210,7 +252,7 @@ Deno.serve(async (req: Request) => {
       if (!invoiceRow) {
         return jsonResponse({ error: "Invoice not found" }, 404);
       }
-      if (invoiceRow.customer_id !== customer_id) {
+      if (email_type === "invoice" && invoiceRow.customer_id !== customer_id) {
         return jsonResponse({ error: "Invoice customer does not match customer_id" }, 400);
       }
       if (invoiceRow.send_disposition !== "sendable") {
