@@ -18,4 +18,27 @@ CREATE EXTENSION IF NOT EXISTS postgis WITH SCHEMA extensions;
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp" WITH SCHEMA extensions;
 CREATE EXTENSION IF NOT EXISTS plpgsql_check WITH SCHEMA public;
 
+DO $baseline_extension_schemas$
+DECLARE
+  v_mismatch text;
+BEGIN
+  SELECT string_agg(e.extname || ' is in ' || n.nspname, ', ' ORDER BY e.extname)
+    INTO v_mismatch
+  FROM pg_extension e
+  JOIN pg_namespace n ON n.oid = e.extnamespace
+  JOIN (VALUES
+    ('pgcrypto', 'extensions'),
+    ('postgis', 'extensions'),
+    ('uuid-ossp', 'extensions')
+  ) AS required(extname, schema_name) ON required.extname = e.extname
+  WHERE n.nspname <> required.schema_name;
+
+  IF v_mismatch IS NOT NULL THEN
+    RAISE EXCEPTION
+      'baseline extension schema mismatch: %; move these extensions before restoring the CRX baseline',
+      v_mismatch;
+  END IF;
+END;
+$baseline_extension_schemas$;
+
 COMMIT;

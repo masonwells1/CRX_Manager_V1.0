@@ -2,6 +2,11 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-20 — Baseline post-migration selector regression proof
+
+- Replaced the source-text-only guard with a behavioral collision fixture proving that a captured migration name cannot hide a later timestamped migration that reuses the same suffix.
+- Added a fail-closed restore guard that rejects `pgcrypto`, `postgis`, or `uuid-ossp` when a target database has them preinstalled outside the required `extensions` schema.
+
 ## 2026-07-20 — Delivery signatures restricted to authorized deliveries
 
 Removed four duplicate bucket-only Storage policies that let any authenticated user

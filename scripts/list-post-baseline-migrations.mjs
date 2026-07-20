@@ -29,12 +29,20 @@ const migrationFiles = readdirSync(migrationsDir)
   .filter((name) => /^\d{14}_.+\.sql$/.test(name))
   .sort();
 
-const pending = migrationFiles.filter((name) => {
-  const stem = name.slice(0, -4);
-  const version = stem.slice(0, 14);
-  if (version <= manifest.migrations_high_water) return false;
-  return !capturedNames.has(stem);
-});
+export function listPostBaselineMigrations(migrationNames, highWater, ledgerNames) {
+  return migrationNames.filter((name) => {
+    const stem = name.slice(0, -4);
+    const version = stem.slice(0, 14);
+    if (version <= highWater) return false;
+    return !ledgerNames.has(stem);
+  });
+}
+
+const pending = listPostBaselineMigrations(
+  migrationFiles,
+  manifest.migrations_high_water,
+  capturedNames,
+);
 
 for (const name of pending) {
   console.log(path.posix.join('supabase', 'migrations', name));

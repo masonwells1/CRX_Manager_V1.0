@@ -1,18 +1,23 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { listPostBaselineMigrations } from './list-post-baseline-migrations.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const selectorSource = readFileSync(
-  path.join(root, 'scripts', 'list-post-baseline-migrations.mjs'),
-  'utf8',
-);
-assert.doesNotMatch(
-  selectorSource,
-  /capturedNames\.has\(suffix\)/,
-  'a bare legacy suffix must never hide a future migration that reuses the concept name',
+assert.deepEqual(
+  listPostBaselineMigrations(
+    [
+      '20260719092832_dashboard_summary_rpc.sql',
+      '20260720220000_dashboard_summary_rpc.sql',
+      '20260720210000_alpha.sql',
+      '20260720230000_beta.sql',
+    ],
+    '20260719092832',
+    new Set(['20260719092832_dashboard_summary_rpc', '20260720210000_alpha']),
+  ),
+  ['20260720220000_dashboard_summary_rpc.sql', '20260720230000_beta.sql'],
+  'only an exact timestamped ledger name may hide a migration; reused suffixes stay pending',
 );
 const result = spawnSync(process.execPath, ['scripts/list-post-baseline-migrations.mjs'], {
   cwd: root,
