@@ -2242,6 +2242,9 @@ BEGIN
      OR (SELECT count(*) FROM public.invoices
           WHERE id IN (SELECT value::uuid FROM jsonb_array_elements_text(v_result->'invoice_ids'))
             AND season = 2025) <> 2
+     OR (SELECT count(*) FROM public.invoice_items
+          WHERE invoice_id IN (SELECT value::uuid FROM jsonb_array_elements_text(v_result->'invoice_ids'))
+            AND price_source = 'manual') <> 2
      OR (SELECT count(*) FROM public.invoices
           WHERE id IN (SELECT value::uuid FROM jsonb_array_elements_text(v_result->'invoice_ids'))
             AND total_amount_cents = 0
@@ -2373,6 +2376,32 @@ BEGIN
          WHERE billing_set.invoice_group_id IS NULL
            AND item.invoice_id = (v_plan_again#>>'{invoice_ids,0}')::uuid) <> 1 THEN
     RAISE EXCEPTION 'P3_FAIL(writer_existing_single_rebuild): %', v_plan_again;
+  END IF;
+
+  -- Expanding an ungrouped draft into a group must retire the consumed source
+  -- invoice instead of leaving an empty active draft behind.
+  INSERT INTO public.field_billing_defaults
+    (field_id, customer_id, split_pct, is_primary, price_override_cents)
+  VALUES
+    (v_field_fallback, v_a, 50, true, NULL),
+    (v_field_fallback, v_b, 50, false, NULL);
+  v_lines := public.save_field_app_invoice_per_line(
+    (v_plan_again#>>'{invoice_ids,0}')::uuid,
+    jsonb_build_object('invoice_date', '2026-07-20'),
+    jsonb_build_array(jsonb_build_object(
+      'field_id', v_field_fallback, 'applied_acres', 1, 'total_acres', 1,
+      'map_number', 8, 'sort_order', 0
+    )), '[]'::jsonb, v_admin, v_service, v_job_single, '{}'::jsonb,
+    'phase3-writer-single-to-group'
+  );
+  IF jsonb_array_length(v_lines->'invoice_ids') <> 2
+     OR v_lines->>'invoice_group_id' IS NULL
+     OR (v_lines->'invoice_ids') ? (v_plan_again#>>'{invoice_ids,0}')
+     OR (SELECT status FROM public.invoices
+          WHERE id = (v_plan_again#>>'{invoice_ids,0}')::uuid) <> 'cancelled'
+     OR (SELECT count(*) FROM public.invoice_items
+          WHERE invoice_id = (v_plan_again#>>'{invoice_ids,0}')::uuid) <> 0 THEN
+    RAISE EXCEPTION 'P3_FAIL(writer_single_to_group_retires_source): %', v_lines;
   END IF;
 
   -- Stored graph validation must reject a header that no longer equals the

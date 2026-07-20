@@ -302,6 +302,19 @@ BEGIN
     v_invoice_map := v_invoice_map || jsonb_build_object(v_customer_id::text, v_invoice_id);
   END LOOP;
 
+  -- Expanding an ungrouped draft into a multi-recipient group creates new
+  -- customer-specific invoices. Retire the consumed source draft so it cannot
+  -- remain as an empty, active invoice with a stranded invoice number.
+  IF p_invoice_id IS NOT NULL
+     AND v_existing_group_id IS NULL
+     AND v_customer_count > 1 THEN
+    UPDATE public.invoices SET
+      status = 'cancelled', invoice_group_id = NULL,
+      total_amount_cents = 0, total_cost_cents = 0,
+      send_disposition = 'sendable', updated_at = now()
+    WHERE id = p_invoice_id AND deleted_at IS NULL;
+  END IF;
+
   IF v_existing_group_id IS NOT NULL THEN
     UPDATE public.invoices SET
       status = 'cancelled', invoice_group_id = NULL,
@@ -366,7 +379,12 @@ BEGIN
         round(NULLIF(v_share->>'allocated_acres', '')::numeric, 2),
         CASE WHEN v_line->>'line_kind' = 'service' THEN (v_share->>'unit_price_cents')::numeric ELSE NULL END,
         CASE WHEN v_line->>'line_kind' = 'service' THEN 'acre' ELSE NULL END,
-        v_line->>'line_kind' = 'service', v_share->>'base_price_source'
+        v_line->>'line_kind' = 'service',
+        CASE
+          WHEN v_share->>'base_price_source' LIKE 'quoted:%' THEN 'quoted'
+          WHEN v_share->>'base_price_source' = 'tier' THEN 'tier'
+          ELSE 'manual'
+        END
       ) RETURNING id INTO v_invoice_item_id;
 
       INSERT INTO public.invoice_line_shares (

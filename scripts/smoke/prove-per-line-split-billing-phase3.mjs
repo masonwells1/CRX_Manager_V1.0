@@ -164,7 +164,9 @@ function run() {
       ADD COLUMN rate_per_acre numeric,
       ADD COLUMN rate_unit text,
       ADD COLUMN is_application_fee boolean DEFAULT false,
-      ADD COLUMN price_source text,
+      ADD COLUMN price_source text
+        CONSTRAINT chk_invoice_items_price_source
+        CHECK (price_source IN ('quoted', 'tier', 'manual')),
       ADD COLUMN updated_at timestamptz NOT NULL DEFAULT now();
     CREATE SEQUENCE public.invoice_number_proof_seq;
     CREATE FUNCTION public.next_invoice_number()
@@ -395,7 +397,7 @@ function run() {
   }
 
   console.log('PROOF — Ran: network-isolated PostgreSQL 17 container; loaded checked-in preflight + Phase 1 + relational guards + Phase 2 calculator + Phase 3 writer verbatim; executed rollback-only Phase 3 SQL proof.');
-  console.log('PROOF — Saw: all Phase 2 calculator and relational-integrity cases remained green; the Phase 3 writer persisted the calculator-only 100/0 service plan as two real invoices/items/shares stamped with the source job season, rebuilt existing grouped and single-recipient invoices without restricted-FK failure, orphaned lines, or duplicate shares, preserved a zero-dollar suppressed child, posted both group members together with an immutable zero snapshot, replayed an identical key for the same actor without duplicate rows, rejected cross-actor replay and same-key changed payload, rejected a header mismatch, blocked transfer_job_to_invoice while the feature was ON, and retained owner/definer/search-path/ACL plus cleanup-failure guards.');
+  console.log('PROOF — Saw: all Phase 2 calculator and relational-integrity cases remained green; the Phase 3 writer persisted the calculator-only 100/0 service plan as two real invoices/items/shares stamped with the source job season and a live-valid price_source, rebuilt existing grouped and single-recipient invoices without restricted-FK failure, retired the consumed source when expanding one recipient into a group, preserved a zero-dollar suppressed child, posted both group members together with an immutable zero snapshot, replayed an identical key for the same actor without duplicate rows, rejected cross-actor replay and same-key changed payload, rejected a header mismatch, blocked transfer_job_to_invoice while the feature was ON, and retained owner/definer/search-path/ACL plus cleanup-failure guards.');
 }
 
 try {
