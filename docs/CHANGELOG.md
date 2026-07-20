@@ -244,6 +244,10 @@ Built read-only adversarial gauntlet loop over sections 2-6 (money/inventory/lif
 
 ---
 
+## 2026-07-20 — Fix autopilot guard test failing (and blocking every commit) whenever autopilot is armed
+
+- `.claude/hooks/autopilot-lib.test.mjs`'s LIVE check spawned `unattended-autopilot.mjs`, which resolves its arming flag from `$CLAUDE_PROJECT_DIR/.claude/session-state/AUTOPILOT.on`. Because the spawn inherited the ambient env, the test's "hook emits NOTHING when flag absent" assertion failed whenever real autopilot was armed in the session — the spawned hook saw the ambient flag and correctly denied the fake `rm -rf /`. Net effect: the pre-commit `test:correction-guards` suite failed, so **no commit could land while autopilot was armed** (forcing a disarm→commit→re-arm workaround). The check now points `CLAUDE_PROJECT_DIR` at throwaway temp dirs — one with no flag (proves inert), one with a fresh active flag (proves it still denies deny-set commands) — so both directions are deterministic regardless of ambient arm state. Proven: with real autopilot armed, `node .claude/hooks/autopilot-lib.test.mjs` now passes (53 assertions).
+
 ## 2026-07-18 — Fix migration-review workflow failing closed when Workflow-tool args arrive as a JSON string
 
 - `.claude/workflows/migration-review.js` now normalizes `args` before reading `file`/`name`/`sql`. When the Workflow tool delivered `args` as a JSON-encoded string, all three fields were `undefined` and the run failed closed with a bogus "No migration SQL provided" BLOCKER (observed runs `wf_ae36ee12-2e4`, `wf_5c9ddfc7-174`). The script now `JSON.parse`s a string `args` (falling back to `null` on parse failure) and reads fields off the normalized object, while keeping the fail-closed placeholder for genuinely-missing SQL. Ran `sync-agent-workflows --write` and `test:agent-workflows` (all green; 35 Codex adapters in sync).
