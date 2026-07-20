@@ -189,6 +189,39 @@ Deno.serve(async (req: Request) => {
       );
     }
 
+    // Per-line split billing defense in depth: UI gates are helpful, but the server is
+    // authoritative. Invoice emails must identify the invoice, match its customer, and
+    // can never send a child marked suppressed_zero_total. This code is prepared only;
+    // deployment remains an explicit owner gate.
+    if (email_type === "invoice") {
+      if (resource_type !== "invoice" || !resource_id) {
+        return jsonResponse(
+          { error: "Invoice emails require resource_type='invoice' and resource_id" },
+          400,
+        );
+      }
+      const { data: invoiceRow, error: invoiceErr } = await adminClient
+        .from("invoices")
+        .select("id, customer_id, send_disposition")
+        .eq("id", resource_id)
+        .maybeSingle();
+      if (invoiceErr) {
+        console.warn("send-email: invoice disposition lookup failed", {
+          resource_id,
+          code: invoiceErr.code,
+          message: invoiceErr.message,
+        });
+        return jsonResponse({ error: "Invoice email safety check failed" }, 500);
+      }
+      if (!invoiceRow) return jsonResponse({ error: "Invoice not found" }, 404);
+      if (invoiceRow.customer_id !== customer_id) {
+        return jsonResponse({ error: "Invoice customer does not match customer_id" }, 400);
+      }
+      if (invoiceRow.send_disposition === "suppressed_zero_total") {
+        return jsonResponse({ error: "This zero-total split invoice must not be emailed" }, 409);
+      }
+    }
+
     // 6. Driver per-resource auth (only relevant when role='driver')
     if (role === "driver") {
       if (resource_type !== "delivery" || !resource_id) {

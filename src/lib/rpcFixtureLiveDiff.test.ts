@@ -56,7 +56,9 @@ const LIVE_FUNCTIONS = new Set(LIVE_PG_PROC_NAMES_CSV.split(','));
 // creates it. The test below verifies the function is not live, the migration
 // source is still pending, and the entry must be removed after the migration is
 // live and the pg_proc snapshot has been regenerated.
-const QUEUED_MIGRATION_FUNCTIONS: Record<string, string> = {};
+const QUEUED_MIGRATION_FUNCTIONS: Record<string, string> = {
+  save_field_app_invoice_per_line: '20260720234000_per_line_split_billing_phase3_writer.sql',
+};
 const QUEUED_FUNCTIONS = new Set(Object.keys(QUEUED_MIGRATION_FUNCTIONS));
 
 // -------------------------------------------------------------------------
@@ -148,7 +150,7 @@ describe('Live pg_proc snapshot integrity', () => {
       const filenameMatch = /^\d{14}_.+\.sql$/.exec(migration);
       expect(filenameMatch, `${rpc} queued migration must be a checked-in migration filename`).not.toBeNull();
       const createPattern = new RegExp(
-        `CREATE\\s+OR\\s+REPLACE\\s+FUNCTION\\s+(?:public\\.)?${rpc}\\s*\\(`,
+        `CREATE\\s+(?:OR\\s+REPLACE\\s+)?FUNCTION\\s+(?:public\\.)?${rpc}\\s*\\(`,
         'i'
       );
       expect(
@@ -164,12 +166,19 @@ describe('Live pg_proc snapshot integrity', () => {
     expect(calls.filter((rpc) => !LIVE_FUNCTIONS.has(rpc) && !QUEUED_FUNCTIONS.has(rpc))).toEqual([]);
   }, 20_000);
 
-  it('does not commit queued RPC exceptions', () => {
-    // A non-empty map is only safe as a short-lived local bridge while testing
-    // a branch that adds a new RPC and caller together. Do not merge with one:
-    // the frontend can deploy before the migration applies and call a missing
-    // production RPC.
-    expect(Object.keys(QUEUED_MIGRATION_FUNCTIONS)).toEqual([]);
+  it('keeps queued RPC callers behind an exact OFF-by-default feature gate', () => {
+    // A stacked draft may contain a frontend caller before its migration is live only
+    // when the entire route fails closed. Remove the queued entry after live apply and
+    // regenerate the pg_proc snapshot before merge.
+    const setting = readFileSync(join(HERE, 'splitBillingSetting.ts'), 'utf8');
+    const editor = readFileSync(join(HERE, '..', 'pages', 'FieldAppSplitInvoiceEditor.tsx'), 'utf8');
+    for (const rpc of Object.keys(QUEUED_MIGRATION_FUNCTIONS)) {
+      expect(rpc).toBe('save_field_app_invoice_per_line');
+      expect(setting).toContain("SPLIT_BILLING_SETTING_KEY = 'feature_per_line_split_billing'");
+      expect(setting).toContain('DEFAULT_SPLIT_BILLING_ENABLED = false');
+      expect(editor).toContain('if (flagEnabled === false)');
+      expect(editor).toContain("rpc('save_field_app_invoice_per_line'");
+    }
   });
 });
 

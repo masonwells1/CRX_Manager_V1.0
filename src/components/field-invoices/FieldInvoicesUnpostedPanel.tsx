@@ -19,7 +19,7 @@ import {
   downloadInvoicePdf,
 } from '../../lib/invoicePdf';
 import { downloadReportPdf } from '../../lib/reportPdf';
-import { sendEmail, pdfToBase64, buildEmailHtml } from '../../lib/emailService';
+import { sendEmail, pdfToBase64, buildEmailHtml, isInvoiceEmailSuppressed } from '../../lib/emailService';
 import { useAuth } from '../../contexts/AuthContext';
 import { formatCents as fmt } from '../../lib/money';
 import { getSeasonDates } from '../../utils/season';
@@ -257,6 +257,11 @@ export default function FieldInvoicesUnpostedPanel() {
   const emailRow = async (row: FieldInvoiceListRow) => {
     if (rowActionRef.current) return;
     if (!profile) { toast('error', 'Profile not loaded — please refresh.'); return; }
+    // Refuse only the server-authored split-child disposition, never a client total.
+    if (isInvoiceEmailSuppressed(row)) {
+      toast('info', 'This $0 invoice is recorded and shown in the account summary, but is not emailed.');
+      return;
+    }
     rowActionRef.current = true;
     await runCriticalAction({
       action: async () => {

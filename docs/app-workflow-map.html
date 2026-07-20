@@ -84,7 +84,7 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(
 <div id="header">
   <h1>⬡ CRX Manager — Architecture Map</h1>
   <!-- __STATS_START__ -->
-  <span id="stat-line" style="color:var(--muted);font-size:.8rem">94 routes · 233 RPC calls · 5 issues · Updated Jul 20, 2026</span>
+  <span id="stat-line" style="color:var(--muted);font-size:.8rem">95 routes · 234 RPC calls · 5 issues · Updated Jul 20, 2026</span>
   <!-- __STATS_END__ -->
   <div id="tabs">
     <button class="tab active" onclick="showTab('graph')">Graph</button>
@@ -684,6 +684,14 @@ const NODES = [
       "type": "page-sales",
       "group": "Customers",
       "path": "/field-invoices",
+      "problem": false
+    },
+    {
+      "id": "field-app-split-invoice-editor",
+      "label": "FieldAppSplitInvoiceEditor",
+      "type": "page-sales",
+      "group": "Core",
+      "path": "/split-billing/new",
       "problem": false
     },
     {
@@ -1494,6 +1502,11 @@ const EDGES = [
       "type": "nav"
     },
     {
+      "s": "field-app-split-invoice-editor",
+      "t": "field-invoices",
+      "type": "nav"
+    },
+    {
       "s": "field-dashboard",
       "t": "fields",
       "type": "nav"
@@ -2010,6 +2023,11 @@ const EDGES = [
     },
     {
       "s": "field-application-invoice",
+      "t": "r-invoice",
+      "type": "rpc"
+    },
+    {
+      "s": "field-app-split-invoice-editor",
       "t": "r-invoice",
       "type": "rpc"
     },

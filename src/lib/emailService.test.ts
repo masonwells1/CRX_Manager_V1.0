@@ -14,11 +14,19 @@ vi.mock('./db', () => ({
 
 vi.stubGlobal('fetch', mockFetch);
 
-import { sendEmail, pdfToBase64, buildEmailHtml, buildInvoiceEmailPayload } from './emailService';
+import { sendEmail, pdfToBase64, buildEmailHtml, buildInvoiceEmailPayload, isInvoiceEmailSuppressed } from './emailService';
 import type { SendEmailParams, InvoiceEmailInput } from './emailService';
 
 beforeEach(() => {
   vi.clearAllMocks();
+});
+
+describe('isInvoiceEmailSuppressed', () => {
+  it('refuses only the server disposition for zero-total split children', () => {
+    expect(isInvoiceEmailSuppressed({ send_disposition: 'suppressed_zero_total' })).toBe(true);
+    expect(isInvoiceEmailSuppressed({ send_disposition: 'sendable' })).toBe(false);
+    expect(isInvoiceEmailSuppressed(null)).toBe(false);
+  });
 });
 
 describe('pdfToBase64', () => {

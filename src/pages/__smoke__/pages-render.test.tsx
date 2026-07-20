@@ -214,6 +214,7 @@ const COVERED = new Set<string>([
   'DeliveryDetail',
   'DeliveryRemainders',
   'DispatchBoard',
+  'FieldAppSplitInvoiceEditor',
   'FieldApplicationInvoice',
   'FieldSetup',
   'Fields',

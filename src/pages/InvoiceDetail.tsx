@@ -17,7 +17,7 @@ import { parseDollarsToCents } from '../lib/parseCents';
 import type { Invoice, InvoiceType, InvoiceStatus, Product, Customer, InvoiceShare, InvoicePrintOptions } from '../types';
 import { downloadInvoicePdf, generateInvoicePdf, deriveFieldAppAppliedAcres, type InvoicePdfData, type InvoicePdfItem } from '../lib/invoicePdf';
 import { formatCents as fmt } from '../lib/money';
-import { sendEmail, pdfToBase64, buildEmailHtml } from '../lib/emailService';
+import { sendEmail, pdfToBase64, buildEmailHtml, isInvoiceEmailSuppressed } from '../lib/emailService';
 import { logActivity } from '../lib/activityLogger';
 import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
@@ -1055,6 +1055,10 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
   const handleEmailInvoice = async () => {
     if (!profile) {
       toast('error', 'Cannot email invoice — profile not loaded. Please refresh.');
+      return;
+    }
+    if (isInvoiceEmailSuppressed(invoice)) {
+      toast('info', 'This $0 invoice is recorded and shown in the account summary, but is not emailed.');
       return;
     }
     const cust = customers.find(c => c.id === invoice.customer_id);

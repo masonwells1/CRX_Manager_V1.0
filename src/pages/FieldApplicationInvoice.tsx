@@ -54,7 +54,7 @@ import {
   WEATHER_DISCLAIMER,
   type WeatherSetForm,
 } from '../lib/fieldAppWeather';
-import { sendEmail, pdfToBase64, buildInvoiceEmailPayload } from '../lib/emailService';
+import { sendEmail, pdfToBase64, buildInvoiceEmailPayload, isInvoiceEmailSuppressed } from '../lib/emailService';
 import {
   countSentPostNotifications,
   describePostNotificationSend,
@@ -364,6 +364,10 @@ export default function FieldApplicationInvoice() {
     prepay_applied_cents: number | null;
     write_off_cents: number | null;
     balance_cents: number;
+    /** Per-line split billing: server-computed send disposition. A
+     *  'suppressed_zero_total' $0 split child is recorded + shown in the account
+     *  summary but never emailed. Undefined until the split-billing migration lands. */
+    send_disposition?: 'sendable' | 'suppressed_zero_total';
   } | null>(null);
 
   // Phase 1 (2026-04-29) state
@@ -853,6 +857,7 @@ export default function FieldApplicationInvoice() {
       prepay_applied_cents: (invoice.prepay_applied_cents as number | null) ?? null,
       write_off_cents: (invoice.write_off_cents as number | null) ?? null,
       balance_cents: (invoice.balance_cents as number) || 0,
+      send_disposition: invoice.send_disposition === 'suppressed_zero_total' ? 'suppressed_zero_total' : 'sendable',
     });
     // Wave B.1 / P2-1: load Applied Info from the invoice row. These are
     // free-form text columns added so the values persist round-trip.
@@ -1978,6 +1983,10 @@ export default function FieldApplicationInvoice() {
       toast('error', 'Profile not loaded — please refresh.');
       return;
     }
+    if (isInvoiceEmailSuppressed(pdfSnapshot)) {
+      toast('info', 'This $0 invoice is recorded and shown in the account summary, but is not emailed.');
+      return;
+    }
     await runCriticalAction({
       action: async () => {
         const { data: cust } = await supabase
@@ -2074,6 +2083,10 @@ export default function FieldApplicationInvoice() {
   const handleSendPostNotification = async () => {
     if (!jobId || !profile) {
       toast('error', 'This invoice has no source job to notify.');
+      return;
+    }
+    if (isInvoiceEmailSuppressed(pdfSnapshot)) {
+      toast('info', 'This $0 invoice is recorded and shown in the account summary, but is not emailed.');
       return;
     }
     // FAIL CLOSED: never decide first-send vs re-send off a log we haven't
