@@ -110,6 +110,12 @@ for (const [key, actual] of Object.entries(staticCounts)) {
 if (countMatches(platformOverlay, /^DROP POLICY IF EXISTS /gm) !== expectedCounts.storage_object_policies) {
   fail('platform overlay does not replace every captured Storage policy');
 }
+const bucketInsertValues = platformOverlay.match(
+  /INSERT INTO "storage"\."buckets"[\s\S]*?\nVALUES\n([\s\S]*?);\r?\nCOMMIT;/,
+)?.[1] ?? '';
+if (countMatches(bucketInsertValues, /^\s+\('/gm) !== expectedCounts.storage_buckets) {
+  fail('platform overlay bucket row count drifted from the bucket snapshot');
+}
 
 for (const extension of ['pg_cron', 'pgcrypto', 'postgis', 'uuid-ossp', 'plpgsql_check']) {
   if (!extensions.includes(`EXTENSION IF NOT EXISTS ${extension}`) &&

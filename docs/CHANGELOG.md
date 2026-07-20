@@ -10,7 +10,9 @@ Brotli payload. The prior Git attribute accidentally enabled its full textual
 diff, making the exact base-main Claude gate exceed the provider's one-million-
 token request limit. The manifest binds both compressed and decoded bytes, the
 decoder refuses hash drift before emitting SQL, and the existing disposable
-restore proof remains the authoritative behavioral check.
+restore proof remains the authoritative behavioral check. The verifier also
+cross-checks the Storage overlay's inserted bucket rows against the captured
+bucket snapshot so those two rebuild artifacts cannot drift independently.
 
 ### 2026-07-19 — Exact push-gate invoice and commission closures
 
