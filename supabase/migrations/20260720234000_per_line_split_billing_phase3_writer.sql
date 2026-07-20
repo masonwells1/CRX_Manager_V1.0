@@ -112,6 +112,7 @@ BEGIN
 
   v_payload_hash := encode(extensions.digest(
     jsonb_build_object(
+      'actor_id', v_actor,
       'invoice_id', p_invoice_id,
       'invoice', COALESCE(p_invoice, '{}'::jsonb),
       'locations', p_locations,

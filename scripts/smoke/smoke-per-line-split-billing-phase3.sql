@@ -2253,6 +2253,31 @@ BEGIN
   IF v_plan_again IS DISTINCT FROM v_result THEN
     RAISE EXCEPTION 'P3_FAIL(writer_idempotent_replay): % vs %', v_result, v_plan_again;
   END IF;
+  -- Idempotency is actor-bound: a different authenticated user cannot replay
+  -- the same payload/key and receive cached invoice identifiers.
+  PERFORM set_config('request.jwt.claim.sub', v_rep_other::text, true);
+  v_err := NULL;
+  BEGIN
+    PERFORM public.save_field_app_invoice_per_line(
+      NULL, jsonb_build_object('invoice_date', '2026-07-20'),
+      jsonb_build_array(jsonb_build_object(
+        'field_id', v_field_50, 'applied_acres', 1, 'total_acres', 1,
+        'map_number', 1, 'sort_order', 0
+      )), '[]'::jsonb, v_rep_other, v_service, v_job_service,
+      jsonb_build_object('lines', jsonb_build_array(jsonb_build_object(
+        'line_key', 'service:' || v_service::text,
+        'split_mode', 'custom', 'split_override_reason', 'Tenant pays service',
+        'vector', jsonb_build_array(
+          jsonb_build_object('customer_id', v_a, 'split_micro_pct', 100000000),
+          jsonb_build_object('customer_id', v_b, 'split_micro_pct', 0)
+        )
+      ))), 'phase3-writer-100-0'
+    );
+  EXCEPTION WHEN OTHERS THEN v_err := SQLERRM; END;
+  IF COALESCE(v_err, '') NOT LIKE '%IDEMPOTENCY_PAYLOAD_CONFLICT%' THEN
+    RAISE EXCEPTION 'P3_FAIL(writer_cross_actor_replay): %', COALESCE(v_err, '<no error>');
+  END IF;
+  PERFORM set_config('request.jwt.claim.sub', v_admin::text, true);
   v_err := NULL;
   BEGIN
     PERFORM public.save_field_app_invoice_per_line(
