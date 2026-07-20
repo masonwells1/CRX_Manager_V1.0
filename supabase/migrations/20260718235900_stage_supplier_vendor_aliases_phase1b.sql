@@ -1,6 +1,6 @@
 -- OWNER-APPROVED GO-LIVE DATA STEP — supplier vendor spelling resolution for Phase 1b.
 -- Apply only through the sanctioned migration review/proof gate.
--- Prerequisite: 20260718225511_supplier_price_evidence_phase1b.sql.
+-- Prerequisite: 20260718230000_supplier_price_evidence_phase1b.sql.
 --
 -- Owner decision (Mason, 2026-07-17; reaffirmed in the Phase 1b build request):
 --   * canonical vendor "The Andersons" owns "Andersons" and "The Anderson's"

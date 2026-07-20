@@ -1733,7 +1733,7 @@ describe('Idempotency BODY verification (reads migration SQL)', () => {
   it('split provenance wrappers preserve the idempotent implementations and forward the exact key', () => {
     const files = getMigrationFiles();
     const wrapper = files.find(
-      ({ name }) => name === '20260719044912_trust_only_post_revoke_split_provenance.sql'
+      ({ name }) => name === '20260719100000_trust_only_post_revoke_split_provenance.sql'
     )?.content;
     const splitImplementation = files.find(
       ({ name }) => name === '20260707090000_u7_split_gate_allow_predelivery.sql'
@@ -1776,7 +1776,7 @@ describe('Idempotency BODY verification (reads migration SQL)', () => {
   it('binds split creation, deletion, void, and cancellation replays to exact requests', () => {
     const files = getMigrationFiles();
     const wrapper = files.find(
-      ({ name }) => name === '20260719060256_allow_governed_split_terminal_lifecycle.sql'
+      ({ name }) => name === '20260719102000_allow_governed_split_terminal_lifecycle.sql'
     )?.content;
     const splitImplementation = files.find(
       ({ name }) => name === '20260707090000_u7_split_gate_allow_predelivery.sql'
@@ -1785,7 +1785,7 @@ describe('Idempotency BODY verification (reads migration SQL)', () => {
       ({ name }) => name === '20260711050000_credit_apply_reversal_and_lifecycle.sql'
     )?.content;
     const voidImplementation = files.find(
-      ({ name }) => name === '20260718221505_preserve_voided_payment_allocation_history.sql'
+      ({ name }) => name === '20260718214000_preserve_voided_payment_allocation_history.sql'
     )?.content;
     const cancelImplementation = files.find(
       ({ name }) => name === '20260714222000_return_credit_source_of_truth.sql'
