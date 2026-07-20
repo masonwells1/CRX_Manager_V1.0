@@ -2041,6 +2041,15 @@ const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
   // contract inside the same transaction; it is absent from generated client
   // types by design but still must remain fail-closed in the migration scan.
   '_save_purchase_order_ascii_identity_impl',
+  // Supplier Pricing Phase 1b is intentionally parked pending a separate,
+  // reviewed apply session. Keep these mutators in the migration-only bucket
+  // until the migration is live and generated client types are refreshed.
+  'approve_supplier_price_import',
+  'correct_supplier_price_observation',
+  'review_vendor_alias',
+  'stage_supplier_price_import',
+  'stage_vendor_alias',
+  'upsert_product_supplier_link',
 ]);
 
 /**

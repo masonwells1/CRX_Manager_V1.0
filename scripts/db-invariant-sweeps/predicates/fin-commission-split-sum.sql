@@ -111,7 +111,7 @@ elem_rollup AS (
   GROUP BY identity_key
 )
 SELECT
-  s.identity_key,
+  s.identity_key AS violation_key,
   'commission_split_invalid'::text                                             AS violation_type,
   s.customer_id,
   100.00::numeric                                                              AS expected_pct,
@@ -145,4 +145,4 @@ WHERE
       OR r.n_duplicate_recipients > 0
     )
   )
-ORDER BY identity_key;
+ORDER BY violation_key;
