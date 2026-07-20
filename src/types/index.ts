@@ -331,6 +331,11 @@ export interface VendorAlias {
   created_by: string | null;
   reviewed_by: string | null;
   reviewed_at: string | null;
+  // Durable idempotent-replay receipt (migration 20260720230000). Server-internal:
+  // stage_vendor_alias strips both from its RPC response, so they are only seen
+  // by direct table reads.
+  idempotency_key?: string | null;
+  request_fingerprint?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -389,6 +394,12 @@ export interface SupplierPriceImport {
   source_document_mime: 'application/pdf' | null;
   request_fingerprint: string;
   idempotency_key: string;
+  // Durable idempotent-replay receipts (migration 20260720230000). Server-internal:
+  // approve/reject RPC responses strip these, so they are only seen by direct table reads.
+  approve_idempotency_key?: string | null;
+  approve_request_fingerprint?: string | null;
+  reject_idempotency_key?: string | null;
+  reject_request_fingerprint?: string | null;
   row_count: number;
   eligible_row_count: number;
   approved_observation_count: number;

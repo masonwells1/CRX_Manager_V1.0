@@ -2046,6 +2046,9 @@ const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
   // until the migration is live and generated client types are refreshed.
   'approve_supplier_price_import',
   'correct_supplier_price_observation',
+  // Parked in 20260720230000 (durable-replay + reject follow-ups) until that
+  // migration applies live and generated client types are refreshed.
+  'reject_supplier_price_import',
   'review_vendor_alias',
   'stage_supplier_price_import',
   'stage_vendor_alias',

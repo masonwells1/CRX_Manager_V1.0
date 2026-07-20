@@ -200,7 +200,7 @@ const router = createBrowserRouter([
 
           // Admin + Sales Rep
           { path: 'products', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><Products /></ProtectedRoute> },
-          { path: 'supplier-pricing', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><SupplierPricing /></ProtectedRoute> },
+          { path: 'supplier-pricing', element: <ProtectedRoute allowedRoles={['admin']}><SupplierPricing /></ProtectedRoute> },
           { path: 'products/:id', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><ProductDetail /></ProtectedRoute> },
           { path: 'customers', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><Customers /></ProtectedRoute> },
           { path: 'customers/:id', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><CustomerDetail /></ProtectedRoute> },

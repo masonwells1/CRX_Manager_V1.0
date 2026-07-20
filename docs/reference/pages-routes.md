@@ -7,7 +7,7 @@
 | `/` | Dashboard | KPIs, today's jobs, recent activity |
 | `/getting-started` | GettingStarted | Role-aware workflow guide (admin/sales: Quote→Order→Deliver stepper; driver: Dashboard→Deliver stepper) |
 | `/products` | Products | Product catalog with search/filter, bulk import |
-| `/supplier-pricing` | SupplierPricing | Admin/sales supplier-evidence workspace: protected per-supplier .xlsx quote sheets, manual staging and approval, comparable-cost review, Product/supplier links, and reviewed vendor aliases. Optional source PDFs are retained for audit and are never parsed. |
+| `/supplier-pricing` | SupplierPricing | Admin-only supplier-evidence workspace (locked down 2026-07-20, migration 20260720203000): protected per-supplier .xlsx quote sheets, manual staging and approval, comparable-cost review, Product/supplier links, and reviewed vendor aliases. Optional source PDFs are retained for audit and are never parsed. |
 | `/products/:id` | ProductDetail | Product CRUD (pricing tiers, EPA info, RUP status). Combobox dropdowns for Vendor/Manufacturer/Category. Grouped sections: Product Form → Container (size+unit+type) → Inventory Unit → Application Rates |
 | `/customers` | Customers | Customer list with search/filter, bulk import |
 | `/customers/:id` | CustomerDetail | Profile, addresses, credit limit, transaction review, finance charge settings, season summary |
