@@ -308,14 +308,18 @@ DECLARE
 BEGIN
   -- Check BOTH the pre-image (OLD) and post-image (NEW) item's invoice, so an
   -- UPDATE cannot remap a share off a posted invoice onto a draft one and slip
-  -- through. On INSERT OLD is NULL; on DELETE NEW is NULL — the NULL simply
-  -- never matches, so IN(...) resolves to the live side. (Strictly safer than
-  -- the COALESCE(NEW,OLD) precedent, which only inspects one side on UPDATE.)
+  -- through. Reference each record ONLY for the operation where it is assigned
+  -- (NEW on INSERT/UPDATE, OLD on UPDATE/DELETE) via a TG_OP guard, so the
+  -- expression is unambiguous — a NULL for the non-applicable side never matches.
+  -- (Codex round-9: the direct IN(NEW.x, OLD.x) form is already NULL-safe in
+  -- PL/pgSQL — proven in live PG — but the explicit guard removes the reviewer flag.)
   SELECT i.invoice_number
     INTO v_blocking_inv
     FROM invoice_items ii
     JOIN invoices i ON i.id = ii.invoice_id
-   WHERE ii.id IN (NEW.invoice_item_id, OLD.invoice_item_id)
+   WHERE ii.id IN (
+           CASE WHEN TG_OP <> 'DELETE' THEN NEW.invoice_item_id END,
+           CASE WHEN TG_OP <> 'INSERT' THEN OLD.invoice_item_id END)
      AND i.deleted_at IS NULL
      AND i.status IN ('posted', 'paid', 'overdue')
    LIMIT 1;
