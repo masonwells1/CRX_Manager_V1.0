@@ -249,9 +249,6 @@ describe('gauntlet sections 2-6 CodeRabbit closeout', () => {
     const deleteVersion = 20260720211454n;
     expect(storageVersion).toBeLessThan(adminRestrictionVersion);
     expect(adminRestrictionVersion).toBeLessThan(deleteVersion);
-    expect(sql).toContain(
-      'submitted as 20260720203000_scope_delivery_signature_storage_access',
-    );
   });
 
   it('keeps the supplier pricing route aligned with admin-only cost access', () => {

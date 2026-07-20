@@ -1,8 +1,3 @@
--- Applied live as server-assigned ledger version 20260720200329 after being
--- submitted as 20260720203000_scope_delivery_signature_storage_access.
--- The disk filename intentionally uses the unique live version, which sorts
--- before 20260720203000_restrict_supplier_pricing_to_admin on clean rebuilds;
--- the live ledger retains the submitted name per the documented B7 contract.
 -- Scope delivery-signature Storage access to the delivery named by the object path.
 -- Paths are canonical: signatures/<delivery uuid>.png.
 

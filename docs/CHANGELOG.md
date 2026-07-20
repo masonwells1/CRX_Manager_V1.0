@@ -13,6 +13,7 @@ The final forward correction also replaces the remaining bucket-wide DELETE poli
 with admin/sales-only canonical-path deletion. Live versions are intentionally preserved
 on disk in apply order (`20260720200329`, `20260720203000`, `20260720211454`) while the
 registry retains Supabase's submitted names, and a regression test binds that ordering.
+The ordering note and regression live outside the already-applied SQL so its reviewed bytes remain immutable.
 
 ## 2026-07-20 — Governed split editing and group void made fail-closed
 
