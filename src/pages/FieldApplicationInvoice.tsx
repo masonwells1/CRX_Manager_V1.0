@@ -1751,9 +1751,9 @@ export default function FieldApplicationInvoice() {
   // cancels pending commissions, writes the append-only financial_audit_log, and zeroes
   // AR — we never recompute money here). It refuses an already voided/cancelled invoice
   // and respects the closed-period gate; those come back as honest toasts.
-  // Group-aware: there is NO void_invoice_group RPC, so a split group is voided
-  // member-by-member, each call carrying its own stable, idempotent key (mirrors #28
-  // Unpost) so a retry after a timeout never double-acts.
+  // Field-application groups do not carry governed order-split provenance, so they
+  // remain member-by-member here. Governed order splits use void_invoice_group from
+  // Invoice Detail. Each field-app call carries its own stable idempotency key.
   const handleVoid = async () => {
     if (!profile || !id) return;
     const reason = voidReason.trim();

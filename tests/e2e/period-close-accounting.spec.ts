@@ -707,19 +707,20 @@ test.describe('Period Close & Accounting', () => {
     });
 
     // Try payment on voided invoice
-    const payResult = await supabaseRpc(page, 'allocate_payment', {
-      p_customer_id: custId,
-      p_total_cents: 5000,
-      p_payment_method: 'check',
-      p_allocations: [{ invoice_id: invoiceId, amount_cents: 5000 }],
-      p_idempotency_key: `VOID-PAY-${RUN}`,
-    });
-
-    const payRecord = payResult as Record<string, unknown> | null;
-    if (!payRecord || typeof payRecord.message !== 'string') {
+    let rejection = '';
+    try {
+      const payResult = await supabaseRpc(page, 'allocate_payment', {
+        p_customer_id: custId,
+        p_total_cents: 5000,
+        p_payment_method: 'check',
+        p_allocations: [{ invoice_id: invoiceId, amount_cents: 5000 }],
+        p_idempotency_key: `VOID-PAY-${RUN}`,
+      });
       throw new Error(`Expected voided-invoice payment rejection, got success: ${JSON.stringify(payResult)}`);
+    } catch (error) {
+      rejection = error instanceof Error ? error.message : String(error);
     }
-    expect(payRecord.message.toLowerCase()).toContain('eligible');
+    expect(rejection.toLowerCase()).toContain('eligible');
     console.log('✓ Voided invoice correctly blocks payments');
   });
 });
