@@ -73,6 +73,7 @@ DECLARE
   v_invoice_total bigint;
   v_invoice_cost bigint;
   v_invoice_acres numeric;
+  v_effective_season integer;
   v_primary_customer_id uuid;
   v_is_new boolean;
   v_result jsonb;
@@ -114,6 +115,18 @@ BEGIN
   -- validate the completed graph explicitly at the end instead.
   SET CONSTRAINTS ALL DEFERRED;
 
+  -- Authorize the concrete invoice/job/customer scope before an idempotency
+  -- cache hit can disclose a prior result. The plan is recomputed under the
+  -- write locks below for non-replay requests.
+  v_plan := public._calculate_per_line_split_billing_plan(
+    p_job_id, p_locations, p_chemicals, p_application_service_id,
+    p_invoice_id, COALESCE(p_options, '{}'::jsonb)
+  );
+  SELECT COALESCE(job.season, public.current_season())
+    INTO v_effective_season
+    FROM public.jobs job
+   WHERE job.id = p_job_id;
+
   v_payload_hash := encode(extensions.digest(
     jsonb_build_object(
       'invoice_id', p_invoice_id,
@@ -135,10 +148,13 @@ BEGIN
      WHERE idempotency_key = p_idempotency_key
        AND operation = 'save_field_app_invoice_per_line';
     IF v_cached IS NOT NULL THEN
+      IF v_cached->>'actor_id' IS DISTINCT FROM v_actor::text THEN
+        RAISE EXCEPTION 'IDEMPOTENCY_ACTOR_MISMATCH';
+      END IF;
       IF v_cached->>'payload_hash' IS DISTINCT FROM v_payload_hash THEN
         RAISE EXCEPTION 'IDEMPOTENCY_PAYLOAD_CONFLICT';
       END IF;
-      RETURN v_cached - 'payload_hash';
+      RETURN v_cached - ARRAY['payload_hash', 'actor_id'];
     END IF;
   END IF;
 
@@ -173,10 +189,15 @@ BEGIN
     END IF;
   END IF;
 
+  PERFORM 1 FROM public.jobs WHERE id = p_job_id FOR SHARE;
   v_plan := public._calculate_per_line_split_billing_plan(
     p_job_id, p_locations, p_chemicals, p_application_service_id,
     p_invoice_id, COALESCE(p_options, '{}'::jsonb)
   );
+  SELECT COALESCE(job.season, public.current_season())
+    INTO v_effective_season
+    FROM public.jobs job
+   WHERE job.id = p_job_id;
   v_customer_count := jsonb_array_length(v_plan->'per_customer');
   IF v_customer_count < 1 THEN RAISE EXCEPTION 'PER_LINE_PLAN_EMPTY'; END IF;
   SELECT (x->>'customer_id')::uuid INTO v_primary_customer_id
@@ -260,7 +281,7 @@ BEGIN
         COALESCE((p_invoice->>'invoice_date')::date, CURRENT_DATE),
         CASE WHEN v_actor_role = 'admin' THEN (p_invoice->>'salesman_id')::uuid ELSE v_actor END,
         p_invoice->>'header_notes', v_actor, 0, 0, v_group_id,
-        p_application_service_id, p_job_id, 'sendable', public.current_season()
+        p_application_service_id, p_job_id, 'sendable', v_effective_season
       ) RETURNING id INTO v_invoice_id;
       v_new_invoice_ids := array_append(v_new_invoice_ids, v_invoice_id);
     ELSE
@@ -269,6 +290,7 @@ BEGIN
         header_notes = COALESCE(p_invoice->>'header_notes', header_notes),
         application_service_id = p_application_service_id,
         job_id = p_job_id,
+        season = v_effective_season,
         invoice_group_id = v_group_id,
         total_amount_cents = 0,
         total_cost_cents = 0,
@@ -466,7 +488,10 @@ BEGIN
     INSERT INTO public.idempotency_keys (idempotency_key, operation, result)
     VALUES (
       p_idempotency_key, 'save_field_app_invoice_per_line',
-      v_result || jsonb_build_object('payload_hash', v_payload_hash)
+      v_result || jsonb_build_object(
+        'payload_hash', v_payload_hash,
+        'actor_id', v_actor
+      )
     );
   END IF;
   RETURN v_result;
