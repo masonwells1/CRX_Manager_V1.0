@@ -10,6 +10,7 @@ DECLARE
   v_insert_delivery_id uuid;
   v_deny_delivery_id uuid;
   v_stranger_id uuid;
+  v_admin_id uuid;
   v_rows integer;
   v_inserted_id uuid;
   v_denied boolean := false;
@@ -120,8 +121,17 @@ BEGIN
   ORDER BY p.id
   LIMIT 1;
 
+  SELECT p.id
+  INTO v_admin_id
+  FROM public.profiles p
+  WHERE p.is_active
+    AND p.role = 'admin'
+  ORDER BY p.id
+  LIMIT 1;
+
   IF v_object_id IS NULL OR v_insert_delivery_id IS NULL OR
-     v_deny_delivery_id IS NULL OR v_stranger_id IS NULL THEN
+     v_deny_delivery_id IS NULL OR v_stranger_id IS NULL OR
+     v_admin_id IS NULL THEN
     RAISE EXCEPTION 'SMOKE_SETUP: assigned-driver signature fixture is unavailable';
   END IF;
 
@@ -183,6 +193,23 @@ BEGIN
   IF NOT v_denied THEN
     RAISE EXCEPTION 'SMOKE_FAIL: unrelated actor can upload another delivery signature';
   END IF;
+
+  -- Direct SQL deletion is always stopped by storage.protect_delete; reaching
+  -- that guard (instead of an RLS/permission error) proves the admin satisfies
+  -- this DELETE policy. The catalog predicate above proves drivers are absent.
+  PERFORM set_config('request.jwt.claim.sub', v_admin_id::text, true);
+  EXECUTE 'SET LOCAL ROLE authenticated';
+  BEGIN
+    DELETE FROM storage.objects WHERE id = v_object_id;
+    RAISE EXCEPTION 'SMOKE_FAIL: admin direct delete bypassed Storage API guard';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN
+      RAISE;
+    END IF;
+    IF SQLERRM LIKE '%row-level security%' OR SQLERRM LIKE '%permission denied%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: admin does not satisfy signature DELETE policy: %', SQLERRM;
+    END IF;
+  END;
 
   RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK';
 END;

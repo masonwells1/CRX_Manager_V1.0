@@ -231,6 +231,12 @@ describe('gauntlet sections 2-6 CodeRabbit closeout', () => {
     expect(sql).toContain("d.assigned_driver = (SELECT auth.uid())");
     expect(sql).toContain("bucket_id = 'delivery-signatures'");
 
+    const completionSql = migration('20260716191000_aggregate_delivery_stock_preflight.sql');
+    expect(completionSql).toContain("v_actor_role IN ('admin', 'sales_rep')");
+    expect(completionSql).toContain(
+      "v_actor_role = 'driver' AND v_actor = v_delivery.assigned_driver",
+    );
+
     const deleteSql = migration('20260720211454_scope_delivery_signature_delete.sql');
     expect(deleteSql).toContain('DROP POLICY IF EXISTS "delivery_signatures_delete"');
     expect(deleteSql).toContain('CREATE POLICY "delivery_signatures_scoped_delete"');
