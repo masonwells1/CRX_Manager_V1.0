@@ -225,7 +225,8 @@ Deno.serve(async (req: Request) => {
         .from("invoices")
         .select("id, customer_id")
         .eq("job_id", notificationRow.job_id)
-        .is("deleted_at", null);
+        .is("deleted_at", null)
+        .not("status", "in", '("voided","cancelled")');
       if (jobInvoicesErr) {
         return jsonResponse({ error: `Invoice gate lookup failed: ${jobInvoicesErr.message}` }, 500);
       }
@@ -243,7 +244,7 @@ Deno.serve(async (req: Request) => {
     if (invoiceGateId) {
       const { data: invoiceRow, error: invoiceErr } = await adminClient
         .from("invoices")
-        .select("id, customer_id, send_disposition")
+        .select("id, customer_id, send_disposition, status, deleted_at")
         .eq("id", invoiceGateId)
         .maybeSingle();
       if (invoiceErr) {
@@ -251,6 +252,9 @@ Deno.serve(async (req: Request) => {
       }
       if (!invoiceRow) {
         return jsonResponse({ error: "Invoice not found" }, 404);
+      }
+      if (invoiceRow.deleted_at != null || invoiceRow.status === "voided" || invoiceRow.status === "cancelled") {
+        return jsonResponse({ error: "A voided, cancelled, or deleted invoice must not be emailed" }, 409);
       }
       if (email_type === "invoice" && invoiceRow.customer_id !== customer_id) {
         return jsonResponse({ error: "Invoice customer does not match customer_id" }, 400);
