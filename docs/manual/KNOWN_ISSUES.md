@@ -1,6 +1,6 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-07-18** (full document re-read and targeted supplier-pricing refresh against current code and live DB through verification watermark `20260717171331`; the reviewed `20260718124517` forward correction is proven locally but not yet applied; older open/deferred claims retain their dated evidence below; owner-facing combined list: root `TODO.md`)
+**Last verified: 2026-07-20** (full document re-read with a targeted per-line split-billing refresh against current branches and the live migration ledger through high-water `20260719092832`; older open/deferred claims retain their dated evidence below; owner-facing combined list: root `TODO.md`)
 **Update triggers:** when a finding is parked/resolved, a migration is parked/applied, or an owner decision lands. Agents must update THIS file, not create new issue lists. Do not re-discover or re-fix something listed here as already known — read the pointer first.
 
 This file consolidates (does not replace) the source documents it points to. If this file and a source disagree, trust the source and fix this file.
@@ -82,13 +82,15 @@ Also open: **Sprint D leftovers** (`docs/loops/workflow-waves-ledger.md`) — D1
 
 ## 4. Deferred/parked feature work
 
-- **Per-line-item custom split billing (field-app)** — DESIGN SPEC complete + review-hardened, **not
-  built**; Mason builds it in Codex next week (baseline real-billing cycle first). Default splits from
-  field ownership, override %/price per line, one invoice per customer, unpost stays reversible. Three
-  advisor passes folded in (gpt-5.6-terra design + xhigh plan-review, claude-fable-5 money-math). Spec:
-  `docs/plans/per-line-item-split-billing-spec-2026-07-17.md`; direction settled in `DECISION_LOG.md`
-  (2026-07-17). Supersedes the "four parallel split mechanisms need a decision" flag — decided: field-app
-  path is the surface, order-side engine retired later.
+- **Per-line-item custom split billing (field-app)** — DESIGN SPEC complete and Phases 1–2 are built
+  behind an OFF/absent feature flag in draft PRs #166 and #167; neither migration set is applied live.
+  Phase 1 was re-stamped as `20260720231000` after production advanced to live high-water
+  `20260719092832`, with byte-identical SQL, a green PostgreSQL 17 rollback proof, and CLEAN
+  content-bound security/drift review. Phase 2 remains dependent on that exact Phase 1 and must be
+  re-stamped/reviewed on top before publication. Phase 3 save/post and Phase 4 UI/mail gates remain
+  unbuilt. The §6.1 real baseline billing cycle is still required before any apply/turn-on decision.
+  Spec: `docs/plans/per-line-item-split-billing-spec-2026-07-17.md`; build ledger:
+  `docs/loops/per-line-split-billing-build-loop.md`.
 - **EPA label backfill** — ~105 of 204 distinct stored EPA registration numbers point at the wrong product (confirmed, `docs/CHANGELOG.md` 2026-07-10 entry). The in-app `/label-data-quality` tool to fix them shipped 2026-07-10; the actual backfill (doing the data-entry) is still pending — it's a data-entry job, not a code task.
 - **OCR REI/PHI auto-fill** — deliberately deferred as a safety trap (label OCR for re-entry-interval/pre-harvest-interval data needs human verification before it can be trusted for compliance).
 - **Grower portal §7-§10** — deferred, internal-only direction for now. `docs/ROADMAP.md` line ~57 (A2, "Grower portal v1") and line ~112 (G9, portal MVP) both still say TODO/VISION.

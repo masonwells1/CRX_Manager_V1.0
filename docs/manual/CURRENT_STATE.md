@@ -1,6 +1,6 @@
 # CRX Manager — Current State
 
-**Last verified:** 2026-07-18 (snapshot — counts are as-of this date)
+**Last verified:** 2026-07-20 (full document re-read against live migration high-water `20260719092832`; operational counts remain the 2026-07-18 snapshot below)
 **Update triggers:** refresh when a major feature ships or quarterly, whichever first.
 
 ## 1. Reality check

@@ -1470,7 +1470,7 @@ export interface Invoice {
   application_service_id: string | null;
   delivery_id: string | null;
 
-  // Per-line split billing Phase 1 (mig 20260718210000): server-controlled email gate.
+  // Per-line split billing Phase 1 (mig 20260720231000): server-controlled email gate.
   // 'sendable' (default, existing behavior) | 'suppressed_zero_total' = a $0 not-to-send
   // invoice — recorded and visible in the account, contributes zero to AR/aging/finance
   // charge, NOT marked paid, and every email path must refuse it. Never written by the browser.
@@ -3385,7 +3385,7 @@ export interface FieldAppLocationShare {
   customer?: Customer;
 }
 
-// ── Per-line-item split billing (mig 20260718210000, Phase 1 schema; flag
+// ── Per-line-item split billing (mig 20260720231000, Phase 1 schema; flag
 //    feature_per_line_split_billing, OFF). Spec: docs/plans/per-line-item-split-billing-spec-2026-07-17.md.
 //    These rows are SERVER-created only (locked SECURITY DEFINER save path); the browser reads
 //    them but has no INSERT/UPDATE/DELETE. Shares are immutable while their invoice is posted. ──
