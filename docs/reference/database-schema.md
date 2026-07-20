@@ -143,7 +143,7 @@
 
 `supabase/migrations/20260717042803_supplier_pricing_phase1a.sql` is the applied-live additive bootstrap: a dedicated `products.pricing_version`, private/RLS-enabled `pricing_workbook_exports` + export rows, `pricing_change_sets` + approved rows + preview rows, three admin-only pricing RPCs, collision-safe fingerprints, durable apply idempotency, and trigger-owned history for governed writes. Supabase ledger version/name: `20260717042803` / `20260717120000_supplier_pricing_phase1a`; the cent-scale hardening is also live as ledger version/name `20260718154131` / `20260718124517_harden_supplier_pricing_cent_scale_and_trigger`. The Phase 1a frontend and OCR pricing-path retirement are merged and live. `scripts/.staging-migrations/20260717121000_supplier_pricing_phase1a_cutover.sql` remains a separate strict-enforcement cutover that removes residual compatibility grants; it is parked and is not current production schema.
 
-### Supplier Pricing Phase 1b — supplier evidence PARKED
+### Supplier Pricing Phase 1b — supplier evidence (database LIVE; admin-only)
 
 `20260718225511_supplier_price_evidence_phase1b.sql` is live. It defines `vendor_aliases`, `legacy_vendor_resolution`, `product_supplier_links`, `supplier_price_imports`, `supplier_price_import_rows`, and append-only `supplier_price_observations`. The evidence workflow is manual only: a protected per-supplier `.xlsx` template is transcribed by a person, staged, reviewed, and approved into integer-cent observations. An optional source PDF is private audit evidence and is never parsed. Supplier comparisons use the human-approved directional `inventory_units_per_supplier_unit`; missing or non-equivalent conversions display `cannot compare` instead of a false best price.
 

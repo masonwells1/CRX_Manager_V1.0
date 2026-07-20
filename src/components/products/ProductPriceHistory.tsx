@@ -41,6 +41,7 @@ export default function ProductPriceHistory({ productId }: { productId: string }
     let active = true;
     setLoading(true);
     setError(null);
+    setSupplierId('');
     getProductPriceHistory(productId)
       .then((result) => {
         if (active) setHistory(result);

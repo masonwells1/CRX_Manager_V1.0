@@ -4,6 +4,12 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-20 — Supplier pricing evidence restricted to ADMIN-ONLY (live fix before Phase 1b merge)
+
+- The Codex GitHub review on PR #179 caught a real security gap all earlier reviewers missed: the live Phase 1b reader RPCs, evidence-table SELECT policies, and the evidence-PDF bucket were gated admin-OR-sales, exposing supplier costs, `cost_history` values, and PO ids/numbers/unit costs to sales reps — contradicting the standing "cost data is admin-only" RLS contract (the contract tests passed because SECURITY DEFINER readers legitimately bypass table RLS). Mason settled it: **admin-only**.
+- Applied live migration `20260720203000_restrict_supplier_pricing_to_admin` (reviewed clean by the migration-review workflow + both Codex proof charters; MCP version `20260720201159` ledger-reconciled to the filename per B7). All seven SELECT policies now require `is_admin()`; all five reader RPCs raise `ADMIN_REQUIRED`; explicit REVOKE/GRANT re-asserted. Proven live: non-admin probe denied, catalog clean.
+- Frontend on the PR branch aligned: `/supplier-pricing` page restricted to admin, ProductDetail price-history panel admin-gated, smoke expectations updated to `ADMIN_REQUIRED`, supplier filter reset on product change (CodeRabbit), reference docs corrected (11th RPC documented, stale PARKED headers and go-live shorthand stamps fixed).
+
 ## 2026-07-20 — Fix headless Claude review wrapper returning empty results (release gate unblocked)
 
 - Three completed `claude -p --output-format json` release-gate reviews of Phase 1b (2× Opus, 1× Sonnet, CLI 2.1.207) returned `subtype: success` with `result: ""`, blocking the release. Root cause (reproduced deterministically): the repo's `Stop` hook `stop-wrap.mjs` blocks a read-only headless session from ever ending — it demands an ack file at `.claude/session-state/stop-wrap-ack.json`, but the reviewer has Write denied — so the session loops through dozens of forced turns until the CLI gives up with an empty final message, and the `json` output format surfaces only the final message's text as `result`. The real review text was generated in the first assistant message and lost (`--no-session-persistence`; confirmed unrecoverable by full local-storage search of all three session IDs).

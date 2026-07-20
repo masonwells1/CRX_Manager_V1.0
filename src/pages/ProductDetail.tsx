@@ -1301,7 +1301,7 @@ export default function ProductDetail() {
 
         {!isNew && id && (
           <div className="space-y-4">
-            <ProductPriceHistory productId={id} />
+            {isAdmin && <ProductPriceHistory productId={id} />}
             {isAdmin && (
               <Card>
                 <CardHeader title="Cost" accent="History" />

@@ -5,6 +5,12 @@
 **Worktree:** `C:\CRX_Phase1b`  **Branch:** `feat/supplier-pricing-phase1b`
 **Live Supabase project ref:** `rhyzpcqhnizqbxphqdkr`
 
+> **2026-07-20 historical note (execution complete — do not follow as a recipe):** the shorthand
+> stamps `162114` and `230100` below are stale drafts of the actual submitted migration names,
+> which were `20260718230000_supplier_price_evidence_phase1b` (ledger version `20260718225511`)
+> and `20260718235900_stage_supplier_vendor_aliases_phase1b` (ledger version `20260718235717`).
+> Both are applied live. This document is preserved as a snapshot of the plan as written.
+
 ---
 
 ## 0. Why this handoff exists
