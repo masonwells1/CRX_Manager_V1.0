@@ -4,6 +4,12 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-20 — Per-line split billing Phase 3 atomic writer built (flag OFF, not applied)
+
+Built the explicit `save_field_app_invoice_per_line` path on top of the reviewed Phase 2 calculator. The SECURITY DEFINER writer requires payload-bound idempotency, consumes only the server calculator plan, locks and replaces editable invoice groups atomically, persists residual-adjusted child cents and allocated COGS, creates complete zero-inclusive line-share vectors, records invoice creation in the financial audit ledger, and runs the full relational assertion before commit. A guarded `transfer_job_to_invoice` wrapper delegates to the exact verified legacy body while the flag is OFF and refuses the divergent transfer path when the per-line engine is enabled.
+
+The network-isolated PostgreSQL 17 proof loads the exact five-migration chain and rolls back all fixtures. It persisted a real 100/0 service split as two invoices/items/shares, posted the zero-dollar child with `suppressed_zero_total` and an immutable snapshot, proved required idempotency plus exact replay and changed-payload conflict, rejected a corrupted header, blocked the legacy transfer path while enabled, and retained owner/definer/search-path/ACL guards. Production remains unchanged: the feature flag is OFF/absent, no split migration is applied, and the read-only live high-water was `20260720203000` at the Phase 3 review.
+
 ## 2026-07-20 — Per-line split billing Phases 1–2 re-stamped and security chain reconciled (flag OFF, not applied)
 
 Production's read-only migration ledger advanced to `20260719092832`, so the four never-applied split-billing migrations were re-stamped in dependency order as preflight `20260720230000`, Phase 1 `20260720231000`, relational guards `20260720232000`, and Phase 2 calculator `20260720233000`. Phase 1 exact-HEAD review found that a sales rep could otherwise forge group-based read authority and that a pre-existing enabled feature flag could survive installation. Phase 1 now grants delegated reads only through server-created line-share membership on a non-deleted child invoice and aborts if the flag already exists with any value other than `false`; both defects have red→green disposable PostgreSQL proofs. Phase 2's preflight now reserves that new helper signature, and the combined four-migration proof verifies the enabled-flag rollback before installing cleanly. All migrations remain unapplied and the feature flag remains OFF/absent in production.

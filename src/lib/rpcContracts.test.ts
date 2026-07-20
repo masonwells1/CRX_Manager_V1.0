@@ -1557,6 +1557,10 @@ const IDEMPOTENCY_BODY_EXEMPT: Record<
   // directly non-executable implementation that owns the canonical replay
   // lookup/save. A dedicated test below pins that indirection and both grants.
   complete_delivery: 'delegated',
+  // The public transfer wrapper authenticates before enforcing the feature
+  // route and delegates flag-OFF requests to the private exact-live body,
+  // which owns the canonical idempotency lookup/save contract.
+  transfer_job_to_invoice: 'delegated',
   // The public wrapper authorizes active customer scope before delegating to
   // the directly non-executable implementation that owns canonical replay.
   save_invoice: 'delegated',
@@ -1913,6 +1917,10 @@ const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
   // contract inside the same transaction; it is absent from generated client
   // types by design but still must remain fail-closed in the migration scan.
   '_save_purchase_order_ascii_identity_impl',
+  // Phase 3 per-line billing writer is intentionally absent from generated
+  // client types until its parked migration is applied and types regenerate.
+  // Its inline payload-bound key contract is still scanned here pre-apply.
+  'save_field_app_invoice_per_line',
 ]);
 
 /**
