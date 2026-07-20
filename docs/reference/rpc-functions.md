@@ -203,7 +203,7 @@ Migrations `20260714220000` through `20260714224000` preserve existing public si
 
 ## AR & Statements
 - `get_ar_aging()` — AR aging report with current/30/60/90+ day buckets
-- `get_customer_statement()` — customer statement with invoice/payment/write-off history; the live `20260716200659` wrapper requires an active admin or the active sales rep assigned to that customer before delegating to the directly non-executable implementation. Live migration `20260720185135` (submitted identity `20260720173059_fix_statement_opening_balance`; both identities preserved in the disk filename) adds opening-balance carry-forward and deterministic same-day running order without changing the public signature.
+- `get_customer_statement()` — customer statement with invoice/payment/write-off history; the live `20260716200659` wrapper requires an active admin or the active sales rep assigned to that customer before delegating to the directly non-executable implementation. Migration `20260720173059_fix_statement_opening_balance` (applied live under server-assigned ledger version `20260720185135`) adds opening-balance carry-forward and deterministic same-day running order without changing the public signature.
 - `get_detailed_statement_data()` — detailed statement data for PDF generation. Includes both 'posted' and 'overdue' invoices. Aging buckets: current(0-30), 31-60, 61-90, 91-120, over-120 (non-overlapping).
 - `generate_batch_statements()` — generate batch PDF statements for multiple customers
 - `get_season_comparison()` — compare two seasons side-by-side
