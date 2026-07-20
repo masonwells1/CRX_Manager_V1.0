@@ -2249,6 +2249,9 @@ BEGIN
          WHERE l.billing_set_id = (v_result->>'billing_set_id')::uuid) <> 2
      OR (SELECT count(*) FROM public.invoices
           WHERE id IN (SELECT value::uuid FROM jsonb_array_elements_text(v_result->'invoice_ids'))
+            AND season = 2025) <> 2
+     OR (SELECT count(*) FROM public.invoices
+          WHERE id IN (SELECT value::uuid FROM jsonb_array_elements_text(v_result->'invoice_ids'))
             AND total_amount_cents = 0
             AND total_cost_cents = 0
             AND send_disposition = 'suppressed_zero_total'

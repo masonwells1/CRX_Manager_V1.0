@@ -64,6 +64,7 @@ DECLARE
   v_existing_billing_set_ids uuid[];
   v_group_id uuid;
   v_locked_group_id uuid;
+  v_locked_customer_id uuid;
   v_locked_status text;
   v_customer_count integer;
   v_billing_set_id uuid;
@@ -73,6 +74,7 @@ DECLARE
   v_invoice_total bigint;
   v_invoice_cost bigint;
   v_invoice_acres numeric;
+  v_source_season integer;
   v_primary_customer_id uuid;
   v_is_new boolean;
   v_result jsonb;
@@ -154,7 +156,8 @@ BEGIN
       PERFORM 1 FROM public.invoices
        WHERE id = p_invoice_id AND deleted_at IS NULL FOR UPDATE;
     END IF;
-    SELECT status, invoice_group_id INTO v_locked_status, v_locked_group_id
+    SELECT status, invoice_group_id, customer_id
+      INTO v_locked_status, v_locked_group_id, v_locked_customer_id
       FROM public.invoices WHERE id = p_invoice_id AND deleted_at IS NULL;
     IF v_locked_group_id IS DISTINCT FROM v_existing_group_id THEN
       RAISE EXCEPTION 'INVOICE_GROUP_CHANGED';
@@ -216,6 +219,13 @@ BEGIN
     p_job_id, p_locations, p_chemicals, p_application_service_id,
     p_invoice_id, COALESCE(p_options, '{}'::jsonb)
   );
+  SELECT COALESCE(job.season, public.current_season())
+    INTO v_source_season
+    FROM public.jobs job
+   WHERE job.id = p_job_id;
+  IF v_source_season IS NULL THEN
+    RAISE EXCEPTION 'PER_LINE_JOB_SEASON_REQUIRED';
+  END IF;
   v_customer_count := jsonb_array_length(v_plan->'per_customer');
   IF v_customer_count < 1 THEN RAISE EXCEPTION 'PER_LINE_PLAN_EMPTY'; END IF;
   SELECT (x->>'customer_id')::uuid INTO v_primary_customer_id
@@ -292,7 +302,7 @@ BEGIN
       SELECT id INTO v_invoice_id FROM public.invoices
        WHERE invoice_group_id = v_existing_group_id
          AND customer_id = v_customer_id AND deleted_at IS NULL LIMIT 1;
-    ELSIF p_invoice_id IS NOT NULL AND v_customer_count = 1 THEN
+    ELSIF p_invoice_id IS NOT NULL AND v_customer_id = v_locked_customer_id THEN
       v_invoice_id := p_invoice_id;
     END IF;
     v_is_new := v_invoice_id IS NULL;
@@ -307,7 +317,7 @@ BEGIN
         COALESCE((p_invoice->>'invoice_date')::date, CURRENT_DATE),
         CASE WHEN v_actor_role = 'admin' THEN (p_invoice->>'salesman_id')::uuid ELSE v_actor END,
         p_invoice->>'header_notes', v_actor, 0, 0, v_group_id,
-        p_application_service_id, p_job_id, 'sendable', public.current_season()
+        p_application_service_id, p_job_id, 'sendable', v_source_season
       ) RETURNING id INTO v_invoice_id;
     ELSE
       UPDATE public.invoices SET
@@ -325,6 +335,18 @@ BEGIN
     v_invoice_ids := array_append(v_invoice_ids, v_invoice_id);
     v_invoice_map := v_invoice_map || jsonb_build_object(v_customer_id::text, v_invoice_id);
   END LOOP;
+
+  -- If the original ungrouped invoice's customer is no longer represented,
+  -- retire that now-empty header instead of leaving stale money behind.
+  IF p_invoice_id IS NOT NULL
+     AND v_existing_group_id IS NULL
+     AND NOT (p_invoice_id = ANY(v_invoice_ids)) THEN
+    UPDATE public.invoices SET
+      status = 'cancelled', invoice_group_id = NULL,
+      total_amount_cents = 0, total_cost_cents = 0,
+      send_disposition = 'sendable', updated_at = now()
+    WHERE id = p_invoice_id;
+  END IF;
 
   IF v_existing_group_id IS NOT NULL THEN
     UPDATE public.invoices SET
