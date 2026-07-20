@@ -1,6 +1,6 @@
 # CRX Manager — Current State
 
-**Last verified:** 2026-07-20 (feature summary and live migration watermark re-checked through `20260719092832`; operational counts remain the dated 2026-07-18 snapshot below)
+**Last verified:** 2026-07-20 (feature summary and live migration watermark re-checked through `20260720185135`; all 24 live migration sources previously absent from `origin/main` were recovered from reviewed Git objects and queued for repository reconciliation; operational counts remain the dated 2026-07-18 snapshot below)
 **Update triggers:** refresh when a major feature ships or quarterly, whichever first.
 
 ## 1. Reality check
