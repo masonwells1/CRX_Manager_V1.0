@@ -9,6 +9,10 @@ read or overwrite any delivery signature. The private bucket now accepts only th
 canonical `signatures/<delivery-id>.png` path and permits access to admins, sales reps,
 or the delivery's assigned driver; uploads and recaptures additionally require a
 completed delivery. A rollback-only catalog smoke proves the broad policies are gone.
+The final forward correction also replaces the remaining bucket-wide DELETE policy
+with admin/sales-only canonical-path deletion. Live versions are intentionally preserved
+on disk in apply order (`20260720200329`, `20260720203000`, `20260720211454`) while the
+registry retains Supabase's submitted names, and a regression test binds that ordering.
 
 ## 2026-07-20 — Governed split editing and group void made fail-closed
 
