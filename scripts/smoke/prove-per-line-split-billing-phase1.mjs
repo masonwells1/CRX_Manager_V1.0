@@ -248,7 +248,8 @@ CREATE TABLE public.invoices (
   invoice_group_id uuid,
   total_amount_cents bigint NOT NULL DEFAULT 0,
   created_by uuid REFERENCES public.profiles(id),
-  salesman_id uuid REFERENCES public.profiles(id)
+  salesman_id uuid REFERENCES public.profiles(id),
+  deleted_at timestamptz
 );
 CREATE TABLE public.invoice_items (
   id uuid PRIMARY KEY,
@@ -269,10 +270,40 @@ GRANT UPDATE ON public.invoices TO authenticated;
     'CREATE TRIGGER trg_invoice_line_shares_frozen_when_posted',
     'CREATE TRIGGER trg_invoice_items_shared_parent_frozen_when_posted',
     'CREATE TRIGGER trg_capture_invoice_line_share_post_snapshot',
+    'CREATE FUNCTION public.can_read_field_app_billing_set',
   ]) {
     if (!migration.includes(marker)) fail(`migration lost required marker: ${marker}`);
   }
+
+  runSql(`
+INSERT INTO public.app_settings (setting_key, setting_value, description)
+VALUES ('feature_per_line_split_billing', 'true', 'adversarial pre-existing enabled flag');
+`);
+  const enabledAttempt = runSql(migration, { allowFailure: true });
+  const enabledDetail = `${enabledAttempt.stdout || ''}${enabledAttempt.stderr || ''}`;
+  const preservedValue = scalar(`
+SELECT setting_value
+  FROM public.app_settings
+ WHERE setting_key = 'feature_per_line_split_billing';
+`);
+  if (enabledAttempt.status === 0
+      || !/PER_LINE_SPLIT_BILLING_FLAG_MUST_BE_OFF/i.test(enabledDetail)
+      || preservedValue !== 'true') {
+    fail(
+      'migration did not fail closed on a pre-existing enabled feature flag',
+      `exit=${enabledAttempt.status} preserved=${preservedValue} detail=${enabledDetail}`,
+    );
+  }
+  runSql(`
+DELETE FROM public.app_settings
+ WHERE setting_key = 'feature_per_line_split_billing';
+`);
   runSql(migration);
+  return {
+    label: 'migration rejects a pre-existing enabled feature flag',
+    passed: true,
+    detail: 'enabled value stayed true while the migration rolled back; clean install persisted false',
+  };
 }
 
 function resetFixture() {
@@ -380,6 +411,28 @@ function proveTriggerSecurityContext() {
     detail: passed
       ? '6 SECURITY DEFINER + fixed search_path + no client EXECUTE + BYPASSRLS owner'
       : `catalog posture definer|search_path|locked_execute|bypass_owner = ${posture}`,
+  };
+}
+
+function proveBillingSetReadHelperSecurityContext() {
+  const posture = scalar(`
+    SELECT
+      p.prosecdef::text || '|' ||
+      (p.provolatile = 's')::text || '|' ||
+      (p.proconfig = ARRAY['search_path=public, pg_temp']::text[])::text || '|' ||
+      (l.lanname = 'sql')::text || '|' ||
+      r.rolbypassrls::text || '|' ||
+      (NOT has_function_privilege('anon', p.oid, 'EXECUTE'))::text || '|' ||
+      has_function_privilege('authenticated', p.oid, 'EXECUTE')::text
+    FROM pg_proc p
+    JOIN pg_roles r ON r.oid = p.proowner
+    JOIN pg_language l ON l.oid = p.prolang
+    WHERE p.oid = 'public.can_read_field_app_billing_set(uuid)'::regprocedure;
+  `);
+  return {
+    label: 'billing-set read helper has exact definer/search-path/ACL posture',
+    passed: posture === 'true|true|true|true|true|true|true',
+    detail: `definer|stable|search_path|sql|bypass_owner|anon_revoked|authenticated_granted = ${posture}`,
   };
 }
 
@@ -677,6 +730,74 @@ LANGUAGE sql STABLE AS $$ SELECT false $$;
     label: 'sales reps can read their own billing sources but not another rep\'s',
     passed: outsiderRows === '0|0' && ownerRows === '1|1',
     detail: `outsider sets|lines = ${outsiderRows}; owner sets|lines = ${ownerRows}`,
+  };
+}
+
+function proveSalesRepCannotForgeBillingMembership() {
+  resetFixture();
+  runSql(`
+BEGIN;
+UPDATE public.field_app_billing_sets
+   SET invoice_group_id = '${ID.group}'
+ WHERE id = '${ID.set}';
+${lineSql(ID.lineA, 'non-forgeable membership source line')}
+${shareSql({ id: ID.shareA, line: ID.lineA, item: ID.itemA, customer: ID.customerA })}
+UPDATE public.invoices
+   SET invoice_group_id = '${ID.group}',
+       created_by = '${ID.actorB}',
+       salesman_id = '${ID.actorB}'
+ WHERE id = '${ID.otherDraftInvoice}';
+COMMIT;
+CREATE OR REPLACE FUNCTION public.is_sales_rep() RETURNS boolean
+LANGUAGE sql STABLE AS $$ SELECT true $$;
+`);
+
+  const forgedRows = scalar(`
+SET ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '${ID.actorB}', false);
+SELECT
+  (SELECT count(*) FROM public.field_app_billing_sets)::text || '|' ||
+  (SELECT count(*) FROM public.field_app_billing_lines)::text;
+RESET ROLE;
+`);
+
+  runSql(`
+BEGIN;
+${lineSql(ID.lineB, 'delegated server-bound source line')}
+${shareSql({ id: ID.shareB, line: ID.lineB, item: ID.itemB, customer: ID.customerB })}
+COMMIT;
+`);
+  const boundRows = scalar(`
+SET ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '${ID.actorB}', false);
+SELECT
+  (SELECT count(*) FROM public.field_app_billing_sets)::text || '|' ||
+  (SELECT count(*) FROM public.field_app_billing_lines)::text;
+RESET ROLE;
+`);
+
+  runSql(`
+UPDATE public.invoices
+   SET deleted_at = now()
+ WHERE id = '${ID.otherDraftInvoice}';
+`);
+  const deletedRows = scalar(`
+SET ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '${ID.actorB}', false);
+SELECT
+  (SELECT count(*) FROM public.field_app_billing_sets)::text || '|' ||
+  (SELECT count(*) FROM public.field_app_billing_lines)::text;
+RESET ROLE;
+`);
+  runSql(`
+CREATE OR REPLACE FUNCTION public.is_sales_rep() RETURNS boolean
+LANGUAGE sql STABLE AS $$ SELECT false $$;
+`);
+
+  return {
+    label: 'sales reps cannot forge billing membership or retain it through soft deletion',
+    passed: forgedRows === '0|0' && boundRows === '1|2' && deletedRows === '0|0',
+    detail: `group-only=${forgedRows}; server-bound=${boundRows}; soft-deleted=${deletedRows}`,
   };
 }
 
@@ -1158,10 +1279,12 @@ SELECT ii.invoice_id::text || '|' || count(s.id)::text
 
 async function main() {
   prepareContainer();
-  installSchema();
+  const flagGuardResult = installSchema();
 
   const results = [
+    flagGuardResult,
     proveTriggerSecurityContext(),
+    proveBillingSetReadHelperSecurityContext(),
     proveNewForeignKeysAreIndexed(),
     proveMovedSourceLine(),
     provePostedReparent(),
@@ -1174,6 +1297,7 @@ async function main() {
     proveOneBillingSetPerInvoiceGroup(),
     proveApplicatorCannotReadBillingSources(),
     proveSalesRepBillingSourceReadsAreOwnerScoped(),
+    proveSalesRepCannotForgeBillingMembership(),
     proveSalesRepShareAndHistoryReadsRequireActiveRole(),
     proveBlankSplitOverrideReasonRejected(),
     proveBlankPriceOverrideReasonRejected(),

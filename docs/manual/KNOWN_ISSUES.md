@@ -85,8 +85,10 @@ Also open: **Sprint D leftovers** (`docs/loops/workflow-waves-ledger.md`) — D1
 - **Per-line-item custom split billing (field-app)** — DESIGN SPEC complete and Phases 1–2 are built
   behind an OFF/absent feature flag in draft PRs #166 and #167; neither migration set is applied live.
   Phase 1 was re-stamped as `20260720231000` after production advanced to live high-water
-  `20260719092832`, with byte-identical SQL, a green PostgreSQL 17 rollback proof, and CLEAN
-  content-bound security/drift review. Phase 2 remains dependent on that exact Phase 1 and must be
+  `20260719092832`; after restamping, an exact-HEAD review found and repaired forgeable/deleted
+  invoice-group read authority plus an enabled-flag fail-open. The PostgreSQL 17 rollback proof now
+  shows group-only `0|0`, server-bound `1|2`, soft-deleted `0|0`, and enabled-flag rejection.
+  Phase 2 remains dependent on that exact Phase 1 and must be
   re-stamped/reviewed on top before publication. Phase 3 save/post and Phase 4 UI/mail gates remain
   unbuilt. The §6.1 real baseline billing cycle is still required before any apply/turn-on decision.
   Spec: `docs/plans/per-line-item-split-billing-spec-2026-07-17.md`; build ledger:
