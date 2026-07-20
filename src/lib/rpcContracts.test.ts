@@ -1564,6 +1564,10 @@ const IDEMPOTENCY_BODY_EXEMPT: Record<
   // line, then delegates to the directly non-executable integer-cents writer
   // that owns the canonical replay lookup/save.
   save_purchase_order: 'delegated',
+  // Phase 3 wraps the exact reviewed legacy transfer function only to enforce
+  // actor attribution and the per-line feature gate. The private delegate keeps
+  // the canonical idempotency lookup/save and is non-executable by API roles.
+  transfer_job_to_invoice: 'delegated',
   //  - 'table-unique'   : idempotency is enforced NOT via the idempotency_keys table
   //                       but by a dedicated column + PARTIAL UNIQUE index on the RPC's
   //                       own table, with a catch-unique-violation replay. Used when the
@@ -1717,6 +1721,23 @@ describe('Idempotency BODY verification (reads migration SQL)', () => {
     expect(implementationSource).toContain("v_existing := check_idempotency(p_idempotency_key, 'save_purchase_order')");
     expect(implementationSource).toContain("PERFORM save_idempotency(p_idempotency_key, 'save_purchase_order'");
     expect(IDEMPOTENCY_BODY_EXEMPT.save_purchase_order).toBe('delegated');
+  });
+
+  it('transfer_job_to_invoice preserves canonical idempotency in its private delegate', () => {
+    const files = getMigrationFiles();
+    const migration = files.find(
+      ({ name }) => name === '20260720234000_per_line_split_billing_phase3_writer.sql'
+    )?.content;
+    const implementationSource = files.find(
+      ({ name }) => name === '20260713060000_harden_field_split_sum100.sql'
+    )?.content;
+
+    expect(migration).toContain('RENAME TO _transfer_job_to_invoice_legacy_20260720');
+    expect(migration).toMatch(/REVOKE ALL ON FUNCTION public\._transfer_job_to_invoice_legacy_20260720[\s\S]*FROM PUBLIC, anon, authenticated/);
+    expect(migration).toMatch(/ACTOR_MISMATCH[\s\S]*RETURN public\._transfer_job_to_invoice_legacy_20260720/);
+    expect(implementationSource).toContain("v_existing := check_idempotency(p_idempotency_key, 'transfer_job_to_invoice')");
+    expect(implementationSource).toContain("PERFORM save_idempotency(p_idempotency_key, 'transfer_job_to_invoice', v_result)");
+    expect(IDEMPOTENCY_BODY_EXEMPT.transfer_job_to_invoice).toBe('delegated');
   });
 
   it("every 'gap' exemption genuinely still lacks body idempotency (forces removal when fixed)", () => {
@@ -1913,6 +1934,10 @@ const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
   // contract inside the same transaction; it is absent from generated client
   // types by design but still must remain fail-closed in the migration scan.
   '_save_purchase_order_ascii_identity_impl',
+  // Phase 3 public writer is intentionally not live yet. Its checked-in SQL
+  // owns an inline, payload-bound idempotency cache; generated client types
+  // remain a truthful live-schema snapshot until the gated apply happens.
+  'save_field_app_invoice_per_line',
 ]);
 
 /**

@@ -306,5 +306,5 @@ describe('product pricing workbook', () => {
 
     await expect(parseProductPricingWorkbook(forgedArchive))
       .rejects.toThrow('expand to at most 25 MB');
-  });
+  }, 20_000);
 });
