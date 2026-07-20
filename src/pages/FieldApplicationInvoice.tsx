@@ -1417,7 +1417,7 @@ export default function FieldApplicationInvoice() {
         // [2026-06-24] pass the invoice being edited so preview excludes deleted split
         // members exactly like save (group-aware). NULL for a new invoice = no exclusion.
         p_invoice_id: (id || null) as string,
-        ...(perLineSplitEnabled ? { p_job_id: jobId as string, p_options: perLineOptions } : {}),
+        ...(perLineSplitEnabled ? { p_job_id: jobId as string, p_line_overrides: perLineOptions } : {}),
       };
       const { data, error } = await supabase.rpc('preview_field_app_invoice_split', previewArgs);
       if (error) throw error;
@@ -2296,7 +2296,10 @@ export default function FieldApplicationInvoice() {
           const scopedProof = assertRpcResult<JobProofData>(scopedRes.data, 'get_job_proof_data');
           const recipientDraft = buildProofDraft(scopedProof);
           const recipientText = renderProofText({ customerName: recipientName, draft: recipientDraft });
-          const recipientInvoiceId = customerToInvoiceId[r.customer_id];
+          // A legacy un-split invoice can notify several grower-share recipients
+          // even though only the billed customer owns the one invoice row. In that
+          // case the shared source invoice is the server gate for every recipient.
+          const recipientInvoiceId = customerToInvoiceId[r.customer_id] ?? (!invoiceGroupId ? id : null);
           if (!recipientInvoiceId) throw new Error('Could not resolve this customer’s invoice send gate.');
           const payload = buildProofEmailPayload({
             customerEmail: r.email,

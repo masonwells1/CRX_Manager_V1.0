@@ -32,15 +32,19 @@ describe('per-line billing UI contracts', () => {
     const source = read('src/pages/FieldApplicationInvoice.tsx');
     expect(source).toContain("supabase.rpc('save_field_app_invoice_per_line' as 'save_field_app_invoice'");
     expect(source).toContain("supabase.rpc('save_field_app_invoice', saveArgs)");
+    expect(source).toContain('p_job_id: jobId as string, p_line_overrides: perLineOptions');
     expect(source).toContain('p_job_id: jobId as string, p_options: perLineOptions');
     expect(source).toContain('const recipientInvoiceId = customerToInvoiceId[r.customer_id]');
     expect(source).toContain('await assertInvoiceSendable(recipientInvoiceId)');
+    expect(source).toContain("customerToInvoiceId[r.customer_id] ?? (!invoiceGroupId ? id : null)");
   });
 
   it('enforces send_disposition again inside the send-email server boundary', () => {
     const source = read('supabase/functions/send-email/index.ts');
     expect(source).toContain('.select("id, customer_id, send_disposition")');
     expect(source).toContain('invoiceRow.send_disposition !== "sendable"');
-    expect(source).toContain('resource_type === "invoice"');
+    expect(source).toContain('email_type === "post_application_notice"');
+    expect(source).toContain('.from("job_notifications")');
+    expect(source).toContain('invoiceGateId = derivedInvoice?.id ?? null');
   });
 });
