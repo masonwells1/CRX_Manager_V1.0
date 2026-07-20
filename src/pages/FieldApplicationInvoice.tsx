@@ -11,6 +11,7 @@ import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, sanitizeError, assertRpcResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
+import { assertInvoiceSendable } from '../lib/invoiceSendDisposition';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
@@ -34,6 +35,9 @@ import {
 import { compareToMaxRate, phiHarvestWarning } from '../lib/labelGuardrails';
 import { computeSeason } from '../utils/season';
 import CustomerSharesTable from '../components/field-app/CustomerSharesTable';
+import PerLineSplitEditor from '../components/field-app/PerLineSplitEditor';
+import { PER_LINE_SPLIT_SETTING_KEY, parsePerLineSplitEnabled, perLineBillingModeBlocker } from '../lib/perLineSplitSetting';
+import type { PerLineBillingOptions } from '../types';
 import type { CustomerSharesBasis } from '../components/field-app/customerSplit';
 import ApplicationServicePicker from '../components/field-app/ApplicationServicePicker';
 import { downloadInvoicePdf, buildInvoicePdfDataFromRow, generateInvoicePdf } from '../lib/invoicePdf';
@@ -253,6 +257,11 @@ export default function FieldApplicationInvoice() {
   const [chemicals, setChemicals] = useState<ChemicalLine[]>([]);
   const [shares, setShares] = useState<CustomerShareResult[]>([]);
   const [growerShareFieldNames, setGrowerShareFieldNames] = useState<string[]>([]);
+  const [growerShareCheckReady, setGrowerShareCheckReady] = useState(false);
+  const [perLineSplitEnabled, setPerLineSplitEnabled] = useState<boolean | null>(null);
+  const [perLineOptions, setPerLineOptions] = useState<PerLineBillingOptions>({ lines: [] });
+  const [perLineOptionsDirty, setPerLineOptionsDirty] = useState(false);
+  const [storedPerLineOptionsReady, setStoredPerLineOptionsReady] = useState(false);
 
   // §5 (Label-Rate Guardrails): the configurable policy (warn vs block). WARN is the
   // shipped/empty default and NEVER blocks the save. Loaded from app_settings once.
@@ -420,6 +429,102 @@ export default function FieldApplicationInvoice() {
           new Map((allRows || []).map((r) => [r.id as string, (r.full_name as string | null) ?? ''])),
         );
       }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  // Rehydrate persisted custom vectors/prices when reopening a per-line draft.
+  // Saving with empty options would otherwise silently replace audited overrides
+  // with today's defaults. Pending-table casts disappear after live type regen.
+  useEffect(() => {
+    if (!perLineSplitEnabled) {
+      setStoredPerLineOptionsReady(!id);
+      return;
+    }
+    if (!id) {
+      setPerLineOptions({ lines: [] });
+      setStoredPerLineOptionsReady(true);
+      return;
+    }
+    if (!invoiceGroupId) {
+      setStoredPerLineOptionsReady(false);
+      return;
+    }
+
+    let cancelled = false;
+    setStoredPerLineOptionsReady(false);
+    (async () => {
+      const { data: setRow, error: setError } = await supabase
+        .from('field_app_billing_sets' as 'invoices')
+        .select('id')
+        .eq('invoice_group_id', invoiceGroupId)
+        .maybeSingle();
+      if (setError || !setRow) throw setError ?? new Error('Per-line billing set not found');
+      const { data: lineRows, error: lineError } = await supabase
+        .from('field_app_billing_lines' as 'invoices')
+        .select('id,line_kind,source_job_chemical_id,application_service_id,description,source_amount_cents,sort_order')
+        .eq('billing_set_id' as 'id', (setRow as unknown as { id: string }).id);
+      if (lineError) throw lineError;
+      const lines = (lineRows ?? []) as unknown as Array<{ id: string; line_kind: 'chemical' | 'service' | 'flat_fee'; source_job_chemical_id: string | null; application_service_id: string | null; description: string; source_amount_cents: number | null; sort_order: number }>;
+      if (lines.length === 0) throw new Error('Per-line billing set has no source lines');
+      const { data: shareRows, error: shareError } = await supabase
+        .from('invoice_line_shares' as 'invoices')
+        .select('billing_line_id,customer_id,split_mode,split_micro_pct,base_unit_price_cents,price_mode,unit_price_cents,split_override_reason,price_override_reason')
+        .in('billing_line_id' as 'id', lines.map((line) => line.id));
+      if (shareError) throw shareError;
+      const shares = (shareRows ?? []) as unknown as Array<{ billing_line_id: string; customer_id: string; split_mode: 'field_default' | 'custom'; split_micro_pct: number; base_unit_price_cents: number; price_mode: 'default' | 'override'; unit_price_cents: number; split_override_reason: string | null; price_override_reason: string | null }>;
+      const restored: PerLineBillingOptions = { lines: lines.flatMap((line) => {
+        const lineShares = shares.filter((share) => share.billing_line_id === line.id);
+        const custom = lineShares.some((share) => share.split_mode === 'custom');
+        const prices = lineShares.filter((share) => share.price_mode === 'override');
+        if (!custom && prices.length === 0) return [];
+        const lineKey = line.line_kind === 'chemical'
+          ? `chemical:${line.source_job_chemical_id}`
+          : line.line_kind === 'service'
+            ? `service:${line.application_service_id}`
+            : `flat_fee:${line.sort_order}`;
+        return [{
+          line_key: lineKey,
+          ...(custom ? {
+            split_mode: 'custom' as const,
+            split_override_reason: lineShares.find((share) => share.split_override_reason)?.split_override_reason ?? '',
+            vector: lineShares.map((share) => ({ customer_id: share.customer_id, split_micro_pct: share.split_micro_pct })),
+          } : {}),
+          ...(prices.length > 0 ? { price_overrides: prices.map((share) => ({
+            customer_id: share.customer_id,
+            unit_price_cents: share.unit_price_cents,
+            reason: share.price_override_reason ?? '',
+          })) } : {}),
+        }];
+      }), flat_fees: lines.filter((line) => line.line_kind === 'flat_fee').map((line) => ({
+        line_key: `flat_fee:${line.sort_order}`,
+        description: line.description,
+        source_amount_cents: line.source_amount_cents ?? 0,
+        sort_order: line.sort_order,
+      })) };
+      if (cancelled) return;
+      setPerLineOptions(restored);
+      setPerLineOptionsDirty(false);
+      setStoredPerLineOptionsReady(true);
+    })().catch((error) => {
+      if (cancelled) return;
+      Sentry.captureException(error, { tags: { source: 'fetch', page: 'field-application-invoice', context: 'stored_per_line_options' } });
+      setStoredPerLineOptionsReady(false);
+    });
+    return () => { cancelled = true; };
+  }, [id, invoiceGroupId, perLineSplitEnabled]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const { data, error } = await supabase
+        .from('app_settings')
+        .select('setting_value')
+        .eq('setting_key', PER_LINE_SPLIT_SETTING_KEY)
+        .maybeSingle();
+      if (cancelled) return;
+      if (error) Sentry.captureException(error, { tags: { source: 'fetch', page: 'field-application-invoice', context: 'per_line_feature_flag' } });
+      setPerLineSplitEnabled(error ? null : parsePerLineSplitEnabled((data as { setting_value?: string } | null)?.setting_value));
     })();
     return () => { cancelled = true; };
   }, []);
@@ -1107,9 +1212,11 @@ export default function FieldApplicationInvoice() {
     const fieldIds = Array.from(new Set(locations.map((location) => location.field_id).filter(Boolean)));
     if (fieldIds.length === 0) {
       setGrowerShareFieldNames([]);
+      setGrowerShareCheckReady(true);
       return;
     }
 
+    setGrowerShareCheckReady(false);
     let cancelled = false;
     (async () => {
       const { data, error } = await supabase
@@ -1121,6 +1228,7 @@ export default function FieldApplicationInvoice() {
       if (error) {
         Sentry.captureException(error, { tags: { source: 'fetch', page: 'field-application-invoice', context: 'grower_share_banner' } });
         setGrowerShareFieldNames([]);
+        setGrowerShareCheckReady(false);
         return;
       }
 
@@ -1134,6 +1242,7 @@ export default function FieldApplicationInvoice() {
             .map((location) => location.field_name),
         )),
       );
+      setGrowerShareCheckReady(true);
     })();
     return () => { cancelled = true; };
   }, [locations]);
@@ -1276,9 +1385,12 @@ export default function FieldApplicationInvoice() {
       toast('error', 'Select at least one location first');
       return;
     }
+    const previewModeBlocker = perLineBillingModeBlocker(perLineSplitEnabled, growerShareFieldNames, jobId, growerShareCheckReady);
+    if (previewModeBlocker) { toast('error', previewModeBlocker); return; }
+    if (perLineSplitEnabled && !storedPerLineOptionsReady) { toast('error', 'Stored per-line overrides could not be verified. Reload before continuing.'); return; }
     setPreviewing(true);
     try {
-      const { data, error } = await supabase.rpc('preview_field_app_invoice_split', {
+      const previewArgs = {
         p_locations: locations.map((l, idx) => ({
           field_id: l.field_id,
           map_number: l.map_number || idx + 1,
@@ -1305,10 +1417,13 @@ export default function FieldApplicationInvoice() {
         // [2026-06-24] pass the invoice being edited so preview excludes deleted split
         // members exactly like save (group-aware). NULL for a new invoice = no exclusion.
         p_invoice_id: (id || null) as string,
-      });
+        ...(perLineSplitEnabled ? { p_job_id: jobId as string, p_options: perLineOptions } : {}),
+      };
+      const { data, error } = await supabase.rpc('preview_field_app_invoice_split', previewArgs);
       if (error) throw error;
       const result = assertRpcResult<PreviewFieldAppSplitResult>(data, 'preview_field_app_invoice_split');
       setPreviewData(result);
+      setPerLineOptionsDirty(false);
       setActiveTab('customers');
     } catch (err) {
       Sentry.captureException(err, { tags: { rpc: 'preview_field_app_invoice_split' } });
@@ -1399,6 +1514,13 @@ export default function FieldApplicationInvoice() {
       toast('error', 'Wait for Get Weather to finish before saving.');
       return;
     }
+    const saveModeBlocker = perLineBillingModeBlocker(perLineSplitEnabled, growerShareFieldNames, jobId, growerShareCheckReady);
+    if (saveModeBlocker) { toast('error', saveModeBlocker); return; }
+    if (perLineSplitEnabled && !storedPerLineOptionsReady) { toast('error', 'Stored per-line overrides could not be verified. Reload before continuing.'); return; }
+    if (perLineSplitEnabled && perLineOptionsDirty) {
+      toast('error', 'Preview the updated per-line splits and prices before saving.');
+      return;
+    }
     // [B1.1] Never bill 0 / blank applied acres. The server rejects it
     // (ZERO_APPLIED_ACRES); block here too with a clear message so the user fixes
     // it before the round-trip rather than seeing a raw RPC error. (The empty-
@@ -1419,7 +1541,7 @@ export default function FieldApplicationInvoice() {
     setSaving(true);
     try {
       const key = saveIdem.getKey();
-      const { data, error } = await supabase.rpc('save_field_app_invoice', {
+      const saveArgs = {
         // save_field_app_invoice accepts NULL p_invoice_id to create a new
         // invoice (live signature is nullable; generated type narrows to string).
         p_invoice_id: (id || null) as string,
@@ -1467,10 +1589,20 @@ export default function FieldApplicationInvoice() {
         p_performed_by: profile.id,
         p_application_service_id: (appServiceId || null) as string,
         p_idempotency_key: key,
-      });
-
-      if (error) throw error;
-      const result = assertRpcResult<FieldAppInvoiceResult>(data, 'save_field_app_invoice');
+        ...(perLineSplitEnabled ? { p_job_id: jobId as string, p_options: perLineOptions } : {}),
+      };
+      let result: FieldAppInvoiceResult;
+      if (perLineSplitEnabled) {
+        // Generated Supabase types reflect the live flag-OFF schema; the additive
+        // Phase 3 RPC remains migration-gated until promotion.
+        const { data, error } = await supabase.rpc('save_field_app_invoice_per_line' as 'save_field_app_invoice', saveArgs);
+        if (error) throw error;
+        result = assertRpcResult<FieldAppInvoiceResult>(data, 'save_field_app_invoice_per_line');
+      } else {
+        const { data, error } = await supabase.rpc('save_field_app_invoice', saveArgs);
+        if (error) throw error;
+        result = assertRpcResult<FieldAppInvoiceResult>(data, 'save_field_app_invoice');
+      }
       saveIdem.resetKey();
       const ids = result.invoice_ids || [];
       const groupNote = result.invoice_group_id ? ` (group of ${ids.length})` : '';
@@ -2003,6 +2135,7 @@ export default function FieldApplicationInvoice() {
           balanceCents: pdfSnapshot.balance_cents,
           attachmentBase64: base64,
         });
+        await assertInvoiceSendable(id);
         const result = await sendEmail(payload);
         if (!result.success) throw new Error(result.error || 'Email failed to send');
 
@@ -2163,14 +2296,18 @@ export default function FieldApplicationInvoice() {
           const scopedProof = assertRpcResult<JobProofData>(scopedRes.data, 'get_job_proof_data');
           const recipientDraft = buildProofDraft(scopedProof);
           const recipientText = renderProofText({ customerName: recipientName, draft: recipientDraft });
+          const recipientInvoiceId = customerToInvoiceId[r.customer_id];
+          if (!recipientInvoiceId) throw new Error('Could not resolve this customer’s invoice send gate.');
           const payload = buildProofEmailPayload({
             customerEmail: r.email,
             customerId: r.customer_id,
             customerName: recipientName,
             jobId,
+            invoiceId: recipientInvoiceId,
             draft: recipientDraft,
             emailIdempotencyKey: r.email_idempotency_key,
           });
+          await assertInvoiceSendable(recipientInvoiceId);
           await sendEmail(payload);
           const confirmRes = await supabase.rpc('confirm_job_notification_sent', {
             p_notification_id: r.notification_id,
@@ -2763,6 +2900,22 @@ export default function FieldApplicationInvoice() {
               discountByCustomer={discountByCustomer}
               onDiscountChange={canEdit ? handleDiscountChange : undefined}
             />
+            {perLineSplitEnabled && previewData?.billing_lines && (
+              <div className="mt-4">
+                {perLineOptionsDirty && (
+                  <div className="mb-3 px-3 py-2 rounded border border-amber-300 bg-amber-50 text-xs text-amber-800">
+                    Per-line overrides changed. Click Preview to validate percentages, reasons, and final stored cents before Save.
+                  </div>
+                )}
+                <PerLineSplitEditor
+                  lines={previewData.billing_lines}
+                  options={perLineOptions}
+                  customerNames={Object.fromEntries(previewData.per_customer.map((customer) => [customer.customer_id, customer.customer_name]))}
+                  onChange={(next) => { setPerLineOptions(next); setPerLineOptionsDirty(true); setDirty(true); }}
+                  readOnly={!canEdit}
+                />
+              </div>
+            )}
           </div>
         )}
 

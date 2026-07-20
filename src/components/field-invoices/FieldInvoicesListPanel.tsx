@@ -7,6 +7,7 @@ import Badge from '../ui/Badge';
 import DataTable, { type Column } from '../ui/DataTable';
 import { useToast } from '../ui/Toast';
 import { supabase, sanitizeError } from '../../lib/db';
+import { assertInvoiceSendable } from '../../lib/invoiceSendDisposition';
 import { Sentry } from '../../lib/sentry';
 import { runCriticalAction } from '../../lib/criticalAction';
 import { exportToCSV } from '../../lib/csvExport';
@@ -291,6 +292,7 @@ export default function FieldInvoicesListPanel() {
           balanceCents: row.balance_cents,
           attachmentBase64: base64,
         });
+        await assertInvoiceSendable(row.id);
         const result = await sendEmail(payload);
         if (!result.success) throw new Error(result.error || 'Email failed to send');
 

@@ -2,6 +2,8 @@
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
+> **Per-line split billing Phase 4 (2026-07-20, branch only):** no new database migration is introduced. The UI remains behind the server-owned `feature_per_line_split_billing=false` row created by the unapplied Phase 1 chain, and the prepared `send-email` server guard is not deployed. Live migration state and data are unchanged; Phase 1–3 migrations remain draft-only pending Mason's ordered promotion decision.
+
 | # | Migration timestamp | Purpose |
 |---:|---|---|
 | 782 | 20260720235246 | **APPLIED LIVE 2026-07-20; submitted as `20260720235000_qualify_sales_rep_authorization_helper`, server-assigned ledger version `20260720235246`; both migration reviewers CLEAN and the live behavioral chain returned `SMOKE_PASS_ROLLBACK`.** Re-emits `public.is_sales_rep()` with `SET search_path = public, pg_temp`, an explicit `public.profiles` reference, and EXECUTE revoked from PUBLIC/anon while retained for authenticated/service roles. The delivery-signature rollback smoke performs a real temporary-table shadowing attempt and requires it to fail. Pre-apply live evidence at 2026-07-20 23:45Z: high-water was `20260720233000`; the exact smoke failed first with `SMOKE_FAIL: is_sales_rep does not qualify public.profiles`, while live catalog inspection confirmed the existing helper already had the safe `public, pg_temp` ordering. The first post-apply run exposed only a qualification-sensitive catalog fixture (`FROM profiles` versus `FROM public.profiles`); after making that textual predicate qualification-tolerant, the unchanged authorization chain passed. |
