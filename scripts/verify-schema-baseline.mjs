@@ -116,6 +116,23 @@ const bucketInsertValues = platformOverlay.match(
 if (countMatches(bucketInsertValues, /^\s+\('/gm) !== expectedCounts.storage_buckets) {
   fail('platform overlay bucket row count drifted from the bucket snapshot');
 }
+const quoteLiteral = (value) => `'${String(value).replaceAll("'", "''")}'`;
+const expectedBucketInsertValues = buckets.map((bucket, index) => {
+  const mimeTypes = bucket.allowed_mime_types == null
+    ? 'NULL'
+    : `ARRAY[${bucket.allowed_mime_types.map(quoteLiteral).join(', ')}]::text[]`;
+  const row = [
+    quoteLiteral(bucket.id),
+    quoteLiteral(bucket.name),
+    bucket.public ? 'true' : 'false',
+    bucket.file_size_limit == null ? 'NULL' : String(bucket.file_size_limit),
+    mimeTypes,
+  ].join(', ');
+  return `  (${row})${index === buckets.length - 1 ? '' : ','}`;
+}).join('\n');
+if (bucketInsertValues !== expectedBucketInsertValues) {
+  fail('platform overlay bucket contents drifted from the bucket snapshot');
+}
 
 for (const extension of ['pg_cron', 'pgcrypto', 'postgis', 'uuid-ossp', 'plpgsql_check']) {
   if (!extensions.includes(`EXTENSION IF NOT EXISTS ${extension}`) &&
