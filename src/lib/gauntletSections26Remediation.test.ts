@@ -6,6 +6,8 @@ import { fileURLToPath } from 'node:url';
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const migration = (name: string) =>
   readFileSync(join(root, 'supabase', 'migrations', name), 'utf8').replace(/\r\n/g, '\n');
+const source = (...parts: string[]) =>
+  readFileSync(join(root, ...parts), 'utf8').replace(/\r\n/g, '\n');
 
 describe('gauntlet sections 2-6 CodeRabbit closeout', () => {
   it('claims and fingerprints revert_quote_status before any quote mutation', () => {
@@ -210,5 +212,34 @@ describe('gauntlet sections 2-6 CodeRabbit closeout', () => {
       'IF v_percentage IS NULL OR v_percentage <= 0 OR v_percentage > 100 THEN',
     );
     expect(sql).toContain('COMMISSION_NULL_PERCENTAGE_POSTFLIGHT_FAILED');
+  });
+
+  it('keeps governed split edits immutable and grouped voids atomic', () => {
+    const sql = migration('20260720175946_protect_governed_split_edit_and_void_group.sql');
+    expect(sql).toContain('SPLIT_INVOICE_EDIT_REQUIRES_REISSUE');
+    expect(sql).toContain('SPLIT_INVOICE_GROUP_VOID_REQUIRED');
+    expect(sql).toContain('CREATE FUNCTION public.void_invoice_group');
+    expect(sql).toContain("v_contract CONSTANT text := 'void_invoice_group_v1'");
+    expect(sql).toContain('INVOICE_GROUP_PROVENANCE_REQUIRED');
+  });
+
+  it('scopes delivery signatures to canonical delivery paths and permitted actors', () => {
+    const sql = migration('20260720200329_scope_delivery_signature_storage_access.sql');
+    expect(sql).toContain('CREATE POLICY "delivery_signatures_scoped_select"');
+    expect(sql).toContain('CREATE POLICY "delivery_signatures_scoped_insert"');
+    expect(sql).toContain('CREATE POLICY "delivery_signatures_scoped_update"');
+    expect(sql).toContain("d.assigned_driver = (SELECT auth.uid())");
+    expect(sql).toContain("bucket_id = 'delivery-signatures'");
+  });
+
+  it('keeps payment-rejection E2E assertions on the thrown RPC error path', () => {
+    for (const path of [
+      ['tests', 'e2e', 'concurrent-operations.spec.ts'],
+      ['tests', 'e2e', 'period-close-accounting.spec.ts'],
+    ]) {
+      const spec = source(...path);
+      expect(spec).toContain("rejection = error instanceof Error ? error.message : String(error)");
+      expect(spec).toContain("expect(rejection.toLowerCase()).toContain('eligible')");
+    }
   });
 });
