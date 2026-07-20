@@ -245,6 +245,16 @@ describe('gauntlet sections 2-6 CodeRabbit closeout', () => {
     expect(deleteSql).toContain('public.is_sales_rep()');
   });
 
+  it('keeps the supplier pricing route aligned with admin-only cost access', () => {
+    const app = source('src', 'App.tsx');
+    expect(app).toContain(
+      "path: 'supplier-pricing', element: <ProtectedRoute allowedRoles={['admin']}>",
+    );
+    expect(app).not.toContain(
+      "path: 'supplier-pricing', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}>",
+    );
+  });
+
   it('keeps payment-rejection E2E assertions on the thrown RPC error path', () => {
     for (const path of [
       ['tests', 'e2e', 'concurrent-operations.spec.ts'],
