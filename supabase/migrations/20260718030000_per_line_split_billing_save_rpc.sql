@@ -361,6 +361,8 @@ DECLARE
   v_repr_base_price    bigint;         -- resolved representative base BEFORE the uniform-override penny guard (Codex r7 P2 audit base)
   v_inv_field_names    text[];         -- denormalized field names for the child invoice row (Codex r7 P2)
   v_inv_crop_type      text;           -- denormalized representative crop for the child invoice row (Codex r7 P2)
+  v_inv_applicator_name text;          -- source-job applicator, denormalized onto the child (Codex r8 P2)
+  v_inv_vehicle_name   text;           -- source-job vehicle, denormalized onto the child (Codex r8 P2)
   v_line_unit_cost     bigint;         -- per-unit COGS for the current line (Codex P1 #3)
   v_invoice_cost       bigint;         -- per-child accumulated total_cost_cents (Codex P1 #3)
   v_is_new_invoice     boolean;        -- true only when a child invoice row is freshly INSERTed (Codex P1 #8)
@@ -750,6 +752,15 @@ BEGIN
     v_season       := v_job.season;            -- capture here (v_job is a bare record, only assigned
                                                -- inside this guard; referencing v_job.season outside
                                                -- it — even in a not-taken CASE branch — raises 55000).
+    -- Codex round-8 P2: denormalize the job's applicator + vehicle onto each child (like
+    -- transfer_job_to_invoice) — field-invoice lists and PDFs read these invoice columns, so without
+    -- them a split child loses who applied it and with what equipment. Job-less splits stay NULL.
+    IF v_job.applicator_id IS NOT NULL THEN
+      SELECT full_name INTO v_inv_applicator_name FROM profiles WHERE id = v_job.applicator_id;
+    END IF;
+    IF v_job.vehicle_id IS NOT NULL THEN
+      SELECT vehicle_name INTO v_inv_vehicle_name FROM vehicles WHERE id = v_job.vehicle_id;
+    END IF;
   END IF;
 
   -- Season for per-customer service-rate lookups AND the child invoice stamp (Codex round-3 P1):
@@ -1134,6 +1145,7 @@ BEGIN
       'per_customer_priced', (COALESCE(v_chem_price_map, v_svc_price_map) IS NOT NULL), -- Option B (#M)
       'caller_override_custs', COALESCE(to_jsonb(v_caller_override), '[]'::jsonb),       -- genuine overrides (#M)
       'repr_base_unit_price_cents', v_repr_base_price,   -- resolved representative base for the override audit (Codex r7 P2)
+      'resolved_price_map', COALESCE(v_chem_price_map, v_svc_price_map, '{}'::jsonb),    -- customer_id -> OWN resolved pre-override price (Codex r8 P2)
       'svc_source_map',  COALESCE(v_svc_source_map, '{}'::jsonb),  -- per-customer service source (#M)
       'reasons_map',     COALESCE(v_reasons_map, '{}'::jsonb),     -- split/price reasons (#L)
       'service_name',    CASE WHEN v_line_kind = 'service' THEN v_app_service.name ELSE NULL END, -- Codex r2 #N
@@ -1187,7 +1199,8 @@ BEGIN
         total_amount_cents, total_cost_cents,
         invoice_group_id, application_service_id, season,
         field_app_billing_set_id, job_id, application_date,
-        field_names, crop_type, total_acres   -- Codex r7 P2: denormalized field context for the combined list/PDFs
+        field_names, crop_type, total_acres,   -- Codex r7 P2: denormalized field context for the combined list/PDFs
+        applicator_name, vehicle_name           -- Codex r8 P2: source-job applicator/vehicle
       ) VALUES (
         v_invoice_number, v_customer_id, 'field_application', 'draft',
         COALESCE((p_invoice->>'invoice_date')::date, CURRENT_DATE),
@@ -1197,7 +1210,8 @@ BEGIN
         -- job_id + application_date on EVERY child so field-invoice lists resolve Job # and the
         -- application date, not just the first child via jobs.invoice_id (round-3 P2).
         v_set_id, p_source_job_id, v_job_app_date,
-        v_inv_field_names, v_inv_crop_type, v_total_applied_acres
+        v_inv_field_names, v_inv_crop_type, v_total_applied_acres,
+        v_inv_applicator_name, v_inv_vehicle_name
       ) RETURNING id INTO v_invoice_id;
     ELSE
       v_is_new_invoice := false;
@@ -1216,6 +1230,8 @@ BEGIN
         field_names            = v_inv_field_names,        -- Codex r7 P2: keep denormalized field context in sync on re-save
         crop_type              = v_inv_crop_type,
         total_acres            = v_total_applied_acres,
+        applicator_name        = v_inv_applicator_name,    -- Codex r8 P2
+        vehicle_name           = v_inv_vehicle_name,
         total_amount_cents     = 0,
         total_cost_cents       = 0,
         send_disposition       = 'normal',
@@ -1255,11 +1271,15 @@ BEGIN
       v_split_reason := NULLIF(v_plan->'reasons_map'->v_cust->>'split_reason', '');
       v_price_reason := NULLIF(v_plan->'reasons_map'->v_cust->>'price_reason', '');
       IF (v_plan->'caller_override_custs') ? v_cust THEN
-        -- Codex round-7 P2: audit the RESOLVED representative base (tier/quote/service), NOT the calculator's
-        -- base — which equals the override value when the uniform penny guard overwrote the source price.
-        v_share_base_price  := COALESCE((v_plan->>'repr_base_unit_price_cents')::bigint,
+        -- Codex round-7/8 P2: audit THIS customer's OWN resolved pre-override price (Option B), falling
+        -- back to the resolved representative base (round-7) then the calculator base. Never the override
+        -- value itself — the audit must document what the price WOULD have been before the override.
+        v_share_base_price  := COALESCE((v_plan->'resolved_price_map'->>v_cust)::bigint,
+                                        (v_plan->>'repr_base_unit_price_cents')::bigint,
                                         (v_alloc_row->>'base_unit_price_cents')::bigint);
-        v_share_base_source := v_alloc_row->>'base_price_source';
+        v_share_base_source := CASE WHEN v_line_kind = 'service'
+                                    THEN COALESCE(v_plan->'svc_source_map'->>v_cust, v_alloc_row->>'base_price_source')
+                                    ELSE v_alloc_row->>'base_price_source' END;
         v_share_price_mode  := 'override';
       ELSIF COALESCE((v_plan->>'per_customer_priced')::boolean, false) THEN
         v_share_base_price  := (v_alloc_row->>'unit_price_cents')::bigint;        -- this co-owner's OWN price
@@ -1291,12 +1311,18 @@ BEGIN
       -- accumulates the LR share below, so the group total is exact regardless.
       v_item_cost_cents := COALESCE((v_plan->'cogs_by_customer'->>v_cust)::bigint, 0);
 
-      -- sql-safety: exempt-registry — invoice_items.billing_line_id is created by the prior
-      -- parked migration 20260718010000 (not yet in the schema-registry); see file header.
+      -- sql-safety: exempt-registry — invoice_items.billing_line_id is created by the prior parked
+      -- migration 20260718010000 (not yet in the registry); unit_size/total_applied/total_applied_unit
+      -- are long-standing invoice_items columns (20260219200000_invoice_statement_enrichment).
+      -- Codex round-8 P1: the field-application PDF/email renders the price unit from unit_size and the
+      -- applied quantity from total_applied/total_applied_unit. For a chemical child, mirror the canonical
+      -- field-app item: unit_size = the pricing unit, total_applied = this co-owner's billed quantity in
+      -- that unit. Service/flat leave them null (service bills per acre; flat is flat).
       INSERT INTO invoice_items (
         invoice_id, product_id, description,
         quantity, unit_price_cents, extended_cents, cost_cents,
         sort_order, acres, rate_unit,
+        unit_size, total_applied, total_applied_unit,
         is_application_fee, price_source, billing_line_id
       ) VALUES (
         v_invoice_id, (v_plan->>'product_id')::uuid,
@@ -1314,6 +1340,9 @@ BEGIN
         (v_plan->>'sort_order')::int,
         v_acres_alloc,
         CASE WHEN v_line_kind = 'service' THEN 'acre' ELSE v_plan->>'rate_unit' END,
+        CASE WHEN v_line_kind = 'chemical' THEN NULLIF(v_plan->>'rate_unit', '') END,   -- unit_size = pricing unit
+        CASE WHEN v_line_kind = 'chemical' THEN COALESCE(v_qty, 0) END,                  -- total_applied = billed qty
+        CASE WHEN v_line_kind = 'chemical' THEN NULLIF(v_plan->>'rate_unit', '') END,   -- total_applied_unit
         (v_line_kind = 'service'),
         v_item_price_source,
         (v_plan->>'billing_line_id')::uuid

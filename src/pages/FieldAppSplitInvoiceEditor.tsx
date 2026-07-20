@@ -10,6 +10,9 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, supabaseUntyped, assertRpcResult, sanitizeError } from '../lib/db';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
+import { useCreditLimitCheck } from '../hooks/useGuardrails';
+import { checkRUPCompliance, rupRegisterDisposition } from '../lib/rupCompliance';
+import { Sentry } from '../lib/sentry';
 import { formatCents } from '../lib/money';
 import { parseDollarsToCents } from '../lib/parseCents';
 import { localToday } from '../lib/dateUtils';
@@ -240,6 +243,9 @@ export default function FieldAppSplitInvoiceEditor() {
   const [saving, setSaving] = useState(false);
   const [posting, setPosting] = useState(false);
   const [showPostConfirm, setShowPostConfirm] = useState(false);
+  // Codex round-8 P2: the credit-limit + RUP-license advisories the normal invoice post shows.
+  const { check: checkCreditLimit } = useCreditLimitCheck();
+  const [postWarning, setPostWarning] = useState<string | null>(null);
   const [resultInvoices, setResultInvoices] = useState<ResultInvoice[]>([]);
   const [resultShares, setResultShares] = useState<ResultShare[]>([]);
   const [posted, setPosted] = useState(false);
@@ -658,6 +664,11 @@ export default function FieldAppSplitInvoiceEditor() {
     if (problem) { toast('error', problem); return; }
     if (!profile?.id) return;
     setSaving(true);
+    // Codex round-8 P1: a re-save may RE-PRICE (server-resolved quote/tier/service prices can move).
+    // Revoke any prior posting authorization NOW so Post is disabled during the RPC + readback and
+    // STAYS disabled if the readback fails — it is restored only after loadResults succeeds below.
+    setInvoiceGroupId(null);
+    setSavedSig(null);
     try {
       const validFields = fields.filter((f) => (parseFloat(f.applied_acres) || 0) > 0);
       const { data, error } = await supabaseUntyped.rpc('save_field_app_split_invoice', {
@@ -704,6 +715,46 @@ export default function FieldAppSplitInvoiceEditor() {
     } finally {
       setSaving(false);
     }
+  };
+
+  // Codex round-8 P2: mirror the normal invoice post flow's guardrails BEFORE confirming the post.
+  // post_invoice_group posts EVERY co-owner child, so the credit-limit + RUP-license advisories must
+  // cover the WHOLE group. Advisory only — this NEVER blocks posting (parity with InvoiceDetail).
+  const openPostConfirm = async () => {
+    let warning: string | null = null;
+    try {
+      const { data: grp } = await supabaseUntyped
+        .from('invoices')
+        .select('id, invoice_number, customer_id, total_amount_cents, invoice_items(product_id)')
+        .eq('invoice_group_id', invoiceGroupId)
+        .is('deleted_at', null)
+        .not('invoice_group_id', 'is', null);
+      const rupParts: string[] = [];
+      const creditParts: string[] = [];
+      for (const inv of ((grp as Array<{ invoice_number: string; customer_id: string | null; total_amount_cents: number | null; invoice_items: { product_id: string | null }[] | null }>) || [])) {
+        const pids = (inv.invoice_items || []).map((x) => x.product_id).filter((p): p is string => Boolean(p));
+        if (inv.customer_id && pids.length > 0) {
+          const res = await checkRUPCompliance(inv.customer_id, pids);
+          if (res.hasRUPProducts && !res.hasValidLicense) {
+            const disp = rupRegisterDisposition(res);
+            rupParts.push(`${inv.invoice_number}: ${res.rupProductNames.join(', ')} — ${res.missingLicense ? 'NO applicator license' : 'EXPIRED license'} (${disp.label})`);
+          }
+        }
+        if (inv.customer_id && Number(inv.total_amount_cents ?? 0) > 0) {
+          const ok = await checkCreditLimit({ customerId: inv.customer_id, newAmountCents: Number(inv.total_amount_cents) });
+          if (!ok) creditParts.push(inv.invoice_number);
+        }
+      }
+      const bits: string[] = [];
+      if (rupParts.length > 0) bits.push(`Restricted-use products without a valid license — ${rupParts.join('; ')}. These will be recorded in the RUP sales register.`);
+      if (creditParts.length > 0) bits.push(`Over credit limit: invoice(s) ${creditParts.join(', ')}.`);
+      if (bits.length > 0) warning = `Posting this group posts every invoice in it. ${bits.join(' ')}`;
+    } catch (err) {
+      // Advisory must never block posting — a check failure falls through to the plain confirm.
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'split_post_guardrails' } });
+    }
+    setPostWarning(warning);
+    setShowPostConfirm(true);
   };
 
   const handlePost = async () => {
@@ -837,9 +888,9 @@ export default function FieldAppSplitInvoiceEditor() {
             variant="primary"
             icon={<Send className="w-4 h-4" />}
             showChevron={false}
-            disabled={!invoiceGroupId || posted || dirtyAfterSave}
+            disabled={!invoiceGroupId || posted || dirtyAfterSave || saving || posting}
             loading={posting}
-            onClick={() => setShowPostConfirm(true)}
+            onClick={openPostConfirm}
             title={dirtyAfterSave ? 'You have unsaved changes — re-save the draft before posting.' : undefined}
           >
             {posted ? 'Posted' : 'Post'}
@@ -1242,9 +1293,11 @@ export default function FieldAppSplitInvoiceEditor() {
         onClose={() => setShowPostConfirm(false)}
         onConfirm={handlePost}
         title="Post this split invoice group?"
-        message="Posting freezes the per-line split and each customer's invoice. This cannot be edited afterward without unposting."
+        message={postWarning
+          ? `${postWarning}\n\nPosting freezes the per-line split and each customer's invoice. This cannot be edited afterward without unposting. Post anyway?`
+          : "Posting freezes the per-line split and each customer's invoice. This cannot be edited afterward without unposting."}
         confirmLabel="Post"
-        variant="info"
+        variant={postWarning ? 'danger' : 'info'}
         icon={Send}
         loading={posting}
       />
