@@ -2,6 +2,16 @@
 
 All significant development milestones, in reverse chronological order.
 
+### 2026-07-20 — Generated schema baseline review packaging corrected
+
+The production public-schema snapshot remains byte-for-byte unchanged and
+SHA/restore verified, but Git now correctly treats that 66,674-line generated
+artifact as non-textual review evidence. The prior attribute accidentally enabled
+its full textual diff, making the exact base-main Claude gate exceed the provider's
+one-million-token request limit. Review prompts now carry the artifact identity
+instead of embedding 2.7 MB of generated SQL; the manifest hash and disposable
+restore proof remain the authoritative content checks.
+
 ### 2026-07-19 — Exact push-gate invoice and commission closures
 
 The final exact Codex review found two live authorization/validation gaps after the
