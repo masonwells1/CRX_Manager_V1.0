@@ -1,12 +1,12 @@
 {
   "_meta": {
     "registry_version": 2,
-    "generated_at": "2026-07-19",
+    "generated_at": "2026-07-20",
     "generated_from": "Supabase project rhyzpcqhnizqbxphqdkr — public schema introspection",
     "regenerate_with": "node scripts/regenerate-schema-registry.mjs --from-introspection <queries.json> (queries documented in the script header)",
     "purpose": "Single source of truth for hooks: generated columns, status enums, ALL parseable CHECK IN-lists, NOT NULL columns, full column lists, sequences, tables-with/without updated_at, applied-migration high water.",
     "note": "For a fresh refresh from the live DB, ask Claude Code: 'regenerate the schema-registry from Supabase' (/regen-schema-registry). skipped_constraints lists every CHECK the hooks can NOT validate — review it when touching those tables.",
-    "migrations_high_water": "20260718235717",
+    "migrations_high_water": "20260720185135",
     "applied_migration_names": [
       "20260207_gap_analysis_fixes.sql",
       "20260209050000_inventory_overhaul",
@@ -262,6 +262,17 @@
       "20260718230848_harden_quote_reopen_history_guards",
       "20260718234500_reconcile_gauntlet_intermediate_live_windows",
       "20260718235900_stage_supplier_vendor_aliases_phase1b",
+      "20260719013000_bind_revert_quote_status_idempotency",
+      "20260719040000_lock_backfill_split_allocation_rows",
+      "20260719064000_validate_quote_commission_splits",
+      "20260719093000_route_invoice_updates_through_governed_rpcs",
+      "20260719093500_reject_null_commission_percentages",
+      "20260719100000_trust_only_post_revoke_split_provenance",
+      "20260719100500_revert_quote_status_deadlock_retry",
+      "20260719101000_align_finance_charge_preview_month_dedup",
+      "20260719102000_allow_governed_split_terminal_lifecycle",
+      "20260720173059_fix_statement_opening_balance",
+      "20260720175946_protect_governed_split_edit_and_void_group",
       "a1_dispatched_list_recent_completed",
       "a1b_dispatched_to_me_completed_tail",
       "accounting_and_integrity_fixes",
@@ -1212,6 +1223,9 @@
     "receiving_records",
     "return_items",
     "rup_sales_records",
+    "split_invoice_creation_claims",
+    "split_invoice_mutation_claims",
+    "split_invoice_provenance",
     "supplier_price_observations",
     "team_note_attachments",
     "team_note_tags",
@@ -2231,6 +2245,17 @@
       ],
       "constraints": [
         "rup_sales_records_compliance_status_check"
+      ]
+    },
+    "split_invoice_mutation_claims.operation": {
+      "values": [
+        "save_invoice",
+        "delete_invoices",
+        "void_invoice",
+        "cancel_order"
+      ],
+      "constraints": [
+        "split_invoice_mutation_claims_operation_check"
       ]
     },
     "supplier_price_import_rows.price_kind": {
@@ -3281,6 +3306,24 @@
       "table": "returns",
       "constraint": "returns_cancelled_has_reason_check",
       "def": "CHECK (((status <> 'cancelled'::text) OR (cancellation_reason IS NOT NULL)))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "split_invoice_provenance",
+      "constraint": "split_invoice_provenance_content_claim_check",
+      "def": "CHECK ((jsonb_typeof(content_claim) = 'object'::text))",
+      "reason": "unparseable — hooks do NOT validate this constraint"
+    },
+    {
+      "table": "split_invoice_provenance",
+      "constraint": "split_invoice_provenance_contract_version_check",
+      "def": "CHECK ((contract_version = 'split_invoice_provenance_v1'::text))",
+      "reason": "unparseable — hooks do NOT validate this constraint"
+    },
+    {
+      "table": "split_invoice_provenance",
+      "constraint": "split_invoice_provenance_total_amount_cents_check",
+      "def": "CHECK ((total_amount_cents >= 0))",
       "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
     },
     {
@@ -4992,6 +5035,44 @@
       ],
       "with_default": [
         "id"
+      ]
+    },
+    "split_invoice_creation_claims": {
+      "no_default": [
+        "transaction_id",
+        "order_id"
+      ],
+      "with_default": [
+        "claim_nonce",
+        "created_at"
+      ]
+    },
+    "split_invoice_mutation_claims": {
+      "no_default": [
+        "transaction_id",
+        "invoice_id",
+        "operation"
+      ],
+      "with_default": [
+        "created_at"
+      ]
+    },
+    "split_invoice_provenance": {
+      "no_default": [
+        "invoice_id",
+        "order_id",
+        "invoice_group_id",
+        "customer_id",
+        "invoice_type",
+        "season",
+        "total_amount_cents",
+        "content_claim",
+        "created_by"
+      ],
+      "with_default": [
+        "provenance_nonce",
+        "created_at",
+        "contract_version"
       ]
     },
     "supplier_price_import_rows": {
@@ -7109,6 +7190,32 @@
       "voided_at",
       "voided_by",
       "void_reason"
+    ],
+    "split_invoice_creation_claims": [
+      "transaction_id",
+      "order_id",
+      "claim_nonce",
+      "created_at"
+    ],
+    "split_invoice_mutation_claims": [
+      "transaction_id",
+      "invoice_id",
+      "operation",
+      "created_at"
+    ],
+    "split_invoice_provenance": [
+      "invoice_id",
+      "order_id",
+      "invoice_group_id",
+      "customer_id",
+      "invoice_type",
+      "season",
+      "total_amount_cents",
+      "content_claim",
+      "provenance_nonce",
+      "created_by",
+      "created_at",
+      "contract_version"
     ],
     "supplier_price_import_rows": [
       "id",

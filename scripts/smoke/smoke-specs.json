@@ -46,6 +46,41 @@
       "description": "Money-workflow correction chain: get_ap_dashboard_summary excludes a voided vendor payment while counting an active one; preview_finance_charges and generate_finance_charges share the same overdue balance and penny-exact charge, reject future dates without side effects, and generate/replay one unposted charge invoice; create_prepay_check_splits rejects a mismatched independent check total without side effects, then creates and idempotently replays two exact prepay buckets. Self-contained fixtures and terminal rollback.",
       "covers": ["get_ap_dashboard_summary", "preview_finance_charges", "generate_finance_charges", "create_prepay_check_splits"]
     },
+    "apply_prepay_to_invoice": {
+      "chain": "smoke-prepay-payment-inactive-actor-gate.sql",
+      "description": "H1 role-gate regression: apply_prepay_to_invoice rejects a deactivated but still-authenticated actor. Self-contained fixtures and terminal rollback.",
+      "covers": ["apply_prepay_to_invoice"]
+    },
+    "revert_quote_status": {
+      "chain": "smoke-revert-quote-escape-hatch.sql",
+      "description": "B2 escape-hatch regression: a quote stranded at 'accepted' after its whole-conversion order was cancelled must be rescuable. Converts a whole quote, cancels the order (quote stays 'accepted', draws still fully drawn), then asserts revert_quote_status reopens it to 'sent', releases the draw ledger, and a re-convert creates a NEW order. FAIL-FIRST against the pre-fix function (revert refused because an order existed). Self-contained fixtures and terminal rollback.",
+      "covers": ["revert_quote_status", "convert_quote_to_order", "cancel_order"]
+    },
+    "generate_finance_charges": {
+      "chain": "smoke-finance-charge-month-dedup.sql",
+      "description": "H2 double-charge and preview-parity regression: preview and generation both reject a closed accounting period, generation charges an overdue balance at most once per customer per calendar month, and preview omits a customer generation will skip. Sets up an overdue posted invoice, proves the closed-period gate, generates once, asserts the later same-month preview is empty, generates again, and asserts exactly one finance_charge exists. FAIL-FIRST against either the exact-date generator or either stale preview predicate. Self-contained fixtures and terminal rollback.",
+      "covers": ["generate_finance_charges", "preview_finance_charges"]
+    },
+    "void_invoice": {
+      "chain": "smoke-void-invoice-blocks-applied-payments.sql",
+      "description": "H3 cash-strand regression: void_invoice refuses an invoice with a supported allocation, void_payment reverses it, and only then can the invoice void; a prepay-only invoice still voids and re-banks correctly. Self-contained fixtures and terminal rollback.",
+      "covers": ["void_invoice", "allocate_payment", "void_payment", "apply_prepay_to_invoice", "create_prepay_check_splits"]
+    },
+    "restore_cancelled_order": {
+      "chain": "smoke-forbid-restore-cancelled-order.sql",
+      "description": "H4 regression: restore_cancelled_order must refuse to reactivate a cancelled order (it cannot re-apply the released inventory / zeroed commissions / reversed draws, so a restored order would be corrupt). Converts a quote, cancels the order, then asserts restore raises ORDER_RESTORE_NOT_SUPPORTED and the order stays cancelled. FAIL-FIRST against the pre-fix function (restore succeeded, restoring a corrupt order). Self-contained fixtures and terminal rollback.",
+      "covers": ["restore_cancelled_order", "convert_quote_to_order", "cancel_order"]
+    },
+    "create_invoice_for_unbilled_delivery": {
+      "chain": "smoke-backfill-refuse-split-billing.sql",
+      "description": "H5 regression: mono backfill and posting refuse split-billing conflicts under both serialized writer orderings; private exact provenance cannot be forged; generic edits and singular voids of governed members are refused; void_invoice_group retires the whole group atomically with exact replay binding; and delete/cancel lifecycle paths remain governed. The companion disposable proof runs real two-session OIFA-vs-create and cancel-vs-revert interleavings. Self-contained fixtures and terminal rollback.",
+      "covers": ["create_invoice_for_unbilled_delivery", "guard_mono_invoice_split_billing_post", "create_split_invoices_from_order", "save_invoice", "void_invoice", "void_invoice_group", "delete_invoices", "convert_quote_to_order"]
+    },
+    "record_invoice_payment": {
+      "chain": "smoke-retire-legacy-record-invoice-payment.sql",
+      "description": "Legacy-payment retirement regression: record_invoice_payment must reject new writes with LEGACY_PAYMENT_PATH_DISABLED and leave both the obsolete payments ledger and invoice paid amount unchanged. New cash uses allocate_payment so it has a supported void path. Self-contained fixtures and terminal rollback.",
+      "covers": ["record_invoice_payment"]
+    },
     "stage_offline_action": {
       "chain": "smoke-offline-action-receipts.sql",
       "description": "Permanent offline receipt chain: complete_delivery and complete_job stage -> immutable canonical replay -> canonical process -> durable sanitized status -> replay without duplicate inventory/application work; actor-bound processing; owner and office status visibility; missing-target and unauthorized-action retention; deterministic state-conflict review; sanitized office queue; audited, idempotent manual resolution; RPC-only writes; grants. Self-contained fixtures and terminal rollback.",
@@ -65,6 +100,11 @@
       "chain": "smoke-save-quote-drawn-guard.sql",
       "description": "Drawn-product edit guard (A4): reducing a booking below its drawn quantity and removing a drawn product both raise BOOKING_OVERDRAWN; a legal reduce keeps booked/drawn/status consistent and the booking still closes at the new total; a no-draws control quote edits freely.",
       "covers": ["save_quote", "draw_down_quote"]
+    },
+    "quote_commission_split_validation": {
+      "chain": "smoke-quote-commission-split-validation.sql",
+      "description": "Quote commission money-routing guard: blank or duplicate recipients and missing/JSON-null percentages fail closed on direct INSERT/UPDATE, while an explicit empty no-commission split and a complete named 100% split remain valid. Self-contained fixture and terminal rollback.",
+      "covers": ["guard_quote_commission_split_valid", "validate_commission_split_json", "quotes"]
     },
     "rollover_quote_to_season": {
       "chain": "smoke-rollover-remainder.sql",
@@ -114,7 +154,12 @@
     "get_customer_statement": {
       "chain": "smoke-customer_statement_blind_spots.sql",
       "description": "Statement blind-spot fix (CHIP task_25d25699, migrations 20260611131549 + 20260716160000): legacy, NULL-order, and allocation-set payments each appear exactly once; paid/overdue invoices keep their charge lines; soft-deleted payments excluded; credit memo single-count; unapplied overpayment prepay NOT pre-counted (DEDUP RULE); the exact same allocate_payment key is replayed after the committed result and must return the cached result without a second allocation set or statement change (regression proof for the atomic idempotency-claim guard); running balance never negative; unknown-actor auth probe rejected by the in-body gate.",
-      "covers": ["get_customer_statement", "allocate_payment", "record_invoice_payment", "_guard_idempotency_key_insert"]
+      "covers": ["get_customer_statement", "allocate_payment", "_guard_idempotency_key_insert"]
+    },
+    "statement_opening_balance": {
+      "chain": "smoke-statement-opening-balance.sql",
+      "description": "Bounded customer statement regression: pre-period AR is carried as an opening-balance row, same-day invoices have stable UUID ordering with a ROWS running frame, the ending balance equals full as-of AR, and reversed date ranges fail closed.",
+      "covers": ["get_customer_statement", "_get_customer_statement_scoped_impl"]
     },
     "create_planned_holds": {
       "chain": "smoke-planned-holds-drawn-sync.sql",
