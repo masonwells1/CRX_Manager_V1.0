@@ -181,7 +181,18 @@ assert.deepEqual(commandArgs, [
   "--no-session-persistence",
   "--disallowedTools",
   "Bash,Edit,Write,NotebookEdit",
+  "--settings",
+  "{\"disableAllHooks\":true}",
 ]);
+// REGRESSION (2026-07-20 empty-result incident): the repo Stop hook blocks the
+// read-only headless reviewer from ever ending its turn (it cannot write the
+// ack file), so the CLI eventually terminates with result:"" while reporting
+// success. The reviewer must always run with the repo's hooks disabled.
+assert.ok(
+  commandArgs.includes("--settings") &&
+    JSON.parse(commandArgs[commandArgs.indexOf("--settings") + 1]).disableAllHooks === true,
+  "headless reviewer must disable repo hooks (Stop-hook loop empties the result)",
+);
 // SECURITY: the prompt must NOT be a CLI arg (it's passed via stdin) so shell
 // metacharacters can't reach cmd.exe on Windows.
 assert.ok(!commandArgs.includes(prompt), "prompt must not be passed as a CLI arg");
@@ -207,6 +218,27 @@ const deniedReview = parseClaudeReviewJson(JSON.stringify({
   permission_denials: [{ tool_name: "Read" }],
 }));
 assert.equal(deniedReview.complete, false, "permission-denied review must block");
+
+// REGRESSION (2026-07-20): a process that exits 0 with subtype success,
+// terminal_reason completed, and NO permission denials — but an EMPTY result
+// string — must stay BLOCKED. This is the exact shape the Stop-hook loop
+// produced across three real runs.
+const emptyResultReview = parseClaudeReviewJson(JSON.stringify({
+  type: "result",
+  subtype: "success",
+  is_error: false,
+  terminal_reason: "completed",
+  result: "",
+  stop_reason: "end_turn",
+  permission_denials: [],
+  modelUsage: { "claude-opus-4-8": {} },
+}));
+assert.equal(emptyResultReview.complete, false, "empty result must never verify");
+assert.equal(
+  classifyClaudeExecution({ status: 0, error: null }, emptyResultReview),
+  "BLOCKED",
+  "successful process with empty result must classify BLOCKED",
+);
 assert.equal(parseClaudeReviewJson("not-json").complete, false, "invalid output must block");
 assert.equal(classifyClaudeExecution({ status: 0, error: null }, completeReview), "VERIFIED");
 assert.equal(claudeExecutionExitStatus({ status: 0, error: null }, "VERIFIED"), 0);
