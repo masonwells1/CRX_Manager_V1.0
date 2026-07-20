@@ -1,6 +1,6 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-07-20** (full document re-read; statement-opening-balance correction applied and verified live as `20260720185135`; live catalog also contains concurrent migration `20260720181939` / `20260720175946_protect_governed_split_edit_and_void_group`, whose source is not yet on `origin/main`; older open/deferred claims retain their dated evidence below; owner-facing combined list: root `TODO.md`)
+**Last verified: 2026-07-20** (full document re-read; statement-opening-balance correction applied and verified live as `20260720185135`; the 24 live migration sources previously absent from `origin/main`, including `20260720181939`, were recovered from reviewed Git objects and queued for repository reconciliation; older open/deferred claims retain their dated evidence below; owner-facing combined list: root `TODO.md`)
 **Update triggers:** when a finding is parked/resolved, a migration is parked/applied, or an owner decision lands. Agents must update THIS file, not create new issue lists. Do not re-discover or re-fix something listed here as already known — read the pointer first.
 
 This file consolidates (does not replace) the source documents it points to. If this file and a source disagree, trust the source and fix this file.
