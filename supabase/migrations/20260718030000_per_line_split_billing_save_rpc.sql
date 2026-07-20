@@ -962,6 +962,19 @@ BEGIN
           INTO v_chem_price_map
           FROM unnest(v_members) AS m(cust);
 
+        -- Codex round-11 P1: reject an UNRESOLVED chemical price. Without a manual override, if any
+        -- co-owner's resolved price (field quote → their assigned tier) is NULL or <= 0, the line would
+        -- bill $0, be flagged suppressed_zero_total, and STILL post — consuming inventory + RUP records
+        -- with NO receivable and no operator signal. Require a real positive price for EVERY member. A
+        -- manual override (already validated > 0 above) resolves the same for everyone, so it passes.
+        IF v_chem_manual IS NULL AND EXISTS (
+          SELECT 1 FROM unnest(v_members) AS m(cust)
+           WHERE COALESCE((v_chem_price_map->>m.cust)::bigint, 0) <= 0
+        ) THEN
+          RAISE EXCEPTION 'SPLIT_CHEMICAL_PRICE_UNRESOLVED: chemical line % has no resolvable price (no field quote and no tier price) for one or more co-owners — set the product''s tier pricing / a field quote, or enter a manual override, before saving', v_idx
+            USING ERRCODE = 'invalid_parameter_value';
+        END IF;
+
         -- Representative line base (display + the calculator's default price): the largest-share
         -- owner's price. The MONEY comes from the per-customer overrides injected below, not this.
         SELECT c.assigned_tier INTO v_rep_tier

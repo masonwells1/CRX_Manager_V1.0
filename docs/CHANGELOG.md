@@ -4,6 +4,31 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-20 — Codex round-11 on per-line split-billing = 1 real P1: a chemical with no field quote and no tier price silently resolved to $0 (suppressed_zero_total child that could still post, consuming inventory/RUP with no receivable). Fixed: SPLIT_CHEMICAL_PRICE_UNRESOLVED rejects a chemical with no resolvable positive price for any co-owner (manual override still passes). Reviewer CLEAN, PROOFOK live PG incl. unresolved_chem_price_rejected_ok. Codex round 12 next. Still PARKED.
+
+Codex round-11 on per-line split-billing = 1 real P1: a chemical with no field quote and no tier price silently resolved to $0 (suppressed_zero_total child that could still post, consuming inventory/RUP with no receivable). Fixed: SPLIT_CHEMICAL_PRICE_UNRESOLVED rejects a chemical with no resolvable positive price for any co-owner (manual override still passes). Reviewer CLEAN, PROOFOK live PG incl. unresolved_chem_price_rejected_ok. Codex round 12 next. Still PARKED.
+
+- **Commits this session** (git log -15 (fallback — no author-matched commits in the last 12h)):
+  - `232149a3 fix(split-billing): Codex round-10 — scope post idempotency key to the invoice group`
+  - `d5cf38c5 fix(split-billing): Codex round-9 — harden line-share post-lock trigger (false positive)`
+  - `52d2e67f fix(split-billing): Codex round-8 split-specific (5 of 6) — post-safety, PDF units, override audit, applicator/vehicle, guardrails`
+  - `3efff630 fix(split-billing): Codex round-7 P2s — item-tamper guard, override audit base, snapshot provenance, child field context`
+  - `b683fa44 fix(split-billing): Codex round-7 P1s — active-group readback + RUP duplicate-product guard`
+  - `924b7728 fix(split-billing): Codex round-6 — 4 P1 + 4 P2 (postable group + validation/readback/recovery)`
+  - `18780146 docs(split-billing): front-to-back Codex round-6 review runbook`
+  - `c4a79c66 docs(changelog): log 2026-07-20 session — split-billing owner-decisions + CodeQL fix`
+  - `21943958 fix(split-billing): use crypto.randomUUID() for line-row keys — clears CodeQL js/insecure-randomness`
+  - `8b03cb88 docs(decision-log): split-billing v1 edge-case policy settled — per-child commissions, no job-less exclusivity guard`
+  - `5ad316de fix(split-billing): Fable adversarial round — 6 RPC fixes + editor race guard + reviewer MEDs [PARKED, flag OFF]`
+  - `bc91afc9 fix(split-billing): Codex round-5 (8) + drift BLOCKER B1 + member-drop bug [PARKED, flag OFF]`
+  - `5983b3eb fix(split-billing): Codex round-4 — commissions + posting-boundary + field/override guards [PARKED, flag OFF]`
+  - `0a2754fd fix(split-billing): Codex round-3 — season/freeze/job-link + repost + snapshot honesty [PARKED, flag OFF]`
+  - `795604f3 fix(split-billing): Codex round-2 remaining 6 — #A/#E/#G/#H/#L/#M [PARKED, flag OFF]`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - `supabase/migrations/20260718010000_per_line_split_billing_schema.sql`
+  - `supabase/migrations/20260718020000_per_line_split_billing_calculator.sql`
+  - `supabase/migrations/20260718030000_per_line_split_billing_save_rpc.sql`
+
 ## 2026-07-20 — Codex round-10 on per-line split-billing = 1 real finding: the post_invoice_group idempotency key could be reused across split-billing drafts (editor stays mounted across /split-billing/:id navigations) -> a stale key returns a PRIOR group's cached success while the current group stays unposted. Fixed: reset the post key whenever invoiceGroupId changes (scoped to the group). Compliance CLEAN; typecheck+lint clean. Codex round 11 next. Still PARKED.
 
 Codex round-10 on per-line split-billing = 1 real finding: the post_invoice_group idempotency key could be reused across split-billing drafts (editor stays mounted across /split-billing/:id navigations) -> a stale key returns a PRIOR group's cached success while the current group stays unposted. Fixed: reset the post key whenever invoiceGroupId changes (scoped to the group). Compliance CLEAN; typecheck+lint clean. Codex round 11 next. Still PARKED.
