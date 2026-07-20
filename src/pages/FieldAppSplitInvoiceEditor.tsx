@@ -106,8 +106,11 @@ interface ResultShare {
 
 let uidCounter = 0;
 function nextUid(): string {
+  // Client-only React list key for a line row (not a security token / idempotency key).
+  // Use crypto.randomUUID() — the codebase convention — so CodeQL's js/insecure-randomness
+  // rule doesn't flag Math.random() in this money-adjacent file.
   uidCounter += 1;
-  return `line_${uidCounter}_${Math.random().toString(36).slice(2, 8)}`;
+  return `line_${uidCounter}_${crypto.randomUUID()}`;
 }
 
 /** Percent strings → micro-percent ints summing EXACTLY to 100000000 (largest remainder,
