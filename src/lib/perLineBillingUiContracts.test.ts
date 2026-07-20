@@ -41,8 +41,10 @@ describe('per-line billing UI contracts', () => {
 
   it('enforces send_disposition again inside the send-email server boundary', () => {
     const source = read('supabase/functions/send-email/index.ts');
-    expect(source).toContain('.select("id, customer_id, send_disposition")');
+    expect(source).toContain('.select("id, customer_id, send_disposition, status, deleted_at")');
     expect(source).toContain('invoiceRow.send_disposition !== "sendable"');
+    expect(source).toContain('invoiceRow.status === "voided" || invoiceRow.status === "cancelled"');
+    expect(source).toContain('.not("status", "in", \'("voided","cancelled")\')');
     expect(source).toContain('email_type === "post_application_notice"');
     expect(source).toContain('.from("job_notifications")');
     expect(source).toContain('invoiceGateId = derivedInvoice?.id ?? null');
