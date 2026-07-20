@@ -2,7 +2,7 @@
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
-> **Per-line split billing Phase 4 (2026-07-20, branch only):** no new database migration is introduced. The UI remains behind the server-owned `feature_per_line_split_billing=false` row created by the unapplied Phase 1 chain, and the prepared `send-email` server guard is not deployed. Live migration state and data are unchanged; Phase 1–3 migrations remain draft-only pending Mason's ordered promotion decision.
+> **Per-line split billing Phase 4 (2026-07-20, branch only):** no new database migration is introduced, and this branch applied nothing. Read-only closeout found that a separate workflow had already applied older inactive split migrations as live ledger versions `20260720213000` (schema), `20260720214000` (calculator), and `20260720233000` (save RPC), followed by live high-water `20260720235246`. The split tables are empty, the feature-flag row is absent, and the public API still has only the legacy four-argument preview and no `save_field_app_invoice_per_line`. The reviewed pending Phase 1–3 chain in this branch is a different implementation and now has a timestamp/object collision; PARK promotion until the live objects are reconciled and the pending chain is re-stamped above the current high-water. The prepared `send-email` server guard remains undeployed.
 
 | # | Migration timestamp | Purpose |
 |---:|---|---|
