@@ -4,6 +4,31 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-20 — Codex round-12 on per-line split-billing = 1 real security P1: resolve_line_split_vector (SECDEF, callable directly by authenticated) let a sales_rep read the ownership split of arbitrary fields/jobs outside their assignment. Fixed: on DIRECT calls (crx.split_writer off), a non-admin may only resolve a vector whose every customer is assigned to them (RESOLVER_NOT_AUTHORIZED, no data leaked); internal save path exempt via the writer flag. rls review CLEAN (GUC exemption NOT forgeable via PostgREST); PROOFOK live incl. resolver_direct_(un)assigned scenarios. Codex round 13 next. Still PARKED.
+
+Codex round-12 on per-line split-billing = 1 real security P1: resolve_line_split_vector (SECDEF, callable directly by authenticated) let a sales_rep read the ownership split of arbitrary fields/jobs outside their assignment. Fixed: on DIRECT calls (crx.split_writer off), a non-admin may only resolve a vector whose every customer is assigned to them (RESOLVER_NOT_AUTHORIZED, no data leaked); internal save path exempt via the writer flag. rls review CLEAN (GUC exemption NOT forgeable via PostgREST); PROOFOK live incl. resolver_direct_(un)assigned scenarios. Codex round 13 next. Still PARKED.
+
+- **Commits this session** (git log -15 (fallback — no author-matched commits in the last 12h)):
+  - `8eec9b4e fix(split-billing): Codex round-11 — reject unresolved ($0) chemical prices before saving`
+  - `232149a3 fix(split-billing): Codex round-10 — scope post idempotency key to the invoice group`
+  - `d5cf38c5 fix(split-billing): Codex round-9 — harden line-share post-lock trigger (false positive)`
+  - `52d2e67f fix(split-billing): Codex round-8 split-specific (5 of 6) — post-safety, PDF units, override audit, applicator/vehicle, guardrails`
+  - `3efff630 fix(split-billing): Codex round-7 P2s — item-tamper guard, override audit base, snapshot provenance, child field context`
+  - `b683fa44 fix(split-billing): Codex round-7 P1s — active-group readback + RUP duplicate-product guard`
+  - `924b7728 fix(split-billing): Codex round-6 — 4 P1 + 4 P2 (postable group + validation/readback/recovery)`
+  - `18780146 docs(split-billing): front-to-back Codex round-6 review runbook`
+  - `c4a79c66 docs(changelog): log 2026-07-20 session — split-billing owner-decisions + CodeQL fix`
+  - `21943958 fix(split-billing): use crypto.randomUUID() for line-row keys — clears CodeQL js/insecure-randomness`
+  - `8b03cb88 docs(decision-log): split-billing v1 edge-case policy settled — per-child commissions, no job-less exclusivity guard`
+  - `5ad316de fix(split-billing): Fable adversarial round — 6 RPC fixes + editor race guard + reviewer MEDs [PARKED, flag OFF]`
+  - `bc91afc9 fix(split-billing): Codex round-5 (8) + drift BLOCKER B1 + member-drop bug [PARKED, flag OFF]`
+  - `5983b3eb fix(split-billing): Codex round-4 — commissions + posting-boundary + field/override guards [PARKED, flag OFF]`
+  - `0a2754fd fix(split-billing): Codex round-3 — season/freeze/job-link + repost + snapshot honesty [PARKED, flag OFF]`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - `supabase/migrations/20260718010000_per_line_split_billing_schema.sql`
+  - `supabase/migrations/20260718020000_per_line_split_billing_calculator.sql`
+  - `supabase/migrations/20260718030000_per_line_split_billing_save_rpc.sql`
+
 ## 2026-07-20 — Codex round-11 on per-line split-billing = 1 real P1: a chemical with no field quote and no tier price silently resolved to $0 (suppressed_zero_total child that could still post, consuming inventory/RUP with no receivable). Fixed: SPLIT_CHEMICAL_PRICE_UNRESOLVED rejects a chemical with no resolvable positive price for any co-owner (manual override still passes). Reviewer CLEAN, PROOFOK live PG incl. unresolved_chem_price_rejected_ok. Codex round 12 next. Still PARKED.
 
 Codex round-11 on per-line split-billing = 1 real P1: a chemical with no field quote and no tier price silently resolved to $0 (suppressed_zero_total child that could still post, consuming inventory/RUP with no receivable). Fixed: SPLIT_CHEMICAL_PRICE_UNRESOLVED rejects a chemical with no resolvable positive price for any co-owner (manual override still passes). Reviewer CLEAN, PROOFOK live PG incl. unresolved_chem_price_rejected_ok. Codex round 12 next. Still PARKED.

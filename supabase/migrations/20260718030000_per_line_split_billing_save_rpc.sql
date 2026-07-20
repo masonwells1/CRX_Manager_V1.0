@@ -217,6 +217,26 @@ BEGIN
       USING ERRCODE = 'invalid_parameter_value';
   END IF;
 
+  -- Codex round-12 P1: this SECURITY DEFINER read bypasses RLS on field_billing_defaults /
+  -- job_field_shares / fields, so a sales_rep could pass an ARBITRARY field/job UUID and read the
+  -- ownership split of customers not assigned to them. On a DIRECT call, enforce the same ownership
+  -- boundary the save ultimately requires — a non-admin may only resolve a vector whose EVERY customer
+  -- is assigned to them — and raise WITHOUT echoing the protected data. The internal save writer
+  -- (crx.split_writer='on', set before its resolver call) runs its own ownership guards, so it is
+  -- exempt here (this changes only the direct-call surface, not the save path).
+  IF NOT is_admin()
+     AND COALESCE(current_setting('crx.split_writer', true), 'off') <> 'on'
+     AND EXISTS (
+       SELECT 1 FROM jsonb_array_elements(v_result) AS e
+        WHERE NOT EXISTS (
+          SELECT 1 FROM customers c
+           WHERE c.id = (e->>'customer_id')::uuid
+             AND c.assigned_sales_rep = auth.uid())
+     ) THEN
+    RAISE EXCEPTION 'RESOLVER_NOT_AUTHORIZED: not authorized to resolve a split for one or more of these fields/jobs'
+      USING ERRCODE = 'insufficient_privilege';
+  END IF;
+
   RETURN v_result;
 END;
 $fn$;
