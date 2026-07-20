@@ -531,6 +531,22 @@ BEGIN
       USING ERRCODE = 'invalid_parameter_value';
   END IF;
 
+  -- Codex round-7 P1 (RUP under-reporting): reject the SAME chemical product on more than one line.
+  -- Two chemical lines with the same product create two invoice_items with the same
+  -- (invoice_id, product_id); generate_rup_sales_records de-dups by (invoice_id, product_id) and
+  -- inserts only the FIRST, silently under-reporting the regulated quantity + amount of the second.
+  -- The operator must combine them into one line (mirrors the SPLIT_DUPLICATE_FIELD guard).
+  IF EXISTS (
+    SELECT 1
+      FROM jsonb_array_elements(p_lines) AS l
+     WHERE l->>'line_kind' = 'chemical' AND NULLIF(l->>'product_id', '') IS NOT NULL
+     GROUP BY l->>'product_id'
+    HAVING count(*) > 1
+  ) THEN
+    RAISE EXCEPTION 'SPLIT_DUPLICATE_PRODUCT: the same chemical product appears on more than one line — combine them into a single line'
+      USING ERRCODE = 'invalid_parameter_value';
+  END IF;
+
   IF p_application_service_id IS NOT NULL THEN
     SELECT * INTO v_app_service FROM application_services WHERE id = p_application_service_id;
     IF NOT FOUND OR NOT v_app_service.is_active THEN

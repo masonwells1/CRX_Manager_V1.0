@@ -10,6 +10,47 @@ verdict is the HARD gate before any apply / merge / flag-flip.
 `8b03cb88`, the CodeQL `crypto.randomUUID()` fix `21943958`, and this runbook/changelog).
 **State at time of writing:** flag OFF · migrations NOT applied · PR NOT merged.
 
+---
+
+## ⏳ OPEN P2 BACKLOG — 4 items from Codex ROUND 7 (fix these in the NEXT fresh session)
+
+Codex has now run rounds 6 (8 findings) and 7 (6 findings). Round-6 (4 P1 + 4 P2) is FULLY fixed +
+proven + committed. Round-7's **two P1s are fixed + proven** (PROOFOK 57/57): the review-card readback
+now filters to active-group members (`.not('invoice_group_id','is',null)`), and the RPC rejects the
+same chemical product on >1 line (`SPLIT_DUPLICATE_PRODUCT`, RUP under-report guard). Mason chose
+(2026-07-20) to land the P1s and take the **4 remaining P2s in a FRESH focused session** (money/
+regulatory + schema/trigger work → fatigue risk; billing isn't used until next year). None of these 4
+bills a wrong amount on a normal path. Do them, re-prove, then re-run `codex review --base main`
+(round 8) → loop until clean → go-live.
+
+The 4 P2s (all in `supabase/migrations/20260718030000_..._save_rpc.sql` unless noted):
+1. **Uniform-override audit base (~line 1036)** — when ALL effective per-person overrides are identical,
+   the resolved representative price is replaced with the override BEFORE the calculator runs, so the
+   calculator emits the override as `base_unit_price_cents` and PASS 2 records `price_mode='override'`
+   with base == effective price — losing the true tier/quote/service base. Fix: keep the resolved base
+   for the audit (`base_unit_price_cents`/`base_price_source`); use the override only for the amount.
+2. **Posting-boundary item-field tamper (~line 1751 snapshot trigger + `guard_split_invoice_items`)** —
+   the Fable-E tie checks only `extended_cents`=share amount + count. A direct admin PATCH of a split
+   item's `product_id`/`quantity`/`unit_price_cents`/`billing_line_id` that leaves `extended_cents`
+   unchanged passes, so posting can print/RUP-report item details that disagree with the allocation.
+   Fix: extend `guard_split_invoice_items` (currently BEFORE DELETE, gated by `crx.split_writer` GUC)
+   to BEFORE UPDATE of those material columns, OR cross-check them against shares/billing lines at post.
+3. **Snapshot provenance (~line 1761 + schema 20260718010000)** — the post snapshot copies effective
+   qty/amounts but drops base price/source, split_mode/price_mode, override reasons, and calc/vector
+   hashes; after post→unpost→re-save deletes the live shares/billing lines it's the only history, so the
+   prior posted allocation can't be fully audited. Fix: ADD those columns to
+   `invoice_line_share_snapshots` (in the parked 010000 — NOT yet applied, so editing it is allowed) and
+   populate them in the snapshot trigger.
+4. **Combined-list field context (~line 1144 child INSERT)** — split children omit `field_names`,
+   `crop_type`, `total_acres` (rely on group-level `field_app_locations`), so `FieldInvoicesListPanel`
+   and `buildInvoicePdfDataFromRow` (which read invoice-row fields) show blank acreage in the COMBINED
+   list + its PDFs/exports. Fix: populate those 3 columns on each child row (mirror the normal
+   field-app invoice flow / `save_field_app_invoice`).
+
+Also still latent (RLS reviewer non-finding, verify in round 8): a VOIDED (not cancelled) child that is
+`jobs.invoice_id` is detached from the group on re-save but NOT repointed to a surviving member (the B1
+repoint NOT-EXISTS excludes only 'cancelled'). Pre-existing; confirm whether it needs a fix.
+
 ## How to run it
 
 ```

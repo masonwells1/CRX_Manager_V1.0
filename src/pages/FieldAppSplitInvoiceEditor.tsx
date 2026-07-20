@@ -459,6 +459,13 @@ export default function FieldAppSplitInvoiceEditor() {
     }
     if (members.length === 0) return 'Resolve the default split before saving.';
     if (lines.length === 0) return 'Add at least one billing line.';
+    // Codex round-7 P1 (RUP under-reporting): the same chemical product on two lines yields two
+    // invoice_items with the same product_id; regulated-use reporting de-dups by product and would
+    // report only one, under-stating the regulated quantity. Require one line per chemical product.
+    const chemProductIds = lines.filter((l) => l.line_kind === 'chemical' && l.product_id).map((l) => l.product_id);
+    if (new Set(chemProductIds).size !== chemProductIds.length) {
+      return 'The same chemical product is on more than one line. Combine them into a single line.';
+    }
     for (const l of lines) {
       if (l.line_kind === 'chemical') {
         if (!l.product_id) return 'A chemical line has no product selected.';
@@ -573,10 +580,14 @@ export default function FieldAppSplitInvoiceEditor() {
       .from('invoices')
       .select('id, invoice_number, customer_id, total_amount_cents, send_disposition, status')
       .eq('field_app_billing_set_id', setId)
-      // Codex round-6 P2: exclude soft-deleted children so the review card + totals match exactly what
-      // post_invoice_group will act on (posting ignores soft-deleted/detached rows). Otherwise a
-      // soft-deleted child and its active replacement both show, misrepresenting the group.
+      // Codex round-6/7 P1/P2: the review card + totals must match EXACTLY what post_invoice_group will
+      // act on (it operates on the active invoice_group). Exclude soft-deleted children AND children
+      // detached from the group on re-save (voided/cancelled terminal rows keep field_app_billing_set_id
+      // as history but have invoice_group_id = NULL) — otherwise the historical child and its active
+      // replacement both show, and the operator reviews stale/duplicate totals before posting different
+      // invoices. `invoice_group_id IS NOT NULL` == "still an active member of this set's group".
       .is('deleted_at', null)
+      .not('invoice_group_id', 'is', null)
       .order('invoice_number');
     if (invErr) throw invErr;
     if (stale()) return false;
