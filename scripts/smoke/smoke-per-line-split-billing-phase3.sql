@@ -2316,6 +2316,38 @@ BEGIN
     RAISE EXCEPTION 'P3_FAIL(writer_payload_conflict): %', COALESCE(v_err, '<no error>');
   END IF;
 
+  -- A rep authorized for only one current child cannot edit the group and
+  -- cancel or replace another customer's child through owner privileges.
+  UPDATE public.customers SET assigned_sales_rep = v_rep_other WHERE id = v_b;
+  PERFORM set_config('request.jwt.claim.sub', v_rep_owner::text, true);
+  v_err := NULL;
+  BEGIN
+    PERFORM public.save_field_app_invoice_per_line(
+      (v_result#>>'{invoice_ids,0}')::uuid,
+      jsonb_build_object('invoice_date', '2026-07-20'),
+      jsonb_build_array(jsonb_build_object(
+        'field_id', v_field_50, 'applied_acres', 1, 'total_acres', 1,
+        'map_number', 1, 'sort_order', 0
+      )), '[]'::jsonb, v_rep_owner, v_service, v_job_service,
+      jsonb_build_object('lines', jsonb_build_array(jsonb_build_object(
+        'line_key', 'service:' || v_service::text,
+        'split_mode', 'custom', 'split_override_reason', 'Tenant pays service',
+        'vector', jsonb_build_array(
+          jsonb_build_object('customer_id', v_a, 'split_micro_pct', 100000000),
+          jsonb_build_object('customer_id', v_b, 'split_micro_pct', 0)
+        )
+      ))), 'phase3-writer-partial-group-scope'
+    );
+  EXCEPTION WHEN OTHERS THEN v_err := SQLERRM; END;
+  IF COALESCE(v_err, '') NOT LIKE '%PER_LINE_GROUP_SCOPE_DENIED%'
+     OR (SELECT count(*) FROM public.invoices
+          WHERE id IN (SELECT value::uuid FROM jsonb_array_elements_text(v_result->'invoice_ids'))
+            AND status = 'draft') <> 2 THEN
+    RAISE EXCEPTION 'P3_FAIL(writer_partial_group_scope): %', COALESCE(v_err, '<no error>');
+  END IF;
+  UPDATE public.customers SET assigned_sales_rep = v_rep_owner WHERE id = v_b;
+  PERFORM set_config('request.jwt.claim.sub', v_admin::text, true);
+
   -- A genuine draft edit must remove dependent line-share rows before the
   -- RESTRICT-protected billing lines and rebuild the same group atomically.
   v_plan_again := public.save_field_app_invoice_per_line(

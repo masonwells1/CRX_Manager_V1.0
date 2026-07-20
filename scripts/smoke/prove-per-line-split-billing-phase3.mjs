@@ -384,7 +384,7 @@ function run() {
   }
 
   console.log('PROOF — Ran: network-isolated PostgreSQL 17 container; loaded checked-in preflight + Phase 1 + relational guards + Phase 2 calculator + Phase 3 writer verbatim; executed rollback-only Phase 3 SQL proof.');
-  console.log('PROOF — Saw: all Phase 2 calculator and relational-integrity cases remained green; the Phase 3 writer refused an ordinary draft without changing its unrelated item, persisted the calculator-only 100/0 service plan as two real invoices/items/shares, rebuilt an existing owned draft group without RESTRICT-FK failure or orphan rows, preserved a zero-dollar suppressed child, posted both group members together with an immutable zero snapshot, replayed an identical actor/key without duplicate rows, rejected changed-payload and cross-actor key reuse, rejected a header/item mismatch, blocked transfer_job_to_invoice while the feature was ON, and retained owner/definer/search-path/ACL plus cleanup-failure guards.');
+  console.log('PROOF — Saw: all Phase 2 calculator and relational-integrity cases remained green; the Phase 3 writer refused an ordinary draft unchanged, denied a rep lacking authority over every current group child, persisted the calculator-only 100/0 service plan as two real invoices/items/shares, rebuilt an existing owned draft group without RESTRICT-FK failure or orphan rows, preserved a zero-dollar suppressed child, posted both group members together with an immutable zero snapshot, replayed an identical actor/key without duplicate rows, rejected changed-payload and cross-actor key reuse, rejected a header/item mismatch, blocked transfer_job_to_invoice while the feature was ON, and retained owner/definer/search-path/ACL plus cleanup-failure guards.');
 }
 
 try {

@@ -189,6 +189,22 @@ BEGIN
     IF v_existing_billing_set_id IS NULL THEN
       RAISE EXCEPTION 'PER_LINE_EDIT_TARGET_NOT_OWNED';
     END IF;
+    IF v_existing_group_id IS NOT NULL
+       AND v_actor_role = 'sales_rep'
+       AND EXISTS (
+         SELECT 1
+           FROM public.invoices group_invoice
+           JOIN public.customers group_customer
+             ON group_customer.id = group_invoice.customer_id
+          WHERE group_invoice.invoice_group_id = v_existing_group_id
+            AND group_invoice.deleted_at IS NULL
+            AND group_invoice.created_by IS DISTINCT FROM v_actor
+            AND group_invoice.salesman_id IS DISTINCT FROM v_actor
+            AND group_customer.assigned_sales_rep IS DISTINCT FROM v_actor
+       ) THEN
+      RAISE EXCEPTION 'PER_LINE_GROUP_SCOPE_DENIED'
+        USING ERRCODE = 'insufficient_privilege';
+    END IF;
     -- The relational guard proves inverse completeness, including that every
     -- invoice item in the target invoice/group belongs to this billing graph.
     -- Run it before deleting anything so an ordinary draft cannot be adopted
