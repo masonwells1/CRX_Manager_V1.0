@@ -2,6 +2,18 @@
 
 All significant development milestones, in reverse chronological order.
 
+### 2026-07-20 — Governed split editing and group void made fail-closed
+
+The exact pre-push Codex review found that the generic invoice editor could replace
+governed split lines without preserving their source order-item identity, and that a
+single grouped invoice could be voided without its siblings. The forward correction
+locks generic editing out of private-provenance split invoices and adds one atomic
+`void_invoice_group` operation with exact actor, group, reason, and replay binding.
+Invoice Detail routes grouped voids through that operation. The affected browser tests
+now use governed invoice RPCs, and their Supabase helper throws on denied HTTP writes
+instead of treating an error body as success. The rollback smoke reproduced the generic
+edit defect on the prior live definition before apply.
+
 ### 2026-07-20 — Generated schema baseline review packaging corrected
 
 The decoded production public-schema snapshot remains byte-for-byte unchanged and

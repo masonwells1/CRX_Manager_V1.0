@@ -692,18 +692,30 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
     setVoiding(true);
     try {
       const idemKey = voidIdem.getKey();
-      // void_invoice RETURNS void — use .throwOnError() (no `=` capture).
-      await supabase.rpc('void_invoice', {
-        p_invoice_id: id!,
-        p_void_reason: voidReason || 'Voided by admin',
-        p_idempotency_key: idemKey,
-      }).throwOnError();
+      if (invoice.invoice_group_id) {
+        const { data, error } = await supabase.rpc('void_invoice_group', {
+          p_invoice_group_id: invoice.invoice_group_id,
+          p_void_reason: voidReason || 'Voided by admin',
+          p_idempotency_key: idemKey,
+        });
+        if (error) throw error;
+        assertRpcResult(data, 'void_invoice_group');
+      } else {
+        // void_invoice RETURNS void — use .throwOnError() (no `=` capture).
+        await supabase.rpc('void_invoice', {
+          p_invoice_id: id!,
+          p_void_reason: voidReason || 'Voided by admin',
+          p_idempotency_key: idemKey,
+        }).throwOnError();
+      }
       voidIdem.resetKey();
-      toast('success', 'Invoice voided');
+      toast('success', invoice.invoice_group_id ? 'Invoice group voided' : 'Invoice voided');
       setShowVoidModal(false);
       fetchInvoice(id!);
     } catch (err: unknown) {
-      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'void_invoice' } });
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), {
+        extra: { context: invoice.invoice_group_id ? 'void_invoice_group' : 'void_invoice' },
+      });
       toast('error', sanitizeError(err));
     }
     setVoiding(false);

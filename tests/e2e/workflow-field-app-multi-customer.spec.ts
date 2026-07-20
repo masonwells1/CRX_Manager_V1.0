@@ -124,9 +124,11 @@ test.describe('Field App Phase 1 — multi-customer split via RPC', () => {
       if (createdGroupId) {
         await supabaseRest(page, 'DELETE', `field_app_locations?invoice_group_id=eq.${createdGroupId}`).catch(() => {});
       }
-      await supabaseRest(page, 'DELETE', `invoice_items?invoice_id=${inClause}`).catch(() => {});
       await supabaseRest(page, 'DELETE', `invoice_shares?invoice_id=${inClause}`).catch(() => {});
-      await supabaseRest(page, 'DELETE', `invoices?id=${inClause}`).catch(() => {});
+      await supabaseRpc(page, 'delete_invoices', {
+        p_invoice_ids: createdInvoiceIds,
+        p_idempotency_key: `e2e-cleanup-split-${createdGroupId || createdInvoiceIds[0]}`,
+      }).catch(() => {});
     }
 
     if (splitFieldId) {

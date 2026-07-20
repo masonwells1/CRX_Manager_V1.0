@@ -1459,6 +1459,7 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   'void_commission_payment',
   'void_delivery',
   'void_invoice',
+  'void_invoice_group',
   'void_order',
   'void_payment',
   'void_vendor_bill',
@@ -1574,6 +1575,9 @@ const IDEMPOTENCY_BODY_EXEMPT: Record<
   // The terminal-provenance wrapper binds the actor and invoice before issuing
   // its exact lifecycle claim and invoking the private implementation.
   void_invoice: 'delegated',
+  // The atomic group wrapper binds actor + group + reason through the private
+  // lifecycle helpers, then calls the owner-only single-member implementation.
+  void_invoice_group: 'delegated',
   // The public wrapper hydrates an omitted cost only for a recognized existing
   // line, then delegates to the directly non-executable integer-cents writer
   // that owns the canonical replay lookup/save.

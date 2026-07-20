@@ -216,8 +216,10 @@ async function cleanupTestData(page: Page) {
 
   // Invoice items + invoices
   if (invoiceId) {
-    await supabaseRest(page, 'DELETE', `invoice_items?invoice_id=eq.${invoiceId}`).catch(() => {});
-    await supabaseRest(page, 'DELETE', `invoices?id=eq.${invoiceId}`).catch(() => {});
+    await supabaseRpc(page, 'delete_invoices', {
+      p_invoice_ids: [invoiceId],
+      p_idempotency_key: `e2e-cleanup-invoice-${invoiceId}`,
+    }).catch(() => {});
   }
 
   // Delivery items + deliveries
@@ -1445,8 +1447,10 @@ test.describe.serial('Comprehensive UI Workflow (12 Acts)', () => {
     const inv = await supabaseRest(page, 'GET', `invoices?select=status&id=eq.${S.invoiceId}`);
     const status = (asArray(inv, 'invoice status')[0] as Record<string, unknown>).status;
     if (status !== 'posted') {
-      // Try posting via DB
-      await supabaseRest(page, 'PATCH', `invoices?id=eq.${S.invoiceId}`, { status: 'posted' });
+      await supabaseRpc(page, 'post_invoice', {
+        p_invoice_id: S.invoiceId,
+        p_idempotency_key: `e2e-post-${S.invoiceId}`,
+      });
     }
   });
 

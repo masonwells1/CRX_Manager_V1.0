@@ -68,8 +68,8 @@
     },
     "create_invoice_for_unbilled_delivery": {
       "chain": "smoke-backfill-refuse-split-billing.sql",
-      "description": "H5 regression: mono backfill and posting refuse split-billing conflicts under both serialized writer orderings; a forged field-acre audit row cannot substitute for private exact provenance; raw split header/item edits and identity deletion are blocked; governed save_invoice refreshes the exact claim; and the canonical split group remains postable. The companion disposable proof runs real two-session OIFA-vs-create and cancel-vs-revert interleavings. Self-contained fixtures and terminal rollback.",
-      "covers": ["create_invoice_for_unbilled_delivery", "guard_mono_invoice_split_billing_post", "create_split_invoices_from_order", "save_invoice", "delete_invoices", "convert_quote_to_order"]
+      "description": "H5 regression: mono backfill and posting refuse split-billing conflicts under both serialized writer orderings; private exact provenance cannot be forged; generic edits and singular voids of governed members are refused; void_invoice_group retires the whole group atomically with exact replay binding; and delete/cancel lifecycle paths remain governed. The companion disposable proof runs real two-session OIFA-vs-create and cancel-vs-revert interleavings. Self-contained fixtures and terminal rollback.",
+      "covers": ["create_invoice_for_unbilled_delivery", "guard_mono_invoice_split_billing_post", "create_split_invoices_from_order", "save_invoice", "void_invoice", "void_invoice_group", "delete_invoices", "convert_quote_to_order"]
     },
     "record_invoice_payment": {
       "chain": "smoke-retire-legacy-record-invoice-payment.sql",

@@ -436,7 +436,8 @@ BEGIN
       FROM public.invoice_items ii
      WHERE ii.invoice_id = v_split_ids[1];
 
-    v_saved_id := public.save_invoice(
+    BEGIN
+      v_saved_id := public.save_invoice(
       jsonb_build_object(
         'id', v_split_ids[1],
         'customer_id', (SELECT customer_id FROM public.invoices WHERE id = v_split_ids[1]),
@@ -449,17 +450,22 @@ BEGIN
       ),
       COALESCE(v_saved_items, '[]'::jsonb),
       'e2e-h5-governed-save-' || v_suffix
-    );
-    IF v_saved_id IS DISTINCT FROM v_split_ids[1]
-       OR (SELECT header_notes FROM public.invoices WHERE id = v_split_ids[1])
-          IS DISTINCT FROM '[E2E] governed split draft edit ' || v_suffix
+      );
+      RAISE EXCEPTION 'SMOKE_FAIL: generic save_invoice edited a governed split member';
+    EXCEPTION WHEN OTHERS THEN
+      v_err := SQLERRM;
+      IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+      IF v_err NOT LIKE 'SPLIT_INVOICE_EDIT_REQUIRES_REISSUE:%' THEN
+        RAISE EXCEPTION 'SMOKE_FAIL: governed split edit raised unexpected error: %', v_err;
+      END IF;
+    END;
+    IF (SELECT header_notes FROM public.invoices WHERE id = v_split_ids[1]) =
+       '[E2E] governed split draft edit ' || v_suffix
        OR NOT EXISTS (
-         SELECT 1
-           FROM public.split_invoice_provenance p
-          WHERE p.invoice_id = v_split_ids[1]
-            AND p.content_claim = public._split_invoice_content_claim(v_split_ids[1])
+         SELECT 1 FROM public.invoice_items ii
+          WHERE ii.invoice_id = v_split_ids[1] AND ii.order_item_id IS NOT NULL
        ) THEN
-      RAISE EXCEPTION 'SMOKE_FAIL: governed save_invoice did not refresh exact split provenance';
+      RAISE EXCEPTION 'SMOKE_FAIL: refused governed edit changed content or lost order-item lineage';
     END IF;
   END IF;
 
@@ -473,20 +479,48 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_FAIL: governed split group did not post completely';
   END IF;
 
-  -- Terminal lifecycle writers must remain usable without weakening raw
-  -- provenance immutability. The pre-follow-up guard has no owner claim for
-  -- void_invoice, so its total=0 update is refused here.
-  FOREACH v_invoice IN ARRAY v_split_ids LOOP
-    BEGIN
-      PERFORM public.void_invoice(
-        v_invoice,
-        '[E2E] governed split terminal void',
-        'e2e-h5-governed-void-' || v_invoice::text
-      );
-    EXCEPTION WHEN OTHERS THEN
-      RAISE EXCEPTION 'SMOKE_FAIL: governed split void_invoice failed: %', SQLERRM;
-    END;
-  END LOOP;
+  -- Singular void must refuse before mutation; group void is all-or-nothing.
+  BEGIN
+    PERFORM public.void_invoice(
+      v_split_ids[1], '[E2E] forbidden singular group void',
+      'e2e-h5-governed-single-void-' || v_suffix
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: singular void_invoice half-voided a governed group';
+  EXCEPTION WHEN OTHERS THEN
+    v_err := SQLERRM;
+    IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_err NOT LIKE 'SPLIT_INVOICE_GROUP_VOID_REQUIRED:%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: singular group void raised unexpected error: %', v_err;
+    END IF;
+  END;
+  IF EXISTS (SELECT 1 FROM public.invoices WHERE id = ANY(v_split_ids) AND status <> 'posted') THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: refused singular group void changed a member';
+  END IF;
+
+  SELECT public.void_invoice_group(
+    v_split_group, '[E2E] governed atomic group void',
+    'e2e-h5-governed-group-void-' || v_suffix
+  ) INTO v_deleted_count;
+  IF v_deleted_count IS DISTINCT FROM cardinality(v_split_ids) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: group void returned %, expected %', v_deleted_count, cardinality(v_split_ids);
+  END IF;
+  SELECT public.void_invoice_group(
+    v_split_group, '[E2E] governed atomic group void',
+    'e2e-h5-governed-group-void-' || v_suffix
+  ) INTO v_deleted_count;
+  BEGIN
+    PERFORM public.void_invoice_group(
+      v_split_group, '[E2E] mismatched group void reason',
+      'e2e-h5-governed-group-void-' || v_suffix
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: group void key replayed across different reasons';
+  EXCEPTION WHEN OTHERS THEN
+    v_err := SQLERRM;
+    IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_err NOT LIKE 'IDEMPOTENCY_REQUEST_MISMATCH:%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: group void mismatch raised unexpected error: %', v_err;
+    END IF;
+  END;
   IF EXISTS (
     SELECT 1
       FROM public.invoices i
