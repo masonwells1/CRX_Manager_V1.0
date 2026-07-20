@@ -4,13 +4,13 @@ All significant development milestones, in reverse chronological order.
 
 ### 2026-07-20 — Generated schema baseline review packaging corrected
 
-The production public-schema snapshot remains byte-for-byte unchanged and
-SHA/restore verified, but Git now correctly treats that 66,674-line generated
-artifact as non-textual review evidence. The prior attribute accidentally enabled
-its full textual diff, making the exact base-main Claude gate exceed the provider's
-one-million-token request limit. Review prompts now carry the artifact identity
-instead of embedding 2.7 MB of generated SQL; the manifest hash and disposable
-restore proof remain the authoritative content checks.
+The decoded production public-schema snapshot remains byte-for-byte unchanged and
+SHA/restore verified, but the 66,674-line generated artifact is now stored as a
+Brotli payload. The prior Git attribute accidentally enabled its full textual
+diff, making the exact base-main Claude gate exceed the provider's one-million-
+token request limit. The manifest binds both compressed and decoded bytes, the
+decoder refuses hash drift before emitting SQL, and the existing disposable
+restore proof remains the authoritative behavioral check.
 
 ### 2026-07-19 — Exact push-gate invoice and commission closures
 

@@ -10,9 +10,11 @@ The baseline contains no CRX business rows. It contains schema, grants, RLS
 policies, functions, triggers, Storage bucket definitions, and a compact
 version/name migration ledger. `npm run test:schema-baseline` checks every
 artifact hash, count, high-water, empty-ledger guard, and credential scan.
-The public schema dump intentionally retains mixed line endings embedded in a
-small set of legacy function bodies; `.gitattributes` stores that file byte for
-byte so content-bound guards remain identical on every operating system.
+The public schema dump is stored as `*_public_schema.sql.br` using Brotli. Its
+manifest entry binds both the compressed artifact and the exact decompressed SQL
+bytes. The decoded dump intentionally retains mixed line endings embedded in a
+small set of legacy function bodies, so content-bound guards remain identical on
+every operating system.
 
 ## Restore a new project
 
@@ -20,10 +22,20 @@ Use a platform-initialized Supabase PostgreSQL 17 project. Apply these files in
 the exact `manifest.json.restore_order` sequence with a fail-fast SQL client:
 
 1. `*_extensions.sql`
-2. `*_public_schema.sql`
+2. `*_public_schema.sql.br`, streamed through the repository decoder
 3. `*_platform_overlay.sql`
 4. `*_cron_jobs.sql`
 5. `*_migration_history.sql`
+
+For step 2, run the decoder from the repository root and pipe its binary-safe
+stdout directly to the fail-fast SQL client:
+
+```bash
+node scripts/decompress-schema-baseline.mjs | psql "$DATABASE_URL" -v ON_ERROR_STOP=1
+```
+
+The decoder refuses to emit SQL unless both the compressed and decompressed
+manifest hashes match.
 
 The platform overlay restores the CRX-owned `auth.users` profile trigger, all
 CRX Storage policies, and bucket configuration after the public functions and
@@ -50,6 +62,7 @@ development or preview project.
 Refresh only from reviewed live introspection after the migration ledger has
 settled. Regenerate the public dump, platform overlay, bucket snapshot, and
 compact ledger together; update the manifest hashes/counts; prove a disposable
-PostgreSQL 17 restore; require the history file's second application to fail;
-and run `npm run test:schema-baseline`. Never edit an applied migration to make a
-fresh rebuild pass.
+PostgreSQL 17 restore; Brotli-compress the exact verified public dump and record
+both stored and decoded hashes; require the history file's second application to
+fail; and run `npm run test:schema-baseline`. Never edit an applied migration to
+make a fresh rebuild pass.

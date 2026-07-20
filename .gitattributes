@@ -25,3 +25,4 @@ supabase/baselines/*.json text eol=lf
 # pg_dump preserves legacy CRLF inside pg_proc.prosrc while emitting LF around
 # it. Treat that mixed-byte snapshot as an immutable artifact, not normal text.
 supabase/baselines/*_public_schema.sql -text -diff whitespace=-trailing-space,cr-at-eol
+supabase/baselines/*_public_schema.sql.br -text -diff

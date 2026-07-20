@@ -1,12 +1,12 @@
 {
-  "format_version": 1,
+  "format_version": 2,
   "project_id": "rhyzpcqhnizqbxphqdkr",
   "generated_at": "2026-07-19T09:45:48.680Z",
   "migrations_high_water": "20260719092832",
   "migration_ledger_rows": 861,
   "restore_order": [
     "20260719092832_extensions.sql",
-    "20260719092832_public_schema.sql",
+    "20260719092832_public_schema.sql.br",
     "20260719092832_platform_overlay.sql",
     "20260719092832_cron_jobs.sql",
     "20260719092832_migration_history.sql"
@@ -28,9 +28,12 @@
       "bytes": 13069,
       "sha256": "3440E26231934F9F51BA18F361C1151DBE38099530C2FAF27F433402DA2A8235"
     },
-    "20260719092832_public_schema.sql": {
-      "bytes": 2746165,
-      "sha256": "8CAF4139673F8ECA029B950E8E434179D3836439DED7C0653720833AA6752EF4"
+    "20260719092832_public_schema.sql.br": {
+      "bytes": 295275,
+      "sha256": "094F9C8F5848D6411FB45AACD25937C556CB321AE83F7CA8A5EDF8A040D44C83",
+      "encoding": "brotli",
+      "decoded_bytes": 2746165,
+      "decoded_sha256": "8CAF4139673F8ECA029B950E8E434179D3836439DED7C0653720833AA6752EF4"
     },
     "20260719092832_storage_buckets.json": {
       "bytes": 2110,

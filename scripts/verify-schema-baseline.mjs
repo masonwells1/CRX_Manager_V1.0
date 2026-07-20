@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { brotliDecompressSync } from 'node:zlib';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const baselineDir = path.join(repoRoot, 'supabase', 'baselines');
@@ -24,6 +25,7 @@ if (!Array.isArray(manifest.restore_order) || manifest.restore_order.length !== 
   fail('manifest restore_order must contain five ordered SQL artifacts');
 }
 
+const decodedArtifacts = new Map();
 for (const [name, expected] of Object.entries(manifest.artifacts ?? {})) {
   const artifactPath = path.join(baselineDir, name);
   let buffer;
@@ -39,12 +41,32 @@ for (const [name, expected] of Object.entries(manifest.artifacts ?? {})) {
   if (sha256(buffer) !== expected.sha256) {
     fail(`${name} SHA-256 drifted`);
   }
+  let decoded = buffer;
+  if (expected.encoding === 'brotli') {
+    try {
+      decoded = brotliDecompressSync(buffer);
+    } catch (error) {
+      fail(`${name} Brotli payload is invalid: ${error.message}`);
+      continue;
+    }
+    if (decoded.length !== expected.decoded_bytes) {
+      fail(`${name} decoded byte length drifted`);
+    }
+    if (sha256(decoded) !== expected.decoded_sha256) {
+      fail(`${name} decoded SHA-256 drifted`);
+    }
+  } else if (expected.encoding) {
+    fail(`${name} has unsupported encoding ${expected.encoding}`);
+    continue;
+  }
+  decodedArtifacts.set(name, decoded);
 }
 
-const publicSchema = readFileSync(
-  path.join(baselineDir, `${manifest.migrations_high_water}_public_schema.sql`),
-  'utf8',
-);
+const publicSchemaName = `${manifest.migrations_high_water}_public_schema.sql.br`;
+const publicSchema = decodedArtifacts.get(publicSchemaName)?.toString('utf8') ?? '';
+if (!publicSchema) {
+  fail(`${publicSchemaName} did not decode to SQL`);
+}
 const platformOverlay = readFileSync(
   path.join(baselineDir, `${manifest.migrations_high_water}_platform_overlay.sql`),
   'utf8',
@@ -152,7 +174,7 @@ const secretPatterns = [
   /eyJ[A-Za-z0-9_-]{20,}\.eyJ[A-Za-z0-9_-]{20,}/,
 ];
 for (const [name] of Object.entries(manifest.artifacts ?? {})) {
-  const source = readFileSync(path.join(baselineDir, name), 'utf8');
+  const source = decodedArtifacts.get(name)?.toString('utf8') ?? '';
   if (secretPatterns.some((pattern) => pattern.test(source))) {
     fail(`${name} contains a credential-shaped value`);
   }
