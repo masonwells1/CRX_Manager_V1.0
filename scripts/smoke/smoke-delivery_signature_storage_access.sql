@@ -1,6 +1,7 @@
 DO $$
 DECLARE
   v_policy_count integer;
+  v_delete_policy_count integer;
   v_bad_policy_count integer;
   v_bucket_public boolean;
   v_delivery_id uuid;
@@ -28,6 +29,17 @@ BEGIN
     AND COALESCE(p.qual, p.with_check, '') LIKE '%auth.uid%';
 
   SELECT count(*)
+  INTO v_delete_policy_count
+  FROM pg_policies p
+  WHERE p.schemaname = 'storage'
+    AND p.tablename = 'objects'
+    AND p.policyname = 'delivery_signatures_scoped_delete'
+    AND p.cmd = 'DELETE'
+    AND p.qual LIKE '%signatures/%'
+    AND p.qual LIKE '%is_admin%'
+    AND p.qual LIKE '%is_sales_rep%';
+
+  SELECT count(*)
   INTO v_bad_policy_count
   FROM pg_policies p
   WHERE p.schemaname = 'storage'
@@ -37,17 +49,19 @@ BEGIN
       'Authenticated users can upload signatures',
       'delivery_signatures_insert',
       'delivery_signatures_select',
-      'delivery_signatures_update'
+      'delivery_signatures_update',
+      'delivery_signatures_delete'
     );
 
   SELECT public INTO v_bucket_public
   FROM storage.buckets
   WHERE id = 'delivery-signatures';
 
-  IF v_policy_count <> 3 OR v_bad_policy_count <> 0 OR v_bucket_public IS DISTINCT FROM false THEN
+  IF v_policy_count <> 3 OR v_delete_policy_count <> 1 OR
+     v_bad_policy_count <> 0 OR v_bucket_public IS DISTINCT FROM false THEN
     RAISE EXCEPTION
-      'SMOKE_FAIL: delivery signature Storage access remains broad (scoped=%, broad=%, public=%)',
-      v_policy_count, v_bad_policy_count, v_bucket_public;
+      'SMOKE_FAIL: delivery signature Storage access remains broad (scoped=%, delete=%, broad=%, public=%)',
+      v_policy_count, v_delete_policy_count, v_bad_policy_count, v_bucket_public;
   END IF;
 
   IF EXISTS (

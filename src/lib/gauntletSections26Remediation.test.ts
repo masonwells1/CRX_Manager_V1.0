@@ -230,6 +230,13 @@ describe('gauntlet sections 2-6 CodeRabbit closeout', () => {
     expect(sql).toContain('CREATE POLICY "delivery_signatures_scoped_update"');
     expect(sql).toContain("d.assigned_driver = (SELECT auth.uid())");
     expect(sql).toContain("bucket_id = 'delivery-signatures'");
+
+    const deleteSql = migration('20260720211454_scope_delivery_signature_delete.sql');
+    expect(deleteSql).toContain('DROP POLICY IF EXISTS "delivery_signatures_delete"');
+    expect(deleteSql).toContain('CREATE POLICY "delivery_signatures_scoped_delete"');
+    expect(deleteSql).toContain("name = 'signatures/' || d.id::text || '.png'");
+    expect(deleteSql).toContain('public.is_admin()');
+    expect(deleteSql).toContain('public.is_sales_rep()');
   });
 
   it('keeps payment-rejection E2E assertions on the thrown RPC error path', () => {
