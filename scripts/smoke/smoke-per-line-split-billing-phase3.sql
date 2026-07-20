@@ -2287,6 +2287,34 @@ BEGIN
     RAISE EXCEPTION 'P3_FAIL(writer_payload_conflict): %', COALESCE(v_err, '<no error>');
   END IF;
 
+  -- Re-saving an existing grouped invoice must remove restrictive child
+  -- shares before its old billing lines and rebuild the graph atomically.
+  v_plan_again := public.save_field_app_invoice_per_line(
+    (v_result#>>'{invoice_ids,0}')::uuid,
+    jsonb_build_object('invoice_date', '2026-07-20'),
+    jsonb_build_array(jsonb_build_object(
+      'field_id', v_field_50, 'applied_acres', 1, 'total_acres', 1,
+      'map_number', 1, 'sort_order', 0
+    )), '[]'::jsonb, v_admin, v_service, v_job_service,
+    jsonb_build_object('lines', jsonb_build_array(jsonb_build_object(
+      'line_key', 'service:' || v_service::text,
+      'split_mode', 'custom', 'split_override_reason', 'Tenant pays service',
+      'vector', jsonb_build_array(
+        jsonb_build_object('customer_id', v_a, 'split_micro_pct', 100000000),
+        jsonb_build_object('customer_id', v_b, 'split_micro_pct', 0)
+      )
+    ))), 'phase3-writer-existing-group'
+  );
+  IF v_plan_again->'invoice_ids' IS DISTINCT FROM v_result->'invoice_ids'
+     OR (SELECT count(*) FROM public.field_app_billing_sets
+          WHERE invoice_group_id = (v_plan_again->>'invoice_group_id')::uuid) <> 1
+     OR (SELECT count(*) FROM public.invoice_line_shares share
+          JOIN public.field_app_billing_lines line ON line.id = share.billing_line_id
+         WHERE line.billing_set_id = (v_plan_again->>'billing_set_id')::uuid) <> 2 THEN
+    RAISE EXCEPTION 'P3_FAIL(writer_existing_group_rebuild): %', v_plan_again;
+  END IF;
+  v_result := v_plan_again;
+
   -- Stored graph validation must reject a header that no longer equals the
   -- residual-adjusted child lines. The exception subtransaction rolls it back.
   v_err := NULL;

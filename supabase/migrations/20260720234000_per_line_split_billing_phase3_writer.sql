@@ -187,6 +187,12 @@ BEGIN
     THEN COALESCE(v_existing_group_id, gen_random_uuid()) ELSE NULL END;
 
   IF v_existing_group_id IS NOT NULL THEN
+    DELETE FROM public.invoice_line_shares line_share
+     USING public.invoice_items item, public.invoices invoice
+     WHERE line_share.invoice_item_id = item.id
+       AND item.invoice_id = invoice.id
+       AND invoice.invoice_group_id = v_existing_group_id
+       AND invoice.deleted_at IS NULL;
     DELETE FROM public.field_app_billing_sets WHERE invoice_group_id = v_existing_group_id;
     DELETE FROM public.field_app_location_shares WHERE location_id IN (
       SELECT id FROM public.field_app_locations WHERE invoice_group_id = v_existing_group_id
@@ -199,6 +205,10 @@ BEGIN
       SELECT id FROM public.invoices WHERE invoice_group_id = v_existing_group_id AND deleted_at IS NULL
     );
   ELSIF p_invoice_id IS NOT NULL THEN
+    DELETE FROM public.invoice_line_shares line_share
+     USING public.invoice_items item
+     WHERE line_share.invoice_item_id = item.id
+       AND item.invoice_id = p_invoice_id;
     DELETE FROM public.field_app_billing_sets billing_set
      WHERE billing_set.invoice_group_id IS NULL
        AND EXISTS (
