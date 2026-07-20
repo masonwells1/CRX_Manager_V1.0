@@ -4,6 +4,19 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-07-20 — Supplier Pricing Phase 1b follow-ups (PR #184): PARKED migration 20260720230000 — durable idempotent replay after cache TTL for the 4 evidence RPCs, new reject_supplier_price_import terminal path, PRICE_UNIT_MISMATCH staging validation, America/Chicago business dates; frontend Reject-import UI, admin-only route alignment, ProductDetail cost-history fetch gate, ProductPriceHistory date-only rendering fix; docs + guard-test registrations. Live apply parked for Mason's OK. Surfaced Q-2026-2059 blank commission recipient (owner decision).
+
+Supplier Pricing Phase 1b follow-ups (PR #184): PARKED migration 20260720230000 — durable idempotent replay after cache TTL for the 4 evidence RPCs, new reject_supplier_price_import terminal path, PRICE_UNIT_MISMATCH staging validation, America/Chicago business dates; frontend Reject-import UI, admin-only route alignment, ProductDetail cost-history fetch gate, ProductPriceHistory date-only rendering fix; docs + guard-test registrations. Live apply parked for Mason's OK. Surfaced Q-2026-2059 blank commission recipient (owner decision).
+
+- **Commits this session** (git log --since=12.hours --author=Mason):
+  - `1a1b3850 feat(pricing): Supplier Pricing Phase 1b — admin-only supplier evidence MVP (#179)`
+  - `d6f02db4 Reconcile live Supabase migration history (#180)`
+  - `31095fcd Fix customer statement opening balances (#178)`
+  - `5e346c85 Isolate autopilot guard test from the ambient AUTOPILOT.on flag (#177)`
+  - `cbe2b789 Fix migration-review workflow failing closed on JSON-string args (#176)`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - `supabase/migrations/20260720230000_supplier_pricing_durable_replay_and_reject.sql`
+
 ## 2026-07-20 — Supplier pricing evidence restricted to ADMIN-ONLY (live fix before Phase 1b merge)
 
 - The Codex GitHub review on PR #179 caught a real security gap all earlier reviewers missed: the live Phase 1b reader RPCs, evidence-table SELECT policies, and the evidence-PDF bucket were gated admin-OR-sales, exposing supplier costs, `cost_history` values, and PO ids/numbers/unit costs to sales reps — contradicting the standing "cost data is admin-only" RLS contract (the contract tests passed because SECURITY DEFINER readers legitimately bypass table RLS). Mason settled it: **admin-only**.
