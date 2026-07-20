@@ -33,8 +33,7 @@ const pending = migrationFiles.filter((name) => {
   const stem = name.slice(0, -4);
   const version = stem.slice(0, 14);
   if (version <= manifest.migrations_high_water) return false;
-  const suffix = stem.slice(15);
-  return !capturedNames.has(stem) && !capturedNames.has(suffix);
+  return !capturedNames.has(stem);
 });
 
 for (const name of pending) {

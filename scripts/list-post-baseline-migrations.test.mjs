@@ -1,9 +1,19 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const selectorSource = readFileSync(
+  path.join(root, 'scripts', 'list-post-baseline-migrations.mjs'),
+  'utf8',
+);
+assert.doesNotMatch(
+  selectorSource,
+  /capturedNames\.has\(suffix\)/,
+  'a bare legacy suffix must never hide a future migration that reuses the concept name',
+);
 const result = spawnSync(process.execPath, ['scripts/list-post-baseline-migrations.mjs'], {
   cwd: root,
   encoding: 'utf8',

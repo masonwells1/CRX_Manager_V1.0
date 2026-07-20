@@ -46,6 +46,8 @@ The restore bootstrap now creates the production-specific `metabase_ro` NOLOGIN
 grant target before decoding the public schema. Post-baseline migration selection
 uses both filename version and captured submitted name, preventing four migrations
 already stored under server-assigned ledger versions from replaying on a clean restore.
+It matches captured names only to the full timestamped migration stem, so reusing an old
+bare concept name cannot silently suppress a future migration.
 
 ### 2026-07-19 — Exact push-gate invoice and commission closures
 
