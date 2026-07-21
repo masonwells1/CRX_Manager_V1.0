@@ -3,7 +3,8 @@ import { describe, expect, it } from 'vitest';
 
 // Vitest transforms import.meta.url to a non-file Vite URL on Windows, so the
 // repository-root working directory used by every package script is deliberate.
-const source = readFileSync('supabase/functions/send-email/index.ts', 'utf8');
+// CRLF-normalized so Windows checkouts (autocrlf) match the LF snippets below.
+const source = readFileSync('supabase/functions/send-email/index.ts', 'utf8').replace(/\r\n/g, '\n');
 
 describe('send-email invoice authority contracts', () => {
   it('does not hide terminal invoices before deriving the proof-notice gate', () => {
