@@ -430,6 +430,15 @@ These are NOT called directly from the frontend. They power triggers, guards, an
 
 All eleven functions are live from `20260718225511_supplier_price_evidence_phase1b.sql` (ledger version `20260718225511`, submitted name `20260718230000_supplier_price_evidence_phase1b`). Post-apply catalog verification confirmed one expected overload each, fixed `search_path = public, pg_temp`, anonymous execution denied, and authenticated execution granted. Migration `20260720203000_restrict_supplier_pricing_to_admin.sql` tightens all five reader RPCs and the evidence-table/storage SELECT policies from admin-or-sales to **admin-only** (`ADMIN_REQUIRED`), per Mason's 2026-07-20 decision that supplier cost data follows the standing admin-only cost contract.
 
+### Supplier Pricing Phase 2 (code-only; not live)
+
+- `get_product_cost_basis_workspace(product_id)` — admin-only read model for the current selected basis, comparable current supplier observations, and received PO costs with a proven conversion.
+- `preview_product_cost_basis_changes(source, export_id, rows, performed_by, idempotency_key)` — actor-bound/idempotent wrapper that validates evidence and stores explicit basis provenance, then delegates price calculation to `preview_product_pricing_changes`.
+- `apply_product_cost_basis_change_set(change_set_id, request_fingerprint, performed_by, idempotency_key)` — actor-bound/idempotent atomic apply. Revalidates evidence and the active-basis concurrency token, delegates money changes to `apply_product_pricing_change_set`, closes the prior basis, and appends the selected basis.
+
+These functions are defined only in the unapplied `20260721193553_supplier_cost_basis_phase2.sql` branch migration. Supplier/actual-purchase selection remains off by default; no live apply or flag enable is implied.
+While that flag remains off, the migration also preserves the deployed Phase 1a pricing RPC as a compatibility writer and atomically records any governed cost change in `product_cost_basis` as a manual basis. Enabling the flag closes that compatibility route and requires `apply_product_cost_basis_change_set`.
+
 ### Custom Application Workflow
 - `create_job_from_quote_section(p_quote_id, p_section_id, p_performed_by, p_idempotency_key)` -> jsonb {job_id} -- Creates scheduled job from planned quote section with pre-filled chemicals and fields
 - `get_program_completion(p_season)` -> jsonb array -- Returns planned vs actual acres per program section for the Program Tracker dashboard
