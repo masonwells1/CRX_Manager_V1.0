@@ -1,4 +1,4 @@
-# Pages & Routes Reference (78 pages, 85 routes)
+# Pages & Routes Reference (79 pages, 87 routes)
 
 > Counts verified 2026-07-13 against `src/App.tsx` (`lazy(` call count = pages) and this table's own row count (routes); `npm run check:docs` (`scripts/check-doc-drift.mjs`) enforces both numbers stay in sync with the codebase on every run.
 
@@ -7,7 +7,7 @@
 | `/` | Dashboard | KPIs, today's jobs, recent activity |
 | `/getting-started` | GettingStarted | Role-aware workflow guide (admin/sales: Quote→Order→Deliver stepper; driver: Dashboard→Deliver stepper) |
 | `/products` | Products | Product catalog with search/filter, bulk import |
-| `/supplier-pricing` | SupplierPricing | Admin/sales supplier-evidence workspace: protected per-supplier .xlsx quote sheets, manual staging and approval, comparable-cost review, Product/supplier links, and reviewed vendor aliases. Optional source PDFs are retained for audit and are never parsed. |
+| `/supplier-pricing` | SupplierPricing | Admin-only supplier-evidence workspace (locked down 2026-07-20, migration 20260720203000): protected per-supplier .xlsx quote sheets, manual staging and approval, comparable-cost review, Product/supplier links, and reviewed vendor aliases. Optional source PDFs are retained for audit and are never parsed. |
 | `/products/:id` | ProductDetail | Product CRUD (pricing tiers, EPA info, RUP status). Combobox dropdowns for Vendor/Manufacturer/Category. Grouped sections: Product Form → Container (size+unit+type) → Inventory Unit → Application Rates |
 | `/customers` | Customers | Customer list with search/filter, bulk import |
 | `/customers/:id` | CustomerDetail | Profile, addresses, credit limit, transaction review, finance charge settings, season summary |
@@ -81,6 +81,8 @@
 | `/receiving-hub` | ReceivingHub | Admin/sales. Open PO lines grouped by product across vendors (ordered/received/remaining + arrival) + a commitment snapshot (On Floor/Hold/Order/Spoken-For/Net) from `get_inventory_position`. Inline full-receipt "Receive" (reuses `receive_po_items`). (UI overhaul v2) |
 | `/accounts-receivable` | AccountsReceivable | **Admin-only.** One AR workspace: tabs for Aging / Payment History / Prepayments / Customer Ledger + a Net Money Position card (total owed via `get_ar_aging` minus unused `prepay_credits`). `/payments` (PaymentAllocation) stays SEPARATE (admin+sales). (UI overhaul v2) |
 | `/field-invoices` | FieldInvoices | Admin/sales. Field-application invoices area (as-applied billing); list + entry into the field-app invoice editor. |
+| `/split-billing/new` | FieldAppSplitInvoiceEditor | Per-line split-billing editor (flag-gated: per_line_split_billing_enabled; renders a not-enabled notice when OFF). Roles: admin/sales_rep. Added 2026-07-20 (inherited from main merge) |
+| `/split-billing/:id` | FieldAppSplitInvoiceEditor | Edit an existing per-line split-billing set (same flag gate) |
 | `/field-invoices/unposted` | FieldInvoicesUnposted | Admin/sales. Field-app parity #22 — dedicated "Unposted" working tray for field invoices (static path, precedes `:id`). |
 | `/field-invoices/posted` | FieldInvoicesPosted | Admin/sales. Field-app parity #23 — dedicated "Posted" committed field-invoice list (static path, precedes `:id`). |
 | `/field-invoices/summary` | CustomerInvoiceSummary | Admin/sales. Field-app parity #34 — combined Customer Invoice Summary (unposted chem sales + unposted field-app). |

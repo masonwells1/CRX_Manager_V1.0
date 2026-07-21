@@ -7,12 +7,13 @@ import Badge from '../ui/Badge';
 import DataTable, { type Column } from '../ui/DataTable';
 import { useToast } from '../ui/Toast';
 import { supabase, sanitizeError } from '../../lib/db';
+import { assertInvoiceSendable } from '../../lib/invoiceSendDisposition';
 import { Sentry } from '../../lib/sentry';
 import { runCriticalAction } from '../../lib/criticalAction';
 import { exportToCSV } from '../../lib/csvExport';
 import { downloadReportPdf } from '../../lib/reportPdf';
 import { buildInvoicePdfDataFromRow, generateBatchInvoicePdf, downloadInvoicePdf, generateInvoicePdf } from '../../lib/invoicePdf';
-import { sendEmail, pdfToBase64, buildInvoiceEmailPayload } from '../../lib/emailService';
+import { sendEmail, pdfToBase64, buildInvoiceEmailPayload, isInvoiceEmailSuppressed } from '../../lib/emailService';
 import { logActivity } from '../../lib/activityLogger';
 import { useAuth } from '../../contexts/AuthContext';
 import {
@@ -266,6 +267,10 @@ export default function FieldInvoicesListPanel() {
   const emailRow = async (row: FieldInvoiceRow) => {
     if (rowActionRef.current) return;
     if (!profile) { toast('error', 'Profile not loaded — please refresh.'); return; }
+    if (isInvoiceEmailSuppressed(row)) {
+      toast('info', 'This $0 invoice is recorded and shown in the account summary, but is not emailed.');
+      return;
+    }
     rowActionRef.current = true;
     await runCriticalAction({
       action: async () => {
@@ -291,6 +296,7 @@ export default function FieldInvoicesListPanel() {
           balanceCents: row.balance_cents,
           attachmentBase64: base64,
         });
+        await assertInvoiceSendable(row.id);
         const result = await sendEmail(payload);
         if (!result.success) throw new Error(result.error || 'Email failed to send');
 

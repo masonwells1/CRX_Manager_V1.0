@@ -331,6 +331,11 @@ export interface VendorAlias {
   created_by: string | null;
   reviewed_by: string | null;
   reviewed_at: string | null;
+  // Durable idempotent-replay receipt (migration 20260720230000). Server-internal:
+  // stage_vendor_alias strips both from its RPC response, so they are only seen
+  // by direct table reads.
+  idempotency_key?: string | null;
+  request_fingerprint?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -389,6 +394,12 @@ export interface SupplierPriceImport {
   source_document_mime: 'application/pdf' | null;
   request_fingerprint: string;
   idempotency_key: string;
+  // Durable idempotent-replay receipts (migration 20260720230000). Server-internal:
+  // approve/reject RPC responses strip these, so they are only seen by direct table reads.
+  approve_idempotency_key?: string | null;
+  approve_request_fingerprint?: string | null;
+  reject_idempotency_key?: string | null;
+  reject_request_fingerprint?: string | null;
   row_count: number;
   eligible_row_count: number;
   approved_observation_count: number;
@@ -1731,6 +1742,16 @@ export interface Invoice {
   invoice_group_id: string | null;
   application_service_id: string | null;
   delivery_id: string | null;
+  // Per-line split billing (mig 20260720213000, flag-gated/additive). Server-computed
+  // suppression flag for a fully-$0 split child: 'suppressed_zero_total' means "record it,
+  // show it in the account summary, but do NOT email it" (a paid-in-full invoice at $0 stays
+  // 'normal' and emailable). Back-link to the field_app_billing_sets row that produced this
+  // child invoice. Both default-neutral until the split feature ships. Optional (?)
+  // because the migration is not applied yet and no invoice query selects them today
+  // (same convention as the additive weather fields above); the DB column is NOT NULL
+  // with default 'normal' once live.
+  send_disposition?: 'normal' | 'suppressed_zero_total';
+  field_app_billing_set_id?: string | null;
 
   deleted_at: string | null;
   created_at: string;
@@ -1789,6 +1810,12 @@ export interface InvoiceItem {
   price_source: 'quoted' | 'tier' | 'manual' | null;
   tote_number: string | null;
   notes: string | null;
+  // Per-line split billing (mig 20260720213000, additive). When set, this item was
+  // produced by a split billing line and its qty/price MUST be read-only in the
+  // InvoiceDetail editor (extended_cents is the server-allocated residual — never
+  // recompute qty x price for a split line). Optional (?) — additive column, not
+  // selected by today's queries; nullable in the DB once live.
+  billing_line_id?: string | null;
   created_at: string;
   updated_at: string;
   product?: Product;
@@ -1810,6 +1837,93 @@ export interface InvoiceShare {
   pricing_note: string | null;
   created_at: string;
   customer?: Customer;
+}
+
+// ── Per-line split billing (migs 20260720213000 / 020000 / 030000) ──────────
+// Flag-gated, additive. A "billing set" is one durable field-application billing
+// event; it has one server-created "billing line" per chemical/service/flat fee;
+// each billing line is allocated across customers into per-line "shares" bound 1:1
+// to the invoice_item they produced. Money is bigint cents; split_micro_pct is
+// integer micro-percent (100000000 = 100%). Frozen while the parent invoice is
+// posted; an append-only snapshot preserves post history across unpost/edit/repost.
+
+export interface FieldAppBillingSet {
+  id: string;
+  invoice_group_id: string | null;
+  source_job_id: string | null;
+  created_by: string | null;
+  created_at: string;
+}
+
+export type FieldAppBillingLineKind = 'chemical' | 'service' | 'fuel_surcharge' | 'flat_fee';
+
+export interface FieldAppBillingLine {
+  id: string;
+  billing_set_id: string;
+  line_kind: FieldAppBillingLineKind;
+  product_id: string | null;
+  application_service_id: string | null;
+  description: string | null;
+  source_quantity: number | null;
+  source_acres: number | null;
+  source_unit_price_cents: number | null;
+  source_line_cents: number | null;
+  sort_order: number;
+  created_at: string;
+}
+
+export type SplitBasePriceSource =
+  | 'manual' | 'quoted' | 'tier' | 'service_rate' | 'service_default' | 'grower_share' | 'flat';
+
+export interface InvoiceLineShare {
+  id: string;
+  billing_line_id: string;
+  invoice_item_id: string;
+  customer_id: string;
+  split_mode: 'field_default' | 'custom';
+  split_micro_pct: number; // micro-percent, 0..100000000
+  allocated_quantity: number | null;
+  allocated_acres: number | null;
+  base_unit_price_cents: number;
+  base_price_source: SplitBasePriceSource;
+  price_mode: 'default' | 'override';
+  unit_price_cents: number;
+  amount_cents: number; // == the child invoice_item.extended_cents (authoritative)
+  split_override_reason: string | null;
+  price_override_reason: string | null;
+  calculation_hash: string;
+  vector_hash: string;
+  created_by: string;
+  created_at: string;
+}
+
+export interface InvoiceLineShareSnapshot {
+  id: string;
+  invoice_id: string;
+  billing_line_id: string | null;
+  customer_id: string;
+  posted_at: string;
+  split_micro_pct: number;
+  allocated_quantity: number | null;
+  allocated_acres: number | null;
+  unit_price_cents: number;
+  amount_cents: number;
+  // Self-contained line identity (Codex round-4) — survives the source rows being deleted on re-save.
+  line_kind?: string | null;
+  product_id?: string | null;
+  application_service_id?: string | null;
+  line_description?: string | null;
+  // Override/pricing provenance (Codex round-7 P2) — nullable; pre-fix snapshot rows have none.
+  base_unit_price_cents?: number | null;
+  base_price_source?: string | null;
+  split_mode?: string | null;
+  price_mode?: string | null;
+  split_override_reason?: string | null;
+  price_override_reason?: string | null;
+  calculation_hash?: string | null;
+  vector_hash?: string | null;
+  snapshot_reason: string;
+  created_at: string;
 }
 
 // ── Invoice & Statement PDF Data Types ──────────────────────────────────
