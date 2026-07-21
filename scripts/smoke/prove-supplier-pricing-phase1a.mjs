@@ -39,11 +39,20 @@ const cutoverSql = path.join(
   'migrations',
   '20260718190000_supplier_pricing_phase1a_cutover.sql'
 );
-const forwardCorrectionSql = path.join(
+// The canonical source is empty-table replay-safe. Production's exact applied
+// artifact additionally contains a live-data assertion and the pre-cutover
+// trigger hardening; exercise both rather than pretending they are identical.
+const forwardCorrectionReplaySql = path.join(
   repoRoot,
   'supabase',
   'migrations',
   '20260718124517_harden_supplier_pricing_cent_scale_and_trigger.sql'
+);
+const forwardCorrectionLiveSql = path.join(
+  repoRoot,
+  'scripts',
+  'applied-migration-artifacts',
+  '20260718154131_20260718124517_harden_supplier_pricing_cent_scale_and_trigger.live.sql'
 );
 const forwardCorrectionSmokeSql = path.join(
   repoRoot,
@@ -190,7 +199,8 @@ try {
   copyToContainer(zeroCostGuardSql, 'zero-cost-guard.sql');
   copyToContainer(zeroCostGuardSmokeSql, 'zero-cost-guard-smoke.sql');
   copyToContainer(cutoverSql, 'cutover.sql');
-  copyToContainer(forwardCorrectionSql, 'forward-correction.sql');
+  copyToContainer(forwardCorrectionReplaySql, 'forward-correction-replay.sql');
+  copyToContainer(forwardCorrectionLiveSql, 'forward-correction.sql');
   copyToContainer(forwardCorrectionSmokeSql, 'forward-correction-smoke.sql');
   copyToContainer(smokeSql, 'smoke.sql');
   copyToContainer(workbookExportSql, 'xlsx-export.sql');
@@ -208,6 +218,25 @@ try {
   psql('zero-cost-guard.sql');
   console.log('[phase1a-proof] proving the guard blocks governed zero cost without breaking legacy mode');
   psql('zero-cost-guard-smoke.sql');
+  console.log('[phase1a-proof] proving the applied correction replays with zero Products');
+  run('docker', [
+    'exec', '-e', `PGPASSWORD=${password}`, container,
+    'createdb', '-U', 'postgres', 'phase1a_empty_replay',
+  ]);
+  for (const filename of [
+    'base.sql',
+    'bootstrap.sql',
+    'pricing-version-compat.sql',
+    'zero-cost-guard.sql',
+    'forward-correction-replay.sql',
+  ]) {
+    run('docker', [
+      'exec', '-e', `PGPASSWORD=${password}`, container,
+      'psql', '-U', 'postgres', '-d', 'phase1a_empty_replay', '-X',
+      '-v', 'ON_ERROR_STOP=1', '-f', `/tmp/${filename}`,
+    ]);
+  }
+  console.log('[phase1a-proof] PHASE1A_EMPTY_PRODUCTS_REPLAY_PASS');
   console.log('[phase1a-proof] seeding pre-cutover live-shaped Products');
   psql('seed.sql');
   console.log('[phase1a-proof] proving the forward preflight fails closed on fractional-cent drift');

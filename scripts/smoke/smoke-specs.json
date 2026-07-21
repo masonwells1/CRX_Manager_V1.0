@@ -4,9 +4,44 @@
     "pass_signal": "Every chain is a single DO block that ALWAYS terminates with RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK'. That exact error text = PASS (and guarantees rollback). ANY other error = FAIL.",
     "how_to_run": "node scripts/smoke/run-smoke.mjs --list | --spec <rpc> | --all  (see scripts/smoke/README.md)",
     "spec_contract": "Keys are the primary RPC under test. 'covers' lists every RPC the chain exercises - run-smoke.mjs --spec <rpc> matches keys AND covers entries, so one chain can certify several RPCs. Every migration that touches an RPC must have or extend a spec covering it.",
-    "area_tags": "Every spec carries an \"area\" array (business-area tags: billing, inventory, lifecycle, pricing, security). run-smoke.mjs --area <area> selects by tag; scripts/run-area.mjs bundles these with the matching vitest slice and DB invariant sweeps."
+    "area_tags": "Every spec carries an \"area\" array (business-area tags: billing, inventory, lifecycle, pricing, security, idempotency). run-smoke.mjs --area <area> selects by tag; scripts/run-area.mjs bundles these with the matching vitest slice and DB invariant sweeps."
   },
   "specs": {
+    "money_lifecycle_idempotency_required": {
+      "chain": "smoke-money-lifecycle-idempotency-required.sql",
+      "description": "Public money/lifecycle boundary: create_invoice_from_order, create_invoice_for_unbilled_delivery, post_invoice, cancel_order, generate_finance_charges, and batch_post_invoices all reject NULL or all-whitespace idempotency keys before mutation; actor-bearing wrappers reject forgery; batch posting derives a nonblank child key; and a valid finance-charge key creates one completed replay record and replays exactly. Terminal rollback.",
+      "covers": [
+        "create_invoice_from_order",
+        "create_invoice_for_unbilled_delivery",
+        "post_invoice",
+        "cancel_order",
+        "generate_finance_charges",
+        "batch_post_invoices"
+      ],
+      "area": [
+        "billing",
+        "lifecycle",
+        "idempotency"
+      ]
+    },
+    "govern_invoice_order_money_lifecycle": {
+      "chain": "smoke-govern-invoice-order-money-lifecycle.sql",
+      "description": "Invoice/order lifecycle closeout: binds invoice creation/posting/cancellation retries, preserves completed-delivery recovery, closes only the undelivered remainder of partially fulfilled orders, locks customer/product source lineage, blocks terminal-order invoice rewrites and direct invoice DML, filters reversed transaction history, and proves every rejected path leaves its money/inventory lineage unchanged. Self-contained fixtures and terminal rollback.",
+      "covers": [
+        "create_invoice_from_order",
+        "post_invoice",
+        "create_invoice_for_unbilled_delivery",
+        "cancel_order",
+        "get_customer_transaction_review",
+        "guard_order_delivered_activity_cancel",
+        "guard_invoice_terminal_order",
+        "guard_terminal_order_invoice_items"
+      ],
+      "area": [
+        "billing",
+        "lifecycle"
+      ]
+    },
     "delivery_signature_storage_access": {
       "chain": "smoke-delivery_signature_storage_access.sql",
       "covers": [
@@ -167,7 +202,7 @@
     },
     "generate_finance_charges": {
       "chain": "smoke-finance-charge-month-dedup.sql",
-      "description": "H2 double-charge and preview-parity regression: preview and generation both reject a closed accounting period, generation charges an overdue balance at most once per customer per calendar month, and preview omits a customer generation will skip. Sets up an overdue posted invoice, proves the closed-period gate, generates once, asserts the later same-month preview is empty, generates again, and asserts exactly one finance_charge exists. FAIL-FIRST against either the exact-date generator or either stale preview predicate. Self-contained fixtures and terminal rollback.",
+      "description": "H2 double-charge and preview-parity regression: preview and generation both reject a closed accounting period, generation charges an overdue balance at most once per customer per calendar month, and preview omits a customer generation will skip. Exact request replay returns the original result, while reusing its key with a changed customer selection fails closed. The chain then voids the first charge invoice and proves preview plus generation permit exactly one corrected active assessment in the same month. FAIL-FIRST against the exact-date generator, unbound idempotency, either stale preview predicate, or bucket-only dedup that counts voided charge invoices. Self-contained fixtures and terminal rollback.",
       "covers": [
         "generate_finance_charges",
         "preview_finance_charges"
@@ -606,16 +641,16 @@
     },
     "save_field_app_split_invoice": {
       "chain": "smoke-per-line-split-billing.sql",
-      "area": [
-        "billing"
-      ],
+      "description": "Per-line split-billing engine full chain: flag gate raises when disabled; a manual-rate service line plus an odd-cents manual chemical line across a 50/50 two-owner field produce penny-exact largest-remainder children (5751/5750 of 11501c) whose stored invoice_line_shares/invoice_items/invoice_shares all tie; identical replay with the same idempotency key returns the same invoice ids; compute_line_split_allocation splits 100c three ways as {34,33,33}; and the duplicate-product, off-job-field, job-immutability, and non-admin resolver-auth guards each raise for real. G5 FAIL-FIRST probe (runs first, cold plan): a save with no service line must succeed — RED until the parked unassigned-v_app_service fix migration applies. Self-contained [E2E] fixtures and terminal rollback.",
       "covers": [
         "save_field_app_split_invoice",
         "_save_field_app_split_invoice_impl",
         "resolve_line_split_vector",
         "compute_line_split_allocation"
       ],
-      "description": "Per-line split-billing engine full chain: the app_settings feature-flag gate refuses with SPLIT_BILLING_DISABLED before any write; with the flag on, a manual-override chemical line of an ODD 1501 cents across a 50/50 two-owner field saves through the public wrapper into exactly one draft child invoice per co-owner at 751/750 (largest-remainder source_lr, penny-exact), with the STORED invoice_line_shares tying to source_line_cents, micro-pct summing to exactly 100000000, allocated quantity conserved at 4dp, and every invoice_item/compat invoice_shares row matching its share; an identical-payload same-key replay returns the same invoice ids with no duplicate set; compute_line_split_allocation is also exercised directly (100 cents 3-way even => {34,33,33}); and the SPLIT_DUPLICATE_PRODUCT, SPLIT_FIELD_NOT_ON_JOB, SPLIT_JOB_IMMUTABLE, and non-admin RESOLVER_NOT_AUTHORIZED guards each fire for real. Posting/unposting, service/flat line kinds, mixed per-tier pricing, and job-backed commissions are out of scope (see the chain header). Self-contained [SMOKE] fixtures with terminal rollback."
+      "area": [
+        "billing"
+      ]
     }
   }
 }

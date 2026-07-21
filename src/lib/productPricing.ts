@@ -1,4 +1,5 @@
-import { assertRpcResult, supabaseUntyped } from './db';
+import type { Json } from '../types/supabase';
+import { assertRpcResult, supabase } from './db';
 
 export type PricingSource = 'pricing_worksheet' | 'product_page' | 'products_inline';
 export type PricingMode = 'margin_driven' | 'price_driven';
@@ -322,8 +323,8 @@ function normalizeApplyPricingResult(result: ApplyPricingResultWire): ApplyPrici
 export async function createPricingWorkbookExport(
   input: CreatePricingWorkbookExportInput,
 ): Promise<PricingWorkbookExport> {
-  const { data, error } = await supabaseUntyped.rpc('create_pricing_workbook_export', {
-    p_product_ids: input.productIds ?? null,
+  const { data, error } = await supabase.rpc('create_pricing_workbook_export', {
+    p_product_ids: input.productIds ?? undefined,
     p_performed_by: input.performedBy,
     p_idempotency_key: input.idempotencyKey,
   });
@@ -334,15 +335,15 @@ export async function createPricingWorkbookExport(
 export async function previewProductPricingChanges(
   input: PreviewPricingChangesInput,
 ): Promise<PricingPreviewResult> {
-  // Defense in depth for the staged rollout: the live bootstrap intentionally
-  // preserves legacy compatibility, so block the one input that could compute
-  // zero sell prices before any frontend path reaches the RPC. The separately
-  // parked database guard enforces the same rule server-side before deployment.
+  // Defense in depth for the staged rollout: legacy direct Product saves remain
+  // temporarily compatible, so block the one input that could compute zero sell
+  // prices before any frontend path reaches the RPC. The live database guard
+  // independently enforces the same rule server-side.
   assertPricingPreviewRowsSafe(input.rows);
-  const { data, error } = await supabaseUntyped.rpc('preview_product_pricing_changes', {
+  const { data, error } = await supabase.rpc('preview_product_pricing_changes', {
     p_source: input.source,
-    p_export_id: input.source === 'pricing_worksheet' ? input.exportId : null,
-    p_rows: input.rows,
+    p_export_id: input.source === 'pricing_worksheet' ? input.exportId : undefined,
+    p_rows: input.rows as unknown as Json,
     p_performed_by: input.performedBy,
     p_idempotency_key: input.idempotencyKey,
   });
@@ -354,7 +355,7 @@ export async function previewProductPricingChanges(
 export async function applyProductPricingChangeSet(
   input: ApplyPricingChangeSetInput,
 ): Promise<ApplyPricingResult> {
-  const { data, error } = await supabaseUntyped.rpc('apply_product_pricing_change_set', {
+  const { data, error } = await supabase.rpc('apply_product_pricing_change_set', {
     p_change_set_id: input.changeSetId,
     p_request_fingerprint: input.requestFingerprint,
     p_performed_by: input.performedBy,

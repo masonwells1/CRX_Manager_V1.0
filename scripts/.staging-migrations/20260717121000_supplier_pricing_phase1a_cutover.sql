@@ -229,6 +229,17 @@ DECLARE
   v_change_set_id uuid;
   v_source text;
 BEGIN
+  IF NEW.current_cost::text IN ('NaN', 'Infinity', '-Infinity')
+     OR NEW.tier1_price::text IN ('NaN', 'Infinity', '-Infinity')
+     OR NEW.tier2_price::text IN ('NaN', 'Infinity', '-Infinity')
+     OR NEW.tier3_price::text IN ('NaN', 'Infinity', '-Infinity')
+     OR round(NEW.current_cost, 2) IS DISTINCT FROM NEW.current_cost
+     OR round(NEW.tier1_price, 2) IS DISTINCT FROM NEW.tier1_price
+     OR round(NEW.tier2_price, 2) IS DISTINCT FROM NEW.tier2_price
+     OR round(NEW.tier3_price, 2) IS DISTINCT FROM NEW.tier3_price THEN
+    RAISE EXCEPTION 'PRODUCT_PRICING_CENT_SCALE_INVALID';
+  END IF;
+
   IF TG_OP = 'INSERT' THEN
     NEW.pricing_version := 1;
     RETURN NEW;

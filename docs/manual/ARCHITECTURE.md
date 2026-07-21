@@ -168,20 +168,19 @@ enums, and generated columns that hooks and reviewer agents check against.
 - **Icons/styling**: Lucide icon set, Tailwind CSS utility classes.
 - A dev-only `/design-preview` route (component gallery) is excluded from
   the production build by hostname check in `App.tsx`.
-- **Product pricing (Phase 1a staged rollout):** the additive database bootstrap
-  is live; the repository frontend awaiting review makes admin Product-page
+- **Product pricing (Phase 1a staged rollout):** the additive database bootstrap,
+  forward hardening, and production frontend are live. Admin Product-page
   edits, Products-list inline edits, and the pricing-only `.xlsx` workflow call the same
   preview/apply RPC engine. The preview shows server-authoritative Product
   identity and old → new cost, margin, tier-price, and per-acre effects. The
-  bootstrap records governed history through one trigger while retaining
-  legacy write compatibility. The live zero-cost guard rejects a
-  margin-driven zero cost while preserving legacy mode. The later parked strict
-  direct-write enforcement cutover denies direct pricing/history writes only
-  after this frontend is deployed and its rollback window closes. Bulk Product
-  Import remains a pricing-free CSV
-  Product-details creator. The repository rejects supplier price sheets and
-  price-bearing Product lists before OCR, but that Edge Function change is not
-  production behavior until a separately approved deployment.
+  bootstrap records governed history through one trigger. The live zero-cost
+  guard rejects a margin-driven zero cost, and the live strict cutover
+  (`20260718190000`) denies direct pricing/history writes from app roles. Product-page,
+  Products-list, and worksheet edits remain available because they use the
+  governed preview/apply RPC path. Bulk Product Import remains a pricing-free CSV
+  Product-details creator. Production `process-document` v19 rejects supplier
+  price sheets and price-bearing Product lists before OCR; JWT verification is
+  enabled, so the permanent supplier-pricing OCR retirement is live.
 
 ---
 
@@ -197,7 +196,7 @@ Current functions, one line each:
 | `create-user` | Admin-only: provisions a new staff login (auth user + profile row) using the service-role key. |
 | `epa-lookup` | Looks up an EPA pesticide registration number against the public EPA registry and normalizes/caches the result (added 2026-07 for label data quality). |
 | `process-blend-ticket` | OCR/text parsing of a photographed blend ticket into structured fields (date, customer, driver, acres, rate, etc.). |
-| `process-document` | Parses supported uploaded documents (invoices, POs, customer lists, and quote lists) into structured import data. Supplier price-list and price-bearing product-list OCR are deliberately retired. |
+| `process-document` | Parses supported invoices, POs, customer lists, and quote lists into structured import data. Production v19 fails closed on supplier price-list/product-list requests before OCR, with JWT verification enabled. |
 | `reset-user-password` | Admin-triggered password reset for another user (service-role privileged action, not self-service). |
 | `send-email` | Sends transactional email; hardened to an allowlist of email types per role and validates the recipient server-side rather than trusting the caller's `to` address. |
 | `setup-blend-tickets-storage` | One-time/idempotent setup of the storage bucket blend-ticket photos are uploaded into. |

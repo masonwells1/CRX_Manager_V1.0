@@ -408,10 +408,27 @@ export default function Orders() {
   };
 
   const handleBulkDelete = async () => {
+    const activeOrders = selectedRows.filter(
+      (order) => order.status !== 'cancelled' && order.status !== 'voided'
+    );
+    if (activeOrders.length > 0) {
+      toast(
+        'error',
+        `${activeOrders.length} selected order(s) are still active. Cancel or void them first, then delete them.`
+      );
+      setDeleteModalOpen(false);
+      return;
+    }
+
     await runCriticalAction({
       action: async () => {
         const ids = selectedRows.map((o) => o.id);
         const result = await supabase.from('orders').update({ deleted_at: new Date().toISOString() }).in('id', ids).select();
+        if (result.error?.message.includes('ORDER_MUST_BE_TERMINAL_BEFORE_DELETE')) {
+          throw new Error(
+            'An order became active before deletion. Refresh the list, then cancel or void it first.'
+          );
+        }
         checkMutationResult(result, 'Soft-delete orders');
       },
       toast,
@@ -426,12 +443,26 @@ export default function Orders() {
     });
   };
 
+  const openBulkDelete = () => {
+    const activeOrders = selectedRows.filter(
+      (order) => order.status !== 'cancelled' && order.status !== 'voided'
+    );
+    if (activeOrders.length > 0) {
+      toast(
+        'error',
+        `${activeOrders.length} selected order(s) are still active. Cancel or void them first, then delete them.`
+      );
+      return;
+    }
+    setDeleteModalOpen(true);
+  };
+
   const bulkActions = [
     { key: 'csv', label: 'Export CSV', icon: <Download className="w-4 h-4" />, onClick: handleExportCSV },
     { key: 'pdf', label: 'Download PDF', icon: <FileText className="w-4 h-4" />, onClick: handleExportPDF, loading: exporting },
     { key: 'print-summary', label: 'Print Summaries', icon: <Printer className="w-4 h-4" />, onClick: handleBulkPrintSummaries, loading: printingSummary },
     { key: 'print-picklist', label: 'Print Pick Lists', icon: <ClipboardList className="w-4 h-4" />, onClick: handleBulkPrintPickLists, loading: printingPickList },
-    { key: 'delete', label: 'Delete', icon: <Trash2 className="w-4 h-4" />, onClick: () => setDeleteModalOpen(true), variant: 'danger' as const },
+    { key: 'delete', label: 'Delete', icon: <Trash2 className="w-4 h-4" />, onClick: openBulkDelete, variant: 'danger' as const },
   ];
 
   const dataColumns: Column<OrderWithFulfillment>[] = [

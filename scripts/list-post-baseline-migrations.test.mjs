@@ -28,10 +28,10 @@ const files = result.stdout.trim().split(/\r?\n/).filter(Boolean);
 assert.deepEqual(files, [...files].sort(), 'post-baseline migrations must be ordered');
 
 for (const captured of [
-  '20260719100000_trust_only_post_revoke_split_provenance.sql',
-  '20260719100500_revert_quote_status_deadlock_retry.sql',
-  '20260719101000_align_finance_charge_preview_month_dedup.sql',
-  '20260719102000_allow_governed_split_terminal_lifecycle.sql',
+  '20260719044912_trust_only_post_revoke_split_provenance.sql',
+  '20260719044958_revert_quote_status_deadlock_retry.sql',
+  '20260719045029_align_finance_charge_preview_month_dedup.sql',
+  '20260719060256_allow_governed_split_terminal_lifecycle.sql',
 ]) {
   assert.equal(
     files.some((file) => file.endsWith(captured)),

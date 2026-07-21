@@ -24,6 +24,9 @@ DECLARE
   v_set_id     uuid;
   v_history_count integer;
   v_history_total bigint;
+  v_credit_balance bigint;
+  v_customer_prepay bigint;
+  v_application_count integer;
 BEGIN
   SELECT id INTO v_admin FROM public.profiles
   WHERE role = 'admin' AND is_active = true ORDER BY created_at LIMIT 1;
@@ -53,6 +56,10 @@ BEGIN
     v_admin, 'e2e-h3-pay-' || v_suffix);
   v_set_id := (v_pay_result->>'allocation_set_id')::uuid;
 
+  -- Isolate the allocation-row half of the guard. The header lever is made
+  -- zero while the active payment allocation remains; void must still refuse.
+  UPDATE public.invoices SET paid_amount_cents = 0 WHERE id = v_inv_paid;
+
   BEGIN
     PERFORM public.void_invoice(v_inv_paid, 'H3 smoke: should be blocked', 'e2e-h3-void-' || v_suffix);
     -- Reached only on the PRE-FIX function: void stranded the applied payment.
@@ -64,6 +71,9 @@ BEGIN
       RAISE EXCEPTION 'SMOKE_FAIL: void_invoice wrong rejection with an applied payment: %', v_err;
     END IF;
   END;
+
+  -- Restore the consistent header before exercising the supported reversal.
+  UPDATE public.invoices SET paid_amount_cents = 50000 WHERE id = v_inv_paid;
 
   -- The supported payment ledger has a real reversal. Once unapplied, the
   -- invoice is no longer stranded and can be voided normally.
@@ -101,14 +111,48 @@ BEGIN
     v_admin, 'e2e-h3-pp-' || v_suffix, 40000);
   SELECT id INTO v_prepay_id FROM public.prepay_credits
   WHERE customer_id = v_customer AND balance_cents > 0 ORDER BY created_at LIMIT 1;
+  SELECT balance_cents INTO v_credit_balance
+  FROM public.prepay_credits WHERE id = v_prepay_id;
+  SELECT prepay_balance_cents INTO v_customer_prepay
+  FROM public.customers WHERE id = v_customer;
+  IF v_credit_balance IS DISTINCT FROM 40000 OR v_customer_prepay IS DISTINCT FROM 40000 THEN
+    RAISE EXCEPTION 'SMOKE_SETUP: prepay funding mismatch (credit=%, customer=%)',
+      v_credit_balance, v_customer_prepay;
+  END IF;
 
   PERFORM public.apply_prepay_to_invoice(v_prepay_id, v_inv_prepay, 40000, NULL, 'e2e-h3-applypp-' || v_suffix);
+  SELECT count(*) INTO v_application_count
+  FROM public.prepay_applications
+  WHERE prepay_credit_id = v_prepay_id AND invoice_id = v_inv_prepay;
+  SELECT balance_cents INTO v_credit_balance
+  FROM public.prepay_credits WHERE id = v_prepay_id;
+  SELECT prepay_balance_cents INTO v_customer_prepay
+  FROM public.customers WHERE id = v_customer;
+  IF v_application_count IS DISTINCT FROM 1
+     OR v_credit_balance IS DISTINCT FROM 0
+     OR v_customer_prepay IS DISTINCT FROM 0 THEN
+    RAISE EXCEPTION 'SMOKE_SETUP: prepay apply mismatch (applications=%, credit=%, customer=%)',
+      v_application_count, v_credit_balance, v_customer_prepay;
+  END IF;
 
   -- prepay-only (paid_amount_cents = 0, no invoice_line_allocations) -> not blocked.
   PERFORM public.void_invoice(v_inv_prepay, 'H3 smoke: prepay-only void allowed', 'e2e-h3-voidpp-' || v_suffix);
   SELECT status INTO v_status FROM public.invoices WHERE id = v_inv_prepay;
   IF v_status <> 'voided' THEN
     RAISE EXCEPTION 'SMOKE_FAIL: prepay-only invoice was not voided (status=%), guard over-blocked', v_status;
+  END IF;
+  SELECT count(*) INTO v_application_count
+  FROM public.prepay_applications
+  WHERE prepay_credit_id = v_prepay_id AND invoice_id = v_inv_prepay;
+  SELECT balance_cents INTO v_credit_balance
+  FROM public.prepay_credits WHERE id = v_prepay_id;
+  SELECT prepay_balance_cents INTO v_customer_prepay
+  FROM public.customers WHERE id = v_customer;
+  IF v_application_count IS DISTINCT FROM 0
+     OR v_credit_balance IS DISTINCT FROM 40000
+     OR v_customer_prepay IS DISTINCT FROM 40000 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: prepay void did not restore ledgers (applications=%, credit=%, customer=%)',
+      v_application_count, v_credit_balance, v_customer_prepay;
   END IF;
 
   RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK';

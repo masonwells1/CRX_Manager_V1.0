@@ -24,6 +24,7 @@ DECLARE
   v_suffix text := substr(md5(random()::text || clock_timestamp()::text), 1, 10);
   v_vendor uuid;
   v_vendor_name text;
+  v_replay_vendor uuid;
   v_product uuid;
   v_product_name text;
   v_inventory_unit text;
@@ -31,6 +32,7 @@ DECLARE
   v_product_prices_after jsonb;
   v_alias_raw text;
   v_alias_id uuid;
+  v_replay_alias_id uuid;
   v_link_id uuid;
   v_import_id uuid;
   v_import_row_id uuid;
@@ -162,6 +164,59 @@ BEGIN
   IF v_replay IS DISTINCT FROM v_res THEN
     RAISE EXCEPTION 'SMOKE_FAIL: stage_vendor_alias replay changed response: % vs %', v_res, v_replay;
   END IF;
+
+  -- Durable replay must survive mutable vendor state after the cache expires.
+  INSERT INTO public.vendors (name)
+  VALUES ('[SMOKE] Retired Replay Vendor ' || v_suffix)
+  RETURNING id INTO v_replay_vendor;
+  v_res := public.stage_vendor_alias(
+    '[SMOKE] Retired Replay Alias ' || v_suffix,
+    '[SMOKE] Retired Replay Alias ' || v_suffix,
+    v_replay_vendor,
+    'manual',
+    v_admin,
+    'smk-' || v_suffix || '-alias-retired-replay'
+  );
+  v_replay_alias_id := (v_res->>'id')::uuid;
+  PERFORM public.review_vendor_alias(
+    v_replay_alias_id,
+    v_replay_vendor,
+    'approved',
+    'smoke mutates the alias after staging',
+    v_admin,
+    'smk-' || v_suffix || '-alias-retired-review'
+  );
+  DELETE FROM public.idempotency_keys
+  WHERE idempotency_key = 'smk-' || v_suffix || '-alias-retired-replay'
+    AND operation = 'stage_vendor_alias';
+  UPDATE public.vendors SET deleted_at = now() WHERE id = v_replay_vendor;
+  v_replay := public.stage_vendor_alias(
+    '[SMOKE] Retired Replay Alias ' || v_suffix,
+    '[SMOKE] Retired Replay Alias ' || v_suffix,
+    v_replay_vendor,
+    'manual',
+    v_admin,
+    'smk-' || v_suffix || '-alias-retired-replay'
+  );
+  IF v_replay IS DISTINCT FROM v_res THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: reviewed, retired-vendor durable replay changed response: % vs %', v_res, v_replay;
+  END IF;
+  BEGIN
+    PERFORM public.stage_vendor_alias(
+      '[SMOKE] New Alias For Retired Vendor ' || v_suffix,
+      '[SMOKE] New Alias For Retired Vendor ' || v_suffix,
+      v_replay_vendor,
+      'manual',
+      v_admin,
+      'smk-' || v_suffix || '-alias-retired-new'
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: a new alias was staged for a retired vendor';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF SQLERRM NOT LIKE 'VENDOR_NOT_FOUND%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: retired-vendor new mutation expected VENDOR_NOT_FOUND, got %', SQLERRM;
+    END IF;
+  END;
 
   -- --------------------------------------------------------------------------
   -- 2. review_vendor_alias auth probes + approval + replay.

@@ -9,7 +9,7 @@ const { mockRpc, mockAssertRpcResult } = vi.hoisted(() => ({
 }));
 
 vi.mock('./db', () => ({
-  supabaseUntyped: { rpc: mockRpc },
+  supabase: { rpc: mockRpc },
   assertRpcResult: mockAssertRpcResult,
 }));
 
@@ -113,7 +113,7 @@ describe('product pricing RPC wrappers', () => {
 
     expect(mockRpc).toHaveBeenCalledWith('preview_product_pricing_changes', {
       p_source: 'product_page',
-      p_export_id: null,
+      p_export_id: undefined,
       p_rows: rows,
       p_performed_by: 'actor-1',
       p_idempotency_key: 'preview-key',
