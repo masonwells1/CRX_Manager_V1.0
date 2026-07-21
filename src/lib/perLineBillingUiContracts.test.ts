@@ -34,6 +34,12 @@ describe('per-line billing UI contracts', () => {
     expect(source).toContain("supabase.rpc('save_field_app_invoice', saveArgs)");
     expect(source).toContain('p_job_id: jobId as string, p_line_overrides: perLineOptions');
     expect(source).toContain('p_job_id: jobId as string, p_options: perLineOptions');
+    expect(source.match(/job_chemical_id: c\.job_chemical_id/g)?.length).toBe(2);
+    expect(source.match(/chemicals\.some\(\(chemical\) => !chemical\.job_chemical_id\)/g)?.length).toBe(2);
+    expect(source).toContain(".from('job_chemicals')");
+    expect(source).toContain(".from('invoice_line_shares' as 'invoices')");
+    expect(source).toContain(".select('billing_set_id')");
+    expect(source).not.toContain('if (!invoiceGroupId) {\n      setStoredPerLineOptionsReady(false)');
     expect(source).toContain('const recipientInvoiceId = customerToInvoiceId[r.customer_id]');
     expect(source).toContain('await assertInvoiceSendable(recipientInvoiceId)');
     expect(source).toContain("customerToInvoiceId[r.customer_id] ?? (!invoiceGroupId ? id : null)");

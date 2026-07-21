@@ -18,6 +18,8 @@ import type { GuardrailMode } from '../../lib/labelGuardrailSetting';
 
 export interface ChemicalLine {
   id: string;
+  /** Frozen source row required by the server per-line calculator for job billing. */
+  job_chemical_id?: string | null;
   product_id: string | null;
   product_name: string;
   rate_per_acre: number | null;
