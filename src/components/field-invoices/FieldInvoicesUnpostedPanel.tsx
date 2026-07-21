@@ -8,6 +8,7 @@ import MobileCardList from '../ui/MobileCardList';
 import MultiSelectDropdown, { type MultiSelectOption } from '../jobs/MultiSelectDropdown';
 import { useToast } from '../ui/Toast';
 import { supabase, sanitizeError, assertRpcResult, hasRpcCode, RpcErrorCodes } from '../../lib/db';
+import { assertInvoiceSendable } from '../../lib/invoiceSendDisposition';
 import { Sentry } from '../../lib/sentry';
 import { runCriticalAction } from '../../lib/criticalAction';
 import { generateIdempotencyKey } from '../../lib/idempotency';
@@ -286,6 +287,7 @@ export default function FieldInvoicesUnpostedPanel() {
           <p style="margin:16px 0 0;color:#374151;">Please find your invoice attached to this email.</p>
         `);
 
+        await assertInvoiceSendable(row.id);
         const result = await sendEmail({
           to: email,
           subject: `Invoice ${row.invoice_number} from Crop RX Solutions`,
