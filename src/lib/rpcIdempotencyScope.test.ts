@@ -232,6 +232,12 @@ const INTERNAL_OPERATION_REFERENCES: Record<string, string[]> = {
   // Deleting a PO must invalidate its saved retry result so the same source
   // document can create a fresh PO if an admin intentionally removes it.
   _invalidate_deleted_purchase_order_retry_state: ['save_purchase_order'],
+  // Per-line split billing (mig 20260720233000): the impl is the write half of the
+  // public save_field_app_split_invoice RPC (direct EXECUTE revoked). The wrapper does
+  // check_idempotency + payload-hash conflict; the impl records via save_idempotency —
+  // both intentionally share the wrapper's single 'save_field_app_split_invoice' cache
+  // namespace, exactly like the save_purchase_order pair above.
+  _save_field_app_split_invoice_impl: ['save_field_app_split_invoice'],
 };
 
 /**

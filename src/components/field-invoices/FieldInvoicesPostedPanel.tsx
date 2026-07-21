@@ -6,6 +6,7 @@ import Button from '../ui/Button';
 import MultiSelectDropdown, { type MultiSelectOption } from '../jobs/MultiSelectDropdown';
 import { useToast } from '../ui/Toast';
 import { supabase, assertRpcResult } from '../../lib/db';
+import { assertInvoiceSendable } from '../../lib/invoiceSendDisposition';
 import { Sentry } from '../../lib/sentry';
 import { runCriticalAction } from '../../lib/criticalAction';
 import { generateIdempotencyKey } from '../../lib/idempotency';
@@ -18,7 +19,7 @@ import {
   downloadInvoicePdf,
 } from '../../lib/invoicePdf';
 import { downloadReportPdf } from '../../lib/reportPdf';
-import { sendEmail, pdfToBase64, buildEmailHtml } from '../../lib/emailService';
+import { sendEmail, pdfToBase64, buildEmailHtml, isInvoiceEmailSuppressed } from '../../lib/emailService';
 import { useAuth } from '../../contexts/AuthContext';
 import { logActivity } from '../../lib/activityLogger';
 import { formatCents as fmt } from '../../lib/money';
@@ -266,6 +267,12 @@ export default function FieldInvoicesPostedPanel() {
   const emailRow = async (row: FieldInvoiceListRow) => {
     if (rowActionRef.current) return;
     if (!profile) { toast('error', 'Profile not loaded — please refresh.'); return; }
+    // FieldInvoiceListRow doesn't yet declare send_disposition (added when the
+    // split-billing migration + list query land); cast to the helper's shape.
+    if (isInvoiceEmailSuppressed(row)) {
+      toast('info', 'This $0 invoice is recorded and shown in the account summary, but is not emailed.');
+      return;
+    }
     rowActionRef.current = true;
     await runCriticalAction({
       action: async () => {
@@ -289,6 +296,7 @@ export default function FieldInvoicesPostedPanel() {
           <p style="margin:16px 0 0;color:#374151;">Please find your invoice attached to this email.</p>
         `);
 
+        await assertInvoiceSendable(row.id);
         const result = await sendEmail({
           to: email,
           subject: `Invoice ${row.invoice_number} from Crop RX Solutions`,

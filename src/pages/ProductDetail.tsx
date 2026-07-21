@@ -312,6 +312,9 @@ export default function ProductDetail() {
   }, [id, toast]);
 
   const fetchCostHistory = useCallback(async (reportError = true): Promise<boolean> => {
+    // cost_history is admin-only under RLS; a non-admin fetch would just be a
+    // denied round-trip (the history panel below only renders for admins).
+    if (!isAdmin) return true;
     const { data, error } = await supabase
       .from('cost_history')
       .select('*')
@@ -325,7 +328,7 @@ export default function ProductDetail() {
     }
     setCostHistory((data || []) as CostHistory[]);
     return true;
-  }, [id, toast]);
+  }, [id, isAdmin, toast]);
 
   useEffect(() => {
     if (!isNew && id) {

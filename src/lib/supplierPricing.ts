@@ -443,6 +443,29 @@ export async function approveSupplierPriceImport(input: {
   };
 }
 
+export async function rejectSupplierPriceImport(input: {
+  importId: string;
+  reason: string;
+  performedBy: string;
+  idempotencyKey: string;
+}): Promise<SupplierImportReview> {
+  const { data, error } = await supabaseUntyped.rpc('reject_supplier_price_import', {
+    p_import_id: input.importId,
+    p_reason: input.reason,
+    p_performed_by: input.performedBy,
+    p_idempotency_key: input.idempotencyKey,
+  });
+  if (error) throw error;
+  const result = assertRpcResult<SupplierImportReviewWire>(data, 'reject_supplier_price_import');
+  return {
+    ...result,
+    rows: result.rows.map((row) => ({
+      ...row,
+      cost_cents: exactIntegerCents(row.cost_cents, 'import row cents'),
+    })),
+  };
+}
+
 export async function stageVendorAlias(input: {
   aliasRaw: string;
   aliasDisplay: string;
