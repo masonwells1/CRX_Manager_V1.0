@@ -17,3 +17,4 @@ Phase 23 (DB CHECK constraints on inventory buckets) unlocks when negatives=0 fo
 | 2026-06-26 | 17 | 15 | 59 | No change — zero rows resolved (7 consecutive stalled weeks) |
 | 2026-07-03 | 17 | 15 | 59 | No change — zero rows resolved (8 consecutive stalled weeks) |
 | 2026-07-10 | 17 | 15 | 59 | No change — zero rows resolved (9 consecutive stalled weeks) |
+| 2026-07-17 | 18 | 15 | 59 | +1 negative — likely U9 warn-not-block delivery (expected; check requires_review=true on inventory_transactions). Legacy 17 rows still need /integrity-cleanup. |
