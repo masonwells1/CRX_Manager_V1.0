@@ -10,6 +10,58 @@ const source = (...parts: string[]) =>
   readFileSync(join(root, ...parts), 'utf8').replace(/\r\n/g, '\n');
 
 describe('gauntlet sections 2-6 CodeRabbit closeout', () => {
+  it('serializes lifecycle invoice retries before any money mutation', () => {
+    const helperSql = migration('20260714230000_gauntlet_core_guards.sql');
+    const helper = helperSql.slice(
+      helperSql.indexOf('CREATE OR REPLACE FUNCTION public.check_idempotency('),
+      helperSql.indexOf('REVOKE EXECUTE ON FUNCTION public.check_idempotency('),
+    );
+    const keyLock = helper.indexOf('PERFORM pg_advisory_xact_lock(');
+    const keyRead = helper.indexOf('FROM public.idempotency_keys');
+    expect(keyLock).toBeGreaterThan(-1);
+    expect(helper).toContain("hashtextextended('crx:idempotency:' || p_key, 0)");
+    expect(keyLock).toBeLessThan(keyRead);
+
+    const lifecycle = migration('20260721010000_govern_invoice_order_money_lifecycle.sql');
+    const wrappers = [
+      {
+        name: 'create_invoice_from_order',
+        end: 'REVOKE ALL ON FUNCTION public.create_invoice_from_order',
+        firstBusinessAction: 'FROM public.orders',
+        delegate: 'public._create_invoice_from_order_impl_20260718(',
+      },
+      {
+        name: 'create_invoice_for_unbilled_delivery',
+        end: 'REVOKE ALL ON FUNCTION public.create_invoice_for_unbilled_delivery',
+        firstBusinessAction: 'DELETE FROM public.invoice_delivery_recovery_capabilities',
+        delegate: 'public._create_invoice_for_unbilled_delivery_impl_20260718(',
+      },
+      {
+        name: 'post_invoice',
+        end: 'REVOKE ALL ON FUNCTION public.post_invoice',
+        firstBusinessAction: 'PERFORM public._post_deleted_delivery_recovery_invoice_20260719(',
+        delegate: 'PERFORM public._post_invoice_public_impl_20260718(',
+      },
+    ];
+
+    for (const contract of wrappers) {
+      const start = lifecycle.indexOf(`CREATE FUNCTION public.${contract.name}(`);
+      const end = lifecycle.indexOf(contract.end, start);
+      const wrapper = lifecycle.slice(start, end);
+      const check = wrapper.indexOf('public.check_idempotency(');
+      const firstBusinessAction = wrapper.indexOf(contract.firstBusinessAction);
+      const delegate = wrapper.indexOf(contract.delegate);
+      const save = wrapper.indexOf('public.save_idempotency(');
+
+      expect(start).toBeGreaterThan(-1);
+      expect(end).toBeGreaterThan(start);
+      expect(check).toBeGreaterThan(-1);
+      expect(firstBusinessAction).toBeGreaterThan(check);
+      expect(delegate).toBeGreaterThan(check);
+      expect(save).toBeGreaterThan(delegate);
+    }
+  });
+
   it('claims and fingerprints revert_quote_status before any quote mutation', () => {
     const sql = migration('20260719013000_bind_revert_quote_status_idempotency.sql');
     expect(sql).toContain("v_contract CONSTANT text := 'revert_quote_status_v1'");
