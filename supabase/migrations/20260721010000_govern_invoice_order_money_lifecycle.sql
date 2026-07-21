@@ -1,4 +1,4 @@
--- 20260719120000: forward-only closeout for the invoice/order money lifecycle issues found while
+-- 20260721010000: forward-only closeout for the invoice/order money lifecycle issues found while
 -- reviewing Supplier Pricing Phase 1a. This migration deliberately wraps the
 -- current live function bodies instead of copying them, except for
 -- revert_quote_status: the gauntlet correction now owns its complete
@@ -34,7 +34,11 @@ DECLARE
 BEGIN
   FOR v_expected IN
     SELECT * FROM (VALUES
-      ('public.void_invoice(uuid,text,text)'::regprocedure, '9f1656542c5c6a667b1c8a67034c5c3f'),
+      ('public.void_invoice(uuid,text,text)'::regprocedure, 'c7a488d58bd876e92565bca9bd4edc90'),
+      ('public.void_invoice_group(uuid,text,text)'::regprocedure, 'fa19808b6ab6b0663663cd28c89a3326'),
+      ('public.save_invoice(jsonb,jsonb,text)'::regprocedure, 'f7e0fe8f494fe160039df9aef46067df'),
+      ('public._void_invoice_group_guard_impl_20260720(uuid,text,text)'::regprocedure, '9f1656542c5c6a667b1c8a67034c5c3f'),
+      ('public._save_invoice_governed_split_guard_impl_20260720(jsonb,jsonb,text)'::regprocedure, '6eb68b6248b52328bfc94284e790ef85'),
       ('public.create_invoice_from_order(uuid,uuid,text,text)'::regprocedure, '6f7bfd6e0cc06bae9afb25e41610ebc8'),
       ('public.revert_quote_status(uuid,text,uuid,text)'::regprocedure, 'fb0cc5def3766270b13c401810b61f3e'),
       ('public.post_invoice(uuid,text)'::regprocedure, '39b9f427eb843e6cba859a1db62553a8'),
@@ -57,6 +61,25 @@ BEGIN
         v_expected.signature, v_actual, v_expected.expected_md5;
     END IF;
   END LOOP;
+
+  IF EXISTS (
+    SELECT 1
+      FROM (VALUES
+        ('public.save_invoice(jsonb,jsonb,text)'),
+        ('public.void_invoice(uuid,text,text)'),
+        ('public.void_invoice_group(uuid,text,text)'),
+        ('public._save_invoice_governed_split_guard_impl_20260720(jsonb,jsonb,text)'),
+        ('public._void_invoice_group_guard_impl_20260720(uuid,text,text)')
+      ) AS governed(signature)
+      LEFT JOIN pg_proc p ON p.oid = to_regprocedure(governed.signature)
+     WHERE p.oid IS NULL
+        OR NOT p.prosecdef
+        OR ('search_path=public, pg_temp' = ANY (
+             COALESCE(p.proconfig, ARRAY[]::text[])
+           )) IS NOT TRUE
+  ) THEN
+    RAISE EXCEPTION 'PRECONDITION: governed split save/void function properties drifted; rebase from live before applying';
+  END IF;
 
   -- The guards below preserve clean lineage; they are not a hidden repair job.
   -- Bind the zero-anomaly live preflight under the apply barrier so no legacy
@@ -125,7 +148,8 @@ $preflight$;
 
 -- Keep the mature, current implementations byte-identical behind owner-only
 -- names. Public wrappers below own argument-bound retry behavior. The upstream
--- provenance migration already owns void_invoice and remains canonical here.
+-- group-aware save/void migration remains canonical; this migration verifies
+-- those final public and private bodies without replacing or re-emitting them.
 ALTER FUNCTION public.create_invoice_from_order(uuid, uuid, text, text)
   RENAME TO _create_invoice_from_order_impl_20260718;
 REVOKE ALL ON FUNCTION public._create_invoice_from_order_impl_20260718(uuid, uuid, text, text)
@@ -1265,6 +1289,7 @@ DECLARE
   v_request jsonb;
   v_fingerprint text;
   v_result jsonb;
+  v_order_status text;
   v_has_delivered_quantity boolean;
   v_has_completed_delivery boolean;
 BEGIN
@@ -1306,7 +1331,10 @@ BEGIN
    WHERE order_id = p_order_id
    ORDER BY id
    FOR UPDATE;
-  PERFORM 1 FROM public.orders WHERE id = p_order_id FOR UPDATE;
+  SELECT status INTO v_order_status
+    FROM public.orders
+   WHERE id = p_order_id
+   FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION 'ORDER_NOT_FOUND'; END IF;
 
   SELECT EXISTS (
@@ -1322,7 +1350,12 @@ BEGIN
     RAISE EXCEPTION 'ORDER_DELIVERY_QUANTITY_DRIFT: completed delivery exists without delivered order-item quantity';
   END IF;
 
-  IF v_has_delivered_quantity OR v_has_completed_delivery THEN
+  -- The UI and state machine expose "Cancel Remaining" only for a genuinely
+  -- partially fulfilled order. Keep the mature full-cancel path canonical for
+  -- confirmed orders (including governed split-draft fixtures) so the final
+  -- PR #165 provenance-aware cancellation contract remains byte-for-byte owned
+  -- by its preserved implementation.
+  IF v_order_status = 'partially_fulfilled' THEN
     v_result := public._close_undelivered_order_remainder_20260718(
       p_order_id, v_actor
     );
@@ -1758,7 +1791,15 @@ DECLARE
   v_source text;
 BEGIN
   IF md5((SELECT prosrc FROM pg_proc WHERE oid = 'public.void_invoice(uuid,text,text)'::regprocedure))
+       <> 'c7a488d58bd876e92565bca9bd4edc90'
+     OR md5((SELECT prosrc FROM pg_proc WHERE oid = 'public.void_invoice_group(uuid,text,text)'::regprocedure))
+       <> 'fa19808b6ab6b0663663cd28c89a3326'
+     OR md5((SELECT prosrc FROM pg_proc WHERE oid = 'public.save_invoice(jsonb,jsonb,text)'::regprocedure))
+       <> 'f7e0fe8f494fe160039df9aef46067df'
+     OR md5((SELECT prosrc FROM pg_proc WHERE oid = 'public._void_invoice_group_guard_impl_20260720(uuid,text,text)'::regprocedure))
        <> '9f1656542c5c6a667b1c8a67034c5c3f'
+     OR md5((SELECT prosrc FROM pg_proc WHERE oid = 'public._save_invoice_governed_split_guard_impl_20260720(jsonb,jsonb,text)'::regprocedure))
+       <> '6eb68b6248b52328bfc94284e790ef85'
      OR md5((SELECT prosrc FROM pg_proc WHERE oid = 'public._cancel_order_provenance_wrapper_20260719(uuid,uuid,text)'::regprocedure))
        <> '26c8b52a1f1e1a5bdf460bd89b730111'
      OR md5((SELECT prosrc FROM pg_proc WHERE oid = 'public._create_invoice_from_order_impl_20260718(uuid,uuid,text,text)'::regprocedure))
@@ -1768,6 +1809,72 @@ BEGIN
      OR md5((SELECT prosrc FROM pg_proc WHERE oid = 'public._create_invoice_for_unbilled_delivery_impl_20260718(uuid,uuid,text)'::regprocedure))
        <> '2fc0102fe8702f6c2d63c326a99c15dd' THEN
     RAISE EXCEPTION 'POSTFLIGHT: a wrapped live implementation changed during migration';
+  END IF;
+
+  SELECT prosrc INTO v_source FROM pg_proc
+   WHERE oid = 'public.save_invoice(jsonb,jsonb,text)'::regprocedure;
+  IF v_source NOT LIKE '%SPLIT_INVOICE_EDIT_REQUIRES_REISSUE%'
+     OR v_source NOT LIKE '%_save_invoice_governed_split_guard_impl_20260720%'
+     OR NOT (SELECT prosecdef FROM pg_proc
+              WHERE oid = 'public.save_invoice(jsonb,jsonb,text)'::regprocedure)
+     OR NOT ('search_path=public, pg_temp' = ANY (
+          SELECT unnest(proconfig) FROM pg_proc
+           WHERE oid = 'public.save_invoice(jsonb,jsonb,text)'::regprocedure
+        ))
+     OR has_function_privilege('anon', 'public.save_invoice(jsonb,jsonb,text)', 'EXECUTE')
+     OR NOT has_function_privilege('authenticated', 'public.save_invoice(jsonb,jsonb,text)', 'EXECUTE')
+     OR NOT has_function_privilege('service_role', 'public.save_invoice(jsonb,jsonb,text)', 'EXECUTE') THEN
+    RAISE EXCEPTION 'POSTFLIGHT: governed split save guard drifted during migration';
+  END IF;
+
+  SELECT prosrc INTO v_source FROM pg_proc
+   WHERE oid = 'public.void_invoice(uuid,text,text)'::regprocedure;
+  IF v_source NOT LIKE '%SPLIT_INVOICE_GROUP_VOID_REQUIRED%'
+     OR v_source NOT LIKE '%_void_invoice_group_guard_impl_20260720%'
+     OR NOT (SELECT prosecdef FROM pg_proc
+              WHERE oid = 'public.void_invoice(uuid,text,text)'::regprocedure)
+     OR NOT ('search_path=public, pg_temp' = ANY (
+          SELECT unnest(proconfig) FROM pg_proc
+           WHERE oid = 'public.void_invoice(uuid,text,text)'::regprocedure
+        ))
+     OR has_function_privilege('anon', 'public.void_invoice(uuid,text,text)', 'EXECUTE')
+     OR NOT has_function_privilege('authenticated', 'public.void_invoice(uuid,text,text)', 'EXECUTE')
+     OR NOT has_function_privilege('service_role', 'public.void_invoice(uuid,text,text)', 'EXECUTE') THEN
+    RAISE EXCEPTION 'POSTFLIGHT: governed split singular-void guard drifted during migration';
+  END IF;
+
+  SELECT prosrc INTO v_source FROM pg_proc
+   WHERE oid = 'public.void_invoice_group(uuid,text,text)'::regprocedure;
+  IF v_source NOT LIKE '%void_invoice_group_v1%'
+     OR v_source NOT LIKE '%_claim_bound_lifecycle_idempotency%'
+     OR v_source NOT LIKE '%_bind_completed_lifecycle_idempotency%'
+     OR v_source NOT LIKE '%every active member must have exact governed split provenance%'
+     OR NOT (SELECT prosecdef FROM pg_proc
+              WHERE oid = 'public.void_invoice_group(uuid,text,text)'::regprocedure)
+     OR NOT ('search_path=public, pg_temp' = ANY (
+          SELECT unnest(proconfig) FROM pg_proc
+           WHERE oid = 'public.void_invoice_group(uuid,text,text)'::regprocedure
+        ))
+     OR has_function_privilege('anon', 'public.void_invoice_group(uuid,text,text)', 'EXECUTE')
+     OR NOT has_function_privilege('authenticated', 'public.void_invoice_group(uuid,text,text)', 'EXECUTE')
+     OR NOT has_function_privilege('service_role', 'public.void_invoice_group(uuid,text,text)', 'EXECUTE') THEN
+    RAISE EXCEPTION 'POSTFLIGHT: governed split group-void contract drifted during migration';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+      FROM (VALUES
+        ('public._save_invoice_governed_split_guard_impl_20260720(jsonb,jsonb,text)'),
+        ('public._void_invoice_group_guard_impl_20260720(uuid,text,text)')
+      ) AS governed_private(signature)
+      LEFT JOIN pg_proc p ON p.oid = to_regprocedure(governed_private.signature)
+     WHERE p.oid IS NULL
+        OR NOT p.prosecdef
+        OR ('search_path=public, pg_temp' = ANY (
+             COALESCE(p.proconfig, ARRAY[]::text[])
+           )) IS NOT TRUE
+  ) THEN
+    RAISE EXCEPTION 'POSTFLIGHT: governed split private function properties drifted during migration';
   END IF;
 
   SELECT prosrc INTO v_source FROM pg_proc
@@ -2088,6 +2195,8 @@ BEGIN
         ('public._claim_bound_lifecycle_idempotency(text,text,text,text,jsonb)'),
         ('public._bind_completed_lifecycle_idempotency(text,text,text,text,jsonb,jsonb)'),
         ('public._void_invoice_split_provenance_impl_20260719(uuid,text,text)'),
+        ('public._void_invoice_group_guard_impl_20260720(uuid,text,text)'),
+        ('public._save_invoice_governed_split_guard_impl_20260720(jsonb,jsonb,text)'),
         ('public._cancel_order_split_provenance_impl_20260719(uuid,uuid,text)'),
         ('public._cancel_order_provenance_wrapper_20260719(uuid,uuid,text)'),
         ('public._create_invoice_from_order_impl_20260718(uuid,uuid,text,text)'),

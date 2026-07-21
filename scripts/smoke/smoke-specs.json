@@ -6,6 +6,11 @@
     "spec_contract": "Keys are the primary RPC under test. 'covers' lists every RPC the chain exercises - run-smoke.mjs --spec <rpc> matches keys AND covers entries, so one chain can certify several RPCs. Every migration that touches an RPC must have or extend a spec covering it."
   },
   "specs": {
+    "govern_invoice_order_money_lifecycle": {
+      "chain": "smoke-govern-invoice-order-money-lifecycle.sql",
+      "description": "Invoice/order lifecycle closeout: binds invoice creation/posting/cancellation retries, preserves completed-delivery recovery, closes only the undelivered remainder of partially fulfilled orders, locks customer/product source lineage, blocks terminal-order invoice rewrites and direct invoice DML, filters reversed transaction history, and proves every rejected path leaves its money/inventory lineage unchanged. Self-contained fixtures and terminal rollback.",
+      "covers": ["create_invoice_from_order", "post_invoice", "create_invoice_for_unbilled_delivery", "cancel_order", "get_customer_transaction_review", "guard_order_delivered_activity_cancel", "guard_invoice_terminal_order", "guard_terminal_order_invoice_items"]
+    },
     "delivery_signature_storage_access": {
       "chain": "smoke-delivery_signature_storage_access.sql",
       "covers": ["delivery_signature_storage_access"],

@@ -2,6 +2,13 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-20 — Supplier-pricing closeout rebased onto final invoice lifecycle
+
+- Restamped the pending PR #168 invoice/order lifecycle closeout above the final PR #165 live high-water and bound it to the strengthened governed split save, singular-void, and atomic group-void contracts without replacing those reviewed bodies.
+- Limited the new "cancel remaining quantity" behavior to genuinely `partially_fulfilled` orders, preserving the final provenance-aware full-cancel path for confirmed orders.
+- Registered and ran both the lifecycle rollback chain and the canonical governed split H5 chain against the composed migration; both returned `SMOKE_PASS_ROLLBACK` with zero persisted fixtures.
+- The migration remains pending live apply until the exact-head review gate completes; the supplier-pricing worksheet and Product-page pricing flows remain governed through preview and explicit approval.
+
 ## 2026-07-20 — Baseline follow-up migrations preserve ledger history
 
 - Replaced the unsafe generic-SQL-client instruction with an isolated, filtered Supabase CLI workflow that dry-runs the exact post-baseline set and records every applied migration in the target ledger.

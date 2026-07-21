@@ -1,4 +1,4 @@
--- Rollback-only chain for 20260719120000_govern_invoice_order_money_lifecycle.
+-- Rollback-only chain for 20260721010000_govern_invoice_order_money_lifecycle.
 -- Exercises the partially delivered short-close, invoice recovery, retry binding,
 -- terminal-order guards, and direct invoice-table DML revocation in one statement.
 DO $smoke$
@@ -55,6 +55,9 @@ DECLARE
   v_count integer;
   v_numeric numeric;
   v_numeric_2 numeric;
+  v_can_bypass_triggers boolean := COALESCE((
+    SELECT r.rolsuper FROM pg_roles r WHERE r.rolname = current_user
+  ), false);
 BEGIN
   -- Disposable-database mode has no users. Live mode reuses an active admin.
   SELECT id INTO v_admin
@@ -472,7 +475,7 @@ BEGIN
   EXCEPTION WHEN OTHERS THEN
     v_err := SQLERRM;
     IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
-    IF v_err NOT LIKE 'IDEMPOTENCY_ARGUMENT_MISMATCH:%' THEN
+    IF v_err NOT LIKE 'IDEMPOTENCY_REQUEST_MISMATCH:%' THEN
       RAISE EXCEPTION 'SMOKE_FAIL: wrong void-invoice binding error: %', v_err;
     END IF;
   END;
@@ -1015,7 +1018,10 @@ BEGIN
 
   -- The trusted writer must reject corrupt historical quantity even if a
   -- privileged test fixture bypasses the normal completed-delivery immutability
-  -- trigger. The subtransaction rolls the synthetic corruption back.
+  -- trigger. The subtransaction rolls the synthetic corruption back. Hosted
+  -- live smoke roles cannot change session_replication_role, so this privileged
+  -- corruption probe runs only in the disposable superuser proof.
+  IF v_can_bypass_triggers THEN
   BEGIN
     PERFORM set_config('session_replication_role', 'replica', true);
     UPDATE public.delivery_items
@@ -1034,6 +1040,7 @@ BEGIN
       RAISE EXCEPTION 'SMOKE_FAIL: wrong corrupt recovery writer error: %', v_err;
     END IF;
   END;
+  END IF;
 
   v_result := public.create_invoice_for_unbilled_delivery(
     v_deleted_delivery, v_admin, 'e2e-life-deleted-recovery-' || v_suffix
@@ -1062,6 +1069,7 @@ BEGIN
       RAISE EXCEPTION 'SMOKE_FAIL: wrong order-customer lineage error: %', v_err;
     END IF;
   END;
+  IF v_can_bypass_triggers THEN
   BEGIN
     PERFORM set_config('session_replication_role', 'replica', true);
     UPDATE public.orders SET customer_id = v_other_customer
@@ -1081,7 +1089,9 @@ BEGIN
       RAISE EXCEPTION 'SMOKE_FAIL: wrong recovery customer-drift error: %', v_err;
     END IF;
   END;
+  END IF;
 
+  IF v_can_bypass_triggers THEN
   BEGIN
     PERFORM set_config('session_replication_role', 'replica', true);
     UPDATE public.delivery_items
@@ -1101,6 +1111,7 @@ BEGIN
       RAISE EXCEPTION 'SMOKE_FAIL: wrong corrupt recovery poster error: %', v_err;
     END IF;
   END;
+  END IF;
 
   BEGIN
     PERFORM public.delete_invoices(
@@ -1346,7 +1357,7 @@ BEGIN
     INSERT INTO public.financial_audit_log (
       operation_type, entity_type, entity_id, actor_role, description
     ) VALUES (
-      'invoice_voided', 'invoice', v_invoice, 'admin',
+      'invoice_voided', 'invoice', v_invoice_id, 'admin',
       '[E2E] direct financial audit insert must be denied'
     );
     RESET ROLE;
