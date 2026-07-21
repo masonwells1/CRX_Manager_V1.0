@@ -1591,7 +1591,7 @@ export type Database = {
           change_note?: string | null
           change_reason?: string | null
           change_set_id?: string | null
-          change_source?: string
+          change_source: string
           changed_at?: string
           changed_by: string
           id?: string
@@ -3098,6 +3098,126 @@ export type Database = {
         }
         Relationships: []
       }
+      field_app_billing_lines: {
+        Row: {
+          application_service_id: string | null
+          billing_set_id: string
+          created_at: string
+          description: string | null
+          id: string
+          line_kind: string
+          product_id: string | null
+          sort_order: number
+          source_acres: number | null
+          source_line_cents: number | null
+          source_quantity: number | null
+          source_unit_price_cents: number | null
+        }
+        Insert: {
+          application_service_id?: string | null
+          billing_set_id: string
+          created_at?: string
+          description?: string | null
+          id?: string
+          line_kind: string
+          product_id?: string | null
+          sort_order?: number
+          source_acres?: number | null
+          source_line_cents?: number | null
+          source_quantity?: number | null
+          source_unit_price_cents?: number | null
+        }
+        Update: {
+          application_service_id?: string | null
+          billing_set_id?: string
+          created_at?: string
+          description?: string | null
+          id?: string
+          line_kind?: string
+          product_id?: string | null
+          sort_order?: number
+          source_acres?: number | null
+          source_line_cents?: number | null
+          source_quantity?: number | null
+          source_unit_price_cents?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "field_app_billing_lines_application_service_id_fkey"
+            columns: ["application_service_id"]
+            isOneToOne: false
+            referencedRelation: "application_services"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "field_app_billing_lines_billing_set_id_fkey"
+            columns: ["billing_set_id"]
+            isOneToOne: false
+            referencedRelation: "field_app_billing_sets"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "field_app_billing_lines_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: false
+            referencedRelation: "products"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "field_app_billing_lines_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: false
+            referencedRelation: "view_unmigrated_products"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      field_app_billing_sets: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          id: string
+          invoice_group_id: string | null
+          source_job_id: string | null
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          invoice_group_id?: string | null
+          source_job_id?: string | null
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          invoice_group_id?: string | null
+          source_job_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "field_app_billing_sets_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profile_public_view"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "field_app_billing_sets_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "field_app_billing_sets_source_job_id_fkey"
+            columns: ["source_job_id"]
+            isOneToOne: false
+            referencedRelation: "jobs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       field_app_location_shares: {
         Row: {
           acres: number | null
@@ -4139,9 +4259,34 @@ export type Database = {
           },
         ]
       }
+      invoice_delivery_recovery_capabilities: {
+        Row: {
+          actor_id: string
+          created_at: string
+          delivery_id: string
+          purpose: string
+          transaction_id: number
+        }
+        Insert: {
+          actor_id: string
+          created_at?: string
+          delivery_id: string
+          purpose: string
+          transaction_id: number
+        }
+        Update: {
+          actor_id?: string
+          created_at?: string
+          delivery_id?: string
+          purpose?: string
+          transaction_id?: number
+        }
+        Relationships: []
+      }
       invoice_items: {
         Row: {
           acres: number | null
+          billing_line_id: string | null
           cost_cents: number
           created_at: string
           description: string
@@ -4173,6 +4318,7 @@ export type Database = {
         }
         Insert: {
           acres?: number | null
+          billing_line_id?: string | null
           cost_cents?: number
           created_at?: string
           description?: string
@@ -4204,6 +4350,7 @@ export type Database = {
         }
         Update: {
           acres?: number | null
+          billing_line_id?: string | null
           cost_cents?: number
           created_at?: string
           description?: string
@@ -4234,6 +4381,13 @@ export type Database = {
           warehouse?: string | null
         }
         Relationships: [
+          {
+            foreignKeyName: "invoice_items_billing_line_id_fkey"
+            columns: ["billing_line_id"]
+            isOneToOne: false
+            referencedRelation: "field_app_billing_lines"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "invoice_items_invoice_id_fkey"
             columns: ["invoice_id"]
@@ -4336,6 +4490,204 @@ export type Database = {
           },
         ]
       }
+      invoice_line_share_snapshots: {
+        Row: {
+          allocated_acres: number | null
+          allocated_quantity: number | null
+          amount_cents: number
+          application_service_id: string | null
+          base_price_source: string | null
+          base_unit_price_cents: number | null
+          billing_line_id: string | null
+          calculation_hash: string | null
+          created_at: string
+          customer_id: string
+          id: string
+          invoice_id: string
+          line_description: string | null
+          line_kind: string | null
+          posted_at: string
+          price_mode: string | null
+          price_override_reason: string | null
+          product_id: string | null
+          snapshot_reason: string
+          split_micro_pct: number
+          split_mode: string | null
+          split_override_reason: string | null
+          unit_price_cents: number
+          vector_hash: string | null
+        }
+        Insert: {
+          allocated_acres?: number | null
+          allocated_quantity?: number | null
+          amount_cents: number
+          application_service_id?: string | null
+          base_price_source?: string | null
+          base_unit_price_cents?: number | null
+          billing_line_id?: string | null
+          calculation_hash?: string | null
+          created_at?: string
+          customer_id: string
+          id?: string
+          invoice_id: string
+          line_description?: string | null
+          line_kind?: string | null
+          posted_at?: string
+          price_mode?: string | null
+          price_override_reason?: string | null
+          product_id?: string | null
+          snapshot_reason?: string
+          split_micro_pct: number
+          split_mode?: string | null
+          split_override_reason?: string | null
+          unit_price_cents: number
+          vector_hash?: string | null
+        }
+        Update: {
+          allocated_acres?: number | null
+          allocated_quantity?: number | null
+          amount_cents?: number
+          application_service_id?: string | null
+          base_price_source?: string | null
+          base_unit_price_cents?: number | null
+          billing_line_id?: string | null
+          calculation_hash?: string | null
+          created_at?: string
+          customer_id?: string
+          id?: string
+          invoice_id?: string
+          line_description?: string | null
+          line_kind?: string | null
+          posted_at?: string
+          price_mode?: string | null
+          price_override_reason?: string | null
+          product_id?: string | null
+          snapshot_reason?: string
+          split_micro_pct?: number
+          split_mode?: string | null
+          split_override_reason?: string | null
+          unit_price_cents?: number
+          vector_hash?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "invoice_line_share_snapshots_customer_id_fkey"
+            columns: ["customer_id"]
+            isOneToOne: false
+            referencedRelation: "customers"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "invoice_line_share_snapshots_invoice_id_fkey"
+            columns: ["invoice_id"]
+            isOneToOne: false
+            referencedRelation: "invoices"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      invoice_line_shares: {
+        Row: {
+          allocated_acres: number | null
+          allocated_quantity: number | null
+          amount_cents: number
+          base_price_source: string
+          base_unit_price_cents: number
+          billing_line_id: string
+          calculation_hash: string
+          created_at: string
+          created_by: string
+          customer_id: string
+          id: string
+          invoice_item_id: string
+          price_mode: string
+          price_override_reason: string | null
+          split_micro_pct: number
+          split_mode: string
+          split_override_reason: string | null
+          unit_price_cents: number
+          vector_hash: string
+        }
+        Insert: {
+          allocated_acres?: number | null
+          allocated_quantity?: number | null
+          amount_cents: number
+          base_price_source: string
+          base_unit_price_cents: number
+          billing_line_id: string
+          calculation_hash: string
+          created_at?: string
+          created_by: string
+          customer_id: string
+          id?: string
+          invoice_item_id: string
+          price_mode?: string
+          price_override_reason?: string | null
+          split_micro_pct: number
+          split_mode: string
+          split_override_reason?: string | null
+          unit_price_cents: number
+          vector_hash: string
+        }
+        Update: {
+          allocated_acres?: number | null
+          allocated_quantity?: number | null
+          amount_cents?: number
+          base_price_source?: string
+          base_unit_price_cents?: number
+          billing_line_id?: string
+          calculation_hash?: string
+          created_at?: string
+          created_by?: string
+          customer_id?: string
+          id?: string
+          invoice_item_id?: string
+          price_mode?: string
+          price_override_reason?: string | null
+          split_micro_pct?: number
+          split_mode?: string
+          split_override_reason?: string | null
+          unit_price_cents?: number
+          vector_hash?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "invoice_line_shares_billing_line_id_fkey"
+            columns: ["billing_line_id"]
+            isOneToOne: false
+            referencedRelation: "field_app_billing_lines"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "invoice_line_shares_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profile_public_view"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "invoice_line_shares_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "invoice_line_shares_customer_id_fkey"
+            columns: ["customer_id"]
+            isOneToOne: false
+            referencedRelation: "customers"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "invoice_line_shares_invoice_item_id_fkey"
+            columns: ["invoice_item_id"]
+            isOneToOne: true
+            referencedRelation: "invoice_items"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       invoice_shares: {
         Row: {
           acres: number | null
@@ -4420,6 +4772,7 @@ export type Database = {
           end_weather_time: string | null
           end_wind_direction: string | null
           end_wind_mph: number | null
+          field_app_billing_set_id: string | null
           field_names: string[] | null
           footer_notes: string | null
           header_notes: string | null
@@ -4442,6 +4795,7 @@ export type Database = {
           purchase_order_ref: string | null
           salesman_id: string | null
           season: number
+          send_disposition: string
           start_humidity_pct: number | null
           start_temp_f: number | null
           start_weather_source: string | null
@@ -4485,6 +4839,7 @@ export type Database = {
           end_weather_time?: string | null
           end_wind_direction?: string | null
           end_wind_mph?: number | null
+          field_app_billing_set_id?: string | null
           field_names?: string[] | null
           footer_notes?: string | null
           header_notes?: string | null
@@ -4507,6 +4862,7 @@ export type Database = {
           purchase_order_ref?: string | null
           salesman_id?: string | null
           season?: number
+          send_disposition?: string
           start_humidity_pct?: number | null
           start_temp_f?: number | null
           start_weather_source?: string | null
@@ -4550,6 +4906,7 @@ export type Database = {
           end_weather_time?: string | null
           end_wind_direction?: string | null
           end_wind_mph?: number | null
+          field_app_billing_set_id?: string | null
           field_names?: string[] | null
           footer_notes?: string | null
           header_notes?: string | null
@@ -4572,6 +4929,7 @@ export type Database = {
           purchase_order_ref?: string | null
           salesman_id?: string | null
           season?: number
+          send_disposition?: string
           start_humidity_pct?: number | null
           start_temp_f?: number | null
           start_weather_source?: string | null
@@ -4619,6 +4977,13 @@ export type Database = {
             columns: ["delivery_id"]
             isOneToOne: false
             referencedRelation: "deliveries"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "invoices_field_app_billing_set_id_fkey"
+            columns: ["field_app_billing_set_id"]
+            isOneToOne: false
+            referencedRelation: "field_app_billing_sets"
             referencedColumns: ["id"]
           },
           {
@@ -5877,6 +6242,90 @@ export type Database = {
             columns: ["vehicle_id"]
             isOneToOne: false
             referencedRelation: "vehicles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      legacy_vendor_resolution: {
+        Row: {
+          confidence: number
+          created_at: string
+          created_by: string | null
+          id: string
+          normalized_text: string | null
+          original_text: string
+          review_note: string | null
+          review_status: string
+          reviewed_at: string | null
+          reviewed_by: string | null
+          source_table: string
+          updated_at: string
+          vendor_id: string | null
+        }
+        Insert: {
+          confidence?: number
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          normalized_text?: string | null
+          original_text: string
+          review_note?: string | null
+          review_status?: string
+          reviewed_at?: string | null
+          reviewed_by?: string | null
+          source_table: string
+          updated_at?: string
+          vendor_id?: string | null
+        }
+        Update: {
+          confidence?: number
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          normalized_text?: string | null
+          original_text?: string
+          review_note?: string | null
+          review_status?: string
+          reviewed_at?: string | null
+          reviewed_by?: string | null
+          source_table?: string
+          updated_at?: string
+          vendor_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "legacy_vendor_resolution_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profile_public_view"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "legacy_vendor_resolution_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "legacy_vendor_resolution_reviewed_by_fkey"
+            columns: ["reviewed_by"]
+            isOneToOne: false
+            referencedRelation: "profile_public_view"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "legacy_vendor_resolution_reviewed_by_fkey"
+            columns: ["reviewed_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "legacy_vendor_resolution_vendor_id_fkey"
+            columns: ["vendor_id"]
+            isOneToOne: false
+            referencedRelation: "vendors"
             referencedColumns: ["id"]
           },
         ]
@@ -7211,6 +7660,131 @@ export type Database = {
           },
         ]
       }
+      product_supplier_links: {
+        Row: {
+          comparison_note: string | null
+          comparison_status: string
+          confirmed_at: string | null
+          confirmed_by: string | null
+          conversion_factor: number | null
+          conversion_unit: string | null
+          created_at: string
+          created_by: string
+          id: string
+          inventory_units_per_supplier_unit: number | null
+          is_active: boolean
+          is_preferred: boolean
+          is_reusable: boolean | null
+          link_status: string
+          match_confidence: number | null
+          product_id: string
+          supplier_pack_description: string | null
+          supplier_product_name: string
+          supplier_sku: string | null
+          supplier_uom: string | null
+          updated_at: string
+          vendor_id: string
+        }
+        Insert: {
+          comparison_note?: string | null
+          comparison_status?: string
+          confirmed_at?: string | null
+          confirmed_by?: string | null
+          conversion_factor?: number | null
+          conversion_unit?: string | null
+          created_at?: string
+          created_by: string
+          id?: string
+          inventory_units_per_supplier_unit?: number | null
+          is_active?: boolean
+          is_preferred?: boolean
+          is_reusable?: boolean | null
+          link_status?: string
+          match_confidence?: number | null
+          product_id: string
+          supplier_pack_description?: string | null
+          supplier_product_name: string
+          supplier_sku?: string | null
+          supplier_uom?: string | null
+          updated_at?: string
+          vendor_id: string
+        }
+        Update: {
+          comparison_note?: string | null
+          comparison_status?: string
+          confirmed_at?: string | null
+          confirmed_by?: string | null
+          conversion_factor?: number | null
+          conversion_unit?: string | null
+          created_at?: string
+          created_by?: string
+          id?: string
+          inventory_units_per_supplier_unit?: number | null
+          is_active?: boolean
+          is_preferred?: boolean
+          is_reusable?: boolean | null
+          link_status?: string
+          match_confidence?: number | null
+          product_id?: string
+          supplier_pack_description?: string | null
+          supplier_product_name?: string
+          supplier_sku?: string | null
+          supplier_uom?: string | null
+          updated_at?: string
+          vendor_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "product_supplier_links_confirmed_by_fkey"
+            columns: ["confirmed_by"]
+            isOneToOne: false
+            referencedRelation: "profile_public_view"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "product_supplier_links_confirmed_by_fkey"
+            columns: ["confirmed_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "product_supplier_links_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profile_public_view"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "product_supplier_links_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "product_supplier_links_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: false
+            referencedRelation: "products"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "product_supplier_links_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: false
+            referencedRelation: "view_unmigrated_products"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "product_supplier_links_vendor_id_fkey"
+            columns: ["vendor_id"]
+            isOneToOne: false
+            referencedRelation: "vendors"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       products: {
         Row: {
           category: string | null
@@ -7442,37 +8016,52 @@ export type Database = {
       }
       purchase_order_items: {
         Row: {
+          cost_provenance: string | null
+          cost_snapshot_at: string | null
           id: string
+          inventory_units_per_supplier_unit_snapshot: number | null
           notes: string | null
           product_id: string
           product_name: string | null
+          product_supplier_link_id: string | null
           purchase_order_id: string
           quantity_ordered: number
           quantity_received: number
+          supplier_price_observation_id: string | null
           unit_cost: number
           unit_cost_cents: number | null
           unit_size: string | null
         }
         Insert: {
+          cost_provenance?: string | null
+          cost_snapshot_at?: string | null
           id?: string
+          inventory_units_per_supplier_unit_snapshot?: number | null
           notes?: string | null
           product_id: string
           product_name?: string | null
+          product_supplier_link_id?: string | null
           purchase_order_id: string
           quantity_ordered?: number
           quantity_received?: number
+          supplier_price_observation_id?: string | null
           unit_cost?: number
           unit_cost_cents?: number | null
           unit_size?: string | null
         }
         Update: {
+          cost_provenance?: string | null
+          cost_snapshot_at?: string | null
           id?: string
+          inventory_units_per_supplier_unit_snapshot?: number | null
           notes?: string | null
           product_id?: string
           product_name?: string | null
+          product_supplier_link_id?: string | null
           purchase_order_id?: string
           quantity_ordered?: number
           quantity_received?: number
+          supplier_price_observation_id?: string | null
           unit_cost?: number
           unit_cost_cents?: number | null
           unit_size?: string | null
@@ -7493,10 +8082,24 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "purchase_order_items_product_supplier_link_id_fkey"
+            columns: ["product_supplier_link_id"]
+            isOneToOne: false
+            referencedRelation: "product_supplier_links"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "purchase_order_items_purchase_order_id_fkey"
             columns: ["purchase_order_id"]
             isOneToOne: false
             referencedRelation: "purchase_orders"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "purchase_order_items_supplier_price_observation_id_fkey"
+            columns: ["supplier_price_observation_id"]
+            isOneToOne: false
+            referencedRelation: "supplier_price_observations"
             referencedColumns: ["id"]
           },
         ]
@@ -8797,6 +9400,524 @@ export type Database = {
           },
         ]
       }
+      split_invoice_creation_claims: {
+        Row: {
+          claim_nonce: string
+          created_at: string
+          order_id: string
+          transaction_id: unknown
+        }
+        Insert: {
+          claim_nonce?: string
+          created_at?: string
+          order_id: string
+          transaction_id: unknown
+        }
+        Update: {
+          claim_nonce?: string
+          created_at?: string
+          order_id?: string
+          transaction_id?: unknown
+        }
+        Relationships: [
+          {
+            foreignKeyName: "split_invoice_creation_claims_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "orders"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      split_invoice_mutation_claims: {
+        Row: {
+          created_at: string
+          invoice_id: string
+          operation: string
+          transaction_id: unknown
+        }
+        Insert: {
+          created_at?: string
+          invoice_id: string
+          operation: string
+          transaction_id: unknown
+        }
+        Update: {
+          created_at?: string
+          invoice_id?: string
+          operation?: string
+          transaction_id?: unknown
+        }
+        Relationships: [
+          {
+            foreignKeyName: "split_invoice_mutation_claims_invoice_id_fkey"
+            columns: ["invoice_id"]
+            isOneToOne: false
+            referencedRelation: "invoices"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      split_invoice_provenance: {
+        Row: {
+          content_claim: Json
+          contract_version: string
+          created_at: string
+          created_by: string
+          customer_id: string
+          invoice_group_id: string
+          invoice_id: string
+          invoice_type: string
+          order_id: string
+          provenance_nonce: string
+          season: number
+          total_amount_cents: number
+        }
+        Insert: {
+          content_claim: Json
+          contract_version?: string
+          created_at?: string
+          created_by: string
+          customer_id: string
+          invoice_group_id: string
+          invoice_id: string
+          invoice_type: string
+          order_id: string
+          provenance_nonce?: string
+          season: number
+          total_amount_cents: number
+        }
+        Update: {
+          content_claim?: Json
+          contract_version?: string
+          created_at?: string
+          created_by?: string
+          customer_id?: string
+          invoice_group_id?: string
+          invoice_id?: string
+          invoice_type?: string
+          order_id?: string
+          provenance_nonce?: string
+          season?: number
+          total_amount_cents?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "split_invoice_provenance_customer_id_fkey"
+            columns: ["customer_id"]
+            isOneToOne: false
+            referencedRelation: "customers"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "split_invoice_provenance_invoice_id_fkey"
+            columns: ["invoice_id"]
+            isOneToOne: true
+            referencedRelation: "invoices"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "split_invoice_provenance_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "orders"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      supplier_price_import_rows: {
+        Row: {
+          cost_cents: number | null
+          created_at: string
+          effective_from: string | null
+          effective_to: string | null
+          id: string
+          import_id: string
+          observation_id: string | null
+          package_quantity: number | null
+          price_kind: string | null
+          price_unit: string | null
+          product_id: string | null
+          product_supplier_link_id: string | null
+          reviewed_at: string | null
+          reviewed_by: string | null
+          reviewer_note: string | null
+          row_number: number
+          row_status: string
+          submitted_row: Json
+          supplier_product_name: string | null
+          supplier_sku: string | null
+          updated_at: string
+          validation_errors: string[]
+          vendor_id: string | null
+        }
+        Insert: {
+          cost_cents?: number | null
+          created_at?: string
+          effective_from?: string | null
+          effective_to?: string | null
+          id?: string
+          import_id: string
+          observation_id?: string | null
+          package_quantity?: number | null
+          price_kind?: string | null
+          price_unit?: string | null
+          product_id?: string | null
+          product_supplier_link_id?: string | null
+          reviewed_at?: string | null
+          reviewed_by?: string | null
+          reviewer_note?: string | null
+          row_number: number
+          row_status: string
+          submitted_row: Json
+          supplier_product_name?: string | null
+          supplier_sku?: string | null
+          updated_at?: string
+          validation_errors?: string[]
+          vendor_id?: string | null
+        }
+        Update: {
+          cost_cents?: number | null
+          created_at?: string
+          effective_from?: string | null
+          effective_to?: string | null
+          id?: string
+          import_id?: string
+          observation_id?: string | null
+          package_quantity?: number | null
+          price_kind?: string | null
+          price_unit?: string | null
+          product_id?: string | null
+          product_supplier_link_id?: string | null
+          reviewed_at?: string | null
+          reviewed_by?: string | null
+          reviewer_note?: string | null
+          row_number?: number
+          row_status?: string
+          submitted_row?: Json
+          supplier_product_name?: string | null
+          supplier_sku?: string | null
+          updated_at?: string
+          validation_errors?: string[]
+          vendor_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "supplier_price_import_rows_import_id_fkey"
+            columns: ["import_id"]
+            isOneToOne: false
+            referencedRelation: "supplier_price_imports"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "supplier_price_import_rows_observation_id_fkey"
+            columns: ["observation_id"]
+            isOneToOne: false
+            referencedRelation: "supplier_price_observations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "supplier_price_import_rows_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: false
+            referencedRelation: "products"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "supplier_price_import_rows_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: false
+            referencedRelation: "view_unmigrated_products"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "supplier_price_import_rows_product_supplier_link_id_fkey"
+            columns: ["product_supplier_link_id"]
+            isOneToOne: false
+            referencedRelation: "product_supplier_links"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "supplier_price_import_rows_reviewed_by_fkey"
+            columns: ["reviewed_by"]
+            isOneToOne: false
+            referencedRelation: "profile_public_view"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "supplier_price_import_rows_reviewed_by_fkey"
+            columns: ["reviewed_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "supplier_price_import_rows_vendor_id_fkey"
+            columns: ["vendor_id"]
+            isOneToOne: false
+            referencedRelation: "vendors"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      supplier_price_imports: {
+        Row: {
+          approve_idempotency_key: string | null
+          approve_request_fingerprint: string | null
+          approved_at: string | null
+          approved_by: string | null
+          approved_observation_count: number
+          created_at: string
+          created_by: string
+          document_date: string
+          eligible_row_count: number
+          format_version: string
+          id: string
+          idempotency_key: string
+          ingestion_method: string
+          reject_idempotency_key: string | null
+          reject_request_fingerprint: string | null
+          rejected_at: string | null
+          rejected_by: string | null
+          rejection_reason: string | null
+          request_fingerprint: string
+          row_count: number
+          source_document_mime: string | null
+          source_document_name: string | null
+          source_document_path: string | null
+          status: string
+          updated_at: string
+          vendor_id: string
+        }
+        Insert: {
+          approve_idempotency_key?: string | null
+          approve_request_fingerprint?: string | null
+          approved_at?: string | null
+          approved_by?: string | null
+          approved_observation_count?: number
+          created_at?: string
+          created_by: string
+          document_date: string
+          eligible_row_count?: number
+          format_version: string
+          id?: string
+          idempotency_key: string
+          ingestion_method: string
+          reject_idempotency_key?: string | null
+          reject_request_fingerprint?: string | null
+          rejected_at?: string | null
+          rejected_by?: string | null
+          rejection_reason?: string | null
+          request_fingerprint: string
+          row_count?: number
+          source_document_mime?: string | null
+          source_document_name?: string | null
+          source_document_path?: string | null
+          status?: string
+          updated_at?: string
+          vendor_id: string
+        }
+        Update: {
+          approve_idempotency_key?: string | null
+          approve_request_fingerprint?: string | null
+          approved_at?: string | null
+          approved_by?: string | null
+          approved_observation_count?: number
+          created_at?: string
+          created_by?: string
+          document_date?: string
+          eligible_row_count?: number
+          format_version?: string
+          id?: string
+          idempotency_key?: string
+          ingestion_method?: string
+          reject_idempotency_key?: string | null
+          reject_request_fingerprint?: string | null
+          rejected_at?: string | null
+          rejected_by?: string | null
+          rejection_reason?: string | null
+          request_fingerprint?: string
+          row_count?: number
+          source_document_mime?: string | null
+          source_document_name?: string | null
+          source_document_path?: string | null
+          status?: string
+          updated_at?: string
+          vendor_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "supplier_price_imports_approved_by_fkey"
+            columns: ["approved_by"]
+            isOneToOne: false
+            referencedRelation: "profile_public_view"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "supplier_price_imports_approved_by_fkey"
+            columns: ["approved_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "supplier_price_imports_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profile_public_view"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "supplier_price_imports_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "supplier_price_imports_rejected_by_fkey"
+            columns: ["rejected_by"]
+            isOneToOne: false
+            referencedRelation: "profile_public_view"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "supplier_price_imports_rejected_by_fkey"
+            columns: ["rejected_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "supplier_price_imports_vendor_id_fkey"
+            columns: ["vendor_id"]
+            isOneToOne: false
+            referencedRelation: "vendors"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      supplier_price_observations: {
+        Row: {
+          cost_cents: number
+          created_at: string
+          created_by: string
+          effective_from: string
+          effective_to: string | null
+          id: string
+          import_id: string
+          import_row_id: string
+          observed_at: string
+          package_quantity: number
+          price_kind: string
+          price_unit: string
+          product_id: string
+          product_supplier_link_id: string
+          supersedes_observation_id: string | null
+          vendor_id: string
+        }
+        Insert: {
+          cost_cents: number
+          created_at?: string
+          created_by: string
+          effective_from: string
+          effective_to?: string | null
+          id?: string
+          import_id: string
+          import_row_id: string
+          observed_at?: string
+          package_quantity?: number
+          price_kind: string
+          price_unit: string
+          product_id: string
+          product_supplier_link_id: string
+          supersedes_observation_id?: string | null
+          vendor_id: string
+        }
+        Update: {
+          cost_cents?: number
+          created_at?: string
+          created_by?: string
+          effective_from?: string
+          effective_to?: string | null
+          id?: string
+          import_id?: string
+          import_row_id?: string
+          observed_at?: string
+          package_quantity?: number
+          price_kind?: string
+          price_unit?: string
+          product_id?: string
+          product_supplier_link_id?: string
+          supersedes_observation_id?: string | null
+          vendor_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "supplier_price_observations_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profile_public_view"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "supplier_price_observations_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "supplier_price_observations_import_id_fkey"
+            columns: ["import_id"]
+            isOneToOne: false
+            referencedRelation: "supplier_price_imports"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "supplier_price_observations_import_row_id_fkey"
+            columns: ["import_row_id"]
+            isOneToOne: true
+            referencedRelation: "supplier_price_import_rows"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "supplier_price_observations_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: false
+            referencedRelation: "products"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "supplier_price_observations_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: false
+            referencedRelation: "view_unmigrated_products"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "supplier_price_observations_product_supplier_link_id_fkey"
+            columns: ["product_supplier_link_id"]
+            isOneToOne: false
+            referencedRelation: "product_supplier_links"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "supplier_price_observations_supersedes_observation_id_fkey"
+            columns: ["supersedes_observation_id"]
+            isOneToOne: false
+            referencedRelation: "supplier_price_observations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "supplier_price_observations_vendor_id_fkey"
+            columns: ["vendor_id"]
+            isOneToOne: false
+            referencedRelation: "vendors"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       team_note_attachments: {
         Row: {
           created_at: string
@@ -9195,6 +10316,141 @@ export type Database = {
             columns: ["created_by"]
             isOneToOne: false
             referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      vendor_alias_stage_receipts: {
+        Row: {
+          actor_id: string
+          alias_id: string
+          created_at: string
+          idempotency_key: string
+          request_fingerprint: string
+          response: Json
+        }
+        Insert: {
+          actor_id: string
+          alias_id: string
+          created_at?: string
+          idempotency_key: string
+          request_fingerprint: string
+          response: Json
+        }
+        Update: {
+          actor_id?: string
+          alias_id?: string
+          created_at?: string
+          idempotency_key?: string
+          request_fingerprint?: string
+          response?: Json
+        }
+        Relationships: [
+          {
+            foreignKeyName: "vendor_alias_stage_receipts_alias_id_fkey"
+            columns: ["alias_id"]
+            isOneToOne: true
+            referencedRelation: "vendor_aliases"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      vendor_aliases: {
+        Row: {
+          alias_display: string
+          alias_normalized: string | null
+          alias_raw: string
+          created_at: string
+          created_by: string | null
+          id: string
+          idempotency_key: string | null
+          proposed_vendor_id: string | null
+          request_fingerprint: string | null
+          review_note: string | null
+          review_status: string
+          reviewed_at: string | null
+          reviewed_by: string | null
+          source: string
+          updated_at: string
+          vendor_id: string | null
+        }
+        Insert: {
+          alias_display: string
+          alias_normalized?: string | null
+          alias_raw: string
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          idempotency_key?: string | null
+          proposed_vendor_id?: string | null
+          request_fingerprint?: string | null
+          review_note?: string | null
+          review_status?: string
+          reviewed_at?: string | null
+          reviewed_by?: string | null
+          source: string
+          updated_at?: string
+          vendor_id?: string | null
+        }
+        Update: {
+          alias_display?: string
+          alias_normalized?: string | null
+          alias_raw?: string
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          idempotency_key?: string | null
+          proposed_vendor_id?: string | null
+          request_fingerprint?: string | null
+          review_note?: string | null
+          review_status?: string
+          reviewed_at?: string | null
+          reviewed_by?: string | null
+          source?: string
+          updated_at?: string
+          vendor_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "vendor_aliases_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profile_public_view"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "vendor_aliases_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "vendor_aliases_proposed_vendor_id_fkey"
+            columns: ["proposed_vendor_id"]
+            isOneToOne: false
+            referencedRelation: "vendors"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "vendor_aliases_reviewed_by_fkey"
+            columns: ["reviewed_by"]
+            isOneToOne: false
+            referencedRelation: "profile_public_view"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "vendor_aliases_reviewed_by_fkey"
+            columns: ["reviewed_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "vendor_aliases_vendor_id_fkey"
+            columns: ["vendor_id"]
+            isOneToOne: false
+            referencedRelation: "vendors"
             referencedColumns: ["id"]
           },
         ]
@@ -9793,6 +11049,17 @@ export type Database = {
         }
         Returns: Json
       }
+      _bind_completed_lifecycle_idempotency: {
+        Args: {
+          p_contract: string
+          p_key: string
+          p_operation: string
+          p_request: Json
+          p_request_fingerprint: string
+          p_response: Json
+        }
+        Returns: undefined
+      }
       _calculate_product_pricing: {
         Args: {
           p_current_cost: number
@@ -9814,9 +11081,39 @@ export type Database = {
         }
         Returns: Json
       }
+      _cancel_order_provenance_wrapper_20260719: {
+        Args: {
+          p_idempotency_key?: string
+          p_order_id: string
+          p_performed_by?: string
+        }
+        Returns: Json
+      }
+      _cancel_order_split_provenance_impl_20260719: {
+        Args: {
+          p_idempotency_key?: string
+          p_order_id: string
+          p_performed_by?: string
+        }
+        Returns: Json
+      }
       _check_credit_limit: {
         Args: { p_additional_cents?: number; p_customer_id: string }
         Returns: undefined
+      }
+      _claim_bound_lifecycle_idempotency: {
+        Args: {
+          p_contract: string
+          p_key: string
+          p_operation: string
+          p_request: Json
+          p_request_fingerprint: string
+        }
+        Returns: Json
+      }
+      _close_undelivered_order_remainder_20260718: {
+        Args: { p_actor: string; p_order_id: string }
+        Returns: Json
       }
       _complete_cycle_count_impl: {
         Args: {
@@ -9864,6 +11161,40 @@ export type Database = {
           p_signed_by: string
         }
         Returns: Json
+      }
+      _create_invoice_for_unbilled_delivery_impl_20260718: {
+        Args: {
+          p_delivery_id: string
+          p_idempotency_key?: string
+          p_performed_by?: string
+        }
+        Returns: Json
+      }
+      _create_invoice_from_order_impl_20260718: {
+        Args: {
+          p_idempotency_key?: string
+          p_invoice_type?: string
+          p_order_id: string
+          p_salesman_id?: string
+        }
+        Returns: string
+      }
+      _create_split_invoices_from_order_provenance_impl_20260719: {
+        Args: {
+          p_idempotency_key?: string
+          p_invoice_type?: string
+          p_order_id: string
+          p_salesman_id?: string
+        }
+        Returns: string[]
+      }
+      _delete_invoices_split_provenance_impl_20260719: {
+        Args: {
+          p_idempotency_key?: string
+          p_invoice_ids: string[]
+          p_performed_by?: string
+        }
+        Returns: number
       }
       _format_pricing_dollars: { Args: { p_cents: number }; Returns: string }
       _format_pricing_margin_percent: {
@@ -9916,10 +11247,18 @@ export type Database = {
         }
         Returns: Json
       }
+      _lr_allocate_int: {
+        Args: { p_total: number; p_weights: Json }
+        Returns: Json
+      }
       _parse_pricing_dollars: { Args: { p_value: string }; Returns: number }
       _parse_pricing_margin_percent: {
         Args: { p_value: string }
         Returns: number
+      }
+      _post_deleted_delivery_recovery_invoice_20260719: {
+        Args: { p_invoice_id: string }
+        Returns: undefined
       }
       _post_invoice_customer_scope_impl: {
         Args: { p_idempotency_key?: string; p_invoice_id: string }
@@ -9934,6 +11273,10 @@ export type Database = {
         Returns: Json
       }
       _post_invoice_impl_20260714: {
+        Args: { p_idempotency_key?: string; p_invoice_id: string }
+        Returns: undefined
+      }
+      _post_invoice_public_impl_20260718: {
         Args: { p_idempotency_key?: string; p_invoice_id: string }
         Returns: undefined
       }
@@ -9979,9 +11322,41 @@ export type Database = {
         }
         Returns: Json
       }
+      _save_field_app_split_invoice_impl: {
+        Args: {
+          p_application_service_id: string
+          p_billing_set_id: string
+          p_fields: Json
+          p_idempotency_key: string
+          p_invoice: Json
+          p_lines: Json
+          p_performed_by: string
+          p_request_hash: string
+          p_source_job_id: string
+        }
+        Returns: Json
+      }
+      _save_invoice_governed_split_guard_impl_20260720: {
+        Args: { p_idempotency_key?: string; p_invoice: Json; p_items?: Json }
+        Returns: string
+      }
       _save_invoice_scoped_impl: {
         Args: { p_idempotency_key?: string; p_invoice: Json; p_items?: Json }
         Returns: string
+      }
+      _save_invoice_split_provenance_impl_20260719: {
+        Args: { p_idempotency_key?: string; p_invoice: Json; p_items?: Json }
+        Returns: string
+      }
+      _save_purchase_order_ascii_identity_impl: {
+        Args: {
+          p_idempotency_key?: string
+          p_items: Json
+          p_performed_by: string
+          p_po_id: string
+          p_po_payload: Json
+        }
+        Returns: Json
       }
       _save_purchase_order_atomic_number_impl: {
         Args: {
@@ -10001,6 +11376,10 @@ export type Database = {
           p_po_id: string
           p_po_payload: Json
         }
+        Returns: Json
+      }
+      _split_invoice_content_claim: {
+        Args: { p_invoice_id: string }
         Returns: Json
       }
       _sync_job_holds: {
@@ -10023,6 +11402,22 @@ export type Database = {
           p_performed_by: string
         }
         Returns: Json
+      }
+      _void_invoice_group_guard_impl_20260720: {
+        Args: {
+          p_idempotency_key?: string
+          p_invoice_id: string
+          p_void_reason: string
+        }
+        Returns: undefined
+      }
+      _void_invoice_split_provenance_impl_20260719: {
+        Args: {
+          p_idempotency_key?: string
+          p_invoice_id: string
+          p_void_reason: string
+        }
+        Returns: undefined
       }
       _void_order_impl_20260714: {
         Args: {
@@ -10122,6 +11517,15 @@ export type Database = {
           p_approved_by: string
           p_idempotency_key?: string
           p_return_id: string
+        }
+        Returns: Json
+      }
+      approve_supplier_price_import: {
+        Args: {
+          p_idempotency_key?: string
+          p_import_id: string
+          p_performed_by: string
+          p_row_ids: string[]
         }
         Returns: Json
       }
@@ -10387,10 +11791,15 @@ export type Database = {
         Args: { p_percentage: number; p_profit: number }
         Returns: number
       }
+      compute_even_split_vector: {
+        Args: { p_customer_ids: Json }
+        Returns: Json
+      }
       compute_fuel_surcharge_cents: {
         Args: { p_acres: number; p_subtotal_cents: number }
         Returns: number
       }
+      compute_line_split_allocation: { Args: { p_line: Json }; Returns: Json }
       compute_season: { Args: { p_date: string }; Returns: number }
       confirm_delivery: {
         Args: {
@@ -10436,6 +11845,16 @@ export type Database = {
           converted_unit: string
           converted_value: number
         }[]
+      }
+      correct_supplier_price_observation: {
+        Args: {
+          p_corrected_cost: string
+          p_idempotency_key?: string
+          p_observation_id: string
+          p_performed_by: string
+          p_reason: string
+        }
+        Returns: Json
       }
       create_application_record_from_blend_ticket: {
         Args: {
@@ -11360,6 +12779,10 @@ export type Database = {
         Args: { p_customer_id?: string; p_season?: number }
         Returns: Json
       }
+      get_product_price_history: {
+        Args: { p_product_id: string }
+        Returns: Json
+      }
       get_program_completion: { Args: { p_season?: number }; Returns: Json }
       get_receiving_log: {
         Args: {
@@ -11489,6 +12912,19 @@ export type Database = {
           season_b_val: number
         }[]
       }
+      get_supplier_market_evidence: {
+        Args: { p_product_ids?: string[] }
+        Returns: Json
+      }
+      get_supplier_price_import: {
+        Args: { p_import_id: string }
+        Returns: Json
+      }
+      get_supplier_pricing_workspace: {
+        Args: { p_product_id?: string; p_vendor_id?: string }
+        Returns: Json
+      }
+      get_supplier_quote_sheet: { Args: { p_vendor_id: string }; Returns: Json }
       get_team_board_deliveries: { Args: never; Returns: Json }
       get_team_workload: { Args: never; Returns: Json }
       get_watchdog_flags: {
@@ -11649,6 +13085,7 @@ export type Database = {
         Returns: string
       }
       normalize_rate_unit: { Args: { p_unit: string }; Returns: string }
+      normalize_vendor_alias: { Args: { p_value: string }; Returns: string }
       notify_damaged_receiving: {
         Args: {
           p_idempotency_key?: string
@@ -12107,6 +13544,15 @@ export type Database = {
         }
         Returns: Json
       }
+      reject_supplier_price_import: {
+        Args: {
+          p_idempotency_key?: string
+          p_import_id: string
+          p_performed_by: string
+          p_reason: string
+        }
+        Returns: Json
+      }
       release_expired_quote_holds: { Args: never; Returns: Json }
       release_inventory_hold: {
         Args: {
@@ -12129,6 +13575,23 @@ export type Database = {
       require_admin_or_sales_rep: { Args: never; Returns: undefined }
       reserve_job_inventory: {
         Args: { p_job_id: string; p_performed_by?: string }
+        Returns: Json
+      }
+      resolve_field_app_chemical_price: {
+        Args: {
+          p_field_ids: string[]
+          p_manual_price_cents?: number
+          p_product_id: string
+          p_tier: number
+        }
+        Returns: Json
+      }
+      resolve_line_split_vector: {
+        Args: {
+          p_applied_acres_map: Json
+          p_field_ids: string[]
+          p_source_job_id: string
+        }
         Returns: Json
       }
       resolve_offline_action: {
@@ -12242,6 +13705,17 @@ export type Database = {
         }
         Returns: Json
       }
+      review_vendor_alias: {
+        Args: {
+          p_alias_id: string
+          p_decision: string
+          p_idempotency_key?: string
+          p_performed_by: string
+          p_review_note: string
+          p_vendor_id: string
+        }
+        Returns: Json
+      }
       rollover_quote_to_season: {
         Args: {
           p_idempotency_key?: string
@@ -12319,6 +13793,19 @@ export type Database = {
           p_invoice_id: string
           p_locations: Json
           p_performed_by: string
+        }
+        Returns: Json
+      }
+      save_field_app_split_invoice: {
+        Args: {
+          p_application_service_id?: string
+          p_billing_set_id: string
+          p_fields: Json
+          p_idempotency_key?: string
+          p_invoice: Json
+          p_lines: Json
+          p_performed_by: string
+          p_source_job_id: string
         }
         Returns: Json
       }
@@ -12469,6 +13956,32 @@ export type Database = {
           p_operation: string
           p_payload: Json
           p_schema_version: number
+        }
+        Returns: Json
+      }
+      stage_supplier_price_import: {
+        Args: {
+          p_document_date: string
+          p_format_version: string
+          p_idempotency_key?: string
+          p_ingestion_method: string
+          p_performed_by: string
+          p_rows: Json
+          p_source_document_mime: string
+          p_source_document_name: string
+          p_source_document_path: string
+          p_vendor_id: string
+        }
+        Returns: Json
+      }
+      stage_vendor_alias: {
+        Args: {
+          p_alias_display: string
+          p_alias_raw: string
+          p_idempotency_key?: string
+          p_performed_by: string
+          p_proposed_vendor_id: string
+          p_source: string
         }
         Returns: Json
       }
@@ -12657,6 +14170,25 @@ export type Database = {
           p_idempotency_key?: string
           p_notes: string
           p_subtotal_cents: number
+        }
+        Returns: Json
+      }
+      upsert_product_supplier_link: {
+        Args: {
+          p_comparison_note: string
+          p_comparison_status: string
+          p_conversion_unit: string
+          p_idempotency_key?: string
+          p_inventory_units_per_supplier_unit: string
+          p_is_preferred: boolean
+          p_link_id?: string
+          p_performed_by: string
+          p_product_id: string
+          p_supplier_pack_description: string
+          p_supplier_product_name: string
+          p_supplier_sku: string
+          p_supplier_uom: string
+          p_vendor_id: string
         }
         Returns: Json
       }

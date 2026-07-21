@@ -1,0 +1,153 @@
+{
+  "_meta": {
+    "purpose": "Business-area slices of the full test system. `node scripts/run-area.mjs <area>` runs the vitest slice and (with --with-db) the live smoke chains + DB invariant sweeps for that area. Smoke selection is driven by the `area` tags in scripts/smoke/smoke-specs.json; sweep selection by the `sweeps` list here.",
+    "contract": "Every vitest path listed MUST exist (run-area.mjs fails loudly on a missing path so renames can't silently shrink a slice). Adding a new smoke spec: tag it with `area` in smoke-specs.json. Adding a new predicate: add it to the right area(s) here.",
+    "areas_are_not_exclusive": "A file or spec may belong to several areas (e.g. returns touch billing AND inventory)."
+  },
+  "areas": {
+    "billing": {
+      "description": "Money engine: invoices, payments, credits, statements, finance charges, splits (legacy per-acre and new per-line), commissions, email authority.",
+      "vitest": [
+        "src/lib/paymentAllocation.test.ts",
+        "src/lib/invoiceBatchPosting.test.ts",
+        "src/lib/financeChargeCalc.test.ts",
+        "src/lib/fuelSurcharge.test.ts",
+        "src/lib/creditLimit.test.ts",
+        "src/lib/customerInvoiceSummary.test.ts",
+        "src/lib/buildInvoicePdfDataFromRow.test.ts",
+        "src/lib/invoicePdf.test.ts",
+        "src/lib/statementPdf.test.ts",
+        "src/lib/invoiceSendDisposition.test.ts",
+        "src/lib/sendEmailEdgeGateContracts.test.ts",
+        "src/lib/proofNotification.test.ts",
+        "src/lib/splitVectorMath.test.ts",
+        "src/lib/commissionSplit.test.ts",
+        "src/lib/commissionPayoutGuards.test.ts",
+        "src/lib/reconciliation.test.ts",
+        "src/lib/returnWriteBoundary.test.ts",
+        "src/lib/fieldInvoiceList.test.ts",
+        "src/components/invoices",
+        "src/components/statements",
+        "src/components/field-app/customerSplit.test.ts",
+        "src/components/field-app/invoiceAppliedCarryover.test.ts",
+        "src/components/field-app/CustomerSharesTable.test.tsx"
+      ],
+      "sweeps": [
+        "fin-allocations-bounded",
+        "fin-ar-statement-balance",
+        "fin-commission-split-sum",
+        "fin-invoice-balance-identity",
+        "fin-prepay-balance",
+        "fin-quote-override-survival",
+        "commission-admin-active"
+      ]
+    },
+    "inventory": {
+      "description": "Stock truth: holds, prebooks, deliveries, receiving ledger, cycle counts, purchase orders.",
+      "vitest": [
+        "src/lib/inventoryPositionValidator.test.ts",
+        "src/lib/deliveryLifecycle.test.ts",
+        "src/lib/purchaseOrderMoney.test.ts",
+        "src/lib/bulkPOImportRetry.test.ts",
+        "src/lib/lotRpc.test.ts",
+        "src/lib/openBookings.test.ts",
+        "src/lib/receivingPdf.test.ts",
+        "src/components/inventory",
+        "src/components/deliveries",
+        "src/components/receiving",
+        "src/components/purchase-orders"
+      ],
+      "sweeps": [
+        "returns-lifecycle-rpc-owned"
+      ]
+    },
+    "lifecycle": {
+      "description": "Entity state machines: quote → order → job → delivery → invoice transitions, voids, restores, dispatch.",
+      "vitest": [
+        "src/lib/quoteCalc.test.ts",
+        "src/lib/quotePdf.test.ts",
+        "src/lib/jobSaveHelpers.test.ts",
+        "src/lib/deliveryLifecycle.test.ts",
+        "src/lib/businessLogicEnhancements.test.ts",
+        "src/lib/routeOrder.test.ts",
+        "src/components/jobs",
+        "src/components/quotes",
+        "src/components/orders",
+        "src/tests/workflow-gaps-safety.test.ts"
+      ],
+      "sweeps": [
+        "status-literals",
+        "returns-lifecycle-rpc-owned"
+      ]
+    },
+    "pricing": {
+      "description": "Product and supplier pricing: governance trigger, supplier evidence imports, price history, workbooks.",
+      "vitest": [
+        "src/lib/productPricing.test.ts",
+        "src/lib/productPricingWorkbook.test.ts",
+        "src/lib/productPricingSupplierEvidenceWorkbook.test.ts",
+        "src/lib/supplierPricing.test.ts",
+        "src/lib/supplierPricingMigration.test.ts",
+        "src/lib/supplierPricingWorkbook.test.ts",
+        "src/components/products"
+      ],
+      "sweeps": []
+    },
+    "security": {
+      "description": "Access control: RLS contracts, role gates, SECURITY DEFINER hygiene, actor forgery, page permissions, error sanitization.",
+      "vitest": [
+        "src/lib/rlsContracts.test.ts",
+        "src/lib/pagePermissions.test.ts",
+        "src/lib/sqlRoleGateNullFailOpen.test.ts",
+        "src/lib/e2eSafetyGuards.test.ts",
+        "src/lib/errorSanitizer.test.ts",
+        "src/lib/logActivitySignature.test.ts",
+        "src/lib/sentryImportEnforcement.test.ts",
+        "src/components/auth"
+      ],
+      "sweeps": [
+        "actor-forgery",
+        "actor-forgery-fin-audit",
+        "anon-exec-secdef",
+        "auth-bound-role-ungated",
+        "secdef-searchpath",
+        "ungated-secdef-mutators"
+      ]
+    },
+    "idempotency": {
+      "description": "Double-submit safety: idempotency key plumbing, RPC result assertion coverage.",
+      "vitest": [
+        "src/lib/idempotency.test.ts",
+        "src/lib/rpcIdempotencyScope.test.ts",
+        "src/lib/assertRpcCoverage.test.ts"
+      ],
+      "sweeps": []
+    },
+    "regression": {
+      "description": "The permanent bug-class regression suite: every guard artifact left by the 2026-06/07 review rounds and gauntlets.",
+      "vitest": [
+        "src/lib/bugClassRegressionGuards.test.ts",
+        "src/lib/gauntletRemediationGuards.test.ts",
+        "src/lib/gauntletSections26Remediation.test.ts",
+        "src/lib/moneyInventoryGauntletFixes.test.ts",
+        "src/lib/sqlRoleGateNullFailOpen.test.ts",
+        "src/lib/splitVectorMath.test.ts"
+      ],
+      "sweeps": []
+    },
+    "drift": {
+      "description": "Schema/contract drift: frontend-vs-SQL signatures, fixture-vs-live pg_proc, schema integrity, overloads.",
+      "vitest": [
+        "src/lib/rpcContracts.test.ts",
+        "src/lib/rpcFixtureLiveDiff.test.ts",
+        "src/lib/schemaIntegrity.test.ts",
+        "src/lib/schemaIntegrityLive.test.ts"
+      ],
+      "sweeps": [
+        "overloads",
+        "plpgsql-check",
+        "status-literals"
+      ]
+    }
+  }
+}

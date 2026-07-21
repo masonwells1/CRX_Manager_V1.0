@@ -2,7 +2,14 @@
 
 All significant development milestones, in reverse chronological order.
 
-<<<<<<< HEAD
+## 2026-07-21 — Test-system overhaul: business-area slices, per-line split smoke, drift reconciliation
+
+- **Area slicing:** every smoke spec now carries `area` tags and `scripts/test-areas.json` + `scripts/run-area.mjs` bundle a vitest slice, the tagged smoke chains, and the matching DB invariant sweeps per business area (billing, inventory, lifecycle, pricing, security, idempotency, regression, drift). `npm run test:billing` etc.; `run-smoke.mjs --area <a>`; `run-sweeps.mjs --only <p1,p2>`.
+- **Per-line split billing behavioral smoke** (`smoke-per-line-split-billing.sql`): proves flag gate, penny-exact odd-cents largest-remainder split (5751/5750 of 11501c), stored-row invariants, idempotent replay, calculator {34,33,33}, and the dup-product / off-job-field / job-immutable / resolver-auth guards against live (rolled back). Its G5 fail-first probe found a REAL live bug: `_save_field_app_split_invoice_impl` crashes (55000 unassigned `v_app_service` record) on any cold-session save whose lines before the first service line are non-service — intermittent by connection-pool warmth. Fix migration PARKED at `scripts/.staging-migrations/20260721180000_fix_split_impl_unassigned_app_service_record.sql` awaiting review + approved apply; smoke stays RED at G5 until then.
+- **Drift reconciliation after the 2026-07-20 go-lives:** regenerated `src/types/supabase.ts` from live (split + supplier-pricing RPCs now typed), emptied the stale `MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY` bucket into `MUTATING_RPCS_WITH_IDEMPOTENCY`, classified the two lifecycle idempotency helpers, fixed the pg_proc fixture header date/count.
+- **Consolidation:** PR #188 email-authority guards pinned in the `bugClassRegressionGuards` manifest; gauntlet index refreshed with 2026-07-21 status notes; removed a stale merge-conflict marker pair from this changelog.
+
+
 ## 2026-07-20 — Bug-class regression test suite (PR #189)
 
 Bug-class regression suite: analyzed all ~60 bugs fixed 2026-07-10..20 (split-billing Codex rounds 2-12, Fable adversarial, gauntlet 2-6, statement opening balance, pricing 1a/1b), clustered them into 12 recurring classes, and locked the top classes with hermetic npm-test guards (commit 9e7e185f): sqlRoleGateNullFailOpen.test.ts (H1 NULL-role fail-open scanner over latest disk fn defs; found latent H1 in parked create_inventory_hold), bugClassRegressionGuards.test.ts (pins 14 SQL guard tokens across 9 fns following PERFORM/RENAME chains + 3 frontend guards + 8 fail-first smokes' registration), splitVectorMath extraction + property tests (r2 #K / r3 P2 residual classes). Full suite 3742 green; Codex verdict pending before PR/merge.
@@ -54,7 +61,6 @@ Bug-class regression suite: analyzed all ~60 bugs fixed 2026-07-10..20 (split-bi
   - `supabase/migrations/20260720175946_protect_governed_split_edit_and_void_group.sql`
   - `supabase/migrations/20260718010000_per_line_split_billing_schema.sql`
   - `supabase/migrations/20260720173059_fix_statement_opening_balance.sql`
-=======
 ## 2026-07-20 — Split-billing email authority completed
 
 - Re-read each invoice's server-owned disposition and lifecycle immediately before every invoice email send, including field-invoice lists and invoice detail.

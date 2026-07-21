@@ -2,9 +2,17 @@
 
 Read-only queue for the recurring CRX Live Foundation Gauntlet. Each run reviews one section against current repo code plus live Supabase database structure only, writes one dated report, updates this index, then stops.
 
-Last updated: 2026-07-14
+Last updated: 2026-07-21
 
 The July 14 full all-section run supersedes the older per-row queue notes below for current risk and remediation status. See [2026-07-14-full-gauntlet-codex-only-remediation.md](2026-07-14-full-gauntlet-codex-only-remediation.md). The table remains as section history until the fixes are deployed and production-verified.
+
+2026-07-21 status notes:
+
+- The 2026-07-14 remediation wave and the sections 2–6 closeout are live, and their guard artifacts are pinned by the permanent regression suite (`src/lib/bugClassRegressionGuards.test.ts`, `src/lib/gauntletRemediationGuards.test.ts`, `src/lib/gauntletSections26Remediation.test.ts`, PR #189).
+- Section 5 drift items from the 2026-07-05 row: the pg_proc fixture snapshot and `src/types/supabase.ts` were fully regenerated 2026-07-21 after the 2026-07-20 live applies (per-line split billing, Supplier Pricing 1b + follow-ups).
+- Section 6's HIGH (`save_job_applied_record` duplicates) was fixed 2026-07-10 (table-native idempotency key + partial unique index) and the RPC is tracked in `MUTATING_RPCS_WITH_IDEMPOTENCY`.
+- Rows 1–4 reference report files recorded only in automation memory; those filenames are not in the repo. Treat the 2026-06-17 and 2026-07-14 committed reports as the durable history.
+- Business-area review slices now exist: `node scripts/run-area.mjs --list` (vitest + smoke + invariant sweeps per area; see `scripts/test-areas.json`).
 
 ## Current Queue
 
