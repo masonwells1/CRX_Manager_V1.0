@@ -28,6 +28,28 @@ BEGIN
 END;
 $proof$;
 
+-- Product creation intentionally persists a pricing-free shell. Prove a row
+-- created after the migration remains valid and receives no invented basis;
+-- its first governed Phase 1a cost update below must create the initial basis.
+INSERT INTO public.products(
+  id, product_name, sku, category, container_size, unit_size, inventory_unit
+) VALUES (
+  'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee1',
+  'Phase 2 Newly Created Product', 'P2-NEW', 'Herbicide', 1, 'gal', 'gal'
+);
+DO $proof$
+BEGIN
+  IF (SELECT current_cost FROM public.products
+      WHERE id = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee1'::uuid) IS NOT NULL
+     OR EXISTS (
+       SELECT 1 FROM public.product_cost_basis
+       WHERE product_id = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee1'::uuid
+     ) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: pricing-free Product creation invented a cost basis';
+  END IF;
+END;
+$proof$;
+
 SELECT set_config('request.jwt.claim.sub', '11111111-1111-4111-8111-111111111111', false);
 SET ROLE authenticated;
 
@@ -69,7 +91,7 @@ INSERT INTO phase2_proof(key, value)
 VALUES ('legacy-off-preview', public.preview_product_pricing_changes(
   'product_page', NULL,
   jsonb_build_array(jsonb_build_object(
-    'product_id', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2',
+    'product_id', 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee1',
     'row_version', 1,
     'pricing_mode', 'margin_driven',
     'new_cost', '105.00',
@@ -95,7 +117,7 @@ BEGIN
     SELECT 1
     FROM public.product_cost_basis b
     JOIN public.products p ON p.id = b.product_id
-    WHERE b.product_id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2'::uuid
+    WHERE b.product_id = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee1'::uuid
       AND b.effective_to IS NULL
       AND b.cost_cents <> round(p.current_cost * 100)::bigint
   ) THEN
@@ -103,7 +125,7 @@ BEGIN
   END IF;
   IF NOT EXISTS (
     SELECT 1 FROM public.product_cost_basis
-    WHERE product_id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2'::uuid
+    WHERE product_id = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee1'::uuid
       AND effective_to IS NULL
       AND basis_type = 'manual_override'
       AND cost_cents = 10500
