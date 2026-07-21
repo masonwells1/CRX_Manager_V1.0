@@ -34,11 +34,14 @@ import {
   type PricingPreviewResult,
 } from '../lib/productPricing';
 import {
-  generateProductPricingWorkbook,
   MAX_PRICING_WORKBOOK_FILE_BYTES,
   MAX_PRICING_WORKBOOK_ROWS,
-  parseProductPricingWorkbook,
 } from '../lib/productPricingWorkbook';
+import {
+  generateProductPricingWorkbookWithSupplierEvidence,
+  parseProductPricingWorkbookWithSupplierEvidence,
+} from '../lib/productPricingSupplierEvidenceWorkbook';
+import { getSupplierMarketEvidence } from '../lib/supplierPricing';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 
 const INLINE_PRICING_FIELDS = new Set([
@@ -534,7 +537,11 @@ export default function Products() {
         performedBy: profile.id,
         idempotencyKey: exportPricingIdem.getKey(),
       });
-      const blob = await generateProductPricingWorkbook(pricingExport);
+      const supplierEvidence = await getSupplierMarketEvidence(productIds);
+      const blob = await generateProductPricingWorkbookWithSupplierEvidence(
+        pricingExport,
+        supplierEvidence,
+      );
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement('a');
       anchor.href = url;
@@ -562,7 +569,7 @@ export default function Products() {
     }
     setWorkbookBusy(true);
     try {
-      const parsed = await parseProductPricingWorkbook(await file.arrayBuffer());
+      const parsed = await parseProductPricingWorkbookWithSupplierEvidence(await file.arrayBuffer());
       const preview = await previewProductPricingChanges({
         source: 'pricing_worksheet',
         exportId: parsed.exportId,

@@ -1,6 +1,6 @@
 # Agent Onboarding — How Not to Fail Here
 
-**Last verified: 2026-07-13**
+**Last verified: 2026-07-19**
 **Update triggers: when a new recurring failure class is identified or the guard system changes.**
 
 You are a new coding agent — possibly a smaller or cheaper model than whoever wrote this doc — starting your first session in CRX Manager. This file is the front door. It assumes you've already read `AGENTS.md` (the contract: hard rules, approval gates, project facts) and exists to make you behave like a senior engineer on this codebase instead of a junior one, on your very first turn.
@@ -69,6 +69,8 @@ These are not code bugs — they're *how an agent convinced itself something was
 - **Re-emitting a function two pending migrations both touch.** If your migration does `CREATE OR REPLACE FUNCTION` on something another *not-yet-applied* migration also re-emits, whichever applies second silently clobbers the first's logic. Countermeasure: grep `supabase/migrations/` for other pending (unapplied) migrations touching the same function name before you write yours.
 
 - **Editing an applied migration.** Forbidden, no exceptions. An applied migration is a permanent historical record; editing it means the file on disk no longer matches what actually ran against the live database, and re-running migrations elsewhere (a fresh environment, a review) produces a different schema than production has. Countermeasure: always create a new migration file, even for a one-line fix to something you wrote five minutes ago in the same session.
+
+- **Replaying the full historical ledger into a fresh database.** The historical files are an immutable audit trail, not the current clean-build entry point. Some correctly fail-closed on production-specific data or byte-exact legacy function bodies. Countermeasure: initialize a new project from `supabase/baselines/manifest.json` in its declared order, then apply only migrations newer than that baseline. Run `npm run test:schema-baseline` before trusting the artifacts.
 
 ---
 

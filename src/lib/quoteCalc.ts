@@ -190,12 +190,30 @@ export function computeQuoteTotals(items: CalcItem[]): {
   };
 }
 
-/** Validate commission splits sum to 100% */
+/** Mirror the database commission-split contract for immediate UI feedback. */
 export function validateCommissionSplits(
   splits: Array<{ recipient: string; percentage: number }>
 ): string | null {
   if (splits.length === 0) return null;
-  const sum = splits.reduce((acc, s) => acc + s.percentage, 0);
+
+  const seenRecipients = new Set<string>();
+  let sum = 0;
+  for (const split of splits) {
+    const recipient = split.recipient.trim();
+    if (!recipient) return 'Every commission split needs a recipient';
+
+    const recipientKey = recipient.toLowerCase();
+    if (seenRecipients.has(recipientKey)) {
+      return `Commission recipient "${recipient}" is listed more than once`;
+    }
+    seenRecipients.add(recipientKey);
+
+    if (!Number.isFinite(split.percentage) || split.percentage <= 0 || split.percentage > 100) {
+      return `Commission percentage for "${recipient}" must be greater than 0 and no more than 100`;
+    }
+    sum += split.percentage;
+  }
+
   if (Math.abs(sum - 100) > 0.01) {
     return `Commission splits sum to ${sum.toFixed(2)}%, expected 100%`;
   }

@@ -16,6 +16,7 @@ import UpdatePrompt from './components/UpdatePrompt';
 // Lazy-loaded pages — each page is only downloaded when the user navigates to it
 const Dashboard = lazy(() => import('./pages/Dashboard'));
 const Products = lazy(() => import('./pages/Products'));
+const SupplierPricing = lazy(() => import('./pages/SupplierPricing'));
 const ProductDetail = lazy(() => import('./pages/ProductDetail'));
 const Customers = lazy(() => import('./pages/Customers'));
 const CustomerDetail = lazy(() => import('./pages/CustomerDetail'));
@@ -278,6 +279,7 @@ const router = createBrowserRouter([
           { path: 'field', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep', 'applicator']}><FieldView /></ProtectedRoute> },
 
           // Admin only
+          { path: 'supplier-pricing', element: <ProtectedRoute allowedRoles={['admin']}><SupplierPricing /></ProtectedRoute> },
           { path: 'financial-dashboard', element: <ProtectedRoute allowedRoles={['admin']}><FinancialDashboard /></ProtectedRoute> },
           { path: 'month-end', element: <ProtectedRoute allowedRoles={['admin']}><MonthEndClose /></ProtectedRoute> },
           { path: 'integrity', element: <ProtectedRoute allowedRoles={['admin']}><Integrity /></ProtectedRoute> },

@@ -303,11 +303,15 @@ test.describe.serial('Seed Test Data', () => {
     const totalA = await getInvTotal(page, S.invAId);
     if (totalA > 0) {
       const partialCents = Math.max(1, Math.floor(totalA * 0.6));
-      await rpc(page, 'record_invoice_payment', {
-        p_invoice_id:       S.invAId,
-        p_amount_cents:     partialCents,
+      await rpc(page, 'allocate_payment', {
+        p_customer_id:      S.custAId,
+        p_total_cents:      partialCents,
         p_payment_method:   'check',
         p_reference_number: `${TAG}-PARTIAL`,
+        p_payment_date:     TODAY,
+        p_allocations:      [{ invoice_id: S.invAId, amount_cents: partialCents }],
+        p_performed_by:     S.userId,
+        p_idempotency_key:  `${TAG}-PARTIAL-${S.invAId}`,
       });
       console.log(
         `[Seeder] Partial payment $${(partialCents / 100).toFixed(2)}` +
@@ -320,11 +324,15 @@ test.describe.serial('Seed Test Data', () => {
     // Invoice B — full payment
     const totalB = await getInvTotal(page, S.invBId);
     if (totalB > 0) {
-      await rpc(page, 'record_invoice_payment', {
-        p_invoice_id:       S.invBId,
-        p_amount_cents:     totalB,
+      await rpc(page, 'allocate_payment', {
+        p_customer_id:      S.custBId,
+        p_total_cents:      totalB,
         p_payment_method:   'check',
         p_reference_number: `${TAG}-FULL`,
+        p_payment_date:     TODAY,
+        p_allocations:      [{ invoice_id: S.invBId, amount_cents: totalB }],
+        p_performed_by:     S.userId,
+        p_idempotency_key:  `${TAG}-FULL-${S.invBId}`,
       });
       console.log(`[Seeder] Full payment $${(totalB / 100).toFixed(2)} on Invoice B`);
     } else {

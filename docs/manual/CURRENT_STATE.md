@@ -1,6 +1,6 @@
 # CRX Manager — Current State
 
-**Last verified:** 2026-07-20 (full document re-read against live migration high-water `20260719092832`; operational counts remain the 2026-07-18 snapshot below)
+**Last verified:** 2026-07-20 (feature summary and live migration watermark re-checked through `20260720225716`; the 24 previously missing live migration sources landed through PR #180, and delivery-signature Storage access is now delivery-path- and active-actor-scoped for read, write, and delete; operational counts remain the dated 2026-07-18 snapshot below)
 **Update triggers:** refresh when a major feature ships or quarterly, whichever first.
 
 ## 1. Reality check

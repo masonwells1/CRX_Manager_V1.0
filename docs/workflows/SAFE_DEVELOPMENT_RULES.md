@@ -147,6 +147,14 @@ Before any schema change, follow `docs/workflows/DATABASE_CHANGE_CHECKLIST.md`:
 6. Update affected components
 7. Run `npm run typecheck` and `npm run build`
 
+### Fresh database rebuilds
+
+- Keep every applied file in `supabase/migrations/` immutable; it remains the audit trail.
+- Initialize a brand-new Supabase project from `supabase/baselines/manifest.json` in the exact listed order, then apply only migrations strictly newer than its high-water.
+- Never clear or overwrite a non-empty migration ledger to force the baseline history restore; it is deliberately fail-closed.
+- Run `npm run test:schema-baseline`, rebuild the schema registry from the target database, and run the DB invariant sweeps before treating the project as usable.
+- The schema baseline contains no business data. Use the separately protected Supabase backup/restore path for disaster recovery.
+
 ---
 
 ## Money Handling

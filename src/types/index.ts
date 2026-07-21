@@ -191,6 +191,263 @@ export interface CostHistory {
   changed_at: string;
 }
 
+// ── Pricing worksheet persistence (Phase 1a) ────────────────────
+
+export type PricingWorkbookExportStatus = 'active' | 'consumed' | 'expired';
+export type PricingChangeSetSource = 'pricing_worksheet' | 'product_page' | 'products_inline';
+export type PricingChangeSetStatus = 'previewed' | 'invalid' | 'no_changes' | 'applied' | 'expired';
+export type PricingMode = 'margin_driven' | 'price_driven';
+export type PricingPreviewRowStatus = 'ready' | 'conflict' | 'invalid' | 'unchanged';
+
+/** Database row from pricing_workbook_exports. */
+export interface PricingWorkbookExportRecord {
+  id: string;
+  created_by: string;
+  request_fingerprint: string;
+  manifest_fingerprint: string;
+  idempotency_key: string;
+  row_count: number;
+  status: PricingWorkbookExportStatus;
+  created_at: string;
+  expires_at: string;
+}
+
+/** Database row from pricing_workbook_export_rows. Money fields are integer cents. */
+export interface PricingWorkbookExportRowRecord {
+  export_id: string;
+  product_id: string;
+  sku_snapshot: string | null;
+  product_name_snapshot: string;
+  category_snapshot: string | null;
+  container_size_snapshot: string | null;
+  unit_size_snapshot: string | null;
+  inventory_unit_snapshot: string | null;
+  identity_fingerprint: string;
+  row_token: string;
+  row_version: number;
+  current_cost_cents: bigint | null;
+  current_tier1_margin: number | null;
+  current_tier1_price_cents: bigint | null;
+  current_tier2_margin: number | null;
+  current_tier2_price_cents: bigint | null;
+  current_tier3_margin: number | null;
+  current_tier3_price_cents: bigint | null;
+}
+
+/** Database row from pricing_change_sets. */
+export interface PricingChangeSetRecord {
+  id: string;
+  export_id: string | null;
+  created_by: string;
+  source: PricingChangeSetSource;
+  request_fingerprint: string;
+  preview_idempotency_key: string;
+  submitted_row_count: number;
+  row_count: number;
+  status: PricingChangeSetStatus;
+  created_at: string;
+  expires_at: string;
+  applied_by: string | null;
+  applied_at: string | null;
+  apply_idempotency_key: string | null;
+  apply_result: Record<string, unknown> | null;
+}
+
+/** Database row from pricing_change_set_rows. Money fields are integer cents. */
+export interface PricingChangeSetRowRecord {
+  change_set_id: string;
+  product_id: string;
+  identity_fingerprint: string;
+  expected_version: number;
+  pricing_mode: PricingMode;
+  change_reason: string | null;
+  input_cost_cents: bigint;
+  input_tier1_margin: number | null;
+  input_tier2_margin: number | null;
+  input_tier3_margin: number | null;
+  input_tier1_price_cents: bigint | null;
+  input_tier2_price_cents: bigint | null;
+  input_tier3_price_cents: bigint | null;
+  output_cost_cents: bigint;
+  output_tier1_margin: number;
+  output_tier2_margin: number;
+  output_tier3_margin: number;
+  output_tier1_price_cents: bigint;
+  output_tier2_price_cents: bigint;
+  output_tier3_price_cents: bigint;
+  output_tier1_gross_margin: number | null;
+  output_tier2_gross_margin: number | null;
+  output_tier3_gross_margin: number | null;
+  output_tier1_price_per_acre_cents: bigint | null;
+  output_tier2_price_per_acre_cents: bigint | null;
+  output_tier3_price_per_acre_cents: bigint | null;
+  output_fingerprint: string;
+}
+
+/** Database row from pricing_change_set_preview_rows. */
+export interface PricingChangeSetPreviewRowRecord {
+  change_set_id: string;
+  sequence: number;
+  product_id: string | null;
+  submitted_row: Record<string, unknown>;
+  row_status: PricingPreviewRowStatus;
+  error_code: string | null;
+  effect: Record<string, unknown> | null;
+}
+
+// ── Supplier price evidence (Phase 1b) ──────────────────────────
+
+export type SupplierReviewStatus = 'pending' | 'approved' | 'rejected';
+export type SupplierComparisonStatus = 'pending' | 'comparable' | 'not_comparable';
+export type SupplierLinkStatus = 'pending' | 'confirmed' | 'rejected';
+export type SupplierPriceKind = 'list' | 'quote' | 'contract' | 'promo' | 'manual';
+export type SupplierPriceImportMethod = 'quote_sheet' | 'quick_quote';
+export type SupplierPriceImportStatus =
+  | 'draft'
+  | 'needs_review'
+  | 'approved'
+  | 'rejected'
+  | 'partially_approved';
+export type SupplierPriceImportRowStatus =
+  | 'new'
+  | 'changed'
+  | 'cannot_compare'
+  | 'invalid'
+  | 'unchanged'
+  | 'duplicate'
+  | 'approved'
+  | 'rejected';
+
+export interface VendorAlias {
+  id: string;
+  vendor_id: string | null;
+  proposed_vendor_id: string | null;
+  alias_raw: string;
+  alias_normalized: string;
+  alias_display: string;
+  source: 'legacy_product' | 'legacy_po' | 'import' | 'manual';
+  review_status: SupplierReviewStatus;
+  review_note: string | null;
+  created_by: string | null;
+  reviewed_by: string | null;
+  reviewed_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LegacyVendorResolution {
+  id: string;
+  original_text: string;
+  normalized_text: string;
+  vendor_id: string | null;
+  confidence: number;
+  review_status: SupplierReviewStatus;
+  source_table: 'products' | 'purchase_orders';
+  review_note: string | null;
+  created_by: string | null;
+  reviewed_by: string | null;
+  reviewed_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProductSupplierLink {
+  id: string;
+  product_id: string;
+  vendor_id: string;
+  supplier_sku: string | null;
+  supplier_product_name: string;
+  supplier_uom: string | null;
+  supplier_pack_description: string | null;
+  inventory_units_per_supplier_unit: number | null;
+  /** Generated compatibility alias; use inventory_units_per_supplier_unit for direction. */
+  conversion_factor: number | null;
+  conversion_unit: string | null;
+  comparison_status: SupplierComparisonStatus;
+  comparison_note: string | null;
+  link_status: SupplierLinkStatus;
+  is_reusable: boolean;
+  is_active: boolean;
+  is_preferred: boolean;
+  match_confidence: number | null;
+  confirmed_by: string | null;
+  confirmed_at: string | null;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SupplierPriceImport {
+  id: string;
+  vendor_id: string;
+  document_date: string;
+  ingestion_method: SupplierPriceImportMethod;
+  format_version: string;
+  status: SupplierPriceImportStatus;
+  source_document_path: string | null;
+  source_document_name: string | null;
+  source_document_mime: 'application/pdf' | null;
+  request_fingerprint: string;
+  idempotency_key: string;
+  row_count: number;
+  eligible_row_count: number;
+  approved_observation_count: number;
+  created_by: string;
+  approved_by: string | null;
+  approved_at: string | null;
+  rejected_by: string | null;
+  rejected_at: string | null;
+  rejection_reason: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SupplierPriceImportRow {
+  id: string;
+  import_id: string;
+  row_number: number;
+  submitted_row: Record<string, unknown>;
+  product_id: string | null;
+  vendor_id: string | null;
+  product_supplier_link_id: string | null;
+  supplier_sku: string | null;
+  supplier_product_name: string | null;
+  cost_cents: bigint | null;
+  price_unit: string | null;
+  package_quantity: number | null;
+  effective_from: string | null;
+  effective_to: string | null;
+  price_kind: SupplierPriceKind | null;
+  row_status: SupplierPriceImportRowStatus;
+  validation_errors: string[];
+  reviewer_note: string | null;
+  reviewed_by: string | null;
+  reviewed_at: string | null;
+  observation_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Append-only supplier_price_observations row. Money is integer cents. */
+export interface SupplierPriceObservation {
+  id: string;
+  product_id: string;
+  vendor_id: string;
+  product_supplier_link_id: string;
+  import_id: string;
+  import_row_id: string;
+  price_kind: SupplierPriceKind;
+  cost_cents: bigint;
+  price_unit: string;
+  package_quantity: number;
+  effective_from: string;
+  effective_to: string | null;
+  observed_at: string;
+  supersedes_observation_id: string | null;
+  created_by: string;
+  created_at: string;
+}
+
 export interface CommissionSplit {
   splits: Array<{ recipient: string; percentage: number }>;
 }
@@ -959,6 +1216,11 @@ export interface PurchaseOrderItem {
   quantity_received: number;
   unit_size: string | null;
   notes: string | null;
+  product_supplier_link_id?: string | null;
+  supplier_price_observation_id?: string | null;
+  inventory_units_per_supplier_unit_snapshot?: number | null;
+  cost_provenance?: 'manual' | 'supplier_observation' | 'legacy' | null;
+  cost_snapshot_at?: string | null;
   product?: Product;
 }
 
