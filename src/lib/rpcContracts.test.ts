@@ -1343,6 +1343,12 @@ describe('RPC contract: save_blend_recipe', () => {
  * If you add a new mutating RPC, add it here AND add the parameter to the SQL function.
  */
 const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
+  // Internal _impl delegates (direct EXECUTE revoked; the public wrapper owns the
+  // client contract). They appear in generated types after the 2026-07-21 regen,
+  // declare p_idempotency_key, and use the canonical replay machinery, so they are
+  // classified here rather than in the migration-only bucket.
+  '_save_field_app_split_invoice_impl',
+  '_save_purchase_order_ascii_identity_impl',
   'adjust_inventory',
   'allocate_payment',
   // credit-memo RPCs (landed on main 2026-07-10) — classified WITH idempotency: verified against
@@ -1353,6 +1359,10 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   'apply_remaining_prepayments',
   'apply_write_off',
   'approve_return',
+  // Supplier Pricing Phase 1b (live since 2026-07-20, admin-only lockdown applied;
+  // types regenerated 2026-07-21): each declares p_idempotency_key and replays via
+  // check_idempotency/save_idempotency.
+  'approve_supplier_price_import',
   'batch_apply_all_prepayments',
   'batch_apply_prepayments',
   'batch_cancel_deliveries',
@@ -1380,6 +1390,7 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   'complete_job',
   'confirm_delivery',
   'convert_quote_to_order',
+  'correct_supplier_price_observation', // Supplier Pricing 1b — see approve_supplier_price_import note
   'create_application_record_from_blend_ticket',
   'create_blend_ticket',
   'create_commission_payment',
@@ -1423,6 +1434,7 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   'receive_return',
   'record_invoice_payment',
   'record_vendor_payment',
+  'reject_supplier_price_import', // Supplier Pricing 1b follow-ups (live) — see approve_supplier_price_import note
   'release_inventory_hold',
   'reopen_accounting_period',
   'resolve_offline_action',
@@ -1438,16 +1450,23 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   // idempotency 2026-07-16 after the types regen landed them in src/types/supabase.ts:
   // both declare p_idempotency_key and replay via check_idempotency/save_idempotency.
   'review_customer_fact',
+  'review_vendor_alias', // Supplier Pricing 1b — see approve_supplier_price_import note
   'save_blend_recipe',
   'save_blend_ticket',
   'save_customer',
   'save_field',
+  // Per-line split billing (applied live 2026-07-20 via 20260720233000, PR #164;
+  // types regenerated 2026-07-21). Public wrapper does check_idempotency +
+  // payload-hash conflict and delegates to _save_field_app_split_invoice_impl.
+  'save_field_app_split_invoice',
   'save_invoice',
   'save_job',
   'save_job_applied_record',
   'save_purchase_order',
   'save_quote',
   'stage_offline_action',
+  'stage_supplier_price_import', // Supplier Pricing 1b — see approve_supplier_price_import note
+  'stage_vendor_alias', // Supplier Pricing 1b — see approve_supplier_price_import note
   'supersede_customer_fact',
   'transfer_invoice_to_job',
   'transfer_job_to_invoice',
@@ -1457,6 +1476,7 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   'update_blend_ticket_billing_status',
   'update_cycle_count_item',
   'update_order_items',
+  'upsert_product_supplier_link', // Supplier Pricing 1b — see approve_supplier_price_import note
   'void_commission_payment',
   'void_delivery',
   'void_invoice',
@@ -2085,37 +2105,20 @@ function generatedMutatingRpcInventory(): Set<string> {
 }
 
 const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
-  // Owner-only cancel router preserved behind the required-key public wrapper.
-  // It binds actor + order through the lifecycle claim/complete helpers; every
-  // application-role EXECUTE privilege is revoked by the migration.
+  // Currently empty (2026-07-21). The 2026-07-20 applies (per-line split billing,
+  // Supplier Pricing 1b + follow-ups) went live and src/types/supabase.ts was
+  // regenerated, so every former bucket entry — including the _impl delegates —
+  // now appears in generated types and is classified in
+  // MUTATING_RPCS_WITH_IDEMPOTENCY instead. This bucket exists for the normal
+  // pre-apply window: an RPC introduced by a PR migration that is NOT yet live
+  // (so it cannot truthfully be in the generated types) goes here, with a note,
+  // and moves to MUTATING_RPCS_WITH_IDEMPOTENCY once applied + types regen.
+  // Owner-only cancel router preserved behind the required-key public wrapper
+  // (Phase 1a closeout, applied live 2026-07-21 AFTER the types regen, so it is
+  // not yet in src/types/supabase.ts). It binds actor + order through the
+  // lifecycle claim/complete helpers; every application-role EXECUTE privilege
+  // is revoked by the migration. Move it out at the next types regen.
   '_cancel_order_idem_impl_20260721',
-  // Direct EXECUTE is revoked from every application role. This internal
-  // delegate carries the public save_purchase_order idempotency key and cache
-  // contract inside the same transaction; it is absent from generated client
-  // types by design but still must remain fail-closed in the migration scan.
-  '_save_purchase_order_ascii_identity_impl',
-  // Per-line split billing (parked migration 20260720233000_per_line_split_billing_save_rpc.sql,
-  // NOT applied live; feature flag OFF). Both declare `p_idempotency_key text` and use the
-  // canonical two-layer replay pattern: the PUBLIC wrapper save_field_app_split_invoice does
-  // check_idempotency + payload-hash conflict; the internal writer _save_field_app_split_invoice_impl
-  // records via save_idempotency (direct EXECUTE revoked). Neither is in the generated client
-  // types yet (types are regenerated only after the migration applies), so they are classified here
-  // rather than in MUTATING_RPCS_WITH_IDEMPOTENCY. Move save_field_app_split_invoice to that list
-  // once the migration is live and src/types/supabase.ts is regenerated.
-  'save_field_app_split_invoice',
-  '_save_field_app_split_invoice_impl',
-  // Supplier Pricing Phase 1b is intentionally parked pending a separate,
-  // reviewed apply session. Keep these mutators in the migration-only bucket
-  // until the migration is live and generated client types are refreshed.
-  'approve_supplier_price_import',
-  'correct_supplier_price_observation',
-  // Parked in 20260720230000 (durable-replay + reject follow-ups) until that
-  // migration applies live and generated client types are refreshed.
-  'reject_supplier_price_import',
-  'review_vendor_alias',
-  'stage_supplier_price_import',
-  'stage_vendor_alias',
-  'upsert_product_supplier_link',
 ]);
 
 /**
@@ -2125,6 +2128,14 @@ const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
  * in MUTATING_RPCS_MISSING_IDEMPOTENCY and must eventually be fixed.
  */
 const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
+  _close_undelivered_order_remainder_20260718:
+    'preserved internal cancel-remainder impl (Phase 1a closeout); the required-key public cancel_order wrapper owns idempotency and every application-role EXECUTE is revoked',
+  _post_deleted_delivery_recovery_invoice_20260719:
+    'preserved internal recovery-invoice impl (Phase 1a closeout); the required-key public wrapper owns idempotency and every application-role EXECUTE is revoked',
+  _bind_completed_lifecycle_idempotency:
+    'idempotency infrastructure helper (sections 2-6 closeout): binds a completed lifecycle result to its key; direct client EXECUTE is revoked',
+  _claim_bound_lifecycle_idempotency:
+    'idempotency infrastructure helper (sections 2-6 closeout): claims a bound lifecycle key for replay; direct client EXECUTE is revoked',
   _insert_commissions_for_job: 'internal helper; caller owns idempotency and direct EXECUTE is revoked',
   _insert_commissions_for_order: 'internal helper; caller owns idempotency and direct EXECUTE is revoked',
   _reverse_credit_memo_application: 'internal helper called only by idempotent credit-memo reversal RPCs',

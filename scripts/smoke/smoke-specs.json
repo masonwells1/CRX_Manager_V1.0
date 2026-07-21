@@ -3,258 +3,654 @@
     "hard_rule": "A fix is 'fixed' ONLY when its full business-chain spec passes end-to-end - never an isolated probe. (B1, 2026-06-09, was falsely declared fixed off a single-insert probe; only the full return->credit->statement->unapply chain exposed the stacked breaks.)",
     "pass_signal": "Every chain is a single DO block that ALWAYS terminates with RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK'. That exact error text = PASS (and guarantees rollback). ANY other error = FAIL.",
     "how_to_run": "node scripts/smoke/run-smoke.mjs --list | --spec <rpc> | --all  (see scripts/smoke/README.md)",
-    "spec_contract": "Keys are the primary RPC under test. 'covers' lists every RPC the chain exercises - run-smoke.mjs --spec <rpc> matches keys AND covers entries, so one chain can certify several RPCs. Every migration that touches an RPC must have or extend a spec covering it."
+    "spec_contract": "Keys are the primary RPC under test. 'covers' lists every RPC the chain exercises - run-smoke.mjs --spec <rpc> matches keys AND covers entries, so one chain can certify several RPCs. Every migration that touches an RPC must have or extend a spec covering it.",
+    "area_tags": "Every spec carries an \"area\" array (business-area tags: billing, inventory, lifecycle, pricing, security, idempotency). run-smoke.mjs --area <area> selects by tag; scripts/run-area.mjs bundles these with the matching vitest slice and DB invariant sweeps."
   },
   "specs": {
     "money_lifecycle_idempotency_required": {
       "chain": "smoke-money-lifecycle-idempotency-required.sql",
       "description": "Public money/lifecycle boundary: create_invoice_from_order, create_invoice_for_unbilled_delivery, post_invoice, cancel_order, generate_finance_charges, and batch_post_invoices all reject NULL or all-whitespace idempotency keys before mutation; actor-bearing wrappers reject forgery; batch posting derives a nonblank child key; and a valid finance-charge key creates one completed replay record and replays exactly. Terminal rollback.",
-      "covers": ["create_invoice_from_order", "create_invoice_for_unbilled_delivery", "post_invoice", "cancel_order", "generate_finance_charges", "batch_post_invoices"]
+      "covers": [
+        "create_invoice_from_order",
+        "create_invoice_for_unbilled_delivery",
+        "post_invoice",
+        "cancel_order",
+        "generate_finance_charges",
+        "batch_post_invoices"
+      ],
+      "area": [
+        "billing",
+        "lifecycle",
+        "idempotency"
+      ]
     },
     "govern_invoice_order_money_lifecycle": {
       "chain": "smoke-govern-invoice-order-money-lifecycle.sql",
       "description": "Invoice/order lifecycle closeout: binds invoice creation/posting/cancellation retries, preserves completed-delivery recovery, closes only the undelivered remainder of partially fulfilled orders, locks customer/product source lineage, blocks terminal-order invoice rewrites and direct invoice DML, filters reversed transaction history, and proves every rejected path leaves its money/inventory lineage unchanged. Self-contained fixtures and terminal rollback.",
-      "covers": ["create_invoice_from_order", "post_invoice", "create_invoice_for_unbilled_delivery", "cancel_order", "get_customer_transaction_review", "guard_order_delivered_activity_cancel", "guard_invoice_terminal_order", "guard_terminal_order_invoice_items"]
+      "covers": [
+        "create_invoice_from_order",
+        "post_invoice",
+        "create_invoice_for_unbilled_delivery",
+        "cancel_order",
+        "get_customer_transaction_review",
+        "guard_order_delivered_activity_cancel",
+        "guard_invoice_terminal_order",
+        "guard_terminal_order_invoice_items"
+      ],
+      "area": [
+        "billing",
+        "lifecycle"
+      ]
     },
     "delivery_signature_storage_access": {
       "chain": "smoke-delivery_signature_storage_access.sql",
-      "covers": ["delivery_signature_storage_access"],
-      "description": "Delivery-signature Storage access is private and scoped to the delivery path and authorized actor; the shared sales-rep helper is proven immune to a forged pg_temp profiles table."
+      "covers": [
+        "delivery_signature_storage_access"
+      ],
+      "description": "Delivery-signature Storage access is private and scoped to the delivery path and authorized actor; the shared sales-rep helper is proven immune to a forged pg_temp profiles table.",
+      "area": [
+        "security",
+        "inventory"
+      ]
     },
     "supplier_pricing_phase1b": {
       "chain": "smoke-supplier-pricing-phase1b.sql",
       "description": "Supplier Pricing Phase 1b full chain: every mutator passes no-auth, anon, wrong-role, forged-actor, positive-control, and idempotent-replay probes; a reviewed vendor alias feeds a reusable comparable supplier link, a one-row quick quote stages and approves into append-only evidence, all five read RPCs return the linked/imported evidence, pack conversion identifies the correct cheapest normalized cost, and a correction supersedes rather than rewrites the original observation. Payload mismatch, link/history immutability, observation immutability, and zero Product cost/sell-price changes are asserted. Self-contained synthetic evidence with terminal rollback.",
-      "covers": ["stage_vendor_alias", "review_vendor_alias", "upsert_product_supplier_link", "stage_supplier_price_import", "get_supplier_price_import", "approve_supplier_price_import", "get_supplier_pricing_workspace", "get_supplier_market_evidence", "get_supplier_quote_sheet", "get_product_price_history", "correct_supplier_price_observation"]
+      "covers": [
+        "stage_vendor_alias",
+        "review_vendor_alias",
+        "upsert_product_supplier_link",
+        "stage_supplier_price_import",
+        "get_supplier_price_import",
+        "approve_supplier_price_import",
+        "get_supplier_pricing_workspace",
+        "get_supplier_market_evidence",
+        "get_supplier_quote_sheet",
+        "get_product_price_history",
+        "correct_supplier_price_observation"
+      ],
+      "area": [
+        "pricing"
+      ]
     },
     "financial_scope_and_delivery_aggregate": {
       "chain": "smoke-financial-scope-and-delivery-aggregate.sql",
       "description": "Security and inventory aggregate chain: an active sales rep creates and replays a draft invoice and reads a statement for their assigned customer, but cannot edit or replay an unassigned customer's invoice, cannot hijack it by requesting reassignment to an assigned customer, and cannot read that customer's statement; inactive access is denied. A real delivery with two individually in-stock lines for one product but an aggregate shortage completes under WARN-NOT-BLOCK, returns and caches one warning, marks both append-only delivered ledger rows for review at insertion, emits one activity/notification set, and replays without duplicating warnings. Self-contained fixtures and terminal rollback.",
-      "covers": ["save_invoice", "get_customer_statement", "complete_delivery", "_mark_delivery_aggregate_short_stock"]
+      "covers": [
+        "save_invoice",
+        "get_customer_statement",
+        "complete_delivery",
+        "_mark_delivery_aggregate_short_stock"
+      ],
+      "area": [
+        "billing",
+        "security",
+        "inventory"
+      ]
     },
     "adversarial_money_inventory_closeout": {
       "chain": "smoke-adversarial-money-inventory-closeout.sql",
       "description": "Adversarial money/inventory closeout chain: invoice save and post replays remain bound to the authorized customer; invalid PO lines are rejected; one global bulk-import intent returns the original PO across authorized employees; an admin delete clears its durable claim and all cached save results so the unchanged document and deterministic key create a fresh PO; omitted edit costs remain penny-exact; duplicate or foreign PO line IDs are rejected; and all disposable fixtures roll back at the terminal pass signal.",
-      "covers": ["save_invoice", "post_invoice", "post_invoice_group", "save_purchase_order", "purchase_order_import_intents"]
+      "covers": [
+        "save_invoice",
+        "post_invoice",
+        "post_invoice_group",
+        "save_purchase_order",
+        "purchase_order_import_intents"
+      ],
+      "area": [
+        "billing",
+        "inventory"
+      ]
     },
     "enforce_delivery_accounting_period": {
       "chain": "smoke-delivery-accounting-period-guard.sql",
       "description": "Delivery closed-period, rewrite, and replay-authorization invariant: the real complete_delivery RPC rejects a closed business date during its side-effect-free outer preflight; an open-date completion succeeds; a different active but unauthorized user is denied before its committed result can replay; authenticated direct rewrites cannot move completed history or legacy scheduled-date-backed terminal history into or out of a closed period; the real admin void_delivery RPC rejects once the completion date is closed without leaking a reversal; reopening the disposable period permits the normal void path. Self-contained fixtures and terminal rollback.",
-      "covers": ["enforce_delivery_accounting_period", "complete_delivery", "void_delivery"]
+      "covers": [
+        "enforce_delivery_accounting_period",
+        "complete_delivery",
+        "void_delivery"
+      ],
+      "area": [
+        "billing",
+        "inventory"
+      ]
     },
     "create_blend_ticket": {
       "chain": "smoke-gauntlet-core-blend-guards.sql",
       "description": "Full-gauntlet remediation chain: serialized idempotency plus real helper/legacy races; commission rejection and valid post/replay/audit; inactive/nonfinite/over-receiving guards; atomic manual/OCR creation; optimistic-version ticket save success, exact replay, missing-version rejection, processing rejection, and stale-edit rejection before and after OCR; atomic OCR commit success, field/manual-product preservation, queue completion, invalid/stale/lifecycle rollback, deleted-ticket denial, and replay; exact blend-line mapping and missing-inventory upsert; linked/billed/applied lifecycle, header, product, field, reparent, and soft-delete locks; forged versus direct-invoice billing provenance; active-invoice link/create-order rejection with zero side effects; linked-order and stale-active-invoice direct-billing rejection with zero invoice/commission/idempotency/log effects; cancelled/voided reset; billed/invoice/application/valid unlink paths; RPC-only legal application snapshots; owner/uploader versus cross-sales Storage mutation boundaries; final RLS/Storage commands, grants, and bucket limits. prove-gauntlet-idempotency-concurrency.mjs additionally runs real two-session idempotency, link/product/reparent, approval/OCR, link/OCR, and lease/OCR races in a network-isolated disposable PostgreSQL container. Terminal rollback.",
-      "covers": ["check_idempotency", "receive_po_items", "post_commission_payment", "get_inventory_position", "update_blend_ticket_billing_status", "create_blend_ticket", "save_blend_ticket", "commit_blend_ticket_ocr_result", "link_blend_ticket_to_order", "unlink_blend_ticket_from_order", "create_order_from_blend_ticket"]
+      "covers": [
+        "check_idempotency",
+        "receive_po_items",
+        "post_commission_payment",
+        "get_inventory_position",
+        "update_blend_ticket_billing_status",
+        "create_blend_ticket",
+        "save_blend_ticket",
+        "commit_blend_ticket_ocr_result",
+        "link_blend_ticket_to_order",
+        "unlink_blend_ticket_from_order",
+        "create_order_from_blend_ticket"
+      ],
+      "area": [
+        "inventory",
+        "lifecycle"
+      ]
     },
     "remaining_money_inventory_hardening": {
       "chain": "smoke-remaining-money-inventory-hardening.sql",
       "description": "Final money/inventory audit chain: voided orders disappear from detail, summary, gross-sales, and finance-dashboard revenue; inactive sales/admin profiles are rejected; only an active admin can use the PO over-receive flag, NULL cannot bypass the quantity ceiling, and a real admin 11-against-10 receipt succeeds; anonymous gross-sales execution and authenticated direct payment-table writes are absent. Self-contained fixtures and terminal rollback.",
-      "covers": ["get_sales_detail_report", "get_sales_summary_report", "get_gross_sales_report", "financial_dashboard_summary", "receive_po_items", "payments"]
+      "covers": [
+        "get_sales_detail_report",
+        "get_sales_summary_report",
+        "get_gross_sales_report",
+        "financial_dashboard_summary",
+        "receive_po_items",
+        "payments"
+      ],
+      "area": [
+        "billing",
+        "inventory"
+      ]
     },
     "save_purchase_order": {
       "chain": "smoke-save-purchase-order-status-lock.sql",
-        "description": "Purchase-order lifecycle and cents correction: fractional-cent costs are rejected; an active sales rep cannot create a submitted PO through save_purchase_order, creates and idempotently replays a draft with a fractional quantity and penny-exact integer-cent header and line costs, edits it while preserving an omitted existing-line cost in both the line and header, cannot transition status through ordinary save, submits through the dedicated idempotent submit_purchase_order RPC, cannot downgrade the submitted PO through save, and cancels it through the dedicated idempotent cancel_purchase_order RPC. An active non-office user is denied. Self-contained fixture and terminal rollback.",
-      "covers": ["save_purchase_order", "submit_purchase_order", "cancel_purchase_order"]
+      "description": "Purchase-order lifecycle and cents correction: fractional-cent costs are rejected; an active sales rep cannot create a submitted PO through save_purchase_order, creates and idempotently replays a draft with a fractional quantity and penny-exact integer-cent header and line costs, edits it while preserving an omitted existing-line cost in both the line and header, cannot transition status through ordinary save, submits through the dedicated idempotent submit_purchase_order RPC, cannot downgrade the submitted PO through save, and cancels it through the dedicated idempotent cancel_purchase_order RPC. An active non-office user is denied. Self-contained fixture and terminal rollback.",
+      "covers": [
+        "save_purchase_order",
+        "submit_purchase_order",
+        "cancel_purchase_order"
+      ],
+      "area": [
+        "inventory"
+      ]
     },
     "gauntlet_money_workflows": {
       "chain": "smoke-gauntlet-money-workflows.sql",
       "description": "Money-workflow correction chain: get_ap_dashboard_summary excludes a voided vendor payment while counting an active one; preview_finance_charges and generate_finance_charges share the same overdue balance and penny-exact charge, reject future dates without side effects, and generate/replay one unposted charge invoice; create_prepay_check_splits rejects a mismatched independent check total without side effects, then creates and idempotently replays two exact prepay buckets. Self-contained fixtures and terminal rollback.",
-      "covers": ["get_ap_dashboard_summary", "preview_finance_charges", "generate_finance_charges", "create_prepay_check_splits"]
+      "covers": [
+        "get_ap_dashboard_summary",
+        "preview_finance_charges",
+        "generate_finance_charges",
+        "create_prepay_check_splits"
+      ],
+      "area": [
+        "billing"
+      ]
     },
     "apply_prepay_to_invoice": {
       "chain": "smoke-prepay-payment-inactive-actor-gate.sql",
       "description": "H1 role-gate regression: apply_prepay_to_invoice rejects a deactivated but still-authenticated actor. Self-contained fixtures and terminal rollback.",
-      "covers": ["apply_prepay_to_invoice"]
+      "covers": [
+        "apply_prepay_to_invoice"
+      ],
+      "area": [
+        "billing"
+      ]
     },
     "revert_quote_status": {
       "chain": "smoke-revert-quote-escape-hatch.sql",
       "description": "B2 escape-hatch regression: a quote stranded at 'accepted' after its whole-conversion order was cancelled must be rescuable. Converts a whole quote, cancels the order (quote stays 'accepted', draws still fully drawn), then asserts revert_quote_status reopens it to 'sent', releases the draw ledger, and a re-convert creates a NEW order. FAIL-FIRST against the pre-fix function (revert refused because an order existed). Self-contained fixtures and terminal rollback.",
-      "covers": ["revert_quote_status", "convert_quote_to_order", "cancel_order"]
+      "covers": [
+        "revert_quote_status",
+        "convert_quote_to_order",
+        "cancel_order"
+      ],
+      "area": [
+        "lifecycle"
+      ]
     },
     "generate_finance_charges": {
       "chain": "smoke-finance-charge-month-dedup.sql",
       "description": "H2 double-charge and preview-parity regression: preview and generation both reject a closed accounting period, generation charges an overdue balance at most once per customer per calendar month, and preview omits a customer generation will skip. Exact request replay returns the original result, while reusing its key with a changed customer selection fails closed. The chain then voids the first charge invoice and proves preview plus generation permit exactly one corrected active assessment in the same month. FAIL-FIRST against the exact-date generator, unbound idempotency, either stale preview predicate, or bucket-only dedup that counts voided charge invoices. Self-contained fixtures and terminal rollback.",
-      "covers": ["generate_finance_charges", "preview_finance_charges"]
+      "covers": [
+        "generate_finance_charges",
+        "preview_finance_charges"
+      ],
+      "area": [
+        "billing"
+      ]
     },
     "void_invoice": {
       "chain": "smoke-void-invoice-blocks-applied-payments.sql",
       "description": "H3 cash-strand regression: void_invoice refuses an invoice with a supported allocation, void_payment reverses it, and only then can the invoice void; a prepay-only invoice still voids and re-banks correctly. Self-contained fixtures and terminal rollback.",
-      "covers": ["void_invoice", "allocate_payment", "void_payment", "apply_prepay_to_invoice", "create_prepay_check_splits"]
+      "covers": [
+        "void_invoice",
+        "allocate_payment",
+        "void_payment",
+        "apply_prepay_to_invoice",
+        "create_prepay_check_splits"
+      ],
+      "area": [
+        "billing"
+      ]
     },
     "restore_cancelled_order": {
       "chain": "smoke-forbid-restore-cancelled-order.sql",
       "description": "H4 regression: restore_cancelled_order must refuse to reactivate a cancelled order (it cannot re-apply the released inventory / zeroed commissions / reversed draws, so a restored order would be corrupt). Converts a quote, cancels the order, then asserts restore raises ORDER_RESTORE_NOT_SUPPORTED and the order stays cancelled. FAIL-FIRST against the pre-fix function (restore succeeded, restoring a corrupt order). Self-contained fixtures and terminal rollback.",
-      "covers": ["restore_cancelled_order", "convert_quote_to_order", "cancel_order"]
+      "covers": [
+        "restore_cancelled_order",
+        "convert_quote_to_order",
+        "cancel_order"
+      ],
+      "area": [
+        "lifecycle"
+      ]
     },
     "create_invoice_for_unbilled_delivery": {
       "chain": "smoke-backfill-refuse-split-billing.sql",
       "description": "H5 regression: mono backfill and posting refuse split-billing conflicts under both serialized writer orderings; private exact provenance cannot be forged; generic edits and singular voids of governed members are refused; void_invoice_group retires the whole group atomically with exact replay binding; and delete/cancel lifecycle paths remain governed. The companion disposable proof runs real two-session OIFA-vs-create and cancel-vs-revert interleavings. Self-contained fixtures and terminal rollback.",
-      "covers": ["create_invoice_for_unbilled_delivery", "guard_mono_invoice_split_billing_post", "create_split_invoices_from_order", "save_invoice", "void_invoice", "void_invoice_group", "delete_invoices", "convert_quote_to_order"]
+      "covers": [
+        "create_invoice_for_unbilled_delivery",
+        "guard_mono_invoice_split_billing_post",
+        "create_split_invoices_from_order",
+        "save_invoice",
+        "void_invoice",
+        "void_invoice_group",
+        "delete_invoices",
+        "convert_quote_to_order"
+      ],
+      "area": [
+        "billing"
+      ]
     },
     "record_invoice_payment": {
       "chain": "smoke-retire-legacy-record-invoice-payment.sql",
       "description": "Legacy-payment retirement regression: record_invoice_payment must reject new writes with LEGACY_PAYMENT_PATH_DISABLED and leave both the obsolete payments ledger and invoice paid amount unchanged. New cash uses allocate_payment so it has a supported void path. Self-contained fixtures and terminal rollback.",
-      "covers": ["record_invoice_payment"]
+      "covers": [
+        "record_invoice_payment"
+      ],
+      "area": [
+        "billing"
+      ]
     },
     "stage_offline_action": {
       "chain": "smoke-offline-action-receipts.sql",
       "description": "Permanent offline receipt chain: complete_delivery and complete_job stage -> immutable canonical replay -> canonical process -> durable sanitized status -> replay without duplicate inventory/application work; actor-bound processing; owner and office status visibility; missing-target and unauthorized-action retention; deterministic state-conflict review; sanitized office queue; audited, idempotent manual resolution; RPC-only writes; grants. Self-contained fixtures and terminal rollback.",
-      "covers": ["stage_offline_action", "process_offline_action", "get_offline_action_status", "get_offline_action_review_queue", "resolve_offline_action", "complete_delivery", "complete_job"]
+      "covers": [
+        "stage_offline_action",
+        "process_offline_action",
+        "get_offline_action_status",
+        "get_offline_action_review_queue",
+        "resolve_offline_action",
+        "complete_delivery",
+        "complete_job"
+      ],
+      "area": [
+        "lifecycle"
+      ]
     },
     "set_field_boundary": {
       "chain": "smoke-set_field_boundary.sql",
       "description": "Field-acre-billing acreage RPCs (migrations 20260623120000/130000): a ~40-ac polygon measures sane geodesic acres (acres_source='measured'); the 0.1-5000 band rejects oversize (AREA_OUT_OF_BAND); a typed override SURVIVES a redraw (set_field_boundary never touches override_acres); idempotent replay returns the same result; the fields_acre_authority trigger blocks a direct measured_acres write.",
-      "covers": ["set_field_boundary", "set_field_override_acres"]
+      "covers": [
+        "set_field_boundary",
+        "set_field_override_acres"
+      ],
+      "area": [
+        "lifecycle"
+      ]
     },
     "save_job": {
       "chain": "smoke-save-job-parity.sql",
       "description": "Field-app parity #1 (migration 20260624120000): the extended save_job round-trips scheduling dates (call/proposed/schedule/expires + time_proposed), consultant, three memo fields, per-field agronomy (planted_acres/crop/strip/pests), per-field customer shares, and chemical extras (diluent_rate/rei_hours/phi_days/warehouse/vendor); remaining_acres GENERATED = total - applied; field shares not totalling 100 raise SHARE_NOT_100; idempotent replay returns the same job_id with no second job; a forged p_performed_by raises ACTOR_MISMATCH.",
-      "covers": ["save_job"]
+      "covers": [
+        "save_job"
+      ],
+      "area": [
+        "lifecycle"
+      ]
     },
     "save_quote": {
       "chain": "smoke-save-quote-drawn-guard.sql",
       "description": "Drawn-product edit guard (A4): reducing a booking below its drawn quantity and removing a drawn product both raise BOOKING_OVERDRAWN; a legal reduce keeps booked/drawn/status consistent and the booking still closes at the new total; a no-draws control quote edits freely.",
-      "covers": ["save_quote", "draw_down_quote"]
+      "covers": [
+        "save_quote",
+        "draw_down_quote"
+      ],
+      "area": [
+        "lifecycle"
+      ]
     },
     "quote_commission_split_validation": {
       "chain": "smoke-quote-commission-split-validation.sql",
       "description": "Quote commission money-routing guard: blank or duplicate recipients and missing/JSON-null percentages fail closed on direct INSERT/UPDATE, while an explicit empty no-commission split and a complete named 100% split remain valid. Self-contained fixture and terminal rollback.",
-      "covers": ["guard_quote_commission_split_valid", "validate_commission_split_json", "quotes"]
+      "covers": [
+        "guard_quote_commission_split_valid",
+        "validate_commission_split_json",
+        "quotes"
+      ],
+      "area": [
+        "billing",
+        "lifecycle"
+      ]
     },
     "rollover_quote_to_season": {
       "chain": "smoke-rollover-remainder.sql",
       "description": "Remainder-only season rollover (A5): 500-booked/200-drawn rolls over exactly 300 with FIFO consumption across split items and acre proration; fully-drawn raises BOOKING_FULLY_DRAWN; no-draws rollover preserves live copy behavior (total_units_needed stays NULL).",
-      "covers": ["rollover_quote_to_season"]
+      "covers": [
+        "rollover_quote_to_season"
+      ],
+      "area": [
+        "lifecycle"
+      ]
     },
     "auto_expire_quotes": {
       "chain": "smoke-auto-expire-draw-skip.sql",
       "description": "Expiry sweep skips partially-drawn bookings past expires_at, still expires an undrawn control quote, completes despite the best-effort activity_feed summary, and re-asserts the 20260609203541 grant hardening (no authenticated/anon EXECUTE).",
-      "covers": ["auto_expire_quotes"]
+      "covers": [
+        "auto_expire_quotes"
+      ],
+      "area": [
+        "lifecycle"
+      ]
     },
     "void_order": {
       "chain": "smoke-draw-ledger-reversal.sql",
       "description": "Draw-ledger reversal on void/cancel: voiding a partial draw order restores the booking balance (re-draw works); cancelling a draw order restores the ledger but preserves the open booking's active hold (F7 skip); voiding the FINAL draw reopens an accepted booking ('booking_reopened' activity) and re-draw re-accepts; whole-conversion void leaves the booking closed; double-void/re-cancel guards hold.",
-      "covers": ["draw_down_quote", "void_order", "cancel_order", "convert_quote_to_order"]
+      "covers": [
+        "draw_down_quote",
+        "void_order",
+        "cancel_order",
+        "convert_quote_to_order"
+      ],
+      "area": [
+        "lifecycle"
+      ]
     },
     "issue_return_credit": {
       "chain": "smoke-return-credit-chain.sql",
       "description": "THE canonical return->credit chain: a real authenticated admin is denied direct returns INSERT, create_return derives immutable lines from delivered order items, and direct return_items mutation is denied -> parent source retarget is blocked -> approve -> receive/restock -> void/cancel refuse the received return even with non-restock line flags -> issue a posted credit memo -> stable replay -> statement single-count -> unapply -> re-issue; only the exact verified production source-free RMA remains finishable while every other source-free row is rejected even if backdated.",
-      "covers": ["create_return", "approve_return", "receive_return", "issue_return_credit", "void_order", "cancel_order", "get_customer_statement", "unapply_credit_memo"]
+      "covers": [
+        "create_return",
+        "approve_return",
+        "receive_return",
+        "issue_return_credit",
+        "void_order",
+        "cancel_order",
+        "get_customer_statement",
+        "unapply_credit_memo"
+      ],
+      "area": [
+        "billing",
+        "inventory"
+      ]
     },
     "cancel_return": {
       "chain": "smoke-cancel-return-chain.sql",
       "description": "Return cancellation lifecycle chain: create_return -> approve_return -> receive_return, then active soft-delete and hard-delete are rejected, NULL/forged cancel actors are rejected without mutation, cancel_return reverses received inventory, stamps cancellation/activity/reversal attribution, clears restocked flags, and idempotent replay creates no duplicate reversal.",
-      "covers": ["cancel_return", "create_return", "approve_return", "receive_return"]
+      "covers": [
+        "cancel_return",
+        "create_return",
+        "approve_return",
+        "receive_return"
+      ],
+      "area": [
+        "billing",
+        "inventory"
+      ]
     },
     "batch_apply_prepayments": {
       "chain": "smoke-batch-prepay-admin-gate.sql",
       "description": "Batch-prepay boundary: active non-admin denied, forged actor denied, active admin positive control succeeds, replay is stable, blank idempotency keys are rejected by both shared helpers, and the shared transaction advisory lock is present.",
-      "covers": ["batch_apply_prepayments", "check_idempotency", "save_idempotency"]
+      "covers": [
+        "batch_apply_prepayments",
+        "check_idempotency",
+        "save_idempotency"
+      ],
+      "area": [
+        "billing"
+      ]
     },
     "complete_cycle_count": {
       "chain": "smoke-cycle-count-concurrency-guards.sql",
       "description": "Cycle-count complete/reverse chain: quantity changes 100->112->100, both replays are stable, lifecycle states advance correctly, and both wrappers retain inventory row locks.",
-      "covers": ["complete_cycle_count", "reverse_completed_cycle_count"]
+      "covers": [
+        "complete_cycle_count",
+        "reverse_completed_cycle_count"
+      ],
+      "area": [
+        "inventory"
+      ]
     },
     "update_order_items": {
       "chain": "smoke-order-draw-lock.sql",
       "description": "Draw-order item lock (Codex r2 HIGH): editing items on a booking_draw order raises BOOKING_DRAW_ORDER_LOCKED (qty change AND add-item) with order+ledger intact, the remaining balance still draws to closure, and a whole-conversion control order (booking_draw=false) edits freely.",
-      "covers": ["update_order_items", "draw_down_quote", "convert_quote_to_order"]
+      "covers": [
+        "update_order_items",
+        "draw_down_quote",
+        "convert_quote_to_order"
+      ],
+      "area": [
+        "inventory",
+        "lifecycle"
+      ]
     },
     "restore_quote_version": {
       "chain": "smoke-restore-version-drawn-guard.sql",
       "description": "Drawn-version restore guard (Codex r2 MED): restoring a snapshot below the drawn ledger raises BOOKING_OVERDRAWN (fall-below AND removes branches; the restore's section DELETE rolls back atomically), a legal restore (>= drawn) succeeds to 'revised' with the ledger intact and then draws to closure, and a no-draws control quote restores freely.",
-      "covers": ["restore_quote_version", "create_quote_version", "draw_down_quote"]
+      "covers": [
+        "restore_quote_version",
+        "create_quote_version",
+        "draw_down_quote"
+      ],
+      "area": [
+        "lifecycle"
+      ]
     },
     "get_customer_statement": {
       "chain": "smoke-customer_statement_blind_spots.sql",
       "description": "Statement blind-spot fix (CHIP task_25d25699, migrations 20260611131549 + 20260716160000): legacy, NULL-order, and allocation-set payments each appear exactly once; paid/overdue invoices keep their charge lines; soft-deleted payments excluded; credit memo single-count; unapplied overpayment prepay NOT pre-counted (DEDUP RULE); the exact same allocate_payment key is replayed after the committed result and must return the cached result without a second allocation set or statement change (regression proof for the atomic idempotency-claim guard); running balance never negative; unknown-actor auth probe rejected by the in-body gate.",
-      "covers": ["get_customer_statement", "allocate_payment", "_guard_idempotency_key_insert"]
+      "covers": [
+        "get_customer_statement",
+        "allocate_payment",
+        "_guard_idempotency_key_insert"
+      ],
+      "area": [
+        "billing"
+      ]
     },
     "statement_opening_balance": {
       "chain": "smoke-statement-opening-balance.sql",
       "description": "Bounded customer statement regression: pre-period AR is carried as an opening-balance row, same-day invoices have stable UUID ordering with a ROWS running frame, the ending balance equals full as-of AR, and reversed date ranges fail closed.",
-      "covers": ["get_customer_statement", "_get_customer_statement_scoped_impl"]
+      "covers": [
+        "get_customer_statement",
+        "_get_customer_statement_scoped_impl"
+      ],
+      "area": [
+        "billing"
+      ]
     },
     "create_planned_holds": {
       "chain": "smoke-planned-holds-drawn-sync.sql",
       "description": "Authoritative planned-hold sync (Codex r2 #3, migration 20260611132115): active holds always equal booked − drawn per product after create_planned_holds, save_quote (Draft/Revise/Present), and restore_quote_version, with FIFO consumption so per-item expiry (needed_by+14d) follows the still-reserved tail; rebuild-after-draw no longer re-reserves drawn quantity; is_planned switched off + save releases all holds server-side.",
-      "covers": ["create_planned_holds", "release_planned_holds", "_sync_planned_holds", "save_quote", "restore_quote_version", "draw_down_quote"]
+      "covers": [
+        "create_planned_holds",
+        "release_planned_holds",
+        "_sync_planned_holds",
+        "save_quote",
+        "restore_quote_version",
+        "draw_down_quote"
+      ],
+      "area": [
+        "inventory"
+      ]
     },
     "draw_down_quote": {
       "chain": "smoke-auth-probe-template.sql",
       "description": "Standard 4-probe auth set, worked example against draw_down_quote: no-auth -> AUTH_REQUIRED; anon-key -> AUTH_REQUIRED with zero rows written; wrong-role (driver/applicator) -> INSUFFICIENT_ROLE; forged p_performed_by -> ACTOR_MISMATCH; plus a positive admin control draw proving the probes failed for the right reason. File header documents the placeholders for adapting it to any new RPC.",
-      "covers": ["draw_down_quote"]
+      "covers": [
+        "draw_down_quote"
+      ],
+      "area": [
+        "inventory",
+        "lifecycle"
+      ]
     },
     "create_direct_order": {
       "chain": "smoke-create-direct-order-po.sql",
       "description": "Customer-PO param (migration 20260614130000): a REAL active sales_rep creates a direct order WITH p_customer_po_number and the PO persists on orders (the bug: the old frontend post-create orders.update() hit the admin-only orders_update RLS and failed for sales_rep). Asserts order/order_items/inventory-prebook created, status confirmed; whitespace PO normalizes to NULL; idempotency replay returns the same order with no duplicate; plus the auth probes (no-auth -> Authentication required, driver -> INSUFFICIENT_ROLE, forged actor -> Actor mismatch).",
-      "covers": ["create_direct_order"]
+      "covers": [
+        "create_direct_order"
+      ],
+      "area": [
+        "lifecycle"
+      ]
     },
     "load_recipe_into_job": {
       "chain": "smoke-recipe-pricing-bundle.sql",
       "description": "Recipe per-unit pricing BUNDLE (Phase 4, REQUIRES 20260618230000 + 20260619150000): save_blend_recipe persists price_per_unit_cents on create AND keeps it on edit (no wipe — Codex Phase-4 P2); load_recipe_into_job seeds job_chemicals.price_per_unit_cents from it; a negative price is rejected. Pre-apply the chain FAILS (live save_blend_recipe drops the column).",
-      "covers": ["load_recipe_into_job", "save_blend_recipe"]
+      "covers": [
+        "load_recipe_into_job",
+        "save_blend_recipe"
+      ],
+      "area": [
+        "inventory",
+        "lifecycle"
+      ]
     },
     "save_field_app_invoice": {
       "chain": "smoke-field-app-split-penny-exact.sql",
       "description": "Field-app parity and save/post serialization: a multi-customer field auto-splits into ONE invoice PER billing customer sharing an invoice_group_id; the split is PENNY-EXACT on an INDIVISIBLE total (price 1501c, rate 0.01, 1/3-2/3 split -> A=500c + B=1001c = 1501c odd); invoice_shares and acres tie exactly; an idempotent retry creates no duplicate; save/group-post serialize on the immutable group ID before ordered row locking; and a save after real group posting is rejected before invoice lines can change.",
-      "covers": ["save_field_app_invoice", "preview_field_app_invoice_split", "post_invoice_group"]
+      "covers": [
+        "save_field_app_invoice",
+        "preview_field_app_invoice_split",
+        "post_invoice_group"
+      ],
+      "area": [
+        "billing"
+      ]
     },
     "save_invoice": {
       "chain": "smoke-save-invoice-field-app.sql",
       "description": "save_invoice field-application aware (#3 edit-path, REQUIRES 20260619160000): editing a field_application invoice PRESERVES the is_application_fee machine-fee line + re-balances the per-grower invoice_shares to the new total; a chemical_sale invoice's shares are NOT touched (field-only guard). Pre-apply the chain FAILS (live save_invoice drops the fee flag + never touches shares).",
-      "covers": ["save_invoice"]
+      "covers": [
+        "save_invoice"
+      ],
+      "area": [
+        "billing"
+      ]
     },
     "fuel_surcharge": {
       "chain": "smoke-fuel-surcharge.sql",
       "description": "Field-app parity #32 (REQUIRES 20260625140000): fuel surcharge is OFF by default and inert. Proves: with app_settings.fuel_surcharge at the shipped default (enabled=false, rate blank) a saved field-app invoice has NO 'Fuel Surcharge' line and the total is the pure pre-surcharge sum (DEFAULT-OFF INERT); after an admin sets enabled=true + a TEST per-acre rate, a re-save adds EXACTLY ONE is_application_fee 'Fuel Surcharge' line of ROUND(rate*100*acres) cents and the total rises by EXACTLY that amount (no drift); the surcharge flows into invoice_shares.amount_cents (share split / print); and enabled+BLANK rate produces NO line (off-if-formula-blank). The config writes are inside the rolled-back txn so the persisted OFF default is never changed. NEVER invents a rate.",
-      "covers": ["save_field_app_invoice", "compute_fuel_surcharge_cents", "preview_field_app_invoice_split"]
+      "covers": [
+        "save_field_app_invoice",
+        "compute_fuel_surcharge_cents",
+        "preview_field_app_invoice_split"
+      ],
+      "area": [
+        "billing"
+      ]
     },
     "transfer_job_to_invoice": {
       "chain": "smoke-transfer_job_invoice_machine_fee.sql",
       "description": "Job->field-invoice billing (REQUIRES 20260619140000): forged actor -> ACTOR_MISMATCH (G3); a job with application_service_id gets ONE is_application_fee line (price_source 'tier') + the service FK on the invoice; a FLAT/unrated chemical line still bills; per-customer fee rate in split jobs (a grower's customer_application_rates override is honored — Codex P1); totals + shares reconcile in single / same-rate-split / different-rate-split cases. Pre-apply the chain FAILS (live body has no fee line). NOTE: the prior full start_job->complete->post->void loop chain file is absent; this chain certifies transfer_job_to_invoice's fee+actor behavior.",
-      "covers": ["transfer_job_to_invoice"]
+      "covers": [
+        "transfer_job_to_invoice"
+      ],
+      "area": [
+        "billing",
+        "lifecycle"
+      ]
     },
     "transfer_invoice_to_job": {
       "chain": "smoke-transfer-invoice-to-job.sql",
       "description": "#27 reverse leg (REQUIRES 20260625120000): full job<->invoice round-trip. transfer_job_to_invoice creates the unposted invoice (job invoiced + invoice_id set + per-customer shares + application_records linked), then transfer_invoice_to_job reverses it (invoice -> cancelled, items+shares deleted, application_records.invoice_id cleared, job invoiced -> completed, jobs.invoice_id NULL, one invoice_cancelled audit row). Proves: forged actor -> ACTOR_MISMATCH (no mutation); idempotent replay (same key -> saved result, no 2nd audit row); the returned job re-transfers to a NEW invoice; a POSTED invoice is refused ('Only a draft or unposted invoice...'); an engine-built field invoice with no job_id is refused.",
-      "covers": ["transfer_invoice_to_job"]
+      "covers": [
+        "transfer_invoice_to_job"
+      ],
+      "area": [
+        "billing",
+        "lifecycle"
+      ]
     },
     "unpost_invoice": {
       "chain": "smoke-unpost-invoice.sql",
       "description": "#28 unpost leg (REQUIRES 20260625130000): post->unpost round-trip on a field_application invoice. post_invoice posts a draft (posted_by/at stamped, invoice_posted audit row); unpost_invoice reverses it (posted|overdue -> unposted, posted_by/at cleared, money fields untouched, one append-only invoice_unposted audit row, post row preserved). Proves: forged actor -> ACTOR_MISMATCH (no mutation); idempotent replay (same key -> saved result, no 2nd audit row); re-post after unpost works; MONEY GUARD refuses a posted invoice with an allocated payment + paid_amount_cents (status unchanged, allocation intact, no audit row); STATUS GUARD refuses a never-posted draft ('nothing to unpost'); PERIOD GUARD refuses a posted invoice in a CLOSED accounting period (status unchanged); an 'overdue' invoice unposts (superset of posted).",
-      "covers": ["unpost_invoice"]
+      "covers": [
+        "unpost_invoice"
+      ],
+      "area": [
+        "billing"
+      ]
     },
     "dispatch_job_locations": {
       "chain": "smoke-dispatch-job-locations.sql",
       "description": "Field-app parity #36 (REQUIRES 20260626120000): per-location dispatch wizard commit. Proves through the REAL dispatch_job_locations RPC + the new job_location_dispatches table: MULTI-APPLICATOR SPLIT (location A->applicator 1 and location B->applicator 2 in one call -> {dispatched:2}, two rows with DIFFERENT applicators); IDEMPOTENCY (same key -> same result, no new rows); RE-DISPATCH UPSERT (re-dispatching a location to a crew REPLACES its row in place, never duplicates); XOR GUARD (both-assignee and neither-assignee both raise ONE_ASSIGNEE_REQUIRED); ROLE GATE (an applicator caller -> INSUFFICIENT_ROLE); ACTOR GATE (forged p_performed_by -> ACTOR_MISMATCH); LIFECYCLE GATE (a location on a cancelled job -> JOB_NOT_DISPATCHABLE); RLS READ (the dispatched applicator can SELECT their own row though not the whole-job applicator); RLS WRITE — RPC-ONLY (neither an applicator NOR an admin can directly INSERT; the SECURITY DEFINER RPC is the sole write path); LICENSE GATE (an applicator with an all-expired active license -> LICENSE_EXPIRED, admin p_license_override succeeds); CREW-MEMBER RLS READ (a member of the dispatched crew can read the crew dispatch row AND the parent job AND its job_fields); PER-LOCATION-APPLICATOR JOB READ (a per-location-only assignee can read the parent job via jobs_select_location_dispatchee — the recursion-safe _is_dispatched_to_me helper breaks the jobs<->dispatches policy cycle); CANCELLED-DISPATCH VISIBILITY REVOKE (a cancelled dispatch no longer surfaces the row/job/fields to the former assignee); LICENSE-OVERRIDE AUDIT (an actual override writes a job_location_dispatched activity_feed row + returns license_overrides count); FK CASCADE (deleting an assignee cascades the dispatch row, never failing the XOR check); CUSTOMER RLS READ (a per-location assignee can read the job's embedded customer); SOFT-DELETED JOB rejected (the RLS-bypassing RPC requires deleted_at IS NULL → JOB_NOT_FOUND); ACTIVITY LOG (every normal dispatch — not just overrides — writes a job_location_dispatched activity_feed row, restoring the audit trail); DEACTIVATED ASSIGNEE LOSES VISIBILITY (the is_active re-check in _is_dispatched_to_me + the SELECT policy revokes a deactivated user's dispatch/job read even with a live token). Self-contained fixtures.",
-      "covers": ["dispatch_job_locations", "_is_dispatched_to_me"]
+      "covers": [
+        "dispatch_job_locations",
+        "_is_dispatched_to_me"
+      ],
+      "area": [
+        "lifecycle"
+      ]
     },
     "undispatch_job_locations": {
       "chain": "smoke-undispatch-job-locations.sql",
       "description": "Field-app parity #37 (REQUIRES 20260626120000 + 20260626140000): Dispatched List + reassign/undispatch. Proves through the REAL undispatch_job_locations + get_dispatched_list RPCs (+ dispatch_job_locations for reassign): SETUP/LIST (dispatch loc A->app1, loc B->app2; get_dispatched_list returns both rows fully shaped — assignee name resolved server-side, job#, field name, status, location + job acres); ASSIGNEE FILTER (get_dispatched_list(app1) returns only loc A); REASSIGN (dispatch_job_locations re-dispatches loc A->app2 as an upsert; the list shows loc A under app2, no duplicate, no longer under app1); UNDISPATCH (undispatch_job_locations([loc B]) -> {undispatched:1}, the row's dispatch_status='cancelled', the list drops loc B, an activity_feed audit row is written); UNDISPATCH REVOKES VISIBILITY (the former assignee can no longer SELECT the cancelled dispatch row); ROLE GATE (an applicator caller -> INSUFFICIENT_ROLE); ACTOR GATE (forged p_performed_by -> ACTOR_MISMATCH); IDEMPOTENCY (replaying the same undispatch key -> same result, cancels nothing new); NO-OP UNDISPATCH (undispatching a never-dispatched location -> {undispatched:0}, not an error); ANON DENIED (anon has no EXECUTE on either new fn). Self-contained fixtures.",
-      "covers": ["undispatch_job_locations", "get_dispatched_list"]
+      "covers": [
+        "undispatch_job_locations",
+        "get_dispatched_list"
+      ],
+      "area": [
+        "lifecycle"
+      ]
     },
     "unpost_invoice_group": {
       "chain": "smoke-unpost-invoice-group.sql",
       "description": "Field-app remediation Wave 2a FIX 4 (REQUIRES 20260629170000): ALL-OR-NOTHING split-group unpost. Proves through the REAL unpost_invoice_group: HAPPY (a posted 2-member split group unposts in ONE call — both members posted->unposted, posted_by/at cleared, one invoice_unposted audit row per member, one invoice_group_unposted activity row); ALL-OR-NOTHING (a posted group where one member is PAID/money-applied -> the whole call RAISES the money-guard error and NOTHING changes — both still posted, 0 unpost audit rows; no half-unpost reachable); ROLE GATE (an applicator caller -> 'admin or sales role required'); ACTOR GATE (forged p_performed_by -> ACTOR_MISMATCH, no mutation); GRANTS (anon has NO EXECUTE, authenticated does). Self-contained fixtures.",
-      "covers": ["unpost_invoice_group"]
+      "covers": [
+        "unpost_invoice_group"
+      ],
+      "area": [
+        "billing"
+      ]
     },
     "get_jobs_billed_customers": {
       "chain": "smoke-get-jobs-billed-customers.sql",
       "description": "Field-app remediation Wave 2a FIX 2 (REQUIRES 20260629160000): batched, RLS-safe billed-customer resolver for the jobs list. Proves through the REAL get_jobs_billed_customers vs get_job_billed_customers: PARITY (as an applicator on a split job, the batch resolver returns the SAME customer_id set as the per-job resolver — exactly {primary A, co-billed B}); CO-BILLED VISIBLE (the co-billed split owner B IS returned to the applicator, the bug being that the job_field_shares.customer RLS embed dropped B; exactly one is_primary row); GRANTS (anon has NO EXECUTE, authenticated does). Self-contained fixtures.",
-      "covers": ["get_jobs_billed_customers"]
+      "covers": [
+        "get_jobs_billed_customers"
+      ],
+      "area": [
+        "billing"
+      ]
     },
     "job_applied_record_fields_rls": {
       "chain": "smoke-jarf-field-membership-rls.sql",
       "description": "Field-app remediation Wave 2a FIX 1 (REQUIRES 20260629150000): field-membership RLS on job_applied_record_fields INSERT/UPDATE. Proves with a sales_rep under RLS (role authenticated): REJECT (inserting a row whose field_id is NOT one of the parent record's job fields fails the WITH CHECK — row-level security violation); ACCEPT (an in-job field_id inserts cleanly, exactly one row, no foreign row); UPDATE REJECT (moving the legit row's field_id onto a foreign field fails the WITH CHECK; the row stays on the in-job field). Self-contained fixtures. (Policy-only migration; no callable RPC — the covers token below is the TABLE name so `--spec job_applied_record_fields` resolves this chain.)",
-      "covers": ["job_applied_record_fields"]
+      "covers": [
+        "job_applied_record_fields"
+      ],
+      "area": [
+        "security"
+      ]
     },
     "enforce_billed_job_immutability": {
       "chain": "smoke-billed-job-immutability.sql",
       "description": "Field-app parity #12 + P1 remediation (REQUIRES 20260625190000 & 20260629120000): regression guard for the _enforce_billed_job_immutability BEFORE-UPDATE trigger on jobs. Proves with a sales_rep under RLS (role authenticated) on an INVOICED job: BLOCKED — soft-delete (deleted_at NULL->non-NULL) RAISES 'cannot be deleted by a non-admin'; rewrite total_price_cents RAISES 'cannot edit its billed-relevant fields'; rewrite invoice_id->NULL (detach) and invoice_id->other (repoint) BOTH RAISE the same (the P1 remediation closing the invoice_id hole); and a sanity check that no blocked path leaked a mutation. EXEMPT — printed_at/last_printed_by (print audit), applied_acres (as-applied recompute), updated_at/updated_by (bookkeeping) all SUCCEED for the non-admin. HATCH — an ADMIN (jwt sub=admin, is_admin()=true) CAN correct total_price_cents; the app.admin_override='true' definer-flow hatch lets an otherwise-blocked non-admin write through. LEGIT WRITERS — transfer_job_to_invoice (writes jobs.invoice_id while status='completed', guard early-returns) and transfer_invoice_to_job (clears invoice_id under the override hatch) both still succeed. Self-contained fixtures; ends in SMOKE_PASS_ROLLBACK. (Trigger-only migration; the covers token is the trigger/function name so `--spec enforce_billed_job_immutability` resolves this chain.)",
-      "covers": ["enforce_billed_job_immutability", "_enforce_billed_job_immutability"]
+      "covers": [
+        "enforce_billed_job_immutability",
+        "_enforce_billed_job_immutability"
+      ],
+      "area": [
+        "billing",
+        "lifecycle"
+      ]
+    },
+    "save_field_app_split_invoice": {
+      "chain": "smoke-per-line-split-billing.sql",
+      "description": "Per-line split-billing engine full chain: flag gate raises when disabled; a manual-rate service line plus an odd-cents manual chemical line across a 50/50 two-owner field produce penny-exact largest-remainder children (5751/5750 of 11501c) whose stored invoice_line_shares/invoice_items/invoice_shares all tie; identical replay with the same idempotency key returns the same invoice ids; compute_line_split_allocation splits 100c three ways as {34,33,33}; and the duplicate-product, off-job-field, job-immutability, and non-admin resolver-auth guards each raise for real. G5 FAIL-FIRST probe (runs first, cold plan): a save with no service line must succeed — RED until the parked unassigned-v_app_service fix migration applies. Self-contained [E2E] fixtures and terminal rollback.",
+      "covers": [
+        "save_field_app_split_invoice",
+        "_save_field_app_split_invoice_impl",
+        "resolve_line_split_vector",
+        "compute_line_split_allocation"
+      ],
+      "area": [
+        "billing"
+      ]
     }
   }
 }

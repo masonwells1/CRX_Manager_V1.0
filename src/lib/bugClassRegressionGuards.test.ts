@@ -148,8 +148,23 @@ const SQL_ANYWHERE_GUARDS: { pattern: RegExp; bug: string }[] = [
   { pattern: /ACTOR_MISMATCH/, bug: 'go-live hardening — actor forgery canonical refusal' },
 ];
 
-/** Frontend source patterns that fixed UI-layer money bugs. */
+/** Frontend/edge source patterns that fixed UI- and edge-layer money bugs. */
 const FRONTEND_GUARDS: { file: string; pattern: RegExp; bug: string }[] = [
+  // PR #188 split-invoice email authority (2026-07-20). These two anchors pin the
+  // fix's load-bearing structures; the detailed ordering/lookup contracts live in
+  // sendEmailEdgeGateContracts.test.ts — this manifest entry exists so the class
+  // is tracked alongside every other 07-10..20 bug and survives file refactors
+  // that would orphan the standalone contract test's assumptions.
+  {
+    file: 'supabase/functions/send-email/index.ts',
+    pattern: /finalGateLookup/,
+    bug: 'PR #188 — invoice mail must recheck lifecycle/authority immediately before the provider call (stale pre-gate let a voided/reassigned invoice email out)',
+  },
+  {
+    file: 'supabase/functions/send-email/index.ts',
+    pattern: /send_disposition/,
+    bug: 'PR #188 — split co-owner email authority: non-normal send_disposition suppresses invoice mail (zero-share co-owners get proof notices only)',
+  },
   {
     file: 'src/pages/FieldAppSplitInvoiceEditor.tsx',
     pattern: /resetPostIdemKey\(\);\s*\},\s*\[invoiceGroupId/,
@@ -180,6 +195,10 @@ const REQUIRED_SMOKES = [
   'smoke-backfill-refuse-split-billing.sql',
   'smoke-statement-opening-balance.sql',
   'smoke-field-app-split-penny-exact.sql',
+  // 2026-07-21: behavioral chain for the NEW per-line split engine (flag gate,
+  // penny-exact LR, idempotent replay, guard raises) + the G5 fail-first probe
+  // for the unassigned-v_app_service cold-session crash.
+  'smoke-per-line-split-billing.sql',
 ];
 
 /**

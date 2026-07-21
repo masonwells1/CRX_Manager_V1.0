@@ -28,7 +28,7 @@ Corollaries:
 | File | Role |
 |------|------|
 | `smoke-specs.json` | Registry: primary RPC → `{ chain, description, covers }`. `covers` lists every RPC the chain exercises, so one chain certifies several RPCs. |
-| `run-smoke.mjs` | Zero-dep runner. `--list`, `--spec <rpc>`, `--all`. |
+| `run-smoke.mjs` | Zero-dep runner. `--list`, `--spec <rpc>`, `--area <area>` (business-area tags; see `scripts/test-areas.json` and `scripts/run-area.mjs`), `--all`. |
 | `smoke-*.sql` | The chains. Each is ONE `DO` block that always ends in `RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK'` — nothing ever commits. |
 
 ## Running

@@ -196,7 +196,25 @@ if (args.includes('--explain')) {
   process.exit(0);
 }
 
-// Default: run all predicates.
+// Optional --only <name1,name2>: run a subset of predicates (used by
+// scripts/run-area.mjs for business-area slices). Unknown names fail loudly.
+let selectedPredicates = predicates;
+if (args.includes('--only')) {
+  const raw = args[args.indexOf('--only') + 1];
+  if (!raw) {
+    console.error('--only requires a comma-separated predicate list (see --list).');
+    process.exit(2);
+  }
+  const wanted = raw.split(',').map((s) => s.trim()).filter(Boolean);
+  const unknown = wanted.filter((w) => !predicates.some((p) => p.name === w));
+  if (unknown.length) {
+    console.error(`--only names unknown predicate(s): ${unknown.join(', ')}. Try --list.`);
+    process.exit(2);
+  }
+  selectedPredicates = predicates.filter((p) => wanted.includes(p.name));
+}
+
+// Default: run all (or --only-selected) predicates.
 const jsonMode = args.includes('--json');
 const strict = args.includes('--strict') || process.env.DB_SWEEPS_REQUIRE_LIVE === '1';
 const psql = hasPsql();
@@ -242,12 +260,12 @@ if (!psql) {
       ' pg_get_functiondef and either (a) seed a justified allowlist entry citing',
       ' the live definition, or (b) report/fix it. NEVER allowlist a real hole.',
       '',
-      ` Predicates: ${predicates.length}   |   allowlist entries: ${allowlist.entries.length}`,
+      ` Predicates: ${selectedPredicates.length}   |   allowlist entries: ${allowlist.entries.length}`,
       '════════════════════════════════════════════════════════════════════════',
       '',
     ].join('\n'),
   );
-  for (const p of predicates) {
+  for (const p of selectedPredicates) {
     assertReadOnly(p);
     const entries = allowlistFor(allowlist, p.name);
     console.log(`\n┌─ PREDICATE: ${p.name}  (allowlisted: ${entries.length}) ${'─'.repeat(20)}`);
@@ -271,7 +289,7 @@ if (!psql) {
 // ---- psql mode: execute + assert ----
 let failed = false;
 const summary = [];
-for (const p of predicates) {
+for (const p of selectedPredicates) {
   assertReadOnly(p);
   const { rows, error } = runViaPsql(p);
   if (error) {
