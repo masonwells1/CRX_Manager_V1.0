@@ -1,6 +1,7 @@
 import { supabase } from './db';
 
-export type InvoiceSendDisposition = 'sendable' | 'suppressed_zero_total';
+export type InvoiceSendDisposition = 'normal' | 'sendable' | 'suppressed_zero_total';
+const SENDABLE_DISPOSITIONS = new Set<InvoiceSendDisposition>(['normal', 'sendable']);
 const NON_SENDABLE_STATUSES = new Set(['voided', 'cancelled']);
 
 export function assertInvoiceSendDisposition(
@@ -14,7 +15,7 @@ export function assertInvoiceSendDisposition(
   if (value === 'suppressed_zero_total') {
     throw new Error('This $0 split invoice is suppressed and must not be emailed.');
   }
-  if (value !== 'sendable') {
+  if (!SENDABLE_DISPOSITIONS.has(value as InvoiceSendDisposition)) {
     throw new Error('Invoice send status is unavailable. Reload before emailing.');
   }
 }

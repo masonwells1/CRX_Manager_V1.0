@@ -263,7 +263,7 @@ Deno.serve(async (req: Request) => {
       if (email_type === "invoice" && invoiceRow.customer_id !== customer_id) {
         return jsonResponse({ error: "Invoice customer does not match customer_id" }, 400);
       }
-      if (invoiceRow.send_disposition !== "sendable") {
+      if (invoiceRow.send_disposition !== "normal" && invoiceRow.send_disposition !== "sendable") {
         return jsonResponse(
           { error: invoiceRow.send_disposition === "suppressed_zero_total"
               ? "This $0 split invoice is suppressed and must not be emailed"
