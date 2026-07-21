@@ -1,4 +1,7 @@
-import type { Json } from './supabase';
+import type { Database, Json } from './supabase';
+
+// Canonical generated row shape for the append-only financial audit ledger.
+export type FinancialAuditLog = Database['public']['Tables']['financial_audit_log']['Row'];
 
 export type UserRole = 'admin' | 'sales_rep' | 'driver' | 'applicator';
 export type ProductForm = 'liquid' | 'dry';

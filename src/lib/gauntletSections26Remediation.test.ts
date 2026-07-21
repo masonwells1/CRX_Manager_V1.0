@@ -10,6 +10,66 @@ const source = (...parts: string[]) =>
   readFileSync(join(root, ...parts), 'utf8').replace(/\r\n/g, '\n');
 
 describe('gauntlet sections 2-6 CodeRabbit closeout', () => {
+  it('requires nonblank idempotency keys at every public money/lifecycle boundary', () => {
+    const sql = migration('20260721145936_require_money_lifecycle_idempotency_keys.sql');
+    const wrappers = [
+      ['create_invoice_from_order', '_create_invoice_from_order_idem_impl_20260721'],
+      ['create_invoice_for_unbilled_delivery', '_create_invoice_for_unbilled_delivery_idem_impl_20260721'],
+      ['post_invoice', '_post_invoice_idem_impl_20260721'],
+      ['cancel_order', '_cancel_order_idem_impl_20260721'],
+      ['generate_finance_charges', '_generate_finance_charges_idem_impl_20260721'],
+    ] as const;
+
+    for (const [publicName, privateName] of wrappers) {
+      const start = sql.indexOf(`CREATE FUNCTION public.${publicName}(`);
+      const end = sql.indexOf(`REVOKE ALL ON FUNCTION public.${publicName}(`, start);
+      const body = sql.slice(start, end);
+      expect(start).toBeGreaterThan(-1);
+      expect(end).toBeGreaterThan(start);
+      expect(body).toContain("p_idempotency_key IS NULL OR p_idempotency_key !~ '[^[:space:]]'");
+      expect(body).toContain(`IDEMPOTENCY_KEY_REQUIRED: ${publicName}`);
+      expect(body).toContain(`public.${privateName}(`);
+      expect(sql).toMatch(
+        new RegExp(`REVOKE ALL ON FUNCTION public\\.${privateName}\\([\\s\\S]*?FROM PUBLIC, anon, authenticated, service_role`),
+      );
+    }
+
+    const batchStart = sql.indexOf('CREATE OR REPLACE FUNCTION public.batch_post_invoices(');
+    const batchEnd = sql.indexOf('REVOKE ALL ON FUNCTION public.batch_post_invoices(', batchStart);
+    const batchBody = sql.slice(batchStart, batchEnd);
+    expect(batchStart).toBeGreaterThan(-1);
+    expect(batchEnd).toBeGreaterThan(batchStart);
+    expect(batchBody).toContain("p_idempotency_key IS NULL OR p_idempotency_key !~ '[^[:space:]]'");
+    expect(batchBody).toContain('IDEMPOTENCY_KEY_REQUIRED: batch_post_invoices');
+    expect(batchBody).toContain("v_contract CONSTANT text := 'batch_post_invoices_v2'");
+    expect(batchBody).toContain('public._claim_bound_lifecycle_idempotency(');
+    expect(batchBody).toContain('public._bind_completed_lifecycle_idempotency(');
+    expect(batchBody).toContain("'actor_id', v_actor");
+    expect(batchBody).toContain("'invoice_ids', to_jsonb(p_invoice_ids)");
+    expect(batchBody).toContain("p_idempotency_key || ':post:' || v_index::text");
+    expect(batchBody).not.toMatch(/post_invoice\s*\(\s*v_id\s*\)/);
+
+    expect(sql).toContain('SET search_path = public, pg_temp');
+    expect(sql).toContain("'49496e51d0d3ee07e57f3afdc7c033ff'");
+  });
+
+  it('blocks received-return orders before either cancellation route', () => {
+    const sql = migration('20260721152604_block_partial_cancel_with_received_returns.sql');
+    const guard = sql.indexOf("r.status IN ('received', 'credited')");
+    const partialRoute = sql.indexOf("IF v_order_status = 'partially_fulfilled' THEN");
+    const fullRoute = sql.indexOf('public._cancel_order_provenance_wrapper_20260719(');
+
+    expect(sql).toContain("'a2f78a473eca08d8ee932892f1c2d263'");
+    expect(sql).toContain("'f45063a92e0f5bedcca3d05ea74f7c01'");
+    expect(sql).toContain("RAISE EXCEPTION 'ORDER_HAS_RECEIVED_RETURN'");
+    expect(guard).toBeGreaterThan(-1);
+    expect(guard).toBeLessThan(partialRoute);
+    expect(guard).toBeLessThan(fullRoute);
+    expect(sql).toMatch(
+      /REVOKE ALL ON FUNCTION public\._cancel_order_idem_impl_20260721\(uuid, uuid, text\)[\s\S]*?FROM PUBLIC, anon, authenticated, service_role/,
+    );
+  });
+
   it('advances transaction-review balances in stable allocation-row order', () => {
     const sql = migration('20260721130355_fix_transaction_review_running_balance.sql');
     expect(sql).toContain(

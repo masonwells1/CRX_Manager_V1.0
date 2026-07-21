@@ -6,6 +6,11 @@
     "spec_contract": "Keys are the primary RPC under test. 'covers' lists every RPC the chain exercises - run-smoke.mjs --spec <rpc> matches keys AND covers entries, so one chain can certify several RPCs. Every migration that touches an RPC must have or extend a spec covering it."
   },
   "specs": {
+    "money_lifecycle_idempotency_required": {
+      "chain": "smoke-money-lifecycle-idempotency-required.sql",
+      "description": "Public money/lifecycle boundary: create_invoice_from_order, create_invoice_for_unbilled_delivery, post_invoice, cancel_order, generate_finance_charges, and batch_post_invoices all reject NULL or all-whitespace idempotency keys before mutation; actor-bearing wrappers reject forgery; batch posting derives a nonblank child key; and a valid finance-charge key creates one completed replay record and replays exactly. Terminal rollback.",
+      "covers": ["create_invoice_from_order", "create_invoice_for_unbilled_delivery", "post_invoice", "cancel_order", "generate_finance_charges", "batch_post_invoices"]
+    },
     "govern_invoice_order_money_lifecycle": {
       "chain": "smoke-govern-invoice-order-money-lifecycle.sql",
       "description": "Invoice/order lifecycle closeout: binds invoice creation/posting/cancellation retries, preserves completed-delivery recovery, closes only the undelivered remainder of partially fulfilled orders, locks customer/product source lineage, blocks terminal-order invoice rewrites and direct invoice DML, filters reversed transaction history, and proves every rejected path leaves its money/inventory lineage unchanged. Self-contained fixtures and terminal rollback.",

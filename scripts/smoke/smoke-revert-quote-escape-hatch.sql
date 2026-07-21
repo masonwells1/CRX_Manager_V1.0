@@ -74,7 +74,9 @@ BEGIN
    WHERE id = v_invoice;
 
   -- ---- cancel the order (whole conversion: booking_draw = false) ----
-  SELECT public.cancel_order(v_order1, v_admin) INTO v_res;
+  SELECT public.cancel_order(
+    v_order1, v_admin, 'smoke-revert-escape-cancel-' || v_suffix
+  ) INTO v_res;
   PERFORM set_config('app.admin_override', 'false', true);
   IF v_res->>'status' IS DISTINCT FROM 'cancelled' THEN
     RAISE EXCEPTION 'SMOKE_SETUP: cancel returned %, expected cancelled', v_res;

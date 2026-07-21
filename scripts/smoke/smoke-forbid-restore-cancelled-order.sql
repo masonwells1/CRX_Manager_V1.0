@@ -46,7 +46,9 @@ BEGIN
   SELECT public.convert_quote_to_order(v_quote) INTO v_res;
   PERFORM set_config('app.admin_override', 'false', true);
   v_order := (v_res->>'order_id')::uuid;
-  SELECT public.cancel_order(v_order, v_admin) INTO v_res;
+  SELECT public.cancel_order(
+    v_order, v_admin, 'smoke-forbid-restore-cancel-' || v_suffix
+  ) INTO v_res;
   PERFORM set_config('app.admin_override', 'false', true);
   IF v_res->>'status' IS DISTINCT FROM 'cancelled' THEN
     RAISE EXCEPTION 'SMOKE_SETUP: cancel returned %, expected cancelled', v_res;

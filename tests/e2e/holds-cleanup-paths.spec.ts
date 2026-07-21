@@ -200,6 +200,7 @@ test.describe.serial('P4-9: holds-cleanup paths', () => {
     const cancelResult = await supabaseRpc(page, 'cancel_order', {
       p_order_id: orderId,
       p_performed_by: userId,
+      p_idempotency_key: `e2e-holds-cancel-order-${orderId}`,
     });
     expect((cancelResult as Record<string, unknown>).status).toBe('cancelled');
 

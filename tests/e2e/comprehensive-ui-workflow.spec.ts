@@ -1366,11 +1366,10 @@ test.describe.serial('Comprehensive UI Workflow (12 Acts)', () => {
 
     // If no invoice exists yet, create via RPC
     if (!S.invoiceId) {
-      const userId = await getUserId(page);
       try {
         const result = await supabaseRpc(page, 'create_invoice_from_order', {
           p_order_id: S.orderId,
-          p_performed_by: userId,
+          p_idempotency_key: `e2e-comprehensive-create-invoice-${S.orderId}`,
         });
         const r = result as Record<string, unknown>;
         if (r.invoice_id) S.invoiceId = r.invoice_id as string;

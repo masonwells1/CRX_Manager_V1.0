@@ -238,7 +238,7 @@ function effectiveBody(fn: string, defs: Map<string, { file: string; body: strin
     // value-producing calls (`v_result := public.fn(...)`). Follow both so a
     // guarded implementation preserved behind a rename is not mistaken for a
     // dropped guard merely because its wrapper returns a value.
-    const performRe = /(?:PERFORM\s+|:=\s*)public\.([A-Za-z_][A-Za-z0-9_]*)\s*\(/gi;
+    const performRe = /(?:PERFORM\s+|RETURN\s+|:=\s*)public\.([A-Za-z_][A-Za-z0-9_]*)\s*\(/gi;
     let m: RegExpExecArray | null;
     while ((m = performRe.exec(def.body)) !== null) {
       const helper = m[1].toLowerCase();

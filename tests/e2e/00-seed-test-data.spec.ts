@@ -231,6 +231,7 @@ test.describe.serial('Seed Test Data', () => {
       const invResult = await rpc(page, 'create_invoice_from_order', {
         p_order_id:    orderId,
         p_invoice_type: invoiceType,
+        p_idempotency_key: `e2e-seed-create-invoice-${orderId}`,
       });
 
       // Returns a raw UUID string
@@ -290,7 +291,10 @@ test.describe.serial('Seed Test Data', () => {
     ];
 
     for (const [label, invId] of invoices) {
-      await rpc(page, 'post_invoice', { p_invoice_id: invId });
+      await rpc(page, 'post_invoice', {
+        p_invoice_id: invId,
+        p_idempotency_key: `e2e-seed-post-invoice-${invId}`,
+      });
       console.log(`[Seeder] Posted invoice ${label} (${invId})`);
     }
   });

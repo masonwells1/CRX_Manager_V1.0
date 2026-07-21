@@ -84,6 +84,7 @@ const HELPER_SCOPED: string[] = [
   'batch_apply_all_prepayments',
   'batch_apply_prepayments',
   'batch_cancel_deliveries',
+  'batch_post_invoices',
   'batch_reschedule_deliveries',
   'batch_void_invoices',
   'bulk_import_order',
@@ -169,7 +170,6 @@ const HELPER_SCOPED: string[] = [
  */
 const INLINE_SCOPED: string[] = [
   'batch_approve_blend_tickets',
-  'batch_post_invoices',
   'batch_reject_blend_tickets',
   'complete_job',
   'create_inventory_hold',
