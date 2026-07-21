@@ -283,6 +283,7 @@ test.describe('Concurrent Operations & Race Conditions', () => {
     // Create invoice
     const invoiceId = await supabaseRpc(page, 'create_invoice_from_order', {
       p_order_id: orderId,
+      p_idempotency_key: `e2e-concurrent-create-invoice-${orderId}`,
     }).catch(e => { console.error('create_invoice error:', e); return null; });
 
     if (!invoiceId) {
@@ -291,7 +292,10 @@ test.describe('Concurrent Operations & Race Conditions', () => {
     }
 
     // Post the invoice
-    await supabaseRpc(page, 'post_invoice', { p_invoice_id: invoiceId })
+    await supabaseRpc(page, 'post_invoice', {
+      p_invoice_id: invoiceId,
+      p_idempotency_key: `e2e-concurrent-post-invoice-${invoiceId}`,
+    })
       .catch(e => console.error('post_invoice error:', e));
 
     // Check invoice balance
@@ -371,6 +375,7 @@ test.describe('Concurrent Operations & Race Conditions', () => {
     // Create invoice (will be in 'draft' status, NOT posted)
     const invoiceId = await supabaseRpc(page, 'create_invoice_from_order', {
       p_order_id: orderId,
+      p_idempotency_key: `e2e-concurrent-draft-invoice-${orderId}`,
     }).catch(_e => null);
 
     if (!invoiceId) {
@@ -445,11 +450,15 @@ test.describe('Concurrent Operations & Race Conditions', () => {
 
     const invoiceId = await supabaseRpc(page, 'create_invoice_from_order', {
       p_order_id: orderId,
+      p_idempotency_key: `e2e-concurrent-negative-payment-invoice-${orderId}`,
     }).catch(_e => null);
 
     if (!invoiceId) { console.log('Skipping: no invoice'); return; }
 
-    await supabaseRpc(page, 'post_invoice', { p_invoice_id: invoiceId }).catch(() => {});
+    await supabaseRpc(page, 'post_invoice', {
+      p_invoice_id: invoiceId,
+      p_idempotency_key: `e2e-concurrent-negative-payment-post-${invoiceId}`,
+    }).catch(() => {});
 
     // Try negative payment
     const result = await supabaseRpc(page, 'allocate_payment', {

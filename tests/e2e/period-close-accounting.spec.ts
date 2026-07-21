@@ -169,7 +169,10 @@ test.describe('Period Close & Accounting', () => {
       for (const inv of unpostedArr) {
         const invId = (inv as Record<string, unknown>).id as string;
         // Try posting first, void if that fails
-        await supabaseRpc(page, 'post_invoice', { p_invoice_id: invId })
+        await supabaseRpc(page, 'post_invoice', {
+          p_invoice_id: invId,
+          p_idempotency_key: `e2e-period-cleanup-post-${invId}`,
+        })
           .catch(async () => {
             await deleteDraftInvoice(page, invId);
           });
@@ -246,6 +249,7 @@ test.describe('Period Close & Accounting', () => {
     // Create invoice (draft status) with date in our test period
     const invoiceId = await supabaseRpc(page, 'create_invoice_from_order', {
       p_order_id: orderId,
+      p_idempotency_key: `e2e-period-create-invoice-${orderId}`,
     }).catch(_e => null);
 
     if (!invoiceId) {
@@ -291,7 +295,10 @@ test.describe('Period Close & Accounting', () => {
     const unpostedArr = asArray(unposted, 'clear unposted');
     for (const inv of unpostedArr) {
       const invId = (inv as Record<string, unknown>).id as string;
-      await supabaseRpc(page, 'post_invoice', { p_invoice_id: invId })
+      await supabaseRpc(page, 'post_invoice', {
+        p_invoice_id: invId,
+        p_idempotency_key: `e2e-period-clear-post-${invId}`,
+      })
         .catch(async () => {
           await deleteDraftInvoice(page, invId);
         });
@@ -342,7 +349,10 @@ test.describe('Period Close & Accounting', () => {
     );
     for (const inv of asArray(unposted, 'clear')) {
       const invId = (inv as Record<string, unknown>).id as string;
-      await supabaseRpc(page, 'post_invoice', { p_invoice_id: invId })
+      await supabaseRpc(page, 'post_invoice', {
+        p_invoice_id: invId,
+        p_idempotency_key: `e2e-period-clear-2-post-${invId}`,
+      })
         .catch(async () => {
           await deleteDraftInvoice(page, invId);
         });
@@ -410,6 +420,7 @@ test.describe('Period Close & Accounting', () => {
     // Create invoice
     const invoiceId = await supabaseRpc(page, 'create_invoice_from_order', {
       p_order_id: orderId,
+      p_idempotency_key: `e2e-period-close-create-${orderId}`,
     }).catch(_e => null);
 
     if (!invoiceId) {
@@ -475,11 +486,15 @@ test.describe('Period Close & Accounting', () => {
     // Create and post invoice (total = $1,000 = 100000 cents)
     const invoiceId = await supabaseRpc(page, 'create_invoice_from_order', {
       p_order_id: orderId,
+      p_idempotency_key: `e2e-period-payment-create-${orderId}`,
     }).catch(_e => null);
 
     if (!invoiceId) { console.log('Skipping: no invoice'); return; }
 
-    await supabaseRpc(page, 'post_invoice', { p_invoice_id: invoiceId }).catch(e => {
+    await supabaseRpc(page, 'post_invoice', {
+      p_invoice_id: invoiceId,
+      p_idempotency_key: `e2e-period-payment-post-${invoiceId}`,
+    }).catch(e => {
       console.log(`post_invoice error: ${e}`);
     });
 
@@ -694,10 +709,14 @@ test.describe('Period Close & Accounting', () => {
 
     const invoiceId = await supabaseRpc(page, 'create_invoice_from_order', {
       p_order_id: orderId,
+      p_idempotency_key: `e2e-period-void-create-${orderId}`,
     }).catch(_e => null);
     if (!invoiceId) { console.log('Skipping: no invoice'); return; }
 
-    await supabaseRpc(page, 'post_invoice', { p_invoice_id: invoiceId }).catch(() => {});
+    await supabaseRpc(page, 'post_invoice', {
+      p_invoice_id: invoiceId,
+      p_idempotency_key: `e2e-period-void-post-${invoiceId}`,
+    }).catch(() => {});
 
     // Void the invoice
     await supabaseRpc(page, 'void_invoice', {

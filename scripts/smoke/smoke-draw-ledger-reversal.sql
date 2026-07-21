@@ -74,8 +74,16 @@ BEGIN
   ) THEN
     RAISE EXCEPTION 'SMOKE_SETUP: _sync_planned_holds missing — apply 20260613150000 first';
   END IF;
-  IF (SELECT prosrc FROM pg_proc WHERE proname = 'cancel_order' AND pronamespace = 'public'::regnamespace)
-       NOT LIKE '%PERFORM _sync_planned_holds(v_order.quote_id, v_actor)%' THEN
+  -- The public function is now a required-key wrapper. The proven hold rebuild
+  -- remains in the preserved mature implementation reached by that wrapper;
+  -- the behavioral S4 assertions below prove the chain is still connected.
+  IF NOT EXISTS (
+    SELECT 1
+      FROM pg_proc
+     WHERE proname = '_cancel_order_impl_20260714'
+       AND pronamespace = 'public'::regnamespace
+       AND prosrc LIKE '%PERFORM _sync_planned_holds(v_order.quote_id, v_actor)%'
+  ) THEN
     RAISE EXCEPTION 'SMOKE_SETUP: cancel_order does not rebuild holds on draw cancel — apply 20260613150100 first';
   END IF;
 
@@ -167,22 +175,18 @@ BEGIN
   END IF;
 
   -- ══ S4: CANCEL a partial draw order — ledger restored, holds REBUILT ═════
-  -- Before the cancel the booking is drawn 200/500 (v_o2 active), but the hold
-  -- has been FIFO-consumed by BOTH S1 draws and never rebuilt (void_order does
-  -- not resurrect holds — the V1 simplification), so the active hold for the
-  -- quote is 100 (500 − 200 [v_o1, voided] − 200 [v_o2, active]). The BUG
-  -- (pre-20260613150100): cancel skipped holds for booking_draw orders, leaving
-  -- the stale 100 hold while it returned the undelivered 200 to the balance +
-  -- released the prebooked — under-reserving (Net Free over-counts). The FIX
-  -- rebuilds the hold to booked − drawn.
+  -- Before the cancel the booking is drawn 200/500 (v_o2 active). The governed
+  -- void path has already rebuilt the hold after v_o1, so the active hold is
+  -- 300 (500 booked minus the one active 200-unit draw). The later cancel must
+  -- rebuild it again after reversing v_o2, returning the hold to all 500 units.
   SELECT COALESCE(SUM(quantity), 0) INTO v_hold_qty_before
   FROM inventory_holds
   WHERE source_id = v_q1 AND product_id = v_product AND is_active = true;
-  IF v_hold_qty_before IS DISTINCT FROM 100 THEN
-    RAISE EXCEPTION 'S4: pre-cancel active hold = %, expected 100 (500 booked − 200 voided draw − 200 active draw, never rebuilt)', v_hold_qty_before;
+  IF v_hold_qty_before IS DISTINCT FROM 300 THEN
+    RAISE EXCEPTION 'S4: pre-cancel active hold = %, expected 300 (500 booked − 200 active draw after the prior void rebuilt holds)', v_hold_qty_before;
   END IF;
 
-  SELECT cancel_order(v_o2, v_admin) INTO v_res;
+  SELECT cancel_order(v_o2, v_admin, 'smoke-draw-cancel-' || v_o2::text) INTO v_res;
   IF COALESCE((v_res->>'success')::boolean, false) IS NOT TRUE
      OR v_res->>'status' IS DISTINCT FROM 'cancelled' THEN
     RAISE EXCEPTION 'S4: cancel_order returned %', v_res;
@@ -221,10 +225,11 @@ BEGIN
     RAISE EXCEPTION 'S4: no active hold after draw cancel — rebuild produced nothing';
   END IF;
 
-  -- already-cancelled re-cancel: no-op, no double decrement, hold unchanged
-  SELECT cancel_order(v_o2, v_admin) INTO v_res;
-  IF v_res->>'status' IS DISTINCT FROM 'already_cancelled' THEN
-    RAISE EXCEPTION 'S4: re-cancel returned %, expected already_cancelled', v_res;
+  -- A new-key re-cancel returns the governed terminal status but remains a
+  -- no-op: no double decrement and no hold change.
+  SELECT cancel_order(v_o2, v_admin, 'smoke-draw-recancel-' || v_o2::text) INTO v_res;
+  IF v_res->>'status' IS DISTINCT FROM 'cancelled' THEN
+    RAISE EXCEPTION 'S4: re-cancel returned %, expected governed cancelled status', v_res;
   END IF;
   PERFORM set_config('app.admin_override', 'false', true);
   SELECT quantity_drawn INTO v_drawn

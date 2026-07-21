@@ -1386,6 +1386,7 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   'create_delivery_with_items',
   'create_direct_order',
   'create_followup_delivery',
+  'create_invoice_for_unbilled_delivery',
   'create_invoice_from_order',
   'create_label_draft',
   'create_order_from_blend_ticket',
@@ -1555,6 +1556,11 @@ const IDEMPOTENCY_BODY_EXEMPT: Record<
   string,
   'verified-live' | 'natural' | 'gap' | 'non-mutating' | 'table-unique' | 'receipt-unique' | 'delegated'
 > = {
+  // The batch boundary binds actor + ordered invoice IDs through the private
+  // lifecycle claim/complete helpers and gives every post_invoice child a
+  // deterministic indexed key. The generic detector does not parse those
+  // private helper names; the dedicated test below pins the full contract.
+  batch_post_invoices: 'delegated',
   // The live public wrapper authorizes before delegating to the unchanged,
   // directly non-executable implementation that owns the canonical replay
   // lookup/save. A dedicated test below pins that indirection and both grants.
@@ -1569,6 +1575,15 @@ const IDEMPOTENCY_BODY_EXEMPT: Record<
   // The terminal-provenance wrapper binds actor + order before issuing exact
   // governed cancellation claims and invoking the private implementation.
   cancel_order: 'delegated',
+  // Required-key wrappers fail closed before delegating to the preserved,
+  // directly non-executable implementations that own replay and mutation.
+  create_invoice_for_unbilled_delivery: 'delegated',
+  create_invoice_from_order: 'delegated',
+  // The public finance-charge RPC binds actor + as-of date + normalized
+  // customer selection through the private lifecycle claim/complete helpers.
+  // Its rollback smoke proves exact replay and changed-request rejection.
+  generate_finance_charges: 'delegated',
+  post_invoice: 'delegated',
   // The public wrapper authorizes active customer scope before delegating to
   // the directly non-executable implementation that owns canonical replay.
   save_invoice: 'delegated',
@@ -1653,7 +1668,10 @@ function getMigrationFiles(): { name: string; content: string }[] {
  */
 function latestFunctionBody(rpc: string): string | null {
   const files = getMigrationFiles();
-  const sigRe = new RegExp(`FUNCTION\\s+(?:public\\.)?${rpc}\\s*\\(`, 'i');
+  const sigRe = new RegExp(
+    `CREATE\\s+(?:OR\\s+REPLACE\\s+)?FUNCTION\\s+(?:public\\.)?${rpc}\\s*\\(`,
+    'i',
+  );
   for (let i = files.length - 1; i >= 0; i--) {
     const content = files[i].content;
     const sigIdx = content.search(sigRe);
@@ -1667,7 +1685,7 @@ function latestFunctionBody(rpc: string): string | null {
 }
 
 function bodyUsesIdempotency(body: string): boolean {
-  return /idempotency_keys|check_idempotency|save_idempotency/i.test(body);
+  return /idempotency_keys|check_idempotency|save_idempotency|_claim_bound_lifecycle_idempotency|_bind_completed_lifecycle_idempotency/i.test(body);
 }
 
 describe('Idempotency BODY verification (reads migration SQL)', () => {
@@ -1733,7 +1751,7 @@ describe('Idempotency BODY verification (reads migration SQL)', () => {
   it('split provenance wrappers preserve the idempotent implementations and forward the exact key', () => {
     const files = getMigrationFiles();
     const wrapper = files.find(
-      ({ name }) => name === '20260719100000_trust_only_post_revoke_split_provenance.sql'
+      ({ name }) => name === '20260719044912_trust_only_post_revoke_split_provenance.sql'
     )?.content;
     const splitImplementation = files.find(
       ({ name }) => name === '20260707090000_u7_split_gate_allow_predelivery.sql'
@@ -1776,7 +1794,7 @@ describe('Idempotency BODY verification (reads migration SQL)', () => {
   it('binds split creation, deletion, void, and cancellation replays to exact requests', () => {
     const files = getMigrationFiles();
     const wrapper = files.find(
-      ({ name }) => name === '20260719102000_allow_governed_split_terminal_lifecycle.sql'
+      ({ name }) => name === '20260719060256_allow_governed_split_terminal_lifecycle.sql'
     )?.content;
     const splitImplementation = files.find(
       ({ name }) => name === '20260707090000_u7_split_gate_allow_predelivery.sql'
@@ -1785,7 +1803,7 @@ describe('Idempotency BODY verification (reads migration SQL)', () => {
       ({ name }) => name === '20260711050000_credit_apply_reversal_and_lifecycle.sql'
     )?.content;
     const voidImplementation = files.find(
-      ({ name }) => name === '20260718214000_preserve_voided_payment_allocation_history.sql'
+      ({ name }) => name === '20260718221505_preserve_voided_payment_allocation_history.sql'
     )?.content;
     const cancelImplementation = files.find(
       ({ name }) => name === '20260714222000_return_credit_source_of_truth.sql'
@@ -1828,6 +1846,37 @@ describe('Idempotency BODY verification (reads migration SQL)', () => {
     expect(IDEMPOTENCY_BODY_EXEMPT.delete_invoices).toBe('delegated');
     expect(IDEMPOTENCY_BODY_EXEMPT.void_invoice).toBe('delegated');
     expect(IDEMPOTENCY_BODY_EXEMPT.cancel_order).toBe('delegated');
+  });
+
+  it('generate_finance_charges binds replay to actor, date, and normalized customer selection', () => {
+    const wrapper = latestFunctionBody('generate_finance_charges');
+    const implementationSource = getMigrationFiles().find(
+      ({ name }) => name === '20260721125937_ignore_voided_finance_charge_month_dedup.sql',
+    )?.content;
+    expect(wrapper).not.toBeNull();
+    expect(wrapper).toContain('IDEMPOTENCY_KEY_REQUIRED: generate_finance_charges');
+    expect(wrapper).toContain('public._generate_finance_charges_idem_impl_20260721(');
+    expect(implementationSource).toContain("v_contract CONSTANT text := 'generate_finance_charges_v2'");
+    expect(implementationSource).toContain('array_agg(DISTINCT customer_id ORDER BY customer_id)');
+    expect(implementationSource).toContain('public._claim_bound_lifecycle_idempotency');
+    expect(implementationSource).toContain('public._bind_completed_lifecycle_idempotency');
+    expect(implementationSource).toContain("'actor_id', v_actor");
+    expect(implementationSource).toContain("'as_of_date', p_as_of_date");
+    expect(implementationSource).toContain("'customer_ids', to_jsonb(v_customer_ids)");
+    expect(IDEMPOTENCY_BODY_EXEMPT.generate_finance_charges).toBe('delegated');
+  });
+
+  it('batch_post_invoices binds replay and forwards a deterministic key to every child post', () => {
+    const body = latestFunctionBody('batch_post_invoices');
+    expect(body).not.toBeNull();
+    expect(body).toContain("v_contract CONSTANT text := 'batch_post_invoices_v2'");
+    expect(body).toContain('public._claim_bound_lifecycle_idempotency(');
+    expect(body).toContain('public._bind_completed_lifecycle_idempotency(');
+    expect(body).toContain("'actor_id', v_actor");
+    expect(body).toContain("'invoice_ids', to_jsonb(p_invoice_ids)");
+    expect(body).toContain("p_idempotency_key || ':post:' || v_index::text");
+    expect(body).not.toMatch(/post_invoice\s*\(\s*v_id\s*\)/);
+    expect(IDEMPOTENCY_BODY_EXEMPT.batch_post_invoices).toBe('delegated');
   });
 
   it('save_purchase_order hydrates omitted cost before delegating to its idempotent implementation', () => {
@@ -2036,6 +2085,10 @@ function generatedMutatingRpcInventory(): Set<string> {
 }
 
 const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
+  // Owner-only cancel router preserved behind the required-key public wrapper.
+  // It binds actor + order through the lifecycle claim/complete helpers; every
+  // application-role EXECUTE privilege is revoked by the migration.
+  '_cancel_order_idem_impl_20260721',
   // Direct EXECUTE is revoked from every application role. This internal
   // delegate carries the public save_purchase_order idempotency key and cache
   // contract inside the same transaction; it is absent from generated client

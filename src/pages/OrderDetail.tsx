@@ -556,7 +556,8 @@ export default function OrderDetail() {
     await runCriticalAction({
       action: async () => {
         if (targetStatus === 'cancelled' && order.status !== 'cancelled') {
-          // Atomic RPC: cancellation + inventory release + cascade (void drafts, zero commissions, release holds)
+          // Atomic RPC: a zero-delivery order is cancelled; a partially delivered
+          // order keeps its delivered lineage and closes only the remaining quantity.
           const cancelKey = cancelOrderIdem.getKey();
           const { data: cancelResult, error } = await supabase.rpc('cancel_order', {
             p_order_id: id!,
@@ -565,16 +566,52 @@ export default function OrderDetail() {
           });
           if (error) throw error;
           cancelOrderIdem.resetKey();
-          const result = assertRpcResult<{ success: boolean; holds_released: number; commissions_cancelled: number; draft_invoices_cancelled: number; posted_invoices_flagged: number; paid_commissions_flagged: number }>(cancelResult, 'cancel_order');
+          const result = assertRpcResult<{
+            success: boolean;
+            mode?: 'full_cancel' | 'remainder_closed';
+            status?: 'cancelled' | 'fulfilled';
+            holds_released: number;
+            released_quantity?: number;
+            commissions_cancelled: number;
+            commissions_recomputed?: number;
+            draft_invoices_cancelled: number;
+            posted_invoices_flagged: number;
+            paid_commissions_flagged: number;
+          }>(cancelResult, 'cancel_order');
           // Show summary toast with cascade details
           if (result && result.success) {
-            const parts: string[] = ['Order cancelled.'];
+            const remainderClosed = result.mode === 'remainder_closed';
+            const parts: string[] = [
+              remainderClosed
+                ? 'Remaining quantity cancelled; delivered quantity kept as fulfilled.'
+                : 'Order cancelled.',
+            ];
+            if (remainderClosed && (result.released_quantity ?? 0) > 0)
+              parts.push(`${result.released_quantity} undelivered unit(s) released.`);
+            if (remainderClosed && (result.commissions_recomputed ?? 0) > 0)
+              parts.push(`${result.commissions_recomputed} commission(s) recalculated to delivered profit.`);
             if (result.holds_released > 0) parts.push(`${result.holds_released} hold(s) released.`);
             if (result.commissions_cancelled > 0) parts.push(`${result.commissions_cancelled} commission(s) zeroed.`);
             if (result.draft_invoices_cancelled > 0) parts.push(`${result.draft_invoices_cancelled} draft invoice(s) cancelled.`);
             if (result.posted_invoices_flagged > 0) parts.push(`Admin notified about ${result.posted_invoices_flagged} posted invoice(s) requiring manual void.`);
             if (result.paid_commissions_flagged > 0) parts.push(`Admin notified about ${result.paid_commissions_flagged} paid commission(s).`);
             toast('success', parts.join(' '));
+          }
+
+          // Idempotent/status-only responses (for example already_cancelled)
+          // are not a new cancellation. Refresh the page state, but do not
+          // write duplicate client activity or send a false status notice.
+          if (!result.success) {
+            await fetchOrder();
+            return;
+          }
+
+          // A remainder close finishes as fulfilled, so do not write or notify a
+          // second, false "cancelled" client event. Preserve the existing client
+          // activity/notification behavior for a true full cancellation below.
+          if (result.mode === 'remainder_closed') {
+            await fetchOrder();
+            return;
           }
         } else {
           // Simple status change (no inventory impact) — validate allowed transitions
@@ -1298,7 +1335,7 @@ export default function OrderDetail() {
                 onClick={() => { cancelOrderIdem.resetKey(); setPendingStatus('cancelled'); setStatusConfirmOpen(true); }}
                 className="text-xs text-red-500 hover:text-red-700 underline"
               >
-                Cancel Order
+                {order.status === 'partially_fulfilled' ? 'Cancel Remaining Quantity' : 'Cancel Order'}
               </button>
             )}
             {isAdmin && order.status === 'fulfilled' && (
@@ -2073,10 +2110,14 @@ export default function OrderDetail() {
         open={statusConfirmOpen}
         onClose={() => setStatusConfirmOpen(false)}
         onConfirm={executeStatusChange}
-        title="Cancel Order"
-        message="Cancel this order? Inventory holds will be released, any draft invoices voided, and pending commissions zeroed. Posted invoices or paid commissions are flagged for manual review. This cannot be undone."
+        title={order?.status === 'partially_fulfilled' ? 'Cancel Remaining Quantity' : 'Cancel Order'}
+        message={
+          order?.status === 'partially_fulfilled'
+            ? 'Cancel only the undelivered remainder? Completed deliveries and their invoices stay intact, undelivered inventory is released, and pending commissions are recalculated to delivered profit. Paid or batched commissions must be voided first. This cannot be undone.'
+            : 'Cancel this order? Inventory holds will be released, any draft invoices cancelled, and pending commissions zeroed. Posted invoices or paid commissions are flagged for manual review. This cannot be undone.'
+        }
         variant="warning"
-        confirmLabel="Cancel Order"
+        confirmLabel={order?.status === 'partially_fulfilled' ? 'Cancel Remaining' : 'Cancel Order'}
         loading={changingStatus}
       />
 

@@ -88,6 +88,11 @@ interface LocalSection {
 
 type CalcMode = 'rate_acres' | 'units_direct';
 
+// Keeps the reason-bearing retry key safely below PostgreSQL B-tree entry limits.
+// The server independently fingerprints the full request, so the exact reason
+// remains bound to the idempotency receipt rather than being trusted from the key.
+const MAX_REVERT_REASON_LENGTH = 500;
+
 interface LocalItem {
   _key: string;
   id?: string;
@@ -209,7 +214,6 @@ export default function QuoteBuilder() {
   const restoreVersionIdem = useIdempotencyKey('restore_quote_version', profile?.id || '');
   const scheduleJobIdem = useIdempotencyKey('create_job_from_quote_section', profile?.id || '');
   const drawDownIdem = useIdempotencyKey('draw_down_quote', profile?.id || '');
-  const revertStatusIdem = useIdempotencyKey('revert_quote_status', profile?.id || '');
   const emailQuoteIdem = useIdempotencyKey('send_email_quote', profile?.id || '');
   const closeAppliedIdem = useIdempotencyKey('close_quote_as_applied', profile?.id || '');
   const closeShortIdem = useIdempotencyKey('close_quote_as_short', profile?.id || '');
@@ -294,6 +298,13 @@ export default function QuoteBuilder() {
   const [confirmDraftScheduleKey, setConfirmDraftScheduleKey] = useState<string | null>(null);
   const [showRevertModal, setShowRevertModal] = useState(false);
   const [revertReason, setRevertReason] = useState('');
+  // Bind the retry key to the exact action intent. A network-uncertain retry
+  // reuses its key, while navigating to another quote or editing the reason
+  // produces a new key that cannot replay the prior quote's result.
+  const revertStatusIdem = useIdempotencyKey(
+    'revert_quote_status',
+    `${profile?.id || ''}:${id || ''}:${revertReason.trim()}`,
+  );
   const [reverting, setReverting] = useState(false);
   // #3 Stage A: email the quote PDF to the grower via the send-email Edge Function.
   const [emailingGrower, setEmailingGrower] = useState(false);
@@ -1486,8 +1497,13 @@ export default function QuoteBuilder() {
   // reverting an accepted quote that already has an order.
   const handleRevertStatus = async () => {
     if (!id) return;
-    if (!revertReason.trim()) {
+    const normalizedReason = revertReason.trim();
+    if (!normalizedReason) {
       toast('warning', 'Please enter a reason for reopening this quote.');
+      return;
+    }
+    if (normalizedReason.length > MAX_REVERT_REASON_LENGTH) {
+      toast('warning', `Reopen reason must be ${MAX_REVERT_REASON_LENGTH} characters or fewer.`);
       return;
     }
     setReverting(true);
@@ -1495,7 +1511,7 @@ export default function QuoteBuilder() {
       const idemKey = revertStatusIdem.getKey();
       const { data, error } = await supabase.rpc('revert_quote_status', {
         p_quote_id: id,
-        p_reason: revertReason.trim(),
+        p_reason: normalizedReason,
         p_performed_by: profile?.id,
         p_idempotency_key: idemKey,
       });
@@ -3975,10 +3991,14 @@ export default function QuoteBuilder() {
               <textarea
                 value={revertReason}
                 onChange={(e) => setRevertReason(e.target.value)}
+                maxLength={MAX_REVERT_REASON_LENGTH}
                 rows={3}
                 placeholder="Why is this quote being reopened?"
                 className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
               />
+              <p className="mt-1 text-xs text-secondary text-right">
+                {revertReason.length}/{MAX_REVERT_REASON_LENGTH}
+              </p>
             </div>
             <div className="flex justify-end gap-3">
               <button

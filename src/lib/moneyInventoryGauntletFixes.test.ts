@@ -92,9 +92,20 @@ const serverAuthoritativeBulkPOIdentity = source(
 const serverDerivedBulkPOClaimPayload = source(
   'supabase/migrations/20260717112906_restore_server_derived_bulk_po_claim_payload.sql',
 );
+const quoteBuilder = source('src/pages/QuoteBuilder.tsx');
 const completeDelivery = access.slice(0, access.indexOf('CREATE OR REPLACE FUNCTION public.void_delivery'));
 
 describe('money and inventory gauntlet fixes', () => {
+  it('bounds quote-reopen reasons before generating the reason-bearing retry key', () => {
+    expect(quoteBuilder).toContain('const MAX_REVERT_REASON_LENGTH = 500;');
+    expect(quoteBuilder).toContain('maxLength={MAX_REVERT_REASON_LENGTH}');
+    expect(quoteBuilder).toContain('if (normalizedReason.length > MAX_REVERT_REASON_LENGTH)');
+    expect(quoteBuilder.indexOf('if (normalizedReason.length > MAX_REVERT_REASON_LENGTH)')).toBeLessThan(
+      quoteBuilder.indexOf('const idemKey = revertStatusIdem.getKey();'),
+    );
+    expect(quoteBuilder).toContain('p_reason: normalizedReason');
+  });
+
   it('requires an active delivery actor and uses the effective completion business date', () => {
     expect(access).toContain('WHERE id = v_actor AND is_active = true');
     expect(access).toContain('IF v_actor_role IS NULL OR NOT (');

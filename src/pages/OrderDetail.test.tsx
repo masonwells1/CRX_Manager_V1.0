@@ -5,11 +5,16 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 
-const { mockFrom, mockRpc, mockToast, mockNavigate } = vi.hoisted(() => ({
+const {
+  mockFrom, mockRpc, mockToast, mockNavigate,
+  mockLogActivity, mockNotifyOrderStatusChange,
+} = vi.hoisted(() => ({
   mockFrom: vi.fn(),
   mockRpc: vi.fn().mockImplementation(() => Promise.resolve({ data: null, error: null })),
   mockToast: vi.fn(),
   mockNavigate: vi.fn(),
+  mockLogActivity: vi.fn(),
+  mockNotifyOrderStatusChange: vi.fn(),
 }));
 
 function buildChain(result: { data: unknown; error: unknown }): Record<string, unknown> {
@@ -68,8 +73,8 @@ vi.mock('../hooks/useIdempotencyKey', () => ({
   useIdempotencyKey: () => ({ getKey: () => 'test-idem-key', resetKey: vi.fn() }),
 }));
 
-vi.mock('../lib/activityLogger', () => ({ logActivity: vi.fn() }));
-vi.mock('../lib/notificationTriggers', () => ({ notifyOrderStatusChange: vi.fn() }));
+vi.mock('../lib/activityLogger', () => ({ logActivity: mockLogActivity }));
+vi.mock('../lib/notificationTriggers', () => ({ notifyOrderStatusChange: mockNotifyOrderStatusChange }));
 vi.mock('../lib/emailService', () => ({
   sendEmail: vi.fn(),
   buildEmailHtml: vi.fn(() => '<p>test</p>'),
@@ -163,6 +168,108 @@ describe('OrderDetail', () => {
     // errored) with one honest Cancel Order action.
     await waitFor(() => expect(screen.getByText('Cancel Order')).toBeInTheDocument());
     expect(screen.queryByText('Change Status')).not.toBeInTheDocument();
+  });
+
+  it('refreshes without duplicate side effects when cancellation returns no new-success marker', async () => {
+    let orderReads = 0;
+    const orderData = {
+      id: 'ord-123', order_number: 'ORD-0099', status: 'confirmed', customer_id: 'cust-1',
+      order_date: '2026-03-15', total_cents: 50000, total_cost: 30000, total_price: 50000,
+      total_profit: 20000, total_margin_pct: 40.0, order_name: 'Spring Order', notes: '',
+      created_at: '2026-03-15T00:00:00Z', delivery_priority: 'normal', po_number: null,
+    };
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'orders') {
+        orderReads += 1;
+        return buildChain({ data: orderData, error: null });
+      }
+      return buildChain({ data: [], error: null });
+    });
+    mockRpc.mockImplementation((rpcName: string) => Promise.resolve(
+      rpcName === 'cancel_order'
+        ? {
+            data: {
+              mode: 'full_cancel',
+              status: 'cancelled',
+              holds_released: 0,
+              commissions_cancelled: 0,
+              draft_invoices_cancelled: 0,
+              posted_invoices_flagged: 0,
+              paid_commissions_flagged: 0,
+            },
+            error: null,
+          }
+        : { data: null, error: null },
+    ));
+
+    renderOrderDetail();
+    fireEvent.click(await screen.findByRole('button', { name: 'Cancel Order' }));
+    const cancelButtons = screen.getAllByRole('button', { name: 'Cancel Order' });
+    fireEvent.click(cancelButtons[cancelButtons.length - 1]);
+
+    await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('cancel_order', {
+      p_order_id: 'ord-123',
+      p_performed_by: 'user-1',
+      p_idempotency_key: 'test-idem-key',
+    }));
+    await waitFor(() => {
+      expect(orderReads).toBeGreaterThanOrEqual(2);
+      expect(mockLogActivity).not.toHaveBeenCalled();
+      expect(mockNotifyOrderStatusChange).not.toHaveBeenCalled();
+    });
+  });
+
+  it('labels a partially fulfilled order as Cancel Remaining Quantity and explains the short-close behavior', async () => {
+    const orderData = {
+      id: 'ord-123', order_number: 'ORD-0099', status: 'partially_fulfilled', customer_id: 'cust-1',
+      order_date: '2026-03-15', total_cents: 50000, total_cost: 30000, total_price: 50000,
+      total_profit: 20000, total_margin_pct: 40.0, order_name: 'Spring Order', notes: '',
+      created_at: '2026-03-15T00:00:00Z', delivery_priority: 'normal', po_number: null,
+    };
+    mockFrom.mockImplementation((table: string) =>
+      table === 'orders' ? buildChain({ data: orderData, error: null }) : buildChain({ data: [], error: null }),
+    );
+    mockRpc.mockImplementation((rpcName: string) => Promise.resolve(
+      rpcName === 'cancel_order'
+        ? {
+            data: {
+              success: true,
+              mode: 'remainder_closed',
+              status: 'fulfilled',
+              released_quantity: 6,
+              holds_released: 0,
+              commissions_cancelled: 0,
+              commissions_recomputed: 1,
+              draft_invoices_cancelled: 0,
+              posted_invoices_flagged: 0,
+              paid_commissions_flagged: 0,
+            },
+            error: null,
+          }
+        : { data: null, error: null },
+    ));
+
+    renderOrderDetail();
+    const cancelRemaining = await screen.findByRole('button', { name: 'Cancel Remaining Quantity' });
+    fireEvent.click(cancelRemaining);
+
+    expect(await screen.findByRole('heading', { name: 'Cancel Remaining Quantity' })).toBeInTheDocument();
+    expect(screen.getByText(/Completed deliveries and their invoices stay intact/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel Remaining' }));
+
+    await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('cancel_order', {
+      p_order_id: 'ord-123',
+      p_performed_by: 'user-1',
+      p_idempotency_key: 'test-idem-key',
+    }));
+    await waitFor(() => {
+      expect(mockToast).toHaveBeenCalledWith(
+        'success',
+        expect.stringContaining('Remaining quantity cancelled; delivered quantity kept as fulfilled.'),
+      );
+      expect(mockLogActivity).not.toHaveBeenCalled();
+      expect(mockNotifyOrderStatusChange).not.toHaveBeenCalled();
+    });
   });
 
   it('posts split draft invoices through one atomic group RPC', async () => {

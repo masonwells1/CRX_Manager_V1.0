@@ -57,6 +57,7 @@ DECLARE
   v_product_id   uuid;
   v_inventory_id uuid;
   v_order_id     uuid;
+  v_delivery_id  uuid;
   v_order_item_1 uuid;
   v_order_item_2 uuid;
   v_return_id    uuid;
@@ -141,6 +142,25 @@ BEGIN
     v_order_id, v_product_id, '[SMOKE] RCC Herbicide ' || v_suffix,
     10, 5, 'gal', 50, 5, 0
   ) RETURNING id INTO v_order_item_2;
+
+  -- Keep the order's delivered totals backed by exact completed-delivery
+  -- history so the governed cancel path reaches the received-return guard.
+  INSERT INTO deliveries (
+    delivery_number, order_id, customer_id, scheduled_date, status, created_by
+  ) VALUES (
+    'SMK-RCC-D-' || v_suffix, v_order_id, v_customer_id,
+    current_date, 'scheduled', v_admin
+  ) RETURNING id INTO v_delivery_id;
+  INSERT INTO delivery_items (
+    delivery_id, order_item_id, product_id, quantity,
+    quantity_delivered, unit_size
+  ) VALUES
+    (v_delivery_id, v_order_item_1, v_product_id, 10, 10, 'gal'),
+    (v_delivery_id, v_order_item_2, v_product_id, 5, 5, 'gal');
+  UPDATE deliveries SET status = 'in_progress' WHERE id = v_delivery_id;
+  UPDATE deliveries
+     SET status = 'completed', completed_at = now(), signed_by = '[SMOKE] RCC Receiver'
+   WHERE id = v_delivery_id;
 
   -- The migration closes both layers: there is no INSERT/FOR ALL RLS policy,
   -- and authenticated has no inherited direct INSERT table privilege.

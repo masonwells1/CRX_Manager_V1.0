@@ -1,7 +1,7 @@
 # Supplier Pricing, Price History & Product Variants — Plan
 
 **Date:** 2026-07-16 (rev 5 — Mason's decision: NO AI extraction of supplier PDFs, manual-entry-only ingestion; rev 4 incorporated the Codex adversarial review; rev 2–3 added pre-season replacement cost, the pricing worksheet, and whole-product fields)
-**Status:** Phase 1a implemented and awaiting review in PR #163. Live: the additive bootstrap, zero-cost guard, and legacy Product repeat-save compatibility repair. Pre-release: the RPC-only Product flows, pricing-only `.xlsx` worksheet, and OCR retirement in this PR. Parked: the strict direct-write cutover until the frontend rollout is complete and its rollback window closes.
+**Status:** Phase 1a frontend merged in PR #163 and deployed to production. Live: additive bootstrap, zero-cost guard, legacy repeat-save compatibility, forward hardening, strict direct-write cutover, RPC-only Product pricing flows, pricing-only `.xlsx` worksheet, and verified `process-document` v19 supplier-pricing OCR retirement. Product-page quick edits remain available through the same governed preview/apply RPCs as the worksheet.
 **Branch:** `feat/supplier-pricing-phase1a` (implementation branch; the original planning baseline was `claude/supplier-pricing-strategy-9c6129`)
 **Advisors:** Claude (grounding + synthesis) with Codex gpt-5.6 ("Sol 5.6") — advisory round + full adversarial review (verdict folded into this rev; see §11)
 

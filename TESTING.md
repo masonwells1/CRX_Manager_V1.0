@@ -178,7 +178,7 @@ This keeps running and automatically re-tests when you save a file. Great during
 - **Offline support:** IndexedDB queue operations, sync logic
 - **Utilities:** Unit conversions, idempotency keys, image compression
 - **UI components:** SignatureCanvas, ActivityFeed, CommentsSection
-- **Bulk import:** BulkCustomerImport, BulkOrderImport, BulkProductImport, BulkPricingImport, BulkPOImport, BulkQuoteImport, BulkTicketUpload, ManualTicketCreate
+- **Bulk and worksheet import:** BulkCustomerImport, BulkOrderImport, BulkProductImport, BulkPOImport, BulkQuoteImport, BulkTicketUpload, ManualTicketCreate, and the governed product-pricing `.xlsx` round trip
 
 ### Pre-Commit Hook
 

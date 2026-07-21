@@ -2,6 +2,24 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-21 — Supplier-pricing Phase 1a production closeout
+
+- Applied the forward-only `cancel_order` correction live as ledger version `20260721152604` after the expanded smoke set proved that a partially fulfilled order could close its undelivered remainder despite having a received return. The correction moves the existing `ORDER_HAS_RECEIVED_RETURN` guard ahead of both cancellation routes while preserving exact committed replay and the reviewed lock/idempotency contract. Both exact-file reviewers returned CLEAN; eight neighboring money/cancellation chains returned `SMOKE_PASS_ROLLBACK`; the private implementation hash, grants, search path, guard order, and single public overload were verified live; and all 17 database-invariant sweeps had zero unallowlisted violations.
+- Applied the release-gate idempotency correction live as ledger version `20260721145936`. It preserves five reviewed money/lifecycle implementations behind private names and makes six public boundaries reject missing or all-whitespace idempotency keys before mutation. `batch_post_invoices` binds each retry to the actor plus ordered invoice list and derives a stable nonblank child key for every `post_invoice` call. The six-RPC rollback smoke and seven additional registered lifecycle chains passed with rollback; the broader run then exposed the separate received-return partial-cancel gap above.
+- Preserved `stage_vendor_alias` exact retries after an alias is reviewed and its vendor is later retired by storing the original stage response in a protected durable-receipt table, then checking cache and that receipt before mutable vendor validation. Applied live as ledger version `20260721130846`; the full Supplier Pricing Phase 1b rollback chain proved reviewed/retired replay, rejection of new mutations against the retired vendor, unchanged Product prices, and zero residue.
+- Bounded quote-reopen reasons to 500 characters before generating the reason-bearing retry key, preventing an oversized user-entered reason from exceeding PostgreSQL's idempotency-key index-entry limit while preserving exact server-side request fingerprinting.
+- Applied the Customer Transaction Review running-balance correction live as ledger version `20260721130355`, so multiple allocations sharing a payment date/reference advance one row at a time in stable UUID order instead of displaying the peer group's final balance on every row. Live inspection found zero current peer groups, so no data repair was needed; the complete governed lifecycle rollback chain returned `SMOKE_PASS_ROLLBACK` with zero residue.
+- Restamped the pending PR #168 invoice/order lifecycle closeout above the final PR #165 live high-water and bound it to the strengthened governed split save, singular-void, and atomic group-void contracts without replacing those reviewed bodies.
+- Limited the new "cancel remaining quantity" behavior to genuinely `partially_fulfilled` orders, preserving the final provenance-aware full-cancel path for confirmed orders.
+- Registered and ran both the lifecycle rollback chain and the canonical governed split H5 chain against the composed migration; both returned `SMOKE_PASS_ROLLBACK` with zero persisted fixtures.
+- Canonicalized the unbilled-delivery actor-forgery rejection to `ACTOR_MISMATCH`, matching the invariant sweep and frontend error contract; reran 114 focused tests, typecheck, and both live-schema rollback smokes successfully.
+- Applied the reviewed lifecycle migration live as ledger version `20260721014858`; both post-apply rollback chains returned `SMOKE_PASS_ROLLBACK`, governed function grants/search paths were verified, and no smoke fixtures remained.
+- Deployed `process-document` v19 ACTIVE with JWT verification. Supplier `price_list` and `product_list` requests now fail closed before paid OCR, completing the permanent supplier-PDF OCR retirement.
+- Refreshed the schema registry from six live introspection queries at high-water `20260721014858`.
+- Restored the exact committed source for the already-live `20260720230000_supplier_pricing_durable_replay_and_reject` migration from its parallel Phase 1b branch, closing the last rebuild/traceability gap identified by the final Claude review.
+- Corrected cancellation replay handling so an `already_cancelled` response refreshes the order without writing a second activity entry or sending a false cancellation notice. Applied the finance-charge correction live as ledger version `20260721125937`: only an active same-month charge blocks another assessment, while voided/cancelled charge invoices permit one corrected preview and generation. Finance-charge generation keys remain bound to the actor, date, and normalized customer selection; both registered rollback chains returned `SMOKE_PASS_ROLLBACK` with zero residue.
+- Refreshed the schema registry from six live introspection datasets at high-water `20260721130846` and ran all 17 database invariant sweeps with zero unallowlisted findings.
+
 ## 2026-07-21 — Weekly cleanup-sprint check (automated routine, 2026-07-17)
 
 Queried live DB — negatives=18 (+1, likely U9 warn-not-block delivery; check requires_review=true on inventory_transactions), over_received=15, unbilled=59. Progress row appended to docs/reports/cleanup-sprint-progress.md. Phase 23 CHECK constraints still blocked (legacy 17 rows need /integrity-cleanup). PR #158 opened and in review.
@@ -59,7 +77,6 @@ Bug-class regression suite: analyzed all ~60 bugs fixed 2026-07-10..20 (split-bi
   - `supabase/migrations/20260720175946_protect_governed_split_edit_and_void_group.sql`
   - `supabase/migrations/20260718010000_per_line_split_billing_schema.sql`
   - `supabase/migrations/20260720173059_fix_statement_opening_balance.sql`
-
 ## 2026-07-20 — Split-billing email authority completed
 
 - Re-read each invoice's server-owned disposition and lifecycle immediately before every invoice email send, including field-invoice lists and invoice detail.
@@ -274,14 +291,14 @@ were applied to live Supabase in the approved order, and each reached
 `SMOKE_PASS_ROLLBACK` through its registered business-chain smoke. The filenames below use
 the server-assigned migration versions so a future rebuild cannot reapply them.
 
-- **H1 — money-RPC auth bypass (LIVE).** `20260718153744_harden_prepay_and_payment_role_gate.sql`
+- **H1 — money-RPC auth bypass (LIVE).** `20260718153744_20260718124500_harden_prepay_and_payment_role_gate.sql`
   hardens `apply_prepay_to_invoice` + `record_invoice_payment` so a deactivated / profile-less
   authenticated user can no longer pass the role gate (`NULL NOT IN (...)` fall-through; missing
   `is_active` filter). Mirrors the vetted `apply_credit_memo_to_invoice`. Reviewers clean (rls +
   drift), no stale overload, fail-first smoke `smoke-prepay-payment-inactive-actor-gate.sql`
   proved the bypass live (raised `SMOKE_FAIL` on the pre-fix functions).
 - **B2 — quote stranded after whole-conversion order cancel (LIVE).**
-  `20260718152837_revert_quote_escape_hatch_for_cancelled_order.sql`. Chosen the safe, admin-driven
+  `20260718152837_20260718131500_revert_quote_escape_hatch_for_cancelled_order.sql`. Chosen the safe, admin-driven
   escape hatch (not auto-reopen on cancel, which would contradict the void path's deliberate
   "converted booking stays closed" semantic): `revert_quote_status` now un-blocks reverting an
   'accepted' quote whose only order is cancelled and releases its stale draw ledger so it is
@@ -291,7 +308,7 @@ the server-assigned migration versions so a future rebuild cannot reapply them.
   advisory lock) so two runs in the same month on different as-of dates can't both charge. Reviewers
   clean; fail-first smoke proved the double-charge live (2 charges from 2 same-month runs).
 - **H3 — void_invoice stranded customer cash (LIVE).**
-  `20260718154810_void_invoice_block_applied_payments.sql`. Refuses to void a posted invoice that
+  `20260718154810_20260718133000_void_invoice_block_applied_payments.sql`. Refuses to void a posted invoice that
   still has direct cash applied (`paid_amount_cents>0` or `invoice_line_allocations`) — admin must
   void/unapply the payment first (re-banks it as prepay). Prepay-only voids unaffected. Reviewers
   clean; fail-first smoke proved the strand live.
