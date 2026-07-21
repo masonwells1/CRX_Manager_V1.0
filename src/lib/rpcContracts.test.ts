@@ -1569,6 +1569,10 @@ const IDEMPOTENCY_BODY_EXEMPT: Record<
   // The terminal-provenance wrapper binds actor + order before issuing exact
   // governed cancellation claims and invoking the private implementation.
   cancel_order: 'delegated',
+  // The public finance-charge RPC binds actor + as-of date + normalized
+  // customer selection through the private lifecycle claim/complete helpers.
+  // Its rollback smoke proves exact replay and changed-request rejection.
+  generate_finance_charges: 'delegated',
   // The public wrapper authorizes active customer scope before delegating to
   // the directly non-executable implementation that owns canonical replay.
   save_invoice: 'delegated',
@@ -1828,6 +1832,19 @@ describe('Idempotency BODY verification (reads migration SQL)', () => {
     expect(IDEMPOTENCY_BODY_EXEMPT.delete_invoices).toBe('delegated');
     expect(IDEMPOTENCY_BODY_EXEMPT.void_invoice).toBe('delegated');
     expect(IDEMPOTENCY_BODY_EXEMPT.cancel_order).toBe('delegated');
+  });
+
+  it('generate_finance_charges binds replay to actor, date, and normalized customer selection', () => {
+    const body = latestFunctionBody('generate_finance_charges');
+    expect(body).not.toBeNull();
+    expect(body).toContain("v_contract CONSTANT text := 'generate_finance_charges_v2'");
+    expect(body).toContain('array_agg(DISTINCT customer_id ORDER BY customer_id)');
+    expect(body).toContain('public._claim_bound_lifecycle_idempotency');
+    expect(body).toContain('public._bind_completed_lifecycle_idempotency');
+    expect(body).toContain("'actor_id', v_actor");
+    expect(body).toContain("'as_of_date', p_as_of_date");
+    expect(body).toContain("'customer_ids', to_jsonb(v_customer_ids)");
+    expect(IDEMPOTENCY_BODY_EXEMPT.generate_finance_charges).toBe('delegated');
   });
 
   it('save_purchase_order hydrates omitted cost before delegating to its idempotent implementation', () => {

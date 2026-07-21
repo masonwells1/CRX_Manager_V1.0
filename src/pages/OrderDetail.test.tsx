@@ -171,15 +171,20 @@ describe('OrderDetail', () => {
   });
 
   it('does not log or notify a second cancellation for an already-cancelled RPC replay', async () => {
+    let orderReads = 0;
     const orderData = {
       id: 'ord-123', order_number: 'ORD-0099', status: 'confirmed', customer_id: 'cust-1',
       order_date: '2026-03-15', total_cents: 50000, total_cost: 30000, total_price: 50000,
       total_profit: 20000, total_margin_pct: 40.0, order_name: 'Spring Order', notes: '',
       created_at: '2026-03-15T00:00:00Z', delivery_priority: 'normal', po_number: null,
     };
-    mockFrom.mockImplementation((table: string) =>
-      table === 'orders' ? buildChain({ data: orderData, error: null }) : buildChain({ data: [], error: null }),
-    );
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'orders') {
+        orderReads += 1;
+        return buildChain({ data: orderData, error: null });
+      }
+      return buildChain({ data: [], error: null });
+    });
     mockRpc.mockImplementation((rpcName: string) => Promise.resolve(
       rpcName === 'cancel_order'
         ? {
@@ -209,6 +214,7 @@ describe('OrderDetail', () => {
     }));
     expect(mockLogActivity).not.toHaveBeenCalled();
     expect(mockNotifyOrderStatusChange).not.toHaveBeenCalled();
+    expect(orderReads).toBeGreaterThanOrEqual(2);
   });
 
   it('labels a partially fulfilled order as Cancel Remaining Quantity and explains the short-close behavior', async () => {

@@ -23,6 +23,16 @@ BEGIN
      OR NOT has_function_privilege('service_role', 'public.generate_finance_charges(date,uuid,uuid[],text)', 'EXECUTE') THEN
     RAISE EXCEPTION 'PRECONDITION: generate_finance_charges live contract drifted';
   END IF;
+  IF to_regprocedure('public._claim_bound_lifecycle_idempotency(text,text,text,text,jsonb)') IS NULL
+     OR to_regprocedure('public._bind_completed_lifecycle_idempotency(text,text,text,text,jsonb,jsonb)') IS NULL THEN
+    RAISE EXCEPTION 'PRECONDITION: bound idempotency helpers are missing';
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM public.idempotency_keys
+     WHERE operation = 'generate_finance_charges'
+  ) THEN
+    RAISE EXCEPTION 'PRECONDITION: unbound generate_finance_charges key requires reconciliation';
+  END IF;
 
   SELECT prosrc INTO v_source
     FROM pg_proc
@@ -64,6 +74,10 @@ DECLARE
   v_min_balance bigint;
   v_existing jsonb;
   v_result jsonb;
+  v_contract CONSTANT text := 'generate_finance_charges_v2';
+  v_request jsonb;
+  v_fingerprint text;
+  v_customer_ids uuid[];
 BEGIN
   v_actor := auth.uid();
   IF v_actor IS NULL THEN RAISE EXCEPTION 'AUTH_REQUIRED'; END IF;
@@ -79,8 +93,26 @@ BEGIN
     RAISE EXCEPTION 'FUTURE_FINANCE_CHARGE_DATE: finance charges cannot be generated for a future business date';
   END IF;
 
+  IF p_customer_ids IS NOT NULL THEN
+    SELECT COALESCE(array_agg(DISTINCT customer_id ORDER BY customer_id), '{}'::uuid[])
+      INTO v_customer_ids
+      FROM unnest(p_customer_ids) AS selected(customer_id);
+  END IF;
+  v_request := jsonb_build_object(
+    'contract_version', v_contract,
+    'actor_id', v_actor,
+    'as_of_date', p_as_of_date,
+    'customer_ids', to_jsonb(v_customer_ids)
+  );
+  v_fingerprint := md5(v_request::text);
   IF p_idempotency_key IS NOT NULL THEN
-    v_existing := check_idempotency(p_idempotency_key, 'generate_finance_charges');
+    v_existing := public._claim_bound_lifecycle_idempotency(
+      p_idempotency_key,
+      'generate_finance_charges',
+      v_contract,
+      v_fingerprint,
+      v_request
+    );
     IF v_existing IS NOT NULL THEN RETURN v_existing; END IF;
   END IF;
 
@@ -117,7 +149,7 @@ BEGIN
       WHERE c.finance_charge_rate > 0
         AND c.is_active = true
         AND COALESCE(c.finance_charge_enabled, true) = true
-        AND (p_customer_ids IS NULL OR c.id = ANY(p_customer_ids))
+        AND (v_customer_ids IS NULL OR c.id = ANY(v_customer_ids))
       GROUP BY c.id, c.farm_name, c.finance_charge_rate, c.finance_charge_grace_days
       HAVING sum(i.balance_cents) >= v_min_balance
   LOOP
@@ -223,7 +255,14 @@ BEGIN
   );
 
   IF p_idempotency_key IS NOT NULL THEN
-    PERFORM save_idempotency(p_idempotency_key, 'generate_finance_charges', v_result);
+    PERFORM public._bind_completed_lifecycle_idempotency(
+      p_idempotency_key,
+      'generate_finance_charges',
+      v_contract,
+      v_fingerprint,
+      v_request,
+      v_result
+    );
   END IF;
 
   RETURN v_result;
@@ -333,6 +372,9 @@ BEGIN
   IF v_source NOT LIKE '%JOIN public.invoices charge_invoice%'
      OR v_source NOT LIKE '%charge_invoice.status NOT IN (''voided'', ''cancelled'')%'
      OR v_source NOT LIKE '%charge_invoice.deleted_at IS NULL%'
+     OR v_source NOT LIKE '%_claim_bound_lifecycle_idempotency%'
+     OR v_source NOT LIKE '%_bind_completed_lifecycle_idempotency%'
+     OR v_source NOT LIKE '%generate_finance_charges_v2%'
      OR NOT (SELECT prosecdef FROM pg_proc
               WHERE oid = 'public.generate_finance_charges(date,uuid,uuid[],text)'::regprocedure)
      OR ('search_path=public, pg_temp' = ANY (

@@ -131,6 +131,27 @@ BEGIN
    ORDER BY fc.created_at DESC
    LIMIT 1;
 
+  -- The exact request replays, but the same key cannot silently accept a
+  -- changed customer selection after an uncertain client response.
+  v_res := public.generate_finance_charges(
+    v_early, v_admin, ARRAY[v_customer], 'e2e-h2-1-' || v_suffix
+  );
+  IF (v_res->>'charges_generated')::int IS DISTINCT FROM 1 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: exact idempotent replay did not return the original response: %', v_res;
+  END IF;
+  BEGIN
+    PERFORM public.generate_finance_charges(
+      v_early, v_admin, '{}'::uuid[], 'e2e-h2-1-' || v_suffix
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: reused key accepted a changed customer selection';
+  EXCEPTION WHEN OTHERS THEN
+    v_err := SQLERRM;
+    IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_err NOT LIKE 'IDEMPOTENCY_REQUEST_MISMATCH:%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: changed-request replay raised unexpected error: %', v_err;
+    END IF;
+  END;
+
   -- Preview must mirror generation's calendar-month exclusion. Against the
   -- pre-fix preview this customer remains selectable even though generation's
   -- next same-month run will skip it.
