@@ -414,6 +414,17 @@ export function buildClaudeCommandArgs({
     "--no-session-persistence",
     "--disallowedTools",
     "Bash,Edit,Write,NotebookEdit",
+    // The repo's interactive-session hooks must NOT run inside the headless
+    // reviewer: the Stop hook (stop-wrap.mjs) blocks session end until an ack
+    // file is written, but this reviewer has Write denied, so it loops through
+    // dozens of forced turns until the CLI gives up and the final message —
+    // the only text --output-format json surfaces as `result` — is empty.
+    // That produced three completed-but-empty (BLOCKED) reviews on 2026-07-20.
+    // The reviewer needs no hook protection anyway: it is restricted to
+    // Read/Grep/Glob above, so the write/push/migration guards the hooks
+    // enforce have nothing to guard here.
+    "--settings",
+    JSON.stringify({ disableAllHooks: true }),
   ];
 }
 

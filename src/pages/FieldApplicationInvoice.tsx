@@ -11,6 +11,7 @@ import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, sanitizeError, assertRpcResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
+import { assertInvoiceLifecycleSendable, assertInvoiceSendable } from '../lib/invoiceSendDisposition';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
@@ -54,7 +55,7 @@ import {
   WEATHER_DISCLAIMER,
   type WeatherSetForm,
 } from '../lib/fieldAppWeather';
-import { sendEmail, pdfToBase64, buildInvoiceEmailPayload } from '../lib/emailService';
+import { sendEmail, pdfToBase64, buildInvoiceEmailPayload, isInvoiceEmailSuppressed } from '../lib/emailService';
 import {
   countSentPostNotifications,
   describePostNotificationSend,
@@ -364,6 +365,10 @@ export default function FieldApplicationInvoice() {
     prepay_applied_cents: number | null;
     write_off_cents: number | null;
     balance_cents: number;
+    /** Per-line split billing: server-computed send disposition. A
+     *  'suppressed_zero_total' $0 split child is recorded + shown in the account
+     *  summary but never emailed. Undefined until the split-billing migration lands. */
+    send_disposition?: 'normal' | 'suppressed_zero_total';
   } | null>(null);
 
   // Phase 1 (2026-04-29) state
@@ -797,6 +802,16 @@ export default function FieldApplicationInvoice() {
     }
 
     const invoice = inv as Record<string, unknown>;
+    // #A (Codex round-2): a per-line SPLIT child must never be edited in this per-acre editor —
+    // its save_field_app_invoice would rewrite invoice_items and cascade away the split's
+    // invoice_line_shares. This load uses select('*') (tolerant of the column's absence before the
+    // split migration), so detecting it here is deploy-order-safe. Send it to the read-only Split
+    // Billing view keyed by the billing set (breaks any redirect loop with InvoiceDetail).
+    const splitSetId = (invoice.field_app_billing_set_id as string | null) ?? null;
+    if (splitSetId) {
+      navigate(`/split-billing/${splitSetId}`, { replace: true });
+      return;
+    }
     setInvoiceNumber((invoice.invoice_number as string) || '');
     setTransactionDate((invoice.invoice_date as string) || '');
     setNotes((invoice.header_notes as string) || '');
@@ -853,6 +868,9 @@ export default function FieldApplicationInvoice() {
       prepay_applied_cents: (invoice.prepay_applied_cents as number | null) ?? null,
       write_off_cents: (invoice.write_off_cents as number | null) ?? null,
       balance_cents: (invoice.balance_cents as number) || 0,
+      // Carry the server-computed suppression flag so the email gate (isInvoiceEmailSuppressed)
+      // actually fires for a $0 split child opened here (Codex P2 #10).
+      send_disposition: (invoice.send_disposition as 'normal' | 'suppressed_zero_total' | undefined) ?? undefined,
     });
     // Wave B.1 / P2-1: load Applied Info from the invoice row. These are
     // free-form text columns added so the values persist round-trip.
@@ -1751,9 +1769,9 @@ export default function FieldApplicationInvoice() {
   // cancels pending commissions, writes the append-only financial_audit_log, and zeroes
   // AR — we never recompute money here). It refuses an already voided/cancelled invoice
   // and respects the closed-period gate; those come back as honest toasts.
-  // Group-aware: there is NO void_invoice_group RPC, so a split group is voided
-  // member-by-member, each call carrying its own stable, idempotent key (mirrors #28
-  // Unpost) so a retry after a timeout never double-acts.
+  // Field-application groups do not carry governed order-split provenance, so they
+  // remain member-by-member here. Governed order splits use void_invoice_group from
+  // Invoice Detail. Each field-app call carries its own stable idempotency key.
   const handleVoid = async () => {
     if (!profile || !id) return;
     const reason = voidReason.trim();
@@ -1978,6 +1996,10 @@ export default function FieldApplicationInvoice() {
       toast('error', 'Profile not loaded — please refresh.');
       return;
     }
+    if (isInvoiceEmailSuppressed(pdfSnapshot)) {
+      toast('info', 'This $0 invoice is recorded and shown in the account summary, but is not emailed.');
+      return;
+    }
     await runCriticalAction({
       action: async () => {
         const { data: cust } = await supabase
@@ -2003,6 +2025,7 @@ export default function FieldApplicationInvoice() {
           balanceCents: pdfSnapshot.balance_cents,
           attachmentBase64: base64,
         });
+        await assertInvoiceSendable(id);
         const result = await sendEmail(payload);
         if (!result.success) throw new Error(result.error || 'Email failed to send');
 
@@ -2163,14 +2186,18 @@ export default function FieldApplicationInvoice() {
           const scopedProof = assertRpcResult<JobProofData>(scopedRes.data, 'get_job_proof_data');
           const recipientDraft = buildProofDraft(scopedProof);
           const recipientText = renderProofText({ customerName: recipientName, draft: recipientDraft });
+          const recipientInvoiceId = customerToInvoiceId[r.customer_id] ?? (!invoiceGroupId ? id : null);
+          if (!recipientInvoiceId) throw new Error('Could not resolve this customer’s invoice send gate.');
           const payload = buildProofEmailPayload({
             customerEmail: r.email,
             customerId: r.customer_id,
             customerName: recipientName,
             jobId,
+            invoiceId: recipientInvoiceId,
             draft: recipientDraft,
             emailIdempotencyKey: r.email_idempotency_key,
           });
+          await assertInvoiceLifecycleSendable(recipientInvoiceId);
           await sendEmail(payload);
           const confirmRes = await supabase.rpc('confirm_job_notification_sent', {
             p_notification_id: r.notification_id,

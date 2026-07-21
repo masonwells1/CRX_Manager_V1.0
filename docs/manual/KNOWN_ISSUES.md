@@ -1,19 +1,69 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-07-18** (full document re-read and targeted supplier-pricing refresh against current code and live DB through verification watermark `20260717171331`; the reviewed `20260718124517` forward correction is proven locally but not yet applied; older open/deferred claims retain their dated evidence below; owner-facing combined list: root `TODO.md`)
+**Last verified: 2026-07-20** (full document re-read; live high-water `20260720225716`; the 24 previously missing live migration sources landed through PR #180, and broad delivery-signature Storage policies were replaced with delivery-bound active-actor read, write, and delete access while preserving one inaccessible historical orphan; older open/deferred claims retain their dated evidence below; owner-facing combined list: root `TODO.md`)
 **Update triggers:** when a finding is parked/resolved, a migration is parked/applied, or an owner decision lands. Agents must update THIS file, not create new issue lists. Do not re-discover or re-fix something listed here as already known — read the pointer first.
 
 This file consolidates (does not replace) the source documents it points to. If this file and a source disagree, trust the source and fix this file.
 
 ---
 
+## 0. Per-line split-billing — pricing rule SETTLED = Option B (Mason, 2026-07-18)
+
+Resolved. The prior open question (how to price a chemical split line when co-owners are on different tiers)
+is decided: **Option B — each co-owner is billed at their OWN assigned_tier**, mirroring today's non-split
+field-app billing (no customer's price changes). A manual price or field quote applies to everyone (tier-
+independent); only the tier fallback varies per grower. Built + proven in the live DB (rollback: 20/80
+tier1/tier3 field → A@$10/gal, B@$8/gal, each own tier; plus a penny guard so a uniform price totals
+round-once). Committed on branch `claude/per-line-split-billing-build`. Still parked: flag OFF, migration
+NOT applied, NOT merged.
+
+**Codex gate RAN 2026-07-18 → 8 P1 + 2 P2 findings, ALL FIXED + re-proven (21/21 live-rollback).** The Codex
+money/RLS review blocked the first go-live attempt: service lines priced $0 / not per-customer (#1,#2);
+chemical COGS written as 0 (#3); cross-rep RLS bypass in the SECDEF writer (#4); Post commits a stale draft
+after edits (#5); a split child opened in the generic invoice page could cascade-delete its line shares (#6);
+children got no field_app_locations → blank fields/acres (#7); duplicate `invoice_created` audit rows on
+re-save (#8); mis-derived compat acres (#9); `send_disposition` never hydrated so the $0-email gate never
+fired (#10). Mason chose **full v1 scope** (chemical + service + flat). All fixed in
+`20260718030000_..._save_rpc.sql` + `FieldAppSplitInvoiceEditor.tsx` / `InvoiceDetail.tsx` /
+`FieldApplicationInvoice.tsx` / `fieldInvoiceList.ts`; typecheck clean. Two non-blocking notes: a
+chemical *return/credit* (negative qty) can't go through the split screen yet (fail-closed); the per-person
+price override in the draft UI still works for one-off adjustments.
+
+**Codex ROUND 2 RAN 2026-07-18 → 13 more findings (8 P1 + 5 P2), ALL 13 NOW RESOLVED + re-proven.** A deeper
+pass found: flag not enforced server-side (#B); deploy-order coupling in InvoiceDetail preflight (#A); negative
+flat credit posted as a charge (#C); malformed override → $0 (#D); source job billable via split AND normal
+flow = double-bill (#E); fee cost per-acre vs extended mismatch (#F); per-child COGS rounding overstates group
+total (#G); no route to reopen a saved draft (#H); local-date default (#J); micro-pct residual on custom
+splits (#K); service name lost on item (#N); Option-B pricing audited as an "override" not a base (#M);
+custom-split/override reasons never captured (#L). First 7 (#B/#C/#D/#F/#J/#K/#N) landed in `eb942f86`; the
+final 6 (#A/#E/#G/#H/#L/#M) this session. **#H = save-now/post-later:** a new `split-billing/:id` route reopens
+a saved set READ-ONLY for review + Post (editable reopen deferred — a re-save re-prices, so rebuilding money
+fields is a future, separately-proven enhancement). **#E** consumes the source job (status→invoiced) so it
+can't be double-billed. Re-proven in live PG: **PROOFOK 29/29** (adds cogs_group_lr_exact, audited_base_is_own,
+reasons_captured, double_bill_second_set_rejected, resave_same_job_allowed). rls-security-reviewer 0/0,
+migration-drift 0 blockers; typecheck + lint clean. Still parked: flag OFF, migrations NOT applied, PR #164
+NOT merged.
+
+**Codex ROUND 3 RAN 2026-07-18 → 2 P1 + 4 P2, ALL fixed + PROOFOK 32/32.** A third pass (on the job-consumption
++ reopen work round-2 added) found: source job changeable on re-save → two jobs consumed (P1, now frozen);
+service priced/stamped with `current_season()` instead of the job/invoice season (P1, now season-correct);
+child invoices lacked `job_id`/`application_date` (P2); unposted group mislabeled "Posted" (P2); negative
+micro-pct residual on `33.334×3` (P2); the live-RPC snapshot test inflated to hide the 2 parked RPCs (P2, now
+uses the verified queued-bridge at true 438). The live proof ALSO caught 2 runtime bugs the reviews missed:
+`v_job.season` on an unassigned record (55000) and a stale `scheduled_date` (live `jobs` uses `job_date`) —
+both fixed. New harness note: seeding synthetic products now needs `ALTER TABLE products DISABLE TRIGGER USER`
+inside the rolled-back txn (a parallel supplier-pricing project applied live pricing-governance triggers).
+**Remaining before flag-on: a CLEAN full re-run of the Codex gate, then Mason's review + baseline field-app
+billing cycle.**
+Owner-facing detail: `docs/plans/per-line-split-billing-BUILD-HANDOFF-2026-07-18.md`.
+
 ## 1. Open HIGH findings (dormant on live data)
 
 ### Supplier Pricing Phase 1a rollout gap — frontend/Edge retirement not deployed
 
-The additive pricing RPC/bootstrap, zero-cost guard, and legacy Product repeat-save compatibility repair are live through verification watermark `20260717171331`. The zero-cost guard's repository source is `20260717112011_supplier_pricing_zero_cost_guard.sql` and its live ledger identity is `20260717120500_supplier_pricing_zero_cost_guard`; the governed calculator now rejects margin-driven zero cost while legacy Product-page editing remains available. The frontend, strict direct-write cutover, and `process-document` retirement are not live. The active production Edge Function is still v18 and retains the old `price_list` / price-bearing `product_list` OCR paths, and the deployed frontend still contains its legacy pricing UI. The repository rejects those document types before OCR, but production will not inherit that rule until a separately approved Edge Function deployment. Do not describe supplier-price OCR as retired live before that deployment is verified.
+The additive pricing RPC/bootstrap, zero-cost guard, legacy Product repeat-save compatibility repair, cent-scale correction, strict direct-write cutover, integrity rescan, and supplier-price evidence foundation are live through `20260718230000_supplier_price_evidence_phase1b`. The zero-cost guard's repository source is `20260717112011_supplier_pricing_zero_cost_guard.sql` and its live ledger identity is `20260717120500_supplier_pricing_zero_cost_guard`; the governed calculator rejects margin-driven zero cost. The earlier statement that `20260718124517_harden_supplier_pricing_cent_scale_and_trigger.sql` and the cutover were pending is resolved by the 2026-07-20 live migration-catalog check.
 
-The forward correction `20260718124517_harden_supplier_pricing_cent_scale_and_trigger.sql` is now an active, reviewed repository migration and passes the disposable pre-cutover and full-cutover proof. It is **not live yet**: it still requires Mason's explicit apply approval, post-apply verification, and a live schema-registry refresh before the frontend PR can merge. The strict enforcement cutover remains parked until that frontend is deployed and the rollback window closes.
+The remaining rollout gap is the production Edge Function: its deployment state was not inspected in this repository/database-only pass. Do not describe supplier-price OCR as retired live until that separately gated deployment is verified.
 
 ### July 14 full-gauntlet remediation — LIVE, frontend rolled out (PR #133 merged 2026-07-15)
 

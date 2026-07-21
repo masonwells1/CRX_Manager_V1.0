@@ -11,13 +11,14 @@ import Modal from '../components/ui/Modal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, sanitizeError, assertRpcResult } from '../lib/db';
+import { assertInvoiceSendable } from '../lib/invoiceSendDisposition';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import { parseDollarsToCents } from '../lib/parseCents';
 import type { Invoice, InvoiceType, InvoiceStatus, Product, Customer, InvoiceShare, InvoicePrintOptions } from '../types';
 import { downloadInvoicePdf, generateInvoicePdf, deriveFieldAppAppliedAcres, type InvoicePdfData, type InvoicePdfItem } from '../lib/invoicePdf';
 import { formatCents as fmt } from '../lib/money';
-import { sendEmail, pdfToBase64, buildEmailHtml } from '../lib/emailService';
+import { sendEmail, pdfToBase64, buildEmailHtml, isInvoiceEmailSuppressed } from '../lib/emailService';
 import { logActivity } from '../lib/activityLogger';
 import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
@@ -49,6 +50,10 @@ interface LineItem {
   tote_number: string | null;
   price_source: 'quoted' | 'tier' | 'manual' | null;
   quoted_price_cents: number | null;
+  /** Per-line split billing: set when this line was produced by a split billing line.
+   *  Undefined until the split-billing migration lands; when set, its quantity/price
+   *  are server-allocated and must not be edited (would clobber the split amount). */
+  billing_line_id?: string | null;
   // Field-application detail — preserved through edits so the machine-fee flag,
   // applied amounts and EPA/form survive a "bill actual" edit (#3 edit-path).
   is_application_fee: boolean;
@@ -317,6 +322,13 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
       const fieldJobId = (pre.data as { job_id?: string | null }).job_id;
       const fieldBlendId = (pre.data as { blend_ticket_id?: string | null }).blend_ticket_id;
       const fieldStatus = (pre.data as { status?: string }).status;
+      // #A (Codex round-2): this preflight must NOT reference field_app_billing_set_id — an
+      // explicit select of a column that only exists after the split migration would 400 every
+      // invoice-detail load if the frontend deploys before the migration. A split-child DRAFT is
+      // still routed to the per-acre editor here, which (via its own select('*') load, tolerant of
+      // the column's absence) redirects it onward to the read-only Split Billing view. A POSTED
+      // split child (status not draft/unposted) stays on THIS page and renders read-only from the
+      // full select('*') load below (isSplitInvoice), which is deploy-order-safe.
       if (routeArea === 'field' && invType === 'field_application' && !fieldJobId && !fieldBlendId
           && (fieldStatus === 'draft' || fieldStatus === 'unposted')) {
         navigate(`/invoices/field-app/${invoiceId}`, { replace: true });
@@ -336,6 +348,22 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
       toast('error', 'Invoice not found');
       navigate('/invoices');
       return;
+    }
+
+    // Codex r4 P1: route a DRAFT/UNPOSTED split child to the Split Billing reopen editor so it
+    // can be reviewed + Posted, REGARDLESS of job_id. Round-3 P2-1 stamped job_id onto every
+    // child, which defeated the no-job preflight redirect above and stranded job-backed split
+    // drafts on this generic page with no Post path (save-now/post-later broken). Detected here
+    // from the tolerant select('*') load — NOT the preflight, which must stay off the parked
+    // field_app_billing_set_id column for deploy-order safety. A POSTED split child still renders
+    // read-only on this page (isSplitInvoice), unchanged.
+    {
+      const splitSetId = (data as { field_app_billing_set_id?: string | null }).field_app_billing_set_id;
+      const splitStatus = (data as { status?: string }).status;
+      if (splitSetId && (splitStatus === 'draft' || splitStatus === 'unposted')) {
+        navigate(`/split-billing/${splitSetId}`, { replace: true });
+        return;
+      }
     }
 
     let salesman: { full_name: string } | null = null;
@@ -571,6 +599,15 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
 
   // Save invoice
   const handleSave = async () => {
+    // Per-line split billing (Codex P1 #6, 2026-07-18): a split child's line detail lives in
+    // invoice_line_shares, keyed to invoice_items by billing_line_id. The generic save_invoice
+    // deletes + recreates invoice_items, which would CASCADE those shares away and silently
+    // destroy the split. Split invoices are only editable from the dedicated Split Billing
+    // editor — hard-refuse a save here (defense-in-depth with the read-only UI below).
+    if ((invoice as { field_app_billing_set_id?: string | null }).field_app_billing_set_id) {
+      toast('error', 'This is a split-billing invoice — open it from the Split Billing editor to make changes.');
+      return;
+    }
     // Codex P2 fix (PR #59, 2026-05-16): reset saveIdem at the top of every
     // save attempt. The invoice form is always-editable in-page (no separate
     // edit toggle), so any change between failed submits constitutes a new
@@ -690,20 +727,53 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
   // Void invoice
   const handleVoid = async () => {
     setVoiding(true);
+    let voidedGroup = false;
     try {
       const idemKey = voidIdem.getKey();
-      // void_invoice RETURNS void — use .throwOnError() (no `=` capture).
-      await supabase.rpc('void_invoice', {
+      // invoice_group_id is shared by governed order splits and field-application
+      // customer groups. Try the ordinary lifecycle first; the database tells us
+      // when this exact invoice has private split provenance and therefore must be
+      // voided atomically with every governed sibling.
+      const { data: invoiceVoidData, error: invoiceVoidError } = await supabase.rpc('void_invoice', {
         p_invoice_id: id!,
         p_void_reason: voidReason || 'Voided by admin',
         p_idempotency_key: idemKey,
-      }).throwOnError();
+      });
+      // The canonical RPC currently RETURNS void (null). Keep the ordinary error
+      // check above, while still validating any future non-null return contract.
+      if (!invoiceVoidError && invoiceVoidData !== null) {
+        assertRpcResult(invoiceVoidData, 'void_invoice');
+      }
+      const requiresGovernedGroupVoid = Boolean(
+        invoiceVoidError
+        && invoice.invoice_group_id
+        && [invoiceVoidError.message, invoiceVoidError.details, invoiceVoidError.hint, invoiceVoidError.code]
+          .filter(Boolean)
+          .join(' ')
+          .includes('SPLIT_INVOICE_GROUP_VOID_REQUIRED'),
+      );
+
+      if (requiresGovernedGroupVoid) {
+        const { data, error } = await supabase.rpc('void_invoice_group', {
+          p_invoice_group_id: invoice.invoice_group_id!,
+          p_void_reason: voidReason || 'Voided by admin',
+          p_idempotency_key: idemKey,
+        });
+        if (error) throw error;
+        const memberCount = assertRpcResult<number>(data, 'void_invoice_group');
+        if (memberCount < 1) throw new Error('void_invoice_group voided no invoices');
+        voidedGroup = true;
+      } else if (invoiceVoidError) {
+        throw invoiceVoidError;
+      }
       voidIdem.resetKey();
-      toast('success', 'Invoice voided');
+      toast('success', voidedGroup ? 'Invoice group voided' : 'Invoice voided');
       setShowVoidModal(false);
       fetchInvoice(id!);
     } catch (err: unknown) {
-      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'void_invoice' } });
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), {
+        extra: { context: voidedGroup ? 'void_invoice_group' : 'void_invoice' },
+      });
       toast('error', sanitizeError(err));
     }
     setVoiding(false);
@@ -1057,6 +1127,10 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
       toast('error', 'Cannot email invoice — profile not loaded. Please refresh.');
       return;
     }
+    if (isInvoiceEmailSuppressed(invoice)) {
+      toast('info', 'This $0 invoice is recorded and shown in the account summary, but is not emailed.');
+      return;
+    }
     const cust = customers.find(c => c.id === invoice.customer_id);
     if (!cust?.email) {
       toast('error', 'Customer does not have an email address on file');
@@ -1078,6 +1152,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
           <p style="margin:8px 0 0;color:#6b7280;font-size:13px;">If you have questions about this invoice, please contact us.</p>
         `);
 
+        await assertInvoiceSendable(id!);
         const result = await sendEmail({
           to: cust.email!,
           subject: `Invoice ${invoice.invoice_number || ''} from Crop RX Solutions`,
@@ -1107,12 +1182,22 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
   };
 
   const totalCents = items.reduce((s, i) => s + i.extended_cents, 0);
-  // Mirror save_invoice DELTA-E: a machine-fee line stores its EXACT extended cost
-  // (its quantity is acres, not a multiplier), so add it as-is; product lines store a
-  // per-unit cost -> x quantity. Using x quantity for the fee line would inflate the
-  // displayed Total Cost/Margin by a factor of acres.
-  const totalCostCents = items.reduce((s, i) => s + (i.is_application_fee ? i.cost_cents : i.cost_cents * i.quantity), 0);
-  const editable = isNew || ['draft', 'unposted'].includes(invoice.status || '');
+  // Split-billing invoices are managed only from the Split Billing editor; keep this
+  // generic page strictly read-only for them so a save can't cascade away their line
+  // shares (Codex P1 #6). Paired with the hard guard in handleSave.
+  const isSplitInvoice = !!(invoice as { field_app_billing_set_id?: string | null }).field_app_billing_set_id;
+  // Total Cost / Margin:
+  // - Split invoice (Codex r5 P2): chemical items store PER-UNIT cost, but the header
+  //   total_cost_cents holds the penny-exact largest-remainder-allocated COGS — recomputing
+  //   cost_cents*quantity here would mis-display it (1¢ cost split 50/50 shows 1¢+1¢ vs the
+  //   authoritative 1¢+0¢). Use the header total.
+  // - Otherwise mirror save_invoice DELTA-E: a machine-fee line stores its EXACT extended cost
+  //   (its quantity is acres, not a multiplier), so add it as-is; product lines store a per-unit
+  //   cost -> x quantity. Using x quantity for the fee line would inflate Total Cost by acres.
+  const totalCostCents = isSplitInvoice
+    ? Number((invoice as { total_cost_cents?: number | null }).total_cost_cents ?? 0)
+    : items.reduce((s, i) => s + (i.is_application_fee ? i.cost_cents : i.cost_cents * i.quantity), 0);
+  const editable = !isSplitInvoice && (isNew || ['draft', 'unposted'].includes(invoice.status || ''));
 
   // Customer filtered list
   const filteredCustomers = customerSearch.length >= 1
@@ -1177,6 +1262,11 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
             <Button icon={<Save className="w-4 h-4" />} onClick={handleSave} loading={saving}>
               Save
             </Button>
+          )}
+          {isSplitInvoice && (
+            <span className="inline-flex items-center text-xs bg-amber-50 text-amber-700 px-2.5 py-1 rounded-md">
+              Read-only — this per-line split invoice is managed from the Split Billing editor.
+            </span>
           )}
           <GuardrailBanner warning={creditWarning} onDismiss={dismissCreditWarning} />
           {!isNew && editable && isAdminOrRep && (
@@ -1540,7 +1630,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
                       )}
                     </td>
                     <td className="py-2 pr-4">
-                      {editable ? (
+                      {editable && !item.billing_line_id ? (
                         <input
                           type="number"
                           value={item.quantity}
@@ -1554,7 +1644,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
                       )}
                     </td>
                     <td className="py-2 pr-4">
-                      {editable ? (
+                      {editable && !item.billing_line_id ? (
                         <input
                           type="number"
                           value={(item.unit_price_cents / 100).toFixed(2)}
@@ -1579,7 +1669,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
                       <td className="py-2 pr-4 text-secondary">{item.tote_number || '-'}</td>
                     )}
                     <td className="py-2">
-                      {editable && (
+                      {editable && !item.billing_line_id && (
                         <button
                           onClick={() => removeItem(idx)}
                           className="text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
