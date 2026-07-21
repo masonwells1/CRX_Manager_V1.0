@@ -572,6 +572,70 @@ Deno.serve(async (req: Request) => {
       );
     }
 
+    // Re-read the authoritative invoice state at the last possible boundary.
+    // The earlier gate protects all pre-send work, but another session can
+    // void/cancel/delete/suppress an invoice while attachments, rate limits,
+    // idempotency, and the write-ahead log are being processed. Fail closed
+    // here before making the irreversible outbound request.
+    if (invoiceGateId) {
+      const finalGateLookup = await adminClient
+        .from("invoices")
+        .select("id, customer_id, send_disposition, status, deleted_at")
+        .eq("id", invoiceGateId)
+        .maybeSingle();
+      let finalInvoiceRow = finalGateLookup.data as {
+        id: string;
+        customer_id: string;
+        send_disposition?: string;
+        status: string;
+        deleted_at: string | null;
+      } | null;
+      let finalGateError = finalGateLookup.error;
+      const finalGatePreMigrationFallback =
+        !!finalGateError && (finalGateError.code === "42703" || finalGateError.code === "PGRST204");
+      if (finalGatePreMigrationFallback) {
+        const fallbackLookup = await adminClient
+          .from("invoices")
+          .select("id, customer_id, status, deleted_at")
+          .eq("id", invoiceGateId)
+          .maybeSingle();
+        finalInvoiceRow = fallbackLookup.data as typeof finalInvoiceRow;
+        finalGateError = fallbackLookup.error;
+      }
+
+      let finalGateRefusal: string | null = null;
+      if (finalGateError) {
+        finalGateRefusal = `Final invoice eligibility lookup failed: ${finalGateError.message}`;
+      } else if (!finalInvoiceRow) {
+        finalGateRefusal = "Invoice no longer exists";
+      } else if (
+        finalInvoiceRow.deleted_at != null ||
+        finalInvoiceRow.status === "voided" ||
+        finalInvoiceRow.status === "cancelled"
+      ) {
+        finalGateRefusal = "Invoice became voided, cancelled, or deleted before send";
+      } else if (email_type === "invoice" && finalInvoiceRow.customer_id !== customer_id) {
+        finalGateRefusal = "Invoice customer changed before send";
+      } else if (
+        finalInvoiceRow.send_disposition != null &&
+        finalInvoiceRow.send_disposition !== "normal" &&
+        finalInvoiceRow.send_disposition !== "sendable"
+      ) {
+        finalGateRefusal = "Invoice became suppressed or unavailable before send";
+      }
+
+      if (finalGateRefusal) {
+        await adminClient
+          .from("email_log")
+          .update({ status: "failed", error_message: finalGateRefusal })
+          .eq("id", emailLogId);
+        return jsonResponse(
+          { error: `${finalGateRefusal}; email send refused`, email_log_id: emailLogId },
+          finalGateError ? 503 : 409,
+        );
+      }
+    }
+
     const resendResp = await fetch("https://api.resend.com/emails", {
       method: "POST",
       headers: {

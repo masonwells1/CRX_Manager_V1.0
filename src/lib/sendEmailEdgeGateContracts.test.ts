@@ -17,4 +17,21 @@ describe('send-email invoice authority contracts', () => {
     expect(source).toContain('invoiceRow.deleted_at != null || invoiceRow.status === "voided" || invoiceRow.status === "cancelled"');
     expect(source).toContain('matchingInvoices.length > 1');
   });
+
+  it('rechecks invoice lifecycle immediately before the outbound provider call', () => {
+    const resendBodyStart = source.indexOf('const resendBody: Record<string, unknown>');
+    const finalGateStart = source.indexOf('const finalGateLookup', resendBodyStart);
+    const outboundSendStart = source.indexOf('await fetch("https://api.resend.com/emails"', finalGateStart);
+    const finalGate = source.slice(finalGateStart, outboundSendStart);
+
+    expect(resendBodyStart).toBeGreaterThan(-1);
+    expect(finalGateStart).toBeGreaterThan(resendBodyStart);
+    expect(outboundSendStart).toBeGreaterThan(finalGateStart);
+    expect(finalGate).toContain('.select("id, customer_id, send_disposition, status, deleted_at")');
+    expect(finalGate).toContain('finalInvoiceRow.deleted_at != null');
+    expect(finalGate).toContain('finalInvoiceRow.status === "voided"');
+    expect(finalGate).toContain('finalInvoiceRow.status === "cancelled"');
+    expect(finalGate).toContain('finalInvoiceRow.send_disposition !== "normal"');
+    expect(finalGate).toContain('.update({ status: "failed", error_message: finalGateRefusal })');
+  });
 });
