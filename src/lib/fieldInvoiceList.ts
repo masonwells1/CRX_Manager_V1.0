@@ -67,6 +67,10 @@ export interface FieldInvoiceListRow {
   total_cost_cents: number;
   balance_cents: number;
   invoice_date: string;
+  /** Per-line split billing (flag-gated, additive): server-computed send suppression for
+   * a fully-$0 split child. Optional — not selected by today's list query (the column is
+   * not live yet); the email-suppression gate keys on it once the migration lands. */
+  send_disposition?: 'normal' | 'suppressed_zero_total' | null;
   /** Lowercased haystack for the in-list Search box. */
   search_blob: string;
 }
@@ -178,6 +182,10 @@ export function mapFieldInvoiceRow(raw: RawFieldInvoiceRow): FieldInvoiceListRow
     total_cost_cents: Number(raw.total_cost_cents) || 0,
     balance_cents: raw.balance_cents,
     invoice_date: raw.invoice_date,
+    // Forward the server-computed send suppression flag so the "don't email a $0 split
+    // child" gate can actually fire (Codex P2 #10). Undefined before the column is live
+    // (LIST_SELECT uses `*`), which the gate reads as "not suppressed" — current behavior.
+    send_disposition: raw.send_disposition ?? null,
     search_blob,
   };
 }
