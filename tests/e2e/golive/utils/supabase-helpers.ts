@@ -45,7 +45,7 @@ export async function supabaseRest(
 ): Promise<unknown> {
   const token = await getToken(page);
 
-  return page.evaluate(
+  const result = await page.evaluate(
     async ({ method, path, body, token, url, key }) => {
       const resp = await fetch(`${url}/rest/v1/${path}`, {
         method,
@@ -58,14 +58,23 @@ export async function supabaseRest(
         body: body ? JSON.stringify(body) : undefined,
       });
       const text = await resp.text();
+      let payload: unknown;
       try {
-        return JSON.parse(text);
+        payload = JSON.parse(text);
       } catch {
-        return text;
+        payload = text;
       }
+      return { ok: resp.ok, status: resp.status, statusText: resp.statusText, payload };
     },
     { method, path, body, token, url: SUPABASE_URL, key: ANON_KEY },
   );
+
+  if (!result.ok) {
+    throw new Error(
+      `Supabase REST ${method} ${path} failed (${result.status} ${result.statusText}): ${JSON.stringify(result.payload)}`,
+    );
+  }
+  return result.payload;
 }
 
 /**
@@ -109,7 +118,7 @@ export async function supabaseRpc(
 ): Promise<unknown> {
   const token = await getToken(page);
 
-  return page.evaluate(
+  const result = await page.evaluate(
     async ({ functionName, params, token, url, key }) => {
       const resp = await fetch(`${url}/rest/v1/rpc/${functionName}`, {
         method: 'POST',
@@ -121,12 +130,21 @@ export async function supabaseRpc(
         body: JSON.stringify(params || {}),
       });
       const text = await resp.text();
+      let payload: unknown;
       try {
-        return JSON.parse(text);
+        payload = JSON.parse(text);
       } catch {
-        return text;
+        payload = text;
       }
+      return { ok: resp.ok, status: resp.status, statusText: resp.statusText, payload };
     },
     { functionName, params, token, url: SUPABASE_URL, key: ANON_KEY },
   );
+
+  if (!result.ok) {
+    throw new Error(
+      `Supabase RPC ${functionName} failed (${result.status} ${result.statusText}): ${JSON.stringify(result.payload)}`,
+    );
+  }
+  return result.payload;
 }

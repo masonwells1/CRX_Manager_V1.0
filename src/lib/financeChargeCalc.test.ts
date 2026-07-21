@@ -238,9 +238,20 @@ describe('Commission split validation (validateCommissionSplits)', () => {
       { recipient: 'user-a', percentage: -10 },
       { recipient: 'user-b', percentage: 110 },
     ]);
-    // Sums to 100 but includes a negative — the function only checks sum,
-    // so this should actually pass. Document this behavior.
-    expect(result).toBeNull();
+    expect(result).not.toBeNull();
+    expect(result).toContain('greater than 0');
+  });
+
+  it('rejects blank or duplicate recipients even when percentages total 100%', () => {
+    expect(validateCommissionSplits([{ recipient: '', percentage: 100 }])).toContain(
+      'needs a recipient',
+    );
+    expect(
+      validateCommissionSplits([
+        { recipient: 'Mason Wells', percentage: 50 },
+        { recipient: ' mason wells ', percentage: 50 },
+      ]),
+    ).toContain('listed more than once');
   });
 
   it('returns null for single split at exactly 100%', () => {

@@ -57,7 +57,7 @@ This is the B7 pattern from 2026-05-26.
 4. Always note the post-apply B7 requirement: after a successful MCP apply, rename the disk file to the MCP-assigned live version and update migration history before commit. This future rename is a post-apply obligation, not a pre-apply finding.
 
 ### CHECK 7 — Missing migration-history.md entry
-After all checks: verify `docs/reference/migration-history.md` contains a row for each new migration file. If missing, severity = **MED** (doc drift, not safety).
+After all checks: verify `docs/reference/migration-history.md` contains either the full filename or its unique timestamp prefix for each new migration file. If missing, severity = **MED** (doc drift, not safety).
 
 ## Output Format
 

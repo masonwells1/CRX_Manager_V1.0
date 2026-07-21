@@ -6,7 +6,7 @@
     "regenerate_with": "node scripts/regenerate-schema-registry.mjs --from-introspection <queries.json> (queries documented in the script header)",
     "purpose": "Single source of truth for hooks: generated columns, status enums, ALL parseable CHECK IN-lists, NOT NULL columns, full column lists, sequences, tables-with/without updated_at, applied-migration high water.",
     "note": "For a fresh refresh from the live DB, ask Claude Code: 'regenerate the schema-registry from Supabase' (/regen-schema-registry). skipped_constraints lists every CHECK the hooks can NOT validate — review it when touching those tables.",
-    "migrations_high_water": "20260720185135",
+    "migrations_high_water": "20260720235246",
     "applied_migration_names": [
       "20260207_gap_analysis_fixes.sql",
       "20260209050000_inventory_overhaul",
@@ -273,6 +273,14 @@
       "20260719102000_allow_governed_split_terminal_lifecycle",
       "20260720173059_fix_statement_opening_balance",
       "20260720175946_protect_governed_split_edit_and_void_group",
+      "20260720203000_restrict_supplier_pricing_to_admin",
+      "20260720203000_scope_delivery_signature_storage_access",
+      "20260720211000_scope_delivery_signature_delete",
+      "20260720213000_per_line_split_billing_schema",
+      "20260720214000_per_line_split_billing_calculator",
+      "20260720225000_require_active_driver_for_signatures",
+      "20260720233000_per_line_split_billing_save_rpc",
+      "20260720235000_qualify_sales_rep_authorization_helper",
       "a1_dispatched_list_recent_completed",
       "a1b_dispatched_to_me_completed_tail",
       "accounting_and_integrity_fixes",
@@ -1176,6 +1184,8 @@
     "delivery_items",
     "delivery_photos",
     "email_log",
+    "field_app_billing_lines",
+    "field_app_billing_sets",
     "field_app_location_shares",
     "field_app_locations",
     "field_crop_history",
@@ -1188,6 +1198,8 @@
     "integrity_negative_baseline",
     "inventory_transactions",
     "invoice_line_allocations",
+    "invoice_line_share_snapshots",
+    "invoice_line_shares",
     "invoice_shares",
     "job_applied_record_crew",
     "job_attachments",
@@ -1579,6 +1591,17 @@
         "email_log_status_check"
       ]
     },
+    "field_app_billing_lines.line_kind": {
+      "values": [
+        "chemical",
+        "service",
+        "fuel_surcharge",
+        "flat_fee"
+      ],
+      "constraints": [
+        "field_app_billing_lines_line_kind_check"
+      ]
+    },
     "field_obstacles.kind": {
       "values": [
         "oil_well",
@@ -1745,6 +1768,38 @@
       ],
       "nullable": true
     },
+    "invoice_line_shares.base_price_source": {
+      "values": [
+        "manual",
+        "quoted",
+        "tier",
+        "service_rate",
+        "service_default",
+        "grower_share",
+        "flat"
+      ],
+      "constraints": [
+        "invoice_line_shares_base_price_source_check"
+      ]
+    },
+    "invoice_line_shares.price_mode": {
+      "values": [
+        "default",
+        "override"
+      ],
+      "constraints": [
+        "invoice_line_shares_price_mode_check"
+      ]
+    },
+    "invoice_line_shares.split_mode": {
+      "values": [
+        "field_default",
+        "custom"
+      ],
+      "constraints": [
+        "invoice_line_shares_split_mode_check"
+      ]
+    },
     "invoices.invoice_type": {
       "values": [
         "chemical_sale",
@@ -1754,6 +1809,15 @@
       ],
       "constraints": [
         "invoices_invoice_type_check"
+      ]
+    },
+    "invoices.send_disposition": {
+      "values": [
+        "normal",
+        "suppressed_zero_total"
+      ],
+      "constraints": [
+        "invoices_send_disposition_check"
       ]
     },
     "invoices.status": {
@@ -2754,6 +2818,12 @@
       "table": "invoice_line_allocations",
       "constraint": "invoice_line_allocations_split_percentage_check",
       "def": "CHECK (((split_percentage > (0)::numeric) AND (split_percentage <= (100)::numeric)))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "invoice_line_shares",
+      "constraint": "invoice_line_shares_split_micro_pct_check",
+      "def": "CHECK (((split_micro_pct >= 0) AND (split_micro_pct <= 100000000)))",
       "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
     },
     {
@@ -3973,6 +4043,24 @@
         "updated_at"
       ]
     },
+    "field_app_billing_lines": {
+      "no_default": [
+        "billing_set_id",
+        "line_kind"
+      ],
+      "with_default": [
+        "id",
+        "sort_order",
+        "created_at"
+      ]
+    },
+    "field_app_billing_sets": {
+      "no_default": [],
+      "with_default": [
+        "id",
+        "created_at"
+      ]
+    },
     "field_app_location_shares": {
       "no_default": [
         "location_id",
@@ -4219,6 +4307,42 @@
         "created_at"
       ]
     },
+    "invoice_line_share_snapshots": {
+      "no_default": [
+        "invoice_id",
+        "customer_id",
+        "split_micro_pct",
+        "unit_price_cents",
+        "amount_cents"
+      ],
+      "with_default": [
+        "id",
+        "posted_at",
+        "snapshot_reason",
+        "created_at"
+      ]
+    },
+    "invoice_line_shares": {
+      "no_default": [
+        "billing_line_id",
+        "invoice_item_id",
+        "customer_id",
+        "split_mode",
+        "split_micro_pct",
+        "base_unit_price_cents",
+        "base_price_source",
+        "unit_price_cents",
+        "amount_cents",
+        "calculation_hash",
+        "vector_hash",
+        "created_by"
+      ],
+      "with_default": [
+        "id",
+        "price_mode",
+        "created_at"
+      ]
+    },
     "invoice_shares": {
       "no_default": [
         "invoice_id",
@@ -4252,7 +4376,8 @@
         "write_off_cents",
         "pricing_pending",
         "discount_earned_cents",
-        "credit_applied_cents"
+        "credit_applied_cents",
+        "send_disposition"
       ]
     },
     "job_applied_info": {
@@ -5924,6 +6049,27 @@
       "created_at",
       "updated_at"
     ],
+    "field_app_billing_lines": [
+      "id",
+      "billing_set_id",
+      "line_kind",
+      "product_id",
+      "application_service_id",
+      "description",
+      "source_quantity",
+      "source_acres",
+      "source_unit_price_cents",
+      "source_line_cents",
+      "sort_order",
+      "created_at"
+    ],
+    "field_app_billing_sets": [
+      "id",
+      "invoice_group_id",
+      "source_job_id",
+      "created_by",
+      "created_at"
+    ],
     "field_app_location_shares": [
       "id",
       "location_id",
@@ -6180,7 +6326,8 @@
       "quoted_price_cents",
       "price_source",
       "warehouse",
-      "vendor"
+      "vendor",
+      "billing_line_id"
     ],
     "invoice_line_allocations": [
       "id",
@@ -6192,6 +6339,53 @@
       "split_invoice_id",
       "created_at",
       "invoice_id"
+    ],
+    "invoice_line_share_snapshots": [
+      "id",
+      "invoice_id",
+      "billing_line_id",
+      "customer_id",
+      "posted_at",
+      "split_micro_pct",
+      "allocated_quantity",
+      "allocated_acres",
+      "unit_price_cents",
+      "amount_cents",
+      "line_kind",
+      "product_id",
+      "application_service_id",
+      "line_description",
+      "base_unit_price_cents",
+      "base_price_source",
+      "split_mode",
+      "price_mode",
+      "split_override_reason",
+      "price_override_reason",
+      "calculation_hash",
+      "vector_hash",
+      "snapshot_reason",
+      "created_at"
+    ],
+    "invoice_line_shares": [
+      "id",
+      "billing_line_id",
+      "invoice_item_id",
+      "customer_id",
+      "split_mode",
+      "split_micro_pct",
+      "allocated_quantity",
+      "allocated_acres",
+      "base_unit_price_cents",
+      "base_price_source",
+      "price_mode",
+      "unit_price_cents",
+      "amount_cents",
+      "split_override_reason",
+      "price_override_reason",
+      "calculation_hash",
+      "vector_hash",
+      "created_by",
+      "created_at"
     ],
     "invoice_shares": [
       "id",
@@ -6270,7 +6464,9 @@
       "weather_manual_override",
       "diluent_rate_gpa",
       "credit_applied_cents",
-      "balance_cents"
+      "balance_cents",
+      "send_disposition",
+      "field_app_billing_set_id"
     ],
     "job_applied_info": [
       "id",

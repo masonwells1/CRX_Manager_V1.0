@@ -271,7 +271,7 @@ const UNCOVERED_WITH_REASON: Record<string, string> = {
   Returns: 'requires populated order and inventory fixtures',
   SalesReports: 'not yet verified with the universal empty-data fixture',
   SettingsPage: 'not yet verified with the universal empty-data fixture',
-  SupplierPricing: 'covered by dedicated supplier-pricing fixtures while its database migration remains parked',
+  SupplierPricing: 'covered by dedicated supplier-pricing fixtures against its governed live database foundation',
   TeamBoard: 'not yet verified with the universal empty-data fixture',
   ToShip: 'not yet verified with the universal empty-data fixture',
   VehicleDetail: 'requires a populated vehicle fixture',

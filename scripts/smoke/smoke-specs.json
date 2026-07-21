@@ -6,6 +6,11 @@
     "spec_contract": "Keys are the primary RPC under test. 'covers' lists every RPC the chain exercises - run-smoke.mjs --spec <rpc> matches keys AND covers entries, so one chain can certify several RPCs. Every migration that touches an RPC must have or extend a spec covering it."
   },
   "specs": {
+    "delivery_signature_storage_access": {
+      "chain": "smoke-delivery_signature_storage_access.sql",
+      "covers": ["delivery_signature_storage_access"],
+      "description": "Delivery-signature Storage access is private and scoped to the delivery path and authorized actor; the shared sales-rep helper is proven immune to a forged pg_temp profiles table."
+    },
     "supplier_pricing_phase1b": {
       "chain": "smoke-supplier-pricing-phase1b.sql",
       "description": "Supplier Pricing Phase 1b full chain: every mutator passes no-auth, anon, wrong-role, forged-actor, positive-control, and idempotent-replay probes; a reviewed vendor alias feeds a reusable comparable supplier link, a one-row quick quote stages and approves into append-only evidence, all five read RPCs return the linked/imported evidence, pack conversion identifies the correct cheapest normalized cost, and a correction supersedes rather than rewrites the original observation. Payload mismatch, link/history immutability, observation immutability, and zero Product cost/sell-price changes are asserted. Self-contained synthetic evidence with terminal rollback.",
