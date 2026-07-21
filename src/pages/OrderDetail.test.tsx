@@ -212,9 +212,11 @@ describe('OrderDetail', () => {
       p_performed_by: 'user-1',
       p_idempotency_key: 'test-idem-key',
     }));
-    expect(mockLogActivity).not.toHaveBeenCalled();
-    expect(mockNotifyOrderStatusChange).not.toHaveBeenCalled();
-    expect(orderReads).toBeGreaterThanOrEqual(2);
+    await waitFor(() => {
+      expect(orderReads).toBeGreaterThanOrEqual(2);
+      expect(mockLogActivity).not.toHaveBeenCalled();
+      expect(mockNotifyOrderStatusChange).not.toHaveBeenCalled();
+    });
   });
 
   it('labels a partially fulfilled order as Cancel Remaining Quantity and explains the short-close behavior', async () => {
@@ -260,12 +262,14 @@ describe('OrderDetail', () => {
       p_performed_by: 'user-1',
       p_idempotency_key: 'test-idem-key',
     }));
-    expect(mockToast).toHaveBeenCalledWith(
-      'success',
-      expect.stringContaining('Remaining quantity cancelled; delivered quantity kept as fulfilled.'),
-    );
-    expect(mockLogActivity).not.toHaveBeenCalled();
-    expect(mockNotifyOrderStatusChange).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(mockToast).toHaveBeenCalledWith(
+        'success',
+        expect.stringContaining('Remaining quantity cancelled; delivered quantity kept as fulfilled.'),
+      );
+      expect(mockLogActivity).not.toHaveBeenCalled();
+      expect(mockNotifyOrderStatusChange).not.toHaveBeenCalled();
+    });
   });
 
   it('posts split draft invoices through one atomic group RPC', async () => {
