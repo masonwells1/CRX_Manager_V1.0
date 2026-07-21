@@ -18,7 +18,7 @@ SET setting_value = EXCLUDED.setting_value,
     description = EXCLUDED.description,
     updated_at = now();
 
-CREATE TABLE IF NOT EXISTS public.product_cost_basis (
+CREATE TABLE public.product_cost_basis (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   product_id uuid NOT NULL REFERENCES public.products(id) ON DELETE RESTRICT,
   basis_type text NOT NULL CHECK (basis_type IN (
@@ -66,22 +66,22 @@ CREATE TABLE IF NOT EXISTS public.product_cost_basis (
   )
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS uq_product_cost_basis_active
+CREATE UNIQUE INDEX uq_product_cost_basis_active
   ON public.product_cost_basis(product_id)
   WHERE effective_to IS NULL;
-CREATE INDEX IF NOT EXISTS idx_product_cost_basis_product_history
+CREATE INDEX idx_product_cost_basis_product_history
   ON public.product_cost_basis(product_id, effective_from DESC, id DESC);
-CREATE INDEX IF NOT EXISTS idx_product_cost_basis_supplier_observation
+CREATE INDEX idx_product_cost_basis_supplier_observation
   ON public.product_cost_basis(supplier_price_observation_id)
   WHERE supplier_price_observation_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_product_cost_basis_purchase_item
+CREATE INDEX idx_product_cost_basis_purchase_item
   ON public.product_cost_basis(purchase_order_item_id)
   WHERE purchase_order_item_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_product_cost_basis_change_set
+CREATE INDEX idx_product_cost_basis_change_set
   ON public.product_cost_basis(pricing_change_set_id)
   WHERE pricing_change_set_id IS NOT NULL;
 
-CREATE TABLE IF NOT EXISTS public.product_cost_basis_change_rows (
+CREATE TABLE public.product_cost_basis_change_rows (
   pricing_change_set_id uuid NOT NULL
     REFERENCES public.pricing_change_sets(id) ON DELETE CASCADE,
   product_id uuid NOT NULL REFERENCES public.products(id) ON DELETE RESTRICT,
@@ -119,7 +119,7 @@ CREATE TABLE IF NOT EXISTS public.product_cost_basis_change_rows (
   )
 );
 
-CREATE INDEX IF NOT EXISTS idx_product_cost_basis_change_rows_product
+CREATE INDEX idx_product_cost_basis_change_rows_product
   ON public.product_cost_basis_change_rows(product_id);
 
 ALTER TABLE public.product_cost_basis ENABLE ROW LEVEL SECURITY;
@@ -154,7 +154,15 @@ SET search_path = public, pg_temp
 AS $function$
 DECLARE
   v_inventory_unit text;
+  v_phase2_enabled boolean;
 BEGIN
+  SELECT COALESCE(s.setting_value = 'true', false)
+  INTO v_phase2_enabled
+  FROM public.app_settings s
+  WHERE s.setting_key = 'supplier_cost_basis_enabled';
+
+  v_phase2_enabled := COALESCE(v_phase2_enabled, false);
+
   SELECT p.unit_size INTO v_inventory_unit
   FROM public.products p
   WHERE p.id = NEW.product_id;
@@ -185,7 +193,18 @@ BEGIN
     AND NULLIF(btrim(v_inventory_unit), '') IS NOT NULL
     AND lower(btrim(NEW.unit_size)) = lower(btrim(v_inventory_unit))
   ) THEN
-    RAISE EXCEPTION 'RECEIVED_PO_COST_SNAPSHOT_IMMUTABLE';
+    IF v_phase2_enabled THEN
+      RAISE EXCEPTION 'RECEIVED_PO_COST_SNAPSHOT_IMMUTABLE';
+    END IF;
+
+    -- While Phase 2 is disabled, preserve the existing partially-received PO
+    -- correction workflow but discard provenance that no longer describes the
+    -- edited cost. A later governed receipt/selection must capture fresh facts.
+    NEW.product_supplier_link_id := NULL;
+    NEW.supplier_price_observation_id := NULL;
+    NEW.inventory_units_per_supplier_unit_snapshot := NULL;
+    NEW.cost_provenance := NULL;
+    NEW.cost_snapshot_at := NULL;
   END IF;
 
   IF COALESCE(OLD.quantity_received, 0) <= 0 AND (
@@ -1495,6 +1514,44 @@ BEGIN
        'EXECUTE'
      ) THEN
     RAISE EXCEPTION 'purchase-order cost snapshot trigger or grants invalid';
+  END IF;
+  IF (
+    SELECT count(*) FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'public'
+      AND p.proname = 'preview_product_cost_basis_changes'
+  ) <> 1 OR to_regprocedure(
+    'public.preview_product_cost_basis_changes(text,uuid,jsonb,uuid,text)'
+  ) IS NULL THEN
+    RAISE EXCEPTION 'preview_product_cost_basis_changes overload drift';
+  END IF;
+  IF (
+    SELECT count(*) FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'public'
+      AND p.proname = 'apply_product_cost_basis_change_set'
+  ) <> 1 OR to_regprocedure(
+    'public.apply_product_cost_basis_change_set(uuid,text,uuid,text)'
+  ) IS NULL THEN
+    RAISE EXCEPTION 'apply_product_cost_basis_change_set overload drift';
+  END IF;
+  IF (
+    SELECT count(*) FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'public'
+      AND p.proname = 'get_product_cost_basis_workspace'
+  ) <> 1 OR to_regprocedure(
+    'public.get_product_cost_basis_workspace(uuid)'
+  ) IS NULL THEN
+    RAISE EXCEPTION 'get_product_cost_basis_workspace overload drift';
+  END IF;
+  IF (
+    SELECT count(*) FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'public'
+      AND p.proname = 'get_product_price_history'
+  ) <> 1 OR to_regprocedure('public.get_product_price_history(uuid)') IS NULL THEN
+    RAISE EXCEPTION 'get_product_price_history overload drift';
   END IF;
 END;
 $migration_checks$;

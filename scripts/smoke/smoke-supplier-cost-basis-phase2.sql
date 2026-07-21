@@ -177,6 +177,42 @@ BEGIN
 END;
 $proof$;
 
+-- Migration-first safety: while the Phase 2 flag is off, the existing app may
+-- still correct a partially received PO line. The edit must succeed and clear
+-- the now-stale snapshot instead of silently preserving false provenance.
+INSERT INTO public.purchase_orders(
+  id, po_number, vendor, status, submitted_date, created_by
+) VALUES (
+  'cccccccc-cccc-4ccc-8ccc-ccccccccccc8', 'PO-PHASE2-FLAG-OFF',
+  'Phase 2 Flag-Off Supplier', 'submitted', current_date,
+  '11111111-1111-4111-8111-111111111111'
+);
+INSERT INTO public.purchase_order_items(
+  id, purchase_order_id, product_id, quantity_received, unit_cost, unit_size
+) VALUES (
+  'cccccccc-cccc-4ccc-8ccc-ccccccccccc9',
+  'cccccccc-cccc-4ccc-8ccc-ccccccccccc8',
+  'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2', 0, 50, 'gal'
+);
+UPDATE public.purchase_order_items SET quantity_received = 1
+WHERE id = 'cccccccc-cccc-4ccc-8ccc-ccccccccccc9'::uuid;
+UPDATE public.purchase_order_items SET unit_cost = 55
+WHERE id = 'cccccccc-cccc-4ccc-8ccc-ccccccccccc9'::uuid;
+DO $proof$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM public.purchase_order_items
+    WHERE id = 'cccccccc-cccc-4ccc-8ccc-ccccccccccc9'::uuid
+      AND unit_cost = 55
+      AND inventory_units_per_supplier_unit_snapshot IS NULL
+      AND cost_provenance IS NULL
+      AND cost_snapshot_at IS NULL
+  ) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: flag-off received PO correction was blocked or retained stale provenance';
+  END IF;
+END;
+$proof$;
+
 UPDATE public.app_settings SET setting_value = 'true'
 WHERE setting_key = 'supplier_cost_basis_enabled';
 
