@@ -117,6 +117,18 @@ if (!vitestOnly && (smokes.length || sweeps.length)) {
   const smokeCmd = `node scripts/smoke/run-smoke.mjs --area ${areaName}`;
   const sweepCmd = `node scripts/db-invariant-sweeps/run-sweeps.mjs --only ${sweeps.join(',')}`;
   if (withDb) {
+    // A printed chain is NOT a passed chain (Codex P1 on PR #191): both child
+    // runners fall back to print-only mode and exit 0 when SUPABASE_DB_URL is
+    // missing, which would false-green this whole area review. Refuse instead.
+    if (!process.env.SUPABASE_DB_URL) {
+      fail(
+        '--with-db requires SUPABASE_DB_URL (psql mode). Without it the smoke/sweep\n' +
+        'runners only PRINT their SQL and exit 0 — a false green. Either set\n' +
+        'SUPABASE_DB_URL, or run the printed layers via Supabase MCP execute_sql:\n' +
+        `  node scripts/smoke/run-smoke.mjs --area ${areaName}\n` +
+        (sweeps.length ? `  node scripts/db-invariant-sweeps/run-sweeps.mjs --only ${sweeps.join(',')}\n` : '')
+      );
+    }
     if (smokes.length) {
       console.log(`\n=== [${areaName}] smoke chains (${smokes.length}) ===\n`);
       const r = spawnSync('node', ['scripts/smoke/run-smoke.mjs', '--area', areaName], {
@@ -126,7 +138,8 @@ if (!vitestOnly && (smokes.length || sweeps.length)) {
     }
     if (sweeps.length) {
       console.log(`\n=== [${areaName}] DB invariant sweeps (${sweeps.length}) ===\n`);
-      const r = spawnSync('node', ['scripts/db-invariant-sweeps/run-sweeps.mjs', '--only', sweeps.join(',')], {
+      // --strict: never let a print-only fallback pass as a run sweep.
+      const r = spawnSync('node', ['scripts/db-invariant-sweeps/run-sweeps.mjs', '--strict', '--only', sweeps.join(',')], {
         cwd: ROOT, stdio: 'inherit',
       });
       if (r.status !== 0) failed = true;

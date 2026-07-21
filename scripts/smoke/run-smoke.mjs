@@ -41,7 +41,17 @@ import { fileURLToPath } from 'node:url';
 
 const SMOKE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const SPECS_PATH = path.join(SMOKE_DIR, 'smoke-specs.json');
+const AREAS_PATH = path.join(SMOKE_DIR, '..', 'test-areas.json');
 const PASS_TOKEN = 'SMOKE_PASS_ROLLBACK';
+
+/** Area vocabulary comes from scripts/test-areas.json so the two files can't drift. */
+const VALID_AREAS = (() => {
+  try {
+    return new Set(Object.keys(JSON.parse(readFileSync(AREAS_PATH, 'utf8')).areas || {}));
+  } catch {
+    return new Set(); // missing/broken manifest -> every tag reports as unknown, loudly
+  }
+})();
 
 function fail(msg, code = 2) {
   console.error(`run-smoke: ${msg}`);
@@ -68,6 +78,12 @@ function loadSpecs() {
     if (!Array.isArray(spec.area) || spec.area.length === 0 ||
         spec.area.some((a) => typeof a !== 'string' || !a.trim())) {
       fail(`spec "${key}" is missing a non-empty "area" array (business-area tags; see scripts/test-areas.json)`);
+    }
+    // A typo'd tag ("billng") would pass here but silently vanish from every
+    // area slice (Codex P2 on PR #191) — validate against the manifest vocabulary.
+    const badAreas = spec.area.filter((a) => !VALID_AREAS.has(a));
+    if (badAreas.length) {
+      fail(`spec "${key}" has unknown area tag(s): ${badAreas.join(', ')} (valid: ${[...VALID_AREAS].join(', ')})`);
     }
     const file = path.join(SMOKE_DIR, spec.chain);
     if (!existsSync(file)) fail(`spec "${key}" points at a missing chain file: ${spec.chain}`);
