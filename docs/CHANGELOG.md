@@ -2,6 +2,58 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-20 — Bug-class regression suite: analyzed all ~60 bugs fixed 2026-07-10..20 (split-billing Codex rounds 2-12, Fable adversarial, gauntlet 2-6, statement opening balance, pricing 1a/1b), clustered them into 12 recurring classes, and locked the top classes with hermetic npm-test guards (commit 9e7e185f): sqlRoleGateNullFailOpen.test.ts (H1 NULL-role fail-open scanner over latest disk fn defs; found latent H1 in parked create_inventory_hold), bugClassRegressionGuards.test.ts (pins 14 SQL guard tokens across 9 fns following PERFORM/RENAME chains + 3 frontend guards + 8 fail-first smokes' registration), splitVectorMath extraction + property tests (r2 #K / r3 P2 residual classes). Full suite 3742 green; Codex verdict pending before PR/merge.
+
+Bug-class regression suite: analyzed all ~60 bugs fixed 2026-07-10..20 (split-billing Codex rounds 2-12, Fable adversarial, gauntlet 2-6, statement opening balance, pricing 1a/1b), clustered them into 12 recurring classes, and locked the top classes with hermetic npm-test guards (commit 9e7e185f): sqlRoleGateNullFailOpen.test.ts (H1 NULL-role fail-open scanner over latest disk fn defs; found latent H1 in parked create_inventory_hold), bugClassRegressionGuards.test.ts (pins 14 SQL guard tokens across 9 fns following PERFORM/RENAME chains + 3 frontend guards + 8 fail-first smokes' registration), splitVectorMath extraction + property tests (r2 #K / r3 P2 residual classes). Full suite 3742 green; Codex verdict pending before PR/merge.
+
+- **Commits this session** (git log --since=12.hours --author=Mason):
+  - `e4f4cab9 Supplier Pricing Phase 1b follow-ups: durable replay, import reject path, admin-only alignment (migration PARKED) (#184)`
+  - `85f64c31 Merge pull request #164 from masonwells1/claude/per-line-split-billing-build`
+  - `24e71f0e Gauntlet sections 2–6 remediation: 6 confirmed fixes (H1, B2, H2, H3, H4, H5) (#165)`
+  - `1a1b3850 feat(pricing): Supplier Pricing Phase 1b — admin-only supplier evidence MVP (#179)`
+  - `d6f02db4 Reconcile live Supabase migration history (#180)`
+  - `31095fcd Fix customer statement opening balances (#178)`
+  - `5e346c85 Isolate autopilot guard test from the ambient AUTOPILOT.on flag (#177)`
+- **Migrations touched** (last 15 commits (fallback)):
+  - `supabase/migrations/20260720230000_supplier_pricing_durable_replay_and_reject.sql`
+  - `supabase/migrations/20260720213000_per_line_split_billing_schema.sql`
+  - `supabase/migrations/20260720214000_per_line_split_billing_calculator.sql`
+  - `supabase/migrations/20260720233000_per_line_split_billing_save_rpc.sql`
+  - `supabase/migrations/20260720200329_scope_delivery_signature_storage_access.sql`
+  - `supabase/migrations/20260720211454_scope_delivery_signature_delete.sql`
+  - `supabase/migrations/20260720225716_require_active_driver_for_signatures.sql`
+  - `supabase/migrations/20260720235246_qualify_sales_rep_authorization_helper.sql`
+  - `supabase/migrations/20260718225511_supplier_price_evidence_phase1b.sql`
+  - `supabase/migrations/20260718235717_stage_supplier_vendor_aliases_phase1b.sql`
+  - `supabase/migrations/20260720203000_restrict_supplier_pricing_to_admin.sql`
+  - `supabase/migrations/20260718030000_per_line_split_billing_save_rpc.sql`
+  - `supabase/migrations/20260718124500_harden_prepay_and_payment_role_gate.sql`
+  - `supabase/migrations/20260718131500_revert_quote_escape_hatch_for_cancelled_order.sql`
+  - `supabase/migrations/20260718132000_finance_charge_month_dedup.sql`
+  - `supabase/migrations/20260718133000_void_invoice_block_applied_payments.sql`
+  - `supabase/migrations/20260718134000_forbid_restore_cancelled_order.sql`
+  - `supabase/migrations/20260718134500_backfill_invoice_refuse_split_billing.sql`
+  - `supabase/migrations/20260718194000_backfill_invoice_guard_durable_split_allocations.sql`
+  - `supabase/migrations/20260718203000_retire_legacy_record_invoice_payment.sql`
+  - `supabase/migrations/20260718204000_void_invoice_ignore_reversed_allocations.sql`
+  - `supabase/migrations/20260718214000_preserve_voided_payment_allocation_history.sql`
+  - `supabase/migrations/20260718230000_supplier_price_evidence_phase1b.sql`
+  - `supabase/migrations/20260718230848_harden_quote_reopen_history_guards.sql`
+  - `supabase/migrations/20260718234500_reconcile_gauntlet_intermediate_live_windows.sql`
+  - `supabase/migrations/20260718235900_stage_supplier_vendor_aliases_phase1b.sql`
+  - `supabase/migrations/20260719013000_bind_revert_quote_status_idempotency.sql`
+  - `supabase/migrations/20260719040000_lock_backfill_split_allocation_rows.sql`
+  - `supabase/migrations/20260719064000_validate_quote_commission_splits.sql`
+  - `supabase/migrations/20260719093000_route_invoice_updates_through_governed_rpcs.sql`
+  - `supabase/migrations/20260719093500_reject_null_commission_percentages.sql`
+  - `supabase/migrations/20260719100000_trust_only_post_revoke_split_provenance.sql`
+  - `supabase/migrations/20260719100500_revert_quote_status_deadlock_retry.sql`
+  - `supabase/migrations/20260719101000_align_finance_charge_preview_month_dedup.sql`
+  - `supabase/migrations/20260719102000_allow_governed_split_terminal_lifecycle.sql`
+  - `supabase/migrations/20260720175946_protect_governed_split_edit_and_void_group.sql`
+  - `supabase/migrations/20260718010000_per_line_split_billing_schema.sql`
+  - `supabase/migrations/20260720173059_fix_statement_opening_balance.sql`
+
 ## 2026-07-20 — Baseline follow-up migrations preserve ledger history
 
 - Replaced the unsafe generic-SQL-client instruction with an isolated, filtered Supabase CLI workflow that dry-runs the exact post-baseline set and records every applied migration in the target ledger.
