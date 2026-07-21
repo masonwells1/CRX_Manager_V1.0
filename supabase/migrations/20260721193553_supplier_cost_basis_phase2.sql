@@ -813,6 +813,17 @@ BEGIN
   ORDER BY o.id
   FOR UPDATE OF o;
 
+  -- Match receiving/reversal lock order: item first, then parent PO. Reversing a
+  -- receipt updates purchase_order_items before purchase_orders, so taking the
+  -- opposite order here would create a deadlock cycle under concurrent apply.
+  PERFORM poi.id
+  FROM public.purchase_order_items poi
+  JOIN public.product_cost_basis_change_rows r
+    ON r.purchase_order_item_id = poi.id
+  WHERE r.pricing_change_set_id = p_change_set_id
+  ORDER BY poi.id
+  FOR UPDATE OF poi;
+
   PERFORM po.id
   FROM public.purchase_orders po
   JOIN public.purchase_order_items poi ON poi.purchase_order_id = po.id
@@ -821,14 +832,6 @@ BEGIN
   WHERE r.pricing_change_set_id = p_change_set_id
   ORDER BY po.id
   FOR UPDATE OF po;
-
-  PERFORM poi.id
-  FROM public.purchase_order_items poi
-  JOIN public.product_cost_basis_change_rows r
-    ON r.purchase_order_item_id = poi.id
-  WHERE r.pricing_change_set_id = p_change_set_id
-  ORDER BY poi.id
-  FOR UPDATE OF poi;
 
   -- Evidence and the OFF-by-default gate are checked again at apply time.
   -- A quote can be superseded, a PO can be cancelled, or the flag can be
