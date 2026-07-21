@@ -2,7 +2,7 @@
 
 Read-only queue for the recurring CRX Live Foundation Gauntlet. Each run reviews one section against current repo code plus live Supabase database structure only, writes one dated report, updates this index, then stops.
 
-Last updated: 2026-07-14
+Last updated: 2026-07-20
 
 The July 14 full all-section run supersedes the older per-row queue notes below for current risk and remediation status. See [2026-07-14-full-gauntlet-codex-only-remediation.md](2026-07-14-full-gauntlet-codex-only-remediation.md). The table remains as section history until the fixes are deployed and production-verified.
 
@@ -10,8 +10,8 @@ The July 14 full all-section run supersedes the older per-row queue notes below 
 
 | # | Section | Status | Last reviewed | Latest report | Notes |
 |---|---|---|---|---|---|
-| 1 | Security, roles, route gating, RLS, SECURITY DEFINER RPC access | Refresh recorded in automation memory | 2026-06-21 | `2026-06-21-section-01-security-roles-rls-secdef-refresh.md` | Automation memory recorded 0 BLOCKER / 1 HIGH; report file is not present in this stale checkout. |
-| 2 | Money, invoices, payments, AR aging, statements, credits, write-offs, finance charges | Refresh recorded in automation memory | 2026-06-24 | `2026-06-24-section-02-money-invoices-payments-ar-refresh.md` | Automation memory recorded 0 BLOCKER / 1 HIGH / 1 MED; report file is not present in this stale checkout. |
+| 1 | Security, roles, route gating, RLS, SECURITY DEFINER RPC access | Refresh complete | 2026-07-19 | [2026-07-19-section-01-security-roles-rls-secdef-refresh.md](2026-07-19-section-01-security-roles-rls-secdef-refresh.md) | 0 BLOCKER / 0 HIGH / 2 MED / 0 LOW. MED: anon-executable SECDEF number generators; `save_field` activity actor spoofing. |
+| 2 | Money, invoices, payments, AR aging, statements, credits, write-offs, finance charges | Refresh complete | 2026-07-20 | [2026-07-20-section-02-money-invoices-payments-ar-refresh.md](2026-07-20-section-02-money-invoices-payments-ar-refresh.md) | 0 BLOCKER / 1 HIGH / 1 MED / 0 LOW. HIGH: period statements omit opening balance. MED: same-day running-balance order is nondeterministic. |
 | 3 | Inventory, holds, prebooks, Net Free, quote draw-down, deliveries, receiving | Refresh recorded in automation memory | 2026-06-29 | `2026-06-29-section-03-inventory-holds-prebooks-deliveries-receiving-refresh.md` | Automation memory recorded 0 BLOCKER / 1 HIGH / 1 MED; report file is not present in this stale checkout. |
 | 4 | Quote to order to delivery to invoice to payment lifecycle wiring | Refresh recorded in automation memory | 2026-07-01 | `2026-07-01-section-04-quote-order-delivery-invoice-payment-lifecycle-refresh.md` | Automation memory recorded 0 app findings; live function metadata follow-up was partially blocked by linked CLI auth. |
 | 5 | Database drift: migrations on disk vs schema registry vs live database catalog, CHECK constraints, overloads, generated columns, search_path | Needs fix | 2026-07-05 | [2026-07-05-section-05-database-drift-refresh.md](2026-07-05-section-05-database-drift-refresh.md) | HIGH: this checkout is behind `origin/main` and live schema migrations; MED: schema registry trails disk migrations. |
@@ -34,4 +34,4 @@ This file was present before the Section 5 run and was not modified by this auto
 
 ## Next Section
 
-All 15 sections completed. The next recurring run restarts at Section 1 after this remediation is live and production-verified.
+Section 3 is queued next: Inventory, holds, prebooks, Net Free, quote draw-down, deliveries, receiving.
