@@ -246,11 +246,33 @@ Deno.serve(async (req: Request) => {
     }
 
     if (invoiceGateId) {
-      const { data: invoiceRow, error: invoiceErr } = await adminClient
+      const primaryInvoiceLookup = await adminClient
         .from("invoices")
         .select("id, customer_id, send_disposition, status, deleted_at")
         .eq("id", invoiceGateId)
         .maybeSingle();
+      let invoiceRow = primaryInvoiceLookup.data as {
+        id: string;
+        customer_id: string;
+        send_disposition?: string;
+        status: string;
+        deleted_at: string | null;
+      } | null;
+      let invoiceErr = primaryInvoiceLookup.error;
+      const preMigrationMissingDisposition =
+        !!invoiceErr && (invoiceErr.code === "42703" || invoiceErr.code === "PGRST204");
+      if (preMigrationMissingDisposition) {
+        // Compatibility for an edge-first rollout: lifecycle/customer checks still
+        // run, while the later invoice-only gate permits only this exact missing-
+        // column condition. No suppressed split children can exist before schema.
+        const fallbackLookup = await adminClient
+          .from("invoices")
+          .select("id, customer_id, status, deleted_at")
+          .eq("id", invoiceGateId)
+          .maybeSingle();
+        invoiceRow = fallbackLookup.data as typeof invoiceRow;
+        invoiceErr = fallbackLookup.error;
+      }
       if (invoiceErr) {
         return jsonResponse({ error: `Invoice send-status lookup failed: ${invoiceErr.message}` }, 500);
       }
@@ -263,7 +285,7 @@ Deno.serve(async (req: Request) => {
       if (email_type === "invoice" && invoiceRow.customer_id !== customer_id) {
         return jsonResponse({ error: "Invoice customer does not match customer_id" }, 400);
       }
-      if (invoiceRow.send_disposition !== "normal" && invoiceRow.send_disposition !== "sendable") {
+      if (invoiceRow.send_disposition != null && invoiceRow.send_disposition !== "normal" && invoiceRow.send_disposition !== "sendable") {
         return jsonResponse(
           { error: invoiceRow.send_disposition === "suppressed_zero_total"
               ? "This $0 split invoice is suppressed and must not be emailed"
