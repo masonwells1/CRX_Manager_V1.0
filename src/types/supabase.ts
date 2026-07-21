@@ -12690,6 +12690,14 @@ export type Database = {
         }
         Returns: undefined
       }
+      void_invoice_group: {
+        Args: {
+          p_idempotency_key?: string
+          p_invoice_group_id: string
+          p_void_reason: string
+        }
+        Returns: number
+      }
       void_order: {
         Args: {
           p_idempotency_key?: string

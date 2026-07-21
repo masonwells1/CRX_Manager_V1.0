@@ -690,20 +690,53 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
   // Void invoice
   const handleVoid = async () => {
     setVoiding(true);
+    let voidedGroup = false;
     try {
       const idemKey = voidIdem.getKey();
-      // void_invoice RETURNS void — use .throwOnError() (no `=` capture).
-      await supabase.rpc('void_invoice', {
+      // invoice_group_id is shared by governed order splits and field-application
+      // customer groups. Try the ordinary lifecycle first; the database tells us
+      // when this exact invoice has private split provenance and therefore must be
+      // voided atomically with every governed sibling.
+      const { data: invoiceVoidData, error: invoiceVoidError } = await supabase.rpc('void_invoice', {
         p_invoice_id: id!,
         p_void_reason: voidReason || 'Voided by admin',
         p_idempotency_key: idemKey,
-      }).throwOnError();
+      });
+      // The canonical RPC currently RETURNS void (null). Keep the ordinary error
+      // check above, while still validating any future non-null return contract.
+      if (!invoiceVoidError && invoiceVoidData !== null) {
+        assertRpcResult(invoiceVoidData, 'void_invoice');
+      }
+      const requiresGovernedGroupVoid = Boolean(
+        invoiceVoidError
+        && invoice.invoice_group_id
+        && [invoiceVoidError.message, invoiceVoidError.details, invoiceVoidError.hint, invoiceVoidError.code]
+          .filter(Boolean)
+          .join(' ')
+          .includes('SPLIT_INVOICE_GROUP_VOID_REQUIRED'),
+      );
+
+      if (requiresGovernedGroupVoid) {
+        const { data, error } = await supabase.rpc('void_invoice_group', {
+          p_invoice_group_id: invoice.invoice_group_id!,
+          p_void_reason: voidReason || 'Voided by admin',
+          p_idempotency_key: idemKey,
+        });
+        if (error) throw error;
+        const memberCount = assertRpcResult<number>(data, 'void_invoice_group');
+        if (memberCount < 1) throw new Error('void_invoice_group voided no invoices');
+        voidedGroup = true;
+      } else if (invoiceVoidError) {
+        throw invoiceVoidError;
+      }
       voidIdem.resetKey();
-      toast('success', 'Invoice voided');
+      toast('success', voidedGroup ? 'Invoice group voided' : 'Invoice voided');
       setShowVoidModal(false);
       fetchInvoice(id!);
     } catch (err: unknown) {
-      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'void_invoice' } });
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), {
+        extra: { context: voidedGroup ? 'void_invoice_group' : 'void_invoice' },
+      });
       toast('error', sanitizeError(err));
     }
     setVoiding(false);

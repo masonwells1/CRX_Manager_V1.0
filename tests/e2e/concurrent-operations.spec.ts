@@ -379,19 +379,20 @@ test.describe('Concurrent Operations & Race Conditions', () => {
     }
 
     // Try to record payment on draft invoice — should fail
-    const payResult = await supabaseRpc(page, 'allocate_payment', {
-      p_customer_id: custId,
-      p_total_cents: 5000,
-      p_payment_method: 'check',
-      p_allocations: [{ invoice_id: invoiceId, amount_cents: 5000 }],
-      p_idempotency_key: `DRAFT-PAY-${RUN}`,
-    });
-
-    const payRecord = payResult as Record<string, unknown> | null;
-    if (!payRecord || typeof payRecord.message !== 'string') {
+    let rejection = '';
+    try {
+      const payResult = await supabaseRpc(page, 'allocate_payment', {
+        p_customer_id: custId,
+        p_total_cents: 5000,
+        p_payment_method: 'check',
+        p_allocations: [{ invoice_id: invoiceId, amount_cents: 5000 }],
+        p_idempotency_key: `DRAFT-PAY-${RUN}`,
+      });
       throw new Error(`Expected draft-invoice payment rejection, got success: ${JSON.stringify(payResult)}`);
+    } catch (error) {
+      rejection = error instanceof Error ? error.message : String(error);
     }
-    expect(payRecord.message.toLowerCase()).toContain('eligible');
+    expect(rejection.toLowerCase()).toContain('eligible');
   });
 
   // ─── Test 6: Zero-quantity order is handled ────────────────────────────

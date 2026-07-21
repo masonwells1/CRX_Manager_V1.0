@@ -6,6 +6,16 @@
     "spec_contract": "Keys are the primary RPC under test. 'covers' lists every RPC the chain exercises - run-smoke.mjs --spec <rpc> matches keys AND covers entries, so one chain can certify several RPCs. Every migration that touches an RPC must have or extend a spec covering it."
   },
   "specs": {
+    "delivery_signature_storage_access": {
+      "chain": "smoke-delivery_signature_storage_access.sql",
+      "covers": ["delivery_signature_storage_access"],
+      "description": "Delivery-signature Storage access is private and scoped to the delivery path and authorized actor; the shared sales-rep helper is proven immune to a forged pg_temp profiles table."
+    },
+    "supplier_pricing_phase1b": {
+      "chain": "smoke-supplier-pricing-phase1b.sql",
+      "description": "Supplier Pricing Phase 1b full chain: every mutator passes no-auth, anon, wrong-role, forged-actor, positive-control, and idempotent-replay probes; a reviewed vendor alias feeds a reusable comparable supplier link, a one-row quick quote stages and approves into append-only evidence, all five read RPCs return the linked/imported evidence, pack conversion identifies the correct cheapest normalized cost, and a correction supersedes rather than rewrites the original observation. Payload mismatch, link/history immutability, observation immutability, and zero Product cost/sell-price changes are asserted. Self-contained synthetic evidence with terminal rollback.",
+      "covers": ["stage_vendor_alias", "review_vendor_alias", "upsert_product_supplier_link", "stage_supplier_price_import", "get_supplier_price_import", "approve_supplier_price_import", "get_supplier_pricing_workspace", "get_supplier_market_evidence", "get_supplier_quote_sheet", "get_product_price_history", "correct_supplier_price_observation"]
+    },
     "financial_scope_and_delivery_aggregate": {
       "chain": "smoke-financial-scope-and-delivery-aggregate.sql",
       "description": "Security and inventory aggregate chain: an active sales rep creates and replays a draft invoice and reads a statement for their assigned customer, but cannot edit or replay an unassigned customer's invoice, cannot hijack it by requesting reassignment to an assigned customer, and cannot read that customer's statement; inactive access is denied. A real delivery with two individually in-stock lines for one product but an aggregate shortage completes under WARN-NOT-BLOCK, returns and caches one warning, marks both append-only delivered ledger rows for review at insertion, emits one activity/notification set, and replays without duplicating warnings. Self-contained fixtures and terminal rollback.",
@@ -15,11 +25,6 @@
       "chain": "smoke-adversarial-money-inventory-closeout.sql",
       "description": "Adversarial money/inventory closeout chain: invoice save and post replays remain bound to the authorized customer; invalid PO lines are rejected; one global bulk-import intent returns the original PO across authorized employees; an admin delete clears its durable claim and all cached save results so the unchanged document and deterministic key create a fresh PO; omitted edit costs remain penny-exact; duplicate or foreign PO line IDs are rejected; and all disposable fixtures roll back at the terminal pass signal.",
       "covers": ["save_invoice", "post_invoice", "post_invoice_group", "save_purchase_order", "purchase_order_import_intents"]
-    },
-    "govern_invoice_order_money_lifecycle": {
-      "chain": "smoke-govern-invoice-order-money-lifecycle.sql",
-      "description": "Invoice/order lifecycle closeout: a partially delivered order closes only its undelivered remainder, preserves delivered totals and invoice recovery, releases inventory once, allocates tiny multi-split commissions penny-exactly, binds every invoice/order retry to its arguments, and clears privileged trigger bypasses. Untouched orders still fully cancel through the upstream split-provenance wrapper and replay the exact augmented response; malformed delivery/draw lineage and paid commissions fail closed without state change; direct terminal transitions, active-order deletion, and terminal-order invoice edits cannot bypass guards; reversed write-offs stay out of transaction review; browser and service-role direct invoice/audit DML is revoked. Self-contained fixtures and terminal rollback.",
-      "covers": ["cancel_order", "create_invoice_from_order", "create_invoice_for_unbilled_delivery", "post_invoice", "void_invoice", "get_customer_transaction_review", "_enforce_delivery_items_parent_lock"]
     },
     "enforce_delivery_accounting_period": {
       "chain": "smoke-delivery-accounting-period-guard.sql",
@@ -73,8 +78,8 @@
     },
     "create_invoice_for_unbilled_delivery": {
       "chain": "smoke-backfill-refuse-split-billing.sql",
-      "description": "H5 regression: mono backfill and posting refuse split-billing conflicts under both serialized writer orderings; a forged field-acre audit row cannot substitute for private exact provenance; raw split header/item edits and identity deletion are blocked; governed save_invoice refreshes the exact claim; and the canonical split group remains postable. The companion disposable proof runs real two-session OIFA-vs-create and cancel-vs-revert interleavings. Self-contained fixtures and terminal rollback.",
-      "covers": ["create_invoice_for_unbilled_delivery", "guard_mono_invoice_split_billing_post", "create_split_invoices_from_order", "save_invoice", "delete_invoices", "convert_quote_to_order"]
+      "description": "H5 regression: mono backfill and posting refuse split-billing conflicts under both serialized writer orderings; private exact provenance cannot be forged; generic edits and singular voids of governed members are refused; void_invoice_group retires the whole group atomically with exact replay binding; and delete/cancel lifecycle paths remain governed. The companion disposable proof runs real two-session OIFA-vs-create and cancel-vs-revert interleavings. Self-contained fixtures and terminal rollback.",
+      "covers": ["create_invoice_for_unbilled_delivery", "guard_mono_invoice_split_billing_post", "create_split_invoices_from_order", "save_invoice", "void_invoice", "void_invoice_group", "delete_invoices", "convert_quote_to_order"]
     },
     "record_invoice_payment": {
       "chain": "smoke-retire-legacy-record-invoice-payment.sql",
@@ -100,6 +105,11 @@
       "chain": "smoke-save-quote-drawn-guard.sql",
       "description": "Drawn-product edit guard (A4): reducing a booking below its drawn quantity and removing a drawn product both raise BOOKING_OVERDRAWN; a legal reduce keeps booked/drawn/status consistent and the booking still closes at the new total; a no-draws control quote edits freely.",
       "covers": ["save_quote", "draw_down_quote"]
+    },
+    "quote_commission_split_validation": {
+      "chain": "smoke-quote-commission-split-validation.sql",
+      "description": "Quote commission money-routing guard: blank or duplicate recipients and missing/JSON-null percentages fail closed on direct INSERT/UPDATE, while an explicit empty no-commission split and a complete named 100% split remain valid. Self-contained fixture and terminal rollback.",
+      "covers": ["guard_quote_commission_split_valid", "validate_commission_split_json", "quotes"]
     },
     "rollover_quote_to_season": {
       "chain": "smoke-rollover-remainder.sql",
@@ -150,6 +160,11 @@
       "chain": "smoke-customer_statement_blind_spots.sql",
       "description": "Statement blind-spot fix (CHIP task_25d25699, migrations 20260611131549 + 20260716160000): legacy, NULL-order, and allocation-set payments each appear exactly once; paid/overdue invoices keep their charge lines; soft-deleted payments excluded; credit memo single-count; unapplied overpayment prepay NOT pre-counted (DEDUP RULE); the exact same allocate_payment key is replayed after the committed result and must return the cached result without a second allocation set or statement change (regression proof for the atomic idempotency-claim guard); running balance never negative; unknown-actor auth probe rejected by the in-body gate.",
       "covers": ["get_customer_statement", "allocate_payment", "_guard_idempotency_key_insert"]
+    },
+    "statement_opening_balance": {
+      "chain": "smoke-statement-opening-balance.sql",
+      "description": "Bounded customer statement regression: pre-period AR is carried as an opening-balance row, same-day invoices have stable UUID ordering with a ROWS running frame, the ending balance equals full as-of AR, and reversed date ranges fail closed.",
+      "covers": ["get_customer_statement", "_get_customer_statement_scoped_impl"]
     },
     "create_planned_holds": {
       "chain": "smoke-planned-holds-drawn-sync.sql",

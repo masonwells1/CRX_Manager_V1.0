@@ -42,7 +42,7 @@ import { Sentry } from '../lib/sentry';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { logActivity } from '../lib/activityLogger';
 import { formatUSD, formatCents } from '../lib/money';
-import { catalogPricePerAcre } from '../lib/quoteCalc';
+import { catalogPricePerAcre, validateCommissionSplits } from '../lib/quoteCalc';
 import { notifyLargeOrder, notifyCreditLimitExceeded } from '../lib/notificationTriggers';
 import { warnIfOverCreditLimit } from '../lib/creditLimit';
 import { sendOrderConfirmedEmail } from '../lib/orderConfirmedEmail';
@@ -1093,13 +1093,10 @@ export default function QuoteBuilder() {
       }
     }
 
-    // S2-3: Validate commission splits sum to 100%
-    if (commissionSplit.splits.length > 0) {
-      const splitTotal = commissionSplit.splits.reduce((sum, s) => sum + (s.percentage || 0), 0);
-      if (Math.abs(splitTotal - 100) > 0.01) {
-        toast('error', `Commission splits must total 100% (currently ${splitTotal.toFixed(1)}%)`);
-        return null;
-      }
+    const commissionSplitError = validateCommissionSplits(commissionSplit.splits);
+    if (commissionSplitError) {
+      toast('error', commissionSplitError);
+      return null;
     }
 
     const quotePayload = {

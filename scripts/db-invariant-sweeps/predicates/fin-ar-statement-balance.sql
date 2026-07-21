@@ -16,9 +16,8 @@
 --   For every customer, the all-time net of get_customer_statement's line-source
 --   union (transcribed below, date window removed) must equal
 --   SUM(invoices.balance_cents) over that customer's posted/overdue/paid,
---   non-deleted invoices, PLUS the customer's write-offs (write-offs remain
---   invisible to the statement by design — they surface only in the detail
---   column here; accepted rows go to the FIN-README baseline). Decomposed
+--   non-deleted invoices. Active write-offs are statement lines as of
+--   20260716120112 and are transcribed below. Decomposed
 --   because the RPC is set-returning per customer and cannot be executed
 --   inside a sweep predicate.
 --
@@ -61,10 +60,8 @@
 --   (no DB function soft-deletes payments today; a frontend soft-delete
 --   without reversal is a TRUE violation), allocation-set prepay remainders
 --   double-spent, and any future producer that bumps paid_amount_cents
---   without a statement-visible source. Write-offs are statement-invisible BY
---   DESIGN, so the identity is stmt_net == ar_open + write_offs (folded into
---   the WHERE below — write-off customers no longer false-positive; the
---   write_offs_invisible diagnostic still prints when other drift fires).
+--   without a statement-visible source. Active write-offs are now explicit
+--   statement lines, so the identity is directly stmt_net == ar_open.
 --
 -- EXPECTED RESULT
 --   Zero rows. Every row is a violation. First column = stable identity key
@@ -72,9 +69,8 @@
 --
 -- KNOWN FALSE-POSITIVE MODES
 --   * None for the credit-memo branches (those are hard identities).
---   * statement_balance_drift is now a hard identity too (write-offs are
---     folded into the expected side: stmt_net must equal ar_open +
---     write_offs). Any remaining row is a TRUE statement-vs-AR divergence —
+--   * statement_balance_drift is a hard identity: stmt_net must equal ar_open.
+--     Any remaining row is a TRUE statement-vs-AR divergence —
 --     triage with the diagnostic columns; move ACCEPTED rows (deliberate
 --     design gaps only) to the baseline in FIN-README.md, do not silently
 --     drop.
@@ -132,6 +128,11 @@ stmt_prepay_branch AS (
   FROM prepay_applications pa
   INNER JOIN prepay_credits pc ON pc.id = pa.prepay_credit_id
 ),
+stmt_writeoff_branch AS (
+  SELECT wo.customer_id, wo.id AS write_off_id, wo.amount_cents AS amt
+  FROM write_offs wo
+  WHERE wo.reversed_at IS NULL
+),
 stmt_side AS (
   SELECT customer_id, SUM(amt)::bigint AS stmt_net_cents
   FROM (
@@ -142,6 +143,8 @@ stmt_side AS (
     SELECT customer_id, -amt       FROM stmt_alloc_branch
     UNION ALL
     SELECT customer_id, -amt       FROM stmt_prepay_branch
+    UNION ALL
+    SELECT customer_id, -amt       FROM stmt_writeoff_branch
   ) u
   GROUP BY customer_id
 ),
@@ -149,7 +152,7 @@ ar_side AS (
   SELECT
     i.customer_id,
     SUM(i.balance_cents)::bigint                                                       AS ar_open_cents,
-    SUM(i.write_off_cents)::bigint                                                     AS write_offs_invisible_to_stmt_cents,
+    SUM(i.write_off_cents)::bigint                                                     AS invoice_write_off_cents,
     SUM(i.paid_amount_cents)::bigint                                                   AS invoice_paid_amount_cents
   FROM invoices i
   WHERE i.status IN ('posted', 'overdue', 'paid')
@@ -187,11 +190,11 @@ balance_drift AS (
     'customer:' || COALESCE(s.customer_id, a.customer_id)::text                AS identity_key,
     'statement_balance_drift'::text                                            AS violation_type,
     COALESCE(s.customer_id, a.customer_id)                                     AS customer_id,
-    COALESCE(a.ar_open_cents, 0) + COALESCE(a.write_offs_invisible_to_stmt_cents, 0) AS expected_cents,
+    COALESCE(a.ar_open_cents, 0)                                                   AS expected_cents,
     COALESCE(s.stmt_net_cents, 0)                                              AS actual_cents,
-    'stmt_net - (ar_open + write_offs) = '
-      || (COALESCE(s.stmt_net_cents, 0) - COALESCE(a.ar_open_cents, 0) - COALESCE(a.write_offs_invisible_to_stmt_cents, 0))::text
-      || '; write_offs_invisible=' || COALESCE(a.write_offs_invisible_to_stmt_cents, 0)::text
+    'stmt_net - ar_open = '
+      || (COALESCE(s.stmt_net_cents, 0) - COALESCE(a.ar_open_cents, 0))::text
+      || '; invoice_write_offs=' || COALESCE(a.invoice_write_off_cents, 0)::text
       || '; paid_on_invoices_vs_stmt_payment_sources='
       || (COALESCE(a.invoice_paid_amount_cents, 0) - COALESCE(p.stmt_payment_cents, 0) - COALESCE(al.stmt_alloc_cents, 0))::text
       || '; stmt_payments=' || COALESCE(p.stmt_payment_cents, 0)::text
@@ -203,7 +206,7 @@ balance_drift AS (
   LEFT JOIN alloc_diag al       ON al.customer_id = COALESCE(s.customer_id, a.customer_id)
   LEFT JOIN deleted_pay_diag d  ON d.customer_id  = COALESCE(s.customer_id, a.customer_id)
   WHERE COALESCE(s.stmt_net_cents, 0)
-        <> COALESCE(a.ar_open_cents, 0) + COALESCE(a.write_offs_invisible_to_stmt_cents, 0)
+        <> COALESCE(a.ar_open_cents, 0)
 ),
 credit_memo_multi_source AS (
   -- B2 shape: one credit memo reachable via more than one return-credit line source

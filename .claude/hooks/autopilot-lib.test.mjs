@@ -5,7 +5,7 @@
 
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -82,26 +82,61 @@ ok(flagActive("not json").active === false, "malformed flag inactive");
 ok(flagActive(JSON.stringify({ armed_at: "x" })).active === false, "no-expiry flag inactive");
 ok(flagActive("").active === false, "empty flag inactive");
 
-// ── LIVE: hook is inert (emits nothing) when the flag is absent ──────────
+// ── LIVE: the hook's arming decision must depend ONLY on the flag in its OWN
+// project dir, never on whatever AUTOPILOT.on happens to be armed in the ambient
+// session. The hook reads $CLAUDE_PROJECT_DIR/.claude/session-state/AUTOPILOT.on,
+// so earlier versions of this test failed whenever real autopilot was armed while
+// it ran (the spawned hook saw the ambient flag and denied). We now point
+// CLAUDE_PROJECT_DIR at throwaway temp dirs — one without a flag, one with a fresh
+// active flag — so both directions are proven deterministically regardless of
+// whether real autopilot is armed. (This is why commits used to fail while armed.)
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const hookPath = path.join(__dirname, "unattended-autopilot.mjs");
-const isolatedProjectDir = mkdtempSync(path.join(tmpdir(), "crx-autopilot-off-test-"));
 const resolvedTempRoot = `${path.resolve(tmpdir())}${path.sep}`;
-const resolvedTestDir = path.resolve(isolatedProjectDir);
-if (!resolvedTestDir.startsWith(resolvedTempRoot)) {
-  throw new Error(`Refusing to use non-temp test directory: ${resolvedTestDir}`);
+
+function safeTempDir(testDir) {
+  const resolvedTestDir = path.resolve(testDir);
+  if (!resolvedTestDir.startsWith(resolvedTempRoot)) {
+    throw new Error(`Refusing to use non-temp test directory: ${resolvedTestDir}`);
+  }
+  return resolvedTestDir;
 }
-let r;
-try {
-  r = spawnSync(process.execPath, [hookPath], {
+
+function runHook(projectDir) {
+  return spawnSync(process.execPath, [hookPath], {
     input: JSON.stringify({ tool_name: "Bash", tool_input: { command: "rm -rf /" } }),
     encoding: "utf8",
-    env: { ...process.env, CLAUDE_PROJECT_DIR: isolatedProjectDir },
+    env: { ...process.env, CLAUDE_PROJECT_DIR: projectDir },
   });
-} finally {
-  rmSync(resolvedTestDir, { recursive: true, force: true });
 }
-eq(r.status, 0, "hook exits 0");
-eq(r.stdout.trim(), "", "hook emits NOTHING when flag absent (off by default — defers to normal flow)");
+
+// (1) flag ABSENT → hook is inert (emits nothing, defers to normal flow).
+const noFlagDir = mkdtempSync(path.join(tmpdir(), "autopilot-noflag-"));
+const resolvedNoFlagDir = safeTempDir(noFlagDir);
+try {
+  const r = runHook(noFlagDir);
+  eq(r.status, 0, "hook exits 0 when flag absent");
+  eq(r.stdout.trim(), "", "hook emits NOTHING when flag absent (off by default — defers to normal flow)");
+} finally {
+  rmSync(resolvedNoFlagDir, { recursive: true, force: true });
+}
+
+// (2) flag PRESENT + active → hook DENIES a deny-set command (rm -rf /). This is
+// the counterpart proof: the same isolation lets us assert the armed behavior too.
+const armedDir = mkdtempSync(path.join(tmpdir(), "autopilot-armed-"));
+const resolvedArmedDir = safeTempDir(armedDir);
+try {
+  const armedStateDir = path.join(armedDir, ".claude", "session-state");
+  mkdirSync(armedStateDir, { recursive: true });
+  writeFileSync(
+    path.join(armedStateDir, "AUTOPILOT.on"),
+    JSON.stringify({ expires: new Date(Date.now() + 3600e3).toISOString() })
+  );
+  const r = runHook(armedDir);
+  eq(r.status, 0, "hook exits 0 when armed");
+  ok(/"permissionDecision":\s*"deny"/.test(r.stdout), "hook DENIES a deny-set command (rm -rf /) when armed");
+} finally {
+  rmSync(resolvedArmedDir, { recursive: true, force: true });
+}
 
 console.log(`autopilot-lib: ${pass} assertions passed`);

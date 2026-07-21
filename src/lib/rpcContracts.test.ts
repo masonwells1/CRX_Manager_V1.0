@@ -1459,6 +1459,7 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   'void_commission_payment',
   'void_delivery',
   'void_invoice',
+  'void_invoice_group',
   'void_order',
   'void_payment',
   'void_vendor_bill',
@@ -1574,6 +1575,9 @@ const IDEMPOTENCY_BODY_EXEMPT: Record<
   // The terminal-provenance wrapper binds the actor and invoice before issuing
   // its exact lifecycle claim and invoking the private implementation.
   void_invoice: 'delegated',
+  // The atomic group wrapper binds actor + group + reason through the private
+  // lifecycle helpers, then calls the owner-only single-member implementation.
+  void_invoice_group: 'delegated',
   // The public wrapper hydrates an omitted cost only for a recognized existing
   // line, then delegates to the directly non-executable integer-cents writer
   // that owns the canonical replay lookup/save.
@@ -1729,7 +1733,7 @@ describe('Idempotency BODY verification (reads migration SQL)', () => {
   it('split provenance wrappers preserve the idempotent implementations and forward the exact key', () => {
     const files = getMigrationFiles();
     const wrapper = files.find(
-      ({ name }) => name === '20260719044912_trust_only_post_revoke_split_provenance.sql'
+      ({ name }) => name === '20260719100000_trust_only_post_revoke_split_provenance.sql'
     )?.content;
     const splitImplementation = files.find(
       ({ name }) => name === '20260707090000_u7_split_gate_allow_predelivery.sql'
@@ -1772,7 +1776,7 @@ describe('Idempotency BODY verification (reads migration SQL)', () => {
   it('binds split creation, deletion, void, and cancellation replays to exact requests', () => {
     const files = getMigrationFiles();
     const wrapper = files.find(
-      ({ name }) => name === '20260719060256_allow_governed_split_terminal_lifecycle.sql'
+      ({ name }) => name === '20260719102000_allow_governed_split_terminal_lifecycle.sql'
     )?.content;
     const splitImplementation = files.find(
       ({ name }) => name === '20260707090000_u7_split_gate_allow_predelivery.sql'
@@ -1781,7 +1785,7 @@ describe('Idempotency BODY verification (reads migration SQL)', () => {
       ({ name }) => name === '20260711050000_credit_apply_reversal_and_lifecycle.sql'
     )?.content;
     const voidImplementation = files.find(
-      ({ name }) => name === '20260718221505_preserve_voided_payment_allocation_history.sql'
+      ({ name }) => name === '20260718214000_preserve_voided_payment_allocation_history.sql'
     )?.content;
     const cancelImplementation = files.find(
       ({ name }) => name === '20260714222000_return_credit_source_of_truth.sql'
@@ -1824,29 +1828,6 @@ describe('Idempotency BODY verification (reads migration SQL)', () => {
     expect(IDEMPOTENCY_BODY_EXEMPT.delete_invoices).toBe('delegated');
     expect(IDEMPOTENCY_BODY_EXEMPT.void_invoice).toBe('delegated');
     expect(IDEMPOTENCY_BODY_EXEMPT.cancel_order).toBe('delegated');
-  });
-
-  it('keeps the upstream provenance-aware cancel wrapper inside the short-close router', () => {
-    const files = getMigrationFiles();
-    const wrapper = files.find(
-      ({ name }) => name === '20260719120000_govern_invoice_order_money_lifecycle.sql'
-    )?.content;
-
-    expect(wrapper).toContain(
-      'RENAME TO _cancel_order_provenance_wrapper_20260719'
-    );
-    expect(wrapper).toMatch(
-      /REVOKE ALL ON FUNCTION public\._cancel_order_provenance_wrapper_20260719[\s\S]*FROM PUBLIC, anon, authenticated, service_role/
-    );
-    expect(wrapper).toContain("v_contract CONSTANT text := 'cancel_order_v1'");
-    expect(wrapper).toContain('public._claim_bound_lifecycle_idempotency(');
-    expect(wrapper).toContain('public._bind_completed_lifecycle_idempotency(');
-    expect(wrapper).toMatch(
-      /public\._cancel_order_provenance_wrapper_20260719\([\s\S]*p_order_id, v_actor, NULL[\s\S]*jsonb_build_object\('mode', 'full_cancel', 'status', 'cancelled'\)/
-    );
-    expect(wrapper).not.toMatch(
-      /v_result := public\._cancel_order_impl_20260714/
-    );
   });
 
   it('save_purchase_order hydrates omitted cost before delegating to its idempotent implementation', () => {
@@ -2060,6 +2041,15 @@ const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
   // contract inside the same transaction; it is absent from generated client
   // types by design but still must remain fail-closed in the migration scan.
   '_save_purchase_order_ascii_identity_impl',
+  // Supplier Pricing Phase 1b is intentionally parked pending a separate,
+  // reviewed apply session. Keep these mutators in the migration-only bucket
+  // until the migration is live and generated client types are refreshed.
+  'approve_supplier_price_import',
+  'correct_supplier_price_observation',
+  'review_vendor_alias',
+  'stage_supplier_price_import',
+  'stage_vendor_alias',
+  'upsert_product_supplier_link',
 ]);
 
 /**
@@ -2069,11 +2059,8 @@ const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
  * in MUTATING_RPCS_MISSING_IDEMPOTENCY and must eventually be fixed.
  */
 const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
-  _close_undelivered_order_remainder_20260718: 'private short-close implementation; public cancel_order owns the bound request and direct EXECUTE is revoked',
-  _enforce_delivery_items_parent_lock: 'trigger-only parent-lock enforcement; direct client EXECUTE is revoked',
   _insert_commissions_for_job: 'internal helper; caller owns idempotency and direct EXECUTE is revoked',
   _insert_commissions_for_order: 'internal helper; caller owns idempotency and direct EXECUTE is revoked',
-  _post_deleted_delivery_recovery_invoice_20260719: 'private completed-delivery recovery helper; public recovery RPC owns idempotency and direct EXECUTE is revoked',
   _reverse_credit_memo_application: 'internal helper called only by idempotent credit-memo reversal RPCs',
   _sync_job_holds: 'internal convergent hold-sync helper; direct client EXECUTE is revoked',
   _sync_planned_holds: 'internal convergent hold-sync helper called within parent transactions',
@@ -2083,8 +2070,6 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
   check_rate_limit: 'rate-limit counter intentionally records every invocation, including retries',
   check_remainder_reminders: 'maintenance reminder sweep uses persisted sent markers to deduplicate',
   check_unpriced_orders: 'cron reminder sweep uses persisted reminder and escalation sent markers',
-  guard_invoice_terminal_order: 'trigger-only invoice lifecycle guard; direct client EXECUTE is revoked',
-  guard_terminal_order_invoice_items: 'trigger-only invoice-item lifecycle guard; direct client EXECUTE is revoked',
   mark_overdue_invoices: 'service-role maintenance updates only invoices currently eligible as overdue',
   recompute_job_applied_acres: 'trigger-only derived-total recomputation; direct client EXECUTE is revoked',
   reconcile_prepay_balances: 'convergent repair sets balances to recomputed ledger truth',

@@ -1,6 +1,6 @@
 # CRX Manager — Current State
 
-**Last verified:** 2026-07-19 (snapshot — counts are as-of this date)
+**Last verified:** 2026-07-20 (feature summary and live migration watermark re-checked through `20260720225716`; the 24 previously missing live migration sources landed through PR #180, and delivery-signature Storage access is now delivery-path- and active-actor-scoped for read, write, and delete; operational counts remain the dated 2026-07-18 snapshot below)
 **Update triggers:** refresh when a major feature ships or quarterly, whichever first.
 
 ## 1. Reality check
@@ -54,12 +54,6 @@ Grouped, one-liner summary of what is LIVE in production today (see
 
 - **Core ops:** customers, products, quotes, orders, invoices, payments, and
   accounts-payable (vendor bills/payments, purchase orders/receiving).
-- **Gauntlet sections 2–6 remediation (2026-07-18):** six live RPC corrections
-  now harden inactive money actors, rescue quotes stranded by a cancelled
-  conversion, deduplicate finance charges by calendar month, block invoice
-  voids with applied cash, forbid unsafe cancelled-order restore, and refuse
-  mono-invoice backfill while split billing remains outstanding. Each passed
-  its content-bound Codex proof and rollback-only production smoke.
 - **CRM relationship intelligence (2026-07-17):** contacts + call logging,
   grower knowledge (facts w/ review queue) + call prep card, seasonal call
   lists (`/call-lists`), per-customer documents — built AI-receptionist-ready

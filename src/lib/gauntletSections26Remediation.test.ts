@@ -6,10 +6,12 @@ import { fileURLToPath } from 'node:url';
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const migration = (name: string) =>
   readFileSync(join(root, 'supabase', 'migrations', name), 'utf8').replace(/\r\n/g, '\n');
+const source = (...parts: string[]) =>
+  readFileSync(join(root, ...parts), 'utf8').replace(/\r\n/g, '\n');
 
 describe('gauntlet sections 2-6 CodeRabbit closeout', () => {
   it('claims and fingerprints revert_quote_status before any quote mutation', () => {
-    const sql = migration('20260719023344_bind_revert_quote_status_idempotency.sql');
+    const sql = migration('20260719013000_bind_revert_quote_status_idempotency.sql');
     expect(sql).toContain("v_contract CONSTANT text := 'revert_quote_status_v1'");
     expect(sql).toContain(
       "hashtextextended('crx:idempotency:revert_quote_status:' || p_idempotency_key, 0)",
@@ -30,7 +32,7 @@ describe('gauntlet sections 2-6 CodeRabbit closeout', () => {
   });
 
   it('locks order items deterministically before checking durable split allocations', () => {
-    const sql = migration('20260719024641_lock_backfill_split_allocation_rows.sql');
+    const sql = migration('20260719040000_lock_backfill_split_allocation_rows.sql');
     const applyBarrier = sql.indexOf(
       'LOCK TABLE\n  public.orders,\n  public.order_items,\n  public.order_item_field_allocations,\n  public.invoices,\n  public.financial_audit_log\nIN SHARE ROW EXCLUSIVE MODE',
     );
@@ -84,7 +86,7 @@ describe('gauntlet sections 2-6 CodeRabbit closeout', () => {
   });
 
   it('binds canonical split invoices to private exact provenance under shared locks', () => {
-    const sql = migration('20260719044912_trust_only_post_revoke_split_provenance.sql');
+    const sql = migration('20260719100000_trust_only_post_revoke_split_provenance.sql');
     const barrier = sql.indexOf(
       'LOCK TABLE\n  public.orders,\n  public.order_items,\n  public.order_item_field_allocations,\n  public.invoices,\n  public.invoice_items,\n  public.financial_audit_log\nIN SHARE ROW EXCLUSIVE MODE',
     );
@@ -117,7 +119,7 @@ describe('gauntlet sections 2-6 CodeRabbit closeout', () => {
   });
 
   it('makes quote/order lock contention retryable instead of deadlocking', () => {
-    const sql = migration('20260719044958_revert_quote_status_deadlock_retry.sql');
+    const sql = migration('20260719100500_revert_quote_status_deadlock_retry.sql');
     expect(sql).toContain('FOR UPDATE NOWAIT');
     expect(sql).toContain('EXCEPTION WHEN lock_not_available');
     expect(sql).toContain('QUOTE_REOPEN_CONCURRENT_ORDER_CHANGE_RETRY');
@@ -128,7 +130,7 @@ describe('gauntlet sections 2-6 CodeRabbit closeout', () => {
   });
 
   it('keeps finance-charge preview aligned with calendar-month generation dedup', () => {
-    const sql = migration('20260719045029_align_finance_charge_preview_month_dedup.sql');
+    const sql = migration('20260719101000_align_finance_charge_preview_month_dedup.sql');
     expect(sql).toContain('CREATE OR REPLACE FUNCTION public.preview_finance_charges');
     expect(sql).toContain('FROM public.finance_charges fc');
     expect(sql).toContain('fc.customer_id = c.id');
@@ -143,7 +145,7 @@ describe('gauntlet sections 2-6 CodeRabbit closeout', () => {
   });
 
   it('keeps governed split lifecycle RPCs usable and binds every affected replay request', () => {
-    const sql = migration('20260719060256_allow_governed_split_terminal_lifecycle.sql');
+    const sql = migration('20260719102000_allow_governed_split_terminal_lifecycle.sql');
     const barrier = sql.indexOf('LOCK TABLE');
     expect(barrier).toBeGreaterThan(-1);
     expect(sql.indexOf('public.idempotency_keys')).toBeGreaterThan(barrier);
@@ -164,5 +166,109 @@ describe('gauntlet sections 2-6 CodeRabbit closeout', () => {
     expect(sql).toContain('RENAME TO _void_invoice_split_provenance_impl_20260719');
     expect(sql).toContain('RENAME TO _cancel_order_split_provenance_impl_20260719');
     expect(sql).toContain('FROM PUBLIC, anon, authenticated, service_role');
+  });
+
+  it('cuts quote commission validation over atomically and reconciles only the proven row', () => {
+    const sql = migration('20260719064000_validate_quote_commission_splits.sql');
+    const barrier = sql.indexOf('LOCK TABLE public.quotes IN SHARE ROW EXCLUSIVE MODE');
+    const preflight = sql.indexOf('DO $preflight$');
+    const repair = sql.indexOf('WITH repaired AS');
+    const trigger = sql.indexOf('CREATE TRIGGER trg_validate_quote_commission_split');
+    expect(barrier).toBeGreaterThan(-1);
+    expect(preflight).toBeGreaterThan(barrier);
+    expect(repair).toBeGreaterThan(preflight);
+    expect(trigger).toBeGreaterThan(repair);
+    expect(sql).toContain("'bcdca194-568a-454b-80da-de726820b27b'::uuid");
+    expect(sql).toContain("'{\"splits\":[]}'::jsonb");
+    expect(sql).toContain('QUOTE_COMMISSION_RECONCILIATION_REQUIRED');
+    expect(sql).toContain('PERFORM public.validate_commission_split_json(NEW.commission_split)');
+    expect(sql).toContain('FROM PUBLIC, anon, authenticated, service_role');
+  });
+
+  it('routes all invoice updates through governed owner-context RPCs', () => {
+    const sql = migration('20260719093000_route_invoice_updates_through_governed_rpcs.sql');
+    const barrier = sql.indexOf('LOCK TABLE public.invoices IN SHARE ROW EXCLUSIVE MODE');
+    const revoke = sql.indexOf('REVOKE UPDATE ON TABLE public.invoices');
+    expect(barrier).toBeGreaterThan(-1);
+    expect(revoke).toBeGreaterThan(barrier);
+    expect(sql).toContain('FROM PUBLIC, anon, authenticated, service_role');
+    expect(sql).toContain("has_table_privilege(role_name, 'public.invoices', 'UPDATE')");
+    expect(sql).toContain("'public.save_invoice(jsonb,jsonb,text)'");
+    expect(sql).toContain("ARRAY['search_path=public, pg_temp']");
+  });
+
+  it('rejects missing and null commission percentages explicitly', () => {
+    const sql = migration('20260719093500_reject_null_commission_percentages.sql');
+    const barrier = sql.indexOf('LOCK TABLE public.quotes IN SHARE ROW EXCLUSIVE MODE');
+    const preflight = sql.indexOf('DO $preflight$');
+    const replacement = sql.indexOf(
+      'CREATE OR REPLACE FUNCTION public.validate_commission_split_json',
+    );
+    expect(barrier).toBeGreaterThan(-1);
+    expect(preflight).toBeGreaterThan(barrier);
+    expect(replacement).toBeGreaterThan(preflight);
+    expect(sql).toContain('COMMISSION_PERCENTAGE_RECONCILIATION_REQUIRED');
+    expect(sql).toContain(
+      'IF v_percentage IS NULL OR v_percentage <= 0 OR v_percentage > 100 THEN',
+    );
+    expect(sql).toContain('COMMISSION_NULL_PERCENTAGE_POSTFLIGHT_FAILED');
+  });
+
+  it('keeps governed split edits immutable and grouped voids atomic', () => {
+    const sql = migration('20260720175946_protect_governed_split_edit_and_void_group.sql');
+    expect(sql).toContain('SPLIT_INVOICE_EDIT_REQUIRES_REISSUE');
+    expect(sql).toContain('SPLIT_INVOICE_GROUP_VOID_REQUIRED');
+    expect(sql).toContain('CREATE FUNCTION public.void_invoice_group');
+    expect(sql).toContain("v_contract CONSTANT text := 'void_invoice_group_v1'");
+    expect(sql).toContain('INVOICE_GROUP_PROVENANCE_REQUIRED');
+  });
+
+  it('scopes delivery signatures to canonical delivery paths and permitted actors', () => {
+    const sql = migration('20260720200329_scope_delivery_signature_storage_access.sql');
+    expect(sql).toContain('CREATE POLICY "delivery_signatures_scoped_select"');
+    expect(sql).toContain('CREATE POLICY "delivery_signatures_scoped_insert"');
+    expect(sql).toContain('CREATE POLICY "delivery_signatures_scoped_update"');
+    expect(sql).toContain("d.assigned_driver = (SELECT auth.uid())");
+    expect(sql).toContain("bucket_id = 'delivery-signatures'");
+
+    const completionSql = migration('20260716191000_aggregate_delivery_stock_preflight.sql');
+    expect(completionSql).toContain("v_actor_role IN ('admin', 'sales_rep')");
+    expect(completionSql).toContain(
+      "v_actor_role = 'driver' AND v_actor = v_delivery.assigned_driver",
+    );
+
+    const deleteSql = migration('20260720211454_scope_delivery_signature_delete.sql');
+    expect(deleteSql).toContain('DROP POLICY IF EXISTS "delivery_signatures_delete"');
+    expect(deleteSql).toContain('CREATE POLICY "delivery_signatures_scoped_delete"');
+    expect(deleteSql).toContain("name = 'signatures/' || d.id::text || '.png'");
+    expect(deleteSql).toContain('public.is_admin()');
+    expect(deleteSql).toContain('public.is_sales_rep()');
+
+    const storageVersion = 20260720200329n;
+    const adminRestrictionVersion = 20260720203000n;
+    const deleteVersion = 20260720211454n;
+    expect(storageVersion).toBeLessThan(adminRestrictionVersion);
+    expect(adminRestrictionVersion).toBeLessThan(deleteVersion);
+  });
+
+  it('keeps the supplier pricing route aligned with admin-only cost access', () => {
+    const app = source('src', 'App.tsx');
+    expect(app).toContain(
+      "path: 'supplier-pricing', element: <ProtectedRoute allowedRoles={['admin']}>",
+    );
+    expect(app).not.toContain(
+      "path: 'supplier-pricing', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}>",
+    );
+  });
+
+  it('keeps payment-rejection E2E assertions on the thrown RPC error path', () => {
+    for (const path of [
+      ['tests', 'e2e', 'concurrent-operations.spec.ts'],
+      ['tests', 'e2e', 'period-close-accounting.spec.ts'],
+    ]) {
+      const spec = source(...path);
+      expect(spec).toContain("rejection = error instanceof Error ? error.message : String(error)");
+      expect(spec).toContain("expect(rejection.toLowerCase()).toContain('eligible')");
+    }
   });
 });

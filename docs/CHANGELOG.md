@@ -2,6 +2,93 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-20 — Baseline follow-up migrations preserve ledger history
+
+- Replaced the unsafe generic-SQL-client instruction with an isolated, filtered Supabase CLI workflow that dry-runs the exact post-baseline set and records every applied migration in the target ledger.
+
+## 2026-07-20 — Sales-rep authorization helper explicitly qualified
+
+- Re-emitted `is_sales_rep()` with the canonical `public, pg_temp` search path, an explicit `public.profiles` reference, and least-privilege EXECUTE grants for authenticated/service roles only. The delivery-signature rollback smoke now proves a forged temporary `profiles` table cannot grant sales-rep access.
+
+## 2026-07-20 — Baseline post-migration selector regression proof
+
+- Replaced the source-text-only guard with a behavioral collision fixture proving that a captured migration name cannot hide a later timestamped migration that reuses the same suffix.
+- Added a fail-closed restore guard that rejects `pgcrypto`, `postgis`, or `uuid-ossp` when a target database has them preinstalled outside the required `extensions` schema.
+
+## 2026-07-20 — Delivery signatures restricted to authorized deliveries
+
+Removed four duplicate bucket-only Storage policies that let any authenticated user
+read or overwrite any delivery signature. The private bucket now accepts only the
+canonical `signatures/<delivery-id>.png` path and permits access to admins, sales reps,
+or the delivery's assigned driver; uploads and recaptures additionally require a
+completed delivery. A rollback-only catalog smoke proves the broad policies are gone.
+The final exact Codex push gate found that assignment alone did not exclude an inactive
+former driver. A forward-only correction now requires the canonical active-driver role
+helper on every assigned-driver signature path, with positive and deactivation rollback proof.
+The final forward correction also replaces the remaining bucket-wide DELETE policy
+with admin/sales-only canonical-path deletion. Live versions are intentionally preserved
+on disk in apply order (`20260720200329`, `20260720203000`, `20260720211454`) while the
+registry retains Supabase's submitted names, and a regression test binds that ordering.
+The ordering note and regression live outside the already-applied SQL so its reviewed bytes remain immutable.
+
+## 2026-07-20 — Governed split editing and group void made fail-closed
+
+The exact pre-push Codex review found that the generic invoice editor could replace
+governed split lines without preserving their source order-item identity, and that a
+single grouped invoice could be voided without its siblings. The forward correction
+locks generic editing out of private-provenance split invoices and adds one atomic
+`void_invoice_group` operation with exact actor, group, reason, and replay binding.
+Invoice Detail routes grouped voids through that operation. The affected browser tests
+now use governed invoice RPCs, and their Supabase helper throws on denied HTTP writes
+instead of treating an error body as success. The rollback smoke reproduced the generic
+edit defect on the prior live definition before apply.
+
+### 2026-07-20 — Generated schema baseline review packaging corrected
+
+The decoded production public-schema snapshot remains byte-for-byte unchanged and
+SHA/restore verified, but the 66,674-line generated artifact is now stored as a
+Brotli payload. The prior Git attribute accidentally enabled its full textual
+diff, making the exact base-main Claude gate exceed the provider's one-million-
+token request limit. The manifest binds both compressed and decoded bytes, the
+decoder refuses hash drift before emitting SQL, and the existing disposable
+restore proof remains the authoritative behavioral check. The verifier also
+reconstructs and compares every Storage bucket row (identity, privacy, size
+limit, and MIME types) against the captured bucket snapshot so those two rebuild
+artifacts cannot drift independently.
+The restore bootstrap now creates the production-specific `metabase_ro` NOLOGIN
+grant target before decoding the public schema. Post-baseline migration selection
+uses both filename version and captured submitted name, preventing four migrations
+already stored under server-assigned ledger versions from replaying on a clean restore.
+It matches captured names only to the full timestamped migration stem, so reusing an old
+bare concept name cannot silently suppress a future migration.
+
+### 2026-07-19 — Exact push-gate invoice and commission closures
+
+The final exact Codex review found two live authorization/validation gaps after the
+clean-rebuild baseline was added. Data API roles still had direct invoice UPDATE,
+so an admin could bypass the governed invoice RPCs for header fields that were not
+part of the split provenance denylist. The repository has no direct invoice writer;
+the forward correction therefore removes direct UPDATE from anon/authenticated/
+service-role and keeps the existing owner-context save/post/payment/void/cancel RPCs
+as the only write path. The shared commission validator also now rejects a missing
+or JSON-null percentage explicitly instead of allowing SQL NULL comparisons to fall
+through. Both updated rollback chains reproduced the current live defects before
+apply; reviewer/apply/post-smoke evidence is recorded in migration history.
+
+### 2026-07-19 — Production schema clean-rebuild baseline at gauntlet high-water
+
+The gauntlet closeout's exact Codex push review found that the immutable historical migration stream cannot safely initialize a brand-new database: one applied function-body guard depends on legacy mixed line endings, and the quote-commission repair correctly requires the one exact production row it reconciled. The fix does not edit either applied migration. `supabase/baselines/` now contains a hash-bound, data-free production schema snapshot at final live high-water `20260719092832`, its required extensions, the CRX-owned Auth trigger/Storage policy and bucket overlay, all eight live pg_cron schedules, and a compact 861-row version/name ledger with empty-ledger/job-name hard stops. A disposable PostgreSQL 17 restore matched production catalog counts and exact logical structural/security/function/policy fingerprints, including the final invoice UPDATE revokes and commission-validator body; replaying the ledger restore failed closed as designed. `scripts/verify-schema-baseline.mjs` is exposed as `npm run test:schema-baseline` and wired into correction guards/CI. Fresh projects must restore the manifest order and then apply only migrations newer than the baseline; the old migration files remain the immutable audit trail.
+
+### 2026-07-19 — Quote commission routing made fail-closed
+
+The post-gauntlet financial sweeps found one accepted but unconverted quote with a 100%
+commission split and a blank recipient. It had no order, commission, salesperson, assigned
+rep, or customer default, so the exact row is reconciled to an explicit no-commission split
+instead of inventing a payee. A database trigger now applies the shared commission validator
+to every quote insert or split update, and Quote Builder mirrors the same blank, duplicate,
+percentage-range, and 100%-total checks before save. The pre-apply rollback smoke reproduced
+the original blank-recipient acceptance; after the live cutover the same smoke passed and rolled back.
+
 ### 2026-07-19 — Exact-HEAD Codex blocker remediation applied live
 
 The independent pre-push review found five remaining release issues after the original
@@ -153,8 +240,6 @@ the server-assigned migration versions so a future rebuild cannot reapply them.
 
 ## 2026-07-18 — Built read-only adversarial gauntlet loop over sections 2-6 (money/inventory/lifecycle/DB-drift/idempotency): opus orchestrator, sonnet finders, opus skeptics + per-section adjudicator gate. Ran overnight; confirmed HIGHs in money+lifecycle and a Section 5 live-drift BLOCKER (Supplier Pricing Phase 1a). Findings parked for Codex-gated fixes.
 
-Built read-only adversarial gauntlet loop over sections 2-6 (money/inventory/lifecycle/DB-drift/idempotency): opus orchestrator, sonnet finders, opus skeptics + per-section adjudicator gate. Ran overnight; confirmed HIGHs in money+lifecycle and a Section 5 live-drift BLOCKER (Supplier Pricing Phase 1a). Findings parked for Codex-gated fixes.
-
 - **Commits this session** (git log -15 (fallback — no author-matched commits in the last 12h)):
   - `4739104 Add gauntlet sections 2-6 adversarial audit loop`
   - `c6c1265 docs: per-line-item split-billing design spec + roadmap/decision-log updates (#162)`
@@ -204,13 +289,35 @@ Built read-only adversarial gauntlet loop over sections 2-6 (money/inventory/lif
 
 ---
 
+## 2026-07-20 — Supplier pricing evidence restricted to ADMIN-ONLY (live fix before Phase 1b merge)
+
+- The Codex GitHub review on PR #179 caught a real security gap all earlier reviewers missed: the live Phase 1b reader RPCs, evidence-table SELECT policies, and the evidence-PDF bucket were gated admin-OR-sales, exposing supplier costs, `cost_history` values, and PO ids/numbers/unit costs to sales reps — contradicting the standing "cost data is admin-only" RLS contract (the contract tests passed because SECURITY DEFINER readers legitimately bypass table RLS). Mason settled it: **admin-only**.
+- Applied live migration `20260720203000_restrict_supplier_pricing_to_admin` (reviewed clean by the migration-review workflow + both Codex proof charters; MCP version `20260720201159` ledger-reconciled to the filename per B7). All seven SELECT policies now require `is_admin()`; all five reader RPCs raise `ADMIN_REQUIRED`; explicit REVOKE/GRANT re-asserted. Proven live: non-admin probe denied, catalog clean.
+- Frontend on the PR branch aligned: `/supplier-pricing` page restricted to admin, ProductDetail price-history panel admin-gated, smoke expectations updated to `ADMIN_REQUIRED`, supplier filter reset on product change (CodeRabbit), reference docs corrected (11th RPC documented, stale PARKED headers and go-live shorthand stamps fixed).
+
+## 2026-07-20 — Fix headless Claude review wrapper returning empty results (release gate unblocked)
+
+- Three completed `claude -p --output-format json` release-gate reviews of Phase 1b (2× Opus, 1× Sonnet, CLI 2.1.207) returned `subtype: success` with `result: ""`, blocking the release. Root cause (reproduced deterministically): the repo's `Stop` hook `stop-wrap.mjs` blocks a read-only headless session from ever ending — it demands an ack file at `.claude/session-state/stop-wrap-ack.json`, but the reviewer has Write denied — so the session loops through dozens of forced turns until the CLI gives up with an empty final message, and the `json` output format surfaces only the final message's text as `result`. The real review text was generated in the first assistant message and lost (`--no-session-persistence`; confirmed unrecoverable by full local-storage search of all three session IDs).
+- Fix: `scripts/run-claude-review.mjs` now launches the reviewer with `--settings '{"disableAllHooks":true}'` — safe because the reviewer is hard-restricted to Read/Grep/Glob, so the write/push/migration guard hooks have nothing to guard inside it. All fail-closed validation is unchanged. `scripts/run-claude-review.test.mjs` adds regressions: the exact success-but-empty-`result` shape must classify BLOCKED, and the hooks-disabled flag must be present in the fixed argv. Verified: wrapper tests + `test:agent-workflows` green; rerun of the exact Phase 1b base-main review completed `Execution state: VERIFIED` with verdict `SHIP-WITH-FOLLOWUPS` (0 BLOCKER / 0 HIGH / 1 MED idempotency-TTL replay follow-up).
+
+## 2026-07-20 — Fix autopilot guard test failing (and blocking every commit) whenever autopilot is armed
+
+- `.claude/hooks/autopilot-lib.test.mjs`'s LIVE check spawned `unattended-autopilot.mjs`, which resolves its arming flag from `$CLAUDE_PROJECT_DIR/.claude/session-state/AUTOPILOT.on`. Because the spawn inherited the ambient env, the test's "hook emits NOTHING when flag absent" assertion failed whenever real autopilot was armed in the session — the spawned hook saw the ambient flag and correctly denied the fake `rm -rf /`. Net effect: the pre-commit `test:correction-guards` suite failed, so **no commit could land while autopilot was armed** (forcing a disarm→commit→re-arm workaround). The check now points `CLAUDE_PROJECT_DIR` at throwaway temp dirs — one with no flag (proves inert), one with a fresh active flag (proves it still denies deny-set commands) — so both directions are deterministic regardless of ambient arm state. Proven: with real autopilot armed, `node .claude/hooks/autopilot-lib.test.mjs` now passes (53 assertions).
+
+## 2026-07-18 — Fix migration-review workflow failing closed when Workflow-tool args arrive as a JSON string
+
+- `.claude/workflows/migration-review.js` now normalizes `args` before reading `file`/`name`/`sql`. When the Workflow tool delivered `args` as a JSON-encoded string, all three fields were `undefined` and the run failed closed with a bogus "No migration SQL provided" BLOCKER (observed runs `wf_ae36ee12-2e4`, `wf_5c9ddfc7-174`). The script now `JSON.parse`s a string `args` (falling back to `null` on parse failure) and reads fields off the normalized object, while keeping the fail-closed placeholder for genuinely-missing SQL. Ran `sync-agent-workflows --write` and `test:agent-workflows` (all green; 35 Codex adapters in sync).
+
 ## 2026-07-18 — Supplier Pricing Phase 1a COMPLETE + LIVE (merge, harden, promote, cutover)
 
-Landed the full Phase 1a supplier-pricing safety foundation to production. PR #163 merged; harden migration `20260718124517` applied live (ledger `20260718154131`); the RPC-only frontend was promoted to production (`croprxsolutions.app`) and **proven end-to-end on live** (a governed `product_page` edit wrote `cost_history` with `change_source='product_page'` + a real `change_set_id`, status `applied`); then the enforcement **cutover `20260718190000`** was applied through the migration-review + apply-guard proof gate (MCP stamped ledger version `20260718185621`, then reconciled via ledger UPDATE to `20260718190000` to match the on-disk filename per settled B7 policy — the disk file is never renamed). After cutover, all direct writes to Products pricing columns and to `cost_history` are REVOKEd from every app role and blocked by the `require_governed_product_pricing` trigger — pricing is editable ONLY through the governed preview/apply RPC (verified live: a direct `UPDATE products SET current_cost` now raises `PRODUCT_PRICING_GOVERNED_PATH_REQUIRED`). A follow-up scan-only migration `20260718193000` (post-cutover data-integrity rescan, applied live) SHARE-locks `products` and fails closed on any non-finite/negative/non-cent-scale existing pricing — found 0 live — closing the adversarial-review gap that the cutover locked future writes but never re-validated existing rows. Phase 1b (supplier evidence) is built + reviewed on `feat/supplier-pricing-phase1b`, pending its own gated apply session.
+Landed the full Phase 1a supplier-pricing safety foundation to production. PR #163 merged; harden migration `20260718124517` applied live (ledger `20260718154131`); the RPC-only frontend was promoted to production (`croprxsolutions.app`) and **proven end-to-end on live** (a governed `product_page` price edit wrote `cost_history` with `change_source='product_page'` + a real `change_set_id`, status `applied`); then the enforcement **cutover `20260718190000`** was applied through the migration-review + apply-guard proof gate (MCP stamped ledger version `20260718185621`, then reconciled via ledger UPDATE to `20260718190000` to match the on-disk filename per settled B7 policy — the disk file is never renamed). After cutover, all direct writes to Products pricing columns and to `cost_history` are REVOKEd from every app role and blocked by the `require_governed_product_pricing` trigger — pricing is editable ONLY through the governed preview/apply RPC (verified live: a direct `UPDATE products SET current_cost` now raises `PRODUCT_PRICING_GOVERNED_PATH_REQUIRED`). A follow-up scan-only migration `20260718193000` (post-cutover data-integrity rescan, applied live) SHARE-locks `products` and fails closed on any non-finite/negative/non-cent-scale existing pricing — found 0 live — closing the adversarial-review gap that the cutover locked future writes but never re-validated existing rows. Phase 1b (supplier evidence) was subsequently applied live and prepared for frontend release.
 
-The same review stream closed the payment-void, quote-retry, split-invoice provenance, and terminal governed-split lifecycle defects through the applied forward migrations ending at live ledger `20260719060256`. PR #168 now carries the remaining invoice/order governance closeout as prepared migration `20260719120000_govern_invoice_order_money_lifecycle`: it preserves those final live wrappers, binds the complete cancel request before mutation, delegates full cancellation through the reviewed provenance-aware implementation, and routes an approved partial close through the governed short-close path. It also fails closed on direct invoice header/item mutation and limits completed-delivery recovery to exact historical line evidence. Its rollback smoke covers exact/mismatched retries, full cancel, partial close, recovery, direct-write rejection, and zero residue. No production database change occurs until the exact committed migration passes both required reviews and Mason approves its live apply.
+## 2026-07-18 — Supplier Pricing Phase 1b evidence MVP built; database foundation live
 
----
+- Added the manual supplier-evidence workflow: protected per-supplier `.xlsx` quote sheets, staged row review, quick single-quote entry, explicit approval into append-only integer-cent observations, comparison with honest `cannot compare` states, and optional private audit-only PDFs. No OCR, AI extraction, automatic vendor selection, sell-price change, or costing engine was added.
+- Added the Supplier Pricing workspace and product-level supplier-filterable three-stream price history. The Product pricing workbook now carries locked market-evidence summary columns plus a per-supplier detail sheet while preserving the Phase 1a pricing upload payload.
+- Applied both Supplier Pricing Phase 1b migrations live through their independent review/proof gates. Evidence foundation ledger version `20260718225511` (submitted as `20260718230000_supplier_price_evidence_phase1b`) adds six RLS tables, eleven fixed-search-path RPCs, append-only observation enforcement, a private PDF evidence bucket, and five purchase-order provenance columns. Alias staging ledger version `20260718235717` (submitted as `20260718235900_stage_supplier_vendor_aliases_phase1b`) maps approved `Van Deist` / `Van Diest` spellings to active canonical vendor `Van Diest Supply`, plus the approved `The Andersons` spellings. The first alias attempt failed transactionally on the canonical-name guard and rolled back; the corrected, freshly reviewed retry created four approved aliases and four approved legacy resolutions without rewriting vendor, PO, or product rows.
+- Added TypeScript interfaces for the Phase 1a `pricing_*` tables, all Phase 1b evidence tables, and the PO cost-provenance snapshot columns. Reconciled the live schema registry, RPC contracts, and fixtures after the reviewed migration applies.
 
 ## 2026-07-17 — Split-billing architecture dig + per-line-item custom-split design spec v2 (review-hardened via gpt-5.6-terra xhigh plan review; 4 blockers folded in). Owner workflow settled: field split=default, adjust in unposted draft, unpost reversible. Committed 4b695109; Codex builds next week. No code/DB changes.
 

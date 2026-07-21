@@ -97,6 +97,36 @@ async function reopenTestPeriod(page: import('@playwright/test').Page) {
   ).catch(() => {}); // ignore if not found
 }
 
+/** Update a draft invoice through its governed RPC, preserving every line. */
+async function saveInvoicePatch(
+  page: import('@playwright/test').Page,
+  invoiceId: string,
+  patch: Record<string, unknown>,
+) {
+  const invoiceRows = asArray<Record<string, unknown>>(
+    await supabaseRest(page, 'GET', `invoices?id=eq.${invoiceId}&select=*`),
+    `invoice ${invoiceId}`,
+  );
+  const itemRows = asArray<Record<string, unknown>>(
+    await supabaseRest(page, 'GET', `invoice_items?invoice_id=eq.${invoiceId}&select=*&order=sort_order,id`),
+    `invoice items ${invoiceId}`,
+  );
+  if (invoiceRows.length !== 1) throw new Error(`Invoice ${invoiceId} not found`);
+  await supabaseRpc(page, 'save_invoice', {
+    p_invoice: { ...invoiceRows[0], ...patch, id: invoiceId },
+    p_items: itemRows,
+    p_idempotency_key: `e2e-save-${invoiceId}-${Date.now()}`,
+  });
+}
+
+async function deleteDraftInvoice(page: import('@playwright/test').Page, invoiceId: string) {
+  await supabaseRpc(page, 'delete_invoices', {
+    p_invoice_ids: [invoiceId],
+    p_performed_by: await getUserId(page),
+    p_idempotency_key: `e2e-delete-${invoiceId}-${Date.now()}`,
+  });
+}
+
 test.describe('Period Close & Accounting', () => {
   test.beforeEach(async ({ page }) => {
     await login(page);
@@ -141,11 +171,7 @@ test.describe('Period Close & Accounting', () => {
         // Try posting first, void if that fails
         await supabaseRpc(page, 'post_invoice', { p_invoice_id: invId })
           .catch(async () => {
-            // If posting fails, try to delete or mark as cancelled
-            await supabaseRest(page, 'PATCH', `invoices?id=eq.${invId}`, {
-              status: 'cancelled',
-              deleted_at: new Date().toISOString(),
-            }).catch(() => {});
+            await deleteDraftInvoice(page, invId);
           });
       }
     }
@@ -228,9 +254,7 @@ test.describe('Period Close & Accounting', () => {
     }
 
     // Ensure the invoice has the right date (in our test period)
-    await supabaseRest(page, 'PATCH', `invoices?id=eq.${invoiceId}`, {
-      invoice_date: PERIOD_START,
-    }).catch(() => {});
+    await saveInvoicePatch(page, invoiceId as string, { invoice_date: PERIOD_START });
 
     // Now try to close the period — should fail because of unposted invoice
     const closeResult = await supabaseRpc(page, 'close_accounting_period', {
@@ -249,10 +273,7 @@ test.describe('Period Close & Accounting', () => {
     }
 
     // Clean up: delete the test invoice so it doesn't block future period closes
-    await supabaseRest(page, 'PATCH', `invoices?id=eq.${invoiceId}`, {
-      status: 'cancelled',
-      deleted_at: new Date().toISOString(),
-    }).catch(() => {});
+    await deleteDraftInvoice(page, invoiceId as string);
   });
 
   // ─── Test 4: Cannot close same period twice ────────────────────────────
@@ -272,9 +293,7 @@ test.describe('Period Close & Accounting', () => {
       const invId = (inv as Record<string, unknown>).id as string;
       await supabaseRpc(page, 'post_invoice', { p_invoice_id: invId })
         .catch(async () => {
-          await supabaseRest(page, 'PATCH', `invoices?id=eq.${invId}`, {
-            status: 'cancelled', deleted_at: new Date().toISOString(),
-          }).catch(() => {});
+          await deleteDraftInvoice(page, invId);
         });
     }
 
@@ -325,9 +344,7 @@ test.describe('Period Close & Accounting', () => {
       const invId = (inv as Record<string, unknown>).id as string;
       await supabaseRpc(page, 'post_invoice', { p_invoice_id: invId })
         .catch(async () => {
-          await supabaseRest(page, 'PATCH', `invoices?id=eq.${invId}`, {
-            status: 'cancelled', deleted_at: new Date().toISOString(),
-          }).catch(() => {});
+          await deleteDraftInvoice(page, invId);
         });
     }
 
@@ -683,25 +700,27 @@ test.describe('Period Close & Accounting', () => {
     await supabaseRpc(page, 'post_invoice', { p_invoice_id: invoiceId }).catch(() => {});
 
     // Void the invoice
-    await supabaseRest(page, 'PATCH', `invoices?id=eq.${invoiceId}`, {
-      status: 'voided',
-      voided_at: new Date().toISOString(),
-    }).catch(() => {});
-
-    // Try payment on voided invoice
-    const payResult = await supabaseRpc(page, 'allocate_payment', {
-      p_customer_id: custId,
-      p_total_cents: 5000,
-      p_payment_method: 'check',
-      p_allocations: [{ invoice_id: invoiceId, amount_cents: 5000 }],
-      p_idempotency_key: `VOID-PAY-${RUN}`,
+    await supabaseRpc(page, 'void_invoice', {
+      p_invoice_id: invoiceId,
+      p_void_reason: 'E2E voided-invoice payment guard',
+      p_idempotency_key: `e2e-void-${invoiceId}`,
     });
 
-    const payRecord = payResult as Record<string, unknown> | null;
-    if (!payRecord || typeof payRecord.message !== 'string') {
+    // Try payment on voided invoice
+    let rejection = '';
+    try {
+      const payResult = await supabaseRpc(page, 'allocate_payment', {
+        p_customer_id: custId,
+        p_total_cents: 5000,
+        p_payment_method: 'check',
+        p_allocations: [{ invoice_id: invoiceId, amount_cents: 5000 }],
+        p_idempotency_key: `VOID-PAY-${RUN}`,
+      });
       throw new Error(`Expected voided-invoice payment rejection, got success: ${JSON.stringify(payResult)}`);
+    } catch (error) {
+      rejection = error instanceof Error ? error.message : String(error);
     }
-    expect(payRecord.message.toLowerCase()).toContain('eligible');
+    expect(rejection.toLowerCase()).toContain('eligible');
     console.log('✓ Voided invoice correctly blocks payments');
   });
 });
