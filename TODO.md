@@ -70,6 +70,9 @@ When an item here ships or is decided, update this file AND `docs/manual/KNOWN_I
   investigation showed the A8 stamping/aging machinery was already live; shipped the two real
   gaps — due-on-receipt parser support (migration `20260721191914`, applied live) + the
   Net 30/Net 15/Due on receipt/Custom terms picker on FieldApplicationInvoice.
+  **Chemical-sale follow-up SHIPPED 2026-07-21** (PR #197 + migration `20260721223817`, applied
+  live): save_invoice now persists payment_terms; same picker on InvoiceDetail; single + batch
+  PDFs print the invoice override. The approved due-dates spec is now fully complete.
 - **Per-line-item custom split billing (field-app)** — SPEC COMPLETE, review-hardened (3 advisor
   passes), **not started; Mason builds in Codex next week.** Default splits from field ownership,
   override %/price per invoice line, one invoice per customer, unpost reversible, $0 recorded-but-unsent.
