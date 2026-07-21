@@ -2073,8 +2073,6 @@ const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
  */
 const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
   _insert_commissions_for_job: 'internal helper; caller owns idempotency and direct EXECUTE is revoked',
-  snapshot_invoice_line_shares_on_post:
-    'RETURNS trigger (verified live 2026-07-21); per-line split-billing post-time snapshot trigger from 20260720233000, not client-callable',
   _insert_commissions_for_order: 'internal helper; caller owns idempotency and direct EXECUTE is revoked',
   _reverse_credit_memo_application: 'internal helper called only by idempotent credit-memo reversal RPCs',
   _sync_job_holds: 'internal convergent hold-sync helper; direct client EXECUTE is revoked',
