@@ -2,7 +2,7 @@
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
-> **Per-line split billing Phase 4 (2026-07-20, branch only):** no new database migration is introduced. The UI remains behind the server-owned `feature_per_line_split_billing=false` row created by the unapplied Phase 1 chain, and the prepared `send-email` server guard is not deployed. Live migration state and data are unchanged; Phase 1–3 migrations remain draft-only pending Mason's ordered promotion decision.
+> **Per-line split billing Phase 4 (2026-07-20, branch only):** no new database migration is introduced. The UI remains dormant because the live `feature_per_line_split_billing` row is absent and only exact string `true` enables it; the prepared `send-email` server guard is not deployed. This branch changes no live migration state or data. A separate older split chain exists live, so the reviewed Phase 1–3 draft chain remains PARKED pending explicit drift reconciliation and fresh timestamps.
 
 | # | Migration timestamp | Purpose |
 |---:|---|---|

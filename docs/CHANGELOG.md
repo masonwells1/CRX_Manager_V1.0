@@ -2,6 +2,12 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-20 — Per-line split billing Phase 4 UI and mail gates (flag OFF, edge not deployed)
+
+Built the collapsed advanced per-line editor, exact micro-percent and per-recipient price overrides, fail-closed Mode A and feature-setting checks, frozen job-chemical payload binding, and grouped plus single-customer persisted-override recovery. Preview and save use the new RPC arguments only when the server flag is exactly `true`; production's flag is absent, so the legacy path remains active.
+
+All invoice send buttons now re-read the server-owned disposition and terminal lifecycle immediately before sending. The prepared `send-email` edge code independently derives and enforces the correct invoice gate for invoice and post-application messages, while preserving legacy sole-invoice and JobDetail customer-resource notices. PDF and statement contracts pin stored cents instead of recomputing quantity times price. The full repository suite and 57 focused Phase 4 tests pass; independent Claude review found no blocker/high after the job-source and ungrouped-rehydration repairs. No migration, feature flip, edge deployment, merge, or live-data change was performed. The separate Phase 1–3 migration collision remains parked for its own reconciliation.
+
 ## 2026-07-20 — Baseline follow-up migrations preserve ledger history
 
 - Replaced the unsafe generic-SQL-client instruction with an isolated, filtered Supabase CLI workflow that dry-runs the exact post-baseline set and records every applied migration in the target ledger.
