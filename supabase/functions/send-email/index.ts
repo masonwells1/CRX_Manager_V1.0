@@ -235,7 +235,11 @@ Deno.serve(async (req: Request) => {
       if ((jobInvoices?.length ?? 0) > 0 && !derivedInvoice) {
         return jsonResponse({ error: "Could not resolve the recipient invoice send gate" }, 409);
       }
-      if (derivedInvoice && invoiceGateId && invoiceGateId !== derivedInvoice.id) {
+      if (
+        derivedInvoice &&
+        resource_type === "invoice" &&
+        resource_id !== derivedInvoice.id
+      ) {
         return jsonResponse({ error: "Invoice resource does not match the server-derived notification invoice" }, 400);
       }
       invoiceGateId = derivedInvoice?.id ?? null;
