@@ -839,12 +839,20 @@ export default function FieldApplicationInvoice() {
     // date is exactly what the preset terms would stamp from invoice_date, it's a
     // stamp — reload as the preset (clearing the date so a repost re-derives it),
     // not as a deliberate Custom override (CodeRabbit P2 on PR #195).
-    const presetDays = { 'Net 30': 30, 'Net 15': 15, 'Due on receipt': 0 }[loadedPaymentTerms];
+    // Mirror parse_payment_terms_days for ANY stored terms (incl. legacy 'Net 45' /
+    // 'net_30'), not just the three presets, so their posting stamps are recognized too.
+    const termDays = isReceiptAlias
+      ? 0
+      : (() => {
+          const m = /(\d+)/.exec(loadedPaymentTerms);
+          const n = m ? Number(m[1]) : NaN;
+          return Number.isFinite(n) && n >= 1 && n <= 365 ? n : 30;
+        })();
     const loadedInvoiceDate = (invoice.invoice_date as string) || '';
     let stampedDate = '';
-    if (presetDays !== undefined && loadedInvoiceDate) {
+    if (loadedInvoiceDate) {
       const d = new Date(loadedInvoiceDate + 'T00:00:00Z');
-      d.setUTCDate(d.getUTCDate() + presetDays);
+      d.setUTCDate(d.getUTCDate() + termDays);
       stampedDate = d.toISOString().slice(0, 10);
     }
     const isPostingStamp = loadedDueDate !== '' && loadedDueDate === stampedDate;
