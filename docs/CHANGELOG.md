@@ -2,7 +2,12 @@
 
 All significant development milestones, in reverse chronological order.
 
-<<<<<<< HEAD
+## 2026-07-21 — Weekly cleanup-sprint check (automated routine, 2026-07-17)
+
+Queried live DB — negatives=18 (+1, likely U9 warn-not-block delivery; check requires_review=true on inventory_transactions), over_received=15, unbilled=59. Progress row appended to docs/reports/cleanup-sprint-progress.md. Phase 23 CHECK constraints still blocked (legacy 17 rows need /integrity-cleanup). PR #158 opened and in review.
+
+- **Migrations touched**: none (docs-only change)
+
 ## 2026-07-20 — Bug-class regression test suite (PR #189)
 
 Bug-class regression suite: analyzed all ~60 bugs fixed 2026-07-10..20 (split-billing Codex rounds 2-12, Fable adversarial, gauntlet 2-6, statement opening balance, pricing 1a/1b), clustered them into 12 recurring classes, and locked the top classes with hermetic npm-test guards (commit 9e7e185f): sqlRoleGateNullFailOpen.test.ts (H1 NULL-role fail-open scanner over latest disk fn defs; found latent H1 in parked create_inventory_hold), bugClassRegressionGuards.test.ts (pins 14 SQL guard tokens across 9 fns following PERFORM/RENAME chains + 3 frontend guards + 8 fail-first smokes' registration), splitVectorMath extraction + property tests (r2 #K / r3 P2 residual classes). Full suite 3742 green; Codex verdict pending before PR/merge.
@@ -54,7 +59,7 @@ Bug-class regression suite: analyzed all ~60 bugs fixed 2026-07-10..20 (split-bi
   - `supabase/migrations/20260720175946_protect_governed_split_edit_and_void_group.sql`
   - `supabase/migrations/20260718010000_per_line_split_billing_schema.sql`
   - `supabase/migrations/20260720173059_fix_statement_opening_balance.sql`
-=======
+
 ## 2026-07-20 — Split-billing email authority completed
 
 - Re-read each invoice's server-owned disposition and lifecycle immediately before every invoice email send, including field-invoice lists and invoice detail.
