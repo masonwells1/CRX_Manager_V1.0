@@ -4,8 +4,6 @@ All significant development milestones, in reverse chronological order.
 
 ## 2026-07-21 — Invoice due-dates ticket (approved spec 2026-07-16): found most A8 machinery already live; shipped the two real gaps. Migration 20260721191914 APPLIED LIVE via full gate (parse_payment_terms_days: due-on-receipt forms -> 0 days; proven with live rollback smoke on [E2E] invoice: due_date=invoice_date for Due on receipt, +30d for Net 30). Frontend terms picker (Net 30/Net 15/Due on receipt/Custom date) on FieldApplicationInvoice with sol-review fixes: unposted edit gating, display-only PDF due date, legacy free-text round-trip. Built by codex gpt-5.6-luna subagents, adversarial gpt-5.6-sol review (2 HIGHs fixed+reverified). Full suite 3776 pass. PR #195 open, awaiting Vercel+CodeRabbit then merge.
 
-Invoice due-dates ticket (approved spec 2026-07-16): found most A8 machinery already live; shipped the two real gaps. Migration 20260721191914 APPLIED LIVE via full gate (parse_payment_terms_days: due-on-receipt forms -> 0 days; proven with live rollback smoke on [E2E] invoice: due_date=invoice_date for Due on receipt, +30d for Net 30). Frontend terms picker (Net 30/Net 15/Due on receipt/Custom date) on FieldApplicationInvoice with sol-review fixes: unposted edit gating, display-only PDF due date, legacy free-text round-trip. Built by codex gpt-5.6-luna subagents, adversarial gpt-5.6-sol review (2 HIGHs fixed+reverified). Full suite 3776 pass. PR #195 open, awaiting Vercel+CodeRabbit then merge.
-
 - **Commits this session** (git log --since=12.hours --author=Mason):
   - `866bb291 Merge pull request #194 from masonwells1/docs/port-missing-docs-to-main`
   - `bd18cee1 fix(split-billing): apply unassigned v_app_service record fix live (mig 20260721180000) (#192)`

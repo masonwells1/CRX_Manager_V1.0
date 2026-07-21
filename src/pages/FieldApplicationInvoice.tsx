@@ -824,17 +824,34 @@ export default function FieldApplicationInvoice() {
     // member), so reading them off the URL invoice is correct.
     setPoRef((invoice.purchase_order_ref as string | null) || '');
     const loadedPaymentTerms = (invoice.payment_terms as string | null) || '';
-    setPaymentTerms(
-      ['Net 30', 'Net 15', 'Due on receipt'].includes(loadedPaymentTerms)
-        ? loadedPaymentTerms
-        : loadedPaymentTerms
-          ? 'Custom date…'
-          : 'Net 30',
+    const loadedDueDate = (invoice.due_date as string | null) || '';
+    // Picker mode from BOTH fields (CodeRabbit P1s on PR #195):
+    // - an explicit due_date on a draft/unposted invoice means a deliberate override —
+    //   show Custom mode with the date so a save round-trips it instead of erasing it;
+    // - receipt-form aliases the parser understands normalize to the preset;
+    // - any other legacy free-text (e.g. 'Net 45') keeps its own picker entry (rendered
+    //   dynamically) so it never gets reclassified as Custom and never demands a date.
+    const isPreset = ['Net 30', 'Net 15', 'Due on receipt'].includes(loadedPaymentTerms);
+    const isReceiptAlias = ['due on receipt', 'due upon receipt', 'receipt', 'immediately'].includes(
+      loadedPaymentTerms.trim().toLowerCase(),
     );
-    setCustomTermsText(
-      ['Net 30', 'Net 15', 'Due on receipt'].includes(loadedPaymentTerms) ? '' : loadedPaymentTerms,
-    );
-    setDueDate((invoice.due_date as string | null) || '');
+    if (loadedDueDate && ['draft', 'unposted'].includes((invoice.status as string) || 'draft')) {
+      setPaymentTerms('Custom date…');
+      // keep the stored terms text (even a preset like 'Net 30') so the save
+      // round-trips it verbatim; the explicit due_date wins server-side anyway.
+      setCustomTermsText(loadedPaymentTerms);
+    } else if (isPreset) {
+      setPaymentTerms(loadedPaymentTerms);
+      setCustomTermsText('');
+    } else if (isReceiptAlias) {
+      setPaymentTerms('Due on receipt');
+      setCustomTermsText('');
+    } else {
+      // legacy free-text (or blank -> Net 30 default)
+      setPaymentTerms(loadedPaymentTerms || 'Net 30');
+      setCustomTermsText('');
+    }
+    setDueDate(loadedDueDate);
     setFooterNotes((invoice.footer_notes as string | null) || '');
     setInternalMemo((invoice.internal_notes as string | null) || '');
     setStatus((invoice.status as InvoiceStatus) || 'draft');
@@ -1957,8 +1974,19 @@ export default function FieldApplicationInvoice() {
       due_date:
         dueDate ||
         (() => {
-          const days = { 'Net 30': 30, 'Net 15': 15, 'Due on receipt': 0 }[paymentTerms];
-          if (days === undefined) return null;
+          // Mirror the server's parse_payment_terms_days for ANY terms string so a
+          // pre-posting print (incl. legacy 'Net 45') matches the eventual stamp:
+          // receipt aliases -> 0; first digit run clamped 1..365; else default 30.
+          if (paymentTerms === 'Custom date…') return null;
+          const t = paymentTerms.trim().toLowerCase();
+          let days: number;
+          if (['due on receipt', 'due upon receipt', 'receipt', 'immediately'].includes(t)) {
+            days = 0;
+          } else {
+            const m = /(\d+)/.exec(paymentTerms);
+            const n = m ? Number(m[1]) : NaN;
+            days = Number.isFinite(n) && n >= 1 && n <= 365 ? n : 30;
+          }
           // A cleared transaction-date input falls back to today — the DB defaults
           // invoice_date to CURRENT_DATE on save, so the print still matches.
           const base = transactionDate || new Date().toLocaleDateString('en-CA');
@@ -2606,6 +2634,9 @@ export default function FieldApplicationInvoice() {
               <option value="Net 30">Net 30</option>
               <option value="Net 15">Net 15</option>
               <option value="Due on receipt">Due on receipt</option>
+              {!['Net 30', 'Net 15', 'Due on receipt', 'Custom date…'].includes(paymentTerms) && (
+                <option value={paymentTerms}>{paymentTerms} (legacy)</option>
+              )}
               <option value="Custom date…">Custom date…</option>
             </select>
           </div>
