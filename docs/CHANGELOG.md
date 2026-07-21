@@ -289,6 +289,374 @@ the server-assigned migration versions so a future rebuild cannot reapply them.
 
 ---
 
+## 2026-07-20 — Codex round-12 on per-line split-billing = 1 real security P1: resolve_line_split_vector (SECDEF, callable directly by authenticated) let a sales_rep read the ownership split of arbitrary fields/jobs outside their assignment. Fixed: on DIRECT calls (crx.split_writer off), a non-admin may only resolve a vector whose every customer is assigned to them (RESOLVER_NOT_AUTHORIZED, no data leaked); internal save path exempt via the writer flag. rls review CLEAN (GUC exemption NOT forgeable via PostgREST); PROOFOK live incl. resolver_direct_(un)assigned scenarios. Codex round 13 next. Still PARKED.
+
+Codex round-12 on per-line split-billing = 1 real security P1: resolve_line_split_vector (SECDEF, callable directly by authenticated) let a sales_rep read the ownership split of arbitrary fields/jobs outside their assignment. Fixed: on DIRECT calls (crx.split_writer off), a non-admin may only resolve a vector whose every customer is assigned to them (RESOLVER_NOT_AUTHORIZED, no data leaked); internal save path exempt via the writer flag. rls review CLEAN (GUC exemption NOT forgeable via PostgREST); PROOFOK live incl. resolver_direct_(un)assigned scenarios. Codex round 13 next. Still PARKED.
+
+- **Commits this session** (git log -15 (fallback — no author-matched commits in the last 12h)):
+  - `8eec9b4e fix(split-billing): Codex round-11 — reject unresolved ($0) chemical prices before saving`
+  - `232149a3 fix(split-billing): Codex round-10 — scope post idempotency key to the invoice group`
+  - `d5cf38c5 fix(split-billing): Codex round-9 — harden line-share post-lock trigger (false positive)`
+  - `52d2e67f fix(split-billing): Codex round-8 split-specific (5 of 6) — post-safety, PDF units, override audit, applicator/vehicle, guardrails`
+  - `3efff630 fix(split-billing): Codex round-7 P2s — item-tamper guard, override audit base, snapshot provenance, child field context`
+  - `b683fa44 fix(split-billing): Codex round-7 P1s — active-group readback + RUP duplicate-product guard`
+  - `924b7728 fix(split-billing): Codex round-6 — 4 P1 + 4 P2 (postable group + validation/readback/recovery)`
+  - `18780146 docs(split-billing): front-to-back Codex round-6 review runbook`
+  - `c4a79c66 docs(changelog): log 2026-07-20 session — split-billing owner-decisions + CodeQL fix`
+  - `21943958 fix(split-billing): use crypto.randomUUID() for line-row keys — clears CodeQL js/insecure-randomness`
+  - `8b03cb88 docs(decision-log): split-billing v1 edge-case policy settled — per-child commissions, no job-less exclusivity guard`
+  - `5ad316de fix(split-billing): Fable adversarial round — 6 RPC fixes + editor race guard + reviewer MEDs [PARKED, flag OFF]`
+  - `bc91afc9 fix(split-billing): Codex round-5 (8) + drift BLOCKER B1 + member-drop bug [PARKED, flag OFF]`
+  - `5983b3eb fix(split-billing): Codex round-4 — commissions + posting-boundary + field/override guards [PARKED, flag OFF]`
+  - `0a2754fd fix(split-billing): Codex round-3 — season/freeze/job-link + repost + snapshot honesty [PARKED, flag OFF]`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - `supabase/migrations/20260718010000_per_line_split_billing_schema.sql`
+  - `supabase/migrations/20260718020000_per_line_split_billing_calculator.sql`
+  - `supabase/migrations/20260718030000_per_line_split_billing_save_rpc.sql`
+
+## 2026-07-20 — Codex round-11 on per-line split-billing = 1 real P1: a chemical with no field quote and no tier price silently resolved to $0 (suppressed_zero_total child that could still post, consuming inventory/RUP with no receivable). Fixed: SPLIT_CHEMICAL_PRICE_UNRESOLVED rejects a chemical with no resolvable positive price for any co-owner (manual override still passes). Reviewer CLEAN, PROOFOK live PG incl. unresolved_chem_price_rejected_ok. Codex round 12 next. Still PARKED.
+
+Codex round-11 on per-line split-billing = 1 real P1: a chemical with no field quote and no tier price silently resolved to $0 (suppressed_zero_total child that could still post, consuming inventory/RUP with no receivable). Fixed: SPLIT_CHEMICAL_PRICE_UNRESOLVED rejects a chemical with no resolvable positive price for any co-owner (manual override still passes). Reviewer CLEAN, PROOFOK live PG incl. unresolved_chem_price_rejected_ok. Codex round 12 next. Still PARKED.
+
+- **Commits this session** (git log -15 (fallback — no author-matched commits in the last 12h)):
+  - `232149a3 fix(split-billing): Codex round-10 — scope post idempotency key to the invoice group`
+  - `d5cf38c5 fix(split-billing): Codex round-9 — harden line-share post-lock trigger (false positive)`
+  - `52d2e67f fix(split-billing): Codex round-8 split-specific (5 of 6) — post-safety, PDF units, override audit, applicator/vehicle, guardrails`
+  - `3efff630 fix(split-billing): Codex round-7 P2s — item-tamper guard, override audit base, snapshot provenance, child field context`
+  - `b683fa44 fix(split-billing): Codex round-7 P1s — active-group readback + RUP duplicate-product guard`
+  - `924b7728 fix(split-billing): Codex round-6 — 4 P1 + 4 P2 (postable group + validation/readback/recovery)`
+  - `18780146 docs(split-billing): front-to-back Codex round-6 review runbook`
+  - `c4a79c66 docs(changelog): log 2026-07-20 session — split-billing owner-decisions + CodeQL fix`
+  - `21943958 fix(split-billing): use crypto.randomUUID() for line-row keys — clears CodeQL js/insecure-randomness`
+  - `8b03cb88 docs(decision-log): split-billing v1 edge-case policy settled — per-child commissions, no job-less exclusivity guard`
+  - `5ad316de fix(split-billing): Fable adversarial round — 6 RPC fixes + editor race guard + reviewer MEDs [PARKED, flag OFF]`
+  - `bc91afc9 fix(split-billing): Codex round-5 (8) + drift BLOCKER B1 + member-drop bug [PARKED, flag OFF]`
+  - `5983b3eb fix(split-billing): Codex round-4 — commissions + posting-boundary + field/override guards [PARKED, flag OFF]`
+  - `0a2754fd fix(split-billing): Codex round-3 — season/freeze/job-link + repost + snapshot honesty [PARKED, flag OFF]`
+  - `795604f3 fix(split-billing): Codex round-2 remaining 6 — #A/#E/#G/#H/#L/#M [PARKED, flag OFF]`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - `supabase/migrations/20260718010000_per_line_split_billing_schema.sql`
+  - `supabase/migrations/20260718020000_per_line_split_billing_calculator.sql`
+  - `supabase/migrations/20260718030000_per_line_split_billing_save_rpc.sql`
+
+## 2026-07-20 — Codex round-10 on per-line split-billing = 1 real finding: the post_invoice_group idempotency key could be reused across split-billing drafts (editor stays mounted across /split-billing/:id navigations) -> a stale key returns a PRIOR group's cached success while the current group stays unposted. Fixed: reset the post key whenever invoiceGroupId changes (scoped to the group). Compliance CLEAN; typecheck+lint clean. Codex round 11 next. Still PARKED.
+
+Codex round-10 on per-line split-billing = 1 real finding: the post_invoice_group idempotency key could be reused across split-billing drafts (editor stays mounted across /split-billing/:id navigations) -> a stale key returns a PRIOR group's cached success while the current group stays unposted. Fixed: reset the post key whenever invoiceGroupId changes (scoped to the group). Compliance CLEAN; typecheck+lint clean. Codex round 11 next. Still PARKED.
+
+- **Commits this session** (git log -15 (fallback — no author-matched commits in the last 12h)):
+  - `d5cf38c5 fix(split-billing): Codex round-9 — harden line-share post-lock trigger (false positive)`
+  - `52d2e67f fix(split-billing): Codex round-8 split-specific (5 of 6) — post-safety, PDF units, override audit, applicator/vehicle, guardrails`
+  - `3efff630 fix(split-billing): Codex round-7 P2s — item-tamper guard, override audit base, snapshot provenance, child field context`
+  - `b683fa44 fix(split-billing): Codex round-7 P1s — active-group readback + RUP duplicate-product guard`
+  - `924b7728 fix(split-billing): Codex round-6 — 4 P1 + 4 P2 (postable group + validation/readback/recovery)`
+  - `18780146 docs(split-billing): front-to-back Codex round-6 review runbook`
+  - `c4a79c66 docs(changelog): log 2026-07-20 session — split-billing owner-decisions + CodeQL fix`
+  - `21943958 fix(split-billing): use crypto.randomUUID() for line-row keys — clears CodeQL js/insecure-randomness`
+  - `8b03cb88 docs(decision-log): split-billing v1 edge-case policy settled — per-child commissions, no job-less exclusivity guard`
+  - `5ad316de fix(split-billing): Fable adversarial round — 6 RPC fixes + editor race guard + reviewer MEDs [PARKED, flag OFF]`
+  - `bc91afc9 fix(split-billing): Codex round-5 (8) + drift BLOCKER B1 + member-drop bug [PARKED, flag OFF]`
+  - `5983b3eb fix(split-billing): Codex round-4 — commissions + posting-boundary + field/override guards [PARKED, flag OFF]`
+  - `0a2754fd fix(split-billing): Codex round-3 — season/freeze/job-link + repost + snapshot honesty [PARKED, flag OFF]`
+  - `795604f3 fix(split-billing): Codex round-2 remaining 6 — #A/#E/#G/#H/#L/#M [PARKED, flag OFF]`
+  - `eb942f86 fix(split-billing): Codex round-2 batch — flag enforcement, fee-COGS, input guards (7/13) [PARKED, flag OFF]`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - `supabase/migrations/20260718010000_per_line_split_billing_schema.sql`
+  - `supabase/migrations/20260718020000_per_line_split_billing_calculator.sql`
+  - `supabase/migrations/20260718030000_per_line_split_billing_save_rpc.sql`
+
+## 2026-07-20 — Codex round-9 on per-line split-billing = ONLY 1 finding (down from 6), and it was a FALSE POSITIVE: the invoice_line_shares post-lock trigger's IN(NEW.x,OLD.x) is NULL-safe in PL/pgSQL (proven by an isolated micro-test + 60+ live share insert/delete proofs). Hardened it to TG_OP-guarded CASE for clarity (behavior-equivalent), re-proven PROOFOK incl. freeze_blocks_posted_ok, reviewer CLEAN. Split-specific work now effectively converged; only the deferred app-wide RUP item remains. Codex round 10 next. Still PARKED.
+
+Codex round-9 on per-line split-billing = ONLY 1 finding (down from 6), and it was a FALSE POSITIVE: the invoice_line_shares post-lock trigger's IN(NEW.x,OLD.x) is NULL-safe in PL/pgSQL (proven by an isolated micro-test + 60+ live share insert/delete proofs). Hardened it to TG_OP-guarded CASE for clarity (behavior-equivalent), re-proven PROOFOK incl. freeze_blocks_posted_ok, reviewer CLEAN. Split-specific work now effectively converged; only the deferred app-wide RUP item remains. Codex round 10 next. Still PARKED.
+
+- **Commits this session** (git log -15 (fallback — no author-matched commits in the last 12h)):
+  - `52d2e67f fix(split-billing): Codex round-8 split-specific (5 of 6) — post-safety, PDF units, override audit, applicator/vehicle, guardrails`
+  - `3efff630 fix(split-billing): Codex round-7 P2s — item-tamper guard, override audit base, snapshot provenance, child field context`
+  - `b683fa44 fix(split-billing): Codex round-7 P1s — active-group readback + RUP duplicate-product guard`
+  - `924b7728 fix(split-billing): Codex round-6 — 4 P1 + 4 P2 (postable group + validation/readback/recovery)`
+  - `18780146 docs(split-billing): front-to-back Codex round-6 review runbook`
+  - `c4a79c66 docs(changelog): log 2026-07-20 session — split-billing owner-decisions + CodeQL fix`
+  - `21943958 fix(split-billing): use crypto.randomUUID() for line-row keys — clears CodeQL js/insecure-randomness`
+  - `8b03cb88 docs(decision-log): split-billing v1 edge-case policy settled — per-child commissions, no job-less exclusivity guard`
+  - `5ad316de fix(split-billing): Fable adversarial round — 6 RPC fixes + editor race guard + reviewer MEDs [PARKED, flag OFF]`
+  - `bc91afc9 fix(split-billing): Codex round-5 (8) + drift BLOCKER B1 + member-drop bug [PARKED, flag OFF]`
+  - `5983b3eb fix(split-billing): Codex round-4 — commissions + posting-boundary + field/override guards [PARKED, flag OFF]`
+  - `0a2754fd fix(split-billing): Codex round-3 — season/freeze/job-link + repost + snapshot honesty [PARKED, flag OFF]`
+  - `795604f3 fix(split-billing): Codex round-2 remaining 6 — #A/#E/#G/#H/#L/#M [PARKED, flag OFF]`
+  - `eb942f86 fix(split-billing): Codex round-2 batch — flag enforcement, fee-COGS, input guards (7/13) [PARKED, flag OFF]`
+  - `3648e52a fix(split-billing): resolve all 8 P1 + 2 P2 Codex money/RLS findings [PARKED, flag OFF]`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - `supabase/migrations/20260718010000_per_line_split_billing_schema.sql`
+  - `supabase/migrations/20260718020000_per_line_split_billing_calculator.sql`
+  - `supabase/migrations/20260718030000_per_line_split_billing_save_rpc.sql`
+
+## 2026-07-20 — Codex round-8 split-specific fixes (5 of 6): P1-1 Post revoked during re-save; P1-3 chemical items persist unit_size/total_applied for the PDF; P2-1 credit-limit + RUP-license advisory before posting a split group; P2-2 per-customer override audit base; P2-3 applicator/vehicle denormalized onto children. Reviewer-clean (rls/drift/compliance 0/0/0), PROOFOK live PG (chem_units_persisted_ok etc). Round-8 P1-2 RUP-orderless is PRE-EXISTING app-wide, DEFERRED to task_c623ed0c. Codex round 9 next. Still PARKED.
+
+Codex round-8 split-specific fixes (5 of 6): P1-1 Post revoked during re-save; P1-3 chemical items persist unit_size/total_applied for the PDF; P2-1 credit-limit + RUP-license advisory before posting a split group; P2-2 per-customer override audit base; P2-3 applicator/vehicle denormalized onto children. Reviewer-clean (rls/drift/compliance 0/0/0), PROOFOK live PG (chem_units_persisted_ok etc). Round-8 P1-2 RUP-orderless is PRE-EXISTING app-wide, DEFERRED to task_c623ed0c. Codex round 9 next. Still PARKED.
+
+- **Commits this session** (git log -15 (fallback — no author-matched commits in the last 12h)):
+  - `3efff630 fix(split-billing): Codex round-7 P2s — item-tamper guard, override audit base, snapshot provenance, child field context`
+  - `b683fa44 fix(split-billing): Codex round-7 P1s — active-group readback + RUP duplicate-product guard`
+  - `924b7728 fix(split-billing): Codex round-6 — 4 P1 + 4 P2 (postable group + validation/readback/recovery)`
+  - `18780146 docs(split-billing): front-to-back Codex round-6 review runbook`
+  - `c4a79c66 docs(changelog): log 2026-07-20 session — split-billing owner-decisions + CodeQL fix`
+  - `21943958 fix(split-billing): use crypto.randomUUID() for line-row keys — clears CodeQL js/insecure-randomness`
+  - `8b03cb88 docs(decision-log): split-billing v1 edge-case policy settled — per-child commissions, no job-less exclusivity guard`
+  - `5ad316de fix(split-billing): Fable adversarial round — 6 RPC fixes + editor race guard + reviewer MEDs [PARKED, flag OFF]`
+  - `bc91afc9 fix(split-billing): Codex round-5 (8) + drift BLOCKER B1 + member-drop bug [PARKED, flag OFF]`
+  - `5983b3eb fix(split-billing): Codex round-4 — commissions + posting-boundary + field/override guards [PARKED, flag OFF]`
+  - `0a2754fd fix(split-billing): Codex round-3 — season/freeze/job-link + repost + snapshot honesty [PARKED, flag OFF]`
+  - `795604f3 fix(split-billing): Codex round-2 remaining 6 — #A/#E/#G/#H/#L/#M [PARKED, flag OFF]`
+  - `eb942f86 fix(split-billing): Codex round-2 batch — flag enforcement, fee-COGS, input guards (7/13) [PARKED, flag OFF]`
+  - `3648e52a fix(split-billing): resolve all 8 P1 + 2 P2 Codex money/RLS findings [PARKED, flag OFF]`
+  - `70912a7c feat(split-billing): Option B — price each co-owner at their OWN tier (per-customer) + round-once penny guard [PARKED, flag OFF]`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - `supabase/migrations/20260718010000_per_line_split_billing_schema.sql`
+  - `supabase/migrations/20260718020000_per_line_split_billing_calculator.sql`
+  - `supabase/migrations/20260718030000_per_line_split_billing_save_rpc.sql`
+
+## 2026-07-20 — Codex round-7 4 P2s FIXED on per-line split-billing: (1) guard_split_invoice_items now BEFORE DELETE OR UPDATE — blocks direct material-field tamper of a split item outside the writer; (2) uniform-override audit base = resolved representative (tier/quote), not the override; (3) invoice_line_share_snapshots gains 8 provenance cols (base/mode/reason/hash) populated at post; (4) split children carry field_names/crop_type/total_acres for the combined list+PDFs. Reviewer-clean (rls 0/0/0, drift apply-clean), PROOFOK 60/60 live PG. Codex round 8 next. Still PARKED.
+
+Codex round-7 4 P2s FIXED on per-line split-billing: (1) guard_split_invoice_items now BEFORE DELETE OR UPDATE — blocks direct material-field tamper of a split item outside the writer; (2) uniform-override audit base = resolved representative (tier/quote), not the override; (3) invoice_line_share_snapshots gains 8 provenance cols (base/mode/reason/hash) populated at post; (4) split children carry field_names/crop_type/total_acres for the combined list+PDFs. Reviewer-clean (rls 0/0/0, drift apply-clean), PROOFOK 60/60 live PG. Codex round 8 next. Still PARKED.
+
+- **Commits this session** (git log -15 (fallback — no author-matched commits in the last 12h)):
+  - `b683fa44 fix(split-billing): Codex round-7 P1s — active-group readback + RUP duplicate-product guard`
+  - `924b7728 fix(split-billing): Codex round-6 — 4 P1 + 4 P2 (postable group + validation/readback/recovery)`
+  - `18780146 docs(split-billing): front-to-back Codex round-6 review runbook`
+  - `c4a79c66 docs(changelog): log 2026-07-20 session — split-billing owner-decisions + CodeQL fix`
+  - `21943958 fix(split-billing): use crypto.randomUUID() for line-row keys — clears CodeQL js/insecure-randomness`
+  - `8b03cb88 docs(decision-log): split-billing v1 edge-case policy settled — per-child commissions, no job-less exclusivity guard`
+  - `5ad316de fix(split-billing): Fable adversarial round — 6 RPC fixes + editor race guard + reviewer MEDs [PARKED, flag OFF]`
+  - `bc91afc9 fix(split-billing): Codex round-5 (8) + drift BLOCKER B1 + member-drop bug [PARKED, flag OFF]`
+  - `5983b3eb fix(split-billing): Codex round-4 — commissions + posting-boundary + field/override guards [PARKED, flag OFF]`
+  - `0a2754fd fix(split-billing): Codex round-3 — season/freeze/job-link + repost + snapshot honesty [PARKED, flag OFF]`
+  - `795604f3 fix(split-billing): Codex round-2 remaining 6 — #A/#E/#G/#H/#L/#M [PARKED, flag OFF]`
+  - `eb942f86 fix(split-billing): Codex round-2 batch — flag enforcement, fee-COGS, input guards (7/13) [PARKED, flag OFF]`
+  - `3648e52a fix(split-billing): resolve all 8 P1 + 2 P2 Codex money/RLS findings [PARKED, flag OFF]`
+  - `70912a7c feat(split-billing): Option B — price each co-owner at their OWN tier (per-customer) + round-once penny guard [PARKED, flag OFF]`
+  - `5f2b5f74 feat(split-billing): R8 — resolve chemical price server-side (manual→quoted→tier) + unit conversion [PARKED, flag OFF]`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - `supabase/migrations/20260718010000_per_line_split_billing_schema.sql`
+  - `supabase/migrations/20260718020000_per_line_split_billing_calculator.sql`
+  - `supabase/migrations/20260718030000_per_line_split_billing_save_rpc.sql`
+
+## 2026-07-20 — Codex round 7 (2 P1 + 4 P2) on per-line split-billing: fixed the 2 P1s — review-card readback now filters to active invoice-group members (excludes round-6-detached terminal children), and the RPC rejects the same chemical product on >1 line (SPLIT_DUPLICATE_PRODUCT; was under-reporting RUP quantity). Reviewer-clean (rls/drift/compliance 0/0/0), PROOFOK 57/57 live PG. 4 P2s (uniform-override audit base, posting-boundary item-tamper, snapshot provenance schema, combined-list field context) DEFERRED to a fresh session per Mason. Still PARKED.
+
+Codex round 7 (2 P1 + 4 P2) on per-line split-billing: fixed the 2 P1s — review-card readback now filters to active invoice-group members (excludes round-6-detached terminal children), and the RPC rejects the same chemical product on >1 line (SPLIT_DUPLICATE_PRODUCT; was under-reporting RUP quantity). Reviewer-clean (rls/drift/compliance 0/0/0), PROOFOK 57/57 live PG. 4 P2s (uniform-override audit base, posting-boundary item-tamper, snapshot provenance schema, combined-list field context) DEFERRED to a fresh session per Mason. Still PARKED.
+
+- **Commits this session** (git log -15 (fallback — no author-matched commits in the last 12h)):
+  - `924b7728 fix(split-billing): Codex round-6 — 4 P1 + 4 P2 (postable group + validation/readback/recovery)`
+  - `18780146 docs(split-billing): front-to-back Codex round-6 review runbook`
+  - `c4a79c66 docs(changelog): log 2026-07-20 session — split-billing owner-decisions + CodeQL fix`
+  - `21943958 fix(split-billing): use crypto.randomUUID() for line-row keys — clears CodeQL js/insecure-randomness`
+  - `8b03cb88 docs(decision-log): split-billing v1 edge-case policy settled — per-child commissions, no job-less exclusivity guard`
+  - `5ad316de fix(split-billing): Fable adversarial round — 6 RPC fixes + editor race guard + reviewer MEDs [PARKED, flag OFF]`
+  - `bc91afc9 fix(split-billing): Codex round-5 (8) + drift BLOCKER B1 + member-drop bug [PARKED, flag OFF]`
+  - `5983b3eb fix(split-billing): Codex round-4 — commissions + posting-boundary + field/override guards [PARKED, flag OFF]`
+  - `0a2754fd fix(split-billing): Codex round-3 — season/freeze/job-link + repost + snapshot honesty [PARKED, flag OFF]`
+  - `795604f3 fix(split-billing): Codex round-2 remaining 6 — #A/#E/#G/#H/#L/#M [PARKED, flag OFF]`
+  - `eb942f86 fix(split-billing): Codex round-2 batch — flag enforcement, fee-COGS, input guards (7/13) [PARKED, flag OFF]`
+  - `3648e52a fix(split-billing): resolve all 8 P1 + 2 P2 Codex money/RLS findings [PARKED, flag OFF]`
+  - `70912a7c feat(split-billing): Option B — price each co-owner at their OWN tier (per-customer) + round-once penny guard [PARKED, flag OFF]`
+  - `5f2b5f74 feat(split-billing): R8 — resolve chemical price server-side (manual→quoted→tier) + unit conversion [PARKED, flag OFF]`
+  - `3c79ea3e feat(split-billing): Phase 4 save/post RPC + Phase 5 UI (editor, email-gate, lock) — proven, reviewed, PARKED (flag OFF, not applied)`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - `supabase/migrations/20260718010000_per_line_split_billing_schema.sql`
+  - `supabase/migrations/20260718020000_per_line_split_billing_calculator.sql`
+  - `supabase/migrations/20260718030000_per_line_split_billing_save_rpc.sql`
+
+## 2026-07-20 — Codex round-6 (4 P1 + 4 P2) on per-line split-billing: fixed unpostable-group regression (detach terminal/deleted children), field/service-acres validation, save/post idempotency+readback recovery, deleted_at readback filter, flat-fee override UI. Reviewer-clean (rls/drift/compliance), PROOFOK 56/56 live PG. Still PARKED — Codex round-7 pending.
+
+Codex round-6 (4 P1 + 4 P2) on per-line split-billing: fixed unpostable-group regression (detach terminal/deleted children), field/service-acres validation, save/post idempotency+readback recovery, deleted_at readback filter, flat-fee override UI. Reviewer-clean (rls/drift/compliance), PROOFOK 56/56 live PG. Still PARKED — Codex round-7 pending.
+
+- **Commits this session** (git log -15 (fallback — no author-matched commits in the last 12h)):
+  - `18780146 docs(split-billing): front-to-back Codex round-6 review runbook`
+  - `c4a79c66 docs(changelog): log 2026-07-20 session — split-billing owner-decisions + CodeQL fix`
+  - `21943958 fix(split-billing): use crypto.randomUUID() for line-row keys — clears CodeQL js/insecure-randomness`
+  - `8b03cb88 docs(decision-log): split-billing v1 edge-case policy settled — per-child commissions, no job-less exclusivity guard`
+  - `5ad316de fix(split-billing): Fable adversarial round — 6 RPC fixes + editor race guard + reviewer MEDs [PARKED, flag OFF]`
+  - `bc91afc9 fix(split-billing): Codex round-5 (8) + drift BLOCKER B1 + member-drop bug [PARKED, flag OFF]`
+  - `5983b3eb fix(split-billing): Codex round-4 — commissions + posting-boundary + field/override guards [PARKED, flag OFF]`
+  - `0a2754fd fix(split-billing): Codex round-3 — season/freeze/job-link + repost + snapshot honesty [PARKED, flag OFF]`
+  - `795604f3 fix(split-billing): Codex round-2 remaining 6 — #A/#E/#G/#H/#L/#M [PARKED, flag OFF]`
+  - `eb942f86 fix(split-billing): Codex round-2 batch — flag enforcement, fee-COGS, input guards (7/13) [PARKED, flag OFF]`
+  - `3648e52a fix(split-billing): resolve all 8 P1 + 2 P2 Codex money/RLS findings [PARKED, flag OFF]`
+  - `70912a7c feat(split-billing): Option B — price each co-owner at their OWN tier (per-customer) + round-once penny guard [PARKED, flag OFF]`
+  - `5f2b5f74 feat(split-billing): R8 — resolve chemical price server-side (manual→quoted→tier) + unit conversion [PARKED, flag OFF]`
+  - `3c79ea3e feat(split-billing): Phase 4 save/post RPC + Phase 5 UI (editor, email-gate, lock) — proven, reviewed, PARKED (flag OFF, not applied)`
+  - `02aacafd docs(split-billing): grounded save/post RPC design + Phase-4 build handoff`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - `supabase/migrations/20260718010000_per_line_split_billing_schema.sql`
+  - `supabase/migrations/20260718020000_per_line_split_billing_calculator.sql`
+  - `supabase/migrations/20260718030000_per_line_split_billing_save_rpc.sql`
+
+## 2026-07-20 — Split-billing (parked): closed both open owner-decisions (per-child commissions, no job-less guard; logged in DECISION_LOG 8b03cb88); re-proved the Fable adversarial fixes PROOFOK 55/55 in live PG + reviewer-clean; declined Fable-as-Codex-gate substitution (kept parked for real Codex round 6 ~Jul 24); fixed CodeQL js/insecure-randomness high alert on PR #164 by switching nextUid() to crypto.randomUUID() (21943958). Feature still flag OFF / not applied / PR not merged.
+
+Split-billing (parked): closed both open owner-decisions (per-child commissions, no job-less guard; logged in DECISION_LOG 8b03cb88); re-proved the Fable adversarial fixes PROOFOK 55/55 in live PG + reviewer-clean; declined Fable-as-Codex-gate substitution (kept parked for real Codex round 6 ~Jul 24); fixed CodeQL js/insecure-randomness high alert on PR #164 by switching nextUid() to crypto.randomUUID() (21943958). Feature still flag OFF / not applied / PR not merged.
+
+- **Commits this session** (git log -15 (fallback — no author-matched commits in the last 12h)):
+  - `21943958 fix(split-billing): use crypto.randomUUID() for line-row keys — clears CodeQL js/insecure-randomness`
+  - `8b03cb88 docs(decision-log): split-billing v1 edge-case policy settled — per-child commissions, no job-less exclusivity guard`
+  - `5ad316de fix(split-billing): Fable adversarial round — 6 RPC fixes + editor race guard + reviewer MEDs [PARKED, flag OFF]`
+  - `bc91afc9 fix(split-billing): Codex round-5 (8) + drift BLOCKER B1 + member-drop bug [PARKED, flag OFF]`
+  - `5983b3eb fix(split-billing): Codex round-4 — commissions + posting-boundary + field/override guards [PARKED, flag OFF]`
+  - `0a2754fd fix(split-billing): Codex round-3 — season/freeze/job-link + repost + snapshot honesty [PARKED, flag OFF]`
+  - `795604f3 fix(split-billing): Codex round-2 remaining 6 — #A/#E/#G/#H/#L/#M [PARKED, flag OFF]`
+  - `eb942f86 fix(split-billing): Codex round-2 batch — flag enforcement, fee-COGS, input guards (7/13) [PARKED, flag OFF]`
+  - `3648e52a fix(split-billing): resolve all 8 P1 + 2 P2 Codex money/RLS findings [PARKED, flag OFF]`
+  - `70912a7c feat(split-billing): Option B — price each co-owner at their OWN tier (per-customer) + round-once penny guard [PARKED, flag OFF]`
+  - `5f2b5f74 feat(split-billing): R8 — resolve chemical price server-side (manual→quoted→tier) + unit conversion [PARKED, flag OFF]`
+  - `3c79ea3e feat(split-billing): Phase 4 save/post RPC + Phase 5 UI (editor, email-gate, lock) — proven, reviewed, PARKED (flag OFF, not applied)`
+  - `02aacafd docs(split-billing): grounded save/post RPC design + Phase-4 build handoff`
+  - `a24e8f8a feat(split-billing): penny-exact split calculator (pure fns, flag-off, parked)`
+  - `4346fb11 feat(split-billing): additive per-line split-billing schema (flag-off, parked)`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - `supabase/migrations/20260718010000_per_line_split_billing_schema.sql`
+  - `supabase/migrations/20260718020000_per_line_split_billing_calculator.sql`
+  - `supabase/migrations/20260718030000_per_line_split_billing_save_rpc.sql`
+
+## 2026-07-19 — Per-line split-billing: FABLE adversarial round → 6 RPC fixes + editor race guard + 2 reviewer MEDs, all fixed + PROOFOK 55/55 (branch, still PARKED). Autonomous Fable-5 run.
+
+With Codex round 6 blocked on a usage limit (~Jul 24), a Fable adversarial review (4 lenses) found real bugs the 5 Codex rounds missed; this session proved and landed the fixes. Feature stays **flag OFF, migrations NOT applied, PR #164 NOT merged**.
+
+- **[BLOCKER money] negative service acres** — a direct RPC call with `source_acres <= 0` could mint NEGATIVE (credit) invoices that passed every invariant and could post to reduce AR. Rejected server-side (`SPLIT_SERVICE_ACRES_NONPOSITIVE`). Proven: `neg_service_acres_rejected_ok`.
+- **[BLOCKER lifecycle] soft-deleted child bricked the set** — after the live `delete_invoices` soft-deleted a child, its `invoice_items` still pointed at the set's billing lines (NO-ACTION FK), so every future re-save FK-aborted and the dropped co-owner became unbillable. The RPC now NULLs those `billing_line_id` refs before rebuilding the lines. Proven: `softdelete_child_resave_ok`.
+- **[BLOCKER lifecycle] voided/cancelled child bricked re-save** — a terminal child kept blocking the wrapper's already-posted check forever. The wrapper, PASS-2 reuse, and orphan-cancel now exclude cancelled/voided children (no resurrection possible — reuse is draft/unposted only). Proven: `voidchild_resave_ok`.
+- **[HIGH money] commission re-save FK abort** — the job-wide commission re-mint hard-DELETEd old rows, which 23503-aborted if a commission had ever been in a (later voided) payout batch. Now SOFT-cancels (`status='cancelled'`, amount 0, `deleted_at`) matching the live never-delete-commissions convention; drift review verified every live consumer (batch creation, void, payable list) excludes soft-cancelled rows.
+- **[HIGH frontend] stale readback race** — opening split set A then B quickly let A's slower queries overwrite B's result card (operator reviews A's amounts, Posts group B). `loadResults` now has a latest-load-wins staleness guard, returns a boolean, and `handleSave` enables Post only on a completed non-stale readback.
+- **[MED] posting tamper tie** — the posting trigger now also requires each item's `extended_cents` to equal its shares' sum (`SPLIT_POST_ITEM_SHARE_MISMATCH`), closing the admin-PATCH tamper window. Proven: `post_item_tamper_rejected_ok`.
+- **[MED] audit-row price accuracy** — `source_unit_price_cents` now reflects a uniform per-share override instead of the stale resolved base. Proven: `source_unit_price_reflects_uniform_override_ok`.
+- **[reviewer MED M1] terminal children keep their printed record** — the re-save clear now only wipes draft/unposted children, so a voided/cancelled child keeps its `invoice_items`/`invoice_shares` as the audit record. Proven: `voidchild_items_preserved_ok`.
+
+**PROVEN in the live DB** (rollback): `PROOFOK` **55/55** — all 49 prior + the 6 new scenarios above. `rls-security-reviewer` 0/0/0 (soft-cancel scoping strictly narrower; no resurrection/double-bill; preserved items can't leak into posting/invariants/commissions), `migration-drift-reviewer` 0 blockers ('cancelled' valid in the live enum; `deleted_at` exists; all live consumers exclude soft-cancelled rows), `compliance-reviewer` clean. Typecheck + lint + focused tests pass. **Tooling learning:** the ~124KB proof bundle now runs reliably by POSTing the file bytes directly to the Supabase management API (no more LLM re-emission stalls). Still **flag OFF, not applied, not merged**; Codex round 6 + two owner decisions (Option-B commission clamp; job-less double-submit) remain open.
+
+---
+
+## 2026-07-19 — Per-line split-billing: Codex ROUND 5 → 6 P1 + 2 P2 + a reviewer BLOCKER, all fixed + PROOFOK 50/50 (branch, still PARKED). Autonomous Opus-4.8 run.
+
+A fifth `codex review --base main` on `5983b3eb` returned 6 P1 + 2 P2 — all fixed. Then the migration-drift reviewer caught a BLOCKER (B1) the admin-only proof had missed, and the live proof caught a second bug in the newly-tested member-drop re-save path. All fixed; feature stays **flag OFF, migrations NOT applied, PR #164 NOT merged**.
+
+- **P1 field-set equality** — billing a source job now requires the billed fields to EQUAL the job's `job_fields` (not just be a subset), so consuming the job can't silently orphan an unbilled field.
+- **P1 positive line amounts server-side** — chemical-manual / service-manual / flat-fee lines reject `<= 0` in the RPC (defense-in-depth behind the editor), so a direct call can't create a free or negative invoice.
+- **P1 commission COGS** — commission profit now uses the largest-remainder-allocated COGS already in the header (accumulated per child in PASS 2), not a re-rounded `cost×qty`; proven `commission_uses_lr_cogs_ok(99.99)` (the drift gave `99.98`).
+- **P1 Post gating** — the editor enables Post only after a SUCCESSFUL authoritative readback, and `loadResults` now surfaces its item/share query errors instead of swallowing them.
+- **P1 email gate hardened** — invoice emails now REQUIRE a valid invoice resource row and FAIL CLOSED (503) on any suppression-lookup error except the pre-migration missing-column case.
+- **P1 duplicate field IDs** — already covered round-4; round-5 tightened the job-field equality above.
+- **P2 re-save anchor repoint** — `jobs.invoice_id` / `application_records` repoint to a surviving child when a re-save drops the prior anchor member.
+- **P2 InvoiceDetail split COGS** — the Total Cost/Margin uses the header's authoritative allocated COGS for split invoices instead of recomputing `cost×quantity`.
+- **BLOCKER B1 (drift reviewer; the proof missed it because it ran only as admin)** — the anchor repoint had split the `jobs` UPDATE into two statements; the second (`SET invoice_id`) ran while `status='invoiced'`, which the live `enforce_billed_job_immutability` trigger BLOCKS for non-admin sales_reps (`is_admin()` early-returns for admins). Fixed by folding `invoice_id` into the `completed→invoiced` statement (guard early-returns on a not-yet-billed job — the sanctioned `transfer_job_to_invoice` shape) and moving the re-save repoint under the `app.admin_override` hatch, scoped to just that one UPDATE.
+- **Second bug (caught by the live proof's new non-admin scenario)** — the orphan-cancel of a dropped member detached its child before the `#E` guard ran, tripping a false `SPLIT_JOB_ALREADY_INVOICED` that blocked every member-drop re-save. Fixed by snapshotting the set's child IDs before the orphan-cancel.
+
+**PROVEN in the live DB** (rollback): `PROOFOK` **50/50** — the 43 prior + 6 round-5 + the decisive `salesrep_job_split_and_anchor_repoint_ok` (a NON-ADMIN sales_rep bills a job-split AND re-saves dropping the anchor member). `rls-security-reviewer` clean (the `app.admin_override` hatch is transaction-local, reset immediately, and can't repoint to a foreign invoice), `migration-drift-reviewer` **B1 resolved / 0 blockers**, `compliance-reviewer` clean. Typecheck + lint pass. **Learning captured:** an admin-only proof silently skips `is_admin()`-early-return immutability guards — always add a sales_rep scenario for money RPCs that write billed job fields. Still **flag OFF, not applied, not merged.**
+
+---
+
+## 2026-07-18 — Per-line split-billing: Codex ROUND 4 → 8 P1 + 2 P2, all fixed + PROOFOK 43/43 (branch, still PARKED). Autonomous Opus-4.8 run.
+
+A fourth `codex review --base main` on `0a2754fd` returned 8 P1 + 2 P2 — all fixed this session. Feature stays **flag OFF, migrations NOT applied, PR #164 NOT merged**; go-live still gated on a CLEAN Codex verdict (round 5 pending).
+
+- **P1 commissions** — a job-backed split marked the job invoiced but never generated salesperson commissions, and the status flip also blocked the normal path from ever making them. The split RPC now mirrors `transfer_job_to_invoice`'s per-owner-group path: resolve the commission split (job snapshot → quote → customer default), persist it on the job, and mint per-child commissions on each child's chemical-line profit. Profit uses the FIELD convention (`extended − ROUND(cost×qty)`, since split chemical items store per-unit cost) — the same math `_save_invoice_scoped_impl`'s U8 recompute uses. Re-save cleanly re-mints (job-wide, guarded against batched/paid) so a redraw or a dropped member never duplicates or strands a commission. Proven: `commissions_minted_ok(count2 total800 profitA400)`, `commissions_recompute_on_resave_ok(count2 total1800)`.
+- **P1 posting-boundary integrity** — generic `save_invoice` would delete a draft split child's items and cascade its `invoice_line_shares` away (its existing `FIELD_INVOICE_SPLIT_LOCKED` guard doesn't fire for our single-compat-share children), then `post_invoice_group` posted a malformed group. Added (a) a `guard_split_invoice_items` BEFORE-DELETE trigger blocking any non-writer from deleting a split-produced item, and (b) posting-boundary validation in the snapshot trigger (item↔share count + shares tie to header) that refuses `SPLIT_POST_MALFORMED` / `SPLIT_POST_TOTAL_MISMATCH`. Proven: `generic_save_invoice_blocked_ok`, `post_malformed_rejected_ok`.
+- **P1 fields-belong-to-job** — selecting a job + unrelated/subset fields consumed the whole job as invoiced while billing different acres. Now the billed fields must be a subset of the job's `job_fields` (`SPLIT_FIELD_NOT_ON_JOB`). Proven: `fields_belong_to_job_ok`.
+- **P1 malformed per-person override** — the editor's round-2 `$0`/`1e5`-override guard covered only line-level overrides; the per-SHARE override still accepted `1e5→0`. Rejected now in BOTH the editor (`validateForSave`) and the server (`SPLIT_SHARE_OVERRIDE_INVALID`, defense-in-depth). Proven: `share_override_nonpositive_rejected_ok`.
+- **P1 route job-backed split drafts** — round-3 stamped `job_id` onto every child, which defeated the no-job redirect and stranded job-backed split drafts on the generic invoice page with no Post path. `InvoiceDetail` now routes a DRAFT/UNPOSTED split child to the reopen editor from its tolerant `select('*')` load (deploy-safe — the preflight stays off the parked column).
+- **P1 zero-invoice suppression server-side** — the `$0` split-invoice email gate was client-only; the `send-email` edge function now loads `send_disposition` and refuses `suppressed_zero_total` (fails open only pre-migration).
+- **P1 reject duplicate field IDs** — the same field twice would double-charge acres + write duplicate location snapshots; rejected now (`SPLIT_DUPLICATE_FIELD`). Proven: `duplicate_field_rejected_ok`.
+- **P1 snapshot self-contained identity** — post/unpost/re-save deletes the billing lines + items, leaving snapshots with a dangling `billing_line_id` and no product/service identity. The snapshot now captures `line_kind/product_id/application_service_id/line_description`. Proven: `snapshot_identity_ok`.
+- **P2 snapshot acres 4dp** — widened `invoice_line_share_snapshots.allocated_acres` `(12,2)→(12,4)` so the post history doesn't silently round `0.3334→0.33`. Proven: `snapshot_acres_4dp_ok`.
+- **P2 persist source acres for service** — `field_app_billing_lines.source_acres` now stores the service line's acre basis (was NULL for services). Proven: `source_acres_persisted_ok`.
+
+**PROVEN in the live DB** (rollback): `PROOFOK` **43/43** — the 32 prior scenarios + the 11 new above. The live proof again earned its keep: the OLD `reasons_captured` scenario used an invalid `$0` per-share override that the new F4 server guard correctly rejects (fixed the scenario, not the code). `rls-security-reviewer` 0/0/0, `migration-drift-reviewer` 0 blockers (one MED — a redundant no-op `allocated_acres` ALTER contradicting the schema migration — fixed by deletion), `compliance-reviewer` CLEAN (F4/F5/F6). Typecheck + lint pass. `F5` (InvoiceDetail routing) and `F6` (edge fn) aren't live-exercisable until the migration applies + flag flips — covered by the clean compliance review and run for real at go-live. Still **flag OFF, not applied, not merged.**
+
+---
+
+## 2026-07-18 — Per-line split-billing: Codex ROUND 3 → 2 P1 + 4 P2, all fixed + PROOFOK 32/32 (branch, still PARKED). Autonomous Opus-4.8 run.
+
+A third `codex review --base main` on `795604f3` went deeper into the job-consumption and reopen work my round-2 fixes introduced, and returned 2 P1 + 4 P2 — all fixed. Feature stays **flag OFF, migrations NOT applied, PR #164 NOT merged**; go-live still gated on a CLEAN Codex verdict.
+
+- **P1 freeze source job on re-save** — the re-save branch never compared/updated the set's stored `source_job_id`, so changing the Source job after the first Save let one billing set consume TWO jobs (both flipped to `invoiced`). Now a change is refused (`SPLIT_JOB_IMMUTABLE`); start a new set instead.
+- **P1 season-correct pricing** — the per-customer service-rate lookup AND the child `season` stamp used `current_season()`, mis-pricing a backdated / prior-season job and filing it in the wrong reporting year. Now `v_season = source job's season → invoice-date season → current`, used for the `customer_application_rates` lookup and `invoices.season` (mirrors `transfer_job_to_invoice`). Proven: a 2025-dated service invoice bills the 2025 rate ($35000) and stamps season 2025.
+- **P2 source-job metadata on every child** — child invoices now carry `job_id` + `application_date`, so field-invoice lists resolve Job # for all children (not just the first via `jobs.invoice_id`).
+- **P2 repost lifecycle** — "posted" now means every child is in a COMMITTED status (not merely "not draft"); an unposted group is no longer mislabeled Posted with Post disabled.
+- **P2 percentage residual** — `pctsToMicro` now removes the ENTIRE negative residual by cycling, so `33.334×3` (sum just over 100 within the 0.01 UI tolerance) lands on exactly 100000000 instead of a server-rejected vector.
+- **P2 live-RPC snapshot honesty** — restored the raw live `pg_proc` snapshot to the true 438 (was inflated to 440 to hide the two parked split RPCs) and moved them into the verified `QUEUED_MIGRATION_FUNCTIONS` bridge (absent-live + migration-sourced), with the "no committed queued exceptions" guard narrowed to an explicit flag-gated allowlist.
+
+**Two runtime bugs the live proof caught (the reviews passed the file — only execution found them):** (a) `v_job.season` referenced in the season COALESCE when `p_source_job_id IS NULL`, where `v_job` (a bare record) is unassigned → PL/pgSQL 55000 — now captured into a plain variable inside the guard; (b) `application_date` used `v_job.scheduled_date` from a stale on-disk migration — the live `jobs` has no such column, switched to `v_job.job_date` (what live `transfer_job_to_invoice` uses).
+
+**PROVEN in the live DB** (rollback): `PROOFOK` **32/32** — the 29 prior scenarios + `children_carry_job_id_ok`, `source_job_frozen_ok`, `season_aware_pricing_ok(2025 rate 35000, child season 2025)`. `rls-security-reviewer` 0/0/0, `migration-drift-reviewer` 0 blockers on the delta. Typecheck + lint + the 3 RPC-contract test files (96 tests) pass. Note: the proof harness now disables `products`' USER triggers for its rolled-back txn because a parallel supplier-pricing project applied live pricing-governance triggers (`require_governed_product_pricing` + `guard_and_version_product_pricing`) that block direct product seeding — the split RPC only READS `products`. Still **flag OFF, not applied, not merged.**
+
+## 2026-07-18 — Per-line split-billing: Codex ROUND 2 fully closed — final 6 findings (#A/#E/#G/#H/#L/#M) fixed + PROOFOK 29/29 (branch, still PARKED). Autonomous Opus-4.8 run.
+
+The remaining 6 of the 13 round-2 findings are now fixed (the first 7 landed in `eb942f86`). Feature stays **flag OFF, migrations NOT applied, PR #164 NOT merged** — go-live remains gated on a CLEAN full Codex re-run + Mason's review.
+
+- **#G COGS penny-residual** — per-child cost was rounded independently, overstating the group `total_cost` by up to n−1¢. Now the ONE canonical line COGS is allocated across co-owners with the SAME largest-remainder rule as revenue (`_lr_allocate_int` by micro-pct), so the group total ties EXACTLY to `unit_cost × source`. The chemical item's `cost_cents` stays per-unit (display convention #F); the header accumulates the LR share. Proven: $0.01/gal × 1 gal, 50/50 → group cost = 1¢ (A=1, B=0), not the naive 2¢.
+- **#M audited base** — Option-B per-customer pricing was injected into the calculator's override slot, so a co-owner's normal tier/rate price was audited as an "override" vs the largest-share owner's base. Now each co-owner's OWN resolved price is stored as their `base_unit_price_cents` / `base_price_source` with `price_mode='default'`; only a genuine caller-supplied manual per-person override is audited as an `override`. Per-customer service source (`service_rate` vs `service_default`) captured. Proven: svc 2000/500 both `default`/`service_rate`; chem 1000 `default`/`tier`.
+- **#L reasons** — `split_override_reason` / `price_override_reason` are now threaded from the editor (optional per-line + per-share reason inputs) into `invoice_line_shares`. Proven stored end-to-end.
+- **#E source-job double-bill** — `source_job_id` was provenance-only, so a job could be billed via split AND the normal `transfer_job_to_invoice` flow. The save RPC now **consumes** the job (`status→invoiced` + link, mirroring `transfer_job_to_invoice`) so that path's "Job already invoiced" guard fires, refuses a job already billed by another set, and (non-admin) refuses a job whose customer isn't assigned to them (incl. null-customer). The editor's job picker shows only `completed` jobs. Proven: consume + second-set reject + same-set re-save allowed.
+- **#H save-now / post-later** — new route `split-billing/:id` reopens a SAVED billing set **read-only** for review + Post (editable reopen deferred: a re-save re-prices, so rebuilding money fields is a future, separately-proven step). The per-acre editor now redirects a split child here; `InvoiceDetail` renders posted split children read-only.
+- **#A deploy-order** — `InvoiceDetail`'s preflight no longer selects `field_app_billing_set_id` (an explicit select of a not-yet-migrated column would 400 EVERY invoice-detail load if the frontend deployed first). The per-acre editor's tolerant `select('*')` load detects a split child and redirects it to the read-only reopen view — loop-free.
+
+**PROVEN in the live DB** (rollback, nothing persisted): `PROOFOK` **29/29** — the 24 prior scenarios PLUS `cogs_group_lr_exact_ok(A+B=1)`, `audited_base_is_own_ok`, `reasons_captured_ok`, `double_bill_second_set_rejected_ok`, `resave_same_job_allowed_ok`. `rls-security-reviewer` 0 blocker/0 high (2 MED fixed: null-customer job guard + trigger REVOKE); `migration-drift-reviewer` 0 blocker. `npm run typecheck` + lint clean. **All 13 round-2 findings now closed. Next: a CLEAN full Codex re-run, then Mason's review.** Still **flag OFF, not applied, not merged.**
+
+## 2026-07-18 — Per-line split-billing: Codex ROUND 2 → 8 P1 + 5 P2; 7 fixed + re-proven this batch, 6 larger items queued (branch, still PARKED). Autonomous Opus-4.8 run.
+
+The re-run of the Codex gate (`codex review --base main`) went deeper and returned 8 P1 + 5 P2 NEW findings (the round-1 fixes all held). Mason chose to **keep iterating** and confirmed he needs **save-now/post-later**. Fixed + re-proven THIS batch (still in the parked `20260718030000` + the split editor):
+
+- **#B flag enforcement** — the save wrapper is granted to `authenticated` and only checked role, so applying the migration during the flag-OFF window left the money RPC callable via direct PostgREST. Now it hard-refuses unless `per_line_split_billing_enabled='true'` in `app_settings`.
+- **#F fee COGS convention** — a service (fee) item now stores its EXTENDED cost (`cost_per_acre × acres`), matching the live `_save_field_app_invoice_impl` fee convention (the rest of the app reads a fee item's `cost_cents` as already-extended), so item detail and header total reconcile. **#N** — a service line with no description now shows the real `application_services.name`, not the literal "Service".
+- **#C negative flat** — `dollarsToCents` preserves a leading minus so a "-$50" credit is REJECTED by the `<=0` guard instead of silently becoming a +$50 charge. **#D malformed override** — an override that parses to 0 (e.g. `1e5`) is now rejected (`<=0`) instead of storing a $0 price. **#J** — invoice date defaults to LOCAL today (`localToday()`), not `toISOString()` (which rolls to tomorrow after ~6 PM Central). **#K** — `pctsToMicro` now distributes the full residual (cycling), so `33.3333×3` reaches exactly 100000000 micro-pct instead of leaving a 97-unit gap the server rejected.
+
+**PROVEN in the live DB** (rollback): `PROOFOK` **24/24** — the 14 originals + `svc_per_customer_rate_ok`, `fee_cost_extended_ok(15000)`, `service_name_on_item_ok`, `chem_cogs_ok`, `field_locations_created_ok`, `compat_acres_from_vector_ok(50)`, `audit_no_dup_on_resave_ok`, `sec_reject_unassigned_ok`, `sec_allow_assigned_ok`, `flag_off_rejected_ok`. Typecheck clean.
+
+**Queued for the next session (larger / needs care):** #H **save-now/post-later** reopen route + loader (Mason wants it); #E **source-job double-billing guard** (source_job_id is provenance-only — a job could be billed via split AND the normal flow); #G COGS penny-residual LR-allocation; #A frontend/DB deploy-order coupling (InvoiceDetail preflight selects the new column — safe only if migrations apply before the frontend merges; harden to migration-first); #M keep each co-owner's resolved price as their audited BASE (Option-B injection currently audits normal pricing as an "override"); #L capture reasons for custom split / override. The full Codex gate re-runs once all 13 are closed. Still **flag OFF, not applied, not merged.**
+
+## 2026-07-18 — Per-line split-billing: Codex money/RLS gate RAN → 8 P1 + 2 P2 findings, ALL FIXED + re-proven (branch, still PARKED). Autonomous Opus-4.8 run.
+
+The Codex CLI money/RLS review (`codex review --base main`, gpt-5.5) finally ran and **blocked go-live** with 8 P1 (blocker) + 2 P2 findings — all verified real against source. Every one is now fixed in the still-parked `20260718030000_..._save_rpc.sql` + three frontend files, and re-proven end-to-end in the live DB (rollback):
+
+- **#1/#2 service lines** — the writer loaded the service record only from the always-null top-level param, so service lines saved at $0/errored, and it used one global rate for all co-owners. Now it loads the service record **per line** and prices each co-owner at their OWN `customer_application_rates(service, season)` → service default (Option B for service, same machinery as chemical). Proven: A@$20/ac vs B@$5/ac → 100000/25000¢.
+- **#3 COGS** — every split item was written `cost_cents = 0`, zeroing COGS and inflating margin reports. Now the chemical unit cost is resolved server-side from `products.current_cost` (`round(*100)`, per sold unit, like `_snapshot_order_item_cost`) and service cost from `application_services.cost_per_acre_cents`, aggregated into `invoices.total_cost_cents`. Proven: cost 250/250, revenue tiers 500/400 intact.
+- **#4 customer-scope security** — the SECDEF writer bypassed RLS and only checked role, so a sales rep could bill another rep's customers. Now every derived member (and every existing child on re-save) must have `assigned_sales_rep = auth.uid()` unless admin. Proven with a real sales_rep: unassigned → rejected, assigned → allowed.
+- **#5 stale post** — after Save, editing left Post enabled, committing old DB values. Editor now tracks a saved-input signature and disables Post (with a banner) until re-save.
+- **#6 data-loss** — a split child opened in the generic invoice page could `save_invoice`-delete its line shares. Split children are now kept out of the per-acre editor (preflight) and rendered strictly read-only in `InvoiceDetail`, with a hard save-refuse guard.
+- **#7 blank fields/acres** — children got no `field_app_locations`; now the writer creates group-level location snapshots (with `job_id` provenance). **#8 audit dup** — re-save re-emitted `invoice_created` with a stale number; now emitted only for freshly-created children. **#9 acres** — compat `invoice_shares.acres` is derived once from the ownership vector × total acres (not summed billing-line acres). **#10 email gate** — `send_disposition` is now hydrated in the list mapper + the detail pdfSnapshot so the "don't email $0" gate actually fires.
+
+**PROVEN in the live DB** (rollback, nothing persisted): `PROOFOK` **21/21** — all 14 prior scenarios PLUS `svc_per_customer_rate_ok`, `chem_cogs_ok(250/250,500/400)`, `field_locations_created_ok`, `compat_acres_from_vector_ok(50)`, `audit_no_dup_on_resave_ok`, `sec_reject_unassigned_ok`, `sec_allow_assigned_ok`. `npm run typecheck` clean. Mason chose **full v1 scope** (chemical + service + flat). Re-running Codex to confirm SHIP before the go-live sequence. Still **flag OFF, not applied, not merged.**
+
+## 2026-07-18 — Per-line split-billing: pricing rule SETTLED = Option B (each co-owner keeps their OWN tier). Committed to branch (PARKED). Autonomous Opus-4.8 run.
+
+Mason chose **Option B** for the tier question R8 surfaced: a chemical split line prices **each co-owner's share at that customer's own `assigned_tier`** (mirrors the live per-child field-app save — no customer's price changes vs today; honors the spec's "don't flatten per-customer tier pricing"). A manual override or a field quote is tier-independent, so it applies to every co-owner; only the tier fallback varies per customer. Implemented in `20260718030000_..._save_rpc.sql` by building a per-customer price map (`resolve_field_app_chemical_price` per member at their tier) and writing each member's price into the calculator's per-person price slot; the calculator collapses to round-once `source_lr` when all prices match and uses `per_person` when they differ. Added a **penny guard**: when every co-owner ends at the same effective price (manual/quote/all-same-tier, or a uniform manual per-person adjustment), the source price is aligned so the total is round-once penny-exact (closes an adversarial LOW where uniform explicit overrides ≠ the representative tier could total per-person, off by ≤ n−1 cents). The representative line base (largest-share owner's price) is display-only (`base_unit_price_cents`); money is the per-customer `unit_price_cents`/`amount_cents`.
+
+**PROVEN in the live DB** (rollback, nothing persisted): `PROOFOK` 14/14 including the reworked **scenE** (20% grower A @ tier1 $10/gal → $2.00 / unit 1000, 80% grower B @ tier3 $8/gal → $6.40 / unit 800; per-person, source_line_cents 840), **scenF** (shared quote $7.50/gal uniform), **scenH** (uniform 1¢ override → round-once total 1¢ not 2¢), plus the manual/penny/$0-suppression/post-freeze/re-save/idempotency/Mode-A cases. Reviews: Opus **adversarial → SHIP-TO-PARK** (Option B correct in every normal flow; the one LOW it found is now fixed by the penny guard); RLS/compliance/drift unchanged (same functions/columns, no new privilege surface). **Codex money/RLS gate still pending** (usage limit, ~2026-07-22) and should review this Option-B version. Still **flag OFF, not applied, not merged.**
+
+## 2026-07-18 — Per-line split-billing R8: chemical base price resolved SERVER-SIDE (manual→quoted→tier) + rate→sold-unit conversion. Committed to branch (PARKED: flag OFF, not applied, not merged). Autonomous Opus-4.8 run.
+
+Closed the R8 scope gap from the Phase-4 build: the split save RPC no longer trusts a caller-supplied chemical price. Added `resolve_field_app_chemical_price(product, field_ids, tier, manual_cents)` to `supabase/migrations/20260718030000_per_line_split_billing_save_rpc.sql` — a SECURITY DEFINER, `SET search_path=public,pg_temp`, **internal-only** (EXECUTE revoked from public/anon/authenticated) reader that mirrors the LIVE `_save_field_app_invoice_impl_20260714` precedence: manual override → customer quote for the field (`quote_items`/`quote_sections`) → product tier list price (`tierN_price`, fallback tier1), dollars→cents via `round(x*100)::bigint`. The writer's chemical branch now resolves the base price and converts the applied quantity from the rate unit to the product's **sold (inventory) unit** via the live `field_app_priced_quantity()` (the 128× guard), failing closed (`FIELD_APP_UNIT_UNCONVERTIBLE`) on a non-convertible unit; the invoice line's display unit follows the converted quantity. **TIER ANCHOR DECISION (owner, pre-go-live):** a split line carries ONE list price anchored on the billing-set member with the largest ownership share; per-grower differences use the existing per-person override. Editor (`FieldAppSplitInvoiceEditor.tsx`): chemical lines default to "price resolved at save" with an optional **Override Price** checkbox; rate unit now required; the client no longer estimates chemical cents (server is authoritative).
+
+**PROVEN by running it in the real DB engine** (all 3 parked migrations' DDL + an independent assertion oracle inside one `BEGIN…ROLLBACK`, rolled back — nothing persisted): `PROOFOK` 13/13, including the new **scenE** (tier price resolved + 128 oz → 1 gal conversion correct, not 128× high; majority-owner tier-3 anchor; 20/80 split penny-exact), **scenF** (customer quote beats tier), **scenG** (mismatched unit hard-refused), alongside the 10 prior cases (manual override, 1¢ split, $0 suppression, post/snapshot/freeze, re-save-after-post lifecycle, idempotency replay+conflict, Mode-A rejection). Reviews: rls-security **clean** (internal-only REVOKE confirmed sufficient), compliance **clean** (bigint cents, no float, no generated-column write), migration-drift **clean** (all columns/helpers verified vs the same-day live schema-registry), Opus **adversarial → SHIP-TO-PARK** (no math/rounding/unit bug; its one flagged item is the tier-anchor go-live decision above — see `docs/manual/KNOWN_ISSUES.md`). **Codex money/RLS gate still NOT run** (usage limit; resets ~2026-07-22) — required before merge/go-live and should review this newer version. Still **flag OFF, not applied, not merged.** Owner-facing steps + the Option-A-vs-B pricing-rule decision: `docs/plans/per-line-split-billing-BUILD-HANDOFF-2026-07-18.md`.
+
+## 2026-07-18 — Per-line split-billing build, Phase 4 (save/post RPC) + Phase 5 UI (split editor + email-gate + InvoiceDetail lock + types + flag), all PARKED (not applied / not pushed / flag OFF). Autonomous Opus-4.8 run.
+
+**Phase 4 — SAVE/POST RPC.** Wrote `supabase/migrations/20260718030000_per_line_split_billing_save_rpc.sql`: `resolve_line_split_vector` (job-snapshot → field-default → owner precedence, acre-weighted, largest-remainder to exactly 100000000 micro-pct; SECURITY DEFINER with an admin/sales_rep guard), `save_field_app_split_invoice` (public SECURITY DEFINER wrapper: auth + actor + active-role guard, advisory lock, `check_idempotency` + payload-hash `IDEMPOTENCY_PAYLOAD_CONFLICT`, re-save anchor-then-full-set row locks) + `_save_field_app_split_invoice_impl` (writer: builds a billing set + one billing line per source line, calls the shared `compute_line_split_allocation` engine, writes one draft child invoice per customer with residual-adjusted `invoice_items` + `invoice_line_shares` + the compat `invoice_shares` self-100% row, suppresses $0 children via `send_disposition`, and asserts every spec-§5 SUM invariant against the STORED rows) + `snapshot_invoice_line_shares_on_post` (R1 AFTER-UPDATE trigger copying line shares → the append-only snapshot on post). Posting reuses `post_invoice_group` UNCHANGED; the freeze trigger auto-locks shares once posted. Never writes the GENERATED `balance_cents`.
+
+**PROVEN by running it in the real DB engine** (all three migrations' DDL + a synthetic end-to-end scenario applied inside one `BEGIN…ROLLBACK`, independent assertion oracle, rolled back — nothing persisted): resolver default 50/50 + job-snapshot-wins 30/70; penny-exact 50/50 chemical+service+flat (flat 1001 → 501/500 by customer_id tie-break, `extended_cents == amount_cents` on every item); $0 child stored + `send_disposition='suppressed_zero_total'` + unpaid + the 0% row present; 1¢ split 50/50 = 1¢ (not 2¢); `post_invoice_group` posts all children + snapshot row-count matches + a post-post share edit is rejected (`check_violation`); **the full post → unpost → re-save → re-post lifecycle** (the F1 fix — re-save REUSES child invoices instead of hard-deleting them, so the append-only snapshot `ON DELETE RESTRICT` FK no longer aborts a re-save); idempotency replay identical + changed-payload conflict; Mode-A field rejection. All 10 assertions passed. **Not applied live.**
+
+Review layer: rls-security-reviewer (0 BLOCKER/0 HIGH; 1 MED — added the admin/sales_rep guard to the resolver — FIXED), migration-drift-reviewer (CLEAN — `balance_cents` never written, `price_source` mapped to the valid CHECK set, `allocated_acres` widened 12,2→12,4 safely, all net-new names/trigger), typescript-types-drift-reviewer (CLEAN — 7 type additions match), Opus adversarial (SHIP-TO-PARK; found F1 HIGH — FIXED + re-proven — plus F2/F3 go-live notes), and compliance-reviewer (1 HIGH — the editor used `parseFloat` for money inputs — FIXED to `parseDollarsToCents`). **Codex money/RLS cross-model gate: NOT run this session** — Codex account usage limit is exhausted (credits reset 2026-07-22). Recorded as a REQUIRED pre-go-live owner step. **Documented SCOPE (R8):** the chemical base unit price is caller-supplied + server-validated, not re-resolved server-side (the large manual→quoted→tier→unit-conversion resolver stays in `_save_field_app_invoice_impl_20260714`); extract + wire it here before go-live. Service-fee base rate IS resolved server-side.
+
+**Phase 5 — behavior-neutral UI (flag OFF).** `src/types/index.ts`: added `Invoice.send_disposition?`, `Invoice.field_app_billing_set_id?`, `InvoiceItem.billing_line_id?` (optional, additive-column convention) + 4 new interfaces (FieldAppBillingSet/Line, InvoiceLineShare, InvoiceLineShareSnapshot). New flag helper `src/lib/splitBillingSetting.ts` (`per_line_split_billing_enabled`, default OFF). Email-suppression gate: new `isInvoiceEmailSuppressed` in `emailService.ts` wired into ALL 5 invoice-email send sites (FieldApplicationInvoice, InvoiceDetail, and the 3 field-invoice panels) — gates on `send_disposition='suppressed_zero_total'` NOT `balance_cents` (a paid-in-full $0 invoice stays emailable). InvoiceDetail per-item lock: qty/price/remove now `editable && !item.billing_line_id`. `FieldInvoiceListRow` carries an optional `send_disposition`. New split editor page `src/pages/FieldAppSplitInvoiceEditor.tsx` (draft-then-review flow: resolve default vector → per-line %/price overrides → Save Draft via the RPC → render the authoritative server-computed per-grower amounts → Post; no client-side authoritative cent math; graceful "backend not enabled" degradation), wired as a flag-gated lazy route in `src/App.tsx` + a flag-gated Sidebar nav link. **typecheck + build GREEN.** All behavior is unchanged today (the new fields are undefined at runtime until the migration lands). Nothing applied/pushed; flag stays OFF; go-live remains gated on Mason's baseline field-app billing cycle (spec §6.1) + live apply of all 3 migrations + the Codex gate + the R8 wiring.
+
+## 2026-07-17 (night) — Per-line split-billing build, Phase 3: penny-exact calculator written + proven against the live Postgres engine (11 hard cases) + Opus-hardened, PARKED (not applied).
+
+Wrote `supabase/migrations/20260718020000_per_line_split_billing_calculator.sql` — 3 pure `IMMUTABLE SECURITY INVOKER` functions (`_lr_allocate_int`, `compute_even_split_vector`, `compute_line_split_allocation`), the single shared engine both preview and post will call (spec §4 rule 1). Largest-remainder allocation, half-away-from-zero, abs-floor-then-negate for returns, `customer_id ASC` tie-break in the quantity AND cents passes. Same-price line = allocate the once-rounded source-line cents by micro_pct; per-person price = round(price×qty) each (group total = sum, documented); flat fee = LR of flat cents.
+
+**Proven by running it in the real DB engine** (created in a `BEGIN…ROLLBACK`, all assertions executed, rolled back — not a self-written unit test in isolation): T1 1¢ 50/50 → **1¢** (not 2¢); T2 even 3-way → **1.0000** (not .9999) + vector 33333334/33333333/33333333; T3 return −13¢ → **−7/−6** (the JS-vs-PG half-cent bug); T4 per-person 1000/900; T5 100/0 with the **$0 row stored**; T6 flat 1001 → 334/334/333; T7/T8 malformed vectors raise. Opus adversarial review: core math clean, no numeric bug on any valid input; added 3 input guards (SPLIT_WEIGHT_NULL / SPLIT_PRICE_REQUIRED / SPLIT_WEIGHT_OUT_OF_RANGE) → T9/T10/T11 also pass. Nothing applied live.
+
+## 2026-07-17 (night) — Per-line split-billing build, Phase 2: additive schema migration written + review-hardened + rollback-smoke-proven, PARKED (not applied). Autonomous Opus-4.8-orchestrated run.
+
+Wrote `supabase/migrations/20260718010000_per_line_split_billing_schema.sql` — purely additive, behavior-neutral: 4 new tables (field_app_billing_sets, field_app_billing_lines, invoice_line_shares, invoice_line_share_snapshots), 3 additive columns (invoice_items.billing_line_id, invoices.send_disposition default 'normal', invoices.field_app_billing_set_id), and a SECURITY DEFINER freeze trigger copied from prevent_order_shares_edit_after_post. Nothing reads/writes these until the calculator + posting RPC land behind a flag.
+
+**NOT applied live** — validated only via `BEGIN…ROLLBACK` smoke against live schema (all objects create, all FKs resolve, assertions pass, nothing persists). Live apply stays gated to Mason (needs a baseline real-billing cycle first per spec §8).
+
+Review layer: 3 parallel reviewers (rls-security-reviewer, migration-drift-reviewer, Opus adversarial). Fixes folded in: allocated_acres → numeric(12,4) [authoritative largest-remainder store, spec §4]; snapshot invoice_id → ON DELETE RESTRICT [protect append-only history]; RLS policies wrap auth.uid() as (select auth.uid()) [avoids auth_rls_initplan warns, matches invoice_shares_select]; REVOKE SELECT FROM anon; freeze trigger checks both old+new invoice_item on UPDATE. Companion: `docs/plans/per-line-split-billing-READINESS-2026-07-17.md`.
 ## 2026-07-20 — Supplier pricing evidence restricted to ADMIN-ONLY (live fix before Phase 1b merge)
 
 - The Codex GitHub review on PR #179 caught a real security gap all earlier reviewers missed: the live Phase 1b reader RPCs, evidence-table SELECT policies, and the evidence-PDF bucket were gated admin-OR-sales, exposing supplier costs, `cost_history` values, and PO ids/numbers/unit costs to sales reps — contradicting the standing "cost data is admin-only" RLS contract (the contract tests passed because SECURITY DEFINER readers legitimately bypass table RLS). Mason settled it: **admin-only**.
