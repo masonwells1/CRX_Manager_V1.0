@@ -103,10 +103,12 @@ When an item here ships or is decided, update this file AND `docs/manual/KNOWN_I
   Web Locks, more operations, auto device-discovery of office resolutions (KNOWN_ISSUES §5).
 - **`apply_prepay_to_invoice` hand-decrement cleanup** — drop only after more prod watching.
 - **Customer RLS upper bound** (far-future job visibility) — left as-is on purpose.
-- **4 MEDIUM + ~11 LOW parked bug-hunt findings** — `docs/audits/overnight-bug-hunt/LEDGER.json`
-  (transfer_job_to_invoice actor binding, save_field_app_invoice row-lock, prepay status
-  check (moot while bulk-apply disabled), commission-pay-picker blanks; plus LOWs incl.
-  C11/C23 inline-idempotency cleanups).
+- **~11 LOW parked bug-hunt findings** — `docs/audits/overnight-bug-hunt/LEDGER.json`
+  (incl. C11/C23 inline-idempotency cleanups). **2026-07-21 sweep of the 4 parked MEDIUMs:**
+  transfer_job_to_invoice actor binding = FIXED LIVE (strict-actor guard verified in the live
+  body); save_field_app_invoice row-lock = FIXED LIVE (locking wrapper, July split-billing
+  hardening); commission-pay-picker blanks = FIXED on main (fetchUnpaid resolves via FK
+  lookups); prepay status check stays MOOTED while bulk-apply is hard-blocked.
 - **Guard-system hardening backlog** — KNOWN_ISSUES §4b (accepted residuals + sweep ideas).
 
 ## 🆕 4. Surfaced by the 2026-07-16 docs review (previously untracked anywhere)
