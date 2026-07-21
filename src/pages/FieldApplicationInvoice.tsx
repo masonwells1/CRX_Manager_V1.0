@@ -11,6 +11,7 @@ import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, sanitizeError, assertRpcResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
+import { assertInvoiceLifecycleSendable, assertInvoiceSendable } from '../lib/invoiceSendDisposition';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
@@ -2024,6 +2025,7 @@ export default function FieldApplicationInvoice() {
           balanceCents: pdfSnapshot.balance_cents,
           attachmentBase64: base64,
         });
+        await assertInvoiceSendable(id);
         const result = await sendEmail(payload);
         if (!result.success) throw new Error(result.error || 'Email failed to send');
 
@@ -2184,14 +2186,18 @@ export default function FieldApplicationInvoice() {
           const scopedProof = assertRpcResult<JobProofData>(scopedRes.data, 'get_job_proof_data');
           const recipientDraft = buildProofDraft(scopedProof);
           const recipientText = renderProofText({ customerName: recipientName, draft: recipientDraft });
+          const recipientInvoiceId = customerToInvoiceId[r.customer_id] ?? (!invoiceGroupId ? id : null);
+          if (!recipientInvoiceId) throw new Error('Could not resolve this customer’s invoice send gate.');
           const payload = buildProofEmailPayload({
             customerEmail: r.email,
             customerId: r.customer_id,
             customerName: recipientName,
             jobId,
+            invoiceId: recipientInvoiceId,
             draft: recipientDraft,
             emailIdempotencyKey: r.email_idempotency_key,
           });
+          await assertInvoiceLifecycleSendable(recipientInvoiceId);
           await sendEmail(payload);
           const confirmRes = await supabase.rpc('confirm_job_notification_sent', {
             p_notification_id: r.notification_id,

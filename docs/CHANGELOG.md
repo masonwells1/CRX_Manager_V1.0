@@ -2,6 +2,12 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-20 — Split-billing email authority completed
+
+- Re-read each invoice's server-owned disposition and lifecycle immediately before every invoice email send, including field-invoice lists and invoice detail.
+- Bound post-application proof notices to the correct split child invoice and added an independent `send-email` edge gate that rejects suppressed, voided, cancelled, deleted, mismatched, or ambiguous invoices.
+- Preserved a narrowly scoped edge-first compatibility path for the pre-schema missing-column condition while failing closed on every other lookup error.
+
 ## 2026-07-20 — Baseline follow-up migrations preserve ledger history
 
 - Replaced the unsafe generic-SQL-client instruction with an isolated, filtered Supabase CLI workflow that dry-runs the exact post-baseline set and records every applied migration in the target ledger.
