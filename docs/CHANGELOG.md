@@ -222,14 +222,14 @@ were applied to live Supabase in the approved order, and each reached
 `SMOKE_PASS_ROLLBACK` through its registered business-chain smoke. The filenames below use
 the server-assigned migration versions so a future rebuild cannot reapply them.
 
-- **H1 — money-RPC auth bypass (LIVE).** `20260718153744_harden_prepay_and_payment_role_gate.sql`
+- **H1 — money-RPC auth bypass (LIVE).** `20260718153744_20260718124500_harden_prepay_and_payment_role_gate.sql`
   hardens `apply_prepay_to_invoice` + `record_invoice_payment` so a deactivated / profile-less
   authenticated user can no longer pass the role gate (`NULL NOT IN (...)` fall-through; missing
   `is_active` filter). Mirrors the vetted `apply_credit_memo_to_invoice`. Reviewers clean (rls +
   drift), no stale overload, fail-first smoke `smoke-prepay-payment-inactive-actor-gate.sql`
   proved the bypass live (raised `SMOKE_FAIL` on the pre-fix functions).
 - **B2 — quote stranded after whole-conversion order cancel (LIVE).**
-  `20260718152837_revert_quote_escape_hatch_for_cancelled_order.sql`. Chosen the safe, admin-driven
+  `20260718152837_20260718131500_revert_quote_escape_hatch_for_cancelled_order.sql`. Chosen the safe, admin-driven
   escape hatch (not auto-reopen on cancel, which would contradict the void path's deliberate
   "converted booking stays closed" semantic): `revert_quote_status` now un-blocks reverting an
   'accepted' quote whose only order is cancelled and releases its stale draw ledger so it is
@@ -239,7 +239,7 @@ the server-assigned migration versions so a future rebuild cannot reapply them.
   advisory lock) so two runs in the same month on different as-of dates can't both charge. Reviewers
   clean; fail-first smoke proved the double-charge live (2 charges from 2 same-month runs).
 - **H3 — void_invoice stranded customer cash (LIVE).**
-  `20260718154810_void_invoice_block_applied_payments.sql`. Refuses to void a posted invoice that
+  `20260718154810_20260718133000_void_invoice_block_applied_payments.sql`. Refuses to void a posted invoice that
   still has direct cash applied (`paid_amount_cents>0` or `invoice_line_allocations`) — admin must
   void/unapply the payment first (re-banks it as prepay). Prepay-only voids unaffected. Reviewers
   clean; fail-first smoke proved the strand live.
