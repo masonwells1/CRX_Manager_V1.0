@@ -200,6 +200,8 @@ BEGIN
     OR NEW.cost_provenance IS DISTINCT FROM OLD.cost_provenance
     OR NEW.cost_snapshot_at IS DISTINCT FROM OLD.cost_snapshot_at
   ) AND NOT (
+    current_setting('crx.cost_basis_backfill', true) = 'phase2'
+    AND
     OLD.inventory_units_per_supplier_unit_snapshot IS NULL
     AND NEW.inventory_units_per_supplier_unit_snapshot = 1
     AND NEW.purchase_order_id IS NOT DISTINCT FROM OLD.purchase_order_id
@@ -267,17 +269,24 @@ CREATE TRIGGER trigger_capture_purchase_order_item_cost_snapshot
   FOR EACH ROW
   EXECUTE FUNCTION public.capture_purchase_order_item_cost_snapshot();
 
-UPDATE public.purchase_order_items poi
-SET inventory_units_per_supplier_unit_snapshot = 1,
-    cost_provenance = COALESCE(poi.cost_provenance, 'legacy'),
-    cost_snapshot_at = COALESCE(poi.cost_snapshot_at, now())
-FROM public.products p
-WHERE p.id = poi.product_id
-  AND poi.quantity_received > 0
-  AND poi.inventory_units_per_supplier_unit_snapshot IS NULL
-  AND NULLIF(btrim(poi.unit_size), '') IS NOT NULL
-  AND NULLIF(btrim(p.unit_size), '') IS NOT NULL
-  AND lower(btrim(poi.unit_size)) = lower(btrim(p.unit_size));
+-- Scope the one-time legacy exception to this statement. A later caller may
+-- not manufacture received-line provenance by replaying the backfill shape.
+DO $backfill$
+BEGIN
+  PERFORM set_config('crx.cost_basis_backfill', 'phase2', true);
+  UPDATE public.purchase_order_items poi
+  SET inventory_units_per_supplier_unit_snapshot = 1,
+      cost_provenance = COALESCE(poi.cost_provenance, 'legacy'),
+      cost_snapshot_at = COALESCE(poi.cost_snapshot_at, now())
+  FROM public.products p
+  WHERE p.id = poi.product_id
+    AND poi.quantity_received > 0
+    AND poi.inventory_units_per_supplier_unit_snapshot IS NULL
+    AND NULLIF(btrim(poi.unit_size), '') IS NOT NULL
+    AND NULLIF(btrim(p.unit_size), '') IS NOT NULL
+    AND lower(btrim(poi.unit_size)) = lower(btrim(p.unit_size));
+END;
+$backfill$;
 
 -- Install enforcement before the baseline copy. CREATE TRIGGER takes the
 -- relation lock needed to wait for in-flight Product writers; after it returns,
@@ -1463,7 +1472,7 @@ END;
 $function$;
 
 REVOKE ALL ON FUNCTION public.get_product_price_history(uuid)
-  FROM PUBLIC, anon, service_role;
+  FROM PUBLIC, anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.get_product_price_history(uuid)
   TO authenticated;
 

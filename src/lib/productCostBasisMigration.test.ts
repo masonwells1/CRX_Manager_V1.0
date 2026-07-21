@@ -69,6 +69,12 @@ describe('supplier cost-basis Phase 2 migration contract', () => {
     expect(migrationSql).toMatch(
       /UPDATE public\.purchase_order_items poi[\s\S]+?inventory_units_per_supplier_unit_snapshot = 1[\s\S]+?poi\.quantity_received > 0[\s\S]+?lower\(btrim\(poi\.unit_size\)\) = lower\(btrim\(p\.unit_size\)\)/,
     );
+    expect(migrationSql).toContain(
+      "set_config('crx.cost_basis_backfill', 'phase2', true)",
+    );
+    expect(migrationSql).toMatch(
+      /current_setting\('crx\.cost_basis_backfill', true\) = 'phase2'[\s\S]+?OLD\.inventory_units_per_supplier_unit_snapshot IS NULL/,
+    );
     const itemLock = migrationSql.indexOf('PERFORM poi.id', migrationSql.indexOf('CREATE OR REPLACE FUNCTION public.apply_product_cost_basis_change_set'));
     const parentLock = migrationSql.indexOf('PERFORM po.id', itemLock);
     expect(itemLock).toBeGreaterThan(-1);
