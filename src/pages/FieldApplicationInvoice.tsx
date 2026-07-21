@@ -835,7 +835,24 @@ export default function FieldApplicationInvoice() {
     const isReceiptAlias = ['due on receipt', 'due upon receipt', 'receipt', 'immediately'].includes(
       loadedPaymentTerms.trim().toLowerCase(),
     );
-    if (loadedDueDate && ['draft', 'unposted'].includes((invoice.status as string) || 'draft')) {
+    // An unposted invoice keeps the due_date the posting RPC stamped. If the stored
+    // date is exactly what the preset terms would stamp from invoice_date, it's a
+    // stamp — reload as the preset (clearing the date so a repost re-derives it),
+    // not as a deliberate Custom override (CodeRabbit P2 on PR #195).
+    const presetDays = { 'Net 30': 30, 'Net 15': 15, 'Due on receipt': 0 }[loadedPaymentTerms];
+    const loadedInvoiceDate = (invoice.invoice_date as string) || '';
+    let stampedDate = '';
+    if (presetDays !== undefined && loadedInvoiceDate) {
+      const d = new Date(loadedInvoiceDate + 'T00:00:00Z');
+      d.setUTCDate(d.getUTCDate() + presetDays);
+      stampedDate = d.toISOString().slice(0, 10);
+    }
+    const isPostingStamp = loadedDueDate !== '' && loadedDueDate === stampedDate;
+    if (
+      loadedDueDate &&
+      !isPostingStamp &&
+      ['draft', 'unposted'].includes((invoice.status as string) || 'draft')
+    ) {
       setPaymentTerms('Custom date…');
       // keep the stored terms text (even a preset like 'Net 30') so the save
       // round-trips it verbatim; the explicit due_date wins server-side anyway.
@@ -2640,7 +2657,9 @@ export default function FieldApplicationInvoice() {
               <option value="Custom date…">Custom date…</option>
             </select>
           </div>
-          {paymentTerms === 'Custom date…' && (
+          {/* Custom mode: editable date. Otherwise: keep the stamped due date visible
+              (read-only) on posted/locked invoices — never hide a real due date. */}
+          {(paymentTerms === 'Custom date…' || (!canEditPaymentTerms && !!dueDate)) && (
             <div>
               <label htmlFor="custom-due-date" className="block text-xs font-medium text-gray-500 mb-1">Due Date</label>
               <input
