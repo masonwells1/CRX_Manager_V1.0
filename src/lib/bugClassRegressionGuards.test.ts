@@ -27,8 +27,15 @@ import { fileURLToPath } from 'node:url';
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const MIGRATIONS_DIR = join(ROOT, 'supabase', 'migrations');
 
+/**
+ * Latest disk definition per function NAME, merging OVERLOADS: each distinct
+ * arg-signature's latest body is concatenated (Codex P2 on 9e7e185f — keying
+ * by name alone dropped every overload after the first). Guard tokens are
+ * required somewhere in the merged text; the fail-open scanner in
+ * sqlRoleGateNullFailOpen.test.ts checks each overload individually.
+ */
 function latestDiskDefinitions(): Map<string, { file: string; body: string }> {
-  const latest = new Map<string, { file: string; body: string }>();
+  const perOverload = new Map<string, { fn: string; file: string; body: string }>();
   const files = readdirSync(MIGRATIONS_DIR)
     .filter((f) => f.endsWith('.sql'))
     .sort()
@@ -39,10 +46,27 @@ function latestDiskDefinitions(): Map<string, { file: string; body: string }> {
     let m: RegExpExecArray | null;
     while ((m = defRe.exec(content)) !== null) {
       const fnName = m[1].toLowerCase();
-      if (latest.has(fnName)) continue;
       const after = content.slice(m.index);
+      const argEnd = after.indexOf(')');
+      const sig = (argEnd > 0 ? after.slice(after.indexOf('(') + 1, argEnd) : '')
+        .replace(/DEFAULT\s+[^,)]+/gi, '')
+        .replace(/\s+/g, ' ')
+        .toLowerCase()
+        .trim();
+      const key = `${fnName}(${sig})`;
+      if (perOverload.has(key)) continue;
       const bodyMatch = after.match(/AS\s+\$([A-Za-z_]*)\$([\s\S]*?)\$\1\$/);
-      latest.set(fnName, { file, body: bodyMatch ? bodyMatch[2] : after });
+      perOverload.set(key, { fn: fnName, file, body: bodyMatch ? bodyMatch[2] : after });
+    }
+  }
+  const latest = new Map<string, { file: string; body: string }>();
+  for (const def of perOverload.values()) {
+    const existing = latest.get(def.fn);
+    if (existing) {
+      existing.body += '\n' + def.body;
+      existing.file += `, ${def.file}`;
+    } else {
+      latest.set(def.fn, { file: def.file, body: def.body });
     }
   }
   return latest;

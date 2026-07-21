@@ -37,10 +37,26 @@ const MIGRATIONS_DIR = join(
 );
 
 interface DiskFnDef {
+  fn: string;
   file: string;
   body: string;
 }
 
+/**
+ * Fingerprint of an argument list so OVERLOADS are tracked separately (Codex
+ * P2 on 9e7e185f: keying by name alone collapses overloads, letting a second
+ * signature keep an unguarded gate invisibly). Normalizes whitespace/case and
+ * strips DEFAULT clauses — enough to tell signatures apart on disk.
+ */
+function argFingerprint(argText: string): string {
+  return argText
+    .replace(/DEFAULT\s+[^,)]+/gi, '')
+    .replace(/\s+/g, ' ')
+    .toLowerCase()
+    .trim();
+}
+
+/** Latest disk definition per (function name, arg signature) — one entry per overload. */
 function latestDiskDefinitions(): Map<string, DiskFnDef> {
   const latest = new Map<string, DiskFnDef>();
   const files = readdirSync(MIGRATIONS_DIR)
@@ -53,10 +69,12 @@ function latestDiskDefinitions(): Map<string, DiskFnDef> {
     let m: RegExpExecArray | null;
     while ((m = defRe.exec(content)) !== null) {
       const fnName = m[1].toLowerCase();
-      if (latest.has(fnName)) continue;
       const after = content.slice(m.index);
+      const argEnd = after.indexOf(')');
+      const key = `${fnName}(${argFingerprint(argEnd > 0 ? after.slice(after.indexOf('(') + 1, argEnd) : '')})`;
+      if (latest.has(key)) continue;
       const bodyMatch = after.match(/AS\s+\$([A-Za-z_]*)\$([\s\S]*?)\$\1\$/);
-      latest.set(fnName, { file, body: bodyMatch ? bodyMatch[2] : after });
+      latest.set(key, { fn: fnName, file, body: bodyMatch ? bodyMatch[2] : after });
     }
   }
   return latest;
@@ -85,7 +103,8 @@ interface GateHit {
  */
 function unguardedRoleGates(defs: Map<string, DiskFnDef>): GateHit[] {
   const hits: GateHit[] = [];
-  for (const [fn, def] of defs) {
+  for (const def of defs.values()) {
+    const fn = def.fn;
     const body = stripSqlComments(def.body);
     // Each IF/ELSIF ... THEN condition, non-greedy to the first THEN.
     const ifRe = /\b(?:IF|ELSIF)\b([\s\S]*?)\bTHEN\b/gi;
@@ -132,6 +151,18 @@ const KNOWN_UNGUARDED: Record<string, string> = {
   create_inventory_hold: 'parked/shelved migration, not live; must be NULL-guarded before any future apply',
 };
 
+/**
+ * Disk-only DEAD overloads: signatures later DROPped by a consolidation
+ * migration and verified ABSENT from live pg_proc (read-only check noted per
+ * entry). Scoped to fn+file so the LIVE overload of the same name stays fully
+ * scanned. May only shrink.
+ */
+const DEAD_OVERLOADS = new Set<string>([
+  // Superseded by 20260331400000_consolidate_receive_po_items (DROPs old sigs);
+  // live pg_proc verified 2026-07-20: single overload, NULL-guarded.
+  'receive_po_items|20260330000000_prelaunch_critical_fixes.sql',
+]);
+
 describe('SQL role gates fail CLOSED on NULL role (H1 class)', () => {
   const defs = latestDiskDefinitions();
 
@@ -140,7 +171,9 @@ describe('SQL role gates fail CLOSED on NULL role (H1 class)', () => {
   });
 
   it('every `<role var> NOT IN (...)` gate carries NULL protection in the same condition', () => {
-    const hits = unguardedRoleGates(defs).filter((h) => !(h.fn in KNOWN_UNGUARDED));
+    const hits = unguardedRoleGates(defs).filter(
+      (h) => !(h.fn in KNOWN_UNGUARDED) && !DEAD_OVERLOADS.has(`${h.fn}|${h.file}`)
+    );
     const report = hits
       .map((h) => `  ${h.fn} (${h.file}) — ${h.variable} NOT IN without IS NULL/COALESCE:\n    IF ${h.condition}`)
       .join('\n');
