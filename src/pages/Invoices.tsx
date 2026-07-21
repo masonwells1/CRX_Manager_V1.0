@@ -368,7 +368,7 @@ export default function Invoices() {
             customer_state: cust?.state || undefined,
             customer_zip: cust?.zip || undefined,
             account_number: cust?.account_number || undefined,
-            payment_terms: cust?.payment_terms || undefined,
+            payment_terms: inv.payment_terms || cust?.payment_terms || undefined,
             salesman_name: inv.salesman_name || undefined,
             purchase_order_ref: inv.purchase_order_ref || undefined,
             header_notes: inv.header_notes || undefined,

@@ -146,6 +146,105 @@ describe('InvoiceDetail', () => {
   });
 });
 
+describe('InvoiceDetail — chemical-sale payment terms', () => {
+  const setupInvoice = (status: string, payment_terms: string | null = null, due_date: string | null = null) => {
+    let invoiceCalls = 0;
+    const invoice = {
+      id: 'inv-terms',
+      invoice_number: 'INV-TERMS',
+      invoice_type: 'chemical_sale',
+      status,
+      customer_id: 'cust-1',
+      order_id: 'ord-1',
+      invoice_date: '2026-03-15',
+      due_date,
+      payment_terms,
+      subtotal_cents: 10000,
+      total_amount_cents: 10000,
+      total_cents: 10000,
+      balance_cents: 10000,
+      header_notes: '',
+      footer_notes: '',
+      purchase_order_ref: '',
+      created_at: '2026-03-15T00:00:00Z',
+    };
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'invoices') {
+        invoiceCalls += 1;
+        return buildChain({ data: invoiceCalls <= 2 ? invoice : [], error: null });
+      }
+      return buildChain({ data: [], error: null });
+    });
+  };
+
+  it('shows the payment-terms picker on a draft invoice', async () => {
+    setupInvoice('draft');
+    renderInvoiceDetail('inv-terms');
+    await waitFor(() => expect(screen.getAllByText('INV-TERMS').length).toBeGreaterThan(0));
+    expect(screen.getByRole('combobox', { name: 'Payment Terms' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Net 60' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Custom date…' })).toBeInTheDocument();
+  });
+
+  it('sends preset terms and omits due_date', async () => {
+    setupInvoice('draft', 'Net 30', '2026-04-14');
+    mockRpc.mockResolvedValue({ data: null, error: null });
+    renderInvoiceDetail('inv-terms');
+    await waitFor(() => expect(screen.getAllByText('INV-TERMS').length).toBeGreaterThan(0));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => {
+      expect(mockRpc).toHaveBeenCalledWith('save_invoice', expect.objectContaining({
+        p_invoice: expect.objectContaining({ payment_terms: 'Net 30' }),
+      }));
+      expect(mockRpc.mock.calls[0][1].p_invoice).not.toHaveProperty('due_date');
+    });
+  });
+
+  it('clears custom terms and omits due_date when switching to customer default', async () => {
+    setupInvoice('draft', 'Due 45 days after invoice', '2026-05-01');
+    mockRpc.mockResolvedValue({ data: null, error: null });
+    renderInvoiceDetail('inv-terms');
+    await waitFor(() => expect(screen.getAllByText('INV-TERMS').length).toBeGreaterThan(0));
+    fireEvent.change(screen.getByRole('combobox', { name: 'Payment Terms' }), { target: { value: 'Customer default' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => {
+      expect(mockRpc).toHaveBeenCalledWith('save_invoice', expect.objectContaining({
+        p_invoice: expect.objectContaining({ payment_terms: null }),
+      }));
+      expect(mockRpc.mock.calls[0][1].p_invoice).not.toHaveProperty('due_date');
+    });
+  });
+
+  it('round-trips custom due date with the original custom terms text', async () => {
+    setupInvoice('draft', 'Due 45 days after invoice', '2026-05-01');
+    mockRpc.mockResolvedValue({ data: null, error: null });
+    renderInvoiceDetail('inv-terms');
+    await waitFor(() => expect(screen.getAllByText('INV-TERMS').length).toBeGreaterThan(0));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => {
+      expect(mockRpc).toHaveBeenCalledWith('save_invoice', expect.objectContaining({
+        p_invoice: expect.objectContaining({ payment_terms: 'Due 45 days after invoice', due_date: '2026-05-01' }),
+      }));
+    });
+  });
+
+  it('recognizes a stamped due date on reload and re-derives the preset', async () => {
+    setupInvoice('draft', 'Net 30', '2026-04-14');
+    renderInvoiceDetail('inv-terms');
+    await waitFor(() => expect(screen.getAllByText('INV-TERMS').length).toBeGreaterThan(0));
+    expect(screen.getByRole('combobox', { name: 'Payment Terms' })).toHaveValue('Net 30');
+    expect(document.querySelector('#custom-due-date')).not.toBeInTheDocument();
+  });
+
+  it.each(['posted', 'voided'])('keeps %s invoices inert', async (status) => {
+    setupInvoice(status, 'Net 30', '2026-04-14');
+    renderInvoiceDetail('inv-terms');
+    await waitFor(() => expect(screen.getAllByText('INV-TERMS').length).toBeGreaterThan(0));
+    expect(screen.queryByRole('combobox', { name: 'Payment Terms' })).not.toBeInTheDocument();
+    expect(screen.getByText(/Net 30/)).toBeInTheDocument();
+  });
+});
+
 /**
  * Codex R11 — segregation PREFLIGHT: the field-vs-chemical route guard must run on a
  * MINIMAL preflight row BEFORE the full select('*'), so a cross-permission URL (a
