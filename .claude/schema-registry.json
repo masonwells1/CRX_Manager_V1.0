@@ -6,7 +6,7 @@
     "regenerate_with": "node scripts/regenerate-schema-registry.mjs --from-introspection <queries.json> (queries documented in the script header)",
     "purpose": "Single source of truth for hooks: generated columns, status enums, ALL parseable CHECK IN-lists, NOT NULL columns, full column lists, sequences, tables-with/without updated_at, applied-migration high water.",
     "note": "For a fresh refresh from the live DB, ask Claude Code: 'regenerate the schema-registry from Supabase' (/regen-schema-registry). skipped_constraints lists every CHECK the hooks can NOT validate — review it when touching those tables.",
-    "migrations_high_water": "20260721014858",
+    "migrations_high_water": "20260721130846",
     "applied_migration_names": [
       "20260207_gap_analysis_fixes.sql",
       "20260209050000_inventory_overhaul",
@@ -283,6 +283,9 @@
       "20260720233000_per_line_split_billing_save_rpc",
       "20260720235000_qualify_sales_rep_authorization_helper",
       "20260721010000_govern_invoice_order_money_lifecycle",
+      "20260721024500_ignore_voided_finance_charge_month_dedup",
+      "20260721130120_fix_transaction_review_running_balance",
+      "20260721130536_replay_vendor_alias_after_vendor_retirement",
       "a1_dispatched_list_recent_completed",
       "a1b_dispatched_to_me_completed_tail",
       "accounting_and_integrity_fixes",
@@ -1245,6 +1248,7 @@
     "team_note_attachments",
     "team_note_tags",
     "unit_conversions",
+    "vendor_alias_stage_receipts",
     "vendor_payments",
     "watchdog_flag_dismissals",
     "watchdog_flags",
@@ -5358,6 +5362,18 @@
         "updated_at"
       ]
     },
+    "vendor_alias_stage_receipts": {
+      "no_default": [
+        "idempotency_key",
+        "alias_id",
+        "actor_id",
+        "request_fingerprint",
+        "response"
+      ],
+      "with_default": [
+        "created_at"
+      ]
+    },
     "vendor_aliases": {
       "no_default": [
         "alias_raw",
@@ -7589,6 +7605,14 @@
       "created_by",
       "created_at",
       "updated_at"
+    ],
+    "vendor_alias_stage_receipts": [
+      "idempotency_key",
+      "alias_id",
+      "actor_id",
+      "request_fingerprint",
+      "response",
+      "created_at"
     ],
     "vendor_aliases": [
       "id",

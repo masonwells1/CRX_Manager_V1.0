@@ -17,7 +17,7 @@ const retiredVendorReplaySql = readFileSync(
     repoRoot,
     'supabase',
     'migrations',
-    '20260721062000_replay_vendor_alias_after_vendor_retirement.sql',
+    '20260721130846_replay_vendor_alias_after_vendor_retirement.sql',
   ),
   'utf8',
 );

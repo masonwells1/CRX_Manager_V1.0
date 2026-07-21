@@ -11,7 +11,7 @@ const source = (...parts: string[]) =>
 
 describe('gauntlet sections 2-6 CodeRabbit closeout', () => {
   it('advances transaction-review balances in stable allocation-row order', () => {
-    const sql = migration('20260721045536_fix_transaction_review_running_balance.sql');
+    const sql = migration('20260721130355_fix_transaction_review_running_balance.sql');
     expect(sql).toContain(
       "md5(replace(v_source, E'\\r\\n', E'\\n')) <> '9f16939c4e57d7b0d91703aed136faf8'",
     );
