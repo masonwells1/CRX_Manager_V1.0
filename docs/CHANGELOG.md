@@ -2,6 +2,21 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-21 — Invoice due-dates ticket (approved spec 2026-07-16): found most A8 machinery already live; shipped the two real gaps. Migration 20260721191914 APPLIED LIVE via full gate (parse_payment_terms_days: due-on-receipt forms -> 0 days; proven with live rollback smoke on [E2E] invoice: due_date=invoice_date for Due on receipt, +30d for Net 30). Frontend terms picker (Net 30/Net 15/Due on receipt/Custom date) on FieldApplicationInvoice with sol-review fixes: unposted edit gating, display-only PDF due date, legacy free-text round-trip. Built by codex gpt-5.6-luna subagents, adversarial gpt-5.6-sol review (2 HIGHs fixed+reverified). Full suite 3776 pass. PR #195 open, awaiting Vercel+CodeRabbit then merge.
+
+Invoice due-dates ticket (approved spec 2026-07-16): found most A8 machinery already live; shipped the two real gaps. Migration 20260721191914 APPLIED LIVE via full gate (parse_payment_terms_days: due-on-receipt forms -> 0 days; proven with live rollback smoke on [E2E] invoice: due_date=invoice_date for Due on receipt, +30d for Net 30). Frontend terms picker (Net 30/Net 15/Due on receipt/Custom date) on FieldApplicationInvoice with sol-review fixes: unposted edit gating, display-only PDF due date, legacy free-text round-trip. Built by codex gpt-5.6-luna subagents, adversarial gpt-5.6-sol review (2 HIGHs fixed+reverified). Full suite 3776 pass. PR #195 open, awaiting Vercel+CodeRabbit then merge.
+
+- **Commits this session** (git log --since=12.hours --author=Mason):
+  - `866bb291 Merge pull request #194 from masonwells1/docs/port-missing-docs-to-main`
+  - `bd18cee1 fix(split-billing): apply unassigned v_app_service record fix live (mig 20260721180000) (#192)`
+  - `3eb8a93d Test-system overhaul: business-area slices, per-line split smoke (found live bug), drift reconciliation (#191)`
+  - `61277725 Close out supplier pricing Phase 1a (#168)`
+  - `66d5371d chore(deps): bump @babel/core to 7.29.7 and esbuild to 0.28.1 (lockfile-only, resolves 2 low dependabot alerts) (#190)`
+  - `310f62a4 chore(reports): cleanup-sprint progress check 2026-07-17 (#158)`
+  - `b0e115af Bug-class regression suite: lock down the 2026-07-10..20 review-round findings (#189)`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - `supabase/migrations/20260721191914_due_on_receipt_terms_parser.sql`
+
 ## 2026-07-21 — Split-save unassigned-record fix APPLIED LIVE (migration 20260721180000)
 
 - Applied `20260721180000_fix_split_impl_unassigned_app_service_record` live via the management-API POST channel (exact repo file bytes; ledger row recorded). Fixes the cold-session 55000 crash in `_save_field_app_split_invoice_impl` on saves with no service line (or non-service lines before the first service line) by capturing the service name into `v_svc_name`; re-asserts the impl's least-privilege REVOKE.
