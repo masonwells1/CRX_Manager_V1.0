@@ -11,7 +11,7 @@ import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, sanitizeError, assertRpcResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
-import { assertInvoiceSendable } from '../lib/invoiceSendDisposition';
+import { assertInvoiceLifecycleSendable, assertInvoiceSendable } from '../lib/invoiceSendDisposition';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
@@ -2197,7 +2197,7 @@ export default function FieldApplicationInvoice() {
             draft: recipientDraft,
             emailIdempotencyKey: r.email_idempotency_key,
           });
-          await assertInvoiceSendable(recipientInvoiceId);
+          await assertInvoiceLifecycleSendable(recipientInvoiceId);
           await sendEmail(payload);
           const confirmRes = await supabase.rpc('confirm_job_notification_sent', {
             p_notification_id: r.notification_id,

@@ -4,14 +4,18 @@ export type InvoiceSendDisposition = 'normal' | 'sendable' | 'suppressed_zero_to
 const SENDABLE_DISPOSITIONS = new Set<InvoiceSendDisposition>(['normal', 'sendable']);
 const NON_SENDABLE_STATUSES = new Set(['voided', 'cancelled']);
 
+export function assertInvoiceLifecycle(status?: unknown, deletedAt?: unknown): void {
+  if (deletedAt != null || NON_SENDABLE_STATUSES.has(String(status))) {
+    throw new Error('A voided, cancelled, or deleted invoice must not be emailed.');
+  }
+}
+
 export function assertInvoiceSendDisposition(
   value: unknown,
   status?: unknown,
   deletedAt?: unknown,
 ): asserts value is InvoiceSendDisposition {
-  if (deletedAt != null || NON_SENDABLE_STATUSES.has(String(status))) {
-    throw new Error('A voided, cancelled, or deleted invoice must not be emailed.');
-  }
+  assertInvoiceLifecycle(status, deletedAt);
   if (value === 'suppressed_zero_total') {
     throw new Error('This $0 split invoice is suppressed and must not be emailed.');
   }
@@ -30,4 +34,16 @@ export async function assertInvoiceSendable(invoiceId: string): Promise<void> {
   if (error) throw error;
   const row = data as { send_disposition?: unknown; status?: unknown; deleted_at?: unknown } | null;
   assertInvoiceSendDisposition(row?.send_disposition, row?.status, row?.deleted_at);
+}
+
+/** Proof-of-application notices are operational records, not invoice emails. */
+export async function assertInvoiceLifecycleSendable(invoiceId: string): Promise<void> {
+  const { data, error } = await supabase
+    .from('invoices')
+    .select('status,deleted_at')
+    .eq('id', invoiceId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) throw new Error('Invoice not found. Reload before emailing.');
+  assertInvoiceLifecycle(data.status, data.deleted_at);
 }

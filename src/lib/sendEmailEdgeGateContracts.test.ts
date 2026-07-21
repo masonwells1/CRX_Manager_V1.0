@@ -36,4 +36,9 @@ describe('send-email invoice authority contracts', () => {
     expect(finalGate).toContain('finalInvoiceRow.send_disposition !== "normal"');
     expect(finalGate).toContain('.update({ status: "failed", error_message: finalGateRefusal })');
   });
+
+  it('suppresses invoice mail but permits proof notices for active zero-share co-owners', () => {
+    expect(source).toContain('email_type === "invoice" &&\n        invoiceRow.send_disposition != null');
+    expect(source).toContain('email_type === "invoice" &&\n        finalInvoiceRow.send_disposition != null');
+  });
 });
