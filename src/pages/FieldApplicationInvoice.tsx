@@ -876,7 +876,14 @@ export default function FieldApplicationInvoice() {
       setPaymentTerms(loadedPaymentTerms || 'Net 30');
       setCustomTermsText('');
     }
-    setDueDate(loadedDueDate);
+    // A recognized posting stamp on a still-editable invoice is NOT kept as local
+    // state: the print path would treat it as explicit and skip re-deriving after a
+    // transaction-date edit. Posted/locked invoices keep it for read-only display.
+    setDueDate(
+      isPostingStamp && ['draft', 'unposted'].includes((invoice.status as string) || 'draft')
+        ? ''
+        : loadedDueDate,
+    );
     setFooterNotes((invoice.footer_notes as string | null) || '');
     setInternalMemo((invoice.internal_notes as string | null) || '');
     setStatus((invoice.status as InvoiceStatus) || 'draft');
