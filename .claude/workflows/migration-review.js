@@ -19,9 +19,22 @@ export const meta = {
 // never stamps a timestamp — the caller writes the proof file with a real clock.
 // ---------------------------------------------------------------------------
 
-const migFile = (args && args.file) || null
-const migName = (args && args.name) || (migFile ? migFile.split(/[\\/]/).pop() : 'unknown')
-const inlineSql = (args && args.sql) || null
+// The Workflow tool can deliver `args` as a JSON-encoded STRING rather than an
+// object (observed 2026-07-18, runs wf_ae36ee12-2e4 / wf_5c9ddfc7-174). When that
+// happens, args.file/args.name/args.sql are all undefined and the run fails closed
+// with "No migration SQL provided". Normalize to an object first, then read fields.
+let _args = args
+if (typeof _args === 'string') {
+  try {
+    _args = JSON.parse(_args)
+  } catch {
+    _args = null
+  }
+}
+
+const migFile = (_args && _args.file) || null
+const migName = (_args && _args.name) || (migFile ? migFile.split(/[\\/]/).pop() : 'unknown')
+const inlineSql = (_args && _args.sql) || null
 
 const target = migFile
   ? `the migration file at ${migFile}`

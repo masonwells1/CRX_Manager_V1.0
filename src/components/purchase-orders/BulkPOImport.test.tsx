@@ -250,6 +250,34 @@ describe('BulkPOImport', () => {
     expect(defaultProps.onClose).not.toHaveBeenCalled();
   });
 
+  it('explains a changed-content conflict instead of showing only a generic failure', async () => {
+    mocks.rpc.mockImplementation(async (name: string) => {
+      if (name === 'save_purchase_order') {
+        return {
+          data: null,
+          error: { message: 'BULK_PO_DOCUMENT_CONTENT_CONFLICT' },
+        };
+      }
+      return { data: null, error: new Error(`Unexpected RPC: ${name}`) };
+    });
+
+    render(<BulkPOImport {...defaultProps} />);
+    fireEvent.change(document.querySelector('#po-pdf-upload')!, {
+      target: { files: [new File(['one'], 'INV-CHANGED.pdf', { type: 'application/pdf' })] },
+    });
+    fireEvent.click(await screen.findByRole('button', { name: /process 1 file/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /import 1 po/i }));
+
+    await waitFor(() => expect(mocks.toast).toHaveBeenCalledWith(
+      'error',
+      expect.stringMatching(/INV-CHANGED\.pdf:.*already imported.*edit it instead/i),
+    ));
+    expect(mocks.toast).not.toHaveBeenCalledWith(
+      'error',
+      expect.stringMatching(/review and retry/i),
+    );
+  });
+
   it('normalizes an OCR fractional-cent unit cost before saving', async () => {
     mocks.processDocumentWithOCR.mockResolvedValue({
       success: true,
@@ -288,13 +316,53 @@ describe('BulkPOImport', () => {
     ));
   });
 
-  it('requires a vendor before creating a global duplicate claim', async () => {
+  it('canonicalizes identity boundary whitespace before saving', async () => {
+    const vendorName = '\u00a0Vendor A\t';
+    const invoiceNumber = '\tINV-NBSP\u00a0';
+    mocks.processDocumentWithOCR.mockResolvedValue({
+      success: true,
+      raw_text: 'parsed with non-ASCII boundary whitespace',
+      document_type: 'purchase_order',
+      parsed_data: {
+        vendor_name: vendorName,
+        invoice_number: invoiceNumber,
+        invoice_date: '2026-07-16',
+        items: [{
+          product_name: product.product_name,
+          quantity: 2,
+          unit_cost: 10,
+          unit_size: 'GAL',
+        }],
+      },
+      confidence: 1,
+      processing_time_ms: 1,
+    });
+
+    render(<BulkPOImport {...defaultProps} />);
+    fireEvent.change(document.querySelector('#po-pdf-upload')!, {
+      target: { files: [new File(['one'], 'INV-NBSP.pdf', { type: 'application/pdf' })] },
+    });
+    fireEvent.click(await screen.findByRole('button', { name: /process 1 file/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /import 1 po/i }));
+
+    await waitFor(() => expect(mocks.rpc).toHaveBeenCalledWith(
+      'save_purchase_order',
+      expect.objectContaining({
+        p_po_payload: expect.objectContaining({
+          vendor: 'Vendor A',
+          bulk_import_vendor_reference: 'INV-NBSP',
+        }),
+      }),
+    ));
+  });
+
+  it('rejects an invisible whitespace-only vendor before creating a duplicate claim', async () => {
     mocks.processDocumentWithOCR.mockResolvedValue({
       success: true,
       raw_text: 'parsed without vendor',
       document_type: 'purchase_order',
       parsed_data: {
-        vendor_name: '',
+        vendor_name: '\u00a0\t',
         invoice_number: 'INV-NO-VENDOR',
         invoice_date: '2026-07-16',
         items: [{

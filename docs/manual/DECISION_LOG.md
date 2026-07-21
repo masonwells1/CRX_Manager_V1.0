@@ -1,6 +1,6 @@
 # Decision Log
 
-Last verified: 2026-07-17
+Last verified: 2026-07-19
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
@@ -8,6 +8,90 @@ settled calls. Newest first. Each entry is a decision, why it was made, and the 
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
 
 ---
+
+## 2026-07-19 — SETTLED: split-billing v1 edge-case policy — per-child commissions (no job-level clamp) + no extra job-less double-submit guard
+
+**Decision (Mason, 2026-07-19, two calls):**
+
+1. **Commissions on Option-B splits stay per-child, mirroring the live model — NO job-level clamp
+   in v1.** Because each co-owner is priced at their own tier, an operator who deliberately
+   overrides one co-owner BELOW cost creates a child with negative profit; the app's standing
+   "commissions never go negative" rule then means total split commissions can exceed 
+   commission-on-whole-job-profit (worked example: 50/50, A tier $15 → +$250 profit → $25
+   commission; B overridden to $8 vs $10 cost → −$100 profit → $0; rep gets $25 where a single
+   invoice would have paid $15). Mason accepted this for v1: the case requires a deliberate
+   below-cost override (with a stored override reason), the exposure is capped by that deliberate
+   loss, and commissions are human-reviewed at payout-batch time. **Operative rule:** do NOT add
+   job-level commission netting/clamping to `save_field_app_split_invoice`; if a real below-cost
+   split ever appears in a payout, build the job-level cap then as its own proven change.
+
+2. **Job-less splits get NO extra double-submit exclusivity guard in v1** (two tabs could each
+   bill a job-less split — same exposure as the rest of the app's non-job invoicing). Job-backed
+   splits are already protected by the #E source-job consume guard. **Operative rule:** accept
+   live parity; do not bolt an idempotency/exclusivity scheme onto the job-less path for v1.
+
+Context: these were the last two open owner-decisions from the Fable adversarial review of the
+parked per-line split-billing build (PR #164, flag OFF, migrations not applied). Go-live still
+gates on a CLEAN Codex round-6 verdict (~2026-07-24) + Mason's review.
+
+## 2026-07-17 — SETTLED: split-billing model = per-line custom splits on the FIELD-APP path; order-side engine retired later
+
+**Decision (Mason, 2026-07-17):** the app's real split-billing model is **per-line-item custom
+splits at the field-application-invoice stage** — default each line from field ownership
+(`field_billing_defaults`), adjust who-pays-what and one-off prices in the UNPOSTED draft, post =
+the actual invoice, and **unpost stays reversible** (edit-then-repost, with an append-only post
+snapshot). This **refines the 2026-06-17 "splits are order-side" decision below**: the FIELD-APP
+path (`field_app_locations` → `invoice_shares`, one child invoice per customer) is the surface we
+build on; the order-side engine (`order_shares` / `order_item_field_allocations` /
+`create_split_invoices_from_order`) is **unproven (0 live rows), NOT dead — retire it LATER** in a
+separate cleanup after confirming zero real executions, and `order_line_allocations` (dead twin,
+only ever DELETEd) can't be dropped standalone until `_update_order_items_impl`'s delete refs go.
+**Operative rule:** new split-billing work targets the field-app path; do not extend or newly
+depend on the order-side engine; the full build spec (3 advisor passes — gpt-5.6-terra design +
+xhigh plan-review, claude-fable-5 money-math) is `docs/plans/per-line-item-split-billing-spec-2026-07-17.md`.
+Money math is pinned there (half-away-from-zero, one shared numeric preview+post engine,
+`amount_cents` display-authoritative, post-time SUM assertions, group total is reporting-only not a
+5th balance lever). **Not built** — Mason builds it in Codex next week; §6.1 baseline real-billing
+cycle first.
+
+## 2026-07-17 — SETTLED: CodeRabbit is the standing every-PR AI reviewer; FarmRx made public
+
+**Decision (Mason, 2026-07-17):** enable CodeRabbit (AI PR reviewer) on both public repos and
+fold it into the landing flow. `CRX_Manager_V1.0` was already public; `FarmRx` was flipped
+**private → public** this session at Mason's explicit request (full 76-commit history was
+secret-scanned clean first — no `.env` ever committed, no service-role keys / tokens / passwords;
+only publishable + VAPID public keys in code; customer data lives in FarmRx's separate Supabase
+project behind RLS, not the repo). Each repo carries a `.coderabbit.yaml` on `main` whose
+`path_instructions` mirror that repo's hard rules; the file overrides CodeRabbit's dashboard
+settings. CodeRabbit is **free for public repos**, so the account's Pro Plus trial is irrelevant
+to cost.
+
+**Enforcement choice (Mason picked "process now, hard-block soon"):** the landing flow now
+includes reading CodeRabbit's review and fixing any real issue before merge (advisory — it does
+not block; nitpicks may be dismissed with a reason). CodeRabbit is the broad every-PR pass;
+the Codex cross-model proof stays the hard gate for money/RLS/migration diffs — both run.
+Operative rule: after CI/Vercel go green, do not merge until CodeRabbit has posted its review and
+its real findings are resolved. **Follow-up (open):** add a merge-blocking required status check
+for CodeRabbit to the `protect-main` ruleset once its exact check name is confirmed on a live PR.
+(Source: AGENTS.md "Standing CodeRabbit review policy"; PR #160 landed the CRX config; FarmRx
+config commit 943e5688.)
+
+## 2026-07-17 — SETTLED: save_customer edits are assigned-rep-or-admin only (no office-manager carve-out)
+
+**Decision (Mason, 2026-07-17, relayed from the CRM loop session):** customer master-record
+edits through the `save_customer` SECDEF RPC are RESTRICTED to admins (any customer) and the
+assigned sales rep (`customers.assigned_sales_rep = auth.uid()` only). No office-manager
+carve-out, no sensitive-field-only scoping. This closes the 2026-07-16 Codex gauntlet finding
+that the RPC's role-only gate let any active sales rep edit any customer (credit limit,
+finance-charge settings, commission split) in bypass of the assigned-rep-only `customers_update`
+RLS policy. Grounding: rep SELECT was already assignment-scoped, and the activity feed shows no
+rep has ever edited a customer — the restriction changes no real workflow.
+Operative rule: the in-body gates (`NOT_CUSTOMER_OWNER` / `REP_CANNOT_REASSIGN` /
+`REP_MUST_SELF_ASSIGN`) in migration `20260717123000_save_customer_ownership_enforcement.sql`
+mirror the customers RLS policies; keep function-body authorization and RLS in lockstep if
+either changes. APPLIED LIVE 2026-07-17 (ledger version 20260717123000) under Mason's
+in-chat OK; post-apply live probe confirmed a rep is denied editing a non-assigned customer.
+(Source: branch `claude/amazing-ptolemy-9e7e0a`; migration-history row 734.)
 
 ## 2026-07-17 — SETTLED (Mason, in-chat): five CRM owner decisions
 
@@ -200,6 +284,10 @@ must respect the same precedence (verified: migration `20260623120000`).
 ---
 
 ## 2026-06-17 — Split invoices modeled order-side, allocated by field/acre
+
+**⚠ SUPERSEDED by the 2026-07-17 split-billing decision (top of log).** Kept for historical rationale
+only. The operative surface is now the FIELD-APP path (per-line custom splits); the order-side
+`order_shares` engine is unproven and slated for retirement. Do NOT treat the guidance below as current.
 
 **Decision:** Multi-customer billing splits live on the order side (`order_shares` /
 `invoice_shares`), allocated by field/acre rather than by dollar percentage alone.

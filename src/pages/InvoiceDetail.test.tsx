@@ -2,7 +2,7 @@
  * InvoiceDetail.test.tsx — Tests for the invoice detail/edit page
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 
 const { mockFrom, mockRpc, mockToast, mockNavigate } = vi.hoisted(() => ({
@@ -321,5 +321,52 @@ describe('InvoiceDetail — Phase 1 group-aware Post routing', () => {
       expect(screen.getAllByText('INV-0099').length).toBeGreaterThan(0);
     });
     expect(mockToast).not.toHaveBeenCalledWith('error', expect.any(String));
+  });
+
+  it('voids a grouped field-application invoice through singular void_invoice', async () => {
+    setupInvoice({
+      ...baseInvoice,
+      status: 'posted',
+      invoice_type: 'field_application',
+      invoice_group_id: 'field-grp-xyz',
+    });
+    mockRpc.mockResolvedValue({ data: null, error: null });
+    renderInvoiceDetail();
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Void' })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Void' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Void Invoice' }));
+
+    await waitFor(() => {
+      expect(mockRpc).toHaveBeenCalledWith('void_invoice', expect.objectContaining({ p_invoice_id: 'inv-123' }));
+      expect(mockRpc).not.toHaveBeenCalledWith('void_invoice_group', expect.anything());
+      expect(mockToast).toHaveBeenCalledWith('success', 'Invoice voided');
+    });
+  });
+
+  it('falls back to atomic group void only for the governed provenance guard', async () => {
+    setupInvoice({ ...baseInvoice, status: 'posted', invoice_group_id: 'governed-grp-xyz' });
+    mockRpc.mockImplementation((name: string) => {
+      if (name === 'void_invoice') {
+        return Promise.resolve({
+          data: null,
+          error: { message: 'SPLIT_INVOICE_GROUP_VOID_REQUIRED: use void_invoice_group' },
+        });
+      }
+      if (name === 'void_invoice_group') return Promise.resolve({ data: 2, error: null });
+      return Promise.resolve({ data: null, error: null });
+    });
+    renderInvoiceDetail();
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Void' })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Void' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Void Invoice' }));
+
+    await waitFor(() => {
+      expect(mockRpc).toHaveBeenCalledWith('void_invoice_group', expect.objectContaining({
+        p_invoice_group_id: 'governed-grp-xyz',
+      }));
+      expect(mockToast).toHaveBeenCalledWith('success', 'Invoice group voided');
+    });
   });
 });

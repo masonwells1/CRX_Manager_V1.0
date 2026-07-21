@@ -1,13 +1,69 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-07-17** (targeted money/inventory release refresh against current code and live DB; older open/deferred claims retain their dated evidence below; owner-facing combined list: root `TODO.md`)
+**Last verified: 2026-07-20** (full document re-read; live high-water `20260720225716`; the 24 previously missing live migration sources landed through PR #180, and broad delivery-signature Storage policies were replaced with delivery-bound active-actor read, write, and delete access while preserving one inaccessible historical orphan; older open/deferred claims retain their dated evidence below; owner-facing combined list: root `TODO.md`)
 **Update triggers:** when a finding is parked/resolved, a migration is parked/applied, or an owner decision lands. Agents must update THIS file, not create new issue lists. Do not re-discover or re-fix something listed here as already known — read the pointer first.
 
 This file consolidates (does not replace) the source documents it points to. If this file and a source disagree, trust the source and fix this file.
 
 ---
 
+## 0. Per-line split-billing — pricing rule SETTLED = Option B (Mason, 2026-07-18)
+
+Resolved. The prior open question (how to price a chemical split line when co-owners are on different tiers)
+is decided: **Option B — each co-owner is billed at their OWN assigned_tier**, mirroring today's non-split
+field-app billing (no customer's price changes). A manual price or field quote applies to everyone (tier-
+independent); only the tier fallback varies per grower. Built + proven in the live DB (rollback: 20/80
+tier1/tier3 field → A@$10/gal, B@$8/gal, each own tier; plus a penny guard so a uniform price totals
+round-once). Committed on branch `claude/per-line-split-billing-build`. Still parked: flag OFF, migration
+NOT applied, NOT merged.
+
+**Codex gate RAN 2026-07-18 → 8 P1 + 2 P2 findings, ALL FIXED + re-proven (21/21 live-rollback).** The Codex
+money/RLS review blocked the first go-live attempt: service lines priced $0 / not per-customer (#1,#2);
+chemical COGS written as 0 (#3); cross-rep RLS bypass in the SECDEF writer (#4); Post commits a stale draft
+after edits (#5); a split child opened in the generic invoice page could cascade-delete its line shares (#6);
+children got no field_app_locations → blank fields/acres (#7); duplicate `invoice_created` audit rows on
+re-save (#8); mis-derived compat acres (#9); `send_disposition` never hydrated so the $0-email gate never
+fired (#10). Mason chose **full v1 scope** (chemical + service + flat). All fixed in
+`20260718030000_..._save_rpc.sql` + `FieldAppSplitInvoiceEditor.tsx` / `InvoiceDetail.tsx` /
+`FieldApplicationInvoice.tsx` / `fieldInvoiceList.ts`; typecheck clean. Two non-blocking notes: a
+chemical *return/credit* (negative qty) can't go through the split screen yet (fail-closed); the per-person
+price override in the draft UI still works for one-off adjustments.
+
+**Codex ROUND 2 RAN 2026-07-18 → 13 more findings (8 P1 + 5 P2), ALL 13 NOW RESOLVED + re-proven.** A deeper
+pass found: flag not enforced server-side (#B); deploy-order coupling in InvoiceDetail preflight (#A); negative
+flat credit posted as a charge (#C); malformed override → $0 (#D); source job billable via split AND normal
+flow = double-bill (#E); fee cost per-acre vs extended mismatch (#F); per-child COGS rounding overstates group
+total (#G); no route to reopen a saved draft (#H); local-date default (#J); micro-pct residual on custom
+splits (#K); service name lost on item (#N); Option-B pricing audited as an "override" not a base (#M);
+custom-split/override reasons never captured (#L). First 7 (#B/#C/#D/#F/#J/#K/#N) landed in `eb942f86`; the
+final 6 (#A/#E/#G/#H/#L/#M) this session. **#H = save-now/post-later:** a new `split-billing/:id` route reopens
+a saved set READ-ONLY for review + Post (editable reopen deferred — a re-save re-prices, so rebuilding money
+fields is a future, separately-proven enhancement). **#E** consumes the source job (status→invoiced) so it
+can't be double-billed. Re-proven in live PG: **PROOFOK 29/29** (adds cogs_group_lr_exact, audited_base_is_own,
+reasons_captured, double_bill_second_set_rejected, resave_same_job_allowed). rls-security-reviewer 0/0,
+migration-drift 0 blockers; typecheck + lint clean. Still parked: flag OFF, migrations NOT applied, PR #164
+NOT merged.
+
+**Codex ROUND 3 RAN 2026-07-18 → 2 P1 + 4 P2, ALL fixed + PROOFOK 32/32.** A third pass (on the job-consumption
++ reopen work round-2 added) found: source job changeable on re-save → two jobs consumed (P1, now frozen);
+service priced/stamped with `current_season()` instead of the job/invoice season (P1, now season-correct);
+child invoices lacked `job_id`/`application_date` (P2); unposted group mislabeled "Posted" (P2); negative
+micro-pct residual on `33.334×3` (P2); the live-RPC snapshot test inflated to hide the 2 parked RPCs (P2, now
+uses the verified queued-bridge at true 438). The live proof ALSO caught 2 runtime bugs the reviews missed:
+`v_job.season` on an unassigned record (55000) and a stale `scheduled_date` (live `jobs` uses `job_date`) —
+both fixed. New harness note: seeding synthetic products now needs `ALTER TABLE products DISABLE TRIGGER USER`
+inside the rolled-back txn (a parallel supplier-pricing project applied live pricing-governance triggers).
+**Remaining before flag-on: a CLEAN full re-run of the Codex gate, then Mason's review + baseline field-app
+billing cycle.**
+Owner-facing detail: `docs/plans/per-line-split-billing-BUILD-HANDOFF-2026-07-18.md`.
+
 ## 1. Open HIGH findings (dormant on live data)
+
+### Supplier Pricing Phase 1a rollout gap — frontend/Edge retirement not deployed
+
+The additive pricing RPC/bootstrap, zero-cost guard, legacy Product repeat-save compatibility repair, cent-scale correction, strict direct-write cutover, integrity rescan, and supplier-price evidence foundation are live through `20260718230000_supplier_price_evidence_phase1b`. The zero-cost guard's repository source is `20260717112011_supplier_pricing_zero_cost_guard.sql` and its live ledger identity is `20260717120500_supplier_pricing_zero_cost_guard`; the governed calculator rejects margin-driven zero cost. The earlier statement that `20260718124517_harden_supplier_pricing_cent_scale_and_trigger.sql` and the cutover were pending is resolved by the 2026-07-20 live migration-catalog check.
+
+The remaining rollout gap is the production Edge Function: its deployment state was not inspected in this repository/database-only pass. Do not describe supplier-price OCR as retired live until that separately gated deployment is verified.
 
 ### July 14 full-gauntlet remediation — LIVE, frontend rolled out (PR #133 merged 2026-07-15)
 
@@ -46,6 +102,7 @@ Two items the ledger flagged as **"top build priority" and Codex-rated HIGH-on-s
 | `scripts/.staging-migrations/SUPERSEDED-20260611080937_idempotency_lookup_operation_scope_sweep.sql` | Idempotency lookup operation-scoping sweep | Filename says SUPERSEDED | Nothing — already replaced, safe to ignore/delete |
 | `scripts/.staging-migrations/workflow-fix-parked/u12/*`, `.../u13/*` | Draft patches for Applicator "My Day" (U12) and dispatch-assignment unification (U13) | **Verified superseded and removed locally in this ticket.** `docs/loops/business-workflow-fix-ledger.md` confirms both U12 and U13 **SHIPPED LIVE 2026-07-06/07** under different migration names (`20260707010000`/`20260707011000` for U12, `20260707020000` for U13) — not the deleted draft filenames (`20260706060000`, `20260706100000`). | Do not re-apply the removed drafts. |
 | `scripts/.staging-migrations/workflow-waves-parked/PARKED-dispatch-backfill.sql` | One-time backfill of `job_location_dispatches` for legacy-assigned open jobs | Business-data write, needs Mason's OK; also a **no-op today** (0 jobs match, verified live 2026-07-10) | Mason's explicit go-ahead; re-run the embedded count query first since it's a live-data-dependent no-op |
+| `scripts/.staging-migrations/20260717121000_supplier_pricing_phase1a_cutover.sql` | Close direct Product pricing and cost-history writes after the governed RPC frontend is deployed | Applying it before frontend deployment breaks current Product-page pricing and prevents a safe frontend rollback | Additive bootstrap and zero-cost guard live and verified; RPC frontend deployed; rollback window closed or forward DB rollback ready; fresh apply approval/proof |
 | `docs/roadmap/shelved-earmark-engine/*.sql` (3 files: `20260613240000`, `20260613250000`, `20260613280000`) | Booking-prepay "earmark" engine (reserve prepay credits for a specific future booking) | **SHELVED for a full redesign** (Mason's call, 2026-06-14) — the earmark engine assumes a single ledger-based spend path, but the legacy aggregate-spend path (`apply_remaining_prepayments`) bypasses it, causing double-spend + fund-diversion defects (Codex rounds 5-6). See README.md in that folder for the reserved-pool redesign sketch. | **DO NOT APPLY without a fresh architectural pass** — reserved-vs-spendable balance model, not a patch. |
 | Per `.claude/commands/parked.md`: also check `node scripts/fleet-status.mjs` output and any `*draft*.sql` under `docs/audits/` for parked drafts in other worktrees | — | — | Not re-run in this pass (read-only doc consolidation, single worktree) — a future agent asked "what's parked" should run it fresh |
 
@@ -75,6 +132,13 @@ Also open: **Sprint D leftovers** (`docs/loops/workflow-waves-ledger.md`) — D1
 
 ## 4. Deferred/parked feature work
 
+- **Per-line-item custom split billing (field-app)** — DESIGN SPEC complete + review-hardened, **not
+  built**; Mason builds it in Codex next week (baseline real-billing cycle first). Default splits from
+  field ownership, override %/price per line, one invoice per customer, unpost stays reversible. Three
+  advisor passes folded in (gpt-5.6-terra design + xhigh plan-review, claude-fable-5 money-math). Spec:
+  `docs/plans/per-line-item-split-billing-spec-2026-07-17.md`; direction settled in `DECISION_LOG.md`
+  (2026-07-17). Supersedes the "four parallel split mechanisms need a decision" flag — decided: field-app
+  path is the surface, order-side engine retired later.
 - **EPA label backfill** — ~105 of 204 distinct stored EPA registration numbers point at the wrong product (confirmed, `docs/CHANGELOG.md` 2026-07-10 entry). The in-app `/label-data-quality` tool to fix them shipped 2026-07-10; the actual backfill (doing the data-entry) is still pending — it's a data-entry job, not a code task.
 - **OCR REI/PHI auto-fill** — deliberately deferred as a safety trap (label OCR for re-entry-interval/pre-harvest-interval data needs human verification before it can be trusted for compliance).
 - **Grower portal §7-§10** — deferred, internal-only direction for now. `docs/ROADMAP.md` line ~57 (A2, "Grower portal v1") and line ~112 (G9, portal MVP) both still say TODO/VISION.
@@ -119,7 +183,7 @@ The 2026-07-13 audit implemented the cheap hard-guard fixes (see CHANGELOG). The
 
 - **2026-07-17** — Money/inventory gauntlet sections 8-15 database remediation is live through `replay_bulk_po_same_request_result` (ledger `20260717032437`). PO numbering is atomic with insertion; active sales reps retain PO create/import/edit authority; vendor bills compare the authoritative line-rounded PO header; an admin-deleted imported PO clears its claim plus cached save results so the unchanged document can be imported again; and a same-key lost-response retry now replays the original `saved` result before different-request document deduplication. Both trusted migration reviewers returned CLEAN; stacked pre/post-apply rollback chains reached `SMOKE_PASS_ROLLBACK`; permanent checks found zero claims, stale save replays, fractional source costs, and PO header mismatches, with public/internal grants correct.
 - **2026-07-15** — The 2026-07-14 workflow-review HIGH (deactivated admins retained commission-payout policy access) is closed: all 3 fix migrations applied live — names `20260714185129_fix_commission_admin_policies` / `20260714185130_gate_batch_prepay_admin` / `20260714185631_harden_is_admin_search_path`, re-stamped live versions `20260715134551` / `20260715134618` / `20260715134629`. Verified in live `schema_migrations` 2026-07-16 (match on name, not version — the standard drift gotcha). `migration-history.md` rows 690–692 corrected the same day.
-- **2026-07-15** — Schema registry regenerated from live introspection; high-water `20260715203911` = latest live migration (verified 2026-07-16). Roadmap tickets T1/N2 done.
+- **2026-07-15/17** — Schema registry and generated TypeScript database types were regenerated from live introspection through high-water `20260717045420` (`bind_bulk_po_claim_to_vendor`). Roadmap tickets T1/N2 remain done.
 - **2026-07-06** — Business-workflow findings **#106 + #109** (application-record date/license snapshots; invoice-side season stamping) shipped live via `20260707050000_application_record_integrity` (live v20260706175157). Recorded here 2026-07-16 after this file wrongly carried them as open.
 - **2026-07-13** — Automated weekly in-database backup live (`20260713050000_weekly_db_backup.sql`, pg_cron) — snapshots all tables to `backup_snapshots` + a run log.
 - **2026-07-12** — Money+Inventory night-hunt batch A-D applied live: `void_invoice` is_active + period guards (`20260712160000`), unbilled-delivery guard now ignores soft-deleted invoices (`20260712170000` + dashboard companion `20260712180000`), `create_order_from_blend_ticket` row-lock race fix (`20260712190000`), `void_payment` overpayment-credit full unwind (`20260712220000`).

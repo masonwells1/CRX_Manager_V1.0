@@ -56,6 +56,7 @@ function baseProduct(overrides: Partial<Product> = {}): Product {
     created_at: '2026-07-01T00:00:00Z',
     updated_at: '2026-07-01T00:00:00Z',
     ...overrides,
+    pricing_version: overrides.pricing_version ?? 1,
   };
 }
 
@@ -152,6 +153,12 @@ vi.mock('../hooks/useIdempotencyKey', () => ({
 
 vi.mock('../lib/activityLogger', () => ({
   logActivity: H.logActivity,
+}));
+
+// Supplier evidence has its own focused tests. Keep this suite scoped to the
+// EPA draft mutation so its assertions are not polluted by the history read.
+vi.mock('../components/products/ProductPriceHistory', () => ({
+  default: () => null,
 }));
 
 import ProductDetail from './ProductDetail';

@@ -1349,6 +1349,7 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   // live pg_proc that each body uses check_idempotency/save scoped to its own operation. They were
   // added to src/types/supabase.ts but never classified here, which left main RED for all sessions.
   'apply_credit_memo_to_invoice',
+  'apply_product_pricing_change_set',
   'apply_remaining_prepayments',
   'apply_write_off',
   'approve_return',
@@ -1388,8 +1389,10 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   'create_invoice_from_order',
   'create_label_draft',
   'create_order_from_blend_ticket',
+  'create_pricing_workbook_export',
   'create_quick_delivery',
   'create_rebate_claim',
+  'create_split_invoices_from_order',
   'create_vendor_bill',
   'delete_invoices',
   'delete_prepay_credit',
@@ -1406,9 +1409,13 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   'increment_customer_prepay',
   'issue_return_credit',
   'link_blend_ticket_to_order',
+  // CRM retry-safe call logging (migration 20260717060000) — declares
+  // p_idempotency_key and replays via check_idempotency/save_idempotency.
+  'log_customer_interaction',
   'manual_inventory_add',
   'post_commission_payment',
   'post_invoice',
+  'preview_product_pricing_changes',
   'process_offline_action',
   'reassign_delivery',
   'receive_po_items',
@@ -1452,6 +1459,7 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   'void_commission_payment',
   'void_delivery',
   'void_invoice',
+  'void_invoice_group',
   'void_order',
   'void_payment',
   'void_vendor_bill',
@@ -1551,9 +1559,25 @@ const IDEMPOTENCY_BODY_EXEMPT: Record<
   // directly non-executable implementation that owns the canonical replay
   // lookup/save. A dedicated test below pins that indirection and both grants.
   complete_delivery: 'delegated',
+  // The private-provenance wrapper owns a bound replay claim, adds stable
+  // order-item serialization and an owner-only creation claim, then invokes
+  // the canonical private implementation without a second legacy key.
+  create_split_invoices_from_order: 'delegated',
+  // The private-provenance wrapper owns the actor + normalized-ID replay claim,
+  // adds an owner-only mutation claim, then invokes the private implementation.
+  delete_invoices: 'delegated',
+  // The terminal-provenance wrapper binds actor + order before issuing exact
+  // governed cancellation claims and invoking the private implementation.
+  cancel_order: 'delegated',
   // The public wrapper authorizes active customer scope before delegating to
   // the directly non-executable implementation that owns canonical replay.
   save_invoice: 'delegated',
+  // The terminal-provenance wrapper binds the actor and invoice before issuing
+  // its exact lifecycle claim and invoking the private implementation.
+  void_invoice: 'delegated',
+  // The atomic group wrapper binds actor + group + reason through the private
+  // lifecycle helpers, then calls the owner-only single-member implementation.
+  void_invoice_group: 'delegated',
   // The public wrapper hydrates an omitted cost only for a recognized existing
   // line, then delegates to the directly non-executable integer-cents writer
   // that owns the canonical replay lookup/save.
@@ -1578,6 +1602,16 @@ const IDEMPOTENCY_BODY_EXEMPT: Record<
   save_blend_recipe: 'verified-live',
   transition_rebate_claim: 'verified-live',
   unapply_credit_memo: 'verified-live',
+  // H4 (2026-07-18): restore_cancelled_order was reduced to an auth gate + an
+  // unconditional RAISE (restore is forbidden — it could not safely reverse the
+  // cancel's inventory/commission/draw side-effects). It no longer mutates, so
+  // there is nothing to make idempotent; the p_idempotency_key param is retained
+  // only to keep the signature identical for in-place CREATE OR REPLACE.
+  restore_cancelled_order: 'non-mutating',
+  // H3 follow-up (2026-07-18): obsolete writer is now an unconditional RAISE
+  // compatibility stub. The legacy signature remains so callers fail with an
+  // actionable error, but it cannot mutate or require replay protection.
+  record_invoice_payment: 'non-mutating',
   // naturally idempotent
   save_blend_ticket: 'natural', // UPDATE-only path; replay overwrites identically
   generate_rup_sales_records: 'natural', // per-row NOT EXISTS guard
@@ -1694,6 +1728,106 @@ describe('Idempotency BODY verification (reads migration SQL)', () => {
     expect(implementationSource).toContain("v_existing := check_idempotency(p_idempotency_key, 'save_invoice')");
     expect(implementationSource).toContain("PERFORM save_idempotency(p_idempotency_key, 'save_invoice'");
     expect(IDEMPOTENCY_BODY_EXEMPT.save_invoice).toBe('delegated');
+  });
+
+  it('split provenance wrappers preserve the idempotent implementations and forward the exact key', () => {
+    const files = getMigrationFiles();
+    const wrapper = files.find(
+      ({ name }) => name === '20260719100000_trust_only_post_revoke_split_provenance.sql'
+    )?.content;
+    const splitImplementation = files.find(
+      ({ name }) => name === '20260707090000_u7_split_gate_allow_predelivery.sql'
+    )?.content;
+    const deleteImplementation = files.find(
+      ({ name }) => name === '20260711050000_credit_apply_reversal_and_lifecycle.sql'
+    )?.content;
+
+    expect(wrapper).toContain(
+      'RENAME TO _create_split_invoices_from_order_provenance_impl_20260719'
+    );
+    expect(wrapper).toContain('RENAME TO _save_invoice_split_provenance_impl_20260719');
+    expect(wrapper).toContain('RENAME TO _delete_invoices_split_provenance_impl_20260719');
+    expect(wrapper).toMatch(
+      /REVOKE ALL ON FUNCTION\s+public\._create_split_invoices_from_order_provenance_impl_20260719[\s\S]*FROM PUBLIC, anon, authenticated, service_role/
+    );
+    expect(wrapper).toMatch(
+      /REVOKE ALL ON FUNCTION\s+public\._delete_invoices_split_provenance_impl_20260719[\s\S]*FROM PUBLIC, anon, authenticated, service_role/
+    );
+    expect(wrapper).toMatch(
+      /_create_split_invoices_from_order_provenance_impl_20260719\([\s\S]*p_idempotency_key[\s\S]*INSERT INTO public\.split_invoice_provenance/
+    );
+    expect(wrapper).toMatch(
+      /_delete_invoices_split_provenance_impl_20260719\([\s\S]*p_idempotency_key[\s\S]*UPDATE public\.invoices i[\s\S]*SET status = 'cancelled'/
+    );
+    expect(splitImplementation).toContain("operation = 'create_split_invoices_from_order'");
+    expect(splitImplementation).toContain(
+      "VALUES (p_idempotency_key, 'create_split_invoices_from_order'"
+    );
+    expect(deleteImplementation).toContain(
+      "v_existing := check_idempotency(p_idempotency_key, 'delete_invoices')"
+    );
+    expect(deleteImplementation).toContain(
+      "PERFORM save_idempotency(p_idempotency_key, 'delete_invoices'"
+    );
+    expect(IDEMPOTENCY_BODY_EXEMPT.create_split_invoices_from_order).toBe('delegated');
+    expect(IDEMPOTENCY_BODY_EXEMPT.delete_invoices).toBe('delegated');
+  });
+
+  it('binds split creation, deletion, void, and cancellation replays to exact requests', () => {
+    const files = getMigrationFiles();
+    const wrapper = files.find(
+      ({ name }) => name === '20260719102000_allow_governed_split_terminal_lifecycle.sql'
+    )?.content;
+    const splitImplementation = files.find(
+      ({ name }) => name === '20260707090000_u7_split_gate_allow_predelivery.sql'
+    )?.content;
+    const deleteImplementation = files.find(
+      ({ name }) => name === '20260711050000_credit_apply_reversal_and_lifecycle.sql'
+    )?.content;
+    const voidImplementation = files.find(
+      ({ name }) => name === '20260718214000_preserve_voided_payment_allocation_history.sql'
+    )?.content;
+    const cancelImplementation = files.find(
+      ({ name }) => name === '20260714222000_return_credit_source_of_truth.sql'
+    )?.content;
+
+    expect(wrapper).toContain('CREATE FUNCTION public._claim_bound_lifecycle_idempotency');
+    expect(wrapper).toContain('IDEMPOTENCY_REQUEST_MISMATCH');
+    expect(wrapper).toContain("v_contract CONSTANT text := 'create_split_invoices_from_order_v1'");
+    expect(wrapper).toContain("v_contract CONSTANT text := 'delete_invoices_v1'");
+    expect(wrapper).toContain("v_contract CONSTANT text := 'void_invoice_v1'");
+    expect(wrapper).toContain("v_contract CONSTANT text := 'cancel_order_v1'");
+    expect(wrapper).toContain('SPLIT_INVOICE_IDEMPOTENCY_RESPONSE_MISMATCH');
+    expect(wrapper).toContain('RENAME TO _void_invoice_split_provenance_impl_20260719');
+    expect(wrapper).toContain('RENAME TO _cancel_order_split_provenance_impl_20260719');
+    expect(wrapper).toMatch(
+      /_create_split_invoices_from_order_provenance_impl_20260719\([\s\S]*NULL::text/
+    );
+    expect(wrapper).toMatch(
+      /_delete_invoices_split_provenance_impl_20260719\([\s\S]*NULL::text/
+    );
+    expect(wrapper).toMatch(
+      /_void_invoice_split_provenance_impl_20260719\([\s\S]*NULL::text/
+    );
+    expect(wrapper).toMatch(
+      /_cancel_order_split_provenance_impl_20260719\([\s\S]*NULL::text/
+    );
+    expect(splitImplementation).toContain(
+      "VALUES (p_idempotency_key, 'create_split_invoices_from_order'"
+    );
+    expect(deleteImplementation).toContain(
+      "v_existing := check_idempotency(p_idempotency_key, 'delete_invoices')"
+    );
+    expect(voidImplementation).toContain(
+      "v_existing := check_idempotency(p_idempotency_key, 'void_invoice')"
+    );
+    expect(cancelImplementation).toContain(
+      "v_existing := public.check_idempotency(p_idempotency_key, 'cancel_order')"
+    );
+    expect(IDEMPOTENCY_BODY_EXEMPT.create_split_invoices_from_order).toBe('delegated');
+    expect(IDEMPOTENCY_BODY_EXEMPT.delete_invoices).toBe('delegated');
+    expect(IDEMPOTENCY_BODY_EXEMPT.void_invoice).toBe('delegated');
+    expect(IDEMPOTENCY_BODY_EXEMPT.cancel_order).toBe('delegated');
   });
 
   it('save_purchase_order hydrates omitted cost before delegating to its idempotent implementation', () => {
@@ -1901,7 +2035,35 @@ function generatedMutatingRpcInventory(): Set<string> {
   }));
 }
 
-const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([]);
+const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
+  // Direct EXECUTE is revoked from every application role. This internal
+  // delegate carries the public save_purchase_order idempotency key and cache
+  // contract inside the same transaction; it is absent from generated client
+  // types by design but still must remain fail-closed in the migration scan.
+  '_save_purchase_order_ascii_identity_impl',
+  // Per-line split billing (parked migration 20260720233000_per_line_split_billing_save_rpc.sql,
+  // NOT applied live; feature flag OFF). Both declare `p_idempotency_key text` and use the
+  // canonical two-layer replay pattern: the PUBLIC wrapper save_field_app_split_invoice does
+  // check_idempotency + payload-hash conflict; the internal writer _save_field_app_split_invoice_impl
+  // records via save_idempotency (direct EXECUTE revoked). Neither is in the generated client
+  // types yet (types are regenerated only after the migration applies), so they are classified here
+  // rather than in MUTATING_RPCS_WITH_IDEMPOTENCY. Move save_field_app_split_invoice to that list
+  // once the migration is live and src/types/supabase.ts is regenerated.
+  'save_field_app_split_invoice',
+  '_save_field_app_split_invoice_impl',
+  // Supplier Pricing Phase 1b is intentionally parked pending a separate,
+  // reviewed apply session. Keep these mutators in the migration-only bucket
+  // until the migration is live and generated client types are refreshed.
+  'approve_supplier_price_import',
+  'correct_supplier_price_observation',
+  // Parked in 20260720230000 (durable-replay + reject follow-ups) until that
+  // migration applies live and generated client types are refreshed.
+  'reject_supplier_price_import',
+  'review_vendor_alias',
+  'stage_supplier_price_import',
+  'stage_vendor_alias',
+  'upsert_product_supplier_link',
+]);
 
 /**
  * Discovered mutating RPCs for which replay safety does not use p_idempotency_key.
@@ -1974,12 +2136,14 @@ describe('Idempotency coverage drift (generated-types driven, fail-closed)', () 
     expect(unclassified).toEqual([]);
   });
 
-  it('migration-only idempotent RPCs are explicit and really declare the key', () => {
+  it('migration-only idempotent RPCs are explicit and really enforce the key', () => {
     const generatedNames = new Set(generatedRpcShapes().map(({ name }) => name));
     const functions = latestMigrationFunctions();
     const stale = [...MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY].filter((rpc) => {
-      const definition = functions.get(rpc)?.definition || '';
-      return generatedNames.has(rpc) || !/p_idempotency_key\s+text/i.test(definition);
+      const current = functions.get(rpc);
+      return generatedNames.has(rpc)
+        || !/p_idempotency_key\s+text/i.test(current?.definition || '')
+        || !bodyUsesIdempotency(current?.body || '');
     });
     expect(stale).toEqual([]);
   });

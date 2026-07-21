@@ -313,6 +313,7 @@ describe('buildProofEmailPayload', () => {
       customerId: 'c1',
       customerName: 'Green Acres Farm',
       jobId: 'job-1',
+      invoiceId: 'invoice-1',
       draft,
       emailIdempotencyKey: 'rpc-key-abc:c1',
     });
@@ -320,15 +321,17 @@ describe('buildProofEmailPayload', () => {
     expect(p.to).toBe('farm@example.com');
     expect(p.idempotency_key).toBe('rpc-key-abc:c1');
     expect(p.subject).toContain('Job FJOB-003');
+    expect(p.resource_type).toBe('invoice');
+    expect(p.resource_id).toBe('invoice-1');
   });
   it('throws (never silently sends) when there is no email on file', () => {
     expect(() =>
-      buildProofEmailPayload({ customerEmail: '  ', customerId: 'c1', customerName: 'X', jobId: 'j', draft, emailIdempotencyKey: 'k' }),
+      buildProofEmailPayload({ customerEmail: '  ', customerId: 'c1', customerName: 'X', jobId: 'j', invoiceId: 'i', draft, emailIdempotencyKey: 'k' }),
     ).toThrow(/email address on file/);
   });
   it('throws rather than inventing a timestamp key when the deterministic key is missing', () => {
     expect(() =>
-      buildProofEmailPayload({ customerEmail: 'a@b.com', customerId: 'c1', customerName: 'X', jobId: 'j', draft, emailIdempotencyKey: '' }),
+      buildProofEmailPayload({ customerEmail: 'a@b.com', customerId: 'c1', customerName: 'X', jobId: 'j', invoiceId: 'i', draft, emailIdempotencyKey: '' }),
     ).toThrow(/idempotency key/i);
   });
 });

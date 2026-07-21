@@ -519,6 +519,8 @@ export interface ProofEmailInput {
    * no email / no key).
    */
   emailIdempotencyKey: string;
+  /** Invoice that owns this post-application send; enables the server send gate. */
+  invoiceId: string;
 }
 
 /**
@@ -543,8 +545,8 @@ export function buildProofEmailPayload(input: ProofEmailInput): SendEmailParams 
     html,
     email_type: 'post_application_notice',
     customer_id: input.customerId,
-    resource_type: 'customer',
-    resource_id: input.customerId,
+    resource_type: 'invoice',
+    resource_id: input.invoiceId,
     idempotency_key: input.emailIdempotencyKey,
   };
 }

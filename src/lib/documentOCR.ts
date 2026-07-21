@@ -23,8 +23,6 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorkerUrl;
 export type DocumentType =
   | 'invoice'
   | 'purchase_order'
-  | 'price_list'
-  | 'product_list'
   | 'customer_list'
   | 'quote_list';
 

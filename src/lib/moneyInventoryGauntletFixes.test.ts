@@ -68,6 +68,30 @@ const exactBulkPOReplay = source(
 const bulkPOVendorBinding = source(
   'supabase/migrations/20260717045420_bind_bulk_po_claim_to_vendor.sql',
 );
+const bulkPOReplayContent = source(
+  'supabase/migrations/20260717063445_bind_bulk_po_replay_content.sql',
+);
+const bulkPOAsciiIdentity = source(
+  'supabase/migrations/20260717070900_bind_bulk_po_identity_ascii_fold.sql',
+);
+const blankBulkPOIdentity = source(
+  'supabase/migrations/20260717081856_reject_blank_bulk_po_identity.sql',
+);
+const canonicalBulkPOIdentity = source(
+  'supabase/migrations/20260717085512_canonicalize_bulk_po_identity_whitespace.sql',
+);
+const secureBulkPOFingerprintTrigger = source(
+  'supabase/migrations/20260717092749_secure_bulk_po_fingerprint_trigger.sql',
+);
+const unicodeBulkPOIdentity = source(
+  'supabase/migrations/20260717101619_canonicalize_bulk_po_unicode_identity.sql',
+);
+const serverAuthoritativeBulkPOIdentity = source(
+  'supabase/migrations/20260717110016_make_bulk_po_identity_server_authoritative.sql',
+);
+const serverDerivedBulkPOClaimPayload = source(
+  'supabase/migrations/20260717112906_restore_server_derived_bulk_po_claim_payload.sql',
+);
 const completeDelivery = access.slice(0, access.indexOf('CREATE OR REPLACE FUNCTION public.void_delivery'));
 
 describe('money and inventory gauntlet fixes', () => {
@@ -214,7 +238,14 @@ describe('money and inventory gauntlet fixes', () => {
     expect(bulkImport).not.toContain(
       'if (isImportedBulkPOIntent(pendingIntentsRef.current, intentKey))',
     );
-    expect(bulkImport).toContain('bulk_import_intent_key: documentClaimKey');
+    expect(bulkImport).toContain("bulk_import_intent_key: 'server-derived'");
+    expect(bulkImport).not.toContain('buildBulkPODocumentClaimKey');
+    expect(bulkImport).toContain(
+      'bulk_import_vendor_reference: trimBulkPOIdentityBoundary(po.invoice_number)',
+    );
+    expect(bulkImport).toContain('vendor: trimBulkPOIdentityBoundary(po.vendor_name)');
+    expect(bulkImport).toContain('bulk_import_invoice_date: normalizeBulkPOInvoiceDate(po.invoice_date)');
+    expect(bulkImport).toContain('getPendingBulkPOIntent(pendingIntentsRef.current, intentKey)');
     expect(bulkImport).toContain('savedPO.po_number');
     expect(bulkImport).toContain('refreshNeededRef.current = true');
     expect(bulkImport).toContain('refreshNeededRef.current = false;\n        onSuccess()');
@@ -460,6 +491,210 @@ describe('money and inventory gauntlet fixes', () => {
     expect(saveWrapper.indexOf('WHERE claim.intent_key = v_bulk_intent_key')).toBeLessThan(
       saveWrapper.indexOf('public.next_po_number()'),
     );
+  });
+
+  it('binds exact replays to one vendor document and its reviewed content', () => {
+    const saveWrapper = bulkPOReplayContent.slice(
+      bulkPOReplayContent.indexOf('CREATE OR REPLACE FUNCTION public.save_purchase_order('),
+      bulkPOReplayContent.indexOf('REVOKE ALL ON FUNCTION public.save_purchase_order('),
+    );
+    const cachedReplay = saveWrapper.slice(
+      saveWrapper.indexOf('IF p_idempotency_key IS NOT NULL THEN'),
+      saveWrapper.indexOf('IF v_bulk_intent_key IS NOT NULL THEN\n    PERFORM pg_advisory_xact_lock'),
+    );
+
+    expect(bulkPOReplayContent).toContain('ADD COLUMN content_fingerprint text');
+    expect(bulkPOReplayContent).toContain(
+      'CREATE CONSTRAINT TRIGGER require_bulk_po_content_fingerprint',
+    );
+    expect(bulkPOReplayContent).toContain('DEFERRABLE INITIALLY DEFERRED');
+    expect(saveWrapper).toContain('BULK_PO_INTENT_IDENTITY_MISMATCH');
+    expect(saveWrapper).toContain('BULK_PO_DOCUMENT_CONTENT_CONFLICT');
+    expect(saveWrapper).toContain(
+      'v_existing_intent_key IS DISTINCT FROM v_bulk_intent_key',
+    );
+    expect(cachedReplay.indexOf('v_existing_intent_key IS DISTINCT FROM v_bulk_intent_key'))
+      .toBeLessThan(cachedReplay.indexOf("RETURN v_cached || jsonb_build_object('po_number', v_po_number)"));
+    expect(cachedReplay.indexOf('v_existing_content_fingerprint IS DISTINCT FROM v_content_fingerprint'))
+      .toBeLessThan(cachedReplay.indexOf("RETURN v_cached || jsonb_build_object('po_number', v_po_number)"));
+    expect(saveWrapper.indexOf('WHERE claim.intent_key = v_bulk_intent_key')).toBeLessThan(
+      saveWrapper.indexOf('public.next_po_number()'),
+    );
+    expect(saveWrapper).toContain('SET content_fingerprint = v_content_fingerprint');
+    expect(saveWrapper).toContain('IF NOT (public.is_admin() OR public.is_sales_rep()) THEN');
+    expect(saveWrapper).not.toContain('lower(btrim(v_existing_vendor))');
+    expect(bulkPOReplayContent).toContain('FROM PUBLIC, anon;\nGRANT EXECUTE ON FUNCTION public.save_purchase_order(');
+    expect(bulkPOReplayContent).toContain('TO authenticated, service_role;');
+  });
+
+  it('moves vendor-invoice identity from the reviewed ASCII transition to shared Unicode canonicalization', () => {
+    const saveWrapper = bulkPOAsciiIdentity.slice(
+      bulkPOAsciiIdentity.indexOf('CREATE OR REPLACE FUNCTION public.save_purchase_order('),
+      bulkPOAsciiIdentity.indexOf('REVOKE ALL ON FUNCTION public.save_purchase_order('),
+    );
+    const browserRetry = source('src/lib/bulkPOImportRetry.ts');
+
+    expect(saveWrapper).toContain("'ABCDEFGHIJKLMNOPQRSTUVWXYZ'");
+    expect(saveWrapper).toContain("'abcdefghijklmnopqrstuvwxyz'");
+    expect(saveWrapper).toContain('translate(\n            v_requested_vendor,');
+    expect(saveWrapper).toContain('translate(\n            v_vendor_reference,');
+    expect(saveWrapper).not.toContain('lower(v_requested_vendor)');
+    expect(saveWrapper).not.toContain('lower(v_vendor_reference)');
+    expect(unicodeBulkPOIdentity).toContain(
+      'LOCK TABLE public.purchase_order_import_intents IN SHARE ROW EXCLUSIVE MODE;',
+    );
+    expect(unicodeBulkPOIdentity).toContain(
+      'BULK_PO_UNICODE_IDENTITY_TRANSITION_BLOCKED',
+    );
+    expect(unicodeBulkPOIdentity).toContain(
+      'normalize(\n      lower(normalize(v_requested_vendor, NFKC)),\n      NFKC\n    )',
+    );
+    expect(unicodeBulkPOIdentity).toContain(
+      'normalize(\n      lower(normalize(v_vendor_reference, NFKC)),\n      NFKC\n    )',
+    );
+    expect(unicodeBulkPOIdentity).toContain(
+      "v_vector_hash <> '2fe4b753fbc589fbadd75339ef9af9d8f5d218449439f86254deef769546270c'",
+    );
+    expect(unicodeBulkPOIdentity).toContain(
+      'IF NOT (public.is_admin() OR public.is_sales_rep()) THEN',
+    );
+    expect(unicodeBulkPOIdentity).toContain(
+      'FROM PUBLIC, anon, authenticated, service_role;',
+    );
+    expect(browserRetry).toContain(
+      ".normalize('NFKC')\n    .toLowerCase()\n    .normalize('NFKC')",
+    );
+    expect(browserRetry).toContain('const HASHED_PENDING_KEY_PATTERN = /^h1:[a-f0-9]{16}$/;');
+    expect(browserRetry).toContain('return value.trim();');
+    expect(browserRetry).toContain('BULK_PO_DOCUMENT_CONTENT_CONFLICT');
+    expect(browserRetry).toContain(
+      'In Supplier POs, search this vendor and invoice number, then edit it instead.',
+    );
+  });
+
+  it('makes PostgreSQL the sole durable bulk-PO identity authority', () => {
+    const adversarialSmoke = source(
+      'scripts/smoke/smoke-adversarial-money-inventory-closeout.sql',
+    );
+    expect(serverAuthoritativeBulkPOIdentity).toContain(
+      "v_payload->>'bulk_import_document' = 'true'",
+    );
+    expect(serverAuthoritativeBulkPOIdentity).toContain(
+      'v_bulk_intent_key := v_expected_intent_key;',
+    );
+    expect(serverAuthoritativeBulkPOIdentity).not.toContain(
+      "RAISE EXCEPTION 'BULK_PO_INTENT_IDENTITY_MISMATCH'",
+    );
+    expect(serverAuthoritativeBulkPOIdentity).toContain(
+      "v_payload - 'bulk_import_intent_key' - 'bulk_import_document'",
+    );
+    expect(serverAuthoritativeBulkPOIdentity).toContain(
+      'IF NOT (public.is_admin() OR public.is_sales_rep()) THEN',
+    );
+    expect(serverAuthoritativeBulkPOIdentity).toContain(
+      'FROM PUBLIC, anon, authenticated, service_role;',
+    );
+    expect(adversarialSmoke).not.toContain("'bulk_import_document', true");
+    expect(adversarialSmoke).toContain(
+      "'bulk_import_intent_key', 'browser-value-is-not-authoritative'",
+    );
+    expect(serverDerivedBulkPOClaimPayload).toContain(
+      "v_payload - 'bulk_import_document'",
+    );
+    expect(serverDerivedBulkPOClaimPayload).not.toContain(
+      "v_payload->>'bulk_import_document' = 'true'",
+    );
+    expect(serverDerivedBulkPOClaimPayload).toContain(
+      "'{bulk_import_intent_key}',\n          to_jsonb(v_bulk_intent_key)",
+    );
+    expect(serverDerivedBulkPOClaimPayload).not.toContain(
+      "v_payload - 'bulk_import_intent_key' - 'bulk_import_document'",
+    );
+    expect(serverDerivedBulkPOClaimPayload.indexOf("'{bulk_import_intent_key}'"))
+      .toBeLessThan(
+        serverDerivedBulkPOClaimPayload.indexOf('_save_purchase_order_atomic_number_impl'),
+      );
+  });
+
+  it('rejects invisible-only bulk PO identity at the public RPC boundary', () => {
+    expect(blankBulkPOIdentity).toContain(
+      'RENAME TO _save_purchase_order_ascii_identity_impl',
+    );
+    expect(blankBulkPOIdentity).toContain('chr(160)');
+    expect(blankBulkPOIdentity).toContain('chr(65279)');
+    expect(blankBulkPOIdentity).toContain("RAISE EXCEPTION 'BULK_PO_VENDOR_REQUIRED'");
+    expect(blankBulkPOIdentity).toContain(
+      "RAISE EXCEPTION 'BULK_PO_VENDOR_REFERENCE_REQUIRED'",
+    );
+    expect(blankBulkPOIdentity).toContain(
+      'IF NOT (public.is_admin() OR public.is_sales_rep()) THEN',
+    );
+    expect(blankBulkPOIdentity).toContain(
+      'RETURN public._save_purchase_order_ascii_identity_impl(',
+    );
+    expect(blankBulkPOIdentity).toContain(
+      'FROM PUBLIC, anon, authenticated, service_role;',
+    );
+    expect(blankBulkPOIdentity).toContain('TO authenticated, service_role;');
+  });
+
+  it('canonicalizes the complete ECMAScript boundary-whitespace set before bulk PO identity use', () => {
+    const expectedCodepoints = [
+      9, 10, 11, 12, 13, 32, 160, 5760,
+      8192, 8193, 8194, 8195, 8196, 8197, 8198, 8199, 8200, 8201, 8202,
+      8232, 8233, 8239, 8287, 12288, 65279,
+    ];
+
+    expect(canonicalBulkPOIdentity).toContain(
+      'CREATE OR REPLACE FUNCTION public.save_purchase_order(',
+    );
+    expectedCodepoints.forEach((codepoint) => {
+      expect(canonicalBulkPOIdentity).toContain(`chr(${codepoint})`);
+    });
+    expect(canonicalBulkPOIdentity).toContain(
+      'v_vendor := btrim(v_vendor, v_identity_boundary_chars);',
+    );
+    expect(canonicalBulkPOIdentity).toContain(
+      'v_vendor_reference := btrim(v_vendor_reference, v_identity_boundary_chars);',
+    );
+    expect(canonicalBulkPOIdentity).toContain(
+      "jsonb_set(v_payload, '{vendor}', to_jsonb(v_vendor), true)",
+    );
+    expect(canonicalBulkPOIdentity).toContain("'{bulk_import_vendor_reference}'");
+    expect(canonicalBulkPOIdentity).toContain(
+      'IF NOT (public.is_admin() OR public.is_sales_rep()) THEN',
+    );
+    expect(canonicalBulkPOIdentity).toContain(
+      'RETURN public._save_purchase_order_ascii_identity_impl(',
+    );
+    expect(canonicalBulkPOIdentity).toContain(
+      'FROM PUBLIC, anon;\nGRANT EXECUTE ON FUNCTION public.save_purchase_order(',
+    );
+    expect(canonicalBulkPOIdentity).toContain('TO authenticated, service_role;');
+  });
+
+  it('runs the deferred bulk PO fingerprint guard with its own locked-down privileges', () => {
+    expect(secureBulkPOFingerprintTrigger).toContain(
+      'CREATE OR REPLACE FUNCTION public._require_bulk_po_content_fingerprint()',
+    );
+    expect(secureBulkPOFingerprintTrigger).toContain(
+      'LANGUAGE plpgsql\nSECURITY DEFINER\nSET search_path = public, pg_temp',
+    );
+    expect(secureBulkPOFingerprintTrigger).toContain(
+      'FROM PUBLIC, anon, authenticated, service_role;',
+    );
+    expect(secureBulkPOFingerprintTrigger).toContain(
+      't.tgdeferrable AND t.tginitdeferred',
+    );
+    expect(secureBulkPOFingerprintTrigger).toContain(
+      "has_function_privilege('authenticated', 'public._require_bulk_po_content_fingerprint()', 'EXECUTE')",
+    );
+    const smoke = source('scripts/smoke/smoke-adversarial-money-inventory-closeout.sql');
+    expect(smoke).toContain('SET LOCAL ROLE authenticated;');
+    expect(smoke).toContain(
+      'SET CONSTRAINTS require_bulk_po_content_fingerprint IMMEDIATE;',
+    );
+    expect(smoke).toContain("normalize('[SMOKE] Élan Bulk Intent Vendor', NFKC)");
   });
 
   it('authorizes invoice saves and statements against active customer assignment before replay', () => {

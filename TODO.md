@@ -69,6 +69,12 @@ When an item here ships or is decided, update this file AND `docs/manual/KNOWN_I
 - **Invoice due dates — APPROVED 2026-07-16** — Net 30 default + Net 15/due-on-receipt/
   custom override; unblocks the parked A8 overdue/aging work. Spec:
   `docs/plans/invoice-due-dates-net30-spec-2026-07-16.md`. Codex build + full migration gate.
+- **Per-line-item custom split billing (field-app)** — SPEC COMPLETE, review-hardened (3 advisor
+  passes), **not started; Mason builds in Codex next week.** Default splits from field ownership,
+  override %/price per invoice line, one invoice per customer, unpost reversible, $0 recorded-but-unsent.
+  Spec: `docs/plans/per-line-item-split-billing-spec-2026-07-17.md`. Build §6.1 (baseline real-billing
+  cycle) FIRST, then schema→calculator→RPC behind a feature flag. This is the settled resolution of the
+  split-billing architecture decision (§4).
 - **X1 Stripe ACH pay-now links** — after owner action 3.
 - **X2 EPA backfill Waves 4–5 execution** — after owner action 4.
 - **X3 REI/PHI tracking + dispatch warnings (B4/T8), then dicamba 72-hr auto-draft (B2/T9)**.
@@ -111,11 +117,11 @@ When an item here ships or is decided, update this file AND `docs/manual/KNOWN_I
   prod-ready, never rebuilt (recorded in the structure-fix ledger — archived to
   `docs/archive/2026-summer-closeout/loops/` — and `docs/loops/structure-wave-2-ledger.md`).
   Decide: rebuild test-first or drop.
-- **Split-billing architecture decision** — the app has FOUR parallel split mechanisms
-  (`order_shares`, `order_item_field_allocations`, `field_app_location_shares`,
-  `job_field_shares`) + a dead twin (`order_line_allocations`) and TWO as-applied stores.
-  Flagged (app-wide structure audit, 2026-07-01) as needing a design decision **before the
-  first real billing season** — increasingly urgent now that real deliveries are flowing.
+- ~~**Split-billing architecture decision**~~ — **DECIDED 2026-07-17.** The FOUR parallel split
+  mechanisms are settled: the **field-application-invoice path is the surface** we build on; the
+  order-side engine (`order_shares` / `order_item_field_allocations` / `create_split_invoices_from_order`)
+  is unproven → retire later; `order_line_allocations` (dead twin) drops after its delete-refs go. Chosen
+  direction = **per-line-item custom splits on the field-app path** (see Engineering §2 + spec).
 - **Scheduling-office Phase 4/5 leftovers** (product-units deep-dive, 2026-07-01, never
   confirmed shipped): calendar/day dispatch board with per-applicator lanes + drag-to-reschedule,
   duplicate-job/job templates, forecast weather strip, auto-seed invoice applied-acres.

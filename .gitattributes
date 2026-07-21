@@ -11,3 +11,18 @@
 .agents/**          text eol=lf
 .claude/skills/**   text eol=lf
 .claude/commands/** text eol=lf
+
+# These migrations are already applied live and contain content-bound
+# function-body hashes. Preserve each artifact's reviewed bytes in Git so a
+# clean checkout replays the same pg_proc.prosrc bodies on every operating system.
+supabase/migrations/20260717042803_supplier_pricing_phase1a.sql -text diff whitespace=cr-at-eol
+supabase/migrations/20260717112011_supplier_pricing_zero_cost_guard.sql text eol=lf
+supabase/migrations/20260717171331_restore_legacy_pricing_version_compat.sql text eol=lf
+
+# Generated clean-rebuild baselines are hash-verified release artifacts.
+supabase/baselines/*.sql  text eol=lf
+supabase/baselines/*.json text eol=lf
+# pg_dump preserves legacy CRLF inside pg_proc.prosrc while emitting LF around
+# it. Treat that mixed-byte snapshot as an immutable artifact, not normal text.
+supabase/baselines/*_public_schema.sql -text -diff whitespace=-trailing-space,cr-at-eol
+supabase/baselines/*_public_schema.sql.br -text -diff
