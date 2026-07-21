@@ -2,6 +2,12 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-21 — Split-save unassigned-record fix APPLIED LIVE (migration 20260721180000)
+
+- Applied `20260721180000_fix_split_impl_unassigned_app_service_record` live via the management-API POST channel (exact repo file bytes; ledger row recorded). Fixes the cold-session 55000 crash in `_save_field_app_split_invoice_impl` on saves with no service line (or non-service lines before the first service line) by capturing the service name into `v_svc_name`; re-asserts the impl's least-privilege REVOKE.
+- Gates: migration-review workflow clean (0 blockers, 3 reviewers), write-apply-proofs CLEAN content-bound proof pair, Mason's in-chat apply approval.
+- Proof: full `smoke-per-line-split-billing.sql` chain now returns `SMOKE_PASS_ROLLBACK` end-to-end with the G5 cold service-less save running FIRST and succeeding — the billing area slice is fully green.
+
 ## 2026-07-21 — Test-system overhaul: business-area slices, per-line split smoke, drift reconciliation
 
 - **Area slicing:** every smoke spec now carries `area` tags and `scripts/test-areas.json` + `scripts/run-area.mjs` bundle a vitest slice, the tagged smoke chains, and the matching DB invariant sweeps per business area (billing, inventory, lifecycle, pricing, security, idempotency, regression, drift). `npm run test:billing` etc.; `run-smoke.mjs --area <a>`; `run-sweeps.mjs --only <p1,p2>`.
