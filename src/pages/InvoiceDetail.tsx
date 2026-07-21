@@ -383,17 +383,27 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
     (data as Record<string, unknown>).salesman = salesman;
 
     if (isStale()) return;
-    setInvoice(data as object as Invoice);
     const loadedInvoice = data as Invoice;
     const loadedPaymentTerms = loadedInvoice.payment_terms || '';
     const loadedDueDate = loadedInvoice.due_date || '';
-    const normalizedTerms = loadedPaymentTerms.trim().toLowerCase();
+    let customerPaymentTerms = '';
+    if (!loadedPaymentTerms.trim() && loadedInvoice.customer_id) {
+      const { data: customerTerms } = await supabase
+        .from('customers')
+        .select('payment_terms')
+        .eq('id', loadedInvoice.customer_id)
+        .maybeSingle();
+      customerPaymentTerms = (customerTerms as { payment_terms?: string | null } | null)?.payment_terms?.trim() || '';
+    }
+    setInvoice(data as object as Invoice);
+    const effectivePaymentTerms = loadedPaymentTerms.trim() || customerPaymentTerms;
+    const normalizedTerms = effectivePaymentTerms.toLowerCase();
     const isReceiptAlias = ['due on receipt', 'due upon receipt', 'receipt', 'immediately'].includes(normalizedTerms);
-    const isPreset = ['Net 30', 'Net 15', 'Net 60', 'Due on receipt'].includes(loadedPaymentTerms);
+    const isPreset = ['Net 30', 'Net 15', 'Net 60', 'Due on receipt'].includes(effectivePaymentTerms);
     const termDays = isReceiptAlias
       ? 0
       : (() => {
-          const match = /(\d+)/.exec(loadedPaymentTerms);
+          const match = /(\d+)/.exec(effectivePaymentTerms);
           const parsed = match ? Number(match[1]) : NaN;
           return Number.isFinite(parsed) && parsed >= 1 && parsed <= 365 ? parsed : 30;
         })();
@@ -410,7 +420,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
       setCustomTermsText(loadedPaymentTerms);
       setCustomDueDate(loadedDueDate);
     } else if (isPreset) {
-      setPaymentTerms(loadedPaymentTerms);
+      setPaymentTerms(loadedPaymentTerms ? effectivePaymentTerms : 'Customer default');
       setCustomTermsText('');
       setCustomDueDate(isPostingStamp && isEditableStatus ? '' : loadedDueDate);
     } else if (isReceiptAlias) {
@@ -684,7 +694,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
               : paymentTerms === 'Custom date…'
                 ? customTermsText || 'Custom'
                 : paymentTerms,
-          ...(paymentTerms === 'Custom date…' ? { due_date: customDueDate || null } : {}),
+          due_date: paymentTerms === 'Custom date…' ? customDueDate || null : null,
           purchase_order_ref: invoice.purchase_order_ref || null,
           header_notes: invoice.header_notes || null,
           footer_notes: invoice.footer_notes || null,
