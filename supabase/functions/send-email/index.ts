@@ -189,6 +189,131 @@ Deno.serve(async (req: Request) => {
       );
     }
 
+    // Invoice sends are gated again inside the server boundary. The browser also
+    // checks immediately before calling us for fast feedback, but that check can
+    // be bypassed or race with a status change. Never trust it as the authority.
+    if (email_type === "invoice" && (resource_type !== "invoice" || !resource_id)) {
+      return jsonResponse(
+        { error: "Invoice emails require resource_type='invoice' and resource_id" },
+        400,
+      );
+    }
+    let invoiceGateId = resource_type === "invoice" ? resource_id : null;
+    let invoiceGateCustomerId: string | null = null;
+
+    // Proof notices can originate on JobDetail before billing or from an invoice
+    // after billing. Do not trust the caller to say which. The notification RPC's
+    // server-created idempotency key binds the send to its job/customer; if that
+    // job has invoices, derive the correct child (or sole legacy un-split invoice)
+    // and enforce its disposition. If billing has not happened, no invoice gate
+    // exists yet and the ordinary post-application notice remains sendable.
+    if (email_type === "post_application_notice") {
+      if (!idempotency_key) {
+        return jsonResponse({ error: "Post-application notices require an idempotency key" }, 400);
+      }
+      const { data: notificationRow, error: notificationErr } = await adminClient
+        .from("job_notifications")
+        .select("job_id, customer_id")
+        .eq("idempotency_key", idempotency_key)
+        .maybeSingle();
+      if (notificationErr) {
+        return jsonResponse({ error: `Notification lookup failed: ${notificationErr.message}` }, 500);
+      }
+      if (!notificationRow || notificationRow.customer_id !== customer_id) {
+        return jsonResponse({ error: "Notification key does not match this customer" }, 403);
+      }
+      const { data: jobInvoices, error: jobInvoicesErr } = await adminClient
+        .from("invoices")
+        .select("id, customer_id, status, deleted_at")
+        .eq("job_id", notificationRow.job_id);
+      if (jobInvoicesErr) {
+        return jsonResponse({ error: `Invoice gate lookup failed: ${jobInvoicesErr.message}` }, 500);
+      }
+      const matchingInvoices = (jobInvoices ?? []).filter((invoice) => invoice.customer_id === customer_id);
+      const activeMatchingInvoices = matchingInvoices.filter(
+        (invoice) =>
+          invoice.deleted_at == null &&
+          invoice.status !== "voided" &&
+          invoice.status !== "cancelled",
+      );
+      if (activeMatchingInvoices.length > 1) {
+        return jsonResponse({ error: "Multiple active invoices match this proof-notice recipient" }, 409);
+      }
+      // Prefer the sole active replacement after a void-and-rebill. If none is
+      // active, retain a sole terminal match so the lifecycle gate below blocks
+      // it instead of mistaking the job for an unbilled legacy notification.
+      const derivedInvoice = activeMatchingInvoices[0] ??
+        (matchingInvoices.length === 1 ? matchingInvoices[0] : null) ??
+        (jobInvoices?.length === 1 ? jobInvoices[0] : null);
+      if ((jobInvoices?.length ?? 0) > 0 && !derivedInvoice) {
+        return jsonResponse({ error: "Could not resolve the recipient invoice send gate" }, 409);
+      }
+      if (
+        derivedInvoice &&
+        resource_type === "invoice" &&
+        resource_id !== derivedInvoice.id
+      ) {
+        return jsonResponse({ error: "Invoice resource does not match the server-derived notification invoice" }, 400);
+      }
+      invoiceGateId = derivedInvoice?.id ?? null;
+    }
+
+    if (invoiceGateId) {
+      const primaryInvoiceLookup = await adminClient
+        .from("invoices")
+        .select("id, customer_id, send_disposition, status, deleted_at")
+        .eq("id", invoiceGateId)
+        .maybeSingle();
+      let invoiceRow = primaryInvoiceLookup.data as {
+        id: string;
+        customer_id: string;
+        send_disposition?: string;
+        status: string;
+        deleted_at: string | null;
+      } | null;
+      let invoiceErr = primaryInvoiceLookup.error;
+      const preMigrationMissingDisposition =
+        !!invoiceErr && (invoiceErr.code === "42703" || invoiceErr.code === "PGRST204");
+      if (preMigrationMissingDisposition) {
+        // Compatibility for an edge-first rollout: lifecycle/customer checks still
+        // run, while the later invoice-only gate permits only this exact missing-
+        // column condition. No suppressed split children can exist before schema.
+        const fallbackLookup = await adminClient
+          .from("invoices")
+          .select("id, customer_id, status, deleted_at")
+          .eq("id", invoiceGateId)
+          .maybeSingle();
+        invoiceRow = fallbackLookup.data as typeof invoiceRow;
+        invoiceErr = fallbackLookup.error;
+      }
+      if (invoiceErr) {
+        return jsonResponse({ error: `Invoice send-status lookup failed: ${invoiceErr.message}` }, 500);
+      }
+      if (!invoiceRow) {
+        return jsonResponse({ error: "Invoice not found" }, 404);
+      }
+      if (invoiceRow.deleted_at != null || invoiceRow.status === "voided" || invoiceRow.status === "cancelled") {
+        return jsonResponse({ error: "A voided, cancelled, or deleted invoice must not be emailed" }, 409);
+      }
+      if (email_type === "invoice" && invoiceRow.customer_id !== customer_id) {
+        return jsonResponse({ error: "Invoice customer does not match customer_id" }, 400);
+      }
+      invoiceGateCustomerId = invoiceRow.customer_id;
+      if (
+        email_type === "invoice" &&
+        invoiceRow.send_disposition != null &&
+        invoiceRow.send_disposition !== "normal" &&
+        invoiceRow.send_disposition !== "sendable"
+      ) {
+        return jsonResponse(
+          { error: invoiceRow.send_disposition === "suppressed_zero_total"
+              ? "This $0 split invoice is suppressed and must not be emailed"
+              : "Invoice send status is unavailable" },
+          409,
+        );
+      }
+    }
+
     // 6. Driver per-resource auth (only relevant when role='driver')
     if (role === "driver") {
       if (resource_type !== "delivery" || !resource_id) {
@@ -463,6 +588,89 @@ Deno.serve(async (req: Request) => {
           content: att.content,
         }),
       );
+    }
+
+    // Re-read the authoritative invoice state at the last possible boundary.
+    // The earlier gate protects all pre-send work, but another session can
+    // void/cancel/delete/suppress an invoice while attachments, rate limits,
+    // idempotency, and the write-ahead log are being processed. Fail closed
+    // here before making the irreversible outbound request.
+    if (invoiceGateId) {
+      const finalGateLookup = await adminClient
+        .from("invoices")
+        .select("id, customer_id, send_disposition, status, deleted_at")
+        .eq("id", invoiceGateId)
+        .maybeSingle();
+      let finalInvoiceRow = finalGateLookup.data as {
+        id: string;
+        customer_id: string;
+        send_disposition?: string;
+        status: string;
+        deleted_at: string | null;
+      } | null;
+      let finalGateError = finalGateLookup.error;
+      const finalGatePreMigrationFallback =
+        !!finalGateError && (finalGateError.code === "42703" || finalGateError.code === "PGRST204");
+      if (finalGatePreMigrationFallback) {
+        const fallbackLookup = await adminClient
+          .from("invoices")
+          .select("id, customer_id, status, deleted_at")
+          .eq("id", invoiceGateId)
+          .maybeSingle();
+        finalInvoiceRow = fallbackLookup.data as typeof finalInvoiceRow;
+        finalGateError = fallbackLookup.error;
+      }
+
+      let finalGateRefusal: string | null = null;
+      if (finalGateError) {
+        finalGateRefusal = `Final invoice eligibility lookup failed: ${finalGateError.message}`;
+      } else if (!finalInvoiceRow) {
+        finalGateRefusal = "Invoice no longer exists";
+      } else if (
+        finalInvoiceRow.deleted_at != null ||
+        finalInvoiceRow.status === "voided" ||
+        finalInvoiceRow.status === "cancelled"
+      ) {
+        finalGateRefusal = "Invoice became voided, cancelled, or deleted before send";
+      } else if (finalInvoiceRow.customer_id !== invoiceGateCustomerId) {
+        finalGateRefusal = "Invoice customer changed before send";
+      } else if (
+        email_type === "invoice" &&
+        finalInvoiceRow.send_disposition != null &&
+        finalInvoiceRow.send_disposition !== "normal" &&
+        finalInvoiceRow.send_disposition !== "sendable"
+      ) {
+        finalGateRefusal = "Invoice became suppressed or unavailable before send";
+      }
+
+      if (finalGateRefusal) {
+        const finalLogResult = await adminClient
+          .from("email_log")
+          .update({ status: "failed", error_message: finalGateRefusal })
+          .eq("id", emailLogId)
+          .select("id")
+          .maybeSingle();
+        if (finalLogResult.error || !finalLogResult.data) {
+          await captureEdgeException(
+            new Error(`Final gate refusal log failed: ${finalLogResult.error?.message || "no row returned"}`),
+            {
+              function: "send-email",
+              level: "error",
+              tags: { email_type, phase: "final-gate-log" },
+              extra: { customer_id, email_log_id: emailLogId, final_gate_refusal: finalGateRefusal },
+              user: { id: caller.id },
+            },
+          );
+          return jsonResponse(
+            { error: "Email refused, but the audit log could not be finalized", email_log_id: emailLogId },
+            500,
+          );
+        }
+        return jsonResponse(
+          { error: `${finalGateRefusal}; email send refused`, email_log_id: emailLogId },
+          finalGateError ? 503 : 409,
+        );
+      }
     }
 
     const resendResp = await fetch("https://api.resend.com/emails", {
