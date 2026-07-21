@@ -2,6 +2,10 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-20 — Baseline follow-up migrations preserve ledger history
+
+- Replaced the unsafe generic-SQL-client instruction with an isolated, filtered Supabase CLI workflow that dry-runs the exact post-baseline set and records every applied migration in the target ledger.
+
 ## 2026-07-20 — Sales-rep authorization helper explicitly qualified
 
 - Re-emitted `is_sales_rep()` with the canonical `public, pg_temp` search path, an explicit `public.profiles` reference, and least-privilege EXECUTE grants for authenticated/service roles only. The delivery-signature rollback smoke now proves a forged temporary `profiles` table cannot grant sales-rep access.

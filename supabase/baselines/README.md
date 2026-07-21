@@ -60,9 +60,32 @@ post-baseline list from both version and captured name:
 node scripts/list-post-baseline-migrations.mjs
 ```
 
-Apply exactly the emitted files, in order, with a fail-fast SQL client. Do not
-run an unfiltered `supabase db push` against this baseline. Then regenerate
-`.claude/schema-registry.json` from that database and run the normal schema/live
+Do not execute those files directly with `psql`: that changes the schema without
+recording the migrations in `supabase_migrations.schema_migrations`. Instead,
+copy only the emitted files into an isolated Supabase CLI workdir, inspect the
+ledger-aware dry run, and then push that exact filtered set:
+
+```bash
+post_baseline_dir="$(mktemp -d)"
+supabase --workdir "$post_baseline_dir" init
+mkdir -p "$post_baseline_dir/supabase/migrations"
+while IFS= read -r migration; do
+  cp "$migration" "$post_baseline_dir/supabase/migrations/"
+done < <(node scripts/list-post-baseline-migrations.mjs)
+
+supabase --workdir "$post_baseline_dir" db push \
+  --db-url "$DATABASE_URL" --include-all --dry-run
+supabase --workdir "$post_baseline_dir" db push \
+  --db-url "$DATABASE_URL" --include-all
+rm -rf "$post_baseline_dir"
+```
+
+The temporary workdir is mandatory: never run an unfiltered `supabase db push`
+from the CRX repository against a restored baseline. The CLI push both applies
+each migration and records its filename version/name in the target ledger. If
+the dry run lists anything other than the selector output, stop. After the push,
+inspect `supabase migration list --db-url "$DATABASE_URL"`, regenerate
+`.claude/schema-registry.json` from that database, and run the normal schema/live
 tests and DB invariant sweeps.
 
 ## Data recovery
