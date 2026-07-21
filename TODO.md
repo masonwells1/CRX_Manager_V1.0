@@ -66,9 +66,10 @@ When an item here ships or is decided, update this file AND `docs/manual/KNOWN_I
 - **Dead-structure retirement batch (T4)** — now only the `setup-blend-tickets-storage`
   edge fn (still deployed v18 ACTIVE, zero callers — needs an approved retirement session).
   The #40 RPC + other dead structures are **KEEP per Mason 2026-07-16** (planned features).
-- **Invoice due dates — APPROVED 2026-07-16** — Net 30 default + Net 15/due-on-receipt/
-  custom override; unblocks the parked A8 overdue/aging work. Spec:
-  `docs/plans/invoice-due-dates-net30-spec-2026-07-16.md`. Codex build + full migration gate.
+- ~~**Invoice due dates — APPROVED 2026-07-16**~~ — **SHIPPED 2026-07-21** (PR #195):
+  investigation showed the A8 stamping/aging machinery was already live; shipped the two real
+  gaps — due-on-receipt parser support (migration `20260721191914`, applied live) + the
+  Net 30/Net 15/Due on receipt/Custom terms picker on FieldApplicationInvoice.
 - **Per-line-item custom split billing (field-app)** — SPEC COMPLETE, review-hardened (3 advisor
   passes), **not started; Mason builds in Codex next week.** Default splits from field ownership,
   override %/price per invoice line, one invoice per customer, unpost reversible, $0 recorded-but-unsent.
