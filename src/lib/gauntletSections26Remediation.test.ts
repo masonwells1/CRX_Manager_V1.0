@@ -10,6 +10,29 @@ const source = (...parts: string[]) =>
   readFileSync(join(root, ...parts), 'utf8').replace(/\r\n/g, '\n');
 
 describe('gauntlet sections 2-6 CodeRabbit closeout', () => {
+  it('advances transaction-review balances in stable allocation-row order', () => {
+    const sql = migration('20260721045536_fix_transaction_review_running_balance.sql');
+    expect(sql).toContain("md5(v_source) <> 'ca016ab0f94d0d809efd3be1094a3a84'");
+    expect(sql).toContain('i.id AS source_row_id');
+    expect(sql).toContain('ila.id');
+    expect(sql).toContain('pa.id');
+    expect(sql).toContain('w.id');
+    expect(sql).toContain(
+      'ORDER BY t.tx_date, t.tx_type, t.ref_num, t.source_row_id\n' +
+        '           ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW',
+    );
+    expect(sql).toContain(
+      'ORDER BY t.tx_date, t.tx_type, t.ref_num, t.source_row_id;\nEND;',
+    );
+    expect(sql).toContain('PERFORM public.require_admin()');
+    expect(sql).toContain('SECURITY DEFINER');
+    expect(sql).toContain('SET search_path = public, pg_temp');
+    expect(sql).toContain(
+      'REVOKE ALL ON FUNCTION public.get_customer_transaction_review(uuid, date, date)',
+    );
+    expect(sql).toContain('TO authenticated, service_role');
+  });
+
   it('serializes lifecycle invoice retries before any money mutation', () => {
     const helperSql = migration('20260714230000_gauntlet_core_guards.sql');
     const helper = helperSql.slice(

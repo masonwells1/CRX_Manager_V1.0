@@ -8,6 +8,7 @@ DECLARE
   v_admin uuid := gen_random_uuid();
   v_customer uuid;
   v_other_customer uuid;
+  v_review_customer uuid;
   v_product uuid;
   v_other_product uuid;
   v_order uuid;
@@ -49,13 +50,26 @@ DECLARE
   v_replay jsonb;
   v_invoice_id uuid;
   v_surviving_invoice uuid;
+  v_review_invoice_a uuid;
+  v_review_invoice_b uuid;
+  v_review_invoice_c uuid;
+  v_review_set_a uuid;
+  v_review_set_b uuid;
   v_terminal_invoice_item uuid;
   v_commission uuid;
   v_commission_payment uuid;
   v_err text;
   v_count integer;
+  v_review_payment_count integer;
   v_numeric numeric;
   v_numeric_2 numeric;
+  v_review_debits bigint;
+  v_review_credits bigint;
+  v_review_min_balance bigint;
+  v_review_ref text := 'E2E-LIFE-REVIEW-' || v_suffix;
+  v_expected_review jsonb;
+  v_actual_review jsonb;
+  v_repeat_review jsonb;
   v_can_bypass_triggers boolean := COALESCE((
     SELECT r.rolsuper FROM pg_roles r WHERE r.rolname = current_user
   ), false);
@@ -1179,6 +1193,149 @@ BEGIN
    WHERE transaction_type = 'Write-Off';
   IF v_count <> 0 THEN
     RAISE EXCEPTION 'SMOKE_FAIL: reversed write-off leaked into transaction review';
+  END IF;
+
+  -- A transaction review must advance once per allocation row, even when one
+  -- multi-invoice payment and a second payment share the same date/reference.
+  -- The hidden invoice_line_allocations.id tie-breaker defines the expected
+  -- order; amounts are unique so the public rows can be matched without
+  -- exposing that internal identifier.
+  INSERT INTO public.customers (farm_name)
+  VALUES ('[E2E] Transaction Review Farm ' || v_suffix)
+  RETURNING id INTO v_review_customer;
+
+  INSERT INTO public.invoices (
+    invoice_number, customer_id, invoice_type, invoice_date,
+    total_amount_cents, created_by
+  ) VALUES (
+    'E2E-LIFE-REV-A-' || v_suffix, v_review_customer, 'chemical_sale',
+    current_date, 100, v_admin
+  ) RETURNING id INTO v_review_invoice_a;
+  INSERT INTO public.invoices (
+    invoice_number, customer_id, invoice_type, invoice_date,
+    total_amount_cents, created_by
+  ) VALUES (
+    'E2E-LIFE-REV-B-' || v_suffix, v_review_customer, 'chemical_sale',
+    current_date, 200, v_admin
+  ) RETURNING id INTO v_review_invoice_b;
+  INSERT INTO public.invoices (
+    invoice_number, customer_id, invoice_type, invoice_date,
+    total_amount_cents, created_by
+  ) VALUES (
+    'E2E-LIFE-REV-C-' || v_suffix, v_review_customer, 'chemical_sale',
+    current_date, 300, v_admin
+  ) RETURNING id INTO v_review_invoice_c;
+
+  UPDATE public.invoices
+     SET status = 'posted'
+   WHERE id IN (v_review_invoice_a, v_review_invoice_b, v_review_invoice_c);
+
+  v_result := public.allocate_payment(
+    p_customer_id := v_review_customer,
+    p_total_cents := 300,
+    p_payment_method := 'check',
+    p_reference_number := v_review_ref,
+    p_check_number := NULL,
+    p_payment_date := current_date,
+    p_notes := '[E2E] deterministic transaction review set A',
+    p_allocations := jsonb_build_array(
+      jsonb_build_object('invoice_id', v_review_invoice_a, 'amount_cents', 100),
+      jsonb_build_object('invoice_id', v_review_invoice_b, 'amount_cents', 200)
+    ),
+    p_performed_by := v_admin,
+    p_idempotency_key := 'e2e-life-review-a-' || v_suffix
+  );
+  v_review_set_a := (v_result->>'allocation_set_id')::uuid;
+
+  v_result := public.allocate_payment(
+    p_customer_id := v_review_customer,
+    p_total_cents := 300,
+    p_payment_method := 'check',
+    p_reference_number := v_review_ref,
+    p_check_number := NULL,
+    p_payment_date := current_date,
+    p_notes := '[E2E] deterministic transaction review set B',
+    p_allocations := jsonb_build_array(
+      jsonb_build_object('invoice_id', v_review_invoice_c, 'amount_cents', 300)
+    ),
+    p_performed_by := v_admin,
+    p_idempotency_key := 'e2e-life-review-b-' || v_suffix
+  );
+  v_review_set_b := (v_result->>'allocation_set_id')::uuid;
+
+  SELECT jsonb_agg(
+           jsonb_build_object(
+             'credit_cents', expected.amount_cents,
+             'running_balance_cents', expected.running_balance_cents
+           ) ORDER BY expected.amount_cents
+         )
+    INTO v_expected_review
+    FROM (
+      SELECT ila.amount_cents,
+             600::bigint - SUM(ila.amount_cents) OVER (
+               ORDER BY ila.id
+               ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+             ) AS running_balance_cents
+        FROM public.invoice_line_allocations ila
+       WHERE ila.allocation_set_id IN (v_review_set_a, v_review_set_b)
+    ) expected;
+
+  SELECT jsonb_agg(
+           jsonb_build_object(
+             'credit_cents', actual.credit_cents,
+             'running_balance_cents', actual.running_balance_cents
+           ) ORDER BY actual.credit_cents
+         )
+    INTO v_actual_review
+    FROM public.get_customer_transaction_review(
+      v_review_customer, current_date, current_date
+    ) actual
+   WHERE actual.transaction_type = 'Payment'
+     AND actual.reference_number = v_review_ref;
+
+  SELECT jsonb_agg(
+           jsonb_build_object(
+             'credit_cents', repeated.credit_cents,
+             'running_balance_cents', repeated.running_balance_cents
+           ) ORDER BY repeated.credit_cents
+         )
+    INTO v_repeat_review
+    FROM public.get_customer_transaction_review(
+      v_review_customer, current_date, current_date
+    ) repeated
+   WHERE repeated.transaction_type = 'Payment'
+     AND repeated.reference_number = v_review_ref;
+
+  SELECT count(*) FILTER (WHERE r.transaction_type = 'Payment'),
+         COALESCE(SUM(r.debit_cents), 0),
+         COALESCE(SUM(r.credit_cents), 0),
+         MIN(r.running_balance_cents)
+    INTO v_review_payment_count, v_review_debits, v_review_credits, v_review_min_balance
+    FROM public.get_customer_transaction_review(
+      v_review_customer, current_date, current_date
+    ) r;
+
+  IF v_expected_review IS DISTINCT FROM v_actual_review
+     OR v_actual_review IS DISTINCT FROM v_repeat_review
+     OR v_review_payment_count <> 3
+     OR v_review_debits <> 600
+     OR v_review_credits <> 600
+     OR v_review_min_balance <> 0 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: transaction review row balance/order drifted: expected=%, actual=%, repeat=%, payment_rows=%, debits=%, credits=%, min_balance=%',
+      v_expected_review, v_actual_review, v_repeat_review,
+      v_review_payment_count, v_review_debits, v_review_credits, v_review_min_balance;
+  END IF;
+
+  IF has_function_privilege(
+       'anon', 'public.get_customer_transaction_review(uuid,date,date)', 'EXECUTE'
+     )
+     OR NOT has_function_privilege(
+       'authenticated', 'public.get_customer_transaction_review(uuid,date,date)', 'EXECUTE'
+     )
+     OR NOT has_function_privilege(
+       'service_role', 'public.get_customer_transaction_review(uuid,date,date)', 'EXECUTE'
+     ) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: transaction review execute grants drifted';
   END IF;
 
   BEGIN
