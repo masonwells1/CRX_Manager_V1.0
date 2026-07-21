@@ -2041,6 +2041,16 @@ const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
   // contract inside the same transaction; it is absent from generated client
   // types by design but still must remain fail-closed in the migration scan.
   '_save_purchase_order_ascii_identity_impl',
+  // Per-line split billing (parked migration 20260720233000_per_line_split_billing_save_rpc.sql,
+  // NOT applied live; feature flag OFF). Both declare `p_idempotency_key text` and use the
+  // canonical two-layer replay pattern: the PUBLIC wrapper save_field_app_split_invoice does
+  // check_idempotency + payload-hash conflict; the internal writer _save_field_app_split_invoice_impl
+  // records via save_idempotency (direct EXECUTE revoked). Neither is in the generated client
+  // types yet (types are regenerated only after the migration applies), so they are classified here
+  // rather than in MUTATING_RPCS_WITH_IDEMPOTENCY. Move save_field_app_split_invoice to that list
+  // once the migration is live and src/types/supabase.ts is regenerated.
+  'save_field_app_split_invoice',
+  '_save_field_app_split_invoice_impl',
   // Supplier Pricing Phase 1b is intentionally parked pending a separate,
   // reviewed apply session. Keep these mutators in the migration-only bucket
   // until the migration is live and generated client types are refreshed.
@@ -2063,6 +2073,8 @@ const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
  */
 const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
   _insert_commissions_for_job: 'internal helper; caller owns idempotency and direct EXECUTE is revoked',
+  snapshot_invoice_line_shares_on_post:
+    'RETURNS trigger (verified live 2026-07-21); per-line split-billing post-time snapshot trigger from 20260720233000, not client-callable',
   _insert_commissions_for_order: 'internal helper; caller owns idempotency and direct EXECUTE is revoked',
   _reverse_credit_memo_application: 'internal helper called only by idempotent credit-memo reversal RPCs',
   _sync_job_holds: 'internal convergent hold-sync helper; direct client EXECUTE is revoked',

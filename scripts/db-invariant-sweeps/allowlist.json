@@ -346,7 +346,7 @@
     {
       "predicate": "ungated-secdef-mutators",
       "violation_key": "save_invoice(p_invoice jsonb, p_items jsonb, p_idempotency_key text)",
-      "justification": "Verified live 2026-07-20 as a transitive-gate false positive. The authenticated SECURITY DEFINER wrapper delegates in-transaction to _save_invoice_split_provenance_impl_20260719, which binds auth.uid(), requires an active admin or sales_rep profile, enforces customer and salesman scope for sales reps, and only then calls the private scoped implementation. The delegated helper is not executable by authenticated, so callers cannot bypass these checks.",
+      "justification": "Verified live 2026-07-20 as a transitive-gate false positive. The authenticated SECURITY DEFINER provenance wrapper's only pre-delegation DML is a transaction-local mutation claim; it delegates in the same transaction to `_save_invoice_split_provenance_impl_20260719`, which binds `auth.uid()`, requires an active admin or sales_rep, enforces customer and salesman scope for sales reps, and only then reaches the canonical writer. Any rejection aborts and rolls the claim back, and the private helper is not executable by Data API roles.",
       "dated": "2026-07-20"
     },
     {

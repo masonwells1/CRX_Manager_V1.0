@@ -5,9 +5,9 @@
 
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { autopilotDecision, flagActive, intentFresh, overnightGateDecision } from "./autopilot-lib.mjs";
 
@@ -92,6 +92,15 @@ ok(flagActive("").active === false, "empty flag inactive");
 // whether real autopilot is armed. (This is why commits used to fail while armed.)
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const hookPath = path.join(__dirname, "unattended-autopilot.mjs");
+const resolvedTempRoot = `${path.resolve(tmpdir())}${path.sep}`;
+
+function safeTempDir(testDir) {
+  const resolvedTestDir = path.resolve(testDir);
+  if (!resolvedTestDir.startsWith(resolvedTempRoot)) {
+    throw new Error(`Refusing to use non-temp test directory: ${resolvedTestDir}`);
+  }
+  return resolvedTestDir;
+}
 
 function runHook(projectDir) {
   return spawnSync(process.execPath, [hookPath], {
@@ -103,17 +112,19 @@ function runHook(projectDir) {
 
 // (1) flag ABSENT → hook is inert (emits nothing, defers to normal flow).
 const noFlagDir = mkdtempSync(path.join(tmpdir(), "autopilot-noflag-"));
+const resolvedNoFlagDir = safeTempDir(noFlagDir);
 try {
   const r = runHook(noFlagDir);
   eq(r.status, 0, "hook exits 0 when flag absent");
   eq(r.stdout.trim(), "", "hook emits NOTHING when flag absent (off by default — defers to normal flow)");
 } finally {
-  rmSync(noFlagDir, { recursive: true, force: true });
+  rmSync(resolvedNoFlagDir, { recursive: true, force: true });
 }
 
 // (2) flag PRESENT + active → hook DENIES a deny-set command (rm -rf /). This is
 // the counterpart proof: the same isolation lets us assert the armed behavior too.
 const armedDir = mkdtempSync(path.join(tmpdir(), "autopilot-armed-"));
+const resolvedArmedDir = safeTempDir(armedDir);
 try {
   const armedStateDir = path.join(armedDir, ".claude", "session-state");
   mkdirSync(armedStateDir, { recursive: true });
@@ -125,7 +136,7 @@ try {
   eq(r.status, 0, "hook exits 0 when armed");
   ok(/"permissionDecision":\s*"deny"/.test(r.stdout), "hook DENIES a deny-set command (rm -rf /) when armed");
 } finally {
-  rmSync(armedDir, { recursive: true, force: true });
+  rmSync(resolvedArmedDir, { recursive: true, force: true });
 }
 
 console.log(`autopilot-lib: ${pass} assertions passed`);

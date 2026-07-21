@@ -1,4 +1,4 @@
-# Pages & Routes Reference (78 pages, 85 routes)
+# Pages & Routes Reference (79 pages, 87 routes)
 
 > Counts verified 2026-07-13 against `src/App.tsx` (`lazy(` call count = pages) and this table's own row count (routes); `npm run check:docs` (`scripts/check-doc-drift.mjs`) enforces both numbers stay in sync with the codebase on every run.
 
@@ -81,6 +81,8 @@
 | `/receiving-hub` | ReceivingHub | Admin/sales. Open PO lines grouped by product across vendors (ordered/received/remaining + arrival) + a commitment snapshot (On Floor/Hold/Order/Spoken-For/Net) from `get_inventory_position`. Inline full-receipt "Receive" (reuses `receive_po_items`). (UI overhaul v2) |
 | `/accounts-receivable` | AccountsReceivable | **Admin-only.** One AR workspace: tabs for Aging / Payment History / Prepayments / Customer Ledger + a Net Money Position card (total owed via `get_ar_aging` minus unused `prepay_credits`). `/payments` (PaymentAllocation) stays SEPARATE (admin+sales). (UI overhaul v2) |
 | `/field-invoices` | FieldInvoices | Admin/sales. Field-application invoices area (as-applied billing); list + entry into the field-app invoice editor. |
+| `/split-billing/new` | FieldAppSplitInvoiceEditor | Per-line split-billing editor (flag-gated: per_line_split_billing_enabled; renders a not-enabled notice when OFF). Roles: admin/sales_rep. Added 2026-07-20 (inherited from main merge) |
+| `/split-billing/:id` | FieldAppSplitInvoiceEditor | Edit an existing per-line split-billing set (same flag gate) |
 | `/field-invoices/unposted` | FieldInvoicesUnposted | Admin/sales. Field-app parity #22 — dedicated "Unposted" working tray for field invoices (static path, precedes `:id`). |
 | `/field-invoices/posted` | FieldInvoicesPosted | Admin/sales. Field-app parity #23 — dedicated "Posted" committed field-invoice list (static path, precedes `:id`). |
 | `/field-invoices/summary` | CustomerInvoiceSummary | Admin/sales. Field-app parity #34 — combined Customer Invoice Summary (unposted chem sales + unposted field-app). |

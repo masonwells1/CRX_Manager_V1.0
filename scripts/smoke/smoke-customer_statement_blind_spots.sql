@@ -46,8 +46,7 @@
 -- Live-state preconditions (checked up front, raise SMOKE_SETUP if unmet):
 --   * at least one active admin profile;
 --   * no CLOSED accounting period overlapping [CURRENT_DATE-7, CURRENT_DATE]
---     (record_invoice_payment gates on now()::date, allocate_payment on its
---     p_payment_date = d-2).
+--     (allocate_payment gates on its p_payment_date = d-2).
 --
 -- DRY-VALIDATION (the 42703 discipline): every reference below was validated
 -- against the LIVE catalog 2026-06-10 (pg_get_functiondef + information_schema
@@ -180,7 +179,7 @@ BEGIN
           50000, v_d6, v_admin)
   RETURNING id INTO v_inv_a;
 
-  -- Invoice B: order-linked; will be PAID via the LEGACY path
+  -- Invoice B: order-linked; marked PAID beside a historical legacy-row fixture
   INSERT INTO invoices (invoice_number, customer_id, order_id, invoice_type,
                         total_amount_cents, invoice_date, created_by)
   VALUES ('SMK-CSB-B-' || v_suffix, v_customer_id, v_order_id, 'chemical_sale',

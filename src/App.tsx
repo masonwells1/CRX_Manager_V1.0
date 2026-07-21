@@ -91,6 +91,10 @@ const Vendors = lazy(() => import('./pages/Vendors'));
 const SalesReports = lazy(() => import('./pages/SalesReports'));
 const GettingStarted = lazy(() => import('./pages/GettingStarted'));
 const FieldApplicationInvoice = lazy(() => import('./pages/FieldApplicationInvoice'));
+// Per-line split-billing editor — flag-gated (per_line_split_billing_enabled). The page
+// self-gates on the flag (renders a "not enabled" notice when OFF), so the route is safe
+// even by hand-typed URL; the nav link is only shown when the flag is ON.
+const FieldAppSplitInvoiceEditor = lazy(() => import('./pages/FieldAppSplitInvoiceEditor'));
 const ToShip = lazy(() => import('./pages/ToShip'));
 // Design-system gallery — available on dev + preview hosts, hidden on the production domain.
 const DesignPreview = lazy(() => import('./pages/DesignPreview'));
@@ -200,7 +204,6 @@ const router = createBrowserRouter([
 
           // Admin + Sales Rep
           { path: 'products', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><Products /></ProtectedRoute> },
-          { path: 'supplier-pricing', element: <ProtectedRoute allowedRoles={['admin']}><SupplierPricing /></ProtectedRoute> },
           { path: 'products/:id', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><ProductDetail /></ProtectedRoute> },
           { path: 'customers', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><Customers /></ProtectedRoute> },
           { path: 'customers/:id', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><CustomerDetail /></ProtectedRoute> },
@@ -221,6 +224,10 @@ const router = createBrowserRouter([
           { path: 'invoices/field-app/:id', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><FieldApplicationInvoice /></ProtectedRoute> },
           { path: 'invoices/:id', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><InvoiceDetail routeArea="chemical" /></ProtectedRoute> },
           { path: 'field-invoices', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><FieldInvoices /></ProtectedRoute> },
+          // Per-line split-billing editor (flag-gated; page self-gates on per_line_split_billing_enabled).
+          { path: 'split-billing/new', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><FieldAppSplitInvoiceEditor /></ProtectedRoute> },
+          // #H save-now/post-later: reopen a saved billing set (read-only review + Post).
+          { path: 'split-billing/:id', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><FieldAppSplitInvoiceEditor /></ProtectedRoute> },
           // Kept for bookmarks; all workflow views now live as query-addressable tabs.
           { path: 'field-invoices/unposted', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><Navigate to="/field-invoices?tab=drafts" replace /></ProtectedRoute> },
           { path: 'field-invoices/posted', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><Navigate to="/field-invoices?tab=posted" replace /></ProtectedRoute> },
@@ -280,6 +287,7 @@ const router = createBrowserRouter([
           { path: 'field', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep', 'applicator']}><FieldView /></ProtectedRoute> },
 
           // Admin only
+          { path: 'supplier-pricing', element: <ProtectedRoute allowedRoles={['admin']}><SupplierPricing /></ProtectedRoute> },
           { path: 'financial-dashboard', element: <ProtectedRoute allowedRoles={['admin']}><FinancialDashboard /></ProtectedRoute> },
           { path: 'month-end', element: <ProtectedRoute allowedRoles={['admin']}><MonthEndClose /></ProtectedRoute> },
           { path: 'integrity', element: <ProtectedRoute allowedRoles={['admin']}><Integrity /></ProtectedRoute> },
