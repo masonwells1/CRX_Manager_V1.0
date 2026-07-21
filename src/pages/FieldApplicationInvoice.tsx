@@ -446,24 +446,50 @@ export default function FieldApplicationInvoice() {
       setStoredPerLineOptionsReady(true);
       return;
     }
-    if (!invoiceGroupId) {
-      setStoredPerLineOptionsReady(false);
-      return;
-    }
-
     let cancelled = false;
     setStoredPerLineOptionsReady(false);
     (async () => {
-      const { data: setRow, error: setError } = await supabase
-        .from('field_app_billing_sets' as 'invoices')
-        .select('id')
-        .eq('invoice_group_id', invoiceGroupId)
-        .maybeSingle();
-      if (setError || !setRow) throw setError ?? new Error('Per-line billing set not found');
+      let billingSetId: string | null = null;
+      if (invoiceGroupId) {
+        const { data: setRow, error: setError } = await supabase
+          .from('field_app_billing_sets' as 'invoices')
+          .select('id')
+          .eq('invoice_group_id', invoiceGroupId)
+          .maybeSingle();
+        if (setError || !setRow) throw setError ?? new Error('Per-line billing set not found');
+        billingSetId = (setRow as unknown as { id: string }).id;
+      } else {
+        const { data: itemRows, error: itemError } = await supabase
+          .from('invoice_items')
+          .select('id')
+          .eq('invoice_id', id);
+        if (itemError) throw itemError;
+        const itemIds = (itemRows ?? []).map((item) => item.id);
+        if (itemIds.length === 0) throw new Error('Per-line invoice has no items');
+        const { data: linkedShares, error: linkedShareError } = await supabase
+          .from('invoice_line_shares' as 'invoices')
+          .select('billing_line_id')
+          .in('invoice_item_id' as 'id', itemIds);
+        if (linkedShareError) throw linkedShareError;
+        const billingLineIds = Array.from(new Set(
+          ((linkedShares ?? []) as unknown as Array<{ billing_line_id: string }>).map((share) => share.billing_line_id),
+        ));
+        if (billingLineIds.length === 0) throw new Error('Per-line invoice has no linked shares');
+        const { data: parentRows, error: parentError } = await supabase
+          .from('field_app_billing_lines' as 'invoices')
+          .select('billing_set_id')
+          .in('id', billingLineIds);
+        if (parentError) throw parentError;
+        const parentIds = Array.from(new Set(
+          ((parentRows ?? []) as unknown as Array<{ billing_set_id: string }>).map((line) => line.billing_set_id),
+        ));
+        if (parentIds.length !== 1) throw new Error('Per-line invoice billing set is ambiguous');
+        billingSetId = parentIds[0];
+      }
       const { data: lineRows, error: lineError } = await supabase
         .from('field_app_billing_lines' as 'invoices')
         .select('id,line_kind,source_job_chemical_id,application_service_id,description,source_amount_cents,sort_order')
-        .eq('billing_set_id' as 'id', (setRow as unknown as { id: string }).id);
+        .eq('billing_set_id' as 'id', billingSetId);
       if (lineError) throw lineError;
       const lines = (lineRows ?? []) as unknown as Array<{ id: string; line_kind: 'chemical' | 'service' | 'flat_fee'; source_job_chemical_id: string | null; application_service_id: string | null; description: string; source_amount_cents: number | null; sort_order: number }>;
       if (lines.length === 0) throw new Error('Per-line billing set has no source lines');
@@ -1087,6 +1113,17 @@ export default function FieldApplicationInvoice() {
       .order('sort_order');
 
     if (items) {
+      const { data: jobChemicalRows, error: jobChemicalError } = srcJobId
+        ? await supabase
+            .from('job_chemicals')
+            .select('id,product_id,sort_order')
+            .eq('job_id', srcJobId)
+            .order('sort_order')
+            .order('id')
+        : { data: [], error: null };
+      if (jobChemicalError) throw jobChemicalError;
+      const jobChemicals = (jobChemicalRows ?? []) as Array<{ id: string; product_id: string; sort_order: number | null }>;
+      const unusedJobChemicalIds = new Set(jobChemicals.map((row) => row.id));
       // §5 (Codex P2): invoice_items does NOT carry label data, so hydrate the per-line
       // label fields (max_label_rate / unit / rei / phi) from products for the lines that
       // have a product_id. Without this, a REOPENED over-label invoice would read as
@@ -1114,8 +1151,16 @@ export default function FieldApplicationInvoice() {
         (items as Array<Record<string, unknown>>).map((it, idx) => {
           const pid = it.product_id as string | null;
           const label = pid ? (labelByProduct.get(pid) ?? null) : null;
+          const itemSortOrder = (it.sort_order as number | null) ?? idx;
+          const sourceJobChemical = jobChemicals.find((row) =>
+            unusedJobChemicalIds.has(row.id) &&
+            row.product_id === pid &&
+            (row.sort_order ?? 0) === itemSortOrder,
+          ) ?? jobChemicals.find((row) => unusedJobChemicalIds.has(row.id) && row.product_id === pid);
+          if (sourceJobChemical) unusedJobChemicalIds.delete(sourceJobChemical.id);
           return {
             id: (it.id as string) || `chem_${idx}`,
+            job_chemical_id: sourceJobChemical?.id ?? null,
             product_id: it.product_id as string | null,
             product_name: (it.description as string) || '',
             rate_per_acre: it.rate_per_acre as number | null,
@@ -1387,6 +1432,10 @@ export default function FieldApplicationInvoice() {
     }
     const previewModeBlocker = perLineBillingModeBlocker(perLineSplitEnabled, growerShareFieldNames, jobId, growerShareCheckReady);
     if (previewModeBlocker) { toast('error', previewModeBlocker); return; }
+    if (perLineSplitEnabled && chemicals.some((chemical) => !chemical.job_chemical_id)) {
+      toast('error', 'The source job chemicals could not be verified. Reload before previewing per-line billing.');
+      return;
+    }
     if (perLineSplitEnabled && !storedPerLineOptionsReady) { toast('error', 'Stored per-line overrides could not be verified. Reload before continuing.'); return; }
     setPreviewing(true);
     try {
@@ -1402,6 +1451,7 @@ export default function FieldApplicationInvoice() {
           sort_order: idx,
         })),
         p_chemicals: chemicals.map((c, idx) => ({
+          ...(perLineSplitEnabled ? { job_chemical_id: c.job_chemical_id } : {}),
           product_id: c.product_id,
           description: c.product_name,
           quantity: c.quantity,
@@ -1516,6 +1566,10 @@ export default function FieldApplicationInvoice() {
     }
     const saveModeBlocker = perLineBillingModeBlocker(perLineSplitEnabled, growerShareFieldNames, jobId, growerShareCheckReady);
     if (saveModeBlocker) { toast('error', saveModeBlocker); return; }
+    if (perLineSplitEnabled && chemicals.some((chemical) => !chemical.job_chemical_id)) {
+      toast('error', 'The source job chemicals could not be verified. Reload before saving per-line billing.');
+      return;
+    }
     if (perLineSplitEnabled && !storedPerLineOptionsReady) { toast('error', 'Stored per-line overrides could not be verified. Reload before continuing.'); return; }
     if (perLineSplitEnabled && perLineOptionsDirty) {
       toast('error', 'Preview the updated per-line splits and prices before saving.');
@@ -1572,6 +1626,7 @@ export default function FieldApplicationInvoice() {
         // #25: warehouse / vendor / epa_registration ride along so the server persists
         // them on invoice_items (informational ChemMan per-line fields; never priced).
         p_chemicals: chemicals.map((c, idx) => ({
+          ...(perLineSplitEnabled ? { job_chemical_id: c.job_chemical_id } : {}),
           product_id: c.product_id,
           description: c.product_name,
           quantity: c.quantity,
