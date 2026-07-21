@@ -170,7 +170,7 @@ describe('OrderDetail', () => {
     expect(screen.queryByText('Change Status')).not.toBeInTheDocument();
   });
 
-  it('does not log or notify a second cancellation for an already-cancelled RPC replay', async () => {
+  it('refreshes without duplicate side effects when cancellation returns no new-success marker', async () => {
     let orderReads = 0;
     const orderData = {
       id: 'ord-123', order_number: 'ORD-0099', status: 'confirmed', customer_id: 'cust-1',
@@ -189,8 +189,8 @@ describe('OrderDetail', () => {
       rpcName === 'cancel_order'
         ? {
             data: {
-              success: false,
-              status: 'already_cancelled',
+              mode: 'full_cancel',
+              status: 'cancelled',
               holds_released: 0,
               commissions_cancelled: 0,
               draft_invoices_cancelled: 0,
