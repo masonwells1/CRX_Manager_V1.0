@@ -3,6 +3,57 @@
 All significant development milestones, in reverse chronological order.
 
 <<<<<<< HEAD
+## 2026-07-21 — Weekly cleanup-sprint check (automated routine, 2026-07-17): queried live DB — negatives=18 (+1, later identified as expected U9 warn-not-block delivery per Codex P2), over_received=15, unbilled=59. Progress row added to docs/reports/cleanup-sprint-progress.md; CHANGELOG updated. Phase 23 CHECK constraints still blocked (legacy 17 rows need /integrity-cleanup). PR #158 opened, conflict-resolved, passes Vercel+CodeRabbit+Codex.
+
+Weekly cleanup-sprint check (automated routine, 2026-07-17): queried live DB — negatives=18 (+1, later identified as expected U9 warn-not-block delivery per Codex P2), over_received=15, unbilled=59. Progress row added to docs/reports/cleanup-sprint-progress.md; CHANGELOG updated. Phase 23 CHECK constraints still blocked (legacy 17 rows need /integrity-cleanup). PR #158 opened, conflict-resolved, passes Vercel+CodeRabbit+Codex.
+
+- **Commits this session** (git log --since=12.hours --author=Mason):
+  - `e318ec6 Merge branch 'main' into chore/cleanup-sprint-progress-2026-07-17`
+  - `4120aff Merge branch 'main' into chore/cleanup-sprint-progress-2026-07-17`
+  - `3d71c1e Merge branch 'main' into chore/cleanup-sprint-progress-2026-07-17`
+  - `b0e115a Bug-class regression suite: lock down the 2026-07-10..20 review-round findings (#189)`
+  - `36405df fix(billing): enforce split invoice email authority (#188)`
+  - `e4f4cab Supplier Pricing Phase 1b follow-ups: durable replay, import reject path, admin-only alignment (migration PARKED) (#184)`
+- **Migrations touched** (last 15 commits (fallback)):
+  - `supabase/migrations/20260720230000_supplier_pricing_durable_replay_and_reject.sql`
+  - `supabase/migrations/20260720213000_per_line_split_billing_schema.sql`
+  - `supabase/migrations/20260720214000_per_line_split_billing_calculator.sql`
+  - `supabase/migrations/20260720233000_per_line_split_billing_save_rpc.sql`
+  - `supabase/migrations/20260720200329_scope_delivery_signature_storage_access.sql`
+  - `supabase/migrations/20260720211454_scope_delivery_signature_delete.sql`
+  - `supabase/migrations/20260720225716_require_active_driver_for_signatures.sql`
+  - `supabase/migrations/20260720235246_qualify_sales_rep_authorization_helper.sql`
+  - `supabase/migrations/20260718225511_supplier_price_evidence_phase1b.sql`
+  - `supabase/migrations/20260718235717_stage_supplier_vendor_aliases_phase1b.sql`
+  - `supabase/migrations/20260720203000_restrict_supplier_pricing_to_admin.sql`
+  - `supabase/migrations/20260718030000_per_line_split_billing_save_rpc.sql`
+  - `supabase/migrations/20260718124500_harden_prepay_and_payment_role_gate.sql`
+  - `supabase/migrations/20260718131500_revert_quote_escape_hatch_for_cancelled_order.sql`
+  - `supabase/migrations/20260718132000_finance_charge_month_dedup.sql`
+  - `supabase/migrations/20260718133000_void_invoice_block_applied_payments.sql`
+  - `supabase/migrations/20260718134000_forbid_restore_cancelled_order.sql`
+  - `supabase/migrations/20260718134500_backfill_invoice_refuse_split_billing.sql`
+  - `supabase/migrations/20260718194000_backfill_invoice_guard_durable_split_allocations.sql`
+  - `supabase/migrations/20260718203000_retire_legacy_record_invoice_payment.sql`
+  - `supabase/migrations/20260718204000_void_invoice_ignore_reversed_allocations.sql`
+  - `supabase/migrations/20260718214000_preserve_voided_payment_allocation_history.sql`
+  - `supabase/migrations/20260718230000_supplier_price_evidence_phase1b.sql`
+  - `supabase/migrations/20260718230848_harden_quote_reopen_history_guards.sql`
+  - `supabase/migrations/20260718234500_reconcile_gauntlet_intermediate_live_windows.sql`
+  - `supabase/migrations/20260718235900_stage_supplier_vendor_aliases_phase1b.sql`
+  - `supabase/migrations/20260719013000_bind_revert_quote_status_idempotency.sql`
+  - `supabase/migrations/20260719040000_lock_backfill_split_allocation_rows.sql`
+  - `supabase/migrations/20260719064000_validate_quote_commission_splits.sql`
+  - `supabase/migrations/20260719093000_route_invoice_updates_through_governed_rpcs.sql`
+  - `supabase/migrations/20260719093500_reject_null_commission_percentages.sql`
+  - `supabase/migrations/20260719100000_trust_only_post_revoke_split_provenance.sql`
+  - `supabase/migrations/20260719100500_revert_quote_status_deadlock_retry.sql`
+  - `supabase/migrations/20260719101000_align_finance_charge_preview_month_dedup.sql`
+  - `supabase/migrations/20260719102000_allow_governed_split_terminal_lifecycle.sql`
+  - `supabase/migrations/20260720175946_protect_governed_split_edit_and_void_group.sql`
+  - `supabase/migrations/20260718010000_per_line_split_billing_schema.sql`
+  - `supabase/migrations/20260720173059_fix_statement_opening_balance.sql`
+
 ## 2026-07-20 — Bug-class regression test suite (PR #189)
 
 Bug-class regression suite: analyzed all ~60 bugs fixed 2026-07-10..20 (split-billing Codex rounds 2-12, Fable adversarial, gauntlet 2-6, statement opening balance, pricing 1a/1b), clustered them into 12 recurring classes, and locked the top classes with hermetic npm-test guards (commit 9e7e185f): sqlRoleGateNullFailOpen.test.ts (H1 NULL-role fail-open scanner over latest disk fn defs; found latent H1 in parked create_inventory_hold), bugClassRegressionGuards.test.ts (pins 14 SQL guard tokens across 9 fns following PERFORM/RENAME chains + 3 frontend guards + 8 fail-first smokes' registration), splitVectorMath extraction + property tests (r2 #K / r3 P2 residual classes). Full suite 3742 green; Codex verdict pending before PR/merge.
