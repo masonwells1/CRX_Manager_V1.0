@@ -173,12 +173,11 @@ enums, and generated columns that hooks and reviewer agents check against.
   edits, Products-list inline edits, and the pricing-only `.xlsx` workflow call the same
   preview/apply RPC engine. The preview shows server-authoritative Product
   identity and old → new cost, margin, tier-price, and per-acre effects. The
-  bootstrap records governed history through one trigger while retaining
-  legacy write compatibility. The live zero-cost guard rejects a
-  margin-driven zero cost while preserving legacy mode. The later parked strict
-  direct-write enforcement cutover denies direct pricing/history writes only
-  after this frontend is deployed and its rollback window closes. Bulk Product
-  Import remains a pricing-free CSV
+  bootstrap records governed history through one trigger. The live zero-cost
+  guard rejects a margin-driven zero cost, and the live strict cutover
+  (`20260718190000`) denies direct pricing/history writes from app roles. Product-page,
+  Products-list, and worksheet edits remain available because they use the
+  governed preview/apply RPC path. Bulk Product Import remains a pricing-free CSV
   Product-details creator. Production `process-document` v19 rejects supplier
   price sheets and price-bearing Product lists before OCR; JWT verification is
   enabled, so the permanent supplier-pricing OCR retirement is live.
