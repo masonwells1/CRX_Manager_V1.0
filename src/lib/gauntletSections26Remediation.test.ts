@@ -22,7 +22,9 @@ describe('gauntlet sections 2-6 CodeRabbit closeout', () => {
     expect(helper).toContain("hashtextextended('crx:idempotency:' || p_key, 0)");
     expect(keyLock).toBeLessThan(keyRead);
 
-    const lifecycle = migration('20260721010000_govern_invoice_order_money_lifecycle.sql');
+    const lifecycle = migration(
+      '20260721014858_20260721010000_govern_invoice_order_money_lifecycle.sql',
+    );
     const wrappers = [
       {
         name: 'create_invoice_from_order',

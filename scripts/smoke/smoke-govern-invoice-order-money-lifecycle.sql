@@ -1,4 +1,5 @@
--- Rollback-only chain for 20260721010000_govern_invoice_order_money_lifecycle.
+-- Rollback-only chain for live ledger version 20260721014858, submitted as
+-- 20260721010000_govern_invoice_order_money_lifecycle.
 -- Exercises the partially delivered short-close, invoice recovery, retry binding,
 -- terminal-order guards, and direct invoice-table DML revocation in one statement.
 DO $smoke$
