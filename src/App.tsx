@@ -204,7 +204,6 @@ const router = createBrowserRouter([
 
           // Admin + Sales Rep
           { path: 'products', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><Products /></ProtectedRoute> },
-          { path: 'supplier-pricing', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><SupplierPricing /></ProtectedRoute> },
           { path: 'products/:id', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><ProductDetail /></ProtectedRoute> },
           { path: 'customers', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><Customers /></ProtectedRoute> },
           { path: 'customers/:id', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><CustomerDetail /></ProtectedRoute> },
@@ -288,6 +287,7 @@ const router = createBrowserRouter([
           { path: 'field', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep', 'applicator']}><FieldView /></ProtectedRoute> },
 
           // Admin only
+          { path: 'supplier-pricing', element: <ProtectedRoute allowedRoles={['admin']}><SupplierPricing /></ProtectedRoute> },
           { path: 'financial-dashboard', element: <ProtectedRoute allowedRoles={['admin']}><FinancialDashboard /></ProtectedRoute> },
           { path: 'month-end', element: <ProtectedRoute allowedRoles={['admin']}><MonthEndClose /></ProtectedRoute> },
           { path: 'integrity', element: <ProtectedRoute allowedRoles={['admin']}><Integrity /></ProtectedRoute> },
