@@ -2199,6 +2199,47 @@ BEGIN
   -- Phase 3 writer consumes the calculator plan and persists the real 100/0
   -- service vector, including a zero-dollar child invoice and item.
   PERFORM set_config('request.jwt.claim.sub', v_admin::text, true);
+
+  -- A legacy draft has no server-created per-line billing set. The writer must
+  -- reject conversion before deleting any of its existing billing graph.
+  INSERT INTO public.invoices (
+    id, invoice_number, customer_id, invoice_type, status, invoice_date,
+    created_by, total_amount_cents, total_cost_cents, job_id,
+    application_service_id, season
+  ) VALUES (
+    '83000000-0000-0000-0000-000000000040', public.next_invoice_number(),
+    v_a, 'field_application', 'draft', DATE '2026-07-20', v_admin,
+    1234, 500, v_job_service, v_service, 2026
+  );
+  INSERT INTO public.invoice_items (
+    id, invoice_id, quantity, acres, unit_price_cents, extended_cents,
+    unit_size, cost_cents
+  ) VALUES (
+    '84000000-0000-0000-0000-000000000040',
+    '83000000-0000-0000-0000-000000000040', 1, 1, 1234, 1234, 'acre', 500
+  );
+  v_err := NULL;
+  BEGIN
+    PERFORM public.save_field_app_invoice_per_line(
+      '83000000-0000-0000-0000-000000000040',
+      jsonb_build_object('invoice_date', '2026-07-20'),
+      jsonb_build_array(jsonb_build_object(
+        'field_id', v_field_50, 'applied_acres', 1, 'total_acres', 1
+      )), '[]'::jsonb, v_admin, v_service, v_job_service, '{}'::jsonb,
+      'phase3-legacy-conversion-refused'
+    );
+  EXCEPTION WHEN OTHERS THEN v_err := SQLERRM; END;
+  IF COALESCE(v_err, '') NOT LIKE '%PER_LINE_LEGACY_INVOICE_CONVERSION_UNSUPPORTED%'
+     OR NOT EXISTS (
+       SELECT 1 FROM public.invoice_items
+        WHERE id = '84000000-0000-0000-0000-000000000040'
+          AND invoice_id = '83000000-0000-0000-0000-000000000040'
+          AND extended_cents = 1234
+     ) THEN
+    RAISE EXCEPTION 'P3_FAIL(legacy_conversion_preserves_graph): %',
+      COALESCE(v_err, '<no error>');
+  END IF;
+
   v_err := NULL;
   BEGIN
     PERFORM public.save_field_app_invoice_per_line(
