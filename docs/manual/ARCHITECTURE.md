@@ -179,9 +179,9 @@ enums, and generated columns that hooks and reviewer agents check against.
   direct-write enforcement cutover denies direct pricing/history writes only
   after this frontend is deployed and its rollback window closes. Bulk Product
   Import remains a pricing-free CSV
-  Product-details creator. The repository rejects supplier price sheets and
-  price-bearing Product lists before OCR, but production `process-document` v18
-  still accepts them until a separately approved Edge Function deployment.
+  Product-details creator. Production `process-document` v19 rejects supplier
+  price sheets and price-bearing Product lists before OCR; JWT verification is
+  enabled, so the permanent supplier-pricing OCR retirement is live.
 
 ---
 
@@ -197,7 +197,7 @@ Current functions, one line each:
 | `create-user` | Admin-only: provisions a new staff login (auth user + profile row) using the service-role key. |
 | `epa-lookup` | Looks up an EPA pesticide registration number against the public EPA registry and normalizes/caches the result (added 2026-07 for label data quality). |
 | `process-blend-ticket` | OCR/text parsing of a photographed blend ticket into structured fields (date, customer, driver, acres, rate, etc.). |
-| `process-document` | Parses uploaded documents into structured import data. Repository code supports invoices, POs, customer lists, and quote lists only; production v18 still has the retired supplier price-list/product-list routes until its owner-gated deployment. |
+| `process-document` | Parses supported invoices, POs, customer lists, and quote lists into structured import data. Production v19 fails closed on supplier price-list/product-list requests before OCR, with JWT verification enabled. |
 | `reset-user-password` | Admin-triggered password reset for another user (service-role privileged action, not self-service). |
 | `send-email` | Sends transactional email; hardened to an allowlist of email types per role and validates the recipient server-side rather than trusting the caller's `to` address. |
 | `setup-blend-tickets-storage` | One-time/idempotent setup of the storage bucket blend-ticket photos are uploaded into. |
