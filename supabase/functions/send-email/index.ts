@@ -223,16 +223,27 @@ Deno.serve(async (req: Request) => {
       }
       const { data: jobInvoices, error: jobInvoicesErr } = await adminClient
         .from("invoices")
-        .select("id, customer_id")
+        .select("id, customer_id, status, deleted_at")
         .eq("job_id", notificationRow.job_id);
       if (jobInvoicesErr) {
         return jsonResponse({ error: `Invoice gate lookup failed: ${jobInvoicesErr.message}` }, 500);
       }
       const matchingInvoices = (jobInvoices ?? []).filter((invoice) => invoice.customer_id === customer_id);
-      if (matchingInvoices.length > 1) {
-        return jsonResponse({ error: "Multiple invoices match this proof-notice recipient" }, 409);
+      const activeMatchingInvoices = matchingInvoices.filter(
+        (invoice) =>
+          invoice.deleted_at == null &&
+          invoice.status !== "voided" &&
+          invoice.status !== "cancelled",
+      );
+      if (activeMatchingInvoices.length > 1) {
+        return jsonResponse({ error: "Multiple active invoices match this proof-notice recipient" }, 409);
       }
-      const derivedInvoice = matchingInvoices[0] ?? (jobInvoices?.length === 1 ? jobInvoices[0] : null);
+      // Prefer the sole active replacement after a void-and-rebill. If none is
+      // active, retain a sole terminal match so the lifecycle gate below blocks
+      // it instead of mistaking the job for an unbilled legacy notification.
+      const derivedInvoice = activeMatchingInvoices[0] ??
+        (matchingInvoices.length === 1 ? matchingInvoices[0] : null) ??
+        (jobInvoices?.length === 1 ? jobInvoices[0] : null);
       if ((jobInvoices?.length ?? 0) > 0 && !derivedInvoice) {
         return jsonResponse({ error: "Could not resolve the recipient invoice send gate" }, 409);
       }

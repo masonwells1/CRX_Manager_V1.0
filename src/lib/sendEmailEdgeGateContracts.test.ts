@@ -12,10 +12,12 @@ describe('send-email invoice authority contracts', () => {
     expect(lookupStart).toBeGreaterThan(-1);
     expect(lookupEnd).toBeGreaterThan(lookupStart);
     expect(lookup).toContain('.eq("job_id", notificationRow.job_id)');
+    expect(lookup).toContain('.select("id, customer_id, status, deleted_at")');
     expect(lookup).not.toContain('.is("deleted_at", null)');
     expect(lookup).not.toContain('.not("status"');
     expect(source).toContain('invoiceRow.deleted_at != null || invoiceRow.status === "voided" || invoiceRow.status === "cancelled"');
-    expect(source).toContain('matchingInvoices.length > 1');
+    expect(source).toContain('activeMatchingInvoices.length > 1');
+    expect(source).toContain('matchingInvoices.length === 1 ? matchingInvoices[0] : null');
   });
 
   it('rechecks invoice lifecycle immediately before the outbound provider call', () => {
