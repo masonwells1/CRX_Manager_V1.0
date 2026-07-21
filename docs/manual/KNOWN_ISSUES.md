@@ -1,6 +1,6 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-07-20** (full document re-read; live high-water `20260720225716`; the 24 previously missing live migration sources landed through PR #180, and broad delivery-signature Storage policies were replaced with delivery-bound active-actor read, write, and delete access while preserving one inaccessible historical orphan; older open/deferred claims retain their dated evidence below; owner-facing combined list: root `TODO.md`)
+**Last verified: 2026-07-21** (live high-water `20260721014858`; supplier-pricing governed edit/batch paths and `process-document` v19 OCR retirement are live and proven; older open/deferred claims retain their dated evidence below; owner-facing combined list: root `TODO.md`)
 **Update triggers:** when a finding is parked/resolved, a migration is parked/applied, or an owner decision lands. Agents must update THIS file, not create new issue lists. Do not re-discover or re-fix something listed here as already known — read the pointer first.
 
 This file consolidates (does not replace) the source documents it points to. If this file and a source disagree, trust the source and fix this file.
@@ -57,13 +57,12 @@ inside the rolled-back txn (a parallel supplier-pricing project applied live pri
 billing cycle.**
 Owner-facing detail: `docs/plans/per-line-split-billing-BUILD-HANDOFF-2026-07-18.md`.
 
+**Resolved 2026-07-21 — Supplier Pricing Phase 1a rollout gap.** The governed
+Product-page and XLSX pricing paths are live, the final lifecycle migration is
+applied at `20260721014858`, and production `process-document` v19 is ACTIVE
+with JWT enforcement and rejects supplier price/product lists before OCR.
+
 ## 1. Open HIGH findings (dormant on live data)
-
-### Supplier Pricing Phase 1a rollout gap — frontend/Edge retirement not deployed
-
-The additive pricing RPC/bootstrap, zero-cost guard, legacy Product repeat-save compatibility repair, cent-scale correction, strict direct-write cutover, integrity rescan, and supplier-price evidence foundation are live through `20260718230000_supplier_price_evidence_phase1b`. The zero-cost guard's repository source is `20260717112011_supplier_pricing_zero_cost_guard.sql` and its live ledger identity is `20260717120500_supplier_pricing_zero_cost_guard`; the governed calculator rejects margin-driven zero cost. The earlier statement that `20260718124517_harden_supplier_pricing_cent_scale_and_trigger.sql` and the cutover were pending is resolved by the 2026-07-20 live migration-catalog check.
-
-The remaining rollout gap is the production Edge Function: its deployment state was not inspected in this repository/database-only pass. Do not describe supplier-price OCR as retired live until that separately gated deployment is verified.
 
 ### July 14 full-gauntlet remediation — LIVE, frontend rolled out (PR #133 merged 2026-07-15)
 

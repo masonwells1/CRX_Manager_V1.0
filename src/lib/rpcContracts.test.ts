@@ -2069,11 +2069,8 @@ const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
  * in MUTATING_RPCS_MISSING_IDEMPOTENCY and must eventually be fixed.
  */
 const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
-  _close_undelivered_order_remainder_20260718: 'internal short-close helper called only by the idempotent cancel_order router; direct API EXECUTE is revoked',
-  _enforce_delivery_items_parent_lock: 'trigger-only delivery/item serialization helper; direct API EXECUTE is revoked',
   _insert_commissions_for_job: 'internal helper; caller owns idempotency and direct EXECUTE is revoked',
   _insert_commissions_for_order: 'internal helper; caller owns idempotency and direct EXECUTE is revoked',
-  _post_deleted_delivery_recovery_invoice_20260719: 'internal recovery poster called only by the idempotent post_invoice router; direct API EXECUTE is revoked',
   _reverse_credit_memo_application: 'internal helper called only by idempotent credit-memo reversal RPCs',
   _sync_job_holds: 'internal convergent hold-sync helper; direct client EXECUTE is revoked',
   _sync_planned_holds: 'internal convergent hold-sync helper called within parent transactions',
@@ -2083,8 +2080,6 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
   check_rate_limit: 'rate-limit counter intentionally records every invocation, including retries',
   check_remainder_reminders: 'maintenance reminder sweep uses persisted sent markers to deduplicate',
   check_unpriced_orders: 'cron reminder sweep uses persisted reminder and escalation sent markers',
-  guard_invoice_terminal_order: 'trigger-only invoice and terminal-order lineage guard; direct API EXECUTE is revoked',
-  guard_terminal_order_invoice_items: 'trigger-only invoice-line and terminal-order lineage guard; direct API EXECUTE is revoked',
   mark_overdue_invoices: 'service-role maintenance updates only invoices currently eligible as overdue',
   recompute_job_applied_acres: 'trigger-only derived-total recomputation; direct client EXECUTE is revoked',
   reconcile_prepay_balances: 'convergent repair sets balances to recomputed ledger truth',

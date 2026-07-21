@@ -6,7 +6,7 @@
     "regenerate_with": "node scripts/regenerate-schema-registry.mjs --from-introspection <queries.json> (queries documented in the script header)",
     "purpose": "Single source of truth for hooks: generated columns, status enums, ALL parseable CHECK IN-lists, NOT NULL columns, full column lists, sequences, tables-with/without updated_at, applied-migration high water.",
     "note": "For a fresh refresh from the live DB, ask Claude Code: 'regenerate the schema-registry from Supabase' (/regen-schema-registry). skipped_constraints lists every CHECK the hooks can NOT validate — review it when touching those tables.",
-    "migrations_high_water": "20260720235246",
+    "migrations_high_water": "20260721014858",
     "applied_migration_names": [
       "20260207_gap_analysis_fixes.sql",
       "20260209050000_inventory_overhaul",
@@ -279,8 +279,10 @@
       "20260720213000_per_line_split_billing_schema",
       "20260720214000_per_line_split_billing_calculator",
       "20260720225000_require_active_driver_for_signatures",
+      "20260720230000_supplier_pricing_durable_replay_and_reject",
       "20260720233000_per_line_split_billing_save_rpc",
       "20260720235000_qualify_sales_rep_authorization_helper",
+      "20260721010000_govern_invoice_order_money_lifecycle",
       "a1_dispatched_list_recent_completed",
       "a1b_dispatched_to_me_completed_tail",
       "accounting_and_integrity_fixes",
@@ -1197,6 +1199,7 @@
     "integrity_alerts",
     "integrity_negative_baseline",
     "inventory_transactions",
+    "invoice_delivery_recovery_capabilities",
     "invoice_line_allocations",
     "invoice_line_share_snapshots",
     "invoice_line_shares",
@@ -1755,6 +1758,15 @@
       ],
       "constraints": [
         "inventory_transactions_transaction_type_check"
+      ]
+    },
+    "invoice_delivery_recovery_capabilities.purpose": {
+      "values": [
+        "writer",
+        "poster"
+      ],
+      "constraints": [
+        "invoice_delivery_recovery_capabilities_purpose_check"
       ]
     },
     "invoice_items.price_source": {
@@ -4279,6 +4291,17 @@
         "requires_review"
       ]
     },
+    "invoice_delivery_recovery_capabilities": {
+      "no_default": [
+        "transaction_id",
+        "purpose",
+        "delivery_id",
+        "actor_id"
+      ],
+      "with_default": [
+        "created_at"
+      ]
+    },
     "invoice_items": {
       "no_default": [
         "invoice_id"
@@ -6297,6 +6320,13 @@
       "requires_review",
       "job_id"
     ],
+    "invoice_delivery_recovery_capabilities": [
+      "transaction_id",
+      "purpose",
+      "delivery_id",
+      "actor_id",
+      "created_at"
+    ],
     "invoice_items": [
       "id",
       "invoice_id",
@@ -7460,7 +7490,11 @@
       "rejected_at",
       "rejection_reason",
       "created_at",
-      "updated_at"
+      "updated_at",
+      "approve_idempotency_key",
+      "approve_request_fingerprint",
+      "reject_idempotency_key",
+      "reject_request_fingerprint"
     ],
     "supplier_price_observations": [
       "id",
@@ -7570,7 +7604,9 @@
       "reviewed_by",
       "reviewed_at",
       "created_at",
-      "updated_at"
+      "updated_at",
+      "idempotency_key",
+      "request_fingerprint"
     ],
     "vendor_bills": [
       "id",

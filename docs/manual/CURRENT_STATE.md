@@ -1,6 +1,6 @@
 # CRX Manager — Current State
 
-**Last verified:** 2026-07-20 (feature summary and live migration watermark re-checked through `20260720225716`; the 24 previously missing live migration sources landed through PR #180, and delivery-signature Storage access is now delivery-path- and active-actor-scoped for read, write, and delete; operational counts remain the dated 2026-07-18 snapshot below)
+**Last verified:** 2026-07-21 (live migration watermark `20260721014858`; supplier-pricing Product-page and monthly XLSX paths are governed through preview/approval/apply, and `process-document` v19 permanently rejects supplier price/product lists before OCR; operational counts remain the dated 2026-07-18 snapshot below)
 **Update triggers:** refresh when a major feature ships or quarterly, whichever first.
 
 ## 1. Reality check
@@ -54,6 +54,9 @@ Grouped, one-liner summary of what is LIVE in production today (see
 
 - **Core ops:** customers, products, quotes, orders, invoices, payments, and
   accounts-payable (vendor bills/payments, purchase orders/receiving).
+- **Supplier pricing:** quick Product-page edits and monthly XLSX batches both
+  use preview, explicit approval, atomic governed apply, and one database
+  history writer; supplier PDF price-list OCR is permanently retired.
 - **CRM relationship intelligence (2026-07-17):** contacts + call logging,
   grower knowledge (facts w/ review queue) + call prep card, seasonal call
   lists (`/call-lists`), per-customer documents — built AI-receptionist-ready
