@@ -1731,7 +1731,7 @@ export interface Invoice {
   invoice_group_id: string | null;
   application_service_id: string | null;
   delivery_id: string | null;
-  // Per-line split billing (mig 20260718010000, flag-gated/additive). Server-computed
+  // Per-line split billing (mig 20260720213000, flag-gated/additive). Server-computed
   // suppression flag for a fully-$0 split child: 'suppressed_zero_total' means "record it,
   // show it in the account summary, but do NOT email it" (a paid-in-full invoice at $0 stays
   // 'normal' and emailable). Back-link to the field_app_billing_sets row that produced this
@@ -1799,7 +1799,7 @@ export interface InvoiceItem {
   price_source: 'quoted' | 'tier' | 'manual' | null;
   tote_number: string | null;
   notes: string | null;
-  // Per-line split billing (mig 20260718010000, additive). When set, this item was
+  // Per-line split billing (mig 20260720213000, additive). When set, this item was
   // produced by a split billing line and its qty/price MUST be read-only in the
   // InvoiceDetail editor (extended_cents is the server-allocated residual — never
   // recompute qty x price for a split line). Optional (?) — additive column, not
@@ -1828,7 +1828,7 @@ export interface InvoiceShare {
   customer?: Customer;
 }
 
-// ── Per-line split billing (migs 20260718010000 / 020000 / 030000) ──────────
+// ── Per-line split billing (migs 20260720213000 / 020000 / 030000) ──────────
 // Flag-gated, additive. A "billing set" is one durable field-application billing
 // event; it has one server-created "billing line" per chemical/service/flat fee;
 // each billing line is allocated across customers into per-line "shares" bound 1:1
@@ -1854,6 +1854,7 @@ export interface FieldAppBillingLine {
   application_service_id: string | null;
   description: string | null;
   source_quantity: number | null;
+  source_acres: number | null;
   source_unit_price_cents: number | null;
   source_line_cents: number | null;
   sort_order: number;

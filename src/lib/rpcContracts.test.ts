@@ -2041,7 +2041,7 @@ const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
   // contract inside the same transaction; it is absent from generated client
   // types by design but still must remain fail-closed in the migration scan.
   '_save_purchase_order_ascii_identity_impl',
-  // Per-line split billing (parked migration 20260718030000_per_line_split_billing_save_rpc.sql,
+  // Per-line split billing (parked migration 20260720233000_per_line_split_billing_save_rpc.sql,
   // NOT applied live; feature flag OFF). Both declare `p_idempotency_key text` and use the
   // canonical two-layer replay pattern: the PUBLIC wrapper save_field_app_split_invoice does
   // check_idempotency + payload-hash conflict; the internal writer _save_field_app_split_invoice_impl

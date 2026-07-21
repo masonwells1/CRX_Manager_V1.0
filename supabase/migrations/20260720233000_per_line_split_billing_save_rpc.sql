@@ -451,7 +451,7 @@ BEGIN
   -- ---- GUARDS (defense-in-depth; the wrapper already checked these) -----------
   IF v_actor IS NULL THEN RAISE EXCEPTION 'Not authenticated'; END IF;
   IF p_performed_by IS DISTINCT FROM v_actor THEN
-    RAISE EXCEPTION 'p_performed_by does not match authenticated user';
+    RAISE EXCEPTION 'ACTOR_MISMATCH: p_performed_by must match the authenticated user';
   END IF;
   IF NOT EXISTS (SELECT 1 FROM profiles WHERE id = v_actor AND is_active = true
                    AND role IN ('admin', 'sales_rep')) THEN
@@ -1684,7 +1684,7 @@ DECLARE
 BEGIN
   IF v_actor IS NULL THEN RAISE EXCEPTION 'Not authenticated'; END IF;
   IF p_performed_by IS DISTINCT FROM v_actor THEN
-    RAISE EXCEPTION 'p_performed_by does not match authenticated user';
+    RAISE EXCEPTION 'ACTOR_MISMATCH: p_performed_by must match the authenticated user';
   END IF;
   IF NOT EXISTS (SELECT 1 FROM profiles WHERE id = v_actor AND is_active = true
                    AND role IN ('admin', 'sales_rep')) THEN

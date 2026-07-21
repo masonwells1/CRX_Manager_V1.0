@@ -348,6 +348,11 @@ CREATE TRIGGER trg_invoice_line_shares_lock_when_posted
 COMMENT ON FUNCTION public.prevent_invoice_line_shares_edit_after_post() IS
   'Blocks INSERT/UPDATE/DELETE on invoice_line_shares when the parent invoice (via invoice_item_id) is posted/paid/overdue. Freezes the per-line split snapshot while posted; unposting reopens it. Copied from prevent_order_shares_edit_after_post().';
 
+-- Deliberate grants (CRX hard rule): this SECURITY DEFINER function is a trigger
+-- body only — never invoked directly — so no role needs EXECUTE. Revoke the
+-- default PUBLIC EXECUTE as defense-in-depth (B7/B8/B9 anon-SECDEF class).
+REVOKE EXECUTE ON FUNCTION public.prevent_invoice_line_shares_edit_after_post() FROM anon, PUBLIC;
+
 -- ============================================================================
 -- 7. TABLE COMMENTS
 -- ============================================================================
