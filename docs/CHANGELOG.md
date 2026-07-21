@@ -20,6 +20,12 @@ All significant development milestones, in reverse chronological order.
 - Corrected cancellation replay handling so an `already_cancelled` response refreshes the order without writing a second activity entry or sending a false cancellation notice. Applied the finance-charge correction live as ledger version `20260721125937`: only an active same-month charge blocks another assessment, while voided/cancelled charge invoices permit one corrected preview and generation. Finance-charge generation keys remain bound to the actor, date, and normalized customer selection; both registered rollback chains returned `SMOKE_PASS_ROLLBACK` with zero residue.
 - Refreshed the schema registry from six live introspection datasets at high-water `20260721130846` and ran all 17 database invariant sweeps with zero unallowlisted findings.
 
+## 2026-07-21 — Weekly cleanup-sprint check (automated routine, 2026-07-17)
+
+Queried live DB — negatives=18 (+1, likely U9 warn-not-block delivery; check requires_review=true on inventory_transactions), over_received=15, unbilled=59. Progress row appended to docs/reports/cleanup-sprint-progress.md. Phase 23 CHECK constraints still blocked (legacy 17 rows need /integrity-cleanup). PR #158 opened and in review.
+
+- **Migrations touched**: none (docs-only change)
+
 ## 2026-07-20 — Bug-class regression test suite (PR #189)
 
 Bug-class regression suite: analyzed all ~60 bugs fixed 2026-07-10..20 (split-billing Codex rounds 2-12, Fable adversarial, gauntlet 2-6, statement opening balance, pricing 1a/1b), clustered them into 12 recurring classes, and locked the top classes with hermetic npm-test guards (commit 9e7e185f): sqlRoleGateNullFailOpen.test.ts (H1 NULL-role fail-open scanner over latest disk fn defs; found latent H1 in parked create_inventory_hold), bugClassRegressionGuards.test.ts (pins 14 SQL guard tokens across 9 fns following PERFORM/RENAME chains + 3 frontend guards + 8 fail-first smokes' registration), splitVectorMath extraction + property tests (r2 #K / r3 P2 residual classes). Full suite 3742 green; Codex verdict pending before PR/merge.
