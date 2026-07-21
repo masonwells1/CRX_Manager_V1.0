@@ -1,6 +1,6 @@
 # Decision Log
 
-Last verified: 2026-07-17
+Last verified: 2026-07-19
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
@@ -8,6 +8,31 @@ settled calls. Newest first. Each entry is a decision, why it was made, and the 
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
 
 ---
+
+## 2026-07-19 — SETTLED: split-billing v1 edge-case policy — per-child commissions (no job-level clamp) + no extra job-less double-submit guard
+
+**Decision (Mason, 2026-07-19, two calls):**
+
+1. **Commissions on Option-B splits stay per-child, mirroring the live model — NO job-level clamp
+   in v1.** Because each co-owner is priced at their own tier, an operator who deliberately
+   overrides one co-owner BELOW cost creates a child with negative profit; the app's standing
+   "commissions never go negative" rule then means total split commissions can exceed 
+   commission-on-whole-job-profit (worked example: 50/50, A tier $15 → +$250 profit → $25
+   commission; B overridden to $8 vs $10 cost → −$100 profit → $0; rep gets $25 where a single
+   invoice would have paid $15). Mason accepted this for v1: the case requires a deliberate
+   below-cost override (with a stored override reason), the exposure is capped by that deliberate
+   loss, and commissions are human-reviewed at payout-batch time. **Operative rule:** do NOT add
+   job-level commission netting/clamping to `save_field_app_split_invoice`; if a real below-cost
+   split ever appears in a payout, build the job-level cap then as its own proven change.
+
+2. **Job-less splits get NO extra double-submit exclusivity guard in v1** (two tabs could each
+   bill a job-less split — same exposure as the rest of the app's non-job invoicing). Job-backed
+   splits are already protected by the #E source-job consume guard. **Operative rule:** accept
+   live parity; do not bolt an idempotency/exclusivity scheme onto the job-less path for v1.
+
+Context: these were the last two open owner-decisions from the Fable adversarial review of the
+parked per-line split-billing build (PR #164, flag OFF, migrations not applied). Go-live still
+gates on a CLEAN Codex round-6 verdict (~2026-07-24) + Mason's review.
 
 ## 2026-07-17 — SETTLED: split-billing model = per-line custom splits on the FIELD-APP path; order-side engine retired later
 

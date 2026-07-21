@@ -30,6 +30,7 @@ import {
   getSupplierPriceImport,
   getSupplierPricingWorkspace,
   getSupplierQuoteSheet,
+  rejectSupplierPriceImport,
   reviewVendorAlias,
   stageSupplierPriceImport,
   stageVendorAlias,
@@ -90,6 +91,8 @@ export default function SupplierPricing() {
   const [review, setReview] = useState<SupplierImportReview | null>(null);
   const [selectedRowIds, setSelectedRowIds] = useState<Set<string>>(new Set());
   const [approveOpen, setApproveOpen] = useState(false);
+  const [rejectOpen, setRejectOpen] = useState(false);
+  const [rejectReason, setRejectReason] = useState('');
   const [correctionRow, setCorrectionRow] = useState<SupplierImportReviewRow | null>(null);
   const [correctionCost, setCorrectionCost] = useState('');
   const [correctionReason, setCorrectionReason] = useState('');
@@ -103,6 +106,7 @@ export default function SupplierPricing() {
 
   const stageImportIdem = useIdempotencyKey('stage_supplier_price_import', profile?.id || '');
   const approveImportIdem = useIdempotencyKey('approve_supplier_price_import', profile?.id || '');
+  const rejectImportIdem = useIdempotencyKey('reject_supplier_price_import', profile?.id || '');
   const linkIdem = useIdempotencyKey('upsert_product_supplier_link', profile?.id || '');
   const aliasStageIdem = useIdempotencyKey('stage_vendor_alias', profile?.id || '');
   const aliasReviewIdem = useIdempotencyKey('review_vendor_alias', profile?.id || '');
@@ -291,6 +295,33 @@ export default function SupplierPricing() {
       setReview(result);
       setApproveOpen(false);
       toast('success', result.summary || `${result.approved_count ?? 0} supplier observation(s) approved.`);
+      await loadWorkspace();
+    } catch (error) {
+      toast('error', sanitizeError(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleReject = async () => {
+    if (!profile || !review) return;
+    if (!rejectReason.trim()) {
+      toast('error', 'A rejection reason is required.');
+      return;
+    }
+    setBusy(true);
+    try {
+      const result = await rejectSupplierPriceImport({
+        importId: review.id,
+        reason: rejectReason.trim(),
+        performedBy: profile.id,
+        idempotencyKey: rejectImportIdem.getKey(),
+      });
+      rejectImportIdem.resetKey();
+      setReview(result);
+      setRejectOpen(false);
+      setRejectReason('');
+      toast('success', result.summary || 'Import rejected. No supplier observations were changed.');
       await loadWorkspace();
     } catch (error) {
       toast('error', sanitizeError(error));
@@ -644,15 +675,23 @@ export default function SupplierPricing() {
             </table>
           </div>
           {isAdmin && review.status === 'needs_review' && (
-            <Button
-              className="mt-4"
-              type="button"
-              icon={<ShieldCheck className="h-4 w-4" />}
-              disabled={selectedRowIds.size === 0}
-              onClick={() => setApproveOpen(true)}
-            >
-              Approve selected observations
-            </Button>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <Button
+                type="button"
+                icon={<ShieldCheck className="h-4 w-4" />}
+                disabled={selectedRowIds.size === 0}
+                onClick={() => setApproveOpen(true)}
+              >
+                Approve selected observations
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => { rejectImportIdem.resetKey(); setRejectReason(''); setRejectOpen(true); }}
+              >
+                Reject import
+              </Button>
+            </div>
           )}
         </Card>
       )}
@@ -826,6 +865,42 @@ export default function SupplierPricing() {
         variant="info"
         loading={busy}
       />
+      <Modal
+        open={rejectOpen}
+        onClose={() => setRejectOpen(false)}
+        closeDisabled={busy}
+        title="Reject"
+        accent="supplier import"
+        footer={(
+          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+            <Button type="button" variant="ghost" onClick={() => setRejectOpen(false)} disabled={busy}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="danger"
+              loading={busy}
+              disabled={!rejectReason.trim()}
+              onClick={handleReject}
+            >
+              Reject import
+            </Button>
+          </div>
+        )}
+      >
+        <p className="text-sm text-secondary">
+          This closes the import without approving any rows. No supplier observations are created and
+          no sell price changes. Rows keep their statuses for the audit trail; nothing is deleted.
+        </p>
+        <div className="mt-4">
+          <Input
+            label="Reason for rejecting"
+            placeholder="All rows were duplicates of the June quote sheet"
+            value={rejectReason}
+            onChange={(event) => setRejectReason(event.target.value)}
+          />
+        </div>
+      </Modal>
       <Modal
         open={correctionRow !== null}
         onClose={() => setCorrectionRow(null)}

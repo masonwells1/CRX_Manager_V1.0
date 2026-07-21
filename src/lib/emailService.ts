@@ -111,6 +111,15 @@ export interface InvoiceEmailInput {
   nowMs?: number;
 }
 
+/** Per-line split billing: a $0 split child invoice is recorded + shown in the account
+ *  summary but must never be emailed. Gate on the server-computed send_disposition ONLY
+ *  (a paid-in-full invoice is also $0 but stays emailable). */
+export function isInvoiceEmailSuppressed(
+  invoice: { send_disposition?: string | null } | null | undefined
+): boolean {
+  return invoice?.send_disposition === 'suppressed_zero_total';
+}
+
 export function buildInvoiceEmailPayload(input: InvoiceEmailInput): SendEmailParams {
   const email = input.customerEmail?.trim();
   if (!email) {

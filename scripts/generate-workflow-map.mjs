@@ -325,7 +325,7 @@ function rpcToGroupId(name) {
     [/^(save_quote|generate_quote|duplicate_quote|rollover_quote|create_quote|restore_quote|convert_quote)/, 'r-quote'],
     [/^(save_order|create_order|create_direct|cancel_order|void_order|update_order|convert_quote_to_order)/, 'r-order'],
     [/^(create_delivery|confirm_delivery|complete_delivery|cancel_delivery|void_delivery|edit_delivery|reassign|batch_cancel|batch_reschedule|create_quick_delivery|create_followup|get_team_board|get_yesterday)/, 'r-delivery'],
-    [/^(save_invoice|post_invoice|void_invoice|batch_post|batch_void|create_invoice|record_invoice|apply_write_off|reverse_write_off|generate_finance|apply_remaining)/, 'r-invoice'],
+    [/^(save_invoice|save_field_app_split_invoice|post_invoice|void_invoice|batch_post|batch_void|create_invoice|record_invoice|apply_write_off|reverse_write_off|generate_finance|apply_remaining)/, 'r-invoice'],
     [/^(record_payment|allocate_payment|apply_prepay|void_payment)/, 'r-payment'],
     [/^(adjust_inventory|create_inventory|release_inventory|receive_po|manual_inventory|retire_inventory|mark_inventory|reconcile|get_inventory|transfer_inventory)/, 'r-inventory'],
     [/^(save_purchase|cancel_purchase|save_vendor|pay_vendor|receive_po)/, 'r-po'],
