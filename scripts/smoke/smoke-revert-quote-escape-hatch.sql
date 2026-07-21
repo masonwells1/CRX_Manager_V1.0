@@ -61,6 +61,18 @@ BEGIN
   END IF;
   v_order1 := (v_res->>'order_id')::uuid;
 
+  -- Create a posted invoice while the order is still active. The terminal-order
+  -- trigger correctly forbids manufacturing a new active invoice after cancel,
+  -- while cancel_order deliberately preserves an existing posted invoice.
+  INSERT INTO public.invoices (
+    invoice_number, order_id, customer_id, invoice_type, status, created_by
+  ) VALUES (
+    'E2E-B2-I-' || v_suffix, v_order1, v_customer, 'chemical_sale', 'draft', v_admin
+  ) RETURNING id INTO v_invoice;
+  UPDATE public.invoices
+     SET status = 'posted', posted_by = v_admin, posted_at = now()
+   WHERE id = v_invoice;
+
   -- ---- cancel the order (whole conversion: booking_draw = false) ----
   SELECT public.cancel_order(v_order1, v_admin) INTO v_res;
   PERFORM set_config('app.admin_override', 'false', true);
@@ -72,6 +84,12 @@ BEGIN
   SELECT status INTO v_status FROM public.quotes WHERE id = v_quote;
   IF v_status <> 'accepted' THEN
     RAISE EXCEPTION 'SMOKE_SETUP: quote after cancel = %, expected accepted (whole-conversion stays closed)', v_status;
+  END IF;
+  SELECT COALESCE(quantity_drawn, 0) INTO v_drawn
+  FROM public.quote_product_draws
+  WHERE quote_id = v_quote AND product_id = v_product;
+  IF COALESCE(v_drawn, 0) <> 300 THEN
+    RAISE EXCEPTION 'SMOKE_SETUP: draw ledger after cancel = %, expected 300 before reopen', v_drawn;
   END IF;
 
   -- ===== NEGATIVE REGRESSIONS: durable order history must block reopen =====
@@ -124,11 +142,6 @@ BEGIN
     IF v_err IS DISTINCT FROM 'B2_COMPLETED_FIXTURE_ROLLBACK' THEN RAISE; END IF;
   END;
 
-  INSERT INTO public.invoices (
-    invoice_number, order_id, customer_id, invoice_type, status, created_by
-  ) VALUES (
-    'E2E-B2-I-' || v_suffix, v_order1, v_customer, 'chemical_sale', 'draft', v_admin
-  ) RETURNING id INTO v_invoice;
   BEGIN
     PERFORM public.revert_quote_status(v_quote, 'must reject active invoice', v_admin,
       'e2e-b2-invoice-' || v_suffix);
@@ -140,7 +153,11 @@ BEGIN
       RAISE EXCEPTION 'SMOKE_FAIL: active-invoice guard raised unexpected error: %', v_err;
     END IF;
   END;
-  DELETE FROM public.invoices WHERE id = v_invoice;
+  PERFORM public.void_invoice(
+    v_invoice,
+    'B2 smoke: terminalize active-invoice regression fixture',
+    'e2e-b2-void-invoice-' || v_suffix
+  );
 
   INSERT INTO public.commissions (
     order_id, customer_id, recipient, split_percentage,

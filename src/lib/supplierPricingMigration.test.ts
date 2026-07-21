@@ -12,6 +12,19 @@ const aliasSql = readFileSync(
   join(repoRoot, 'supabase', 'migrations', '20260718235717_stage_supplier_vendor_aliases_phase1b.sql'),
   'utf8',
 );
+const retiredVendorReplaySql = readFileSync(
+  join(
+    repoRoot,
+    'supabase',
+    'migrations',
+    '20260721062000_replay_vendor_alias_after_vendor_retirement.sql',
+  ),
+  'utf8',
+);
+const phase1bSmokeSql = readFileSync(
+  join(repoRoot, 'scripts', 'smoke', 'smoke-supplier-pricing-phase1b.sql'),
+  'utf8',
+);
 
 const newTables = [
   'vendor_aliases',
@@ -32,6 +45,28 @@ const mutatingRpcs = [
 ];
 
 describe('live supplier pricing Phase 1b migrations', () => {
+  it('replays an existing alias before re-validating mutable vendor state', () => {
+    const durableLookup = retiredVendorReplaySql.indexOf(
+      'WHERE receipt.idempotency_key = p_idempotency_key',
+    );
+    const vendorLookup = retiredVendorReplaySql.indexOf('WHERE id = p_proposed_vendor_id');
+
+    expect(durableLookup).toBeGreaterThan(-1);
+    expect(vendorLookup).toBeGreaterThan(durableLookup);
+    expect(retiredVendorReplaySql).toContain("RAISE EXCEPTION 'VENDOR_NOT_FOUND'");
+    expect(retiredVendorReplaySql).toContain('CREATE TABLE public.vendor_alias_stage_receipts');
+    expect(retiredVendorReplaySql).toContain('ENABLE ROW LEVEL SECURITY');
+    expect(retiredVendorReplaySql).toContain('vendor_alias_stage_receipts_no_direct_access');
+    expect(retiredVendorReplaySql).toContain('RETURN v_durable.response');
+    expect(retiredVendorReplaySql).toContain('SET search_path = public, pg_temp');
+    expect(retiredVendorReplaySql).toContain('FROM PUBLIC, anon');
+    expect(retiredVendorReplaySql).toContain('TO authenticated, service_role');
+    expect(phase1bSmokeSql).toContain("DELETE FROM public.idempotency_keys");
+    expect(phase1bSmokeSql).toContain('PERFORM public.review_vendor_alias');
+    expect(phase1bSmokeSql).toContain('UPDATE public.vendors SET deleted_at = now()');
+    expect(phase1bSmokeSql).toContain('reviewed, retired-vendor durable replay changed response');
+  });
+
   it('records the evidence migration ledger reconciliation and keeps the approved alias step non-destructive', () => {
     expect(schemaSql).toContain('LIVE — Supplier Pricing Phase 1b supplier-evidence MVP');
     expect(schemaSql).toContain('20260718230000_supplier_price_evidence_phase1b');
