@@ -22,6 +22,23 @@ const streamColors: Record<SupplierPriceHistoryPoint['stream'], string> = {
   actual_purchase: '#c2410c',
 };
 
+// Date-only strings ('2026-07-20') and UTC-midnight timestamps (a Postgres date
+// cast to timestamptz, e.g. effective_from in the supplier stream) represent a
+// business DAY, not an instant. `new Date('2026-07-20')` parses as UTC midnight
+// and toLocaleDateString() then shows the PREVIOUS day in US timezones. Render
+// the calendar day the server stated instead.
+function formatBusinessDate(value: string): string {
+  const dayPart = /^(\d{4})-(\d{2})-(\d{2})(?:$|T00:00:00(?:\.0+)?(?:\+00(?::00)?|Z)$)/.exec(value);
+  if (dayPart) {
+    return new Date(
+      Number(dayPart[1]),
+      Number(dayPart[2]) - 1,
+      Number(dayPart[3]),
+    ).toLocaleDateString();
+  }
+  return new Date(value).toLocaleDateString();
+}
+
 function chartPosition(
   value: bigint,
   minimum: bigint,
@@ -103,7 +120,7 @@ export default function ProductPriceHistory({ productId }: { productId: string }
             <p className="mt-1 text-xs text-secondary">
               {history.summary.best_supplier || 'No comparable supplier'}
               {history.summary.replacement_cost_as_of
-                ? ` · ${new Date(history.summary.replacement_cost_as_of).toLocaleDateString()}`
+                ? ` · ${formatBusinessDate(history.summary.replacement_cost_as_of)}`
                 : ''}
             </p>
           </div>
@@ -113,7 +130,7 @@ export default function ProductPriceHistory({ productId }: { productId: string }
               {formatSupplierCents(selectedBasis?.cost_cents ?? null)}
             </p>
             <p className="mt-1 text-xs text-secondary">
-              {selectedBasis ? new Date(selectedBasis.occurred_at).toLocaleDateString() : 'No history captured'}
+              {selectedBasis ? formatBusinessDate(selectedBasis.occurred_at) : 'No history captured'}
             </p>
           </div>
           <div className="rounded-lg border border-orange-100 bg-orange-50 p-3">
@@ -123,7 +140,7 @@ export default function ProductPriceHistory({ productId }: { productId: string }
             </p>
             <p className="mt-1 text-xs text-secondary">
               {history.summary.last_paid_as_of
-                ? new Date(history.summary.last_paid_as_of).toLocaleDateString()
+                ? formatBusinessDate(history.summary.last_paid_as_of)
                 : 'No received purchase'}
             </p>
           </div>
@@ -171,7 +188,7 @@ export default function ProductPriceHistory({ productId }: { productId: string }
                     vectorEffect="non-scaling-stroke"
                     fill={streamColors[point.stream]}
                   >
-                    <title>{`${streamLabels[point.stream]}: ${formatSupplierCents(value)} on ${new Date(point.occurred_at).toLocaleDateString()}`}</title>
+                    <title>{`${streamLabels[point.stream]}: ${formatSupplierCents(value)} on ${formatBusinessDate(point.occurred_at)}`}</title>
                   </circle>
                 );
               })}
@@ -203,7 +220,7 @@ export default function ProductPriceHistory({ productId }: { productId: string }
                   </span>
                 </div>
                 <p className="mt-1 text-xs text-secondary">
-                  {new Date(point.occurred_at).toLocaleDateString()} · {point.detail.replace(/_/g, ' ')}
+                  {formatBusinessDate(point.occurred_at)} · {point.detail.replace(/_/g, ' ')}
                   {point.normalized_cost_cents === null && point.stream === 'supplier_observation'
                     ? ' · package quote cannot be normalized'
                     : ''}
