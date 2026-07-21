@@ -9,6 +9,11 @@ All significant development milestones, in reverse chronological order.
 - **Drift reconciliation after the 2026-07-20 go-lives:** regenerated `src/types/supabase.ts` from live (split + supplier-pricing RPCs now typed), emptied the stale `MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY` bucket into `MUTATING_RPCS_WITH_IDEMPOTENCY`, classified the two lifecycle idempotency helpers, fixed the pg_proc fixture header date/count.
 - **Consolidation:** PR #188 email-authority guards pinned in the `bugClassRegressionGuards` manifest; gauntlet index refreshed with 2026-07-21 status notes; removed a stale merge-conflict marker pair from this changelog.
 
+## 2026-07-21 — Weekly cleanup-sprint check (automated routine, 2026-07-17)
+
+Queried live DB — negatives=18 (+1, likely U9 warn-not-block delivery; check requires_review=true on inventory_transactions), over_received=15, unbilled=59. Progress row appended to docs/reports/cleanup-sprint-progress.md. Phase 23 CHECK constraints still blocked (legacy 17 rows need /integrity-cleanup). PR #158 opened and in review.
+
+- **Migrations touched**: none (docs-only change)
 
 ## 2026-07-20 — Bug-class regression test suite (PR #189)
 
@@ -61,6 +66,7 @@ Bug-class regression suite: analyzed all ~60 bugs fixed 2026-07-10..20 (split-bi
   - `supabase/migrations/20260720175946_protect_governed_split_edit_and_void_group.sql`
   - `supabase/migrations/20260718010000_per_line_split_billing_schema.sql`
   - `supabase/migrations/20260720173059_fix_statement_opening_balance.sql`
+
 ## 2026-07-20 — Split-billing email authority completed
 
 - Re-read each invoice's server-owned disposition and lifecycle immediately before every invoice email send, including field-invoice lists and invoice detail.
