@@ -18,6 +18,9 @@ describe('supplier cost-basis Phase 2 migration contract', () => {
   it('is additive, off by default, and does not rewrite Product money during migration', () => {
     expect(migrationSql).toContain("'supplier_cost_basis_enabled'");
     expect(migrationSql).toMatch(/'supplier_cost_basis_enabled',\s*'false'/);
+    expect(migrationSql).toMatch(
+      /ON CONFLICT \(setting_key\) DO UPDATE[\s\S]+?setting_value = EXCLUDED\.setting_value/,
+    );
     expect(migrationSql).toContain('CREATE TABLE IF NOT EXISTS public.product_cost_basis');
     expect(migrationSql).toContain('CREATE TABLE IF NOT EXISTS public.product_cost_basis_change_rows');
     expect(migrationSql).not.toMatch(/UPDATE\s+public\.products\s+SET\s+current_cost/i);

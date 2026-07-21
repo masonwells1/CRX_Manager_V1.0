@@ -13,7 +13,10 @@ VALUES (
   'false',
   'OFF-by-default gate for selecting supplier or actual-purchase evidence as the Product cost basis.'
 )
-ON CONFLICT (setting_key) DO NOTHING;
+ON CONFLICT (setting_key) DO UPDATE
+SET setting_value = EXCLUDED.setting_value,
+    description = EXCLUDED.description,
+    updated_at = now();
 
 CREATE TABLE IF NOT EXISTS public.product_cost_basis (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

@@ -106,6 +106,15 @@ CREATE TABLE public.purchase_order_items (
   cost_snapshot_at timestamptz
 );
 
+-- Simulate a drifted environment so the migration proves it always installs
+-- behind an explicit off-by-default barrier.
+INSERT INTO public.app_settings(setting_key, setting_value, description)
+VALUES (
+  'supplier_cost_basis_enabled',
+  'true',
+  'Pre-existing drift fixture; Phase 2 must reset this flag to false.'
+);
+
 INSERT INTO public.purchase_orders(
   id, po_number, vendor, status, submitted_date, created_by
 ) VALUES (
