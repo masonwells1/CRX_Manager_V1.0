@@ -14,7 +14,7 @@ BEGIN
     FROM pg_proc p
    WHERE p.oid = 'public.get_customer_transaction_review(uuid,date,date)'::regprocedure;
 
-  IF md5(v_source) <> 'ca016ab0f94d0d809efd3be1094a3a84'
+  IF md5(replace(v_source, E'\r\n', E'\n')) <> '9f16939c4e57d7b0d91703aed136faf8'
      OR NOT (SELECT p.prosecdef
                FROM pg_proc p
               WHERE p.oid = 'public.get_customer_transaction_review(uuid,date,date)'::regprocedure)
@@ -147,7 +147,7 @@ BEGIN
     FROM pg_proc p
    WHERE p.oid = 'public.get_customer_transaction_review(uuid,date,date)'::regprocedure;
 
-  IF md5(v_source) <> 'ed2b798d1a16221b4d886bd6944eb762'
+  IF md5(replace(v_source, E'\r\n', E'\n')) <> 'ffb9f119d87cfc34f6690e484ad32366'
      OR v_source NOT LIKE '%ila.id%'
      OR v_source NOT LIKE '%ORDER BY t.tx_date, t.tx_type, t.ref_num, t.source_row_id%'
      OR v_source NOT LIKE '%ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW%'

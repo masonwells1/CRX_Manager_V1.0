@@ -12,7 +12,12 @@ const source = (...parts: string[]) =>
 describe('gauntlet sections 2-6 CodeRabbit closeout', () => {
   it('advances transaction-review balances in stable allocation-row order', () => {
     const sql = migration('20260721045536_fix_transaction_review_running_balance.sql');
-    expect(sql).toContain("md5(v_source) <> 'ca016ab0f94d0d809efd3be1094a3a84'");
+    expect(sql).toContain(
+      "md5(replace(v_source, E'\\r\\n', E'\\n')) <> '9f16939c4e57d7b0d91703aed136faf8'",
+    );
+    expect(sql).toContain(
+      "md5(replace(v_source, E'\\r\\n', E'\\n')) <> 'ffb9f119d87cfc34f6690e484ad32366'",
+    );
     expect(sql).toContain('i.id AS source_row_id');
     expect(sql).toContain('ila.id');
     expect(sql).toContain('pa.id');

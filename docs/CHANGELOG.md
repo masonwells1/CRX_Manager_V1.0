@@ -4,7 +4,7 @@ All significant development milestones, in reverse chronological order.
 
 ## 2026-07-21 — Supplier-pricing Phase 1a production closeout
 
-- Corrected the Customer Transaction Review running balance so multiple allocations sharing a payment date/reference advance one row at a time in stable UUID order instead of displaying the peer group's final balance on every row. Live inspection found zero current peer groups, so this is a forward-only report fix with no data repair.
+- Corrected the Customer Transaction Review running balance so multiple allocations sharing a payment date/reference advance one row at a time in stable UUID order instead of displaying the peer group's final balance on every row. Live inspection found zero current peer groups, so this is a forward-only report fix with no data repair. Its predecessor/postflight hashes normalize line endings so live Windows-applied state and clean Linux rebuilds enforce the same function contract.
 - Restamped the pending PR #168 invoice/order lifecycle closeout above the final PR #165 live high-water and bound it to the strengthened governed split save, singular-void, and atomic group-void contracts without replacing those reviewed bodies.
 - Limited the new "cancel remaining quantity" behavior to genuinely `partially_fulfilled` orders, preserving the final provenance-aware full-cancel path for confirmed orders.
 - Registered and ran both the lifecycle rollback chain and the canonical governed split H5 chain against the composed migration; both returned `SMOKE_PASS_ROLLBACK` with zero persisted fixtures.
