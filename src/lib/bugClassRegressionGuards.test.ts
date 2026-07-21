@@ -34,13 +34,30 @@ const MIGRATIONS_DIR = join(ROOT, 'supabase', 'migrations');
  * required somewhere in the merged text; the fail-open scanner in
  * sqlRoleGateNullFailOpen.test.ts checks each overload individually.
  */
+/** TYPE-ONLY signature fingerprint — parameter names/modes/DEFAULTs dropped so
+ *  a CREATE's named args match a later DROP's identity args. */
+function argFingerprint(argText: string): string {
+  return argText
+    .replace(/--[^\n]*/g, '') // inline SQL comments inside arg lists poison the fingerprint
+    .replace(/DEFAULT\s+[^,)]+/gi, '')
+    .split(',')
+    .map((part) => {
+      const toks = part.trim().replace(/^(IN|OUT|INOUT|VARIADIC)\s+/i, '').split(/\s+/);
+      return (toks.length > 1 ? toks.slice(1).join(' ') : toks[0] || '').toLowerCase();
+    })
+    .filter(Boolean)
+    .join(',');
+}
+
 function latestDiskDefinitions(): Map<string, { file: string; body: string }> {
   const perOverload = new Map<string, { fn: string; file: string; body: string }>();
+  const tombstoned = new Set<string>();
   const files = readdirSync(MIGRATIONS_DIR)
     .filter((f) => f.endsWith('.sql'))
     .sort()
     .reverse();
   const defRe = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:public\.)?([A-Za-z_][A-Za-z0-9_]*)\s*\(/gi;
+  const dropRe = /DROP\s+FUNCTION\s+(?:IF\s+EXISTS\s+)?(?:public\.)?([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)/gi;
   for (const file of files) {
     const content = readFileSync(join(MIGRATIONS_DIR, file), 'utf8');
     let m: RegExpExecArray | null;
@@ -48,15 +65,17 @@ function latestDiskDefinitions(): Map<string, { file: string; body: string }> {
       const fnName = m[1].toLowerCase();
       const after = content.slice(m.index);
       const argEnd = after.indexOf(')');
-      const sig = (argEnd > 0 ? after.slice(after.indexOf('(') + 1, argEnd) : '')
-        .replace(/DEFAULT\s+[^,)]+/gi, '')
-        .replace(/\s+/g, ' ')
-        .toLowerCase()
-        .trim();
-      const key = `${fnName}(${sig})`;
-      if (perOverload.has(key)) continue;
+      const key = `${fnName}(${argFingerprint(argEnd > 0 ? after.slice(after.indexOf('(') + 1, argEnd) : '')})`;
+      // DROP-aware (CodeRabbit Major, PR #189): a signature dropped by a NEWER
+      // migration is dead — its old body must not satisfy a guard check.
+      // Same-file CREATEs win over that file's own DROPs (drop-then-recreate).
+      if (perOverload.has(key) || tombstoned.has(key)) continue;
       const bodyMatch = after.match(/AS\s+\$([A-Za-z_]*)\$([\s\S]*?)\$\1\$/);
       perOverload.set(key, { fn: fnName, file, body: bodyMatch ? bodyMatch[2] : after });
+    }
+    let d: RegExpExecArray | null;
+    while ((d = dropRe.exec(content)) !== null) {
+      tombstoned.add(`${d[1].toLowerCase()}(${argFingerprint(d[2])})`);
     }
   }
   const latest = new Map<string, { file: string; body: string }>();

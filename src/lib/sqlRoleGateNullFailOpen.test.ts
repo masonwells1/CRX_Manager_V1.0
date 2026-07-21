@@ -43,27 +43,43 @@ interface DiskFnDef {
 }
 
 /**
- * Fingerprint of an argument list so OVERLOADS are tracked separately (Codex
- * P2 on 9e7e185f: keying by name alone collapses overloads, letting a second
- * signature keep an unguarded gate invisibly). Normalizes whitespace/case and
- * strips DEFAULT clauses — enough to tell signatures apart on disk.
+ * TYPE-ONLY fingerprint of an argument list so OVERLOADS are tracked
+ * separately (Codex P2 on 9e7e185f: keying by name alone collapses overloads,
+ * letting a second signature keep an unguarded gate invisibly). Drops DEFAULT
+ * clauses, arg modes, and parameter NAMES — so a `CREATE (p_items jsonb, ...)`
+ * matches a later `DROP FUNCTION receive_po_items(jsonb, ...)`.
  */
 function argFingerprint(argText: string): string {
   return argText
+    .replace(/--[^\n]*/g, '') // inline SQL comments inside arg lists poison the fingerprint
     .replace(/DEFAULT\s+[^,)]+/gi, '')
-    .replace(/\s+/g, ' ')
-    .toLowerCase()
-    .trim();
+    .split(',')
+    .map((part) => {
+      const toks = part.trim().replace(/^(IN|OUT|INOUT|VARIADIC)\s+/i, '').split(/\s+/);
+      return (toks.length > 1 ? toks.slice(1).join(' ') : toks[0] || '').toLowerCase();
+    })
+    .filter(Boolean)
+    .join(',');
 }
 
-/** Latest disk definition per (function name, arg signature) — one entry per overload. */
+/**
+ * Latest disk definition per (function name, type signature) — one entry per
+ * LIVE overload. DROP-aware (CodeRabbit Major on PR #189): a `DROP FUNCTION`
+ * in a NEWER migration tombstones that signature, so an overload removed by a
+ * later consolidation can't satisfy (or fail) the scan from a dead body.
+ * Within one file, CREATEs win over that same file's DROPs (the common
+ * drop-then-recreate migration pattern); a file's DROPs only tombstone
+ * definitions in OLDER files.
+ */
 function latestDiskDefinitions(): Map<string, DiskFnDef> {
   const latest = new Map<string, DiskFnDef>();
+  const tombstoned = new Set<string>();
   const files = readdirSync(MIGRATIONS_DIR)
     .filter((f) => f.endsWith('.sql'))
     .sort()
     .reverse(); // newest first
   const defRe = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:public\.)?([A-Za-z_][A-Za-z0-9_]*)\s*\(/gi;
+  const dropRe = /DROP\s+FUNCTION\s+(?:IF\s+EXISTS\s+)?(?:public\.)?([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)/gi;
   for (const file of files) {
     const content = readFileSync(join(MIGRATIONS_DIR, file), 'utf8');
     let m: RegExpExecArray | null;
@@ -72,9 +88,13 @@ function latestDiskDefinitions(): Map<string, DiskFnDef> {
       const after = content.slice(m.index);
       const argEnd = after.indexOf(')');
       const key = `${fnName}(${argFingerprint(argEnd > 0 ? after.slice(after.indexOf('(') + 1, argEnd) : '')})`;
-      if (latest.has(key)) continue;
+      if (latest.has(key) || tombstoned.has(key)) continue;
       const bodyMatch = after.match(/AS\s+\$([A-Za-z_]*)\$([\s\S]*?)\$\1\$/);
       latest.set(key, { fn: fnName, file, body: bodyMatch ? bodyMatch[2] : after });
+    }
+    let d: RegExpExecArray | null;
+    while ((d = dropRe.exec(content)) !== null) {
+      tombstoned.add(`${d[1].toLowerCase()}(${argFingerprint(d[2])})`);
     }
   }
   return latest;
@@ -135,20 +155,25 @@ function unguardedRoleGates(defs: Map<string, DiskFnDef>): GateHit[] {
  * Functions with a role gate that intentionally has no IS NULL in the same
  * condition. Every entry needs a reason. This list may only SHRINK.
  */
+/**
+ * Keys are `<function>|<variable>` (CodeRabbit P2 on PR #189: a name-only key
+ * would also mute a FUTURE unsafe gate on a different variable in the same
+ * function). An entry exempts exactly one variable's gates in one function.
+ */
 const KNOWN_UNGUARDED: Record<string, string> = {
   // Safe: v_actor_role is loaded with `WHERE id = v_actor AND is_active = true`
   // followed by `IF NOT FOUND THEN RAISE NOT_AUTHORIZED` — an active profile is
   // pinned before the gate, so the role can only be NULL if profiles.role is
   // NULL, and the gate is a secondary owner-mismatch check, not the auth gate.
-  get_offline_action_status: 'active-profile pinned upstream (NOT FOUND raise) before the gate',
+  'get_offline_action_status|v_actor_role': 'active-profile pinned upstream (NOT FOUND raise) before the gate',
   // Safe BY DESIGN: `new_role IS NOT NULL AND new_role NOT IN (...)` — NULL
   // means "caller is not changing the role", so skipping the value check on
   // NULL is fail-closed for this validation (nothing is written).
-  admin_update_profile: 'NULL new_role means no role change; the NOT IN is a value whitelist, not an auth gate',
+  'admin_update_profile|new_role': 'NULL new_role means no role change; the NOT IN is a value whitelist, not an auth gate',
   // LATENT H1 in a PARKED migration (parked_010, inventory-hold shelved with the
   // earmark engine 2026-06-14, never applied live). If this migration is ever
   // revived, add `v_role IS NULL OR` BEFORE applying — then delete this entry.
-  create_inventory_hold: 'parked/shelved migration, not live; must be NULL-guarded before any future apply',
+  'create_inventory_hold|v_role': 'parked/shelved migration, not live; must be NULL-guarded before any future apply',
 };
 
 /**
@@ -158,9 +183,10 @@ const KNOWN_UNGUARDED: Record<string, string> = {
  * scanned. May only shrink.
  */
 const DEAD_OVERLOADS = new Set<string>([
-  // Superseded by 20260331400000_consolidate_receive_po_items (DROPs old sigs);
-  // live pg_proc verified 2026-07-20: single overload, NULL-guarded.
-  'receive_po_items|20260330000000_prelaunch_critical_fixes.sql',
+  // Empty: DROP-aware tombstoning in latestDiskDefinitions() removes dropped
+  // signatures automatically (it retired the receive_po_items 2026-03-30
+  // entry that used to live here). Use only for a dead overload the tombstone
+  // scan can't see (e.g. dropped via dynamic SQL), with a live-pg_proc note.
 ]);
 
 describe('SQL role gates fail CLOSED on NULL role (H1 class)', () => {
@@ -172,7 +198,7 @@ describe('SQL role gates fail CLOSED on NULL role (H1 class)', () => {
 
   it('every `<role var> NOT IN (...)` gate carries NULL protection in the same condition', () => {
     const hits = unguardedRoleGates(defs).filter(
-      (h) => !(h.fn in KNOWN_UNGUARDED) && !DEAD_OVERLOADS.has(`${h.fn}|${h.file}`)
+      (h) => !(`${h.fn}|${h.variable}` in KNOWN_UNGUARDED) && !DEAD_OVERLOADS.has(`${h.fn}|${h.file}`)
     );
     const report = hits
       .map((h) => `  ${h.fn} (${h.file}) — ${h.variable} NOT IN without IS NULL/COALESCE:\n    IF ${h.condition}`)
@@ -184,12 +210,13 @@ describe('SQL role gates fail CLOSED on NULL role (H1 class)', () => {
     ).toEqual([]);
   });
 
-  it('KNOWN_UNGUARDED only names functions that still exist and still have a gate', () => {
+  it('KNOWN_UNGUARDED only names gates that still exist', () => {
     const allHits = unguardedRoleGates(defs);
-    for (const fn of Object.keys(KNOWN_UNGUARDED)) {
+    for (const key of Object.keys(KNOWN_UNGUARDED)) {
+      const [fn, variable] = key.split('|');
       expect(
-        allHits.some((h) => h.fn === fn),
-        `${fn} no longer has an unguarded gate — remove it from KNOWN_UNGUARDED`
+        allHits.some((h) => h.fn === fn && h.variable === variable),
+        `${key} no longer matches an unguarded gate — remove it from KNOWN_UNGUARDED`
       ).toBe(true);
     }
   });
