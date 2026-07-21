@@ -394,6 +394,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
         .eq('id', loadedInvoice.customer_id)
         .maybeSingle();
       customerPaymentTerms = (customerTerms as { payment_terms?: string | null } | null)?.payment_terms?.trim() || '';
+      if (isStale()) return;
     }
     setInvoice(data as object as Invoice);
     const effectivePaymentTerms = loadedPaymentTerms.trim() || customerPaymentTerms;

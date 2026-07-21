@@ -3,7 +3,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { Link, MemoryRouter, Route, Routes } from 'react-router-dom';
 
 const { mockFrom, mockRpc, mockToast, mockNavigate } = vi.hoisted(() => ({
   mockFrom: vi.fn(),
@@ -253,6 +253,78 @@ describe('InvoiceDetail — chemical-sale payment terms', () => {
       }));
       expect(mockRpc.mock.calls[0][1].p_invoice.payment_terms).not.toBe('Custom');
     });
+  });
+
+  it('does not apply stale customer terms after navigating to another invoice', async () => {
+    const invoiceA = {
+      id: 'inv-a',
+      invoice_number: 'INV-A',
+      invoice_type: 'chemical_sale',
+      status: 'draft',
+      customer_id: 'cust-a',
+      order_id: null,
+      invoice_date: '2026-03-15',
+      due_date: null,
+      payment_terms: null,
+      subtotal_cents: 10000,
+      total_amount_cents: 10000,
+      total_cents: 10000,
+      balance_cents: 10000,
+      header_notes: '',
+      footer_notes: '',
+      purchase_order_ref: '',
+      created_at: '2026-03-15T00:00:00Z',
+    };
+    const invoiceB = { ...invoiceA, id: 'inv-b', invoice_number: 'INV-B', customer_id: 'cust-b', payment_terms: 'Net 30', due_date: '2026-04-14' };
+    let invoiceCalls = 0;
+    let customerCalls = 0;
+    let resolveCustomerTerms!: (value: { data: { payment_terms: string }; error: null }) => void;
+    const delayedCustomerTerms = new Promise<{ data: { payment_terms: string }; error: null }>((resolve) => {
+      resolveCustomerTerms = resolve;
+    });
+
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'invoices') {
+        invoiceCalls += 1;
+        const invoice = invoiceCalls <= 2 ? invoiceA : invoiceCalls <= 4 ? invoiceB : [];
+        return buildChain({ data: invoice, error: null });
+      }
+      if (table === 'customers') {
+        customerCalls += 1;
+        if (customerCalls === 2) {
+          const chain = buildChain({ data: null, error: null });
+          const promise = delayedCustomerTerms;
+          chain.then = promise.then.bind(promise);
+          chain.catch = promise.catch.bind(promise);
+          chain.finally = promise.finally.bind(promise);
+          return chain;
+        }
+      }
+      return buildChain({ data: [], error: null });
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/invoices/inv-a']}>
+        <Link to="/invoices/inv-b">Invoice B</Link>
+        <Routes>
+          <Route path="/invoices/:id" element={<InvoiceDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(customerCalls).toBe(2));
+    fireEvent.click(screen.getByRole('link', { name: 'Invoice B' }));
+    await waitFor(() => {
+      expect(screen.getAllByText('INV-B').length).toBeGreaterThan(0);
+      expect(screen.getByRole('combobox', { name: 'Payment Terms' })).toHaveValue('Net 30');
+    });
+
+    resolveCustomerTerms({ data: { payment_terms: 'Net 60' }, error: null });
+    await waitFor(() => {
+      expect(screen.getAllByText('INV-B').length).toBeGreaterThan(0);
+      expect(screen.getByRole('combobox', { name: 'Payment Terms' })).toHaveValue('Net 30');
+    });
+    expect(screen.queryByText('INV-A')).not.toBeInTheDocument();
   });
 
   it.each(['posted', 'voided'])('keeps %s invoices inert', async (status) => {
