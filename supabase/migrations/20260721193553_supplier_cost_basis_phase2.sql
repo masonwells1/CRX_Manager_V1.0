@@ -137,6 +137,109 @@ REVOKE ALL ON TABLE public.product_cost_basis
 REVOKE ALL ON TABLE public.product_cost_basis_change_rows
   FROM PUBLIC, anon, authenticated, service_role;
 
+-- Purchase-order unit costs entered by the current app are per Product
+-- inventory unit. Preserve that fact as an immutable conversion snapshot when
+-- the PO line uses the same unit label as the Product. Lines expressed in a
+-- different supplier/package unit remain unresolved instead of guessing.
+-- Installing the trigger before the historical backfill closes the concurrent
+-- writer gap without depending on an outer migration transaction wrapper.
+
+CREATE OR REPLACE FUNCTION public.capture_purchase_order_item_cost_snapshot()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = public, pg_temp
+AS $function$
+DECLARE
+  v_inventory_unit text;
+BEGIN
+  SELECT p.unit_size INTO v_inventory_unit
+  FROM public.products p
+  WHERE p.id = NEW.product_id;
+
+  IF OLD.quantity_received > 0 AND (
+    NEW.purchase_order_id IS DISTINCT FROM OLD.purchase_order_id
+    OR NEW.product_id IS DISTINCT FROM OLD.product_id
+    OR NEW.unit_cost IS DISTINCT FROM OLD.unit_cost
+    OR NEW.unit_size IS DISTINCT FROM OLD.unit_size
+    OR NEW.product_supplier_link_id IS DISTINCT FROM OLD.product_supplier_link_id
+    OR NEW.supplier_price_observation_id IS DISTINCT FROM OLD.supplier_price_observation_id
+    OR NEW.inventory_units_per_supplier_unit_snapshot IS DISTINCT FROM
+       OLD.inventory_units_per_supplier_unit_snapshot
+    OR NEW.cost_provenance IS DISTINCT FROM OLD.cost_provenance
+    OR NEW.cost_snapshot_at IS DISTINCT FROM OLD.cost_snapshot_at
+  ) AND NOT (
+    OLD.inventory_units_per_supplier_unit_snapshot IS NULL
+    AND NEW.inventory_units_per_supplier_unit_snapshot = 1
+    AND NEW.purchase_order_id IS NOT DISTINCT FROM OLD.purchase_order_id
+    AND NEW.product_id IS NOT DISTINCT FROM OLD.product_id
+    AND NEW.unit_cost IS NOT DISTINCT FROM OLD.unit_cost
+    AND NEW.unit_size IS NOT DISTINCT FROM OLD.unit_size
+    AND NEW.product_supplier_link_id IS NOT DISTINCT FROM OLD.product_supplier_link_id
+    AND NEW.supplier_price_observation_id IS NOT DISTINCT FROM OLD.supplier_price_observation_id
+    AND NEW.cost_provenance IS NOT DISTINCT FROM COALESCE(OLD.cost_provenance, 'legacy')
+    AND NEW.cost_snapshot_at IS NOT NULL
+    AND NULLIF(btrim(NEW.unit_size), '') IS NOT NULL
+    AND NULLIF(btrim(v_inventory_unit), '') IS NOT NULL
+    AND lower(btrim(NEW.unit_size)) = lower(btrim(v_inventory_unit))
+  ) THEN
+    RAISE EXCEPTION 'RECEIVED_PO_COST_SNAPSHOT_IMMUTABLE';
+  END IF;
+
+  IF COALESCE(OLD.quantity_received, 0) <= 0 AND (
+    NEW.purchase_order_id IS DISTINCT FROM OLD.purchase_order_id
+    OR NEW.product_id IS DISTINCT FROM OLD.product_id
+    OR NEW.unit_cost IS DISTINCT FROM OLD.unit_cost
+    OR NEW.unit_size IS DISTINCT FROM OLD.unit_size
+  ) THEN
+    NEW.product_supplier_link_id := NULL;
+    NEW.supplier_price_observation_id := NULL;
+    NEW.inventory_units_per_supplier_unit_snapshot := NULL;
+    NEW.cost_provenance := NULL;
+    NEW.cost_snapshot_at := NULL;
+  END IF;
+
+  IF COALESCE(OLD.quantity_received, 0) <= 0
+     AND NEW.quantity_received > 0
+     AND NEW.inventory_units_per_supplier_unit_snapshot IS NULL THEN
+    IF NULLIF(btrim(NEW.unit_size), '') IS NOT NULL
+       AND NULLIF(btrim(v_inventory_unit), '') IS NOT NULL
+       AND lower(btrim(NEW.unit_size)) = lower(btrim(v_inventory_unit)) THEN
+      NEW.inventory_units_per_supplier_unit_snapshot := 1;
+      NEW.cost_provenance := COALESCE(NEW.cost_provenance, 'manual');
+      NEW.cost_snapshot_at := COALESCE(NEW.cost_snapshot_at, now());
+    END IF;
+  END IF;
+
+  RETURN NEW;
+END;
+$function$;
+
+REVOKE ALL ON FUNCTION public.capture_purchase_order_item_cost_snapshot()
+  FROM PUBLIC, anon, authenticated, service_role;
+
+DROP TRIGGER IF EXISTS trigger_capture_purchase_order_item_cost_snapshot
+  ON public.purchase_order_items;
+CREATE TRIGGER trigger_capture_purchase_order_item_cost_snapshot
+  BEFORE UPDATE OF quantity_received, purchase_order_id, product_id,
+    unit_cost, unit_size, product_supplier_link_id,
+    supplier_price_observation_id,
+    inventory_units_per_supplier_unit_snapshot, cost_provenance, cost_snapshot_at
+  ON public.purchase_order_items
+  FOR EACH ROW
+  EXECUTE FUNCTION public.capture_purchase_order_item_cost_snapshot();
+
+UPDATE public.purchase_order_items poi
+SET inventory_units_per_supplier_unit_snapshot = 1,
+    cost_provenance = COALESCE(poi.cost_provenance, 'legacy'),
+    cost_snapshot_at = COALESCE(poi.cost_snapshot_at, now())
+FROM public.products p
+WHERE p.id = poi.product_id
+  AND poi.quantity_received > 0
+  AND poi.inventory_units_per_supplier_unit_snapshot IS NULL
+  AND NULLIF(btrim(poi.unit_size), '') IS NOT NULL
+  AND NULLIF(btrim(p.unit_size), '') IS NOT NULL
+  AND lower(btrim(poi.unit_size)) = lower(btrim(p.unit_size));
+
 -- Install enforcement before the baseline copy. CREATE TRIGGER takes the
 -- relation lock needed to wait for in-flight Product writers; after it returns,
 -- every new cost write is fail-closed while the baseline is being captured.
@@ -1375,6 +1478,20 @@ BEGIN
        'service_role', 'public.sync_legacy_product_cost_basis()', 'EXECUTE'
      ) THEN
     RAISE EXCEPTION 'legacy cost-basis sync is directly executable';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_trigger
+    WHERE tgrelid = 'public.purchase_order_items'::regclass
+      AND tgname = 'trigger_capture_purchase_order_item_cost_snapshot'
+      AND NOT tgisinternal
+  ) OR has_function_privilege(
+       'authenticated', 'public.capture_purchase_order_item_cost_snapshot()',
+       'EXECUTE'
+     ) OR has_function_privilege(
+       'service_role', 'public.capture_purchase_order_item_cost_snapshot()',
+       'EXECUTE'
+     ) THEN
+    RAISE EXCEPTION 'purchase-order cost snapshot trigger or grants invalid';
   END IF;
 END;
 $migration_checks$;

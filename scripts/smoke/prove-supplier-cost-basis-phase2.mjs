@@ -51,7 +51,9 @@ try {
 
   let ready = false;
   for (let attempt = 0; attempt < 60; attempt += 1) {
-    const result = run('docker', ['exec', container, 'pg_isready', '-U', 'postgres'],
+    const result = run('docker', [
+      'exec', container, 'pg_isready', '-h', '127.0.0.1', '-U', 'postgres',
+    ],
       { capture: true, allowFailure: true });
     if (result.status === 0) { ready = true; break; }
     await new Promise((resolve) => setTimeout(resolve, 500));

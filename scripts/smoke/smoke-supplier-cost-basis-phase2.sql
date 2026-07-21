@@ -179,6 +179,131 @@ $proof$;
 
 UPDATE public.app_settings SET setting_value = 'true'
 WHERE setting_key = 'supplier_cost_basis_enabled';
+
+-- The migration backfills only same-inventory-unit legacy PO lines and the
+-- receipt trigger captures that same fact for future app-created lines.
+DO $proof$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM public.purchase_order_items
+    WHERE id = 'cccccccc-cccc-4ccc-8ccc-ccccccccccc2'::uuid
+      AND inventory_units_per_supplier_unit_snapshot = 1
+      AND cost_provenance = 'legacy'
+      AND cost_snapshot_at IS NOT NULL
+  ) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: same-unit legacy PO cost was not backfilled';
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM public.purchase_order_items
+    WHERE id = 'cccccccc-cccc-4ccc-8ccc-ccccccccccc7'::uuid
+      AND inventory_units_per_supplier_unit_snapshot IS NOT NULL
+  ) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: unreceived legacy PO line was backfilled';
+  END IF;
+END;
+$proof$;
+
+-- A pre-migration open line can still be edited before receipt. Changing its
+-- unit to a supplier package must remain unresolved, proving no stale snapshot
+-- was attached by the backfill.
+UPDATE public.purchase_order_items SET unit_size = 'case'
+WHERE id = 'cccccccc-cccc-4ccc-8ccc-ccccccccccc7'::uuid;
+UPDATE public.purchase_order_items SET quantity_received = 1
+WHERE id = 'cccccccc-cccc-4ccc-8ccc-ccccccccccc7'::uuid;
+DO $proof$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM public.purchase_order_items
+    WHERE id = 'cccccccc-cccc-4ccc-8ccc-ccccccccccc7'::uuid
+      AND inventory_units_per_supplier_unit_snapshot IS NOT NULL
+  ) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: edited unreceived PO retained a stale snapshot';
+  END IF;
+END;
+$proof$;
+
+INSERT INTO public.purchase_orders(
+  id, po_number, vendor, status, submitted_date, created_by
+) VALUES (
+  'cccccccc-cccc-4ccc-8ccc-ccccccccccc3', 'PO-PHASE2-FUTURE',
+  'Phase 2 Future Supplier', 'submitted', current_date,
+  '11111111-1111-4111-8111-111111111111'
+);
+INSERT INTO public.purchase_order_items(
+  id, purchase_order_id, product_id, quantity_received, unit_cost, unit_size
+) VALUES
+  (
+    'cccccccc-cccc-4ccc-8ccc-ccccccccccc4',
+    'cccccccc-cccc-4ccc-8ccc-ccccccccccc3',
+    'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2', 0, 50, 'gal'
+  ),
+  (
+    'cccccccc-cccc-4ccc-8ccc-ccccccccccc5',
+    'cccccccc-cccc-4ccc-8ccc-ccccccccccc3',
+    'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2', 0, 500, 'case'
+  );
+UPDATE public.purchase_order_items SET quantity_received = 1
+WHERE id IN (
+  'cccccccc-cccc-4ccc-8ccc-ccccccccccc4'::uuid,
+  'cccccccc-cccc-4ccc-8ccc-ccccccccccc5'::uuid
+);
+
+DO $proof$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM public.purchase_order_items
+    WHERE id = 'cccccccc-cccc-4ccc-8ccc-ccccccccccc4'::uuid
+      AND inventory_units_per_supplier_unit_snapshot = 1
+      AND cost_provenance = 'manual'
+      AND cost_snapshot_at IS NOT NULL
+  ) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: future same-unit receipt snapshot was not captured';
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM public.purchase_order_items
+    WHERE id = 'cccccccc-cccc-4ccc-8ccc-ccccccccccc5'::uuid
+      AND inventory_units_per_supplier_unit_snapshot IS NOT NULL
+  ) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: mismatched supplier package unit was guessed';
+  END IF;
+  BEGIN
+    UPDATE public.purchase_order_items
+    SET unit_cost = 55
+    WHERE id = 'cccccccc-cccc-4ccc-8ccc-ccccccccccc4'::uuid;
+    RAISE EXCEPTION 'SMOKE_FAIL: received PO cost-defining fields were mutable';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF SQLERRM NOT LIKE 'RECEIVED_PO_COST_SNAPSHOT_IMMUTABLE%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: received snapshot failed for wrong reason: %', SQLERRM;
+    END IF;
+  END;
+END;
+$proof$;
+
+-- A fully reversed receipt may be edited again, but that edit must discard the
+-- old snapshot so a later receipt cannot reuse stale cost provenance.
+UPDATE public.purchase_order_items SET quantity_received = 0
+WHERE id = 'cccccccc-cccc-4ccc-8ccc-ccccccccccc4'::uuid;
+UPDATE public.purchase_order_items SET unit_size = 'case'
+WHERE id = 'cccccccc-cccc-4ccc-8ccc-ccccccccccc4'::uuid;
+UPDATE public.purchase_order_items SET quantity_received = 1
+WHERE id = 'cccccccc-cccc-4ccc-8ccc-ccccccccccc4'::uuid;
+DO $proof$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM public.purchase_order_items
+    WHERE id = 'cccccccc-cccc-4ccc-8ccc-ccccccccccc4'::uuid
+      AND (
+        inventory_units_per_supplier_unit_snapshot IS NOT NULL
+        OR cost_provenance IS NOT NULL
+        OR cost_snapshot_at IS NOT NULL
+      )
+  ) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: reversed-and-edited PO retained stale provenance';
+  END IF;
+END;
+$proof$;
+
 INSERT INTO public.vendors(id, name)
 VALUES ('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb1', 'Phase 2 Supplier');
 INSERT INTO public.product_supplier_links(
@@ -212,6 +337,51 @@ INSERT INTO public.supplier_price_observations(
   'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb4',
   'quote', 18000, 'case', 1, current_date, '11111111-1111-4111-8111-111111111111'
 );
+SET ROLE authenticated;
+
+INSERT INTO phase2_proof(key, value)
+VALUES ('purchase-preview', public.preview_product_cost_basis_changes(
+  'product_page', NULL,
+  jsonb_build_array(jsonb_build_object(
+    'product_id', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3',
+    'row_version', 1,
+    'pricing_mode', 'margin_driven',
+    'new_cost', '40.00',
+    'tier1_margin_percent', '20',
+    'tier2_margin_percent', '25',
+    'tier3_margin_percent', '30',
+    'change_reason', 'Select received purchase cost',
+    'basis_type', 'actual_purchase',
+    'basis_source', 'product_page',
+    'basis_reason', 'Select received purchase cost',
+    'basis_selection', true,
+    'purchase_order_item_id', 'cccccccc-cccc-4ccc-8ccc-ccccccccccc2'
+  )),
+  '11111111-1111-4111-8111-111111111111', 'phase2-purchase-preview'
+));
+
+INSERT INTO phase2_proof(key, value)
+SELECT 'purchase-apply', public.apply_product_cost_basis_change_set(
+  (value->>'change_set_id')::uuid, value->>'request_fingerprint',
+  '11111111-1111-4111-8111-111111111111', 'phase2-purchase-apply'
+)
+FROM phase2_proof WHERE key = 'purchase-preview';
+
+RESET ROLE;
+DO $proof$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM public.product_cost_basis
+    WHERE product_id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3'::uuid
+      AND effective_to IS NULL
+      AND basis_type = 'actual_purchase'
+      AND cost_cents = 4000
+      AND purchase_order_item_id = 'cccccccc-cccc-4ccc-8ccc-ccccccccccc2'::uuid
+  ) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: actual-purchase basis was not selectable';
+  END IF;
+END;
+$proof$;
 SET ROLE authenticated;
 
 INSERT INTO phase2_proof(key, value)

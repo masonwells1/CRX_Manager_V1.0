@@ -98,8 +98,44 @@ CREATE TABLE public.purchase_order_items (
   quantity_received numeric NOT NULL DEFAULT 0,
   unit_cost numeric NOT NULL DEFAULT 0,
   unit_cost_cents bigint GENERATED ALWAYS AS (round(unit_cost * 100)::bigint) STORED,
+  unit_size text,
+  product_supplier_link_id uuid REFERENCES public.product_supplier_links(id),
+  supplier_price_observation_id uuid REFERENCES public.supplier_price_observations(id),
   inventory_units_per_supplier_unit_snapshot numeric(20,8),
-  cost_provenance text
+  cost_provenance text,
+  cost_snapshot_at timestamptz
+);
+
+INSERT INTO public.purchase_orders(
+  id, po_number, vendor, status, submitted_date, created_by
+) VALUES (
+  'cccccccc-cccc-4ccc-8ccc-ccccccccccc1', 'PO-PHASE2-LEGACY',
+  'Phase 2 Legacy Supplier', 'fully_received', current_date,
+  '11111111-1111-4111-8111-111111111111'
+);
+
+INSERT INTO public.purchase_order_items(
+  id, purchase_order_id, product_id, quantity_received, unit_cost, unit_size
+) VALUES (
+  'cccccccc-cccc-4ccc-8ccc-ccccccccccc2',
+  'cccccccc-cccc-4ccc-8ccc-ccccccccccc1',
+  'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3', 5, 40, 'lb'
+);
+
+INSERT INTO public.purchase_orders(
+  id, po_number, vendor, status, submitted_date, created_by
+) VALUES (
+  'cccccccc-cccc-4ccc-8ccc-ccccccccccc6', 'PO-PHASE2-OPEN',
+  'Phase 2 Open Supplier', 'submitted', current_date,
+  '11111111-1111-4111-8111-111111111111'
+);
+
+INSERT INTO public.purchase_order_items(
+  id, purchase_order_id, product_id, quantity_received, unit_cost, unit_size
+) VALUES (
+  'cccccccc-cccc-4ccc-8ccc-ccccccccccc7',
+  'cccccccc-cccc-4ccc-8ccc-ccccccccccc6',
+  'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2', 0, 50, 'gal'
 );
 
 CREATE OR REPLACE FUNCTION public.get_supplier_market_evidence(p_product_ids uuid[] DEFAULT NULL)

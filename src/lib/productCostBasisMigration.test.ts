@@ -42,6 +42,22 @@ describe('supplier cost-basis Phase 2 migration contract', () => {
   });
 
   it('normalizes supplier and received-purchase evidence before selection', () => {
+    expect(migrationSql).toContain(
+      'CREATE OR REPLACE FUNCTION public.capture_purchase_order_item_cost_snapshot()',
+    );
+    expect(migrationSql).toContain(
+      'CREATE TRIGGER trigger_capture_purchase_order_item_cost_snapshot',
+    );
+    expect(migrationSql).toContain("RAISE EXCEPTION 'RECEIVED_PO_COST_SNAPSHOT_IMMUTABLE'");
+    expect(migrationSql).toMatch(
+      /BEFORE UPDATE OF quantity_received, purchase_order_id, product_id,\s*unit_cost, unit_size/,
+    );
+    expect(migrationSql).toMatch(
+      /COALESCE\(OLD\.quantity_received, 0\) <= 0[\s\S]+?NEW\.inventory_units_per_supplier_unit_snapshot := NULL/,
+    );
+    expect(migrationSql).toMatch(
+      /UPDATE public\.purchase_order_items poi[\s\S]+?inventory_units_per_supplier_unit_snapshot = 1[\s\S]+?poi\.quantity_received > 0[\s\S]+?lower\(btrim\(poi\.unit_size\)\) = lower\(btrim\(p\.unit_size\)\)/,
+    );
     expect(migrationSql).toMatch(
       /o\.cost_cents::numeric\s*\/\s*o\.package_quantity\s*\/\s*l\.inventory_units_per_supplier_unit/,
     );
