@@ -4,9 +4,9 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
-## 2026-07-20 — Supplier Pricing Phase 1b follow-ups (PR #184): PARKED migration 20260720230000 — durable idempotent replay after cache TTL for the 4 evidence RPCs, new reject_supplier_price_import terminal path, PRICE_UNIT_MISMATCH staging validation, America/Chicago business dates; frontend Reject-import UI, admin-only route alignment, ProductDetail cost-history fetch gate, ProductPriceHistory date-only rendering fix; docs + guard-test registrations. Live apply parked for Mason's OK. Surfaced Q-2026-2059 blank commission recipient (owner decision).
+## 2026-07-20 — Supplier Pricing Phase 1b follow-ups (PR #184)
 
-Supplier Pricing Phase 1b follow-ups (PR #184): PARKED migration 20260720230000 — durable idempotent replay after cache TTL for the 4 evidence RPCs, new reject_supplier_price_import terminal path, PRICE_UNIT_MISMATCH staging validation, America/Chicago business dates; frontend Reject-import UI, admin-only route alignment, ProductDetail cost-history fetch gate, ProductPriceHistory date-only rendering fix; docs + guard-test registrations. Live apply parked for Mason's OK. Surfaced Q-2026-2059 blank commission recipient (owner decision).
+Migration 20260720230000 (built this session, then **APPLIED LIVE** with Mason's in-chat OK; ledger-reconciled per B7): durable idempotent replay after cache TTL for the 4 evidence RPCs, new `reject_supplier_price_import` terminal path, PRICE_UNIT_MISMATCH staging validation, America/Chicago business dates. Frontend: Reject-import UI, admin-only route alignment, ProductDetail cost-history fetch gate, ProductPriceHistory date-only rendering fix; docs + guard-test registrations; schema registry + pg_proc snapshot refreshed from live; invariant sweeps 17/17 pass. Surfaced Q-2026-2059 blank commission recipient (owner decision).
 
 - **Commits this session** (git log --since=12.hours --author=Mason):
   - `1a1b3850 feat(pricing): Supplier Pricing Phase 1b — admin-only supplier evidence MVP (#179)`
