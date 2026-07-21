@@ -865,8 +865,8 @@ BEGIN
     request_fingerprint, idempotency_key, row_count, eligible_row_count,
     approved_observation_count, created_by, approved_by, approved_at
   ) VALUES (
-    -- Business date: the DB session runs UTC; current_date would stamp the
-    -- correction with tomorrow's date after ~6-7pm America/Chicago.
+    -- Business date: the DB session runs UTC; the session-local date function
+    -- would stamp the correction with tomorrow's date after ~6-7pm Chicago.
     v_original.vendor_id, (now() AT TIME ZONE 'America/Chicago')::date, 'quick_quote',
     'crx-supplier-correction-phase1b-v1', 'approved',
     v_request_fp, 'correction:' || p_idempotency_key, 1, 1, 1,
