@@ -140,6 +140,16 @@ REVOKE ALL ON TABLE public.product_cost_basis
 REVOKE ALL ON TABLE public.product_cost_basis_change_rows
   FROM PUBLIC, anon, authenticated, service_role;
 
+ALTER TABLE public.purchase_order_items
+  ADD COLUMN inventory_unit_snapshot text,
+  ADD CONSTRAINT purchase_order_items_cost_unit_snapshot_shape CHECK (
+    (inventory_units_per_supplier_unit_snapshot IS NULL
+      AND inventory_unit_snapshot IS NULL)
+    OR
+    (inventory_units_per_supplier_unit_snapshot > 0
+      AND NULLIF(btrim(inventory_unit_snapshot), '') IS NOT NULL)
+  );
+
 -- Purchase-order unit costs entered by the current app are per Product
 -- inventory unit. Preserve that fact as an immutable conversion snapshot when
 -- the PO line uses the same unit label as the Product. Lines expressed in a
@@ -163,7 +173,10 @@ BEGIN
 
   v_phase2_enabled := COALESCE(v_phase2_enabled, false);
 
-  SELECT p.unit_size INTO v_inventory_unit
+  SELECT COALESCE(
+    NULLIF(btrim(p.inventory_unit), ''),
+    NULLIF(btrim(p.unit_size), '')
+  ) INTO v_inventory_unit
   FROM public.products p
   WHERE p.id = NEW.product_id;
 
@@ -173,6 +186,7 @@ BEGIN
     NEW.product_supplier_link_id := NULL;
     NEW.supplier_price_observation_id := NULL;
     NEW.inventory_units_per_supplier_unit_snapshot := NULL;
+    NEW.inventory_unit_snapshot := NULL;
     NEW.cost_provenance := NULL;
     NEW.cost_snapshot_at := NULL;
 
@@ -181,6 +195,7 @@ BEGIN
        AND NULLIF(btrim(v_inventory_unit), '') IS NOT NULL
        AND lower(btrim(NEW.unit_size)) = lower(btrim(v_inventory_unit)) THEN
       NEW.inventory_units_per_supplier_unit_snapshot := 1;
+      NEW.inventory_unit_snapshot := v_inventory_unit;
       NEW.cost_provenance := 'manual';
       NEW.cost_snapshot_at := now();
     END IF;
@@ -197,6 +212,7 @@ BEGIN
     OR NEW.supplier_price_observation_id IS DISTINCT FROM OLD.supplier_price_observation_id
     OR NEW.inventory_units_per_supplier_unit_snapshot IS DISTINCT FROM
        OLD.inventory_units_per_supplier_unit_snapshot
+    OR NEW.inventory_unit_snapshot IS DISTINCT FROM OLD.inventory_unit_snapshot
     OR NEW.cost_provenance IS DISTINCT FROM OLD.cost_provenance
     OR NEW.cost_snapshot_at IS DISTINCT FROM OLD.cost_snapshot_at
   ) AND NOT (
@@ -204,6 +220,8 @@ BEGIN
     AND
     OLD.inventory_units_per_supplier_unit_snapshot IS NULL
     AND NEW.inventory_units_per_supplier_unit_snapshot = 1
+    AND OLD.inventory_unit_snapshot IS NULL
+    AND lower(btrim(NEW.inventory_unit_snapshot)) = lower(btrim(v_inventory_unit))
     AND NEW.purchase_order_id IS NOT DISTINCT FROM OLD.purchase_order_id
     AND NEW.product_id IS NOT DISTINCT FROM OLD.product_id
     AND NEW.unit_cost IS NOT DISTINCT FROM OLD.unit_cost
@@ -226,6 +244,7 @@ BEGIN
     NEW.product_supplier_link_id := NULL;
     NEW.supplier_price_observation_id := NULL;
     NEW.inventory_units_per_supplier_unit_snapshot := NULL;
+    NEW.inventory_unit_snapshot := NULL;
     NEW.cost_provenance := NULL;
     NEW.cost_snapshot_at := NULL;
   END IF;
@@ -236,6 +255,7 @@ BEGIN
     NEW.product_supplier_link_id := NULL;
     NEW.supplier_price_observation_id := NULL;
     NEW.inventory_units_per_supplier_unit_snapshot := NULL;
+    NEW.inventory_unit_snapshot := NULL;
     NEW.cost_provenance := NULL;
     NEW.cost_snapshot_at := NULL;
   END IF;
@@ -246,6 +266,7 @@ BEGIN
        AND NULLIF(btrim(v_inventory_unit), '') IS NOT NULL
        AND lower(btrim(NEW.unit_size)) = lower(btrim(v_inventory_unit)) THEN
       NEW.inventory_units_per_supplier_unit_snapshot := 1;
+      NEW.inventory_unit_snapshot := v_inventory_unit;
       NEW.cost_provenance := COALESCE(NEW.cost_provenance, 'manual');
       NEW.cost_snapshot_at := COALESCE(NEW.cost_snapshot_at, now());
     END IF;
@@ -264,7 +285,8 @@ CREATE TRIGGER trigger_capture_purchase_order_item_cost_snapshot
   BEFORE INSERT OR UPDATE OF quantity_received, purchase_order_id, product_id,
     unit_cost, unit_size, product_supplier_link_id,
     supplier_price_observation_id,
-    inventory_units_per_supplier_unit_snapshot, cost_provenance, cost_snapshot_at
+    inventory_units_per_supplier_unit_snapshot, inventory_unit_snapshot,
+    cost_provenance, cost_snapshot_at
   ON public.purchase_order_items
   FOR EACH ROW
   EXECUTE FUNCTION public.capture_purchase_order_item_cost_snapshot();
@@ -276,6 +298,9 @@ BEGIN
   PERFORM set_config('crx.cost_basis_backfill', 'phase2', true);
   UPDATE public.purchase_order_items poi
   SET inventory_units_per_supplier_unit_snapshot = 1,
+      inventory_unit_snapshot = COALESCE(
+        NULLIF(btrim(p.inventory_unit), ''), NULLIF(btrim(p.unit_size), '')
+      ),
       cost_provenance = COALESCE(poi.cost_provenance, 'legacy'),
       cost_snapshot_at = COALESCE(poi.cost_snapshot_at, now())
   FROM public.products p
@@ -283,8 +308,12 @@ BEGIN
     AND poi.quantity_received > 0
     AND poi.inventory_units_per_supplier_unit_snapshot IS NULL
     AND NULLIF(btrim(poi.unit_size), '') IS NOT NULL
-    AND NULLIF(btrim(p.unit_size), '') IS NOT NULL
-    AND lower(btrim(poi.unit_size)) = lower(btrim(p.unit_size));
+    AND COALESCE(
+      NULLIF(btrim(p.inventory_unit), ''), NULLIF(btrim(p.unit_size), '')
+    ) IS NOT NULL
+    AND lower(btrim(poi.unit_size)) = lower(COALESCE(
+      NULLIF(btrim(p.inventory_unit), ''), NULLIF(btrim(p.unit_size), '')
+    ));
 END;
 $backfill$;
 
@@ -491,11 +520,15 @@ BEGIN
     INTO v_candidate_cents
     FROM public.purchase_order_items poi
     JOIN public.purchase_orders po ON po.id = poi.purchase_order_id
+    JOIN public.products p ON p.id = poi.product_id
     WHERE poi.id = v_purchase_item_id
       AND poi.product_id = v_product_id
       AND poi.quantity_received > 0
       AND poi.unit_cost_cents IS NOT NULL
       AND poi.inventory_units_per_supplier_unit_snapshot > 0
+      AND lower(btrim(poi.inventory_unit_snapshot)) = lower(COALESCE(
+        NULLIF(btrim(p.inventory_unit), ''), NULLIF(btrim(p.unit_size), '')
+      ))
       AND po.status <> 'cancelled';
     IF v_candidate_cents IS NULL THEN
       RAISE EXCEPTION 'ACTUAL_PURCHASE_COST_BASIS_INVALID';
@@ -1269,6 +1302,9 @@ BEGIN
           AND poi.quantity_received > 0
           AND poi.unit_cost_cents IS NOT NULL
           AND poi.inventory_units_per_supplier_unit_snapshot > 0
+          AND lower(btrim(poi.inventory_unit_snapshot)) = lower(COALESCE(
+            NULLIF(btrim(p.inventory_unit), ''), NULLIF(btrim(p.unit_size), '')
+          ))
           AND po.status <> 'cancelled'
         ORDER BY purchased_at DESC, poi.id DESC
         LIMIT 20
@@ -1399,6 +1435,9 @@ BEGIN
       COALESCE(v.name, 'supplier unknown'),
       poi.unit_cost_cents,
       CASE WHEN poi.inventory_units_per_supplier_unit_snapshot > 0
+          AND lower(btrim(poi.inventory_unit_snapshot)) = lower(COALESCE(
+            NULLIF(btrim(p.inventory_unit), ''), NULLIF(btrim(p.unit_size), '')
+          ))
         THEN round(poi.unit_cost_cents::numeric
           / poi.inventory_units_per_supplier_unit_snapshot)::bigint
         ELSE NULL END,
@@ -1415,6 +1454,7 @@ BEGIN
       )
     FROM public.purchase_order_items poi
     JOIN public.purchase_orders po ON po.id = poi.purchase_order_id
+    JOIN public.products p ON p.id = poi.product_id
     LEFT JOIN public.legacy_vendor_resolution resolved
       ON resolved.normalized_text = public.normalize_vendor_alias(po.vendor)
      AND resolved.review_status = 'approved'

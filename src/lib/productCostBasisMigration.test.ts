@@ -43,6 +43,9 @@ describe('supplier cost-basis Phase 2 migration contract', () => {
     expect(migrationSql).toContain('get_product_cost_basis_workspace overload drift');
     expect(migrationSql).toMatch(/IF v_phase2_enabled THEN\s+RAISE EXCEPTION 'RECEIVED_PO_COST_SNAPSHOT_IMMUTABLE'/);
     expect(migrationSql).toContain('NEW.inventory_units_per_supplier_unit_snapshot := NULL');
+    expect(migrationSql).toContain('ADD COLUMN inventory_unit_snapshot text');
+    expect(migrationSql).toContain('purchase_order_items_cost_unit_snapshot_shape');
+    expect(migrationSql).toContain('NEW.inventory_unit_snapshot := v_inventory_unit');
     expect(migrationSql).toMatch(/IF TG_OP = 'INSERT' THEN[\s\S]+?NEW\.inventory_units_per_supplier_unit_snapshot := 1/);
     expect(migrationSql).toMatch(/BEFORE INSERT OR UPDATE OF quantity_received/);
     expect(migrationSql).toContain('WHERE effective_to IS NULL');
@@ -67,7 +70,7 @@ describe('supplier cost-basis Phase 2 migration contract', () => {
       /COALESCE\(OLD\.quantity_received, 0\) <= 0[\s\S]+?NEW\.inventory_units_per_supplier_unit_snapshot := NULL/,
     );
     expect(migrationSql).toMatch(
-      /UPDATE public\.purchase_order_items poi[\s\S]+?inventory_units_per_supplier_unit_snapshot = 1[\s\S]+?poi\.quantity_received > 0[\s\S]+?lower\(btrim\(poi\.unit_size\)\) = lower\(btrim\(p\.unit_size\)\)/,
+      /UPDATE public\.purchase_order_items poi[\s\S]+?inventory_units_per_supplier_unit_snapshot = 1[\s\S]+?inventory_unit_snapshot = COALESCE[\s\S]+?poi\.quantity_received > 0[\s\S]+?lower\(btrim\(poi\.unit_size\)\) = lower\(COALESCE/,
     );
     expect(migrationSql).toContain(
       "set_config('crx.cost_basis_backfill', 'phase2', true)",
@@ -86,6 +89,9 @@ describe('supplier cost-basis Phase 2 migration contract', () => {
       /poi\.unit_cost_cents::numeric\s*\/\s*poi\.inventory_units_per_supplier_unit_snapshot/,
     );
     expect(migrationSql).toContain('poi.quantity_received > 0');
+    expect(migrationSql).toMatch(
+      /lower\(btrim\(poi\.inventory_unit_snapshot\)\) = lower\(COALESCE\([\s\S]+?p\.inventory_unit[\s\S]+?p\.unit_size/,
+    );
     expect(migrationSql).toContain("RAISE EXCEPTION 'COST_BASIS_AMOUNT_MISMATCH'");
     expect(migrationSql).toContain('correction.supersedes_observation_id = o.id');
     expect(migrationSql).toContain('v.deleted_at IS NULL');

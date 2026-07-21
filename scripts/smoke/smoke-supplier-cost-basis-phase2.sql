@@ -227,6 +227,7 @@ BEGIN
     WHERE id = 'cccccccc-cccc-4ccc-8ccc-ccccccccccc9'::uuid
       AND unit_cost = 55
       AND inventory_units_per_supplier_unit_snapshot IS NULL
+      AND inventory_unit_snapshot IS NULL
       AND cost_provenance IS NULL
       AND cost_snapshot_at IS NULL
   ) THEN
@@ -246,6 +247,7 @@ BEGIN
     SELECT 1 FROM public.purchase_order_items
     WHERE id = 'cccccccc-cccc-4ccc-8ccc-ccccccccccc2'::uuid
       AND inventory_units_per_supplier_unit_snapshot = 1
+      AND inventory_unit_snapshot = 'lb'
       AND cost_provenance = 'legacy'
       AND cost_snapshot_at IS NOT NULL
   ) THEN
@@ -306,23 +308,25 @@ INSERT INTO public.purchase_order_items(
 -- same-inventory-unit 1:1 snapshot on the server.
 INSERT INTO public.purchase_order_items(
   id, purchase_order_id, product_id, quantity_received, unit_cost, unit_size,
-  inventory_units_per_supplier_unit_snapshot, cost_provenance, cost_snapshot_at
+  inventory_units_per_supplier_unit_snapshot, inventory_unit_snapshot,
+  cost_provenance, cost_snapshot_at
 ) VALUES
   (
     'dddddddd-dddd-4ddd-8ddd-ddddddddddd1',
     'cccccccc-cccc-4ccc-8ccc-ccccccccccc3',
     'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2', 1, 50, 'gal',
-    999, 'manual', now() - interval '1 year'
+    999, 'forged-unit', 'manual', now() - interval '1 year'
   ),
   (
     'dddddddd-dddd-4ddd-8ddd-ddddddddddd2',
     'cccccccc-cccc-4ccc-8ccc-ccccccccccc3',
     'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2', 0, 50, 'gal',
-    999, 'manual', now() - interval '1 year'
+    999, 'forged-unit', 'manual', now() - interval '1 year'
   );
 UPDATE public.purchase_order_items
 SET quantity_received = 1,
     inventory_units_per_supplier_unit_snapshot = 777,
+    inventory_unit_snapshot = 'forged-unit',
     cost_provenance = 'manual',
     cost_snapshot_at = now() - interval '1 year'
 WHERE id = 'dddddddd-dddd-4ddd-8ddd-ddddddddddd2'::uuid;
@@ -339,6 +343,7 @@ BEGIN
     SELECT 1 FROM public.purchase_order_items
     WHERE id = 'cccccccc-cccc-4ccc-8ccc-ccccccccccc4'::uuid
       AND inventory_units_per_supplier_unit_snapshot = 1
+      AND inventory_unit_snapshot = 'gal'
       AND cost_provenance = 'manual'
       AND cost_snapshot_at IS NOT NULL
   ) THEN
@@ -358,6 +363,7 @@ BEGIN
       'dddddddd-dddd-4ddd-8ddd-ddddddddddd2'::uuid
     )
       AND inventory_units_per_supplier_unit_snapshot = 1
+      AND inventory_unit_snapshot = 'gal'
       AND cost_provenance = 'manual'
       AND cost_snapshot_at > now() - interval '1 minute'
   ) <> 2 THEN
@@ -392,6 +398,7 @@ BEGIN
     WHERE id = 'cccccccc-cccc-4ccc-8ccc-ccccccccccc4'::uuid
       AND (
         inventory_units_per_supplier_unit_snapshot IS NOT NULL
+        OR inventory_unit_snapshot IS NOT NULL
         OR cost_provenance IS NOT NULL
         OR cost_snapshot_at IS NOT NULL
       )
@@ -436,12 +443,57 @@ INSERT INTO public.supplier_price_observations(
 );
 SET ROLE authenticated;
 
+-- A conversion factor is meaningful only for the Product inventory unit that
+-- was captured at receipt. Changing that unit makes the old PO evidence
+-- ineligible at preview and apply instead of reinterpreting $/lb as $/oz.
+RESET ROLE;
+UPDATE public.products SET inventory_unit = 'oz'
+WHERE id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3'::uuid;
+SET ROLE authenticated;
+DO $proof$
+BEGIN
+  BEGIN
+    PERFORM public.preview_product_cost_basis_changes(
+      'product_page', NULL,
+      jsonb_build_array(jsonb_build_object(
+        'product_id', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3',
+        'row_version', (SELECT pricing_version FROM public.products
+          WHERE id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3'::uuid),
+        'pricing_mode', 'margin_driven',
+        'new_cost', '40.00',
+        'tier1_margin_percent', '20',
+        'tier2_margin_percent', '25',
+        'tier3_margin_percent', '30',
+        'change_reason', 'Reject stale received unit',
+        'basis_type', 'actual_purchase',
+        'basis_source', 'product_page',
+        'basis_reason', 'Reject stale received unit',
+        'basis_selection', true,
+        'purchase_order_item_id', 'cccccccc-cccc-4ccc-8ccc-ccccccccccc2'
+      )),
+      '11111111-1111-4111-8111-111111111111', 'phase2-stale-purchase-unit'
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: stale purchase unit remained selectable';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF SQLERRM NOT LIKE 'ACTUAL_PURCHASE_COST_BASIS_INVALID%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: stale purchase unit failed for wrong reason: %', SQLERRM;
+    END IF;
+  END;
+END;
+$proof$;
+RESET ROLE;
+UPDATE public.products SET inventory_unit = 'lb'
+WHERE id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3'::uuid;
+SET ROLE authenticated;
+
 INSERT INTO phase2_proof(key, value)
 VALUES ('purchase-preview', public.preview_product_cost_basis_changes(
   'product_page', NULL,
   jsonb_build_array(jsonb_build_object(
     'product_id', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3',
-    'row_version', 1,
+    'row_version', (SELECT pricing_version FROM public.products
+      WHERE id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3'::uuid),
     'pricing_mode', 'margin_driven',
     'new_cost', '40.00',
     'tier1_margin_percent', '20',
@@ -456,6 +508,39 @@ VALUES ('purchase-preview', public.preview_product_cost_basis_changes(
   )),
   '11111111-1111-4111-8111-111111111111', 'phase2-purchase-preview'
 ));
+
+DO $proof$
+DECLARE v jsonb := (SELECT value FROM phase2_proof WHERE key = 'purchase-preview');
+BEGIN
+  IF v->>'status' NOT IN ('previewed', 'no_changes') THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: restored-unit purchase preview was not applicable: %', v;
+  END IF;
+END;
+$proof$;
+
+SAVEPOINT phase2_stale_unit_apply;
+RESET ROLE;
+UPDATE public.products SET inventory_unit = 'oz'
+WHERE id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3'::uuid;
+SET ROLE authenticated;
+DO $proof$
+DECLARE v jsonb := (SELECT value FROM phase2_proof WHERE key = 'purchase-preview');
+BEGIN
+  BEGIN
+    PERFORM public.apply_product_cost_basis_change_set(
+      (v->>'change_set_id')::uuid, v->>'request_fingerprint',
+      '11111111-1111-4111-8111-111111111111', 'phase2-stale-unit-apply'
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: unit changed after preview still applied';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF SQLERRM NOT LIKE 'ACTUAL_PURCHASE_COST_BASIS_INVALID%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: stale apply unit failed for wrong reason: %', SQLERRM;
+    END IF;
+  END;
+END;
+$proof$;
+ROLLBACK TO SAVEPOINT phase2_stale_unit_apply;
 
 INSERT INTO phase2_proof(key, value)
 SELECT 'purchase-apply', public.apply_product_cost_basis_change_set(
