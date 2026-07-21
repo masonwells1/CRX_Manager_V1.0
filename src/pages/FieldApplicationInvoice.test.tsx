@@ -221,6 +221,22 @@ describe('FieldApplicationInvoice — new invoice (no id)', () => {
     expect(screen.getByText('Application Service')).toBeInTheDocument();
   });
 
+  it('uses Net 30 by default and requires a date for Custom date', async () => {
+    await renderPage();
+
+    const terms = screen.getByLabelText('Payment Terms') as HTMLSelectElement;
+    expect(terms.value).toBe('Net 30');
+    expect(screen.getByRole('option', { name: 'Net 15' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Due on receipt' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Custom date…' })).toBeInTheDocument();
+
+    fireEvent.change(terms, { target: { value: 'Custom date…' } });
+    expect(screen.getByLabelText('Due Date')).toBeRequired();
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/i }));
+    expect(mockToast).toHaveBeenCalledWith('error', 'Choose a custom due date before saving.');
+    expect(mockRpc).not.toHaveBeenCalled();
+  });
+
   it('clicking Save calls save_field_app_invoice with the 7-arg Phase 1 shape', async () => {
     mockRpc.mockResolvedValueOnce({
       data: { invoice_ids: ['new-inv-1'], invoice_group_id: null },

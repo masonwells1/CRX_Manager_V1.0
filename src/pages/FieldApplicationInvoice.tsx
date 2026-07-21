@@ -218,7 +218,11 @@ export default function FieldApplicationInvoice() {
   // Discount Earned is per-invoice (one invoice row per customer in a split).
   // poRef/terms/dueDate/footerNotes/internalMemo are uniform across the group.
   const [poRef, setPoRef] = useState('');
-  const [paymentTerms, setPaymentTerms] = useState('');
+  const [paymentTerms, setPaymentTerms] = useState('Net 30');
+  // A non-standard terms string loaded from the DB (e.g. legacy 'Net 45') shows as
+  // 'Custom date…' in the picker; preserve the original text so saving doesn't
+  // overwrite it with the picker's sentinel label.
+  const [customTermsText, setCustomTermsText] = useState('');
   const [dueDate, setDueDate] = useState('');
   const [footerNotes, setFooterNotes] = useState('');
   const [internalMemo, setInternalMemo] = useState(''); // internal_notes — NOT printed
@@ -819,7 +823,17 @@ export default function FieldApplicationInvoice() {
     // fields are uniform across a split group (the save RPC writes them to every
     // member), so reading them off the URL invoice is correct.
     setPoRef((invoice.purchase_order_ref as string | null) || '');
-    setPaymentTerms((invoice.payment_terms as string | null) || '');
+    const loadedPaymentTerms = (invoice.payment_terms as string | null) || '';
+    setPaymentTerms(
+      ['Net 30', 'Net 15', 'Due on receipt'].includes(loadedPaymentTerms)
+        ? loadedPaymentTerms
+        : loadedPaymentTerms
+          ? 'Custom date…'
+          : 'Net 30',
+    );
+    setCustomTermsText(
+      ['Net 30', 'Net 15', 'Due on receipt'].includes(loadedPaymentTerms) ? '' : loadedPaymentTerms,
+    );
     setDueDate((invoice.due_date as string | null) || '');
     setFooterNotes((invoice.footer_notes as string | null) || '');
     setInternalMemo((invoice.internal_notes as string | null) || '');
@@ -1343,6 +1357,10 @@ export default function FieldApplicationInvoice() {
   // silent data corruption). 'cannot_compare' / 'no_label_max' never gate a save.
   const handleSave = async () => {
     if (!profile) return;
+    if ((isNew || ['draft', 'unposted'].includes(status)) && paymentTerms === 'Custom date…' && !dueDate) {
+      toast('error', 'Choose a custom due date before saving.');
+      return;
+    }
     // §5 (Codex r6): if any line is over-label but the guardrail mode hasn't loaded yet,
     // FAIL CLOSED — don't let a pending read default to warn and skip a block-mode override.
     if (guardrailState.overRateCount > 0 && !guardrailModeLoaded) {
@@ -1594,9 +1612,11 @@ export default function FieldApplicationInvoice() {
           // Omit (undefined) when blank → the RPC's NULL default clears the column,
           // matching the Applied-Info "blank intentionally clears" behavior.
           p_purchase_order_ref: poRef || undefined,
-          p_payment_terms: paymentTerms || undefined,
+          p_payment_terms:
+            (paymentTerms === 'Custom date…' ? customTermsText || 'Custom' : paymentTerms) ||
+            undefined,
           p_header_notes: notes || undefined,
-          p_due_date: dueDate || undefined,
+          p_due_date: paymentTerms === 'Custom date…' ? dueDate || undefined : undefined,
           p_footer_notes: footerNotes || undefined,
           p_internal_notes: internalMemo || undefined,
           p_discounts: discounts,
@@ -1834,6 +1854,9 @@ export default function FieldApplicationInvoice() {
     ['draft', 'unposted'].includes(status) &&
     (siblings.length === 0 || siblings.every((s) => ['draft', 'unposted'].includes(s.status)))
   );
+  // Terms stay editable in every state the billing RPC accepts (draft AND unposted —
+  // 20260625150000 permits both), matching canEdit for the rest of the header fields.
+  const canEditPaymentTerms = canEdit && (isNew || ['draft', 'unposted'].includes(status));
   const canPost = !isNew && canEdit && isAdminOrRep;
   // #28: Unpost is available when this saved invoice (or any group member) is
   // posted/overdue — the inverse condition to Post. paid/voided/cancelled invoices
@@ -1923,10 +1946,26 @@ export default function FieldApplicationInvoice() {
       // (matches the existing header_notes: notes pattern). payment_terms is the
       // invoice-level override and wins over the customer default in the builder.
       purchase_order_ref: poRef || null,
-      payment_terms: paymentTerms || null,
+      payment_terms:
+        (paymentTerms === 'Custom date…' ? customTermsText || 'Custom' : paymentTerms) || null,
       header_notes: notes || null,
       footer_notes: footerNotes || null,
-      due_date: dueDate || null,
+      // Display-only: before posting the DB has no stamped due_date yet, and the PDF
+      // renders null as "On receipt" — which would contradict a printed "Net 30". Derive
+      // the same date the posting RPC will stamp (invoice_date + terms days) so a
+      // pre-posting print matches the eventual invoice. Server stamping stays authoritative.
+      due_date:
+        dueDate ||
+        (() => {
+          const days = { 'Net 30': 30, 'Net 15': 15, 'Due on receipt': 0 }[paymentTerms];
+          if (days === undefined) return null;
+          // A cleared transaction-date input falls back to today — the DB defaults
+          // invoice_date to CURRENT_DATE on save, so the print still matches.
+          const base = transactionDate || new Date().toLocaleDateString('en-CA');
+          const d = new Date(base + 'T00:00:00Z');
+          d.setUTCDate(d.getUTCDate() + days);
+          return d.toISOString().slice(0, 10);
+        })(),
       // #33: Discount Earned for THIS invoice (the URL invoice), resolved from the
       // customer-keyed draft via the URL invoice's billed customer. Informational line
       // on the PDF — it does NOT change the Total/Balance math (passed through untouched).
@@ -2550,29 +2589,40 @@ export default function FieldApplicationInvoice() {
               className="w-full px-3 py-2 border rounded-lg text-sm disabled:bg-gray-50"
             />
           </div>
-          {/* #33: Due Date — printed; defaults to "On receipt" on the PDF when blank. */}
+          {/* #33: Payment Terms — invoice-level override, printed. */}
           <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">Due Date</label>
-            <input
-              type="date"
-              value={dueDate}
-              onChange={(e) => { setDueDate(e.target.value); setDirty(true); }}
-              disabled={!canEdit}
-              className="w-full px-3 py-2 border rounded-lg text-sm disabled:bg-gray-50"
-            />
-          </div>
-          {/* #33: Payment Terms — invoice-level override (free text), printed. */}
-          <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">Payment Terms</label>
-            <input
-              type="text"
+            <label htmlFor="payment-terms" className="block text-xs font-medium text-gray-500 mb-1">Payment Terms</label>
+            <select
+              id="payment-terms"
               value={paymentTerms}
-              onChange={(e) => { setPaymentTerms(e.target.value); setDirty(true); }}
-              placeholder="e.g. Net 30"
-              disabled={!canEdit}
+              onChange={(e) => {
+                setPaymentTerms(e.target.value);
+                if (e.target.value !== 'Custom date…') setDueDate('');
+                setDirty(true);
+              }}
+              disabled={!canEditPaymentTerms}
               className="w-full px-3 py-2 border rounded-lg text-sm disabled:bg-gray-50"
-            />
+            >
+              <option value="Net 30">Net 30</option>
+              <option value="Net 15">Net 15</option>
+              <option value="Due on receipt">Due on receipt</option>
+              <option value="Custom date…">Custom date…</option>
+            </select>
           </div>
+          {paymentTerms === 'Custom date…' && (
+            <div>
+              <label htmlFor="custom-due-date" className="block text-xs font-medium text-gray-500 mb-1">Due Date</label>
+              <input
+                id="custom-due-date"
+                type="date"
+                value={dueDate}
+                onChange={(e) => { setDueDate(e.target.value); setDirty(true); }}
+                disabled={!canEditPaymentTerms}
+                required
+                className="w-full px-3 py-2 border rounded-lg text-sm disabled:bg-gray-50"
+              />
+            </div>
+          )}
           {/* header_notes (printed at the top of the invoice). */}
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">Header Notes</label>
