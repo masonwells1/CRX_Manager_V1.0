@@ -278,6 +278,33 @@ INSERT INTO public.purchase_order_items(
     'cccccccc-cccc-4ccc-8ccc-ccccccccccc3',
     'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2', 0, 500, 'case'
   );
+
+-- Direct callers cannot forge conversion provenance on insert or first
+-- receipt. Both paths must discard the supplied factor and derive the safe
+-- same-inventory-unit 1:1 snapshot on the server.
+INSERT INTO public.purchase_order_items(
+  id, purchase_order_id, product_id, quantity_received, unit_cost, unit_size,
+  inventory_units_per_supplier_unit_snapshot, cost_provenance, cost_snapshot_at
+) VALUES
+  (
+    'dddddddd-dddd-4ddd-8ddd-ddddddddddd1',
+    'cccccccc-cccc-4ccc-8ccc-ccccccccccc3',
+    'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2', 1, 50, 'gal',
+    999, 'manual', now() - interval '1 year'
+  ),
+  (
+    'dddddddd-dddd-4ddd-8ddd-ddddddddddd2',
+    'cccccccc-cccc-4ccc-8ccc-ccccccccccc3',
+    'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2', 0, 50, 'gal',
+    999, 'manual', now() - interval '1 year'
+  );
+UPDATE public.purchase_order_items
+SET quantity_received = 1,
+    inventory_units_per_supplier_unit_snapshot = 777,
+    cost_provenance = 'manual',
+    cost_snapshot_at = now() - interval '1 year'
+WHERE id = 'dddddddd-dddd-4ddd-8ddd-ddddddddddd2'::uuid;
+
 UPDATE public.purchase_order_items SET quantity_received = 1
 WHERE id IN (
   'cccccccc-cccc-4ccc-8ccc-ccccccccccc4'::uuid,
@@ -301,6 +328,18 @@ BEGIN
       AND inventory_units_per_supplier_unit_snapshot IS NOT NULL
   ) THEN
     RAISE EXCEPTION 'SMOKE_FAIL: mismatched supplier package unit was guessed';
+  END IF;
+  IF (
+    SELECT count(*) FROM public.purchase_order_items
+    WHERE id IN (
+      'dddddddd-dddd-4ddd-8ddd-ddddddddddd1'::uuid,
+      'dddddddd-dddd-4ddd-8ddd-ddddddddddd2'::uuid
+    )
+      AND inventory_units_per_supplier_unit_snapshot = 1
+      AND cost_provenance = 'manual'
+      AND cost_snapshot_at > now() - interval '1 minute'
+  ) <> 2 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: caller-supplied PO snapshot provenance was trusted';
   END IF;
   BEGIN
     UPDATE public.purchase_order_items

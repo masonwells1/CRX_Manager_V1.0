@@ -43,6 +43,8 @@ describe('supplier cost-basis Phase 2 migration contract', () => {
     expect(migrationSql).toContain('get_product_cost_basis_workspace overload drift');
     expect(migrationSql).toMatch(/IF v_phase2_enabled THEN\s+RAISE EXCEPTION 'RECEIVED_PO_COST_SNAPSHOT_IMMUTABLE'/);
     expect(migrationSql).toContain('NEW.inventory_units_per_supplier_unit_snapshot := NULL');
+    expect(migrationSql).toMatch(/IF TG_OP = 'INSERT' THEN[\s\S]+?NEW\.inventory_units_per_supplier_unit_snapshot := 1/);
+    expect(migrationSql).toMatch(/BEFORE INSERT OR UPDATE OF quantity_received/);
     expect(migrationSql).toContain('WHERE effective_to IS NULL');
     expect(migrationSql).toContain('expected_active_basis_id uuid');
     expect(migrationSql).toContain("RAISE EXCEPTION 'PRODUCT_COST_BASIS_DELETE_FORBIDDEN'");
@@ -59,7 +61,7 @@ describe('supplier cost-basis Phase 2 migration contract', () => {
     );
     expect(migrationSql).toContain("RAISE EXCEPTION 'RECEIVED_PO_COST_SNAPSHOT_IMMUTABLE'");
     expect(migrationSql).toMatch(
-      /BEFORE UPDATE OF quantity_received, purchase_order_id, product_id,\s*unit_cost, unit_size/,
+      /BEFORE INSERT OR UPDATE OF quantity_received, purchase_order_id, product_id,\s*unit_cost, unit_size/,
     );
     expect(migrationSql).toMatch(
       /COALESCE\(OLD\.quantity_received, 0\) <= 0[\s\S]+?NEW\.inventory_units_per_supplier_unit_snapshot := NULL/,

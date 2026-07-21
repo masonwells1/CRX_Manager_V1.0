@@ -167,6 +167,27 @@ BEGIN
   FROM public.products p
   WHERE p.id = NEW.product_id;
 
+  IF TG_OP = 'INSERT' THEN
+    -- Snapshot provenance is server-derived. Direct callers cannot preload a
+    -- conversion factor on either an open or already-received line.
+    NEW.product_supplier_link_id := NULL;
+    NEW.supplier_price_observation_id := NULL;
+    NEW.inventory_units_per_supplier_unit_snapshot := NULL;
+    NEW.cost_provenance := NULL;
+    NEW.cost_snapshot_at := NULL;
+
+    IF NEW.quantity_received > 0
+       AND NULLIF(btrim(NEW.unit_size), '') IS NOT NULL
+       AND NULLIF(btrim(v_inventory_unit), '') IS NOT NULL
+       AND lower(btrim(NEW.unit_size)) = lower(btrim(v_inventory_unit)) THEN
+      NEW.inventory_units_per_supplier_unit_snapshot := 1;
+      NEW.cost_provenance := 'manual';
+      NEW.cost_snapshot_at := now();
+    END IF;
+
+    RETURN NEW;
+  END IF;
+
   IF OLD.quantity_received > 0 AND (
     NEW.purchase_order_id IS DISTINCT FROM OLD.purchase_order_id
     OR NEW.product_id IS DISTINCT FROM OLD.product_id
@@ -207,12 +228,9 @@ BEGIN
     NEW.cost_snapshot_at := NULL;
   END IF;
 
-  IF COALESCE(OLD.quantity_received, 0) <= 0 AND (
-    NEW.purchase_order_id IS DISTINCT FROM OLD.purchase_order_id
-    OR NEW.product_id IS DISTINCT FROM OLD.product_id
-    OR NEW.unit_cost IS DISTINCT FROM OLD.unit_cost
-    OR NEW.unit_size IS DISTINCT FROM OLD.unit_size
-  ) THEN
+  IF COALESCE(OLD.quantity_received, 0) <= 0 THEN
+    -- An open line carries no trusted purchase evidence. Clear any direct
+    -- caller input, including values pre-seeded on a first-receipt update.
     NEW.product_supplier_link_id := NULL;
     NEW.supplier_price_observation_id := NULL;
     NEW.inventory_units_per_supplier_unit_snapshot := NULL;
@@ -221,8 +239,7 @@ BEGIN
   END IF;
 
   IF COALESCE(OLD.quantity_received, 0) <= 0
-     AND NEW.quantity_received > 0
-     AND NEW.inventory_units_per_supplier_unit_snapshot IS NULL THEN
+     AND NEW.quantity_received > 0 THEN
     IF NULLIF(btrim(NEW.unit_size), '') IS NOT NULL
        AND NULLIF(btrim(v_inventory_unit), '') IS NOT NULL
        AND lower(btrim(NEW.unit_size)) = lower(btrim(v_inventory_unit)) THEN
@@ -242,7 +259,7 @@ REVOKE ALL ON FUNCTION public.capture_purchase_order_item_cost_snapshot()
 DROP TRIGGER IF EXISTS trigger_capture_purchase_order_item_cost_snapshot
   ON public.purchase_order_items;
 CREATE TRIGGER trigger_capture_purchase_order_item_cost_snapshot
-  BEFORE UPDATE OF quantity_received, purchase_order_id, product_id,
+  BEFORE INSERT OR UPDATE OF quantity_received, purchase_order_id, product_id,
     unit_cost, unit_size, product_supplier_link_id,
     supplier_price_observation_id,
     inventory_units_per_supplier_unit_snapshot, cost_provenance, cost_snapshot_at
