@@ -32,9 +32,9 @@
 --          the source job's job_fields.
 --   G3  — SPLIT_JOB_IMMUTABLE raises when a re-save tries to attach a source job
 --          to a set that was first saved without one.
---   G5  — FAIL-FIRST (known live bug 2026-07-21): a chemical-only save (no
---          service line) must succeed; the live impl crashes on the unassigned
---          v_app_service record. RED until the fix migration applies.
+--   G5  — regression probe (bug FIXED live 2026-07-21 by migration
+--          20260721180000): a chemical-only save (no service line) must succeed;
+--          the pre-fix impl crashed on the unassigned v_app_service record.
 --   G4  — RESOLVER_NOT_AUTHORIZED raises for a NON-ADMIN sales_rep directly
 --          resolving a split vector for customers not assigned to them (probed
 --          as a real active sales_rep, per the "admin-only proof misses
@@ -157,21 +157,19 @@ BEGIN
   END;
   UPDATE app_settings SET setting_value = 'true' WHERE setting_key = 'per_line_split_billing_enabled';
 
-  -- ---- G5 (FAIL-FIRST, known live bug 2026-07-21): a save with NO service line
-  -- must succeed. Today _save_field_app_split_invoice_impl references
-  -- v_app_service.name at plan-build for EVERY line kind but only assigns
-  -- v_app_service for service lines, so a save whose lines-before-the-first-
-  -- service-line include any other kind crashes with 55000 'record
-  -- "v_app_service" is not assigned yet'. FLAKY: once a service-first save has
-  -- run on a connection, the cached plan knows the record's structure and later
-  -- chemical-only saves on that connection succeed — so production behavior
-  -- depends on connection-pool warmth. This probe runs FIRST (cold plan) so it
-  -- reproduces deterministically; it stays RED until the fix migration applies.
+  -- ---- G5 regression probe (bug FIXED live 2026-07-21, migration 20260721180000):
+  -- a save with NO service line must succeed. The pre-fix impl referenced
+  -- v_app_service.name at plan-build for EVERY line kind but only assigned the
+  -- record for service lines, so a cold-connection save whose lines before the
+  -- first service line were any other kind crashed with 55000 'record
+  -- "v_app_service" is not assigned yet' (flaky by connection-pool warmth: a
+  -- warmed plan cache masked it). This probe runs FIRST (cold plan) so any
+  -- regression reproduces deterministically.
   BEGIN
     PERFORM save_field_app_split_invoice(NULL, NULL, v_invoice, v_fields, v_chem_only, v_admin, NULL, NULL);
     v_g5_invoices := 2; -- the successful probe minted its own pair for the co-owners
   EXCEPTION WHEN OTHERS THEN
-    RAISE EXCEPTION 'SMOKE_FAIL(G5 KNOWN BUG): first cold save with no service line crashed — %', SQLERRM;
+    RAISE EXCEPTION 'SMOKE_FAIL(G5 REGRESSION): first cold save with no service line crashed — %', SQLERRM;
   END;
 
   -- ---- P1: penny-exact odd split through the PUBLIC wrapper -------------------
