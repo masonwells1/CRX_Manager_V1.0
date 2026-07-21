@@ -93,7 +93,7 @@ describe('gauntlet sections 2-6 CodeRabbit closeout', () => {
   });
 
   it('claims and fingerprints revert_quote_status before any quote mutation', () => {
-    const sql = migration('20260719013000_bind_revert_quote_status_idempotency.sql');
+    const sql = migration('20260719023344_bind_revert_quote_status_idempotency.sql');
     expect(sql).toContain("v_contract CONSTANT text := 'revert_quote_status_v1'");
     expect(sql).toContain(
       "hashtextextended('crx:idempotency:revert_quote_status:' || p_idempotency_key, 0)",
@@ -114,7 +114,7 @@ describe('gauntlet sections 2-6 CodeRabbit closeout', () => {
   });
 
   it('locks order items deterministically before checking durable split allocations', () => {
-    const sql = migration('20260719040000_lock_backfill_split_allocation_rows.sql');
+    const sql = migration('20260719024641_lock_backfill_split_allocation_rows.sql');
     const applyBarrier = sql.indexOf(
       'LOCK TABLE\n  public.orders,\n  public.order_items,\n  public.order_item_field_allocations,\n  public.invoices,\n  public.financial_audit_log\nIN SHARE ROW EXCLUSIVE MODE',
     );
@@ -168,7 +168,7 @@ describe('gauntlet sections 2-6 CodeRabbit closeout', () => {
   });
 
   it('binds canonical split invoices to private exact provenance under shared locks', () => {
-    const sql = migration('20260719100000_trust_only_post_revoke_split_provenance.sql');
+    const sql = migration('20260719044912_trust_only_post_revoke_split_provenance.sql');
     const barrier = sql.indexOf(
       'LOCK TABLE\n  public.orders,\n  public.order_items,\n  public.order_item_field_allocations,\n  public.invoices,\n  public.invoice_items,\n  public.financial_audit_log\nIN SHARE ROW EXCLUSIVE MODE',
     );
@@ -201,7 +201,7 @@ describe('gauntlet sections 2-6 CodeRabbit closeout', () => {
   });
 
   it('makes quote/order lock contention retryable instead of deadlocking', () => {
-    const sql = migration('20260719100500_revert_quote_status_deadlock_retry.sql');
+    const sql = migration('20260719044958_revert_quote_status_deadlock_retry.sql');
     expect(sql).toContain('FOR UPDATE NOWAIT');
     expect(sql).toContain('EXCEPTION WHEN lock_not_available');
     expect(sql).toContain('QUOTE_REOPEN_CONCURRENT_ORDER_CHANGE_RETRY');
@@ -212,7 +212,7 @@ describe('gauntlet sections 2-6 CodeRabbit closeout', () => {
   });
 
   it('keeps finance-charge preview aligned with calendar-month generation dedup', () => {
-    const sql = migration('20260719101000_align_finance_charge_preview_month_dedup.sql');
+    const sql = migration('20260719045029_align_finance_charge_preview_month_dedup.sql');
     expect(sql).toContain('CREATE OR REPLACE FUNCTION public.preview_finance_charges');
     expect(sql).toContain('FROM public.finance_charges fc');
     expect(sql).toContain('fc.customer_id = c.id');
@@ -227,7 +227,7 @@ describe('gauntlet sections 2-6 CodeRabbit closeout', () => {
   });
 
   it('keeps governed split lifecycle RPCs usable and binds every affected replay request', () => {
-    const sql = migration('20260719102000_allow_governed_split_terminal_lifecycle.sql');
+    const sql = migration('20260719060256_allow_governed_split_terminal_lifecycle.sql');
     const barrier = sql.indexOf('LOCK TABLE');
     expect(barrier).toBeGreaterThan(-1);
     expect(sql.indexOf('public.idempotency_keys')).toBeGreaterThan(barrier);
