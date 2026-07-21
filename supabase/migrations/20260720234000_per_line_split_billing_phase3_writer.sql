@@ -187,6 +187,30 @@ BEGIN
     ) THEN
       RAISE EXCEPTION 'PER_LINE_INVOICE_NOT_EDITABLE';
     END IF;
+
+    -- This RPC edits only graphs that it previously created. Converting an
+    -- arbitrary legacy draft in place would discard invoice items/locations
+    -- whose provenance and split intent cannot be reconstructed safely.
+    IF v_existing_group_id IS NOT NULL THEN
+      SELECT billing_set.id INTO v_existing_billing_set_id
+        FROM public.field_app_billing_sets billing_set
+       WHERE billing_set.invoice_group_id = v_existing_group_id;
+    ELSE
+      SELECT billing_set.id INTO v_existing_billing_set_id
+        FROM public.field_app_billing_sets billing_set
+        JOIN public.field_app_billing_lines billing_line
+          ON billing_line.billing_set_id = billing_set.id
+        JOIN public.invoice_line_shares line_share
+          ON line_share.billing_line_id = billing_line.id
+        JOIN public.invoice_items item
+          ON item.id = line_share.invoice_item_id
+       WHERE billing_set.invoice_group_id IS NULL
+         AND item.invoice_id = p_invoice_id
+       LIMIT 1;
+    END IF;
+    IF v_existing_billing_set_id IS NULL THEN
+      RAISE EXCEPTION 'PER_LINE_LEGACY_INVOICE_CONVERSION_UNSUPPORTED';
+    END IF;
   END IF;
 
   PERFORM 1 FROM public.jobs WHERE id = p_job_id FOR SHARE;
@@ -227,17 +251,6 @@ BEGIN
       SELECT id FROM public.invoices WHERE invoice_group_id = v_existing_group_id AND deleted_at IS NULL
     );
   ELSIF p_invoice_id IS NOT NULL THEN
-    SELECT billing_set.id INTO v_existing_billing_set_id
-      FROM public.field_app_billing_sets billing_set
-      JOIN public.field_app_billing_lines billing_line
-        ON billing_line.billing_set_id = billing_set.id
-      JOIN public.invoice_line_shares line_share
-        ON line_share.billing_line_id = billing_line.id
-      JOIN public.invoice_items item
-        ON item.id = line_share.invoice_item_id
-     WHERE billing_set.invoice_group_id IS NULL
-       AND item.invoice_id = p_invoice_id
-     LIMIT 1;
     DELETE FROM public.invoice_line_shares line_share
      USING public.invoice_items item
      WHERE line_share.invoice_item_id = item.id
