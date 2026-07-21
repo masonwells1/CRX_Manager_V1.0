@@ -199,6 +199,7 @@ Deno.serve(async (req: Request) => {
       );
     }
     let invoiceGateId = resource_type === "invoice" ? resource_id : null;
+    let invoiceGateCustomerId: string | null = null;
 
     // Proof notices can originate on JobDetail before billing or from an invoice
     // after billing. Do not trust the caller to say which. The notification RPC's
@@ -297,6 +298,7 @@ Deno.serve(async (req: Request) => {
       if (email_type === "invoice" && invoiceRow.customer_id !== customer_id) {
         return jsonResponse({ error: "Invoice customer does not match customer_id" }, 400);
       }
+      invoiceGateCustomerId = invoiceRow.customer_id;
       if (
         email_type === "invoice" &&
         invoiceRow.send_disposition != null &&
@@ -630,7 +632,7 @@ Deno.serve(async (req: Request) => {
         finalInvoiceRow.status === "cancelled"
       ) {
         finalGateRefusal = "Invoice became voided, cancelled, or deleted before send";
-      } else if (email_type === "invoice" && finalInvoiceRow.customer_id !== customer_id) {
+      } else if (finalInvoiceRow.customer_id !== invoiceGateCustomerId) {
         finalGateRefusal = "Invoice customer changed before send";
       } else if (
         email_type === "invoice" &&
@@ -642,10 +644,28 @@ Deno.serve(async (req: Request) => {
       }
 
       if (finalGateRefusal) {
-        await adminClient
+        const finalLogResult = await adminClient
           .from("email_log")
           .update({ status: "failed", error_message: finalGateRefusal })
-          .eq("id", emailLogId);
+          .eq("id", emailLogId)
+          .select("id")
+          .maybeSingle();
+        if (finalLogResult.error || !finalLogResult.data) {
+          await captureEdgeException(
+            new Error(`Final gate refusal log failed: ${finalLogResult.error?.message || "no row returned"}`),
+            {
+              function: "send-email",
+              level: "error",
+              tags: { email_type, phase: "final-gate-log" },
+              extra: { customer_id, email_log_id: emailLogId, final_gate_refusal: finalGateRefusal },
+              user: { id: caller.id },
+            },
+          );
+          return jsonResponse(
+            { error: "Email refused, but the audit log could not be finalized", email_log_id: emailLogId },
+            500,
+          );
+        }
         return jsonResponse(
           { error: `${finalGateRefusal}; email send refused`, email_log_id: emailLogId },
           finalGateError ? 503 : 409,

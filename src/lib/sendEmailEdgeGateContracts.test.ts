@@ -1,6 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
+// Vitest transforms import.meta.url to a non-file Vite URL on Windows, so the
+// repository-root working directory used by every package script is deliberate.
 const source = readFileSync('supabase/functions/send-email/index.ts', 'utf8');
 
 describe('send-email invoice authority contracts', () => {
@@ -8,14 +10,19 @@ describe('send-email invoice authority contracts', () => {
     const lookupStart = source.indexOf('const { data: jobInvoices');
     const lookupEnd = source.indexOf('const matchingInvoices', lookupStart);
     const lookup = source.slice(lookupStart, lookupEnd);
+    const invoiceGateStart = source.indexOf('if (invoiceGateId) {', lookupEnd);
+    const finalGateStart = source.indexOf('// 6. Driver per-resource auth', invoiceGateStart);
+    const invoiceGate = source.slice(invoiceGateStart, finalGateStart);
 
     expect(lookupStart).toBeGreaterThan(-1);
     expect(lookupEnd).toBeGreaterThan(lookupStart);
+    expect(invoiceGateStart).toBeGreaterThan(lookupEnd);
+    expect(finalGateStart).toBeGreaterThan(invoiceGateStart);
     expect(lookup).toContain('.eq("job_id", notificationRow.job_id)');
     expect(lookup).toContain('.select("id, customer_id, status, deleted_at")');
     expect(lookup).not.toContain('.is("deleted_at", null)');
     expect(lookup).not.toContain('.not("status"');
-    expect(source).toContain('invoiceRow.deleted_at != null || invoiceRow.status === "voided" || invoiceRow.status === "cancelled"');
+    expect(invoiceGate).toContain('invoiceRow.deleted_at != null || invoiceRow.status === "voided" || invoiceRow.status === "cancelled"');
     expect(source).toContain('activeMatchingInvoices.length > 1');
     expect(source).toContain('matchingInvoices.length === 1 ? matchingInvoices[0] : null');
   });
@@ -33,8 +40,10 @@ describe('send-email invoice authority contracts', () => {
     expect(finalGate).toContain('finalInvoiceRow.deleted_at != null');
     expect(finalGate).toContain('finalInvoiceRow.status === "voided"');
     expect(finalGate).toContain('finalInvoiceRow.status === "cancelled"');
+    expect(finalGate).toContain('finalInvoiceRow.customer_id !== invoiceGateCustomerId');
     expect(finalGate).toContain('finalInvoiceRow.send_disposition !== "normal"');
-    expect(finalGate).toContain('.update({ status: "failed", error_message: finalGateRefusal })');
+    expect(finalGate).toContain('const finalLogResult = await adminClient');
+    expect(finalGate).toContain('if (finalLogResult.error || !finalLogResult.data)');
   });
 
   it('suppresses invoice mail but permits proof notices for active zero-share co-owners', () => {
