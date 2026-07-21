@@ -1329,3 +1329,9 @@ BEGIN
   RETURN v_result;
 END;
 $fn$;
+
+-- Re-assert least-privilege after the re-emit (Codex HIGH on PR #191): CREATE OR
+-- REPLACE preserves grants only when the exact function already exists; if it
+-- were absent/drifted, defaults would grant PUBLIC execute on this internal
+-- SECURITY DEFINER money writer. Only the guarded public wrapper may call it.
+REVOKE ALL ON FUNCTION public._save_field_app_split_invoice_impl(uuid, uuid, jsonb, jsonb, jsonb, uuid, uuid, text, text) FROM public, anon, authenticated;
