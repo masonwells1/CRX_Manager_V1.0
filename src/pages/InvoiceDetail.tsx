@@ -126,6 +126,9 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
     footer_notes: '',
     purchase_order_ref: '',
   });
+  const [paymentTerms, setPaymentTerms] = useState('Customer default');
+  const [customDueDate, setCustomDueDate] = useState('');
+  const [customTermsText, setCustomTermsText] = useState('');
   const isOrderlessMiscCharge = !isNew
     && invoice.invoice_type === 'misc_charge'
     && !invoice.order_id
@@ -269,7 +272,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
   useEffect(() => {
     const fetchRef = async () => {
       const [custRes, salesRes] = await Promise.all([
-        supabase.from('customers').select('id, farm_name').eq('is_active', true).order('farm_name').limit(500),
+        supabase.from('customers').select('id, farm_name, payment_terms').eq('is_active', true).order('farm_name').limit(500),
         // PR-07 follow-up: profile_public_view exposes only id/full_name/role/is_active.
         supabase.from('profile_public_view').select('id, full_name').in('role', ['admin', 'sales_rep']).eq('is_active', true).order('full_name'),
       ]);
@@ -380,7 +383,56 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
     (data as Record<string, unknown>).salesman = salesman;
 
     if (isStale()) return;
+    const loadedInvoice = data as Invoice;
+    const loadedPaymentTerms = loadedInvoice.payment_terms || '';
+    const loadedDueDate = loadedInvoice.due_date || '';
+    let customerPaymentTerms = '';
+    if (!loadedPaymentTerms.trim() && loadedInvoice.customer_id) {
+      const { data: customerTerms } = await supabase
+        .from('customers')
+        .select('payment_terms')
+        .eq('id', loadedInvoice.customer_id)
+        .maybeSingle();
+      customerPaymentTerms = (customerTerms as { payment_terms?: string | null } | null)?.payment_terms?.trim() || '';
+      if (isStale()) return;
+    }
     setInvoice(data as object as Invoice);
+    const effectivePaymentTerms = loadedPaymentTerms.trim() || customerPaymentTerms;
+    const normalizedTerms = effectivePaymentTerms.toLowerCase();
+    const isReceiptAlias = ['due on receipt', 'due upon receipt', 'receipt', 'immediately'].includes(normalizedTerms);
+    const isPreset = ['Net 30', 'Net 15', 'Net 60', 'Due on receipt'].includes(effectivePaymentTerms);
+    const termDays = isReceiptAlias
+      ? 0
+      : (() => {
+          const match = /(\d+)/.exec(effectivePaymentTerms);
+          const parsed = match ? Number(match[1]) : NaN;
+          return Number.isFinite(parsed) && parsed >= 1 && parsed <= 365 ? parsed : 30;
+        })();
+    let stampedDate = '';
+    if (loadedInvoice.invoice_date) {
+      const stamped = new Date(`${loadedInvoice.invoice_date}T00:00:00Z`);
+      stamped.setUTCDate(stamped.getUTCDate() + termDays);
+      stampedDate = stamped.toISOString().slice(0, 10);
+    }
+    const isPostingStamp = loadedDueDate !== '' && loadedDueDate === stampedDate;
+    const isEditableStatus = ['draft', 'unposted'].includes(loadedInvoice.status || '');
+    if (loadedDueDate && !isPostingStamp && isEditableStatus) {
+      setPaymentTerms('Custom date…');
+      setCustomTermsText(loadedPaymentTerms);
+      setCustomDueDate(loadedDueDate);
+    } else if (isPreset) {
+      setPaymentTerms(loadedPaymentTerms ? effectivePaymentTerms : 'Customer default');
+      setCustomTermsText('');
+      setCustomDueDate(isPostingStamp && isEditableStatus ? '' : loadedDueDate);
+    } else if (isReceiptAlias) {
+      setPaymentTerms('Due on receipt');
+      setCustomTermsText('');
+      setCustomDueDate(isPostingStamp && isEditableStatus ? '' : loadedDueDate);
+    } else {
+      setPaymentTerms(loadedPaymentTerms || 'Customer default');
+      setCustomTermsText('');
+      setCustomDueDate(isPostingStamp && isEditableStatus ? '' : loadedDueDate);
+    }
     setCustomerName((data as unknown as { customer?: { farm_name: string } }).customer?.farm_name || '');
 
     // Fetch parent order for breadcrumb + related deliveries for cross-link
@@ -599,6 +651,10 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
 
   // Save invoice
   const handleSave = async () => {
+    if (paymentTerms === 'Custom date…' && !customDueDate) {
+      toast('error', 'Choose a custom due date before saving.');
+      return;
+    }
     // Per-line split billing (Codex P1 #6, 2026-07-18): a split child's line detail lives in
     // invoice_line_shares, keyed to invoice_items by billing_line_id. The generic save_invoice
     // deletes + recreates invoice_items, which would CASCADE those shares away and silently
@@ -633,7 +689,13 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
           season: invoice.season,
           salesman_id: invoice.salesman_id || null,
           invoice_date: invoice.invoice_date,
-          due_date: invoice.due_date || null,
+          payment_terms:
+            paymentTerms === 'Customer default'
+              ? null
+              : paymentTerms === 'Custom date…'
+                ? customTermsText || 'Custom'
+                : paymentTerms,
+          due_date: paymentTerms === 'Custom date…' ? customDueDate || null : null,
           purchase_order_ref: invoice.purchase_order_ref || null,
           header_notes: invoice.header_notes || null,
           footer_notes: invoice.footer_notes || null,
@@ -1054,7 +1116,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
       customer_state: cust?.state || undefined,
       customer_zip: cust?.zip || undefined,
       account_number: cust?.account_number || undefined,
-      payment_terms: cust?.payment_terms || undefined,
+      payment_terms: invoice.payment_terms || cust?.payment_terms || undefined,
       salesman_name: salespeople.find((s) => s.id === invoice.salesman_id)?.full_name,
       purchase_order_ref: invoice.purchase_order_ref || undefined,
       header_notes: invoice.header_notes || undefined,
@@ -1197,7 +1259,8 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
   const totalCostCents = isSplitInvoice
     ? Number((invoice as { total_cost_cents?: number | null }).total_cost_cents ?? 0)
     : items.reduce((s, i) => s + (i.is_application_fee ? i.cost_cents : i.cost_cents * i.quantity), 0);
-  const editable = !isSplitInvoice && (isNew || ['draft', 'unposted'].includes(invoice.status || ''));
+  const canEdit = isAdminOrRep;
+  const editable = canEdit && !isSplitInvoice && (isNew || ['draft', 'unposted'].includes(invoice.status || ''));
 
   // Customer filtered list
   const filteredCustomers = customerSearch.length >= 1
@@ -1523,6 +1586,49 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
                 />
               ) : (
                 <p className="mt-1 text-sm">{invoice.purchase_order_ref || '-'}</p>
+              )}
+            </div>
+
+            {/* Payment terms — follows the field-application invoice picker. */}
+            <div>
+              <label htmlFor="payment-terms" className="text-sm font-medium text-nav-dark">Payment Terms</label>
+              {editable ? (
+                <>
+                  <select
+                    id="payment-terms"
+                    value={paymentTerms}
+                    onChange={(e) => {
+                      setPaymentTerms(e.target.value);
+                      if (e.target.value !== 'Custom date…') setCustomDueDate('');
+                    }}
+                    className="mt-1 w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  >
+                    <option value="Customer default">Customer default</option>
+                    <option value="Net 30">Net 30</option>
+                    <option value="Net 15">Net 15</option>
+                    <option value="Net 60">Net 60</option>
+                    <option value="Due on receipt">Due on receipt</option>
+                    {!['Customer default', 'Net 30', 'Net 15', 'Net 60', 'Due on receipt', 'Custom date…'].includes(paymentTerms) && (
+                      <option value={paymentTerms}>{paymentTerms} (legacy)</option>
+                    )}
+                    <option value="Custom date…">Custom date…</option>
+                  </select>
+                  {paymentTerms === 'Custom date…' && (
+                    <input
+                      id="custom-due-date"
+                      type="date"
+                      value={customDueDate}
+                      onChange={(e) => setCustomDueDate(e.target.value)}
+                      required
+                      className="mt-2 w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                    />
+                  )}
+                </>
+              ) : (
+                <p className="mt-1 text-sm">
+                  {invoice.payment_terms || 'Customer default'}
+                  {invoice.due_date ? ` · Due ${new Date(invoice.due_date + 'T00:00:00').toLocaleDateString()}` : ''}
+                </p>
               )}
             </div>
 

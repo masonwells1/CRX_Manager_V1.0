@@ -5,6 +5,83 @@ All significant development milestones, in reverse chronological order.
 ## 2026-07-21 — Supplier Pricing Phase 2 migration-first review
 
 - Prepared the additive `20260721231000_supplier_cost_basis_phase2` migration behind the queued-RPC/frontend barrier. Its rollout flag is forcibly reset to `false` during migration, including when a drifted pre-existing row says `true`, so applying schema alone cannot enable the new cost-basis workflow. New tables/indexes and public RPC overloads fail closed on pre-existing schema drift. Pricing-free Product shells created after migration receive their initial basis on the first governed cost approval, without inventing a zero-cost basis. PO insert/first-receipt paths discard caller-supplied conversion provenance and derive only safe same-unit factor plus unit-identity snapshots; a later Product unit change makes old purchase evidence ineligible instead of reinterpreting its cost. The existing-line legacy backfill exception is scoped to the migration transaction so later callers cannot replay it. While disabled, existing received-PO corrections clear stale provenance; once enabled, received cost-defining fields freeze. Actual-purchase apply locks PO items before parent POs to match receiving/reversal order and avoid deadlocks. The disposable PostgreSQL proof covers both flag states and adversarial snapshot inputs.
+## 2026-07-21 — Chemical-sale payment-terms build: migration 20260721223817 (save_invoice persists payment_terms; due_date now key-conditional) APPLIED LIVE with Mason's OK; InvoiceDetail terms picker + posted read-only display; single+batch PDF print invoice override. 3 codex review rounds (sol adversarial x2 + migration gauntlet clean).
+
+Chemical-sale payment-terms build: migration 20260721223817 (save_invoice persists payment_terms; due_date now key-conditional) APPLIED LIVE with Mason's OK; InvoiceDetail terms picker + posted read-only display; single+batch PDF print invoice override. 3 codex review rounds (sol adversarial x2 + migration gauntlet clean).
+
+- **Commits this session** (git log --since=12.hours --author=Mason):
+  - `5180426b feat(billing): invoice payment-terms picker + due-on-receipt parser support (#195)`
+  - `866bb291 Merge pull request #194 from masonwells1/docs/port-missing-docs-to-main`
+  - `bd18cee1 fix(split-billing): apply unassigned v_app_service record fix live (mig 20260721180000) (#192)`
+  - `3eb8a93d Test-system overhaul: business-area slices, per-line split smoke (found live bug), drift reconciliation (#191)`
+  - `61277725 Close out supplier pricing Phase 1a (#168)`
+  - `66d5371d chore(deps): bump @babel/core to 7.29.7 and esbuild to 0.28.1 (lockfile-only, resolves 2 low dependabot alerts) (#190)`
+  - `310f62a4 chore(reports): cleanup-sprint progress check 2026-07-17 (#158)`
+  - `b0e115af Bug-class regression suite: lock down the 2026-07-10..20 review-round findings (#189)`
+- **Migrations touched** (last 15 commits (fallback)):
+  - `supabase/migrations/20260721191914_due_on_receipt_terms_parser.sql`
+  - `supabase/migrations/20260721180000_fix_split_impl_unassigned_app_service_record.sql`
+  - `supabase/migrations/20260718152837_20260718131500_revert_quote_escape_hatch_for_cancelled_order.sql`
+  - `supabase/migrations/20260718153744_20260718124500_harden_prepay_and_payment_role_gate.sql`
+  - `supabase/migrations/20260718154810_20260718133000_void_invoice_block_applied_payments.sql`
+  - `supabase/migrations/20260718174018_finance_charge_month_dedup.sql`
+  - `supabase/migrations/20260718174859_forbid_restore_cancelled_order.sql`
+  - `supabase/migrations/20260718175641_backfill_invoice_refuse_split_billing.sql`
+  - `supabase/migrations/20260718202607_backfill_invoice_guard_durable_split_allocations.sql`
+  - `supabase/migrations/20260718203206_retire_legacy_record_invoice_payment.sql`
+  - `supabase/migrations/20260718213305_void_invoice_ignore_reversed_allocations.sql`
+  - `supabase/migrations/20260718221505_preserve_voided_payment_allocation_history.sql`
+  - `supabase/migrations/20260718232157_harden_quote_reopen_history_guards.sql`
+  - `supabase/migrations/20260718235153_reconcile_gauntlet_intermediate_live_windows.sql`
+  - `supabase/migrations/20260719023344_bind_revert_quote_status_idempotency.sql`
+  - `supabase/migrations/20260719024641_lock_backfill_split_allocation_rows.sql`
+  - `supabase/migrations/20260719044912_trust_only_post_revoke_split_provenance.sql`
+  - `supabase/migrations/20260719044958_revert_quote_status_deadlock_retry.sql`
+  - `supabase/migrations/20260719045029_align_finance_charge_preview_month_dedup.sql`
+  - `supabase/migrations/20260719060256_allow_governed_split_terminal_lifecycle.sql`
+  - `supabase/migrations/20260721014858_20260721010000_govern_invoice_order_money_lifecycle.sql`
+  - `supabase/migrations/20260721125937_ignore_voided_finance_charge_month_dedup.sql`
+  - `supabase/migrations/20260721130355_fix_transaction_review_running_balance.sql`
+  - `supabase/migrations/20260721130846_replay_vendor_alias_after_vendor_retirement.sql`
+  - `supabase/migrations/20260721145936_require_money_lifecycle_idempotency_keys.sql`
+  - `supabase/migrations/20260721152604_block_partial_cancel_with_received_returns.sql`
+  - `supabase/migrations/20260720230000_supplier_pricing_durable_replay_and_reject.sql`
+  - `supabase/migrations/20260720213000_per_line_split_billing_schema.sql`
+  - `supabase/migrations/20260720214000_per_line_split_billing_calculator.sql`
+  - `supabase/migrations/20260720233000_per_line_split_billing_save_rpc.sql`
+  - `supabase/migrations/20260720200329_scope_delivery_signature_storage_access.sql`
+  - `supabase/migrations/20260720211454_scope_delivery_signature_delete.sql`
+  - `supabase/migrations/20260720225716_require_active_driver_for_signatures.sql`
+  - `supabase/migrations/20260720235246_qualify_sales_rep_authorization_helper.sql`
+  - `supabase/migrations/20260718225511_supplier_price_evidence_phase1b.sql`
+  - `supabase/migrations/20260718235717_stage_supplier_vendor_aliases_phase1b.sql`
+  - `supabase/migrations/20260720203000_restrict_supplier_pricing_to_admin.sql`
+  - `supabase/migrations/20260718030000_per_line_split_billing_save_rpc.sql`
+  - `supabase/migrations/20260718124500_harden_prepay_and_payment_role_gate.sql`
+  - `supabase/migrations/20260718131500_revert_quote_escape_hatch_for_cancelled_order.sql`
+  - `supabase/migrations/20260718132000_finance_charge_month_dedup.sql`
+  - `supabase/migrations/20260718133000_void_invoice_block_applied_payments.sql`
+  - `supabase/migrations/20260718134000_forbid_restore_cancelled_order.sql`
+  - `supabase/migrations/20260718134500_backfill_invoice_refuse_split_billing.sql`
+  - `supabase/migrations/20260718194000_backfill_invoice_guard_durable_split_allocations.sql`
+  - `supabase/migrations/20260718203000_retire_legacy_record_invoice_payment.sql`
+  - `supabase/migrations/20260718204000_void_invoice_ignore_reversed_allocations.sql`
+  - `supabase/migrations/20260718214000_preserve_voided_payment_allocation_history.sql`
+  - `supabase/migrations/20260718230000_supplier_price_evidence_phase1b.sql`
+  - `supabase/migrations/20260718230848_harden_quote_reopen_history_guards.sql`
+  - `supabase/migrations/20260718234500_reconcile_gauntlet_intermediate_live_windows.sql`
+  - `supabase/migrations/20260718235900_stage_supplier_vendor_aliases_phase1b.sql`
+  - `supabase/migrations/20260719013000_bind_revert_quote_status_idempotency.sql`
+  - `supabase/migrations/20260719040000_lock_backfill_split_allocation_rows.sql`
+  - `supabase/migrations/20260719064000_validate_quote_commission_splits.sql`
+  - `supabase/migrations/20260719093000_route_invoice_updates_through_governed_rpcs.sql`
+  - `supabase/migrations/20260719093500_reject_null_commission_percentages.sql`
+  - `supabase/migrations/20260719100000_trust_only_post_revoke_split_provenance.sql`
+  - `supabase/migrations/20260719100500_revert_quote_status_deadlock_retry.sql`
+  - `supabase/migrations/20260719101000_align_finance_charge_preview_month_dedup.sql`
+  - `supabase/migrations/20260719102000_allow_governed_split_terminal_lifecycle.sql`
+  - `supabase/migrations/20260720175946_protect_governed_split_edit_and_void_group.sql`
+  - `supabase/migrations/20260718010000_per_line_split_billing_schema.sql`
 
 ## 2026-07-21 — Invoice due-dates ticket (approved spec 2026-07-16): found most A8 machinery already live; shipped the two real gaps. Migration 20260721191914 APPLIED LIVE via full gate (parse_payment_terms_days: due-on-receipt forms -> 0 days; proven with live rollback smoke on [E2E] invoice: due_date=invoice_date for Due on receipt, +30d for Net 30). Frontend terms picker (Net 30/Net 15/Due on receipt/Custom date) on FieldApplicationInvoice with sol-review fixes: unposted edit gating, display-only PDF due date, legacy free-text round-trip. Built by codex gpt-5.6-luna subagents, adversarial gpt-5.6-sol review (2 HIGHs fixed+reverified). Full suite 3776 pass. PR #195 open, awaiting Vercel+CodeRabbit then merge.
 
