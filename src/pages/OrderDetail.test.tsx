@@ -170,6 +170,47 @@ describe('OrderDetail', () => {
     expect(screen.queryByText('Change Status')).not.toBeInTheDocument();
   });
 
+  it('does not log or notify a second cancellation for an already-cancelled RPC replay', async () => {
+    const orderData = {
+      id: 'ord-123', order_number: 'ORD-0099', status: 'confirmed', customer_id: 'cust-1',
+      order_date: '2026-03-15', total_cents: 50000, total_cost: 30000, total_price: 50000,
+      total_profit: 20000, total_margin_pct: 40.0, order_name: 'Spring Order', notes: '',
+      created_at: '2026-03-15T00:00:00Z', delivery_priority: 'normal', po_number: null,
+    };
+    mockFrom.mockImplementation((table: string) =>
+      table === 'orders' ? buildChain({ data: orderData, error: null }) : buildChain({ data: [], error: null }),
+    );
+    mockRpc.mockImplementation((rpcName: string) => Promise.resolve(
+      rpcName === 'cancel_order'
+        ? {
+            data: {
+              success: false,
+              status: 'already_cancelled',
+              holds_released: 0,
+              commissions_cancelled: 0,
+              draft_invoices_cancelled: 0,
+              posted_invoices_flagged: 0,
+              paid_commissions_flagged: 0,
+            },
+            error: null,
+          }
+        : { data: null, error: null },
+    ));
+
+    renderOrderDetail();
+    fireEvent.click(await screen.findByRole('button', { name: 'Cancel Order' }));
+    const cancelButtons = screen.getAllByRole('button', { name: 'Cancel Order' });
+    fireEvent.click(cancelButtons[cancelButtons.length - 1]);
+
+    await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('cancel_order', {
+      p_order_id: 'ord-123',
+      p_performed_by: 'user-1',
+      p_idempotency_key: 'test-idem-key',
+    }));
+    expect(mockLogActivity).not.toHaveBeenCalled();
+    expect(mockNotifyOrderStatusChange).not.toHaveBeenCalled();
+  });
+
   it('labels a partially fulfilled order as Cancel Remaining Quantity and explains the short-close behavior', async () => {
     const orderData = {
       id: 'ord-123', order_number: 'ORD-0099', status: 'partially_fulfilled', customer_id: 'cust-1',

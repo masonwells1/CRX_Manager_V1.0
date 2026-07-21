@@ -68,7 +68,7 @@
     },
     "generate_finance_charges": {
       "chain": "smoke-finance-charge-month-dedup.sql",
-      "description": "H2 double-charge and preview-parity regression: preview and generation both reject a closed accounting period, generation charges an overdue balance at most once per customer per calendar month, and preview omits a customer generation will skip. Sets up an overdue posted invoice, proves the closed-period gate, generates once, asserts the later same-month preview is empty, generates again, and asserts exactly one finance_charge exists. FAIL-FIRST against either the exact-date generator or either stale preview predicate. Self-contained fixtures and terminal rollback.",
+      "description": "H2 double-charge and preview-parity regression: preview and generation both reject a closed accounting period, generation charges an overdue balance at most once per customer per calendar month, and preview omits a customer generation will skip. The chain then voids the first charge invoice and proves preview plus generation permit exactly one corrected active assessment in the same month. FAIL-FIRST against the exact-date generator, either stale preview predicate, or bucket-only dedup that counts voided charge invoices. Self-contained fixtures and terminal rollback.",
       "covers": ["generate_finance_charges", "preview_finance_charges"]
     },
     "void_invoice": {

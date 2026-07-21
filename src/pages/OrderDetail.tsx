@@ -598,6 +598,14 @@ export default function OrderDetail() {
             toast('success', parts.join(' '));
           }
 
+          // Idempotent/status-only responses (for example already_cancelled)
+          // are not a new cancellation. Refresh the page state, but do not
+          // write duplicate client activity or send a false status notice.
+          if (!result.success) {
+            await fetchOrder();
+            return;
+          }
+
           // A remainder close finishes as fulfilled, so do not write or notify a
           // second, false "cancelled" client event. Preserve the existing client
           // activity/notification behavior for a true full cancellation below.

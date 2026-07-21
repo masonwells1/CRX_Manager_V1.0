@@ -1,7 +1,8 @@
 -- Post-apply rollback-only regression proof for H2 (Live Foundation Gauntlet
 -- 2026-07-18): generate_finance_charges must charge an overdue balance at most
 -- once per customer per calendar month, even across two runs on different
--- as-of dates in that month.
+-- as-of dates in that month, while permitting a corrected assessment after
+-- the earlier charge invoice is voided.
 --
 -- FAIL-FIRST CONTRACT: against the PRE-FIX function the second same-month run
 -- (different as-of date, so a different period_end) charges the balance again,
@@ -17,6 +18,7 @@ DECLARE
   v_suffix   text := substr(md5(random()::text), 1, 8);
   v_customer uuid;
   v_invoice  uuid;
+  v_charge_invoice uuid;
   v_late     date;
   v_early    date;
   v_res      jsonb;
@@ -123,6 +125,11 @@ BEGIN
   IF (v_res->>'charges_generated')::int IS DISTINCT FROM 1 THEN
     RAISE EXCEPTION 'SMOKE_SETUP: first run did not charge as expected: %', v_res;
   END IF;
+  SELECT fc.invoice_id INTO v_charge_invoice
+    FROM public.finance_charges fc
+   WHERE fc.customer_id = v_customer
+   ORDER BY fc.created_at DESC
+   LIMIT 1;
 
   -- Preview must mirror generation's calendar-month exclusion. Against the
   -- pre-fix preview this customer remains selectable even though generation's
@@ -146,6 +153,39 @@ BEGIN
   IF (v_res->>'charges_generated')::int IS DISTINCT FROM 0
      OR (v_res->>'skipped_already_charged')::int IS DISTINCT FROM 1 THEN
     RAISE EXCEPTION 'SMOKE_FAIL: second same-month run should skip, got %', v_res;
+  END IF;
+
+  -- Once the charge invoice is voided it is no longer an active assessment.
+  -- Both preview and generation must allow one corrected charge in that month.
+  PERFORM public.void_invoice(
+    v_charge_invoice,
+    '[E2E] void finance charge before corrected assessment',
+    'e2e-h2-void-' || v_suffix
+  );
+
+  SELECT count(*) INTO v_preview_n
+    FROM public.preview_finance_charges(v_late) p
+   WHERE p.customer_id = v_customer;
+  IF v_preview_n IS DISTINCT FROM 1 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: preview did not offer a corrected charge after voiding the first one';
+  END IF;
+
+  v_res := public.generate_finance_charges(
+    v_late, v_admin, ARRAY[v_customer], 'e2e-h2-corrected-' || v_suffix
+  );
+  IF (v_res->>'charges_generated')::int IS DISTINCT FROM 1
+     OR (v_res->>'skipped_already_charged')::int IS DISTINCT FROM 0 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: corrected same-month charge was not generated: %', v_res;
+  END IF;
+
+  SELECT count(*) INTO v_n
+    FROM public.finance_charges fc
+    JOIN public.invoices i ON i.id = fc.invoice_id
+   WHERE fc.customer_id = v_customer
+     AND i.deleted_at IS NULL
+     AND i.status NOT IN ('voided', 'cancelled');
+  IF v_n IS DISTINCT FROM 1 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: expected exactly one active finance charge after correction, got %', v_n;
   END IF;
 
   RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK';

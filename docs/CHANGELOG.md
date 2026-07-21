@@ -12,6 +12,7 @@ All significant development milestones, in reverse chronological order.
 - Deployed `process-document` v19 ACTIVE with JWT verification. Supplier `price_list` and `product_list` requests now fail closed before paid OCR, completing the permanent supplier-PDF OCR retirement.
 - Refreshed the schema registry from six live introspection queries at high-water `20260721014858`.
 - Restored the exact committed source for the already-live `20260720230000_supplier_pricing_durable_replay_and_reject` migration from its parallel Phase 1b branch, closing the last rebuild/traceability gap identified by the final Claude review.
+- Corrected cancellation replay handling so an `already_cancelled` response refreshes the order without writing a second activity entry or sending a false cancellation notice. Added a forward-only finance-charge correction so only an active same-month charge blocks another assessment; voided/cancelled charge invoices no longer hide or block the operator's corrected preview and generation flow.
 
 ## 2026-07-20 — Baseline follow-up migrations preserve ledger history
 
