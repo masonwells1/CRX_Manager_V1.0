@@ -284,7 +284,7 @@ DECLARE
 BEGIN
   IF v_actor IS NULL THEN RAISE EXCEPTION 'Not authenticated'; END IF;
   IF p_performed_by IS NOT NULL AND p_performed_by IS DISTINCT FROM v_actor THEN
-    RAISE EXCEPTION 'p_performed_by does not match authenticated user';
+    RAISE EXCEPTION 'ACTOR_MISMATCH';
   END IF;
   IF NOT EXISTS (
     SELECT 1 FROM public.profiles
