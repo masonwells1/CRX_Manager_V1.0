@@ -14,7 +14,7 @@ const files = [
   ['cent-hardening.sql', 'scripts/applied-migration-artifacts/20260718154131_20260718124517_harden_supplier_pricing_cent_scale_and_trigger.live.sql'],
   ['cutover.sql', 'supabase/migrations/20260718190000_supplier_pricing_phase1a_cutover.sql'],
   ['phase1b-base.sql', 'scripts/smoke/fixtures/supplier-cost-basis-phase2-base.sql'],
-  ['phase2.sql', 'supabase/migrations/20260721193553_supplier_cost_basis_phase2.sql'],
+  ['phase2.sql', 'supabase/migrations/20260721231000_supplier_cost_basis_phase2.sql'],
   ['smoke.sql', 'scripts/smoke/smoke-supplier-cost-basis-phase2.sql'],
 ];
 const container = `crx-pricing-phase2-proof-${process.pid}-${Date.now()}`;

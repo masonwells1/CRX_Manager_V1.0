@@ -436,7 +436,7 @@ All eleven functions are live from `20260718225511_supplier_price_evidence_phase
 - `preview_product_cost_basis_changes(source, export_id, rows, performed_by, idempotency_key)` — actor-bound/idempotent wrapper that validates evidence and stores explicit basis provenance, then delegates price calculation to `preview_product_pricing_changes`.
 - `apply_product_cost_basis_change_set(change_set_id, request_fingerprint, performed_by, idempotency_key)` — actor-bound/idempotent atomic apply. Revalidates evidence and the active-basis concurrency token, delegates money changes to `apply_product_pricing_change_set`, closes the prior basis, and appends the selected basis.
 
-These functions are defined only in the unapplied `20260721193553_supplier_cost_basis_phase2.sql` branch migration. Supplier/actual-purchase selection remains off by default; no live apply or flag enable is implied.
+These functions are defined only in the unapplied `20260721231000_supplier_cost_basis_phase2.sql` branch migration. Supplier/actual-purchase selection remains off by default; no live apply or flag enable is implied.
 While that flag remains off, the migration also preserves the deployed Phase 1a pricing RPC as a compatibility writer and atomically records any governed cost change in `product_cost_basis` as a manual basis. Enabling the flag closes that compatibility route and requires `apply_product_cost_basis_change_set`.
 
 ### Custom Application Workflow
