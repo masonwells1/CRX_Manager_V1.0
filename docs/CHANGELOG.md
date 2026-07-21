@@ -11,6 +11,7 @@ All significant development milestones, in reverse chronological order.
 - Applied the reviewed lifecycle migration live as ledger version `20260721014858`; both post-apply rollback chains returned `SMOKE_PASS_ROLLBACK`, governed function grants/search paths were verified, and no smoke fixtures remained.
 - Deployed `process-document` v19 ACTIVE with JWT verification. Supplier `price_list` and `product_list` requests now fail closed before paid OCR, completing the permanent supplier-PDF OCR retirement.
 - Refreshed the schema registry from six live introspection queries at high-water `20260721014858`.
+- Restored the exact committed source for the already-live `20260720230000_supplier_pricing_durable_replay_and_reject` migration from its parallel Phase 1b branch, closing the last rebuild/traceability gap identified by the final Claude review.
 
 ## 2026-07-20 — Baseline follow-up migrations preserve ledger history
 
