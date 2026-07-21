@@ -857,18 +857,6 @@ save_customer ownership enforcement: wrote + reviewed + smoked migration 2026071
 - **Migrations touched** (git diff --name-only origin/main...HEAD):
   - `supabase/migrations/20260717123000_save_customer_ownership_enforcement.sql`
 
-## 2026-07-17 — Cleanup-sprint weekly check (automated routine)
-
-Routine fired at 13:00 UTC. Live SQL against production (Supabase ):
-
-- **Negatives:** 18 (↑ +1 from 17 — new bad row appeared; ⚠️ needs investigation)
-- **Over-received PO items:** 15 (unchanged)
-- **Unbilled completed deliveries:** 59 (unchanged)
-
-Progress row appended to  (PR #158, docs-only draft). Phase 23 CHECK constraints remain blocked. Mason notified via push notification.
-
----
-
 ## 2026-07-17 — CRM follow-up: customer crops + top products by volume (owner decisions)
 
 Mason answered the five parked CRM owner questions; the two that were build items shipped same-day (branch `feat/crm-crops-and-volume`, Opus/Sonnet builders per owner instruction, full migration gauntlet):
