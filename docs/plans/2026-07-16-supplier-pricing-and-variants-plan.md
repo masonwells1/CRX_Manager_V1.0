@@ -52,7 +52,8 @@ There are **three different price facts** currently forced into one `products.cu
 - NEW `legacy_vendor_resolution` (for PO backfill, §5): `original_text`, `vendor_id`, `confidence`, `reviewed_by`, `reviewed_at`. Historical PO lines join through this reviewed table only; unresolved history displays as **"supplier unknown"**, never fuzzy-assigned.
 
 ### NEW `product_supplier_links` — confirmed "supplier X sells us product Y" mappings
-`product_id FK`, `vendor_id FK`, `supplier_sku`, `supplier_product_name`, `supplier_uom`, `supplier_pack_description`, **`conversion_factor` + `conversion_unit` (canonical purchasable-equivalent conversion to the product's inventory unit, human-approved)**, `is_active`, `is_preferred`, `match_confidence`, `confirmed_by/at`. Unique on `(product_id, vendor_id, supplier_sku)`.
+`product_id FK`, `vendor_id FK`, `supplier_sku`, `supplier_product_name`, `supplier_uom`, `supplier_pack_description`, **`inventory_units_per_supplier_unit` (directional, human-approved conversion — e.g. 1 supplier tote × 265 = 265 inventory gallons; deliberately NOT a generic "conversion_factor", per the 2026-07-16 inventory-costing advisory)**, `is_active`, `is_preferred`, `match_confidence`, `confirmed_by/at`. Unique on `(product_id, vendor_id, supplier_sku)`.
+**Feed-forward for the parked inventory-costing plan (Gate 0):** future PO lines snapshot (not re-read) the link id, supplier unit, inventory unit, `inventory_units_per_supplier_unit`, supplier qty, supplier unit cost cents, exact receipt total cents, and normalized inventory quantity — columns added in 1b so the costing engine (see `docs/plans/2026-07-16-inventory-costing-plan.md`) never needs PO rework.
 **Reuse rules (anti-mismatch):** a link only becomes reusable once it has a supplier SKU + confirmed pack/UOM. Name-only matches stay pending review every time; a changed package or missing SKU breaks reuse. Links are never copied across formulations/pack sizes.
 
 ### 4a. Comparability model (not just a flag)
@@ -164,8 +165,8 @@ Automated vendor selection; automatic sell-price changes from imports; machine-r
 ## 9. Open owner decisions
 
 1. **Approve this architecture** (observation layer + never-auto-change-sell-prices + owner-controlled worksheet; adversarially hardened rev 4, manual-ingestion rev 5). Recommended: yes.
-2. **Vendor merges** — confirm "The Anderson's"="The Andersons" and "Van Deist"="Van Diest" (already an open TODO item).
-3. **Priority** — where Phase 1a/1b slot against the current roadmap (CRM Phase 2, etc.).
+2. **Vendor merges — SETTLED 2026-07-17 by Mason:** both pairs ARE the same vendor; merge them. (His reply named "The Anderson's and Van Deist." Recommended canonical display spellings: the companies' official ones — **"The Andersons"** and **"Van Diest"** — with the other variants preserved as aliases, which the alias system keeps searchable either way. If Mason prefers his spellings as the display names, one word overrides this.)
+3. **Priority** — moot: Mason launched the Codex build 2026-07-16; Phase 1a built overnight.
 
 *(SETTLED 2026-07-16 by Mason: no AI/OCR extraction of supplier PDFs — manual staged entry only. This also removed the Anthropic-API-key and PDF-sample-corpus asks from this project; the vendor-bill pilot's key need is unrelated and stands on its own.)*
 
