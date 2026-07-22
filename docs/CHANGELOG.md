@@ -2,6 +2,25 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-22 — Extend _guard_recipient_name_reuse() to reserve commission-recipient names on invoiced jobs (closes KNOWN_ISSUES §1b). Applied live as 20260722184744; committed 140b7f11. PR to main deferred until #213/#216 merge.
+
+Extend _guard_recipient_name_reuse() to reserve commission-recipient names on invoiced jobs (closes KNOWN_ISSUES §1b). Applied live as 20260722184744; committed 140b7f11. PR to main deferred until #213/#216 merge.
+
+- **Commits this session** (git log --since=12.hours --author=Mason):
+  - `d8a17601 Fix bulk quote import lifecycle path`
+  - `5c577703 Improve Codex session momentum guidance (#215)`
+  - `f36158bf Document Supplier Pricing Phase 3 execution contract (#214)`
+  - `85392e02 Record live inventory guard migration (#211)`
+  - `8e4bea10 Close out Supplier Cost Basis Phase 2 Wells canary (#210)`
+  - `016236fd Merge pull request #209 from masonwells1/claude/gauntlet-t3-sections-5-8`
+  - `e3ecc9b2 Fix inventory gauntlet section 3 findings (#208)`
+  - `b78535af Supplier Pricing: complete workbook v2 product info (#207)`
+  - `bf2a60ef Merge pull request #204 from masonwells1/claude/field-profitability`
+  - `5a3f49fa Merge pull request #206 from masonwells1/codex/supplier-pricing-integration`
+  - `466c2095 Merge pull request #205 from masonwells1/codex/supplier-cost-basis-phase2-frontend`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - `supabase/migrations/20260722184744_reuse_guard_covers_invoiced_jobs.sql`
+
 ## 2026-07-22 — Supplier Cost Basis Phase 2 Wells canary closed out
 
 - Closed PR #207's final CodeRabbit verification findings: the documentation-drift guard now validates the migration-history ledger sequence independently from SQL-file and grouped-row counts, and the ProductDetail pricing-flow test keeps each simulated query builder isolated so later builders cannot redirect earlier assertions.
