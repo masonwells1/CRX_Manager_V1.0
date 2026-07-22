@@ -7,6 +7,7 @@ import { supabase, assertRpcResult } from '../../lib/db';
 import { useAuth } from '../../contexts/AuthContext';
 import { processDocumentWithOCR, isCSVFile, isOCRSupported } from '../../lib/documentOCR';
 import { generateIdempotencyKey } from '../../lib/idempotency';
+import { Sentry } from '../../lib/sentry';
 import type { Json } from '../../types/supabase';
 
 interface BulkQuoteImportProps {
@@ -56,7 +57,7 @@ const FIELD_MAPPINGS: Record<string, string[]> = {
   footer_notes: ['footer_notes', 'footer', 'quote_footer'],
 };
 
-const IMPORTABLE_QUOTE_STATUSES = new Set(['draft', 'sent', 'revised']);
+const IMPORTABLE_QUOTE_STATUSES = new Set(['draft']);
 
 export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteImportProps) {
   const { toast } = useToast();
@@ -99,7 +100,6 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
       setFile(selectedFile);
       setValidation(null);
       setUploadResults(null);
-      importIdempotencyKeysRef.current.clear();
     }
   };
 
@@ -283,7 +283,7 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
         if (item.status && !IMPORTABLE_QUOTE_STATUSES.has(item.status)) {
           invalid.push({
             row: idx + 2,
-            error: 'Unsupported status. Bulk quote imports may only create draft, sent, or revised quotes.',
+            error: 'Unsupported status. Bulk quote imports may only create draft quotes.',
             data: rowData,
           });
           return;
@@ -293,7 +293,10 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
       });
 
       setValidation({ valid, invalid });
-    } catch {
+    } catch (error) {
+      Sentry.captureException(error instanceof Error ? error : new Error(String(error)), {
+        extra: { context: 'BulkQuoteImport.parseCSVFile' },
+      });
       toast('error', 'Failed to parse file. Please ensure it is a valid CSV.');
     }
     setParsing(false);
@@ -386,9 +389,15 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
 
               const product = productDetailsById.get(productId);
               const current_cost = product?.current_cost || 0;
-              const price_per_unit = item.price_per_unit || 0;
+              const hasPriceOverride = typeof item.price_per_unit === 'number';
+              const price_per_unit = hasPriceOverride ? item.price_per_unit! : 0;
               const acres = item.acres || 0;
-              const oz_per_acre = item.oz_per_acre || 0;
+              const actualRate = item.actual_rate ?? item.oz_per_acre ?? null;
+              const rateUnit = item.rate_unit || (actualRate !== null ? 'oz' : null);
+              const rateConv = rateUnit
+                ? unitConversions.find((c: { unit: string; factor_oz: number }) => c.unit.toLowerCase() === rateUnit.toLowerCase())
+                : null;
+              const oz_per_acre = actualRate !== null ? actualRate * (rateConv?.factor_oz ?? 1) : 0;
 
               // Look up the conversion factor for the product's inventory_unit (e.g. Lb=16, Gallon=128)
               // Falls back to 16 (oz-per-lb) if no inventory_unit or no matching conversion found
@@ -411,11 +420,11 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
                 product_id: productId,
                 sort_order: itemIndex,
                 price_per_unit,
-                price_override: null,
+                price_override: hasPriceOverride ? price_per_unit : null,
                 current_cost,
                 suggested_rate: null,
-                actual_rate: item.actual_rate || null,
-                rate_unit: item.rate_unit || null,
+                actual_rate: actualRate,
+                rate_unit: rateUnit,
                 oz_per_acre: oz_per_acre || null,
                 acres: acres || null,
                 total_units_needed: total_units_needed || null,
@@ -446,15 +455,12 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
 
           if (itemsCreated > 0) {
             const validDays = firstItem.valid_days || 15;
-            const status = firstItem.status && IMPORTABLE_QUOTE_STATUSES.has(firstItem.status)
-              ? firstItem.status
-              : 'draft';
             const quotePayload = {
               quote_number: quoteNumber,
               customer_id: customerId,
               created_by: profile.id,
               tier: firstItem.tier || 1,
-              status,
+              status: 'draft',
               total_price: totalPrice,
               total_cost: totalCost,
               total_profit: totalProfit,
@@ -489,7 +495,10 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
             details.push(`Quote ${quoteNumber}: No items could be created`);
             failCount++;
           }
-        } catch {
+        } catch (error) {
+          Sentry.captureException(error instanceof Error ? error : new Error(String(error)), {
+            extra: { context: 'BulkQuoteImport.createQuote', quoteNumber },
+          });
           details.push(`Quote ${quoteNumber}: Unexpected error`);
           failCount++;
         }
@@ -504,7 +513,10 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
       if (failCount > 0) {
         toast('error', `Failed to import ${failCount} quote(s)`);
       }
-    } catch {
+    } catch (error) {
+      Sentry.captureException(error instanceof Error ? error : new Error(String(error)), {
+        extra: { context: 'BulkQuoteImport.import' },
+      });
       toast('error', 'Import failed');
     }
     setUploading(false);
@@ -550,7 +562,7 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
             <p className="text-xs font-medium text-secondary mb-2">Optional Columns:</p>
             <p className="text-xs text-gray-500 font-mono">
               section_name, acres, price_per_unit, oz_per_acre, actual_rate, rate_unit, notes, tier (1-3),
-              status (draft/sent/revised), valid_days, header_notes, footer_notes
+              status (draft), valid_days, header_notes, footer_notes
             </p>
           </div>
         </div>

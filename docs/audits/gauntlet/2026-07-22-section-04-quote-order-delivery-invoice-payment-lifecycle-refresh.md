@@ -26,19 +26,19 @@ Bulk quote upload could create quote rows outside the same server-side save cont
 
 Suggested fix:
 
-Route bulk quote import through `save_quote`, build the same quote/section/item JSON shape as Quote Builder, keep one retry-safe idempotency key per imported quote number, and restrict import-created statuses to `draft`, `sent`, or `revised`.
+Route bulk quote import through `save_quote`, build the same quote/section/item JSON shape as Quote Builder, keep one retry-safe idempotency key per imported quote number until successful acknowledgement, and restrict import-created statuses to `draft` because the RPC rejects non-draft new quotes.
 
 Prevention:
 
-Add a regression test proving bulk import calls `save_quote` and never direct-inserts `quotes`, `quote_sections`, or `quote_items`; add a parse test rejecting `accepted` status.
+Add a regression test proving bulk import calls `save_quote` and never direct-inserts `quotes`, `quote_sections`, or `quote_items`; add a parse test rejecting non-draft statuses and payload assertions for server-authoritative dosage and price override fields.
 
 Remediation in this branch:
 
-- `src/components/quotes/BulkQuoteImport.tsx:59` restricts importable statuses to `draft/sent/revised`.
-- `src/components/quotes/BulkQuoteImport.tsx:70-82` keeps a per-quote idempotency-key cache.
-- `src/components/quotes/BulkQuoteImport.tsx:470-484` now calls `save_quote` and asserts the RPC result.
-- `src/components/quotes/BulkQuoteImport.test.tsx:83-110` proves the RPC-only path and direct-insert absence.
-- `src/components/quotes/BulkQuoteImport.test.tsx:113-126` proves `accepted` import status is rejected.
+- `src/components/quotes/BulkQuoteImport.tsx` restricts importable statuses to `draft` and sends all new quote payloads to `save_quote` as `draft`.
+- `src/components/quotes/BulkQuoteImport.tsx` keeps per-quote idempotency keys across file reselection/retry and clears them only after `save_quote` succeeds.
+- `src/components/quotes/BulkQuoteImport.tsx` translates CSV `oz_per_acre` into `actual_rate: <value>, rate_unit: 'oz'`, preserves explicit CSV prices as `price_override`, and restores Sentry reporting for unexpected parse/import failures.
+- `src/components/quotes/BulkQuoteImport.test.tsx` proves the RPC-only path, direct-insert absence, draft-only status, dosage translation, and price override payload.
+- `src/components/quotes/BulkQuoteImport.test.tsx` proves non-draft import status is rejected.
 
 Status: fixed in branch; no live database mutation required.
 

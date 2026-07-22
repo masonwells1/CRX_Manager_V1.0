@@ -33,7 +33,7 @@ const mocks = vi.hoisted(() => {
       };
       return chainable({ data: dataByTable[table] ?? [], error: null });
     }),
-    rpc: vi.fn(() => Promise.resolve({ data: { quote_id: 'quote-1' }, error: null })),
+    rpc: vi.fn((_name: string, _args: Record<string, unknown>) => Promise.resolve({ data: { quote_id: 'quote-1' }, error: null })),
     assertRpcResult: vi.fn((data: unknown) => data),
   };
 });
@@ -41,6 +41,10 @@ const mocks = vi.hoisted(() => {
 vi.mock('../../lib/db', () => ({
   supabase: { from: mocks.from, rpc: mocks.rpc },
   assertRpcResult: mocks.assertRpcResult,
+}));
+
+vi.mock('../../lib/sentry', () => ({
+  Sentry: { captureException: vi.fn() },
 }));
 
 vi.mock('../../contexts/AuthContext', () => ({
@@ -85,7 +89,7 @@ describe('BulkQuoteImport', () => {
     const { container } = render(<BulkQuoteImport {...defaultProps} onSuccess={onSuccess} />);
     const csv = [
       'quote_number,customer_farm_name,section_name,product_name,acres,price_per_unit,oz_per_acre,status',
-      'Q-100,North Farm,Spring,Roundup,10,20,32,sent',
+      'Q-100,North Farm,Spring,Roundup,10,20,32,draft',
     ].join('\n');
     const file = new File([csv], 'quotes.csv', { type: 'text/csv' });
     Object.defineProperty(file, 'text', { value: () => Promise.resolve(csv) });
@@ -104,17 +108,30 @@ describe('BulkQuoteImport', () => {
       p_performed_by: 'user-1',
       p_idempotency_key: expect.stringContaining('save_quote_bulk_import'),
     })));
+    const saveQuoteArgs = mocks.rpc.mock.calls.find(([rpcName]) => rpcName === 'save_quote')?.[1] as {
+      p_quote_payload: { status: string };
+      p_sections: Array<{ items: Array<Record<string, unknown>> }>;
+    };
+    expect(saveQuoteArgs.p_quote_payload).toEqual(expect.objectContaining({
+      status: 'draft',
+    }));
+    expect(saveQuoteArgs.p_sections[0].items[0]).toEqual(expect.objectContaining({
+      actual_rate: 32,
+      rate_unit: 'oz',
+      price_per_unit: 20,
+      price_override: 20,
+    }));
     expect(mocks.from).not.toHaveBeenCalledWith('quotes');
     expect(mocks.from).not.toHaveBeenCalledWith('quote_sections');
     expect(mocks.from).not.toHaveBeenCalledWith('quote_items');
     expect(onSuccess).toHaveBeenCalled();
   });
 
-  it('rejects accepted quote status during parse', async () => {
+  it('rejects non-draft quote status during parse', async () => {
     const { container } = render(<BulkQuoteImport {...defaultProps} />);
     const csv = [
       'quote_number,customer_farm_name,product_name,status',
-      'Q-200,North Farm,Roundup,accepted',
+      'Q-200,North Farm,Roundup,sent',
     ].join('\n');
     const file = new File([csv], 'quotes.csv', { type: 'text/csv' });
     Object.defineProperty(file, 'text', { value: () => Promise.resolve(csv) });
@@ -126,6 +143,7 @@ describe('BulkQuoteImport', () => {
     fireEvent.click(screen.getByRole('button', { name: /parse file/i }));
 
     await screen.findByText(/unsupported status/i);
+    expect(screen.getByText(/draft quotes/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /import 0 quote/i })).toBeDisabled();
   });
 });
