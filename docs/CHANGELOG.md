@@ -4,6 +4,8 @@ All significant development milestones, in reverse chronological order.
 
 ## 2026-07-22 — Commission-recipient integrity close-out (gauntlet §7 + hardening)
 
+- Made profile names globally unique — active or deactivated — closing the last name-identity variant (a parked deactivated account sharing a real user's name could otherwise be swapped in later). Live migration `20260722154303_global_unique_profile_names`; proven in-transaction: the pre-positioning insert is rejected by exactly the new index. A future hire sharing a former employee's exact name now requires renaming the old account first.
+
 - Closed the vacated-name reuse hole in commission routing. Live migration `20260722150432_forbid_referenced_recipient_name_acquisition`: the database now refuses to let any profile — admin actions included — acquire a name still referenced by a commission split with future money (customer defaults, live quotes, uninvoiced jobs); update the splits first. Proven live: an admin attempt to reassign a referenced name raised `COMMISSION_RECIPIENT_NAME_RESERVED` and was rolled back. The durable redesign (storing profile ids inside splits instead of names) is queued as follow-up work.
 
 - Hardened commission-identity names after the Codex pre-merge review flagged that any authenticated user could rename their own profile — colliding with or claiming a commission-recipient name. Live migration `20260722144121_lock_commission_identity_names`: `full_name` joins the admin-only column set in the profile guard trigger, and a case-insensitive partial unique index forbids duplicate active names for everyone. Proven live with an aborted-transaction test: non-admin rename raises `PROFILE_ROLE_LOCK`, admin rename still works.
