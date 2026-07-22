@@ -4,6 +4,8 @@ All significant development milestones, in reverse chronological order.
 
 ## 2026-07-22 — Commission-recipient integrity close-out (gauntlet §7 + hardening)
 
+- Extended the recipient-name reservation to terminal-but-revivable quotes: live migration `20260722172533_reuse_guard_covers_revivable_quotes` widens the reuse guard's quotes branch to every non-deleted quote — declined/expired/cancelled quotes can be revived (`revert_quote_status`, `restore_quote_version`), so their commission-split names stay reserved. This was the round-8 Codex gate finding PR #213 briefly parked on; the branch is now landed.
+
 - Extended the recipient-name reservation to orders: live migration `20260722162851_reuse_guard_covers_orders` adds order commission-split snapshots (including cancelled-but-restorable orders) to the set of names no profile may acquire, closing the rush-order/deferred-pricing variant of the name-reuse hole.
 
 - Made profile names globally unique — active or deactivated — closing the last name-identity variant (a parked deactivated account sharing a real user's name could otherwise be swapped in later). Live migration `20260722154303_global_unique_profile_names`; proven in-transaction: the pre-positioning insert is rejected by exactly the new index. A future hire sharing a former employee's exact name now requires renaming the old account first.

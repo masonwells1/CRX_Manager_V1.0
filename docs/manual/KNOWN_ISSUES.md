@@ -92,13 +92,9 @@ Two items the ledger flagged as **"top build priority" and Codex-rated HIGH-on-s
 
 ---
 
-## 1b. PARKED BRANCH 2026-07-22 — commission-recipient close-out, one gate finding open
+## 1b. RESOLVED 2026-07-22 — commission-recipient close-out fully landed
 
-Branch `claude/nervous-dubinsky-39a725` (worktree `.claude/worktrees/stoic-heyrovsky-ebaaf6`) holds the gauntlet-§7 close-out: **five migrations ALL APPLIED LIVE and individually proven** (ledger rows 812–816: `20260722134252` reject-unresolvable-recipients + dropdown RPC, `20260722144121` admin-only names + unique active names, `20260722150432` referenced-name reuse guard, `20260722154303` global unique names, `20260722162851` orders coverage) plus the frontend (CommissionSplitEditor loads recipients from `list_commission_recipients()`, "Other" removed), regenerated types/fixture/registry, and docs. Pipeline fully green (3856 tests, lint, build, CodeRabbit's one nit fixed on PR #213).
-
-**Why parked:** the Codex push-proof merge gate ran 8 rounds; rounds 1–7's findings were all fixed or live-refuted (row 816 documents the needs_pricing column-conflation refutation). Round 8 found ONE more real angle in the same name-identity class: **terminal quotes (declined/expired/cancelled) are revivable** via `revert_quote_status` (→ sent) and `restore_quote_version` (→ revised), but the reuse guard reserves names only for draft/sent/revised/accepted quotes — so a name referenced only by a terminal-but-revivable quote can be vacated, reacquired, and later converted with the wrong holder. Mason's standing instruction from the session: no further fix rounds tonight → park.
-
-**To land:** write one more migration re-emitting `_guard_recipient_name_reuse()` with the quotes branch widened to every non-deleted quote (mirroring the cancelled-orders decision on row 816 — reservation ≠ resolution, so the preflight resolution sweep stays scoped to live quotes), through the full gates; then push branch → PR #213 (already open) → checks → merge. The durable end of this whole class is the parked id-based-splits task (task chip pending). Note: because the branch is unmerged, the five applied migrations' files exist only in this worktree — treat disk-vs-live accordingly.
+The gauntlet-§7 close-out branch (`claude/nervous-dubinsky-39a725`, PR #213) briefly parked on one open Codex-gate finding (terminal quotes are revivable via `revert_quote_status`/`restore_quote_version` but the reuse guard's quotes branch covered only draft/sent/revised/accepted). Closed by live migration `20260722172533_reuse_guard_covers_revivable_quotes` (ledger row 817): the quotes branch now reserves names on EVERY non-deleted quote. All six family migrations (rows 812–817) are applied live and individually proven; PR #213 merged. The durable end of the whole name-identity class remains the id-based-splits redesign (task chip / in-progress sibling branch `claude/commission-split-recipient-ids`).
 
 ## 2. Parked migrations (written, not applied)
 
