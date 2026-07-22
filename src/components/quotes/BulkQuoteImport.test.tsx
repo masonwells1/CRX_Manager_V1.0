@@ -183,4 +183,26 @@ describe('BulkQuoteImport', () => {
     expect(screen.getByText(/draft quotes/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /import 0 quote/i })).toBeDisabled();
   });
+
+  it('rejects the whole quote when one grouped row is invalid', async () => {
+    const { container } = render(<BulkQuoteImport {...defaultProps} />);
+    const csv = [
+      'quote_number,customer_farm_name,product_name,acres,status',
+      'Q-400,North Farm,Roundup,10,draft',
+      'Q-400,North Farm,Roundup,10,accepted',
+    ].join('\n');
+    const file = new File([csv], 'quotes.csv', { type: 'text/csv' });
+    Object.defineProperty(file, 'text', { value: () => Promise.resolve(csv) });
+
+    const input = container.querySelector('input[type="file"]');
+    expect(input).toBeTruthy();
+    fireEvent.change(input as HTMLInputElement, { target: { files: [file] } });
+    await screen.findByText(/quotes\.csv/i);
+    fireEvent.click(screen.getByRole('button', { name: /parse file/i }));
+
+    await screen.findByText(/unsupported status/i);
+    expect(screen.getByText(/another invalid row/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /import 0 quote/i })).toBeDisabled();
+    expect(mocks.rpc).not.toHaveBeenCalledWith('save_quote', expect.anything());
+  });
 });

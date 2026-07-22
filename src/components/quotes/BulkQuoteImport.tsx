@@ -40,6 +40,14 @@ interface ValidationResult {
   invalid: Array<{ row: number; error: string; data: Record<string, string> }>;
 }
 
+type InvalidQuoteRow = ValidationResult['invalid'][number];
+
+interface ValidQuoteRow {
+  row: number;
+  item: ParsedQuoteItem;
+  data: Record<string, string>;
+}
+
 const FIELD_MAPPINGS: Record<string, string[]> = {
   quote_number: ['quote_number', 'quote_num', 'quote_id', 'quote', 'quote#'],
   customer_farm_name: ['customer_farm_name', 'customer', 'farm_name', 'farm', 'customer_name'],
@@ -59,6 +67,42 @@ const FIELD_MAPPINGS: Record<string, string[]> = {
 };
 
 const IMPORTABLE_QUOTE_STATUSES = new Set(['draft']);
+
+const normalizeQuoteNumber = (quoteNumber?: string | null): string =>
+  quoteNumber?.toLowerCase().trim() ?? '';
+
+const rejectPartiallyInvalidQuoteGroups = (
+  candidates: ValidQuoteRow[],
+  invalid: InvalidQuoteRow[]
+): ValidationResult => {
+  const blockedQuoteNumbers = new Set(
+    invalid
+      .map((row) => normalizeQuoteNumber(row.data.quote_number))
+      .filter(Boolean)
+  );
+
+  if (blockedQuoteNumbers.size === 0) {
+    return { valid: candidates.map(({ item }) => item), invalid };
+  }
+
+  const valid: ParsedQuoteItem[] = [];
+  const normalizedInvalid = [...invalid];
+
+  candidates.forEach(({ row, item, data }) => {
+    if (blockedQuoteNumbers.has(normalizeQuoteNumber(item.quote_number))) {
+      normalizedInvalid.push({
+        row,
+        error: `Quote ${item.quote_number} has another invalid row; fix all rows for this quote before importing.`,
+        data,
+      });
+      return;
+    }
+
+    valid.push(item);
+  });
+
+  return { valid, invalid: normalizedInvalid };
+};
 
 export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteImportProps) {
   const { toast } = useToast();
@@ -155,8 +199,8 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
       return { valid: [], invalid: [] };
     }
 
-    const valid: ParsedQuoteItem[] = [];
-    const invalid: Array<{ row: number; error: string; data: Record<string, string> }> = [];
+    const candidates: ValidQuoteRow[] = [];
+    const invalid: InvalidQuoteRow[] = [];
 
     data.items.forEach((item, idx) => {
       if (!item.quote_number || !item.customer_name || !item.product_name) {
@@ -167,17 +211,21 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
         });
         return;
       }
-      valid.push({
-        quote_number: item.quote_number,
-        customer_farm_name: item.customer_name,
-        product_name: item.product_name,
-        acres: item.acres,
-        price_per_unit: item.price,
-        actual_rate: item.rate,
+      candidates.push({
+        row: idx + 1,
+        data: { ...item } as unknown as Record<string, string>,
+        item: {
+          quote_number: item.quote_number,
+          customer_farm_name: item.customer_name,
+          product_name: item.product_name,
+          acres: item.acres,
+          price_per_unit: item.price,
+          actual_rate: item.rate,
+        },
       });
     });
 
-    return { valid, invalid };
+    return rejectPartiallyInvalidQuoteGroups(candidates, invalid);
   };
 
   const handleParse = async () => {
@@ -221,8 +269,8 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
         return;
       }
 
-      const valid: ParsedQuoteItem[] = [];
-      const invalid: Array<{ row: number; error: string; data: Record<string, string> }> = [];
+      const validRows: ValidQuoteRow[] = [];
+      const invalid: InvalidQuoteRow[] = [];
 
       rows.forEach((cols, idx) => {
         const item: Partial<ParsedQuoteItem> = {};
@@ -290,10 +338,10 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
           return;
         }
 
-        valid.push(item as ParsedQuoteItem);
+        validRows.push({ row: idx + 2, item: item as ParsedQuoteItem, data: rowData });
       });
 
-      setValidation({ valid, invalid });
+      setValidation(rejectPartiallyInvalidQuoteGroups(validRows, invalid));
     } catch (error) {
       Sentry.captureException(error instanceof Error ? error : new Error(String(error)), {
         extra: { context: 'BulkQuoteImport.parseCSVFile' },
