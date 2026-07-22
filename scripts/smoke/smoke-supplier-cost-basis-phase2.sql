@@ -11,8 +11,8 @@ BEGIN
       WHERE setting_key = 'supplier_cost_basis_enabled') <> 'false' THEN
     RAISE EXCEPTION 'SMOKE_FAIL: Phase 2 feature flag did not default off';
   END IF;
-  IF (SELECT count(*) FROM public.product_cost_basis WHERE effective_to IS NULL) <> 4 THEN
-    RAISE EXCEPTION 'SMOKE_FAIL: existing Product costs were not baselined exactly once';
+  IF (SELECT count(*) FROM public.product_cost_basis WHERE effective_to IS NULL) <> 14 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: base and Wells fixture costs were not baselined exactly once';
   END IF;
   IF EXISTS (
     SELECT 1 FROM public.product_cost_basis b
@@ -24,6 +24,18 @@ BEGIN
   END IF;
   IF has_table_privilege('authenticated', 'public.product_cost_basis', 'SELECT') THEN
     RAISE EXCEPTION 'SMOKE_FAIL: authenticated retained direct basis ledger access';
+  END IF;
+  IF (SELECT count(*) FROM public.product_cost_basis_rollout) <> 10
+     OR has_table_privilege('authenticated', 'public.product_cost_basis_rollout', 'SELECT') THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: Wells rollout table shape or privacy drifted';
+  END IF;
+  IF public._supplier_cost_basis_enabled_for_product(
+       'd1961efe-6133-4ab4-bf84-ac7bf7da903a'
+     ) IS NOT TRUE
+     OR public._supplier_cost_basis_enabled_for_product(
+       'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1'
+     ) IS NOT FALSE THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: Product-scoped rollout gate drifted';
   END IF;
 END;
 $proof$;
@@ -64,6 +76,65 @@ END;
 $proof$;
 
 SELECT set_config('request.jwt.claim.sub', '11111111-1111-4111-8111-111111111111', false);
+SET ROLE authenticated;
+
+-- The global flag remains false, but the exact Wells allowlist must permit the
+-- real governed wrapper. Prove a keep-sell-prices selection end to end.
+INSERT INTO phase2_proof(key, value)
+VALUES ('wells-rollout-preview', public.preview_product_cost_basis_changes(
+  'product_page', NULL,
+  jsonb_build_array(jsonb_build_object(
+    'product_id', 'd1961efe-6133-4ab4-bf84-ac7bf7da903a',
+    'row_version', 1,
+    'pricing_mode', 'price_driven',
+    'new_cost', '10.09',
+    'tier1_price', '12.00',
+    'tier2_price', '13.00',
+    'tier3_price', '14.00',
+    'change_reason', 'Disposable Wells rollout proof',
+    'basis_type', 'selected_supplier_price',
+    'basis_source', 'supplier_pricing',
+    'basis_reason', 'Disposable Wells rollout proof',
+    'basis_selection', true,
+    'supplier_price_observation_id', '30000000-0000-4000-8000-000000000009'
+  )),
+  '11111111-1111-4111-8111-111111111111',
+  'phase2-wells-rollout-preview'
+));
+INSERT INTO phase2_proof(key, value)
+SELECT 'wells-rollout-apply', public.apply_product_cost_basis_change_set(
+  (value->>'change_set_id')::uuid, value->>'request_fingerprint',
+  '11111111-1111-4111-8111-111111111111',
+  'phase2-wells-rollout-apply'
+)
+FROM phase2_proof WHERE key = 'wells-rollout-preview';
+
+RESET ROLE;
+DO $proof$
+DECLARE
+  v_workspace jsonb := public.get_product_cost_basis_workspace(
+    'd1961efe-6133-4ab4-bf84-ac7bf7da903a'
+  );
+BEGIN
+  IF (SELECT round(current_cost * 100)::bigint FROM public.products
+      WHERE id = 'd1961efe-6133-4ab4-bf84-ac7bf7da903a') <> 1009
+     OR EXISTS (
+       SELECT 1 FROM public.products
+       WHERE id = 'd1961efe-6133-4ab4-bf84-ac7bf7da903a'
+         AND (tier1_price <> 12 OR tier2_price <> 13 OR tier3_price <> 14)
+     )
+     OR NOT EXISTS (
+       SELECT 1 FROM public.product_cost_basis
+       WHERE product_id = 'd1961efe-6133-4ab4-bf84-ac7bf7da903a'
+         AND effective_to IS NULL
+         AND supplier_price_observation_id =
+             '30000000-0000-4000-8000-000000000009'
+     )
+     OR (v_workspace->>'enabled')::boolean IS NOT TRUE THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: Wells rollout keep-sell-prices apply drifted';
+  END IF;
+END;
+$proof$;
 SET ROLE authenticated;
 
 -- Establish the changed fixture's starting cost through the live Phase 1a

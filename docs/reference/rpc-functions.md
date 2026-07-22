@@ -430,15 +430,17 @@ These are NOT called directly from the frontend. They power triggers, guards, an
 
 All eleven functions are live from `20260718225511_supplier_price_evidence_phase1b.sql` (ledger version `20260718225511`, submitted name `20260718230000_supplier_price_evidence_phase1b`). Post-apply catalog verification confirmed one expected overload each, fixed `search_path = public, pg_temp`, anonymous execution denied, and authenticated execution granted. Migration `20260720203000_restrict_supplier_pricing_to_admin.sql` tightens all five reader RPCs and the evidence-table/storage SELECT policies from admin-or-sales to **admin-only** (`ADMIN_REQUIRED`), per Mason's 2026-07-20 decision that supplier cost data follows the standing admin-only cost contract.
 
-### Supplier Pricing Phase 2 (live foundation; selection flag OFF)
+### Supplier Pricing Phase 2 (database LIVE; rollout flag off)
 
 - `get_product_cost_basis_workspace(product_id)` — admin-only read model for the current selected basis, comparable current supplier observations, and received PO costs with a proven conversion.
 - `preview_product_cost_basis_changes(source, export_id, rows, performed_by, idempotency_key)` — actor-bound/idempotent wrapper that validates evidence and stores explicit basis provenance, then delegates price calculation to `preview_product_pricing_changes`.
 - `apply_product_cost_basis_change_set(change_set_id, request_fingerprint, performed_by, idempotency_key)` — actor-bound/idempotent atomic apply. Revalidates evidence and the active-basis concurrency token, delegates money changes to `apply_product_pricing_change_set`, closes the prior basis, and appends the selected basis.
 
-These functions were applied live in `20260722015019_supplier_cost_basis_phase2.sql` on 2026-07-21 (Chicago). Supplier/actual-purchase selection remains off because `supplier_cost_basis_enabled` is still `false`; applying the schema did not enable the workflow.
+These functions are live from `20260722015019_supplier_cost_basis_phase2.sql`, with the null-cost-safe final wrapper from `20260722035521`, overload assertions through `20260722043537`, and the Wells Product-scoped rollout gate through live high-water `20260722064814`. Supplier/actual-purchase selection is enabled only for the exact ten Wells canary Products; global rollout remains off.
 While that flag remains off, the migration also preserves the deployed Phase 1a pricing RPC as a compatibility writer and atomically records any governed cost change in `product_cost_basis` as a manual basis. Enabling the flag closes that compatibility route and requires `apply_product_cost_basis_change_set`.
 The Product Detail frontend sends `p_source = 'product_page'` because that field identifies the existing single-Product pricing change-set route. Each explicit basis row separately sends `basis_source = 'product_detail'`, which is the audit field identifying where the administrator selected the basis. Supplier Pricing comparison remains read-only and links to that Product Detail flow.
+
+Live migration `20260722064814_wells_cost_basis_rollout_gate.sql` (submitted as `20260722060644_wells_cost_basis_rollout_gate`) changes that rollout decision from global-only to global-or-Product-allowlisted. The public RPC signatures do not change. `get_product_cost_basis_workspace(product_id)` reports `enabled` for the requested Product, and preview/apply plus all trigger readers enforce the same private helper. The exact ten Wells pilot Products are seeded and enabled; the global setting remains false, so non-pilot Products retain the Phase 1a path.
 
 ### Custom Application Workflow
 - `create_job_from_quote_section(p_quote_id, p_section_id, p_performed_by, p_idempotency_key)` -> jsonb {job_id} -- Creates scheduled job from planned quote section with pre-filled chemicals and fields

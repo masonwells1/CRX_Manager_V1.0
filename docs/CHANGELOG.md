@@ -2,6 +2,8 @@
 
 All significant development milestones, in reverse chronological order.
 
+- Applied the Wells-only Phase 2 canary migration, submitted as `20260722060644_wells_cost_basis_rollout_gate` and recorded live as `20260722064814_wells_cost_basis_rollout_gate`. It adds a private deny-all Product allowlist seeded with the exact ten reviewed Wells Products, requires the canonical global flag row to exist exactly once and remain `false`, fails closed if Product/vendor/link/observation shape has drifted, and routes all six behavioral flag readers through a global-or-Product helper while preserving apply's global setting-row lock. Live postflight confirmed exactly 10 allowlisted Products, all 10 helper-enabled, a non-pilot Product disabled, 602 active basis rows, zero pending change rows, unchanged Wells totals, and the global flag still OFF. No Product money changed.
+
 ## 2026-07-21 — Wells Supplier Pricing Phase 1b pilot closeout
 
 - Completed the governed manual Wells Ag Supply pilot with 10 representative Product links and one approved 10-row quote import. Supplier comparison and Product history now show the Wells quote observation while Product cost and all three sell-price tiers remain unchanged.
