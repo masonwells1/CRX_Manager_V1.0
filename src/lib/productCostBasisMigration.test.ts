@@ -9,7 +9,7 @@ const migrationSql = readFileSync(
     repoRoot,
     'supabase',
     'migrations',
-    '20260721231000_supplier_cost_basis_phase2.sql',
+    '20260722015019_supplier_cost_basis_phase2.sql',
   ),
   'utf8',
 );
