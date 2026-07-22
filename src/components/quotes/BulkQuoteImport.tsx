@@ -1,12 +1,15 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Upload, CheckCircle, AlertCircle, FileText, Sparkles } from 'lucide-react';
 import Modal from '../ui/Modal';
 import Button from '../ui/Button';
 import { useToast } from '../ui/Toast';
-import { supabase, checkMutationResult } from '../../lib/db';
+import { supabase, assertRpcResult } from '../../lib/db';
 import { useAuth } from '../../contexts/AuthContext';
 import { processDocumentWithOCR, isCSVFile, isOCRSupported } from '../../lib/documentOCR';
+import { generateIdempotencyKey } from '../../lib/idempotency';
 import { Sentry } from '../../lib/sentry';
+import { logActivity } from '../../lib/activityLogger';
+import type { Json } from '../../types/supabase';
 
 interface BulkQuoteImportProps {
   open: boolean;
@@ -37,6 +40,14 @@ interface ValidationResult {
   invalid: Array<{ row: number; error: string; data: Record<string, string> }>;
 }
 
+type InvalidQuoteRow = ValidationResult['invalid'][number];
+
+interface ValidQuoteRow {
+  row: number;
+  item: ParsedQuoteItem;
+  data: Record<string, string>;
+}
+
 const FIELD_MAPPINGS: Record<string, string[]> = {
   quote_number: ['quote_number', 'quote_num', 'quote_id', 'quote', 'quote#'],
   customer_farm_name: ['customer_farm_name', 'customer', 'farm_name', 'farm', 'customer_name'],
@@ -55,6 +66,110 @@ const FIELD_MAPPINGS: Record<string, string[]> = {
   footer_notes: ['footer_notes', 'footer', 'quote_footer'],
 };
 
+const IMPORTABLE_QUOTE_STATUSES = new Set(['draft']);
+
+const normalizeQuoteNumber = (quoteNumber?: string | null): string =>
+  quoteNumber?.trim().toUpperCase() ?? '';
+
+const escapeIlikePattern = (value: string): string =>
+  value.replace(/[\\%_]/g, (match) => `\\${match}`);
+
+const normalizeUnitName = (unit?: string | null): string =>
+  unit?.toLowerCase().trim() ?? '';
+
+const toMoneyCents = (value: number | null | undefined): bigint =>
+  BigInt(Math.round((value ?? 0) * 100));
+
+const centsToDollars = (cents: bigint): number => Number(cents) / 100;
+
+const multiplyCentsByQuantity = (unitCents: bigint, quantity: number): bigint =>
+  BigInt(Math.round(Number(unitCents) * quantity));
+
+const stableStringify = (value: unknown): string => {
+  if (value === undefined || value === null) return 'null';
+  if (typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
+
+  return `{${Object.entries(value as Record<string, unknown>)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, item]) => `${JSON.stringify(key)}:${stableStringify(item)}`)
+    .join(',')}}`;
+};
+
+const payloadFingerprint = (value: unknown): string => {
+  let hash = 2166136261;
+  const serialized = stableStringify(value);
+  for (let i = 0; i < serialized.length; i++) {
+    hash ^= serialized.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
+};
+
+const importRowFingerprint = (quoteNumber: string, items: ParsedQuoteItem[]): string =>
+  payloadFingerprint({
+    quote_number: quoteNumber,
+    items: items.map((item) => ({
+      quote_number: normalizeQuoteNumber(item.quote_number),
+      customer_farm_name: item.customer_farm_name.trim(),
+      section_name: item.section_name?.trim() || null,
+      product_name: item.product_name.trim(),
+      acres: item.acres ?? null,
+      price_per_unit: item.price_per_unit ?? null,
+      oz_per_acre: item.oz_per_acre ?? null,
+      actual_rate: item.actual_rate ?? null,
+      rate_unit: normalizeUnitName(item.rate_unit) || null,
+      notes: item.notes ?? null,
+      tier: item.tier ?? null,
+      status: item.status ?? null,
+      valid_days: item.valid_days ?? null,
+      header_notes: item.header_notes ?? null,
+      footer_notes: item.footer_notes ?? null,
+    })),
+  });
+
+const rejectPartiallyInvalidQuoteGroups = (
+  candidates: ValidQuoteRow[],
+  invalid: InvalidQuoteRow[]
+): ValidationResult => {
+  const blockedQuoteNumbers = new Set(
+    invalid
+      .map((row) => normalizeQuoteNumber(row.data.quote_number))
+      .filter(Boolean)
+  );
+
+  if (blockedQuoteNumbers.size === 0) {
+    return {
+      valid: candidates.map(({ item }) => ({
+        ...item,
+        quote_number: normalizeQuoteNumber(item.quote_number),
+      })),
+      invalid,
+    };
+  }
+
+  const valid: ParsedQuoteItem[] = [];
+  const normalizedInvalid = [...invalid];
+
+  candidates.forEach(({ row, item, data }) => {
+    if (blockedQuoteNumbers.has(normalizeQuoteNumber(item.quote_number))) {
+      normalizedInvalid.push({
+        row,
+        error: `Quote ${item.quote_number} has another invalid row; fix all rows for this quote before importing.`,
+        data,
+      });
+      return;
+    }
+
+    valid.push({
+      ...item,
+      quote_number: normalizeQuoteNumber(item.quote_number),
+    });
+  });
+
+  return { valid, invalid: normalizedInvalid };
+};
+
 export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteImportProps) {
   const { toast } = useToast();
   const { profile } = useAuth();
@@ -63,6 +178,26 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
   const [uploading, setUploading] = useState(false);
   const [validation, setValidation] = useState<ValidationResult | null>(null);
   const [uploadResults, setUploadResults] = useState<{ success: number; failed: number; details: string[] } | null>(null);
+  const importIdempotencyKeysRef = useRef(new Map<string, string>());
+
+  const importIdempotencyScope = (quoteNumber: string, payloadScope: string): string =>
+    `${profile?.id ?? 'unknown'}:${normalizeQuoteNumber(quoteNumber)}:${payloadScope}`;
+
+  const hasImportIdempotencyKey = (quoteNumber: string, payloadScope: string): boolean =>
+    importIdempotencyKeysRef.current.has(importIdempotencyScope(quoteNumber, payloadScope));
+
+  const getImportIdempotencyKey = (quoteNumber: string, payloadScope: string): string => {
+    const scope = importIdempotencyScope(quoteNumber, payloadScope);
+    const cached = importIdempotencyKeysRef.current.get(scope);
+    if (cached) return cached;
+    const key = generateIdempotencyKey('save_quote_bulk_import', scope);
+    importIdempotencyKeysRef.current.set(scope, key);
+    return key;
+  };
+
+  const clearImportIdempotencyKey = (quoteNumber: string, payloadScope: string): void => {
+    importIdempotencyKeysRef.current.delete(importIdempotencyScope(quoteNumber, payloadScope));
+  };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
@@ -136,8 +271,8 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
       return { valid: [], invalid: [] };
     }
 
-    const valid: ParsedQuoteItem[] = [];
-    const invalid: Array<{ row: number; error: string; data: Record<string, string> }> = [];
+    const candidates: ValidQuoteRow[] = [];
+    const invalid: InvalidQuoteRow[] = [];
 
     data.items.forEach((item, idx) => {
       if (!item.quote_number || !item.customer_name || !item.product_name) {
@@ -148,17 +283,21 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
         });
         return;
       }
-      valid.push({
-        quote_number: item.quote_number,
-        customer_farm_name: item.customer_name,
-        product_name: item.product_name,
-        acres: item.acres,
-        price_per_unit: item.price,
-        actual_rate: item.rate,
+      candidates.push({
+        row: idx + 1,
+        data: { ...item } as unknown as Record<string, string>,
+        item: {
+          quote_number: item.quote_number,
+          customer_farm_name: item.customer_name,
+          product_name: item.product_name,
+          acres: item.acres,
+          price_per_unit: item.price,
+          actual_rate: item.rate,
+        },
       });
     });
 
-    return { valid, invalid };
+    return rejectPartiallyInvalidQuoteGroups(candidates, invalid);
   };
 
   const handleParse = async () => {
@@ -202,8 +341,8 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
         return;
       }
 
-      const valid: ParsedQuoteItem[] = [];
-      const invalid: Array<{ row: number; error: string; data: Record<string, string> }> = [];
+      const validRows: ValidQuoteRow[] = [];
+      const invalid: InvalidQuoteRow[] = [];
 
       rows.forEach((cols, idx) => {
         const item: Partial<ParsedQuoteItem> = {};
@@ -250,6 +389,9 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
           }
         });
 
+        const normalizedStatus = item.status?.toLowerCase().trim();
+        if (normalizedStatus) item.status = normalizedStatus;
+
         if (!item.quote_number || !item.customer_farm_name || !item.product_name) {
           invalid.push({
             row: idx + 2,
@@ -259,11 +401,23 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
           return;
         }
 
-        valid.push(item as ParsedQuoteItem);
+        if (item.status && !IMPORTABLE_QUOTE_STATUSES.has(item.status)) {
+          invalid.push({
+            row: idx + 2,
+            error: 'Unsupported status. Bulk quote imports may only create draft quotes.',
+            data: rowData,
+          });
+          return;
+        }
+
+        validRows.push({ row: idx + 2, item: item as ParsedQuoteItem, data: rowData });
       });
 
-      setValidation({ valid, invalid });
-    } catch {
+      setValidation(rejectPartiallyInvalidQuoteGroups(validRows, invalid));
+    } catch (error) {
+      Sentry.captureException(error instanceof Error ? error : new Error(String(error)), {
+        extra: { context: 'BulkQuoteImport.parseCSVFile' },
+      });
       toast('error', 'Failed to parse file. Please ensure it is a valid CSV.');
     }
     setParsing(false);
@@ -280,7 +434,7 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
     try {
       const [custRes, prodRes, convRes] = await Promise.all([
         supabase.from('customers').select('id, farm_name'),
-        supabase.from('products').select('id, product_name, sku'),
+        supabase.from('products').select('id, product_name, sku, current_cost, inventory_unit, unit_size'),
         supabase.from('unit_conversions').select('*'),
       ]);
 
@@ -310,10 +464,11 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
           p.sku ? [p.sku.toLowerCase().trim(), p.id] : null,
         ].filter(Boolean) as [string, string][])
       );
+      const productDetailsById = new Map(products.map((p) => [p.id, p]));
 
       const quoteGroups = new Map<string, ParsedQuoteItem[]>();
       validation.valid.forEach((item) => {
-        const key = item.quote_number;
+        const key = normalizeQuoteNumber(item.quote_number);
         if (!quoteGroups.has(key)) {
           quoteGroups.set(key, []);
         }
@@ -323,36 +478,69 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
       for (const [quoteNumber, items] of quoteGroups) {
         try {
           const firstItem = items[0];
-          const customerId = customerMap.get(firstItem.customer_farm_name.toLowerCase().trim());
-
-          if (!customerId) {
-            details.push(`Quote ${quoteNumber}: Customer "${firstItem.customer_farm_name}" not found`);
+          const customerMatches = items.map((item) => ({
+            name: item.customer_farm_name,
+            id: customerMap.get(item.customer_farm_name.toLowerCase().trim()),
+          }));
+          const missingCustomers = Array.from(new Set(
+            customerMatches
+              .filter((customer) => !customer.id)
+              .map((customer) => customer.name)
+          )).sort((a, b) => a.localeCompare(b));
+          if (missingCustomers.length > 0) {
+            details.push(`Quote ${quoteNumber}: Customer(s) not found - ${missingCustomers.join(', ')}`);
             failCount++;
             continue;
           }
 
-          const { data: quote, error: quoteError } = await supabase
-            .from('quotes')
-            .insert({
-              quote_number: quoteNumber,
-              customer_id: customerId,
-              created_by: profile!.id,
-              tier: firstItem.tier || 1,
-              status: (() => {
-                const validStatuses = ['draft', 'sent', 'revised', 'accepted', 'declined', 'expired'];
-                return validStatuses.includes(firstItem.status || '') ? firstItem.status : 'draft';
-              })(),
-              valid_days: firstItem.valid_days || 15,
-              header_notes: firstItem.header_notes || '',
-              footer_notes: firstItem.footer_notes || '',
-            })
-            .select()
-            .single();
-
-          if (quoteError || !quote) {
-            details.push(`Quote ${quoteNumber}: Failed to create quote - ${quoteError?.message}`);
+          const customerIds = Array.from(new Set(customerMatches.map((customer) => customer.id!)));
+          if (customerIds.length > 1) {
+            const customerNames = Array.from(new Set(customerMatches.map((customer) => customer.name)))
+              .sort((a, b) => a.localeCompare(b));
+            details.push(`Quote ${quoteNumber}: Rows reference multiple customers - ${customerNames.join(', ')}`);
             failCount++;
             continue;
+          }
+          const customerId = customerIds[0];
+
+          const missingProducts = Array.from(new Set(
+            items
+              .filter((item) => !productMap.has(item.product_name.toLowerCase().trim()))
+              .map((item) => item.product_name)
+          )).sort((a, b) => a.localeCompare(b));
+          if (missingProducts.length > 0) {
+            details.push(`Quote ${quoteNumber}: Product(s) not found - ${missingProducts.join(', ')}`);
+            failCount++;
+            continue;
+          }
+
+          const idemPayloadScope = importRowFingerprint(quoteNumber, items);
+          if (!hasImportIdempotencyKey(quoteNumber, idemPayloadScope)) {
+            const existingQuoteResult = await supabase
+              .from('quotes')
+              .select('quote_number')
+              .ilike('quote_number', escapeIlikePattern(quoteNumber));
+            if (existingQuoteResult.error) {
+              Sentry.captureException(new Error(`Failed to check existing quote numbers: ${existingQuoteResult.error.message}`), {
+                extra: { context: 'BulkQuoteImport existing quote check', quoteNumber },
+              });
+              details.push(`Quote ${quoteNumber}: Failed to check existing quote numbers - ${existingQuoteResult.error.message}`);
+              failCount++;
+              continue;
+            }
+
+            const existingQuoteNumbers = (existingQuoteResult.data || [])
+              .map((quote: { quote_number?: string | null }) => quote.quote_number)
+              .filter((value): value is string => Boolean(value));
+            if (existingQuoteNumbers.length > 0) {
+              const caseVariants = existingQuoteNumbers.filter((value) => value !== quoteNumber);
+              const suffix = caseVariants.length > 0
+                ? ` Existing case variant(s): ${caseVariants.join(', ')}.`
+                : '';
+              details.push(`Quote ${quoteNumber}: Quote number already exists.${suffix}`);
+              failCount++;
+              continue;
+            }
           }
 
           const sectionGroups = new Map<string, ParsedQuoteItem[]>();
@@ -364,68 +552,66 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
             sectionGroups.get(sectionName)!.push(item);
           });
 
-          let itemsCreated = 0;
+          let totalPriceCents = 0n;
+          let totalCostCents = 0n;
+          let totalProfitCents = 0n;
 
-          for (const [sectionName, sectionItems] of sectionGroups) {
-            const { data: section, error: sectionError } = await supabase
-              .from('quote_sections')
-              .insert({
-                quote_id: quote.id,
-                section_name: sectionName,
-                sort_order: 0,
-              })
-              .select()
-              .single();
+          const sectionsPayload = Array.from(sectionGroups.entries()).map(([sectionName, sectionItems], sectionIndex) => {
+            const sectionItemsPayload = sectionItems
+              .map((item, itemIndex) => {
+              const productId = productMap.get(item.product_name.toLowerCase().trim())!;
 
-            if (sectionError || !section) {
-              Sentry.captureException(sectionError instanceof Error ? sectionError : new Error(String(sectionError || 'Section insert returned no data')), { extra: { context: 'BulkQuoteImport section insert failed', sectionName } });
-              continue;
-            }
-
-            for (const item of sectionItems) {
-              const productId = productMap.get(item.product_name.toLowerCase().trim());
-
-              if (!productId) {
-                continue;
-              }
-
-              const { data: product, error: prodDetailError } = await supabase
-                .from('products')
-                .select('current_cost, inventory_unit')
-                .eq('id', productId)
-                .single();
-
-              if (prodDetailError) {
-                Sentry.captureException(new Error(`Failed to load product details: ${prodDetailError.message}`));
-              }
-
-              const current_cost = product?.current_cost || 0;
-              const price_per_unit = item.price_per_unit || 0;
+              const product = productDetailsById.get(productId);
+              const inventoryUnit = product?.inventory_unit || product?.unit_size;
+              const hasPriceOverride = typeof item.price_per_unit === 'number';
+              const pricePerUnitCents = toMoneyCents(hasPriceOverride ? item.price_per_unit! : 0);
+              const currentCostCents = toMoneyCents(product?.current_cost);
+              const price_per_unit = centsToDollars(pricePerUnitCents);
+              const current_cost = centsToDollars(currentCostCents);
               const acres = item.acres || 0;
-              const oz_per_acre = item.oz_per_acre || 0;
-
-              // Look up the conversion factor for the product's inventory_unit (e.g. Lb=16, Gallon=128)
-              // Falls back to 16 (oz-per-lb) if no inventory_unit or no matching conversion found
-              const inventoryUnit = product?.inventory_unit;
-              const conv = inventoryUnit
-                ? unitConversions.find((c: { unit: string; factor_oz: number }) => c.unit.toLowerCase() === inventoryUnit.toLowerCase())
+              const hasActualRate = typeof item.actual_rate === 'number';
+              const hasOzPerAcre = typeof item.oz_per_acre === 'number';
+              if (hasActualRate && !normalizeUnitName(item.rate_unit)) {
+                throw new Error(`Rate unit is required when actual_rate is supplied for product ${item.product_name}`);
+              }
+              const actualRate = hasActualRate ? item.actual_rate! : hasOzPerAcre ? item.oz_per_acre! : null;
+              const rateUnit = hasActualRate ? item.rate_unit! : hasOzPerAcre ? 'oz' : null;
+              const rateConv = rateUnit
+                ? unitConversions.find((c: { unit: string; factor_oz: number }) => normalizeUnitName(c.unit) === normalizeUnitName(rateUnit))
                 : null;
-              const conversionFactor = conv ? conv.factor_oz : 16;
+              if (actualRate !== null && (!rateConv || rateConv.factor_oz <= 0)) {
+                throw new Error(`Unsupported rate unit "${rateUnit || 'blank'}" for product ${item.product_name}`);
+              }
+              const oz_per_acre = actualRate !== null ? actualRate * rateConv!.factor_oz : 0;
+
+              const conv = inventoryUnit
+                ? unitConversions.find((c: { unit: string; factor_oz: number }) => normalizeUnitName(c.unit) === normalizeUnitName(inventoryUnit))
+                : null;
+              if (acres > 0 && oz_per_acre > 0 && (!conv || conv.factor_oz <= 0)) {
+                throw new Error(`Unsupported inventory unit "${inventoryUnit || 'blank'}" for product ${item.product_name}`);
+              }
+              const conversionFactor = conv?.factor_oz ?? 1;
               const total_units_needed = acres && oz_per_acre ? (acres * oz_per_acre) / conversionFactor : 0;
-              const total_price = price_per_unit * total_units_needed;
-              const total_cost = current_cost * total_units_needed;
-              const profit = total_price - total_cost;
+              const lineTotalPriceCents = multiplyCentsByQuantity(pricePerUnitCents, total_units_needed);
+              const lineTotalCostCents = multiplyCentsByQuantity(currentCostCents, total_units_needed);
+              const profitCents = lineTotalPriceCents - lineTotalCostCents;
+              const total_price = centsToDollars(lineTotalPriceCents);
+              const profit = centsToDollars(profitCents);
               const net_margin = total_price > 0 ? (profit / total_price) * 100 : 0;
 
-              const quoteItemResult = await supabase.from('quote_items').insert({
-                quote_id: quote.id,
-                section_id: section.id,
+              totalPriceCents += lineTotalPriceCents;
+              totalCostCents += lineTotalCostCents;
+              totalProfitCents += profitCents;
+
+              return {
                 product_id: productId,
-                sort_order: 0,
+                sort_order: itemIndex,
                 price_per_unit,
+                price_override: hasPriceOverride ? price_per_unit : null,
                 current_cost,
-                actual_rate: item.actual_rate || null,
-                rate_unit: item.rate_unit || null,
+                suggested_rate: null,
+                actual_rate: actualRate,
+                rate_unit: rateUnit,
                 oz_per_acre: oz_per_acre || null,
                 acres: acres || null,
                 total_units_needed: total_units_needed || null,
@@ -433,25 +619,90 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
                 total_price,
                 profit,
                 net_margin,
-                notes: item.notes || '',
-              }).select();
+                calc_mode: 'rate_acres',
+                price_unit: null,
+                unit_size: null,
+                notes: item.notes || null,
+              };
+            });
 
-              if (!quoteItemResult.error) {
-                checkMutationResult(quoteItemResult, 'Insert quote_item');
-                itemsCreated++;
-              }
-            }
-          }
+            return {
+              section_name: sectionName,
+              sort_order: sectionIndex,
+              section_notes: null,
+              section_header_notes: null,
+              needed_by_date: null,
+              field_id: null,
+              items: sectionItemsPayload,
+            };
+          });
+
+          const itemsCreated = sectionsPayload.reduce((sum, section) => sum + section.items.length, 0);
 
           if (itemsCreated > 0) {
+            const validDays = firstItem.valid_days || 15;
+            const totalPrice = centsToDollars(totalPriceCents);
+            const totalCost = centsToDollars(totalCostCents);
+            const totalProfit = centsToDollars(totalProfitCents);
+            const quotePayload = {
+              quote_number: quoteNumber,
+              customer_id: customerId,
+              created_by: profile.id,
+              tier: firstItem.tier || 1,
+              status: 'draft',
+              total_price: totalPrice,
+              total_cost: totalCost,
+              total_profit: totalProfit,
+              total_margin_pct: totalPrice > 0 ? (totalProfit / totalPrice) * 100 : 0,
+              valid_days: validDays,
+              expires_at: new Date(Date.now() + validDays * 24 * 60 * 60 * 1000).toISOString(),
+              header_notes: firstItem.header_notes || null,
+              footer_notes: firstItem.footer_notes || null,
+              is_planned: false,
+            };
+
+            const idemKey = getImportIdempotencyKey(quoteNumber, idemPayloadScope);
+            const { data, error } = await supabase.rpc('save_quote', {
+              p_quote_id: null as unknown as string,
+              p_quote_payload: quotePayload as Json,
+              p_sections: sectionsPayload as Json,
+              p_performed_by: profile.id,
+              p_idempotency_key: idemKey,
+            });
+
+            if (error) {
+              details.push(`Quote ${quoteNumber}: Failed to create quote - ${error.message}`);
+              failCount++;
+              continue;
+            }
+
+            const result = assertRpcResult<{ quote_id: string }>(data, 'save_quote');
+            clearImportIdempotencyKey(quoteNumber, idemPayloadScope);
+            try {
+              await logActivity({
+                event: 'quote_bulk_imported',
+                description: `Bulk imported quote ${quoteNumber} with ${itemsCreated} item(s)`,
+                performedBy: profile.id,
+                entityType: 'quote',
+                entityId: result.quote_id,
+                customerId,
+              });
+            } catch (logError) {
+              Sentry.captureException(logError instanceof Error ? logError : new Error(String(logError)), {
+                extra: { context: 'BulkQuoteImport.logActivity', quoteNumber, quoteId: result.quote_id },
+              });
+            }
             details.push(`Quote ${quoteNumber}: Created with ${itemsCreated} items`);
             successCount++;
           } else {
             details.push(`Quote ${quoteNumber}: No items could be created`);
             failCount++;
           }
-        } catch {
-          details.push(`Quote ${quoteNumber}: Unexpected error`);
+        } catch (error) {
+          Sentry.captureException(error instanceof Error ? error : new Error(String(error)), {
+            extra: { context: 'BulkQuoteImport.createQuote', quoteNumber },
+          });
+          details.push(`Quote ${quoteNumber}: ${error instanceof Error ? error.message : 'Unexpected error'}`);
           failCount++;
         }
       }
@@ -465,7 +716,10 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
       if (failCount > 0) {
         toast('error', `Failed to import ${failCount} quote(s)`);
       }
-    } catch {
+    } catch (error) {
+      Sentry.captureException(error instanceof Error ? error : new Error(String(error)), {
+        extra: { context: 'BulkQuoteImport.import' },
+      });
       toast('error', 'Import failed');
     }
     setUploading(false);
@@ -511,7 +765,7 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
             <p className="text-xs font-medium text-secondary mb-2">Optional Columns:</p>
             <p className="text-xs text-gray-500 font-mono">
               section_name, acres, price_per_unit, oz_per_acre, actual_rate, rate_unit, notes, tier (1-3),
-              status (draft/sent/accepted), valid_days, header_notes, footer_notes
+              status (draft), valid_days, header_notes, footer_notes
             </p>
           </div>
         </div>
