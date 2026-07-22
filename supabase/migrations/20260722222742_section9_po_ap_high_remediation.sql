@@ -377,7 +377,7 @@ BEGIN
       p_vendor_id;
   END IF;
 
-  IF p_subtotal_cents <= 0 THEN
+  IF p_subtotal_cents IS NULL OR p_subtotal_cents <= 0 THEN
     RAISE EXCEPTION 'INVALID_AMOUNT: subtotal must be positive';
   END IF;
 

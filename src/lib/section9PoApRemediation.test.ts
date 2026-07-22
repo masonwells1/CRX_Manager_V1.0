@@ -63,6 +63,9 @@ describe('Section 9 PO/AP HIGH remediation contracts', () => {
     expect(statusGate).toBeGreaterThan(poLock);
     expect(insert).toBeGreaterThan(statusGate);
     expect(body).toContain("'submitted',\n      'partially_received',\n      'fully_received'");
+    expect(body).toContain(
+      'p_subtotal_cents IS NULL OR p_subtotal_cents <= 0',
+    );
   });
 
   it('fails closed instead of claiming unsupported historical AP', () => {
