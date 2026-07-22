@@ -35,7 +35,7 @@ Applied change set: `3708874a-aceb-4130-9023-12d140b5a9b0`
 | Basis type | `selected_supplier_price` |
 | Evidence | Wells supplier observation `52f1cbff-5cb9-4067-adc5-dd0422816861` |
 | Reason | `Wells Ag Supply quote dated 2026-07-21; approved N-Serve pilot canary.` |
-| Pricing behavior | `price_driven` / keep current sell prices |
+| Pricing behavior | `keep_sell_prices` (stored preview mode `price_driven`) |
 | Cost | $47.05 → $47.26 |
 | Tier 1 | $52.77 → $52.77 |
 | Tier 2 | $56.46 → $56.46 |
