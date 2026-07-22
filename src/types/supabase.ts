@@ -13401,8 +13401,25 @@ export type Database = {
       list_commission_recipients: {
         Args: never
         Returns: {
+          id: string
           full_name: string
         }[]
+      }
+      commission_recipient_name_for_id: {
+        Args: { p_id: string }
+        Returns: string
+      }
+      commission_split_with_recipient_ids: {
+        Args: { p_split: Json }
+        Returns: Json
+      }
+      resolve_commission_recipient_id: {
+        Args: { p_recipient: string }
+        Returns: string
+      }
+      resolve_commission_split_recipient: {
+        Args: { p_elem: Json; p_prefer_name?: boolean }
+        Returns: string
       }
       load_recipe_into_job: {
         Args: {
