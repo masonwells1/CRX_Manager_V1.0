@@ -2,9 +2,11 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-22 — Supplier Cost Basis Phase 2 Wells canary closed out
+
 - Closed PR #207's final CodeRabbit verification findings: the documentation-drift guard now validates the migration-history ledger sequence independently from SQL-file and grouped-row counts, and the ProductDetail pricing-flow test keeps each simulated query builder isolated so later builders cannot redirect earlier assertions.
 
-- Completed and re-verified the single authenticated Wells Phase 2 Product canary. `N-Serve - Bulk` moved from the $47.05 manual baseline to the reviewed $47.26/Gal Wells quote through governed preview/apply; all three tier sell prices remained exactly $52.77 / $56.46 / $62.46, while only the derived margins changed. Cost history, selected-basis, change-set, supplier-comparison provenance, and activity records agree. The Wells allowlist remains exactly 10 Products and the global supplier-cost-basis flag remains OFF; no second canary or broader rollout was performed.
+- Completed and re-verified the single authenticated Wells Phase 2 Product canary. `N-Serve - Bulk` moved from the $47.05 manual baseline to the reviewed $47.26/Gal Wells quote through governed preview/apply; all three tier sell prices remained exactly $52.77 / $56.46 / $62.46, while only the derived margins changed. Cost history, selected-basis, change-set, supplier-comparison provenance, and activity records agree. More than three hours of read-only observation and an authenticated production browser check remained clean. The Wells allowlist remains exactly 10 Products and the global supplier-cost-basis flag remains OFF; no second canary or broader rollout was performed. The durable evidence and remaining production boundary are recorded in [`docs/audits/2026-07-22-supplier-cost-basis-phase2-wells-canary-closeout.md`](audits/2026-07-22-supplier-cost-basis-phase2-wells-canary-closeout.md).
 
 - Closed the PR #207 review finding that the retained Phase 1a pricing engines were still directly executable by authenticated callers after all supported UI paths moved to the governed Phase 2 wrappers. Live migration `20260722100456_revoke_inner_pricing_rpc_access` revokes both inner preview/apply functions from browser and service roles while preserving authenticated access to the governed wrapper pair. The wrappers remain SECURITY DEFINER owner callers, so Product-page, Products-list, and workbook behavior is unchanged.
 
