@@ -159,7 +159,7 @@ Instead:
 ### Phase 2 — Governed cost basis
 - `product_cost_basis` + "select basis → preview sell-price impact → confirm" workflow
 - Pricing RPC migrates to read the selected basis; order snapshot behavior unchanged
-- **Fast-follow:** worksheet product-info columns (§6b fixed contract incl. `quoting_notes`) — kept out of the first risky pricing release, added once the loop is proven
+- **Fast-follow — COMPLETE/LIVE 2026-07-22:** worksheet product-info columns (§6b fixed contract incl. `quoting_notes`) now use workbook format v2 with atomic preview/approval/apply.
 
 ### Phase 3 — Families + policy enforcement
 - `product_families`, policy attributes, classify the 163 variants (no merges)

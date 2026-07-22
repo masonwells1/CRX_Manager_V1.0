@@ -104,6 +104,7 @@ vi.mock('../components/ui/CommissionSplitEditor', () => ({
 }));
 vi.mock('../components/ui/UnsavedChangesModal', () => ({ default: () => null }));
 
+import { preferredQuoteNotes } from '../lib/quoteNotes';
 import QuoteBuilder from './QuoteBuilder';
 
 function renderQuoteBuilder(id?: string) {
@@ -119,6 +120,15 @@ function renderQuoteBuilder(id?: string) {
 }
 
 describe('QuoteBuilder', () => {
+  it('prefers customer-facing quoting guidance and falls back to the grower description', () => {
+    expect(preferredQuoteNotes({ quoting_notes: 'Customer quote guidance', notes: 'Grower copy' }))
+      .toBe('Customer quote guidance');
+    expect(preferredQuoteNotes({ quoting_notes: null, notes: 'Grower copy' }))
+      .toBe('Grower copy');
+    expect(preferredQuoteNotes({ quoting_notes: '   ', notes: '  Grower copy  ' }))
+      .toBe('Grower copy');
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     mockFrom.mockImplementation(() => buildChain({ data: [], error: null }));

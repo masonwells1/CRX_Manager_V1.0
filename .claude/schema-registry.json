@@ -6,7 +6,7 @@
     "regenerate_with": "node scripts/regenerate-schema-registry.mjs --from-introspection <queries.json> (queries documented in the script header)",
     "purpose": "Single source of truth for hooks: generated columns, status enums, ALL parseable CHECK IN-lists, NOT NULL columns, full column lists, sequences, tables-with/without updated_at, applied-migration high water.",
     "note": "For a fresh refresh from the live DB, ask Claude Code: 'regenerate the schema-registry from Supabase' (/regen-schema-registry). skipped_constraints lists every CHECK the hooks can NOT validate — review it when touching those tables.",
-    "migrations_high_water": "20260722080226",
+    "migrations_high_water": "20260722091359",
     "applied_migration_names": [
       "20260207_gap_analysis_fixes.sql",
       "20260209050000_inventory_overhaul",
@@ -848,6 +848,7 @@
       "strict_actor_quote_rpcs",
       "strict_actor_reverse_rpcs",
       "strict_actor_six_admin_rpcs",
+      "supplier_pricing_workbook_v2_product_info",
       "team_board_phase2_and_delivery_rpc_fixes",
       "team_board_v2",
       "team_note_tags_rls",
@@ -1246,6 +1247,7 @@
     "product_cost_basis",
     "product_cost_basis_change_rows",
     "product_cost_basis_rollout",
+    "product_info_change_set_rows",
     "purchase_order_import_intents",
     "purchase_order_items",
     "quote_items",
@@ -3320,6 +3322,12 @@
     },
     {
       "table": "pricing_workbook_exports",
+      "constraint": "pricing_workbook_exports_format_version_check",
+      "def": "CHECK ((btrim(format_version) <> ''::text))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "pricing_workbook_exports",
       "constraint": "pricing_workbook_exports_row_count_check",
       "def": "CHECK ((row_count > 0))",
       "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
@@ -3389,6 +3397,30 @@
       "constraint": "product_cost_basis_rollout_rollout_scope_check",
       "def": "CHECK ((rollout_scope = 'wells_phase2_canary'::text))",
       "reason": "unparseable — hooks do NOT validate this constraint"
+    },
+    {
+      "table": "product_info_change_set_rows",
+      "constraint": "product_info_change_set_rows_after_values_check",
+      "def": "CHECK ((jsonb_typeof(after_values) = 'object'::text))",
+      "reason": "unparseable — hooks do NOT validate this constraint"
+    },
+    {
+      "table": "product_info_change_set_rows",
+      "constraint": "product_info_change_set_rows_before_values_check",
+      "def": "CHECK ((jsonb_typeof(before_values) = 'object'::text))",
+      "reason": "unparseable — hooks do NOT validate this constraint"
+    },
+    {
+      "table": "product_info_change_set_rows",
+      "constraint": "product_info_change_set_rows_changes_check",
+      "def": "CHECK (((jsonb_typeof(changes) = 'object'::text) AND (changes <> '{}'::jsonb)))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "product_info_change_set_rows",
+      "constraint": "product_info_change_set_rows_expected_version_check",
+      "def": "CHECK ((expected_version >= 1))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
     },
     {
       "table": "product_supplier_links",
@@ -4986,7 +5018,8 @@
         "id",
         "status",
         "created_at",
-        "expires_at"
+        "expires_at",
+        "format_version"
       ]
     },
     "product_cost_basis": {
@@ -5027,6 +5060,18 @@
       "with_default": [
         "created_at"
       ]
+    },
+    "product_info_change_set_rows": {
+      "no_default": [
+        "change_set_id",
+        "product_id",
+        "expected_version",
+        "before_values",
+        "after_values",
+        "changes",
+        "output_fingerprint"
+      ],
+      "with_default": []
     },
     "product_label_drafts": {
       "no_default": [
@@ -7192,7 +7237,13 @@
       "current_tier2_margin",
       "current_tier2_price_cents",
       "current_tier3_margin",
-      "current_tier3_price_cents"
+      "current_tier3_price_cents",
+      "suggested_rate_snapshot",
+      "rate_per_acre_snapshot",
+      "rate_unit_snapshot",
+      "use_timing_snapshot",
+      "internal_notes_snapshot",
+      "quoting_notes_snapshot"
     ],
     "pricing_workbook_exports": [
       "id",
@@ -7203,7 +7254,8 @@
       "row_count",
       "status",
       "created_at",
-      "expires_at"
+      "expires_at",
+      "format_version"
     ],
     "product_cost_basis": [
       "id",
@@ -7239,6 +7291,15 @@
       "product_id",
       "rollout_scope",
       "created_at"
+    ],
+    "product_info_change_set_rows": [
+      "change_set_id",
+      "product_id",
+      "expected_version",
+      "before_values",
+      "after_values",
+      "changes",
+      "output_fingerprint"
     ],
     "product_label_drafts": [
       "id",
@@ -7326,7 +7387,8 @@
       "max_label_rate",
       "max_label_rate_unit",
       "use_timing",
-      "pricing_version"
+      "pricing_version",
+      "quoting_notes"
     ],
     "profiles": [
       "id",

@@ -55,6 +55,7 @@ function makeProduct(overrides?: Partial<Product>): Product {
     max_label_rate: null,
     max_label_rate_unit: null,
     notes: null,
+    quoting_notes: null,
     is_active: true,
     created_at: '',
     internal_notes: null,
