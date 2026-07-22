@@ -13,6 +13,15 @@ const migrationSql = readFileSync(
   ),
   'utf8',
 );
+const nullCostWorkbookFollowupSql = readFileSync(
+  join(
+    repoRoot,
+    'supabase',
+    'migrations',
+    '20260722035521_allow_inert_null_cost_workbook_rows.sql',
+  ),
+  'utf8',
+);
 
 describe('supplier cost-basis Phase 2 migration contract', () => {
   it('is additive, off by default, and does not rewrite Product money during migration', () => {
@@ -181,5 +190,70 @@ describe('supplier cost-basis Phase 2 migration contract', () => {
       expect(body![0]).toContain('IF NOT public.is_admin()');
       expect(body![0]).toContain('IDEMPOTENCY_KEY_REQUIRED');
     }
+  });
+});
+
+describe('supplier cost-basis null-cost workbook follow-up contract', () => {
+  it('skips only an exact inert worksheet row with no durable cost fact', () => {
+    expect(nullCostWorkbookFollowupSql).toContain(
+      'CREATE OR REPLACE FUNCTION public._product_cost_basis_row_required',
+    );
+    expect(nullCostWorkbookFollowupSql).toContain("p_source = 'pricing_worksheet'");
+    expect(nullCostWorkbookFollowupSql).toContain("p_row_status = 'unchanged'");
+    expect(nullCostWorkbookFollowupSql).toContain(
+      "p_submitted_row->'basis_selection' = 'false'::jsonb",
+    );
+    expect(nullCostWorkbookFollowupSql).toContain(
+      "p_submitted_row->>'basis_type' = 'manual_override'",
+    );
+    expect(nullCostWorkbookFollowupSql).toContain(
+      "p_effect #> '{before,cost_cents}' = 'null'::jsonb",
+    );
+    expect(nullCostWorkbookFollowupSql).toContain(
+      "p_effect->'cost_cents' = 'null'::jsonb",
+    );
+    expect(nullCostWorkbookFollowupSql).toContain('ELSE true');
+    expect(nullCostWorkbookFollowupSql).toContain('IMMUTABLE');
+    expect(nullCostWorkbookFollowupSql).toContain('SET search_path = public, pg_temp');
+    expect(nullCostWorkbookFollowupSql).toMatch(
+      /REVOKE ALL ON FUNCTION public\._product_cost_basis_row_required\([\s\S]+?FROM PUBLIC, anon, authenticated, service_role/,
+    );
+  });
+
+  it('runs the full legacy workbook validation before resolving required basis rows', () => {
+    const legacyPreview = nullCostWorkbookFollowupSql.indexOf(
+      'v_pricing_result := public.preview_product_pricing_changes(',
+    );
+    const requiredRowLoop = nullCostWorkbookFollowupSql.indexOf(
+      'FOR v_row IN',
+    );
+    const resolver = nullCostWorkbookFollowupSql.indexOf(
+      'v_resolved := public._resolve_product_cost_basis_row(v_row.submitted_row)',
+    );
+    expect(legacyPreview).toBeGreaterThan(-1);
+    expect(requiredRowLoop).toBeGreaterThan(legacyPreview);
+    expect(resolver).toBeGreaterThan(requiredRowLoop);
+    expect(nullCostWorkbookFollowupSql).toContain(
+      'FROM jsonb_array_elements(p_rows) WITH ORDINALITY',
+    );
+    expect(nullCostWorkbookFollowupSql).toContain(
+      'preview_row.sequence = submitted.sequence',
+    );
+  });
+
+  it('derives preview and apply shape from durable validated rows without enabling the flag', () => {
+    expect(nullCostWorkbookFollowupSql).toMatch(
+      /SELECT count\(\*\)::integer[\s\S]+?FROM public\.pricing_change_set_preview_rows preview_row[\s\S]+?public\._product_cost_basis_row_required/,
+    );
+    expect(nullCostWorkbookFollowupSql).toMatch(
+      /apply_product_cost_basis_change_set[\s\S]+?SELECT count\(\*\)[\s\S]+?pricing_change_set_preview_rows preview_row[\s\S]+?_product_cost_basis_row_required/,
+    );
+    expect(nullCostWorkbookFollowupSql).not.toContain('v_change_set.submitted_row_count');
+    expect(nullCostWorkbookFollowupSql).not.toMatch(
+      /UPDATE\s+public\.app_settings/i,
+    );
+    expect(nullCostWorkbookFollowupSql).not.toMatch(
+      /supplier_cost_basis_enabled[\s\S]+?'true'/i,
+    );
   });
 });

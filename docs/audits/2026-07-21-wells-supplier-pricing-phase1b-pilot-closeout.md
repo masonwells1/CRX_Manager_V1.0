@@ -95,4 +95,6 @@ Closeout rules:
 - Wells is complete; do not add another resolution or rewrite historical purchase rows.
 - Phase 2 remains off until its separately parked frontend/types release lands and Mason approves a live canary.
 - The migration order is reconciled on disk and live; keep the applied `20260722025808` filename unchanged.
+- Independent pre-push review found that active vendor names were only unique by exact text, not by supplier normalization. Live read-only evidence showed one normalized Wells vendor and zero active normalized collisions. The CLEAN, rollback-proven follow-up was applied as ledger version `20260722033450` and B7-renamed on disk to `20260722033450_enforce_active_vendor_normalized_uniqueness.sql`.
+- Phase 2 frontend verification later exposed a separate database-wrapper issue for unchanged Products with no current cost. The isolated follow-up is live as `20260722035521_allow_inert_null_cost_workbook_rows` and remains outside the Wells data cleanup: it preserves complete workbook validation, skips only an exact inert null-cost basis row, and leaves the Phase 2 flag OFF. Its full PostgreSQL rollback chain passed before apply.
 - Continue to treat every supplier import as observation-only with zero sell-price changes.

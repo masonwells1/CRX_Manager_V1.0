@@ -30,6 +30,15 @@ const wellsResolutionSql = readFileSync(
   ),
   'utf8',
 );
+const vendorNormalizedUniquenessSql = readFileSync(
+  join(
+    repoRoot,
+    'supabase',
+    'migrations',
+    '20260722033450_enforce_active_vendor_normalized_uniqueness.sql',
+  ),
+  'utf8',
+);
 const phase1bSmokeSql = readFileSync(
   join(repoRoot, 'scripts', 'smoke', 'smoke-supplier-pricing-phase1b.sql'),
   'utf8',
@@ -103,6 +112,20 @@ describe('live supplier pricing Phase 1b migrations', () => {
     expect(wellsResolutionSql).not.toMatch(/UPDATE\s+public\.products/i);
     expect(wellsResolutionSql).not.toMatch(/INSERT\s+INTO\s+public\.supplier_price_observations/i);
     expect(wellsResolutionSql).not.toMatch(/INSERT\s+INTO\s+public\.vendor_aliases/i);
+  });
+
+  it('prevents ambiguous active vendor identities under supplier normalization', () => {
+    expect(vendorNormalizedUniquenessSql).toContain(
+      'LOCK TABLE public.vendors IN SHARE ROW EXCLUSIVE MODE',
+    );
+    expect(vendorNormalizedUniquenessSql).toContain(
+      'VENDOR_ACTIVE_NORMALIZED_NAME_NOT_UNIQUE',
+    );
+    expect(vendorNormalizedUniquenessSql).toMatch(
+      /CREATE UNIQUE INDEX vendors_active_normalized_name_key[\s\S]*public\.normalize_vendor_alias\(name\)[\s\S]*WHERE deleted_at IS NULL/i,
+    );
+    expect(vendorNormalizedUniquenessSql).not.toMatch(/UPDATE\s+public\.vendors/i);
+    expect(vendorNormalizedUniquenessSql).not.toMatch(/DELETE\s+FROM\s+public\.vendors/i);
   });
 
   it.each(newTables)('creates %s with RLS and a policy', (table) => {
