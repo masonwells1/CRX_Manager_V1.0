@@ -13401,6 +13401,7 @@ export type Database = {
       list_commission_recipients: {
         Args: never
         Returns: {
+          id: string
           full_name: string
         }[]
       }

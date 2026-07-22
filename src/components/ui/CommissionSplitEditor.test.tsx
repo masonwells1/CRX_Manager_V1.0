@@ -115,8 +115,43 @@ describe('CommissionSplitEditor', () => {
 
     const select = screen.getByLabelText('Recipient for split 1');
     fireEvent.change(select, { target: { value: 'Chance Tuttle' } });
+    // Fallback options carry no profile id; the DB stamps it at save time.
     expect(onChange).toHaveBeenCalledWith({
-      splits: [{ recipient: 'Chance Tuttle', percentage: 50 }],
+      splits: [{ recipient: 'Chance Tuttle', recipient_user_id: null, percentage: 50 }],
+    });
+  });
+
+  it('carries the profile id when the picked option came from the live RPC', async () => {
+    mockRpc.mockResolvedValue({
+      data: [
+        { id: 'aaaaaaaa-0000-0000-0000-000000000001', full_name: 'Chance Tuttle' },
+        { id: 'aaaaaaaa-0000-0000-0000-000000000002', full_name: 'Mason Wells' },
+      ],
+      error: null,
+    });
+    const onChange = vi.fn();
+    render(
+      <CommissionSplitEditor value={defaultValue} onChange={onChange} />
+    );
+
+    await waitFor(() => {
+      const select = screen.getByLabelText('Recipient for split 1');
+      expect(
+        Array.from(select.querySelectorAll('option')).map((o) => o.textContent)
+      ).toContain('Chance Tuttle');
+    });
+
+    fireEvent.change(screen.getByLabelText('Recipient for split 1'), {
+      target: { value: 'Chance Tuttle' },
+    });
+    expect(onChange).toHaveBeenCalledWith({
+      splits: [
+        {
+          recipient: 'Chance Tuttle',
+          recipient_user_id: 'aaaaaaaa-0000-0000-0000-000000000001',
+          percentage: 50,
+        },
+      ],
     });
   });
 

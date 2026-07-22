@@ -5,12 +5,18 @@ import type { CommissionSplit } from '../../types';
 
 // Fallback only — the live list comes from list_commission_recipients(),
 // which returns every active commission-eligible profile the database-side
-// validator will accept.
-const FALLBACK_RECIPIENTS = [
-  'Mason Wells',
-  'Chance Tuttle',
-  'CMCTW LLC',
-  'Crop Rx Solutions',
+// validator will accept. Fallback entries carry no id; the database stamps
+// recipient_user_id at save time (migration 20260722170000).
+interface RecipientOption {
+  id: string | null;
+  full_name: string;
+}
+
+const FALLBACK_RECIPIENTS: RecipientOption[] = [
+  { id: null, full_name: 'Mason Wells' },
+  { id: null, full_name: 'Chance Tuttle' },
+  { id: null, full_name: 'CMCTW LLC' },
+  { id: null, full_name: 'Crop Rx Solutions' },
 ];
 
 interface CommissionSplitEditorProps {
@@ -28,7 +34,7 @@ export default function CommissionSplitEditor({
   const total = splits.reduce((sum, s) => sum + (s.percentage || 0), 0);
   const isValid = Math.abs(total - 100) < 0.01;
 
-  const [recipients, setRecipients] = useState<string[]>(FALLBACK_RECIPIENTS);
+  const [recipients, setRecipients] = useState<RecipientOption[]>(FALLBACK_RECIPIENTS);
 
   useEffect(() => {
     let cancelled = false;
@@ -36,15 +42,20 @@ export default function CommissionSplitEditor({
       try {
         const { data, error } = await supabase.rpc('list_commission_recipients');
         if (error) throw error;
-        const rows = assertRpcResult<{ full_name: string | null }[]>(
+        // Pre-20260722170000 the RPC returns { full_name } only; after it,
+        // { id, full_name }. Accept both so deploy/apply order doesn't matter.
+        const rows = assertRpcResult<{ id?: string | null; full_name: string | null }[]>(
           data,
           'list_commission_recipients'
         );
         if (cancelled || !Array.isArray(rows)) return;
-        const names = rows
-          .map((r) => r.full_name)
-          .filter((n): n is string => typeof n === 'string' && n.trim() !== '');
-        if (names.length > 0) setRecipients(names);
+        const options = rows
+          .filter(
+            (r): r is { id?: string | null; full_name: string } =>
+              typeof r.full_name === 'string' && r.full_name.trim() !== ''
+          )
+          .map((r) => ({ id: typeof r.id === 'string' ? r.id : null, full_name: r.full_name }));
+        if (options.length > 0) setRecipients(options);
       } catch {
         // Keep the fallback list — the dropdown must still work if the RPC
         // is unavailable (e.g. migration not yet applied).
@@ -61,7 +72,11 @@ export default function CommissionSplitEditor({
       if (field === 'percentage') {
         return { ...s, percentage: typeof val === 'string' ? parseFloat(val) || 0 : val };
       }
-      return { ...s, [field]: String(val) };
+      const name = String(val);
+      // Carry the profile UUID when the picked option has one; a re-pick of a
+      // legacy/fallback name clears any stale id so the DB re-resolves it.
+      const picked = recipients.find((r) => r.full_name === name);
+      return { ...s, recipient: name, recipient_user_id: picked?.id ?? null };
     });
     onChange({ splits: updated });
   };
@@ -88,7 +103,9 @@ export default function CommissionSplitEditor({
         {splits.map((split, i) => {
           // A stored value outside the known list (legacy data) still needs to
           // display; it stays selectable so the row isn't silently blanked.
-          const isLegacy = split.recipient !== '' && !recipients.includes(split.recipient);
+          const isLegacy =
+            split.recipient !== '' &&
+            !recipients.some((r) => r.full_name === split.recipient);
           return (
             <div key={i} className="flex items-center gap-2">
               <select
@@ -98,9 +115,9 @@ export default function CommissionSplitEditor({
                 className={selectClass}
               >
                 <option value="">Select recipient...</option>
-                {recipients.map((name) => (
-                  <option key={name} value={name}>
-                    {name}
+                {recipients.map((r) => (
+                  <option key={r.id ?? r.full_name} value={r.full_name}>
+                    {r.full_name}
                   </option>
                 ))}
                 {isLegacy && (
