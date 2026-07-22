@@ -22,6 +22,15 @@ const nullCostWorkbookFollowupSql = readFileSync(
   ),
   'utf8',
 );
+const nullCostWorkbookOverloadGuardSql = readFileSync(
+  join(
+    repoRoot,
+    'supabase',
+    'migrations',
+    '20260722042515_assert_supplier_cost_basis_followup_overloads.sql',
+  ),
+  'utf8',
+);
 
 describe('supplier cost-basis Phase 2 migration contract', () => {
   it('is additive, off by default, and does not rewrite Product money during migration', () => {
@@ -254,6 +263,45 @@ describe('supplier cost-basis null-cost workbook follow-up contract', () => {
     );
     expect(nullCostWorkbookFollowupSql).not.toMatch(
       /supplier_cost_basis_enabled[\s\S]+?'true'/i,
+    );
+  });
+});
+
+describe('supplier cost-basis follow-up overload guard contract', () => {
+  it('fails closed on alternate preview, apply, or helper signatures', () => {
+    for (const name of [
+      'preview_product_cost_basis_changes',
+      'apply_product_cost_basis_change_set',
+      '_product_cost_basis_row_required',
+    ]) {
+      expect(nullCostWorkbookOverloadGuardSql).toContain(
+        `p.proname = '${name}'`,
+      );
+      expect(nullCostWorkbookOverloadGuardSql).toContain(
+        `${name} overload drift`,
+      );
+    }
+    expect(nullCostWorkbookOverloadGuardSql).toContain(
+      'public.preview_product_cost_basis_changes(text,uuid,jsonb,uuid,text)',
+    );
+    expect(nullCostWorkbookOverloadGuardSql).toContain(
+      'public.apply_product_cost_basis_change_set(uuid,text,uuid,text)',
+    );
+    expect(nullCostWorkbookOverloadGuardSql).toContain(
+      'public._product_cost_basis_row_required(text,text,jsonb,jsonb)',
+    );
+  });
+
+  it('asserts least-privilege grants without changing data, functions, or flags', () => {
+    expect(nullCostWorkbookOverloadGuardSql).toContain(
+      'supplier cost-basis follow-up grant drift',
+    );
+    expect(nullCostWorkbookOverloadGuardSql).not.toMatch(/CREATE OR REPLACE FUNCTION/i);
+    expect(nullCostWorkbookOverloadGuardSql).not.toMatch(
+      /(INSERT INTO|UPDATE\s+public\.|DELETE FROM|TRUNCATE)/i,
+    );
+    expect(nullCostWorkbookOverloadGuardSql).not.toContain(
+      'supplier_cost_basis_enabled',
     );
   });
 });
