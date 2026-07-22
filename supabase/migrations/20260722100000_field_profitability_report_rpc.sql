@@ -92,19 +92,30 @@ BEGIN
       jf.field_id,
       -- Grouped multi-owner children weight by THEIR field_billing_defaults
       -- ownership share of each job field (transfer_job_to_invoice derives the
-      -- split from fbd, so this mirrors how the child was billed); ungrouped
-      -- single-owner transfers take the job field acres directly. A grouped
-      -- child with no fbd rows anywhere yields all-zero weights and falls into
-      -- the equal-weight zero-total guard (money still conserved).
+      -- split from fbd, so this mirrors how the child was billed; a field with
+      -- NO billing defaults belongs 100% to its owning customer, exactly like
+      -- the writer); ungrouped single-owner transfers take the job field acres
+      -- directly. All-zero weights still fall into the equal-weight guard.
       CASE
         WHEN ei.invoice_group_id IS NULL
           THEN GREATEST(COALESCE(jf.acres_to_treat, 0), 0)
         ELSE GREATEST(COALESCE(jf.acres_to_treat, 0), 0)
-             * COALESCE(fbd.split_pct, 0) / 100.0
+             -- Mirror transfer_job_to_invoice: FBD share when the field has
+             -- billing defaults, otherwise the field OWNER gets 100%.
+             * CASE
+                 WHEN EXISTS (
+                   SELECT 1 FROM public.field_billing_defaults fbd_any
+                   WHERE fbd_any.field_id = jf.field_id
+                 ) THEN COALESCE(fbd.split_pct, 0)
+                 WHEN fld.customer_id = ei.customer_id THEN 100
+                 ELSE 0
+               END / 100.0
       END AS applied_acres
     FROM eligible_invoices ei
     JOIN public.job_fields jf
       ON jf.job_id = ei.job_id
+    JOIN public.fields fld
+      ON fld.id = jf.field_id
     LEFT JOIN public.field_billing_defaults fbd
       ON fbd.field_id = jf.field_id
      AND fbd.customer_id = ei.customer_id
@@ -333,12 +344,23 @@ BEGIN
           WHEN ei.invoice_group_id IS NULL
             THEN GREATEST(COALESCE(jf.acres_to_treat, 0), 0)
           ELSE GREATEST(COALESCE(jf.acres_to_treat, 0), 0)
-               * COALESCE(fbd.split_pct, 0) / 100.0
+               -- Mirror transfer_job_to_invoice: FBD share when the field has
+               -- billing defaults, otherwise the field OWNER gets 100%.
+               * CASE
+                   WHEN EXISTS (
+                     SELECT 1 FROM public.field_billing_defaults fbd_any
+                     WHERE fbd_any.field_id = jf.field_id
+                   ) THEN COALESCE(fbd.split_pct, 0)
+                   WHEN fld.customer_id = ei.customer_id THEN 100
+                   ELSE 0
+                 END / 100.0
         END
       ) AS applied_acres
     FROM eligible_invoices ei
     JOIN public.job_fields jf
       ON jf.job_id = ei.job_id
+    JOIN public.fields fld
+      ON fld.id = jf.field_id
     LEFT JOIN public.field_billing_defaults fbd
       ON fbd.field_id = jf.field_id
      AND fbd.customer_id = ei.customer_id
