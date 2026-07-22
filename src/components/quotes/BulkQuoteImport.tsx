@@ -446,13 +446,30 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
       for (const [quoteNumber, items] of quoteGroups) {
         try {
           const firstItem = items[0];
-          const customerId = customerMap.get(firstItem.customer_farm_name.toLowerCase().trim());
-
-          if (!customerId) {
-            details.push(`Quote ${quoteNumber}: Customer "${firstItem.customer_farm_name}" not found`);
+          const customerMatches = items.map((item) => ({
+            name: item.customer_farm_name,
+            id: customerMap.get(item.customer_farm_name.toLowerCase().trim()),
+          }));
+          const missingCustomers = Array.from(new Set(
+            customerMatches
+              .filter((customer) => !customer.id)
+              .map((customer) => customer.name)
+          )).sort((a, b) => a.localeCompare(b));
+          if (missingCustomers.length > 0) {
+            details.push(`Quote ${quoteNumber}: Customer(s) not found - ${missingCustomers.join(', ')}`);
             failCount++;
             continue;
           }
+
+          const customerIds = Array.from(new Set(customerMatches.map((customer) => customer.id!)));
+          if (customerIds.length > 1) {
+            const customerNames = Array.from(new Set(customerMatches.map((customer) => customer.name)))
+              .sort((a, b) => a.localeCompare(b));
+            details.push(`Quote ${quoteNumber}: Rows reference multiple customers - ${customerNames.join(', ')}`);
+            failCount++;
+            continue;
+          }
+          const customerId = customerIds[0];
 
           const missingProducts = Array.from(new Set(
             items
@@ -580,7 +597,13 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
               is_planned: false,
             };
 
-            const idemPayloadScope = payloadFingerprint({ quotePayload, sectionsPayload });
+            const idemPayloadScope = payloadFingerprint({
+              quotePayload: {
+                ...quotePayload,
+                expires_at: `valid_days:${validDays}`,
+              },
+              sectionsPayload,
+            });
             const idemKey = getImportIdempotencyKey(quoteNumber, idemPayloadScope);
             const { data, error } = await supabase.rpc('save_quote', {
               p_quote_id: null as unknown as string,

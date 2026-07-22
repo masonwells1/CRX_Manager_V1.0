@@ -2,7 +2,7 @@
  * BulkQuoteImport.test.tsx — Basic render + behavior tests
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 const mocks = vi.hoisted(() => {
@@ -73,6 +73,7 @@ import BulkQuoteImport from './BulkQuoteImport';
 describe('BulkQuoteImport', () => {
   const defaultProps = { open: true, onClose: vi.fn(), onSuccess: vi.fn() };
   beforeEach(() => vi.clearAllMocks());
+  afterEach(() => vi.restoreAllMocks());
 
   it('renders when open', () => {
     render(<BulkQuoteImport {...defaultProps} />);
@@ -171,6 +172,47 @@ describe('BulkQuoteImport', () => {
     expect(saveQuoteArgs.p_sections[0].items).toHaveLength(2);
   });
 
+  it('rejects normalized quote groups that reference multiple customers', async () => {
+    mocks.from
+      .mockImplementationOnce(() => mocks.chainable({
+        data: [
+          { id: 'customer-1', farm_name: 'North Farm' },
+          { id: 'customer-2', farm_name: 'South Farm' },
+        ],
+        error: null,
+      }))
+      .mockImplementationOnce(() => mocks.chainable({
+        data: [{ id: 'product-1', product_name: 'Roundup', sku: 'RU-1', current_cost: 10, inventory_unit: 'Gallon', unit_size: null }],
+        error: null,
+      }))
+      .mockImplementationOnce(() => mocks.chainable({
+        data: [{ unit: 'oz', factor_oz: 1 }, { unit: 'Gallon', factor_oz: 128 }],
+        error: null,
+      }));
+    const onSuccess = vi.fn();
+    const { container } = render(<BulkQuoteImport {...defaultProps} onSuccess={onSuccess} />);
+    const csv = [
+      'quote_number,customer_farm_name,section_name,product_name,acres,price_per_unit,oz_per_acre,status',
+      ' q-525 ,North Farm,Spring,Roundup,10,20,32,draft',
+      'Q-525,South Farm,Spring,Roundup,5,20,32,draft',
+    ].join('\n');
+    const file = new File([csv], 'quotes.csv', { type: 'text/csv' });
+    Object.defineProperty(file, 'text', { value: () => Promise.resolve(csv) });
+
+    const input = container.querySelector('input[type="file"]');
+    expect(input).toBeTruthy();
+    fireEvent.change(input as HTMLInputElement, { target: { files: [file] } });
+    await screen.findByText(/quotes\.csv/i);
+    fireEvent.click(screen.getByRole('button', { name: /parse file/i }));
+
+    await screen.findAllByText(/Q-525/);
+    fireEvent.click(screen.getByRole('button', { name: /import 1 quote/i }));
+
+    await screen.findByText(/Rows reference multiple customers - North Farm, South Farm/);
+    expect(mocks.rpc).not.toHaveBeenCalledWith('save_quote', expect.anything());
+    expect(onSuccess).not.toHaveBeenCalled();
+  });
+
   it('uses product unit_size when inventory_unit is blank', async () => {
     mocks.from
       .mockImplementationOnce(() => mocks.chainable({
@@ -252,6 +294,52 @@ describe('BulkQuoteImport', () => {
     expect(firstSaveQuoteArgs.p_idempotency_key).toContain('Q-800');
     expect(secondSaveQuoteArgs.p_idempotency_key).toContain('Q-800');
     expect(secondSaveQuoteArgs.p_idempotency_key).not.toBe(firstSaveQuoteArgs.p_idempotency_key);
+  });
+
+  it('reuses the retry key when the same failed import is reselected later', async () => {
+    vi.spyOn(Date, 'now')
+      .mockReturnValueOnce(new Date('2026-01-01T00:00:00.000Z').getTime())
+      .mockReturnValueOnce(new Date('2026-01-02T00:00:00.000Z').getTime());
+    mocks.rpc
+      .mockResolvedValueOnce({ data: null, error: { message: 'dropped response' } } as never)
+      .mockResolvedValueOnce({ data: { quote_id: 'quote-1' }, error: null });
+    const { container } = render(<BulkQuoteImport {...defaultProps} />);
+    const csv = [
+      'quote_number,customer_farm_name,product_name,acres,price_per_unit,oz_per_acre,status',
+      'Q-825,North Farm,Roundup,10,20,32,draft',
+    ].join('\n');
+    const input = container.querySelector('input[type="file"]');
+    expect(input).toBeTruthy();
+
+    const firstFile = new File([csv], 'quotes.csv', { type: 'text/csv' });
+    Object.defineProperty(firstFile, 'text', { value: () => Promise.resolve(csv) });
+    fireEvent.change(input as HTMLInputElement, { target: { files: [firstFile] } });
+    await screen.findByText(/quotes\.csv/i);
+    fireEvent.click(screen.getByRole('button', { name: /parse file/i }));
+    await screen.findByText(/Q-825/);
+    fireEvent.click(screen.getByRole('button', { name: /import 1 quote/i }));
+    await screen.findByText(/dropped response/);
+
+    const firstSaveQuoteArgs = mocks.rpc.mock.calls.find(([rpcName]) => rpcName === 'save_quote')?.[1] as {
+      p_idempotency_key: string;
+    };
+
+    const closeButtons = screen.getAllByRole('button', { name: /close/i });
+    fireEvent.click(closeButtons[closeButtons.length - 1]);
+    const retryInput = container.querySelector('input[type="file"]');
+    expect(retryInput).toBeTruthy();
+    const secondFile = new File([csv], 'quotes.csv', { type: 'text/csv' });
+    Object.defineProperty(secondFile, 'text', { value: () => Promise.resolve(csv) });
+    fireEvent.change(retryInput as HTMLInputElement, { target: { files: [secondFile] } });
+    fireEvent.click(screen.getByRole('button', { name: /parse file/i }));
+    await screen.findByText(/Q-825/);
+    fireEvent.click(screen.getByRole('button', { name: /import 1 quote/i }));
+
+    await waitFor(() => expect(mocks.rpc.mock.calls.filter(([rpcName]) => rpcName === 'save_quote')).toHaveLength(2));
+    const saveQuoteCalls = mocks.rpc.mock.calls.filter(([rpcName]) => rpcName === 'save_quote');
+    const secondSaveQuoteArgs = saveQuoteCalls[1][1] as { p_idempotency_key: string };
+    expect(firstSaveQuoteArgs.p_idempotency_key).toContain('Q-825');
+    expect(secondSaveQuoteArgs.p_idempotency_key).toBe(firstSaveQuoteArgs.p_idempotency_key);
   });
 
   it('does not fail an acknowledged import when activity logging fails', async () => {
