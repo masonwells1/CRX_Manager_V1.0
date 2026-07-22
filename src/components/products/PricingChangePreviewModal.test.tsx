@@ -169,6 +169,110 @@ describe('PricingChangePreviewModal', () => {
     expect(document.querySelector('[data-modal-panel]')).toHaveFocus();
   });
 
+  it('allows a basis-only selection when the dollar cost is unchanged', () => {
+    const onApprove = vi.fn();
+    render(
+      <PricingChangePreviewModal
+        open
+        preview={makePreview({
+          status: 'no_changes',
+          ready_count: 0,
+          unchanged_count: 1,
+          conflict_count: 0,
+          apply_allowed: true,
+          basis_change_count: 1,
+          rows: [{
+            sequence: 1,
+            product_id: 'product-1',
+            submitted_row: {
+              product_name: 'First Product',
+              basis_selection: true,
+              basis_type: 'selected_supplier_price',
+              basis_reason: 'Current confirmed supplier quote',
+              supplier_price_observation_id: 'observation-1',
+            },
+            row_status: 'unchanged',
+            error_code: null,
+            effect: null,
+          }],
+        })}
+        applying={false}
+        onClose={vi.fn()}
+        onApprove={onApprove}
+      />,
+    );
+
+    expect(screen.getByText('Cost basis ready — sell prices stay unchanged')).toBeInTheDocument();
+    const basisDetails = screen.getByLabelText('Cost basis approval details');
+    expect(within(basisDetails).getByText('Supplier price observation')).toBeInTheDocument();
+    expect(within(basisDetails).getByText('Current confirmed supplier quote')).toBeInTheDocument();
+    expect(within(basisDetails).getByText('Supplier observation observation-1')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Apply approved changes' }));
+    expect(onApprove).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    {
+      basisType: 'actual_purchase',
+      reason: 'Most recent received inventory cost',
+      evidenceKey: 'purchase_order_item_id',
+      evidenceId: 'po-item-1',
+      expectedType: 'Received purchase order',
+      expectedEvidence: 'Purchase order item po-item-1',
+    },
+    {
+      basisType: 'manual_override',
+      reason: 'Owner-entered replacement cost',
+      evidenceKey: null,
+      evidenceId: null,
+      expectedType: 'Manual replacement cost',
+      expectedEvidence: 'Entered manually',
+    },
+  ])('shows $expectedType approval metadata', ({
+    basisType,
+    reason,
+    evidenceKey,
+    evidenceId,
+    expectedType,
+    expectedEvidence,
+  }) => {
+    const submittedRow: Record<string, unknown> = {
+      product_name: 'First Product',
+      basis_selection: true,
+      basis_type: basisType,
+      basis_reason: reason,
+    };
+    if (evidenceKey) submittedRow[evidenceKey] = evidenceId;
+
+    render(
+      <PricingChangePreviewModal
+        open
+        preview={makePreview({
+          submitted_row_count: 1,
+          ready_count: 1,
+          conflict_count: 0,
+          basis_change_count: 1,
+          rows: [{
+            sequence: 1,
+            product_id: 'product-1',
+            submitted_row: submittedRow,
+            row_status: 'ready',
+            error_code: null,
+            effect: null,
+          }],
+        })}
+        applying={false}
+        onClose={vi.fn()}
+        onApprove={vi.fn()}
+      />,
+    );
+
+    const basisDetails = screen.getByLabelText('Cost basis approval details');
+    expect(within(basisDetails).getByText(expectedType)).toBeInTheDocument();
+    expect(within(basisDetails).getByText(reason)).toBeInTheDocument();
+    expect(within(basisDetails).getByText(expectedEvidence)).toBeInTheDocument();
+  });
+
   it.each([
     ['invalid', 'Some rows need attention'],
     ['no_changes', 'No pricing changes found'],
