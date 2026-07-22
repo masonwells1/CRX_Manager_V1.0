@@ -39,14 +39,14 @@ Supplier imports remain evidence-only. Approving a quote must never select a cos
 
 ## 4. Data model
 
-Add `public.product_cost_basis` in a new migration:
+Applied migration `20260722015019_supplier_cost_basis_phase2` created `public.product_cost_basis`:
 
 | Field | Purpose |
 |---|---|
 | `id uuid` | Immutable history-row identity |
 | `product_id uuid` | Product whose basis was selected |
 | `basis_type text` | `selected_supplier_price`, `actual_purchase`, or `manual_override` |
-| `cost_cents bigint` | Exact selected cost, positive integer cents |
+| `cost_cents bigint` | Exact selected cost, non-negative integer cents |
 | `supplier_price_observation_id uuid null` | Required only for a supplier-price selection |
 | `purchase_order_item_id uuid null` | Required only for an actual-purchase selection |
 | `effective_from timestamptz` | When this selection became active |
@@ -62,7 +62,7 @@ Required constraints and guards:
 - Supplier source must match the same product and remain a current, non-superseded observation.
 - Actual-purchase source must reference a received purchase fact for the same product.
 - Direct table writes are revoked from browser roles; selection and closure occur only inside the governed apply RPC.
-- RLS is enabled in the migration, with admin-only read access and RPC-only writes.
+- RLS is enabled with deny-by-default direct table access. Admin reads use `get_product_cost_basis_workspace(...)`; selection and closure use the governed RPCs.
 - Historical fields are immutable. The only allowed update is the apply RPC closing the previously active row.
 
 Bootstrap existing products with a `manual_override` basis equal to `products.current_cost`, reason `Phase 2 bootstrap from existing selected cost`. Do not infer a supplier or purchase source, and do not update `products` during bootstrap.
@@ -73,7 +73,7 @@ Bootstrap existing products with a `manual_override` basis equal to `products.cu
 
 ### Preview RPC
 
-Add `preview_product_cost_basis_selection(...)` with a required idempotency key. Inputs identify the product, source evidence or manual amount, reason, expected `pricing_version`, and pricing behavior:
+The applied migration exposes `preview_product_cost_basis_changes(p_source, p_export_id, p_rows, p_performed_by, p_idempotency_key)`. It accepts one or more governed workbook-shaped rows plus an optional export ID and requires an idempotency key. Each row identifies the Product, source evidence or manual amount, reason, expected `pricing_version`, and pricing behavior:
 
 - `keep_sell_prices` — recommended default; preserve tier prices and recalculate margins.
 - `keep_margins_and_reprice` — preserve entered margins and calculate new tier prices.
@@ -90,7 +90,7 @@ No `product_cost_basis`, `products`, or `cost_history` row changes during previe
 
 ### Apply RPC
 
-Add `apply_product_cost_basis_selection(...)` with change-set ID, request fingerprint, actor, and required idempotency key.
+The applied migration exposes `apply_product_cost_basis_change_set(p_change_set_id, p_request_fingerprint, p_performed_by, p_idempotency_key)` with the previewed change-set ID, request fingerprint, actor, and required idempotency key.
 
 In one transaction it must:
 
@@ -140,7 +140,7 @@ Do not add a direct `Update current cost` escape hatch. Existing Product-page pr
 - Migration shape, RLS, grants, foreign keys, check constraints, unique active-row index, and immutable-history guard.
 - Bootstrap preserves every `products` and `cost_history` value.
 - Supplier, actual-purchase, and manual-override source-shape tests.
-- Cross-product source forgery, superseded observation, unresolved/incomparable link, non-received purchase, zero/negative/overflow cents, and blank reason rejection.
+- Cross-product source forgery, superseded observation, unresolved/incomparable link, non-received purchase, negative/overflow cents, and blank reason rejection; zero cents is explicitly allowed and tested consistently with the applied constraints.
 - Preview is read-only.
 - Default mode changes cost and margins but leaves all three tier prices byte-for-byte unchanged.
 - Reprice mode changes only the values shown in preview.
@@ -192,4 +192,4 @@ Phase 2 is complete only when:
 
 - Graphify refreshed at commit `3eb8a93d` (7,600 nodes, 15,816 edges).
 - Query: `graphify query "what connects supplier price observations to governed product cost basis selection and sell price protection?" --budget 1600`.
-- Material connections were confirmed in current source: Supplier Pricing uses append-only observations; Product Price History already renders the three evidence streams; Product Detail and Products call the Phase 1a preview/apply wrappers; live PostgreSQL has the two governed pricing RPCs and three product-pricing triggers; `product_cost_basis` does not yet exist.
+- Material connections were confirmed in current source: Supplier Pricing uses append-only observations; Product Price History already renders the three evidence streams; Product Detail and Products call the Phase 1a preview/apply wrappers; live PostgreSQL has the governed pricing and cost-basis RPCs plus the product-pricing triggers; `product_cost_basis` exists from the applied Phase 2 migration while the frontend rollout remains separately gated.
