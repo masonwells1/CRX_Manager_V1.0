@@ -34,6 +34,7 @@ BEGIN
       i.id AS invoice_id,
       i.invoice_group_id,
       i.customer_id,
+      i.job_id,
       i.season::text AS invoice_season,
       i.total_amount_cents AS invoice_revenue_cents,
       COALESCE(i.total_cost_cents, 0)::bigint AS invoice_cost_cents
@@ -72,6 +73,30 @@ BEGIN
       ON fal.invoice_id = ei.invoice_id
     WHERE ei.invoice_group_id IS NULL
       AND COALESCE(fal.applied_acres, 0) >= 0
+
+    UNION ALL
+
+    -- Job-backed fallback: transfer_job_to_invoice keeps invoices.job_id but
+    -- writes NO field_app_locations — resolve fields/acres via job_fields so
+    -- these invoices report per-field instead of landing in the unassigned bucket.
+    SELECT
+      ei.invoice_id,
+      ei.customer_id,
+      ei.invoice_season,
+      ei.invoice_revenue_cents,
+      ei.invoice_cost_cents,
+      jf.id AS location_id,
+      jf.field_id,
+      GREATEST(COALESCE(jf.acres_to_treat, 0), 0) AS applied_acres
+    FROM eligible_invoices ei
+    JOIN public.job_fields jf
+      ON jf.job_id = ei.job_id
+    WHERE ei.invoice_group_id IS NULL
+      AND ei.job_id IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM public.field_app_locations fal2
+        WHERE fal2.invoice_id = ei.invoice_id
+      )
 
     UNION ALL
 
@@ -277,6 +302,23 @@ BEGIN
     WHERE COALESCE(fal.applied_acres, 0) >= 0
     GROUP BY eui.invoice_id, eui.customer_id, eui.invoice_season, fal.field_id
   ),
+  job_backed_acres_by_scope_field AS (
+    SELECT
+      ei.customer_id,
+      ei.invoice_season,
+      jf.field_id,
+      SUM(GREATEST(COALESCE(jf.acres_to_treat, 0), 0)) AS applied_acres
+    FROM eligible_invoices ei
+    JOIN public.job_fields jf
+      ON jf.job_id = ei.job_id
+    WHERE ei.invoice_group_id IS NULL
+      AND ei.job_id IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM public.field_app_locations fal2
+        WHERE fal2.invoice_id = ei.invoice_id
+      )
+    GROUP BY ei.invoice_id, ei.customer_id, ei.invoice_season, jf.field_id
+  ),
   grouped_share_acres_by_scope_field AS (
     -- Count each eligible child's customer share once per group. DISTINCT in
     -- eligible_group_customers prevents duplicate child rows from doubling acres.
@@ -373,6 +415,8 @@ BEGIN
   acres_by_scope_field AS (
     SELECT * FROM ungrouped_acres_by_scope_field
     UNION ALL
+    SELECT * FROM job_backed_acres_by_scope_field
+    UNION ALL
     SELECT * FROM grouped_share_acres_by_scope_field
     UNION ALL
     SELECT * FROM grouped_invoice_share_acres_by_scope_field
@@ -414,6 +458,14 @@ BEGIN
         )
       )
       AND COALESCE(fal.applied_acres, 0) >= 0
+    )
+    AND NOT (
+      ei.invoice_group_id IS NULL
+      AND ei.job_id IS NOT NULL
+      AND EXISTS (
+        SELECT 1 FROM public.job_fields jf
+        WHERE jf.job_id = ei.job_id
+      )
     )
   )
   SELECT
