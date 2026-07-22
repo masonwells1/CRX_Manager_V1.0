@@ -925,27 +925,6 @@ BEGIN
   ORDER BY po.id
   FOR UPDATE OF po;
 
-  -- Evidence and the OFF-by-default gate are checked again at apply time.
-  -- A quote can be superseded, a PO can be cancelled, or the flag can be
-  -- turned off during the preview window; none of those may apply stale data.
-  FOR v_row IN
-    SELECT * FROM public.product_cost_basis_change_rows
-    WHERE pricing_change_set_id = p_change_set_id
-    ORDER BY product_id
-  LOOP
-    PERFORM public._resolve_product_cost_basis_row(jsonb_build_object(
-      'product_id', v_row.product_id,
-      'row_version', v_row.expected_version,
-      'basis_type', v_row.basis_type,
-      'new_cost', public._format_pricing_dollars(v_row.cost_cents),
-      'basis_reason', v_row.reason,
-      'basis_source', v_row.selection_source,
-      'basis_selection', v_row.force_selection,
-      'supplier_price_observation_id', v_row.supplier_price_observation_id,
-      'purchase_order_item_id', v_row.purchase_order_item_id
-    ));
-  END LOOP;
-
   -- Stable product lock order and an independent version check also protect
   -- basis-only selections where the shared pricing preview had no price delta.
   PERFORM p.id
@@ -971,6 +950,29 @@ BEGIN
   ) THEN
     RAISE EXCEPTION 'PRICING_ROW_CONFLICT';
   END IF;
+
+  -- Evidence and the OFF-by-default gate are checked again at apply time only
+  -- after every Product row is locked. This closes the pricing-free Product
+  -- race where a concurrent unit edit could otherwise occur after evidence
+  -- resolution but before the Product lock. Source rows were locked above, so
+  -- the resolver now observes one stable Product/evidence snapshot.
+  FOR v_row IN
+    SELECT * FROM public.product_cost_basis_change_rows
+    WHERE pricing_change_set_id = p_change_set_id
+    ORDER BY product_id
+  LOOP
+    PERFORM public._resolve_product_cost_basis_row(jsonb_build_object(
+      'product_id', v_row.product_id,
+      'row_version', v_row.expected_version,
+      'basis_type', v_row.basis_type,
+      'new_cost', public._format_pricing_dollars(v_row.cost_cents),
+      'basis_reason', v_row.reason,
+      'basis_source', v_row.selection_source,
+      'basis_selection', v_row.force_selection,
+      'supplier_price_observation_id', v_row.supplier_price_observation_id,
+      'purchase_order_item_id', v_row.purchase_order_item_id
+    ));
+  END LOOP;
 
   PERFORM set_config('crx.cost_basis_authorized', 'phase2', true);
   PERFORM set_config('crx.cost_basis_actor', v_actor::text, true);

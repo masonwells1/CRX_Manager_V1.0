@@ -80,8 +80,15 @@ describe('supplier cost-basis Phase 2 migration contract', () => {
     );
     const itemLock = migrationSql.indexOf('PERFORM poi.id', migrationSql.indexOf('CREATE OR REPLACE FUNCTION public.apply_product_cost_basis_change_set'));
     const parentLock = migrationSql.indexOf('PERFORM po.id', itemLock);
+    const productLock = migrationSql.indexOf('PERFORM p.id', parentLock);
+    const applyEvidenceResolution = migrationSql.indexOf(
+      'PERFORM public._resolve_product_cost_basis_row',
+      productLock,
+    );
     expect(itemLock).toBeGreaterThan(-1);
     expect(parentLock).toBeGreaterThan(itemLock);
+    expect(productLock).toBeGreaterThan(parentLock);
+    expect(applyEvidenceResolution).toBeGreaterThan(productLock);
     expect(migrationSql).toMatch(
       /o\.cost_cents::numeric\s*\/\s*o\.package_quantity\s*\/\s*l\.inventory_units_per_supplier_unit/,
     );
