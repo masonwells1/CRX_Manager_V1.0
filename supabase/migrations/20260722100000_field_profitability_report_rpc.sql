@@ -33,30 +33,31 @@ BEGIN
     SELECT
       i.id AS invoice_id,
       i.invoice_group_id,
+      i.customer_id,
       i.season::text AS invoice_season,
       i.total_amount_cents AS invoice_revenue_cents,
-      COALESCE(item_cost.total_cost_cents, 0)::bigint AS invoice_cost_cents
+      COALESCE(i.total_cost_cents, 0)::bigint AS invoice_cost_cents
     FROM public.invoices i
-    LEFT JOIN LATERAL (
-      SELECT
-        COALESCE(
-          SUM(
-            ROUND(
-              COALESCE(ii.cost_cents, 0)::numeric
-              * COALESCE(ii.quantity, 0)
-            )::bigint
-          ),
-          0
-        )::bigint AS total_cost_cents
-      FROM public.invoice_items ii
-      WHERE ii.invoice_id = i.id
-    ) item_cost ON true
     WHERE i.invoice_type = 'field_application'
       AND i.status IN ('posted', 'overdue', 'paid')
       AND i.deleted_at IS NULL
       AND (p_season IS NULL OR i.season::text = p_season)
+      AND (
+        public.is_admin()
+        OR i.created_by = auth.uid()
+        OR i.salesman_id = auth.uid()
+      )
   ),
-  invoice_location_totals AS (
+  grouped_location_shares AS (
+    SELECT
+      s.location_id,
+      s.customer_id,
+      SUM(GREATEST(COALESCE(s.acres, 0), 0)) AS share_acres
+    FROM public.field_app_location_shares s
+    GROUP BY s.location_id, s.customer_id
+  ),
+  invoice_location_basis AS (
+    -- Ungrouped invoices retain their direct invoice -> location behavior.
     SELECT
       ei.invoice_id,
       ei.invoice_season,
@@ -64,23 +65,74 @@ BEGIN
       ei.invoice_cost_cents,
       fal.id AS location_id,
       fal.field_id,
-      COALESCE(fal.applied_acres, 0) AS applied_acres,
-      SUM(COALESCE(fal.applied_acres, 0)) OVER (
-        PARTITION BY ei.invoice_id
-      ) AS invoice_applied_acres,
-      COUNT(*) OVER (
-        PARTITION BY ei.invoice_id
-      ) AS invoice_location_count
+      COALESCE(fal.applied_acres, 0) AS applied_acres
     FROM eligible_invoices ei
     JOIN public.field_app_locations fal
-      ON (
-        ei.invoice_group_id IS NULL
-        AND fal.invoice_id = ei.invoice_id
-      ) OR (
-        ei.invoice_group_id IS NOT NULL
-        AND fal.invoice_group_id = ei.invoice_group_id
+      ON fal.invoice_id = ei.invoice_id
+    WHERE ei.invoice_group_id IS NULL
+      AND COALESCE(fal.applied_acres, 0) >= 0
+
+    UNION ALL
+
+    -- A grouped child follows only its own customer's per-location shares.
+    SELECT
+      ei.invoice_id,
+      ei.invoice_season,
+      ei.invoice_revenue_cents,
+      ei.invoice_cost_cents,
+      fal.id AS location_id,
+      fal.field_id,
+      gls.share_acres AS applied_acres
+    FROM eligible_invoices ei
+    JOIN public.field_app_locations fal
+      ON fal.invoice_group_id = ei.invoice_group_id
+    JOIN grouped_location_shares gls
+      ON gls.location_id = fal.id
+     AND gls.customer_id = ei.customer_id
+    WHERE ei.invoice_group_id IS NOT NULL
+
+    UNION ALL
+
+    -- Legacy grouped children with no share rows at all still allocate across
+    -- the whole group's locations, so no invoice money can disappear.
+    SELECT
+      ei.invoice_id,
+      ei.invoice_season,
+      ei.invoice_revenue_cents,
+      ei.invoice_cost_cents,
+      fal.id AS location_id,
+      fal.field_id,
+      COALESCE(fal.applied_acres, 0) AS applied_acres
+    FROM eligible_invoices ei
+    JOIN public.field_app_locations fal
+      ON fal.invoice_group_id = ei.invoice_group_id
+    WHERE ei.invoice_group_id IS NOT NULL
+      AND COALESCE(fal.applied_acres, 0) >= 0
+      AND NOT EXISTS (
+        SELECT 1
+        FROM public.field_app_locations share_fal
+        JOIN grouped_location_shares share_gls
+          ON share_gls.location_id = share_fal.id
+         AND share_gls.customer_id = ei.customer_id
+        WHERE share_fal.invoice_group_id = ei.invoice_group_id
       )
-    WHERE COALESCE(fal.applied_acres, 0) >= 0
+  ),
+  invoice_location_totals AS (
+    SELECT
+      ilb.invoice_id,
+      ilb.invoice_season,
+      ilb.invoice_revenue_cents,
+      ilb.invoice_cost_cents,
+      ilb.location_id,
+      ilb.field_id,
+      ilb.applied_acres,
+      SUM(ilb.applied_acres) OVER (
+        PARTITION BY ilb.invoice_id
+      ) AS invoice_applied_acres,
+      COUNT(*) OVER (
+        PARTITION BY ilb.invoice_id
+      ) AS invoice_location_count
+    FROM invoice_location_basis ilb
   ),
   invoice_location_weights AS (
     SELECT
@@ -184,38 +236,79 @@ BEGIN
     FROM allocated_money am
     GROUP BY am.field_id, am.invoice_season
   ),
-  eligible_application_scopes AS (
+  eligible_ungrouped_invoices AS (
     SELECT DISTINCT
-      CASE
-        WHEN ei.invoice_group_id IS NULL THEN 'invoice'
-        ELSE 'group'
-      END AS scope_type,
-      COALESCE(ei.invoice_group_id, ei.invoice_id) AS scope_id,
+      ei.invoice_id,
       ei.invoice_season
     FROM eligible_invoices ei
+    WHERE ei.invoice_group_id IS NULL
   ),
-  acres_by_scope_field AS (
+  eligible_group_customers AS (
+    SELECT DISTINCT
+      ei.invoice_group_id,
+      ei.customer_id,
+      ei.invoice_season
+    FROM eligible_invoices ei
+    WHERE ei.invoice_group_id IS NOT NULL
+  ),
+  eligible_groups AS (
+    SELECT DISTINCT
+      egc.invoice_group_id,
+      egc.invoice_season
+    FROM eligible_group_customers egc
+  ),
+  ungrouped_acres_by_scope_field AS (
     SELECT
-      eas.scope_type,
-      eas.scope_id,
-      eas.invoice_season,
+      eui.invoice_season,
       fal.field_id,
       SUM(COALESCE(fal.applied_acres, 0)) AS applied_acres
-    FROM eligible_application_scopes eas
+    FROM eligible_ungrouped_invoices eui
     JOIN public.field_app_locations fal
-      ON (
-        eas.scope_type = 'invoice'
-        AND fal.invoice_id = eas.scope_id
-      ) OR (
-        eas.scope_type = 'group'
-        AND fal.invoice_group_id = eas.scope_id
-      )
+      ON fal.invoice_id = eui.invoice_id
     WHERE COALESCE(fal.applied_acres, 0) >= 0
-    GROUP BY
-      eas.scope_type,
-      eas.scope_id,
-      eas.invoice_season,
-      fal.field_id
+    GROUP BY eui.invoice_id, eui.invoice_season, fal.field_id
+  ),
+  grouped_share_acres_by_scope_field AS (
+    -- Count each eligible child's customer share once per group. DISTINCT in
+    -- eligible_group_customers prevents duplicate child rows from doubling acres.
+    SELECT
+      egc.invoice_season,
+      fal.field_id,
+      SUM(gls.share_acres) AS applied_acres
+    FROM eligible_group_customers egc
+    JOIN public.field_app_locations fal
+      ON fal.invoice_group_id = egc.invoice_group_id
+    JOIN grouped_location_shares gls
+      ON gls.location_id = fal.id
+     AND gls.customer_id = egc.customer_id
+    GROUP BY egc.invoice_group_id, egc.invoice_season, fal.field_id
+  ),
+  grouped_legacy_acres_by_scope_field AS (
+    -- If an entire legacy group predates location shares, retain the old
+    -- whole-group acres count once (not once per child).
+    SELECT
+      eg.invoice_season,
+      fal.field_id,
+      SUM(COALESCE(fal.applied_acres, 0)) AS applied_acres
+    FROM eligible_groups eg
+    JOIN public.field_app_locations fal
+      ON fal.invoice_group_id = eg.invoice_group_id
+    WHERE COALESCE(fal.applied_acres, 0) >= 0
+      AND NOT EXISTS (
+        SELECT 1
+        FROM public.field_app_locations share_fal
+        JOIN public.field_app_location_shares s
+          ON s.location_id = share_fal.id
+        WHERE share_fal.invoice_group_id = eg.invoice_group_id
+      )
+    GROUP BY eg.invoice_group_id, eg.invoice_season, fal.field_id
+  ),
+  acres_by_scope_field AS (
+    SELECT * FROM ungrouped_acres_by_scope_field
+    UNION ALL
+    SELECT * FROM grouped_share_acres_by_scope_field
+    UNION ALL
+    SELECT * FROM grouped_legacy_acres_by_scope_field
   ),
   acres_by_field AS (
     SELECT
@@ -259,19 +352,19 @@ BEGIN
     c.id AS customer_id,
     c.farm_name AS customer_name,
     mbf.invoice_season AS season,
-    abf.total_acres_applied,
+    COALESCE(abf.total_acres_applied, 0) AS total_acres_applied,
     mbf.revenue_cents,
     mbf.cost_cents,
     (mbf.revenue_cents - mbf.cost_cents)::bigint AS margin_cents,
     CASE
-      WHEN abf.total_acres_applied = 0 THEN 0::bigint
+      WHEN COALESCE(abf.total_acres_applied, 0) = 0 THEN 0::bigint
       ELSE TRUNC(
         (mbf.revenue_cents - mbf.cost_cents)::numeric
         / abf.total_acres_applied
       )::bigint
     END AS margin_per_acre_cents
   FROM money_by_field mbf
-  JOIN acres_by_field abf
+  LEFT JOIN acres_by_field abf
     ON abf.field_id = mbf.field_id
    AND abf.invoice_season = mbf.invoice_season
   JOIN public.fields f
