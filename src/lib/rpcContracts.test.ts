@@ -2108,14 +2108,11 @@ function generatedMutatingRpcInventory(): Set<string> {
 }
 
 const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
-  // Currently empty (2026-07-21). The 2026-07-20 applies (per-line split billing,
-  // Supplier Pricing 1b + follow-ups) went live and src/types/supabase.ts was
-  // regenerated, so every former bucket entry — including the _impl delegates —
-  // now appears in generated types and is classified in
-  // MUTATING_RPCS_WITH_IDEMPOTENCY instead. This bucket exists for the normal
-  // pre-apply window: an RPC introduced by a PR migration that is NOT yet live
-  // (so it cannot truthfully be in the generated types) goes here, with a note,
-  // and moves to MUTATING_RPCS_WITH_IDEMPOTENCY once applied + types regen.
+  // Currently empty (2026-07-22). The live registry/type regeneration through
+  // 20260722064814 moved every former entry into
+  // MUTATING_RPCS_WITH_IDEMPOTENCY. This bucket remains for the normal pre-apply
+  // window: an RPC introduced by a PR migration that is not yet live belongs
+  // here until the next truthful live type regeneration.
 ]);
 
 /**

@@ -18,6 +18,13 @@ const files = [
   ['null-cost-followup.sql', 'supabase/migrations/20260722035521_allow_inert_null_cost_workbook_rows.sql'],
   ['null-cost-overload-guard.sql', 'supabase/migrations/20260722042515_assert_supplier_cost_basis_followup_overloads.sql'],
   ['null-cost-overload-guard-replay.sql', 'supabase/migrations/20260722043537_assert_supplier_cost_basis_followup_overloads_replay.sql'],
+  ['wells-rollout-seed.sql', 'scripts/smoke/seed-wells-cost-basis-rollout.sql'],
+  ['wells-rollout-flag-true.sql', 'scripts/smoke/smoke-wells-cost-basis-rollout-flag-true.sql'],
+  ['wells-rollout-flag-missing.sql', 'scripts/smoke/smoke-wells-cost-basis-rollout-flag-missing.sql'],
+  ['wells-rollout-nonreusable.sql', 'scripts/smoke/smoke-wells-cost-basis-rollout-nonreusable.sql'],
+  ['wells-rollout-observation-link.sql', 'scripts/smoke/smoke-wells-cost-basis-rollout-observation-link.sql'],
+  ['wells-rollout.sql', 'supabase/migrations/20260722064814_wells_cost_basis_rollout_gate.sql'],
+  ['po-reassignment-guard.sql', 'supabase/migrations/20260722080226_lock_received_po_cost_snapshot_across_product_reassignment.sql'],
   ['smoke.sql', 'scripts/smoke/smoke-supplier-cost-basis-phase2.sql'],
 ];
 const container = `crx-pricing-phase2-proof-${process.pid}-${Date.now()}`;
@@ -45,6 +52,21 @@ function psql(file) {
     '-f', `/tmp/${file}`);
 }
 
+function psqlExpectedFailure(file, token) {
+  const result = run('docker', [
+    'exec', '-e', `PGPASSWORD=${password}`, container, 'psql',
+    '-U', 'postgres', '-d', 'postgres', '-X', '-v', 'ON_ERROR_STOP=1',
+    '-f', `/tmp/${file}`,
+  ], { capture: true, allowFailure: true });
+  const detail = `${result.stdout || ''}\n${result.stderr || ''}`;
+  if (result.status === 0 || !detail.includes(token)) {
+    throw new Error(
+      `Expected ${file} to fail with ${token}; status=${result.status}\n${detail}`,
+    );
+  }
+  console.log(`[phase2-proof] expected failure confirmed: ${token}`);
+}
+
 let started = false;
 try {
   docker('run', '--detach', '--name', container, '--network', 'none',
@@ -68,7 +90,16 @@ try {
   }
   for (const [target] of files) {
     console.log(`[phase2-proof] applying ${target}`);
-    psql(target);
+    if (target === 'wells-rollout-flag-true.sql'
+        || target === 'wells-rollout-flag-missing.sql') {
+      psqlExpectedFailure(target, 'WELLS_COST_BASIS_ROLLOUT_GLOBAL_FLAG_DRIFT');
+    } else if (target === 'wells-rollout-nonreusable.sql') {
+      psqlExpectedFailure(target, 'WELLS_COST_BASIS_ROLLOUT_LINK_SHAPE_DRIFT');
+    } else if (target === 'wells-rollout-observation-link.sql') {
+      psqlExpectedFailure(target, 'WELLS_COST_BASIS_ROLLOUT_OBSERVATION_SHAPE_DRIFT');
+    } else {
+      psql(target);
+    }
   }
 } finally {
   if (started) run('docker', ['rm', '-f', container], { allowFailure: true });

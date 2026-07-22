@@ -2,6 +2,10 @@
 
 All significant development milestones, in reverse chronological order.
 
+- Applied a forward-only repair for the Wells Phase 2 canary after the independent Codex review found that a received purchase-order line could be reassigned from a canary Product to a non-canary Product and shed its immutable cost provenance. Submitted as `20260722075500_lock_received_po_cost_snapshot_across_product_reassignment`, Supabase recorded it under live ledger version `20260722080226`, and the repository file was reconciled to `20260722080226_lock_received_po_cost_snapshot_across_product_reassignment.sql`. The replacement trigger now evaluates both the old and new Product identities; the disposable PostgreSQL 17 chain proves the exact reassignment fails with `RECEIVED_PO_COST_SNAPSHOT_IMMUTABLE`. The original applied migration remains unchanged, and the global feature flag remains OFF.
+
+- Applied the Wells-only Phase 2 canary migration. Its submitted migration name is `20260722060644_wells_cost_basis_rollout_gate`; Supabase recorded it under live ledger version `20260722064814`; the reconciled repository file is `20260722064814_wells_cost_basis_rollout_gate.sql`. It adds a private deny-all Product allowlist seeded with the exact ten reviewed Wells Products, requires the canonical global flag row to exist exactly once and remain `false`, fails closed if Product/vendor/link/observation shape has drifted, and routes all six behavioral flag readers through a global-or-Product helper while preserving apply's global setting-row lock. Live postflight confirmed exactly 10 allowlisted Products, all 10 helper-enabled, a non-pilot Product disabled, 602 active basis rows, zero pending change rows, unchanged Wells totals, and the global flag still OFF. No Product money changed.
+
 ## 2026-07-21 — Wells Supplier Pricing Phase 1b pilot closeout
 
 - Completed the governed manual Wells Ag Supply pilot with 10 representative Product links and one approved 10-row quote import. Supplier comparison and Product history now show the Wells quote observation while Product cost and all three sell-price tiers remain unchanged.

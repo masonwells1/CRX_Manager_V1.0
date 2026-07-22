@@ -7774,6 +7774,39 @@ export type Database = {
           },
         ]
       }
+      product_cost_basis_rollout: {
+        Row: {
+          created_at: string
+          product_id: string
+          rollout_scope: string
+        }
+        Insert: {
+          created_at?: string
+          product_id: string
+          rollout_scope: string
+        }
+        Update: {
+          created_at?: string
+          product_id?: string
+          rollout_scope?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "product_cost_basis_rollout_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: true
+            referencedRelation: "products"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "product_cost_basis_rollout_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: true
+            referencedRelation: "view_unmigrated_products"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       product_label_drafts: {
         Row: {
           confidence: string
@@ -11621,6 +11654,10 @@ export type Database = {
       _split_invoice_content_claim: {
         Args: { p_invoice_id: string }
         Returns: Json
+      }
+      _supplier_cost_basis_enabled_for_product: {
+        Args: { p_product_id: string }
+        Returns: boolean
       }
       _sync_job_holds: {
         Args: { p_actor: string; p_job_id: string }
