@@ -26,11 +26,24 @@
 --      refresh the display name from the profile.
 --   5. list_commission_recipients() now returns (id, full_name) so the
 --      editor can store both.
---   6. trg_guard_recipient_name_reuse is RETIRED: with ids authoritative and
---      no id-less split able to exist (layers 1+2), acquiring an old name can
---      no longer redirect stored splits. The other trio protections stay:
---      unique-active names, admin-only name edits (20260722144121), and the
---      commissions.recipient_user_id NOT-NULL backstop trigger.
+--   6. Name-vs-id precedence (Codex push-proof HIGH, 2026-07-22): when an
+--      element carries BOTH and the name differs from the id-profile's name,
+--      the NAME wins (re-resolved unique-active) — an already-deployed old
+--      bundle edits only the visible name and would otherwise have its
+--      reassignment silently reverted to the stale hidden id. When the name
+--      matches (or is absent), the id is authoritative and the display name
+--      refreshes on write.
+--   7. trg_guard_recipient_name_reuse is KEPT, not retired (Codex push-proof
+--      BLOCKER, 2026-07-22): while any deployed bundle can still send a
+--      name-only split (old bundles always; new bundles via the RPC-failure
+--      fallback list), a re-acquired name would be stamped with the NEW
+--      holder's id at write time. The guard prevents that acquisition, so
+--      name-only writes stay unambiguous. Retirement is PARKED until
+--      name-only split writes are impossible (id-carrying frontend fully
+--      propagated + fallback path rejected); see KNOWN_ISSUES. All trio
+--      protections stay: unique-active names, admin-only name edits
+--      (20260722144121), the commissions.recipient_user_id backstop trigger,
+--      and the name-reuse guard itself.
 
 SET LOCAL lock_timeout = '5s';
 
@@ -86,15 +99,17 @@ BEGIN
     RAISE EXCEPTION 'COMMISSION_RESOLVES_HELPER_BASELINE_DRIFT';
   END IF;
 
-  -- The guard being retired must still exist (we are the ones removing it)
-  -- and carry the exact reviewed body from live 20260722150432.
-  IF to_regprocedure('public._guard_recipient_name_reuse()') IS NULL THEN
-    RAISE EXCEPTION 'COMMISSION_NAME_REUSE_GUARD_ALREADY_GONE';
-  END IF;
-  IF (SELECT md5(prosrc) FROM pg_proc
-       WHERE oid = to_regprocedure('public._guard_recipient_name_reuse()'))
-     IS DISTINCT FROM '0b74292a2961d22ffd266b8ef25103e3' THEN
-    RAISE EXCEPTION 'COMMISSION_NAME_REUSE_GUARD_BASELINE_DRIFT';
+  -- The name-reuse guard must still be in place — this migration DEPENDS on
+  -- it staying (name-only writes remain possible until the id-carrying
+  -- frontend is fully propagated; see header layer 7).
+  IF to_regprocedure('public._guard_recipient_name_reuse()') IS NULL
+     OR NOT EXISTS (
+       SELECT 1 FROM pg_trigger
+        WHERE tgname = 'trg_guard_recipient_name_reuse'
+          AND tgrelid = 'public.profiles'::regclass
+          AND NOT tgisinternal AND tgenabled = 'O'
+     ) THEN
+    RAISE EXCEPTION 'COMMISSION_NAME_REUSE_GUARD_MISSING';
   END IF;
 
   -- Every stored split recipient (ALL rows, including soft-deleted quotes and
@@ -189,6 +204,78 @@ REVOKE ALL ON FUNCTION public.commission_recipient_name_for_id(uuid) FROM PUBLIC
 REVOKE ALL ON FUNCTION public.commission_recipient_name_for_id(uuid) FROM anon;
 GRANT EXECUTE ON FUNCTION public.commission_recipient_name_for_id(uuid) TO authenticated, service_role;
 
+-- Single source of truth for resolving one split element to a profile id.
+-- The mismatch case — id and name both present, name differing from the
+-- id-profile's name — is context-dependent (Codex push-proof HIGH):
+--   * WRITE time (stamp trigger, p_prefer_name => true): the NAME wins.
+--     An already-deployed old bundle edits only the visible name and keeps
+--     the stale hidden id; trusting the id would silently revert the
+--     human's reassignment.
+--   * CREATION/VALIDATION time (p_prefer_name => false, default): the ID
+--     wins while it points at an active profile. A stored name can only go
+--     stale via an admin profile rename, and a rename must not reroute
+--     money; the write-time stamp keeps stored pairs consistent otherwise.
+-- A stale/inactive id always falls back to the name. Fail-closed on
+-- everything unresolvable.
+CREATE OR REPLACE FUNCTION public.resolve_commission_split_recipient(
+  p_elem jsonb, p_prefer_name boolean DEFAULT false)
+RETURNS uuid
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+DECLARE
+  v_id_txt text;
+  v_name text;
+  v_rid uuid;
+  v_id_name text;
+  v_name_rid uuid;
+BEGIN
+  IF jsonb_typeof(p_elem) <> 'object' THEN
+    RAISE EXCEPTION 'COMMISSION_SPLIT_INVALID: each split must be an object';
+  END IF;
+
+  v_id_txt := NULLIF(btrim(p_elem->>'recipient_user_id'), '');
+  v_name := NULLIF(btrim(p_elem->>'recipient'), '');
+
+  IF v_id_txt IS NULL AND v_name IS NULL THEN
+    RAISE EXCEPTION 'COMMISSION_SPLIT_INVALID: recipient is required';
+  END IF;
+
+  IF v_id_txt IS NOT NULL THEN
+    BEGIN
+      v_rid := v_id_txt::uuid;
+    EXCEPTION WHEN invalid_text_representation THEN
+      RAISE EXCEPTION 'COMMISSION_SPLIT_INVALID: recipient_user_id % is not a valid uuid', v_id_txt;
+    END;
+    v_id_name := public.commission_recipient_name_for_id(v_rid);
+
+    IF v_id_name IS NOT NULL THEN
+      IF v_name IS NULL OR lower(btrim(v_name)) = lower(trim(v_id_name)) THEN
+        RETURN v_rid; -- name absent or agrees: id authoritative
+      END IF;
+      IF NOT p_prefer_name THEN
+        RETURN v_rid; -- creation/validation context: active id wins
+      END IF;
+      -- write context: fall through to name resolution below
+    ELSIF v_name IS NULL THEN
+      RAISE EXCEPTION 'COMMISSION_SPLIT_INVALID: recipient_user_id % does not match an active user', v_rid;
+    END IF;
+  END IF;
+
+  v_name_rid := public.resolve_commission_recipient_id(v_name);
+  IF v_name_rid IS NULL THEN
+    RAISE EXCEPTION 'COMMISSION_SPLIT_INVALID: recipient % does not match exactly one active user', v_name;
+  END IF;
+  RETURN v_name_rid;
+END;
+$function$;
+
+REVOKE ALL ON FUNCTION public.resolve_commission_split_recipient(jsonb, boolean) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.resolve_commission_split_recipient(jsonb, boolean) FROM anon;
+GRANT EXECUTE ON FUNCTION public.resolve_commission_split_recipient(jsonb, boolean) TO authenticated, service_role;
+
 -- ---------------------------------------------------------------------------
 -- Enrichment: return the split JSON with every element stamped with its
 -- resolved recipient_user_id and the profile's current display name.
@@ -205,9 +292,7 @@ AS $function$
 DECLARE
   v_elems jsonb := '[]'::jsonb;
   v_e jsonb;
-  v_id_txt text;
   v_rid uuid;
-  v_name text;
   v_display text;
 BEGIN
   IF p_split IS NULL OR p_split = 'null'::jsonb
@@ -222,34 +307,11 @@ BEGIN
     -- quotes have a write-time validate trigger, so a pass-through element
     -- could persist id-less on orders/jobs/customers (it could never route
     -- money — commission creation validates — but it would decay the
-    -- "every stored element carries an id" invariant). Messages match the
-    -- validator's canonical wording.
-    IF jsonb_typeof(v_e) <> 'object' THEN
-      RAISE EXCEPTION 'COMMISSION_SPLIT_INVALID: each split must be an object';
-    END IF;
-
-    v_id_txt := NULLIF(btrim(v_e->>'recipient_user_id'), '');
-    v_name := NULLIF(btrim(v_e->>'recipient'), '');
-
-    IF v_id_txt IS NOT NULL THEN
-      BEGIN
-        v_rid := v_id_txt::uuid;
-      EXCEPTION WHEN invalid_text_representation THEN
-        RAISE EXCEPTION 'COMMISSION_SPLIT_INVALID: recipient_user_id % is not a valid uuid', v_id_txt;
-      END;
-      v_display := public.commission_recipient_name_for_id(v_rid);
-      IF v_display IS NULL THEN
-        RAISE EXCEPTION 'COMMISSION_SPLIT_INVALID: recipient_user_id % does not match an active user', v_rid;
-      END IF;
-    ELSIF v_name IS NOT NULL THEN
-      v_rid := public.resolve_commission_recipient_id(v_name);
-      IF v_rid IS NULL THEN
-        RAISE EXCEPTION 'COMMISSION_SPLIT_INVALID: recipient % does not match exactly one active user', v_name;
-      END IF;
-      v_display := public.commission_recipient_name_for_id(v_rid);
-    ELSE
-      RAISE EXCEPTION 'COMMISSION_SPLIT_INVALID: recipient is required';
-    END IF;
+    -- "every stored element carries an id" invariant). The shared resolver
+    -- raises the validator's canonical messages. p_prefer_name => true:
+    -- this is the WRITE path, so a human name-edit beats a stale id.
+    v_rid := public.resolve_commission_split_recipient(v_e, true);
+    v_display := public.commission_recipient_name_for_id(v_rid);
 
     v_elems := v_elems || jsonb_build_array(
       v_e || jsonb_build_object('recipient_user_id', v_rid::text, 'recipient', v_display)
@@ -278,7 +340,6 @@ AS $function$
 DECLARE
   v_split jsonb;
   v_recipient text;
-  v_id_txt text;
   v_rid uuid;
   v_seen_ids uuid[] := ARRAY[]::uuid[];
   v_percentage numeric;
@@ -300,31 +361,10 @@ BEGIN
 
   FOR v_split IN SELECT value FROM jsonb_array_elements(p_split->'splits')
   LOOP
-    IF jsonb_typeof(v_split) <> 'object' THEN
-      RAISE EXCEPTION 'COMMISSION_SPLIT_INVALID: each split must be an object';
-    END IF;
-
-    v_id_txt := NULLIF(btrim(v_split->>'recipient_user_id'), '');
+    -- Shared precedence resolver (raises canonical COMMISSION_SPLIT_INVALID
+    -- messages for non-object, missing, bogus-id, and unresolvable cases).
+    v_rid := public.resolve_commission_split_recipient(v_split);
     v_recipient := NULLIF(btrim(v_split->>'recipient'), '');
-
-    IF v_id_txt IS NOT NULL THEN
-      BEGIN
-        v_rid := v_id_txt::uuid;
-      EXCEPTION WHEN invalid_text_representation THEN
-        RAISE EXCEPTION 'COMMISSION_SPLIT_INVALID: recipient_user_id % is not a valid uuid', v_id_txt;
-      END;
-      IF public.commission_recipient_name_for_id(v_rid) IS NULL THEN
-        RAISE EXCEPTION 'COMMISSION_SPLIT_INVALID: recipient_user_id % does not match an active user', v_rid;
-      END IF;
-    ELSE
-      IF v_recipient IS NULL THEN
-        RAISE EXCEPTION 'COMMISSION_SPLIT_INVALID: recipient is required';
-      END IF;
-      v_rid := public.resolve_commission_recipient_id(v_recipient);
-      IF v_rid IS NULL THEN
-        RAISE EXCEPTION 'COMMISSION_SPLIT_INVALID: recipient % does not match exactly one active user', v_recipient;
-      END IF;
-    END IF;
 
     IF v_rid = ANY(v_seen_ids) THEN
       RAISE EXCEPTION 'COMMISSION_SPLIT_INVALID: duplicate recipient %',
@@ -632,14 +672,9 @@ REVOKE ALL ON FUNCTION public.list_commission_recipients() FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.list_commission_recipients() FROM anon;
 GRANT EXECUTE ON FUNCTION public.list_commission_recipients() TO authenticated, service_role;
 
--- ---------------------------------------------------------------------------
--- Retire the name-reservation guard (20260722150432). With every stored split
--- carrying an id (backfill) and no id-less split able to be written (stamp
--- triggers), acquiring a previously-referenced name can no longer redirect
--- stored splits — routing follows the id.
--- ---------------------------------------------------------------------------
-DROP TRIGGER IF EXISTS trg_guard_recipient_name_reuse ON public.profiles;
-DROP FUNCTION IF EXISTS public._guard_recipient_name_reuse();
+-- NOTE: trg_guard_recipient_name_reuse is deliberately NOT dropped here —
+-- see header layer 7. Its retirement is a separate parked follow-up gated on
+-- name-only split writes becoming impossible.
 
 DO $postflight$
 DECLARE
@@ -715,10 +750,15 @@ BEGIN
     RAISE EXCEPTION 'COMMISSION_STAMP_TRIGGER_POSTFLIGHT_MISSING: % of 4 installed', v_count;
   END IF;
 
-  -- 4. Name-reuse guard fully gone; identity + backstop protections intact.
-  IF EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_guard_recipient_name_reuse')
-     OR to_regprocedure('public._guard_recipient_name_reuse()') IS NOT NULL THEN
-    RAISE EXCEPTION 'COMMISSION_NAME_REUSE_GUARD_STILL_PRESENT';
+  -- 4. Name-reuse guard STILL in place (kept per Codex push-proof BLOCKER);
+  -- identity + backstop protections intact.
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_trigger
+     WHERE tgname = 'trg_guard_recipient_name_reuse'
+       AND tgrelid = 'public.profiles'::regclass
+       AND NOT tgisinternal AND tgenabled = 'O'
+  ) OR to_regprocedure('public._guard_recipient_name_reuse()') IS NULL THEN
+    RAISE EXCEPTION 'COMMISSION_NAME_REUSE_GUARD_UNEXPECTEDLY_ABSENT';
   END IF;
   IF NOT EXISTS (
     SELECT 1 FROM pg_trigger t
@@ -736,9 +776,10 @@ BEGIN
      AND p.proname IN ('validate_commission_split_json', '_insert_commissions_for_order',
                        '_insert_commissions_for_job', 'list_commission_recipients',
                        'commission_split_with_recipient_ids', 'resolve_commission_recipient_id',
-                       'commission_recipient_name_for_id', 'stamp_commission_split_recipient_ids');
-  IF v_count <> 8 THEN
-    RAISE EXCEPTION 'COMMISSION_OVERLOAD_POSTFLIGHT_DRIFT: % functions, expected 8', v_count;
+                       'commission_recipient_name_for_id', 'stamp_commission_split_recipient_ids',
+                       'resolve_commission_split_recipient');
+  IF v_count <> 9 THEN
+    RAISE EXCEPTION 'COMMISSION_OVERLOAD_POSTFLIGHT_DRIFT: % functions, expected 9', v_count;
   END IF;
 
   -- 6. Validator behavior: id-only element passes; bogus id fails; unresolvable
@@ -812,5 +853,58 @@ BEGIN
   ) THEN
     RAISE EXCEPTION 'COMMISSION_RECIPIENT_LIST_POSTFLIGHT_INCONSISTENT';
   END IF;
+
+  -- 9. Every stored split passes the FULL new validator end-to-end (Codex
+  -- push-proof MED: shape/percentage/total problems, not just id presence).
+  -- Live data was swept clean on 2026-07-22 before authoring; a failure here
+  -- means something malformed slipped in since — abort and reconcile.
+  DECLARE
+    v_row record;
+  BEGIN
+    FOR v_row IN
+      SELECT 'quotes' AS src, q.id::text AS row_id, q.commission_split AS s
+        FROM public.quotes q WHERE q.commission_split IS NOT NULL
+      UNION ALL
+      SELECT 'orders', o.id::text, o.commission_split
+        FROM public.orders o WHERE o.commission_split IS NOT NULL
+      UNION ALL
+      SELECT 'customers', c.id::text, c.default_commission_split
+        FROM public.customers c WHERE c.default_commission_split IS NOT NULL
+      UNION ALL
+      SELECT 'jobs', j.id::text, j.commission_split
+        FROM public.jobs j WHERE j.commission_split IS NOT NULL
+    LOOP
+      BEGIN
+        PERFORM public.validate_commission_split_json(v_row.s);
+      EXCEPTION WHEN OTHERS THEN
+        RAISE EXCEPTION 'COMMISSION_STORED_SPLIT_POSTFLIGHT_INVALID: %.% — %',
+          v_row.src, v_row.row_id, SQLERRM;
+      END;
+    END LOOP;
+  END;
+
+  -- 10. Precedence proof when two distinct recipients exist (live has 3):
+  -- a mismatched element (person 1's id, person 2's name) resolves to the
+  -- ID at creation/validation time and to the NAME at write time.
+  DECLARE
+    v_id1 uuid; v_id2 uuid; v_name2 text; v_elem jsonb;
+  BEGIN
+    SELECT r.id INTO v_id1 FROM public.list_commission_recipients() r
+     ORDER BY r.full_name LIMIT 1;
+    SELECT r.id, r.full_name INTO v_id2, v_name2
+      FROM public.list_commission_recipients() r
+     ORDER BY r.full_name OFFSET 1 LIMIT 1;
+
+    IF v_id1 IS NOT NULL AND v_id2 IS NOT NULL THEN
+      v_elem := jsonb_build_object(
+        'recipient_user_id', v_id1::text, 'recipient', v_name2, 'percentage', 100);
+      IF public.resolve_commission_split_recipient(v_elem, false) IS DISTINCT FROM v_id1 THEN
+        RAISE EXCEPTION 'COMMISSION_PRECEDENCE_POSTFLIGHT_CREATION_NOT_ID';
+      END IF;
+      IF public.resolve_commission_split_recipient(v_elem, true) IS DISTINCT FROM v_id2 THEN
+        RAISE EXCEPTION 'COMMISSION_PRECEDENCE_POSTFLIGHT_WRITE_NOT_NAME';
+      END IF;
+    END IF;
+  END;
 END;
 $postflight$;
