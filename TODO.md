@@ -70,6 +70,9 @@ When an item here ships or is decided, update this file AND `docs/manual/KNOWN_I
   investigation showed the A8 stamping/aging machinery was already live; shipped the two real
   gaps — due-on-receipt parser support (migration `20260721191914`, applied live) + the
   Net 30/Net 15/Due on receipt/Custom terms picker on FieldApplicationInvoice.
+  **Chemical-sale follow-up SHIPPED 2026-07-21** (PR #197 + migration `20260721223817`, applied
+  live): save_invoice now persists payment_terms; same picker on InvoiceDetail; single + batch
+  PDFs print the invoice override. The approved due-dates spec is now fully complete.
 - **Per-line-item custom split billing (field-app)** — SPEC COMPLETE, review-hardened (3 advisor
   passes), **not started; Mason builds in Codex next week.** Default splits from field ownership,
   override %/price per invoice line, one invoice per customer, unpost reversible, $0 recorded-but-unsent.
@@ -83,7 +86,7 @@ When an item here ships or is decided, update this file AND `docs/manual/KNOWN_I
 - **X5 portal prework (P1 customer-org model, P3 server-side PDFs)** — before any portal UI.
 - **X6 vendor-bill extraction pilot (D1/T13)** — after owner action 6.
 - **#117** — `auto_draft_skipped` activity-feed row — **BUILT 2026-07-21** (migration
-  `20260721210000_auto_draft_skipped_activity_row.sql`, PR #199); pending live apply.
+  `20260721230000_auto_draft_skipped_activity_row.sql`, PR #199); pending live apply.
 - ~~**F3 WebP for `process-document`**~~ **RESOLVED — verified 2026-07-16:** the deployed
   v18 source contains the WebP/BMP/TIFF magic-byte allow-list (commented "Codex bug-hunt
   F3"); the 2026-07-12 CORS redeploy carried it live. No redeploy needed.
