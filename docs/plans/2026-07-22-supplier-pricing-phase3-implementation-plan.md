@@ -32,7 +32,7 @@ The schema/enforcement migration contains no Product classifications and must re
 
 ### One database return-policy guard
 
-Implement one reusable PostgreSQL guard with a stable error code/message such as `RETURN_POLICY_NO_RETURN`.
+Implement one reusable PostgreSQL guard. Every explicit `no_return` refusal must use the exact stable error code `RETURN_POLICY_NO_RETURN`.
 
 Enforce it at:
 

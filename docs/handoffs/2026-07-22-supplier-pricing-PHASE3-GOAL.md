@@ -132,10 +132,10 @@ Only one writer may edit a given stage at a time. Fable and the independent Sol 
 
 ## Goal Start Instruction
 
-Once, and only once, a heartbeat returns `READY`, perform an atomic start sequence: read the current Goal state, create exactly one Goal only if none is active, verify Goal creation succeeded, and only then disable this watcher. If Goal creation fails, leave the watcher active and report `FAILED`; never disable first and never create a duplicate.
+Once, and only once, a heartbeat returns `READY`, perform an idempotent start sequence keyed to this contract (`supplier-pricing-phase3-after-pr213`). Do not rely on read-then-create alone. Use the platform's conditional Goal creation/unfinished-Goal uniqueness guard so concurrent or repeated heartbeats can create at most one Goal; after any create rejection, re-read Goal state and accept it only when the active Goal matches this contract key and objective. Verify matching Goal ownership, and only then disable this watcher. If creation fails without a matching active Goal, leave the watcher active and report `FAILED`; never disable first and never create a duplicate.
 
 Create the Goal with this objective:
 
-> After PR #213 is fully reconciled, execute Supplier Pricing Phase 3 through the next authorized stage in the isolated `codex/` lane: build the Stage A schema/enforcement PR and a drift-protected all-Product proposed classification packet, prove the return/credit boundary in a disposable database, obtain clean Fable and exact-SHA Sol reviews, push/open the protected PR, and park before merge, live migration, live data mutation, or classification activation.
+> [goal-key: supplier-pricing-phase3-after-pr213] After PR #213 is fully reconciled, execute Supplier Pricing Phase 3 through the next authorized stage in the isolated `codex/` lane: build the Stage A schema/enforcement PR and a drift-protected all-Product proposed classification packet, prove the return/credit boundary in a disposable database, obtain clean Fable and exact-SHA Sol reviews, push/open the protected PR, and park before merge, live migration, live data mutation, or classification activation.
 
 If an active matching Goal already exists, do not create another; verify that it owns this contract and then disable the watcher.
