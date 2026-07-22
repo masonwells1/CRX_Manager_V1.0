@@ -60,6 +60,7 @@ BEGIN
     -- Ungrouped invoices retain their direct invoice -> location behavior.
     SELECT
       ei.invoice_id,
+      ei.customer_id,
       ei.invoice_season,
       ei.invoice_revenue_cents,
       ei.invoice_cost_cents,
@@ -77,6 +78,7 @@ BEGIN
     -- A grouped child follows only its own customer's per-location shares.
     SELECT
       ei.invoice_id,
+      ei.customer_id,
       ei.invoice_season,
       ei.invoice_revenue_cents,
       ei.invoice_cost_cents,
@@ -97,6 +99,7 @@ BEGIN
     -- the whole group's locations, so no invoice money can disappear.
     SELECT
       ei.invoice_id,
+      ei.customer_id,
       ei.invoice_season,
       ei.invoice_revenue_cents,
       ei.invoice_cost_cents,
@@ -120,6 +123,7 @@ BEGIN
   invoice_location_totals AS (
     SELECT
       ilb.invoice_id,
+      ilb.customer_id,
       ilb.invoice_season,
       ilb.invoice_revenue_cents,
       ilb.invoice_cost_cents,
@@ -137,6 +141,7 @@ BEGIN
   invoice_location_weights AS (
     SELECT
       ilt.invoice_id,
+      ilt.customer_id,
       ilt.invoice_season,
       ilt.invoice_revenue_cents,
       ilt.invoice_cost_cents,
@@ -210,6 +215,7 @@ BEGIN
   allocated_money AS (
     SELECT
       ar.field_id,
+      ar.customer_id,
       ar.invoice_season,
       ar.revenue_floor_cents
         + CASE
@@ -230,15 +236,17 @@ BEGIN
   money_by_field AS (
     SELECT
       am.field_id,
+      am.customer_id,
       am.invoice_season,
       SUM(am.revenue_cents)::bigint AS revenue_cents,
       SUM(am.cost_cents)::bigint AS cost_cents
     FROM allocated_money am
-    GROUP BY am.field_id, am.invoice_season
+    GROUP BY am.field_id, am.customer_id, am.invoice_season
   ),
   eligible_ungrouped_invoices AS (
     SELECT DISTINCT
       ei.invoice_id,
+      ei.customer_id,
       ei.invoice_season
     FROM eligible_invoices ei
     WHERE ei.invoice_group_id IS NULL
@@ -259,6 +267,7 @@ BEGIN
   ),
   ungrouped_acres_by_scope_field AS (
     SELECT
+      eui.customer_id,
       eui.invoice_season,
       fal.field_id,
       SUM(COALESCE(fal.applied_acres, 0)) AS applied_acres
@@ -266,12 +275,13 @@ BEGIN
     JOIN public.field_app_locations fal
       ON fal.invoice_id = eui.invoice_id
     WHERE COALESCE(fal.applied_acres, 0) >= 0
-    GROUP BY eui.invoice_id, eui.invoice_season, fal.field_id
+    GROUP BY eui.invoice_id, eui.customer_id, eui.invoice_season, fal.field_id
   ),
   grouped_share_acres_by_scope_field AS (
     -- Count each eligible child's customer share once per group. DISTINCT in
     -- eligible_group_customers prevents duplicate child rows from doubling acres.
     SELECT
+      egc.customer_id,
       egc.invoice_season,
       fal.field_id,
       SUM(gls.share_acres) AS applied_acres
@@ -281,27 +291,30 @@ BEGIN
     JOIN grouped_location_shares gls
       ON gls.location_id = fal.id
      AND gls.customer_id = egc.customer_id
-    GROUP BY egc.invoice_group_id, egc.invoice_season, fal.field_id
+    GROUP BY egc.invoice_group_id, egc.customer_id, egc.invoice_season, fal.field_id
   ),
   grouped_legacy_acres_by_scope_field AS (
-    -- If an entire legacy group predates location shares, retain the old
-    -- whole-group acres count once (not once per child).
+    -- If an entire legacy group predates location shares, each child's money was
+    -- allocated over the whole group's locations, so attribute the whole-group
+    -- acres to EACH child customer (keeps that customer's margin/acre consistent
+    -- with its whole-group allocation).
     SELECT
-      eg.invoice_season,
+      egc.customer_id,
+      egc.invoice_season,
       fal.field_id,
       SUM(COALESCE(fal.applied_acres, 0)) AS applied_acres
-    FROM eligible_groups eg
+    FROM eligible_group_customers egc
     JOIN public.field_app_locations fal
-      ON fal.invoice_group_id = eg.invoice_group_id
+      ON fal.invoice_group_id = egc.invoice_group_id
     WHERE COALESCE(fal.applied_acres, 0) >= 0
       AND NOT EXISTS (
         SELECT 1
         FROM public.field_app_locations share_fal
         JOIN public.field_app_location_shares s
           ON s.location_id = share_fal.id
-        WHERE share_fal.invoice_group_id = eg.invoice_group_id
+        WHERE share_fal.invoice_group_id = egc.invoice_group_id
       )
-    GROUP BY eg.invoice_group_id, eg.invoice_season, fal.field_id
+    GROUP BY egc.invoice_group_id, egc.customer_id, egc.invoice_season, fal.field_id
   ),
   acres_by_scope_field AS (
     SELECT * FROM ungrouped_acres_by_scope_field
@@ -313,10 +326,11 @@ BEGIN
   acres_by_field AS (
     SELECT
       absf.field_id,
+      absf.customer_id,
       absf.invoice_season,
       SUM(absf.applied_acres) AS total_acres_applied
     FROM acres_by_scope_field absf
-    GROUP BY absf.field_id, absf.invoice_season
+    GROUP BY absf.field_id, absf.customer_id, absf.invoice_season
   ),
   unassigned_invoices AS (
     SELECT
@@ -366,11 +380,15 @@ BEGIN
   FROM money_by_field mbf
   LEFT JOIN acres_by_field abf
     ON abf.field_id = mbf.field_id
+   AND abf.customer_id = mbf.customer_id
    AND abf.invoice_season = mbf.invoice_season
   JOIN public.fields f
     ON f.id = mbf.field_id
+  -- Attribution follows the BILLED customer (invoices.customer_id carried through
+  -- the allocation), not the field owner — on shared fields each co-owner's
+  -- invoiced money reports under that co-owner.
   JOIN public.customers c
-    ON c.id = f.customer_id
+    ON c.id = mbf.customer_id
   UNION ALL
   SELECT
     NULL::uuid AS field_id,

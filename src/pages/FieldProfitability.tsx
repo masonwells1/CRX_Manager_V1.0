@@ -227,7 +227,7 @@ export default function FieldProfitability() {
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {sortedRows.map((row) => (
-                  <tr key={`${row.field_id ?? `unassigned-${row.customer_id}`}-${row.season}`} className="hover:bg-gray-50">
+                  <tr key={`${row.field_id ?? 'unassigned'}-${row.customer_id}-${row.season}`} className="hover:bg-gray-50">
                     <td className="px-4 py-3 font-medium text-nav-dark">{row.customer_name}</td>
                     <td className="px-4 py-3 text-nav-dark">{row.field_name}</td>
                     <td className="px-4 py-3 text-secondary">{row.season}</td>
