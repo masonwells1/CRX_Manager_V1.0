@@ -77,8 +77,11 @@ BEGIN
     UNION ALL
 
     -- Job-backed fallback: transfer_job_to_invoice keeps invoices.job_id but
-    -- writes NO field_app_locations — resolve fields/acres via job_fields so
-    -- these invoices report per-field instead of landing in the unassigned bucket.
+    -- writes NO field_app_locations (single OR multi-owner grouped children) —
+    -- resolve fields/acres via job_fields so these invoices report per-field
+    -- instead of landing in the unassigned bucket. Each grouped child's money
+    -- allocates over the same job fields (weights identical per child; the
+    -- child's own acres come from invoice_shares in the acres CTE below).
     SELECT
       ei.invoice_id,
       ei.customer_id,
@@ -91,11 +94,12 @@ BEGIN
     FROM eligible_invoices ei
     JOIN public.job_fields jf
       ON jf.job_id = ei.job_id
-    WHERE ei.invoice_group_id IS NULL
-      AND ei.job_id IS NOT NULL
+    WHERE ei.job_id IS NOT NULL
       AND NOT EXISTS (
         SELECT 1 FROM public.field_app_locations fal2
         WHERE fal2.invoice_id = ei.invoice_id
+           OR (ei.invoice_group_id IS NOT NULL
+               AND fal2.invoice_group_id = ei.invoice_group_id)
       )
 
     UNION ALL
@@ -303,19 +307,40 @@ BEGIN
     GROUP BY eui.invoice_id, eui.customer_id, eui.invoice_season, fal.field_id
   ),
   job_backed_acres_by_scope_field AS (
+    -- Per-child acres: a multi-owner child's own allocated acres live in
+    -- invoice_shares.acres — spread that total across the job's fields by
+    -- acres_to_treat proportion. A child with no usable share rows (single-owner
+    -- transfer) takes the job fields' acres directly.
     SELECT
       ei.customer_id,
       ei.invoice_season,
       jf.field_id,
-      SUM(GREATEST(COALESCE(jf.acres_to_treat, 0), 0)) AS applied_acres
+      SUM(
+        CASE
+          WHEN child.share_acres IS NOT NULL AND job_tot.job_acres > 0
+            THEN child.share_acres
+                 * GREATEST(COALESCE(jf.acres_to_treat, 0), 0) / job_tot.job_acres
+          ELSE GREATEST(COALESCE(jf.acres_to_treat, 0), 0)
+        END
+      ) AS applied_acres
     FROM eligible_invoices ei
     JOIN public.job_fields jf
       ON jf.job_id = ei.job_id
-    WHERE ei.invoice_group_id IS NULL
-      AND ei.job_id IS NOT NULL
+    JOIN LATERAL (
+      SELECT SUM(GREATEST(COALESCE(jf2.acres_to_treat, 0), 0)) AS job_acres
+      FROM public.job_fields jf2 WHERE jf2.job_id = ei.job_id
+    ) job_tot ON true
+    LEFT JOIN LATERAL (
+      SELECT NULLIF(SUM(GREATEST(COALESCE(ish.acres, 0), 0)), 0) AS share_acres
+      FROM public.invoice_shares ish
+      WHERE ish.invoice_id = ei.invoice_id
+    ) child ON true
+    WHERE ei.job_id IS NOT NULL
       AND NOT EXISTS (
         SELECT 1 FROM public.field_app_locations fal2
         WHERE fal2.invoice_id = ei.invoice_id
+           OR (ei.invoice_group_id IS NOT NULL
+               AND fal2.invoice_group_id = ei.invoice_group_id)
       )
     GROUP BY ei.invoice_id, ei.customer_id, ei.invoice_season, jf.field_id
   ),
@@ -460,8 +485,7 @@ BEGIN
       AND COALESCE(fal.applied_acres, 0) >= 0
     )
     AND NOT (
-      ei.invoice_group_id IS NULL
-      AND ei.job_id IS NOT NULL
+      ei.job_id IS NOT NULL
       AND EXISTS (
         SELECT 1 FROM public.job_fields jf
         WHERE jf.job_id = ei.job_id
@@ -517,3 +541,19 @@ $$;
 
 REVOKE ALL ON FUNCTION public.get_field_profitability(text) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.get_field_profitability(text) TO authenticated, service_role;
+
+-- Fail closed on overload drift: exactly ONE get_field_profitability may exist,
+-- so a stale overload can never survive with unintended grants or cause
+-- PostgREST ambiguity.
+DO $$
+DECLARE v_count int;
+BEGIN
+  SELECT count(*) INTO v_count
+  FROM pg_proc p
+  JOIN pg_namespace n ON n.oid = p.pronamespace
+  WHERE n.nspname = 'public' AND p.proname = 'get_field_profitability';
+  IF v_count <> 1 THEN
+    RAISE EXCEPTION 'OVERLOAD_DRIFT: expected exactly 1 get_field_profitability, found %', v_count;
+  END IF;
+END
+$$;
