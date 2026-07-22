@@ -92,6 +92,15 @@ describe('supplier cost-basis Phase 2 migration contract', () => {
     expect(migrationSql).toMatch(
       /lower\(btrim\(poi\.inventory_unit_snapshot\)\) = lower\(COALESCE\([\s\S]+?p\.inventory_unit[\s\S]+?p\.unit_size/,
     );
+    expect(migrationSql).toMatch(
+      /lower\(btrim\(l\.conversion_unit\)\) = lower\(COALESCE\([\s\S]+?p\.inventory_unit[\s\S]+?p\.unit_size/,
+    );
+    expect(migrationSql).toContain(
+      'CREATE TRIGGER trigger_guard_product_cost_basis_unit_change',
+    );
+    expect(migrationSql).toContain(
+      "RAISE EXCEPTION 'PRODUCT_COST_BASIS_UNIT_CHANGE_REQUIRES_FLAG_OFF'",
+    );
     expect(migrationSql).toContain("RAISE EXCEPTION 'COST_BASIS_AMOUNT_MISMATCH'");
     expect(migrationSql).toContain('correction.supersedes_observation_id = o.id');
     expect(migrationSql).toContain('v.deleted_at IS NULL');

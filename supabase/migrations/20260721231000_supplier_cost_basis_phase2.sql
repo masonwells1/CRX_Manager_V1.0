@@ -291,6 +291,51 @@ CREATE TRIGGER trigger_capture_purchase_order_item_cost_snapshot
   FOR EACH ROW
   EXECUTE FUNCTION public.capture_purchase_order_item_cost_snapshot();
 
+-- Once governed cost basis is enabled, the Product inventory unit is part of
+-- the meaning of every active per-unit cost. Unit corrections therefore use a
+-- controlled flag-off maintenance window instead of silently reinterpreting an
+-- active supplier or purchase basis in a different unit.
+CREATE OR REPLACE FUNCTION public.guard_product_cost_basis_unit_change()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+BEGIN
+  IF lower(COALESCE(NULLIF(btrim(NEW.inventory_unit), ''), NULLIF(btrim(NEW.unit_size), '')))
+       IS NOT DISTINCT FROM
+     lower(COALESCE(NULLIF(btrim(OLD.inventory_unit), ''), NULLIF(btrim(OLD.unit_size), ''))) THEN
+    RETURN NEW;
+  END IF;
+
+  IF COALESCE((
+       SELECT setting_value = 'true'
+       FROM public.app_settings
+       WHERE setting_key = 'supplier_cost_basis_enabled'
+     ), false)
+     AND EXISTS (
+       SELECT 1
+       FROM public.product_cost_basis b
+       WHERE b.product_id = OLD.id
+         AND b.effective_to IS NULL
+     ) THEN
+    RAISE EXCEPTION 'PRODUCT_COST_BASIS_UNIT_CHANGE_REQUIRES_FLAG_OFF';
+  END IF;
+
+  RETURN NEW;
+END;
+$function$;
+
+REVOKE ALL ON FUNCTION public.guard_product_cost_basis_unit_change()
+  FROM PUBLIC, anon, authenticated, service_role;
+
+DROP TRIGGER IF EXISTS trigger_guard_product_cost_basis_unit_change
+  ON public.products;
+CREATE TRIGGER trigger_guard_product_cost_basis_unit_change
+  BEFORE UPDATE OF inventory_unit, unit_size ON public.products
+  FOR EACH ROW
+  EXECUTE FUNCTION public.guard_product_cost_basis_unit_change();
+
 -- Scope the one-time legacy exception to this statement. A later caller may
 -- not manufacture received-line provenance by replaying the backfill shape.
 DO $backfill$
@@ -489,6 +534,8 @@ BEGIN
     FROM public.supplier_price_observations o
     JOIN public.product_supplier_links l
       ON l.id = o.product_supplier_link_id
+    JOIN public.products p
+      ON p.id = o.product_id
     JOIN public.vendors v
       ON v.id = o.vendor_id AND v.deleted_at IS NULL
     WHERE o.id = v_observation_id
@@ -499,6 +546,9 @@ BEGIN
       AND l.is_reusable
       AND l.comparison_status = 'comparable'
       AND l.inventory_units_per_supplier_unit > 0
+      AND lower(btrim(l.conversion_unit)) = lower(COALESCE(
+        NULLIF(btrim(p.inventory_unit), ''), NULLIF(btrim(p.unit_size), '')
+      ))
       AND o.package_quantity > 0
       AND o.effective_from <= v_business_date
       AND (o.effective_to IS NULL OR o.effective_to >= v_business_date)
@@ -1262,6 +1312,9 @@ BEGIN
           AND l.is_active AND l.is_reusable
           AND l.comparison_status = 'comparable'
           AND l.inventory_units_per_supplier_unit > 0
+          AND lower(btrim(l.conversion_unit)) = lower(COALESCE(
+            NULLIF(btrim(p.inventory_unit), ''), NULLIF(btrim(p.unit_size), '')
+          ))
           AND o.package_quantity > 0
           AND o.effective_from <= v_business_date
           AND (o.effective_to IS NULL OR o.effective_to >= v_business_date)
@@ -1350,6 +1403,10 @@ BEGIN
       o.cost_cents,
       CASE WHEN l.comparison_status = 'comparable'
              AND l.inventory_units_per_supplier_unit > 0
+             AND lower(btrim(l.conversion_unit)) = lower(COALESCE(
+               NULLIF(btrim(supplier_product.inventory_unit), ''),
+               NULLIF(btrim(supplier_product.unit_size), '')
+             ))
         THEN round(o.cost_cents::numeric / o.package_quantity
           / l.inventory_units_per_supplier_unit)::bigint
         ELSE NULL END AS normalized_cost_cents,
@@ -1364,6 +1421,7 @@ BEGIN
       ) AS provenance
     FROM public.supplier_price_observations o
     JOIN public.product_supplier_links l ON l.id = o.product_supplier_link_id
+    JOIN public.products supplier_product ON supplier_product.id = o.product_id
     JOIN public.vendors v ON v.id = o.vendor_id
     WHERE o.product_id = p_product_id
 
@@ -1581,8 +1639,20 @@ BEGIN
      ) OR has_function_privilege(
        'service_role', 'public.capture_purchase_order_item_cost_snapshot()',
        'EXECUTE'
-     ) THEN
+  ) THEN
     RAISE EXCEPTION 'purchase-order cost snapshot trigger or grants invalid';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_trigger
+    WHERE tgrelid = 'public.products'::regclass
+      AND tgname = 'trigger_guard_product_cost_basis_unit_change'
+      AND NOT tgisinternal
+  ) OR has_function_privilege(
+       'authenticated', 'public.guard_product_cost_basis_unit_change()', 'EXECUTE'
+     ) OR has_function_privilege(
+       'service_role', 'public.guard_product_cost_basis_unit_change()', 'EXECUTE'
+     ) THEN
+    RAISE EXCEPTION 'Product cost-basis unit guard trigger or grants invalid';
   END IF;
   IF (
     SELECT count(*) FROM pg_proc p

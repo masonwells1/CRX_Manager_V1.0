@@ -39,6 +39,7 @@ CREATE TABLE public.product_supplier_links (
   supplier_uom text,
   supplier_pack_description text,
   inventory_units_per_supplier_unit numeric(20,8),
+  conversion_unit text,
   comparison_status text NOT NULL DEFAULT 'pending',
   link_status text NOT NULL DEFAULT 'pending',
   is_reusable boolean GENERATED ALWAYS AS (

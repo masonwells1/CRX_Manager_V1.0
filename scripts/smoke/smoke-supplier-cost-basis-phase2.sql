@@ -413,13 +413,14 @@ VALUES ('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb1', 'Phase 2 Supplier');
 INSERT INTO public.product_supplier_links(
   id, product_id, vendor_id, supplier_sku, supplier_product_name,
   supplier_uom, supplier_pack_description,
-  inventory_units_per_supplier_unit, comparison_status, link_status, created_by
+  inventory_units_per_supplier_unit, conversion_unit,
+  comparison_status, link_status, created_by
 ) VALUES (
   'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb2',
   'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1',
   'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb1',
   'SUP-001', 'Phase 2 Margin Product', 'case', '2 inventory units per case',
-  2, 'comparable', 'confirmed', '11111111-1111-4111-8111-111111111111'
+  2, 'gal', 'comparable', 'confirmed', '11111111-1111-4111-8111-111111111111'
 );
 INSERT INTO public.supplier_price_imports(id, vendor_id, created_by)
 VALUES (
@@ -439,16 +440,110 @@ INSERT INTO public.supplier_price_observations(
   'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb2',
   'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb3',
   'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb4',
-  'quote', 18000, 'case', 1, current_date, '11111111-1111-4111-8111-111111111111'
+  'quote', 18000, 'case', 1,
+  (now() AT TIME ZONE 'America/Chicago')::date,
+  '11111111-1111-4111-8111-111111111111'
 );
+SET ROLE authenticated;
+
+-- Supplier conversions are meaningful only for the Product unit they were
+-- confirmed against. With governance enabled, an active basis blocks a direct
+-- unit reinterpretation. A controlled flag-off correction invalidates the old
+-- supplier evidence in workspace, history normalization, and preview.
+RESET ROLE;
+DO $proof$
+BEGIN
+  BEGIN
+    UPDATE public.products SET inventory_unit = 'oz'
+    WHERE id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1'::uuid;
+    RAISE EXCEPTION 'SMOKE_FAIL: governed Product unit changed while flag was on';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF SQLERRM NOT LIKE 'PRODUCT_COST_BASIS_UNIT_CHANGE_REQUIRES_FLAG_OFF%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: governed unit change failed for wrong reason: %', SQLERRM;
+    END IF;
+  END;
+END;
+$proof$;
+
+UPDATE public.app_settings SET setting_value = 'false'
+WHERE setting_key = 'supplier_cost_basis_enabled';
+UPDATE public.products SET inventory_unit = 'oz'
+WHERE id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1'::uuid;
+UPDATE public.app_settings SET setting_value = 'true'
+WHERE setting_key = 'supplier_cost_basis_enabled';
+SET ROLE authenticated;
+
+DO $proof$
+DECLARE
+  v_workspace jsonb := public.get_product_cost_basis_workspace(
+    'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1'
+  );
+  v_history jsonb := public.get_product_price_history(
+    'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1'
+  );
+BEGIN
+  IF jsonb_array_length(v_workspace->'supplier_candidates') <> 0 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: stale supplier unit remained in workspace: %', v_workspace;
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM jsonb_array_elements(v_history->'points') point
+    WHERE point->>'stream' = 'supplier_observation'
+      AND point->>'source_id' = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb5'
+      AND point->>'normalized_cost_cents' IS NOT NULL
+  ) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: stale supplier unit remained normalized in history: %', v_history;
+  END IF;
+  BEGIN
+    PERFORM public.preview_product_cost_basis_changes(
+      'product_page', NULL,
+      jsonb_build_array(jsonb_build_object(
+        'product_id', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1',
+        'row_version', (SELECT pricing_version FROM public.products
+          WHERE id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1'::uuid),
+        'pricing_mode', 'margin_driven',
+        'new_cost', '90.00',
+        'tier1_margin_percent', '20',
+        'tier2_margin_percent', '25',
+        'tier3_margin_percent', '30',
+        'change_reason', 'Reject stale supplier unit',
+        'basis_type', 'selected_supplier_price',
+        'basis_source', 'supplier_pricing',
+        'basis_reason', 'Reject stale supplier unit',
+        'basis_selection', true,
+        'supplier_price_observation_id', 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb5'
+      )),
+      '11111111-1111-4111-8111-111111111111', 'phase2-stale-supplier-unit'
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: stale supplier unit remained selectable';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF SQLERRM NOT LIKE 'SUPPLIER_COST_BASIS_NOT_COMPARABLE%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: stale supplier preview failed for wrong reason: %', SQLERRM;
+    END IF;
+  END;
+END;
+$proof$;
+
+RESET ROLE;
+UPDATE public.app_settings SET setting_value = 'false'
+WHERE setting_key = 'supplier_cost_basis_enabled';
+UPDATE public.products SET inventory_unit = 'gal'
+WHERE id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1'::uuid;
+UPDATE public.app_settings SET setting_value = 'true'
+WHERE setting_key = 'supplier_cost_basis_enabled';
 SET ROLE authenticated;
 
 -- A conversion factor is meaningful only for the Product inventory unit that
 -- was captured at receipt. Changing that unit makes the old PO evidence
 -- ineligible at preview and apply instead of reinterpreting $/lb as $/oz.
 RESET ROLE;
+UPDATE public.app_settings SET setting_value = 'false'
+WHERE setting_key = 'supplier_cost_basis_enabled';
 UPDATE public.products SET inventory_unit = 'oz'
 WHERE id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3'::uuid;
+UPDATE public.app_settings SET setting_value = 'true'
+WHERE setting_key = 'supplier_cost_basis_enabled';
 SET ROLE authenticated;
 DO $proof$
 BEGIN
@@ -483,8 +578,12 @@ BEGIN
 END;
 $proof$;
 RESET ROLE;
+UPDATE public.app_settings SET setting_value = 'false'
+WHERE setting_key = 'supplier_cost_basis_enabled';
 UPDATE public.products SET inventory_unit = 'lb'
 WHERE id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3'::uuid;
+UPDATE public.app_settings SET setting_value = 'true'
+WHERE setting_key = 'supplier_cost_basis_enabled';
 SET ROLE authenticated;
 
 INSERT INTO phase2_proof(key, value)
@@ -520,8 +619,12 @@ $proof$;
 
 SAVEPOINT phase2_stale_unit_apply;
 RESET ROLE;
+UPDATE public.app_settings SET setting_value = 'false'
+WHERE setting_key = 'supplier_cost_basis_enabled';
 UPDATE public.products SET inventory_unit = 'oz'
 WHERE id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3'::uuid;
+UPDATE public.app_settings SET setting_value = 'true'
+WHERE setting_key = 'supplier_cost_basis_enabled';
 SET ROLE authenticated;
 DO $proof$
 DECLARE v jsonb := (SELECT value FROM phase2_proof WHERE key = 'purchase-preview');
@@ -564,6 +667,22 @@ BEGIN
   END IF;
 END;
 $proof$;
+DO $proof$
+DECLARE
+  v_product_unit text;
+  v_conversion_unit text;
+BEGIN
+  SELECT p.inventory_unit, l.conversion_unit
+  INTO v_product_unit, v_conversion_unit
+  FROM public.products p
+  JOIN public.product_supplier_links l ON l.product_id = p.id
+  WHERE p.id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1'::uuid;
+  IF lower(btrim(v_product_unit)) IS DISTINCT FROM lower(btrim(v_conversion_unit)) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: supplier units were not restored: product=%, link=%',
+      v_product_unit, v_conversion_unit;
+  END IF;
+END;
+$proof$;
 SET ROLE authenticated;
 
 INSERT INTO phase2_proof(key, value)
@@ -571,7 +690,8 @@ VALUES ('supplier-preview', public.preview_product_cost_basis_changes(
   'product_page', NULL,
   jsonb_build_array(jsonb_build_object(
     'product_id', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1',
-    'row_version', 2,
+    'row_version', (SELECT pricing_version FROM public.products
+      WHERE id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1'::uuid),
     'pricing_mode', 'margin_driven',
     'new_cost', '90.00',
     'tier1_margin_percent', '20',
@@ -592,7 +712,8 @@ VALUES ('supplier-stale-preview', public.preview_product_cost_basis_changes(
   'product_page', NULL,
   jsonb_build_array(jsonb_build_object(
     'product_id', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1',
-    'row_version', 2,
+    'row_version', (SELECT pricing_version FROM public.products
+      WHERE id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1'::uuid),
     'pricing_mode', 'margin_driven',
     'new_cost', '90.00',
     'tier1_margin_percent', '20',
@@ -618,6 +739,34 @@ BEGIN
 END;
 $proof$;
 
+SAVEPOINT phase2_stale_supplier_unit_apply;
+RESET ROLE;
+UPDATE public.app_settings SET setting_value = 'false'
+WHERE setting_key = 'supplier_cost_basis_enabled';
+UPDATE public.products SET inventory_unit = 'oz'
+WHERE id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1'::uuid;
+UPDATE public.app_settings SET setting_value = 'true'
+WHERE setting_key = 'supplier_cost_basis_enabled';
+SET ROLE authenticated;
+DO $proof$
+DECLARE v jsonb := (SELECT value FROM phase2_proof WHERE key = 'supplier-preview');
+BEGIN
+  BEGIN
+    PERFORM public.apply_product_cost_basis_change_set(
+      (v->>'change_set_id')::uuid, v->>'request_fingerprint',
+      '11111111-1111-4111-8111-111111111111', 'phase2-stale-supplier-unit-apply'
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: supplier unit changed after preview still applied';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF SQLERRM NOT LIKE 'SUPPLIER_COST_BASIS_NOT_COMPARABLE%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: stale supplier apply failed for wrong reason: %', SQLERRM;
+    END IF;
+  END;
+END;
+$proof$;
+ROLLBACK TO SAVEPOINT phase2_stale_supplier_unit_apply;
+
 INSERT INTO phase2_proof(key, value)
 SELECT 'supplier-apply', public.apply_product_cost_basis_change_set(
   (value->>'change_set_id')::uuid, value->>'request_fingerprint',
@@ -641,7 +790,11 @@ BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM public.products
     WHERE id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1'::uuid
-      AND current_cost = 90 AND pricing_version = 2
+      AND current_cost = 90
+      AND pricing_version = (
+        SELECT (value->'rows'->0->'submitted_row'->>'row_version')::bigint
+        FROM phase2_proof WHERE key = 'supplier-preview'
+      )
   ) THEN
     RAISE EXCEPTION 'SMOKE_FAIL: basis-only selection changed Product pricing';
   END IF;
@@ -763,7 +916,8 @@ VALUES ('deleted-vendor-preview', public.preview_product_cost_basis_changes(
   'product_page', NULL,
   jsonb_build_array(jsonb_build_object(
     'product_id', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1',
-    'row_version', 2,
+    'row_version', (SELECT pricing_version FROM public.products
+      WHERE id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1'::uuid),
     'pricing_mode', 'margin_driven',
     'new_cost', '90.00',
     'tier1_margin_percent', '20',
@@ -807,7 +961,8 @@ VALUES ('legacy-preview', public.preview_product_pricing_changes(
   'product_page', NULL,
   jsonb_build_array(jsonb_build_object(
     'product_id', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1',
-    'row_version', 2,
+    'row_version', (SELECT pricing_version FROM public.products
+      WHERE id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1'::uuid),
     'pricing_mode', 'margin_driven',
     'new_cost', '95.00',
     'tier1_margin_percent', '20',
