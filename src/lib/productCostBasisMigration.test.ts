@@ -31,6 +31,15 @@ const nullCostWorkbookOverloadGuardSql = readFileSync(
   ),
   'utf8',
 );
+const nullCostWorkbookOverloadGuardReplaySql = readFileSync(
+  join(
+    repoRoot,
+    'supabase',
+    'migrations',
+    '20260722043537_assert_supplier_cost_basis_followup_overloads_replay.sql',
+  ),
+  'utf8',
+);
 
 describe('supplier cost-basis Phase 2 migration contract', () => {
   it('is additive, off by default, and does not rewrite Product money during migration', () => {
@@ -268,6 +277,13 @@ describe('supplier cost-basis null-cost workbook follow-up contract', () => {
 });
 
 describe('supplier cost-basis follow-up overload guard contract', () => {
+  it('keeps the ledger-parity replay identical to the reviewed assertion body', () => {
+    const assertionBody = (sql: string) => sql.slice(sql.indexOf('DO $migration_checks$'));
+    expect(assertionBody(nullCostWorkbookOverloadGuardReplaySql)).toBe(
+      assertionBody(nullCostWorkbookOverloadGuardSql),
+    );
+  });
+
   it('fails closed on alternate preview, apply, or helper signatures', () => {
     for (const name of [
       'preview_product_cost_basis_changes',
