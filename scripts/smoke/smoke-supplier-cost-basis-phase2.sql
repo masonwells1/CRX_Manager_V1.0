@@ -486,6 +486,9 @@ BEGIN
   IF jsonb_array_length(v_workspace->'supplier_candidates') <> 0 THEN
     RAISE EXCEPTION 'SMOKE_FAIL: stale supplier unit remained in workspace: %', v_workspace;
   END IF;
+  IF v_workspace->'current_basis' <> 'null'::jsonb THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: flag-off unit correction retained active basis: %', v_workspace;
+  END IF;
   IF EXISTS (
     SELECT 1 FROM jsonb_array_elements(v_history->'points') point
     WHERE point->>'stream' = 'supplier_observation'

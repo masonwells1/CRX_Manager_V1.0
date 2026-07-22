@@ -108,6 +108,12 @@ describe('supplier cost-basis Phase 2 migration contract', () => {
     expect(migrationSql).toContain(
       "RAISE EXCEPTION 'PRODUCT_COST_BASIS_UNIT_CHANGE_REQUIRES_FLAG_OFF'",
     );
+    expect(migrationSql).toContain(
+      "set_config('crx.cost_basis_authorized', 'unit_change', true)",
+    );
+    expect(migrationSql).toMatch(
+      /UPDATE public\.product_cost_basis\s+SET effective_to = clock_timestamp\(\)[\s\S]+?WHERE product_id = OLD\.id[\s\S]+?effective_to IS NULL/,
+    );
     expect(migrationSql).toContain("RAISE EXCEPTION 'COST_BASIS_AMOUNT_MISMATCH'");
     expect(migrationSql).toContain('correction.supersedes_observation_id = o.id');
     expect(migrationSql).toContain('v.deleted_at IS NULL');

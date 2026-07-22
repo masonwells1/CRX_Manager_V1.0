@@ -291,10 +291,10 @@ CREATE TRIGGER trigger_capture_purchase_order_item_cost_snapshot
   FOR EACH ROW
   EXECUTE FUNCTION public.capture_purchase_order_item_cost_snapshot();
 
--- Once governed cost basis is enabled, the Product inventory unit is part of
--- the meaning of every active per-unit cost. Unit corrections therefore use a
--- controlled flag-off maintenance window instead of silently reinterpreting an
--- active supplier or purchase basis in a different unit.
+-- The Product inventory unit is part of the meaning of every active per-unit
+-- cost. Enabled governance blocks unit edits. A controlled flag-off correction
+-- atomically closes the old basis so it can never be silently reinterpreted;
+-- the next governed approval must establish a fresh basis for the new unit.
 CREATE OR REPLACE FUNCTION public.guard_product_cost_basis_unit_change()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -318,8 +318,24 @@ BEGIN
        FROM public.product_cost_basis b
        WHERE b.product_id = OLD.id
          AND b.effective_to IS NULL
-     ) THEN
+  ) THEN
     RAISE EXCEPTION 'PRODUCT_COST_BASIS_UNIT_CHANGE_REQUIRES_FLAG_OFF';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+    FROM public.product_cost_basis b
+    WHERE b.product_id = OLD.id
+      AND b.effective_to IS NULL
+  ) THEN
+    PERFORM set_config('crx.cost_basis_authorized', 'unit_change', true);
+    PERFORM set_config('crx.cost_basis_unit_change_product', OLD.id::text, true);
+    UPDATE public.product_cost_basis
+    SET effective_to = clock_timestamp()
+    WHERE product_id = OLD.id
+      AND effective_to IS NULL;
+    PERFORM set_config('crx.cost_basis_unit_change_product', '', true);
+    PERFORM set_config('crx.cost_basis_authorized', '', true);
   END IF;
 
   RETURN NEW;
@@ -439,12 +455,21 @@ LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $function$
+DECLARE
+  v_authorized text := current_setting('crx.cost_basis_authorized', true);
+  v_unit_change_product uuid := NULLIF(
+    current_setting('crx.cost_basis_unit_change_product', true), ''
+  )::uuid;
 BEGIN
   IF TG_OP = 'DELETE' THEN
     RAISE EXCEPTION 'PRODUCT_COST_BASIS_DELETE_FORBIDDEN';
   END IF;
 
-  IF current_setting('crx.cost_basis_authorized', true) IS DISTINCT FROM 'phase2'
+  IF NOT (
+       v_authorized = 'phase2'
+       OR (v_authorized = 'unit_change'
+         AND v_unit_change_product IS NOT DISTINCT FROM OLD.product_id)
+     )
      OR OLD.effective_to IS NOT NULL
      OR NEW.effective_to IS NULL
      OR NEW.effective_to < OLD.effective_from
