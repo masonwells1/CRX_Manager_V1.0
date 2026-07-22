@@ -698,7 +698,7 @@ export default function InventoryPage() {
     return 'text-red-600';
   };
 
-  const locationOptions = locations.map((l) => ({ value: l, label: l }));
+  const BULK_EDITABLE_INVENTORY_FIELDS = new Set(['reorder_point', 'min_stock_level']);
 
   const handleBulkSave = async (changes: Map<string, Record<string, unknown>>) => {
     try {
@@ -706,6 +706,11 @@ export default function InventoryPage() {
         // Skip virtual rows (they don't have real DB records)
         if (inventoryId.startsWith('virtual-')) {
           continue;
+        }
+
+        const unsafeFields = Object.keys(fields).filter((field) => !BULK_EDITABLE_INVENTORY_FIELDS.has(field));
+        if (unsafeFields.length > 0) {
+          throw new Error(`Inventory inline edit cannot update: ${unsafeFields.join(', ')}`);
         }
 
         const result = await supabase
@@ -847,9 +852,6 @@ export default function InventoryPage() {
       key: 'location',
       header: 'Location',
       sortable: true,
-      editable: isAdmin,
-      editType: 'select',
-      editOptions: locationOptions,
     },
     {
       key: 'reorder_point',
