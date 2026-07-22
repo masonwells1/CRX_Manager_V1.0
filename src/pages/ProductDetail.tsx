@@ -425,11 +425,18 @@ export default function ProductDetail() {
   }, []);
 
   const saveExistingProductDetails = async () => {
+    if (!persistedProduct || !Number.isInteger(persistedProduct.pricing_version)) {
+      throw new Error('Reload this Product before saving details.');
+    }
     const result = await supabaseUntyped
       .from('products')
       .update(nonpricingProductPayload(product))
       .eq('id', id!)
+      .eq('pricing_version', persistedProduct.pricing_version)
       .select();
+    if (!result.error && Array.isArray(result.data) && result.data.length === 0) {
+      throw new Error('Product details changed after this page loaded. Reload before saving.');
+    }
     checkMutationResult(result, 'Update product details');
     setPersistedLabelFields({
       signalWord: product.signal_word ?? null,

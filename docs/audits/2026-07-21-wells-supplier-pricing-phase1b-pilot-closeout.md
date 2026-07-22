@@ -39,7 +39,7 @@ Supplier evidence changed. Every recorded Product cost and tier-price total abov
 
 ## Authenticated Wells Phase 2 canary
 
-One controlled Product-money canary was previewed and explicitly applied through the governed Phase 2 wrapper by authenticated admin `22c1fc50-4d2a-4baa-8ff8-341c0c7edd4f` on 2026-07-22. No second canary is required.
+One controlled Product-money canary was previewed and explicitly applied through the governed Phase 2 wrapper by an authenticated CRX admin on 2026-07-22. The durable database audit rows retain the exact actor identifier; this repository document intentionally does not duplicate it. No second canary is required.
 
 | Canary evidence | Verified value |
 |---|---|

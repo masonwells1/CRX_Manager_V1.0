@@ -17,7 +17,9 @@ const history = read("docs/reference/migration-history.md");
 const routes = read("docs/reference/pages-routes.md");
 const app = read("src/App.tsx");
 
-const historyClaim = history.match(/^#\s*Migration History\s*\((\d+)\s+migrations?\)/m)?.[1];
+const historyClaim = history.match(
+  /^#\s*Migration History\s*\((\d+)\s+(?:migrations?|migration-history entries)\)/m,
+)?.[1];
 row("migration-history count", historyClaim ?? "missing", migrations.length,
   Number(historyClaim) === migrations.length ? "PASS" : "FAIL");
 

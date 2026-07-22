@@ -5,12 +5,14 @@ const {
   mockApplyPricing,
   mockPreviewPricing,
   mockProductUpdate,
+  mockProductEq,
   mockToast,
   mockGetCostBasisWorkspace,
 } = vi.hoisted(() => ({
   mockApplyPricing: vi.fn(),
   mockPreviewPricing: vi.fn(),
   mockProductUpdate: vi.fn(),
+  mockProductEq: vi.fn(),
   mockToast: vi.fn(),
   mockGetCostBasisWorkspace: vi.fn(),
 }));
@@ -52,6 +54,7 @@ const product = {
   suggested_rate: null,
   notes: null,
   internal_notes: null,
+  quoting_notes: 'Default quote guidance',
   is_active: true,
   pricing_version: 7,
   created_at: '2026-01-01T00:00:00Z',
@@ -61,19 +64,27 @@ const product = {
 let routeProductId = product.id;
 
 let productLoadResults: Array<{ data: typeof product | null; error: unknown }> = [];
+let productMutationResult: { data: Array<typeof product>; error: unknown } = {
+  data: [product],
+  error: null,
+};
 
 function chainable(resolveWith: unknown) {
   const builder: Record<string, unknown> = {};
   let resolved = resolveWith;
   const self = () => builder;
   for (const method of [
-    'select', 'insert', 'upsert', 'delete', 'eq', 'neq', 'gt', 'gte', 'lt', 'lte',
+    'select', 'insert', 'upsert', 'delete', 'neq', 'gt', 'gte', 'lt', 'lte',
     'like', 'ilike', 'is', 'in', 'or', 'not', 'match', 'order', 'limit', 'range',
     'single', 'csv', 'explain',
   ]) {
     builder[method] = vi.fn(self);
   }
-  builder.update = mockProductUpdate.mockImplementation(self);
+  builder.eq = mockProductEq.mockImplementation(self);
+  builder.update = mockProductUpdate.mockImplementation(() => {
+    resolved = productMutationResult;
+    return builder;
+  });
   builder.maybeSingle = vi.fn(() => {
     resolved = productLoadResults.shift() ?? { data: product, error: null };
     return builder;
@@ -170,6 +181,7 @@ describe('ProductDetail governed pricing flow', () => {
     vi.clearAllMocks();
     routeProductId = product.id;
     productLoadResults = [];
+    productMutationResult = { data: [product], error: null };
     mockPreviewPricing.mockResolvedValue({
       change_set_id: '22222222-2222-4222-8222-222222222222',
       request_fingerprint: 'preview-fingerprint',
@@ -245,11 +257,35 @@ describe('ProductDetail governed pricing flow', () => {
     });
   });
 
-  it('shows a dedicated customer-facing Quoting Notes field', async () => {
+  it('loads and saves customer-facing Quoting Notes with pricing-version conflict protection', async () => {
     render(<ProductDetail />);
-    expect(await screen.findByLabelText('Quoting Notes')).toBeInTheDocument();
+    const quotingNotes = await screen.findByLabelText('Quoting Notes');
+    expect(quotingNotes).toHaveValue('Default quote guidance');
     expect(screen.getByText(/customer-facing guidance automatically added to the quote line/i))
       .toBeInTheDocument();
+
+    fireEvent.change(quotingNotes, { target: { value: 'Updated quote guidance' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+
+    await waitFor(() => expect(mockProductUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ quoting_notes: 'Updated quote guidance' }),
+    ));
+    expect(mockProductEq).toHaveBeenCalledWith('pricing_version', product.pricing_version);
+  });
+
+  it('rejects a direct detail save when the loaded pricing version is stale', async () => {
+    productMutationResult = { data: [], error: null };
+    render(<ProductDetail />);
+    const quotingNotes = await screen.findByLabelText('Quoting Notes');
+
+    fireEvent.change(quotingNotes, { target: { value: 'Stale overwrite attempt' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
+      'error',
+      'Product details changed after this page loaded. Reload before saving.',
+    ));
+    expect(mockProductEq).toHaveBeenCalledWith('pricing_version', product.pricing_version);
   });
 
   it('defaults supplier evidence selection to keeping sell prices with Product-detail provenance', async () => {
