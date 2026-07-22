@@ -18,25 +18,12 @@ import { exportToCSV, fmtCSV } from '../lib/csvExport';
 import { formatCents as fmt } from '../lib/money';
 import type { APAgingRow, APDashboardSummary } from '../types';
 
-function chicagoBusinessToday(): string {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'America/Chicago',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).formatToParts(new Date());
-  const value = (type: Intl.DateTimeFormatPartTypes) =>
-    parts.find((part) => part.type === type)?.value ?? '';
-  return `${value('year')}-${value('month')}-${value('day')}`;
-}
-
 export default function AccountsPayable() {
   const navigate = useNavigate();
   const { toast } = useToast();
   const [loading, setLoading] = useState(true);
   const [summary, setSummary] = useState<APDashboardSummary | null>(null);
   const [agingData, setAgingData] = useState<APAgingRow[]>([]);
-  const asOfDate = chicagoBusinessToday();
 
   // Audit #35: split the dashboard fetch into two so changing the as-of-date
   // only re-runs the aging query (which depends on it). The summary query is
@@ -214,13 +201,9 @@ export default function AccountsPayable() {
         <div className="flex items-end gap-4 mb-4">
           <div>
             <label className="block text-xs font-medium text-secondary mb-1">Report Date</label>
-            <input
-              type="date"
-              value={asOfDate}
-              disabled
-              aria-describedby="ap-history-note"
-              className="px-3 py-2 text-sm border border-gray-200 rounded-lg bg-gray-50 text-secondary"
-            />
+            <span className="block rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-secondary">
+              Server-determined Chicago business date
+            </span>
             <p id="ap-history-note" className="mt-1 max-w-xs text-xs text-secondary">
               Current AP only. Exact historical AP is unavailable until durable bill history is recorded.
             </p>

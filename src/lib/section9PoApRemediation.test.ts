@@ -75,13 +75,14 @@ describe('Section 9 PO/AP HIGH remediation contracts', () => {
     const page = source('src', 'pages', 'AccountsPayable.tsx');
     expect(page).toContain('Current AP only.');
     expect(page).toContain('Exact historical AP is unavailable');
-    expect(page).toContain("timeZone: 'America/Chicago'");
     expect(page).toContain("supabase.rpc('get_ap_aging')");
     expect(page).not.toContain('requestAsOfDate');
+    expect(page).not.toContain('chicagoBusinessToday');
+    expect(page).toContain('Server-determined Chicago business date');
     expect(migration).toContain(
       "DEFAULT ((clock_timestamp() AT TIME ZONE 'America/Chicago')::date)",
     );
-    expect(page).toMatch(/type="date"[\s\S]*?value=\{asOfDate\}[\s\S]*?disabled/);
+    expect(page).not.toContain('type="date"');
   });
 
   it('locks the stored bill before checking both accounting periods', () => {
