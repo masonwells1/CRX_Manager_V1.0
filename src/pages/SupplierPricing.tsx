@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   Download,
   FileSpreadsheet,
@@ -828,12 +829,12 @@ export default function SupplierPricing() {
                   Comparison remains read-only.
                 </div>
               )}
-              <a
-                href={`/products/${basisWorkspace.product.id}`}
+              <Link
+                to={`/products/${basisWorkspace.product.id}`}
                 className="inline-flex items-center rounded-lg border border-crx-green px-3 py-2 text-sm font-medium text-crx-green hover:bg-green-50"
               >
                 Open Product cost-basis flow
-              </a>
+              </Link>
 
               <div className="space-y-2">
                 <p className="text-sm font-semibold text-nav-dark">Comparable supplier candidates</p>

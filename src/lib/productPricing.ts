@@ -291,7 +291,7 @@ function exactDollarCents(value: string | null, field: string): bigint | null {
   return cents;
 }
 
-function exactIntegerCents(value: unknown, field: string): bigint | null {
+export function exactIntegerCents(value: unknown, field: string): bigint | null {
   if (value === null || value === undefined) return null;
   if (typeof value === 'bigint') return value;
   if (typeof value === 'string' && /^-?\d+$/.test(value)) return BigInt(value);
@@ -299,7 +299,7 @@ function exactIntegerCents(value: unknown, field: string): bigint | null {
   throw new Error(`Pricing RPC returned an unsafe ${field} value.`);
 }
 
-function requiredExactIntegerCents(value: unknown, field: string): bigint {
+export function requiredExactIntegerCents(value: unknown, field: string): bigint {
   const cents = exactIntegerCents(value, field);
   if (cents === null) throw new Error(`Pricing RPC returned a missing ${field} value.`);
   return cents;

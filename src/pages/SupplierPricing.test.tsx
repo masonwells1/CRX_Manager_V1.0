@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const {
@@ -61,6 +62,14 @@ vi.mock('../lib/productPricing', async () => {
 
 import SupplierPricing from './SupplierPricing';
 
+function renderSupplierPricing() {
+  return render(
+    <MemoryRouter>
+      <SupplierPricing />
+    </MemoryRouter>,
+  );
+}
+
 describe('SupplierPricing page', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -113,7 +122,7 @@ describe('SupplierPricing page', () => {
       }],
     });
 
-    render(<SupplierPricing />);
+    renderSupplierPricing();
 
     expect(await screen.findByRole('heading', { name: 'Supplier Pricing' })).toBeInTheDocument();
     expect(screen.getByText(
@@ -174,7 +183,7 @@ describe('SupplierPricing page', () => {
       conflict_count: 0, invalid_count: 0, apply_allowed: true, rows: [],
     });
 
-    render(<SupplierPricing />);
+    renderSupplierPricing();
     fireEvent.click(await screen.findByRole('tab', { name: 'Comparison' }));
     expect(await screen.findByText('The Andersons')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Open Product cost-basis flow' }))
@@ -220,7 +229,7 @@ describe('SupplierPricing page', () => {
         conflict_count: 0, invalid_count: 0, apply_allowed: true, rows: [],
       });
 
-    render(<SupplierPricing />);
+    renderSupplierPricing();
     fireEvent.click(await screen.findByRole('tab', { name: 'Comparison' }));
     expect(await screen.findByText('First supplier')).toBeInTheDocument();
     expect(screen.getByText('Second supplier')).toBeInTheDocument();
@@ -256,7 +265,7 @@ describe('SupplierPricing page', () => {
       conflict_count: 0, invalid_count: 0, apply_allowed: true, rows: [],
     });
 
-    render(<SupplierPricing />);
+    renderSupplierPricing();
     fireEvent.click(await screen.findByRole('tab', { name: 'Comparison' }));
 
     expect(await screen.findByText('Normalized received cost: $120.00')).toBeInTheDocument();
@@ -300,7 +309,7 @@ describe('SupplierPricing page', () => {
       purchase_candidates: [],
     });
 
-    render(<SupplierPricing />);
+    renderSupplierPricing();
     fireEvent.click(await screen.findByRole('tab', { name: 'Comparison' }));
     await waitFor(() => expect(mockGetBasisWorkspace).toHaveBeenCalledWith('product-1'));
 
@@ -349,7 +358,7 @@ describe('SupplierPricing page', () => {
       purchase_candidates: [],
     }));
 
-    render(<SupplierPricing />);
+    renderSupplierPricing();
     fireEvent.click(await screen.findByRole('tab', { name: 'Comparison' }));
     expect(await screen.findByRole('link', { name: 'Open Product cost-basis flow' }))
       .toHaveAttribute('href', '/products/product-1');

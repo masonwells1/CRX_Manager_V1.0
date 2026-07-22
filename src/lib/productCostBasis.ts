@@ -1,6 +1,10 @@
 import { assertRpcResult, supabase } from './db';
 import type { ProductCostBasis, ProductCostBasisSelectionSource } from '../types';
-import type { PricingPreviewInputRow } from './productPricing';
+import {
+  exactIntegerCents,
+  requiredExactIntegerCents,
+  type PricingPreviewInputRow,
+} from './productPricing';
 
 export type ProductCostBasisRecord = Pick<
   ProductCostBasis,
@@ -79,14 +83,24 @@ type ProductCostBasisWorkspaceWire = Omit<
 };
 
 function exactCents(value: CentsWire, field: string): bigint {
-  if (typeof value === 'bigint') return value;
-  if (typeof value === 'number' && Number.isSafeInteger(value)) return BigInt(value);
-  if (typeof value === 'string' && /^\d+$/.test(value)) return BigInt(value);
-  throw new Error(`Cost basis RPC returned unsafe ${field}.`);
+  try {
+    const cents = requiredExactIntegerCents(value, field);
+    if (cents < 0n) throw new Error('negative cents');
+    return cents;
+  } catch {
+    throw new Error(`Cost basis RPC returned unsafe ${field}.`);
+  }
 }
 
 function optionalExactCents(value: CentsWire | null, field: string): bigint | null {
-  return value === null ? null : exactCents(value, field);
+  if (value === null) return null;
+  try {
+    const cents = exactIntegerCents(value, field);
+    if (cents === null || cents < 0n) throw new Error('invalid cents');
+    return cents;
+  } catch {
+    throw new Error(`Cost basis RPC returned unsafe ${field}.`);
+  }
 }
 
 export function formatCostBasisDollars(cents: bigint): string {

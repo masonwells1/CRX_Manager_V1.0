@@ -376,15 +376,35 @@ describe('product pricing RPC wrappers', () => {
   });
 
   it('applies the approved change set with its exact request fingerprint', async () => {
-    const response = { change_set_id: 'change-1', status: 'applied', applied_count: 1, rows: [] };
+    const response = {
+      change_set_id: 'change-1',
+      status: 'applied',
+      applied_count: 1,
+      rows: [],
+      cost_basis_rows: [{
+        id: 'basis-1',
+        product_id: 'product-1',
+        basis_type: 'manual_override',
+        cost_cents: '9007199254740993',
+        supplier_price_observation_id: null,
+        purchase_order_item_id: null,
+        selection_source: 'product_page',
+        reason: 'Approved cost update',
+        selected_at: '2026-07-22T07:00:00Z',
+      }],
+    };
     mockRpc.mockResolvedValue({ data: response, error: null });
 
-    await expect(applyProductPricingChangeSet({
+    const result = await applyProductPricingChangeSet({
       changeSetId: 'change-1',
       requestFingerprint: 'request-fingerprint',
       performedBy: 'actor-1',
       idempotencyKey: 'apply-key',
-    })).resolves.toEqual(response);
+    });
+    expect(result).toEqual({
+      ...response,
+      cost_basis_rows: [{ ...response.cost_basis_rows[0], cost_cents: 9_007_199_254_740_993n }],
+    });
 
     expect(mockRpc).toHaveBeenCalledWith('apply_product_cost_basis_change_set', {
       p_change_set_id: 'change-1',
@@ -393,6 +413,36 @@ describe('product pricing RPC wrappers', () => {
       p_idempotency_key: 'apply-key',
     });
     expect(mockAssertRpcResult).toHaveBeenCalledWith(response, 'apply_product_cost_basis_change_set');
+  });
+
+  it('rejects an applied cost-basis row with missing cents', async () => {
+    mockRpc.mockResolvedValue({
+      data: {
+        change_set_id: 'change-1',
+        status: 'applied',
+        applied_count: 1,
+        rows: [],
+        cost_basis_rows: [{
+          id: 'basis-1',
+          product_id: 'product-1',
+          basis_type: 'manual_override',
+          cost_cents: null,
+          supplier_price_observation_id: null,
+          purchase_order_item_id: null,
+          selection_source: 'product_page',
+          reason: 'Approved cost update',
+          selected_at: '2026-07-22T07:00:00Z',
+        }],
+      },
+      error: null,
+    });
+
+    await expect(applyProductPricingChangeSet({
+      changeSetId: 'change-1',
+      requestFingerprint: 'request-fingerprint',
+      performedBy: 'actor-1',
+      idempotencyKey: 'apply-key',
+    })).rejects.toThrow('Pricing RPC returned a missing cost basis cents value.');
   });
 
   it('throws the Supabase error before asserting a result', async () => {
