@@ -82,6 +82,26 @@ const centsToDollars = (cents: bigint): number => Number(cents) / 100;
 const multiplyCentsByQuantity = (unitCents: bigint, quantity: number): bigint =>
   BigInt(Math.round(Number(unitCents) * quantity));
 
+const stableStringify = (value: unknown): string => {
+  if (value === undefined || value === null) return 'null';
+  if (typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
+
+  return `{${Object.entries(value as Record<string, unknown>)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, item]) => `${JSON.stringify(key)}:${stableStringify(item)}`)
+    .join(',')}}`;
+};
+
+const payloadFingerprint = (value: unknown): string => {
+  let hash = 2166136261;
+  for (const char of stableStringify(value)) {
+    hash ^= char.charCodeAt(0);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
+};
+
 const rejectPartiallyInvalidQuoteGroups = (
   candidates: ValidQuoteRow[],
   invalid: InvalidQuoteRow[]
@@ -134,8 +154,8 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
   const [uploadResults, setUploadResults] = useState<{ success: number; failed: number; details: string[] } | null>(null);
   const importIdempotencyKeysRef = useRef(new Map<string, string>());
 
-  const getImportIdempotencyKey = (quoteNumber: string): string => {
-    const scope = `${profile?.id ?? 'unknown'}:${normalizeQuoteNumber(quoteNumber)}`;
+  const getImportIdempotencyKey = (quoteNumber: string, payloadScope: string): string => {
+    const scope = `${profile?.id ?? 'unknown'}:${normalizeQuoteNumber(quoteNumber)}:${payloadScope}`;
     const cached = importIdempotencyKeysRef.current.get(scope);
     if (cached) return cached;
     const key = generateIdempotencyKey('save_quote_bulk_import', scope);
@@ -143,8 +163,8 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
     return key;
   };
 
-  const clearImportIdempotencyKey = (quoteNumber: string): void => {
-    importIdempotencyKeysRef.current.delete(`${profile?.id ?? 'unknown'}:${normalizeQuoteNumber(quoteNumber)}`);
+  const clearImportIdempotencyKey = (quoteNumber: string, payloadScope: string): void => {
+    importIdempotencyKeysRef.current.delete(`${profile?.id ?? 'unknown'}:${normalizeQuoteNumber(quoteNumber)}:${payloadScope}`);
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -382,7 +402,7 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
     try {
       const [custRes, prodRes, convRes] = await Promise.all([
         supabase.from('customers').select('id, farm_name'),
-        supabase.from('products').select('id, product_name, sku, current_cost, inventory_unit'),
+        supabase.from('products').select('id, product_name, sku, current_cost, inventory_unit, unit_size'),
         supabase.from('unit_conversions').select('*'),
       ]);
 
@@ -464,7 +484,7 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
               const productId = productMap.get(item.product_name.toLowerCase().trim())!;
 
               const product = productDetailsById.get(productId);
-              const inventoryUnit = product?.inventory_unit;
+              const inventoryUnit = product?.inventory_unit || product?.unit_size;
               const hasPriceOverride = typeof item.price_per_unit === 'number';
               const pricePerUnitCents = toMoneyCents(hasPriceOverride ? item.price_per_unit! : 0);
               const currentCostCents = toMoneyCents(product?.current_cost);
@@ -560,7 +580,8 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
               is_planned: false,
             };
 
-            const idemKey = getImportIdempotencyKey(quoteNumber);
+            const idemPayloadScope = payloadFingerprint({ quotePayload, sectionsPayload });
+            const idemKey = getImportIdempotencyKey(quoteNumber, idemPayloadScope);
             const { data, error } = await supabase.rpc('save_quote', {
               p_quote_id: null as unknown as string,
               p_quote_payload: quotePayload as Json,
@@ -576,7 +597,7 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
             }
 
             const result = assertRpcResult<{ quote_id: string }>(data, 'save_quote');
-            clearImportIdempotencyKey(quoteNumber);
+            clearImportIdempotencyKey(quoteNumber, idemPayloadScope);
             try {
               await logActivity({
                 event: 'quote_bulk_imported',

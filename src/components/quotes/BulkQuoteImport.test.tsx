@@ -28,7 +28,7 @@ const mocks = vi.hoisted(() => {
     from: vi.fn((table: string) => {
       const dataByTable: Record<string, unknown[]> = {
         customers: [{ id: 'customer-1', farm_name: 'North Farm' }],
-        products: [{ id: 'product-1', product_name: 'Roundup', sku: 'RU-1', current_cost: 10, inventory_unit: 'Gallon' }],
+        products: [{ id: 'product-1', product_name: 'Roundup', sku: 'RU-1', current_cost: 10, inventory_unit: 'Gallon', unit_size: null }],
         unit_conversions: [{ unit: 'oz', factor_oz: 1 }, { unit: 'Gallon', factor_oz: 128 }],
       };
       return chainable({ data: dataByTable[table] ?? [], error: null });
@@ -127,6 +127,7 @@ describe('BulkQuoteImport', () => {
       price_per_unit: 20,
       price_override: 20,
     }));
+    expect(mocks.assertRpcResult).toHaveBeenCalledWith({ quote_id: 'quote-1' }, 'save_quote');
     expect(mocks.logActivity).toHaveBeenCalledWith(expect.objectContaining({
       event: 'quote_bulk_imported',
       performedBy: 'user-1',
@@ -168,6 +169,89 @@ describe('BulkQuoteImport', () => {
     expect(saveQuoteArgs.p_quote_payload.quote_number).toBe('Q-500');
     expect(saveQuoteArgs.p_idempotency_key).toContain('Q-500');
     expect(saveQuoteArgs.p_sections[0].items).toHaveLength(2);
+  });
+
+  it('uses product unit_size when inventory_unit is blank', async () => {
+    mocks.from
+      .mockImplementationOnce(() => mocks.chainable({
+        data: [{ id: 'customer-1', farm_name: 'North Farm' }],
+        error: null,
+      }))
+      .mockImplementationOnce(() => mocks.chainable({
+        data: [{ id: 'product-1', product_name: 'Roundup', sku: 'RU-1', current_cost: 10, inventory_unit: null, unit_size: 'Gallon' }],
+        error: null,
+      }))
+      .mockImplementationOnce(() => mocks.chainable({
+        data: [{ unit: 'oz', factor_oz: 1 }, { unit: 'Gallon', factor_oz: 128 }],
+        error: null,
+      }));
+    const { container } = render(<BulkQuoteImport {...defaultProps} />);
+    const csv = [
+      'quote_number,customer_farm_name,product_name,acres,price_per_unit,oz_per_acre,status',
+      'Q-550,North Farm,Roundup,10,20,32,draft',
+    ].join('\n');
+    const file = new File([csv], 'quotes.csv', { type: 'text/csv' });
+    Object.defineProperty(file, 'text', { value: () => Promise.resolve(csv) });
+
+    const input = container.querySelector('input[type="file"]');
+    expect(input).toBeTruthy();
+    fireEvent.change(input as HTMLInputElement, { target: { files: [file] } });
+    await screen.findByText(/quotes\.csv/i);
+    fireEvent.click(screen.getByRole('button', { name: /parse file/i }));
+
+    await screen.findByText(/Q-550/);
+    fireEvent.click(screen.getByRole('button', { name: /import 1 quote/i }));
+
+    await waitFor(() => expect(mocks.rpc).toHaveBeenCalledWith('save_quote', expect.anything()));
+    expect(screen.queryByText(/Unsupported inventory unit/i)).not.toBeInTheDocument();
+  });
+
+  it('uses a different retry key when the same quote number has changed payload content', async () => {
+    mocks.rpc
+      .mockResolvedValueOnce({ data: null, error: { message: 'dropped response' } } as never)
+      .mockResolvedValueOnce({ data: { quote_id: 'quote-1' }, error: null });
+    const { container } = render(<BulkQuoteImport {...defaultProps} />);
+    const firstCsv = [
+      'quote_number,customer_farm_name,product_name,acres,price_per_unit,oz_per_acre,status',
+      'Q-800,North Farm,Roundup,10,20,32,draft',
+    ].join('\n');
+    const secondCsv = [
+      'quote_number,customer_farm_name,product_name,acres,price_per_unit,oz_per_acre,status',
+      'Q-800,North Farm,Roundup,10,21,32,draft',
+    ].join('\n');
+    const input = container.querySelector('input[type="file"]');
+    expect(input).toBeTruthy();
+
+    const firstFile = new File([firstCsv], 'quotes.csv', { type: 'text/csv' });
+    Object.defineProperty(firstFile, 'text', { value: () => Promise.resolve(firstCsv) });
+    fireEvent.change(input as HTMLInputElement, { target: { files: [firstFile] } });
+    await screen.findByText(/quotes\.csv/i);
+    fireEvent.click(screen.getByRole('button', { name: /parse file/i }));
+    await screen.findByText(/Q-800/);
+    fireEvent.click(screen.getByRole('button', { name: /import 1 quote/i }));
+    await screen.findByText(/dropped response/);
+
+    const firstSaveQuoteArgs = mocks.rpc.mock.calls.find(([rpcName]) => rpcName === 'save_quote')?.[1] as {
+      p_idempotency_key: string;
+    };
+
+    const closeButtons = screen.getAllByRole('button', { name: /close/i });
+    fireEvent.click(closeButtons[closeButtons.length - 1]);
+    const retryInput = container.querySelector('input[type="file"]');
+    expect(retryInput).toBeTruthy();
+    const secondFile = new File([secondCsv], 'quotes.csv', { type: 'text/csv' });
+    Object.defineProperty(secondFile, 'text', { value: () => Promise.resolve(secondCsv) });
+    fireEvent.change(retryInput as HTMLInputElement, { target: { files: [secondFile] } });
+    fireEvent.click(screen.getByRole('button', { name: /parse file/i }));
+    await screen.findByText(/Q-800/);
+    fireEvent.click(screen.getByRole('button', { name: /import 1 quote/i }));
+
+    await waitFor(() => expect(mocks.rpc.mock.calls.filter(([rpcName]) => rpcName === 'save_quote')).toHaveLength(2));
+    const saveQuoteCalls = mocks.rpc.mock.calls.filter(([rpcName]) => rpcName === 'save_quote');
+    const secondSaveQuoteArgs = saveQuoteCalls[1][1] as { p_idempotency_key: string };
+    expect(firstSaveQuoteArgs.p_idempotency_key).toContain('Q-800');
+    expect(secondSaveQuoteArgs.p_idempotency_key).toContain('Q-800');
+    expect(secondSaveQuoteArgs.p_idempotency_key).not.toBe(firstSaveQuoteArgs.p_idempotency_key);
   });
 
   it('does not fail an acknowledged import when activity logging fails', async () => {
