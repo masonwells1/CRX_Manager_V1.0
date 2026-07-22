@@ -245,6 +245,13 @@ describe('ProductDetail governed pricing flow', () => {
     });
   });
 
+  it('shows a dedicated customer-facing Quoting Notes field', async () => {
+    render(<ProductDetail />);
+    expect(await screen.findByLabelText('Quoting Notes')).toBeInTheDocument();
+    expect(screen.getByText(/customer-facing guidance automatically added to the quote line/i))
+      .toBeInTheDocument();
+  });
+
   it('defaults supplier evidence selection to keeping sell prices with Product-detail provenance', async () => {
     render(<ProductDetail />);
     await screen.findByText('Select supplier evidence');

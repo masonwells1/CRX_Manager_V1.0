@@ -1241,6 +1241,390 @@ BEGIN
 END;
 $proof$;
 
+-- Workbook v2: an information-only row updates one Product exactly once,
+-- creates no cost history/basis row, and writes one atomic activity record.
+RESET ROLE;
+DO $proof$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM public.pricing_workbook_exports
+    WHERE id = '77777777-7777-4777-8777-777777777777'
+      AND status = 'expired'
+      AND format_version = 'crx-product-pricing-phase1a-v1'
+  ) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: workbook v2 did not expire the retained v1 export';
+  END IF;
+END;
+$proof$;
+SET ROLE authenticated;
+DO $proof$
+BEGIN
+  BEGIN
+    PERFORM public.preview_product_cost_basis_changes(
+      'pricing_worksheet', '77777777-7777-4777-8777-777777777777',
+      jsonb_build_array(jsonb_build_object('product_id',
+        'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa5')),
+      '11111111-1111-4111-8111-111111111111',
+      'phase2-workbook-v1-reject'
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: workbook v1 remained previewable';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF SQLERRM NOT LIKE 'WORKBOOK_V2_EXPORT_REQUIRED%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: workbook v1 failed for wrong reason: %', SQLERRM;
+    END IF;
+  END;
+END;
+$proof$;
+
+INSERT INTO phase2_proof(key, value)
+VALUES ('workbook-v2-info-export', public.create_pricing_workbook_export(
+  ARRAY['aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa5'::uuid],
+  '11111111-1111-4111-8111-111111111111',
+  'phase2-workbook-v2-info-export'
+));
+
+INSERT INTO phase2_proof(key, value)
+SELECT 'workbook-v2-info-preview', public.preview_product_cost_basis_changes(
+  'pricing_worksheet', (e.value->>'export_id')::uuid,
+  jsonb_build_array((e.value->'rows'->0) || jsonb_build_object(
+    'pricing_mode', '',
+    'new_cost', e.value->'rows'->0->>'current_cost',
+    'tier1_margin_percent', e.value->'rows'->0->>'current_tier1_margin_percent',
+    'tier1_price', e.value->'rows'->0->>'current_tier1_price',
+    'tier2_margin_percent', e.value->'rows'->0->>'current_tier2_margin_percent',
+    'tier2_price', e.value->'rows'->0->>'current_tier2_price',
+    'tier3_margin_percent', e.value->'rows'->0->>'current_tier3_margin_percent',
+    'tier3_price', e.value->'rows'->0->>'current_tier3_price',
+    'change_reason', 'Workbook v2 info-only proof',
+    'suggested_rate', '0.25-0.5 gal',
+    'rate_per_acre', '0.5',
+    'rate_unit', 'gal',
+    'use_timing', 'Early post-emergence',
+    'internal_notes', 'Keep above freezing',
+    'quoting_notes', 'Use this internal quote guidance',
+    'has_formula', false,
+    'formula_cells', '[]'::jsonb
+  )),
+  '11111111-1111-4111-8111-111111111111',
+  'phase2-workbook-v2-info-preview'
+)
+FROM phase2_proof e WHERE e.key = 'workbook-v2-info-export';
+
+DO $proof$
+DECLARE
+  v_preview jsonb := (SELECT value FROM phase2_proof WHERE key = 'workbook-v2-info-preview');
+BEGIN
+  IF v_preview->>'status' <> 'previewed'
+     OR (v_preview->>'ready_count')::integer <> 1
+     OR (v_preview->>'pricing_change_count')::integer <> 0
+     OR (v_preview->>'product_info_change_count')::integer <> 1
+     OR (v_preview->>'basis_change_count')::integer <> 0 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: workbook v2 info-only preview shape drifted: %', v_preview;
+  END IF;
+  BEGIN
+    PERFORM public.apply_product_pricing_change_set(
+      (v_preview->>'change_set_id')::uuid, v_preview->>'request_fingerprint',
+      '11111111-1111-4111-8111-111111111111',
+      'phase2-workbook-v2-direct-bypass'
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: workbook v2 bypassed the Phase 2 wrapper';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF SQLERRM NOT LIKE 'PRODUCT_COST_BASIS_CONTEXT_REQUIRED%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: workbook v2 bypass failed for wrong reason: %', SQLERRM;
+    END IF;
+  END;
+END;
+$proof$;
+
+INSERT INTO phase2_proof(key, value)
+SELECT 'workbook-v2-info-apply', public.apply_product_cost_basis_change_set(
+  (value->>'change_set_id')::uuid, value->>'request_fingerprint',
+  '11111111-1111-4111-8111-111111111111',
+  'phase2-workbook-v2-info-apply'
+)
+FROM phase2_proof WHERE key = 'workbook-v2-info-preview';
+
+RESET ROLE;
+DO $proof$
+DECLARE
+  v_preview jsonb := (SELECT value FROM phase2_proof WHERE key = 'workbook-v2-info-preview');
+  v_export jsonb := (SELECT value FROM phase2_proof WHERE key = 'workbook-v2-info-export');
+BEGIN
+  IF (SELECT quoting_notes FROM public.products
+      WHERE id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa5')
+       IS DISTINCT FROM 'Use this internal quote guidance'
+     OR (SELECT suggested_rate FROM public.products
+         WHERE id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa5')
+       IS DISTINCT FROM '0.25-0.5 gal'
+     OR (SELECT rate_per_acre FROM public.products
+         WHERE id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa5') <> 0.5
+     OR (SELECT rate_unit FROM public.products
+         WHERE id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa5') IS DISTINCT FROM 'gal'
+     OR (SELECT use_timing FROM public.products
+         WHERE id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa5')
+       IS DISTINCT FROM 'Early post-emergence'
+     OR (SELECT internal_notes FROM public.products
+         WHERE id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa5')
+       IS DISTINCT FROM 'Keep above freezing'
+     OR (SELECT pricing_version FROM public.products
+         WHERE id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa5')
+       IS DISTINCT FROM (v_export->'rows'->0->>'row_version')::bigint + 1 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: workbook v2 info-only Product update drifted';
+  END IF;
+  IF (SELECT count(*) FROM public.cost_history
+      WHERE change_set_id = (v_preview->>'change_set_id')::uuid) <> 0 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: info-only update wrote cost history';
+  END IF;
+  IF (SELECT count(*) FROM public.product_cost_basis
+      WHERE pricing_change_set_id = (v_preview->>'change_set_id')::uuid) <> 0 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: info-only apply wrote a basis row';
+  END IF;
+  IF (SELECT count(*) FROM public.activity_feed
+      WHERE event_type = 'product_info_updated'
+        AND related_entity_id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa5') <> 1 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: info-only apply did not write one activity event';
+  END IF;
+END;
+$proof$;
+
+SET ROLE authenticated;
+
+-- Combined pricing + information uses one Product UPDATE: one version bump,
+-- one cost-history row, one basis row, and one information activity record.
+INSERT INTO phase2_proof(key, value)
+VALUES ('workbook-v2-combined-export', public.create_pricing_workbook_export(
+  ARRAY['aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa5'::uuid],
+  '11111111-1111-4111-8111-111111111111',
+  'phase2-workbook-v2-combined-export'
+));
+
+INSERT INTO phase2_proof(key, value)
+SELECT 'workbook-v2-combined-preview', public.preview_product_cost_basis_changes(
+  'pricing_worksheet', (e.value->>'export_id')::uuid,
+  jsonb_build_array((e.value->'rows'->0) || jsonb_build_object(
+    'pricing_mode', 'margin_driven',
+    'new_cost', '21.00',
+    'tier1_margin_percent', '20',
+    'tier2_margin_percent', '25',
+    'tier3_margin_percent', '30',
+    'tier1_price', e.value->'rows'->0->>'current_tier1_price',
+    'tier2_price', e.value->'rows'->0->>'current_tier2_price',
+    'tier3_price', e.value->'rows'->0->>'current_tier3_price',
+    'change_reason', 'Workbook v2 combined proof',
+    'quoting_notes', 'Updated combined quote guidance',
+    'basis_type', 'manual_override',
+    'basis_source', 'pricing_worksheet',
+    'basis_reason', 'Workbook v2 combined proof',
+    'basis_selection', false,
+    'has_formula', false,
+    'formula_cells', '[]'::jsonb
+  )),
+  '11111111-1111-4111-8111-111111111111',
+  'phase2-workbook-v2-combined-preview'
+)
+FROM phase2_proof e WHERE e.key = 'workbook-v2-combined-export';
+
+INSERT INTO phase2_proof(key, value)
+SELECT 'workbook-v2-combined-apply', public.apply_product_cost_basis_change_set(
+  (value->>'change_set_id')::uuid, value->>'request_fingerprint',
+  '11111111-1111-4111-8111-111111111111',
+  'phase2-workbook-v2-combined-apply'
+)
+FROM phase2_proof WHERE key = 'workbook-v2-combined-preview';
+
+RESET ROLE;
+DO $proof$
+DECLARE
+  v_preview jsonb := (SELECT value FROM phase2_proof WHERE key = 'workbook-v2-combined-preview');
+  v_export jsonb := (SELECT value FROM phase2_proof WHERE key = 'workbook-v2-combined-export');
+BEGIN
+  IF (SELECT pricing_version FROM public.products
+      WHERE id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa5')
+       IS DISTINCT FROM (v_export->'rows'->0->>'row_version')::bigint + 1
+     OR (SELECT current_cost FROM public.products
+         WHERE id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa5') <> 21.00
+     OR (SELECT quoting_notes FROM public.products
+         WHERE id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa5')
+       IS DISTINCT FROM 'Updated combined quote guidance' THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: workbook v2 combined Product update drifted';
+  END IF;
+  IF (SELECT count(*) FROM public.cost_history
+      WHERE change_set_id = (v_preview->>'change_set_id')::uuid) <> 1 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: combined apply did not write exactly one cost history row';
+  END IF;
+  IF (SELECT count(*) FROM public.product_cost_basis
+      WHERE pricing_change_set_id = (v_preview->>'change_set_id')::uuid
+        AND cost_cents = 2100) <> 1 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: combined apply did not write one matching basis row';
+  END IF;
+  IF (SELECT count(*) FROM public.activity_feed
+      WHERE event_type = 'product_info_updated'
+        AND related_entity_id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa5') <> 2 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: combined apply did not append one information event';
+  END IF;
+END;
+$proof$;
+
+-- Validation boundaries: negative rates fail, a newly selected incompatible
+-- unit fails, an unchanged legacy unit is grandfathered, stale versions fail,
+-- and conversion-factor drift invalidates the approved per-acre output.
+INSERT INTO public.unit_conversions(unit, factor_oz, unit_type)
+VALUES ('dryunit', 1, 'dry');
+SELECT set_config('crx.pricing_authorized', '', true);
+SELECT set_config('crx.pricing_mode', 'margin_driven', true);
+UPDATE public.products
+SET product_form = 'liquid', rate_unit = 'legacy-bad'
+WHERE id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa5';
+
+SET ROLE authenticated;
+INSERT INTO phase2_proof(key, value)
+VALUES ('workbook-v2-validation-export', public.create_pricing_workbook_export(
+  ARRAY['aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa5'::uuid],
+  '11111111-1111-4111-8111-111111111111',
+  'phase2-workbook-v2-validation-export'
+));
+
+INSERT INTO phase2_proof(key, value)
+SELECT 'workbook-v2-negative-preview', public.preview_product_cost_basis_changes(
+  'pricing_worksheet', (e.value->>'export_id')::uuid,
+  jsonb_build_array((e.value->'rows'->0) || jsonb_build_object(
+    'pricing_mode', '', 'new_cost', e.value->'rows'->0->>'current_cost',
+    'tier1_margin_percent', e.value->'rows'->0->>'current_tier1_margin_percent',
+    'tier1_price', e.value->'rows'->0->>'current_tier1_price',
+    'tier2_margin_percent', e.value->'rows'->0->>'current_tier2_margin_percent',
+    'tier2_price', e.value->'rows'->0->>'current_tier2_price',
+    'tier3_margin_percent', e.value->'rows'->0->>'current_tier3_margin_percent',
+    'tier3_price', e.value->'rows'->0->>'current_tier3_price',
+    'change_reason', 'Negative rate rejection proof',
+    'rate_per_acre', '-1', 'has_formula', false, 'formula_cells', '[]'::jsonb
+  )), '11111111-1111-4111-8111-111111111111',
+  'phase2-workbook-v2-negative-preview'
+)
+FROM phase2_proof e WHERE e.key = 'workbook-v2-validation-export';
+
+INSERT INTO phase2_proof(key, value)
+SELECT 'workbook-v2-incompatible-preview', public.preview_product_cost_basis_changes(
+  'pricing_worksheet', (e.value->>'export_id')::uuid,
+  jsonb_build_array((e.value->'rows'->0) || jsonb_build_object(
+    'pricing_mode', '', 'new_cost', e.value->'rows'->0->>'current_cost',
+    'tier1_margin_percent', e.value->'rows'->0->>'current_tier1_margin_percent',
+    'tier1_price', e.value->'rows'->0->>'current_tier1_price',
+    'tier2_margin_percent', e.value->'rows'->0->>'current_tier2_margin_percent',
+    'tier2_price', e.value->'rows'->0->>'current_tier2_price',
+    'tier3_margin_percent', e.value->'rows'->0->>'current_tier3_margin_percent',
+    'tier3_price', e.value->'rows'->0->>'current_tier3_price',
+    'change_reason', 'Incompatible unit rejection proof',
+    'rate_unit', 'dryunit', 'has_formula', false, 'formula_cells', '[]'::jsonb
+  )), '11111111-1111-4111-8111-111111111111',
+  'phase2-workbook-v2-incompatible-preview'
+)
+FROM phase2_proof e WHERE e.key = 'workbook-v2-validation-export';
+
+INSERT INTO phase2_proof(key, value)
+SELECT 'workbook-v2-grandfather-preview', public.preview_product_cost_basis_changes(
+  'pricing_worksheet', (e.value->>'export_id')::uuid,
+  jsonb_build_array((e.value->'rows'->0) || jsonb_build_object(
+    'pricing_mode', '', 'new_cost', e.value->'rows'->0->>'current_cost',
+    'tier1_margin_percent', e.value->'rows'->0->>'current_tier1_margin_percent',
+    'tier1_price', e.value->'rows'->0->>'current_tier1_price',
+    'tier2_margin_percent', e.value->'rows'->0->>'current_tier2_margin_percent',
+    'tier2_price', e.value->'rows'->0->>'current_tier2_price',
+    'tier3_margin_percent', e.value->'rows'->0->>'current_tier3_margin_percent',
+    'tier3_price', e.value->'rows'->0->>'current_tier3_price',
+    'change_reason', 'Grandfathered legacy unit proof',
+    'quoting_notes', 'Grandfather preview',
+    'has_formula', false, 'formula_cells', '[]'::jsonb
+  )), '11111111-1111-4111-8111-111111111111',
+  'phase2-workbook-v2-grandfather-preview'
+)
+FROM phase2_proof e WHERE e.key = 'workbook-v2-validation-export';
+
+DO $proof$
+DECLARE
+  v_negative jsonb := (SELECT value FROM phase2_proof WHERE key = 'workbook-v2-negative-preview');
+  v_incompatible jsonb := (SELECT value FROM phase2_proof WHERE key = 'workbook-v2-incompatible-preview');
+  v_grandfather jsonb := (SELECT value FROM phase2_proof WHERE key = 'workbook-v2-grandfather-preview');
+BEGIN
+  IF v_negative->'rows'->0->>'error_code' <> 'PRODUCT_RATE_PER_ACRE_INVALID'
+     OR v_incompatible->'rows'->0->>'error_code' <> 'PRODUCT_RATE_UNIT_INVALID'
+     OR v_grandfather->>'status' <> 'previewed'
+     OR (v_grandfather->>'product_info_change_count')::integer <> 1 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: workbook v2 validation/grandfather boundary drifted';
+  END IF;
+END;
+$proof$;
+
+RESET ROLE;
+SELECT set_config('crx.pricing_authorized', '', true);
+UPDATE public.products SET internal_notes = 'Concurrent stale edit'
+WHERE id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa5';
+SET ROLE authenticated;
+DO $proof$
+DECLARE v jsonb := (SELECT value FROM phase2_proof WHERE key = 'workbook-v2-grandfather-preview');
+BEGIN
+  BEGIN
+    PERFORM public.apply_product_cost_basis_change_set(
+      (v->>'change_set_id')::uuid, v->>'request_fingerprint',
+      '11111111-1111-4111-8111-111111111111', 'phase2-workbook-v2-stale-apply'
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: stale workbook v2 info row applied';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF SQLERRM NOT LIKE 'PRICING_ROW_CONFLICT%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: stale workbook row failed for wrong reason: %', SQLERRM;
+    END IF;
+  END;
+END;
+$proof$;
+
+INSERT INTO phase2_proof(key, value)
+VALUES ('workbook-v2-drift-export', public.create_pricing_workbook_export(
+  ARRAY['aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa5'::uuid],
+  '11111111-1111-4111-8111-111111111111',
+  'phase2-workbook-v2-drift-export'
+));
+INSERT INTO phase2_proof(key, value)
+SELECT 'workbook-v2-drift-preview', public.preview_product_cost_basis_changes(
+  'pricing_worksheet', (e.value->>'export_id')::uuid,
+  jsonb_build_array((e.value->'rows'->0) || jsonb_build_object(
+    'pricing_mode', '', 'new_cost', e.value->'rows'->0->>'current_cost',
+    'tier1_margin_percent', e.value->'rows'->0->>'current_tier1_margin_percent',
+    'tier1_price', e.value->'rows'->0->>'current_tier1_price',
+    'tier2_margin_percent', e.value->'rows'->0->>'current_tier2_margin_percent',
+    'tier2_price', e.value->'rows'->0->>'current_tier2_price',
+    'tier3_margin_percent', e.value->'rows'->0->>'current_tier3_margin_percent',
+    'tier3_price', e.value->'rows'->0->>'current_tier3_price',
+    'change_reason', 'Conversion drift proof',
+    'rate_per_acre', '1', 'rate_unit', 'oz',
+    'has_formula', false, 'formula_cells', '[]'::jsonb
+  )), '11111111-1111-4111-8111-111111111111',
+  'phase2-workbook-v2-drift-preview'
+)
+FROM phase2_proof e WHERE e.key = 'workbook-v2-drift-export';
+
+RESET ROLE;
+UPDATE public.unit_conversions SET factor_oz = 2 WHERE unit = 'oz';
+SET ROLE authenticated;
+DO $proof$
+DECLARE v jsonb := (SELECT value FROM phase2_proof WHERE key = 'workbook-v2-drift-preview');
+BEGIN
+  BEGIN
+    PERFORM public.apply_product_cost_basis_change_set(
+      (v->>'change_set_id')::uuid, v->>'request_fingerprint',
+      '11111111-1111-4111-8111-111111111111', 'phase2-workbook-v2-drift-apply'
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: conversion-drifted workbook v2 row applied';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF SQLERRM NOT LIKE 'CHANGE_SET_OUTPUT_DRIFT%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: conversion drift failed for wrong reason: %', SQLERRM;
+    END IF;
+  END;
+END;
+$proof$;
+
 RESET ROLE;
 INSERT INTO public.profiles(id, email, full_name, role, is_active)
 VALUES ('33333333-3333-4333-8333-333333333333', 'phase2-user@example.invalid', 'Phase 2 User', 'sales_rep', true);

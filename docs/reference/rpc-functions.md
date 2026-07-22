@@ -442,6 +442,8 @@ The Product Detail frontend sends `p_source = 'product_page'` because that field
 
 Live migration `20260722064814_wells_cost_basis_rollout_gate.sql` (submitted as `20260722060644_wells_cost_basis_rollout_gate`) changes that rollout decision from global-only to global-or-Product-allowlisted. The public RPC signatures do not change. `get_product_cost_basis_workspace(product_id)` reports `enabled` for the requested Product, and preview/apply plus all trigger readers enforce the same private helper. The exact ten Wells pilot Products are seeded and enabled; the global setting remains false, so non-pilot Products retain the Phase 1a path.
 
+Live migration `20260722091359_supplier_pricing_workbook_v2_product_info.sql` upgrades the existing workbook RPC contract to format v2. `create_pricing_workbook_export` snapshots the six editable fields—suggested rate, per-acre rate/unit, use timing, internal notes, and customer-facing quoting notes—while keeping Product name/category/SKU/package identity protected by the manifest. Preview validates and displays both Product-information and pricing effects; apply serializes the full batch and commits each Product with one version increment and one activity record. A Product-information-only row deliberately creates no cost-history or cost-basis entry.
+
 ### Custom Application Workflow
 - `create_job_from_quote_section(p_quote_id, p_section_id, p_performed_by, p_idempotency_key)` -> jsonb {job_id} -- Creates scheduled job from planned quote section with pre-filled chemicals and fields
 - `get_program_completion(p_season)` -> jsonb array -- Returns planned vs actual acres per program section for the Program Tracker dashboard

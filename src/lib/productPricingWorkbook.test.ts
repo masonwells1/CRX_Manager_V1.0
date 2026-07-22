@@ -17,6 +17,7 @@ import {
 
 const pricingExport: PricingWorkbookExport = {
   export_id: '11111111-1111-4111-8111-111111111111',
+  format_version: PRICING_WORKBOOK_FORMAT_VERSION,
   manifest_fingerprint: 'manifest-fingerprint',
   expires_at: '2026-07-17T21:00:00+00:00',
   rows: [
@@ -38,6 +39,12 @@ const pricingExport: PricingWorkbookExport = {
       current_tier2_price: '148.40',
       current_tier3_margin_percent: '10.125',
       current_tier3_price: '139.53',
+      suggested_rate: '12-16 oz',
+      rate_per_acre: '16',
+      rate_unit: 'oz',
+      use_timing: 'Post-emergence',
+      internal_notes: 'Warehouse note',
+      quoting_notes: 'Sales guidance',
     },
     {
       product_id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
@@ -57,6 +64,12 @@ const pricingExport: PricingWorkbookExport = {
       current_tier2_price: '0.07',
       current_tier3_margin_percent: null,
       current_tier3_price: null,
+      suggested_rate: null,
+      rate_per_acre: null,
+      rate_unit: null,
+      use_timing: null,
+      internal_notes: null,
+      quoting_notes: null,
     },
   ],
 };
@@ -160,6 +173,12 @@ describe('product pricing workbook', () => {
       new_cost: '125.40',
       tier1_margin_percent: '20',
       tier1_price: '156.75',
+      suggested_rate: '12-16 oz',
+      rate_per_acre: '16',
+      rate_unit: 'oz',
+      use_timing: 'Post-emergence',
+      internal_notes: 'Warehouse note',
+      quoting_notes: 'Sales guidance',
       has_formula: false,
       formula_cells: [],
     });
@@ -173,6 +192,8 @@ describe('product pricing workbook', () => {
     const tokenColumn = PRICING_WORKBOOK_HEADERS.indexOf('row_token') + 1;
     const modeColumn = PRICING_WORKBOOK_HEADERS.indexOf('pricing_mode') + 1;
     const currentCostColumn = PRICING_WORKBOOK_HEADERS.indexOf('current_cost') + 1;
+    const quotingNotesColumn = PRICING_WORKBOOK_HEADERS.indexOf('quoting_notes') + 1;
+    const ratePerAcreColumn = PRICING_WORKBOOK_HEADERS.indexOf('rate_per_acre') + 1;
 
     expect(workbook.worksheets.map((sheet) => sheet.name)).toEqual([
       PRICING_WORKBOOK_SHEET,
@@ -184,6 +205,9 @@ describe('product pricing workbook', () => {
     expect(worksheet.getCell(2, modeColumn).value).toBe('');
     expect(worksheet.getCell(2, currentCostColumn).value).toBe('125.40');
     expect(worksheet.getCell(2, currentCostColumn).numFmt).toBe('@');
+    expect(worksheet.getCell(2, quotingNotesColumn).value).toBe('Sales guidance');
+    expect(worksheet.getCell(2, quotingNotesColumn).protection.locked).toBe(false);
+    expect(worksheet.getCell(2, ratePerAcreColumn).numFmt).toBe('@');
     expect(manifest.getCell(5, 2).value).toBe('2');
     expect(worksheet.getCell(2, modeColumn).dataValidation).toMatchObject({
       type: 'list',
@@ -272,6 +296,15 @@ describe('product pricing workbook', () => {
       .rejects.toThrow(PricingWorkbookFormatError);
     await expect(parseProductPricingWorkbook(await writeWorkbook(workbook)))
       .rejects.toThrow('Missing CRX workbook manifest');
+  });
+
+  it('rejects an expired v1 workbook format and requires a fresh v2 export', async () => {
+    const { workbook } = await loadGeneratedWorkbook();
+    const manifest = workbook.getWorksheet(PRICING_WORKBOOK_MANIFEST_SHEET)!;
+    manifest.getCell(1, 2).value = 'crx-product-pricing-phase1a-v1';
+
+    await expect(parseProductPricingWorkbook(await writeWorkbook(workbook)))
+      .rejects.toThrow('not supported');
   });
 
   it('rejects a manifest that could make the browser parse an excessive row count', async () => {

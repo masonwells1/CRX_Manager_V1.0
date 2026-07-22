@@ -74,6 +74,33 @@ function makePreview(overrides: Partial<PricingPreviewResult> = {}): PricingPrev
 }
 
 describe('PricingChangePreviewModal', () => {
+  it('renders Product information old-to-new values without a pricing card for info-only rows', () => {
+    const preview = makePreview({ submitted_row_count: 1, conflict_count: 0 });
+    preview.rows = [{
+      ...preview.rows[1],
+      effect: {
+        ...preview.rows[1].effect!,
+        pricing_changed: false,
+        product_info_changes: {
+          quoting_notes: { before: null, after: 'Prefer early-season placement' },
+          rate_per_acre: { before: 12, after: 16 },
+        },
+      },
+    }];
+
+    render(
+      <PricingChangePreviewModal
+        open preview={preview} applying={false}
+        onClose={vi.fn()} onApprove={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('Product information')).toBeInTheDocument();
+    expect(screen.getByText('Quoting notes')).toBeInTheDocument();
+    expect(screen.getByText('Prefer early-season placement')).toBeInTheDocument();
+    expect(screen.queryByText('Cost')).not.toBeInTheDocument();
+  });
+
   it('renders summary, ordered rows, effects, warnings, and plain-English errors', () => {
     render(
       <PricingChangePreviewModal

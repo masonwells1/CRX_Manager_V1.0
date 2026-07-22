@@ -79,6 +79,8 @@ export interface Product {
   max_label_rate_unit: string | null;
   notes: string | null;
   internal_notes: string | null;
+  /** Customer-facing guidance preferred when adding this Product to a quote. */
+  quoting_notes?: string | null;
   is_active: boolean;
   created_at: string;
   updated_at: string;
@@ -211,6 +213,7 @@ export interface PricingWorkbookExportRecord {
   idempotency_key: string;
   row_count: number;
   status: PricingWorkbookExportStatus;
+  format_version?: string;
   created_at: string;
   expires_at: string;
 }
@@ -235,6 +238,12 @@ export interface PricingWorkbookExportRowRecord {
   current_tier2_price_cents: bigint | null;
   current_tier3_margin: number | null;
   current_tier3_price_cents: bigint | null;
+  suggested_rate_snapshot?: string | null;
+  rate_per_acre_snapshot?: number | null;
+  rate_unit_snapshot?: string | null;
+  use_timing_snapshot?: string | null;
+  internal_notes_snapshot?: string | null;
+  quoting_notes_snapshot?: string | null;
 }
 
 /** Database row from pricing_change_sets. */

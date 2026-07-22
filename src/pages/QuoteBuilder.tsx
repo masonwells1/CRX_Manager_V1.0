@@ -51,6 +51,7 @@ import { localDatePlusDays, localToday, parseLocalDate } from '../lib/dateUtils'
 import { downloadQuotePdf, generateQuotePdf } from '../lib/quotePdf';
 import { sendEmail, pdfToBase64, buildEmailHtml } from '../lib/emailService';
 import { checkRUPCompliance } from '../lib/rupCompliance';
+import { preferredQuoteNotes } from '../lib/quoteNotes';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import HelpTip from '../components/ui/HelpTip';
 import TransactionThread from '../components/ui/TransactionThread';
@@ -903,7 +904,7 @@ export default function QuoteBuilder() {
               ...item,
               product_id: product.id,
               product,
-              notes: product.notes || '',
+              notes: preferredQuoteNotes(product),
               price_per_unit: pricePerUnit,
               price_override: null,
               current_cost: product.current_cost || 0,
