@@ -7,6 +7,28 @@
     "area_tags": "Every spec carries an \"area\" array (business-area tags: billing, inventory, lifecycle, pricing, security, idempotency). run-smoke.mjs --area <area> selects by tag; scripts/run-area.mjs bundles these with the matching vitest slice and DB invariant sweeps."
   },
   "specs": {
+    "section9_po_ap_high_remediation": {
+      "chain": "smoke-section9-po-ap-high-remediation.sql",
+      "description": "Section 9 PO/AP HIGH closeout: real save/submit/edit/alternate-location receive/reverse/cancel paths keep Main Warehouse on-order equal to authoritative open remainder; vendor browser mutation grants/policies are absent; cancelled-PO bill creation and billed-PO cancellation fail in the shared PO-first lock contract; AP aging serves current truth but fails closed for unsupported past/future dates; and update_vendor_bill cannot move or rewrite a bill whose stored period is closed. Self-contained fixtures and terminal rollback. The companion prove-section9-po-ap-concurrency.mjs races create_vendor_bill against cancel_purchase_order in an isolated PostgreSQL container.",
+      "covers": [
+        "save_purchase_order",
+        "submit_purchase_order",
+        "receive_po_items",
+        "reverse_receiving_record",
+        "cancel_purchase_order",
+        "create_vendor_bill",
+        "get_ap_aging",
+        "update_vendor_bill",
+        "vendors",
+        "_recompute_po_on_order_for_products"
+      ],
+      "area": [
+        "billing",
+        "inventory",
+        "lifecycle",
+        "security"
+      ]
+    },
     "money_lifecycle_idempotency_required": {
       "chain": "smoke-money-lifecycle-idempotency-required.sql",
       "description": "Public money/lifecycle boundary: create_invoice_from_order, create_invoice_for_unbilled_delivery, post_invoice, cancel_order, generate_finance_charges, and batch_post_invoices all reject NULL or all-whitespace idempotency keys before mutation; actor-bearing wrappers reject forgery; batch posting derives a nonblank child key; and a valid finance-charge key creates one completed replay record and replays exactly. Terminal rollback.",

@@ -23,6 +23,7 @@
         "src/lib/splitVectorMath.test.ts",
         "src/lib/commissionSplit.test.ts",
         "src/lib/commissionPayoutGuards.test.ts",
+        "src/lib/section9PoApRemediation.test.ts",
         "src/lib/reconciliation.test.ts",
         "src/lib/returnWriteBoundary.test.ts",
         "src/lib/fieldInvoiceList.test.ts",
@@ -39,7 +40,8 @@
         "fin-invoice-balance-identity",
         "fin-prepay-balance",
         "fin-quote-override-survival",
-        "commission-admin-active"
+        "commission-admin-active",
+        "section9-po-ap-controls"
       ]
     },
     "inventory": {
@@ -52,13 +54,15 @@
         "src/lib/lotRpc.test.ts",
         "src/lib/openBookings.test.ts",
         "src/lib/receivingPdf.test.ts",
+        "src/lib/section9PoApRemediation.test.ts",
         "src/components/inventory",
         "src/components/deliveries",
         "src/components/receiving",
         "src/components/purchase-orders"
       ],
       "sweeps": [
-        "returns-lifecycle-rpc-owned"
+        "returns-lifecycle-rpc-owned",
+        "section9-po-ap-controls"
       ]
     },
     "lifecycle": {
@@ -68,6 +72,7 @@
         "src/lib/quotePdf.test.ts",
         "src/lib/jobSaveHelpers.test.ts",
         "src/lib/deliveryLifecycle.test.ts",
+        "src/lib/section9PoApRemediation.test.ts",
         "src/lib/businessLogicEnhancements.test.ts",
         "src/lib/routeOrder.test.ts",
         "src/components/jobs",
@@ -77,7 +82,8 @@
       ],
       "sweeps": [
         "status-literals",
-        "returns-lifecycle-rpc-owned"
+        "returns-lifecycle-rpc-owned",
+        "section9-po-ap-controls"
       ]
     },
     "pricing": {
@@ -103,6 +109,7 @@
         "src/lib/errorSanitizer.test.ts",
         "src/lib/logActivitySignature.test.ts",
         "src/lib/sentryImportEnforcement.test.ts",
+        "src/lib/section9PoApRemediation.test.ts",
         "src/components/auth"
       ],
       "sweeps": [
@@ -111,6 +118,7 @@
         "anon-exec-secdef",
         "auth-bound-role-ungated",
         "secdef-searchpath",
+        "section9-po-ap-controls",
         "ungated-secdef-mutators"
       ]
     },
