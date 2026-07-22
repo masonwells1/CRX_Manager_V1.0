@@ -52,6 +52,7 @@ function baseProduct(overrides: Partial<Product> = {}): Product {
     max_label_rate_unit: null,
     notes: null,
     internal_notes: null,
+    quoting_notes: null,
     is_active: true,
     created_at: '2026-07-01T00:00:00Z',
     updated_at: '2026-07-01T00:00:00Z',

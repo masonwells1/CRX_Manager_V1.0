@@ -86,10 +86,17 @@ export interface PricingWorkbookExportRow {
   current_tier2_price: string | null;
   current_tier3_margin_percent: string | null;
   current_tier3_price: string | null;
+  suggested_rate?: string | null;
+  rate_per_acre?: string | null;
+  rate_unit?: string | null;
+  use_timing?: string | null;
+  internal_notes?: string | null;
+  quoting_notes?: string | null;
 }
 
 export interface PricingWorkbookExport {
   export_id: string;
+  format_version?: string;
   manifest_fingerprint: string;
   expires_at: string;
   rows: PricingWorkbookExportRow[];
@@ -158,6 +165,12 @@ export interface PricingWorksheetPreviewRow extends CostBasisPreviewMetadata {
   tier3_margin_percent: string;
   tier3_price: string;
   change_reason: string;
+  suggested_rate?: string;
+  rate_per_acre?: string;
+  rate_unit?: string;
+  use_timing?: string;
+  internal_notes?: string;
+  quoting_notes?: string;
   has_formula: boolean;
   formula_cells: string[];
 }
@@ -171,6 +184,8 @@ export interface PricingEffect extends PricingSnapshot {
   tier1_gross_margin?: number | null;
   tier2_gross_margin?: number | null;
   tier3_gross_margin?: number | null;
+  pricing_changed?: boolean;
+  product_info_changes?: Record<string, { before: unknown; after: unknown }>;
 }
 
 export interface PricingPreviewRow {
@@ -195,6 +210,8 @@ export interface PricingPreviewResult {
   invalid_count: number;
   apply_allowed: boolean;
   basis_change_count?: number;
+  pricing_change_count?: number;
+  product_info_change_count?: number;
   rows: PricingPreviewRow[];
 }
 

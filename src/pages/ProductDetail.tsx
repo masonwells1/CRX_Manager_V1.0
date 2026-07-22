@@ -46,6 +46,7 @@ const PRODUCT_NONPRICING_FIELDS = [
   'container_size', 'unit_size', 'suggested_rate', 'rate_per_acre', 'rate_unit',
   'notes', 'is_active', 'epa_registration', 'product_form', 'inventory_unit',
   'container_unit', 'container_type', 'is_rup', 'signal_word', 'internal_notes',
+  'quoting_notes',
   'rei_hours', 'phi_days', 'max_label_rate', 'max_label_rate_unit', 'use_timing',
 ] as const satisfies ReadonlyArray<keyof Product>;
 
@@ -262,6 +263,7 @@ export default function ProductDetail() {
     rate_per_acre: undefined,
     rate_unit: '',
     notes: '',
+    quoting_notes: '',
     is_active: true,
   });
   const [costHistory, setCostHistory] = useState<CostHistory[]>([]);
@@ -423,11 +425,18 @@ export default function ProductDetail() {
   }, []);
 
   const saveExistingProductDetails = async () => {
+    if (!persistedProduct || !Number.isInteger(persistedProduct.pricing_version)) {
+      throw new Error('Reload this Product before saving details.');
+    }
     const result = await supabaseUntyped
       .from('products')
       .update(nonpricingProductPayload(product))
       .eq('id', id!)
+      .eq('pricing_version', persistedProduct.pricing_version)
       .select();
+    if (!result.error && Array.isArray(result.data) && result.data.length === 0) {
+      throw new Error('Product details changed after this page loaded. Reload before saving.');
+    }
     checkMutationResult(result, 'Update product details');
     setPersistedLabelFields({
       signalWord: product.signal_word ?? null,
@@ -1397,6 +1406,20 @@ export default function ProductDetail() {
                 id="internal-notes"
                 value={product.internal_notes || ''}
                 onChange={(e) => update('internal_notes', e.target.value)}
+                disabled={!isAdmin}
+                rows={3}
+                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:opacity-50 disabled:bg-gray-50"
+              />
+            </div>
+
+            {/* Quoting Notes */}
+            <div className="border-t border-gray-100 pt-4 mt-4">
+              <label htmlFor="quoting-notes" className="block text-sm font-medium text-secondary mb-1">Quoting Notes</label>
+              <p className="text-xs text-gray-400 mb-1">Customer-facing guidance automatically added to the quote line and shown on the quote PDF.</p>
+              <textarea
+                id="quoting-notes"
+                value={product.quoting_notes || ''}
+                onChange={(e) => update('quoting_notes', e.target.value)}
                 disabled={!isAdmin}
                 rows={3}
                 className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:opacity-50 disabled:bg-gray-50"

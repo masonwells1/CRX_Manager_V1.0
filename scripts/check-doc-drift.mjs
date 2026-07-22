@@ -17,9 +17,15 @@ const history = read("docs/reference/migration-history.md");
 const routes = read("docs/reference/pages-routes.md");
 const app = read("src/App.tsx");
 
-const historyClaim = history.match(/^#\s*Migration History\s*\((\d+)\s+migrations?\)/m)?.[1];
-row("migration-history count", historyClaim ?? "missing", migrations.length,
-  Number(historyClaim) === migrations.length ? "PASS" : "FAIL");
+const historyClaim = history.match(
+  /^#\s*Migration History\s*\((\d+)\s+(?:migrations?|migration-history entries)\)/m,
+)?.[1];
+const historySequences = [...history.matchAll(/^\|\s*(\d+)\s*\|\s*\d{8,14}\s*\|/gm)]
+  .map((match) => Number(match[1]));
+const latestHistorySequence = historySequences.length ? Math.max(...historySequences) : 0;
+row("migration-history sequence", historyClaim ?? "missing", latestHistorySequence,
+  Number(historyClaim) === latestHistorySequence ? "PASS" : "FAIL",
+  `parsed history rows: ${historySequences.length}`);
 
 const missingMigrations = migrations.filter((filename) => {
   const base = filename.replace(/\.sql$/, "");

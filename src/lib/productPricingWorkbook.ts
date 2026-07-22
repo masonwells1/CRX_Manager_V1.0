@@ -7,7 +7,7 @@ import type {
 
 export const PRICING_WORKBOOK_SHEET = 'Pricing Update';
 export const PRICING_WORKBOOK_MANIFEST_SHEET = '_crx_manifest';
-export const PRICING_WORKBOOK_FORMAT_VERSION = 'crx-product-pricing-phase1a-v1';
+export const PRICING_WORKBOOK_FORMAT_VERSION = 'crx-product-pricing-phase2-v2';
 export const MAX_PRICING_WORKBOOK_ROWS = 5_000;
 export const MAX_PRICING_WORKBOOK_FILE_BYTES = 10 * 1024 * 1024;
 export const MAX_PRICING_WORKBOOK_UNCOMPRESSED_BYTES = 25 * 1024 * 1024;
@@ -42,6 +42,12 @@ export const PRICING_WORKBOOK_HEADERS = [
   'tier3_margin_percent',
   'tier3_price',
   'change_reason',
+  'suggested_rate',
+  'rate_per_acre',
+  'rate_unit',
+  'use_timing',
+  'internal_notes',
+  'quoting_notes',
 ] as const;
 
 export type PricingWorkbookHeader = (typeof PRICING_WORKBOOK_HEADERS)[number];
@@ -64,6 +70,12 @@ const EDITABLE_HEADERS = new Set<PricingWorkbookHeader>([
   'tier3_margin_percent',
   'tier3_price',
   'change_reason',
+  'suggested_rate',
+  'rate_per_acre',
+  'rate_unit',
+  'use_timing',
+  'internal_notes',
+  'quoting_notes',
 ]);
 
 const DOLLAR_HEADERS = new Set<PricingWorkbookHeader>([
@@ -113,6 +125,12 @@ const COLUMN_WIDTHS: Record<PricingWorkbookHeader, number> = {
   tier3_margin_percent: 20,
   tier3_price: 15,
   change_reason: 32,
+  suggested_rate: 18,
+  rate_per_acre: 16,
+  rate_unit: 16,
+  use_timing: 28,
+  internal_notes: 36,
+  quoting_notes: 36,
 };
 
 const HEADER_FILL = 'FF1F6B4F';
@@ -426,6 +444,12 @@ function workbookRow(exportRow: PricingWorkbookExportRow): Record<PricingWorkboo
     tier3_margin_percent: exportRow.current_tier3_margin_percent ?? '',
     tier3_price: exportRow.current_tier3_price ?? '',
     change_reason: '',
+    suggested_rate: exportRow.suggested_rate ?? '',
+    rate_per_acre: exportRow.rate_per_acre ?? '',
+    rate_unit: exportRow.rate_unit ?? '',
+    use_timing: exportRow.use_timing ?? '',
+    internal_notes: exportRow.internal_notes ?? '',
+    quoting_notes: exportRow.quoting_notes ?? '',
   };
 }
 
@@ -468,11 +492,14 @@ function stylePricingWorksheet(worksheet: Worksheet, rowCount: number): void {
       cell.alignment = {
         vertical: 'middle',
         horizontal: DOLLAR_HEADERS.has(header) || MARGIN_HEADERS.has(header) ? 'right' : 'left',
-        wrapText: header === 'product_name' || header === 'change_reason',
+        wrapText: header === 'product_name' || header === 'change_reason'
+          || header === 'use_timing' || header === 'internal_notes'
+          || header === 'quoting_notes',
       };
       cell.protection = { locked: !editable };
       if (header === 'product_id' || header === 'sku' || header === 'identity_fingerprint'
           || header === 'row_token' || header === 'row_version'
+          || header === 'rate_per_acre'
           || DOLLAR_HEADERS.has(header) || MARGIN_HEADERS.has(header)) {
         cell.numFmt = '@';
       }
@@ -513,7 +540,7 @@ export async function generateProductPricingWorkbook(
   stylePricingWorksheet(worksheet, pricingExport.rows.length);
   // This is a usability guard only. The preview RPC revalidates every protected
   // value against its retained server manifest; Excel protection is not security.
-  await worksheet.protect('crx-phase1a-layout', {
+  await worksheet.protect('crx-phase2-layout', {
     spinCount: 1_000,
     selectLockedCells: false,
     selectUnlockedCells: true,
@@ -535,7 +562,7 @@ export async function generateProductPricingWorkbook(
   manifest.getColumn(2).width = 72;
   manifest.getColumn(1).numFmt = '@';
   manifest.getColumn(2).numFmt = '@';
-  await manifest.protect('crx-phase1a-layout', { spinCount: 1_000 });
+  await manifest.protect('crx-phase2-layout', { spinCount: 1_000 });
 
   const buffer = await workbook.xlsx.writeBuffer();
   return new Blob([new Uint8Array(buffer as unknown as ArrayBuffer)], {
