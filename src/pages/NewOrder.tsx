@@ -31,7 +31,9 @@ import { trackBusinessEvent } from '../lib/metrics';
 import { localToday } from '../lib/dateUtils';
 import SearchableSelect from '../components/ui/SearchableSelect';
 import { fetchOpenBookings, type OpenBooking } from '../lib/openBookings';
-import type { Product, Customer } from '../types';
+import { validateInventoryPositionShape } from '../lib/inventoryPositionValidator';
+import { inventoryPositionByProduct } from '../lib/inventoryPositionLookup';
+import type { Product, Customer, InventoryPositionRow } from '../types';
 
 interface LocalItem {
   _key: string;
@@ -167,15 +169,11 @@ export default function NewOrder() {
   const [inventoryByProduct, setInventoryByProduct] = useState<Record<string, { available: number; prebooked: number; onOrder: number }>>({});
 
   const fetchData = useCallback(async () => {
-    const [customersRes, productsRes, inventoryRes, poRes] = await Promise.all([
+    const [customersRes, productsRes] = await Promise.all([
       supabase.from('customers').select('*').order('farm_name'),
       supabase.from('products').select('*').eq('is_active', true).order('product_name'),
-      supabase.from('inventory').select('product_id, quantity_available, quantity_prebooked'),
-      supabase
-        .from('purchase_order_items')
-        .select('product_id, quantity_ordered, quantity_received, purchase_orders!inner(status)')
-        .in('purchase_orders.status', ['submitted', 'partially_received']),
     ]);
+    const { data: positionData, error: positionError } = await supabase.rpc('get_inventory_position');
 
     if (customersRes.error) {
       Sentry.captureException(customersRes.error, { tags: { source: 'fetch', action: 'load_customers' } });
@@ -185,21 +183,24 @@ export default function NewOrder() {
       Sentry.captureException(productsRes.error, { tags: { source: 'fetch', action: 'load_products' } });
       toast('error', 'Failed to load products. Please refresh.');
     }
+    if (positionError) {
+      Sentry.captureException(positionError, { tags: { source: 'fetch', action: 'load_inventory_position' } });
+      toast('error', 'Failed to load inventory positions. Please refresh.');
+    }
 
-    // Build inventory lookup by product_id
-    const invMap: Record<string, { available: number; prebooked: number; onOrder: number }> = {};
-    for (const row of inventoryRes.data || []) {
-      const pid = row.product_id;
-      if (!invMap[pid]) invMap[pid] = { available: 0, prebooked: 0, onOrder: 0 };
-      invMap[pid].available += Number(row.quantity_available);
-      invMap[pid].prebooked += Number(row.quantity_prebooked);
+    if (positionError) {
+      setInventoryByProduct({});
+    } else {
+      try {
+        const positionRows = assertRpcResult<InventoryPositionRow[]>(positionData, 'get_inventory_position');
+        validateInventoryPositionShape(positionRows);
+        setInventoryByProduct(inventoryPositionByProduct(positionRows));
+      } catch (err) {
+        Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { tags: { source: 'fetch', action: 'parse_inventory_position' } });
+        toast('error', 'Inventory position data was malformed. Please refresh.');
+        setInventoryByProduct({});
+      }
     }
-    for (const poi of (poRes.data || []) as Array<{ product_id: string; quantity_ordered: number; quantity_received: number }>) {
-      const pid = poi.product_id;
-      if (!invMap[pid]) invMap[pid] = { available: 0, prebooked: 0, onOrder: 0 };
-      invMap[pid].onOrder += Number(poi.quantity_ordered) - Number(poi.quantity_received);
-    }
-    setInventoryByProduct(invMap);
 
     setCustomers((customersRes.data || []) as Customer[]);
     setProducts((productsRes.data || []) as Product[]);
