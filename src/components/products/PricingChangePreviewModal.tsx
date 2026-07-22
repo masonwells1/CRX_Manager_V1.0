@@ -1,4 +1,5 @@
 import type { PricingEffect, PricingPreviewResult, PricingPreviewRow } from '../../lib/productPricing';
+import type { ProductCostBasisType } from '../../types';
 import Button from '../ui/Button';
 import Modal from '../ui/Modal';
 
@@ -58,6 +59,48 @@ function productLabel(row: PricingPreviewRow): { name: string; detail: string | 
     name: productName ?? sku ?? productId ?? 'Unknown product',
     detail: productName && sku ? `SKU ${sku}` : productName && productId ? productId : null,
   };
+}
+
+const BASIS_TYPE_LABELS: Record<ProductCostBasisType, string> = {
+  selected_supplier_price: 'Supplier price observation',
+  actual_purchase: 'Received purchase order',
+  manual_override: 'Manual replacement cost',
+};
+
+function BasisReviewDetails({ row }: { row: PricingPreviewRow }) {
+  if (row.submitted_row.basis_selection !== true) return null;
+
+  const basisType = submittedValue(row, 'basis_type');
+  const reason = submittedValue(row, 'basis_reason');
+  const supplierEvidenceId = submittedValue(row, 'supplier_price_observation_id');
+  const purchaseEvidenceId = submittedValue(row, 'purchase_order_item_id');
+  const evidence = supplierEvidenceId
+    ? `Supplier observation ${supplierEvidenceId}`
+    : purchaseEvidenceId
+      ? `Purchase order item ${purchaseEvidenceId}`
+      : 'Entered manually';
+
+  return (
+    <div className="mt-3 rounded-lg border border-blue-200 bg-blue-50 p-3" aria-label="Cost basis approval details">
+      <div className="text-xs font-semibold uppercase tracking-wide text-blue-800">Cost basis approval</div>
+      <dl className="mt-2 grid gap-2 text-sm sm:grid-cols-3">
+        <div>
+          <dt className="text-xs text-blue-700">Basis type</dt>
+          <dd className="font-medium text-nav-dark">
+            {basisType ? (BASIS_TYPE_LABELS[basisType as ProductCostBasisType] ?? basisType) : '—'}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-xs text-blue-700">Audit reason</dt>
+          <dd className="font-medium text-nav-dark">{reason ?? '—'}</dd>
+        </div>
+        <div>
+          <dt className="text-xs text-blue-700">Evidence</dt>
+          <dd className="break-all font-mono text-xs text-nav-dark">{evidence}</dd>
+        </div>
+      </dl>
+    </div>
+  );
 }
 
 function ChangePair({ oldValue, newValue }: { oldValue: string; newValue: string }) {
@@ -196,7 +239,9 @@ export default function PricingChangePreviewModal({
   onApprove,
 }: PricingChangePreviewModalProps) {
   const canApprove = Boolean(
-    preview?.apply_allowed && preview.status === 'previewed' && preview.ready_count > 0,
+    preview?.apply_allowed
+      && (preview.status === 'previewed' || preview.status === 'no_changes')
+      && (preview.ready_count > 0 || (preview.basis_change_count ?? 0) > 0),
   );
   const orderedRows = preview ? [...preview.rows].sort((a, b) => a.sequence - b.sequence) : [];
 
@@ -212,7 +257,8 @@ export default function PricingChangePreviewModal({
           <Button variant="secondary" onClick={onClose} disabled={applying}>
             Close
           </Button>
-          {preview?.status === 'previewed' && (
+          {(preview?.status === 'previewed'
+            || (preview?.status === 'no_changes' && (preview.basis_change_count ?? 0) > 0)) && (
             <Button onClick={onApprove} disabled={!canApprove} loading={applying}>
               Apply approved changes
             </Button>
@@ -230,7 +276,10 @@ export default function PricingChangePreviewModal({
                 <div className="text-sm font-semibold text-nav-dark">
                   {preview.status === 'previewed' && 'Ready for approval'}
                   {preview.status === 'invalid' && 'Some rows need attention'}
-                  {preview.status === 'no_changes' && 'No pricing changes found'}
+                  {preview.status === 'no_changes' && (preview.basis_change_count ?? 0) > 0
+                    && 'Cost basis ready — sell prices stay unchanged'}
+                  {preview.status === 'no_changes' && (preview.basis_change_count ?? 0) === 0
+                    && 'No pricing changes found'}
                   {preview.status === 'applied' && 'Pricing changes applied'}
                   {preview.status === 'expired' && 'This preview expired'}
                 </div>
@@ -297,6 +346,7 @@ export default function PricingChangePreviewModal({
                       {errorMessage}
                     </div>
                   )}
+                  <BasisReviewDetails row={row} />
                   {row.effect && <PricingEffectDetails effect={row.effect} />}
                 </li>
               );

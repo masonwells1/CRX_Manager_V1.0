@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const {
@@ -6,11 +6,13 @@ const {
   mockPreviewPricing,
   mockProductUpdate,
   mockToast,
+  mockGetCostBasisWorkspace,
 } = vi.hoisted(() => ({
   mockApplyPricing: vi.fn(),
   mockPreviewPricing: vi.fn(),
   mockProductUpdate: vi.fn(),
   mockToast: vi.fn(),
+  mockGetCostBasisWorkspace: vi.fn(),
 }));
 
 const product = {
@@ -55,6 +57,8 @@ const product = {
   created_at: '2026-01-01T00:00:00Z',
   updated_at: '2026-01-01T00:00:00Z',
 };
+
+let routeProductId = product.id;
 
 let productLoadResults: Array<{ data: typeof product | null; error: unknown }> = [];
 
@@ -111,6 +115,35 @@ vi.mock('../components/ui/Toast', () => ({
   useToast: () => ({ toast: mockToast }),
 }));
 
+vi.mock('../lib/productCostBasis', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/productCostBasis')>();
+  return { ...actual, getProductCostBasisWorkspace: mockGetCostBasisWorkspace };
+});
+
+vi.mock('../components/products/ProductPriceHistory', () => ({
+  default: ({ costBasisWorkspace, onSelectSupplierBasis, onSelectPurchaseBasis }: {
+    costBasisWorkspace?: {
+      supplier_candidates: Array<{ supplier_price_observation_id: string }>;
+      purchase_candidates: Array<{ purchase_order_item_id: string }>;
+    } | null;
+    onSelectSupplierBasis?: (candidate: unknown) => void;
+    onSelectPurchaseBasis?: (candidate: unknown) => void;
+  }) => (
+    <div>
+      {costBasisWorkspace?.supplier_candidates.map((candidate) => (
+        <button key={candidate.supplier_price_observation_id} type="button" onClick={() => onSelectSupplierBasis?.(candidate)}>
+          Select supplier evidence
+        </button>
+      ))}
+      {costBasisWorkspace?.purchase_candidates.map((candidate) => (
+        <button key={candidate.purchase_order_item_id} type="button" onClick={() => onSelectPurchaseBasis?.(candidate)}>
+          Select received PO evidence
+        </button>
+      ))}
+    </div>
+  ),
+}));
+
 vi.mock('../contexts/AuthContext', () => ({
   useAuth: () => ({
     role: 'admin',
@@ -119,7 +152,7 @@ vi.mock('../contexts/AuthContext', () => ({
 }));
 
 vi.mock('react-router-dom', () => ({
-  useParams: () => ({ id: product.id }),
+  useParams: () => ({ id: routeProductId }),
   useNavigate: () => vi.fn(),
   useLocation: () => ({ pathname: `/products/${product.id}` }),
 }));
@@ -135,6 +168,7 @@ import ProductDetail from './ProductDetail';
 describe('ProductDetail governed pricing flow', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    routeProductId = product.id;
     productLoadResults = [];
     mockPreviewPricing.mockResolvedValue({
       change_set_id: '22222222-2222-4222-8222-222222222222',
@@ -185,6 +219,257 @@ describe('ProductDetail governed pricing flow', () => {
       applied_count: 1,
       rows: [],
     });
+    mockGetCostBasisWorkspace.mockResolvedValue({
+      enabled: true,
+      product: {
+        id: product.id,
+        product_name: product.product_name,
+        sku: product.sku,
+        pricing_version: product.pricing_version,
+        current_cost_cents: 5_000n,
+        tier1_margin_percent: '20',
+        tier2_margin_percent: '15',
+        tier3_margin_percent: '10',
+      },
+      current_basis: null,
+      supplier_candidates: [{
+        supplier_price_observation_id: 'observation-1',
+        vendor_id: 'vendor-1',
+        vendor_name: 'Test Supplier',
+        quoted_package_cost_cents: 5_500n,
+        normalized_cost_cents: 5_500n,
+        effective_from: '2026-07-21',
+        price_kind: 'quote',
+      }],
+      purchase_candidates: [],
+    });
+  });
+
+  it('defaults supplier evidence selection to keeping sell prices with Product-detail provenance', async () => {
+    render(<ProductDetail />);
+    await screen.findByText('Select supplier evidence');
+
+    expect(screen.getByLabelText('Pricing behavior')).toHaveValue('keep_sell_prices');
+    fireEvent.change(screen.getByLabelText('Cost basis reason'), {
+      target: { value: 'Current confirmed supplier quote' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Select supplier evidence' }));
+
+    await waitFor(() => expect(mockPreviewPricing).toHaveBeenCalledWith(expect.objectContaining({
+      source: 'product_page',
+      rows: [expect.objectContaining({
+        pricing_mode: 'price_driven',
+        new_cost: '55.00',
+        tier1_price: '62.5',
+        tier2_price: '58.82',
+        tier3_price: '55.56',
+        basis_type: 'selected_supplier_price',
+        supplier_price_observation_id: 'observation-1',
+        basis_source: 'product_detail',
+        basis_selection: true,
+      })],
+    })));
+  });
+
+  it('rejects a cost-basis preview when Product and workspace pricing versions differ', async () => {
+    const currentWorkspace = await mockGetCostBasisWorkspace(product.id);
+    mockGetCostBasisWorkspace.mockClear();
+    mockGetCostBasisWorkspace.mockResolvedValue({
+      ...currentWorkspace,
+      product: {
+        ...currentWorkspace.product,
+        pricing_version: product.pricing_version + 1,
+      },
+    });
+
+    render(<ProductDetail />);
+    await screen.findByText('Select supplier evidence');
+    fireEvent.change(screen.getByLabelText('Cost basis reason'), {
+      target: { value: 'Current confirmed supplier quote' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Select supplier evidence' }));
+
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
+      'error',
+      'Product pricing changed while this cost-basis workspace loaded. Reload before selecting a cost basis.',
+    ));
+    expect(mockPreviewPricing).not.toHaveBeenCalled();
+  });
+
+  it('uses a fresh preview intent when a failed supplier selection switches to manual cost', async () => {
+    mockPreviewPricing
+      .mockRejectedValueOnce(new Error('temporary preview failure'))
+      .mockResolvedValueOnce({
+        change_set_id: 'manual-change', request_fingerprint: 'manual-fingerprint',
+        source: 'product_page', status: 'previewed', expires_at: '2026-07-22T12:00:00Z',
+        submitted_row_count: 1, ready_count: 1, unchanged_count: 0,
+        conflict_count: 0, invalid_count: 0, apply_allowed: true, rows: [],
+      });
+    render(<ProductDetail />);
+    await screen.findByText('Select supplier evidence');
+    fireEvent.change(screen.getByLabelText('Cost basis reason'), {
+      target: { value: 'Owner reviewed current evidence' },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Select supplier evidence' }));
+    await waitFor(() => expect(mockPreviewPricing).toHaveBeenCalledTimes(1));
+    const failedKey = mockPreviewPricing.mock.calls[0][0].idempotencyKey;
+
+    fireEvent.change(screen.getByLabelText('Manual replacement cost'), {
+      target: { value: '54.00' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Preview manual basis' }));
+    await waitFor(() => expect(mockPreviewPricing).toHaveBeenCalledTimes(2));
+    expect(mockPreviewPricing.mock.calls[1][0].idempotencyKey).not.toBe(failedKey);
+    expect(mockPreviewPricing.mock.calls[1][0].rows[0]).toMatchObject({
+      basis_type: 'manual_override',
+      basis_source: 'product_detail',
+      new_cost: '54.00',
+    });
+  });
+
+  it('discards a stale cost-basis workspace after Product route navigation', async () => {
+    let resolveFirst!: (value: unknown) => void;
+    let resolveSecond!: (value: unknown) => void;
+    const first = new Promise((resolve) => { resolveFirst = resolve; });
+    const second = new Promise((resolve) => { resolveSecond = resolve; });
+    mockGetCostBasisWorkspace.mockImplementation((productId: string) => (
+      productId === product.id ? first : second
+    ));
+    const { rerender } = render(<ProductDetail />);
+    await waitFor(() => expect(mockGetCostBasisWorkspace).toHaveBeenCalledWith(product.id));
+
+    const secondProductId = '22222222-2222-4222-8222-222222222222';
+    routeProductId = secondProductId;
+    rerender(<ProductDetail />);
+    await waitFor(() => expect(mockGetCostBasisWorkspace).toHaveBeenCalledWith(secondProductId));
+
+    resolveSecond({
+      enabled: true,
+      product: {
+        id: secondProductId, product_name: 'Second Product', sku: null, pricing_version: 1,
+        current_cost_cents: 6_000n, tier1_margin_percent: '20',
+        tier2_margin_percent: '15', tier3_margin_percent: '10',
+      },
+      current_basis: {
+        id: 'basis-2', basis_type: 'manual_override', cost_cents: 6_000n,
+        supplier_price_observation_id: null, purchase_order_item_id: null,
+        selection_source: 'product_detail', reason: 'Current Product basis',
+        selected_at: '2026-07-22T12:00:00Z',
+      },
+      supplier_candidates: [], purchase_candidates: [],
+    });
+    expect(await screen.findByText('Current Product basis')).toBeInTheDocument();
+
+    resolveFirst({
+      enabled: true,
+      product: {
+        id: product.id, product_name: product.product_name, sku: product.sku, pricing_version: 7,
+        current_cost_cents: 5_000n, tier1_margin_percent: '20',
+        tier2_margin_percent: '15', tier3_margin_percent: '10',
+      },
+      current_basis: {
+        id: 'basis-1', basis_type: 'manual_override', cost_cents: 5_000n,
+        supplier_price_observation_id: null, purchase_order_item_id: null,
+        selection_source: 'product_detail', reason: 'Stale Product basis',
+        selected_at: '2026-07-22T11:00:00Z',
+      },
+      supplier_candidates: [], purchase_candidates: [],
+    });
+    await waitFor(() => expect(screen.queryByText('Stale Product basis')).not.toBeInTheDocument());
+    expect(screen.getByText('Current Product basis')).toBeInTheDocument();
+  });
+
+  it('clears an open Product preview when the route changes', async () => {
+    const { rerender } = render(<ProductDetail />);
+    await screen.findByText('Select supplier evidence');
+    fireEvent.change(screen.getByLabelText('Cost basis reason'), {
+      target: { value: 'Current confirmed supplier quote' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Select supplier evidence' }));
+    expect(await screen.findByText('Ready for approval')).toBeInTheDocument();
+
+    routeProductId = '22222222-2222-4222-8222-222222222222';
+    rerender(<ProductDetail />);
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
+
+  it('discards an in-flight Product preview when the route changes', async () => {
+    let resolvePreview!: (value: unknown) => void;
+    mockPreviewPricing.mockImplementationOnce(() => new Promise((resolve) => { resolvePreview = resolve; }));
+    const { rerender } = render(<ProductDetail />);
+    await screen.findByText('Select supplier evidence');
+    fireEvent.change(screen.getByLabelText('Cost basis reason'), {
+      target: { value: 'Current confirmed supplier quote' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Select supplier evidence' }));
+    await waitFor(() => expect(mockPreviewPricing).toHaveBeenCalledTimes(1));
+
+    routeProductId = '22222222-2222-4222-8222-222222222222';
+    rerender(<ProductDetail />);
+    act(() => {
+      resolvePreview({
+        change_set_id: 'stale-change', request_fingerprint: 'stale-fingerprint',
+        source: 'product_page', status: 'previewed', expires_at: '2026-07-22T12:00:00Z',
+        submitted_row_count: 1, ready_count: 1, unchanged_count: 0,
+        conflict_count: 0, invalid_count: 0, apply_allowed: true,
+        rows: [{
+          sequence: 1, product_id: product.id, submitted_row: {}, row_status: 'ready',
+          error_code: null, effect: {},
+        }],
+      });
+    });
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
+
+  it('reports a basis-only apply as a selected cost basis, not zero Products priced', async () => {
+    mockApplyPricing.mockResolvedValueOnce({
+      change_set_id: 'basis-change',
+      status: 'applied',
+      applied_count: 0,
+      rows: [],
+      cost_basis_rows: [{ product_id: product.id }],
+    });
+    render(<ProductDetail />);
+    await screen.findByText('Select supplier evidence');
+    fireEvent.change(screen.getByLabelText('Cost basis reason'), {
+      target: { value: 'Current confirmed supplier quote' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Select supplier evidence' }));
+    await screen.findByText('Ready for approval');
+    fireEvent.click(screen.getByRole('button', { name: 'Apply approved changes' }));
+
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
+      'success',
+      'Selected cost basis for 1 Product.',
+    ));
+    expect(mockToast).not.toHaveBeenCalledWith('success', 'Applied pricing to 0 Product.');
+  });
+
+  it('reports both basis selection and sell-price application when both occur', async () => {
+    mockApplyPricing.mockResolvedValueOnce({
+      change_set_id: 'basis-reprice-change',
+      status: 'applied',
+      applied_count: 1,
+      rows: [],
+      cost_basis_rows: [{ product_id: product.id }],
+    });
+    render(<ProductDetail />);
+    await screen.findByText('Select supplier evidence');
+    fireEvent.change(screen.getByLabelText('Pricing behavior'), {
+      target: { value: 'keep_margins_and_reprice' },
+    });
+    fireEvent.change(screen.getByLabelText('Cost basis reason'), {
+      target: { value: 'Reprice from confirmed supplier quote' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Select supplier evidence' }));
+    await screen.findByText('Ready for approval');
+    fireEvent.click(screen.getByRole('button', { name: 'Apply approved changes' }));
+
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
+      'success',
+      'Selected cost basis and applied pricing to 1 Product.',
+    ));
   });
 
   it('requires an explicit mode when saved prices and margins are both populated', async () => {

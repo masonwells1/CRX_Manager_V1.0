@@ -1,10 +1,20 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { mockToast, mockGetWorkspace, mockGetImport } = vi.hoisted(() => ({
+const {
+  mockToast,
+  mockGetWorkspace,
+  mockGetImport,
+  mockGetBasisWorkspace,
+  mockPreviewPricing,
+  mockResetIdempotencyKey,
+} = vi.hoisted(() => ({
   mockToast: vi.fn(),
   mockGetWorkspace: vi.fn(),
   mockGetImport: vi.fn(),
+  mockGetBasisWorkspace: vi.fn(),
+  mockPreviewPricing: vi.fn(),
+  mockResetIdempotencyKey: vi.fn(),
 }));
 
 vi.mock('../contexts/AuthContext', () => ({
@@ -16,7 +26,7 @@ vi.mock('../components/ui/Toast', () => ({
 }));
 
 vi.mock('../hooks/useIdempotencyKey', () => ({
-  useIdempotencyKey: () => ({ getKey: () => 'idempotency-key', resetKey: vi.fn() }),
+  useIdempotencyKey: () => ({ getKey: () => 'idempotency-key', resetKey: mockResetIdempotencyKey }),
 }));
 
 vi.mock('../lib/supplierPricing', async () => {
@@ -35,9 +45,38 @@ vi.mock('../lib/supplierPricing', async () => {
   };
 });
 
+vi.mock('../lib/productCostBasis', async () => {
+  const actual = await vi.importActual<typeof import('../lib/productCostBasis')>('../lib/productCostBasis');
+  return { ...actual, getProductCostBasisWorkspace: mockGetBasisWorkspace };
+});
+
+vi.mock('../lib/productPricing', async () => {
+  const actual = await vi.importActual<typeof import('../lib/productPricing')>('../lib/productPricing');
+  return {
+    ...actual,
+    previewProductPricingChanges: mockPreviewPricing,
+    applyProductPricingChangeSet: vi.fn(),
+  };
+});
+
 import SupplierPricing from './SupplierPricing';
 
 describe('SupplierPricing page', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetBasisWorkspace.mockResolvedValue({
+      enabled: false,
+      product: {
+        id: 'product-1', product_name: 'Atrazine', sku: 'A-1', pricing_version: 7,
+        current_cost_cents: 10_000n, tier1_margin_percent: '20',
+        tier2_margin_percent: '15', tier3_margin_percent: '10',
+      },
+      current_basis: null,
+      supplier_candidates: [],
+      purchase_candidates: [],
+    });
+  });
+
   it('shows the manual-only boundary and the zero-sell-price import review gate', async () => {
     mockGetWorkspace.mockResolvedValue({
       vendors: [{ id: 'vendor-1', name: 'The Andersons' }],
@@ -77,6 +116,9 @@ describe('SupplierPricing page', () => {
     render(<SupplierPricing />);
 
     expect(await screen.findByRole('heading', { name: 'Supplier Pricing' })).toBeInTheDocument();
+    expect(screen.getByText(
+      'Manual supplier evidence only. Observation approval changes no sell prices; cost-basis changes require a separate preview and approval.',
+    )).toBeInTheDocument();
     expect(screen.getByText(/No OCR or AI extraction/)).toBeInTheDocument();
     expect(screen.getByText(/PDFs are retained only as audit evidence/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Download prefilled .xlsx/ })).toBeInTheDocument();
@@ -88,5 +130,234 @@ describe('SupplierPricing page', () => {
       'You are adding 1 supplier observations. You are changing ZERO sell prices.',
     )).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Approve selected observations' })).toBeInTheDocument();
+
+    await waitFor(() => expect(mockGetBasisWorkspace).toHaveBeenCalledWith('product-1'));
+    const workspaceLoads = mockGetWorkspace.mock.calls.length;
+    const basisLoads = mockGetBasisWorkspace.mock.calls.length;
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await waitFor(() => {
+      expect(mockGetWorkspace).toHaveBeenCalledTimes(workspaceLoads + 1);
+      expect(mockGetBasisWorkspace).toHaveBeenCalledTimes(basisLoads + 1);
+    });
+  });
+
+  it('routes comparable supplier evidence to the single-Product governed flow', async () => {
+    mockGetWorkspace.mockResolvedValue({
+      vendors: [{ id: 'vendor-1', name: 'The Andersons' }],
+      products: [{ id: 'product-1', product_name: 'Atrazine', sku: 'A-1', inventory_unit: 'gallon' }],
+      links: [], imports: [], aliases: [], evidence: [],
+    });
+    mockGetBasisWorkspace.mockResolvedValue({
+      enabled: true,
+      product: {
+        id: 'product-1', product_name: 'Atrazine', sku: 'A-1', pricing_version: 7,
+        current_cost_cents: 10_000n, tier1_margin_percent: '20',
+        tier2_margin_percent: '15', tier3_margin_percent: '10',
+      },
+      current_basis: {
+        id: 'basis-1', basis_type: 'manual_override', cost_cents: 10_000n,
+        supplier_price_observation_id: null, purchase_order_item_id: null,
+        selection_source: 'migration_baseline', reason: 'Baseline',
+        selected_at: '2026-07-21T12:00:00Z',
+      },
+      supplier_candidates: [{
+        supplier_price_observation_id: 'observation-1', vendor_id: 'vendor-1',
+        vendor_name: 'The Andersons', quoted_package_cost_cents: 60_000n,
+        normalized_cost_cents: 12_000n, effective_from: '2026-07-21', price_kind: 'quote',
+      }],
+      purchase_candidates: [],
+    });
+    mockPreviewPricing.mockResolvedValue({
+      change_set_id: 'change-1', request_fingerprint: 'fingerprint-1',
+      source: 'product_page', status: 'previewed', expires_at: '2026-07-21T14:00:00Z',
+      submitted_row_count: 1, ready_count: 1, unchanged_count: 0,
+      conflict_count: 0, invalid_count: 0, apply_allowed: true, rows: [],
+    });
+
+    render(<SupplierPricing />);
+    fireEvent.click(await screen.findByRole('tab', { name: 'Comparison' }));
+    expect(await screen.findByText('The Andersons')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open Product cost-basis flow' }))
+      .toHaveAttribute('href', '/products/product-1');
+    expect(screen.queryByRole('button', { name: 'Preview as cost basis' })).not.toBeInTheDocument();
+    expect(mockPreviewPricing).not.toHaveBeenCalled();
+  });
+
+  it('keeps multiple supplier candidates read-only in the comparison workspace', async () => {
+    mockGetWorkspace.mockResolvedValue({
+      vendors: [],
+      products: [{ id: 'product-1', product_name: 'Atrazine', sku: 'A-1', inventory_unit: 'gallon' }],
+      links: [], imports: [], aliases: [], evidence: [],
+    });
+    mockGetBasisWorkspace.mockResolvedValue({
+      enabled: true,
+      product: {
+        id: 'product-1', product_name: 'Atrazine', sku: 'A-1', pricing_version: 7,
+        current_cost_cents: 10_000n, tier1_margin_percent: '20',
+        tier2_margin_percent: '15', tier3_margin_percent: '10',
+      },
+      current_basis: null,
+      supplier_candidates: [
+        {
+          supplier_price_observation_id: 'observation-1', vendor_id: 'vendor-1',
+          vendor_name: 'First supplier', quoted_package_cost_cents: 60_000n,
+          normalized_cost_cents: 12_000n, effective_from: '2026-07-21', price_kind: 'quote',
+        },
+        {
+          supplier_price_observation_id: 'observation-2', vendor_id: 'vendor-2',
+          vendor_name: 'Second supplier', quoted_package_cost_cents: 65_000n,
+          normalized_cost_cents: 13_000n, effective_from: '2026-07-21', price_kind: 'quote',
+        },
+      ],
+      purchase_candidates: [],
+    });
+    mockPreviewPricing
+      .mockRejectedValueOnce(new Error('temporary failure'))
+      .mockResolvedValueOnce({
+        change_set_id: 'change-2', request_fingerprint: 'fingerprint-2',
+        source: 'product_page', status: 'previewed', expires_at: '2026-07-21T14:00:00Z',
+        submitted_row_count: 1, ready_count: 1, unchanged_count: 0,
+        conflict_count: 0, invalid_count: 0, apply_allowed: true, rows: [],
+      });
+
+    render(<SupplierPricing />);
+    fireEvent.click(await screen.findByRole('tab', { name: 'Comparison' }));
+    expect(await screen.findByText('First supplier')).toBeInTheDocument();
+    expect(screen.getByText('Second supplier')).toBeInTheDocument();
+    expect(screen.getAllByText('Select from Product Detail')).toHaveLength(2);
+    expect(mockPreviewPricing).not.toHaveBeenCalled();
+  });
+
+  it('labels a received PO candidate without claiming it was paid or applying from comparison', async () => {
+    mockGetWorkspace.mockResolvedValue({
+      vendors: [],
+      products: [{ id: 'product-1', product_name: 'Atrazine', sku: 'A-1', inventory_unit: 'gallon' }],
+      links: [], imports: [], aliases: [], evidence: [],
+    });
+    mockGetBasisWorkspace.mockResolvedValue({
+      enabled: true,
+      product: {
+        id: 'product-1', product_name: 'Atrazine', sku: 'A-1', pricing_version: 7,
+        current_cost_cents: 10_000n, tier1_margin_percent: '20',
+        tier2_margin_percent: '15', tier3_margin_percent: '10',
+      },
+      current_basis: null,
+      supplier_candidates: [],
+      purchase_candidates: [{
+        purchase_order_item_id: 'po-item-1', purchase_order_id: 'po-1',
+        po_number: 'PO-10', vendor_name: 'The Andersons',
+        normalized_cost_cents: 12_000n, purchased_at: '2026-07-21T12:00:00Z',
+      }],
+    });
+    mockPreviewPricing.mockResolvedValue({
+      change_set_id: 'change-po', request_fingerprint: 'fingerprint-po',
+      source: 'product_page', status: 'previewed', expires_at: '2026-07-21T14:00:00Z',
+      submitted_row_count: 1, ready_count: 1, unchanged_count: 0,
+      conflict_count: 0, invalid_count: 0, apply_allowed: true, rows: [],
+    });
+
+    render(<SupplierPricing />);
+    fireEvent.click(await screen.findByRole('tab', { name: 'Comparison' }));
+
+    expect(await screen.findByText('Normalized received cost: $120.00')).toBeInTheDocument();
+    expect(screen.queryByText(/paid/i)).not.toBeInTheDocument();
+    expect(screen.getByText('Select from Product Detail')).toBeInTheDocument();
+    expect(mockPreviewPricing).not.toHaveBeenCalled();
+  });
+
+  it('discards stale cost-basis loads and clears actions when the Product selection is cleared', async () => {
+    mockGetWorkspace.mockResolvedValue({
+      vendors: [],
+      products: [
+        { id: 'product-1', product_name: 'Atrazine', sku: 'A-1', inventory_unit: 'gallon' },
+        { id: 'product-2', product_name: 'Glyphosate', sku: 'G-1', inventory_unit: 'gallon' },
+      ],
+      links: [], imports: [], aliases: [], evidence: [],
+    });
+
+    let resolveFirst!: (value: Awaited<ReturnType<typeof mockGetBasisWorkspace>>) => void;
+    let resolveSecond!: (value: Awaited<ReturnType<typeof mockGetBasisWorkspace>>) => void;
+    const first = new Promise((resolve) => { resolveFirst = resolve; });
+    const second = new Promise((resolve) => { resolveSecond = resolve; });
+    mockGetBasisWorkspace.mockImplementation((productId: string) => (
+      productId === 'product-1' ? first : second
+    ));
+
+    const workspaceFor = (productId: string, productName: string, vendorName: string) => ({
+      enabled: true,
+      product: {
+        id: productId, product_name: productName, sku: null, pricing_version: 1,
+        current_cost_cents: 10_000n, tier1_margin_percent: '20',
+        tier2_margin_percent: '15', tier3_margin_percent: '10',
+      },
+      current_basis: null,
+      supplier_candidates: [{
+        supplier_price_observation_id: `observation-${productId}`,
+        vendor_id: `vendor-${productId}`, vendor_name: vendorName,
+        quoted_package_cost_cents: 12_000n, normalized_cost_cents: 12_000n,
+        effective_from: '2026-07-21', price_kind: 'quote',
+      }],
+      purchase_candidates: [],
+    });
+
+    render(<SupplierPricing />);
+    fireEvent.click(await screen.findByRole('tab', { name: 'Comparison' }));
+    await waitFor(() => expect(mockGetBasisWorkspace).toHaveBeenCalledWith('product-1'));
+
+    const productSelect = screen.getByLabelText('Product');
+    fireEvent.change(productSelect, { target: { value: 'product-2' } });
+    await waitFor(() => expect(mockGetBasisWorkspace).toHaveBeenCalledWith('product-2'));
+
+    act(() => {
+      resolveSecond(workspaceFor('product-2', 'Glyphosate', 'Current supplier'));
+    });
+    expect(await screen.findByText('Current supplier')).toBeInTheDocument();
+
+    act(() => {
+      resolveFirst(workspaceFor('product-1', 'Atrazine', 'Stale supplier'));
+    });
+    expect(screen.queryByText('Stale supplier')).not.toBeInTheDocument();
+    expect(screen.getByText('Current supplier')).toBeInTheDocument();
+
+    fireEvent.change(productSelect, { target: { value: '' } });
+    expect(screen.queryByText('Current supplier')).not.toBeInTheDocument();
+    expect(screen.getByText('Choose a Product to load its selected cost basis.')).toBeInTheDocument();
+  });
+
+  it('updates the Product-detail destination when the selected Product changes', async () => {
+    mockGetWorkspace.mockResolvedValue({
+      vendors: [],
+      products: [
+        { id: 'product-1', product_name: 'Atrazine', sku: 'A-1', inventory_unit: 'gallon' },
+        { id: 'product-2', product_name: 'Glyphosate', sku: 'G-1', inventory_unit: 'gallon' },
+      ],
+      links: [], imports: [], aliases: [], evidence: [],
+    });
+    mockGetBasisWorkspace.mockImplementation(async (productId: string) => ({
+      enabled: true,
+      product: {
+        id: productId, product_name: productId === 'product-1' ? 'Atrazine' : 'Glyphosate',
+        sku: null, pricing_version: 1, current_cost_cents: 10_000n,
+        tier1_margin_percent: '20', tier2_margin_percent: '15', tier3_margin_percent: '10',
+      },
+      current_basis: null,
+      supplier_candidates: productId === 'product-1' ? [{
+        supplier_price_observation_id: 'observation-1', vendor_id: 'vendor-1',
+        vendor_name: 'Pending supplier', quoted_package_cost_cents: 12_000n,
+        normalized_cost_cents: 12_000n, effective_from: '2026-07-21', price_kind: 'quote',
+      }] : [],
+      purchase_candidates: [],
+    }));
+
+    render(<SupplierPricing />);
+    fireEvent.click(await screen.findByRole('tab', { name: 'Comparison' }));
+    expect(await screen.findByRole('link', { name: 'Open Product cost-basis flow' }))
+      .toHaveAttribute('href', '/products/product-1');
+
+    fireEvent.change(screen.getByLabelText('Product'), { target: { value: 'product-2' } });
+    await waitFor(() => expect(mockGetBasisWorkspace).toHaveBeenCalledWith('product-2'));
+    expect(await screen.findByRole('link', { name: 'Open Product cost-basis flow' }))
+      .toHaveAttribute('href', '/products/product-2');
+    expect(mockPreviewPricing).not.toHaveBeenCalled();
   });
 });

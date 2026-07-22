@@ -51,13 +51,51 @@ describe('ProductPriceHistory', () => {
       ],
     });
 
-    render(<ProductPriceHistory productId="product-1" />);
+    const selectSupplier = vi.fn();
+    const selectPurchase = vi.fn();
+    render(
+      <ProductPriceHistory
+        productId="product-1"
+        costBasisWorkspace={{
+          enabled: true,
+          product: {
+            id: 'product-1', product_name: 'Atrazine', sku: null, pricing_version: 1,
+            current_cost_cents: 2_100n, tier1_margin_percent: '20',
+            tier2_margin_percent: '15', tier3_margin_percent: '10',
+          },
+          current_basis: null,
+          supplier_candidates: [{
+            supplier_price_observation_id: 'observation-1', vendor_id: 'vendor-1',
+            vendor_name: 'The Andersons', quoted_package_cost_cents: 10_000n,
+            normalized_cost_cents: 2_000n, effective_from: '2026-07-01', price_kind: 'quote',
+          }],
+          purchase_candidates: [{
+            purchase_order_item_id: 'po-1', purchase_order_id: 'purchase-1',
+            po_number: 'PO-1', vendor_name: 'supplier unknown',
+            normalized_cost_cents: 2_200n, purchased_at: '2026-07-04T12:00:00Z',
+          }],
+        }}
+        onSelectSupplierBasis={selectSupplier}
+        onSelectPurchaseBasis={selectPurchase}
+      />,
+    );
 
     await screen.findByText('supplier unknown');
     expect(screen.getAllByText('The Andersons')).toHaveLength(2);
     expect(screen.getAllByText('Van Diest')).toHaveLength(2);
     expect(screen.getByText('CRX selected basis')).toBeInTheDocument();
+    expect(screen.getAllByText('Received PO cost').length).toBeGreaterThan(0);
     expect(screen.getByRole('img', { name: 'Product supplier price history chart' })).toBeInTheDocument();
+    const selectButtons = screen.getAllByRole('button', { name: 'Select as cost basis' });
+    expect(selectButtons).toHaveLength(2);
+    fireEvent.click(selectButtons[0]);
+    fireEvent.click(selectButtons[1]);
+    expect(selectSupplier).toHaveBeenCalledWith(expect.objectContaining({
+      supplier_price_observation_id: 'observation-1',
+    }));
+    expect(selectPurchase).toHaveBeenCalledWith(expect.objectContaining({
+      purchase_order_item_id: 'po-1',
+    }));
 
     fireEvent.change(screen.getByLabelText('Filter supplier'), { target: { value: 'vendor-1' } });
 

@@ -1,4 +1,5 @@
 import type { Json } from '../types/supabase';
+import type { ProductCostBasisSelectionSource, ProductCostBasisType } from '../types';
 import { assertRpcResult, supabase } from './db';
 
 export type PricingSource = 'pricing_worksheet' | 'product_page' | 'products_inline';
@@ -10,6 +11,19 @@ export type PricingChangeSetStatus =
   | 'no_changes'
   | 'applied'
   | 'expired';
+export type ProductCostBasisSource = Exclude<
+  ProductCostBasisSelectionSource,
+  'migration_baseline'
+>;
+
+export interface CostBasisPreviewMetadata {
+  basis_type?: ProductCostBasisType;
+  basis_reason?: string;
+  basis_source?: ProductCostBasisSource;
+  basis_selection?: boolean;
+  supplier_price_observation_id?: string;
+  purchase_order_item_id?: string;
+}
 
 const MAX_PRICING_CENTS = 9_223_372_036_854_775_807n;
 const PRICING_DOLLAR_INPUT = /^([0-9]+)(?:\.([0-9]{1,2}))?$/;
@@ -81,7 +95,7 @@ export interface PricingWorkbookExport {
   rows: PricingWorkbookExportRow[];
 }
 
-export interface PricingPreviewInputRow {
+export interface PricingPreviewInputRow extends CostBasisPreviewMetadata {
   product_id: string;
   product_name?: string;
   sku?: string;
@@ -117,7 +131,7 @@ export interface PricingSnapshot {
   tier3_price_per_acre_cents?: bigint | null;
 }
 
-export interface PricingWorksheetPreviewRow {
+export interface PricingWorksheetPreviewRow extends CostBasisPreviewMetadata {
   product_id: string;
   sku: string;
   product_name: string;
@@ -180,6 +194,7 @@ export interface PricingPreviewResult {
   conflict_count: number;
   invalid_count: number;
   apply_allowed: boolean;
+  basis_change_count?: number;
   rows: PricingPreviewRow[];
 }
 
@@ -192,6 +207,19 @@ export interface ApplyPricingResult {
   status: 'applied';
   applied_count: number;
   rows: AppliedPricingRow[];
+  cost_basis_rows?: AppliedCostBasisRow[];
+}
+
+export interface AppliedCostBasisRow {
+  id: string;
+  product_id: string;
+  basis_type: ProductCostBasisType;
+  cost_cents: bigint;
+  supplier_price_observation_id: string | null;
+  purchase_order_item_id: string | null;
+  selection_source: ProductCostBasisSource;
+  reason: string;
+  selected_at: string;
 }
 
 export interface CreatePricingWorkbookExportInput {
@@ -251,8 +279,9 @@ type PricingPreviewResultWire = Omit<PricingPreviewResult, 'rows'> & {
   rows: Array<Omit<PricingPreviewRow, 'effect'> & { effect: PricingEffectWire | null }>;
 };
 
-type ApplyPricingResultWire = Omit<ApplyPricingResult, 'rows'> & {
+type ApplyPricingResultWire = Omit<ApplyPricingResult, 'rows' | 'cost_basis_rows'> & {
   rows: Array<PricingEffectWire & Pick<AppliedPricingRow, 'pricing_version'>>;
+  cost_basis_rows?: Array<Omit<AppliedCostBasisRow, 'cost_cents'> & { cost_cents: unknown }>;
 };
 
 function exactDollarCents(value: string | null, field: string): bigint | null {
@@ -268,6 +297,12 @@ function exactIntegerCents(value: unknown, field: string): bigint | null {
   if (typeof value === 'string' && /^-?\d+$/.test(value)) return BigInt(value);
   if (typeof value === 'number' && Number.isSafeInteger(value)) return BigInt(value);
   throw new Error(`Pricing RPC returned an unsafe ${field} value.`);
+}
+
+function requiredExactIntegerCents(value: unknown, field: string): bigint {
+  const cents = exactIntegerCents(value, field);
+  if (cents === null) throw new Error(`Pricing RPC returned a missing ${field} value.`);
+  return cents;
 }
 
 function normalizePricingSnapshot(snapshot: PricingSnapshotWire): PricingSnapshot {
@@ -317,7 +352,29 @@ function normalizeApplyPricingResult(result: ApplyPricingResultWire): ApplyPrici
       ...normalizePricingEffect(row),
       pricing_version: row.pricing_version,
     })),
+    cost_basis_rows: result.cost_basis_rows?.map((row) => ({
+      ...row,
+      cost_cents: requiredExactIntegerCents(row.cost_cents, 'cost basis cents'),
+    })),
   };
+}
+
+function costBasisRows(
+  rows: ReadonlyArray<PricingPreviewInputRow | PricingWorksheetPreviewRow>,
+  source: PricingSource,
+): Array<PricingPreviewInputRow | PricingWorksheetPreviewRow> {
+  const defaultReason = source === 'pricing_worksheet'
+    ? 'Pricing worksheet update'
+    : source === 'products_inline'
+      ? 'Products list pricing update'
+      : 'Product pricing update';
+  return rows.map((row) => ({
+    ...row,
+    basis_type: row.basis_type ?? 'manual_override',
+    basis_reason: row.basis_reason?.trim() || row.change_reason?.trim() || defaultReason,
+    basis_source: row.basis_source ?? source,
+    basis_selection: row.basis_selection ?? false,
+  }));
 }
 
 export async function createPricingWorkbookExport(
@@ -340,28 +397,29 @@ export async function previewProductPricingChanges(
   // prices before any frontend path reaches the RPC. The live database guard
   // independently enforces the same rule server-side.
   assertPricingPreviewRowsSafe(input.rows);
-  const { data, error } = await supabase.rpc('preview_product_pricing_changes', {
+  const rows = costBasisRows(input.rows, input.source);
+  const { data, error } = await supabase.rpc('preview_product_cost_basis_changes', {
     p_source: input.source,
     p_export_id: input.source === 'pricing_worksheet' ? input.exportId : undefined,
-    p_rows: input.rows as unknown as Json,
+    p_rows: rows as unknown as Json,
     p_performed_by: input.performedBy,
     p_idempotency_key: input.idempotencyKey,
   });
   if (error) throw error;
-  const result = assertRpcResult<PricingPreviewResultWire>(data, 'preview_product_pricing_changes');
+  const result = assertRpcResult<PricingPreviewResultWire>(data, 'preview_product_cost_basis_changes');
   return normalizePricingPreviewResult(result);
 }
 
 export async function applyProductPricingChangeSet(
   input: ApplyPricingChangeSetInput,
 ): Promise<ApplyPricingResult> {
-  const { data, error } = await supabase.rpc('apply_product_pricing_change_set', {
+  const { data, error } = await supabase.rpc('apply_product_cost_basis_change_set', {
     p_change_set_id: input.changeSetId,
     p_request_fingerprint: input.requestFingerprint,
     p_performed_by: input.performedBy,
     p_idempotency_key: input.idempotencyKey,
   });
   if (error) throw error;
-  const result = assertRpcResult<ApplyPricingResultWire>(data, 'apply_product_pricing_change_set');
+  const result = assertRpcResult<ApplyPricingResultWire>(data, 'apply_product_cost_basis_change_set');
   return normalizeApplyPricingResult(result);
 }

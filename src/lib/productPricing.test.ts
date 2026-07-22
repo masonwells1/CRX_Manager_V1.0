@@ -111,10 +111,16 @@ describe('product pricing RPC wrappers', () => {
       idempotencyKey: 'preview-key',
     })).resolves.toEqual(response);
 
-    expect(mockRpc).toHaveBeenCalledWith('preview_product_pricing_changes', {
+    expect(mockRpc).toHaveBeenCalledWith('preview_product_cost_basis_changes', {
       p_source: 'product_page',
       p_export_id: undefined,
-      p_rows: rows,
+      p_rows: [{
+        ...rows[0],
+        basis_type: 'manual_override',
+        basis_reason: 'Monthly update',
+        basis_source: 'product_page',
+        basis_selection: false,
+      }],
       p_performed_by: 'actor-1',
       p_idempotency_key: 'preview-key',
     });
@@ -225,7 +231,7 @@ describe('product pricing RPC wrappers', () => {
     expect(mockRpc).not.toHaveBeenCalled();
   });
 
-  it('passes a worksheet export id and all rows unchanged', async () => {
+  it('passes a worksheet export id and adds manual cost-basis provenance', async () => {
     const response = { change_set_id: 'change-1', status: 'no_changes', rows: [] };
     const rows = [{
       product_id: 'product-1',
@@ -267,12 +273,105 @@ describe('product pricing RPC wrappers', () => {
       idempotencyKey: 'preview-key',
     });
 
-    expect(mockRpc).toHaveBeenCalledWith('preview_product_pricing_changes', {
+    expect(mockRpc).toHaveBeenCalledWith('preview_product_cost_basis_changes', {
       p_source: 'pricing_worksheet',
       p_export_id: 'export-1',
-      p_rows: rows,
+      p_rows: [{
+        ...rows[0],
+        basis_type: 'manual_override',
+        basis_reason: 'Pricing worksheet update',
+        basis_source: 'pricing_worksheet',
+        basis_selection: false,
+      }],
       p_performed_by: 'actor-1',
       p_idempotency_key: 'preview-key',
+    });
+  });
+
+  it('preserves an unchanged null-cost worksheet row for server manifest validation', async () => {
+    const response = {
+      change_set_id: 'change-null-cost',
+      status: 'previewed',
+      submitted_row_count: 2,
+      ready_count: 1,
+      unchanged_count: 1,
+      rows: [],
+    };
+    const changedRow = {
+      product_id: 'product-priced',
+      sku: 'PRICED',
+      product_name: 'Priced Product',
+      category: 'Herbicide',
+      container_size: '2.5',
+      unit_size: 'gal',
+      inventory_unit: 'gallon',
+      identity_fingerprint: 'priced-identity',
+      row_token: 'priced-token',
+      row_version: '7',
+      current_cost: '100.00',
+      current_tier1_margin_percent: '20',
+      current_tier1_price: '125.00',
+      current_tier2_margin_percent: '15',
+      current_tier2_price: '117.65',
+      current_tier3_margin_percent: '10',
+      current_tier3_price: '111.11',
+      pricing_mode: 'margin_driven' as const,
+      new_cost: '110.00',
+      tier1_margin_percent: '20',
+      tier1_price: '',
+      tier2_margin_percent: '15',
+      tier2_price: '',
+      tier3_margin_percent: '10',
+      tier3_price: '',
+      change_reason: 'Monthly update',
+      has_formula: false,
+      formula_cells: [],
+    };
+    const inertNullCostRow = {
+      ...changedRow,
+      product_id: 'product-null-cost',
+      sku: 'NULL-COST',
+      product_name: 'Pricing-free Product',
+      identity_fingerprint: 'null-cost-identity',
+      row_token: 'null-cost-token',
+      row_version: '1',
+      current_cost: '',
+      current_tier1_margin_percent: '',
+      current_tier1_price: '',
+      current_tier2_margin_percent: '',
+      current_tier2_price: '',
+      current_tier3_margin_percent: '',
+      current_tier3_price: '',
+      pricing_mode: '' as const,
+      new_cost: '',
+      tier1_margin_percent: '',
+      tier1_price: '',
+      tier2_margin_percent: '',
+      tier2_price: '',
+      tier3_margin_percent: '',
+      tier3_price: '',
+      change_reason: '',
+    };
+    mockRpc.mockResolvedValue({ data: response, error: null });
+
+    await previewProductPricingChanges({
+      source: 'pricing_worksheet',
+      exportId: 'export-null-cost',
+      rows: [changedRow, inertNullCostRow],
+      performedBy: 'actor-1',
+      idempotencyKey: 'preview-null-cost-key',
+    });
+
+    const rpcArgs = mockRpc.mock.calls[0][1];
+    expect(rpcArgs.p_rows).toHaveLength(2);
+    expect(rpcArgs.p_rows[1]).toMatchObject({
+      product_id: 'product-null-cost',
+      pricing_mode: '',
+      current_cost: '',
+      new_cost: '',
+      basis_type: 'manual_override',
+      basis_source: 'pricing_worksheet',
+      basis_selection: false,
     });
   });
 
@@ -287,13 +386,13 @@ describe('product pricing RPC wrappers', () => {
       idempotencyKey: 'apply-key',
     })).resolves.toEqual(response);
 
-    expect(mockRpc).toHaveBeenCalledWith('apply_product_pricing_change_set', {
+    expect(mockRpc).toHaveBeenCalledWith('apply_product_cost_basis_change_set', {
       p_change_set_id: 'change-1',
       p_request_fingerprint: 'request-fingerprint',
       p_performed_by: 'actor-1',
       p_idempotency_key: 'apply-key',
     });
-    expect(mockAssertRpcResult).toHaveBeenCalledWith(response, 'apply_product_pricing_change_set');
+    expect(mockAssertRpcResult).toHaveBeenCalledWith(response, 'apply_product_cost_basis_change_set');
   });
 
   it('throws the Supabase error before asserting a result', async () => {
@@ -315,6 +414,6 @@ describe('product pricing RPC wrappers', () => {
       requestFingerprint: 'request-fingerprint',
       performedBy: 'actor-1',
       idempotencyKey: 'apply-key',
-    })).rejects.toThrow('apply_product_pricing_change_set returned no data');
+    })).rejects.toThrow('apply_product_cost_basis_change_set returned no data');
   });
 });
