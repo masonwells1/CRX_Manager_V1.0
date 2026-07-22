@@ -1,5 +1,6 @@
 import { useEffect, useState , useCallback } from 'react';
-import { Download, CheckCircle2, FileText } from 'lucide-react';
+import { Download, CheckCircle2, FileText, Sprout } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import Card from '../components/ui/Card';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
@@ -852,6 +853,22 @@ export default function Reports() {
   return (
     <div className="space-y-6">
       <SplitHeading title="Reports" accent="& Analytics" />
+
+      <Link to="/field-profitability" className="block max-w-xl">
+        <Card hover className="group h-full">
+          <div className="flex items-start gap-4">
+            <div className="rounded-lg bg-crx-green-tint p-3 text-crx-green">
+              <Sprout className="h-6 w-6" />
+            </div>
+            <div>
+              <h2 className="font-semibold text-nav-dark group-hover:text-crx-green">Field Profitability</h2>
+              <p className="mt-1 text-sm text-secondary">
+                Compare applied acres, revenue, cost, margin, and margin per acre by field and season.
+              </p>
+            </div>
+          </div>
+        </Card>
+      </Link>
 
       {/* Category selector */}
       <div className="flex gap-2 flex-wrap">

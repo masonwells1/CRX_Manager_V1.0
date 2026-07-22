@@ -3186,6 +3186,20 @@ export interface PnLRow {
   pct_of_revenue: number;
 }
 
+export interface FieldProfitabilityRow {
+  [k: string]: unknown;
+  field_id: string;
+  field_name: string;
+  customer_id: string;
+  customer_name: string;
+  season: string;
+  total_acres_applied: number;
+  revenue_cents: number;
+  cost_cents: number;
+  margin_cents: number;
+  margin_per_acre_cents: number;
+}
+
 export interface GrossSalesRow {
   [k: string]: unknown;
   group_name: string;
