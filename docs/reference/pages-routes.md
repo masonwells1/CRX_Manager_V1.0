@@ -1,4 +1,4 @@
-# Pages & Routes Reference (79 pages, 87 routes)
+# Pages & Routes Reference (80 pages, 88 routes)
 
 > Counts verified 2026-07-13 against `src/App.tsx` (`lazy(` call count = pages) and this table's own row count (routes); `npm run check:docs` (`scripts/check-doc-drift.mjs`) enforces both numbers stay in sync with the codebase on every run.
 
@@ -56,6 +56,7 @@
 | `/sales-reports` | SalesReports | Comprehensive sales & chemical history. 5 tabs (Detail, By Product, By Customer, By Month, By Sales Rep), 6 filters, multi-customer select with farm group support, Customer View toggle (hides cost/margin), CSV/PDF export |
 | `/reports` | Reports | 14 reports: 4 logbook, 6 financial, 4 operational. CSV/PDF export. |
 | `/fields` | Fields | Field list with Mapbox map view + bulk import (shapefile/KML/GeoJSON) |
+| `/field-profitability` | FieldProfitability | Field-level profitability report (X4/E4/T10): margin per acre by field/customer/season from posted field-app invoices via read-only RPC `get_field_profitability`; "(unassigned field)" bucket for job-transferred invoices without location rows. Roles: admin/sales_rep. Added 2026-07-21 |
 | `/fields/:id` | FieldSetup | Field CRUD with two-panel layout and satellite map with polygon drawing |
 | `/recipes` | BlendRecipes | Reusable blend recipe management, create job from recipe |
 | `/cycle-counts` | CycleCounts | Inventory cycle counting with variance tracking |

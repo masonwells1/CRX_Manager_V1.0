@@ -46,6 +46,7 @@ const Integrity = lazy(() => import('./pages/Integrity'));
 const Fields = lazy(() => import('./pages/Fields'));
 const FieldSetup = lazy(() => import('./pages/FieldSetup'));
 const FieldDashboard = lazy(() => import('./pages/FieldDashboard'));
+const FieldProfitability = lazy(() => import('./pages/FieldProfitability'));
 const BlendTickets = lazy(() => import('./pages/BlendTickets').then(m => ({ default: m.BlendTickets })));
 const BlendTicketDetail = lazy(() => import('./pages/BlendTicketDetail').then(m => ({ default: m.BlendTicketDetail })));
 const Invoices = lazy(() => import('./pages/Invoices'));
@@ -251,6 +252,7 @@ const router = createBrowserRouter([
           { path: 'purchase-orders/:id', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><PurchaseOrderDetail /></ProtectedRoute> },
           { path: 'brand-vs-generic', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><BrandVsGeneric /></ProtectedRoute> },
           { path: 'reports', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><Reports /></ProtectedRoute> },
+          { path: 'field-profitability', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><FieldProfitability /></ProtectedRoute> },
           { path: 'sales-reports', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><SalesReports /></ProtectedRoute> },
           { path: 'crop-programs', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><CropPrograms /></ProtectedRoute> },
           { path: 'payments', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><PaymentAllocation /></ProtectedRoute> },
