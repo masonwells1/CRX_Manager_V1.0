@@ -1,5 +1,6 @@
 import { useEffect, useState , useCallback } from 'react';
-import { Download, CheckCircle2, FileText } from 'lucide-react';
+import { Download, CheckCircle2, FileText, Sprout } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import Card from '../components/ui/Card';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
@@ -7,6 +8,7 @@ import Button from '../components/ui/Button';
 import SplitHeading from '../components/ui/SplitHeading';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
+import { hasPageAccess } from '../lib/pagePermissions';
 import { supabase, assertRpcResult } from '../lib/db';
 import { logActivity } from '../lib/activityLogger';
 import { exportToCSV, fmtCSV, fmtDateCSV } from '../lib/csvExport';
@@ -100,7 +102,7 @@ function getPresetDates(preset: string): { start: string; end: string } {
 }
 
 export default function Reports() {
-  const { role, profile } = useAuth();
+  const { role, profile, deniedPages } = useAuth();
   const { toast } = useToast();
   const isAdmin = role === 'admin';
 
@@ -852,6 +854,24 @@ export default function Reports() {
   return (
     <div className="space-y-6">
       <SplitHeading title="Reports" accent="& Analytics" />
+
+      {hasPageAccess(role, deniedPages, 'field-profitability') && (
+      <Link to="/field-profitability" className="block max-w-xl">
+        <Card hover className="group h-full">
+          <div className="flex items-start gap-4">
+            <div className="rounded-lg bg-crx-green-tint p-3 text-crx-green">
+              <Sprout className="h-6 w-6" />
+            </div>
+            <div>
+              <h2 className="font-semibold text-nav-dark group-hover:text-crx-green">Field Profitability</h2>
+              <p className="mt-1 text-sm text-secondary">
+                Compare applied acres, revenue, cost, margin, and margin per acre by field and season.
+              </p>
+            </div>
+          </div>
+        </Card>
+      </Link>
+      )}
 
       {/* Category selector */}
       <div className="flex gap-2 flex-wrap">

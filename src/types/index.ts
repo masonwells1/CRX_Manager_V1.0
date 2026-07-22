@@ -3234,6 +3234,22 @@ export interface PnLRow {
   pct_of_revenue: number;
 }
 
+export interface FieldProfitabilityRow {
+  [k: string]: unknown;
+  // NULL for the "(unassigned field)" bucket row.
+  field_id: string | null;
+  field_name: string;
+  customer_id: string;
+  // LEFT-joined; can be null for the unassigned bucket.
+  customer_name: string | null;
+  season: string;
+  total_acres_applied: number;
+  revenue_cents: number;
+  cost_cents: number;
+  margin_cents: number;
+  margin_per_acre_cents: number;
+}
+
 export interface GrossSalesRow {
   [k: string]: unknown;
   group_name: string;

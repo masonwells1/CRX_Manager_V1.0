@@ -80,6 +80,7 @@ export const PAGE_PERMISSIONS: PagePermission[] = [
   { key: 'dashboard', path: '/dashboard', label: 'Overview (KPI Dashboard)', category: 'Insights', roles: ['admin', 'sales_rep'] },
   { key: 'office-cockpit', path: '/office-cockpit', label: 'Today', category: 'Insights', roles: ['admin', 'sales_rep'] },
   { key: 'reports', path: '/reports', label: 'Reports Library', category: 'Insights', roles: ['admin', 'sales_rep'] },
+  { key: 'field-profitability', path: '/field-profitability', label: 'Field Profitability', category: 'Insights', roles: ['admin', 'sales_rep'] },
   { key: 'sales-reports', path: '/sales-reports', label: 'Sales Reports', category: 'Insights', roles: ['admin', 'sales_rep'] },
   { key: 'financial-dashboard', path: '/financial-dashboard', label: 'Financial Dashboard', category: 'Insights', roles: ['admin'] },
 
