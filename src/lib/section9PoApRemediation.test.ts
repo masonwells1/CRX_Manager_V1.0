@@ -1,0 +1,117 @@
+import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+const source = (...parts: string[]) =>
+  readFileSync(join(root, ...parts), 'utf8').replace(/\r\n/g, '\n');
+
+const migration = source(
+  'supabase',
+  'migrations',
+  '20260722191804_section9_po_ap_high_remediation.sql',
+);
+
+describe('Section 9 PO/AP HIGH remediation contracts', () => {
+  it('recomputes Main Warehouse on-order truth after line and status changes', () => {
+    expect(migration).toContain(
+      "po.status IN ('submitted', 'partially_received')",
+    );
+    expect(migration).toContain('pg_advisory_xact_lock(73492009)');
+    expect(migration).toContain('FULL JOIN (');
+    expect(migration).toContain(
+      'poi.quantity_ordered - COALESCE(poi.quantity_received, 0)',
+    );
+    expect(migration).toContain("location = 'Main Warehouse'");
+    expect(migration).toContain('AFTER INSERT OR DELETE OR UPDATE OF');
+    expect(migration).toContain('AFTER UPDATE OF status ON public.purchase_orders');
+    expect(migration).toContain(
+      'DROP TRIGGER IF EXISTS trg_po_submitted_on_order',
+    );
+  });
+
+  it('removes every browser vendor-write path while retaining RPC grants', () => {
+    expect(migration).toContain(
+      'REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER\n' +
+        'ON TABLE public.vendors\nFROM anon, authenticated;',
+    );
+    expect(migration).toContain('DROP POLICY IF EXISTS vendors_insert');
+    expect(migration).toContain('DROP POLICY IF EXISTS vendors_update');
+    expect(migration).toContain('DROP POLICY IF EXISTS vendors_admin_delete');
+    expect(migration).toContain('SECTION9_VENDOR_GRANT_CHECK_FAILED');
+    expect(migration).toContain(
+      'REVOKE ALL ON FUNCTION public.save_purchase_order(uuid, jsonb, jsonb, uuid, text) FROM PUBLIC, anon;',
+    );
+  });
+
+  it('locks and revalidates the PO before inserting an active bill', () => {
+    const start = migration.indexOf(
+      'CREATE OR REPLACE FUNCTION public.create_vendor_bill(',
+    );
+    const end = migration.indexOf(
+      '-- ---------------------------------------------------------------------------\n' +
+        '-- 4.',
+      start,
+    );
+    const body = migration.slice(start, end);
+    const poLock = body.indexOf('FROM public.purchase_orders\n    WHERE id = p_purchase_order_id\n    FOR UPDATE;');
+    const statusGate = body.indexOf('PO_NOT_BILLABLE');
+    const insert = body.indexOf('INSERT INTO public.vendor_bills');
+
+    expect(poLock).toBeGreaterThan(-1);
+    expect(statusGate).toBeGreaterThan(poLock);
+    expect(insert).toBeGreaterThan(statusGate);
+    expect(body).toContain("'submitted',\n      'partially_received',\n      'fully_received'");
+  });
+
+  it('fails closed instead of claiming unsupported historical AP', () => {
+    expect(migration).toContain(
+      "clock_timestamp() AT TIME ZONE 'America/Chicago'",
+    );
+    expect(migration).toContain('HISTORICAL_AP_UNAVAILABLE');
+    expect(migration).toContain('vb.bill_date <= p_as_of_date');
+
+    const page = source('src', 'pages', 'AccountsPayable.tsx');
+    expect(page).toContain('Current AP only.');
+    expect(page).toContain('Exact historical AP is unavailable');
+    expect(page).toContain("timeZone: 'America/Chicago'");
+    expect(page).toContain('const requestAsOfDate = chicagoBusinessToday()');
+    expect(page).toMatch(/type="date"[\s\S]*?value=\{asOfDate\}[\s\S]*?disabled/);
+  });
+
+  it('locks the stored bill before checking both accounting periods', () => {
+    const start = migration.indexOf(
+      'CREATE OR REPLACE FUNCTION public.update_vendor_bill(',
+    );
+    const body = migration.slice(start);
+    const lock = body.indexOf('FOR UPDATE;');
+    const oldPeriod = body.indexOf('check_period_open(v_bill.bill_date)');
+    const newPeriod = body.indexOf('check_period_open(p_bill_date)');
+
+    expect(lock).toBeGreaterThan(-1);
+    expect(oldPeriod).toBeGreaterThan(lock);
+    expect(newPeriod).toBeGreaterThan(lock);
+  });
+
+  it('keeps permanent rollback and two-session prevention proofs registered', () => {
+    const registry = source('scripts', 'smoke', 'smoke-specs.json');
+    const sweep = source(
+      'scripts',
+      'db-invariant-sweeps',
+      'predicates',
+      'section9-po-ap-controls.sql',
+    );
+    const concurrency = source(
+      'scripts',
+      'smoke',
+      'prove-section9-po-ap-concurrency.mjs',
+    );
+
+    expect(registry).toContain('smoke-section9-po-ap-high-remediation.sql');
+    expect(sweep).toContain('vendors:browser-mutation-privilege');
+    expect(sweep).toContain('vendor_bills:invalid-po:');
+    expect(concurrency).toContain('SECTION9_PO_AP_CONCURRENCY_PASS');
+    expect(concurrency).toContain("'--network', 'none'");
+  });
+});

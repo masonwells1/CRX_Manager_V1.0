@@ -1620,6 +1620,12 @@ const IDEMPOTENCY_BODY_EXEMPT: Record<
   // line, then delegates to the directly non-executable integer-cents writer
   // that owns the canonical replay lookup/save.
   save_purchase_order: 'delegated',
+  // Section 9 wrappers acquire the PO-derived-state serialization lock before
+  // delegating to directly non-executable preserved implementations. Those
+  // implementations retain the canonical idempotency lookup/save behavior.
+  cancel_purchase_order: 'delegated',
+  delete_purchase_order: 'delegated',
+  receive_po_items: 'delegated',
   //  - 'table-unique'   : idempotency is enforced NOT via the idempotency_keys table
   //                       but by a dedicated column + PARTIAL UNIQUE index on the RPC's
   //                       own table, with a catch-unique-violation replay. Used when the
@@ -2133,6 +2139,8 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
   _insert_commissions_for_job: 'internal helper; caller owns idempotency and direct EXECUTE is revoked',
   _insert_commissions_for_order: 'internal helper; caller owns idempotency and direct EXECUTE is revoked',
   _reverse_credit_memo_application: 'internal helper called only by idempotent credit-memo reversal RPCs',
+  _recompute_po_on_order_for_products:
+    'internal convergent PO-cache recomputation helper; trigger parents own the transaction and direct browser EXECUTE is revoked',
   _sync_job_holds: 'internal convergent hold-sync helper; direct client EXECUTE is revoked',
   _sync_planned_holds: 'internal convergent hold-sync helper called within parent transactions',
   _sync_quote_job_reservations: 'internal convergent reservation-sync helper called by parent RPCs',
@@ -2154,6 +2162,10 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
   save_idempotency: 'idempotency infrastructure helper that stores the parent operation result',
   set_primary_customer_contact: 'convergent primary-contact promotion; replays settle to the same single-primary state; SECURITY INVOKER under customer RLS',
   settle_applied_record_acres: 'trigger-only derived-acre recomputation; direct client EXECUTE is revoked',
+  trg_po_items_recompute_on_order:
+    'trigger-only PO on-order derived-cache recomputation; direct browser EXECUTE is revoked',
+  trg_po_status_recompute_on_order:
+    'trigger-only PO on-order derived-cache recomputation; direct browser EXECUTE is revoked',
 };
 
 

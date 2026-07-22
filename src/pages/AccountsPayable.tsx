@@ -4,7 +4,7 @@
  * Shows summary cards (Total Owed, Due This Week, Due This Month, Overdue),
  * AP aging buckets, and a vendor breakdown. Admin-only.
  */
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { DollarSign, Clock, AlertTriangle, FileText, Plus } from 'lucide-react';
 import Card from '../components/ui/Card';
@@ -15,9 +15,20 @@ import { useToast } from '../components/ui/Toast';
 import { supabase, assertRpcResult } from '../lib/db';
 import { Sentry } from '../lib/sentry';
 import { exportToCSV, fmtCSV } from '../lib/csvExport';
-import { localToday } from '../lib/dateUtils';
 import { formatCents as fmt } from '../lib/money';
 import type { APAgingRow, APDashboardSummary } from '../types';
+
+function chicagoBusinessToday(): string {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Chicago',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date());
+  const value = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((part) => part.type === type)?.value ?? '';
+  return `${value('year')}-${value('month')}-${value('day')}`;
+}
 
 export default function AccountsPayable() {
   const navigate = useNavigate();
@@ -25,7 +36,7 @@ export default function AccountsPayable() {
   const [loading, setLoading] = useState(true);
   const [summary, setSummary] = useState<APDashboardSummary | null>(null);
   const [agingData, setAgingData] = useState<APAgingRow[]>([]);
-  const [asOfDate, setAsOfDate] = useState(localToday());
+  const asOfDate = chicagoBusinessToday();
 
   // Audit #35: split the dashboard fetch into two so changing the as-of-date
   // only re-runs the aging query (which depends on it). The summary query is
@@ -41,14 +52,17 @@ export default function AccountsPayable() {
   }, [toast]);
 
   const fetchAging = useCallback(async () => {
-    const { data, error } = await supabase.rpc('get_ap_aging', { p_as_of_date: asOfDate });
+    // Resolve at request time so a tab left open across Chicago midnight does
+    // not send yesterday's now-unsupported current-only report date.
+    const requestAsOfDate = chicagoBusinessToday();
+    const { data, error } = await supabase.rpc('get_ap_aging', { p_as_of_date: requestAsOfDate });
     if (error) {
       Sentry.captureException(error);
       toast('error', 'Failed to load AP aging data');
       return;
     }
     setAgingData(assertRpcResult<APAgingRow[]>(data, 'get_ap_aging'));
-  }, [asOfDate, toast]);
+  }, [toast]);
 
   // Initial load: both queries fire in parallel, drop loading state when both settle.
   useEffect(() => {
@@ -60,17 +74,6 @@ export default function AccountsPayable() {
     return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  // asOfDate changes only re-run the aging query (summary doesn't depend on it).
-  // Skip the initial render — the mount effect above already fetched aging.
-  const isInitialDateRef = useRef(true);
-  useEffect(() => {
-    if (isInitialDateRef.current) {
-      isInitialDateRef.current = false;
-      return;
-    }
-    fetchAging();
-  }, [asOfDate, fetchAging]);
 
   const agingTotals = agingData.reduce(
     (acc, r) => ({
@@ -212,13 +215,17 @@ export default function AccountsPayable() {
       <Card>
         <div className="flex items-end gap-4 mb-4">
           <div>
-            <label className="block text-xs font-medium text-secondary mb-1">As of Date</label>
+            <label className="block text-xs font-medium text-secondary mb-1">Report Date</label>
             <input
               type="date"
               value={asOfDate}
-              onChange={(e) => setAsOfDate(e.target.value)}
-              className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              disabled
+              aria-describedby="ap-history-note"
+              className="px-3 py-2 text-sm border border-gray-200 rounded-lg bg-gray-50 text-secondary"
             />
+            <p id="ap-history-note" className="mt-1 max-w-xs text-xs text-secondary">
+              Current AP only. Exact historical AP is unavailable until durable bill history is recorded.
+            </p>
           </div>
           <Button variant="secondary" size="sm" onClick={() => { setLoading(true); Promise.all([fetchSummary(), fetchAging()]).finally(() => setLoading(false)); }}>
             Refresh
