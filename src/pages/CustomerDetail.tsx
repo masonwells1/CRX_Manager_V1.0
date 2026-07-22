@@ -22,6 +22,7 @@ import type { Json } from '../types/supabase';
 import { Sentry } from '../lib/sentry';
 import { parseDollarsToCents } from '../lib/parseCents';
 import { formatUSD as fmt } from '../lib/money';
+import { buildCommissionSplitPatch, nextLoadedSplitSnapshot } from '../lib/commissionSplitConcurrency';
 import { ALLOWED_CROPS, type CropValue } from '../lib/crops';
 import { logActivity } from '../lib/activityLogger';
 import CustomerSummaryBar from '../components/customers/CustomerSummaryBar';
@@ -88,6 +89,10 @@ export default function CustomerDetail() {
     default_application_service_id: null,
   });
   const [addresses, setAddresses] = useState<Partial<CustomerAddress>[]>([]);
+  // Lost-update guard: split as loaded from the DB, and whether the user has
+  // changed it this session (see src/lib/commissionSplitConcurrency.ts).
+  const loadedDefaultSplitRef = useRef<Customer['default_commission_split'] | null>(null);
+  const defaultSplitTouchedRef = useRef(false);
   const [loading, setLoading] = useState(!isNew);
   const [saving, setSaving] = useState(false);
   const [tab, setTab] = useState<'info' | 'contacts' | 'knowledge' | 'documents' | 'timeline' | 'fields' | 'quotes' | 'orders' | 'deliveries' | 'financials' | 'history'>('info');
@@ -147,6 +152,8 @@ export default function CustomerDetail() {
     }
     if (data) {
       setCustomer(data as Customer);
+      loadedDefaultSplitRef.current = (data as Customer).default_commission_split ?? null;
+      defaultSplitTouchedRef.current = false;
       // DB type is string[]; the CHECK constraint guarantees values are CropValue.
       setCrops((data.crops ?? []) as CropValue[]);
       // Fetch parent customer name if set
@@ -480,7 +487,13 @@ export default function CustomerDetail() {
         soybean_acres: customer.soybean_acres,
         other_acres: customer.other_acres,
         payment_terms: customer.payment_terms,
-        default_commission_split: customer.default_commission_split,
+        ...buildCommissionSplitPatch({
+          isUpdate: !isNew,
+          touched: defaultSplitTouchedRef.current,
+          key: 'default_commission_split',
+          value: customer.default_commission_split ?? null,
+          loaded: loadedDefaultSplitRef.current,
+        }),
         credit_limit_cents: customer.credit_limit_cents || 0,
         finance_charge_rate: customer.finance_charge_rate || 0,
         finance_charge_enabled: customer.finance_charge_enabled ?? true,
@@ -516,7 +529,16 @@ export default function CustomerDetail() {
         toast('error', error.message);
       } else {
         saveCustomerIdem.resetKey();
-        const result = assertRpcResult<{ customer_id: string }>(data, 'save_customer');
+        const result = assertRpcResult<{ customer_id: string; default_commission_split?: Customer['default_commission_split'] | null }>(data, 'save_customer');
+        // Advance the baseline snapshot ONLY when THIS tab saved its own split edit
+        // (see QuoteBuilder / nextLoadedSplitSnapshot for the multi-tab rationale).
+        loadedDefaultSplitRef.current = nextLoadedSplitSnapshot({
+          touched: defaultSplitTouchedRef.current,
+          prevLoaded: loadedDefaultSplitRef.current,
+          echoed: result.default_commission_split,
+          currentValue: customer.default_commission_split ?? null,
+        });
+        defaultSplitTouchedRef.current = false;
         setIsDirty(false);
         if (isNew) {
           toast('success', 'Customer created');
@@ -896,7 +918,10 @@ export default function CustomerDetail() {
             <CardHeader title="Default" accent="Commission Split" />
             <CommissionSplitEditor
               value={(customer.default_commission_split as CommissionSplit) || { splits: [{ recipient: '', percentage: 100 }] }}
-              onChange={(val) => update('default_commission_split', val)}
+              onChange={(val) => {
+                defaultSplitTouchedRef.current = true;
+                update('default_commission_split', val);
+              }}
               label=""
             />
             <p className="text-xs text-secondary mt-2">
