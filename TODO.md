@@ -85,7 +85,8 @@ When an item here ships or is decided, update this file AND `docs/manual/KNOWN_I
 - **X4 field-level profitability (E4/T10)** — verified not built yet.
 - **X5 portal prework (P1 customer-org model, P3 server-side PDFs)** — before any portal UI.
 - **X6 vendor-bill extraction pilot (D1/T13)** — after owner action 6.
-- **#117** — `auto_draft_skipped` activity-feed row (small; verified not built).
+- **#117** — `auto_draft_skipped` activity-feed row — **BUILT 2026-07-21** (migration
+  `20260721230000_auto_draft_skipped_activity_row.sql`, PR #199); pending live apply.
 - ~~**F3 WebP for `process-document`**~~ **RESOLVED — verified 2026-07-16:** the deployed
   v18 source contains the WebP/BMP/TIFF magic-byte allow-list (commented "Codex bug-hunt
   F3"); the 2026-07-12 CORS redeploy carried it live. No redeploy needed.
@@ -106,10 +107,12 @@ When an item here ships or is decided, update this file AND `docs/manual/KNOWN_I
   Web Locks, more operations, auto device-discovery of office resolutions (KNOWN_ISSUES §5).
 - **`apply_prepay_to_invoice` hand-decrement cleanup** — drop only after more prod watching.
 - **Customer RLS upper bound** (far-future job visibility) — left as-is on purpose.
-- **4 MEDIUM + ~11 LOW parked bug-hunt findings** — `docs/audits/overnight-bug-hunt/LEDGER.json`
-  (transfer_job_to_invoice actor binding, save_field_app_invoice row-lock, prepay status
-  check (moot while bulk-apply disabled), commission-pay-picker blanks; plus LOWs incl.
-  C11/C23 inline-idempotency cleanups).
+- **~11 LOW parked bug-hunt findings** — `docs/audits/overnight-bug-hunt/LEDGER.json`
+  (incl. C11/C23 inline-idempotency cleanups). **2026-07-21 sweep of the 4 parked MEDIUMs:**
+  transfer_job_to_invoice actor binding = FIXED LIVE (strict-actor guard verified in the live
+  body); save_field_app_invoice row-lock = FIXED LIVE (locking wrapper, July split-billing
+  hardening); commission-pay-picker blanks = FIXED on main (fetchUnpaid resolves via FK
+  lookups); prepay status check stays MOOTED while bulk-apply is hard-blocked.
 - **Guard-system hardening backlog** — KNOWN_ISSUES §4b (accepted residuals + sweep ideas).
 
 ## 🆕 4. Surfaced by the 2026-07-16 docs review (previously untracked anywhere)

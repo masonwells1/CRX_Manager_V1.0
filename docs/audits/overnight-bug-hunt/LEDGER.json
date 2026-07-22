@@ -361,7 +361,8 @@
       "codexSeverityCycle1Gate": "HIGH",
       "codexSeverityHolistic": "MEDIUM",
       "tier": "yellow",
-      "status": "parked",
+      "status": "fixed-live",
+      "resolved2026-07-21": "VERIFIED FIXED LIVE 2026-07-21: the live transfer_job_to_invoice body contains the ACTOR_MISMATCH strict-actor guard — the parked feat/as-applied-invoices fix (commit 97836e8, migration 20260619140000_transfer_job_invoice_machine_fee_strict_actor.sql) merged to main and was applied. No further work.",
       "fixKind": "migration",
       "cycle": 1,
       "reConfirmedCycle": 6,
@@ -500,7 +501,8 @@
       "claudeSeverity": "MEDIUM",
       "codexSeverity": "MEDIUM",
       "tier": "yellow",
-      "status": "parked",
+      "status": "fixed-live",
+      "resolved2026-07-21": "VERIFIED FIXED LIVE 2026-07-21: the live save_field_app_invoice is now a locking wrapper (advisory xact lock on the group id + anchor-then-set FOR UPDATE + status/group re-check under the lock, mirroring post_invoice_group) delegating to _save_field_app_invoice_impl_20260714 — landed during the 2026-07 split-billing hardening. No further work.",
       "fixKind": "migration",
       "cycle": 2,
       "note": "NEW cycle 2 (Codex-confirmed REAL, MEDIUM — agrees with Claude verifier). save_field_app_invoice group-edit branch reads status with a PLAIN unlocked SELECT (no FOR UPDATE), checks status once, then unconditionally DELETEs+rewrites invoice_items/invoice_shares/field_app_locations for the whole group; its later `UPDATE invoices SET total_amount_cents` has no `WHERE status IN(...)` recheck. post_invoice/post_invoice_group both lock FOR UPDATE first. Race: a concurrent edit can rewrite the line items/total of an invoice a concurrent post just flipped to 'posted' -> POSTED doc diverged from financial_audit_log 'invoice_posted' + generate_rup_sales_records. Latent (0 field_application invoices, 0 posted invoices live). FIX: lock first — `PERFORM 1 FROM invoices WHERE (id=p_invoice_id OR invoice_group_id=v_existing_group_id) FOR UPDATE;` and re-read status under the lock (mirror post_invoice_group). Migration. Evidence: 20260616191740_blend_and_fieldapp_invoice_audit_rows.sql (save_field_app_invoice edit branch ~L500/L517/L823); post FOR UPDATE in 20260614144252_pricing_status_columns_and_post_gate.sql:59/116."
@@ -837,7 +839,7 @@
       "codexSeverity": "MEDIUM",
       "fixKind": "frontend-only",
       "cycle": 21,
-      "status": "PARKED FOR REVIEW (frontend, money-domain -> not auto-pushed) — documented, not yet implemented",
+      "status": "fixed (verified implemented on origin/main 2026-07-21: fetchUnpaid selects FK ids and resolves order_number/job_number/farm_name via orders/jobs/customers lookups — see the PR-07 follow-up comment in CommissionPayments.tsx fetchUnpaid)",
       "file": "src/pages/CommissionPayments.tsx fetchUnpaid (~L135-148), modal render ~L629-630",
       "codex": "REAL/MED, frontend join correct+minimal",
       "note": "Fix: add order_id to the select + resolve order_number/customer_name from orders (join/embed) instead of the empty commissions columns. Display-only; reclassified GREEN->park because it is on the commission payout flow (auto-push exclusion)."
