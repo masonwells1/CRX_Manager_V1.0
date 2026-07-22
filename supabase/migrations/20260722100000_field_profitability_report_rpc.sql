@@ -90,10 +90,24 @@ BEGIN
       ei.invoice_cost_cents,
       jf.id AS location_id,
       jf.field_id,
-      GREATEST(COALESCE(jf.acres_to_treat, 0), 0) AS applied_acres
+      -- Grouped multi-owner children weight by THEIR field_billing_defaults
+      -- ownership share of each job field (transfer_job_to_invoice derives the
+      -- split from fbd, so this mirrors how the child was billed); ungrouped
+      -- single-owner transfers take the job field acres directly. A grouped
+      -- child with no fbd rows anywhere yields all-zero weights and falls into
+      -- the equal-weight zero-total guard (money still conserved).
+      CASE
+        WHEN ei.invoice_group_id IS NULL
+          THEN GREATEST(COALESCE(jf.acres_to_treat, 0), 0)
+        ELSE GREATEST(COALESCE(jf.acres_to_treat, 0), 0)
+             * COALESCE(fbd.split_pct, 0) / 100.0
+      END AS applied_acres
     FROM eligible_invoices ei
     JOIN public.job_fields jf
       ON jf.job_id = ei.job_id
+    LEFT JOIN public.field_billing_defaults fbd
+      ON fbd.field_id = jf.field_id
+     AND fbd.customer_id = ei.customer_id
     WHERE ei.job_id IS NOT NULL
       AND NOT EXISTS (
         SELECT 1 FROM public.field_app_locations fal2
@@ -307,34 +321,27 @@ BEGIN
     GROUP BY eui.invoice_id, eui.customer_id, eui.invoice_season, fal.field_id
   ),
   job_backed_acres_by_scope_field AS (
-    -- Per-child acres: a multi-owner child's own allocated acres live in
-    -- invoice_shares.acres — spread that total across the job's fields by
-    -- acres_to_treat proportion. A child with no usable share rows (single-owner
-    -- transfer) takes the job fields' acres directly.
+    -- Per-child acres mirror the money weights: grouped children take their
+    -- field_billing_defaults ownership share of each job field's acres;
+    -- ungrouped single-owner transfers take the job field acres directly.
     SELECT
       ei.customer_id,
       ei.invoice_season,
       jf.field_id,
       SUM(
         CASE
-          WHEN child.share_acres IS NOT NULL AND job_tot.job_acres > 0
-            THEN child.share_acres
-                 * GREATEST(COALESCE(jf.acres_to_treat, 0), 0) / job_tot.job_acres
+          WHEN ei.invoice_group_id IS NULL
+            THEN GREATEST(COALESCE(jf.acres_to_treat, 0), 0)
           ELSE GREATEST(COALESCE(jf.acres_to_treat, 0), 0)
+               * COALESCE(fbd.split_pct, 0) / 100.0
         END
       ) AS applied_acres
     FROM eligible_invoices ei
     JOIN public.job_fields jf
       ON jf.job_id = ei.job_id
-    JOIN LATERAL (
-      SELECT SUM(GREATEST(COALESCE(jf2.acres_to_treat, 0), 0)) AS job_acres
-      FROM public.job_fields jf2 WHERE jf2.job_id = ei.job_id
-    ) job_tot ON true
-    LEFT JOIN LATERAL (
-      SELECT NULLIF(SUM(GREATEST(COALESCE(ish.acres, 0), 0)), 0) AS share_acres
-      FROM public.invoice_shares ish
-      WHERE ish.invoice_id = ei.invoice_id
-    ) child ON true
+    LEFT JOIN public.field_billing_defaults fbd
+      ON fbd.field_id = jf.field_id
+     AND fbd.customer_id = ei.customer_id
     WHERE ei.job_id IS NOT NULL
       AND NOT EXISTS (
         SELECT 1 FROM public.field_app_locations fal2

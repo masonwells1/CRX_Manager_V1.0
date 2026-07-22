@@ -8,6 +8,7 @@ import Button from '../components/ui/Button';
 import SplitHeading from '../components/ui/SplitHeading';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
+import { hasPageAccess } from '../lib/pagePermissions';
 import { supabase, assertRpcResult } from '../lib/db';
 import { logActivity } from '../lib/activityLogger';
 import { exportToCSV, fmtCSV, fmtDateCSV } from '../lib/csvExport';
@@ -101,7 +102,7 @@ function getPresetDates(preset: string): { start: string; end: string } {
 }
 
 export default function Reports() {
-  const { role, profile } = useAuth();
+  const { role, profile, deniedPages } = useAuth();
   const { toast } = useToast();
   const isAdmin = role === 'admin';
 
@@ -854,6 +855,7 @@ export default function Reports() {
     <div className="space-y-6">
       <SplitHeading title="Reports" accent="& Analytics" />
 
+      {hasPageAccess(role, deniedPages, 'field-profitability') && (
       <Link to="/field-profitability" className="block max-w-xl">
         <Card hover className="group h-full">
           <div className="flex items-start gap-4">
@@ -869,6 +871,7 @@ export default function Reports() {
           </div>
         </Card>
       </Link>
+      )}
 
       {/* Category selector */}
       <div className="flex gap-2 flex-wrap">
