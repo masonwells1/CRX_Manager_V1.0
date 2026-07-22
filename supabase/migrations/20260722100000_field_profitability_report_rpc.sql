@@ -96,6 +96,11 @@ BEGIN
       -- NO billing defaults belongs 100% to its owning customer, exactly like
       -- the writer); ungrouped single-owner transfers take the job field acres
       -- directly. All-zero weights still fall into the equal-weight guard.
+      -- KNOWN LIMITATION (accepted): fbd/fields are CURRENT state — the writer
+      -- does not persist a per-field split snapshot at posting time (only the
+      -- per-child totals in invoice_shares), so if field ownership splits are
+      -- edited later, historical job-backed attribution shifts with them. The
+      -- per-child money totals are unaffected; only the field spread moves.
       CASE
         WHEN ei.invoice_group_id IS NULL
           THEN GREATEST(COALESCE(jf.acres_to_treat, 0), 0)
