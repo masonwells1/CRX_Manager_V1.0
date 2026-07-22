@@ -3,6 +3,8 @@
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 The first column is the historical documentation-entry sequence, not the file
 count; one entry can index multiple reconstruction sources restored together.
+Sequence reflects entry/landing order, so a pending migration renamed above the
+live high-water can have a newer timestamp without changing its assigned sequence.
 
 | # | Migration timestamp | Purpose |
 |---:|---|---|
