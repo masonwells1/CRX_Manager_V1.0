@@ -71,7 +71,7 @@ A final live verification closed the original rollout-plan checks:
 - N-Serve has no existing `quote_items` rows, so there was no quote snapshot to change;
 - N-Serve's one existing `order_items` row still holds `cost_per_unit = $47.05` and `cost_at_time_cents = 4705` while the Product basis is now $47.26, directly confirming the historical order snapshot did not follow the Product update.
 
-Timing disclosure: one exact cached idempotent replay call completed before the coordinator's STOP instruction arrived. It returned the stored apply response. Immediate read-only postflight proved zero durable change: the global flag remained `false`; rollout count remained 10; Product cost, tier prices, and pricing version remained $47.26 / $52.77 / $56.46 / $62.46 / version 2; basis, cost-history, and idempotency-receipt counts remained 1; basis selection and change-set apply timestamps were unchanged; and the existing order snapshot remained $47.05 / 4,705 cents. No further live RPC, write, or apply was performed.
+Timing disclosure: one exact cached idempotent replay call completed before the coordinator's STOP instruction arrived. It returned the stored apply response. Immediate read-only postflight proved zero durable change: the global flag remained `false`; rollout count remained 10; Product cost, tier prices, and pricing version remained $47.26 / $52.77 / $56.46 / $62.46 / version 2; the N-Serve basis row, this change set's cost-history row, and its matching idempotency receipt each remained at 1; basis selection and change-set apply timestamps were unchanged; and the existing order snapshot remained $47.05 / 4,705 cents. No further live RPC, write, or apply was performed.
 
 ## Authenticated browser proof
 
