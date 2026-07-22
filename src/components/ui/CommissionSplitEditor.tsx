@@ -1,8 +1,12 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
+import { supabase, assertRpcResult } from '../../lib/db';
 import type { CommissionSplit } from '../../types';
 
-const RECIPIENTS = [
+// Fallback only — the live list comes from list_commission_recipients(),
+// which returns every active commission-eligible profile the database-side
+// validator will accept.
+const FALLBACK_RECIPIENTS = [
   'Mason Wells',
   'Chance Tuttle',
   'CMCTW LLC',
@@ -24,10 +28,32 @@ export default function CommissionSplitEditor({
   const total = splits.reduce((sum, s) => sum + (s.percentage || 0), 0);
   const isValid = Math.abs(total - 100) < 0.01;
 
-  // Track which rows are using "Other" (custom text)
-  const [otherFlags, setOtherFlags] = useState<boolean[]>(
-    splits.map((s) => s.recipient !== '' && !RECIPIENTS.includes(s.recipient))
-  );
+  const [recipients, setRecipients] = useState<string[]>(FALLBACK_RECIPIENTS);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data, error } = await supabase.rpc('list_commission_recipients');
+        if (error) throw error;
+        const rows = assertRpcResult<{ full_name: string | null }[]>(
+          data,
+          'list_commission_recipients'
+        );
+        if (cancelled || !Array.isArray(rows)) return;
+        const names = rows
+          .map((r) => r.full_name)
+          .filter((n): n is string => typeof n === 'string' && n.trim() !== '');
+        if (names.length > 0) setRecipients(names);
+      } catch {
+        // Keep the fallback list — the dropdown must still work if the RPC
+        // is unavailable (e.g. migration not yet applied).
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const updateSplit = (index: number, field: 'recipient' | 'percentage', val: string | number) => {
     const updated = splits.map((s, i) => {
@@ -40,38 +66,16 @@ export default function CommissionSplitEditor({
     onChange({ splits: updated });
   };
 
-  const handleRecipientSelect = (index: number, selected: string) => {
-    if (selected === '__other__') {
-      setOtherFlags((prev) => {
-        const next = [...prev];
-        next[index] = true;
-        return next;
-      });
-      updateSplit(index, 'recipient', '');
-    } else {
-      setOtherFlags((prev) => {
-        const next = [...prev];
-        next[index] = false;
-        return next;
-      });
-      updateSplit(index, 'recipient', selected);
-    }
-  };
-
   const addSplit = () => {
     onChange({ splits: [...splits, { recipient: '', percentage: 0 }] });
-    setOtherFlags((prev) => [...prev, false]);
   };
 
   const removeSplit = (index: number) => {
     onChange({ splits: splits.filter((_, i) => i !== index) });
-    setOtherFlags((prev) => prev.filter((_, i) => i !== index));
   };
 
   const selectClass =
     'flex-1 px-3 py-2 text-sm text-nav-dark bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green transition-colors duration-150';
-  const inputClass =
-    'flex-1 px-3 py-2 text-sm text-nav-dark bg-white border border-gray-200 rounded-lg placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green transition-colors duration-150';
 
   return (
     <div className="w-full">
@@ -82,45 +86,27 @@ export default function CommissionSplitEditor({
       )}
       <div className="space-y-2">
         {splits.map((split, i) => {
-          const isOther = otherFlags[i];
+          // A stored value outside the known list (legacy data) still needs to
+          // display; it stays selectable so the row isn't silently blanked.
+          const isLegacy = split.recipient !== '' && !recipients.includes(split.recipient);
           return (
             <div key={i} className="flex items-center gap-2">
-              {isOther ? (
-                <div className="flex-1 flex items-center gap-2">
-                  <input
-                    type="text"
-                    value={split.recipient}
-                    onChange={(e) => updateSplit(i, 'recipient', e.target.value)}
-                    placeholder="Enter recipient name"
-                    aria-label={`Recipient name for split ${i + 1}`}
-                    className={inputClass}
-                    // eslint-disable-next-line jsx-a11y/no-autofocus -- newly-revealed input; user just clicked to add a split
-                    autoFocus
-                  />
-                  <button
-                    type="button"
-                    onClick={() => handleRecipientSelect(i, '')}
-                    className="text-xs text-secondary hover:text-nav-dark whitespace-nowrap"
-                  >
-                    Back
-                  </button>
-                </div>
-              ) : (
-                <select
-                  value={split.recipient}
-                  onChange={(e) => handleRecipientSelect(i, e.target.value)}
-                  aria-label={`Recipient for split ${i + 1}`}
-                  className={selectClass}
-                >
-                  <option value="">Select recipient...</option>
-                  {RECIPIENTS.map((name) => (
-                    <option key={name} value={name}>
-                      {name}
-                    </option>
-                  ))}
-                  <option value="__other__">Other...</option>
-                </select>
-              )}
+              <select
+                value={split.recipient}
+                onChange={(e) => updateSplit(i, 'recipient', e.target.value)}
+                aria-label={`Recipient for split ${i + 1}`}
+                className={selectClass}
+              >
+                <option value="">Select recipient...</option>
+                {recipients.map((name) => (
+                  <option key={name} value={name}>
+                    {name}
+                  </option>
+                ))}
+                {isLegacy && (
+                  <option value={split.recipient}>{split.recipient}</option>
+                )}
+              </select>
               <div className="relative w-24">
                 <input
                   type="number"

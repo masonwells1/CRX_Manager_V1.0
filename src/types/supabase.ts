@@ -12093,6 +12093,10 @@ export type Database = {
         }
         Returns: Json
       }
+      commission_recipient_resolves: {
+        Args: { p_recipient: string }
+        Returns: boolean
+      }
       commit_blend_ticket_ocr_result: {
         Args: {
           p_blend_ticket_id: string
@@ -12850,6 +12854,21 @@ export type Database = {
           sort_order: number
         }[]
       }
+      get_field_profitability: {
+        Args: { p_season?: string }
+        Returns: {
+          cost_cents: number
+          customer_id: string
+          customer_name: string
+          field_id: string
+          field_name: string
+          margin_cents: number
+          margin_per_acre_cents: number
+          revenue_cents: number
+          season: string
+          total_acres_applied: number
+        }[]
+      }
       get_fields_geojson_by_ids: {
         Args: { p_field_ids: string[] }
         Returns: {
@@ -13378,6 +13397,12 @@ export type Database = {
           p_performed_by?: string
         }
         Returns: undefined
+      }
+      list_commission_recipients: {
+        Args: never
+        Returns: {
+          full_name: string
+        }[]
       }
       load_recipe_into_job: {
         Args: {

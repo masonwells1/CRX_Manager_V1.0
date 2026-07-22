@@ -2,6 +2,8 @@
 
 All significant development milestones, in reverse chronological order.
 
+- Closed the parked gauntlet section-7 HIGH: commission recipients are now validated fail-closed at creation. Live migration `20260722134252_reject_unresolvable_commission_recipients` makes the shared commission-split validator reject any recipient that does not resolve to exactly one active profile, adds a commissions-table backstop trigger so no code path can ever create a commission without a payable `recipient_user_id`, and adds `list_commission_recipients()` which now feeds the CommissionSplitEditor dropdown from the database (the free-text "Other" path is removed). Proven live: postflight reject/accept/trigger tests inside the apply transaction plus a non-admin (`authenticated` role) proof that the dropdown RPC and resolution helper work under RLS. Zero existing rows affected.
+
 - Closed PR #207's final CodeRabbit verification findings: the documentation-drift guard now validates the migration-history ledger sequence independently from SQL-file and grouped-row counts, and the ProductDetail pricing-flow test keeps each simulated query builder isolated so later builders cannot redirect earlier assertions.
 
 - Completed and re-verified the single authenticated Wells Phase 2 Product canary. `N-Serve - Bulk` moved from the $47.05 manual baseline to the reviewed $47.26/Gal Wells quote through governed preview/apply; all three tier sell prices remained exactly $52.77 / $56.46 / $62.46, while only the derived margins changed. Cost history, selected-basis, change-set, supplier-comparison provenance, and activity records agree. The Wells allowlist remains exactly 10 Products and the global supplier-cost-basis flag remains OFF; no second canary or broader rollout was performed.
