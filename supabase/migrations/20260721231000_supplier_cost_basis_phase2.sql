@@ -148,7 +148,10 @@ ALTER TABLE public.purchase_order_items
     OR
     (inventory_units_per_supplier_unit_snapshot > 0
       AND NULLIF(btrim(inventory_unit_snapshot), '') IS NOT NULL)
-  );
+  ) NOT VALID;
+
+ALTER TABLE public.purchase_order_items
+  VALIDATE CONSTRAINT purchase_order_items_cost_unit_snapshot_shape;
 
 -- Purchase-order unit costs entered by the current app are per Product
 -- inventory unit. Preserve that fact as an immutable conversion snapshot when
@@ -215,7 +218,7 @@ BEGIN
     OR NEW.inventory_unit_snapshot IS DISTINCT FROM OLD.inventory_unit_snapshot
     OR NEW.cost_provenance IS DISTINCT FROM OLD.cost_provenance
     OR NEW.cost_snapshot_at IS DISTINCT FROM OLD.cost_snapshot_at
-  ) AND NOT (
+  ) AND NOT COALESCE((
     current_setting('crx.cost_basis_backfill', true) = 'phase2'
     AND
     OLD.inventory_units_per_supplier_unit_snapshot IS NULL
@@ -233,7 +236,7 @@ BEGIN
     AND NULLIF(btrim(NEW.unit_size), '') IS NOT NULL
     AND NULLIF(btrim(v_inventory_unit), '') IS NOT NULL
     AND lower(btrim(NEW.unit_size)) = lower(btrim(v_inventory_unit))
-  ) THEN
+  ), false) THEN
     IF v_phase2_enabled THEN
       RAISE EXCEPTION 'RECEIVED_PO_COST_SNAPSHOT_IMMUTABLE';
     END IF;
@@ -465,11 +468,11 @@ BEGIN
     RAISE EXCEPTION 'PRODUCT_COST_BASIS_DELETE_FORBIDDEN';
   END IF;
 
-  IF NOT (
+  IF NOT COALESCE((
        v_authorized = 'phase2'
        OR (v_authorized = 'unit_change'
          AND v_unit_change_product IS NOT DISTINCT FROM OLD.product_id)
-     )
+     ), false)
      OR OLD.effective_to IS NOT NULL
      OR NEW.effective_to IS NULL
      OR NEW.effective_to < OLD.effective_from
@@ -902,6 +905,17 @@ BEGIN
     FOR UPDATE;
   END IF;
 
+  -- Match the correction path: lock the immutable observation first. A
+  -- correction holds that row before its replacement takes FK locks on the
+  -- referenced link/vendor/product, so reversing this order can deadlock.
+  PERFORM o.id
+  FROM public.supplier_price_observations o
+  JOIN public.product_cost_basis_change_rows r
+    ON r.supplier_price_observation_id = o.id
+  WHERE r.pricing_change_set_id = p_change_set_id
+  ORDER BY o.id
+  FOR UPDATE OF o;
+
   PERFORM l.id
   FROM public.product_supplier_links l
   JOIN public.product_cost_basis_change_rows r
@@ -921,14 +935,6 @@ BEGIN
   WHERE r.pricing_change_set_id = p_change_set_id
   ORDER BY v.id
   FOR UPDATE OF v;
-
-  PERFORM o.id
-  FROM public.supplier_price_observations o
-  JOIN public.product_cost_basis_change_rows r
-    ON r.supplier_price_observation_id = o.id
-  WHERE r.pricing_change_set_id = p_change_set_id
-  ORDER BY o.id
-  FOR UPDATE OF o;
 
   -- Match receiving/reversal lock order: item first, then parent PO. Reversing a
   -- receipt updates purchase_order_items before purchase_orders, so taking the

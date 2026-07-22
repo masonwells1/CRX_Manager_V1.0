@@ -45,6 +45,9 @@ describe('supplier cost-basis Phase 2 migration contract', () => {
     expect(migrationSql).toContain('NEW.inventory_units_per_supplier_unit_snapshot := NULL');
     expect(migrationSql).toContain('ADD COLUMN inventory_unit_snapshot text');
     expect(migrationSql).toContain('purchase_order_items_cost_unit_snapshot_shape');
+    expect(migrationSql).toMatch(
+      /purchase_order_items_cost_unit_snapshot_shape CHECK \([\s\S]+?\) NOT VALID;[\s\S]+?VALIDATE CONSTRAINT purchase_order_items_cost_unit_snapshot_shape/,
+    );
     expect(migrationSql).toContain('NEW.inventory_unit_snapshot := v_inventory_unit');
     expect(migrationSql).toMatch(/IF TG_OP = 'INSERT' THEN[\s\S]+?NEW\.inventory_units_per_supplier_unit_snapshot := 1/);
     expect(migrationSql).toMatch(/BEFORE INSERT OR UPDATE OF quantity_received/);
@@ -76,9 +79,21 @@ describe('supplier cost-basis Phase 2 migration contract', () => {
       "set_config('crx.cost_basis_backfill', 'phase2', true)",
     );
     expect(migrationSql).toMatch(
-      /current_setting\('crx\.cost_basis_backfill', true\) = 'phase2'[\s\S]+?OLD\.inventory_units_per_supplier_unit_snapshot IS NULL/,
+      /NOT COALESCE\(\(\s*current_setting\('crx\.cost_basis_backfill', true\) = 'phase2'[\s\S]+?OLD\.inventory_units_per_supplier_unit_snapshot IS NULL/,
     );
-    const itemLock = migrationSql.indexOf('PERFORM poi.id', migrationSql.indexOf('CREATE OR REPLACE FUNCTION public.apply_product_cost_basis_change_set'));
+    expect(migrationSql).toMatch(
+      /IF NOT COALESCE\(\([\s\S]+?v_authorized = 'phase2'[\s\S]+?\), false\)[\s\S]+?PRODUCT_COST_BASIS_IMMUTABLE/,
+    );
+    const applyFunction = migrationSql.indexOf(
+      'CREATE OR REPLACE FUNCTION public.apply_product_cost_basis_change_set',
+    );
+    const observationLock = migrationSql.indexOf('PERFORM o.id', applyFunction);
+    const supplierLinkLock = migrationSql.indexOf('PERFORM l.id', observationLock);
+    const vendorLock = migrationSql.indexOf('PERFORM v.id', supplierLinkLock);
+    expect(observationLock).toBeGreaterThan(-1);
+    expect(supplierLinkLock).toBeGreaterThan(observationLock);
+    expect(vendorLock).toBeGreaterThan(supplierLinkLock);
+    const itemLock = migrationSql.indexOf('PERFORM poi.id', applyFunction);
     const parentLock = migrationSql.indexOf('PERFORM po.id', itemLock);
     const productLock = migrationSql.indexOf('PERFORM p.id', parentLock);
     const applyEvidenceResolution = migrationSql.indexOf(
