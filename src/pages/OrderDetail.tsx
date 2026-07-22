@@ -33,7 +33,9 @@ import { downloadPickListPdf } from '../lib/orderPickListPdf';
 import { buildInvoicePostTargets } from '../lib/invoiceBatchPosting';
 import type { OrderSummaryData } from '../lib/orderSummaryPdf';
 import type { PickListData } from '../lib/orderPickListPdf';
-import type { Order, OrderItem, OrderShare, OrderItemFieldAllocation, Customer, Invoice, Delivery, Product, LinkedEntityType } from '../types';
+import { validateInventoryPositionShape } from '../lib/inventoryPositionValidator';
+import { inventoryPositionByProduct } from '../lib/inventoryPositionLookup';
+import type { Order, OrderItem, OrderShare, OrderItemFieldAllocation, Customer, Invoice, Delivery, Product, LinkedEntityType, InventoryPositionRow } from '../types';
 
 /** Temporary new item (not yet saved to DB — has no real id) */
 interface NewOrderItem {
@@ -289,31 +291,34 @@ export default function OrderDetail() {
 
   // Fetch products + inventory when entering edit mode (lazy load — only when needed)
   const fetchProducts = useCallback(async () => {
-    const [productsRes, inventoryRes, poRes] = await Promise.all([
-      supabase.from('products').select('*').eq('is_active', true).order('product_name'),
-      supabase.from('inventory').select('product_id, quantity_available, quantity_prebooked'),
-      supabase
-        .from('purchase_order_items')
-        .select('product_id, quantity_ordered, quantity_received, purchase_orders!inner(status)')
-        .in('purchase_orders.status', ['submitted', 'partially_received']),
-    ]);
+    const productsRes = await supabase.from('products').select('*').eq('is_active', true).order('product_name');
+    const { data: positionData, error: positionError } = await supabase.rpc('get_inventory_position');
+
+    if (productsRes.error) {
+      Sentry.captureException(productsRes.error, { tags: { source: 'fetch', action: 'load_products_for_order_edit' } });
+      toast('error', 'Failed to load products. Please refresh.');
+    }
+    if (positionError) {
+      Sentry.captureException(positionError, { tags: { source: 'fetch', action: 'load_inventory_position_for_order_edit' } });
+      toast('error', 'Failed to load inventory positions. Please refresh.');
+    }
 
     setProducts((productsRes.data || []) as Product[]);
 
-    const invMap: Record<string, { available: number; prebooked: number; onOrder: number }> = {};
-    for (const row of inventoryRes.data || []) {
-      const pid = row.product_id;
-      if (!invMap[pid]) invMap[pid] = { available: 0, prebooked: 0, onOrder: 0 };
-      invMap[pid].available += Number(row.quantity_available);
-      invMap[pid].prebooked += Number(row.quantity_prebooked);
+    if (positionError) {
+      setInventoryByProduct({});
+    } else {
+      try {
+        const positionRows = assertRpcResult<InventoryPositionRow[]>(positionData, 'get_inventory_position');
+        validateInventoryPositionShape(positionRows);
+        setInventoryByProduct(inventoryPositionByProduct(positionRows));
+      } catch (err) {
+        Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { tags: { source: 'fetch', action: 'parse_inventory_position_for_order_edit' } });
+        toast('error', 'Inventory position data was malformed. Please refresh.');
+        setInventoryByProduct({});
+      }
     }
-    for (const poi of (poRes.data || []) as Array<{ product_id: string; quantity_ordered: number; quantity_received: number }>) {
-      const pid = poi.product_id;
-      if (!invMap[pid]) invMap[pid] = { available: 0, prebooked: 0, onOrder: 0 };
-      invMap[pid].onOrder += Number(poi.quantity_ordered) - Number(poi.quantity_received);
-    }
-    setInventoryByProduct(invMap);
-  }, []);
+  }, [toast]);
 
   // Load products when edit mode is activated
   useEffect(() => {

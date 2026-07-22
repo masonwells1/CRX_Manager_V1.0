@@ -17,7 +17,9 @@ import { localToday } from '../../lib/dateUtils';
 import { Sentry } from '../../lib/sentry';
 import { formatCents as fmtCurrency } from '../../lib/money';
 import { fetchOpenBookings, type OpenBooking } from '../../lib/openBookings';
-import type { Product, Profile } from '../../types';
+import { validateInventoryPositionShape } from '../../lib/inventoryPositionValidator';
+import { inventoryPositionByProduct } from '../../lib/inventoryPositionLookup';
+import type { Product, Profile, InventoryPositionRow } from '../../types';
 
 interface QuickItem {
   _key: string;
@@ -122,32 +124,18 @@ export default function QuickDeliveryModal({
     let cancelled = false;
     (async () => {
       try {
-        const [inventoryRes, poRes] = await Promise.all([
-          supabase.from('inventory').select('product_id, quantity_available, quantity_prebooked').eq('location', 'Main Warehouse'),
-          supabase
-            .from('purchase_order_items')
-            .select('product_id, quantity_ordered, quantity_received, purchase_orders!inner(status)')
-            .in('purchase_orders.status', ['submitted', 'partially_received']),
-        ]);
+        const { data: positionData, error: positionError } = await supabase.rpc('get_inventory_position');
         if (cancelled) return;
-        if (inventoryRes.error || poRes.error) {
+        if (positionError) {
           // Non-fatal (the modal still works) but don't render fake zeros (Codex).
-          Sentry.captureException(inventoryRes.error || poRes.error, { extra: { context: 'QuickDeliveryModal.stockLookup' } });
+          Sentry.captureException(positionError, { extra: { context: 'QuickDeliveryModal.stockLookup' } });
           setStockLookupFailed(true);
           return;
         }
         setStockLookupFailed(false);
-        const invMap: Record<string, { available: number; prebooked: number; onOrder: number }> = {};
-        for (const row of (inventoryRes.data || []) as Array<{ product_id: string; quantity_available: number; quantity_prebooked: number }>) {
-          if (!invMap[row.product_id]) invMap[row.product_id] = { available: 0, prebooked: 0, onOrder: 0 };
-          invMap[row.product_id].available += Number(row.quantity_available);
-          invMap[row.product_id].prebooked += Number(row.quantity_prebooked);
-        }
-        for (const poi of (poRes.data || []) as Array<{ product_id: string; quantity_ordered: number; quantity_received: number }>) {
-          if (!invMap[poi.product_id]) invMap[poi.product_id] = { available: 0, prebooked: 0, onOrder: 0 };
-          invMap[poi.product_id].onOrder += Number(poi.quantity_ordered) - Number(poi.quantity_received);
-        }
-        setInventoryByProduct(invMap);
+        const positionRows = assertRpcResult<InventoryPositionRow[]>(positionData, 'get_inventory_position');
+        validateInventoryPositionShape(positionRows);
+        setInventoryByProduct(inventoryPositionByProduct(positionRows, { location: 'Main Warehouse' }));
       } catch (err) {
         if (!cancelled) {
           Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'QuickDeliveryModal.stockLookup' } });
