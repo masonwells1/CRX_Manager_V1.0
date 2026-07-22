@@ -37,6 +37,19 @@ INSERT INTO public.products(
   'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee1',
   'Phase 2 Newly Created Product', 'P2-NEW', 'Herbicide', 1, 'gal', 'gal'
 );
+
+-- Dedicated complete-workbook follow-up fixtures. One Product deliberately has
+-- no cost; the other has an existing cost and will receive a governed change.
+INSERT INTO public.products(
+  id, product_name, sku, category, container_size, unit_size, inventory_unit,
+  current_cost, tier1_margin, tier2_margin, tier3_margin
+) VALUES
+  ('ffffffff-ffff-4fff-8fff-fffffffffff1',
+   'Phase 2 Null Cost Workbook Product', 'P2-NULL', 'Herbicide', 1, 'gal', 'gal',
+   NULL, NULL, NULL, NULL),
+  ('ffffffff-ffff-4fff-8fff-fffffffffff2',
+   'Phase 2 Changed Workbook Product', 'P2-CHANGE', 'Herbicide', 1, 'gal', 'gal',
+   NULL, NULL, NULL, NULL);
 DO $proof$
 BEGIN
   IF (SELECT current_cost FROM public.products
@@ -52,6 +65,32 @@ $proof$;
 
 SELECT set_config('request.jwt.claim.sub', '11111111-1111-4111-8111-111111111111', false);
 SET ROLE authenticated;
+
+-- Establish the changed fixture's starting cost through the live Phase 1a
+-- governed path while the Phase 2 feature flag remains off.
+INSERT INTO phase2_proof(key, value)
+VALUES ('null-cost-workbook-setup-preview', public.preview_product_pricing_changes(
+  'product_page', NULL,
+  jsonb_build_array(jsonb_build_object(
+    'product_id', 'ffffffff-ffff-4fff-8fff-fffffffffff2',
+    'row_version', 1,
+    'pricing_mode', 'margin_driven',
+    'new_cost', '50.00',
+    'tier1_margin_percent', '20',
+    'tier2_margin_percent', '25',
+    'tier3_margin_percent', '30',
+    'change_reason', 'Null-cost workbook fixture setup'
+  )),
+  '11111111-1111-4111-8111-111111111111',
+  'phase2-null-cost-workbook-setup-preview'
+));
+INSERT INTO phase2_proof(key, value)
+SELECT 'null-cost-workbook-setup-apply', public.apply_product_pricing_change_set(
+  (value->>'change_set_id')::uuid, value->>'request_fingerprint',
+  '11111111-1111-4111-8111-111111111111',
+  'phase2-null-cost-workbook-setup-apply'
+)
+FROM phase2_proof WHERE key = 'null-cost-workbook-setup-preview';
 
 DO $proof$
 BEGIN
@@ -235,6 +274,11 @@ BEGIN
   END IF;
 END;
 $proof$;
+
+-- The disposable smoke keeps all scenarios in one transaction, unlike real
+-- RPC calls. Clear the transaction-local Phase 1a trigger marker before the
+-- Phase 2 scenarios to model the real request boundary.
+SELECT set_config('crx.cost_basis_legacy_sync', '', true);
 
 UPDATE public.app_settings SET setting_value = 'true'
 WHERE setting_key = 'supplier_cost_basis_enabled';
@@ -804,6 +848,116 @@ BEGIN
 END;
 $proof$;
 
+SET ROLE authenticated;
+
+-- A complete export can include a genuinely unchanged Product with no cost.
+-- The inert row must still pass the shared manifest checks, while the changed
+-- row must receive a required basis record and apply normally.
+INSERT INTO phase2_proof(key, value)
+VALUES ('null-cost-workbook-export', public.create_pricing_workbook_export(
+  ARRAY[
+    'ffffffff-ffff-4fff-8fff-fffffffffff1'::uuid,
+    'ffffffff-ffff-4fff-8fff-fffffffffff2'::uuid
+  ],
+  '11111111-1111-4111-8111-111111111111',
+  'phase2-null-cost-workbook-export'
+));
+
+INSERT INTO phase2_proof(key, value)
+SELECT 'null-cost-workbook-preview', public.preview_product_cost_basis_changes(
+  'pricing_worksheet', (value->>'export_id')::uuid,
+  jsonb_build_array(
+    (value->'rows'->0) || jsonb_build_object(
+      'has_formula', false, 'formula_cells', '[]'::jsonb,
+      'pricing_mode', '', 'new_cost', '',
+      'tier1_margin_percent', '', 'tier2_margin_percent', '',
+      'tier3_margin_percent', '', 'tier1_price', '',
+      'tier2_price', '', 'tier3_price', '',
+      'change_reason', '', 'basis_type', 'manual_override',
+      'basis_source', 'pricing_worksheet', 'basis_reason', '',
+      'basis_selection', false
+    ),
+    (value->'rows'->1) || jsonb_build_object(
+      'has_formula', false, 'formula_cells', '[]'::jsonb,
+      'pricing_mode', 'margin_driven', 'new_cost', '55.00',
+      'tier1_margin_percent', '20', 'tier2_margin_percent', '25',
+      'tier3_margin_percent', '30',
+      'change_reason', 'Null-cost workbook follow-up proof',
+      'basis_type', 'manual_override',
+      'basis_source', 'pricing_worksheet',
+      'basis_reason', 'Null-cost workbook follow-up proof',
+      'basis_selection', false
+    )
+  ),
+  '11111111-1111-4111-8111-111111111111',
+  'phase2-null-cost-workbook-preview'
+)
+FROM phase2_proof WHERE key = 'null-cost-workbook-export';
+
+DO $proof$
+DECLARE
+  v jsonb := (SELECT value FROM phase2_proof WHERE key = 'null-cost-workbook-preview');
+  v_change_set_id uuid := (v->>'change_set_id')::uuid;
+BEGIN
+  IF v->>'status' <> 'previewed'
+     OR (v->>'submitted_row_count')::int <> 2
+     OR (v->>'ready_count')::int <> 1
+     OR (v->>'unchanged_count')::int <> 1
+     OR (v->>'basis_change_count')::int <> 1
+     OR (v->>'apply_allowed')::boolean IS DISTINCT FROM true THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: null-cost workbook preview wrong: %', v;
+  END IF;
+END;
+$proof$;
+
+RESET ROLE;
+DO $proof$
+DECLARE v_change_set_id uuid := (
+  SELECT (value->>'change_set_id')::uuid
+  FROM phase2_proof WHERE key = 'null-cost-workbook-preview'
+);
+BEGIN
+  IF (SELECT count(*) FROM public.product_cost_basis_change_rows
+      WHERE pricing_change_set_id = v_change_set_id) <> 1 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: inert null-cost row entered basis change set';
+  END IF;
+END;
+$proof$;
+SET ROLE authenticated;
+
+INSERT INTO phase2_proof(key, value)
+SELECT 'null-cost-workbook-apply', public.apply_product_cost_basis_change_set(
+  (value->>'change_set_id')::uuid, value->>'request_fingerprint',
+  '11111111-1111-4111-8111-111111111111',
+  'phase2-null-cost-workbook-apply'
+)
+FROM phase2_proof WHERE key = 'null-cost-workbook-preview';
+
+RESET ROLE;
+DO $proof$
+BEGIN
+  IF (SELECT current_cost FROM public.products
+      WHERE id = 'ffffffff-ffff-4fff-8fff-fffffffffff1'::uuid) IS NOT NULL
+     OR EXISTS (
+       SELECT 1 FROM public.product_cost_basis
+       WHERE product_id = 'ffffffff-ffff-4fff-8fff-fffffffffff1'::uuid
+     ) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: inert null-cost Product was changed or given a basis';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM public.products
+    WHERE id = 'ffffffff-ffff-4fff-8fff-fffffffffff2'::uuid
+      AND current_cost = 55
+  ) OR NOT EXISTS (
+    SELECT 1 FROM public.product_cost_basis
+    WHERE product_id = 'ffffffff-ffff-4fff-8fff-fffffffffff2'::uuid
+      AND effective_to IS NULL AND basis_type = 'manual_override'
+      AND cost_cents = 5500
+  ) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: changed workbook Product did not apply with basis';
+  END IF;
+END;
+$proof$;
 SET ROLE authenticated;
 
 -- A same-dollar workbook selection is basis-only (`no_changes`) but must still

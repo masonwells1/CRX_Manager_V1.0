@@ -1,7 +1,7 @@
 # Supplier Pricing, Price History & Product Variants — Plan
 
 **Date:** 2026-07-16 (rev 5 — Mason's decision: NO AI extraction of supplier PDFs, manual-entry-only ingestion; rev 4 incorporated the Codex adversarial review; rev 2–3 added pre-season replacement cost, the pricing worksheet, and whole-product fields)
-**Status:** Phase 1a frontend merged in PR #163 and deployed to production. Live: additive bootstrap, zero-cost guard, legacy repeat-save compatibility, forward hardening, strict direct-write cutover, RPC-only Product pricing flows, pricing-only `.xlsx` worksheet, and verified `process-document` v19 supplier-pricing OCR retirement. Product-page quick edits remain available through the same governed preview/apply RPCs as the worksheet.
+**Status:** Phase 1a and Phase 1b are deployed to production. The Wells Ag Supply operational pilot completed end to end on 2026-07-21 with 10 linked products and 10 approved observations; comparison and history populated while Product costs and all three tier sell prices remained unchanged. Supplier PDFs remain audit attachments only and are never parsed. Phase 2's governed cost-basis build is proceeding separately; supplier imports remain evidence-only.
 **Branch:** `feat/supplier-pricing-phase1a` (implementation branch; the original planning baseline was `claude/supplier-pricing-strategy-9c6129`)
 **Advisors:** Claude (grounding + synthesis) with Codex gpt-5.6 ("Sol 5.6") — advisory round + full adversarial review (verdict folded into this rev; see §11)
 
@@ -26,6 +26,16 @@
 - **PDF import already exists**: `process-document` edge function (Google Vision OCR + regex, first-class `price_list` document type) + `BulkPricingImport` modal (CSV/PDF, fuzzy match by SKU/name, **directly overwrites `current_cost` + tier prices**, writes cost_history). It is single-supplier: the parsed `vendor_name` is discarded.
 - Quotes resolve sell price live from the product's tier price (server-authoritative `save_quote`); orders snapshot price at quote→order conversion. `unit_conversions` keys are frozen (renaming silently rescales money).
 - **Live trigger `trigger_calculate_prices_from_margin`**: changing `products.current_cost` (or margins) auto-recomputes tier prices. So ANY write to cost is already a sell-price change today.
+
+### 2a. Wells operational pilot evidence (verified 2026-07-21)
+
+- Wells Ag Supply is linked to 10 representative CRX products through confirmed supplier-product links and directional conversions.
+- Staff downloaded the protected quote workbook, manually transcribed the supplier prices, uploaded it, previewed it, and approved the corrected import. One rejected attempt remains in the audit trail; the approved import produced 10 append-only observations.
+- Supplier Comparison shows the normalized Wells replacement cost, and Product Price History shows the Wells observation beside selected-cost and actual-purchase evidence.
+- For the 10 linked products, the post-pilot baseline remained exactly: selected cost **$882.03**, Tier 1 **$995.67**, Tier 2 **$1,097.73**, Tier 3 **$1,220.51**, and 9 existing `cost_history` rows. Supplier evidence changed; sell pricing did not.
+- The pilot exposed one safe input-hardening follow-up: staff may type a sub-dollar workbook price as `.39`. The workbook boundary now normalizes that unambiguous shorthand to `0.39` while leaving invalid forms for authoritative server rejection; the database money parser remains strict.
+- Historical purchase orders use the exact legacy text `Wells Ag Supply` on 17 total orders: 11 fully/partially received orders contain 66 received lines, while 4 cancelled and 2 submitted orders contain no received lines. The reviewed resolution is a separate non-destructive Phase 1b closeout migration; it only supplies the supplier label for history and does not rewrite purchases, costs, observations, or sell prices.
+- No supplier PDF was read by AI or OCR during the pilot.
 
 ## 3. Architecture decision (the core insight)
 

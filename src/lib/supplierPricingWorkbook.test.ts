@@ -81,6 +81,31 @@ describe('supplier quote workbook', () => {
     });
   });
 
+  it.each([
+    ['.39', '0.39'],
+    ['.5', '0.5'],
+  ])('normalizes the manual sub-dollar cost %s to %s', async (enteredCost, expectedCost) => {
+    const workbook = await loadGeneratedWorkbook();
+    const sheet = workbook.getWorksheet(SUPPLIER_QUOTE_SHEET)!;
+    const newCostColumn = SUPPLIER_QUOTE_HEADERS.indexOf('new_cost') + 1;
+    sheet.getCell(2, newCostColumn).value = enteredCost;
+
+    const parsed = await parseSupplierQuoteWorkbook(await writeWorkbook(workbook));
+
+    expect(parsed.rows[0].new_cost).toBe(expectedCost);
+  });
+
+  it.each(['.123', '-.39', '1e-2'])('leaves invalid cost text %s for governed server rejection', async (enteredCost) => {
+    const workbook = await loadGeneratedWorkbook();
+    const sheet = workbook.getWorksheet(SUPPLIER_QUOTE_SHEET)!;
+    const newCostColumn = SUPPLIER_QUOTE_HEADERS.indexOf('new_cost') + 1;
+    sheet.getCell(2, newCostColumn).value = enteredCost;
+
+    const parsed = await parseSupplierQuoteWorkbook(await writeWorkbook(workbook));
+
+    expect(parsed.rows[0].new_cost).toBe(enteredCost);
+  });
+
   it('flags formulas for server-side row rejection', async () => {
     const workbook = await loadGeneratedWorkbook();
     const sheet = workbook.getWorksheet(SUPPLIER_QUOTE_SHEET)!;

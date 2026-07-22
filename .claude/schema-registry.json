@@ -1,12 +1,12 @@
 {
   "_meta": {
     "registry_version": 2,
-    "generated_at": "2026-07-21",
+    "generated_at": "2026-07-22",
     "generated_from": "Supabase project rhyzpcqhnizqbxphqdkr — public schema introspection",
     "regenerate_with": "node scripts/regenerate-schema-registry.mjs --from-introspection <queries.json> (queries documented in the script header)",
     "purpose": "Single source of truth for hooks: generated columns, status enums, ALL parseable CHECK IN-lists, NOT NULL columns, full column lists, sequences, tables-with/without updated_at, applied-migration high water.",
     "note": "For a fresh refresh from the live DB, ask Claude Code: 'regenerate the schema-registry from Supabase' (/regen-schema-registry). skipped_constraints lists every CHECK the hooks can NOT validate — review it when touching those tables.",
-    "migrations_high_water": "20260721152604",
+    "migrations_high_water": "20260722043537",
     "applied_migration_names": [
       "20260207_gap_analysis_fixes.sql",
       "20260209050000_inventory_overhaul",
@@ -287,6 +287,15 @@
       "20260721130120_fix_transaction_review_running_balance",
       "20260721130536_replay_vendor_alias_after_vendor_retirement",
       "20260721134500_require_money_lifecycle_idempotency_keys",
+      "20260721191500_due_on_receipt_terms_parser",
+      "20260721210000_save_invoice_payment_terms",
+      "20260721230000_auto_draft_skipped_activity_row",
+      "20260722015019_supplier_cost_basis_phase2",
+      "20260722025020_resolve_wells_legacy_vendor_history",
+      "20260722032039_enforce_active_vendor_normalized_uniqueness",
+      "20260722033604_allow_inert_null_cost_workbook_rows",
+      "20260722042038_assert_supplier_cost_basis_followup_overloads",
+      "20260722042515_assert_supplier_cost_basis_followup_overloads",
       "a1_dispatched_list_recent_completed",
       "a1b_dispatched_to_me_completed_tail",
       "accounting_and_integrity_fixes",
@@ -598,6 +607,7 @@
       "fix_security_and_performance_issues",
       "fix_security_definer_search_path_batch",
       "fix_soft_delete_activity_logging",
+      "fix_split_impl_unassigned_app_service_record",
       "fix_transfer_job_cost_cents_per_unit",
       "fix_transfer_job_invoice_conversion_record",
       "fix_transfer_job_to_invoice_columns",
@@ -1231,6 +1241,8 @@
     "pricing_change_sets",
     "pricing_workbook_export_rows",
     "pricing_workbook_exports",
+    "product_cost_basis",
+    "product_cost_basis_change_rows",
     "purchase_order_import_intents",
     "purchase_order_items",
     "quote_items",
@@ -2096,6 +2108,51 @@
       ],
       "constraints": [
         "pricing_workbook_exports_status_check"
+      ]
+    },
+    "product_cost_basis.basis_type": {
+      "values": [
+        "selected_supplier_price",
+        "actual_purchase",
+        "manual_override"
+      ],
+      "constraints": [
+        "product_cost_basis_basis_type_check"
+      ]
+    },
+    "product_cost_basis.selection_source": {
+      "values": [
+        "migration_baseline",
+        "pricing_worksheet",
+        "product_page",
+        "products_inline",
+        "supplier_pricing",
+        "product_detail"
+      ],
+      "constraints": [
+        "product_cost_basis_selection_source_check"
+      ]
+    },
+    "product_cost_basis_change_rows.basis_type": {
+      "values": [
+        "selected_supplier_price",
+        "actual_purchase",
+        "manual_override"
+      ],
+      "constraints": [
+        "product_cost_basis_change_rows_basis_type_check"
+      ]
+    },
+    "product_cost_basis_change_rows.selection_source": {
+      "values": [
+        "pricing_worksheet",
+        "product_page",
+        "products_inline",
+        "supplier_pricing",
+        "product_detail"
+      ],
+      "constraints": [
+        "product_cost_basis_change_rows_selection_source_check"
       ]
     },
     "product_label_drafts.confidence": {
@@ -3271,6 +3328,60 @@
       "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
     },
     {
+      "table": "product_cost_basis",
+      "constraint": "product_cost_basis_actor_shape",
+      "def": "CHECK ((((selection_source = 'migration_baseline'::text) AND (selected_by IS NULL) AND (pricing_change_set_id IS NULL)) OR ((selection_source <> 'migration_baseline'::text) AND (selected_by IS NOT NULL) AND (pricing_change_set_id IS NOT NULL))))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "product_cost_basis",
+      "constraint": "product_cost_basis_cost_cents_check",
+      "def": "CHECK ((cost_cents >= 0))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "product_cost_basis",
+      "constraint": "product_cost_basis_effective_range",
+      "def": "CHECK (((effective_to IS NULL) OR (effective_to >= effective_from)))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "product_cost_basis",
+      "constraint": "product_cost_basis_provenance_shape",
+      "def": "CHECK ((((basis_type = 'selected_supplier_price'::text) AND (supplier_price_observation_id IS NOT NULL) AND (purchase_order_item_id IS NULL)) OR ((basis_type = 'actual_purchase'::text) AND (supplier_price_observation_id IS NULL) AND (purchase_order_item_id IS NOT NULL)) OR ((basis_type = 'manual_override'::text) AND (supplier_price_observation_id IS NULL) AND (purchase_order_item_id IS NULL))))",
+      "reason": "conditional/multi-column — not a single-column IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "product_cost_basis",
+      "constraint": "product_cost_basis_reason_check",
+      "def": "CHECK ((btrim(reason) <> ''::text))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "product_cost_basis_change_rows",
+      "constraint": "product_cost_basis_change_provenance_shape",
+      "def": "CHECK ((((basis_type = 'selected_supplier_price'::text) AND (supplier_price_observation_id IS NOT NULL) AND (purchase_order_item_id IS NULL)) OR ((basis_type = 'actual_purchase'::text) AND (supplier_price_observation_id IS NULL) AND (purchase_order_item_id IS NOT NULL)) OR ((basis_type = 'manual_override'::text) AND (supplier_price_observation_id IS NULL) AND (purchase_order_item_id IS NULL))))",
+      "reason": "conditional/multi-column — not a single-column IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "product_cost_basis_change_rows",
+      "constraint": "product_cost_basis_change_rows_cost_cents_check",
+      "def": "CHECK ((cost_cents >= 0))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "product_cost_basis_change_rows",
+      "constraint": "product_cost_basis_change_rows_expected_version_check",
+      "def": "CHECK ((expected_version >= 1))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "product_cost_basis_change_rows",
+      "constraint": "product_cost_basis_change_rows_reason_check",
+      "def": "CHECK ((btrim(reason) <> ''::text))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
       "table": "product_supplier_links",
       "constraint": "product_supplier_links_comparable_shape",
       "def": "CHECK (((comparison_status <> 'comparable'::text) OR ((link_status = 'confirmed'::text) AND (inventory_units_per_supplier_unit IS NOT NULL) AND (NULLIF(btrim(conversion_unit), ''::text) IS NOT NULL))))",
@@ -3352,6 +3463,12 @@
       "table": "purchase_order_items",
       "constraint": "chk_poi_qty_received",
       "def": "CHECK ((quantity_received >= (0)::numeric))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "purchase_order_items",
+      "constraint": "purchase_order_items_cost_unit_snapshot_shape",
+      "def": "CHECK ((((inventory_units_per_supplier_unit_snapshot IS NULL) AND (inventory_unit_snapshot IS NULL)) OR ((inventory_units_per_supplier_unit_snapshot > (0)::numeric) AND (NULLIF(btrim(inventory_unit_snapshot), ''::text) IS NOT NULL))))",
       "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
     },
     {
@@ -4861,6 +4978,36 @@
         "status",
         "created_at",
         "expires_at"
+      ]
+    },
+    "product_cost_basis": {
+      "no_default": [
+        "product_id",
+        "basis_type",
+        "cost_cents",
+        "selection_source",
+        "reason"
+      ],
+      "with_default": [
+        "id",
+        "selected_at",
+        "effective_from",
+        "created_at"
+      ]
+    },
+    "product_cost_basis_change_rows": {
+      "no_default": [
+        "pricing_change_set_id",
+        "product_id",
+        "expected_version",
+        "basis_type",
+        "cost_cents",
+        "selection_source",
+        "reason"
+      ],
+      "with_default": [
+        "force_selection",
+        "created_at"
       ]
     },
     "product_label_drafts": {
@@ -7040,6 +7187,36 @@
       "created_at",
       "expires_at"
     ],
+    "product_cost_basis": [
+      "id",
+      "product_id",
+      "basis_type",
+      "cost_cents",
+      "supplier_price_observation_id",
+      "purchase_order_item_id",
+      "pricing_change_set_id",
+      "selection_source",
+      "reason",
+      "selected_by",
+      "selected_at",
+      "effective_from",
+      "effective_to",
+      "created_at"
+    ],
+    "product_cost_basis_change_rows": [
+      "pricing_change_set_id",
+      "product_id",
+      "expected_version",
+      "expected_active_basis_id",
+      "basis_type",
+      "cost_cents",
+      "supplier_price_observation_id",
+      "purchase_order_item_id",
+      "selection_source",
+      "reason",
+      "force_selection",
+      "created_at"
+    ],
     "product_label_drafts": [
       "id",
       "product_id",
@@ -7164,7 +7341,8 @@
       "supplier_price_observation_id",
       "inventory_units_per_supplier_unit_snapshot",
       "cost_provenance",
-      "cost_snapshot_at"
+      "cost_snapshot_at",
+      "inventory_unit_snapshot"
     ],
     "purchase_orders": [
       "id",

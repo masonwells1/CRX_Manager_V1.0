@@ -2153,11 +2153,7 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
   check_remainder_reminders: 'maintenance reminder sweep uses persisted sent markers to deduplicate',
   check_unpriced_orders: 'cron reminder sweep uses persisted reminder and escalation sent markers',
   mark_overdue_invoices: 'service-role maintenance updates only invoices currently eligible as overdue',
-  guard_product_cost_basis_unit_change:
-    'trigger-only Phase 2 unit guard; atomically closes only the affected Product basis during a flag-off unit edit and direct EXECUTE is revoked',
   recompute_job_applied_acres: 'trigger-only derived-total recomputation; direct client EXECUTE is revoked',
-  sync_legacy_product_cost_basis:
-    'trigger-only Phase 2 flag-off compatibility ledger sync; validates the Phase 1a actor/change set and direct EXECUTE is revoked',
   reconcile_prepay_balances: 'convergent repair sets balances to recomputed ledger truth',
   refresh_watchdog_flags: 'convergent watchdog rebuild deduplicates flags by persisted natural key',
   release_expired_quote_holds: 'maintenance releases only holds that remain in the expired state',

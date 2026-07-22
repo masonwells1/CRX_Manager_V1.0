@@ -15,6 +15,9 @@ const files = [
   ['cutover.sql', 'supabase/migrations/20260718190000_supplier_pricing_phase1a_cutover.sql'],
   ['phase1b-base.sql', 'scripts/smoke/fixtures/supplier-cost-basis-phase2-base.sql'],
   ['phase2.sql', 'supabase/migrations/20260722015019_supplier_cost_basis_phase2.sql'],
+  ['null-cost-followup.sql', 'supabase/migrations/20260722035521_allow_inert_null_cost_workbook_rows.sql'],
+  ['null-cost-overload-guard.sql', 'supabase/migrations/20260722042515_assert_supplier_cost_basis_followup_overloads.sql'],
+  ['null-cost-overload-guard-replay.sql', 'supabase/migrations/20260722043537_assert_supplier_cost_basis_followup_overloads_replay.sql'],
   ['smoke.sql', 'scripts/smoke/smoke-supplier-cost-basis-phase2.sql'],
 ];
 const container = `crx-pricing-phase2-proof-${process.pid}-${Date.now()}`;

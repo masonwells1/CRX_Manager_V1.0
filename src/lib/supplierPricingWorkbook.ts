@@ -149,6 +149,12 @@ function cellValueToText(value: CellValue, context: string): string {
   throw new SupplierQuoteWorkbookError(`${context} contains an unsupported cell value.`);
 }
 
+function normalizeSupplierCostText(value: string): string {
+  // Staff commonly enter sub-dollar quotes as `.39`. Keep the database parser
+  // strict and normalize only this unambiguous workbook shorthand at the edge.
+  return /^\.[0-9]{1,2}$/.test(value) ? `0${value}` : value;
+}
+
 function quoteWorkbookRow(row: SupplierQuoteSheetRow): Record<SupplierQuoteHeader, string> {
   return {
     product_supplier_link_id: row.product_supplier_link_id,
@@ -327,7 +333,7 @@ function parseQuoteRow(worksheet: Worksheet, rowNumber: number): {
     vendorId: values.vendor_id,
     row: {
       product_supplier_link_id: values.product_supplier_link_id,
-      new_cost: values.new_cost,
+      new_cost: normalizeSupplierCostText(values.new_cost),
       effective_date: values.effective_date,
       price_kind: kind,
       price_unit: values.price_unit,
