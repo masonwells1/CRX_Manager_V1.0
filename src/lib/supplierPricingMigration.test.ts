@@ -21,6 +21,15 @@ const retiredVendorReplaySql = readFileSync(
   ),
   'utf8',
 );
+const wellsResolutionSql = readFileSync(
+  join(
+    repoRoot,
+    'supabase',
+    'migrations',
+    '20260722025808_resolve_wells_legacy_vendor_history.sql',
+  ),
+  'utf8',
+);
 const phase1bSmokeSql = readFileSync(
   join(repoRoot, 'scripts', 'smoke', 'smoke-supplier-pricing-phase1b.sql'),
   'utf8',
@@ -77,6 +86,23 @@ describe('live supplier pricing Phase 1b migrations', () => {
     expect(aliasSql).toContain('Van Diest Supply');
     expect(aliasSql).not.toMatch(/DELETE\s+FROM\s+public\.vendors/i);
     expect(aliasSql).not.toMatch(/UPDATE\s+public\.vendors/i);
+  });
+
+  it('resolves Wells purchase history without rewriting purchases or Product pricing', () => {
+    expect(wellsResolutionSql).toContain('SUPPLIER_VENDOR_CANONICAL_NOT_UNIQUE: Wells Ag Supply');
+    expect(wellsResolutionSql).toContain('SUPPLIER_LEGACY_VENDOR_CONFLICT: Wells Ag Supply');
+    expect(wellsResolutionSql).toContain('SUPPLIER_LEGACY_VENDOR_PRICE_INVARIANT_FAILED: Wells Ag Supply');
+    expect(wellsResolutionSql).toContain('INSERT INTO public.legacy_vendor_resolution');
+    expect(wellsResolutionSql).toContain("'Wells Ag Supply'");
+    expect(wellsResolutionSql).toContain("'approved'");
+    expect(wellsResolutionSql).toContain("'purchase_orders'");
+    expect(wellsResolutionSql).toContain('ON CONFLICT (normalized_text) DO NOTHING');
+
+    expect(wellsResolutionSql).not.toMatch(/UPDATE\s+public\.purchase_orders/i);
+    expect(wellsResolutionSql).not.toMatch(/UPDATE\s+public\.purchase_order_items/i);
+    expect(wellsResolutionSql).not.toMatch(/UPDATE\s+public\.products/i);
+    expect(wellsResolutionSql).not.toMatch(/INSERT\s+INTO\s+public\.supplier_price_observations/i);
+    expect(wellsResolutionSql).not.toMatch(/INSERT\s+INTO\s+public\.vendor_aliases/i);
   });
 
   it.each(newTables)('creates %s with RLS and a policy', (table) => {
