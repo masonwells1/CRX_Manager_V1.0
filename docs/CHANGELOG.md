@@ -2,6 +2,34 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-22 — Cross-session coordination for landing PR #213: pinged the duplicate chip session (stand down, migration 20260722172533 already live) and the id-redesign session (landing order #216 then #213); armed a persistent monitor on PR #216 merge that triggers the #213 landing path; recorded id-redesign confirmation that invoiced-jobs revival is covered by id-precedence routing plus the residual deactivated-name/invoiced-window guard corner in KNOWN_ISSUES §1b; spawned follow-up chip task_0bbf4089 (widen reuse guard to invoiced jobs) and withdrew superseded chip task_87490ee3.
+
+Cross-session coordination for landing PR #213: pinged the duplicate chip session (stand down, migration 20260722172533 already live) and the id-redesign session (landing order #216 then #213); armed a persistent monitor on PR #216 merge that triggers the #213 landing path; recorded id-redesign confirmation that invoiced-jobs revival is covered by id-precedence routing plus the residual deactivated-name/invoiced-window guard corner in KNOWN_ISSUES §1b; spawned follow-up chip task_0bbf4089 (widen reuse guard to invoiced jobs) and withdrew superseded chip task_87490ee3.
+
+- **Commits this session** (git log --since=12.hours --author=Mason):
+  - `d8a17601 Fix bulk quote import lifecycle path`
+  - `5c577703 Improve Codex session momentum guidance (#215)`
+  - `f36158bf Document Supplier Pricing Phase 3 execution contract (#214)`
+  - `85392e02 Record live inventory guard migration (#211)`
+  - `8e4bea10 Close out Supplier Cost Basis Phase 2 Wells canary (#210)`
+  - `016236fd Merge pull request #209 from masonwells1/claude/gauntlet-t3-sections-5-8`
+  - `e3ecc9b2 Fix inventory gauntlet section 3 findings (#208)`
+  - `b78535af Supplier Pricing: complete workbook v2 product info (#207)`
+  - `bf2a60ef Merge pull request #204 from masonwells1/claude/field-profitability`
+  - `5a3f49fa Merge pull request #206 from masonwells1/codex/supplier-pricing-integration`
+  - `466c2095 Merge pull request #205 from masonwells1/codex/supplier-cost-basis-phase2-frontend`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - `supabase/migrations/20260722134252_reject_unresolvable_commission_recipients.sql`
+  - `supabase/migrations/20260722144121_lock_commission_identity_names.sql`
+  - `supabase/migrations/20260722150432_forbid_referenced_recipient_name_acquisition.sql`
+  - `supabase/migrations/20260722154303_global_unique_profile_names.sql`
+  - `supabase/migrations/20260722162851_reuse_guard_covers_orders.sql`
+  - `supabase/migrations/20260722172533_reuse_guard_covers_revivable_quotes.sql`
+
+## 2026-07-22 — Commission-recipient integrity close-out (gauntlet §7 + hardening)
+
+- Extended the recipient-name reservation to terminal-but-revivable quotes: live migration `20260722172533_reuse_guard_covers_revivable_quotes` widens the reuse guard's quotes branch to every non-deleted quote — declined/expired/cancelled quotes can be revived (`revert_quote_status`, `restore_quote_version`), so their commission-split names stay reserved. This was the round-8 Codex gate finding PR #213 briefly parked on; the migration is live, and PR #213 lands after the parallel id-based-splits branch merges (see KNOWN_ISSUES §1b).
+
 ## 2026-07-22 — Commission-recipient integrity close-out (gauntlet §7 + hardening)
 
 - Built and APPLIED LIVE the durable commission-routing fix (submitted as `20260722170000_commission_split_recipient_ids`, server-assigned ledger version `20260722174029`, applied 2026-07-22 with Mason's in-chat OK; disk file B7-renamed to the live version): commission splits stored on quotes, orders, jobs, and customer defaults now carry the recipient's immutable profile UUID (`recipient_user_id`) alongside the display name, and the id — not the name — is authoritative for routing. The migration backfills every stored split after a preflight proving each recipient resolves to exactly one active profile, installs write-time stamp triggers on all four split columns so an id-less split can never be stored again (even from a stale browser session), makes `validate_commission_split_json` id-first with cross-form duplicate detection, routes `_insert_commissions_for_order`/`_insert_commissions_for_job` by id with unique-name resolution as legacy fallback plus display-name refresh, and changes `list_commission_recipients()` to return `(id, full_name)`. The Codex push-proof review (1 BLOCKER, 1 HIGH, 1 MED — all addressed) reshaped two decisions: the `trg_guard_recipient_name_reuse` name-reservation guard is KEPT, not retired (retirement is parked until name-only split writes are impossible — see KNOWN_ISSUES §4b entry), and name-vs-id mismatches resolve context-dependently via a shared `resolve_commission_split_recipient(elem, prefer_name)` helper: at write time the human-edited NAME wins (an old deployed bundle edits only the name and must not have its reassignment reverted by the stale hidden id), while at commission-creation time an active ID wins (an admin rename must not reroute money). The preflight md5-pins the live bodies of every function it replaces so post-review live drift aborts the apply instead of clobbering, and the postflight runs the full new validator over every stored split plus a two-person precedence proof. CommissionSplitEditor now stores the profile id when the dropdown row came from the live RPC and tolerates both RPC shapes so deploy/apply order doesn't matter. The PR also carries the sibling session's live-applied guard migrations (`20260722154303`, `20260722162851`, `20260722172533`) verbatim for disk/live parity — the final Codex push gate caught that `172533` (revivable-terminal-quote name reservation) was referenced by the registry/changelog but absent from the branch, which would have left clean rebuilds with the narrower guard. Post-apply live proof: ledger row present, all 4 stamp triggers enabled, name-reuse guard still enabled, `list_commission_recipients()` returns `TABLE(id uuid, full_name text)`, 36/36 stored split elements stamped with active-profile ids, 0 id-less elements; the in-transaction postflight additionally proved validator accept/reject/dup cases, enrichment stamping, the full stored-split sweep, and the two-person precedence rule. The preflight baseline pins were exercised for real: sibling migrations `20260722172533` (reuse_guard_covers_revivable_quotes) landed minutes before the apply and the pins passed because none of the replaced bodies had drifted.
