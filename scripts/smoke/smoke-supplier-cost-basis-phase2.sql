@@ -117,11 +117,13 @@ DECLARE
   );
 BEGIN
   IF (SELECT round(current_cost * 100)::bigint FROM public.products
-      WHERE id = 'd1961efe-6133-4ab4-bf84-ac7bf7da903a') <> 1009
+      WHERE id = 'd1961efe-6133-4ab4-bf84-ac7bf7da903a') IS DISTINCT FROM 1009
      OR EXISTS (
        SELECT 1 FROM public.products
        WHERE id = 'd1961efe-6133-4ab4-bf84-ac7bf7da903a'
-         AND (tier1_price <> 12 OR tier2_price <> 13 OR tier3_price <> 14)
+         AND (tier1_price IS DISTINCT FROM 12
+           OR tier2_price IS DISTINCT FROM 13
+           OR tier3_price IS DISTINCT FROM 14)
      )
      OR NOT EXISTS (
        SELECT 1 FROM public.product_cost_basis
