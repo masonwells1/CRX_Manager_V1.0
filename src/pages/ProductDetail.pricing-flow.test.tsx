@@ -80,8 +80,12 @@ function chainable(resolveWith: unknown) {
   ]) {
     builder[method] = vi.fn(self);
   }
-  builder.eq = mockProductEq.mockImplementation(self);
-  builder.update = mockProductUpdate.mockImplementation(() => {
+  builder.eq = vi.fn((...args: unknown[]) => {
+    mockProductEq(...args);
+    return builder;
+  });
+  builder.update = vi.fn((...args: unknown[]) => {
+    mockProductUpdate(...args);
     resolved = productMutationResult;
     return builder;
   });
