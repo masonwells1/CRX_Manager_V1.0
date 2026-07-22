@@ -43,6 +43,7 @@ import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { logActivity } from '../lib/activityLogger';
 import { formatUSD, formatCents } from '../lib/money';
 import { catalogPricePerAcre, validateCommissionSplits } from '../lib/quoteCalc';
+import { buildCommissionSplitPatch, nextLoadedSplitSnapshot } from '../lib/commissionSplitConcurrency';
 import { notifyLargeOrder, notifyCreditLimitExceeded } from '../lib/notificationTriggers';
 import { warnIfOverCreditLimit } from '../lib/creditLimit';
 import { sendOrderConfirmedEmail } from '../lib/orderConfirmedEmail';
@@ -250,6 +251,10 @@ export default function QuoteBuilder() {
   const [commissionSplit, setCommissionSplit] = useState<CommissionSplit>({
     splits: [{ recipient: '', percentage: 100 }],
   });
+  // Lost-update guard: split as loaded from the DB, and whether the user has
+  // changed it this session (see src/lib/commissionSplitConcurrency.ts).
+  const loadedCommissionSplitRef = useRef<CommissionSplit | null>(null);
+  const commissionSplitTouchedRef = useRef(false);
   const [quoteNumber, setQuoteNumber] = useState('');
   const [status, setStatus] = useState<QuoteStatus>('draft');
   const [quoteId, setQuoteId] = useState<string | null>(id || null);
@@ -606,6 +611,8 @@ export default function QuoteBuilder() {
     setIsPlanned(q.is_planned || false);
     setWasPlanned(q.is_planned || false);
     if (q.commission_split) setCommissionSplit(q.commission_split);
+    loadedCommissionSplitRef.current = q.commission_split ?? null;
+    commissionSplitTouchedRef.current = false;
     setQuoteCreatedAt(q.created_at || null);
 
     const dbSections = (sectionsRes.data || []) as QuoteSection[];
@@ -718,6 +725,7 @@ export default function QuoteBuilder() {
           setTier(cust.assigned_tier);
           if (cust.default_commission_split) {
             setCommissionSplit(cust.default_commission_split);
+            commissionSplitTouchedRef.current = true;
           }
         }
       }
@@ -737,6 +745,7 @@ export default function QuoteBuilder() {
       setTier(cust.assigned_tier);
       if (cust.default_commission_split) {
         setCommissionSplit(cust.default_commission_split);
+        commissionSplitTouchedRef.current = true;
       }
       recalcAllForTier(cust.assigned_tier);
     }
@@ -1111,7 +1120,13 @@ export default function QuoteBuilder() {
       created_by: profile.id,
       tier,
       status: newStatus || status,
-      commission_split: { splits: commissionSplit.splits },
+      ...buildCommissionSplitPatch({
+        isUpdate: Boolean(quoteId && isEditing),
+        touched: commissionSplitTouchedRef.current,
+        key: 'commission_split',
+        value: { splits: commissionSplit.splits },
+        loaded: loadedCommissionSplitRef.current,
+      }),
       total_price: totals.totalPrice,
       total_cost: totals.totalCost,
       total_profit: totals.totalProfit,
@@ -1175,7 +1190,17 @@ export default function QuoteBuilder() {
       }
 
       saveQuoteIdem.resetKey();
-      const result = assertRpcResult<{ quote_id: string }>(data, 'save_quote');
+      const result = assertRpcResult<{ quote_id: string; commission_split?: CommissionSplit | null }>(data, 'save_quote');
+      // Advance the baseline snapshot ONLY when THIS tab saved its own split edit;
+      // an untouched save keeps the old baseline (still shown in the editor) so a
+      // later edit fail-closed-conflicts if another tab changed the split.
+      loadedCommissionSplitRef.current = nextLoadedSplitSnapshot({
+        touched: commissionSplitTouchedRef.current,
+        prevLoaded: loadedCommissionSplitRef.current,
+        echoed: result.commission_split,
+        currentValue: { splits: commissionSplit.splits },
+      });
+      commissionSplitTouchedRef.current = false;
       const savedQuoteId = result.quote_id || quoteId;
       if (!quoteId || !isEditing) {
         setQuoteId(savedQuoteId);
@@ -3001,7 +3026,10 @@ export default function QuoteBuilder() {
           <div className="sm:col-span-2 lg:col-span-4">
             <CommissionSplitEditor
               value={commissionSplit}
-              onChange={setCommissionSplit}
+              onChange={(val) => {
+                commissionSplitTouchedRef.current = true;
+                setCommissionSplit(val);
+              }}
             />
           </div>
         </div>

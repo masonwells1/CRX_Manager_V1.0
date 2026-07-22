@@ -309,7 +309,12 @@ function retryDelayMs(retryCount: number): number {
 
 function isSessionMismatch(message: string): boolean {
   const normalized = message.toLowerCase();
-  return normalized.includes('does not match authenticated user')
+  // ACTOR_MISMATCH is the canonical actor-forgery token raised by save_customer,
+  // save_quote (as of 2026-07-22), and other governed RPCs. The older
+  // 'does not match authenticated user' string is kept so in-flight queued
+  // actions from a pre-canonicalization client still classify correctly.
+  return normalized.includes('actor_mismatch')
+    || normalized.includes('does not match authenticated user')
     || normalized.includes('not authenticated');
 }
 

@@ -542,6 +542,20 @@ describe('syncPendingActions', () => {
     expect(result).toEqual({ ...EMPTY_RESULT, deferred: 1 });
   });
 
+  it('treats the canonical ACTOR_MISMATCH token as a deferred session mismatch', async () => {
+    mockGetPendingActions.mockResolvedValue([makeAction({ retryCount: 1 })]);
+    mockRpc.mockResolvedValue({ error: { message: 'ACTOR_MISMATCH' } });
+
+    const result = await syncPendingActions('user-1');
+
+    expect(mockUpdateAction).toHaveBeenCalledWith(expect.objectContaining({
+      retryCount: 1,
+      status: 'retry_wait',
+      sessionMismatchCount: 1,
+    }));
+    expect(result).toEqual({ ...EMPTY_RESULT, deferred: 1 });
+  });
+
   it('treats an expired unauthenticated session as a deferred session mismatch', async () => {
     mockGetPendingActions.mockResolvedValue([makeAction({ retryCount: 1 })]);
     mockRpc.mockResolvedValue({ error: { message: 'Not authenticated' } });
