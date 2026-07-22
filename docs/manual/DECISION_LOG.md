@@ -1,6 +1,6 @@
 # Decision Log
 
-Last verified: 2026-07-19
+Last verified: 2026-07-22
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
@@ -8,6 +8,28 @@ settled calls. Newest first. Each entry is a decision, why it was made, and the 
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
 
 ---
+
+## 2026-07-22 — SETTLED: Codex plans, then proceeds; progress must expose remaining work
+
+**Decision (Mason, in-chat, 2026-07-22):** when Mason asks Codex to build, fix, finish, audit,
+or handle a CRX task, that request authorizes the ordinary reversible local work needed to
+complete the stated scope. For substantial work, Codex states a short plain-English goal,
+definition of done, plan, and expected files/systems, then begins without waiting for a second
+approval. It must not ask "Should I continue?" while another safe in-scope step exists. A blocked
+lane triggers investigation, safe alternatives, and progress on other unblocked lanes before
+returning to Mason.
+
+**Communication rule:** substantial work keeps a visible completed/current/remaining plan and
+uses compact `PROGRESS`, `DONE`, `NOW`, `REMAINING`, and `NEEDS MASON` updates. Closeout uses one
+categorical verdict — `COMPLETE`, `READY FOR APPROVAL`, `BLOCKED`, or `PARTIAL` — and states what
+was done, what remains, the proof observed, and one recommended next step. Never call work
+complete while required work remains.
+
+**Safety boundaries unchanged:** stop at the explicit live-data, migration, destructive,
+permissions, secrets, billing, production, and other outward-facing gates in this contract; stop
+also when Mason must make a material product/business choice or when no meaningful progress
+remains after safe alternatives are exhausted. Before stopping at a gate, finish safe preparation
+and combine the required decisions into one question.
 
 ## 2026-07-19 — SETTLED: split-billing v1 edge-case policy — per-child commissions (no job-level clamp) + no extra job-less double-submit guard
 
