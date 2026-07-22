@@ -1,6 +1,6 @@
 # Decision Log
 
-Last verified: 2026-07-19
+Last verified: 2026-07-22
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
@@ -8,6 +8,12 @@ settled calls. Newest first. Each entry is a decision, why it was made, and the 
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
 
 ---
+
+## 2026-07-22 — SETTLED: Codex plans, then proceeds; progress must expose remaining work
+
+**Decision (Mason, in-chat):** a request to Codex to build, fix, finish, audit, or handle a CRX task authorizes its ordinary reversible local work; for substantial work, Codex states the plain-English goal, definition of done, plan, and expected files/systems, then begins without a second approval or "Should I continue?" while a safe in-scope step exists. Claude's existing plan-approval workflow is unchanged.
+**Why:** sessions were stopping after plans and obscuring forward movement, remaining work, and the next action.
+**What this forbids/implies:** keep a visible completed/current/remaining plan and use `PROGRESS` / `DONE` / `NOW` / `REMAINING` / `NEEDS MASON`; close with `COMPLETE` / `READY FOR APPROVAL` / `BLOCKED` / `PARTIAL`, work remaining, proof, and one next step. Investigate/reroute blocked lanes; stop only at the contract's live/destructive/outward-facing gates, a material owner choice, or exhausted safe progress; finish safe preparation and consolidate any question. Never call work complete while required work remains.
 
 ## 2026-07-19 — SETTLED: split-billing v1 edge-case policy — per-child commissions (no job-level clamp) + no extra job-less double-submit guard
 

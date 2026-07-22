@@ -1,10 +1,10 @@
 # Supplier Pricing Phase 2 — Governed Cost Basis Build Plan
 
 **Date:** 2026-07-21
-**Status:** Mason approved and merged migration-first PR #196 on 2026-07-21 as main commit `c4b16d19aa69bbbda9f96206ad743f74397ef030`. Vercel production deployment completed successfully and `/supplier-pricing` returned HTTP 200. Live Supabase now records `20260722015019_supplier_cost_basis_phase2`; the feature flag remains disabled. Live postflight found 602 baseline rows and 602 active rows, zero change rows, one exact overload for each new RPC, and unchanged Wells Product cost/sell-price totals. A rollback-only live preview→apply chain returned `SMOKE_PASS_ROLLBACK`, and all 17 invariant sweeps returned zero unallowlisted findings. Before merge, the disposable PostgreSQL proof returned `SMOKE_PASS_ROLLBACK`; 98 focused tests and the full 3,791-test pipeline passed with 118 skipped. Both migration reviewers returned CLEAN with zero blocker/high/medium findings; Claude returned `SHIP-WITH-FOLLOWUPS` with no blocker/high findings; the required Codex push review returned CLEAN on its successful retry after one tooling timeout. All protected GitHub checks passed, including SQL validation, lint/typecheck/test/build, CodeQL, Vercel, and CodeRabbit; E2E was intentionally skipped by workflow policy. CodeRabbit reported no actionable comments. Two mechanically unresolved GitHub Codex threads were non-actionable on final code: the PO-snapshot claim was disproved by the migration trigger and smoke proof, and the supplier-lock deadlock was fixed by observation-first locking. The frontend remains separately parked behind live registry/generated-types refresh and the queued-RPC CI barrier; the feature must not be enabled until that release is complete and its live canary is approved.
+**Status:** Phase 2 foundation, governed frontend, Wells-only rollout gate, and first authenticated live canary are complete. PRs #196, #205, #206, and #207 landed the database foundation, Product Detail selection workflow, ten-Product allowlist, regression hardening, workbook-v2 Product information, and inner-RPC permission revocation. The approved N-Serve canary selected the $47.26 Wells observation over the prior $47.05 basis while preserving tier prices exactly at $52.77 / $56.46 / $62.46; one basis row and one cost-history row were recorded. More than three hours of read-only observation found no sell-price drift, duplicate active basis, duplicate history, or browser error. The global feature flag remains `false`, and only the exact ten Wells Products are enabled. The durable evidence and remaining rollout boundary are in [`2026-07-22-supplier-cost-basis-phase2-wells-canary-closeout.md`](../audits/2026-07-22-supplier-cost-basis-phase2-wells-canary-closeout.md).
 **Parent roadmap:** `docs/plans/2026-07-16-supplier-pricing-and-variants-plan.md`
 
-**Frontend verification follow-up:** Authenticated workbook review found that the original wrapper attempted cost-basis resolution for every manifest row, including a legitimate unchanged Product whose exported current cost was blank. Follow-up migration `20260722035521_allow_inert_null_cost_workbook_rows` is now live; it preserves full workbook manifest, identity, token, formula, and baseline validation, then omits only the exact unchanged/null-cost/no-selection row from the basis ledger. Changed Products and explicit selections remain fail-closed. Disposable PostgreSQL proof passed with one inert null-cost row and one changed row. The feature flag remains OFF. OFF hides the frontend rollout but is not a database permission lock: an authenticated admin can already call the governed Phase 2 preview/apply RPCs directly, so normal admin-account and explicit-approval controls still protect real Product money.
+**Frontend verification follow-up:** Authenticated workbook review found that the original wrapper attempted cost-basis resolution for every manifest row, including a legitimate unchanged Product whose exported current cost was blank. Follow-up migration `20260722035521_allow_inert_null_cost_workbook_rows` is now live; it preserves full workbook manifest, identity, token, formula, and baseline validation, then omits only the exact unchanged/null-cost/no-selection row from the basis ledger. Changed Products and explicit selections remain fail-closed. Disposable PostgreSQL proof passed with one inert null-cost row and one changed row. The global feature flag remains OFF, which prevents broad rollout; the exact ten Wells allowlisted Products still show and can use the governed UI. OFF is not a database permission lock: an authenticated admin can call the governed Phase 2 preview/apply RPCs directly, so normal admin-account and explicit-approval controls still protect real Product money.
 
 ## 1. Pilot gate and current evidence
 
@@ -167,29 +167,30 @@ Do not add a direct `Update current cost` escape hatch. Existing Product-page pr
 
 ## 8. Rollout and production gate
 
-1. **Read-only release:** ship the table, bootstrap, RPC preview, and UI preview behind an admin-only feature flag. Compare preview results against the existing Phase 1a pricing RPC.
-2. **Wells canary:** enable apply only for the 10 pilot products. Start with one `keep_sell_prices` selection and prove tier prices remain unchanged; then separately test a deliberately approved reprice on a non-customer-impacting test product if Mason authorizes it.
-3. **Canary observation period:** confirm active-basis uniqueness, history rendering, idempotent replay, cost-history count, product pricing versions, quotes, and order snapshots.
-4. **Broader admin rollout:** remove the product allowlist only after the canary evidence packet is clean.
+1. **Read-only release — complete:** the table, bootstrap, governed preview/apply wrappers, and admin UI shipped with the global flag OFF.
+2. **Wells canary — complete:** apply is enabled only for the exact 10 pilot Products. One approved `keep_sell_prices` selection changed N-Serve cost by $0.21 and changed zero tier prices.
+3. **Canary observation period — complete:** active-basis uniqueness, history rendering, cost-history count, pricing version, privilege shape, authenticated browser state, idempotent replay, and quote/order snapshot isolation remained clean through the recorded observation window. One exact cached replay returned the stored response; immediate postflight proved zero durable change. N-Serve had no existing quote snapshot; its one existing order snapshot retained the pre-canary $47.05 cost while the Product moved to $47.26. Full live inspection of the wrapper, serialized helper, inner pricing engine, and relevant trigger functions found no quote/order snapshot writer.
+4. **Broader admin rollout — not authorized:** removing the Product allowlist, enabling the global flag, a reprice experiment, or another live Product selection requires a new production gate.
 
-Applying the live migration and enabling Phase 2 apply remain separate explicit production approvals. A failure or ambiguous preview/apply result triggers PARK-AND-REPORT; it is not worked around with direct SQL.
+The foundation migration and one allowlisted Wells selection are already live. Enabling the global flag, removing the allowlist, or running any additional Product selection remains a separate explicit production gate. A failure or ambiguous preview/apply result triggers PARK-AND-REPORT; it is not worked around with direct SQL.
 
 ## 9. Acceptance criteria
 
-Phase 2 is complete only when:
+The Wells-canary scope meets these Phase 2 acceptance criteria:
 
-- every active product can have exactly one attributable selected basis;
+- each of the exact ten allowlisted Wells Products has one attributable active selected basis;
 - selecting evidence never happens automatically;
 - preview and apply are server-authoritative, idempotent, version-checked, and cent-exact;
 - default selection changes zero tier sell prices;
-- any intentional repricing exactly matches the confirmed preview;
 - history shows supplier evidence, selected basis, and actual paid as distinct streams;
 - imports remain observation-only;
-- legacy `products.current_cost` matches the active basis without becoming an alternate write path;
-- a real Wells canary is proven in the UI and live database with a rollback/closeout record.
+- N-Serve's legacy `products.current_cost` matches its active selected basis without becoming an alternate write path;
+- a real Wells canary is proven in the UI and live database with a rollback/closeout record — completed in the linked closeout packet.
+
+Broader-rollout acceptance remains pending: every active Product must have an attributable basis before global enablement, and any separately authorized repricing experiment must exactly match its confirmed preview. Neither global enablement nor a repricing experiment was part of this canary.
 
 ## 10. Architecture evidence used for this plan
 
 - Graphify refreshed at commit `3eb8a93d` (7,600 nodes, 15,816 edges).
 - Query: `graphify query "what connects supplier price observations to governed product cost basis selection and sell price protection?" --budget 1600`.
-- Material connections were confirmed in current source: Supplier Pricing uses append-only observations; Product Price History already renders the three evidence streams; Product Detail and Products call the Phase 1a preview/apply wrappers; live PostgreSQL has the governed pricing and cost-basis RPCs plus the product-pricing triggers; `product_cost_basis` exists from the applied Phase 2 migration while the frontend rollout remains separately gated.
+- Material connections were confirmed in current source and live read-only state: Supplier Pricing uses append-only observations; Product Price History renders the three evidence streams; Product Detail and Products enter through the governed cost-basis wrappers; live PostgreSQL enforces the Product allowlist, pricing triggers, and inner-RPC permission boundary; and the global flag remains OFF after the completed Wells canary.

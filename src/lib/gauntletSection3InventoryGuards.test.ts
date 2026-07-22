@@ -48,8 +48,8 @@ describe('live-foundation gauntlet section 3 inventory guards', () => {
     }
   });
 
-  it('documents the database guard and quick-receive grant fix in a migration', () => {
-    const migration = source('supabase/migrations/20260722105402_guard_inventory_location_and_matcher_grants.sql');
+  it('documents the live database guard and quick-receive grant fix in a migration', () => {
+    const migration = source('supabase/migrations/20260722122651_guard_inventory_location_and_matcher_grants.sql');
 
     expect(migration).toContain('CREATE TRIGGER guard_inventory_location_change');
     expect(migration).toContain('INVENTORY_LOCATION_TRANSFER_REQUIRED');

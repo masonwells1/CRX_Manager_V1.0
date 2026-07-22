@@ -20,7 +20,7 @@ These are mandatory safety rules for anyone (human or AI) making changes to CRX 
 
 ### 3. Plan before building
 - Write a clear plan listing every file you'll create or modify
-- For multi-file or risky work (data, money, security, production, migrations), show the plan to Mason and wait for approval before starting. **Tiny, obvious, reversible fixes may proceed directly** (per `AGENTS.md`) — don't make a ceremony of a typo fix.
+- For multi-file or risky work (data, money, security, production, migrations), show the plan to Mason. **Codex exception (Mason, 2026-07-22):** when Mason asks Codex to build, fix, finish, audit, or handle the task, that request approves ordinary reversible in-scope work, so Codex proceeds after the plan without a second approval. Claude and other agents retain their own plan-approval instructions. **Tiny, obvious, reversible fixes may proceed directly** (per `AGENTS.md`) — don't make a ceremony of a typo fix.
 - Break large changes into small, testable steps
 
 ---
