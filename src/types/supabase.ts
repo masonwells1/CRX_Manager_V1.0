@@ -7462,13 +7462,19 @@ export type Database = {
           current_tier3_price_cents: number | null
           export_id: string
           identity_fingerprint: string
+          internal_notes_snapshot: string | null
           inventory_unit_snapshot: string | null
           product_id: string
           product_name_snapshot: string
+          quoting_notes_snapshot: string | null
+          rate_per_acre_snapshot: number | null
+          rate_unit_snapshot: string | null
           row_token: string
           row_version: number
           sku_snapshot: string | null
+          suggested_rate_snapshot: string | null
           unit_size_snapshot: string | null
+          use_timing_snapshot: string | null
         }
         Insert: {
           category_snapshot?: string | null
@@ -7482,13 +7488,19 @@ export type Database = {
           current_tier3_price_cents?: number | null
           export_id: string
           identity_fingerprint: string
+          internal_notes_snapshot?: string | null
           inventory_unit_snapshot?: string | null
           product_id: string
           product_name_snapshot: string
+          quoting_notes_snapshot?: string | null
+          rate_per_acre_snapshot?: number | null
+          rate_unit_snapshot?: string | null
           row_token: string
           row_version: number
           sku_snapshot?: string | null
+          suggested_rate_snapshot?: string | null
           unit_size_snapshot?: string | null
+          use_timing_snapshot?: string | null
         }
         Update: {
           category_snapshot?: string | null
@@ -7502,13 +7514,19 @@ export type Database = {
           current_tier3_price_cents?: number | null
           export_id?: string
           identity_fingerprint?: string
+          internal_notes_snapshot?: string | null
           inventory_unit_snapshot?: string | null
           product_id?: string
           product_name_snapshot?: string
+          quoting_notes_snapshot?: string | null
+          rate_per_acre_snapshot?: number | null
+          rate_unit_snapshot?: string | null
           row_token?: string
           row_version?: number
           sku_snapshot?: string | null
+          suggested_rate_snapshot?: string | null
           unit_size_snapshot?: string | null
+          use_timing_snapshot?: string | null
         }
         Relationships: [
           {
@@ -7539,6 +7557,7 @@ export type Database = {
           created_at: string
           created_by: string
           expires_at: string
+          format_version: string
           id: string
           idempotency_key: string
           manifest_fingerprint: string
@@ -7550,6 +7569,7 @@ export type Database = {
           created_at?: string
           created_by: string
           expires_at?: string
+          format_version?: string
           id?: string
           idempotency_key: string
           manifest_fingerprint: string
@@ -7561,6 +7581,7 @@ export type Database = {
           created_at?: string
           created_by?: string
           expires_at?: string
+          format_version?: string
           id?: string
           idempotency_key?: string
           manifest_fingerprint?: string
@@ -7807,6 +7828,58 @@ export type Database = {
           },
         ]
       }
+      product_info_change_set_rows: {
+        Row: {
+          after_values: Json
+          before_values: Json
+          change_set_id: string
+          changes: Json
+          expected_version: number
+          output_fingerprint: string
+          product_id: string
+        }
+        Insert: {
+          after_values: Json
+          before_values: Json
+          change_set_id: string
+          changes: Json
+          expected_version: number
+          output_fingerprint: string
+          product_id: string
+        }
+        Update: {
+          after_values?: Json
+          before_values?: Json
+          change_set_id?: string
+          changes?: Json
+          expected_version?: number
+          output_fingerprint?: string
+          product_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "product_info_change_set_rows_change_set_id_fkey"
+            columns: ["change_set_id"]
+            isOneToOne: false
+            referencedRelation: "pricing_change_sets"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "product_info_change_set_rows_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: false
+            referencedRelation: "products"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "product_info_change_set_rows_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: false
+            referencedRelation: "view_unmigrated_products"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       product_label_drafts: {
         Row: {
           confidence: string
@@ -8030,6 +8103,7 @@ export type Database = {
           pricing_version: number
           product_form: string | null
           product_name: string
+          quoting_notes: string | null
           rate_per_acre: number | null
           rate_unit: string | null
           rei_hours: number | null
@@ -8075,6 +8149,7 @@ export type Database = {
           pricing_version?: number
           product_form?: string | null
           product_name: string
+          quoting_notes?: string | null
           rate_per_acre?: number | null
           rate_unit?: string | null
           rei_hours?: number | null
@@ -8120,6 +8195,7 @@ export type Database = {
           pricing_version?: number
           product_form?: string | null
           product_name?: string
+          quoting_notes?: string | null
           rate_per_acre?: number | null
           rate_unit?: string | null
           rei_hours?: number | null
@@ -11266,6 +11342,15 @@ export type Database = {
               type: string
             }[]
           }
+      _apply_product_cost_basis_change_set_serialized_inner: {
+        Args: {
+          p_change_set_id: string
+          p_idempotency_key?: string
+          p_performed_by?: string
+          p_request_fingerprint: string
+        }
+        Returns: Json
+      }
       _batch_apply_prepayments_impl: {
         Args: {
           p_allocations: Json

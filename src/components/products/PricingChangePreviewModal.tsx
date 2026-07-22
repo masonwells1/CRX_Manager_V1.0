@@ -21,6 +21,14 @@ const ERROR_MESSAGES: Record<string, string> = {
     'Protected product or baseline pricing details no longer match the exported worksheet.',
   WORKBOOK_BLANK_MODE_CHANGED_VALUES:
     'Pricing values changed, but no pricing mode was selected for this row.',
+  WORKBOOK_V2_EXPORT_REQUIRED:
+    'This workbook is from an older template. Export a fresh Product pricing workbook and try again.',
+  PRODUCT_INFO_FIELDS_REQUIRED:
+    'This workbook is missing Product information columns. Export a fresh workbook and try again.',
+  PRODUCT_RATE_PER_ACRE_INVALID:
+    'Rate per acre must be blank or a non-negative number.',
+  PRODUCT_RATE_UNIT_INVALID:
+    'The selected rate unit is not compatible with this Product form.',
 };
 
 const STATUS_LABELS: Record<PricingPreviewRow['row_status'], string> = {
@@ -230,6 +238,43 @@ function PricingEffectDetails({ effect }: { effect: PricingEffect }) {
   );
 }
 
+const PRODUCT_INFO_LABELS: Record<string, string> = {
+  suggested_rate: 'Suggested rate',
+  rate_per_acre: 'Rate per acre',
+  rate_unit: 'Rate unit',
+  use_timing: 'Use timing',
+  internal_notes: 'Internal notes',
+  quoting_notes: 'Quoting notes',
+};
+
+function displayInfoValue(value: unknown): string {
+  if (value === null || value === undefined || value === '') return '—';
+  return String(value);
+}
+
+function ProductInfoEffectDetails({ effect }: { effect: PricingEffect }) {
+  const changes = effect.product_info_changes;
+  if (!changes || Object.keys(changes).length === 0) return null;
+  return (
+    <div className="mt-3 rounded-lg border border-blue-200 bg-blue-50 p-3">
+      <div className="text-xs font-semibold uppercase tracking-wide text-blue-800">Product information</div>
+      <dl className="mt-2 space-y-2 text-sm">
+        {Object.entries(changes).map(([field, change]) => (
+          <div key={field} className="grid gap-1 sm:grid-cols-[10rem_1fr]">
+            <dt className="text-xs font-medium text-blue-700">{PRODUCT_INFO_LABELS[field] ?? field}</dt>
+            <dd className="text-nav-dark">
+              <ChangePair
+                oldValue={displayInfoValue(change.before)}
+                newValue={displayInfoValue(change.after)}
+              />
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </div>
+  );
+}
+
 export default function PricingChangePreviewModal({
   open,
   preview,
@@ -347,7 +392,9 @@ export default function PricingChangePreviewModal({
                     </div>
                   )}
                   <BasisReviewDetails row={row} />
-                  {row.effect && <PricingEffectDetails effect={row.effect} />}
+                  {row.effect && <ProductInfoEffectDetails effect={row.effect} />}
+                  {row.effect && row.effect.pricing_changed !== false
+                    && <PricingEffectDetails effect={row.effect} />}
                 </li>
               );
             })}

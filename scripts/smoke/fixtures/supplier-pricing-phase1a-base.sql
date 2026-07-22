@@ -102,6 +102,17 @@ CREATE TABLE public.cost_history (
   changed_at timestamptz NOT NULL DEFAULT now()
 );
 
+CREATE TABLE public.activity_feed (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  event_type text NOT NULL,
+  description text NOT NULL,
+  performed_by uuid REFERENCES public.profiles(id),
+  related_entity_type text,
+  related_entity_id uuid,
+  customer_id uuid,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
 CREATE TABLE public.unit_conversions (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   unit text NOT NULL UNIQUE,

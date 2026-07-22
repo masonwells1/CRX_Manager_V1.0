@@ -25,3 +25,15 @@ VALUES
    NULL, NULL, NULL, NULL, NULL, NULL),
   ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa5'::uuid, 'Phase 1a Rate Product', '005-RATE', 'Herbicide', 1, 'gal', 'gal',
    20.00, 0.20, 0.25, 0.30, 16, 'oz');
+
+-- A retained active v1 export proves the workbook-v2 migration expires legacy
+-- templates rather than allowing an old workbook to cross the new boundary.
+INSERT INTO public.pricing_workbook_exports(
+  id, created_by, request_fingerprint, manifest_fingerprint,
+  idempotency_key, row_count, status
+) VALUES (
+  '77777777-7777-4777-8777-777777777777',
+  '11111111-1111-4111-8111-111111111111',
+  'legacy-v1-request', 'legacy-v1-manifest',
+  'legacy-v1-export', 1, 'active'
+);
