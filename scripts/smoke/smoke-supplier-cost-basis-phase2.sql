@@ -25,6 +25,18 @@ BEGIN
   IF has_table_privilege('authenticated', 'public.product_cost_basis', 'SELECT') THEN
     RAISE EXCEPTION 'SMOKE_FAIL: authenticated retained direct basis ledger access';
   END IF;
+  IF has_function_privilege(
+       'authenticated',
+       'public.preview_product_pricing_changes(text,uuid,jsonb,uuid,text)',
+       'EXECUTE'
+     )
+     OR has_function_privilege(
+       'authenticated',
+       'public.apply_product_pricing_change_set(uuid,text,uuid,text)',
+       'EXECUTE'
+     ) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: authenticated retained direct inner pricing RPC access';
+  END IF;
   IF (SELECT count(*) FROM public.product_cost_basis_rollout) <> 10
      OR has_table_privilege('authenticated', 'public.product_cost_basis_rollout', 'SELECT') THEN
     RAISE EXCEPTION 'SMOKE_FAIL: Wells rollout table shape or privacy drifted';
@@ -39,6 +51,16 @@ BEGIN
   END IF;
 END;
 $proof$;
+
+-- The remainder of this rollback-only proof still exercises the retained
+-- Phase 1a engines directly. Grant disposable access only inside this test
+-- transaction after proving production roles lost that access above.
+GRANT EXECUTE ON FUNCTION public.preview_product_pricing_changes(
+  text, uuid, jsonb, uuid, text
+) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.apply_product_pricing_change_set(
+  uuid, text, uuid, text
+) TO authenticated;
 
 -- Product creation intentionally persists a pricing-free shell. Prove a row
 -- created after the migration remains valid and receives no invented basis;

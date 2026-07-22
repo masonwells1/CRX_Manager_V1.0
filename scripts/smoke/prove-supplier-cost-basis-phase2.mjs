@@ -26,6 +26,7 @@ const files = [
   ['wells-rollout.sql', 'supabase/migrations/20260722064814_wells_cost_basis_rollout_gate.sql'],
   ['po-reassignment-guard.sql', 'supabase/migrations/20260722080226_lock_received_po_cost_snapshot_across_product_reassignment.sql'],
   ['workbook-v2.sql', 'supabase/migrations/20260722091359_supplier_pricing_workbook_v2_product_info.sql'],
+  ['inner-rpc-revoke.sql', 'supabase/migrations/20260722100456_revoke_inner_pricing_rpc_access.sql'],
   ['smoke.sql', 'scripts/smoke/smoke-supplier-cost-basis-phase2.sql'],
 ];
 const container = `crx-pricing-phase2-proof-${process.pid}-${Date.now()}`;

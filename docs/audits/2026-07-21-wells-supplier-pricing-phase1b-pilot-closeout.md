@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-21
 **Owner approval:** Mason approved the revised Wells pilot, confirmed CRX's existing Wells vendor fields, and approved the Phase 1b closeout plus exact Wells legacy resolution.
-**Current status:** Operational pilot complete. Phase 2 migration `20260722015019` is applied live with its feature flag off. The Wells resolution is applied live as ledger version `20260722025808`, with disk migration `20260722025808_resolve_wells_legacy_vendor_history.sql`. Workbook hardening and all closeout proofs are green.
+**Current status:** Operational pilot and one authenticated Phase 2 Product canary are complete. Phase 2 migration `20260722015019` is applied live with its global feature flag off. The Wells resolution is applied live as ledger version `20260722025808`, with disk migration `20260722025808_resolve_wells_legacy_vendor_history.sql`. Workbook hardening and all closeout proofs are green.
 
 ## Scope and non-negotiable rules
 
@@ -36,6 +36,26 @@ Fresh live evidence after the pilot and after the rollback-only resolution proof
 | Tier 3 sell-price total | $1,220.51 |
 
 Supplier evidence changed. Every recorded Product cost and tier-price total above remained unchanged.
+
+## Authenticated Wells Phase 2 canary
+
+One controlled Product-money canary was previewed and explicitly applied through the governed Phase 2 wrapper by authenticated admin `22c1fc50-4d2a-4baa-8ff8-341c0c7edd4f` on 2026-07-22. No second canary is required.
+
+| Canary evidence | Verified value |
+|---|---|
+| Product | `N-Serve - Bulk` (`d1961efe-6133-4ab4-bf84-ac7bf7da903a`) |
+| Selected evidence | Wells quote observation `52f1cbff-5cb9-4067-adc5-dd0422816861`, $47.26/Gal, exact 1:1 Gal conversion |
+| Before selected cost | $47.05 manual baseline |
+| After selected cost | $47.26 Wells supplier quote (+$0.21) |
+| Tier 1 sell price | $52.77 before and after; no change |
+| Tier 2 sell price | $56.46 before and after; no change |
+| Tier 3 sell price | $62.46 before and after; no change |
+| Derived margins | 10.84% / 16.67% / 24.67% before; 10.441539% / 16.294722% / 24.335575% after |
+| Governed preview/apply | Change set `3708874a-aceb-4130-9023-12d140b5a9b0`, one submitted row, one applied row, expected pricing version 1, resulting version 2 |
+| Audit result | Cost-history row `f1f85bfa-639a-442c-a087-331a1dda0b43`, active basis row `db39fd19-e22a-4f9c-aa2c-5034092f1d63`, and activity row `3e8a60e2-2b87-468a-b963-0b1341e2ff0e` all agree |
+| Scope guard | Wells allowlist remains exactly 10; global `supplier_cost_basis_enabled` remains `false` |
+
+The canary changed only the selected cost and its mathematically derived margins. It did not change any tier sell price, did not select a purchase-order row, and did not widen the rollout beyond the exact Wells allowlist.
 
 ## Workbook hardening
 
@@ -93,7 +113,7 @@ Phase 2 applied live as exact ledger version/name `20260722015019_supplier_cost_
 Closeout rules:
 
 - Wells is complete; do not add another resolution or rewrite historical purchase rows.
-- Phase 2 remains off until its separately parked frontend/types release lands and Mason approves a live canary.
+- The Phase 2 frontend/types release and one authenticated Wells live canary are complete. Keep the global flag off; any broader rollout still requires separate approval.
 - The migration order is reconciled on disk and live; keep the applied `20260722025808` filename unchanged.
 - Independent pre-push review found that active vendor names were only unique by exact text, not by supplier normalization. Live read-only evidence showed one normalized Wells vendor and zero active normalized collisions. The CLEAN, rollback-proven follow-up was applied as ledger version `20260722033450` and B7-renamed on disk to `20260722033450_enforce_active_vendor_normalized_uniqueness.sql`.
 - Phase 2 frontend verification later exposed a separate database-wrapper issue for unchanged Products with no current cost. The isolated follow-up is live as `20260722035521_allow_inert_null_cost_workbook_rows` and remains outside the Wells data cleanup: it preserves complete workbook validation, skips only an exact inert null-cost basis row, and leaves the Phase 2 flag OFF. Its full PostgreSQL rollback chain passed before apply.

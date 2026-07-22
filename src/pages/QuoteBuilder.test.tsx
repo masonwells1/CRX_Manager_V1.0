@@ -125,6 +125,8 @@ describe('QuoteBuilder', () => {
       .toBe('Customer quote guidance');
     expect(preferredQuoteNotes({ quoting_notes: null, notes: 'Grower copy' }))
       .toBe('Grower copy');
+    expect(preferredQuoteNotes({ quoting_notes: '   ', notes: '  Grower copy  ' }))
+      .toBe('Grower copy');
   });
 
   beforeEach(() => {

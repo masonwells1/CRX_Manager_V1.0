@@ -4,5 +4,5 @@ import type { Product } from '../types';
 export function preferredQuoteNotes(
   product: Pick<Product, 'quoting_notes' | 'notes'>,
 ): string {
-  return product.quoting_notes || product.notes || '';
+  return product.quoting_notes?.trim() || product.notes?.trim() || '';
 }

@@ -3442,9 +3442,10 @@ export default function QuoteBuilder() {
                                   placeholder="Product notes..."
                                   className="w-full text-xs border border-gray-200 rounded px-2 py-1 focus:ring-1 focus:ring-crx-green/20 resize-none"
                                 />
-                                {prod?.notes && item.notes !== prod.notes && (
+                                {prod && preferredQuoteNotes(prod)
+                                  && item.notes !== preferredQuoteNotes(prod) && (
                                   <button
-                                    onClick={() => updateItem(sec._key, item._key, { notes: prod?.notes || '' })}
+                                    onClick={() => updateItem(sec._key, item._key, { notes: preferredQuoteNotes(prod) })}
                                     title="Reset to default"
                                     className="text-xs text-crx-green hover:underline whitespace-nowrap"
                                   >

@@ -444,6 +444,8 @@ Live migration `20260722064814_wells_cost_basis_rollout_gate.sql` (submitted as 
 
 Live migration `20260722091359_supplier_pricing_workbook_v2_product_info.sql` upgrades the existing workbook RPC contract to format v2. `create_pricing_workbook_export` snapshots the six editable fields—suggested rate, per-acre rate/unit, use timing, internal notes, and customer-facing quoting notes—while keeping Product name/category/SKU/package identity protected by the manifest. Preview validates and displays both Product-information and pricing effects; apply serializes the full batch and commits each Product with one version increment and one activity record. A Product-information-only row deliberately creates no cost-history or cost-basis entry.
 
+The retained Phase 1a `preview_product_pricing_changes` and `apply_product_pricing_change_set` functions are private inner engines after live hardening `20260722100456_revoke_inner_pricing_rpc_access`. Application roles call only the governed cost-basis wrapper pair; SECURITY DEFINER wrappers invoke the inner engines as owner.
+
 ### Custom Application Workflow
 - `create_job_from_quote_section(p_quote_id, p_section_id, p_performed_by, p_idempotency_key)` -> jsonb {job_id} -- Creates scheduled job from planned quote section with pre-filled chemicals and fields
 - `get_program_completion(p_season)` -> jsonb array -- Returns planned vs actual acres per program section for the Program Tracker dashboard
