@@ -3,28 +3,44 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 
-// Fully chainable Supabase query-builder mock
-function chainable(resolveWith: unknown = { data: [], error: null }) {
-  const builder: Record<string, unknown> = {};
-  const self = () => builder;
-  const methods = [
-    'select','insert','update','upsert','delete',
-    'eq','neq','gt','gte','lt','lte','like','ilike','is','in','or','not','match',
-    'order','limit','range','single','maybeSingle',
-    'csv','explain',
-  ];
-  for (const m of methods) builder[m] = vi.fn(self);
-  builder.then = vi.fn((resolve: (v: unknown) => void) => {
-    Promise.resolve(resolveWith).then(resolve);
+const mocks = vi.hoisted(() => {
+  function chainable(resolveWith: unknown = { data: [], error: null }) {
+    const builder: Record<string, unknown> = {};
+    const self = () => builder;
+    const methods = [
+      'select','insert','update','upsert','delete',
+      'eq','neq','gt','gte','lt','lte','like','ilike','is','in','or','not','match',
+      'order','limit','range','single','maybeSingle',
+      'csv','explain',
+    ];
+    for (const m of methods) builder[m] = vi.fn(self);
+    builder.then = vi.fn((resolve: (v: unknown) => void) => {
+      Promise.resolve(resolveWith).then(resolve);
+      return builder;
+    });
     return builder;
-  });
-  return builder;
-}
+  }
+
+  return {
+    chainable,
+    from: vi.fn((table: string) => {
+      const dataByTable: Record<string, unknown[]> = {
+        customers: [{ id: 'customer-1', farm_name: 'North Farm' }],
+        products: [{ id: 'product-1', product_name: 'Roundup', sku: 'RU-1', current_cost: 10, inventory_unit: 'Gallon' }],
+        unit_conversions: [{ unit: 'Gallon', factor_oz: 128 }],
+      };
+      return chainable({ data: dataByTable[table] ?? [], error: null });
+    }),
+    rpc: vi.fn(() => Promise.resolve({ data: { quote_id: 'quote-1' }, error: null })),
+    assertRpcResult: vi.fn((data: unknown) => data),
+  };
+});
 
 vi.mock('../../lib/db', () => ({
-  supabase: { from: vi.fn(() => chainable()), rpc: vi.fn(() => chainable()) },
+  supabase: { from: mocks.from, rpc: mocks.rpc },
+  assertRpcResult: mocks.assertRpcResult,
 }));
 
 vi.mock('../../contexts/AuthContext', () => ({
@@ -62,5 +78,54 @@ describe('BulkQuoteImport', () => {
   it('shows file upload instructions', () => {
     render(<BulkQuoteImport {...defaultProps} />);
     expect(screen.getByText(/csv/i)).toBeInTheDocument();
+  });
+
+  it('routes uploaded quotes through save_quote instead of direct lifecycle table inserts', async () => {
+    const onSuccess = vi.fn();
+    const { container } = render(<BulkQuoteImport {...defaultProps} onSuccess={onSuccess} />);
+    const csv = [
+      'quote_number,customer_farm_name,section_name,product_name,acres,price_per_unit,oz_per_acre,status',
+      'Q-100,North Farm,Spring,Roundup,10,20,32,sent',
+    ].join('\n');
+    const file = new File([csv], 'quotes.csv', { type: 'text/csv' });
+    Object.defineProperty(file, 'text', { value: () => Promise.resolve(csv) });
+
+    const input = container.querySelector('input[type="file"]');
+    expect(input).toBeTruthy();
+    fireEvent.change(input as HTMLInputElement, { target: { files: [file] } });
+    await screen.findByText(/quotes\.csv/i);
+    fireEvent.click(screen.getByRole('button', { name: /parse file/i }));
+
+    await screen.findByText(/Q-100/);
+    fireEvent.click(screen.getByRole('button', { name: /import 1 quote/i }));
+
+    await waitFor(() => expect(mocks.rpc).toHaveBeenCalledWith('save_quote', expect.objectContaining({
+      p_quote_id: null,
+      p_performed_by: 'user-1',
+      p_idempotency_key: expect.stringContaining('save_quote_bulk_import'),
+    })));
+    expect(mocks.from).not.toHaveBeenCalledWith('quotes');
+    expect(mocks.from).not.toHaveBeenCalledWith('quote_sections');
+    expect(mocks.from).not.toHaveBeenCalledWith('quote_items');
+    expect(onSuccess).toHaveBeenCalled();
+  });
+
+  it('rejects accepted quote status during parse', async () => {
+    const { container } = render(<BulkQuoteImport {...defaultProps} />);
+    const csv = [
+      'quote_number,customer_farm_name,product_name,status',
+      'Q-200,North Farm,Roundup,accepted',
+    ].join('\n');
+    const file = new File([csv], 'quotes.csv', { type: 'text/csv' });
+    Object.defineProperty(file, 'text', { value: () => Promise.resolve(csv) });
+
+    const input = container.querySelector('input[type="file"]');
+    expect(input).toBeTruthy();
+    fireEvent.change(input as HTMLInputElement, { target: { files: [file] } });
+    await screen.findByText(/quotes\.csv/i);
+    fireEvent.click(screen.getByRole('button', { name: /parse file/i }));
+
+    await screen.findByText(/unsupported status/i);
+    expect(screen.getByRole('button', { name: /import 0 quote/i })).toBeDisabled();
   });
 });

@@ -1,12 +1,13 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Upload, CheckCircle, AlertCircle, FileText, Sparkles } from 'lucide-react';
 import Modal from '../ui/Modal';
 import Button from '../ui/Button';
 import { useToast } from '../ui/Toast';
-import { supabase, checkMutationResult } from '../../lib/db';
+import { supabase, assertRpcResult } from '../../lib/db';
 import { useAuth } from '../../contexts/AuthContext';
 import { processDocumentWithOCR, isCSVFile, isOCRSupported } from '../../lib/documentOCR';
-import { Sentry } from '../../lib/sentry';
+import { generateIdempotencyKey } from '../../lib/idempotency';
+import type { Json } from '../../types/supabase';
 
 interface BulkQuoteImportProps {
   open: boolean;
@@ -55,6 +56,8 @@ const FIELD_MAPPINGS: Record<string, string[]> = {
   footer_notes: ['footer_notes', 'footer', 'quote_footer'],
 };
 
+const IMPORTABLE_QUOTE_STATUSES = new Set(['draft', 'sent', 'revised']);
+
 export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteImportProps) {
   const { toast } = useToast();
   const { profile } = useAuth();
@@ -63,6 +66,20 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
   const [uploading, setUploading] = useState(false);
   const [validation, setValidation] = useState<ValidationResult | null>(null);
   const [uploadResults, setUploadResults] = useState<{ success: number; failed: number; details: string[] } | null>(null);
+  const importIdempotencyKeysRef = useRef(new Map<string, string>());
+
+  const getImportIdempotencyKey = (quoteNumber: string): string => {
+    const scope = `${profile?.id ?? 'unknown'}:${quoteNumber}`;
+    const cached = importIdempotencyKeysRef.current.get(scope);
+    if (cached) return cached;
+    const key = generateIdempotencyKey('save_quote_bulk_import', scope);
+    importIdempotencyKeysRef.current.set(scope, key);
+    return key;
+  };
+
+  const clearImportIdempotencyKey = (quoteNumber: string): void => {
+    importIdempotencyKeysRef.current.delete(`${profile?.id ?? 'unknown'}:${quoteNumber}`);
+  };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
@@ -82,6 +99,7 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
       setFile(selectedFile);
       setValidation(null);
       setUploadResults(null);
+      importIdempotencyKeysRef.current.clear();
     }
   };
 
@@ -250,10 +268,22 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
           }
         });
 
+        const normalizedStatus = item.status?.toLowerCase().trim();
+        if (normalizedStatus) item.status = normalizedStatus;
+
         if (!item.quote_number || !item.customer_farm_name || !item.product_name) {
           invalid.push({
             row: idx + 2,
             error: 'Missing required fields (quote_number, customer_farm_name, or product_name)',
+            data: rowData,
+          });
+          return;
+        }
+
+        if (item.status && !IMPORTABLE_QUOTE_STATUSES.has(item.status)) {
+          invalid.push({
+            row: idx + 2,
+            error: 'Unsupported status. Bulk quote imports may only create draft, sent, or revised quotes.',
             data: rowData,
           });
           return;
@@ -280,7 +310,7 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
     try {
       const [custRes, prodRes, convRes] = await Promise.all([
         supabase.from('customers').select('id, farm_name'),
-        supabase.from('products').select('id, product_name, sku'),
+        supabase.from('products').select('id, product_name, sku, current_cost, inventory_unit'),
         supabase.from('unit_conversions').select('*'),
       ]);
 
@@ -310,6 +340,7 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
           p.sku ? [p.sku.toLowerCase().trim(), p.id] : null,
         ].filter(Boolean) as [string, string][])
       );
+      const productDetailsById = new Map(products.map((p) => [p.id, p]));
 
       const quoteGroups = new Map<string, ParsedQuoteItem[]>();
       validation.valid.forEach((item) => {
@@ -331,30 +362,6 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
             continue;
           }
 
-          const { data: quote, error: quoteError } = await supabase
-            .from('quotes')
-            .insert({
-              quote_number: quoteNumber,
-              customer_id: customerId,
-              created_by: profile!.id,
-              tier: firstItem.tier || 1,
-              status: (() => {
-                const validStatuses = ['draft', 'sent', 'revised', 'accepted', 'declined', 'expired'];
-                return validStatuses.includes(firstItem.status || '') ? firstItem.status : 'draft';
-              })(),
-              valid_days: firstItem.valid_days || 15,
-              header_notes: firstItem.header_notes || '',
-              footer_notes: firstItem.footer_notes || '',
-            })
-            .select()
-            .single();
-
-          if (quoteError || !quote) {
-            details.push(`Quote ${quoteNumber}: Failed to create quote - ${quoteError?.message}`);
-            failCount++;
-            continue;
-          }
-
           const sectionGroups = new Map<string, ParsedQuoteItem[]>();
           items.forEach((item) => {
             const sectionName = item.section_name || 'Default';
@@ -364,41 +371,20 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
             sectionGroups.get(sectionName)!.push(item);
           });
 
-          let itemsCreated = 0;
+          let totalPrice = 0;
+          let totalCost = 0;
+          let totalProfit = 0;
 
-          for (const [sectionName, sectionItems] of sectionGroups) {
-            const { data: section, error: sectionError } = await supabase
-              .from('quote_sections')
-              .insert({
-                quote_id: quote.id,
-                section_name: sectionName,
-                sort_order: 0,
-              })
-              .select()
-              .single();
-
-            if (sectionError || !section) {
-              Sentry.captureException(sectionError instanceof Error ? sectionError : new Error(String(sectionError || 'Section insert returned no data')), { extra: { context: 'BulkQuoteImport section insert failed', sectionName } });
-              continue;
-            }
-
-            for (const item of sectionItems) {
+          const sectionsPayload = Array.from(sectionGroups.entries()).map(([sectionName, sectionItems], sectionIndex) => {
+            const sectionItemsPayload = sectionItems
+              .map((item, itemIndex) => {
               const productId = productMap.get(item.product_name.toLowerCase().trim());
 
               if (!productId) {
-                continue;
+                return null;
               }
 
-              const { data: product, error: prodDetailError } = await supabase
-                .from('products')
-                .select('current_cost, inventory_unit')
-                .eq('id', productId)
-                .single();
-
-              if (prodDetailError) {
-                Sentry.captureException(new Error(`Failed to load product details: ${prodDetailError.message}`));
-              }
-
+              const product = productDetailsById.get(productId);
               const current_cost = product?.current_cost || 0;
               const price_per_unit = item.price_per_unit || 0;
               const acres = item.acres || 0;
@@ -417,13 +403,17 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
               const profit = total_price - total_cost;
               const net_margin = total_price > 0 ? (profit / total_price) * 100 : 0;
 
-              const quoteItemResult = await supabase.from('quote_items').insert({
-                quote_id: quote.id,
-                section_id: section.id,
+              totalPrice += total_price;
+              totalCost += total_cost;
+              totalProfit += profit;
+
+              return {
                 product_id: productId,
-                sort_order: 0,
+                sort_order: itemIndex,
                 price_per_unit,
+                price_override: null,
                 current_cost,
+                suggested_rate: null,
                 actual_rate: item.actual_rate || null,
                 rate_unit: item.rate_unit || null,
                 oz_per_acre: oz_per_acre || null,
@@ -433,17 +423,66 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
                 total_price,
                 profit,
                 net_margin,
-                notes: item.notes || '',
-              }).select();
+                calc_mode: 'rate_acres',
+                price_unit: null,
+                unit_size: null,
+                notes: item.notes || null,
+              };
+            })
+            .filter((item): item is NonNullable<typeof item> => item !== null);
 
-              if (!quoteItemResult.error) {
-                checkMutationResult(quoteItemResult, 'Insert quote_item');
-                itemsCreated++;
-              }
-            }
-          }
+            return {
+              section_name: sectionName,
+              sort_order: sectionIndex,
+              section_notes: null,
+              section_header_notes: null,
+              needed_by_date: null,
+              field_id: null,
+              items: sectionItemsPayload,
+            };
+          });
+
+          const itemsCreated = sectionsPayload.reduce((sum, section) => sum + section.items.length, 0);
 
           if (itemsCreated > 0) {
+            const validDays = firstItem.valid_days || 15;
+            const status = firstItem.status && IMPORTABLE_QUOTE_STATUSES.has(firstItem.status)
+              ? firstItem.status
+              : 'draft';
+            const quotePayload = {
+              quote_number: quoteNumber,
+              customer_id: customerId,
+              created_by: profile.id,
+              tier: firstItem.tier || 1,
+              status,
+              total_price: totalPrice,
+              total_cost: totalCost,
+              total_profit: totalProfit,
+              total_margin_pct: totalPrice > 0 ? (totalProfit / totalPrice) * 100 : 0,
+              valid_days: validDays,
+              expires_at: new Date(Date.now() + validDays * 24 * 60 * 60 * 1000).toISOString(),
+              header_notes: firstItem.header_notes || null,
+              footer_notes: firstItem.footer_notes || null,
+              is_planned: false,
+            };
+
+            const idemKey = getImportIdempotencyKey(quoteNumber);
+            const { data, error } = await supabase.rpc('save_quote', {
+              p_quote_id: null as unknown as string,
+              p_quote_payload: quotePayload as Json,
+              p_sections: sectionsPayload as Json,
+              p_performed_by: profile.id,
+              p_idempotency_key: idemKey,
+            });
+
+            if (error) {
+              details.push(`Quote ${quoteNumber}: Failed to create quote - ${error.message}`);
+              failCount++;
+              continue;
+            }
+
+            assertRpcResult<{ quote_id: string }>(data, 'save_quote');
+            clearImportIdempotencyKey(quoteNumber);
             details.push(`Quote ${quoteNumber}: Created with ${itemsCreated} items`);
             successCount++;
           } else {
@@ -511,7 +550,7 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
             <p className="text-xs font-medium text-secondary mb-2">Optional Columns:</p>
             <p className="text-xs text-gray-500 font-mono">
               section_name, acres, price_per_unit, oz_per_acre, actual_rate, rate_unit, notes, tier (1-3),
-              status (draft/sent/accepted), valid_days, header_notes, footer_notes
+              status (draft/sent/revised), valid_days, header_notes, footer_notes
             </p>
           </div>
         </div>
