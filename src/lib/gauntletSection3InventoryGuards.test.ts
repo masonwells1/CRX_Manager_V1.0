@@ -34,6 +34,20 @@ describe('live-foundation gauntlet section 3 inventory guards', () => {
     }
   });
 
+  it('keeps inventory-position parsing failures from escaping order screens', () => {
+    for (const path of [
+      'src/pages/NewOrder.tsx',
+      'src/pages/OrderDetail.tsx',
+    ]) {
+      const file = source(path);
+      expect(file).toContain("assertRpcResult<InventoryPositionRow[]>(positionData, 'get_inventory_position')");
+      expect(file).toContain('validateInventoryPositionShape(positionRows)');
+      expect(file).toContain('catch (err)');
+      expect(file).toContain('setInventoryByProduct({})');
+      expect(file).toContain('Inventory position data was malformed. Please refresh.');
+    }
+  });
+
   it('documents the database guard and quick-receive grant fix in a migration', () => {
     const migration = source('supabase/migrations/20260722105402_guard_inventory_location_and_matcher_grants.sql');
 

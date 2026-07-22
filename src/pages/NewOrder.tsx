@@ -188,12 +188,18 @@ export default function NewOrder() {
       toast('error', 'Failed to load inventory positions. Please refresh.');
     }
 
-    if (!positionError) {
-      const positionRows = assertRpcResult<InventoryPositionRow[]>(positionData, 'get_inventory_position');
-      validateInventoryPositionShape(positionRows);
-      setInventoryByProduct(inventoryPositionByProduct(positionRows));
-    } else {
+    if (positionError) {
       setInventoryByProduct({});
+    } else {
+      try {
+        const positionRows = assertRpcResult<InventoryPositionRow[]>(positionData, 'get_inventory_position');
+        validateInventoryPositionShape(positionRows);
+        setInventoryByProduct(inventoryPositionByProduct(positionRows));
+      } catch (err) {
+        Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { tags: { source: 'fetch', action: 'parse_inventory_position' } });
+        toast('error', 'Inventory position data was malformed. Please refresh.');
+        setInventoryByProduct({});
+      }
     }
 
     setCustomers((customersRes.data || []) as Customer[]);

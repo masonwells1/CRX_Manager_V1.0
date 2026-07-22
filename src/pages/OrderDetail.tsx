@@ -305,12 +305,18 @@ export default function OrderDetail() {
 
     setProducts((productsRes.data || []) as Product[]);
 
-    if (!positionError) {
-      const positionRows = assertRpcResult<InventoryPositionRow[]>(positionData, 'get_inventory_position');
-      validateInventoryPositionShape(positionRows);
-      setInventoryByProduct(inventoryPositionByProduct(positionRows));
-    } else {
+    if (positionError) {
       setInventoryByProduct({});
+    } else {
+      try {
+        const positionRows = assertRpcResult<InventoryPositionRow[]>(positionData, 'get_inventory_position');
+        validateInventoryPositionShape(positionRows);
+        setInventoryByProduct(inventoryPositionByProduct(positionRows));
+      } catch (err) {
+        Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { tags: { source: 'fetch', action: 'parse_inventory_position_for_order_edit' } });
+        toast('error', 'Inventory position data was malformed. Please refresh.');
+        setInventoryByProduct({});
+      }
     }
   }, [toast]);
 
