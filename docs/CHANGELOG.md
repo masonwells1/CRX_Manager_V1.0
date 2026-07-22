@@ -2,18 +2,23 @@
 
 All significant development milestones, in reverse chronological order.
 
-<<<<<<< HEAD
 ## 2026-07-22 — Field-level profitability report (X4/E4/T10) built
 
 - New read-only RPC `get_field_profitability(p_season)` (migration applied live 2026-07-22, ledger version `20260722092928`) + `/field-profitability` page (PR #204). Margin per acre at (field, billed customer, season) from posted field-app invoices: header-COGS based, integer largest-remainder allocation, RLS-mirror sales-rep scoping, per-customer group shares, job-backed (transfer_job_to_invoice) invoices report exactly per billed customer in the '(unassigned field)' bucket (mutable job_fields/fbd state deliberately NOT presented as historical field attribution), which honors durable invoice_shares splits. Codex (gpt-5.6-sol) built it; six adversarial Codex review rounds drove 5 confirmed HIGH fixes + 2 evidence-backed dispositions (per-line split groups have no per-field customer mapping by design; invoices.customer_id is the billed customer for every current writer — verified in live function bodies and catalog). Final hardening: job-backed acres anchor to the invoice_shares.acres snapshot stored at posting (current FBD/owner state supplies spread proportions only), zero-weight children report in the unassigned bucket, and the row type is null-accurate for the unassigned row.
-=======
+- Applied a forward-only repair for the Wells Phase 2 canary after the independent Codex review found that a received purchase-order line could be reassigned from a canary Product to a non-canary Product and shed its immutable cost provenance. Submitted as `20260722075500_lock_received_po_cost_snapshot_across_product_reassignment`, Supabase recorded it under live ledger version `20260722080226`, and the repository file was reconciled to `20260722080226_lock_received_po_cost_snapshot_across_product_reassignment.sql`. The replacement trigger now evaluates both the old and new Product identities; the disposable PostgreSQL 17 chain proves the exact reassignment fails with `RECEIVED_PO_COST_SNAPSHOT_IMMUTABLE`. The original applied migration remains unchanged, and the global feature flag remains OFF.
+
+- Applied the Wells-only Phase 2 canary migration. Its submitted migration name is `20260722060644_wells_cost_basis_rollout_gate`; Supabase recorded it under live ledger version `20260722064814`; the reconciled repository file is `20260722064814_wells_cost_basis_rollout_gate.sql`. It adds a private deny-all Product allowlist seeded with the exact ten reviewed Wells Products, requires the canonical global flag row to exist exactly once and remain `false`, fails closed if Product/vendor/link/observation shape has drifted, and routes all six behavioral flag readers through a global-or-Product helper while preserving apply's global setting-row lock. Live postflight confirmed exactly 10 allowlisted Products, all 10 helper-enabled, a non-pilot Product disabled, 602 active basis rows, zero pending change rows, unchanged Wells totals, and the global flag still OFF. No Product money changed.
+
 ## 2026-07-21 — Wells Supplier Pricing Phase 1b pilot closeout
 
 - Completed the governed manual Wells Ag Supply pilot with 10 representative Product links and one approved 10-row quote import. Supplier comparison and Product history now show the Wells quote observation while Product cost and all three sell-price tiers remain unchanged.
 - Applied `20260722025808_resolve_wells_legacy_vendor_history` to associate 17 exact Wells purchase orders (11 received, 66 received lines) with the approved Wells supplier identity. The migration was proven with rollback-only PostgreSQL execution before live apply and does not write Product costs or sell prices.
 - Hardened workbook parsing for staff-entered unit shorthand and added durable pilot/migration regression coverage. Supplier PDFs remain audit attachments only; no AI/OCR extraction was added.
 - Applied a fail-closed unique index for active vendor names under supplier normalization after independent review identified punctuation/whitespace identity ambiguity. Live preflight found no existing collisions, rollback proof passed, and the server-assigned migration version is `20260722033450`.
->>>>>>> origin/main
+
+## 2026-07-21 — Supplier Pricing Phase 2 live foundation and frontend follow-up
+
+- Applied `20260722015019_supplier_cost_basis_phase2` live with the rollout flag still `false`. Post-apply proof found 602 active Product basis rows, zero pending basis-change rows, one exact overload for each Phase 2 preview/apply RPC, a rollback-only preview→apply pass with Product cost and all sell prices unchanged, and zero unallowlisted findings across all 17 invariant sweeps. The frontend follow-up adds an admin-only Product Detail cost-basis flow with eligible supplier/received-PO evidence actions, manual override, required reason, explicit governed preview/approval, and a safe default that keeps current sell prices. Supplier Pricing remains the read-only comparison workspace and links to the Product flow. Exact bigint-cent normalization, typed live RPC contracts, stale-response protection, and idempotency remain enforced. The feature stays disabled pending its separate enable gate.
 
 ## 2026-07-21 — Supplier Pricing Phase 2 migration-first review
 

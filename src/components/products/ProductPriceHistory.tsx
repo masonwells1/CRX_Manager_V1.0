@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import Badge from '../ui/Badge';
+import Button from '../ui/Button';
 import Card, { CardHeader } from '../ui/Card';
 import Select from '../ui/Select';
 import { sanitizeError } from '../../lib/errorSanitizer';
@@ -9,11 +10,16 @@ import {
   type SupplierPriceHistory,
   type SupplierPriceHistoryPoint,
 } from '../../lib/supplierPricing';
+import type {
+  ProductCostBasisWorkspace,
+  PurchaseCostBasisCandidate,
+  SupplierCostBasisCandidate,
+} from '../../lib/productCostBasis';
 
 const streamLabels: Record<SupplierPriceHistoryPoint['stream'], string> = {
   supplier_observation: 'Supplier observation',
   selected_cost_basis: 'Selected cost basis',
-  actual_purchase: 'Actual paid',
+  actual_purchase: 'Received PO cost',
 };
 
 const streamColors: Record<SupplierPriceHistoryPoint['stream'], string> = {
@@ -48,7 +54,23 @@ function chartPosition(
   return 90 - (Number(((value - minimum) * 800n) / (maximum - minimum)) / 10);
 }
 
-export default function ProductPriceHistory({ productId }: { productId: string }) {
+interface ProductPriceHistoryProps {
+  productId: string;
+  costBasisWorkspace?: ProductCostBasisWorkspace | null;
+  costBasisBusy?: boolean;
+  reloadToken?: number;
+  onSelectSupplierBasis?: (candidate: SupplierCostBasisCandidate) => void;
+  onSelectPurchaseBasis?: (candidate: PurchaseCostBasisCandidate) => void;
+}
+
+export default function ProductPriceHistory({
+  productId,
+  costBasisWorkspace,
+  costBasisBusy = false,
+  reloadToken = 0,
+  onSelectSupplierBasis,
+  onSelectPurchaseBasis,
+}: ProductPriceHistoryProps) {
   const [history, setHistory] = useState<SupplierPriceHistory | null>(null);
   const [supplierId, setSupplierId] = useState('');
   const [loading, setLoading] = useState(true);
@@ -70,7 +92,7 @@ export default function ProductPriceHistory({ productId }: { productId: string }
         if (active) setLoading(false);
       });
     return () => { active = false; };
-  }, [productId]);
+  }, [productId, reloadToken]);
 
   const points = useMemo(() => {
     const all = history?.points ?? [];
@@ -134,7 +156,7 @@ export default function ProductPriceHistory({ productId }: { productId: string }
             </p>
           </div>
           <div className="rounded-lg border border-orange-100 bg-orange-50 p-3">
-            <p className="text-xs font-medium uppercase tracking-wide text-orange-700">Last paid (received PO)</p>
+            <p className="text-xs font-medium uppercase tracking-wide text-orange-700">Most recent received PO</p>
             <p className="mt-1 font-semibold tabular-nums text-nav-dark">
               {formatSupplierCents(history.summary.last_paid_cents)}
             </p>
@@ -225,6 +247,39 @@ export default function ProductPriceHistory({ productId }: { productId: string }
                     ? ' · package quote cannot be normalized'
                     : ''}
                 </p>
+                {point.stream === 'supplier_observation' && (() => {
+                  const candidate = costBasisWorkspace?.supplier_candidates.find(
+                    (item) => item.supplier_price_observation_id === point.source_id,
+                  );
+                  return candidate && onSelectSupplierBasis ? (
+                    <Button
+                      className="mt-2"
+                      size="sm"
+                      type="button"
+                      disabled={!costBasisWorkspace?.enabled || costBasisBusy}
+                      onClick={() => onSelectSupplierBasis(candidate)}
+                    >
+                      Select as cost basis
+                    </Button>
+                  ) : null;
+                })()}
+                {point.stream === 'actual_purchase' && (() => {
+                  const candidate = costBasisWorkspace?.purchase_candidates.find(
+                    (item) => item.purchase_order_item_id === point.source_id,
+                  );
+                  return candidate && onSelectPurchaseBasis ? (
+                    <Button
+                      className="mt-2"
+                      size="sm"
+                      type="button"
+                      variant="secondary"
+                      disabled={!costBasisWorkspace?.enabled || costBasisBusy}
+                      onClick={() => onSelectPurchaseBasis(candidate)}
+                    >
+                      Select as cost basis
+                    </Button>
+                  ) : null;
+                })()}
               </div>
             ))}
           </div>

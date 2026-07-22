@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   Download,
   FileSpreadsheet,
@@ -23,6 +24,10 @@ import { useAuth } from '../contexts/AuthContext';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { localToday } from '../lib/dateUtils';
 import { sanitizeError } from '../lib/errorSanitizer';
+import {
+  getProductCostBasisWorkspace,
+  type ProductCostBasisWorkspace,
+} from '../lib/productCostBasis';
 import {
   approveSupplierPriceImport,
   correctSupplierPriceObservation,
@@ -101,8 +106,11 @@ export default function SupplierPricing() {
   const [aliasText, setAliasText] = useState('');
   const [aliasVendorId, setAliasVendorId] = useState('');
   const [aliasReviewIntent, setAliasReviewIntent] = useState<string | null>(null);
+  const [basisWorkspace, setBasisWorkspace] = useState<ProductCostBasisWorkspace | null>(null);
+  const [basisLoading, setBasisLoading] = useState(false);
   const workbookInputRef = useRef<HTMLInputElement>(null);
   const pdfInputRef = useRef<HTMLInputElement>(null);
+  const basisWorkspaceRequestRef = useRef(0);
 
   const stageImportIdem = useIdempotencyKey('stage_supplier_price_import', profile?.id || '');
   const approveImportIdem = useIdempotencyKey('approve_supplier_price_import', profile?.id || '');
@@ -139,6 +147,38 @@ export default function SupplierPricing() {
       review.rows.filter((row) => eligibleReviewRow(row.row_status)).map((row) => row.id),
     ));
   }, [review]);
+
+  const loadBasisWorkspace = useCallback(async (productId: string) => {
+    const requestId = ++basisWorkspaceRequestRef.current;
+    setBasisWorkspace(null);
+    if (!isAdmin || !productId) {
+      setBasisLoading(false);
+      return;
+    }
+    setBasisLoading(true);
+    try {
+      const result = await getProductCostBasisWorkspace(productId);
+      if (basisWorkspaceRequestRef.current === requestId) setBasisWorkspace(result);
+    } catch (error) {
+      if (basisWorkspaceRequestRef.current === requestId) {
+        setBasisWorkspace(null);
+        toast('error', sanitizeError(error));
+      }
+    } finally {
+      if (basisWorkspaceRequestRef.current === requestId) setBasisLoading(false);
+    }
+  }, [isAdmin, toast]);
+
+  useEffect(() => {
+    void loadBasisWorkspace(selectedProductId);
+  }, [loadBasisWorkspace, selectedProductId]);
+
+  const refreshWorkspaceAndBasis = useCallback(async () => {
+    await Promise.all([
+      loadWorkspace(),
+      selectedProductId ? loadBasisWorkspace(selectedProductId) : Promise.resolve(),
+    ]);
+  }, [loadBasisWorkspace, loadWorkspace, selectedProductId]);
 
   const vendorOptions = useMemo(
     () => (workspace?.vendors ?? []).map((vendor) => ({ value: vendor.id, label: vendor.name })),
@@ -232,7 +272,7 @@ export default function SupplierPricing() {
       setSelectedVendorId(parsed.vendorId);
       setReview(result);
       toast('success', `Staged ${result.row_count} manual quote row(s) for review.`);
-      await loadWorkspace();
+      await refreshWorkspaceAndBasis();
     } catch (error) {
       toast('error', sanitizeError(error));
     } finally {
@@ -273,7 +313,7 @@ export default function SupplierPricing() {
       stageImportIdem.resetKey();
       setReview(result);
       toast('success', 'Quick quote staged for review. No sell price was changed.');
-      await loadWorkspace();
+      await refreshWorkspaceAndBasis();
     } catch (error) {
       toast('error', sanitizeError(error));
     } finally {
@@ -295,7 +335,7 @@ export default function SupplierPricing() {
       setReview(result);
       setApproveOpen(false);
       toast('success', result.summary || `${result.approved_count ?? 0} supplier observation(s) approved.`);
-      await loadWorkspace();
+      await refreshWorkspaceAndBasis();
     } catch (error) {
       toast('error', sanitizeError(error));
     } finally {
@@ -322,7 +362,7 @@ export default function SupplierPricing() {
       setRejectOpen(false);
       setRejectReason('');
       toast('success', result.summary || 'Import rejected. No supplier observations were changed.');
-      await loadWorkspace();
+      await refreshWorkspaceAndBasis();
     } catch (error) {
       toast('error', sanitizeError(error));
     } finally {
@@ -356,7 +396,7 @@ export default function SupplierPricing() {
       setCorrectionRow(null);
       toast('success', result.summary || 'Correction recorded. The prior quote is superseded.');
       if (review) setReview(await getSupplierPriceImport(review.id));
-      await loadWorkspace();
+      await refreshWorkspaceAndBasis();
     } catch (error) {
       toast('error', sanitizeError(error));
     } finally {
@@ -388,7 +428,7 @@ export default function SupplierPricing() {
       linkIdem.resetKey();
       setLinkForm(blankLink);
       toast('success', 'Confirmed supplier link saved.');
-      await loadWorkspace();
+      await refreshWorkspaceAndBasis();
     } catch (error) {
       toast('error', sanitizeError(error));
     } finally {
@@ -411,7 +451,7 @@ export default function SupplierPricing() {
       aliasStageIdem.resetKey();
       setAliasText('');
       toast('success', 'Vendor alias staged for review.');
-      await loadWorkspace();
+      await refreshWorkspaceAndBasis();
     } catch (error) {
       toast('error', sanitizeError(error));
     } finally {
@@ -439,7 +479,7 @@ export default function SupplierPricing() {
       aliasReviewIdem.resetKey();
       setAliasReviewIntent(null);
       toast('success', `Vendor alias ${decision}.`);
-      await loadWorkspace();
+      await refreshWorkspaceAndBasis();
     } catch (error) {
       toast('error', sanitizeError(error));
     } finally {
@@ -757,6 +797,93 @@ export default function SupplierPricing() {
           </>
         ) : <p className="text-sm text-secondary">Choose a Product to compare supplier evidence.</p>}
       </Card>
+      {isAdmin && (
+        <Card>
+          <CardHeader title="Selected" accent="cost basis" />
+          {basisLoading ? (
+            <p className="text-sm text-secondary">Loading the governed cost-basis options…</p>
+          ) : basisWorkspace ? (
+            <div className="space-y-4">
+              <div className="grid gap-3 rounded-lg border border-gray-200 p-4 sm:grid-cols-3">
+                <div>
+                  <p className="text-xs text-secondary">Current selected basis</p>
+                  <p className="font-semibold">
+                    {basisWorkspace.current_basis?.basis_type.replace(/_/g, ' ') || 'No baseline'}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs text-secondary">Selected cost</p>
+                  <p className="font-semibold tabular-nums">
+                    {formatSupplierCents(basisWorkspace.current_basis?.cost_cents ?? null)}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs text-secondary">Reason</p>
+                  <p className="text-sm">{basisWorkspace.current_basis?.reason || '—'}</p>
+                </div>
+              </div>
+
+              {!basisWorkspace.enabled && (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                  Supplier cost-basis selection is OFF until the Phase 2 release gate is completed.
+                  Comparison remains read-only.
+                </div>
+              )}
+              <Link
+                to={`/products/${basisWorkspace.product.id}`}
+                className="inline-flex items-center rounded-lg border border-crx-green px-3 py-2 text-sm font-medium text-crx-green hover:bg-green-50"
+              >
+                Open Product cost-basis flow
+              </Link>
+
+              <div className="space-y-2">
+                <p className="text-sm font-semibold text-nav-dark">Comparable supplier candidates</p>
+                {basisWorkspace.supplier_candidates.map((candidate) => (
+                  <div
+                    key={candidate.supplier_price_observation_id}
+                    className="grid gap-3 rounded-lg border border-gray-200 p-3 md:grid-cols-[1fr_1fr_1fr_auto] md:items-center"
+                  >
+                    <span className="font-medium">{candidate.vendor_name}</span>
+                    <span className="tabular-nums">
+                      Normalized: {formatSupplierCents(candidate.normalized_cost_cents)}
+                    </span>
+                    <span className="text-sm text-secondary">
+                      {candidate.price_kind} · {candidate.effective_from}
+                    </span>
+                    <span className="text-xs text-secondary">Select from Product Detail</span>
+                  </div>
+                ))}
+                {basisWorkspace.supplier_candidates.length === 0 && (
+                  <p className="text-sm text-secondary">No current comparable supplier observations.</p>
+                )}
+              </div>
+              <div className="space-y-2">
+                <p className="text-sm font-semibold text-nav-dark">Received purchase candidates</p>
+                {basisWorkspace.purchase_candidates.slice(0, 5).map((candidate) => (
+                  <div
+                    key={candidate.purchase_order_item_id}
+                    className="grid gap-3 rounded-lg border border-gray-200 p-3 md:grid-cols-[1fr_1fr_1fr_auto] md:items-center"
+                  >
+                    <span className="font-medium">{candidate.po_number} · {candidate.vendor_name}</span>
+                    <span className="tabular-nums">
+                      Normalized received cost: {formatSupplierCents(candidate.normalized_cost_cents)}
+                    </span>
+                    <span className="text-sm text-secondary">
+                      {candidate.purchased_at.slice(0, 10)}
+                    </span>
+                    <span className="text-xs text-secondary">Select from Product Detail</span>
+                  </div>
+                ))}
+                {basisWorkspace.purchase_candidates.length === 0 && (
+                  <p className="text-sm text-secondary">No received PO cost with a proven conversion.</p>
+                )}
+              </div>
+            </div>
+          ) : (
+            <p className="text-sm text-secondary">Choose a Product to load its selected cost basis.</p>
+          )}
+        </Card>
+      )}
     </div>
   );
 
@@ -838,8 +965,8 @@ export default function SupplierPricing() {
       <PageHeader
         title="Supplier"
         accent="Pricing"
-        subtitle="Manual supplier evidence only. Review observations before approval; sell prices never change here."
-        actions={<Button type="button" variant="secondary" icon={<RefreshCw className="h-4 w-4" />} loading={loading} onClick={() => void loadWorkspace()}>Refresh</Button>}
+        subtitle="Manual supplier evidence only. Observation approval changes no sell prices; cost-basis changes require a separate preview and approval."
+        actions={<Button type="button" variant="secondary" icon={<RefreshCw className="h-4 w-4" />} loading={loading} onClick={() => void refreshWorkspaceAndBasis()}>Refresh</Button>}
       />
       <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
         <strong>No OCR or AI extraction:</strong> staff transcribe supplier PDFs into the protected .xlsx sheet. PDFs are retained only as audit evidence.

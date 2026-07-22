@@ -1347,6 +1347,7 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   // client contract). They appear in generated types after the 2026-07-21 regen,
   // declare p_idempotency_key, and use the canonical replay machinery, so they are
   // classified here rather than in the migration-only bucket.
+  '_cancel_order_idem_impl_20260721',
   '_save_field_app_split_invoice_impl',
   '_save_purchase_order_ascii_identity_impl',
   'adjust_inventory',
@@ -1355,6 +1356,7 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   // live pg_proc that each body uses check_idempotency/save scoped to its own operation. They were
   // added to src/types/supabase.ts but never classified here, which left main RED for all sessions.
   'apply_credit_memo_to_invoice',
+  'apply_product_cost_basis_change_set',
   'apply_product_pricing_change_set',
   'apply_remaining_prepayments',
   'apply_write_off',
@@ -1427,6 +1429,7 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   'manual_inventory_add',
   'post_commission_payment',
   'post_invoice',
+  'preview_product_cost_basis_changes',
   'preview_product_pricing_changes',
   'process_offline_action',
   'reassign_delivery',
@@ -2105,25 +2108,11 @@ function generatedMutatingRpcInventory(): Set<string> {
 }
 
 const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
-  // Currently empty (2026-07-21). The 2026-07-20 applies (per-line split billing,
-  // Supplier Pricing 1b + follow-ups) went live and src/types/supabase.ts was
-  // regenerated, so every former bucket entry — including the _impl delegates —
-  // now appears in generated types and is classified in
-  // MUTATING_RPCS_WITH_IDEMPOTENCY instead. This bucket exists for the normal
-  // pre-apply window: an RPC introduced by a PR migration that is NOT yet live
-  // (so it cannot truthfully be in the generated types) goes here, with a note,
-  // and moves to MUTATING_RPCS_WITH_IDEMPOTENCY once applied + types regen.
-  // Owner-only cancel router preserved behind the required-key public wrapper
-  // (Phase 1a closeout, applied live 2026-07-21 AFTER the types regen, so it is
-  // not yet in src/types/supabase.ts). It binds actor + order through the
-  // lifecycle claim/complete helpers; every application-role EXECUTE privilege
-  // is revoked by the migration. Move it out at the next types regen.
-  '_cancel_order_idem_impl_20260721',
-  // Supplier Pricing Phase 2 code-only wrappers. Both require and bind the
-  // actor/idempotency key, then delegate to the existing Phase 1a engine.
-  // Move them to MUTATING_RPCS_WITH_IDEMPOTENCY after live apply + type regen.
-  'apply_product_cost_basis_change_set',
-  'preview_product_cost_basis_changes',
+  // Currently empty (2026-07-22). The live registry/type regeneration through
+  // 20260722064814 moved every former entry into
+  // MUTATING_RPCS_WITH_IDEMPOTENCY. This bucket remains for the normal pre-apply
+  // window: an RPC introduced by a PR migration that is not yet live belongs
+  // here until the next truthful live type regeneration.
 ]);
 
 /**

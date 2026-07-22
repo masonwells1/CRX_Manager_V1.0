@@ -7585,6 +7585,228 @@ export type Database = {
           },
         ]
       }
+      product_cost_basis: {
+        Row: {
+          basis_type: string
+          cost_cents: number
+          created_at: string
+          effective_from: string
+          effective_to: string | null
+          id: string
+          pricing_change_set_id: string | null
+          product_id: string
+          purchase_order_item_id: string | null
+          reason: string
+          selected_at: string
+          selected_by: string | null
+          selection_source: string
+          supplier_price_observation_id: string | null
+        }
+        Insert: {
+          basis_type: string
+          cost_cents: number
+          created_at?: string
+          effective_from?: string
+          effective_to?: string | null
+          id?: string
+          pricing_change_set_id?: string | null
+          product_id: string
+          purchase_order_item_id?: string | null
+          reason: string
+          selected_at?: string
+          selected_by?: string | null
+          selection_source: string
+          supplier_price_observation_id?: string | null
+        }
+        Update: {
+          basis_type?: string
+          cost_cents?: number
+          created_at?: string
+          effective_from?: string
+          effective_to?: string | null
+          id?: string
+          pricing_change_set_id?: string | null
+          product_id?: string
+          purchase_order_item_id?: string | null
+          reason?: string
+          selected_at?: string
+          selected_by?: string | null
+          selection_source?: string
+          supplier_price_observation_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "product_cost_basis_pricing_change_set_id_fkey"
+            columns: ["pricing_change_set_id"]
+            isOneToOne: false
+            referencedRelation: "pricing_change_sets"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "product_cost_basis_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: false
+            referencedRelation: "products"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "product_cost_basis_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: false
+            referencedRelation: "view_unmigrated_products"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "product_cost_basis_purchase_order_item_id_fkey"
+            columns: ["purchase_order_item_id"]
+            isOneToOne: false
+            referencedRelation: "purchase_order_items"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "product_cost_basis_selected_by_fkey"
+            columns: ["selected_by"]
+            isOneToOne: false
+            referencedRelation: "profile_public_view"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "product_cost_basis_selected_by_fkey"
+            columns: ["selected_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "product_cost_basis_supplier_price_observation_id_fkey"
+            columns: ["supplier_price_observation_id"]
+            isOneToOne: false
+            referencedRelation: "supplier_price_observations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      product_cost_basis_change_rows: {
+        Row: {
+          basis_type: string
+          cost_cents: number
+          created_at: string
+          expected_active_basis_id: string | null
+          expected_version: number
+          force_selection: boolean
+          pricing_change_set_id: string
+          product_id: string
+          purchase_order_item_id: string | null
+          reason: string
+          selection_source: string
+          supplier_price_observation_id: string | null
+        }
+        Insert: {
+          basis_type: string
+          cost_cents: number
+          created_at?: string
+          expected_active_basis_id?: string | null
+          expected_version: number
+          force_selection?: boolean
+          pricing_change_set_id: string
+          product_id: string
+          purchase_order_item_id?: string | null
+          reason: string
+          selection_source: string
+          supplier_price_observation_id?: string | null
+        }
+        Update: {
+          basis_type?: string
+          cost_cents?: number
+          created_at?: string
+          expected_active_basis_id?: string | null
+          expected_version?: number
+          force_selection?: boolean
+          pricing_change_set_id?: string
+          product_id?: string
+          purchase_order_item_id?: string | null
+          reason?: string
+          selection_source?: string
+          supplier_price_observation_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "product_cost_basis_change_row_supplier_price_observation_i_fkey"
+            columns: ["supplier_price_observation_id"]
+            isOneToOne: false
+            referencedRelation: "supplier_price_observations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "product_cost_basis_change_rows_expected_active_basis_id_fkey"
+            columns: ["expected_active_basis_id"]
+            isOneToOne: false
+            referencedRelation: "product_cost_basis"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "product_cost_basis_change_rows_pricing_change_set_id_fkey"
+            columns: ["pricing_change_set_id"]
+            isOneToOne: false
+            referencedRelation: "pricing_change_sets"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "product_cost_basis_change_rows_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: false
+            referencedRelation: "products"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "product_cost_basis_change_rows_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: false
+            referencedRelation: "view_unmigrated_products"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "product_cost_basis_change_rows_purchase_order_item_id_fkey"
+            columns: ["purchase_order_item_id"]
+            isOneToOne: false
+            referencedRelation: "purchase_order_items"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      product_cost_basis_rollout: {
+        Row: {
+          created_at: string
+          product_id: string
+          rollout_scope: string
+        }
+        Insert: {
+          created_at?: string
+          product_id: string
+          rollout_scope: string
+        }
+        Update: {
+          created_at?: string
+          product_id?: string
+          rollout_scope?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "product_cost_basis_rollout_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: true
+            referencedRelation: "products"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "product_cost_basis_rollout_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: true
+            referencedRelation: "view_unmigrated_products"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       product_label_drafts: {
         Row: {
           confidence: string
@@ -8019,6 +8241,7 @@ export type Database = {
           cost_provenance: string | null
           cost_snapshot_at: string | null
           id: string
+          inventory_unit_snapshot: string | null
           inventory_units_per_supplier_unit_snapshot: number | null
           notes: string | null
           product_id: string
@@ -8036,6 +8259,7 @@ export type Database = {
           cost_provenance?: string | null
           cost_snapshot_at?: string | null
           id?: string
+          inventory_unit_snapshot?: string | null
           inventory_units_per_supplier_unit_snapshot?: number | null
           notes?: string | null
           product_id: string
@@ -8053,6 +8277,7 @@ export type Database = {
           cost_provenance?: string | null
           cost_snapshot_at?: string | null
           id?: string
+          inventory_unit_snapshot?: string | null
           inventory_units_per_supplier_unit_snapshot?: number | null
           notes?: string | null
           product_id?: string
@@ -11073,6 +11298,14 @@ export type Database = {
         }
         Returns: Json
       }
+      _cancel_order_idem_impl_20260721: {
+        Args: {
+          p_idempotency_key?: string
+          p_order_id: string
+          p_performed_by?: string
+        }
+        Returns: Json
+      }
       _cancel_order_impl_20260714: {
         Args: {
           p_idempotency_key?: string
@@ -11162,6 +11395,14 @@ export type Database = {
         }
         Returns: Json
       }
+      _create_invoice_for_unbilled_delivery_idem_impl_20260721: {
+        Args: {
+          p_delivery_id: string
+          p_idempotency_key?: string
+          p_performed_by?: string
+        }
+        Returns: Json
+      }
       _create_invoice_for_unbilled_delivery_impl_20260718: {
         Args: {
           p_delivery_id: string
@@ -11169,6 +11410,15 @@ export type Database = {
           p_performed_by?: string
         }
         Returns: Json
+      }
+      _create_invoice_from_order_idem_impl_20260721: {
+        Args: {
+          p_idempotency_key?: string
+          p_invoice_type?: string
+          p_order_id: string
+          p_salesman_id?: string
+        }
+        Returns: string
       }
       _create_invoice_from_order_impl_20260718: {
         Args: {
@@ -11200,6 +11450,15 @@ export type Database = {
       _format_pricing_margin_percent: {
         Args: { p_ratio: number }
         Returns: string
+      }
+      _generate_finance_charges_idem_impl_20260721: {
+        Args: {
+          p_as_of_date: string
+          p_customer_ids?: string[]
+          p_idempotency_key?: string
+          p_performed_by: string
+        }
+        Returns: Json
       }
       _get_customer_statement_scoped_impl: {
         Args: {
@@ -11272,6 +11531,10 @@ export type Database = {
         }
         Returns: Json
       }
+      _post_invoice_idem_impl_20260721: {
+        Args: { p_idempotency_key?: string; p_invoice_id: string }
+        Returns: undefined
+      }
       _post_invoice_impl_20260714: {
         Args: { p_idempotency_key?: string; p_invoice_id: string }
         Returns: undefined
@@ -11279,6 +11542,15 @@ export type Database = {
       _post_invoice_public_impl_20260718: {
         Args: { p_idempotency_key?: string; p_invoice_id: string }
         Returns: undefined
+      }
+      _product_cost_basis_row_required: {
+        Args: {
+          p_effect: Json
+          p_row_status: string
+          p_source: string
+          p_submitted_row: Json
+        }
+        Returns: boolean
       }
       _purchase_order_item_unit_cost_cents: {
         Args: { p_item: Json }
@@ -11293,6 +11565,7 @@ export type Database = {
         Returns: Json
       }
       _require_auth: { Args: never; Returns: string }
+      _resolve_product_cost_basis_row: { Args: { p_row: Json }; Returns: Json }
       _reverse_completed_cycle_count_impl: {
         Args: {
           p_cycle_count_id: string
@@ -11381,6 +11654,10 @@ export type Database = {
       _split_invoice_content_claim: {
         Args: { p_invoice_id: string }
         Returns: Json
+      }
+      _supplier_cost_basis_enabled_for_product: {
+        Args: { p_product_id: string }
+        Returns: boolean
       }
       _sync_job_holds: {
         Args: { p_actor: string; p_job_id: string }
@@ -11484,6 +11761,15 @@ export type Database = {
           p_prepay_credit_id: string
         }
         Returns: string
+      }
+      apply_product_cost_basis_change_set: {
+        Args: {
+          p_change_set_id: string
+          p_idempotency_key?: string
+          p_performed_by?: string
+          p_request_fingerprint: string
+        }
+        Returns: Json
       }
       apply_product_pricing_change_set: {
         Args: {
@@ -12779,6 +13065,10 @@ export type Database = {
         Args: { p_customer_id?: string; p_season?: number }
         Returns: Json
       }
+      get_product_cost_basis_workspace: {
+        Args: { p_product_id: string }
+        Returns: Json
+      }
       get_product_price_history: {
         Args: { p_product_id: string }
         Returns: Json
@@ -13410,6 +13700,16 @@ export type Database = {
           open_credit_cents: number
           overdue_balance_cents: number
         }[]
+      }
+      preview_product_cost_basis_changes: {
+        Args: {
+          p_export_id?: string
+          p_idempotency_key?: string
+          p_performed_by?: string
+          p_rows?: Json
+          p_source: string
+        }
+        Returns: Json
       }
       preview_product_pricing_changes: {
         Args: {

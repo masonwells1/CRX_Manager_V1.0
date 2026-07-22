@@ -462,6 +462,54 @@ export interface SupplierPriceObservation {
   created_at: string;
 }
 
+// ── Governed Product cost basis (Supplier Pricing Phase 2) ─────
+
+export type ProductCostBasisType =
+  | 'selected_supplier_price'
+  | 'actual_purchase'
+  | 'manual_override';
+export type ProductCostBasisSelectionSource =
+  | 'migration_baseline'
+  | 'pricing_worksheet'
+  | 'product_page'
+  | 'products_inline'
+  | 'supplier_pricing'
+  | 'product_detail';
+
+/** Server-owned Product cost-basis history. Money is integer cents. */
+export interface ProductCostBasis {
+  id: string;
+  product_id: string;
+  basis_type: ProductCostBasisType;
+  cost_cents: bigint;
+  supplier_price_observation_id: string | null;
+  purchase_order_item_id: string | null;
+  pricing_change_set_id: string | null;
+  selection_source: ProductCostBasisSelectionSource;
+  reason: string;
+  selected_by: string | null;
+  selected_at: string;
+  effective_from: string;
+  effective_to: string | null;
+  created_at: string;
+}
+
+/** Durable provenance attached to an existing Phase 1a pricing preview. */
+export interface ProductCostBasisChangeRow {
+  pricing_change_set_id: string;
+  product_id: string;
+  expected_version: number;
+  expected_active_basis_id: string | null;
+  basis_type: ProductCostBasisType;
+  cost_cents: bigint;
+  supplier_price_observation_id: string | null;
+  purchase_order_item_id: string | null;
+  selection_source: Exclude<ProductCostBasisSelectionSource, 'migration_baseline'>;
+  reason: string;
+  force_selection: boolean;
+  created_at: string;
+}
+
 export interface CommissionSplit {
   splits: Array<{ recipient: string; percentage: number }>;
 }

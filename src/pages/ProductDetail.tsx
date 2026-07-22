@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { AlertTriangle, ArrowLeft, DollarSign, ExternalLink, Search, Save } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
@@ -29,6 +29,17 @@ import {
   type PricingPreviewInputRow,
   type PricingPreviewResult,
 } from '../lib/productPricing';
+import {
+  getProductCostBasisWorkspace,
+  formatCostBasisDollars,
+  manualCostBasisPricingRow,
+  purchaseCandidatePricingRow,
+  supplierCandidatePricingRow,
+  type CostBasisPricingBehavior,
+  type ProductCostBasisWorkspace,
+  type PurchaseCostBasisCandidate,
+  type SupplierCostBasisCandidate,
+} from '../lib/productCostBasis';
 
 const PRODUCT_NONPRICING_FIELDS = [
   'product_name', 'sku', 'category', 'vendor', 'manufacturer',
@@ -267,9 +278,22 @@ export default function ProductDetail() {
   const [pricingMode, setPricingMode] = useState<PricingMode | ''>('');
   const [pricingMoneyDrafts, setPricingMoneyDrafts] = useState<ProductPricingMoneyDrafts>({});
   const [pricingPreview, setPricingPreview] = useState<PricingPreviewResult | null>(null);
+  const [pricingPreviewTitle, setPricingPreviewTitle] = useState('Review Product Pricing');
   const [applyingPricing, setApplyingPricing] = useState(false);
   const [pricingReloadRequired, setPricingReloadRequired] = useState(false);
   const [pricingReloading, setPricingReloading] = useState(false);
+  const [costBasisWorkspace, setCostBasisWorkspace] = useState<ProductCostBasisWorkspace | null>(null);
+  const [costBasisLoading, setCostBasisLoading] = useState(false);
+  const [costBasisBusy, setCostBasisBusy] = useState(false);
+  const [costBasisReason, setCostBasisReason] = useState('');
+  const [manualBasisCost, setManualBasisCost] = useState('');
+  const [costBasisPricingBehavior, setCostBasisPricingBehavior] = useState<CostBasisPricingBehavior>('keep_sell_prices');
+  const [priceHistoryReloadToken, setPriceHistoryReloadToken] = useState(0);
+  const pricingPreviewIntentRef = useRef<string | null>(null);
+  const costBasisWorkspaceRequestRef = useRef(0);
+  const pricingPreviewRequestRef = useRef(0);
+  const productIdRef = useRef(id);
+  productIdRef.current = id;
   const [persistedLabelFields, setPersistedLabelFields] = useState<{
     signalWord: Product['signal_word'];
     epaRegistration: string | null;
@@ -279,8 +303,14 @@ export default function ProductDetail() {
   const [epaLookupLoading, setEpaLookupLoading] = useState(false);
   const [epaDraftCreating, setEpaDraftCreating] = useState(false);
   const epaDraftKey = useIdempotencyKey('create_label_draft', profile?.id ?? '');
-  const previewPricingIdem = useIdempotencyKey('preview_product_pricing_changes', profile?.id ?? '');
-  const applyPricingIdem = useIdempotencyKey('apply_product_pricing_change_set', profile?.id ?? '');
+  const {
+    getKey: getPreviewPricingKey,
+    resetKey: resetPreviewPricingKey,
+  } = useIdempotencyKey('preview_product_pricing_changes', profile?.id ?? '');
+  const {
+    getKey: getApplyPricingKey,
+    resetKey: resetApplyPricingKey,
+  } = useIdempotencyKey('apply_product_pricing_change_set', profile?.id ?? '');
 
   // Track dirty state for unsaved changes warning
   const [isDirty, setIsDirty] = useState(false);
@@ -330,12 +360,49 @@ export default function ProductDetail() {
     return true;
   }, [id, isAdmin, toast]);
 
+  const fetchCostBasisWorkspace = useCallback(async (reportError = true): Promise<boolean> => {
+    const requestId = ++costBasisWorkspaceRequestRef.current;
+    if (!isAdmin || !id || isNew) return true;
+    setCostBasisWorkspace(null);
+    setCostBasisLoading(true);
+    try {
+      const workspace = await getProductCostBasisWorkspace(id);
+      if (costBasisWorkspaceRequestRef.current !== requestId) return false;
+      if (workspace.product.id !== id) {
+        throw new Error('Cost-basis workspace returned the wrong Product.');
+      }
+      setCostBasisWorkspace(workspace);
+      return true;
+    } catch (error) {
+      if (costBasisWorkspaceRequestRef.current !== requestId) return false;
+      setCostBasisWorkspace(null);
+      Sentry.captureException(error);
+      if (reportError) toast('error', 'Failed to load governed cost-basis options');
+      return false;
+    } finally {
+      if (costBasisWorkspaceRequestRef.current === requestId) setCostBasisLoading(false);
+    }
+  }, [id, isAdmin, isNew, toast]);
+
   useEffect(() => {
     if (!isNew && id) {
       void fetchProduct();
       void fetchCostHistory();
+      void fetchCostBasisWorkspace();
     }
-  }, [id, isNew, fetchProduct, fetchCostHistory]);
+  }, [id, isNew, fetchProduct, fetchCostHistory, fetchCostBasisWorkspace]);
+
+  useEffect(() => {
+    pricingPreviewRequestRef.current += 1;
+    setPricingPreview(null);
+    setPricingPreviewTitle('Review Product Pricing');
+    resetPreviewPricingKey();
+    resetApplyPricingKey();
+    setCostBasisReason('');
+    setManualBasisCost('');
+    setCostBasisPricingBehavior('keep_sell_prices');
+    pricingPreviewIntentRef.current = null;
+  }, [id, resetApplyPricingKey, resetPreviewPricingKey]);
 
   useEffect(() => {
     supabase.from('unit_conversions').select('*').order('unit').then(({ data, error }) => {
@@ -385,22 +452,144 @@ export default function ProductDetail() {
     if (pricingMode !== 'margin_driven' && pricingMode !== 'price_driven') {
       throw new Error('Choose margin-driven or price-driven before reviewing pricing.');
     }
+    const row = pricingPreviewRow(
+      product,
+      persistedProduct,
+      pricingMode,
+      reason,
+      pricingMoneyDrafts,
+      costOverride,
+    );
+    const intent = JSON.stringify(row);
+    if (pricingPreviewIntentRef.current !== intent) {
+      resetPreviewPricingKey();
+      pricingPreviewIntentRef.current = intent;
+    }
+    const targetProductId = persistedProduct.id;
+    const requestId = ++pricingPreviewRequestRef.current;
     const preview = await previewProductPricingChanges({
       source: 'product_page',
-      rows: [pricingPreviewRow(
-        product,
-        persistedProduct,
-        pricingMode,
-        reason,
-        pricingMoneyDrafts,
-        costOverride,
-      )],
+      rows: [row],
       performedBy: profile.id,
-      idempotencyKey: previewPricingIdem.getKey(),
+      idempotencyKey: getPreviewPricingKey(),
     });
-    previewPricingIdem.resetKey();
+    if (pricingPreviewRequestRef.current !== requestId
+        || productIdRef.current !== targetProductId) return;
+    resetPreviewPricingKey();
+    pricingPreviewIntentRef.current = null;
 
+    setPricingPreviewTitle('Review Product Pricing');
     setPricingPreview(preview);
+  };
+
+  const costBasisRowOptions = () => {
+    const reason = costBasisReason.trim();
+    if (!reason) throw new Error('Enter a reason before selecting a cost basis.');
+    if (!persistedProduct) throw new Error('Reload this Product before selecting a cost basis.');
+    return {
+      reason,
+      basisSource: 'product_detail' as const,
+      pricingBehavior: costBasisPricingBehavior,
+      currentTierPrices: {
+        tier1: pricingMoneyInput(persistedProduct, {}, 'tier1_price'),
+        tier2: pricingMoneyInput(persistedProduct, {}, 'tier2_price'),
+        tier3: pricingMoneyInput(persistedProduct, {}, 'tier3_price'),
+      },
+    };
+  };
+
+  const previewCostBasisRow = async (row: PricingPreviewInputRow, label: string) => {
+    if (!profile || !costBasisWorkspace) return;
+    const intent = JSON.stringify(row);
+    if (pricingPreviewIntentRef.current !== intent) {
+      resetPreviewPricingKey();
+      pricingPreviewIntentRef.current = intent;
+    }
+    const requestId = ++pricingPreviewRequestRef.current;
+    const preview = await previewProductPricingChanges({
+      // p_source identifies the single-Product change-set route. The row's
+      // basis_source separately records that the choice came from Product Detail.
+      source: 'product_page',
+      rows: [row],
+      performedBy: profile.id,
+      idempotencyKey: getPreviewPricingKey(),
+    });
+    if (pricingPreviewRequestRef.current !== requestId
+        || productIdRef.current !== row.product_id) return;
+    resetPreviewPricingKey();
+    pricingPreviewIntentRef.current = null;
+    setPricingPreviewTitle(`Review cost basis — ${label}`);
+    setPricingPreview(preview);
+  };
+
+  const ensureCostBasisSelectionReady = () => {
+    if (!costBasisWorkspace?.enabled) {
+      throw new Error('Cost-basis selection is OFF until the Phase 2 release gate is completed.');
+    }
+    if (pricingReloadRequired) throw new Error('Reload this Product before making another change.');
+    if (!id || costBasisWorkspace.product.id !== id || persistedProduct?.id !== id) {
+      throw new Error('Reload this Product before selecting a cost basis.');
+    }
+    if (costBasisWorkspace.product.pricing_version !== persistedProduct.pricing_version) {
+      throw new Error('Product pricing changed while this cost-basis workspace loaded. Reload before selecting a cost basis.');
+    }
+    if (isDirty || productDetailsChanged(product, persistedProduct)
+        || pricingChanged(product, persistedProduct, pricingMoneyDrafts)) {
+      throw new Error('Save or discard unsaved Product changes before selecting a cost basis.');
+    }
+  };
+
+  const handleSupplierBasisSelection = async (candidate: SupplierCostBasisCandidate) => {
+    if (!costBasisWorkspace) return;
+    setCostBasisBusy(true);
+    try {
+      ensureCostBasisSelectionReady();
+      await previewCostBasisRow(
+        supplierCandidatePricingRow(costBasisWorkspace, candidate, costBasisRowOptions()),
+        `${candidate.vendor_name} at $${formatCostBasisDollars(candidate.normalized_cost_cents)}`,
+      );
+    } catch (error) {
+      toast('error', error instanceof Error ? error.message : 'Failed to preview cost basis');
+    } finally {
+      setCostBasisBusy(false);
+    }
+  };
+
+  const handlePurchaseBasisSelection = async (candidate: PurchaseCostBasisCandidate) => {
+    if (!costBasisWorkspace) return;
+    setCostBasisBusy(true);
+    try {
+      ensureCostBasisSelectionReady();
+      await previewCostBasisRow(
+        purchaseCandidatePricingRow(costBasisWorkspace, candidate, costBasisRowOptions()),
+        `${candidate.po_number} received PO cost`,
+      );
+    } catch (error) {
+      toast('error', error instanceof Error ? error.message : 'Failed to preview cost basis');
+    } finally {
+      setCostBasisBusy(false);
+    }
+  };
+
+  const handleManualBasisSelection = async () => {
+    if (!costBasisWorkspace) return;
+    const costCents = pricingDollarInputToCents(manualBasisCost);
+    if (costCents === null) {
+      toast('error', 'Enter a non-negative cost with no more than two decimal places');
+      return;
+    }
+    setCostBasisBusy(true);
+    try {
+      ensureCostBasisSelectionReady();
+      await previewCostBasisRow(
+        manualCostBasisPricingRow(costBasisWorkspace, costCents, costBasisRowOptions()),
+        `manual cost $${formatCostBasisDollars(costCents)}`,
+      );
+    } catch (error) {
+      toast('error', error instanceof Error ? error.message : 'Failed to preview cost basis');
+    } finally {
+      setCostBasisBusy(false);
+    }
   };
 
   const handleSave = async () => {
@@ -520,30 +709,62 @@ export default function ProductDetail() {
 
   const handleApplyPricing = async () => {
     if (!pricingPreview || !profile) return;
+    const previewProductIds = [...new Set(
+      pricingPreview.rows.map((row) => row.product_id).filter((productId): productId is string => Boolean(productId)),
+    )];
+    if (!id || previewProductIds.length !== 1 || previewProductIds[0] !== id) {
+      setPricingPreview(null);
+      resetApplyPricingKey();
+      toast('error', 'This preview belongs to a different Product. Reload before applying.');
+      return;
+    }
     setApplyingPricing(true);
     try {
       const result = await applyProductPricingChangeSet({
         changeSetId: pricingPreview.change_set_id,
         requestFingerprint: pricingPreview.request_fingerprint,
         performedBy: profile.id,
-        idempotencyKey: applyPricingIdem.getKey(),
+        idempotencyKey: getApplyPricingKey(),
       });
-      applyPricingIdem.resetKey();
+      resetApplyPricingKey();
       setPricingReloadRequired(true);
       setIsDirty(true);
       setPricingPreview(null);
       setNewCost('');
       setCostNote('');
-      const [productReloaded, historyReloaded] = await Promise.all([
+      setCostBasisReason('');
+      setManualBasisCost('');
+      setCostBasisPricingBehavior('keep_sell_prices');
+      const [productReloaded, historyReloaded, basisReloaded] = await Promise.all([
         fetchProduct(false),
         fetchCostHistory(false),
+        fetchCostBasisWorkspace(false),
       ]);
-      if (productReloaded && historyReloaded) {
-        toast('success', `Applied pricing to ${result.applied_count} Product.`);
+      setPriceHistoryReloadToken((current) => current + 1);
+      const basisAppliedCount = result.cost_basis_rows?.length ?? 0;
+      const pricingAppliedCount = result.applied_count;
+      const successMessage = basisAppliedCount > 0 && pricingAppliedCount > 0
+        ? `Selected cost basis and applied pricing to ${pricingAppliedCount} Product.`
+        : basisAppliedCount > 0
+          ? `Selected cost basis for ${basisAppliedCount} Product.`
+          : `Applied pricing to ${pricingAppliedCount} Product.`;
+      const activityDescription = basisAppliedCount > 0 && pricingAppliedCount > 0
+        ? 'Product cost basis and pricing updated through approved preview'
+        : basisAppliedCount > 0
+          ? 'Product cost basis selected through approved preview'
+          : 'Product pricing updated through approved preview';
+      if (productReloaded && historyReloaded && basisReloaded) {
+        toast('success', successMessage);
       } else {
-        toast('warning', 'Pricing was applied, but the latest Product values could not be reloaded. Refresh this page before making another change.');
+        toast('warning', `${successMessage} The latest Product values could not be reloaded. Refresh this page before making another change.`);
       }
-      logActivity({ event: 'product_cost_updated', description: `Product pricing updated through approved preview`, performedBy: profile.id, entityType: 'product', entityId: id });
+      logActivity({
+        event: 'product_cost_updated',
+        description: activityDescription,
+        performedBy: profile.id,
+        entityType: 'product',
+        entityId: id,
+      });
     } catch (err: unknown) {
       toast('error', err instanceof Error ? err.message : 'Failed to apply pricing');
     } finally {
@@ -553,16 +774,18 @@ export default function ProductDetail() {
 
   const handlePricingReload = async () => {
     setPricingReloading(true);
-    const [productReloaded, historyReloaded] = await Promise.all([
+    const [productReloaded, historyReloaded, basisReloaded] = await Promise.all([
       fetchProduct(false),
       fetchCostHistory(false),
+      fetchCostBasisWorkspace(false),
     ]);
+    setPriceHistoryReloadToken((current) => current + 1);
     if (productReloaded) {
       toast(
-        historyReloaded ? 'success' : 'warning',
-        historyReloaded
+        historyReloaded && basisReloaded ? 'success' : 'warning',
+        historyReloaded && basisReloaded
           ? 'Product pricing reloaded.'
-          : 'Product pricing reloaded, but pricing history is not available yet.',
+          : 'Product pricing reloaded, but pricing history or governed cost-basis options are not available yet.',
       );
     } else {
       toast('error', 'Product pricing could not be reloaded. Try again before making another change.');
@@ -1304,7 +1527,98 @@ export default function ProductDetail() {
 
         {!isNew && id && (
           <div className="space-y-4">
-            {isAdmin && <ProductPriceHistory productId={id} />}
+            {isAdmin && (
+              <Card>
+                <CardHeader title="Select" accent="Cost Basis" />
+                {costBasisLoading ? (
+                  <p className="text-sm text-secondary">Loading governed cost-basis options…</p>
+                ) : costBasisWorkspace ? (
+                  <div className="space-y-4">
+                    <div className="grid gap-3 rounded-lg border border-gray-200 p-4 sm:grid-cols-3">
+                      <div>
+                        <p className="text-xs text-secondary">Current selected basis</p>
+                        <p className="font-semibold">{costBasisWorkspace.current_basis?.basis_type.replace(/_/g, ' ') ?? 'No baseline'}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-secondary">Selected cost</p>
+                        <p className="font-semibold tabular-nums">
+                          {costBasisWorkspace.current_basis
+                            ? `$${formatCostBasisDollars(costBasisWorkspace.current_basis.cost_cents)}`
+                            : '—'}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-secondary">Reason</p>
+                        <p className="text-sm">{costBasisWorkspace.current_basis?.reason ?? '—'}</p>
+                      </div>
+                    </div>
+
+                    {!costBasisWorkspace.enabled && (
+                      <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                        Cost-basis selection is OFF until the Phase 2 release gate is completed. You can review evidence below, but selection controls remain disabled.
+                      </div>
+                    )}
+
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <div>
+                        <label htmlFor="cost-basis-pricing-behavior" className="mb-1 block text-sm font-medium text-secondary">Pricing behavior</label>
+                        <select
+                          id="cost-basis-pricing-behavior"
+                          value={costBasisPricingBehavior}
+                          onChange={(event) => setCostBasisPricingBehavior(event.target.value as CostBasisPricingBehavior)}
+                          disabled={!costBasisWorkspace.enabled || costBasisBusy || pricingReloadRequired}
+                          className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-crx-green focus:outline-none focus:ring-2 focus:ring-crx-green/20"
+                        >
+                          <option value="keep_sell_prices">Keep current sell prices; recalculate margins</option>
+                          <option value="keep_margins_and_reprice">Keep current margins; recalculate sell prices</option>
+                        </select>
+                      </div>
+                      <Input
+                        label="Cost basis reason"
+                        value={costBasisReason}
+                        onChange={(event) => setCostBasisReason(event.target.value)}
+                        placeholder="Why this evidence is the right basis"
+                        disabled={!costBasisWorkspace.enabled || costBasisBusy || pricingReloadRequired}
+                      />
+                    </div>
+                    <div className="grid gap-3 md:grid-cols-[1fr_auto] md:items-end">
+                      <Input
+                        label="Manual replacement cost"
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={manualBasisCost}
+                        onChange={(event) => setManualBasisCost(event.target.value)}
+                        placeholder="0.00"
+                        disabled={!costBasisWorkspace.enabled || costBasisBusy || pricingReloadRequired}
+                      />
+                      <Button
+                        type="button"
+                        disabled={!costBasisWorkspace.enabled || costBasisBusy || pricingReloadRequired}
+                        onClick={() => void handleManualBasisSelection()}
+                      >
+                        Preview manual basis
+                      </Button>
+                    </div>
+                    <p className="text-xs text-secondary">
+                      Eligible supplier and received-PO evidence below has a Select as cost basis action. Every choice still requires preview and explicit approval.
+                    </p>
+                  </div>
+                ) : (
+                  <p className="text-sm text-secondary">Governed cost-basis options are unavailable for this Product.</p>
+                )}
+              </Card>
+            )}
+            {isAdmin && (
+              <ProductPriceHistory
+                productId={id}
+                costBasisWorkspace={costBasisWorkspace}
+                costBasisBusy={costBasisBusy}
+                reloadToken={priceHistoryReloadToken}
+                onSelectSupplierBasis={(candidate) => void handleSupplierBasisSelection(candidate)}
+                onSelectPurchaseBasis={(candidate) => void handlePurchaseBasisSelection(candidate)}
+              />
+            )}
             {isAdmin && (
               <Card>
                 <CardHeader title="Cost" accent="History" />
@@ -1362,10 +1676,10 @@ export default function ProductDetail() {
         open={pricingPreview !== null}
         preview={pricingPreview}
         applying={applyingPricing}
-        title="Review Product Pricing"
+        title={pricingPreviewTitle}
         onClose={() => {
           setPricingPreview(null);
-          applyPricingIdem.resetKey();
+          resetApplyPricingKey();
         }}
         onApprove={() => void handleApplyPricing()}
       />
