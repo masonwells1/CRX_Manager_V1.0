@@ -3188,10 +3188,12 @@ export interface PnLRow {
 
 export interface FieldProfitabilityRow {
   [k: string]: unknown;
-  field_id: string;
+  // NULL for the "(unassigned field)" bucket row.
+  field_id: string | null;
   field_name: string;
   customer_id: string;
-  customer_name: string;
+  // LEFT-joined; can be null for the unassigned bucket.
+  customer_name: string | null;
   season: string;
   total_acres_applied: number;
   revenue_cents: number;

@@ -63,6 +63,74 @@ BEGIN
         OR i.salesman_id = auth.uid()
       )
   ),
+  job_backed_children AS (
+    -- transfer_job_to_invoice invoices: job_id set, no field_app_locations for
+    -- the invoice or its group.
+    SELECT
+      ei.invoice_id,
+      ei.customer_id,
+      ei.invoice_group_id,
+      ei.job_id,
+      ei.invoice_season,
+      ei.invoice_revenue_cents,
+      ei.invoice_cost_cents
+    FROM eligible_invoices ei
+    WHERE ei.job_id IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM public.field_app_locations fal2
+        WHERE fal2.invoice_id = ei.invoice_id
+           OR (ei.invoice_group_id IS NOT NULL
+               AND fal2.invoice_group_id = ei.invoice_group_id)
+      )
+  ),
+  job_backed_weights AS (
+    -- Per-field spread weights. Grouped children mirror the writer: FBD share
+    -- when the field has billing defaults, otherwise 100% to the field owner.
+    -- Weights are used ONLY for the spread; totals anchor to the stored
+    -- invoice_shares.acres snapshot below.
+    SELECT
+      jbc.invoice_id,
+      jbc.customer_id,
+      jbc.invoice_season,
+      jbc.invoice_revenue_cents,
+      jbc.invoice_cost_cents,
+      jf.id AS location_id,
+      jf.field_id,
+      CASE
+        WHEN jbc.invoice_group_id IS NULL
+          THEN GREATEST(COALESCE(jf.acres_to_treat, 0), 0)
+        ELSE GREATEST(COALESCE(jf.acres_to_treat, 0), 0)
+             * CASE
+                 WHEN EXISTS (
+                   SELECT 1 FROM public.field_billing_defaults fbd_any
+                   WHERE fbd_any.field_id = jf.field_id
+                 ) THEN COALESCE(fbd.split_pct, 0)
+                 WHEN fld.customer_id = jbc.customer_id THEN 100
+                 ELSE 0
+               END / 100.0
+      END AS weight
+    FROM job_backed_children jbc
+    JOIN public.job_fields jf
+      ON jf.job_id = jbc.job_id
+    JOIN public.fields fld
+      ON fld.id = jf.field_id
+    LEFT JOIN public.field_billing_defaults fbd
+      ON fbd.field_id = jf.field_id
+     AND fbd.customer_id = jbc.customer_id
+  ),
+  job_backed_weight_totals AS (
+    SELECT
+      jbw.invoice_id,
+      SUM(jbw.weight) AS weight_total,
+      -- Billed-acreage snapshot the writer stored at posting time (the
+      -- 100%-self invoice_shares row). Anchors historical acres so later
+      -- ownership edits cannot change a posted invoice's total acres.
+      (SELECT NULLIF(SUM(GREATEST(COALESCE(ish.acres, 0), 0)), 0)
+         FROM public.invoice_shares ish
+        WHERE ish.invoice_id = jbw.invoice_id) AS snapshot_acres
+    FROM job_backed_weights jbw
+    GROUP BY jbw.invoice_id
+  ),
   grouped_location_shares AS (
     SELECT
       s.location_id,
@@ -90,61 +158,23 @@ BEGIN
 
     UNION ALL
 
-    -- Job-backed fallback: transfer_job_to_invoice keeps invoices.job_id but
-    -- writes NO field_app_locations (single OR multi-owner grouped children) —
-    -- resolve fields/acres via job_fields so these invoices report per-field
-    -- instead of landing in the unassigned bucket. Each grouped child's money
-    -- allocates over the same job fields (weights identical per child; the
-    -- child's own acres come from invoice_shares in the acres CTE below).
+    -- Job-backed fallback (transfer_job_to_invoice writes NO locations):
+    -- spread each invoice's money across its job fields by the weight CTEs
+    -- above. Zero/absent weights (e.g. ownership edited away) get NO basis rows
+    -- here and land in the unassigned bucket instead of a fabricated spread.
     SELECT
-      ei.invoice_id,
-      ei.customer_id,
-      ei.invoice_season,
-      ei.invoice_revenue_cents,
-      ei.invoice_cost_cents,
-      jf.id AS location_id,
-      jf.field_id,
-      -- Grouped multi-owner children weight by THEIR field_billing_defaults
-      -- ownership share of each job field (transfer_job_to_invoice derives the
-      -- split from fbd, so this mirrors how the child was billed; a field with
-      -- NO billing defaults belongs 100% to its owning customer, exactly like
-      -- the writer); ungrouped single-owner transfers take the job field acres
-      -- directly. All-zero weights still fall into the equal-weight guard.
-      -- KNOWN LIMITATION (accepted): fbd/fields are CURRENT state — the writer
-      -- does not persist a per-field split snapshot at posting time (only the
-      -- per-child totals in invoice_shares), so if field ownership splits are
-      -- edited later, historical job-backed attribution shifts with them. The
-      -- per-child money totals are unaffected; only the field spread moves.
-      CASE
-        WHEN ei.invoice_group_id IS NULL
-          THEN GREATEST(COALESCE(jf.acres_to_treat, 0), 0)
-        ELSE GREATEST(COALESCE(jf.acres_to_treat, 0), 0)
-             -- Mirror transfer_job_to_invoice: FBD share when the field has
-             -- billing defaults, otherwise the field OWNER gets 100%.
-             * CASE
-                 WHEN EXISTS (
-                   SELECT 1 FROM public.field_billing_defaults fbd_any
-                   WHERE fbd_any.field_id = jf.field_id
-                 ) THEN COALESCE(fbd.split_pct, 0)
-                 WHEN fld.customer_id = ei.customer_id THEN 100
-                 ELSE 0
-               END / 100.0
-      END AS applied_acres
-    FROM eligible_invoices ei
-    JOIN public.job_fields jf
-      ON jf.job_id = ei.job_id
-    JOIN public.fields fld
-      ON fld.id = jf.field_id
-    LEFT JOIN public.field_billing_defaults fbd
-      ON fbd.field_id = jf.field_id
-     AND fbd.customer_id = ei.customer_id
-    WHERE ei.job_id IS NOT NULL
-      AND NOT EXISTS (
-        SELECT 1 FROM public.field_app_locations fal2
-        WHERE fal2.invoice_id = ei.invoice_id
-           OR (ei.invoice_group_id IS NOT NULL
-               AND fal2.invoice_group_id = ei.invoice_group_id)
-      )
+      jbw.invoice_id,
+      jbw.customer_id,
+      jbw.invoice_season,
+      jbw.invoice_revenue_cents,
+      jbw.invoice_cost_cents,
+      jbw.location_id,
+      jbw.field_id,
+      jbw.weight AS applied_acres
+    FROM job_backed_weights jbw
+    JOIN job_backed_weight_totals jbt
+      ON jbt.invoice_id = jbw.invoice_id
+     AND jbt.weight_total > 0
 
     UNION ALL
 
@@ -351,46 +381,25 @@ BEGIN
     GROUP BY eui.invoice_id, eui.customer_id, eui.invoice_season, fal.field_id
   ),
   job_backed_acres_by_scope_field AS (
-    -- Per-child acres mirror the money weights: grouped children take their
-    -- field_billing_defaults ownership share of each job field's acres;
-    -- ungrouped single-owner transfers take the job field acres directly.
+    -- Acres anchor to the stored invoice_shares.acres snapshot (what the child
+    -- was actually billed), spread across fields by the same weights as the
+    -- money; if no snapshot exists, fall back to the raw weights.
     SELECT
-      ei.customer_id,
-      ei.invoice_season,
-      jf.field_id,
+      jbw.customer_id,
+      jbw.invoice_season,
+      jbw.field_id,
       SUM(
         CASE
-          WHEN ei.invoice_group_id IS NULL
-            THEN GREATEST(COALESCE(jf.acres_to_treat, 0), 0)
-          ELSE GREATEST(COALESCE(jf.acres_to_treat, 0), 0)
-               -- Mirror transfer_job_to_invoice: FBD share when the field has
-               -- billing defaults, otherwise the field OWNER gets 100%.
-               * CASE
-                   WHEN EXISTS (
-                     SELECT 1 FROM public.field_billing_defaults fbd_any
-                     WHERE fbd_any.field_id = jf.field_id
-                   ) THEN COALESCE(fbd.split_pct, 0)
-                   WHEN fld.customer_id = ei.customer_id THEN 100
-                   ELSE 0
-                 END / 100.0
+          WHEN jbt.snapshot_acres IS NOT NULL
+            THEN jbt.snapshot_acres * jbw.weight / jbt.weight_total
+          ELSE jbw.weight
         END
       ) AS applied_acres
-    FROM eligible_invoices ei
-    JOIN public.job_fields jf
-      ON jf.job_id = ei.job_id
-    JOIN public.fields fld
-      ON fld.id = jf.field_id
-    LEFT JOIN public.field_billing_defaults fbd
-      ON fbd.field_id = jf.field_id
-     AND fbd.customer_id = ei.customer_id
-    WHERE ei.job_id IS NOT NULL
-      AND NOT EXISTS (
-        SELECT 1 FROM public.field_app_locations fal2
-        WHERE fal2.invoice_id = ei.invoice_id
-           OR (ei.invoice_group_id IS NOT NULL
-               AND fal2.invoice_group_id = ei.invoice_group_id)
-      )
-    GROUP BY ei.invoice_id, ei.customer_id, ei.invoice_season, jf.field_id
+    FROM job_backed_weights jbw
+    JOIN job_backed_weight_totals jbt
+      ON jbt.invoice_id = jbw.invoice_id
+     AND jbt.weight_total > 0
+    GROUP BY jbw.invoice_id, jbw.customer_id, jbw.invoice_season, jbw.field_id
   ),
   grouped_share_acres_by_scope_field AS (
     -- Count each eligible child's customer share once per group. DISTINCT in
@@ -532,12 +541,10 @@ BEGIN
       )
       AND COALESCE(fal.applied_acres, 0) >= 0
     )
-    AND NOT (
-      ei.job_id IS NOT NULL
-      AND EXISTS (
-        SELECT 1 FROM public.job_fields jf
-        WHERE jf.job_id = ei.job_id
-      )
+    AND NOT EXISTS (
+      SELECT 1 FROM job_backed_weight_totals jbt
+      WHERE jbt.invoice_id = ei.invoice_id
+        AND jbt.weight_total > 0
     )
   )
   SELECT
