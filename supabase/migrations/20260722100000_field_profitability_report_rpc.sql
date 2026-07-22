@@ -39,6 +39,20 @@ BEGIN
       i.total_amount_cents AS invoice_revenue_cents,
       COALESCE(i.total_cost_cents, 0)::bigint AS invoice_cost_cents
     FROM public.invoices i
+    -- BILLED-CUSTOMER ATTRIBUTION EVIDENCE (verified live 2026-07-22): every
+    -- current field_application writer bills exactly ONE customer per invoice
+    -- row, so invoices.customer_id IS the billed customer and invoice_shares
+    -- never needs to drive attribution here:
+    --   * transfer_job_to_invoice multi-owner path creates one invoice PER
+    --     member and writes literally "one invoice_shares row (100% of this
+    --     member -> itself)" (live function body);
+    --   * save_field_app_invoice / the per-line split writer create one child
+    --     invoice per customer in a group;
+    --   * live catalog: 0 field_application invoices carry an invoice_shares
+    --     row whose customer differs from invoices.customer_id.
+    -- A hypothetical legacy single-invoice-multi-customer-share shape has no
+    -- writer and no live rows; if one ever appears its money reports under the
+    -- invoice header customer (total cents still conserved).
     WHERE i.invoice_type = 'field_application'
       AND i.status IN ('posted', 'overdue', 'paid')
       AND i.deleted_at IS NULL
