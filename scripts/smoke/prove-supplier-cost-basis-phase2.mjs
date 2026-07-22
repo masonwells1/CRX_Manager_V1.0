@@ -24,6 +24,7 @@ const files = [
   ['wells-rollout-nonreusable.sql', 'scripts/smoke/smoke-wells-cost-basis-rollout-nonreusable.sql'],
   ['wells-rollout-observation-link.sql', 'scripts/smoke/smoke-wells-cost-basis-rollout-observation-link.sql'],
   ['wells-rollout.sql', 'supabase/migrations/20260722064814_wells_cost_basis_rollout_gate.sql'],
+  ['po-reassignment-guard.sql', 'supabase/migrations/20260722080226_lock_received_po_cost_snapshot_across_product_reassignment.sql'],
   ['smoke.sql', 'scripts/smoke/smoke-supplier-cost-basis-phase2.sql'],
 ];
 const container = `crx-pricing-phase2-proof-${process.pid}-${Date.now()}`;

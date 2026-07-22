@@ -454,6 +454,14 @@ WHERE id IN (
   'cccccccc-cccc-4ccc-8ccc-ccccccccccc5'::uuid
 );
 
+INSERT INTO public.purchase_order_items(
+  id, purchase_order_id, product_id, quantity_received, unit_cost, unit_size
+) VALUES (
+  'cccccccc-cccc-4ccc-8ccc-ccccccccccc6',
+  'cccccccc-cccc-4ccc-8ccc-ccccccccccc3',
+  'd1961efe-6133-4ab4-bf84-ac7bf7da903a', 1, 47.26, 'gal'
+);
+
 DO $proof$
 BEGIN
   IF NOT EXISTS (
@@ -495,6 +503,18 @@ BEGIN
     IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
     IF SQLERRM NOT LIKE 'RECEIVED_PO_COST_SNAPSHOT_IMMUTABLE%' THEN
       RAISE EXCEPTION 'SMOKE_FAIL: received snapshot failed for wrong reason: %', SQLERRM;
+    END IF;
+  END;
+
+  BEGIN
+    UPDATE public.purchase_order_items
+    SET product_id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2'::uuid
+    WHERE id = 'cccccccc-cccc-4ccc-8ccc-ccccccccccc6'::uuid;
+    RAISE EXCEPTION 'SMOKE_FAIL: received canary PO line escaped by Product reassignment';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF SQLERRM NOT LIKE 'RECEIVED_PO_COST_SNAPSHOT_IMMUTABLE%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: received Product reassignment failed for wrong reason: %', SQLERRM;
     END IF;
   END;
 END;
