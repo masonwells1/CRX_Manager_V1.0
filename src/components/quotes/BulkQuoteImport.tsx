@@ -102,6 +102,28 @@ const payloadFingerprint = (value: unknown): string => {
   return (hash >>> 0).toString(16).padStart(8, '0');
 };
 
+const importRowFingerprint = (quoteNumber: string, items: ParsedQuoteItem[]): string =>
+  payloadFingerprint({
+    quote_number: quoteNumber,
+    items: items.map((item) => ({
+      quote_number: normalizeQuoteNumber(item.quote_number),
+      customer_farm_name: item.customer_farm_name.trim(),
+      section_name: item.section_name?.trim() || null,
+      product_name: item.product_name.trim(),
+      acres: item.acres ?? null,
+      price_per_unit: item.price_per_unit ?? null,
+      oz_per_acre: item.oz_per_acre ?? null,
+      actual_rate: item.actual_rate ?? null,
+      rate_unit: normalizeUnitName(item.rate_unit) || null,
+      notes: item.notes ?? null,
+      tier: item.tier ?? null,
+      status: item.status ?? null,
+      valid_days: item.valid_days ?? null,
+      header_notes: item.header_notes ?? null,
+      footer_notes: item.footer_notes ?? null,
+    })),
+  });
+
 const rejectPartiallyInvalidQuoteGroups = (
   candidates: ValidQuoteRow[],
   invalid: InvalidQuoteRow[]
@@ -154,8 +176,14 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
   const [uploadResults, setUploadResults] = useState<{ success: number; failed: number; details: string[] } | null>(null);
   const importIdempotencyKeysRef = useRef(new Map<string, string>());
 
+  const importIdempotencyScope = (quoteNumber: string, payloadScope: string): string =>
+    `${profile?.id ?? 'unknown'}:${normalizeQuoteNumber(quoteNumber)}:${payloadScope}`;
+
+  const hasImportIdempotencyKey = (quoteNumber: string, payloadScope: string): boolean =>
+    importIdempotencyKeysRef.current.has(importIdempotencyScope(quoteNumber, payloadScope));
+
   const getImportIdempotencyKey = (quoteNumber: string, payloadScope: string): string => {
-    const scope = `${profile?.id ?? 'unknown'}:${normalizeQuoteNumber(quoteNumber)}:${payloadScope}`;
+    const scope = importIdempotencyScope(quoteNumber, payloadScope);
     const cached = importIdempotencyKeysRef.current.get(scope);
     if (cached) return cached;
     const key = generateIdempotencyKey('save_quote_bulk_import', scope);
@@ -164,7 +192,7 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
   };
 
   const clearImportIdempotencyKey = (quoteNumber: string, payloadScope: string): void => {
-    importIdempotencyKeysRef.current.delete(`${profile?.id ?? 'unknown'}:${normalizeQuoteNumber(quoteNumber)}:${payloadScope}`);
+    importIdempotencyKeysRef.current.delete(importIdempotencyScope(quoteNumber, payloadScope));
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -482,6 +510,35 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
             continue;
           }
 
+          const idemPayloadScope = importRowFingerprint(quoteNumber, items);
+          if (!hasImportIdempotencyKey(quoteNumber, idemPayloadScope)) {
+            const existingQuoteResult = await supabase
+              .from('quotes')
+              .select('quote_number')
+              .ilike('quote_number', quoteNumber);
+            if (existingQuoteResult.error) {
+              Sentry.captureException(new Error(`Failed to check existing quote numbers: ${existingQuoteResult.error.message}`), {
+                extra: { context: 'BulkQuoteImport existing quote check', quoteNumber },
+              });
+              details.push(`Quote ${quoteNumber}: Failed to check existing quote numbers - ${existingQuoteResult.error.message}`);
+              failCount++;
+              continue;
+            }
+
+            const existingQuoteNumbers = (existingQuoteResult.data || [])
+              .map((quote: { quote_number?: string | null }) => quote.quote_number)
+              .filter((value): value is string => Boolean(value));
+            if (existingQuoteNumbers.length > 0) {
+              const caseVariants = existingQuoteNumbers.filter((value) => value !== quoteNumber);
+              const suffix = caseVariants.length > 0
+                ? ` Existing case variant(s): ${caseVariants.join(', ')}.`
+                : '';
+              details.push(`Quote ${quoteNumber}: Quote number already exists.${suffix}`);
+              failCount++;
+              continue;
+            }
+          }
+
           const sectionGroups = new Map<string, ParsedQuoteItem[]>();
           items.forEach((item) => {
             const sectionName = item.section_name || 'Default';
@@ -510,8 +567,11 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
               const acres = item.acres || 0;
               const hasActualRate = typeof item.actual_rate === 'number';
               const hasOzPerAcre = typeof item.oz_per_acre === 'number';
+              if (hasActualRate && !normalizeUnitName(item.rate_unit)) {
+                throw new Error(`Rate unit is required when actual_rate is supplied for product ${item.product_name}`);
+              }
               const actualRate = hasActualRate ? item.actual_rate! : hasOzPerAcre ? item.oz_per_acre! : null;
-              const rateUnit = hasActualRate ? item.rate_unit || 'oz' : hasOzPerAcre ? 'oz' : null;
+              const rateUnit = hasActualRate ? item.rate_unit! : hasOzPerAcre ? 'oz' : null;
               const rateConv = rateUnit
                 ? unitConversions.find((c: { unit: string; factor_oz: number }) => normalizeUnitName(c.unit) === normalizeUnitName(rateUnit))
                 : null;
@@ -597,13 +657,6 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
               is_planned: false,
             };
 
-            const idemPayloadScope = payloadFingerprint({
-              quotePayload: {
-                ...quotePayload,
-                expires_at: `valid_days:${validDays}`,
-              },
-              sectionsPayload,
-            });
             const idemKey = getImportIdempotencyKey(quoteNumber, idemPayloadScope);
             const { data, error } = await supabase.rpc('save_quote', {
               p_quote_id: null as unknown as string,
