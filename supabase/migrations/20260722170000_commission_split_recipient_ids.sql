@@ -48,9 +48,10 @@ DECLARE
   v_validator_hash text;
   v_bad_count integer;
 BEGIN
-  -- Baseline drift guard: the validator being replaced must be the exact body
-  -- deployed by 20260722134252. A different hash means another migration got
-  -- there first — stop and reconcile instead of clobbering.
+  -- Baseline drift guard: the validator being replaced must be the exact
+  -- LIVE body fetched from the catalog on 2026-07-22 (post-20260722150432
+  -- ledger state; md5 of pg_proc.prosrc). A different hash means another
+  -- migration got there first — stop and reconcile instead of clobbering.
   SELECT md5(p.prosrc)
     INTO v_validator_hash
     FROM pg_proc p
@@ -60,9 +61,40 @@ BEGIN
     RAISE EXCEPTION 'COMMISSION_VALIDATOR_BASELINE_DRIFT: %', v_validator_hash;
   END IF;
 
-  -- The guard being retired must still exist (we are the ones removing it).
+  -- Same drift pin for every other function this migration replaces or drops
+  -- (drift-review H2): all md5(prosrc) values fetched from LIVE on 2026-07-22,
+  -- post-20260722150432. Any mismatch = another migration touched the body
+  -- since review — abort instead of clobbering.
+  IF (SELECT md5(prosrc) FROM pg_proc
+       WHERE oid = to_regprocedure('public._insert_commissions_for_order(uuid,uuid,numeric,jsonb,date)'))
+     IS DISTINCT FROM '192d18e4fd1887bc8cc9cbfb2fa1644a' THEN
+    RAISE EXCEPTION 'COMMISSION_ORDER_HELPER_BASELINE_DRIFT';
+  END IF;
+  IF (SELECT md5(prosrc) FROM pg_proc
+       WHERE oid = to_regprocedure('public._insert_commissions_for_job(uuid,uuid,uuid,numeric,jsonb,date)'))
+     IS DISTINCT FROM '05452dbb099e31e44a45c6a82d46df58' THEN
+    RAISE EXCEPTION 'COMMISSION_JOB_HELPER_BASELINE_DRIFT';
+  END IF;
+  IF (SELECT md5(prosrc) FROM pg_proc
+       WHERE oid = to_regprocedure('public.list_commission_recipients()'))
+     IS DISTINCT FROM '1bdea0077f5e94f19750b8d64148ce0e' THEN
+    RAISE EXCEPTION 'COMMISSION_RECIPIENT_LIST_BASELINE_DRIFT';
+  END IF;
+  IF (SELECT md5(prosrc) FROM pg_proc
+       WHERE oid = to_regprocedure('public.commission_recipient_resolves(text)'))
+     IS DISTINCT FROM '9a19892622e213d0f25b043169d99418' THEN
+    RAISE EXCEPTION 'COMMISSION_RESOLVES_HELPER_BASELINE_DRIFT';
+  END IF;
+
+  -- The guard being retired must still exist (we are the ones removing it)
+  -- and carry the exact reviewed body from live 20260722150432.
   IF to_regprocedure('public._guard_recipient_name_reuse()') IS NULL THEN
     RAISE EXCEPTION 'COMMISSION_NAME_REUSE_GUARD_ALREADY_GONE';
+  END IF;
+  IF (SELECT md5(prosrc) FROM pg_proc
+       WHERE oid = to_regprocedure('public._guard_recipient_name_reuse()'))
+     IS DISTINCT FROM '0b74292a2961d22ffd266b8ef25103e3' THEN
+    RAISE EXCEPTION 'COMMISSION_NAME_REUSE_GUARD_BASELINE_DRIFT';
   END IF;
 
   -- Every stored split recipient (ALL rows, including soft-deleted quotes and
