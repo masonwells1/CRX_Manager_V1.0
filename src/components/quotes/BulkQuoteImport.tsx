@@ -71,6 +71,9 @@ const IMPORTABLE_QUOTE_STATUSES = new Set(['draft']);
 const normalizeQuoteNumber = (quoteNumber?: string | null): string =>
   quoteNumber?.trim().toUpperCase() ?? '';
 
+const escapeIlikePattern = (value: string): string =>
+  value.replace(/[\\%_]/g, (match) => `\\${match}`);
+
 const normalizeUnitName = (unit?: string | null): string =>
   unit?.toLowerCase().trim() ?? '';
 
@@ -515,7 +518,7 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
             const existingQuoteResult = await supabase
               .from('quotes')
               .select('quote_number')
-              .ilike('quote_number', quoteNumber);
+              .ilike('quote_number', escapeIlikePattern(quoteNumber));
             if (existingQuoteResult.error) {
               Sentry.captureException(new Error(`Failed to check existing quote numbers: ${existingQuoteResult.error.message}`), {
                 extra: { context: 'BulkQuoteImport existing quote check', quoteNumber },

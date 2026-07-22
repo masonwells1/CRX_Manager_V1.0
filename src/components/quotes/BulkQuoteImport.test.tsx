@@ -411,6 +411,47 @@ describe('BulkQuoteImport', () => {
     expect(onSuccess).not.toHaveBeenCalled();
   });
 
+  it('escapes wildcard characters when checking existing quote numbers', async () => {
+    const quotesBuilder = mocks.chainable({
+      data: [],
+      error: null,
+    });
+    mocks.from
+      .mockImplementationOnce(() => mocks.chainable({
+        data: [{ id: 'customer-1', farm_name: 'North Farm' }],
+        error: null,
+      }))
+      .mockImplementationOnce(() => mocks.chainable({
+        data: [{ id: 'product-1', product_name: 'Roundup', sku: 'RU-1', current_cost: 10, inventory_unit: 'Gallon', unit_size: null }],
+        error: null,
+      }))
+      .mockImplementationOnce(() => mocks.chainable({
+        data: [{ unit: 'oz', factor_oz: 1 }, { unit: 'Gallon', factor_oz: 128 }],
+        error: null,
+      }))
+      .mockImplementationOnce(() => quotesBuilder);
+
+    const { container } = render(<BulkQuoteImport {...defaultProps} />);
+    const csv = [
+      'quote_number,customer_farm_name,product_name,acres,price_per_unit,oz_per_acre,status',
+      'q_8%50,North Farm,Roundup,10,20,32,draft',
+    ].join('\n');
+    const file = new File([csv], 'quotes.csv', { type: 'text/csv' });
+    Object.defineProperty(file, 'text', { value: () => Promise.resolve(csv) });
+
+    const input = container.querySelector('input[type="file"]');
+    expect(input).toBeTruthy();
+    fireEvent.change(input as HTMLInputElement, { target: { files: [file] } });
+    await screen.findByText(/quotes\.csv/i);
+    fireEvent.click(screen.getByRole('button', { name: /parse file/i }));
+
+    await screen.findByText(/Q_8%50/);
+    fireEvent.click(screen.getByRole('button', { name: /import 1 quote/i }));
+
+    await waitFor(() => expect(quotesBuilder.ilike).toHaveBeenCalledWith('quote_number', 'Q\\_8\\%50'));
+    expect(mocks.rpc).toHaveBeenCalledWith('save_quote', expect.anything());
+  });
+
   it('does not fail an acknowledged import when activity logging fails', async () => {
     mocks.logActivity.mockRejectedValueOnce(new Error('activity down'));
     const onSuccess = vi.fn();
