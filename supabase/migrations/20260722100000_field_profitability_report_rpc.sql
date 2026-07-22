@@ -63,74 +63,6 @@ BEGIN
         OR i.salesman_id = auth.uid()
       )
   ),
-  job_backed_children AS (
-    -- transfer_job_to_invoice invoices: job_id set, no field_app_locations for
-    -- the invoice or its group.
-    SELECT
-      ei.invoice_id,
-      ei.customer_id,
-      ei.invoice_group_id,
-      ei.job_id,
-      ei.invoice_season,
-      ei.invoice_revenue_cents,
-      ei.invoice_cost_cents
-    FROM eligible_invoices ei
-    WHERE ei.job_id IS NOT NULL
-      AND NOT EXISTS (
-        SELECT 1 FROM public.field_app_locations fal2
-        WHERE fal2.invoice_id = ei.invoice_id
-           OR (ei.invoice_group_id IS NOT NULL
-               AND fal2.invoice_group_id = ei.invoice_group_id)
-      )
-  ),
-  job_backed_weights AS (
-    -- Per-field spread weights. Grouped children mirror the writer: FBD share
-    -- when the field has billing defaults, otherwise 100% to the field owner.
-    -- Weights are used ONLY for the spread; totals anchor to the stored
-    -- invoice_shares.acres snapshot below.
-    SELECT
-      jbc.invoice_id,
-      jbc.customer_id,
-      jbc.invoice_season,
-      jbc.invoice_revenue_cents,
-      jbc.invoice_cost_cents,
-      jf.id AS location_id,
-      jf.field_id,
-      CASE
-        WHEN jbc.invoice_group_id IS NULL
-          THEN GREATEST(COALESCE(jf.acres_to_treat, 0), 0)
-        ELSE GREATEST(COALESCE(jf.acres_to_treat, 0), 0)
-             * CASE
-                 WHEN EXISTS (
-                   SELECT 1 FROM public.field_billing_defaults fbd_any
-                   WHERE fbd_any.field_id = jf.field_id
-                 ) THEN COALESCE(fbd.split_pct, 0)
-                 WHEN fld.customer_id = jbc.customer_id THEN 100
-                 ELSE 0
-               END / 100.0
-      END AS weight
-    FROM job_backed_children jbc
-    JOIN public.job_fields jf
-      ON jf.job_id = jbc.job_id
-    JOIN public.fields fld
-      ON fld.id = jf.field_id
-    LEFT JOIN public.field_billing_defaults fbd
-      ON fbd.field_id = jf.field_id
-     AND fbd.customer_id = jbc.customer_id
-  ),
-  job_backed_weight_totals AS (
-    SELECT
-      jbw.invoice_id,
-      SUM(jbw.weight) AS weight_total,
-      -- Billed-acreage snapshot the writer stored at posting time (the
-      -- 100%-self invoice_shares row). Anchors historical acres so later
-      -- ownership edits cannot change a posted invoice's total acres.
-      (SELECT NULLIF(SUM(GREATEST(COALESCE(ish.acres, 0), 0)), 0)
-         FROM public.invoice_shares ish
-        WHERE ish.invoice_id = jbw.invoice_id) AS snapshot_acres
-    FROM job_backed_weights jbw
-    GROUP BY jbw.invoice_id
-  ),
   grouped_location_shares AS (
     SELECT
       s.location_id,
@@ -155,26 +87,6 @@ BEGIN
       ON fal.invoice_id = ei.invoice_id
     WHERE ei.invoice_group_id IS NULL
       AND COALESCE(fal.applied_acres, 0) >= 0
-
-    UNION ALL
-
-    -- Job-backed fallback (transfer_job_to_invoice writes NO locations):
-    -- spread each invoice's money across its job fields by the weight CTEs
-    -- above. Zero/absent weights (e.g. ownership edited away) get NO basis rows
-    -- here and land in the unassigned bucket instead of a fabricated spread.
-    SELECT
-      jbw.invoice_id,
-      jbw.customer_id,
-      jbw.invoice_season,
-      jbw.invoice_revenue_cents,
-      jbw.invoice_cost_cents,
-      jbw.location_id,
-      jbw.field_id,
-      jbw.weight AS applied_acres
-    FROM job_backed_weights jbw
-    JOIN job_backed_weight_totals jbt
-      ON jbt.invoice_id = jbw.invoice_id
-     AND jbt.weight_total > 0
 
     UNION ALL
 
@@ -380,27 +292,6 @@ BEGIN
     WHERE COALESCE(fal.applied_acres, 0) >= 0
     GROUP BY eui.invoice_id, eui.customer_id, eui.invoice_season, fal.field_id
   ),
-  job_backed_acres_by_scope_field AS (
-    -- Acres anchor to the stored invoice_shares.acres snapshot (what the child
-    -- was actually billed), spread across fields by the same weights as the
-    -- money; if no snapshot exists, fall back to the raw weights.
-    SELECT
-      jbw.customer_id,
-      jbw.invoice_season,
-      jbw.field_id,
-      SUM(
-        CASE
-          WHEN jbt.snapshot_acres IS NOT NULL
-            THEN jbt.snapshot_acres * jbw.weight / jbt.weight_total
-          ELSE jbw.weight
-        END
-      ) AS applied_acres
-    FROM job_backed_weights jbw
-    JOIN job_backed_weight_totals jbt
-      ON jbt.invoice_id = jbw.invoice_id
-     AND jbt.weight_total > 0
-    GROUP BY jbw.invoice_id, jbw.customer_id, jbw.invoice_season, jbw.field_id
-  ),
   grouped_share_acres_by_scope_field AS (
     -- Count each eligible child's customer share once per group. DISTINCT in
     -- eligible_group_customers prevents duplicate child rows from doubling acres.
@@ -497,8 +388,6 @@ BEGIN
   acres_by_scope_field AS (
     SELECT * FROM ungrouped_acres_by_scope_field
     UNION ALL
-    SELECT * FROM job_backed_acres_by_scope_field
-    UNION ALL
     SELECT * FROM grouped_share_acres_by_scope_field
     UNION ALL
     SELECT * FROM grouped_invoice_share_acres_by_scope_field
@@ -515,18 +404,20 @@ BEGIN
     GROUP BY absf.field_id, absf.customer_id, absf.invoice_season
   ),
   unassigned_invoices AS (
+    -- Invoices with NO durable field attribution: no field_app_locations for
+    -- the invoice or its group. This includes ALL transfer_job_to_invoice
+    -- invoices - deliberately NOT spread over job_fields/field_billing_defaults
+    -- because those are mutable current state (editable after posting);
+    -- presenting a mutable spread as historical profitability was rejected in
+    -- review. Their money reports exactly, per billed customer, with zero
+    -- acres, until a durable per-field posting snapshot exists.
     SELECT
       ei.invoice_id,
-      i.customer_id,
-      c.farm_name AS customer_name,
+      ei.customer_id AS header_customer_id,
       ei.invoice_season,
       ei.invoice_revenue_cents,
       ei.invoice_cost_cents
     FROM eligible_invoices ei
-    JOIN public.invoices i
-      ON i.id = ei.invoice_id
-    LEFT JOIN public.customers c
-      ON c.id = i.customer_id
     WHERE NOT EXISTS (
       SELECT 1
       FROM public.field_app_locations fal
@@ -541,11 +432,100 @@ BEGIN
       )
       AND COALESCE(fal.applied_acres, 0) >= 0
     )
-    AND NOT EXISTS (
-      SELECT 1 FROM job_backed_weight_totals jbt
-      WHERE jbt.invoice_id = ei.invoice_id
-        AND jbt.weight_total > 0
-    )
+  ),
+  unassigned_share_sums AS (
+    -- Durable invoice_shares splits (e.g. a landlord/tenant share on a single
+    -- invoice): revenue follows the stored share amounts exactly.
+    SELECT
+      ui.invoice_id,
+      ish.customer_id,
+      SUM(GREATEST(COALESCE(ish.amount_cents, 0), 0))::bigint AS share_cents
+    FROM unassigned_invoices ui
+    JOIN public.invoice_shares ish
+      ON ish.invoice_id = ui.invoice_id
+    GROUP BY ui.invoice_id, ish.customer_id
+    HAVING SUM(GREATEST(COALESCE(ish.amount_cents, 0), 0)) > 0
+  ),
+  unassigned_units_raw AS (
+    SELECT
+      ui.invoice_id,
+      uss.customer_id,
+      ui.invoice_season,
+      uss.share_cents AS revenue_cents
+    FROM unassigned_invoices ui
+    JOIN unassigned_share_sums uss
+      ON uss.invoice_id = ui.invoice_id
+    UNION ALL
+    -- Residual (or the whole invoice when no usable shares) goes to the header
+    -- customer, so every invoice's revenue lands exactly once to the cent.
+    SELECT
+      ui.invoice_id,
+      ui.header_customer_id,
+      ui.invoice_season,
+      ui.invoice_revenue_cents
+        - COALESCE((SELECT SUM(uss2.share_cents)
+                      FROM unassigned_share_sums uss2
+                     WHERE uss2.invoice_id = ui.invoice_id), 0) AS revenue_cents
+    FROM unassigned_invoices ui
+    WHERE ui.invoice_revenue_cents
+        - COALESCE((SELECT SUM(uss2.share_cents)
+                      FROM unassigned_share_sums uss2
+                     WHERE uss2.invoice_id = ui.invoice_id), 0) <> 0
+       OR NOT EXISTS (
+        SELECT 1 FROM unassigned_share_sums uss3
+        WHERE uss3.invoice_id = ui.invoice_id
+      )
+  ),
+  unassigned_units AS (
+    SELECT
+      uur.invoice_id,
+      uur.customer_id,
+      uur.invoice_season,
+      SUM(uur.revenue_cents)::bigint AS revenue_cents
+    FROM unassigned_units_raw uur
+    GROUP BY uur.invoice_id, uur.customer_id, uur.invoice_season
+  ),
+  unassigned_cost_alloc AS (
+    -- Cost follows revenue proportionally with integer largest-remainder;
+    -- single-unit invoices (all current writers) pass cost through exactly.
+    SELECT
+      uu.invoice_id,
+      uu.customer_id,
+      uu.invoice_season,
+      uu.revenue_cents,
+      ui.invoice_cost_cents,
+      SUM(uu.revenue_cents) OVER (PARTITION BY uu.invoice_id) AS invoice_rev_total,
+      COUNT(*) OVER (PARTITION BY uu.invoice_id) AS unit_count,
+      ROW_NUMBER() OVER (
+        PARTITION BY uu.invoice_id ORDER BY uu.revenue_cents DESC, uu.customer_id
+      ) AS unit_rank
+    FROM unassigned_units uu
+    JOIN unassigned_invoices ui
+      ON ui.invoice_id = uu.invoice_id
+  ),
+  unassigned_cost_floors AS (
+    SELECT
+      uca.*,
+      CASE
+        WHEN uca.invoice_rev_total > 0
+          THEN FLOOR(uca.invoice_cost_cents::numeric * uca.revenue_cents / uca.invoice_rev_total)::bigint
+        ELSE FLOOR(uca.invoice_cost_cents::numeric / uca.unit_count)::bigint
+      END AS cost_floor_cents
+    FROM unassigned_cost_alloc uca
+  ),
+  unassigned_final AS (
+    SELECT
+      ucf.customer_id,
+      ucf.invoice_season,
+      ucf.revenue_cents,
+      (ucf.cost_floor_cents
+        + CASE
+            WHEN ucf.unit_rank
+              <= ucf.invoice_cost_cents
+                 - SUM(ucf.cost_floor_cents) OVER (PARTITION BY ucf.invoice_id)
+            THEN 1 ELSE 0
+          END)::bigint AS cost_cents
+    FROM unassigned_cost_floors ucf
   )
   SELECT
     f.id AS field_id,
@@ -580,16 +560,18 @@ BEGIN
   SELECT
     NULL::uuid AS field_id,
     '(unassigned field)'::text AS field_name,
-    ui.customer_id,
-    ui.customer_name,
-    ui.invoice_season AS season,
+    uf.customer_id,
+    c2.farm_name AS customer_name,
+    uf.invoice_season AS season,
     0::numeric AS total_acres_applied,
-    SUM(ui.invoice_revenue_cents)::bigint AS revenue_cents,
-    SUM(ui.invoice_cost_cents)::bigint AS cost_cents,
-    (SUM(ui.invoice_revenue_cents) - SUM(ui.invoice_cost_cents))::bigint AS margin_cents,
+    SUM(uf.revenue_cents)::bigint AS revenue_cents,
+    SUM(uf.cost_cents)::bigint AS cost_cents,
+    (SUM(uf.revenue_cents) - SUM(uf.cost_cents))::bigint AS margin_cents,
     0::bigint AS margin_per_acre_cents
-  FROM unassigned_invoices ui
-  GROUP BY ui.customer_id, ui.customer_name, ui.invoice_season
+  FROM unassigned_final uf
+  LEFT JOIN public.customers c2
+    ON c2.id = uf.customer_id
+  GROUP BY uf.customer_id, c2.farm_name, uf.invoice_season
   ORDER BY 4, 2, 5;
 END;
 $$;
