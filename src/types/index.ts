@@ -520,7 +520,10 @@ export interface ProductCostBasisChangeRow {
 }
 
 export interface CommissionSplit {
-  splits: Array<{ recipient: string; percentage: number }>;
+  /** recipient is the display name; recipient_user_id (profile UUID, stamped
+   *  by the DB on write since migration 20260722170000) is authoritative for
+   *  routing. Optional because pre-migration rows and drafts may lack it. */
+  splits: Array<{ recipient: string; recipient_user_id?: string | null; percentage: number }>;
 }
 
 export interface Customer {

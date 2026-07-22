@@ -192,7 +192,7 @@ export function computeQuoteTotals(items: CalcItem[]): {
 
 /** Mirror the database commission-split contract for immediate UI feedback. */
 export function validateCommissionSplits(
-  splits: Array<{ recipient: string; percentage: number }>
+  splits: Array<{ recipient: string; recipient_user_id?: string | null; percentage: number }>
 ): string | null {
   if (splits.length === 0) return null;
 

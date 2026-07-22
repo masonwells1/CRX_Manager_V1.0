@@ -43,7 +43,7 @@ interface CreateDirectOrderParams {
     net_margin: number;
     notes: string | null;
   }>;
-  p_commission_split: { splits: Array<{ recipient: string; percentage: number }> } | null;
+  p_commission_split: { splits: Array<{ recipient: string; recipient_user_id?: string | null; percentage: number }> } | null;
   p_performed_by: string;
 }
 
@@ -62,7 +62,7 @@ interface SaveQuoteParams {
   p_tier: number;
   p_status: string;
   p_is_planned: boolean;
-  p_commission_split: { splits: Array<{ recipient: string; percentage: number }> } | null;
+  p_commission_split: { splits: Array<{ recipient: string; recipient_user_id?: string | null; percentage: number }> } | null;
   p_valid_days: number;
   p_header_notes: string | null;
   p_footer_notes: string | null;
@@ -109,7 +109,7 @@ interface SaveCustomerParams {
     soybean_acres?: number | null;
     other_acres?: number | null;
     payment_terms?: string | null;
-    default_commission_split?: { splits: Array<{ recipient: string; percentage: number }> } | null;
+    default_commission_split?: { splits: Array<{ recipient: string; recipient_user_id?: string | null; percentage: number }> } | null;
     notes?: string | null;
     is_active?: boolean;
     credit_limit_cents?: number | null;
