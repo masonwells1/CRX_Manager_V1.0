@@ -10,7 +10,7 @@ const source = (...parts: string[]) =>
 const migration = source(
   'supabase',
   'migrations',
-  '20260722191804_section9_po_ap_high_remediation.sql',
+  '20260722222742_section9_po_ap_high_remediation.sql',
 );
 
 describe('Section 9 PO/AP HIGH remediation contracts', () => {
