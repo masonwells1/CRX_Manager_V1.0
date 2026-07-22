@@ -293,33 +293,89 @@ BEGIN
      AND gls.customer_id = egc.customer_id
     GROUP BY egc.invoice_group_id, egc.customer_id, egc.invoice_season, fal.field_id
   ),
-  grouped_legacy_acres_by_scope_field AS (
-    -- If an entire legacy group predates location shares, each child's money was
-    -- allocated over the whole group's locations, so attribute the whole-group
-    -- acres to EACH child customer (keeps that customer's margin/acre consistent
-    -- with its whole-group allocation).
+  no_location_share_group_children AS (
+    -- Groups whose locations carry NO field_app_location_shares rows. This is
+    -- the CURRENT per-line split writer's shape (group-level field_app_locations,
+    -- per-child acres in invoice_shares.acres) as well as true legacy groups.
     SELECT
-      egc.customer_id,
-      egc.invoice_season,
-      fal.field_id,
-      SUM(COALESCE(fal.applied_acres, 0)) AS applied_acres
-    FROM eligible_group_customers egc
-    JOIN public.field_app_locations fal
-      ON fal.invoice_group_id = egc.invoice_group_id
-    WHERE COALESCE(fal.applied_acres, 0) >= 0
+      ei.invoice_id,
+      ei.invoice_group_id,
+      ei.customer_id,
+      ei.invoice_season
+    FROM eligible_invoices ei
+    WHERE ei.invoice_group_id IS NOT NULL
       AND NOT EXISTS (
         SELECT 1
         FROM public.field_app_locations share_fal
         JOIN public.field_app_location_shares s
           ON s.location_id = share_fal.id
-        WHERE share_fal.invoice_group_id = egc.invoice_group_id
+        WHERE share_fal.invoice_group_id = ei.invoice_group_id
       )
-    GROUP BY egc.invoice_group_id, egc.customer_id, egc.invoice_season, fal.field_id
+  ),
+  group_location_acres AS (
+    SELECT
+      fal.invoice_group_id,
+      fal.field_id,
+      SUM(COALESCE(fal.applied_acres, 0)) AS field_acres,
+      SUM(SUM(COALESCE(fal.applied_acres, 0))) OVER (
+        PARTITION BY fal.invoice_group_id
+      ) AS group_acres
+    FROM public.field_app_locations fal
+    WHERE fal.invoice_group_id IS NOT NULL
+      AND COALESCE(fal.applied_acres, 0) >= 0
+    GROUP BY fal.invoice_group_id, fal.field_id
+  ),
+  grouped_invoice_share_acres_by_scope_field AS (
+    -- Current split writer: the child's own allocated acres live in
+    -- invoice_shares.acres. Spread that child total across the group's fields
+    -- proportionally by location acres (numeric, no cent constraint).
+    SELECT
+      nlc.customer_id,
+      nlc.invoice_season,
+      gla.field_id,
+      SUM(
+        child_acres.total_acres
+        * CASE WHEN gla.group_acres > 0
+               THEN gla.field_acres / gla.group_acres
+               ELSE 0 END
+      ) AS applied_acres
+    FROM no_location_share_group_children nlc
+    JOIN LATERAL (
+      SELECT SUM(GREATEST(COALESCE(ish.acres, 0), 0)) AS total_acres
+      FROM public.invoice_shares ish
+      WHERE ish.invoice_id = nlc.invoice_id
+    ) child_acres ON child_acres.total_acres IS NOT NULL AND child_acres.total_acres > 0
+    JOIN group_location_acres gla
+      ON gla.invoice_group_id = nlc.invoice_group_id
+    GROUP BY nlc.invoice_group_id, nlc.customer_id, nlc.invoice_season, gla.field_id
+  ),
+  grouped_legacy_acres_by_scope_field AS (
+    -- TRUE legacy only: no location shares AND no usable invoice_shares acres.
+    -- The child's money was allocated over the whole group's locations, so
+    -- attribute the whole-group acres to EACH such child customer.
+    SELECT
+      nlc.customer_id,
+      nlc.invoice_season,
+      fal.field_id,
+      SUM(COALESCE(fal.applied_acres, 0)) AS applied_acres
+    FROM no_location_share_group_children nlc
+    JOIN public.field_app_locations fal
+      ON fal.invoice_group_id = nlc.invoice_group_id
+    WHERE COALESCE(fal.applied_acres, 0) >= 0
+      AND NOT EXISTS (
+        SELECT 1
+        FROM public.invoice_shares ish
+        WHERE ish.invoice_id = nlc.invoice_id
+          AND COALESCE(ish.acres, 0) > 0
+      )
+    GROUP BY nlc.invoice_group_id, nlc.customer_id, nlc.invoice_season, fal.field_id
   ),
   acres_by_scope_field AS (
     SELECT * FROM ungrouped_acres_by_scope_field
     UNION ALL
     SELECT * FROM grouped_share_acres_by_scope_field
+    UNION ALL
+    SELECT * FROM grouped_invoice_share_acres_by_scope_field
     UNION ALL
     SELECT * FROM grouped_legacy_acres_by_scope_field
   ),
