@@ -33,9 +33,11 @@ SELECT
     AS violation_key,
   'Main Warehouse quantity_on_order differs from open PO remainder' AS reason
 FROM expected_on_order e
-FULL JOIN public.inventory i
-  ON i.product_id = e.product_id
- AND i.location = 'Main Warehouse'
+FULL JOIN (
+  SELECT product_id, quantity_on_order
+  FROM public.inventory
+  WHERE location = 'Main Warehouse'
+) i ON i.product_id = e.product_id
 WHERE COALESCE(i.quantity_on_order, 0)
       IS DISTINCT FROM COALESCE(e.expected, 0)
 

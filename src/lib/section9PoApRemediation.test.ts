@@ -76,7 +76,11 @@ describe('Section 9 PO/AP HIGH remediation contracts', () => {
     expect(page).toContain('Current AP only.');
     expect(page).toContain('Exact historical AP is unavailable');
     expect(page).toContain("timeZone: 'America/Chicago'");
-    expect(page).toContain('const requestAsOfDate = chicagoBusinessToday()');
+    expect(page).toContain("supabase.rpc('get_ap_aging')");
+    expect(page).not.toContain('requestAsOfDate');
+    expect(migration).toContain(
+      "DEFAULT ((clock_timestamp() AT TIME ZONE 'America/Chicago')::date)",
+    );
     expect(page).toMatch(/type="date"[\s\S]*?value=\{asOfDate\}[\s\S]*?disabled/);
   });
 
@@ -111,7 +115,19 @@ describe('Section 9 PO/AP HIGH remediation contracts', () => {
     expect(registry).toContain('smoke-section9-po-ap-high-remediation.sql');
     expect(sweep).toContain('vendors:browser-mutation-privilege');
     expect(sweep).toContain('vendor_bills:invalid-po:');
+    expect(sweep).toMatch(
+      /FULL JOIN \(\s*SELECT product_id, quantity_on_order\s*FROM public\.inventory\s*WHERE location = 'Main Warehouse'\s*\) i/,
+    );
     expect(concurrency).toContain('SECTION9_PO_AP_CONCURRENCY_PASS');
     expect(concurrency).toContain("'--network', 'none'");
+    expect(concurrency).toContain('SQL exited before marker');
+
+    const areas = source('scripts', 'test-areas.json');
+    const lifecycle = areas.slice(
+      areas.indexOf('"lifecycle"'),
+      areas.indexOf('"pricing"'),
+    );
+    expect(lifecycle).toContain('src/lib/section9PoApRemediation.test.ts');
+    expect(lifecycle).toContain('section9-po-ap-controls');
   });
 });

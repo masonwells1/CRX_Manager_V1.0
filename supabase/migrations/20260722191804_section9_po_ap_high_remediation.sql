@@ -552,7 +552,7 @@ $function$;
 -- ---------------------------------------------------------------------------
 
 CREATE OR REPLACE FUNCTION public.get_ap_aging(
-  p_as_of_date date DEFAULT ((CURRENT_TIMESTAMP AT TIME ZONE 'America/Chicago')::date)
+  p_as_of_date date DEFAULT ((clock_timestamp() AT TIME ZONE 'America/Chicago')::date)
 )
 RETURNS TABLE(
   vendor_id uuid,

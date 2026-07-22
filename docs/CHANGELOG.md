@@ -2,6 +2,10 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-22 — Section 09 PO/AP remediation review close-out
+
+- Addressed all four CodeRabbit findings before PR #218 merge: the standing on-order invariant now compares only Main Warehouse inventory rows; the two-session concurrency harness rejects readiness when its SQL child exits early; the lifecycle test area now includes the Section 09 contract test and invariant sweep; and current-only AP aging now lets PostgreSQL own the Chicago business date. The RPC default and its fail-closed guard both use `clock_timestamp()`, avoiding browser-clock skew and transaction-boundary date disagreement. Focused, lifecycle, typecheck, and isolated four-race concurrency proofs passed after the changes. The migration remains pending live apply.
+
 ## 2026-07-22 — Cross-session coordination for landing PR #213: pinged the duplicate chip session (stand down, migration 20260722172533 already live) and the id-redesign session (landing order #216 then #213); armed a persistent monitor on PR #216 merge that triggers the #213 landing path; recorded id-redesign confirmation that invoiced-jobs revival is covered by id-precedence routing plus the residual deactivated-name/invoiced-window guard corner in KNOWN_ISSUES §1b; spawned follow-up chip task_0bbf4089 (widen reuse guard to invoiced jobs) and withdrew superseded chip task_87490ee3.
 
 Cross-session coordination for landing PR #213: pinged the duplicate chip session (stand down, migration 20260722172533 already live) and the id-redesign session (landing order #216 then #213); armed a persistent monitor on PR #216 merge that triggers the #213 landing path; recorded id-redesign confirmation that invoiced-jobs revival is covered by id-precedence routing plus the residual deactivated-name/invoiced-window guard corner in KNOWN_ISSUES §1b; spawned follow-up chip task_0bbf4089 (widen reuse guard to invoiced jobs) and withdrew superseded chip task_87490ee3.

@@ -103,9 +103,20 @@ function startSqlWithMarker(sql, marker) {
   child.stderr.on('data', (chunk) => { stderr += chunk; });
   child.stdin.end(sql);
   const completion = new Promise((resolve, reject) => {
-    child.once('error', reject);
+    child.once('error', (error) => {
+      clearTimeout(timeout);
+      if (!readySettled) {
+        readySettled = true;
+        readyReject(error);
+      }
+      reject(error);
+    });
     child.once('close', (code, signal) => {
       clearTimeout(timeout);
+      if (!readySettled) {
+        readySettled = true;
+        readyReject(new Error(`SQL exited before marker ${marker}: ${stderr || stdout}`));
+      }
       resolve({ code, signal, stdout, stderr });
     });
   });

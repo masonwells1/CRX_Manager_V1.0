@@ -72,6 +72,7 @@
         "src/lib/quotePdf.test.ts",
         "src/lib/jobSaveHelpers.test.ts",
         "src/lib/deliveryLifecycle.test.ts",
+        "src/lib/section9PoApRemediation.test.ts",
         "src/lib/businessLogicEnhancements.test.ts",
         "src/lib/routeOrder.test.ts",
         "src/components/jobs",
@@ -81,7 +82,8 @@
       ],
       "sweeps": [
         "status-literals",
-        "returns-lifecycle-rpc-owned"
+        "returns-lifecycle-rpc-owned",
+        "section9-po-ap-controls"
       ]
     },
     "pricing": {

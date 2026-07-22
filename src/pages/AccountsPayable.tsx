@@ -52,10 +52,8 @@ export default function AccountsPayable() {
   }, [toast]);
 
   const fetchAging = useCallback(async () => {
-    // Resolve at request time so a tab left open across Chicago midnight does
-    // not send yesterday's now-unsupported current-only report date.
-    const requestAsOfDate = chicagoBusinessToday();
-    const { data, error } = await supabase.rpc('get_ap_aging', { p_as_of_date: requestAsOfDate });
+    // The server owns the Chicago business date for this current-only report.
+    const { data, error } = await supabase.rpc('get_ap_aging');
     if (error) {
       Sentry.captureException(error);
       toast('error', 'Failed to load AP aging data');
