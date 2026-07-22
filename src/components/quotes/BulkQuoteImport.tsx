@@ -8,6 +8,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { processDocumentWithOCR, isCSVFile, isOCRSupported } from '../../lib/documentOCR';
 import { generateIdempotencyKey } from '../../lib/idempotency';
 import { Sentry } from '../../lib/sentry';
+import { logActivity } from '../../lib/activityLogger';
 import type { Json } from '../../types/supabase';
 
 interface BulkQuoteImportProps {
@@ -365,6 +366,17 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
             continue;
           }
 
+          const missingProducts = Array.from(new Set(
+            items
+              .filter((item) => !productMap.has(item.product_name.toLowerCase().trim()))
+              .map((item) => item.product_name)
+          )).sort((a, b) => a.localeCompare(b));
+          if (missingProducts.length > 0) {
+            details.push(`Quote ${quoteNumber}: Product(s) not found - ${missingProducts.join(', ')}`);
+            failCount++;
+            continue;
+          }
+
           const sectionGroups = new Map<string, ParsedQuoteItem[]>();
           items.forEach((item) => {
             const sectionName = item.section_name || 'Default';
@@ -381,19 +393,17 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
           const sectionsPayload = Array.from(sectionGroups.entries()).map(([sectionName, sectionItems], sectionIndex) => {
             const sectionItemsPayload = sectionItems
               .map((item, itemIndex) => {
-              const productId = productMap.get(item.product_name.toLowerCase().trim());
-
-              if (!productId) {
-                return null;
-              }
+              const productId = productMap.get(item.product_name.toLowerCase().trim())!;
 
               const product = productDetailsById.get(productId);
               const current_cost = product?.current_cost || 0;
               const hasPriceOverride = typeof item.price_per_unit === 'number';
               const price_per_unit = hasPriceOverride ? item.price_per_unit! : 0;
               const acres = item.acres || 0;
-              const actualRate = item.actual_rate ?? item.oz_per_acre ?? null;
-              const rateUnit = item.rate_unit || (actualRate !== null ? 'oz' : null);
+              const hasActualRate = typeof item.actual_rate === 'number';
+              const hasOzPerAcre = typeof item.oz_per_acre === 'number';
+              const actualRate = hasActualRate ? item.actual_rate! : hasOzPerAcre ? item.oz_per_acre! : null;
+              const rateUnit = hasActualRate ? item.rate_unit || 'oz' : hasOzPerAcre ? 'oz' : null;
               const rateConv = rateUnit
                 ? unitConversions.find((c: { unit: string; factor_oz: number }) => c.unit.toLowerCase() === rateUnit.toLowerCase())
                 : null;
@@ -437,8 +447,7 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
                 unit_size: null,
                 notes: item.notes || null,
               };
-            })
-            .filter((item): item is NonNullable<typeof item> => item !== null);
+            });
 
             return {
               section_name: sectionName,
@@ -487,7 +496,15 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
               continue;
             }
 
-            assertRpcResult<{ quote_id: string }>(data, 'save_quote');
+            const result = assertRpcResult<{ quote_id: string }>(data, 'save_quote');
+            await logActivity({
+              event: 'quote_bulk_imported',
+              description: `Bulk imported quote ${quoteNumber} with ${itemsCreated} item(s)`,
+              performedBy: profile.id,
+              entityType: 'quote',
+              entityId: result.quote_id,
+              customerId,
+            });
             clearImportIdempotencyKey(quoteNumber);
             details.push(`Quote ${quoteNumber}: Created with ${itemsCreated} items`);
             successCount++;

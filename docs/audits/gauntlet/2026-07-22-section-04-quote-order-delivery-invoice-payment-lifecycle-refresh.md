@@ -36,8 +36,8 @@ Remediation in this branch:
 
 - `src/components/quotes/BulkQuoteImport.tsx` restricts importable statuses to `draft` and sends all new quote payloads to `save_quote` as `draft`.
 - `src/components/quotes/BulkQuoteImport.tsx` keeps per-quote idempotency keys across file reselection/retry and clears them only after `save_quote` succeeds.
-- `src/components/quotes/BulkQuoteImport.tsx` translates CSV `oz_per_acre` into `actual_rate: <value>, rate_unit: 'oz'`, preserves explicit CSV prices as `price_override`, and restores Sentry reporting for unexpected parse/import failures.
-- `src/components/quotes/BulkQuoteImport.test.tsx` proves the RPC-only path, direct-insert absence, draft-only status, dosage translation, and price override payload.
+- `src/components/quotes/BulkQuoteImport.tsx` translates CSV `oz_per_acre` into `actual_rate: <value>, rate_unit: 'oz'`, preserves explicit CSV prices as `price_override`, rejects the whole quote when any grouped product is unknown, restores Sentry reporting for unexpected parse/import failures, and logs successful imports to `activity_feed`.
+- `src/components/quotes/BulkQuoteImport.test.tsx` proves the RPC-only path, direct-insert absence, draft-only status, dosage translation, price override payload, activity logging, and whole-quote rejection for unknown products.
 - `src/components/quotes/BulkQuoteImport.test.tsx` proves non-draft import status is rejected.
 
 Status: fixed in branch; no live database mutation required.
