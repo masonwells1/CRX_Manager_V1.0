@@ -252,13 +252,15 @@ describe('BulkQuoteImport', () => {
       .mockResolvedValueOnce({ data: null, error: { message: 'dropped response' } } as never)
       .mockResolvedValueOnce({ data: { quote_id: 'quote-1' }, error: null });
     const { container } = render(<BulkQuoteImport {...defaultProps} />);
+    const firstNote = '\u{1F601}';
+    const secondNote = '\u{1F602}';
     const firstCsv = [
-      'quote_number,customer_farm_name,product_name,acres,price_per_unit,oz_per_acre,status',
-      'Q-800,North Farm,Roundup,10,20,32,draft',
+      'quote_number,customer_farm_name,product_name,acres,price_per_unit,oz_per_acre,status,notes',
+      `Q-800,North Farm,Roundup,10,20,32,draft,${firstNote}`,
     ].join('\n');
     const secondCsv = [
-      'quote_number,customer_farm_name,product_name,acres,price_per_unit,oz_per_acre,status',
-      'Q-800,North Farm,Roundup,10,21,32,draft',
+      'quote_number,customer_farm_name,product_name,acres,price_per_unit,oz_per_acre,status,notes',
+      `Q-800,North Farm,Roundup,10,20,32,draft,${secondNote}`,
     ].join('\n');
     const input = container.querySelector('input[type="file"]');
     expect(input).toBeTruthy();
