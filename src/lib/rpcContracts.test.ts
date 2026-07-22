@@ -2136,6 +2136,8 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
     'idempotency infrastructure helper (sections 2-6 closeout): binds a completed lifecycle result to its key; direct client EXECUTE is revoked',
   _claim_bound_lifecycle_idempotency:
     'idempotency infrastructure helper (sections 2-6 closeout): claims a bound lifecycle key for replay; direct client EXECUTE is revoked',
+  _guard_recipient_name_reuse:
+    "read-only BEFORE trigger on profiles with zero DML — it only SELECTs referenced-name state and RAISEs; the scanner false-flags it because its RAISE message literal contains the phrase 'update those splits'. Not client-callable (REVOKE PUBLIC/anon); no idempotency key applies to a trigger",
   _insert_commissions_for_job: 'internal helper; caller owns idempotency and direct EXECUTE is revoked',
   _insert_commissions_for_order: 'internal helper; caller owns idempotency and direct EXECUTE is revoked',
   _reverse_credit_memo_application: 'internal helper called only by idempotent credit-memo reversal RPCs',
