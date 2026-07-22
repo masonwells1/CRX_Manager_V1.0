@@ -2,6 +2,30 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-22 — Cross-session coordination for landing PR #213: pinged the duplicate chip session (stand down, migration 20260722172533 already live) and the id-redesign session (landing order #216 then #213); armed a persistent monitor on PR #216 merge that triggers the #213 landing path; recorded id-redesign confirmation that invoiced-jobs revival is covered by id-precedence routing plus the residual deactivated-name/invoiced-window guard corner in KNOWN_ISSUES §1b; spawned follow-up chip task_0bbf4089 (widen reuse guard to invoiced jobs) and withdrew superseded chip task_87490ee3.
+
+Cross-session coordination for landing PR #213: pinged the duplicate chip session (stand down, migration 20260722172533 already live) and the id-redesign session (landing order #216 then #213); armed a persistent monitor on PR #216 merge that triggers the #213 landing path; recorded id-redesign confirmation that invoiced-jobs revival is covered by id-precedence routing plus the residual deactivated-name/invoiced-window guard corner in KNOWN_ISSUES §1b; spawned follow-up chip task_0bbf4089 (widen reuse guard to invoiced jobs) and withdrew superseded chip task_87490ee3.
+
+- **Commits this session** (git log --since=12.hours --author=Mason):
+  - `d8a17601 Fix bulk quote import lifecycle path`
+  - `5c577703 Improve Codex session momentum guidance (#215)`
+  - `f36158bf Document Supplier Pricing Phase 3 execution contract (#214)`
+  - `85392e02 Record live inventory guard migration (#211)`
+  - `8e4bea10 Close out Supplier Cost Basis Phase 2 Wells canary (#210)`
+  - `016236fd Merge pull request #209 from masonwells1/claude/gauntlet-t3-sections-5-8`
+  - `e3ecc9b2 Fix inventory gauntlet section 3 findings (#208)`
+  - `b78535af Supplier Pricing: complete workbook v2 product info (#207)`
+  - `bf2a60ef Merge pull request #204 from masonwells1/claude/field-profitability`
+  - `5a3f49fa Merge pull request #206 from masonwells1/codex/supplier-pricing-integration`
+  - `466c2095 Merge pull request #205 from masonwells1/codex/supplier-cost-basis-phase2-frontend`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - `supabase/migrations/20260722134252_reject_unresolvable_commission_recipients.sql`
+  - `supabase/migrations/20260722144121_lock_commission_identity_names.sql`
+  - `supabase/migrations/20260722150432_forbid_referenced_recipient_name_acquisition.sql`
+  - `supabase/migrations/20260722154303_global_unique_profile_names.sql`
+  - `supabase/migrations/20260722162851_reuse_guard_covers_orders.sql`
+  - `supabase/migrations/20260722172533_reuse_guard_covers_revivable_quotes.sql`
+
 ## 2026-07-22 — Commission-recipient integrity close-out (gauntlet §7 + hardening)
 
 - Extended the recipient-name reservation to terminal-but-revivable quotes: live migration `20260722172533_reuse_guard_covers_revivable_quotes` widens the reuse guard's quotes branch to every non-deleted quote — declined/expired/cancelled quotes can be revived (`revert_quote_status`, `restore_quote_version`), so their commission-split names stay reserved. This was the round-8 Codex gate finding PR #213 briefly parked on; the migration is live, and PR #213 lands after the parallel id-based-splits branch merges (see KNOWN_ISSUES §1b).
