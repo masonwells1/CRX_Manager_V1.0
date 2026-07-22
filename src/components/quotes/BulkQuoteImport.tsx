@@ -69,7 +69,18 @@ const FIELD_MAPPINGS: Record<string, string[]> = {
 const IMPORTABLE_QUOTE_STATUSES = new Set(['draft']);
 
 const normalizeQuoteNumber = (quoteNumber?: string | null): string =>
-  quoteNumber?.toLowerCase().trim() ?? '';
+  quoteNumber?.trim().toUpperCase() ?? '';
+
+const normalizeUnitName = (unit?: string | null): string =>
+  unit?.toLowerCase().trim() ?? '';
+
+const toMoneyCents = (value: number | null | undefined): bigint =>
+  BigInt(Math.round((value ?? 0) * 100));
+
+const centsToDollars = (cents: bigint): number => Number(cents) / 100;
+
+const multiplyCentsByQuantity = (unitCents: bigint, quantity: number): bigint =>
+  BigInt(Math.round(Number(unitCents) * quantity));
 
 const rejectPartiallyInvalidQuoteGroups = (
   candidates: ValidQuoteRow[],
@@ -82,7 +93,13 @@ const rejectPartiallyInvalidQuoteGroups = (
   );
 
   if (blockedQuoteNumbers.size === 0) {
-    return { valid: candidates.map(({ item }) => item), invalid };
+    return {
+      valid: candidates.map(({ item }) => ({
+        ...item,
+        quote_number: normalizeQuoteNumber(item.quote_number),
+      })),
+      invalid,
+    };
   }
 
   const valid: ParsedQuoteItem[] = [];
@@ -98,7 +115,10 @@ const rejectPartiallyInvalidQuoteGroups = (
       return;
     }
 
-    valid.push(item);
+    valid.push({
+      ...item,
+      quote_number: normalizeQuoteNumber(item.quote_number),
+    });
   });
 
   return { valid, invalid: normalizedInvalid };
@@ -115,7 +135,7 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
   const importIdempotencyKeysRef = useRef(new Map<string, string>());
 
   const getImportIdempotencyKey = (quoteNumber: string): string => {
-    const scope = `${profile?.id ?? 'unknown'}:${quoteNumber}`;
+    const scope = `${profile?.id ?? 'unknown'}:${normalizeQuoteNumber(quoteNumber)}`;
     const cached = importIdempotencyKeysRef.current.get(scope);
     if (cached) return cached;
     const key = generateIdempotencyKey('save_quote_bulk_import', scope);
@@ -124,7 +144,7 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
   };
 
   const clearImportIdempotencyKey = (quoteNumber: string): void => {
-    importIdempotencyKeysRef.current.delete(`${profile?.id ?? 'unknown'}:${quoteNumber}`);
+    importIdempotencyKeysRef.current.delete(`${profile?.id ?? 'unknown'}:${normalizeQuoteNumber(quoteNumber)}`);
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -396,7 +416,7 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
 
       const quoteGroups = new Map<string, ParsedQuoteItem[]>();
       validation.valid.forEach((item) => {
-        const key = item.quote_number;
+        const key = normalizeQuoteNumber(item.quote_number);
         if (!quoteGroups.has(key)) {
           quoteGroups.set(key, []);
         }
@@ -434,9 +454,9 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
             sectionGroups.get(sectionName)!.push(item);
           });
 
-          let totalPrice = 0;
-          let totalCost = 0;
-          let totalProfit = 0;
+          let totalPriceCents = 0n;
+          let totalCostCents = 0n;
+          let totalProfitCents = 0n;
 
           const sectionsPayload = Array.from(sectionGroups.entries()).map(([sectionName, sectionItems], sectionIndex) => {
             const sectionItemsPayload = sectionItems
@@ -444,35 +464,43 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
               const productId = productMap.get(item.product_name.toLowerCase().trim())!;
 
               const product = productDetailsById.get(productId);
-              const current_cost = product?.current_cost || 0;
+              const inventoryUnit = product?.inventory_unit;
               const hasPriceOverride = typeof item.price_per_unit === 'number';
-              const price_per_unit = hasPriceOverride ? item.price_per_unit! : 0;
+              const pricePerUnitCents = toMoneyCents(hasPriceOverride ? item.price_per_unit! : 0);
+              const currentCostCents = toMoneyCents(product?.current_cost);
+              const price_per_unit = centsToDollars(pricePerUnitCents);
+              const current_cost = centsToDollars(currentCostCents);
               const acres = item.acres || 0;
               const hasActualRate = typeof item.actual_rate === 'number';
               const hasOzPerAcre = typeof item.oz_per_acre === 'number';
               const actualRate = hasActualRate ? item.actual_rate! : hasOzPerAcre ? item.oz_per_acre! : null;
               const rateUnit = hasActualRate ? item.rate_unit || 'oz' : hasOzPerAcre ? 'oz' : null;
               const rateConv = rateUnit
-                ? unitConversions.find((c: { unit: string; factor_oz: number }) => c.unit.toLowerCase() === rateUnit.toLowerCase())
+                ? unitConversions.find((c: { unit: string; factor_oz: number }) => normalizeUnitName(c.unit) === normalizeUnitName(rateUnit))
                 : null;
-              const oz_per_acre = actualRate !== null ? actualRate * (rateConv?.factor_oz ?? 1) : 0;
+              if (actualRate !== null && (!rateConv || rateConv.factor_oz <= 0)) {
+                throw new Error(`Unsupported rate unit "${rateUnit || 'blank'}" for product ${item.product_name}`);
+              }
+              const oz_per_acre = actualRate !== null ? actualRate * rateConv!.factor_oz : 0;
 
-              // Look up the conversion factor for the product's inventory_unit (e.g. Lb=16, Gallon=128)
-              // Falls back to 16 (oz-per-lb) if no inventory_unit or no matching conversion found
-              const inventoryUnit = product?.inventory_unit;
               const conv = inventoryUnit
-                ? unitConversions.find((c: { unit: string; factor_oz: number }) => c.unit.toLowerCase() === inventoryUnit.toLowerCase())
+                ? unitConversions.find((c: { unit: string; factor_oz: number }) => normalizeUnitName(c.unit) === normalizeUnitName(inventoryUnit))
                 : null;
-              const conversionFactor = conv ? conv.factor_oz : 16;
+              if (acres > 0 && oz_per_acre > 0 && (!conv || conv.factor_oz <= 0)) {
+                throw new Error(`Unsupported inventory unit "${inventoryUnit || 'blank'}" for product ${item.product_name}`);
+              }
+              const conversionFactor = conv?.factor_oz ?? 1;
               const total_units_needed = acres && oz_per_acre ? (acres * oz_per_acre) / conversionFactor : 0;
-              const total_price = price_per_unit * total_units_needed;
-              const total_cost = current_cost * total_units_needed;
-              const profit = total_price - total_cost;
+              const lineTotalPriceCents = multiplyCentsByQuantity(pricePerUnitCents, total_units_needed);
+              const lineTotalCostCents = multiplyCentsByQuantity(currentCostCents, total_units_needed);
+              const profitCents = lineTotalPriceCents - lineTotalCostCents;
+              const total_price = centsToDollars(lineTotalPriceCents);
+              const profit = centsToDollars(profitCents);
               const net_margin = total_price > 0 ? (profit / total_price) * 100 : 0;
 
-              totalPrice += total_price;
-              totalCost += total_cost;
-              totalProfit += profit;
+              totalPriceCents += lineTotalPriceCents;
+              totalCostCents += lineTotalCostCents;
+              totalProfitCents += profitCents;
 
               return {
                 product_id: productId,
@@ -512,6 +540,9 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
 
           if (itemsCreated > 0) {
             const validDays = firstItem.valid_days || 15;
+            const totalPrice = centsToDollars(totalPriceCents);
+            const totalCost = centsToDollars(totalCostCents);
+            const totalProfit = centsToDollars(totalProfitCents);
             const quotePayload = {
               quote_number: quoteNumber,
               customer_id: customerId,
@@ -545,15 +576,21 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
             }
 
             const result = assertRpcResult<{ quote_id: string }>(data, 'save_quote');
-            await logActivity({
-              event: 'quote_bulk_imported',
-              description: `Bulk imported quote ${quoteNumber} with ${itemsCreated} item(s)`,
-              performedBy: profile.id,
-              entityType: 'quote',
-              entityId: result.quote_id,
-              customerId,
-            });
             clearImportIdempotencyKey(quoteNumber);
+            try {
+              await logActivity({
+                event: 'quote_bulk_imported',
+                description: `Bulk imported quote ${quoteNumber} with ${itemsCreated} item(s)`,
+                performedBy: profile.id,
+                entityType: 'quote',
+                entityId: result.quote_id,
+                customerId,
+              });
+            } catch (logError) {
+              Sentry.captureException(logError instanceof Error ? logError : new Error(String(logError)), {
+                extra: { context: 'BulkQuoteImport.logActivity', quoteNumber, quoteId: result.quote_id },
+              });
+            }
             details.push(`Quote ${quoteNumber}: Created with ${itemsCreated} items`);
             successCount++;
           } else {
@@ -564,7 +601,7 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
           Sentry.captureException(error instanceof Error ? error : new Error(String(error)), {
             extra: { context: 'BulkQuoteImport.createQuote', quoteNumber },
           });
-          details.push(`Quote ${quoteNumber}: Unexpected error`);
+          details.push(`Quote ${quoteNumber}: ${error instanceof Error ? error.message : 'Unexpected error'}`);
           failCount++;
         }
       }
