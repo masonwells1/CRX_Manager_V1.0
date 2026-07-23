@@ -51,6 +51,10 @@ export interface Product {
   /** Pre-harvest interval in days, from the product label (NULL = not entered) */
   phi_days: number | null;
   product_form: ProductForm | null;
+  product_family_id?: string | null;
+  return_policy?: 'returnable' | 'no_return' | 'not_applicable' | 'unknown';
+  packaging_variant?: string | null;
+  is_full_tote_only?: boolean;
   inventory_unit: string | null;
   container_unit: string | null;
   container_type: ContainerType | null;

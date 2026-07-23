@@ -1,6 +1,6 @@
 # CRX Manager — Current State
 
-**Last verified:** 2026-07-22 (live migration watermark `20260722012359` — #117 auto_draft_skipped logging in `complete_job`, applied 2026-07-21 evening Chicago; supplier-pricing Product-page and monthly XLSX paths are governed through preview/approval/apply, and `process-document` v19 permanently rejects supplier price/product lists before OCR; operational counts remain the dated 2026-07-18 snapshot below)
+**Last verified:** 2026-07-23 (live migration watermark `20260723193312` — Supplier Pricing Phase 3 Stage A return-policy foundation applied under its server-assigned ledger version; it is dormant with 604 Products unchanged, zero classifications/family rows, and `supplier_cost_basis_enabled=false`. Supplier-pricing Product-page and monthly XLSX paths remain governed through preview/approval/apply, and `process-document` v19 permanently rejects supplier price/product lists before OCR; operational counts remain the dated 2026-07-18 snapshot below)
 **Update triggers:** refresh when a major feature ships or quarterly, whichever first.
 
 ## 1. Reality check

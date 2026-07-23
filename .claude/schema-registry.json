@@ -1,12 +1,12 @@
 {
   "_meta": {
     "registry_version": 2,
-    "generated_at": "2026-07-22",
+    "generated_at": "2026-07-23",
     "generated_from": "Supabase project rhyzpcqhnizqbxphqdkr — public schema introspection",
     "regenerate_with": "node scripts/regenerate-schema-registry.mjs --from-introspection <queries.json> (queries documented in the script header)",
     "purpose": "Single source of truth for hooks: generated columns, status enums, ALL parseable CHECK IN-lists, NOT NULL columns, full column lists, sequences, tables-with/without updated_at, applied-migration high water.",
     "note": "For a fresh refresh from the live DB, ask Claude Code: 'regenerate the schema-registry from Supabase' (/regen-schema-registry). skipped_constraints lists every CHECK the hooks can NOT validate — review it when touching those tables.",
-    "migrations_high_water": "20260722202622",
+    "migrations_high_water": "20260723193312",
     "applied_migration_names": [
       "20260207_gap_analysis_fixes.sql",
       "20260209050000_inventory_overhaul",
@@ -310,6 +310,7 @@
       "20260722173000_reuse_guard_covers_revivable_quotes",
       "20260722180000_reuse_guard_covers_invoiced_jobs",
       "20260722190000_commission_split_lost_update_guard",
+      "20260722222743_product_families_return_policy_foundation",
       "a1_dispatched_list_recent_completed",
       "a1b_dispatched_to_me_completed_tail",
       "accounting_and_integrity_fixes",
@@ -2241,6 +2242,17 @@
         "products_product_form_check"
       ]
     },
+    "products.return_policy": {
+      "values": [
+        "returnable",
+        "no_return",
+        "not_applicable",
+        "unknown"
+      ],
+      "constraints": [
+        "products_return_policy_check"
+      ]
+    },
     "products.signal_word": {
       "values": [
         "Danger",
@@ -3411,6 +3423,12 @@
       "constraint": "product_cost_basis_rollout_rollout_scope_check",
       "def": "CHECK ((rollout_scope = 'wells_phase2_canary'::text))",
       "reason": "unparseable — hooks do NOT validate this constraint"
+    },
+    {
+      "table": "product_families",
+      "constraint": "product_families_name_canonical_check",
+      "def": "CHECK (((name = btrim(name)) AND (name <> ''::text)))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
     },
     {
       "table": "product_info_change_set_rows",
@@ -5075,6 +5093,17 @@
         "created_at"
       ]
     },
+    "product_families": {
+      "no_default": [
+        "name"
+      ],
+      "with_default": [
+        "id",
+        "is_active",
+        "created_at",
+        "updated_at"
+      ]
+    },
     "product_info_change_set_rows": {
       "no_default": [
         "change_set_id",
@@ -5128,7 +5157,9 @@
         "created_at",
         "updated_at",
         "is_rup",
-        "pricing_version"
+        "pricing_version",
+        "return_policy",
+        "is_full_tote_only"
       ]
     },
     "profiles": {
@@ -7306,6 +7337,16 @@
       "rollout_scope",
       "created_at"
     ],
+    "product_families": [
+      "id",
+      "name",
+      "description",
+      "active_ingredient",
+      "formulation",
+      "is_active",
+      "created_at",
+      "updated_at"
+    ],
     "product_info_change_set_rows": [
       "change_set_id",
       "product_id",
@@ -7402,7 +7443,11 @@
       "max_label_rate_unit",
       "use_timing",
       "pricing_version",
-      "quoting_notes"
+      "quoting_notes",
+      "product_family_id",
+      "return_policy",
+      "packaging_variant",
+      "is_full_tote_only"
     ],
     "profiles": [
       "id",

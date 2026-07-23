@@ -1467,6 +1467,7 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   'save_job_applied_record',
   'save_purchase_order',
   'save_quote',
+  'set_product_phase3_metadata',
   'stage_offline_action',
   'stage_supplier_price_import', // Supplier Pricing 1b — see approve_supplier_price_import note
   'stage_vendor_alias', // Supplier Pricing 1b — see approve_supplier_price_import note
@@ -2097,6 +2098,54 @@ function registryMigrationHighWater(): string {
   return registry._meta?.migrations_high_water || '';
 }
 
+// Intentional bookkeeping gate: update this set when Section 9 applies or a
+// new current pending migration is added; otherwise the inventory fails closed.
+const EXPECTED_PENDING_MIGRATION_TIMESTAMPS = new Set(['20260722222742']);
+
+/**
+ * Explicitly pending migrations remain part of the contract inventory even
+ * when Supabase assigned a later ledger version to another applied migration.
+ */
+function pendingMigrationTimestamps(): Set<string> {
+  const historyPath = join(
+    dirname(fileURLToPath(import.meta.url)),
+    '..',
+    '..',
+    'docs',
+    'reference',
+    'migration-history.md',
+  );
+  const migrationDir = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'supabase', 'migrations');
+  const lines = readFileSync(historyPath, 'utf8').split(/\r?\n/);
+  const pendingRows = lines.filter((line) =>
+    /^\|\s*\d+\s*\|\s*\d{14}\s*\|.*\bPENDING APPLY\b/i.test(line),
+  );
+  const timestamps = new Set(
+    pendingRows.map((line) => {
+      const match = line.match(/^\|\s*\d+\s*\|\s*(\d{14})\s*\|\s*\*\*PENDING APPLY\b/i);
+      if (!match) {
+        throw new Error(`Pending migration-history row must start its purpose with PENDING APPLY: ${line}`);
+      }
+      return match[1];
+    }),
+  );
+  const expected = [...EXPECTED_PENDING_MIGRATION_TIMESTAMPS].sort();
+  const actual = [...timestamps].sort();
+  if (actual.length !== expected.length || actual.some((timestamp, index) => timestamp !== expected[index])) {
+    throw new Error(`Pending migration-history drift: expected ${expected.join(', ')}, found ${actual.join(', ') || '(none)'}`);
+  }
+  const diskTimestamps = new Set(
+    readdirSync(migrationDir)
+      .filter((file) => /^\d{14}_.+\.sql$/.test(file))
+      .map((file) => file.slice(0, 14)),
+  );
+  const missingSources = [...timestamps].filter((timestamp) => !diskTimestamps.has(timestamp));
+  if (missingSources.length > 0) {
+    throw new Error(`Pending migration-history rows lack checked-in migration sources: ${missingSources.join(', ')}`);
+  }
+  return timestamps;
+}
+
 /**
  * Generated RPCs plus mutators introduced after the generated schema snapshot.
  * The latter closes the normal pre-apply gap where a PR migration exists before
@@ -2107,9 +2156,11 @@ function generatedMutatingRpcInventory(): Set<string> {
   const functions = latestMigrationFunctions();
   const mutators = transitiveMutatingFunctionNames(latestMigrationFunctionBodies());
   const highWater = registryMigrationHighWater();
+  const pendingTimestamps = pendingMigrationTimestamps();
   return new Set([...mutators].filter((name) => {
     const timestamp = functions.get(name)?.fileName.match(/^\d{14}/)?.[0] || '';
-    return generatedNames.has(name) || (timestamp !== '' && timestamp > highWater);
+    return generatedNames.has(name)
+      || (timestamp !== '' && (timestamp > highWater || pendingTimestamps.has(timestamp)));
   }));
 }
 
@@ -2119,7 +2170,6 @@ const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
   // MUTATING_RPCS_WITH_IDEMPOTENCY. This bucket remains for the normal pre-apply
   // window: an RPC introduced by a PR migration that is not yet live belongs
   // here until the next truthful live type regeneration.
-  'set_product_phase3_metadata',
 ]);
 
 /**

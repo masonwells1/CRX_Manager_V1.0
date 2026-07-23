@@ -7828,6 +7828,39 @@ export type Database = {
           },
         ]
       }
+      product_families: {
+        Row: {
+          active_ingredient: string | null
+          created_at: string
+          description: string | null
+          formulation: string | null
+          id: string
+          is_active: boolean
+          name: string
+          updated_at: string
+        }
+        Insert: {
+          active_ingredient?: string | null
+          created_at?: string
+          description?: string | null
+          formulation?: string | null
+          id?: string
+          is_active?: boolean
+          name: string
+          updated_at?: string
+        }
+        Update: {
+          active_ingredient?: string | null
+          created_at?: string
+          description?: string | null
+          formulation?: string | null
+          id?: string
+          is_active?: boolean
+          name?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       product_info_change_set_rows: {
         Row: {
           after_values: Json
@@ -8094,19 +8127,23 @@ export type Database = {
           internal_notes: string | null
           inventory_unit: string | null
           is_active: boolean
+          is_full_tote_only: boolean
           is_rup: boolean
           manufacturer: string | null
           max_label_rate: number | null
           max_label_rate_unit: string | null
           notes: string | null
+          packaging_variant: string | null
           phi_days: number | null
           pricing_version: number
+          product_family_id: string | null
           product_form: string | null
           product_name: string
           quoting_notes: string | null
           rate_per_acre: number | null
           rate_unit: string | null
           rei_hours: number | null
+          return_policy: string
           signal_word: string | null
           sku: string | null
           suggested_rate: string | null
@@ -8140,19 +8177,23 @@ export type Database = {
           internal_notes?: string | null
           inventory_unit?: string | null
           is_active?: boolean
+          is_full_tote_only?: boolean
           is_rup?: boolean
           manufacturer?: string | null
           max_label_rate?: number | null
           max_label_rate_unit?: string | null
           notes?: string | null
+          packaging_variant?: string | null
           phi_days?: number | null
           pricing_version?: number
+          product_family_id?: string | null
           product_form?: string | null
           product_name: string
           quoting_notes?: string | null
           rate_per_acre?: number | null
           rate_unit?: string | null
           rei_hours?: number | null
+          return_policy?: string
           signal_word?: string | null
           sku?: string | null
           suggested_rate?: string | null
@@ -8186,19 +8227,23 @@ export type Database = {
           internal_notes?: string | null
           inventory_unit?: string | null
           is_active?: boolean
+          is_full_tote_only?: boolean
           is_rup?: boolean
           manufacturer?: string | null
           max_label_rate?: number | null
           max_label_rate_unit?: string | null
           notes?: string | null
+          packaging_variant?: string | null
           phi_days?: number | null
           pricing_version?: number
+          product_family_id?: string | null
           product_form?: string | null
           product_name?: string
           quoting_notes?: string | null
           rate_per_acre?: number | null
           rate_unit?: string | null
           rei_hours?: number | null
+          return_policy?: string
           signal_word?: string | null
           sku?: string | null
           suggested_rate?: string | null
@@ -8219,7 +8264,15 @@ export type Database = {
           use_timing?: string | null
           vendor?: string | null
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "products_product_family_id_fkey"
+            columns: ["product_family_id"]
+            isOneToOne: false
+            referencedRelation: "product_families"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       profiles: {
         Row: {
@@ -11900,6 +11953,14 @@ export type Database = {
         }
         Returns: Json
       }
+      assert_phase3_product_metadata_change_safe: {
+        Args: { p_product_id: string }
+        Returns: undefined
+      }
+      assert_phase3_return_policy: {
+        Args: { p_product_ids: string[] }
+        Returns: undefined
+      }
       assign_job_applicator: {
         Args: {
           p_applicator_id?: string
@@ -12093,9 +12154,17 @@ export type Database = {
         }
         Returns: Json
       }
+      commission_recipient_name_for_id: {
+        Args: { p_id: string }
+        Returns: string
+      }
       commission_recipient_resolves: {
         Args: { p_recipient: string }
         Returns: boolean
+      }
+      commission_split_with_recipient_ids: {
+        Args: { p_split: Json }
+        Returns: Json
       }
       commit_blend_ticket_ocr_result: {
         Args: {
@@ -13401,25 +13470,9 @@ export type Database = {
       list_commission_recipients: {
         Args: never
         Returns: {
-          id: string
           full_name: string
+          id: string
         }[]
-      }
-      commission_recipient_name_for_id: {
-        Args: { p_id: string }
-        Returns: string
-      }
-      commission_split_with_recipient_ids: {
-        Args: { p_split: Json }
-        Returns: Json
-      }
-      resolve_commission_recipient_id: {
-        Args: { p_recipient: string }
-        Returns: string
-      }
-      resolve_commission_split_recipient: {
-        Args: { p_elem: Json; p_prefer_name?: boolean }
-        Returns: string
       }
       load_recipe_into_job: {
         Args: {
@@ -13428,6 +13481,10 @@ export type Database = {
           p_recipe_id: string
         }
         Returns: Json
+      }
+      lock_phase3_product_policy_products: {
+        Args: { p_product_ids: string[] }
+        Returns: undefined
       }
       log_customer_interaction: {
         Args: {
@@ -14004,6 +14061,14 @@ export type Database = {
         Args: { p_job_id: string; p_performed_by?: string }
         Returns: Json
       }
+      resolve_commission_recipient_id: {
+        Args: { p_recipient: string }
+        Returns: string
+      }
+      resolve_commission_split_recipient: {
+        Args: { p_elem: Json; p_prefer_name?: boolean }
+        Returns: string
+      }
       resolve_field_app_chemical_price: {
         Args: {
           p_field_ids: string[]
@@ -14367,6 +14432,21 @@ export type Database = {
       }
       set_primary_customer_contact: {
         Args: { p_contact_id: string; p_customer_id: string }
+        Returns: Json
+      }
+      set_product_phase3_metadata: {
+        Args: {
+          p_expected_is_full_tote_only: boolean
+          p_expected_packaging_variant: string
+          p_expected_product_family_id: string
+          p_expected_return_policy: string
+          p_idempotency_key?: string
+          p_is_full_tote_only: boolean
+          p_packaging_variant: string
+          p_product_family_id: string
+          p_product_id: string
+          p_return_policy: string
+        }
         Returns: Json
       }
       settle_applied_record_acres: {
