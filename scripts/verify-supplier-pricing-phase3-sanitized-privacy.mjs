@@ -2,6 +2,7 @@
 /** Verify the sanitized Stage A diff contains aggregate evidence only. */
 import { existsSync, readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -9,7 +10,14 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const DEFAULT_AGGREGATE_AUDIT = 'docs/audits/2026-07-22-supplier-pricing-phase3-classification-review.md';
 const EXPECTED_CHECKSUM = 'bf85cc649657735fa26ba8c7e753d653c76ba238ce63c7605ce723393ea322c4';
 const UUID_PATTERN = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
+const AUDIT_ROW_FIELD_PATTERN = /\b(product_id|product_name|sku|formulation|package(?:_size)?|packaging_variant|inventory_unit)\b/gi;
 const FORMAT_MARKER_PREFIX = ['supplier', 'pricing', 'phase3'].join('-');
+const SAFE_SQL_FIXTURE_SHA256 = Object.freeze({
+  'scripts/smoke/seed-supplier-pricing-phase1a.sql': '21304bd81361e59e938c98071cf0d504f63ea68f9f9129443d33467fd53bd65f',
+  'scripts/smoke/seed-wells-cost-basis-rollout.sql': '8a28c59d0668ae7254a6c9c974f144c793d448975021e56881eddf1ba5192231',
+  'scripts/smoke/smoke-supplier-cost-basis-phase2.sql': 'dc6107e701275e715d1b82a816a568d1b7610f48ac4c22da52fc8790e7294eb9',
+  'scripts/smoke/smoke-supplier-pricing-phase1a-bootstrap-compat.sql': '06742b81da30e425f87e46fb9beb5d6e1f455aaddf7774cfe6526d98a4cca348',
+});
 
 const lines = output => output.trim().split(/\r?\n/).filter(Boolean);
 const normalizePath = value => value.split(path.sep).join('/');
@@ -38,6 +46,10 @@ export function hasValidAggregateAuditText(text) {
     && text.includes('| Rows unresolved | 604 |')
     && text.includes('| Name-only no-return evidence flags | 21 |')
     && text.includes(EXPECTED_CHECKSUM);
+}
+
+export function countAuditRowFields(text) {
+  return (text.match(AUDIT_ROW_FIELD_PATTERN) || []).length;
 }
 
 export function detectPrivateCatalogContent(text) {
@@ -98,6 +110,12 @@ function headerFields(line) {
     .filter(Boolean);
 }
 
+export function isKnownSafeSqlFixture(file, text, allowlist = SAFE_SQL_FIXTURE_SHA256) {
+  const expectedHash = allowlist[file];
+  return typeof expectedHash === 'string'
+    && createHash('sha256').update(text, 'utf8').digest('hex') === expectedHash;
+}
+
 export function detectPrivateCatalogFile(file, text) {
   const hits = detectPrivateCatalogContent(text);
   if ((text.match(UUID_PATTERN) || []).length < 2) return hits;
@@ -107,7 +125,10 @@ export function detectPrivateCatalogFile(file, text) {
     if (!predicate(fields)) return false;
     const beforeHeader = tableLines.slice(Math.max(0, index - 12), index + 1).join('\n');
     const afterHeader = tableLines.slice(index, index + 13).join('\n');
-    return !(/\binsert\s+into\b/i.test(beforeHeader) && /^\s*\)\s*(?:values|select)\b/im.test(afterHeader));
+    const isSqlInsertColumnList = /\binsert\s+into\b/i.test(beforeHeader) && /^\s*\)\s*(?:values|select)\b/im.test(afterHeader);
+    if (!isSqlInsertColumnList) return true;
+    const isProductsInsert = /\binsert\s+into\s+(?:public\.)?"?products"?\s*\(/i.test(beforeHeader);
+    return isProductsInsert && !isKnownSafeSqlFixture(file, text);
   });
   const hasProductTable = hasTableHeader(fields => (fields.includes('product_id') || fields.includes('id'))
     && fields.includes('product_name') && fields.includes('sku'));
@@ -161,7 +182,7 @@ function main() {
       if (contentHits.length) privateContentFiles.push(file);
     }
     if (!auditFiles.includes(file) || text === null) continue;
-    rowFieldHits += (text.match(/\b(product_id|product_name|sku|formulation|package(?:_size)?|inventory_unit)\b/gi) || []).length;
+    rowFieldHits += countAuditRowFields(text);
     uuidHits += (text.match(UUID_PATTERN) || []).length;
   }
   if (forbidden.length || privateContentFiles.length || rowFieldHits || uuidHits) {

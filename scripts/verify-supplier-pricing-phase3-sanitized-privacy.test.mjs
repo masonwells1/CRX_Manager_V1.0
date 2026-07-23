@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import {
+  countAuditRowFields,
   detectPrivateCatalogFile,
   hasValidAggregateAuditText,
+  isKnownSafeSqlFixture,
   requirePathInScope,
   resolveAggregateAuditPath,
 } from './verify-supplier-pricing-phase3-sanitized-privacy.mjs';
@@ -20,6 +23,7 @@ const renamedManifest = JSON.stringify({
 });
 assert.deepEqual(detectPrivateCatalogFile('artifacts/classification.json', renamedManifest).sort(), ['format_marker', 'manifest_row_schema']);
 assert.deepEqual(detectPrivateCatalogFile('docs/audits/aggregate.md', '| Products represented | 604 |\nAggregate-only audit text.'), []);
+assert.equal(countAuditRowFields('packaging_variant'), 1);
 assert.deepEqual(detectPrivateCatalogFile('exports/classification.dat', `format=${phase3}-product-snapshot-v1`), ['format_marker']);
 const renamedSnapshot = JSON.stringify({ products: [
   { id: '33333333-3333-4333-8333-333333333333', product_name: 'Example', SKU: 'EX-1' },
@@ -36,12 +40,26 @@ const renamedCsv = `${productHeader}\n55555555-5555-4555-8555-555555555555,Examp
 assert.deepEqual(detectPrivateCatalogFile('exports/classification.csv', renamedCsv), ['delimited_product_schema']);
 assert.deepEqual(detectPrivateCatalogFile('exports/classification.txt', renamedCsv), ['delimited_product_schema']);
 assert.deepEqual(detectPrivateCatalogFile('docs/audits/classification.csv', renamedCsv), ['delimited_product_schema']);
-const sqlColumnList = `INSERT INTO products (
-  id, product_name, sku
+const insertInto = ['INSERT', 'INTO'].join(' ');
+const productColumns = ['id', 'product_name', 'sku'].join(', ');
+const nonCatalogTable = ['public', 'fixture_rows'].join('.');
+const safeNonCatalogSql = `${insertInto} ${nonCatalogTable} (
+  ${productColumns}
 ) VALUES
   ('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'Example', 'EX-5'),
   ('cccccccc-cccc-4ccc-8ccc-cccccccccccc', 'Example Two', 'EX-6');`;
-assert.deepEqual(detectPrivateCatalogFile('exports/classification.sql', sqlColumnList), []);
+assert.deepEqual(detectPrivateCatalogFile('exports/classification.sql', safeNonCatalogSql), []);
+const productTable = ['public', 'products'].join('.');
+const bulkCatalogSql = `${insertInto} ${productTable} (
+  ${productColumns}
+) VALUES
+  ('dddddddd-dddd-4ddd-8ddd-dddddddddddd', 'Catalog One', 'CAT-1'),
+  ('eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', 'Catalog Two', 'CAT-2');`;
+assert.deepEqual(detectPrivateCatalogFile('exports/classification.sql', bulkCatalogSql), ['delimited_product_schema']);
+const fixturePath = 'fixtures/known.sql';
+const fixtureHash = createHash('sha256').update(bulkCatalogSql, 'utf8').digest('hex');
+assert.equal(isKnownSafeSqlFixture(fixturePath, bulkCatalogSql, { [fixturePath]: fixtureHash }), true);
+assert.equal(isKnownSafeSqlFixture(fixturePath, `${bulkCatalogSql}\n-- appended`, { [fixturePath]: fixtureHash }), false);
 const manifestHeader = ['product_id', 'current_product', 'decisions', 'row_sha256'].join('|');
 const renamedManifestTable = `${manifestHeader}\n77777777-7777-4777-8777-777777777777|{}|[]|a\n88888888-8888-4888-8888-888888888888|{}|[]|b`;
 assert.deepEqual(detectPrivateCatalogFile('exports/classification.md', renamedManifestTable), ['delimited_manifest_schema']);
@@ -58,4 +76,4 @@ const headScopeCheck = spawnSync(process.execPath, ['scripts/verify-supplier-pri
 assert.notEqual(headScopeCheck.status, 0);
 assert.match(headScopeCheck.stderr, /aggregate_audit_outside_scope/);
 
-console.log('supplier-pricing-phase3-sanitized-privacy: 18 assertions passed');
+console.log('supplier-pricing-phase3-sanitized-privacy: 22 assertions passed');

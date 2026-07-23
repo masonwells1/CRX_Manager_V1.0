@@ -9,6 +9,7 @@ All significant development milestones, in reverse chronological order.
 - The package-level Phase 3 privacy guard now scans the entire tracked-plus-untracked checkout by default and remains available in explicit base-diff mode; CI runs the whole-tree guard before dependency work. Whole-tree mode does not depend on the dated aggregate audit being present, while explicit base-diff verification still requires and validates it.
 - The privacy guard also rejects renamed JSON that carries the reviewed Phase 3 snapshot/manifest format or row schemas, and rejects aggregate-audit paths that are absolute, traverse outside the checkout, or fall outside the selected scan scope.
 - The guard now reads every non-binary selected file by content, so neither extension nor location can evade format/schema detection; delimited catalog row dumps require the narrow header-plus-two-UUID signature before refusal.
+- Bulk `products` SQL inserts with the same catalog signature are now rejected too; the four pre-existing disposable fixtures are allowed only by exact path-and-SHA-256 matches, so any byte change or appended rows is refused.
 - No live migration apply, Product mutation, feature-flag enablement, merge, or AI/OCR supplier-PDF extraction occurred. Final external review evidence and the explicit owner gate remain required before acceptance.
 
 ## 2026-07-22 — Section 09 PO/AP remediation review close-out
