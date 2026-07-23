@@ -39,7 +39,7 @@
     "proof:pricing-phase2": "node scripts/smoke/prove-supplier-cost-basis-phase2.mjs",
     "verify:deps": "node scripts/verify-deps.mjs",
     "check:docs": "node scripts/check-doc-drift.mjs",
-    "check:supplier-pricing-phase3-privacy": "node scripts/verify-supplier-pricing-phase3-sanitized-privacy.mjs",
+    "check:supplier-pricing-phase3-privacy": "node scripts/verify-supplier-pricing-phase3-sanitized-privacy.test.mjs && node scripts/verify-supplier-pricing-phase3-sanitized-privacy.mjs",
     "check:agent-guidance": "node scripts/check-agent-guidance.mjs",
     "check:agent-workflows": "node scripts/check-agent-workflows.mjs",
     "test:agent-workflows": "node .claude/hooks/codex-gauntlet-reminder.test.mjs && node .claude/workflows/gauntlet-sections-2-6-loop.test.mjs && node .claude/hooks/codex-to-claude-handoff-reminder.test.mjs && node .claude/hooks/agent-pair-review-reminder.test.mjs && node .claude/workflows/truthful-review-states.test.mjs && node scripts/run-claude-review.test.mjs && node scripts/write-codex-push-proof.test.mjs && node scripts/agent-health-check.test.mjs && node scripts/post-agent-review-to-pr.test.mjs && node .codex/hooks/codex-hook-adapter.test.mjs && node .codex/hooks/production-action-guard.test.mjs && node scripts/agent-manifest-parity.test.mjs && node scripts/check-agent-workflows.mjs && node scripts/check-agent-guidance.mjs",
