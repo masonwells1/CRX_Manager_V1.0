@@ -8,6 +8,7 @@ All significant development milestones, in reverse chronological order.
 - Aggregate provisional classification packet only: 604 rows remain unresolved and pending owner review; 21 name-only no-return candidates are evidence flags only. Aggregate packet checksum: `bf85cc649657735fa26ba8c7e753d653c76ba238ce63c7605ce723393ea322c4`. No row-level catalog artifacts are included in this branch.
 - The package-level Phase 3 privacy guard now scans the entire tracked-plus-untracked checkout by default and remains available in explicit base-diff mode; CI runs the whole-tree guard before dependency work. Whole-tree mode does not depend on the dated aggregate audit being present, while explicit base-diff verification still requires and validates it.
 - The privacy guard also rejects renamed JSON that carries the reviewed Phase 3 snapshot/manifest format or row schemas, and rejects aggregate-audit paths that are absolute, traverse outside the checkout, or fall outside the selected scan scope.
+- The guard now reads every non-binary selected file by content, so extension changes cannot evade format/schema detection; delimited catalog row dumps require the narrow header-plus-two-UUID signature before refusal.
 - No live migration apply, Product mutation, feature-flag enablement, merge, or AI/OCR supplier-PDF extraction occurred. Final external review evidence and the explicit owner gate remain required before acceptance.
 
 ## 2026-07-22 — Section 09 PO/AP remediation review close-out

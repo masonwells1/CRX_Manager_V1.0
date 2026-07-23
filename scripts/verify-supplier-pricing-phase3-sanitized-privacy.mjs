@@ -8,8 +8,8 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const DEFAULT_AGGREGATE_AUDIT = 'docs/audits/2026-07-22-supplier-pricing-phase3-classification-review.md';
 const EXPECTED_CHECKSUM = 'bf85cc649657735fa26ba8c7e753d653c76ba238ce63c7605ce723393ea322c4';
-const TEXT_EXTENSIONS = new Set(['.csv', '.json', '.jsonl', '.md', '.ndjson', '.sql', '.text', '.tsv', '.txt', '.yaml', '.yml']);
 const UUID_PATTERN = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
+const FORMAT_MARKER_PREFIX = ['supplier', 'pricing', 'phase3'].join('-');
 
 const lines = output => output.trim().split(/\r?\n/).filter(Boolean);
 const normalizePath = value => value.split(path.sep).join('/');
@@ -41,11 +41,15 @@ export function hasValidAggregateAuditText(text) {
 }
 
 export function detectPrivateCatalogContent(text) {
+  const hits = [];
+  if (new RegExp(`${FORMAT_MARKER_PREFIX}-(?:product-snapshot|proposed-classification-manifest)(?:-v\\d+)?`, 'i').test(text)) {
+    hits.push('format_marker');
+  }
   let parsed;
   try {
     parsed = JSON.parse(text);
   } catch {
-    return [];
+    return hits;
   }
 
   let hasKnownFormat = false;
@@ -72,11 +76,12 @@ export function detectPrivateCatalogContent(text) {
   walk(parsed);
 
   const uuidCount = (text.match(UUID_PATTERN) || []).length;
-  return [
+  return [...new Set([
+    ...hits,
     ...(hasKnownFormat ? ['format_marker'] : []),
     ...(hasManifestRow ? ['manifest_row_schema'] : []),
     ...(hasSnapshotArray && uuidCount >= 2 ? ['snapshot_product_schema'] : []),
-  ];
+  ])];
 }
 
 function isSnapshotProductRow(value) {
@@ -85,12 +90,31 @@ function isSnapshotProductRow(value) {
   return ['id', 'product_name', 'sku'].every(key => keys.has(key));
 }
 
-function shouldScanText(file) {
-  return TEXT_EXTENSIONS.has(path.extname(file).toLowerCase());
+function headerFields(line) {
+  if (!/[|,\t]/.test(line)) return [];
+  return line
+    .split(/[|,\t]/)
+    .map(field => field.trim().replace(/^["'`]+|["'`]+$/g, '').toLowerCase())
+    .filter(Boolean);
 }
 
 export function detectPrivateCatalogFile(file, text) {
-  return shouldScanText(file) ? detectPrivateCatalogContent(text) : [];
+  const hits = detectPrivateCatalogContent(text);
+  if (/^docs\/audits\//i.test(file) || !/\.(?:csv|tsv|md)$/i.test(file) || (text.match(UUID_PATTERN) || []).length < 2) return hits;
+  const headers = text.split(/\r?\n/).map(headerFields);
+  const hasProductTable = headers.some(fields => (fields.includes('product_id') || fields.includes('id'))
+    && fields.includes('product_name') && fields.includes('sku'));
+  const hasManifestTable = headers.some(fields => ['product_id', 'current_product', 'decisions', 'row_sha256'].every(field => fields.includes(field)));
+  return [...new Set([
+    ...hits,
+    ...(hasProductTable ? ['delimited_product_schema'] : []),
+    ...(hasManifestTable ? ['delimited_manifest_schema'] : []),
+  ])];
+}
+
+function readTextIfReadable(absolute) {
+  const buffer = readFileSync(absolute);
+  return buffer.includes(0) ? null : buffer.toString('utf8');
 }
 
 function main() {
@@ -124,7 +148,7 @@ function main() {
   for (const file of scannedFiles) {
     const absolute = path.join(ROOT, file);
     if (!existsSync(absolute)) continue;
-    const text = shouldScanText(file) ? readFileSync(absolute, 'utf8') : null;
+    const text = readTextIfReadable(absolute);
     if (text) {
       const contentHits = detectPrivateCatalogFile(file, text);
       if (contentHits.length) privateContentFiles.push(file);
