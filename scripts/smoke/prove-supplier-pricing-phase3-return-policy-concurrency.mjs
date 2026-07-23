@@ -24,6 +24,12 @@ function file(local,name){run(['cp',local,`${NAME}:/tmp/${name}`])}
 function apply(name){return sql(`BEGIN;
 \\i /tmp/${name}
 COMMIT;`)}
+function applyNormalized(local){
+  const source=readFileSync(local,'utf8').replace(/\r\n/g,'\n');
+  return sql(`BEGIN;
+${source}
+COMMIT;`);
+}
 function session(s,marker){const c=spawn('docker',psqlArgs(),{cwd:ROOT,stdio:['pipe','pipe','pipe']});let out='',err='',timer,settled=false;let resolve,reject;const ready=new Promise((r,j)=>{resolve=r;reject=j;timer=setTimeout(()=>{if(!settled){settled=true;j(new Error(`timeout waiting for ${marker}: ${err||out}`))}},20000)});c.stdout.on('data',x=>{out+=x;if(!settled&&out.includes(marker)){settled=true;clearTimeout(timer);resolve()}});c.stderr.on('data',x=>err+=x);c.stdin.end(s);const done=new Promise(r=>c.on('close',code=>{if(!settled){settled=true;clearTimeout(timer);reject(new Error(`session ended before ${marker}: ${err||out}`))}r({code,out,err})}));return {ready,done,output:()=>out} }
 const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 function scalar(statement){const out=sql(statement).stdout.trim(); if(!out)throw new Error(`expected scalar output: ${statement}`); return out.split(/\r?\n/).at(-1)}
@@ -42,7 +48,10 @@ try {
   // 09. Restore the read-only pg_get_functiondef fixture, then Section 09, so
   // Stage A sees the exact live bodies it deliberately hash-pins. Each boundary
   // is a separate transaction and therefore fails independently.
-  apply('liveUnapply.sql'); apply('section9.sql'); apply('stageA.sql');
+  // Normalize the captured pg_get_functiondef fixture before psql sees it.
+  // PostgreSQL hashes the function body byte-for-byte, so a Windows CRLF
+  // checkout must reconstruct the same LF body captured from production.
+  applyNormalized(files.liveUnapply); apply('section9.sql'); apply('stageA.sql');
   sql(`INSERT INTO auth.users(id) VALUES ('00000000-0000-0000-0000-00000000a001'),('00000000-0000-0000-0000-00000000a002') ON CONFLICT DO NOTHING; INSERT INTO public.profiles(id,email,role,is_active) VALUES ('00000000-0000-0000-0000-00000000a001','phase3-admin@example.invalid','admin',true),('00000000-0000-0000-0000-00000000a002','phase3-sales@example.invalid','sales_rep',true) ON CONFLICT (id) DO UPDATE SET role=excluded.role,is_active=true;`);
   const smoke=sql('\\i /tmp/smoke.sql',{fail:true}); const smokeOut=`${smoke.stdout}\n${smoke.stderr}`; assert.match(smokeOut,/SMOKE_PASS_ROLLBACK/,'rollback matrix did not reach its terminal marker'); assert.match(smokeOut,/PHASE3_UNRELATED_CREDIT_MEMO_UNAPPLY_PASS/,'unrelated credit-memo unapply regression did not pass'); console.log('PHASE3_UNRELATED_CREDIT_MEMO_UNAPPLY_PASS');
   const source=readFileSync(files.stageA,'utf8'); for(const x of ['lock_phase3_product_policy_products','RETURN_POLICY_NO_RETURN','trigger_x_validate_phase3_return_item_policy'])assert.match(source,new RegExp(x));
