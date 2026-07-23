@@ -20,6 +20,8 @@ supabase/migrations/20260717112011_supplier_pricing_zero_cost_guard.sql text eol
 supabase/migrations/20260717171331_restore_legacy_pricing_version_compat.sql text eol=lf
 supabase/migrations/20260722222743_product_families_return_policy_foundation.sql text eol=lf
 scripts/smoke/fixtures/phase3-live-unapply-credit-memo.sql text eol=lf
+docs/audits/2026-07-22-supplier-pricing-phase3-product-snapshot.json text eol=lf
+docs/audits/2026-07-22-supplier-pricing-phase3-proposed-classification-manifest.json text eol=lf
 
 # Generated clean-rebuild baselines are hash-verified release artifacts.
 supabase/baselines/*.sql  text eol=lf
