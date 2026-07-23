@@ -14,7 +14,7 @@ const dump=process.argv[2]==='--schema-dump'?process.argv[3]:process.env.CRXP3_S
 if(!dump||!existsSync(dump)) throw new Error('usage: node scripts/smoke/prove-supplier-pricing-phase3-return-policy-concurrency.mjs --schema-dump <read-only-public-schema.sql>');
 const NAME=`crx-phase3-real-${process.pid}-${Date.now().toString(36)}`;
 const image='public.ecr.aws/supabase/postgres:17.6.1.141';
-const files={ extensions:path.join(ROOT,'supabase/baselines/20260719092832_extensions.sql'), dump:path.resolve(dump), section9:path.join(ROOT,'supabase/migrations/20260722222742_section9_po_ap_high_remediation.sql'), stageA:path.join(ROOT,'supabase/migrations/20260722222743_product_families_return_policy_foundation.sql'), smoke:path.join(ROOT,'scripts/smoke/smoke-supplier-pricing-phase3-return-policy.sql') };
+const files={ extensions:path.join(ROOT,'supabase/baselines/20260719092832_extensions.sql'), dump:path.resolve(dump), liveUnapply:path.join(ROOT,'scripts/smoke/fixtures/phase3-live-unapply-credit-memo.sql'), section9:path.join(ROOT,'supabase/migrations/20260722222742_section9_po_ap_high_remediation.sql'), stageA:path.join(ROOT,'supabase/migrations/20260722222743_product_families_return_policy_foundation.sql'), smoke:path.join(ROOT,'scripts/smoke/smoke-supplier-pricing-phase3-return-policy.sql') };
 for(const [k,v] of Object.entries(files)) if(!existsSync(v)) throw new Error(`missing ${k}: ${v}`);
 function run(args,o={}){const r=spawnSync('docker',args,{cwd:ROOT,encoding:'utf8',input:o.input,maxBuffer:50*1024*1024});if(r.error||(!o.fail&&r.status!==0))throw new Error(`${r.error?.message||''}\n${r.stderr||r.stdout}`);return r}
 function psqlArgs(){return ['exec','-i',NAME,'psql','-U','postgres','-d','postgres','-X','-q','-A','-t','-v','ON_ERROR_STOP=1']}
@@ -38,9 +38,11 @@ try {
   for(const [k,v] of Object.entries(files)) file(v,`${k}.sql`);
   adminSql('CREATE SCHEMA IF NOT EXISTS auth; CREATE TABLE IF NOT EXISTS auth.users(id uuid PRIMARY KEY);');
   apply('extensions.sql'); apply('dump.sql');
-  // The real dump is deliberately pre-Section09. Each migration is a separate
-  // transaction so a failure proves which boundary failed and stops the proof.
-  apply('section9.sql'); apply('stageA.sql');
+  // The approved real dump predates the current live unapply body and Section
+  // 09. Restore the read-only pg_get_functiondef fixture, then Section 09, so
+  // Stage A sees the exact live bodies it deliberately hash-pins. Each boundary
+  // is a separate transaction and therefore fails independently.
+  apply('liveUnapply.sql'); apply('section9.sql'); apply('stageA.sql');
   sql(`INSERT INTO auth.users(id) VALUES ('00000000-0000-0000-0000-00000000a001'),('00000000-0000-0000-0000-00000000a002') ON CONFLICT DO NOTHING; INSERT INTO public.profiles(id,email,role,is_active) VALUES ('00000000-0000-0000-0000-00000000a001','phase3-admin@example.invalid','admin',true),('00000000-0000-0000-0000-00000000a002','phase3-sales@example.invalid','sales_rep',true) ON CONFLICT (id) DO UPDATE SET role=excluded.role,is_active=true;`);
   const smoke=sql('\\i /tmp/smoke.sql',{fail:true}); const smokeOut=`${smoke.stdout}\n${smoke.stderr}`; assert.match(smokeOut,/SMOKE_PASS_ROLLBACK/,'rollback matrix did not reach its terminal marker'); assert.match(smokeOut,/PHASE3_UNRELATED_CREDIT_MEMO_UNAPPLY_PASS/,'unrelated credit-memo unapply regression did not pass'); console.log('PHASE3_UNRELATED_CREDIT_MEMO_UNAPPLY_PASS');
   const source=readFileSync(files.stageA,'utf8'); for(const x of ['lock_phase3_product_policy_products','RETURN_POLICY_NO_RETURN','trigger_x_validate_phase3_return_item_policy'])assert.match(source,new RegExp(x));
