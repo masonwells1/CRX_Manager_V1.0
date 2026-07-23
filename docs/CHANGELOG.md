@@ -2,6 +2,12 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-22 — Supplier Pricing Phase 3 Stage A prepared (NOT APPLIED)
+
+- Prepared an additive `product_families` / Product metadata and return-credit enforcement foundation. `RETURN_POLICY_NO_RETURN` is the exact refusal code; pre-Stage-A compatibility remains `unknown` / default metadata values. Rollback-matrix and two-session real-schema concurrency proofs passed.
+- Added a 604-row provisional classification manifest: every row remains unresolved and pending owner review; 21 name-only no-return candidates are evidence flags only. Manifest SHA-256: `bf85cc649657735fa26ba8c7e753d653c76ba238ce63c7605ce723393ea322c4`. Fable review verdict: SHIP.
+- No live migration apply, Product mutation, feature-flag enablement, merge, or AI/OCR supplier-PDF extraction occurred. The protected PR must remain unmerged pending its explicit owner gate.
+
 ## 2026-07-22 — Section 09 PO/AP remediation review close-out
 
 - Addressed all CodeRabbit findings before PR #218 merge: the standing on-order invariant now compares only Main Warehouse inventory rows; the two-session concurrency harness rejects readiness when its SQL child exits early; the lifecycle test area now includes the Section 09 contract test and invariant sweep; current-only AP aging now lets PostgreSQL own the Chicago business date; and `create_vendor_bill` explicitly rejects a NULL subtotal through the stable `INVALID_AMOUNT` path instead of leaking a table-constraint error. The RPC default and its fail-closed guard both use `clock_timestamp()`, avoiding browser-clock skew and transaction-boundary date disagreement; the page no longer shows a browser-derived numeric report date that could disagree with the server-owned data. Focused, lifecycle, typecheck, and isolated four-race concurrency proofs passed after the changes. The migration remains pending live apply.

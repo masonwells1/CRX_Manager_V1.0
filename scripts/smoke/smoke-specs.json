@@ -7,6 +7,12 @@
     "area_tags": "Every spec carries an \"area\" array (business-area tags: billing, inventory, lifecycle, pricing, security, idempotency). run-smoke.mjs --area <area> selects by tag; scripts/run-area.mjs bundles these with the matching vitest slice and DB invariant sweeps."
   },
   "specs": {
+    "supplier_pricing_phase3_return_policy": {
+      "chain": "smoke-supplier-pricing-phase3-return-policy.sql",
+      "description": "Supplier Pricing Phase 3 Stage A rollback matrix: dormant unknown/default Product compatibility; full returnable create/approve/receive/restock/credit lifecycle; governed metadata refusal at requested/approved/received; exact no-return create/re-credit and direct return-items refusals; reject/cancel/unapply reversal boundaries; and forced late-failure atomic rollback for requested, approved, received/restock, and credit-issued effects. The companion prove-supplier-pricing-phase3-return-policy-concurrency.mjs uses two independent disposable PostgreSQL sessions for ordered advisory-lock races.",
+      "covers": ["create_return", "approve_return", "receive_return", "issue_return_credit", "set_product_phase3_metadata", "return_items", "product_families"],
+      "area": ["billing", "inventory", "lifecycle", "pricing", "security", "idempotency"]
+    },
     "section9_po_ap_high_remediation": {
       "chain": "smoke-section9-po-ap-high-remediation.sql",
       "description": "Section 9 PO/AP HIGH closeout: real save/submit/edit/alternate-location receive/reverse/cancel paths keep Main Warehouse on-order equal to authoritative open remainder; vendor browser mutation grants/policies are absent; cancelled-PO bill creation and billed-PO cancellation fail in the shared PO-first lock contract; AP aging serves current truth but fails closed for unsupported past/future dates; and update_vendor_bill cannot move or rewrite a bill whose stored period is closed. Self-contained fixtures and terminal rollback. The companion prove-section9-po-ap-concurrency.mjs races create_vendor_bill against cancel_purchase_order in an isolated PostgreSQL container.",
