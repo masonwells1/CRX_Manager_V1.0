@@ -18,6 +18,11 @@
 supabase/migrations/20260717042803_supplier_pricing_phase1a.sql -text diff whitespace=cr-at-eol
 supabase/migrations/20260717112011_supplier_pricing_zero_cost_guard.sql text eol=lf
 supabase/migrations/20260717171331_restore_legacy_pricing_version_compat.sql text eol=lf
+# Stage A also hashes `pg_proc.prosrc`; LF is part of its reviewed body bytes.
+supabase/migrations/20260722222743_product_families_return_policy_foundation.sql text eol=lf
+
+# The Phase 3 classification packet is byte-verified as canonical LF JSON.
+docs/audits/2026-07-22-supplier-pricing-phase3-proposed-classification-manifest.json text eol=lf
 
 # Generated clean-rebuild baselines are hash-verified release artifacts.
 supabase/baselines/*.sql  text eol=lf

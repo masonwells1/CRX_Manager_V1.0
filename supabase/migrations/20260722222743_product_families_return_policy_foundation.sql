@@ -330,6 +330,7 @@ DECLARE
   v_cached jsonb;
   v_product public.products%ROWTYPE;
   v_result jsonb;
+  v_idempotency_fingerprint text;
 BEGIN
   IF v_actor IS NULL THEN RAISE EXCEPTION 'AUTH_REQUIRED'; END IF;
   IF NOT public.is_admin() THEN RAISE EXCEPTION 'ADMIN_REQUIRED'; END IF;
@@ -343,8 +344,28 @@ BEGIN
     RAISE EXCEPTION 'PRODUCT_PHASE3_METADATA_INVALID';
   END IF;
 
+  -- A key is a retry only for this exact actor and full optimistic-update
+  -- request.  Never replay a success onto a different Product or target.
+  v_idempotency_fingerprint := md5(jsonb_build_object(
+    'actor_id', v_actor,
+    'product_id', p_product_id,
+    'expected_product_family_id', p_expected_product_family_id,
+    'expected_return_policy', p_expected_return_policy,
+    'expected_packaging_variant', p_expected_packaging_variant,
+    'expected_is_full_tote_only', p_expected_is_full_tote_only,
+    'product_family_id', p_product_family_id,
+    'return_policy', p_return_policy,
+    'packaging_variant', p_packaging_variant,
+    'is_full_tote_only', p_is_full_tote_only
+  )::text);
   v_cached := public.check_idempotency(p_idempotency_key, 'set_product_phase3_metadata');
-  IF v_cached IS NOT NULL THEN RETURN v_cached; END IF;
+  IF v_cached IS NOT NULL THEN
+    IF v_cached->>'request_fingerprint' IS DISTINCT FROM v_idempotency_fingerprint
+       OR NOT (v_cached ? 'response') THEN
+      RAISE EXCEPTION 'IDEMPOTENCY_PAYLOAD_MISMATCH';
+    END IF;
+    RETURN v_cached->'response';
+  END IF;
 
   PERFORM public.lock_phase3_product_policy_products(ARRAY[p_product_id]);
 
@@ -380,7 +401,11 @@ BEGIN
     'packaging_variant', p_packaging_variant,
     'is_full_tote_only', p_is_full_tote_only
   );
-  PERFORM public.save_idempotency(p_idempotency_key, 'set_product_phase3_metadata', v_result);
+  PERFORM public.save_idempotency(
+    p_idempotency_key,
+    'set_product_phase3_metadata',
+    jsonb_build_object('request_fingerprint', v_idempotency_fingerprint, 'response', v_result)
+  );
   RETURN v_result;
 END;
 $function$;
