@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import {
   detectPrivateCatalogFile,
@@ -25,9 +26,22 @@ const renamedSnapshot = JSON.stringify({ products: [
   { id: '44444444-4444-4444-8444-444444444444', product_name: 'Example Two', SKU: 'EX-2' },
 ] });
 assert.deepEqual(detectPrivateCatalogFile('exports/classification', renamedSnapshot), ['snapshot_product_schema']);
+const productIdSnapshot = JSON.stringify({ products: [
+  { product_id: '99999999-9999-4999-8999-999999999999', product_name: 'Example', SKU: 'EX-3' },
+  { product_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', product_name: 'Example Two', SKU: 'EX-4' },
+] });
+assert.deepEqual(detectPrivateCatalogFile('exports/product-classification', productIdSnapshot), ['snapshot_product_schema']);
 const productHeader = ['product_id', 'product_name', 'sku'].join(',');
 const renamedCsv = `${productHeader}\n55555555-5555-4555-8555-555555555555,Example,EX-1\n66666666-6666-4666-8666-666666666666,Example Two,EX-2`;
 assert.deepEqual(detectPrivateCatalogFile('exports/classification.csv', renamedCsv), ['delimited_product_schema']);
+assert.deepEqual(detectPrivateCatalogFile('exports/classification.txt', renamedCsv), ['delimited_product_schema']);
+assert.deepEqual(detectPrivateCatalogFile('docs/audits/classification.csv', renamedCsv), ['delimited_product_schema']);
+const sqlColumnList = `INSERT INTO products (
+  id, product_name, sku
+) VALUES
+  ('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'Example', 'EX-5'),
+  ('cccccccc-cccc-4ccc-8ccc-cccccccccccc', 'Example Two', 'EX-6');`;
+assert.deepEqual(detectPrivateCatalogFile('exports/classification.sql', sqlColumnList), []);
 const manifestHeader = ['product_id', 'current_product', 'decisions', 'row_sha256'].join('|');
 const renamedManifestTable = `${manifestHeader}\n77777777-7777-4777-8777-777777777777|{}|[]|a\n88888888-8888-4888-8888-888888888888|{}|[]|b`;
 assert.deepEqual(detectPrivateCatalogFile('exports/classification.md', renamedManifestTable), ['delimited_manifest_schema']);
@@ -40,5 +54,8 @@ assert.throws(() => resolveAggregateAuditPath(root, '../outside.md'), /aggregate
 assert.throws(() => resolveAggregateAuditPath(root, path.join(path.sep, 'outside.md')), /aggregate_audit_path_invalid/);
 assert.doesNotThrow(() => requirePathInScope('docs/audits/aggregate.md', ['docs/audits/aggregate.md']));
 assert.throws(() => requirePathInScope('docs/audits/aggregate.md', []), /aggregate_audit_outside_scope/);
+const headScopeCheck = spawnSync(process.execPath, ['scripts/verify-supplier-pricing-phase3-sanitized-privacy.mjs', 'HEAD'], { encoding: 'utf8' });
+assert.notEqual(headScopeCheck.status, 0);
+assert.match(headScopeCheck.stderr, /aggregate_audit_outside_scope/);
 
-console.log('supplier-pricing-phase3-sanitized-privacy: 13 assertions passed');
+console.log('supplier-pricing-phase3-sanitized-privacy: 18 assertions passed');

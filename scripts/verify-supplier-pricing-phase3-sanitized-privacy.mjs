@@ -87,7 +87,7 @@ export function detectPrivateCatalogContent(text) {
 function isSnapshotProductRow(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const keys = new Set(Object.keys(value).map(key => key.toLowerCase()));
-  return ['id', 'product_name', 'sku'].every(key => keys.has(key));
+  return (keys.has('product_id') || keys.has('id')) && keys.has('product_name') && keys.has('sku');
 }
 
 function headerFields(line) {
@@ -100,11 +100,18 @@ function headerFields(line) {
 
 export function detectPrivateCatalogFile(file, text) {
   const hits = detectPrivateCatalogContent(text);
-  if (/^docs\/audits\//i.test(file) || !/\.(?:csv|tsv|md)$/i.test(file) || (text.match(UUID_PATTERN) || []).length < 2) return hits;
-  const headers = text.split(/\r?\n/).map(headerFields);
-  const hasProductTable = headers.some(fields => (fields.includes('product_id') || fields.includes('id'))
+  if ((text.match(UUID_PATTERN) || []).length < 2) return hits;
+  const tableLines = text.split(/\r?\n/);
+  const hasTableHeader = predicate => tableLines.some((line, index) => {
+    const fields = headerFields(line);
+    if (!predicate(fields)) return false;
+    const beforeHeader = tableLines.slice(Math.max(0, index - 12), index + 1).join('\n');
+    const afterHeader = tableLines.slice(index, index + 13).join('\n');
+    return !(/\binsert\s+into\b/i.test(beforeHeader) && /^\s*\)\s*(?:values|select)\b/im.test(afterHeader));
+  });
+  const hasProductTable = hasTableHeader(fields => (fields.includes('product_id') || fields.includes('id'))
     && fields.includes('product_name') && fields.includes('sku'));
-  const hasManifestTable = headers.some(fields => ['product_id', 'current_product', 'decisions', 'row_sha256'].every(field => fields.includes(field)));
+  const hasManifestTable = hasTableHeader(fields => ['product_id', 'current_product', 'decisions', 'row_sha256'].every(field => fields.includes(field)));
   return [...new Set([
     ...hits,
     ...(hasProductTable ? ['delimited_product_schema'] : []),
@@ -136,7 +143,7 @@ function main() {
   const auditFiles = scannedFiles.filter(file => /^docs\/audits\/.*supplier-pricing-phase3/i.test(file));
   const { absolute: aggregateAudit, relative: aggregateAuditRelative } = resolveAggregateAuditPath(ROOT, aggregateAuditPath);
   const aggregatePresent = existsSync(aggregateAudit);
-  if (aggregateAuditArg && aggregatePresent) requirePathInScope(aggregateAuditRelative, scannedFiles);
+  if ((base || aggregateAuditArg) && aggregatePresent) requirePathInScope(aggregateAuditRelative, scannedFiles);
   if (base && !aggregatePresent) throw new Error('SANITIZED_PRIVACY_CHECK_FAILED aggregate_audit_missing');
   if (aggregatePresent && !hasValidAggregateAuditText(readFileSync(aggregateAudit, 'utf8'))) {
     throw new Error('SANITIZED_PRIVACY_CHECK_FAILED aggregate_consistency');
