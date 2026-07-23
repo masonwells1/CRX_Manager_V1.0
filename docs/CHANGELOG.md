@@ -6,6 +6,7 @@ All significant development milestones, in reverse chronological order.
 
 - Prepared an additive `product_families` / Product metadata and return-credit enforcement foundation. `RETURN_POLICY_NO_RETURN` is the exact refusal code; Product metadata remains dormant/default `unknown` until an owner gate. Direct return-item writers and lifecycle wrappers use sorted Product advisory locks; cancellation and credit-memo reversals preserve their inventory and ledger behavior. Metadata idempotency binds the full request and transaction-local authorization resets immediately after the governed update. The content-bound migration is LF-pinned to preserve reviewed `pg_proc` hashes.
 - Aggregate provisional classification packet only: 604 rows remain unresolved and pending owner review; 21 name-only no-return candidates are evidence flags only. Aggregate packet checksum: `bf85cc649657735fa26ba8c7e753d653c76ba238ce63c7605ce723393ea322c4`. No row-level catalog artifacts are included in this branch.
+- The package-level Phase 3 privacy guard now scans the entire tracked-plus-untracked checkout by default and remains available in explicit base-diff mode; CI runs the whole-tree guard before dependency work.
 - No live migration apply, Product mutation, feature-flag enablement, merge, or AI/OCR supplier-PDF extraction occurred. Final external review evidence and the explicit owner gate remain required before acceptance.
 
 ## 2026-07-22 — Section 09 PO/AP remediation review close-out

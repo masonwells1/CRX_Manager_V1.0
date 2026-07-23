@@ -53,6 +53,9 @@ jobs:
         with:
           node-version-file: '.nvmrc'
 
+      - name: Enforce supplier-pricing Phase 3 privacy boundary
+        run: npm run check:supplier-pricing-phase3-privacy
+
       - name: Cache node_modules
         uses: actions/cache@v6
         id: cache-node-modules

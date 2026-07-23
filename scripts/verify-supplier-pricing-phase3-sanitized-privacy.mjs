@@ -6,16 +6,18 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const base = process.argv[2] || 'origin/main';
+const base = process.argv[2];
 const git = args => execFileSync('git', args, { cwd: ROOT, encoding: 'utf8' });
-const tracked = git(['diff', '--no-ext-diff', '--name-only', base]).trim().split(/\r?\n/).filter(Boolean);
+const lines = output => output.trim().split(/\r?\n/).filter(Boolean);
 const untracked = git(['ls-files', '--others', '--exclude-standard']).trim().split(/\r?\n/).filter(Boolean);
-const changed = [...new Set([...tracked, ...untracked])];
-const forbidden = changed.filter(file =>
-  /supplier-pricing-phase3-(product-snapshot|proposed-classification-manifest)\.json$/i.test(file)
-  || /(?:generate|verify)-supplier-pricing-phase3-classification-manifest\.mjs$/i.test(file)
+const scopedFiles = base
+  ? lines(git(['diff', '--no-ext-diff', '--name-only', base]))
+  : lines(git(['ls-files', '--cached', '--others', '--exclude-standard']));
+const scannedFiles = [...new Set([...scopedFiles, ...untracked])];
+const forbidden = scannedFiles.filter(file =>
+  /(?:^|\/)(?:supplier-pricing-phase3-(?:product-snapshot|proposed-classification-manifest)\.json|(?:generate|verify)-supplier-pricing-phase3-classification-manifest\.mjs)$/i.test(file)
 );
-const auditFiles = changed.filter(file => /^docs\/audits\/.*supplier-pricing-phase3/i.test(file));
+const auditFiles = scannedFiles.filter(file => /^docs\/audits\/.*supplier-pricing-phase3/i.test(file));
 const aggregateAudit = path.join(ROOT, 'docs', 'audits', '2026-07-22-supplier-pricing-phase3-classification-review.md');
 const expectedChecksum = 'bf85cc649657735fa26ba8c7e753d653c76ba238ce63c7605ce723393ea322c4';
 if (!existsSync(aggregateAudit)) throw new Error('SANITIZED_PRIVACY_CHECK_FAILED aggregate_audit_missing');
@@ -38,4 +40,4 @@ for (const file of auditFiles) {
 if (forbidden.length || rowFieldHits || uuidHits) {
   throw new Error(`SANITIZED_PRIVACY_CHECK_FAILED forbidden_files=${forbidden.length} audit_row_fields=${rowFieldHits} audit_uuids=${uuidHits}`);
 }
-console.log(`SANITIZED_PRIVACY_CHECK_PASS changed_files=${changed.length} forbidden_files=0 audit_row_fields=0 audit_uuids=0 aggregate_rows=604 unresolved=604 evidence_flags=21 checksum=${expectedChecksum}`);
+console.log(`SANITIZED_PRIVACY_CHECK_PASS scope=${base ? 'diff' : 'whole_tree'} scanned_files=${scannedFiles.length} forbidden_files=0 audit_row_fields=0 audit_uuids=0 aggregate_rows=604 unresolved=604 evidence_flags=21 checksum=${expectedChecksum}`);
