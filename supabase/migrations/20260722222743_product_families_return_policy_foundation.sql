@@ -942,7 +942,9 @@ $function$;
 
 -- Latest production cancellation/reversal bodies are re-emitted below only to
 -- establish the Phase 3 Product lock before any durable inventory or ledger
--- mutation.  Fail closed if a later migration has changed either source.
+-- mutation. These source hashes are pinned to the approved 2026-07-22 live
+-- public-schema dump (highwater 20260722202622), not the 20260719 baseline.
+-- Fail closed if a later migration has changed either source.
 DO $phase3_reversal_preflight$
 DECLARE v_hash text;
 BEGIN
@@ -953,7 +955,7 @@ BEGIN
   END IF;
   SELECT encode(extensions.digest(prosrc, 'sha256'), 'hex') INTO v_hash
     FROM pg_proc WHERE oid = 'public.unapply_credit_memo(uuid,text,uuid,text)'::regprocedure;
-  IF v_hash IS DISTINCT FROM 'c7dc03743aa3fb58298b2bfe4c89e5c8f431eb183f577897f57adafd12c8f3c7' THEN
+  IF v_hash IS DISTINCT FROM '93ce6fa9d974c52e0e50919eeea4ed03cfe6a64761d4f01a86f69d033e7459b8' THEN
     RAISE EXCEPTION 'PHASE3_UNAPPLY_CREDIT_MEMO_SOURCE_HASH_MISMATCH';
   END IF;
 END;
