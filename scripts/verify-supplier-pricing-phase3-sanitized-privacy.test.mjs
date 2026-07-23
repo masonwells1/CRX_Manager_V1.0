@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  canonicalTextSha256,
   countAuditRowFields,
   detectPrivateCatalogFile,
   hasCatalogRowSignature,
@@ -60,10 +60,11 @@ assert.deepEqual(detectPrivateCatalogFile('exports/non-catalog.sql', nonCatalogS
 
 const genericCatalog = catalogText(11, 12);
 const genericFixturePath = 'fixtures/known-catalog.txt';
-const genericFixtureHash = createHash('sha256').update(genericCatalog, 'utf8').digest('hex');
+const genericFixtureHash = canonicalTextSha256(genericCatalog);
 assert.equal(hasCatalogRowSignature(genericCatalog), true);
 assert.equal(isKnownSafeCatalogSignature(genericFixturePath, genericCatalog, { [genericFixturePath]: genericFixtureHash }), true);
 assert.equal(isKnownSafeCatalogSignature(genericFixturePath, `${genericCatalog}x`, { [genericFixturePath]: genericFixtureHash }), false);
+assert.equal(canonicalTextSha256(`${genericCatalog}\r\nnext\rline\nlast`), canonicalTextSha256(`${genericCatalog}\nnext\nline\nlast`));
 assert.deepEqual(detectPrivateCatalogFile('exports/catalog.txt', genericCatalog), ['catalog_row_signature']);
 
 const insertInto = ['INSERT', 'INTO'].join(' ');
@@ -109,10 +110,20 @@ const safeFixturePaths = [
 ];
 for (const safeFixturePath of safeFixturePaths) {
   const safeFixtureText = readFileSync(path.join(workspaceRoot, safeFixturePath), 'utf8');
+  const headBlobText = execFileSync('git', ['show', `HEAD:${safeFixturePath}`], { cwd: workspaceRoot, encoding: 'utf8' });
+  const crlfText = headBlobText.replace(/\n/g, '\r\n');
   assert.equal(hasCatalogRowSignature(safeFixtureText), true, `${safeFixturePath} must have generic signature`);
-  assert.equal(isKnownSafeCatalogSignature(safeFixturePath, safeFixtureText), true, `${safeFixturePath} must match allowlist hash`);
+  assert.equal(hasCatalogRowSignature(headBlobText), true, `${safeFixturePath} HEAD blob must have generic signature`);
+  assert.equal(canonicalTextSha256(safeFixtureText), canonicalTextSha256(headBlobText), `${safeFixturePath} worktree and HEAD canonical hashes must match`);
+  assert.equal(canonicalTextSha256(crlfText), canonicalTextSha256(headBlobText), `${safeFixturePath} CRLF canonical hash must match`);
+  assert.equal(isKnownSafeCatalogSignature(safeFixturePath, safeFixtureText), true, `${safeFixturePath} worktree must match allowlist hash`);
+  assert.equal(isKnownSafeCatalogSignature(safeFixturePath, headBlobText), true, `${safeFixturePath} HEAD blob must match allowlist hash`);
+  assert.equal(isKnownSafeCatalogSignature(safeFixturePath, crlfText), true, `${safeFixturePath} CRLF equivalent must match allowlist hash`);
   assert.deepEqual(detectPrivateCatalogFile(safeFixturePath, safeFixtureText), [], `${safeFixturePath} must be exactly allowlisted`);
-  assert.ok(detectPrivateCatalogFile(safeFixturePath, `${safeFixtureText}\nX`).includes('catalog_row_signature'), `${safeFixturePath} one-byte append must refuse`);
+  assert.deepEqual(detectPrivateCatalogFile(safeFixturePath, headBlobText), [], `${safeFixturePath} HEAD blob must be allowlisted`);
+  assert.deepEqual(detectPrivateCatalogFile(safeFixturePath, crlfText), [], `${safeFixturePath} CRLF equivalent must be allowlisted`);
+  assert.equal(isKnownSafeCatalogSignature(safeFixturePath, `${safeFixtureText}\nX`), false, `${safeFixturePath} content append must lose exemption`);
+  assert.ok(detectPrivateCatalogFile(safeFixturePath, `${safeFixtureText}\nX`).includes('catalog_row_signature'), `${safeFixturePath} content append must refuse`);
 }
 
 const manifestHeader = ['product_id', 'current_product', 'decisions', 'row_sha256'].join('|');
