@@ -56,6 +56,10 @@ backups/
 # Generated EPA catalog data-quality manifest/report (contains live product data)
 .epa-data-quality/
 
+# Supplier Pricing Phase 3 private catalog artifacts (never publish)
+2026-07-22-supplier-pricing-phase3-product-snapshot.json
+2026-07-22-supplier-pricing-phase3-proposed-classification-manifest.json
+
 # Vercel CLI working directory
 .vercel/
 
