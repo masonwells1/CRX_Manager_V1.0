@@ -291,7 +291,7 @@ BEGIN
   END IF;
 
   IF current_setting('app.phase3_metadata_authorized', true) IS DISTINCT FROM 'true' THEN
-    RAISE EXCEPTION 'PRODUCT_PHASE3_METADATA_GOVERNED';
+    RAISE EXCEPTION 'PRODUCT_PHASE3_METADATA_GOVERNED_WRITE_REQUIRED';
   END IF;
 
   PERFORM public.assert_phase3_product_metadata_change_safe(NEW.id);
@@ -392,6 +392,10 @@ BEGIN
          is_full_tote_only = p_is_full_tote_only,
          updated_at = now()
    WHERE id = p_product_id;
+
+  -- Scope the authorization to the governed UPDATE above; do not let a later
+  -- direct Product metadata write inherit it in this same transaction.
+  PERFORM set_config('app.phase3_metadata_authorized', 'false', true);
 
   v_result := jsonb_build_object(
     'success', true,

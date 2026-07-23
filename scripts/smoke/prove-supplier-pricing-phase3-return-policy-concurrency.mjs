@@ -241,6 +241,22 @@ try {
     assert.equal(scalar(`SELECT count(*) FROM public.idempotency_keys WHERE idempotency_key='${key}';`),'1');
     console.log('PHASE3_METADATA_IDEMPOTENCY_BINDING_PASS');
   }
+  function metadataAuthorizationScope(){
+    const f=makeFixture('metadata authorization scope','none'), key=`metadata-scope-${f.n}`;
+    const call=`SELECT public.set_product_phase3_metadata('${f.productId}'::uuid,NULL,'unknown',NULL,false,NULL,'no_return',NULL,false,'${key}');`;
+    const scoped=sql(`BEGIN; ${claims(admin)} ${call} DO $scope$ BEGIN
+      UPDATE public.products SET return_policy='returnable' WHERE id='${f.productId}'::uuid;
+      RAISE EXCEPTION 'PHASE3_AUTH_SCOPE_LEAK';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM LIKE 'PHASE3_AUTH_SCOPE_LEAK%' THEN RAISE; END IF;
+      IF SQLERRM NOT LIKE 'PRODUCT_PHASE3_METADATA_GOVERNED_WRITE_REQUIRED%' THEN
+        RAISE EXCEPTION 'PHASE3_AUTH_SCOPE_UNEXPECTED_FAILURE: %', SQLERRM;
+      END IF;
+    END $scope$; COMMIT;`,{fail:true});
+    assert.equal(scoped.status,0,`metadata authorization scope transaction failed: ${scoped.stderr||scoped.stdout}`);
+    assert.equal(policy(f),'no_return','governed metadata update did not persist before direct-write refusal');
+    console.log('PHASE3_METADATA_AUTHORIZATION_SCOPE_PASS');
+  }
   async function cancelReceiveSharedProductRace(){
     // These wrappers exert opposite pressure on the same inventory row:
     // received cancellation decrements it while approved receive increments it.
@@ -295,6 +311,7 @@ try {
   hostileNoReturnApproveReceive();
   proveCreditedReversalBoundary();
   metadataIdempotencyBinding();
+  metadataAuthorizationScope();
   await cancelReceiveSharedProductRace();
   console.log('PHASE3_REAL_SCHEMA_RESTORE_PASS'); console.log('PHASE3_ROLLBACK_MATRIX_PASS'); console.log('PHASE3_REAL_TWO_CONNECTION_LOCK_ORDER_PASS');
   console.log('PHASE3_REAL_WRAPPER_CONCURRENCY_PASS');
