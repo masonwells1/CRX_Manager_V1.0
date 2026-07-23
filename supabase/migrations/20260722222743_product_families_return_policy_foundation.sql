@@ -940,6 +940,151 @@ BEGIN
 END;
 $function$;
 
+-- Latest production cancellation/reversal bodies are re-emitted below only to
+-- establish the Phase 3 Product lock before any durable inventory or ledger
+-- mutation.  Fail closed if a later migration has changed either source.
+DO $phase3_reversal_preflight$
+DECLARE v_hash text;
+BEGIN
+  SELECT encode(extensions.digest(prosrc, 'sha256'), 'hex') INTO v_hash
+    FROM pg_proc WHERE oid = 'public.cancel_return(uuid,text,uuid,text)'::regprocedure;
+  IF v_hash IS DISTINCT FROM '832d63367837da5db7b96040e316691741823293a2cce655c4e1637a988fa2ec' THEN
+    RAISE EXCEPTION 'PHASE3_CANCEL_RETURN_SOURCE_HASH_MISMATCH';
+  END IF;
+  SELECT encode(extensions.digest(prosrc, 'sha256'), 'hex') INTO v_hash
+    FROM pg_proc WHERE oid = 'public.unapply_credit_memo(uuid,text,uuid,text)'::regprocedure;
+  IF v_hash IS DISTINCT FROM 'c7dc03743aa3fb58298b2bfe4c89e5c8f431eb183f577897f57adafd12c8f3c7' THEN
+    RAISE EXCEPTION 'PHASE3_UNAPPLY_CREDIT_MEMO_SOURCE_HASH_MISMATCH';
+  END IF;
+END;
+$phase3_reversal_preflight$;
+
+CREATE OR REPLACE FUNCTION public.cancel_return(
+  p_return_id uuid,
+  p_reason text,
+  p_performed_by uuid,
+  p_idempotency_key text DEFAULT NULL::text
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+DECLARE
+  v_return record;
+  v_item record;
+  v_cached jsonb;
+  v_result jsonb;
+  v_reversed_ids uuid[] := ARRAY[]::uuid[];
+  v_skipped_ids uuid[] := ARRAY[]::uuid[];
+  v_reversed_qty bigint := 0;
+  v_reversed_count int := 0;
+  v_skipped_count int := 0;
+  v_was_received boolean;
+  v_actor uuid;
+  v_product_ids uuid[];
+BEGIN
+  v_actor := auth.uid();
+  IF v_actor IS NULL THEN RAISE EXCEPTION 'AUTH_REQUIRED'; END IF;
+  IF p_performed_by IS DISTINCT FROM v_actor THEN RAISE EXCEPTION 'ACTOR_MISMATCH'; END IF;
+  IF NOT EXISTS (SELECT 1 FROM public.profiles WHERE id = v_actor AND is_active = true AND role IN ('admin', 'sales_rep')) THEN RAISE EXCEPTION 'INSUFFICIENT_ROLE'; END IF;
+  IF p_idempotency_key IS NOT NULL THEN
+    v_cached := public.check_idempotency(p_idempotency_key, 'cancel_return');
+    IF v_cached IS NOT NULL THEN RETURN v_cached; END IF;
+  END IF;
+  IF p_reason IS NULL OR trim(p_reason) = '' THEN RAISE EXCEPTION 'Reason is required to cancel a return'; END IF;
+  SELECT id, return_number, status, customer_id INTO v_return FROM public.returns WHERE id = p_return_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'Return not found: %', p_return_id; END IF;
+  IF v_return.status NOT IN ('requested', 'approved', 'received') THEN RAISE EXCEPTION 'Cannot cancel return in status "%" - only requested/approved/received returns can be cancelled', v_return.status; END IF;
+
+  -- Lock every linked Product before inventory is touched.  The helper sorts
+  -- UUIDs, matching receive_return and the direct-write backstop trigger.
+  SELECT array_agg(DISTINCT ri.product_id ORDER BY ri.product_id) INTO v_product_ids
+    FROM public.return_items ri WHERE ri.return_id = p_return_id;
+  PERFORM public.lock_phase3_product_policy_products(v_product_ids);
+
+  v_was_received := (v_return.status = 'received');
+  IF v_was_received THEN
+    FOR v_item IN
+      SELECT ri.id AS item_id, ri.product_id, ri.quantity, ri.product_name, ri.condition, inv.id AS inv_id, inv.location AS inv_location
+      FROM public.return_items ri
+      LEFT JOIN LATERAL (SELECT id, location FROM public.inventory WHERE product_id = ri.product_id AND location = 'Main Warehouse' LIMIT 1) inv ON true
+      WHERE ri.return_id = p_return_id AND ri.restocked = true ORDER BY ri.sort_order
+    LOOP
+      IF v_item.inv_id IS NOT NULL THEN
+        UPDATE public.inventory SET quantity_available = quantity_available - v_item.quantity, updated_at = now() WHERE id = v_item.inv_id;
+        INSERT INTO public.inventory_transactions (product_id, transaction_type, quantity, to_location, performed_by, notes)
+        VALUES (v_item.product_id, 'returned', -v_item.quantity, v_item.inv_location, v_actor, 'Cancel of return ' || v_return.return_number || ': ' || v_item.product_name || ' (' || v_item.condition || ') - restock reversed: ' || p_reason);
+        v_reversed_ids := array_append(v_reversed_ids, v_item.item_id); v_reversed_qty := v_reversed_qty + v_item.quantity; v_reversed_count := v_reversed_count + 1;
+      ELSE
+        RAISE WARNING 'Cancel of return %: item % (product %) was restocked but inventory row no longer exists - skipping reversal, restocked flag will still be cleared.', v_return.return_number, v_item.item_id, v_item.product_id;
+        v_skipped_ids := array_append(v_skipped_ids, v_item.item_id); v_skipped_count := v_skipped_count + 1;
+      END IF;
+    END LOOP;
+  END IF;
+  PERFORM set_config('app.admin_override', 'true', true);
+  UPDATE public.returns SET status = 'cancelled', cancelled_at = now(), cancelled_by = v_actor, cancellation_reason = p_reason, updated_at = now() WHERE id = p_return_id;
+  PERFORM set_config('app.admin_override', 'false', true);
+  IF array_length(v_reversed_ids, 1) > 0 OR array_length(v_skipped_ids, 1) > 0 THEN UPDATE public.return_items SET restocked = false WHERE id = ANY(v_reversed_ids || v_skipped_ids); END IF;
+  INSERT INTO public.activity_feed (event_type, description, performed_by, related_entity_type, related_entity_id, customer_id)
+  VALUES ('return_cancelled', 'Return ' || v_return.return_number || ' cancelled' || CASE WHEN v_was_received THEN ' - ' || v_reversed_count || ' item(s) un-restocked' || CASE WHEN v_skipped_count > 0 THEN ' (' || v_skipped_count || ' skipped: inventory row missing - admin must reconcile)' ELSE '' END ELSE '' END || ': ' || p_reason, v_actor, 'return', p_return_id, v_return.customer_id);
+  v_result := jsonb_build_object('success', true, 'return_id', p_return_id, 'return_number', v_return.return_number, 'status', 'cancelled', 'was_received', v_was_received, 'reversed_count', v_reversed_count, 'reversed_quantity', v_reversed_qty, 'skipped_count', v_skipped_count);
+  IF p_idempotency_key IS NOT NULL THEN PERFORM public.save_idempotency(p_idempotency_key, 'cancel_return', v_result); END IF;
+  RETURN v_result;
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.unapply_credit_memo(p_credit_memo_id uuid, p_reason text, p_performed_by uuid DEFAULT NULL::uuid, p_idempotency_key text DEFAULT NULL::text)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public', 'pg_temp'
+AS $function$
+DECLARE
+  v_actor uuid; v_invoice record; v_return record; v_existing jsonb; v_result jsonb; v_capp record; v_product_ids uuid[];
+BEGIN
+  v_actor := auth.uid();
+  IF v_actor IS NULL THEN RAISE EXCEPTION 'AUTH_REQUIRED'; END IF;
+  IF p_performed_by IS NOT NULL AND p_performed_by IS DISTINCT FROM v_actor THEN RAISE EXCEPTION 'ACTOR_MISMATCH'; END IF;
+  IF NOT EXISTS (SELECT 1 FROM profiles WHERE id = v_actor AND is_active = true AND role = 'admin') THEN RAISE EXCEPTION 'INSUFFICIENT_ROLE'; END IF;
+  IF p_reason IS NULL OR trim(p_reason) = '' THEN RAISE EXCEPTION 'Reason is required to unapply a credit memo'; END IF;
+  IF p_idempotency_key IS NOT NULL THEN
+    SELECT result INTO v_existing FROM idempotency_keys WHERE idempotency_key = p_idempotency_key AND operation = 'unapply_credit_memo';
+    IF v_existing IS NOT NULL THEN IF (v_existing->>'credit_memo_id')::uuid IS DISTINCT FROM p_credit_memo_id THEN RAISE EXCEPTION 'IDEMPOTENCY_ARGUMENT_MISMATCH: idempotency key was already used for a different credit memo'; END IF; RETURN v_existing; END IF;
+  END IF;
+  SELECT * INTO v_invoice FROM invoices WHERE id = p_credit_memo_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'Invoice not found: %', p_credit_memo_id; END IF;
+  IF v_invoice.invoice_type != 'credit_memo' THEN RAISE EXCEPTION 'Invoice % is not a credit memo (type: %)', v_invoice.invoice_number, v_invoice.invoice_type; END IF;
+  IF v_invoice.status != 'posted' THEN RAISE EXCEPTION 'Only posted credit memos can be unapplied (current status: %)', v_invoice.status; END IF;
+  PERFORM check_period_open(v_invoice.invoice_date);
+  -- Acquire Return/Product protocol before reversing applications or voiding the memo.
+  SELECT * INTO v_return FROM returns WHERE credit_invoice_id = p_credit_memo_id FOR UPDATE;
+  IF v_return.id IS NOT NULL THEN
+    SELECT array_agg(DISTINCT ri.product_id ORDER BY ri.product_id) INTO v_product_ids FROM return_items ri WHERE ri.return_id = v_return.id;
+    PERFORM public.lock_phase3_product_policy_products(v_product_ids);
+  END IF;
+  FOR v_capp IN SELECT id, applied_at FROM credit_memo_applications WHERE credit_memo_id = p_credit_memo_id AND reversed_at IS NULL ORDER BY id LOOP
+    PERFORM check_period_open(v_capp.applied_at::date);
+    PERFORM _reverse_credit_memo_application(v_capp.id, v_actor, (SELECT role FROM profiles WHERE id = v_actor), 'Auto-reversed: credit memo ' || v_invoice.invoice_number || ' unapplied — ' || p_reason);
+  END LOOP;
+  UPDATE invoices SET status = 'voided', voided_by = v_actor, voided_at = now(), void_reason = p_reason, updated_at = now() WHERE id = p_credit_memo_id;
+  IF v_return.id IS NOT NULL THEN
+    PERFORM set_config('app.admin_override', 'true', true);
+    UPDATE returns SET status = 'received', credit_invoice_id = NULL, total_credit_cents = 0, credited_at = NULL, credited_by = NULL, updated_at = now() WHERE id = v_return.id;
+    PERFORM set_config('app.admin_override', 'false', true);
+  END IF;
+  INSERT INTO financial_audit_log (operation_type, entity_type, entity_id, actor_role, old_values, new_values, total_impact_cents, description)
+  VALUES ('credit_memo_unapplied', 'invoice', p_credit_memo_id, (SELECT role FROM profiles WHERE id = v_actor), jsonb_build_object('status', 'posted', 'total_amount_cents', v_invoice.total_amount_cents), jsonb_build_object('status', 'voided', 'return_reverted', CASE WHEN v_return.id IS NOT NULL THEN v_return.return_number ELSE NULL END), -v_invoice.total_amount_cents, 'Credit memo ' || v_invoice.invoice_number || ' unapplied: ' || p_reason);
+  INSERT INTO activity_feed (event_type, description, performed_by, related_entity_type, related_entity_id, customer_id)
+  VALUES ('credit_memo_unapplied', 'Credit memo ' || v_invoice.invoice_number || ' unapplied: ' || p_reason, v_actor, 'invoice', p_credit_memo_id, v_invoice.customer_id);
+  v_result := jsonb_build_object('success', true, 'credit_memo_id', p_credit_memo_id, 'invoice_number', v_invoice.invoice_number, 'return_id', v_return.id, 'return_reverted', v_return.id IS NOT NULL);
+  IF p_idempotency_key IS NOT NULL THEN INSERT INTO idempotency_keys (idempotency_key, operation, result, expires_at) VALUES (p_idempotency_key, 'unapply_credit_memo', v_result, now() + interval '24 hours') ON CONFLICT (idempotency_key) DO NOTHING; END IF;
+  RETURN v_result;
+END;
+$function$;
+
+REVOKE ALL ON FUNCTION public.cancel_return(uuid, text, uuid, text) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.unapply_credit_memo(uuid, text, uuid, text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.cancel_return(uuid, text, uuid, text) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.unapply_credit_memo(uuid, text, uuid, text) TO authenticated, service_role;
+
 REVOKE ALL ON FUNCTION public.create_return(jsonb, jsonb, text) FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION public.approve_return(uuid, uuid, text) FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION public.receive_return(uuid, uuid, text) FROM PUBLIC, anon;
@@ -992,6 +1137,30 @@ BEGIN
   END IF;
   IF position('ACTOR_MISMATCH' IN v_src) = 0 OR position('assert_phase3_return_policy' IN v_src) = 0 OR position('_issue_return_credit_impl' IN v_src) = 0 THEN
     RAISE EXCEPTION 'PHASE3_ISSUE_RETURN_CREDIT_ASSERTION_FAILED';
+  END IF;
+  SELECT prosrc INTO v_src FROM pg_proc WHERE oid = 'public.cancel_return(uuid,text,uuid,text)'::regprocedure;
+  SELECT encode(extensions.digest(v_src, 'sha256'), 'hex') INTO v_hash;
+  IF v_hash IS DISTINCT FROM '84e3721397dc5d904c0e0d0fe279a821c2a8f1eeec24e87969261dba5984fe45' THEN
+    RAISE EXCEPTION 'PHASE3_CANCEL_RETURN_POST_HASH_ASSERTION_FAILED';
+  END IF;
+  IF position('ACTOR_MISMATCH' IN v_src) = 0
+     OR position('lock_phase3_product_policy_products' IN v_src) = 0
+     OR position('UPDATE public.inventory' IN v_src) = 0
+     OR position('lock_phase3_product_policy_products' IN v_src) > position('UPDATE public.inventory' IN v_src)
+     OR position('app.admin_override' IN v_src) = 0 THEN
+    RAISE EXCEPTION 'PHASE3_CANCEL_RETURN_LOCK_ORDER_ASSERTION_FAILED';
+  END IF;
+  SELECT prosrc INTO v_src FROM pg_proc WHERE oid = 'public.unapply_credit_memo(uuid,text,uuid,text)'::regprocedure;
+  SELECT encode(extensions.digest(v_src, 'sha256'), 'hex') INTO v_hash;
+  IF v_hash IS DISTINCT FROM '286de5b0ac196331713278f335ba1b02e73e9de334cc2fb5f22e49629922b374' THEN
+    RAISE EXCEPTION 'PHASE3_UNAPPLY_CREDIT_MEMO_POST_HASH_ASSERTION_FAILED';
+  END IF;
+  IF position('ACTOR_MISMATCH' IN v_src) = 0
+     OR position('lock_phase3_product_policy_products' IN v_src) = 0
+     OR position('_reverse_credit_memo_application' IN v_src) = 0
+     OR position('lock_phase3_product_policy_products' IN v_src) > position('_reverse_credit_memo_application' IN v_src)
+     OR position('app.admin_override' IN v_src) = 0 THEN
+    RAISE EXCEPTION 'PHASE3_UNAPPLY_CREDIT_MEMO_LOCK_ORDER_ASSERTION_FAILED';
   END IF;
 
   -- Direct return-item writers and return status writers must use the same

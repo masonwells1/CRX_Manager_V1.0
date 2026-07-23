@@ -24,13 +24,14 @@ function file(local,name){run(['cp',local,`${NAME}:/tmp/${name}`])}
 function apply(name){return sql(`BEGIN;
 \\i /tmp/${name}
 COMMIT;`)}
-function session(s,marker){const c=spawn('docker',psqlArgs(),{cwd:ROOT,stdio:['pipe','pipe','pipe']});let out='',err='',timer,settled=false;let resolve,reject;const ready=new Promise((r,j)=>{resolve=r;reject=j;timer=setTimeout(()=>{if(!settled){settled=true;j(new Error(`timeout waiting for ${marker}: ${err||out}`))}},20000)});c.stdout.on('data',x=>{out+=x;if(!settled&&out.includes(marker)){settled=true;clearTimeout(timer);resolve()}});c.stderr.on('data',x=>err+=x);c.stdin.end(s);const done=new Promise(r=>c.on('close',code=>{if(!settled){settled=true;clearTimeout(timer);reject(new Error(`session ended before ${marker}: ${err||out}`))}r({code,out,err})}));return {ready,done} }
+function session(s,marker){const c=spawn('docker',psqlArgs(),{cwd:ROOT,stdio:['pipe','pipe','pipe']});let out='',err='',timer,settled=false;let resolve,reject;const ready=new Promise((r,j)=>{resolve=r;reject=j;timer=setTimeout(()=>{if(!settled){settled=true;j(new Error(`timeout waiting for ${marker}: ${err||out}`))}},20000)});c.stdout.on('data',x=>{out+=x;if(!settled&&out.includes(marker)){settled=true;clearTimeout(timer);resolve()}});c.stderr.on('data',x=>err+=x);c.stdin.end(s);const done=new Promise(r=>c.on('close',code=>{if(!settled){settled=true;clearTimeout(timer);reject(new Error(`session ended before ${marker}: ${err||out}`))}r({code,out,err})}));return {ready,done,output:()=>out} }
 const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 function scalar(statement){const out=sql(statement).stdout.trim(); if(!out)throw new Error(`expected scalar output: ${statement}`); return out.split(/\r?\n/).at(-1)}
 function json(statement){return JSON.parse(scalar(statement))}
 function claims(userId){return `SET \"request.jwt.claim.sub\" = '${userId}'; SET \"request.jwt.claim.role\" = 'authenticated';`}
 function assertExactFailure(result,code,label){const exit=result.code??result.status, out=result.out??result.stdout??'', err=result.err??result.stderr??'';assert.notEqual(exit,0,`${label} unexpectedly succeeded: ${out}`);assert.match(`${out}\n${err}`,new RegExp(`ERROR:\\s+${code}`),`${label} did not fail ${code}: ${out}\n${err}`)}
 async function assertWaiting(done,label){const state=await Promise.race([done.then(()=> 'finished'),pause(500).then(()=> 'waiting')]);assert.equal(state,'waiting',`${label} did not wait for the advisory lock`)}
+async function assertMarkerBlocked(ready,label){const state=await Promise.race([ready.then(()=> 'marked'),pause(500).then(()=> 'waiting')]);assert.equal(state,'waiting',`${label} acquired the Product advisory lock before cancellation released inventory`)}
 try {
   run(['run','-d','--name',NAME,'--network','none','--tmpfs','/var/lib/postgresql/data:rw,noexec,nosuid,size=1024m','-e','POSTGRES_PASSWORD=postgres',image]);
   let healthy=false; for(let i=0;i<90;i++){if(run(['exec',NAME,'pg_isready','-U','postgres','-d','postgres'],{fail:true}).status===0){Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,2000);if(run(['exec',NAME,'pg_isready','-U','postgres','-d','postgres'],{fail:true}).status===0){healthy=true;break}}Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,500)} if(!healthy)throw new Error('disposable Postgres did not become healthy');
@@ -65,13 +66,13 @@ try {
     if(operation==='issue_return_credit') return `SELECT public.issue_return_credit('${f.returnId}'::uuid,'${admin}'::uuid,'${key}');`;
     throw new Error(`unsupported wrapper ${operation}`);
   }
-  function makeFixture(label,state='requested'){
+  function makeFixture(label,state='requested',sharedProductId=null){
     const n=++fixtureNo, tag=`[PROOF P3 ${process.pid}-${n}] ${label}`;
-    const productId=scalar(`INSERT INTO public.products(product_name) VALUES ('${tag} Product') RETURNING id;`);
+    const productId=sharedProductId||scalar(`INSERT INTO public.products(product_name) VALUES ('${tag} Product') RETURNING id;`);
     const customerId=scalar(`INSERT INTO public.customers(farm_name) VALUES ('${tag} Customer') RETURNING id;`);
     const orderId=scalar(`INSERT INTO public.orders(order_number,customer_id,salesman_id,status) VALUES ('P3-${process.pid}-${n}','${customerId}'::uuid,'${sales}'::uuid,'confirmed') RETURNING id;`);
     const orderItemId=scalar(`INSERT INTO public.order_items(order_id,product_id,product_name,price_per_unit,total_units_needed,unit_size,total_price,quantity_delivered,quantity_remaining) VALUES ('${orderId}'::uuid,'${productId}'::uuid,'${tag} Product',10,4,'ea',40,4,0) RETURNING id;`);
-    scalar(`INSERT INTO public.inventory(product_id,location,quantity_available,unit_size) VALUES ('${productId}'::uuid,'Main Warehouse',7,'ea') RETURNING id;`);
+    if(!sharedProductId) scalar(`INSERT INTO public.inventory(product_id,location,quantity_available,unit_size) VALUES ('${productId}'::uuid,'Main Warehouse',7,'ea') RETURNING id;`);
     const f={label,n,productId,customerId,orderId,orderItemId,returnId:null};
     if(state==='none') return f;
     const result=json(`${claims(sales)} ${wrapperSql(f,'create_return',`fixture-${n}-create`)}`);
@@ -223,6 +224,38 @@ try {
     const before=snapshot(f,`reversal-${f.n}-recredit`); const failed=sql(`${claims(admin)} ${wrapperSql(f,'issue_return_credit',`reversal-${f.n}-recredit`)}`,{fail:true}); assertExactFailure(failed,'RETURN_POLICY_NO_RETURN','re-credit after governed no_return'); assert.deepEqual(snapshot(f,`reversal-${f.n}-recredit`),before,'blocked re-credit left money or audit effects');
     console.log('PHASE3_CREDITED_REVERSAL_BOUNDARY_PASS');
   }
+  async function cancelReceiveSharedProductRace(){
+    // These wrappers exert opposite pressure on the same inventory row:
+    // received cancellation decrements it while approved receive increments it.
+    // They run in independent sessions and both must finish, so this catches a
+    // Product-before-inventory ordering regression as a real deadlock/timeout.
+    const cancelFixture=makeFixture('cancel receive shared product cancel','received');
+    const receiveFixture=makeFixture('cancel receive shared product receive','approved',cancelFixture.productId);
+    const before=snapshot(cancelFixture,`cancel-receive-${cancelFixture.n}-before`);
+    const beforeTransactions=Number(before.transactions);
+    const invId=scalar(`SELECT id FROM public.inventory WHERE product_id='${cancelFixture.productId}'::uuid AND location='Main Warehouse';`);
+    const holderMarker=`P3_SHARED_INVENTORY_HELD_${cancelFixture.n}`, cancelMarker=`P3_CANCEL_SHARED_PRODUCT_CALLING_${cancelFixture.n}`, receiveMarker=`P3_RECEIVE_SHARED_PRODUCT_GOT_ADVISORY_${receiveFixture.n}`;
+    const cancelKey=`cancel-receive-${cancelFixture.n}-cancel`, receiveKey=`cancel-receive-${receiveFixture.n}-receive`;
+    const holder=session(`BEGIN; SELECT id FROM public.inventory WHERE id='${invId}'::uuid FOR UPDATE; SELECT '${holderMarker}'; SELECT pg_sleep(3); COMMIT;`,holderMarker);
+    await holder.ready;
+    const cancelling=session(`BEGIN; SET lock_timeout='10s'; ${claims(sales)} SELECT '${cancelMarker}'; SELECT public.cancel_return('${cancelFixture.returnId}'::uuid,'Phase 3 shared-product race','${sales}'::uuid,'${cancelKey}'); COMMIT;`,cancelMarker);
+    await cancelling.ready;
+    // Give cancel_return time to acquire its Product advisory lock and block on
+    // the held inventory row. The receive session must then wait at the helper.
+    await pause(500);
+    const receiving=session(`BEGIN; SET lock_timeout='10s'; ${claims(sales)} SELECT public.lock_phase3_product_policy_products(ARRAY['${cancelFixture.productId}'::uuid]); SELECT '${receiveMarker}'; ${wrapperSql(receiveFixture,'receive_return',receiveKey)} COMMIT;`,receiveMarker);
+    await assertMarkerBlocked(receiving.ready,'shared-product receive advisory lock while cancellation waits on inventory');
+    const [held,cancelled,received]=await Promise.all([holder.done,cancelling.done,receiving.done]);
+    assert.equal(held.code,0,held.err);
+    assert.equal(cancelled.code,0,cancelled.err); assert.equal(received.code,0,received.err);
+    assert.equal(snapshot(cancelFixture,cancelKey).status,'cancelled');
+    assert.equal(snapshot(receiveFixture,receiveKey).status,'received');
+    const afterInventory=Number(scalar(`SELECT quantity_available FROM public.inventory WHERE product_id='${cancelFixture.productId}'::uuid AND location='Main Warehouse';`));
+    assert.equal(afterInventory,Number(before.inventory),'shared Product inventory net effect must be zero');
+    assert.equal(Number(scalar(`SELECT count(*) FROM public.inventory_transactions WHERE product_id='${cancelFixture.productId}'::uuid;`)),beforeTransactions+2,'shared Product race must write exact cancel+receive transactions');
+    assert.equal(scalar(`SELECT count(*) FROM public.idempotency_keys WHERE idempotency_key IN ('${cancelKey}','${receiveKey}');`),'2');
+    console.log('PHASE3_RACE_CANCEL_RECEIVE_SHARED_PRODUCT_NO_DEADLOCK_PASS');
+  }
   // Positive control first: this fixture must restock Main Warehouse through
   // the real receive wrapper before the race cases assert its no-effect path.
   const receiveControl=makeFixture('receive positive control','approved'), receiveBefore=snapshot(receiveControl,`control-${receiveControl.n}`);
@@ -244,6 +277,7 @@ try {
   await unapplyMetadataRace(false);
   hostileNoReturnApproveReceive();
   proveCreditedReversalBoundary();
+  await cancelReceiveSharedProductRace();
   console.log('PHASE3_REAL_SCHEMA_RESTORE_PASS'); console.log('PHASE3_ROLLBACK_MATRIX_PASS'); console.log('PHASE3_REAL_TWO_CONNECTION_LOCK_ORDER_PASS');
   console.log('PHASE3_REAL_WRAPPER_CONCURRENCY_PASS');
 } finally { run(['rm','-f',NAME],{fail:true}); }
