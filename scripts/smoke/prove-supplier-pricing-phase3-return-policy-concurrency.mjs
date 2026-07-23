@@ -41,7 +41,7 @@ try {
   // transaction so a failure proves which boundary failed and stops the proof.
   apply('section9.sql'); apply('stageA.sql');
   sql(`INSERT INTO auth.users(id) VALUES ('00000000-0000-0000-0000-00000000a001'),('00000000-0000-0000-0000-00000000a002') ON CONFLICT DO NOTHING; INSERT INTO public.profiles(id,email,role,is_active) VALUES ('00000000-0000-0000-0000-00000000a001','phase3-admin@example.invalid','admin',true),('00000000-0000-0000-0000-00000000a002','phase3-sales@example.invalid','sales_rep',true) ON CONFLICT (id) DO UPDATE SET role=excluded.role,is_active=true;`);
-  const smoke=sql('\\i /tmp/smoke.sql',{fail:true}); const smokeOut=`${smoke.stdout}\n${smoke.stderr}`; assert.match(smokeOut,/SMOKE_PASS_ROLLBACK/,'rollback matrix did not reach its terminal marker');
+  const smoke=sql('\\i /tmp/smoke.sql',{fail:true}); const smokeOut=`${smoke.stdout}\n${smoke.stderr}`; assert.match(smokeOut,/SMOKE_PASS_ROLLBACK/,'rollback matrix did not reach its terminal marker'); assert.match(smokeOut,/PHASE3_UNRELATED_CREDIT_MEMO_UNAPPLY_PASS/,'unrelated credit-memo unapply regression did not pass'); console.log('PHASE3_UNRELATED_CREDIT_MEMO_UNAPPLY_PASS');
   const source=readFileSync(files.stageA,'utf8'); for(const x of ['lock_phase3_product_policy_products','RETURN_POLICY_NO_RETURN','trigger_x_validate_phase3_return_item_policy'])assert.match(source,new RegExp(x));
   sql(`INSERT INTO public.products(product_name) VALUES ('[PROOF] Phase3 lock A'),('[PROOF] Phase3 lock B');`);
   const ids=sql(`SELECT id FROM public.products ORDER BY id LIMIT 2;`).stdout.trim().split(/\r?\n/).filter(Boolean); if(ids.length<2)throw new Error('schema dump has fewer than two Products for real lock proof'); const [a,b]=ids;
@@ -93,10 +93,88 @@ try {
     'idempotency',(SELECT count(*) FROM public.idempotency_keys WHERE idempotency_key='${key}')
   );`)}
   function policy(f){return scalar(`SELECT return_policy FROM public.products WHERE id='${f.productId}'::uuid;`)}
+  function directItemSql(returnId,productId,label){return `INSERT INTO public.return_items(return_id,product_id,product_name,quantity,unit,unit_price_cents,extended_cents,condition,restock,sort_order) VALUES ('${returnId}'::uuid,'${productId}'::uuid,'[PROOF P3] ${label}',1,'ea',1,1,'unopened',false,99);`;}
+  function unapplySql(invoiceId,key){return `SELECT public.unapply_credit_memo('${invoiceId}'::uuid,'Phase 3 concurrency reversal','${admin}'::uuid,'${key}');`;}
+  function createTarget(label){return scalar(`INSERT INTO public.products(product_name) VALUES ('[PROOF P3] ${label} target') RETURNING id;`);}
+  function autocommitDeferredFkTiming(){
+    const f=makeFixture('autocommit deferred FK timing','requested'), target=createTarget(`autocommit ${f.n}`);
+    // sql() launches psql without BEGIN, so this is an implicit/autocommit
+    // statement. The BEFORE trigger defers then the AFTER trigger restores the
+    // FK to immediate before the statement returns.
+    sql(directItemSql(f.returnId,target,'autocommit timing'));
+    assert.equal(scalar(`SELECT count(*) FROM public.return_items WHERE return_id='${f.returnId}'::uuid AND product_id='${target}'::uuid;`),'1');
+    sql(`DELETE FROM public.return_items WHERE return_id='${f.returnId}'::uuid AND product_id='${target}'::uuid;`);
+    assert.equal(scalar(`SELECT condeferrable::text || ':' || condeferred::text FROM pg_constraint WHERE conrelid='public.return_items'::regclass AND conname='return_items_product_id_fkey';`),'true:false');
+    console.log('PHASE3_AUTOCOMMIT_DEFERRED_FK_TIMING_PASS');
+  }
+  async function directItemMetadataRace(metadataFirst){
+    const f=makeFixture(`direct-item ${metadataFirst?'metadata':'direct'} first`,'requested');
+    const target=createTarget(`direct-item ${f.n}`), directKey=`direct-item-${f.n}`, metaKey=`direct-meta-${f.n}`;
+    const marker=`P3_DIRECT_ITEM_${metadataFirst?'META':'ITEM'}_LOCKED_${f.n}`;
+    if(metadataFirst){
+      const meta=session(`BEGIN; ${claims(admin)} SELECT public.set_product_phase3_metadata('${target}'::uuid,NULL,'unknown',NULL,false,NULL,'no_return',NULL,false,'${metaKey}'); SELECT '${marker}'; SELECT pg_sleep(2); COMMIT;`,marker);
+      await meta.ready;
+      const direct=session(`BEGIN; SET lock_timeout='10s'; SELECT 'P3_DIRECT_ITEM_CALLING_${f.n}'; ${directItemSql(f.returnId,target,'metadata-first')} COMMIT;`,`P3_DIRECT_ITEM_CALLING_${f.n}`);
+      await direct.ready; await assertWaiting(direct.done,'metadata-first direct return_item insert');
+      const [metaResult,directResult]=await Promise.all([meta.done,direct.done]);
+      assert.equal(metaResult.code,0,metaResult.err); assertExactFailure(directResult,'RETURN_POLICY_NO_RETURN','metadata-first direct return_item insert');
+      assert.equal(scalar(`SELECT count(*) FROM public.return_items WHERE return_id='${f.returnId}'::uuid AND product_id='${target}'::uuid;`),'0');
+      assert.equal(scalar(`SELECT return_policy FROM public.products WHERE id='${target}'::uuid;`),'no_return');
+      console.log('PHASE3_RACE_METADATA_FIRST_DIRECT_RETURN_ITEM_NO_RETURN_PASS');
+      return;
+    }
+    const direct=session(`BEGIN; SET lock_timeout='10s'; ${directItemSql(f.returnId,target,'direct-first')} SELECT '${marker}'; SELECT pg_sleep(2); COMMIT;`,marker);
+    await direct.ready;
+    const meta=session(`BEGIN; SET lock_timeout='10s'; ${claims(admin)} SELECT 'P3_DIRECT_ITEM_METADATA_CALLING_${f.n}'; SELECT public.set_product_phase3_metadata('${target}'::uuid,NULL,'unknown',NULL,false,NULL,'no_return',NULL,false,'${metaKey}'); COMMIT;`,`P3_DIRECT_ITEM_METADATA_CALLING_${f.n}`);
+    await meta.ready; await assertWaiting(meta.done,'direct-first metadata');
+    const [directResult,metaResult]=await Promise.all([direct.done,meta.done]);
+    assert.equal(directResult.code,0,directResult.err); assertExactFailure(metaResult,'RETURN_POLICY_ACTIVE_RETURN','direct-first metadata');
+    assert.equal(scalar(`SELECT count(*) FROM public.return_items WHERE return_id='${f.returnId}'::uuid AND product_id='${target}'::uuid;`),'1');
+    assert.equal(scalar(`SELECT return_policy FROM public.products WHERE id='${target}'::uuid;`),'unknown');
+    console.log('PHASE3_RACE_DIRECT_RETURN_ITEM_FIRST_METADATA_ACTIVE_REFUSAL_PASS');
+  }
+  async function unapplyMetadataRace(metadataFirst){
+    const f=makeFixture(`unapply ${metadataFirst?'metadata':'unapply'} first`,'received');
+    const creditKey=`unapply-race-${f.n}-credit`, credit=json(`${claims(admin)} ${wrapperSql(f,'issue_return_credit',creditKey)}`), invoiceId=credit.credit_invoice_id;
+    assert.ok(invoiceId,'unapply race did not issue credit');
+    const unapplyKey=`unapply-race-${f.n}-unapply`, metaKey=`unapply-race-${f.n}-metadata`, marker=`P3_UNAPPLY_${metadataFirst?'META':'UNAPPLY'}_LOCKED_${f.n}`;
+    if(metadataFirst){
+      const meta=session(`BEGIN; ${claims(admin)} ${metadataSql(f,metaKey)} SELECT '${marker}'; SELECT pg_sleep(2); COMMIT;`,marker);
+      await meta.ready;
+      const unapply=session(`BEGIN; SET lock_timeout='10s'; ${claims(admin)} SELECT 'P3_UNAPPLY_CALLING_${f.n}'; ${unapplySql(invoiceId,unapplyKey)} COMMIT;`,`P3_UNAPPLY_CALLING_${f.n}`);
+      await unapply.ready; await assertWaiting(unapply.done,'metadata-first unapply');
+      const [metaResult,unapplyResult]=await Promise.all([meta.done,unapply.done]);
+      assert.equal(metaResult.code,0,metaResult.err); assert.equal(unapplyResult.code,0,unapplyResult.err);
+      assert.equal(snapshot(f,creditKey).status,'received'); assert.equal(policy(f),'no_return');
+      assert.equal(scalar(`SELECT count(*) FROM public.idempotency_keys WHERE idempotency_key='${unapplyKey}';`),'1');
+      console.log('PHASE3_RACE_METADATA_FIRST_UNAPPLY_NO_RETURN_REVERSAL_PASS');
+      return;
+    }
+    const unapply=session(`BEGIN; SET lock_timeout='10s'; ${claims(admin)} ${unapplySql(invoiceId,unapplyKey)} SELECT '${marker}'; SELECT pg_sleep(2); COMMIT;`,marker);
+    await unapply.ready;
+    const meta=session(`BEGIN; SET lock_timeout='10s'; ${claims(admin)} SELECT 'P3_UNAPPLY_METADATA_CALLING_${f.n}'; ${metadataSql(f,metaKey)} COMMIT;`,`P3_UNAPPLY_METADATA_CALLING_${f.n}`);
+    await meta.ready; await assertWaiting(meta.done,'unapply-first metadata');
+    const [unapplyResult,metaResult]=await Promise.all([unapply.done,meta.done]);
+    assert.equal(unapplyResult.code,0,unapplyResult.err); assertExactFailure(metaResult,'RETURN_POLICY_ACTIVE_RETURN','unapply-first metadata');
+    assert.equal(snapshot(f,creditKey).status,'received'); assert.equal(policy(f),'unknown');
+    assert.equal(scalar(`SELECT count(*) FROM public.idempotency_keys WHERE idempotency_key='${unapplyKey}';`),'1');
+    console.log('PHASE3_RACE_UNAPPLY_FIRST_METADATA_ACTIVE_REFUSAL_PASS');
+  }
+  function forceNoReturnForDisposableFixture(f){
+    sql(`ALTER TABLE public.products DISABLE TRIGGER trigger_x_require_governed_phase3_product_metadata; UPDATE public.products SET return_policy='no_return' WHERE id='${f.productId}'::uuid; ALTER TABLE public.products ENABLE TRIGGER trigger_x_require_governed_phase3_product_metadata;`);
+    assert.equal(scalar(`SELECT tgenabled FROM pg_trigger WHERE tgrelid='public.products'::regclass AND tgname='trigger_x_require_governed_phase3_product_metadata';`),'O','hostile-fixture metadata trigger was not re-enabled');
+  }
+  function hostileNoReturnApproveReceive(){
+    const approveFixture=makeFixture('hostile no_return approve','requested'); forceNoReturnForDisposableFixture(approveFixture);
+    const approve=sql(`${claims(sales)} ${wrapperSql(approveFixture,'approve_return',`hostile-${approveFixture.n}-approve`)}`,{fail:true}); assertExactFailure(approve,'RETURN_POLICY_NO_RETURN','hostile no_return approve'); assert.equal(snapshot(approveFixture,`hostile-${approveFixture.n}-approve`).status,'requested');
+    const receiveFixture=makeFixture('hostile no_return receive','approved'); forceNoReturnForDisposableFixture(receiveFixture);
+    const before=snapshot(receiveFixture,`hostile-${receiveFixture.n}-receive`); const receive=sql(`${claims(sales)} ${wrapperSql(receiveFixture,'receive_return',`hostile-${receiveFixture.n}-receive`)}`,{fail:true}); assertExactFailure(receive,'RETURN_POLICY_NO_RETURN','hostile no_return receive'); assert.deepEqual(snapshot(receiveFixture,`hostile-${receiveFixture.n}-receive`),before,'hostile no_return receive leaked effects');
+    console.log('PHASE3_HOSTILE_NO_RETURN_APPROVE_RECEIVE_REFUSAL_PASS');
+  }
   async function metadataFirstSuccessCreate(){
     const f=makeFixture('metadata-first create','none');
     const key=`race-${f.n}-create`, before=snapshot(f,key), marker=`P3_META_LOCKED_CREATE_${f.n}`, call=`P3_WRAPPER_CALLING_CREATE_${f.n}`;
-    const meta=session(`BEGIN; ${claims(admin)} SELECT public.lock_phase3_product_policy_products(ARRAY['${f.productId}'::uuid]); SELECT '${marker}'; SELECT pg_sleep(2); ${metadataSql(f,`meta-${f.n}`)} COMMIT;`,marker);
+    const meta=session(`BEGIN; ${claims(admin)} ${metadataSql(f,`meta-${f.n}`)} SELECT '${marker}'; SELECT pg_sleep(2); COMMIT;`,marker);
     await meta.ready;
     const wrapper=session(`BEGIN; SET lock_timeout='10s'; ${claims(sales)} SELECT '${call}'; ${wrapperSql(f,'create_return',key)} COMMIT;`,call);
     await wrapper.ready; await assertWaiting(wrapper.done,'metadata-first create wrapper');
@@ -121,7 +199,7 @@ try {
   }
   async function wrapperFirst(operation,state){
     const f=makeFixture(`wrapper-first ${operation}`,state), key=`race-${f.n}-${operation}`, marker=`P3_WRAPPER_LOCKED_${operation}_${f.n}`, call=`P3_METADATA_CALLING_${operation}_${f.n}`;
-    const holder=session(`BEGIN; SET lock_timeout='10s'; ${claims(operation==='issue_return_credit'?admin:sales)} SELECT public.lock_phase3_product_policy_products(ARRAY['${f.productId}'::uuid]); SELECT '${marker}'; SELECT pg_sleep(2); ${wrapperSql(f,operation,key)} COMMIT;`,marker);
+    const holder=session(`BEGIN; SET lock_timeout='10s'; ${claims(operation==='issue_return_credit'?admin:sales)} ${wrapperSql(f,operation,key)} SELECT '${marker}'; SELECT pg_sleep(2); COMMIT;`,marker);
     await holder.ready;
     const meta=session(`BEGIN; SET lock_timeout='10s'; ${claims(admin)} SELECT '${call}'; ${metadataSql(f,`meta-${f.n}`)} COMMIT;`,call);
     await meta.ready; await assertWaiting(meta.done,`wrapper-first ${operation} metadata`);
@@ -151,6 +229,7 @@ try {
   json(`${claims(sales)} ${wrapperSql(receiveControl,'receive_return',`control-${receiveControl.n}`)}`); const receiveAfter=snapshot(receiveControl,`control-${receiveControl.n}`);
   assert.equal(receiveAfter.inventory,receiveBefore.inventory+2,'receive control did not restock Main Warehouse exactly'); assert.equal(receiveAfter.transactions,receiveBefore.transactions+1,'receive control did not create exactly one transaction');
   console.log('PHASE3_RECEIVE_RESTOCK_EFFECTS_PASS');
+  autocommitDeferredFkTiming();
   await metadataFirstSuccessCreate();
   await metadataFirstActiveRefusal('approve_return','requested');
   await metadataFirstActiveRefusal('receive_return','approved');
@@ -159,6 +238,11 @@ try {
   await wrapperFirst('approve_return','requested');
   await wrapperFirst('receive_return','approved');
   await wrapperFirst('issue_return_credit','received');
+  await directItemMetadataRace(true);
+  await directItemMetadataRace(false);
+  await unapplyMetadataRace(true);
+  await unapplyMetadataRace(false);
+  hostileNoReturnApproveReceive();
   proveCreditedReversalBoundary();
   console.log('PHASE3_REAL_SCHEMA_RESTORE_PASS'); console.log('PHASE3_ROLLBACK_MATRIX_PASS'); console.log('PHASE3_REAL_TWO_CONNECTION_LOCK_ORDER_PASS');
   console.log('PHASE3_REAL_WRAPPER_CONCURRENCY_PASS');

@@ -18,6 +18,7 @@ DECLARE
   v_returnable_order uuid;
   v_returnable_item uuid;
   v_returnable_return uuid;
+  v_unlinked_credit uuid;
   v_reject_order uuid;
   v_reject_item uuid;
   v_reject_return uuid;
@@ -160,6 +161,31 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_FAIL: blocked re-credit leaked effects';
   END IF;
 
+  -- A credit memo is normally return-linked, but unapply also has a safe
+  -- non-return-linked branch. This disposable fixture proves it voids only the
+  -- memo (`return_reverted=false`) and does not change an unrelated Return.
+  SELECT status INTO v_before_status FROM public.returns WHERE id=v_return;
+  INSERT INTO public.invoices(
+    invoice_number,customer_id,invoice_type,status,invoice_date,total_amount_cents,total_cost_cents,
+    created_by,posted_by,posted_at,header_notes
+  ) VALUES (
+    public.next_invoice_number('credit_memo'),v_customer,'credit_memo','posted',CURRENT_DATE,-100,0,
+    v_admin,v_admin,now(),'[SMOKE] unrelated credit memo'
+  ) RETURNING id INTO v_unlinked_credit;
+  SELECT count(*) INTO v_before_count FROM public.financial_audit_log;
+  SELECT count(*) INTO v_n FROM public.activity_feed WHERE related_entity_id=v_unlinked_credit;
+  v_result:=public.unapply_credit_memo(v_unlinked_credit,'Phase 3 unrelated credit memo',v_admin,'smk-p3-'||v_suffix||'-unlinked-unapply');
+  IF v_result->>'success' IS DISTINCT FROM 'true' OR v_result->>'return_reverted' IS DISTINCT FROM 'false'
+     OR (SELECT status FROM public.invoices WHERE id=v_unlinked_credit) IS DISTINCT FROM 'voided'
+     OR (SELECT status FROM public.returns WHERE id=v_return) IS DISTINCT FROM v_before_status
+     OR EXISTS (SELECT 1 FROM public.returns WHERE credit_invoice_id=v_unlinked_credit)
+     OR (SELECT count(*) FROM public.financial_audit_log) IS DISTINCT FROM v_before_count+1
+     OR (SELECT count(*) FROM public.activity_feed WHERE related_entity_id=v_unlinked_credit) IS DISTINCT FROM v_n+1
+     OR NOT EXISTS (SELECT 1 FROM public.idempotency_keys WHERE idempotency_key='smk-p3-'||v_suffix||'-unlinked-unapply') THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: unrelated credit-memo unapply changed a Return or missed exact effects %',v_result;
+  END IF;
+  RAISE NOTICE 'PHASE3_UNRELATED_CREDIT_MEMO_UNAPPLY_PASS';
+
   -- No-return is directly reachable for create_return and must fail before a
   -- return row, line, activity, or idempotency result exists.
   PERFORM set_config('request.jwt.claim.sub', v_sales::text, true);
@@ -187,10 +213,22 @@ BEGIN
   INSERT INTO public.orders(order_number,customer_id,salesman_id) VALUES ('SMK-P3-CAN-'||v_suffix,v_customer,v_sales) RETURNING id INTO v_cancel_order;
   INSERT INTO public.order_items(order_id,product_id,product_name,price_per_unit,total_units_needed,unit_size,total_price,quantity_delivered,quantity_remaining)
   VALUES(v_cancel_order,v_other,'[SMOKE] cancel',10,4,'ea',40,4,0) RETURNING id INTO v_cancel_item;
-  v_result:=public.create_return(jsonb_build_object('customer_id',v_customer,'order_id',v_cancel_order,'reason','overstock'),jsonb_build_array(jsonb_build_object('order_item_id',v_cancel_item,'quantity',1,'condition','unopened','restock',false)),'smk-p3-'||v_suffix||'-cancel-create');
+  INSERT INTO public.inventory(product_id,location,quantity_available,unit_size) VALUES(v_other,'Main Warehouse',7,'ea');
+  v_result:=public.create_return(jsonb_build_object('customer_id',v_customer,'order_id',v_cancel_order,'reason','overstock'),jsonb_build_array(jsonb_build_object('order_item_id',v_cancel_item,'quantity',1,'condition','unopened','restock',true)),'smk-p3-'||v_suffix||'-cancel-create');
   v_cancel_return:=(v_result->>'return_id')::uuid;
+  PERFORM public.approve_return(v_cancel_return,v_sales,'smk-p3-'||v_suffix||'-cancel-approve');
+  SELECT quantity_available INTO v_before_inventory FROM public.inventory WHERE product_id=v_other AND location='Main Warehouse';
+  v_result:=public.receive_return(v_cancel_return,v_sales,'smk-p3-'||v_suffix||'-cancel-receive');
+  IF v_result->>'status' IS DISTINCT FROM 'received'
+     OR (SELECT quantity_available FROM public.inventory WHERE product_id=v_other AND location='Main Warehouse') IS DISTINCT FROM v_before_inventory+1 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: cancellation fixture did not receive/restock exactly once';
+  END IF;
   v_result:=public.cancel_return(v_cancel_return,'Phase 3 rollback cancellation',v_sales,'smk-p3-'||v_suffix||'-cancel');
-  IF v_result->>'status' IS DISTINCT FROM 'cancelled' THEN RAISE EXCEPTION 'SMOKE_FAIL: cancel boundary %',v_result; END IF;
+  IF v_result->>'status' IS DISTINCT FROM 'cancelled'
+     OR (SELECT quantity_available FROM public.inventory WHERE product_id=v_other AND location='Main Warehouse') IS DISTINCT FROM v_before_inventory
+     OR (SELECT restocked FROM public.return_items WHERE return_id=v_cancel_return) IS DISTINCT FROM false THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: cancel boundary did not exactly reverse received inventory %',v_result;
+  END IF;
 
   -- These disposable-only BEFORE triggers fail after each real wrapper has
   -- already reached a late side-effect boundary. They are created inside this
@@ -203,6 +241,12 @@ BEGIN
         RAISE EXCEPTION 'SMOKE_FORCED_RETURN_REQUESTED';
       ELSIF current_setting('app.phase3_smoke_force', true) = 'return_approved' AND NEW.event_type = 'return_approved' THEN
         RAISE EXCEPTION 'SMOKE_FORCED_RETURN_APPROVED';
+      ELSIF current_setting('app.phase3_smoke_force', true) = 'return_rejected' AND NEW.event_type = 'return_rejected' THEN
+        RAISE EXCEPTION 'SMOKE_FORCED_RETURN_REJECTED';
+      ELSIF current_setting('app.phase3_smoke_force', true) = 'return_cancelled' AND NEW.event_type = 'return_cancelled' THEN
+        RAISE EXCEPTION 'SMOKE_FORCED_RETURN_CANCELLED';
+      ELSIF current_setting('app.phase3_smoke_force', true) = 'credit_memo_unapplied' AND NEW.event_type = 'credit_memo_unapplied' THEN
+        RAISE EXCEPTION 'SMOKE_FORCED_CREDIT_MEMO_UNAPPLIED';
       END IF;
       RETURN NEW;
     END;
@@ -233,6 +277,54 @@ BEGIN
   EXECUTE 'CREATE TRIGGER smoke_phase3_late_activity BEFORE INSERT ON public.activity_feed FOR EACH ROW EXECUTE FUNCTION public.smoke_phase3_late_activity()';
   EXECUTE 'CREATE TRIGGER smoke_phase3_late_inventory_transaction BEFORE INSERT ON public.inventory_transactions FOR EACH ROW EXECUTE FUNCTION public.smoke_phase3_late_inventory_transaction()';
   EXECUTE 'CREATE TRIGGER smoke_phase3_late_credit_audit BEFORE INSERT ON public.financial_audit_log FOR EACH ROW EXECUTE FUNCTION public.smoke_phase3_late_credit_audit()';
+
+  -- reject_return changes status/activity late; a forced activity failure must
+  -- leave its requested return and idempotency ledger untouched.
+  INSERT INTO public.orders(order_number,customer_id,salesman_id) VALUES ('SMK-P3-FORCE-REJ-'||v_suffix,v_customer,v_sales) RETURNING id INTO v_force_order;
+  INSERT INTO public.order_items(order_id,product_id,product_name,price_per_unit,total_units_needed,unit_size,total_price,quantity_delivered,quantity_remaining)
+  VALUES(v_force_order,v_other,'[SMOKE] forced reject',10,4,'ea',40,4,0) RETURNING id INTO v_force_item;
+  v_result:=public.create_return(jsonb_build_object('customer_id',v_customer,'order_id',v_force_order,'reason','overstock'),jsonb_build_array(jsonb_build_object('order_item_id',v_force_item,'quantity',1,'condition','unopened','restock',false)),'smk-p3-'||v_suffix||'-force-reject-create');
+  v_reject_return:=(v_result->>'return_id')::uuid;
+  SELECT count(*) INTO v_before_count FROM public.activity_feed WHERE related_entity_id=v_reject_return;
+  PERFORM set_config('app.phase3_smoke_force','return_rejected',true);
+  BEGIN
+    PERFORM public.reject_return(v_reject_return,v_sales,'smk-p3-'||v_suffix||'-force-reject');
+    RAISE EXCEPTION 'SMOKE_FAIL: forced return_rejected did not fail';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF SQLERRM NOT LIKE 'SMOKE_FORCED_RETURN_REJECTED%' THEN RAISE EXCEPTION 'SMOKE_FAIL: forced reject wrong error %',SQLERRM; END IF;
+  END;
+  PERFORM set_config('app.phase3_smoke_force','',true);
+  IF (SELECT status FROM public.returns WHERE id=v_reject_return) IS DISTINCT FROM 'requested'
+     OR (SELECT count(*) FROM public.activity_feed WHERE related_entity_id=v_reject_return) IS DISTINCT FROM v_before_count
+     OR EXISTS (SELECT 1 FROM public.idempotency_keys WHERE idempotency_key='smk-p3-'||v_suffix||'-force-reject') THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: forced return_rejected leaked effects';
+  END IF;
+
+  -- cancel_return reverses received inventory before its late activity row.
+  INSERT INTO public.orders(order_number,customer_id,salesman_id) VALUES ('SMK-P3-FORCE-CAN-'||v_suffix,v_customer,v_sales) RETURNING id INTO v_force_order;
+  INSERT INTO public.order_items(order_id,product_id,product_name,price_per_unit,total_units_needed,unit_size,total_price,quantity_delivered,quantity_remaining)
+  VALUES(v_force_order,v_other,'[SMOKE] forced cancel',10,4,'ea',40,4,0) RETURNING id INTO v_force_item;
+  v_result:=public.create_return(jsonb_build_object('customer_id',v_customer,'order_id',v_force_order,'reason','overstock'),jsonb_build_array(jsonb_build_object('order_item_id',v_force_item,'quantity',1,'condition','unopened','restock',true)),'smk-p3-'||v_suffix||'-force-cancel-create');
+  v_cancel_return:=(v_result->>'return_id')::uuid;
+  PERFORM public.approve_return(v_cancel_return,v_sales,'smk-p3-'||v_suffix||'-force-cancel-approve');
+  PERFORM public.receive_return(v_cancel_return,v_sales,'smk-p3-'||v_suffix||'-force-cancel-receive');
+  SELECT quantity_available INTO v_before_inventory FROM public.inventory WHERE product_id=v_other AND location='Main Warehouse';
+  PERFORM set_config('app.phase3_smoke_force','return_cancelled',true);
+  BEGIN
+    PERFORM public.cancel_return(v_cancel_return,'forced rollback',v_sales,'smk-p3-'||v_suffix||'-force-cancel');
+    RAISE EXCEPTION 'SMOKE_FAIL: forced return_cancelled did not fail';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF SQLERRM NOT LIKE 'SMOKE_FORCED_RETURN_CANCELLED%' THEN RAISE EXCEPTION 'SMOKE_FAIL: forced cancel wrong error %',SQLERRM; END IF;
+  END;
+  PERFORM set_config('app.phase3_smoke_force','',true);
+  IF (SELECT status FROM public.returns WHERE id=v_cancel_return) IS DISTINCT FROM 'received'
+     OR (SELECT quantity_available FROM public.inventory WHERE product_id=v_other AND location='Main Warehouse') IS DISTINCT FROM v_before_inventory
+     OR (SELECT restocked FROM public.return_items WHERE return_id=v_cancel_return) IS DISTINCT FROM true
+     OR EXISTS (SELECT 1 FROM public.idempotency_keys WHERE idempotency_key='smk-p3-'||v_suffix||'-force-cancel') THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: forced return_cancelled leaked inventory/status/idempotency';
+  END IF;
 
   -- return_requested: return and return_items are inserted before activity; a
   -- forced late activity failure must erase all three and the idempotency row.
@@ -282,7 +374,6 @@ BEGIN
   -- implementation has updated Main Warehouse and attempted its inventory
   -- transaction. Both inventory and return state must roll back.
   PERFORM public.approve_return(v_force_return,v_sales,'smk-p3-'||v_suffix||'-force-approve-ok');
-  INSERT INTO public.inventory(product_id,location,quantity_available,unit_size) VALUES(v_other,'Main Warehouse',7,'ea');
   SELECT quantity_available INTO v_before_inventory FROM public.inventory WHERE product_id=v_other AND location='Main Warehouse';
   SELECT count(*) INTO v_before_count FROM public.inventory_transactions WHERE product_id=v_other;
   PERFORM set_config('app.phase3_smoke_force','return_received',true);
@@ -325,6 +416,30 @@ BEGIN
      OR (SELECT count(*) FROM public.financial_audit_log) IS DISTINCT FROM v_n
      OR EXISTS (SELECT 1 FROM public.idempotency_keys WHERE idempotency_key='smk-p3-'||v_suffix||'-force-credit') THEN
     RAISE EXCEPTION 'SMOKE_FAIL: forced credit-issued leaked money/audit effects';
+  END IF;
+
+  -- unapply_credit_memo changes invoice and return status before writing its
+  -- audit/activity/idempotency rows; force the late activity boundary and
+  -- require all three durable surfaces to remain at their credited snapshot.
+  v_result:=public.issue_return_credit(v_force_return,v_admin,'smk-p3-'||v_suffix||'-force-unapply-credit');
+  v_credit:=(v_result->>'credit_invoice_id')::uuid;
+  SELECT count(*) INTO v_before_count FROM public.financial_audit_log;
+  SELECT count(*) INTO v_n FROM public.activity_feed WHERE related_entity_id=v_credit;
+  PERFORM set_config('app.phase3_smoke_force','credit_memo_unapplied',true);
+  BEGIN
+    PERFORM public.unapply_credit_memo(v_credit,'forced rollback unapply',v_admin,'smk-p3-'||v_suffix||'-force-unapply');
+    RAISE EXCEPTION 'SMOKE_FAIL: forced credit_memo_unapplied did not fail';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF SQLERRM NOT LIKE 'SMOKE_FORCED_CREDIT_MEMO_UNAPPLIED%' THEN RAISE EXCEPTION 'SMOKE_FAIL: forced unapply wrong error %',SQLERRM; END IF;
+  END;
+  PERFORM set_config('app.phase3_smoke_force','',true);
+  IF (SELECT status FROM public.returns WHERE id=v_force_return) IS DISTINCT FROM 'credited'
+     OR (SELECT status FROM public.invoices WHERE id=v_credit) IS DISTINCT FROM 'posted'
+     OR (SELECT count(*) FROM public.financial_audit_log) IS DISTINCT FROM v_before_count
+     OR (SELECT count(*) FROM public.activity_feed WHERE related_entity_id=v_credit) IS DISTINCT FROM v_n
+     OR EXISTS (SELECT 1 FROM public.idempotency_keys WHERE idempotency_key='smk-p3-'||v_suffix||'-force-unapply') THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: forced credit_memo_unapplied leaked invoice/return/audit/activity/idempotency';
   END IF;
   PERFORM set_config('request.jwt.claim.sub', v_sales::text, true);
 

@@ -25,11 +25,11 @@ ALTER TABLE public.product_families ENABLE ROW LEVEL SECURITY;
 CREATE POLICY product_families_select
   ON public.product_families
   FOR SELECT
-  TO anon, authenticated
+  TO authenticated
   USING (true);
 
 REVOKE ALL ON TABLE public.product_families FROM PUBLIC, anon, authenticated;
-GRANT SELECT ON TABLE public.product_families TO anon, authenticated;
+GRANT SELECT ON TABLE public.product_families TO authenticated;
 
 CREATE TRIGGER set_product_families_updated_at
   BEFORE UPDATE ON public.product_families
@@ -143,10 +143,122 @@ BEGIN
 END;
 $function$;
 
+-- The FK normally acquires a Product key-share lock before an AFTER statement
+-- trigger can join the advisory-lock protocol. Defer it for just this
+-- statement; the AFTER trigger takes the sorted namespaced Product locks,
+-- re-reads policy, then forces the FK check before returning. That preserves
+-- the constraint while making metadata/direct-write ordering transaction-wide.
+ALTER TABLE public.return_items
+  DROP CONSTRAINT return_items_product_id_fkey,
+  ADD CONSTRAINT return_items_product_id_fkey
+    FOREIGN KEY (product_id) REFERENCES public.products(id)
+    DEFERRABLE INITIALLY IMMEDIATE;
+
+CREATE OR REPLACE FUNCTION public.defer_phase3_return_item_product_fk()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+BEGIN
+  SET CONSTRAINTS return_items_product_id_fkey DEFERRED;
+  RETURN NULL;
+END;
+$function$;
+
+CREATE TRIGGER trigger_w_defer_phase3_return_item_product_fk
+  BEFORE INSERT OR UPDATE ON public.return_items
+  FOR EACH STATEMENT
+  EXECUTE FUNCTION public.defer_phase3_return_item_product_fk();
+
 CREATE TRIGGER trigger_x_validate_phase3_return_item_policy
   BEFORE INSERT OR UPDATE OF product_id ON public.return_items
   FOR EACH ROW
   EXECUTE FUNCTION public.validate_phase3_return_item_policy();
+
+-- Row validation gives a direct writer the stable refusal immediately. The
+-- statement triggers below then acquire the complete UUID-sorted Product lock
+-- set before re-reading policy, so a multi-row direct writer cannot race a
+-- governed metadata change or invert advisory-lock order.
+CREATE OR REPLACE FUNCTION public.lock_and_assert_phase3_return_item_insert_policy()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+DECLARE
+  v_product_ids uuid[];
+BEGIN
+  SELECT array_agg(DISTINCT n.product_id ORDER BY n.product_id)
+    INTO v_product_ids
+    FROM new_return_items n;
+  PERFORM public.lock_phase3_product_policy_products(v_product_ids);
+  PERFORM public.assert_phase3_return_policy(v_product_ids);
+  SET CONSTRAINTS return_items_product_id_fkey IMMEDIATE;
+  RETURN NULL;
+END;
+$function$;
+
+CREATE TRIGGER trigger_y_lock_assert_phase3_return_item_insert_policy
+  AFTER INSERT ON public.return_items
+  REFERENCING NEW TABLE AS new_return_items
+  FOR EACH STATEMENT
+  EXECUTE FUNCTION public.lock_and_assert_phase3_return_item_insert_policy();
+
+CREATE OR REPLACE FUNCTION public.lock_and_assert_phase3_return_item_update_policy()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+DECLARE
+  v_product_ids uuid[];
+BEGIN
+  SELECT array_agg(DISTINCT n.product_id ORDER BY n.product_id)
+    INTO v_product_ids
+    FROM new_return_items n
+    JOIN old_return_items o ON o.id = n.id
+   WHERE n.product_id IS DISTINCT FROM o.product_id;
+  PERFORM public.lock_phase3_product_policy_products(v_product_ids);
+  PERFORM public.assert_phase3_return_policy(v_product_ids);
+  SET CONSTRAINTS return_items_product_id_fkey IMMEDIATE;
+  RETURN NULL;
+END;
+$function$;
+
+CREATE TRIGGER trigger_y_lock_assert_phase3_return_item_update_policy
+  AFTER UPDATE ON public.return_items
+  REFERENCING OLD TABLE AS old_return_items NEW TABLE AS new_return_items
+  FOR EACH STATEMENT
+  EXECUTE FUNCTION public.lock_and_assert_phase3_return_item_update_policy();
+
+CREATE OR REPLACE FUNCTION public.lock_phase3_return_status_products()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+DECLARE
+  v_product_ids uuid[];
+BEGIN
+  IF NEW.status IS NOT DISTINCT FROM OLD.status THEN
+    RETURN NEW;
+  END IF;
+  SELECT array_agg(DISTINCT ri.product_id ORDER BY ri.product_id)
+    INTO v_product_ids
+    FROM public.return_items ri
+   WHERE ri.return_id = NEW.id;
+  -- Lock only: reject/cancel/unapply are reversible retirement paths and stay
+  -- legal after a Product becomes no_return.
+  PERFORM public.lock_phase3_product_policy_products(v_product_ids);
+  RETURN NEW;
+END;
+$function$;
+
+CREATE TRIGGER trigger_x_lock_phase3_return_status_products
+  BEFORE UPDATE OF status ON public.returns
+  FOR EACH ROW
+  EXECUTE FUNCTION public.lock_phase3_return_status_products();
 
 CREATE OR REPLACE FUNCTION public.guard_phase3_product_metadata()
 RETURNS trigger
@@ -832,6 +944,10 @@ REVOKE ALL ON FUNCTION public.create_return(jsonb, jsonb, text) FROM PUBLIC, ano
 REVOKE ALL ON FUNCTION public.approve_return(uuid, uuid, text) FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION public.receive_return(uuid, uuid, text) FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION public.issue_return_credit(uuid, uuid, text) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.lock_and_assert_phase3_return_item_insert_policy() FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.lock_and_assert_phase3_return_item_update_policy() FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.lock_phase3_return_status_products() FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.defer_phase3_return_item_product_fk() FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.create_return(jsonb, jsonb, text) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.approve_return(uuid, uuid, text) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.receive_return(uuid, uuid, text) TO authenticated, service_role;
@@ -843,6 +959,7 @@ DO $assertions$
 DECLARE
   v_src text;
   v_hash text;
+  v_trigger_def text;
 BEGIN
   SELECT prosrc INTO v_src FROM pg_proc WHERE oid = 'public.approve_return(uuid,uuid,text)'::regprocedure;
   SELECT encode(extensions.digest(v_src, 'sha256'), 'hex') INTO v_hash;
@@ -875,6 +992,78 @@ BEGIN
   END IF;
   IF position('ACTOR_MISMATCH' IN v_src) = 0 OR position('assert_phase3_return_policy' IN v_src) = 0 OR position('_issue_return_credit_impl' IN v_src) = 0 THEN
     RAISE EXCEPTION 'PHASE3_ISSUE_RETURN_CREDIT_ASSERTION_FAILED';
+  END IF;
+
+  -- Direct return-item writers and return status writers must use the same
+  -- sorted, namespaced Product lock protocol as the governed wrappers.
+  FOREACH v_src IN ARRAY ARRAY[
+    'lock_and_assert_phase3_return_item_insert_policy',
+    'lock_and_assert_phase3_return_item_update_policy',
+    'lock_phase3_return_status_products',
+    'defer_phase3_return_item_product_fk'
+  ] LOOP
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_proc p
+      WHERE p.oid = ('public.' || v_src || '()')::regprocedure
+        AND p.prosecdef
+        AND p.proconfig @> ARRAY['search_path=public, pg_temp']
+    ) THEN
+      RAISE EXCEPTION 'PHASE3_LOCK_TRIGGER_FUNCTION_ASSERTION_FAILED: %', v_src;
+    END IF;
+    IF EXISTS (
+         SELECT 1
+           FROM pg_proc p
+           CROSS JOIN LATERAL aclexplode(COALESCE(p.proacl, acldefault('f', p.proowner))) acl
+          WHERE p.oid = ('public.' || v_src || '()')::regprocedure
+            AND acl.grantee = 0 AND acl.privilege_type = 'EXECUTE'
+       )
+       OR has_function_privilege('anon', ('public.' || v_src || '()')::regprocedure, 'EXECUTE')
+       OR has_function_privilege('authenticated', ('public.' || v_src || '()')::regprocedure, 'EXECUTE') THEN
+      RAISE EXCEPTION 'PHASE3_LOCK_TRIGGER_GRANT_ASSERTION_FAILED: %', v_src;
+    END IF;
+  END LOOP;
+  FOREACH v_src IN ARRAY ARRAY[
+    'trigger_y_lock_assert_phase3_return_item_insert_policy',
+    'trigger_y_lock_assert_phase3_return_item_update_policy',
+    'trigger_x_lock_phase3_return_status_products',
+    'trigger_w_defer_phase3_return_item_product_fk'
+  ] LOOP
+    SELECT pg_get_triggerdef(t.oid) INTO v_trigger_def
+      FROM pg_trigger t
+     WHERE t.tgname = v_src AND t.tgrelid='public.return_items'::regclass AND NOT t.tgisinternal
+     UNION ALL
+    SELECT pg_get_triggerdef(t.oid)
+      FROM pg_trigger t
+     WHERE t.tgname = v_src AND t.tgrelid='public.returns'::regclass AND NOT t.tgisinternal;
+    IF v_trigger_def IS NULL OR position('phase3_' IN v_trigger_def) = 0 THEN
+      RAISE EXCEPTION 'PHASE3_LOCK_TRIGGER_ASSERTION_FAILED: %', v_src;
+    END IF;
+  END LOOP;
+  SELECT pg_get_triggerdef(t.oid) INTO v_trigger_def
+    FROM pg_trigger t WHERE t.tgname='trigger_y_lock_assert_phase3_return_item_insert_policy';
+  IF position('REFERENCING NEW TABLE AS new_return_items' IN v_trigger_def) = 0
+     OR position('FOR EACH STATEMENT' IN v_trigger_def) = 0 THEN
+    RAISE EXCEPTION 'PHASE3_INSERT_TRANSITION_LOCK_ASSERTION_FAILED';
+  END IF;
+  SELECT pg_get_triggerdef(t.oid) INTO v_trigger_def
+    FROM pg_trigger t WHERE t.tgname='trigger_y_lock_assert_phase3_return_item_update_policy';
+  IF position('REFERENCING OLD TABLE AS old_return_items NEW TABLE AS new_return_items' IN v_trigger_def) = 0
+     OR position('FOR EACH STATEMENT' IN v_trigger_def) = 0 THEN
+    RAISE EXCEPTION 'PHASE3_UPDATE_TRANSITION_LOCK_ASSERTION_FAILED';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint c
+     WHERE c.conrelid='public.return_items'::regclass
+       AND c.connamespace='public'::regnamespace
+       AND c.conname='return_items_product_id_fkey'
+       AND c.condeferrable AND NOT c.condeferred
+  ) OR 1 <> (SELECT count(*) FROM pg_constraint c WHERE c.connamespace='public'::regnamespace AND c.conname='return_items_product_id_fkey') THEN
+    RAISE EXCEPTION 'PHASE3_RETURN_ITEM_FK_TIMING_ASSERTION_FAILED';
+  END IF;
+  IF has_table_privilege('anon', 'public.product_families', 'SELECT')
+     OR NOT has_table_privilege('authenticated', 'public.product_families', 'SELECT')
+     OR EXISTS (SELECT 1 FROM pg_policies WHERE schemaname='public' AND tablename='product_families' AND roles @> ARRAY['anon'::name]) THEN
+    RAISE EXCEPTION 'PHASE3_PRODUCT_FAMILIES_GRANT_ASSERTION_FAILED';
   END IF;
 END;
 $assertions$;
