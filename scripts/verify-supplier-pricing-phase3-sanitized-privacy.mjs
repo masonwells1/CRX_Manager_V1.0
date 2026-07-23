@@ -110,6 +110,177 @@ function headerFields(line) {
     .filter(Boolean);
 }
 
+const SQL_IDENTIFIER_PATTERN = String.raw`(?:"(?:""|[^"])*"|[A-Za-z_][A-Za-z0-9_$]*)`;
+const PRODUCT_INSERT_PATTERN = new RegExp(
+  String.raw`\binsert\s+into\s*(?:(?<schema>${SQL_IDENTIFIER_PATTERN})\s*\.\s*)?(?<table>${SQL_IDENTIFIER_PATTERN})\s*(?:(?:as\s+)(?<asAlias>${SQL_IDENTIFIER_PATTERN})\s*|(?<bareAlias>${SQL_IDENTIFIER_PATTERN})\s*)?\(`,
+  'gi',
+);
+
+function stripSqlComments(text) {
+  let result = '';
+  let index = 0;
+  let quote = null;
+  while (index < text.length) {
+    const character = text[index];
+    const next = text[index + 1];
+    if (quote) {
+      result += character;
+      if (character === quote) {
+        if (text[index + 1] === quote) {
+          result += next;
+          index += 2;
+          continue;
+        }
+        quote = null;
+      }
+      index += 1;
+      continue;
+    }
+    if (character === "'" || character === '"') {
+      quote = character;
+      result += character;
+      index += 1;
+      continue;
+    }
+    if (character === '-' && next === '-') {
+      while (index < text.length && text[index] !== '\n') {
+        result += ' ';
+        index += 1;
+      }
+      continue;
+    }
+    if (character === '/' && next === '*') {
+      result += '  ';
+      index += 2;
+      while (index < text.length && !(text[index] === '*' && text[index + 1] === '/')) {
+        result += text[index] === '\n' ? '\n' : ' ';
+        index += 1;
+      }
+      if (index < text.length) {
+        result += '  ';
+        index += 2;
+      }
+      continue;
+    }
+    result += character;
+    index += 1;
+  }
+  return result;
+}
+
+function normalizeSqlIdentifier(value) {
+  if (!value) return null;
+  const trimmed = value.trim();
+  if (/^"(?:""|[^"])*"$/.test(trimmed)) return trimmed.slice(1, -1).replaceAll('""', '"').toLowerCase();
+  return /^[A-Za-z_][A-Za-z0-9_$]*$/.test(trimmed) ? trimmed.toLowerCase() : null;
+}
+
+function readBalancedSqlParentheses(text, openIndex) {
+  let depth = 0;
+  let quote = null;
+  for (let index = openIndex; index < text.length; index += 1) {
+    const character = text[index];
+    if (quote) {
+      if (character === quote) {
+        if (text[index + 1] === quote) {
+          index += 1;
+          continue;
+        }
+        quote = null;
+      }
+      continue;
+    }
+    if (character === "'" || character === '"') {
+      quote = character;
+      continue;
+    }
+    if (character === '(') depth += 1;
+    if (character === ')') {
+      depth -= 1;
+      if (depth === 0) return index;
+    }
+  }
+  return null;
+}
+
+function splitSqlColumnList(text) {
+  const fields = [];
+  let start = 0;
+  let depth = 0;
+  let quote = null;
+  for (let index = 0; index <= text.length; index += 1) {
+    const character = text[index];
+    if (quote) {
+      if (character === quote) {
+        if (text[index + 1] === quote) {
+          index += 1;
+          continue;
+        }
+        quote = null;
+      }
+      continue;
+    }
+    if (character === "'" || character === '"') {
+      quote = character;
+      continue;
+    }
+    if (character === '(') depth += 1;
+    if (character === ')') depth -= 1;
+    if ((character === ',' && depth === 0) || index === text.length) {
+      fields.push(text.slice(start, index));
+      start = index + 1;
+    }
+  }
+  return fields.map(normalizeSqlIdentifier).filter(Boolean);
+}
+
+function sqlInsertColumnListLines(text) {
+  const stripped = stripSqlComments(text);
+  const lineNumbers = new Set();
+  const insertPattern = /\binsert\s+into\b/gi;
+  let match;
+  while ((match = insertPattern.exec(stripped))) {
+    const statementEnd = stripped.indexOf(';', match.index);
+    const openIndex = stripped.indexOf('(', match.index + match[0].length);
+    if (openIndex < 0 || (statementEnd >= 0 && openIndex > statementEnd)) continue;
+    const closeIndex = readBalancedSqlParentheses(stripped, openIndex);
+    if (closeIndex === null) continue;
+    const firstLine = stripped.slice(0, openIndex).split('\n').length - 1;
+    const lastLine = stripped.slice(0, closeIndex).split('\n').length - 1;
+    for (let line = firstLine; line <= lastLine; line += 1) lineNumbers.add(line);
+  }
+  return lineNumbers;
+}
+
+export function detectProductCatalogSqlInsert(text) {
+  const stripped = stripSqlComments(text);
+  const fileUuidCount = (stripped.match(UUID_PATTERN) || []).length;
+  PRODUCT_INSERT_PATTERN.lastIndex = 0;
+  let match;
+  while ((match = PRODUCT_INSERT_PATTERN.exec(stripped))) {
+    const schema = normalizeSqlIdentifier(match.groups.schema);
+    const table = normalizeSqlIdentifier(match.groups.table);
+    if (table !== 'products' || (schema && schema !== 'public')) continue;
+    const openIndex = match.index + match[0].lastIndexOf('(');
+    const closeIndex = readBalancedSqlParentheses(stripped, openIndex);
+    if (closeIndex === null) continue;
+    const insertBody = stripped.slice(closeIndex + 1);
+    const insertVerb = insertBody.match(/^\s*(values|select)\b/i)?.[1]?.toLowerCase();
+    if (!insertVerb) continue;
+    const columns = new Set(splitSqlColumnList(stripped.slice(openIndex + 1, closeIndex)));
+    const statementEnd = stripped.indexOf(';', closeIndex);
+    const statement = stripped.slice(match.index, statementEnd < 0 ? stripped.length : statementEnd);
+    const hasCatalogUuids = insertVerb === 'values'
+      ? fileUuidCount >= 2
+      : (statement.match(UUID_PATTERN) || []).length >= 2;
+    if (hasCatalogUuids
+      && (columns.has('id') || columns.has('product_id')) && columns.has('product_name') && columns.has('sku')) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function isKnownSafeSqlFixture(file, text, allowlist = SAFE_SQL_FIXTURE_SHA256) {
   const expectedHash = allowlist[file];
   return typeof expectedHash === 'string'
@@ -120,23 +291,21 @@ export function detectPrivateCatalogFile(file, text) {
   const hits = detectPrivateCatalogContent(text);
   if ((text.match(UUID_PATTERN) || []).length < 2) return hits;
   const tableLines = text.split(/\r?\n/);
-  const hasTableHeader = predicate => tableLines.some((line, index) => {
+  const sqlColumnLines = sqlInsertColumnListLines(text);
+  const hasDelimitedTableHeader = predicate => tableLines.some((line, index) => {
+    if (sqlColumnLines.has(index)) return false;
     const fields = headerFields(line);
-    if (!predicate(fields)) return false;
-    const beforeHeader = tableLines.slice(Math.max(0, index - 12), index + 1).join('\n');
-    const afterHeader = tableLines.slice(index, index + 13).join('\n');
-    const isSqlInsertColumnList = /\binsert\s+into\b/i.test(beforeHeader) && /^\s*\)\s*(?:values|select)\b/im.test(afterHeader);
-    if (!isSqlInsertColumnList) return true;
-    const isProductsInsert = /\binsert\s+into\s+(?:public\.)?"?products"?\s*\(/i.test(beforeHeader);
-    return isProductsInsert && !isKnownSafeSqlFixture(file, text);
+    return predicate(fields);
   });
-  const hasProductTable = hasTableHeader(fields => (fields.includes('product_id') || fields.includes('id'))
+  const hasProductTable = hasDelimitedTableHeader(fields => (fields.includes('product_id') || fields.includes('id'))
     && fields.includes('product_name') && fields.includes('sku'));
-  const hasManifestTable = hasTableHeader(fields => ['product_id', 'current_product', 'decisions', 'row_sha256'].every(field => fields.includes(field)));
+  const hasManifestTable = hasDelimitedTableHeader(fields => ['product_id', 'current_product', 'decisions', 'row_sha256'].every(field => fields.includes(field)));
+  const hasProductSqlInsert = detectProductCatalogSqlInsert(text);
   return [...new Set([
     ...hits,
     ...(hasProductTable ? ['delimited_product_schema'] : []),
     ...(hasManifestTable ? ['delimited_manifest_schema'] : []),
+    ...(hasProductSqlInsert && !isKnownSafeSqlFixture(file, text) ? ['sql_product_catalog_insert'] : []),
   ])];
 }
 
