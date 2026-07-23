@@ -235,6 +235,39 @@ try {
     const before=snapshot(f,`reversal-${f.n}-recredit`); const failed=sql(`${claims(admin)} ${wrapperSql(f,'issue_return_credit',`reversal-${f.n}-recredit`)}`,{fail:true}); assertExactFailure(failed,'RETURN_POLICY_NO_RETURN','re-credit after governed no_return'); assert.deepEqual(snapshot(f,`reversal-${f.n}-recredit`),before,'blocked re-credit left money or audit effects');
     console.log('PHASE3_CREDITED_REVERSAL_BOUNDARY_PASS');
   }
+  function metadataIdempotencyBinding(){
+    const first=makeFixture('metadata idempotency binding','none');
+    const second=makeFixture('metadata idempotency other product','none');
+    const key=`metadata-idempotency-${first.n}`;
+    const call=(productId,expectedPolicy,targetPolicy)=>`SELECT public.set_product_phase3_metadata('${productId}'::uuid,NULL,'${expectedPolicy}',NULL,false,NULL,'${targetPolicy}',NULL,false,'${key}');`;
+    const initial=json(`${claims(admin)} ${call(first.productId,'unknown','no_return')}`);
+    const replay=json(`${claims(admin)} ${call(first.productId,'unknown','no_return')}`);
+    assert.deepEqual(replay,initial,'identical metadata retry must replay its original response');
+    const changedTarget=sql(`${claims(admin)} ${call(first.productId,'no_return','returnable')}`,{fail:true});
+    assertExactFailure(changedTarget,'IDEMPOTENCY_PAYLOAD_MISMATCH','metadata idempotency changed target');
+    const changedProduct=sql(`${claims(admin)} ${call(second.productId,'unknown','no_return')}`,{fail:true});
+    assertExactFailure(changedProduct,'IDEMPOTENCY_PAYLOAD_MISMATCH','metadata idempotency changed product');
+    assert.equal(policy(first),'no_return','changed-target replay mutated the original Product');
+    assert.equal(policy(second),'unknown','changed-product replay mutated a second Product');
+    assert.equal(scalar(`SELECT count(*) FROM public.idempotency_keys WHERE idempotency_key='${key}';`),'1');
+    console.log('PHASE3_METADATA_IDEMPOTENCY_BINDING_PASS');
+  }
+  function metadataAuthorizationScope(){
+    const f=makeFixture('metadata authorization scope','none'), key=`metadata-scope-${f.n}`;
+    const call=`SELECT public.set_product_phase3_metadata('${f.productId}'::uuid,NULL,'unknown',NULL,false,NULL,'no_return',NULL,false,'${key}');`;
+    const scoped=sql(`BEGIN; ${claims(admin)} ${call} DO $scope$ BEGIN
+      UPDATE public.products SET return_policy='returnable' WHERE id='${f.productId}'::uuid;
+      RAISE EXCEPTION 'PHASE3_AUTH_SCOPE_LEAK';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM LIKE 'PHASE3_AUTH_SCOPE_LEAK%' THEN RAISE; END IF;
+      IF SQLERRM NOT LIKE 'PRODUCT_PHASE3_METADATA_GOVERNED%' THEN
+        RAISE EXCEPTION 'PHASE3_AUTH_SCOPE_UNEXPECTED_FAILURE: %', SQLERRM;
+      END IF;
+    END $scope$; COMMIT;`,{fail:true});
+    assert.equal(scoped.status,0,`metadata authorization scope transaction failed: ${scoped.stderr||scoped.stdout}`);
+    assert.equal(policy(f),'no_return','governed metadata update did not persist before direct-write refusal');
+    console.log('PHASE3_METADATA_AUTHORIZATION_SCOPE_PASS');
+  }
   async function cancelReceiveSharedProductRace(){
     // These wrappers exert opposite pressure on the same inventory row:
     // received cancellation decrements it while approved receive increments it.
@@ -288,6 +321,8 @@ try {
   await unapplyMetadataRace(false);
   hostileNoReturnApproveReceive();
   proveCreditedReversalBoundary();
+  metadataIdempotencyBinding();
+  metadataAuthorizationScope();
   await cancelReceiveSharedProductRace();
   console.log('PHASE3_REAL_SCHEMA_RESTORE_PASS'); console.log('PHASE3_ROLLBACK_MATRIX_PASS'); console.log('PHASE3_REAL_TWO_CONNECTION_LOCK_ORDER_PASS');
   console.log('PHASE3_REAL_WRAPPER_CONCURRENCY_PASS');
