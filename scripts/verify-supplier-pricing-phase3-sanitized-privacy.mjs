@@ -1,0 +1,41 @@
+#!/usr/bin/env node
+/** Verify the sanitized Stage A diff contains aggregate evidence only. */
+import { existsSync, readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const base = process.argv[2] || 'origin/main';
+const git = args => execFileSync('git', args, { cwd: ROOT, encoding: 'utf8' });
+const tracked = git(['diff', '--no-ext-diff', '--name-only', base]).trim().split(/\r?\n/).filter(Boolean);
+const untracked = git(['ls-files', '--others', '--exclude-standard']).trim().split(/\r?\n/).filter(Boolean);
+const changed = [...new Set([...tracked, ...untracked])];
+const forbidden = changed.filter(file =>
+  /supplier-pricing-phase3-(product-snapshot|proposed-classification-manifest)\.json$/i.test(file)
+  || /(?:generate|verify)-supplier-pricing-phase3-classification-manifest\.mjs$/i.test(file)
+);
+const auditFiles = changed.filter(file => /^docs\/audits\/.*supplier-pricing-phase3/i.test(file));
+const aggregateAudit = path.join(ROOT, 'docs', 'audits', '2026-07-22-supplier-pricing-phase3-classification-review.md');
+const expectedChecksum = 'bf85cc649657735fa26ba8c7e753d653c76ba238ce63c7605ce723393ea322c4';
+if (!existsSync(aggregateAudit)) throw new Error('SANITIZED_PRIVACY_CHECK_FAILED aggregate_audit_missing');
+const aggregateText = readFileSync(aggregateAudit, 'utf8');
+if (!aggregateText.includes('| Products represented | 604 |')
+  || !aggregateText.includes('| Rows unresolved | 604 |')
+  || !aggregateText.includes('| Name-only no-return evidence flags | 21 |')
+  || !aggregateText.includes(expectedChecksum)) {
+  throw new Error('SANITIZED_PRIVACY_CHECK_FAILED aggregate_consistency');
+}
+let rowFieldHits = 0;
+let uuidHits = 0;
+for (const file of auditFiles) {
+  const absolute = path.join(ROOT, file);
+  if (!existsSync(absolute)) continue;
+  const text = readFileSync(absolute, 'utf8');
+  rowFieldHits += (text.match(/\b(product_id|product_name|sku|formulation|package(?:_size)?|inventory_unit)\b/gi) || []).length;
+  uuidHits += (text.match(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi) || []).length;
+}
+if (forbidden.length || rowFieldHits || uuidHits) {
+  throw new Error(`SANITIZED_PRIVACY_CHECK_FAILED forbidden_files=${forbidden.length} audit_row_fields=${rowFieldHits} audit_uuids=${uuidHits}`);
+}
+console.log(`SANITIZED_PRIVACY_CHECK_PASS changed_files=${changed.length} forbidden_files=0 audit_row_fields=0 audit_uuids=0 aggregate_rows=604 unresolved=604 evidence_flags=21 checksum=${expectedChecksum}`);
