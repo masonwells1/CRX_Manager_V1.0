@@ -2,6 +2,10 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-23 — Supplier Pricing Phase 3 Stage A pre-apply hardening (NOT APPLIED)
+
+- Bound `set_product_phase3_metadata` idempotency replays to the exact actor, Product, expected values, and target values; changed payloads now fail closed with `IDEMPOTENCY_PAYLOAD_MISMATCH`. Its transaction-local metadata-write authorization now resets immediately after the governed Product update, preventing later direct metadata writes in the same transaction. The disposable real-schema proof covers both refusals. No live migration, Product mutation, flag enablement, merge, or deployment occurred.
+
 ## 2026-07-22 — Supplier Pricing Phase 3 Stage A prepared (NOT APPLIED)
 
 - Prepared an additive `product_families` / Product metadata and return-credit enforcement foundation. `RETURN_POLICY_NO_RETURN` is the exact refusal code; pre-Stage-A compatibility remains `unknown` / default metadata values. Direct `return_items` writes defer only their Product FK inside the statement, then take sorted namespaced Product advisory locks and force the FK immediate again, preventing metadata/direct-write races without row-lock ordering. The preserved cancel and credit-memo-unapply wrappers now acquire the linked sorted Product lock set before their first inventory or ledger mutation; `reject_return` remains safely covered by its first durable action, the privileged status-trigger backstop. Replacement prehashes are pinned to current live source. Because the approved schema dump predates the live unapply body, the disposable proof first restores a read-only `pg_get_functiondef` fixture whose SHA-256 is independently checked by the Stage A preflight, then applies Section 09 before Stage A; it never weakens or bypasses the production hash guard. Rollback-matrix and two-session real-schema concurrency proofs cover wrapper/direct-item/unapply races, a regression-sensitive received-cancel versus approved-receive shared-Product race, autocommit timing, cancellation reversal, late reject/cancel/unapply rollback, and an unrelated credit-memo unapply that voids only its memo (`return_reverted=false`).
