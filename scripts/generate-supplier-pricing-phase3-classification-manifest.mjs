@@ -114,7 +114,7 @@ export function makeManifest(snapshot) {
     format: 'crx-supplier-pricing-phase3-proposed-classification-manifest-v1',
     generated_from_snapshot_sha256: snapshot.snapshot_sha256,
     migration_high_water: snapshot.migration_high_water,
-    provisional_warning: 'Pre-Stage-A proposal only. Regenerate from the live Stage A schema after the separately approved migration is applied; this artifact does not approve, merge, apply, or activate any classification.',
+    provisional_warning: 'Pre-Stage-A proposal only. After the separately approved Stage A migration is applied, capture live read-only values with a future Stage-A-aware generator; this pre-Stage-A generator cannot consume that schema. This artifact does not approve, merge, apply, or activate any classification.',
     rows,
     snapshot_timestamp_utc: snapshot.snapshot_timestamp_utc,
     summary: {

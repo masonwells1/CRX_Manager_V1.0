@@ -2,7 +2,13 @@
 
 **Status: PROPOSAL ONLY — all approvals remain pending Mason's explicit review.**
 
-This is the required pre-Stage-A all-Product classification packet. It neither approves classifications nor authorizes a migration, Product update, feature activation, PR merge, or live-data change. Regenerate it from the Stage A schema only after the separately governed Stage A migration is applied.
+This is the required pre-Stage-A all-Product classification packet. It neither
+approves classifications nor authorizes a migration, Product update, feature
+activation, PR merge, or live-data change. After the separately governed Stage A
+migration is applied, a future Stage-A-aware generator must capture the new live
+read-only schema; this pre-Stage-A generator cannot consume it. Any later
+classification apply must call the lock-taking `set_product_phase3_metadata`
+RPC for each Product rather than update the governed columns directly.
 
 ## Fresh read-only snapshot
 
@@ -17,7 +23,7 @@ The snapshot records each Product UUID, SKU, name, form, package and unit fields
 
 ## Proposed classification disposition
 
-- Manifest SHA-256: `bf85cc649657735fa26ba8c7e753d653c76ba238ce63c7605ce723393ea322c4`.
+- Manifest SHA-256: `57da3f92d2e02253f4be7fa88a8626a3191bdbbc13ab140a57f33af6e84f7b91`.
 - **604 unresolved**, **0 standalone**, **0 family assigned**.
 - **21** Product names contain name-only `no return` candidate text. This is flag-only evidence, not policy truth; none were classified `no_return`.
 - **56** Product names contain full-tote/tote text candidates. This is flag-only evidence; none were set to tote-only.
@@ -31,7 +37,7 @@ an approved private directory and point the verification scripts to it with
 `CRX_PHASE3_PRIVATE_ARTIFACT_DIR`.
 
 - Snapshot file SHA-256: `2edbb16698fb6e957aaec21fd79c531dbb81a1b620b84f494b149caaa49cb90a`.
-- Manifest file SHA-256: `2d7e13c6545d44bdb3391d407a90a403e5f2138d6d538b9a07b0d82a8acf94cb`.
+- Manifest file SHA-256: `fe62e53a16266078c50417b02c7063f0165cbb883d4f0c2e89386791a08ee3b7`.
 - `scripts/generate-supplier-pricing-phase3-classification-manifest.mjs`
 - `scripts/verify-supplier-pricing-phase3-classification-manifest.mjs`
 

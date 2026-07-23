@@ -385,9 +385,11 @@ BEGIN
 END;
 $function$;
 
--- Stage A deliberately has no app-role path for changing classifications. The
--- future Stage C owner migration uses SET LOCAL app.phase3_metadata_authorized
--- = 'true' in its approved transaction; this is intentionally not an app grant.
+-- Stage A deliberately has no app-role path for changing classifications.
+-- Future Stage C owner SQL MUST call set_product_phase3_metadata so the Product
+-- advisory lock is acquired before UPDATE. Directly setting
+-- app.phase3_metadata_authorized and updating products would bypass that lock
+-- ordering and is not an approved write path.
 REVOKE ALL ON FUNCTION public.lock_phase3_product_policy_products(uuid[]) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.assert_phase3_return_policy(uuid[]) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.assert_phase3_product_metadata_change_safe(uuid) FROM PUBLIC, anon, authenticated;
