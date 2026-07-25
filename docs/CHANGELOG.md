@@ -2,6 +2,47 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-25 — Harness review: documented cross-agent sync gaps (6 hooks Claude-only vs Codex; Hermes absent from repo) and Claude Opus 5 tuning proposals (effort levels, subagent budget, verbosity/deliverable-length calibration). Review only — no harness file changed. PR #227 (draft).
+
+Harness review: documented cross-agent sync gaps (6 hooks Claude-only vs Codex; Hermes absent from repo) and Claude Opus 5 tuning proposals (effort levels, subagent budget, verbosity/deliverable-length calibration). Review only — no harness file changed. PR #227 (draft).
+
+- **Commits this session** (git log -15 (fallback — no author-matched commits in the last 12h)):
+  - `8a9aefc3 docs: harness review — cross-agent sync gaps and Opus 5 tuning proposals`
+  - `f4b30598 chore: close out supplier pricing phase 3 stage a (#225)`
+  - `7f447881 fix: harden phase3 metadata governance (#224)`
+  - `6cc70dea Supplier Pricing Phase 3 Stage A private-artifact foundation (#223)`
+  - `34baf4eb Fix Section 09 purchase order and AP controls (#218)`
+  - `417d4b4c Merge pull request #219 from masonwells1/claude/heuristic-tesla-4efda8`
+  - `d68c44bb B7-reconcile: rename applied migration to live ledger version 20260722202622`
+  - `6498284c Merge remote-tracking branch 'origin/main' into claude/heuristic-tesla-4efda8`
+  - `49a08500 Refresh schema registry to include applied commission-split guard migration`
+  - `efe6dcf9 Reserve commission-recipient names on invoiced jobs (#220)`
+  - `e107c7a6 Guard commission splits against stale-tab lost updates`
+  - `30616b04 KNOWN_ISSUES §1b: PR #213 landed — mark commission-recipient close-out resolved (#217)`
+  - `4d686ece Reject unresolvable commission recipients at creation (gauntlet §7) (#213)`
+  - `a7806253 Durable commission routing: immutable profile UUIDs in splits (applied live as 20260722174029) (#216)`
+  - `d8a17601 Fix bulk quote import lifecycle path`
+- **Migrations touched** (last 15 commits (fallback)):
+  - `supabase/migrations/20260723193312_product_families_return_policy_foundation.sql`
+  - `supabase/migrations/20260722222743_product_families_return_policy_foundation.sql`
+  - `supabase/migrations/20260722222742_section9_po_ap_high_remediation.sql`
+  - `supabase/migrations/20260722202622_commission_split_lost_update_guard.sql`
+  - `supabase/migrations/20260722184744_reuse_guard_covers_invoiced_jobs.sql`
+  - `supabase/migrations/20260722190000_commission_split_lost_update_guard.sql`
+  - `supabase/migrations/20260722134252_reject_unresolvable_commission_recipients.sql`
+  - `supabase/migrations/20260722144121_lock_commission_identity_names.sql`
+  - `supabase/migrations/20260722150432_forbid_referenced_recipient_name_acquisition.sql`
+  - `supabase/migrations/20260722154303_global_unique_profile_names.sql`
+  - `supabase/migrations/20260722162851_reuse_guard_covers_orders.sql`
+  - `supabase/migrations/20260722172533_reuse_guard_covers_revivable_quotes.sql`
+  - `supabase/migrations/20260722174029_commission_split_recipient_ids.sql`
+  - `supabase/migrations/20260722122651_guard_inventory_location_and_matcher_grants.sql`
+  - `supabase/migrations/20260722105402_guard_inventory_location_and_matcher_grants.sql`
+  - `supabase/migrations/20260722091359_supplier_pricing_workbook_v2_product_info.sql`
+  - `supabase/migrations/20260722100456_revoke_inner_pricing_rpc_access.sql`
+  - `supabase/migrations/20260722111620_search_path_hardening_crm_guards_helpers.sql`
+  - `supabase/migrations/20260722112835_unapply_credit_memo_replay_binding.sql`
+
 ## 2026-07-23 — Supplier Pricing Phase 3 Stage A live closeout (APPLIED LIVE; DORMANT)
 
 - Applied the submitted `20260722222743_product_families_return_policy_foundation` migration live; Supabase assigned ledger version `20260723193312`, and the disk migration was B7-renamed to that version without changing its SQL. `set_product_phase3_metadata` idempotency replays remain bound to the exact actor, Product, expected values, and target values; changed payloads fail closed with `IDEMPOTENCY_PAYLOAD_MISMATCH`, and the transaction-local metadata-write authorization resets immediately after the governed Product update. Stage A remains dormant: no Product was classified, `product_families` has 0 rows, and `supplier_cost_basis_enabled` remains `false`. Postflight confirmed all 604 Products unchanged, four new Product columns live, authenticated-only `product_families` SELECT/RLS, no app-role Phase 3 metadata mutation, enabled Phase 3 triggers, and search-path-pinned non-app-executable helper functions. The rollback-only smoke returned `SMOKE_PASS_ROLLBACK`; all 17 invariant predicates had zero unallowlisted findings. The five Section 9 PO/AP findings are unrelated pre-existing items owned by still-pending migration `20260722222742`.
