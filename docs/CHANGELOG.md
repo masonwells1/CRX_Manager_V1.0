@@ -2,6 +2,49 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-25 — Applied Opus 5 harness tuning: CLAUDE.md Model Tuning section (tone, deliverable length, subagent budget, effort mapping, review-prompt rule, parity-script pointer), AGENTS.md scope paragraph, DECISION_LOG entry. Corrected the earlier Codex hook-parity finding — the asymmetry is deliberate and build-enforced. Hermes dropped (not in use). PR #227.
+
+Applied Opus 5 harness tuning: CLAUDE.md Model Tuning section (tone, deliverable length, subagent budget, effort mapping, review-prompt rule, parity-script pointer), AGENTS.md scope paragraph, DECISION_LOG entry. Corrected the earlier Codex hook-parity finding — the asymmetry is deliberate and build-enforced. Hermes dropped (not in use). PR #227.
+
+- **Commits this session** (PR #227): the `docs:` commits below. The remaining entries are unrelated repository context from the `git log -15` fallback, not part of this session.
+  - `b5d85282 docs: apply Opus 5 harness tuning; correct Codex hook-parity finding`
+  - `5e5eb484 docs: log harness review session in CHANGELOG`
+  - `8a9aefc3 docs: harness review — cross-agent sync gaps and Opus 5 tuning proposals`
+  - `f4b30598 chore: close out supplier pricing phase 3 stage a (#225)`
+  - `7f447881 fix: harden phase3 metadata governance (#224)`
+  - `6cc70dea Supplier Pricing Phase 3 Stage A private-artifact foundation (#223)`
+  - `34baf4eb Fix Section 09 purchase order and AP controls (#218)`
+  - `417d4b4c Merge pull request #219 from masonwells1/claude/heuristic-tesla-4efda8`
+  - `d68c44bb B7-reconcile: rename applied migration to live ledger version 20260722202622`
+  - `6498284c Merge remote-tracking branch 'origin/main' into claude/heuristic-tesla-4efda8`
+  - `49a08500 Refresh schema registry to include applied commission-split guard migration`
+  - `efe6dcf9 Reserve commission-recipient names on invoiced jobs (#220)`
+  - `e107c7a6 Guard commission splits against stale-tab lost updates`
+  - `30616b04 KNOWN_ISSUES §1b: PR #213 landed — mark commission-recipient close-out resolved (#217)`
+  - `4d686ece Reject unresolvable commission recipients at creation (gauntlet §7) (#213)`
+- **Migrations touched:** none — documentation and agent-guidance only.
+
+## 2026-07-25 — Harness review: documented cross-agent sync gaps (6 hooks Claude-only vs Codex; Hermes absent from repo) and Claude Opus 5 tuning proposals (effort levels, subagent budget, verbosity/deliverable-length calibration). Review only — no harness file changed. PR #227 (draft).
+
+Harness review: documented cross-agent sync gaps (6 hooks Claude-only vs Codex; Hermes absent from repo) and Claude Opus 5 tuning proposals (effort levels, subagent budget, verbosity/deliverable-length calibration). Review only — no harness file changed. PR #227 (draft).
+
+- **Commits this session** (PR #227): the `docs:` commits below. The remaining entries are unrelated repository context from the `git log -15` fallback, not part of this session.
+  - `8a9aefc3 docs: harness review — cross-agent sync gaps and Opus 5 tuning proposals`
+  - `f4b30598 chore: close out supplier pricing phase 3 stage a (#225)`
+  - `7f447881 fix: harden phase3 metadata governance (#224)`
+  - `6cc70dea Supplier Pricing Phase 3 Stage A private-artifact foundation (#223)`
+  - `34baf4eb Fix Section 09 purchase order and AP controls (#218)`
+  - `417d4b4c Merge pull request #219 from masonwells1/claude/heuristic-tesla-4efda8`
+  - `d68c44bb B7-reconcile: rename applied migration to live ledger version 20260722202622`
+  - `6498284c Merge remote-tracking branch 'origin/main' into claude/heuristic-tesla-4efda8`
+  - `49a08500 Refresh schema registry to include applied commission-split guard migration`
+  - `efe6dcf9 Reserve commission-recipient names on invoiced jobs (#220)`
+  - `e107c7a6 Guard commission splits against stale-tab lost updates`
+  - `30616b04 KNOWN_ISSUES §1b: PR #213 landed — mark commission-recipient close-out resolved (#217)`
+  - `4d686ece Reject unresolvable commission recipients at creation (gauntlet §7) (#213)`
+  - `a7806253 Durable commission routing: immutable profile UUIDs in splits (applied live as 20260722174029) (#216)`
+  - `d8a17601 Fix bulk quote import lifecycle path`
+- **Migrations touched:** none — documentation and agent-guidance only.
 ## 2026-07-24 — Cleanup sprint progress check (automated weekly routine)
 
 - Weekly read-only SQL check against production. Negatives: 19 (+1 vs prior week — second consecutive increase). Over-received PO items: 15 (flat, 10 consecutive stalled weeks). Unbilled deliveries: 59 (flat). New negative-bucket rows are still being created despite the Phase 21 going-forward fix — warn-not-block delivery path (U9) likely still has an open write path. No legacy rows resolved in /integrity-cleanup this week. Phase 23 (DB CHECK constraints on inventory buckets) remains blocked. PR #226 filed with the progress log row; push notification sent to Mason.
