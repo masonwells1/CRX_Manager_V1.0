@@ -2,6 +2,10 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-24 — Cleanup sprint progress check (automated weekly routine)
+
+- Weekly read-only SQL check against production. Negatives: 19 (+1 vs prior week — second consecutive increase). Over-received PO items: 15 (flat, 10 consecutive stalled weeks). Unbilled deliveries: 59 (flat). New negative-bucket rows are still being created despite the Phase 21 going-forward fix — warn-not-block delivery path (U9) likely still has an open write path. No legacy rows resolved in /integrity-cleanup this week. Phase 23 (DB CHECK constraints on inventory buckets) remains blocked. PR #226 filed with the progress log row; push notification sent to Mason.
+
 ## 2026-07-23 — Supplier Pricing Phase 3 Stage A live closeout (APPLIED LIVE; DORMANT)
 
 - Applied the submitted `20260722222743_product_families_return_policy_foundation` migration live; Supabase assigned ledger version `20260723193312`, and the disk migration was B7-renamed to that version without changing its SQL. `set_product_phase3_metadata` idempotency replays remain bound to the exact actor, Product, expected values, and target values; changed payloads fail closed with `IDEMPOTENCY_PAYLOAD_MISMATCH`, and the transaction-local metadata-write authorization resets immediately after the governed Product update. Stage A remains dormant: no Product was classified, `product_families` has 0 rows, and `supplier_cost_basis_enabled` remains `false`. Postflight confirmed all 604 Products unchanged, four new Product columns live, authenticated-only `product_families` SELECT/RLS, no app-role Phase 3 metadata mutation, enabled Phase 3 triggers, and search-path-pinned non-app-executable helper functions. The rollback-only smoke returned `SMOKE_PASS_ROLLBACK`; all 17 invariant predicates had zero unallowlisted findings. The five Section 9 PO/AP findings are unrelated pre-existing items owned by still-pending migration `20260722222742`.
