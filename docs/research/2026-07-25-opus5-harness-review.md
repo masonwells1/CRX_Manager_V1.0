@@ -121,7 +121,9 @@ Important distinction, because getting this wrong would be bad: **the project's 
 
 ### 2.3 Subagent budget — the highest-value change
 
-Opus 5 delegates to subagents noticeably more readily than earlier models. This harness is built on fan-out: `foundation-ultra-review` launches 6 agents plus standing reviewers, `review-workflow` runs 4 layers each with adversarial skeptics, `preflight`, `ship`, `migration-review`, and the overnight hunts all fan out. There is currently **no cap anywhere** on how many agents a run may spawn.
+Opus 5 delegates to subagents noticeably more readily than earlier models. This harness is built on fan-out: `foundation-ultra-review` launches 6 agents plus standing reviewers, `review-workflow` runs 4 layers each with adversarial skeptics, `preflight`, `ship`, `migration-review`, and the overnight hunts all fan out. Each workflow script defines its own fan-out, but there is **no global ceiling** across a run and nothing stops an agent adding ad-hoc subagents on top of a script's defined set.
+
+Terminology, since the distinction matters: the per-workflow fan-outs in `.claude/workflows/` are **hard caps, not defaults**. The rule added to `CLAUDE.md` is that an agent may not exceed the fan-out its workflow defines — the script is the ceiling for that run, and ad-hoc agents on top of it are forbidden. It is not a global budget across the session.
 
 The risk is not correctness — it is cost and wall-clock time growing quietly, on a model that already defaults to `high` effort.
 

@@ -47,7 +47,7 @@ Keep responses focused and concise. Lead with the outcome — the first sentence
 </tone_preference>
 
 - **Written deliverables.** Match document length to what the task needs. Reports, audits, and handoffs lead with findings, not a restatement of the assignment. Do not pad with filler sections, redundant summaries, or boilerplate.
-- **Subagent budget.** Delegate only for large, genuinely independent, parallelizable work. Do not delegate what you can finish in a handful of tool calls, and never spawn a subagent to double-check your own output. The fan-outs defined in `.claude/workflows/` are the budget — do not add ad-hoc agents on top of them.
+- **Subagent budget.** Delegate only for large, genuinely independent, parallelizable work. Do not delegate what you can finish in a handful of tool calls, and never spawn a subagent to double-check your own output. The fan-out a workflow script defines is a **hard cap for that run, not a default** — never add ad-hoc agents on top of it. There is no global session budget; the ceiling is per-workflow.
 - **Self-verification.** Opus 5 self-corrects reliably; do not add "double-check your answer" re-checks. This does not relax the `AGENTS.md` Verification Standard — running the changed behavior and observing it is a production-safety rule, not a self-check, and it stands unchanged. The Codex cross-model gate and the adversarial skeptics on money/RLS/migration paths also stand: they are independent or precision-motivated, not self-verification.
 - **Review prompts** must request every finding and filter in a later pass. Never instruct a reviewer to "only report high-severity issues" or "be conservative" — Opus 5 follows that literally and reports less. **Settled exception (Mason, 2026-07-25):** bounded overnight sweeps are exempt. `overnight-bug-hunt.js`, `money-inventory-hunt.js`, and `whole-codebase-audit.js` keep their 8–10 "most significant" caps — the per-run cost of uncapped fan-out outweighs the tail findings. The rule binds everywhere else; do not add a cap to any other review prompt.
 - **Effort.** `low` for mechanical read-only work (`status`, `parked`, `fleet`, doc updates); `medium` for routine review and non-money multi-file work; `high` (default) for money, inventory, RLS, migrations, `ship`, `codex-gauntlet`; `xhigh` for `foundation-ultra-review`, `migration-review`, and overnight hunts. This is a starting point pending an effort sweep on real CRX tasks — never lower effort on a money/RLS/migration path to save tokens. `money-inventory-hunt.js` pins `effort: 'high'` at its finder and verifier call sites; Mason settled on 2026-07-25 that it **stays at `high` until an effort sweep measures otherwise**, so the `xhigh` row does not reach those agents by design.
@@ -57,6 +57,7 @@ Keep responses focused and concise. Lead with the outcome — the first sentence
 After changing Claude commands, skills, hooks, permissions, or agent helpers:
 
 ```bash
+git status --short --branch   # --write mutates tracked files; inspect state first
 node scripts/sync-agent-workflows.mjs --write
 npm run test:agent-workflows
 npm run agent-health
