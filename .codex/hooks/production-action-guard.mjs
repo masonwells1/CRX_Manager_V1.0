@@ -135,7 +135,12 @@ function defaultRunGh(args, cwd) {
   throw lastError || new Error("GitHub CLI is unavailable");
 }
 
-function proofRequirement(headSha, riskDescription, detail) {
+function proofRequirement(headSha, riskDescription, detail, baseSha) {
+  // State the EXACT expected base. On a PR merge that base is GitHub's baseRefOid,
+  // not local origin/main, so generic "<origin/main at review time>" guidance would
+  // send the operator round a fetch-then-review loop, producing a proof this gate
+  // rejects without ever saying which base it wanted.
+  const expectedBase = baseSha || "<origin/main at review time>";
   return denied(
     `CODEX PRODUCTION GATE: ${riskDescription}\n\n` +
     `${detail}\n\n` +
@@ -144,9 +149,9 @@ function proofRequirement(headSha, riskDescription, detail) {
     `SHIP/SHIP-WITH-FOLLOWUPS review writes .claude/session-state/claude-review-push.json. ` +
     `Required JSON: ` +
     `{\"claude_ran\":true,\"verdict\":\"clean|blockers-fixed\",` +
-    `\"head_sha\":\"${headSha || "<exact pushed SHA>"}\",\"base_sha\":\"<origin/main at review time>\",` +
+    `\"head_sha\":\"${headSha || "<exact pushed SHA>"}\",\"base_sha\":\"${expectedBase}\",` +
     `\"timestamp\":\"<ISO-8601, 0-30 minutes old>\"}. ` +
-    `The proof is bound to both the exact pushed SHA and the origin/main base; future-dated, stale, base-moved, malformed, or BOM-corrupted proof is refused.`
+    `The proof is bound to both the exact pushed SHA and that exact base; future-dated, stale, base-moved, malformed, or BOM-corrupted proof is refused.`
   );
 }
 
@@ -169,6 +174,17 @@ function gateMainChange({ repoDir, sourceRef, sourceSha, nowMs, runGit, authorit
       : runGit(["rev-parse", "--verify", "--quiet", "origin/main"], repoDir);
     if (!baseSha) throw new Error("empty base SHA");
     if (authoritativeBaseSha) {
+      // `rev-parse --verify <value>^{commit}` also resolves REF NAMES, so an
+      // abbreviated or symbolic value from a changed `gh` output shape would
+      // silently resolve to something local instead of failing closed — quietly
+      // defeating the point of binding to GitHub's base. Require a full commit id.
+      if (!/^[0-9a-f]{40}$/i.test(baseSha)) {
+        return denied(
+          `CODEX PRODUCTION GATE: GitHub reported an unusable base commit ` +
+          `(${baseSha.slice(0, 20)}); the merge cannot be bound to a real base commit ` +
+          `and is denied (fail closed).`
+        );
+      }
       // The object must exist locally or every diff below is meaningless. Fail
       // closed with actionable guidance rather than an opaque git error.
       try {
@@ -258,20 +274,21 @@ function gateMainChange({ repoDir, sourceRef, sourceSha, nowMs, runGit, authorit
     : "the main-bound diff contains money or financial-audit identifiers even though its paths look ordinary";
   const proofPath = path.join(repoDir, ...CLAUDE_PROOF_RELATIVE);
   if (!existsSync(proofPath)) {
-    return proofRequirement(headSha, riskDescription, `Missing required Claude proof: ${proofPath}`);
+    return proofRequirement(headSha, riskDescription, `Missing required Claude proof: ${proofPath}`, baseSha);
   }
 
   let proof;
   try {
     proof = JSON.parse(readFileSync(proofPath, "utf8"));
   } catch (error) {
-    return proofRequirement(headSha, riskDescription, `Claude proof could not be parsed: ${error?.message || error}`);
+    return proofRequirement(headSha, riskDescription, `Claude proof could not be parsed: ${error?.message || error}`, baseSha);
   }
   if (!claudeProofValid(proof, headSha, nowMs, baseSha)) {
     return proofRequirement(
       headSha,
       riskDescription,
-      "Claude proof is stale, future-dated, bound to a different HEAD or a different origin/main base, has the wrong verdict/ran key, or is otherwise invalid."
+      `Claude proof is stale, future-dated, bound to a different HEAD or to a base other than ${baseSha}, has the wrong verdict/ran key, or is otherwise invalid.`,
+      baseSha
     );
   }
 

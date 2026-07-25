@@ -723,17 +723,52 @@ try {
 
     // The gh query must actually ask for baseRefOid.
     let askedFor = "";
-    mergeWith2: {
-      evaluateProductionAction({
-        toolName: "PowerShell",
-        toolInput: { command: "gh pr merge 123 --squash" },
-        repoDir: stale.repo,
-        nowMs: now,
-        runGh: (args) => { askedFor = args.join(" "); return prAt(githubBase); },
-      });
-      break mergeWith2;
-    }
+    evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command: "gh pr merge 123 --squash" },
+      repoDir: stale.repo,
+      nowMs: now,
+      runGh: (args) => { askedFor = args.join(" "); return prAt(githubBase); },
+    });
     assert.match(askedFor, /baseRefOid/, "gh pr view requests baseRefOid");
+
+    // A base that is not a full commit id must fail closed: `rev-parse --verify`
+    // resolves ref names too, so an abbreviated/symbolic value would otherwise
+    // silently bind to a local ref.
+    const notASha = mergeWith(prAt("main"));
+    assert.equal(notASha.blocked, true, "non-SHA baseRefOid fails closed");
+    assert.match(
+      String(notASha.reason || notASha.message || JSON.stringify(notASha)),
+      /unusable base commit/,
+      "non-SHA base denial says the base is unusable"
+    );
+
+    // The proof guidance must name the EXACT expected base, not a generic
+    // origin/main placeholder, or the operator loops producing rejected proofs.
+    // Use the up-to-date head so this reaches the proof requirement rather than
+    // stopping at the ancestry gate.
+    unlinkSync(proofPath(stale.repo));
+    const guidance = String(evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command: "gh pr merge 123 --squash" },
+      repoDir: stale.repo,
+      nowMs: now,
+      runGh: () => JSON.stringify({
+        baseRefName: "main",
+        baseRefOid: githubBase,
+        headRefName: "feature/test",
+        headRefOid: updatedHead,
+        mergeStateStatus: "CLEAN",
+        statusCheckRollup: greenChecks,
+      }),
+    }).reason || "");
+    assert.match(guidance, new RegExp(githubBase), "proof guidance states the exact expected base SHA");
+    assert.doesNotMatch(
+      guidance,
+      /<origin\/main at review time>/,
+      "proof guidance no longer shows the generic origin/main placeholder on a PR merge"
+    );
+    console.log(`TRANSCRIPT BASEOID: non-SHA base blocked=${notASha.blocked}; guidance names exact base=true`);
   }
 
   console.log(`TRANSCRIPT DENY (no proof): exit=${deniedProcess.status} stdout=${deniedProcess.stdout}`);

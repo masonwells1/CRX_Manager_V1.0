@@ -2,13 +2,25 @@
 
 All significant development milestones, in reverse chronological order.
 
-## 2026-07-25 — Fixed the Codex PR-merge guard to bind its review proof AND its risk diff to GitHub current baseRefOid instead of a possibly-stale local origin/main; unfetched base now fails closed with fetch guidance. Closes the P1 Codex raised on PR #227. Regression tests drive the real guard against real git repos with a divergent base. PR #228.
+## 2026-07-25 — Codex PR-merge guard bound to GitHub's real base (PR #228)
 
-Fixed the Codex PR-merge guard to bind its review proof AND its risk diff to GitHub current baseRefOid instead of a possibly-stale local origin/main; unfetched base now fails closed with fetch guidance. Closes the P1 Codex raised on PR #227. Regression tests drive the real guard against real git repos with a divergent base. PR #228.
+Closes the P1 Codex raised on PR #227, plus a second P1 Codex raised against the first fix.
+
+The guard now requests GitHub's current `baseRefOid` and binds both the Claude review proof and the
+risk diff to it, instead of a possibly-stale local `origin/main` that it never fetched. **Risky
+main-bound merges additionally require that base to be an ancestor of the PR head**, failing closed
+with "update the branch" guidance — without it, a head behind the base produces a byte-identical
+three-dot diff (`A...B` is `merge-base(A,B)..B`), so base-only commits stay unreviewed and the
+base-binding is meaningless. A base GitHub reports but the checkout lacks, and any base that is not
+a full 40-hex commit id, also fail closed; the proof guidance now names the exact expected base
+rather than a generic `origin/main` placeholder.
 
 - **Commits this session** (PR #228):
   - `60858a6c fix(guard): bind Codex PR-merge gate to GitHub's current base, not local origin/main`
-- **Migrations touched:** none — guard logic and its tests only.
+  - `ad7cee00 docs: log guard-fix session in CHANGELOG`
+  - `9a5dde9e fix(guard): require risky PR heads to contain the base they merge onto`
+  - plus this entry and the CodeRabbit follow-ups (proof-guidance base, 40-hex validation, doc fixes)
+- **Migrations touched:** none — guard logic, its tests, and docs only.
 
 ## 2026-07-25 — Applied Opus 5 harness tuning: CLAUDE.md Model Tuning section (tone, deliverable length, subagent budget, effort mapping, review-prompt rule, parity-script pointer), AGENTS.md scope paragraph, DECISION_LOG entry. Corrected the earlier Codex hook-parity finding — the asymmetry is deliberate and build-enforced. Hermes dropped (not in use). PR #227.
 
