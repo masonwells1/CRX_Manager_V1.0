@@ -654,15 +654,50 @@ try {
       `githubBase=${githubBase.slice(0, 12)} -> stale-bound proof blocked=${staleAttempt.blocked}`
     );
 
-    // A proof bound to GitHub's real base is what actually clears the gate.
+    // Rebinding the proof to GitHub's base is NOT sufficient on its own: this head
+    // is still BEHIND that base, so `baseSha...headSha` (three-dot = merge-base..head)
+    // silently omits every base-only commit and the review cannot have covered the
+    // real merge result. Risky merges must fail closed until the branch is updated.
+    // (Codex P1 #2, 2026-07-25 — the earlier revision of this test wrongly expected
+    // this case to pass.)
     writeProof(stale.repo, { ...valid, head_sha: stale.sha, base_sha: githubBase });
-    const reboundAttempt = mergeWith(prAt(githubBase));
+    const behindBase = mergeWith(prAt(githubBase));
     assert.equal(
-      reboundAttempt.blocked,
-      false,
-      "proof bound to GitHub's current baseRefOid clears the merge gate"
+      behindBase.blocked,
+      true,
+      "risky head that does not contain GitHub's base is denied even with a base-bound proof"
     );
-    console.log(`TRANSCRIPT BASEOID: proof rebound to githubBase -> blocked=${reboundAttempt.blocked}`);
+    assert.match(
+      String(behindBase.reason || behindBase.message || JSON.stringify(behindBase)),
+      /does not contain the base/,
+      "behind-base denial explains that the branch must be updated"
+    );
+    console.log(`TRANSCRIPT BASEOID: risky head behind GitHub base -> blocked=${behindBase.blocked}`);
+
+    // Once the branch actually contains the base, the base-bound proof clears it.
+    git(stale.repo, ["merge", "--no-edit", "-q", githubBase]);
+    const updatedHead = git(stale.repo, ["rev-parse", "HEAD"]);
+    writeProof(stale.repo, { ...valid, head_sha: updatedHead, base_sha: githubBase });
+    const upToDate = evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command: "gh pr merge 123 --squash" },
+      repoDir: stale.repo,
+      nowMs: now,
+      runGh: () => JSON.stringify({
+        baseRefName: "main",
+        baseRefOid: githubBase,
+        headRefName: "feature/test",
+        headRefOid: updatedHead,
+        mergeStateStatus: "CLEAN",
+        statusCheckRollup: greenChecks,
+      }),
+    });
+    assert.equal(
+      upToDate.blocked,
+      false,
+      "base-bound proof on a head that contains the base clears the merge gate"
+    );
+    console.log(`TRANSCRIPT BASEOID: head updated to contain base -> blocked=${upToDate.blocked}`);
 
     // A base GitHub reports but the checkout does not have must fail closed with
     // actionable guidance, not an opaque git error or a silent pass.

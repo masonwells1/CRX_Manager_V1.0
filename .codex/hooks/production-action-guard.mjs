@@ -198,6 +198,12 @@ function gateMainChange({ repoDir, sourceRef, sourceSha, nowMs, runGit, authorit
     // Diff against the resolved baseSha, never the literal `origin/main` ref:
     // on a PR merge that ref may be stale, which would misclassify a risky diff
     // as ordinary and skip the proof requirement entirely.
+    //
+    // NOTE the three-dot semantics: `A...B` is merge-base(A,B)..B, so this only
+    // genuinely diffs "against baseSha" when baseSha is an ancestor of headSha.
+    // The risky path enforces that ancestry below; without it a head that is
+    // BEHIND the real base produces the identical diff either way, and changes
+    // living only on the base stay invisible (Codex P1 #2, 2026-07-25).
     changedFiles = runGit(["diff", "--name-only", `${baseSha}...${headSha}`], repoDir)
       .split(/\r?\n/)
       .map((file) => file.trim())
@@ -221,6 +227,31 @@ function gateMainChange({ repoDir, sourceRef, sourceSha, nowMs, runGit, authorit
   }
 
   if (risky.length === 0 && !contentFlagged) return { blocked: false };
+
+  // The change is risky, so a Claude proof is about to be demanded. That proof is
+  // only meaningful if the reviewed diff actually covers what will land on main.
+  // When the head does not contain GitHub's current base, the merge result also
+  // includes base-only commits that no review in this flow ever saw — and
+  // `run-claude-review.mjs --scope base-main` hands Claude the same merge-base
+  // patch. Branch protection does not require up-to-date heads, so enforce it
+  // here for risky merges rather than assuming it.
+  if (authoritativeBaseSha) {
+    let headContainsBase = false;
+    try {
+      runGit(["merge-base", "--is-ancestor", baseSha, headSha], repoDir);
+      headContainsBase = true;
+    } catch {
+      headContainsBase = false;
+    }
+    if (!headContainsBase) {
+      return denied(
+        `CODEX PRODUCTION GATE: this pull request is risky and its head ${headSha.slice(0, 12)} does not ` +
+        `contain the base it will merge onto (${baseSha.slice(0, 12)}), so the reviewed diff cannot cover ` +
+        `everything the merge lands (fail closed). Update the branch first — merge origin/main into it (or ` +
+        `rebase onto it) and push — then re-run the review so the proof covers the real merge result.`
+      );
+    }
+  }
 
   const riskDescription = risky.length > 0
     ? `the main-bound diff changes ${risky.length} risky file(s): ${risky.slice(0, 6).join(", ")}${risky.length > 6 ? ", ..." : ""}`
