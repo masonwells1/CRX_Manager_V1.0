@@ -14,7 +14,7 @@ import PageHeader from '../components/ui/PageHeader';
 import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, checkMutationResult, sanitizeError, assertRpcResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
+import { supabase, checkMutationResult, sanitizeError, assertRpcResult } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
 import { exportToCSV } from '../lib/csvExport';
@@ -22,6 +22,7 @@ import { downloadReportPdf } from '../lib/reportPdf';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { logActivity } from '../lib/activityLogger';
 import { ProductOptionDetails, normalizeReturnPolicy, productOptionLabel, type ProductOptionPresentationModel } from '../components/products/ProductOptionPresentation';
+import { mapReturnPolicyRpcError } from '../lib/returnPolicyError';
 import type { Return, ReturnItem, Customer, Order, ReturnStatus, ReturnReason, ReturnItemCondition } from '../types';
 
 type ReturnRow = Return & {
@@ -74,6 +75,8 @@ interface ReturnableOrderItem {
   product?: ProductOptionPresentationModel | null;
 }
 
+type DetailReturnItem = ReturnItem & { product?: ProductOptionPresentationModel | null };
+
 export default function Returns() {
   const { profile, role } = useAuth();
   const approveIdem = useIdempotencyKey('approve_return', profile?.id || '');
@@ -107,7 +110,7 @@ export default function Returns() {
   // Detail modal
   const [showDetail, setShowDetail] = useState(false);
   const [activeReturn, setActiveReturn] = useState<ReturnRow | null>(null);
-  const [detailItems, setDetailItems] = useState<ReturnItem[]>([]);
+  const [detailItems, setDetailItems] = useState<DetailReturnItem[]>([]);
   const [loadingDetail, setLoadingDetail] = useState(false);
 
   const isAdmin = role === 'admin';
@@ -321,12 +324,7 @@ export default function Returns() {
           })),
           p_idempotency_key: createKey,
         });
-        if (error) {
-          if (hasRpcCode(error, RpcErrorCodes.RETURN_POLICY_NO_RETURN)) {
-            throw new Error('RETURN_POLICY_NO_RETURN: This Product is marked no return.');
-          }
-          throw error;
-        }
+        if (error) throw mapReturnPolicyRpcError(error);
         assertRpcResult<{ return_id: string; return_number: string; item_count: number }>(data, 'create_return');
         createIdem.resetKey();
       },
@@ -348,12 +346,17 @@ export default function Returns() {
 
     const { data, error } = await supabase
       .from('return_items')
-      .select('*, product:products(product_name)')
+      .select('*, product:products(id, product_name, sku, unit_size, packaging_variant, container_size, container_unit, inventory_unit, return_policy, is_full_tote_only, product_family:product_families(name))')
       .eq('return_id', ret.id)
       .order('sort_order');
 
-    if (error) Sentry.captureException(error);
-    setDetailItems((data || []) as ReturnItem[]);
+    if (error) {
+      Sentry.captureException(error, { extra: { context: 'load_return_detail_items', returnId: ret.id } });
+      toast('error', 'Failed to load return item details');
+      setDetailItems([]);
+    } else {
+      setDetailItems((data || []) as DetailReturnItem[]);
+    }
     setLoadingDetail(false);
   };
 
@@ -368,7 +371,7 @@ export default function Returns() {
           p_approved_by: profile.id,
           p_idempotency_key: approveKey,
         });
-        if (error) throw error;
+        if (error) throw mapReturnPolicyRpcError(error);
         assertRpcResult(data, 'approve_return');
 
         approveIdem.resetKey();
@@ -398,7 +401,7 @@ export default function Returns() {
           p_rejected_by: profile.id,
           p_idempotency_key: rejectKey,
         });
-        if (error) throw error;
+        if (error) throw mapReturnPolicyRpcError(error);
         assertRpcResult(data, 'reject_return');
         rejectIdem.resetKey();
 
@@ -431,7 +434,7 @@ export default function Returns() {
           p_performed_by: profile.id,
           p_idempotency_key: cancelKey,
         });
-        if (error) throw error;
+        if (error) throw mapReturnPolicyRpcError(error);
         cancelIdem.resetKey();
         const result = assertRpcResult<{ was_received: boolean; reversed_count: number; skipped_count: number }>(data, 'cancel_return');
         if (result.was_received && result.reversed_count > 0) {
@@ -466,7 +469,7 @@ export default function Returns() {
           p_received_by: profile.id,
           p_idempotency_key: receiveKey,
         });
-        if (error) throw error;
+        if (error) throw mapReturnPolicyRpcError(error);
         assertRpcResult(data, 'receive_return');
 
         receiveIdem.resetKey();
@@ -492,7 +495,7 @@ export default function Returns() {
           p_actor_id: profile.id,
           p_idempotency_key: creditKey,
         });
-        if (error) throw error;
+        if (error) throw mapReturnPolicyRpcError(error);
         assertRpcResult(data, 'issue_return_credit');
 
         creditIdem.resetKey();
@@ -731,7 +734,7 @@ export default function Returns() {
         size="large"
       >
         <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Customer *</label>
               <select
@@ -802,7 +805,7 @@ export default function Returns() {
             </div>
             <div className="space-y-2 max-h-56 overflow-y-auto">
               {newItems.map((item, idx) => (
-                <div key={idx} className="flex gap-2 items-center p-2 bg-gray-50 rounded-lg">
+                <div key={idx} className="flex min-w-0 flex-col gap-2 rounded-lg bg-gray-50 p-2 sm:flex-row sm:flex-wrap sm:items-center">
                   <select
                     value={item.order_item_id}
                     onChange={(e) => {
@@ -819,7 +822,7 @@ export default function Returns() {
                       };
                       setNewItems(updated);
                     }}
-                    className="flex-1 px-2 py-1.5 text-sm border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green"
+                    className="w-full min-w-0 flex-1 px-2 py-1.5 text-sm border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green"
                   >
                     <option value="">Select Product</option>
                     {orderItems
@@ -834,7 +837,7 @@ export default function Returns() {
                       ))}
                   </select>
                   {orderItems.some((p) => normalizeReturnPolicy(p.product?.return_policy) === 'no_return') && (
-                    <p className="text-xs font-medium text-red-700">Products marked no return are disabled. The server also refuses them with RETURN_POLICY_NO_RETURN.</p>
+                    <p className="w-full min-w-0 text-xs font-medium text-red-700">Products marked no return are disabled. The server also refuses them with RETURN_POLICY_NO_RETURN.</p>
                   )}
                   {orderItems.find((p) => p.id === item.order_item_id)?.product && (
                     <div className="min-w-0 flex-1">
@@ -850,19 +853,19 @@ export default function Returns() {
                     value={item.quantity || ''}
                     onChange={(e) => updateItem(idx, 'quantity', parseFloat(e.target.value) || 0)}
                     placeholder="Qty"
-                    className="w-16 px-2 py-1.5 text-sm border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green"
+                    className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green sm:w-20"
                   />
                   <select
                     value={item.condition}
                     onChange={(e) => updateItem(idx, 'condition', e.target.value)}
-                    className="w-24 px-2 py-1.5 text-sm border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green"
+                    className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green sm:w-28"
                   >
                     <option value="unopened">Unopened</option>
                     <option value="opened">Opened</option>
                     <option value="damaged">Damaged</option>
                     <option value="expired">Expired</option>
                   </select>
-                  <label className="flex items-center gap-1 text-xs text-gray-600 whitespace-nowrap">
+                  <label className="flex w-full items-center gap-1 text-xs text-gray-600 sm:w-auto whitespace-nowrap">
                     <input
                       type="checkbox"
                       checked={item.restock}
@@ -871,7 +874,7 @@ export default function Returns() {
                     />
                     Restock
                   </label>
-                  <button onClick={() => removeItem(idx)} className="text-red-400 hover:text-red-600 p-1">
+                  <button onClick={() => removeItem(idx)} className="self-end text-red-400 hover:text-red-600 p-1 sm:self-auto">
                     <XCircle className="w-4 h-4" />
                   </button>
                 </div>
@@ -992,7 +995,11 @@ export default function Returns() {
                   <tbody>
                     {detailItems.map((item) => (
                       <tr key={item.id} className="border-t border-gray-100">
-                        <td className="py-2 px-3 font-medium">{item.product_name || item.product?.product_name}</td>
+                        <td className="min-w-0 py-2 px-3 font-medium">
+                          <div>{item.product_name || item.product?.product_name}</div>
+                          {item.product && <ProductOptionDetails product={item.product} />}
+                          {normalizeReturnPolicy(item.product?.return_policy) === 'no_return' && <p className="mt-1 text-xs font-medium text-red-700">No return policy — the database remains the authority for every return action.</p>}
+                        </td>
                         <td className="py-2 px-3 text-right">{item.quantity} {item.unit}</td>
                         <td className="py-2 px-3 capitalize">{item.condition}</td>
                         <td className="py-2 px-3 text-right text-emerald-600">{formatCents(item.extended_cents)}</td>
@@ -1029,8 +1036,8 @@ export default function Returns() {
 
             {/* Workflow Actions */}
             {isAdmin && (
-              <div className="flex justify-between pt-2 border-t">
-                <div className="flex gap-2">
+              <div className="flex flex-col gap-3 pt-2 border-t sm:flex-row sm:justify-between">
+                <div className="flex flex-wrap gap-2">
                   {activeReturn.status === 'requested' && (
                     <Button variant="secondary" onClick={() => setConfirmAction({ type: 'reject', title: 'Reject Return', message: 'Are you sure you want to reject this return? This cannot be undone.' })} icon={<XCircle className="w-4 h-4" />}>
                       Reject
@@ -1042,7 +1049,7 @@ export default function Returns() {
                     </Button>
                   )}
                 </div>
-                <div className="flex gap-2">
+                <div className="flex flex-wrap gap-2">
                   {activeReturn.status === 'requested' && (
                     <Button onClick={() => setConfirmAction({ type: 'approve', title: 'Approve Return', message: 'Are you sure you want to approve this return?' })} icon={<CheckCircle className="w-4 h-4" />}>
                       Approve

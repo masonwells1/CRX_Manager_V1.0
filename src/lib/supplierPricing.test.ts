@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { mockRpc, mockAssertRpcResult, mockUpload, mockProductFrom, mockProductSelect, mockProductEq } = vi.hoisted(() => ({
+const { mockRpc, mockAssertRpcResult, mockUpload, mockProductFrom, mockProductSelect, mockProductIn } = vi.hoisted(() => ({
   mockRpc: vi.fn(),
   mockAssertRpcResult: vi.fn((data: unknown, name: string) => {
     if (data == null) throw new Error(`${name} returned no data`);
@@ -9,7 +9,7 @@ const { mockRpc, mockAssertRpcResult, mockUpload, mockProductFrom, mockProductSe
   mockUpload: vi.fn(),
   mockProductFrom: vi.fn(),
   mockProductSelect: vi.fn(),
-  mockProductEq: vi.fn(),
+  mockProductIn: vi.fn(),
 }));
 
 vi.mock('./db', () => ({
@@ -37,12 +37,12 @@ describe('supplier pricing RPC wrappers', () => {
     mockUpload.mockReset();
     mockProductFrom.mockReset();
     mockProductSelect.mockReset();
-    mockProductEq.mockReset();
+    mockProductIn.mockReset();
     mockProductFrom.mockReturnValue({ select: mockProductSelect });
-    mockProductSelect.mockReturnValue({ eq: mockProductEq });
+    mockProductSelect.mockReturnValue({ in: mockProductIn });
   });
 
-  it('hydrates only the active workspace RPC Product UUIDs with canonical Stage A metadata', async () => {
+  it('hydrates only the workspace RPC Product UUIDs with canonical Stage A metadata', async () => {
     mockRpc.mockResolvedValue({
       data: {
         vendors: [],
@@ -54,7 +54,7 @@ describe('supplier pricing RPC wrappers', () => {
       },
       error: null,
     });
-    mockProductEq.mockResolvedValue({
+    mockProductIn.mockResolvedValue({
       data: [{
         id: 'product-a', product_name: 'Same Name', sku: 'NEW-A', unit_size: '2.5 gal',
         packaging_variant: '2 x 2.5 gal', container_size: 2.5, container_unit: 'gal',
@@ -67,7 +67,7 @@ describe('supplier pricing RPC wrappers', () => {
     const workspace = await getSupplierPricingWorkspace();
 
     expect(mockProductFrom).toHaveBeenCalledWith('products');
-    expect(mockProductEq).toHaveBeenCalledWith('is_active', true);
+    expect(mockProductIn).toHaveBeenCalledWith('id', ['product-a', 'product-missing']);
     expect(workspace.products[0]).toMatchObject({
       id: 'product-a', sku: 'NEW-A', packaging_variant: '2 x 2.5 gal',
       return_policy: 'no_return', product_family: { name: 'Atrazine' },
@@ -76,7 +76,7 @@ describe('supplier pricing RPC wrappers', () => {
     expect(workspace.products[1]).toMatchObject({ id: 'product-missing', sku: 'OLD' });
   });
 
-  it('hydrates a filtered workspace by the caller Product UUID, not a broad UUID list', async () => {
+  it('hydrates a filtered workspace by its returned exact Product UUID', async () => {
     mockRpc.mockResolvedValue({
       data: {
         vendors: [],
@@ -85,12 +85,40 @@ describe('supplier pricing RPC wrappers', () => {
       },
       error: null,
     });
-    mockProductEq.mockResolvedValue({ data: [], error: null });
+    mockProductIn.mockResolvedValue({ data: [], error: null });
 
     await getSupplierPricingWorkspace('product-a');
 
-    expect(mockProductEq).toHaveBeenCalledWith('id', 'product-a');
-    expect(mockProductEq).not.toHaveBeenCalledWith('is_active', true);
+    expect(mockProductIn).toHaveBeenCalledWith('id', ['product-a']);
+  });
+
+  it('batches large workspace metadata requests and preserves exact-ID-only hydration', async () => {
+    const products = Array.from({ length: 1_001 }, (_, index) => ({
+      id: `product-${index}`, product_name: `Product ${index}`, sku: null, inventory_unit: 'ea',
+    }));
+    mockRpc.mockResolvedValue({ data: { vendors: [], products, links: [], imports: [], aliases: [], evidence: [] }, error: null });
+    mockProductIn.mockImplementation(async (_column: string, ids: string[]) => ({
+      data: ids[0] === 'product-0'
+        ? [{ id: 'product-0', product_name: 'Product 0', sku: 'EXACT', unit_size: null, packaging_variant: null, container_size: null, container_unit: null, inventory_unit: 'ea', return_policy: 'returnable', is_full_tote_only: false, product_family: null }]
+        : [],
+      error: null,
+    }));
+
+    const workspace = await getSupplierPricingWorkspace();
+
+    expect(mockProductIn).toHaveBeenCalledTimes(11);
+    expect(mockProductIn.mock.calls.map(([, ids]) => ids.length)).toEqual([100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 1]);
+    expect(mockProductIn.mock.calls.every(([, ids]) => ids.length <= 100)).toBe(true);
+    expect(workspace.products[0]).toMatchObject({ id: 'product-0', sku: 'EXACT' });
+    expect(workspace.products[1]).toMatchObject({ id: 'product-1', sku: null });
+  });
+
+  it('surfaces canonical Product metadata query failures', async () => {
+    mockRpc.mockResolvedValue({ data: { vendors: [], products: [{ id: 'product-a', product_name: 'Same', sku: null, inventory_unit: 'ea' }], links: [], imports: [], aliases: [], evidence: [] }, error: null });
+    const error = { message: 'metadata unavailable' };
+    mockProductIn.mockResolvedValue({ data: null, error });
+
+    await expect(getSupplierPricingWorkspace()).rejects.toBe(error);
   });
 
   it('normalizes bigint cents exactly beyond JavaScript safe-integer precision', async () => {

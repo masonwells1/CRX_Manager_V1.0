@@ -32,6 +32,7 @@ import { parseLocalDate } from '../lib/dateUtils';
 import { formatCents as fmtCents } from '../lib/money';
 import { Sentry } from '../lib/sentry';
 import { ProductOptionDetails, productOptionLabel } from '../components/products/ProductOptionPresentation';
+import { addDeliveryEditItem, removeDeliveryEditItem, type AvailableDeliveryEditItem, type DeliveryEditItem } from '../lib/deliveryEditItems';
 import QuickTaskModal from '../components/team/QuickTaskModal';
 import RelatedNotes from '../components/team/RelatedNotes';
 import TransactionThread from '../components/ui/TransactionThread';
@@ -128,15 +129,9 @@ export default function DeliveryDetail() {
   const [editAddress, setEditAddress] = useState('');
   const [editPriority, setEditPriority] = useState('normal');
   const [editNotes, setEditNotes] = useState('');
-  const [editItems, setEditItems] = useState<Array<{
-    order_item_id: string; product_id: string; product_name: string;
-    quantity: number; max_quantity: number; unit_size: string; product?: Parameters<typeof ProductOptionDetails>[0]['product'];
-  }>>([]);
+  const [editItems, setEditItems] = useState<Array<DeliveryEditItem<Parameters<typeof ProductOptionDetails>[0]['product']>>>([]);
   // Order items available to add (not already on delivery)
-  const [availableOrderItems, setAvailableOrderItems] = useState<Array<{
-    order_item_id: string; product_id: string; product_name: string;
-    max_quantity: number; unit_size: string; product?: Parameters<typeof ProductOptionDetails>[0]['product'];
-  }>>([]);
+  const [availableOrderItems, setAvailableOrderItems] = useState<Array<AvailableDeliveryEditItem<Parameters<typeof ProductOptionDetails>[0]['product']>>>([]);
   const [addresses, setAddresses] = useState<CustomerAddress[]>([]);
   const [drivers, setDrivers] = useState<Profile[]>([]);
   const [savingEdit, setSavingEdit] = useState(false);
@@ -235,6 +230,13 @@ export default function DeliveryDetail() {
             : Promise.resolve({ data: null }),
           supabase.from('delivery_photos').select('*').eq('delivery_id', id!).order('sort_order'),
         ]);
+
+        if (itemsRes.error) {
+          Sentry.captureException(itemsRes.error, { extra: { context: 'load_delivery_items', deliveryId: del.id } });
+          toast('error', 'Failed to load delivery items');
+          setLoading(false);
+          return;
+        }
 
         setCustomer(custRes.data as Customer | null);
         const loadedItems = (itemsRes.data || []) as unknown as DeliveryItem[];
@@ -423,6 +425,11 @@ export default function DeliveryDetail() {
       supabase.from('profile_public_view').select('id, full_name, role, is_active').in('role', ['driver', 'admin', 'sales_rep']).eq('is_active', true).order('full_name'),
       supabase.from('order_items').select('*, product:products(id, product_name, sku, unit_size, packaging_variant, container_size, container_unit, inventory_unit, return_policy, is_full_tote_only, product_family:product_families(name))').eq('order_id', delivery.order_id).order('section_name'),
     ]);
+    if (oiRes.error) {
+      Sentry.captureException(oiRes.error, { extra: { context: 'load_delivery_edit_order_items', deliveryId: delivery.id } });
+      toast('error', 'Failed to load order items for delivery editing');
+      return;
+    }
     setAddresses((addrRes.data || []) as CustomerAddress[]);
     setDrivers((driverRes.data || []) as Profile[]);
     const allOrderItems = (oiRes.data || []) as unknown as Array<OrderItem & {
@@ -1918,18 +1925,9 @@ export default function DeliveryDetail() {
                         </button>
                         <button
                           onClick={() => {
-                            // Move item back to available list
-                            setAvailableOrderItems((prev) => [
-                              ...prev,
-                              {
-                                order_item_id: item.order_item_id,
-                                product_id: item.product_id,
-                                product_name: item.product_name,
-                                max_quantity: item.max_quantity,
-                                unit_size: item.unit_size,
-                              },
-                            ]);
-                            setEditItems((prev) => prev.filter((i) => i.order_item_id !== item.order_item_id));
+                            const next = removeDeliveryEditItem(editItems, availableOrderItems, item.order_item_id);
+                            setEditItems(next.editItems);
+                            setAvailableOrderItems(next.availableItems);
                           }}
                           className="w-8 h-8 rounded-lg border border-red-200 flex items-center justify-center hover:bg-red-50 transition-colors"
                           title="Remove from delivery"
@@ -1953,13 +1951,9 @@ export default function DeliveryDetail() {
                     onChange={(e) => {
                       const oiId = e.target.value;
                       if (!oiId) return;
-                      const toAdd = availableOrderItems.find((a) => a.order_item_id === oiId);
-                      if (!toAdd) return;
-                      setEditItems((prev) => [
-                        ...prev,
-                        { ...toAdd, quantity: toAdd.max_quantity },
-                      ]);
-                      setAvailableOrderItems((prev) => prev.filter((a) => a.order_item_id !== oiId));
+                      const next = addDeliveryEditItem(editItems, availableOrderItems, oiId);
+                      setEditItems(next.editItems);
+                      setAvailableOrderItems(next.availableItems);
                     }}
                     className="w-full px-3 py-2 text-sm text-nav-dark bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                   >

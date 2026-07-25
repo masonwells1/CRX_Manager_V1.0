@@ -106,6 +106,30 @@ describe('InvoiceDetail', () => {
     expect(mockNavigate).toHaveBeenCalledWith('/invoices');
   });
 
+  it('shows a Product search failure instead of silently rendering an empty picker', async () => {
+    const invoice = {
+      id: 'inv-product-error', invoice_number: 'INV-PRODUCT-ERROR', status: 'draft', type: 'standard',
+      customer_id: 'cust-1', order_id: 'ord-1', subtotal_cents: 0, tax_cents: 0, total_cents: 0,
+      balance_cents: 0, invoice_date: '2026-03-15', due_date: null, notes: '', created_at: '2026-03-15T00:00:00Z',
+    };
+    let invoiceCalls = 0;
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'invoices') {
+        invoiceCalls += 1;
+        return buildChain({ data: invoiceCalls <= 2 ? invoice : [], error: null });
+      }
+      if (table === 'products') return buildChain({ data: null, error: { message: 'Product query failed' } });
+      return buildChain({ data: [], error: null });
+    });
+
+    renderInvoiceDetail('inv-product-error');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Add Product' })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Add Product' }));
+    fireEvent.change(screen.getByPlaceholderText('Search products by name or SKU...'), { target: { value: 'at' } });
+
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', 'Failed to search Products'));
+  });
+
   it('renders invoice detail when data loads', async () => {
     const invoiceData = {
       id: 'inv-123',

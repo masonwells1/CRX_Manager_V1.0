@@ -570,15 +570,21 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
   // Product search
   const searchProducts = useCallback(async (q: string) => {
     if (q.length < 2) { setProductResults([]); return; }
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('products')
       .select('*, product_family:product_families(name)')
       .eq('is_active', true)
       .or(`product_name.ilike.%${q}%,sku.ilike.%${q}%`)
       .order('product_name')
       .limit(20);
+    if (error) {
+      Sentry.captureException(error, { extra: { context: 'search_invoice_products' } });
+      toast('error', 'Failed to search Products');
+      setProductResults([]);
+      return;
+    }
     setProductResults((data || []) as Product[]);
-  }, []);
+  }, [toast]);
 
   useEffect(() => {
     const t = setTimeout(() => searchProducts(productSearch), 200);

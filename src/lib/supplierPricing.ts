@@ -8,6 +8,7 @@ import type {
 } from '../types';
 
 const SUPPLIER_EVIDENCE_BUCKET = 'supplier-price-evidence';
+const SUPPLIER_PRODUCT_METADATA_BATCH_SIZE = 100;
 
 export interface SupplierVendorOption {
   id: string;
@@ -326,19 +327,23 @@ export async function getSupplierPricingWorkspace(
   // The workspace RPC intentionally returns only the selector's identity
   // fields. Hydrate just those returned UUIDs from the canonical Products
   // rows; this supplies Stage A metadata without ranking, matching, or
-  // replacing any Product identity. Do not put every workspace UUID into an
-  // `.in(...)` URL: an unfiltered workspace can exceed a safe query length.
-  // The RPC returns active Products, and a filtered caller already supplies
-  // the exact UUID. The merge below remains exact-ID-only in either case.
-  const { data: metadataRows, error: metadataError } = await supabase
-    .from('products')
-    .select('id, product_name, sku, unit_size, packaging_variant, container_size, container_unit, inventory_unit, return_policy, is_full_tote_only, product_family:product_families(name)')
-    .eq(productId ? 'id' : 'is_active', productId || true);
-  if (metadataError) throw metadataError;
+  // replacing any Product identity. Query only the exact UUIDs the RPC
+  // returned, in small batches so an unfiltered workspace cannot exceed a
+  // safe GET URL length.
+  const workspaceProductIds = [...new Set(result.products.map((product) => product.id))];
+  const metadataRows: SupplierProductMetadata[] = [];
+  for (let index = 0; index < workspaceProductIds.length; index += SUPPLIER_PRODUCT_METADATA_BATCH_SIZE) {
+    const productIds = workspaceProductIds.slice(index, index + SUPPLIER_PRODUCT_METADATA_BATCH_SIZE);
+    const { data: batch, error: metadataError } = await supabase
+      .from('products')
+      .select('id, product_name, sku, unit_size, packaging_variant, container_size, container_unit, inventory_unit, return_policy, is_full_tote_only, product_family:product_families(name)')
+      .in('id', productIds);
+    if (metadataError) throw metadataError;
+    metadataRows.push(...((batch || []) as unknown as SupplierProductMetadata[]));
+  }
 
   const metadataByProductId = new Map(
-    ((metadataRows || []) as unknown as SupplierProductMetadata[])
-      .map((product) => [product.id, product] as const),
+    metadataRows.map((product) => [product.id, product] as const),
   );
   const products: SupplierProductOption[] = result.products.map((product) => {
     const metadata = metadataByProductId.get(product.id);

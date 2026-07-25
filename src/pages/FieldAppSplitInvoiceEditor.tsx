@@ -267,6 +267,12 @@ export default function FieldAppSplitInvoiceEditor() {
             .limit(200),
         ]);
         if (cancelled) return;
+        const pickerError = flds.error || prods.error || svcs.error || jbs.error;
+        if (pickerError) {
+          Sentry.captureException(pickerError, { extra: { context: 'load_field_app_split_invoice_pickers' } });
+          toast('error', 'Failed to load field application invoice pickers');
+          return;
+        }
         setFieldOptions(((flds.data as Array<{ id: string; field_name: string | null }> | null) ?? []).map((f) => ({ id: f.id, field_name: f.field_name || 'Unnamed field' })));
         setProductOptions(((prods.data as Array<ProductOption> | null) ?? []).map((p) => ({ ...p, product_name: p.product_name || 'Unnamed product' })));
         setServiceOptions(((svcs.data as Array<{ id: string; name: string | null }> | null) ?? []).map((s) => ({ id: s.id, name: s.name || 'Unnamed service' })));
@@ -277,7 +283,10 @@ export default function FieldAppSplitInvoiceEditor() {
           })),
         );
       } catch (err) {
-        if (!cancelled) toast('error', sanitizeError(err));
+        if (!cancelled) {
+          Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'load_field_app_split_invoice_pickers' } });
+          toast('error', sanitizeError(err));
+        }
       }
     })();
     return () => { cancelled = true; };

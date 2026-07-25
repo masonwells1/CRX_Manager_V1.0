@@ -36,16 +36,12 @@ export function productPackageLabel(product: ProductOptionPresentationModel): st
   return 'Not recorded';
 }
 
-function shortProductId(id: string): string {
-  return id.length <= 12 ? id : `${id.slice(0, 8)}…${id.slice(-4)}`;
-}
-
 /** Stable plain text for native <option>s, which cannot render badges. */
 export function productOptionLabel(product: ProductOptionPresentationModel): string {
   const policy = normalizeReturnPolicy(product.return_policy).replace(/_/g, ' ');
   return [
     product.product_name || 'Unnamed product',
-    product.sku ? `SKU: ${product.sku}` : `Product ID: ${shortProductId(product.id)}`,
+    product.sku ? `SKU: ${product.sku}` : `Product ID: ${product.id}`,
     `Family: ${product.product_family?.name || 'Unassigned'}`,
     `Package: ${productPackageLabel(product)}`,
     `Unit: ${product.inventory_unit || 'Not recorded'}`,

@@ -14,9 +14,11 @@ describe('ProductOptionPresentation', () => {
     expect(productOptionLabel({ ...siblingA, id: 'product-b', sku: 'SKU-B' })).toContain('SKU: SKU-B');
   });
 
-  it('uses a stable Product-ID fallback when same-name siblings have no SKU', () => {
-    expect(productOptionLabel({ ...siblingA, id: 'a1b2c3d4-product-a', sku: null })).toContain('Product ID: a1b2c3d4…ct-a');
-    expect(productOptionLabel({ ...siblingA, id: 'e5f6g7h8-product-b', sku: null })).toContain('Product ID: e5f6g7h8…ct-b');
+  it('uses the full Product-ID fallback when same-name siblings have no SKU', () => {
+    const sharedPrefixAndSuffixA = 'aaaaaaaa-1111-2222-3333-zzzzzzzzzzzz';
+    const sharedPrefixAndSuffixB = 'aaaaaaaa-4444-5555-6666-zzzzzzzzzzzz';
+    expect(productOptionLabel({ ...siblingA, id: sharedPrefixAndSuffixA, sku: null })).toContain(`Product ID: ${sharedPrefixAndSuffixA}`);
+    expect(productOptionLabel({ ...siblingA, id: sharedPrefixAndSuffixB, sku: null })).toContain(`Product ID: ${sharedPrefixAndSuffixB}`);
   });
 
   it('keeps absent policy compatible as unknown and renders all picker metadata', () => {
