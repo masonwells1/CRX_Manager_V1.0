@@ -150,14 +150,37 @@ function proofRequirement(headSha, riskDescription, detail) {
   );
 }
 
-function gateMainChange({ repoDir, sourceRef, sourceSha, nowMs, runGit }) {
+function gateMainChange({ repoDir, sourceRef, sourceSha, nowMs, runGit, authoritativeBaseSha }) {
   let headSha = sourceSha || "";
   let baseSha = "";
   try {
-    // Resolve the exact origin/main this change is gated against so the Claude
-    // proof can be required to match the SAME base it was reviewed on; a moved
-    // origin/main (e.g. a sibling merge fetched locally) forces a fresh review.
-    baseSha = runGit(["rev-parse", "--verify", "--quiet", "origin/main"], repoDir);
+    // Resolve the exact base this change is gated against so the Claude proof can
+    // be required to match the SAME base it was reviewed on; a moved base (e.g. a
+    // sibling merge) forces a fresh review.
+    //
+    // For a PR merge the caller supplies GitHub's CURRENT baseRefOid. Local
+    // origin/main is NOT authoritative there: on a stale checkout it can be behind
+    // GitHub's real main, which would gate a risky merge on a proof — and on a
+    // risk diff — computed against a base the change will never land on. Claude's
+    // pr-merge-guard.mjs binds to baseRefOid for exactly this reason (Codex P1,
+    // 2026-07-25; docs/research/2026-07-25-opus5-harness-review.md §1.1a).
+    baseSha = authoritativeBaseSha
+      ? String(authoritativeBaseSha).trim()
+      : runGit(["rev-parse", "--verify", "--quiet", "origin/main"], repoDir);
+    if (!baseSha) throw new Error("empty base SHA");
+    if (authoritativeBaseSha) {
+      // The object must exist locally or every diff below is meaningless. Fail
+      // closed with actionable guidance rather than an opaque git error.
+      try {
+        baseSha = runGit(["rev-parse", "--verify", `${baseSha}^{commit}`], repoDir);
+      } catch {
+        return denied(
+          `CODEX PRODUCTION GATE: GitHub's current base commit ${String(authoritativeBaseSha).slice(0, 12)} ` +
+          `is not present in this checkout, so the main-bound diff cannot be inspected against the base the ` +
+          `merge will actually land on (fail closed). Run \`git fetch origin main\` and retry.`
+        );
+      }
+    }
     if (!headSha) {
       const ref = sourceRef === "HEAD" ? "HEAD" : sourceRef;
       headSha = runGit(["rev-parse", "--verify", `${ref}^{commit}`], repoDir);
@@ -166,19 +189,22 @@ function gateMainChange({ repoDir, sourceRef, sourceSha, nowMs, runGit }) {
     }
   } catch (error) {
     return denied(
-      `CODEX PRODUCTION GATE: could not resolve origin/main or the exact ref being sent to main, so the operation is denied (fail closed). ${error?.message || error}`
+      `CODEX PRODUCTION GATE: could not resolve the base branch or the exact ref being sent to main, so the operation is denied (fail closed). ${error?.message || error}`
     );
   }
 
   let changedFiles;
   try {
-    changedFiles = runGit(["diff", "--name-only", `origin/main...${headSha}`], repoDir)
+    // Diff against the resolved baseSha, never the literal `origin/main` ref:
+    // on a PR merge that ref may be stale, which would misclassify a risky diff
+    // as ordinary and skip the proof requirement entirely.
+    changedFiles = runGit(["diff", "--name-only", `${baseSha}...${headSha}`], repoDir)
       .split(/\r?\n/)
       .map((file) => file.trim())
       .filter(Boolean);
   } catch (error) {
     return denied(
-      `CODEX PRODUCTION GATE: could not inspect origin/main...${headSha}, so the operation is denied (fail closed). ${error?.message || error}`
+      `CODEX PRODUCTION GATE: could not inspect ${baseSha}...${headSha}, so the operation is denied (fail closed). ${error?.message || error}`
     );
   }
 
@@ -186,7 +212,7 @@ function gateMainChange({ repoDir, sourceRef, sourceSha, nowMs, runGit }) {
   let contentFlagged = false;
   if (risky.length === 0) {
     try {
-      contentFlagged = contentIsRisky(runGit(["diff", `origin/main...${headSha}`], repoDir));
+      contentFlagged = contentIsRisky(runGit(["diff", `${baseSha}...${headSha}`], repoDir));
     } catch (error) {
       return denied(
         `CODEX PRODUCTION GATE: could not inspect the full diff for money/security risk, so the operation is denied (fail closed). ${error?.message || error}`
@@ -359,9 +385,15 @@ function mcpMergeRequest(toolInput) {
 function resolvePullRequest({ request, repoDir, runGh }) {
   const args = ["pr", "view"];
   if (request.selector) args.push(request.selector);
-  args.push("--json", "baseRefName,headRefName,headRefOid,mergeStateStatus,statusCheckRollup");
+  // baseRefOid is GitHub's CURRENT tip of the base branch — the commit the merge
+  // will actually land on. Without it the gate falls back to local origin/main,
+  // which can be stale (Codex P1, 2026-07-25).
+  args.push("--json", "baseRefName,baseRefOid,headRefName,headRefOid,mergeStateStatus,statusCheckRollup");
   if (request.repo) args.push("--repo", request.repo);
   const data = JSON.parse(runGh(args, repoDir));
+  // baseRefOid is required only for main-bound merges; gatePullRequestMerge
+  // enforces it after the base check so a PR onto another branch is not
+  // needlessly failed closed.
   if (!data?.baseRefName || !data?.headRefOid) throw new Error("GitHub did not return baseRefName and headRefOid");
   return data;
 }
@@ -397,12 +429,25 @@ function gatePullRequestMerge({ request, repoDir, nowMs, runGit, runGh }) {
     return denied(`CODEX PRODUCTION GATE: merges to protected branch ${base} remain blocked.`);
   }
   if (base !== "main") return { blocked: false };
+  if (!pullRequest.baseRefOid) {
+    return denied(
+      "CODEX PRODUCTION GATE: GitHub did not report this pull request's current base commit (baseRefOid), " +
+      "so the merge cannot be bound to the base it will actually land on and is denied (fail closed)."
+    );
+  }
   if (!pullRequestChecksGreen(pullRequest)) {
     return denied(
       "CODEX PRODUCTION GATE: this pull request is not merge-ready with a fully green GitHub pipeline. Wait until mergeStateStatus is CLEAN and every reported check is completed successfully, neutral, or skipped."
     );
   }
-  return gateMainChange({ repoDir, sourceSha: pullRequest.headRefOid, nowMs, runGit });
+  return gateMainChange({
+    repoDir,
+    sourceSha: pullRequest.headRefOid,
+    // Bind the proof AND the risk diff to GitHub's real base, not local origin/main.
+    authoritativeBaseSha: pullRequest.baseRefOid,
+    nowMs,
+    runGit,
+  });
 }
 
 export function evaluateProductionAction({

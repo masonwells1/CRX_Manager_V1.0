@@ -314,6 +314,8 @@ try {
   ];
   const mainPr = {
     baseRefName: "main",
+    // GitHub's CURRENT base tip. Here it equals local origin/main, the ordinary case.
+    baseRefOid: risky.base,
     headRefName: "feature/test",
     headRefOid: risky.sha,
     mergeStateStatus: "CLEAN",
@@ -605,6 +607,99 @@ try {
   });
   assert.equal(allowedProcess.status, 0);
   assert.equal(allowedProcess.stdout, "", "allow path stays silent for Codex hook compatibility");
+
+  // --- Codex P1 (2026-07-25): PR merges must bind to GitHub's CURRENT base ---
+  // Before this fix resolvePullRequest() never requested baseRefOid and
+  // gateMainChange() resolved the base from LOCAL origin/main without fetching, so
+  // a stale checkout could clear a risky merge on a proof — and a risk diff —
+  // computed against a base the change would never land on.
+  // See docs/research/2026-07-25-opus5-harness-review.md §1.1a.
+  {
+    const stale = makeRepo("supabase/migrations/20260725000000_baseoid.sql", "select 2;\n");
+    // GitHub's main has moved ahead; local origin/main still points at the old tip.
+    git(stale.repo, ["switch", "-c", "github-main", "origin/main"]);
+    writeFileSync(path.join(stale.repo, "README.md"), "github main moved\n", "utf8");
+    git(stale.repo, ["add", "README.md"]);
+    git(stale.repo, ["commit", "-m", "main moved on github"]);
+    const githubBase = git(stale.repo, ["rev-parse", "HEAD"]);
+    git(stale.repo, ["switch", "feature/test"]);
+    assert.notEqual(githubBase, stale.base, "fixture must model a genuinely moved base");
+
+    const prAt = (baseRefOid) => JSON.stringify({
+      baseRefName: "main",
+      baseRefOid,
+      headRefName: "feature/test",
+      headRefOid: stale.sha,
+      mergeStateStatus: "CLEAN",
+      statusCheckRollup: greenChecks,
+    });
+    const mergeWith = (json) => evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command: "gh pr merge 123 --squash" },
+      repoDir: stale.repo,
+      nowMs: now,
+      runGh: () => json,
+    });
+
+    // A proof bound to the STALE local origin/main must no longer pass.
+    writeProof(stale.repo, { ...valid, head_sha: stale.sha, base_sha: stale.base });
+    const staleAttempt = mergeWith(prAt(githubBase));
+    assert.equal(
+      staleAttempt.blocked,
+      true,
+      "proof bound to stale local origin/main is denied when GitHub's base has moved"
+    );
+    console.log(
+      `TRANSCRIPT BASEOID: local origin/main=${stale.base.slice(0, 12)} ` +
+      `githubBase=${githubBase.slice(0, 12)} -> stale-bound proof blocked=${staleAttempt.blocked}`
+    );
+
+    // A proof bound to GitHub's real base is what actually clears the gate.
+    writeProof(stale.repo, { ...valid, head_sha: stale.sha, base_sha: githubBase });
+    const reboundAttempt = mergeWith(prAt(githubBase));
+    assert.equal(
+      reboundAttempt.blocked,
+      false,
+      "proof bound to GitHub's current baseRefOid clears the merge gate"
+    );
+    console.log(`TRANSCRIPT BASEOID: proof rebound to githubBase -> blocked=${reboundAttempt.blocked}`);
+
+    // A base GitHub reports but the checkout does not have must fail closed with
+    // actionable guidance, not an opaque git error or a silent pass.
+    const absent = "0".repeat(40);
+    const missing = mergeWith(prAt(absent));
+    assert.equal(missing.blocked, true, "unfetched GitHub base fails closed");
+    assert.match(
+      String(missing.reason || missing.message || JSON.stringify(missing)),
+      /git fetch origin main/,
+      "unfetched-base denial tells the caller to fetch"
+    );
+    console.log(`TRANSCRIPT BASEOID: unfetched GitHub base -> blocked=${missing.blocked} (fetch guidance present)`);
+
+    // Missing baseRefOid entirely (old gh, changed API shape) must fail closed.
+    const noBaseOid = mergeWith(JSON.stringify({
+      baseRefName: "main",
+      headRefName: "feature/test",
+      headRefOid: stale.sha,
+      mergeStateStatus: "CLEAN",
+      statusCheckRollup: greenChecks,
+    }));
+    assert.equal(noBaseOid.blocked, true, "PR payload without baseRefOid fails closed");
+
+    // The gh query must actually ask for baseRefOid.
+    let askedFor = "";
+    mergeWith2: {
+      evaluateProductionAction({
+        toolName: "PowerShell",
+        toolInput: { command: "gh pr merge 123 --squash" },
+        repoDir: stale.repo,
+        nowMs: now,
+        runGh: (args) => { askedFor = args.join(" "); return prAt(githubBase); },
+      });
+      break mergeWith2;
+    }
+    assert.match(askedFor, /baseRefOid/, "gh pr view requests baseRefOid");
+  }
 
   console.log(`TRANSCRIPT DENY (no proof): exit=${deniedProcess.status} stdout=${deniedProcess.stdout}`);
   console.log(`TRANSCRIPT ALLOW (valid wrapper-shaped proof): exit=${allowedProcess.status} stdout=${JSON.stringify(allowedProcess.stdout)}`);
