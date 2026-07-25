@@ -113,6 +113,7 @@ export default function Returns() {
   const [activeReturn, setActiveReturn] = useState<ReturnRow | null>(null);
   const [detailItems, setDetailItems] = useState<DetailReturnItem[]>([]);
   const [loadingDetail, setLoadingDetail] = useState(false);
+  const returnDetailRequestRef = useRef(0);
 
   const isAdmin = role === 'admin';
   const canBulkAction = role === 'admin' || role === 'sales_rep';
@@ -341,24 +342,42 @@ export default function Returns() {
   };
 
   const openDetail = async (ret: ReturnRow) => {
+    const requestId = ++returnDetailRequestRef.current;
     setActiveReturn(ret);
     setShowDetail(true);
+    setDetailItems([]);
     setLoadingDetail(true);
 
-    const { data, error } = await supabase
-      .from('return_items')
-      .select('*, product:products(id, product_name, sku, unit_size, packaging_variant, container_size, container_unit, inventory_unit, return_policy, is_full_tote_only, product_family:product_families(name))')
-      .eq('return_id', ret.id)
-      .order('sort_order');
+    try {
+      const { data, error } = await supabase
+        .from('return_items')
+        .select('*, product:products(id, product_name, sku, unit_size, packaging_variant, container_size, container_unit, inventory_unit, return_policy, is_full_tote_only, product_family:product_families(name))')
+        .eq('return_id', ret.id)
+        .order('sort_order');
 
-    if (error) {
+      if (requestId !== returnDetailRequestRef.current) return;
+      if (error) {
+        Sentry.captureException(error, { extra: { context: 'load_return_detail_items', returnId: ret.id } });
+        toast('error', 'Failed to load return item details');
+        setDetailItems([]);
+      } else {
+        setDetailItems((data || []) as DetailReturnItem[]);
+      }
+    } catch (error) {
+      if (requestId !== returnDetailRequestRef.current) return;
       Sentry.captureException(error, { extra: { context: 'load_return_detail_items', returnId: ret.id } });
       toast('error', 'Failed to load return item details');
       setDetailItems([]);
-    } else {
-      setDetailItems((data || []) as DetailReturnItem[]);
+    } finally {
+      if (requestId === returnDetailRequestRef.current) setLoadingDetail(false);
     }
+  };
+
+  const closeDetail = () => {
+    returnDetailRequestRef.current += 1;
+    setShowDetail(false);
     setLoadingDetail(false);
+    setDetailItems([]);
   };
 
   // Workflow actions
@@ -943,7 +962,7 @@ export default function Returns() {
       {/* Return Detail Modal */}
       <Modal
         open={showDetail}
-        onClose={() => setShowDetail(false)}
+        onClose={closeDetail}
         title={activeReturn ? `Return: ${activeReturn.return_number}` : 'Return Detail'}
         size="large"
       >

@@ -248,11 +248,8 @@ export default function SupplierPricing() {
   }, [loadBasisWorkspace, selectedProductId, workspace]);
 
   const refreshWorkspaceAndBasis = useCallback(async () => {
-    await Promise.all([
-      loadWorkspace(),
-      selectedProductId ? loadBasisWorkspace(selectedProductId) : Promise.resolve(),
-    ]);
-  }, [loadBasisWorkspace, loadWorkspace, selectedProductId]);
+    await loadWorkspace();
+  }, [loadWorkspace]);
 
   const vendorOptions = useMemo(
     () => (workspace?.vendors ?? []).map((vendor) => ({ value: vendor.id, label: vendor.name })),

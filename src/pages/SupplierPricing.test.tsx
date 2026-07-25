@@ -156,11 +156,9 @@ describe('SupplierPricing page', () => {
 
     await waitFor(() => expect(mockGetBasisWorkspace).toHaveBeenCalledWith('product-1'));
     const workspaceLoads = mockGetWorkspace.mock.calls.length;
-    const basisLoads = mockGetBasisWorkspace.mock.calls.length;
     fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
     await waitFor(() => {
       expect(mockGetWorkspace).toHaveBeenCalledTimes(workspaceLoads + 1);
-      expect(mockGetBasisWorkspace).toHaveBeenCalledTimes(basisLoads + 1);
     });
   });
 
@@ -254,6 +252,29 @@ describe('SupplierPricing page', () => {
     await waitFor(() => expect(productSelect).toHaveValue(initial.products[0].id));
     fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
     await waitFor(() => expect(productSelect).toHaveValue(refreshed.products[0].id));
+  });
+
+  it('loads cost basis exactly once for the final reconciled Product after refresh', async () => {
+    const initial = {
+      vendors: [],
+      products: [{ id: 'basis-old', product_name: 'Old Basis Product', sku: 'BASIS-OLD', inventory_unit: 'gallon' }],
+      links: [], imports: [], aliases: [], evidence: [],
+    };
+    const refreshed = {
+      vendors: [],
+      products: [{ id: 'basis-new', product_name: 'New Basis Product', sku: 'BASIS-NEW', inventory_unit: 'gallon' }],
+      links: [], imports: [], aliases: [], evidence: [],
+    };
+    mockGetWorkspace.mockResolvedValueOnce(initial).mockResolvedValueOnce(refreshed);
+
+    renderSupplierPricing();
+    await waitFor(() => expect(mockGetBasisWorkspace).toHaveBeenCalledWith('basis-old'));
+    mockGetBasisWorkspace.mockClear();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await waitFor(() => expect(mockGetBasisWorkspace).toHaveBeenCalledWith('basis-new'));
+    expect(mockGetBasisWorkspace).toHaveBeenCalledTimes(1);
+    expect(mockGetBasisWorkspace).not.toHaveBeenCalledWith('basis-old');
   });
 
   it('reconciles every stale vendor/product/link form ID before a refreshed workspace can submit it', async () => {
