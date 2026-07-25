@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-25
 **Scope:** `AGENTS.md`, `CLAUDE.md`, `.claude/settings.json`, `.claude/hooks/`, `.claude/commands/`, `.claude/skills/`, `.claude/workflows/`, `.codex/hooks.json`, `.agents/`, `docs/workflows/AGENT_COLLABORATION.md`, `docs/manual/AGENT_ONBOARDING.md`
-**Status:** APPLIED. Reviewed first, then fixed with Mason's approval on 2026-07-25 — see "What was applied" near the end. One finding in the first draft (1.1, the Codex hook gap) was **wrong** and is corrected in place.
+**Status:** APPLIED, with one OPEN P1 (§1.1a). Reviewed, then fixed with Mason's approval on 2026-07-25. Two findings were corrected in place: the first draft wrongly called the Claude/Codex hook wiring a BLOCKER, and the first correction wrongly called the two merge guards equivalent — Codex's independent review of PR #227 caught the second, and it is now recorded as an open P1 needing its own change.
 
 ---
 
@@ -10,7 +10,7 @@
 
 Two separate questions were asked, and they have two different answers.
 
-**"Are we in sync across Claude, Codex, and Hermes?"** Yes — better than expected. The documents agree, the generated Codex adapters match their Claude sources, and the six hooks that run for Claude but not Codex turned out to be *deliberate, declared, and build-enforced* rather than a gap (I called this a BLOCKER on first pass and was wrong — Codex runs its own equivalent production guard). Hermes is absent from the repo entirely, which is fine: Mason confirmed it is not actually in use. The only real defect was that the parity mechanism wasn't discoverable, which is now fixed.
+**"Are we in sync across Claude, Codex, and Hermes?"** Yes — better than expected. The documents agree, the generated Codex adapters match their Claude sources, and the six hooks that run for Claude but not Codex turned out to be *deliberate, declared, and build-enforced* rather than a gap (I called this a BLOCKER on first pass and was wrong — Codex runs its own production guard covering the same actions). Hermes is absent from the repo entirely, which is fine: Mason confirmed it is not actually in use. Two defects came out of this: the parity mechanism wasn't discoverable, which is now fixed, and — caught by Codex reviewing this very PR — Codex's merge guard binds its review proof to a possibly-stale *local* base where Claude's binds to GitHub's real one. That second one is a genuine P1 and is left open for its own change (§1.1a).
 
 **"How do we change things for Opus 5?"** The good news: the harness is already close. Anthropic's Opus 5 prompting guide names five habits that used to help older models and now *hurt*, and this project only has two of them. The bigger opportunity is the things that are simply missing — there is no effort-level guidance and no subagent budget anywhere, and Opus 5 both delegates and writes more than earlier models did.
 
@@ -26,17 +26,34 @@ The raw numbers are real: `.claude/settings.json` wires 35 distinct hook scripts
 
 | Hook | Declared reason |
 |---|---|
-| `codex-push-guard.mjs`, `pr-merge-guard.mjs` | Codex has its own `.codex/hooks/production-action-guard.mjs`, which covers pushes **and** PR merges. Verified: that file matches `merge_pull_request`, `gh pr merge` (including flags between `gh`, `pr`, and `merge`), `apply_migration`, `deploy_edge_function`, and `delete_branch`. |
+| `codex-push-guard.mjs`, `pr-merge-guard.mjs` | Codex has its own `.codex/hooks/production-action-guard.mjs`, which covers pushes **and** PR merges. Verified: that file matches `merge_pull_request`, `gh pr merge` (including flags between `gh`, `pr`, and `merge`), `apply_migration`, `deploy_edge_function`, and `delete_branch`. **The coverage is equivalent; the base-binding is not — see 1.1a.** |
 | `autopilot-intent-reminder.mjs`, `unattended-autopilot.mjs` | Autopilot is a Claude-session mechanism; Codex has no autopilot flag, so there is nothing for these to read. |
 | `worktree-cleanup.mjs`, `session-heartbeat.mjs` | Claude manages `.claude/worktrees/`; Codex worktrees live elsewhere and are never swept. |
 
-So Codex is *not* running unguarded on merges or live actions — it runs a different, equivalent guard. `node scripts/agent-manifest-parity.test.mjs` passes with 18 assertions, and adding a new hook to one side without declaring it will fail `npm run test:agent-workflows`.
+So Codex is *not* running unguarded on merges or live actions — it runs a different guard covering the same set of actions (though not, it turns out, with the same base-binding — §1.1a). `node scripts/agent-manifest-parity.test.mjs` passes with 18 assertions, and adding a new hook to one side without declaring it will fail `npm run test:agent-workflows`.
 
-This is a better design than the one I proposed. The only gap was discoverability: nothing in `CLAUDE.md` pointed at the parity mechanism, so a reviewer reading the two manifests side by side reaches the wrong conclusion — as I did. **Fix applied:** a line in `CLAUDE.md` under "Claude Hooks and Agents" naming the parity script and the declare-or-wire-both rule.
+The declare-or-wire-both design is better than the change I proposed, and the *hook wiring* needs no fix. One gap was discoverability: nothing in `CLAUDE.md` pointed at the parity mechanism, so a reviewer comparing the two manifests reaches the wrong conclusion — as I did. **Fix applied:** a line in `CLAUDE.md` under "Claude Hooks and Agents" naming the parity script and the declare-or-wire-both rule.
+
+But "declared" is not the same as "equivalent," and my first correction over-rotated into calling them equivalent. Codex caught that on PR #227. See 1.1a.
+
+### 1.1a OPEN, P1 — the Codex merge guard binds its proof to a possibly-stale local base
+
+**Found by Codex's independent review of PR #227 (2026-07-25), refuting my own "equivalent guard" conclusion. Verified in source before recording.**
+
+The two merge guards do not bind their review proof to the same thing:
+
+- `.claude/hooks/pr-merge-guard.mjs` asks GitHub for `baseRefOid` — the **current** tip of the base branch — and binds the proof to it, denying if GitHub returns an unusable value. Its inline comment names the hazard directly: local `origin/main` "can be stale (Codex round-6: a proof reviewed against an [older base])".
+- `.codex/hooks/production-action-guard.mjs` does not. `resolvePullRequest()` requests `baseRefName,headRefName,headRefOid,mergeStateStatus,statusCheckRollup` — **`baseRefOid` is not among them**. `gatePullRequestMerge()` then calls `gateMainChange()` with only the head SHA, and `gateMainChange()` resolves the base with `git rev-parse origin/main` against the **local** checkout. The guard never runs `git fetch`.
+
+**Consequence:** on a checkout whose `origin/main` is behind GitHub's real `main`, Codex can clear a risky money/RLS/migration merge on a Codex proof that reviewed a diff against a base the change will not actually land on. Claude's guard refuses that same situation. The failure is silent — everything looks green.
+
+This is narrow (it needs a stale local checkout plus a risky diff plus a merge attempt) but it sits on exactly the money/RLS/migration path the whole gate exists to protect, and `AGENTS.md` treats stale-checkout risk as a first-class concern under Workspace Hygiene.
+
+**Not fixed here.** The fix is to have `resolvePullRequest()` request `baseRefOid` and thread it into `gateMainChange()` as the authoritative base, matching `pr-merge-guard.mjs`, plus regression tests in `.codex/hooks/production-action-guard.test.mjs`. That is a security-guard change to a file listed in the guard's own `PROTECTED_HARNESS_SOURCE` set, so it is its own reviewed change with Mason's sign-off — not a rider on a documentation PR.
 
 ### 1.2 CLOSED — Hermes is not in use
 
-A full-text search for "hermes" returns zero hits anywhere in the repository. Mason confirmed on 2026-07-25 that Hermes is not actually part of the workflow, so no contract, entry point, or hook adapter is needed. `AGENTS.md`'s "every coding agent" scope stands as written for Claude and Codex.
+A full-text search for "hermes" across the pre-existing harness and docs returned zero hits — no contract, no guard, no entry point, nothing. (The only occurrences in the repository now are this review and its `DECISION_LOG.md` entry, both added by this change.) Mason confirmed on 2026-07-25 that Hermes is not actually part of the workflow, so no contract, entry point, or hook adapter is needed. `AGENTS.md`'s "every coding agent" scope stands as written for Claude and Codex.
 
 If Hermes (or any third agent) is ever adopted, the work is: an entry point that imports `AGENTS.md`, hooks routed through the existing `.claude/hooks/` implementations via an adapter (never copied), and a `CODEX_ONLY_HOOKS`-style declaration in the parity script.
 
@@ -53,7 +70,7 @@ These checks passed and need no action:
 ### 1.4 MEDIUM — three smaller consistency items
 
 - **`AGENT_COLLABORATION.md` is Claude-and-Codex only.** Correct as written now that Hermes is out of scope. No change needed.
-- **Verification commands were PowerShell-flavored.** `CLAUDE.md` labelled its maintenance block ```powershell though the commands are cross-platform npm/node — mildly confusing for an agent running on Linux, as this session was. **Fixed:** retagged to ```bash. `AGENT_COLLABORATION.md` still carries the same tag; left alone because it is inside the generated-adapter surface and not worth a sync cycle on its own.
+- **Verification commands were PowerShell-flavored.** `CLAUDE.md` labelled its maintenance block `powershell` though the commands are cross-platform npm/node — mildly confusing for an agent running on Linux, as this session was. **Fixed:** retagged to `bash`. `AGENT_COLLABORATION.md` still carries the same tag; left alone because it is inside the generated-adapter surface and not worth a sync cycle on its own.
 - **`.claude/settings.json` allow-lists two bare-UUID MCP servers** (`mcp__50e15046-…` for Supabase, `mcp__0fb370f6-…` in the deny list for Vercel) alongside the named `mcp__supabase__*` entries. My first draft suggested deleting these as dead entries. **Do not do that without checking** — MCP server IDs are generated per install, and these are plausibly Mason's actual local Supabase and Vercel servers. Deleting them would silently break his setup or, worse, remove a *deny* entry. Left untouched; worth confirming against his live MCP config before any cleanup.
 
 ---
@@ -174,7 +191,7 @@ Mason approved the fixes on 2026-07-25. Changes made:
 |---|---|
 | 1.1 | `CLAUDE.md` now names `scripts/agent-manifest-parity.mjs` and the declare-or-wire-both rule, so the deliberate Claude/Codex hook asymmetry is discoverable instead of looking like a gap. |
 | 1.2 | Closed — Hermes not in use. |
-| 1.4 | `CLAUDE.md` maintenance block retagged ```powershell → ```bash. MCP allow-list left alone (see the warning above). |
+| 1.4 | `CLAUDE.md` maintenance block retagged `powershell` → `bash`. MCP allow-list left alone (see the warning above). |
 | 2.3, 2.5, 2.6, 2.1 | New **Model Tuning (Claude Opus 5)** section in `CLAUDE.md`: `<tone_preference>` block, written-deliverable length calibration, subagent budget, the self-verification carve-out that protects the Verification Standard and the Codex gate, and a standing rule against severity-filtered review prompts. |
 | 2.4 | Effort mapping documented in the same section, explicitly marked as a pre-sweep starting point, with a hard floor: never lower effort on a money/RLS/migration path. |
 | 2.7 | Scope paragraph added to `AGENTS.md` under Plan and Approval Gates — applies to Codex as well as Claude. |
@@ -188,7 +205,7 @@ Mason approved the fixes on 2026-07-25. Changes made:
 **PROOF — Ran:**
 - `node scripts/sync-agent-workflows.mjs --check` → PASS, 35 files match.
 - Hook-reference diff between `.claude/settings.json` and `.codex/hooks.json` (extracted and compared script paths) → the six-hook gap in 1.1 is measured, not inferred.
-- Full-repo case-insensitive search for "hermes" → 0 hits.
+- Case-insensitive search for "hermes" across the pre-existing repository → 0 hits (this review and its decision-log entry are the only occurrences now, and were added afterward).
 - Grep for the five Opus 5 anti-patterns across `.claude/agents`, `commands`, `skills`, `workflows`, `AGENTS.md`, `CLAUDE.md`, `docs/` → results as tabled in 2.1.
 - Read in full: `AGENTS.md`, `CLAUDE.md`, `.claude/settings.json`, `AGENT_COLLABORATION.md`, `AGENT_ONBOARDING.md`, `.agents/README.md`, `.codex/hooks.json`.
 - Fetched both current Anthropic Opus 5 prompting pages.

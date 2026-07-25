@@ -6,7 +6,7 @@ All significant development milestones, in reverse chronological order.
 
 Applied Opus 5 harness tuning: CLAUDE.md Model Tuning section (tone, deliverable length, subagent budget, effort mapping, review-prompt rule, parity-script pointer), AGENTS.md scope paragraph, DECISION_LOG entry. Corrected the earlier Codex hook-parity finding — the asymmetry is deliberate and build-enforced. Hermes dropped (not in use). PR #227.
 
-- **Commits this session** (git log -15 (fallback — no author-matched commits in the last 12h)):
+- **Commits this session** (PR #227): the `docs:` commits below. The remaining entries are unrelated repository context from the `git log -15` fallback, not part of this session.
   - `b5d85282 docs: apply Opus 5 harness tuning; correct Codex hook-parity finding`
   - `5e5eb484 docs: log harness review session in CHANGELOG`
   - `8a9aefc3 docs: harness review — cross-agent sync gaps and Opus 5 tuning proposals`
@@ -22,32 +22,13 @@ Applied Opus 5 harness tuning: CLAUDE.md Model Tuning section (tone, deliverable
   - `e107c7a6 Guard commission splits against stale-tab lost updates`
   - `30616b04 KNOWN_ISSUES §1b: PR #213 landed — mark commission-recipient close-out resolved (#217)`
   - `4d686ece Reject unresolvable commission recipients at creation (gauntlet §7) (#213)`
-- **Migrations touched** (last 15 commits (fallback)):
-  - `supabase/migrations/20260723193312_product_families_return_policy_foundation.sql`
-  - `supabase/migrations/20260722222743_product_families_return_policy_foundation.sql`
-  - `supabase/migrations/20260722222742_section9_po_ap_high_remediation.sql`
-  - `supabase/migrations/20260722202622_commission_split_lost_update_guard.sql`
-  - `supabase/migrations/20260722184744_reuse_guard_covers_invoiced_jobs.sql`
-  - `supabase/migrations/20260722190000_commission_split_lost_update_guard.sql`
-  - `supabase/migrations/20260722134252_reject_unresolvable_commission_recipients.sql`
-  - `supabase/migrations/20260722144121_lock_commission_identity_names.sql`
-  - `supabase/migrations/20260722150432_forbid_referenced_recipient_name_acquisition.sql`
-  - `supabase/migrations/20260722154303_global_unique_profile_names.sql`
-  - `supabase/migrations/20260722162851_reuse_guard_covers_orders.sql`
-  - `supabase/migrations/20260722172533_reuse_guard_covers_revivable_quotes.sql`
-  - `supabase/migrations/20260722174029_commission_split_recipient_ids.sql`
-  - `supabase/migrations/20260722122651_guard_inventory_location_and_matcher_grants.sql`
-  - `supabase/migrations/20260722105402_guard_inventory_location_and_matcher_grants.sql`
-  - `supabase/migrations/20260722091359_supplier_pricing_workbook_v2_product_info.sql`
-  - `supabase/migrations/20260722100456_revoke_inner_pricing_rpc_access.sql`
-  - `supabase/migrations/20260722111620_search_path_hardening_crm_guards_helpers.sql`
-  - `supabase/migrations/20260722112835_unapply_credit_memo_replay_binding.sql`
+- **Migrations touched:** none — documentation and agent-guidance only.
 
 ## 2026-07-25 — Harness review: documented cross-agent sync gaps (6 hooks Claude-only vs Codex; Hermes absent from repo) and Claude Opus 5 tuning proposals (effort levels, subagent budget, verbosity/deliverable-length calibration). Review only — no harness file changed. PR #227 (draft).
 
 Harness review: documented cross-agent sync gaps (6 hooks Claude-only vs Codex; Hermes absent from repo) and Claude Opus 5 tuning proposals (effort levels, subagent budget, verbosity/deliverable-length calibration). Review only — no harness file changed. PR #227 (draft).
 
-- **Commits this session** (git log -15 (fallback — no author-matched commits in the last 12h)):
+- **Commits this session** (PR #227): the `docs:` commits below. The remaining entries are unrelated repository context from the `git log -15` fallback, not part of this session.
   - `8a9aefc3 docs: harness review — cross-agent sync gaps and Opus 5 tuning proposals`
   - `f4b30598 chore: close out supplier pricing phase 3 stage a (#225)`
   - `7f447881 fix: harden phase3 metadata governance (#224)`
@@ -63,26 +44,7 @@ Harness review: documented cross-agent sync gaps (6 hooks Claude-only vs Codex; 
   - `4d686ece Reject unresolvable commission recipients at creation (gauntlet §7) (#213)`
   - `a7806253 Durable commission routing: immutable profile UUIDs in splits (applied live as 20260722174029) (#216)`
   - `d8a17601 Fix bulk quote import lifecycle path`
-- **Migrations touched** (last 15 commits (fallback)):
-  - `supabase/migrations/20260723193312_product_families_return_policy_foundation.sql`
-  - `supabase/migrations/20260722222743_product_families_return_policy_foundation.sql`
-  - `supabase/migrations/20260722222742_section9_po_ap_high_remediation.sql`
-  - `supabase/migrations/20260722202622_commission_split_lost_update_guard.sql`
-  - `supabase/migrations/20260722184744_reuse_guard_covers_invoiced_jobs.sql`
-  - `supabase/migrations/20260722190000_commission_split_lost_update_guard.sql`
-  - `supabase/migrations/20260722134252_reject_unresolvable_commission_recipients.sql`
-  - `supabase/migrations/20260722144121_lock_commission_identity_names.sql`
-  - `supabase/migrations/20260722150432_forbid_referenced_recipient_name_acquisition.sql`
-  - `supabase/migrations/20260722154303_global_unique_profile_names.sql`
-  - `supabase/migrations/20260722162851_reuse_guard_covers_orders.sql`
-  - `supabase/migrations/20260722172533_reuse_guard_covers_revivable_quotes.sql`
-  - `supabase/migrations/20260722174029_commission_split_recipient_ids.sql`
-  - `supabase/migrations/20260722122651_guard_inventory_location_and_matcher_grants.sql`
-  - `supabase/migrations/20260722105402_guard_inventory_location_and_matcher_grants.sql`
-  - `supabase/migrations/20260722091359_supplier_pricing_workbook_v2_product_info.sql`
-  - `supabase/migrations/20260722100456_revoke_inner_pricing_rpc_access.sql`
-  - `supabase/migrations/20260722111620_search_path_hardening_crm_guards_helpers.sql`
-  - `supabase/migrations/20260722112835_unapply_credit_memo_replay_binding.sql`
+- **Migrations touched:** none — documentation and agent-guidance only.
 
 ## 2026-07-23 — Supplier Pricing Phase 3 Stage A live closeout (APPLIED LIVE; DORMANT)
 
