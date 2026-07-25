@@ -60,6 +60,7 @@ import CommissionSplitEditor from '../components/ui/CommissionSplitEditor';
 import { useStaleQuoteCheck } from '../hooks/useGuardrails';
 import GuardrailBanner from '../components/ui/GuardrailBanner';
 import { ProductOptionDetails } from '../components/products/ProductOptionPresentation';
+import { ProductSearchResultRow } from '../components/products/ProductSearchResultRow';
 import type {
   Quote,
   QuoteSection,
@@ -3626,39 +3627,14 @@ export default function QuoteBuilder() {
                 // columns) — matches what the line will show once added.
                 const perAcre = catalogPricePerAcre(p, tier, unitConversions);
                 return (
-                <button
+                <ProductSearchResultRow
                   key={p.id}
+                  product={p}
                   onClick={() => {
-                    if (productSearchOpen) {
-                      assignProduct(
-                        productSearchOpen.sectionKey,
-                        productSearchOpen.itemKey,
-                        p
-                      );
-                    }
+                    if (productSearchOpen) assignProduct(productSearchOpen.sectionKey, productSearchOpen.itemKey, p);
                   }}
-                  className="w-full min-w-0 text-left px-3 py-2.5 hover:bg-crx-green-tint transition-colors flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"
-                >
-                  <div className="min-w-0 flex-1">
-                    <p className="font-medium text-nav-dark text-sm">
-                      {p.product_name}
-                    </p>
-                    <ProductOptionDetails product={p} />
-                  </div>
-                  <div className="text-left sm:text-right">
-                    <p className="font-mono text-sm text-nav-dark">
-                      {fmt(getTierPrice(p, tier))}
-                    </p>
-                    <p className="text-xs text-gray-400">
-                      T{tier} price
-                    </p>
-                    {perAcre != null && (
-                      <p className="text-xs font-mono text-crx-green" title={`Approx. $/acre at tier ${tier}, applied at this product's standard rate`}>
-                        {fmt(perAcre)}/ac
-                      </p>
-                    )}
-                  </div>
-                </button>
+                  trailing={<><p className="font-mono text-sm text-nav-dark">{fmt(getTierPrice(p, tier))}</p><p className="text-xs text-gray-400">T{tier} price</p>{perAcre != null && <p className="text-xs font-mono text-crx-green" title={`Approx. $/acre at tier ${tier}, applied at this product's standard rate`}>{fmt(perAcre)}/ac</p>}</>}
+                />
                 );
               })
             )}

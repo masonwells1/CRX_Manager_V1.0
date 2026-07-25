@@ -10,6 +10,9 @@ const {
   mockPreviewPricing,
   mockResetIdempotencyKey,
   mockSentryCaptureException,
+  mockStageSupplierPriceImport,
+  mockStageVendorAlias,
+  mockUpsertProductSupplierLink,
 } = vi.hoisted(() => ({
   mockToast: vi.fn(),
   mockGetWorkspace: vi.fn(),
@@ -18,6 +21,9 @@ const {
   mockPreviewPricing: vi.fn(),
   mockResetIdempotencyKey: vi.fn(),
   mockSentryCaptureException: vi.fn(),
+  mockStageSupplierPriceImport: vi.fn(),
+  mockStageVendorAlias: vi.fn(),
+  mockUpsertProductSupplierLink: vi.fn(),
 }));
 
 vi.mock('../contexts/AuthContext', () => ({
@@ -41,10 +47,10 @@ vi.mock('../lib/supplierPricing', async () => {
     getSupplierQuoteSheet: vi.fn(),
     approveSupplierPriceImport: vi.fn(),
     reviewVendorAlias: vi.fn(),
-    stageSupplierPriceImport: vi.fn(),
-    stageVendorAlias: vi.fn(),
+    stageSupplierPriceImport: mockStageSupplierPriceImport,
+    stageVendorAlias: mockStageVendorAlias,
     uploadSupplierSourcePdf: vi.fn(),
-    upsertProductSupplierLink: vi.fn(),
+    upsertProductSupplierLink: mockUpsertProductSupplierLink,
   };
 });
 
@@ -248,6 +254,62 @@ describe('SupplierPricing page', () => {
     await waitFor(() => expect(productSelect).toHaveValue(initial.products[0].id));
     fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
     await waitFor(() => expect(productSelect).toHaveValue(refreshed.products[0].id));
+  });
+
+  it('reconciles every stale vendor/product/link form ID before a refreshed workspace can submit it', async () => {
+    const oldWorkspace = {
+      vendors: [{ id: 'vendor-old', name: 'Old vendor' }],
+      products: [{ id: '77777777-7777-4777-8777-777777777777', product_name: 'Old Product', sku: 'OLD-1', inventory_unit: 'gallon' }],
+      links: [{
+        id: 'link-old', product_id: '77777777-7777-4777-8777-777777777777', product_name: 'Old Product',
+        vendor_id: 'vendor-old', vendor_name: 'Old vendor', supplier_sku: 'OLD-SKU', supplier_product_name: 'Old Product',
+        supplier_uom: 'case', supplier_pack_description: null, inventory_units_per_supplier_unit: 1,
+        conversion_unit: 'gallon', comparison_status: 'comparable' as const, comparison_note: null,
+        link_status: 'confirmed' as const, is_reusable: true, is_preferred: false, is_active: true,
+      }],
+      imports: [], aliases: [], evidence: [],
+    };
+    const refreshedWorkspace = {
+      vendors: [{ id: 'vendor-new', name: 'New vendor' }],
+      products: [{ id: '88888888-8888-4888-8888-888888888888', product_name: 'New Product', sku: 'NEW-1', inventory_unit: 'gallon' }],
+      links: [], imports: [], aliases: [], evidence: [],
+    };
+    mockGetWorkspace.mockResolvedValueOnce(oldWorkspace).mockResolvedValueOnce(refreshedWorkspace);
+
+    renderSupplierPricing();
+    await screen.findByRole('option', { name: /Old Product/ });
+    fireEvent.change(screen.getByLabelText('Linked Product'), { target: { value: 'link-old' } });
+    fireEvent.change(screen.getByLabelText('Quoted cost (dollars)'), { target: { value: '12.50' } });
+
+    fireEvent.click(screen.getByRole('tab', { name: /Product links/ }));
+    fireEvent.change(screen.getByLabelText('Product'), { target: { value: oldWorkspace.products[0].id } });
+    fireEvent.change(screen.getByLabelText('Supplier'), { target: { value: 'vendor-old' } });
+    fireEvent.change(screen.getByLabelText('Supplier SKU'), { target: { value: 'OLD-SKU' } });
+
+    fireEvent.click(screen.getByRole('tab', { name: /Vendor aliases/ }));
+    fireEvent.change(screen.getByLabelText('Alias spelling'), { target: { value: 'Old alias' } });
+    fireEvent.change(screen.getByLabelText('Proposed canonical vendor'), { target: { value: 'vendor-old' } });
+
+    mockUpsertProductSupplierLink.mockClear();
+    mockStageSupplierPriceImport.mockClear();
+    mockStageVendorAlias.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await waitFor(() => expect(screen.getByLabelText('Proposed canonical vendor')).toHaveValue(''));
+
+    fireEvent.click(screen.getByRole('tab', { name: /Product links/ }));
+    expect(screen.getByLabelText('Product')).toHaveValue('');
+    expect(screen.getByLabelText('Supplier')).toHaveValue('');
+    fireEvent.click(screen.getByRole('button', { name: 'Save confirmed link' }));
+    expect(mockUpsertProductSupplierLink).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Quote review' }));
+    expect(screen.getByLabelText('Linked Product')).toHaveValue('');
+    fireEvent.click(screen.getByRole('button', { name: 'Stage quick quote' }));
+    expect(mockStageSupplierPriceImport).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('tab', { name: /Vendor aliases/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Stage for review' }));
+    expect(mockStageVendorAlias).not.toHaveBeenCalled();
   });
 
   it('routes comparable supplier evidence to the single-Product governed flow', async () => {

@@ -114,6 +114,13 @@ export default function SupplierPricing() {
   const pdfInputRef = useRef<HTMLInputElement>(null);
   const workspaceRequestRef = useRef(0);
   const basisWorkspaceRequestRef = useRef(0);
+  const selectedVendorIdRef = useRef(selectedVendorId);
+  const selectedProductIdRef = useRef(selectedProductId);
+  const reviewRef = useRef(review);
+
+  useEffect(() => { selectedVendorIdRef.current = selectedVendorId; }, [selectedVendorId]);
+  useEffect(() => { selectedProductIdRef.current = selectedProductId; }, [selectedProductId]);
+  useEffect(() => { reviewRef.current = review; }, [review]);
 
   const stageImportIdem = useIdempotencyKey('stage_supplier_price_import', profile?.id || '');
   const approveImportIdem = useIdempotencyKey('approve_supplier_price_import', profile?.id || '');
@@ -129,27 +136,72 @@ export default function SupplierPricing() {
     try {
       const result = await getSupplierPricingWorkspace();
       if (workspaceRequestRef.current !== requestId) return;
+      const nextVendorId = result.vendors.some((vendor) => vendor.id === selectedVendorIdRef.current)
+        ? selectedVendorIdRef.current
+        : result.vendors[0]?.id || '';
+      const nextProductId = result.products.some((product) => product.id === selectedProductIdRef.current)
+        ? selectedProductIdRef.current
+        : result.products[0]?.id || '';
+      const reviewStillExists = reviewRef.current && result.imports.some((item) => item.id === reviewRef.current?.id);
       setWorkspace(result);
-      setSelectedVendorId((current) => (
-        result.vendors.some((vendor) => vendor.id === current) ? current : result.vendors[0]?.id || ''
-      ));
-      setSelectedProductId((current) => (
-        result.products.some((product) => product.id === current) ? current : result.products[0]?.id || ''
-      ));
+      selectedVendorIdRef.current = nextVendorId;
+      selectedProductIdRef.current = nextProductId;
+      reviewRef.current = reviewStillExists ? reviewRef.current : null;
+      setSelectedVendorId(nextVendorId);
+      setSelectedProductId(nextProductId);
+      setQuickQuote((current) => {
+        const link = result.links.find((item) => (
+          item.id === current.linkId
+          && item.vendor_id === nextVendorId
+          && item.is_active
+          && item.is_reusable
+        ));
+        return link ? current : blankQuickQuote;
+      });
+      setLinkForm((current) => {
+        const product = result.products.find((item) => item.id === current.productId);
+        const vendor = result.vendors.find((item) => item.id === current.vendorId);
+        return product && vendor
+          ? { ...current, conversionUnit: product.inventory_unit || '' }
+          : blankLink;
+      });
+      setAliasVendorId((current) => result.vendors.some((vendor) => vendor.id === current) ? current : '');
+      setReview(reviewStillExists ? reviewRef.current : null);
+      setSelectedRowIds(new Set());
+      setApproveOpen(false);
+      setRejectOpen(false);
+      setRejectReason('');
+      setAliasReviewIntent(null);
+      setCorrectionRow(null);
+      setCorrectionCost('');
+      setCorrectionReason('');
+      setBasisWorkspace(null);
+      basisWorkspaceRequestRef.current += 1;
     } catch (error) {
       if (workspaceRequestRef.current !== requestId) return;
       Sentry.captureException(error instanceof Error ? error : new Error(String(error)), {
         extra: { context: 'load_supplier_pricing_workspace' },
       });
       setWorkspace(null);
+      selectedVendorIdRef.current = '';
+      selectedProductIdRef.current = '';
+      reviewRef.current = null;
       setSelectedVendorId('');
       setSelectedProductId('');
       setLinkForm(blankLink);
       setQuickQuote(blankQuickQuote);
       setReview(null);
+      setSelectedRowIds(new Set());
+      setApproveOpen(false);
+      setRejectOpen(false);
+      setRejectReason('');
       setCorrectionRow(null);
+      setCorrectionCost('');
+      setCorrectionReason('');
       setAliasVendorId('');
+      setAliasReviewIntent(null);
       setBasisWorkspace(null);
+      basisWorkspaceRequestRef.current += 1;
       toast('error', sanitizeError(error));
     } finally {
       if (workspaceRequestRef.current === requestId) setLoading(false);
@@ -193,7 +245,7 @@ export default function SupplierPricing() {
 
   useEffect(() => {
     void loadBasisWorkspace(selectedProductId);
-  }, [loadBasisWorkspace, selectedProductId]);
+  }, [loadBasisWorkspace, selectedProductId, workspace]);
 
   const refreshWorkspaceAndBasis = useCallback(async () => {
     await Promise.all([
@@ -306,6 +358,12 @@ export default function SupplierPricing() {
   const handleQuickQuote = async () => {
     if (!profile || !selectedVendorId || !quickQuote.linkId || !quickQuote.newCost.trim()) {
       toast('error', 'Supplier, linked Product, and quoted cost are required.');
+      return;
+    }
+    const currentLink = vendorLinks.find((link) => link.id === quickQuote.linkId);
+    if (!currentLink) {
+      setQuickQuote(blankQuickQuote);
+      toast('error', 'The selected supplier link is no longer available. Refresh and choose a current link.');
       return;
     }
     setBusy(true);
@@ -440,6 +498,13 @@ export default function SupplierPricing() {
 
   const handleLinkSave = async () => {
     if (!profile || !isAdmin) return;
+    const selectedProduct = workspace?.products.find((product) => product.id === linkForm.productId);
+    const selectedVendor = workspace?.vendors.find((vendor) => vendor.id === linkForm.vendorId);
+    if (!selectedProduct || !selectedVendor) {
+      setLinkForm(blankLink);
+      toast('error', 'The selected Product or supplier is no longer available. Refresh and choose current values.');
+      return;
+    }
     setBusy(true);
     try {
       await upsertProductSupplierLink({
@@ -460,6 +525,11 @@ export default function SupplierPricing() {
 
   const handleAliasStage = async () => {
     if (!profile || !aliasText.trim() || !aliasVendorId) return;
+    if (!workspace?.vendors.some((vendor) => vendor.id === aliasVendorId)) {
+      setAliasVendorId('');
+      toast('error', 'The selected supplier is no longer available. Refresh and choose a current supplier.');
+      return;
+    }
     setBusy(true);
     try {
       await stageVendorAlias({

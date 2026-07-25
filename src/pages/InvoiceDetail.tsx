@@ -32,7 +32,7 @@ import ConfirmModal from '../components/ui/ConfirmModal';
 import TransactionThread from '../components/ui/TransactionThread';
 import { useCreditLimitCheck } from '../hooks/useGuardrails';
 import GuardrailBanner from '../components/ui/GuardrailBanner';
-import { ProductOptionDetails } from '../components/products/ProductOptionPresentation';
+import { ProductSearchResultRow } from '../components/products/ProductSearchResultRow';
 
 interface LineItem {
   id?: string;
@@ -1915,20 +1915,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
           {productResults.length > 0 ? (
             <div className="max-h-60 overflow-auto divide-y divide-gray-50">
               {productResults.map((p) => (
-                <button
-                  key={p.id}
-                  onClick={() => addProduct(p)}
-                  className="w-full min-w-0 text-left px-3 py-2 hover:bg-gray-50 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"
-                >
-                  <div className="min-w-0 flex-1">
-                    <div className="text-sm font-medium text-nav-dark">{p.product_name}</div>
-                    <ProductOptionDetails product={p} />
-                  </div>
-                  <div className="text-left text-xs text-secondary sm:text-right">
-                    <div>T1: ${(p.tier1_price || 0).toFixed(2)}</div>
-                    <div>Cost: ${(p.current_cost || 0).toFixed(2)}</div>
-                  </div>
-                </button>
+                <ProductSearchResultRow key={p.id} product={p} onClick={() => addProduct(p)} trailing={<><div>T1: ${(p.tier1_price || 0).toFixed(2)}</div><div>Cost: ${(p.current_cost || 0).toFixed(2)}</div></>} />
               ))}
             </div>
           ) : productSearch.length >= 2 ? (
