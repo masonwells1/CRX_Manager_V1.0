@@ -141,10 +141,19 @@ function proofRequirement(headSha, riskDescription, detail, baseSha) {
   // send the operator round a fetch-then-review loop, producing a proof this gate
   // rejects without ever saying which base it wanted.
   const expectedBase = baseSha || "<origin/main at review time>";
+  // run-claude-review.mjs derives base_sha from LOCAL origin/main
+  // (scripts/run-claude-review.mjs, `baseSha = rev-parse origin/main`) and never
+  // fetches. If that ref is stale, the wrapper mints a proof naming the old base
+  // while this gate expects `expectedBase` — so following the guidance would loop
+  // forever, rejected every time. Require the fetch first (Codex P2, 2026-07-25).
+  const fetchFirst = baseSha
+    ? `FIRST run \`git fetch origin main\` so local origin/main equals ${baseSha} — ` +
+      `the review wrapper reads its base from that ref and will otherwise mint a proof bound to a stale base. Then `
+    : "";
   return denied(
     `CODEX PRODUCTION GATE: ${riskDescription}\n\n` +
     `${detail}\n\n` +
-    `Claude must actually review the exact diff in this session by running ` +
+    `${fetchFirst}Claude must actually review the exact diff in this session by running ` +
     `node scripts/run-claude-review.mjs --scope base-main. A successful ` +
     `SHIP/SHIP-WITH-FOLLOWUPS review writes .claude/session-state/claude-review-push.json. ` +
     `Required JSON: ` +

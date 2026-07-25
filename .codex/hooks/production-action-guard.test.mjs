@@ -763,6 +763,14 @@ try {
       }),
     }).reason || "");
     assert.match(guidance, new RegExp(githubBase), "proof guidance states the exact expected base SHA");
+    // run-claude-review.mjs reads its base from LOCAL origin/main and never
+    // fetches, so without this step the operator loops: the wrapper mints a proof
+    // bound to the stale base and the gate rejects it every time.
+    assert.match(
+      guidance,
+      /git fetch origin main/,
+      "proof guidance requires fetching origin/main before running the review wrapper"
+    );
     assert.doesNotMatch(
       guidance,
       /<origin\/main at review time>/,
