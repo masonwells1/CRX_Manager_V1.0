@@ -3637,15 +3637,15 @@ export default function QuoteBuilder() {
                       );
                     }
                   }}
-                  className="w-full text-left px-3 py-2.5 hover:bg-crx-green-tint transition-colors flex items-center justify-between"
+                  className="w-full min-w-0 text-left px-3 py-2.5 hover:bg-crx-green-tint transition-colors flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"
                 >
-                  <div>
+                  <div className="min-w-0 flex-1">
                     <p className="font-medium text-nav-dark text-sm">
                       {p.product_name}
                     </p>
                     <ProductOptionDetails product={p} />
                   </div>
-                  <div className="text-right">
+                  <div className="text-left sm:text-right">
                     <p className="font-mono text-sm text-nav-dark">
                       {fmt(getTierPrice(p, tier))}
                     </p>

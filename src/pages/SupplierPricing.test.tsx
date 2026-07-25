@@ -1,6 +1,6 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const {
   mockToast,
@@ -9,6 +9,7 @@ const {
   mockGetBasisWorkspace,
   mockPreviewPricing,
   mockResetIdempotencyKey,
+  mockSentryCaptureException,
 } = vi.hoisted(() => ({
   mockToast: vi.fn(),
   mockGetWorkspace: vi.fn(),
@@ -16,6 +17,7 @@ const {
   mockGetBasisWorkspace: vi.fn(),
   mockPreviewPricing: vi.fn(),
   mockResetIdempotencyKey: vi.fn(),
+  mockSentryCaptureException: vi.fn(),
 }));
 
 vi.mock('../contexts/AuthContext', () => ({
@@ -60,6 +62,10 @@ vi.mock('../lib/productPricing', async () => {
   };
 });
 
+vi.mock('../lib/sentry', () => ({
+  Sentry: { captureException: mockSentryCaptureException },
+}));
+
 import SupplierPricing from './SupplierPricing';
 
 function renderSupplierPricing() {
@@ -71,6 +77,8 @@ function renderSupplierPricing() {
 }
 
 describe('SupplierPricing page', () => {
+  afterEach(() => cleanup());
+
   beforeEach(() => {
     vi.clearAllMocks();
     mockGetBasisWorkspace.mockResolvedValue({
@@ -148,6 +156,98 @@ describe('SupplierPricing page', () => {
       expect(mockGetWorkspace).toHaveBeenCalledTimes(workspaceLoads + 1);
       expect(mockGetBasisWorkspace).toHaveBeenCalledTimes(basisLoads + 1);
     });
+  });
+
+  it('clears an already-populated workspace when the current refresh fails', async () => {
+    const populated = {
+      vendors: [{ id: 'vendor-1', name: 'Current vendor' }],
+      products: [{ id: '11111111-1111-4111-8111-111111111111', product_name: 'Current Product', sku: 'CUR-1', inventory_unit: 'gallon' }],
+      links: [], imports: [], aliases: [], evidence: [],
+    };
+    mockGetWorkspace.mockResolvedValueOnce(populated).mockRejectedValueOnce(new Error('metadata hydration failed'));
+
+    renderSupplierPricing();
+    fireEvent.click(await screen.findByRole('tab', { name: 'Comparison' }));
+    const productSelect = screen.getByLabelText('Product');
+    await waitFor(() => expect(productSelect).toHaveValue(populated.products[0].id));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', 'metadata hydration failed'));
+    expect(mockSentryCaptureException).toHaveBeenCalled();
+    expect(productSelect).toHaveValue('');
+    expect(screen.queryByRole('option', { name: /Current Product/ })).not.toBeInTheDocument();
+  });
+
+  it('ignores stale workspace completions after a newer refresh wins', async () => {
+    const newest = {
+      vendors: [],
+      products: [{ id: '22222222-2222-4222-8222-222222222222', product_name: 'Newest Product', sku: 'NEW-1', inventory_unit: 'gallon' }],
+      links: [], imports: [], aliases: [], evidence: [],
+    };
+    let resolveFirst!: (value: typeof newest) => void;
+    const first = new Promise<typeof newest>((resolve) => { resolveFirst = resolve; });
+    mockGetWorkspace.mockImplementationOnce(() => first).mockResolvedValueOnce(newest);
+
+    renderSupplierPricing();
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Refresh' })).not.toHaveAttribute('aria-busy', 'true'));
+    fireEvent.click(screen.getByRole('tab', { name: 'Comparison' }));
+    expect(await screen.findByRole('option', { name: /Newest Product/ })).toBeInTheDocument();
+
+    act(() => {
+      resolveFirst({
+        vendors: [],
+        products: [{ id: '33333333-3333-4333-8333-333333333333', product_name: 'Stale Product', sku: 'OLD-1', inventory_unit: 'gallon' }],
+        links: [], imports: [], aliases: [], evidence: [],
+      });
+    });
+    await Promise.resolve();
+    expect(screen.queryByRole('option', { name: /Stale Product/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /Newest Product/ })).toBeInTheDocument();
+  });
+
+  it('ignores a stale workspace failure after a newer refresh succeeds', async () => {
+    let rejectFirst!: (reason?: unknown) => void;
+    const first = new Promise<never>((_resolve, reject) => { rejectFirst = reject; });
+    const newest = {
+      vendors: [],
+      products: [{ id: '66666666-6666-4666-8666-666666666666', product_name: 'Newest Product', sku: 'NEW-2', inventory_unit: 'gallon' }],
+      links: [], imports: [], aliases: [], evidence: [],
+    };
+    mockGetWorkspace.mockImplementationOnce(() => first).mockResolvedValueOnce(newest);
+
+    renderSupplierPricing();
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Comparison' }));
+    expect(await screen.findByRole('option', { name: /Newest Product/ })).toBeInTheDocument();
+
+    act(() => rejectFirst(new Error('stale hydration failure')));
+    await Promise.resolve();
+    expect(mockToast).not.toHaveBeenCalledWith('error', 'stale hydration failure');
+    expect(mockSentryCaptureException).not.toHaveBeenCalled();
+    expect(screen.getByRole('option', { name: /Newest Product/ })).toBeInTheDocument();
+  });
+
+  it('replaces selections that no longer belong to a successful refreshed workspace', async () => {
+    const initial = {
+      vendors: [{ id: 'vendor-old', name: 'Old vendor' }],
+      products: [{ id: '44444444-4444-4444-8444-444444444444', product_name: 'Old Product', sku: 'OLD-1', inventory_unit: 'gallon' }],
+      links: [], imports: [], aliases: [], evidence: [],
+    };
+    const refreshed = {
+      vendors: [{ id: 'vendor-new', name: 'New vendor' }],
+      products: [{ id: '55555555-5555-4555-8555-555555555555', product_name: 'New Product', sku: 'NEW-1', inventory_unit: 'gallon' }],
+      links: [], imports: [], aliases: [], evidence: [],
+    };
+    mockGetWorkspace.mockResolvedValueOnce(initial).mockResolvedValueOnce(refreshed);
+
+    renderSupplierPricing();
+    fireEvent.click(await screen.findByRole('tab', { name: 'Comparison' }));
+    const productSelect = screen.getByLabelText('Product');
+    await waitFor(() => expect(productSelect).toHaveValue(initial.products[0].id));
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await waitFor(() => expect(productSelect).toHaveValue(refreshed.products[0].id));
   });
 
   it('routes comparable supplier evidence to the single-Product governed flow', async () => {
@@ -357,7 +457,6 @@ describe('SupplierPricing page', () => {
       }] : [],
       purchase_candidates: [],
     }));
-
     renderSupplierPricing();
     fireEvent.click(await screen.findByRole('tab', { name: 'Comparison' }));
     expect(await screen.findByRole('link', { name: 'Open Product cost-basis flow' }))

@@ -981,7 +981,24 @@ export default function Returns() {
                 <div className="w-6 h-6 border-2 border-crx-green border-t-transparent rounded-full animate-spin" />
               </div>
             ) : (
-              <div className="border border-gray-200 rounded-lg overflow-hidden">
+              <>
+                <div className="space-y-3 sm:hidden">
+                  {detailItems.map((item) => (
+                    <div key={item.id} className="min-w-0 rounded-lg border border-gray-200 p-3 text-sm">
+                      <div className="font-medium">{item.product_name || item.product?.product_name}</div>
+                      {item.product && <ProductOptionDetails product={item.product} />}
+                      {normalizeReturnPolicy(item.product?.return_policy) === 'no_return' && <p className="mt-1 break-words text-xs font-medium text-red-700">No return policy — the database remains the authority for every return action.</p>}
+                      <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2 text-xs">
+                        <div><dt className="text-gray-500">Quantity</dt><dd>{item.quantity} {item.unit}</dd></div>
+                        <div><dt className="text-gray-500">Condition</dt><dd className="capitalize">{item.condition}</dd></div>
+                        <div><dt className="text-gray-500">Credit</dt><dd className="font-medium text-emerald-600">{formatCents(item.extended_cents)}</dd></div>
+                        <div><dt className="text-gray-500">Restock</dt><dd>{item.restock ? (item.restocked ? 'Restocked' : 'Pending') : 'No'}</dd></div>
+                      </dl>
+                    </div>
+                  ))}
+                  <div className="rounded-lg bg-gray-50 p-3 text-right text-sm font-semibold">Total Credit: <span className="text-emerald-600">{formatCents(detailItems.reduce((s, i) => s + i.extended_cents, 0))}</span></div>
+                </div>
+                <div className="hidden overflow-hidden rounded-lg border border-gray-200 sm:block">
                 <table className="w-full text-sm">
                   <thead className="bg-gray-50">
                     <tr>
@@ -1027,7 +1044,8 @@ export default function Returns() {
                     </tr>
                   </tfoot>
                 </table>
-              </div>
+                </div>
+              </>
             )}
 
             {activeReturn.notes && (

@@ -47,8 +47,8 @@ describe('supplier pricing RPC wrappers', () => {
       data: {
         vendors: [],
         products: [
-          { id: 'product-a', product_name: 'Same Name', sku: null, inventory_unit: 'jug' },
-          { id: 'product-missing', product_name: 'Missing row', sku: 'OLD', inventory_unit: 'case' },
+          { id: '11111111-1111-4111-8111-111111111111', product_name: 'Same Name', sku: null, inventory_unit: 'jug' },
+          { id: '22222222-2222-4222-8222-222222222222', product_name: 'Missing row', sku: 'OLD', inventory_unit: 'case' },
         ],
         links: [], imports: [], aliases: [], evidence: [],
       },
@@ -56,7 +56,7 @@ describe('supplier pricing RPC wrappers', () => {
     });
     mockProductIn.mockResolvedValue({
       data: [{
-        id: 'product-a', product_name: 'Same Name', sku: 'NEW-A', unit_size: '2.5 gal',
+        id: '11111111-1111-4111-8111-111111111111', product_name: 'Same Name', sku: 'NEW-A', unit_size: '2.5 gal',
         packaging_variant: '2 x 2.5 gal', container_size: 2.5, container_unit: 'gal',
         inventory_unit: 'gal', return_policy: 'no_return', is_full_tote_only: false,
         product_family: { name: 'Atrazine' },
@@ -67,39 +67,39 @@ describe('supplier pricing RPC wrappers', () => {
     const workspace = await getSupplierPricingWorkspace();
 
     expect(mockProductFrom).toHaveBeenCalledWith('products');
-    expect(mockProductIn).toHaveBeenCalledWith('id', ['product-a', 'product-missing']);
+    expect(mockProductIn).toHaveBeenCalledWith('id', ['11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222']);
     expect(workspace.products[0]).toMatchObject({
-      id: 'product-a', sku: 'NEW-A', packaging_variant: '2 x 2.5 gal',
+      id: '11111111-1111-4111-8111-111111111111', sku: 'NEW-A', packaging_variant: '2 x 2.5 gal',
       return_policy: 'no_return', product_family: { name: 'Atrazine' },
     });
     // A missing canonical row cannot cause a cross-SKU substitution.
-    expect(workspace.products[1]).toMatchObject({ id: 'product-missing', sku: 'OLD' });
+    expect(workspace.products[1]).toMatchObject({ id: '22222222-2222-4222-8222-222222222222', sku: 'OLD' });
   });
 
   it('hydrates a filtered workspace by its returned exact Product UUID', async () => {
     mockRpc.mockResolvedValue({
       data: {
         vendors: [],
-        products: [{ id: 'product-a', product_name: 'Same Name', sku: null, inventory_unit: 'jug' }],
+        products: [{ id: '11111111-1111-4111-8111-111111111111', product_name: 'Same Name', sku: null, inventory_unit: 'jug' }],
         links: [], imports: [], aliases: [], evidence: [],
       },
       error: null,
     });
     mockProductIn.mockResolvedValue({ data: [], error: null });
 
-    await getSupplierPricingWorkspace('product-a');
+    await getSupplierPricingWorkspace('11111111-1111-4111-8111-111111111111');
 
-    expect(mockProductIn).toHaveBeenCalledWith('id', ['product-a']);
+    expect(mockProductIn).toHaveBeenCalledWith('id', ['11111111-1111-4111-8111-111111111111']);
   });
 
   it('batches large workspace metadata requests and preserves exact-ID-only hydration', async () => {
     const products = Array.from({ length: 1_001 }, (_, index) => ({
-      id: `product-${index}`, product_name: `Product ${index}`, sku: null, inventory_unit: 'ea',
+      id: `00000000-0000-4000-8000-${index.toString().padStart(12, '0')}`, product_name: `Product ${index}`, sku: null, inventory_unit: 'ea',
     }));
     mockRpc.mockResolvedValue({ data: { vendors: [], products, links: [], imports: [], aliases: [], evidence: [] }, error: null });
     mockProductIn.mockImplementation(async (_column: string, ids: string[]) => ({
-      data: ids[0] === 'product-0'
-        ? [{ id: 'product-0', product_name: 'Product 0', sku: 'EXACT', unit_size: null, packaging_variant: null, container_size: null, container_unit: null, inventory_unit: 'ea', return_policy: 'returnable', is_full_tote_only: false, product_family: null }]
+      data: ids[0] === '00000000-0000-4000-8000-000000000000'
+        ? [{ id: '00000000-0000-4000-8000-000000000000', product_name: 'Product 0', sku: 'EXACT', unit_size: null, packaging_variant: null, container_size: null, container_unit: null, inventory_unit: 'ea', return_policy: 'returnable', is_full_tote_only: false, product_family: null }]
         : [],
       error: null,
     }));
@@ -108,17 +108,29 @@ describe('supplier pricing RPC wrappers', () => {
 
     expect(mockProductIn).toHaveBeenCalledTimes(11);
     expect(mockProductIn.mock.calls.map(([, ids]) => ids.length)).toEqual([100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 1]);
-    expect(mockProductIn.mock.calls.every(([, ids]) => ids.length <= 100)).toBe(true);
-    expect(workspace.products[0]).toMatchObject({ id: 'product-0', sku: 'EXACT' });
-    expect(workspace.products[1]).toMatchObject({ id: 'product-1', sku: null });
+    expect(mockProductIn.mock.calls.every(([, ids]) => ids.length <= 100 && ids.join(',').length < 4_096)).toBe(true);
+    expect(workspace.products[0]).toMatchObject({ id: '00000000-0000-4000-8000-000000000000', sku: 'EXACT' });
+    expect(workspace.products[1]).toMatchObject({ id: '00000000-0000-4000-8000-000000000001', sku: null });
   });
 
   it('surfaces canonical Product metadata query failures', async () => {
-    mockRpc.mockResolvedValue({ data: { vendors: [], products: [{ id: 'product-a', product_name: 'Same', sku: null, inventory_unit: 'ea' }], links: [], imports: [], aliases: [], evidence: [] }, error: null });
+    mockRpc.mockResolvedValue({ data: { vendors: [], products: [{ id: '11111111-1111-4111-8111-111111111111', product_name: 'Same', sku: null, inventory_unit: 'ea' }], links: [], imports: [], aliases: [], evidence: [] }, error: null });
     const error = { message: 'metadata unavailable' };
     mockProductIn.mockResolvedValue({ data: null, error });
 
     await expect(getSupplierPricingWorkspace()).rejects.toBe(error);
+  });
+
+  it('surfaces a late metadata batch failure without returning a partial workspace', async () => {
+    const products = Array.from({ length: 101 }, (_, index) => ({
+      id: `00000000-0000-4000-8000-${index.toString().padStart(12, '0')}`, product_name: `Product ${index}`, sku: null, inventory_unit: 'ea',
+    }));
+    mockRpc.mockResolvedValue({ data: { vendors: [], products, links: [], imports: [], aliases: [], evidence: [] }, error: null });
+    const lateError = { message: 'second batch unavailable' };
+    mockProductIn.mockImplementation(async (_column: string, ids: string[]) => ({ data: [], error: ids.length === 1 ? lateError : null }));
+
+    await expect(getSupplierPricingWorkspace()).rejects.toBe(lateError);
+    expect(mockProductIn).toHaveBeenCalledTimes(2);
   });
 
   it('normalizes bigint cents exactly beyond JavaScript safe-integer precision', async () => {

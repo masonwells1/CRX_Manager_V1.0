@@ -1918,13 +1918,13 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
                 <button
                   key={p.id}
                   onClick={() => addProduct(p)}
-                  className="w-full text-left px-3 py-2 hover:bg-gray-50 flex items-center justify-between"
+                  className="w-full min-w-0 text-left px-3 py-2 hover:bg-gray-50 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"
                 >
-                  <div>
+                  <div className="min-w-0 flex-1">
                     <div className="text-sm font-medium text-nav-dark">{p.product_name}</div>
                     <ProductOptionDetails product={p} />
                   </div>
-                  <div className="text-right text-xs text-secondary">
+                  <div className="text-left text-xs text-secondary sm:text-right">
                     <div>T1: ${(p.tier1_price || 0).toFixed(2)}</div>
                     <div>Cost: ${(p.current_cost || 0).toFixed(2)}</div>
                   </div>

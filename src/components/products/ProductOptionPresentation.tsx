@@ -62,8 +62,10 @@ function PolicyBadge({ policy }: { policy: ProductReturnPolicy }) {
 export function ProductOptionDetails({ product, className = '' }: { product: ProductOptionPresentationModel; className?: string }): ReactNode {
   const policy = normalizeReturnPolicy(product.return_policy);
   return (
-    <div className={`mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-secondary ${className}`.trim()} data-product-id={product.id}>
-      <span>SKU: {product.sku || 'Not recorded'}</span>
+    <div className={`mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-secondary ${className}`.trim()} data-product-id={product.id}>
+      {product.sku
+        ? <span>SKU: {product.sku}</span>
+        : <span className="min-w-0 break-all">Product ID: {product.id}</span>}
       <span>Family: {product.product_family?.name || 'Unassigned'}</span>
       <span>Package: {productPackageLabel(product)}</span>
       <span>Unit: {product.inventory_unit || 'Not recorded'}</span>

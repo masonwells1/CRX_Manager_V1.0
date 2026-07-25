@@ -25,6 +25,7 @@ import { ProductOptionDetails, productOptionLabel } from '../components/products
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { localToday } from '../lib/dateUtils';
 import { sanitizeError } from '../lib/errorSanitizer';
+import { Sentry } from '../lib/sentry';
 import {
   getProductCostBasisWorkspace,
   type ProductCostBasisWorkspace,
@@ -111,6 +112,7 @@ export default function SupplierPricing() {
   const [basisLoading, setBasisLoading] = useState(false);
   const workbookInputRef = useRef<HTMLInputElement>(null);
   const pdfInputRef = useRef<HTMLInputElement>(null);
+  const workspaceRequestRef = useRef(0);
   const basisWorkspaceRequestRef = useRef(0);
 
   const stageImportIdem = useIdempotencyKey('stage_supplier_price_import', profile?.id || '');
@@ -122,16 +124,35 @@ export default function SupplierPricing() {
   const correctionIdem = useIdempotencyKey('correct_supplier_price_observation', profile?.id || '');
 
   const loadWorkspace = useCallback(async () => {
+    const requestId = ++workspaceRequestRef.current;
     setLoading(true);
     try {
       const result = await getSupplierPricingWorkspace();
+      if (workspaceRequestRef.current !== requestId) return;
       setWorkspace(result);
-      setSelectedVendorId((current) => current || result.vendors[0]?.id || '');
-      setSelectedProductId((current) => current || result.products[0]?.id || '');
+      setSelectedVendorId((current) => (
+        result.vendors.some((vendor) => vendor.id === current) ? current : result.vendors[0]?.id || ''
+      ));
+      setSelectedProductId((current) => (
+        result.products.some((product) => product.id === current) ? current : result.products[0]?.id || ''
+      ));
     } catch (error) {
+      if (workspaceRequestRef.current !== requestId) return;
+      Sentry.captureException(error instanceof Error ? error : new Error(String(error)), {
+        extra: { context: 'load_supplier_pricing_workspace' },
+      });
+      setWorkspace(null);
+      setSelectedVendorId('');
+      setSelectedProductId('');
+      setLinkForm(blankLink);
+      setQuickQuote(blankQuickQuote);
+      setReview(null);
+      setCorrectionRow(null);
+      setAliasVendorId('');
+      setBasisWorkspace(null);
       toast('error', sanitizeError(error));
     } finally {
-      setLoading(false);
+      if (workspaceRequestRef.current === requestId) setLoading(false);
     }
   }, [toast]);
 
@@ -970,7 +991,7 @@ export default function SupplierPricing() {
         title="Supplier"
         accent="Pricing"
         subtitle="Manual supplier evidence only. Observation approval changes no sell prices; cost-basis changes require a separate preview and approval."
-        actions={<Button type="button" variant="secondary" icon={<RefreshCw className="h-4 w-4" />} loading={loading} onClick={() => void refreshWorkspaceAndBasis()}>Refresh</Button>}
+        actions={<Button type="button" variant="secondary" icon={<RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />} onClick={() => void refreshWorkspaceAndBasis()}>Refresh</Button>}
       />
       <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
         <strong>No OCR or AI extraction:</strong> staff transcribe supplier PDFs into the protected .xlsx sheet. PDFs are retained only as audit evidence.

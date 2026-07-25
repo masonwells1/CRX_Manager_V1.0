@@ -30,6 +30,8 @@ describe('Stage B1 Product presentation adoption', () => {
     expect(source).toContain('flex min-w-0 flex-col');
     expect(source).toContain('sm:flex-row');
     expect(source).toContain('sm:flex-wrap');
+    expect(source).toContain('sm:hidden');
+    expect(source).toContain('hidden overflow-hidden rounded-lg border border-gray-200 sm:block');
   });
 
   it('keeps Supplier Pricing selected by exact Product ID', () => {
@@ -47,5 +49,12 @@ describe('Stage B1 Product presentation adoption', () => {
     expect(fieldApp).toContain("context: 'load_field_app_split_invoice_pickers'");
     expect(invoice).toContain("context: 'search_invoice_products'");
     expect(invoice).toContain("toast('error', 'Failed to search Products')");
+  });
+
+  it('keeps Product result rows phone-safe before restoring desktop alignment', () => {
+    const quote = readFileSync(resolve(root, 'src/pages/QuoteBuilder.tsx'), 'utf8');
+    const invoice = readFileSync(resolve(root, 'src/pages/InvoiceDetail.tsx'), 'utf8');
+    expect(quote).toContain('flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between');
+    expect(invoice).toContain('flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between');
   });
 });

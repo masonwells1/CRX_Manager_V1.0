@@ -21,6 +21,17 @@ describe('ProductOptionPresentation', () => {
     expect(productOptionLabel({ ...siblingA, id: sharedPrefixAndSuffixB, sku: null })).toContain(`Product ID: ${sharedPrefixAndSuffixB}`);
   });
 
+  it('visibly distinguishes same-name SKU-less cards with their full Product UUIDs', () => {
+    const firstId = 'aaaaaaaa-1111-2222-3333-444444444444';
+    const secondId = 'aaaaaaaa-5555-6666-7777-444444444444';
+    render(<>
+      <ProductOptionDetails product={{ ...siblingA, id: firstId, sku: null }} />
+      <ProductOptionDetails product={{ ...siblingA, id: secondId, sku: null }} />
+    </>);
+    expect(screen.getByText(`Product ID: ${firstId}`)).toBeInTheDocument();
+    expect(screen.getByText(`Product ID: ${secondId}`)).toBeInTheDocument();
+  });
+
   it('keeps absent policy compatible as unknown and renders all picker metadata', () => {
     render(<ProductOptionDetails product={{ ...siblingA, return_policy: null, is_full_tote_only: true }} />);
     expect(screen.getByText('Family: Family A')).toBeInTheDocument();
