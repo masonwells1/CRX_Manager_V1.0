@@ -83,7 +83,7 @@ The matrix is a point-in-time Graphify/source inventory, not permission to skip 
 To keep each PR reviewable, split Stage B:
 
 - **Stage B1 core sales/returns/supplier:** QuoteBuilder, NewOrder, OrderDetail, QuickDeliveryModal, DeliveryDetail, Returns, SupplierPricing comparison/linking, InvoiceDetail, and FieldAppSplitInvoiceEditor. These own quote/order/delivery/return/invoice or supplier-link Product-ID writes.
-- **Stage B2 operational/procurement hardening:** ManualTicketCreate, BlendTicketDetail, FieldAppChemicalEntry, JobDetail, NewPurchaseOrder, QuickReceivePanel, the three bulk import/correction flows, both InventoryPage flows, and Rebates. These own inventory, production, applied-chemical, procurement, import-resolution, reservation, rebate-program, or rebate-claim Product-ID writes.
+- **Stage B2 operational/procurement hardening:** ManualTicketCreate, BlendTicketDetail, FieldAppChemicalEntry, JobDetail, NewPurchaseOrder, PurchaseOrderDetail, QuickReceivePanel, the three bulk import/correction flows, both InventoryPage flows, and Rebates. These own inventory, production, applied-chemical, procurement, import-resolution, reservation, rebate-program, or rebate-claim Product-ID writes.
 
 Neither PR alone is the complete Phase 3 picker rollout.
 
@@ -104,6 +104,7 @@ Neither PR alone is the complete Phase 3 picker rollout.
 | FieldAppChemicalEntry | INCLUDE | Distinguish the applied Product before writing its ID. | `src/components/field-app/FieldAppChemicalEntry.tsx:155`, `:294`, `:410` |
 | JobDetail chemical row | INCLUDE | Apply the same contract to the separate job chemical picker. | `src/pages/JobDetail.tsx:1429`, `:3576` |
 | NewPurchaseOrder | INCLUDE | Prevent procurement of the wrong package/tote sibling. | `src/pages/NewPurchaseOrder.tsx:81`, `:135`, `:501` |
+| PurchaseOrderDetail | INCLUDE | Preserve the exact Product ID while an unreceived procurement line is corrected; show exact SKU/package/policy context before saving the PO line. | `src/pages/PurchaseOrderDetail.tsx:446`, `:454`, `:473`, `:1128` |
 | QuickReceivePanel | INCLUDE | Show exact SKU where receipt creates inventory/PO allocations. | `src/components/receiving/QuickReceivePanel.tsx:94`, `:141`, `:923` |
 | BulkQuoteImport | INCLUDE | Ambiguous family-member input becomes a review error. | `src/components/quotes/BulkQuoteImport.tsx:281`, `:385` |
 | BulkOrderImport | INCLUDE | Ambiguous name lookup becomes a row error. | `src/components/orders/BulkOrderImport.tsx:345` |

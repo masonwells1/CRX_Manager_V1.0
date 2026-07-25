@@ -33,6 +33,7 @@ import SearchableSelect from '../components/ui/SearchableSelect';
 import { fetchOpenBookings, type OpenBooking } from '../lib/openBookings';
 import { validateInventoryPositionShape } from '../lib/inventoryPositionValidator';
 import { inventoryPositionByProduct } from '../lib/inventoryPositionLookup';
+import { ProductOptionDetails } from '../components/products/ProductOptionPresentation';
 import type { Product, Customer, InventoryPositionRow } from '../types';
 
 interface LocalItem {
@@ -171,7 +172,7 @@ export default function NewOrder() {
   const fetchData = useCallback(async () => {
     const [customersRes, productsRes] = await Promise.all([
       supabase.from('customers').select('*').order('farm_name'),
-      supabase.from('products').select('*').eq('is_active', true).order('product_name'),
+      supabase.from('products').select('*, product_family:product_families(name)').eq('is_active', true).order('product_name'),
     ]);
     const { data: positionData, error: positionError } = await supabase.rpc('get_inventory_position');
 
@@ -805,7 +806,10 @@ export default function NewOrder() {
                         onClick={() => openProductModal(item._key)}
                         className="w-full px-3 py-2 text-left border border-gray-200 rounded-lg hover:border-crx-green transition-colors focus:outline-none focus:ring-2 focus:ring-crx-green/20"
                       >
-                        {item.product_name || (
+                        {item.product_name ? <>
+                          <span>{item.product_name}</span>
+                          {products.find((product) => product.id === item.product_id) && <ProductOptionDetails product={products.find((product) => product.id === item.product_id)!} />}
+                        </> : (
                           <span className="text-secondary flex items-center gap-2">
                             <Search className="w-4 h-4" />
                             Select product...
@@ -1035,6 +1039,7 @@ export default function NewOrder() {
                 className="w-full text-left p-3 border border-gray-200 rounded-lg hover:border-crx-green hover:bg-gray-50 transition-colors"
               >
                 <div className="font-medium text-nav-dark">{product.product_name}</div>
+                <ProductOptionDetails product={product} />
                 {product.manufacturer && (
                   <div className="text-xs text-secondary mt-1">{product.manufacturer}</div>
                 )}

@@ -32,6 +32,7 @@ import ConfirmModal from '../components/ui/ConfirmModal';
 import TransactionThread from '../components/ui/TransactionThread';
 import { useCreditLimitCheck } from '../hooks/useGuardrails';
 import GuardrailBanner from '../components/ui/GuardrailBanner';
+import { ProductOptionDetails } from '../components/products/ProductOptionPresentation';
 
 interface LineItem {
   id?: string;
@@ -571,7 +572,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
     if (q.length < 2) { setProductResults([]); return; }
     const { data } = await supabase
       .from('products')
-      .select('*')
+      .select('*, product_family:product_families(name)')
       .eq('is_active', true)
       .or(`product_name.ilike.%${q}%,sku.ilike.%${q}%`)
       .order('product_name')
@@ -1915,7 +1916,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
                 >
                   <div>
                     <div className="text-sm font-medium text-nav-dark">{p.product_name}</div>
-                    <div className="text-xs text-secondary">{p.sku || 'No SKU'} • {p.vendor || 'No vendor'}</div>
+                    <ProductOptionDetails product={p} />
                   </div>
                   <div className="text-right text-xs text-secondary">
                     <div>T1: ${(p.tier1_price || 0).toFixed(2)}</div>

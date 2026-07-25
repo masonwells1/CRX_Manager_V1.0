@@ -2,7 +2,7 @@
 
 **Owner:** Mason Wells
 **Approved:** 2026-07-22
-**Status:** ARMED, NOT STARTED
+**Status:** Stage A live and dormant; Stage B1 in progress. Stage C remains parked for Mason's row-by-row classification approval and exact checksum.
 **Orchestrator:** GPT-5.6 Sol, high reasoning
 **Coordination lane:** this contract is persisted on the dedicated `codex/supplier-pricing-phase3` docs branch
 **Implementation lane:** after reconciliation, create a different clean isolated `codex/` worktree from the exact post-#213 `origin/main`; never worktree `7582`
@@ -81,13 +81,13 @@ It may not:
 
 ## Staged Delivery Contract
 
-### Stage A — schema and database enforcement
+### Stage A — schema and database enforcement (live; dormant)
 
 Build a migration that is compatible with the current UI: `product_families`, nullable Product-family metadata, an `unknown` safe default, one reusable return-policy guard, RPC enforcement, trigger backstops, RLS/grants, and rollback-only disposable proof. Do not classify Product rows.
 
 Open a protected Stage A PR after clean Fable and exact-SHA Sol reviews, wait for required checks and Vercel, read CodeRabbit, and fix every real finding. Any code change requires rerunning the owning tests plus fresh exact-commit Fable and Sol reviews. Park only when the PR is green and review-resolved. Merging the PR and applying its migration remain explicit Mason gates.
 
-### Stage B — exact-SKU Product-picker UI
+### Stage B — exact-SKU Product-picker UI (B1 in progress)
 
 Only after Stage A is merged and its live migration is explicitly approved and proven, refresh from `main` and rerun the repo-wide Graphify/source Product-selector inventory. Implement the shared Product-option presentation across every included transactional selector in the approved plan.
 

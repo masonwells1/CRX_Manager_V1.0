@@ -14,13 +14,14 @@ import PageHeader from '../components/ui/PageHeader';
 import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, checkMutationResult, sanitizeError, assertRpcResult } from '../lib/db';
+import { supabase, checkMutationResult, sanitizeError, assertRpcResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
 import { exportToCSV } from '../lib/csvExport';
 import { downloadReportPdf } from '../lib/reportPdf';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { logActivity } from '../lib/activityLogger';
+import { ProductOptionDetails, normalizeReturnPolicy, productOptionLabel, type ProductOptionPresentationModel } from '../components/products/ProductOptionPresentation';
 import type { Return, ReturnItem, Customer, Order, ReturnStatus, ReturnReason, ReturnItemCondition } from '../types';
 
 type ReturnRow = Return & {
@@ -70,6 +71,7 @@ interface ReturnableOrderItem {
   quantity_returnable: number;
   unit_size: string | null;
   section_name: string | null;
+  product?: ProductOptionPresentationModel | null;
 }
 
 export default function Returns() {
@@ -179,7 +181,7 @@ export default function Returns() {
     const [itemsResult, priorReturnsResult] = await Promise.all([
       supabase
         .from('order_items')
-        .select('id, product_id, product_name, price_per_unit, quantity_delivered, unit_size, section_name')
+        .select('id, product_id, product_name, price_per_unit, quantity_delivered, unit_size, section_name, product:products(id, product_name, sku, unit_size, packaging_variant, container_size, container_unit, inventory_unit, return_policy, is_full_tote_only, product_family:product_families(name))')
         .eq('order_id', orderId)
         .gt('quantity_delivered', 0)
         .order('sort_order'),
@@ -319,7 +321,12 @@ export default function Returns() {
           })),
           p_idempotency_key: createKey,
         });
-        if (error) throw error;
+        if (error) {
+          if (hasRpcCode(error, RpcErrorCodes.RETURN_POLICY_NO_RETURN)) {
+            throw new Error('RETURN_POLICY_NO_RETURN: This Product is marked no return.');
+          }
+          throw error;
+        }
         assertRpcResult<{ return_id: string; return_number: string; item_count: number }>(data, 'create_return');
         createIdem.resetKey();
       },
@@ -821,11 +828,20 @@ export default function Returns() {
                         || !newItems.some((other, otherIdx) => otherIdx !== idx && other.order_item_id === p.id)
                       ))
                       .map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.product_name} — {p.section_name || 'No section'} — ${Number(p.price_per_unit).toFixed(2)}/{p.unit_size || 'ea'} (returnable {p.quantity_returnable} of {p.quantity_delivered})
+                      <option key={p.id} value={p.id} disabled={normalizeReturnPolicy(p.product?.return_policy) === 'no_return'}>
+                        {productOptionLabel({ id: p.product_id, product_name: p.product_name, unit_size: p.unit_size, ...p.product })} — {p.section_name || 'No section'} — ${Number(p.price_per_unit).toFixed(2)}/{p.unit_size || 'ea'} (returnable {p.quantity_returnable} of {p.quantity_delivered})
                       </option>
                       ))}
                   </select>
+                  {orderItems.some((p) => normalizeReturnPolicy(p.product?.return_policy) === 'no_return') && (
+                    <p className="text-xs font-medium text-red-700">Products marked no return are disabled. The server also refuses them with RETURN_POLICY_NO_RETURN.</p>
+                  )}
+                  {orderItems.find((p) => p.id === item.order_item_id)?.product && (
+                    <div className="min-w-0 flex-1">
+                      <ProductOptionDetails product={orderItems.find((p) => p.id === item.order_item_id)!.product!} />
+                      {normalizeReturnPolicy(orderItems.find((p) => p.id === item.order_item_id)!.product!.return_policy) === 'no_return' && <p className="mt-1 text-xs font-medium text-red-700">This Product is no return and cannot be added to a return.</p>}
+                    </div>
+                  )}
                   <input
                     type="number"
                     step="0.01"

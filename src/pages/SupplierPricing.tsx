@@ -21,6 +21,7 @@ import Select from '../components/ui/Select';
 import Tabs from '../components/ui/Tabs';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
+import { ProductOptionDetails, productOptionLabel } from '../components/products/ProductOptionPresentation';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { localToday } from '../lib/dateUtils';
 import { sanitizeError } from '../lib/errorSanitizer';
@@ -187,7 +188,7 @@ export default function SupplierPricing() {
   const productOptions = useMemo(
     () => (workspace?.products ?? []).map((product) => ({
       value: product.id,
-      label: product.sku ? `${product.product_name} (${product.sku})` : product.product_name,
+      label: productOptionLabel(product),
     })),
     [workspace],
   );
@@ -772,6 +773,9 @@ export default function SupplierPricing() {
           options={productOptions}
           placeholder="Choose Product"
         />
+        {workspace?.products.find((product) => product.id === selectedProductId) && (
+          <ProductOptionDetails product={workspace.products.find((product) => product.id === selectedProductId)!} />
+        )}
       </Card>
       <Card>
         {selectedEvidence ? (

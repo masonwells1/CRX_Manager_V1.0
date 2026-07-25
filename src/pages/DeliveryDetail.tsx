@@ -31,6 +31,7 @@ import { compressImage } from '../lib/imageCompression';
 import { parseLocalDate } from '../lib/dateUtils';
 import { formatCents as fmtCents } from '../lib/money';
 import { Sentry } from '../lib/sentry';
+import { ProductOptionDetails, productOptionLabel } from '../components/products/ProductOptionPresentation';
 import QuickTaskModal from '../components/team/QuickTaskModal';
 import RelatedNotes from '../components/team/RelatedNotes';
 import TransactionThread from '../components/ui/TransactionThread';
@@ -129,12 +130,12 @@ export default function DeliveryDetail() {
   const [editNotes, setEditNotes] = useState('');
   const [editItems, setEditItems] = useState<Array<{
     order_item_id: string; product_id: string; product_name: string;
-    quantity: number; max_quantity: number; unit_size: string;
+    quantity: number; max_quantity: number; unit_size: string; product?: Parameters<typeof ProductOptionDetails>[0]['product'];
   }>>([]);
   // Order items available to add (not already on delivery)
   const [availableOrderItems, setAvailableOrderItems] = useState<Array<{
     order_item_id: string; product_id: string; product_name: string;
-    max_quantity: number; unit_size: string;
+    max_quantity: number; unit_size: string; product?: Parameters<typeof ProductOptionDetails>[0]['product'];
   }>>([]);
   const [addresses, setAddresses] = useState<CustomerAddress[]>([]);
   const [drivers, setDrivers] = useState<Profile[]>([]);
@@ -223,7 +224,7 @@ export default function DeliveryDetail() {
       try {
         const [custRes, itemsRes, addrRes, driverRes, photosRes] = await Promise.all([
           supabase.from('customers').select('*').eq('id', del.customer_id).maybeSingle(),
-          supabase.from('delivery_items').select('*, product:products(product_name)').eq('delivery_id', id!),
+          supabase.from('delivery_items').select('*, product:products(id, product_name, sku, unit_size, packaging_variant, container_size, container_unit, inventory_unit, return_policy, is_full_tote_only, product_family:product_families(name))').eq('delivery_id', id!),
           del.delivery_address_id
             ? supabase.from('customer_addresses').select('*').eq('id', del.delivery_address_id).maybeSingle()
             : Promise.resolve({ data: null }),
@@ -236,7 +237,7 @@ export default function DeliveryDetail() {
         ]);
 
         setCustomer(custRes.data as Customer | null);
-        const loadedItems = (itemsRes.data || []) as DeliveryItem[];
+        const loadedItems = (itemsRes.data || []) as unknown as DeliveryItem[];
         setItems(loadedItems);
         const initQtys: Record<string, number> = {};
         loadedItems.forEach((item) => { initQtys[item.id] = item.quantity; });
@@ -420,11 +421,13 @@ export default function DeliveryDetail() {
       supabase.from('customer_addresses').select('*').eq('customer_id', customer.id).order('is_default', { ascending: false }),
       // PR-07 follow-up: driver picker only uses id/full_name/role; safe via view.
       supabase.from('profile_public_view').select('id, full_name, role, is_active').in('role', ['driver', 'admin', 'sales_rep']).eq('is_active', true).order('full_name'),
-      supabase.from('order_items').select('*').eq('order_id', delivery.order_id).order('section_name'),
+      supabase.from('order_items').select('*, product:products(id, product_name, sku, unit_size, packaging_variant, container_size, container_unit, inventory_unit, return_policy, is_full_tote_only, product_family:product_families(name))').eq('order_id', delivery.order_id).order('section_name'),
     ]);
     setAddresses((addrRes.data || []) as CustomerAddress[]);
     setDrivers((driverRes.data || []) as Profile[]);
-    const allOrderItems = (oiRes.data || []) as OrderItem[];
+    const allOrderItems = (oiRes.data || []) as unknown as Array<OrderItem & {
+      product?: Parameters<typeof ProductOptionDetails>[0]['product'];
+    }>;
 
     // For scheduled deliveries, calculate real max quantities
     // by checking what other active deliveries have scheduled for each order item
@@ -470,6 +473,7 @@ export default function DeliveryDetail() {
         quantity: item.quantity,
         max_quantity: maxQty,
         unit_size: item.unit_size || '',
+        product: item.product as unknown as Parameters<typeof ProductOptionDetails>[0]['product'],
       };
     }));
 
@@ -486,6 +490,7 @@ export default function DeliveryDetail() {
             product_name: oi.product_name,
             max_quantity: maxQty,
             unit_size: oi.unit_size || '',
+            product: oi.product as unknown as Parameters<typeof ProductOptionDetails>[0]['product'],
           };
         })
         .filter((item) => item.max_quantity > 0);
@@ -1296,6 +1301,7 @@ export default function DeliveryDetail() {
                       <p className="text-white font-medium">
                         {(item.product as unknown as { product_name: string })?.product_name || 'Unknown'}
                       </p>
+                      {item.product && <ProductOptionDetails product={item.product as unknown as Parameters<typeof ProductOptionDetails>[0]['product']} className="text-gray-300" />}
                       <p className="text-sm text-gray-400">
                         {delivery.status === 'completed'
                           ? `Delivered: ${item.quantity_delivered}/${item.quantity} ${item.unit_size || 'units'}`
@@ -1858,6 +1864,7 @@ export default function DeliveryDetail() {
                   <div key={item.order_item_id} className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg">
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium text-nav-dark truncate">{item.product_name}</p>
+                      {item.product && <ProductOptionDetails product={item.product} />}
                       <p className="text-xs text-secondary">
                         {item.unit_size || 'units'}
                         {delivery.status === 'scheduled' && (
@@ -1959,7 +1966,7 @@ export default function DeliveryDetail() {
                     <option value="">Select a product to add...</option>
                     {availableOrderItems.map((a) => (
                       <option key={a.order_item_id} value={a.order_item_id}>
-                        {a.product_name} — up to {a.max_quantity} {a.unit_size || 'units'}
+                        {a.product ? productOptionLabel(a.product) : a.product_name} — up to {a.max_quantity} {a.unit_size || 'units'}
                       </option>
                     ))}
                   </select>

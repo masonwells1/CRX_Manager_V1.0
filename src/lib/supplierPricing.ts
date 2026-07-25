@@ -16,9 +16,19 @@ export interface SupplierVendorOption {
 
 export interface SupplierProductOption {
   id: string;
-  product_name: string;
+  product_name: string | null;
   sku: string | null;
   inventory_unit: string | null;
+  // Stage A metadata is hydrated from canonical Products rows. It stays
+  // optional because a stale/deleted RPC row must render as Not recorded,
+  // never borrow a sibling Product's metadata.
+  unit_size?: string | null;
+  packaging_variant?: string | null;
+  container_size?: number | null;
+  container_unit?: string | null;
+  return_policy?: string | null;
+  is_full_tote_only?: boolean | null;
+  product_family?: { name: string | null } | null;
 }
 
 export interface SupplierWorkspaceLink {
@@ -217,8 +227,30 @@ interface SupplierMarketEvidenceWire extends Omit<
   suppliers: SupplierEvidenceDetailWire[];
 }
 
-interface SupplierPricingWorkspaceWire extends Omit<SupplierPricingWorkspace, 'evidence'> {
+interface SupplierPricingWorkspaceWireProduct {
+  id: string;
+  product_name: string;
+  sku: string | null;
+  inventory_unit: string | null;
+}
+
+interface SupplierPricingWorkspaceWire extends Omit<SupplierPricingWorkspace, 'products' | 'evidence'> {
+  products: SupplierPricingWorkspaceWireProduct[];
   evidence: SupplierMarketEvidenceWire[];
+}
+
+interface SupplierProductMetadata {
+  id: string;
+  product_name: string;
+  sku: string | null;
+  unit_size: string | null;
+  packaging_variant: string | null;
+  container_size: number | null;
+  container_unit: string | null;
+  inventory_unit: string | null;
+  return_policy: string | null;
+  is_full_tote_only: boolean | null;
+  product_family: { name: string | null } | null;
 }
 
 interface SupplierImportReviewWire extends Omit<SupplierImportReview, 'rows'> {
@@ -287,7 +319,37 @@ export async function getSupplierPricingWorkspace(
   });
   if (error) throw error;
   const result = assertRpcResult<SupplierPricingWorkspaceWire>(data, 'get_supplier_pricing_workspace');
-  return { ...result, evidence: result.evidence.map(normalizeEvidence) };
+  if (result.products.length === 0) {
+    return { ...result, evidence: result.evidence.map(normalizeEvidence) };
+  }
+
+  // The workspace RPC intentionally returns only the selector's identity
+  // fields. Hydrate just those returned UUIDs from the canonical Products
+  // rows; this supplies Stage A metadata without ranking, matching, or
+  // replacing any Product identity. Do not put every workspace UUID into an
+  // `.in(...)` URL: an unfiltered workspace can exceed a safe query length.
+  // The RPC returns active Products, and a filtered caller already supplies
+  // the exact UUID. The merge below remains exact-ID-only in either case.
+  const { data: metadataRows, error: metadataError } = await supabase
+    .from('products')
+    .select('id, product_name, sku, unit_size, packaging_variant, container_size, container_unit, inventory_unit, return_policy, is_full_tote_only, product_family:product_families(name)')
+    .eq(productId ? 'id' : 'is_active', productId || true);
+  if (metadataError) throw metadataError;
+
+  const metadataByProductId = new Map(
+    ((metadataRows || []) as unknown as SupplierProductMetadata[])
+      .map((product) => [product.id, product] as const),
+  );
+  const products: SupplierProductOption[] = result.products.map((product) => {
+    const metadata = metadataByProductId.get(product.id);
+    // Missing/deleted metadata stays visibly incomplete rather than borrowing
+    // a sibling Product's details. The RPC Product UUID is always preserved.
+    return metadata && metadata.id === product.id
+      ? { ...product, ...metadata, id: product.id }
+      : product;
+  });
+
+  return { ...result, products, evidence: result.evidence.map(normalizeEvidence) };
 }
 
 export async function getSupplierQuoteSheet(vendorId: string): Promise<SupplierQuoteSheet> {

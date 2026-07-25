@@ -1,18 +1,24 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { mockRpc, mockAssertRpcResult, mockUpload } = vi.hoisted(() => ({
+const { mockRpc, mockAssertRpcResult, mockUpload, mockProductFrom, mockProductSelect, mockProductEq } = vi.hoisted(() => ({
   mockRpc: vi.fn(),
   mockAssertRpcResult: vi.fn((data: unknown, name: string) => {
     if (data == null) throw new Error(`${name} returned no data`);
     return data;
   }),
   mockUpload: vi.fn(),
+  mockProductFrom: vi.fn(),
+  mockProductSelect: vi.fn(),
+  mockProductEq: vi.fn(),
 }));
 
 vi.mock('./db', () => ({
   supabaseUntyped: { rpc: mockRpc },
   assertRpcResult: mockAssertRpcResult,
-  supabase: { storage: { from: () => ({ upload: mockUpload }) } },
+  supabase: {
+    storage: { from: () => ({ upload: mockUpload }) },
+    from: mockProductFrom,
+  },
 }));
 
 import {
@@ -20,6 +26,7 @@ import {
   formatSupplierCents,
   getProductPriceHistory,
   getSupplierMarketEvidence,
+  getSupplierPricingWorkspace,
   stageSupplierPriceImport,
 } from './supplierPricing';
 
@@ -28,6 +35,62 @@ describe('supplier pricing RPC wrappers', () => {
     mockRpc.mockReset();
     mockAssertRpcResult.mockClear();
     mockUpload.mockReset();
+    mockProductFrom.mockReset();
+    mockProductSelect.mockReset();
+    mockProductEq.mockReset();
+    mockProductFrom.mockReturnValue({ select: mockProductSelect });
+    mockProductSelect.mockReturnValue({ eq: mockProductEq });
+  });
+
+  it('hydrates only the active workspace RPC Product UUIDs with canonical Stage A metadata', async () => {
+    mockRpc.mockResolvedValue({
+      data: {
+        vendors: [],
+        products: [
+          { id: 'product-a', product_name: 'Same Name', sku: null, inventory_unit: 'jug' },
+          { id: 'product-missing', product_name: 'Missing row', sku: 'OLD', inventory_unit: 'case' },
+        ],
+        links: [], imports: [], aliases: [], evidence: [],
+      },
+      error: null,
+    });
+    mockProductEq.mockResolvedValue({
+      data: [{
+        id: 'product-a', product_name: 'Same Name', sku: 'NEW-A', unit_size: '2.5 gal',
+        packaging_variant: '2 x 2.5 gal', container_size: 2.5, container_unit: 'gal',
+        inventory_unit: 'gal', return_policy: 'no_return', is_full_tote_only: false,
+        product_family: { name: 'Atrazine' },
+      }],
+      error: null,
+    });
+
+    const workspace = await getSupplierPricingWorkspace();
+
+    expect(mockProductFrom).toHaveBeenCalledWith('products');
+    expect(mockProductEq).toHaveBeenCalledWith('is_active', true);
+    expect(workspace.products[0]).toMatchObject({
+      id: 'product-a', sku: 'NEW-A', packaging_variant: '2 x 2.5 gal',
+      return_policy: 'no_return', product_family: { name: 'Atrazine' },
+    });
+    // A missing canonical row cannot cause a cross-SKU substitution.
+    expect(workspace.products[1]).toMatchObject({ id: 'product-missing', sku: 'OLD' });
+  });
+
+  it('hydrates a filtered workspace by the caller Product UUID, not a broad UUID list', async () => {
+    mockRpc.mockResolvedValue({
+      data: {
+        vendors: [],
+        products: [{ id: 'product-a', product_name: 'Same Name', sku: null, inventory_unit: 'jug' }],
+        links: [], imports: [], aliases: [], evidence: [],
+      },
+      error: null,
+    });
+    mockProductEq.mockResolvedValue({ data: [], error: null });
+
+    await getSupplierPricingWorkspace('product-a');
+
+    expect(mockProductEq).toHaveBeenCalledWith('id', 'product-a');
+    expect(mockProductEq).not.toHaveBeenCalledWith('is_active', true);
   });
 
   it('normalizes bigint cents exactly beyond JavaScript safe-integer precision', async () => {
