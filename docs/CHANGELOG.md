@@ -2,6 +2,14 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-25 — Fixed the Codex PR-merge guard to bind its review proof AND its risk diff to GitHub current baseRefOid instead of a possibly-stale local origin/main; unfetched base now fails closed with fetch guidance. Closes the P1 Codex raised on PR #227. Regression tests drive the real guard against real git repos with a divergent base. PR #228.
+
+Fixed the Codex PR-merge guard to bind its review proof AND its risk diff to GitHub current baseRefOid instead of a possibly-stale local origin/main; unfetched base now fails closed with fetch guidance. Closes the P1 Codex raised on PR #227. Regression tests drive the real guard against real git repos with a divergent base. PR #228.
+
+- **Commits this session** (PR #228):
+  - `60858a6c fix(guard): bind Codex PR-merge gate to GitHub's current base, not local origin/main`
+- **Migrations touched:** none — guard logic and its tests only.
+
 ## 2026-07-25 — Applied Opus 5 harness tuning: CLAUDE.md Model Tuning section (tone, deliverable length, subagent budget, effort mapping, review-prompt rule, parity-script pointer), AGENTS.md scope paragraph, DECISION_LOG entry. Corrected the earlier Codex hook-parity finding — the asymmetry is deliberate and build-enforced. Hermes dropped (not in use). PR #227.
 
 Applied Opus 5 harness tuning: CLAUDE.md Model Tuning section (tone, deliverable length, subagent budget, effort mapping, review-prompt rule, parity-script pointer), AGENTS.md scope paragraph, DECISION_LOG entry. Corrected the earlier Codex hook-parity finding — the asymmetry is deliberate and build-enforced. Hermes dropped (not in use). PR #227.
