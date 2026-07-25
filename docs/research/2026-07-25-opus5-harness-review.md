@@ -85,11 +85,26 @@ Headline: **Opus 5 performs well on existing prompts out of the box.** Nothing h
 
 | Opus 5 anti-pattern | Present here? | Verdict |
 |---|---|---|
-| "Only report high-severity issues" / "be conservative" in review prompts — Opus 5 obeys literally and finds less | **No** — grep across `.claude/agents`, `commands`, `skills`, `workflows` found zero instances. The reviewers correctly say "report everything, filter later." | Clean. Do not introduce this. |
+| "Only report high-severity issues" / "be conservative" in review prompts — Opus 5 obeys literally and finds less | **Yes, in 3 workflows** — my first pass said "no," which was a false negative from a case-sensitive grep. | See 2.1a |
 | Instructing re-checks the model already does ("double-check your answer") | **Partially** — 7 files use double-check/re-verify language | See 2.2 |
 | "Use a subagent to verify" scaffolding causing over-verification | **Yes, heavily** — 99 references to skeptic/refute/adversarial across commands and workflows | See 2.3 — but this one needs care |
 | Prompting the model not to think / not to reason | **No** | Clean. |
 | Carried-over effort defaults never re-swept | **N/A** — no effort setting exists anywhere | See 2.4 |
+
+### 2.1a OPEN, P2 — three workflows cap findings before the filter pass
+
+**Found by Codex reviewing this PR, after my own grep missed it. Verified in source.**
+
+My first pass searched for `only report|only flag|be conservative|report only` **case-sensitively**, so it never matched the actual text, which begins with a capital R. The pattern is present:
+
+- `.claude/workflows/overnight-bug-hunt.js:51` and `money-inventory-hunt.js:52` — "Prefer precision over volume. Report only what you can substantiate… **At most your 8 most significant findings.**"
+- `.claude/workflows/whole-codebase-audit.js:29` — "…Report at most your **10 most significant findings** for this dimension."
+
+This is the exact instruction shape Anthropic says Opus 5 now follows literally, and it conflicts with the rule this change adds to `CLAUDE.md`. The agent ranks and drops findings *before* the adversarial verification pass that was supposed to do the filtering, so a real correctness bug ranked 11th is never seen by anything.
+
+**Not fixed here — it is a cost decision, not a doc fix.** These workflows fan out across many agents and run overnight; removing the caps raises token spend materially and is Mason's call. Two sane options: drop the caps and let the existing skeptic pass filter (truer to the guidance, more expensive), or keep them and narrow the `CLAUDE.md` rule to exclude bounded overnight sweeps. `CLAUDE.md` currently records this as a known exception so the canonical rule is not silently violated.
+
+**Methodology note worth keeping:** a case-sensitive grep produced a confident "clean" verdict on the single most important anti-pattern in this review. Anti-pattern sweeps in this repo should use `grep -i`.
 
 ### 2.2 Trim redundant self-verification language — LOW risk, small win
 
@@ -196,7 +211,9 @@ Mason approved the fixes on 2026-07-25. Changes made:
 | 2.4 | Effort mapping documented in the same section, explicitly marked as a pre-sweep starting point, with a hard floor: never lower effort on a money/RLS/migration path. |
 | 2.7 | Scope paragraph added to `AGENTS.md` under Plan and Approval Gates — applies to Codex as well as Claude. |
 
-**Deliberately not done:** no `effort` values were hardcoded into `.claude/workflows/*.js`. Anthropic's guidance is to re-run an effort sweep on real evals rather than carry defaults over; forcing untested effort levels into the money/inventory hunt and review workflows would be exactly the unmeasured change that guidance warns against. The policy is documented; the mechanical change waits for measurement.
+**Deliberately not done:** this change added no `effort` values to `.claude/workflows/*.js`. Anthropic's guidance is to re-run an effort sweep on real evals rather than carry defaults over; forcing untested effort levels into the money/inventory hunt and review workflows would be exactly the unmeasured change that guidance warns against. The policy is documented; the mechanical change waits for measurement.
+
+**Correction (Codex, PR #227):** an earlier wording of the line above implied *no* workflow pins effort. That is wrong — `.claude/workflows/money-inventory-hunt.js` passes `effort: 'high'` at both its finder (`:293`) and verifier (`:334`) call sites. Consequence: the `xhigh` row of the 2.4 mapping does **not** reach the money/inventory night hunt, which is the highest-risk audit in the repo; it continues at `high` until that override is deliberately revisited. Flagged in `CLAUDE.md` so the mapping is not read as already in force. Whether to raise it is part of the same effort sweep — raising it costs more per run, so it is Mason's call, not a silent edit.
 
 ---
 
