@@ -2,7 +2,14 @@
 
 **Date:** 2026-07-25
 **Scope:** `AGENTS.md`, `CLAUDE.md`, `.claude/settings.json`, `.claude/hooks/`, `.claude/commands/`, `.claude/skills/`, `.claude/workflows/`, `.codex/hooks.json`, `.agents/`, `docs/workflows/AGENT_COLLABORATION.md`, `docs/manual/AGENT_ONBOARDING.md`
-**Status:** APPLIED, with one OPEN P1 (§1.1a). Reviewed, then fixed with Mason's approval on 2026-07-25. Two findings were corrected in place: the first draft wrongly called the Claude/Codex hook wiring a BLOCKER, and the first correction wrongly called the two merge guards equivalent — Codex's independent review of PR #227 caught the second, and it is now recorded as an open P1 needing its own change.
+**Status:** APPLIED. One item remains open — the P1 in §1.1a, which Mason approved on 2026-07-25 as its own separate PR. The two P2s Codex raised (§2.1a, §2.4) are **settled decisions, not open work**.
+
+**Three of this review's own claims were wrong and are corrected in place rather than edited away:**
+1. The first draft called the Claude/Codex hook wiring a BLOCKER. It isn't — `agent-manifest-parity.mjs` declares and build-enforces it (§1.1).
+2. The correction to (1) over-rotated into calling the two merge guards *equivalent*. Codex refuted that with a P1: the Codex guard binds its proof to a possibly-stale local base (§1.1a).
+3. §2.1 reported the severity-filter anti-pattern as absent. It is present in three workflows; the "clean" verdict came from a case-sensitive grep that missed capitalised text (§2.1a).
+
+Each was caught by a different reviewer than the one that made the error. That is the cross-model gate earning its cost.
 
 ---
 
@@ -12,7 +19,7 @@ Two separate questions were asked, and they have two different answers.
 
 **"Are we in sync across Claude, Codex, and Hermes?"** Yes — better than expected. The documents agree, the generated Codex adapters match their Claude sources, and the six hooks that run for Claude but not Codex turned out to be *deliberate, declared, and build-enforced* rather than a gap (I called this a BLOCKER on first pass and was wrong — Codex runs its own production guard covering the same actions). Hermes is absent from the repo entirely, which is fine: Mason confirmed it is not actually in use. Two defects came out of this: the parity mechanism wasn't discoverable, which is now fixed, and — caught by Codex reviewing this very PR — Codex's merge guard binds its review proof to a possibly-stale *local* base where Claude's binds to GitHub's real one. That second one is a genuine P1 and is left open for its own change (§1.1a).
 
-**"How do we change things for Opus 5?"** The good news: the harness is already close. Anthropic's Opus 5 prompting guide names five habits that used to help older models and now *hurt*, and this project only has two of them. The bigger opportunity is the things that are simply missing — there is no effort-level guidance and no subagent budget anywhere, and Opus 5 both delegates and writes more than earlier models did.
+**"How do we change things for Opus 5?"** The harness is already close. Anthropic's Opus 5 guide names five habits that used to help older models and now *hurt*; this project has three of them — redundant self-verification language, uncapped subagent fan-out, and (missed on my first pass, found by Codex) severity caps in three overnight workflows. The bigger opportunity is what was simply missing: no effort-level guidance and no subagent budget anywhere, on a model that both delegates and writes more than its predecessors. Mason settled the two cost trade-offs on 2026-07-25 — overnight sweeps keep their finding caps, and the money/inventory night hunt stays at `high` effort until an actual sweep measures otherwise.
 
 ---
 
@@ -49,7 +56,7 @@ The two merge guards do not bind their review proof to the same thing:
 
 This is narrow (it needs a stale local checkout plus a risky diff plus a merge attempt) but it sits on exactly the money/RLS/migration path the whole gate exists to protect, and `AGENTS.md` treats stale-checkout risk as a first-class concern under Workspace Hygiene.
 
-**Not fixed here.** The fix is to have `resolvePullRequest()` request `baseRefOid` and thread it into `gateMainChange()` as the authoritative base, matching `pr-merge-guard.mjs`, plus regression tests in `.codex/hooks/production-action-guard.test.mjs`. That is a security-guard change to a file listed in the guard's own `PROTECTED_HARNESS_SOURCE` set, so it is its own reviewed change with Mason's sign-off — not a rider on a documentation PR.
+**Approved as a separate PR (Mason, 2026-07-25); not fixed in this change.** The fix is to have `resolvePullRequest()` request `baseRefOid` and thread it into `gateMainChange()` as the authoritative base, matching `pr-merge-guard.mjs`, plus regression tests in `.codex/hooks/production-action-guard.test.mjs`. That is a security-guard change to a file listed in the guard's own `PROTECTED_HARNESS_SOURCE` set, so it is its own reviewed change with Mason's sign-off — not a rider on a documentation PR.
 
 ### 1.2 CLOSED — Hermes is not in use
 
@@ -102,7 +109,7 @@ My first pass searched for `only report|only flag|be conservative|report only` *
 
 This is the exact instruction shape Anthropic says Opus 5 now follows literally, and it conflicts with the rule this change adds to `CLAUDE.md`. The agent ranks and drops findings *before* the adversarial verification pass that was supposed to do the filtering, so a real correctness bug ranked 11th is never seen by anything.
 
-**Not fixed here — it is a cost decision, not a doc fix.** These workflows fan out across many agents and run overnight; removing the caps raises token spend materially and is Mason's call. Two sane options: drop the caps and let the existing skeptic pass filter (truer to the guidance, more expensive), or keep them and narrow the `CLAUDE.md` rule to exclude bounded overnight sweeps. `CLAUDE.md` currently records this as a known exception so the canonical rule is not silently violated.
+**SETTLED (Mason, 2026-07-25): keep the caps, narrow the rule.** Bounded overnight sweeps are now an explicit exception in `CLAUDE.md` — the per-run cost of uncapped fan-out across many agents outweighs the tail findings. The accepted trade-off is stated plainly: on those runs a low-ranked correctness bug can be dropped before the skeptic pass ever sees it. The rule binds everywhere else, and no other review prompt may add a cap.
 
 **Methodology note worth keeping:** a case-sensitive grep produced a confident "clean" verdict on the single most important anti-pattern in this review. Anti-pattern sweeps in this repo should use `grep -i`.
 
@@ -213,7 +220,7 @@ Mason approved the fixes on 2026-07-25. Changes made:
 
 **Deliberately not done:** this change added no `effort` values to `.claude/workflows/*.js`. Anthropic's guidance is to re-run an effort sweep on real evals rather than carry defaults over; forcing untested effort levels into the money/inventory hunt and review workflows would be exactly the unmeasured change that guidance warns against. The policy is documented; the mechanical change waits for measurement.
 
-**Correction (Codex, PR #227):** an earlier wording of the line above implied *no* workflow pins effort. That is wrong — `.claude/workflows/money-inventory-hunt.js` passes `effort: 'high'` at both its finder (`:293`) and verifier (`:334`) call sites. Consequence: the `xhigh` row of the 2.4 mapping does **not** reach the money/inventory night hunt, which is the highest-risk audit in the repo; it continues at `high` until that override is deliberately revisited. Flagged in `CLAUDE.md` so the mapping is not read as already in force. Whether to raise it is part of the same effort sweep — raising it costs more per run, so it is Mason's call, not a silent edit.
+**Correction (Codex, PR #227):** an earlier wording of the line above implied *no* workflow pins effort. That is wrong — `.claude/workflows/money-inventory-hunt.js` passes `effort: 'high'` at both its finder (`:293`) and verifier (`:334`) call sites. Consequence: the `xhigh` row of the 2.4 mapping does **not** reach the money/inventory night hunt, which is the highest-risk audit in the repo; it continues at `high` until that override is deliberately revisited. Flagged in `CLAUDE.md` so the mapping is not read as already in force. **SETTLED (Mason, 2026-07-25): it stays at `high`** until an effort sweep on real CRX tasks measures otherwise — nothing indicates `high` is currently failing, and `xhigh` costs more on the largest fan-out in the repo. The mapping's `xhigh` row therefore does not reach those agents by design, not by oversight.
 
 ---
 
