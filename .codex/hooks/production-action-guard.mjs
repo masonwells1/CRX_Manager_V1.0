@@ -135,29 +135,77 @@ function defaultRunGh(args, cwd) {
   throw lastError || new Error("GitHub CLI is unavailable");
 }
 
-function proofRequirement(headSha, riskDescription, detail) {
+function proofRequirement(headSha, riskDescription, detail, baseSha) {
+  // State the EXACT expected base. On a PR merge that base is GitHub's baseRefOid,
+  // not local origin/main, so generic "<origin/main at review time>" guidance would
+  // send the operator round a fetch-then-review loop, producing a proof this gate
+  // rejects without ever saying which base it wanted.
+  const expectedBase = baseSha || "<origin/main at review time>";
+  // run-claude-review.mjs derives base_sha from LOCAL origin/main
+  // (scripts/run-claude-review.mjs, `baseSha = rev-parse origin/main`) and never
+  // fetches. If that ref is stale, the wrapper mints a proof naming the old base
+  // while this gate expects `expectedBase` — so following the guidance would loop
+  // forever, rejected every time. Require the fetch first (Codex P2, 2026-07-25).
+  const fetchFirst = baseSha
+    ? `FIRST run \`git fetch origin main\` so local origin/main equals ${baseSha} — ` +
+      `the review wrapper reads its base from that ref and will otherwise mint a proof bound to a stale base. Then `
+    : "";
   return denied(
     `CODEX PRODUCTION GATE: ${riskDescription}\n\n` +
     `${detail}\n\n` +
-    `Claude must actually review the exact diff in this session by running ` +
+    `${fetchFirst}Claude must actually review the exact diff in this session by running ` +
     `node scripts/run-claude-review.mjs --scope base-main. A successful ` +
     `SHIP/SHIP-WITH-FOLLOWUPS review writes .claude/session-state/claude-review-push.json. ` +
     `Required JSON: ` +
     `{\"claude_ran\":true,\"verdict\":\"clean|blockers-fixed\",` +
-    `\"head_sha\":\"${headSha || "<exact pushed SHA>"}\",\"base_sha\":\"<origin/main at review time>\",` +
+    `\"head_sha\":\"${headSha || "<exact pushed SHA>"}\",\"base_sha\":\"${expectedBase}\",` +
     `\"timestamp\":\"<ISO-8601, 0-30 minutes old>\"}. ` +
-    `The proof is bound to both the exact pushed SHA and the origin/main base; future-dated, stale, base-moved, malformed, or BOM-corrupted proof is refused.`
+    `The proof is bound to both the exact pushed SHA and that exact base; future-dated, stale, base-moved, malformed, or BOM-corrupted proof is refused.`
   );
 }
 
-function gateMainChange({ repoDir, sourceRef, sourceSha, nowMs, runGit }) {
+function gateMainChange({ repoDir, sourceRef, sourceSha, nowMs, runGit, authoritativeBaseSha }) {
   let headSha = sourceSha || "";
   let baseSha = "";
   try {
-    // Resolve the exact origin/main this change is gated against so the Claude
-    // proof can be required to match the SAME base it was reviewed on; a moved
-    // origin/main (e.g. a sibling merge fetched locally) forces a fresh review.
-    baseSha = runGit(["rev-parse", "--verify", "--quiet", "origin/main"], repoDir);
+    // Resolve the exact base this change is gated against so the Claude proof can
+    // be required to match the SAME base it was reviewed on; a moved base (e.g. a
+    // sibling merge) forces a fresh review.
+    //
+    // For a PR merge the caller supplies GitHub's CURRENT baseRefOid. Local
+    // origin/main is NOT authoritative there: on a stale checkout it can be behind
+    // GitHub's real main, which would gate a risky merge on a proof — and on a
+    // risk diff — computed against a base the change will never land on. Claude's
+    // pr-merge-guard.mjs binds to baseRefOid for exactly this reason (Codex P1,
+    // 2026-07-25; docs/research/2026-07-25-opus5-harness-review.md §1.1a).
+    baseSha = authoritativeBaseSha
+      ? String(authoritativeBaseSha).trim()
+      : runGit(["rev-parse", "--verify", "--quiet", "origin/main"], repoDir);
+    if (!baseSha) throw new Error("empty base SHA");
+    if (authoritativeBaseSha) {
+      // `rev-parse --verify <value>^{commit}` also resolves REF NAMES, so an
+      // abbreviated or symbolic value from a changed `gh` output shape would
+      // silently resolve to something local instead of failing closed — quietly
+      // defeating the point of binding to GitHub's base. Require a full commit id.
+      if (!/^[0-9a-f]{40}$/i.test(baseSha)) {
+        return denied(
+          `CODEX PRODUCTION GATE: GitHub reported an unusable base commit ` +
+          `(${baseSha.slice(0, 20)}); the merge cannot be bound to a real base commit ` +
+          `and is denied (fail closed).`
+        );
+      }
+      // The object must exist locally or every diff below is meaningless. Fail
+      // closed with actionable guidance rather than an opaque git error.
+      try {
+        baseSha = runGit(["rev-parse", "--verify", `${baseSha}^{commit}`], repoDir);
+      } catch {
+        return denied(
+          `CODEX PRODUCTION GATE: GitHub's current base commit ${String(authoritativeBaseSha).slice(0, 12)} ` +
+          `is not present in this checkout, so the main-bound diff cannot be inspected against the base the ` +
+          `merge will actually land on (fail closed). Run \`git fetch origin main\` and retry.`
+        );
+      }
+    }
     if (!headSha) {
       const ref = sourceRef === "HEAD" ? "HEAD" : sourceRef;
       headSha = runGit(["rev-parse", "--verify", `${ref}^{commit}`], repoDir);
@@ -166,19 +214,28 @@ function gateMainChange({ repoDir, sourceRef, sourceSha, nowMs, runGit }) {
     }
   } catch (error) {
     return denied(
-      `CODEX PRODUCTION GATE: could not resolve origin/main or the exact ref being sent to main, so the operation is denied (fail closed). ${error?.message || error}`
+      `CODEX PRODUCTION GATE: could not resolve the base branch or the exact ref being sent to main, so the operation is denied (fail closed). ${error?.message || error}`
     );
   }
 
   let changedFiles;
   try {
-    changedFiles = runGit(["diff", "--name-only", `origin/main...${headSha}`], repoDir)
+    // Diff against the resolved baseSha, never the literal `origin/main` ref:
+    // on a PR merge that ref may be stale, which would misclassify a risky diff
+    // as ordinary and skip the proof requirement entirely.
+    //
+    // NOTE the three-dot semantics: `A...B` is merge-base(A,B)..B, so this only
+    // genuinely diffs "against baseSha" when baseSha is an ancestor of headSha.
+    // The risky path enforces that ancestry below; without it a head that is
+    // BEHIND the real base produces the identical diff either way, and changes
+    // living only on the base stay invisible (Codex P1 #2, 2026-07-25).
+    changedFiles = runGit(["diff", "--name-only", `${baseSha}...${headSha}`], repoDir)
       .split(/\r?\n/)
       .map((file) => file.trim())
       .filter(Boolean);
   } catch (error) {
     return denied(
-      `CODEX PRODUCTION GATE: could not inspect origin/main...${headSha}, so the operation is denied (fail closed). ${error?.message || error}`
+      `CODEX PRODUCTION GATE: could not inspect ${baseSha}...${headSha}, so the operation is denied (fail closed). ${error?.message || error}`
     );
   }
 
@@ -186,7 +243,7 @@ function gateMainChange({ repoDir, sourceRef, sourceSha, nowMs, runGit }) {
   let contentFlagged = false;
   if (risky.length === 0) {
     try {
-      contentFlagged = contentIsRisky(runGit(["diff", `origin/main...${headSha}`], repoDir));
+      contentFlagged = contentIsRisky(runGit(["diff", `${baseSha}...${headSha}`], repoDir));
     } catch (error) {
       return denied(
         `CODEX PRODUCTION GATE: could not inspect the full diff for money/security risk, so the operation is denied (fail closed). ${error?.message || error}`
@@ -196,25 +253,51 @@ function gateMainChange({ repoDir, sourceRef, sourceSha, nowMs, runGit }) {
 
   if (risky.length === 0 && !contentFlagged) return { blocked: false };
 
+  // The change is risky, so a Claude proof is about to be demanded. That proof is
+  // only meaningful if the reviewed diff actually covers what will land on main.
+  // When the head does not contain GitHub's current base, the merge result also
+  // includes base-only commits that no review in this flow ever saw — and
+  // `run-claude-review.mjs --scope base-main` hands Claude the same merge-base
+  // patch. Branch protection does not require up-to-date heads, so enforce it
+  // here for risky merges rather than assuming it.
+  if (authoritativeBaseSha) {
+    let headContainsBase = false;
+    try {
+      runGit(["merge-base", "--is-ancestor", baseSha, headSha], repoDir);
+      headContainsBase = true;
+    } catch {
+      headContainsBase = false;
+    }
+    if (!headContainsBase) {
+      return denied(
+        `CODEX PRODUCTION GATE: this pull request is risky and its head ${headSha.slice(0, 12)} does not ` +
+        `contain the base it will merge onto (${baseSha.slice(0, 12)}), so the reviewed diff cannot cover ` +
+        `everything the merge lands (fail closed). Update the branch first — merge origin/main into it (or ` +
+        `rebase onto it) and push — then re-run the review so the proof covers the real merge result.`
+      );
+    }
+  }
+
   const riskDescription = risky.length > 0
     ? `the main-bound diff changes ${risky.length} risky file(s): ${risky.slice(0, 6).join(", ")}${risky.length > 6 ? ", ..." : ""}`
     : "the main-bound diff contains money or financial-audit identifiers even though its paths look ordinary";
   const proofPath = path.join(repoDir, ...CLAUDE_PROOF_RELATIVE);
   if (!existsSync(proofPath)) {
-    return proofRequirement(headSha, riskDescription, `Missing required Claude proof: ${proofPath}`);
+    return proofRequirement(headSha, riskDescription, `Missing required Claude proof: ${proofPath}`, baseSha);
   }
 
   let proof;
   try {
     proof = JSON.parse(readFileSync(proofPath, "utf8"));
   } catch (error) {
-    return proofRequirement(headSha, riskDescription, `Claude proof could not be parsed: ${error?.message || error}`);
+    return proofRequirement(headSha, riskDescription, `Claude proof could not be parsed: ${error?.message || error}`, baseSha);
   }
   if (!claudeProofValid(proof, headSha, nowMs, baseSha)) {
     return proofRequirement(
       headSha,
       riskDescription,
-      "Claude proof is stale, future-dated, bound to a different HEAD or a different origin/main base, has the wrong verdict/ran key, or is otherwise invalid."
+      `Claude proof is stale, future-dated, bound to a different HEAD or to a base other than ${baseSha}, has the wrong verdict/ran key, or is otherwise invalid.`,
+      baseSha
     );
   }
 
@@ -359,9 +442,15 @@ function mcpMergeRequest(toolInput) {
 function resolvePullRequest({ request, repoDir, runGh }) {
   const args = ["pr", "view"];
   if (request.selector) args.push(request.selector);
-  args.push("--json", "baseRefName,headRefName,headRefOid,mergeStateStatus,statusCheckRollup");
+  // baseRefOid is GitHub's CURRENT tip of the base branch — the commit the merge
+  // will actually land on. Without it the gate falls back to local origin/main,
+  // which can be stale (Codex P1, 2026-07-25).
+  args.push("--json", "baseRefName,baseRefOid,headRefName,headRefOid,mergeStateStatus,statusCheckRollup");
   if (request.repo) args.push("--repo", request.repo);
   const data = JSON.parse(runGh(args, repoDir));
+  // baseRefOid is required only for main-bound merges; gatePullRequestMerge
+  // enforces it after the base check so a PR onto another branch is not
+  // needlessly failed closed.
   if (!data?.baseRefName || !data?.headRefOid) throw new Error("GitHub did not return baseRefName and headRefOid");
   return data;
 }
@@ -397,12 +486,25 @@ function gatePullRequestMerge({ request, repoDir, nowMs, runGit, runGh }) {
     return denied(`CODEX PRODUCTION GATE: merges to protected branch ${base} remain blocked.`);
   }
   if (base !== "main") return { blocked: false };
+  if (!pullRequest.baseRefOid) {
+    return denied(
+      "CODEX PRODUCTION GATE: GitHub did not report this pull request's current base commit (baseRefOid), " +
+      "so the merge cannot be bound to the base it will actually land on and is denied (fail closed)."
+    );
+  }
   if (!pullRequestChecksGreen(pullRequest)) {
     return denied(
       "CODEX PRODUCTION GATE: this pull request is not merge-ready with a fully green GitHub pipeline. Wait until mergeStateStatus is CLEAN and every reported check is completed successfully, neutral, or skipped."
     );
   }
-  return gateMainChange({ repoDir, sourceSha: pullRequest.headRefOid, nowMs, runGit });
+  return gateMainChange({
+    repoDir,
+    sourceSha: pullRequest.headRefOid,
+    // Bind the proof AND the risk diff to GitHub's real base, not local origin/main.
+    authoritativeBaseSha: pullRequest.baseRefOid,
+    nowMs,
+    runGit,
+  });
 }
 
 export function evaluateProductionAction({
