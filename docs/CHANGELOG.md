@@ -45,6 +45,9 @@ Harness review: documented cross-agent sync gaps (6 hooks Claude-only vs Codex; 
   - `a7806253 Durable commission routing: immutable profile UUIDs in splits (applied live as 20260722174029) (#216)`
   - `d8a17601 Fix bulk quote import lifecycle path`
 - **Migrations touched:** none — documentation and agent-guidance only.
+## 2026-07-24 — Cleanup sprint progress check (automated weekly routine)
+
+- Weekly read-only SQL check against production. Negatives: 19 (+1 vs prior week — second consecutive increase). Over-received PO items: 15 (flat, 10 consecutive stalled weeks). Unbilled deliveries: 59 (flat). New negative-bucket rows are still being created despite the Phase 21 going-forward fix — warn-not-block delivery path (U9) likely still has an open write path. No legacy rows resolved in /integrity-cleanup this week. Phase 23 (DB CHECK constraints on inventory buckets) remains blocked. PR #226 filed with the progress log row; push notification sent to Mason.
 
 ## 2026-07-23 — Supplier Pricing Phase 3 Stage A live closeout (APPLIED LIVE; DORMANT)
 
