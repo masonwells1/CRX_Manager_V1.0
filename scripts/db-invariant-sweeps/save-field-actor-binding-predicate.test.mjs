@@ -77,11 +77,19 @@ CREATE FUNCTION public.save_idempotency(text, text, jsonb) RETURNS void LANGUAGE
 INSERT INTO public.profiles VALUES ('00000000-0000-0000-0000-000000000001', 'admin', true, now());
 `);
   createSaveField(`
-  -- ACTOR_MISMATCH in a comment and dead string must not pass this predicate.
-  PERFORM 'ACTOR_MISMATCH';
+  /* v_actor := auth.uid();
+     IF p_performed_by IS NOT NULL AND p_performed_by IS DISTINCT FROM v_actor THEN
+       RAISE EXCEPTION 'ACTOR_MISMATCH';
+     END IF;
+     INSERT INTO activity_feed (performed_by) VALUES (v_actor); */
   INSERT INTO public.activity_feed (event_type, description, performed_by, related_entity_type, related_entity_id)
-  VALUES ('field_saved', 'pre-apply', p_performed_by, 'field', v_field_id);`);
-  assert.deepEqual(rows(), [VIOLATION], 'token/comment-only pre-apply body must be unsafe');
+  VALUES ('field_saved', 'comment fake guard', v_actor, 'field', v_field_id);`);
+  assert.deepEqual(rows(), [VIOLATION], 'full fake bind/guard in a block comment must be unsafe');
+  createSaveField(`
+  PERFORM 'v_actor := auth.uid(); IF p_performed_by IS NOT NULL AND p_performed_by IS DISTINCT FROM v_actor THEN RAISE EXCEPTION ''ACTOR_MISMATCH''; END IF; INSERT INTO activity_feed (performed_by) VALUES (v_actor);';
+  INSERT INTO public.activity_feed (event_type, description, performed_by, related_entity_type, related_entity_id)
+  VALUES ('field_saved', 'dead-string fake guard', v_actor, 'field', v_field_id);`);
+  assert.deepEqual(rows(), [VIOLATION], 'full fake bind/guard in a dead string must be unsafe');
   createSaveField(`
   v_actor := auth.uid();
   INSERT INTO public.activity_feed (event_type, description, performed_by, related_entity_type, related_entity_id)

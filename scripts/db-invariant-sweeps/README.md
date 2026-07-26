@@ -114,7 +114,8 @@ This is a narrow, no-allowlist regression control for the exact audited function
 `save_field(uuid,jsonb,jsonb,uuid,text)`. It requires `v_actor := auth.uid()` before every
 write/idempotency action; the real `p_performed_by` mismatch rejection before those actions; and the
 `activity_feed.performed_by` sink to use `v_actor`, not `p_performed_by`. Error tokens, comments, and
-dead `ACTOR_MISMATCH` strings do not count as proof. The scope is intentionally narrow: it prevents
+dead `ACTOR_MISMATCH` strings do not count as proof: the predicate strips block comments, line comments,
+and quoted-string contents before every positional check. The scope is intentionally narrow: it prevents
 this demonstrated regression without claiming that a catalog regex can safely parse every actor style.
 
 For the current pre-apply catalog, the expected result is exactly one row:

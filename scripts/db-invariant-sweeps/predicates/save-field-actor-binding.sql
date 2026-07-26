@@ -13,25 +13,41 @@ WITH target AS (
   FROM pg_proc p
   WHERE p.oid = 'public.save_field(uuid,jsonb,jsonb,uuid,text)'::regprocedure
 ),
+normalized AS (
+  -- Analyze executable body text only. Strip quoted strings first (including
+  -- doubled-quote escapes), then multiline block comments and line comments.
+  -- Every structural check below uses normalized_src, never raw prosrc.
+  SELECT regexp_replace(
+           regexp_replace(
+             regexp_replace(prosrc, '''([^'']|'''')*''', '', 'g'),
+             chr(47) || chr(92) || chr(42) || '([^' || chr(42) || ']|' ||
+             chr(92) || chr(42) || '+[^' || chr(42) || chr(47) || '])*' ||
+             chr(92) || chr(42) || '+' || chr(47),
+             ' ', 'g'
+           ),
+           chr(45) || chr(45) || E'[^\\n]*', ' ', 'g'
+         ) AS normalized_src
+  FROM target
+),
 positions AS (
-  SELECT t.*,
-         regexp_instr(t.prosrc, 'v_actor\s*:=\s*auth\.uid\s*\(\s*\)', 1, 1, 0, 'i') AS actor_bind_pos,
-         regexp_instr(t.prosrc, 'if\s+p_performed_by\s+is\s+not\s+null\s+and\s+p_performed_by\s+is\s+distinct\s+from\s+v_actor\s+then(.|\n){0,240}raise\s+exception[^;]{0,240};\s*end\s+if', 1, 1, 0, 'i') AS guard_pos,
-         regexp_instr(t.prosrc, 'insert\s+into\s+(public\.)?activity_feed', 1, 1, 0, 'i') AS sink_pos,
-         regexp_instr(t.prosrc, 'insert\s+into\s+(public\.)?activity_feed\s*\([^)]*performed_by[^)]*\)\s*values\s*\([^;]*\mv_actor\M', 1, 1, 0, 'i') AS actor_sink_pos
-  FROM target t
+  SELECT n.*,
+         regexp_instr(n.normalized_src, 'v_actor\s*:=\s*auth\.uid\s*\(\s*\)', 1, 1, 0, 'i') AS actor_bind_pos,
+         regexp_instr(n.normalized_src, 'if\s+p_performed_by\s+is\s+not\s+null\s+and\s+p_performed_by\s+is\s+distinct\s+from\s+v_actor\s+then(.|\n){0,240}raise\s+exception[^;]{0,240};\s*end\s+if', 1, 1, 0, 'i') AS guard_pos,
+         regexp_instr(n.normalized_src, 'insert\s+into\s+(public\.)?activity_feed', 1, 1, 0, 'i') AS sink_pos,
+         regexp_instr(n.normalized_src, 'insert\s+into\s+(public\.)?activity_feed\s*\([^)]*performed_by[^)]*\)\s*values\s*\([^;]*\mv_actor\M', 1, 1, 0, 'i') AS actor_sink_pos
+  FROM normalized n
 ),
 ordered AS (
   SELECT p.*,
          (
            SELECT min(pos)
            FROM unnest(ARRAY[
-             nullif(regexp_instr(p.prosrc, 'check_idempotency\s*\(', 1, 1, 0, 'i'), 0),
-             nullif(regexp_instr(p.prosrc, 'insert\s+into\s+fields', 1, 1, 0, 'i'), 0),
-             nullif(regexp_instr(p.prosrc, 'update\s+fields\s+set', 1, 1, 0, 'i'), 0),
-             nullif(regexp_instr(p.prosrc, 'delete\s+from\s+field_billing_defaults', 1, 1, 0, 'i'), 0),
-             nullif(regexp_instr(p.prosrc, 'insert\s+into\s+(public\.)?activity_feed', 1, 1, 0, 'i'), 0),
-             nullif(regexp_instr(p.prosrc, 'save_idempotency\s*\(', 1, 1, 0, 'i'), 0)
+             nullif(regexp_instr(p.normalized_src, 'check_idempotency\s*\(', 1, 1, 0, 'i'), 0),
+             nullif(regexp_instr(p.normalized_src, 'insert\s+into\s+fields', 1, 1, 0, 'i'), 0),
+             nullif(regexp_instr(p.normalized_src, 'update\s+fields\s+set', 1, 1, 0, 'i'), 0),
+             nullif(regexp_instr(p.normalized_src, 'delete\s+from\s+field_billing_defaults', 1, 1, 0, 'i'), 0),
+             nullif(regexp_instr(p.normalized_src, 'insert\s+into\s+(public\.)?activity_feed', 1, 1, 0, 'i'), 0),
+             nullif(regexp_instr(p.normalized_src, 'save_idempotency\s*\(', 1, 1, 0, 'i'), 0)
            ]) AS action(pos)
          ) AS first_action_pos
   FROM positions p
@@ -46,5 +62,5 @@ WHERE NOT (
   AND guard_pos < first_action_pos
   AND sink_pos > guard_pos
   AND actor_sink_pos = sink_pos
-  AND substring(prosrc FROM sink_pos FOR 1500) !~* '\mp_performed_by\M'
+  AND substring(normalized_src FROM sink_pos FOR 1500) !~* '\mp_performed_by\M'
 );
