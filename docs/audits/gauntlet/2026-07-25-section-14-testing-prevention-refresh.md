@@ -71,7 +71,7 @@ The 2026-06-17 Section 14 report correctly recorded the state then, but several 
 - Hook/workflow wiring: `npm run test:agent-workflows` passed. It confirmed 30 worktree-aware Codex command hooks, 35 synced Codex workflow adapters, manifest parity, and the tested production-action/review-proof paths.
 - Guard regressions: `npm run test:correction-guards` passed, including stop verification, worktree awareness/cleanup, shell/MCP safety, migration proof, idempotency-body, review proof, registry freshness, session staleness, ledger update, and baseline checks.
 - RPC prevention contracts: `npm run test:contracts` passed — 3 files / 100 tests, including the mutator/idempotency inventory.
-- Full local unit coverage gate: `npm run test:coverage` passed — 286 files / 3,888 tests passed / 118 skipped. Measured coverage was statements 41.18%, branches 34.18%, functions 30.43%, and lines 43.45%, above the configured ratchets in `vite.config.ts:144-166`.
+- Full local unit coverage gate: `npm run test:coverage` passed — 286 files / 3,888 tests passed / 118 skipped. Measured coverage was statements 41.18%; branches 34.17% as Vitest reports it, with `11,927 / 34,896 = 34.1787%` (34.18% conventionally rounded); functions 30.43%; and lines 43.45%, above the configured ratchets in `vite.config.ts:144-166`.
 - Historical WPS coverage: focused WPS output tests passed 16/16.
 - The pre-commit path is substantive: `.husky/pre-commit` runs migration/frontend validation, lint, typecheck, build, unit tests, agent-workflow tests, correction guards, dependency verification, and map generation. This audit did not change that path.
 
