@@ -2,6 +2,20 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-26 — void_vendor_payment vendor-liveness gate DRAFTED (pending apply)
+
+Section 9 follow-up MEDIUM-1: `void_vendor_payment` flips a bill from paid back to unpaid without
+ever touching the parent vendor row, so it does not serialize with `delete_vendor` — interleaved,
+a vendor can be soft-deleted while carrying an open AP liability. New pending migration
+`20260726210000_void_vendor_payment_vendor_liveness.sql` re-emits the live function body
+byte-identically (md5-verified against live `pg_proc`) plus one added gate: after locking the
+payment and bill, it locks the vendor row with the same `deleted_at IS NULL … FOR UPDATE` predicate
+`delete_vendor` uses, raising `VENDOR_DELETED` if the vendor is already soft-deleted. Lock-order
+analysis in the migration header shows no deadlock cycle. Deliberate strict consequence: payments
+on a deleted vendor's bills cannot be voided until the vendor is restored (no restore RPC exists
+yet). Registered in the pending-migration test gate and migration-history row 823. **NOT applied
+live** — awaits the governed apply gate plus Mason's explicit approval.
+
 ## 2026-07-26 — Section 9 PO/AP HIGH remediation APPLIED LIVE
 
 With Mason's in-chat approval ("fix any issues we need then apply and merge everything"), the
