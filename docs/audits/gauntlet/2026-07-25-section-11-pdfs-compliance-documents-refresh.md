@@ -11,6 +11,8 @@ This refresh covers invoice PDFs, the WPS pre-application notice, the Chemical A
 
 It does not change source, generated artifacts, migrations, live data, or production. In particular, it does not touch Supplier Pricing/Product files, shared types, Phase 3 artifacts, gauntlet tracker files, manual current-state/known-issues files, migration history, smoke registry, or the app workflow map.
 
+The first normal-hook commit did regenerate `docs/app-workflow-map.html`; its entire diff is the mandatory date-only churn from “Updated Jul 23, 2026” to “Updated Jul 25, 2026.” It is not a Section 11 finding or a functional workflow-map change.
+
 ## Result summary
 
 | Category | Count | Result |
@@ -29,12 +31,12 @@ The current WPS output test has 16 cases. It asserts the WPS title and 40 CFR ci
 
 ### Invoices
 
-- `generateInvoicePdf` has narrow unit coverage for all three layouts (field application, chemical sale, and misc. charge), current and legacy printing, write-off reconciliation, and optional PO/terms fields (`src/lib/invoicePdf.test.ts:116-340`, `434-515`).
+- `generateInvoicePdf` has narrow unit coverage for all three layouts (field application, chemical sale, and misc. charge), current and legacy printing, write-off reconciliation, and optional PO-reference fields (`src/lib/invoicePdf.test.ts:116-340`, `434-515`).
 - The list-print data builder re-fetches invoice-level billing fields omitted from lightweight list rows and preserves caller-supplied/explicitly-cleared values (`src/lib/buildInvoicePdfDataFromRow.test.ts:85-180`). This protects the prior silent omission class for discount, terms, PO reference, due date, and notes.
 
 ### WPS pre-application notice
 
-- The generator includes treated-area data and product EPA registration, signal word, rate, REI, and PHI; absent label values are displayed as label-directed fallbacks rather than invented values (`src/lib/wpsNoticePdf.ts:132-146`). It also contains the stated WPS notice and retention language (`src/lib/wpsNoticePdf.ts:165-185`).
+- The generator includes treated-area data and product EPA registration, signal word, rate, REI, and PHI. Missing EPA/REI/PHI values use label-directed fallbacks, while a missing signal word (and missing rate) renders as an em dash rather than an invented value (`src/lib/wpsNoticePdf.ts:132-146`). It also contains the stated WPS notice and retention language (`src/lib/wpsNoticePdf.ts:165-185`).
 - The Job Detail action refuses to print while the form is dirty, refuses failed product-label lookups, and refuses a job whose selected product has no resolved label row (`src/pages/JobDetail.tsx:815-893`).
 
 ### Chemical Application Report and shared reports
@@ -55,7 +57,7 @@ The current WPS output test has 16 cases. It asserts the WPS title and 40 CFR ci
 
 ### COV-11-2 — Four specialized PDF generators have no matching direct output test (MED)
 
-**Evidence:** The current `src/lib/*Pdf.ts` inventory has direct same-basename tests for 13 of 17 generators. The four exceptions are `chemicalSummaryReportPdf.ts`, `invoiceSummaryPdf.ts`, `masterMixSummaryPdf.ts`, and `projectedUseReportPdf.ts`; no matching `*.test.ts` file exists for any of them. This is a file-presence coverage observation, not a claim that their output is incorrect.
+**Evidence:** The current `src/lib/*Pdf.ts` inventory has direct same-basename tests for 14 of 18 generators. The four exceptions are `chemicalSummaryReportPdf.ts`, `invoiceSummaryPdf.ts`, `masterMixSummaryPdf.ts`, and `projectedUseReportPdf.ts`; no matching `*.test.ts` file exists for any of them. This is a file-presence coverage observation, not a claim that their output is incorrect.
 
 **Risk:** Changes to one of these report layouts can regress its generated rows, fallbacks, pagination, or filename without a direct renderer assertion.
 
@@ -65,7 +67,7 @@ The current WPS output test has 16 cases. It asserts the WPS title and 40 CFR ci
 
 ### BLOCKED-11-1 — No authenticated browser/download fixture was used
 
-The 112 focused tests use mocked jsPDF/autoTable calls; they prove the generators receive and render the asserted text/table cells but do not inspect a binary PDF in a browser viewer. This audit did not use a logged-in staging or production record because the lane is read-only and no safe authenticated fixture was supplied. Therefore, visual pagination, download behavior, and runtime data retrieval in the real UI remain unproven here.
+The focused PDF-renderer output tests use mocked jsPDF/autoTable calls; they prove the applicable generators receive and render the asserted text/table cells but do not inspect a binary PDF in a browser viewer. This statement applies to those renderer tests, not to all 112 focused tests. This audit did not use a logged-in staging or production record because the lane is read-only and no safe authenticated fixture was supplied. Therefore, visual pagination, download behavior, and runtime data retrieval in the real UI remain unproven here.
 
 This is also not an independent legal certification of the WPS document. The review confirms the app’s documented required-field and fallback behavior only.
 
