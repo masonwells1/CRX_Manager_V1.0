@@ -9,7 +9,7 @@
 - Fetched `origin`; audit worktree was created from exact `origin/main` commit `25363345adeabb5b2b08a3772a0de3f0edcb3952` on branch `codex/section14-testing-prevention-refresh-20260725`.
 - Audit worktree: `C:\Users\mason\.codex\worktrees\section14-testing-prevention-refresh-20260725\CRX_Manager`; start and pre-commit working tree were clean, and `origin/main...HEAD` was `0 0` before the report commit.
 - Collision check: the root checkout had unrelated Section 3/Supplier documentation, smoke, and migration work; the active Supplier Phase 3 worktree had Product/Supplier/frontend changes. This worktree touched neither lane and this report is the sole intended tracked change.
-- Graphify was refreshed at commit `25363345` (`7,923` nodes, `16,456` edges). Query used: `graphify query "what connects testing prevention hooks guard sweep and regression tests" --budget 1200`; the follow-up `graphify affected "scripts/db-invariant-sweeps/run-sweeps.mjs" --depth 2` scoped the audit to the sweep runner, guard suites, workflow manifest checks, contracts, coverage, and CI. Material relationships below were then verified directly in source/configuration.
+- A fresh exact-tree Graphify build at commit `25363345` reproducibly produced `8,113` nodes and `16,659` edges. `graphify affected "scripts/db-invariant-sweeps/run-sweeps.mjs" --depth 2` returned `No affected nodes`. Because `.graphifyignore` excludes `.claude/`, `.github/`, `tests/`, and `docs/`, the hook, test, CI, and historical-report findings below came from direct source/configuration inspection, not Graphify.
 
 ## Confirmed current gaps
 
@@ -71,7 +71,7 @@ The 2026-06-17 Section 14 report correctly recorded the state then, but several 
 - Hook/workflow wiring: `npm run test:agent-workflows` passed. It confirmed 30 worktree-aware Codex command hooks, 35 synced Codex workflow adapters, manifest parity, and the tested production-action/review-proof paths.
 - Guard regressions: `npm run test:correction-guards` passed, including stop verification, worktree awareness/cleanup, shell/MCP safety, migration proof, idempotency-body, review proof, registry freshness, session staleness, ledger update, and baseline checks.
 - RPC prevention contracts: `npm run test:contracts` passed — 3 files / 100 tests, including the mutator/idempotency inventory.
-- Full local unit coverage gate: `npm run test:coverage` passed — 286 files / 3,888 tests passed / 118 skipped. Measured coverage was statements 41.18%, branches 34.17%, functions 30.43%, and lines 43.45%, above the configured ratchets in `vite.config.ts:144-166`.
+- Full local unit coverage gate: `npm run test:coverage` passed — 286 files / 3,888 tests passed / 118 skipped. Measured coverage was statements 41.18%, branches 34.18%, functions 30.43%, and lines 43.45%, above the configured ratchets in `vite.config.ts:144-166`.
 - Historical WPS coverage: focused WPS output tests passed 16/16.
 - The pre-commit path is substantive: `.husky/pre-commit` runs migration/frontend validation, lint, typecheck, build, unit tests, agent-workflow tests, correction guards, dependency verification, and map generation. This audit did not change that path.
 
