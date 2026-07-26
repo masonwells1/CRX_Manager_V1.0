@@ -81,6 +81,18 @@ The same disposable database loads the checked-in atomic OCR commit function
 and proves three real two-session losers roll back cleanly: approval-first,
 link-first, and lease-change-first.
 
+## Disposable Section 1 security proof
+
+```bash
+node scripts/smoke/prove-section1-number-and-field-actor.mjs
+```
+
+This PostgreSQL 17 proof creates a unique `--network none` tmpfs container,
+installs only the live-shaped auth/profile and business-table minimum, then
+loads the exact checked-in Section 1 migration and rollback smoke files. It
+requires `SMOKE_PASS_ROLLBACK` and force-removes the container in `finally`; it
+never reads a database URL or connects to Supabase.
+
 ## Disposable Supplier Pricing Phase 1a proof
 
 The live additive bootstrap, live pre-deploy zero-cost guard, and parked

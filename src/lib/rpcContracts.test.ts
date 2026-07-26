@@ -2100,7 +2100,7 @@ function registryMigrationHighWater(): string {
 
 // Intentional bookkeeping gate: update this set when Section 9 applies or a
 // new current pending migration is added; otherwise the inventory fails closed.
-const EXPECTED_PENDING_MIGRATION_TIMESTAMPS = new Set(['20260722222742']);
+const EXPECTED_PENDING_MIGRATION_TIMESTAMPS = new Set(['20260722222742', '20260725234503']);
 
 /**
  * Explicitly pending migrations remain part of the contract inventory even

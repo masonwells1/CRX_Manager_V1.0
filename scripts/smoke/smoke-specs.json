@@ -7,6 +7,12 @@
     "area_tags": "Every spec carries an \"area\" array (business-area tags: billing, inventory, lifecycle, pricing, security, idempotency). run-smoke.mjs --area <area> selects by tag; scripts/run-area.mjs bundles these with the matching vitest slice and DB invariant sweeps."
   },
   "specs": {
+    "section1_number_and_field_actor": {
+      "chain": "smoke-section1-number-and-field-actor.sql",
+      "description": "Section 1 SECURITY DEFINER boundary: all six number generators have exactly one overload, exact pinned search paths, authenticated/service_role-only EXECUTE, no PUBLIC/anon grant, AUTH_REQUIRED and active-role gates; save_field has the same grant/search-path/overload shape, rejects no-auth and forged actors before writes, records a NULL-parameter save under the authenticated actor, and replays without a duplicate field or activity row. Terminal rollback.",
+      "covers": ["next_application_record_number", "next_commission_payment_number", "next_cycle_count_number", "next_delivery_number", "next_job_number", "next_po_number", "save_field"],
+      "area": ["security", "idempotency"]
+    },
     "supplier_pricing_phase3_return_policy": {
       "chain": "smoke-supplier-pricing-phase3-return-policy.sql",
       "description": "Supplier Pricing Phase 3 Stage A rollback matrix: dormant unknown/default Product compatibility; full returnable create/approve/receive/restock/credit lifecycle; governed metadata refusal at requested/approved/received; exact no-return create/re-credit and direct return-items refusals; received cancellation inventory reversal; linked and unrelated-credit-memo unapply boundaries; reject/cancel/unapply reversal boundaries; and forced late-failure atomic rollback for requested, approved, received/restock, credit-issued, rejected, cancelled, and credit-memo-unapplied effects. The companion prove-supplier-pricing-phase3-return-policy-concurrency.mjs proves autocommit and explicit deferred-FK timing plus two independent-session sorted advisory-lock races for wrappers, direct return_items writes, unapply, and a regression-sensitive received-cancel versus approved-receive race on the same Product/inventory row.",

@@ -207,42 +207,6 @@
     },
     {
       "predicate": "anon-exec-secdef",
-      "violation_key": "next_application_record_number()",
-      "justification": "Sequence/number generator; returns a formatted next-number string, no PII, no caller-controlled input. anon EXECUTE harmless.",
-      "dated": "2026-06-10"
-    },
-    {
-      "predicate": "anon-exec-secdef",
-      "violation_key": "next_commission_payment_number()",
-      "justification": "Sequence/number generator; no PII. anon EXECUTE harmless.",
-      "dated": "2026-06-10"
-    },
-    {
-      "predicate": "anon-exec-secdef",
-      "violation_key": "next_cycle_count_number()",
-      "justification": "Sequence/number generator; no PII. anon EXECUTE harmless.",
-      "dated": "2026-06-10"
-    },
-    {
-      "predicate": "anon-exec-secdef",
-      "violation_key": "next_delivery_number()",
-      "justification": "Sequence/number generator; no PII. anon EXECUTE harmless.",
-      "dated": "2026-06-10"
-    },
-    {
-      "predicate": "anon-exec-secdef",
-      "violation_key": "next_job_number()",
-      "justification": "Sequence/number generator; no PII. anon EXECUTE harmless.",
-      "dated": "2026-06-10"
-    },
-    {
-      "predicate": "anon-exec-secdef",
-      "violation_key": "next_po_number()",
-      "justification": "Sequence/number generator; no PII. anon EXECUTE harmless.",
-      "dated": "2026-06-10"
-    },
-    {
-      "predicate": "anon-exec-secdef",
       "violation_key": "next_return_number()",
       "justification": "Sequence/number generator; no PII. anon EXECUTE harmless.",
       "dated": "2026-06-10"
