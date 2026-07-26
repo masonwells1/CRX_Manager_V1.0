@@ -1,6 +1,6 @@
 # CRX Manager — Current State
 
-**Last verified:** 2026-07-25 (live migration high-water `20260723193312` — Supplier Pricing Phase 3 Stage A return-policy foundation is applied but dormant: 604 Products remain unchanged, `product_families` has 0 rows, `public.product_classifications` does not exist live, and `supplier_cost_basis_enabled=false`. Supplier-pricing Product-page and monthly XLSX paths remain governed through preview/approval/apply, and `process-document` v19 permanently rejects supplier price/product lists before OCR. The Section 9 PO/AP migration `20260722222742` and the Section 1 security migration `20260725234503` are both pending/not live; operational counts remain the dated 2026-07-18 snapshot below.)
+**Last verified:** 2026-07-25 (live migration watermark `20260723193312` — Supplier Pricing Phase 3 Stage A return-policy foundation applied under its server-assigned ledger version; it is dormant with 604 Products unchanged, zero classifications/family rows, and `supplier_cost_basis_enabled=false`. Supplier-pricing Product-page and monthly XLSX paths remain governed through preview/approval/apply, and `process-document` v19 permanently rejects supplier price/product lists before OCR; the Section 9 PO/AP migration `20260722222742` and Section 1 security migration `20260725234503` are pending/not live; operational counts remain the dated 2026-07-18 snapshot below.)
 **Update triggers:** refresh when a major feature ships or quarterly, whichever first.
 
 ## 1. Reality check

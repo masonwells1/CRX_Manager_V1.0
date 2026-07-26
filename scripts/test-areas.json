@@ -115,7 +115,7 @@
       "sweeps": [
         "actor-forgery",
         "actor-forgery-fin-audit",
-        "actor-forgery-activity-feed",
+        "save-field-actor-binding",
         "anon-exec-secdef",
         "auth-bound-role-ungated",
         "secdef-searchpath",
