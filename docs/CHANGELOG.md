@@ -2,6 +2,24 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-26 — Vendor Deactivate/Reactivate (restore path for soft-deleted vendors)
+
+Owner-approved follow-up to the vendor-liveness gate below: vendor "Delete" never destroyed data
+(it soft-deletes via `deleted_at`), but the UI called it Delete and there was no way back — and
+the new `VENDOR_DELETED` guard on `void_vendor_payment` made that dead end operational. This
+change (a) reframes the Vendors page action as **Deactivate** with honest copy (history kept,
+reversible), (b) adds a **Show Inactive** view listing deactivated vendors, and (c) adds a
+**Reactivate** button backed by a new `reactivate_vendor(p_vendor_id, p_idempotency_key)` RPC
+(**APPLIED LIVE 2026-07-26** with Mason's in-chat OK after both reviewer charters returned CLEAN;
+submitted as `20260726213000`, server-assigned ledger version `20260726212043`, disk file
+B7-renamed to match; live body md5-verified against the on-disk migration post-apply).
+The RPC is admin-only, locks the deactivated vendor row, refuses with `VENDOR_NAME_CONFLICT`
+when an active vendor already uses the same normalized identity (partial unique index
+`vendors_active_normalized_name_key` as hard backstop, `unique_violation` mapped to the same
+error), clears `deleted_at`, logs `vendor_reactivated` to the activity feed, and carries the
+standard SECURITY DEFINER + pg_temp + explicit ACL + in-migration verification pattern.
+`delete_vendor` itself is unchanged — only the UI language moved.
+
 ## 2026-07-26 — void_vendor_payment vendor-liveness gate APPLIED LIVE
 
 Section 9 follow-up MEDIUM-1: `void_vendor_payment` flipped a bill from paid back to unpaid without

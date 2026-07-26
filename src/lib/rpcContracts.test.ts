@@ -1432,6 +1432,7 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   'preview_product_cost_basis_changes',
   'preview_product_pricing_changes',
   'process_offline_action',
+  'reactivate_vendor',
   'reassign_delivery',
   'receive_po_items',
   'receive_return',
@@ -2100,10 +2101,7 @@ function registryMigrationHighWater(): string {
 
 // Intentional bookkeeping gate: update this set when Section 9 applies or a
 // new current pending migration is added; otherwise the inventory fails closed.
-const EXPECTED_PENDING_MIGRATION_TIMESTAMPS = new Set<string>([
-  // (empty — the void_vendor_payment vendor-liveness gate applied live
-  // 2026-07-26 as ledger version 20260726201208.)
-]);
+const EXPECTED_PENDING_MIGRATION_TIMESTAMPS = new Set<string>([]);
 
 /**
  * Explicitly pending migrations remain part of the contract inventory even
