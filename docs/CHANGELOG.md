@@ -31,6 +31,18 @@ visibility is unchanged and no write policy was added — reactivation still goe
 the `reactivate_vendor` RPC. Post-apply proof: live `pg_policy` shows exactly the two intended
 SELECT-only policies.
 
+**Second review round, same day:** the follow-up Codex review of the P1 fix raised two real P2s,
+both fixed. (1) The new policy checked `role = 'admin'` only, so a *deactivated* admin holding a
+still-valid session would keep read access to inactive vendors — tightened with an ALTER POLICY
+adding `profiles.is_active = true` (**APPLIED LIVE 2026-07-26** after both reviewer charters
+returned CLEAN; submitted as `20260726230000`, server-assigned ledger version `20260726223520`,
+disk file B7-renamed to match; behaviorally proven live: active admin sees the inactive vendors,
+a deactivated admin sees none — via a fully rolled-back simulation, no live data mutated). The
+pre-existing systemic gap (older policies and `is_admin()` omit `is_active`) is tracked as a
+separate follow-up task. (2) Toggling Show Inactive could leave two vendor fetches racing, with
+the stale one overwriting the fresh list — fixed with a fetch sequence guard in `Vendors.tsx`
+(only the newest in-flight fetch may touch state).
+
 ## 2026-07-26 — void_vendor_payment vendor-liveness gate APPLIED LIVE
 
 Section 9 follow-up MEDIUM-1: `void_vendor_payment` flipped a bill from paid back to unpaid without

@@ -11,7 +11,7 @@
  *
  * Uses save_vendor() and delete_vendor() RPCs from migration 20260510120000.
  */
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { Plus, Pencil, Trash2, RotateCcw } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -60,13 +60,20 @@ export default function Vendors() {
   const [reactivateTarget, setReactivateTarget] = useState<Vendor | null>(null);
   const [reactivating, setReactivating] = useState(false);
 
+  // Codex P2 fix (PR #236): toggling Show Inactive can leave two fetches in
+  // flight; if the older one resolves last, its stale list would overwrite
+  // the current view. Each fetch takes a sequence number and only the newest
+  // is allowed to touch state.
+  const fetchSeq = useRef(0);
   const fetchVendors = useCallback(async () => {
+    const seq = ++fetchSeq.current;
     setLoading(true);
     let query = supabase.from('vendors').select('*');
     query = showInactive
       ? query.not('deleted_at', 'is', null)
       : query.is('deleted_at', null);
     const { data, error } = await query.order('name', { ascending: true });
+    if (seq !== fetchSeq.current) return;
     if (error) {
       toast('error', 'Failed to load vendors');
       setLoading(false);
