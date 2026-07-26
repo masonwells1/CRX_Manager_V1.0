@@ -134,6 +134,9 @@ describe('Section 9 PO/AP HIGH remediation contracts', () => {
     expect(concurrency).toContain('SECTION9_PO_AP_CONCURRENCY_PASS');
     expect(concurrency).toContain('VENDOR_HAS_UNPAID_BILLS');
     expect(concurrency).toContain('VENDOR_NOT_FOUND');
+    expect(concurrency).toContain(
+      '20260510120000_vendor_master_data_rpcs.sql',
+    );
     expect(concurrency).toContain("'--network', 'none'");
     expect(concurrency).toContain('SQL exited before marker');
 

@@ -33,6 +33,12 @@ const CANCEL_MIGRATION = path.join(
   'migrations',
   '20260716120104_gauntlet_access_boundaries.sql',
 );
+const VENDOR_MIGRATION = path.join(
+  ROOT,
+  'supabase',
+  'migrations',
+  '20260510120000_vendor_master_data_rpcs.sql',
+);
 
 function fail(message, detail = '') {
   throw new Error(`${message}${detail ? `\n${detail}` : ''}`);
@@ -158,6 +164,7 @@ function prepareContainer() {
 function assertCheckedInMarkers() {
   const migration = readFileSync(MIGRATION, 'utf8').replace(/\r\n/g, '\n');
   const cancel = readFileSync(CANCEL_MIGRATION, 'utf8').replace(/\r\n/g, '\n');
+  const vendor = readFileSync(VENDOR_MIGRATION, 'utf8').replace(/\r\n/g, '\n');
   assert.match(
     migration,
     /FROM public\.vendors\n\s+WHERE id = p_vendor_id\n\s+AND deleted_at IS NULL\n\s+FOR UPDATE;/,
@@ -177,6 +184,18 @@ function assertCheckedInMarkers() {
   assert.match(
     cancel,
     /FROM vendor_bills\n\s+WHERE purchase_order_id = p_po_id/,
+  );
+  assert.match(
+    vendor,
+    /SELECT \* INTO v_vendor FROM vendors WHERE id = p_vendor_id AND deleted_at IS NULL FOR UPDATE;/,
+  );
+  assert.match(
+    vendor,
+    /FROM vendor_bills\n\s+WHERE vendor_id = p_vendor_id\n\s+AND status NOT IN \('paid', 'voided'\)\n\s+AND deleted_at IS NULL;/,
+  );
+  assert.match(
+    vendor,
+    /UPDATE vendors SET deleted_at = now\(\), updated_at = now\(\) WHERE id = p_vendor_id;/,
   );
 }
 
