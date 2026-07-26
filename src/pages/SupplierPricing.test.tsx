@@ -387,6 +387,66 @@ describe('SupplierPricing page', () => {
     expect(mockStageSupplierPriceImport).not.toHaveBeenCalled();
   });
 
+  it('blocks Quick Quote staging while a refresh that removes its Product is unresolved', async () => {
+    const product = {
+      id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      product_name: 'Refresh Race Product',
+      sku: 'RACE-SKU',
+      inventory_unit: 'gallon',
+    };
+    const link = {
+      id: 'link-refresh-race',
+      product_id: product.id,
+      product_name: product.product_name,
+      vendor_id: 'vendor-1',
+      vendor_name: 'Supplier One',
+      supplier_sku: 'RACE-SUP',
+      supplier_product_name: product.product_name,
+      supplier_uom: 'case',
+      supplier_pack_description: null,
+      inventory_units_per_supplier_unit: 1,
+      conversion_unit: 'gallon',
+      comparison_status: 'comparable' as const,
+      comparison_note: null,
+      link_status: 'confirmed' as const,
+      is_reusable: true,
+      is_preferred: false,
+      is_active: true,
+    };
+    const initial = {
+      vendors: [{ id: 'vendor-1', name: 'Supplier One' }],
+      products: [product],
+      links: [link],
+      imports: [], aliases: [], evidence: [],
+    };
+    const refreshed = { ...initial, products: [], links: [link] };
+    let resolveRefresh: ((workspace: typeof refreshed) => void) | undefined;
+    const pendingRefresh = new Promise<typeof refreshed>((resolve) => {
+      resolveRefresh = resolve;
+    });
+    mockGetWorkspace.mockResolvedValueOnce(initial).mockReturnValueOnce(pendingRefresh);
+
+    renderSupplierPricing();
+    const linkedProduct = await screen.findByLabelText('Linked Product');
+    fireEvent.change(linkedProduct, { target: { value: link.id } });
+    fireEvent.change(screen.getByLabelText('Quoted cost (dollars)'), { target: { value: '12.50' } });
+
+    mockStageSupplierPriceImport.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    const stageButton = screen.getByRole('button', { name: 'Stage quick quote' });
+    expect(stageButton).toBeDisabled();
+    fireEvent.click(stageButton);
+    expect(mockStageSupplierPriceImport).not.toHaveBeenCalled();
+
+    await act(async () => {
+      resolveRefresh?.(refreshed);
+      await pendingRefresh;
+    });
+    await waitFor(() => expect(linkedProduct).toHaveValue(''));
+    expect(stageButton).toBeEnabled();
+    expect(mockStageSupplierPriceImport).not.toHaveBeenCalled();
+  });
+
   it('routes comparable supplier evidence to the single-Product governed flow', async () => {
     mockGetWorkspace.mockResolvedValue({
       vendors: [{ id: 'vendor-1', name: 'The Andersons' }],

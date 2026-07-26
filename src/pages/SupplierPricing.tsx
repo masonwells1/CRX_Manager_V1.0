@@ -113,6 +113,7 @@ export default function SupplierPricing() {
   const workbookInputRef = useRef<HTMLInputElement>(null);
   const pdfInputRef = useRef<HTMLInputElement>(null);
   const workspaceRequestRef = useRef(0);
+  const workspaceRefreshPendingRef = useRef(false);
   const basisWorkspaceRequestRef = useRef(0);
   const selectedVendorIdRef = useRef(selectedVendorId);
   const selectedProductIdRef = useRef(selectedProductId);
@@ -132,6 +133,7 @@ export default function SupplierPricing() {
 
   const loadWorkspace = useCallback(async () => {
     const requestId = ++workspaceRequestRef.current;
+    workspaceRefreshPendingRef.current = true;
     setLoading(true);
     try {
       const result = await getSupplierPricingWorkspace();
@@ -205,7 +207,10 @@ export default function SupplierPricing() {
       basisWorkspaceRequestRef.current += 1;
       toast('error', sanitizeError(error));
     } finally {
-      if (workspaceRequestRef.current === requestId) setLoading(false);
+      if (workspaceRequestRef.current === requestId) {
+        workspaceRefreshPendingRef.current = false;
+        setLoading(false);
+      }
     }
   }, [toast]);
 
@@ -361,6 +366,10 @@ export default function SupplierPricing() {
   };
 
   const handleQuickQuote = async () => {
+    if (workspaceRefreshPendingRef.current) {
+      toast('error', 'Supplier pricing is refreshing. Wait for it to finish, then choose a current link.');
+      return;
+    }
     if (!profile || !selectedVendorId || !quickQuote.linkId || !quickQuote.newCost.trim()) {
       toast('error', 'Supplier, linked Product, and quoted cost are required.');
       return;
@@ -503,6 +512,10 @@ export default function SupplierPricing() {
   };
 
   const handleLinkSave = async () => {
+    if (workspaceRefreshPendingRef.current) {
+      toast('error', 'Supplier pricing is refreshing. Wait for it to finish before saving a link.');
+      return;
+    }
     if (!profile || !isAdmin) return;
     const selectedProduct = workspace?.products.find((product) => product.id === linkForm.productId);
     const selectedVendor = workspace?.vendors.find((vendor) => vendor.id === linkForm.vendorId);
@@ -530,6 +543,10 @@ export default function SupplierPricing() {
   };
 
   const handleAliasStage = async () => {
+    if (workspaceRefreshPendingRef.current) {
+      toast('error', 'Supplier pricing is refreshing. Wait for it to finish before staging a vendor alias.');
+      return;
+    }
     if (!profile || !aliasText.trim() || !aliasVendorId) return;
     if (!workspace?.vendors.some((vendor) => vendor.id === aliasVendorId)) {
       setAliasVendorId('');
@@ -736,7 +753,7 @@ export default function SupplierPricing() {
               }}
             />
           </div>
-          <Button className="mt-4" type="button" loading={busy} onClick={handleQuickQuote}>
+          <Button className="mt-4" type="button" loading={busy} disabled={loading || busy} onClick={handleQuickQuote}>
             Stage quick quote
           </Button>
         </Card>
@@ -1007,7 +1024,7 @@ export default function SupplierPricing() {
             <label className="flex items-center gap-2 self-end pb-3 text-sm font-medium text-secondary"><input type="checkbox" checked={linkForm.isPreferred} onChange={(event) => { linkIdem.resetKey(); setLinkForm((current) => ({ ...current, isPreferred: event.target.checked })); }} />Preferred supplier</label>
           </div>
           <p className="mt-3 text-xs text-secondary">Direction: supplier package cost ÷ inventory units per supplier unit = normalized cost per {linkProduct?.inventory_unit || 'product inventory unit'}. The conversion unit is locked to the product.</p>
-          <Button className="mt-4" type="button" icon={<Link2 className="h-4 w-4" />} loading={busy} onClick={handleLinkSave}>Save confirmed link</Button>
+          <Button className="mt-4" type="button" icon={<Link2 className="h-4 w-4" />} loading={busy} disabled={loading || busy} onClick={handleLinkSave}>Save confirmed link</Button>
         </Card>
       )}
       <Card>
@@ -1036,7 +1053,7 @@ export default function SupplierPricing() {
             <Input label="Alias spelling" value={aliasText} onChange={(event) => { aliasStageIdem.resetKey(); setAliasText(event.target.value); }} />
             <Select label="Proposed canonical vendor" value={aliasVendorId} onChange={(event) => { aliasStageIdem.resetKey(); setAliasVendorId(event.target.value); }} options={vendorOptions} placeholder="Choose canonical vendor" />
           </div>
-          <Button className="mt-4" type="button" loading={busy} onClick={handleAliasStage}>Stage for review</Button>
+          <Button className="mt-4" type="button" loading={busy} disabled={loading || busy} onClick={handleAliasStage}>Stage for review</Button>
         </Card>
       )}
       <Card>
