@@ -8,6 +8,13 @@
 rows are a query-null-semantics false positive, not 77 incorrect cached
 quantities. The current production mismatch count is zero.
 
+**INDEPENDENT P1 APPLY BLOCKER:** **THE CANONICAL SECTION 9 MIGRATION MUST NOT
+APPLY IN ITS CURRENT FORM.** Its replacement `update_vendor_bill` locks only
+the bill row. The live `close_accounting_period` takes no advisory lock, table
+lock, or `FOR UPDATE` lock, so a month can close after the bill RPC's period
+checks but before its update commits. This blocker is independent of, and does
+not reverse, the no-reconciliation verdict.
+
 ## Owner summary
 
 `inventory.quantity_on_order` is a cache: its authoritative source is the
@@ -37,11 +44,13 @@ The canonical pending Section 9 migration already uses the correct rule:
 - total authoritative open-PO remainder: **14,715**.
 
 Writing 77 rows would therefore replace correct zeros with the same zeros and
-create needless production-data risk. The correct next database action is to
-apply the already-reviewed canonical Section 9 migration only after its normal
-fresh proof and approval gates. If a fresh true mismatch appears before that
-apply, stop and use the contingency design in this packet; do not convert this
-point-in-time zero result into standing authority to write.
+create needless production-data risk. However, the canonical migration is not
+safe to apply yet: its vendor-bill update can race an accounting-period close.
+The correct next database action is to fix that P1 with a new forward/corrective
+migration, or rigorously refute it, then obtain fresh exact-content review and
+real two-session concurrency proof. If a fresh true quantity mismatch appears
+before any later apply, stop and use the contingency design in this packet; do
+not convert this point-in-time zero result into standing authority to write.
 
 ## Scope boundaries and provenance
 
@@ -59,6 +68,8 @@ This packet:
 - inspected the canonical migration, its rollback-only smoke, standing
   invariant, network-isolated concurrency proof, contract tests, migration
   history, original Section 9 audit, and PR #218 review history.
+- independently rechecked the live function lock shapes and PR #218's commit
+  lineage on 2026-07-26.
 
 No migration was created or edited. No application/shared registry, migration
 history, smoke registry, map, Supplier/Product/Phase 3 file, live row, live
@@ -258,9 +269,9 @@ one current violation in each of these control classes:
 - `get_ap_aging` lacks the reviewed current-only fail-closed behavior;
 - `update_vendor_bill` lacks the reviewed lock-before-both-period-check shape.
 
-Those are the other canonical migration responsibilities and remain reasons to
-apply the existing reviewed migration; they are not reasons to write a
-quantity reconciliation migration.
+Those are reasons to finish and harden Section 9, but they do not make the
+current canonical file safe to apply and are not reasons to write a quantity
+reconciliation migration.
 
 ## Root-cause classification
 
@@ -296,7 +307,7 @@ If the canonical query later returns rows, classify them before any write:
 
 No current row falls into these classes.
 
-## Decision: park the data migration, proceed only with the canonical control migration
+## Decision: park the data migration; block the canonical control migration
 
 The three candidate dispositions are:
 
@@ -308,10 +319,11 @@ The three candidate dispositions are:
    design as the contingency, rerun the exact canonical query immediately
    before apply, and create a forward migration only if true mismatches appear.
 
-This decision does not park canonical migration
-`20260722222742_section9_po_ap_high_remediation.sql`. That migration supplies
-the going-forward recomputation, locking, vendor, bill, aging, and
-closed-period controls. Its apply remains a separate live approval action.
+The no-reconciliation decision does not certify canonical migration
+`20260722222742_section9_po_ap_high_remediation.sql`. That file supplies
+needed going-forward controls, but its apply is independently blocked by the
+accounting-period-close race below. Because the file is already merged, correct
+it only with a new forward migration; never rewrite the merged file.
 
 ## Invariants
 
@@ -487,6 +499,69 @@ fail-closed preflight is the guard against drift in that window: if a legacy
 write reintroduces a true mismatch, canonical apply aborts and nothing from
 that migration commits.
 
+### P1: accounting period can close during `update_vendor_bill`
+
+The canonical replacement `update_vendor_bill` takes `FOR UPDATE` only on its
+`vendor_bills` row, calls `check_period_open` for the old and new bill dates,
+then performs the update. The live `close_accounting_period` checks the month
+and inserts/updates `accounting_periods`, but takes no lock shared with the bill
+RPC. Under PostgreSQL's normal `READ COMMITTED` behavior, the following
+interleaving is therefore possible:
+
+1. Transaction A locks the bill and passes both period-open checks.
+2. Transaction B closes that month and commits.
+3. Transaction A updates the bill and commits into the now-closed month.
+
+The bill-row lock serializes competing edits to that bill; it does not reserve
+the accounting month's open state. A plain read in `check_period_open` also
+does not reserve that state.
+
+Minimal deterministic reproduction:
+
+1. In a disposable real-schema database, create an unpaid bill dated in an
+   open month.
+2. Pause transaction A after both `check_period_open` calls.
+3. In transaction B, call `close_accounting_period` for that month and commit.
+4. Resume transaction A. **Current failure marker:** the bill update succeeds.
+
+Required lock protocol for a corrective design:
+
+1. Define one transaction-level advisory-lock namespace/key per accounting
+   month.
+2. Make `close_accounting_period` acquire that month key before its period
+   checks and close write.
+3. Make every date/money mutator relying on `check_period_open`, at minimum
+   `update_vendor_bill`, acquire the same key before its period checks and
+   mutation.
+4. For a move between two months, acquire both month keys once in ascending
+   date order to prevent deadlocks.
+5. Recheck period openness while holding the shared month lock. Preserve the
+   existing bill-row lock in a documented, consistent order.
+
+A durable accounting-calendar row locked by both paths could be equivalent
+only if a row is guaranteed to exist for every open month. The current
+close-on-demand shape does not establish that guarantee. A table lock would be
+broader than necessary and is not the preferred fix.
+
+The fixed two-session proof must demonstrate both orders: when the update gets
+the month lock first, close waits and then observes the completed update; when
+close gets it first, the update waits and then fails the period-open check
+without changing the bill.
+
+### Review provenance mismatch
+
+PR #218's owner readiness comment bound the exact-SHA review and concurrency
+claim to `9ae7db4d1a883775597b12af4ceda5b748b29014`. The PR then received three
+more commits, ending at final head
+`c48f1abecab47d0117e0895958b46a45b5ecf6fd`, and merged as
+`34baf4eb38dc1432edf8e889b2456b64cad256ac`. Therefore the prior readiness
+statement is not exact-content review evidence for the final merged migration.
+
+**Apply rule:** the current canonical file **MUST NOT APPLY** until this P1 is
+fixed by a new forward/corrective migration or rigorously refuted. Either path
+requires fresh review bound to the final exact content and a real two-session
+close-versus-update concurrency proof.
+
 ## Rollback and forward-fix posture
 
 - **Current design:** no data write, so no rollback is needed.
@@ -506,23 +581,28 @@ that migration commits.
 
 ### Required before canonical Section 9 apply
 
-1. Fetch current `origin/main` and verify the migration is unchanged and still
-   pending in the live ledger.
-2. Rerun the exact canonical mismatch query and bounded summary.
-3. Require:
+1. Resolve the P1 with a new forward/corrective migration, or rigorously refute
+   it; never edit the merged canonical migration.
+2. Run the two-session close-versus-update reproduction and prove both lock
+   acquisition orders fail closed without a write in a closed period.
+3. Fetch current `origin/main` and verify the canonical and corrective exact
+   content and live-ledger state.
+4. Rerun the exact canonical mismatch query and bounded summary.
+5. Require:
    - canonical mismatch count `0`;
    - standing invariant mismatch count `0`;
    - stored total equals expected total;
    - no positive cache row without qualifying PO truth;
    - no positive expected remainder without a Main Warehouse row.
-4. Rerun focused static contracts:
+6. Rerun focused static contracts:
    `src/lib/section9PoApRemediation.test.ts` and RPC contracts.
-5. Rerun the network-isolated concurrency proof to
+7. Rerun the network-isolated concurrency proof to
    `SECTION9_PO_AP_CONCURRENCY_PASS`.
-6. Rerun the registered linked rollback-only smoke and require
+8. Rerun the registered linked rollback-only smoke and require
    `SMOKE_PASS_ROLLBACK`.
-7. Run the registered Section 9 predicate and full invariant sweep.
-8. Produce fresh exact-content migration-review and independent Codex proof.
+9. Run the registered Section 9 predicate and full invariant sweep.
+10. Produce fresh exact-content migration-review and independent Codex proof
+    covering the final canonical-plus-corrective apply packet.
 
 ### Required after apply
 
@@ -558,16 +638,20 @@ that migration commits.
 ### Current evidence: recommended order
 
 1. **No reconciliation migration.**
-2. Fresh read-only zero-mismatch preflight immediately before apply.
-3. Fresh exact-content migration-review and independent Codex verdict.
-4. Obtain the authorization required by `AGENTS.md`:
+2. **Do not apply the current canonical migration.**
+3. Fix the period-close race in a new forward/corrective migration, or
+   rigorously refute the P1.
+4. Run fresh exact-content independent review and the required two-session
+   concurrency proof against the final apply packet.
+5. Run the fresh read-only zero-mismatch preflight immediately before apply.
+6. Obtain the authorization required by `AGENTS.md`:
    - ordinary interactive run: Mason's explicit in-chat approval;
    - pre-authorized hands-free run: only the documented armed-autopilot
      exception with every proof gate satisfied;
    - any destructive/data-deleting expansion: always stop for fresh approval.
-5. Apply canonical migration
-   `20260722222742_section9_po_ap_high_remediation.sql`.
-6. Perform the post-apply proof plan before declaring Section 9 live.
+7. Only after every blocker and gate is cleared, apply the explicitly reviewed
+   canonical-plus-corrective sequence.
+8. Perform the post-apply proof plan before declaring Section 9 live.
 
 ### If a future true mismatch appears
 
@@ -598,6 +682,12 @@ timestamp order. Never use a bulk push that applies unreviewed pending files.
 - The other Section 9 controls remain absent live. This packet clears only the
   alleged need for a 77-row data repair; it does not certify the pending
   canonical migration as applied or the whole Section 9 lane as live.
+- The live lock-shape check found no advisory/table/row lock in
+  `close_accounting_period`; Section 9 remains absent from the live ledger.
+  This supports the P1 rather than clearing it.
+- Existing Section 9 concurrency proof covers PO/bill and Product-order races,
+  not the accounting-period close-versus-bill-update interleaving required
+  here.
 - No owner/business evidence is needed for the current 77 because no true
   quantity discrepancy exists. Owner evidence becomes mandatory only if a
   future source-data anomaly makes the PO rows themselves disputable.
@@ -608,6 +698,7 @@ timestamp order. Never use a bulk push that applies unreviewed pending files.
 
 The 77 figure is a NULL-versus-zero query artifact. Current production cache
 truth is exact: zero canonical mismatches and equal totals. Preserve the
-fail-closed contingency design, rerun the canonical query immediately before
-apply, and move the already-reviewed Section 9 control migration through its
-normal proof and live-approval gates without a preceding data rewrite.
+fail-closed contingency design. Separately, **BLOCK CANONICAL SECTION 9 APPLY**
+until the accounting-period-close P1 is corrected by a new forward migration
+or rigorously refuted, with fresh exact-content review and the missing
+two-session concurrency proof. No preceding quantity data rewrite is needed.
