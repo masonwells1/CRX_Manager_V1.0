@@ -22,7 +22,11 @@ two stale ledger rows:
 - **Ledger correction:** gauntlet summary ranks 6 (HIGH inventory-location bypass) and 11 (LOW
   `match_quick_receive_items` anon grant) marked RESOLVED — both were already fixed live by
   PR #208's InventoryPage field allowlist and migration `20260722122651`, confirmed applied in the
-  live migration ledger 2026-07-26.
+  live migration ledger 2026-07-26. Per PR-review verification, rank 15 (Section 7
+  commission-recipient HIGH) also marked RESOLVED — closed live 2026-07-22 by
+  `20260722134252_reject_unresolvable_commission_recipients` after Mason's reject-at-creation
+  decision (recorded in `KNOWN_ISSUES.md`). The preserved sweep artifact is explicitly labeled a
+  stale 17-of-18-predicate partial run (Section 9 predicate not executed), not a full baseline.
 - **Migrations touched:** none — docs only.
 - **Flagged for follow-up:** `20260722222742_section9_po_ap_high_remediation.sql` exists on main's
   tree but does not appear in the live migration ledger; confirm with Codex whether that is an
