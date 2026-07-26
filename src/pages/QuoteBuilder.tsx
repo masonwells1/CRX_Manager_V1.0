@@ -3274,11 +3274,6 @@ export default function QuoteBuilder() {
                                   <p className="font-medium text-nav-dark truncate max-w-[200px]">
                                     {prod.product_name}
                                   </p>
-                                  {prod.sku && (
-                                    <p className="text-xs text-gray-400">
-                                      {prod.sku}
-                                    </p>
-                                  )}
                                   <ProductOptionDetails product={prod} />
                                 </button>
                               ) : (

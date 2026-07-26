@@ -153,9 +153,18 @@ export default function SupplierPricing() {
     try {
       const result = await getSupplierPricingWorkspace();
       if (workspaceRequestRef.current !== requestId) return;
-      const refreshedReview = reviewIdToRefresh && result.imports.some((item) => item.id === reviewIdToRefresh)
-        ? await getSupplierPriceImport(reviewIdToRefresh)
-        : null;
+      let refreshedReview: SupplierImportReview | null = null;
+      if (reviewIdToRefresh && result.imports.some((item) => item.id === reviewIdToRefresh)) {
+        try {
+          refreshedReview = await getSupplierPriceImport(reviewIdToRefresh);
+        } catch (reviewError) {
+          if (workspaceRequestRef.current !== requestId) return;
+          Sentry.captureException(reviewError instanceof Error ? reviewError : new Error(String(reviewError)), {
+            extra: { context: 'refresh_supplier_price_import' },
+          });
+          toast('error', sanitizeError(reviewError));
+        }
+      }
       if (workspaceRequestRef.current !== requestId) return;
       const nextVendorId = result.vendors.some((vendor) => vendor.id === selectedVendorIdRef.current)
         ? selectedVendorIdRef.current
@@ -1131,7 +1140,7 @@ export default function SupplierPricing() {
         title="Supplier"
         accent="Pricing"
         subtitle="Manual supplier evidence only. Observation approval changes no sell prices; cost-basis changes require a separate preview and approval."
-        actions={<Button type="button" variant="secondary" icon={<RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />} onClick={() => void refreshWorkspaceAndBasis()}>Refresh</Button>}
+        actions={<Button type="button" variant="secondary" aria-busy={loading} icon={<RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />} onClick={() => void refreshWorkspaceAndBasis()}>Refresh</Button>}
       />
       <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
         <strong>No OCR or AI extraction:</strong> staff transcribe supplier PDFs into the protected .xlsx sheet. PDFs are retained only as audit evidence.

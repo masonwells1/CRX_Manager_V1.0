@@ -23,7 +23,7 @@ import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { logActivity } from '../lib/activityLogger';
 import { ProductOptionDetails, normalizeReturnPolicy, productOptionLabel, type ProductOptionPresentationModel } from '../components/products/ProductOptionPresentation';
 import { ReturnDetailItems } from '../components/returns/ReturnDetailItems';
-import { mapReturnPolicyRpcError } from '../lib/returnPolicyError';
+import { mapReturnPolicyRpcError, RETURN_POLICY_NO_RETURN_CODE } from '../lib/returnPolicyError';
 import type { Return, ReturnItem, Customer, Order, ReturnStatus, ReturnReason, ReturnItemCondition } from '../types';
 
 type ReturnRow = Return & {
@@ -824,8 +824,15 @@ export default function Returns() {
               </Button>
             </div>
             <div className="space-y-2 max-h-56 overflow-y-auto">
-              {newItems.map((item, idx) => (
-                <div key={idx} className="flex min-w-0 flex-col gap-2 rounded-lg bg-gray-50 p-2 sm:flex-row sm:flex-wrap sm:items-center">
+              {orderItems.some((p) => normalizeReturnPolicy(p.product?.return_policy) === 'no_return') && (
+                <p className="w-full min-w-0 text-xs font-medium text-red-700">
+                  Products marked no return are disabled. The server also refuses them with {RETURN_POLICY_NO_RETURN_CODE}.
+                </p>
+              )}
+              {newItems.map((item, idx) => {
+                const selectedOrderItem = orderItems.find((p) => p.id === item.order_item_id);
+                return (
+                  <div key={idx} className="flex min-w-0 flex-col gap-2 rounded-lg bg-gray-50 p-2 sm:flex-row sm:flex-wrap sm:items-center">
                   <select
                     value={item.order_item_id}
                     onChange={(e) => {
@@ -856,13 +863,10 @@ export default function Returns() {
                       </option>
                       ))}
                   </select>
-                  {orderItems.some((p) => normalizeReturnPolicy(p.product?.return_policy) === 'no_return') && (
-                    <p className="w-full min-w-0 text-xs font-medium text-red-700">Products marked no return are disabled. The server also refuses them with RETURN_POLICY_NO_RETURN.</p>
-                  )}
-                  {orderItems.find((p) => p.id === item.order_item_id)?.product && (
+                  {selectedOrderItem?.product && (
                     <div className="min-w-0 flex-1">
-                      <ProductOptionDetails product={orderItems.find((p) => p.id === item.order_item_id)!.product!} />
-                      {normalizeReturnPolicy(orderItems.find((p) => p.id === item.order_item_id)!.product!.return_policy) === 'no_return' && <p className="mt-1 text-xs font-medium text-red-700">This Product is no return and cannot be added to a return.</p>}
+                      <ProductOptionDetails product={selectedOrderItem.product} />
+                      {normalizeReturnPolicy(selectedOrderItem.product.return_policy) === 'no_return' && <p className="mt-1 text-xs font-medium text-red-700">This Product is no return and cannot be added to a return.</p>}
                     </div>
                   )}
                   <input
@@ -897,8 +901,9 @@ export default function Returns() {
                   <button onClick={() => removeItem(idx)} className="self-end text-red-400 hover:text-red-600 p-1 sm:self-auto">
                     <XCircle className="w-4 h-4" />
                   </button>
-                </div>
-              ))}
+                  </div>
+                );
+              })}
               {newItems.length === 0 && (
                 <p className="text-sm text-gray-400 text-center py-4">No items added</p>
               )}

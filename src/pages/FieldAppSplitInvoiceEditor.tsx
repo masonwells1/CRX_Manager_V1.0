@@ -267,21 +267,30 @@ export default function FieldAppSplitInvoiceEditor() {
             .limit(200),
         ]);
         if (cancelled) return;
-        const pickerError = flds.error || prods.error || svcs.error || jbs.error;
-        if (pickerError) {
-          Sentry.captureException(pickerError, { extra: { context: 'load_field_app_split_invoice_pickers' } });
-          toast('error', 'Failed to load field application invoice pickers');
-          return;
+        const pickerErrors = [flds.error, prods.error, svcs.error, jbs.error].filter(Boolean);
+        if (pickerErrors.length > 0) {
+          pickerErrors.forEach((error) => {
+            Sentry.captureException(error, { extra: { context: 'load_field_app_split_invoice_pickers' } });
+          });
+          toast('error', 'Some field application invoice pickers could not be loaded.');
         }
-        setFieldOptions(((flds.data as Array<{ id: string; field_name: string | null }> | null) ?? []).map((f) => ({ id: f.id, field_name: f.field_name || 'Unnamed field' })));
-        setProductOptions(((prods.data as Array<ProductOption> | null) ?? []).map((p) => ({ ...p, product_name: p.product_name || 'Unnamed product' })));
-        setServiceOptions(((svcs.data as Array<{ id: string; name: string | null }> | null) ?? []).map((s) => ({ id: s.id, name: s.name || 'Unnamed service' })));
-        setJobOptions(
-          ((jbs.data as Array<{ id: string; job_number: string | null; job_date: string | null; customer: { farm_name?: string | null } | null }> | null) ?? []).map((j) => ({
-            id: j.id,
-            label: `${j.job_number || 'Job'}${j.job_date ? ` — ${j.job_date}` : ''}${j.customer?.farm_name ? ` (${j.customer.farm_name})` : ''}`,
-          })),
-        );
+        if (!flds.error) {
+          setFieldOptions(((flds.data as Array<{ id: string; field_name: string | null }> | null) ?? []).map((f) => ({ id: f.id, field_name: f.field_name || 'Unnamed field' })));
+        }
+        if (!prods.error) {
+          setProductOptions(((prods.data as Array<ProductOption> | null) ?? []).map((p) => ({ ...p, product_name: p.product_name || 'Unnamed product' })));
+        }
+        if (!svcs.error) {
+          setServiceOptions(((svcs.data as Array<{ id: string; name: string | null }> | null) ?? []).map((s) => ({ id: s.id, name: s.name || 'Unnamed service' })));
+        }
+        if (!jbs.error) {
+          setJobOptions(
+            ((jbs.data as Array<{ id: string; job_number: string | null; job_date: string | null; customer: { farm_name?: string | null } | null }> | null) ?? []).map((j) => ({
+              id: j.id,
+              label: `${j.job_number || 'Job'}${j.job_date ? ` — ${j.job_date}` : ''}${j.customer?.farm_name ? ` (${j.customer.farm_name})` : ''}`,
+            })),
+          );
+        }
       } catch (err) {
         if (!cancelled) {
           Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'load_field_app_split_invoice_pickers' } });

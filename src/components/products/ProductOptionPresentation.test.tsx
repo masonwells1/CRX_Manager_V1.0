@@ -42,6 +42,13 @@ describe('ProductOptionPresentation', () => {
     expect(screen.getByText('Return: unknown').closest('[data-product-id]')).toHaveAttribute('data-product-id', 'product-a');
   });
 
+  it('lets a dark-surface caller replace the default detail text color', () => {
+    render(<ProductOptionDetails product={siblingA} textClassName="text-gray-300" />);
+    const details = screen.getByText('SKU: SKU-A').closest('[data-product-id]');
+    expect(details).toHaveClass('text-gray-300');
+    expect(details).not.toHaveClass('text-secondary');
+  });
+
   it('recognizes only the explicit no_return policy as no-return', () => {
     expect(normalizeReturnPolicy('no_return')).toBe('no_return');
     expect(normalizeReturnPolicy('unexpected')).toBe('unknown');

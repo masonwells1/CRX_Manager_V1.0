@@ -1,4 +1,4 @@
-const RETURN_POLICY_NO_RETURN_CODE = 'RETURN_POLICY_NO_RETURN';
+export const RETURN_POLICY_NO_RETURN_CODE = 'RETURN_POLICY_NO_RETURN';
 export const RETURN_POLICY_NO_RETURN_MESSAGE = 'This Product is marked no return.';
 
 /** Converts the guarded RPC policy token into one stable user-facing error. */

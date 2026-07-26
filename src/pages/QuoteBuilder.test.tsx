@@ -276,6 +276,7 @@ describe('QuoteBuilder', () => {
     renderQuoteBuilder(quote.id);
 
     expect(await screen.findByText('Family: Family Alpha')).toBeInTheDocument();
+    expect(screen.getAllByText('SKU: SKU-EXACT')).toHaveLength(1);
     expect(quoteItemSelects).toContain('*, product:products(*, product_family:product_families(name))');
   });
 });

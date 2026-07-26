@@ -399,6 +399,40 @@ describe('SupplierPricing page', () => {
     expect(screen.queryByRole('option', { name: /Current Product/ })).not.toBeInTheDocument();
   });
 
+  it('preserves a refreshed workspace when only the current import review refetch fails', async () => {
+    const workspace = {
+      vendors: [{ id: 'vendor-1', name: 'Current vendor' }],
+      products: [{ id: '11111111-1111-4111-8111-111111111111', product_name: 'Current Product', sku: 'CUR-1', inventory_unit: 'gallon' }],
+      links: [],
+      imports: [makeImportSummary('import-1', 'Current vendor')],
+      aliases: [],
+      evidence: [],
+    };
+    mockGetWorkspace.mockResolvedValue(workspace);
+    mockGetImport
+      .mockResolvedValueOnce(makeImportDetail('import-1', 'Current vendor', 'Current Product'))
+      .mockRejectedValueOnce(new Error('review refetch unavailable'));
+
+    renderSupplierPricing();
+    fireEvent.click(await screen.findByRole('button', { name: /Current vendor/ }));
+    expect(await screen.findByRole('button', { name: 'Approve selected observations' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', 'review refetch unavailable'));
+    expect(mockSentryCaptureException).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ extra: { context: 'refresh_supplier_price_import' } }),
+    );
+    expect(screen.queryByRole('button', { name: 'Approve selected observations' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Current vendor/ })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Comparison' }));
+    const productSelect = screen.getByLabelText('Product');
+    await waitFor(() => expect(productSelect).toHaveValue(workspace.products[0].id));
+    expect(screen.getByRole('option', { name: /Current Product/ })).toBeInTheDocument();
+  });
+
   it('ignores stale workspace completions after a newer refresh wins', async () => {
     const newest = {
       vendors: [],
@@ -411,20 +445,21 @@ describe('SupplierPricing page', () => {
 
     renderSupplierPricing();
     fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Refresh' })).not.toHaveAttribute('aria-busy', 'true'));
     fireEvent.click(screen.getByRole('tab', { name: 'Comparison' }));
     expect(await screen.findByRole('option', { name: /Newest Product/ })).toBeInTheDocument();
 
-    act(() => {
+    await act(async () => {
       resolveFirst({
         vendors: [],
         products: [{ id: '33333333-3333-4333-8333-333333333333', product_name: 'Stale Product', sku: 'OLD-1', inventory_unit: 'gallon' }],
         links: [], imports: [], aliases: [], evidence: [],
       });
+      await first;
     });
-    await Promise.resolve();
-    expect(screen.queryByRole('option', { name: /Stale Product/ })).not.toBeInTheDocument();
-    expect(screen.getByRole('option', { name: /Newest Product/ })).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.queryByRole('option', { name: /Stale Product/ })).not.toBeInTheDocument();
+      expect(screen.getByRole('option', { name: /Newest Product/ })).toBeInTheDocument();
+    });
   });
 
   it('ignores a stale workspace failure after a newer refresh succeeds', async () => {
@@ -442,11 +477,15 @@ describe('SupplierPricing page', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Comparison' }));
     expect(await screen.findByRole('option', { name: /Newest Product/ })).toBeInTheDocument();
 
-    act(() => rejectFirst(new Error('stale hydration failure')));
-    await Promise.resolve();
-    expect(mockToast).not.toHaveBeenCalledWith('error', 'stale hydration failure');
-    expect(mockSentryCaptureException).not.toHaveBeenCalled();
-    expect(screen.getByRole('option', { name: /Newest Product/ })).toBeInTheDocument();
+    await act(async () => {
+      rejectFirst(new Error('stale hydration failure'));
+      await first.catch(() => undefined);
+    });
+    await waitFor(() => {
+      expect(mockToast).not.toHaveBeenCalledWith('error', 'stale hydration failure');
+      expect(mockSentryCaptureException).not.toHaveBeenCalled();
+      expect(screen.getByRole('option', { name: /Newest Product/ })).toBeInTheDocument();
+    });
   });
 
   it('replaces selections that no longer belong to a successful refreshed workspace', async () => {

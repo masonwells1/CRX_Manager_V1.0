@@ -30,6 +30,7 @@ describe('Stage B1 Product presentation adoption', () => {
     expect(source).toContain('flex min-w-0 flex-col');
     expect(source).toContain('sm:flex-row');
     expect(source).toContain('sm:flex-wrap');
+    expect(source.match(/Products marked no return are disabled\./g)).toHaveLength(1);
   });
 
   it('keeps Supplier Pricing selected by exact Product ID', () => {

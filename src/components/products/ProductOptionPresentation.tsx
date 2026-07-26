@@ -59,10 +59,18 @@ function PolicyBadge({ policy }: { policy: ProductReturnPolicy }) {
   return <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${className}`}>Return: {policy.replace(/_/g, ' ')}</span>;
 }
 
-export function ProductOptionDetails({ product, className = '' }: { product: ProductOptionPresentationModel; className?: string }): ReactNode {
+export function ProductOptionDetails({
+  product,
+  className = '',
+  textClassName = 'text-secondary',
+}: {
+  product: ProductOptionPresentationModel;
+  className?: string;
+  textClassName?: string;
+}): ReactNode {
   const policy = normalizeReturnPolicy(product.return_policy);
   return (
-    <div className={`mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-secondary ${className}`.trim()} data-product-id={product.id}>
+    <div className={`mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs ${textClassName} ${className}`.trim()} data-product-id={product.id}>
       {product.sku
         ? <span>SKU: {product.sku}</span>
         : <span className="min-w-0 break-all">Product ID: {product.id}</span>}

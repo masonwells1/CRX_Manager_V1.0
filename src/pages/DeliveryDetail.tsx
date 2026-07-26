@@ -31,7 +31,7 @@ import { compressImage } from '../lib/imageCompression';
 import { parseLocalDate } from '../lib/dateUtils';
 import { formatCents as fmtCents } from '../lib/money';
 import { Sentry } from '../lib/sentry';
-import { ProductOptionDetails, productOptionLabel } from '../components/products/ProductOptionPresentation';
+import { ProductOptionDetails, productOptionLabel, type ProductOptionPresentationModel } from '../components/products/ProductOptionPresentation';
 import { addDeliveryEditItem, removeDeliveryEditItem, type AvailableDeliveryEditItem, type DeliveryEditItem } from '../lib/deliveryEditItems';
 import QuickTaskModal from '../components/team/QuickTaskModal';
 import RelatedNotes from '../components/team/RelatedNotes';
@@ -129,9 +129,9 @@ export default function DeliveryDetail() {
   const [editAddress, setEditAddress] = useState('');
   const [editPriority, setEditPriority] = useState('normal');
   const [editNotes, setEditNotes] = useState('');
-  const [editItems, setEditItems] = useState<Array<DeliveryEditItem<Parameters<typeof ProductOptionDetails>[0]['product']>>>([]);
+  const [editItems, setEditItems] = useState<Array<DeliveryEditItem<ProductOptionPresentationModel>>>([]);
   // Order items available to add (not already on delivery)
-  const [availableOrderItems, setAvailableOrderItems] = useState<Array<AvailableDeliveryEditItem<Parameters<typeof ProductOptionDetails>[0]['product']>>>([]);
+  const [availableOrderItems, setAvailableOrderItems] = useState<Array<AvailableDeliveryEditItem<ProductOptionPresentationModel>>>([]);
   const [addresses, setAddresses] = useState<CustomerAddress[]>([]);
   const [drivers, setDrivers] = useState<Profile[]>([]);
   const [savingEdit, setSavingEdit] = useState(false);
@@ -433,7 +433,7 @@ export default function DeliveryDetail() {
     setAddresses((addrRes.data || []) as CustomerAddress[]);
     setDrivers((driverRes.data || []) as Profile[]);
     const allOrderItems = (oiRes.data || []) as unknown as Array<OrderItem & {
-      product?: Parameters<typeof ProductOptionDetails>[0]['product'];
+      product?: ProductOptionPresentationModel;
     }>;
 
     // For scheduled deliveries, calculate real max quantities
@@ -480,7 +480,7 @@ export default function DeliveryDetail() {
         quantity: item.quantity,
         max_quantity: maxQty,
         unit_size: item.unit_size || '',
-        product: item.product as unknown as Parameters<typeof ProductOptionDetails>[0]['product'],
+        product: item.product as unknown as ProductOptionPresentationModel,
       };
     }));
 
@@ -497,7 +497,7 @@ export default function DeliveryDetail() {
             product_name: oi.product_name,
             max_quantity: maxQty,
             unit_size: oi.unit_size || '',
-            product: oi.product as unknown as Parameters<typeof ProductOptionDetails>[0]['product'],
+            product: oi.product as unknown as ProductOptionPresentationModel,
           };
         })
         .filter((item) => item.max_quantity > 0);
@@ -1308,7 +1308,7 @@ export default function DeliveryDetail() {
                       <p className="text-white font-medium">
                         {(item.product as unknown as { product_name: string })?.product_name || 'Unknown'}
                       </p>
-                      {item.product && <ProductOptionDetails product={item.product as unknown as Parameters<typeof ProductOptionDetails>[0]['product']} className="text-gray-300" />}
+                      {item.product && <ProductOptionDetails product={item.product as unknown as ProductOptionPresentationModel} textClassName="text-gray-300" />}
                       <p className="text-sm text-gray-400">
                         {delivery.status === 'completed'
                           ? `Delivered: ${item.quantity_delivered}/${item.quantity} ${item.unit_size || 'units'}`
