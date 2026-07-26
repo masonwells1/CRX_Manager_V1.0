@@ -122,6 +122,7 @@ export default function SupplierPricing() {
   const sourcePdfRef = useRef<File | null>(null);
   const sourcePdfSelectionRef = useRef(0);
   const uploadedPdfRef = useRef<{ selectionId: number; path: string } | null>(null);
+  const quickQuoteIntentRef = useRef(0);
 
   useEffect(() => { selectedVendorIdRef.current = selectedVendorId; }, [selectedVendorId]);
   useEffect(() => { selectedProductIdRef.current = selectedProductId; }, [selectedProductId]);
@@ -420,6 +421,7 @@ export default function SupplierPricing() {
       return;
     }
     const workspaceRequestId = workspaceRequestRef.current;
+    const quickQuoteIntentId = quickQuoteIntentRef.current;
     setBusy(true);
     try {
       const sourceEvidence = await ensurePdfStored();
@@ -429,6 +431,10 @@ export default function SupplierPricing() {
       ) {
         setQuickQuote(blankQuickQuote);
         toast('error', 'Supplier pricing changed while the PDF was uploading. Choose a current link and try again.');
+        return;
+      }
+      if (quickQuoteIntentRef.current !== quickQuoteIntentId) {
+        toast('error', 'Quick quote details changed while the PDF was uploading. Review the current details and stage again.');
         return;
       }
       const result = await stageSupplierPriceImport({
@@ -666,6 +672,7 @@ export default function SupplierPricing() {
             value={selectedVendorId}
             onChange={(event) => {
               stageImportIdem.resetKey();
+              quickQuoteIntentRef.current += 1;
               setSelectedVendorId(event.target.value);
               setQuickQuote(blankQuickQuote);
             }}
@@ -678,6 +685,7 @@ export default function SupplierPricing() {
             value={documentDate}
             onChange={(event) => {
               stageImportIdem.resetKey();
+              quickQuoteIntentRef.current += 1;
               setDocumentDate(event.target.value);
             }}
           />
@@ -746,6 +754,7 @@ export default function SupplierPricing() {
               value={quickQuote.linkId}
               onChange={(event) => {
                 stageImportIdem.resetKey();
+                quickQuoteIntentRef.current += 1;
                 const link = vendorLinks.find((item) => item.id === event.target.value);
                 setQuickQuote((current) => ({
                   ...current,
@@ -766,6 +775,7 @@ export default function SupplierPricing() {
               value={quickQuote.newCost}
               onChange={(event) => {
                 stageImportIdem.resetKey();
+                quickQuoteIntentRef.current += 1;
                 setQuickQuote((current) => ({ ...current, newCost: event.target.value }));
               }}
             />
@@ -775,6 +785,7 @@ export default function SupplierPricing() {
               value={quickQuote.effectiveDate}
               onChange={(event) => {
                 stageImportIdem.resetKey();
+                quickQuoteIntentRef.current += 1;
                 setQuickQuote((current) => ({ ...current, effectiveDate: event.target.value }));
               }}
             />
@@ -783,6 +794,7 @@ export default function SupplierPricing() {
               value={quickQuote.priceKind}
               onChange={(event) => {
                 stageImportIdem.resetKey();
+                quickQuoteIntentRef.current += 1;
                 setQuickQuote((current) => ({
                   ...current,
                   priceKind: event.target.value as typeof current.priceKind,
@@ -795,6 +807,7 @@ export default function SupplierPricing() {
               value={quickQuote.priceUnit}
               onChange={(event) => {
                 stageImportIdem.resetKey();
+                quickQuoteIntentRef.current += 1;
                 setQuickQuote((current) => ({ ...current, priceUnit: event.target.value }));
               }}
             />
@@ -804,6 +817,7 @@ export default function SupplierPricing() {
               value={quickQuote.packageQuantity}
               onChange={(event) => {
                 stageImportIdem.resetKey();
+                quickQuoteIntentRef.current += 1;
                 setQuickQuote((current) => ({ ...current, packageQuantity: event.target.value }));
               }}
             />

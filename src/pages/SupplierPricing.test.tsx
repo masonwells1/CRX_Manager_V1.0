@@ -767,6 +767,78 @@ describe('SupplierPricing page', () => {
     );
   });
 
+  it('cancels Quick Quote staging when the selected exact Product changes during PDF upload', async () => {
+    const firstProduct = {
+      id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+      product_name: 'Sibling Product',
+      sku: 'SIBLING-A',
+      inventory_unit: 'gallon',
+    };
+    const secondProduct = {
+      id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+      product_name: 'Sibling Product',
+      sku: 'SIBLING-B',
+      inventory_unit: 'gallon',
+    };
+    const makeLink = (id: string, product: typeof firstProduct) => ({
+      id,
+      product_id: product.id,
+      product_name: product.product_name,
+      vendor_id: 'vendor-1',
+      vendor_name: 'Supplier One',
+      supplier_sku: `SUP-${product.sku}`,
+      supplier_product_name: product.product_name,
+      supplier_uom: 'case',
+      supplier_pack_description: null,
+      inventory_units_per_supplier_unit: 1,
+      conversion_unit: 'gallon',
+      comparison_status: 'comparable' as const,
+      comparison_note: null,
+      link_status: 'confirmed' as const,
+      is_reusable: true,
+      is_preferred: false,
+      is_active: true,
+    });
+    const firstLink = makeLink('link-sibling-a', firstProduct);
+    const secondLink = makeLink('link-sibling-b', secondProduct);
+    let resolveUpload!: (path: string) => void;
+    const pendingUpload = new Promise<string>((resolve) => { resolveUpload = resolve; });
+    mockGetWorkspace.mockResolvedValue({
+      vendors: [{ id: 'vendor-1', name: 'Supplier One' }],
+      products: [firstProduct, secondProduct],
+      links: [firstLink, secondLink],
+      imports: [], aliases: [], evidence: [],
+    });
+    mockUploadSupplierSourcePdf.mockReturnValueOnce(pendingUpload);
+
+    const { container } = renderSupplierPricing();
+    const linkedProduct = await screen.findByLabelText('Linked Product');
+    fireEvent.change(linkedProduct, { target: { value: firstLink.id } });
+    fireEvent.change(screen.getByLabelText('Quoted cost (dollars)'), { target: { value: '12.50' } });
+    const pdfInput = container.querySelector<HTMLInputElement>('input[accept*="application/pdf"]');
+    expect(pdfInput).not.toBeNull();
+    fireEvent.change(pdfInput!, {
+      target: { files: [new File(['pdf'], 'supplier-quote.pdf', { type: 'application/pdf' })] },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Stage quick quote' }));
+    await waitFor(() => expect(mockUploadSupplierSourcePdf).toHaveBeenCalledTimes(1));
+    fireEvent.change(linkedProduct, { target: { value: secondLink.id } });
+    expect(linkedProduct).toHaveValue(secondLink.id);
+
+    await act(async () => {
+      resolveUpload('supplier-evidence/local-intent-race.pdf');
+      await pendingUpload;
+    });
+
+    expect(mockStageSupplierPriceImport).not.toHaveBeenCalled();
+    expect(linkedProduct).toHaveValue(secondLink.id);
+    expect(mockToast).toHaveBeenCalledWith(
+      'error',
+      'Quick quote details changed while the PDF was uploading. Review the current details and stage again.',
+    );
+  });
+
   it('never reuses an older PDF path after the selected PDF changes during upload', async () => {
     const product = {
       id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
